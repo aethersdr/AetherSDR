@@ -1,6 +1,6 @@
 # TCI Receiver Index Policy
 
-_Changed in [e49875b2](https://github.com/AetherSDR/AetherSDR/commit/e49875b2) (#2140)._
+_Changed in [e49875b2](https://github.com/ten9876/AetherSDR/commit/e49875b2) (#2140)._
 
 ## Overview
 
