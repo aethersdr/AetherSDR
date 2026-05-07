@@ -270,6 +270,10 @@ void RadioSetupDialog::setFramelessMode(bool on)
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
 {
+    // Persist any uncommitted "user cleared IP" edits in the Peripherals
+    // tab before saving + closing.
+    for (const auto& saver : m_peripheralRowSavers)
+        saver();
     AppSettings::instance().setValue("RadioSetupDialogGeometry",
         QString::fromLatin1(saveGeometry().toBase64()));
     AppSettings::instance().save();
@@ -3748,11 +3752,33 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
         connect(btn, &QPushButton::clicked, this,
                 [=, &settings]() {
+            QString ip = ipEdit->text().trimmed();
             if (isConnectedFn()) {
+                // If the user cleared the IP field before clicking, wipe
+                // the saved manual IP/port FIRST — the disconnect signal
+                // fires synchronously and downstream handlers (e.g. SS
+                // button visibility) read these settings to decide
+                // whether to keep showing the device. Clearing after the
+                // disconnect would leave the button visible.
+                if (ip.isEmpty()) {
+                    settings.remove(ipKey);
+                    settings.remove(portKey);
+                    settings.save();
+                }
                 disconnectFn();
             } else {
-                QString ip = ipEdit->text().trimmed();
-                if (ip.isEmpty()) return;
+                if (ip.isEmpty()) {
+                    // Empty IP while disconnected: if a manual IP was saved
+                    // previously, treat this click as "save back to default"
+                    // — clear the persisted manual IP/port so the device
+                    // stops auto-connecting.
+                    if (!settings.value(ipKey, "").toString().isEmpty()) {
+                        settings.remove(ipKey);
+                        settings.remove(portKey);
+                        settings.save();
+                    }
+                    return;
+                }
                 int port = portSpin->value();
                 // Save to settings
                 settings.setValue(ipKey, ip);
@@ -3771,6 +3797,26 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
                 ? "QLabel { color: #00e060; font-size: 11px; }"
                 : "QLabel { color: #8aa8c0; font-size: 11px; }");
         };
+
+        // Save-on-close: if the user has cleared the IP field and closes
+        // the dialog without clicking Connect/Disconnect, treat that as
+        // "wipe the saved manual IP/port". A non-empty edit still requires
+        // an explicit Connect click so a partially-typed IP cannot leak in.
+        m_peripheralRowSavers.append([ipEdit, ipKey, portKey, &settings,
+                                      isConnectedFn, disconnectFn]() {
+            if (!ipEdit) return;
+            const QString ip = ipEdit->text().trimmed();
+            if (!ip.isEmpty()) return;
+            const QString savedIp = settings.value(ipKey, "").toString();
+            if (savedIp.isEmpty()) return;
+            // The user cleared a previously-saved IP. If still connected
+            // (e.g. auto-connect ran at startup), disconnect first so
+            // downstream visibility handlers see the cleared settings.
+            settings.remove(ipKey);
+            settings.remove(portKey);
+            settings.save();
+            if (isConnectedFn()) disconnectFn();
+        });
 
         return updateState;
     };

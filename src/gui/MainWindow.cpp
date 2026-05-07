@@ -3752,6 +3752,24 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
+    // On disconnect, if the device that was connected was a ShackSwitch and
+    // there is no longer a saved SS_ManualIp (e.g. the user cleared it via
+    // the Peripherals tab), hide the SS button. A UDP-discovered SS will
+    // re-show the button via deviceDiscovered if the hardware is still
+    // broadcasting. The model never emits presenceChanged(false) on simple
+    // disconnect, so this handler is needed to bridge the gap.
+    connect(&m_antennaGenius, &AntennaGeniusModel::disconnected,
+            this, [this]() {
+        const AgDeviceInfo& dev = m_antennaGenius.connectedDevice();
+        const bool wasSS = AntennaGeniusModel::isShackSwitch(dev);
+        if (!wasSS) return;
+        const QString ssIp =
+            AppSettings::instance().value("SS_ManualIp", "").toString();
+        if (ssIp.isEmpty()) {
+            m_appletPanel->setShackSwitchVisible(false);
+        }
+    });
+
     // ── 8-channel CAT: rigctld + PTY (A-H, each bound to a slice) ────────────
     {
         static const char kLetters[] = "ABCDEFGH";

@@ -760,11 +760,15 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         m_appletOrder.append(entry);
     }
 
-    // ShackSwitch applet — shown instead of/alongside AG for ShackSwitch devices
+    // ShackSwitch applet — shown instead of/alongside AG for ShackSwitch devices.
+    // Button starts hidden (mirroring AG) and is shown only when a ShackSwitch
+    // is actually connected or discovered, so a fresh install with no SS
+    // configured does not display a stray SS button in the top right.
     m_ssApplet = new ShackSwitchApplet;
     {
         auto entry = makeEntry("SS", "ShackSwitch", m_ssApplet, false, btnRow1, btnLayout1);
         m_ssBtn = entry.btn;
+        if (m_ssBtn) m_ssBtn->hide();
         m_appletOrder.append(entry);
     }
 

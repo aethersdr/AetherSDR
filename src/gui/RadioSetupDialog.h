@@ -2,6 +2,7 @@
 
 #include <QDialog>
 #include <QHash>
+#include <QVector>
 #include <functional>
 
 class QTabWidget;
@@ -105,6 +106,13 @@ private:
     // External APD tab (visible only when the radio reports apd configurable=1)
     int                       m_apdTabIndex{-1};
     QHash<QString, QComboBox*> m_apdSamplerCombos;
+
+    // Peripherals tab — savers run on dialog close to persist field edits
+    // that the user did not commit via the row's Connect/Disconnect button.
+    // Currently only used to honour "user cleared IP and closed dialog"
+    // → wipe the saved manual IP/port. New-IP edits still require an
+    // explicit Connect click so an unfinished value cannot leak in.
+    QVector<std::function<void()>> m_peripheralRowSavers;
 };
 
 } // namespace AetherSDR
