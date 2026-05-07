@@ -140,7 +140,9 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         auto* addRow = new QHBoxLayout;
         m_categoryCombo = new QComboBox;
         m_categoryCombo->setStyleSheet(kComboStyle);
-        m_categoryCombo->addItems({"All", "RX", "TX", "Phone/CW", "EQ", "Global"});
+        m_categoryCombo->addItems({"All", "RX", "TX", "Phone/CW", "EQ",
+                                   "Global", "Mode", "Band", "Filter",
+                                   "Slice", "Display", "Frequency"});
         addRow->addWidget(m_categoryCombo);
 
         m_paramCombo = new QComboBox;

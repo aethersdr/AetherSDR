@@ -413,13 +413,12 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2,
 
         // For toggles: use > 0.5 threshold; for triggers: only fire on > 0.5
         if (param->type == MidiParamType::Toggle) {
-            // NoteOn = toggle (sentinel -1 tells MainWindow to flip current state)
-            // CC = direct threshold
-            if (msgType == MidiBinding::NoteOn) {
-                scaled = -1.0f;  // sentinel: MainWindow reads getter and toggles (#502)
-            } else {
-                scaled = (value > 0.5f) ? 1.0f : 0.0f;
-            }
+            // Toggle on any rising edge (NoteOn press, CC value > 0.5).
+            // Silently ignore falling edges (NoteOff, NoteOn vel=0, CC=0)
+            // so the control doesn't revert to off the moment the button
+            // is released.
+            if (value < 0.5f) return;
+            scaled = -1.0f;  // sentinel: MainWindow reads getter and flips (#502)
         } else if (param->type == MidiParamType::Trigger) {
             if (value < 0.5f) return; // only fire on press, not release
             scaled = 1.0f;

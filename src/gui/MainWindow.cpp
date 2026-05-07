@@ -13058,6 +13058,27 @@ void MainWindow::registerMidiParams()
     reg("global.bandDown", "Band Down", "Global", P::Trigger, 0, 1,
         [cycleBand](float) { cycleBand(-1); });
 
+    // ── Mode Up / Down (cycle through the mode list above) ───────────
+    static constexpr int kModeCount =
+        static_cast<int>(sizeof(kModes) / sizeof(const char*));
+    auto cycleMode = [this, fireShortcut](int direction) {
+        // Find current mode index from the active slice; if no match, start at 0.
+        int currentIdx = 0;
+        if (auto* s = activeSlice()) {
+            const QString curMode = s->mode().toUpper();
+            for (int i = 0; i < kModeCount; ++i) {
+                if (curMode == QLatin1String(kModes[i])) { currentIdx = i; break; }
+            }
+        }
+        const int next = (currentIdx + direction + kModeCount) % kModeCount;
+        const QString idShort = QString("mode_%1").arg(QString(kModes[next]).toLower());
+        fireShortcut(idShort.toUtf8().constData());
+    };
+    reg("global.modeUp", "Mode Up", "Global", P::Trigger, 0, 1,
+        [cycleMode](float) { cycleMode(+1); });
+    reg("global.modeDown", "Mode Down", "Global", P::Trigger, 0, 1,
+        [cycleMode](float) { cycleMode(-1); });
+
     // ── Slice / display / filter / DSP triggers (mirror keyboard) ──────
     reg("global.splitToggle", "Split Toggle", "Slice", P::Trigger, 0, 1,
         [fireShortcut](float) { fireShortcut("split_toggle"); });
