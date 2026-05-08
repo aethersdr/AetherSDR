@@ -1,6 +1,7 @@
 #include "PanadapterStream.h"
 #include "LogManager.h"
 #include "OpusCodec.h"
+#include "PerfTelemetry.h"
 #include "RadioConnection.h"
 
 #include <QNetworkDatagram>
@@ -429,9 +430,19 @@ void PanadapterStream::setYPixels(quint32 streamId, int yPixels)
 
 void PanadapterStream::onDatagramReady()
 {
+    auto& perf = PerfTelemetry::instance();
+    const bool perfEnabled = perf.enabled();
+    const qint64 batchStartNs = perfEnabled ? PerfTelemetry::nowNs() : 0;
+    int batchDatagrams = 0;
+    qint64 batchBytes = 0;
+
     while (m_socket && m_socket->hasPendingDatagrams()) {
         const QNetworkDatagram dg = m_socket->receiveDatagram();
         if (!dg.isNull()) {
+            const QByteArray payload = dg.data();
+            const int payloadBytes = payload.size();
+            batchDatagrams++;
+            batchBytes += payloadBytes;
             if (!m_hasReceivedPacket) {
                 m_hasReceivedPacket = true;
                 if (m_routedPrimeTimer) {
@@ -450,7 +461,7 @@ void PanadapterStream::onDatagramReady()
             // Stop the rapid udp_register timer and switch to ping keepalive.
             if (m_isWanMode && !m_wanRegistered) {
                 qCDebug(lcVita49) << "PanadapterStream: WAN — first VITA-49 packet received!"
-                         << dg.data().size() << "bytes from"
+                         << payloadBytes << "bytes from"
                          << dg.senderAddress().toString() << ":" << dg.senderPort()
                          << "— UDP registration confirmed";
                 m_wanRegistered = true;
@@ -461,9 +472,14 @@ void PanadapterStream::onDatagramReady()
                     m_wanPingTimer->start(5000);
                 }
             }
-            m_totalRxBytes.fetch_add(dg.data().size());
-            processDatagram(dg.data());
+            m_totalRxBytes.fetch_add(payloadBytes);
+            processDatagram(payload);
         }
+    }
+
+    if (perfEnabled && batchDatagrams > 0) {
+        perf.recordUdpBatch(batchDatagrams, batchBytes,
+                            static_cast<double>(PerfTelemetry::nowNs() - batchStartNs) / 1000000.0);
     }
 }
 
@@ -547,6 +563,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
 
     // Per-category byte/packet/sequence tracking.
     // Only track owned/routed streams — skip uncategorized packets. (#455)
+    bool sequenceError = false;
     if (cat != CatCount) {
         QMutexLocker statsLock(&m_statsMutex);
         m_catStats[cat].bytes += data.size();
@@ -556,6 +573,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         if (stats.lastSeq >= 0) {
             const int expected = (stats.lastSeq + 1) & 0x0F;
             if (vitaSeq != expected) {
+                sequenceError = true;
                 stats.errorCount++;
                 m_catStats[cat].errors++;
             }
@@ -580,6 +598,12 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                 m_audioPacketTimerStarted = true;
             }
         }
+    }
+    if ((cat == CatFFT || cat == CatWaterfall) && PerfTelemetry::instance().enabled()) {
+        PerfTelemetry::instance().recordStreamPacket(
+            cat == CatWaterfall ? PerfTelemetry::FrameKind::Waterfall
+                                : PerfTelemetry::FrameKind::Panadapter,
+            sequenceError);
     }
 
     if (daxChannel >= 0) {
@@ -696,8 +720,11 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
 
     // Per-stream frame assembly
     auto& frame = m_frames[streamId];
-    if (frameIndex != frame.frameIndex)
+    if (frameIndex != frame.frameIndex) {
+        if (frame.totalBins > 0 && !frame.isComplete())
+            PerfTelemetry::instance().recordFrameRestart(PerfTelemetry::FrameKind::Panadapter);
         frame.reset(frameIndex, totalBins);
+    }
 
     if (startBin + numBins > static_cast<quint16>(frame.buf.size()))
         return;
@@ -726,7 +753,8 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     for (int i = 0; i < count; ++i)
         bins[i] = maxDbm - (static_cast<float>(frame.buf[i]) / (yPix - 1.0f)) * range;
 
-    emit spectrumReady(streamId, bins);
+    const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
+    emit spectrumReady(streamId, bins, emittedNs);
 }
 
 // ─── Waterfall tile decode ───────────────────────────────────────────────────
@@ -798,8 +826,11 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     // ── Waterfall frame assembly ─────────────────────────────────────────
     // Start a new frame if timecode changed
     auto& wfFrame = m_wfFrames[streamId];
-    if (timecode != wfFrame.timecode)
+    if (timecode != wfFrame.timecode) {
+        if (wfFrame.totalBins > 0 && !wfFrame.isComplete())
+            PerfTelemetry::instance().recordFrameRestart(PerfTelemetry::FrameKind::Waterfall);
         wfFrame.reset(timecode, totalBinsInFrame, lowFreqMhz, binBwMhz, autoBlack);
+    }
 
     // Copy this fragment's bins into the assembly buffer.
     // Only process the first row (height is typically 1).
@@ -819,7 +850,9 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
 
     const double frameHighMhz = wfFrame.lowFreqMhz + wfFrame.binBwMhz * wfFrame.totalBins;
     emit waterfallAutoBlackLevel(streamId, wfFrame.autoBlack);
-    emit waterfallRowReady(streamId, wfFrame.buf, wfFrame.lowFreqMhz, frameHighMhz, wfFrame.timecode);
+    const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
+    emit waterfallRowReady(streamId, wfFrame.buf, wfFrame.lowFreqMhz, frameHighMhz,
+                           wfFrame.timecode, emittedNs);
 }
 
 // ─── Audio decode ─────────────────────────────────────────────────────────────

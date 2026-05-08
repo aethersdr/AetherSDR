@@ -1,4 +1,5 @@
 #include "PanadapterModel.h"
+#include "core/PerfTelemetry.h"
 #include <QDebug>
 
 namespace AetherSDR {
@@ -135,6 +136,7 @@ void PanadapterModel::applyWaterfallStatus(const QMap<QString, QString>& kvs)
         bool ok = false;
         const int ms = kvs["line_duration"].toInt(&ok);
         if (ok) {
+            PerfTelemetry::instance().setWaterfallLineDurationMs(ms);
             if (ms != m_waterfallLineDuration) {
                 m_waterfallLineDuration = ms;
                 emit waterfallLineDurationChanged(m_waterfallLineDuration);

@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
 #include "core/LogManager.h"
+#include "core/PerfTelemetry.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
 #include "RadioStatusOwnership.h"
@@ -2503,6 +2504,13 @@ void RadioModel::logRemoteAudioRxSummary(const QString& reason) const
 
 quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
 {
+    auto& perf = PerfTelemetry::instance();
+    if (perf.enabled()
+        && command.startsWith(QStringLiteral("display pan set "))
+        && command.contains(QStringLiteral(" center="))) {
+        perf.recordPanCenterCommand();
+    }
+
     if (m_wanConn)
         return m_wanConn->sendCommand(command, std::move(cb));
 

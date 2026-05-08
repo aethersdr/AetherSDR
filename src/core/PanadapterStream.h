@@ -97,11 +97,11 @@ public:
 signals:
     void daxAudioReady(int channel, const QByteArray& pcm);
     void iqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
-    void spectrumReady(quint32 streamId, const QVector<float>& binsDbm);
+    void spectrumReady(quint32 streamId, const QVector<float>& binsDbm, qint64 emittedNs);
     // One row of waterfall data (intensity values, Width bins).
     void waterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                            double lowFreqMhz, double highFreqMhz,
-                           quint32 timecode);
+                           quint32 timecode, qint64 emittedNs);
     // Emitted once per waterfall tile with the radio's computed auto black level.
     void waterfallAutoBlackLevel(quint32 streamId, quint32 autoBlack);
     // Raw PCM payload (header stripped) from IF-Data (audio) VITA-49 packets.

@@ -11,6 +11,7 @@
 #include "PanLayoutDialog.h"
 #include "core/CommandParser.h"
 #include "core/LogManager.h"
+#include "core/PerfTelemetry.h"
 #include "core/VoiceSignalDetector.h"
 #include "core/MemoryRecallPolicy.h"
 #include "core/StreamStatus.h"
@@ -954,6 +955,12 @@ MainWindow::MainWindow(QWidget* parent)
     }
 
     applyDarkTheme();
+
+    m_perfHeartbeatTimer.setInterval(50);
+    connect(&m_perfHeartbeatTimer, &QTimer::timeout, this, [] {
+        PerfTelemetry::instance().recordUiHeartbeat();
+    });
+    m_perfHeartbeatTimer.start();
 
     // Audio worker thread (#502) — AudioEngine runs on its own thread so
     // audio processing never competes with paintEvent for main thread CPU.
@@ -2084,7 +2091,12 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Panadapter stream → spectrum widget ───────────────────────────────
     // Route FFT/waterfall data to the correct SpectrumWidget by stream ID
     connect(m_radioModel.panStream(), &PanadapterStream::spectrumReady,
-            this, [this](quint32 streamId, const QVector<float>& bins) {
+            this, [this](quint32 streamId, const QVector<float>& bins, qint64 emittedNs) {
+        if (emittedNs > 0) {
+            PerfTelemetry::instance().recordFrameAge(
+                PerfTelemetry::FrameKind::Panadapter,
+                static_cast<double>(PerfTelemetry::nowNs() - emittedNs) / 1000000.0);
+        }
         for (auto* pan : m_radioModel.panadapters()) {
             if (pan->panStreamId() == streamId) {
                 if (auto* sw = m_panStack->spectrum(pan->panId())) {
@@ -2106,7 +2118,12 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_radioModel.panStream(), &PanadapterStream::waterfallRowReady,
             this, [this](quint32 streamId, const QVector<float>& bins,
-                         double low, double high, quint32 tc) {
+                         double low, double high, quint32 tc, qint64 emittedNs) {
+        if (emittedNs > 0) {
+            PerfTelemetry::instance().recordFrameAge(
+                PerfTelemetry::FrameKind::Waterfall,
+                static_cast<double>(PerfTelemetry::nowNs() - emittedNs) / 1000000.0);
+        }
         for (auto* pan : m_radioModel.panadapters()) {
             if (pan->wfStreamId() == streamId) {
                 const double panCenter = pan->centerMhz();
@@ -6552,6 +6569,22 @@ void MainWindow::buildMenuBar()
             for (PanadapterApplet* applet : m_panStack->allApplets()) {
                 applet->spectrumWidget()->setPropForecast(-1, -1, -1);
             }
+        }
+    });
+
+    auto* fpsMetersAct = viewMenu->addAction("FPS Meters");
+    fpsMetersAct->setCheckable(true);
+    fpsMetersAct->setShortcut(QKeySequence("Ctrl+F"));
+    fpsMetersAct->setChecked(
+        AppSettings::instance().value("DisplayFpsMeters", "False").toString() == "True");
+    connect(fpsMetersAct, &QAction::toggled, this, [this](bool on) {
+        AppSettings::instance().setValue("DisplayFpsMeters", on ? "True" : "False");
+        AppSettings::instance().save();
+        if (!m_panStack)
+            return;
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (auto* sw = applet->spectrumWidget())
+                sw->setShowFpsMeters(on);
         }
     });
 
@@ -13899,9 +13932,17 @@ void MainWindow::expireSHistoryMarkers()
     }
 }
 
-void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<float>& bins)
+void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<float>& bins, qint64 emittedNs)
 {
-    if (!m_sHistoryEnabled && !m_sHistoryQrmEnabled) return;
+    Q_UNUSED(emittedNs);
+    const bool perfEnabled = PerfTelemetry::instance().enabled();
+    const qint64 perfStartNs = perfEnabled ? PerfTelemetry::nowNs() : 0;
+
+    if (!m_sHistoryEnabled && !m_sHistoryQrmEnabled) {
+        if (perfEnabled)
+            PerfTelemetry::instance().recordSHistorySkipped();
+        return;
+    }
 
     // Build voice-only frequency ranges from the active band plan once per frame
     QVector<QPair<double, double>> voiceRanges;
@@ -13912,8 +13953,10 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
         }
     }
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    bool processedFrame = false;
     for (auto* pan : m_radioModel.panadapters()) {
         if (pan->panStreamId() != streamId) continue;
+        processedFrame = true;
 
         const QString panId = pan->panId();
         auto& state = m_sHistoryPanState[panId];
@@ -14047,6 +14090,15 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
         // even when nothing was detected this frame.
         rebuildSHistoryForPan(panId);
         break;
+    }
+
+    if (perfEnabled) {
+        if (processedFrame) {
+            PerfTelemetry::instance().recordSHistoryProcessed(
+                static_cast<double>(PerfTelemetry::nowNs() - perfStartNs) / 1000000.0);
+        } else {
+            PerfTelemetry::instance().recordSHistorySkipped();
+        }
     }
 }
 

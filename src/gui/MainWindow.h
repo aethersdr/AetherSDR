@@ -351,7 +351,7 @@ private:
     bool    m_sHistoryQrmEnabled{false};
     void rebuildSHistoryForPan(const QString& panId);
     void expireSHistoryMarkers();
-    void onSpectrumReadyForSHistory(quint32 streamId, const QVector<float>& bins);
+    void onSpectrumReadyForSHistory(quint32 streamId, const QVector<float>& bins, qint64 emittedNs);
     // Per-pan spectrogram ring buffer for CNN classification.
     // shared_ptr so QHash COW can copy the pointer on detach without deep-copying
     // the 32-frame ring buffer (unique_ptr is non-copyable, which breaks QHash::operator[]).
@@ -457,6 +457,7 @@ private:
     QLabel* m_supplyVoltLabel{nullptr};
     QLabel* m_networkLabel{nullptr};
     QTimer m_networkTooltipRefreshTimer;
+    QTimer m_perfHeartbeatTimer;
     QLabel* m_tgxlSeparator{nullptr};
     QLabel* m_tgxlIndicator{nullptr};
     QLabel* m_pgxlSeparator{nullptr};

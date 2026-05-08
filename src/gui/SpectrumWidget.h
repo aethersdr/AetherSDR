@@ -188,6 +188,8 @@ public:
     void setSingleClickTune(bool on) { m_singleClickTune = on; }
     void setShowCursorFreq(bool on) { m_showCursorFreq = on; update(); }
     bool showCursorFreq() const { return m_showCursorFreq; }
+    void setShowFpsMeters(bool on);
+    bool showFpsMeters() const { return m_showFpsMeters; }
     void setShowTuneGuides(bool on);
     bool showTuneGuides() const { return m_showTuneGuides; }
     void setExtendedFrequencyLine(bool on);
@@ -440,6 +442,7 @@ private:
     void updateTrackedCursorState(const QPoint& localPos, bool insideWidget);
     void updateTnfHoverPopup();
     void drawWaterfall(QPainter& p, const QRect& r);
+    void drawFpsMeters(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void positionZoomButtons();
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
@@ -457,6 +460,13 @@ private:
     int maxWaterfallHistoryOffsetRows() const;
     int historyRowIndexForAge(int ageRows) const;
     QString pausedTimeLabelForAge(int ageRows) const;
+    void applyFpsMeterVisibility(bool on);
+    void resetFpsMeterWindow();
+    void updateFpsMeterValues();
+    void recordPanadapterFrame();
+    void recordWaterfallFrame(int rows = 1);
+    bool anyDragActive() const;
+    void publishPerfDragState() const;
 
     // Helper: find overlay index for a sliceId, or -1.
     int overlayIndex(int sliceId) const;
@@ -686,6 +696,16 @@ private:
     int      m_wfAvgTarget{1};   // how many tiles to average into one row
     int      m_wfAvgCount{0};    // tiles accumulated so far
     QVector<float> m_wfAvgBins;  // accumulated intensity values
+
+    // Lightweight diagnostics overlay toggled from View -> FPS Meters.
+    bool m_showFpsMeters{false};
+    QTimer* m_fpsMeterTimer{nullptr};
+    QElapsedTimer m_fpsMeterWindow;
+    int m_panadapterFrameCount{0};
+    int m_waterfallFrameCount{0};
+    double m_panadapterFps{0.0};
+    double m_waterfallFps{0.0};
+    qint64 m_lastMouseMoveNs{0};
 
     // ── TNF markers ────────────────────────────────────────────────────
     QVector<TnfMarker> m_tnfMarkers;

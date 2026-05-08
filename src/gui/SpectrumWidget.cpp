@@ -41,6 +41,7 @@
 #include <QTimeZone>
 #include <QElapsedTimer>
 #include "core/LogManager.h"
+#include "core/PerfTelemetry.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -74,6 +75,87 @@ static bool spotMarkersVisuallyEqual(const QVector<SpectrumWidget::SpotMarker>& 
     }
 
     return true;
+}
+
+class PerfInputScope {
+public:
+    explicit PerfInputScope(const char* kind)
+        : m_kind(kind),
+          m_enabled(PerfTelemetry::instance().enabled()),
+          m_startNs(m_enabled ? PerfTelemetry::nowNs() : 0)
+    {
+    }
+
+    ~PerfInputScope()
+    {
+        if (!m_enabled)
+            return;
+        PerfTelemetry::instance().recordInputEvent(
+            m_kind,
+            static_cast<double>(PerfTelemetry::nowNs() - m_startNs) / 1000000.0);
+    }
+
+private:
+    const char* m_kind;
+    bool m_enabled;
+    qint64 m_startNs;
+};
+
+class PerfUpdateScope {
+public:
+    enum class Kind {
+        Panadapter,
+        Waterfall
+    };
+
+    explicit PerfUpdateScope(Kind kind)
+        : m_kind(kind),
+          m_enabled(PerfTelemetry::instance().enabled()),
+          m_startNs(m_enabled ? PerfTelemetry::nowNs() : 0)
+    {
+    }
+
+    ~PerfUpdateScope()
+    {
+        if (!m_enabled)
+            return;
+        const double durationMs = static_cast<double>(PerfTelemetry::nowNs() - m_startNs) / 1000000.0;
+        if (m_kind == Kind::Waterfall)
+            PerfTelemetry::instance().recordWaterfallUpdate(durationMs);
+        else
+            PerfTelemetry::instance().recordPanUpdate(durationMs);
+    }
+
+private:
+    Kind m_kind;
+    bool m_enabled;
+    qint64 m_startNs;
+};
+
+template <typename F>
+class ScopeExit {
+public:
+    explicit ScopeExit(F&& fn)
+        : m_fn(std::forward<F>(fn))
+    {
+    }
+
+    ~ScopeExit()
+    {
+        m_fn();
+    }
+
+    ScopeExit(const ScopeExit&) = delete;
+    ScopeExit& operator=(const ScopeExit&) = delete;
+
+private:
+    F m_fn;
+};
+
+template <typename F>
+ScopeExit<F> makeScopeExit(F&& fn)
+{
+    return ScopeExit<F>(std::forward<F>(fn));
 }
 
 static QString formatFlagFrequency(double freqMhz)
@@ -218,6 +300,12 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
             markOverlayDirty();
     });
 
+    m_fpsMeterTimer = new QTimer(this);
+    m_fpsMeterTimer->setInterval(1000);
+    connect(m_fpsMeterTimer, &QTimer::timeout, this, [this]() {
+        updateFpsMeterValues();
+    });
+
     // Load display settings (panIndex 0 by default — loadSettings() can be
     // called again after setPanIndex() for multi-pan)
     loadSettings();
@@ -319,6 +407,7 @@ void SpectrumWidget::loadSettings()
     m_wfAutoBlack    = s.value(settingsKey("DisplayWfAutoBlack"), "True").toString() == "True";
     m_wfAutoBlackOffset = s.value(settingsKey("DisplayWfAutoBlackOffset"), "50").toInt();
     m_wfLineDuration = s.value(settingsKey("DisplayWfLineDuration"), "100").toInt();
+    PerfTelemetry::instance().setWaterfallLineDurationMs(m_wfLineDuration);
     // NB Waterfall Blanker (#277)
     m_wfBlankerEnabled   = s.value(settingsKey("WaterfallBlankingEnabled"), "False").toString() == "True";
     m_wfBlankerMode      = s.value(settingsKey("WaterfallBlankingMode"), "0").toInt();
@@ -334,6 +423,8 @@ void SpectrumWidget::loadSettings()
     m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
     m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
+    applyFpsMeterVisibility(
+        s.value("DisplayFpsMeters", "False").toString() == "True");
     m_wfColorScheme  = static_cast<WfColorScheme>(
         std::clamp(s.value(settingsKey("DisplayWfColorScheme"), "0").toInt(),
                    0, static_cast<int>(WfColorScheme::Count) - 1));
@@ -436,6 +527,79 @@ void SpectrumWidget::setFreqGridSpacing(int khz) {
     s.setValue(settingsKey("DisplayFreqGridSpacing"), QString::number(khz));
     s.save();
     markOverlayDirty();
+}
+void SpectrumWidget::setShowFpsMeters(bool on) {
+    applyFpsMeterVisibility(on);
+    auto& s = AppSettings::instance();
+    s.setValue("DisplayFpsMeters", on ? "True" : "False");
+    s.save();
+
+    // Keep FPS meters global across docked and sibling panadapters.
+    if (QWidget* top = window()) {
+        const auto siblings = top->findChildren<SpectrumWidget*>();
+        for (SpectrumWidget* sw : siblings) {
+            if (sw != this)
+                sw->applyFpsMeterVisibility(on);
+        }
+    }
+}
+void SpectrumWidget::applyFpsMeterVisibility(bool on) {
+    m_showFpsMeters = on;
+    resetFpsMeterWindow();
+    if (m_fpsMeterTimer) {
+        if (on)
+            m_fpsMeterTimer->start();
+        else
+            m_fpsMeterTimer->stop();
+    }
+    markOverlayDirty();
+}
+void SpectrumWidget::resetFpsMeterWindow() {
+    m_panadapterFrameCount = 0;
+    m_waterfallFrameCount = 0;
+    m_panadapterFps = 0.0;
+    m_waterfallFps = 0.0;
+    m_fpsMeterWindow.restart();
+}
+void SpectrumWidget::updateFpsMeterValues() {
+    if (!m_showFpsMeters)
+        return;
+    if (!m_fpsMeterWindow.isValid()) {
+        resetFpsMeterWindow();
+        return;
+    }
+    const qint64 elapsedMs = m_fpsMeterWindow.elapsed();
+    if (elapsedMs <= 0)
+        return;
+
+    const double scale = 1000.0 / static_cast<double>(elapsedMs);
+    m_panadapterFps = m_panadapterFrameCount * scale;
+    m_waterfallFps = m_waterfallFrameCount * scale;
+    m_panadapterFrameCount = 0;
+    m_waterfallFrameCount = 0;
+    m_fpsMeterWindow.restart();
+    markOverlayDirty();
+}
+void SpectrumWidget::recordPanadapterFrame() {
+    if (m_showFpsMeters)
+        ++m_panadapterFrameCount;
+}
+void SpectrumWidget::recordWaterfallFrame(int rows) {
+    if (m_showFpsMeters && rows > 0)
+        m_waterfallFrameCount += rows;
+}
+bool SpectrumWidget::anyDragActive() const {
+    return m_draggingDivider
+        || m_draggingBandwidth
+        || m_draggingPan
+        || m_draggingFilter != FilterEdge::None
+        || m_draggingVfo
+        || m_draggingDbm
+        || m_draggingTimeScale
+        || m_draggingTnfId >= 0;
+}
+void SpectrumWidget::publishPerfDragState() const {
+    PerfTelemetry::instance().setDragActive(anyDragActive());
 }
 void SpectrumWidget::setShowTuneGuides(bool on) {
     m_showTuneGuides = on;
@@ -540,6 +704,7 @@ void SpectrumWidget::setWfAutoBlackOffset(int level) {
 }
 void SpectrumWidget::setWfLineDuration(int ms) {
     m_wfLineDuration = std::clamp(ms, 50, 500);
+    PerfTelemetry::instance().setWaterfallLineDurationMs(m_wfLineDuration);
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("DisplayWfLineDuration"), QString::number(m_wfLineDuration));
     s.save();
@@ -685,6 +850,8 @@ void SpectrumWidget::appendVisibleRow(const QRgb* rowData)
     m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
     auto* row = reinterpret_cast<QRgb*>(m_waterfall.bits() + m_wfWriteRow * m_waterfall.bytesPerLine());
     std::memcpy(row, rowData, m_waterfall.width() * sizeof(QRgb));
+    if (PerfTelemetry::instance().enabled())
+        PerfTelemetry::instance().recordWaterfallVisibleRows();
 }
 
 void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
@@ -740,6 +907,8 @@ void SpectrumWidget::rebuildWaterfallViewport()
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
+    if (PerfTelemetry::instance().enabled())
+        PerfTelemetry::instance().recordWaterfallRebuild();
     update();
 }
 
@@ -1369,6 +1538,13 @@ void SpectrumWidget::setSliceInfo(int sliceId, bool isTxSlice)
 
 void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
 {
+    PerfUpdateScope perfScope(PerfUpdateScope::Kind::Panadapter);
+    if (!binsDbm.isEmpty()) {
+        recordPanadapterFrame();
+        if (PerfTelemetry::instance().enabled())
+            PerfTelemetry::instance().recordPanFrame();
+    }
+
     // Forward to GPU renderer (#502)
 
 
@@ -1488,6 +1664,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
                                         double lowFreqMhz, double highFreqMhz,
                                         quint32 timecode)
 {
+    PerfUpdateScope perfScope(PerfUpdateScope::Kind::Waterfall);
     // Native waterfall tiles carry intensity values (int16/128.0f, ~96-120 on HF).
     if (binsIntensity.isEmpty()) return;
 
@@ -1667,6 +1844,9 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         }
     }
     m_prevTileScanline = scanline;
+    recordWaterfallFrame(rowsToPush);
+    if (PerfTelemetry::instance().enabled())
+        PerfTelemetry::instance().recordWaterfallNativeRows(rowsToPush);
 
     update();
 }
@@ -1762,6 +1942,10 @@ static double snapToStep(double mhz, int stepHz)
 
 void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 {
+    PerfInputScope perfScope("mousePress");
+    const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
+    (void)dragStatePublisher;
+
     const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
@@ -2213,6 +2397,18 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 
 void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 {
+    PerfInputScope perfScope("mouseMove");
+    if (PerfTelemetry::instance().enabled()) {
+        const qint64 nowNs = PerfTelemetry::nowNs();
+        if (m_lastMouseMoveNs > 0) {
+            PerfTelemetry::instance().recordMouseMoveGap(
+                static_cast<double>(nowNs - m_lastMouseMoveNs) / 1000000.0);
+        }
+        m_lastMouseMoveNs = nowNs;
+    }
+    const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
+    (void)dragStatePublisher;
+
     const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
@@ -2537,6 +2733,10 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 
 void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
 {
+    PerfInputScope perfScope("mouseRelease");
+    const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
+    (void)dragStatePublisher;
+
     if (m_draggingTnfId >= 0) {
         m_draggingTnfId = -1;
         setSpectrumCursor(Qt::CrossCursor);
@@ -2805,6 +3005,8 @@ bool SpectrumWidget::event(QEvent* ev)
 
 void SpectrumWidget::wheelEvent(QWheelEvent* ev)
 {
+    PerfInputScope perfScope("wheel");
+
     // Skip scroll on the divider + freq scale bar.
     const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
     const int contentH2 = height() - chromeH;
@@ -3013,9 +3215,73 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     } else {
         rebuildWaterfallViewport();
     }
+    recordWaterfallFrame();
+    if (PerfTelemetry::instance().enabled())
+        PerfTelemetry::instance().recordWaterfallFallbackRows(1);
 }
 
 // ─── Paint ────────────────────────────────────────────────────────────────────
+
+void SpectrumWidget::drawFpsMeters(QPainter& p, const QRect& specRect, const QRect& wfRect)
+{
+    if (!m_showFpsMeters)
+        return;
+
+    p.save();
+    QFont f = p.font();
+    f.setPointSize(9);
+    f.setBold(true);
+    p.setFont(f);
+    const QFontMetrics fm(f);
+
+    auto drawMeter = [&](const QRect& area, const QString& name, double fps,
+                         bool bottomAligned, int bottomInset, int rightInset) {
+        if (area.width() < 56 || area.height() < 18)
+            return;
+
+        const QString label = QString("%1 %2 FPS").arg(name).arg(fps, 0, 'f', 1);
+        const int padX = 6;
+        const int padY = 3;
+        const int boxW = fm.horizontalAdvance(label) + padX * 2;
+        const int boxH = fm.height() + padY * 2;
+        if (area.width() < boxW + rightInset + 12 || area.height() < boxH + 8)
+            return;
+
+        const int plotRight = area.right() - rightInset;
+        int x = plotRight - boxW - 8;
+        int y = bottomAligned ? area.bottom() - boxH - bottomInset : area.top() + 6;
+        if (x + boxW > plotRight - 4)
+            x = plotRight - boxW - 4;
+        if (x < area.left() + 4)
+            x = area.left() + 4;
+        if (y + boxH > area.bottom() - 4)
+            y = area.bottom() - boxH - 4;
+        if (y < area.top() + 4)
+            y = area.top() + 4;
+
+        const QRect box(x, y, boxW, boxH);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF frame = QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5);
+        p.setPen(Qt::NoPen);
+        p.setBrush(QColor(0x0f, 0x0f, 0x1a, 210));
+        p.drawRoundedRect(frame, 3.0, 3.0);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(QColor(255, 255, 255, 170), 1.0));
+        p.drawRoundedRect(frame, 3.0, 3.0);
+        p.setRenderHint(QPainter::Antialiasing, false);
+        p.setPen(QColor(0x9c, 0xee, 0xff));
+        p.drawText(box.left() + padX,
+                   box.top() + padY + fm.ascent(),
+                   label);
+    };
+
+    const int panBottomInset = (m_bandPlanFontSize > 0)
+        ? m_bandPlanFontSize + 12
+        : 6;
+    drawMeter(specRect, QStringLiteral("PAN"), m_panadapterFps, true, panBottomInset, DBM_STRIP_W);
+    drawMeter(wfRect, QStringLiteral("WF"), m_waterfallFps, true, 6, waterfallStripWidth());
+    p.restore();
+}
 
 #ifdef AETHER_GPU_SPECTRUM
 
@@ -3262,6 +3528,8 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
         QImage rgba = m_waterfall.convertToFormat(QImage::Format_RGBA8888);
         QRhiTextureSubresourceUploadDescription desc(rgba);
         batch->uploadTexture(m_wfGpuTex, QRhiTextureUploadEntry(0, 0, desc));
+        if (PerfTelemetry::instance().enabled())
+            PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::WaterfallFull);
     }
 
     cb->resourceUpdate(batch);
@@ -3306,6 +3574,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const int w = width();
     const int h = height();
     if (w <= 0 || h <= FREQ_SCALE_H + DIVIDER_H + 2) return;
+    const bool perfEnabled = PerfTelemetry::instance().enabled();
+    const qint64 perfStartNs = perfEnabled ? PerfTelemetry::nowNs() : 0;
 
     const int chromeH = FREQ_SCALE_H + DIVIDER_H;
     const int contentH = h - chromeH;
@@ -3354,6 +3624,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             QImage rgba = m_waterfall.convertToFormat(QImage::Format_RGBA8888);
             QRhiTextureSubresourceUploadDescription desc(rgba);
             batch->uploadTexture(m_wfGpuTex, QRhiTextureUploadEntry(0, 0, desc));
+            if (perfEnabled)
+                PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::WaterfallFull);
             m_wfLastUploadedRow = m_wfWriteRow;
             m_wfTexFullUpload = false;
         } else if (m_wfWriteRow != m_wfLastUploadedRow) {
@@ -3386,6 +3658,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             if (!entries.isEmpty()) {
                 uploadDesc.setEntries(entries.begin(), entries.end());
                 batch->uploadTexture(m_wfGpuTex, uploadDesc);
+                if (perfEnabled) {
+                    PerfTelemetry::instance().recordGpuUpload(
+                        PerfTelemetry::GpuUploadKind::WaterfallIncremental);
+                }
             }
             m_wfLastUploadedRow = m_wfWriteRow;
         }
@@ -3457,6 +3733,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawSwrSweep(p, specRect);
             drawSliceMarkers(p, specRect, wfRect);
             drawOffScreenSlices(p, specRect);
+            drawFpsMeters(p, specRect, wfRect);
 
             // WNB / RF gain / Prop forecast indicators (top-right of spectrum)
             {
@@ -3603,6 +3880,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         if (m_overlayNeedsUpload) {
             QRhiTextureSubresourceUploadDescription ovDesc(m_overlayStatic);
             batch->uploadTexture(m_ovGpuTex, QRhiTextureUploadEntry(0, 0, ovDesc));
+            if (perfEnabled)
+                PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::Overlay);
             m_overlayNeedsUpload = false;
         }
 
@@ -3890,6 +4169,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             }
         }
     }
+
+    if (perfEnabled) {
+        PerfTelemetry::instance().recordRender(
+            static_cast<double>(PerfTelemetry::nowNs() - perfStartNs) / 1000000.0);
+    }
 }
 
 void SpectrumWidget::render(QRhiCommandBuffer* cb)
@@ -4000,6 +4284,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         drawSliceMarkers(p, specRect, wfRect);
         drawOffScreenSlices(p, specRect);
         drawConnectionAnimation(p, specRect);
+        drawFpsMeters(p, specRect, wfRect);
     }
 
     // Reposition all VFO widgets — deconflict flags so they fly away from each other
@@ -4228,7 +4513,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
     }
 
-    qCDebug(lcPerf) << "paintEvent:" << static_cast<int>(frameTimer.elapsed()) << "ms";
+    if (PerfTelemetry::instance().enabled()) {
+        PerfTelemetry::instance().recordRender(
+            static_cast<double>(frameTimer.nsecsElapsed()) / 1000000.0);
+    }
 }
 
 #endif // AETHER_GPU_SPECTRUM
