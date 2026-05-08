@@ -39,6 +39,7 @@ public:
     bool wnbActive() const { return m_wnbActive; }
     int wnbLevel() const { return m_wnbLevel; }
     bool wideActive() const { return m_wideActive; }
+    int fps() const { return m_fps; }
     QString preamp() const { return m_preamp; }
     void setPreamp(const QString& pre) {
         // Preamp is internal state only — no UI listeners. Do not emit
@@ -67,6 +68,8 @@ signals:
     void rfGainInfoChanged(int low, int high, int step);
     void wnbChanged(bool active, int level);
     void wideChanged(bool active);
+    void fpsChanged(int fps);
+    void fpsReported(int fps);
     void waterfallIdChanged(const QString& wfId);
     void daxiqChannelChanged(int channel);
 
@@ -86,6 +89,7 @@ private:
     bool        m_wnbActive{false};
     bool        m_wideActive{false};
     int         m_wnbLevel{50};
+    int         m_fps{-1};
     QString     m_preamp;
     int         m_daxiqChannel{0};
     bool        m_resized{false};

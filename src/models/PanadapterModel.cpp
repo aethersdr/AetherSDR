@@ -94,6 +94,17 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
             emit wideChanged(m_wideActive);
         }
     }
+    if (kvs.contains("fps")) {
+        bool ok = false;
+        const int fps = kvs["fps"].toInt(&ok);
+        if (ok) {
+            if (fps != m_fps) {
+                m_fps = fps;
+                emit fpsChanged(m_fps);
+            }
+            emit fpsReported(fps);
+        }
+    }
     if (kvs.contains("ant_list")) {
         QStringList ants = kvs["ant_list"].split(',', Qt::SkipEmptyParts);
         if (ants != m_antList) {

@@ -2396,6 +2396,20 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
+        if (auto it = m_panFpsReconcileConnections.find(panId);
+            it != m_panFpsReconcileConnections.end()) {
+            QObject::disconnect(it.value());
+            m_panFpsReconcileConnections.erase(it);
+        }
+        if (auto it = m_panFpsReconcile.find(panId);
+            it != m_panFpsReconcile.end()) {
+            if (it->timer) {
+                it->timer->stop();
+                it->timer->deleteLater();
+            }
+            m_panFpsReconcile.erase(it);
+        }
+
         // Disconnect all signals from the dying applet's widgets to prevent
         // dangling pointer crashes in wirePanadapter lambdas (#242)
         if (auto* applet = m_panStack->panadapter(panId)) {
@@ -7855,6 +7869,20 @@ void MainWindow::onConnectionStateChanged(bool connected)
         audioStopRx();
         audioStopTx();
 
+        for (auto it = m_panFpsReconcileConnections.begin();
+             it != m_panFpsReconcileConnections.end(); ++it) {
+            QObject::disconnect(it.value());
+        }
+        m_panFpsReconcileConnections.clear();
+        for (auto it = m_panFpsReconcile.begin();
+             it != m_panFpsReconcile.end(); ++it) {
+            if (it->timer) {
+                it->timer->stop();
+                it->timer->deleteLater();
+            }
+        }
+        m_panFpsReconcile.clear();
+
         // Clear spectrum/waterfall so the display doesn't look frozen
         for (auto* applet : m_panStack->allApplets())
             applet->spectrumWidget()->clearDisplay();
@@ -9026,6 +9054,83 @@ void MainWindow::routeCwDecoderOutput()
     }
 }
 
+void MainWindow::schedulePanFpsReconcile(const QString& panId, int reportedFps)
+{
+    if (panId.isEmpty() || reportedFps <= 0)
+        return;
+
+    auto* pan = m_radioModel.panadapter(panId);
+    if (!pan)
+        return;
+
+    auto& state = m_panFpsReconcile[panId];
+    if (!state.spectrum) {
+        if (auto* applet = m_panStack->panadapter(panId))
+            state.spectrum = applet->spectrumWidget();
+    }
+
+    auto* sw = state.spectrum.data();
+    if (!sw)
+        return;
+
+    const int desiredFps = sw->fftFps();
+    if (desiredFps <= 0)
+        return;
+    if (desiredFps == reportedFps) {
+        if (state.timer)
+            state.timer->stop();
+        state.lastSentMs = 0;
+        state.lastSentDesired = -1;
+        return;
+    }
+
+    if (!state.timer) {
+        state.timer = new QTimer(this);
+        state.timer->setSingleShot(true);
+        state.timer->setInterval(300);
+        connect(state.timer, &QTimer::timeout, this, [this, panId]() {
+            auto it = m_panFpsReconcile.find(panId);
+            if (it == m_panFpsReconcile.end())
+                return;
+
+            auto* pan = m_radioModel.panadapter(panId);
+            auto* sw = it->spectrum.data();
+            if (!sw) {
+                if (auto* applet = m_panStack->panadapter(panId)) {
+                    sw = applet->spectrumWidget();
+                    it->spectrum = sw;
+                }
+            }
+            if (!pan || !sw)
+                return;
+
+            const int reported = pan->fps();
+            const int desired = sw->fftFps();
+            if (reported <= 0 || desired <= 0 || reported == desired)
+                return;
+
+            constexpr qint64 kCooldownMs = 5000;
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (it->lastSentDesired == desired
+                && it->lastSentMs > 0
+                && now - it->lastSentMs < kCooldownMs) {
+                return;
+            }
+
+            qCDebug(lcProtocol).noquote().nospace()
+                << "MainWindow: reasserting panadapter FPS pan=" << panId
+                << " reported=" << reported
+                << " desired=" << desired;
+            m_radioModel.sendCommand(
+                QString("display pan set %1 fps=%2").arg(panId).arg(desired));
+            it->lastSentMs = now;
+            it->lastSentDesired = desired;
+        });
+    }
+
+    state.timer->start();
+}
+
 void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
@@ -9085,6 +9190,20 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         //      update pan A's dBm scale.
         connect(pan, &PanadapterModel::levelChanged,
                 sw, &SpectrumWidget::setDbmRange);
+
+        auto oldFpsConnection = m_panFpsReconcileConnections.take(applet->panId());
+        if (oldFpsConnection)
+            QObject::disconnect(oldFpsConnection);
+
+        auto& fpsState = m_panFpsReconcile[applet->panId()];
+        fpsState.spectrum = sw;
+        m_panFpsReconcileConnections.insert(
+            applet->panId(),
+            connect(pan, &PanadapterModel::fpsReported,
+                    this, [this, panId = applet->panId()](int fps) {
+                schedulePanFpsReconcile(panId, fps);
+            }));
+        schedulePanFpsReconcile(applet->panId(), pan->fps());
     }
 
     // ── Debounced resize → re-push xpixels/ypixels to the radio (#1511) ───
@@ -11711,8 +11830,6 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
                 // Configure the pan
                 m_radioModel.sendCommand(
                     QString("display pan set %1 xpixels=1024 ypixels=700").arg(panId));
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 fps=25").arg(panId));
             }
 
             // Create next pan after a brief delay
