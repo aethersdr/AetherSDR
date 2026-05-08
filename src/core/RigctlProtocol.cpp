@@ -210,19 +210,21 @@ QString RigctlProtocol::handleLine(const QString& line)
     if (trimmed.isEmpty())
         return {};
 
-    // Check for extended mode prefix
-    if (!trimmed.isEmpty() && (trimmed[0] == '+' || trimmed[0] == ';')) {
-        if (trimmed[0] == '+') {
-            m_extended = true;
-            trimmed = trimmed.mid(1);
-        }
+    const bool savedExtended = m_extended;
+    bool commandExtended = false;
+
+    // Hamlib's leading '+' requests extended response framing for this
+    // command only; it is reset after the response is emitted.
+    if (!trimmed.isEmpty() && trimmed[0] == '+') {
+        commandExtended = true;
+        m_extended = true;
+        trimmed = trimmed.mid(1);
     }
 
     // Pipe separator mode: '|' splits commands and implies extended responses
     // joined by '|' instead of newlines (standard rigctld wire protocol).
     const bool pipeMode = trimmed.contains('|');
     if (pipeMode) {
-        const bool savedExtended = m_extended;
         m_extended = true;
 
         QStringList cmds = trimmed.split('|', Qt::SkipEmptyParts);
@@ -246,6 +248,8 @@ QString RigctlProtocol::handleLine(const QString& line)
     for (const auto& cmd : cmds) {
         response += processCommand(cmd.trimmed());
     }
+    if (commandExtended)
+        m_extended = savedExtended;
     return response;
 }
 
@@ -290,8 +294,9 @@ QString RigctlProtocol::processCommand(const QString& cmd)
         if (name == "dump_state")     return cmdDumpState();
         if (name == "quit")           return {};  // caller handles disconnect
         if (name == "chk_vfo")        return QStringLiteral("0\n");  // VFO mode disabled
-        if (name == "send_morse")    return cmdSendMorse(args);
-        if (name == "stop_morse")    return cmdStopMorse();
+        if (name == "send_morse")     return cmdSendMorse(args);
+        if (name == "stop_morse")     return cmdStopMorse();
+        if (name == "wait_morse")     return cmdWaitMorse();
 
         return rprt(-4);  // RIG_EINVAL
     }
@@ -491,7 +496,9 @@ QString RigctlProtocol::cmdGetVfoInfo(const QString& arg)
     constexpr int satMode = 0;
 
     if (m_extended) {
-        return QStringLiteral("get_vfo_info:\nFreq: %1\nMode: %2\nWidth: %3\nSplit: %4\nSatMode: %5\n")
+        // MacLoggerDX sends +\get_vfo_info but parses the payload as the
+        // five positional values from Hamlib's non-extended response.
+        return QStringLiteral("get_vfo_info:\n%1\n%2\n%3\n%4\n%5\n")
             .arg(hz)
             .arg(mode)
             .arg(width)
@@ -913,9 +920,8 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
         m_pendingMorseLine = true;
         return {};
     }
-    QString cmd = QString("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [this, cmd]() {
-        m_model->sendCmdPublic(cmd, nullptr);
+    QMetaObject::invokeMethod(m_model, [this, text]() {
+        m_model->cwxModel().send(text);
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -924,8 +930,14 @@ QString RigctlProtocol::cmdStopMorse()
 {
     if (!m_model) return rprt(-1);
     QMetaObject::invokeMethod(m_model, [this]() {
-        m_model->sendCmdPublic("cwx clear", nullptr);
+        m_model->cwxModel().clearBuffer();
     }, Qt::QueuedConnection);
+    return rprt(0);
+}
+
+QString RigctlProtocol::cmdWaitMorse()
+{
+    if (!m_model) return rprt(-1);
     return rprt(0);
 }
 
