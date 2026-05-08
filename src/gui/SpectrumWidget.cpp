@@ -165,7 +165,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 #else
     setAttribute(Qt::WA_OpaquePaintEvent);
 #endif
-    setCursor(Qt::CrossCursor);
+    setSpectrumCursor(Qt::CrossCursor);
     setMouseTracking(true);
 
     // Floating overlay menu (child widget, stays on top)
@@ -1714,6 +1714,18 @@ void SpectrumWidget::updateTrackedCursorState(const QPoint& localPos, bool insid
     updateTnfHoverPopup();
 }
 
+void SpectrumWidget::setSpectrumCursor(Qt::CursorShape shape)
+{
+    // Avoid redundant cursor installs on every hover mouse-move. On macOS, even
+    // standard Qt cursor changes can pass through QImage::toCGImage() in the
+    // Cocoa platform plugin; issue #2458 crashed in that path while dispatching
+    // enter/leave events.
+    if (cursor().shape() == shape) {
+        return;
+    }
+    setCursor(shape);
+}
+
 // ─── Mouse ────────────────────────────────────────────────────────────────────
 
 // Snap a frequency (MHz) to the nearest multiple of m_stepHz.
@@ -1781,7 +1793,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     // Click on the divider bar → start split drag
     if (y >= specH && y < specH + DIVIDER_H) {
         m_draggingDivider = true;
-        setCursor(Qt::SplitVCursor);
+        setSpectrumCursor(Qt::SplitVCursor);
         ev->accept();
         return;
     }
@@ -1801,7 +1813,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         m_bwDragStartBw = m_bandwidthMhz;
         const double mouseXFrac = ev->position().x() / width() - 0.5;
         m_bwDragAnchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
-        setCursor(Qt::SizeHorCursor);
+        setSpectrumCursor(Qt::SizeHorCursor);
         ev->accept();
         return;
     }
@@ -1817,7 +1829,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             m_draggingTimeScale = true;
             m_timeScaleDragStartY = y;
             m_timeScaleDragStartOffsetRows = m_wfHistoryOffsetRows;
-            setCursor(Qt::SizeVerCursor);
+            setSpectrumCursor(Qt::SizeVerCursor);
             ev->accept();
             return;
         }
@@ -1825,7 +1837,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         m_draggingPan = true;
         m_panDragStartX = static_cast<int>(ev->position().x());
         m_panDragStartCenter = m_centerMhz;
-        setCursor(Qt::ClosedHandCursor);
+        setSpectrumCursor(Qt::ClosedHandCursor);
         ev->accept();
         return;
     }
@@ -1874,7 +1886,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             m_draggingDbm = true;
             m_dbmDragStartY = y;
             m_dbmDragStartRef = m_refLevel;
-            setCursor(Qt::SizeVerCursor);
+            setSpectrumCursor(Qt::SizeVerCursor);
             ev->accept();
             return;
         }
@@ -2081,7 +2093,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     break;
                 }
             }
-            setCursor(Qt::SizeAllCursor);
+            setSpectrumCursor(Qt::SizeAllCursor);
             ev->accept();
             return;
         }
@@ -2117,7 +2129,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 m_draggingVfo = true;
                 m_vfoDragOffsetHz = static_cast<int>(
                     std::round((xToMhz(mx) - so.freqMhz) * 1.0e6));
-                setCursor(Qt::SizeHorCursor);
+                setSpectrumCursor(Qt::SizeHorCursor);
                 ev->accept();
                 return;
             }
@@ -2150,7 +2162,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             m_filterDragStartX = mx;
             m_filterDragStartHz = edgeHz;
 
-            setCursor(Qt::SizeHorCursor);
+            setSpectrumCursor(Qt::SizeHorCursor);
             ev->accept();
             return;
         }
@@ -2161,7 +2173,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         if (mx > left + GRAB && mx < right - GRAB) {
             m_draggingVfo = true;
             m_vfoDragOffsetHz = static_cast<int>(std::round((xToMhz(mx) - ao->freqMhz) * 1.0e6));
-            setCursor(Qt::SizeHorCursor);
+            setSpectrumCursor(Qt::SizeHorCursor);
             ev->accept();
             return;
         }
@@ -2171,7 +2183,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     m_draggingPan = true;
     m_panDragStartX = static_cast<int>(ev->position().x());
     m_panDragStartCenter = m_centerMhz;
-    setCursor(Qt::ClosedHandCursor);
+    setSpectrumCursor(Qt::ClosedHandCursor);
     ev->accept();
 }
 
@@ -2274,7 +2286,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
             markOverlayDirty();
         }
 
-        setCursor(Qt::SizeVerCursor);
+        setSpectrumCursor(Qt::SizeVerCursor);
         ev->accept();
         return;
     }
@@ -2346,22 +2358,22 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
 
     if (y >= specH && y < specH + DIVIDER_H) {
-        setCursor(Qt::SplitVCursor);
+        setSpectrumCursor(Qt::SplitVCursor);
     } else if (y >= specH + DIVIDER_H && y < wfY) {
         const QRect wfRect(0, wfY, width(), height() - wfY);
         if (waterfallLiveButtonRect(wfRect).contains(ev->position().toPoint())) {
-            setCursor(Qt::PointingHandCursor);
+            setSpectrumCursor(Qt::PointingHandCursor);
         } else {
-            setCursor(Qt::SizeHorCursor);
+            setSpectrumCursor(Qt::SizeHorCursor);
         }
     } else if (y >= wfY) {
         const QRect wfRect(0, wfY, width(), height() - wfY);
         const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
         const QPoint pos = ev->position().toPoint();
         if (timeScaleRect.contains(pos)) {
-            setCursor(Qt::SizeVerCursor);
+            setSpectrumCursor(Qt::SizeVerCursor);
         } else {
-            setCursor(Qt::CrossCursor);
+            setSpectrumCursor(Qt::CrossCursor);
         }
     } else if (y < specH) {
         const QPoint pos(mx, y);
@@ -2379,22 +2391,22 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         if (m_hoveringOffScreenIdx != oldHover) markOverlayDirty();
 
         if (m_hoveringOffScreenIdx >= 0) {
-            setCursor(Qt::PointingHandCursor);
+            setSpectrumCursor(Qt::PointingHandCursor);
         } else {
             const int stripX = width() - DBM_STRIP_W;
 
             // Hovering over dBm scale strip
             if (mx >= stripX) {
                 if (y < DBM_ARROW_H)
-                    setCursor(Qt::PointingHandCursor);
+                    setSpectrumCursor(Qt::PointingHandCursor);
                 else
-                    setCursor(Qt::SizeVerCursor);
+                    setSpectrumCursor(Qt::SizeVerCursor);
             } else {
                 // Check if hovering over a filter edge or inactive slice marker
                 bool foundCursor = false;
                 if (hoveringTnf) {
                     if (const TnfMarker* tnf = tnfMarkerById(m_hoveredTnfId)) {
-                        setCursor(Qt::SizeAllCursor);
+                        setSpectrumCursor(Qt::SizeAllCursor);
                         m_hoveredTnfId = tnf->id;
                         foundCursor = true;
                     }
@@ -2405,7 +2417,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                     constexpr int GRAB = 5;
                     if (!foundCursor
                         && (std::abs(mx - loX) <= GRAB || std::abs(mx - hiX) <= GRAB)) {
-                        setCursor(Qt::SizeHorCursor);
+                        setSpectrumCursor(Qt::SizeHorCursor);
                         foundCursor = true;
                     }
                 }
@@ -2416,7 +2428,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                         int sliceX = mhzToX(so.freqMhz);
                         if ((mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25)
                             || std::abs(mx - sliceX) <= 8) {
-                            setCursor(Qt::PointingHandCursor);
+                            setSpectrumCursor(Qt::PointingHandCursor);
                             foundCursor = true;
                             break;
                         }
@@ -2426,7 +2438,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                     bool spotHover = false;
                     for (const auto& hr : m_spotClickRects) {
                         if (hr.rect.contains(pos)) {
-                            setCursor(Qt::PointingHandCursor);
+                            setSpectrumCursor(Qt::PointingHandCursor);
                             foundCursor = true;
                             // Show spot tooltip
                             if (hr.markerIndex >= 0 && hr.markerIndex < m_spotMarkers.size()) {
@@ -2452,7 +2464,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                     if (!foundCursor) {
                         for (const auto& cluster : m_spotClusters) {
                             if (cluster.rect.contains(pos)) {
-                                setCursor(Qt::PointingHandCursor);
+                                setSpectrumCursor(Qt::PointingHandCursor);
                                 foundCursor = true;
                                 break;
                             }
@@ -2462,11 +2474,11 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 // Prop forecast overlay click target
                 if (!foundCursor && !m_propClickRect.isNull()
                     && m_propClickRect.contains(QPoint(mx, y))) {
-                    setCursor(Qt::PointingHandCursor);
+                    setSpectrumCursor(Qt::PointingHandCursor);
                     foundCursor = true;
                 }
                 if (!foundCursor) {
-                    setCursor(Qt::CrossCursor);
+                    setSpectrumCursor(Qt::CrossCursor);
                 }
             }
         }
@@ -2503,13 +2515,13 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
 {
     if (m_draggingTnfId >= 0) {
         m_draggingTnfId = -1;
-        setCursor(Qt::CrossCursor);
+        setSpectrumCursor(Qt::CrossCursor);
         ev->accept();
         return;
     }
     if (m_draggingDivider) {
         m_draggingDivider = false;
-        setCursor(Qt::CrossCursor);
+        setSpectrumCursor(Qt::CrossCursor);
         auto& s = AppSettings::instance();
         s.setValue(settingsKey("SpectrumSplitRatio"), QString::number(m_spectrumFrac, 'f', 3));
         s.save();
@@ -2518,19 +2530,19 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     }
     if (m_draggingDbm) {
         m_draggingDbm = false;
-        setCursor(Qt::CrossCursor);
+        setSpectrumCursor(Qt::CrossCursor);
         ev->accept();
         return;
     }
     if (m_draggingTimeScale) {
         m_draggingTimeScale = false;
-        setCursor(Qt::CrossCursor);
+        setSpectrumCursor(Qt::CrossCursor);
         ev->accept();
         return;
     }
     if (m_draggingBandwidth) {
         m_draggingBandwidth = false;
-        setCursor(Qt::CrossCursor);
+        setSpectrumCursor(Qt::CrossCursor);
         // Re-send the final combined range so the release lands on the same
         // coherent center/bandwidth pair as the in-flight drag updates.
         emit frequencyRangeChangeRequested(m_centerMhz, m_bandwidthMhz);
@@ -2539,19 +2551,19 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     }
     if (m_draggingVfo) {
         m_draggingVfo = false;
-        setCursor(Qt::CrossCursor);
+        setSpectrumCursor(Qt::CrossCursor);
         ev->accept();
         return;
     }
     if (m_draggingFilter != FilterEdge::None) {
         m_draggingFilter = FilterEdge::None;
-        setCursor(Qt::CrossCursor);
+        setSpectrumCursor(Qt::CrossCursor);
         ev->accept();
         return;
     }
     if (m_draggingPan) {
         m_draggingPan = false;
-        setCursor(Qt::CrossCursor);
+        setSpectrumCursor(Qt::CrossCursor);
 
         // Single-click-to-tune: if the mouse didn't move during the
         // "pan drag", treat it as a click-to-tune instead

@@ -436,6 +436,7 @@ private:
     QColor tnfFillColor(const TnfMarker& tnf) const;
     QColor tnfLineColor(const TnfMarker& tnf) const;
     int  tnfAtPixel(int x, int preferredId = -1) const;
+    void setSpectrumCursor(Qt::CursorShape shape);
     void updateTrackedCursorState(const QPoint& localPos, bool insideWidget);
     void updateTnfHoverPopup();
     void drawWaterfall(QPainter& p, const QRect& r);
