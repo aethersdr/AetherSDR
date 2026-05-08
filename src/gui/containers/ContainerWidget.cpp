@@ -32,7 +32,7 @@ ContainerWidget::ContainerWidget(const QString& id, const QString& title,
     connect(m_titleBar, &ContainerTitleBar::closeClicked,
             this, &ContainerWidget::onTitleBarClose);
     connect(m_titleBar, &ContainerTitleBar::alwaysOnTopToggled,
-            this, &ContainerWidget::onTitleBarAlwaysOnTopToggled);
+            this, &ContainerWidget::alwaysOnTopToggled);
     connect(m_titleBar, &ContainerTitleBar::dragStartRequested,
             this, &ContainerWidget::onTitleBarDragStart);
 }
@@ -139,16 +139,6 @@ void ContainerWidget::onTitleBarFloatToggle()
 void ContainerWidget::onTitleBarClose()
 {
     emit closeRequested();
-}
-
-void ContainerWidget::onTitleBarAlwaysOnTopToggled(bool on)
-{
-    emit alwaysOnTopRequested(on);
-}
-
-void ContainerWidget::setAlwaysOnTopIndicator(bool on)
-{
-    if (m_titleBar) m_titleBar->setAlwaysOnTopState(on);
 }
 
 void ContainerWidget::onTitleBarDragStart(const QPoint& /*globalPos*/)

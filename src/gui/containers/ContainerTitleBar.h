@@ -34,10 +34,11 @@ public:
     // through the menu bar instead).
     void setCloseButtonVisible(bool visible);
 
-    // Reflect the always-on-top state in the pin button glyph/colour
-    // without re-emitting alwaysOnTopToggled.  Used when the manager
-    // restores persisted state on float.
+    // Sync the pin button's pressed state.  The pin button is only
+    // visible while the container is in floating mode (mirrors the
+    // float-button visibility in setFloatingState()).
     void setAlwaysOnTopState(bool on);
+    bool alwaysOnTopState() const { return m_alwaysOnTop; }
 
 signals:
     void floatToggleClicked();
@@ -51,8 +52,8 @@ protected:
 
 private:
     QLabel*      m_titleLabel{nullptr};
-    QPushButton* m_floatBtn{nullptr};
     QPushButton* m_pinBtn{nullptr};
+    QPushButton* m_floatBtn{nullptr};
     QPushButton* m_closeBtn{nullptr};
     QPoint       m_pressPos;
     bool         m_pressed{false};

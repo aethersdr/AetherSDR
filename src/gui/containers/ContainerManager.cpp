@@ -1,4 +1,5 @@
 #include "ContainerManager.h"
+#include "ContainerTitleBar.h"
 #include "FloatingContainerWindow.h"
 #include "core/AppSettings.h"
 
@@ -39,8 +40,8 @@ QString geometryKeyFor(const QString& id)
     return QStringLiteral("ContainerGeometry_%1").arg(safe);
 }
 
-// Per-container always-on-top preference key.  Same sanitisation
-// rules as geometryKeyFor() so the two keys stay aligned.
+// Parallel helper for the per-container "always on top" preference
+// (issue #2430).  Same '/' sanitisation as geometryKeyFor().
 QString alwaysOnTopKeyFor(const QString& id)
 {
     QString safe = id;
@@ -244,14 +245,14 @@ void ContainerManager::floatContainer(const QString& id)
     win->setWindowTitle(c->title());
     win->restoreAndEnsureVisible(meta.originalParent);
 
-    // Apply the persisted always-on-top preference *after* geometry
-    // restore — toggling Qt::WindowStaysOnTopHint forces Qt to
-    // recreate the native window, which would otherwise clobber the
+    // Apply the persisted always-on-top preference *after*
+    // restoreAndEnsureVisible(): toggling Qt::WindowStaysOnTopHint
+    // recreates the native window, which would otherwise clobber the
     // geometry we just restored.
     const bool aot = AppSettings::instance()
-        .value(alwaysOnTopKeyFor(id), "False").toString() == "True";
+        .value(alwaysOnTopKeyFor(id), false).toBool();
     if (aot) win->setAlwaysOnTop(true);
-    c->setAlwaysOnTopIndicator(aot);
+    if (auto* tb = c->titleBar()) tb->setAlwaysOnTopState(aot);
 
     win->show();
     saveState();
@@ -321,8 +322,8 @@ void ContainerManager::wireContainer(ContainerWidget* c)
             this, &ContainerManager::onDockRequested);
     connect(c, &ContainerWidget::closeRequested,
             this, &ContainerManager::onCloseRequested);
-    connect(c, &ContainerWidget::alwaysOnTopRequested,
-            this, &ContainerManager::onAlwaysOnTopRequested);
+    connect(c, &ContainerWidget::alwaysOnTopToggled,
+            this, &ContainerManager::onAlwaysOnTopToggled);
 }
 
 void ContainerManager::onFloatRequested()
@@ -345,16 +346,13 @@ void ContainerManager::onCloseRequested()
     saveState();
 }
 
-void ContainerManager::onAlwaysOnTopRequested(bool on)
+void ContainerManager::onAlwaysOnTopToggled(bool on)
 {
     auto* c = qobject_cast<ContainerWidget*>(sender());
     if (!c) return;
     const QString id = c->id();
-
-    AppSettings::instance().setValue(
-        alwaysOnTopKeyFor(id), on ? "True" : "False");
-
-    if (auto* win = m_floatingWindows.value(id)) {
+    AppSettings::instance().setValue(alwaysOnTopKeyFor(id), on);
+    if (auto* win = m_floatingWindows.value(id, nullptr)) {
         win->setAlwaysOnTop(on);
     }
 }

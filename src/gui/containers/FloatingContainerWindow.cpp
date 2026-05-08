@@ -166,9 +166,8 @@ void FloatingContainerWindow::setFramelessMode(bool on)
 
 void FloatingContainerWindow::setAlwaysOnTop(bool on)
 {
-    if (on == m_alwaysOnTop) return;
+    if (m_alwaysOnTop == on) return;
     m_alwaysOnTop = on;
-
     const bool wasVisible = isVisible();
     const QRect geom = geometry();
     Qt::WindowFlags flags = windowFlags();

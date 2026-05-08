@@ -52,10 +52,9 @@ public:
     // main-window frameless setting.  Preserves geometry and visibility.
     void setFramelessMode(bool on);
 
-    // Toggle Qt::WindowStaysOnTopHint at runtime so the popped-out
-    // window floats above all applications.  Mirrors setFramelessMode()
-    // because Qt has to recreate the native window when this hint
-    // changes; geometry and visibility are preserved across the flip.
+    // Toggle Qt::WindowStaysOnTopHint at runtime — see issue #2430.
+    // Same recreate-the-native-window dance as setFramelessMode():
+    // snapshot geometry + visibility, flip the bit, restore.
     void setAlwaysOnTop(bool on);
     bool isAlwaysOnTop() const { return m_alwaysOnTop; }
 

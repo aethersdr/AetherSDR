@@ -4,6 +4,7 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPushButton>
+#include <QSignalBlocker>
 
 namespace AetherSDR {
 
@@ -23,6 +24,15 @@ constexpr const char* kBtnStyle =
     "color: #c8d8e8; font-size: 11px; font-weight: bold; "
     "padding: 0px 4px; } "
     "QPushButton:hover { color: #ffffff; }";
+
+// Same as kBtnStyle but with an explicit "checked" colour so an
+// engaged pin reads visibly different from an idle one.
+constexpr const char* kPinBtnStyle =
+    "QPushButton { background: transparent; border: none; "
+    "color: #c8d8e8; font-size: 11px; font-weight: bold; "
+    "padding: 0px 4px; } "
+    "QPushButton:hover { color: #ffffff; } "
+    "QPushButton:checked { color: #ffd166; }";
 
 constexpr int kDragThresholdPx = 6;
 
@@ -52,16 +62,18 @@ ContainerTitleBar::ContainerTitleBar(const QString& title, QWidget* parent)
     layout->addWidget(m_titleLabel);
     layout->addStretch();
 
-    m_pinBtn = new QPushButton(QString::fromUtf8("\xe2\x88\x98"));  // ∘ unpinned
-    m_pinBtn->setStyleSheet(kBtnStyle);
+    m_pinBtn = new QPushButton(QString::fromUtf8("\xf0\x9f\x93\x8c"));  // 📌
+    m_pinBtn->setStyleSheet(kPinBtnStyle);
     m_pinBtn->setFixedSize(16, 16);
-    m_pinBtn->setToolTip("Keep this window above all applications");
+    m_pinBtn->setCheckable(true);
+    m_pinBtn->setToolTip("Always on top");
     m_pinBtn->setCursor(Qt::ArrowCursor);
-    m_pinBtn->setVisible(false);  // only meaningful when floating
-    connect(m_pinBtn, &QPushButton::clicked, this, [this]() {
-        setAlwaysOnTopState(!m_alwaysOnTop);
-        emit alwaysOnTopToggled(m_alwaysOnTop);
-    });
+    m_pinBtn->setVisible(false);  // shown only in float mode
+    connect(m_pinBtn, &QPushButton::toggled, this,
+            [this](bool on) {
+                m_alwaysOnTop = on;
+                emit alwaysOnTopToggled(on);
+            });
     layout->addWidget(m_pinBtn);
 
     m_floatBtn = new QPushButton(QString::fromUtf8("\xe2\x9a\x8a"));  // ⚊ single line
@@ -106,28 +118,23 @@ void ContainerTitleBar::setFloatingState(bool isFloating)
     // ↙ already covers "close + dock" while floating, so the redundant
     // × button hides itself in float mode and reappears when docked.
     if (m_closeBtn) m_closeBtn->setVisible(m_closeAllowed && !isFloating);
-    // Pin button only makes sense in float mode.
+    // The pin makes no sense for in-panel containers — only show it
+    // when this container hosts an actual top-level window.
     if (m_pinBtn) m_pinBtn->setVisible(isFloating);
-}
-
-void ContainerTitleBar::setCloseButtonVisible(bool visible)
-{
-    m_closeAllowed = visible;
-    if (m_closeBtn) m_closeBtn->setVisible(visible && !m_isFloating);
 }
 
 void ContainerTitleBar::setAlwaysOnTopState(bool on)
 {
     m_alwaysOnTop = on;
     if (!m_pinBtn) return;
-    // Filled "●" when pinned, hollow "∘" when not.  Tooltip flips so
-    // the click target reads as a toggle.
-    m_pinBtn->setText(on
-        ? QString::fromUtf8("\xe2\x97\x8f")
-        : QString::fromUtf8("\xe2\x88\x98"));
-    m_pinBtn->setToolTip(on
-        ? "Stop keeping this window above all applications"
-        : "Keep this window above all applications");
+    QSignalBlocker blocker(m_pinBtn);
+    m_pinBtn->setChecked(on);
+}
+
+void ContainerTitleBar::setCloseButtonVisible(bool visible)
+{
+    m_closeAllowed = visible;
+    if (m_closeBtn) m_closeBtn->setVisible(visible && !m_isFloating);
 }
 
 void ContainerTitleBar::mousePressEvent(QMouseEvent* ev)
