@@ -11711,8 +11711,6 @@ void MainWindow::createPansSequentially(const QString& layoutId, int total,
                 // Configure the pan
                 m_radioModel.sendCommand(
                     QString("display pan set %1 xpixels=1024 ypixels=700").arg(panId));
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 fps=25").arg(panId));
             }
 
             // Create next pan after a brief delay

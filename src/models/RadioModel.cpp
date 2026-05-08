@@ -1044,7 +1044,7 @@ void RadioModel::createPanadapter()
             ensureOwnedPanadapter(panId);
             QTimer::singleShot(200, this, [this, panId]() {
                 sendCmd(QString("display pan set %1 xpixels=1024 ypixels=700").arg(panId));
-                sendCmd(QString("display pan set %1 fps=25 min_dbm=-130 max_dbm=-40").arg(panId));
+                sendCmd(QString("display pan set %1 min_dbm=-130 max_dbm=-40").arg(panId));
             });
         }
     };
@@ -3872,10 +3872,10 @@ void RadioModel::configurePan()
     emit panDimensionsNeeded(m_activePanId);
 
     sendCmd(
-        QString("display pan set %1 fps=25 min_dbm=-130 max_dbm=-40").arg(m_activePanId),
+        QString("display pan set %1 min_dbm=-130 max_dbm=-40").arg(m_activePanId),
         [](int code, const QString&) {
             if (code != 0)
-                qCWarning(lcProtocol) << "RadioModel: display pan set fps/average/dbm failed, code" << Qt::hex << code;
+                qCWarning(lcProtocol) << "RadioModel: display pan set dBm failed, code" << Qt::hex << code;
         });
 }
 
