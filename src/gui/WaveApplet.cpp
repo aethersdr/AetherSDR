@@ -26,6 +26,34 @@ constexpr int kDefaultZoomPercent = 170;
 constexpr int kMinFps = 5;
 constexpr int kMaxFps = 30;
 constexpr int kDefaultFps = 24;
+// Discrete window steps for the WaveApplet drawer's "Window" slider.
+// First three notches give sub-second detail (240 ms, 480 ms, 1 s); the
+// rest are 1-second increments out to 10 s.  Index-based so each notch
+// is a deliberate stop, not a free-scrub through ms-resolution values.
+const QVector<int>& windowStepsMs()
+{
+    static const QVector<int> kSteps = {
+        240, 480, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000
+    };
+    return kSteps;
+}
+constexpr int kDefaultWindowStepIdx = 2;  // 1 s
+QString formatWindow(int ms)
+{
+    return ms < 1000 ? QStringLiteral("%1 ms").arg(ms)
+                     : QStringLiteral("%1 s").arg(ms / 1000);
+}
+int closestStepIdx(int targetMs)
+{
+    const auto& steps = windowStepsMs();
+    int bestIdx = 0;
+    int bestDelta = std::abs(steps[0] - targetMs);
+    for (int i = 1; i < steps.size(); ++i) {
+        const int d = std::abs(steps[i] - targetMs);
+        if (d < bestDelta) { bestDelta = d; bestIdx = i; }
+    }
+    return bestIdx;
+}
 
 const QString kSliderStyle =
     "QSlider::groove:horizontal { height: 4px; background: #203040; border-radius: 2px; }"
@@ -116,6 +144,26 @@ WaveApplet::WaveApplet(QWidget* parent)
     m_waveform->setRefreshRateHz(refreshRate);
     updateRefreshLabel();
 
+    // One-time migration from the previous "TimeWindowSec" key (1–20 s
+    // linear) to the new "TimeWindowMs" discrete-step storage.  Existing
+    // users keep their value, snapped to the nearest available step.
+    if (settings.contains("WaveApplet_TimeWindowSec")
+        && !settings.contains("WaveApplet_TimeWindowMs")) {
+        const int legacySec = settings.value("WaveApplet_TimeWindowSec", 1).toInt();
+        settings.setValue("WaveApplet_TimeWindowMs", QString::number(legacySec * 1000));
+    }
+    const int windowMs = settings.value(
+        "WaveApplet_TimeWindowMs",
+        windowStepsMs()[kDefaultWindowStepIdx]).toInt();
+    const int windowIdx = closestStepIdx(windowMs);
+    const int snappedMs = windowStepsMs()[windowIdx];
+    {
+        QSignalBlocker block(m_windowSlider);
+        m_windowSlider->setValue(windowIdx);
+    }
+    m_waveform->setZoomWindowMs(snappedMs);
+    updateWindowLabel();
+
     setSettingsExpanded(true);
     setMinimumHeight(minimumSizeHint().height());
 
@@ -146,10 +194,6 @@ QSize WaveApplet::minimumSizeHint() const
 void WaveApplet::buildSettingsDrawer()
 {
     m_settingsDrawer = new QFrame(this);
-    m_settingsDrawer->setObjectName("WaveSettingsDrawer");
-    m_settingsDrawer->setStyleSheet(
-        "QFrame#WaveSettingsDrawer { background-color: #0f1a24; "
-        "border: 1px solid #20384d; border-radius: 3px; }");
 
     auto* drawer = new QVBoxLayout(m_settingsDrawer);
     drawer->setContentsMargins(5, 4, 5, 5);
@@ -246,6 +290,40 @@ void WaveApplet::buildSettingsDrawer()
 
         drawer->addLayout(row);
     }
+
+    {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(5);
+        row->addWidget(makeSettingLabel("Window:", m_settingsDrawer));
+
+        m_windowSlider = new GuardedSlider(Qt::Horizontal, m_settingsDrawer);
+        m_windowSlider->setRange(0, windowStepsMs().size() - 1);
+        m_windowSlider->setSingleStep(1);
+        m_windowSlider->setPageStep(1);
+        m_windowSlider->setTickPosition(QSlider::NoTicks);
+        m_windowSlider->setStyleSheet(kSliderStyle);
+        m_windowSlider->setToolTip(
+            "Time window. Steps: 240 ms, 480 ms, 1 s, then 1-second "
+            "increments to 10 s.");
+        row->addWidget(m_windowSlider, 1);
+
+        m_windowValue = new QLabel(m_settingsDrawer);
+        m_windowValue->setFixedWidth(48);
+        m_windowValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        m_windowValue->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; }");
+        row->addWidget(m_windowValue);
+
+        connect(m_windowSlider, &QSlider::valueChanged, this, [this](int idx) {
+            const int ms = windowStepsMs().value(idx, 1000);
+            m_waveform->setZoomWindowMs(ms);
+            updateWindowLabel();
+            auto& settings = AppSettings::instance();
+            settings.setValue("WaveApplet_TimeWindowMs", QString::number(ms));
+            settings.save();
+        });
+
+        drawer->addLayout(row);
+    }
 }
 
 void WaveApplet::setSettingsExpanded(bool expanded)
@@ -277,6 +355,14 @@ void WaveApplet::updateRefreshLabel()
     if (!m_refreshSlider || !m_refreshValue)
         return;
     m_refreshValue->setText(QStringLiteral("%1 fps").arg(m_refreshSlider->value()));
+}
+
+void WaveApplet::updateWindowLabel()
+{
+    if (!m_windowSlider || !m_windowValue)
+        return;
+    const int ms = windowStepsMs().value(m_windowSlider->value(), 1000);
+    m_windowValue->setText(formatWindow(ms));
 }
 
 void WaveApplet::appendScopeSamples(const QByteArray& monoFloat32Pcm,

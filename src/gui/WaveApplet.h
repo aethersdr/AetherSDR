@@ -30,14 +30,17 @@ private:
     void setSettingsExpanded(bool expanded);
     void updateZoomLabel();
     void updateRefreshLabel();
+    void updateWindowLabel();
 
     WaveformWidget* m_waveform{nullptr};
     QFrame* m_settingsDrawer{nullptr};
     GuardedComboBox* m_viewCombo{nullptr};
     GuardedSlider* m_zoomSlider{nullptr};
     GuardedSlider* m_refreshSlider{nullptr};
+    GuardedSlider* m_windowSlider{nullptr};
     QLabel* m_zoomValue{nullptr};
     QLabel* m_refreshValue{nullptr};
+    QLabel* m_windowValue{nullptr};
 };
 
 } // namespace AetherSDR

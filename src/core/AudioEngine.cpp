@@ -57,6 +57,11 @@ constexpr qint64 kScopeEmitMinIntervalMs = 25;  // ~40 fps, per RX/TX source
 // to draw on every frame.  ~120 Hz max — emissions over the strip
 // widget's repaint rate are simply ignored by the panel.
 constexpr qint64 kTxPostChainEmitMinIntervalMs = 8;
+// RX strip-panel mirror — same 8 ms throttle so the strip's "Aetherial
+// Waveform — RX" panel sees one emission per audio callback (no dropped
+// blocks).  The shared scopeSamplesReady throttle stays at 25 ms for
+// the floating WaveApplet which doesn't need this fidelity.
+constexpr qint64 kRxPostChainEmitMinIntervalMs = 8;
 
 bool devicePresent(const QList<QAudioDevice>& devices, const QAudioDevice& target)
 {
@@ -183,6 +188,47 @@ void AudioEngine::emitTxPostChainScopeFromInt16Stereo(const QByteArray& pcm,
     else
         m_lastTxPostChainScopeEmit.start();
     emit txPostChainScopeReady(m_scopeTxPostChainScratch,
+                               sampleRate > 0 ? sampleRate : DEFAULT_SAMPLE_RATE);
+}
+
+void AudioEngine::emitRxPostChainScopeFromFloat32Stereo(const QByteArray& pcm,
+                                                         int sampleRate)
+{
+    // RX-side mirror of emitTxPostChainScopeFromInt16Stereo.  Same
+    // float32-stereo → mono-float collapse as emitScopeFromFloat32Stereo,
+    // but uses a dedicated 8 ms throttle and emits on rxPostChainScopeReady
+    // so the channel strip's RX scope tracks wall clock at short windows.
+    const int floatSamples = pcm.size() / static_cast<int>(sizeof(float));
+    if (floatSamples <= 0)
+        return;
+
+    if (m_lastRxPostChainScopeEmit.isValid()
+        && m_lastRxPostChainScopeEmit.elapsed() < kRxPostChainEmitMinIntervalMs)
+        return;
+
+    const bool stereo = (floatSamples % 2) == 0;
+    const int monoSamples = stereo ? floatSamples / 2 : floatSamples;
+    m_scopeRxPostChainScratch.resize(monoSamples * static_cast<int>(sizeof(float)));
+
+    const auto* src = reinterpret_cast<const float*>(pcm.constData());
+    auto* dst = reinterpret_cast<float*>(m_scopeRxPostChainScratch.data());
+    if (stereo) {
+        for (int i = 0; i < monoSamples; ++i) {
+            const float avg = (src[i * 2] + src[i * 2 + 1]) * 0.5f;
+            dst[i] = std::clamp(std::isfinite(avg) ? avg : 0.0f, -1.0f, 1.0f);
+        }
+    } else {
+        for (int i = 0; i < monoSamples; ++i) {
+            const float s = src[i];
+            dst[i] = std::clamp(std::isfinite(s) ? s : 0.0f, -1.0f, 1.0f);
+        }
+    }
+
+    if (m_lastRxPostChainScopeEmit.isValid())
+        m_lastRxPostChainScopeEmit.restart();
+    else
+        m_lastRxPostChainScopeEmit.start();
+    emit rxPostChainScopeReady(m_scopeRxPostChainScratch,
                                sampleRate > 0 ? sampleRate : DEFAULT_SAMPLE_RATE);
 }
 
@@ -995,6 +1041,7 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
         }
         m_rxBuffer.append(*output);
         emitScopeFromFloat32Stereo(*output, scopeSampleRate, false);
+        emitRxPostChainScopeFromFloat32Stereo(*output, scopeSampleRate);
         updateRxBufferStats();
     };
 
@@ -3123,6 +3170,7 @@ void AudioEngine::processBnr(const QByteArray& stereoPcm)
             const QByteArray& output = m_resampleTo48k ? resampleStereo(chunk) : chunk;
             m_rxBuffer.append(output);
             emitScopeFromFloat32Stereo(output, scopeSampleRate, false);
+            emitRxPostChainScopeFromFloat32Stereo(output, scopeSampleRate);
             updateRxBufferStats();
         }
         emit levelChanged(computeRMS(chunk));

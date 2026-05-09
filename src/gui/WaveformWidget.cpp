@@ -26,7 +26,11 @@ constexpr int kMinSampleRate = 8000;
 constexpr int kMaxSampleRate = 192000;
 constexpr int kNoAudioTimeoutMs = 1000;
 constexpr int kMinWindowMs = 40;
-constexpr int kMaxWindowMs = 240;
+// Lifted from 240 ms to 20 s so the WaveApplet drawer's "Window" slider
+// (1–20 s, matches StripWaveformPanel) can take effect.  ensureCapacity
+// scales the ring buffer to fit the current window, so larger values
+// only allocate when the user picks them.
+constexpr int kMaxWindowMs = 20000;
 constexpr int kMinRefreshRateHz = 5;
 constexpr int kMaxRefreshRateHz = 30;
 constexpr double kPi = 3.14159265358979323846;
@@ -306,8 +310,15 @@ const WaveformWidget::RingBuffer& WaveformWidget::activeBuffer() const
 void WaveformWidget::ensureCapacity(RingBuffer& buffer, int sampleRate)
 {
     const int rate = sanitizeSampleRate(sampleRate);
-    const int capacity = std::max(kDefaultSampleRate, rate);
-    if (buffer.samples.size() == capacity) {
+    // Size the ring to hold the current window plus 1 s headroom.  Floor
+    // at 1 s so a freshly-applied small window doesn't truncate samples
+    // that arrived just before the change.  Round up to 4096-sample
+    // chunks so a slider drag doesn't realloc on every notch.
+    const int windowSamples = static_cast<int>(
+        static_cast<int64_t>(rate) * std::max(1000, m_windowMs) / 1000);
+    const int needed   = std::max(rate, windowSamples) + rate;
+    const int capacity = ((needed + 4095) / 4096) * 4096;
+    if (buffer.samples.size() >= capacity) {
         buffer.sampleRate = rate;
         return;
     }

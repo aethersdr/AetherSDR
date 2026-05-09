@@ -449,6 +449,12 @@ signals:
     // "Waveform CE-SSB" panel listens to so the operator sees the
     // actual transmitted envelope.
     void txPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
+    // Mirror of txPostChainScopeReady for the RX side: high-rate emit
+    // (~125 Hz, no sample loss across audio callbacks) so the channel
+    // strip's "Aetherial Waveform — RX" panel sees a wall-clock-accurate
+    // scope.  The shared scopeSamplesReady throttles at 25 ms which made
+    // the strip's RX scroll lag wall clock at short time-window settings.
+    void rxPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void radioTransmittingChanged(bool tx);
     void mutedChanged(bool muted);                          // local audio output mute state
     void txBypassChanged(bool on);                          // master TX BYPASS state
@@ -470,6 +476,7 @@ private:
     void emitScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitTxPostChainScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate);
+    void emitRxPostChainScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate);
     QByteArray resampleStereo(const QByteArray& pcm);
     void processNr2(const QByteArray& stereoPcm);
     void updateRxBufferStats();
@@ -571,9 +578,11 @@ private:
     QElapsedTimer m_lastRxScopeEmit;
     QElapsedTimer m_lastTxScopeEmit;
     QElapsedTimer m_lastTxPostChainScopeEmit;
+    QElapsedTimer m_lastRxPostChainScopeEmit;
     QByteArray    m_scopeRxScratch;
     QByteArray    m_scopeTxScratch;
     QByteArray    m_scopeTxPostChainScratch;
+    QByteArray    m_scopeRxPostChainScratch;
 
     QAudioDevice m_outputDevice;
     QAudioDevice m_inputDevice;

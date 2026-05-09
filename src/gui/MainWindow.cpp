@@ -1151,9 +1151,19 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::advanceSwrSweep);
 
     if (auto* wave = m_appletPanel ? m_appletPanel->waveApplet() : nullptr) {
-        connect(m_audio, &AudioEngine::scopeSamplesReady,
-                wave, &WaveApplet::appendScopeSamples,
-                Qt::QueuedConnection);
+        // Use the dedicated high-rate post-chain feeds (8 ms throttle,
+        // one emit per audio callback) instead of the shared 25 ms
+        // scopeSamplesReady so the applet's scroll tracks wall clock at
+        // short time-window settings.  Each side-specific signal lacks
+        // the tx flag, so the lambdas reintroduce it.
+        connect(m_audio, &AudioEngine::txPostChainScopeReady,
+                wave, [wave](const QByteArray& mono, int sr) {
+            wave->appendScopeSamples(mono, sr, /*tx=*/true);
+        }, Qt::QueuedConnection);
+        connect(m_audio, &AudioEngine::rxPostChainScopeReady,
+                wave, [wave](const QByteArray& mono, int sr) {
+            wave->appendScopeSamples(mono, sr, /*tx=*/false);
+        }, Qt::QueuedConnection);
         connect(m_audio, &AudioEngine::radioTransmittingChanged,
                 wave, &WaveApplet::setTransmitting,
                 Qt::QueuedConnection);
@@ -10782,6 +10792,8 @@ void MainWindow::setFramelessWindow(bool on)
     if (auto* dlg = qobject_cast<AetherDspDialog*>(m_dspDialog))
         dlg->setFramelessMode(on);
     if (auto* dlg = qobject_cast<DxClusterDialog*>(m_spotHubDialog))
+        dlg->setFramelessMode(on);
+    if (auto* dlg = qobject_cast<MemoryDialog*>(m_memoryDialog))
         dlg->setFramelessMode(on);
     if (m_aetherialStrip)
         m_aetherialStrip->setFramelessMode(on);

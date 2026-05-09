@@ -13,6 +13,7 @@ class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
+class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -23,6 +24,12 @@ class MemoryDialog : public QDialog {
 
 public:
     explicit MemoryDialog(RadioModel* model, QWidget* parent = nullptr);
+
+    // Toggle frameless chrome at runtime — mirrors the SpotHub /
+    // RadioSetup pattern.  Snapshots geometry + visibility, flips
+    // Qt::FramelessWindowHint, restores.  Called by MainWindow when
+    // the global View → Frameless Window setting changes.
+    void setFramelessMode(bool on);
 
 Q_SIGNALS:
     void memoryActivated(int memoryIndex);
@@ -66,6 +73,12 @@ private:
     bool m_inlineEditMode{false};
     int m_sortColumn{2};
     Qt::SortOrder m_sortOrder{Qt::AscendingOrder};
+
+    // Frameless chrome (mirrors SpotHub / RadioSetup): custom title
+    // bar at the top, FramelessResizer on the body for 8-axis edge
+    // resize.
+    QWidget*     m_titleBar{nullptr};
+    QVBoxLayout* m_outerLayout{nullptr};
 };
 
 } // namespace AetherSDR

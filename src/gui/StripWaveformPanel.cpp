@@ -132,12 +132,14 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
             if (m_side != Side::Tx || !m_waveform) return;
             m_waveform->appendScopeSamples(mono, sr, /*tx=*/true);
         });
-        // RX-side tap: post-Pudu output (#2425) — the exact bytes
-        // about to hit the local audio sink.  scopeSamplesReady fires
-        // for both sides; filter on tx=false to take only RX.
-        connect(m_audio, &AudioEngine::scopeSamplesReady,
-                m_waveform, [this](const QByteArray& mono, int sr, bool tx) {
-            if (m_side != Side::Rx || tx || !m_waveform) return;
+        // RX-side tap: dedicated rxPostChainScopeReady — same 8 ms
+        // throttle as the TX-side feed so the strip's RX scroll tracks
+        // wall clock at short windows.  The shared scopeSamplesReady
+        // signal that the floating WaveApplet uses keeps its 25 ms
+        // throttle, so both consumers get what they need.
+        connect(m_audio, &AudioEngine::rxPostChainScopeReady,
+                m_waveform, [this](const QByteArray& mono, int sr) {
+            if (m_side != Side::Rx || !m_waveform) return;
             m_waveform->appendScopeSamples(mono, sr, /*tx=*/false);
         });
     }
