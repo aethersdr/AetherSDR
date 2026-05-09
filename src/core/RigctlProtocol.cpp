@@ -54,6 +54,11 @@ QStringList rigVfoTokens()
     };
 }
 
+bool isTxVfoToken(const QString& token)
+{
+    return token == "VFOB" || token == "SUB" || token == "TX";
+}
+
 QStringList rigGetLevelTokens()
 {
     return {
@@ -169,7 +174,12 @@ SliceModel* RigctlProtocol::sliceForVfo(const QString& vfo) const
         return current;
     }
 
-    if (token == "VFOB" || token == "SUB" || token == "TX") {
+    if (isTxVfoToken(token)) {
+        if (m_catSplitEnabled) {
+            if (auto* tx = findCatSplitTxSlice())
+                return tx;
+        }
+
         auto* tx = findTxSlice();
         if (tx && (token == "TX" || tx != current))
             return tx;
@@ -195,6 +205,118 @@ SliceModel* RigctlProtocol::sliceForVfo(const QString& vfo) const
 QString RigctlProtocol::rprt(int code) const
 {
     return QStringLiteral("RPRT %1\n").arg(code);
+}
+
+double RigctlProtocol::defaultSplitTxFrequencyMhz(const SliceModel* rxSlice) const
+{
+    if (!rxSlice)
+        return 0.0;
+
+    const QString mode = rxSlice->mode().toUpper();
+    const bool isCw = (mode == "CW" || mode == "CWL");
+    return rxSlice->frequency() + (isCw ? 0.001 : 0.005);
+}
+
+SliceModel* RigctlProtocol::findCatSplitTxSlice() const
+{
+    if (!m_model)
+        return nullptr;
+
+    if (m_catSplitTxSliceId >= 0) {
+        if (auto* tracked = m_model->slice(m_catSplitTxSliceId))
+            return tracked;
+    }
+
+    auto* rxSlice = (m_catSplitRxSliceId >= 0) ? m_model->slice(m_catSplitRxSliceId) : nullptr;
+    if (!rxSlice)
+        rxSlice = currentSlice();
+    for (auto* s : m_model->slices()) {
+        if (s && s != rxSlice && s->isTxSlice())
+            return s;
+    }
+
+    const int preferredOtherSlice = (m_sliceIndex == 0) ? 1 : 0;
+    for (auto* s : m_model->slices()) {
+        if (s && s != rxSlice && s->sliceId() == preferredOtherSlice)
+            return s;
+    }
+
+    for (auto* s : m_model->slices()) {
+        if (s && s != rxSlice)
+            return s;
+    }
+
+    return nullptr;
+}
+
+SliceModel* RigctlProtocol::ensureCatSplitTxSlice(bool createIfMissing)
+{
+    if (!m_catSplitEnabled || !m_model || !m_model->isConnected())
+        return nullptr;
+
+    auto* txSlice = findCatSplitTxSlice();
+    if (txSlice) {
+        m_catSplitCreatePending = false;
+        m_catSplitTxSliceId = txSlice->sliceId();
+        txSlice->setTxSlice(true);
+        applyPendingSplitSettings(txSlice);
+        return txSlice;
+    }
+
+    if (createIfMissing && !m_catSplitCreatePending) {
+        const double initialFreq = m_hasPendingSplitFreq
+            ? m_pendingSplitFreqMhz
+            : defaultSplitTxFrequencyMhz(currentSlice());
+        requestCatSplitSlice(initialFreq);
+    }
+
+    return nullptr;
+}
+
+void RigctlProtocol::applyPendingSplitSettings(SliceModel* txSlice)
+{
+    if (!txSlice)
+        return;
+
+    if (m_hasPendingSplitFreq) {
+        txSlice->setFrequency(m_pendingSplitFreqMhz);
+        m_hasPendingSplitFreq = false;
+    }
+
+    if (!m_pendingSplitMode.isEmpty()) {
+        txSlice->setMode(m_pendingSplitMode);
+        m_pendingSplitMode.clear();
+    }
+}
+
+void RigctlProtocol::requestCatSplitSlice(double initialFreqMhz)
+{
+    if (!m_model)
+        return;
+
+    auto* rxSlice = currentSlice();
+    if (!rxSlice)
+        return;
+
+    if (m_model->slices().size() >= m_model->maxSlices())
+        return;
+
+    QString panId = rxSlice->panId();
+    if (panId.isEmpty())
+        panId = m_model->panId();
+    if (panId.isEmpty())
+        return;
+
+    if (initialFreqMhz <= 0.0)
+        initialFreqMhz = defaultSplitTxFrequencyMhz(rxSlice);
+    if (initialFreqMhz <= 0.0)
+        return;
+
+    m_catSplitCreatePending = true;
+    m_catSplitOwnsTxSlice = true;
+    m_model->sendCommand(QStringLiteral("slice create pan=%1 freq=%2")
+        .arg(panId)
+        .arg(initialFreqMhz, 0, 'f', 6));
 }
 
 // ── Main entry point ────────────────────────────────────────────────────────
@@ -484,16 +606,36 @@ QString RigctlProtocol::cmdGetVfoInfo(const QString& arg)
         return supported + "\n";
     }
 
-    auto* slice = sliceForVfo(requested);
-    if (!slice) return rprt(-1);
-
-    const auto hz = static_cast<long long>(std::round(slice->frequency() * 1e6));
-    const QString mode = smartsdrToHamlib(slice->mode());
-    const int width = qAbs(slice->filterHigh() - slice->filterLow());
     auto* rxSlice = currentSlice();
+    if (m_catSplitEnabled)
+        ensureCatSplitTxSlice(false);
     auto* txSlice = findTxSlice();
-    const bool split = rxSlice && txSlice && txSlice != rxSlice;
+    const bool wantsTxVfo = isTxVfoToken(requested);
+    const bool split = m_catSplitEnabled || (rxSlice && txSlice && txSlice != rxSlice);
     constexpr int satMode = 0;
+
+    long long hz = 0;
+    QString mode;
+    int width = 0;
+
+    if (wantsTxVfo && m_catSplitEnabled && !txSlice) {
+        if (!rxSlice) return rprt(-1);
+        const double freqMhz = m_hasPendingSplitFreq
+            ? m_pendingSplitFreqMhz
+            : defaultSplitTxFrequencyMhz(rxSlice);
+        hz = static_cast<long long>(std::round(freqMhz * 1e6));
+        mode = m_pendingSplitMode.isEmpty()
+            ? smartsdrToHamlib(rxSlice->mode())
+            : smartsdrToHamlib(m_pendingSplitMode);
+        width = qAbs(rxSlice->filterHigh() - rxSlice->filterLow());
+    } else {
+        auto* slice = sliceForVfo(requested);
+        if (!slice) return rprt(-1);
+
+        hz = static_cast<long long>(std::round(slice->frequency() * 1e6));
+        mode = smartsdrToHamlib(slice->mode());
+        width = qAbs(slice->filterHigh() - slice->filterLow());
+    }
 
     if (m_extended) {
         return QStringLiteral("get_vfo_info: %1\nFreq: %2\nMode: %3\nWidth: %4\nSplit: %5\nSatMode: %6\n")
@@ -613,6 +755,11 @@ QString RigctlProtocol::cmdGetRigInfo()
 SliceModel* RigctlProtocol::findTxSlice() const
 {
     if (!m_model) return nullptr;
+    if (m_catSplitEnabled) {
+        if (auto* tx = findCatSplitTxSlice())
+            return tx;
+        return nullptr;
+    }
     for (auto* s : m_model->slices())
         if (s->isTxSlice()) return s;
     return nullptr;
@@ -621,8 +768,10 @@ SliceModel* RigctlProtocol::findTxSlice() const
 QString RigctlProtocol::cmdGetSplitVfo()
 {
     auto* rxSlice = currentSlice();
+    if (m_catSplitEnabled)
+        ensureCatSplitTxSlice(false);
     auto* txSlice = findTxSlice();
-    bool split = (rxSlice && txSlice && rxSlice != txSlice);
+    bool split = m_catSplitEnabled || (rxSlice && txSlice && rxSlice != txSlice);
     // Report TX VFO as VFOB when split (TX on a different slice), VFOA otherwise.
     // The actual slice is resolved internally — the VFO label is only for the client.
     const QString txVfo = split ? "VFOB" : "VFOA";
@@ -637,20 +786,49 @@ QString RigctlProtocol::cmdSetSplitVfo(const QString& args)
     QStringList parts = args.split(' ', Qt::SkipEmptyParts);
     if (parts.isEmpty()) return rprt(-1);
     bool enable = (parts[0] == "1");
-    if (!enable) {
+    if (enable) {
+        m_catSplitEnabled = true;
+        if (auto* s = currentSlice())
+            m_catSplitRxSliceId = s->sliceId();
+        // MacLoggerDX sends set_split_vfo, set_freq, then set_split_freq as a
+        // burst.  Claim an existing VFOB immediately, but defer creating a new
+        // slice until set_split_freq so the slice is born on the requested TX
+        // frequency instead of a temporary default offset.
+        ensureCatSplitTxSlice(false);
+    } else {
         // Disable split — move TX back to our slice
+        if (m_catSplitOwnsTxSlice && m_catSplitTxSliceId >= 0 && m_model)
+            m_model->sendCommand(QStringLiteral("slice remove %1").arg(m_catSplitTxSliceId));
         if (auto* s = currentSlice())
             s->setTxSlice(true);
+        m_catSplitEnabled = false;
+        m_catSplitCreatePending = false;
+        m_catSplitOwnsTxSlice = false;
+        m_hasPendingSplitFreq = false;
+        m_catSplitRxSliceId = -1;
+        m_catSplitTxSliceId = -1;
+        m_pendingSplitFreqMhz = 0.0;
+        m_pendingSplitMode.clear();
     }
-    // Enabling split requires a second slice — handled by MainWindow's split logic
     return rprt(0);
 }
 
 QString RigctlProtocol::cmdGetSplitFreq()
 {
-    auto* txSlice = findTxSlice();
-    if (!txSlice) return rprt(-1);
-    long long hz = static_cast<long long>(std::round(txSlice->frequency() * 1e6));
+    auto* txSlice = m_catSplitEnabled ? ensureCatSplitTxSlice(false) : findTxSlice();
+    long long hz = 0;
+    if (txSlice) {
+        hz = static_cast<long long>(std::round(txSlice->frequency() * 1e6));
+    } else if (m_catSplitEnabled) {
+        auto* rxSlice = currentSlice();
+        if (!rxSlice) return rprt(-1);
+        const double freqMhz = m_hasPendingSplitFreq
+            ? m_pendingSplitFreqMhz
+            : defaultSplitTxFrequencyMhz(rxSlice);
+        hz = static_cast<long long>(std::round(freqMhz * 1e6));
+    } else {
+        return rprt(-1);
+    }
     if (m_extended)
         return QString("get_split_freq:\nTX Frequency: %1\n").arg(hz) + rprt(0);
     return QString("%1\n").arg(hz);
@@ -658,26 +836,41 @@ QString RigctlProtocol::cmdGetSplitFreq()
 
 QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
 {
-    auto* txSlice = findTxSlice();
-    if (!txSlice) return rprt(-1);
     bool ok;
     double hz = args.trimmed().toDouble(&ok);
     if (!ok) return rprt(-1);
+
+    if (m_catSplitEnabled) {
+        m_pendingSplitFreqMhz = hz / 1e6;
+        m_hasPendingSplitFreq = true;
+        if (auto* txSlice = ensureCatSplitTxSlice(true))
+            applyPendingSplitSettings(txSlice);
+        return rprt(0);
+    }
+
+    auto* txSlice = findTxSlice();
+    if (!txSlice) return rprt(-1);
     txSlice->setFrequency(hz / 1e6);
     return rprt(0);
 }
 
 QString RigctlProtocol::cmdGetSplitMode()
 {
-    auto* txSlice = findTxSlice();
-    if (!txSlice) return rprt(-1);
-    const QString mode = txSlice->mode();
+    auto* txSlice = m_catSplitEnabled ? ensureCatSplitTxSlice(false) : findTxSlice();
+    if (!txSlice && !m_catSplitEnabled) return rprt(-1);
+    auto* rxSlice = currentSlice();
+    if (!txSlice && !rxSlice) return rprt(-1);
+
+    const QString mode = txSlice
+        ? txSlice->mode()
+        : (m_pendingSplitMode.isEmpty() ? rxSlice->mode() : m_pendingSplitMode);
     // Map FlexRadio mode to Hamlib mode string
     QString hMode = mode;
     if (mode == "DIGU") hMode = "PKTUSB";
     else if (mode == "DIGL") hMode = "PKTLSB";
     else if (mode == "SAM") hMode = "AMS";
-    int passband = txSlice->filterHigh() - txSlice->filterLow();
+    const auto* widthSlice = txSlice ? txSlice : rxSlice;
+    int passband = widthSlice->filterHigh() - widthSlice->filterLow();
     if (m_extended)
         return QString("get_split_mode:\nTX Mode: %1\nTX Passband: %2\n").arg(hMode).arg(passband) + rprt(0);
     return QString("%1\n%2\n").arg(hMode).arg(passband);
@@ -685,14 +878,22 @@ QString RigctlProtocol::cmdGetSplitMode()
 
 QString RigctlProtocol::cmdSetSplitMode(const QString& args)
 {
-    auto* txSlice = findTxSlice();
-    if (!txSlice) return rprt(-1);
     QStringList parts = args.split(' ', Qt::SkipEmptyParts);
     if (parts.isEmpty()) return rprt(-1);
     QString mode = parts[0];
     if (mode == "PKTUSB") mode = "DIGU";
     else if (mode == "PKTLSB") mode = "DIGL";
     else if (mode == "AMS") mode = "SAM";
+
+    if (m_catSplitEnabled) {
+        m_pendingSplitMode = mode;
+        if (auto* txSlice = ensureCatSplitTxSlice(true))
+            applyPendingSplitSettings(txSlice);
+        return rprt(0);
+    }
+
+    auto* txSlice = findTxSlice();
+    if (!txSlice) return rprt(-1);
     txSlice->setMode(mode);
     return rprt(0);
 }
