@@ -108,7 +108,7 @@ signals:
     void freedvStartRequested();
     void freedvStopRequested();
     void freedvReportingToggled(bool enabled);
-    void fdvMessageChanged(const QString& message);
+    void freedvMessageChanged(const QString& message);
 #endif
     void wsjtxSpotFiltered(const DxSpot& spot);  // WSJT-X spot after filter+color
     void tuneRequested(double freqMhz, const QString& spotMode, const QString& comment);

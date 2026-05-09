@@ -1701,7 +1701,7 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
         QString msg = m_fdvMessageEdit->text().trimmed();
         as.setValue("FreeDvMyMessage", msg);
         as.save();
-        emit fdvMessageChanged(msg);
+        emit freedvMessageChanged(msg);
     });
     reportLayout->addWidget(m_fdvMessageEdit, frow, 1);
     frow++;
