@@ -9,6 +9,7 @@
 #include <QLayout>
 #include <QStringList>
 #include <QVBoxLayout>
+#include <QPointer>
 #include <QTimer>
 #include <QWindow>
 
@@ -202,7 +203,7 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     // render produces a black surface and the next input event into it
     // crashes (#2495).  Stale entries would also remain in
     // m_floatingWindows, permanently blocking future float requests.
-    QList<SpectrumWidget*> rebound;
+    QList<QPointer<SpectrumWidget>> rebound;
     if (!m_floatingWindows.isEmpty()) {
         const QList<QString> floatingIds = m_floatingWindows.keys();
         for (const QString& panId : floatingIds) {
@@ -364,7 +365,7 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     // out of a floating window, so they bind to the new top-level window
     // before the first render (mirrors the dockPanadapter() refresh dance).
     QTimer::singleShot(0, this, [this, rebound]() {
-        for (auto* sw : rebound) {
+        for (SpectrumWidget* sw : rebound) {
             if (!sw) continue;
             sw->show();
             refreshAfterReparent(sw);
