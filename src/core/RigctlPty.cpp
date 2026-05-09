@@ -69,6 +69,15 @@ bool RigctlPty::start()
     m_protocol = new RigctlProtocol(m_model);
     m_protocol->setSliceIndex(m_sliceIndex);
 
+    // Give the protocol a write path for deferred responses (e.g. wait_morse).
+    // Capture masterFd by value; stop() sets m_masterFd=-1 which is harmless
+    // since the protocol is deleted in stop() before the fd is closed.
+    int masterFd = m_masterFd;
+    m_protocol->setWriteCallback([masterFd](const QString& r) {
+        QByteArray data = r.toUtf8();
+        ::write(masterFd, data.constData(), data.size());
+    });
+
     // Watch for data on the master FD
     m_notifier = new QSocketNotifier(m_masterFd, QSocketNotifier::Read, this);
     connect(m_notifier, &QSocketNotifier::activated, this, &RigctlPty::onDataReady);

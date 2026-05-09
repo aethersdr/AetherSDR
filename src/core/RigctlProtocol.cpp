@@ -1,4 +1,5 @@
 #include "RigctlProtocol.h"
+#include "models/CwxModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -102,6 +103,14 @@ QString formatRigLevelValue(double value)
 RigctlProtocol::RigctlProtocol(RadioModel* model)
     : m_model(model)
 {}
+
+RigctlProtocol::~RigctlProtocol()
+{
+    // Cancel any in-flight wait_morse so the queueEmpty lambda doesn't
+    // fire after this protocol (and its write callback's captured socket)
+    // have been destroyed.
+    QObject::disconnect(m_pendingMorseConn);
+}
 
 // ── Mode conversion tables ──────────────────────────────────────────────────
 // SmartSDR mode names observed on FLEX-8600 fw v1.4.0.0.
@@ -1133,6 +1142,16 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
 QString RigctlProtocol::cmdStopMorse()
 {
     if (!m_model) return rprt(-1);
+
+    // If wait_morse is blocked, resolve it immediately — CW is being
+    // cancelled, so "done" is the right answer.
+    if (m_pendingMorseConn) {
+        QObject::disconnect(m_pendingMorseConn);
+        m_pendingMorseConn = {};
+        if (m_writeCallback)
+            m_writeCallback(rprt(0));
+    }
+
     auto* model = m_model;
     QMetaObject::invokeMethod(model, [model]() {
         model->cwxModel().clearBuffer();
@@ -1143,7 +1162,28 @@ QString RigctlProtocol::cmdStopMorse()
 QString RigctlProtocol::cmdWaitMorse()
 {
     if (!m_model) return rprt(-1);
-    return rprt(0);
+
+    // If no CWX is in flight, or we have no async write path, respond
+    // immediately — there is nothing to wait for.
+    if (!m_model->isCwxActive() || !m_writeCallback)
+        return rprt(0);
+
+    // CWX is active: block the response until the radio drains its CWX
+    // queue (queueEmpty fires when the radio sends "cwx queue=").
+    // Use the model as context so Qt auto-disconnects if RadioModel goes
+    // away before the CW completes. SingleShotConnection fires once then
+    // removes itself.
+    QObject::disconnect(m_pendingMorseConn);
+    auto cb = m_writeCallback;
+    m_pendingMorseConn = QObject::connect(
+        &m_model->cwxModel(), &CwxModel::queueEmpty,
+        m_model, [this, cb]() mutable {
+            m_pendingMorseConn = {};
+            cb(rprt(0));
+        },
+        Qt::SingleShotConnection
+    );
+    return {};  // no immediate response — deferred via write callback
 }
 
 QString RigctlProtocol::cmdSetKeySpeed(const QString& arg)

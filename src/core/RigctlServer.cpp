@@ -3,6 +3,8 @@
 #include "RigctlProtocol.h"
 #include "models/RadioModel.h"
 
+#include <QPointer>
+
 namespace AetherSDR {
 
 RigctlServer::RigctlServer(RadioModel* model, QObject* parent)
@@ -78,6 +80,15 @@ void RigctlServer::onNewConnection()
         socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);  // TCP_NODELAY
         auto* protocol = new RigctlProtocol(m_model);
         protocol->setSliceIndex(m_sliceIndex);
+
+        // Give the protocol a safe write path for deferred responses
+        // (e.g. wait_morse). QPointer guards against use-after-free if
+        // the socket is destroyed before queueEmpty fires.
+        QPointer<QTcpSocket> safeSocket = socket;
+        protocol->setWriteCallback([safeSocket](const QString& r) {
+            if (safeSocket)
+                safeSocket->write(r.toUtf8());
+        });
 
         ClientState cs;
         cs.socket = socket;

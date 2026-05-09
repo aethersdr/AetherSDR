@@ -1,7 +1,10 @@
 #pragma once
 
-#include <QString>
 #include <QMap>
+#include <QMetaObject>
+#include <QString>
+
+#include <functional>
 
 namespace AetherSDR {
 
@@ -14,6 +17,12 @@ class SliceModel;
 class RigctlProtocol {
 public:
     explicit RigctlProtocol(RadioModel* model);
+    ~RigctlProtocol();
+
+    // Called once by the server/PTY to give us a direct-write path for
+    // deferred responses (e.g. wait_morse blocking until CWX drains).
+    void setWriteCallback(std::function<void(const QString&)> fn)
+        { m_writeCallback = std::move(fn); }
 
     // Process one command line (may contain ';' or '|'-separated batch commands).
     // '|' separator enables extended responses joined by '|' (rigctld pipe mode).
@@ -95,6 +104,11 @@ private:
     // The next line is consumed verbatim as the morse text. Hamlib spec
     // allows this two-line form and Not1MM contest CW relies on it.
     bool m_pendingMorseLine{false};
+    // Callback for deferred writes (set once by server/PTY on creation).
+    std::function<void(const QString&)> m_writeCallback;
+    // Active Qt connection for a deferred wait_morse response.
+    // Disconnected in the destructor and cancelled by stop_morse.
+    QMetaObject::Connection m_pendingMorseConn;
 };
 
 } // namespace AetherSDR

@@ -84,6 +84,7 @@ public:
     float paTemp()    const { return m_paTemp; }
     float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
+    bool  isCwxActive()         const { return m_cwxActive; }
     QStringList antennaList() const { return m_antList; }
     QString serial()       const;
     QString chassisSerial() const { return m_chassisSerial; }
