@@ -6002,12 +6002,21 @@ void MainWindow::buildMenuBar()
                 sw->setSpotBgColor(bgColor);
                 sw->setSpotBgOpacity(bgOpacity);
                 sw->setSpotShowLines(s.value("IsSpotsLinesEnabled", "True").toString() == "True");
+                sw->setSHistorySnapToStep(
+                    s.value("SHistorySnapToStep", "False").toString() == "True");
             }
             // Rebuild markers so source-level visibility changes, such as the
             // Memories feed toggle, apply immediately without mutating the cache.
             m_radioModel.spotModel().refresh();
         };
         connect(dlg, &DxClusterDialog::settingsChanged, this, refreshSpots);
+        // Signal/QRM History Markers live exclusively on the SpotHub
+        // Display tab (no View-menu duplicate, by design — a single UI
+        // surface with no risk of state drift).
+        connect(dlg, &DxClusterDialog::sHistoryEnabledToggled, this,
+                &MainWindow::applySHistoryEnabled);
+        connect(dlg, &DxClusterDialog::sHistoryQrmToggled, this,
+                &MainWindow::applySHistoryQrmEnabled);
         connect(dlg, &DxClusterDialog::connectRequested,
                 this, [this](const QString& host, quint16 port, const QString& call) {
             QMetaObject::invokeMethod(m_dxCluster, [=] { m_dxCluster->connectToCluster(host, port, call); });
@@ -6063,6 +6072,14 @@ void MainWindow::buildMenuBar()
                 this, [this] {
             m_spotDedup.clear();
             m_radioModel.spotModel().clear();
+            // Also wipe Signal History + QRM marker state so "Clear All
+            // Spots" really does clear every marker shape on the
+            // spectrum, not just the DX cluster spots.
+            m_sHistoryData.clear();
+            m_sHistoryPanState.clear();
+            for (auto* a : m_panStack->allApplets()) {
+                a->spectrumWidget()->setSHistoryMarkers({});
+            }
         });
         connect(dlg, &DxClusterDialog::tuneRequested,
                 this, [this](double freqMhz, const QString& spotMode, const QString& comment) {
@@ -6595,48 +6612,14 @@ void MainWindow::buildMenuBar()
         AppSettings::instance().save();
     });
 
+    // Signal/QRM History Markers live exclusively on the SpotHub Display
+    // tab — no View-menu duplicate.  Boot-time state is read here; Display
+    // tab toggle signals call applySHistoryEnabled / applySHistoryQrmEnabled
+    // (defined in this file) for the live apply + persistence path.
     m_sHistoryEnabled =
         AppSettings::instance().value("SHistoryMarkersEnabled", "False").toString() == "True";
     m_sHistoryQrmEnabled =
         AppSettings::instance().value("SHistoryQrmEnabled", "False").toString() == "True";
-
-    auto* sHistoryAct = viewMenu->addAction("Signal History Markers");
-    sHistoryAct->setCheckable(true);
-    sHistoryAct->setChecked(m_sHistoryEnabled);
-    connect(sHistoryAct, &QAction::toggled, this, [this](bool on) {
-        m_sHistoryEnabled = on;
-        AppSettings::instance().setValue("SHistoryMarkersEnabled", on ? "True" : "False");
-        AppSettings::instance().save();
-        for (auto* a : m_panStack->allApplets()) {
-            a->spectrumWidget()->setShowSHistory(on);
-        }
-        if (!on && !m_sHistoryQrmEnabled) {
-            m_sHistoryData.clear();
-            m_sHistoryPanState.clear();
-            for (auto* a : m_panStack->allApplets()) {
-                a->spectrumWidget()->setSHistoryMarkers({});
-            }
-        }
-    });
-
-    auto* qrmHistoryAct = viewMenu->addAction("QRM History Markers");
-    qrmHistoryAct->setCheckable(true);
-    qrmHistoryAct->setChecked(m_sHistoryQrmEnabled);
-    connect(qrmHistoryAct, &QAction::toggled, this, [this](bool on) {
-        m_sHistoryQrmEnabled = on;
-        AppSettings::instance().setValue("SHistoryQrmEnabled", on ? "True" : "False");
-        AppSettings::instance().save();
-        for (auto* a : m_panStack->allApplets()) {
-            a->spectrumWidget()->setShowSHistoryQrm(on);
-        }
-        if (!on && !m_sHistoryEnabled) {
-            m_sHistoryData.clear();
-            m_sHistoryPanState.clear();
-            for (auto* a : m_panStack->allApplets()) {
-                a->spectrumWidget()->setSHistoryMarkers({});
-            }
-        }
-    });
 
     // UI Scale submenu — sets QT_SCALE_FACTOR, applies on restart
     auto* scaleMenu = viewMenu->addMenu("UI Scale");
@@ -9712,6 +9695,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // ── S History Markers ─────────────────────────────────────────────────
     sw->setShowSHistory(m_sHistoryEnabled);
     sw->setShowSHistoryQrm(m_sHistoryQrmEnabled);
+    sw->setSHistorySnapToStep(
+        AppSettings::instance().value("SHistorySnapToStep", "False").toString() == "True");
     if (m_sHistoryEnabled || m_sHistoryQrmEnabled) {
         // Seed a 10-second warmup so QRM classification can establish a
         // baseline before any markers appear on the newly-wired pan.
@@ -10795,6 +10780,8 @@ void MainWindow::setFramelessWindow(bool on)
     if (auto* dlg = qobject_cast<RadioSetupDialog*>(m_radioSetupDialog))
         dlg->setFramelessMode(on);
     if (auto* dlg = qobject_cast<AetherDspDialog*>(m_dspDialog))
+        dlg->setFramelessMode(on);
+    if (auto* dlg = qobject_cast<DxClusterDialog*>(m_spotHubDialog))
         dlg->setFramelessMode(on);
     if (m_aetherialStrip)
         m_aetherialStrip->setFramelessMode(on);
@@ -13875,6 +13862,40 @@ static double roundToHundredHz(double freqMhz)
     return std::round(freqMhz * 10000.0) / 10000.0;
 }
 
+void MainWindow::applySHistoryEnabled(bool on)
+{
+    m_sHistoryEnabled = on;
+    AppSettings::instance().setValue("SHistoryMarkersEnabled", on ? "True" : "False");
+    AppSettings::instance().save();
+    for (auto* a : m_panStack->allApplets()) {
+        a->spectrumWidget()->setShowSHistory(on);
+    }
+    if (!on && !m_sHistoryQrmEnabled) {
+        m_sHistoryData.clear();
+        m_sHistoryPanState.clear();
+        for (auto* a : m_panStack->allApplets()) {
+            a->spectrumWidget()->setSHistoryMarkers({});
+        }
+    }
+}
+
+void MainWindow::applySHistoryQrmEnabled(bool on)
+{
+    m_sHistoryQrmEnabled = on;
+    AppSettings::instance().setValue("SHistoryQrmEnabled", on ? "True" : "False");
+    AppSettings::instance().save();
+    for (auto* a : m_panStack->allApplets()) {
+        a->spectrumWidget()->setShowSHistoryQrm(on);
+    }
+    if (!on && !m_sHistoryEnabled) {
+        m_sHistoryData.clear();
+        m_sHistoryPanState.clear();
+        for (auto* a : m_panStack->allApplets()) {
+            a->spectrumWidget()->setSHistoryMarkers({});
+        }
+    }
+}
+
 void MainWindow::rebuildSHistoryForPan(const QString& panId)
 {
     auto* sw = m_panStack->spectrum(panId);
@@ -13885,7 +13906,10 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
     constexpr int    kMinHits           = 1;
     constexpr qint64 kQualifyMs         = 3000;  // min age before a new signal becomes visible
     constexpr int    kQualifyMinHits    = 3;     // min detections within kQualifyMs to qualify
-    constexpr qint64 kNarrowQrmGateMs   = 6000;  // narrow/wideband: show QRM after 6 s
+    // SpotHub Display tab → Signal History → "QRM Gate" slider; default 6 s.
+    const qint64 kNarrowQrmGateMs = std::clamp(
+        AppSettings::instance().value("SHistoryQrmGateS", 6).toInt(),
+        3, 30) * 1000LL;
     // Require 70% frame occupancy over 6 s, derived from observed fps rather than
     // the old hard-coded 105 (which assumed 25 fps and broke at 10 fps or 60 fps).
     const float observedFps = m_sHistoryPanState.value(panId).fpsEwma;
@@ -13938,7 +13962,7 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
         } else {
             const int hitsIn6s = static_cast<int>(std::count_if(
                 e.hitTimestamps.constBegin(), e.hitTimestamps.constEnd(),
-                [now](qint64 t) { return (now - t) <= kNarrowQrmGateMs; }));
+                [now, kNarrowQrmGateMs](qint64 t) { return (now - t) <= kNarrowQrmGateMs; }));
             // Use lastGapMs so gaps that fell out of the 15 s window still
             // prevent a voice-like signal from being misclassified as QRM.
             const bool noRecentGap = (now - e.lastGapMs) >= kNarrowQrmGateMs;
@@ -13981,6 +14005,12 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
         }
     }
 
+    // SpotHub Display tab → Signal History colour pickers feed these.
+    // Defaults preserve historical look (amber for voice, red for QRM).
+    const QColor signalsCol(AppSettings::instance()
+        .value("SHistoryColorSignals", "#FFC800").toString());
+    const QColor qrmCol(AppSettings::instance()
+        .value("SHistoryColorQrm",     "#FF0000").toString());
     QVector<SpectrumWidget::SpotMarker> markers;
     for (const auto& e : entries) {
         if (!e.visible) { continue; }
@@ -13988,7 +14018,7 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
         const QString label = isQrm
             ? (QStringLiteral("QRM") + AetherSDR::sLabel(e.peakDbm).mid(1))
             : AetherSDR::sLabel(e.peakDbm);
-        const QString color = isQrm ? QStringLiteral("#FF0000") : QStringLiteral("#FFFF00");
+        const QColor col = isQrm ? qrmCol : signalsCol;
         const QString comment = isQrm
             ? QStringLiteral("QRM width=%1 Hz").arg(e.widthHz, 0, 'f', 0)
             : QStringLiteral("Voice width=%1 Hz").arg(e.widthHz, 0, 'f', 0);
@@ -13996,9 +14026,9 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
             -1,
             label,
             roundToHundredHz(e.freqMhz),
-            color,
+            col.name(),
             e.mode,
-            QColor(isQrm ? 255 : 255, isQrm ? 0 : 200, 0),
+            col,
             isQrm ? QStringLiteral("QRM") : QStringLiteral("SHistory"),
             {},
             comment,
@@ -14006,7 +14036,7 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
         });
 
         // Double mark: voice operator detected on top of a QRM-classified entry.
-        // Emit an additional gold voice marker so the operator can see both the
+        // Emit an additional voice marker so the operator can see both the
         // interference AND the person trying to work through it simultaneously.
         // The voice marker ages out independently (30 s after last voice-width hit).
         if (isQrm && (now - e.voiceOverQrmLastMs) < kHideAfterMs) {
@@ -14014,9 +14044,9 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
                 -1,
                 AetherSDR::sLabel(e.peakDbm),
                 roundToHundredHz(e.freqMhz),
-                QStringLiteral("#FFFF00"),
+                signalsCol.name(),
                 e.mode,
-                QColor(255, 200, 0),
+                signalsCol,
                 QStringLiteral("SHistory"),
                 {},
                 QStringLiteral("Voice on QRM ch, width=%1 Hz").arg(e.widthHz, 0, 'f', 0),
@@ -14031,12 +14061,16 @@ void MainWindow::expireSHistoryMarkers()
 {
     if (!m_sHistoryEnabled && !m_sHistoryQrmEnabled) return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    constexpr qint64 kLifetimeMs = 60000;  // entries live 60 s; visible for 30 s
+    // Per-tick read keeps the slider live — fires once a second, AppSettings
+    // reads are an in-memory hash lookup so the cost is negligible.
+    const qint64 kLifetimeMs = std::clamp(
+        AppSettings::instance().value("SHistoryLifetimeS", 60).toInt(),
+        15, 300) * 1000LL;
     for (auto it = m_sHistoryData.begin(); it != m_sHistoryData.end(); ++it) {
         auto& entries = it.value();
         entries.erase(
             std::remove_if(entries.begin(), entries.end(),
-                [now](const SHistoryEntry& e) {
+                [now, kLifetimeMs](const SHistoryEntry& e) {
                     return (now - e.lastSeenMs) > kLifetimeMs;
                 }),
             entries.end());
@@ -14122,9 +14156,15 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
         if (!bufPtr) { bufPtr = std::make_shared<AetherSDR::SpectrogramBuffer>(); }
         bufPtr->push(bins, pan->centerMhz(), pan->bandwidthMhz());
 
+        // SpotHub Display tab → Signal History → "Edge Threshold" slider.
+        // Negative = disabled (use historical 6 dB edge); >= 0 enables slope-
+        // based edge walk at noise floor + this many dB.  Default 3 dB.
+        const float softEdgeDb = AppSettings::instance()
+            .value("SHistorySoftEdgeDb", "3.0").toFloat();
         const auto detected =
             AetherSDR::detectVoiceSignals(bins, pan->centerMhz(), pan->bandwidthMhz(),
-                                          voiceRanges, noiseFloor, sliceMode);
+                                          voiceRanges, noiseFloor, sliceMode,
+                                          softEdgeDb);
         auto& entries = m_sHistoryData[panId];
         for (const auto& sig : detected) {
             bool found = false;

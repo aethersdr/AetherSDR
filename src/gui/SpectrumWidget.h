@@ -330,6 +330,11 @@ public:
     bool showSHistory() const         { return m_showSHistory; }
     void setShowSHistoryQrm(bool on) { m_showSHistoryQrm = on; update(); }
     bool showSHistoryQrm() const      { return m_showSHistoryQrm; }
+    // When on, click-to-tune on a SHistory/QRM marker rounds the target to
+    // the nearest multiple of stepSize().  Compensates for the inherent
+    // detector edge-bin imprecision (typically 100–300 Hz off carrier).
+    void setSHistorySnapToStep(bool on) { m_sHistorySnapToStep = on; }
+    bool sHistorySnapToStep() const     { return m_sHistorySnapToStep; }
     void setSHistoryMarkers(const QVector<SpotMarker>& markers);
     void setSpotFontSize(int px) { m_spotFontSize = px; update(); }
     void setSpotMaxLevels(int n) { m_spotMaxLevels = n; update(); }
@@ -726,6 +731,7 @@ private:
     bool m_showSpots{true};
     bool m_showSHistory{false};
     bool m_showSHistoryQrm{false};
+    bool m_sHistorySnapToStep{false};
     QVector<SpotMarker> m_sHistoryMarkers;
     int  m_spotFontSize{16};
     int  m_spotMaxLevels{3};

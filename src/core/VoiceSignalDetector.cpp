@@ -50,7 +50,8 @@ QVector<DetectedVoiceSignal> detectVoiceSignals(
     double bandwidthMhz,
     const QVector<QPair<double, double>>& voiceRangesMhz,
     float rollingNoiseFloorDbm,
-    const QString& sliceMode)
+    const QString& sliceMode,
+    float softEdgeDb)
 {
     QVector<DetectedVoiceSignal> results;
     const int N = binsDbm.size();
@@ -176,9 +177,42 @@ QVector<DetectedVoiceSignal> detectVoiceSignals(
                 const int peakBin = static_cast<int>(peakIt - binsDbm.constBegin());
                 fMhz = startMhz + (peakBin + 0.5) / N * bandwidthMhz;
             } else {
-                fMhz = isUsb
-                    ? startMhz + (lo + 0.5) / N * bandwidthMhz
-                    : startMhz + (hi + 0.5) / N * bandwidthMhz;
+                int edge = isUsb ? lo : hi;
+                if (softEdgeDb >= 0.0f) {
+                    // Slope-based edge walk.  Starting from the 6 dB region
+                    // boundary, walk outward (toward the carrier) on raw
+                    // unfilled bins using the softer noiseFloor+softEdgeDb
+                    // threshold.  Require kStopBins consecutive sub-threshold
+                    // bins to terminate so isolated noise gaps in the voice
+                    // rolloff don't end the walk prematurely.  Then roll back
+                    // to the last above-threshold bin so the reported edge
+                    // sits at the lowest visible voice energy — typically
+                    // 100–200 Hz nearer to the carrier than the 6 dB edge.
+                    const float softThr = noiseFloor + softEdgeDb;
+                    constexpr int kStopBins = 3;
+                    int below = 0;
+                    int b     = edge;
+                    while (true) {
+                        const int next = isUsb ? b - 1 : b + 1;
+                        if (next < 0 || next >= N) { break; }
+                        if (binsDbm[next] < softThr) {
+                            ++below;
+                            if (below >= kStopBins) {
+                                edge = isUsb ? (b + (kStopBins - 1))
+                                             : (b - (kStopBins - 1));
+                                edge = std::clamp(edge, 0, N - 1);
+                                break;
+                            }
+                        } else {
+                            below = 0;
+                        }
+                        b = next;
+                    }
+                    if (below < kStopBins) {
+                        edge = std::clamp(b, 0, N - 1);
+                    }
+                }
+                fMhz = startMhz + (edge + 0.5) / N * bandwidthMhz;
             }
             qCDebug(lcSHistory,
                 "  DETECTED: %.4f MHz  %s  peak=%.1f dBm (%s)  width=%.0f Hz%s",

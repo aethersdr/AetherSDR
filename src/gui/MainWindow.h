@@ -349,6 +349,12 @@ private:
     QTimer* m_sHistoryExpireTimer{nullptr};
     bool    m_sHistoryEnabled{false};
     bool    m_sHistoryQrmEnabled{false};
+    // Single apply path used by the SpotHub Display tab toggles (no
+    // View-menu duplicate).  Updates the member flag, persists via
+    // AppSettings, pushes to all spectrum widgets, and clears the data
+    // hashes when both markers go off.
+    void applySHistoryEnabled(bool on);
+    void applySHistoryQrmEnabled(bool on);
     void rebuildSHistoryForPan(const QString& panId);
     void expireSHistoryMarkers();
     void onSpectrumReadyForSHistory(quint32 streamId, const QVector<float>& bins, qint64 emittedNs);

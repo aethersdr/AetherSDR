@@ -1,4 +1,6 @@
 #include "DxClusterDialog.h"
+#include "FramelessResizer.h"
+#include "FramelessWindowTitleBar.h"
 #include "GuardedSlider.h"
 #include "core/DxClusterClient.h"
 #include "core/AppSettings.h"
@@ -32,6 +34,18 @@
 #include <QTimer>
 
 namespace AetherSDR {
+
+// Shared DSP-style toggle for every checkable button in SpotHub
+// (matches kDspToggle in VfoWidget.cpp so the chrome reads the same as
+// the NB / NR / ANF buttons in the VFO panel).  Dark inset by default,
+// green fill when checked, cyan hover-border accent.
+static const QString kSpotHubToggle =
+    "QPushButton { background: #1a2a3a; border: 1px solid #304050;"
+    " border-radius: 2px; color: #c8d8e8; font-size: 13px;"
+    " font-weight: bold; padding: 2px 8px; }"
+    "QPushButton:checked { background: #1a6030; color: #ffffff;"
+    " border: 1px solid #20a040; }"
+    "QPushButton:hover { border: 1px solid #0090e0; }";
 
 // Read the last N lines of a file without loading the entire thing.
 static QStringList tailFile(const QString& path, int maxLines = 500)
@@ -242,9 +256,22 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     setMinimumSize(680, 560);
     resize(760, 640);
 
-    auto* root = new QVBoxLayout(this);
+    // Outer layout hosts the frameless title bar + content area.  The
+    // content area in turn carries the QTabWidget with the existing
+    // body padding, so flipping frameless on/off only adjusts the
+    // outer's top margin and the title bar's visibility.
+    m_outerLayout = new QVBoxLayout(this);
+    m_outerLayout->setSpacing(0);
+    m_outerLayout->setContentsMargins(0, 0, 0, 0);
+
+    m_titleBar = new FramelessWindowTitleBar(QStringLiteral("SpotHub"), this);
+    m_outerLayout->addWidget(m_titleBar);
+
+    auto* content = new QWidget(this);
+    auto* root = new QVBoxLayout(content);
     root->setSpacing(0);
     root->setContentsMargins(4, 4, 4, 4);
+    m_outerLayout->addWidget(content, 1);
 
     auto* tabs = new QTabWidget;
     tabs->setStyleSheet(
@@ -265,6 +292,11 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     buildDisplayTab(tabs);
 
     root->addWidget(tabs);
+
+    // 8-axis edge resize for the frameless mode.
+    FramelessResizer::install(this);
+    setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
 
     // ── Spot batch timer (1/sec flush) ──────────────────────────────────
     m_spotBatchTimer = new QTimer(this);
@@ -676,8 +708,7 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     m_autoConnectBtn->setCheckable(true);
     m_autoConnectBtn->setChecked(s.value("DxClusterAutoConnect", "False").toString() == "True");
     m_autoConnectBtn->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 4px 10px; }"
-        "QPushButton:!checked { background: #603020; }");
+        kSpotHubToggle);
     connect(m_autoConnectBtn, &QPushButton::toggled, this, [this](bool on) {
         m_autoConnectBtn->setText(on ? "Auto-Connect: ON" : "Auto-Connect: OFF");
         auto& s = AppSettings::instance();
@@ -865,8 +896,7 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     m_rbnAutoConnectBtn->setCheckable(true);
     m_rbnAutoConnectBtn->setChecked(s.value("RbnAutoConnect", "False").toString() == "True");
     m_rbnAutoConnectBtn->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 4px 10px; }"
-        "QPushButton:!checked { background: #603020; }");
+        kSpotHubToggle);
     connect(m_rbnAutoConnectBtn, &QPushButton::toggled, this, [this](bool on) {
         m_rbnAutoConnectBtn->setText(on ? "Auto-Connect: ON" : "Auto-Connect: OFF");
         auto& s = AppSettings::instance();
@@ -1026,8 +1056,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     m_wsjtxAutoStartBtn->setCheckable(true);
     m_wsjtxAutoStartBtn->setChecked(s.value("WsjtxAutoStart", "False").toString() == "True");
     m_wsjtxAutoStartBtn->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 4px 10px; }"
-        "QPushButton:!checked { background: #603020; }");
+        kSpotHubToggle);
     connect(m_wsjtxAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_wsjtxAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -1270,8 +1299,7 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
     m_scAutoStartBtn->setCheckable(true);
     m_scAutoStartBtn->setChecked(s.value("SpotCollectorAutoStart", "False").toString() == "True");
     m_scAutoStartBtn->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 4px 10px; }"
-        "QPushButton:!checked { background: #603020; }");
+        kSpotHubToggle);
     connect(m_scAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_scAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -1384,8 +1412,7 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     m_potaAutoStartBtn->setCheckable(true);
     m_potaAutoStartBtn->setChecked(s.value("PotaAutoStart", "False").toString() == "True");
     m_potaAutoStartBtn->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 4px 10px; }"
-        "QPushButton:!checked { background: #603020; }");
+        kSpotHubToggle);
     connect(m_potaAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_potaAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -1505,8 +1532,7 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     m_freedvAutoStartBtn->setCheckable(true);
     m_freedvAutoStartBtn->setChecked(s.value("FreeDvAutoStart", "False").toString() == "True");
     m_freedvAutoStartBtn->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 4px 10px; }"
-        "QPushButton:!checked { background: #603020; }");
+        kSpotHubToggle);
     connect(m_freedvAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_freedvAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& s = AppSettings::instance();
@@ -1892,6 +1918,9 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     bool passiveSpots     = SpotCommandPolicy::passiveModeFromSetting(
                                 s.value(SpotCommandPolicy::kPassiveSpotsModeKey, "False"));
     bool memoriesEnabled  = s.value("IsMemorySpotsEnabled", "False").toString() == "True";
+    bool autoMode         = s.value("SpotAutoSwitchMode", "True").toString() == "True";
+    bool sHistorySignals  = s.value("SHistoryMarkersEnabled", "False").toString() == "True";
+    bool sHistoryQrm      = s.value("SHistoryQrmEnabled", "False").toString() == "True";
     bool overrideColors   = s.value("IsSpotsOverrideColorsEnabled", "False").toString() == "True";
     bool overrideBg       = s.value("IsSpotsOverrideBackgroundColorsEnabled", "True").toString() == "True";
     bool overrideBgAuto   = s.value("IsSpotsOverrideToAutoBackgroundColorEnabled", "True").toString() == "True";
@@ -1923,71 +1952,99 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             "QPushButton:hover { border-color: #c8d8e8; }").arg(color.name()));
     };
 
-    // ── Spots: Enabled/Disabled ─────────────────────────────────────────
-    grid->addWidget(new QLabel("Spots:"), row, 0);
-    auto* spotsToggle = new QPushButton(spotsEnabled ? "Enabled" : "Disabled");
-    spotsToggle->setCheckable(true);
-    spotsToggle->setChecked(spotsEnabled);
-    spotsToggle->setFixedWidth(80);
-    spotsToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
-    connect(spotsToggle, &QPushButton::toggled, this, [spotsToggle, save](bool on) {
-        spotsToggle->setText(on ? "Enabled" : "Disabled");
-        save("IsSpotsEnabled", on ? "True" : "False");
-    });
-    grid->addWidget(spotsToggle, row++, 1, Qt::AlignLeft);
+    // ── Compact toggle cluster: Spots / Passive / Memories / Auto ─────
+    // One row of name-on-button toggles replaces four label+button rows.
+    // Visual state (green checked / red unchecked) carries the on/off
+    // signal — no separate "Enabled"/"Disabled" text needed.
+    {
+        // Use the shared kSpotHubToggle style (matches VfoWidget's
+        // kDspToggle) — see top of this file.
+        auto makeToggle = [](const QString& label, bool checked,
+                             const QString& tooltip = {}) {
+            auto* btn = new QPushButton(label);
+            btn->setCheckable(true);
+            btn->setChecked(checked);
+            btn->setFixedWidth(90);
+            btn->setFixedHeight(26);
+            if (!tooltip.isEmpty())
+                btn->setToolTip(tooltip);
+            btn->setStyleSheet(kSpotHubToggle);
+            return btn;
+        };
 
-    // ── Passive Spots: receive/render only, do not publish spot add commands ──
-    grid->addWidget(new QLabel("Passive Spots:"), row, 0);
-    auto* passiveToggle = new QPushButton(passiveSpots ? "Enabled" : "Disabled");
-    passiveToggle->setCheckable(true);
-    passiveToggle->setChecked(passiveSpots);
-    passiveToggle->setFixedWidth(80);
-    passiveToggle->setToolTip(
-        "Receive and render radio spots without sending spot add commands to the radio.");
-    passiveToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
-    connect(passiveToggle, &QPushButton::toggled, this, [passiveToggle, save](bool on) {
-        passiveToggle->setText(on ? "Enabled" : "Disabled");
-        save(SpotCommandPolicy::kPassiveSpotsModeKey, on ? "True" : "False");
-    });
-    grid->addWidget(passiveToggle, row++, 1, Qt::AlignLeft);
+        auto* toggleRow = new QHBoxLayout;
+        toggleRow->setSpacing(4);
 
-    // ── Memory feed visibility ──────────────────────────────────────────
-    grid->addWidget(new QLabel("Memories:"), row, 0);
-    auto* memoriesToggle = new QPushButton(memoriesEnabled ? "Enabled" : "Disabled");
-    memoriesToggle->setCheckable(true);
-    memoriesToggle->setChecked(memoriesEnabled);
-    memoriesToggle->setFixedWidth(80);
-    memoriesToggle->setToolTip(
-        "Show radio memory channels as a spot-like feed on the panadapter.");
-    memoriesToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
-    connect(memoriesToggle, &QPushButton::toggled, this, [memoriesToggle, save](bool on) {
-        memoriesToggle->setText(on ? "Enabled" : "Disabled");
-        save("IsMemorySpotsEnabled", on ? "True" : "False");
-    });
-    grid->addWidget(memoriesToggle, row++, 1, Qt::AlignLeft);
+        auto* spotsToggle = makeToggle("Spots", spotsEnabled);
+        connect(spotsToggle, &QPushButton::toggled, this, [save](bool on) {
+            save("IsSpotsEnabled", on ? "True" : "False");
+        });
+        toggleRow->addWidget(spotsToggle);
 
-    // ── Auto-switch mode on spot click (#424) ───────────────────────────
-    grid->addWidget(new QLabel("Auto Mode:"), row, 0);
-    bool autoMode = s.value("SpotAutoSwitchMode", "True").toString() == "True";
-    auto* autoModeToggle = new QPushButton(autoMode ? "Enabled" : "Disabled");
-    autoModeToggle->setCheckable(true);
-    autoModeToggle->setChecked(autoMode);
-    autoModeToggle->setFixedWidth(80);
-    autoModeToggle->setToolTip("Automatically switch slice mode when clicking a spot\nthat includes mode information (e.g. CW, FT8, RTTY)");
-    autoModeToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
-    connect(autoModeToggle, &QPushButton::toggled, this, [autoModeToggle, save](bool on) {
-        autoModeToggle->setText(on ? "Enabled" : "Disabled");
-        save("SpotAutoSwitchMode", on ? "True" : "False");
-    });
-    grid->addWidget(autoModeToggle, row++, 1, Qt::AlignLeft);
+        auto* passiveToggle = makeToggle("Passive", passiveSpots,
+            "Receive and render radio spots without sending spot add commands to the radio.");
+        connect(passiveToggle, &QPushButton::toggled, this, [save](bool on) {
+            save(SpotCommandPolicy::kPassiveSpotsModeKey, on ? "True" : "False");
+        });
+        toggleRow->addWidget(passiveToggle);
+
+        auto* memoriesToggle = makeToggle("Memories", memoriesEnabled,
+            "Show radio memory channels as a spot-like feed on the panadapter.");
+        connect(memoriesToggle, &QPushButton::toggled, this, [save](bool on) {
+            save("IsMemorySpotsEnabled", on ? "True" : "False");
+        });
+        toggleRow->addWidget(memoriesToggle);
+
+        auto* autoModeToggle = makeToggle("Auto", autoMode,
+            "Automatically switch slice mode when clicking a spot\n"
+            "that includes mode information (e.g. CW, FT8, RTTY)");
+        connect(autoModeToggle, &QPushButton::toggled, this, [save](bool on) {
+            save("SpotAutoSwitchMode", on ? "True" : "False");
+        });
+        toggleRow->addWidget(autoModeToggle);
+
+        // Signal History Markers (gold, voice signals).  Mirrors the
+        // View-menu QAction; MainWindow listens to the signal below and
+        // calls setChecked on the QAction, which re-fires the existing
+        // toggled handler that owns the live apply + persistence logic.
+        auto* signalsToggle = makeToggle("Signals", sHistorySignals,
+            "Gold markers for detected voice-width signals on the panadapter.\n"
+            "Same toggle as View → Signal History Markers.");
+        connect(signalsToggle, &QPushButton::toggled, this,
+                [this](bool on) { emit sHistoryEnabledToggled(on); });
+        toggleRow->addWidget(signalsToggle);
+
+        // QRM History Markers (red, persistent carriers / wideband).
+        auto* qrmToggle = makeToggle("QRM", sHistoryQrm,
+            "Red markers for persistent carriers and wideband interference.\n"
+            "Same toggle as View → QRM History Markers.");
+        connect(qrmToggle, &QPushButton::toggled, this,
+                [this](bool on) { emit sHistoryQrmToggled(on); });
+        toggleRow->addWidget(qrmToggle);
+
+        // Clear-all action — non-checkable, but uses the same chrome as
+        // the toggles so the row reads as one cluster.  Wipes DX spots,
+        // memories feed, and S-History / QRM marker state in one click.
+        auto* clearAllBtn = new QPushButton("Clear All");
+        clearAllBtn->setFixedWidth(90);
+        clearAllBtn->setFixedHeight(26);
+        clearAllBtn->setToolTip(
+            "Clear all DX cluster, RBN, WSJT-X, memory feed, signal history,\n"
+            "and QRM history markers from the spectrum.");
+        clearAllBtn->setStyleSheet(kSpotHubToggle);
+        connect(clearAllBtn, &QPushButton::clicked, this, [this] {
+            m_radioModel->sendCommand("spot clear");
+            m_spotModel->clear();
+            if (m_totalSpotsLabel)
+                m_totalSpotsLabel->setText("0");
+            emit spotsClearedAll();
+            emit settingsChanged();
+        });
+        toggleRow->addWidget(clearAllBtn);
+
+        toggleRow->addStretch();
+        grid->addLayout(toggleRow, row++, 0, 1, 2);
+    }
 
     // ── Levels slider ───────────────────────────────────────────────────
     grid->addWidget(new QLabel("Levels:"), row, 0);
@@ -2085,8 +2142,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     overrideToggle->setChecked(overrideColors);
     overrideToggle->setFixedWidth(80);
     overrideToggle->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
+        kSpotHubToggle);
     connect(overrideToggle, &QPushButton::toggled, this, [overrideToggle, save](bool on) {
         overrideToggle->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsOverrideColorsEnabled", on ? "True" : "False");
@@ -2111,9 +2167,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     // ── Override Background + Auto + color picker ───────────────────────
     grid->addWidget(new QLabel("Override Background:"), row, 0);
     auto* bgRow = new QHBoxLayout;
-    QString bgStyle =
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }";
+    const QString& bgStyle = kSpotHubToggle;
     auto* bgEnabledBtn = new QPushButton("Enabled");
     bgEnabledBtn->setCheckable(true);
     bgEnabledBtn->setChecked(overrideBg);
@@ -2173,8 +2227,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     spotLinesBtn->setFixedWidth(80);
     spotLinesBtn->setToolTip("Show vertical lines from the spectrum up to each spot label.\nDisable during contests to reduce clutter.");
     spotLinesBtn->setStyleSheet(
-        "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-        "QPushButton:!checked { background: #603020; }");
+        kSpotHubToggle);
     connect(spotLinesBtn, &QPushButton::toggled, this, [spotLinesBtn, save](bool on) {
         spotLinesBtn->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsLinesEnabled", on ? "True" : "False");
@@ -2189,14 +2242,25 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
 
     layout->addLayout(grid);
 
-    // ── DXCC Coloring section (#330) ────────────────────────────────────
+    // ── Two-column section below the divider ────────────────────────────
+    // Left column: DXCC Coloring (#330)
+    // Right column: Signal History controls
+    // Top border on each column header forms the visual divider line.
+    auto* twoColRow = new QHBoxLayout;
+    twoColRow->setSpacing(16);
+    auto* leftCol  = new QVBoxLayout;
+    auto* rightCol = new QVBoxLayout;
+    leftCol->setSpacing(4);
+    rightCol->setSpacing(4);
+
+    // ── DXCC Coloring section (#330) — left column ──────────────────────
     {
         auto* dxccTitle = new QLabel("DXCC Coloring");
         dxccTitle->setAlignment(Qt::AlignCenter);
         dxccTitle->setStyleSheet(
             "QLabel { font-size: 13px; font-weight: bold; color: #80b0d0; "
             "border-top: 1px solid #304050; padding-top: 8px; margin-top: 6px; }");
-        layout->addWidget(dxccTitle);
+        leftCol->addWidget(dxccTitle);
 
         auto* dxccGrid = new QGridLayout;
         dxccGrid->setColumnStretch(1, 1);
@@ -2208,8 +2272,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         dxccToggle->setChecked(dxccEnabled);
         dxccToggle->setFixedWidth(80);
         dxccToggle->setStyleSheet(
-            "QPushButton { background: #206030; color: white; border: 1px solid #305040; padding: 3px; }"
-            "QPushButton:!checked { background: #603020; }");
+            kSpotHubToggle);
         connect(dxccToggle, &QPushButton::toggled, this, [this, dxccToggle, save](bool on) {
             dxccToggle->setText(on ? "Enabled" : "Disabled");
             save("IsDxccColoringEnabled", on ? "True" : "False");
@@ -2276,7 +2339,8 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         dxccGrid->addWidget(new QLabel("Colors:"), drow, 0);
         dxccGrid->addLayout(swatchRow, drow++, 1);
 
-        layout->addLayout(dxccGrid);
+        leftCol->addLayout(dxccGrid);
+        leftCol->addStretch();
 
         // Wire browse button — always arms the file watcher automatically so
         // spot colours update whenever the user exports a new log (#logbook-autoreload).
@@ -2309,25 +2373,186 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         }
     }
 
+    // ── Signal History section — right column ───────────────────────────
+    // The [Signals] / [QRM] toggles in the top row gate marker visibility;
+    // these controls tune the classification/expiry timings.
+    {
+        auto* shTitle = new QLabel("Signal History");
+        shTitle->setAlignment(Qt::AlignCenter);
+        shTitle->setStyleSheet(
+            "QLabel { font-size: 13px; font-weight: bold; color: #80b0d0; "
+            "border-top: 1px solid #304050; padding-top: 8px; margin-top: 6px; }");
+        rightCol->addWidget(shTitle);
+
+        auto* shGrid = new QGridLayout;
+        shGrid->setColumnStretch(1, 1);
+        int shr = 0;
+
+        // Marker Lifetime — how long inactive markers persist before purge
+        // (replaces the historical 60 s constant in MainWindow::expireSHistoryMarkers).
+        const int lifetimeS = AppSettings::instance()
+            .value("SHistoryLifetimeS", 60).toInt();
+        shGrid->addWidget(new QLabel("Marker Lifetime:"), shr, 0);
+        auto* lifeRow = new QHBoxLayout;
+        auto* lifeSlider = new GuardedSlider(Qt::Horizontal);
+        lifeSlider->setRange(15, 300);
+        lifeSlider->setValue(std::clamp(lifetimeS, 15, 300));
+        lifeSlider->setToolTip(
+            "How long an inactive S-History marker persists before being\n"
+            "removed.  Default 60 s.");
+        auto* lifeValue = new QLabel(QString("%1 s").arg(lifeSlider->value()));
+        lifeValue->setFixedWidth(48);
+        lifeValue->setAlignment(Qt::AlignRight);
+        lifeRow->addWidget(lifeSlider);
+        lifeRow->addWidget(lifeValue);
+        connect(lifeSlider, &QSlider::valueChanged, this, [lifeValue, save](int v) {
+            lifeValue->setText(QString("%1 s").arg(v));
+            save("SHistoryLifetimeS", QString::number(v));
+        });
+        shGrid->addLayout(lifeRow, shr++, 1);
+
+        // QRM Gate Time — minimum age before a narrow/wideband signal can be
+        // classified as QRM.  Voice-width signals use a separate longer gate.
+        const int qrmGateS = AppSettings::instance()
+            .value("SHistoryQrmGateS", 6).toInt();
+        shGrid->addWidget(new QLabel("QRM Gate:"), shr, 0);
+        auto* qrmRow = new QHBoxLayout;
+        auto* qrmSlider = new GuardedSlider(Qt::Horizontal);
+        qrmSlider->setRange(3, 30);
+        qrmSlider->setValue(std::clamp(qrmGateS, 3, 30));
+        qrmSlider->setToolTip(
+            "How long a narrow carrier or wideband signal must persist\n"
+            "before being classified as QRM.  Default 6 s.");
+        auto* qrmValue = new QLabel(QString("%1 s").arg(qrmSlider->value()));
+        qrmValue->setFixedWidth(48);
+        qrmValue->setAlignment(Qt::AlignRight);
+        qrmRow->addWidget(qrmSlider);
+        qrmRow->addWidget(qrmValue);
+        connect(qrmSlider, &QSlider::valueChanged, this, [qrmValue, save](int v) {
+            qrmValue->setText(QString("%1 s").arg(v));
+            save("SHistoryQrmGateS", QString::number(v));
+        });
+        shGrid->addLayout(qrmRow, shr++, 1);
+
+        // Edge Threshold — softer noise-above-floor cutoff used by the slope
+        // edge walk to refine the carrier-side mode edge.  Lower values pull
+        // the marker closer to the carrier (more aggressive).  Steps in
+        // 0.5 dB increments via a 10× int slider.
+        const int edgeDbInt = static_cast<int>(std::lround(
+            AppSettings::instance().value("SHistorySoftEdgeDb", "3.0").toFloat() * 10.0f));
+        shGrid->addWidget(new QLabel("Edge Threshold:"), shr, 0);
+        auto* edgeRow = new QHBoxLayout;
+        auto* edgeSlider = new GuardedSlider(Qt::Horizontal);
+        edgeSlider->setRange(10, 100);  // 1.0–10.0 dB in 0.1 dB units
+        edgeSlider->setSingleStep(5);   // snap-feel: 0.5 dB notches
+        edgeSlider->setValue(std::clamp(edgeDbInt, 10, 100));
+        edgeSlider->setToolTip(
+            "Threshold above noise floor for the slope edge walk that\n"
+            "refines the SHistory carrier-side edge.  Lower = closer to\n"
+            "the carrier but more sensitive to noise.  Default 3.0 dB.");
+        auto* edgeValue = new QLabel(QString::number(edgeSlider->value() / 10.0, 'f', 1) + " dB");
+        edgeValue->setFixedWidth(56);
+        edgeValue->setAlignment(Qt::AlignRight);
+        edgeRow->addWidget(edgeSlider);
+        edgeRow->addWidget(edgeValue);
+        connect(edgeSlider, &QSlider::valueChanged, this, [edgeValue, save](int v) {
+            const double db = v / 10.0;
+            edgeValue->setText(QString::number(db, 'f', 1) + " dB");
+            save("SHistorySoftEdgeDb", QString::number(db, 'f', 1));
+        });
+        shGrid->addLayout(edgeRow, shr++, 1);
+
+        // Marker colour swatches — mirrors the DXCC swatch pattern in the
+        // left column.  Two pickers: Signals (voice) and QRM.
+        QColor signalsColor(AppSettings::instance()
+            .value("SHistoryColorSignals", "#FFC800").toString());
+        QColor qrmColor(AppSettings::instance()
+            .value("SHistoryColorQrm",     "#FF0000").toString());
+
+        auto* shSwatchRow = new QHBoxLayout;
+        struct ShSwatchDef { const char* label; QColor* colPtr; const char* key; };
+        ShSwatchDef shSwatches[] = {
+            { "Signals", &signalsColor, "SHistoryColorSignals" },
+            { "QRM",     &qrmColor,     "SHistoryColorQrm"     },
+        };
+        for (const auto& sw : shSwatches) {
+            auto* col = new QVBoxLayout;
+            auto* lbl = new QLabel(sw.label);
+            lbl->setAlignment(Qt::AlignCenter);
+            lbl->setStyleSheet("QLabel { color: #809090; font-size: 10px; }");
+            auto* btn = new QPushButton;
+            btn->setFixedSize(28, 22);
+            updateSwatch(btn, *sw.colPtr);
+            const QString key = sw.key;
+            QColor* colPtr = sw.colPtr;
+            connect(btn, &QPushButton::clicked, this,
+                    [this, btn, key, colPtr, updateSwatch, save]() {
+                QColor c = QColorDialog::getColor(*colPtr, this, "Pick Colour");
+                if (!c.isValid()) return;
+                *colPtr = c;
+                updateSwatch(btn, c);
+                save(key, c.name());
+            });
+            col->addWidget(lbl);
+            col->addWidget(btn, 0, Qt::AlignCenter);
+            shSwatchRow->addLayout(col);
+        }
+        shSwatchRow->addStretch();
+        shGrid->addWidget(new QLabel("Colors:"), shr, 0);
+        shGrid->addLayout(shSwatchRow, shr++, 1);
+
+        // Snap-to-step toggle — rounds SHistory click-to-tune to the
+        // nearest multiple of the active slice's step size.  Compensates
+        // for the detector edge-bin imprecision (typically 100–300 Hz off
+        // the carrier).
+        const bool snapEnabled = AppSettings::instance()
+            .value("SHistorySnapToStep", "False").toString() == "True";
+        auto* snapToggle = new QPushButton(snapEnabled ? "Enabled" : "Disabled");
+        snapToggle->setCheckable(true);
+        snapToggle->setChecked(snapEnabled);
+        snapToggle->setFixedWidth(80);
+        snapToggle->setStyleSheet(kSpotHubToggle);
+        snapToggle->setToolTip(
+            "Round SHistory click-to-tune to the nearest multiple of the\n"
+            "active slice's step size.  Hides the small carrier offset that\n"
+            "comes from detecting voice on the panadapter.");
+        connect(snapToggle, &QPushButton::toggled, this, [snapToggle, save](bool on) {
+            snapToggle->setText(on ? "Enabled" : "Disabled");
+            save("SHistorySnapToStep", on ? "True" : "False");
+        });
+        shGrid->addWidget(new QLabel("Snap to Step:"), shr, 0);
+        shGrid->addWidget(snapToggle, shr++, 1, Qt::AlignLeft);
+
+        rightCol->addLayout(shGrid);
+        rightCol->addStretch();
+    }
+
+    twoColRow->addLayout(leftCol, 1);
+    twoColRow->addLayout(rightCol, 1);
+    layout->addLayout(twoColRow);
+
     layout->addStretch();
 
-    // ── Clear All Spots button ──────────────────────────────────────────
-    auto* btnRow2 = new QHBoxLayout;
-    auto* clearAllBtn = new QPushButton("Clear All Spots");
-    clearAllBtn->setFixedWidth(120);
-    connect(clearAllBtn, &QPushButton::clicked, this, [this] {
-        m_radioModel->sendCommand("spot clear");
-        m_spotModel->clear();
-        if (m_totalSpotsLabel)
-            m_totalSpotsLabel->setText("0");
-        emit spotsClearedAll();
-        emit settingsChanged();
-    });
-    btnRow2->addWidget(clearAllBtn);
-    btnRow2->addStretch();
-    layout->addLayout(btnRow2);
-
     tabs->addTab(page, "Display");
+}
+
+void DxClusterDialog::setFramelessMode(bool on)
+{
+    const QRect geom = geometry();
+    const bool wasVisible = isVisible();
+
+    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
+    flags.setFlag(Qt::FramelessWindowHint, on);
+    setWindowFlags(flags);
+    setGeometry(geom);
+
+    if (m_titleBar)
+        m_titleBar->setVisible(on);
+    if (m_outerLayout)
+        m_outerLayout->setContentsMargins(0, 0, 0, 0);
+
+    if (wasVisible)
+        show();
 }
 
 void DxClusterDialog::setTotalSpots(int count)

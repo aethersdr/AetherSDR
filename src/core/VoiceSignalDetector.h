@@ -35,6 +35,14 @@ bool isVoiceSegmentLabel(const QString& label);
 // the internal energy-asymmetry heuristic so markers always match the operator's
 // current mode.  Pass an empty string to use the heuristic (e.g. for AM/FM pans).
 //
+// softEdgeDb: when >= 0, refines the carrier-side edge of voice-width regions
+// by walking outward from the 6 dB region boundary using this softer
+// (noise floor + softEdgeDb) threshold, until 3 consecutive bins fall below
+// the threshold.  This pulls the marker closer to the carrier than the main
+// region threshold allows, at the cost of a small amount of extra compute per
+// detected region.  Pass < 0 to disable the refinement (the historical
+// behaviour: marker sits exactly at the 6 dB region edge).
+//
 // Returns one entry per detected signal (primary + optional secondary per region).
 QVector<DetectedVoiceSignal> detectVoiceSignals(
     const QVector<float>& binsDbm,
@@ -42,7 +50,8 @@ QVector<DetectedVoiceSignal> detectVoiceSignals(
     double bandwidthMhz,
     const QVector<QPair<double, double>>& voiceRangesMhz = {},
     float rollingNoiseFloorDbm = -1000.0f,
-    const QString& sliceMode = {});
+    const QString& sliceMode = {},
+    float softEdgeDb = -1.0f);
 
 // Format a peak-dBm value as an S-meter label, rounded UP to the next unit.
 // Scale: S9 = -73 dBm, 6 dB/S-unit.  Examples: -85 → "S8", -63 → "S9+10".

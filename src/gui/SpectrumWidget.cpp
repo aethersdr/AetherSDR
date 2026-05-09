@@ -1981,7 +1981,13 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                         emit spotTriggered(marker.index);
                     }
                 } else {
-                    emit frequencyClicked(hr.freqMhz);
+                    // SHistory / QRM marker — markerIndex is past the regular
+                    // spot range.  Optionally snap to the slice's step size to
+                    // counter detector edge-bin imprecision.
+                    const double tuneMhz = m_sHistorySnapToStep
+                        ? snapToStep(hr.freqMhz, m_stepHz)
+                        : hr.freqMhz;
+                    emit frequencyClicked(tuneMhz);
                 }
                 m_spotClickConsumed = true;  // suppress release-to-tune (#530)
                 ev->accept();
