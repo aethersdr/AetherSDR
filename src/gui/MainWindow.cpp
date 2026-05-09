@@ -956,7 +956,10 @@ MainWindow::MainWindow(QWidget* parent)
         // The radio does not persist audio_mute, so restoring it from
         // AppSettings caused Slice A to start muted on every reconnect.
         if (!s.contains("SliceAudioMutedMigratedV0999")) {
-            for (const QChar letter : {'A', 'B', 'C', 'D'})
+            // Cover A-H for FLEX-6700/M owners — the now-removed setter
+            // computed QChar('A' + sliceId) for sliceId 0..7, so 8-slice
+            // radios could have left up to eight orphan keys behind.
+            for (const QChar letter : {'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'})
                 s.remove(QString("SliceAudioMuted_%1").arg(letter));
             s.setValue("SliceAudioMutedMigratedV0999", "True");
             s.save();
