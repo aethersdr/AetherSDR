@@ -1703,18 +1703,20 @@ void RxApplet::updateModeSettings(const QString& mode)
     // QSK visibility — only meaningful in CW mode
     m_qskBtn->setVisible(mode == "CW");
 
-    // Disable squelch in digital and CW modes
-    // Digital: audio goes via DAX, SQL not meaningful
+    // Disable squelch in digital, RTTY, and CW modes
+    // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
+    //   and gates weak FSK signals (#2504)
     // CW: radio locks squelch on at fixed level, rejects changes
     bool sqlDisabled = (mode == "DIGU" || mode == "DIGL" || mode == "NT"
+                        || mode == "RTTY"
                         || mode == "CW" || mode == "CWL");
     m_sqlBtn->setEnabled(!sqlDisabled);
     m_sqlSlider->setEnabled(!sqlDisabled);
     if (sqlDisabled && m_slice) {
         if (m_slice->squelchOn()) {
             m_savedSquelchOn = true;
-            if (mode == "DIGU" || mode == "DIGL" || mode == "NT") {
-                // Only send squelch off for digital modes; CW is radio-managed
+            if (mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY") {
+                // Only send squelch off for digital/RTTY modes; CW is radio-managed
                 m_slice->setSquelch(false, m_slice->squelchLevel());
                 QSignalBlocker sb(m_sqlBtn);
                 m_sqlBtn->setChecked(false);

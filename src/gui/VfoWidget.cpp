@@ -2476,16 +2476,17 @@ void VfoWidget::setSlice(SliceModel* slice)
         // CW: show APF, hide ANF/RNN/ANFL/ANFT
         // RTTY/DIG/FDV: hide ANF/ANFL/ANFT
         bool isVoice = !isRtty && !isCw && !isDig && !isFm && !isFdv;
-        // Disable squelch in digital and CW modes
-        // Digital: audio goes via DAX, SQL not meaningful
+        // Disable squelch in digital, RTTY, and CW modes
+        // Digital/RTTY: audio feeds external decoders via DAX, SQL not meaningful
+        //   and gates weak FSK signals (#2504)
         // CW: radio locks squelch on at fixed level, rejects changes
-        bool sqlDisabled = isDig || isCw;
+        bool sqlDisabled = isDig || isCw || isRtty;
         m_sqlBtn->setEnabled(!sqlDisabled);
         m_sqlSlider->setEnabled(!sqlDisabled);
         if (sqlDisabled && m_slice) {
             if (m_slice->squelchOn()) {
                 m_savedSquelchOn = true;
-                if (isDig) {
+                if (isDig || isRtty) {
                     m_slice->setSquelch(false, m_slice->squelchLevel());
                     QSignalBlocker sb(m_sqlBtn);
                     m_sqlBtn->setChecked(false);
