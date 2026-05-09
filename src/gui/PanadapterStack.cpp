@@ -815,11 +815,22 @@ void PanadapterStack::prepareShutdown()
         delete fw;
     }
 
-    for (auto* applet : m_pans) {
-        if (auto* sw = applet ? applet->spectrumWidget() : nullptr) {
+    // Explicitly delete docked applets so ~QRhiWidget() runs (and calls
+    // removeCleanupCallback) while MainWindow's QRhi is still alive.
+    // If we leave applets alive, Qt's destructor chain for QWidget destroys
+    // the QRhi *before* ~QObject()::deleteChildren() deletes the child
+    // SpectrumWidgets — QRhi::runCleanup() then fires against QRhiWidgetPrivate
+    // objects that are still live but have internal Qt fields in a stale state
+    // → crash at $0_cleanup +24 on exit (#2495 macOS).
+    const QList<QString> dockedIds = m_pans.keys();
+    for (const QString& panId : dockedIds) {
+        PanadapterApplet* applet = m_pans.take(panId);
+        if (!applet) continue;
+        if (SpectrumWidget* sw = applet->spectrumWidget()) {
             sw->hide();
             sw->resetGpuResources();
         }
+        delete applet;
     }
 }
 
