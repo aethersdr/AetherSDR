@@ -75,7 +75,7 @@ void expectRange(const char* label, const XvtrPolicy::WaterfallTileRange& range,
            detailFor(range));
 }
 
-void testBandStackKeysUseFlexOrder()
+void testBandStackKeysUseFlexIndex()
 {
     const QVector<XvtrPolicy::Transverter> xvtrs = {
         xvtr(12, 3, "2m",    144.0, 28.0),
@@ -86,9 +86,9 @@ void testBandStackKeysUseFlexOrder()
     expectBandKey("native HF strips UI suffix", "20m", xvtrs, "20");
     expectBandKey("native utility slot WWV", "WWV", xvtrs, "33");
     expectBandKey("native utility slot GEN", "GEN", xvtrs, "34");
-    expectBandKey("XVTR 2m uses setup order, not status index", "2m", xvtrs, "X3");
-    expectBandKey("XVTR 70cm uses setup order, not RF frequency", "70cm", xvtrs, "X7");
-    expectBandKey("XVTR 1.2G uses setup order", "1.2G", xvtrs, "X9");
+    expectBandKey("XVTR 2m uses status index, not setup order", "2m", xvtrs, "X12");
+    expectBandKey("XVTR 70cm uses status index, not RF frequency", "70cm", xvtrs, "X4");
+    expectBandKey("XVTR 1.2G uses status index", "1.2G", xvtrs, "X1");
 }
 
 void testBandStackKeysRefuseGuesses()
@@ -98,8 +98,9 @@ void testBandStackKeysRefuseGuesses()
         xvtr(3,  5, "70cm", 432.0, 28.0, false),
     };
 
-    expectUnsupportedBand("XVTR with missing order is refused",
-                          "2m", xvtrs, "has no setup order");
+    // order=-1 is irrelevant now — index is always valid; key is X2
+    expectBandKey("XVTR with no order field uses index",
+                  "2m", xvtrs, "X2");
     expectUnsupportedBand("invalid XVTR entry is ignored",
                           "70cm", xvtrs, "has no Flex display pan band= mapping");
     expectUnsupportedBand("unknown band does not use freq/mode fallback",
@@ -210,7 +211,7 @@ void testXvtrWaterfallGuardrails()
 
 int main()
 {
-    testBandStackKeysUseFlexOrder();
+    testBandStackKeysUseFlexIndex();
     testBandStackKeysRefuseGuesses();
     testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan();
     testXvtrWaterfallMapsIfToRfBands();

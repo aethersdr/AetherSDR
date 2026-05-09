@@ -63,15 +63,7 @@ BandStackKeyResult resolveBandStackKey(const QString& bandName,
         if (!xvtr.isValid || xvtr.name != bandName)
             continue;
 
-        if (xvtr.order < 0) {
-            return {
-                {},
-                QString("XVTR %1 has no setup order; cannot form Flex band= key")
-                    .arg(bandName)
-            };
-        }
-
-        return {QString("X%1").arg(xvtr.order), {}};
+        return {QString("X%1").arg(xvtr.index), {}};
     }
 
     return {

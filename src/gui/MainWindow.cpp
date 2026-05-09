@@ -10133,9 +10133,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         //   - Native bands are displayed as "20m", "630m", etc., but Flex
         //     expects bare keys such as "20" and "630".
         //   - XVTR names are user labels such as "2m" or "70cm"; do not strip
-        //     those into native-band keys. Flex expects `X<order>`, where
-        //     `order` is the radio's XVTR setup order, not the xvtr status
-        //     object index, RF frequency, or display name.
+        //     those into native-band keys. Flex expects `X<index>`, where
+        //     `index` is the xvtr status-object number from `xvtr <n>` messages
+        //     (0-based), not the radio's 1-based setup-order field (#2342).
         //   - WWV / GEN use numeric band-stack slots 33 / 34 from SmartSDR
         //     capture history (#1540/#1211).
         //
