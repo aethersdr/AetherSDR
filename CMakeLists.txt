@@ -302,9 +302,19 @@ if(ENABLE_SPECBLEACH)
         set(SPECBLEACH_BUILD_DIR "${CMAKE_BINARY_DIR}/specbleach")
         file(MAKE_DIRECTORY ${SPECBLEACH_BUILD_DIR})
         set(SPECBLEACH_STATIC_LIB "${SPECBLEACH_BUILD_DIR}/specbleach.lib")
+        # When -T ClangCL is used CMAKE_C_COMPILER is the VS-bundled clang-cl which
+        # auto-detects the Windows SDK and MSVC include paths. Prefer it over the
+        # standalone LLVM found by find_program (which may not locate stdint.h in a
+        # MSBuild custom-command environment).
+        if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+            set(_specbleach_cc "${CMAKE_C_COMPILER}")
+        else()
+            set(_specbleach_cc "${CLANG_CL}")
+        endif()
         add_custom_command(
             OUTPUT ${SPECBLEACH_STATIC_LIB}
-            COMMAND ${CLANG_CL} -w --target=x86_64-pc-windows-msvc
+            COMMAND ${_specbleach_cc} -w --target=x86_64-pc-windows-msvc
+                -DFFTW_DLL
                 -I${CMAKE_SOURCE_DIR}/third_party/libspecbleach/include
                 -I${CMAKE_SOURCE_DIR}/third_party/libspecbleach/src
                 -I${CMAKE_SOURCE_DIR}/third_party/fftw3/include
@@ -944,7 +954,11 @@ if(PORTAUDIO_FOUND)
 endif()
 
 if(FFTW3_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_FFTW3)
+    target_compile_definitions(AetherSDR PRIVATE HAVE_FFTW3
+        # On Windows lld-link (used by ClangCL) requires explicit dllimport
+        # declarations; define FFTW_DLL so fftw3.h emits __declspec(dllimport)
+        # and the linker can resolve __imp_fftwf_* symbols from the import lib.
+        $<$<BOOL:${WIN32}>:FFTW_DLL>)
     target_include_directories(AetherSDR PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_link_directories(AetherSDR PRIVATE ${FFTW3_LIBRARY_DIRS})
     target_link_libraries(AetherSDR PRIVATE ${FFTW3_LIBRARIES})

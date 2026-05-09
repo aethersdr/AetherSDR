@@ -50,8 +50,13 @@ if(WIN32)
         URL_HASH ${OPUS_PREPARED_ARCHIVE_HASH}
         CMAKE_ARGS
             ${OPUS_CMAKE_ARGS}
-        BUILD_BYPRODUCTS <BINARY_DIR>/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
-                         <BINARY_DIR>/libopus${CMAKE_STATIC_LIBRARY_SUFFIX}
+        # VS multi-config generator puts the lib in a per-config subdir.
+        # List all standard configs as byproducts so Ninja/MSBuild tracks them.
+        BUILD_BYPRODUCTS
+            <BINARY_DIR>/Debug/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
+            <BINARY_DIR>/Release/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
+            <BINARY_DIR>/RelWithDebInfo/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
+            <BINARY_DIR>/MinSizeRel/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
         INSTALL_COMMAND ""
     )
 
@@ -60,16 +65,27 @@ if(WIN32)
     add_library(opus STATIC IMPORTED)
     add_dependencies(opus build_opus)
 
-    # CMake produces opus.lib (MSVC) or libopus.a (MinGW)
     if(MSVC)
-        set(_opus_lib "${BINARY_DIR}/opus${CMAKE_STATIC_LIBRARY_SUFFIX}")
+        # $<CONFIG> is not evaluated in IMPORTED_LOCATION for imported targets;
+        # set per-config properties for each standard VS build configuration.
+        foreach(_cfg Debug Release RelWithDebInfo MinSizeRel)
+            set(_lib "${BINARY_DIR}/${_cfg}/opus${CMAKE_STATIC_LIBRARY_SUFFIX}")
+            set_target_properties(opus PROPERTIES
+                "IMPORTED_LOCATION_${_cfg}" "${_lib}"
+                "IMPORTED_IMPLIB_${_cfg}"   "${_lib}"
+            )
+        endforeach()
+        # Fallback for any unlisted config — use RelWithDebInfo
+        set_target_properties(opus PROPERTIES
+            IMPORTED_LOCATION "${BINARY_DIR}/RelWithDebInfo/opus${CMAKE_STATIC_LIBRARY_SUFFIX}"
+        )
     else()
         set(_opus_lib "${BINARY_DIR}/libopus${CMAKE_STATIC_LIBRARY_SUFFIX}")
+        set_target_properties(opus PROPERTIES
+            IMPORTED_LOCATION "${_opus_lib}"
+            IMPORTED_IMPLIB   "${_opus_lib}"
+        )
     endif()
-    set_target_properties(opus PROPERTIES
-        IMPORTED_LOCATION "${_opus_lib}"
-        IMPORTED_IMPLIB   "${_opus_lib}"
-    )
 
     include_directories(${SOURCE_DIR}/dnn ${SOURCE_DIR}/celt ${SOURCE_DIR}/include ${SOURCE_DIR})
 
