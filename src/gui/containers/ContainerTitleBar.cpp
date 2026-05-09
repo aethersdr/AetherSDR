@@ -34,6 +34,16 @@ constexpr const char* kPinBtnStyle =
     "QPushButton:hover { color: #ffffff; } "
     "QPushButton:checked { color: #ffd166; }";
 
+// Float-toggle button gets a larger font-size than its siblings so
+// the ⧉ glyph reads clearly at small sizes — at 11px the two-square
+// detail blurs together. The button box is bumped to 18×18 to fit the
+// taller glyph without clipping.
+constexpr const char* kFloatBtnStyle =
+    "QPushButton { background: transparent; border: none; "
+    "color: #c8d8e8; font-size: 15px; font-weight: bold; "
+    "padding: 0px 4px; } "
+    "QPushButton:hover { color: #ffffff; }";
+
 constexpr int kDragThresholdPx = 6;
 
 } // namespace
@@ -76,9 +86,9 @@ ContainerTitleBar::ContainerTitleBar(const QString& title, QWidget* parent)
             });
     layout->addWidget(m_pinBtn);
 
-    m_floatBtn = new QPushButton(QString::fromUtf8("\xe2\x9a\x8a"));  // ⚊ single line
-    m_floatBtn->setStyleSheet(kBtnStyle);
-    m_floatBtn->setFixedSize(16, 16);
+    m_floatBtn = new QPushButton(QString::fromUtf8("\xe2\xa7\x89"));  // ⧉ two joined squares (#2430 follow-up)
+    m_floatBtn->setStyleSheet(kFloatBtnStyle);
+    m_floatBtn->setFixedSize(18, 18);
     m_floatBtn->setToolTip("Pop out into a floating window");
     m_floatBtn->setCursor(Qt::ArrowCursor);
     connect(m_floatBtn, &QPushButton::clicked,
@@ -108,10 +118,13 @@ QString ContainerTitleBar::title() const
 void ContainerTitleBar::setFloatingState(bool isFloating)
 {
     m_isFloating = isFloating;
-    // "↙" when floating (to dock) / "⚊" when docked (to float).
+    // "↙" when floating (to dock) / "⧉" when docked (to float).
+    // Single-line "⚊" was unclear; the double-square "⧉" is the
+    // canonical "open in new window" affordance and reads as pop-out
+    // at a glance.
     m_floatBtn->setText(isFloating
         ? QString::fromUtf8("\xe2\x86\x99")
-        : QString::fromUtf8("\xe2\x9a\x8a"));
+        : QString::fromUtf8("\xe2\xa7\x89"));
     m_floatBtn->setToolTip(isFloating
         ? "Return to panel"
         : "Pop out into a floating window");
