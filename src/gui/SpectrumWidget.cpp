@@ -1780,8 +1780,15 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         }
     }
 
-    // NB Waterfall Blanker (#277) — suppress impulse rows
-    if (m_wfBlankerEnabled) {
+    // NB Waterfall Blanker (#277) — suppress impulse rows.
+    // Skip entirely during TX: with show-tx-in-waterfall enabled, TX-era tiles
+    // flow through and would otherwise poison the rolling baseline.  Post-TX,
+    // real RX rows would then read as huge "impulses" against the suppressed
+    // TX-era baseline, causing the blanker to substitute m_wfLastGoodRow (a
+    // TX-era scanline) for ~10–18 s while baseline slowly re-converges —
+    // visible as a frozen, striped waterfall.  Freezing the ring across TX
+    // means post-TX rows are compared against the pre-TX baseline instead.
+    if (m_wfBlankerEnabled && !m_transmitting) {
         float rowSum = 0.0f;
         const int binCount = binsIntensity.size();
         for (int i = 0; i < binCount; ++i)

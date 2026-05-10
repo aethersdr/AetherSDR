@@ -356,6 +356,7 @@ public:
             m_wfPrevTimecodeMs = 0;
             m_txEndMs = QDateTime::currentMSecsSinceEpoch(); // post-TX blanking (#2117)
             m_wfBlankerRingCount = 0;                        // reset stale blanker baseline
+            m_wfLastGoodRow.clear();                          // forget any TX-era last-good scanline
         }
         m_transmitting = tx;
     }
