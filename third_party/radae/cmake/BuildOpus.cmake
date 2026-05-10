@@ -44,19 +44,32 @@ endif ()
 
 # ── Windows: build Opus via CMake ─────────────────────────────────────────
 if(WIN32)
+    # VS (multi-config) places opus.lib in <BINARY_DIR>/<Config>/; Ninja and
+    # other single-config generators place it flat at <BINARY_DIR>/.  CI uses
+    # Ninja, most local Windows ClangCL setups also use Ninja, while -T ClangCL
+    # implies the VS generator — so both layouts are real and we must detect.
+    get_property(_opus_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if(_opus_is_multi_config)
+        set(_opus_byproducts
+            <BINARY_DIR>/Debug/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
+            <BINARY_DIR>/Release/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
+            <BINARY_DIR>/RelWithDebInfo/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
+            <BINARY_DIR>/MinSizeRel/opus${CMAKE_STATIC_LIBRARY_SUFFIX})
+    else()
+        # Single-config: MSVC emits opus.lib, MinGW emits libopus.a — list both
+        # so the generator picks whichever the toolchain produced.
+        set(_opus_byproducts
+            <BINARY_DIR>/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
+            <BINARY_DIR>/libopus${CMAKE_STATIC_LIBRARY_SUFFIX})
+    endif()
+
     ExternalProject_Add(build_opus
         DOWNLOAD_EXTRACT_TIMESTAMP NO
         URL "${OPUS_PREPARED_ARCHIVE}"
         URL_HASH ${OPUS_PREPARED_ARCHIVE_HASH}
         CMAKE_ARGS
             ${OPUS_CMAKE_ARGS}
-        # VS multi-config generator puts the lib in a per-config subdir.
-        # List all standard configs as byproducts so Ninja/MSBuild tracks them.
-        BUILD_BYPRODUCTS
-            <BINARY_DIR>/Debug/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
-            <BINARY_DIR>/Release/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
-            <BINARY_DIR>/RelWithDebInfo/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
-            <BINARY_DIR>/MinSizeRel/opus${CMAKE_STATIC_LIBRARY_SUFFIX}
+        BUILD_BYPRODUCTS ${_opus_byproducts}
         INSTALL_COMMAND ""
     )
 
@@ -66,19 +79,28 @@ if(WIN32)
     add_dependencies(opus build_opus)
 
     if(MSVC)
-        # $<CONFIG> is not evaluated in IMPORTED_LOCATION for imported targets;
-        # set per-config properties for each standard VS build configuration.
-        foreach(_cfg Debug Release RelWithDebInfo MinSizeRel)
-            set(_lib "${BINARY_DIR}/${_cfg}/opus${CMAKE_STATIC_LIBRARY_SUFFIX}")
+        if(_opus_is_multi_config)
+            # $<CONFIG> is not evaluated in IMPORTED_LOCATION for imported targets;
+            # set per-config properties for each standard VS build configuration.
+            foreach(_cfg Debug Release RelWithDebInfo MinSizeRel)
+                set(_lib "${BINARY_DIR}/${_cfg}/opus${CMAKE_STATIC_LIBRARY_SUFFIX}")
+                set_target_properties(opus PROPERTIES
+                    "IMPORTED_LOCATION_${_cfg}" "${_lib}"
+                    "IMPORTED_IMPLIB_${_cfg}"   "${_lib}"
+                )
+            endforeach()
+            # Fallback for any unlisted config — use RelWithDebInfo
             set_target_properties(opus PROPERTIES
-                "IMPORTED_LOCATION_${_cfg}" "${_lib}"
-                "IMPORTED_IMPLIB_${_cfg}"   "${_lib}"
+                IMPORTED_LOCATION "${BINARY_DIR}/RelWithDebInfo/opus${CMAKE_STATIC_LIBRARY_SUFFIX}"
             )
-        endforeach()
-        # Fallback for any unlisted config — use RelWithDebInfo
-        set_target_properties(opus PROPERTIES
-            IMPORTED_LOCATION "${BINARY_DIR}/RelWithDebInfo/opus${CMAKE_STATIC_LIBRARY_SUFFIX}"
-        )
+        else()
+            # Ninja / single-config MSVC: flat layout
+            set(_opus_lib "${BINARY_DIR}/opus${CMAKE_STATIC_LIBRARY_SUFFIX}")
+            set_target_properties(opus PROPERTIES
+                IMPORTED_LOCATION "${_opus_lib}"
+                IMPORTED_IMPLIB   "${_opus_lib}"
+            )
+        endif()
     else()
         set(_opus_lib "${BINARY_DIR}/libopus${CMAKE_STATIC_LIBRARY_SUFFIX}")
         set_target_properties(opus PROPERTIES
