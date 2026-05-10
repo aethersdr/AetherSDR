@@ -211,7 +211,14 @@ constexpr int kSwrSweepMaxPoints = 260;
 constexpr int kSwrSweepMinPowerW = 1;
 constexpr int kSwrSweepDefaultPowerW = 1;
 constexpr int kSwrSweepMaxPowerW = 10;
+constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
 constexpr const char* kSwrSweepPowerSettingKey = "SwrSweepPowerWatts";
+
+bool memoryRevealTargetMatches(double actualMhz, double targetMhz)
+{
+    return targetMhz <= 0.0
+        || std::abs(actualMhz - targetMhz) <= kMemoryRevealTargetToleranceMhz;
+}
 
 int panCountForLayoutId(const QString& layoutId)
 {
@@ -8308,19 +8315,63 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
     if (!slice)
         return false;
 
+    const double memoryFreqMhz = it->freq;
+    const bool hasMemoryFrequency = memoryFreqMhz > 0.0;
+    const QString slicePanId = slice->panId();
+
+    if (hasMemoryFrequency) {
+        const QString memoryBand = BandSettings::bandForFrequency(memoryFreqMhz);
+        const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
+        if (memoryBand != currentBand) {
+            const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
+            const auto stackKeyResult = XvtrPolicy::resolveBandStackKey(memoryBand, xvtrs);
+            if (stackKeyResult.isSupported()) {
+                qCDebug(lcProtocol).noquote().nospace()
+                    << "MainWindow: memory recall preselecting band stack memory="
+                    << memoryIndex
+                    << " pan=" << slicePanId
+                    << " from_band=" << currentBand
+                    << " to_band=" << memoryBand
+                    << " key=" << stackKeyResult.key;
+                clearSwrSweepForBandChange(-1, slicePanId, memoryBand);
+                m_bandSettings.setCurrentBand(memoryBand);
+                m_radioModel.sendCommand(
+                    QString("display pan set %1 band=%2").arg(slicePanId, stackKeyResult.key));
+                QTimer::singleShot(300, this, [this, slicePanId]() {
+                    reassertUnmutedSliceAudioForPan(slicePanId);
+                });
+            } else {
+                qCWarning(lcProtocol).noquote().nospace()
+                    << "MainWindow: memory recall cannot preselect band stack memory="
+                    << memoryIndex
+                    << " band=" << memoryBand
+                    << " reason=" << stackKeyResult.unsupportedReason
+                    << " available_xvtrs=" << xvtrListSummary(xvtrs);
+            }
+        }
+    }
+
     m_pendingMemoryRevealSliceId = sliceId;
+    m_pendingMemoryRevealTargetMhz = hasMemoryFrequency ? memoryFreqMhz : 0.0;
     m_radioModel.sendCommand(QString("memory apply %1").arg(memoryIndex));
+    const QString retuneCommand =
+        AetherSDR::buildMemoryRecallRetuneCommand(sliceId, it.value());
+    if (!retuneCommand.isEmpty())
+        m_radioModel.sendCommand(retuneCommand);
     QTimer::singleShot(750, this, [this, sliceId]() {
         if (m_pendingMemoryRevealSliceId != sliceId)
             return;
+        const double targetMhz = m_pendingMemoryRevealTargetMhz;
         m_pendingMemoryRevealSliceId = -1;
+        m_pendingMemoryRevealTargetMhz = 0.0;
         if (auto* pendingSlice = m_radioModel.slice(sliceId)) {
+            const double revealMhz = targetMhz > 0.0 ? targetMhz : pendingSlice->frequency();
             const TuneCenteringResult result =
-                revealFrequencyIfNeeded(pendingSlice, pendingSlice->frequency(),
+                revealFrequencyIfNeeded(pendingSlice, revealMhz,
                                         TuneIntent::CommandedTargetCenter,
                                         "memory-apply-timeout");
             logTunePolicyDecision("memory-apply-timeout", TuneIntent::CommandedTargetCenter,
-                                  pendingSlice->frequency(), pendingSlice->frequency(),
+                                  pendingSlice->frequency(), revealMhz,
                                   result);
         }
     });
@@ -8533,11 +8584,24 @@ void MainWindow::onSliceAdded(SliceModel* s)
         m_updatingFromModel = false;
 
         if (memoryRevealPending) {
-            m_pendingMemoryRevealSliceId = -1;
-            const TuneCenteringResult result =
-                revealFrequencyIfNeeded(s, mhz, TuneIntent::CommandedTargetCenter, "memory-apply");
-            logTunePolicyDecision("memory-apply", TuneIntent::CommandedTargetCenter,
-                                  mhz, mhz, result);
+            const double targetMhz = m_pendingMemoryRevealTargetMhz;
+            if (memoryRevealTargetMatches(mhz, targetMhz)) {
+                m_pendingMemoryRevealSliceId = -1;
+                m_pendingMemoryRevealTargetMhz = 0.0;
+                const double revealMhz = targetMhz > 0.0 ? targetMhz : mhz;
+                const TuneCenteringResult result =
+                    revealFrequencyIfNeeded(s, revealMhz,
+                                            TuneIntent::CommandedTargetCenter,
+                                            "memory-apply");
+                logTunePolicyDecision("memory-apply", TuneIntent::CommandedTargetCenter,
+                                      mhz, revealMhz, result);
+            } else {
+                qCDebug(lcProtocol).noquote().nospace()
+                    << "MainWindow: deferring memory reveal for intermediate echo slice="
+                    << s->sliceId()
+                    << " echo_mhz=" << QString::number(mhz, 'f', 6)
+                    << " target_mhz=" << QString::number(targetMhz, 'f', 6);
+            }
         }
 
         if (s->isTxSlice() || s->sliceId() == m_swrSweep.sliceId) {

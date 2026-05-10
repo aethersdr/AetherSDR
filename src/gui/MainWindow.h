@@ -478,6 +478,7 @@ private:
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
     int  m_pendingMemoryRevealSliceId{-1};
+    double m_pendingMemoryRevealTargetMhz{0.0};
     int  m_pendingSpectrumTargetSliceId{-1};
 
     // Guard: set true while updating controls from the model so shared tune

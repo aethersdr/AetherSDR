@@ -26,6 +26,10 @@ int main()
     up.toneValue = 88.5;
     ok &= expect(AetherSDR::memoryRepeaterTxOffsetFreq(up) == 0.1,
                  "up repeater offset produces positive tx_offset_freq");
+    up.freq = 146.52;
+    ok &= expect(AetherSDR::buildMemoryRecallRetuneCommand(3, up)
+                     == "slice tune 3 146.520000 autopan=0",
+                 "memory recall retunes slice without autopan");
     ok &= expect(AetherSDR::buildMemoryRecallSliceFixupCommand(3, up)
                      == "slice set 3 repeater_offset_dir=up fm_repeater_offset_freq=0.100000 "
                         "tx_offset_freq=0.100000 fm_tone_mode=ctcss_tx fm_tone_value=88.5",
@@ -60,6 +64,8 @@ int main()
                  "tone value can be fixed up even when tone mode is absent");
 
     AetherSDR::MemoryEntry empty;
+    ok &= expect(AetherSDR::buildMemoryRecallRetuneCommand(2, empty).isEmpty(),
+                 "memory without frequency does not emit retune command");
     ok &= expect(AetherSDR::buildMemoryRecallSliceFixupCommand(2, empty).isEmpty(),
                  "memory without repeater or tone details does not emit a fixup command");
 

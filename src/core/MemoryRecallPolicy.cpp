@@ -31,6 +31,13 @@ double memoryRepeaterTxOffsetFreq(const MemoryEntry& memory)
     return 0.0;
 }
 
+QString buildMemoryRecallRetuneCommand(int sliceId, const MemoryEntry& memory)
+{
+    if (sliceId < 0 || memory.freq <= 0.0)
+        return {};
+    return QString("slice tune %1 %2 autopan=0").arg(sliceId).arg(memory.freq, 0, 'f', 6);
+}
+
 QString buildMemoryRecallSliceFixupCommand(int sliceId, const MemoryEntry& memory)
 {
     QStringList fields;
