@@ -208,6 +208,17 @@ private:
     // to AppSettings("FramelessWindow"). When on, users move/close the
     // window via keyboard shortcuts or taskbar.
     void setFramelessWindow(bool on);
+
+    // Reorder the main splitter so the applet panel sits on the left or
+    // right of the panadapter stack.  Wired from the dock-side icons in
+    // the title bar and persisted via "AppletPanelDockedLeft".
+    void setAppletPanelDockedLeft(bool left);
+
+    // Show/hide the applet panel — single source of truth that updates the
+    // status-bar ☰ toggle, the View menu action, the title-bar dock icons,
+    // and the persisted "AppletPanelVisible" setting.
+    void setAppletPanelVisible(bool visible);
+
     void showMemoryDialog();
     void showQuickAddMemoryDialog(const QString& preferredPanId = {});
     void updateKeyerAvailability(const QString& mode);
@@ -441,7 +452,6 @@ private:
     // Status bar labels (SmartSDR-style)
     QLabel* m_connStatusLabel{nullptr};   // hidden, used for connection state logic
     QLabel* m_addPanLabel{nullptr};
-    QLabel* m_panelToggle{nullptr};
     QAction* m_panelVisAction{nullptr};
     QLabel* m_tnfIndicator{nullptr};
     QLabel* m_cwxIndicator{nullptr};

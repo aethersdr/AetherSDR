@@ -131,6 +131,13 @@ public:
     // Reset applet order to default
     void resetOrder();
 
+    // Move the vertical scroll bar to the left edge of the panel.  When the
+    // applet panel is docked on the left side of the panadapter, this puts
+    // the scroll bar against the window edge rather than against the
+    // waterfall.  Inner content stays LTR — only the scroll-area direction
+    // flips.
+    void setScrollBarOnLeft(bool onLeft);
+
     // Show / hide an applet by ID — used to drive visibility from
     // external state (e.g. the CHAIN widget mirrors DSP bypass onto
     // CEQ and CMP tile visibility).  No-op for unknown IDs.

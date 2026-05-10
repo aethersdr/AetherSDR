@@ -5630,20 +5630,6 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             cancelTransmitFromIndicator();
         return true;
     }
-    if (obj == m_panelToggle && event->type() == QEvent::MouseButtonPress) {
-        bool visible = m_appletPanel->isVisible();
-        m_appletPanel->setVisible(!visible);
-        m_panelToggle->setStyleSheet(!visible
-            ? "QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 22px; }"
-            : "QLabel { color: #404858; font-weight: bold; font-size: 22px; }");
-        AppSettings::instance().setValue("AppletPanelVisible", !visible ? "True" : "False");
-        AppSettings::instance().save();
-        if (m_panelVisAction) {
-            QSignalBlocker sb(m_panelVisAction);
-            m_panelVisAction->setChecked(!visible);
-        }
-        return true;
-    }
     if (obj == m_addPanLabel && event->type() == QEvent::MouseButtonPress) {
         if (!m_radioModel.isConnected()) return true;
         int maxPans = m_radioModel.maxPanadapters();
@@ -6617,12 +6603,7 @@ void MainWindow::buildMenuBar()
     m_panelVisAction->setChecked(
         AppSettings::instance().value("AppletPanelVisible", "True").toString() == "True");
     connect(m_panelVisAction, &QAction::toggled, this, [this](bool on) {
-        m_appletPanel->setVisible(on);
-        m_panelToggle->setStyleSheet(on
-            ? "QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 22px; }"
-            : "QLabel { color: #404858; font-weight: bold; font-size: 22px; }");
-        AppSettings::instance().setValue("AppletPanelVisible", on ? "True" : "False");
-        AppSettings::instance().save();
+        setAppletPanelVisible(on);
     });
 
     // Pop out the whole applet panel into its own window (#1713 Phase 6).
@@ -6640,9 +6621,14 @@ void MainWindow::buildMenuBar()
         AppSettings::instance().setValue(
             "AppletPanelFloating", floating ? "True" : "False");
         AppSettings::instance().save();
+        if (m_titleBar)
+            m_titleBar->setAppletFloating(floating);
     });
     if (m_popOutSidebarAction->isChecked()) {
-        QTimer::singleShot(0, this, [this]() { floatAppletPanel(); });
+        QTimer::singleShot(0, this, [this]() {
+            floatAppletPanel();
+            if (m_titleBar) m_titleBar->setAppletFloating(true);
+        });
     }
 
     viewMenu->addSeparator();
@@ -7056,6 +7042,28 @@ void MainWindow::buildUI()
     connect(m_titleBar, &TitleBar::minimalModeWindowedExitRequested, this, [this]() {
         toggleMinimalMode(false);
     });
+    // Title-bar dock-side click: clicking the active-side icon hides the
+    // applet panel; clicking the inactive-side icon moves it there (and
+    // shows it if hidden).
+    auto handleDockClick = [this](bool wantLeft) {
+        const bool dockedLeft = AppSettings::instance()
+            .value("AppletPanelDockedLeft", "False").toString() == "True";
+        const bool visible = m_appletPanel && m_appletPanel->isVisible();
+        if (visible && dockedLeft == wantLeft) {
+            setAppletPanelVisible(false);
+        } else {
+            if (!visible) setAppletPanelVisible(true);
+            if (dockedLeft != wantLeft) setAppletPanelDockedLeft(wantLeft);
+        }
+    };
+    connect(m_titleBar, &TitleBar::dockAppletLeftRequested,  this, [handleDockClick]() { handleDockClick(true);  });
+    connect(m_titleBar, &TitleBar::dockAppletRightRequested, this, [handleDockClick]() { handleDockClick(false); });
+    // Pop-out icon: route through the existing View-menu toggle so all
+    // three controls (icon, menu, Ctrl+Shift+S) stay in sync.
+    connect(m_titleBar, &TitleBar::popOutAppletRequested, this, [this]() {
+        if (m_popOutSidebarAction)
+            m_popOutSidebarAction->toggle();
+    });
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->setHandleWidth(0);
@@ -7414,6 +7422,16 @@ void MainWindow::buildUI()
     if (AppSettings::instance().value("AppletPanelVisible", "True").toString() != "True")
         m_appletPanel->hide();
 
+    // Restore applet panel dock side ("AppletPanelDockedLeft" — defaults right).
+    {
+        const bool dockedLeft =
+            AppSettings::instance().value("AppletPanelDockedLeft", "False").toString() == "True";
+        if (dockedLeft)
+            setAppletPanelDockedLeft(true);
+        else if (m_titleBar)
+            m_titleBar->setAppletDockState(m_appletPanel->isVisible(), false);
+    }
+
     // ── Status bar (SmartSDR-style, double height) ─────────────────────
     statusBar()->setFixedHeight(46);
     statusBar()->setSizeGripEnabled(false);
@@ -7457,22 +7475,32 @@ void MainWindow::buildUI()
     m_connStatusLabel->hide();
 
     // ── Left section ─────────────────────────────────────────────────────
-    // +PAN icon: mini spectrum with + overlay
+    // +PAN icon: jagged FFT-spectrum trace with multiple sharp peaks
+    // (matching the SSDR visual language) plus a "+" overlay.
     {
         QPixmap pm(36, 28);
         pm.fill(Qt::transparent);
         QPainter pp(&pm);
         pp.setRenderHint(QPainter::Antialiasing);
-        // Spectrum line — flat noise floor with two signal peaks
-        pp.setPen(QPen(QColor(255, 255, 255, 128), 1.8));
+
+        const QColor stroke(255, 255, 255, 210);
+
+        // Polyline: noise floor at y=22, multiple peaks of varying height,
+        // with extra detail between peaks for the "real FFT" texture.
+        pp.setPen(QPen(stroke, 1.6));
         const QPointF pts[] = {
-            {0,22}, {4,21}, {7,20}, {9,14}, {10,7}, {11,14}, {13,20},
-            {16,21}, {18,20}, {20,10}, {21,4}, {22,10}, {24,20},
-            {27,21}, {30,22}
+            { 0, 22}, { 1, 21}, { 2, 22}, { 3, 19}, { 4, 22},   // floor + small peak
+            { 5, 21}, { 6, 18}, { 7, 12}, { 8, 17}, { 9, 22},   // tall peak
+            {10, 21}, {11, 22}, {12, 16}, {13, 22},             // medium peak
+            {14, 21}, {15, 19}, {16, 22},                       // ripple
+            {17, 20}, {18, 12}, {19,  4}, {20, 11}, {21, 21},   // tallest peak
+            {22, 22}, {23, 21}, {24, 17}, {25, 22},             // medium peak
+            {26, 21}, {27, 22}, {28, 18}, {29, 22}, {30, 22}    // small peak + floor
         };
-        pp.drawPolyline(pts, 15);
-        // + sign in upper-right
-        pp.setPen(QPen(QColor(255, 255, 255, 200), 2.2));
+        pp.drawPolyline(pts, sizeof(pts) / sizeof(pts[0]));
+
+        // "+" sign in upper-right.
+        pp.setPen(QPen(stroke, 2.2));
         pp.drawLine(30, 4, 30, 14);   // vertical
         pp.drawLine(25, 9, 35, 9);    // horizontal
         pp.end();
@@ -7496,19 +7524,6 @@ void MainWindow::buildUI()
         hbox->addWidget(addPanBtn);
         m_addPanLabel = addPanBtn;
     }
-
-    hbox->addSpacing(8);
-
-    bool panelVis = AppSettings::instance().value("AppletPanelVisible", "True").toString() == "True";
-    m_panelToggle = new QLabel(QString::fromUtf8("\xe2\x98\xb0"));  // ☰ hamburger
-    m_panelToggle->setStyleSheet(panelVis
-        ? "QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 22px; }"
-        : "QLabel { color: #404858; font-weight: bold; font-size: 22px; }");
-    m_panelToggle->setAlignment(Qt::AlignBottom);
-    m_panelToggle->setCursor(Qt::PointingHandCursor);
-    m_panelToggle->setToolTip("Toggle applet panel");
-    m_panelToggle->installEventFilter(this);
-    hbox->addWidget(m_panelToggle);
 
     hbox->addSpacing(8);
 
@@ -10884,6 +10899,80 @@ void MainWindow::stepUiScale(int direction)
         applyUiScale(best);
 }
 
+void MainWindow::setAppletPanelDockedLeft(bool left)
+{
+    if (!m_splitter || !m_appletPanel || !m_panStack)
+        return;
+
+    // Move m_appletPanel either before m_panStack (left dock) or to the end
+    // (right dock).  insertWidget()/addWidget() on an already-attached child
+    // reparents it to the new index without destroy/recreate.
+    if (left) {
+        const int panIdx = m_splitter->indexOf(m_panStack);
+        if (panIdx < 0) return;
+        m_splitter->insertWidget(panIdx, m_appletPanel);
+    } else {
+        m_splitter->addWidget(m_appletPanel);
+    }
+
+    // Re-apply stretch/collapse rules by widget identity (indices shifted).
+    for (int i = 0; i < m_splitter->count(); ++i) {
+        QWidget* w = m_splitter->widget(i);
+        m_splitter->setStretchFactor(i, w == m_panStack ? 1 : 0);
+        m_splitter->setCollapsible(i, false);
+    }
+
+    // QSplitter's per-index size array does NOT follow widgets when they
+    // move — applet's slot inherits panstack's old (huge) width, which
+    // setFixedWidth(260) then visibly caps but leaves the remainder as
+    // an unallocated blank strip.  Reassign sizes by widget identity using
+    // the panel's actual maximum width (== fixed width).
+    const int total = m_splitter->width();
+    if (total > 0) {
+        const int appletW = m_appletPanel->maximumWidth();
+        const int centerW = qMax(200, total - appletW);
+        QList<int> newSizes(m_splitter->count(), 0);
+        for (int i = 0; i < m_splitter->count(); ++i) {
+            QWidget* w = m_splitter->widget(i);
+            if (w == m_panStack)         newSizes[i] = centerW;
+            else if (w == m_appletPanel) newSizes[i] = appletW;
+        }
+        m_splitter->setSizes(newSizes);
+    }
+
+    // Scroll bar to the outside edge: against the window edge when docked
+    // left, default position (right of the panel) when docked right.
+    m_appletPanel->setScrollBarOnLeft(left);
+
+    AppSettings::instance().setValue("AppletPanelDockedLeft", left ? "True" : "False");
+    AppSettings::instance().save();
+
+    if (m_titleBar)
+        m_titleBar->setAppletDockState(m_appletPanel->isVisible(), left);
+}
+
+void MainWindow::setAppletPanelVisible(bool visible)
+{
+    if (!m_appletPanel) return;
+
+    // AppletPanel::setFixedWidth(260) means Qt restores the same width on
+    // un-hide automatically — the splitter just shrinks PanStack (stretch=1)
+    // by 260 and gives the slot back to the applet.
+    m_appletPanel->setVisible(visible);
+
+    AppSettings::instance().setValue("AppletPanelVisible", visible ? "True" : "False");
+    AppSettings::instance().save();
+    if (m_panelVisAction) {
+        QSignalBlocker sb(m_panelVisAction);
+        m_panelVisAction->setChecked(visible);
+    }
+    if (m_titleBar) {
+        const bool dockedLeft = AppSettings::instance()
+            .value("AppletPanelDockedLeft", "False").toString() == "True";
+        m_titleBar->setAppletDockState(visible, dockedLeft);
+    }
+}
+
 void MainWindow::setFramelessWindow(bool on)
 {
     auto& s = AppSettings::instance();
@@ -13928,7 +14017,11 @@ void MainWindow::floatAppletPanel()
     if (!m_appletPanel || !m_splitter) return;
     if (m_appletPanelFloatWindow) return;  // already floating
 
-    m_appletPanelFloatWindow = new QWidget(nullptr, Qt::Window);
+    const bool frameless = framelessWindowEnabled();
+    Qt::WindowFlags flags = Qt::Window;
+    if (frameless) flags |= Qt::FramelessWindowHint;
+
+    m_appletPanelFloatWindow = new QWidget(nullptr, flags);
     m_appletPanelFloatWindow->setWindowTitle("AetherSDR — Applet Panel");
     m_appletPanelFloatWindow->setAttribute(Qt::WA_DeleteOnClose, false);
     m_appletPanelFloatWindow->setAttribute(Qt::WA_StyledBackground, true);
@@ -13936,9 +14029,25 @@ void MainWindow::floatAppletPanel()
     auto* layout = new QVBoxLayout(m_appletPanelFloatWindow);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
+
+    // Project frameless title bar (drag-to-move, double-click maximize,
+    // min/max/close trio).  Only added when frameless is on; the system
+    // frame supplies its own title bar in non-frameless mode.
+    if (frameless) {
+        auto* titleBar = new FramelessWindowTitleBar(
+            QStringLiteral("AetherSDR — Applet Panel"),
+            m_appletPanelFloatWindow);
+        layout->addWidget(titleBar);
+    }
+
     m_appletPanel->setParent(m_appletPanelFloatWindow);
     layout->addWidget(m_appletPanel);
     m_appletPanel->show();
+
+    // 8-axis edge resize for the frameless variant — same install pattern
+    // as the floating dialogs and the main window.  The resizer no-ops
+    // when the system frame is on, so installing unconditionally is safe.
+    FramelessResizer::install(m_appletPanelFloatWindow);
     // Qt auto-redistributes remaining splitter slots once the panel
     // is reparented out; we don't need to touch the sizes manually.
 

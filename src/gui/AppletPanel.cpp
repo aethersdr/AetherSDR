@@ -953,6 +953,17 @@ void AppletPanel::setPooDooActiveSide(PooDooSide side)
     }
 }
 
+void AppletPanel::setScrollBarOnLeft(bool onLeft)
+{
+    if (!m_scrollArea) return;
+    // Flip the QScrollArea's layout direction — vertical scroll bar moves
+    // to the opposite edge.  Force the inner content widget back to LTR
+    // so the applets themselves don't mirror.
+    m_scrollArea->setLayoutDirection(onLeft ? Qt::RightToLeft : Qt::LeftToRight);
+    if (auto* content = m_scrollArea->widget())
+        content->setLayoutDirection(Qt::LeftToRight);
+}
+
 void AppletPanel::resetOrder()
 {
     // Reorder m_appletOrder to match kDefaultOrder

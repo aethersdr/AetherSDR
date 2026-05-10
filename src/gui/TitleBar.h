@@ -32,6 +32,15 @@ public:
     void setMinimalMode(bool on);
     void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
 
+    // Reflect applet-panel state on the dock-side icons:
+    //  - visible=false: both icons dim (no active side).
+    //  - visible=true:  the icon matching `left` is highlighted.
+    void setAppletDockState(bool visible, bool left);
+
+    // Highlight the pop-out icon when the applet panel is floating in its
+    // own Qt::Window.
+    void setAppletFloating(bool floating);
+
 signals:
     void pcAudioToggled(bool on);
     void masterVolumeChanged(int pct);
@@ -44,6 +53,11 @@ signals:
     // Emitted when the blink setting changes (e.g. via right-click) so the
     // View menu checkbox can stay in sync.
     void blinkEnabledChanged(bool enabled);
+    // Dock-side selectors — applet panel left vs right of the panadapter.
+    void dockAppletLeftRequested();
+    void dockAppletRightRequested();
+    // Toggle applet panel between docked and floating-window mode.
+    void popOutAppletRequested();
 
 public:
     // Open the feature-request dialog.  Wired from Help → Submit your idea…
@@ -75,6 +89,9 @@ private:
     QLabel*      m_minimizeLbl{nullptr};
     QLabel*      m_maximizeLbl{nullptr};
     QLabel*      m_closeLbl{nullptr};
+    QLabel*      m_dockLeftLbl{nullptr};
+    QLabel*      m_dockRightLbl{nullptr};
+    QLabel*      m_popOutLbl{nullptr};
     bool         m_minimalMode{false};
     bool         m_windowMoveActive{false};
     bool         m_windowMoveUsesSystem{false};

@@ -4,6 +4,8 @@
 
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QPainter>
+#include <QPixmap>
 #include <QVBoxLayout>
 #include <QDialog>
 #include <QMouseEvent>
@@ -30,6 +32,61 @@ namespace AetherSDR {
 
 namespace {
 constexpr const char* kTitleDragHandleProperty = "aetherTitleDragHandle";
+
+// Build a 16×18 dock-side indicator: hollow rectangle (the main window)
+// with a thin shaded strip flush against one inner wall, representing
+// the applet panel docked on that side.  Visual language matches the
+// pop-out icon's thin-strip-as-panel motif.
+QPixmap buildDockSideIcon(bool fillLeft, bool active)
+{
+    QPixmap pm(16, 18);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    const QColor stroke(active ? QColor(255, 255, 255, 230)
+                                : QColor(138, 168, 192, 200));
+    p.setPen(QPen(stroke, 1));
+    p.setBrush(Qt::NoBrush);
+    // Outline 13×14: columns 1 and 14, rows 2 and 16.  Interior 12×13.
+    p.drawRect(1, 2, 13, 14);
+    // Shaded strip 4 px wide, spanning top-to-bottom of the outer rect
+    // (rows 3–15 = full interior height), flush against the chosen wall:
+    //   left  = cols 2–5
+    //   right = cols 10–13
+    if (fillLeft)
+        p.fillRect(2,  3, 4, 13, stroke);
+    else
+        p.fillRect(10, 3, 4, 13, stroke);
+    p.end();
+    return pm;
+}
+
+// Build a 16×18 pop-out indicator: hollow square (the main waterfall
+// window) on the left, with a smaller filled rectangle to its right
+// representing the applet panel detached into its own window.  The
+// filled area is 25% of the hollow square's interior so the relative
+// sizing reads as "small floating window".
+QPixmap buildPopOutIcon(bool active)
+{
+    QPixmap pm(16, 18);
+    pm.fill(Qt::transparent);
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    const QColor stroke(active ? QColor(255, 255, 255, 230)
+                                : QColor(138, 168, 192, 200));
+    p.setPen(QPen(stroke, 1));
+    p.setBrush(Qt::NoBrush);
+    // Main-window hollow rect on the left.  Same vertical extent as the
+    // dock-side icons (rows 2–16, 14 tall outline) so all three icons line
+    // up; horizontally narrower since the popped-out strip lives outside.
+    p.drawRect(1, 2, 8, 14);
+    // Popped-out applet — 4 px wide strip spanning the full top-to-bottom
+    // height of the outer hollow rect (rows 3–15).  Positioned outside the
+    // hollow with a 2 px gap (columns 10 and 11) so the detachment reads.
+    p.fillRect(12, 3, 4, 13, stroke);
+    p.end();
+    return pm;
+}
 }
 
 TitleBar::TitleBar(QWidget* parent)
@@ -295,6 +352,51 @@ TitleBar::TitleBar(QWidget* parent)
         "QLabel { color: #8aa8c0; font-size: 18px; padding: 0 10px; "
         "border-radius: 4px; }"
         "QLabel:hover { color: #ffffff; background: #cc2030; }");
+    const QString dockLblStyle = QStringLiteral(
+        "QLabel { padding: 0 6px; border-radius: 4px; }"
+        "QLabel:hover { background: #203040; }");
+
+    // Dock-side selectors (applet panel left vs right of the panadapter).
+    // Click is wired via eventFilter() like the min/max/close trio.
+    m_dockLeftLbl = new QLabel;
+    m_dockLeftLbl->setFixedHeight(24);
+    m_dockLeftLbl->setAlignment(Qt::AlignCenter);
+    m_dockLeftLbl->setCursor(Qt::PointingHandCursor);
+    m_dockLeftLbl->setToolTip("Dock applet panel to the left of the panadapter");
+    m_dockLeftLbl->setStyleSheet(dockLblStyle);
+    m_dockLeftLbl->setPixmap(buildDockSideIcon(/*fillLeft=*/true, /*active=*/false));
+    m_dockLeftLbl->installEventFilter(this);
+    m_hbox->addWidget(m_dockLeftLbl);
+
+    m_dockRightLbl = new QLabel;
+    m_dockRightLbl->setFixedHeight(24);
+    m_dockRightLbl->setAlignment(Qt::AlignCenter);
+    m_dockRightLbl->setCursor(Qt::PointingHandCursor);
+    m_dockRightLbl->setToolTip("Dock applet panel to the right of the panadapter");
+    m_dockRightLbl->setStyleSheet(dockLblStyle);
+    m_dockRightLbl->setPixmap(buildDockSideIcon(/*fillLeft=*/false, /*active=*/true));
+    m_dockRightLbl->installEventFilter(this);
+    m_hbox->addWidget(m_dockRightLbl);
+
+    m_popOutLbl = new QLabel;
+    m_popOutLbl->setFixedHeight(24);
+    m_popOutLbl->setAlignment(Qt::AlignCenter);
+    m_popOutLbl->setCursor(Qt::PointingHandCursor);
+    m_popOutLbl->setToolTip("Pop the applet panel out into its own window");
+    m_popOutLbl->setStyleSheet(dockLblStyle);
+    m_popOutLbl->setPixmap(buildPopOutIcon(/*active=*/false));
+    m_popOutLbl->installEventFilter(this);
+    m_hbox->addWidget(m_popOutLbl);
+
+    m_hbox->addSpacing(4);
+
+    auto* dockSep = new QFrame;
+    dockSep->setFixedSize(1, 20);
+    dockSep->setStyleSheet("QFrame { background: #304050; border: none; }");
+    markDragHandle(dockSep);
+    m_hbox->addWidget(dockSep);
+
+    m_hbox->addSpacing(4);
 
     m_minimizeLbl = new QLabel(QString::fromUtf8("\xe2\x80\x94"));  // — em dash
     m_minimizeLbl->setFixedHeight(24);
@@ -494,9 +596,35 @@ bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
                 if (auto* w = window()) w->close();
                 return true;
             }
+            if (obj == m_dockLeftLbl) {
+                emit dockAppletLeftRequested();
+                return true;
+            }
+            if (obj == m_dockRightLbl) {
+                emit dockAppletRightRequested();
+                return true;
+            }
+            if (obj == m_popOutLbl) {
+                emit popOutAppletRequested();
+                return true;
+            }
         }
     }
     return QWidget::eventFilter(obj, ev);
+}
+
+void TitleBar::setAppletFloating(bool floating)
+{
+    if (m_popOutLbl)
+        m_popOutLbl->setPixmap(buildPopOutIcon(floating));
+}
+
+void TitleBar::setAppletDockState(bool visible, bool left)
+{
+    if (m_dockLeftLbl)
+        m_dockLeftLbl->setPixmap(buildDockSideIcon(true,  visible &&  left));
+    if (m_dockRightLbl)
+        m_dockRightLbl->setPixmap(buildDockSideIcon(false, visible && !left));
 }
 
 void TitleBar::updateMaximizeIcon()
