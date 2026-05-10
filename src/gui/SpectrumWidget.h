@@ -104,6 +104,22 @@ public:
     // Reflects the current band, antenna and preamp — no hardcoded dBm value.
     float noiseFloorDbm() const { return m_measuredNoiseFloorDbm; }
 
+    // Squelch threshold overlay line.  level is the radio squelch_level (0-100),
+    // mapped to absolute dBm via the radio's fixed scale: dBm = -160 + level.
+    // (Empirically verified on FLEX-8600 fw 4.1.5 — not in FlexLib docs.)
+    void setSquelchLine(bool visible, int level);
+
+    // When enabled, measures the noise floor on every FFT frame using a
+    // two-pass trimmed mean (pass 1: overall mean; pass 2: mean of bins
+    // at or below pass-1 mean to exclude signal peaks).  An EMA (α=0.1)
+    // smooths frame-to-frame variation.  Emits autoSquelchLevelSuggested()
+    // with a squelch level just above the smoothed floor.
+    void setAutoSquelchEnable(bool on);
+
+    // Margin above the EMA-smoothed noise floor for auto-squelch suggestion
+    // (5-20 dB, default 10).  User-tunable via Display > SQL Margin.
+    void setAutoSqlMarginDb(int dB);
+
     // (getters for display settings are below with their members)
 
     // Set the VFO frequency (draws the orange VFO marker).
@@ -368,6 +384,10 @@ public:
     void setHasTxSlice(bool has) { m_hasTxSlice = has; }
 
 signals:
+    // Emitted when auto-squelch computes a new suggested level (0-100 radio units).
+    // Connect to SliceModel::setSquelch and setSquelchLine to apply.
+    void autoSquelchLevelSuggested(int level);
+
     // Emitted when user clicks on an inactive slice marker.
     void sliceClicked(int sliceId);
     // Emitted when the user requests an absolute jump in the panadapter area.
@@ -445,6 +465,7 @@ private:
     void drawTnfMarkers(QPainter& p, const QRect& specRect);
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
+    void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
     void showSpotClusterPopup(const SpotCluster& cluster, const QPoint& globalPos);
     const TnfMarker* tnfMarkerById(int id) const;
     QColor tnfColor(const TnfMarker& tnf) const;
@@ -525,6 +546,18 @@ private:
     bool  m_noiseFloorEnable{false};
     int   m_noiseFloorPosition{75};  // 0=top, 100=bottom
     int   m_noiseFloorFrameCount{0};
+
+    // Percentile EWMA used for the amber floor overlay line and auto-squelch.
+    // Tracked separately from m_measuredNoiseFloorDbm (two-pass trimmed mean)
+    // so the auto-adjust display feature and auto-squelch are independent.
+    // Squelch threshold overlay line
+    bool  m_squelchLineVisible{false};
+    int   m_squelchLevel{0};             // 0-100 radio squelch_level units
+    bool  m_autoSquelchEnabled{false};
+    float m_sqlNoiseFloorDbm{-999.0f};  // auto-squelch own two-pass trimmed-mean EWMA
+    // dBm above noise floor for auto-squelch suggestion (5-20, default 10)
+    int   m_autoSqlMarginDb{10};
+    int   m_lastAutoSquelchLevel{-1};    // dedup — only emit when level changes
 
     // Tuning step size for click-snap and wheel scroll (Hz)
     int m_stepHz{100};

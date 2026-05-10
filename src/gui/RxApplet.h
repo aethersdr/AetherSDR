@@ -74,6 +74,10 @@ signals:
     void afGainChanged(int value);
     // Emitted when the user changes the tuning step size (Hz).
     void stepSizeChanged(int hz);
+    // Emitted when Auto SQL tracking is toggled.
+    void sqlAutoChanged(bool on);
+    // Emitted when the radio reports a squelch state change (for spectrum line).
+    void squelchStateChanged(bool on, int level);
 
 #ifdef HAVE_RADE
     // Emitted when user selects/deselects RADE digital voice mode
@@ -177,6 +181,7 @@ private:
     // Squelch
     QPushButton* m_sqlBtn{nullptr};
     QSlider*     m_sqlSlider{nullptr};
+    QPushButton* m_sqlAutoBtn{nullptr};
     bool         m_savedSquelchOn{false};
 
 

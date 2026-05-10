@@ -717,6 +717,43 @@ void SpectrumWidget::setWfLineDuration(int ms) {
     resetWfTimeScale();
 }
 
+void SpectrumWidget::setSquelchLine(bool visible, int level)
+{
+    m_squelchLineVisible = visible;
+    m_squelchLevel       = level;
+    markOverlayDirty();
+}
+
+void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
+{
+    if (!m_autoSquelchEnabled || m_sqlNoiseFloorDbm <= -500.0f) { return; }
+    const float norm = (m_refLevel - m_sqlNoiseFloorDbm) / m_dynamicRange;
+    const int y = specRect.top()
+        + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
+    p.setPen(QPen(QColor(0xFF, 0xA0, 0x20, 200), 1, Qt::DashLine));
+    p.drawLine(specRect.left(), y, specRect.right(), y);
+    QFont f = p.font();
+    f.setPointSize(8);
+    f.setBold(true);
+    p.setFont(f);
+    p.setPen(QColor(0xFF, 0xA0, 0x20, 200));
+    const QString lbl = QString("Floor %1 dBm").arg(static_cast<int>(m_sqlNoiseFloorDbm));
+    p.drawText(specRect.right() - p.fontMetrics().horizontalAdvance(lbl) - 4, y - 2, lbl);
+}
+
+void SpectrumWidget::setAutoSquelchEnable(bool on)
+{
+    m_autoSquelchEnabled   = on;
+    m_sqlNoiseFloorDbm     = -999.0f;  // cold-start the floor EWMA on each enable
+    m_lastAutoSquelchLevel = -1;
+}
+
+void SpectrumWidget::setAutoSqlMarginDb(int dBm)
+{
+    m_autoSqlMarginDb      = std::clamp(dBm, 5, 20);
+    m_lastAutoSquelchLevel = -1;  // force re-emit with new margin
+}
+
 void SpectrumWidget::setWfColorScheme(int scheme) {
     auto clamped = static_cast<WfColorScheme>(
         std::clamp(scheme, 0, static_cast<int>(WfColorScheme::Count) - 1));
@@ -1624,6 +1661,41 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
                 }
             }
         }
+    }
+
+    // ── Auto-squelch: own two-pass trimmed-mean noise floor ───────────────
+    // Independent copy of the floor measurement — not borrowed from the
+    // display pipeline so it survives any future refactor of the other block.
+    // Two-pass trimmed mean: pass 1 gets the overall mean; pass 2 averages
+    // only bins at-or-below that mean, excluding signal peaks.
+    // EWMA (α=0.1, ~10-frame window at 25 fps) smooths frame-to-frame variation.
+    // kSqlMinDbm: FLEX-8600 maps squelch_level 0-100 → -160 to -60 dBm.
+    // Empirically verified on fw 4.1.5; not explicitly documented in FlexLib.
+    if (m_autoSquelchEnabled && !m_transmitting && !binsDbm.isEmpty()) {
+        // Pass 1 — overall mean
+        float sum1 = 0.0f; int cnt1 = 0;
+        for (int j = 0; j < binsDbm.size(); j += 4) { sum1 += binsDbm[j]; ++cnt1; }
+        const float mean1 = sum1 / cnt1;
+        // Pass 2 — noise-only bins (≤ mean)
+        float sum2 = 0.0f; int cnt2 = 0;
+        for (int j = 0; j < binsDbm.size(); j += 4) {
+            if (binsDbm[j] <= mean1) { sum2 += binsDbm[j]; ++cnt2; }
+        }
+        const float frameFloor = (cnt2 > 0) ? sum2 / cnt2 : mean1;
+        // EWMA with α=0.1
+        m_sqlNoiseFloorDbm = (m_sqlNoiseFloorDbm <= -500.0f)
+            ? frameFloor
+            : 0.1f * frameFloor + 0.9f * m_sqlNoiseFloorDbm;
+
+        constexpr float kSqlMinDbm = -160.0f;
+        const float targetDbm = m_sqlNoiseFloorDbm + static_cast<float>(m_autoSqlMarginDb);
+        const int level = std::clamp(
+            static_cast<int>(targetDbm - kSqlMinDbm + 0.5f), 1, 100);
+        if (level != m_lastAutoSquelchLevel) {
+            m_lastAutoSquelchLevel = level;
+            emit autoSquelchLevelSuggested(level);
+        }
+        markOverlayDirty();
     }
 
     // Use FFT data for waterfall only when native tiles aren't available.
@@ -3784,6 +3856,30 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawOffScreenSlices(p, specRect);
             drawFpsMeters(p, specRect, wfRect);
 
+            drawAutoSqlFloor(p, specRect);
+
+            // ── Squelch threshold line (solid yellow) ────────────────────
+            // Drawn at the radio's actual gate position using the fixed absolute
+            // dBm scale: dBm = -160 + squelch_level. Empirically verified on
+            // FLEX-8600 fw 4.1.5; independent of refLevel/dynamicRange so the
+            // line stays correct regardless of zoom or display range changes.
+            if (m_squelchLineVisible && m_squelchLevel > 0) {
+                constexpr float kSqlMinDbm = -160.0f;
+                const float squelchDbm = kSqlMinDbm + static_cast<float>(m_squelchLevel);
+                const float norm = (m_refLevel - squelchDbm) / m_dynamicRange;
+                const int sy = specRect.top()
+                    + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
+                p.setPen(QPen(QColor(0xFF, 0xFF, 0x00, 220), 1));
+                p.drawLine(specRect.left(), sy, specRect.right(), sy);
+                QFont f = p.font();
+                f.setPointSize(8);
+                f.setBold(true);
+                p.setFont(f);
+                p.setPen(QColor(0xFF, 0xFF, 0x00, 220));
+                const QString lbl = QString("SQL %1").arg(m_squelchLevel);
+                p.drawText(4, sy - 2, lbl);
+            }
+
             // WNB / RF gain / Prop forecast indicators (top-right of spectrum)
             {
                 const bool showProp = m_propForecastVisible
@@ -4332,6 +4428,23 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         drawSwrSweep(p, specRect);
         drawSliceMarkers(p, specRect, wfRect);
         drawOffScreenSlices(p, specRect);
+
+        drawAutoSqlFloor(p, specRect);
+
+        // ── Squelch threshold line (solid yellow) ────────────────────
+        if (m_squelchLineVisible && m_squelchLevel > 0) {
+            constexpr float kSqlMinDbm = -160.0f;
+            const float squelchDbm = kSqlMinDbm + static_cast<float>(m_squelchLevel);
+            const float norm = (m_refLevel - squelchDbm) / m_dynamicRange;
+            const int sy = specRect.top()
+                + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
+            p.setPen(QPen(QColor(0xFF, 0xFF, 0x00, 220), 1));
+            p.drawLine(specRect.left(), sy, specRect.right(), sy);
+            QFont f = p.font(); f.setPointSize(8); f.setBold(true); p.setFont(f);
+            p.setPen(QColor(0xFF, 0xFF, 0x00, 220));
+            p.drawText(4, sy - 2, QString("SQL %1").arg(m_squelchLevel));
+        }
+
         drawConnectionAnimation(p, specRect);
         drawFpsMeters(p, specRect, wfRect);
     }

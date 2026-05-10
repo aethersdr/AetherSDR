@@ -6,6 +6,7 @@
 #include "ComboStyle.h"
 #include "models/SliceModel.h"
 #include "models/BandDefs.h"
+#include "core/AppSettings.h"
 
 #include <QPushButton>
 #include <QComboBox>
@@ -985,6 +986,34 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
+    // ── Noise Floor reference line ────────────────────────────────────────
+    makeRowWithBtn("Floor:", 1, 99, 75, m_floorSlider, m_floorLabel,
+                   m_floorEnableBtn, "Off");
+    m_floorSlider->setEnabled(false);
+    connect(m_floorEnableBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_floorEnableBtn->setText(on ? "On" : "Off");
+        m_floorSlider->setEnabled(on);
+        emit noiseFloorEnableChanged(on);
+    });
+    connect(m_floorSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_floorLabel->setText(QString::number(v));
+        emit noiseFloorPositionChanged(v);
+    });
+
+    // ── Auto-squelch margin ───────────────────────────────────────────────
+    {
+        auto& s = AppSettings::instance();
+        int savedMargin = std::clamp(s.value("AutoSqlMarginDb", "10").toInt(), 5, 20);
+        makeRow("SQL Margin:", 5, 20, savedMargin, m_autoSqlMarginSlider, m_autoSqlMarginLabel);
+        connect(m_autoSqlMarginSlider, &QSlider::valueChanged, this, [this](int v) {
+            m_autoSqlMarginLabel->setText(QString::number(v));
+            auto& s2 = AppSettings::instance();
+            s2.setValue("AutoSqlMarginDb", QString::number(v));
+            s2.save();
+            emit autoSqlMarginDbChanged(v);
+        });
+    }
+
     // ── Freq Grid Spacing dropdown (#1390) ──────────────────────────────
     {
         auto* lbl = new QLabel("Grid:");
@@ -1048,7 +1077,8 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     if (m_colorSchemeCmb) m_colorSchemeCmb->setToolTip("Selects the waterfall color palette.");
     if (m_bgOpacitySlider) m_bgOpacitySlider->setToolTip("Opacity of the background image overlay.");
     if (m_floorEnableBtn) m_floorEnableBtn->setToolTip("Shows a noise floor reference line on the spectrum display.");
-    if (m_floorSlider) m_floorSlider->setToolTip("Vertical position of the noise floor reference line.");
+    if (m_floorSlider) m_floorSlider->setToolTip("Vertical position of the noise floor reference line (% from top).");
+    if (m_autoSqlMarginSlider) m_autoSqlMarginSlider->setToolTip("Auto-squelch margin in dBm above the measured noise floor.");
 
     m_displayPanel->adjustSize();
 }

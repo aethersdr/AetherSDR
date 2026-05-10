@@ -8730,6 +8730,16 @@ void MainWindow::onSliceAdded(SliceModel* s)
             s->mode(), s->rttyMark(), s->rttyShift(),
             s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq());
     });
+    // Squelch threshold line on the spectrum overlay — only update for the
+    // active slice so that inactive slices sharing a pan don't overwrite it.
+    connect(s, &SliceModel::squelchChanged, this, [this, s](bool on, int level) {
+        if (s != activeSlice()) return;
+        if (auto* sw = spectrumForSlice(s))
+            sw->setSquelchLine(on, level);
+    });
+    if (auto* sw = spectrumForSlice(s))
+        sw->setSquelchLine(s->squelchOn(), s->squelchLevel());
+
     connect(s, &SliceModel::txSliceChanged, this, [this, s](bool tx) {
         // Update hasTxSlice on all spectrums for waterfall freeze logic
         if (tx) {
@@ -9251,6 +9261,10 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     }
     m_appletPanel->setSlice(s);
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), sliceId);
+    // Sync squelch line to newly active slice (handles slice switch without waiting
+    // for squelchChanged signal)
+    if (auto* sw2 = spectrumForSlice(s))
+        sw2->setSquelchLine(s->squelchOn(), s->squelchLevel());
     auto* sw = spectrum();
     if (sw) {
         if (revealOffscreen) {
@@ -9913,6 +9927,31 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setNoiseFloorPosition);
     connect(menu, &SpectrumOverlayMenu::noiseFloorEnableChanged,
             sw, &SpectrumWidget::setNoiseFloorEnable);
+
+    // ── Auto-squelch wiring ───────────────────────────────────────────────
+    // RxApplet signals → per-pan spectrum widget
+    connect(m_appletPanel->rxApplet(), &RxApplet::sqlAutoChanged,
+            sw, &SpectrumWidget::setAutoSquelchEnable);
+    connect(m_appletPanel->rxApplet(), &RxApplet::squelchStateChanged,
+            sw, &SpectrumWidget::setSquelchLine);
+    // Spectrum widget → radio + back to overlay: apply level and immediately
+    // update the squelch line on sw so the yellow line never depends on the
+    // RxApplet → squelchStateChanged → setSquelchLine round-trip, which can
+    // miss the first emission if wirePanadapter runs before setSlice.
+    connect(sw, &SpectrumWidget::autoSquelchLevelSuggested,
+            this, [this, sw](int level) {
+        if (auto* s = activeSlice()) s->setSquelch(true, level);
+        sw->setSquelchLine(true, level);
+    });
+    // SQL Margin overlay control → spectrum widget + persist
+    connect(menu, &SpectrumOverlayMenu::autoSqlMarginDbChanged,
+            sw, &SpectrumWidget::setAutoSqlMarginDb);
+    // Initialize SQL Margin from AppSettings for this pan's spectrum widget
+    {
+        auto& s = AppSettings::instance();
+        int margin = std::clamp(s.value("AutoSqlMarginDb", "10").toInt(), 5, 20);
+        sw->setAutoSqlMarginDb(margin);
+    }
 
     // Pop out / dock panadapter
     connect(sw, &SpectrumWidget::popOutRequested, this, [this, applet](bool popOut) {
