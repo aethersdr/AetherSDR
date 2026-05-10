@@ -73,7 +73,8 @@ static bool spotMarkersVisuallyEqual(const QVector<SpectrumWidget::SpotMarker>& 
             || std::abs(a.freqMhz - b.freqMhz) > kFrequencyEpsilonMhz
             || a.color != b.color
             || a.dxccColor != b.dxccColor
-            || a.source != b.source) {
+            || a.source != b.source
+            || a.backgroundColor != b.backgroundColor) {
             return false;
         }
     }
@@ -5186,7 +5187,8 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
         const bool isQrm = (spot.source == QStringLiteral("QRM"));
         if (isQrm) { p.setOpacity(0.3); }
 
-        // Background pill — only draw when override background is enabled (#768)
+        // Background pill — override (#768) takes precedence; otherwise honor
+        // the protocol-provided background_color from the FlexLib spot (#2550).
         if (m_spotOverrideBg) {
             int bgAlpha = m_spotBgOpacity * 255 / 100;
             QColor bgCol = m_spotBgColor;
@@ -5194,6 +5196,13 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
             p.setPen(Qt::NoPen);
             p.setBrush(bgCol);
             p.drawRoundedRect(labelRect, 3, 3);
+        } else if (!spot.backgroundColor.isEmpty() && spot.backgroundColor.startsWith('#')) {
+            QColor bgCol(spot.backgroundColor);  // #AARRGGBB — alpha already encoded
+            if (bgCol.isValid()) {
+                p.setPen(Qt::NoPen);
+                p.setBrush(bgCol);
+                p.drawRoundedRect(labelRect, 3, 3);
+            }
         }
 
         // Text

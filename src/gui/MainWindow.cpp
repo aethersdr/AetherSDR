@@ -9856,7 +9856,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             if (m_dxccProvider.isEnabled() && spot.source != "Memory")
                 dxccCol = m_dxccProvider.colorForSpot(spot.callsign, spot.rxFreqMhz, spot.mode);
             markers.append({spot.index, spot.callsign, spot.rxFreqMhz, spot.color, spot.mode,
-                            dxccCol, spot.source, spot.spotterCallsign, spot.comment, tsMs});
+                            dxccCol, spot.source, spot.spotterCallsign, spot.comment, tsMs,
+                            spot.backgroundColor});
         }
         swGuard->setSpotMarkers(markers);
     };

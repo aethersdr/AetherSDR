@@ -307,6 +307,7 @@ public:
         QString spotterCallsign;
         QString comment;
         qint64  timestampMs{0};
+        QString backgroundColor;  // #AARRGGBB from FlexLib protocol, empty for default (#2550)
     };
     void setSpotMarkers(const QVector<SpotMarker>& markers);
 
