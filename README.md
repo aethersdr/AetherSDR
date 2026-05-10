@@ -69,7 +69,29 @@ Pre-built binaries are available from [Releases](https://github.com/ten9876/Aeth
 
 ---
 
-## Building from Source
+
+### Qt 6.7+ for GPU Spectrum Rendering
+
+GPU-accelerated spectrum/waterfall rendering requires Qt 6.7 or greater. If your distribution ships with an older version (e.g., Ubuntu 24.04, Debian 12, or Mint 21-22 include Qt 6.4.2), the build system automatically disables GPU rendering and falls back to the CPU-based `QPainter` path.
+
+To use GPU acceleration on these systems, you must install Qt 6.7+ manually:
+
+1. **Option 1: Using PPA (Ubuntu/Mint)**
+   You may be able to use the `kubuntu-backports` PPA to obtain a newer Qt version.
+
+2. **Option 2: Using the Qt Online Installer**
+   Install the newer Qt version into your home directory (e.g., `~/Qt/6.7.3/gcc_64`). Because CMake often defaults to the system-provided Qt, you must explicitly point CMake to the newer version using the `-DCMAKE_PREFIX_PATH` flag:
+
+   ```bash
+   cmake -B build -G Ninja \
+       -DCMAKE_PREFIX_PATH="$HOME/Qt/6.7.3/gcc_64" \
+       -DCMAKE_BUILD_TYPE=RelWithDebInfo
+   ```
+
+*Note: Ensure you have installed the necessary development headers (e.g., `qt6-base-private-dev` equivalent for your installed Qt version).*
+
+### Building from Source
+
 
 ### Dependencies
 
