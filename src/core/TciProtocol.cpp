@@ -79,25 +79,32 @@ SliceModel* TciProtocol::sliceForTrx(int trx) const
 QString TciProtocol::generateInitBurst()
 {
     QString burst;
-    burst += QStringLiteral("protocol:ExpertSDR3,1.5;");
-    burst += QStringLiteral("device:%1;").arg(
-        m_model ? m_model->name() + " " + m_model->model()
-                : QStringLiteral("AetherSDR"));
-    burst += QStringLiteral("receive_only:false;");
 
-    // Count TRXs based on owned slices and expose them as contiguous TCI
-    // receivers (0..N-1). Flex slice ids may start at 1 when another client
-    // owns slice 0, but TCI clients use indexes within the advertised count.
+    // ── Phase 1: Initialization commands (spec section 4.1) ───────────
+    // Sent in spec order, terminated by READY.  Strict clients (notably
+    // RF2K-S amps) treat anything before READY that isn't one of the 9
+    // listed init commands as malformed and refuse to engage.
+    burst += QStringLiteral("vfo_limits:1000,75000000;");
+    burst += QStringLiteral("if_limits:-48000,48000;");
+
     const auto slices = m_model ? m_model->slices() : QList<SliceModel*>{};
     int trxCount = slices.size();
     if (trxCount < 1) trxCount = 1;
     burst += QStringLiteral("trx_count:%1;").arg(trxCount);
-    burst += QStringLiteral("channels_count:1;");
+    burst += QStringLiteral("channel_count:1;");
 
-    // Modulations list
+    // Identify as SunSDR2DX so strict TCI clients (notably RF2K-S amps)
+    // that whitelist Expert Electronics device names accept the server.
+    burst += QStringLiteral("device:SunSDR2DX;");
+    burst += QStringLiteral("receive_only:false;");
     burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,fm,nfm,digu,digl,rtty;");
+    burst += QStringLiteral("protocol:ExpertSDR2,1.9;");
+    burst += QStringLiteral("ready;");
 
-    // Per-slice state
+    // ── Phase 2: Current state notifications ──────────────────────────
+    // After READY these are plain event notifications, indistinguishable
+    // from the events fired by a live tuning operation.  All current TCI
+    // clients (WSJT-X, JTDX, aether_pad) should process them identically.
     if (m_model) {
         for (auto* s : slices) {
             int trx = tciTrxForSlice(m_model, s);
@@ -167,10 +174,12 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("trx:%1,%2;").arg(txTrx).arg(isTx ? "true" : "false");
     }
 
+    // ── Phase 3: Audio / IQ stream configuration ──────────────────────
+    // After READY and after current state — these are clients-of-audio
+    // concerns (WSJT-X), and irrelevant to control-only clients like
+    // amplifiers.  Sending them post-READY keeps strict amp clients
+    // happy without breaking WSJT-X's TX audio FIFO setup.
     burst += QStringLiteral("audio_samplerate:48000;");
-    // Stream negotiation — required for WSJT-X to initialize its TCI TX
-    // audio FIFO. Without these, readAudioData() returns all zeros.
-    // Matches Thetis TCI server init burst. — confirmed via Thetis source
     burst += QStringLiteral("audio_stream_sample_type:float32;");
     burst += QStringLiteral("audio_stream_channels:2;");
     burst += QStringLiteral("audio_stream_samples:2048;");
@@ -180,7 +189,6 @@ QString TciProtocol::generateInitBurst()
     // audio_start:0 back to request RX audio streaming.
     burst += QStringLiteral("audio_start;");
     burst += QStringLiteral("start;");
-    burst += QStringLiteral("ready;");
 
     return burst;
 }
