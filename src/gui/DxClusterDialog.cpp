@@ -2544,15 +2544,20 @@ void DxClusterDialog::setFramelessMode(bool on)
     Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
     flags.setFlag(Qt::FramelessWindowHint, on);
     setWindowFlags(flags);
-    setGeometry(geom);
+    if (wasVisible) {
+        setGeometry(geom);
+    }
 
-    if (m_titleBar)
+    if (m_titleBar) {
         m_titleBar->setVisible(on);
-    if (m_outerLayout)
+    }
+    if (m_outerLayout) {
         m_outerLayout->setContentsMargins(0, 0, 0, 0);
+    }
 
-    if (wasVisible)
+    if (wasVisible) {
         show();
+    }
 }
 
 void DxClusterDialog::setTotalSpots(int count)

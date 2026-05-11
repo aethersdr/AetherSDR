@@ -434,6 +434,7 @@ private:
     QPointer<QDialog> m_radioSetupDialog;
     QPointer<QDialog> m_networkDiagnosticsDialog;
     QPointer<QDialog> m_propDashboardDialog;
+    QPointer<QDialog> m_txBandDialog;
     QPointer<QDialog> m_memoryDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<QDialog> m_dspDialog;

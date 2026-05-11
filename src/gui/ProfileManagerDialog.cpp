@@ -1,4 +1,7 @@
 #include "ProfileManagerDialog.h"
+#include "FramelessResizer.h"
+#include "FramelessWindowTitleBar.h"
+#include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -11,6 +14,7 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QMessageBox>
+#include <QRect>
 
 namespace AetherSDR {
 
@@ -41,7 +45,19 @@ ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
     setMinimumSize(460, 400);
     setStyleSheet(kDialogStyle);
 
-    auto* root = new QVBoxLayout(this);
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    m_titleBar = new FramelessWindowTitleBar(QStringLiteral("Profile Manager"), this);
+    outer->addWidget(m_titleBar);
+
+    auto* bodyWidget = new QWidget(this);
+    auto* root = new QVBoxLayout(bodyWidget);
+    root->setContentsMargins(9, 9, 9, 9);
+    root->setSpacing(9);
+    m_bodyLayout = root;
+    outer->addWidget(bodyWidget, 1);
 
     m_tabs = new QTabWidget;
 
@@ -76,6 +92,10 @@ ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
     closeRow->addWidget(closeBtn);
     root->addLayout(closeRow);
 
+    FramelessResizer::install(this);
+    setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+
     // Listen for profile list updates
     connect(model, &RadioModel::globalProfilesChanged, this, [this] {
         refreshTab("global");
@@ -86,6 +106,29 @@ ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
     connect(&model->transmitModel(), &TransmitModel::micProfileListChanged, this, [this] {
         refreshTab("mic");
     });
+}
+
+void ProfileManagerDialog::setFramelessMode(bool on)
+{
+    const QRect geom = geometry();
+    const bool wasVisible = isVisible();
+
+    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
+    flags.setFlag(Qt::FramelessWindowHint, on);
+    setWindowFlags(flags);
+    if (wasVisible) {
+        setGeometry(geom);
+    }
+
+    if (m_titleBar) {
+        m_titleBar->setVisible(on);
+    }
+    if (m_bodyLayout) {
+        m_bodyLayout->setContentsMargins(9, on ? 7 : 9, 9, 9);
+    }
+    if (wasVisible) {
+        show();
+    }
 }
 
 QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,

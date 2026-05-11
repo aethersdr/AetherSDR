@@ -4464,7 +4464,9 @@ void setDialogFramelessMode(QDialog* dialog, bool on)
     Qt::WindowFlags flags = (dialog->windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
     flags.setFlag(Qt::FramelessWindowHint, on);
     dialog->setWindowFlags(flags);
-    dialog->setGeometry(geom);
+    if (wasVisible) {
+        dialog->setGeometry(geom);
+    }
 
     if (auto* titleBar = dialog->findChild<QWidget*>("editorFramelessTitleBar")) {
         titleBar->setVisible(on);
@@ -6045,6 +6047,7 @@ void MainWindow::buildMenuBar()
         auto* dlg = new MidiMappingDialog(m_midiControl, this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         m_midiDialog = dlg;
+        dlg->setFramelessMode(framelessWindowEnabled());
         dlg->show();
     });
 #endif
@@ -6201,14 +6204,33 @@ void MainWindow::buildMenuBar()
             statusBar()->showMessage("Not connected to radio", 3000);
             return;
         }
+        if (m_txBandDialog) {
+            m_txBandDialog->raise();
+            m_txBandDialog->activateWindow();
+            return;
+        }
         auto* dlg = new QDialog(this);
         dlg->setWindowTitle(QString("TX Band Settings (Current TX Profile: %1)")
             .arg(m_radioModel.transmitModel().activeProfile()));
         dlg->setMinimumSize(700, 450);
         dlg->setStyleSheet("QDialog { background: #0f0f1a; }");
         dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_txBandDialog = dlg;
 
-        auto* vb = new QVBoxLayout(dlg);
+        auto* outer = new QVBoxLayout(dlg);
+        outer->setContentsMargins(0, 0, 0, 0);
+        outer->setSpacing(0);
+
+        auto* titleBar = new FramelessWindowTitleBar(dlg->windowTitle(), dlg);
+        titleBar->setObjectName(QStringLiteral("framelessWindowTitleBar"));
+        outer->addWidget(titleBar);
+
+        auto* bodyWidget = new QWidget(dlg);
+        auto* vb = new QVBoxLayout(bodyWidget);
+        vb->setContentsMargins(9, 9, 9, 9);
+        vb->setSpacing(9);
+        outer->addWidget(bodyWidget, 1);
+
         auto* gridContainer = new QWidget;
         gridContainer->setStyleSheet("background: #506070;");
         auto* headerGrid = new QGridLayout(gridContainer);
@@ -6308,6 +6330,8 @@ void MainWindow::buildMenuBar()
 
         vb->addWidget(gridContainer);
         vb->addStretch();
+        FramelessResizer::install(dlg);
+        setDialogFramelessMode(dlg, framelessWindowEnabled());
         dlg->show();
     });
 
@@ -11054,6 +11078,14 @@ void MainWindow::setFramelessWindow(bool on)
         dlg->setFramelessMode(on);
     if (auto* dlg = qobject_cast<MemoryDialog*>(m_memoryDialog))
         dlg->setFramelessMode(on);
+#ifdef HAVE_MIDI
+    if (auto* dlg = qobject_cast<MidiMappingDialog*>(m_midiDialog)) {
+        dlg->setFramelessMode(on);
+    }
+#endif
+    if (m_txBandDialog) {
+        setDialogFramelessMode(m_txBandDialog, on);
+    }
     if (m_reconnectDlg && m_reconnectDlg->findChild<QWidget*>("framelessWindowTitleBar")) {
         setDialogFramelessMode(m_reconnectDlg, on);
     }
