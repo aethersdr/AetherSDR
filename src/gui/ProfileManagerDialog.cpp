@@ -1,7 +1,7 @@
 #include "ProfileManagerDialog.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
-
+#include "AppSettings.h"
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -86,6 +86,7 @@ ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
     connect(&model->transmitModel(), &TransmitModel::micProfileListChanged, this, [this] {
         refreshTab("mic");
     });
+    restoreGeometry(AppSettings::instance()->value("ProfileManagerDialogGeometry").toByteArray());
 }
 
 QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
@@ -259,6 +260,11 @@ void ProfileManagerDialog::refreshTab(const QString& type)
         if (p == active)
             tw.list->setCurrentItem(item);
     }
+}
+
+void ProfileManagerDialog::closeEvent(QCloseEvent *event) {
+    AppSettings::instance()->setValue("ProfileManagerDialogGeometry", saveGeometry());
+    QDialog::closeEvent(event);
 }
 
 } // namespace AetherSDR
