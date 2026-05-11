@@ -195,12 +195,11 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     //    mode (CW or CWL).  Guard prevents collisions with a future DVK
     //    macro panel or other function-key users. (#1552)
     //
-    //    Enabled only while CwxPanel is visible — DvkPanel registers its
-    //    own F1-F12 ApplicationShortcuts and Qt would otherwise emit
-    //    activatedAmbiguously when both contexts match, dropping the
-    //    event silently.  Toggling enabled state on show/hide keeps
-    //    exactly one set live since the panels are mutually exclusive
-    //    in the splitter. (#2464)
+    //    Created disabled; MainWindow flips enable state based on the
+    //    active slice's mode (mutually exclusive with DvkPanel's F1-F12
+    //    set) so the keys fire regardless of panel visibility, while
+    //    Qt still sees at most one enabled ApplicationShortcut per key
+    //    and never emits activatedAmbiguously. (#2464, #2582)
     for (int i = 0; i < 12; ++i) {
         auto* sc = new QShortcut(Qt::Key_F1 + i, window());
         sc->setContext(Qt::ApplicationShortcut);
@@ -430,16 +429,9 @@ void CwxPanel::sendBuffer()
     m_model->send(text);
 }
 
-void CwxPanel::showEvent(QShowEvent* event)
+void CwxPanel::setShortcutsEnabled(bool enabled)
 {
-    for (auto* sc : m_shortcuts) sc->setEnabled(true);
-    QWidget::showEvent(event);
-}
-
-void CwxPanel::hideEvent(QHideEvent* event)
-{
-    for (auto* sc : m_shortcuts) sc->setEnabled(false);
-    QWidget::hideEvent(event);
+    for (auto* sc : m_shortcuts) sc->setEnabled(enabled);
 }
 
 void CwxPanel::onCharSent(int /*index*/)

@@ -11353,6 +11353,13 @@ void MainWindow::updateKeyerAvailability(const QString& mode)
     bool isSsb = (mode == "USB" || mode == "LSB" || mode == "AM" || mode == "SAM"
                   || mode == "FM" || mode == "NFM" || mode == "DFM");
 
+    // F1-F12 / Esc ApplicationShortcuts: enable the set that matches the
+    // active slice's mode, regardless of panel visibility.  The two sets
+    // are mutually exclusive so Qt never sees two enabled shortcuts for
+    // the same key and won't emit activatedAmbiguously (#2464, #2582).
+    if (m_cwxPanel) m_cwxPanel->setShortcutsEnabled(isCw);
+    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(isSsb);
+
     // CWX: available in CW modes only
     m_cwxIndicator->setEnabled(isCw);
     if (!isCw && m_cwxPanel->isVisible()) {
