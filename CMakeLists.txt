@@ -767,7 +767,7 @@ if(APPLE)
         COMMAND sips -z 256 256 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_256x256.png"
         COMMAND sips -z 512 512 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_256x256@2x.png"
         COMMAND sips -z 512 512 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_512x512.png"
-        COMMAND sips -z 768 768 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_512x512@2x.png"
+        COMMAND sips -z 1024 1024 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_512x512@2x.png"
         COMMAND iconutil -c icns "${ICONSET_PATH}" -o "${ICNS_PATH}"
         DEPENDS "${ICON_SOURCE}"
         COMMENT "Generating AetherSDR.icns"
