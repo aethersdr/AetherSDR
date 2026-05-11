@@ -39,9 +39,9 @@ represented as **stereo frames** because the radio/audio interfaces expect
 interleaved L/R samples. Important cases:
 
 - PC mic voice TX is carried as stereo Int16 frames after capture normalization.
-  If capture is stereo at 24 kHz, the current code preserves L/R as-is. If
-  stereo capture must be resampled, `Resampler::processStereoToStereo()` first
-  averages L/R and then duplicates the result to stereo.
+  Stereo capture is first collapsed to a canonical mono voice signal using Auto
+  Left/Right/Average selection, then duplicated to L/R. If resampling is needed,
+  that canonical mono signal is sent through `Resampler::processMonoToStereo()`.
 - Opus `remote_audio_tx` packets are always 24 kHz stereo Int16 frames.
 - RADE modem/speech processing is logically mono, but AudioEngine handoff and
   VITA packetization use 24 kHz stereo float32 frames.
@@ -219,16 +219,12 @@ radio audio streams.
 ```mermaid
 flowchart TD
     A["QAudioSource mic capture<br/>Int16, preferred stereo"] --> B["AudioEngine::onTxAudioReady()"]
-    B --> C{"Input rate/channels"}
-    C --> D["Mono needing resample<br/>float32 mono -> processMonoToStereo()<br/>24 kHz stereo Int16"]
-    C --> E["Stereo needing resample<br/>float32 stereo -> processStereoToStereo()<br/>average L/R, duplicate<br/>24 kHz stereo Int16"]
-    C --> F["24 kHz mono<br/>duplicate Int16 mono to stereo"]
-    C --> G["24 kHz stereo<br/>pass through unchanged"]
-    D --> H{"RADE mode?"}
+    B --> C["Canonicalize mic channels<br/>Auto Left/Right/Average/Mono<br/>duplicate mono to L/R"]
+    C --> D{"Needs resample?"}
+    D -->|yes| E["Use canonical mono<br/>processMonoToStereo()<br/>24 kHz stereo Int16"]
+    D -->|no| H{"RADE mode?"}
     E --> H
-    F --> H
-    G --> H
-    H -->|yes| I["PC mic gain -> left-channel meter<br/>Int16 stereo -> float32 stereo<br/>txRawPcmReady()"]
+    H -->|yes| I["PC mic gain -> canonical meter<br/>Int16 stereo -> float32 stereo<br/>txRawPcmReady()"]
     I --> J["RADEEngine"]
     H -->|no| K{"DAX TX mode?"}
     K -->|yes| L["return<br/>DAX/TCI feed feedDaxTxAudio()"]
@@ -240,7 +236,7 @@ flowchart TD
     Q --> R["ClientFinalLimiter"]
     R --> S["Final monitor tap"]
     S --> T["txPostChainScopeReady<br/>average L/R"]
-    T --> U["PC mic meter<br/>left channel only"]
+    T --> U["PC mic meter<br/>canonical stereo frame level"]
     U --> V["scopeSamplesReady<br/>average L/R"]
     V --> W{"Opus enabled?"}
     W -->|yes| X["10 ms Opus remote_audio_tx<br/>PCC 0x8005"]
@@ -266,34 +262,32 @@ flowchart TD
 When the capture sample rate is not 24 kHz, `m_txResampler` converts to the
 internal 24 kHz voice rate.
 
-### Capture normalization and current resampling behavior
+### Capture normalization and resampling behavior
 
 `onTxAudioReady()` normalizes the mic data to interleaved 24 kHz stereo Int16
 before the voice TX chain or early RADE/DAX branches:
 
-- Mono input needing resample is converted to float32 mono, resampled with
-  `Resampler::processMonoToStereo()`, and converted back to Int16 stereo.
-- Stereo input needing resample is converted to float32 stereo and passed through
-  `Resampler::processStereoToStereo()`. That helper averages L/R with
-  `(L+R)/2`, resamples the mono signal, then duplicates it back to stereo.
-- 24 kHz mono input is duplicated directly to 24 kHz stereo Int16.
-- 24 kHz stereo input currently passes through unchanged. It is not canonicalized
-  to mono.
-
-Current known behavior: a stereo mic device that has signal on only one channel
-can lose 6.02 dB when the signal is averaged with a silent channel during
-`processStereoToStereo()`. A right-only 24 kHz stereo device can also produce a
-silent or incorrect PC mic meter because the voice-path mic meter reads the left
-channel only.
+- The actual negotiated channel count is stored as `m_txInputChannels`.
+- Mono input is duplicated to stereo with no level change.
+- Stereo input is reduced to one canonical mono voice signal before any
+  resampling. Auto mode measures raw L/R RMS per block, selects the stronger
+  channel when the weaker side is at least 12 dB down above a -65 dBFS floor,
+  otherwise averages balanced L/R. A short hold keeps the previous one-sided
+  selection through quiet pauses.
+- The canonical mono sample is duplicated back to L/R for the rest of the voice
+  path.
+- Input that needs resampling is converted from the canonical duplicated stereo
+  to float32 mono and resampled with `Resampler::processMonoToStereo()`.
+  `processStereoToStereo()` is not used on raw mic stereo.
 
 ### Voice TX ordering after capture/resampling
 
 After capture normalization, `onTxAudioReady()` uses this ordering:
 
 1. **RADE early path**: if RADE mode is active, PC mic gain is applied, the
-   client mic meter is computed from the left channel only, Int16 stereo is
-   converted to float32 stereo, and `txRawPcmReady()` is emitted. The normal
-   voice Opus path returns immediately.
+   client mic meter is computed from the canonical stereo frame level, Int16
+   stereo is converted to float32 stereo, and `txRawPcmReady()` is emitted. The
+   normal voice Opus path returns immediately.
 2. **DAX TX bypass**: if DAX TX mode is active, the PC mic voice handler returns.
    DAX/TCI audio enters through `feedDaxTxAudio()` and intentionally bypasses the
    voice DSP chain.
@@ -314,8 +308,8 @@ After capture normalization, `onTxAudioReady()` uses this ordering:
    post-limiter signal.
 10. **TX post-chain scope**: `txPostChainScopeReady` receives a mono scope signal
     made by averaging L/R from the post-limiter Int16 stereo signal.
-11. **PC mic meter**: `pcMicLevelChanged` uses the left channel only from the
-    post-limiter Int16 stereo signal.
+11. **PC mic meter**: `pcMicLevelChanged` uses the post-limiter canonical stereo
+    frame level, so right-only input devices meter correctly.
 12. **Main scope**: `scopeSamplesReady(..., true)` receives a mono scope signal
     made by averaging L/R.
 13. **Packetization**:
@@ -370,7 +364,7 @@ emitting `audioDataReady()`.
 
 ```mermaid
 flowchart TD
-    A["PC mic capture normalized<br/>24 kHz stereo Int16"] --> B["AudioEngine RADE branch<br/>PC mic gain, left-channel meter"]
+    A["PC mic capture normalized<br/>24 kHz stereo Int16"] --> B["AudioEngine RADE branch<br/>PC mic gain, canonical meter"]
     B --> C["Int16 stereo -> float32 stereo"]
     C --> D["txRawPcmReady()"]
     D --> E["RADEEngine::feedTxAudio()<br/>24 kHz stereo float32"]
@@ -436,7 +430,7 @@ flowchart TD
     D --> E{"Route"}
     E -->|"Low-latency"| F["Requires raw radio TX<br/>float32 stereo chunks"]
     F --> G["VITA PCC 0x03E3<br/>128 stereo frames"]
-    E -->|"Radio-native"| H["transmit dax=1<br/>average L/R to mono"]
+    E -->|"Radio-native"| H["transmit dax=1<br/>safe mono collapse"]
     H --> I["float32 stereo -> int16 mono<br/>PCC 0x0123"]
 ```
 
@@ -473,14 +467,15 @@ route:
 
 - `MainWindow::updateDaxTxMode()` enables radio-side `transmit dax=1` for
   digital modes.
-- `feedDaxTxAudio()` converts float32 stereo to Int16 mono by averaging
-  `(L+R)/2`, clamps to the Int16 range, and packetizes 128 mono samples per VITA
-  packet.
+- `feedDaxTxAudio()` converts float32 stereo to Int16 mono using the same safe
+  Auto Left/Right/Average policy as PC mic canonicalization, clamps to the Int16
+  range, and packetizes 128 mono samples per VITA packet.
 - The packet class code is PCC `0x0123`.
 
-This route can also lose 6.02 dB when the DAX/TCI source has signal on only one
-side of a stereo pair, because the live code averages the active channel with a
-silent channel.
+This is still a DAX/TCI digital bypass. It does not apply voice DSP, PC mic
+gain, Quindar tones, or the final voice limiter. Balanced stereo DAX/TCI tones
+continue to average as before; one-sided virtual/aggregate sources keep full
+level instead of losing 6.02 dB.
 
 ## Metering and scopes
 
@@ -490,9 +485,9 @@ equivalent taps.
 Local/client taps:
 
 - `pcMicLevelChanged` on the PC mic voice path is a post-final-limiter Int16
-  meter and uses the left channel only.
+  meter over the canonical stereo frame level.
 - `pcMicLevelChanged` on the RADE early branch is after PC mic gain but before
-  Int16-to-float conversion and uses the left channel only.
+  Int16-to-float conversion and uses the canonical stereo frame level.
 - `pcMicLevelChanged` on the DAX/TCI path is computed in `feedDaxTxAudio()` from
   all float samples before packetization.
 - `levelChanged` is the local RX speaker RMS from `feedAudioData()` after the
@@ -534,20 +529,20 @@ Radio-provided taps:
 | CW sidetone | `CwSidetoneGenerator` | key state | float32 stereo | normally 48 kHz | 2 | Local-only sidetone sink |
 | Quindar local monitor | `QuindarLocalSink` | tone state | float32 stereo | 48 kHz | 2 | Local-only Quindar monitor sink |
 | PC mic capture | `AudioEngine::startTxStream()` | device Int16 | Int16 from `QAudioSource` | 24, 44.1, or 48 kHz | 1 or 2 | macOS push-buffer polling; Linux/Windows pull mode |
-| PC mic normalization | `AudioEngine::onTxAudioReady()` | Int16 mono/stereo | Int16 stereo | 24 kHz | 1 or 2 -> 2 | Resamples and/or duplicates to stereo |
+| PC mic normalization | `AudioEngine::onTxAudioReady()` | Int16 mono/stereo | Int16 stereo | 24 kHz | 1 or 2 -> 1 -> 2 | Auto selects stronger one-sided stereo channel or averages balanced stereo before resampling/duplication |
 | PC mic voice strip | `AudioEngine::applyClientTxDspInt16()` | Int16 stereo | Int16 stereo | 24 kHz | 2 | Ordered Gate/EQ/DeEss/Comp/Tube/PUDU/Reverb |
 | PC mic gain | `AudioEngine::onTxAudioReady()` | Int16 stereo | Int16 stereo | 24 kHz | 2 | 0..100 maps to 0.0..1.0 attenuation |
 | Quindar TX insertion | `ClientQuindarTone::process()` | Int16 stereo | Int16 stereo | 24 kHz | 2 | Inserts tones before final limiter |
 | Final voice limiter | `ClientFinalLimiter::processInt16Stereo()` | Int16 stereo | Int16 stereo | 24 kHz | 2 | DC block, output trim, linked peak limiting |
 | Opus TX packetization | `AudioEngine::onTxAudioReady()` | Int16 stereo | VITA PCC `0x8005` Opus | 24 kHz | 2 | 10 ms packets, paced queue |
 | Uncompressed voice fallback | `AudioEngine::onTxAudioReady()` | Int16 stereo | VITA PCC `0x03E3` float32 stereo | 24 kHz | 2 | 128 stereo frames per packet |
-| RADE TX branch | `AudioEngine::onTxAudioReady()` | Int16 stereo | float32 stereo | 24 kHz | 2 | Applies PC mic gain, left-channel meter, emits `txRawPcmReady()` |
+| RADE TX branch | `AudioEngine::onTxAudioReady()` | Int16 stereo | float32 stereo | 24 kHz | 2 | Applies PC mic gain, canonical meter, emits `txRawPcmReady()` |
 | RADE TX modem | `RADEEngine::feedTxAudio()` | float32 stereo | float32 stereo modem waveform | 24 kHz -> 16 kHz -> 8 kHz -> 24 kHz | 2 -> 1 -> 2 | Averages L/R for LPCNet/RADE |
 | RADE TX packetization | `AudioEngine::sendModemTxAudio()` | float32 stereo | VITA PCC `0x03E3` float32 stereo | 24 kHz | 2 | 128 stereo frames per packet |
 | RADE RX decode | `RADEEngine::feedRxAudio()` | float32 stereo | float32 stereo speech | 24 kHz -> 8 kHz -> 16 kHz -> 24 kHz | 2 -> 1 -> 2 | Averages L/R, emits decoded speech |
 | DAX/TCI TX entry | `AudioEngine::feedDaxTxAudio()` | float32 PCM, normally stereo | route-dependent VITA | 24 kHz | normally 2 | Bypasses client voice DSP |
 | DAX low-latency TX | `AudioEngine::feedDaxTxAudio()` | float32 stereo | VITA PCC `0x03E3` float32 stereo | 24 kHz | 2 | 128 stereo frames per packet |
-| DAX radio-native TX | `AudioEngine::feedDaxTxAudio()` | float32 stereo | VITA PCC `0x0123` Int16 mono | 24 kHz | 2 -> 1 | Averages L/R; radio `dax=1` route |
+| DAX radio-native TX | `AudioEngine::feedDaxTxAudio()` | float32 stereo | VITA PCC `0x0123` Int16 mono | 24 kHz | 2 -> 1 | Safe stronger-channel/average mono collapse; radio `dax=1` route |
 
 ## Downmix, duplication, resampling, and format-change table
 
@@ -561,14 +556,13 @@ Radio-provided taps:
 | `AudioEngine::resampleStereo()` | Resample without downmix | float32 stereo | float32 stereo | Uses independent L/R resamplers; preserves pan |
 | `AudioEngine::processNr2()` | Downmix and duplicate | float32 stereo | float32 stereo | Averages L/R, NR2 mono processing, duplicates, reapplies pan |
 | `AudioEngine::processBnr()` | Downmix, 24->48, 48->24, duplicate | float32 stereo | float32 stereo | BNR path is mono internally |
-| `AudioEngine::onTxAudioReady()`, mono resample | Resample and duplicate | Int16 mono | Int16 stereo | Int16 -> float32 -> `processMonoToStereo()` -> Int16 |
-| `AudioEngine::onTxAudioReady()`, stereo resample | Downmix, resample, duplicate | Int16 stereo | Int16 stereo | Uses `processStereoToStereo()`; one-sided stereo loses 6.02 dB |
-| `AudioEngine::onTxAudioReady()`, 24 kHz mono | Duplicate | Int16 mono | Int16 stereo | Direct Int16 mono duplication |
-| `AudioEngine::onTxAudioReady()`, 24 kHz stereo | Pass-through | Int16 stereo | Int16 stereo | No canonical mono conversion today |
-| `AudioEngine::onTxAudioReady()`, RADE branch | Format conversion | Int16 stereo | float32 stereo | After PC mic gain and left-channel meter |
+| `AudioEngine::onTxAudioReady()`, mono input | Duplicate canonical mono | Int16 mono | Int16 stereo | Direct Int16 mono duplication before optional resample |
+| `AudioEngine::onTxAudioReady()`, stereo input | Canonicalize and duplicate | Int16 stereo | Int16 stereo | Auto Left/Right/Average avoids one-sided stereo 6.02 dB loss |
+| `AudioEngine::onTxAudioReady()`, resample | Resample canonical mono and duplicate | Int16 stereo | Int16 stereo | Canonical duplicated stereo -> float32 mono -> `processMonoToStereo()` -> Int16 |
+| `AudioEngine::onTxAudioReady()`, RADE branch | Format conversion | Int16 stereo | float32 stereo | After PC mic gain and canonical meter |
 | `AudioEngine::onTxAudioReady()`, Opus TX | Encoding | Int16 stereo | Opus payload | 10 ms / 240 frame packets |
 | `AudioEngine::onTxAudioReady()`, VITA fallback | Format conversion | Int16 stereo | float32 stereo VITA | 128 stereo frames per packet |
-| `AudioEngine::feedDaxTxAudio()`, radio-native route | Downmix and format conversion | float32 stereo | Int16 mono VITA | Averages `(L+R)/2`; one-sided stereo loses 6.02 dB |
+| `AudioEngine::feedDaxTxAudio()`, radio-native route | Safe mono collapse and format conversion | float32 stereo | Int16 mono VITA | Auto stronger-channel/average policy; no voice DSP or limiter |
 | `AudioEngine::feedDaxTxAudio()`, low-latency route | Packetization only | float32 stereo | float32 stereo VITA | No downmix in this route |
 | `RADEEngine::feedTxAudio()` | Downmix and downsample | float32 stereo 24 kHz | mono 16 kHz | Uses `processStereoToMono()` |
 | `RADEEngine::feedTxAudio()` | Upsample and duplicate | mono 8 kHz modem | float32 stereo 24 kHz | Uses `processMonoToStereo()` |
@@ -586,8 +580,8 @@ Radio-provided taps:
 
 | Signal/name | File/function | Pre/post stage | Channel policy | Units |
 | --- | --- | --- | --- | --- |
-| `AudioEngine::pcMicLevelChanged`, PC voice | `AudioEngine::onTxAudioReady()` | Post final limiter, before Opus/fallback packetization | Left channel only | dBFS peak and RMS |
-| `AudioEngine::pcMicLevelChanged`, RADE | `AudioEngine::onTxAudioReady()` RADE branch | After PC mic gain, before Int16->float32 and RADE engine | Left channel only | dBFS peak and RMS |
+| `AudioEngine::pcMicLevelChanged`, PC voice | `AudioEngine::onTxAudioReady()` | Post final limiter, before Opus/fallback packetization | Canonical stereo frame level | dBFS peak and RMS |
+| `AudioEngine::pcMicLevelChanged`, RADE | `AudioEngine::onTxAudioReady()` RADE branch | After PC mic gain, before Int16->float32 and RADE engine | Canonical stereo frame level | dBFS peak and RMS |
 | `AudioEngine::pcMicLevelChanged`, DAX/TCI | `AudioEngine::feedDaxTxAudio()` | Before DAX route packetization | All float samples | dBFS peak and RMS |
 | `AudioEngine::levelChanged` | `AudioEngine::feedAudioData()` | After selected RX NR, before RX client strip/boost/trim/resample | RMS over all float samples in the buffer | Linear RMS |
 | `AudioEngine::scopeSamplesReady`, TX voice | `AudioEngine::emitScopeFromInt16Stereo()` | Post PC mic meter, before packetization | Average L/R | float PCM scope samples, sample rate |
@@ -611,8 +605,8 @@ Radio-provided taps:
   correct only when the desired behavior is "average L/R, resample, duplicate."
 - Use `AudioEngine::resampleStereo()` or equivalent separate L/R resamplers when
   preserving stereo image or radio pan matters.
-- The PC mic one-sided stereo issue and the left-channel-only PC mic meter are
-  current behavior, not design recommendations.
+- PC mic capture is canonicalized before resampling and metering, so one-sided
+  stereo microphones keep full level and right-only microphones meter correctly.
 - DAX/TCI and RADE intentionally bypass the client voice strip. Do not move them
   through voice EQ/compression/limiting unless the digital-mode behavior is
   deliberately being redesigned.

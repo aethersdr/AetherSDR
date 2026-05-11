@@ -421,6 +421,7 @@ set(CORE_SOURCES
     src/core/TgxlConnection.cpp
     src/core/CommandParser.cpp
     src/core/AudioEngine.cpp
+    src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp
     src/core/ClientEq.cpp
     src/core/ClientComp.cpp
@@ -1245,6 +1246,18 @@ add_executable(client_quindar_test
 )
 target_include_directories(client_quindar_test PRIVATE src)
 target_link_libraries(client_quindar_test PRIVATE Qt6::Core)
+
+add_executable(tx_mic_channel_normalizer_test
+    tests/tx_mic_channel_normalizer_test.cpp
+    src/core/TxMicChannelNormalizer.cpp
+    src/core/Resampler.cpp
+)
+target_include_directories(tx_mic_channel_normalizer_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(tx_mic_channel_normalizer_test PRIVATE Qt6::Core)
+add_test(NAME tx_mic_channel_normalizer_test COMMAND tx_mic_channel_normalizer_test)
 
 add_executable(client_gate_test
     tests/client_gate_test.cpp
