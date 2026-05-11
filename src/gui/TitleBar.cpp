@@ -468,8 +468,10 @@ bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
     m_windowMoveStartPos = w->pos();
 
     if (useSystemMove) {
+#ifndef Q_OS_MAC
         if (auto* h = w->windowHandle())
             m_windowMoveUsesSystem = h->startSystemMove();
+#endif
     }
 
     // Manual-move path: when a child-widget eventFilter consumes the press

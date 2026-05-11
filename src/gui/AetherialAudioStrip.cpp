@@ -4,6 +4,7 @@
 #include <QScreen>
 
 #include "AetherDspWidget.h"
+#include "FramelessMoveHelper.h"
 #include "StripChainWidget.h"
 #include "StripRxChainWidget.h"
 #include "ClientEqApplet.h"
@@ -911,19 +912,20 @@ void AetherialAudioStrip::leaveEvent(QEvent* ev)
 
 bool AetherialAudioStrip::eventFilter(QObject* obj, QEvent* ev)
 {
+    if (obj == m_titleBar && ev->type() == QEvent::MouseMove) {
+        return FramelessMoveHelper::move(m_titleBar, static_cast<QMouseEvent*>(ev));
+    }
+    if (obj == m_titleBar && ev->type() == QEvent::MouseButtonRelease) {
+        return FramelessMoveHelper::finish(m_titleBar, static_cast<QMouseEvent*>(ev));
+    }
+
     // Drag-to-move via the custom title bar.  The trio buttons are
     // independent QPushButtons that consume the press themselves, so
     // this only fires on the bare title-bar background between the
     // title text and the trio.
     if (obj == m_titleBar && ev->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(ev);
-        if (me->button() == Qt::LeftButton) {
-            if (auto* h = windowHandle()) {
-                h->startSystemMove();
-                me->accept();
-                return true;
-            }
-        }
+        return FramelessMoveHelper::start(m_titleBar, me);
     }
     if (obj == m_titleBar && ev->type() == QEvent::MouseButtonDblClick) {
         if (isMaximized()) showNormal();
