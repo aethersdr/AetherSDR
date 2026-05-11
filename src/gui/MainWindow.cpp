@@ -2388,7 +2388,12 @@ MainWindow::MainWindow(QWidget* parent)
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
                 connect(pan, &PanadapterModel::levelChanged,
-                        sw, &SpectrumWidget::setDbmRange);
+                        sw, [sw](float minDbm, float maxDbm) {
+                    if (sw->isDraggingDbmScale()) {
+                        return;
+                    }
+                    sw->setDbmRange(minDbm, maxDbm);
+                });
                 connect(pan, &PanadapterModel::wideChanged,
                         sw, &SpectrumWidget::setWideActive);
                 sw->setWideActive(pan->wideActive());
@@ -9625,6 +9630,31 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
 
+    struct PendingDbmRange {
+        bool active{false};
+        float minDbm{0.0f};
+        float maxDbm{0.0f};
+    };
+    auto pendingDbm = std::make_shared<PendingDbmRange>();
+    auto dbmMatches = [](float leftMin, float leftMax, float rightMin, float rightMax) {
+        return std::abs(leftMin - rightMin) < 0.01f
+            && std::abs(leftMax - rightMax) < 0.01f;
+    };
+    auto setStreamDbmRange = [this, applet](float minDbm, float maxDbm, bool waitForEcho = false) {
+        if (auto* pan = m_radioModel.panadapter(applet->panId())) {
+            if (pan->panStreamId()) {
+                m_radioModel.panStream()->setDbmRange(pan->panStreamId(), minDbm, maxDbm, waitForEcho);
+            }
+        }
+    };
+    auto sendDbmRangeCommand = [this, applet](float minDbm, float maxDbm) {
+        m_radioModel.sendCommand(
+            QString("display pan set %1 min_dbm=%2 max_dbm=%3")
+                .arg(applet->panId())
+                .arg(static_cast<double>(minDbm), 0, 'f', 2)
+                .arg(static_cast<double>(maxDbm), 0, 'f', 2));
+    };
+
     // Guard: wirePanadapter() is called once at startup (for m_panApplet) and
     // again from panadapterAdded for the same widget.  Without these disconnects
     // every sw/menu/applet → this signal would be connected twice, causing each
@@ -9678,7 +9708,19 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         //   b) in multi-pan setups, a level update on pan B doesn't incorrectly
         //      update pan A's dBm scale.
         connect(pan, &PanadapterModel::levelChanged,
-                sw, &SpectrumWidget::setDbmRange);
+                sw, [sw, pendingDbm, dbmMatches, setStreamDbmRange](float minDbm, float maxDbm) {
+            if (pendingDbm->active) {
+                if (!dbmMatches(minDbm, maxDbm, pendingDbm->minDbm, pendingDbm->maxDbm)) {
+                    setStreamDbmRange(pendingDbm->minDbm, pendingDbm->maxDbm, true);
+                    return;
+                }
+                pendingDbm->active = false;
+            }
+            if (sw->isDraggingDbmScale()) {
+                return;
+            }
+            sw->setDbmRange(minDbm, maxDbm);
+        });
 
         auto oldFpsConnection = m_panFpsReconcileConnections.take(applet->panId());
         if (oldFpsConnection)
@@ -9789,13 +9831,22 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](int lo, int hi) {
         if (auto* s = activeSlice()) s->setFilterWidth(lo, hi);
     });
+
     connect(sw, &SpectrumWidget::dbmRangeChangeRequested,
-            this, [this, applet](float minDbm, float maxDbm) {
-        m_radioModel.sendCommand(
-            QString("display pan set %1 min_dbm=%2 max_dbm=%3")
-                .arg(applet->panId())
-                .arg(static_cast<double>(minDbm), 0, 'f', 2)
-                .arg(static_cast<double>(maxDbm), 0, 'f', 2));
+            this, [pendingDbm, setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
+        pendingDbm->active = true;
+        pendingDbm->minDbm = minDbm;
+        pendingDbm->maxDbm = maxDbm;
+        setStreamDbmRange(minDbm, maxDbm, true);
+        sendDbmRangeCommand(minDbm, maxDbm);
+    });
+    connect(sw, &SpectrumWidget::dbmRangeDragFinished,
+            this, [pendingDbm, setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
+        pendingDbm->active = true;
+        pendingDbm->minDbm = minDbm;
+        pendingDbm->maxDbm = maxDbm;
+        setStreamDbmRange(minDbm, maxDbm, true);
+        sendDbmRangeCommand(minDbm, maxDbm);
     });
 
     // ── TNF signals ──────────────────────────────────────────────────────
