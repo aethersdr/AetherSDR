@@ -4,6 +4,8 @@
 #include <QMap>
 
 class QCloseEvent;
+class QMoveEvent;
+class QResizeEvent;
 class QVBoxLayout;
 class QTabWidget;
 class QLineEdit;
@@ -24,12 +26,16 @@ public:
 
 protected:
     void closeEvent(QCloseEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     QWidget* buildProfileTab(const QString& type, const QStringList& profiles,
                              const QString& active);
     QWidget* buildAutoSaveTab();
     void refreshTab(const QString& type);
+    void saveGeometryToSettings();
+    void restoreGeometryFromSettings();
 
     RadioModel* m_model;
     QTabWidget* m_tabs;
@@ -47,6 +53,11 @@ private:
     QMap<QString, TabWidgets> m_tabWidgets;
 
     QCheckBox* m_autoSaveTx{nullptr};
+
+    // Set during restoreGeometry() so the move/resize callbacks the
+    // restore triggers don't immediately overwrite the just-loaded
+    // value.  Cleared when restore completes.
+    bool m_restoringGeometry{false};
 };
 
 } // namespace AetherSDR
