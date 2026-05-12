@@ -9,6 +9,7 @@
 #include <QStringList>
 #include <QtEndian>
 #include <QSet>
+#include <cmath>
 #include <cstring>
 
 namespace AetherSDR {
@@ -389,6 +390,7 @@ void PanadapterStream::unregisterPanStream(quint32 streamId)
     m_knownPanStreams.remove(streamId);
     m_frames.remove(streamId);
     m_dbmRanges.remove(streamId);
+    m_pendingDbmRanges.remove(streamId);
 }
 
 void PanadapterStream::unregisterWfStream(quint32 streamId)
@@ -406,6 +408,7 @@ void PanadapterStream::clearRegisteredStreams()
     m_frames.clear();
     m_wfFrames.clear();
     m_dbmRanges.clear();
+    m_pendingDbmRanges.clear();
     m_daxStreamIds.clear();
     m_iqStreamIds.clear();
     m_loggedDaxPacketStreams.clear();
@@ -413,9 +416,29 @@ void PanadapterStream::clearRegisteredStreams()
     qCDebug(lcVita49) << "PanadapterStream: cleared all registered streams";
 }
 
-void PanadapterStream::setDbmRange(quint32 streamId, float minDbm, float maxDbm)
+void PanadapterStream::setDbmRange(quint32 streamId, float minDbm, float maxDbm, bool waitForEcho)
 {
     QMutexLocker lock(&m_streamMutex);
+    if (waitForEcho) {
+        m_pendingDbmRanges[streamId] = {minDbm, maxDbm};
+        m_dbmRanges[streamId] = {minDbm, maxDbm};
+        qCDebug(lcVita49) << "PanadapterStream: pending dBm range for 0x" + QString::number(streamId, 16)
+                 << minDbm << "->" << maxDbm;
+        return;
+    } else {
+        const auto pendingIt = m_pendingDbmRanges.constFind(streamId);
+        if (pendingIt != m_pendingDbmRanges.constEnd()) {
+            const bool matchesPending = std::abs(minDbm - pendingIt->first) < 0.01f
+                && std::abs(maxDbm - pendingIt->second) < 0.01f;
+            if (!matchesPending) {
+                qCDebug(lcVita49) << "PanadapterStream: ignored stale dBm range for 0x"
+                         + QString::number(streamId, 16)
+                         << minDbm << "->" << maxDbm;
+                return;
+            }
+            m_pendingDbmRanges.remove(streamId);
+        }
+    }
     m_dbmRanges[streamId] = {minDbm, maxDbm};
     qCDebug(lcVita49) << "PanadapterStream: dBm range for 0x" + QString::number(streamId, 16)
              << minDbm << "->" << maxDbm;

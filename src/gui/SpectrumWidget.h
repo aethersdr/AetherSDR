@@ -117,6 +117,7 @@ public:
     float spectrumFrac()  const { return m_spectrumFrac; }
     float refLevel()      const { return m_refLevel; }
     float dynamicRange()  const { return m_dynamicRange; }
+    bool isDraggingDbmScale() const { return m_draggingDbm; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
 
@@ -393,6 +394,7 @@ signals:
     void filterChangeRequested(int lowHz, int highHz);
     // Emitted when the user adjusts the dBm scale (drag or arrows).
     void dbmRangeChangeRequested(float minDbm, float maxDbm);
+    void dbmRangeDragFinished(float minDbm, float maxDbm);
     // TNF signals
     void tnfCreateRequested(double freqMhz);
     void tnfMoveRequested(int id, double newFreqMhz);
@@ -521,6 +523,12 @@ private:
 
     float m_refLevel{-50.0f};       // top of display (dBm)
     float m_dynamicRange{100.0f};   // dB range shown in spectrum (-50 to -150)
+    bool  m_resetFftSmoothingOnNextFrame{false};
+    bool  m_pendingDbmRangeEcho{false};
+    int   m_holdFftUpdatesAfterDbmRelease{0};
+    float m_dbmReleasePreviewOffset{0.0f};
+    float m_pendingMinDbm{0.0f};
+    float m_pendingMaxDbm{0.0f};
 
     // Two-pass trimmed-mean noise floor (dBm), EMA-smoothed across ~20 frames.
     // -1000 = cold start (not yet measured).

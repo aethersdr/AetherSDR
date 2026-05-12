@@ -4167,6 +4167,8 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
     // Delegate to the specific PanadapterModel, not just the active one
     auto* pan = m_panadapters.value(panId, nullptr);
     if (!pan) pan = activePanadapter();  // fallback
+    const float previousMinDbm = pan ? pan->minDbm() : 0.0f;
+    const float previousMaxDbm = pan ? pan->maxDbm() : 0.0f;
     if (pan) {
         pan->applyPanStatus(kvs);
     }
@@ -4176,10 +4178,14 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
         if (pan) emit panadapterInfoChanged(pan->centerMhz(), pan->bandwidthMhz());
     }
     if (kvs.contains("min_dbm") || kvs.contains("max_dbm")) {
-        const float minDbm = kvs.value("min_dbm", "-130").toFloat();
-        const float maxDbm = kvs.value("max_dbm", "-20").toFloat();
+        const float minDbm = pan ? pan->minDbm() : kvs.value("min_dbm", "-130").toFloat();
+        const float maxDbm = pan ? pan->maxDbm() : kvs.value("max_dbm", "-20").toFloat();
         if (pan) {
-            m_panStream->setDbmRange(pan->panStreamId(), minDbm, maxDbm);
+            const bool levelChanged = (pan->minDbm() != previousMinDbm)
+                || (pan->maxDbm() != previousMaxDbm);
+            if (levelChanged) {
+                m_panStream->setDbmRange(pan->panStreamId(), minDbm, maxDbm);
+            }
         }
         emit panadapterLevelChanged(minDbm, maxDbm);
     }

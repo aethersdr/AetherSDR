@@ -56,6 +56,7 @@ QSoundEffect* SpectrumWidget::s_starstruckSound = nullptr;
 static const QColor kAetherBrandBlue(0x00, 0xb4, 0xd8);
 static const QColor kAetherBrandGreen(0x20, 0xc0, 0x60);
 static const QColor kConnectionTextColor(0xd8, 0xe6, 0xf0);
+static constexpr float kMinDisplayDbm = -180.0f;
 
 static bool spotMarkersVisuallyEqual(const QVector<SpectrumWidget::SpotMarker>& lhs,
                                      const QVector<SpectrumWidget::SpotMarker>& rhs)
@@ -1577,11 +1578,22 @@ void SpectrumWidget::setSpectrumFrac(float f)
 
 void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 {
+    if (m_pendingDbmRangeEcho) {
+        const bool matchesPending = std::abs(minDbm - m_pendingMinDbm) < 0.01f
+            && std::abs(maxDbm - m_pendingMaxDbm) < 0.01f;
+        if (!matchesPending) {
+            return;
+        }
+        m_pendingDbmRangeEcho = false;
+    }
+
+    const float clampedMinDbm = std::max(minDbm, kMinDisplayDbm);
     float ref = maxDbm;
-    float dyn = maxDbm - minDbm;
+    float dyn = std::max(10.0f, maxDbm - clampedMinDbm);
     if (ref == m_refLevel && dyn == m_dynamicRange) return;
     m_refLevel     = ref;
     m_dynamicRange = dyn;
+    m_resetFftSmoothingOnNextFrame = true;
     markOverlayDirty();
 }
 
@@ -1716,16 +1728,42 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
             PerfTelemetry::instance().recordPanFrame();
     }
 
-    // Forward to GPU renderer (#502)
-
-
-    if (m_smoothed.size() != binsDbm.size())
-        m_smoothed = binsDbm;
-    else {
-        for (int i = 0; i < binsDbm.size(); ++i)
-            m_smoothed[i] = SMOOTH_ALPHA * binsDbm[i] + (1.0f - SMOOTH_ALPHA) * m_smoothed[i];
+    QVector<float> adjustedBins;
+    const QVector<float>* spectrumBins = &binsDbm;
+    if (m_holdFftUpdatesAfterDbmRelease > 0 && m_dbmReleasePreviewOffset != 0.0f) {
+        --m_holdFftUpdatesAfterDbmRelease;
+        if (!m_bins.isEmpty() && m_bins.size() == binsDbm.size()) {
+            QVector<float> deltas;
+            const int step = qMax(1, binsDbm.size() / 256);
+            deltas.reserve((binsDbm.size() + step - 1) / step);
+            for (int i = 0; i < binsDbm.size(); i += step) {
+                deltas.append(binsDbm[i] - m_bins[i]);
+            }
+            std::sort(deltas.begin(), deltas.end());
+            const float frameOffset = deltas[deltas.size() / 2];
+            const float tolerance = qMax(1.5f, std::abs(m_dbmReleasePreviewOffset) * 0.35f);
+            if (std::abs(frameOffset - m_dbmReleasePreviewOffset) <= tolerance) {
+                adjustedBins = binsDbm;
+                for (float& bin : adjustedBins) {
+                    bin -= m_dbmReleasePreviewOffset;
+                }
+                spectrumBins = &adjustedBins;
+            }
+        }
+    } else if (m_holdFftUpdatesAfterDbmRelease > 0) {
+        --m_holdFftUpdatesAfterDbmRelease;
     }
-    m_bins = binsDbm;
+
+    if (m_resetFftSmoothingOnNextFrame) {
+        m_smoothed = *spectrumBins;
+        m_resetFftSmoothingOnNextFrame = false;
+    } else if (m_smoothed.size() != spectrumBins->size()) {
+        m_smoothed = *spectrumBins;
+    } else {
+        for (int i = 0; i < spectrumBins->size(); ++i)
+            m_smoothed[i] = SMOOTH_ALPHA * (*spectrumBins)[i] + (1.0f - SMOOTH_ALPHA) * m_smoothed[i];
+    }
+    m_bins = *spectrumBins;
 
     // ── Live noise floor measurement (two-pass trimmed mean) ─────────────
     // Same technique as the waterfall auto-black: compute the mean of ALL bins,
@@ -1734,18 +1772,18 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     // leaving only the "consistently low, close-in-value" noise bins — exactly
     // the flat green line a human eye reads as the noise floor on the scope.
     // This is robust even on a very crowded band (40-50% bins occupied).
-    if (!binsDbm.isEmpty()) {
+    if (!spectrumBins->isEmpty()) {
         // Pass 1 — overall mean (sampled every 4th bin for speed)
         float sum = 0.0f;
         int   cnt = 0;
-        for (int j = 0; j < binsDbm.size(); j += 4) { sum += binsDbm[j]; ++cnt; }
+        for (int j = 0; j < spectrumBins->size(); j += 4) { sum += (*spectrumBins)[j]; ++cnt; }
         const float mean = sum / cnt;
 
         // Pass 2 — average only noise bins (≤ mean), which excludes signal peaks
         float noiseSum = 0.0f;
         int   noiseCnt = 0;
-        for (int j = 0; j < binsDbm.size(); j += 4) {
-            if (binsDbm[j] <= mean) { noiseSum += binsDbm[j]; ++noiseCnt; }
+        for (int j = 0; j < spectrumBins->size(); j += 4) {
+            if ((*spectrumBins)[j] <= mean) { noiseSum += (*spectrumBins)[j]; ++noiseCnt; }
         }
         const float frameFloor = (noiseCnt > 0) ? noiseSum / noiseCnt : mean;
 
@@ -1777,7 +1815,8 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
             if (frac > 0.05f && frac < 0.95f) {
                 float newRange = (m_refLevel - noiseFloor) / frac;
                 newRange = std::clamp(newRange, 20.0f, 150.0f);
-                float newMin = m_refLevel - newRange;
+                float newMin = std::max(m_refLevel - newRange, kMinDisplayDbm);
+                newRange = m_refLevel - newMin;
                 // Only adjust if change is significant (> 1 dB)
                 float currentMin = m_refLevel - m_dynamicRange;
                 if (std::abs(newMin - currentMin) > 1.0f) {
@@ -1802,7 +1841,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         // keeps scrolling regardless).
         bool freeze = !m_showTxInWaterfall && m_hasTxSlice;
         if (!freeze && !m_waterfall.isNull())
-            pushWaterfallRow(binsDbm, m_waterfall.width());
+            pushWaterfallRow(*spectrumBins, m_waterfall.width());
     } else {
         // Suppress post-TX transient noise rows (#2117).  The receiver AGC
         // needs ~400 ms to settle after TX→RX; discard waterfall data during
@@ -1824,7 +1863,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
                 }
             }
             if (!m_hasNativeWaterfall && !m_waterfall.isNull())
-                pushWaterfallRow(binsDbm, m_waterfall.width());
+                pushWaterfallRow(*spectrumBins, m_waterfall.width());
         }
     }
 
@@ -2256,7 +2295,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         if (mx >= stripX) {
             // Arrow row (side by side: left = up, right = down)
             if (y < DBM_ARROW_H) {
-                const float bottom = m_refLevel - m_dynamicRange;
+                const float bottom = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
                 if (mx < stripX + DBM_STRIP_W / 2) {
                     // Up arrow: raise ref level by 10 dB, keep bottom fixed
                     m_refLevel += 10.0f;
@@ -2664,8 +2703,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         // Convert pixel drag to dB: full FFT height = full dynamic range
         const float deltaDb = (static_cast<float>(dy) / specH) * m_dynamicRange;
         m_refLevel = m_dbmDragStartRef + deltaDb;
+        m_refLevel = std::max(m_refLevel, kMinDisplayDbm + m_dynamicRange);
         markOverlayDirty();
-        emit dbmRangeChangeRequested(m_refLevel - m_dynamicRange, m_refLevel);
         ev->accept();
         return;
     }
@@ -2942,8 +2981,15 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
         return;
     }
     if (m_draggingDbm) {
+        m_pendingDbmRangeEcho = true;
+        m_pendingMinDbm = m_refLevel - m_dynamicRange;
+        m_pendingMaxDbm = m_refLevel;
+        m_dbmReleasePreviewOffset = m_refLevel - m_dbmDragStartRef;
+        m_holdFftUpdatesAfterDbmRelease = 10;
         m_draggingDbm = false;
         setSpectrumCursor(Qt::CrossCursor);
+        m_resetFftSmoothingOnNextFrame = true;
+        emit dbmRangeDragFinished(m_pendingMinDbm, m_pendingMaxDbm);
         ev->accept();
         return;
     }
