@@ -2,6 +2,7 @@
 
 #include "ClientCompKnob.h"
 #include "EditorFramelessTitleBar.h"
+#include "FramelessMoveHelper.h"
 #include "MeterSmoother.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -899,22 +900,22 @@ void StripFinalOutputPanel::showQuindarEditor()
     connect(tbCloseBtn, &QPushButton::clicked, dlg, &QDialog::accept);
     tbLayout->addWidget(tbCloseBtn);
 
-    // Drag-to-move via QWindow::startSystemMove() — same pattern as
-    // EditorFramelessTitleBar elsewhere in the strip.  Single inline
-    // event filter installed on the bar + label so a left-press
-    // anywhere on the title (not the close button) starts a
-    // compositor-managed window move.
+    // Drag-to-move via the shared frameless move helper.  Single inline
+    // event filter installed on the bar + label so a left-press anywhere
+    // on the title (not the close button) moves the dialog.
     struct MoveFilter : public QObject {
         QWidget* host;
         explicit MoveFilter(QWidget* h) : QObject(h), host(h) {}
         bool eventFilter(QObject* /*o*/, QEvent* ev) override {
+            if (ev->type() == QEvent::MouseMove) {
+                return FramelessMoveHelper::move(host, static_cast<QMouseEvent*>(ev));
+            }
+            if (ev->type() == QEvent::MouseButtonRelease) {
+                return FramelessMoveHelper::finish(host, static_cast<QMouseEvent*>(ev));
+            }
             if (ev->type() == QEvent::MouseButtonPress) {
                 auto* me = static_cast<QMouseEvent*>(ev);
-                if (me->button() == Qt::LeftButton && host && host->window()) {
-                    if (auto* w = host->window()->windowHandle())
-                        w->startSystemMove();
-                    return true;
-                }
+                return FramelessMoveHelper::start(host, me);
             }
             return false;
         }

@@ -406,7 +406,7 @@ QString TciProtocol::cmdTxEnable(const QStringList& args)
 
     if (enable) {
         auto* s = sliceForTrx(trx);
-        if (s) {
+        if (s && !s->isTxSlice()) {
             QMetaObject::invokeMethod(s, [s]() {
                 s->setTxSlice(true);
             }, Qt::QueuedConnection);

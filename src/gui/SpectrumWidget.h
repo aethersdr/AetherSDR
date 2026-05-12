@@ -457,6 +457,9 @@ private:
     void updateTnfHoverPopup();
     void drawWaterfall(QPainter& p, const QRect& r);
     void drawFpsMeters(QPainter& p, const QRect& specRect, const QRect& wfRect);
+    void createFpsMeterLabels();
+    void updateFpsMeterLabels();
+    void positionFpsMeterLabels();
     void positionZoomButtons();
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
@@ -727,6 +730,8 @@ private:
     int m_waterfallFrameCount{0};
     double m_panadapterFps{0.0};
     double m_waterfallFps{0.0};
+    QLabel* m_panFpsMeterLabel{nullptr};
+    QLabel* m_wfFpsMeterLabel{nullptr};
     qint64 m_lastMouseMoveNs{0};
 
     // ── TNF markers ────────────────────────────────────────────────────

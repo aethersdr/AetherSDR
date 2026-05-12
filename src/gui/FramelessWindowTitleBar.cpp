@@ -1,10 +1,10 @@
 #include "FramelessWindowTitleBar.h"
+#include "FramelessMoveHelper.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPushButton>
-#include <QWindow>
 
 namespace AetherSDR {
 
@@ -101,30 +101,34 @@ void FramelessWindowTitleBar::setTitleText(const QString& title)
 
 void FramelessWindowTitleBar::mousePressEvent(QMouseEvent* event)
 {
-    if (event->button() == Qt::LeftButton) {
-        if (auto* w = window()) {
-            if (auto* h = w->windowHandle()) {
-                h->startSystemMove();
-                event->accept();
-                return;
-            }
-        }
+    if (FramelessMoveHelper::start(this, event)) {
+        return;
     }
     QWidget::mousePressEvent(event);
+}
+
+void FramelessWindowTitleBar::mouseMoveEvent(QMouseEvent* event)
+{
+    if (FramelessMoveHelper::move(this, event)) {
+        return;
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void FramelessWindowTitleBar::mouseReleaseEvent(QMouseEvent* event)
+{
+    if (FramelessMoveHelper::finish(this, event)) {
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
 }
 
 void FramelessWindowTitleBar::mouseDoubleClickEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
-        if (auto* w = window()) {
-            if (w->isMaximized()) {
-                w->showNormal();
-            } else {
-                w->showMaximized();
-            }
-            event->accept();
-            return;
-        }
+        FramelessMoveHelper::toggleMaximized(this);
+        event->accept();
+        return;
     }
     QWidget::mouseDoubleClickEvent(event);
 }

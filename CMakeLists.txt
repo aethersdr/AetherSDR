@@ -421,6 +421,7 @@ set(CORE_SOURCES
     src/core/TgxlConnection.cpp
     src/core/CommandParser.cpp
     src/core/AudioEngine.cpp
+    src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp
     src/core/ClientEq.cpp
     src/core/ClientComp.cpp
@@ -767,7 +768,7 @@ if(APPLE)
         COMMAND sips -z 256 256 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_256x256.png"
         COMMAND sips -z 512 512 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_256x256@2x.png"
         COMMAND sips -z 512 512 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_512x512.png"
-        COMMAND sips -z 768 768 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_512x512@2x.png"
+        COMMAND sips -z 1024 1024 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_512x512@2x.png"
         COMMAND iconutil -c icns "${ICONSET_PATH}" -o "${ICNS_PATH}"
         DEPENDS "${ICON_SOURCE}"
         COMMENT "Generating AetherSDR.icns"
@@ -904,7 +905,9 @@ if(HIDAPI_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_HIDAPI)
     target_sources(AetherSDR PRIVATE
         src/core/HidEncoderManager.cpp
-        src/core/HidDeviceParser.cpp)
+        src/core/HidEncoderManager.h
+        src/core/HidDeviceParser.cpp
+        src/core/HidDeviceParser.h)
     set(HIDAPI_NORMALIZED_INCLUDE_DIRS ${HIDAPI_INCLUDE_DIRS})
     foreach(hidapi_dir IN LISTS HIDAPI_INCLUDE_DIRS)
         if(EXISTS "${hidapi_dir}/hidapi.h")
@@ -1245,6 +1248,18 @@ add_executable(client_quindar_test
 )
 target_include_directories(client_quindar_test PRIVATE src)
 target_link_libraries(client_quindar_test PRIVATE Qt6::Core)
+
+add_executable(tx_mic_channel_normalizer_test
+    tests/tx_mic_channel_normalizer_test.cpp
+    src/core/TxMicChannelNormalizer.cpp
+    src/core/Resampler.cpp
+)
+target_include_directories(tx_mic_channel_normalizer_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(tx_mic_channel_normalizer_test PRIVATE Qt6::Core)
+add_test(NAME tx_mic_channel_normalizer_test COMMAND tx_mic_channel_normalizer_test)
 
 add_executable(client_gate_test
     tests/client_gate_test.cpp
