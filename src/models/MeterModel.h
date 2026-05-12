@@ -128,6 +128,12 @@ signals:
     // Emitted when TX meters change (power, SWR).
     void txMetersChanged(float fwdPower, float swr);
 
+    // Emitted on every FWDPWR sample with the raw pre-smoothed value (watts).
+    // Consumers (e.g. TxApplet's PEP peak-hold tick) want the instant peak
+    // information that the double-smoothed m_fwdPower in txMetersChanged
+    // attenuates by 1-2 dB on SSB. (#2561)
+    void txPeakChanged(float fwdPowerInstant);
+
     // Emitted when mic meters change (instantaneous level, compression,
     // and peak values for peak-hold markers).
     void micMetersChanged(float micLevel, float compLevel,

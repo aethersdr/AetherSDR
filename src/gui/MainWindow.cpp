@@ -3111,6 +3111,12 @@ MainWindow::MainWindow(QWidget* parent)
     // ── TX applet: meters + model ───────────────────────────────────────────
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
             m_appletPanel->txApplet(), &TxApplet::updateMeters);
+    // PEP peak-hold tick on the FWDPWR gauge: feed the raw pre-smoothed
+    // sample and reset the hold on un-key. (#2561)
+    connect(&m_radioModel.meterModel(), &MeterModel::txPeakChanged,
+            m_appletPanel->txApplet(), &TxApplet::updatePeakPower);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            m_appletPanel->txApplet(), &TxApplet::setTransmitting);
     m_appletPanel->txApplet()->setTransmitModel(&m_radioModel.transmitModel());
     m_appletPanel->txApplet()->setTunerModel(&m_radioModel.tunerModel());
     m_appletPanel->rxApplet()->setTransmitModel(&m_radioModel.transmitModel());

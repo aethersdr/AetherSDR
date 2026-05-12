@@ -597,6 +597,7 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
     const int activeScMicIdx = scMicIndexForActiveTxSlice();
     // sLevelChanged is emitted per-slice inline in the loop below
     bool txChanged = false;
+    bool fwdInstantChanged = false;
     bool micChanged = false;
     bool hwAlcChangedFlag = false;
     bool swAlcChangedFlag = false;
@@ -641,6 +642,7 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
             // e.g. 50 dBm = 100 W, 47 dBm ≈ 50 W, 40 dBm = 10 W
             float watts = std::pow(10.0f, v / 10.0f) / 1000.0f;
             m_fwdPowerInstant = watts;
+            fwdInstantChanged = true;
             // Smooth: fast attack (α=0.5) to track peaks, slow decay (α=0.15)
             // for stable display without jitter (#980)
             if (m_fwdPower < 0.01f) {
@@ -724,6 +726,11 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
     // sLevelChanged is now emitted per-slice inline above
     if (txChanged)
         emit txMetersChanged(m_fwdPower, m_swr);
+    // Separate signal carries the raw pre-smoothed sample so consumers
+    // can compute PEP peak-hold without re-tracking the smoothing
+    // ballistics. (#2561)
+    if (fwdInstantChanged)
+        emit txPeakChanged(m_fwdPowerInstant);
     if (micChanged)
         emit micMetersChanged(m_micLevel, m_compLevel, m_micPeak, m_compPeak);
     if (hwAlcChangedFlag)

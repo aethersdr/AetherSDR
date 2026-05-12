@@ -53,6 +53,35 @@ TxApplet::TxApplet(QWidget* parent)
     hide();
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     buildUI();
+
+    // PEP peak-hold ballistics — 50 ms tick advances decay after the 2 s
+    // hold window, matching SmartSDR's peak-hold bar and the RX S-meter
+    // peak-hold pattern in SMeterWidget. (#2561)
+    m_peakTick.setInterval(50);
+    connect(&m_peakTick, &QTimer::timeout, this, [this]() {
+        if (!m_peakHoldRunning) {
+            m_peakTick.stop();
+            return;
+        }
+        const qint64 elapsedMs = m_peakHoldTimer.elapsed();
+        constexpr qint64 kHoldMs = 2000;
+        if (elapsedMs <= kHoldMs)
+            return;
+        // After the hold, decay the peak toward the current smoothed value
+        // at 50 W/s — empties a barefoot (120 W) gauge in roughly 2 s, the
+        // same visual feel as SmartSDR's peak-hold bar.
+        const float decaySecs = static_cast<float>(elapsedMs - kHoldMs) / 1000.0f;
+        constexpr float kDecayWattsPerSec = 50.0f;
+        const float decayed = m_peakDecayStart - kDecayWattsPerSec * decaySecs;
+        if (decayed <= m_smoothedPower) {
+            m_peakPower = m_smoothedPower;
+            m_peakHoldRunning = false;
+            m_peakTick.stop();
+        } else {
+            m_peakPower = decayed;
+        }
+        static_cast<HGauge*>(m_fwdGauge)->setPeakValue(m_peakPower);
+    });
 }
 
 void TxApplet::buildUI()
@@ -497,8 +526,35 @@ void TxApplet::syncAtuIndicators()
 
 void TxApplet::updateMeters(float fwdPower, float swr)
 {
+    m_smoothedPower = fwdPower;
     static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
     static_cast<HGauge*>(m_swrGauge)->setValue(swr);
+}
+
+void TxApplet::updatePeakPower(float fwdPowerInstant)
+{
+    if (fwdPowerInstant > m_peakPower) {
+        m_peakPower = fwdPowerInstant;
+        m_peakDecayStart = fwdPowerInstant;
+        m_peakHoldTimer.restart();
+        m_peakHoldRunning = true;
+        if (!m_peakTick.isActive())
+            m_peakTick.start();
+        static_cast<HGauge*>(m_fwdGauge)->setPeakValue(m_peakPower);
+    }
+}
+
+void TxApplet::setTransmitting(bool tx)
+{
+    if (!tx) {
+        // Drop the peak-hold tick to zero immediately on un-key so a held
+        // PEP reading does not linger across overs. (#2561)
+        m_peakPower = 0.0f;
+        m_peakDecayStart = 0.0f;
+        m_peakHoldRunning = false;
+        m_peakTick.stop();
+        static_cast<HGauge*>(m_fwdGauge)->setPeakValue(0.0f);
+    }
 }
 
 void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
