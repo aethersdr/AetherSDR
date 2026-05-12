@@ -309,32 +309,6 @@ AudioEngine::AudioEngine(QObject* parent)
         }
     }
 
-    // Monitor audio output device list for changes — when a USB audio device
-    // (like Connect6) power-cycles or WASAPI sessions reset after idle/screensaver,
-    // restart the RX stream to re-acquire a fresh handle. (#1361)
-    // Windows/macOS only: PipeWire on Linux crashes in pw_stream_connect when
-    // audioOutputsChanged fires during device enumeration. The zombie sink
-    // watchdog and stateChanged handlers cover Linux recovery instead.
-#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
-    m_mediaDevices = new QMediaDevices(this);
-    connect(m_mediaDevices, &QMediaDevices::audioOutputsChanged, this, [this]() {
-        if (!m_outputDevice.isNull()) {
-            const auto outputs = QMediaDevices::audioOutputs();
-            if (!devicePresent(outputs, m_outputDevice)) {
-                qCWarning(lcAudio) << "AudioEngine: selected output device is no longer available, falling back to the system default";
-                m_outputDevice = QAudioDevice{};
-            }
-        }
-        if (!m_audioSink) return;
-        qCWarning(lcAudio) << "AudioEngine: audio output device list changed, restarting RX (#1361)";
-        QMetaObject::invokeMethod(this, [this]() {
-            if (!m_audioSink) return;
-            stopRxStream();
-            startRxStream();
-        }, Qt::QueuedConnection);
-    });
-#endif
-
     // Opus TX pacing timer — sends one queued packet every 10ms for even
     // delivery timing. Without this, QAudioSource delivers bursts of samples
     // that get Opus-encoded and sent back-to-back, causing jitter-induced
@@ -628,7 +602,6 @@ bool AudioEngine::startRxStream()
     });
     qCWarning(lcAudio) << "AudioEngine: RX stream started at" << fmt.sampleRate() << "Hz"
                        << "device:" << dev.description();
-    m_rxStreamStarted = true;
     startSidetoneStream();
     emit rxStarted();
     return true;
@@ -719,7 +692,6 @@ bool AudioEngine::startRxStream()
     });
     qCDebug(lcAudio) << "AudioEngine: RX stream started";
     m_rxBufferSampleRate.store(fmt.sampleRate());
-    m_rxStreamStarted = true;
     // Open the dedicated sidetone sink alongside the RX sink.  Cheap when
     // sidetone is disabled — the timer fires but writes silence to a tiny
     // primed buffer; no audible output, no extra CPU on the operator side.
@@ -3390,8 +3362,16 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     fmt.setSampleRate(DEFAULT_SAMPLE_RATE);
     fmt.setChannelCount(2);
     fmt.setSampleFormat(QAudioFormat::Int16);
-    const QAudioDevice dev = m_inputDevice.isNull()
-        ? QMediaDevices::defaultAudioInput() : m_inputDevice;
+    QAudioDevice dev = QMediaDevices::defaultAudioInput();
+    if (!m_inputDevice.isNull()) {
+        const auto inputs = QMediaDevices::audioInputs();
+        if (devicePresent(inputs, m_inputDevice)) {
+            dev = m_inputDevice;
+        } else {
+            qCWarning(lcAudio) << "AudioEngine: saved input device is unavailable, using the system default input instead";
+            m_inputDevice = QAudioDevice{};
+        }
+    }
 
     if (dev.isNull()) {
         qCWarning(lcAudio) << "AudioEngine: no audio input device available";
@@ -3977,6 +3957,8 @@ void AudioEngine::setOutputDevice(const QAudioDevice& dev)
         stopRxStream();
         startRxStream();
     }
+
+    emit outputDeviceChanged();
 }
 
 void AudioEngine::setInputDevice(const QAudioDevice& dev)
@@ -3996,6 +3978,8 @@ void AudioEngine::setInputDevice(const QAudioDevice& dev)
         stopTxStream();
         startTxStream(addr, port);
     }
+
+    emit inputDeviceChanged();
 }
 
 #ifdef Q_OS_MAC

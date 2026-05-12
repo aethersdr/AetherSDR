@@ -200,6 +200,33 @@ restarts the RX sink when the setting changes. `MainWindow` allows Bluetooth
 telephony output while PC mic capture is selected, so a headset selected for PC
 mic operation is not forcibly moved away from the telephony profile.
 
+### Audio device hotplug handling
+
+`MainWindow` owns Qt audio device change monitoring because user prompting must
+run on the GUI thread. `QMediaDevices::audioInputsChanged()` and
+`QMediaDevices::audioOutputsChanged()` are debounced before any action is taken.
+When at least one new device appears, AetherSDR shows a selection dialog with
+the current input/output highlighted, newly detected devices marked, and system
+defaults available as explicit choices.
+
+Accepting the dialog queues `AudioEngine::setInputDevice()` and
+`AudioEngine::setOutputDevice()` onto the audio worker thread. Those setters are
+the only place that persists the chosen device IDs and restarts the affected
+`QAudioSource`/`QAudioSink` paths. Cancel leaves the current selection alone
+unless the selected device disappeared during the same change batch, in which
+case AetherSDR falls back to the system default device without prompting.
+
+When the accepted selection changes the input device while the radio mic source
+is `PC`, `MainWindow` immediately re-arms PC mic capture by restarting the local
+`QAudioSource` on the selected device. The radio mic source is not toggled and
+no hardware-mic fallback route is used.
+
+The same local re-arm applies when an input device is removed while PC mic
+capture is active. If the selected input disappeared, the selection is cleared
+so `AudioEngine::startTxStream()` opens the current system default. If AetherSDR
+was already following the system default, the TX source is still restarted so Qt
+binds the capture stream to the replacement endpoint.
+
 ## Local sidetone and Quindar local output
 
 CW sidetone and Quindar local monitor output are independent local paths:

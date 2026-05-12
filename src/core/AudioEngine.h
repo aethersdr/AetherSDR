@@ -465,6 +465,8 @@ signals:
     void rxPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void radioTransmittingChanged(bool tx);
     void mutedChanged(bool muted);                          // local audio output mute state
+    void inputDeviceChanged();
+    void outputDeviceChanged();
     void txBypassChanged(bool on);                          // master TX BYPASS state
     void rxBypassChanged(bool on);                          // master RX BYPASS state
     // Fired by saveClientReverbSettings() after any reverb param
@@ -745,11 +747,6 @@ private:
     std::vector<float> m_nr2Mono;
     std::vector<float> m_nr2Processed;
     QByteArray m_nr2Output;
-
-    // Audio device change detection — restarts RX when USB devices
-    // power-cycle or WASAPI sessions reset after idle (#1361)
-    QMediaDevices* m_mediaDevices{nullptr};
-    bool           m_rxStreamStarted{false};  // guard: ignore device changes before first start
 
     // Zombie sink watchdog: tracks consecutive RX timer ticks where we have
     // data to write but bytesFree() == 0, indicating a stale WASAPI handle.

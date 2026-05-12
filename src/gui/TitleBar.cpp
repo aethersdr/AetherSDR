@@ -221,7 +221,8 @@ TitleBar::TitleBar(QWidget* parent)
     bool pcOn = s.value("PcAudioEnabled", "True").toString() == "True";
     m_pcBtn->setChecked(pcOn);
     m_pcBtn->setAccessibleName("PC Audio");
-    m_pcBtn->setAccessibleDescription("Toggle PC audio input for microphone");
+    m_pcBtn->setAccessibleDescription("Toggle PC audio receive playback");
+    updatePcAudioToolTip();
 
     auto updatePcStyle = [this]() {
         m_pcBtn->setStyleSheet(m_pcBtn->isChecked()
@@ -707,6 +708,33 @@ void TitleBar::setPcAudioEnabled(bool on)
         : "QPushButton { background: #1a2a3a; color: #607080; border: 1px solid #304050; "
           "border-radius: 3px; font-size: 10px; font-weight: bold; }"
           "QPushButton:hover { background: #243848; }");
+}
+
+void TitleBar::setPcAudioDevices(const QString& inputDevice, const QString& outputDevice)
+{
+    m_pcAudioInputDevice = inputDevice.trimmed();
+    m_pcAudioOutputDevice = outputDevice.trimmed();
+    updatePcAudioToolTip();
+}
+
+void TitleBar::updatePcAudioToolTip()
+{
+    if (!m_pcBtn)
+        return;
+
+    const QString input = m_pcAudioInputDevice.isEmpty()
+        ? tr("Unavailable")
+        : m_pcAudioInputDevice;
+    const QString output = m_pcAudioOutputDevice.isEmpty()
+        ? tr("Unavailable")
+        : m_pcAudioOutputDevice;
+
+    m_pcBtn->setToolTip(
+        tr("Routes radio receive audio through this computer.\n"
+           "PC mic transmit uses the selected input device.\n"
+           "Input: %1\n"
+           "Output: %2")
+            .arg(input, output));
 }
 
 void TitleBar::setLineoutMuted(bool muted)

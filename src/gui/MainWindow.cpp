@@ -67,6 +67,7 @@
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
 #include "RadioSetupDialog.h"
+#include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
@@ -110,6 +111,7 @@
 #include <memory>
 #include <functional>
 #include <QApplication>
+#include <QAudioDevice>
 #include <QProcess>
 #include <QScreen>
 #include <QTimer>
@@ -159,6 +161,7 @@
 #include <QProgressBar>
 #include <QThread>
 #include <QToolTip>
+#include <QMediaDevices>
 #include "core/AppSettings.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
@@ -213,6 +216,66 @@ constexpr int kSwrSweepDefaultPowerW = 1;
 constexpr int kSwrSweepMaxPowerW = 10;
 constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
 constexpr const char* kSwrSweepPowerSettingKey = "SwrSweepPowerWatts";
+
+QList<QByteArray> audioDeviceIds(const QList<QAudioDevice>& devices)
+{
+    QList<QByteArray> ids;
+    ids.reserve(devices.size());
+    for (const QAudioDevice& device : devices)
+        ids.append(device.id());
+    return ids;
+}
+
+bool containsAudioDeviceId(const QList<QByteArray>& ids, const QByteArray& id)
+{
+    return std::any_of(ids.cbegin(), ids.cend(),
+                       [&id](const QByteArray& candidate) {
+                           return candidate == id;
+                       });
+}
+
+QList<QByteArray> newlyAddedAudioDeviceIds(const QList<QAudioDevice>& devices,
+                                           const QList<QByteArray>& knownIds)
+{
+    QList<QByteArray> added;
+    for (const QAudioDevice& device : devices) {
+        if (!containsAudioDeviceId(knownIds, device.id()))
+            added.append(device.id());
+    }
+    return added;
+}
+
+QList<QByteArray> removedAudioDeviceIds(const QList<QByteArray>& knownIds,
+                                        const QList<QByteArray>& currentIds)
+{
+    QList<QByteArray> removed;
+    for (const QByteArray& id : knownIds) {
+        if (!containsAudioDeviceId(currentIds, id))
+            removed.append(id);
+    }
+    return removed;
+}
+
+bool audioDevicePresent(const QList<QAudioDevice>& devices,
+                        const QAudioDevice& target)
+{
+    if (target.isNull())
+        return true;
+
+    return std::any_of(devices.cbegin(), devices.cend(),
+                       [&target](const QAudioDevice& device) {
+                           return device.id() == target.id();
+                       });
+}
+
+bool sameAudioDeviceSelection(const QAudioDevice& lhs, const QAudioDevice& rhs)
+{
+    if (lhs.isNull() && rhs.isNull())
+        return true;
+    if (lhs.isNull() || rhs.isNull())
+        return false;
+    return lhs.id() == rhs.id();
+}
 
 bool memoryRevealTargetMatches(double actualMhz, double targetMhz)
 {
@@ -1076,6 +1139,7 @@ MainWindow::MainWindow(QWidget* parent)
         AppSettings::instance().value("AudioBufferMs", "200").toInt());
     m_audio->moveToThread(m_audioThread);
     m_audioThread->start();
+    setupAudioDeviceChangeMonitor();
 
     // QSO audio recorder (#1297) — lives on main thread, audio feeds are thread-safe
     m_qsoRecorder = new QsoRecorder(this);
@@ -5892,6 +5956,32 @@ void MainWindow::setPaTempDisplayUnit(bool useFahrenheit)
 // ─── Audio thread helpers (#502) ─────────────────────────────────────────────
 // These invoke AudioEngine methods on the audio worker thread.
 
+void MainWindow::updatePcAudioTooltip()
+{
+    if (!m_titleBar || !m_audio)
+        return;
+
+    auto describeDevice = [](const QAudioDevice& selected,
+                             const QAudioDevice& defaultDevice) {
+        const bool usingDefault = selected.isNull();
+        const QAudioDevice device = usingDefault ? defaultDevice : selected;
+        const QString name = device.description().trimmed();
+
+        if (device.isNull() || name.isEmpty())
+            return MainWindow::tr("Unavailable");
+
+        return usingDefault
+            ? MainWindow::tr("%1 (system default)").arg(name)
+            : name;
+    };
+
+    const QAudioDevice inputDevice = m_audio->inputDevice();
+    const QAudioDevice outputDevice = m_audio->outputDevice();
+    m_titleBar->setPcAudioDevices(
+        describeDevice(inputDevice, QMediaDevices::defaultAudioInput()),
+        describeDevice(outputDevice, QMediaDevices::defaultAudioOutput()));
+}
+
 void MainWindow::audioStartRx()
 {
     QMetaObject::invokeMethod(m_audio, &AudioEngine::startRxStream);
@@ -5912,6 +6002,160 @@ void MainWindow::audioStartTx(const QHostAddress& addr, quint16 port)
 void MainWindow::audioStopTx()
 {
     QMetaObject::invokeMethod(m_audio, &AudioEngine::stopTxStream);
+}
+
+void MainWindow::setupAudioDeviceChangeMonitor()
+{
+    m_knownAudioInputIds = audioDeviceIds(QMediaDevices::audioInputs());
+    m_knownAudioOutputIds = audioDeviceIds(QMediaDevices::audioOutputs());
+
+    m_audioDeviceChangeTimer.setSingleShot(true);
+    m_audioDeviceChangeTimer.setInterval(750);
+    connect(&m_audioDeviceChangeTimer, &QTimer::timeout,
+            this, &MainWindow::handleAudioDeviceListChanged);
+
+    m_audioDeviceMonitor = new QMediaDevices(this);
+    connect(m_audioDeviceMonitor, &QMediaDevices::audioInputsChanged,
+            this, &MainWindow::scheduleAudioDeviceChangeCheck);
+    connect(m_audioDeviceMonitor, &QMediaDevices::audioOutputsChanged,
+            this, &MainWindow::scheduleAudioDeviceChangeCheck);
+}
+
+void MainWindow::scheduleAudioDeviceChangeCheck()
+{
+    if (m_shuttingDown)
+        return;
+    m_audioDeviceChangeTimer.start();
+}
+
+void MainWindow::handleAudioDeviceListChanged()
+{
+    if (!m_audio || m_shuttingDown)
+        return;
+
+    if (m_audioDeviceDialogOpen) {
+        m_audioDeviceChangeTimer.start();
+        return;
+    }
+
+    const QList<QAudioDevice> inputDevices = QMediaDevices::audioInputs();
+    const QList<QAudioDevice> outputDevices = QMediaDevices::audioOutputs();
+    const QList<QByteArray> currentInputIds = audioDeviceIds(inputDevices);
+    const QList<QByteArray> currentOutputIds = audioDeviceIds(outputDevices);
+    const QList<QByteArray> addedInputIds =
+        newlyAddedAudioDeviceIds(inputDevices, m_knownAudioInputIds);
+    const QList<QByteArray> addedOutputIds =
+        newlyAddedAudioDeviceIds(outputDevices, m_knownAudioOutputIds);
+    const QList<QByteArray> removedInputIds =
+        removedAudioDeviceIds(m_knownAudioInputIds, currentInputIds);
+    const QList<QByteArray> removedOutputIds =
+        removedAudioDeviceIds(m_knownAudioOutputIds, currentOutputIds);
+
+    m_knownAudioInputIds = currentInputIds;
+    m_knownAudioOutputIds = currentOutputIds;
+
+    const QAudioDevice currentInput = m_audio->inputDevice();
+    const QAudioDevice currentOutput = m_audio->outputDevice();
+    const bool resetInputToDefault =
+        !currentInput.isNull() && !audioDevicePresent(inputDevices, currentInput);
+    const bool resetOutputToDefault =
+        !currentOutput.isNull() && !audioDevicePresent(outputDevices, currentOutput);
+    const bool defaultInputNeedsRestart =
+        currentInput.isNull() && !removedInputIds.isEmpty();
+    const bool defaultOutputNeedsRestart =
+        currentOutput.isNull() && !removedOutputIds.isEmpty();
+    const bool resetInput = resetInputToDefault || defaultInputNeedsRestart;
+    const bool resetOutput = resetOutputToDefault || defaultOutputNeedsRestart;
+    const bool reinitializePcInput = resetInput
+        && m_radioModel.isConnected()
+        && m_radioModel.transmitModel().micSelection() == "PC";
+
+    const bool deviceAdded = !addedInputIds.isEmpty() || !addedOutputIds.isEmpty();
+    if (!deviceAdded) {
+        if (resetInput || resetOutput)
+            resetMissingAudioDevicesToDefault(resetInput,
+                                              resetOutput,
+                                              reinitializePcInput);
+        return;
+    }
+
+    m_audioDeviceDialogOpen = true;
+    AudioDeviceChangeDialog dialog(inputDevices,
+                                   outputDevices,
+                                   currentInput,
+                                   currentOutput,
+                                   addedInputIds,
+                                   addedOutputIds,
+                                   this);
+    const int result = dialog.exec();
+    m_audioDeviceDialogOpen = false;
+
+    if (result == QDialog::Accepted) {
+        const QAudioDevice selectedInput = dialog.selectedInputDevice();
+        const QAudioDevice selectedOutput = dialog.selectedOutputDevice();
+        const bool inputChanged =
+            !sameAudioDeviceSelection(currentInput, selectedInput);
+        const bool reinitializePcInput = inputChanged
+            && m_radioModel.isConnected()
+            && m_radioModel.transmitModel().micSelection() == "PC";
+        applyAudioDeviceSelection(selectedInput,
+                                  selectedOutput,
+                                  reinitializePcInput);
+    } else if (resetInput || resetOutput) {
+        resetMissingAudioDevicesToDefault(resetInput,
+                                          resetOutput,
+                                          reinitializePcInput);
+    }
+}
+
+void MainWindow::applyAudioDeviceSelection(const QAudioDevice& inputDevice,
+                                           const QAudioDevice& outputDevice,
+                                           bool reinitializePcInput)
+{
+    if (!m_audio)
+        return;
+
+    QPointer<AudioEngine> audio = m_audio;
+    const QHostAddress radioAddress = m_radioModel.radioAddress();
+    const bool restartCapture = reinitializePcInput && !radioAddress.isNull();
+    QMetaObject::invokeMethod(m_audio, [audio,
+                                        inputDevice,
+                                        outputDevice,
+                                        restartCapture,
+                                        radioAddress]() {
+        if (!audio)
+            return;
+        audio->setInputDevice(inputDevice);
+        audio->setOutputDevice(outputDevice);
+        if (restartCapture && !audio->isTxStreaming())
+            audio->startTxStream(radioAddress, 4991);
+    }, Qt::QueuedConnection);
+}
+
+void MainWindow::resetMissingAudioDevicesToDefault(bool resetInput,
+                                                   bool resetOutput,
+                                                   bool reinitializePcInput)
+{
+    if (!m_audio || (!resetInput && !resetOutput))
+        return;
+
+    QPointer<AudioEngine> audio = m_audio;
+    const QHostAddress radioAddress = m_radioModel.radioAddress();
+    const bool restartCapture = reinitializePcInput && !radioAddress.isNull();
+    QMetaObject::invokeMethod(m_audio, [audio,
+                                        resetInput,
+                                        resetOutput,
+                                        restartCapture,
+                                        radioAddress]() {
+        if (!audio)
+            return;
+        if (resetInput)
+            audio->setInputDevice(QAudioDevice{});
+        if (resetOutput)
+            audio->setOutputDevice(QAudioDevice{});
+        if (restartCapture && !audio->isTxStreaming())
+            audio->startTxStream(radioAddress, 4991);
+    }, Qt::QueuedConnection);
 }
 
 // ─── UI Construction ──────────────────────────────────────────────────────────
@@ -7050,6 +7294,11 @@ void MainWindow::buildUI()
     m_titleBar = new TitleBar(this);
     // Embed the menu bar into the title bar (left side)
     m_titleBar->setMenuBar(menuBar());
+    updatePcAudioTooltip();
+    connect(m_audio, &AudioEngine::inputDeviceChanged,
+            this, &MainWindow::updatePcAudioTooltip, Qt::QueuedConnection);
+    connect(m_audio, &AudioEngine::outputDeviceChanged,
+            this, &MainWindow::updatePcAudioTooltip, Qt::QueuedConnection);
     connect(m_titleBar, &TitleBar::multiFlexClicked, this, [this] {
         MultiFlexDialog dlg(&m_radioModel, this);
         dlg.exec();
@@ -11402,6 +11651,13 @@ void MainWindow::updateKeyerAvailability(const QString& mode)
     bool isCw  = (mode == "CW" || mode == "CWL");
     bool isSsb = (mode == "USB" || mode == "LSB" || mode == "AM" || mode == "SAM"
                   || mode == "FM" || mode == "NFM" || mode == "DFM");
+
+    // F1-F12 / Esc ApplicationShortcuts: enable the set that matches the
+    // active slice's mode, regardless of panel visibility.  The two sets
+    // are mutually exclusive so Qt never sees two enabled shortcuts for
+    // the same key and won't emit activatedAmbiguously (#2464, #2582).
+    if (m_cwxPanel) m_cwxPanel->setShortcutsEnabled(isCw);
+    if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(isSsb);
 
     // CWX: available in CW modes only
     m_cwxIndicator->setEnabled(isCw);
