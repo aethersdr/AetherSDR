@@ -747,14 +747,17 @@ void RxApplet::buildUI()
         rightCol->addLayout(row);
     }
 
-    // Squelch — row 1: SQL toggle + threshold slider
+    // Squelch — single row with a 3-way cycle button + threshold slider.
+    // Button cycles Off → Manual (SQL) → Auto (AUTO) → Off on each click.
+    // Slider is enabled only in Manual mode; Auto drives the level itself.
     {
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
 
-        m_sqlBtn = mkToggle("SQL");
+        m_sqlBtn = new QPushButton("SQL");
+        m_sqlBtn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        m_sqlBtn->setFixedHeight(20);
         m_sqlBtn->setFixedWidth(52);
-        m_sqlBtn->setStyleSheet(QString(kButtonBase) + kGreenActive + kDisabledBtn);
         row->addWidget(m_sqlBtn);
 
         m_sqlSlider = new GuardedSlider(Qt::Horizontal);
@@ -763,43 +766,12 @@ void RxApplet::buildUI()
         m_sqlSlider->setStyleSheet(kSliderStyle);
         row->addWidget(m_sqlSlider, 1);
 
-        connect(m_sqlBtn, &QPushButton::toggled, this, [this](bool on) {
-            // Turning SQL off while AUTO is engaged cancels AUTO
-            if (!on && m_sqlAutoBtn && m_sqlAutoBtn->isChecked()) {
-                QSignalBlocker sb(m_sqlAutoBtn);
-                m_sqlAutoBtn->setChecked(false);
-                emit sqlAutoChanged(false);
-            }
-            // Slider manual when SQL on and AUTO off; slider disabled when AUTO manages it
-            m_sqlSlider->setEnabled(on && !(m_sqlAutoBtn && m_sqlAutoBtn->isChecked()));
-            if (m_slice) m_slice->setSquelch(on, m_sqlSlider->value());
-        });
+        applySqlModeVisuals();
+        connect(m_sqlBtn, &QPushButton::clicked,
+                this, &RxApplet::cycleSqlMode);
         connect(m_sqlSlider, &QSlider::valueChanged, this, [this](int v) {
-            if (m_slice && m_sqlBtn->isChecked())
+            if (m_slice && m_sqlMode == SqlMode::Manual)
                 m_slice->setSquelch(true, v);
-        });
-        rightCol->addLayout(row);
-    }
-
-    // Squelch — row 2: Auto SQL button on its own row
-    {
-        auto* row = new QHBoxLayout;
-        row->setSpacing(4);
-
-        m_sqlAutoBtn = new QPushButton("Auto SQL");
-        m_sqlAutoBtn->setCheckable(true);
-        m_sqlAutoBtn->setFixedHeight(20);
-        m_sqlAutoBtn->setStyleSheet(QString(kButtonBase) + kGreenActive + kDisabledBtn);
-        m_sqlAutoBtn->setToolTip("Automatically tracks noise floor and sets squelch just above it.");
-        row->addWidget(m_sqlAutoBtn, 1);
-
-        connect(m_sqlAutoBtn, &QPushButton::toggled, this, [this](bool on) {
-            emit sqlAutoChanged(on);
-            if (on && !m_sqlBtn->isChecked()) {
-                m_sqlBtn->setChecked(true);  // enable SQL via existing connection
-            }
-            // Disable manual slider while AUTO is driving the threshold
-            m_sqlSlider->setEnabled(!on && m_sqlBtn->isChecked());
         });
         rightCol->addLayout(row);
     }
@@ -1003,14 +975,16 @@ void RxApplet::buildUI()
     m_afSlider->setAccessibleDescription("Audio output volume for this slice");
     m_panSlider->setAccessibleName("Audio pan");
     m_panSlider->setAccessibleDescription("Stereo audio pan, left to right");
-    m_sqlBtn->setAccessibleName("Squelch");
-    m_sqlBtn->setAccessibleDescription("Toggle squelch gate");
+    m_sqlBtn->setAccessibleName("Squelch mode");
+    m_sqlBtn->setAccessibleDescription(
+        "Cycle squelch through Off, Manual, and Auto modes");
+    m_sqlBtn->setToolTip(
+        "Click to cycle:\n"
+        "  Off — squelch open, all audio passes\n"
+        "  SQL — manual threshold via the slider\n"
+        "  AUTO — algorithm tracks the noise floor automatically");
     m_sqlSlider->setAccessibleName("Squelch threshold");
     m_sqlSlider->setAccessibleDescription("Signal level below which audio is muted");
-    if (m_sqlAutoBtn) {
-        m_sqlAutoBtn->setAccessibleName("Auto squelch");
-        m_sqlAutoBtn->setAccessibleDescription("Automatically track noise floor for squelch threshold");
-    }
     m_agcCombo->setAccessibleName("AGC mode");
     m_agcCombo->setAccessibleDescription("Automatic gain control speed");
     m_agcTSlider->setAccessibleName("AGC threshold");
@@ -1041,6 +1015,76 @@ void RxApplet::buildUI()
 // ─── NR button 3-state sync ──────────────────────────────────────────────────
 
 // DSP sync functions removed — VFO DSP tab and spectrum overlay handle all DSP state
+
+// ─── Squelch 3-way cycle button ──────────────────────────────────────────────
+
+void RxApplet::applySqlModeVisuals()
+{
+    if (!m_sqlBtn) return;
+    // Off: base style, "SQL" label, dim.
+    // Manual: green active, "SQL" label.
+    // Auto: amber active, "AUTO" label.  Distinct color so the operator can
+    // tell at a glance whether they're driving the threshold manually or the
+    // algorithm is.
+    switch (m_sqlMode) {
+    case SqlMode::Off:
+        m_sqlBtn->setText("SQL");
+        m_sqlBtn->setStyleSheet(QString(kButtonBase) + kDisabledBtn);
+        break;
+    case SqlMode::Manual:
+        m_sqlBtn->setText("SQL");
+        m_sqlBtn->setStyleSheet(
+            "QPushButton { background: #006040; color: #00ff88; "
+            "border: 1px solid #00a060; border-radius: 3px; "
+            "font-size: 10px; font-weight: bold; padding: 1px 2px; }"
+            "QPushButton:hover { background: #007050; }"
+            + kDisabledBtn);
+        break;
+    case SqlMode::Auto:
+        m_sqlBtn->setText("AUTO");
+        m_sqlBtn->setStyleSheet(
+            "QPushButton { background: #604000; color: #ffb800; "
+            "border: 1px solid #906000; border-radius: 3px; "
+            "font-size: 10px; font-weight: bold; padding: 1px 2px; }"
+            "QPushButton:hover { background: #705000; }"
+            + kDisabledBtn);
+        break;
+    }
+    // Slider is the threshold input; only meaningful in Manual mode.
+    if (m_sqlSlider) m_sqlSlider->setEnabled(m_sqlMode == SqlMode::Manual);
+}
+
+void RxApplet::cycleSqlMode()
+{
+    const SqlMode next =
+        (m_sqlMode == SqlMode::Off)    ? SqlMode::Manual :
+        (m_sqlMode == SqlMode::Manual) ? SqlMode::Auto   :
+                                          SqlMode::Off;
+    setSqlMode(next, /*propagateToRadio=*/true);
+}
+
+void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
+{
+    if (m == m_sqlMode) return;
+    const bool wasAuto = (m_sqlMode == SqlMode::Auto);
+    const bool nowAuto = (m == SqlMode::Auto);
+    m_sqlMode = m;
+    applySqlModeVisuals();
+
+    // Auto state is client-side only; tell the spectrum-side algorithm to
+    // start or stop driving the level.
+    if (wasAuto != nowAuto)
+        emit sqlAutoChanged(nowAuto);
+
+    // Manual / Auto both want the radio squelch ON.  Auto's first level push
+    // arrives from the algorithm via autoSquelchLevelSuggested → setSquelch
+    // routed through MainWindow; the immediate setSquelch(true, slider) here
+    // just makes sure the gate is open while the algorithm warms up.
+    if (propagateToRadio && m_slice) {
+        const bool sqOn = (m != SqlMode::Off);
+        m_slice->setSquelch(sqOn, m_sqlSlider->value());
+    }
+}
 
 void RxApplet::setAfGain(int pct)
 {
@@ -1401,11 +1445,15 @@ void RxApplet::connectSlice(SliceModel* s)
         m_panSlider->setValue(v);
     });
 
-    // Squelch
+    // Squelch — derive 3-way mode from the radio's squelch on/off state.
+    // Auto is client-side only and doesn't survive slice switches, so a
+    // freshly-selected slice always starts in Off or Manual.  The user can
+    // re-enter Auto on the new slice with one click if they want.
     {
         QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
-        m_sqlBtn->setChecked(s->squelchOn());
         m_sqlSlider->setValue(s->squelchLevel());
+        setSqlMode(s->squelchOn() ? SqlMode::Manual : SqlMode::Off,
+                   /*propagateToRadio=*/false);
     }
     emit squelchStateChanged(s->squelchOn(), s->squelchLevel());
     // AF gain → radio's per-slice audio_level
@@ -1420,9 +1468,15 @@ void RxApplet::connectSlice(SliceModel* s)
 
     connect(s, &SliceModel::squelchChanged, this, [this](bool on, int level) {
         QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
-        if (m_sqlBtn->isEnabled())
-            m_sqlBtn->setChecked(on);
         m_sqlSlider->setValue(level);
+        // Auto drives setSquelch every algorithm tick; don't demote out of
+        // Auto when the echo arrives with squelch-on.  Only flip the mode
+        // when the radio reports squelch-off (operator hit it from somewhere
+        // else) or when we were Off and squelch came on (external SQL on).
+        if (!on && m_sqlMode != SqlMode::Off)
+            setSqlMode(SqlMode::Off, /*propagateToRadio=*/false);
+        else if (on && m_sqlMode == SqlMode::Off && m_sqlBtn->isEnabled())
+            setSqlMode(SqlMode::Manual, /*propagateToRadio=*/false);
         emit squelchStateChanged(on, level);
     });
 
@@ -1749,25 +1803,21 @@ void RxApplet::updateModeSettings(const QString& mode)
                         || mode == "RTTY"
                         || mode == "CW" || mode == "CWL");
     m_sqlBtn->setEnabled(!sqlDisabled);
-    if (m_sqlAutoBtn) m_sqlAutoBtn->setEnabled(!sqlDisabled);
-    // Slider: enabled only when SQL on, AUTO off, and mode allows it
-    const bool autoOn = m_sqlAutoBtn && m_sqlAutoBtn->isChecked();
-    m_sqlSlider->setEnabled(!sqlDisabled && m_sqlBtn->isChecked() && !autoOn);
+    // Slider enabled only in Manual mode AND mode allows squelch.
+    m_sqlSlider->setEnabled(!sqlDisabled && m_sqlMode == SqlMode::Manual);
     if (sqlDisabled && m_slice) {
-        if (m_slice->squelchOn()) {
+        if (m_slice->squelchOn() || m_sqlMode == SqlMode::Auto) {
             m_savedSquelchOn = true;
             if (mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY") {
                 // Only send squelch off for digital/RTTY modes; CW is radio-managed
                 m_slice->setSquelch(false, m_slice->squelchLevel());
-                QSignalBlocker sb(m_sqlBtn);
-                m_sqlBtn->setChecked(false);
+                setSqlMode(SqlMode::Off, /*propagateToRadio=*/false);
             }
         }
     } else if (!sqlDisabled && m_slice && m_savedSquelchOn) {
         m_savedSquelchOn = false;
         m_slice->setSquelch(true, m_slice->squelchLevel());
-        QSignalBlocker sb(m_sqlBtn);
-        m_sqlBtn->setChecked(true);
+        setSqlMode(SqlMode::Manual, /*propagateToRadio=*/false);
     }
 
     // Step sizes are radio-authoritative — driven by SliceModel::stepChanged
