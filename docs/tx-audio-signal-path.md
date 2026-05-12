@@ -6,19 +6,29 @@ All meters are source `TX-` unless noted. Units are dBFS unless noted.
 For capture-backed 8000/6000-series compression formulas and FPS notes, see
 `docs/flex-meter-learnings.md`.
 
-## Client-side TX DSP (PooDoo™ Audio, before the radio)
+For the complete current client-side audio ordering, sample formats, DAX/RADE
+branches, metering taps, downmixing, and packetization details, see
+[AetherSDR Audio Pipeline](audio-pipeline.md). This page focuses on how the
+client-shaped PC mic voice stream relates to FlexRadio firmware meters.
+
+## Client-side TX DSP (AetherialAudio, before the radio)
 
 Since v0.8.15 AetherSDR applies its own client-side DSP chain to the
-TX stream between the mic/VirtualAudioBridge and the VITA-49 encoder.
-The radio receives the already-shaped signal and treats it identically
-to any other PC-mic input (enters at SC_MIC, meter 26).
+PC mic voice TX stream before VITA/Opus packetization. The radio receives
+the already-shaped voice signal and treats it identically to any other
+PC-mic input (enters at SC_MIC, meter 26).
 
-As of v0.8.18 the full **PooDoo™ Audio** chain is in place: seven
+DAX/TCI TX and RADE are intentionally not part of this voice strip.
+DAX/TCI bypasses client voice DSP in `AudioEngine::feedDaxTxAudio()`.
+RADE branches early from `AudioEngine::onTxAudioReady()` and bypasses
+Opus voice TX.
+
+As of v0.8.18 the full **AetherialAudio** chain is in place: seven
 ordered stages, drag-to-reorder inside the CHAIN widget, single-click
 to bypass, double-click to open the floating editor.
 
 ```
-Mic capture (QAudioSource) / DAX TX audio
+PC mic capture (QAudioSource)
   │
   ▼
 ┌───────────────────────────────────────────────────────────────────┐
@@ -42,11 +52,14 @@ Mic capture (QAudioSource) / DAX TX audio
           │   tap, ClientPudu wet RMS, ClientReverb wet RMS)
           │
           ▼
-     VITA-49 encode → UDP → radio
+     PC mic gain → Quindar → final limiter → meters/scopes
+          │
+          ▼
+     Opus remote_audio_tx / VITA encode → UDP → radio
 ```
 
 The chain is bypassed entirely on the DAX/TCI TX path so digital-mode
-tones (WSJT-X, fldigi) reach the radio unshaped.  Mic voice TX runs
+tones (WSJT-X, fldigi) reach the radio unshaped. PC mic voice TX runs
 through the full chain.
 
 Post-encoding, the radio sees this stream as any other PC-mic source
@@ -56,7 +69,7 @@ and runs it through the firmware TX chain below.
 
 ```
 PC Mic Audio (Opus via remote_audio_tx) — arrives with client-side
-                                          EQ + CMP already applied
+                                          voice DSP already applied
   │
   ▼
 ┌─────────────────────────────┐

@@ -1,4 +1,5 @@
 #include "NetworkDiagnosticsDialog.h"
+#include "FramelessMoveHelper.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/LogManager.h"
@@ -1045,7 +1046,9 @@ void NetworkDiagnosticsDialog::setFramelessMode(bool on)
     Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
     flags.setFlag(Qt::FramelessWindowHint, on);
     setWindowFlags(flags);
-    setGeometry(geom);
+    if (wasVisible) {
+        setGeometry(geom);
+    }
     if (m_titleBar) {
         m_titleBar->setVisible(on);
     }
@@ -1900,18 +1903,19 @@ void NetworkDiagnosticsDialog::leaveEvent(QEvent* ev)
 
 bool NetworkDiagnosticsDialog::eventFilter(QObject* obj, QEvent* ev)
 {
+    if (obj == m_titleBar && ev->type() == QEvent::MouseMove) {
+        return FramelessMoveHelper::move(m_titleBar, static_cast<QMouseEvent*>(ev));
+    }
+    if (obj == m_titleBar && ev->type() == QEvent::MouseButtonRelease) {
+        return FramelessMoveHelper::finish(m_titleBar, static_cast<QMouseEvent*>(ev));
+    }
+
     // Drag-to-move via the custom title bar.  The trio buttons are
     // their own QPushButtons that consume the press themselves, so
     // this only fires on the bare title-bar background.
     if (obj == m_titleBar && ev->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(ev);
-        if (me->button() == Qt::LeftButton) {
-            if (auto* h = windowHandle()) {
-                h->startSystemMove();
-                me->accept();
-                return true;
-            }
-        }
+        return FramelessMoveHelper::start(m_titleBar, me);
     }
     if (obj == m_titleBar && ev->type() == QEvent::MouseButtonDblClick) {
         if (isMaximized()) {

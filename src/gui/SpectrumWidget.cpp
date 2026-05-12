@@ -310,6 +310,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     connect(m_fpsMeterTimer, &QTimer::timeout, this, [this]() {
         updateFpsMeterValues();
     });
+    createFpsMeterLabels();
 
     // Load display settings (panIndex 0 by default — loadSettings() can be
     // called again after setPanIndex() for multi-pan)
@@ -557,6 +558,7 @@ void SpectrumWidget::applyFpsMeterVisibility(bool on) {
         else
             m_fpsMeterTimer->stop();
     }
+    updateFpsMeterLabels();
     markOverlayDirty();
 }
 void SpectrumWidget::resetFpsMeterWindow() {
@@ -583,7 +585,7 @@ void SpectrumWidget::updateFpsMeterValues() {
     m_panadapterFrameCount = 0;
     m_waterfallFrameCount = 0;
     m_fpsMeterWindow.restart();
-    markOverlayDirty();
+    updateFpsMeterLabels();
 }
 void SpectrumWidget::recordPanadapterFrame() {
     if (m_showFpsMeters)
@@ -593,6 +595,119 @@ void SpectrumWidget::recordWaterfallFrame(int rows) {
     if (m_showFpsMeters && rows > 0)
         m_waterfallFrameCount += rows;
 }
+
+void SpectrumWidget::createFpsMeterLabels() {
+    const QString style = QStringLiteral(
+        "QLabel {"
+        " background: rgba(15, 15, 26, 210);"
+        " border: 1px solid rgba(255, 255, 255, 170);"
+        " border-radius: 3px;"
+        " color: #9ceeff;"
+        " font-size: 9pt;"
+        " font-weight: bold;"
+        " padding: 3px 6px;"
+        "}");
+
+    auto makeLabel = [this, &style]() {
+        auto* label = new QLabel(this);
+        label->setAttribute(Qt::WA_TransparentForMouseEvents);
+        label->setAlignment(Qt::AlignCenter);
+        label->setStyleSheet(style);
+        if (m_overlayMenu) {
+            label->stackUnder(m_overlayMenu);
+        }
+        label->hide();
+        return label;
+    };
+
+    m_panFpsMeterLabel = makeLabel();
+    m_wfFpsMeterLabel = makeLabel();
+    updateFpsMeterLabels();
+}
+
+void SpectrumWidget::updateFpsMeterLabels() {
+    if (!m_panFpsMeterLabel || !m_wfFpsMeterLabel) {
+        return;
+    }
+
+    m_panFpsMeterLabel->setText(QStringLiteral("PAN %1 FPS").arg(m_panadapterFps, 0, 'f', 1));
+    m_wfFpsMeterLabel->setText(QStringLiteral("WF %1 FPS").arg(m_waterfallFps, 0, 'f', 1));
+    m_panFpsMeterLabel->adjustSize();
+    m_wfFpsMeterLabel->adjustSize();
+    positionFpsMeterLabels();
+}
+
+void SpectrumWidget::positionFpsMeterLabels() {
+    if (!m_panFpsMeterLabel || !m_wfFpsMeterLabel) {
+        return;
+    }
+
+    auto hideMeters = [this]() {
+        m_panFpsMeterLabel->hide();
+        m_wfFpsMeterLabel->hide();
+    };
+
+    if (!m_showFpsMeters || width() <= 0 || height() <= 0) {
+        hideMeters();
+        return;
+    }
+
+    const int chromeH = FREQ_SCALE_H + DIVIDER_H;
+    const int contentH = height() - chromeH;
+    if (contentH <= 0) {
+        hideMeters();
+        return;
+    }
+
+    const int specH = static_cast<int>(contentH * m_spectrumFrac);
+    const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+    const QRect specRect(0, 0, width(), specH);
+    const QRect wfRect(0, wfY, width(), height() - wfY);
+
+    auto positionMeter = [](QLabel* label, const QRect& area,
+                            int bottomInset, int rightInset) {
+        if (area.width() < 56 || area.height() < 18) {
+            label->hide();
+            return;
+        }
+
+        const QSize labelSize = label->sizeHint();
+        if (area.width() < labelSize.width() + rightInset + 12
+            || area.height() < labelSize.height() + 8) {
+            label->hide();
+            return;
+        }
+
+        const int plotRight = area.right() - rightInset;
+        int x = plotRight - labelSize.width() - 8;
+        int y = area.bottom() - labelSize.height() - bottomInset;
+        if (x + labelSize.width() > plotRight - 4) {
+            x = plotRight - labelSize.width() - 4;
+        }
+        if (x < area.left() + 4) {
+            x = area.left() + 4;
+        }
+        if (y + labelSize.height() > area.bottom() - 4) {
+            y = area.bottom() - labelSize.height() - 4;
+        }
+        if (y < area.top() + 4) {
+            y = area.top() + 4;
+        }
+
+        label->move(x, y);
+        label->show();
+    };
+
+    const int panBottomInset = (m_bandPlanFontSize > 0)
+        ? m_bandPlanFontSize + 12
+        : 6;
+    positionMeter(m_panFpsMeterLabel, specRect, panBottomInset, DBM_STRIP_W);
+    positionMeter(m_wfFpsMeterLabel, wfRect, 6, waterfallStripWidth());
+    if (m_overlayMenu) {
+        m_overlayMenu->raiseAll();
+    }
+}
+
 bool SpectrumWidget::anyDragActive() const {
     return m_draggingDivider
         || m_draggingBandwidth
@@ -1406,6 +1521,7 @@ void SpectrumWidget::setSpectrumFrac(float f)
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("SpectrumSplitRatio"), QString::number(m_spectrumFrac, 'f', 3));
     s.save();
+    positionFpsMeterLabels();
     markOverlayDirty();
 }
 
@@ -2487,6 +2603,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 rebuildWaterfallViewport();
             }
         }
+        positionFpsMeterLabels();
         markOverlayDirty();
         ev->accept();
         return;
@@ -3165,6 +3282,7 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
 
 
     positionZoomButtons();
+    positionFpsMeterLabels();
 
     // Notify MainWindow so it can re-push xpixels/ypixels to the radio (#1511)
     if (width() >= 100 && height() >= 100)
@@ -3275,6 +3393,9 @@ void SpectrumWidget::drawFpsMeters(QPainter& p, const QRect& specRect, const QRe
 {
     if (!m_showFpsMeters)
         return;
+    if (m_panFpsMeterLabel && m_wfFpsMeterLabel) {
+        return;
+    }
 
     p.save();
     QFont f = p.font();

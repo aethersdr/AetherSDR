@@ -1,9 +1,9 @@
 #include "EditorFramelessTitleBar.h"
+#include "FramelessMoveHelper.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
-#include <QWindow>
 
 namespace AetherSDR {
 
@@ -77,27 +77,34 @@ void EditorFramelessTitleBar::setControlsVisible(bool on)
 
 void EditorFramelessTitleBar::mousePressEvent(QMouseEvent* ev)
 {
-    if (ev->button() == Qt::LeftButton) {
-        if (auto* w = window()) {
-            if (auto* h = w->windowHandle()) {
-                h->startSystemMove();
-                ev->accept();
-                return;
-            }
-        }
+    if (FramelessMoveHelper::start(this, ev)) {
+        return;
     }
     QWidget::mousePressEvent(ev);
+}
+
+void EditorFramelessTitleBar::mouseMoveEvent(QMouseEvent* ev)
+{
+    if (FramelessMoveHelper::move(this, ev)) {
+        return;
+    }
+    QWidget::mouseMoveEvent(ev);
+}
+
+void EditorFramelessTitleBar::mouseReleaseEvent(QMouseEvent* ev)
+{
+    if (FramelessMoveHelper::finish(this, ev)) {
+        return;
+    }
+    QWidget::mouseReleaseEvent(ev);
 }
 
 void EditorFramelessTitleBar::mouseDoubleClickEvent(QMouseEvent* ev)
 {
     if (ev->button() == Qt::LeftButton) {
-        if (auto* w = window()) {
-            if (w->isMaximized()) w->showNormal();
-            else                  w->showMaximized();
-            ev->accept();
-            return;
-        }
+        FramelessMoveHelper::toggleMaximized(this);
+        ev->accept();
+        return;
     }
     QWidget::mouseDoubleClickEvent(ev);
 }

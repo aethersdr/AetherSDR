@@ -1,10 +1,13 @@
 #include "ContainerTitleBar.h"
+#include "gui/FramelessMoveHelper.h"
 
 #include <QHBoxLayout>
+#include <QGuiApplication>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QTimer>
 
 namespace AetherSDR {
 
@@ -153,6 +156,11 @@ void ContainerTitleBar::setCloseButtonVisible(bool visible)
 void ContainerTitleBar::mousePressEvent(QMouseEvent* ev)
 {
     if (ev->button() != Qt::LeftButton) { QWidget::mousePressEvent(ev); return; }
+    if (m_isFloating) {
+        FramelessMoveHelper::start(this, ev);
+        setCursor(Qt::ClosedHandCursor);
+        return;
+    }
     m_pressed = true;
     m_pressPos = ev->globalPosition().toPoint();
     setCursor(Qt::ClosedHandCursor);
@@ -161,6 +169,9 @@ void ContainerTitleBar::mousePressEvent(QMouseEvent* ev)
 
 void ContainerTitleBar::mouseMoveEvent(QMouseEvent* ev)
 {
+    if (m_isFloating && FramelessMoveHelper::move(this, ev)) {
+        return;
+    }
     if (!m_pressed || !(ev->buttons() & Qt::LeftButton)) {
         QWidget::mouseMoveEvent(ev);
         return;
@@ -173,6 +184,25 @@ void ContainerTitleBar::mouseMoveEvent(QMouseEvent* ev)
     emit dragStartRequested(g);
     m_pressed = false;
     setCursor(Qt::OpenHandCursor);
+}
+
+void ContainerTitleBar::mouseReleaseEvent(QMouseEvent* ev)
+{
+    if (m_isFloating) {
+        FramelessMoveHelper::finish(this, ev);
+        setCursor(Qt::OpenHandCursor);
+        return;
+    }
+    QWidget::mouseReleaseEvent(ev);
+    if (ev->button() == Qt::LeftButton) {
+        QTimer::singleShot(0, this, [this]() {
+            if (!m_isFloating && m_pressed
+                && !(QGuiApplication::mouseButtons() & Qt::LeftButton)) {
+                m_pressed = false;
+                setCursor(Qt::OpenHandCursor);
+            }
+        });
+    }
 }
 
 } // namespace AetherSDR

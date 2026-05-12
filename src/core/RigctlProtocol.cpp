@@ -439,8 +439,12 @@ QString RigctlProtocol::cmdSetSplitVfo(const QString& args)
     if (parts.isEmpty()) return rprt(-1);
     bool enable = (parts[0] == "1");
     if (!enable) {
-        // Disable split — move TX back to our slice
-        if (auto* s = currentSlice())
+        // Disable split — move TX back to our slice (idempotent).
+        // Hamlib clients (VARA/VARAC/N1MM) poll this every ~3s; without the
+        // isTxSlice() guard the radio gets bombarded with `slice set N tx=1`
+        // commands, which appears to interfere with radio-side TX state
+        // tracking and causes spurious unkey after ~1s during PTT.
+        if (auto* s = currentSlice(); s && !s->isTxSlice())
             s->setTxSlice(true);
     }
     // Enabling split requires a second slice — handled by MainWindow's split logic
