@@ -1,4 +1,5 @@
 #include "PanadapterApplet.h"
+#include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
 #include "SpectrumWidget.h"
 #include "core/AppSettings.h"
@@ -385,20 +386,20 @@ void PanadapterApplet::clearCwText()
 
 bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
 {
+    if (obj == m_titleBar && m_isFloating && ev->type() == QEvent::MouseMove) {
+        return FramelessMoveHelper::move(m_titleBar, static_cast<QMouseEvent*>(ev));
+    }
+    if (obj == m_titleBar && m_isFloating && ev->type() == QEvent::MouseButtonRelease) {
+        return FramelessMoveHelper::finish(m_titleBar, static_cast<QMouseEvent*>(ev));
+    }
+
     // Title-bar drag in floating mode → move the OS window via Qt 6's
-    // cross-platform startSystemMove.  Frameless pop-outs have no native
+    // cross-platform move helper.  Frameless pop-outs have no native
     // title bar, so the applet's own title strip becomes the drag handle.
     if (obj == m_titleBar && m_isFloating
         && ev->type() == QEvent::MouseButtonPress) {
         auto* me = static_cast<QMouseEvent*>(ev);
-        if (me->button() == Qt::LeftButton) {
-            if (auto* w = window()) {
-                if (auto* h = w->windowHandle()) {
-                    h->startSystemMove();
-                    return true;
-                }
-            }
-        }
+        return FramelessMoveHelper::start(m_titleBar, me);
     }
     if (ev->type() == QEvent::MouseButtonPress)
         emit activated(m_panId);

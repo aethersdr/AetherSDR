@@ -79,6 +79,7 @@ public:
     void clearDisplay();  // blank spectrum and waterfall on disconnect
     void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
     void setConnectionAnimationVisible(bool on, const QString& label = {});
+    void showInterlockNotification(const QString& message, int durationMs = 5000);
 
     // Feed a new FFT frame. bins are scaled dBm values.
     void updateSpectrum(const QVector<float>& binsDbm);
@@ -132,6 +133,7 @@ public:
     float spectrumFrac()  const { return m_spectrumFrac; }
     float refLevel()      const { return m_refLevel; }
     float dynamicRange()  const { return m_dynamicRange; }
+    bool isDraggingDbmScale() const { return m_draggingDbm; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
 
@@ -412,6 +414,7 @@ signals:
     void filterChangeRequested(int lowHz, int highHz);
     // Emitted when the user adjusts the dBm scale (drag or arrows).
     void dbmRangeChangeRequested(float minDbm, float maxDbm);
+    void dbmRangeDragFinished(float minDbm, float maxDbm);
     // TNF signals
     void tnfCreateRequested(double freqMhz);
     void tnfMoveRequested(int id, double newFreqMhz);
@@ -477,11 +480,15 @@ private:
     void updateTnfHoverPopup();
     void drawWaterfall(QPainter& p, const QRect& r);
     void drawFpsMeters(QPainter& p, const QRect& specRect, const QRect& wfRect);
+    void createFpsMeterLabels();
+    void updateFpsMeterLabels();
+    void positionFpsMeterLabels();
     void positionZoomButtons();
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
     void drawConnectionAnimation(QPainter& p, const QRect& contentRect);
+    void positionInterlockNotification();
     int waterfallStripWidth() const;
     QRect waterfallLiveButtonRect(const QRect& wfRect) const;
     QRect waterfallTimeScaleRect(const QRect& wfRect) const;
@@ -537,6 +544,12 @@ private:
 
     float m_refLevel{-50.0f};       // top of display (dBm)
     float m_dynamicRange{100.0f};   // dB range shown in spectrum (-50 to -150)
+    bool  m_resetFftSmoothingOnNextFrame{false};
+    bool  m_pendingDbmRangeEcho{false};
+    int   m_holdFftUpdatesAfterDbmRelease{0};
+    float m_dbmReleasePreviewOffset{0.0f};
+    float m_pendingMinDbm{0.0f};
+    float m_pendingMaxDbm{0.0f};
 
     // Two-pass trimmed-mean noise floor (dBm), EMA-smoothed across ~20 frames.
     // -1000 = cold start (not yet measured).
@@ -699,6 +712,8 @@ private:
     QString m_connectionAnimationLabel;
     QTimer* m_connectionAnimationTimer{nullptr};
     QElapsedTimer m_connectionAnimationClock;
+    QLabel* m_interlockNotificationLabel{nullptr};
+    QTimer* m_interlockNotificationTimer{nullptr};
 
     // State change detector cache (per-instance, NOT static — multiple
     // panadapters have different values and static vars cause an infinite
@@ -756,6 +771,8 @@ private:
     int m_waterfallFrameCount{0};
     double m_panadapterFps{0.0};
     double m_waterfallFps{0.0};
+    QLabel* m_panFpsMeterLabel{nullptr};
+    QLabel* m_wfFpsMeterLabel{nullptr};
     qint64 m_lastMouseMoveNs{0};
 
     // ── TNF markers ────────────────────────────────────────────────────

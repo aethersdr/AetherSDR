@@ -11,9 +11,9 @@ namespace AetherSDR {
 // Each editor sets Qt::FramelessWindowHint at construction and adds
 // this widget at the very top of its layout.  Behaviour:
 //
-//  - Press-and-drag anywhere on the bar starts a compositor-managed
-//    window move via QWindow::startSystemMove() — same pattern as
-//    the main window's TitleBar.
+//  - Press-and-drag anywhere on the bar moves the window.  macOS uses
+//    a manual move path because repeated QWindow::startSystemMove()
+//    calls can be refused for several seconds after a move completes.
 //  - Double-click toggles maximize.
 //  - The trio at the right (— □ ✕) wires to showMinimized /
 //    showMaximized / close on the host window via an installed event
@@ -34,6 +34,8 @@ public:
 
 protected:
     void mousePressEvent(QMouseEvent* ev) override;
+    void mouseMoveEvent(QMouseEvent* ev) override;
+    void mouseReleaseEvent(QMouseEvent* ev) override;
     void mouseDoubleClickEvent(QMouseEvent* ev) override;
     bool eventFilter(QObject* obj, QEvent* ev) override;
 

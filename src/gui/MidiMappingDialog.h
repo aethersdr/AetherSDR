@@ -8,6 +8,8 @@
 #include <QLabel>
 #include <QPushButton>
 
+class QVBoxLayout;
+
 namespace AetherSDR {
 
 class MidiControlManager;
@@ -21,6 +23,7 @@ class MidiMappingDialog : public QDialog {
 
 public:
     explicit MidiMappingDialog(MidiControlManager* manager, QWidget* parent = nullptr);
+    void setFramelessMode(bool on);
 
 private:
     void refreshPortList();
@@ -37,6 +40,8 @@ private:
     QComboBox*    m_paramCombo;
     QComboBox*    m_categoryCombo;
     QComboBox*    m_profileCombo;
+    QWidget*      m_titleBar{nullptr};
+    QVBoxLayout*  m_bodyLayout{nullptr};
 };
 
 } // namespace AetherSDR

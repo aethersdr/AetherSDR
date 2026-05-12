@@ -3,6 +3,11 @@
 Extracted from CLAUDE.md for on-demand reference. Read this when debugging
 thread safety, signal routing, or data flow issues.
 
+For the authoritative audio ordering, sample formats, channel handling,
+downmixing, metering taps, and VITA/Opus packetization details, see
+[AetherSDR Audio Pipeline](audio-pipeline.md). This page is a thread and
+high-level routing overview; it intentionally omits many audio-stage details.
+
 ### Data Pipelines
 
 Multi-thread architecture — up to 11 threads depending on features enabled:
@@ -39,7 +44,7 @@ Multi-thread architecture — up to 11 threads depending on features enabled:
     ▼ [queued]            ▼  │  ▼ [queued]            ▼ [queued]
 ┌────────┐         ┌────────┐│┌────────┐        ┌──────────┐
 │PCC 8003│         │PCC 8004│││PCC 8002│        │PCC 03E3/ │
-│FFT bins│         │WF tiles│││ meters │        │0123 audio│
+│FFT bins│         │WF tiles│││ meters │        │0123/8005 │
 └───┬────┘         └───┬────┘│└───┬────┘        └────┬─────┘
     │                  │     │    │                   │
     ▼ MAIN             ▼     │    ▼ MAIN              ▼ AUDIO THREAD
@@ -58,37 +63,42 @@ SpectrumWidget   SpectrumWidget  MeterModel     AudioEngine
                       │ DAX streams │
                       └──────┬──────┘
                              ▼ MAIN
-                     PipeWireAudioBridge ──→ Virtual Audio Devices
-                     (PulseAudio pipes)     (WSJT-X, fldigi, etc.)
+                     VirtualAudioBridge / PipeWireAudioBridge / TCI / RADE
+                     (virtual devices, digital apps, modem paths)
 
-TX AUDIO PIPELINE:                          ◄── AUDIO THREAD
-  QAudioSource (mic) ──→ AudioEngine.onTxAudioReady()
+TX AUDIO ROUTING SUMMARY:                  ◄── AUDIO THREAD
+  QAudioSource (PC mic) ──→ AudioEngine.onTxAudioReady()
+                              │
+              ┌───────────────┼────────────────┐
+              ▼               ▼                ▼
+      PC mic voice TX     DAX TX mode       RADE mode
+              │               │                │
+              │               │                ├─→ txRawPcmReady()
+              │               │                └─→ RADEEngine.feedTxAudio()
+              │               │                       │
+              │               │                       ▼
+              │               │                AudioEngine.sendModemTxAudio()
+              │               │                VITA PCC 0x03E3
+              │               │
+              │               └─ PC mic handler returns;
+              │                  DAX/TCI enters AudioEngine.feedDaxTxAudio()
+              │                  and bypasses client voice DSP
+              │                       │
+              │                       ├─→ low-latency VITA PCC 0x03E3
+              │                       └─→ radio-native VITA PCC 0x0123
+              │
+              ▼
+      test tone → client TX DSP chain → post-DSP monitor
+        → PC mic gain → Quindar → final limiter → meters/scopes
+              │
+              ├─→ Opus remote_audio_tx VITA PCC 0x8005
+              └─→ uncompressed VITA fallback PCC 0x03E3
+                              │
+                              ▼ [queued to NETWORK]
+                      PanadapterStream.sendToRadio()
                               │
                               ▼
-                 applyClientTxDsp{Int16,Float32}
-                 (ClientComp + ClientEq in user-configurable order;
-                  CMP→EQ default, EQ→CMP alt.  See src/core/ClientComp.h
-                  and src/core/ClientEq.h.  Lock-free atomics,
-                  meter snapshots published per block.)
-                              │
-              ┌───────────────┼───────────────┐
-              ▼               ▼               ▼
-         Voice mode      DAX TX mode      RADE mode
-              │               │               │
-              ▼               ▼               ▼
-         Opus encode    DaxBridge.feed    RADEEngine.feed
-              │               │               │
-              ▼               ▼               ▼
-         VITA-49 pkt    VITA-49 pkt      OFDM modem
-              │               │               │
-              └───────┬───────┘               │
-                      ▼ [queued to NETWORK]    ▼
-              PanadapterStream         PanadapterStream
-              .sendToRadio()           .sendToRadio()
-              (QUdpSocket)             (QUdpSocket)
-                      │                       │
-                      ▼                       ▼
-                 Radio UDP 4991          Radio UDP 4991
+                         Radio UDP 4991
 
 TCP COMMAND PIPELINE (bidirectional):
   GUI widget ──→ SliceModel.setXxx() ──→ emit commandReady("slice ...")  [MAIN]
@@ -205,4 +215,3 @@ only when state changes. Main thread CPU reduced from ~97% to ~28%.
 shader. Per-vertex `fract()` when UV spans 0→1 produces identical values
 at both vertices (`fract(0+offset) == fract(1+offset)`), resulting in
 constant UV across the quad.
-

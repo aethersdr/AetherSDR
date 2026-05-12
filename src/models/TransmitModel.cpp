@@ -383,15 +383,21 @@ void TransmitModel::setTuneMode(const QString& mode)
     emit commandReady("transmit set tune_mode=" + mode);
 }
 
-void TransmitModel::startTune()
+void TransmitModel::startTune(PttSource source)
 {
+    if (!runPttPreflight(source, false))
+        return;
+
     emit commandReady("transmit tune 1");
 }
 
-void TransmitModel::startTwoToneTune()
+void TransmitModel::startTwoToneTune(PttSource source)
 {
+    if (!runPttPreflight(source, false))
+        return;
+
     setTuneMode("two_tone");
-    startTune();
+    emit commandReady("transmit tune 1");
 }
 
 void TransmitModel::toggleTwoToneTune()
@@ -748,6 +754,11 @@ void TransmitModel::setTxModeGetter(TxModeGetter getter)
     m_txModeGetter = std::move(getter);
 }
 
+void TransmitModel::setPttPreflight(PttPreflight preflight)
+{
+    m_pttPreflight = std::move(preflight);
+}
+
 bool TransmitModel::isPhoneModeForQuindar() const
 {
     if (!m_txModeGetter) return false;
@@ -760,6 +771,29 @@ bool TransmitModel::isPhoneModeForQuindar() const
         || m == "FDV";
 }
 
+bool TransmitModel::runPttPreflight(PttSource source, bool resyncMoxOnBlock)
+{
+    if (!m_pttPreflight)
+        return true;
+
+    const QString message = m_pttPreflight(source).trimmed();
+    if (message.isEmpty())
+        return true;
+
+    cancelPendingQuindarOff();
+    emit pttBlocked(message);
+
+    // A checked MOX button has already toggled before requestPttOn() runs.
+    // Force a UI resync even when the internal state was already RX.
+    if (resyncMoxOnBlock) {
+        if (m_transmitting)
+            setTransmitting(false);
+        else
+            emit moxChanged(false);
+    }
+    return false;
+}
+
 void TransmitModel::cancelPendingQuindarOff()
 {
     if (m_pendingMoxOffTimer) {
@@ -770,8 +804,11 @@ void TransmitModel::cancelPendingQuindarOff()
     m_quindarOutroInFlight = false;
 }
 
-void TransmitModel::requestPttOn(PttSource /*source*/)
+void TransmitModel::requestPttOn(PttSource source)
 {
+    if (!runPttPreflight(source))
+        return;
+
     // If Quindar is enabled + phone mode + we have an engine, start
     // the intro tone alongside MOX so the radio keys up while the
     // tone plays (the tone gets transmitted as part of the audio).

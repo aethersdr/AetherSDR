@@ -309,32 +309,6 @@ AudioEngine::AudioEngine(QObject* parent)
         }
     }
 
-    // Monitor audio output device list for changes — when a USB audio device
-    // (like Connect6) power-cycles or WASAPI sessions reset after idle/screensaver,
-    // restart the RX stream to re-acquire a fresh handle. (#1361)
-    // Windows/macOS only: PipeWire on Linux crashes in pw_stream_connect when
-    // audioOutputsChanged fires during device enumeration. The zombie sink
-    // watchdog and stateChanged handlers cover Linux recovery instead.
-#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
-    m_mediaDevices = new QMediaDevices(this);
-    connect(m_mediaDevices, &QMediaDevices::audioOutputsChanged, this, [this]() {
-        if (!m_outputDevice.isNull()) {
-            const auto outputs = QMediaDevices::audioOutputs();
-            if (!devicePresent(outputs, m_outputDevice)) {
-                qCWarning(lcAudio) << "AudioEngine: selected output device is no longer available, falling back to the system default";
-                m_outputDevice = QAudioDevice{};
-            }
-        }
-        if (!m_audioSink) return;
-        qCWarning(lcAudio) << "AudioEngine: audio output device list changed, restarting RX (#1361)";
-        QMetaObject::invokeMethod(this, [this]() {
-            if (!m_audioSink) return;
-            stopRxStream();
-            startRxStream();
-        }, Qt::QueuedConnection);
-    });
-#endif
-
     // Opus TX pacing timer — sends one queued packet every 10ms for even
     // delivery timing. Without this, QAudioSource delivers bursts of samples
     // that get Opus-encoded and sent back-to-back, causing jitter-induced
@@ -628,7 +602,6 @@ bool AudioEngine::startRxStream()
     });
     qCWarning(lcAudio) << "AudioEngine: RX stream started at" << fmt.sampleRate() << "Hz"
                        << "device:" << dev.description();
-    m_rxStreamStarted = true;
     startSidetoneStream();
     emit rxStarted();
     return true;
@@ -719,7 +692,6 @@ bool AudioEngine::startRxStream()
     });
     qCDebug(lcAudio) << "AudioEngine: RX stream started";
     m_rxBufferSampleRate.store(fmt.sampleRate());
-    m_rxStreamStarted = true;
     // Open the dedicated sidetone sink alongside the RX sink.  Cheap when
     // sidetone is disabled — the timer fires but writes silence to a tiny
     // primed buffer; no audible output, no extra CPU on the operator side.
@@ -3322,6 +3294,55 @@ float AudioEngine::computeRMS(const QByteArray& pcm) const
     return static_cast<float>(std::sqrt(sum / samples));
 }
 
+void AudioEngine::accumulatePcMicMeterInt16Stereo(const QByteArray& int16stereo)
+{
+    const auto block = TxMicChannelNormalizer::measureInt16StereoLevelBlock(int16stereo);
+    if (block.frames <= 0) {
+        return;
+    }
+
+    m_pcMicPeak = std::max(m_pcMicPeak, block.peak);
+    m_pcMicSumSq += block.sumSq;
+    m_pcMicSampleCount += block.frames;
+    if (m_pcMicSampleCount >= kMicMeterWindowSamples) {
+        const float rms = static_cast<float>(std::sqrt(m_pcMicSumSq / m_pcMicSampleCount));
+        emit pcMicLevelChanged(TxMicChannelNormalizer::dbfs(m_pcMicPeak),
+                               TxMicChannelNormalizer::dbfs(rms));
+        m_pcMicPeak = 0.0f;
+        m_pcMicSumSq = 0.0;
+        m_pcMicSampleCount = 0;
+    }
+}
+
+void AudioEngine::logTxInputChannelDiagnostics(const TxMicChannelNormalizer::Diagnostics& diagnostics,
+                                               const char* route)
+{
+    if (!diagnostics.oneSidedStereo) {
+        return;
+    }
+
+    QElapsedTimer& throttle = (route && std::strcmp(route, "DAX radio") == 0)
+        ? m_lastDaxRadioChannelLog
+        : m_lastTxMicChannelLog;
+    if (throttle.isValid() && throttle.elapsed() < 1000) {
+        return;
+    }
+
+    if (throttle.isValid())
+        throttle.restart();
+    else
+        throttle.start();
+
+    qCDebug(lcAudio) << "AudioEngine:" << (route ? route : "TX mic")
+                     << "one-sided stereo input"
+                     << "leftRmsDbfs:" << TxMicChannelNormalizer::dbfs(diagnostics.leftRms)
+                     << "rightRmsDbfs:" << TxMicChannelNormalizer::dbfs(diagnostics.rightRms)
+                     << "leftPeakDbfs:" << TxMicChannelNormalizer::dbfs(diagnostics.leftPeak)
+                     << "rightPeakDbfs:" << TxMicChannelNormalizer::dbfs(diagnostics.rightPeak)
+                     << "selected:"
+                     << TxMicChannelNormalizer::channelModeName(diagnostics.selectedMode);
+}
+
 // ─── TX stream ────────────────────────────────────────────────────────────────
 
 bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioPort)
@@ -3332,6 +3353,8 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     m_txPort    = radioPort;
     m_txPacketCount = 0;
     m_txAccumulator.clear();
+    m_txMicChannelState.reset();
+    m_lastTxMicChannelLog.invalidate();
 
     // TX mic capture uses Int16 — we convert to float32 after capture.
     // (makeFormat() returns Float for the RX sink, but mic hardware is Int16.)
@@ -3339,8 +3362,16 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     fmt.setSampleRate(DEFAULT_SAMPLE_RATE);
     fmt.setChannelCount(2);
     fmt.setSampleFormat(QAudioFormat::Int16);
-    const QAudioDevice dev = m_inputDevice.isNull()
-        ? QMediaDevices::defaultAudioInput() : m_inputDevice;
+    QAudioDevice dev = QMediaDevices::defaultAudioInput();
+    if (!m_inputDevice.isNull()) {
+        const auto inputs = QMediaDevices::audioInputs();
+        if (devicePresent(inputs, m_inputDevice)) {
+            dev = m_inputDevice;
+        } else {
+            qCWarning(lcAudio) << "AudioEngine: saved input device is unavailable, using the system default input instead";
+            m_inputDevice = QAudioDevice{};
+        }
+    }
 
     if (dev.isNull()) {
         qCWarning(lcAudio) << "AudioEngine: no audio input device available";
@@ -3395,7 +3426,8 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 
     // Record actual negotiated input format for resampling in onTxAudioReady
     m_txInputRate = fmt.sampleRate();
-    m_txInputMono = (fmt.channelCount() == 1);
+    m_txInputChannels = fmt.channelCount();
+    m_txInputMono = (m_txInputChannels == 1);
     m_txNeedsResample = (m_txInputRate != 24000);
 
     // Create polyphase resampler for high-quality rate conversion
@@ -3405,6 +3437,7 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
         m_txResampler.reset();
 
     qCDebug(lcAudio) << "AudioEngine: TX input device:" << dev.description()
+             << "id:" << dev.id()
              << "rate:" << fmt.sampleRate() << "ch:" << fmt.channelCount()
              << "resample:" << m_txNeedsResample;
 
@@ -3503,7 +3536,8 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
                     qCInfo(lcAudio) << "AudioEngine: TX source opened at fallback"
                                     << rate << "Hz" << ch << "ch";
                     m_txInputRate = rate;
-                    m_txInputMono = (ch == 1);
+                    m_txInputChannels = ch;
+                    m_txInputMono = (m_txInputChannels == 1);
                     m_txNeedsResample = (rate != 24000);
                     if (m_txNeedsResample) {
                         m_txResampler = std::make_unique<Resampler>(rate, 24000, 16384);
@@ -3532,8 +3566,9 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     m_txSourceStartTime.restart();
     qCWarning(lcAudio) << "AudioEngine: TX stream started ->" << radioAddress.toString()
              << ":" << radioPort << "streamId:" << Qt::hex << m_txStreamId
-             << "device:" << dev.description() << "rate:" << fmt.sampleRate()
-             << "ch:" << fmt.channelCount();
+             << Qt::dec << "device:" << dev.description() << "id:" << dev.id()
+             << "rate:" << m_txInputRate << "ch:" << m_txInputChannels
+             << "resample:" << m_txNeedsResample;
     return true;
 }
 
@@ -3574,6 +3609,12 @@ void AudioEngine::stopTxStream()
     m_txAccumulator.clear();
     m_txFloatAccumulator.clear();
     m_txResampler.reset();
+    m_txInputChannels = 2;
+    m_txInputMono = false;
+    m_txInputRate = DEFAULT_SAMPLE_RATE;
+    m_txNeedsResample = false;
+    m_txMicChannelState.reset();
+    m_lastTxMicChannelLog.invalidate();
     m_txSourceStartTime.invalidate();
 }
 
@@ -3596,45 +3637,46 @@ void AudioEngine::onTxAudioReady()
     if (data.isEmpty()) return;
 #endif
 
-    // Resample int16 to 24kHz stereo if needed, then convert to float32
-    // for RADE. Normal TX path stays int16 (Opus requires int16).
-    if (m_txNeedsResample && m_txResampler) {
-        // Convert int16 → float32 for float32 Resampler
-        const auto* i16 = reinterpret_cast<const int16_t*>(data.constData());
-        const int numSamples = data.size() / static_cast<int>(sizeof(int16_t));
-        QByteArray f32(numSamples * static_cast<int>(sizeof(float)), Qt::Uninitialized);
-        auto* fd = reinterpret_cast<float*>(f32.data());
-        for (int i = 0; i < numSamples; ++i)
-            fd[i] = i16[i] / 32768.0f;
+    // Canonicalize immediately after capture: TX voice is logically mono
+    // carried as stereo int16, so choose/average the real mic channel before
+    // any resampling, RADE/DAX branch, test tone, DSP, gain, limiter, or meter.
+    TxMicChannelNormalizer::Diagnostics channelDiagnostics;
+    data = TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo(
+        data,
+        m_txInputChannels,
+        m_txInputRate,
+        m_txMicChannelMode,
+        &m_txMicChannelState,
+        &channelDiagnostics);
+    if (data.isEmpty()) return;
+    logTxInputChannelDiagnostics(channelDiagnostics, "TX mic");
 
-        if (m_txInputMono) {
-            f32 = m_txResampler->processMonoToStereo(
-                reinterpret_cast<const float*>(f32.constData()),
-                f32.size() / static_cast<int>(sizeof(float)));
-        } else {
-            f32 = m_txResampler->processStereoToStereo(
-                reinterpret_cast<const float*>(f32.constData()),
-                f32.size() / (2 * static_cast<int>(sizeof(float))));
-        }
+    // Resample canonical mono int16 to 24kHz duplicated stereo if needed, then
+    // convert to float32 for RADE. Normal TX path stays int16 (Opus requires
+    // int16). Do not call processStereoToStereo() here: that helper would
+    // average raw mic L/R and reintroduce the one-sided-channel 6.02 dB loss.
+    if (m_txNeedsResample && m_txResampler) {
+        // Convert canonical duplicated int16 stereo → float32 mono for the
+        // mono-to-stereo resampler.
+        const auto* i16 = reinterpret_cast<const int16_t*>(data.constData());
+        const int frames = data.size() / static_cast<int>(2 * sizeof(int16_t));
+        QByteArray f32(frames * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+        auto* fd = reinterpret_cast<float*>(f32.data());
+        for (int i = 0; i < frames; ++i)
+            fd[i] = i16[i * 2] / 32768.0f;
+
+        f32 = m_txResampler->processMonoToStereo(
+            reinterpret_cast<const float*>(f32.constData()),
+            f32.size() / static_cast<int>(sizeof(float)));
 
         // Convert back to int16 for the rest of the TX path
         const auto* rsrc = reinterpret_cast<const float*>(f32.constData());
         const int rcount = f32.size() / static_cast<int>(sizeof(float));
+        if (rcount <= 0) return;
         data.resize(rcount * static_cast<int>(sizeof(int16_t)));
         auto* rdst = reinterpret_cast<int16_t*>(data.data());
         for (int i = 0; i < rcount; ++i)
             rdst[i] = static_cast<int16_t>(std::clamp(rsrc[i] * 32768.0f, -32768.0f, 32767.0f));
-    } else if (m_txInputMono) {
-        // 24kHz mono int16 (no resample needed) → duplicate to stereo
-        const auto* src = reinterpret_cast<const int16_t*>(data.constData());
-        const int monoSamples = data.size() / static_cast<int>(sizeof(int16_t));
-        QByteArray stereo(monoSamples * 2 * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
-        auto* dst = reinterpret_cast<int16_t*>(stereo.data());
-        for (int i = 0; i < monoSamples; ++i) {
-            dst[i * 2] = src[i];
-            dst[i * 2 + 1] = src[i];
-        }
-        data = stereo;
     }
 
     // RADE mode: apply client-side gain + meter, then convert int16 → float32
@@ -3649,26 +3691,7 @@ void AudioEngine::onTxAudioReady()
                     static_cast<int>(pcm[i] * gain), -32768, 32767));
             }
         }
-        // Mic level metering — same window accumulator and signal as SSB path
-        {
-            const auto* pcm = reinterpret_cast<const int16_t*>(data.constData());
-            int sampleCount = data.size() / static_cast<int>(sizeof(int16_t));
-            for (int i = 0; i < sampleCount; i += 2) {
-                float s = std::abs(pcm[i]) / 32768.0f;
-                if (s > m_pcMicPeak) m_pcMicPeak = s;
-                m_pcMicSumSq += static_cast<double>(s) * s;
-                m_pcMicSampleCount++;
-            }
-            if (m_pcMicSampleCount >= kMicMeterWindowSamples) {
-                float rms = static_cast<float>(std::sqrt(m_pcMicSumSq / m_pcMicSampleCount));
-                float peakDb = (m_pcMicPeak > 1e-10f) ? 20.0f * std::log10(m_pcMicPeak) : -150.0f;
-                float rmsDb  = (rms > 1e-10f)         ? 20.0f * std::log10(rms)          : -150.0f;
-                emit pcMicLevelChanged(peakDb, rmsDb);
-                m_pcMicPeak = 0.0f;
-                m_pcMicSumSq = 0.0;
-                m_pcMicSampleCount = 0;
-            }
-        }
+        accumulatePcMicMeterInt16Stereo(data);
         const auto* i16 = reinterpret_cast<const int16_t*>(data.constData());
         const int ns = data.size() / static_cast<int>(sizeof(int16_t));
         QByteArray f32(ns * static_cast<int>(sizeof(float)), Qt::Uninitialized);
@@ -3757,25 +3780,7 @@ void AudioEngine::onTxAudioReady()
     emitTxPostChainScopeFromInt16Stereo(data, DEFAULT_SAMPLE_RATE);
 
     // ── Client-side PC mic level metering (int16) ───────────────────────
-    {
-        const auto* pcm = reinterpret_cast<const int16_t*>(data.constData());
-        int sampleCount = data.size() / static_cast<int>(sizeof(int16_t));
-        for (int i = 0; i < sampleCount; i += 2) {  // stereo: use L channel
-            float s = std::abs(pcm[i]) / 32768.0f;
-            if (s > m_pcMicPeak) m_pcMicPeak = s;
-            m_pcMicSumSq += static_cast<double>(s) * s;
-            m_pcMicSampleCount++;
-        }
-        if (m_pcMicSampleCount >= kMicMeterWindowSamples) {
-            float rms = static_cast<float>(std::sqrt(m_pcMicSumSq / m_pcMicSampleCount));
-            float peakDb = (m_pcMicPeak > 1e-10f) ? 20.0f * std::log10(m_pcMicPeak) : -150.0f;
-            float rmsDb  = (rms > 1e-10f)         ? 20.0f * std::log10(rms)          : -150.0f;
-            emit pcMicLevelChanged(peakDb, rmsDb);
-            m_pcMicPeak = 0.0f;
-            m_pcMicSumSq = 0.0;
-            m_pcMicSampleCount = 0;
-        }
-    }
+    accumulatePcMicMeterInt16Stereo(data);
 
     emitScopeFromInt16Stereo(data, DEFAULT_SAMPLE_RATE, true);
 
@@ -3952,6 +3957,8 @@ void AudioEngine::setOutputDevice(const QAudioDevice& dev)
         stopRxStream();
         startRxStream();
     }
+
+    emit outputDeviceChanged();
 }
 
 void AudioEngine::setInputDevice(const QAudioDevice& dev)
@@ -3971,6 +3978,8 @@ void AudioEngine::setInputDevice(const QAudioDevice& dev)
         stopTxStream();
         startTxStream(addr, port);
     }
+
+    emit inputDeviceChanged();
 }
 
 #ifdef Q_OS_MAC
@@ -4065,6 +4074,8 @@ void AudioEngine::setDaxTxUseRadioRoute(bool on)
     // Switching route changes payload format; drop partial buffered samples.
     m_txFloatAccumulator.clear();
     m_daxPreTxBuffer.clear();
+    m_daxRadioTxChannelState.reset();
+    m_lastDaxRadioChannelLog.invalidate();
     qCDebug(lcDax) << "AudioEngine: DAX TX route"
                    << (on ? "radio-dax pcc=0x0123" : "float32 pcc=0x03e3")
                    << "stream=0x" + QString::number(m_txStreamId, 16);
@@ -4142,17 +4153,19 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
     m_daxPreTxBuffer.clear();
 
     // Convert float32 stereo → int16 mono (reduced BW format, PCC 0x0123).
-    const auto* src = reinterpret_cast<const float*>(float32pcm.constData());
-    const int stereoSamples = float32pcm.size() / sizeof(float) / 2;
-
-    // Convert: average L+R channels, scale to int16 big-endian
-    QByteArray mono(stereoSamples * sizeof(qint16), Qt::Uninitialized);
-    auto* dst = reinterpret_cast<qint16*>(mono.data());
-    for (int i = 0; i < stereoSamples; ++i) {
-        float avg = (src[i * 2] + src[i * 2 + 1]) * 0.5f;
-        avg = std::clamp(avg, -1.0f, 1.0f);
-        dst[i] = qToBigEndian(static_cast<qint16>(avg * 32767.0f));
-    }
+    // This route is still a digital/DAX bypass: no voice DSP, gain, Quindar, or
+    // final limiter. The mono collapse only avoids the same one-sided stereo
+    // 6.02 dB loss that can affect virtual/aggregate DAX sources.
+    TxMicChannelNormalizer::Diagnostics daxDiagnostics;
+    QByteArray mono = TxMicChannelNormalizer::collapseFloat32ToInt16MonoBigEndian(
+        float32pcm,
+        2,
+        DEFAULT_SAMPLE_RATE,
+        m_daxRadioTxChannelMode,
+        &m_daxRadioTxChannelState,
+        &daxDiagnostics);
+    if (mono.isEmpty()) return;
+    logTxInputChannelDiagnostics(daxDiagnostics, "DAX radio");
 
     m_txFloatAccumulator.append(mono);
 

@@ -203,12 +203,11 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     connect(m_model, &DvkModel::recordingChanged, this, &DvkPanel::onRecordingChanged);
 
     // F1-F12 hotkeys (only play if slot has a recording).  Registered as
-    // Qt::ApplicationShortcut on window() but enabled only while the panel
-    // is visible — CwxPanel registers its own F1-F12 ApplicationShortcuts,
-    // and Qt's ambiguity detection silently swallows the event when both
-    // contexts match.  The panels are mutually exclusive in the splitter,
-    // so toggling enabled state on show/hide ensures exactly one set is
-    // live at any time. (#2464)
+    // Qt::ApplicationShortcut on window() and created disabled — MainWindow
+    // flips enable state based on the active slice's mode (mutually
+    // exclusive with CwxPanel's F1-F12 set) so the keys fire regardless of
+    // panel visibility while Qt still sees at most one enabled shortcut
+    // per key and never emits activatedAmbiguously. (#2464, #2582)
     for (int i = 0; i < 12; ++i) {
         auto* sc = new QShortcut(QKeySequence(Qt::Key_F1 + i), window());
         sc->setContext(Qt::ApplicationShortcut);
@@ -253,16 +252,9 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     selectSlot(1);
 }
 
-void DvkPanel::showEvent(QShowEvent* event)
+void DvkPanel::setShortcutsEnabled(bool enabled)
 {
-    for (auto* sc : m_shortcuts) sc->setEnabled(true);
-    QWidget::showEvent(event);
-}
-
-void DvkPanel::hideEvent(QHideEvent* event)
-{
-    for (auto* sc : m_shortcuts) sc->setEnabled(false);
-    QWidget::hideEvent(event);
+    for (auto* sc : m_shortcuts) sc->setEnabled(enabled);
 }
 
 void DvkPanel::selectSlot(int id)

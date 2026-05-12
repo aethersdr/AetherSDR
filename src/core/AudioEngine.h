@@ -16,6 +16,8 @@
 #include <QElapsedTimer>
 #include <QPointer>
 
+#include "TxMicChannelNormalizer.h"
+
 class QMediaDevices;
 
 #include <functional>
@@ -463,6 +465,8 @@ signals:
     void rxPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void radioTransmittingChanged(bool tx);
     void mutedChanged(bool muted);                          // local audio output mute state
+    void inputDeviceChanged();
+    void outputDeviceChanged();
     void txBypassChanged(bool on);                          // master TX BYPASS state
     void rxBypassChanged(bool on);                          // master RX BYPASS state
     // Fired by saveClientReverbSettings() after any reverb param
@@ -522,6 +526,10 @@ private:
     // Apply the whole TX DSP chain (CMP + EQ) in the configured order.
     void applyClientTxDspInt16(QByteArray& int16stereo);
     void applyClientTxDspFloat32(QByteArray& float32);
+
+    void accumulatePcMicMeterInt16Stereo(const QByteArray& int16stereo);
+    void logTxInputChannelDiagnostics(const TxMicChannelNormalizer::Diagnostics& diagnostics,
+                                      const char* route);
 
     // Apply the whole RX DSP chain in the configured order.  Phase 0
     // ships the dispatcher with no implemented stages — every entry is
@@ -604,8 +612,17 @@ private:
     std::unique_ptr<Resampler> m_radeRxResampler;   // separate 24k→48k for RADE decoded speech
     std::unique_ptr<CwSidetoneGenerator> m_cwSidetone;  // local CW sidetone, mixed into RX drain
     bool  m_txNeedsResample{false};      // TX: input rate != 24kHz, needs resampling
-    bool  m_txInputMono{false};          // TX: input device is mono
+    bool  m_txInputMono{false};          // TX: legacy convenience mirror of m_txInputChannels == 1
+    int   m_txInputChannels{2};          // TX: actual negotiated input channel count
     int   m_txInputRate{24000};          // TX: actual input sample rate
+    TxMicChannelNormalizer::ChannelMode m_txMicChannelMode{
+        TxMicChannelNormalizer::ChannelMode::Auto};
+    TxMicChannelNormalizer::AutoState m_txMicChannelState;
+    TxMicChannelNormalizer::ChannelMode m_daxRadioTxChannelMode{
+        TxMicChannelNormalizer::ChannelMode::Auto};
+    TxMicChannelNormalizer::AutoState m_daxRadioTxChannelState;
+    QElapsedTimer m_lastTxMicChannelLog;
+    QElapsedTimer m_lastDaxRadioChannelLog;
     std::unique_ptr<Resampler> m_txResampler;  // e.g. 48k→24k (lazy init)
 
     // DSP lifecycle mutex: held during feedAudioData() DSP section AND
@@ -730,11 +747,6 @@ private:
     std::vector<float> m_nr2Mono;
     std::vector<float> m_nr2Processed;
     QByteArray m_nr2Output;
-
-    // Audio device change detection — restarts RX when USB devices
-    // power-cycle or WASAPI sessions reset after idle (#1361)
-    QMediaDevices* m_mediaDevices{nullptr};
-    bool           m_rxStreamStarted{false};  // guard: ignore device changes before first start
 
     // Zombie sink watchdog: tracks consecutive RX timer ticks where we have
     // data to write but bytesFree() == 0, indicating a stale WASAPI handle.

@@ -24,8 +24,11 @@ int main(int argc, char** argv)
 
     TransmitModel tx;
     QStringList commands;
+    QStringList blockedMessages;
     QObject::connect(&tx, &TransmitModel::commandReady,
                      [&commands](const QString& cmd) { commands.append(cmd); });
+    QObject::connect(&tx, &TransmitModel::pttBlocked,
+                     [&blockedMessages](const QString& message) { blockedMessages.append(message); });
 
     bool ok = true;
 
@@ -63,6 +66,26 @@ int main(int argc, char** argv)
     tx.setTuneMode("invalid");
     ok &= expect(commands.isEmpty(),
                  "invalid tune mode is ignored");
+
+    tx.setPttPreflight([](TransmitModel::PttSource source) {
+        return source == TransmitModel::PttSource::Tune
+            ? QStringLiteral("blocked")
+            : QString();
+    });
+
+    blockedMessages.clear();
+    commands.clear();
+    tx.startTune();
+    ok &= expect(commands.isEmpty()
+                 && blockedMessages == QStringList({"blocked"}),
+                 "tune preflight blocks tune command");
+
+    blockedMessages.clear();
+    commands.clear();
+    tx.startTwoToneTune();
+    ok &= expect(commands.isEmpty()
+                 && blockedMessages == QStringList({"blocked"}),
+                 "two-tone preflight blocks setup and tune commands");
 
     return ok ? 0 : 1;
 }

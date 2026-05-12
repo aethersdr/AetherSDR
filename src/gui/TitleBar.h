@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QString>
 #include <QWidget>
 
 class QPushButton;
@@ -22,6 +23,7 @@ public:
     void setMenuBar(QMenuBar* mb);
 
     void setPcAudioEnabled(bool on);
+    void setPcAudioDevices(const QString& inputDevice, const QString& outputDevice);
     void setLineoutMuted(bool muted);
     void setMasterVolume(int pct);
     void setHeadphoneVolume(int pct);
@@ -72,6 +74,7 @@ private:
     bool finishWindowMove(QMouseEvent* ev);
     void handleTitleDoubleClick(QMouseEvent* ev);
     void showFeatureRequestDialogImpl();
+    void updatePcAudioToolTip();
     QHBoxLayout* m_hbox{nullptr};
     QMenuBar*    m_menuBar{nullptr};
     QLabel*      m_appNameLabel{nullptr};
@@ -108,6 +111,8 @@ private:
     bool         m_alarmRed{false};
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
     bool         m_discovering{false};  // solid amber while waiting for connection
+    QString      m_pcAudioInputDevice;
+    QString      m_pcAudioOutputDevice;
 
 protected:
     // Drag-to-move + double-click-to-maximize for frameless main window.
