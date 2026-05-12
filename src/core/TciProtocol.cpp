@@ -386,7 +386,7 @@ QString TciProtocol::cmdTrx(const QStringList& args, bool isSet)
             if (s && !s->isTxSlice())
                 s->setTxSlice(true);
         }
-        m_model->setTransmit(tx);
+        m_model->setTransmit(tx, TransmitModel::PttSource::Dax);
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("trx:%1,%2;")
@@ -406,7 +406,7 @@ QString TciProtocol::cmdTxEnable(const QStringList& args)
 
     if (enable) {
         auto* s = sliceForTrx(trx);
-        if (s) {
+        if (s && !s->isTxSlice()) {
             QMetaObject::invokeMethod(s, [s]() {
                 s->setTxSlice(true);
             }, Qt::QueuedConnection);
@@ -436,7 +436,7 @@ QString TciProtocol::cmdTune(const QStringList& args, bool isSet)
     bool tune = (args[1].toLower() == "true");
     QMetaObject::invokeMethod(m_model, [this, tune]() {
         if (tune)
-            m_model->transmitModel().startTune();
+            m_model->transmitModel().startTune(TransmitModel::PttSource::Dax);
         else
             m_model->transmitModel().stopTune();
     }, Qt::QueuedConnection);

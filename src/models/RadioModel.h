@@ -273,7 +273,8 @@ public:
     void disconnectFromRadio();
     void forceDisconnect();  // Close TCP but allow auto-reconnect
     bool isWan() const { return m_wanConn != nullptr; }
-    void setTransmit(bool tx);
+    void setTransmit(bool tx, TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
+    void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
     void sendCwKey(bool down, const QString& debugSource = {},
                    quint64 debugTraceId = 0, quint64 debugSourceMs = 0); // straight key via netcw stream
@@ -385,6 +386,8 @@ signals:
     void txAudioGateChanged(bool transmitting);
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
+    // Short operator-facing interlock warnings for the panadapter overlay.
+    void interlockNotificationRequested(const QString& message);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
     // Emitted on each successful ping response from the radio.
@@ -558,6 +561,12 @@ private:
     bool        m_cwxActive{false};   // true while CWX send is in flight (#2047, #2097)
     bool        m_txAudioGate{false}; // actual TX audio gate state
     bool        m_radioTransmitting{false}; // raw interlock TX state, any owner
+    QString     m_lastInterlockNotificationKey;
+    qint64      m_lastInterlockNotificationMs{0};
+    qint64      m_interlockNotificationArmedUntilMs{0};
+    TransmitModel::PttSource m_pendingTransmitPreflightSource{TransmitModel::PttSource::Mox};
+    TransmitModel::PttSource m_interlockNotificationSource{TransmitModel::PttSource::Mox};
+    int         m_digitalVoiceTxSliceId{-1};
     QString     m_lastInterlockSource;   // last seen interlock source= (#2373)
                                          // SW/MIC/ACC/RCA/TUNE per FlexLib
                                          // v4.2.18 ParsePTTSource. Persists
@@ -610,6 +619,13 @@ private:
     int bandIdForFrequency(double freqMhz) const;  // map TX freq → band ID
     void applyTuneInhibit();    // suppress selected TX outputs before tune
     void restoreTuneInhibit();  // re-enable TX outputs after tune
+    SliceModel* txSlice() const;
+    QString localPttInterlockMessage(TransmitModel::PttSource source) const;
+    QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
+    QString radioInterlockNotificationMessage(const QMap<QString, QString>& kvs) const;
+    void armInterlockNotification(TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
+    bool interlockNotificationArmed() const;
+    void emitInterlockNotification(const QString& message, const QString& key);
 
 public:
     const QMap<int, TxBandInfo>& txBandSettings() const { return m_txBandSettings; }

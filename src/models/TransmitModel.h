@@ -141,16 +141,6 @@ public:
     void setActiveMicProfile(const QString& profile);
     void setMicInputList(const QStringList& inputs);
 
-    // ── Command methods (emit commandReady) ─────────────────────────────────
-    void setRfPower(int power);
-    void setTunePower(int power);
-    void setTuneMode(const QString& mode);
-    void startTune();
-    void startTwoToneTune();
-    void toggleTwoToneTune();
-    void stopTune();
-    void setMox(bool on);
-
     // PTT request coordinator (#2262) — single entry point for "user
     // wants to key/unkey".  When Quindar is enabled and the active TX
     // slice is on a phone mode, runs the engage/disengage tone state
@@ -158,10 +148,23 @@ public:
     // to setMox().  All UI and TCI hardware-PTT callers should use this
     // path so Quindar tones happen consistently regardless of source.
     enum class PttSource : uint8_t {
-        Mox          = 0,   // GUI MOX button
+        Mox          = 0,   // GUI/local MOX or PTT
         TciHardware  = 1,   // TCI radio-direct PTT (e.g. Stream Deck plugin)
         Footswitch   = 2,   // future: serial-PTT or other hardware path
+        Tune         = 3,   // local TUNE/two-tone carrier
+        Dax          = 4,   // external digital-audio PTT path
     };
+
+    // ── Command methods (emit commandReady) ─────────────────────────────────
+    void setRfPower(int power);
+    void setTunePower(int power);
+    void setTuneMode(const QString& mode);
+    void startTune(PttSource source = PttSource::Tune);
+    void startTwoToneTune(PttSource source = PttSource::Tune);
+    void toggleTwoToneTune();
+    void stopTune();
+    void setMox(bool on);
+
     void requestPttOn(PttSource source);
     void requestPttOff(PttSource source);
     // Bindings injected once at MainWindow wire-up.  The coordinator
@@ -173,6 +176,8 @@ public:
     void setQuindarTone(class ClientQuindarTone* tone);
     using TxModeGetter = std::function<QString()>;
     void setTxModeGetter(TxModeGetter getter);
+    using PttPreflight = std::function<QString(PttSource)>;
+    void setPttPreflight(PttPreflight preflight);
 
     void atuStart();
     void atuBypass();
@@ -237,6 +242,7 @@ signals:
     void apdEqualizerResetReceived();
     void maxPowerLevelChanged(int maxWatts);
     void commandReady(const QString& cmd);
+    void pttBlocked(const QString& message);
     // Quindar active-phase signal (#2262).  Emitted on the GUI thread
     // immediately when intro/outro starts and again when each finishes,
     // sized from the tone's current duration.  Used by the strip's
@@ -247,11 +253,13 @@ signals:
 private:
     static ATUStatus parseAtuTuneStatus(const QString& s);
     bool isPhoneModeForQuindar() const;
+    bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
     void cancelPendingQuindarOff();
 
     // PTT coordinator state (#2262)
     class ClientQuindarTone* m_quindarTone{nullptr};
     TxModeGetter             m_txModeGetter;
+    PttPreflight             m_pttPreflight;
     QTimer*                  m_pendingMoxOffTimer{nullptr};
     bool                     m_quindarOutroInFlight{false};
 

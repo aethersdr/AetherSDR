@@ -2,6 +2,7 @@
 
 #include <QDialog>
 
+class QVBoxLayout;
 class QTableWidget;
 class QPushButton;
 class QLabel;
@@ -14,6 +15,7 @@ class MultiFlexDialog : public QDialog {
     Q_OBJECT
 public:
     explicit MultiFlexDialog(RadioModel* model, QWidget* parent = nullptr);
+    void setFramelessMode(bool on);
 
 private:
     void refresh();
@@ -23,6 +25,8 @@ private:
     QPushButton* m_enableBtn;
     QLabel* m_pttLabel;
     QPushButton* m_pttBtn;
+    QWidget* m_titleBar{nullptr};
+    QVBoxLayout* m_bodyLayout{nullptr};
     bool m_refreshing{false};
 };
 

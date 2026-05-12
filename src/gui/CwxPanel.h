@@ -37,10 +37,13 @@ public:
         m_transmittingProvider = std::move(provider);
     }
 
+    // Enable/disable the F1-F12 and Esc ApplicationShortcuts. Driven by
+    // the active slice's mode in MainWindow, so the keys fire whether
+    // the panel is visible or not. (#2582)
+    void setShortcutsEnabled(bool enabled);
+
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
-    void showEvent(QShowEvent* event) override;
-    void hideEvent(QHideEvent* event) override;
 
 private slots:
     void onCharSent(int index);
@@ -81,8 +84,10 @@ private:
     std::function<QString()> m_activeModeProvider;
     std::function<bool()>    m_transmittingProvider;
 
-    // F1-F12 + ESC shortcuts — enabled only while panel is visible to
-    // avoid Qt shortcut ambiguity with DvkPanel's F1-F12 set (#2464).
+    // F1-F12 + ESC shortcuts — enabled by MainWindow based on the active
+    // slice's mode so they fire regardless of panel visibility, while
+    // staying mutually exclusive with DvkPanel's F1-F12 set to avoid Qt
+    // shortcut ambiguity (#2464, #2582).
     QVector<QShortcut*> m_shortcuts;
 };
 

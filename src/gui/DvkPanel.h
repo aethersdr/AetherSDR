@@ -22,10 +22,14 @@ public:
     int selectedSlot() const;
     void setWavTransfer(DvkWavTransfer* transfer);
 
+    // Enable/disable the F1-F12 and Esc ApplicationShortcuts. Driven by
+    // the active slice's mode in MainWindow so the keys fire regardless
+    // of panel visibility, while staying mutually exclusive with CwxPanel
+    // to avoid Qt shortcut ambiguity. (#2582)
+    void setShortcutsEnabled(bool enabled);
+
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
-    void showEvent(QShowEvent* event) override;
-    void hideEvent(QHideEvent* event) override;
 
 private slots:
     void onStatusChanged(int status, int id);
@@ -56,7 +60,9 @@ private:
     int m_timerStatus{0};  // DvkModel::Status cast to int
 
     // F1-F12 + ESC shortcuts — ApplicationShortcut on window(), enabled
-    // only while panel is visible to avoid collision with CwxPanel (#2464).
+    // by MainWindow based on the active slice's mode (mutually exclusive
+    // with CwxPanel's set) so they fire regardless of panel visibility
+    // (#2464, #2582).
     QVector<QShortcut*> m_shortcuts;
 
     void selectSlot(int id);

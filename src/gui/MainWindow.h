@@ -48,6 +48,7 @@
 #include <QSplitter>
 #include <QPointer>
 #include <QLabel>
+#include <QList>
 #include <QMenu>
 #include <QStatusBar>
 #include <QSizeGrip>
@@ -58,6 +59,7 @@
 #include <atomic>
 
 class QAbstractSlider;
+class QMediaDevices;
 
 #include "gui/ClientEqApplet.h"   // ClientEqApplet::Path enum used in
                                    // onEqCutoffsDragRequested signature.
@@ -73,6 +75,7 @@ class AppletPanel;
 class BandPlanManager;
 class NetworkDiagnosticsHistory;
 class WhatsNewDialog;
+class ProfileManagerDialog;
 class CwxPanel;
 class DvkPanel;
 #ifdef HAVE_RADE
@@ -146,6 +149,16 @@ private:
     void audioStopRx();
     void audioStartTx(const QHostAddress& addr, quint16 port);
     void audioStopTx();
+    void updatePcAudioTooltip();
+    void setupAudioDeviceChangeMonitor();
+    void scheduleAudioDeviceChangeCheck();
+    void handleAudioDeviceListChanged();
+    void applyAudioDeviceSelection(const QAudioDevice& inputDevice,
+                                   const QAudioDevice& outputDevice,
+                                   bool reinitializePcInput);
+    void resetMissingAudioDevicesToDefault(bool resetInput,
+                                           bool resetOutput,
+                                           bool reinitializePcInput);
     SliceModel* activeSlice() const;
     static const char* tuneIntentName(TuneIntent intent);
     bool panFollowEnabled() const;
@@ -175,6 +188,7 @@ private:
     void schedulePanFpsReconcile(const QString& panId, int reportedFps);
     void scheduleWaterfallLineDurationReconcile(const QString& panId, int reportedMs);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
+    void showPanadapterInterlockNotification(const QString& message);
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();  // wire CW decoder to the pan owning the active slice
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
@@ -290,6 +304,11 @@ private:
     DxccColorProvider m_dxccProvider;
     AudioEngine*      m_audio{nullptr};
     QThread*          m_audioThread{nullptr};
+    QMediaDevices*    m_audioDeviceMonitor{nullptr};
+    QTimer            m_audioDeviceChangeTimer;
+    QList<QByteArray> m_knownAudioInputIds;
+    QList<QByteArray> m_knownAudioOutputIds;
+    bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
     QsoRecorder*      m_qsoRecorder{nullptr};
     ClientPuduMonitor* m_finalMonitor{nullptr};
@@ -434,9 +453,11 @@ private:
     QPointer<QDialog> m_radioSetupDialog;
     QPointer<QDialog> m_networkDiagnosticsDialog;
     QPointer<QDialog> m_propDashboardDialog;
+    QPointer<QDialog> m_txBandDialog;
     QPointer<QDialog> m_memoryDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<QDialog> m_dspDialog;
+    QPointer<ProfileManagerDialog> m_profileManagerDialog;
 #ifdef HAVE_MIDI
     QPointer<QDialog> m_midiDialog;
 #endif

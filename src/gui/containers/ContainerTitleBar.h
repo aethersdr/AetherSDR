@@ -49,6 +49,7 @@ signals:
 protected:
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;
+    void mouseReleaseEvent(QMouseEvent* ev) override;
 
 private:
     QLabel*      m_titleLabel{nullptr};

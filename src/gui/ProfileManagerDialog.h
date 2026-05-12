@@ -3,6 +3,10 @@
 #include <QDialog>
 #include <QMap>
 
+class QCloseEvent;
+class QMoveEvent;
+class QResizeEvent;
+class QVBoxLayout;
 class QTabWidget;
 class QLineEdit;
 class QListWidget;
@@ -18,15 +22,25 @@ class ProfileManagerDialog : public QDialog {
 
 public:
     explicit ProfileManagerDialog(RadioModel* model, QWidget* parent = nullptr);
+    void setFramelessMode(bool on);
+
+protected:
+    void closeEvent(QCloseEvent* event) override;
+    void moveEvent(QMoveEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     QWidget* buildProfileTab(const QString& type, const QStringList& profiles,
                              const QString& active);
     QWidget* buildAutoSaveTab();
     void refreshTab(const QString& type);
+    void saveGeometryToSettings();
+    void restoreGeometryFromSettings();
 
     RadioModel* m_model;
     QTabWidget* m_tabs;
+    QWidget* m_titleBar{nullptr};
+    QVBoxLayout* m_bodyLayout{nullptr};
 
     // Per-tab widgets (indexed by type: "global", "transmit", "mic")
     struct TabWidgets {
@@ -39,6 +53,11 @@ private:
     QMap<QString, TabWidgets> m_tabWidgets;
 
     QCheckBox* m_autoSaveTx{nullptr};
+
+    // Set during restoreGeometry() so the move/resize callbacks the
+    // restore triggers don't immediately overwrite the just-loaded
+    // value.  Cleared when restore completes.
+    bool m_restoringGeometry{false};
 };
 
 } // namespace AetherSDR

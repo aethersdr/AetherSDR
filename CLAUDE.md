@@ -158,6 +158,15 @@ audio payload, meter data — see `docs/vita49-format.md`.
 
 ## Key Implementation Patterns
 
+### Adding or converting a dialog
+
+See **[`docs/dialog-patterns.md`](docs/dialog-patterns.md)** before writing
+or modifying a `QDialog`. It documents the canonical
+lazy-construct + non-modal + geometry-persist + frameless-chrome pattern,
+the common pitfalls that have hit real PRs, and the existing dialogs to
+use as reference. Tracked for cleanup in #2605 (`PersistentDialog` base
+class).
+
 ### Settings Persistence (AppSettings — NOT QSettings)
 
 **IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
