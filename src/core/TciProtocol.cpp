@@ -135,6 +135,16 @@ QString TciProtocol::generateInitBurst()
             burst += QStringLiteral("xit_offset:%1,%2;")
                          .arg(trx).arg(static_cast<int>(s->xitFreq()));
 
+            // Split — explicitly false so single-VFO operation is signalled.
+            // The RF2K-S TCI client uses `split_enable:0,false;` as the
+            // signal that VFO 0 is the active VFO; without ever receiving
+            // it, its `currentPosition` stays None and get_frequency()
+            // returns None, causing the amp to fall back to UNIV and show
+            // "No TCI available" regardless of how many `vfo:` events it
+            // receives.  (Source: rf-kit-gui_v198/operational_interface/
+            // tciSupport.py, SplitThreadSafeValue.get() + extract_current_vfo.)
+            burst += QStringLiteral("split_enable:%1,false;").arg(trx);
+
             // Lock
             burst += QStringLiteral("lock:%1,%2;")
                          .arg(trx).arg(s->isLocked() ? "true" : "false");
