@@ -495,7 +495,6 @@ private:
     void updateTrackedCursorState(const QPoint& localPos, bool insideWidget);
     void updateTnfHoverPopup();
     void drawWaterfall(QPainter& p, const QRect& r);
-    void drawFpsMeters(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void createFpsMeterLabels();
     void updateFpsMeterLabels();
     void positionFpsMeterLabels();

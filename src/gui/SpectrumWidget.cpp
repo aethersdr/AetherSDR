@@ -3566,72 +3566,6 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         PerfTelemetry::instance().recordWaterfallFallbackRows(1);
 }
 
-// ─── Paint ────────────────────────────────────────────────────────────────────
-
-void SpectrumWidget::drawFpsMeters(QPainter& p, const QRect& specRect, const QRect& wfRect)
-{
-    if (!m_showFpsMeters)
-        return;
-    if (m_panFpsMeterLabel && m_wfFpsMeterLabel) {
-        return;
-    }
-
-    p.save();
-    QFont f = p.font();
-    f.setPointSize(9);
-    f.setBold(true);
-    p.setFont(f);
-    const QFontMetrics fm(f);
-
-    auto drawMeter = [&](const QRect& area, const QString& name, double fps,
-                         bool bottomAligned, int bottomInset, int rightInset) {
-        if (area.width() < 56 || area.height() < 18)
-            return;
-
-        const QString label = QString("%1 %2 FPS").arg(name).arg(fps, 0, 'f', 1);
-        const int padX = 6;
-        const int padY = 3;
-        const int boxW = fm.horizontalAdvance(label) + padX * 2;
-        const int boxH = fm.height() + padY * 2;
-        if (area.width() < boxW + rightInset + 12 || area.height() < boxH + 8)
-            return;
-
-        const int plotRight = area.right() - rightInset;
-        int x = plotRight - boxW - 8;
-        int y = bottomAligned ? area.bottom() - boxH - bottomInset : area.top() + 6;
-        if (x + boxW > plotRight - 4)
-            x = plotRight - boxW - 4;
-        if (x < area.left() + 4)
-            x = area.left() + 4;
-        if (y + boxH > area.bottom() - 4)
-            y = area.bottom() - boxH - 4;
-        if (y < area.top() + 4)
-            y = area.top() + 4;
-
-        const QRect box(x, y, boxW, boxH);
-        p.setRenderHint(QPainter::Antialiasing, true);
-        const QRectF frame = QRectF(box).adjusted(0.5, 0.5, -0.5, -0.5);
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor(0x0f, 0x0f, 0x1a, 210));
-        p.drawRoundedRect(frame, 3.0, 3.0);
-        p.setBrush(Qt::NoBrush);
-        p.setPen(QPen(QColor(255, 255, 255, 170), 1.0));
-        p.drawRoundedRect(frame, 3.0, 3.0);
-        p.setRenderHint(QPainter::Antialiasing, false);
-        p.setPen(QColor(0x9c, 0xee, 0xff));
-        p.drawText(box.left() + padX,
-                   box.top() + padY + fm.ascent(),
-                   label);
-    };
-
-    const int panBottomInset = (m_bandPlanFontSize > 0)
-        ? m_bandPlanFontSize + 12
-        : 6;
-    drawMeter(specRect, QStringLiteral("PAN"), m_panadapterFps, true, panBottomInset, DBM_STRIP_W);
-    drawMeter(wfRect, QStringLiteral("WF"), m_waterfallFps, true, 6, waterfallStripWidth());
-    p.restore();
-}
-
 #ifdef AETHER_GPU_SPECTRUM
 
 // Fullscreen quad: position (x,y) + texcoord (u,v)
@@ -4082,7 +4016,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawSwrSweep(p, specRect);
             drawSliceMarkers(p, specRect, wfRect);
             drawOffScreenSlices(p, specRect);
-            drawFpsMeters(p, specRect, wfRect);
 
             drawAutoSqlFloor(p, specRect);
 
@@ -4677,7 +4610,6 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         }
 
         drawConnectionAnimation(p, specRect);
-        drawFpsMeters(p, specRect, wfRect);
     }
 
     // Reposition all VFO widgets — deconflict flags so they fly away from each other
