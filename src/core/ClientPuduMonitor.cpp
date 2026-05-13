@@ -181,24 +181,33 @@ void ClientPuduMonitor::startPlayback()
     if (m_recordedBytes <= 0) return;
 
     // ── Pick an output device + format ─────────────────────────────
-    // int16 stereo at the sink's native rate.  Try 24 kHz first (zero-
-    // resample fast path — typical on Linux); fall back to 48 kHz
-    // (typical on macOS and Windows) with a one-shot r8brain upsample
-    // of the whole captured buffer up-front.
+    // int16 stereo at the sink's playback rate.  The captured monitor
+    // buffer is 24 kHz, so keep the zero-resample fast path on most
+    // platforms. On macOS, opening a dedicated Bluetooth output sink at
+    // 24 kHz can route headsets onto HFP/telephony; prefer 48 kHz there.
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
     if (dev.isNull()) return;
+
+    static constexpr int kFallbackSampleRate = 48000;
+#ifdef Q_OS_MAC
+    const int preferredRate = kFallbackSampleRate;
+    const int fallbackRate = kSampleRate;
+#else
+    const int preferredRate = kSampleRate;
+    const int fallbackRate = kFallbackSampleRate;
+#endif
 
     QAudioFormat fmt;
     fmt.setChannelCount(kChannels);
     fmt.setSampleFormat(QAudioFormat::Int16);
-    fmt.setSampleRate(kSampleRate);
-    int sinkRate = kSampleRate;
+    fmt.setSampleRate(preferredRate);
+    int sinkRate = preferredRate;
 
     if (!dev.isFormatSupported(fmt)) {
-        fmt.setSampleRate(48000);
-        sinkRate = 48000;
+        fmt.setSampleRate(fallbackRate);
+        sinkRate = fallbackRate;
         if (!dev.isFormatSupported(fmt)) {
-            // Neither 24 kHz nor 48 kHz int16 — extremely rare.  Give up
+            // Neither 24 kHz nor 48 kHz int16 - extremely rare. Give up
             // quietly; playback was best-effort anyway.
             return;
         }
