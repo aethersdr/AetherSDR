@@ -24,6 +24,7 @@ namespace AetherSDR {
 
 class SliceModel;
 class TransmitModel;
+class RadioModel;
 class PhaseKnob;
 
 // Floating VFO info panel attached to the VFO marker on the spectrum display.
@@ -40,6 +41,7 @@ public:
     void setSlice(SliceModel* slice);
     void setAntennaList(const QStringList& ants);
     void setTransmitModel(TransmitModel* txModel);
+    void setRadioModel(RadioModel* radioModel);
     void setSignalLevel(float dbm);
 
     // Split mode: call whenever TX assignment or active slice changes.
@@ -131,10 +133,15 @@ private:
     void applyFilterPreset(int widthHz);
     void saveFilterPresets();
     void updateAgcSliderFromSlice();
+    void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
+    void updateAntennaButtons();
+    QStringList txAntennaOptions() const;
+    QString antennaMenuLabel(const QString& token, const QStringList& options) const;
     static QString formatFilterLabel(int hz);
 
     SliceModel*    m_slice{nullptr};
     TransmitModel* m_txModel{nullptr};
+    RadioModel*    m_radioModel{nullptr};
     QStringList    m_antList;
     bool           m_updatingFromModel{false};
     bool           m_lastOnLeft{true};

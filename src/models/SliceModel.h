@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QMap>
 
 namespace AetherSDR {
@@ -39,6 +40,8 @@ public:
     // Getters — RX DSP state
     QString rxAntenna()   const { return m_rxAntenna; }
     QString txAntenna()   const { return m_txAntenna; }
+    QStringList rxAntennaList() const { return m_rxAntennaList; }
+    QStringList txAntennaList() const { return m_txAntennaList; }
     bool    isLocked()    const { return m_locked; }
     bool    qskOn()       const { return m_qsk; }
     bool    nbOn()        const { return m_nb; }
@@ -176,6 +179,8 @@ signals:
     void audioPanChanged(int pan);
     void rxAntennaChanged(const QString& ant);
     void txAntennaChanged(const QString& ant);
+    void rxAntennaListChanged(const QStringList& ants);
+    void txAntennaListChanged(const QStringList& ants);
     void lockedChanged(bool locked);
     void qskChanged(bool on);
     void nbChanged(bool on);
@@ -246,6 +251,8 @@ private:
     // Slice control state
     QString m_rxAntenna{"ANT1"};
     QString m_txAntenna{"ANT1"};
+    QStringList m_rxAntennaList;
+    QStringList m_txAntennaList;
     bool    m_locked{false};
     bool    m_qsk{false};
     bool    m_audioMute{false};

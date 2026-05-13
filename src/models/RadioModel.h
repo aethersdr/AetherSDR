@@ -85,6 +85,16 @@ public:
     float txPower()   const { return m_txPower; }
     bool  isRadioTransmitting() const { return m_radioTransmitting; }
     QStringList antennaList() const { return m_antList; }
+    QString antennaAlias(const QString& token) const;
+    QString antennaDisplayName(const QString& token,
+                               bool includeTokenForDisambiguation = false) const;
+    QString antennaShortDisplayName(const QString& token, int maxChars = 6) const;
+    QMap<QString, QString> antennaAliases() const;
+    bool antennaAliasNeedsDisambiguation(const QString& token,
+                                         const QStringList& tokens) const;
+    void setAntennaAlias(const QString& token, const QString& alias);
+    void clearAntennaAlias(const QString& token);
+    QStringList knownAntennaTokens() const;
     QString serial()       const;
     QString chassisSerial() const { return m_chassisSerial; }
     QString callsign()     const { return m_callsign; }
@@ -344,6 +354,8 @@ signals:
     void panDimensionsNeeded(const QString& panId);
     // Emitted when the radio reports its antenna list (e.g. "ANT1,ANT2,RX_A,RX_B").
     void antListChanged(QStringList ants);
+    // Local AetherSDR display aliases changed. The radio still uses canonical tokens.
+    void antennaAliasesChanged();
     // Emitted when a power amplifier (e.g. PGXL) is detected or lost.
     void amplifierChanged(bool present);
     void ampStateChanged();   // amplifier operate/bypass changed
@@ -465,6 +477,8 @@ private:
     void updateStreamFilters();
     void handleGpsStatus(const QString& rawBody);
     void emitOtherClientsChanged();
+    QString antennaAliasRadioKey() const;
+    bool reloadAntennaAliases() const;
 
     // Standalone mode: create a panadapter then attach a slice to it.
     void createDefaultSlice(const QString& freqMhz = "14.225000",
@@ -574,6 +588,8 @@ private:
                                          // the field; cleared on non-TX
                                          // interlock states and on disconnect.
     QStringList m_antList;
+    mutable QString m_antennaAliasRadioKey;
+    mutable QMap<QString, QString> m_antennaAliases;
 
     QMap<QString, PanadapterModel*> m_panadapters;  // panId → model
     QString m_activePanId;       // currently active panadapter

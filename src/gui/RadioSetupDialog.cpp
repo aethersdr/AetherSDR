@@ -51,6 +51,7 @@
 #include <QStackedWidget>
 #include <QPlainTextEdit>
 #include <QSplitter>
+#include <QScrollArea>
 #include <QHostAddress>
 #include <QDebug>
 #include <QPointer>
@@ -210,6 +211,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addDeferred("TX",          [this] { return buildTxTab(); });
     addDeferred("Phone/CW",   [this] { return buildPhoneCwTab(); });
     addDeferred("RX",          [this] { return buildRxTab(); });
+    addDeferred("Antennas",    [this] { return buildAntennaNamesTab(); });
     addDeferred("Filters",     [this] { return buildFiltersTab(); });
     addDeferred("XVTR",        [this] { return buildXvtrTab(); });
     // External APD tab (#2186) — only present on radios that report
@@ -2521,6 +2523,150 @@ QWidget* RadioSetupDialog::buildXvtrTab()
     xvtrTabs->addTab(addPage, "+");
 
     vbox->addWidget(xvtrTabs);
+    return page;
+}
+
+QWidget* RadioSetupDialog::buildAntennaNamesTab()
+{
+    auto* page = new QWidget;
+    auto* vbox = new QVBoxLayout(page);
+    vbox->setSpacing(8);
+
+    // Model header
+    {
+        auto* hdr = new QHBoxLayout;
+        hdr->addStretch(1);
+        auto* modelLbl = new QLabel(m_model->model());
+        modelLbl->setStyleSheet("QLabel { color: #00c8ff; font-size: 20px; font-weight: bold; }");
+        hdr->addWidget(modelLbl);
+        vbox->addLayout(hdr);
+    }
+
+    auto* group = new QGroupBox("Antenna Names");
+    group->setStyleSheet(kGroupStyle);
+    auto* groupLayout = new QVBoxLayout(group);
+    groupLayout->setSpacing(6);
+
+    auto* rowsWidget = new QWidget;
+    rowsWidget->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Maximum);
+    auto* grid = new QGridLayout(rowsWidget);
+    grid->setContentsMargins(8, 2, 8, 2);
+    grid->setHorizontalSpacing(8);
+    grid->setVerticalSpacing(4);
+    grid->setAlignment(Qt::AlignTop);
+    grid->setColumnStretch(1, 1);
+    grid->setColumnStretch(2, 1);
+
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+    scroll->setWidget(rowsWidget);
+    groupLayout->addWidget(scroll);
+    vbox->addWidget(group, 1);
+
+    // Antenna display names are intentionally local to AetherSDR. FlexLib exposes
+    // canonical RX/TX antenna lists and rxant/txant setters, but no verified
+    // writable display-name API; radio commands must keep using ANT1/XVTR/etc.
+    auto refresh = std::make_shared<std::function<void()>>();
+    auto scheduleRefresh = [this, refresh] {
+        QTimer::singleShot(0, this, [refresh] {
+            if (*refresh)
+                (*refresh)();
+        });
+    };
+
+    auto wireSlice = [this, scheduleRefresh](SliceModel* slice) {
+        if (!slice)
+            return;
+        connect(slice, &SliceModel::rxAntennaChanged, this,
+                [scheduleRefresh](const QString&) { scheduleRefresh(); });
+        connect(slice, &SliceModel::txAntennaChanged, this,
+                [scheduleRefresh](const QString&) { scheduleRefresh(); });
+        connect(slice, &SliceModel::rxAntennaListChanged, this,
+                [scheduleRefresh](const QStringList&) { scheduleRefresh(); });
+        connect(slice, &SliceModel::txAntennaListChanged, this,
+                [scheduleRefresh](const QStringList&) { scheduleRefresh(); });
+    };
+
+    *refresh = [this, grid] {
+        while (QLayoutItem* item = grid->takeAt(0)) {
+            if (QWidget* w = item->widget())
+                w->deleteLater();
+            delete item;
+        }
+
+        auto addHeader = [grid](const QString& text, int col) {
+            auto* lbl = new QLabel(text);
+            lbl->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; font-weight: bold; }");
+            grid->addWidget(lbl, 0, col);
+        };
+        addHeader("Port", 0);
+        addHeader("Custom name", 1);
+        addHeader("Preview", 2);
+
+        const QStringList tokens = m_model->knownAntennaTokens();
+        if (tokens.isEmpty()) {
+            auto* empty = new QLabel("Waiting for antenna ports from the radio.");
+            empty->setStyleSheet("QLabel { color: #607080; font-size: 12px; padding: 8px; }");
+            grid->addWidget(empty, 1, 0, 1, 4);
+            return;
+        }
+
+        int row = 1;
+        for (const QString& token : tokens) {
+            auto* port = new QLabel(token);
+            port->setStyleSheet(kValueStyle);
+            grid->addWidget(port, row, 0);
+
+            auto* edit = new QLineEdit(m_model->antennaAlias(token));
+            edit->setMaxLength(16);
+            edit->setStyleSheet(kEditStyle);
+            edit->setPlaceholderText(token);
+            grid->addWidget(edit, row, 1);
+
+            const bool disambiguate =
+                m_model->antennaAliasNeedsDisambiguation(token, tokens);
+            auto* preview = new QLabel(m_model->antennaDisplayName(token, disambiguate));
+            preview->setStyleSheet(kLabelStyle);
+            grid->addWidget(preview, row, 2);
+
+            auto* clearBtn = new QPushButton("Clear");
+            clearBtn->setStyleSheet(
+                "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
+                "border-radius: 3px; color: #c8d8e8; font-size: 11px; "
+                "font-weight: bold; padding: 3px 10px; }"
+                "QPushButton:hover { background: #203040; }");
+            grid->addWidget(clearBtn, row, 3);
+
+            connect(edit, &QLineEdit::textChanged, this,
+                    [preview, token](const QString& text) {
+                const QString alias = text.trimmed();
+                preview->setText(alias.isEmpty() ? token : alias);
+            });
+            connect(edit, &QLineEdit::editingFinished, this, [this, edit, token] {
+                m_model->setAntennaAlias(token, edit->text());
+            });
+            connect(clearBtn, &QPushButton::clicked, this, [this, edit, token] {
+                edit->clear();
+                m_model->clearAntennaAlias(token);
+            });
+            ++row;
+        }
+    };
+
+    for (SliceModel* slice : m_model->slices())
+        wireSlice(slice);
+    connect(m_model, &RadioModel::sliceAdded, this,
+            [wireSlice, scheduleRefresh](SliceModel* slice) {
+        wireSlice(slice);
+        scheduleRefresh();
+    });
+    connect(m_model, &RadioModel::antListChanged, this,
+            [scheduleRefresh](const QStringList&) { scheduleRefresh(); });
+    connect(m_model, &RadioModel::antennaAliasesChanged, this, scheduleRefresh);
+
+    (*refresh)();
     return page;
 }
 

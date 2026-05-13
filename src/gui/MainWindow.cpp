@@ -3190,6 +3190,7 @@ MainWindow::MainWindow(QWidget* parent)
             m_appletPanel->txApplet(), &TxApplet::setTransmitting);
     m_appletPanel->txApplet()->setTransmitModel(&m_radioModel.transmitModel());
     m_appletPanel->txApplet()->setTunerModel(&m_radioModel.tunerModel());
+    m_appletPanel->rxApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->rxApplet()->setTransmitModel(&m_radioModel.transmitModel());
 
     // Hide APD row on radios that don't support it
@@ -10007,6 +10008,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // Set panId on the overlay menu so +RX routes to the correct pan
     menu->setPanId(applet->panId());
     menu->setMemories(m_radioModel.memories());
+    menu->setRadioModel(&m_radioModel);
 
     // Antenna list → this overlay menu (per-pan, mirrors VfoWidget pattern) (#1260)
     connect(&m_radioModel, &RadioModel::antListChanged,
@@ -11160,6 +11162,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
 
     // Wire slice data into widget
+    w->setRadioModel(&m_radioModel);
     w->setSlice(s);
     w->setAntennaList(m_radioModel.antennaList());
     w->setTransmitModel(&m_radioModel.transmitModel());

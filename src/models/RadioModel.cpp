@@ -1,4 +1,5 @@
 #include "RadioModel.h"
+#include "AntennaAliasStore.h"
 #include "BandSettings.h"
 #include "core/CommandParser.h"
 #include "core/AppSettings.h"
@@ -73,6 +74,12 @@ bool statusFlagSet(const QMap<QString, QString>& kvs, const QString& key)
     const QString value = kvs.value(key).trimmed();
     return value == QStringLiteral("1")
         || value.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
+}
+
+void appendUniqueAntennaToken(QStringList& tokens, const QString& token)
+{
+    if (!token.isEmpty() && !tokens.contains(token))
+        tokens.append(token);
 }
 
 QString cleanClientText(QString value)
@@ -498,6 +505,129 @@ int RadioModel::activeTxSliceNum() const
     return -1;
 }
 
+QString RadioModel::antennaAliasRadioKey() const
+{
+    QString key = m_chassisSerial.trimmed();
+    if (key.isEmpty())
+        key = serial().trimmed();
+    if (key.isEmpty())
+        key = m_model.trimmed();
+    if (key.isEmpty())
+        key = m_name.trimmed();
+    if (key.isEmpty())
+        key = m_nickname.trimmed();
+    return key.isEmpty() ? QStringLiteral("unconnected") : key;
+}
+
+bool RadioModel::reloadAntennaAliases() const
+{
+    const QString key = antennaAliasRadioKey();
+    if (key == m_antennaAliasRadioKey)
+        return false;
+
+    const QMap<QString, QString> aliases = AntennaAliasStore::load(key);
+    const bool changed = aliases != m_antennaAliases
+        || key != m_antennaAliasRadioKey;
+    m_antennaAliasRadioKey = key;
+    m_antennaAliases = aliases;
+    return changed;
+}
+
+QString RadioModel::antennaAlias(const QString& token) const
+{
+    reloadAntennaAliases();
+    return AntennaAliasStore::alias(m_antennaAliases, token);
+}
+
+QString RadioModel::antennaDisplayName(const QString& token,
+                                       bool includeTokenForDisambiguation) const
+{
+    reloadAntennaAliases();
+    return AntennaAliasStore::displayName(
+        m_antennaAliases, token, includeTokenForDisambiguation);
+}
+
+QString RadioModel::antennaShortDisplayName(const QString& token, int maxChars) const
+{
+    reloadAntennaAliases();
+    return AntennaAliasStore::shortDisplayName(m_antennaAliases, token, maxChars);
+}
+
+QMap<QString, QString> RadioModel::antennaAliases() const
+{
+    reloadAntennaAliases();
+    return m_antennaAliases;
+}
+
+bool RadioModel::antennaAliasNeedsDisambiguation(const QString& token,
+                                                 const QStringList& tokens) const
+{
+    reloadAntennaAliases();
+    const QString a = AntennaAliasStore::alias(m_antennaAliases, token);
+    if (a.isEmpty())
+        return false;
+
+    int count = 0;
+    for (const QString& other : tokens) {
+        if (AntennaAliasStore::alias(m_antennaAliases, other) == a)
+            ++count;
+    }
+    return count > 1;
+}
+
+void RadioModel::setAntennaAlias(const QString& token, const QString& alias)
+{
+    if (token.isEmpty())
+        return;
+    reloadAntennaAliases();
+
+    const QString trimmedAlias = alias.trimmed();
+    if (trimmedAlias.isEmpty()) {
+        clearAntennaAlias(token);
+        return;
+    }
+
+    if (m_antennaAliases.value(token) == trimmedAlias)
+        return;
+
+    m_antennaAliases.insert(token, trimmedAlias);
+    AntennaAliasStore::save(m_antennaAliasRadioKey, m_antennaAliases);
+    emit antennaAliasesChanged();
+}
+
+void RadioModel::clearAntennaAlias(const QString& token)
+{
+    if (token.isEmpty())
+        return;
+    reloadAntennaAliases();
+    if (!m_antennaAliases.remove(token))
+        return;
+
+    AntennaAliasStore::save(m_antennaAliasRadioKey, m_antennaAliases);
+    emit antennaAliasesChanged();
+}
+
+QStringList RadioModel::knownAntennaTokens() const
+{
+    reloadAntennaAliases();
+    QStringList tokens;
+    for (const QString& ant : m_antList)
+        appendUniqueAntennaToken(tokens, ant);
+    for (SliceModel* s : m_slices) {
+        if (!s)
+            continue;
+        appendUniqueAntennaToken(tokens, s->rxAntenna());
+        appendUniqueAntennaToken(tokens, s->txAntenna());
+        for (const QString& ant : s->rxAntennaList())
+            appendUniqueAntennaToken(tokens, ant);
+        for (const QString& ant : s->txAntennaList())
+            appendUniqueAntennaToken(tokens, ant);
+    }
+    for (auto it = m_antennaAliases.constBegin(); it != m_antennaAliases.constEnd(); ++it)
+        appendUniqueAntennaToken(tokens, it.key());
+    return tokens;
+}
+
 SliceModel* RadioModel::txSlice() const
 {
     for (auto* s : m_slices) {
@@ -682,6 +812,8 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_model   = info.model;
     m_version = info.version;
     m_maxSlices = maxSlicesForModel(m_model);
+    if (reloadAntennaAliases())
+        emit antennaAliasesChanged();
     setKnownGuiClients(info.guiClientHandles,
                        info.guiClientPrograms,
                        info.guiClientStations,
@@ -1837,6 +1969,8 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                         qCDebug(lcProtocol) << "RadioModel: info — callsign:" << m_callsign
                                  << "region:" << m_region << "options:" << m_radioOptions;
                         emit infoChanged();
+                        if (reloadAntennaAliases())
+                            emit antennaAliasesChanged();
                     });
 
                 sendCmd("slice list",

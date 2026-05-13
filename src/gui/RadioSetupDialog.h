@@ -56,6 +56,7 @@ private:
     QWidget* buildAudioTab();
     QWidget* buildFiltersTab();
     QWidget* buildXvtrTab();
+    QWidget* buildAntennaNamesTab();
     QWidget* buildApdTab();
     void     refreshApdSamplerCombo(const QString& txAnt);
     QWidget* buildUsbCablesTab();

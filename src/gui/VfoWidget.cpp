@@ -4,6 +4,7 @@
 #include "GuardedSlider.h"
 #include "RxApplet.h"
 #include "SliceColorManager.h"
+#include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "core/AppSettings.h"
@@ -27,6 +28,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QFontMetrics>
 #include <QSignalBlocker>
 #include <QDir>
 #include <QFile>
@@ -183,6 +185,16 @@ static const QString kSliderStyle =
 static const QString kLabelStyle =
     "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }";
 
+static bool likelyTxAntennaFallbackToken(const QString& token)
+{
+    const QString upper = token.toUpper();
+    if (upper.startsWith(QStringLiteral("RX")))
+        return false;
+    return upper.startsWith(QStringLiteral("ANT"))
+        || upper.startsWith(QStringLiteral("TX"))
+        || upper == QStringLiteral("XVTR");
+}
+
 // ── Construction ──────────────────────────────────────────────────────────────
 
 VfoWidget::VfoWidget(QWidget* parent)
@@ -335,13 +347,19 @@ void VfoWidget::buildUI()
     connect(m_rxAntBtn, &QPushButton::clicked, this, [this] {
         if (!m_slice) return;
         QMenu menu(this);
-        for (const QString& ant : m_antList) {
-            auto* act = menu.addAction(ant);
+        const QStringList options = !m_slice->rxAntennaList().isEmpty()
+            ? m_slice->rxAntennaList()
+            : m_antList;
+        for (const QString& ant : options) {
+            auto* act = menu.addAction(antennaMenuLabel(ant, options));
+            act->setData(ant);
             act->setCheckable(true);
             act->setChecked(ant == m_slice->rxAntenna());
+            act->setToolTip(ant);
+            act->setStatusTip(ant);
         }
         if (auto* sel = menu.exec(m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height()))))
-            m_slice->setRxAntenna(sel->text());
+            m_slice->setRxAntenna(sel->data().toString());
     });
     hdr->addWidget(m_rxAntBtn);
 
@@ -351,15 +369,17 @@ void VfoWidget::buildUI()
     connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
         if (!m_slice) return;
         QMenu menu(this);
-        for (const QString& ant : m_antList) {
-            if (ant.startsWith("RX", Qt::CaseInsensitive))
-                continue;  // skip RX-only antenna ports
-            auto* act = menu.addAction(ant);
+        const QStringList options = txAntennaOptions();
+        for (const QString& ant : options) {
+            auto* act = menu.addAction(antennaMenuLabel(ant, options));
+            act->setData(ant);
             act->setCheckable(true);
             act->setChecked(ant == m_slice->txAntenna());
+            act->setToolTip(ant);
+            act->setStatusTip(ant);
         }
         if (auto* sel = menu.exec(m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height()))))
-            m_slice->setTxAntenna(sel->text());
+            m_slice->setTxAntenna(sel->data().toString());
     });
     hdr->addWidget(m_txAntBtn);
 
@@ -2522,11 +2542,13 @@ void VfoWidget::setSlice(SliceModel* slice)
     });
     // Antennas
     connect(m_slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
-        m_updatingFromModel = true; m_rxAntBtn->setText(ant); m_updatingFromModel = false;
+        m_updatingFromModel = true; updateAntennaButton(m_rxAntBtn, ant, false); m_updatingFromModel = false;
     });
     connect(m_slice, &SliceModel::txAntennaChanged, this, [this](const QString& ant) {
-        m_updatingFromModel = true; m_txAntBtn->setText(ant); m_updatingFromModel = false;
+        m_updatingFromModel = true; updateAntennaButton(m_txAntBtn, ant, true); m_updatingFromModel = false;
     });
+    connect(m_slice, &SliceModel::txAntennaListChanged,
+            this, [this](const QStringList&) { updateAntennaButtons(); });
     // TX slice — toggle between red (active TX) and grey (clickable to set TX)
     connect(m_slice, &SliceModel::txSliceChanged, this, [this](bool tx) {
         updateTxBadgeStyle(tx);
@@ -2874,8 +2896,8 @@ void VfoWidget::syncFromSlice()
     if (!m_slice) return;
     m_updatingFromModel = true;
 
-    m_rxAntBtn->setText(m_slice->rxAntenna());
-    m_txAntBtn->setText(m_slice->txAntenna());
+    updateAntennaButton(m_rxAntBtn, m_slice->rxAntenna(), false);
+    updateAntennaButton(m_txAntBtn, m_slice->txAntenna(), true);
     updateTxBadgeStyle(m_slice->isTxSlice());
     {
         QSignalBlocker b(m_lockVfoBtn);
@@ -3637,11 +3659,90 @@ void VfoWidget::saveFilterPresets()
 void VfoWidget::setAntennaList(const QStringList& ants)
 {
     m_antList = ants;
+    updateAntennaButtons();
 }
 
 void VfoWidget::setTransmitModel(TransmitModel* txModel)
 {
     m_txModel = txModel;
+}
+
+void VfoWidget::setRadioModel(RadioModel* radioModel)
+{
+    if (m_radioModel)
+        disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
+                   this, &VfoWidget::updateAntennaButtons);
+    m_radioModel = radioModel;
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::antennaAliasesChanged,
+                this, &VfoWidget::updateAntennaButtons);
+    }
+    updateAntennaButtons();
+}
+
+QString VfoWidget::antennaMenuLabel(const QString& token,
+                                    const QStringList& options) const
+{
+    if (!m_radioModel)
+        return token;
+    return m_radioModel->antennaDisplayName(
+        token, m_radioModel->antennaAliasNeedsDisambiguation(token, options));
+}
+
+QStringList VfoWidget::txAntennaOptions() const
+{
+    QStringList options;
+    auto append = [&options](const QString& token) {
+        if (!token.isEmpty() && !options.contains(token))
+            options.append(token);
+    };
+
+    if (m_slice && !m_slice->txAntennaList().isEmpty()) {
+        for (const QString& ant : m_slice->txAntennaList())
+            append(ant);
+        append(m_slice->txAntenna());
+        return options;
+    }
+
+    for (const QString& ant : m_antList) {
+        if (likelyTxAntennaFallbackToken(ant))
+            append(ant);
+    }
+    if (m_slice)
+        append(m_slice->txAntenna());
+    return options;
+}
+
+void VfoWidget::updateAntennaButton(QPushButton* button, const QString& token, bool tx)
+{
+    if (!button)
+        return;
+
+    const QString shortLabel = m_radioModel
+        ? m_radioModel->antennaShortDisplayName(token, 6)
+        : token;
+    const QFontMetrics fm(button->font());
+    constexpr int kMinWidth = 34;
+    constexpr int kMaxWidth = 66;
+    constexpr int kPad = 12;
+    const QString text = fm.elidedText(shortLabel, Qt::ElideRight, kMaxWidth - kPad);
+    button->setText(text);
+    button->setFixedWidth(qBound(kMinWidth, fm.horizontalAdvance(text) + kPad, kMaxWidth));
+
+    const QString full = m_radioModel
+        ? m_radioModel->antennaDisplayName(token, !m_radioModel->antennaAlias(token).isEmpty())
+        : token;
+    button->setToolTip(QStringLiteral("%1 antenna port: %2")
+                           .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
+                                full));
+}
+
+void VfoWidget::updateAntennaButtons()
+{
+    if (!m_slice)
+        return;
+    updateAntennaButton(m_rxAntBtn, m_slice->rxAntenna(), false);
+    updateAntennaButton(m_txAntBtn, m_slice->txAntenna(), true);
 }
 
 bool VfoWidget::eventFilter(QObject* obj, QEvent* event)

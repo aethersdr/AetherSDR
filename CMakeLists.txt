@@ -511,6 +511,7 @@ endif()
 
 set(MODEL_SOURCES
     src/models/RadioModel.cpp
+    src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp
     src/models/PanadapterModel.cpp
     src/models/MeterModel.cpp
@@ -1362,6 +1363,17 @@ add_executable(shortcut_manager_test
 target_include_directories(shortcut_manager_test PRIVATE src)
 target_link_libraries(shortcut_manager_test PRIVATE Qt6::Core Qt6::Widgets)
 add_test(NAME shortcut_manager_test COMMAND shortcut_manager_test)
+
+add_executable(antenna_alias_test
+    tests/antenna_alias_test.cpp
+    src/models/AntennaAliasStore.cpp
+    src/models/SliceModel.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(antenna_alias_test PRIVATE src)
+target_link_libraries(antenna_alias_test PRIVATE Qt6::Core)
+set_target_properties(antenna_alias_test PROPERTIES AUTOMOC ON)
+add_test(NAME antenna_alias_test COMMAND antenna_alias_test)
 
 add_executable(cw_sidetone_test
     tests/cw_sidetone_test.cpp

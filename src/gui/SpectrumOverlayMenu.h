@@ -36,6 +36,7 @@ public:
 
     // Set the antenna list (from RadioModel::antListChanged).
     void setAntennaList(const QStringList& ants);
+    void setRadioModel(RadioModel* model);
 
     // Sync Display sub-panel controls with saved settings.  The Black slider
     // displays `black` while autoBlack is off and `autoBlackOffset` while it
@@ -150,6 +151,8 @@ private:
     void hideAllSubPanels();
     void showBandPanelAt(const QPoint& pos);
     void syncAntPanel();
+    void refreshAntennaCombo();
+    void setRxAntennaComboToken(const QString& token);
 
     static constexpr int kBtnAddRx = 0;
     static constexpr int kBtnAddTnf = 1;
@@ -237,6 +240,7 @@ private:
     QLabel*      m_autoSqlMarginLabel{nullptr};
 
     QStringList  m_antList;
+    RadioModel*  m_radioModel{nullptr};
     QPointer<SliceModel> m_slice;
     bool         m_updatingFromModel{false};
     int          m_lastEmittedRfGain{INT_MIN};  // dedupe rfgain emits across drag snap ticks (#1498)

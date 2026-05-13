@@ -273,9 +273,14 @@ void SpectrumOverlayMenu::buildAntPanel()
     antRow->addWidget(m_rxAntCmb, 1);
     vbox->addLayout(antRow);
 
-    connect(m_rxAntCmb, &QComboBox::currentTextChanged,
-            this, [this](const QString& ant) {
-        if (!m_updatingFromModel && m_slice && !ant.isEmpty())
+    connect(m_rxAntCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int index) {
+        if (m_updatingFromModel || !m_slice || index < 0)
+            return;
+        QString ant = m_rxAntCmb->itemData(index).toString();
+        if (ant.isEmpty())
+            ant = m_rxAntCmb->itemText(index);
+        if (!ant.isEmpty())
             m_slice->setRxAntenna(ant);
     });
 
@@ -427,12 +432,51 @@ void SpectrumOverlayMenu::buildAntPanel()
 void SpectrumOverlayMenu::setAntennaList(const QStringList& ants)
 {
     m_antList = ants;
+    refreshAntennaCombo();
+}
+
+void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
+{
+    if (m_radioModel)
+        disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
+                   this, &SpectrumOverlayMenu::refreshAntennaCombo);
+    m_radioModel = model;
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::antennaAliasesChanged,
+                this, &SpectrumOverlayMenu::refreshAntennaCombo);
+    }
+    refreshAntennaCombo();
+}
+
+void SpectrumOverlayMenu::refreshAntennaCombo()
+{
+    if (!m_rxAntCmb)
+        return;
+    const QString cur = m_slice ? m_slice->rxAntenna()
+                                : m_rxAntCmb->currentData().toString();
     QSignalBlocker sb(m_rxAntCmb);
-    QString cur = m_rxAntCmb->currentText();
     m_rxAntCmb->clear();
-    m_rxAntCmb->addItems(ants);
-    if (ants.contains(cur))
-        m_rxAntCmb->setCurrentText(cur);
+    for (const QString& ant : m_antList) {
+        const bool disambiguate = m_radioModel
+            && m_radioModel->antennaAliasNeedsDisambiguation(ant, m_antList);
+        const QString label = m_radioModel
+            ? m_radioModel->antennaDisplayName(ant, disambiguate)
+            : ant;
+        m_rxAntCmb->addItem(label, ant);
+    }
+    setRxAntennaComboToken(cur);
+}
+
+void SpectrumOverlayMenu::setRxAntennaComboToken(const QString& token)
+{
+    if (!m_rxAntCmb)
+        return;
+    for (int i = 0; i < m_rxAntCmb->count(); ++i) {
+        if (m_rxAntCmb->itemData(i).toString() == token) {
+            m_rxAntCmb->setCurrentIndex(i);
+            return;
+        }
+    }
 }
 
 void SpectrumOverlayMenu::setSlice(SliceModel* slice)
@@ -444,7 +488,7 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
 
     connect(m_slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
         m_updatingFromModel = true;
-        m_rxAntCmb->setCurrentText(ant);
+        setRxAntennaComboToken(ant);
         m_updatingFromModel = false;
     });
 
@@ -469,7 +513,7 @@ void SpectrumOverlayMenu::syncAntPanel()
 {
     if (!m_slice) return;
     m_updatingFromModel = true;
-    m_rxAntCmb->setCurrentText(m_slice->rxAntenna());
+    setRxAntennaComboToken(m_slice->rxAntenna());
     {
         QSignalBlocker sb(m_rfGainSlider);
         m_rfGainSlider->setValue(static_cast<int>(m_slice->rfGain()));

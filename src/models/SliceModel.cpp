@@ -3,6 +3,21 @@
 
 namespace AetherSDR {
 
+namespace {
+
+QStringList splitAntennaList(const QString& value)
+{
+    QStringList result;
+    for (QString token : value.split(',', Qt::SkipEmptyParts)) {
+        token = token.trimmed();
+        if (!token.isEmpty())
+            result.append(token);
+    }
+    return result;
+}
+
+} // namespace
+
 SliceModel::SliceModel(int id, QObject* parent)
     : QObject(parent), m_id(id)
 {}
@@ -605,6 +620,21 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
     }
 
     // Slice control state
+    if (kvs.contains("ant_list") || kvs.contains("rx_ant_list")) {
+        const QString raw = kvs.value("rx_ant_list", kvs.value("ant_list"));
+        const QStringList ants = splitAntennaList(raw);
+        if (ants != m_rxAntennaList) {
+            m_rxAntennaList = ants;
+            emit rxAntennaListChanged(m_rxAntennaList);
+        }
+    }
+    if (kvs.contains("tx_ant_list")) {
+        const QStringList ants = splitAntennaList(kvs["tx_ant_list"]);
+        if (ants != m_txAntennaList) {
+            m_txAntennaList = ants;
+            emit txAntennaListChanged(m_txAntennaList);
+        }
+    }
     if (kvs.contains("rxant")) {
         m_rxAntenna = kvs["rxant"];
         emit rxAntennaChanged(m_rxAntenna);

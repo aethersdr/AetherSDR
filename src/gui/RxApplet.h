@@ -21,6 +21,7 @@ class QToolButton;
 namespace AetherSDR {
 
 class SliceModel;
+class RadioModel;
 
 // RX Applet — controls for a single receive slice.
 //
@@ -54,6 +55,7 @@ public:
 
     // Connect to transmit model for QSK (break_in) indicator.
     void setTransmitModel(class TransmitModel* txModel);
+    void setRadioModel(class RadioModel* radioModel);
 
     // Set the available antenna list (from ant_list in panadapter status).
     void setAntennaList(const QStringList& ants);
@@ -98,6 +100,10 @@ private:
     void buildUI();
     void connectSlice(SliceModel* s);
     void disconnectSlice(SliceModel* s);
+    void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
+    void updateAntennaButtons();
+    QStringList txAntennaOptions() const;
+    QString antennaMenuLabel(const QString& token, const QStringList& options) const;
 
     void applyFilterPreset(int widthHz);
     void updateFilterButtons();
@@ -113,6 +119,7 @@ private:
 
     SliceModel* m_slice{nullptr};
     TransmitModel* m_txModel{nullptr};
+    RadioModel* m_radioModel{nullptr};
     QStringList m_antList{"ANT1", "ANT2"};   // populated from ant_list key
 
     // Step sizes (Hz) — per-mode, swapped on mode change

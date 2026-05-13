@@ -3,6 +3,7 @@
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
+#include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
@@ -24,6 +25,7 @@
 #include <QFormLayout>
 #include "core/AppSettings.h"
 #include <QAction>
+#include <QFontMetrics>
 #include <QPainter>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -136,6 +138,16 @@ static const QString kDisabledBtn =
 static const QString kAmberActive =
     "QPushButton:checked { background-color: #604000; color: #ffb800; "
     "border: 1px solid #906000; }";
+
+static bool likelyTxAntennaFallbackToken(const QString& token)
+{
+    const QString upper = token.toUpper();
+    if (upper.startsWith(QStringLiteral("RX")))
+        return false;
+    return upper.startsWith(QStringLiteral("ANT"))
+        || upper.startsWith(QStringLiteral("TX"))
+        || upper == QStringLiteral("XVTR");
+}
 
 
 // ── Per-mode filter widths and step sizes (from SmartSDR) ─────────────────────
@@ -298,15 +310,21 @@ void RxApplet::buildUI()
         connect(m_rxAntBtn, &QPushButton::clicked, this, [this] {
             QMenu menu(this);
             const QString cur = m_slice ? m_slice->rxAntenna() : "";
-            for (const QString& ant : m_antList) {
-                QAction* act = menu.addAction(ant);
+            const QStringList options = m_slice && !m_slice->rxAntennaList().isEmpty()
+                ? m_slice->rxAntennaList()
+                : m_antList;
+            for (const QString& ant : options) {
+                QAction* act = menu.addAction(antennaMenuLabel(ant, options));
+                act->setData(ant);
                 act->setCheckable(true);
                 act->setChecked(ant == cur);
+                act->setToolTip(ant);
+                act->setStatusTip(ant);
             }
             const QAction* sel = menu.exec(
                 m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())));
             if (sel && m_slice)
-                m_slice->setRxAntenna(sel->text());
+                m_slice->setRxAntenna(sel->data().toString());
         });
         row->addWidget(m_rxAntBtn);
 
@@ -320,17 +338,19 @@ void RxApplet::buildUI()
         connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
             QMenu menu(this);
             const QString cur = m_slice ? m_slice->txAntenna() : "";
-            for (const QString& ant : m_antList) {
-                if (ant.startsWith("RX", Qt::CaseInsensitive))
-                    continue;  // skip RX-only antenna ports
-                QAction* act = menu.addAction(ant);
+            const QStringList options = txAntennaOptions();
+            for (const QString& ant : options) {
+                QAction* act = menu.addAction(antennaMenuLabel(ant, options));
+                act->setData(ant);
                 act->setCheckable(true);
                 act->setChecked(ant == cur);
+                act->setToolTip(ant);
+                act->setStatusTip(ant);
             }
             const QAction* sel = menu.exec(
                 m_txAntBtn->mapToGlobal(QPoint(0, m_txAntBtn->height())));
             if (sel && m_slice)
-                m_slice->setTxAntenna(sel->text());
+                m_slice->setTxAntenna(sel->data().toString());
         });
         row->addWidget(m_txAntBtn);
 
@@ -1216,11 +1236,20 @@ void RxApplet::setAntennaList(const QStringList& ants)
 {
     if (ants.isEmpty()) return;
     m_antList = ants;
-    // Update button labels if the current antenna is still valid
-    if (m_slice) {
-        m_rxAntBtn->setText(m_slice->rxAntenna());
-        m_txAntBtn->setText(m_slice->txAntenna());
+    updateAntennaButtons();
+}
+
+void RxApplet::setRadioModel(RadioModel* radioModel)
+{
+    if (m_radioModel)
+        disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
+                   this, &RxApplet::updateAntennaButtons);
+    m_radioModel = radioModel;
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::antennaAliasesChanged,
+                this, &RxApplet::updateAntennaButtons);
     }
+    updateAntennaButtons();
 }
 
 void RxApplet::setTransmitModel(TransmitModel* txModel)
@@ -1238,6 +1267,71 @@ void RxApplet::setTransmitModel(TransmitModel* txModel)
         QSignalBlocker b(m_qskBtn);
         m_qskBtn->setChecked(m_txModel->cwBreakIn());
     });
+}
+
+QString RxApplet::antennaMenuLabel(const QString& token,
+                                   const QStringList& options) const
+{
+    if (!m_radioModel)
+        return token;
+    return m_radioModel->antennaDisplayName(
+        token, m_radioModel->antennaAliasNeedsDisambiguation(token, options));
+}
+
+QStringList RxApplet::txAntennaOptions() const
+{
+    QStringList options;
+    auto append = [&options](const QString& token) {
+        if (!token.isEmpty() && !options.contains(token))
+            options.append(token);
+    };
+
+    if (m_slice && !m_slice->txAntennaList().isEmpty()) {
+        for (const QString& ant : m_slice->txAntennaList())
+            append(ant);
+        append(m_slice->txAntenna());
+        return options;
+    }
+
+    for (const QString& ant : m_antList) {
+        if (likelyTxAntennaFallbackToken(ant))
+            append(ant);
+    }
+    if (m_slice)
+        append(m_slice->txAntenna());
+    return options;
+}
+
+void RxApplet::updateAntennaButton(QPushButton* button, const QString& token, bool tx)
+{
+    if (!button)
+        return;
+
+    const QString shortLabel = m_radioModel
+        ? m_radioModel->antennaShortDisplayName(token, 6)
+        : token;
+    const QFontMetrics fm(button->font());
+    constexpr int kMinWidth = 30;
+    constexpr int kMaxWidth = 58;
+    constexpr int kPad = 8;
+    const QString text = fm.elidedText(shortLabel, Qt::ElideRight, kMaxWidth - kPad);
+    button->setText(text);
+    button->setFixedWidth(qBound(kMinWidth, fm.horizontalAdvance(text) + kPad, kMaxWidth));
+
+    const QString full = m_radioModel
+        ? m_radioModel->antennaDisplayName(token, !m_radioModel->antennaAlias(token).isEmpty())
+        : token;
+    button->setToolTip(QStringLiteral("%1 antenna port: %2")
+                           .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
+                                full));
+}
+
+void RxApplet::updateAntennaButtons()
+{
+    if (!m_slice)
+        return;
+    updateAntennaButton(m_rxAntBtn, m_slice->rxAntenna(), false);
+    updateAntennaButton(m_txAntBtn, m_slice->txAntenna(), true);
 }
 
 void RxApplet::connectSlice(SliceModel* s)
@@ -1266,16 +1360,18 @@ void RxApplet::connectSlice(SliceModel* s)
     });
 
     // RX antenna
-    m_rxAntBtn->setText(s->rxAntenna());
+    updateAntennaButton(m_rxAntBtn, s->rxAntenna(), false);
     connect(s, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
-        m_rxAntBtn->setText(ant);
+        updateAntennaButton(m_rxAntBtn, ant, false);
     });
 
     // TX antenna
-    m_txAntBtn->setText(s->txAntenna());
+    updateAntennaButton(m_txAntBtn, s->txAntenna(), true);
     connect(s, &SliceModel::txAntennaChanged, this, [this](const QString& ant) {
-        m_txAntBtn->setText(ant);
+        updateAntennaButton(m_txAntBtn, ant, true);
     });
+    connect(s, &SliceModel::txAntennaListChanged,
+            this, [this](const QStringList&) { updateAntennaButtons(); });
 
     // Filter width label
     m_filterWidthLbl->setText(formatFilterWidth(s->filterLow(), s->filterHigh(), s->mode()));
