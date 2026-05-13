@@ -13608,13 +13608,7 @@ void MainWindow::activateRADE(int sliceId)
     connect(m_radeEngine, &RADEEngine::rxSpeechReady,
             m_audio, &AudioEngine::feedDecodedSpeech, Qt::QueuedConnection);
 
-    // On platforms without a DAX audio bridge (Windows, Linux without PipeWire),
-    // startDax() is not compiled in so no dax_rx stream is ever created. RADE
-    // needs those VITA-49 IF audio packets regardless of whether a DAX bridge
-    // is in use — create the stream directly so feedRxAudio() gets called.
-    // If TCI already created a stream for this channel, reuse it rather than
-    // creating a duplicate (which would cause RADEEngine to receive double audio).
-#if !defined(Q_OS_MAC) && !defined(HAVE_PIPEWIRE)
+    // If TCI or another path already registered a stream — RADE rides it.
     {
         SliceModel* radeSlice = m_radioModel.slice(sliceId);
         int daxCh = radeSlice ? radeSlice->daxChannel() : 0;
@@ -13648,7 +13642,6 @@ void MainWindow::activateRADE(int sliceId)
                        << "has no DAX channel assigned — RX audio will not flow";
         }
     }
-#endif
 
     // Restore client-side mic gain for RADE. The radio's mic input is unused in
     // RADE mode so PcMicGain applies regardless of the current mic_selection.
@@ -13724,7 +13717,6 @@ void MainWindow::deactivateRADE()
                    m_radeEngine, nullptr);
         disconnect(m_radeEngine, &RADEEngine::rxSpeechReady,
                    m_audio, nullptr);
-#if !defined(Q_OS_MAC) && !defined(HAVE_PIPEWIRE)
         if (m_radeDaxStreamId) {
             // Only send stream remove if TCI has no active clients. If TCI is
             // connected it may have borrowed this stream — removing it would
@@ -13732,7 +13724,8 @@ void MainWindow::deactivateRADE()
             // that case. TODO: replace with proper ref-counting in PanadapterStream
             // so any creator/borrower can safely release independently (#stream-lifecycle).
             bool tciActive = m_tciServer && m_tciServer->clientCount() > 0;
-            if (!tciActive) {
+            bool daxBridgeActive = (m_daxBridge != nullptr);
+            if (!tciActive && !daxBridgeActive) {
                 m_radioModel.panStream()->unregisterDaxStream(m_radeDaxStreamId);
                 if (m_radioModel.isConnected()) {
                     m_radioModel.sendCommand(
@@ -13743,7 +13736,6 @@ void MainWindow::deactivateRADE()
             m_radeDaxStreamId = 0;
         }
         disconnect(m_radeDaxStreamConn);
-#endif
         // Stop on the worker thread, then shut down the thread
         QMetaObject::invokeMethod(m_radeEngine, &RADEEngine::stop,
                                   Qt::BlockingQueuedConnection);
