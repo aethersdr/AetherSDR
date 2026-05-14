@@ -983,13 +983,18 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* accTxEdit   = addTimingField(0, 0, "ACC TX:",       tx.accTxDelay());
         auto* txDelayEdit = addTimingField(0, 1, "TX Delay:",      tx.txDelay());
         auto* tx1Edit     = addTimingField(1, 0, "RCA TX1:",       tx.tx1Delay());
-        auto* timeoutEdit = addTimingField(1, 1, "Timeout(min):",  tx.interlockTimeout());
+        auto* timeoutEdit = addTimingField(1, 1, "Timeout (min):",  tx.interlockTimeout() / 60000);
         auto* tx2Edit     = addTimingField(2, 0, "RCA TX2:",       tx.tx2Delay());
 
         connectTimingField(accTxEdit,   "acc_tx_delay");
         connectTimingField(txDelayEdit, "tx_delay");
         connectTimingField(tx1Edit,     "tx1_delay");
-        connectTimingField(timeoutEdit, "timeout");
+        // timeout is stored in ms on the radio; display and edit in whole minutes
+        connect(timeoutEdit, &QLineEdit::editingFinished, this, [this, timeoutEdit] {
+            int minutes = qMax(0, timeoutEdit->text().toInt());
+            timeoutEdit->setText(QString::number(minutes));
+            m_model->sendCommand(QString("interlock set timeout=%1").arg(minutes * 60000));
+        });
         connectTimingField(tx2Edit,     "tx2_delay");
 
         // TX Profile dropdown (below Timeout, right column)
