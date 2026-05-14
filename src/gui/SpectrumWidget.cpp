@@ -390,6 +390,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         }
         m_centerMhz = newCenter;
         m_bandwidthMhz = newBw;
+        resetSpectrumLocationLockMeasurement();
         markOverlayDirty();
         emit frequencyRangeChangeRequested(newCenter, newBw);
     };
@@ -743,6 +744,297 @@ bool SpectrumWidget::anyDragActive() const {
 void SpectrumWidget::publishPerfDragState() const {
     PerfTelemetry::instance().setDragActive(anyDragActive());
 }
+
+float SpectrumWidget::estimateSpectrumBaselineDbm(const QVector<float>& bins) const
+{
+    if (bins.isEmpty()) {
+        return -1000.0f;
+    }
+
+    const int stride = std::max(1, static_cast<int>(bins.size() / 512));
+    float sum = 0.0f;
+    int count = 0;
+    for (int i = 0; i < bins.size(); i += stride) {
+        const float value = bins[i];
+        if (std::isfinite(value)) {
+            sum += value;
+            ++count;
+        }
+    }
+    if (count <= 0) {
+        return -1000.0f;
+    }
+
+    const float mean = sum / static_cast<float>(count);
+    float baselineSum = 0.0f;
+    int baselineCount = 0;
+    for (int i = 0; i < bins.size(); i += stride) {
+        const float value = bins[i];
+        if (std::isfinite(value) && value <= mean) {
+            baselineSum += value;
+            ++baselineCount;
+        }
+    }
+
+    return (baselineCount > 0)
+        ? baselineSum / static_cast<float>(baselineCount)
+        : mean;
+}
+
+void SpectrumWidget::setSpectrumLocationLockEnabled(bool on)
+{
+    if (m_spectrumLocationLockEnabled == on) {
+        return;
+    }
+
+    m_spectrumLocationLockEnabled = on;
+    m_spectrumLockBaselineValid = false;
+    m_spectrumLockTargetValid = false;
+    m_spectrumLockLastSampleMs = 0;
+    m_spectrumLockLastMotionMs = 0;
+    m_spectrumLockLastCommandMs = 0;
+    m_spectrumLockLastCommandRef = m_refLevel;
+    m_spectrumLockCandidateValid = false;
+    m_spectrumLockCandidateDbm = -1000.0f;
+    m_spectrumLockCandidateStartMs = 0;
+    m_spectrumLockCandidateFrames = 0;
+    m_spectrumLockFreshFrameCount = on ? 5 : 0;
+}
+
+void SpectrumWidget::refreshSpectrumLocationLockTarget()
+{
+    if (m_spectrumLocationLockEnabled && !m_spectrumLockBaselineValid
+        && (!m_smoothed.isEmpty() || !m_bins.isEmpty())) {
+        const QVector<float>& baselineBins = !m_smoothed.isEmpty() ? m_smoothed : m_bins;
+        const float baselineDbm = estimateSpectrumBaselineDbm(baselineBins);
+        if (baselineDbm > -500.0f) {
+            m_spectrumLockBaselineDbm = baselineDbm;
+            m_spectrumLockBaselineValid = true;
+            m_spectrumLockLastSampleMs = QDateTime::currentMSecsSinceEpoch();
+        }
+    }
+
+    if (!m_spectrumLocationLockEnabled || !m_spectrumLockBaselineValid
+        || m_dynamicRange <= 0.0f) {
+        m_spectrumLockTargetValid = false;
+        return;
+    }
+
+    const float frac = (m_refLevel - m_spectrumLockBaselineDbm) / m_dynamicRange;
+    m_spectrumLockTargetFrac = std::clamp(frac, 0.02f, 0.98f);
+    m_spectrumLockTargetValid = true;
+    m_spectrumLockLastMotionMs = QDateTime::currentMSecsSinceEpoch();
+    m_spectrumLockLastCommandMs = 0;
+    m_spectrumLockLastCommandRef = m_refLevel;
+}
+
+void SpectrumWidget::resetSpectrumLocationLockMeasurement()
+{
+    if (!m_spectrumLocationLockEnabled) {
+        return;
+    }
+
+    if (!m_spectrumLockTargetValid && m_spectrumLockBaselineValid) {
+        refreshSpectrumLocationLockTarget();
+    }
+
+    m_pendingDbmRangeEcho = false;
+    m_holdFftUpdatesAfterDbmRelease = 0;
+    m_dbmReleasePreviewOffset = 0.0f;
+
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    m_spectrumLockBaselineDbm = -1000.0f;
+    m_spectrumLockBaselineValid = false;
+    m_spectrumLockLastSampleMs = 0;
+    m_spectrumLockLastMotionMs = nowMs - 100;
+    m_spectrumLockLastCommandMs = 0;
+    m_spectrumLockLastCommandRef = m_refLevel;
+    m_spectrumLockCandidateValid = false;
+    m_spectrumLockCandidateDbm = -1000.0f;
+    m_spectrumLockCandidateStartMs = 0;
+    m_spectrumLockCandidateFrames = 0;
+    m_spectrumLockFreshFrameCount = 5;
+}
+
+void SpectrumWidget::updateSpectrumLocationLock(const QVector<float>& bins, bool forceBaseline)
+{
+    if (!m_spectrumLocationLockEnabled || m_transmitting || bins.isEmpty()) {
+        return;
+    }
+
+    const float frameBaseline = estimateSpectrumBaselineDbm(bins);
+    if (frameBaseline <= -500.0f || m_dynamicRange <= 0.0f) {
+        return;
+    }
+
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (!m_spectrumLockBaselineValid || m_spectrumLockLastSampleMs <= 0 || forceBaseline) {
+        m_spectrumLockBaselineDbm = frameBaseline;
+        m_spectrumLockBaselineValid = true;
+        m_spectrumLockLastSampleMs = nowMs;
+        m_spectrumLockCandidateValid = false;
+        m_spectrumLockCandidateFrames = 0;
+    } else {
+        const float baselineDelta = frameBaseline - m_spectrumLockBaselineDbm;
+        const float baselineDeltaAbs = std::abs(baselineDelta);
+        constexpr float kTransientShiftDb = 4.0f;
+        if (baselineDeltaAbs > kTransientShiftDb) {
+            const bool sameCandidate =
+                m_spectrumLockCandidateValid
+                && ((frameBaseline - m_spectrumLockCandidateDbm) * baselineDelta >= 0.0f
+                    || std::abs(frameBaseline - m_spectrumLockCandidateDbm) < kTransientShiftDb);
+            if (!sameCandidate) {
+                m_spectrumLockCandidateValid = true;
+                m_spectrumLockCandidateDbm = frameBaseline;
+                m_spectrumLockCandidateStartMs = nowMs;
+                m_spectrumLockCandidateFrames = 1;
+                m_spectrumLockLastSampleMs = nowMs;
+                return;
+            }
+
+            m_spectrumLockCandidateDbm =
+                0.65f * m_spectrumLockCandidateDbm + 0.35f * frameBaseline;
+            ++m_spectrumLockCandidateFrames;
+
+            const qint64 candidateAgeMs = nowMs - m_spectrumLockCandidateStartMs;
+            const bool upwardShift = baselineDelta > 0.0f;
+            const int requiredFrames = upwardShift ? 16 : 2;
+            const qint64 requiredAgeMs = upwardShift ? 1200 : 70;
+            const bool keepWaiting = upwardShift
+                ? (m_spectrumLockCandidateFrames < requiredFrames
+                   || candidateAgeMs < requiredAgeMs)
+                : (m_spectrumLockCandidateFrames < requiredFrames
+                   && candidateAgeMs < requiredAgeMs);
+            if (keepWaiting) {
+                m_spectrumLockLastSampleMs = nowMs;
+                return;
+            }
+        } else {
+            m_spectrumLockCandidateValid = false;
+            m_spectrumLockCandidateFrames = 0;
+        }
+
+        const float elapsedSec = std::clamp(
+            static_cast<float>(nowMs - m_spectrumLockLastSampleMs) / 1000.0f,
+            0.001f,
+            1.0f);
+        float smoothingTauSec = 2.5f;
+        if (baselineDeltaAbs > 20.0f) {
+            smoothingTauSec = 0.08f;
+        } else if (baselineDeltaAbs > 10.0f) {
+            smoothingTauSec = 0.15f;
+        } else if (baselineDeltaAbs > 5.0f) {
+            smoothingTauSec = 0.35f;
+        } else if (baselineDeltaAbs < 0.60f) {
+            smoothingTauSec = 8.0f;
+        }
+        if (baselineDelta < -1.0f) {
+            smoothingTauSec = std::min(smoothingTauSec, 0.12f);
+        } else if (baselineDelta > 1.0f) {
+            smoothingTauSec = std::max(smoothingTauSec, 1.2f);
+        }
+        const float alpha = 1.0f - std::exp(-elapsedSec / smoothingTauSec);
+        m_spectrumLockBaselineDbm =
+            (1.0f - alpha) * m_spectrumLockBaselineDbm + alpha * frameBaseline;
+        m_spectrumLockLastSampleMs = nowMs;
+        if (baselineDeltaAbs > kTransientShiftDb) {
+            m_spectrumLockCandidateValid = false;
+            m_spectrumLockCandidateFrames = 0;
+        }
+    }
+
+    if (!m_spectrumLockTargetValid) {
+        refreshSpectrumLocationLockTarget();
+        return;
+    }
+
+    if (m_draggingDbm || m_pendingDbmRangeEcho) {
+        return;
+    }
+
+    const float desiredRef = m_spectrumLockBaselineDbm
+        + m_spectrumLockTargetFrac * m_dynamicRange;
+    const float clampedRef = std::max(desiredRef, kMinDisplayDbm + m_dynamicRange);
+    if (std::abs(clampedRef - m_refLevel) < 0.45f) {
+        return;
+    }
+
+    moveSpectrumLocationLockToward(clampedRef, nowMs);
+}
+
+void SpectrumWidget::moveSpectrumLocationLockToward(float targetRef, qint64 nowMs)
+{
+    if (m_spectrumLockLastMotionMs <= 0) {
+        m_spectrumLockLastMotionMs = nowMs;
+    }
+
+    const float delta = targetRef - m_refLevel;
+    const float deltaAbs = std::abs(delta);
+    if (deltaAbs < 0.45f) {
+        m_refLevel = targetRef;
+        sendSpectrumLocationLockRange(nowMs, true);
+        return;
+    }
+
+    const float elapsedSec = std::clamp(
+        static_cast<float>(nowMs - m_spectrumLockLastMotionMs) / 1000.0f,
+        0.001f,
+        0.1f);
+    m_spectrumLockLastMotionMs = nowMs;
+
+    float motionTauSec = 0.24f;
+    if (deltaAbs > 30.0f) {
+        motionTauSec = 0.12f;
+    } else if (deltaAbs > 15.0f) {
+        motionTauSec = 0.16f;
+    }
+    if (delta < 0.0f) {
+        motionTauSec = 0.10f;
+        if (deltaAbs > 30.0f) {
+            motionTauSec = 0.06f;
+        } else if (deltaAbs > 15.0f) {
+            motionTauSec = 0.08f;
+        }
+    }
+
+    const float alpha = 1.0f - std::exp(-elapsedSec / motionTauSec);
+    m_refLevel += delta * alpha;
+    if (std::abs(targetRef - m_refLevel) < 0.12f) {
+        m_refLevel = targetRef;
+    }
+
+    markOverlayDirty();
+    sendSpectrumLocationLockRange(nowMs, m_refLevel == targetRef);
+}
+
+void SpectrumWidget::sendSpectrumLocationLockRange(qint64 nowMs, bool force)
+{
+    if (!m_spectrumLocationLockEnabled || m_dynamicRange <= 0.0f) {
+        return;
+    }
+
+    constexpr qint64 kCommandIntervalMs = 150;
+    constexpr float kCommandThresholdDb = 0.75f;
+
+    if (!force) {
+        if (m_spectrumLockLastCommandMs > 0
+            && nowMs - m_spectrumLockLastCommandMs < kCommandIntervalMs) {
+            return;
+        }
+        if (m_spectrumLockLastCommandRef > -500.0f
+            && std::abs(m_refLevel - m_spectrumLockLastCommandRef) < kCommandThresholdDb) {
+            return;
+        }
+    } else if (m_spectrumLockLastCommandRef > -500.0f
+               && std::abs(m_refLevel - m_spectrumLockLastCommandRef) < 0.05f) {
+        return;
+    }
+
+    m_spectrumLockLastCommandMs = nowMs;
+    m_spectrumLockLastCommandRef = m_refLevel;
+    emit dbmRangeChangeRequested(m_refLevel - m_dynamicRange, m_refLevel);
+}
+
 void SpectrumWidget::setShowTuneGuides(bool on) {
     m_showTuneGuides = on;
     if (!on) {
@@ -1535,6 +1827,7 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
         }
         m_centerMhz       = centerMhz;
         m_panCenterTarget = centerMhz;
+        resetSpectrumLocationLockMeasurement();
         markOverlayDirty();
         return;
     }
@@ -1631,6 +1924,7 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
     m_refLevel     = ref;
     m_dynamicRange = dyn;
     m_resetFftSmoothingOnNextFrame = true;
+    resetSpectrumLocationLockMeasurement();
     markOverlayDirty();
 }
 
@@ -1810,19 +2104,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     // the flat green line a human eye reads as the noise floor on the scope.
     // This is robust even on a very crowded band (40-50% bins occupied).
     if (!spectrumBins->isEmpty()) {
-        // Pass 1 — overall mean (sampled every 4th bin for speed)
-        float sum = 0.0f;
-        int   cnt = 0;
-        for (int j = 0; j < spectrumBins->size(); j += 4) { sum += (*spectrumBins)[j]; ++cnt; }
-        const float mean = sum / cnt;
-
-        // Pass 2 — average only noise bins (≤ mean), which excludes signal peaks
-        float noiseSum = 0.0f;
-        int   noiseCnt = 0;
-        for (int j = 0; j < spectrumBins->size(); j += 4) {
-            if ((*spectrumBins)[j] <= mean) { noiseSum += (*spectrumBins)[j]; ++noiseCnt; }
-        }
-        const float frameFloor = (noiseCnt > 0) ? noiseSum / noiseCnt : mean;
+        const float frameFloor = estimateSpectrumBaselineDbm(*spectrumBins);
 
         constexpr float kAlpha = 0.05f;  // ~20-frame window ≈ 0.8 s at 25 fps
         m_measuredNoiseFloorDbm = (m_measuredNoiseFloorDbm <= -500.0f)
@@ -1830,9 +2112,18 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
             : m_measuredNoiseFloorDbm * (1.0f - kAlpha) + frameFloor * kAlpha;
     }
 
+    const bool useFreshLockFrame =
+        m_spectrumLockFreshFrameCount > 0 && !spectrumBins->isEmpty();
+    updateSpectrumLocationLock(useFreshLockFrame ? *spectrumBins : m_smoothed,
+                               useFreshLockFrame);
+    if (useFreshLockFrame) {
+        --m_spectrumLockFreshFrameCount;
+    }
+
     // Noise floor auto-adjust: every 10 frames, measure noise floor and
     // adjust min_dbm so it sits at the user's chosen position.
-    if (m_noiseFloorEnable && !m_transmitting && !m_smoothed.isEmpty()) {
+    if (!m_spectrumLocationLockEnabled && m_noiseFloorEnable
+        && !m_transmitting && !m_smoothed.isEmpty()) {
         if (++m_noiseFloorFrameCount >= 10) {
             m_noiseFloorFrameCount = 0;
 
@@ -2381,6 +2672,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     m_refLevel = bottom + m_dynamicRange;
                 }
                 markOverlayDirty();
+                refreshSpectrumLocationLockTarget();
                 emit dbmRangeChangeRequested(bottom, m_refLevel);
                 ev->accept();
                 return;
@@ -2567,6 +2859,12 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             extendedLineAction->setCheckable(true);
             extendedLineAction->setChecked(m_extendedFrequencyLine);
             connect(extendedLineAction, &QAction::toggled, this, &SpectrumWidget::setExtendedFrequencyLine);
+
+            QAction* lockSpectrumAction = menu.addAction("Lock Spectrum Position");
+            lockSpectrumAction->setCheckable(true);
+            lockSpectrumAction->setChecked(m_spectrumLocationLockEnabled);
+            connect(lockSpectrumAction, &QAction::toggled, this,
+                    [this](bool on) { setSpectrumLocationLockEnabled(on); });
 
             menu.addSeparator();
             bool floating = m_isFloating;
@@ -2821,6 +3119,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         }
         m_bandwidthMhz = newBw;
         m_centerMhz = zoomCenter;
+        resetSpectrumLocationLockMeasurement();
         markOverlayDirty();
         // Keep center and bandwidth coupled while dragging. Sending only the
         // bandwidth and waiting to send center on release caused the radio and
@@ -3061,6 +3360,7 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
         m_draggingDbm = false;
         setSpectrumCursor(Qt::CrossCursor);
         m_resetFftSmoothingOnNextFrame = true;
+        refreshSpectrumLocationLockTarget();
         emit dbmRangeDragFinished(m_pendingMinDbm, m_pendingMaxDbm);
         ev->accept();
         return;
@@ -3303,6 +3603,7 @@ bool SpectrumWidget::event(QEvent* ev)
             }
             m_bandwidthMhz = newBw;
             m_centerMhz = newCenter;
+            resetSpectrumLocationLockMeasurement();
             markOverlayDirty();
             emit frequencyRangeChangeRequested(newCenter, newBw);
             return true;

@@ -524,6 +524,13 @@ private:
     void recordWaterfallFrame(int rows = 1);
     bool anyDragActive() const;
     void publishPerfDragState() const;
+    float estimateSpectrumBaselineDbm(const QVector<float>& bins) const;
+    void setSpectrumLocationLockEnabled(bool on);
+    void refreshSpectrumLocationLockTarget();
+    void resetSpectrumLocationLockMeasurement();
+    void updateSpectrumLocationLock(const QVector<float>& bins, bool forceBaseline = false);
+    void moveSpectrumLocationLockToward(float targetRef, qint64 nowMs);
+    void sendSpectrumLocationLockRange(qint64 nowMs, bool force = false);
 
     // Helper: find overlay index for a sliceId, or -1.
     int overlayIndex(int sliceId) const;
@@ -575,6 +582,21 @@ private:
     bool  m_noiseFloorEnable{false};
     int   m_noiseFloorPosition{75};  // 0=top, 100=bottom
     int   m_noiseFloorFrameCount{0};
+
+    bool   m_spectrumLocationLockEnabled{false};
+    bool   m_spectrumLockBaselineValid{false};
+    bool   m_spectrumLockTargetValid{false};
+    float  m_spectrumLockBaselineDbm{-1000.0f};
+    float  m_spectrumLockTargetFrac{0.75f};
+    qint64 m_spectrumLockLastSampleMs{0};
+    qint64 m_spectrumLockLastMotionMs{0};
+    qint64 m_spectrumLockLastCommandMs{0};
+    float  m_spectrumLockLastCommandRef{-1000.0f};
+    bool   m_spectrumLockCandidateValid{false};
+    float  m_spectrumLockCandidateDbm{-1000.0f};
+    qint64 m_spectrumLockCandidateStartMs{0};
+    int    m_spectrumLockCandidateFrames{0};
+    int    m_spectrumLockFreshFrameCount{0};
 
     // Percentile EWMA used for the amber floor overlay line and auto-squelch.
     // Tracked separately from m_measuredNoiseFloorDbm (two-pass trimmed mean)
