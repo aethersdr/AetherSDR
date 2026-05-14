@@ -10716,6 +10716,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             [this](double freqMhz, const QString& callsign, const QString& comment,
                    int lifetimeSec, bool forwardToCluster) {
         auto& as = AppSettings::instance();
+        // Seed dedup so a cluster echo of our own DX command (when
+        // forwardToCluster is on) is suppressed by isDuplicateSpot. (#2658)
+        m_spotDedup[callsign] = { freqMhz, QDateTime::currentMSecsSinceEpoch() };
         QString call = QString(callsign).replace(' ', QChar(0x7f));
         QString freq = QString::number(freqMhz, 'f', 6);
         QString myCall = as.value("DxClusterCallsign").toString();
