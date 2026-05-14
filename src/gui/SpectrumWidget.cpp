@@ -2975,7 +2975,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                                 if (sm.timestampMs > 0)
                                     tip += QString("<br>Spotted: %1 UTC").arg(
                                         QDateTime::fromMSecsSinceEpoch(sm.timestampMs, QTimeZone::utc()).toString("yyyy-MM-dd HH:mm:ss"));
-                                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(16, 4), tip, this);
+                                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20), tip, this, hr.rect);
                             }
                             spotHover = true;
                             break;
@@ -3019,11 +3019,12 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         for (const auto& spot : spots) {
             const int sx = mhzToX(spot.freqMhz);
             if (std::abs(mx2 - sx) <= 5) {
-                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(16, 4),
+                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
                     QString("%1 MHz — %2")
                         .arg(spot.freqMhz, 0, 'f', 3)
                         .arg(spot.label),
-                    this);
+                    this,
+                    QRect(sx - 5, bandBarTop, 11, specH2 - bandBarTop));
                 return;
             }
         }
