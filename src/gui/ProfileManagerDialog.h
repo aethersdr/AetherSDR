@@ -8,6 +8,7 @@ class QLineEdit;
 class QListWidget;
 class QPushButton;
 class QCheckBox;
+class QTabWidget;
 
 namespace AetherSDR {
 
@@ -26,7 +27,7 @@ private:
     void refreshTab(const QString& type);
 
     RadioModel* m_model;
-    class QTabWidget* m_tabs;
+    QTabWidget* m_tabs;
 
     // Per-tab widgets (indexed by type: "global", "transmit", "mic")
     struct TabWidgets {
