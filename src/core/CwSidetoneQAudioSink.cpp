@@ -36,19 +36,30 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
                                     48000, 44100, 24000 };
     QAudioFormat fmt;
     fmt.setChannelCount(2);
-    fmt.setSampleFormat(QAudioFormat::Float);
+
+    // Probe Float first (the historical path), then Int16. VB-Audio Virtual
+    // Cable and other Int16-only WASAPI endpoints fail the Float probe but
+    // succeed at Int16; without the fallback the sidetone sink silently
+    // refuses to open against SmartSDR-parity output devices (issue #2629).
     int chosenRate = 0;
-    for (int rate : kCandidateRates) {
-        fmt.setSampleRate(rate);
-        if (dev.isFormatSupported(fmt)) { chosenRate = rate; break; }
+    QAudioFormat::SampleFormat chosenFmt = QAudioFormat::Unknown;
+    for (auto sf : { QAudioFormat::Float, QAudioFormat::Int16 }) {
+        fmt.setSampleFormat(sf);
+        for (int rate : kCandidateRates) {
+            fmt.setSampleRate(rate);
+            if (dev.isFormatSupported(fmt)) { chosenRate = rate; chosenFmt = sf; break; }
+        }
+        if (chosenRate) break;
     }
     if (chosenRate == 0) {
-        qCWarning(lcAudio) << "CwSidetoneQAudioSink: no supported float-stereo rate on device"
+        qCWarning(lcAudio) << "CwSidetoneQAudioSink: no supported float/int16-stereo rate on device"
                            << dev.description();
         return false;
     }
+    fmt.setSampleFormat(chosenFmt);
     fmt.setSampleRate(chosenRate);
-    m_actualRate = chosenRate;
+    m_actualRate   = chosenRate;
+    m_sampleFormat = chosenFmt;
 
     m_sink = new QAudioSink(dev, fmt, this);
     // 50 ms buffer — Pulse/PipeWire happily honour ≥40 ms; <30 ms causes
@@ -56,8 +67,11 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
     // latency stays low (~25 ms typical) because we keep the buffer about
     // half-full via the 2 ms timer, not because the buffer itself is small.
     constexpr int kSidetoneBufferMs = 50;
+    const int sampleBytes = (chosenFmt == QAudioFormat::Float)
+                                ? static_cast<int>(sizeof(float))
+                                : static_cast<int>(sizeof(int16_t));
     const int sidetoneBufBytes =
-        chosenRate * 2 * static_cast<int>(sizeof(float)) * kSidetoneBufferMs / 1000;
+        chosenRate * 2 * sampleBytes * kSidetoneBufferMs / 1000;
     m_sink->setBufferSize(sidetoneBufBytes);
 
     m_generator = generator;
@@ -83,6 +97,7 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
 
     qCInfo(lcAudio) << "CwSidetoneQAudioSink: started"
                     << "rate=" << chosenRate << "Hz"
+                    << "format=" << (chosenFmt == QAudioFormat::Float ? "Float" : "Int16")
                     << "buffer=" << m_sink->bufferSize() << "bytes (push, 2ms timer)";
     return true;
 }
@@ -92,13 +107,34 @@ void CwSidetoneQAudioSink::onTimerTick()
     if (!m_sink || !m_device || !m_generator) return;
     const qsizetype freeBytes = m_sink->bytesFree();
     if (freeBytes <= 0) return;
-    constexpr qsizetype frameBytes = 2 * sizeof(float);
+    const qsizetype frameBytes = (m_sampleFormat == QAudioFormat::Float)
+                                     ? qsizetype(2 * sizeof(float))
+                                     : qsizetype(2 * sizeof(int16_t));
     const qsizetype byteCount = (freeBytes / frameBytes) * frameBytes;
     if (byteCount == 0) return;
-    QByteArray chunk(byteCount, '\0');
     const int frames = static_cast<int>(byteCount / frameBytes);
-    m_generator->process(reinterpret_cast<float*>(chunk.data()), frames);
-    m_device->write(chunk);
+
+    if (m_sampleFormat == QAudioFormat::Float) {
+        QByteArray chunk(byteCount, '\0');
+        m_generator->process(reinterpret_cast<float*>(chunk.data()), frames);
+        m_device->write(chunk);
+    } else {
+        const qsizetype scratchBytes = qsizetype(frames) * 2 * qsizetype(sizeof(float));
+        if (m_scratch.size() < scratchBytes) m_scratch.resize(scratchBytes);
+        auto* fbuf = reinterpret_cast<float*>(m_scratch.data());
+        m_generator->process(fbuf, frames);
+
+        QByteArray chunk(byteCount, Qt::Uninitialized);
+        auto* ibuf = reinterpret_cast<int16_t*>(chunk.data());
+        const int samples = frames * 2;
+        for (int i = 0; i < samples; ++i) {
+            float s = fbuf[i];
+            if (s >  1.0f) s =  1.0f;
+            if (s < -1.0f) s = -1.0f;
+            ibuf[i] = static_cast<int16_t>(s * 32767.0f);
+        }
+        m_device->write(chunk);
+    }
 }
 
 void CwSidetoneQAudioSink::stop()
@@ -113,6 +149,8 @@ void CwSidetoneQAudioSink::stop()
     }
     m_generator = nullptr;
     m_actualRate = 0;
+    m_sampleFormat = QAudioFormat::Float;
+    m_scratch.clear();
 }
 
 } // namespace AetherSDR
