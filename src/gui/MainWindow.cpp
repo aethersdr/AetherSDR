@@ -13832,7 +13832,10 @@ void MainWindow::deactivateRADE()
             // that case. TODO: replace with proper ref-counting in PanadapterStream
             // so any creator/borrower can safely release independently (#stream-lifecycle).
             bool tciActive = m_tciServer && m_tciServer->clientCount() > 0;
-            bool daxBridgeActive = (m_daxBridge != nullptr);
+            bool daxBridgeActive = false;
+#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+            daxBridgeActive = (m_daxBridge != nullptr);
+#endif
             if (!tciActive && !daxBridgeActive) {
                 m_radioModel.panStream()->unregisterDaxStream(m_radeDaxStreamId);
                 if (m_radioModel.isConnected()) {
