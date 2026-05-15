@@ -865,8 +865,10 @@ void WaveformWidget::drawNoAudio(QPainter& painter,
     f.setPointSizeF(std::max(8.0, f.pointSizeF() - 1.0));
     painter.setFont(f);
     painter.setPen(kMutedLabel);
-    painter.drawText(plotRect, Qt::AlignCenter,
-                     QStringLiteral("no %1 audio").arg(source));
+    const QString message = source == QStringLiteral("RX")
+        ? QStringLiteral("Enable PC Audio")
+        : QStringLiteral("no %1 audio").arg(source);
+    painter.drawText(plotRect, Qt::AlignCenter, message);
     painter.restore();
 }
 

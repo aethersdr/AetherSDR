@@ -125,8 +125,8 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     applyViewMode();
 
     if (m_audio) {
-        // TX-side tap: post-final-limiter — the exact bytes packetised
-        // for VITA-49.  Fires only when the user is transmitting.
+        // TX-side tap: post-final-limiter for PC mic voice, and the
+        // pre-packetization bypass waveform for digital TX paths.
         connect(m_audio, &AudioEngine::txPostChainScopeReady,
                 m_waveform, [this](const QByteArray& mono, int sr) {
             if (m_side != Side::Tx || !m_waveform) return;
@@ -135,8 +135,7 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
         // RX-side tap: dedicated rxPostChainScopeReady — same 8 ms
         // throttle as the TX-side feed so the strip's RX scroll tracks
         // wall clock at short windows.  The shared scopeSamplesReady
-        // signal that the floating WaveApplet uses keeps its 25 ms
-        // throttle, so both consumers get what they need.
+        // signal keeps its 25 ms throttle for lower-rate consumers.
         connect(m_audio, &AudioEngine::rxPostChainScopeReady,
                 m_waveform, [this](const QByteArray& mono, int sr) {
             if (m_side != Side::Rx || !m_waveform) return;

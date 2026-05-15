@@ -262,7 +262,7 @@ flowchart TD
     P --> Q["Quindar tone insertion"]
     Q --> R["ClientFinalLimiter"]
     R --> S["Final monitor tap"]
-    S --> T["txPostChainScopeReady<br/>average L/R"]
+    S --> T["txPostChainScopeReady<br/>average L/R<br/>voice post-limiter"]
     T --> U["PC mic meter<br/>canonical stereo frame level"]
     U --> V["scopeSamplesReady<br/>average L/R"]
     V --> W{"Opus enabled?"}
@@ -551,7 +551,9 @@ Local/client taps:
 - `scopeSamplesReady` is a shared local scope signal. Stereo sources are
   converted to mono by averaging L/R.
 - `txPostChainScopeReady` is taken after the PC mic voice final limiter and
-  converts stereo to mono by averaging L/R.
+  converts stereo to mono by averaging L/R. DAX/TCI and RADE also emit this
+  high-rate TX scope from their pre-packetization bypass audio so the WAVE
+  display continues to show digital-mode transmit waveforms.
 - `rxPostChainScopeReady` is taken after the RX client strip, optional RX
   upsampling, RX boost, and RX output trim on the non-BNR path. For BNR it is
   taken after BNR output resampling and trim. In both cases it is before speaker
@@ -641,7 +643,8 @@ Radio-provided taps:
 | `AudioEngine::scopeSamplesReady`, TX voice | `AudioEngine::emitScopeFromInt16Stereo()` | Post PC mic meter, before packetization | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::scopeSamplesReady`, TX DAX | `AudioEngine::emitScopeFromFloat32Stereo()` | In `feedDaxTxAudio()` before route packetization | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::scopeSamplesReady`, RX | `AudioEngine::emitScopeFromFloat32Stereo()` | In `writeAudio()` or BNR output path near RX buffering | Average L/R | float PCM scope samples, sample rate |
-| `AudioEngine::txPostChainScopeReady` | `AudioEngine::emitTxPostChainScopeFromInt16Stereo()` | Post final limiter and final monitor tap | Average L/R | float PCM scope samples, sample rate |
+| `AudioEngine::txPostChainScopeReady`, TX voice | `AudioEngine::emitTxPostChainScopeFromInt16Stereo()` | Post final limiter and final monitor tap | Average L/R | float PCM scope samples, sample rate |
+| `AudioEngine::txPostChainScopeReady`, TX DAX/TCI/RADE | `AudioEngine::emitTxPostChainScopeFromFloat32Stereo()` | Pre-packetization digital bypass audio | Average L/R | float PCM scope samples, sample rate |
 | `AudioEngine::rxPostChainScopeReady` | `AudioEngine::emitRxPostChainScopeFromFloat32Stereo()` | Non-BNR: after RX strip, upsample, boost, and trim; BNR: after BNR resample/trim; before buffer append | Average L/R | float PCM scope samples, sample rate |
 | RX EQ analyzer | `AudioEngine::tapClientEqRxStereo()` | After RX EQ, before RX Gate/Comp/DeEss/Tube/PUDU | Average L/R | float mono analyzer samples |
 | TX EQ analyzer | `AudioEngine::tapClientEqTxInt16()` / `tapClientEqTxFloat32()` | After TX EQ or EQ bypass inside TX strip | Average L/R for stereo | float mono analyzer samples |

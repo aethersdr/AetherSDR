@@ -472,12 +472,10 @@ signals:
 
     void pcMicLevelChanged(float peakDbfs, float avgDbfs);  // client-side PC mic metering
     void scopeSamplesReady(const QByteArray& monoFloat32Pcm, int sampleRate, bool tx);
-    // Emitted on every TX block AFTER everything the strip can do to
-    // the audio: user DSP chain, PC mic gain, and the final brickwall
-    // limiter.  This is the exact int16 stream that gets packetised
-    // into VITA-49 and sent to the radio — what the strip's
-    // "Waveform CE-SSB" panel listens to so the operator sees the
-    // actual transmitted envelope.
+    // Emitted on the local TX audio that will feed the radio. For PC mic
+    // voice this is after the strip, PC mic gain, and final limiter; for
+    // DAX/TCI/RADE digital bypasses this is the pre-packetization waveform
+    // because those paths intentionally skip the voice chain.
     void txPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     // Mirror of txPostChainScopeReady for the RX side: high-rate emit
     // (~125 Hz, no sample loss across audio callbacks) so the channel
@@ -508,6 +506,7 @@ private:
     void emitScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate, bool tx);
     void emitTxPostChainScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate);
+    void emitTxPostChainScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate);
     void emitRxPostChainScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate);
     QByteArray resampleStereo(const QByteArray& pcm);
     void processNr2(const QByteArray& stereoPcm);

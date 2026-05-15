@@ -316,11 +316,10 @@ void AudioEngine::emitScopeFromInt16Stereo(const QByteArray& pcm,
 void AudioEngine::emitTxPostChainScopeFromInt16Stereo(const QByteArray& pcm,
                                                       int sampleRate)
 {
-    // Same int16-stereo → mono-float collapse as emitScopeFromInt16Stereo,
-    // but reuses the TX scratch and emits on the dedicated
-    // txPostChainScopeReady signal so consumers (channel-strip waveform
-    // panel) see exactly the post-DSP-chain audio without competing
-    // with the floating Waveform applet's main TX/RX feed.
+    // Same int16-stereo -> mono-float collapse as emitScopeFromInt16Stereo,
+    // but emits on the dedicated high-rate TX scope used by the waveform
+    // displays. PC mic voice reaches this point after the user DSP chain,
+    // PC mic gain, and final limiter.
     const int intSamples = pcm.size() / static_cast<int>(sizeof(int16_t));
     if (intSamples <= 0)
         return;
@@ -344,6 +343,43 @@ void AudioEngine::emitTxPostChainScopeFromInt16Stereo(const QByteArray& pcm,
     } else {
         for (int i = 0; i < monoSamples; ++i)
             dst[i] = std::clamp(src[i] / 32768.0f, -1.0f, 1.0f);
+    }
+
+    if (m_lastTxPostChainScopeEmit.isValid())
+        m_lastTxPostChainScopeEmit.restart();
+    else
+        m_lastTxPostChainScopeEmit.start();
+    emit txPostChainScopeReady(m_scopeTxPostChainScratch,
+                               sampleRate > 0 ? sampleRate : DEFAULT_SAMPLE_RATE);
+}
+
+void AudioEngine::emitTxPostChainScopeFromFloat32Stereo(const QByteArray& pcm,
+                                                        int sampleRate)
+{
+    const int floatSamples = pcm.size() / static_cast<int>(sizeof(float));
+    if (floatSamples <= 0)
+        return;
+
+    if (m_lastTxPostChainScopeEmit.isValid()
+        && m_lastTxPostChainScopeEmit.elapsed() < kTxPostChainEmitMinIntervalMs)
+        return;
+
+    const bool stereo = (floatSamples % 2) == 0;
+    const int monoSamples = stereo ? floatSamples / 2 : floatSamples;
+    m_scopeTxPostChainScratch.resize(monoSamples * static_cast<int>(sizeof(float)));
+
+    const auto* src = reinterpret_cast<const float*>(pcm.constData());
+    auto* dst = reinterpret_cast<float*>(m_scopeTxPostChainScratch.data());
+    if (stereo) {
+        for (int i = 0; i < monoSamples; ++i) {
+            const float avg = (src[i * 2] + src[i * 2 + 1]) * 0.5f;
+            dst[i] = std::clamp(std::isfinite(avg) ? avg : 0.0f, -1.0f, 1.0f);
+        }
+    } else {
+        for (int i = 0; i < monoSamples; ++i) {
+            const float s = src[i];
+            dst[i] = std::clamp(std::isfinite(s) ? s : 0.0f, -1.0f, 1.0f);
+        }
     }
 
     if (m_lastTxPostChainScopeEmit.isValid())
@@ -4233,8 +4269,10 @@ void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
 {
     if (m_txStreamId == 0) return;
 
-    if (m_radioTransmitting)
+    if (m_radioTransmitting) {
+        emitTxPostChainScopeFromFloat32Stereo(float32pcm, DEFAULT_SAMPLE_RATE);
         emitScopeFromFloat32Stereo(float32pcm, DEFAULT_SAMPLE_RATE, true);
+    }
 
     m_txFloatAccumulator.append(float32pcm);
 
@@ -4333,8 +4371,10 @@ void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
 
     const bool daxAudioWillTransmit = m_radioTransmitting
         && (!m_daxTxUseRadioRoute || !(m_transmitting && !m_daxTxMode));
-    if (daxAudioWillTransmit)
+    if (daxAudioWillTransmit) {
+        emitTxPostChainScopeFromFloat32Stereo(float32pcm, DEFAULT_SAMPLE_RATE);
         emitScopeFromFloat32Stereo(float32pcm, DEFAULT_SAMPLE_RATE, true);
+    }
 
     if (!m_daxTxUseRadioRoute) {
         // Low-latency route: keep radio on mic path (dax=0) and packetize
