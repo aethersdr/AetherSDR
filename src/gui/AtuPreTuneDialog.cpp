@@ -99,6 +99,60 @@ int pointsForRange(double lowMhz, double highMhz, int segmentKhz)
     return computeCenters(lowMhz, highMhz, segmentKhz).size();
 }
 
+// Walk the matching segments per contiguous region so discrete-channel
+// bands (US 60m: 6 USB channels at 2.8 kHz each, separated by ~30 kHz of
+// gap) generate one tune-center per legal channel instead of stepping
+// across illegal gaps and triggering radio-side out-of-band rejections.
+// Continuous bands (single segment, or contiguous segments) collapse into
+// one [min, max] region and use the original even-stride walk. (#2647)
+QVector<double> computeCentersForBand(
+    const QVector<BandPlanManager::Segment>& segments,
+    double searchLowMhz, double searchHighMhz, int segmentKhz)
+{
+    QVector<double> out;
+    if (segmentKhz <= 0) return out;
+
+    // Pass 1: collect matching segments (midpoint in search window).
+    struct Region { double lo; double hi; };
+    QVector<Region> regions;
+    for (const auto& seg : segments) {
+        const double mid = (seg.lowMhz + seg.highMhz) / 2.0;
+        if (mid >= searchLowMhz && mid <= searchHighMhz) {
+            regions.append({seg.lowMhz, seg.highMhz});
+        }
+    }
+    if (regions.isEmpty()) return out;
+
+    // Pass 2: sort and merge contiguous regions (treat adjacent or
+    // overlapping segments as one continuous range).
+    std::sort(regions.begin(), regions.end(),
+              [](const Region& a, const Region& b) { return a.lo < b.lo; });
+    QVector<Region> merged;
+    merged.append(regions.front());
+    constexpr double kAdjacencyEpsMhz = 1.0e-6;  // 1 Hz
+    for (int i = 1; i < regions.size(); ++i) {
+        if (regions[i].lo <= merged.last().hi + kAdjacencyEpsMhz) {
+            merged.last().hi = std::max(merged.last().hi, regions[i].hi);
+        } else {
+            merged.append(regions[i]);
+        }
+    }
+
+    // Pass 3: per merged region, walk centers.  If a region is narrower
+    // than one full tune segment (e.g. US 60m's 2.8 kHz channel vs 9 kHz
+    // segment), emit a single midpoint so the ATU still tunes that
+    // channel; computeCenters() returns empty for narrow ranges.
+    const double segMhz = segmentKhz / 1000.0;
+    for (const auto& r : merged) {
+        if (r.hi - r.lo < segMhz) {
+            out.append((r.lo + r.hi) / 2.0);
+        } else {
+            out.append(computeCenters(r.lo, r.hi, segmentKhz));
+        }
+    }
+    return out;
+}
+
 } // namespace
 
 AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
@@ -320,9 +374,15 @@ void AtuPreTuneDialog::populateBands()
         row.name = spec.name;
         row.segmentKhz = spec.segmentKhz;
 
-        // Derive low/high from segments whose midpoint falls in the band's
-        // search window. Plans use MHz; segments may start later than the
-        // regulatory edge (e.g. IARU R1 starts 160m at 1.810 MHz).
+        // Walk segments per contiguous region — discrete-channel bands
+        // (US 60m) get one center per legal channel instead of stepping
+        // across illegal gaps. (#2647)  Display low/high still show the
+        // envelope so the operator sees the band's overall coverage.
+        row.centers = computeCentersForBand(segments,
+                                            spec.searchLowMhz,
+                                            spec.searchHighMhz,
+                                            row.segmentKhz);
+        if (row.centers.isEmpty()) continue;  // no coverage in active plan
         double lo = 1e9;
         double hi = -1.0;
         for (const auto& seg : segments) {
@@ -332,10 +392,9 @@ void AtuPreTuneDialog::populateBands()
                 hi = std::max(hi, seg.highMhz);
             }
         }
-        if (hi <= lo) continue;  // no coverage for this band in the active plan
         row.lowMhz = lo;
         row.highMhz = hi;
-        row.points = pointsForRange(row.lowMhz, row.highMhz, row.segmentKhz);
+        row.points = row.centers.size();
 
         auto* lineWidget = new QWidget(m_bandsContainer);
         auto* lineLayout = new QHBoxLayout(lineWidget);
@@ -369,7 +428,9 @@ void AtuPreTuneDialog::populateBands()
 
 QVector<double> AtuPreTuneDialog::centersForBand(const BandRow& row) const
 {
-    return computeCenters(row.lowMhz, row.highMhz, row.segmentKhz);
+    // Precomputed in populateBands() so discrete-channel walks match the
+    // count shown in the UI exactly. (#2647)
+    return row.centers;
 }
 
 void AtuPreTuneDialog::onStartClicked()

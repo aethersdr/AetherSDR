@@ -50,6 +50,10 @@ private:
         double  highMhz{0.0};
         int     segmentKhz{0};      // tuning segment size in kHz
         int     points{0};          // count of pre-tune frequencies
+        // Precomputed sweep centers — walked per contiguous-segment region so
+        // discrete-channel bands (e.g. US 60m) tune at legal channel midpoints
+        // instead of evenly across the [low, high] envelope. (#2647)
+        QVector<double> centers;
         QCheckBox* check{nullptr};
         QLabel*    info{nullptr};
     };
