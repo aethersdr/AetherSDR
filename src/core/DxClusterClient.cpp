@@ -208,6 +208,29 @@ void DxClusterClient::onReadyRead()
         QString line = QString::fromLatin1(m_readBuffer.left(idx)).trimmed();
         m_readBuffer.remove(0, idx + 1);
 
+        // Strip non-printable control characters that some DX cluster
+        // software appends to spot lines (BEL 0x07 as a TTY alert is the
+        // most common, but C1 controls in 0x80–0x9F have also been seen
+        // in the wild).  trimmed() above only handles ASCII whitespace,
+        // so these otherwise render as missing-glyph boxes in the
+        // console and contaminate spot.comment captured by the regex in
+        // handleLine().  Keep TAB (0x09); drop everything else in
+        // {0x00–0x1F, 0x7F–0x9F}.
+        auto isControl = [](QChar c) {
+            const ushort u = c.unicode();
+            if (u == '\t') return false;
+            return u < 0x20 || (u >= 0x7F && u <= 0x9F);
+        };
+        if (std::any_of(line.cbegin(), line.cend(), isControl)) {
+            QString cleaned;
+            cleaned.reserve(line.size());
+            for (QChar c : line) {
+                if (!isControl(c))
+                    cleaned.append(c);
+            }
+            line = cleaned;
+        }
+
         if (line.isEmpty()) continue;
 
         // Write to log file
