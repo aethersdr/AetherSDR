@@ -1,4 +1,5 @@
 #include "AtuPreTuneDialog.h"
+#include "AtuPreTuneCenters.h"
 #include "FramelessWindowTitleBar.h"
 #include "FramelessResizer.h"
 #include "core/AppSettings.h"
@@ -69,31 +70,8 @@ constexpr int kPerPointTimeoutMs = 30 * 1000;
 constexpr int kSettleMs = 300;
 constexpr int kMaxConsecutiveFailBypass = 3;
 
-// Centers are evenly-spaced starting at band_low + seg/2. We keep adding
-// while the full tune segment fits inside the band (center + seg/2 <= high).
-// If room remains at the top after the regular loop, an extra clamped center
-// is appended at high - seg/2 so the band end isn't left uncovered.  This
-// matches the reference counts in the issue's IARU R1 table. (#2624)
-QVector<double> computeCenters(double lowMhz, double highMhz, int segmentKhz)
-{
-    QVector<double> out;
-    if (segmentKhz <= 0 || highMhz <= lowMhz) return out;
-    const double segMhz = segmentKhz / 1000.0;
-    const double half = segMhz / 2.0;
-    const double firstCenter = lowMhz + half;
-    const double lastAllowedCenter = highMhz - half;
-    if (lastAllowedCenter < firstCenter - 1e-9) return out;
-
-    constexpr double kEps = 1e-9;
-    for (double f = firstCenter; f <= lastAllowedCenter + kEps; f += segMhz) {
-        out.append(f);
-    }
-    if (!out.isEmpty() && out.last() < lastAllowedCenter - kEps) {
-        out.append(lastAllowedCenter);
-    }
-    return out;
-}
-
+// computeCenters() is now in AtuPreTuneCenters.h (header-only) so the
+// unit test can exercise it without dragging in this dialog. (#2648)
 int pointsForRange(double lowMhz, double highMhz, int segmentKhz)
 {
     return computeCenters(lowMhz, highMhz, segmentKhz).size();

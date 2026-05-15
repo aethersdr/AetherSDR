@@ -1394,6 +1394,16 @@ target_link_libraries(antenna_alias_test PRIVATE Qt6::Core)
 set_target_properties(antenna_alias_test PROPERTIES AUTOMOC ON)
 add_test(NAME antenna_alias_test COMMAND antenna_alias_test)
 
+# Pure-math test for the ATU pre-tune center-frequency calculator.
+# Locks in the IARU R1 reference table from issue #2624 so future edits
+# to computeCenters() can't silently regress the per-band point counts.
+add_executable(atu_pretune_centers_test
+    tests/atu_pretune_centers_test.cpp
+)
+target_include_directories(atu_pretune_centers_test PRIVATE src)
+target_link_libraries(atu_pretune_centers_test PRIVATE Qt6::Core)
+add_test(NAME atu_pretune_centers_test COMMAND atu_pretune_centers_test)
+
 add_executable(cw_sidetone_test
     tests/cw_sidetone_test.cpp
     src/core/CwSidetoneGenerator.cpp
