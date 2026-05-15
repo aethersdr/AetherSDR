@@ -1,7 +1,10 @@
 #include "ClientEqOutputFader.h"
 
+#include <QContextMenuEvent>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLinearGradient>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -259,6 +262,45 @@ void ClientEqOutputFader::wheelEvent(QWheelEvent* ev)
     refreshValueLabel();
     emit gainChanged(m_gain);
     update();
+    ev->accept();
+}
+
+void ClientEqOutputFader::contextMenuEvent(QContextMenuEvent* ev)
+{
+    // Right-click → numeric entry.  Drag / double-click reset / wheel
+    // remain on the left button so the existing gesture set is intact.
+    QMenu menu(this);
+    QAction* enterAct = menu.addAction(tr("Enter output gain (dB)…"));
+    QAction* resetAct = menu.addAction(tr("Reset to 0 dB"));
+    QAction* chosen = menu.exec(ev->globalPos());
+    if (chosen == enterAct) {
+        bool ok = false;
+        const double currentDb =
+            std::clamp(linearToDb(m_gain), kGainMinDb, kGainMaxDb);
+        const double val = QInputDialog::getDouble(
+            this,
+            tr("Output Gain"),
+            tr("Gain (%1 to %2 dB):")
+                .arg(kGainMinDb, 0, 'f', 0)
+                .arg(kGainMaxDb, 0, 'f', 0),
+            currentDb,
+            static_cast<double>(kGainMinDb),
+            static_cast<double>(kGainMaxDb),
+            1, &ok);
+        if (ok) {
+            const float db = std::clamp(static_cast<float>(val),
+                                        kGainMinDb, kGainMaxDb);
+            m_gain = dbToLinear(db);
+            refreshValueLabel();
+            emit gainChanged(m_gain);
+            update();
+        }
+    } else if (chosen == resetAct) {
+        m_gain = 1.0f;
+        refreshValueLabel();
+        emit gainChanged(m_gain);
+        update();
+    }
     ev->accept();
 }
 

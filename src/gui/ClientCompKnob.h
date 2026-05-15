@@ -67,6 +67,7 @@ protected:
     void mouseReleaseEvent(QMouseEvent* ev) override;
     void mouseDoubleClickEvent(QMouseEvent* ev) override;
     void wheelEvent(QWheelEvent* ev) override;
+    void contextMenuEvent(QContextMenuEvent* ev) override;
 
 private:
     void applyNorm(float norm);

@@ -292,6 +292,16 @@ StripEqPanel::StripEqPanel(AudioEngine* engine, QWidget* parent)
     connect(m_paramRow, &ClientEqParamRow::bandSelected,
             this, &StripEqPanel::syncSelection);
 
+    // Numeric entries committed via the param row's right-click menu
+    // need the same persist + redraw fan-out a canvas drag triggers
+    // (issue #2655).  refreshValues() already happened inside the row.
+    connect(m_paramRow, &ClientEqParamRow::bandEdited,
+            this, [this](int) {
+        if (m_audio)    m_audio->saveClientEqSettings();
+        if (m_canvas)   m_canvas->update();
+        if (m_iconRow)  m_iconRow->refresh();
+    });
+
     // Any canvas-side band mutation refreshes the text-valued widgets
     // (icon row rebuilds on type / count change; param row updates
     // numeric display live during drags).

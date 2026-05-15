@@ -1,6 +1,9 @@
 #include "ClientCompKnob.h"
 
+#include <QContextMenuEvent>
 #include <QFontMetrics>
+#include <QInputDialog>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -275,6 +278,40 @@ void ClientCompKnob::wheelEvent(QWheelEvent* ev)
     const float scale = (ev->modifiers() & Qt::ShiftModifier)
                           ? kFineMultiplier : 1.0f;
     applyNorm(m_norm + ticks * kWheelNormStep * scale);
+    ev->accept();
+}
+
+void ClientCompKnob::contextMenuEvent(QContextMenuEvent* ev)
+{
+    // Right-click → numeric entry.  Drag / wheel / double-click stay on
+    // the left button so existing muscle memory is untouched; this just
+    // adds a precise-value path on a button the knob ignored before.
+    const QString param = m_label.isEmpty() ? tr("Value") : m_label;
+    QMenu menu(this);
+    QAction* enterAct = menu.addAction(tr("Enter %1…").arg(param));
+    QAction* resetAct = menu.addAction(tr("Reset to default"));
+    QAction* chosen = menu.exec(ev->globalPos());
+    if (chosen == enterAct) {
+        bool ok = false;
+        const double val = QInputDialog::getDouble(
+            this,
+            tr("Enter %1").arg(param),
+            tr("%1 (%2 to %3):")
+                .arg(param)
+                .arg(static_cast<double>(m_minPhys))
+                .arg(static_cast<double>(m_maxPhys)),
+            static_cast<double>(m_physical),
+            static_cast<double>(m_minPhys),
+            static_cast<double>(m_maxPhys),
+            3, &ok);
+        if (ok) {
+            setValue(static_cast<float>(val));  // clamps to [min, max]
+            emit valueChanged(m_physical);
+        }
+    } else if (chosen == resetAct) {
+        setValue(m_defaultPhys);
+        emit valueChanged(m_physical);
+    }
     ev->accept();
 }
 

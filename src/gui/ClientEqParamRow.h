@@ -12,8 +12,11 @@ namespace AetherSDR {
 // Selected band gets a boxed outline around the gain value — the
 // Logic-Pro-style "this is what you're tweaking" affordance.
 //
-// Clicking a column selects that band. No inline editing yet — a future
-// PR can promote the labels to click-to-edit.
+// Left-click selects the band.  Right-click on a column opens a context
+// menu offering numeric entry for Frequency / Gain / Q (issue #2655).
+// Numeric writes go straight through ClientEq::setBand() — the same
+// path canvas drags use — and emit bandEdited() so the host panel can
+// persist + redraw.
 class ClientEqParamRow : public QWidget {
     Q_OBJECT
 
@@ -24,6 +27,10 @@ public:
 
 signals:
     void bandSelected(int idx);
+    // Fired when the user commits a numeric value via the column's
+    // right-click context menu.  Host wiring connects this to
+    // saveClientEqSettings() + canvas update().
+    void bandEdited(int idx);
 
 public slots:
     void refresh();           // rebuild columns to match current band count

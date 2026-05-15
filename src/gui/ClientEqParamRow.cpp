@@ -1,11 +1,15 @@
 #include "ClientEqParamRow.h"
 #include "ClientEqCurveWidget.h"
 
+#include <QContextMenuEvent>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QVBoxLayout>
+#include <algorithm>
 
 namespace AetherSDR {
 
@@ -102,6 +106,102 @@ protected:
     void mousePressEvent(QMouseEvent*) override
     {
         if (m_row) emit m_row->bandSelected(m_bandIdx);
+    }
+
+    // Right-click → numeric entry menu for this band's Freq / Gain / Q
+    // (issue #2655).  Reset action restores this slot's factory preset,
+    // matching the canvas's per-handle context menu.
+    void contextMenuEvent(QContextMenuEvent* ev) override
+    {
+        if (!m_eq) { QWidget::contextMenuEvent(ev); return; }
+        // Right-click implicitly selects this column too — matches the
+        // canvas's right-click-on-handle behaviour.
+        if (m_row) emit m_row->bandSelected(m_bandIdx);
+
+        const auto bp = m_eq->band(m_bandIdx);
+        const bool isSlope =
+            (bp.type == ClientEq::FilterType::LowPass
+          || bp.type == ClientEq::FilterType::HighPass);
+
+        QMenu menu(this);
+        QAction* freqAct = menu.addAction(tr("Set frequency…"));
+        // HP/LP have no gain — match the canvas convention of suppressing
+        // the gain handle for slope bands.
+        QAction* gainAct = isSlope ? nullptr
+                                   : menu.addAction(tr("Set gain (dB)…"));
+        QAction* qAct    = menu.addAction(tr("Set Q…"));
+        menu.addSeparator();
+        QAction* resetAct = menu.addAction(tr("Reset to default"));
+
+        QAction* chosen = menu.exec(ev->globalPos());
+        if (!chosen) { ev->accept(); return; }
+
+        // Match the ranges the canvas drag handlers use so numeric and
+        // mouse paths can't produce out-of-range values from each other.
+        constexpr float kFreqMin = 20.0f,    kFreqMax = 20000.0f;
+        constexpr float kGainMin = -18.0f,   kGainMax = 18.0f;
+        constexpr float kQMin    = 0.1f,     kQMax    = 18.0f;
+
+        ClientEq::BandParams next = bp;
+        bool wrote = false;
+        if (chosen == freqAct) {
+            bool ok = false;
+            const double v = QInputDialog::getDouble(
+                this, tr("Frequency"),
+                tr("Frequency (Hz, %1 to %2):")
+                    .arg(kFreqMin, 0, 'f', 0).arg(kFreqMax, 0, 'f', 0),
+                static_cast<double>(bp.freqHz),
+                static_cast<double>(kFreqMin),
+                static_cast<double>(kFreqMax),
+                2, &ok);
+            if (ok) {
+                next.freqHz = std::clamp(static_cast<float>(v),
+                                         kFreqMin, kFreqMax);
+                next.enabled = true;  // explicit edit = enable
+                wrote = true;
+            }
+        } else if (gainAct && chosen == gainAct) {
+            bool ok = false;
+            const double v = QInputDialog::getDouble(
+                this, tr("Gain"),
+                tr("Gain (dB, %1 to %2):")
+                    .arg(kGainMin, 0, 'f', 0).arg(kGainMax, 0, 'f', 0),
+                static_cast<double>(bp.gainDb),
+                static_cast<double>(kGainMin),
+                static_cast<double>(kGainMax),
+                1, &ok);
+            if (ok) {
+                next.gainDb = std::clamp(static_cast<float>(v),
+                                         kGainMin, kGainMax);
+                next.enabled = true;
+                wrote = true;
+            }
+        } else if (chosen == qAct) {
+            bool ok = false;
+            const double v = QInputDialog::getDouble(
+                this, tr("Q"),
+                tr("Q (%1 to %2):")
+                    .arg(kQMin, 0, 'f', 2).arg(kQMax, 0, 'f', 1),
+                static_cast<double>(bp.q),
+                static_cast<double>(kQMin),
+                static_cast<double>(kQMax),
+                2, &ok);
+            if (ok) {
+                next.q = std::clamp(static_cast<float>(v), kQMin, kQMax);
+                next.enabled = true;
+                wrote = true;
+            }
+        } else if (chosen == resetAct) {
+            next = ClientEq::defaultBand(m_bandIdx);
+            wrote = true;
+        }
+
+        if (wrote) {
+            m_eq->setBand(m_bandIdx, next);
+            refreshValues();
+            if (m_row) emit m_row->bandEdited(m_bandIdx);
+        }
+        ev->accept();
     }
 
     void paintEvent(QPaintEvent* ev) override

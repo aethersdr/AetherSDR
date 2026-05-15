@@ -1,7 +1,10 @@
 #include "ClientCompThresholdFader.h"
 
+#include <QContextMenuEvent>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLinearGradient>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -253,6 +256,44 @@ void ClientCompThresholdFader::wheelEvent(QWheelEvent* ev)
     refreshValueLabel();
     emit thresholdChanged(m_thresholdDb);
     update();
+    ev->accept();
+}
+
+void ClientCompThresholdFader::contextMenuEvent(QContextMenuEvent* ev)
+{
+    // Right-click → numeric entry.  Drag / double-click reset / wheel
+    // stay on the left button; this only attaches behaviour to a button
+    // the fader ignored before.
+    QMenu menu(this);
+    QAction* enterAct = menu.addAction(tr("Enter threshold (dB)…"));
+    QAction* resetAct = menu.addAction(tr("Reset to %1 dB")
+                                           .arg(kThreshDefaultDb, 0, 'f', 0));
+    QAction* chosen = menu.exec(ev->globalPos());
+    if (chosen == enterAct) {
+        bool ok = false;
+        const double val = QInputDialog::getDouble(
+            this,
+            tr("Threshold"),
+            tr("Threshold (%1 to %2 dB):")
+                .arg(kThreshMinDb, 0, 'f', 0)
+                .arg(kThreshMaxDb, 0, 'f', 0),
+            static_cast<double>(m_thresholdDb),
+            static_cast<double>(kThreshMinDb),
+            static_cast<double>(kThreshMaxDb),
+            1, &ok);
+        if (ok) {
+            m_thresholdDb = std::clamp(static_cast<float>(val),
+                                       kThreshMinDb, kThreshMaxDb);
+            refreshValueLabel();
+            emit thresholdChanged(m_thresholdDb);
+            update();
+        }
+    } else if (chosen == resetAct) {
+        m_thresholdDb = kThreshDefaultDb;
+        refreshValueLabel();
+        emit thresholdChanged(m_thresholdDb);
+        update();
+    }
     ev->accept();
 }
 
