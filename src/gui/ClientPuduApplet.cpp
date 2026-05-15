@@ -170,6 +170,7 @@ void ClientPuduApplet::buildUI()
             auto* k = new ClientCompKnob;
             k->setLabel(label);
             k->setCenterLabelMode(true);
+            k->setInlineEditEnabled(false);
             // 260 px panel budget: 6 × 38 = 228 + 10 px gap +
             // margins comfortably inside the container.  Ring +
             // value row fit in ~48 px vertical.

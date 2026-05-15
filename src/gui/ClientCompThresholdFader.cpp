@@ -1,10 +1,12 @@
 #include "ClientCompThresholdFader.h"
 
-#include <QContextMenuEvent>
-#include <QInputDialog>
+#include <QEvent>
+#include <QFocusEvent>
+#include <QKeyEvent>
 #include <QLabel>
+#include <QLineEdit>
 #include <QLinearGradient>
-#include <QMenu>
+#include <QLocale>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -54,14 +56,89 @@ ClientCompThresholdFader::ClientCompThresholdFader(QWidget* parent)
 
     root->addStretch(1);
 
-    m_valueLabel = new QLabel;
-    m_valueLabel->setAlignment(Qt::AlignCenter);
-    m_valueLabel->setStyleSheet(
-        "QLabel { color: #e8e8e8; font-size: 10px; font-weight: bold;"
-        " background: transparent; border: none; }");
-    root->addWidget(m_valueLabel);
+    // Inline-editable threshold value.  Click to focus, type a dB number,
+    // Enter or focus-out to commit (clamped to [kThreshMinDb, kThreshMaxDb]).
+    // Looks identical to a label until focused; matches ClientCompKnob /
+    // ClientEqOutputFader's edit affordance.
+    m_valueEdit = new QLineEdit;
+    m_valueEdit->setAlignment(Qt::AlignCenter);
+    m_valueEdit->setFrame(false);
+    m_valueEdit->setStyleSheet(
+        "QLineEdit { color: #e8e8e8; font-size: 10px; font-weight: bold;"
+        " background: transparent; border: 1px solid transparent;"
+        " border-radius: 2px; padding: 0;"
+        " selection-background-color: #0070c0; }"
+        "QLineEdit:focus { background: #0a0a18; border: 1px solid #00b4d8; }");
+    m_valueEdit->installEventFilter(this);
+    root->addWidget(m_valueEdit);
+
+    connect(m_valueEdit, &QLineEdit::returnPressed, this, [this] {
+        commitValueEdit();
+        m_valueEdit->clearFocus();
+    });
+    connect(m_valueEdit, &QLineEdit::editingFinished, this, [this] {
+        commitValueEdit();
+    });
 
     refreshValueLabel();
+}
+
+void ClientCompThresholdFader::commitValueEdit()
+{
+    if (!m_valueEdit) return;
+    static thread_local bool s_committing = false;
+    if (s_committing) return;
+    s_committing = true;
+    const QString raw = m_valueEdit->text().trimmed();
+    bool ok = false;
+    double v = QLocale().toDouble(raw, &ok);
+    if (!ok) {
+        QString cleaned;
+        cleaned.reserve(raw.size());
+        for (QChar c : raw) {
+            if (c.isDigit() || c == QChar('.') || c == QChar('-')
+                || c == QChar('+') || c == QChar('e') || c == QChar('E'))
+                cleaned.append(c);
+        }
+        v = cleaned.toDouble(&ok);
+    }
+    if (ok) {
+        m_thresholdDb = std::clamp(static_cast<float>(v),
+                                   kThreshMinDb, kThreshMaxDb);
+        refreshValueLabel();
+        emit thresholdChanged(m_thresholdDb);
+        update();
+    } else {
+        refreshValueLabel();
+    }
+    s_committing = false;
+}
+
+bool ClientCompThresholdFader::eventFilter(QObject* obj, QEvent* ev)
+{
+    if (obj == m_valueEdit) {
+        if (ev->type() == QEvent::Wheel) {
+            wheelEvent(static_cast<QWheelEvent*>(ev));
+            return true;
+        }
+        if (ev->type() == QEvent::KeyPress) {
+            auto* ke = static_cast<QKeyEvent*>(ev);
+            if (ke->key() == Qt::Key_Escape) {
+                QSignalBlocker b(m_valueEdit);
+                refreshValueLabel();
+                m_valueEdit->clearFocus();
+                return true;
+            }
+        }
+        if (ev->type() == QEvent::FocusIn) {
+            QSignalBlocker b(m_valueEdit);
+            m_valueEdit->setText(QString::number(m_thresholdDb, 'f', 1));
+            m_valueEdit->selectAll();
+        } else if (ev->type() == QEvent::FocusOut) {
+            refreshValueLabel();
+        }
+    }
+    return QWidget::eventFilter(obj, ev);
 }
 
 void ClientCompThresholdFader::setThresholdDb(float db)
@@ -82,7 +159,9 @@ void ClientCompThresholdFader::setInputPeakDb(float db)
 
 void ClientCompThresholdFader::refreshValueLabel()
 {
-    m_valueLabel->setText(QString::asprintf("%+.1f dB", m_thresholdDb));
+    if (!m_valueEdit || m_valueEdit->hasFocus()) return;
+    QSignalBlocker b(m_valueEdit);
+    m_valueEdit->setText(QString::asprintf("%+.1f dB", m_thresholdDb));
 }
 
 void ClientCompThresholdFader::setThresholdFromY(int y)
@@ -256,44 +335,6 @@ void ClientCompThresholdFader::wheelEvent(QWheelEvent* ev)
     refreshValueLabel();
     emit thresholdChanged(m_thresholdDb);
     update();
-    ev->accept();
-}
-
-void ClientCompThresholdFader::contextMenuEvent(QContextMenuEvent* ev)
-{
-    // Right-click → numeric entry.  Drag / double-click reset / wheel
-    // stay on the left button; this only attaches behaviour to a button
-    // the fader ignored before.
-    QMenu menu(this);
-    QAction* enterAct = menu.addAction(tr("Enter threshold (dB)…"));
-    QAction* resetAct = menu.addAction(tr("Reset to %1 dB")
-                                           .arg(kThreshDefaultDb, 0, 'f', 0));
-    QAction* chosen = menu.exec(ev->globalPos());
-    if (chosen == enterAct) {
-        bool ok = false;
-        const double val = QInputDialog::getDouble(
-            this,
-            tr("Threshold"),
-            tr("Threshold (%1 to %2 dB):")
-                .arg(kThreshMinDb, 0, 'f', 0)
-                .arg(kThreshMaxDb, 0, 'f', 0),
-            static_cast<double>(m_thresholdDb),
-            static_cast<double>(kThreshMinDb),
-            static_cast<double>(kThreshMaxDb),
-            1, &ok);
-        if (ok) {
-            m_thresholdDb = std::clamp(static_cast<float>(val),
-                                       kThreshMinDb, kThreshMaxDb);
-            refreshValueLabel();
-            emit thresholdChanged(m_thresholdDb);
-            update();
-        }
-    } else if (chosen == resetAct) {
-        m_thresholdDb = kThreshDefaultDb;
-        refreshValueLabel();
-        emit thresholdChanged(m_thresholdDb);
-        update();
-    }
     ev->accept();
 }
 

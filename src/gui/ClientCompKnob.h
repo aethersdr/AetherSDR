@@ -4,6 +4,8 @@
 #include <QString>
 #include <functional>
 
+class QLineEdit;
+
 namespace AetherSDR {
 
 // Shared rotary knob for the compressor editor.  Click-drag vertical to
@@ -53,6 +55,14 @@ public:
     void setCenterLabelMode(bool on);
     bool isCenterLabelMode() const { return m_centerLabel; }
 
+    // Inline value editor — defaults ON for the channel-strip / editor
+    // contexts where the knob is large enough (76+ px) for the
+    // QLineEdit to fit cleanly.  Applet tiles in the applet bar are
+    // ~38 px wide and the inline editor clips visually, so they
+    // disable it and fall back to painted value text.
+    void setInlineEditEnabled(bool on);
+    bool isInlineEditEnabled() const { return m_inlineEdit; }
+
     // Programmatic setter — e.g. loadClientCompSettings on startup.
     void setValue(float physical);
     float value() const { return m_physical; }
@@ -62,16 +72,21 @@ signals:
 
 protected:
     void paintEvent(QPaintEvent* ev) override;
+    void resizeEvent(QResizeEvent* ev) override;
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;
     void mouseReleaseEvent(QMouseEvent* ev) override;
     void mouseDoubleClickEvent(QMouseEvent* ev) override;
     void wheelEvent(QWheelEvent* ev) override;
-    void contextMenuEvent(QContextMenuEvent* ev) override;
+    bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
     void applyNorm(float norm);
     QString formatValue() const;
+    QRect valueRect() const;          // bottom-area rect for the value text
+    void layoutValueEditor();          // position m_valueEdit over valueRect
+    void commitValueEdit();            // parse text → setValue → emit
+    void refreshValueEditDisplay();    // when not focused: show formatted value
 
     QString     m_label;
     float       m_minPhys{0.0f};
@@ -87,6 +102,12 @@ private:
     int         m_dragStartY{0};
     float       m_dragStartNorm{0.0f};
     bool        m_centerLabel{false};
+    bool        m_inlineEdit{true};
+
+    // Inline value editor — child QLineEdit positioned over the painted
+    // value text.  Click to focus, type a number, Enter (or focus-out)
+    // commits.  Closes #2655.
+    QLineEdit*  m_valueEdit{nullptr};
 };
 
 } // namespace AetherSDR

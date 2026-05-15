@@ -2,7 +2,7 @@
 
 #include <QWidget>
 
-class QLabel;
+class QLineEdit;
 
 namespace AetherSDR {
 
@@ -40,13 +40,14 @@ protected:
     void mouseReleaseEvent(QMouseEvent* ev) override;
     void mouseDoubleClickEvent(QMouseEvent* ev) override;
     void wheelEvent(QWheelEvent* ev) override;
-    void contextMenuEvent(QContextMenuEvent* ev) override;
+    bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
     void refreshValueLabel();
+    void commitValueEdit();
     void setThresholdFromY(int y);
 
-    QLabel* m_valueLabel{nullptr};
+    QLineEdit* m_valueEdit{nullptr};
     float   m_thresholdDb{-18.0f};
     float   m_smoothedPeakDb{-120.0f};
     bool    m_dragging{false};

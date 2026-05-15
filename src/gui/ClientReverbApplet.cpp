@@ -174,6 +174,7 @@ void ClientReverbApplet::buildUI()
         auto* k = new ClientCompKnob;
         k->setLabel(label);
         k->setCenterLabelMode(true);
+        k->setInlineEditEnabled(false);
         k->setFixedSize(38, 48);
         return k;
     };

@@ -1,12 +1,16 @@
 #include "ClientCompKnob.h"
 
-#include <QContextMenuEvent>
+#include <QDoubleValidator>
+#include <QEvent>
+#include <QFocusEvent>
 #include <QFontMetrics>
-#include <QInputDialog>
-#include <QMenu>
+#include <QKeyEvent>
+#include <QLineEdit>
+#include <QLocale>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QResizeEvent>
 #include <QPaintEvent>
 #include <QPen>
 #include <QPixmap>
@@ -37,6 +41,37 @@ ClientCompKnob::ClientCompKnob(QWidget* parent) : QWidget(parent)
     setMinimumSize(58, 64);
     setFocusPolicy(Qt::StrongFocus);
     setAttribute(Qt::WA_OpaquePaintEvent, false);
+
+    // Inline value editor — child QLineEdit overlay positioned over the
+    // value text the knob would otherwise paint.  Click to focus, type
+    // a number, Enter or focus-out to commit.  Clamped to [min, max]
+    // via setValue().  Wheel events bubbling up while focused are
+    // forwarded to the knob so the existing wheel-adjust UX survives.
+    m_valueEdit = new QLineEdit(this);
+    m_valueEdit->setAlignment(Qt::AlignHCenter);
+    m_valueEdit->setFrame(false);
+    m_valueEdit->setStyleSheet(
+        // No frame normally — looks identical to a painted label.  On
+        // focus, a subtle dark inset + cyan border indicates edit mode.
+        "QLineEdit { background: transparent; color: #e8e8e8;"
+        " border: 1px solid transparent; border-radius: 2px;"
+        " padding: 0; selection-background-color: #0070c0; }"
+        "QLineEdit:focus { background: #0a0a18;"
+        " border: 1px solid #00b4d8; }");
+    m_valueEdit->installEventFilter(this);  // wheel forward + Escape cancel
+    refreshValueEditDisplay();
+
+    connect(m_valueEdit, &QLineEdit::returnPressed, this, [this]() {
+        commitValueEdit();
+        // Drop focus so the editor reverts to its "looks like a label" look.
+        clearFocus();
+    });
+    connect(m_valueEdit, &QLineEdit::editingFinished, this, [this]() {
+        // editingFinished fires on focus-out too; commit there as well so
+        // clicking elsewhere applies the value (matches the Phone applet's
+        // commit-on-blur expectation from the issue body).
+        commitValueEdit();
+    });
 }
 
 void ClientCompKnob::setLabel(const QString& text)
@@ -72,6 +107,7 @@ void ClientCompKnob::setNormFromValue(ValueMap toNorm)
 void ClientCompKnob::setLabelFormat(LabelFormat fmt)
 {
     m_fmt = std::move(fmt);
+    refreshValueEditDisplay();
     update();
 }
 
@@ -79,6 +115,14 @@ void ClientCompKnob::setCenterLabelMode(bool on)
 {
     if (m_centerLabel == on) return;
     m_centerLabel = on;
+    update();
+}
+
+void ClientCompKnob::setInlineEditEnabled(bool on)
+{
+    if (m_inlineEdit == on) return;
+    m_inlineEdit = on;
+    if (m_valueEdit) m_valueEdit->setVisible(on);
     update();
 }
 
@@ -91,6 +135,7 @@ void ClientCompKnob::setValue(float physical)
         const float span = std::max(1e-9f, m_maxPhys - m_minPhys);
         m_norm = std::clamp((m_physical - m_minPhys) / span, 0.0f, 1.0f);
     }
+    refreshValueEditDisplay();
     update();
 }
 
@@ -103,6 +148,7 @@ void ClientCompKnob::applyNorm(float norm)
         m_physical = m_minPhys + m_norm * (m_maxPhys - m_minPhys);
     }
     emit valueChanged(m_physical);
+    refreshValueEditDisplay();
     update();
 }
 
@@ -110,6 +156,74 @@ QString ClientCompKnob::formatValue() const
 {
     if (m_fmt) return m_fmt(m_physical);
     return QString::number(m_physical, 'f', 2);
+}
+
+QRect ClientCompKnob::valueRect() const
+{
+    const int w = width();
+    const int h = height();
+    const int topRow    = m_centerLabel ?  0 : 12;
+    const int bottomRow = 4;
+    const int diameter  = std::min(w - 4, h - topRow - bottomRow);
+    const int valueY = topRow + static_cast<int>(diameter * 0.82f);
+    const int valueH = std::max(13, h - valueY);
+    return QRect(0, valueY, w, valueH);
+}
+
+void ClientCompKnob::layoutValueEditor()
+{
+    if (!m_valueEdit) return;
+    const QRect r = valueRect();
+    // Slight horizontal inset so the editor isn't full-width — keeps
+    // the visual match with the painted text the old paint path drew.
+    const int inset = std::max(2, r.width() / 8);
+    m_valueEdit->setGeometry(r.adjusted(inset, 0, -inset, 0));
+    QFont f = m_valueEdit->font();
+    f.setPixelSize(11);
+    m_valueEdit->setFont(f);
+}
+
+void ClientCompKnob::refreshValueEditDisplay()
+{
+    if (!m_valueEdit || m_valueEdit->hasFocus()) return;  // don't fight active edit
+    QSignalBlocker b(m_valueEdit);
+    m_valueEdit->setText(formatValue());
+}
+
+void ClientCompKnob::commitValueEdit()
+{
+    if (!m_valueEdit) return;
+    // Already locked out by hasFocus guard in refreshValueEditDisplay,
+    // but be doubly defensive against re-entry from editingFinished +
+    // returnPressed firing back to back.
+    static thread_local bool s_committing = false;
+    if (s_committing) return;
+    s_committing = true;
+
+    const QString raw = m_valueEdit->text().trimmed();
+    bool ok = false;
+    // Locale-aware parse so "12,5" works in comma-decimal locales.
+    double v = QLocale().toDouble(raw, &ok);
+    if (!ok) {
+        // Fallback: strip everything that isn't digit / sign / dot, then
+        // try C-locale parse so "12.5 ms" or "−6 dB" still work.
+        QString cleaned;
+        cleaned.reserve(raw.size());
+        for (QChar c : raw) {
+            if (c.isDigit() || c == QChar('.') || c == QChar('-')
+                || c == QChar('+') || c == QChar('e') || c == QChar('E'))
+                cleaned.append(c);
+        }
+        v = cleaned.toDouble(&ok);
+    }
+    if (ok) {
+        setValue(static_cast<float>(v));   // setValue() clamps to [min, max]
+        emit valueChanged(m_physical);
+    } else {
+        // Bad input — silently revert.
+        refreshValueEditDisplay();
+    }
+    s_committing = false;
 }
 
 void ClientCompKnob::paintEvent(QPaintEvent*)
@@ -220,20 +334,17 @@ void ClientCompKnob::paintEvent(QPaintEvent*)
         p.drawText(ring, Qt::AlignCenter, m_label);
     }
 
-    // Value text — positioned inside the empty bottom sector of the
-    // 270° arc (between the 4:30 and 7:30 sweep endpoints).  The
-    // sector starts at y = ring_center + arc_radius * sin(45°),
-    // which works out to ~82 % of the diameter from the ring top.
-    QFont valFont = p.font();
-    valFont.setPixelSize(11);
-    valFont.setBold(false);
-    p.setFont(valFont);
-    p.setPen(kValueColor);
-    const int valueY = topRow + static_cast<int>(diameter * 0.82f);
-    const int valueH = std::max(13, h - valueY);
-    p.drawText(QRectF(0, valueY, w, valueH),
-               Qt::AlignHCenter | Qt::AlignTop,
-               formatValue());
+    // Value text — when inline editing is on (channel strip / editor),
+    // the child QLineEdit handles painting.  When off (applet tiles,
+    // where the QLineEdit would clip), paint the formatted value here.
+    if (!m_inlineEdit) {
+        QFont valueFont = p.font();
+        valueFont.setBold(true);
+        valueFont.setPixelSize(11);
+        p.setFont(valueFont);
+        p.setPen(kValueColor);
+        p.drawText(valueRect(), Qt::AlignCenter, formatValue());
+    }
 }
 
 void ClientCompKnob::mousePressEvent(QMouseEvent* ev)
@@ -281,38 +392,45 @@ void ClientCompKnob::wheelEvent(QWheelEvent* ev)
     ev->accept();
 }
 
-void ClientCompKnob::contextMenuEvent(QContextMenuEvent* ev)
+void ClientCompKnob::resizeEvent(QResizeEvent* ev)
 {
-    // Right-click → numeric entry.  Drag / wheel / double-click stay on
-    // the left button so existing muscle memory is untouched; this just
-    // adds a precise-value path on a button the knob ignored before.
-    const QString param = m_label.isEmpty() ? tr("Value") : m_label;
-    QMenu menu(this);
-    QAction* enterAct = menu.addAction(tr("Enter %1…").arg(param));
-    QAction* resetAct = menu.addAction(tr("Reset to default"));
-    QAction* chosen = menu.exec(ev->globalPos());
-    if (chosen == enterAct) {
-        bool ok = false;
-        const double val = QInputDialog::getDouble(
-            this,
-            tr("Enter %1").arg(param),
-            tr("%1 (%2 to %3):")
-                .arg(param)
-                .arg(static_cast<double>(m_minPhys))
-                .arg(static_cast<double>(m_maxPhys)),
-            static_cast<double>(m_physical),
-            static_cast<double>(m_minPhys),
-            static_cast<double>(m_maxPhys),
-            3, &ok);
-        if (ok) {
-            setValue(static_cast<float>(val));  // clamps to [min, max]
-            emit valueChanged(m_physical);
+    QWidget::resizeEvent(ev);
+    layoutValueEditor();
+}
+
+bool ClientCompKnob::eventFilter(QObject* obj, QEvent* ev)
+{
+    if (obj == m_valueEdit) {
+        // Forward wheel events on the value editor to the parent knob
+        // so the existing wheel-adjust UX (#1026 fine step with Shift)
+        // keeps working when the cursor happens to be over the value
+        // text instead of the ring.
+        if (ev->type() == QEvent::Wheel) {
+            wheelEvent(static_cast<QWheelEvent*>(ev));
+            return true;
         }
-    } else if (chosen == resetAct) {
-        setValue(m_defaultPhys);
-        emit valueChanged(m_physical);
+        // Escape cancels the edit without committing — revert text from
+        // the current physical value and drop focus.
+        if (ev->type() == QEvent::KeyPress) {
+            auto* ke = static_cast<QKeyEvent*>(ev);
+            if (ke->key() == Qt::Key_Escape) {
+                QSignalBlocker b(m_valueEdit);   // suppress editingFinished
+                refreshValueEditDisplay();
+                m_valueEdit->clearFocus();
+                return true;
+            }
+        }
+        // Show the formatted text-with-units on blur, raw number on focus,
+        // so the user types just digits (no need to type units back).
+        if (ev->type() == QEvent::FocusIn) {
+            QSignalBlocker b(m_valueEdit);
+            m_valueEdit->setText(QString::number(m_physical, 'f', 3));
+            m_valueEdit->selectAll();
+        } else if (ev->type() == QEvent::FocusOut) {
+            refreshValueEditDisplay();
+        }
     }
-    ev->accept();
+    return QWidget::eventFilter(obj, ev);
 }
 
 } // namespace AetherSDR

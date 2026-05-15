@@ -2,7 +2,7 @@
 
 #include <QWidget>
 
-class QLabel;
+class QLineEdit;
 
 namespace AetherSDR {
 
@@ -36,13 +36,14 @@ protected:
     void mouseReleaseEvent(QMouseEvent* ev) override;
     void mouseDoubleClickEvent(QMouseEvent* ev) override;
     void wheelEvent(QWheelEvent* ev) override;
-    void contextMenuEvent(QContextMenuEvent* ev) override;
+    bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
     void refreshValueLabel();
+    void commitValueEdit();
     void setGainFromY(int y);
 
-    QLabel* m_valueLabel{nullptr};
+    QLineEdit* m_valueEdit{nullptr};
     float   m_gain{1.0f};
     float   m_smoothedPeak{-120.0f};  // dB
     bool    m_dragging{false};
