@@ -791,17 +791,61 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         ++row;
     };
 
+    // ── Toggle button row ─────────────────────────────────────────────────
+    {
+        auto* toggleRow = new QWidget;
+        // The Display panel's QWidget { border: 1px solid } cascades to this
+        // QWidget container and would otherwise draw a 1 px frame around the
+        // whole Heat Map / Grid / Wt Avg row.  Override locally.
+        toggleRow->setStyleSheet("QWidget { border: none; background: transparent; }");
+        auto* toggleLayout = new QHBoxLayout(toggleRow);
+        toggleLayout->setContentsMargins(0, 2, 0, 2);
+        toggleLayout->setSpacing(3);
+
+        // Use the shared btnStyle so Heat Map / Grid / Wt Avg get the same
+        // 1 px frame (blue unchecked, green checked) as the FFT Floor "Auto"
+        // button and the other row-end action buttons.  The toggleRow
+        // QWidget container itself is borderless (see setStyleSheet above)
+        // so the panel's cascading frame doesn't draw a box around the
+        // whole row.
+        auto makeToggle = [&](const QString& text, QPushButton*& btn, bool checked = false) {
+            btn = new QPushButton(text);
+            btn->setCheckable(true);
+            btn->setChecked(checked);
+            btn->setStyleSheet(btnStyle);
+            btn->setFixedHeight(20);
+            toggleLayout->addWidget(btn);
+        };
+
+        makeToggle("Heat Map", m_heatMapBtn);
+        makeToggle("Grid", m_showGridBtn, true);
+        makeToggle("Wt Avg", m_weightedAvgBtn);
+
+        grid->addWidget(toggleRow, row, 0, 1, 4);
+        ++row;
+
+        connect(m_heatMapBtn, &QPushButton::toggled, this, [this](bool on) {
+            emit fftHeatMapChanged(on);
+        });
+        connect(m_showGridBtn, &QPushButton::toggled, this, [this](bool on) {
+            emit showGridChanged(on);
+        });
+        connect(m_weightedAvgBtn, &QPushButton::toggled, this, [this](bool on) {
+            emit fftWeightedAverageChanged(on);
+        });
+    }
+
     // ── Sliders ───────────────────────────────────────────────────────────
 
     // AVG
-    makeRow("AVG:", 0, 100, 0, m_avgSlider, m_avgLabel);
+    makeRow("FFT AVG:", 0, 100, 0, m_avgSlider, m_avgLabel);
     connect(m_avgSlider, &QSlider::valueChanged, this, [this](int v) {
         m_avgLabel->setText(QString::number(v));
         emit fftAverageChanged(v);
     });
 
     // FPS
-    makeRow("FPS:", 5, 30, 25, m_fpsSlider, m_fpsLabel);
+    makeRow("FFT FPS:", 5, 30, 25, m_fpsSlider, m_fpsLabel);
     connect(m_fpsSlider, &QSlider::valueChanged, this, [this](int v) {
         m_fpsLabel->setText(QString::number(v));
         emit fftFpsChanged(v);
@@ -809,7 +853,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
     // Line Width
     {
-        auto* lbl = new QLabel("Line Width:");
+        auto* lbl = new QLabel("FFT Line:");
         lbl->setStyleSheet(labelStyle);
         grid->addWidget(lbl, row, 0);
 
@@ -835,23 +879,9 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
-    // Gain
-    makeRow("Gain:", 0, 100, 50, m_gainSlider, m_gainLabel);
-    connect(m_gainSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_gainLabel->setText(QString::number(v));
-        emit wfColorGainChanged(v);
-    });
-
-    // Rate
-    makeRow("Rate:", 1, 30, 15, m_rateSlider, m_rateLabel);
-    connect(m_rateSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_rateLabel->setText(QString::number(v));
-        emit wfLineDurationChanged(v + 70);
-    });
-
     // Fill: color picker button + slider
     {
-        auto* lbl = new QLabel("Fill:");
+        auto* lbl = new QLabel("FFT Fill:");
         lbl->setStyleSheet(labelStyle);
         grid->addWidget(lbl, row, 0);
 
@@ -895,13 +925,40 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
     }
 
+    // ── Noise Floor reference line ────────────────────────────────────────
+    makeRowWithBtn("FFT Floor:", 1, 99, 75, m_floorSlider, m_floorLabel,
+                   m_floorEnableBtn, "Auto");
+    m_floorSlider->setEnabled(false);
+    connect(m_floorEnableBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_floorSlider->setEnabled(on);
+        emit noiseFloorEnableChanged(on);
+    });
+    connect(m_floorSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_floorLabel->setText(QString::number(v));
+        emit noiseFloorPositionChanged(v);
+    });
+
+    // NB Blank + Off/On
+    makeRowWithBtn("NB Blank:", 5, 95, 15, m_wfBlankerThreshSlider, m_wfBlankerThreshLabel,
+                   m_wfBlankerBtn, "Off");
+    m_wfBlankerBtn->setToolTip("Suppress impulse noise stripes in waterfall");
+    connect(m_wfBlankerBtn, &QPushButton::toggled, this, [this](bool on) {
+        m_wfBlankerBtn->setText(on ? "On" : "Off");
+        emit wfBlankerEnabledChanged(on);
+    });
+    connect(m_wfBlankerThreshSlider, &QSlider::valueChanged, this, [this](int v) {
+        float t = 1.0f + v / 100.0f;
+        m_wfBlankerThreshLabel->setText(QString::number(t, 'f', 2));
+        emit wfBlankerThresholdChanged(t);
+    });
+
     // Black + Auto.  Single slider with two roles depending on AUTO state:
     //   AUTO off → manual black-level (0..100), value persists in
     //              m_blackManualValue and emits wfBlackLevelChanged.
     //   AUTO on  → noise-floor offset (0..100, 50 = noise floor), value
     //              persists in m_blackAutoOffsetValue and emits
     //              wfAutoBlackOffsetChanged.
-    makeRowWithBtn("Black:", 0, 100, 50, m_blackSlider, m_blackLabel,
+    makeRowWithBtn("Black Level:", 0, 100, 50, m_blackSlider, m_blackLabel,
                    m_autoBlackBtn, "Auto");
     m_autoBlackBtn->setChecked(true);
     connect(m_blackSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -937,18 +994,18 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             emit wfAutoBlackOffsetChanged(m_blackAutoOffsetValue);
     });
 
-    // NB Blank + Off/On
-    makeRowWithBtn("NB Blank:", 5, 95, 15, m_wfBlankerThreshSlider, m_wfBlankerThreshLabel,
-                   m_wfBlankerBtn, "Off");
-    m_wfBlankerBtn->setToolTip("Suppress impulse noise stripes in waterfall");
-    connect(m_wfBlankerBtn, &QPushButton::toggled, this, [this](bool on) {
-        m_wfBlankerBtn->setText(on ? "On" : "Off");
-        emit wfBlankerEnabledChanged(on);
+    // Gain
+    makeRow("WtrFall Gain:", 0, 100, 50, m_gainSlider, m_gainLabel);
+    connect(m_gainSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_gainLabel->setText(QString::number(v));
+        emit wfColorGainChanged(v);
     });
-    connect(m_wfBlankerThreshSlider, &QSlider::valueChanged, this, [this](int v) {
-        float t = 1.0f + v / 100.0f;
-        m_wfBlankerThreshLabel->setText(QString::number(t, 'f', 2));
-        emit wfBlankerThresholdChanged(t);
+
+    // Rate
+    makeRow("WtrFall Rate:", 1, 30, 15, m_rateSlider, m_rateLabel);
+    connect(m_rateSlider, &QSlider::valueChanged, this, [this](int v) {
+        m_rateLabel->setText(QString::number(v));
+        emit wfLineDurationChanged(v + 70);
     });
 
     // BG Opacity
@@ -994,68 +1051,6 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         });
         grid->addWidget(clearBtn, row, 3);
         ++row;
-    }
-
-    // ── Toggle button row ─────────────────────────────────────────────────
-    {
-        auto* toggleRow = new QWidget;
-        auto* toggleLayout = new QHBoxLayout(toggleRow);
-        toggleLayout->setContentsMargins(0, 2, 0, 2);
-        toggleLayout->setSpacing(3);
-
-        auto makeToggle = [&](const QString& text, QPushButton*& btn, bool checked = false) {
-            btn = new QPushButton(text);
-            btn->setCheckable(true);
-            btn->setChecked(checked);
-            btn->setStyleSheet(btnStyle);
-            btn->setFixedHeight(20);
-            toggleLayout->addWidget(btn);
-        };
-
-        makeToggle("Heat Map", m_heatMapBtn);
-        makeToggle("Grid", m_showGridBtn, true);
-        makeToggle("Wt Avg", m_weightedAvgBtn);
-
-        grid->addWidget(toggleRow, row, 0, 1, 4);
-        ++row;
-
-        connect(m_heatMapBtn, &QPushButton::toggled, this, [this](bool on) {
-            emit fftHeatMapChanged(on);
-        });
-        connect(m_showGridBtn, &QPushButton::toggled, this, [this](bool on) {
-            emit showGridChanged(on);
-        });
-        connect(m_weightedAvgBtn, &QPushButton::toggled, this, [this](bool on) {
-            emit fftWeightedAverageChanged(on);
-        });
-    }
-
-    // ── Noise Floor reference line ────────────────────────────────────────
-    makeRowWithBtn("Floor:", 1, 99, 75, m_floorSlider, m_floorLabel,
-                   m_floorEnableBtn, "Off");
-    m_floorSlider->setEnabled(false);
-    connect(m_floorEnableBtn, &QPushButton::toggled, this, [this](bool on) {
-        m_floorEnableBtn->setText(on ? "On" : "Off");
-        m_floorSlider->setEnabled(on);
-        emit noiseFloorEnableChanged(on);
-    });
-    connect(m_floorSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_floorLabel->setText(QString::number(v));
-        emit noiseFloorPositionChanged(v);
-    });
-
-    // ── Auto-squelch margin ───────────────────────────────────────────────
-    {
-        auto& s = AppSettings::instance();
-        int savedMargin = std::clamp(s.value("AutoSqlMarginDb", "10").toInt(), 5, 20);
-        makeRow("SQL Margin:", 5, 20, savedMargin, m_autoSqlMarginSlider, m_autoSqlMarginLabel);
-        connect(m_autoSqlMarginSlider, &QSlider::valueChanged, this, [this](int v) {
-            m_autoSqlMarginLabel->setText(QString::number(v));
-            auto& s2 = AppSettings::instance();
-            s2.setValue("AutoSqlMarginDb", QString::number(v));
-            s2.save();
-            emit autoSqlMarginDbChanged(v);
-        });
     }
 
     // ── Freq Grid Spacing dropdown (#1390) ──────────────────────────────
@@ -1122,7 +1117,6 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     if (m_bgOpacitySlider) m_bgOpacitySlider->setToolTip("Opacity of the background image overlay.");
     if (m_floorEnableBtn) m_floorEnableBtn->setToolTip("Shows a noise floor reference line on the spectrum display.");
     if (m_floorSlider) m_floorSlider->setToolTip("Vertical position of the noise floor reference line (% from top).");
-    if (m_autoSqlMarginSlider) m_autoSqlMarginSlider->setToolTip("Auto-squelch margin in dBm above the measured noise floor.");
 
     m_displayPanel->adjustSize();
 }
@@ -1173,7 +1167,6 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
         m_floorSlider->setValue(floorPos);
         m_floorLabel->setText(QString::number(floorPos));
         m_floorEnableBtn->setChecked(floorEnable);
-        m_floorEnableBtn->setText(floorEnable ? "On" : "Off");
         m_floorSlider->setEnabled(floorEnable);
     }
     if (m_heatMapBtn) {

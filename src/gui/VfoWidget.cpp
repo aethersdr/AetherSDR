@@ -791,11 +791,11 @@ void VfoWidget::buildTabContent()
         m_sqlSlider->setValue(20);
         m_sqlSlider->setStyleSheet(kSliderStyle);
         sqlRow->addWidget(m_sqlSlider, 1);
-        auto* sqlVal = new QLabel("20");
-        sqlVal->setStyleSheet(kLabelStyle);
-        sqlVal->setFixedWidth(20);
-        sqlVal->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        sqlRow->addWidget(sqlVal);
+        m_sqlValueLbl = new QLabel("20");
+        m_sqlValueLbl->setStyleSheet(kLabelStyle);
+        m_sqlValueLbl->setFixedWidth(20);
+        m_sqlValueLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        sqlRow->addWidget(m_sqlValueLbl);
         vb->addLayout(sqlRow);
 
         // AGC-T row: mode combo + threshold slider
@@ -962,14 +962,31 @@ void VfoWidget::buildTabContent()
                                      : QString::fromUtf8("\xF0\x9F\x94\x8A"));
             if (!m_updatingFromModel) emit audioMuteToggled(on);  // (#1560)
         });
-        connect(m_sqlBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (!m_updatingFromModel && m_slice)
-                m_slice->setSquelch(on, m_sqlSlider->value());
+        // SQL button: when wired to an RxApplet (the normal case in
+        // MainWindow), delegate the 3-way mode cycle to RxApplet so both
+        // UIs share Off / Manual / Auto state.  Standalone fallback
+        // (no RxApplet — e.g. tests) keeps the original 2-state toggle.
+        // We turn off Qt's built-in checkable behavior in setRxApplet
+        // so the click handler can drive the cycle explicitly.
+        connect(m_sqlBtn, &QPushButton::clicked, this, [this]() {
+            if (m_rxApplet) {
+                m_rxApplet->cycleSqlModeExternal();
+            } else if (!m_updatingFromModel && m_slice) {
+                m_slice->setSquelch(m_sqlBtn->isChecked(),
+                                    m_sqlSlider->value());
+            }
         });
-        connect(m_sqlSlider, &QSlider::valueChanged, this, [this, sqlVal](int v) {
-            sqlVal->setText(QString::number(v));
-            if (!m_updatingFromModel && m_slice)
+        connect(m_sqlSlider, &QSlider::valueChanged, this, [this](int v) {
+            if (m_sqlValueLbl) m_sqlValueLbl->setText(QString::number(v));
+            if (m_updatingFromModel) return;
+            if (m_rxApplet) {
+                // Routes through RxApplet's Manual/Auto branching so the
+                // manual cache, AppSettings persistence, and spectrum-side
+                // margin broadcast all happen exactly once and in one place.
+                m_rxApplet->setSqlSliderValueExternal(v);
+            } else if (m_slice) {
                 m_slice->setSquelch(m_sqlBtn->isChecked(), v);
+            }
         });
         connect(m_agcCmb, &QComboBox::currentTextChanged, this, [this](const QString& text) {
             if (!m_updatingFromModel && m_slice) {
@@ -2705,12 +2722,23 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_apfValueLbl->setText(QString::number(v));
         m_updatingFromModel = false;
     });
-    // Squelch
+    // Squelch.  When mirrored against an RxApplet, the slider represents
+    // the operator-chosen dB margin in Auto mode (NOT the algorithm-
+    // suggested level), so skip the value update when m_sqlMode is Auto.
+    // The 3-way button visuals are driven separately via syncSqlVisuals
+    // on sqlModeChanged — we don't need to touch the button here.
     connect(m_slice, &SliceModel::squelchChanged, this, [this](bool on, int level) {
         m_updatingFromModel = true;
-        if (m_sqlBtn->isEnabled())
-            m_sqlBtn->setChecked(on);
-        m_sqlSlider->setValue(level);
+        if (m_rxApplet) {
+            const bool inAuto =
+                (m_rxApplet->sqlMode() == RxApplet::SqlMode::Auto);
+            if (!inAuto)
+                m_sqlSlider->setValue(level);
+        } else {
+            if (m_sqlBtn->isEnabled())
+                m_sqlBtn->setChecked(on);
+            m_sqlSlider->setValue(level);
+        }
         m_updatingFromModel = false;
     });
     // AGC
@@ -3707,6 +3735,93 @@ void VfoWidget::setAntennaList(const QStringList& ants)
 void VfoWidget::setTransmitModel(TransmitModel* txModel)
 {
     m_txModel = txModel;
+}
+
+void VfoWidget::setRxApplet(RxApplet* rx)
+{
+    if (m_rxApplet == rx) return;
+    m_rxApplet = rx;
+    if (!rx) return;
+
+    // Take the SQL button out of Qt's built-in checkable behavior — the
+    // 3-way cycle is driven by clicked()'s explicit call to RxApplet.
+    if (m_sqlBtn) {
+        m_sqlBtn->setCheckable(false);
+        m_sqlBtn->setChecked(false);
+    }
+
+    // Refresh visuals whenever the RxApplet's mode changes, and once now
+    // so the freshly-wired widget shows the current shared state.
+    connect(rx, &RxApplet::sqlModeChanged, this, [this](int) {
+        syncSqlVisuals();
+    });
+    // Auto-margin updates come from RxApplet (or any sibling VfoWidget
+    // mirroring it) — reflect them in the slider when we're in Auto mode.
+    connect(rx, &RxApplet::autoSqlMarginDbChanged, this, [this](int dB) {
+        if (!m_rxApplet || !m_sqlSlider) return;
+        if (m_rxApplet->sqlMode() != RxApplet::SqlMode::Auto) return;
+        QSignalBlocker b(m_sqlSlider);
+        m_sqlSlider->setValue(dB);
+        if (m_sqlValueLbl) m_sqlValueLbl->setText(QString::number(dB));
+    });
+    syncSqlVisuals();
+}
+
+void VfoWidget::syncSqlVisuals()
+{
+    if (!m_rxApplet || !m_sqlBtn || !m_sqlSlider) return;
+    const auto mode = m_rxApplet->sqlMode();
+    // Match RxApplet's three button styles + label so the two surfaces
+    // read identically.
+    switch (mode) {
+    case RxApplet::SqlMode::Off:
+        m_sqlBtn->setText("SQL");
+        m_sqlBtn->setStyleSheet(QString(kDspToggle) + kDisabledBtn);
+        break;
+    case RxApplet::SqlMode::Manual:
+        m_sqlBtn->setText("SQL");
+        m_sqlBtn->setStyleSheet(
+            "QPushButton { background: #006040; color: #00ff88; "
+            "border: 1px solid #00a060; border-radius: 3px; "
+            "font-size: 10px; font-weight: bold; padding: 1px 2px; }"
+            "QPushButton:hover { background: #007050; }"
+            + kDisabledBtn);
+        break;
+    case RxApplet::SqlMode::Auto:
+        m_sqlBtn->setText("AUTO");
+        m_sqlBtn->setStyleSheet(
+            "QPushButton { background: #604000; color: #ffb800; "
+            "border: 1px solid #906000; border-radius: 3px; "
+            "font-size: 10px; font-weight: bold; padding: 1px 2px; }"
+            "QPushButton:hover { background: #705000; }"
+            + kDisabledBtn);
+        break;
+    }
+    // Slider swaps role between Manual (0–100 squelch_level) and Auto
+    // (5–20 dB margin).  Block signals during the swap so the resize
+    // doesn't fire a phantom valueChanged.
+    QSignalBlocker b(m_sqlSlider);
+    switch (mode) {
+    case RxApplet::SqlMode::Manual: {
+        m_sqlSlider->setRange(0, 100);
+        m_sqlSlider->setValue(m_rxApplet->sqlManualLevel());
+        m_sqlSlider->setEnabled(true);
+        if (m_sqlValueLbl)
+            m_sqlValueLbl->setText(QString::number(m_sqlSlider->value()));
+        break;
+    }
+    case RxApplet::SqlMode::Auto: {
+        m_sqlSlider->setRange(5, 20);
+        m_sqlSlider->setValue(m_rxApplet->autoSqlMarginDb());
+        m_sqlSlider->setEnabled(true);
+        if (m_sqlValueLbl)
+            m_sqlValueLbl->setText(QString::number(m_sqlSlider->value()));
+        break;
+    }
+    case RxApplet::SqlMode::Off:
+        m_sqlSlider->setEnabled(false);
+        break;
+    }
 }
 
 void VfoWidget::setRadioModel(RadioModel* radioModel)

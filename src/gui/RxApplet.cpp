@@ -242,6 +242,14 @@ static QPushButton* mkRight(QWidget* parent = nullptr) { return new TriBtn(TriBt
 RxApplet::RxApplet(QWidget* parent) : QWidget(parent)
 {
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    // Recall the last user-chosen Manual squelch threshold from prior
+    // sessions.  Auto mode clobbers the slice's squelchLevel with
+    // algorithm-suggested values, so the radio can't be relied on to
+    // preserve the operator's manual preference across mode cycles or
+    // launches — we persist it client-side.
+    m_sqlManualLevel = std::clamp(
+        AppSettings::instance().value("LastManualSquelchLevel", "20").toInt(),
+        0, 100);
     buildUI();
 }
 
@@ -794,8 +802,28 @@ void RxApplet::buildUI()
         connect(m_sqlBtn, &QPushButton::clicked,
                 this, &RxApplet::cycleSqlMode);
         connect(m_sqlSlider, &QSlider::valueChanged, this, [this](int v) {
-            if (m_slice && m_sqlMode == SqlMode::Manual)
-                m_slice->setSquelch(true, v);
+            if (m_sqlMode == SqlMode::Manual) {
+                // Cache the user's chosen manual level so re-entering
+                // Manual from Auto/Off restores it, and persist it so the
+                // choice survives launch (the slice's squelchLevel gets
+                // clobbered by Auto's algorithm pushes and can no longer
+                // be trusted as the manual baseline).
+                m_sqlManualLevel = v;
+                auto& s = AppSettings::instance();
+                s.setValue("LastManualSquelchLevel", QString::number(v));
+                s.save();
+                if (m_slice)
+                    m_slice->setSquelch(true, v);
+            } else if (m_sqlMode == SqlMode::Auto) {
+                // Auto SQL: slider sets the dB margin above the measured
+                // noise floor (5–20 dB).  Persist + broadcast so every
+                // pan's auto-squelch algorithm picks up the new margin
+                // and the suggested level recomputes on the next FFT.
+                auto& s = AppSettings::instance();
+                s.setValue("AutoSqlMarginDb", QString::number(v));
+                s.save();
+                emit autoSqlMarginDbChanged(v);
+            }
         });
         rightCol->addLayout(row);
     }
@@ -1074,8 +1102,49 @@ void RxApplet::applySqlModeVisuals()
             + kDisabledBtn);
         break;
     }
-    // Slider is the threshold input; only meaningful in Manual mode.
-    if (m_sqlSlider) m_sqlSlider->setEnabled(m_sqlMode == SqlMode::Manual);
+    // Slider has two distinct roles depending on mode:
+    //   Manual: threshold input (0–100, squelch_level units).
+    //   Auto:   dB margin above measured noise floor (5–20).
+    //   Off:    disabled.
+    // Switching modes resizes the slider's range and restores the
+    // appropriate value (live squelch_level for Manual, persisted
+    // AutoSqlMarginDb for Auto).  Signals are blocked during the swap
+    // so the resize doesn't fire a phantom valueChanged into either path.
+    if (m_sqlSlider) {
+        QSignalBlocker b(m_sqlSlider);
+        switch (m_sqlMode) {
+        case SqlMode::Manual: {
+            m_sqlSlider->setRange(0, 100);
+            // Restore the cached manual level — slice->squelchLevel() may
+            // hold a stale Auto-algorithm value that doesn't represent the
+            // user's chosen manual threshold.
+            m_sqlSlider->setValue(m_sqlManualLevel);
+            m_sqlSlider->setEnabled(true);
+            m_sqlSlider->setToolTip(
+                "Squelch threshold (0–100). Increase to require a stronger "
+                "signal before audio opens.");
+            break;
+        }
+        case SqlMode::Auto: {
+            m_sqlSlider->setRange(5, 20);
+            const int margin = std::clamp(
+                AppSettings::instance().value("AutoSqlMarginDb", "10").toInt(),
+                5, 20);
+            m_sqlSlider->setValue(margin);
+            m_sqlSlider->setEnabled(true);
+            m_sqlSlider->setToolTip(
+                "Auto SQL margin (5–20 dB). dB above the measured noise "
+                "floor where the squelch gate opens.");
+            break;
+        }
+        case SqlMode::Off:
+            m_sqlSlider->setEnabled(false);
+            m_sqlSlider->setToolTip(
+                "Squelch threshold. Increase to require a stronger signal "
+                "before audio opens.");
+            break;
+        }
+    }
 }
 
 void RxApplet::cycleSqlMode()
@@ -1087,6 +1156,53 @@ void RxApplet::cycleSqlMode()
     setSqlMode(next, /*propagateToRadio=*/true);
 }
 
+// ── Cross-widget SQL drivers (for VfoWidget mirroring) ──────────────────
+//
+// VfoWidget hosts a second SQL button+slider that must show the same
+// mode and value as the one in RxApplet.  These helpers let it pipe its
+// own user events through RxApplet's existing state machine so all the
+// persistence (AppSettings LastManualSquelchLevel / AutoSqlMarginDb),
+// algorithm enable/disable, and the manual-level cache live in exactly
+// one place.  RxApplet emits sqlModeChanged / autoSqlMarginDbChanged
+// back so VfoWidget can refresh its UI.
+
+void RxApplet::cycleSqlModeExternal()
+{
+    cycleSqlMode();
+}
+
+int RxApplet::autoSqlMarginDb() const
+{
+    return std::clamp(
+        AppSettings::instance().value("AutoSqlMarginDb", "10").toInt(), 5, 20);
+}
+
+void RxApplet::setSqlSliderValueExternal(int v)
+{
+    if (m_sqlMode == SqlMode::Manual) {
+        m_sqlManualLevel = v;
+        auto& s = AppSettings::instance();
+        s.setValue("LastManualSquelchLevel", QString::number(v));
+        s.save();
+        if (m_slice)
+            m_slice->setSquelch(true, v);
+        if (m_sqlSlider) {
+            QSignalBlocker b(m_sqlSlider);
+            m_sqlSlider->setValue(v);
+        }
+    } else if (m_sqlMode == SqlMode::Auto) {
+        auto& s = AppSettings::instance();
+        s.setValue("AutoSqlMarginDb", QString::number(v));
+        s.save();
+        emit autoSqlMarginDbChanged(v);
+        if (m_sqlSlider) {
+            QSignalBlocker b(m_sqlSlider);
+            m_sqlSlider->setValue(v);
+        }
+    }
+    // Off: ignored — slider is disabled on both UIs.
+}
+
 void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
 {
     if (m == m_sqlMode) return;
@@ -1094,6 +1210,11 @@ void RxApplet::setSqlMode(SqlMode m, bool propagateToRadio)
     const bool nowAuto = (m == SqlMode::Auto);
     m_sqlMode = m;
     applySqlModeVisuals();
+
+    // Notify any mirroring UI (VfoWidget's SQL button + slider) so it can
+    // refresh label / color / slider role to match.  Fires before the
+    // radio-push below so listeners see the new mode before any echo.
+    emit sqlModeChanged(static_cast<int>(m));
 
     // Auto state is client-side only; tell the spectrum-side algorithm to
     // start or stop driving the level.
@@ -1551,6 +1672,14 @@ void RxApplet::connectSlice(SliceModel* s)
     // re-enter Auto on the new slice with one click if they want.
     {
         QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
+        // Do NOT overwrite m_sqlManualLevel from the slice here — the
+        // slice's squelchLevel may have been clobbered by Auto-mode
+        // algorithm pushes in the prior session, and we want to keep the
+        // user's persisted manual choice as the source of truth across
+        // launches.  The slider value is still visually set to the
+        // slice's current state below; applySqlModeVisuals (via the
+        // setSqlMode call) will overwrite that with m_sqlManualLevel
+        // when entering Manual.
         m_sqlSlider->setValue(s->squelchLevel());
         setSqlMode(s->squelchOn() ? SqlMode::Manual : SqlMode::Off,
                    /*propagateToRadio=*/false);
@@ -1568,7 +1697,26 @@ void RxApplet::connectSlice(SliceModel* s)
 
     connect(s, &SliceModel::squelchChanged, this, [this](bool on, int level) {
         QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
-        m_sqlSlider->setValue(level);
+        // In Auto mode the slider represents the operator-chosen dB margin,
+        // NOT the algorithm-suggested threshold — skip the value update so
+        // the algorithm's tick-by-tick setSquelch echoes don't overwrite
+        // the user's margin choice.  The spectrum-side yellow SQL line
+        // still tracks `level` via setSquelchLine.
+        if (m_sqlMode != SqlMode::Auto) {
+            m_sqlSlider->setValue(level);
+            // Keep the Manual-level cache in sync with external squelch
+            // changes (TCI client, radio panel knob) so a later Manual
+            // re-entry restores the up-to-date value, not a stale one.
+            // Persist too so launch-time recall reflects the most recent
+            // manual threshold regardless of who set it.
+            if (m_sqlMode == SqlMode::Manual) {
+                m_sqlManualLevel = level;
+                auto& settings = AppSettings::instance();
+                settings.setValue("LastManualSquelchLevel",
+                                  QString::number(level));
+                settings.save();
+            }
+        }
         // Auto drives setSquelch every algorithm tick; don't demote out of
         // Auto when the echo arrives with squelch-on.  Only flip the mode
         // when the radio reports squelch-off (operator hit it from somewhere
@@ -1903,8 +2051,9 @@ void RxApplet::updateModeSettings(const QString& mode)
                         || mode == "RTTY"
                         || mode == "CW" || mode == "CWL");
     m_sqlBtn->setEnabled(!sqlDisabled);
-    // Slider enabled only in Manual mode AND mode allows squelch.
-    m_sqlSlider->setEnabled(!sqlDisabled && m_sqlMode == SqlMode::Manual);
+    // Slider enabled when the mode allows squelch AND we're not in SqlMode::Off.
+    // Manual mode = threshold input; Auto mode = dB margin input.
+    m_sqlSlider->setEnabled(!sqlDisabled && m_sqlMode != SqlMode::Off);
     if (sqlDisabled && m_slice) {
         if (m_slice->squelchOn() || m_sqlMode == SqlMode::Auto) {
             m_savedSquelchOn = true;

@@ -39,11 +39,32 @@ class RxApplet : public QWidget {
     Q_OBJECT
 
 public:
+    // 3-way squelch state.  Off → Manual → Auto cycle on SQL button click.
+    // Mirrored by VfoWidget's SQL button via the sqlModeChanged signal so
+    // both UI surfaces present the same state and value.
+    enum class SqlMode : uint8_t { Off, Manual, Auto };
+
     explicit RxApplet(QWidget* parent = nullptr);
 
     // Attach to a slice; pass nullptr to detach.
     void setSlice(SliceModel* slice);
     void setAfGain(int pct);
+
+    // Cross-widget access for the bidirectional SQL sync with VfoWidget.
+    // VfoWidget mirrors mode + value via these methods; RxApplet stays the
+    // source of truth for SqlMode, the manual-level cache, and the
+    // AutoSqlMarginDb persistence.
+    SqlMode sqlMode() const { return m_sqlMode; }
+    int     sqlManualLevel() const { return m_sqlManualLevel; }
+    int     autoSqlMarginDb() const;
+    // Externally cycle the mode (Off → Manual → Auto → Off) — same path the
+    // RxApplet's own SQL button takes.  Emits sqlModeChanged.
+    void    cycleSqlModeExternal();
+    // Programmatic slider drag from another UI surface.  Branches by mode
+    // exactly like the in-applet slider does: Manual writes the slice and
+    // persists m_sqlManualLevel; Auto writes AppSettings AutoSqlMarginDb
+    // and emits autoSqlMarginDbChanged.  Off is a no-op.
+    void    setSqlSliderValueExternal(int v);
     void syncStepFromSlice(int stepHz, const QVector<int>& stepList);
     void cycleStepUp();
     void cycleStepDown();
@@ -78,6 +99,17 @@ signals:
     void stepSizeChanged(int hz);
     // Emitted when Auto SQL tracking is toggled.
     void sqlAutoChanged(bool on);
+    // Emitted on every SQL mode transition (Off / Manual / Auto), so any
+    // mirroring UI (e.g. VfoWidget's SQL button + slider) can refresh its
+    // label, color, and slider role.  Carries the new SqlMode value as an
+    // int so the header doesn't need to leak the enum to listeners that
+    // don't care about the symbolic names.
+    void sqlModeChanged(int mode);
+    // Emitted when the user adjusts the SQL slider while SQL mode is Auto.
+    // Carries the new dB margin above the measured noise floor.  Routes to
+    // every SpectrumWidget's setAutoSqlMarginDb().  Replaces the standalone
+    // "Auto SQL ∆" slider that used to live in the Display overlay menu.
+    void autoSqlMarginDbChanged(int dB);
     // Emitted when the radio reports a squelch state change (for spectrum line).
     void squelchStateChanged(bool on, int level);
 
@@ -190,11 +222,16 @@ private:
     // change with the mode ("SQL"/"AUTO"; base/green/amber).  Auto mode
     // emits sqlAutoChanged(true) so MainWindow's spectrum-side algorithm
     // takes over driving the squelch level; Manual mode uses the slider.
-    enum class SqlMode : uint8_t { Off, Manual, Auto };
+    // SqlMode is declared in the public section above so VfoWidget can mirror.
     QPushButton* m_sqlBtn{nullptr};
     QSlider*     m_sqlSlider{nullptr};
     SqlMode      m_sqlMode{SqlMode::Off};
     bool         m_savedSquelchOn{false};
+    // Last user-chosen Manual squelch level (0–100).  Auto mode overwrites
+    // the slice's squelchLevel with algorithm-suggested values every FFT
+    // tick, so we cache the manual value separately and restore it when
+    // the user comes back to Manual.  Seeded from the slice on first attach.
+    int          m_sqlManualLevel{20};
 
     void applySqlModeVisuals();
     void cycleSqlMode();

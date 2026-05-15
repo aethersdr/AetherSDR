@@ -10405,10 +10405,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (auto* s = activeSlice()) s->setSquelch(true, level);
         sw->setSquelchLine(true, level);
     });
-    // SQL Margin overlay control → spectrum widget + persist
-    connect(menu, &SpectrumOverlayMenu::autoSqlMarginDbChanged,
+    // Auto-squelch margin: now driven by the RX Applet's SQL slider when
+    // SQL mode is Auto (instead of a separate slider in the Display
+    // overlay).  The slider repurposes itself in Auto mode to set the
+    // dB margin above the measured noise floor; manual mode is unchanged.
+    connect(m_appletPanel->rxApplet(), &RxApplet::autoSqlMarginDbChanged,
             sw, &SpectrumWidget::setAutoSqlMarginDb);
-    // Initialize SQL Margin from AppSettings for this pan's spectrum widget
+    // Initialize from AppSettings for this pan's spectrum widget.
     {
         auto& s = AppSettings::instance();
         int margin = std::clamp(s.value("AutoSqlMarginDb", "10").toInt(), 5, 20);
@@ -10599,6 +10602,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("BackgroundImage"),            ":/bg-default.jpg");
         s.setValue(sw->settingsKey("BackgroundOpacity"),          "80");
         s.setValue(sw->settingsKey("DisplayFreqGridSpacing"),     "0");
+        s.setValue(sw->settingsKey("DisplayNoiseFloorEnable"),    "False");
+        s.setValue(sw->settingsKey("DisplayNoiseFloorPosition"),  "75");
         s.save();
 
         // Sync all Display panel UI controls
@@ -11059,6 +11064,14 @@ MainWindow::TuneCenteringResult MainWindow::panFollowVfo(
 void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 {
     const int sliceId = s->sliceId();
+
+    // Bidirectional SQL sync — the VfoWidget mirrors the RxApplet's 3-way
+    // SQL state (Off / Manual / Auto), the manual-level cache, and the
+    // Auto dB margin.  RxApplet is the source of truth; VfoWidget pipes
+    // its own button + slider events through RxApplet so persistence,
+    // algorithm enable/disable, and the manual cache stay in one place.
+    if (m_appletPanel && m_appletPanel->rxApplet())
+        w->setRxApplet(m_appletPanel->rxApplet());
 
     // Note: w->setSlice(s) is called at the end of this method (line ~1895)
 

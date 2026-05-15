@@ -459,6 +459,13 @@ void SpectrumWidget::loadSettings()
     m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
     m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
+    m_noiseFloorEnable   = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
+    m_noiseFloorPosition = std::clamp(
+        s.value(settingsKey("DisplayNoiseFloorPosition"), "75").toInt(), 1, 99);
+    // Match the enable-time fresh-frame seed used by setNoiseFloorEnable so a
+    // restored Floor=on locks onto the current floor without smoothing from a
+    // stale value.
+    m_noiseFloorFreshFrameCount = m_noiseFloorEnable ? 5 : 0;
     applyFpsMeterVisibility(
         s.value("DisplayFpsMeters", "False").toString() == "True");
     m_wfColorScheme  = static_cast<WfColorScheme>(
@@ -480,11 +487,15 @@ void SpectrumWidget::loadSettings()
             static_cast<int>(m_fftFillAlpha * 100), m_fftWeightedAvg, m_fftFillColor,
             m_wfColorGain, m_wfBlackLevel, m_wfAutoBlack, m_wfAutoBlackOffset,
             m_wfLineDuration,
-            75, false, m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
+            m_noiseFloorPosition, m_noiseFloorEnable,
+            m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
             m_fftLineWidth);
         m_overlayMenu->syncExtraDisplaySettings(m_wfBlankerEnabled,
             m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz);
     }
+    // Refresh the noise-floor target so the slider position takes effect
+    // even when the overlay menu is built but not yet shown.
+    refreshNoiseFloorTarget();
 }
 
 VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
@@ -534,6 +545,23 @@ void SpectrumWidget::setFftAverage(int frames) {
     m_fftAverage = frames;
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("DisplayFftAverage"), QString::number(frames));
+    s.save();
+}
+void SpectrumWidget::setNoiseFloorPosition(int pos) {
+    m_noiseFloorPosition = pos;
+    refreshNoiseFloorTarget();
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("DisplayNoiseFloorPosition"), QString::number(pos));
+    s.save();
+}
+void SpectrumWidget::setNoiseFloorEnable(bool on) {
+    m_noiseFloorEnable = on;
+    resetNoiseFloorBaseline();
+    // Five fresh frames after enable so we lock onto the current
+    // floor without smoothing from a stale value.
+    m_noiseFloorFreshFrameCount = on ? 5 : 0;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("DisplayNoiseFloorEnable"), on ? "True" : "False");
     s.save();
 }
 void SpectrumWidget::setFftWeightedAvg(bool on) {

@@ -26,6 +26,7 @@ class SliceModel;
 class TransmitModel;
 class RadioModel;
 class PhaseKnob;
+class RxApplet;
 
 // Floating VFO info panel attached to the VFO marker on the spectrum display.
 // Shows slice info (antennas, frequency, signal level, filter width, TX/SPLIT)
@@ -42,6 +43,11 @@ public:
     void setAntennaList(const QStringList& ants);
     void setTransmitModel(TransmitModel* txModel);
     void setRadioModel(RadioModel* radioModel);
+    // Wire the SQL button + slider as a mirror of the RxApplet's 3-way
+    // SQL UI (Off / Manual / Auto, manual-level cache, Auto margin).
+    // Without this call, the SQL row still functions but in the old
+    // 2-state on/off mode against the slice's squelchLevel only.
+    void setRxApplet(RxApplet* rx);
     void setSignalLevel(float dbm);
 
     // Split mode: call whenever TX assignment or active slice changes.
@@ -209,7 +215,13 @@ private:
     QWidget*     m_escMeterBar{nullptr};
     float        m_escLevelDbm{-130.0f};
     QPushButton* m_sqlBtn{nullptr};
+    QPointer<RxApplet> m_rxApplet;       // source-of-truth for 3-way SQL state
+    QLabel*      m_sqlValueLbl{nullptr}; // captured during buildUI() for syncSqlVisuals
     bool         m_savedSquelchOn{false};
+    // Apply the current SqlMode from m_rxApplet to the VfoWidget's SQL
+    // button label/style and slider range/value.  Called on rxApplet's
+    // sqlModeChanged signal and once after setRxApplet().
+    void syncSqlVisuals();
 public:
     void setDiversityAllowed(bool allowed);
     void setSmartSdrPlus(bool has);

@@ -98,17 +98,10 @@ public:
     void setDbmRange(float minDbm, float maxDbm);
 
     // Noise floor auto-adjust: position (0=top, 100=bottom), enable on/off.
-    void setNoiseFloorPosition(int pos) {
-        m_noiseFloorPosition = pos;
-        refreshNoiseFloorTarget();
-    }
-    void setNoiseFloorEnable(bool on) {
-        m_noiseFloorEnable = on;
-        resetNoiseFloorBaseline();
-        // Five fresh frames after enable so we lock onto the current
-        // floor without smoothing from a stale value.
-        m_noiseFloorFreshFrameCount = on ? 5 : 0;
-    }
+    // Both setters persist to AppSettings (per-pan keys DisplayNoiseFloor*)
+    // so the state and value survive launch.
+    void setNoiseFloorPosition(int pos);
+    void setNoiseFloorEnable(bool on);
 
     // Two-pass trimmed-mean noise floor from live FFT bins (dBm), EMA-smoothed.
     // Pass 1 computes the overall mean; pass 2 averages only bins ≤ mean so
