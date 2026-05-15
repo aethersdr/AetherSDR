@@ -80,6 +80,11 @@ class NetworkDiagnosticsHistory;
 class WhatsNewDialog;
 class ProfileManagerDialog;
 class ProfileImportExportDialog;
+class NetworkDiagnosticsDialog;
+class MemoryDialog;
+class AetherDspDialog;
+class DxClusterDialog;
+class MidiMappingDialog;
 class CwxPanel;
 class DvkPanel;
 #ifdef HAVE_RADE
@@ -241,6 +246,13 @@ private:
     // Example: showOrRaisePersistent(m_profileManagerDialog, &m_radioModel);
     template <class T, class... Args>
     void showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs);
+
+    // Create-or-raise helper for the AetherDSP Settings dialog.  Centralizes
+    // the ~17 audio-parameter signal connections that every call site was
+    // duplicating; on first construction wires them once, on subsequent calls
+    // just raises the existing instance.  Returns nullptr only if construction
+    // failed (e.g. allocation failure).
+    AetherDspDialog* ensureAetherDspDialog();
 
     // Reorder the main splitter so the applet panel sits on the left or
     // right of the panadapter stack.  Wired from the dock-side icons in
@@ -475,18 +487,18 @@ private:
     AppletPanel*     m_appletPanel{nullptr};
 
     // Modeless dialogs
-    QPointer<QDialog> m_spotHubDialog;
+    QPointer<DxClusterDialog> m_spotHubDialog;
     QPointer<QDialog> m_radioSetupDialog;
-    QPointer<QDialog> m_networkDiagnosticsDialog;
+    QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
     QPointer<QDialog> m_propDashboardDialog;
     QPointer<QDialog> m_txBandDialog;
-    QPointer<QDialog> m_memoryDialog;
+    QPointer<MemoryDialog> m_memoryDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
-    QPointer<QDialog> m_dspDialog;
+    QPointer<AetherDspDialog> m_dspDialog;
     QPointer<ProfileManagerDialog> m_profileManagerDialog;
     QPointer<ProfileImportExportDialog> m_profileImportExportDialog;
 #ifdef HAVE_MIDI
-    QPointer<QDialog> m_midiDialog;
+    QPointer<MidiMappingDialog> m_midiDialog;
 #endif
 
     // Tracks every PersistentDialog created via showOrRaisePersistent() so

@@ -1,10 +1,10 @@
 #pragma once
 
-#include <QDialog>
+#include "PersistentDialog.h"
+
 #include <QString>
 #include <QVector>
 
-class QVBoxLayout;
 class QWidget;
 
 namespace AetherSDR {
@@ -30,7 +30,7 @@ struct PanLayout {
     QVector<QVector<int>> rows;
 };
 
-class PanLayoutDialog : public QDialog {
+class PanLayoutDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
@@ -38,13 +38,10 @@ public:
                              QWidget* parent = nullptr);
 
     QString selectedLayout() const { return m_selected; }
-    void setFramelessMode(bool on);
 
 private:
     void buildUI(int maxPans, const QString& currentLayout);
     QString m_selected;
-    QWidget* m_titleBar{nullptr};
-    QVBoxLayout* m_bodyLayout{nullptr};
 };
 
 } // namespace AetherSDR

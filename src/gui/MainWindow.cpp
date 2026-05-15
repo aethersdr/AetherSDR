@@ -4810,6 +4810,16 @@ ClientPuduEditor* MainWindow::ensureClientPuduEditor()
     return m_clientPuduEditor;
 }
 
+AetherDspDialog* MainWindow::ensureAetherDspDialog()
+{
+    const bool wasFresh = !m_dspDialog;
+    showOrRaisePersistent(m_dspDialog, m_audio);
+    if (wasFresh && m_dspDialog) {
+        if (auto* w = m_dspDialog->widget()) wireAetherDspWidget(w);
+    }
+    return m_dspDialog.data();
+}
+
 void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
 {
     if (!w || !m_audio) return;
@@ -5241,17 +5251,8 @@ bool MainWindow::handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eve
 
 void MainWindow::showNetworkDiagnosticsDialog()
 {
-    if (!m_networkDiagnosticsDialog) {
-        auto* dlg = new NetworkDiagnosticsDialog(&m_radioModel, m_audio, m_networkDiagnosticsHistory, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setModal(false);
-        dlg->setWindowModality(Qt::NonModal);
-        m_networkDiagnosticsDialog = dlg;
-    }
-
-    m_networkDiagnosticsDialog->show();
-    m_networkDiagnosticsDialog->raise();
-    m_networkDiagnosticsDialog->activateWindow();
+    showOrRaisePersistent(m_networkDiagnosticsDialog,
+                          &m_radioModel, m_audio, m_networkDiagnosticsHistory);
 }
 
 QJsonObject MainWindow::buildControlDevicesSnapshot() const
@@ -5832,26 +5833,19 @@ void MainWindow::toggleConnectionDialog()
 
 void MainWindow::showMemoryDialog()
 {
-    if (m_memoryDialog) {
-        m_memoryDialog->show();
-        m_memoryDialog->raise();
-        m_memoryDialog->activateWindow();
-        return;
+    const bool wasFresh = !m_memoryDialog;
+    showOrRaisePersistent(m_memoryDialog, &m_radioModel);
+    if (wasFresh && m_memoryDialog) {
+        connect(m_memoryDialog.data(), &MemoryDialog::memoryActivated,
+                this, [this](int memoryIndex) { activateMemorySpot(memoryIndex); });
+        connect(m_memoryDialog.data(), &QObject::destroyed, this, [this] {
+            if (m_shuttingDown)
+                return;
+            auto& s = AppSettings::instance();
+            s.setValue("MemoryDialogOpen", "False");
+            s.save();
+        });
     }
-
-    auto* dlg = new MemoryDialog(&m_radioModel, this);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    connect(dlg, &MemoryDialog::memoryActivated,
-            this, [this](int memoryIndex) { activateMemorySpot(memoryIndex); });
-    connect(dlg, &QObject::destroyed, this, [this] {
-        if (m_shuttingDown)
-            return;
-        auto& s = AppSettings::instance();
-        s.setValue("MemoryDialogOpen", "False");
-        s.save();
-    });
-    m_memoryDialog = dlg;
-    dlg->show();
 }
 
 SliceModel* MainWindow::preferredMemorySlice(const QString& preferredPanId) const
@@ -6336,36 +6330,22 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_MIDI
     auto* midiAction = settingsMenu->addAction("MIDI Mapping...");
     connect(midiAction, &QAction::triggered, this, [this] {
-        if (m_midiDialog) {
-            m_midiDialog->raise();
-            m_midiDialog->activateWindow();
-            return;
-        }
-        auto* dlg = new MidiMappingDialog(m_midiControl, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_midiDialog = dlg;
-        dlg->setFramelessMode(framelessWindowEnabled());
-        dlg->show();
+        showOrRaisePersistent(m_midiDialog, m_midiControl);
     });
 #endif
 #ifdef HAVE_HIDAPI
 #endif
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
-        // Raise existing dialog if already open
-        if (m_spotHubDialog) {
-            m_spotHubDialog->raise();
-            m_spotHubDialog->activateWindow();
-            return;
-        }
-        auto* dlg = new DxClusterDialog(m_dxCluster, m_rbnClient, m_wsjtxClient,
-                            m_spotCollectorClient, m_potaClient,
+        const bool wasFresh = !m_spotHubDialog;
+        showOrRaisePersistent(m_spotHubDialog, m_dxCluster, m_rbnClient, m_wsjtxClient,
+                              m_spotCollectorClient, m_potaClient,
 #ifdef HAVE_WEBSOCKETS
-                            m_freedvClient,
+                              m_freedvClient,
 #endif
-                            &m_radioModel, &m_dxccProvider, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        m_spotHubDialog = dlg;
+                              &m_radioModel, &m_dxccProvider);
+        if (!wasFresh || !m_spotHubDialog) return;
+        auto* dlg = m_spotHubDialog.data();
         dlg->setTotalSpots(m_radioModel.spotModel().spots().size());
         // Live preview: refresh spots on every display settings change
         auto refreshSpots = [this]() {
@@ -6494,7 +6474,6 @@ void MainWindow::buildMenuBar()
                 sl->setMode(radioMode);
         });
         connect(dlg, &QDialog::finished, this, refreshSpots);  // refresh on close
-        dlg->show();
     });
     auto* multiFlexAction = settingsMenu->addAction("multiFLEX...");
     auto openMultiFlex = [this] {
@@ -6741,16 +6720,7 @@ void MainWindow::buildMenuBar()
     auto* dspAction = settingsMenu->addAction("AetherDSP Settings...");
     dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
     connect(dspAction, &QAction::triggered, this, [this] {
-        if (m_dspDialog) {
-            m_dspDialog->raise();
-            m_dspDialog->activateWindow();
-            return;
-        }
-        auto* dlg = new AetherDspDialog(m_audio, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        if (auto* w = dlg->widget()) wireAetherDspWidget(w);
-        m_dspDialog = dlg;
-        dlg->show();
+        ensureAetherDspDialog();
     });
     // RX chain DSP tile double-click also opens the full AetherDSP
     // Settings dialog — same entry point as the Settings menu action.
@@ -11232,16 +11202,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     // Settings menu action and the RX chain double-click; reuses the
     // existing modeless m_dspDialog when one is already open.
     connect(w, &VfoWidget::aetherDspRequested, this, [this] {
-        if (m_dspDialog) {
-            m_dspDialog->raise();
-            m_dspDialog->activateWindow();
-            return;
-        }
-        auto* dlg = new AetherDspDialog(m_audio, this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        if (auto* dspWidget = dlg->widget()) wireAetherDspWidget(dspWidget);
-        m_dspDialog = dlg;
-        dlg->show();
+        ensureAetherDspDialog();
     });
 
     // AetherVoice button on the per-slice DSP tab — toggles the Aetherial
@@ -11569,17 +11530,9 @@ void MainWindow::setFramelessWindow(bool on)
         m_appletPanel->containerManager()->setFramelessMode(on);
     if (m_connPanel)
         m_connPanel->setFramelessMode(on);
-    if (auto* dlg = qobject_cast<NetworkDiagnosticsDialog*>(m_networkDiagnosticsDialog))
-        dlg->setFramelessMode(on);
     if (auto* dlg = qobject_cast<PropDashboardDialog*>(m_propDashboardDialog))
         dlg->setFramelessMode(on);
     if (auto* dlg = qobject_cast<RadioSetupDialog*>(m_radioSetupDialog))
-        dlg->setFramelessMode(on);
-    if (auto* dlg = qobject_cast<AetherDspDialog*>(m_dspDialog))
-        dlg->setFramelessMode(on);
-    if (auto* dlg = qobject_cast<DxClusterDialog*>(m_spotHubDialog))
-        dlg->setFramelessMode(on);
-    if (auto* dlg = qobject_cast<MemoryDialog*>(m_memoryDialog))
         dlg->setFramelessMode(on);
     // Profile Import/Export hasn't been migrated to PersistentDialog yet
     // (#2605 follow-up), so it still needs an explicit cast.  Profile
@@ -11587,11 +11540,6 @@ void MainWindow::setFramelessWindow(bool on)
     // below.
     if (m_profileImportExportDialog)
         m_profileImportExportDialog->setFramelessMode(on);
-#ifdef HAVE_MIDI
-    if (auto* dlg = qobject_cast<MidiMappingDialog*>(m_midiDialog)) {
-        dlg->setFramelessMode(on);
-    }
-#endif
     if (m_txBandDialog) {
         setDialogFramelessMode(m_txBandDialog, on);
     }
@@ -11716,18 +11664,7 @@ void MainWindow::toggleAetherialStrip()
         // ADSP launcher tile → open / focus the AetherDsp Settings
         // dialog, same as the Settings menu action.
         connect(m_aetherialStrip, &AetherialAudioStrip::rxDspEditRequested,
-                this, [this]() {
-            if (m_dspDialog) {
-                m_dspDialog->raise();
-                m_dspDialog->activateWindow();
-                return;
-            }
-            auto* dlg = new AetherDspDialog(m_audio, this);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
-            if (auto* w = dlg->widget()) wireAetherDspWidget(w);
-            m_dspDialog = dlg;
-            dlg->show();
-        });
+                this, [this]() { ensureAetherDspDialog(); });
         // PUDU monitor record / play — same toggle logic as the docked
         // ClientChainApplet.
         connect(m_aetherialStrip, &AetherialAudioStrip::monitorRecordClicked,
@@ -12528,71 +12465,7 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
         });
 
     popup->finalize(
-        [this]() {
-            // Open AetherDSP Settings dialog
-            if (m_dspDialog) {
-                m_dspDialog->raise();
-                m_dspDialog->activateWindow();
-                return;
-            }
-            auto* dlg = new AetherDspDialog(m_audio, this);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
-            connect(dlg, &AetherDspDialog::nr2GainMaxChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainMax(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr2GainSmoothChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainSmooth(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr2QsppChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2Qspp(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr2GainMethodChanged, this, [this](int m) {
-                QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2GainMethod(m); });
-            });
-            connect(dlg, &AetherDspDialog::nr2NpeMethodChanged, this, [this](int m) {
-                QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2NpeMethod(m); });
-            });
-            connect(dlg, &AetherDspDialog::nr2AeFilterChanged, this, [this](bool on) {
-                QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
-            });
-            // Wire NR4 parameter signals
-            connect(dlg, &AetherDspDialog::nr4ReductionChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4ReductionAmount(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4SmoothingChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SmoothingFactor(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4WhiteningChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4WhiteningFactor(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4AdaptiveNoiseChanged, this, [this](bool on) {
-                QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr4AdaptiveNoise(on); });
-            });
-            connect(dlg, &AetherDspDialog::nr4NoiseMethodChanged, this, [this](int m) {
-                QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr4NoiseEstimationMethod(m); });
-            });
-            connect(dlg, &AetherDspDialog::nr4MaskingDepthChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4MaskingDepth(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4SuppressionChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SuppressionStrength(v); });
-            });
-            connect(dlg, &AetherDspDialog::dfnrAttenLimitChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrAttenLimit(v); });
-            });
-            connect(dlg, &AetherDspDialog::dfnrPostFilterBetaChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrPostFilterBeta(v); });
-            });
-            // Wire MNR enable / strength signals
-            connect(dlg, &AetherDspDialog::mnrEnabledChanged, this, [this](bool on) {
-                QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setMnrEnabled(on); });
-            });
-            connect(dlg, &AetherDspDialog::mnrStrengthChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setMnrStrength(v); });
-            });
-            m_dspDialog = dlg;
-            dlg->show();
-        },
+        [this]() { ensureAetherDspDialog(); },
         nullptr  // Reset handled by individual control resetters
     );
 
@@ -12657,70 +12530,7 @@ void MainWindow::showNr4ParamPopup(const QPoint& globalPos)
         });
 
     popup->finalize(
-        [this]() {
-            // Open AetherDSP Settings dialog (NR4 tab)
-            if (m_dspDialog) {
-                m_dspDialog->raise();
-                m_dspDialog->activateWindow();
-                return;
-            }
-            auto* dlg = new AetherDspDialog(m_audio, this);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
-            connect(dlg, &AetherDspDialog::nr2GainMaxChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainMax(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr2GainSmoothChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainSmooth(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr2QsppChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2Qspp(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr2GainMethodChanged, this, [this](int m) {
-                QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2GainMethod(m); });
-            });
-            connect(dlg, &AetherDspDialog::nr2NpeMethodChanged, this, [this](int m) {
-                QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2NpeMethod(m); });
-            });
-            connect(dlg, &AetherDspDialog::nr2AeFilterChanged, this, [this](bool on) {
-                QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
-            });
-            connect(dlg, &AetherDspDialog::nr4ReductionChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4ReductionAmount(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4SmoothingChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SmoothingFactor(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4WhiteningChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4WhiteningFactor(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4AdaptiveNoiseChanged, this, [this](bool on) {
-                QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr4AdaptiveNoise(on); });
-            });
-            connect(dlg, &AetherDspDialog::nr4NoiseMethodChanged, this, [this](int m) {
-                QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr4NoiseEstimationMethod(m); });
-            });
-            connect(dlg, &AetherDspDialog::nr4MaskingDepthChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4MaskingDepth(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4SuppressionChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SuppressionStrength(v); });
-            });
-            connect(dlg, &AetherDspDialog::dfnrAttenLimitChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrAttenLimit(v); });
-            });
-            connect(dlg, &AetherDspDialog::dfnrPostFilterBetaChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrPostFilterBeta(v); });
-            });
-            // Wire MNR enable / strength signals
-            connect(dlg, &AetherDspDialog::mnrEnabledChanged, this, [this](bool on) {
-                QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setMnrEnabled(on); });
-            });
-            connect(dlg, &AetherDspDialog::mnrStrengthChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setMnrStrength(v); });
-            });
-            m_dspDialog = dlg;
-            dlg->show();
-        },
+        [this]() { ensureAetherDspDialog(); },
         nullptr  // Reset handled by individual control resetters
     );
 
@@ -12755,71 +12565,7 @@ void MainWindow::showDfnrParamPopup(const QPoint& globalPos)
         });
 
     popup->finalize(
-        [this]() {
-            // Open AetherDSP Settings dialog (DFNR tab)
-            if (m_dspDialog) {
-                m_dspDialog->raise();
-                m_dspDialog->activateWindow();
-                return;
-            }
-            auto* dlg = new AetherDspDialog(m_audio, this);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
-            connect(dlg, &AetherDspDialog::dfnrAttenLimitChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrAttenLimit(v); });
-            });
-            connect(dlg, &AetherDspDialog::dfnrPostFilterBetaChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrPostFilterBeta(v); });
-            });
-            // Wire NR2/NR4 signals too (shared dialog)
-            connect(dlg, &AetherDspDialog::nr2GainMaxChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainMax(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr2GainSmoothChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainSmooth(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr2QsppChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2Qspp(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr2GainMethodChanged, this, [this](int m) {
-                QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2GainMethod(m); });
-            });
-            connect(dlg, &AetherDspDialog::nr2NpeMethodChanged, this, [this](int m) {
-                QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2NpeMethod(m); });
-            });
-            connect(dlg, &AetherDspDialog::nr2AeFilterChanged, this, [this](bool on) {
-                QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
-            });
-            connect(dlg, &AetherDspDialog::nr4ReductionChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4ReductionAmount(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4SmoothingChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SmoothingFactor(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4WhiteningChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4WhiteningFactor(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4AdaptiveNoiseChanged, this, [this](bool on) {
-                QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr4AdaptiveNoise(on); });
-            });
-            connect(dlg, &AetherDspDialog::nr4NoiseMethodChanged, this, [this](int m) {
-                QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr4NoiseEstimationMethod(m); });
-            });
-            connect(dlg, &AetherDspDialog::nr4MaskingDepthChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4MaskingDepth(v); });
-            });
-            connect(dlg, &AetherDspDialog::nr4SuppressionChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SuppressionStrength(v); });
-            });
-            // Wire MNR enable / strength signals
-            connect(dlg, &AetherDspDialog::mnrEnabledChanged, this, [this](bool on) {
-                QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setMnrEnabled(on); });
-            });
-            connect(dlg, &AetherDspDialog::mnrStrengthChanged, this, [this](float v) {
-                QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setMnrStrength(v); });
-            });
-            m_dspDialog = dlg;
-            dlg->show();
-        },
+        [this]() { ensureAetherDspDialog(); },
         nullptr
     );
 
@@ -12828,48 +12574,9 @@ void MainWindow::showDfnrParamPopup(const QPoint& globalPos)
 
 void MainWindow::showMnrSettings()
 {
-    if (m_dspDialog) {
-        m_dspDialog->raise();
-        m_dspDialog->activateWindow();
-        if (auto* d = qobject_cast<AetherDspDialog*>(m_dspDialog))
-            d->selectTab("MNR");
-        return;
+    if (auto* dlg = ensureAetherDspDialog()) {
+        dlg->selectTab("MNR");
     }
-    auto* dlg = new AetherDspDialog(m_audio, this);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    connect(dlg, &AetherDspDialog::mnrEnabledChanged, this, [this](bool on) {
-        QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setMnrEnabled(on); });
-    });
-    connect(dlg, &AetherDspDialog::mnrStrengthChanged, this, [this](float v) {
-        QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setMnrStrength(v); });
-    });
-    connect(dlg, &AetherDspDialog::nr2GainMaxChanged, this, [this](float v) {
-        QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainMax(v); });
-    });
-    connect(dlg, &AetherDspDialog::nr2GainSmoothChanged, this, [this](float v) {
-        QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainSmooth(v); });
-    });
-    connect(dlg, &AetherDspDialog::nr2QsppChanged, this, [this](float v) {
-        QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2Qspp(v); });
-    });
-    connect(dlg, &AetherDspDialog::nr2GainMethodChanged, this, [this](int m) {
-        QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2GainMethod(m); });
-    });
-    connect(dlg, &AetherDspDialog::nr2NpeMethodChanged, this, [this](int m) {
-        QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2NpeMethod(m); });
-    });
-    connect(dlg, &AetherDspDialog::nr2AeFilterChanged, this, [this](bool on) {
-        QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
-    });
-    connect(dlg, &AetherDspDialog::dfnrAttenLimitChanged, this, [this](float v) {
-        QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrAttenLimit(v); });
-    });
-    connect(dlg, &AetherDspDialog::dfnrPostFilterBetaChanged, this, [this](float v) {
-        QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrPostFilterBeta(v); });
-    });
-    m_dspDialog = dlg;
-    dlg->selectTab("MNR");
-    dlg->show();
 }
 
 void MainWindow::applyPanLayout(const QString& layoutId)

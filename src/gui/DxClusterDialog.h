@@ -1,6 +1,7 @@
 #pragma once
 
-#include <QDialog>
+#include "PersistentDialog.h"
+
 #include <QAbstractTableModel>
 #include <QSortFilterProxyModel>
 #include <QSet>
@@ -22,7 +23,6 @@ class QCheckBox;
 class QPlainTextEdit;
 class QTabWidget;
 class QTableView;
-class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -77,7 +77,7 @@ private:
 
 // ── Dialog ──────────────────────────────────────────────────────────────────
 
-class DxClusterDialog : public QDialog {
+class DxClusterDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
@@ -93,11 +93,6 @@ public:
 
     void updateStatus();
     void setTotalSpots(int count);
-
-    // Toggle frameless chrome at runtime.  Snapshots geometry + visibility,
-    // flips Qt::FramelessWindowHint, restores.  Called by MainWindow when
-    // the global View → Frameless Window setting changes.
-    void setFramelessMode(bool on);
 
 signals:
     void connectRequested(const QString& host, quint16 port, const QString& callsign);
@@ -143,14 +138,6 @@ private:
     void loadLogFiles(const QString& clusterLog, const QString& rbnLog,
                       const QString& wsjtxLog, const QString& potaLog,
                       const QString& freedvLog = {});
-
-    // Frameless chrome (mirrors ConnectionPanel / NetworkDiagnosticsDialog
-    // pattern): custom 18 px title bar at the top, FramelessResizer on
-    // the body for 8-axis edge resize.  m_outerLayout's top margin is
-    // adjusted in setFramelessMode so the tab strip doesn't double-pad
-    // when the system frame returns.
-    QWidget*              m_titleBar{nullptr};
-    QVBoxLayout*          m_outerLayout{nullptr};
 
     DxClusterClient*      m_client;
     DxClusterClient*      m_rbnClient;

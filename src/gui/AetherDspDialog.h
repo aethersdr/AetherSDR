@@ -1,9 +1,6 @@
 #pragma once
 
-#include <QDialog>
-
-class QEvent;
-class QMouseEvent;
+#include "PersistentDialog.h"
 
 namespace AetherSDR {
 
@@ -14,13 +11,11 @@ class AetherDspWidget;
 // Accessible from Settings menu and "AetherDSP Settings..." in right-click
 // popups.  All values persist via AppSettings (PascalCase keys).  The same
 // widget body is also embedded in ClientRxDspApplet for in-chain access.
-class AetherDspDialog : public QDialog {
+class AetherDspDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
     explicit AetherDspDialog(AudioEngine* audio, QWidget* parent = nullptr);
-
-    void setFramelessMode(bool on);
 
     // Sync UI from current AudioEngine state.
     void syncFromEngine();
@@ -56,20 +51,8 @@ signals:
     void nr4MaskingDepthChanged(float value);
     void nr4SuppressionChanged(float value);
 
-protected:
-    // Frameless 8-axis resize + drag-to-move (same pattern as
-    // NetworkDiagnosticsDialog and the AetherialAudioStrip).
-    void mousePressEvent(QMouseEvent* ev) override;
-    void mouseMoveEvent(QMouseEvent* ev) override;
-    void leaveEvent(QEvent* ev) override;
-    bool eventFilter(QObject* obj, QEvent* ev) override;
-
 private:
-    Qt::Edges edgesAt(const QPoint& pos) const;
-    void updateResizeCursor(const QPoint& pos);
-
     AetherDspWidget* m_widget{nullptr};
-    QWidget*         m_titleBar{nullptr};
 };
 
 } // namespace AetherSDR

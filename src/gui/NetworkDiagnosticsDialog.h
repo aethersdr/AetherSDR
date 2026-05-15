@@ -1,9 +1,9 @@
 #pragma once
 
+#include "PersistentDialog.h"
 #include "core/PanadapterStream.h"
 
 #include <QComboBox>
-#include <QDialog>
 #include <QFile>
 #include <QLabel>
 #include <QObject>
@@ -14,7 +14,6 @@
 class QCheckBox;
 class QPlainTextEdit;
 class QPushButton;
-class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -66,7 +65,7 @@ private:
     qint64 m_lastCatBytes[PanadapterStream::CatCount]{};
 };
 
-class NetworkDiagnosticsDialog : public QDialog {
+class NetworkDiagnosticsDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
@@ -74,16 +73,6 @@ public:
                                       AudioEngine* audio,
                                       NetworkDiagnosticsHistory* history,
                                       QWidget* parent = nullptr);
-    void setFramelessMode(bool on);
-
-protected:
-    // Frameless 8-axis resize: 4 edges + 4 corners.  Hovering the bare
-    // margin around the content updates the cursor; pressing starts a
-    // compositor-managed resize via QWindow::startSystemResize.
-    void mouseMoveEvent(QMouseEvent* ev) override;
-    void mousePressEvent(QMouseEvent* ev) override;
-    void leaveEvent(QEvent* ev) override;
-    bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
     struct LogLine {
@@ -105,11 +94,6 @@ private:
     void setLogFollowLive(bool on);
     void setAllLogCategoriesVisible(bool visible);
     int selectedRangeSeconds() const;
-    Qt::Edges edgesAt(const QPoint& pos) const;
-    void updateResizeCursor(const QPoint& pos);
-
-    QWidget* m_titleBar{nullptr};
-    QVBoxLayout* m_bodyLayout{nullptr};
 
     RadioModel* m_model;
     AudioEngine* m_audio;

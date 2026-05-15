@@ -1,7 +1,4 @@
 #include "PanLayoutDialog.h"
-#include "FramelessResizer.h"
-#include "FramelessWindowTitleBar.h"
-#include "core/AppSettings.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -110,33 +107,20 @@ private:
 
 PanLayoutDialog::PanLayoutDialog(int maxPans, const QString& currentLayout,
                                  QWidget* parent)
-    : QDialog(parent)
+    : PersistentDialog("Panadapter Layout", /*geomKey*/ QString(), parent)
 {
-    setWindowTitle("Panadapter Layout");
     setStyleSheet("QDialog { background: #0f0f1a; }"
                   "QLabel { color: #c8d8e8; }");
-    setFixedSize(560, 520);
-    FramelessResizer::install(this);
+    // Fixed-size grid of thumbnails — body content is the same regardless of
+    // chrome state; the dialog wraps it.  Modal dialog; no geometry persist.
+    bodyWidget()->setFixedSize(560, 502);
     buildUI(maxPans, currentLayout);
-    setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
 }
 
 void PanLayoutDialog::buildUI(int maxPans, const QString& currentLayout)
 {
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-    outer->setSpacing(0);
-
-    m_titleBar = new FramelessWindowTitleBar(QStringLiteral("Panadapter Layout"), this);
-    outer->addWidget(m_titleBar);
-
-    auto* bodyWidget = new QWidget(this);
-    auto* vbox = new QVBoxLayout(bodyWidget);
-    vbox->setContentsMargins(9, 9, 9, 9);
+    auto* vbox = new QVBoxLayout(bodyWidget());
     vbox->setSpacing(8);
-    m_bodyLayout = vbox;
-    outer->addWidget(bodyWidget, 1);
 
     auto* title = new QLabel("Choose panadapter layout:");
     title->setStyleSheet("QLabel { color: #8aa8c0; font-size: 13px; font-weight: bold; }");
@@ -198,31 +182,6 @@ void PanLayoutDialog::buildUI(int maxPans, const QString& currentLayout)
         "QPushButton:hover { background: #204060; }");
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     vbox->addWidget(cancelBtn, 0, Qt::AlignCenter);
-}
-
-void PanLayoutDialog::setFramelessMode(bool on)
-{
-    const QRect geom = geometry();
-    const bool wasVisible = isVisible();
-    const QSize targetSize(560, on ? 538 : 520);
-
-    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
-    flags.setFlag(Qt::FramelessWindowHint, on);
-    setWindowFlags(flags);
-    setFixedSize(targetSize);
-    if (wasVisible) {
-        setGeometry(QRect(geom.topLeft(), targetSize));
-    }
-
-    if (m_titleBar) {
-        m_titleBar->setVisible(on);
-    }
-    if (m_bodyLayout) {
-        m_bodyLayout->setContentsMargins(9, on ? 7 : 9, 9, 9);
-    }
-    if (wasVisible) {
-        show();
-    }
 }
 
 } // namespace AetherSDR

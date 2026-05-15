@@ -397,6 +397,8 @@ public:
         if (tx && !m_transmitting) {
             m_preTxAutoBlack = m_autoBlackThresh;  // save before TX
             m_lastFftRowMs = 0;  // (#2666) first TX row scrolls immediately
+            std::fill(m_fftAccum.begin(), m_fftAccum.end(), 0.0f);
+            m_fftAccumCount = 0;
         }
         if (!tx && m_transmitting) {
             m_autoBlackThresh = m_preTxAutoBlack;  // restore after TX
@@ -687,6 +689,12 @@ private:
     // FFT-fallback path after native tiles time out) scrolls at the same
     // line_duration cadence as RX native tiles (#2666).
     qint64 m_lastFftRowMs{0};
+    // Accumulator for FFT-derived rows so we average all frames within the
+    // line_duration window instead of dropping the intermediates. Without
+    // this, the TX waterfall paints in discrete stripes with visible black
+    // gaps between rows (#2666 follow-up).
+    QVector<float> m_fftAccum;
+    int            m_fftAccumCount{0};
 
     // Waterfall colour range for FFT-derived fallback (dBm).
     float m_wfMinDbm{-130.0f};

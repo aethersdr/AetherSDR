@@ -1,6 +1,4 @@
 #include "DxClusterDialog.h"
-#include "FramelessResizer.h"
-#include "FramelessWindowTitleBar.h"
 #include "GuardedSlider.h"
 #include "core/DxClusterClient.h"
 #include "core/AppSettings.h"
@@ -244,7 +242,8 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
                                    RadioModel* radioModel,
                                    DxccColorProvider* dxccProvider,
                                    QWidget* parent)
-    : QDialog(parent), m_client(clusterClient), m_rbnClient(rbnClient),
+    : PersistentDialog("SpotHub", "DxClusterDialogGeometry", parent),
+      m_client(clusterClient), m_rbnClient(rbnClient),
       m_wsjtxClient(wsjtxClient), m_spotCollectorClient(spotCollectorClient),
       m_potaClient(potaClient),
 #ifdef HAVE_WEBSOCKETS
@@ -252,26 +251,12 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 #endif
       m_radioModel(radioModel), m_dxccProvider(dxccProvider)
 {
-    setWindowTitle("SpotHub");
     setMinimumSize(680, 560);
     resize(760, 640);
 
-    // Outer layout hosts the frameless title bar + content area.  The
-    // content area in turn carries the QTabWidget with the existing
-    // body padding, so flipping frameless on/off only adjusts the
-    // outer's top margin and the title bar's visibility.
-    m_outerLayout = new QVBoxLayout(this);
-    m_outerLayout->setSpacing(0);
-    m_outerLayout->setContentsMargins(0, 0, 0, 0);
-
-    m_titleBar = new FramelessWindowTitleBar(QStringLiteral("SpotHub"), this);
-    m_outerLayout->addWidget(m_titleBar);
-
-    auto* content = new QWidget(this);
-    auto* root = new QVBoxLayout(content);
+    auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(0);
     root->setContentsMargins(4, 4, 4, 4);
-    m_outerLayout->addWidget(content, 1);
 
     auto* tabs = new QTabWidget;
     tabs->setStyleSheet(
@@ -292,11 +277,6 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     buildDisplayTab(tabs);
 
     root->addWidget(tabs);
-
-    // 8-axis edge resize for the frameless mode.
-    FramelessResizer::install(this);
-    setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
 
     // ── Spot batch timer (1/sec flush) ──────────────────────────────────
     m_spotBatchTimer = new QTimer(this);
@@ -2554,30 +2534,6 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     layout->addStretch();
 
     tabs->addTab(page, "Display");
-}
-
-void DxClusterDialog::setFramelessMode(bool on)
-{
-    const QRect geom = geometry();
-    const bool wasVisible = isVisible();
-
-    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
-    flags.setFlag(Qt::FramelessWindowHint, on);
-    setWindowFlags(flags);
-    if (wasVisible) {
-        setGeometry(geom);
-    }
-
-    if (m_titleBar) {
-        m_titleBar->setVisible(on);
-    }
-    if (m_outerLayout) {
-        m_outerLayout->setContentsMargins(0, 0, 0, 0);
-    }
-
-    if (wasVisible) {
-        show();
-    }
 }
 
 void DxClusterDialog::setTotalSpots(int count)

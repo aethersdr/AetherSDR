@@ -1,14 +1,10 @@
 #include "MultiFlexDialog.h"
-#include "FramelessResizer.h"
-#include "FramelessWindowTitleBar.h"
-#include "core/AppSettings.h"
 #include "models/RadioModel.h"
 
 #include <QBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
-#include <QRect>
 #include <QTableWidget>
 
 namespace AetherSDR {
@@ -26,26 +22,15 @@ static const char* kDialogStyle =
     "  border: 1px solid #203040; padding: 6px; font-weight: bold; }";
 
 MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
-    : QDialog(parent), m_model(model)
+    : PersistentDialog("multiFLEX Dashboard", "MultiFlexDialogGeometry", parent),
+      m_model(model)
 {
-    setWindowTitle("multiFLEX Dashboard");
     setMinimumSize(550, 280);
     resize(600, 320);
     setStyleSheet(kDialogStyle);
 
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-    outer->setSpacing(0);
-
-    m_titleBar = new FramelessWindowTitleBar(QStringLiteral("multiFLEX Dashboard"), this);
-    outer->addWidget(m_titleBar);
-
-    auto* bodyWidget = new QWidget(this);
-    auto* root = new QVBoxLayout(bodyWidget);
-    root->setContentsMargins(9, 9, 9, 9);
+    auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(10);
-    m_bodyLayout = root;
-    outer->addWidget(bodyWidget, 1);
 
     // Title
     auto* title = new QLabel("multiFLEX Stations");
@@ -106,33 +91,6 @@ MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
     connect(m_table, &QTableWidget::itemSelectionChanged, this, [this]() { refresh(); });
 
     refresh();
-
-    FramelessResizer::install(this);
-    setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-}
-
-void MultiFlexDialog::setFramelessMode(bool on)
-{
-    const QRect geom = geometry();
-    const bool wasVisible = isVisible();
-
-    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
-    flags.setFlag(Qt::FramelessWindowHint, on);
-    setWindowFlags(flags);
-    if (wasVisible) {
-        setGeometry(geom);
-    }
-
-    if (m_titleBar) {
-        m_titleBar->setVisible(on);
-    }
-    if (m_bodyLayout) {
-        m_bodyLayout->setContentsMargins(9, on ? 7 : 9, 9, 9);
-    }
-    if (wasVisible) {
-        show();
-    }
 }
 
 void MultiFlexDialog::refresh()

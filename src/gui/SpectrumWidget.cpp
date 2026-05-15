@@ -2141,9 +2141,14 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
 
     if (m_waterfall.isNull()) return;
 
-    // Freeze waterfall during TX if show-tx-in-waterfall is off and this pan
-    // contains the TX slice. Non-TX pans keep scrolling in multi-pan.
-    if (m_transmitting && !m_showTxInWaterfall && m_hasTxSlice) return;
+    // Skip native tile updates entirely during TX on the TX-bearing pan.
+    // The FFT-derived path (pushWaterfallRow) is the authoritative TX render
+    // source while transmitting — letting both paths run causes the visible
+    // row to advance at ~2× the FFT cadence, producing alternating "data"
+    // and "stale tile" rows that read visually as horizontal black gaps
+    // between colored rows (#2666 follow-up). Non-TX pans in multi-pan
+    // continue to update normally.
+    if (m_transmitting && m_hasTxSlice) return;
 
     // Suppress post-TX transient noise rows (#2117). The receiver AGC needs
     // ~400 ms to settle after TX→RX; discard waterfall data during that
@@ -3736,12 +3741,22 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     const int h = m_waterfall.height();
     if (h <= 1) return;
 
-    // Throttle FFT-derived rows to the radio's line_duration cadence so the
-    // TX waterfall (and the RX FFT-fallback path) scroll at the same rate as
-    // RX native tiles. FFT frames arrive at the panadapter fps (e.g. 25),
-    // which is ~2.5× faster than the default 100 ms/row line_duration; without
-    // this gate, TX scrolls visibly faster than RX (#2666). Native RX tiles
-    // bypass this path entirely via updateWaterfallRow().
+    // Pace FFT-derived rows to the radio's line_duration cadence so the TX
+    // waterfall (and the RX FFT-fallback path) scroll at the same rate as RX
+    // native tiles. FFT frames arrive at the panadapter fps (e.g. 25), which
+    // is ~2.5× faster than the default 100 ms/row line_duration. Rather than
+    // drop the intermediate frames — which produced visible black gaps
+    // between rows — accumulate them and write an averaged row each window
+    // (#2666 + smoothness follow-up). Native RX tiles bypass this path
+    // entirely via updateWaterfallRow().
+    if (m_fftAccum.size() != bins.size()) {
+        m_fftAccum.assign(bins.size(), 0.0f);
+        m_fftAccumCount = 0;
+    }
+    for (int i = 0; i < bins.size(); ++i)
+        m_fftAccum[i] += bins[i];
+    ++m_fftAccumCount;
+
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (m_lastFftRowMs != 0 && (now - m_lastFftRowMs) < m_wfLineDuration)
         return;
@@ -3750,12 +3765,22 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     Q_UNUSED(tileLowMhz);
     Q_UNUSED(tileHighMhz);
 
+    const float invCount = m_fftAccumCount > 0
+        ? 1.0f / static_cast<float>(m_fftAccumCount)
+        : 1.0f;
+    const int accumSize = m_fftAccum.size();
+
     QVector<QRgb> scanline(destWidth, qRgb(0, 0, 0));
     for (int x = 0; x < destWidth; ++x) {
-        const int binIdx = x * bins.size() / destWidth;
-        const float dbm = (binIdx >= 0 && binIdx < bins.size()) ? bins[binIdx] : m_wfMinDbm;
+        const int binIdx = x * accumSize / destWidth;
+        const float dbm = (binIdx >= 0 && binIdx < accumSize)
+            ? m_fftAccum[binIdx] * invCount
+            : m_wfMinDbm;
         scanline[x] = dbmToRgb(dbm);
     }
+
+    std::fill(m_fftAccum.begin(), m_fftAccum.end(), 0.0f);
+    m_fftAccumCount = 0;
 
     appendHistoryRow(scanline.constData(), QDateTime::currentMSecsSinceEpoch());
     if (m_wfLive) {

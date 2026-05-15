@@ -2,13 +2,12 @@
 
 #ifdef HAVE_MIDI
 
-#include <QDialog>
+#include "PersistentDialog.h"
+
 #include <QTableWidget>
 #include <QComboBox>
 #include <QLabel>
 #include <QPushButton>
-
-class QVBoxLayout;
 
 namespace AetherSDR {
 
@@ -18,12 +17,11 @@ class MidiControlManager;
 // controller bindings. Opened from Settings → MIDI Mapping.
 // Shows device selector, binding table with Learn mode, and profile
 // save/load. All bindings stored in ~/.config/AetherSDR/midi.settings.
-class MidiMappingDialog : public QDialog {
+class MidiMappingDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
     explicit MidiMappingDialog(MidiControlManager* manager, QWidget* parent = nullptr);
-    void setFramelessMode(bool on);
 
 private:
     void refreshPortList();
@@ -40,8 +38,6 @@ private:
     QComboBox*    m_paramCombo;
     QComboBox*    m_categoryCombo;
     QComboBox*    m_profileCombo;
-    QWidget*      m_titleBar{nullptr};
-    QVBoxLayout*  m_bodyLayout{nullptr};
 };
 
 } // namespace AetherSDR

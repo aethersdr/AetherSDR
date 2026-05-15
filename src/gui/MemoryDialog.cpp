@@ -1,8 +1,5 @@
 #include "MemoryDialog.h"
-#include "FramelessResizer.h"
-#include "FramelessWindowTitleBar.h"
 #include "MemoryCommands.h"
-#include "core/AppSettings.h"
 #include "core/MemoryCsvCompat.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -224,26 +221,12 @@ static const QStringList COLUMNS = {
 };
 
 MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
-    : QDialog(parent), m_model(model)
+    : PersistentDialog("Memory Channels", "MemoryDialogGeometry", parent),
+      m_model(model)
 {
-    setWindowTitle("Memory Channels");
     resize(1000, 500);
 
-    // Outer layout hosts the frameless title bar + content area.  The
-    // existing dialog body layout (search row, table, buttons) lives
-    // inside `content` so flipping frameless on/off only adjusts the
-    // title bar's visibility and outer margin.
-    m_outerLayout = new QVBoxLayout(this);
-    m_outerLayout->setSpacing(0);
-    m_outerLayout->setContentsMargins(0, 0, 0, 0);
-
-    m_titleBar = new FramelessWindowTitleBar(QStringLiteral("Memory Channels"), this);
-    m_outerLayout->addWidget(m_titleBar);
-
-    auto* content = new QWidget(this);
-    m_outerLayout->addWidget(content, 1);
-
-    auto* root = new QVBoxLayout(content);
+    auto* root = new QVBoxLayout(bodyWidget());
 
     // ── Search + profile filter ──────────────────────────────────────────
     auto* filterRow = new QHBoxLayout;
@@ -387,40 +370,6 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     // If cache is empty, memories may not have been pushed yet. As a fallback,
     // new memories created via Add will populate the table immediately.
     populateTable();
-
-    // 8-axis edge resize for the frameless mode.
-    FramelessResizer::install(this);
-    setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-}
-
-void MemoryDialog::setFramelessMode(bool on)
-{
-    const QRect geom = geometry();
-    const bool wasVisible = isVisible();
-
-    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
-    flags.setFlag(Qt::FramelessWindowHint, on);
-    setWindowFlags(flags);
-    if (wasVisible) {
-        setGeometry(geom);
-    }
-
-    if (m_titleBar) {
-        m_titleBar->setVisible(on);
-    }
-    if (m_outerLayout) {
-        m_outerLayout->setContentsMargins(0, 0, 0, 0);
-    }
-
-    if (wasVisible) {
-        show();
-    }
-}
-
-void MemoryDialog::closeEvent(QCloseEvent* event)
-{
-    QDialog::closeEvent(event);
 }
 
 void MemoryDialog::keyPressEvent(QKeyEvent* event)
@@ -512,7 +461,7 @@ bool MemoryDialog::eventFilter(QObject* watched, QEvent* event)
 
 void MemoryDialog::showEvent(QShowEvent* event)
 {
-    QDialog::showEvent(event);
+    PersistentDialog::showEvent(event);
     if (m_searchEdit)
         m_searchEdit->setFocus(Qt::OtherFocusReason);
 }

@@ -1,9 +1,6 @@
 #ifdef HAVE_MIDI
 
 #include "MidiMappingDialog.h"
-#include "FramelessResizer.h"
-#include "FramelessWindowTitleBar.h"
-#include "core/AppSettings.h"
 #include "core/MidiControlManager.h"
 #include "core/MidiSettings.h"
 
@@ -16,7 +13,6 @@
 #include <QLineEdit>
 #include <QInputDialog>
 #include <QMessageBox>
-#include <QRect>
 
 namespace AetherSDR {
 
@@ -39,25 +35,14 @@ static const QString kBtnStyle =
     "QPushButton:disabled { background: #404060; color: #808080; }";
 
 MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* parent)
-    : QDialog(parent), m_manager(manager)
+    : PersistentDialog("MIDI Controller Mapping", "MidiMappingDialogGeometry", parent),
+      m_manager(manager)
 {
-    setWindowTitle("MIDI Controller Mapping");
     setMinimumSize(700, 550);
     setStyleSheet("QDialog { background: #0f0f1a; }");
 
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-    outer->setSpacing(0);
-
-    m_titleBar = new FramelessWindowTitleBar(QStringLiteral("MIDI Controller Mapping"), this);
-    outer->addWidget(m_titleBar);
-
-    auto* bodyWidget = new QWidget(this);
-    auto* root = new QVBoxLayout(bodyWidget);
-    root->setContentsMargins(9, 9, 9, 9);
+    auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(8);
-    m_bodyLayout = root;
-    outer->addWidget(bodyWidget, 1);
 
     // ── Device section ──────────────────────────────────────────────────
     {
@@ -279,33 +264,6 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
 
     if (m_manager->isOpen()) {
         m_connectBtn->setText("Disconnect");
-    }
-
-    FramelessResizer::install(this);
-    setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-}
-
-void MidiMappingDialog::setFramelessMode(bool on)
-{
-    const QRect geom = geometry();
-    const bool wasVisible = isVisible();
-
-    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
-    flags.setFlag(Qt::FramelessWindowHint, on);
-    setWindowFlags(flags);
-    if (wasVisible) {
-        setGeometry(geom);
-    }
-
-    if (m_titleBar) {
-        m_titleBar->setVisible(on);
-    }
-    if (m_bodyLayout) {
-        m_bodyLayout->setContentsMargins(9, on ? 7 : 9, 9, 9);
-    }
-    if (wasVisible) {
-        show();
     }
 }
 
