@@ -74,6 +74,7 @@
 #include "PropDashboardDialog.h"
 #include "MemoryCommands.h"
 #include "MemoryDialog.h"
+#include "SwrSweepLicenseDialog.h"
 #include "DxClusterDialog.h"
 #include "CwxPanel.h"
 #include "DvkPanel.h"
@@ -13046,6 +13047,14 @@ void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts)
     if (sweepFreqs.size() > kSwrSweepMaxPoints) {
         QMessageBox::warning(this, tr("SWR Sweep"),
                              tr("This band would need too many sweep points for one fast pass."));
+        return;
+    }
+
+    // License gate.  First-press shows a modal disclaimer; subsequent
+    // presses are silent once the user ticks "Remember my answer" and
+    // accepts.  Placed after all preconditions clear so the dialog only
+    // fires when an actual transmission would follow.
+    if (!SwrSweepLicenseDialog::confirm(this)) {
         return;
     }
 

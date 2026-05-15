@@ -582,6 +582,7 @@ set(GUI_SOURCES
     src/gui/TunerApplet.cpp
     src/gui/TxApplet.cpp
     src/gui/AtuPreTuneDialog.cpp
+    src/gui/SwrSweepLicenseDialog.cpp
     src/gui/PhoneCwApplet.cpp
     src/gui/PhoneApplet.cpp
     src/gui/EqApplet.cpp
