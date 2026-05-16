@@ -11962,33 +11962,6 @@ void MainWindow::registerShortcutActions()
         }
     };
 
-    auto stepActivePanRfGain = [this](int direction) {
-        if (!m_radioModel.isConnected()) return;
-        auto* pan = m_radioModel.activePanadapter();
-        if (!pan) return;
-
-        auto* sw = m_panStack ? m_panStack->spectrum(pan->panId()) : spectrum();
-        if (!sw) sw = spectrum();
-
-        const int step = std::max(1, pan->rfGainStep());
-        const int current = sw ? sw->rfGainValue() : pan->rfGain();
-        const int next = std::clamp(current + (direction * step),
-                                    pan->rfGainLow(),
-                                    pan->rfGainHigh());
-        if (next == current) return;
-
-        m_radioModel.setPanRfGain(next);
-        if (!sw) return;
-
-        sw->setRfGain(next);
-        if (auto* menu = sw->overlayMenu())
-            menu->setRfGain(next);
-
-        auto& settings = AppSettings::instance();
-        settings.setValue(sw->settingsKey("DisplayRfGain"), QString::number(next));
-        settings.save();
-    };
-
     // ── Frequency ───────────────────────────────────────────────────────
     // autoRepeat=true so holding the key continuously tunes (accessibility).
     m_shortcutManager.registerAction("tune_up_1", "Tune Up (1 step)", "Frequency",
@@ -12321,24 +12294,6 @@ void MainWindow::registerShortcutActions()
                 if (cur == modes[i]) { idx = i; break; }
             s->setAgcMode(modes[(idx + 1) % 4]);
         });
-    m_shortcutManager.registerAction("rf_gain_up", "RF Gain Up", "AGC",
-        QKeySequence(), [stepActivePanRfGain]() {
-            stepActivePanRfGain(1);
-        }, true);
-    m_shortcutManager.registerAction("rf_gain_down", "RF Gain Down", "AGC",
-        QKeySequence(), [stepActivePanRfGain]() {
-            stepActivePanRfGain(-1);
-        }, true);
-    m_shortcutManager.registerAction("agct_up", "AGC-T Up", "AGC",
-        QKeySequence(), [this]() {
-            auto* s = activeSlice();
-            if (s) s->setAgcThreshold(std::min(100, s->agcThreshold() + 5));
-        }, true);
-    m_shortcutManager.registerAction("agct_down", "AGC-T Down", "AGC",
-        QKeySequence(), [this]() {
-            auto* s = activeSlice();
-            if (s) s->setAgcThreshold(std::max(0, s->agcThreshold() - 5));
-        }, true);
 
     // ── CW ──────────────────────────────────────────────────────────────
     m_shortcutManager.registerAction("cw_speed_up", "CW Speed Up (+5 WPM)", "CW",

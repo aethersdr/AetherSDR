@@ -100,6 +100,7 @@ function closestBandIndex(freq) {
 // ── Action handlers ─────────────────────────────────────────────────────────
 const POWER_LEVELS = [5, 10, 25, 50, 75, 100];
 const TUNE_LEVELS = [5, 10, 15, 25, 50];
+const TUNE_STEP_HZ = 1000; // 1 kHz per press; matches streamcontroller-aethersdr
 
 function nextInCycle(levels, current) {
     return levels.find(l => l > current) || levels[0];
@@ -128,8 +129,8 @@ const actionHandlers = {
     "com.aethersdr.radio.rit-toggle":   { keyDown: () => tciSend(`rit_enable:0,${!radio.ritOn};`) },
     "com.aethersdr.radio.xit-toggle":   { keyDown: () => tciSend(`xit_enable:0,${!radio.xitOn};`) },
     // Frequency
-    "com.aethersdr.radio.tune-up":   { keyDown: () => tciSend(`vfo:0,0,${radio.frequency + 100};`) },
-    "com.aethersdr.radio.tune-down": { keyDown: () => tciSend(`vfo:0,0,${radio.frequency - 100};`) },
+    "com.aethersdr.radio.tune-up":   { keyDown: () => tciSend(`vfo:0,0,${radio.frequency + TUNE_STEP_HZ};`) },
+    "com.aethersdr.radio.tune-down": { keyDown: () => tciSend(`vfo:0,0,${radio.frequency - TUNE_STEP_HZ};`) },
     "com.aethersdr.radio.band-up":   { keyDown: () => { const i = Math.min(closestBandIndex(radio.frequency) + 1, BAND_ORDER.length - 1); tciSend(`vfo:0,0,${BANDS[BAND_ORDER[i]]};`); } },
     "com.aethersdr.radio.band-down": { keyDown: () => { const i = Math.max(closestBandIndex(radio.frequency) - 1, 0); tciSend(`vfo:0,0,${BANDS[BAND_ORDER[i]]};`); } },
     // DVK
