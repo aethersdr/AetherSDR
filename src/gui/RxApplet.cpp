@@ -1449,9 +1449,11 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
             const int colourIdx = SliceLabel::displayColorIndex(slotId, ourSlice->letter());
             btn->setStyleSheet(buildButtonStyle(colourIdx));
         } else if (qstrcmp(state, "foreign") == 0) {
-            const QString glyph = radioIdx ? QString::fromUtf8("—")
-                                           : QString(QChar('A' + slotId));
-            btn->setText(glyph);
+            // Foreign slots always render as "—" so they're visually
+            // distinguishable from empty slots even with the dim styling
+            // — colour-blind users couldn't separate grey/dim letters
+            // from dim-letters before (#2606 follow-up).
+            btn->setText(QString::fromUtf8("—"));
             btn->setEnabled(false);
             btn->setChecked(false);
             btn->setProperty("sliceId", QVariant());
