@@ -183,6 +183,14 @@ QScrollBar::add-line:vertical,
 QScrollBar::sub-line:vertical {
     height: 0px;
 }
+QLabel#ExperimentalBanner {
+    background: #3a2a14;
+    color: #e8b977;
+    border: 1px solid #6b4a1f;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 13px;
+}
 )";
 
 QString profileSettingsValue(Ax25ModemProfile profile)
@@ -467,7 +475,7 @@ private:
 Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
                                                    SliceModel* initialSlice,
                                                    QWidget* parent)
-    : PersistentDialog(QStringLiteral("AetherModem - Packet Decoder"),
+    : PersistentDialog(QStringLiteral("AetherModem - Packet Decoder (Experimental)"),
                        QStringLiteral("Ax25HfPacketDecodeDialogGeometry"),
                        parent)
     , m_audio(audio)
@@ -481,6 +489,16 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(10);
+
+    auto* experimentalBanner = new QLabel(
+        QStringLiteral("<b>Experimental \xE2\x80\x94 Phase 0 receive-only.</b> "
+                       "300 baud HF only. HDLC timing is first-pass and "
+                       "may produce noisy rejects on weak HF signals."),
+        bodyWidget());
+    experimentalBanner->setObjectName(QStringLiteral("ExperimentalBanner"));
+    experimentalBanner->setWordWrap(true);
+    experimentalBanner->setTextFormat(Qt::RichText);
+    root->addWidget(experimentalBanner);
 
     auto* tabsFrame = panel(QStringLiteral("TabsFrame"), bodyWidget());
     auto* tabs = new QHBoxLayout(tabsFrame);
