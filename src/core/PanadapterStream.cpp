@@ -907,9 +907,11 @@ void PanadapterStream::setPacketLossConcealment(bool on)
     m_plcEnabled.store(on);
     if (!on) {
         // Drop any queued concealment so a future re-enable doesn't dump
-        // a stale tail into the next emitted packet. Per-stream state is
-        // touched on the network thread elsewhere, but this is one atomic
-        // map-clear and we accept the rare race on toggle. (#2731)
+        // a stale tail into the next emitted packet.  Safe because the
+        // only caller (RadioSetupDialog) routes this through
+        // QMetaObject::invokeMethod(..., Qt::QueuedConnection), so the
+        // map-clear runs on the same network worker thread that owns
+        // m_audioPlc — no cross-thread access on the map. (#2731)
         m_audioPlc.clear();
     }
 }
