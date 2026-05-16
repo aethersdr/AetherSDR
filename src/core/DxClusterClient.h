@@ -43,6 +43,12 @@ public:
     QString logFilePath() const;
     void setLogFileName(const QString& name) { m_logFileName = name; }
 
+    // Which AppSettings key holds the per-instance startup-commands string
+    // (one cluster command per line, replayed after every login). Defaults
+    // to "DxClusterStartupCommands"; MainWindow overrides the RBN instance
+    // to "RbnStartupCommands" so the two tabs persist independently (#2683).
+    void setStartupCommandsKey(const QString& key) { m_startupCommandsKey = key; }
+
 public slots:
     // Defer socket + timer construction to the worker thread (#1929). On Windows,
     // QTcpSocket creates a QSocketNotifier whose Win32 message-loop affinity is
@@ -71,6 +77,10 @@ private:
     bool isLoginPrompt(const QString& line) const;
     void handleLine(const QString& line);
     void stripTelnetIAC();
+    // Replay the persisted startup-commands list (one per line, blanks
+    // skipped) immediately after the callsign write. No-op if the
+    // configured AppSettings key is absent or empty (#2683).
+    void sendStartupCommands();
     // Arm the exponential-backoff reconnect timer. Guards against double-scheduling
     // (errorOccurred + timeout can both fire for one failed attempt). No-op when
     // m_intentionalDisconnect is set or the timer is already active (#2380).
@@ -82,6 +92,7 @@ private:
     QFile       m_logFile;
 
     QString m_logFileName{"dxcluster.log"};
+    QString m_startupCommandsKey{"DxClusterStartupCommands"};
     QString m_host;
     quint16 m_port{7300};
     QString m_callsign;

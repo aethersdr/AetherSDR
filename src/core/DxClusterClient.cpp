@@ -1,10 +1,12 @@
 #include "DxClusterClient.h"
+#include "AppSettings.h"
 #include "LogManager.h"
 
 #include <QRegularExpression>
 #include <QStandardPaths>
 #include <QDateTime>
 #include <QDir>
+#include <QStringList>
 #include <algorithm>
 
 namespace AetherSDR {
@@ -200,6 +202,7 @@ void DxClusterClient::onReadyRead()
                     m_socket->write((m_callsign + "\r\n").toLatin1());
                     m_loggedIn = true;
                     qCDebug(lcDxCluster) << "DxClusterClient: sent callsign" << m_callsign;
+                    sendStartupCommands();
                 }
             }
             break;
@@ -252,6 +255,7 @@ void DxClusterClient::handleLine(const QString& line)
         m_socket->write((m_callsign + "\r\n").toLatin1());
         m_loggedIn = true;
         qCDebug(lcDxCluster) << "DxClusterClient: sent callsign" << m_callsign;
+        sendStartupCommands();
         return;
     }
 
@@ -261,6 +265,20 @@ void DxClusterClient::handleLine(const QString& line)
         qCDebug(lcDxCluster) << "DxClusterClient: spot" << spot.dxCall
                  << spot.freqMhz << "MHz de" << spot.spotterCall;
         emit spotReceived(spot);
+    }
+}
+
+// ── Startup commands replay ─────────────────────────────────────────────────
+
+void DxClusterClient::sendStartupCommands()
+{
+    const QString raw = AppSettings::instance().value(m_startupCommandsKey).toString();
+    if (raw.isEmpty()) return;
+    const QStringList lines = raw.split(QChar('\n'), Qt::SkipEmptyParts);
+    for (const QString& line : lines) {
+        const QString cmd = line.trimmed();
+        if (cmd.isEmpty()) continue;
+        sendCommand(cmd);
     }
 }
 
