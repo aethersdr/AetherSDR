@@ -63,6 +63,7 @@ public:
     void setWnbState(bool on, int level);
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step);
+    void syncNoiseFloorPosition(int pos);
 
     // Populate XVTR band sub-panel
     struct XvtrBand { QString name; double rfFreqMhz; };

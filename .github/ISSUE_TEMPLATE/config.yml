@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: "💡 AI-Assisted Feature Request (Recommended)"
-    url: https://github.com/ten9876/AetherSDR/blob/main/CONTRIBUTING.md#ai-assisted-feature-requests
+    url: https://github.com/aethersdr/AetherSDR/blob/main/CONTRIBUTING.md#ai-assisted-feature-requests
     about: "Use Claude.ai (free) to help you write a well-structured feature request. Issues created with AI assistance are prioritized — see our contributing guide for the prompt."
   - name: "📋 RFC — is your change significant? Read this first"
-    url: https://github.com/ten9876/AetherSDR/blob/main/GOVERNANCE.md#rfc-process
+    url: https://github.com/aethersdr/AetherSDR/blob/main/GOVERNANCE.md#rfc-process
     about: "UX changes, new dependencies, architecture changes, and platform-specific native integration require an approved RFC before a PR will be accepted."
   - name: "💬 Discussions"
-    url: https://github.com/ten9876/AetherSDR/discussions
+    url: https://github.com/aethersdr/AetherSDR/discussions
     about: "Ask questions, share ideas, or show your setup"

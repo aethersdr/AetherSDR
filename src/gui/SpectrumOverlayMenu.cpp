@@ -1163,6 +1163,18 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
     }
 }
 
+void SpectrumOverlayMenu::syncNoiseFloorPosition(int pos)
+{
+    if (!m_floorSlider) return;
+
+    const int clamped = std::clamp(pos, 1, 99);
+    QSignalBlocker block(m_floorSlider);
+    m_floorSlider->setValue(clamped);
+    if (m_floorLabel) {
+        m_floorLabel->setText(QString::number(clamped));
+    }
+}
+
 void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                                     int bgOpacity,
                                                     int freqGridSpacingKhz)

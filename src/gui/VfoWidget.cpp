@@ -4,6 +4,7 @@
 #include "GuardedSlider.h"
 #include "RxApplet.h"
 #include "SliceColorManager.h"
+#include "SliceLabel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -421,6 +422,7 @@ void VfoWidget::buildUI()
     m_sliceBadge->setFixedSize(20, 20);
     m_sliceBadge->setAlignment(Qt::AlignCenter);
     m_sliceBadge->setCursor(Qt::PointingHandCursor);
+    m_sliceBadge->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
     m_sliceBadge->setStyleSheet(
         "QLabel { background: #0070c0; color: #ffffff; "
         "border-radius: 3px; font-weight: bold; font-size: 11px; }");
@@ -2270,7 +2272,9 @@ void VfoWidget::paintEvent(QPaintEvent* event)
         // Slice letter badge
         int sliceId = m_slice ? m_slice->sliceId() : 0;
         QRect badgeRect(margin, yPos, badgeSize, badgeSize);
-        p.setBrush(SliceColorManager::instance().activeColor(sliceId));
+        const QString rl = m_slice ? m_slice->letter() : QString();
+        const int colourIdx = SliceLabel::displayColorIndex(sliceId, rl);
+        p.setBrush(SliceColorManager::instance().activeColor(colourIdx));
         p.setPen(Qt::NoPen);
         p.drawRoundedRect(badgeRect, 3, 3);
 
@@ -2279,9 +2283,11 @@ void VfoWidget::paintEvent(QPaintEvent* event)
         badgeFont.setBold(true);
         p.setFont(badgeFont);
         p.setPen(QColor(0, 0, 0));
-        const char letters[] = "ABCDEFGH";
-        QChar letter = (sliceId >= 0 && sliceId < 8) ? QChar(letters[sliceId]) : QChar('?');
-        p.drawText(badgeRect, Qt::AlignCenter, QString(letter));
+        // Display follows the SliceLetterDisplay AppSettings option
+        // (#2606): "Global" → plain global letter; "RadioIndexed" → the
+        // per-client letter with a global-slice-id subscript.
+        const QString radioLetter = m_slice ? m_slice->letter() : QString();
+        SliceLabel::drawSliceBadge(p, badgeRect, sliceId, radioLetter);
 
         yPos += badgeSize + 2;
 
@@ -2485,6 +2491,13 @@ void VfoWidget::setSlice(SliceModel* slice)
 
     // Frequency
     connect(m_slice, &SliceModel::frequencyChanged, this, [this](double) { updateFreqLabel(); });
+
+    // Per-client letter — refresh the slice badge when index_letter arrives
+    // or changes (Multi-Flex sessions, see #2606).
+    connect(m_slice, &SliceModel::letterChanged, this, [this](const QString&) {
+        syncFromSlice();
+        update();   // collapsed-mode badge is painted in paintEvent
+    });
 
     // Slice-level → shared DSP slider: when the active target's level
     // changes externally (radio echo, profile load, MIDI), update the
@@ -2974,14 +2987,17 @@ void VfoWidget::syncFromSlice()
         m_lockVfoBtn->setChecked(m_slice->isLocked());
         m_lockVfoBtn->setText(m_slice->isLocked() ? "\xF0\x9F\x94\x92" : "\xF0\x9F\x94\x93");
     }
-    const char letters[] = "ABCDEFGH";
-    int id = m_slice->sliceId();
-    m_sliceBadge->setText(QString(QChar(id >= 0 && id < 8 ? letters[id] : '?')));
-    // Color-code the slice badge to match the spectrum overlay colors
+    // Slice badge — display follows SliceLetterDisplay AppSettings (#2606).
+    const int id = m_slice->sliceId();
+    m_sliceBadge->setText(SliceLabel::richText(id, m_slice->letter()));
+    // Colour pairs with the visible letter: in Global mode that's the
+    // global sliceId; in RadioIndexed mode it's the letter index so the
+    // user's "A" slice is always the A colour regardless of slot.
+    const int colourIdx = SliceLabel::displayColorIndex(id, m_slice->letter());
     m_sliceBadge->setStyleSheet(
         QString("QLabel { background: %1; color: #000000; "
                 "border-radius: 3px; font-weight: bold; font-size: 11px; }")
-            .arg(SliceColorManager::instance().hexActive(id)));
+            .arg(SliceColorManager::instance().hexActive(colourIdx)));
     updateFreqLabel();
     updateFilterLabel();
 

@@ -1841,6 +1841,43 @@ QWidget* RadioSetupDialog::buildAudioTab()
         vbox->addWidget(compGroup);
     }
 
+    // ── Packet-Loss Concealment ─────────────────────────────────────────
+    // Fades dropped VITA-49 audio packets to silence (uncompressed) or
+    // calls libopus native PLC (Opus) instead of splicing the next packet
+    // directly. Cuts the broadband click on lossy WAN/SmartLink. (#2731)
+    {
+        auto* plcCheck = new QCheckBox(
+            "Smooth packet loss (conceal dropped audio packets)");
+        plcCheck->setStyleSheet("QCheckBox { color: #c8d8e8; font-size: 11px; }");
+        plcCheck->setToolTip(
+            "When the radio's audio stream loses a UDP packet, fade the gap\n"
+            "to silence (uncompressed) or synthesize a perceptually smooth\n"
+            "fill with libopus PLC (Opus) instead of splicing the next packet\n"
+            "directly. Reduces the high-pitch click that the splice produces\n"
+            "on lossy WAN/SmartLink links. Capped at ~80 ms before the audio\n"
+            "drops to clean silence.");
+        plcCheck->setChecked(
+            AppSettings::instance()
+                .value("AudioPacketLossConcealment", "True").toString() == "True");
+        connect(plcCheck, &QCheckBox::toggled, this, [this](bool on) {
+            auto& s = AppSettings::instance();
+            s.setValue("AudioPacketLossConcealment", on ? "True" : "False");
+            s.save();
+            // PanadapterStream lives on the network worker thread (#502);
+            // route the toggle through QueuedConnection so the atomic and
+            // map mutations happen on the owning thread.
+            if (m_model && m_model->panStream()) {
+                QMetaObject::invokeMethod(
+                    m_model->panStream(),
+                    [stream = m_model->panStream(), on]() {
+                        stream->setPacketLossConcealment(on);
+                    },
+                    Qt::QueuedConnection);
+            }
+        });
+        vbox->addWidget(plcCheck);
+    }
+
     // ── Prevent Sleep ───────────────────────────────────────────────────
     {
         auto* sleepCheck = new QCheckBox("Prevent system sleep while connected");
@@ -3762,7 +3799,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
             "NextSlice", "PrevSlice",
             "ToggleAgc", "VolumeUp", "VolumeDown",
             "WheelFrequency", "WheelVolume", "WheelPower",
-            "WheelRit", "WheelXit"
+            "WheelRit", "WheelXit",
+            "CwxF1", "CwxF2", "CwxF3", "CwxF4",
+            "CwxF5", "CwxF6", "CwxF7", "CwxF8",
+            "CwxF9", "CwxF10", "CwxF11", "CwxF12"
         };
         static const char* defaultActions[4][2] = {
             {"StepUp", "StepDown"},
@@ -4149,6 +4189,69 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     auto* vbox = new QVBoxLayout(page);
     vbox->setSpacing(12);
     vbox->setContentsMargins(16, 16, 16, 16);
+
+    // ── Slice letter display ─────────────────────────────────────────────────
+    // Two display modes for slice letters in the GUI (#2606):
+    //   "Global"       (default) — letters track the radio's global slice
+    //                  index ('A' = slot 0, 'B' = slot 1, ...) so Multi-Flex
+    //                  operators can see at a glance which global slots are
+    //                  in use.
+    //   "RadioIndexed" — use the radio-provided per-client letter (matches
+    //                  SmartSDR behaviour) with the global slot id rendered
+    //                  as a subscript so slot awareness survives.
+    //
+    // Pure display change — slice IDs in commands, settings keys, and
+    // signal routing remain global throughout.
+    {
+        auto* letterGrp = new QGroupBox("Slice Letter Display");
+        letterGrp->setStyleSheet(kGroupStyle);
+        auto* letterLayout = new QVBoxLayout(letterGrp);
+        letterLayout->setSpacing(8);
+
+        auto* radioRow = new QHBoxLayout;
+        auto* globalRadio = new QRadioButton("Global slot index (A=0, B=1, …)");
+        auto* radioIdxRadio =
+            new QRadioButton("Radio-assigned letter with global subscript (A₂)");
+        globalRadio->setStyleSheet("QRadioButton { color: #c8d8e8; font-size: 12px; }");
+        radioIdxRadio->setStyleSheet("QRadioButton { color: #c8d8e8; font-size: 12px; }");
+        radioRow->addWidget(globalRadio);
+        radioRow->addWidget(radioIdxRadio);
+        radioRow->addStretch();
+        letterLayout->addLayout(radioRow);
+
+        auto* letterDesc = new QLabel(
+            "Choose how slice letters are rendered in badges, faders, and "
+            "applet labels. Multi-Flex sessions with multiple clients only: "
+            "Radio-assigned letters match SmartSDR's behaviour; the global "
+            "subscript preserves which physical slot you're on.");
+        letterDesc->setStyleSheet("QLabel { color: #7090a0; font-size: 11px; }");
+        letterDesc->setWordWrap(true);
+        letterLayout->addWidget(letterDesc);
+
+        auto& s = AppSettings::instance();
+        const QString current =
+            s.value("SliceLetterDisplay", "Global").toString();
+        (current == "RadioIndexed" ? radioIdxRadio : globalRadio)->setChecked(true);
+
+        auto saveLetterMode = [this](const QString& mode) {
+            auto& s = AppSettings::instance();
+            s.setValue("SliceLetterDisplay", mode);
+            s.save();
+            // Push a refresh through anything that paints a slice letter
+            // — the active slice path's syncFromSlice() pulls.  Cheapest
+            // broad-stroke: re-emit currentSliceChanged so the model
+            // listeners reapply via their existing slots.
+            emit sliceLetterDisplayModeChanged();
+        };
+        connect(globalRadio, &QRadioButton::toggled, this, [saveLetterMode](bool on) {
+            if (on) saveLetterMode("Global");
+        });
+        connect(radioIdxRadio, &QRadioButton::toggled, this, [saveLetterMode](bool on) {
+            if (on) saveLetterMode("RadioIndexed");
+        });
+
+        vbox->addWidget(letterGrp);
+    }
 
     // ── Slice color group ────────────────────────────────────────────────────
     auto* grp = new QGroupBox("Slice Colors");

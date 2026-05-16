@@ -3418,6 +3418,11 @@ MainWindow::MainWindow(QWidget* parent)
             m_flexWheelMode = FlexWheelMode::Rit;
         } else if (actionName == "WheelXit") {
             m_flexWheelMode = FlexWheelMode::Xit;
+        } else if (actionName.startsWith("CwxF")) {
+            bool ok = false;
+            int idx = actionName.mid(4).toInt(&ok);
+            if (ok && idx >= 1 && idx <= 12)
+                m_radioModel.cwxModel().sendMacro(idx);
         }
     });
 #endif
@@ -6246,6 +6251,13 @@ void MainWindow::buildMenuBar()
             QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
         });
 #endif
+        // Toggle of SliceLetterDisplay → repaint every slice-letter widget
+        // by re-emitting letterChanged on each slice (#2606).
+        connect(dlg, &RadioSetupDialog::sliceLetterDisplayModeChanged,
+                this, [this]() {
+            for (auto* s : m_radioModel.slices())
+                s->emitLetterRefresh();
+        });
         connect(dlg, &QDialog::finished, this, [this, prevComp]() {
 #ifdef HAVE_SERIALPORT
             // Re-load serial port settings if changed (on worker thread)
@@ -6297,6 +6309,14 @@ void MainWindow::buildMenuBar()
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
                 m_txBandAction, &QAction::trigger);
+        // Same Multi-Flex display-mode refresh wiring as the primary
+        // Radio Setup entrypoint — keep both code paths in sync so a
+        // toggle from the Serial shortcut still triggers a live repaint.
+        connect(dlg, &RadioSetupDialog::sliceLetterDisplayModeChanged,
+                this, [this]() {
+            for (auto* s : m_radioModel.slices())
+                s->emitLetterRefresh();
+        });
         if (auto* tabs = dlg->findChild<QTabWidget*>()) {
             for (int i = 0; i < tabs->count(); ++i) {
                 if (tabs->tabText(i) == "Serial") {
@@ -7313,8 +7333,8 @@ void MainWindow::buildMenuBar()
             "Licensed under "
             "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:#00b4d8;'>GPLv3</a></p>"
             "<p style='font-size:11px;'>"
-            "<a href='https://github.com/ten9876/AetherSDR' style='color:#00b4d8;'>"
-            "github.com/ten9876/AetherSDR</a></p>"
+            "<a href='https://github.com/aethersdr/AetherSDR' style='color:#00b4d8;'>"
+            "github.com/aethersdr/AetherSDR</a></p>"
             "<p style='font-size:10px; color:#6a8090;'>"
             "SmartSDR protocol &copy; FlexRadio Systems</p>"
             "<p style='font-size:10px; color:#6a8090;'>"
@@ -7340,7 +7360,7 @@ void MainWindow::buildMenuBar()
         // Fetch live contributor list from GitHub API
         auto* nam = new QNetworkAccessManager(dlg);
         auto* reply = nam->get(QNetworkRequest(
-            QUrl("https://api.github.com/repos/ten9876/AetherSDR/contributors")));
+            QUrl("https://api.github.com/repos/aethersdr/AetherSDR/contributors")));
         connect(reply, &QNetworkReply::finished, dlg, [contribLabel, reply] {
             reply->deleteLater();
             if (reply->error() != QNetworkReply::NoError) return;
@@ -9003,7 +9023,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // which pan this slice belongs to
     if (m_panStack && !s->panId().isEmpty()) {
         if (auto* applet = m_panStack->panadapter(s->panId()))
-            applet->setSliceId(s->sliceId());
+            applet->setSliceId(s->sliceId(), s->letter());
     }
 
     // Set initial hasTxSlice for waterfall freeze logic
@@ -9016,6 +9036,18 @@ void MainWindow::onSliceAdded(SliceModel* s)
     if (auto* sw = spectrumForSlice(s))
         sw->setShowTxInWaterfall(
             m_radioModel.transmitModel().showTxInWaterfall());
+
+    // Per-client letter (#2606) — keep spectrum overlay synced so the
+    // slice marker / passband colour follows the badge in RadioIndexed
+    // display mode.  Also push the current letter once now in case it
+    // was already set at slice creation.
+    if (auto* sw = spectrumForSlice(s))
+        sw->setSliceOverlayLetter(s->sliceId(), s->letter());
+    connect(s, &SliceModel::letterChanged, this,
+            [this, s](const QString& letter) {
+        if (auto* sw = spectrumForSlice(s))
+            sw->setSliceOverlayLetter(s->sliceId(), letter);
+    });
 
     // Connect slice state changes → spectrum overlay updates
     connect(s, &SliceModel::frequencyChanged, this, [this, s](double mhz) {
@@ -9349,7 +9381,7 @@ void MainWindow::onSliceRemoved(int id)
             bool found = false;
             for (auto* sl : m_radioModel.slices()) {
                 if (sl->panId() == applet->panId()) {
-                    applet->setSliceId(sl->sliceId());
+                    applet->setSliceId(sl->sliceId(), sl->letter());
                     found = true;
                     break;
                 }
@@ -9613,9 +9645,9 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     // Re-wire applet panel, overlay menu to the new active slice
     if (m_panStack) {
         if (auto* applet = m_panStack->panadapter(s->panId()))
-            applet->setSliceId(sliceId);
+            applet->setSliceId(sliceId, s->letter());
         else if (m_panStack->activeApplet())
-            m_panStack->activeApplet()->setSliceId(sliceId);
+            m_panStack->activeApplet()->setSliceId(sliceId, s->letter());
     }
     m_appletPanel->setSlice(s);
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), sliceId);
@@ -10071,6 +10103,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         bool active{false};
         float minDbm{0.0f};
         float maxDbm{0.0f};
+        qint64 requestedMs{0};
     };
     auto pendingDbm = std::make_shared<PendingDbmRange>();
     auto dbmMatches = [](float leftMin, float leftMax, float rightMin, float rightMax) {
@@ -10158,10 +10191,19 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 sw, [sw, pendingDbm, dbmMatches, setStreamDbmRange](float minDbm, float maxDbm) {
             if (pendingDbm->active) {
                 if (!dbmMatches(minDbm, maxDbm, pendingDbm->minDbm, pendingDbm->maxDbm)) {
-                    setStreamDbmRange(pendingDbm->minDbm, pendingDbm->maxDbm, true);
-                    return;
+                    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                    if (pendingDbm->requestedMs > 0
+                        && nowMs - pendingDbm->requestedMs > kDbmRangeHandshakeTimeoutMs) {
+                        pendingDbm->active = false;
+                        pendingDbm->requestedMs = 0;
+                    } else {
+                        setStreamDbmRange(pendingDbm->minDbm, pendingDbm->maxDbm, true);
+                        return;
+                    }
+                } else {
+                    pendingDbm->active = false;
+                    pendingDbm->requestedMs = 0;
                 }
-                pendingDbm->active = false;
             }
             if (sw->isDraggingDbmScale()) {
                 return;
@@ -10284,6 +10326,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         pendingDbm->active = true;
         pendingDbm->minDbm = minDbm;
         pendingDbm->maxDbm = maxDbm;
+        pendingDbm->requestedMs = QDateTime::currentMSecsSinceEpoch();
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
     });
@@ -10292,6 +10335,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         pendingDbm->active = true;
         pendingDbm->minDbm = minDbm;
         pendingDbm->maxDbm = maxDbm;
+        pendingDbm->requestedMs = QDateTime::currentMSecsSinceEpoch();
         setStreamDbmRange(minDbm, maxDbm, true);
         sendDbmRangeCommand(minDbm, maxDbm);
     });
@@ -10411,6 +10455,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setNoiseFloorPosition);
     connect(menu, &SpectrumOverlayMenu::noiseFloorEnableChanged,
             sw, &SpectrumWidget::setNoiseFloorEnable);
+    connect(sw, &SpectrumWidget::noiseFloorPositionResolved,
+            menu, &SpectrumOverlayMenu::syncNoiseFloorPosition);
 
     // ── Auto-squelch wiring ───────────────────────────────────────────────
     // RxApplet signals → per-pan spectrum widget
@@ -11253,6 +11299,13 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         if (sliceId == m_activeSliceId)
             m_audio->setRxPan(v);
     });
+    connect(s, &SliceModel::rxAntennaChanged, this, [this, sliceId](const QString&) {
+        if (auto* sl = m_radioModel.slice(sliceId)) {
+            if (auto* sw = spectrumForSlice(sl)) {
+                sw->reacquireNoiseFloorLock();
+            }
+        }
+    });
 
     // Wire slice data into widget
     w->setRadioModel(&m_radioModel);
@@ -11471,7 +11524,15 @@ void MainWindow::setAppletPanelDockedLeft(bool left)
     // setFixedWidth(260) then visibly caps but leaves the remainder as
     // an unallocated blank strip.  Reassign sizes by widget identity using
     // the panel's actual maximum width (== fixed width).
-    const int total = m_splitter->width();
+    //
+    // When called during buildUI() (issue #2704: restart with
+    // AppletPanelDockedLeft=True), the splitter isn't laid out yet and
+    // m_splitter->width() is 0 — falling back to the MainWindow's width()
+    // matches the source buildUI() itself uses for its initial centerWidth,
+    // so the panstack gets its slot instead of being squeezed to a sliver.
+    int total = m_splitter->width();
+    if (total <= 0)
+        total = width();
     if (total > 0) {
         const int appletW = m_appletPanel->maximumWidth();
         const int centerW = qMax(200, total - appletW);

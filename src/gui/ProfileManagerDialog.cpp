@@ -125,7 +125,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
     if (!isGlobal) {
         auto* note = new QLabel(
             "Updates to existing profiles save automatically — enable\n"
-            "Auto-Save (next tab) so changes follow the active profile.\n"
+            "Auto-Save (Auto-Save tab) so changes follow the active profile.\n"
             "Create makes a new profile; it does not overwrite an existing one.");
         note->setStyleSheet("QLabel { color: #6888a0; font-size: 11px; }");
         note->setWordWrap(true);
@@ -209,7 +209,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                             "while the profile is active.\n\n"
                             "To replace this profile, delete it first and then "
                             "Create it again, or enable Auto-Save on the "
-                            "next tab so future changes follow it automatically.")
+                            "Auto-Save tab so future changes follow it automatically.")
                         .arg(kind, name, autoState));
                 return;
             }

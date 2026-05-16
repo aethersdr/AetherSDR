@@ -12,6 +12,16 @@ on:
       - 'LICENSE'
       - '.gitignore'
       - '.github/**'
+  # Post-merge guard — paired with ci.yml's push:main trigger; same
+  # paths-ignore rules apply so docs/CI-only merges don't burn 23 min.
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '.github/**'
   schedule:
     - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC
 

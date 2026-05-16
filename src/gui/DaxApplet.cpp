@@ -1,5 +1,6 @@
 #include "DaxApplet.h"
 #include "MeterSlider.h"
+#include "SliceLabel.h"
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -89,6 +90,7 @@ void DaxApplet::buildUI()
         m_daxRxStatus[i] = new QLabel(QStringLiteral("\u2014"));
         m_daxRxStatus[i]->setStyleSheet(kStatusLabel);
         m_daxRxStatus[i]->setFixedWidth(40);
+        m_daxRxStatus[i]->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
         row->addWidget(m_daxRxStatus[i]);
 
         m_daxRxMeter[i] = new MeterSlider;
@@ -120,6 +122,7 @@ void DaxApplet::buildUI()
     m_daxTxStatus = new QLabel(QStringLiteral("\u2014"));
     m_daxTxStatus->setStyleSheet(kStatusLabel);
     m_daxTxStatus->setFixedWidth(40);
+    m_daxTxStatus->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
     txRow->addWidget(m_daxTxStatus);
 
     m_daxTxMeter = new MeterSlider;
@@ -156,12 +159,12 @@ void DaxApplet::setRadioModel(RadioModel* model)
             if (!m_model) {
                 return;
             }
-            static const char letters[] = "ABCDEFGH";
             for (auto* sl : m_model->slices()) {
                 int ch = sl->daxChannel();
                 if (ch >= 1 && ch <= kChannels) {
                     m_daxRxStatus[ch - 1]->setText(
-                        QString("Slice %1").arg(letters[sl->sliceId()]));
+                        QString("Slice %1").arg(
+                            SliceLabel::richText(sl->sliceId(), sl->letter())));
                 }
             }
         });
@@ -173,10 +176,11 @@ void DaxApplet::setRadioModel(RadioModel* model)
             m_daxTxStatus->setText(QStringLiteral("\u2014"));
             return;
         }
-        static const char letters[] = "ABCDEFGH";
         for (auto* s : m_model->slices()) {
             if (s->isTxSlice()) {
-                m_daxTxStatus->setText(QString("Slice %1").arg(letters[s->sliceId()]));
+                m_daxTxStatus->setText(
+                    QString("Slice %1").arg(
+                        SliceLabel::richText(s->sliceId(), s->letter())));
                 return;
             }
         }

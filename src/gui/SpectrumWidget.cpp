@@ -3,6 +3,7 @@
 #include "VfoWidget.h"
 #include "SliceColors.h"
 #include "SliceColorManager.h"
+#include "SliceLabel.h"
 #include <QVariantAnimation>
 
 #ifdef AETHER_GPU_SPECTRUM
@@ -548,21 +549,57 @@ void SpectrumWidget::setFftAverage(int frames) {
     s.save();
 }
 void SpectrumWidget::setNoiseFloorPosition(int pos) {
-    m_noiseFloorPosition = pos;
+    m_noiseFloorPosition = std::clamp(pos, 1, 99);
+    m_pendingDbmRangeEcho = false;
+    m_pendingDbmRangeEchoStartMs = 0;
     refreshNoiseFloorTarget();
+    if (m_noiseFloorEnable) {
+        if (!m_noiseFloorBaselineValid && (!m_smoothed.isEmpty() || !m_bins.isEmpty())) {
+            const QVector<float>& baselineBins = !m_smoothed.isEmpty() ? m_smoothed : m_bins;
+            const float baselineDbm = estimateNoiseFloorDbm(baselineBins);
+            if (baselineDbm > -500.0f) {
+                m_noiseFloorBaselineDbm = baselineDbm;
+                m_noiseFloorBaselineValid = true;
+                m_noiseFloorLastSampleMs = QDateTime::currentMSecsSinceEpoch();
+                m_noiseFloorCandidateValid = false;
+                m_noiseFloorCandidateFrames = 0;
+            }
+        }
+        applyNoiseFloorAutoAdjust(QDateTime::currentMSecsSinceEpoch());
+    }
     auto& s = AppSettings::instance();
-    s.setValue(settingsKey("DisplayNoiseFloorPosition"), QString::number(pos));
+    s.setValue(settingsKey("DisplayNoiseFloorPosition"), QString::number(m_noiseFloorPosition));
     s.save();
 }
 void SpectrumWidget::setNoiseFloorEnable(bool on) {
+    m_pendingDbmRangeEcho = false;
+    m_pendingDbmRangeEchoStartMs = 0;
+    if (on) {
+        captureNoiseFloorTargetFromCurrentScale(true);
+    }
     m_noiseFloorEnable = on;
     resetNoiseFloorBaseline();
     // Five fresh frames after enable so we lock onto the current
     // floor without smoothing from a stale value.
     m_noiseFloorFreshFrameCount = on ? 5 : 0;
+    if (on) {
+        refreshNoiseFloorTarget();
+    }
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("DisplayNoiseFloorEnable"), on ? "True" : "False");
     s.save();
+}
+void SpectrumWidget::reacquireNoiseFloorLock() {
+    if (!m_noiseFloorEnable) return;
+    m_pendingDbmRangeEcho = false;
+    m_pendingDbmRangeEchoStartMs = 0;
+    resetNoiseFloorBaseline();
+    // Antenna changes can take several FFT frames to settle after the
+    // slice command, so keep cold-acquiring long enough to catch the new floor.
+    // 30 frames ≈ 1 s of cold-acquire at the default 30 Hz FFT update rate —
+    // long enough for the antenna change to settle through the radio.
+    m_noiseFloorFreshFrameCount = 30;
+    m_measuredNoiseFloorDbm = -1000.0f;
 }
 void SpectrumWidget::setFftWeightedAvg(bool on) {
     m_fftWeightedAvg = on;
@@ -777,6 +814,7 @@ bool SpectrumWidget::anyDragActive() const {
         || m_draggingFilter != FilterEdge::None
         || m_draggingVfo
         || m_draggingDbm
+        || m_draggingDbmRange
         || m_draggingTimeScale
         || m_draggingTnfId >= 0;
 }
@@ -823,22 +861,68 @@ void SpectrumWidget::resetNoiseFloorBaseline()
     m_noiseFloorCandidateStartMs = 0;
     m_noiseFloorCandidateFrames = 0;
     m_noiseFloorFreshFrameCount = m_noiseFloorEnable ? 5 : 0;
+    m_pendingDbmRangeEcho = false;
+    m_pendingDbmRangeEchoStartMs = 0;
 }
 
-void SpectrumWidget::refreshNoiseFloorTarget()
+void SpectrumWidget::refreshNoiseFloorTarget(bool captureCurrentScale)
 {
-    // Target frac comes from the slider (0=top, 100=bottom).  We
-    // capture it here so subsequent baseline movement steers m_refLevel
-    // toward keeping the floor at that fraction.
+    if (captureCurrentScale) {
+        captureNoiseFloorTargetFromCurrentScale(true);
+    }
+
     if (m_noiseFloorEnable) {
         m_noiseFloorTargetFrac = std::clamp(m_noiseFloorPosition / 100.0f, 0.02f, 0.98f);
         m_noiseFloorTargetValid = true;
-        m_noiseFloorLastMotionMs = QDateTime::currentMSecsSinceEpoch();
+        if (m_noiseFloorLastMotionMs <= 0) {
+            m_noiseFloorLastMotionMs = QDateTime::currentMSecsSinceEpoch() - 100;
+        }
         m_noiseFloorLastCommandMs = 0;
         m_noiseFloorLastCommandRef = m_refLevel;
     } else {
         m_noiseFloorTargetValid = false;
     }
+}
+
+bool SpectrumWidget::captureNoiseFloorTargetFromCurrentScale(bool notify)
+{
+    if (m_dynamicRange <= 0.0f) {
+        qDebug() << "SpectrumWidget: noise-floor capture skipped — "
+                    "dynamic range not yet valid";
+        return false;
+    }
+
+    float baselineDbm = -1000.0f;
+    if (!m_smoothed.isEmpty() || !m_bins.isEmpty()) {
+        const QVector<float>& baselineBins = !m_smoothed.isEmpty() ? m_smoothed : m_bins;
+        baselineDbm = estimateNoiseFloorDbm(baselineBins);
+    }
+    if (baselineDbm <= -500.0f && m_noiseFloorBaselineValid) {
+        baselineDbm = m_noiseFloorBaselineDbm;
+    }
+    if (baselineDbm <= -500.0f && m_measuredNoiseFloorDbm > -500.0f) {
+        baselineDbm = m_measuredNoiseFloorDbm;
+    }
+    if (baselineDbm <= -500.0f) {
+        qDebug() << "SpectrumWidget: noise-floor capture skipped — "
+                    "no baseline (bins empty, cached invalid, measured invalid)";
+        return false;
+    }
+
+    const float targetFrac = std::clamp((m_refLevel - baselineDbm) / m_dynamicRange,
+                                        0.02f,
+                                        0.98f);
+    const int newPosition = std::clamp(
+        static_cast<int>(std::lround(targetFrac * 100.0f)),
+        1,
+        99);
+
+    m_noiseFloorTargetFrac = targetFrac;
+    m_noiseFloorPosition = newPosition;
+    if (notify) {
+        emit noiseFloorPositionResolved(newPosition);
+    }
+    return true;
 }
 
 void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool forceBaseline)
@@ -849,6 +933,12 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
     if (frameFloor <= -500.0f || m_dynamicRange <= 0.0f) return;
 
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_pendingDbmRangeEcho
+        && m_pendingDbmRangeEchoStartMs > 0
+        && nowMs - m_pendingDbmRangeEchoStartMs > kDbmRangeHandshakeTimeoutMs) {
+        m_pendingDbmRangeEcho = false;
+        m_pendingDbmRangeEchoStartMs = 0;
+    }
 
     if (!m_noiseFloorBaselineValid || m_noiseFloorLastSampleMs <= 0 || forceBaseline) {
         // Cold-acquire: force the baseline to this frame's reading.
@@ -926,7 +1016,7 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
         if (!m_noiseFloorTargetValid) return;
     }
 
-    if (m_draggingDbm || m_pendingDbmRangeEcho) return;
+    if (isDraggingDbmScale() || m_pendingDbmRangeEcho) return;
 
     applyNoiseFloorAutoAdjust(nowMs);
 }
@@ -1892,9 +1982,14 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
         const bool matchesPending = std::abs(minDbm - m_pendingMinDbm) < 0.01f
             && std::abs(maxDbm - m_pendingMaxDbm) < 0.01f;
         if (!matchesPending) {
-            return;
+            const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+            if (m_pendingDbmRangeEchoStartMs <= 0
+                || nowMs - m_pendingDbmRangeEchoStartMs <= kDbmRangeHandshakeTimeoutMs) {
+                return;
+            }
         }
         m_pendingDbmRangeEcho = false;
+        m_pendingDbmRangeEchoStartMs = 0;
     }
 
     const float clampedMinDbm = std::max(minDbm, kMinDisplayDbm);
@@ -1913,6 +2008,16 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 static QColor sliceColor(int sliceId, bool active) {
     if (active) return SliceColorManager::instance().activeColor(sliceId);
     return SliceColorManager::instance().dimColor(sliceId);
+}
+
+// Variant that respects the SliceLetterDisplay mode (#2606): when set to
+// RadioIndexed, the colour follows the radio-provided per-client letter
+// rather than the global slice id so the slice marker / passband colour
+// keeps pace with the badge above the VFO.
+static QColor sliceColorForOverlay(const SpectrumWidget::SliceOverlay& so) {
+    const int colourIdx = SliceLabel::displayColorIndex(so.sliceId, so.perClientLetter);
+    if (so.isActive) return SliceColorManager::instance().activeColor(colourIdx);
+    return SliceColorManager::instance().dimColor(colourIdx);
 }
 
 // ─── Multi-slice overlay management ──────────────────────────────────────────
@@ -1983,6 +2088,18 @@ void SpectrumWidget::setSliceOverlayFreq(int sliceId, double freqMhz)
             if (so.freqMhz == freqMhz) return;  // unchanged — no repaint needed
             so.freqMhz = freqMhz;
             markOverlayDirty();  // repaint so markers reflect the new frequency (#1272)
+            return;
+        }
+    }
+}
+
+void SpectrumWidget::setSliceOverlayLetter(int sliceId, const QString& letter)
+{
+    for (auto& so : m_sliceOverlays) {
+        if (so.sliceId == sliceId) {
+            if (so.perClientLetter == letter) return;
+            so.perClientLetter = letter;
+            markOverlayDirty();
             return;
         }
     }
@@ -2603,34 +2720,59 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         const int stripX = width() - DBM_STRIP_W;
 
         if (mx >= stripX) {
-            // Arrow row (side by side: left = up, right = down)
-            if (y < DBM_ARROW_H) {
-                const float bottom = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
-                if (mx < stripX + DBM_STRIP_W / 2) {
-                    // Up arrow: raise ref level by 10 dB, keep bottom fixed
-                    m_refLevel += 10.0f;
-                } else {
-                    // Down arrow: lower ref level by 10 dB, keep bottom fixed
-                    m_refLevel -= 10.0f;
-                }
-                m_dynamicRange = m_refLevel - bottom;
-                if (m_dynamicRange < 10.0f) {
-                    m_dynamicRange = 10.0f;
-                    m_refLevel = bottom + m_dynamicRange;
-                }
-                markOverlayDirty();
-                refreshNoiseFloorTarget();
-                emit dbmRangeChangeRequested(bottom, m_refLevel);
+            const Qt::KeyboardModifiers modifiers =
+                ev->modifiers() | QGuiApplication::keyboardModifiers();
+            const bool primaryClick = ev->button() == Qt::LeftButton;
+#ifdef Q_OS_MAC
+            const bool rangeDrag = modifiers.testFlag(Qt::ControlModifier)
+                || modifiers.testFlag(Qt::MetaModifier);
+            const bool controlClick = rangeDrag
+                && (primaryClick || ev->button() == Qt::RightButton);
+#else
+            const bool rangeDrag = modifiers.testFlag(Qt::ControlModifier);
+            const bool controlClick = rangeDrag && primaryClick;
+#endif
+            if (controlClick) {
+                m_draggingDbmRange = true;
+                m_dbmDragStartY = y;
+                m_dbmDragStartRef = m_refLevel;
+                m_dbmDragStartRange = m_dynamicRange;
+                m_dbmDragStartBottom = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
+                setSpectrumCursor(Qt::SizeVerCursor);
                 ev->accept();
                 return;
             }
-            // Below arrows: start dBm drag (pan reference)
-            m_draggingDbm = true;
-            m_dbmDragStartY = y;
-            m_dbmDragStartRef = m_refLevel;
-            setSpectrumCursor(Qt::SizeVerCursor);
-            ev->accept();
-            return;
+
+            if (primaryClick) {
+                // Arrow row (side by side: left = up, right = down)
+                if (y < DBM_ARROW_H) {
+                    const float bottom = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
+                    if (mx < stripX + DBM_STRIP_W / 2) {
+                        // Up arrow: raise ref level by 10 dB, keep bottom fixed
+                        m_refLevel += 10.0f;
+                    } else {
+                        // Down arrow: lower ref level by 10 dB, keep bottom fixed
+                        m_refLevel -= 10.0f;
+                    }
+                    m_dynamicRange = m_refLevel - bottom;
+                    if (m_dynamicRange < 10.0f) {
+                        m_dynamicRange = 10.0f;
+                        m_refLevel = bottom + m_dynamicRange;
+                    }
+                    markOverlayDirty();
+                    refreshNoiseFloorTarget(true);
+                    emit dbmRangeChangeRequested(bottom, m_refLevel);
+                    ev->accept();
+                    return;
+                }
+                // Below arrows: start dBm drag (pan reference)
+                m_draggingDbm = true;
+                m_dbmDragStartY = y;
+                m_dbmDragStartRef = m_refLevel;
+                setSpectrumCursor(Qt::SizeVerCursor);
+                ev->accept();
+                return;
+            }
         }
     }
 
@@ -2644,7 +2786,9 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             if (!m_offScreenRects[oi].isNull() &&
                 m_offScreenRects[oi].contains(QPoint(mx, y))) {
                 const auto& so = m_sliceOverlays[oi];
-                const QChar letter = QChar('A' + (so.sliceId % kSliceColorCount));
+                // Follow display mode so menu labels match the pill above (#2606).
+                const QString letter =
+                    SliceLabel::unicodeForm(so.sliceId, so.perClientLetter);
                 QMenu menu(this);
                 menu.addAction(QString("Close Slice %1").arg(letter), this,
                     [this, id = so.sliceId]{ emit sliceCloseRequested(id); });
@@ -2785,12 +2929,18 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 menu.addSeparator();
                 int closestSlice = -1;
                 int closestDist = INT_MAX;
+                QString closestLetter;
                 for (const auto& so : m_sliceOverlays) {
                     int dist = std::abs(mx - mhzToX(so.freqMhz));
-                    if (dist < closestDist) { closestDist = dist; closestSlice = so.sliceId; }
+                    if (dist < closestDist) {
+                        closestDist = dist;
+                        closestSlice = so.sliceId;
+                        closestLetter = so.perClientLetter;
+                    }
                 }
                 if (closestSlice >= 0) {
-                    const QChar letter = QChar('A' + (closestSlice & 3));
+                    const QString letter =
+                        SliceLabel::unicodeForm(closestSlice, closestLetter);
                     menu.addAction(QString("Close Slice %1").arg(letter), this,
                         [this, closestSlice]{ emit sliceCloseRequested(closestSlice); });
                 }
@@ -3009,10 +3159,22 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         return;
     }
 
+    if (m_draggingDbmRange) {
+        const int dragHeight = std::max(1, specH);
+        const int dy = m_dbmDragStartY - y;
+        const float deltaDb = (static_cast<float>(dy) / dragHeight) * m_dbmDragStartRange;
+        m_dynamicRange = std::max(10.0f, m_dbmDragStartRange + deltaDb);
+        m_refLevel = m_dbmDragStartBottom + m_dynamicRange;
+        markOverlayDirty();
+        ev->accept();
+        return;
+    }
+
     if (m_draggingDbm) {
+        const int dragHeight = std::max(1, specH);
         const int dy = y - m_dbmDragStartY;
         // Convert pixel drag to dB: full FFT height = full dynamic range
-        const float deltaDb = (static_cast<float>(dy) / specH) * m_dynamicRange;
+        const float deltaDb = (static_cast<float>(dy) / dragHeight) * m_dynamicRange;
         m_refLevel = m_dbmDragStartRef + deltaDb;
         m_refLevel = std::max(m_refLevel, kMinDisplayDbm + m_dynamicRange);
         markOverlayDirty();
@@ -3161,6 +3323,23 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                     setSpectrumCursor(Qt::PointingHandCursor);
                 else
                     setSpectrumCursor(Qt::SizeVerCursor);
+                // Surface the Ctrl-drag span-zoom affordance (#2724).
+                // Use a plain string literal (not QStringLiteral) so the
+                // platform-conditional #ifdef block sits at the preprocessor
+                // level rather than inside a macro call — MSVC strictly
+                // rejects preprocessor directives inside macro arguments.
+                const QRect stripRect(stripX, 0, DBM_STRIP_W, specH);
+                static const QString tip =
+                    "<b>dBm scale</b><br>"
+                    "Drag &mdash; pan reference level<br>"
+#ifdef Q_OS_MAC
+                    "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>"
+#else
+                    "Ctrl-drag &mdash; zoom span (anchor at bottom)<br>"
+#endif
+                    "&#9650; / &#9660; &mdash; &plusmn;10 dB steps";
+                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
+                                   tip, this, stripRect);
             } else {
                 // Check if hovering over a filter edge or inactive slice marker
                 bool foundCursor = false;
@@ -3293,16 +3472,19 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
         ev->accept();
         return;
     }
-    if (m_draggingDbm) {
+    if (m_draggingDbm || m_draggingDbmRange) {
+        const bool rangeDrag = m_draggingDbmRange;
         m_pendingDbmRangeEcho = true;
+        m_pendingDbmRangeEchoStartMs = QDateTime::currentMSecsSinceEpoch();
         m_pendingMinDbm = m_refLevel - m_dynamicRange;
         m_pendingMaxDbm = m_refLevel;
-        m_dbmReleasePreviewOffset = m_refLevel - m_dbmDragStartRef;
-        m_holdFftUpdatesAfterDbmRelease = 10;
+        m_dbmReleasePreviewOffset = rangeDrag ? 0.0f : m_refLevel - m_dbmDragStartRef;
+        m_holdFftUpdatesAfterDbmRelease = rangeDrag ? 0 : 10;
         m_draggingDbm = false;
+        m_draggingDbmRange = false;
         setSpectrumCursor(Qt::CrossCursor);
         m_resetFftSmoothingOnNextFrame = true;
-        refreshNoiseFloorTarget();
+        refreshNoiseFloorTarget(true);
         emit dbmRangeDragFinished(m_pendingMinDbm, m_pendingMaxDbm);
         ev->accept();
         return;
@@ -4257,13 +4439,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawGrid(p, specRect);
             if (m_bandPlanFontSize > 0)
                 drawBandPlan(p, specRect);
-            drawDbmScale(p, specRect);
 
             // Divider bar
             p.fillRect(0, specH, w, DIVIDER_H, QColor(0x30, 0x40, 0x50));
 
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, FREQ_SCALE_H));
-            drawTimeScale(p, wfRect);
             drawTnfMarkers(p, specRect);
             if (m_showSpots || m_showSHistory)
                 drawSpotMarkers(p, specRect);
@@ -4431,6 +4611,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             }
 
             drawConnectionAnimation(p, specRect);
+            drawDbmScale(p, specRect);
+            drawTimeScale(p, wfRect);
 
             m_overlayStaticDirty = false;
             m_overlayNeedsUpload = true;
@@ -4842,7 +5024,6 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         drawGrid(p, specRect);
         drawSpectrum(p, specRect);
         if (m_bandPlanFontSize > 0) drawBandPlan(p, specRect);
-        drawDbmScale(p, specRect);
 
         p.fillRect(divRect, QColor(0x18, 0x28, 0x38));
         p.setPen(QColor(m_draggingDivider ? 0x00b4d8 : 0x304050));
@@ -4850,7 +5031,6 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
         drawFreqScale(p, scaleRect);
         drawWaterfall(p, wfRect);
-        drawTimeScale(p, wfRect);
         drawTnfMarkers(p, specRect);
         if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
         drawSwrSweep(p, specRect);
@@ -5103,6 +5283,9 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         p.setPen(QColor(0xc8, 0xd8, 0xe8));
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
     }
+
+    drawDbmScale(p, specRect);
+    drawTimeScale(p, wfRect);
 
     if (PerfTelemetry::instance().enabled()) {
         PerfTelemetry::instance().recordRender(
@@ -6318,7 +6501,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
     auto drawOne = [&](const SliceOverlay& so) {
         if (so.freqMhz < startMhz || so.freqMhz > endMhz) return;
 
-        const QColor col = sliceColor(so.sliceId, so.isActive);
+        const QColor col = sliceColorForOverlay(so);
         const int freqLineBottom = m_extendedFrequencyLine ? wfRect.bottom() : specRect.bottom();
         const double fLoMhz = so.freqMhz + so.filterLowHz / 1.0e6;
         const double fHiMhz = so.freqMhz + so.filterHighHz / 1.0e6;
@@ -6646,8 +6829,13 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
         if (so.freqMhz >= startMhz && so.freqMhz <= endMhz) continue;
 
         const bool isRight = (so.freqMhz > endMhz);
-        const QColor col = sliceColor(so.sliceId, so.isActive);
-        const QChar letter = QChar('A' + (so.sliceId % kSliceColorCount));
+        const QColor col = sliceColorForOverlay(so);
+        // Letter on the off-screen pill follows the same display mode as
+        // the marker colour: per-client letter (with Unicode subscript)
+        // in RadioIndexed mode, global letter in Global mode (#2606).
+        QString letter = SliceLabel::unicodeForm(so.sliceId, so.perClientLetter);
+        if (letter.isEmpty())
+            letter = QString(QChar('A' + (so.sliceId % kSliceColorCount)));
 
         long long hz = static_cast<long long>(std::round(so.freqMhz * 1e6));
         int mhzPart = static_cast<int>(hz / 1000000);

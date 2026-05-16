@@ -12,7 +12,7 @@ body:
         ### How to create a great feature request in 2 minutes:
 
         1. Go to [claude.ai](https://claude.ai) (free) or any AI assistant
-        2. Paste the prompt from our [Contributing Guide](https://github.com/ten9876/AetherSDR/blob/main/CONTRIBUTING.md#ai-assisted-feature-requests)
+        2. Paste the prompt from our [Contributing Guide](https://github.com/aethersdr/AetherSDR/blob/main/CONTRIBUTING.md#ai-assisted-feature-requests)
         3. Describe your idea in plain English — the AI will structure it with protocol hints and implementation details
         4. Paste the AI's output into the form below
 

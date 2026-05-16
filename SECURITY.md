@@ -6,7 +6,7 @@ If you discover a security vulnerability in AetherSDR, please report it
 **privately** rather than opening a public issue.
 
 **Email:** Send details to the repository owner via GitHub private messaging,
-or use [GitHub's private vulnerability reporting](https://github.com/ten9876/AetherSDR/security/advisories/new).
+or use [GitHub's private vulnerability reporting](https://github.com/aethersdr/AetherSDR/security/advisories/new).
 
 Please include:
 - A description of the vulnerability

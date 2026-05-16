@@ -29,4 +29,4 @@ Original text courtesy of the [Speak Up! project](http://web.archive.org/web/201
 
 ## Questions?
 
-If you have questions, feel free to [contact us](mailto:info@aethersdr.com) or open a [GitHub Discussion](https://github.com/ten9876/AetherSDR/discussions).
+If you have questions, feel free to [contact us](mailto:info@aethersdr.com) or open a [GitHub Discussion](https://github.com/aethersdr/AetherSDR/discussions).

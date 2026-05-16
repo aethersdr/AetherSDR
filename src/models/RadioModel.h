@@ -271,6 +271,17 @@ public:
     SliceModel* slice(int id) const;
     int activeTxSliceNum() const;
 
+    // Multi-Flex slot occupancy.  These let UI distinguish three slot
+    // states for any global slice index: ours (we have a SliceModel for
+    // it), foreign (another client owns it — we have no SliceModel but
+    // know the slot is taken), and empty (neither).  Updated by
+    // handleSliceStatus() as slice ownership comes in.
+    bool isSlotOurs(int sliceId) const;
+    bool isSlotForeign(int sliceId) const;
+    // Station name of the client occupying a foreign slot, or empty string
+    // if not foreign / not known yet.
+    QString foreignSliceOwnerStation(int sliceId) const;
+
     // High-level actions
     void connectToRadio(const RadioInfo& info);
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
@@ -372,6 +383,10 @@ signals:
     void multiFlexConflictDetected();
     // Emitted when TX ownership changes in Multi-Flex (another client transmitting)
     void txOwnerChanged(bool ownedByUs, const QString& otherStation);
+    // Emitted when a global slice slot transitions between ours / foreign /
+    // empty states.  UI listens to this to re-style slice-tab buttons
+    // (e.g. RxApplet dims foreign slots).
+    void slotOccupancyChanged(int sliceId);
     // Emitted when the set of other connected clients changes.
     void otherClientsChanged(int count, const QStringList& names);
     // Emitted when another GUI client logs in after our known client list.
@@ -731,6 +746,7 @@ private:
     QString  m_wanPublicIp;
     quint16  m_wanUdpPort{4991};
     QSet<int>          m_ownedSliceIds;   // slice IDs that belong to our client
+    QHash<int, quint32> m_foreignSliceOwners;  // slot id → owning client handle
     bool               m_txOwnedByUs{true};  // true when tx_client_handle matches our handle
     bool               m_fullDuplex{false};
     int                m_rttyMarkDefault{2125};

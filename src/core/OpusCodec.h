@@ -32,6 +32,12 @@ public:
     // Decode an Opus frame → stereo int16 24kHz PCM (for AudioEngine)
     QByteArray decode(const QByteArray& opusFrame);
 
+    // Synthesize one frame of concealment audio from the decoder's internal
+    // state (Opus native PLC, opus_decode(nullptr, 0, ...)). Used when a
+    // packet is detected lost via VITA-49 sequence skip; perceptually much
+    // better than raw silence for one or two consecutive missed frames. (#2731)
+    QByteArray concealLost();
+
     // Encode stereo int16 24kHz PCM → Opus frame bytes
     QByteArray encode(const QByteArray& pcmStereo);
 

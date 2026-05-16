@@ -2,15 +2,15 @@
 
 **A Linux-native client for FlexRadio Systems transceivers**
 
-[![CI](https://github.com/ten9876/AetherSDR/actions/workflows/ci.yml/badge.svg)](https://github.com/ten9876/AetherSDR/actions/workflows/ci.yml)
+[![CI](https://github.com/aethersdr/AetherSDR/actions/workflows/ci.yml/badge.svg)](https://github.com/aethersdr/AetherSDR/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Qt6](https://img.shields.io/badge/Qt-6-green.svg)](https://www.qt.io/)
-[![Signed Commits](https://img.shields.io/badge/commits-GPG%20signed-brightgreen?logo=gnuprivacyguard)](https://github.com/ten9876/AetherSDR/commits/main)
+[![Signed Commits](https://img.shields.io/badge/commits-GPG%20signed-brightgreen?logo=gnuprivacyguard)](https://github.com/aethersdr/AetherSDR/commits/main)
 
 AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.5.1** — first stable, 1.0-equivalent release. Versioning moves to CalVer (`YY.M.patch`). | [Download](https://github.com/ten9876/AetherSDR/releases/latest) | [Discussions](https://github.com/ten9876/AetherSDR/discussions) | [What's New](https://github.com/ten9876/AetherSDR/releases)
+**Current version: 26.5.1** — first stable, 1.0-equivalent release. Versioning moves to CalVer (`YY.M.patch`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Cross-platform downloads available:** Linux AppImage, macOS universal DMG, Windows installer and portable ZIP.
 > Linux is the primary supported platform. macOS and Windows builds are provided as a courtesy.
@@ -83,7 +83,7 @@ MIDI, Stream Deck/StreamController plugins, and generic USB-serial adapters:
 
 ## Download
 
-Pre-built binaries are available from [Releases](https://github.com/ten9876/AetherSDR/releases/latest):
+Pre-built binaries are available from [Releases](https://github.com/aethersdr/AetherSDR/releases/latest):
 
 | Platform | Download | Notes |
 |----------|----------|-------|
@@ -155,7 +155,7 @@ brew install qt@6 ninja cmake pkgconf autoconf automake libtool \
 ### Build & Run
 
 ```bash
-git clone https://github.com/ten9876/AetherSDR.git
+git clone https://github.com/aethersdr/AetherSDR.git
 cd AetherSDR
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
@@ -200,7 +200,7 @@ sudo cmake --install build
 - [ ] CW ultimatic keyer mode (#416)
 - [ ] Native DAX audio channels on Windows
 
-See the full [issue tracker](https://github.com/ten9876/AetherSDR/issues) for all planned features.
+See the full [issue tracker](https://github.com/aethersdr/AetherSDR/issues) for all planned features.
 
 ---
 
@@ -219,7 +219,7 @@ PRs, bug reports, and feature requests welcome! See [CONTRIBUTING.md](CONTRIBUTI
 Linux and Windows binaries are GPG-signed. macOS artifacts are Apple notarized. Each release includes `.asc` signatures and `SHA256SUMS.txt`.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/ten9876/AetherSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
+curl -sSL https://raw.githubusercontent.com/aethersdr/AetherSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
 gpg --verify AetherSDR-vX.Y.Z-x86_64.AppImage.asc AetherSDR-vX.Y.Z-x86_64.AppImage
 ```
 

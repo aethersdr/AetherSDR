@@ -1,6 +1,7 @@
 #include "PanadapterApplet.h"
 #include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
+#include "SliceLabel.h"
 #include "SpectrumWidget.h"
 #include "core/AppSettings.h"
 
@@ -49,6 +50,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_titleLabel = new QLabel("Slice A");
     m_titleLabel->setStyleSheet("QLabel { background: transparent; color: #8aa8c0; "
                                 "font-size: 10px; font-weight: bold; }");
+    m_titleLabel->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
     barLayout->addWidget(m_titleLabel);
     barLayout->addStretch();
 
@@ -325,11 +327,10 @@ void PanadapterApplet::setFloatingState(bool floating)
     if (m_closeBtn && floating) m_closeBtn->setVisible(true);
 }
 
-void PanadapterApplet::setSliceId(int id)
+void PanadapterApplet::setSliceId(int id, const QString& perClientLetter)
 {
-    const char letters[] = "ABCDEFGH";
-    const char letter = (id >= 0 && id < 8) ? letters[id] : '?';
-    m_titleLabel->setText(QString("Slice %1").arg(letter));
+    m_titleLabel->setText(
+        QString("Slice %1").arg(SliceLabel::richText(id, perClientLetter)));
 }
 
 void PanadapterApplet::clearSliceTitle()

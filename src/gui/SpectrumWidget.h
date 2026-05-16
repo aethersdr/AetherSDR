@@ -29,6 +29,14 @@ namespace AetherSDR {
 class SpectrumOverlayMenu;
 class VfoWidget;
 
+// Shared timeout for the dBm-range echo handshake between MainWindow's
+// request-side tracker (wirePanadapter / PendingDbmRange) and SpectrumWidget's
+// echo-side tracker (m_pendingDbmRangeEcho).  Both ends must expire on the
+// same interval — if the request side stays patient longer than the echo
+// side, the spectrum can drop the echo while MainWindow is still waiting
+// for a match (and vice versa).  Keep them tied to this one constant.
+inline constexpr qint64 kDbmRangeHandshakeTimeoutMs = 2000;
+
 // Waterfall color scheme presets.
 enum class WfColorScheme : int {
     Default = 0,   // black → dark blue → blue → cyan → green → yellow → red
@@ -97,11 +105,12 @@ public:
     // Update the dBm range used for the waterfall colour map and spectrum Y axis.
     void setDbmRange(float minDbm, float maxDbm);
 
-    // Noise floor auto-adjust: position (0=top, 100=bottom), enable on/off.
+    // Noise floor auto-adjust: position (1=top, 99=bottom), enable on/off.
     // Both setters persist to AppSettings (per-pan keys DisplayNoiseFloor*)
     // so the state and value survive launch.
     void setNoiseFloorPosition(int pos);
     void setNoiseFloorEnable(bool on);
+    void reacquireNoiseFloorLock();
 
     // Two-pass trimmed-mean noise floor from live FFT bins (dBm), EMA-smoothed.
     // Pass 1 computes the overall mean; pass 2 averages only bins ≤ mean so
@@ -137,7 +146,7 @@ public:
     float spectrumFrac()  const { return m_spectrumFrac; }
     float refLevel()      const { return m_refLevel; }
     float dynamicRange()  const { return m_dynamicRange; }
-    bool isDraggingDbmScale() const { return m_draggingDbm; }
+    bool isDraggingDbmScale() const { return m_draggingDbm || m_draggingDbmRange; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
 
@@ -173,7 +182,13 @@ public:
     int  rfGainValue() const { return m_rfGainValue; }
     bool wideActive()  const { return m_wideActive; }
     void setWnbActive(bool on) { m_wnbActive = on; markOverlayDirty(); }
-    void setRfGain(int gain) { m_rfGainValue = gain; markOverlayDirty(); }
+    void setRfGain(int gain) {
+        if (m_rfGainValue != gain) {
+            m_rfGainValue = gain;
+            reacquireNoiseFloorLock();
+        }
+        markOverlayDirty();
+    }
     void setWideActive(bool on) {
         if (m_wideActive != on) {
             m_wideActive = on;
@@ -288,6 +303,7 @@ public:
         // 1 = 1 px, 3 = 3 px.
         int    markerWidth{1};
         bool   filterEdgesHidden{false};  // skip drawing filter-edge vertical lines
+        QString perClientLetter;   // radio-provided index_letter (Multi-Flex)
     };
 
     // Add or update a slice overlay (called per-slice on any state change).
@@ -299,6 +315,11 @@ public:
                          bool xitOn = false, int xitFreq = 0);
     // Update just the frequency on an existing overlay (for optimistic scroll-to-tune)
     void setSliceOverlayFreq(int sliceId, double freqMhz);
+    // Update the per-client letter on an existing overlay; safe to call
+    // before/after setSliceOverlay.  Used by the Multi-Flex display mode
+    // so the slice marker / passband colour can follow the radio's
+    // index_letter assignment (#2606).
+    void setSliceOverlayLetter(int sliceId, const QString& letter);
     // Update per-slice marker display style (#1526)
     void setSliceOverlayMarkerStyle(int sliceId, int markerWidth, bool filterEdgesHidden);
     // Remove a slice overlay.
@@ -442,6 +463,7 @@ signals:
     // Emitted when the user adjusts the dBm scale (drag or arrows).
     void dbmRangeChangeRequested(float minDbm, float maxDbm);
     void dbmRangeDragFinished(float minDbm, float maxDbm);
+    void noiseFloorPositionResolved(int pos);
     // TNF signals
     void tnfCreateRequested(double freqMhz);
     void tnfMoveRequested(int id, double newFreqMhz);
@@ -560,9 +582,10 @@ private:
     // band switch, manual dBm drag) so the next frame re-acquires
     // rather than smooths from a stale value.
     void resetNoiseFloorBaseline();
-    // Re-capture the target frac (m_noiseFloorPosition) — called when
-    // the user changes the position slider or finishes a dBm drag.
-    void refreshNoiseFloorTarget();
+    // Re-capture the target frac. Slider changes use m_noiseFloorPosition;
+    // manual dBm-scale changes can capture the floor's current screen position.
+    void refreshNoiseFloorTarget(bool captureCurrentScale = false);
+    bool captureNoiseFloorTargetFromCurrentScale(bool notify);
 
     // Helper: find overlay index for a sliceId, or -1.
     int overlayIndex(int sliceId) const;
@@ -601,6 +624,7 @@ private:
     float m_dynamicRange{100.0f};   // dB range shown in spectrum (-50 to -150)
     bool  m_resetFftSmoothingOnNextFrame{false};
     bool  m_pendingDbmRangeEcho{false};
+    qint64 m_pendingDbmRangeEchoStartMs{0};
     int   m_holdFftUpdatesAfterDbmRelease{0};
     float m_dbmReleasePreviewOffset{0.0f};
     float m_pendingMinDbm{0.0f};
@@ -612,7 +636,7 @@ private:
 
     // Noise floor auto-adjust
     bool  m_noiseFloorEnable{false};
-    int   m_noiseFloorPosition{75};  // 0=top, 100=bottom
+    int   m_noiseFloorPosition{75};  // 1=top, 99=bottom
     int   m_noiseFloorFrameCount{0};
     // Noise-floor auto-adjust state machine (per-frame baseline tracker
     // with asymmetric smoothing + transient rejection — keeps the floor
@@ -744,8 +768,11 @@ private:
     static constexpr int DBM_STRIP_W = 36;  // width of the dBm scale strip
     static constexpr int DBM_ARROW_H = 14;  // height of each arrow button
     bool  m_draggingDbm{false};
+    bool  m_draggingDbmRange{false};
     int   m_dbmDragStartY{0};
     float m_dbmDragStartRef{0.0f};
+    float m_dbmDragStartRange{0.0f};
+    float m_dbmDragStartBottom{0.0f};
     // Off-screen slice indicator hit rects (parallel to m_sliceOverlays)
     QVector<QRect> m_offScreenRects;
     int  m_hoveringOffScreenIdx{-1};

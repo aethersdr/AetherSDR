@@ -787,7 +787,7 @@ void TitleBar::showFeatureRequestDialog()
     // Version check guard (#486) — warn if not on latest release
     auto* nam = new QNetworkAccessManager(this);
     auto* reply = nam->get(QNetworkRequest(
-        QUrl("https://api.github.com/repos/ten9876/AetherSDR/releases/latest")));
+        QUrl("https://api.github.com/repos/aethersdr/AetherSDR/releases/latest")));
     connect(reply, &QNetworkReply::finished, this, [this, reply, nam] {
         reply->deleteLater();
         nam->deleteLater();
@@ -819,12 +819,12 @@ void TitleBar::showFeatureRequestDialogImpl()
     static const QString kPrompt =
         "IMPORTANT — before doing anything else, fetch the complete list of open\n"
         "issues by reading pages sequentially until you get fewer than 100 results:\n"
-        "  Page 1: https://github.com/ten9876/AetherSDR/issues?state=open&per_page=100&page=1\n"
-        "  Page 2: https://github.com/ten9876/AetherSDR/issues?state=open&per_page=100&page=2\n"
+        "  Page 1: https://github.com/aethersdr/AetherSDR/issues?state=open&per_page=100&page=1\n"
+        "  Page 2: https://github.com/aethersdr/AetherSDR/issues?state=open&per_page=100&page=2\n"
         "  ... continue until a page returns fewer than 100 issues.\n"
         "Do NOT rely on cached or training data for the issue list.\n\n"
         "Also fetch CLAUDE.md fresh (do not use cached versions):\n"
-        "  https://raw.githubusercontent.com/ten9876/AetherSDR/main/CLAUDE.md\n\n"
+        "  https://raw.githubusercontent.com/aethersdr/AetherSDR/main/CLAUDE.md\n\n"
         "I want to report an issue or request a feature for AetherSDR, a Linux-native\n"
         "Qt6/C++20 client for FlexRadio transceivers. It uses the FlexLib API over TCP/UDP.\n\n"
         "DUPLICATE CHECK — this is mandatory. Search the fetched issue list for keywords\n"
@@ -938,7 +938,7 @@ void TitleBar::showFeatureRequestDialogImpl()
         "QPushButton:hover { background: #00c8f0; }");
     connect(submitBtn, &QPushButton::clicked, dlg, [dlg] {
         QDesktopServices::openUrl(QUrl(
-            "https://github.com/ten9876/AetherSDR/issues/new?template=feature_request.yml"));
+            "https://github.com/aethersdr/AetherSDR/issues/new?template=feature_request.yml"));
         QTimer::singleShot(500, dlg, &QDialog::close);
     });
     btnRow2->addWidget(submitBtn);
@@ -950,7 +950,7 @@ void TitleBar::showFeatureRequestDialogImpl()
         "QPushButton:hover { background: #dd5050; }");
     connect(bugBtn, &QPushButton::clicked, dlg, [dlg] {
         QDesktopServices::openUrl(QUrl(
-            "https://github.com/ten9876/AetherSDR/issues/new?template=bug_report.yml"));
+            "https://github.com/aethersdr/AetherSDR/issues/new?template=bug_report.yml"));
         QTimer::singleShot(500, dlg, &QDialog::close);
     });
     btnRow2->addWidget(bugBtn);

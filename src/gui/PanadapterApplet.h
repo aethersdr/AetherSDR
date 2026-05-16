@@ -27,8 +27,11 @@ public:
     QString panId() const { return m_panId; }
     void setPanId(const QString& id) { m_panId = id; }
 
-    // Set the slice ID (0=A .. 7=H) shown in the title bar.
-    void setSliceId(int id);
+    // Set the slice ID (0=A .. 7=H) shown in the title bar.  Optional
+    // perClientLetter overrides the displayed letter (Multi-Flex sessions
+    // use the radio-provided index_letter so the title matches the slice
+    // badge — see #2606).  Empty falls back to 'A' + id.
+    void setSliceId(int id, const QString& perClientLetter = QString());
     void clearSliceTitle();
     QString sliceTitle() const;
 

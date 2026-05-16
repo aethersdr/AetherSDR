@@ -25,6 +25,14 @@ public:
 
     // Getters
     int     sliceId()    const { return m_id; }
+    // Per-client display letter from the radio's `index_letter` status field.
+    // In Multi-Flex sessions this is the letter as the radio assigns it to
+    // *this* client (e.g. the second client's first slice is "A" even when
+    // its global sliceId is 2).  Falls back to `'A' + sliceId` if the field
+    // hasn't arrived yet (early in status, or older firmware).
+    QString letter()     const { return m_letter.isEmpty()
+                                     ? QString(QChar('A' + m_id))
+                                     : m_letter; }
     QString panId()      const { return m_panId; }       // e.g. "0x40000000"
     double  frequency()  const { return m_frequency; }   // MHz
     QString mode()       const { return m_mode; }
@@ -165,10 +173,17 @@ public:
     // Apply a batch of KV pairs from a status message.
     void applyStatus(const QMap<QString, QString>& kvs);
 
+    // Force a re-emit of letterChanged() with the current letter — used
+    // when a global display preference (e.g. AppSettings
+    // SliceLetterDisplay) changes so widgets repaint without us having
+    // to know which ones they are.  See #2606.
+    void emitLetterRefresh();
+
     // Drain pending outgoing commands (called by RadioModel to send them)
     QStringList drainPendingCommands();
 
 signals:
+    void letterChanged(const QString& newLetter);
     void frequencyChanged(double mhz);
     void panIdChanged(const QString& panId);
     void modeChanged(const QString& mode);
@@ -236,6 +251,7 @@ signals:
 
 private:
     int     m_id{0};
+    QString m_letter;          // per-client display letter from `index_letter`
     QString m_panId;           // panadapter assignment (e.g. "0x40000000")
     double  m_frequency{0.0};
     QString m_mode{"USB"};

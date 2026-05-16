@@ -1,7 +1,7 @@
 # TCI Peripheral Discovery — mDNS Service Schema
 
-_Proposed in [#2502](https://github.com/ten9876/AetherSDR/issues/2502) as
-a follow-up to [#2456](https://github.com/ten9876/AetherSDR/pull/2456).
+_Proposed in [#2502](https://github.com/aethersdr/AetherSDR/issues/2502) as
+a follow-up to [#2456](https://github.com/aethersdr/AetherSDR/pull/2456).
 This document defines the discovery contract; the Qt-side browse
 implementation lives in a separate change._
 

@@ -41,6 +41,11 @@ public:
 signals:
     void txBandSettingsRequested();
     void serialSettingsChanged();
+    // Fired when the user toggles SliceLetterDisplay mode in the Themes
+    // tab so MainWindow can push a refresh through all slice-letter
+    // widgets (the AppSettings value is what's actually consulted at
+    // paint time — this signal is just the redraw trigger).
+    void sliceLetterDisplayModeChanged();
 
 protected:
     void closeEvent(QCloseEvent* event) override;

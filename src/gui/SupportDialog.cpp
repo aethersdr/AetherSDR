@@ -168,14 +168,14 @@ void SupportDialog::buildUI()
         // Diagnostic prompt for AI
         static const QString kPromptTemplate =
             "I'm experiencing an issue with AetherSDR, a Linux/macOS/Windows SDR client\n"
-            "for FlexRadio transceivers (https://github.com/ten9876/AetherSDR).\n\n"
+            "for FlexRadio transceivers (https://github.com/aethersdr/AetherSDR).\n\n"
             "My system:\n"
             "- AetherSDR version: %1\n"
             "- Qt version: %2\n"
             "- OS: %3\n"
             "- Radio: %4\n\n"
             "Before writing the bug report, please read the AetherSDR project context at\n"
-            "https://raw.githubusercontent.com/ten9876/AetherSDR/main/CLAUDE.md\n"
+            "https://raw.githubusercontent.com/aethersdr/AetherSDR/main/CLAUDE.md\n"
             "for architecture overview, data flow, protocol details, and known issues.\n\n"
             "Based on my description below, write a complete GitHub bug report.\n"
             "Do NOT ask me follow-up questions — just write the best report you can\n"
@@ -251,7 +251,7 @@ void SupportDialog::buildUI()
             QDesktopServices::openUrl(QUrl("https://www.perplexity.ai/"));
             openedLLM = true;
         } else if (clicked == issueBtn) {
-            QUrl url("https://github.com/ten9876/AetherSDR/issues/new");
+            QUrl url("https://github.com/aethersdr/AetherSDR/issues/new");
             QUrlQuery query;
             query.addQueryItem("labels", "bug");
             url.setQuery(query);

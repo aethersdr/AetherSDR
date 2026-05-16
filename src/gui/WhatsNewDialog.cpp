@@ -138,7 +138,7 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
             "font-size: 14px; border-radius: 18px; padding: 0 32px; }"
             "QPushButton:hover { background: #28c050; }");
         connect(upgradeBtn, &QPushButton::clicked, this, [this] {
-            QDesktopServices::openUrl(QUrl("https://github.com/ten9876/AetherSDR/releases/latest"));
+            QDesktopServices::openUrl(QUrl("https://github.com/aethersdr/AetherSDR/releases/latest"));
             close();
         });
         btnRow->addWidget(upgradeBtn);

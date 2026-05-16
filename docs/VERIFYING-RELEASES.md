@@ -23,7 +23,7 @@ Linux and source artifacts.
 From the repository:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/ten9876/AetherSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
+curl -sSL https://raw.githubusercontent.com/aethersdr/AetherSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
 ```
 
 Or from keys.openpgp.org:

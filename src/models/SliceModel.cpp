@@ -502,6 +502,11 @@ void SliceModel::setAudioPan(int pan)
 
 // ─── Status updates from radio ────────────────────────────────────────────────
 
+void SliceModel::emitLetterRefresh()
+{
+    emit letterChanged(letter());
+}
+
 void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
 {
     bool freqChanged   = false;
@@ -514,6 +519,19 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
         if (m_panId != p) {
             m_panId = p;
             emit panIdChanged(m_panId);
+        }
+    }
+
+    // Per-client display letter.  Radio assigns this independently of the
+    // global slice index in Multi-Flex sessions — e.g. a second client's
+    // first slice is "A" even when sliceId is 2.  Emits letterChanged()
+    // with the resolved value (post-fallback) so UI bindings get the
+    // string they should actually display.
+    if (kvs.contains("index_letter")) {
+        const QString newLetter = kvs["index_letter"];
+        if (newLetter != m_letter) {
+            m_letter = newLetter;
+            emit letterChanged(letter());
         }
     }
 

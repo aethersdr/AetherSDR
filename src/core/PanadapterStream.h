@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PacketLossConcealment.h"
+
 #include <QObject>
 #include <QUdpSocket>
 #include <QHostAddress>
@@ -94,6 +96,15 @@ public:
     // Send a raw UDP datagram to the radio (used for DAX TX VITA-49 packets)
     Q_INVOKABLE void sendToRadio(const QByteArray& packet);
 
+    // Enable/disable network-audio packet-loss concealment. When enabled
+    // (default), gaps detected via VITA-49 sequence skips on the CatAudio
+    // path are filled with cosine-faded silence (uncompressed) or native
+    // Opus PLC frames before the next received packet is emitted to
+    // AudioEngine. Reduces the broadband click that the splice would
+    // otherwise produce. Safe to call from any thread. (#2731)
+    Q_INVOKABLE void setPacketLossConcealment(bool on);
+    bool packetLossConcealment() const { return m_plcEnabled.load(); }
+
 signals:
     void daxAudioReady(int channel, const QByteArray& pcm);
     void iqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
@@ -117,10 +128,16 @@ private:
     void processDatagram(const QByteArray& data);
     void decodeFFT(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
     void decodeWaterfallTile(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
-    void decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer);
-    void decodeReducedBwAudio(const uchar* raw, int totalBytes, bool hasTrailer);
-    void decodeOpusAudio(const uchar* raw, int totalBytes, bool hasTrailer);
+    void decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
+    void decodeReducedBwAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
+    void decodeOpusAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
     void decodeMeterData(const uchar* raw, int totalBytes, bool hasTrailer);
+
+    // Per-stream PLC state map.  Accessed only from the network worker
+    // thread.  Public AudioPlcState struct and static applyConcealmentFade
+    // declared above.
+    QMap<quint32, AudioPlcState> m_audioPlc;
+    std::atomic<bool> m_plcEnabled{true};
 
     // PacketClassCodes (from FlexLib VitaFlex.cs)
     static constexpr quint16 PCC_IF_NARROW         = 0x03E3u; // float32 stereo, big-endian

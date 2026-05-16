@@ -3,6 +3,14 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Post-merge guard. We dropped the "Require branches up to date before
+  # merging" branch-protection bit because it forced a CI rerun on every
+  # PR whenever main moved (~15–25 min × N stale PRs per batch day).
+  # The trade-off is: CI now runs on the merged commit itself, so any
+  # semantic conflict that slipped past three-way merge surfaces on main
+  # within ~10 min and triggers normal failure notifications.
+  push:
+    branches: [main]
 
 jobs:
   build:

@@ -1,11 +1,11 @@
 {
   "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
   "UUID": "com.aethersdr.radio",
-  "Version": "1.0.0.0",
+  "Version": "1.0.1.0",
   "Name": "AetherSDR",
   "Description": "Full AetherSDR radio control via TCI — 43 actions for FlexRadio TX, bands, modes, DSP, audio, and DVK.",
   "Author": "AetherSDR",
-  "URL": "https://github.com/ten9876/AetherSDR",
+  "URL": "https://github.com/aethersdr/AetherSDR",
   "Icon": "imgs/plugin-icon",
   "CodePath": "plugin.js",
   "Category": "AetherSDR",

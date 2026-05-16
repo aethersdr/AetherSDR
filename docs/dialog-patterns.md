@@ -5,7 +5,7 @@ non-modal — there's a canonical pattern that the project's existing dialogs
 follow. This doc captures it in one place so contributors (human or agent)
 don't have to reverse-engineer it from 8+ existing dialogs.
 
-Long-term, the [`PersistentDialog` base class issue (#2605)](https://github.com/ten9876/AetherSDR/issues/2605)
+Long-term, the [`PersistentDialog` base class issue (#2605)](https://github.com/aethersdr/AetherSDR/issues/2605)
 will collapse this boilerplate into a parent class with `bodyWidget()`. Until
 then, every new dialog needs to wire these pieces by hand.
 

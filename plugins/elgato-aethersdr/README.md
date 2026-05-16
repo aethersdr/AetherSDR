@@ -7,7 +7,7 @@ Works with the **official Elgato Stream Deck app** on macOS and Windows.
 ## Installation
 
 1. Enable TCI in AetherSDR: **Settings > Autostart TCI with AetherSDR**
-2. Download `com.aethersdr.radio.streamDeckPlugin` from the [latest release](https://github.com/ten9876/AetherSDR/releases/latest)
+2. Download `com.aethersdr.radio.streamDeckPlugin` from the [latest release](https://github.com/aethersdr/AetherSDR/releases/latest)
 3. Double-click the file — the Elgato app installs it automatically
 4. Drag AetherSDR actions onto your Stream Deck buttons
 

@@ -36,7 +36,7 @@ Those are exactly the kinds of observations that make the software safer and eas
 
 GitHub:
 
-[https://github.com/ten9876/AetherSDR](https://github.com/ten9876/AetherSDR)
+[https://github.com/aethersdr/AetherSDR](https://github.com/aethersdr/AetherSDR)
 
 This is the main place for issues, discussions, releases, and pull requests.
 

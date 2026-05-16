@@ -455,6 +455,7 @@ set(CORE_SOURCES
     src/core/IambicKeyer.cpp
     src/core/SpectralNR.cpp
     src/core/PanadapterStream.cpp
+    src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/RigctlProtocol.cpp
     src/core/RigctlPty.cpp
@@ -557,6 +558,7 @@ set(GUI_SOURCES
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/SliceColorManager.cpp
+    src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
@@ -1285,6 +1287,31 @@ add_executable(client_comp_test
     src/core/ClientComp.cpp
 )
 target_include_directories(client_comp_test PRIVATE src)
+
+add_executable(slice_label_test
+    tests/slice_label_test.cpp
+    src/gui/SliceLabel.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(slice_label_test PRIVATE src)
+target_link_libraries(slice_label_test PRIVATE Qt6::Gui)
+add_test(NAME slice_label_test COMMAND slice_label_test)
+
+add_executable(slice_model_letter_test
+    tests/slice_model_letter_test.cpp
+    src/models/SliceModel.cpp
+)
+target_include_directories(slice_model_letter_test PRIVATE src)
+target_link_libraries(slice_model_letter_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME slice_model_letter_test COMMAND slice_model_letter_test)
+
+add_executable(packet_loss_concealment_test
+    tests/packet_loss_concealment_test.cpp
+    src/core/PacketLossConcealment.cpp
+)
+target_include_directories(packet_loss_concealment_test PRIVATE src)
+target_link_libraries(packet_loss_concealment_test PRIVATE Qt6::Core)
+add_test(NAME packet_loss_concealment_test COMMAND packet_loss_concealment_test)
 
 add_executable(client_quindar_test
     tests/client_quindar_test.cpp

@@ -496,6 +496,23 @@ SliceModel* RadioModel::slice(int id) const
     return nullptr;
 }
 
+bool RadioModel::isSlotOurs(int sliceId) const
+{
+    return slice(sliceId) != nullptr;
+}
+
+bool RadioModel::isSlotForeign(int sliceId) const
+{
+    return m_foreignSliceOwners.contains(sliceId);
+}
+
+QString RadioModel::foreignSliceOwnerStation(int sliceId) const
+{
+    auto it = m_foreignSliceOwners.constFind(sliceId);
+    if (it == m_foreignSliceOwners.constEnd()) return {};
+    return m_clientStations.value(it.value(), {});
+}
+
 int RadioModel::activeTxSliceNum() const
 {
     for (auto* s : m_slices) {
@@ -904,6 +921,10 @@ void RadioModel::applyKnownGuiClients(const QStringList& handles,
         m_clientStations.clear();
         m_clientInfoMap.clear();
         m_startupClientConnections.clear();
+        // Foreign-slot dimming markers belong to per-handle state; clear
+        // them alongside so a re-sync doesn't carry stale Multi-Flex
+        // occupancy across the reset (#2606).
+        m_foreignSliceOwners.clear();
     }
 
     for (int i = 0; i < handles.size(); ++i) {
@@ -1664,6 +1685,10 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
         it = (it.key() != ours) ? m_clientInfoMap.erase(it) : std::next(it);
     }
     m_clientStations.clear();
+    // Foreign-slot markers are rebuilt from fresh client/slice statuses
+    // after the resub below; clear them so the tab row doesn't show
+    // pre-reconnect dim placeholders during the gap (#2606).
+    m_foreignSliceOwners.clear();
 
     // Subscribe to radio and client topics early — before client gui — to get
     // mf_enable and the live connected-client list directly from the radio.
@@ -2293,6 +2318,7 @@ void RadioModel::onDisconnected()
     m_clientStations.clear();
     m_clientInfoMap.clear();
     m_announcedClientConnections.clear();
+    m_foreignSliceOwners.clear();  // #2606: drop Multi-Flex slot markers on full reset
     m_startupClientConnections.clear();
     m_clientConnectionNoticeTimer.invalidate();
     emit otherClientsChanged(0, {});
@@ -3309,6 +3335,23 @@ void RadioModel::onStatusReceived(const QString& object,
                 m_clientInfoMap.remove(handle);
                 m_announcedClientConnections.remove(handle);
                 m_startupClientConnections.remove(handle);
+                // Drop any foreign-slot markers tied to the disconnecting
+                // handle so the RX-applet tab row stops dimming slots the
+                // client no longer owns.  A graceful disconnect usually
+                // also produces `slice N removed=1` echoes which would
+                // clear these, but hard/abrupt drops don't — covering both
+                // paths here is harmless and avoids stale dim markers
+                // (#2606).
+                auto it = m_foreignSliceOwners.begin();
+                while (it != m_foreignSliceOwners.end()) {
+                    if (it.value() == handle) {
+                        const int sliceId = it.key();
+                        it = m_foreignSliceOwners.erase(it);
+                        emit slotOccupancyChanged(sliceId);
+                    } else {
+                        ++it;
+                    }
+                }
                 emitOtherClientsChanged();
             } else if (action == "connected" || kvs.contains("connected")) {
                 QString program = cleanClientText(kvs.value("program", "Unknown"));
@@ -4191,12 +4234,20 @@ void RadioModel::handleSliceStatus(int id,
         quint32 owner = kvs["client_handle"].toUInt(nullptr, 16);
         if (owner == clientHandle()) {
             m_ownedSliceIds.insert(id);
+            // If this slot was previously foreign (e.g. another client
+            // released it and we just got assigned), drop the foreign mark.
+            if (m_foreignSliceOwners.remove(id) > 0) {
+                emit slotOccupancyChanged(id);
+            }
             qCDebug(lcProtocol) << "RadioModel: slice" << id << "is ours (client_handle match)";
         } else if (owner != 0) {
             qCDebug(lcProtocol) << "RadioModel: slice" << id << "belongs to another client"
-                     << Qt::hex << owner << ", removing";
+                     << Qt::hex << owner << ", marking foreign";
             m_ownedSliceIds.remove(id);
-            // If we already have a SliceModel for this ID, remove it
+            const bool wasForeign = m_foreignSliceOwners.value(id) == owner;
+            m_foreignSliceOwners.insert(id, owner);
+            // If we already have a SliceModel for this ID, remove it.  We
+            // keep the foreign-owner record so UI can dim the slot.
             if (SliceModel* existing = slice(id)) {
                 const bool wasTxSlice = existing->isTxSlice();
                 m_slices.removeOne(existing);
@@ -4205,27 +4256,36 @@ void RadioModel::handleSliceStatus(int id,
                 if (wasTxSlice)
                     m_meterModel.setActiveTxSlice(activeTxSliceNum());
             }
+            if (!wasForeign) emit slotOccupancyChanged(id);
             return;  // slice belongs to another client
         }
     }
 
-    // If we've seen client_handle info and this slice isn't ours, skip it
-    if (!m_ownedSliceIds.isEmpty() && !m_ownedSliceIds.contains(id)) {
-        qCDebug(lcProtocol) << "RadioModel: ignoring slice" << id << "status (not in owned set)";
-        return;
-    }
-
+    // Removal can apply to ours OR a foreign slot — handle before the
+    // not-in-owned-set early-out so foreign slot dimming clears when the
+    // other client releases their slice.
     SliceModel* s = slice(id);
 
     if (removed) {
         if (s) {
             const bool wasTxSlice = s->isTxSlice();
             m_slices.removeOne(s);
+            m_ownedSliceIds.remove(id);
             emit sliceRemoved(id);
             s->deleteLater();
             if (wasTxSlice)
                 m_meterModel.setActiveTxSlice(activeTxSliceNum());
+            emit slotOccupancyChanged(id);
+        } else if (m_foreignSliceOwners.remove(id) > 0) {
+            // Foreign client released their slot — clear the dim marker.
+            emit slotOccupancyChanged(id);
         }
+        return;
+    }
+
+    // If we've seen client_handle info and this slice isn't ours, skip it
+    if (!m_ownedSliceIds.isEmpty() && !m_ownedSliceIds.contains(id)) {
+        qCDebug(lcProtocol) << "RadioModel: ignoring slice" << id << "status (not in owned set)";
         return;
     }
 
@@ -4249,6 +4309,7 @@ void RadioModel::handleSliceStatus(int id,
         s->applyStatus(kvs);  // populate frequency/mode before notifying UI
         m_meterModel.setActiveTxSlice(activeTxSliceNum());
         emit sliceAdded(s);
+        emit slotOccupancyChanged(id);  // empty/foreign → ours
         return;                // applyStatus already called below; skip second call
     }
 

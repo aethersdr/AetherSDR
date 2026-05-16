@@ -82,7 +82,7 @@ and fills in variables (issue number, PR number, author, etc.).
 
 ## Skill 1: Community PR Review
 
-**Trigger:** New PR opened on `ten9876/AetherSDR` (polled every 30 min)
+**Trigger:** New PR opened on `aethersdr/AetherSDR` (polled every 30 min)
 
 **Skip if:**
 - PR author is `ten9876` (maintainer) or `AetherClaude` (self)
@@ -164,7 +164,7 @@ Fastest possible response time.
 - Issue is assigned to someone (they're working on it)
 
 **What it does:**
-1. Search API: `repo:ten9876/AetherSDR is:issue is:open updated:<30_DAYS_AGO`
+1. Search API: `repo:aethersdr/AetherSDR is:issue is:open updated:<30_DAYS_AGO`
 2. For each stale issue:
    a. Read the issue body and all comments
    b. Feed to Claude Code for context-aware triage
@@ -203,7 +203,7 @@ or via a labeled issue (`release-notes-draft`)
 **What it does:**
 1. Find the latest release tag: `git describe --tags --abbrev=0`
 2. List all merged PRs since that tag:
-   `gh pr list --repo ten9876/AetherSDR --state merged --search "merged:>DATE"`
+   `gh pr list --repo aethersdr/AetherSDR --state merged --search "merged:>DATE"`
 3. For each PR, extract: number, title, author, labels
 4. Feed the list to Claude Code with instructions to:
    a. Group by category (Bug Fix, Feature, Enhancement, Internal)
@@ -271,7 +271,7 @@ operations
 **What it does:**
 1. Extract key terms from the new issue title and body
 2. Search existing open AND closed issues via `search_issues` MCP operation:
-   `repo:ten9876/AetherSDR is:issue "keyword1" "keyword2"`
+   `repo:aethersdr/AetherSDR is:issue "keyword1" "keyword2"`
 3. If candidates found (>0 results with different issue numbers):
    a. Feed the new issue + candidates to Claude Code
    b. Claude Code determines if any are true duplicates
