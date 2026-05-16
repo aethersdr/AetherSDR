@@ -29,6 +29,14 @@ namespace AetherSDR {
 class SpectrumOverlayMenu;
 class VfoWidget;
 
+// Shared timeout for the dBm-range echo handshake between MainWindow's
+// request-side tracker (wirePanadapter / PendingDbmRange) and SpectrumWidget's
+// echo-side tracker (m_pendingDbmRangeEcho).  Both ends must expire on the
+// same interval — if the request side stays patient longer than the echo
+// side, the spectrum can drop the echo while MainWindow is still waiting
+// for a match (and vice versa).  Keep them tied to this one constant.
+inline constexpr qint64 kDbmRangeHandshakeTimeoutMs = 2000;
+
 // Waterfall color scheme presets.
 enum class WfColorScheme : int {
     Default = 0,   // black → dark blue → blue → cyan → green → yellow → red

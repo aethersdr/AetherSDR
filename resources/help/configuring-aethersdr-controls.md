@@ -143,6 +143,9 @@ On the main spectrum display:
 - **Drag the frequency scale bar** to change the displayed bandwidth.
 - **Drag the divider between the spectrum and waterfall** to change how much height each one uses.
 - **Scroll vertically** over the spectrum or waterfall to tune the active slice by the current step size.
+- **Drag the dBm scale on the right edge** to pan the reference level up or down.
+- **Ctrl-drag the dBm scale** (⌘-drag on macOS) to zoom the visible dB span; the bottom of the scale stays anchored.
+- **Click the ▲ / ▼ arrows at the top of the dBm scale** to step the reference level by 10 dB.
 
 ### Trackpad notes
 

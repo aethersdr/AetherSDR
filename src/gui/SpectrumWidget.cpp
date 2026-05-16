@@ -58,7 +58,6 @@ static const QColor kAetherBrandBlue(0x00, 0xb4, 0xd8);
 static const QColor kAetherBrandGreen(0x20, 0xc0, 0x60);
 static const QColor kConnectionTextColor(0xd8, 0xe6, 0xf0);
 static constexpr float kMinDisplayDbm = -180.0f;
-static constexpr qint64 kDbmRangeEchoTimeoutMs = 2000;
 
 static bool spotMarkersVisuallyEqual(const QVector<SpectrumWidget::SpotMarker>& lhs,
                                      const QVector<SpectrumWidget::SpotMarker>& rhs)
@@ -597,6 +596,8 @@ void SpectrumWidget::reacquireNoiseFloorLock() {
     resetNoiseFloorBaseline();
     // Antenna changes can take several FFT frames to settle after the
     // slice command, so keep cold-acquiring long enough to catch the new floor.
+    // 30 frames ≈ 1 s of cold-acquire at the default 30 Hz FFT update rate —
+    // long enough for the antenna change to settle through the radio.
     m_noiseFloorFreshFrameCount = 30;
     m_measuredNoiseFloorDbm = -1000.0f;
 }
@@ -886,6 +887,8 @@ void SpectrumWidget::refreshNoiseFloorTarget(bool captureCurrentScale)
 bool SpectrumWidget::captureNoiseFloorTargetFromCurrentScale(bool notify)
 {
     if (m_dynamicRange <= 0.0f) {
+        qDebug() << "SpectrumWidget: noise-floor capture skipped — "
+                    "dynamic range not yet valid";
         return false;
     }
 
@@ -901,6 +904,8 @@ bool SpectrumWidget::captureNoiseFloorTargetFromCurrentScale(bool notify)
         baselineDbm = m_measuredNoiseFloorDbm;
     }
     if (baselineDbm <= -500.0f) {
+        qDebug() << "SpectrumWidget: noise-floor capture skipped — "
+                    "no baseline (bins empty, cached invalid, measured invalid)";
         return false;
     }
 
@@ -930,7 +935,7 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     if (m_pendingDbmRangeEcho
         && m_pendingDbmRangeEchoStartMs > 0
-        && nowMs - m_pendingDbmRangeEchoStartMs > kDbmRangeEchoTimeoutMs) {
+        && nowMs - m_pendingDbmRangeEchoStartMs > kDbmRangeHandshakeTimeoutMs) {
         m_pendingDbmRangeEcho = false;
         m_pendingDbmRangeEchoStartMs = 0;
     }
@@ -1979,7 +1984,7 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
         if (!matchesPending) {
             const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
             if (m_pendingDbmRangeEchoStartMs <= 0
-                || nowMs - m_pendingDbmRangeEchoStartMs <= kDbmRangeEchoTimeoutMs) {
+                || nowMs - m_pendingDbmRangeEchoStartMs <= kDbmRangeHandshakeTimeoutMs) {
                 return;
             }
         }
@@ -3318,6 +3323,19 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                     setSpectrumCursor(Qt::PointingHandCursor);
                 else
                     setSpectrumCursor(Qt::SizeVerCursor);
+                // Surface the Ctrl-drag span-zoom affordance (#2724).
+                const QRect stripRect(stripX, 0, DBM_STRIP_W, specH);
+                static const QString tip = QStringLiteral(
+                    "<b>dBm scale</b><br>"
+                    "Drag &mdash; pan reference level<br>"
+#ifdef Q_OS_MAC
+                    "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>"
+#else
+                    "Ctrl-drag &mdash; zoom span (anchor at bottom)<br>"
+#endif
+                    "&#9650; / &#9660; &mdash; &plusmn;10 dB steps");
+                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
+                                   tip, this, stripRect);
             } else {
                 // Check if hovering over a filter edge or inactive slice marker
                 bool foundCursor = false;
