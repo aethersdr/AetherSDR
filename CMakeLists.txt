@@ -1473,6 +1473,17 @@ if(UNIX)
 endif()
 set_target_properties(meter_model_test PROPERTIES AUTOMOC ON)
 
+add_executable(async_log_writer_test
+    tests/async_log_writer_test.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(async_log_writer_test PRIVATE src)
+target_link_libraries(async_log_writer_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(async_log_writer_test PRIVATE pthread)
+endif()
+set_target_properties(async_log_writer_test PROPERTIES AUTOMOC ON)
+
 add_executable(memory_recall_policy_test
     tests/memory_recall_policy_test.cpp
     src/core/MemoryRecallPolicy.cpp
