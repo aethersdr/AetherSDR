@@ -5677,11 +5677,19 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
     p.setFont(spotFont);
     const QFontMetrics fm(spotFont);
 
+    // Label-geometry constants.  Extracted from inline literals so the
+    // padding and inter-label spacing can be tuned in one place (#2622).
+    constexpr int kSpotLabelHPad = 6;   // horizontal padding inside each label
+    constexpr int kSpotLabelVPad = 2;   // vertical padding inside each label
+    constexpr int kSpotLabelGap  = 2;   // inter-label gap (collision only — not painted)
+
     // Starting Y position based on percentage setting
     const int startY = specRect.top() + specRect.height() * m_spotStartPct / 100;
-    const int th = fm.height() + 2;
-    const int maxBottom = startY + th * m_spotMaxLevels;
-    constexpr int SPOT_LABEL_GAP = 2;  // inter-label gap added to collision geometry
+    const int th = fm.height() + kSpotLabelVPad;
+    // Each label occupies th + kSpotLabelGap of vertical space once the
+    // collision-nudge gap is included, so m_spotMaxLevels keeps meaning
+    // "this many labels stack" rather than shrinking by the gap factor.
+    const int maxBottom = startY + (th + kSpotLabelGap) * m_spotMaxLevels;
 
     // Track label positions to avoid overlap and for click detection
     QVector<QRect> placed;
@@ -5711,7 +5719,7 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
 
         // Draw callsign label
         const QString label = spot.callsign;
-        const int tw = fm.horizontalAdvance(label) + 6;
+        const int tw = fm.horizontalAdvance(label) + kSpotLabelHPad;
 
         // Start at configured position, nudge down to avoid overlap.
         // Re-scan from the start after each nudge to handle cases where
@@ -5721,8 +5729,8 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
         while (collision) {
             collision = false;
             for (const auto& r : placed) {
-                if (labelRect.intersects(r.adjusted(0, -SPOT_LABEL_GAP, 0, SPOT_LABEL_GAP))) {
-                    labelRect.moveTop(r.bottom() + SPOT_LABEL_GAP + 1);
+                if (labelRect.intersects(r.adjusted(0, -kSpotLabelGap, 0, kSpotLabelGap))) {
+                    labelRect.moveTop(r.bottom() + kSpotLabelGap + 1);
                     collision = true;
                     break;
                 }
