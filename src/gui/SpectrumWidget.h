@@ -138,7 +138,7 @@ public:
     float spectrumFrac()  const { return m_spectrumFrac; }
     float refLevel()      const { return m_refLevel; }
     float dynamicRange()  const { return m_dynamicRange; }
-    bool isDraggingDbmScale() const { return m_draggingDbm; }
+    bool isDraggingDbmScale() const { return m_draggingDbm || m_draggingDbmRange; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
 
@@ -760,8 +760,11 @@ private:
     static constexpr int DBM_STRIP_W = 36;  // width of the dBm scale strip
     static constexpr int DBM_ARROW_H = 14;  // height of each arrow button
     bool  m_draggingDbm{false};
+    bool  m_draggingDbmRange{false};
     int   m_dbmDragStartY{0};
     float m_dbmDragStartRef{0.0f};
+    float m_dbmDragStartRange{0.0f};
+    float m_dbmDragStartBottom{0.0f};
     // Off-screen slice indicator hit rects (parallel to m_sliceOverlays)
     QVector<QRect> m_offScreenRects;
     int  m_hoveringOffScreenIdx{-1};

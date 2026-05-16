@@ -813,6 +813,7 @@ bool SpectrumWidget::anyDragActive() const {
         || m_draggingFilter != FilterEdge::None
         || m_draggingVfo
         || m_draggingDbm
+        || m_draggingDbmRange
         || m_draggingTimeScale
         || m_draggingTnfId >= 0;
 }
@@ -2714,34 +2715,59 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         const int stripX = width() - DBM_STRIP_W;
 
         if (mx >= stripX) {
-            // Arrow row (side by side: left = up, right = down)
-            if (y < DBM_ARROW_H) {
-                const float bottom = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
-                if (mx < stripX + DBM_STRIP_W / 2) {
-                    // Up arrow: raise ref level by 10 dB, keep bottom fixed
-                    m_refLevel += 10.0f;
-                } else {
-                    // Down arrow: lower ref level by 10 dB, keep bottom fixed
-                    m_refLevel -= 10.0f;
-                }
-                m_dynamicRange = m_refLevel - bottom;
-                if (m_dynamicRange < 10.0f) {
-                    m_dynamicRange = 10.0f;
-                    m_refLevel = bottom + m_dynamicRange;
-                }
-                markOverlayDirty();
-                refreshNoiseFloorTarget(true);
-                emit dbmRangeChangeRequested(bottom, m_refLevel);
+            const Qt::KeyboardModifiers modifiers =
+                ev->modifiers() | QGuiApplication::keyboardModifiers();
+            const bool primaryClick = ev->button() == Qt::LeftButton;
+#ifdef Q_OS_MAC
+            const bool rangeDrag = modifiers.testFlag(Qt::ControlModifier)
+                || modifiers.testFlag(Qt::MetaModifier);
+            const bool controlClick = rangeDrag
+                && (primaryClick || ev->button() == Qt::RightButton);
+#else
+            const bool rangeDrag = modifiers.testFlag(Qt::ControlModifier);
+            const bool controlClick = rangeDrag && primaryClick;
+#endif
+            if (controlClick) {
+                m_draggingDbmRange = true;
+                m_dbmDragStartY = y;
+                m_dbmDragStartRef = m_refLevel;
+                m_dbmDragStartRange = m_dynamicRange;
+                m_dbmDragStartBottom = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
+                setSpectrumCursor(Qt::SizeVerCursor);
                 ev->accept();
                 return;
             }
-            // Below arrows: start dBm drag (pan reference)
-            m_draggingDbm = true;
-            m_dbmDragStartY = y;
-            m_dbmDragStartRef = m_refLevel;
-            setSpectrumCursor(Qt::SizeVerCursor);
-            ev->accept();
-            return;
+
+            if (primaryClick) {
+                // Arrow row (side by side: left = up, right = down)
+                if (y < DBM_ARROW_H) {
+                    const float bottom = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
+                    if (mx < stripX + DBM_STRIP_W / 2) {
+                        // Up arrow: raise ref level by 10 dB, keep bottom fixed
+                        m_refLevel += 10.0f;
+                    } else {
+                        // Down arrow: lower ref level by 10 dB, keep bottom fixed
+                        m_refLevel -= 10.0f;
+                    }
+                    m_dynamicRange = m_refLevel - bottom;
+                    if (m_dynamicRange < 10.0f) {
+                        m_dynamicRange = 10.0f;
+                        m_refLevel = bottom + m_dynamicRange;
+                    }
+                    markOverlayDirty();
+                    refreshNoiseFloorTarget(true);
+                    emit dbmRangeChangeRequested(bottom, m_refLevel);
+                    ev->accept();
+                    return;
+                }
+                // Below arrows: start dBm drag (pan reference)
+                m_draggingDbm = true;
+                m_dbmDragStartY = y;
+                m_dbmDragStartRef = m_refLevel;
+                setSpectrumCursor(Qt::SizeVerCursor);
+                ev->accept();
+                return;
+            }
         }
     }
 
@@ -3128,10 +3154,22 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         return;
     }
 
+    if (m_draggingDbmRange) {
+        const int dragHeight = std::max(1, specH);
+        const int dy = m_dbmDragStartY - y;
+        const float deltaDb = (static_cast<float>(dy) / dragHeight) * m_dbmDragStartRange;
+        m_dynamicRange = std::max(10.0f, m_dbmDragStartRange + deltaDb);
+        m_refLevel = m_dbmDragStartBottom + m_dynamicRange;
+        markOverlayDirty();
+        ev->accept();
+        return;
+    }
+
     if (m_draggingDbm) {
+        const int dragHeight = std::max(1, specH);
         const int dy = y - m_dbmDragStartY;
         // Convert pixel drag to dB: full FFT height = full dynamic range
-        const float deltaDb = (static_cast<float>(dy) / specH) * m_dynamicRange;
+        const float deltaDb = (static_cast<float>(dy) / dragHeight) * m_dynamicRange;
         m_refLevel = m_dbmDragStartRef + deltaDb;
         m_refLevel = std::max(m_refLevel, kMinDisplayDbm + m_dynamicRange);
         markOverlayDirty();
@@ -3412,14 +3450,16 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
         ev->accept();
         return;
     }
-    if (m_draggingDbm) {
+    if (m_draggingDbm || m_draggingDbmRange) {
+        const bool rangeDrag = m_draggingDbmRange;
         m_pendingDbmRangeEcho = true;
         m_pendingDbmRangeEchoStartMs = QDateTime::currentMSecsSinceEpoch();
         m_pendingMinDbm = m_refLevel - m_dynamicRange;
         m_pendingMaxDbm = m_refLevel;
-        m_dbmReleasePreviewOffset = m_refLevel - m_dbmDragStartRef;
-        m_holdFftUpdatesAfterDbmRelease = 10;
+        m_dbmReleasePreviewOffset = rangeDrag ? 0.0f : m_refLevel - m_dbmDragStartRef;
+        m_holdFftUpdatesAfterDbmRelease = rangeDrag ? 0 : 10;
         m_draggingDbm = false;
+        m_draggingDbmRange = false;
         setSpectrumCursor(Qt::CrossCursor);
         m_resetFftSmoothingOnNextFrame = true;
         refreshNoiseFloorTarget(true);
@@ -4377,13 +4417,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawGrid(p, specRect);
             if (m_bandPlanFontSize > 0)
                 drawBandPlan(p, specRect);
-            drawDbmScale(p, specRect);
 
             // Divider bar
             p.fillRect(0, specH, w, DIVIDER_H, QColor(0x30, 0x40, 0x50));
 
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, FREQ_SCALE_H));
-            drawTimeScale(p, wfRect);
             drawTnfMarkers(p, specRect);
             if (m_showSpots || m_showSHistory)
                 drawSpotMarkers(p, specRect);
@@ -4551,6 +4589,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             }
 
             drawConnectionAnimation(p, specRect);
+            drawDbmScale(p, specRect);
+            drawTimeScale(p, wfRect);
 
             m_overlayStaticDirty = false;
             m_overlayNeedsUpload = true;
@@ -4962,7 +5002,6 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         drawGrid(p, specRect);
         drawSpectrum(p, specRect);
         if (m_bandPlanFontSize > 0) drawBandPlan(p, specRect);
-        drawDbmScale(p, specRect);
 
         p.fillRect(divRect, QColor(0x18, 0x28, 0x38));
         p.setPen(QColor(m_draggingDivider ? 0x00b4d8 : 0x304050));
@@ -4970,7 +5009,6 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
         drawFreqScale(p, scaleRect);
         drawWaterfall(p, wfRect);
-        drawTimeScale(p, wfRect);
         drawTnfMarkers(p, specRect);
         if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
         drawSwrSweep(p, specRect);
@@ -5223,6 +5261,9 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         p.setPen(QColor(0xc8, 0xd8, 0xe8));
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
     }
+
+    drawDbmScale(p, specRect);
+    drawTimeScale(p, wfRect);
 
     if (PerfTelemetry::instance().enabled()) {
         PerfTelemetry::instance().recordRender(
