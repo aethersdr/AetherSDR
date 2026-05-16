@@ -10169,7 +10169,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 if (!dbmMatches(minDbm, maxDbm, pendingDbm->minDbm, pendingDbm->maxDbm)) {
                     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
                     if (pendingDbm->requestedMs > 0
-                        && nowMs - pendingDbm->requestedMs > kDbmRangePendingTimeoutMs) {
+                        && nowMs - pendingDbm->requestedMs > kDbmRangeHandshakeTimeoutMs) {
                         pendingDbm->active = false;
                         pendingDbm->requestedMs = 0;
                     } else {
