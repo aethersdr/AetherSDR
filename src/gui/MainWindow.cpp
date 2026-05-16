@@ -8346,7 +8346,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
 #endif
         // Populate XVTR bands after radio status settles, and refresh
-        // whenever XVTR config changes (add/remove/rename). (#571)
+        // whenever XVTR config changes (add/remove/rename). (#571)  Also
+        // pushes the radio's built-in transverter capabilities so the
+        // band menu surfaces 4m/2m on FLEX-6500 / FLEX-6700 (#695).
         auto refreshXvtr = [this]() {
             if (!m_radioModel.isConnected()) return;
             QVector<SpectrumOverlayMenu::XvtrBand> xvtrBands;
@@ -8354,8 +8356,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 if (x.isValid)
                     xvtrBands.append({x.name, x.rfFreq});
             }
-            for (auto* applet : m_panStack->allApplets())
-                applet->spectrumWidget()->overlayMenu()->setXvtrBands(xvtrBands);
+            const ModelCapabilities caps = m_radioModel.capabilities();
+            for (auto* applet : m_panStack->allApplets()) {
+                auto* menu = applet->spectrumWidget()->overlayMenu();
+                menu->setRadioCapabilities(caps);
+                menu->setXvtrBands(xvtrBands);
+            }
         };
         QTimer::singleShot(2000, this, refreshXvtr);
         connect(&m_radioModel, &RadioModel::infoChanged, this, refreshXvtr);

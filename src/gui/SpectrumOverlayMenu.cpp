@@ -90,7 +90,17 @@ static constexpr BandGridEntry BAND_GRID[] = {
     {"2200", "2200m", 0.1375, "CW"},    // 13
     {"630",  "630m",  0.475,  "CW"},    // 14
     {"XVTR", "",      0.0,    ""},      // 15
+    // Built-in transverter bands — appended at the end so HF/utility
+    // indices stay stable.  Surfaced conditionally via the radio's
+    // ModelCapabilities (#695).
+    {"4",    "4m",   70.200,  "USB"},   // 16 — FLEX-6500 (Region 1) + FLEX-6700
+    {"2",    "2m",  144.200,  "USB"},   // 17 — FLEX-6700
 };
+
+// Indices into BAND_GRID for the built-in transverter bands.  Used by
+// the conditional VHF row in setXvtrBands().
+constexpr int kBandIdx4m = 16;
+constexpr int kBandIdx2m = 17;
 
 SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     : QWidget(parent)
@@ -1252,8 +1262,23 @@ void SpectrumOverlayMenu::setRfGainRange(int low, int high, int step)
             .arg(low).arg(high > 0 ? "+" : "").arg(high).arg(step));
 }
 
+void SpectrumOverlayMenu::setRadioCapabilities(ModelCapabilities caps)
+{
+    if (m_radioCapabilities.has4Meters == caps.has4Meters
+        && m_radioCapabilities.has2Meters == caps.has2Meters) {
+        return;  // No change — skip the rebuild.
+    }
+    m_radioCapabilities = caps;
+    // Delegate to setXvtrBands which already handles the full rebuild;
+    // pass the cached XVTR list so we don't lose configured external
+    // transverters when the model capability flags change.
+    setXvtrBands(m_lastXvtrBands);
+}
+
 void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
 {
+    m_lastXvtrBands = bands;
+
     const bool bandPanelWasVisible = m_bandPanel && m_bandPanel->isVisible();
     const QPoint bandPanelPos = m_bandPanel ? m_bandPanel->pos()
                                             : QPoint(x() + width(), y());
@@ -1304,23 +1329,40 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         {9, 10, -1},    // 10, 6
     };
 
+    auto makeBandBtn = [&](int idx) {
+        auto* btn = new QPushButton(BAND_GRID[idx].label, m_bandPanel);
+        btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
+        btn->setStyleSheet(bandBtnStyle);
+        const QString bandName = QString::fromLatin1(BAND_GRID[idx].bandName);
+        const double  freq = BAND_GRID[idx].freqMhz;
+        const QString mode = QString::fromLatin1(BAND_GRID[idx].mode);
+        connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
+            hideAllSubPanels();
+            emit bandSelected(bandName, freq, mode);
+        });
+        return btn;
+    };
+
     int row = 0;
     for (int r = 0; r < 4; ++r) {
         for (int col = 0; col < 3; ++col) {
             int idx = hfLayout[r][col];
             if (idx < 0) continue;
-            auto* btn = new QPushButton(BAND_GRID[idx].label, m_bandPanel);
-            btn->setFixedSize(BAND_BTN_W, BAND_BTN_H);
-            btn->setStyleSheet(bandBtnStyle);
-            QString bandName = QString::fromLatin1(BAND_GRID[idx].bandName);
-            double freq = BAND_GRID[idx].freqMhz;
-            QString mode = QString::fromLatin1(BAND_GRID[idx].mode);
-            connect(btn, &QPushButton::clicked, this, [this, bandName, freq, mode]() {
-                hideAllSubPanels();
-                emit bandSelected(bandName, freq, mode);
-            });
-            grid->addWidget(btn, row, col);
+            grid->addWidget(makeBandBtn(idx), row, col);
         }
+        ++row;
+    }
+
+    // Built-in transverter bands (4m / 2m) — surfaced for radios that
+    // report the corresponding capability flag (FLEX-6500 Region 1: 4m;
+    // FLEX-6700: 4m + 2m).  Styled identically to HF bands per #695
+    // (these are native radio hardware, not user-configured XVTRs).
+    if (m_radioCapabilities.has4Meters || m_radioCapabilities.has2Meters) {
+        int col = 0;
+        if (m_radioCapabilities.has4Meters)
+            grid->addWidget(makeBandBtn(kBandIdx4m), row, col++);
+        if (m_radioCapabilities.has2Meters)
+            grid->addWidget(makeBandBtn(kBandIdx2m), row, col++);
         ++row;
     }
 

@@ -527,6 +527,7 @@ endif()
 
 set(MODEL_SOURCES
     src/models/RadioModel.cpp
+    src/models/ModelCapabilities.cpp
     src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp
     src/models/PanadapterModel.cpp
@@ -1290,6 +1291,14 @@ add_executable(packet_loss_concealment_test
 target_include_directories(packet_loss_concealment_test PRIVATE src)
 target_link_libraries(packet_loss_concealment_test PRIVATE Qt6::Core)
 add_test(NAME packet_loss_concealment_test COMMAND packet_loss_concealment_test)
+
+add_executable(model_capabilities_test
+    tests/model_capabilities_test.cpp
+    src/models/ModelCapabilities.cpp
+)
+target_include_directories(model_capabilities_test PRIVATE src)
+target_link_libraries(model_capabilities_test PRIVATE Qt6::Core)
+add_test(NAME model_capabilities_test COMMAND model_capabilities_test)
 
 add_executable(client_quindar_test
     tests/client_quindar_test.cpp

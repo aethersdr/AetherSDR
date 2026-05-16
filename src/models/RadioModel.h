@@ -20,6 +20,7 @@
 #include "DaxIqModel.h"
 #include "NavtexModel.h"
 #include "MemoryEntry.h"
+#include "ModelCapabilities.h"
 #include "RadioStatusOwnership.h"
 
 #include <QObject>
@@ -131,6 +132,14 @@ public:
     // Max slices reported by radio
     int maxSlices() const { return m_maxSlices; }
     static int maxSlicesForModel(const QString& model);
+
+    // Per-model feature flags from the central ModelCapabilities table.
+    // First consumer is the band selector (#695); future model-conditional
+    // UI should pull from here rather than adding more model.contains()
+    // checks.
+    ModelCapabilities capabilities() const {
+        return capabilitiesFor(m_model);
+    }
 
     // Returns true for BigBend/DragonFire-platform radios (8400, 8600,
     // AU-series, ML-series, CL-series, RT-series) that support the extended

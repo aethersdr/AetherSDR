@@ -68,6 +68,12 @@ public:
     // Populate XVTR band sub-panel
     struct XvtrBand { QString name; double rfFreqMhz; };
     void setXvtrBands(const QVector<XvtrBand>& bands);
+
+    // Surface the connected radio's built-in transverter bands (4m on
+    // FLEX-6500 Region 1, 4m + 2m on FLEX-6700) in the band menu.  Pass
+    // a default-constructed value when disconnected — the conditional
+    // VHF row will disappear.  Triggers a band-panel rebuild. (#695)
+    void setRadioCapabilities(ModelCapabilities caps);
     void syncDaxIqChannel(int channel);
     // DSP button accessors and the DSP sub-panel were removed — radio-
     // side DSP lives on VfoWidget only, client-side DSP lives on the
@@ -169,6 +175,13 @@ private:
     QWidget* m_xvtrPanel{nullptr};
     bool m_xvtrPanelVisible{false};
     QVector<QPushButton*> m_xvtrBandBtns;
+
+    // Cached state for band-panel rebuilds — setXvtrBands() and
+    // setRadioCapabilities() each store their argument and trigger
+    // a rebuild so either input changing produces a correct panel
+    // without the caller needing to re-supply the other half. (#695)
+    QVector<XvtrBand>  m_lastXvtrBands;
+    ModelCapabilities  m_radioCapabilities;
 
     // ANT sub-panel
     QWidget*     m_antPanel{nullptr};
