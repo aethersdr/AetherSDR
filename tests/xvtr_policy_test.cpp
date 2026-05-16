@@ -187,14 +187,23 @@ void testXvtrWaterfallMapsIfToRfBands()
 
 void testXvtrWaterfallGuardrails()
 {
-    const QVector<XvtrPolicy::Transverter> invalidXvtr = {
+    const QVector<XvtrPolicy::Transverter> unvalidatedXvtr = {
         xvtr(12, 3, "2m", 144.0, 28.0, false),
     };
 
-    const auto invalid = XvtrPolicy::mapWaterfallTileRange(
-        28.125, 28.625, 144.375, invalidXvtr, false);
-    expectRange("invalid XVTR does not trigger IF/RF waterfall shift",
-                invalid, 28.125, 28.625, false);
+    const auto unvalidated = XvtrPolicy::mapWaterfallTileRange(
+        28.125, 28.625, 144.375, unvalidatedXvtr, false);
+    expectRange("unvalidated XVTR with RF/IF offset maps waterfall range",
+                unvalidated, 144.125, 144.625, true);
+
+    const QVector<XvtrPolicy::Transverter> missingIfXvtr = {
+        xvtr(12, 3, "2m", 144.0, 0.0, false),
+    };
+
+    const auto missingIf = XvtrPolicy::mapWaterfallTileRange(
+        28.125, 28.625, 144.375, missingIfXvtr, false);
+    expectRange("XVTR without IF frequency does not shift waterfall range",
+                missingIf, 28.125, 28.625, false);
 
     const auto antennaFallback = XvtrPolicy::mapWaterfallTileRange(
         28.125, 28.625, 144.375, {}, true);

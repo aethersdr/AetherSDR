@@ -93,7 +93,7 @@ WaterfallTileMatch matchWaterfallTileTransverterOffset(double lowMhz, double hig
     match.observedOffsetMhz = panCenterMhz - tileCenter(lowMhz, highMhz);
     match.toleranceMhz = std::max(bw, 0.25);
     for (const auto& xvtr : xvtrs) {
-        if (!xvtr.isValid || xvtr.rfFreqMhz <= 0.0 || xvtr.ifFreqMhz <= 0.0)
+        if (xvtr.rfFreqMhz <= 0.0 || xvtr.ifFreqMhz <= 0.0)
             continue;
 
         const double expectedOffset = xvtr.rfFreqMhz - xvtr.ifFreqMhz;
