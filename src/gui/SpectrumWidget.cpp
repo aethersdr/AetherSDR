@@ -3079,6 +3079,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     ev->accept();
 }
 
+static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm);
+
 void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 {
     PerfInputScope perfScope("mouseMove");
@@ -3375,27 +3377,19 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                         if (hr.rect.contains(pos)) {
                             setSpectrumCursor(Qt::PointingHandCursor);
                             foundCursor = true;
-                            // Show spot tooltip
                             if (hr.markerIndex >= 0 && hr.markerIndex < m_spotMarkers.size()) {
-                                const auto& sm = m_spotMarkers[hr.markerIndex];
-                                QString tip = QString("<b>%1</b>  %2 MHz")
-                                    .arg(sm.callsign)
-                                    .arg(sm.freqMhz, 0, 'f', 4);
-                                if (!sm.source.isEmpty())
-                                    tip += QString("<br>Source: %1").arg(sm.source);
-                                if (!sm.spotterCallsign.isEmpty())
-                                    tip += QString("<br>Spotter: %1").arg(sm.spotterCallsign);
-                                if (!sm.comment.isEmpty())
-                                    tip += QString("<br>%1").arg(sm.comment);
-                                if (sm.timestampMs > 0)
-                                    tip += QString("<br>Spotted: %1 UTC").arg(
-                                        QDateTime::fromMSecsSinceEpoch(sm.timestampMs, QTimeZone::utc()).toString("yyyy-MM-dd HH:mm:ss"));
-                                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20), tip, this, hr.rect);
+                                m_hoveredSpotKey = hr.callsign + QChar('@')
+                                    + QString::number(qRound(hr.freqMhz * 1000.0));
+                                QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
+                                                   spotMarkerTooltip(m_spotMarkers[hr.markerIndex]),
+                                                   this, hr.rect);
                             }
                             spotHover = true;
                             break;
                         }
                     }
+                    if (!spotHover)
+                        m_hoveredSpotKey.clear();
                     if (!foundCursor) {
                         for (const auto& cluster : m_spotClusters) {
                             if (cluster.rect.contains(pos)) {
@@ -3670,6 +3664,7 @@ void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
 void SpectrumWidget::leaveEvent(QEvent* event)
 {
     QWidget::leaveEvent(event);
+    m_hoveredSpotKey.clear();
     updateTrackedCursorState(QPoint(-1, -1), false);
 }
 
@@ -5820,6 +5815,21 @@ int SpectrumWidget::tnfAtPixel(int x, int preferredId) const
 
 // ─── VFO marker (filter passband + tuned frequency line) ──────────────────────
 
+static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm)
+{
+    QString tip = QString("<b>%1</b>  %2 MHz").arg(sm.callsign).arg(sm.freqMhz, 0, 'f', 4);
+    if (!sm.source.isEmpty())
+        tip += QString("<br>Source: %1").arg(sm.source);
+    if (!sm.spotterCallsign.isEmpty())
+        tip += QString("<br>Spotter: %1").arg(sm.spotterCallsign);
+    if (!sm.comment.isEmpty())
+        tip += QString("<br>%1").arg(sm.comment);
+    if (sm.timestampMs > 0)
+        tip += QString("<br>Spotted: %1 UTC").arg(
+            QDateTime::fromMSecsSinceEpoch(sm.timestampMs, QTimeZone::utc()).toString("yyyy-MM-dd HH:mm:ss"));
+    return tip;
+}
+
 void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
 {
     // Merge DX spots, Signal History markers, and QRM History markers.
@@ -5978,7 +5988,7 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
         }
 
         placed.append(labelRect);
-        m_spotClickRects.append({labelRect, spot.freqMhz, mIdx});
+        m_spotClickRects.append({labelRect, spot.freqMhz, mIdx, spot.callsign});
 
         // Background pill — local Override Background color wins when on
         // (#768).  When off, fall through to the protocol-supplied
@@ -6060,6 +6070,31 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
     }
 
     p.setFont(QFont());  // restore default
+
+    // Re-show tooltip for the hovered spot after every rect rebuild. Without
+    // this, the jitter in spot label positions (collision-nudge cascade) causes
+    // Qt to hide the tooltip each repaint because the registered rect shifts
+    // slightly. Called via QueuedConnection because drawSpotMarkers runs on the
+    // render thread; QToolTip must be touched on the main thread. (#2553)
+    if (!m_hoveredSpotKey.isEmpty() && !m_tooltipRefreshPending) {
+        m_tooltipRefreshPending = true;
+        QMetaObject::invokeMethod(this, [this]() {
+            m_tooltipRefreshPending = false;
+            if (m_hoveredSpotKey.isEmpty()) return;
+            const QPoint cursorPos = QCursor::pos();
+            for (const auto& hr : m_spotClickRects) {
+                const QString key = hr.callsign + QChar('@')
+                    + QString::number(qRound(hr.freqMhz * 1000.0));
+                if (key != m_hoveredSpotKey) continue;
+                if (!hr.rect.contains(mapFromGlobal(cursorPos))) continue;
+                if (hr.markerIndex >= 0 && hr.markerIndex < m_spotMarkers.size())
+                    QToolTip::showText(cursorPos + QPoint(0, 20),
+                                       spotMarkerTooltip(m_spotMarkers[hr.markerIndex]),
+                                       this, hr.rect);
+                break;
+            }
+        }, Qt::QueuedConnection);
+    }
 }
 
 void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)

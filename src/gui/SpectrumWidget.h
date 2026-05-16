@@ -371,7 +371,7 @@ public:
                            const QString& sourceLabel = {});
     void clearSwrSweepPoints();
 
-    void setShowSpots(bool on) { m_showSpots = on; update(); }
+    void setShowSpots(bool on) { m_showSpots = on; m_hoveredSpotKey.clear(); update(); }
     bool showSpots() const { return m_showSpots; }
     void setShowSHistory(bool on)    { m_showSHistory = on;    update(); }
     bool showSHistory() const         { return m_showSHistory; }
@@ -891,8 +891,11 @@ private:
         QRect rect;
         double freqMhz;
         int markerIndex;  // index into m_spotMarkers for tooltip data
+        QString callsign; // stable hover key (index can go stale on list rebuild)
     };
     QVector<SpotHitRect> m_spotClickRects;
+    QString m_hoveredSpotKey;          // callsign@freqKHz, empty when no spot hovered
+    bool    m_tooltipRefreshPending{false}; // guards against duplicate queued refreshes
 
     QVector<SpotCluster> m_spotClusters;
     bool m_showSpots{true};
