@@ -84,6 +84,7 @@ class NetworkDiagnosticsDialog;
 class MemoryDialog;
 class AetherDspDialog;
 class DxClusterDialog;
+class Ax25HfPacketDecodeDialog;
 class MidiMappingDialog;
 class CwxPanel;
 class DvkPanel;
@@ -281,6 +282,7 @@ private:
     void showPanadapterSliceCapacityMessage();
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
+    void showAx25HfPacketDecodeDialog();
     QJsonObject buildControlDevicesSnapshot() const;
     void showPropDashboard();
     bool confirmClientSlotAvailability(const RadioInfo& info, QList<quint32>* disconnectHandles);
@@ -493,6 +495,7 @@ private:
     QPointer<QDialog> m_propDashboardDialog;
     QPointer<QDialog> m_txBandDialog;
     QPointer<MemoryDialog> m_memoryDialog;
+    QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<AetherDspDialog> m_dspDialog;
     QPointer<ProfileManagerDialog> m_profileManagerDialog;

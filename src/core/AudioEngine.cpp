@@ -431,6 +431,34 @@ void AudioEngine::emitRxPostChainScopeFromFloat32Stereo(const QByteArray& pcm,
                                sampleRate > 0 ? sampleRate : DEFAULT_SAMPLE_RATE);
 }
 
+void AudioEngine::emitTncRxTapFromFloat32Stereo(const QByteArray& pcm, int sampleRate)
+{
+    const int floatSamples = pcm.size() / static_cast<int>(sizeof(float));
+    if (floatSamples <= 0)
+        return;
+
+    const bool stereo = (floatSamples % 2) == 0;
+    const int monoSamples = stereo ? floatSamples / 2 : floatSamples;
+    m_tncRxTapScratch.resize(monoSamples * static_cast<int>(sizeof(float)));
+
+    const auto* src = reinterpret_cast<const float*>(pcm.constData());
+    auto* dst = reinterpret_cast<float*>(m_tncRxTapScratch.data());
+    if (stereo) {
+        for (int i = 0; i < monoSamples; ++i) {
+            const float avg = (src[i * 2] + src[i * 2 + 1]) * 0.5f;
+            dst[i] = std::clamp(std::isfinite(avg) ? avg : 0.0f, -1.0f, 1.0f);
+        }
+    } else {
+        for (int i = 0; i < monoSamples; ++i) {
+            const float s = src[i];
+            dst[i] = std::clamp(std::isfinite(s) ? s : 0.0f, -1.0f, 1.0f);
+        }
+    }
+
+    emit tncRxAudioReady(m_tncRxTapScratch,
+                         sampleRate > 0 ? sampleRate : DEFAULT_SAMPLE_RATE);
+}
+
 void AudioEngine::updateRxBufferStats()
 {
     const qsizetype total = m_rxBuffer.size() + m_radeRxBuffer.size();
@@ -1170,6 +1198,9 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
 
     auto writeAudio = [this](const QByteArray& data) {
         if (!m_audioDevice || !m_audioDevice->isOpen()) return;
+
+        if (m_tncRxTapEnabled.load(std::memory_order_relaxed))
+            emitTncRxTapFromFloat32Stereo(data, DEFAULT_SAMPLE_RATE);
 
         // Client-side parametric EQ runs at the native 24 kHz rate, after
         // any NR chain, before resample-to-48k and soft boost. Copy-then-

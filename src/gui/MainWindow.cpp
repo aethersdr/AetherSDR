@@ -76,6 +76,7 @@
 #include "MemoryDialog.h"
 #include "SwrSweepLicenseDialog.h"
 #include "DxClusterDialog.h"
+#include "Ax25HfPacketDecodeDialog.h"
 #include "CwxPanel.h"
 #include "DvkPanel.h"
 #include "core/DvkWavTransfer.h"
@@ -5252,6 +5253,14 @@ void MainWindow::showNetworkDiagnosticsDialog()
                           &m_radioModel, m_audio, m_networkDiagnosticsHistory);
 }
 
+void MainWindow::showAx25HfPacketDecodeDialog()
+{
+    const int sliceId = activeSlice() ? activeSlice()->sliceId() : -1;
+    showOrRaisePersistent(m_ax25HfPacketDecodeDialog, m_audio, sliceId);
+    if (m_ax25HfPacketDecodeDialog)
+        m_ax25HfPacketDecodeDialog->setAttachedSlice(sliceId);
+}
+
 QJsonObject MainWindow::buildControlDevicesSnapshot() const
 {
     auto stringArray = [](const QStringList& values) {
@@ -7074,6 +7083,11 @@ void MainWindow::buildMenuBar()
             }
         }
     });
+
+    auto* packetDecoderAction = viewMenu->addAction("Packet Decoder...");
+    packetDecoderAction->setMenuRole(QAction::NoRole);
+    connect(packetDecoderAction, &QAction::triggered,
+            this, &MainWindow::showAx25HfPacketDecodeDialog);
 
     auto* smartSpotAct = viewMenu->addAction("Smart Spot Filtering");
     smartSpotAct->setCheckable(true);
@@ -9357,8 +9371,11 @@ void MainWindow::onSliceRemoved(int id)
         const auto& slices = m_radioModel.slices();
         if (!slices.isEmpty())
             setActiveSlice(slices.first()->sliceId());
-        else
+        else {
             m_activeSliceId = -1;
+            if (m_ax25HfPacketDecodeDialog)
+                m_ax25HfPacketDecodeDialog->setAttachedSlice(-1);
+        }
     }
 
     // Refresh slice tab buttons (#1278)
@@ -9568,6 +9585,8 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     // the new slice may have a different mode / filter shape.
     if (sliceId != prevId)
         pushRxFilterCutoffsToEq();
+    if (sliceId != prevId && m_ax25HfPacketDecodeDialog)
+        m_ax25HfPacketDecodeDialog->setAttachedSlice(sliceId);
 
     // Active slice changed → restart dwell window for the new active slice
     if (sliceId != prevId && m_bsAutoSaveTimer) {

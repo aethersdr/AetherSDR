@@ -445,6 +445,15 @@ public:
         return m_cwDecodeTxTapEnabled.load(std::memory_order_relaxed);
     }
 
+    void setTncRxTapEnabled(bool on)
+    {
+        m_tncRxTapEnabled.store(on, std::memory_order_relaxed);
+    }
+    bool isTncRxTapEnabled() const
+    {
+        return m_tncRxTapEnabled.load(std::memory_order_relaxed);
+    }
+
 public slots:
     // Receives stripped PCM from PanadapterStream::audioDataReady().
     void feedAudioData(const QByteArray& pcm);
@@ -483,6 +492,7 @@ signals:
     // scope.  The shared scopeSamplesReady throttles at 25 ms which made
     // the strip's RX scroll lag wall clock at short time-window settings.
     void rxPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
+    void tncRxAudioReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     void radioTransmittingChanged(bool tx);
     void mutedChanged(bool muted);                          // local audio output mute state
     void inputDeviceChanged();
@@ -508,6 +518,7 @@ private:
     void emitTxPostChainScopeFromInt16Stereo(const QByteArray& pcm, int sampleRate);
     void emitTxPostChainScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate);
     void emitRxPostChainScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate);
+    void emitTncRxTapFromFloat32Stereo(const QByteArray& pcm, int sampleRate);
     QByteArray resampleStereo(const QByteArray& pcm);
     void processNr2(const QByteArray& stereoPcm);
     void updateRxBufferStats();
@@ -618,6 +629,7 @@ private:
     QByteArray    m_scopeTxScratch;
     QByteArray    m_scopeTxPostChainScratch;
     QByteArray    m_scopeRxPostChainScratch;
+    QByteArray    m_tncRxTapScratch;
 
     QAudioDevice m_outputDevice;
     QAudioDevice m_inputDevice;
@@ -637,6 +649,7 @@ private:
     // sidetone audio thread so the mirror lambda can return cheaply
     // when TX-decode is off.
     std::atomic<bool> m_cwDecodeTxTapEnabled{false};
+    std::atomic<bool> m_tncRxTapEnabled{false};
     bool  m_txNeedsResample{false};      // TX: input rate != 24kHz, needs resampling
     bool  m_txInputMono{false};          // TX: legacy convenience mirror of m_txInputChannels == 1
     int   m_txInputChannels{2};          // TX: actual negotiated input channel count
