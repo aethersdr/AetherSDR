@@ -108,6 +108,15 @@ void CwxLocalKeyer::scheduleNext()
             }
             return;
         }
+        // In live mode each keystroke arrives as a separate Pending entry.
+        // encode() always starts with firstChar=true so it never prepends a
+        // CharGap for the transition between entries. The last element of any
+        // encoded character is always Dit or Dah, leaving m_currentlyDown=true
+        // here; without an explicit gap the key stays down continuously and
+        // adjacent characters merge into undecodable noise (#2473).
+        if (m_currentlyDown) {
+            m_elements.enqueue(Element::CharGap);
+        }
         const Pending p = m_queue.dequeue();
         encode(p.text, p.wpm);
         if (m_elements.isEmpty()) {
