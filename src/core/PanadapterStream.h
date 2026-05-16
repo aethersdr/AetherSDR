@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PacketLossConcealment.h"
+
 #include <QObject>
 #include <QUdpSocket>
 #include <QHostAddress>
@@ -131,23 +133,11 @@ private:
     void decodeOpusAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
     void decodeMeterData(const uchar* raw, int totalBytes, bool hasTrailer);
 
-    // Per-audio-stream packet-loss concealment state. Accessed only from
-    // the network worker thread (alongside m_streamStats). (#2731)
-    struct AudioPlcState {
-        int   lastFrames{0};       // stereo frames in last good packet
-        int   pendingMissed{0};    // missed packets queued for concealment
-        float tailL{0.0f};         // last emitted sample, used for fade-down
-        float tailR{0.0f};
-    };
-    static constexpr int kMaxConcealPackets = 8;  // ~80 ms cap @ 10 ms/pkt
+    // Per-stream PLC state map.  Accessed only from the network worker
+    // thread.  Public AudioPlcState struct and static applyConcealmentFade
+    // declared above.
     QMap<quint32, AudioPlcState> m_audioPlc;
     std::atomic<bool> m_plcEnabled{true};
-
-    // Prepend faded-silence concealment to a float32 stereo PCM buffer
-    // before emit. Returns the (possibly enlarged) buffer with a cosine
-    // fade-down from the cached tail, zero-pad for the rest of the gap,
-    // and cosine fade-up into the newly received head. (#2731)
-    QByteArray applyConcealmentFade(QByteArray pcm, AudioPlcState& plc);
 
     // PacketClassCodes (from FlexLib VitaFlex.cs)
     static constexpr quint16 PCC_IF_NARROW         = 0x03E3u; // float32 stereo, big-endian
