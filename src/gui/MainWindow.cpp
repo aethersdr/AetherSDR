@@ -1978,6 +1978,8 @@ MainWindow::MainWindow(QWidget* parent)
             QString("%1 supports a maximum of %2 slices across all connected clients")
                 .arg(model).arg(limit), 4000);
     });
+    connect(&m_radioModel, &RadioModel::radioMessageReceived,
+            this, &MainWindow::onRadioMessage);
     connect(&m_radioModel.spotModel(), &SpotModel::spotsCleared,
             this, &MainWindow::rebuildMemorySpotFeed);
 
@@ -8671,6 +8673,12 @@ void MainWindow::onConnectionError(const QString& msg)
     statusBar()->showMessage("Connection error: " + msg, 5000);
     if (!m_reconnectDlg)
         setPanadapterConnectionAnimation(false);
+}
+
+void MainWindow::onRadioMessage(const QString& text)
+{
+    qCInfo(lcGui) << "Radio M-message:" << text;
+    QMessageBox::warning(this, tr("Radio"), text);
 }
 
 void MainWindow::setPanadapterConnectionAnimation(bool visible, const QString& label)

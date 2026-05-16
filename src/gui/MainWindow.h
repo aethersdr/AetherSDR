@@ -122,6 +122,7 @@ private slots:
     // Radio/connection events
     void onConnectionStateChanged(bool connected);
     void onConnectionError(const QString& msg);
+    void onRadioMessage(const QString& text);
     void onSliceAdded(SliceModel* slice);
     void onSliceRemoved(int id);
 

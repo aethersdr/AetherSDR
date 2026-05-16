@@ -432,6 +432,9 @@ signals:
     void pingReceived();
     // Generic status relay — for dialogs that need to listen for specific objects.
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
+    // Emitted when the radio sends an M-prefix informational or warning message
+    // (e.g. FreeDV waveform conflict warnings). Text is plain, ready for display.
+    void radioMessageReceived(const QString& text);
 
 public:
     // Send a raw command to the radio (for dialogs that need direct protocol access).

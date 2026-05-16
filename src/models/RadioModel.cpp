@@ -2710,6 +2710,12 @@ void RadioModel::handleMemoryStatus(int index, const QMap<QString, QString>& kvs
 
 void RadioModel::onMessageReceived(const ParsedMessage& msg)
 {
+    if (msg.type == MessageType::Message) {
+        qCWarning(lcProtocol) << "Radio M-message:" << msg.object;
+        emit radioMessageReceived(msg.object);
+        return;
+    }
+
     // Meter status uses '#' as KV separator (not spaces), so the normal
     // parseKVs() in CommandParser doesn't handle it.  We intercept the raw
     // status line here and parse it ourselves.
@@ -4380,7 +4386,7 @@ void RadioModel::handleMeterStatus(const QString& rawBody)
         MeterDef def;
         def.index = it.key();
         if (fields.contains("src"))  def.source      = fields["src"];
-        if (fields.contains("num"))  def.sourceIndex  = fields["num"].toInt();
+        if (fields.contains("num"))  def.sourceIndex  = fields["num"].toInt(nullptr, 0);
         if (fields.contains("nam"))  def.name         = fields["nam"];
         if (fields.contains("unit")) def.unit         = fields["unit"];
         if (fields.contains("low"))  def.low          = fields["low"].toDouble();
