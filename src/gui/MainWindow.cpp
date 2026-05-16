@@ -107,6 +107,7 @@
 #endif
 #include "AetherDspDialog.h"
 #include "AetherDspWidget.h"
+#include "WaveformsDialog.h"
 #include "ClientRxDspApplet.h"
 #include "DspParamPopup.h"
 #include "FramelessResizer.h"
@@ -6242,6 +6243,14 @@ void MainWindow::resetMissingAudioDevicesToDefault(bool resetInput,
 void MainWindow::buildMenuBar()
 {
     auto* fileMenu = menuBar()->addMenu("&File");
+
+    auto* waveformsAct = fileMenu->addAction("Waveforms...");
+    waveformsAct->setMenuRole(QAction::NoRole);
+    connect(waveformsAct, &QAction::triggered, this, [this] {
+        showOrRaisePersistent(m_waveformsDialog, &m_radioModel.flexWaveformModel());
+    });
+
+    fileMenu->addSeparator();
     auto* quitAct = fileMenu->addAction("&Quit");
     quitAct->setShortcut(QKeySequence::Quit);
     connect(quitAct, &QAction::triggered, qApp, &QApplication::quit);

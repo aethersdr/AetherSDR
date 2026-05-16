@@ -83,6 +83,7 @@ class ProfileImportExportDialog;
 class NetworkDiagnosticsDialog;
 class MemoryDialog;
 class AetherDspDialog;
+class WaveformsDialog;
 class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
 class MidiMappingDialog;
@@ -498,6 +499,7 @@ private:
     QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<AetherDspDialog> m_dspDialog;
+    QPointer<WaveformsDialog> m_waveformsDialog;
     QPointer<ProfileManagerDialog> m_profileManagerDialog;
     QPointer<ProfileImportExportDialog> m_profileImportExportDialog;
 #ifdef HAVE_MIDI
