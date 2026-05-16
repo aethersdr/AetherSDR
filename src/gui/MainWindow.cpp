@@ -6907,15 +6907,7 @@ void MainWindow::buildMenuBar()
     });
     auto* profileImportExportAct = m_profilesMenu->addAction("Import/Export Profiles...");
     connect(profileImportExportAct, &QAction::triggered, this, [this] {
-        if (!m_profileImportExportDialog) {
-            auto* dlg = new ProfileImportExportDialog(&m_radioModel, this);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
-            dlg->setFramelessMode(framelessWindowEnabled());
-            m_profileImportExportDialog = dlg;
-        }
-        m_profileImportExportDialog->show();
-        m_profileImportExportDialog->raise();
-        m_profileImportExportDialog->activateWindow();
+        showOrRaisePersistent(m_profileImportExportDialog, &m_radioModel);
     });
     m_profilesMenu->addSeparator();
 
@@ -11591,12 +11583,6 @@ void MainWindow::setFramelessWindow(bool on)
         dlg->setFramelessMode(on);
     if (auto* dlg = qobject_cast<RadioSetupDialog*>(m_radioSetupDialog))
         dlg->setFramelessMode(on);
-    // Profile Import/Export hasn't been migrated to PersistentDialog yet
-    // (#2605 follow-up), so it still needs an explicit cast.  Profile
-    // Manager IS on PersistentDialog and propagates via m_persistentDialogs
-    // below.
-    if (m_profileImportExportDialog)
-        m_profileImportExportDialog->setFramelessMode(on);
     if (m_txBandDialog) {
         setDialogFramelessMode(m_txBandDialog, on);
     }

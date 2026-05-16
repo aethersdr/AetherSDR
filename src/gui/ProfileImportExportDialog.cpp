@@ -1,7 +1,5 @@
 #include "ProfileImportExportDialog.h"
 
-#include "FramelessResizer.h"
-#include "FramelessWindowTitleBar.h"
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -84,40 +82,31 @@ QString sanitizedVersion(QString version)
 } // namespace
 
 ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget* parent)
-    : QDialog(parent), m_model(model)
+    : PersistentDialog(QStringLiteral("Import/Export Profiles"),
+                       QStringLiteral("ProfileImportExportDialogGeometry"), parent),
+      m_model(model)
 {
-    setWindowTitle(QStringLiteral("Import/Export Profiles"));
     setMinimumSize(560, 430);
     setStyleSheet(kDialogStyle);
 
-    auto* outer = new QVBoxLayout(this);
-    outer->setContentsMargins(0, 0, 0, 0);
-    outer->setSpacing(0);
-
-    m_titleBar = new FramelessWindowTitleBar(QStringLiteral("Import/Export Profiles"), this);
-    outer->addWidget(m_titleBar);
-
-    auto* body = new QWidget(this);
-    m_bodyLayout = new QVBoxLayout(body);
-    m_bodyLayout->setContentsMargins(9, 9, 9, 9);
-    m_bodyLayout->setSpacing(9);
-    outer->addWidget(body, 1);
+    auto* root = new QVBoxLayout(bodyWidget());
+    root->setSpacing(9);
 
     m_transfer = new ProfileTransfer(model, this);
     m_tabs = new QTabWidget(this);
     m_tabs->addTab(buildExportPage(), QStringLiteral("Export"));
     m_tabs->addTab(buildImportPage(), QStringLiteral("Import"));
-    m_bodyLayout->addWidget(m_tabs, 1);
+    root->addWidget(m_tabs, 1);
 
     m_statusLabel = new QLabel(this);
     m_statusLabel->setWordWrap(true);
     m_statusLabel->setStyleSheet(QStringLiteral("QLabel { color: #9fb0c0; }"));
-    m_bodyLayout->addWidget(m_statusLabel);
+    root->addWidget(m_statusLabel);
 
     m_progress = new QProgressBar(this);
     m_progress->setRange(0, 100);
     m_progress->setValue(0);
-    m_bodyLayout->addWidget(m_progress);
+    root->addWidget(m_progress);
 
     auto* buttonRow = new QHBoxLayout;
     buttonRow->addStretch();
@@ -126,7 +115,7 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
     m_closeButton = new QPushButton(QStringLiteral("Close"), this);
     buttonRow->addWidget(m_cancelButton);
     buttonRow->addWidget(m_closeButton);
-    m_bodyLayout->addLayout(buttonRow);
+    root->addLayout(buttonRow);
 
     connect(m_cancelButton, &QPushButton::clicked, m_transfer, &ProfileTransfer::cancel);
     connect(m_closeButton, &QPushButton::clicked, this, &QDialog::accept);
@@ -177,29 +166,7 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
         connect(&m_model->transmitModel(), &TransmitModel::tuneChanged, this, [this](bool) { updateControls(); });
     }
 
-    FramelessResizer::install(this);
-    setFramelessMode(
-        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     updateControls();
-}
-
-void ProfileImportExportDialog::setFramelessMode(bool on)
-{
-    const QRect geom = geometry();
-    const bool wasVisible = isVisible();
-
-    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
-    flags.setFlag(Qt::FramelessWindowHint, on);
-    setWindowFlags(flags);
-    if (wasVisible)
-        setGeometry(geom);
-
-    if (m_titleBar)
-        m_titleBar->setVisible(on);
-    if (m_bodyLayout)
-        m_bodyLayout->setContentsMargins(9, on ? 7 : 9, 9, 9);
-    if (wasVisible)
-        show();
 }
 
 void ProfileImportExportDialog::closeEvent(QCloseEvent* event)
@@ -214,7 +181,7 @@ void ProfileImportExportDialog::closeEvent(QCloseEvent* event)
         }
         m_transfer->cancel();
     }
-    QDialog::closeEvent(event);
+    PersistentDialog::closeEvent(event);
 }
 
 QWidget* ProfileImportExportDialog::buildExportPage()
