@@ -707,6 +707,7 @@ private:
     QString m_lastRadeRxCallsign;
     void activateRADE(int sliceId);
     void deactivateRADE();
+    void onRadeSliceModeChanged(const QString& mode);
     void startFreeDvReporting(int sliceId);
     void stopFreeDvReporting(int sliceId);
 #endif

@@ -13506,6 +13506,13 @@ void MainWindow::activateRADE(int sliceId)
     m_radePrevMute = s->audioMute();
     s->setAudioMute(true);
 
+    // Auto-deactivate if the slice mode is changed externally (TCI, profile
+    // load, remote SmartSDR client) — those paths bypass the VfoWidget and
+    // RxApplet combos and would otherwise leave audio_mute=1 stranded.
+    connect(s, &SliceModel::modeChanged,
+            this, &MainWindow::onRadeSliceModeChanged,
+            Qt::UniqueConnection);
+
     // Create RADE engine on a worker thread for multi-core utilization
     if (!m_radeEngine) {
         m_radeEngine = new RADEEngine;  // no parent — will be moved to worker thread
@@ -13645,8 +13652,11 @@ void MainWindow::deactivateRADE()
 
     // Restore audio mute state on the RADE slice
     if (m_radeSliceId >= 0) {
-        if (auto* s = m_radioModel.slice(m_radeSliceId))
+        if (auto* s = m_radioModel.slice(m_radeSliceId)) {
+            disconnect(s, &SliceModel::modeChanged,
+                       this, &MainWindow::onRadeSliceModeChanged);
             s->setAudioMute(m_radePrevMute);
+        }
         // Clear RADE status label before resetting sliceId
         if (auto* sw = spectrumForSlice(m_radioModel.slice(m_radeSliceId))) {
             if (auto* vfo = sw->vfoWidget(m_radeSliceId))
@@ -13714,6 +13724,15 @@ void MainWindow::deactivateRADE()
     stopFreeDvReporting(radeSliceId);
 
     qInfo() << "MainWindow: RADE mode deactivated";
+}
+
+void MainWindow::onRadeSliceModeChanged(const QString& mode)
+{
+    // Fired when the RADE slice's mode changes via any path — TCI, profile
+    // load, remote SmartSDR client. RADE requires DIGU or DIGL; deactivate
+    // if the mode leaves that family so audio_mute is always restored.
+    if (mode != "DIGU" && mode != "DIGL")
+        deactivateRADE();
 }
 
 void MainWindow::startFreeDvReporting(int sliceId)
