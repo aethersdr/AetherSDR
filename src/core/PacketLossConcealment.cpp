@@ -6,6 +6,15 @@
 
 namespace AetherSDR {
 
+namespace {
+
+// M_PI is a POSIX extension; MSVC only exposes it when _USE_MATH_DEFINES
+// is set before <cmath>.  Define our own portable constant so this
+// translation unit doesn't depend on either path. (#2732 check-windows fix)
+constexpr float kPi = 3.14159265358979323846f;
+
+} // namespace
+
 QByteArray applyConcealmentFade(QByteArray pcm, AudioPlcState& plc, bool enabled)
 {
     constexpr int kChannels   = 2;
@@ -38,7 +47,7 @@ QByteArray applyConcealmentFade(QByteArray pcm, AudioPlcState& plc, bool enabled
     const int fadeDown = std::min(kFadeFrames, fillFrames);
     for (int i = 0; i < fadeDown; ++i) {
         const float w =
-            0.5f * (1.0f + std::cos(static_cast<float>(M_PI) * i / fadeDown));
+            0.5f * (1.0f + std::cos(kPi * i / fadeDown));
         dst[i * kChannels]     = plc.tailL * w;
         dst[i * kChannels + 1] = plc.tailR * w;
     }
@@ -51,7 +60,7 @@ QByteArray applyConcealmentFade(QByteArray pcm, AudioPlcState& plc, bool enabled
     const int fadeUp = std::min(kFadeFrames, newFrames);
     for (int i = 0; i < fadeUp; ++i) {
         const float w =
-            0.5f * (1.0f - std::cos(static_cast<float>(M_PI) * i / fadeUp));
+            0.5f * (1.0f - std::cos(kPi * i / fadeUp));
         dst[(fillFrames + i) * kChannels]     = in[i * kChannels]     * w;
         dst[(fillFrames + i) * kChannels + 1] = in[i * kChannels + 1] * w;
     }
