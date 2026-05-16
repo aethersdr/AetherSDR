@@ -1,4 +1,5 @@
 #include "PanadapterStream.h"
+#include "AppSettings.h"
 #include "LogManager.h"
 #include "OpusCodec.h"
 #include "PerfTelemetry.h"
@@ -97,6 +98,13 @@ void PanadapterStream::init()
     if (!m_routedPrimeTimer) {
         m_routedPrimeTimer = new QTimer(this);
     }
+
+    // Pick up the persisted PLC toggle. Default true — strictly better in
+    // the failure mode and a no-op when no packets are lost. (#2731)
+    m_plcEnabled.store(
+        AppSettings::instance().value("AudioPacketLossConcealment", "True")
+            .toString() == "True");
+
     connect(m_socket, &QUdpSocket::readyRead,
             this, &PanadapterStream::onDatagramReady);
 
@@ -587,6 +595,7 @@ void PanadapterStream::processDatagram(const QByteArray& data)
     // Per-category byte/packet/sequence tracking.
     // Only track owned/routed streams — skip uncategorized packets. (#455)
     bool sequenceError = false;
+    int  audioMissedThisPacket = 0;
     if (cat != CatCount) {
         QMutexLocker statsLock(&m_statsMutex);
         m_catStats[cat].bytes += data.size();
@@ -599,6 +608,11 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                 sequenceError = true;
                 stats.errorCount++;
                 m_catStats[cat].errors++;
+                if (cat == CatAudio) {
+                    // 4-bit modular distance, minus the one packet we just got. (#2731)
+                    audioMissedThisPacket =
+                        ((vitaSeq - stats.lastSeq - 1) & 0x0F);
+                }
             }
         }
         stats.lastSeq = vitaSeq;
@@ -688,16 +702,24 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         return;
     }
 
+    // Accumulate PLC pending-missed count before dispatching the audio
+    // decoder, so it can prepend concealment to the new packet's PCM. (#2731)
+    if (audioMissedThisPacket > 0 && m_plcEnabled.load()) {
+        auto& plc = m_audioPlc[streamId];
+        plc.pendingMissed =
+            std::min(plc.pendingMissed + audioMissedThisPacket, kMaxConcealPackets);
+    }
+
     // Route by PacketClassCode
     switch (pcc) {
     case PCC_IF_NARROW:
-        decodeNarrowAudio(raw, data.size(), hasTrailer);
+        decodeNarrowAudio(raw, data.size(), hasTrailer, streamId);
         return;
     case PCC_IF_NARROW_REDUCED:
-        decodeReducedBwAudio(raw, data.size(), hasTrailer);
+        decodeReducedBwAudio(raw, data.size(), hasTrailer, streamId);
         return;
     case PCC_OPUS:
-        decodeOpusAudio(raw, data.size(), hasTrailer);
+        decodeOpusAudio(raw, data.size(), hasTrailer, streamId);
         return;
     case PCC_FFT:
         if (!isPan) return;
@@ -880,7 +902,81 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
 
 // ─── Audio decode ─────────────────────────────────────────────────────────────
 
-void PanadapterStream::decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer)
+void PanadapterStream::setPacketLossConcealment(bool on)
+{
+    m_plcEnabled.store(on);
+    if (!on) {
+        // Drop any queued concealment so a future re-enable doesn't dump
+        // a stale tail into the next emitted packet. Per-stream state is
+        // touched on the network thread elsewhere, but this is one atomic
+        // map-clear and we accept the rare race on toggle. (#2731)
+        m_audioPlc.clear();
+    }
+}
+
+QByteArray PanadapterStream::applyConcealmentFade(QByteArray pcm, AudioPlcState& plc)
+{
+    constexpr int kChannels    = 2;
+    constexpr int kFadeFrames  = 48;  // ~2 ms @ 24 kHz
+
+    auto* in = reinterpret_cast<const float*>(pcm.constData());
+    const int newFrames = pcm.size() / static_cast<int>(kChannels * sizeof(float));
+    if (newFrames <= 0) {
+        plc.pendingMissed = 0;
+        return pcm;
+    }
+
+    const bool conceal = m_plcEnabled.load()
+                         && plc.pendingMissed > 0
+                         && plc.lastFrames > 0;
+    if (!conceal) {
+        plc.tailL = in[(newFrames - 1) * kChannels];
+        plc.tailR = in[(newFrames - 1) * kChannels + 1];
+        plc.lastFrames = newFrames;
+        plc.pendingMissed = 0;
+        return pcm;
+    }
+
+    const int fillFrames = plc.pendingMissed * plc.lastFrames;
+    QByteArray out((fillFrames + newFrames) * kChannels * static_cast<int>(sizeof(float)),
+                   Qt::Uninitialized);
+    auto* dst = reinterpret_cast<float*>(out.data());
+
+    // Cosine fade-down from cached tail to zero (~2 ms).
+    const int fadeDown = std::min(kFadeFrames, fillFrames);
+    for (int i = 0; i < fadeDown; ++i) {
+        const float w =
+            0.5f * (1.0f + std::cos(static_cast<float>(M_PI) * i / fadeDown));
+        dst[i * kChannels]     = plc.tailL * w;
+        dst[i * kChannels + 1] = plc.tailR * w;
+    }
+    if (fillFrames > fadeDown) {
+        std::memset(dst + fadeDown * kChannels, 0,
+                    (fillFrames - fadeDown) * kChannels * sizeof(float));
+    }
+
+    // Cosine fade-up into the new packet's first ~2 ms.
+    const int fadeUp = std::min(kFadeFrames, newFrames);
+    for (int i = 0; i < fadeUp; ++i) {
+        const float w =
+            0.5f * (1.0f - std::cos(static_cast<float>(M_PI) * i / fadeUp));
+        dst[(fillFrames + i) * kChannels]     = in[i * kChannels]     * w;
+        dst[(fillFrames + i) * kChannels + 1] = in[i * kChannels + 1] * w;
+    }
+    if (newFrames > fadeUp) {
+        std::memcpy(dst + (fillFrames + fadeUp) * kChannels,
+                    in  + fadeUp * kChannels,
+                    (newFrames - fadeUp) * kChannels * sizeof(float));
+    }
+
+    plc.tailL = in[(newFrames - 1) * kChannels];
+    plc.tailR = in[(newFrames - 1) * kChannels + 1];
+    plc.lastFrames = newFrames;
+    plc.pendingMissed = 0;
+    return out;
+}
+
+void PanadapterStream::decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId)
 {
     // One-time: log the RX audio VITA-49 header for comparison with our TX packets
     static bool rxHeaderLogged = false;
@@ -916,10 +1012,12 @@ void PanadapterStream::decodeNarrowAudio(const uchar* raw, int totalBytes, bool 
         std::memcpy(&dst[i], &u, 4);
     }
 
+    auto& plc = m_audioPlc[streamId];
+    pcm = applyConcealmentFade(std::move(pcm), plc);
     emit audioDataReady(pcm);
 }
 
-void PanadapterStream::decodeReducedBwAudio(const uchar* raw, int totalBytes, bool hasTrailer)
+void PanadapterStream::decodeReducedBwAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId)
 {
     // One-time: log the reduced-BW RX audio VITA-49 header
     static bool rxReducedLogged = false;
@@ -955,6 +1053,8 @@ void PanadapterStream::decodeReducedBwAudio(const uchar* raw, int totalBytes, bo
         dst[i * 2 + 1] = s;  // R
     }
 
+    auto& plc = m_audioPlc[streamId];
+    pcm = applyConcealmentFade(std::move(pcm), plc);
     emit audioDataReady(pcm);
 }
 
@@ -967,7 +1067,7 @@ void PanadapterStream::decodeReducedBwAudio(const uchar* raw, int totalBytes, bo
 // Raw values are converted by MeterModel based on the meter's unit type.
 // Reference: FlexLib VitaMeterPacket.cs
 
-void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool hasTrailer)
+void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId)
 {
     const int payloadStart = VITA49_HEADER_BYTES;
     const int payloadBytes = totalBytes - payloadStart - (hasTrailer ? 4 : 0);
@@ -985,18 +1085,45 @@ void PanadapterStream::decodeOpusAudio(const uchar* raw, int totalBytes, bool ha
         qCDebug(lcVita49) << "PanadapterStream: Opus decoder initialized";
     }
 
+    // For each missed packet, synthesize a concealment frame using libopus
+    // native PLC before decoding the received frame. Materially better
+    // than raw silence for 1–2 dropped frames because the decoder fades
+    // from its own internal state. (#2731)
+    auto& plc = m_audioPlc[streamId];
+    QByteArray int16Concealed;
+    if (m_plcEnabled.load() && plc.pendingMissed > 0) {
+        const int n = std::min(plc.pendingMissed, kMaxConcealPackets);
+        for (int i = 0; i < n; ++i) {
+            QByteArray frame = m_opusCodec->concealLost();
+            if (frame.isEmpty()) break;
+            int16Concealed.append(frame);
+        }
+        plc.pendingMissed = 0;
+    }
+
     // Opus payload is raw bytes — no byte-swapping needed
     QByteArray opusFrame(reinterpret_cast<const char*>(raw + payloadStart), payloadBytes);
     QByteArray int16pcm = m_opusCodec->decode(opusFrame);
     if (int16pcm.isEmpty()) return;
 
-    // Convert Opus int16 output to float32 stereo
-    const int numSamples = int16pcm.size() / static_cast<int>(sizeof(qint16));
-    const auto* src = reinterpret_cast<const qint16*>(int16pcm.constData());
+    QByteArray combined = int16Concealed;
+    combined.append(int16pcm);
+
+    // Convert combined int16 PCM to float32 stereo
+    const int numSamples = combined.size() / static_cast<int>(sizeof(qint16));
+    const auto* src = reinterpret_cast<const qint16*>(combined.constData());
     QByteArray pcm(numSamples * static_cast<int>(sizeof(float)), Qt::Uninitialized);
     auto* dst = reinterpret_cast<float*>(pcm.data());
     for (int i = 0; i < numSamples; ++i) {
         dst[i] = src[i] / 32768.0f;
+    }
+    // Track frame count so a follow-on loss on the uncompressed path (very
+    // unusual for a single stream, but keeps state consistent) uses the
+    // right fill size. Opus is always stereo at FRAME_SIZE; record frames.
+    if (numSamples >= 2) {
+        plc.lastFrames = numSamples / 2;
+        plc.tailL = dst[numSamples - 2];
+        plc.tailR = dst[numSamples - 1];
     }
     emit audioDataReady(pcm);
 }

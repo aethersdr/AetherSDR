@@ -1841,6 +1841,43 @@ QWidget* RadioSetupDialog::buildAudioTab()
         vbox->addWidget(compGroup);
     }
 
+    // ── Packet-Loss Concealment ─────────────────────────────────────────
+    // Fades dropped VITA-49 audio packets to silence (uncompressed) or
+    // calls libopus native PLC (Opus) instead of splicing the next packet
+    // directly. Cuts the broadband click on lossy WAN/SmartLink. (#2731)
+    {
+        auto* plcCheck = new QCheckBox(
+            "Smooth packet loss (conceal dropped audio packets)");
+        plcCheck->setStyleSheet("QCheckBox { color: #c8d8e8; font-size: 11px; }");
+        plcCheck->setToolTip(
+            "When the radio's audio stream loses a UDP packet, fade the gap\n"
+            "to silence (uncompressed) or synthesize a perceptually smooth\n"
+            "fill with libopus PLC (Opus) instead of splicing the next packet\n"
+            "directly. Reduces the high-pitch click that the splice produces\n"
+            "on lossy WAN/SmartLink links. Capped at ~80 ms before the audio\n"
+            "drops to clean silence.");
+        plcCheck->setChecked(
+            AppSettings::instance()
+                .value("AudioPacketLossConcealment", "True").toString() == "True");
+        connect(plcCheck, &QCheckBox::toggled, this, [this](bool on) {
+            auto& s = AppSettings::instance();
+            s.setValue("AudioPacketLossConcealment", on ? "True" : "False");
+            s.save();
+            // PanadapterStream lives on the network worker thread (#502);
+            // route the toggle through QueuedConnection so the atomic and
+            // map mutations happen on the owning thread.
+            if (m_model && m_model->panStream()) {
+                QMetaObject::invokeMethod(
+                    m_model->panStream(),
+                    [stream = m_model->panStream(), on]() {
+                        stream->setPacketLossConcealment(on);
+                    },
+                    Qt::QueuedConnection);
+            }
+        });
+        vbox->addWidget(plcCheck);
+    }
+
     // ── Prevent Sleep ───────────────────────────────────────────────────
     {
         auto* sleepCheck = new QCheckBox("Prevent system sleep while connected");

@@ -94,6 +94,15 @@ public:
     // Send a raw UDP datagram to the radio (used for DAX TX VITA-49 packets)
     Q_INVOKABLE void sendToRadio(const QByteArray& packet);
 
+    // Enable/disable network-audio packet-loss concealment. When enabled
+    // (default), gaps detected via VITA-49 sequence skips on the CatAudio
+    // path are filled with cosine-faded silence (uncompressed) or native
+    // Opus PLC frames before the next received packet is emitted to
+    // AudioEngine. Reduces the broadband click that the splice would
+    // otherwise produce. Safe to call from any thread. (#2731)
+    Q_INVOKABLE void setPacketLossConcealment(bool on);
+    bool packetLossConcealment() const { return m_plcEnabled.load(); }
+
 signals:
     void daxAudioReady(int channel, const QByteArray& pcm);
     void iqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
@@ -117,10 +126,28 @@ private:
     void processDatagram(const QByteArray& data);
     void decodeFFT(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
     void decodeWaterfallTile(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
-    void decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer);
-    void decodeReducedBwAudio(const uchar* raw, int totalBytes, bool hasTrailer);
-    void decodeOpusAudio(const uchar* raw, int totalBytes, bool hasTrailer);
+    void decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
+    void decodeReducedBwAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
+    void decodeOpusAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
     void decodeMeterData(const uchar* raw, int totalBytes, bool hasTrailer);
+
+    // Per-audio-stream packet-loss concealment state. Accessed only from
+    // the network worker thread (alongside m_streamStats). (#2731)
+    struct AudioPlcState {
+        int   lastFrames{0};       // stereo frames in last good packet
+        int   pendingMissed{0};    // missed packets queued for concealment
+        float tailL{0.0f};         // last emitted sample, used for fade-down
+        float tailR{0.0f};
+    };
+    static constexpr int kMaxConcealPackets = 8;  // ~80 ms cap @ 10 ms/pkt
+    QMap<quint32, AudioPlcState> m_audioPlc;
+    std::atomic<bool> m_plcEnabled{true};
+
+    // Prepend faded-silence concealment to a float32 stereo PCM buffer
+    // before emit. Returns the (possibly enlarged) buffer with a cosine
+    // fade-down from the cached tail, zero-pad for the rest of the gap,
+    // and cosine fade-up into the newly received head. (#2731)
+    QByteArray applyConcealmentFade(QByteArray pcm, AudioPlcState& plc);
 
     // PacketClassCodes (from FlexLib VitaFlex.cs)
     static constexpr quint16 PCC_IF_NARROW         = 0x03E3u; // float32 stereo, big-endian

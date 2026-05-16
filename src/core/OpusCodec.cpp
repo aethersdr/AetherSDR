@@ -69,6 +69,26 @@ QByteArray OpusCodec::decode(const QByteArray& opusFrame)
 #endif
 }
 
+QByteArray OpusCodec::concealLost()
+{
+#ifdef HAVE_OPUS
+    if (!m_decoder) return {};
+
+    // opus_decode with a null pointer requests packet-loss concealment:
+    // libopus synthesizes one frame from its internal state, producing a
+    // perceptually smooth fill rather than the splice click we'd get from
+    // jumping straight to the next received frame. (#2731)
+    alignas(16) int16_t stereoOut[FRAME_SIZE * CHANNELS];
+    int samples = opus_decode(m_decoder, nullptr, 0, stereoOut, FRAME_SIZE, 0);
+    if (samples <= 0) return {};
+
+    return QByteArray(reinterpret_cast<const char*>(stereoOut),
+                      samples * CHANNELS * sizeof(int16_t));
+#else
+    return {};
+#endif
+}
+
 QByteArray OpusCodec::encode(const QByteArray& pcmStereo)
 {
 #ifdef HAVE_OPUS
