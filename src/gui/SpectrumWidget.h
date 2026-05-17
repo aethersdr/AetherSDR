@@ -464,6 +464,7 @@ signals:
     void dbmRangeChangeRequested(float minDbm, float maxDbm);
     void dbmRangeDragFinished(float minDbm, float maxDbm);
     void noiseFloorPositionResolved(int pos);
+    void waterfallLineDurationChangeRequested(int ms);
     // TNF signals
     void tnfCreateRequested(double freqMhz);
     void tnfMoveRequested(int id, double newFreqMhz);
@@ -727,8 +728,10 @@ private:
     int    m_wfHistoryOffsetRows{0};
     bool   m_wfLive{true};
     bool   m_draggingTimeScale{false};
+    bool   m_draggingTimeScaleRate{false};
     int    m_timeScaleDragStartY{0};
     int    m_timeScaleDragStartOffsetRows{0};
+    int    m_timeScaleDragStartLineDuration{100};
     static constexpr qint64 kWaterfallHistoryMs = 20LL * 60LL * 1000LL;
 
     // True once we receive native waterfall tile data (PCC 0x8004).
@@ -861,11 +864,6 @@ private:
     int      m_wfCalibrationCount{0};  // tiles measured so far
     bool     m_wfTimeScaleLocked{false};
 
-
-    // Client-side row averaging (Rate slider)
-    int      m_wfAvgTarget{1};   // how many tiles to average into one row
-    int      m_wfAvgCount{0};    // tiles accumulated so far
-    QVector<float> m_wfAvgBins;  // accumulated intensity values
 
     // Lightweight diagnostics overlay toggled from View -> FPS Meters.
     bool m_showFpsMeters{false};

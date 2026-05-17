@@ -49,6 +49,7 @@ public:
                              bool heatMap = true, int colorScheme = 0,
                              bool showGrid = true,
                              float lineWidth = 2.0f);
+    void syncWfLineDuration(int rate);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
     void syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                   int bgOpacity,

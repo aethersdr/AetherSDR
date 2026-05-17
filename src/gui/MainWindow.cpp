@@ -10595,14 +10595,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [sw](int offset) {
         sw->setWfAutoBlackOffset(offset);
     });
-    connect(menu, &SpectrumOverlayMenu::wfLineDurationChanged,
-            this, [this, applet, sw](int ms) {
+    const auto applyWaterfallLineDuration = [this, applet, sw](int ms) {
         sw->setWfLineDuration(ms);
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan && !pan->waterfallId().isEmpty())
             m_radioModel.sendCommand(
                 QString("display panafall set %1 line_duration=%2").arg(pan->waterfallId()).arg(ms));
-    });
+    };
+    connect(menu, &SpectrumOverlayMenu::wfLineDurationChanged,
+            this, applyWaterfallLineDuration);
+    connect(sw, &SpectrumWidget::waterfallLineDurationChangeRequested,
+            this, applyWaterfallLineDuration);
     // NB Waterfall Blanker (#277)
     connect(menu, &SpectrumOverlayMenu::wfBlankerEnabledChanged,
             sw, &SpectrumWidget::setWfBlankerEnabled);

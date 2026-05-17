@@ -20,10 +20,28 @@
 #include <QFrame>
 #include <QColorDialog>
 
+#include <algorithm>
+
 namespace AetherSDR {
 
 static constexpr int BTN_W = 68;
 static constexpr int BTN_H = 22;
+static constexpr int WF_RATE_SLIDER_MIN = 1;
+static constexpr int WF_RATE_SLIDER_MAX = 30;
+static constexpr int WF_LINE_DURATION_OFFSET = 70;
+
+static int lineDurationToRateSliderValue(int lineDuration)
+{
+    return std::clamp(lineDuration - WF_LINE_DURATION_OFFSET,
+                      WF_RATE_SLIDER_MIN,
+                      WF_RATE_SLIDER_MAX);
+}
+
+static int rateSliderValueToLineDuration(int sliderValue)
+{
+    return std::clamp(sliderValue, WF_RATE_SLIDER_MIN, WF_RATE_SLIDER_MAX)
+        + WF_LINE_DURATION_OFFSET;
+}
 
 // Band button size (slightly smaller for the grid)
 static constexpr int BAND_BTN_W = 48;
@@ -987,10 +1005,12 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     });
 
     // Rate
-    makeRow("WtrFall Rate:", 1, 30, 15, m_rateSlider, m_rateLabel);
+    makeRow("WtrFall Rate:", WF_RATE_SLIDER_MIN, WF_RATE_SLIDER_MAX,
+            lineDurationToRateSliderValue(85), m_rateSlider, m_rateLabel);
     connect(m_rateSlider, &QSlider::valueChanged, this, [this](int v) {
+        const int lineDurationMs = rateSliderValueToLineDuration(v);
         m_rateLabel->setText(QString::number(v));
-        emit wfLineDurationChanged(v + 70);
+        emit wfLineDurationChanged(lineDurationMs);
     });
 
     // BG Opacity
@@ -1095,7 +1115,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_gainSlider->setToolTip("Waterfall color gain. Higher values brighten weak signals.");
     m_blackSlider->setToolTip("Waterfall black level. Decrease to darken the noise floor.");
     if (m_autoBlackBtn) m_autoBlackBtn->setToolTip("Automatically adjusts the waterfall black level to match the current noise floor.");
-    m_rateSlider->setToolTip("Waterfall line duration. Higher values scroll faster.");
+    m_rateSlider->setToolTip("Waterfall line duration. Higher values scroll slower.");
     if (m_wfBlankerThreshSlider) m_wfBlankerThreshSlider->setToolTip("Waterfall noise blanking threshold. Higher values blank more aggressively.");
     if (m_freqGridSpacingCmb) m_freqGridSpacingCmb->setToolTip("Frequency grid line spacing. Auto adapts to the current span.");
     if (m_colorSchemeCmb) m_colorSchemeCmb->setToolTip("Selects the waterfall color palette.");
@@ -1143,9 +1163,7 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
         ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
         : "Waterfall black level. Decrease to darken the noise floor.");
     m_autoBlackBtn->setChecked(autoBlack);
-    int rateSliderVal = std::clamp(rate - 70, 1, 30);  // line_duration 71-100 → slider 1-30
-    m_rateSlider->setValue(rateSliderVal);
-    m_rateLabel->setText(QString::number(rateSliderVal));
+    syncWfLineDuration(rate);
 
     if (m_floorSlider) {
         QSignalBlocker bf(m_floorSlider), be(m_floorEnableBtn);
@@ -1184,6 +1202,18 @@ void SpectrumOverlayMenu::syncNoiseFloorPosition(int pos)
     if (m_floorLabel) {
         m_floorLabel->setText(QString::number(clamped));
     }
+}
+
+void SpectrumOverlayMenu::syncWfLineDuration(int rate)
+{
+    if (!m_rateSlider || !m_rateLabel) {
+        return;
+    }
+
+    QSignalBlocker blocker(m_rateSlider);
+    const int sliderValue = lineDurationToRateSliderValue(rate);
+    m_rateSlider->setValue(sliderValue);
+    m_rateLabel->setText(QString::number(sliderValue));
 }
 
 void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blankerThresh,

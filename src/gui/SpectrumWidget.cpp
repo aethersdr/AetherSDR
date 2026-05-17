@@ -58,6 +58,10 @@ static const QColor kAetherBrandBlue(0x00, 0xb4, 0xd8);
 static const QColor kAetherBrandGreen(0x20, 0xc0, 0x60);
 static const QColor kConnectionTextColor(0xd8, 0xe6, 0xf0);
 static constexpr float kMinDisplayDbm = -180.0f;
+static constexpr int kWaterfallLineDurationMinMs = 50;
+static constexpr int kWaterfallLineDurationMaxMs = 500;
+static constexpr int kWaterfallUiRateMinMs = 71;
+static constexpr int kWaterfallUiRateMaxMs = 100;
 
 static bool spotMarkersVisuallyEqual(const QVector<SpectrumWidget::SpotMarker>& lhs,
                                      const QVector<SpectrumWidget::SpotMarker>& rhs)
@@ -443,7 +447,9 @@ void SpectrumWidget::loadSettings()
     m_wfBlackLevel   = s.value(settingsKey("DisplayWfBlackLevel"), "15").toInt();
     m_wfAutoBlack    = s.value(settingsKey("DisplayWfAutoBlack"), "True").toString() == "True";
     m_wfAutoBlackOffset = s.value(settingsKey("DisplayWfAutoBlackOffset"), "50").toInt();
-    m_wfLineDuration = s.value(settingsKey("DisplayWfLineDuration"), "100").toInt();
+    m_wfLineDuration = std::clamp(s.value(settingsKey("DisplayWfLineDuration"), "100").toInt(),
+                                  kWaterfallLineDurationMinMs,
+                                  kWaterfallLineDurationMaxMs);
     PerfTelemetry::instance().setWaterfallLineDurationMs(m_wfLineDuration);
     // NB Waterfall Blanker (#277)
     m_wfBlankerEnabled   = s.value(settingsKey("WaterfallBlankingEnabled"), "False").toString() == "True";
@@ -816,6 +822,7 @@ bool SpectrumWidget::anyDragActive() const {
         || m_draggingDbm
         || m_draggingDbmRange
         || m_draggingTimeScale
+        || m_draggingTimeScaleRate
         || m_draggingTnfId >= 0;
 }
 void SpectrumWidget::publishPerfDragState() const {
@@ -1192,15 +1199,27 @@ void SpectrumWidget::setWfAutoBlackOffset(int level) {
     update();
 }
 void SpectrumWidget::setWfLineDuration(int ms) {
-    m_wfLineDuration = std::clamp(ms, 50, 500);
+    const int clamped = std::clamp(ms, kWaterfallLineDurationMinMs, kWaterfallLineDurationMaxMs);
+    if (m_wfLineDuration == clamped) {
+        if (m_overlayMenu) {
+            m_overlayMenu->syncWfLineDuration(m_wfLineDuration);
+        }
+        return;
+    }
+
+    m_wfLineDuration = clamped;
     PerfTelemetry::instance().setWaterfallLineDurationMs(m_wfLineDuration);
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("DisplayWfLineDuration"), QString::number(m_wfLineDuration));
     s.save();
+    if (m_overlayMenu) {
+        m_overlayMenu->syncWfLineDuration(m_wfLineDuration);
+    }
     // Re-calibrate the time scale for the new rate
     resetWfTimeScale();
     // (#2666) Apply the new cadence to FFT-derived rows on the next frame
     m_lastFftRowMs = 0;
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setSquelchLine(bool visible, int level)
@@ -1307,7 +1326,9 @@ void SpectrumWidget::resetWfTimeScale() {
 
 int SpectrumWidget::waterfallHistoryCapacityRows() const
 {
-    const int msPerRow = std::max(1, m_wfLineDuration);
+    // Size for the fastest accepted line duration so rate changes do not
+    // resize the buffer and discard existing history.
+    const int msPerRow = kWaterfallLineDurationMinMs;
     return static_cast<int>((kWaterfallHistoryMs + msPerRow - 1) / msPerRow);
 }
 
@@ -2323,14 +2344,15 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         m_txEndMs = 0;
     }
 
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+
     // Derive ms-per-row by measuring wall-clock / timecode delta.
     // Collect data for the first 50 tiles to converge, then lock the value.
     // Only re-measure when the user changes the waterfall rate slider
     // (which calls resetWfTimeScale()).
     if (!m_wfTimeScaleLocked) {
-        const qint64 now = QDateTime::currentMSecsSinceEpoch();
         if (timecode > 0 && m_wfPrevTimecode > 0 && timecode > m_wfPrevTimecode && m_wfPrevTimecodeMs > 0) {
-            const float wallDelta = static_cast<float>(now - m_wfPrevTimecodeMs);
+            const float wallDelta = static_cast<float>(nowMs - m_wfPrevTimecodeMs);
             const float tcDelta = static_cast<float>(timecode - m_wfPrevTimecode);
             if (tcDelta > 0 && wallDelta > 0) {
                 const float measured = wallDelta / tcDelta;
@@ -2342,7 +2364,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         }
         if (timecode > 0) {
             m_wfPrevTimecode = timecode;
-            m_wfPrevTimecodeMs = now;
+            m_wfPrevTimecodeMs = nowMs;
         }
     }
 
@@ -2380,17 +2402,16 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
         }
     }
 
-    // One pixel row per tile — scroll speed determined by tile arrival rate.
-    int rowsToPush = 1;
-
     m_hasNativeWaterfall = true;
-    m_lastNativeTileMs = QDateTime::currentMSecsSinceEpoch();
+    m_lastNativeTileMs = nowMs;
 
     const int destWidth = m_waterfall.width();
     if (destWidth <= 0) return;
 
     const int h = m_waterfall.height();
     if (h <= 1) return;
+
+    int rowsToPush = 1;
     rowsToPush = std::min(rowsToPush, h - 1);
 
     // Render the tile row into a temporary scanline.
@@ -2462,7 +2483,6 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
 
     // Write rows into history + visible viewport.
     const bool canInterp = (m_prevTileScanline.size() == destWidth && rowsToPush > 1);
-    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     for (int r = 0; r < rowsToPush; ++r) {
         QVector<QRgb> interpolatedRow(destWidth, qRgb(0, 0, 0));
         if (canInterp) {
@@ -2676,28 +2696,51 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         return;
     }
 
-    // Left-click in waterfall area → start pan drag (tune on double-click only)
+    // Left-click in waterfall area -> start pan drag (tune on double-click only)
     const int wfY = scaleY + FREQ_SCALE_H;
-    if (y >= wfY && ev->button() == Qt::LeftButton) {
+    if (y >= wfY) {
         const QRect wfRect(0, wfY, width(), height() - wfY);
         const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
         const QPoint pos = ev->position().toPoint();
-
-        if (timeScaleRect.contains(pos)) {
-            m_draggingTimeScale = true;
+        const Qt::KeyboardModifiers modifiers =
+            ev->modifiers() | QGuiApplication::keyboardModifiers();
+#ifdef Q_OS_MAC
+        const bool rateModifier = modifiers.testFlag(Qt::ControlModifier)
+            || modifiers.testFlag(Qt::MetaModifier);
+        const bool rateClick = rateModifier
+            && (ev->button() == Qt::LeftButton || ev->button() == Qt::RightButton);
+#else
+        const bool rateModifier = modifiers.testFlag(Qt::ControlModifier);
+        const bool rateClick = rateModifier && ev->button() == Qt::LeftButton;
+#endif
+        if (rateClick && timeScaleRect.contains(pos)) {
+            m_draggingTimeScaleRate = true;
             m_timeScaleDragStartY = y;
-            m_timeScaleDragStartOffsetRows = m_wfHistoryOffsetRows;
+            m_timeScaleDragStartLineDuration = std::clamp(m_wfLineDuration,
+                                                          kWaterfallUiRateMinMs,
+                                                          kWaterfallUiRateMaxMs);
             setSpectrumCursor(Qt::SizeVerCursor);
             ev->accept();
             return;
         }
 
-        m_draggingPan = true;
-        m_panDragStartX = static_cast<int>(ev->position().x());
-        m_panDragStartCenter = m_centerMhz;
-        setSpectrumCursor(Qt::ClosedHandCursor);
-        ev->accept();
-        return;
+        if (ev->button() == Qt::LeftButton) {
+            if (timeScaleRect.contains(pos)) {
+                m_draggingTimeScale = true;
+                m_timeScaleDragStartY = y;
+                m_timeScaleDragStartOffsetRows = m_wfHistoryOffsetRows;
+                setSpectrumCursor(Qt::SizeVerCursor);
+                ev->accept();
+                return;
+            }
+
+            m_draggingPan = true;
+            m_panDragStartX = static_cast<int>(ev->position().x());
+            m_panDragStartCenter = m_centerMhz;
+            setSpectrumCursor(Qt::ClosedHandCursor);
+            ev->accept();
+            return;
+        }
     }
 
     // Left-click on off-screen slice indicator → absorb or switch slice
@@ -3184,6 +3227,28 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         return;
     }
 
+    if (m_draggingTimeScaleRate) {
+        const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+        const QRect wfRect(0, wfY, width(), height() - wfY);
+        const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
+        const int dragHeight = std::max(1, timeScaleRect.height());
+        const int dy = m_timeScaleDragStartY - y;
+        const int rangeMs = kWaterfallUiRateMaxMs - kWaterfallUiRateMinMs;
+        const int deltaMs = static_cast<int>(
+            std::round((static_cast<double>(dy) / dragHeight) * rangeMs));
+        const int newMs = std::clamp(m_timeScaleDragStartLineDuration + deltaMs,
+                                     kWaterfallUiRateMinMs,
+                                     kWaterfallUiRateMaxMs);
+
+        if (newMs != m_wfLineDuration) {
+            emit waterfallLineDurationChangeRequested(newMs);
+        }
+
+        setSpectrumCursor(Qt::SizeVerCursor);
+        ev->accept();
+        return;
+    }
+
     if (m_draggingTimeScale) {
         const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
         const QRect wfRect(0, wfY, width(), height() - wfY);
@@ -3485,6 +3550,12 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     }
     if (m_draggingTimeScale) {
         m_draggingTimeScale = false;
+        setSpectrumCursor(Qt::CrossCursor);
+        ev->accept();
+        return;
+    }
+    if (m_draggingTimeScaleRate) {
+        m_draggingTimeScaleRate = false;
         setSpectrumCursor(Qt::CrossCursor);
         ev->accept();
         return;
@@ -6813,9 +6884,9 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
     p.setPen(m_wfLive ? QColor(0xb0, 0xb0, 0xb0) : Qt::white);
     p.drawText(liveRect, Qt::AlignCenter, "LIVE");
 
-    // Total time depth: use ms-per-row derived from radio tile timecodes.
-    // This is the radio's own clock — stable and accurate to actual scroll rate.
-    const float msPerRow = m_wfMsPerRow > 0 ? m_wfMsPerRow : 100.0f;
+    // Total time depth follows the visible row duration, including client-side
+    // pacing for native waterfall tiles.
+    const float msPerRow = static_cast<float>(std::max(1, m_wfLineDuration));
     const QRect labelRect = strip.adjusted(0, 4, 0, 0);
     const float totalSec = labelRect.height() * msPerRow / 1000.0f;
     if (totalSec <= 0) return;
