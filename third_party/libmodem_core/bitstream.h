@@ -189,9 +189,9 @@ public:
 
     template<class V>
         requires std::constructible_from<typename Container::value_type, V>
-    constexpr traits_back_insert_iterator& operator=(V&& v) noexcept(noexcept(Traits::push_back(*container, typename Container::value_type(std::forward<V>(v)))))
+    constexpr traits_back_insert_iterator& operator=(V&& v) noexcept(noexcept(Traits::push_back(*this->container, typename Container::value_type(std::forward<V>(v)))))
     {
-        Traits::push_back(*container, typename Container::value_type(std::forward<V>(v)));
+        Traits::push_back(*this->container, typename Container::value_type(std::forward<V>(v)));
         return *this;
     }
 
