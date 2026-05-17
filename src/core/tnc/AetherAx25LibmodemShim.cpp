@@ -1,12 +1,12 @@
 #include "core/tnc/AetherAx25LibmodemShim.h"
 
-#include "core/LogManager.h"
 #include "core/tnc/Ax25FrameFormatter.h"
 
 #include "bitstream.h"
 #include "demodulator.h"
 
 #include <QDateTime>
+#include <QLoggingCategory>
 
 #include <algorithm>
 #include <array>
@@ -14,6 +14,8 @@
 #include <iterator>
 #include <optional>
 #include <vector>
+
+Q_LOGGING_CATEGORY(lcAetherAx25Shim, "aether.ax25")
 
 namespace AetherSDR {
 
@@ -311,7 +313,7 @@ struct AetherAx25LibmodemShim::Impl {
                 ++receiveGateResets;
                 resetDecoderState(false, false);
                 if (diagnosticsLoggingEnabled) {
-                    qCDebug(lcAx25).nospace()
+                    qCDebug(lcAetherAx25Shim).nospace()
                         << "receive gate opened: rms="
                         << QString::number(receiveGateRmsDbfs, 'f', 1) << "dBFS floor="
                         << QString::number(receiveGateFloorDbfs, 'f', 1) << "dBFS resets="
@@ -342,7 +344,7 @@ struct AetherAx25LibmodemShim::Impl {
             receiveGateFloorDbfs = receiveGateRmsDbfs;
             resetDecoderState(false, false);
             if (diagnosticsLoggingEnabled) {
-                qCDebug(lcAx25).nospace()
+                qCDebug(lcAetherAx25Shim).nospace()
                     << "receive gate closed: rms="
                     << QString::number(receiveGateRmsDbfs, 'f', 1) << "dBFS floor="
                     << QString::number(receiveGateFloorDbfs, 'f', 1) << "dBFS";
@@ -690,7 +692,7 @@ void AetherAx25LibmodemShim::feedAudio(const QByteArray& monoFloat32Pcm, int sam
     const auto* samples = reinterpret_cast<const float*>(monoFloat32Pcm.constData());
     const QVector<Ax25DecodedFrame> frames = processMonoFloat(samples, sampleCount, sampleRate);
     for (const auto& frame : frames) {
-        qCDebug(lcAx25).noquote()
+        qCDebug(lcAetherAx25Shim).noquote()
             << QStringLiteral("decoded AX.25 frame SRC=%1 DST=%2 VIA=%3 UI=%4 pid=%5 payload=%6")
                 .arg(frame.source,
                      frame.destination,
@@ -702,7 +704,7 @@ void AetherAx25LibmodemShim::feedAudio(const QByteArray& monoFloat32Pcm, int sam
     }
     if (auto diagnostics = m_impl->takeDiagnosticsIfReady(sampleRate)) {
         if (m_impl->diagnosticsLoggingEnabled) {
-            qCDebug(lcAx25).nospace()
+            qCDebug(lcAetherAx25Shim).nospace()
                 << "sr=" << diagnostics->sampleRate
                 << " rms=" << QString::number(diagnostics->rmsDbfs, 'f', 1) << "dBFS"
                 << " peak=" << QString::number(diagnostics->peakDbfs, 'f', 1) << "dBFS"

@@ -1,5 +1,7 @@
 #include "RadioSetupDialog.h"
 #include "CwDecodeSettings.h"
+#include "FramelessResizer.h"
+#include "FramelessWindowTitleBar.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
@@ -164,15 +166,26 @@ static void refreshOscillatorSourceCombo(QComboBox* combo, const RadioModel* mod
 RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    TgxlConnection* tgxl, PgxlConnection* pgxl,
                                    AntennaGeniusModel* ag, QWidget* parent)
-    : PersistentDialog(QStringLiteral("Radio Setup"),
-                       QStringLiteral("RadioSetupDialogGeometry"), parent),
-      m_model(model), m_audio(audio),
+    : QDialog(parent), m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag)
 {
+    setWindowTitle("Radio Setup");
     setMinimumSize(820, 620);
     setStyleSheet("QDialog { background: #0f0f1a; }");
 
-    auto* layout = new QVBoxLayout(bodyWidget());
+    auto* outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(0);
+
+    auto* titleBar = new FramelessWindowTitleBar(QStringLiteral("Radio Setup"), this);
+    m_titleBar = titleBar;
+    outer->addWidget(titleBar);
+
+    auto* bodyWidget = new QWidget(this);
+    auto* layout = new QVBoxLayout(bodyWidget);
+    layout->setContentsMargins(9, 9, 9, 9);
+    m_bodyLayout = layout;
+    outer->addWidget(bodyWidget, 1);
 
     auto* tabs = new QTabWidget;
     m_tabs = tabs;
@@ -229,15 +242,46 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
         "QPushButton:hover { background: #203040; }");
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     layout->addWidget(buttons);
+
+    // Restore saved geometry so the dialog reopens at the user's last size.
+    const QString geomB64 = AppSettings::instance()
+        .value("RadioSetupDialogGeometry", "").toString();
+    if (!geomB64.isEmpty())
+        restoreGeometry(QByteArray::fromBase64(geomB64.toLatin1()));
+
+    FramelessResizer::install(this);
+    setFramelessMode(
+        AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+}
+
+void RadioSetupDialog::setFramelessMode(bool on)
+{
+    const QRect geom = geometry();
+    const bool wasVisible = isVisible();
+
+    Qt::WindowFlags flags = (windowFlags() & ~Qt::WindowType_Mask) | Qt::Dialog;
+    flags.setFlag(Qt::FramelessWindowHint, on);
+    setWindowFlags(flags);
+    if (wasVisible)
+        setGeometry(geom);
+    if (m_titleBar)
+        m_titleBar->setVisible(on);
+    if (m_bodyLayout)
+        m_bodyLayout->setContentsMargins(9, on ? 7 : 9, 9, 9);
+    if (wasVisible)
+        show();
 }
 
 void RadioSetupDialog::closeEvent(QCloseEvent* event)
 {
     // Persist any uncommitted "user cleared IP" edits in the Peripherals
-    // tab before the base class flushes geometry to AppSettings.
+    // tab before saving + closing.
     for (const auto& saver : m_peripheralRowSavers)
         saver();
-    PersistentDialog::closeEvent(event);
+    AppSettings::instance().setValue("RadioSetupDialogGeometry",
+        QString::fromLatin1(saveGeometry().toBase64()));
+    AppSettings::instance().save();
+    QDialog::closeEvent(event);
 }
 
 // ── Radio tab ─────────────────────────────────────────────────────────────────

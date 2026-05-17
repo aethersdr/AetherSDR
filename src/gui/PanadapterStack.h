@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QMap>
+#include <QSet>
 #include <QSplitter>
 
 namespace AetherSDR {
@@ -55,6 +56,7 @@ public:
 
     // Follow the main-window frameless setting for all active floating windows.
     void setFramelessMode(bool on);
+    void setShuttingDown(bool on);
 
     // Persist / restore which pans are currently floating (AppSettings key
     // "FloatingPanIds").  saveFloatingState is called automatically on every
@@ -77,7 +79,10 @@ private:
     QSplitter* m_splitter{nullptr};
     QMap<QString, PanadapterApplet*> m_pans;
     QMap<QString, PanFloatingWindow*> m_floatingWindows;
+    // Preserve floating state for restored pans that were unavailable this run.
+    QSet<QString> m_seenPanIds;
     QString m_activePanId;
+    bool m_shutdownPrepared{false};
 };
 
 } // namespace AetherSDR

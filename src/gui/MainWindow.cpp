@@ -203,6 +203,13 @@ constexpr double kSpectrumClickEdgeMarginFrac = 0.05;
 constexpr int kPanFollowAnimationDurationMs = 110;
 constexpr int kSliderShortcutLeaseMs = 2000;
 constexpr int kPanadapterSliceCapacityStatusMs = 4000;
+constexpr int kDefaultPanXpixels = 1024;
+constexpr int kDefaultPanYpixels = 700;
+constexpr int kMinPanXpixels = 100;
+constexpr int kMinPanYpixels = 20;
+constexpr int kMinRadioPanYpixels = 100;
+constexpr qint64 kPanLayoutRestoreWaitingForFirstPan = -1;
+constexpr int kPanLayoutRestoreWindowMs = 5000;
 constexpr qint64 kXvtrWaterfallDecisionLogIntervalMs = 20000;
 constexpr double kSwrSweepStepMhz = 0.020;
 constexpr double kSwrSweepEdgeGuardMhz = 0.005;
@@ -292,6 +299,49 @@ int panCountForLayoutId(const QString& layoutId)
         {"2x2", 4}, {"4v", 4}, {"3h2", 5}, {"2x3", 6}, {"4h3", 7}, {"2x4", 8}
     };
     return kPanCounts.value(layoutId, 1);
+}
+
+QString defaultPanLayoutForCount(int panCount)
+{
+    static const QMap<int, QString> kDefaultLayouts = {
+        {1, QStringLiteral("1")},
+        {2, QStringLiteral("2v")},
+        {3, QStringLiteral("2h1")},
+        {4, QStringLiteral("2x2")},
+        {5, QStringLiteral("3h2")},
+        {6, QStringLiteral("2x3")},
+        {7, QStringLiteral("4h3")},
+        {8, QStringLiteral("2x4")}
+    };
+    return kDefaultLayouts.value(panCount, QStringLiteral("1"));
+}
+
+int panXpixelsFor(const SpectrumWidget* spectrum)
+{
+    if (!spectrum || spectrum->width() < kMinPanXpixels) {
+        return kDefaultPanXpixels;
+    }
+    return spectrum->width();
+}
+
+int panYpixelsFor(const SpectrumWidget* spectrum)
+{
+    if (!spectrum) {
+        return kDefaultPanYpixels;
+    }
+
+    const int ypix = spectrum->spectrumPixelHeight();
+    if (ypix < kMinPanYpixels) {
+        return kDefaultPanYpixels;
+    }
+    return std::max(ypix, kMinRadioPanYpixels);
+}
+
+bool panPixelDimensionsReady(const SpectrumWidget* spectrum)
+{
+    return spectrum
+        && spectrum->width() >= kMinPanXpixels
+        && spectrum->spectrumPixelHeight() >= kMinPanYpixels;
 }
 
 QVector<XvtrPolicy::Transverter> xvtrPolicyBandsFrom(
@@ -2320,6 +2370,9 @@ MainWindow::MainWindow(QWidget* parent)
     // Route FFT/waterfall data to the correct SpectrumWidget by stream ID
     connect(m_radioModel.panStream(), &PanadapterStream::spectrumReady,
             this, [this](quint32 streamId, const QVector<float>& bins, qint64 emittedNs) {
+        if (m_shuttingDown || !m_panStack) {
+            return;
+        }
         if (emittedNs > 0) {
             PerfTelemetry::instance().recordFrameAge(
                 PerfTelemetry::FrameKind::Panadapter,
@@ -2347,6 +2400,9 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_radioModel.panStream(), &PanadapterStream::waterfallRowReady,
             this, [this](quint32 streamId, const QVector<float>& bins,
                          double low, double high, quint32 tc, qint64 emittedNs) {
+        if (m_shuttingDown || !m_panStack) {
+            return;
+        }
         if (emittedNs > 0) {
             PerfTelemetry::instance().recordFrameAge(
                 PerfTelemetry::FrameKind::Waterfall,
@@ -2396,6 +2452,9 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(m_radioModel.panStream(), &PanadapterStream::waterfallAutoBlackLevel,
             this, [this](quint32 streamId, quint32 autoBlack) {
+        if (m_shuttingDown || !m_panStack) {
+            return;
+        }
         for (auto* pan : m_radioModel.panadapters()) {
             if (pan->wfStreamId() == streamId) {
                 if (auto* sw = m_panStack->spectrum(pan->panId())) {
@@ -2455,6 +2514,9 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Multi-panadapter lifecycle ──────────────────────────────────────────
     connect(&m_radioModel, &RadioModel::panadapterAdded,
             this, [this](PanadapterModel* pan) {
+        if (m_shuttingDown || !m_panStack || !pan) {
+            return;
+        }
         // During layout application, applyLayout/createPansSequentially handles
         // applet creation and wiring — don't duplicate here.
         if (m_applyingLayout) return;
@@ -2513,20 +2575,20 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Push display dimensions to the radio so it sends full-size FFT bins.
         // Without this, the radio uses xpixels=50 ypixels=20 (default) and
-        // FFT data is essentially empty/unusable. Use actual widget dimensions
-        // for 1:1 bin-to-pixel mapping (matches SmartSDR behavior from pcap).
+        // FFT data is essentially empty/unusable. Use widget width and the
+        // actual FFT pane height for 1:1 bin-to-pixel mapping.
         auto* sw = applet->spectrumWidget();
-        int xpix = sw ? sw->width() : 1024;
-        int ypix = sw ? sw->height() : 700;
-        if (xpix < 100) xpix = 1024;  // widget may not be laid out yet
-        if (ypix < 100) ypix = 700;
+        const int xpix = panXpixelsFor(sw);
+        const int ypix = panYpixelsFor(sw);
         m_radioModel.sendCommand(
             QString("display pan set %1 xpixels=%2 ypixels=%3")
                 .arg(pan->panId()).arg(xpix).arg(ypix));
 
         // Tell PanadapterStream the ypixels for FFT bin→dBm conversion
-        if (pan->panStreamId())
+        if (pan->panStreamId()) {
             m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
+            sw->prepareForFftScaleChange();
+        }
 
         qDebug() << "MainWindow: added panadapter applet for" << pan->panId();
 
@@ -2537,7 +2599,9 @@ MainWindow::MainWindow(QWidget* parent)
             m_layoutRestoreTimer->setSingleShot(true);
             m_layoutRestoreTimer->setInterval(1000);
             connect(m_layoutRestoreTimer, &QTimer::timeout, this, [this]() {
-                m_layoutRestoreTimer->setProperty("fired", true);
+                if (m_shuttingDown || !m_panStack) {
+                    return;
+                }
                 // The radio restores pans from the GUIClientID session.
                 // Accept whatever the radio gives and arrange based on count.
                 const int panCount = m_panStack->count();
@@ -2545,18 +2609,13 @@ MainWindow::MainWindow(QWidget* parent)
                     // Pick a layout based on the number of pans the radio restored
                     const QString saved = AppSettings::instance()
                         .value("PanadapterLayout", "1").toString();
-                    // Only rearrange if the saved layout matches the pan count
-                    static const QMap<QString, int> layoutPanCount = {
-                        {"1", 1}, {"2v", 2}, {"2h", 2}, {"2h1", 3}, {"12h", 3}, {"3v", 3}, {"2x2", 4}, {"4v", 4}
-                    };
-                    if (layoutPanCount.value(saved, 1) == panCount)
-                        m_panStack->rearrangeLayout(saved);
-                    else if (panCount == 2)
-                        m_panStack->rearrangeLayout("2v");  // default 2-pan to vertical
-                    else if (panCount == 3)
-                        m_panStack->rearrangeLayout("2h1"); // default 3-pan
-                    else if (panCount >= 4)
-                        m_panStack->rearrangeLayout("2x2"); // default 4-pan
+                    const QString layoutId = panCountForLayoutId(saved) == panCount
+                        ? saved
+                        : defaultPanLayoutForCount(panCount);
+                    const QString floatingPanIds = AppSettings::instance()
+                        .value("FloatingPanIds", "").toString();
+                    m_panStack->rearrangeLayout(layoutId);
+                    AppSettings::instance().setValue("FloatingPanIds", floatingPanIds);
 
                     // Optimistically set local yPixels immediately so FFT frames
                     // arriving before the radio echoes back use correct scaling (#1511).
@@ -2564,25 +2623,32 @@ MainWindow::MainWindow(QWidget* parent)
                         auto* s = a->spectrumWidget();
                         auto* p = m_radioModel.panadapter(a->panId());
                         if (!s || !p || !p->panStreamId()) continue;
-                        int y = s->height();
-                        if (y >= 100)
-                            m_radioModel.panStream()->setYPixels(p->panStreamId(), y);
+                        if (panPixelDimensionsReady(s)) {
+                            m_radioModel.panStream()->setYPixels(
+                                p->panStreamId(), panYpixelsFor(s));
+                            s->prepareForFftScaleChange();
+                        }
                     }
 
                     // Defensive re-push xpixels for all pans after layout settles.
                     // Covers race where radio hadn't finished pan init when first push arrived.
                     QTimer::singleShot(500, this, [this]() {
+                        if (m_shuttingDown || !m_panStack) {
+                            return;
+                        }
                         for (auto* applet : m_panStack->allApplets()) {
                             auto* sw = applet->spectrumWidget();
                             auto* pan = m_radioModel.panadapter(applet->panId());
                             if (!sw || !pan) continue;
-                            int xpix = qMax(sw->width(), 1024);
-                            int ypix = qMax(sw->height(), 200);
+                            const int xpix = panXpixelsFor(sw);
+                            const int ypix = panYpixelsFor(sw);
                             m_radioModel.sendCommand(
                                 QString("display pan set %1 xpixels=%2 ypixels=%3")
                                     .arg(pan->panId()).arg(xpix).arg(ypix));
-                            if (pan->panStreamId())
+                            if (pan->panStreamId()) {
                                 m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
+                                sw->prepareForFftScaleChange();
+                            }
                         }
                     });
                 }
@@ -2592,48 +2658,59 @@ MainWindow::MainWindow(QWidget* parent)
                 m_panStack->restoreFloatingState();
             });
         }
-        if (!m_layoutRestoreTimer->property("fired").toBool()) {
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (m_layoutRestoreUntilMs == kPanLayoutRestoreWaitingForFirstPan) {
+            m_layoutRestoreUntilMs = nowMs + kPanLayoutRestoreWindowMs;
+        }
+        if (nowMs <= m_layoutRestoreUntilMs) {
             m_layoutRestoreTimer->start();
         }
     });
     // Re-push xpixels/ypixels when the radio requests it (profile change, reconnect, etc.)
     connect(&m_radioModel, &RadioModel::panDimensionsNeeded,
             this, [this](const QString& panId) {
+        if (m_shuttingDown || !m_panStack) {
+            return;
+        }
         auto* applet = m_panStack->panadapter(panId);
         if (!applet) return;
         auto* sw = applet->spectrumWidget();
         auto* pan = m_radioModel.panadapter(panId);
         if (!sw || !pan) return;
-        int xpix = sw->width();
-        int ypix = sw->height();
-        if (xpix < 100) xpix = 1024;
-        if (ypix < 100) ypix = 700;
+        const int xpix = panXpixelsFor(sw);
+        const int ypix = panYpixelsFor(sw);
         m_radioModel.sendCommand(
             QString("display pan set %1 xpixels=%2 ypixels=%3")
                 .arg(panId).arg(xpix).arg(ypix));
-        if (pan->panStreamId())
+        if (pan->panStreamId()) {
             m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
+            sw->prepareForFftScaleChange();
+        }
     });
 
 #ifdef Q_OS_MAC
     auto repushPanDimensions = [this]() {
         QTimer::singleShot(200, this, [this]() {
+            if (m_shuttingDown || !m_panStack) {
+                return;
+            }
             for (auto* applet : m_panStack->allApplets()) {
                 auto* sw = applet->spectrumWidget();
                 auto* pan = m_radioModel.panadapter(applet->panId());
                 if (!sw || !pan) {
                     continue;
                 }
-                const int xpix = sw->width();
-                const int ypix = sw->height();
-                if (xpix < 100 || ypix < 100) {
+                if (!panPixelDimensionsReady(sw)) {
                     continue;
                 }
+                const int xpix = panXpixelsFor(sw);
+                const int ypix = panYpixelsFor(sw);
                 m_radioModel.sendCommand(
                     QString("display pan set %1 xpixels=%2 ypixels=%3")
                         .arg(pan->panId()).arg(xpix).arg(ypix));
                 if (pan->panStreamId()) {
                     m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
+                    sw->prepareForFftScaleChange();
                 }
             }
         });
@@ -2646,6 +2723,9 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(&m_radioModel, &RadioModel::panadapterRemoved,
             this, [this](const QString& panId) {
+        if (m_shuttingDown || !m_panStack) {
+            return;
+        }
         if (auto it = m_panFpsReconcileConnections.find(panId);
             it != m_panFpsReconcileConnections.end()) {
             QObject::disconnect(it.value());
@@ -2688,14 +2768,13 @@ MainWindow::MainWindow(QWidget* parent)
         m_spectrogramBuffers.remove(panId);
         qDebug() << "MainWindow: removed panadapter applet for" << panId;
 
-        // Rearrange remaining pans to a sensible layout
+        // Rearrange remaining pans to a sensible layout. Do not persist this
+        // fallback: a temporary resource-shortage session must not overwrite
+        // the user's saved multi-pan layout.
         int remaining = m_panStack->count();
-        if (remaining == 1)
-            AppSettings::instance().setValue("PanadapterLayout", "1");
-        else if (remaining == 2)
-            m_panStack->rearrangeLayout("2v");
-        else if (remaining == 3)
-            m_panStack->rearrangeLayout("2h1");
+        if (remaining > 1) {
+            m_panStack->rearrangeLayout(defaultPanLayoutForCount(remaining));
+        }
     });
 
     // ── Per-panadapter signal wiring (extracted for multi-pan support) ──────
@@ -4458,6 +4537,9 @@ MainWindow::MainWindow(QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    qApp->removeEventFilter(this);
+    preparePanadapterUiForShutdown();
+
 #ifdef HAVE_RADE
     if (m_radeSliceId >= 0)
         deactivateRADE();
@@ -4573,6 +4655,54 @@ MainWindow::~MainWindow()
 #ifdef HAVE_HIDAPI
     m_hidEncoder = nullptr;
 #endif
+}
+
+void MainWindow::preparePanadapterUiForShutdown()
+{
+    if (m_panadapterUiPreparedForShutdown) {
+        return;
+    }
+
+    m_panadapterUiPreparedForShutdown = true;
+    m_shuttingDown = true;
+
+    if (m_sHistoryExpireTimer) {
+        m_sHistoryExpireTimer->stop();
+        QObject::disconnect(m_sHistoryExpireTimer, nullptr, this, nullptr);
+    }
+    m_sHistoryData.clear();
+    m_sHistoryPanState.clear();
+    m_spectrogramBuffers.clear();
+
+    if (m_layoutRestoreTimer) {
+        m_layoutRestoreTimer->stop();
+    }
+    m_layoutRestoreUntilMs = 0;
+
+    if (m_panStack) {
+        m_panStack->setShuttingDown(true);
+    }
+
+    if (auto* stream = m_radioModel.panStream()) {
+        QObject::disconnect(stream, nullptr, this, nullptr);
+    }
+
+    const QList<SpectrumWidget*> spectra = findChildren<SpectrumWidget*>();
+    for (SpectrumWidget* spectrum : spectra) {
+        if (spectrum) {
+            spectrum->prepareForShutdown();
+        }
+    }
+
+    if (m_panStack) {
+        m_panStack->prepareShutdown();
+    }
+    m_panApplet = nullptr;
+    m_cwDecoderApplet = nullptr;
+
+    if (m_appletPanel && m_appletPanel->containerManager()) {
+        m_appletPanel->containerManager()->prepareShutdown();
+    }
 }
 
 namespace {
@@ -4954,11 +5084,7 @@ void MainWindow::changeEvent(QEvent* event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
-    m_shuttingDown = true;
-    m_panStack->prepareShutdown();
-    if (m_appletPanel && m_appletPanel->containerManager()) {
-        m_appletPanel->containerManager()->prepareShutdown();
-    }
+    preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
     s.setValue("MainWindowState",   saveState().toBase64());
@@ -5577,6 +5703,16 @@ void MainWindow::releaseSliderShortcutLease(bool clearFocus)
 
 bool MainWindow::eventFilter(QObject* obj, QEvent* event)
 {
+    if (obj == qApp && event->type() == QEvent::Quit) {
+        if (!m_shuttingDown) {
+            if (m_panStack) {
+                m_panStack->setShuttingDown(true);
+            }
+            QTimer::singleShot(0, this, [this]() { close(); });
+            return true;
+        }
+    }
+
     if (auto* slider = qobject_cast<QAbstractSlider*>(obj)) {
         if (event->type() == QEvent::MouseButtonPress
             || event->type() == QEvent::MouseButtonDblClick) {
@@ -6246,7 +6382,13 @@ void MainWindow::buildMenuBar()
     auto* fileMenu = menuBar()->addMenu("&File");
     auto* quitAct = fileMenu->addAction("&Quit");
     quitAct->setShortcut(QKeySequence::Quit);
-    connect(quitAct, &QAction::triggered, qApp, &QApplication::quit);
+    quitAct->setMenuRole(QAction::QuitRole);
+    connect(quitAct, &QAction::triggered, this, [this]() {
+        if (m_panStack) {
+            m_panStack->setShuttingDown(true);
+        }
+        close();
+    });
 
     // ── Settings menu ──────────────────────────────────────────────────────
     auto* settingsMenu = menuBar()->addMenu("&Settings");
@@ -6254,66 +6396,67 @@ void MainWindow::buildMenuBar()
     auto* radioSetup = settingsMenu->addAction("Radio Setup...");
     radioSetup->setMenuRole(QAction::PreferencesRole);  // macOS: appears in app menu as Preferences (#883, #1013)
     connect(radioSetup, &QAction::triggered, this, [this] {
-        // Snapshot compression setting before dialog opens.  The dialog is
-        // constructed lazily and destroys itself on close (WA_DeleteOnClose
-        // via showOrRaisePersistent), so each fresh open captures the
-        // current value — matching the pre-migration behavior (#2769).
-        const QString prevComp = m_radioModel.audioCompressionParam();
-        const bool wasFresh = !m_radioSetupDialog;
-        showOrRaisePersistent(m_radioSetupDialog, &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius);
-        if (wasFresh && m_radioSetupDialog) {
-            auto* dlg = m_radioSetupDialog.data();
-            connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
-                    m_txBandAction, &QAction::trigger);
-#ifdef HAVE_SERIALPORT
-            connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
-                QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
-            });
-#endif
-            // Toggle of SliceLetterDisplay → repaint every slice-letter widget
-            // by re-emitting letterChanged on each slice (#2606).
-            connect(dlg, &RadioSetupDialog::sliceLetterDisplayModeChanged,
-                    this, [this]() {
-                for (auto* s : m_radioModel.slices())
-                    s->emitLetterRefresh();
-            });
-            connect(dlg, &QDialog::finished, this, [this, prevComp]() {
-#ifdef HAVE_SERIALPORT
-                // Re-load serial port settings if changed (on worker thread)
-                QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
-                // Re-check FlexControl open/close state
-                auto& fcs = AppSettings::instance();
-                bool fcOpen = fcs.value("FlexControlOpen", "False").toString() == "True";
-                QString fcPort = fcs.value("FlexControlPort").toString();
-                bool fcInvert = fcs.value("FlexControlInvertDir", "False").toString() == "True";
-                QMetaObject::invokeMethod(m_flexControl, [this, fcOpen, fcPort, fcInvert] {
-                    if (fcOpen) {
-                        if (!m_flexControl->isOpen() && !fcPort.isEmpty())
-                            m_flexControl->open(fcPort);
-                    } else {
-                        if (m_flexControl->isOpen()) m_flexControl->close();
-                    }
-                    m_flexControl->setInvertDirection(fcInvert);
-                });
-#endif
-                // Re-evaluate CW decode panel and TX tap from the dialog's
-                // RX/TX toggles, plus run state vs current slice mode (#2417).
-                refreshCwDecodeState();
-
-                // If audio compression changed, recreate the RX audio stream
-                QString newComp = m_radioModel.audioCompressionParam();
-                if (newComp != prevComp && m_radioModel.isConnected()) {
-                    qDebug() << "MainWindow: audio compression changed from" << prevComp
-                             << "to" << newComp << "— recreating audio stream";
-                    m_radioModel.removeRxAudioStream();
-                    QTimer::singleShot(500, this, [this]() {
-                        m_radioModel.createRxAudioStream();
-                    });
-                    updateNr2Availability();  // Disable NR2 if switching to Opus (#1597)
-                }
-            });
+        if (m_radioSetupDialog) {
+            m_radioSetupDialog->raise();
+            m_radioSetupDialog->activateWindow();
+            return;
         }
+        // Snapshot compression setting before dialog opens
+        QString prevComp = m_radioModel.audioCompressionParam();
+
+        auto* dlg = new RadioSetupDialog(&m_radioModel, m_audio, &m_tgxlConn, &m_pgxlConn, &m_antennaGenius, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        m_radioSetupDialog = dlg;
+        connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
+                m_txBandAction, &QAction::trigger);
+#ifdef HAVE_SERIALPORT
+        connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
+            QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
+        });
+#endif
+        // Toggle of SliceLetterDisplay → repaint every slice-letter widget
+        // by re-emitting letterChanged on each slice (#2606).
+        connect(dlg, &RadioSetupDialog::sliceLetterDisplayModeChanged,
+                this, [this]() {
+            for (auto* s : m_radioModel.slices())
+                s->emitLetterRefresh();
+        });
+        connect(dlg, &QDialog::finished, this, [this, prevComp]() {
+#ifdef HAVE_SERIALPORT
+            // Re-load serial port settings if changed (on worker thread)
+            QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
+            // Re-check FlexControl open/close state
+            auto& fcs = AppSettings::instance();
+            bool fcOpen = fcs.value("FlexControlOpen", "False").toString() == "True";
+            QString fcPort = fcs.value("FlexControlPort").toString();
+            bool fcInvert = fcs.value("FlexControlInvertDir", "False").toString() == "True";
+            QMetaObject::invokeMethod(m_flexControl, [this, fcOpen, fcPort, fcInvert] {
+                if (fcOpen) {
+                    if (!m_flexControl->isOpen() && !fcPort.isEmpty())
+                        m_flexControl->open(fcPort);
+                } else {
+                    if (m_flexControl->isOpen()) m_flexControl->close();
+                }
+                m_flexControl->setInvertDirection(fcInvert);
+            });
+#endif
+            // Re-evaluate CW decode panel and TX tap from the dialog's
+            // RX/TX toggles, plus run state vs current slice mode (#2417).
+            refreshCwDecodeState();
+
+            // If audio compression changed, recreate the RX audio stream
+            QString newComp = m_radioModel.audioCompressionParam();
+            if (newComp != prevComp && m_radioModel.isConnected()) {
+                qDebug() << "MainWindow: audio compression changed from" << prevComp
+                         << "to" << newComp << "— recreating audio stream";
+                m_radioModel.removeRxAudioStream();
+                QTimer::singleShot(500, this, [this]() {
+                    m_radioModel.createRxAudioStream();
+                });
+                updateNr2Availability();  // Disable NR2 if switching to Opus (#1597)
+            }
+        });
+        dlg->show();
     });
 
     auto* chooseRadio = settingsMenu->addAction("Connect to Radio...");
@@ -8239,11 +8382,13 @@ void MainWindow::applyDarkTheme()
 
 void MainWindow::onConnectionStateChanged(bool connected)
 {
+    if (m_shuttingDown) {
+        return;
+    }
+
     m_connPanel->setConnected(connected);
     if (connected) {
-        if (m_layoutRestoreTimer) {
-            m_layoutRestoreTimer->setProperty("fired", false);
-        }
+        m_layoutRestoreUntilMs = kPanLayoutRestoreWaitingForFirstPan;
         m_radioInfoLabel->setText(m_radioModel.model());
         m_radioVersionLabel->setText(m_radioModel.version());
         m_stationLabel->setText(m_radioModel.nickname());
@@ -8309,18 +8454,22 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 BandStackSettings::instance().save();
             }
         }
-        // Apply saved UI preferences to the panel
-        m_panStack->bandStackPanel()->setGrouped(
-            BandStackSettings::instance().groupByBand());
-        m_panStack->bandStackPanel()->setAutoExpiryMinutes(expiryMin);
-        m_panStack->bandStackPanel()->setAutoSaveDwellSeconds(
-            BandStackSettings::instance().autoSaveDwellSeconds());
+        BandStackPanel* bandStackPanel =
+            m_panStack ? m_panStack->bandStackPanel() : nullptr;
+        if (bandStackPanel) {
+            // Apply saved UI preferences to the panel
+            bandStackPanel->setGrouped(BandStackSettings::instance().groupByBand());
+            bandStackPanel->setAutoExpiryMinutes(expiryMin);
+            bandStackPanel->setAutoSaveDwellSeconds(
+                BandStackSettings::instance().autoSaveDwellSeconds());
+        }
 
         // 5-second grace window after connect — suppresses an auto-save fire
         // while the radio finishes pushing initial slice/pan state.
         m_bsConnectGraceUntilMs = QDateTime::currentMSecsSinceEpoch() + 5000;
-        m_panStack->bandStackPanel()->loadBookmarks(
-            m_radioModel.serial(), m_bandPlanMgr);
+        if (bandStackPanel) {
+            bandStackPanel->loadBookmarks(m_radioModel.serial(), m_bandPlanMgr);
+        }
         refreshMemoryBrowsePanel();
         updateBandStackIndicator();
 
@@ -8376,7 +8525,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // pushes the radio's built-in transverter capabilities so the
         // band menu surfaces 4m/2m on FLEX-6500 / FLEX-6700 (#695).
         auto refreshXvtr = [this]() {
-            if (!m_radioModel.isConnected()) return;
+            if (m_shuttingDown || !m_panStack || !m_radioModel.isConnected()) {
+                return;
+            }
             QVector<SpectrumOverlayMenu::XvtrBand> xvtrBands;
             for (const auto& x : m_radioModel.xvtrList()) {
                 if (x.isValid)
@@ -8502,6 +8653,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
     } else {
+        if (m_layoutRestoreTimer) {
+            m_layoutRestoreTimer->stop();
+        }
+        m_layoutRestoreUntilMs = 0;
         if (m_appletPanel) {
             m_appletPanel->clearSliceButtons();
         }
@@ -8533,12 +8688,16 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_radioVersionLabel->setText("");
         m_stationLabel->setText("N0CALL");
         m_tnfIndicator->setStyleSheet("QLabel { color: #404858; font-weight: bold; font-size: 24px; }");
-        m_panStack->bandStackPanel()->clear();
+        if (auto* bandStackPanel = m_panStack ? m_panStack->bandStackPanel() : nullptr) {
+            bandStackPanel->clear();
+        }
         if (m_bsExpiryTimer && m_bsExpiryTimer->isActive())
             m_bsExpiryTimer->stop();
         if (m_bsAutoSaveTimer && m_bsAutoSaveTimer->isActive())
             m_bsAutoSaveTimer->stop();
-        m_panStack->setBandStackVisible(false);
+        if (m_panStack) {
+            m_panStack->setBandStackVisible(false);
+        }
         refreshMemoryBrowsePanel();
         updateBandStackIndicator();
         m_tgxlIndicator->setVisible(false);
@@ -8584,8 +8743,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_wfLineDurationReconcile.clear();
 
         // Clear spectrum/waterfall so the display doesn't look frozen
-        for (auto* applet : m_panStack->allApplets())
-            applet->spectrumWidget()->clearDisplay();
+        if (m_panStack) {
+            for (auto* applet : m_panStack->allApplets()) {
+                if (applet && applet->spectrumWidget()) {
+                    applet->spectrumWidget()->clearDisplay();
+                }
+            }
+        }
 
         setPanadapterConnectionAnimation(!m_userDisconnected, "Reconnecting to radio…");
 
@@ -10268,7 +10432,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // ── Debounced resize → re-push xpixels/ypixels to the radio (#1511) ───
     // When the layout changes (e.g. adding a second pan, splitting, resizing),
-    // the widget dimensions change but the radio keeps encoding FFT bins to the
+    // the FFT pane dimensions change but the radio keeps encoding FFT bins to the
     // old yPixels scale.  This causes a ~5 dB noise-floor offset until restart.
     // A 300ms debounce avoids flooding the radio during animated resizes.
     {
@@ -10280,15 +10444,21 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         connect(resizeTimer, &QTimer::timeout,
                 this, [this, applet, sw]() {
             auto* pan = m_radioModel.panadapter(applet->panId());
-            if (!pan || !sw) return;
-            int xpix = sw->width();
-            int ypix = sw->height();
-            if (xpix < 100 || ypix < 100) return;
+            if (!pan || !sw) {
+                return;
+            }
+            if (!panPixelDimensionsReady(sw)) {
+                return;
+            }
+            const int xpix = panXpixelsFor(sw);
+            const int ypix = panYpixelsFor(sw);
             m_radioModel.sendCommand(
                 QString("display pan set %1 xpixels=%2 ypixels=%3")
                     .arg(pan->panId()).arg(xpix).arg(ypix));
-            if (pan->panStreamId())
+            if (pan->panStreamId()) {
                 m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
+                sw->prepareForFftScaleChange();
+            }
         });
     }
 
@@ -14628,6 +14798,7 @@ void MainWindow::applySHistoryEnabled(bool on)
     m_sHistoryEnabled = on;
     AppSettings::instance().setValue("SHistoryMarkersEnabled", on ? "True" : "False");
     AppSettings::instance().save();
+    if (m_shuttingDown || !m_panStack) return;
     for (auto* a : m_panStack->allApplets()) {
         a->spectrumWidget()->setShowSHistory(on);
     }
@@ -14645,6 +14816,7 @@ void MainWindow::applySHistoryQrmEnabled(bool on)
     m_sHistoryQrmEnabled = on;
     AppSettings::instance().setValue("SHistoryQrmEnabled", on ? "True" : "False");
     AppSettings::instance().save();
+    if (m_shuttingDown || !m_panStack) return;
     for (auto* a : m_panStack->allApplets()) {
         a->spectrumWidget()->setShowSHistoryQrm(on);
     }
@@ -14659,6 +14831,7 @@ void MainWindow::applySHistoryQrmEnabled(bool on)
 
 void MainWindow::rebuildSHistoryForPan(const QString& panId)
 {
+    if (m_shuttingDown || !m_panStack) return;
     auto* sw = m_panStack->spectrum(panId);
     if (!sw) return;
 
@@ -14822,6 +14995,7 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
 
 void MainWindow::expireSHistoryMarkers()
 {
+    if (m_shuttingDown || !m_panStack) return;
     if (!m_sHistoryEnabled && !m_sHistoryQrmEnabled) return;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     // Per-tick read keeps the slider live — fires once a second, AppSettings
@@ -14852,7 +15026,7 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
     const bool perfEnabled = PerfTelemetry::instance().enabled();
     const qint64 perfStartNs = perfEnabled ? PerfTelemetry::nowNs() : 0;
 
-    if (!m_sHistoryEnabled && !m_sHistoryQrmEnabled) {
+    if (m_shuttingDown || !m_panStack || (!m_sHistoryEnabled && !m_sHistoryQrmEnabled)) {
         if (perfEnabled)
             PerfTelemetry::instance().recordSHistorySkipped();
         return;
@@ -14901,7 +15075,8 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
         // Read the noise floor that the spectrum widget has already measured
         // from this pan's live FFT stream — no hardcoded dBm, adapts to the
         // current band, antenna, and preamp setup automatically.
-        SpectrumWidget* sw = m_panStack->spectrum(pan->panId());
+        auto* panStack = m_panStack;
+        SpectrumWidget* sw = panStack ? panStack->spectrum(pan->panId()) : nullptr;
         const float noiseFloor = sw ? sw->noiseFloorDbm() : -1000.0f;
 
         // Use the active slice mode so USB pans only show USB markers and

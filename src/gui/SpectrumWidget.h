@@ -75,6 +75,7 @@ class SpectrumWidget : public SPECTRUM_BASE_CLASS {
 
 public:
     explicit SpectrumWidget(QWidget* parent = nullptr);
+    ~SpectrumWidget() override;
 
     // Per-pan settings persistence
     void setPanIndex(int idx) { m_panIndex = idx; }
@@ -83,11 +84,14 @@ public:
     void loadSettings();
 
     QSize sizeHint() const override { return {800, 300}; }
+    int spectrumPixelHeight() const;
 
     // Set the frequency range covered by this panadapter.
     void setFrequencyRange(double centerMhz, double bandwidthMhz);
     void clearDisplay();  // blank spectrum and waterfall on disconnect
     void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
+    void prepareForTopLevelChange(); // unregister QRhiWidget from the current backing-store QRhi
+    void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     void setConnectionAnimationVisible(bool on, const QString& label = {});
     void showInterlockNotification(const QString& message, int durationMs = 5000);
 
@@ -110,6 +114,7 @@ public:
     // so the state and value survive launch.
     void setNoiseFloorPosition(int pos);
     void setNoiseFloorEnable(bool on);
+    void prepareForFftScaleChange();
     void reacquireNoiseFloorLock();
 
     // Two-pass trimmed-mean noise floor from live FFT bins (dBm), EMA-smoothed.
@@ -476,7 +481,8 @@ signals:
     void sliceTuneRequested(int sliceId, double freqMhz);
     void popOutRequested(bool popOut);  // true=float, false=dock
     void sliceTxRequested(int sliceId);
-    // Emitted on resize so MainWindow can re-push xpixels/ypixels to the radio (#1511)
+    // Emitted when FFT bin-mapping dimensions change so MainWindow can re-push
+    // xpixels/ypixels to the radio (#1511).
     void dimensionsChanged(int w, int h);
     // Spot signals
     void spotAddRequested(double freqMhz, const QString& callsign,
@@ -582,10 +588,10 @@ private:
     // band switch, manual dBm drag) so the next frame re-acquires
     // rather than smooths from a stale value.
     void resetNoiseFloorBaseline();
-    // Re-capture the target frac. Slider changes use m_noiseFloorPosition;
-    // manual dBm-scale changes can capture the floor's current screen position.
-    void refreshNoiseFloorTarget(bool captureCurrentScale = false);
-    bool captureNoiseFloorTargetFromCurrentScale(bool notify);
+    // Re-capture the target frac. Explicit user changes (slider/right dBm bar)
+    // can persist; startup/enable/layout refreshes only rebuild transient state.
+    void refreshNoiseFloorTarget(bool captureCurrentScale = false, bool persistCapture = false);
+    bool captureNoiseFloorTargetFromCurrentScale(bool notify, bool persist);
 
     // Helper: find overlay index for a sliceId, or -1.
     int overlayIndex(int sliceId) const;
@@ -604,6 +610,7 @@ private:
 
     QVector<float> m_bins;       // raw FFT frame (dBm)
     QVector<float> m_smoothed;   // exponential-smoothed for visual stability
+    bool m_shutdownPrepared{false};
 
     double m_centerMhz{14.225};
     double m_bandwidthMhz{0.200};
@@ -625,8 +632,6 @@ private:
     bool  m_resetFftSmoothingOnNextFrame{false};
     bool  m_pendingDbmRangeEcho{false};
     qint64 m_pendingDbmRangeEchoStartMs{0};
-    int   m_holdFftUpdatesAfterDbmRelease{0};
-    float m_dbmReleasePreviewOffset{0.0f};
     float m_pendingMinDbm{0.0f};
     float m_pendingMaxDbm{0.0f};
 
@@ -649,6 +654,7 @@ private:
     qint64 m_noiseFloorLastSampleMs{0};
     qint64 m_noiseFloorLastMotionMs{0};
     qint64 m_noiseFloorLastCommandMs{0};
+    qint64 m_noiseFloorScaleSettlingUntilMs{0};
     float  m_noiseFloorLastCommandRef{-1000.0f};
     bool   m_noiseFloorCandidateValid{false};
     float  m_noiseFloorCandidateDbm{-1000.0f};

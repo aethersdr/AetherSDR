@@ -1498,13 +1498,6 @@ add_executable(ax25_libmodem_shim_test
     tests/ax25_libmodem_shim_test.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
-    # LogManager.cpp provides lcAx25 (the shim's qCDebug category, #2763);
-    # LogManager.cpp depends on AsyncLogWriter via the m_writer member, so
-    # AppSettings + AsyncLogWriter come along to satisfy the constructor /
-    # destructor chain at link time.
-    src/core/LogManager.cpp
-    src/core/AsyncLogWriter.cpp
-    src/core/AppSettings.cpp
 )
 target_include_directories(ax25_libmodem_shim_test PRIVATE src)
 target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core)

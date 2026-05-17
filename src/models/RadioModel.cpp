@@ -25,6 +25,8 @@ namespace AetherSDR {
 
 namespace {
 
+constexpr int kMinUsablePanYpixels = 100;
+
 QJsonArray toJsonArray(const QStringList& values)
 {
     QJsonArray array;
@@ -4480,8 +4482,9 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
     // load) and re-request correct dimensions from MainWindow.
     if (kvs.contains("y_pixels") && pan) {
         int yPix = kvs["y_pixels"].toInt();
-        if (yPix > 0)
+        if (yPix > kMinUsablePanYpixels) {
             m_panStream->setYPixels(pan->panStreamId(), yPix);
+        }
     }
     if ((kvs.contains("x_pixels") || kvs.contains("y_pixels")) && pan) {
         int xPix = kvs.value("x_pixels", "0").toInt();

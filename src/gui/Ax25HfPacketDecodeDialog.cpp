@@ -2,7 +2,6 @@
 
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
-#include "core/LogManager.h"
 #include "core/tnc/Ax25FrameFormatter.h"
 #include "models/SliceModel.h"
 
@@ -15,6 +14,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLoggingCategory>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -30,6 +30,8 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+
+Q_LOGGING_CATEGORY(lcAetherAx25Dialog, "aether.ax25")
 
 namespace AetherSDR {
 
@@ -1092,7 +1094,7 @@ void Ax25HfPacketDecodeDialog::appendSystemLine(const QString& text)
 {
     if (!m_log)
         return;
-    qCDebug(lcAx25).noquote() << text;
+    qCDebug(lcAetherAx25Dialog).noquote() << text;
     m_log->append(QStringLiteral(
         "<span style=\"color:#63d47a;\">%1</span>&nbsp;&nbsp;"
         "<span style=\"color:#8190a3;\">MODEM</span>&nbsp;&nbsp;"
@@ -1151,7 +1153,7 @@ void Ax25HfPacketDecodeDialog::appendDiagnosticsLine(const Ax25DecoderDiagnostic
                  : diagnostics.lastRejectExpectedFcs)
             .arg(diagnostics.lastRejectPreviewHex);
     }
-    qCDebug(lcAx25).noquote() << line;
+    qCDebug(lcAetherAx25Dialog).noquote() << line;
     m_log->append(QStringLiteral(
         "<span style=\"color:#63d47a;\">%1</span>&nbsp;&nbsp;"
         "<span style=\"color:#8ea0b8;\">DIAG</span>&nbsp;&nbsp;"

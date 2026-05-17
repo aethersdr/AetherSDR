@@ -13,9 +13,10 @@
 #include <QTimer>
 #include <QWindow>
 
-// After reparenting a QRhiWidget to a different top-level window,
-// tear down old GPU pipelines and force a fresh initialize() cycle
-// so the Metal/Vulkan surface binds to the new window.
+// After moving a QRhiWidget between top-level windows, force a fresh initialize()
+// cycle so Metal binds to the new NSView. The backing-store notification is sent
+// before the actual reparent; sending it again here can make QRhiWidget remove a
+// stale cleanup callback from the wrong QRhi during startup floating restore.
 static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
 {
     if (!sw) return;
@@ -37,6 +38,30 @@ static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
 }
 
 namespace AetherSDR {
+
+namespace {
+
+static const QMap<QString, int> kLayoutPanCount = {
+    {"1", 1}, {"2v", 2}, {"2h", 2}, {"2h1", 3}, {"12h", 3}, {"3v", 3},
+    {"2x2", 4}, {"4v", 4}, {"3h2", 5}, {"2x3", 6}, {"4h3", 7}, {"2x4", 8}
+};
+
+QString defaultDockedLayoutForCount(int panCount)
+{
+    static const QMap<int, QString> kDefaultLayouts = {
+        {1, QStringLiteral("1")},
+        {2, QStringLiteral("2v")},
+        {3, QStringLiteral("2h1")},
+        {4, QStringLiteral("2x2")},
+        {5, QStringLiteral("3h2")},
+        {6, QStringLiteral("2x3")},
+        {7, QStringLiteral("4h3")},
+        {8, QStringLiteral("2x4")}
+    };
+    return kDefaultLayouts.value(panCount, QStringLiteral("1"));
+}
+
+} // namespace
 
 PanadapterStack::PanadapterStack(QWidget* parent)
     : QWidget(parent)
@@ -63,6 +88,8 @@ void PanadapterStack::setBandStackVisible(bool visible)
 
 PanadapterApplet* PanadapterStack::addPanadapter(const QString& panId)
 {
+    m_seenPanIds.insert(panId);
+
     if (m_pans.contains(panId))
         return m_pans[panId];
 
@@ -129,6 +156,8 @@ void PanadapterStack::rekey(const QString& oldId, const QString& newId)
 {
     if (auto* applet = m_pans.take(oldId)) {
         m_pans[newId] = applet;
+        m_seenPanIds.remove(oldId);
+        m_seenPanIds.insert(newId);
         if (m_activePanId == oldId)
             m_activePanId = newId;
     }
@@ -204,6 +233,15 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     // crashes (#2495).  Stale entries would also remain in
     // m_floatingWindows, permanently blocking future float requests.
     QList<QPointer<SpectrumWidget>> rebound;
+    auto appendRebound = [&rebound](SpectrumWidget* sw) {
+        if (!sw) return;
+        for (SpectrumWidget* existing : rebound) {
+            if (existing == sw) {
+                return;
+            }
+        }
+        rebound.append(sw);
+    };
     if (!m_floatingWindows.isEmpty()) {
         const QList<QString> floatingIds = m_floatingWindows.keys();
         for (const QString& panId : floatingIds) {
@@ -213,8 +251,9 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
             PanadapterApplet* applet = fw->applet();
             if (auto* sw = applet ? applet->spectrumWidget() : nullptr) {
                 sw->hide();
+                sw->prepareForTopLevelChange();
                 sw->resetGpuResources();
-                rebound.append(sw);
+                appendRebound(sw);
             }
             applet = fw->takeApplet();
             fw->hide();
@@ -232,9 +271,18 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     QList<PanadapterApplet*> applets = m_pans.values();
     if (applets.isEmpty()) return;
 
-    // Remove all applets from current splitter (don't delete them)
-    for (auto* a : applets)
+    // Remove all applets from current splitter (don't delete them).  setParent()
+    // can temporarily change the QRhiWidget's top-level window, so give Qt a
+    // chance to unregister the old backing-store callback before the move.
+    for (auto* a : applets) {
+        if (auto* sw = a ? a->spectrumWidget() : nullptr) {
+            sw->hide();
+            sw->prepareForTopLevelChange();
+            sw->resetGpuResources();
+            appendRebound(sw);
+        }
         a->setParent(nullptr);
+    }
 
     // Hide + remove old splitter from layout, defer deletion
     m_splitter->hide();
@@ -367,8 +415,8 @@ void PanadapterStack::rearrangeLayout(const QString& layoutId)
     QTimer::singleShot(0, this, [this, rebound]() {
         for (SpectrumWidget* sw : rebound) {
             if (!sw) continue;
-            sw->show();
             refreshAfterReparent(sw);
+            sw->show();
         }
         equalizeSizes();
     });
@@ -410,21 +458,9 @@ void PanadapterStack::rebuildDockedSplitter()
     newSplitter->setChildrenCollapsible(false);
     layout()->addWidget(newSplitter);
 
-    static const QMap<QString, int> layoutPanCount = {
-        {"1", 1}, {"2v", 2}, {"2h", 2}, {"2h1", 3}, {"12h", 3}, {"3v", 3},
-        {"2x2", 4}, {"4v", 4}, {"3h2", 5}, {"2x3", 6}, {"4h3", 7}, {"2x4", 8}
-    };
     QString layoutId = AppSettings::instance().value("PanadapterLayout", "1").toString();
-    if (layoutPanCount.value(layoutId, -1) != docked.size()) {
-        if (docked.size() == 2) {
-            layoutId = QStringLiteral("2v");
-        } else if (docked.size() == 3) {
-            layoutId = QStringLiteral("2h1");
-        } else if (docked.size() == 4) {
-            layoutId = QStringLiteral("2x2");
-        } else {
-            layoutId = QStringLiteral("1");
-        }
+    if (!m_floatingWindows.isEmpty() || kLayoutPanCount.value(layoutId, -1) != docked.size()) {
+        layoutId = defaultDockedLayoutForCount(docked.size());
     }
 
     auto makeSplitter = [](Qt::Orientation orientation) {
@@ -669,6 +705,7 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     // destruction can corrupt the main window's NSResponder chain (#1344).
     SpectrumWidget* sw = applet->spectrumWidget();
     sw->hide();
+    sw->prepareForTopLevelChange();
     sw->resetGpuResources();
 
     // Reparent directly from splitter into the floating window — never through
@@ -722,6 +759,7 @@ void PanadapterStack::dockPanadapter(const QString& panId)
     SpectrumWidget* sw = applet ? applet->spectrumWidget() : nullptr;
     if (sw) {
         sw->hide();
+        sw->prepareForTopLevelChange();
         sw->resetGpuResources();
     }
 
@@ -787,8 +825,21 @@ void PanadapterStack::setFramelessMode(bool on)
     }
 }
 
+void PanadapterStack::setShuttingDown(bool on)
+{
+    for (auto* fw : m_floatingWindows) {
+        fw->setShuttingDown(on);
+    }
+}
+
 void PanadapterStack::prepareShutdown()
 {
+    if (m_shutdownPrepared) {
+        return;
+    }
+    m_shutdownPrepared = true;
+
+    setShuttingDown(true);
     saveFloatingState();
 
     // Explicitly delete floating windows rather than calling close().
@@ -807,8 +858,7 @@ void PanadapterStack::prepareShutdown()
         fw->saveWindowGeometry();
         if (PanadapterApplet* applet = fw->applet()) {
             if (SpectrumWidget* sw = applet->spectrumWidget()) {
-                sw->hide();
-                sw->resetGpuResources();
+                sw->prepareForShutdown();
             }
         }
         m_pans.remove(panId);
@@ -827,8 +877,7 @@ void PanadapterStack::prepareShutdown()
         PanadapterApplet* applet = m_pans.take(panId);
         if (!applet) continue;
         if (SpectrumWidget* sw = applet->spectrumWidget()) {
-            sw->hide();
-            sw->resetGpuResources();
+            sw->prepareForShutdown();
         }
         delete applet;
     }
@@ -837,8 +886,17 @@ void PanadapterStack::prepareShutdown()
 void PanadapterStack::saveFloatingState() const
 {
     QStringList ids;
+    const QString saved =
+        AppSettings::instance().value("FloatingPanIds", "").toString();
+    for (const QString& id : saved.split(',', Qt::SkipEmptyParts)) {
+        if (!m_seenPanIds.contains(id) && !ids.contains(id)) {
+            ids << id;
+        }
+    }
     for (const QString& id : m_floatingWindows.keys()) {
-        ids << id;
+        if (!ids.contains(id)) {
+            ids << id;
+        }
     }
     AppSettings::instance().setValue("FloatingPanIds", ids.join(','));
     AppSettings::instance().save();

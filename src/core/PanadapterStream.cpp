@@ -10,6 +10,7 @@
 #include <QStringList>
 #include <QtEndian>
 #include <QSet>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -18,6 +19,7 @@ namespace AetherSDR {
 namespace {
 
 constexpr QAbstractSocket::BindMode kLanVitaBindMode = QAbstractSocket::DontShareAddress;
+constexpr float kMinSpectrumDbm = -180.0f;
 
 QHostAddress chooseLanBindAddress(RadioConnection* conn,
                                   QString* chosenReason,
@@ -430,6 +432,9 @@ void PanadapterStream::clearRegisteredStreams()
 
 void PanadapterStream::setDbmRange(quint32 streamId, float minDbm, float maxDbm, bool waitForEcho)
 {
+    minDbm = std::max(minDbm, kMinSpectrumDbm);
+    maxDbm = std::max(maxDbm, minDbm + 10.0f);
+
     QMutexLocker lock(&m_streamMutex);
     if (waitForEcho) {
         m_pendingDbmRanges[streamId] = {minDbm, maxDbm};
@@ -795,12 +800,19 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     }
     auto [minDbm, maxDbm] = dbmRange;
     const float range = maxDbm - minDbm;
+    if (range <= 0.0f) return;
+
     const int   count = frame.buf.size();
     QVector<float> bins(count);
 
-    const float yPix = static_cast<float>(yPixVal);
-    for (int i = 0; i < count; ++i)
-        bins[i] = maxDbm - (static_cast<float>(frame.buf[i]) / (yPix - 1.0f)) * range;
+    const float yPix = static_cast<float>(std::max(yPixVal, 2));
+
+    for (int i = 0; i < count; ++i) {
+        const float pixel = std::clamp(
+            static_cast<float>(frame.buf[i]), 0.0f, yPix - 1.0f);
+        const float dbm = maxDbm - (pixel / (yPix - 1.0f)) * range;
+        bins[i] = std::clamp(dbm, minDbm, maxDbm);
+    }
 
     const qint64 emittedNs = PerfTelemetry::instance().enabled() ? PerfTelemetry::nowNs() : 0;
     emit spectrumReady(streamId, bins, emittedNs);
