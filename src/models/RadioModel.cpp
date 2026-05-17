@@ -2716,8 +2716,23 @@ void RadioModel::handleMemoryStatus(int index, const QMap<QString, QString>& kvs
 void RadioModel::onMessageReceived(const ParsedMessage& msg)
 {
     if (msg.type == MessageType::Message) {
-        qCWarning(lcProtocol) << "Radio M-message:" << msg.object;
-        emit radioMessageReceived(msg.object);
+        // Log everything to the protocol channel at the matching level so the
+        // diagnostic trail is uniform.  The user-facing decision (silent log,
+        // warning dialog, error dialog) is made in MainWindow::onRadioMessage
+        // based on the same severity, so the two paths can't disagree.
+        switch (msg.severity) {
+        case MessageSeverity::Info:
+            qCInfo(lcProtocol) << "Radio M-message [Info]:" << msg.object;
+            break;
+        case MessageSeverity::Warning:
+            qCWarning(lcProtocol) << "Radio M-message [Warning]:" << msg.object;
+            break;
+        case MessageSeverity::Error:
+        case MessageSeverity::Fatal:
+            qCCritical(lcProtocol) << "Radio M-message [Error/Fatal]:" << msg.object;
+            break;
+        }
+        emit radioMessageReceived(msg.object, msg.severity);
         return;
     }
 

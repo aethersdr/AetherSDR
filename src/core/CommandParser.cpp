@@ -99,7 +99,15 @@ ParsedMessage CommandParser::parseLine(const QString& rawLine)
         {
             const int pipe = body.indexOf('|');
             if (pipe >= 0) {
+                // The number before the '|' is hex.  Bits 24-25 encode
+                // severity (Info=0, Warning=1, Error=2, Fatal=3) per
+                // FlexLib Radio.cs:4498-4516; the remaining bits are an
+                // opaque message id.  Reuse the same field as 'handle' to
+                // keep the struct stable — readers that want the severity
+                // use msg.severity, readers that need the raw id still
+                // get it from msg.handle.
                 msg.handle = body.left(pipe).toUInt(nullptr, 16);
+                msg.severity = static_cast<MessageSeverity>((msg.handle >> 24) & 0x3);
                 msg.object = body.mid(pipe + 1);
             }
         }

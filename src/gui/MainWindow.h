@@ -4,6 +4,7 @@
 #include "models/BandSettings.h"
 #include "models/AntennaGeniusModel.h"
 #include "core/AppSettings.h"
+#include "core/CommandParser.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
 #include "core/RigctlServer.h"
@@ -126,7 +127,7 @@ private slots:
     // Radio/connection events
     void onConnectionStateChanged(bool connected);
     void onConnectionError(const QString& msg);
-    void onRadioMessage(const QString& text);
+    void onRadioMessage(const QString& text, MessageSeverity severity);
     void onSliceAdded(SliceModel* slice);
     void onSliceRemoved(int id);
 

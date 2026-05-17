@@ -8546,10 +8546,34 @@ void MainWindow::onConnectionError(const QString& msg)
         setPanadapterConnectionAnimation(false);
 }
 
-void MainWindow::onRadioMessage(const QString& text)
+void MainWindow::onRadioMessage(const QString& text, MessageSeverity severity)
 {
-    qCInfo(lcGui) << "Radio M-message:" << text;
-    QMessageBox::warning(this, tr("Radio"), text);
+    // Info messages (e.g. "Client connected from IP …") are routine multi-
+    // client notices that the radio sends on every connect / disconnect —
+    // they're documented as silent-log in SmartSDR.  Show a status-bar
+    // toast instead of a modal popup so the operator notices without an
+    // interruptive dialog.  Warnings, errors, and fatals are user-actionable
+    // and continue to surface as modal QMessageBox to preserve PR #2771's
+    // intent for FreeDV/ATU/interlock conflicts.  See #2785 for context.
+    switch (severity) {
+    case MessageSeverity::Info:
+        qCInfo(lcGui) << "Radio M-message [Info]:" << text;
+        if (statusBar())
+            statusBar()->showMessage(text, 5000);
+        break;
+    case MessageSeverity::Warning:
+        qCWarning(lcGui) << "Radio M-message [Warning]:" << text;
+        QMessageBox::warning(this, tr("Radio"), text);
+        break;
+    case MessageSeverity::Error:
+        qCCritical(lcGui) << "Radio M-message [Error]:" << text;
+        QMessageBox::critical(this, tr("Radio — Error"), text);
+        break;
+    case MessageSeverity::Fatal:
+        qCCritical(lcGui) << "Radio M-message [Fatal]:" << text;
+        QMessageBox::critical(this, tr("Radio — Fatal"), text);
+        break;
+    }
 }
 
 void MainWindow::setPanadapterConnectionAnimation(bool visible, const QString& label)
