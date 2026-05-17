@@ -1897,6 +1897,10 @@ void VfoWidget::showTab(int index)
         m_tabBtns[index]->setStyleSheet(kTabLblActive);
         m_tabStack->setCurrentIndex(index);
         m_tabStack->show();
+        // QSW::sizeHint() is max of all pages; restrict to current page to prevent cross-tab inflation.
+        for (int i = 0; i < m_tabStack->count(); ++i)
+            m_tabStack->widget(i)->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+        m_tabStack->currentWidget()->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
     }
     adjustSize();
 }
