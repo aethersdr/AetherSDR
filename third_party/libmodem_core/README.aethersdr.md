@@ -39,9 +39,9 @@ Refresh notes:
 3. Re-apply the AX.25-only trim to remove libcorrect-backed FX.25/IL2P code.
 4. Build `aether_libmodem_core` and run the AX.25 shim tests.
 
-Manual RX test notes:
+Manual RX/TX test notes:
 
-- Open **View > Packet Decoder...**. The action is listed immediately under
+- Open **View > AetherModem...**. The action is listed immediately under
   **Propagation Conditions**.
 - For HF packet/APRS, choose **300 baud HF**, tune an appropriate frequency,
   and use SSB/DIG receive mode with the audio passband covering 1600/1800 Hz.
@@ -50,7 +50,12 @@ Manual RX test notes:
 - Enable decode and try both Normal and Inverted tone polarity. USB/LSB receive
   paths can invert tone sense.
 - Confirm accepted AX.25 UI frames appear in the scrolling log.
-- For diagnostics in the normal AetherSDR logfile, enable the **Packet
-  Decoder** logging category (`aether.ax25`) from the app's logging controls.
+- For the experimental 300 baud HF TX path, enter either raw payload text or
+  full `SRC>DST,path:payload` monitor syntax in the transmit field. The window
+  packetizes it as an AX.25 UI frame and feeds AFSK into the app-owned DAX TX
+  stream.
+- For diagnostics in the normal AetherSDR logfile, enable the
+  **AetherModem** logging category (`aether.ax25`) from the app's logging
+  controls.
 
-This is an experimental first receive window, not a production packet TNC.
+This is an experimental first modem window, not a production packet TNC.

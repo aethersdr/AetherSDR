@@ -5410,7 +5410,7 @@ void MainWindow::showNetworkDiagnosticsDialog()
 void MainWindow::showAx25HfPacketDecodeDialog()
 {
     SliceModel* slice = activeSlice();
-    showOrRaisePersistent(m_ax25HfPacketDecodeDialog, m_audio, slice);
+    showOrRaisePersistent(m_ax25HfPacketDecodeDialog, m_audio, &m_radioModel, slice);
     if (m_ax25HfPacketDecodeDialog)
         m_ax25HfPacketDecodeDialog->setAttachedSlice(slice);
 }
@@ -7131,7 +7131,7 @@ void MainWindow::buildMenuBar()
         }
     });
 
-    auto* packetDecoderAction = viewMenu->addAction("Packet Decoder...");
+    auto* packetDecoderAction = viewMenu->addAction("AetherModem...");
     packetDecoderAction->setMenuRole(QAction::NoRole);
     connect(packetDecoderAction, &QAction::triggered,
             this, &MainWindow::showAx25HfPacketDecodeDialog);

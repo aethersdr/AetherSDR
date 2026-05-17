@@ -93,6 +93,18 @@ std::vector<float> afskPcmFromBits(const std::vector<uint8_t>& bits,
     return samples;
 }
 
+std::vector<float> monoFromStereoFloat32(const QByteArray& pcm)
+{
+    const auto* src = reinterpret_cast<const float*>(pcm.constData());
+    const int samples = pcm.size() / static_cast<int>(sizeof(float));
+    const int frames = samples / 2;
+    std::vector<float> mono;
+    mono.reserve(static_cast<size_t>(frames));
+    for (int i = 0; i < frames; ++i)
+        mono.push_back((src[i * 2] + src[i * 2 + 1]) * 0.5f);
+    return mono;
+}
+
 quint16 readLe16(const char* bytes)
 {
     return static_cast<quint16>(static_cast<unsigned char>(bytes[0]))
@@ -392,6 +404,81 @@ void testSyntheticHf300AfskLoopbackDecodes()
            frame.payloadText == QStringLiteral("!3644.00N\\11947.00W-KI6BCJ HF APRS test via Direwolf 300 baud"));
 }
 
+void testTransmitRawPayloadBuildsLoopbackAudio()
+{
+    AetherAx25LibmodemShim txShim;
+    txShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
+
+    const Ax25TransmitResult tx = txShim.buildTransmitAudio(
+        QStringLiteral("hello from AetherModem"),
+        QStringLiteral("N0CALL-9"));
+    report("TX raw payload packetizes", tx.ok);
+    if (!tx.ok)
+        return;
+    report("TX raw source", tx.frame.source == QStringLiteral("N0CALL-9"));
+    report("TX raw destination defaults APRS", tx.frame.destination == QStringLiteral("APRS"));
+    report("TX raw payload preserved", tx.frame.payloadText == QStringLiteral("hello from AetherModem"));
+    report("TX raw stereo PCM generated", !tx.stereoFloat32Pcm.isEmpty() && tx.audioFrames > 0);
+    report("TX raw audio padded to VITA packet frames", (tx.audioFrames % tx.vitaPacketFrames) == 0);
+    report("TX raw waveform has sane level", tx.peakDbfs < -6.0 && tx.peakDbfs > -12.0);
+
+    const std::vector<float> mono = monoFromStereoFloat32(tx.stereoFloat32Pcm);
+    AetherAx25LibmodemShim rxShim;
+    rxShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
+    const auto frames = rxShim.processMonoFloat(mono.data(),
+                                                static_cast<int>(mono.size()),
+                                                tx.sampleRate);
+    report("TX raw loopback decodes", frames.size() == 1);
+    if (frames.isEmpty())
+        return;
+    report("TX raw loopback source", frames.first().source == QStringLiteral("N0CALL-9"));
+    report("TX raw loopback payload", frames.first().payloadText == QStringLiteral("hello from AetherModem"));
+}
+
+void testTransmitMonitorSyntaxBuildsLoopbackAudio()
+{
+    AetherAx25LibmodemShim txShim;
+    txShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
+
+    const Ax25TransmitResult tx = txShim.buildTransmitAudio(
+        QStringLiteral("KI6BCJ-1>APDW18,WIDE1-1:!3644.00N\\11947.00W-Test TX"),
+        QStringLiteral("N0CALL"));
+    report("TX monitor syntax packetizes", tx.ok);
+    if (!tx.ok)
+        return;
+    report("TX monitor source", tx.frame.source == QStringLiteral("KI6BCJ-1"));
+    report("TX monitor destination", tx.frame.destination == QStringLiteral("APDW18"));
+    report("TX monitor path", tx.frame.path == QStringList({QStringLiteral("WIDE1-1")}));
+
+    const std::vector<float> mono = monoFromStereoFloat32(tx.stereoFloat32Pcm);
+    AetherAx25LibmodemShim rxShim;
+    rxShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
+    const auto frames = rxShim.processMonoFloat(mono.data(),
+                                                static_cast<int>(mono.size()),
+                                                tx.sampleRate);
+    report("TX monitor loopback decodes", frames.size() == 1);
+    if (frames.isEmpty())
+        return;
+    report("TX monitor loopback destination", frames.first().destination == QStringLiteral("APDW18"));
+    report("TX monitor loopback path", frames.first().path == QStringList({QStringLiteral("WIDE1-1")}));
+    report("TX monitor loopback payload", frames.first().payloadText == QStringLiteral("!3644.00N\\11947.00W-Test TX"));
+}
+
+void testMalformedTransmitMonitorSyntaxIsRejected()
+{
+    AetherAx25LibmodemShim txShim;
+    txShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
+
+    const Ax25TransmitResult tx = txShim.buildTransmitAudio(
+        QStringLiteral("KI6BCJ-123>APDW18:bad source"),
+        QStringLiteral("N0CALL"));
+    report("malformed TX monitor syntax is rejected", !tx.ok);
+    report("malformed TX monitor syntax reports error",
+           tx.error.contains(QStringLiteral("invalid monitor syntax"))
+           || tx.error.contains(QStringLiteral("invalid AX.25 address")));
+    report("malformed TX monitor syntax emits no audio", tx.stereoFloat32Pcm.isEmpty());
+}
+
 void testChunkedSyntheticReplayUsesReceiveGate()
 {
     const auto cfg = ax25DemodConfigForProfile(Ax25ModemProfile::Hf300);
@@ -567,6 +654,9 @@ int main(int argc, char** argv)
     testVhf1200ProfileConfig();
     testKnownGoodBitstreamDecodes();
     testSyntheticHf300AfskLoopbackDecodes();
+    testTransmitRawPayloadBuildsLoopbackAudio();
+    testTransmitMonitorSyntaxBuildsLoopbackAudio();
+    testMalformedTransmitMonitorSyntaxIsRejected();
     testChunkedSyntheticReplayUsesReceiveGate();
     testReplayWavLoaderFeedsShim();
     testBadFcsDoesNotEmit();

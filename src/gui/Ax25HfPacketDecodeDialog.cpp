@@ -2,9 +2,12 @@
 
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
+#include "core/DaxTxPolicy.h"
 #include "core/LogManager.h"
 #include "core/tnc/Ax25FrameFormatter.h"
+#include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -15,6 +18,7 @@
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -39,6 +43,10 @@ constexpr auto kPacketDecoderProfileSetting = "Ax25PacketDecoderProfile";
 constexpr auto kPacketDecoderPolaritySetting = "Ax25PacketDecoderPolarity";
 constexpr auto kPacketDecoderDebugSetting = "Ax25PacketDecoderDiagnosticsDebug";
 constexpr int kAudioCaptureSeconds = 180;
+constexpr int kTxDaxSettleMs = 150;
+constexpr int kTxLeadMs = 200;
+constexpr int kTxTailMs = 250;
+constexpr int kTxChunkMs = 20;
 
 constexpr const char* kAetherModemStyle = R"(
 QWidget {
@@ -157,6 +165,19 @@ QComboBox {
     border: 1px solid #26374e;
     border-radius: 5px;
     padding: 6px 28px 6px 10px;
+}
+QLineEdit {
+    color: #c4cedd;
+    background: #050b13;
+    border: 1px solid #26374e;
+    border-radius: 7px;
+    padding: 10px 12px;
+    selection-background-color: #1b3650;
+    font-family: "SF Mono", "Menlo", "Consolas", monospace;
+    font-size: 13px;
+}
+QLineEdit:focus {
+    border-color: #54c768;
 }
 QTextEdit {
     color: #c2ccdb;
@@ -471,27 +492,31 @@ private:
 };
 
 Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
+                                                   RadioModel* radio,
                                                    SliceModel* initialSlice,
                                                    QWidget* parent)
     : PersistentDialog(QStringLiteral("AetherModem - Packet Decoder (Experimental)"),
                        QStringLiteral("Ax25HfPacketDecodeDialogGeometry"),
                        parent)
     , m_audio(audio)
+    , m_radio(radio)
 {
     setMinimumSize(1080, 680);
 
     m_shim = new AetherAx25LibmodemShim(this);
     m_heartbeatTimer = new QTimer(this);
     m_heartbeatTimer->setInterval(1000);
+    m_txPaceTimer = new QTimer(this);
+    m_txPaceTimer->setInterval(kTxChunkMs);
     bodyWidget()->setStyleSheet(QString::fromLatin1(kAetherModemStyle));
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(10);
 
     auto* experimentalBanner = new QLabel(
-        QStringLiteral("<b>Experimental \xE2\x80\x94 Phase 0 receive-only.</b> "
-                       "300 baud HF only. HDLC timing is first-pass and "
-                       "may produce noisy rejects on weak HF signals."),
+        QStringLiteral("<b>Experimental \xE2\x80\x94 AX.25 modem bring-up.</b> "
+                       "300 baud HF RX/TX is active; 1200 baud VHF remains "
+                       "receive-focused while timing work continues."),
         bodyWidget());
     experimentalBanner->setObjectName(QStringLiteral("ExperimentalBanner"));
     experimentalBanner->setWordWrap(true);
@@ -502,7 +527,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     auto* tabs = new QHBoxLayout(tabsFrame);
     tabs->setContentsMargins(0, 0, 0, 0);
     tabs->setSpacing(0);
-    tabs->addWidget(tabButton(QStringLiteral("APRS"), true, tabsFrame), 1);
+    tabs->addWidget(tabButton(QStringLiteral("AX.25"), true, tabsFrame), 1);
     auto* terminalTab = tabButton(QStringLiteral("Terminal"), false, tabsFrame);
     terminalTab->setVisible(false);
     tabs->addWidget(terminalTab, 1);
@@ -564,6 +589,20 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_clearButton->setMinimumHeight(42);
     controls->addWidget(m_clearButton);
     root->addWidget(controlsFrame);
+
+    auto* txFrame = panel(QStringLiteral("ControlsFrame"), bodyWidget());
+    auto* txLayout = new QHBoxLayout(txFrame);
+    txLayout->setContentsMargins(16, 12, 16, 12);
+    txLayout->setSpacing(12);
+    auto* txLabel = sectionLabel(QStringLiteral("TRANSMIT AX.25 UI FRAME"), txFrame);
+    txLayout->addWidget(txLabel);
+    m_txText = new QLineEdit(txFrame);
+    m_txText->setPlaceholderText(QStringLiteral("hello world  or  N0CALL-1>APRS,WIDE1-1:hello world"));
+    txLayout->addWidget(m_txText, 1);
+    m_txButton = new QPushButton(QStringLiteral("Transmit"), txFrame);
+    m_txButton->setMinimumHeight(42);
+    txLayout->addWidget(m_txButton);
+    root->addWidget(txFrame);
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
     auto* logLayout = new QVBoxLayout(logFrame);
@@ -667,6 +706,14 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         else
             startAudioCapture();
     });
+    connect(m_txText, &QLineEdit::textChanged,
+            this, &Ax25HfPacketDecodeDialog::refreshTransmitControls);
+    connect(m_txText, &QLineEdit::returnPressed,
+            this, &Ax25HfPacketDecodeDialog::startTransmitFromUi);
+    connect(m_txButton, &QPushButton::clicked,
+            this, &Ax25HfPacketDecodeDialog::startTransmitFromUi);
+    connect(m_txPaceTimer, &QTimer::timeout,
+            this, &Ax25HfPacketDecodeDialog::paceTransmitAudio);
     connect(m_polarityNormal, &QRadioButton::toggled, this, [this](bool checked) {
         if (!checked)
             return;
@@ -686,6 +733,21 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     connect(m_heartbeatTimer, &QTimer::timeout,
             this, &Ax25HfPacketDecodeDialog::updateHeartbeat);
 
+    if (m_radio) {
+        connect(m_radio, &RadioModel::txAudioStreamReady,
+                this, [this](quint32 streamId) {
+            appendSystemLine(QStringLiteral("DAX TX stream ready: 0x%1.")
+                .arg(streamId, 0, 16));
+            if (m_txPendingStream)
+                beginTransmitWhenReady();
+        });
+        connect(&m_radio->transmitModel(), &TransmitModel::pttBlocked,
+                this, [this](const QString& message) {
+            if (m_txActive || m_txPendingStream)
+                finishTransmit(true, QStringLiteral("PTT blocked: %1").arg(message));
+        });
+    }
+
     if (m_audio) {
         connect(m_audio, &AudioEngine::tncRxAudioReady,
                 this, &Ax25HfPacketDecodeDialog::handleRxAudio,
@@ -694,12 +756,16 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     appendSystemLine(QStringLiteral("AetherModem initialized."));
     appendSystemLine(QStringLiteral("Enable Modem to start the RX audio tap."));
+    appendSystemLine(QStringLiteral("TX accepts raw payload text or full SRC>DST,path:payload syntax."));
     setAttachedSlice(initialSlice);
     refreshStatus();
+    refreshTransmitControls();
 }
 
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
 {
+    if (m_txActive || m_txPendingStream)
+        finishTransmit(true, QStringLiteral("AetherModem window closing"));
     if (m_captureActive)
         finishAudioCapture(false);
     if (m_audio)
@@ -904,6 +970,241 @@ void Ax25HfPacketDecodeDialog::finishAudioCapture(bool save)
         .arg(path));
 }
 
+void Ax25HfPacketDecodeDialog::startTransmitFromUi()
+{
+    if (m_txActive || m_txPendingStream) {
+        appendSystemLine(QStringLiteral("TX already in progress."));
+        return;
+    }
+    if (!m_txText)
+        return;
+    if (!m_hf300Profile || !m_hf300Profile->isChecked()) {
+        appendSystemLine(QStringLiteral("TX is enabled for the 300 baud HF profile in this pass."));
+        return;
+    }
+    if (!m_audio || !m_radio) {
+        appendSystemLine(QStringLiteral("TX unavailable: audio engine or radio model is not ready."));
+        return;
+    }
+    if (m_radio->isRadioTransmitting() || m_radio->transmitModel().isTransmitting()) {
+        appendSystemLine(QStringLiteral("TX unavailable: radio is already transmitting."));
+        return;
+    }
+
+    const QString text = m_txText->text();
+    Ax25TransmitResult tx = m_shim->buildTransmitAudio(text, defaultTransmitSource());
+    if (!tx.ok) {
+        appendSystemLine(QStringLiteral("TX packetization failed: %1.").arg(tx.error));
+        qCWarning(lcAx25).noquote() << "AX.25 TX packetization failed:" << tx.error;
+        return;
+    }
+
+    m_pendingTx = tx;
+    m_txPcm = tx.stereoFloat32Pcm;
+    m_txOffsetBytes = 0;
+    m_txChunkIndex = 0;
+    const qsizetype chunkBytes = static_cast<qsizetype>(tx.sampleRate)
+        * kTxChunkMs / 1000
+        * 2
+        * static_cast<qsizetype>(sizeof(float));
+    m_txChunkCount = chunkBytes > 0
+        ? static_cast<int>((m_txPcm.size() + chunkBytes - 1) / chunkBytes)
+        : 0;
+
+    appendSystemLine(QStringLiteral(
+        "TX packetized: %1 > %2%3, %4 payload bytes, %5 frame bytes, %6 bits, %7 s, RMS %8 dBFS, peak %9 dBFS.")
+        .arg(tx.frame.source,
+             tx.frame.destination,
+             tx.frame.path.isEmpty()
+                 ? QString()
+                 : QStringLiteral(" via %1").arg(tx.frame.path.join(QStringLiteral(","))))
+        .arg(tx.frame.payload.size())
+        .arg(tx.frameBytes)
+        .arg(tx.bitCount)
+        .arg(tx.durationSeconds, 0, 'f', 2)
+        .arg(tx.rmsDbfs, 0, 'f', 1)
+        .arg(tx.peakDbfs, 0, 'f', 1));
+
+    if (m_audio->txStreamId() == 0) {
+        m_txPendingStream = true;
+        refreshTransmitControls();
+        appendSystemLine(QStringLiteral("Requesting DAX TX stream for AetherModem TX."));
+        qCInfo(lcAx25) << "AX.25 TX requesting DAX TX stream";
+        if (!m_radio->ensureDaxTxStream(DaxTxRequestReason::AetherModemAx25Tx))
+            finishTransmit(true, QStringLiteral("DAX TX stream policy rejected stream creation"));
+        return;
+    }
+
+    beginTransmitWhenReady();
+}
+
+void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
+{
+    if (m_txPcm.isEmpty())
+        return;
+    if (!m_audio || !m_radio) {
+        finishTransmit(true, QStringLiteral("audio engine or radio model disappeared before TX"));
+        return;
+    }
+    if (m_audio->txStreamId() == 0) {
+        m_txPendingStream = true;
+        refreshTransmitControls();
+        return;
+    }
+
+    auto& txModel = m_radio->transmitModel();
+    if (m_attachedSlice && !m_attachedSlice->isTxSlice()) {
+        appendSystemLine(QStringLiteral("Selecting attached slice %1 for AX.25 TX.")
+            .arg(m_attachedSlice->sliceId()));
+        m_attachedSlice->setTxSlice(true);
+    }
+    m_txPendingStream = false;
+    m_txActive = true;
+    m_txPreviousAudioDaxMode = m_audio->isDaxTxMode();
+    m_txPreviousTransmitDax = txModel.daxOn();
+    m_txRestoreAudioDaxMode = true;
+    m_txRestoreTransmitDax = true;
+
+    m_audio->setDaxTxMode(true);
+    txModel.setDax(true);
+    appendSystemLine(QStringLiteral("Keying transmitter for AX.25 TX on %1; DAX TX stream 0x%2.")
+        .arg(transmitSliceSummary())
+        .arg(m_audio->txStreamId(), 0, 16));
+    qCInfo(lcAx25).noquote()
+        << QStringLiteral("AX.25 TX start stream=0x%1 %2 chunks=%3 daxSettleMs=%4 leadMs=%5 tailMs=%6")
+            .arg(m_audio->txStreamId(), 0, 16)
+            .arg(transmitSliceSummary())
+            .arg(m_txChunkCount)
+            .arg(kTxDaxSettleMs)
+            .arg(kTxLeadMs)
+            .arg(kTxTailMs);
+
+    refreshTransmitControls();
+    QTimer::singleShot(kTxDaxSettleMs, this, [this] {
+        if (!m_txActive)
+            return;
+        if (!m_radio) {
+            finishTransmit(true, QStringLiteral("radio model disappeared before PTT"));
+            return;
+        }
+        auto& txModel = m_radio->transmitModel();
+        txModel.requestPttOn(TransmitModel::PttSource::Dax);
+        if (!m_txActive)
+            return;
+        if (!txModel.isTransmitting()) {
+            finishTransmit(true, QStringLiteral("PTT did not engage"));
+            return;
+        }
+
+        appendTransmitLine(m_pendingTx.frame);
+        QTimer::singleShot(kTxLeadMs, this, [this] {
+            if (!m_txActive)
+                return;
+            appendSystemLine(QStringLiteral("Sending AX.25 AFSK audio: %1 chunks at %2 ms.")
+                .arg(m_txChunkCount)
+                .arg(kTxChunkMs));
+            paceTransmitAudio();
+            if (m_txActive && m_txPaceTimer)
+                m_txPaceTimer->start();
+        });
+    });
+}
+
+void Ax25HfPacketDecodeDialog::paceTransmitAudio()
+{
+    if (!m_txActive || !m_audio)
+        return;
+
+    const qsizetype bytesPerChunk = static_cast<qsizetype>(m_pendingTx.sampleRate)
+        * kTxChunkMs / 1000
+        * 2
+        * static_cast<qsizetype>(sizeof(float));
+    if (bytesPerChunk <= 0) {
+        finishTransmit(true, QStringLiteral("invalid TX pacing chunk size"));
+        return;
+    }
+
+    if (m_txOffsetBytes >= m_txPcm.size()) {
+        if (m_txPaceTimer)
+            m_txPaceTimer->stop();
+        appendSystemLine(QStringLiteral("AX.25 TX audio queued; waiting %1 ms before unkey.")
+            .arg(kTxTailMs));
+        QTimer::singleShot(kTxTailMs, this, [this] {
+            finishTransmit(false, QStringLiteral("AX.25 TX complete"));
+        });
+        return;
+    }
+
+    const qsizetype sendBytes = std::min<qsizetype>(bytesPerChunk, m_txPcm.size() - m_txOffsetBytes);
+    const QByteArray chunk = m_txPcm.mid(m_txOffsetBytes, sendBytes);
+    m_txOffsetBytes += sendBytes;
+    ++m_txChunkIndex;
+
+    QPointer<AudioEngine> audio = m_audio;
+    QMetaObject::invokeMethod(m_audio, [audio, chunk]() {
+        if (audio)
+            audio->sendModemTxAudio(chunk);
+    }, Qt::QueuedConnection);
+
+    if (m_diagnosticsDebugEnabled
+        && (m_txChunkIndex == 1 || m_txChunkIndex == m_txChunkCount
+            || (m_txChunkIndex % std::max(1, 1000 / kTxChunkMs)) == 0)) {
+        qCDebug(lcAx25).noquote()
+            << QStringLiteral("AX.25 TX chunk %1/%2 bytes=%3 offset=%4/%5")
+                .arg(m_txChunkIndex)
+                .arg(m_txChunkCount)
+                .arg(sendBytes)
+                .arg(m_txOffsetBytes)
+                .arg(m_txPcm.size());
+    }
+}
+
+void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reason)
+{
+    if (m_txPaceTimer)
+        m_txPaceTimer->stop();
+
+    const bool hadTx = m_txActive || m_txPendingStream || !m_txPcm.isEmpty();
+    m_txActive = false;
+    m_txPendingStream = false;
+
+    if (m_radio) {
+        auto& txModel = m_radio->transmitModel();
+        if (txModel.isTransmitting())
+            txModel.requestPttOff(TransmitModel::PttSource::Dax);
+        if (m_txRestoreTransmitDax)
+            txModel.setDax(m_txPreviousTransmitDax);
+    }
+    if (m_audio) {
+        if (m_txRestoreAudioDaxMode)
+            m_audio->setDaxTxMode(m_txPreviousAudioDaxMode);
+        m_audio->clearTxAccumulators();
+    }
+
+    if (hadTx) {
+        appendSystemLine(aborted
+            ? QStringLiteral("AX.25 TX aborted: %1.").arg(reason)
+            : QStringLiteral("%1.").arg(reason));
+        qCInfo(lcAx25).noquote()
+            << QStringLiteral("AX.25 TX %1 reason=%2 chunks=%3/%4 bytes=%5/%6")
+                .arg(aborted ? QStringLiteral("aborted") : QStringLiteral("finished"),
+                     reason)
+                .arg(m_txChunkIndex)
+                .arg(m_txChunkCount)
+                .arg(m_txOffsetBytes)
+                .arg(m_txPcm.size());
+    }
+
+    m_txPcm.clear();
+    m_pendingTx = {};
+    m_txOffsetBytes = 0;
+    m_txChunkIndex = 0;
+    m_txChunkCount = 0;
+    m_txRestoreAudioDaxMode = false;
+    m_txRestoreTransmitDax = false;
+    refreshTransmitControls();
+}
+
 void Ax25HfPacketDecodeDialog::appendFrame(const Ax25DecodedFrame& frame)
 {
     if (!frame.fcsOk)
@@ -1046,6 +1347,33 @@ void Ax25HfPacketDecodeDialog::refreshStatus()
                 .arg(m_lastDiagnostics.rmsDbfs, 0, 'f', 1)
                 .arg(m_lastDiagnostics.peakDbfs, 0, 'f', 1)
             : QStringLiteral("No audio yet"));
+    refreshTransmitControls();
+}
+
+void Ax25HfPacketDecodeDialog::refreshTransmitControls()
+{
+    if (!m_txButton)
+        return;
+
+    const bool hfTx = m_hf300Profile && m_hf300Profile->isChecked();
+    const bool hasText = m_txText && !m_txText->text().trimmed().isEmpty();
+    const bool ready = hfTx && hasText && !m_txActive && !m_txPendingStream;
+    m_txButton->setEnabled(ready);
+    if (m_txActive) {
+        m_txButton->setText(QStringLiteral("Transmitting..."));
+    } else if (m_txPendingStream) {
+        m_txButton->setText(QStringLiteral("Preparing..."));
+    } else {
+        m_txButton->setText(QStringLiteral("Transmit"));
+    }
+
+    if (m_txText) {
+        m_txText->setEnabled(!m_txActive && !m_txPendingStream);
+        m_txText->setToolTip(hfTx
+            ? QStringLiteral("Transmit a 300 baud HF AX.25 UI frame. Raw text uses %1>APRS; full SRC>DST,path:payload syntax is also accepted.")
+                .arg(defaultTransmitSource())
+            : QStringLiteral("TX is enabled for 300 baud HF in this pass."));
+    }
 }
 
 void Ax25HfPacketDecodeDialog::setDiagnosticsDebugEnabled(bool enabled, bool persist)
@@ -1102,6 +1430,29 @@ void Ax25HfPacketDecodeDialog::appendSystemLine(const QString& text)
         "<span style=\"color:#8190a3;\">MODEM</span>&nbsp;&nbsp;"
         "<span style=\"color:#9aa7ba;\">%2</span>")
         .arg(utcClock().toHtmlEscaped(), text.toHtmlEscaped()));
+    m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
+}
+
+void Ax25HfPacketDecodeDialog::appendTransmitLine(const Ax25TransmitFrame& frame)
+{
+    if (!m_log)
+        return;
+
+    QString route = frame.source + QStringLiteral(" > ") + frame.destination;
+    if (!frame.path.isEmpty())
+        route += QStringLiteral(",") + frame.path.join(QStringLiteral(","));
+    const QString payload = frame.payloadText.isEmpty()
+        ? QStringLiteral("[%1]").arg(frame.payloadHex)
+        : frame.payloadText;
+
+    m_log->append(QStringLiteral(
+        "<span style=\"color:#63d47a;\">%1</span>&nbsp;&nbsp;"
+        "<span style=\"color:#74df87;\">TX</span>&nbsp;&nbsp;"
+        "<span style=\"color:#c9d3e2;\">%2:</span>&nbsp;&nbsp;"
+        "<span style=\"color:#b5bfce;\">%3</span>")
+        .arg(utcClock().toHtmlEscaped(),
+             route.toHtmlEscaped(),
+             payload.toHtmlEscaped()));
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
 }
 
@@ -1165,6 +1516,38 @@ void Ax25HfPacketDecodeDialog::appendDiagnosticsLine(const Ax25DecoderDiagnostic
         "<span style=\"color:#9aa7ba;\">%2</span>")
         .arg(utcClock().toHtmlEscaped(), line.toHtmlEscaped()));
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
+}
+
+QString Ax25HfPacketDecodeDialog::defaultTransmitSource() const
+{
+    if (m_radio) {
+        const QString callsign = m_radio->callsign().trimmed().toUpper();
+        if (!callsign.isEmpty())
+            return callsign;
+    }
+    return QStringLiteral("NOCALL");
+}
+
+QString Ax25HfPacketDecodeDialog::transmitSliceSummary() const
+{
+    if (!m_radio)
+        return QStringLiteral("no radio");
+
+    for (auto* slice : m_radio->slices()) {
+        if (!slice || !slice->isTxSlice())
+            continue;
+        return QStringLiteral("slice %1 %2 MHz %3")
+            .arg(slice->sliceId())
+            .arg(slice->frequency(), 0, 'f', 6)
+            .arg(slice->mode());
+    }
+    if (m_attachedSlice) {
+        return QStringLiteral("attached slice %1 %2 MHz %3")
+            .arg(m_attachedSlice->sliceId())
+            .arg(m_attachedSlice->frequency(), 0, 'f', 6)
+            .arg(m_attachedSlice->mode());
+    }
+    return QStringLiteral("no TX slice");
 }
 
 QString Ax25HfPacketDecodeDialog::formatTerminalLine(const Ax25DecodedFrame& frame) const

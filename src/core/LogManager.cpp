@@ -65,7 +65,7 @@ LogManager::LogManager()
         {"aether.propforecast", "Propagation",  "Solar and propagation forecast updates"},
         {"aether.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
         {"aether.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},
-        {"aether.ax25",       "Packet Decoder", "AX.25 packet decoder lifecycle, audio, demod, and frame diagnostics"},
+        {"aether.ax25",       "AetherModem", "AX.25 modem lifecycle, RX/TX audio, demod, framing, and packet diagnostics"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.

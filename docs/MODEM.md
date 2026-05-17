@@ -1,6 +1,6 @@
-# AetherModem AX.25 RX Notes
+# AetherModem AX.25 Notes
 
-This file captures the current receive-only 300 baud HF AX.25 decoder bring-up notes for the AetherSDR packet decoder window.
+This file captures the current 300 baud HF AX.25 modem bring-up notes for the AetherSDR AetherModem window.
 
 The working test packet has been:
 
@@ -92,6 +92,25 @@ For current testing, keep receive audio in this rough range:
 - Normal polarity is correct for the tested Dire Wolf A+ / DIGU path.
 - If decodes stop entirely after a sideband or mode change, try Reverse polarity as a tone-sense check.
 
+## Experimental TX Path
+
+The first TX pass is intentionally narrow:
+
+- 300 baud HF AX.25 UI frames only.
+- The transmit field accepts raw payload text or full `SRC>DST,path:payload`
+  monitor syntax.
+- Raw text defaults to `<radio callsign> > APRS` with no digipeater path.
+- AetherModem generates 24 kHz stereo float AFSK, pads it to the VITA packet
+  boundary, and paces it through the app-owned DAX TX stream.
+- The window sets DAX TX routing, keys PTT with a short settle/lead time,
+  feeds the generated audio in 20 ms chunks, then unkeys and restores the
+  previous DAX state.
+
+TX diagnostics in the `aether.ax25` category include packet source/destination,
+path, payload bytes, AX.25 frame bytes, bit count, waveform duration, RMS/peak,
+DAX TX stream id, PTT lead/tail timing, and paced chunk progress when debug is
+enabled.
+
 ## Open Work
 
 The remaining missed packets are mostly AX.25-looking candidates that fail FCS. That means the decoder is often finding packet structure but still has symbol/bit errors before CRC.
@@ -103,5 +122,7 @@ Next work should focus on:
 - reducing dependence on many parallel fixed phase lanes
 - using bad-FCS AX.25-like candidates to diagnose where bit errors cluster
 - possibly adapting lane activation only while the receive gate is open, if CPU becomes a concern
+- validating over-the-air AetherModem TX level, timing, and FCS decode with a
+  second receiver
 
-Out of scope remains TX, KISS, APRS-IS, maps, digipeating, and connected-mode AX.25.
+Out of scope remains KISS, APRS-IS, maps, digipeating, and connected-mode AX.25.

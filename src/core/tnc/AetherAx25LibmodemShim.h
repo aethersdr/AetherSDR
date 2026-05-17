@@ -5,6 +5,7 @@
 #include <QByteArray>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include <memory>
@@ -67,6 +68,38 @@ struct Ax25DecoderDiagnostics {
     int lastRejectFrameBytes{0};
 };
 
+struct Ax25TransmitFrame {
+    QString source;
+    QString destination;
+    QStringList path;
+    quint8 control{0x03};
+    quint8 pid{0xf0};
+    QByteArray payload;
+    QString payloadText;
+    QString payloadHex;
+};
+
+struct Ax25TransmitResult {
+    bool ok{false};
+    QString error;
+    Ax25TransmitFrame frame;
+    QByteArray stereoFloat32Pcm;
+    int sampleRate{0};
+    int baud{0};
+    double markHz{0.0};
+    double spaceHz{0.0};
+    Ax25TonePolarity polarity{Ax25TonePolarity::Normal};
+    int preambleFlags{0};
+    int postambleFlags{0};
+    int frameBytes{0};
+    int bitCount{0};
+    int audioFrames{0};
+    int vitaPacketFrames{0};
+    double durationSeconds{0.0};
+    double rmsDbfs{-120.0};
+    double peakDbfs{-120.0};
+};
+
 Ax25DemodConfig ax25DemodConfigForProfile(
     Ax25ModemProfile profile,
     Ax25TonePolarity polarity = Ax25TonePolarity::Normal);
@@ -90,6 +123,9 @@ public:
                                                int sampleRate);
     QVector<Ax25DecodedFrame> processRecoveredBitsForTest(const QVector<quint8>& bits,
                                                           double quality = 1.0);
+    Ax25TransmitResult buildTransmitAudio(const QString& text,
+                                          const QString& defaultSource,
+                                          const QString& defaultDestination = QStringLiteral("APRS")) const;
 
     Ax25DecoderDiagnostics diagnosticsSnapshot() const;
     QString demodDescription() const;
