@@ -54,10 +54,10 @@ public:
     void recordSHistoryProcessed(double durationMs);
     void recordSHistorySkipped();
 
-    // Test-only seams. When the clock override is non-zero, nowNs() returns
-    // that value instead of consulting steady_clock — lets tests drive
-    // window timing deterministically. resetForTest() zeroes aggregation
-    // state so cases don't bleed into each other.
+    // Test-only seams. When the override is non-zero, nowNs() returns that
+    // value instead of consulting steady_clock so tests can drive window
+    // cadence deterministically. resetForTest() zeroes aggregation state
+    // so cases don't leak into each other through the singleton.
     static void setClockOverrideForTest(qint64 nowNs);
     void resetForTest();
 

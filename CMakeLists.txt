@@ -529,6 +529,7 @@ endif()
 
 set(MODEL_SOURCES
     src/models/RadioModel.cpp
+    src/models/ModelCapabilities.cpp
     src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp
     src/models/PanadapterModel.cpp
@@ -543,6 +544,7 @@ set(MODEL_SOURCES
     src/models/CwxModel.cpp
     src/models/DvkModel.cpp
     src/models/NavtexModel.cpp
+    src/models/FlexWaveformModel.cpp
     src/models/BandSettings.cpp
     src/models/BandPlanManager.cpp
     src/models/XvtrPolicy.cpp
@@ -585,6 +587,7 @@ set(GUI_SOURCES
     src/gui/PersistentDialog.cpp
     src/gui/ProfileManagerDialog.cpp
     src/gui/ProfileImportExportDialog.cpp
+    src/gui/TxBandDialog.cpp
     src/gui/PanadapterApplet.cpp
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
@@ -1314,6 +1317,14 @@ target_include_directories(packet_loss_concealment_test PRIVATE src)
 target_link_libraries(packet_loss_concealment_test PRIVATE Qt6::Core)
 add_test(NAME packet_loss_concealment_test COMMAND packet_loss_concealment_test)
 
+add_executable(model_capabilities_test
+    tests/model_capabilities_test.cpp
+    src/models/ModelCapabilities.cpp
+)
+target_include_directories(model_capabilities_test PRIVATE src)
+target_link_libraries(model_capabilities_test PRIVATE Qt6::Core)
+add_test(NAME model_capabilities_test COMMAND model_capabilities_test)
+
 add_executable(client_quindar_test
     tests/client_quindar_test.cpp
     src/core/ClientQuindarTone.cpp
@@ -1402,6 +1413,13 @@ add_executable(navtex_model_test
 target_include_directories(navtex_model_test PRIVATE src)
 target_link_libraries(navtex_model_test PRIVATE Qt6::Core Qt6::Test)
 
+add_executable(flex_waveform_model_test
+    tests/flex_waveform_model_test.cpp
+    src/models/FlexWaveformModel.cpp
+)
+target_include_directories(flex_waveform_model_test PRIVATE src)
+target_link_libraries(flex_waveform_model_test PRIVATE Qt6::Core Qt6::Test)
+
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp
@@ -1477,21 +1495,17 @@ target_include_directories(ax25_frame_formatter_test PRIVATE src)
 target_link_libraries(ax25_frame_formatter_test PRIVATE Qt6::Core)
 add_test(NAME ax25_frame_formatter_test COMMAND ax25_frame_formatter_test)
 
-# PerfTelemetry unit tests — drive the singleton through its public API
-# with a synthetic clock seam. lcPerf is defined locally inside the test
-# to avoid pulling LogManager and AppSettings.
-add_executable(perf_telemetry_test
-    tests/perf_telemetry_test.cpp
-    src/core/PerfTelemetry.cpp
-)
-target_include_directories(perf_telemetry_test PRIVATE src)
-target_link_libraries(perf_telemetry_test PRIVATE Qt6::Core)
-add_test(NAME perf_telemetry_test COMMAND perf_telemetry_test)
-
 add_executable(ax25_libmodem_shim_test
     tests/ax25_libmodem_shim_test.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    # LogManager.cpp provides lcAx25 (the shim's qCDebug category, #2763);
+    # LogManager.cpp depends on AsyncLogWriter via the m_writer member, so
+    # AppSettings + AsyncLogWriter come along to satisfy the constructor /
+    # destructor chain at link time.
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
 )
 target_include_directories(ax25_libmodem_shim_test PRIVATE src)
 target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core)
@@ -1522,6 +1536,36 @@ if(UNIX)
     target_link_libraries(meter_model_test PRIVATE pthread)
 endif()
 set_target_properties(meter_model_test PROPERTIES AUTOMOC ON)
+
+add_executable(async_log_writer_test
+    tests/async_log_writer_test.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(async_log_writer_test PRIVATE src)
+target_link_libraries(async_log_writer_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(async_log_writer_test PRIVATE pthread)
+endif()
+set_target_properties(async_log_writer_test PROPERTIES AUTOMOC ON)
+
+add_executable(perf_telemetry_test
+    tests/perf_telemetry_test.cpp
+    src/core/PerfTelemetry.cpp
+    # LogManager.cpp owns the lcPerf Q_LOGGING_CATEGORY definition (per
+    # Principle III consolidation, #2770); LogManager has AsyncLogWriter
+    # as a member which transitively needs AppSettings, so all three .cpp
+    # files come along to satisfy the ctor/dtor chain at link time.
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(perf_telemetry_test PRIVATE src)
+target_link_libraries(perf_telemetry_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(perf_telemetry_test PRIVATE pthread)
+endif()
+set_target_properties(perf_telemetry_test PROPERTIES AUTOMOC ON)
+add_test(NAME perf_telemetry_test COMMAND perf_telemetry_test)
 
 add_executable(memory_recall_policy_test
     tests/memory_recall_policy_test.cpp

@@ -1,13 +1,22 @@
 // Unit tests for PerfTelemetry — issue #2500.
 //
-// Covers: disabled hot-path no-op, window aggregation, stall thresholds,
-// drag-aware UI lag, frame-restart counter, percentile-95 boundaries, and
-// window timing — by driving the singleton through its public record* API
-// with a synthetic clock seam (setClockOverrideForTest) and capturing the
-// lcPerf log line via qInstallMessageHandler.
+// Drives the singleton through its public record* API with a synthetic
+// clock seam (setClockOverrideForTest) so window cadence is deterministic
+// without real sleeps. Output is captured via qInstallMessageHandler and
+// matched on key=value field extraction from emitted PerfStall /
+// PerfSummary lines.
 //
-// CMake target `perf_telemetry_test`. Exit 0 = pass.
+// Coverage matches the matrix in the issue body:
+//   - disabled hot-path is a no-op
+//   - window aggregation (count / p95)
+//   - per-window reset isolation
+//   - stall threshold matrix for every record* path
+//   - drag-aware UI lag thresholds (50 ms idle / 33 ms drag)
+//   - frame-restart counter aggregation
+//   - percentile95 boundary cases (empty / single / 100 sorted / 100 reversed)
+//   - 1 s window cadence (no fire at 950 ms, fire at 1100 ms)
 
+#include "core/LogManager.h"
 #include "core/PerfTelemetry.h"
 
 #include <QCoreApplication>
@@ -20,15 +29,6 @@
 #include <functional>
 #include <string>
 #include <vector>
-
-// PerfTelemetry.cpp uses lcPerf via LogManager.h. Standalone tests provide
-// their own definition rather than pulling LogManager (which would drag in
-// AppSettings, AsyncLogWriter, etc.). Default level is QtDebugMsg so the
-// hot path is "enabled" — tests flip rules off when they need the disabled
-// path verified.
-namespace AetherSDR {
-Q_LOGGING_CATEGORY(lcPerf, "aether.perf", QtDebugMsg)
-} // namespace AetherSDR
 
 using AetherSDR::PerfTelemetry;
 
@@ -45,10 +45,7 @@ void messageHandler(QtMsgType, const QMessageLogContext& ctx, const QString& msg
 
 void report(const char* name, bool ok, const std::string& detail = {})
 {
-    std::printf("%s %-58s %s\n",
-                ok ? "[ OK ]" : "[FAIL]",
-                name,
-                detail.c_str());
+    std::printf("%s %-58s %s\n", ok ? "[ OK ]" : "[FAIL]", name, detail.c_str());
     if (!ok) ++g_failed;
 }
 
@@ -57,48 +54,47 @@ void resetCapture()
     g_capturedLines.clear();
 }
 
-QStringList stallLines()
+QStringList linesStartingWith(const char* prefix)
 {
     QStringList out;
     for (const auto& line : g_capturedLines)
-        if (line.startsWith(QLatin1String("PerfStall")))
+        if (line.startsWith(QLatin1String(prefix)))
             out << line;
     return out;
 }
 
-QStringList summaryLines()
-{
-    QStringList out;
-    for (const auto& line : g_capturedLines)
-        if (line.startsWith(QLatin1String("PerfSummary")))
-            out << line;
-    return out;
-}
+QStringList stallLines()   { return linesStartingWith("PerfStall"); }
+QStringList summaryLines() { return linesStartingWith("PerfSummary"); }
 
 QString fieldValue(const QString& line, const QString& key)
 {
     const QStringList parts = line.split(QLatin1Char(' '));
     const QString prefix = key + QLatin1Char('=');
-    for (const auto& part : parts) {
+    for (const auto& part : parts)
         if (part.startsWith(prefix))
             return part.mid(prefix.size());
-    }
     return {};
 }
 
+// Pin the clock to t0, zero singleton state, and clear the captured log
+// buffer. The next record* call will open a fresh window at t0.
 void prime(qint64 t0)
 {
-    // Reset state and pin the clock — the next record call will start a
-    // fresh window at t0.
     PerfTelemetry::setClockOverrideForTest(t0);
     PerfTelemetry::instance().resetForTest();
     resetCapture();
 }
 
-// Advance synthetic clock to the next 1-second boundary and emit a final
-// recordPanFrame so maybeLogSummary fires. Returns the captured summary.
+// Advance the synthetic clock past the 1 s window boundary and emit a
+// recordPanFrame so maybeLogSummary fires. Returns the final captured
+// summary line. The initial recordPanCenterCommand at windowStartNs
+// guarantees a window is open at that time even if the caller has not
+// emitted any aggregated record* calls (this matters for the empty-input
+// percentile case where the panUpdate vector should be empty).
 QString flushSummary(qint64 windowStartNs)
 {
+    PerfTelemetry::setClockOverrideForTest(windowStartNs);
+    PerfTelemetry::instance().recordPanCenterCommand();
     PerfTelemetry::setClockOverrideForTest(windowStartNs + 1'100'000'000LL);
     PerfTelemetry::instance().recordPanFrame();
     const auto summaries = summaryLines();
@@ -124,25 +120,23 @@ void testDisabledHotPath()
     QLoggingCategory::setFilterRules(QStringLiteral("aether.perf.debug=true"));
 }
 
-// --- Window aggregation: count, p95, max ------------------------------------
+// --- Window aggregation -----------------------------------------------------
 
 void testWindowAggregation()
 {
     constexpr qint64 t0 = 5'000'000'000LL;
     prime(t0);
 
-    // Feed 10 panUpdate samples below the stall threshold (8.0 ms) so no
-    // PerfStall lines are emitted — they would otherwise crowd capture.
-    // Values: 1, 2, 3, 4, 5, 6, 7, 7.5, 7.8, 7.9 — all <= 8.0.
+    // 10 samples all <= 8.0 ms (panUpdate stall threshold) so no PerfStall
+    // lines contaminate the capture buffer.
     const std::vector<double> samples = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 7.5, 7.8, 7.9};
     for (double v : samples)
         PerfTelemetry::instance().recordPanUpdate(v);
 
     const QString summary = flushSummary(t0);
-    const bool hasSummary = !summary.isEmpty();
-    report("window aggregation emits a summary", hasSummary);
+    report("window aggregation emits a summary", !summary.isEmpty());
 
-    if (hasSummary) {
+    if (!summary.isEmpty()) {
         // percentile95 for N=10: ceil(10*0.95)-1 = 9, sorted[9] = 7.9
         const QString p95 = fieldValue(summary, QStringLiteral("panUpdateP95Ms"));
         report("panUpdateP95Ms equals 7.9 for 10 sorted samples",
@@ -151,7 +145,7 @@ void testWindowAggregation()
     }
 }
 
-// --- Window resets after summary --------------------------------------------
+// --- Window state does not leak across summaries ----------------------------
 
 void testWindowResetsAfterSummary()
 {
@@ -163,23 +157,21 @@ void testWindowResetsAfterSummary()
     PerfTelemetry::instance().recordPanUpdate(7.0);
     (void)flushSummary(t0);
 
-    // Now drive a fresh window from t0 + 1.1s onward and verify the new
-    // summary doesn't carry the prior window's panUpdate samples.
-    constexpr qint64 t1 = 10'000'000'000LL + 1'100'000'000LL;
+    constexpr qint64 t1 = t0 + 1'100'000'000LL;
     resetCapture();
     PerfTelemetry::setClockOverrideForTest(t1);
     PerfTelemetry::instance().recordPanUpdate(1.0);
 
     const QString summary = flushSummary(t1);
     const QString p95 = fieldValue(summary, QStringLiteral("panUpdateP95Ms"));
-    // Second window had one sample at 1.0, then flushSummary added a
-    // recordPanFrame (which doesn't add to panUpdateMs). So P95 should be 1.0.
+    // Second window saw only 1.0 (the recordPanFrame in flushSummary adds
+    // nothing to panUpdateMs), so the prior 5/6/7 samples must be gone.
     report("window state does not bleed across summaries",
            p95 == QLatin1String("1.0"),
            std::string("got '") + p95.toStdString() + "'");
 }
 
-// --- Stall thresholds -------------------------------------------------------
+// --- Stall threshold matrix -------------------------------------------------
 
 void testStallThresholdMatrix()
 {
@@ -191,9 +183,8 @@ void testStallThresholdMatrix()
         std::function<void(double)> trigger;
     };
 
-    // Threshold values are duplicated from PerfTelemetry.cpp — if either
-    // drifts, these tests must be updated in lockstep with the production
-    // constants.
+    // Thresholds duplicated from PerfTelemetry.cpp; if either side drifts,
+    // these test values must move in lockstep.
     const std::vector<Case> cases = {
         {"panUpdate stall (8.0 ms)", 7.5, 8.5, QStringLiteral("updateSpectrum"),
             [](double v){ PerfTelemetry::instance().recordPanUpdate(v); }},
@@ -211,26 +202,24 @@ void testStallThresholdMatrix()
 
     qint64 t = 100'000'000'000LL;
     for (const auto& c : cases) {
-        // Below-threshold: no stall.
+        // Below threshold: no stall of this kind.
         prime(t);
         c.trigger(c.justUnder);
-        bool sawStallBelow = false;
+        bool sawBelow = false;
         for (const auto& line : stallLines())
             if (fieldValue(line, QStringLiteral("kind")) == c.expectedStallKind)
-                sawStallBelow = true;
-        report((std::string(c.name) + " below threshold: no stall").c_str(),
-               !sawStallBelow);
+                sawBelow = true;
+        report((std::string(c.name) + " below threshold: no stall").c_str(), !sawBelow);
 
-        // Above-threshold: stall fires.
+        // Above threshold: stall fires.
         t += 5'000'000'000LL;
         prime(t);
         c.trigger(c.justOver);
-        bool sawStallAbove = false;
+        bool sawAbove = false;
         for (const auto& line : stallLines())
             if (fieldValue(line, QStringLiteral("kind")) == c.expectedStallKind)
-                sawStallAbove = true;
-        report((std::string(c.name) + " above threshold: stall fires").c_str(),
-               sawStallAbove);
+                sawAbove = true;
+        report((std::string(c.name) + " above threshold: stall fires").c_str(), sawAbove);
 
         t += 5'000'000'000LL;
     }
@@ -238,16 +227,15 @@ void testStallThresholdMatrix()
 
 // --- Drag-aware UI lag thresholds -------------------------------------------
 //
-// Lag is computed as max(0, gap - kHeartbeatIntervalMs) where the heartbeat
-// interval is 50 ms. Idle stall threshold is 50 ms (so gap > 100 ms); drag
-// stall threshold is 33 ms (so gap > 83 ms). A 90 ms gap → lag=40, which
-// trips drag but not idle.
+// lagMs = max(0, gap - kHeartbeatIntervalMs)  where heartbeat interval = 50 ms.
+// Idle stall threshold = 50 ms (so gap > 100 ms).
+// Drag stall threshold = 33 ms (so gap > 83 ms).
 
 void testUiHeartbeatDragThresholds()
 {
     constexpr qint64 t0 = 200'000'000'000LL;
 
-    // Idle, gap = 90 ms → lag = 40 ms < 50 ms idle threshold → no stall.
+    // Idle, gap = 90 ms → lag = 40 ms < 50 → no stall.
     prime(t0);
     PerfTelemetry::instance().setDragActive(false);
     PerfTelemetry::instance().recordUiHeartbeat();
@@ -259,7 +247,7 @@ void testUiHeartbeatDragThresholds()
             sawIdleStall = true;
     report("uiHeartbeat idle 90ms gap (lag=40): no stall", !sawIdleStall);
 
-    // Drag, same 90 ms gap → lag = 40 ms > 33 ms drag threshold → stall.
+    // Drag, same 90 ms gap → lag = 40 ms > 33 → stall fires.
     const qint64 t1 = t0 + 5'000'000'000LL;
     prime(t1);
     PerfTelemetry::instance().setDragActive(true);
@@ -272,7 +260,7 @@ void testUiHeartbeatDragThresholds()
             sawDragStall = true;
     report("uiHeartbeat drag 90ms gap (lag=40): stall fires", sawDragStall);
 
-    // Idle, gap = 110 ms → lag = 60 ms > 50 ms idle threshold → stall.
+    // Idle, gap = 110 ms → lag = 60 ms > 50 → stall fires.
     const qint64 t2 = t1 + 5'000'000'000LL;
     prime(t2);
     PerfTelemetry::instance().setDragActive(false);
@@ -304,12 +292,12 @@ void testFrameRestartCounter()
            std::string("got '") + restarts.toStdString() + "'");
 }
 
-// --- Percentile-95 boundary cases (exercised via the public record path) ----
+// --- Percentile-95 boundary cases (exercised through the public path) ------
 
 void testPercentile95Boundaries()
 {
-    // Empty input — no panUpdate samples, but a recordPanFrame to ensure
-    // maybeLogSummary fires.
+    // Empty input — no panUpdate samples; flushSummary's recordPanFrame
+    // triggers maybeLogSummary without adding any panUpdate samples.
     {
         constexpr qint64 t0 = 400'000'000'000LL;
         prime(t0);
@@ -320,7 +308,7 @@ void testPercentile95Boundaries()
                std::string("got '") + p95.toStdString() + "'");
     }
 
-    // Single value — keep it under the 8 ms stall threshold.
+    // Single value — kept under the 8 ms stall threshold.
     {
         constexpr qint64 t0 = 410'000'000'000LL;
         prime(t0);
@@ -332,10 +320,8 @@ void testPercentile95Boundaries()
                std::string("got '") + p95.toStdString() + "'");
     }
 
-    // 100 values [1..100] — render samples (threshold 16 ms) lets values
-    // 1..15 pass without stall noise; for percentile coverage use frameAge
-    // which has a 100 ms threshold — we want all 100 values under it.
-    // frameAge stall fires at > 100, so 1..100 are all clean.
+    // 100 values [1..100] via frameAge (threshold 100 ms, so 1..100 are
+    // all clean and don't spam PerfStall lines).
     {
         constexpr qint64 t0 = 420'000'000'000LL;
         prime(t0);
@@ -350,8 +336,8 @@ void testPercentile95Boundaries()
                std::string("got '") + p95.toStdString() + "'");
     }
 
-    // Same 100 values fed in reverse — sort inside percentile95 should give
-    // the same result.
+    // Same values fed in reverse — the internal sort must yield the same
+    // result regardless of insertion order.
     {
         constexpr qint64 t0 = 430'000'000'000LL;
         prime(t0);
@@ -366,14 +352,14 @@ void testPercentile95Boundaries()
     }
 }
 
-// --- Window timing ----------------------------------------------------------
+// --- Window timing ---------------------------------------------------------
 
 void testWindowTiming()
 {
     constexpr qint64 t0 = 500'000'000'000LL;
     prime(t0);
 
-    // Samples spread across 950 ms — no summary yet.
+    // Spread samples across 950 ms — summary must not fire yet.
     PerfTelemetry::setClockOverrideForTest(t0);
     PerfTelemetry::instance().recordPanUpdate(1.0);
     PerfTelemetry::setClockOverrideForTest(t0 + 300'000'000LL);
@@ -387,14 +373,13 @@ void testWindowTiming()
            summaryLines().isEmpty(),
            std::string("got ") + std::to_string(summaryLines().size()) + " summary lines");
 
-    // One more sample past the 1 s boundary — summary should fire and
-    // include all five samples in panUpdateP95Ms.
+    // One more sample past the 1 s boundary — summary fires and includes
+    // every sample from the window.
     PerfTelemetry::setClockOverrideForTest(t0 + 1'100'000'000LL);
     PerfTelemetry::instance().recordPanUpdate(5.0);
 
     const auto summaries = summaryLines();
-    report("summary fires once 1s window elapses",
-           !summaries.isEmpty());
+    report("summary fires once 1s window elapses", !summaries.isEmpty());
 
     if (!summaries.isEmpty()) {
         const QString p95 = fieldValue(summaries.last(), QStringLiteral("panUpdateP95Ms"));
