@@ -4182,7 +4182,11 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
         changed = true;
     }
     if (kvs.contains("auto_save")) {
-        m_autoSave = kvs["auto_save"] == "1";
+        const bool newAutoSave = kvs["auto_save"] == "1";
+        if (m_autoSave != newAutoSave) {
+            m_autoSave = newAutoSave;
+            emit autoSaveChanged(newAutoSave);
+        }
         changed = true;
     }
     if (kvs.contains("freq_error_ppb")) {

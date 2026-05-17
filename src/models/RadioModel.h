@@ -429,6 +429,8 @@ signals:
     void interlockNotificationRequested(const QString& message);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
+    // Emitted when the radio reports a change to the global Auto-Save setting.
+    void autoSaveChanged(bool autoSave);
     void profileDatabaseImportingChanged(bool importing);
     void profileDatabaseExportingChanged(bool exporting);
     // Emitted on each successful ping response from the radio.

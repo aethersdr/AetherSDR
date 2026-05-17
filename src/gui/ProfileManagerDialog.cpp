@@ -222,14 +222,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                     box.exec();
                     if (box.clickedButton() == enableBtn) {
                         m_model->sendCommand("profile autosave on");
-                        // Keep the sibling Auto-Save tab checkbox in sync —
-                        // RadioModel has no autoSaveChanged signal, so the
-                        // checkbox would otherwise read stale until the
-                        // dialog is reopened.
-                        if (m_autoSaveTx) {
-                            QSignalBlocker block(m_autoSaveTx);
-                            m_autoSaveTx->setChecked(true);
-                        }
+                        // autoSaveChanged signal will update m_autoSaveTx automatically.
                     }
                     return;
                 }
@@ -295,6 +288,12 @@ QWidget* ProfileManagerDialog::buildAutoSaveTab()
 
     connect(m_autoSaveTx, &QCheckBox::toggled, this, [this](bool on) {
         m_model->sendCommand(QString("profile autosave %1").arg(on ? "on" : "off"));
+    });
+
+    connect(m_model, &RadioModel::autoSaveChanged, this, [this](bool on) {
+        if (!m_autoSaveTx) { return; }
+        QSignalBlocker block(m_autoSaveTx);
+        m_autoSaveTx->setChecked(on);
     });
 
     vbox->addWidget(m_autoSaveTx);
