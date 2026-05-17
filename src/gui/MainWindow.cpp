@@ -13395,8 +13395,31 @@ void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts)
         return;
     }
 
-    const double safeLow = band.lowMhz + kSwrSweepEdgeGuardMhz;
-    const double safeHigh = band.highMhz - kSwrSweepEdgeGuardMhz;
+    // Narrow the sweep range to the active regional band plan when one is
+    // loaded.  BandDefs.h holds ARRL/US allocations only; without this the
+    // sweep transmits outside the user's region (e.g. past 7.200 MHz on
+    // 40 m for IARU R1) and trips the radio's interlock.  Mirrors the
+    // pattern used by AtuPreTuneDialog::recomputeBands. (#2800)
+    double effectiveLow = band.lowMhz;
+    double effectiveHigh = band.highMhz;
+    if (m_bandPlanMgr) {
+        double planLow = std::numeric_limits<double>::infinity();
+        double planHigh = -std::numeric_limits<double>::infinity();
+        for (const auto& seg : m_bandPlanMgr->segments()) {
+            const double mid = (seg.lowMhz + seg.highMhz) / 2.0;
+            if (mid >= band.lowMhz && mid <= band.highMhz) {
+                planLow = std::min(planLow, seg.lowMhz);
+                planHigh = std::max(planHigh, seg.highMhz);
+            }
+        }
+        if (std::isfinite(planLow) && std::isfinite(planHigh) && planHigh > planLow) {
+            effectiveLow = std::max(effectiveLow, planLow);
+            effectiveHigh = std::min(effectiveHigh, planHigh);
+        }
+    }
+
+    const double safeLow = effectiveLow + kSwrSweepEdgeGuardMhz;
+    const double safeHigh = effectiveHigh - kSwrSweepEdgeGuardMhz;
     if (safeHigh <= safeLow) {
         QMessageBox::warning(this, tr("SWR Sweep"),
                              tr("This band is too narrow for the configured SWR sweep guard."));
