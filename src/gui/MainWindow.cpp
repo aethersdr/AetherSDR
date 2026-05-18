@@ -12514,6 +12514,16 @@ void MainWindow::registerShortcutActions()
                 disableSplit();
             }
         });
+    m_shortcutManager.registerAction("cycle_tx_slice", "Cycle TX Slice", "Slice",
+        QKeySequence(), [this]() {
+            const auto slices = m_radioModel.slices();
+            if (slices.size() <= 1) return;
+            int txIdx = 0;
+            for (int i = 0; i < slices.size(); ++i) {
+                if (slices[i]->isTxSlice()) { txIdx = i; break; }
+            }
+            slices[(txIdx + 1) % slices.size()]->setTxSlice(true);
+        });
 
     // ── Filter ──────────────────────────────────────────────────────────
     // Step through the per-mode preset list via RxApplet so LSB/CWL/DIGL/RTTY
