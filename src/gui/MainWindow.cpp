@@ -2993,6 +2993,9 @@ MainWindow::MainWindow(QWidget* parent)
     // live only in the AetherDSP applet, which owns its own
     // *EnabledChanged subscriptions.
 
+    connect(m_appletPanel->rxApplet(), &RxApplet::muteAllToggled,
+            this, &MainWindow::onMuteAllSlicesToggle);
+
 #ifdef HAVE_RADE
     connect(m_appletPanel->rxApplet(), &RxApplet::radeActivated,
             this, [this](bool on, int sliceId) {
@@ -10006,6 +10009,34 @@ void MainWindow::reassertUnmutedSliceAudioForPan(const QString& panId)
     }
 }
 
+void MainWindow::onMuteAllSlicesToggle()
+{
+    const auto slices = m_radioModel.slices();
+
+    // Determine intent: mute all if any owned slice is currently unmuted,
+    // otherwise unmute all.  RadioModel::slices() returns only owned slices
+    // (foreign clients' slices are deleted from m_slices on client_handle).
+    bool anyUnmuted = false;
+    for (const SliceModel* s : slices) {
+#ifdef HAVE_RADE
+        if (s && s->sliceId() == m_radeSliceId) continue;  // RADE owns its mute
+#endif
+        if (s && !s->audioMute()) { anyUnmuted = true; break; }
+    }
+
+    for (SliceModel* s : slices) {
+#ifdef HAVE_RADE
+        // Skip the RADE-managed slice in both directions.
+        // Muting: the RADE slice is already forced muted by activateRADE();
+        //   setAudioMute(true) would no-op, but skipping is clearer intent.
+        // Unmuting: setAudioMute(false) would break RADE's audio gating and
+        //   corrupt m_radePrevMute's restore value on deactivateRADE().
+        if (s && s->sliceId() == m_radeSliceId) continue;
+#endif
+        if (s) s->setAudioMute(anyUnmuted);
+    }
+}
+
 void MainWindow::setActivePanApplet(PanadapterApplet* applet)
 {
     if (applet == m_panApplet) return;
@@ -12466,6 +12497,8 @@ void MainWindow::registerShortcutActions()
             auto* s = activeSlice();
             if (s) s->setAudioMute(!s->audioMute());
         });
+    m_shortcutManager.registerAction("mute_all_slices_toggle", "Mute All Slices", "Audio",
+        QKeySequence(), [this]() { onMuteAllSlicesToggle(); });
     m_shortcutManager.registerAction("master_mute_toggle", "Master Mute Toggle", "Audio",
         QKeySequence(), [this]() {
             m_audio->setMuted(!m_audio->isMuted());
