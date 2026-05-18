@@ -192,6 +192,14 @@ QString clientConnectionSource(const QMap<QString, QString>& kvs)
     return {};
 }
 
+bool isRoutineClientConnectionInfo(const QString& text)
+{
+    static const QRegularExpression clientInfoRe(
+        QStringLiteral(R"(^Client\s+(?:connected|disconnected)\s+from\s+IP\b)"),
+        QRegularExpression::CaseInsensitiveOption);
+    return clientInfoRe.match(text.trimmed()).hasMatch();
+}
+
 QJsonObject panToJson(const PanadapterModel* pan, const QString& activePanId)
 {
     QJsonObject obj;
@@ -964,6 +972,24 @@ void RadioModel::applyKnownGuiClients(const QStringList& handles,
     }
 }
 
+void RadioModel::armClientConnectionNoticeSuppression()
+{
+    m_clientConnectionNoticeTimer.restart();
+}
+
+bool RadioModel::clientConnectionNoticeSuppressionActive() const
+{
+    return m_clientConnectionNoticeTimer.isValid()
+        && m_clientConnectionNoticeTimer.elapsed() < CLIENT_CONNECTION_STARTUP_SUPPRESS_MS;
+}
+
+bool RadioModel::shouldSuppressRadioMessageNotice(const QString& text, MessageSeverity severity) const
+{
+    return severity == MessageSeverity::Info
+        && clientConnectionNoticeSuppressionActive()
+        && isRoutineClientConnectionInfo(text);
+}
+
 bool RadioModel::shouldSuppressClientConnectionNotice(quint32 handle)
 {
     if (handle == 0 || handle == clientHandle())
@@ -974,8 +1000,7 @@ bool RadioModel::shouldSuppressClientConnectionNotice(quint32 handle)
         return true;
     }
 
-    if (m_clientConnectionNoticeTimer.isValid()
-            && m_clientConnectionNoticeTimer.elapsed() < CLIENT_CONNECTION_STARTUP_SUPPRESS_MS) {
+    if (clientConnectionNoticeSuppressionActive()) {
         m_announcedClientConnections.insert(handle);
         return true;
     }
@@ -1602,7 +1627,7 @@ void RadioModel::onConnected()
 {
     qCDebug(lcProtocol) << "RadioModel: connected";
     m_reconnectTimer.stop();
-    m_clientConnectionNoticeTimer.restart();
+    armClientConnectionNoticeSuppression();
     setActivePanResized(false);
 
     // Inhibit system sleep while connected if the user has opted in (#1420)
@@ -1812,6 +1837,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         sendCmd("client low_bw_connect");
 
     sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
+        armClientConnectionNoticeSuppression();
         if (code != 0) {
             qCWarning(lcProtocol) << "RadioModel: client gui failed, code" << Qt::hex << code;
         } else if (!body.trimmed().isEmpty()) {
@@ -1848,6 +1874,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             sendCmd("sub audio all", [this](int, const QString&) {
             sendCmd("sub gps all", [this](int, const QString&) {
             sendCmd("sub apd all", [this](int, const QString&) {
+            armClientConnectionNoticeSuppression();
             sendCmd("sub client all", [this](int, const QString&) {
             sendCmd("sub xvtr all", [this](int, const QString&) {
             // Memory status arrives via normal status handler — no subscription needed.
@@ -2713,7 +2740,21 @@ void RadioModel::handleMemoryStatus(int index, const QMap<QString, QString>& kvs
 
 void RadioModel::onMessageReceived(const ParsedMessage& msg)
 {
+    if (msg.type == MessageType::Handle) {
+        // The radio can send routine "Client connected from IP ..." M-messages
+        // immediately after H<handle>, before onConnected() is delivered to
+        // this object. Arm the startup gate here so our own connect notice stays
+        // silent even on that ordering.
+        armClientConnectionNoticeSuppression();
+        return;
+    }
+
     if (msg.type == MessageType::Message) {
+        if (shouldSuppressRadioMessageNotice(msg.object, msg.severity)) {
+            qCInfo(lcProtocol) << "Radio M-message [Info suppressed during connect]:" << msg.object;
+            return;
+        }
+
         // Log everything to the protocol channel at the matching level so the
         // diagnostic trail is uniform.  The user-facing decision (silent log,
         // warning dialog, error dialog) is made in MainWindow::onRadioMessage

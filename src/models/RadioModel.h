@@ -506,6 +506,9 @@ private:
                               const QStringList& ips,
                               const QStringList& hosts,
                               bool replaceExisting);
+    void armClientConnectionNoticeSuppression();
+    bool clientConnectionNoticeSuppressionActive() const;
+    bool shouldSuppressRadioMessageNotice(const QString& text, MessageSeverity severity) const;
     bool shouldSuppressClientConnectionNotice(quint32 handle);
     void announceClientConnection(quint32 handle,
                                   const QString& source,
