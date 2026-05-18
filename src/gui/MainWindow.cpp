@@ -9747,6 +9747,8 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
     if (panId.isEmpty() || bandwidthMhz <= 0.0)
         return;
 
+    centerMhz = std::max(centerMhz, bandwidthMhz / 2.0);
+
     auto* pan = m_radioModel.panadapter(panId);
     const QString centerStr = QString::number(centerMhz, 'f', 6);
     const QString bandwidthStr = QString::number(bandwidthMhz, 'f', 6);
@@ -10507,6 +10509,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::centerChangeRequested,
             this, [this, applet](double center) {
+        if (const auto* pan = m_radioModel.panadapter(applet->panId()))
+            center = std::max(center, pan->bandwidthMhz() / 2.0);
         m_radioModel.sendCommand(
             QString("display pan set %1 center=%2").arg(applet->panId()).arg(center, 0, 'f', 6));
     });
@@ -12569,6 +12573,7 @@ void MainWindow::registerShortcutActions()
         if (factor < 1.0) {
             newCenter = s->frequency();
         }
+        newCenter = std::max(newCenter, newBw / 2.0);
 
         sw->setFrequencyRange(newCenter, newBw);
         // Keep keyboard zoom on the same combined pan-range path as trackpad /

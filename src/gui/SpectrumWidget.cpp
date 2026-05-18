@@ -405,6 +405,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
             if (ao)
                 newCenter = ao->freqMhz;
         }
+        newCenter = std::max(newCenter, newBw / 2.0);
 
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
@@ -3443,7 +3444,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const double scale = std::pow(2.0, static_cast<double>(-dx) / (width() / 4.0));
         const double newBw = std::clamp(m_bwDragStartBw * scale, m_minBwMhz, m_maxBwMhz);
         const double mouseXFrac = static_cast<double>(m_bwDragStartX) / width() - 0.5;
-        const double zoomCenter = m_bwDragAnchorMhz - mouseXFrac * newBw;
+        const double zoomCenter = std::max(m_bwDragAnchorMhz - mouseXFrac * newBw,
+                                           newBw / 2.0);
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw);
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw)) {
             m_bins.clear();
@@ -3492,7 +3494,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const int dx = static_cast<int>(ev->position().x()) - m_panDragStartX;
         // Dragging right moves the view right → center shifts left
         const double deltaMhz = -(static_cast<double>(dx) / width()) * m_bandwidthMhz;
-        const double newCenter = m_panDragStartCenter + deltaMhz;
+        const double newCenter = std::max(m_panDragStartCenter + deltaMhz,
+                                          m_bandwidthMhz / 2.0);
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
         m_centerMhz = newCenter;
         markOverlayDirty();
@@ -3960,7 +3963,8 @@ bool SpectrumWidget::event(QEvent* ev)
             // Anchor: keep the frequency under the cursor at the same pixel.
             const double mouseXFrac = ge->position().x() / width() - 0.5;
             const double anchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
-            const double newCenter = anchorMhz - mouseXFrac * newBw;
+            const double newCenter = std::max(anchorMhz - mouseXFrac * newBw,
+                                              newBw / 2.0);
             reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
             if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
                 m_bins.clear();
