@@ -289,6 +289,12 @@ void RxApplet::buildUI()
             "QPushButton:pressed { background: #6a2020; }");
         connect(m_muteAllBtn, &QPushButton::clicked, this, [this]() {
             if (!m_radioModel) return;
+            // RadioModel::slices() returns only owned slices (m_slices); foreign
+            // client slices are removed from that list when client_handle arrives.
+            // setAudioMute() no-ops when the value doesn't change, so calling
+            // this while a RADE-managed slice is already muted is safe — it won't
+            // disturb m_radePrevMute because the RADE slice's setAudioMute(true)
+            // returns early at the existing-value guard.
             const QList<SliceModel*> slices = m_radioModel->slices();
             bool anyUnmuted = false;
             for (const SliceModel* s : slices) {

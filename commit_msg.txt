@@ -13,12 +13,20 @@ Toggle logic:
   - All slices already muted → unmutes all slices
 
 The button calls `SliceModel::setAudioMute()` on every slice owned by the
-current RadioModel, so each change sends the correct `slice set N audio_mute=`
-command to the radio and emits `audioMuteChanged` to keep all UI in sync.
+current RadioModel. `RadioModel::slices()` returns only owned slices (m_slices);
+foreign client slices are removed from that list when client_handle arrives, so
+we never attempt to mute another client's slice.
+
+`setAudioMute()` no-ops when the value doesn't change, so pressing mute-all
+while a RADE-managed slice is already muted is safe — it will not disturb
+`m_radePrevMute` because the RADE slice's `setAudioMute(true)` returns early at
+the existing-value guard (SliceModel.cpp:450).
 
 A matching keyboard shortcut ("Mute All Slices", category "Audio") is
-registered in MainWindow as `mute_all_slices_toggle` with no default binding.
-Users can assign a key via the shortcut editor.
+registered in MainWindow as `mute_all_slices_toggle` with no default binding,
+using the existing `registerAction()` / ShortcutManager pattern so it
+participates in the `shortcutInputCaptured()` guard and is configurable via
+ShortcutDialog.
 
 Files: src/gui/RxApplet.h, src/gui/RxApplet.cpp, src/gui/MainWindow.cpp
 
@@ -31,38 +39,52 @@ playing" after a reconnect.
 
 **Root cause**
 
-`RadioModel::onDisconnected()` clears panadapters, meters, and other models
-on disconnect, but does NOT delete `SliceModel` objects. They survive
-reconnect so the UI does not flicker. This is intentional for SmartConnect
-fast-reconnect, but it creates a stale-state hazard.
+`RadioModel::onDisconnected()` (RadioModel.cpp:2238) clears panadapters, meters,
+transmit/tuner/xvtr state, etc., but never touches m_slices — SliceModel objects
+survive reconnect so the UI does not flicker. This is intentional for
+SmartConnect fast-reconnect, but it creates a stale-state hazard.
 
 The radio does not persist `audio_mute` across sessions (see MainWindow.cpp
-migration comment, line ~1265: "The radio does not persist audio_mute, so
+migration block ~line 1264: "The radio does not persist audio_mute, so
 restoring it from AppSettings caused Slice A to start muted on every
-reconnect"). After any disconnect — even a brief network drop — the radio
-resets all slice audio_mute values to 0.
+reconnect"). After any disconnect — even a brief network drop — the radio resets
+all slice audio_mute values to 0.
 
 When the reconnected radio sends the full slice status, it only includes
-non-default values. If `audio_mute` was 0 (default), the key is omitted from
-the status message entirely. The existing `applyStatus()` code only updates
-`m_audioMute` when `kvs.contains("audio_mute")`, so a previously muted
-SliceModel would keep `m_audioMute = true` indefinitely — the button shows 🔇
-and the model reports muted, but the radio is actually playing audio.
+non-default values. Since `audio_mute=0` is the default, the key is omitted
+entirely. The existing `applyStatus()` code only updates `m_audioMute` when
+`kvs.contains("audio_mute")`, so a previously muted SliceModel keeps
+`m_audioMute = true` indefinitely — the button shows 🔇 and the model reports
+muted, but the radio is actually playing audio.
 
-**Fix**
+**Fix** (suggested form from code review by Jeremy KK7GWY)
 
-In `SliceModel::applyStatus()`, the `audio_mute` block is extended with an
-`else if` branch that fires when:
-  - `audio_mute` is absent from the KVS, AND
-  - `in_use=1` is present (marking this as a full status, not a partial update)
+In `SliceModel::applyStatus()`, the `audio_mute` block is extended with:
 
-In that case the code resets `m_audioMute` to `false` and emits
-`audioMuteChanged(false)` if needed. This is safe because:
+    } else if (kvs.value("in_use") == "1" && m_audioMute) {
+        // Full status w/o audio_mute key → radio reset to default (0)
+        // on (re)connect.
+        m_audioMute = false;
+        emit audioMuteChanged(false);
+    }
+
+The `in_use=1` marker is the codebase's canonical signal for a full status
+message. `RadioModel::handleSliceStatus()` (RadioModel.cpp:4337-4341) already
+refuses to create a SliceModel from a status lacking `in_use=1`, so using the
+same marker inside `applyStatus()` is consistent with how the rest of the
+protocol layer treats it.
+
+The `&& m_audioMute` guard in the condition — rather than an inner `if` — avoids
+firing `audioMuteChanged(false)` on every full-status message for slices that
+were already unmuted (the common case on initial creation, where `m_audioMute`
+is constructed false).
+
+The fix is safe because:
   1. The radio is documented as not persisting audio_mute.
   2. Full-status messages (in_use=1) arrive only on initial slice creation or
-     on reconnect — not on the frequent partial-update messages that carry only
-     the key(s) that changed.
-  3. If the radio genuinely wants the slice muted after reconnect it will
-     include audio_mute=1 in the full status, which the existing branch handles.
+     reconnect, not on the frequent partial-update messages that carry only the
+     key(s) that changed.
+  3. If the radio genuinely sends audio_mute=1 after reconnect, it will be
+     present in the KVS and the existing first branch handles it normally.
 
 File: src/models/SliceModel.cpp
