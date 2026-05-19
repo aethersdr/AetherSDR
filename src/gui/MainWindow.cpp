@@ -5554,8 +5554,14 @@ bool MainWindow::handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eve
 
 void MainWindow::showNetworkDiagnosticsDialog()
 {
+#ifdef HAVE_WEBSOCKETS
+    showOrRaisePersistent(m_networkDiagnosticsDialog,
+                          &m_radioModel, m_audio, m_networkDiagnosticsHistory,
+                          m_tciServer);
+#else
     showOrRaisePersistent(m_networkDiagnosticsDialog,
                           &m_radioModel, m_audio, m_networkDiagnosticsHistory);
+#endif
 }
 
 void MainWindow::showAx25HfPacketDecodeDialog()
