@@ -13776,6 +13776,16 @@ void MainWindow::activateRADE(int sliceId)
     auto* s = m_radioModel.slice(sliceId);
     if (!s) return;
 
+    // Capture TX slice owner before potentially moving the badge, so the
+    // failure path can restore it.  -1 means no TX slice existed.
+    int prevTxSliceId = sliceId;
+    if (!s->isTxSlice()) {
+        prevTxSliceId = -1;
+        for (auto* sl : m_radioModel.slices()) {
+            if (sl && sl->isTxSlice()) { prevTxSliceId = sl->sliceId(); break; }
+        }
+    }
+
     // RADE needs to be the TX slice so it can transmit modem audio.
     // Move TX badge to the RADE slice automatically.
     if (!s->isTxSlice())
@@ -13792,6 +13802,9 @@ void MainWindow::activateRADE(int sliceId)
             break;
         }
     }
+    const QString prevMode       = s->mode();
+    const int     prevFilterLow  = s->filterLow();
+    const int     prevFilterHigh = s->filterHigh();
     s->setMode(mode);
     if (mode == "DIGL")
         s->setFilterWidth(-3500, 0);
@@ -13825,7 +13838,21 @@ void MainWindow::activateRADE(int sliceId)
         ok = m_radeEngine->start();
     }, Qt::BlockingQueuedConnection);
     if (!ok) {
-        qWarning() << "MainWindow: failed to start RADE engine";
+        qCWarning(lcRade) << "MainWindow: RADE engine failed to start — restoring slice state";
+        deactivateRADE();
+        if (auto* sl = m_radioModel.slice(sliceId)) {
+            sl->setMode(prevMode);
+            sl->setFilterWidth(prevFilterLow, prevFilterHigh);
+            if (prevTxSliceId != sliceId) {
+                if (prevTxSliceId >= 0) {
+                    if (auto* prevTx = m_radioModel.slice(prevTxSliceId)) {
+                        prevTx->setTxSlice(true);
+                    }
+                } else {
+                    sl->setTxSlice(false);
+                }
+            }
+        }
         return;
     }
     m_radioModel.setDigitalVoiceTxSlice(sliceId);
