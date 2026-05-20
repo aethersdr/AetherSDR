@@ -1380,8 +1380,12 @@ void NetworkDiagnosticsDialog::tciSuppress(const QString& cmd)
         if (it && tciCmdOf(it->text()) == cmd)
             m_tciLogTable->removeRow(r);
     }
+    // Serialise sorted so the on-disk JSON is stable across saves
+    // (QSet iteration order is not deterministic).
+    QStringList sorted(m_tciSuppressed.begin(), m_tciSuppressed.end());
+    sorted.sort();
     QJsonArray arr;
-    for (const QString& s : m_tciSuppressed) arr.append(s);
+    for (const QString& s : sorted) arr.append(s);
     AppSettings::instance().setValue(QStringLiteral("TciMonitorSuppressed"),
         QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
     AppSettings::instance().save();

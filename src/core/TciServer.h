@@ -101,8 +101,10 @@ signals:
     void clientsChanged();
     // Raw TCI text traffic for the embedded monitor. direction is
     // "rx" (received from a client) or "tx" (broadcast to clients).
-    // One emission per logical message; high-rate per-client telemetry
-    // sends are intentionally not emitted to keep the stream readable.
+    // One emission per logical message. Binary audio/IQ frames are
+    // never emitted; high-rate text broadcasts like rx_smeter ARE
+    // emitted but can be muted per-command via the monitor's
+    // suppression list to keep the stream readable.
     void tciMessage(const QString& direction, const QString& text);
     void rxLevel(int channel, float rms);  // 1-based channel, RMS of TCI-gained RX audio
     void txLevel(float rms);                // RMS of post-gain TCI TX audio
