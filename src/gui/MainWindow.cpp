@@ -3499,6 +3499,12 @@ MainWindow::MainWindow(QWidget* parent)
             s->setXit(true, hz);
             return;
         }
+        case FlexWheelMode::AgcT: {
+            auto* s = activeSlice();
+            if (!s) return;
+            s->setAgcThreshold(std::clamp(s->agcThreshold() + steps, 0, 100));
+            return;
+        }
         case FlexWheelMode::Frequency:
         default:
             break;
@@ -3599,6 +3605,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_flexWheelMode = FlexWheelMode::Rit;
         } else if (actionName == "WheelXit") {
             m_flexWheelMode = FlexWheelMode::Xit;
+        } else if (actionName == "WheelAgcT") {
+            m_flexWheelMode = FlexWheelMode::AgcT;
         } else if (actionName.startsWith("CwxF")) {
             bool ok = false;
             int idx = actionName.mid(4).toInt(&ok);
@@ -5610,6 +5618,7 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
         case FlexWheelMode::Power:     return QStringLiteral("Power");
         case FlexWheelMode::Rit:       return QStringLiteral("Rit");
         case FlexWheelMode::Xit:       return QStringLiteral("Xit");
+        case FlexWheelMode::AgcT:      return QStringLiteral("AgcT");
         }
         return QStringLiteral("Unknown");
     };
