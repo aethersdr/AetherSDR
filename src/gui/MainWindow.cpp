@@ -3468,15 +3468,19 @@ MainWindow::MainWindow(QWidget* parent)
         double target = m_flexTargetMhz;
         applyTuneRequest(s, target, TuneIntent::IncrementalTune, "flexcontrol");
     });
+    auto adjustMasterVolume = [this](int deltaPct) {
+        int cur = AppSettings::instance().value("MasterVolume", "100").toInt();
+        int next = std::clamp(cur + deltaPct, 0, 100);
+        if (m_titleBar)
+            m_titleBar->setMasterVolume(next);
+        applyMasterVolume(next);
+    };
     // FlexControl signals (auto-queued from worker → main)
     connect(m_flexControl, &FlexControlManager::tuneSteps,
-            this, [this](int steps) {
+            this, [this, adjustMasterVolume](int steps) {
         switch (m_flexWheelMode) {
         case FlexWheelMode::Volume: {
-            auto* s = activeSlice();
-            if (!s) return;
-            float gain = s->audioGain() + steps * 2.0f;
-            s->setAudioGain(std::clamp(gain, 0.0f, 100.0f));
+            adjustMasterVolume(steps * 2);
             return;
         }
         case FlexWheelMode::Power: {
@@ -3520,7 +3524,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     connect(m_flexControl, &FlexControlManager::buttonPressed,
-            this, [this](int button, int action) {
+            this, [this, adjustMasterVolume](int button, int action) {
         // Knob press while wheel function is active → return to frequency mode (#1354)
         if (button == 4 && action == 0 && m_flexWheelMode != FlexWheelMode::Frequency) {
             m_flexWheelMode = FlexWheelMode::Frequency;
@@ -3582,13 +3586,9 @@ MainWindow::MainWindow(QWidget* parent)
                 s->setAgcMode(modes[(idx + 1) % 4]);
             }
         } else if (actionName == "VolumeUp") {
-            if (auto* s = activeSlice()) {
-                s->setAudioGain(std::min(100.0f, s->audioGain() + 5.0f));
-            }
+            adjustMasterVolume(5);
         } else if (actionName == "VolumeDown") {
-            if (auto* s = activeSlice()) {
-                s->setAudioGain(std::max(0.0f, s->audioGain() - 5.0f));
-            }
+            adjustMasterVolume(-5);
         } else if (actionName == "WheelFrequency") {
             m_flexWheelMode = FlexWheelMode::Frequency;
         } else if (actionName == "WheelVolume") {
