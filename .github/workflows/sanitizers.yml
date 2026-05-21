@@ -19,11 +19,7 @@ jobs:
   sanitize:
     name: ${{ matrix.sanitizer.label }}
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/ten9876/aethersdr-ci:latest
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
+    container: ghcr.io/ten9876/aethersdr-ci:latest
     strategy:
       fail-fast: false
       matrix:
@@ -31,19 +27,25 @@ jobs:
           - id: asan-ubsan
             label: ASan + UBSan
             build_type: Debug
-            # CMakeLists.txt already enables -fsanitize=address on Debug builds.
-            # Layer UBSan on top via CXXFLAGS / LDFLAGS.
-            extra_cxx: "-fsanitize=undefined -fno-sanitize-recover=undefined"
-            extra_ld:  "-fsanitize=undefined"
+            # ASan + UBSan applied via CXXFLAGS / LDFLAGS so the flags
+            # reach every target the build produces — including the
+            # standalone unit-test executables (CMakeLists.txt:1273+),
+            # which are NOT linked against the AetherSDR target and
+            # therefore don't inherit the per-target -fsanitize=address
+            # option set at CMakeLists.txt:1260. Setting the flags here
+            # also lets us drop that coupling in a future
+            # -DAETHERSDR_SANITIZER=... cleanup without touching this
+            # workflow.
+            extra_cxx: "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
+            extra_ld:  "-fsanitize=address,undefined"
             runtime_env: |
               ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0:strict_string_checks=1:detect_stack_use_after_return=1:print_summary=1
               UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0:print_summary=1
               LSAN_OPTIONS=print_suppressions=0
           - id: tsan
             label: TSan
-            # TSan cannot coexist with the Debug-only ASan plumbing in
-            # CMakeLists.txt, so build RelWithDebInfo and inject the TSan
-            # flags ourselves.
+            # TSan cannot coexist with ASan, so build RelWithDebInfo and
+            # inject the TSan flags ourselves.
             build_type: RelWithDebInfo
             extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
             extra_ld:  "-fsanitize=thread"
@@ -51,7 +53,7 @@ jobs:
               TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=7:print_summary=1
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - name: Configure
         env:
@@ -101,7 +103,7 @@ jobs:
 
       - name: Upload sanitizer artifacts
         if: steps.ctest.outputs.exit != '0'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: ${{ matrix.sanitizer.id }}-${{ github.run_id }}
           path: |
@@ -111,7 +113,7 @@ jobs:
 
       - name: Open or update tracking issue
         if: steps.ctest.outputs.exit != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
         env:
           SAN_ID:     ${{ matrix.sanitizer.id }}
           SAN_LABEL:  ${{ matrix.sanitizer.label }}
@@ -142,6 +144,9 @@ jobs:
               'Full `sanitizer.log` attached to the workflow run artifacts.',
             ].join('\n');
 
+            // The label combo (sanitizer + asan-ubsan|tsan) uniquely
+            // identifies the bucket, so the first open match is the
+            // sticky issue regardless of any title edits made by hand.
             const open = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo:  context.repo.repo,
@@ -149,7 +154,7 @@ jobs:
               labels: labels.join(','),
               per_page: 100,
             });
-            const existing = open.data.find(i => i.title === title);
+            const existing = open.data[0];
 
             if (existing) {
               await github.rest.issues.createComment({
