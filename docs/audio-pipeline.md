@@ -209,6 +209,15 @@ When at least one new device appears, AetherSDR shows a selection dialog with
 the current input/output highlighted, newly detected devices marked, and system
 defaults available as explicit choices.
 
+The dialog includes a "Don't ask me again" checkbox. Checking it persists
+`SuppressAudioDeviceNotifications=True` in `AppSettings`; future device-add
+events skip the selection dialog while preserving the existing fallback to
+system default when a selected device disappears.
+
+The same setting is exposed in Radio Setup > Audio > PC Audio Devices as
+"Prompt on Audio Device Changes"; that checkbox is checked when notifications
+are enabled and unchecked when the suppression setting is active.
+
 Accepting the dialog queues `AudioEngine::setInputDevice()` and
 `AudioEngine::setOutputDevice()` onto the audio worker thread. Those setters are
 the only place that persists the chosen device IDs and restarts the affected

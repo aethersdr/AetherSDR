@@ -76,6 +76,9 @@ static const QString kEditStyle =
     "QLineEdit { background: #1a2a3a; border: 1px solid #304050; "
     "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
 
+static constexpr const char* kSuppressAudioDeviceNotificationsKey =
+    "SuppressAudioDeviceNotifications";
+
 static QString normalizedOscillatorValue(QString value)
 {
     value = value.trimmed().toLower();
@@ -1888,6 +1891,21 @@ QWidget* RadioSetupDialog::buildAudioTab()
     outRow->addWidget(outLabel);
     outRow->addWidget(outCombo, 1);
     pcLayout->addLayout(outRow);
+
+    auto* promptCheck = new QCheckBox("Prompt on Audio Device Changes");
+    promptCheck->setStyleSheet("QCheckBox { color: #c8d8e8; font-size: 11px; }");
+    promptCheck->setToolTip("Show the Audio Device Detected dialog when a new PC audio device appears.");
+    const bool suppressAudioDeviceNotifications =
+        AppSettings::instance()
+            .value(kSuppressAudioDeviceNotificationsKey, "False")
+            .toString() == "True";
+    promptCheck->setChecked(!suppressAudioDeviceNotifications);
+    connect(promptCheck, &QCheckBox::toggled, this, [](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue(kSuppressAudioDeviceNotificationsKey, on ? "False" : "True");
+        s.save();
+    });
+    pcLayout->addWidget(promptCheck);
 
     // Wire device changes to AudioEngine
     if (m_audio) {

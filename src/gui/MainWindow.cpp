@@ -227,6 +227,8 @@ constexpr int kSwrSweepTuneStopTimeoutMs = 1800;
 constexpr int kSwrSweepTgxlRestoreTimeoutMs = 3500;
 constexpr int kSwrSweepMaxPoints = 260;
 constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
+constexpr const char* kSuppressAudioDeviceNotificationsKey =
+    "SuppressAudioDeviceNotifications";
 
 QList<QByteArray> audioDeviceIds(const QList<QAudioDevice>& devices)
 {
@@ -6456,6 +6458,18 @@ void MainWindow::handleAudioDeviceListChanged()
         return;
     }
 
+    const bool suppressAudioDeviceNotifications =
+        AppSettings::instance()
+            .value(kSuppressAudioDeviceNotificationsKey, "False")
+            .toString() == "True";
+    if (suppressAudioDeviceNotifications) {
+        if (resetInput || resetOutput)
+            resetMissingAudioDevicesToDefault(resetInput,
+                                              resetOutput,
+                                              reinitializePcInput);
+        return;
+    }
+
     m_audioDeviceDialogOpen = true;
     AudioDeviceChangeDialog dialog(inputDevices,
                                    outputDevices,
@@ -6466,6 +6480,12 @@ void MainWindow::handleAudioDeviceListChanged()
                                    this);
     const int result = dialog.exec();
     m_audioDeviceDialogOpen = false;
+
+    if (dialog.dontAskAgainChecked()) {
+        auto& settings = AppSettings::instance();
+        settings.setValue(kSuppressAudioDeviceNotificationsKey, "True");
+        settings.save();
+    }
 
     if (result == QDialog::Accepted) {
         const QAudioDevice selectedInput = dialog.selectedInputDevice();
