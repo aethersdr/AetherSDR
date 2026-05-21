@@ -1264,7 +1264,13 @@ void SpectrumOverlayMenu::toggleDisplayPanel()
 
 void SpectrumOverlayMenu::setWnbState(bool on, int level)
 {
+    syncWnbState(on, level, false);
+}
+
+void SpectrumOverlayMenu::syncWnbState(bool on, int level, bool updating)
+{
     QSignalBlocker b1(m_wnbBtn), b2(m_wnbSlider);
+    Q_UNUSED(updating);
     m_wnbBtn->setChecked(on);
     m_wnbSlider->setValue(level);
     m_wnbLabel->setText(QString::number(level));

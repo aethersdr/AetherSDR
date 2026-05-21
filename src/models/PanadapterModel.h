@@ -38,6 +38,7 @@ public:
     void setRfGainInfo(int low, int high, int step);
     bool wnbActive() const { return m_wnbActive; }
     int wnbLevel() const { return m_wnbLevel; }
+    bool wnbUpdating() const { return m_wnbUpdating; }
     bool wideActive() const { return m_wideActive; }
     int fps() const { return m_fps; }
     int waterfallLineDuration() const { return m_waterfallLineDuration; }
@@ -68,6 +69,7 @@ signals:
     void rfGainChanged(int gain);
     void rfGainInfoChanged(int low, int high, int step);
     void wnbChanged(bool active, int level);
+    void wnbStateChanged(bool active, int level, bool updating);
     void wideChanged(bool active);
     void fpsChanged(int fps);
     void fpsReported(int fps);
@@ -90,6 +92,7 @@ private:
     int         m_rfGainHigh{32};
     int         m_rfGainStep{8};
     bool        m_wnbActive{false};
+    bool        m_wnbUpdating{false};
     bool        m_wideActive{false};
     int         m_wnbLevel{50};
     int         m_fps{-1};

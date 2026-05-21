@@ -4551,13 +4551,17 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         if (m_centerMhz != m_lastDetectCenter || m_bandwidthMhz != m_lastDetectBw ||
             m_refLevel != m_lastDetectRef || m_dynamicRange != m_lastDetectDyn ||
             m_spectrumFrac != m_lastDetectFrac ||
-            m_wnbActive != m_lastDetectWnb || m_rfGainValue != m_lastDetectRfGain ||
+            m_wnbActive != m_lastDetectWnb ||
+            m_wnbUpdating != m_lastDetectWnbUpdating ||
+            m_rfGainValue != m_lastDetectRfGain ||
             m_wideActive != m_lastDetectWide) {
             markOverlayDirty();
             m_lastDetectCenter = m_centerMhz; m_lastDetectBw = m_bandwidthMhz;
             m_lastDetectRef = m_refLevel; m_lastDetectDyn = m_dynamicRange;
             m_lastDetectFrac = m_spectrumFrac;
-            m_lastDetectWnb = m_wnbActive; m_lastDetectRfGain = m_rfGainValue;
+            m_lastDetectWnb = m_wnbActive;
+            m_lastDetectWnbUpdating = m_wnbUpdating;
+            m_lastDetectRfGain = m_rfGainValue;
             m_lastDetectWide = m_wideActive;
         }
     }
@@ -4726,50 +4730,56 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 if (m_wnbActive || m_rfGainValue != 0 || showProp || m_wideActive) {
                     QFont indFont(p.font().family(), 14, QFont::Bold);
                     p.setFont(indFont);
-                    p.setPen(QColor(0xc8, 0xd8, 0xe8, 180));
+                    const QColor indicatorColor(0xc8, 0xd8, 0xe8, 180);
+                    const QColor wnbDimColor(0xc8, 0xd8, 0xe8, 84);
                     const QFontMetrics fm(indFont);
-                    int y = specRect.top() + fm.ascent() + 4;
-                    // Build combined label (left to right: prop, WNB, RF gain, WIDE), right-align
-                    QString label;
-                    if (showProp) {
-                        label += QString("K%1  A%2  SFI %3")
-                            .arg(m_propKIndex, 0, 'f', 2)
-                            .arg(m_propAIndex)
-                            .arg(m_propSfi);
-                    }
-                    if (m_wnbActive) {
-                        if (!label.isEmpty()) { label += QStringLiteral("   "); }
-                        label += QStringLiteral("WNB");
+                    const int y = specRect.top() + fm.ascent() + 4;
+                    const int rightEdge = specRect.right() - DBM_STRIP_W - 8;
+                    int x = rightEdge;
+                    int leftEdge = rightEdge;
+                    auto drawSegment = [&](const QString& text, const QColor& color) {
+                        const int textWidth = fm.horizontalAdvance(text);
+                        x -= textWidth;
+                        leftEdge = x;
+                        p.setPen(color);
+                        p.drawText(x, y, text);
+                        x -= 10;
+                    };
+
+                    if (m_wideActive) {
+                        drawSegment(QStringLiteral("WIDE"), indicatorColor);
                     }
                     if (m_rfGainValue != 0) {
-                        if (!label.isEmpty()) { label += QStringLiteral("   "); }
-                        label += QStringLiteral("%1%2 dB")
-                            .arg(m_rfGainValue > 0 ? "+" : "").arg(m_rfGainValue);
+                        drawSegment(
+                            QStringLiteral("%1%2 dB")
+                                .arg(m_rfGainValue > 0 ? "+" : "")
+                                .arg(m_rfGainValue),
+                            indicatorColor);
                     }
-                    if (m_wideActive) {
-                        if (!label.isEmpty()) { label += QStringLiteral("   "); }
-                        label += QStringLiteral("WIDE");
+                    if (m_wnbActive) {
+                        drawSegment(QStringLiteral("WNB"),
+                                    m_wnbUpdating ? wnbDimColor : indicatorColor);
                     }
-                    int x = specRect.right() - DBM_STRIP_W - 8 - fm.horizontalAdvance(label);
-                    p.drawText(x, y, label);
-
-                    // Bounding rect of the full strip — used to suppress
-                    // single-click-to-tune when clicking on these indicators (#1564).
-                    m_indicatorStripRect = QRect(x, y - fm.ascent(),
-                                                 fm.horizontalAdvance(label),
-                                                 fm.height());
-
-                    // Store click rect for the prop portion only
                     if (showProp) {
-                        QString propText = QString("K%1  A%2  SFI %3")
+                        const QString propText = QString("K%1  A%2  SFI %3")
                             .arg(m_propKIndex, 0, 'f', 2)
                             .arg(m_propAIndex)
                             .arg(m_propSfi);
-                        int propW = fm.horizontalAdvance(propText);
+                        const int propW = fm.horizontalAdvance(propText);
+                        x -= propW;
+                        leftEdge = x;
+                        p.setPen(indicatorColor);
+                        p.drawText(x, y, propText);
                         m_propClickRect = QRect(x, y - fm.ascent(), propW, fm.height());
                     } else {
                         m_propClickRect = QRect();
                     }
+
+                    // Bounding rect of the full strip — used to suppress
+                    // single-click-to-tune when clicking on these indicators (#1564).
+                    m_indicatorStripRect = QRect(leftEdge, y - fm.ascent(),
+                                                 rightEdge - leftEdge,
+                                                 fm.height());
                 } else {
                     m_indicatorStripRect = QRect();
                 }
@@ -5413,49 +5423,54 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             indFont.setPointSize(18);
             indFont.setBold(true);
             p.setFont(indFont);
-            p.setPen(QColor(255, 255, 255, 84));
+            const QColor indicatorColor(255, 255, 255, 84);
+            const QColor wnbActiveColor(0xc8, 0xd8, 0xe8, 180);
+            const QColor wnbDimColor(0xc8, 0xd8, 0xe8, 84);
 
             const QFontMetrics fm(indFont);
             const int rightEdge = specRect.right() - DBM_STRIP_W - 6;
             const int topY = specRect.top() + fm.ascent() + 2;
 
             int x = rightEdge;
+            int leftEdge = rightEdge;
+            auto drawSegment = [&](const QString& text, const QColor& color) {
+                const int textWidth = fm.horizontalAdvance(text);
+                x -= textWidth;
+                leftEdge = x;
+                p.setPen(color);
+                p.drawText(x, topY, text);
+                x -= 10;
+            };
 
             // WIDE (rightmost)
             if (m_wideActive) {
-                int ww = fm.horizontalAdvance("WIDE");
-                x -= ww;
-                p.drawText(x, topY, "WIDE");
-                x -= 10;
+                drawSegment(QStringLiteral("WIDE"), indicatorColor);
             }
 
             // RF Gain (to the left of WIDE)
             if (m_rfGainValue != 0) {
-                QString gainStr = (m_rfGainValue > 0)
+                const QString gainStr = (m_rfGainValue > 0)
                     ? QString("+%1dB").arg(m_rfGainValue)
                     : QString("%1dB").arg(m_rfGainValue);
-                int gw = fm.horizontalAdvance(gainStr);
-                x -= gw;
-                p.drawText(x, topY, gainStr);
-                x -= 10;  // gap between labels
+                drawSegment(gainStr, indicatorColor);
             }
 
             // WNB (to the left of RF Gain)
             if (m_wnbActive) {
-                int ww = fm.horizontalAdvance("WNB");
-                x -= ww;
-                p.drawText(x, topY, "WNB");
-                x -= 10;
+                drawSegment(QStringLiteral("WNB"),
+                            m_wnbUpdating ? wnbDimColor : wnbActiveColor);
             }
 
             // Prop forecast (leftmost: "K3  A12  SFI 110")
             if (showProp) {
-                QString propStr = QString("K%1  A%2  SFI %3")
+                const QString propStr = QString("K%1  A%2  SFI %3")
                     .arg(m_propKIndex, 0, 'f', 2)
                     .arg(m_propAIndex)
                     .arg(m_propSfi);
-                int pw = fm.horizontalAdvance(propStr);
+                const int pw = fm.horizontalAdvance(propStr);
                 x -= pw;
+                leftEdge = x;
+                p.setPen(indicatorColor);
                 p.drawText(x, topY, propStr);
                 m_propClickRect = QRect(x, topY - fm.ascent(), pw, fm.height());
             } else {
@@ -5464,8 +5479,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
             // Bounding rect of the full strip (prop + WNB + RF Gain + WIDE) —
             // used to suppress single-click-to-tune within (#1564).
-            m_indicatorStripRect = QRect(x, topY - fm.ascent(),
-                                         rightEdge - x, fm.height());
+            m_indicatorStripRect = QRect(leftEdge, topY - fm.ascent(),
+                                         rightEdge - leftEdge, fm.height());
         } else {
             m_indicatorStripRect = QRect();
         }

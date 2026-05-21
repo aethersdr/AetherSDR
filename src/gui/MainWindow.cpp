@@ -2635,6 +2635,17 @@ MainWindow::MainWindow(QWidget* parent)
                 connect(pan, &PanadapterModel::wideChanged,
                         sw, &SpectrumWidget::setWideActive);
                 sw->setWideActive(pan->wideActive());
+                connect(pan, &PanadapterModel::wnbStateChanged,
+                        sw, &SpectrumWidget::syncWnbState,
+                        Qt::UniqueConnection);
+                connect(pan, &PanadapterModel::wnbStateChanged,
+                        sw->overlayMenu(), &SpectrumOverlayMenu::syncWnbState,
+                        Qt::UniqueConnection);
+                sw->syncWnbState(pan->wnbActive(), pan->wnbLevel(),
+                                 pan->wnbUpdating());
+                sw->overlayMenu()->syncWnbState(pan->wnbActive(),
+                                                pan->wnbLevel(),
+                                                pan->wnbUpdating());
             }
             return;
         }
@@ -10380,6 +10391,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         connect(pan, &PanadapterModel::wideChanged,
                 sw, &SpectrumWidget::setWideActive);
         sw->setWideActive(pan->wideActive());
+        connect(pan, &PanadapterModel::wnbStateChanged,
+                sw, &SpectrumWidget::syncWnbState,
+                Qt::UniqueConnection);
+        connect(pan, &PanadapterModel::wnbStateChanged,
+                menu, &SpectrumOverlayMenu::syncWnbState,
+                Qt::UniqueConnection);
+        sw->syncWnbState(pan->wnbActive(), pan->wnbLevel(), pan->wnbUpdating());
+        menu->syncWnbState(pan->wnbActive(), pan->wnbLevel(), pan->wnbUpdating());
 
         // Route confirmed level changes (min_dbm / max_dbm) from the radio to
         // this pan's spectrum widget.  Using the per-pan PanadapterModel signal
@@ -11168,7 +11187,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this, sw, applet](bool on) {
         m_radioModel.sendCommand(
             QString("display pan set %1 wnb=%2").arg(applet->panId()).arg(on ? 1 : 0));
-        sw->setWnbActive(on);
+        // The radio echoes WNB state, level, and normalization progress.
+        // Let PanadapterModel drive the spectrum indicator and related menus.
         auto& s = AppSettings::instance();
         s.setValue(sw->settingsKey("DisplayWnbEnabled"), on ? "True" : "False");
         s.save();

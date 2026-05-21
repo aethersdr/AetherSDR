@@ -62,6 +62,7 @@ public:
     // Connect/disconnect the ANT panel to a slice model.
     void setSlice(SliceModel* slice);
     void setWnbState(bool on, int level);
+    void syncWnbState(bool on, int level, bool updating);
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step);
     void syncNoiseFloorPosition(int pos);
