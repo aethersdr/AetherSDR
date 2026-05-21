@@ -364,6 +364,8 @@ private:
     QTimer            m_audioDeviceChangeTimer;
     QList<QByteArray> m_knownAudioInputIds;
     QList<QByteArray> m_knownAudioOutputIds;
+    QByteArray        m_knownDefaultAudioInputId;
+    QByteArray        m_knownDefaultAudioOutputId;
     bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
     QsoRecorder*      m_qsoRecorder{nullptr};

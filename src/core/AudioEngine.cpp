@@ -1049,7 +1049,10 @@ bool AudioEngine::startSidetoneStream()
     if (!m_outputDevice.isNull()) {
         const auto outputs = QMediaDevices::audioOutputs();
         for (const auto& d : outputs) {
-            if (d.id() == m_outputDevice.id()) { dev = m_outputDevice; break; }
+            if (d.id() == m_outputDevice.id()) { dev = d; break; }
+        }
+        if (dev.id() != m_outputDevice.id()) {
+            qCWarning(lcAudio) << "AudioEngine: saved sidetone output device is unavailable, using the system default output instead";
         }
     }
 
