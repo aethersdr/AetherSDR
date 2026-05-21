@@ -43,6 +43,12 @@ static int rateSliderValueToLineDuration(int sliderValue)
         + WF_LINE_DURATION_OFFSET;
 }
 
+static bool isLoopSelectableRxAntenna(const QString& token)
+{
+    const QString upper = token.trimmed().toUpper();
+    return upper == QStringLiteral("ANT1") || upper == QStringLiteral("ANT2");
+}
+
 // Band button size (slightly smaller for the grid)
 static constexpr int BAND_BTN_W = 48;
 static constexpr int BAND_BTN_H = 26;
@@ -304,13 +310,80 @@ void SpectrumOverlayMenu::buildAntPanel()
 
     connect(m_rxAntCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int index) {
-        if (m_updatingFromModel || !m_slice || index < 0)
+        if (m_updatingFromModel || index < 0)
             return;
         QString ant = m_rxAntCmb->itemData(index).toString();
         if (ant.isEmpty())
             ant = m_rxAntCmb->itemText(index);
-        if (!ant.isEmpty())
+        if (ant.isEmpty())
+            return;
+        if (m_radioModel && !m_panId.isEmpty()) {
+            m_radioModel->sendCommand(
+                QStringLiteral("display pan set %1 rxant=%2").arg(m_panId, ant));
+        } else if (m_slice) {
             m_slice->setRxAntenna(ant);
+        }
+        updateLoopButtonVisibility();
+    });
+
+    // Loop row — SmartSDR exposes this directly below RX ANT on models
+    // with RX loop hardware (FLEX-6500 LoopA, FLEX-6700 LoopA/LoopB).
+    const QString loopBtnStyle =
+        "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
+        "border-radius: 2px; color: #c8d8e8; font-size: 10px; font-weight: bold; }"
+        "QPushButton:checked { background: #0070c0; color: #ffffff; "
+        "border: 1px solid #0090e0; }"
+        "QPushButton:hover { border: 1px solid #0090e0; }";
+    m_loopRow = new QWidget(m_antPanel);
+    m_loopRow->setStyleSheet("QWidget { background: transparent; border: none; }");
+    auto* loopRow = new QHBoxLayout(m_loopRow);
+    loopRow->setContentsMargins(0, 0, 0, 0);
+    loopRow->setSpacing(4);
+    auto* loopLabel = new QLabel("Loop:");
+    loopLabel->setStyleSheet(kLabelStyle);
+    loopLabel->setFixedWidth(kLabelW);
+    loopRow->addWidget(loopLabel);
+    m_loopABtn = new QPushButton("LoopA");
+    m_loopABtn->setCheckable(true);
+    m_loopABtn->setMinimumHeight(22);
+    m_loopABtn->setStyleSheet(loopBtnStyle);
+    loopRow->addWidget(m_loopABtn, 1);
+    m_loopBBtn = new QPushButton("LoopB");
+    m_loopBBtn->setCheckable(true);
+    m_loopBBtn->setMinimumHeight(22);
+    m_loopBBtn->setStyleSheet(loopBtnStyle);
+    loopRow->addWidget(m_loopBBtn, 1);
+    vbox->addWidget(m_loopRow);
+
+    connect(m_loopABtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_updatingFromModel)
+            return;
+        if (on && !isLoopSelectableRxAntenna(currentRxAntennaToken())) {
+            QSignalBlocker blocker(m_loopABtn);
+            m_loopABtn->setChecked(false);
+            return;
+        }
+        if (on && m_loopBBtn && m_loopBBtn->isChecked()) {
+            QSignalBlocker blocker(m_loopBBtn);
+            m_loopBBtn->setChecked(false);
+            emit loopBToggled(false);
+        }
+        emit loopAToggled(on);
+    });
+    connect(m_loopBBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_updatingFromModel)
+            return;
+        if (on && !isLoopSelectableRxAntenna(currentRxAntennaToken())) {
+            QSignalBlocker blocker(m_loopBBtn);
+            m_loopBBtn->setChecked(false);
+            return;
+        }
+        if (on && m_loopABtn && m_loopABtn->isChecked()) {
+            QSignalBlocker blocker(m_loopABtn);
+            m_loopABtn->setChecked(false);
+            emit loopAToggled(false);
+        }
+        emit loopBToggled(on);
     });
 
     // RF Gain row
@@ -355,7 +428,7 @@ void SpectrumOverlayMenu::buildAntPanel()
         if (!m_updatingFromModel && snapped != m_lastEmittedRfGain) {
             m_lastEmittedRfGain = snapped;
             emit rfGainChanged(snapped);
-            if (m_slice)
+            if ((!m_radioModel || m_panId.isEmpty()) && m_slice)
                 m_slice->setRfGain(static_cast<float>(snapped));
         }
     });
@@ -421,7 +494,9 @@ void SpectrumOverlayMenu::buildAntPanel()
     });
 
     // ANT panel tooltips
-    m_rxAntCmb->setToolTip("Select the receive antenna port for this slice.");
+    m_rxAntCmb->setToolTip("Select the receive antenna port for this panadapter.");
+    m_loopABtn->setToolTip("Toggle the LoopA receive loop/preselector path for this panadapter.");
+    m_loopBBtn->setToolTip("Toggle the LoopB receive loop/preselector path for this panadapter.");
     m_rfGainSlider->setToolTip("Adjusts receiver IF gain. Lower values reduce strong-signal overload.");
     m_wnbBtn->setToolTip("Wideband noise blanker \u2014 suppresses correlated impulse noise across the full panadapter bandwidth.");
     m_wnbSlider->setToolTip("Adjusts WNB threshold. Higher values blank more aggressively.");
@@ -429,6 +504,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_swrClearBtn->setToolTip("Clear the displayed SWR sweep trace.");
 
     m_antPanel->setFixedWidth(180);
+    updateLoopButtonVisibility();
     m_antPanel->adjustSize();
 }
 
@@ -438,25 +514,85 @@ void SpectrumOverlayMenu::setAntennaList(const QStringList& ants)
     refreshAntennaCombo();
 }
 
+void SpectrumOverlayMenu::setPanId(const QString& id)
+{
+    if (m_panId == id)
+        return;
+    m_panId = id;
+    wirePanadapterRxAntenna();
+    refreshAntennaCombo();
+}
+
 void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
 {
     if (m_radioModel)
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &SpectrumOverlayMenu::refreshAntennaCombo);
+    if (m_panRxAntennaConnection) {
+        disconnect(m_panRxAntennaConnection);
+        m_panRxAntennaConnection = {};
+    }
+    if (m_panLoopConnection) {
+        disconnect(m_panLoopConnection);
+        m_panLoopConnection = {};
+    }
+    m_panadapter = nullptr;
     m_radioModel = model;
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &SpectrumOverlayMenu::refreshAntennaCombo);
     }
+    wirePanadapterRxAntenna();
     refreshAntennaCombo();
+}
+
+void SpectrumOverlayMenu::wirePanadapterRxAntenna()
+{
+    if (m_panRxAntennaConnection) {
+        disconnect(m_panRxAntennaConnection);
+        m_panRxAntennaConnection = {};
+    }
+    if (m_panLoopConnection) {
+        disconnect(m_panLoopConnection);
+        m_panLoopConnection = {};
+    }
+    m_panadapter = nullptr;
+
+    if (!m_radioModel || m_panId.isEmpty())
+        return;
+
+    m_panadapter = m_radioModel->panadapter(m_panId);
+    if (!m_panadapter)
+        return;
+
+    m_panRxAntennaConnection =
+        connect(m_panadapter, &PanadapterModel::rxAntennaChanged,
+                this, [this](const QString& ant) {
+        m_updatingFromModel = true;
+        setRxAntennaComboToken(ant);
+        m_updatingFromModel = false;
+        updateLoopButtonVisibility();
+    });
+    m_panLoopConnection =
+        connect(m_panadapter, &PanadapterModel::loopChanged,
+                this, &SpectrumOverlayMenu::setLoopState);
+    setLoopState(m_panadapter->loopA(), m_panadapter->loopB());
+}
+
+QString SpectrumOverlayMenu::currentRxAntennaToken() const
+{
+    if (m_panadapter && !m_panadapter->rxAntenna().isEmpty())
+        return m_panadapter->rxAntenna();
+    if (m_slice)
+        return m_slice->rxAntenna();
+    return m_rxAntCmb ? m_rxAntCmb->currentData().toString() : QString();
 }
 
 void SpectrumOverlayMenu::refreshAntennaCombo()
 {
     if (!m_rxAntCmb)
         return;
-    const QString cur = m_slice ? m_slice->rxAntenna()
-                                : m_rxAntCmb->currentData().toString();
+    const QString cur = currentRxAntennaToken();
     QSignalBlocker sb(m_rxAntCmb);
     m_rxAntCmb->clear();
     for (const QString& ant : m_antList) {
@@ -468,6 +604,7 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
         m_rxAntCmb->addItem(label, ant);
     }
     setRxAntennaComboToken(cur);
+    updateLoopButtonVisibility();
 }
 
 void SpectrumOverlayMenu::setRxAntennaComboToken(const QString& token)
@@ -477,9 +614,11 @@ void SpectrumOverlayMenu::setRxAntennaComboToken(const QString& token)
     for (int i = 0; i < m_rxAntCmb->count(); ++i) {
         if (m_rxAntCmb->itemData(i).toString() == token) {
             m_rxAntCmb->setCurrentIndex(i);
+            updateLoopButtonVisibility();
             return;
         }
     }
+    updateLoopButtonVisibility();
 }
 
 void SpectrumOverlayMenu::setSlice(SliceModel* slice)
@@ -490,12 +629,17 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
     if (!m_slice) return;
 
     connect(m_slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
+        if (m_panadapter && !m_panadapter->rxAntenna().isEmpty())
+            return;
         m_updatingFromModel = true;
         setRxAntennaComboToken(ant);
         m_updatingFromModel = false;
+        updateLoopButtonVisibility();
     });
 
     connect(m_slice, &SliceModel::rfGainChanged, this, [this](float gain) {
+        if (m_panadapter)
+            return;
         m_updatingFromModel = true;
         QSignalBlocker sb(m_rfGainSlider);
         m_rfGainSlider->setValue(static_cast<int>(gain));
@@ -514,15 +658,18 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
 
 void SpectrumOverlayMenu::syncAntPanel()
 {
-    if (!m_slice) return;
+    if (!m_slice && !m_panadapter) return;
     m_updatingFromModel = true;
-    setRxAntennaComboToken(m_slice->rxAntenna());
+    setRxAntennaComboToken(currentRxAntennaToken());
+    const int gain = m_panadapter ? m_panadapter->rfGain()
+                                  : static_cast<int>(m_slice->rfGain());
     {
         QSignalBlocker sb(m_rfGainSlider);
-        m_rfGainSlider->setValue(static_cast<int>(m_slice->rfGain()));
+        m_rfGainSlider->setValue(gain);
     }
-    m_rfGainLabel->setText(QString("%1 dB").arg(static_cast<int>(m_slice->rfGain())));
+    m_rfGainLabel->setText(QString("%1 dB").arg(gain));
     m_updatingFromModel = false;
+    updateLoopButtonVisibility();
 }
 
 // ── DAX sub-panel ─────────────────────────────────────────────────────────────
@@ -1292,17 +1439,67 @@ void SpectrumOverlayMenu::setRfGainRange(int low, int high, int step)
             .arg(low).arg(high > 0 ? "+" : "").arg(high).arg(step));
 }
 
+void SpectrumOverlayMenu::setLoopState(bool loopA, bool loopB)
+{
+    if (!m_loopABtn || !m_loopBBtn)
+        return;
+    QSignalBlocker b1(m_loopABtn), b2(m_loopBBtn);
+    m_loopABtn->setChecked(loopA);
+    m_loopBBtn->setChecked(loopB);
+}
+
 void SpectrumOverlayMenu::setRadioCapabilities(ModelCapabilities caps)
 {
-    if (m_radioCapabilities.has4Meters == caps.has4Meters
-        && m_radioCapabilities.has2Meters == caps.has2Meters) {
+    const bool bandCapabilitiesChanged =
+        m_radioCapabilities.has4Meters != caps.has4Meters
+        || m_radioCapabilities.has2Meters != caps.has2Meters;
+    const bool loopCapabilitiesChanged =
+        m_radioCapabilities.hasLoopA != caps.hasLoopA
+        || m_radioCapabilities.hasLoopB != caps.hasLoopB;
+    if (!bandCapabilitiesChanged && !loopCapabilitiesChanged) {
         return;  // No change — skip the rebuild.
     }
     m_radioCapabilities = caps;
+    updateLoopButtonVisibility();
+    if (!bandCapabilitiesChanged)
+        return;
     // Delegate to setXvtrBands which already handles the full rebuild;
     // pass the cached XVTR list so we don't lose configured external
     // transverters when the model capability flags change.
     setXvtrBands(m_lastXvtrBands);
+}
+
+void SpectrumOverlayMenu::updateLoopButtonVisibility()
+{
+    const bool showLoopA = m_radioCapabilities.hasLoopA;
+    const bool showLoopB = m_radioCapabilities.hasLoopB;
+    const bool canSelectLoop = isLoopSelectableRxAntenna(currentRxAntennaToken());
+    if (m_loopABtn) {
+        if (!showLoopA) {
+            QSignalBlocker blocker(m_loopABtn);
+            m_loopABtn->setChecked(false);
+        }
+        m_loopABtn->setVisible(showLoopA);
+        m_loopABtn->setEnabled(showLoopA && canSelectLoop);
+        m_loopABtn->setToolTip(canSelectLoop
+            ? QStringLiteral("Toggle the LoopA receive loop/preselector path for this panadapter.")
+            : QStringLiteral("LoopA requires RX ANT set to ANT1 or ANT2."));
+    }
+    if (m_loopBBtn) {
+        if (!showLoopB) {
+            QSignalBlocker blocker(m_loopBBtn);
+            m_loopBBtn->setChecked(false);
+        }
+        m_loopBBtn->setVisible(showLoopB);
+        m_loopBBtn->setEnabled(showLoopB && canSelectLoop);
+        m_loopBBtn->setToolTip(canSelectLoop
+            ? QStringLiteral("Toggle the LoopB receive loop/preselector path for this panadapter.")
+            : QStringLiteral("LoopB requires RX ANT set to ANT1 or ANT2."));
+    }
+    if (m_loopRow)
+        m_loopRow->setVisible(showLoopA || showLoopB);
+    if (m_antPanel)
+        m_antPanel->adjustSize();
 }
 
 void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)

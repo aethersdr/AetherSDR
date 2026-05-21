@@ -56,7 +56,7 @@ public:
                                   int freqGridSpacingKhz = 0);
 
     // Set the panadapter ID this overlay belongs to (for +RX routing).
-    void setPanId(const QString& id) { m_panId = id; }
+    void setPanId(const QString& id);
     QString panId() const { return m_panId; }
 
     // Connect/disconnect the ANT panel to a slice model.
@@ -64,6 +64,7 @@ public:
     void setWnbState(bool on, int level);
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step);
+    void setLoopState(bool loopA, bool loopB);
     void syncNoiseFloorPosition(int pos);
 
     // Populate XVTR band sub-panel
@@ -123,6 +124,8 @@ signals:
     void xvtrSetupRequested();
     // Emitted when WNB toggle changes.
     void wnbToggled(bool on);
+    void loopAToggled(bool on);
+    void loopBToggled(bool on);
     // Emitted when WNB level slider changes (0–100).
     void wnbLevelChanged(int level);
     // Emitted when RF gain slider changes (panadapter-level).
@@ -139,6 +142,9 @@ signals:
 
 private:
     QString m_panId;
+    QPointer<PanadapterModel> m_panadapter;
+    QMetaObject::Connection m_panRxAntennaConnection;
+    QMetaObject::Connection m_panLoopConnection;
     void toggle();
     void updateLayout();
     void toggleBandPanel();
@@ -155,8 +161,11 @@ private:
     void hideAllSubPanels();
     void showBandPanelAt(const QPoint& pos);
     void syncAntPanel();
+    void wirePanadapterRxAntenna();
     void refreshAntennaCombo();
     void setRxAntennaComboToken(const QString& token);
+    QString currentRxAntennaToken() const;
+    void updateLoopButtonVisibility();
 
     static constexpr int kBtnAddRx = 0;
     static constexpr int kBtnAddTnf = 1;
@@ -188,6 +197,9 @@ private:
     QWidget*     m_antPanel{nullptr};
     bool         m_antPanelVisible{false};
     QComboBox*   m_rxAntCmb{nullptr};
+    QWidget*     m_loopRow{nullptr};
+    QPushButton* m_loopABtn{nullptr};
+    QPushButton* m_loopBBtn{nullptr};
     QSlider*     m_rfGainSlider{nullptr};
     QLabel*      m_rfGainLabel{nullptr};
     QPushButton* m_wnbBtn{nullptr};
