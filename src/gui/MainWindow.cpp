@@ -77,6 +77,7 @@
 #include "SwrSweepLicenseDialog.h"
 #include "DxClusterDialog.h"
 #include "Ax25HfPacketDecodeDialog.h"
+#include "FlexControlDialog.h"
 #include "CwxPanel.h"
 #include "DvkPanel.h"
 #include "core/DvkWavTransfer.h"
@@ -292,6 +293,49 @@ bool memoryRevealTargetMatches(double actualMhz, double targetMhz)
 {
     return targetMhz <= 0.0
         || std::abs(actualMhz - targetMhz) <= kMemoryRevealTargetToleranceMhz;
+}
+
+bool flexWheelModeForAction(const QString& actionName, FlexWheelMode& mode)
+{
+    if (actionName == QLatin1String("WheelFrequency")) {
+        mode = FlexWheelMode::Frequency;
+    } else if (actionName == QLatin1String("WheelVolume")) {
+        mode = FlexWheelMode::Volume;
+    } else if (actionName == QLatin1String("WheelPower")) {
+        mode = FlexWheelMode::Power;
+    } else if (actionName == QLatin1String("WheelRit")) {
+        mode = FlexWheelMode::Rit;
+    } else if (actionName == QLatin1String("WheelXit")) {
+        mode = FlexWheelMode::Xit;
+    } else if (actionName == QLatin1String("WheelMasterAf")) {
+        mode = FlexWheelMode::MasterAf;
+    } else if (actionName == QLatin1String("WheelHeadphoneVolume")) {
+        mode = FlexWheelMode::HeadphoneVolume;
+    } else if (actionName == QLatin1String("WheelAgct")) {
+        mode = FlexWheelMode::Agct;
+    } else if (actionName == QLatin1String("WheelApf")) {
+        mode = FlexWheelMode::Apf;
+    } else if (actionName == QLatin1String("WheelCwSpeed")) {
+        mode = FlexWheelMode::CwSpeed;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+QString flexControlButtonAction(int button, int action)
+{
+    static const char* defaults[4][3] = {
+        {"StepUp",     "StepDown",     "None"},
+        {"ToggleMox",  "ToggleTune",   "None"},
+        {"ToggleMute", "ToggleLock",   "None"},
+        {"StepUp",     "StepDown",     "None"},
+    };
+    const char* fallback = (button >= 1 && button <= 4 && action >= 0 && action <= 2)
+                               ? defaults[button - 1][action] : "None";
+    return AppSettings::instance()
+        .value(QString("FlexControlBtn%1Action%2").arg(button).arg(action), fallback)
+        .toString();
 }
 
 int panCountForLayoutId(const QString& layoutId)
@@ -3013,6 +3057,8 @@ MainWindow::MainWindow(QWidget* parent)
         auto& settings = AppSettings::instance();
         settings.setValue("TuningStepSize", QString::number(step));
         settings.save();
+        if (m_flexControlDialog)
+            m_flexControlDialog->setStepSize(step);
     });
     int savedStep = AppSettings::instance().value("TuningStepSize", "100").toInt();
     for (auto* a : m_panStack->allApplets()) a->spectrumWidget()->setStepSize(savedStep);
@@ -3428,6 +3474,19 @@ MainWindow::MainWindow(QWidget* parent)
     m_extCtrlThread = new QThread(this);
     m_extCtrlThread->setObjectName("ExtControllers");
 
+    // Shared FlexControl coalescing for the USB device and the virtual
+    // FlexControl dialog. The timer stays on the main thread because it
+    // reads the active slice and updates UI state.
+    m_flexCoalesceTimer.setSingleShot(true);
+    m_flexCoalesceTimer.setInterval(20);
+    connect(&m_flexCoalesceTimer, &QTimer::timeout, this, [this]() {
+        if (m_flexTargetMhz < 0.0) return;
+        auto* s = activeSlice();
+        if (!s || s->isLocked()) { m_flexTargetMhz = -1.0; return; }
+        const double target = m_flexTargetMhz;
+        applyTuneRequest(s, target, TuneIntent::IncrementalTune, "flexcontrol");
+    });
+
 #ifdef HAVE_SERIALPORT
     m_serialPort = new SerialPortController;  // no parent — moved to thread
     m_serialPort->moveToThread(m_extCtrlThread);
@@ -3458,153 +3517,28 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // FlexControl coalesce timer stays on main thread (accesses activeSlice)
-    m_flexCoalesceTimer.setSingleShot(true);
-    m_flexCoalesceTimer.setInterval(20);
-    connect(&m_flexCoalesceTimer, &QTimer::timeout, this, [this]() {
-        if (m_flexTargetMhz < 0.0) return;
-        auto* s = activeSlice();
-        if (!s || s->isLocked()) { m_flexTargetMhz = -1.0; return; }
-        double target = m_flexTargetMhz;
-        applyTuneRequest(s, target, TuneIntent::IncrementalTune, "flexcontrol");
-    });
     // FlexControl signals (auto-queued from worker → main)
     connect(m_flexControl, &FlexControlManager::tuneSteps,
-            this, [this](int steps) {
-        switch (m_flexWheelMode) {
-        case FlexWheelMode::Volume: {
-            auto* s = activeSlice();
-            if (!s) return;
-            float gain = s->audioGain() + steps * 2.0f;
-            s->setAudioGain(std::clamp(gain, 0.0f, 100.0f));
-            return;
-        }
-        case FlexWheelMode::Power: {
-            auto& tx = m_radioModel.transmitModel();
-            int power = tx.rfPower() + steps;
-            tx.setRfPower(std::clamp(power, 0, 100));
-            return;
-        }
-        case FlexWheelMode::Rit: {
-            auto* s = activeSlice();
-            if (!s) return;
-            int hz = std::clamp(s->ritFreq() + steps * 10, -9999, 9999);
-            s->setRit(true, hz);
-            return;
-        }
-        case FlexWheelMode::Xit: {
-            auto* s = activeSlice();
-            if (!s) return;
-            int hz = std::clamp(s->xitFreq() + steps * 10, -9999, 9999);
-            s->setXit(true, hz);
-            return;
-        }
-        case FlexWheelMode::Frequency:
-        default:
-            break;
-        }
-        // Frequency mode (default)
-        auto* s = activeSlice();
-        if (!s || s->isLocked()) return;
-        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
-        // Initialize target from slice on first step or after external QSY (#1098)
-        if (m_flexTargetMhz < 0.0 ||
-            (!m_flexCoalesceTimer.isActive() &&
-             std::abs(m_flexTargetMhz - s->frequency()) > 0.001))
-            m_flexTargetMhz = s->frequency();
-        m_flexTargetMhz += steps * stepHz / 1e6;
-        // Optimistic VFO display update — immediate visual feedback
-        if (spectrum()) spectrum()->setVfoFrequency(m_flexTargetMhz);
-        if (!m_flexCoalesceTimer.isActive())
-            m_flexCoalesceTimer.start();
-    });
+            this, &MainWindow::handleFlexControlTuneSteps);
 
     connect(m_flexControl, &FlexControlManager::buttonPressed,
+            this, &MainWindow::handleFlexControlButton);
+    connect(m_flexControl, &FlexControlManager::buttonPressed,
             this, [this](int button, int action) {
-        // Knob press while wheel function is active → return to frequency mode (#1354)
-        if (button == 4 && action == 0 && m_flexWheelMode != FlexWheelMode::Frequency) {
-            m_flexWheelMode = FlexWheelMode::Frequency;
-            return;
-        }
-        QString key = QString("FlexControlBtn%1Action%2").arg(button).arg(action);
-        auto& settings = AppSettings::instance();
-        static const char* defaults[4][3] = {
-            {"StepUp",     "StepDown",     "None"},
-            {"ToggleMox",  "ToggleTune",   "None"},
-            {"ToggleMute", "ToggleLock",   "None"},
-            {"StepUp",     "StepDown",     "None"},  // Knob button
-        };
-        const char* def = (button >= 1 && button <= 4 && action >= 0 && action <= 2)
-                          ? defaults[button-1][action] : "None";
-        QString actionName = settings.value(key, def).toString();
+        if (m_flexControlDialog)
+            m_flexControlDialog->reflectButtonPress(button, action);
+    });
 
-        if (actionName == "StepUp") {
-            if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepUp();
-        } else if (actionName == "StepDown") {
-            if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepDown();
-        } else if (actionName == "ToggleMox") {
-            m_radioModel.setTransmit(!m_radioModel.transmitModel().isTransmitting());
-        } else if (actionName == "ToggleTune") {
-            if (m_radioModel.transmitModel().isTuning())
-                m_radioModel.transmitModel().stopTune();
-            else
-                m_radioModel.transmitModel().startTune();
-        } else if (actionName == "ToggleMute") {
-            m_audio->setMuted(!m_audio->isMuted());
-        } else if (actionName == "ToggleLock") {
-            if (auto* s = activeSlice()) s->setLocked(!s->isLocked());
-        } else if (actionName == "NextSlice") {
-            const auto& slices = m_radioModel.slices();
-            if (slices.size() > 1) {
-                int idx = 0;
-                for (int i = 0; i < slices.size(); ++i) {
-                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
-                }
-                setActiveSlice(slices[(idx + 1) % slices.size()]->sliceId());
-            }
-        } else if (actionName == "PrevSlice") {
-            const auto& slices = m_radioModel.slices();
-            if (slices.size() > 1) {
-                int idx = 0;
-                for (int i = 0; i < slices.size(); ++i) {
-                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
-                }
-                setActiveSlice(slices[(idx - 1 + slices.size()) % slices.size()]->sliceId());
-            }
-        } else if (actionName == "ToggleAgc") {
-            if (auto* s = activeSlice()) {
-                static const char* modes[] = {"off", "slow", "med", "fast"};
-                QString cur = s->agcMode().toLower();
-                int idx = 0;
-                for (int i = 0; i < 4; ++i) {
-                    if (cur == modes[i]) { idx = i; break; }
-                }
-                s->setAgcMode(modes[(idx + 1) % 4]);
-            }
-        } else if (actionName == "VolumeUp") {
-            if (auto* s = activeSlice()) {
-                s->setAudioGain(std::min(100.0f, s->audioGain() + 5.0f));
-            }
-        } else if (actionName == "VolumeDown") {
-            if (auto* s = activeSlice()) {
-                s->setAudioGain(std::max(0.0f, s->audioGain() - 5.0f));
-            }
-        } else if (actionName == "WheelFrequency") {
-            m_flexWheelMode = FlexWheelMode::Frequency;
-        } else if (actionName == "WheelVolume") {
-            m_flexWheelMode = FlexWheelMode::Volume;
-        } else if (actionName == "WheelPower") {
-            m_flexWheelMode = FlexWheelMode::Power;
-        } else if (actionName == "WheelRit") {
-            m_flexWheelMode = FlexWheelMode::Rit;
-        } else if (actionName == "WheelXit") {
-            m_flexWheelMode = FlexWheelMode::Xit;
-        } else if (actionName.startsWith("CwxF")) {
-            bool ok = false;
-            int idx = actionName.mid(4).toInt(&ok);
-            if (ok && idx >= 1 && idx <= 12)
-                m_radioModel.cwxModel().sendMacro(idx);
-        }
+    connect(m_flexControl, &FlexControlManager::connectionChanged,
+            this, [this](bool connected) {
+        m_flexControlConnected = connected;
+        const QString port = connected && m_flexControl
+            ? m_flexControl->portName()
+            : QString();
+        if (m_flexControlDialog)
+            m_flexControlDialog->setPhysicalReady(connected, port);
+        if (m_radioSetupDialog)
+            m_radioSetupDialog->setFlexControlConnectionStatus(connected, port);
     });
 #endif
 
@@ -5081,7 +5015,32 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
 #ifdef HAVE_SERIALPORT
     connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
         QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
+        auto& fcs = AppSettings::instance();
+        const bool fcOpen = fcs.value("FlexControlOpen", "False").toString() == "True";
+        const QString fcPort = fcs.value("FlexControlPort").toString();
+        const bool fcInvert = fcs.value("FlexControlInvertDir", "False").toString() == "True";
+        QMetaObject::invokeMethod(m_flexControl, [this, fcOpen, fcPort, fcInvert] {
+            if (fcOpen) {
+                if (fcPort.isEmpty()) {
+                    if (m_flexControl->isOpen())
+                        m_flexControl->close();
+                } else if (!m_flexControl->isOpen() || m_flexControl->portName() != fcPort) {
+                    if (m_flexControl->isOpen())
+                        m_flexControl->close();
+                    m_flexControl->open(fcPort);
+                }
+            } else if (m_flexControl->isOpen()) {
+                m_flexControl->close();
+            }
+            m_flexControl->setInvertDirection(fcInvert);
+        });
+        if (m_flexControlDialog)
+            m_flexControlDialog->refreshButtonActions();
+        syncFlexControlIndicatorForSettings();
     });
+    dlg->setFlexControlConnectionStatus(
+        m_flexControlConnected,
+        m_flexControlConnected && m_flexControl ? m_flexControl->portName() : QString());
 #endif
     // Toggle of SliceLetterDisplay → repaint every slice-letter widget
     // by re-emitting letterChanged on each slice (#2606).
@@ -5101,8 +5060,14 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         bool fcInvert = fcs.value("FlexControlInvertDir", "False").toString() == "True";
         QMetaObject::invokeMethod(m_flexControl, [this, fcOpen, fcPort, fcInvert] {
             if (fcOpen) {
-                if (!m_flexControl->isOpen() && !fcPort.isEmpty())
+                if (fcPort.isEmpty()) {
+                    if (m_flexControl->isOpen())
+                        m_flexControl->close();
+                } else if (!m_flexControl->isOpen() || m_flexControl->portName() != fcPort) {
+                    if (m_flexControl->isOpen())
+                        m_flexControl->close();
                     m_flexControl->open(fcPort);
+                }
             } else {
                 if (m_flexControl->isOpen()) m_flexControl->close();
             }
@@ -5566,6 +5531,376 @@ void MainWindow::showAx25HfPacketDecodeDialog()
         m_ax25HfPacketDecodeDialog->setAttachedSlice(slice);
 }
 
+void MainWindow::showFlexControlDialog()
+{
+    const bool wasFresh = !m_flexControlDialog;
+    showOrRaisePersistent(m_flexControlDialog);
+    if (wasFresh && m_flexControlDialog) {
+        connect(m_flexControlDialog, &FlexControlDialog::virtualWheelSteps,
+                this, &MainWindow::handleVirtualFlexControlWheel);
+        connect(m_flexControlDialog, &FlexControlDialog::virtualButtonPressed,
+                this, &MainWindow::handleFlexControlButton);
+        connect(m_flexControlDialog, &FlexControlDialog::virtualButtonPressed,
+                this, [this](int button, int action) {
+            if (m_flexControlDialog)
+                m_flexControlDialog->reflectButtonPress(button, action);
+        });
+        connect(m_flexControlDialog, &FlexControlDialog::flexControlSettingsChanged,
+                this, [this] {
+            if (m_radioSetupDialog)
+                m_radioSetupDialog->refreshFlexControlButtonActions();
+            syncFlexControlIndicatorForSettings();
+#ifdef HAVE_SERIALPORT
+            const bool invert = AppSettings::instance()
+                .value("FlexControlInvertDir", "False").toString() == "True";
+            QMetaObject::invokeMethod(m_flexControl, [this, invert] {
+                m_flexControl->setInvertDirection(invert);
+            });
+#endif
+        });
+        connect(m_flexControlDialog, &FlexControlDialog::physicalDetectRequested,
+                this, [this] {
+#ifdef HAVE_SERIALPORT
+            const QString port = FlexControlManager::detectPort();
+            if (port.isEmpty()) {
+                m_flexControlConnected = false;
+                if (m_flexControlDialog)
+                    m_flexControlDialog->setPhysicalReady(false);
+                if (m_radioSetupDialog)
+                    m_radioSetupDialog->setFlexControlConnectionStatus(false);
+                return;
+            }
+
+            auto& settings = AppSettings::instance();
+            settings.setValue("FlexControlPort", port);
+            settings.setValue("FlexControlOpen", "True");
+            settings.save();
+
+            const bool invert = settings.value("FlexControlInvertDir", "False").toString() == "True";
+            QMetaObject::invokeMethod(m_flexControl, [this, port, invert] {
+                m_flexControl->setInvertDirection(invert);
+                m_flexControl->open(port);
+            });
+#else
+            if (m_flexControlDialog)
+                m_flexControlDialog->setPhysicalReady(false);
+#endif
+        });
+        connect(m_flexControlDialog, &FlexControlDialog::physicalDisconnectRequested,
+                this, [this] {
+#ifdef HAVE_SERIALPORT
+            auto& settings = AppSettings::instance();
+            settings.setValue("FlexControlOpen", "False");
+            settings.save();
+            m_flexControlConnected = false;
+            if (m_flexControlDialog)
+                m_flexControlDialog->setPhysicalReady(false);
+            if (m_radioSetupDialog)
+                m_radioSetupDialog->setFlexControlConnectionStatus(false);
+            QMetaObject::invokeMethod(m_flexControl, [this] {
+                if (m_flexControl->isOpen())
+                    m_flexControl->close();
+            });
+#endif
+        });
+    }
+    syncFlexControlDialog();
+}
+
+void MainWindow::syncFlexControlDialog()
+{
+    if (!m_flexControlDialog)
+        return;
+
+    auto* s = activeSlice();
+    m_flexControlDialog->setSlice(s);
+#ifdef HAVE_SERIALPORT
+    m_flexControlDialog->setPhysicalReady(
+        m_flexControlConnected,
+        m_flexControlConnected && m_flexControl ? m_flexControl->portName() : QString());
+#else
+    m_flexControlDialog->setPhysicalReady(false);
+#endif
+    int stepHz = 100;
+    if (auto* sw = spectrumForSlice(s))
+        stepHz = sw->stepSize();
+    else if (s && s->stepHz() > 0)
+        stepHz = s->stepHz();
+    m_flexControlDialog->setStepSize(stepHz);
+    m_flexControlDialog->setActiveAuxButton(m_flexActiveLedButton);
+}
+
+void MainWindow::syncFlexControlIndicatorForSettings()
+{
+    if (m_flexActiveLedButton < 1 || m_flexActiveLedButton > 3) {
+        syncFlexControlDialog();
+        return;
+    }
+
+    FlexWheelMode mode = FlexWheelMode::Frequency;
+    if (flexWheelModeForAction(flexControlButtonAction(m_flexActiveLedButton, 0), mode)) {
+        m_flexWheelMode = mode;
+        setFlexControlHardwareIndicator(m_flexActiveLedButton);
+    } else {
+        m_flexWheelMode = FlexWheelMode::Frequency;
+        setFlexControlHardwareIndicator(0);
+    }
+    syncFlexControlDialog();
+}
+
+void MainWindow::setFlexControlHardwareIndicator(int button)
+{
+    if (button < 1 || button > 3) {
+        button = 0;
+    }
+    m_flexActiveLedButton = button;
+#ifdef HAVE_SERIALPORT
+    if (m_flexControl) {
+        QMetaObject::invokeMethod(m_flexControl, [this, button] {
+            m_flexControl->setActiveLedButton(button);
+        });
+    }
+#else
+    Q_UNUSED(button);
+#endif
+}
+
+void MainWindow::handleFlexControlTuneSteps(int steps)
+{
+    switch (m_flexWheelMode) {
+    case FlexWheelMode::Frequency:
+        applyFlexControlWheelAction(QStringLiteral("WheelFrequency"), steps);
+        break;
+    case FlexWheelMode::Volume:
+        applyFlexControlWheelAction(QStringLiteral("WheelVolume"), steps);
+        break;
+    case FlexWheelMode::Power:
+        applyFlexControlWheelAction(QStringLiteral("WheelPower"), steps);
+        break;
+    case FlexWheelMode::Rit:
+        applyFlexControlWheelAction(QStringLiteral("WheelRit"), steps);
+        break;
+    case FlexWheelMode::Xit:
+        applyFlexControlWheelAction(QStringLiteral("WheelXit"), steps);
+        break;
+    case FlexWheelMode::MasterAf:
+        applyFlexControlWheelAction(QStringLiteral("WheelMasterAf"), steps);
+        break;
+    case FlexWheelMode::HeadphoneVolume:
+        applyFlexControlWheelAction(QStringLiteral("WheelHeadphoneVolume"), steps);
+        break;
+    case FlexWheelMode::Agct:
+        applyFlexControlWheelAction(QStringLiteral("WheelAgct"), steps);
+        break;
+    case FlexWheelMode::Apf:
+        applyFlexControlWheelAction(QStringLiteral("WheelApf"), steps);
+        break;
+    case FlexWheelMode::CwSpeed:
+        applyFlexControlWheelAction(QStringLiteral("WheelCwSpeed"), steps);
+        break;
+    }
+}
+
+void MainWindow::handleFlexControlButton(int button, int action)
+{
+    // Knob press while a wheel function is active returns to frequency mode (#1354).
+    if (button == 4 && action == 0 && m_flexWheelMode != FlexWheelMode::Frequency) {
+        m_flexWheelMode = FlexWheelMode::Frequency;
+        setFlexControlHardwareIndicator(0);
+        syncFlexControlDialog();
+        return;
+    }
+
+    const QString actionName = flexControlButtonAction(button, action);
+    FlexWheelMode requestedWheelMode = FlexWheelMode::Frequency;
+    const bool actionControlsWheel = flexWheelModeForAction(actionName, requestedWheelMode);
+    if (button >= 1 && button <= 3 && action == 0 && !actionControlsWheel) {
+        m_flexWheelMode = FlexWheelMode::Frequency;
+        setFlexControlHardwareIndicator(0);
+    }
+
+    if (actionName == "StepUp") {
+        if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepUp();
+    } else if (actionName == "StepDown") {
+        if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepDown();
+    } else if (actionName == "ToggleMox") {
+        m_radioModel.setTransmit(!m_radioModel.transmitModel().isTransmitting());
+    } else if (actionName == "ToggleTune") {
+        if (m_radioModel.transmitModel().isTuning())
+            m_radioModel.transmitModel().stopTune();
+        else
+            m_radioModel.transmitModel().startTune();
+    } else if (actionName == "ToggleMute") {
+        m_audio->setMuted(!m_audio->isMuted());
+    } else if (actionName == "ToggleLock") {
+        if (auto* s = activeSlice()) s->setLocked(!s->isLocked());
+    } else if (actionName == "ClearRit") {
+        if (auto* s = activeSlice()) s->setRit(s->ritOn(), 0);
+    } else if (actionName == "ClearXit") {
+        if (auto* s = activeSlice()) s->setXit(s->xitOn(), 0);
+    } else if (actionName == "ToggleApf") {
+        if (auto* s = activeSlice()) s->setApf(!s->apfOn());
+    } else if (actionName == "BandZoom") {
+        auto* s = activeSlice();
+        if (!s) return;
+        const QString panId = !s->panId().isEmpty()
+            ? s->panId()
+            : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+        if (panId.isEmpty()) return;
+        m_flexVirtualBandZoomOn = !m_flexVirtualBandZoomOn;
+        m_radioModel.sendCommand(QString("display pan set %1 band_zoom=%2")
+            .arg(panId).arg(m_flexVirtualBandZoomOn ? 1 : 0));
+    } else if (actionName == "SegmentZoom") {
+        auto* s = activeSlice();
+        if (!s) return;
+        const QString panId = !s->panId().isEmpty()
+            ? s->panId()
+            : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+        if (panId.isEmpty()) return;
+        m_flexVirtualSegmentZoomOn = !m_flexVirtualSegmentZoomOn;
+        m_radioModel.sendCommand(QString("display pan set %1 segment_zoom=%2")
+            .arg(panId).arg(m_flexVirtualSegmentZoomOn ? 1 : 0));
+    } else if (actionName == "NextSlice") {
+        const auto& slices = m_radioModel.slices();
+        if (slices.size() > 1) {
+            int idx = 0;
+            for (int i = 0; i < slices.size(); ++i) {
+                if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+            }
+            setActiveSlice(slices[(idx + 1) % slices.size()]->sliceId());
+        }
+    } else if (actionName == "PrevSlice") {
+        const auto& slices = m_radioModel.slices();
+        if (slices.size() > 1) {
+            int idx = 0;
+            for (int i = 0; i < slices.size(); ++i) {
+                if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+            }
+            setActiveSlice(slices[(idx - 1 + slices.size()) % slices.size()]->sliceId());
+        }
+    } else if (actionName == "ToggleAgc") {
+        if (auto* s = activeSlice()) {
+            static const char* modes[] = {"off", "slow", "med", "fast"};
+            const QString cur = s->agcMode().toLower();
+            int idx = 0;
+            for (int i = 0; i < 4; ++i) {
+                if (cur == modes[i]) { idx = i; break; }
+            }
+            s->setAgcMode(modes[(idx + 1) % 4]);
+        }
+    } else if (actionName == "VolumeUp") {
+        if (auto* s = activeSlice())
+            s->setAudioGain(std::min(100.0f, s->audioGain() + 5.0f));
+    } else if (actionName == "VolumeDown") {
+        if (auto* s = activeSlice())
+            s->setAudioGain(std::max(0.0f, s->audioGain() - 5.0f));
+    } else if (actionControlsWheel) {
+        m_flexWheelMode = requestedWheelMode;
+        setFlexControlHardwareIndicator(button);
+    } else if (actionName == "SplitActiveSlice") {
+        if (!m_splitActive) {
+            if (m_radioModel.slices().size() >= m_radioModel.maxSlices()) return;
+            auto* s = activeSlice();
+            if (!s) return;
+            QString panId = s->panId();
+            if (panId.isEmpty())
+                panId = m_panStack ? m_panStack->activePanId() : m_radioModel.panId();
+            const bool isCw = s->mode() == "CW" || s->mode() == "CWL";
+            const double txFreq = s->frequency() + (isCw ? 0.001 : 0.005);
+            m_splitActive = true;
+            m_splitRxSliceId = s->sliceId();
+            m_radioModel.sendCommand(
+                QString("slice create pan=%1 freq=%2").arg(panId).arg(txFreq, 0, 'f', 6));
+        } else {
+            disableSplit();
+        }
+    } else if (actionName.startsWith("CwxF")) {
+        bool ok = false;
+        const int idx = actionName.mid(4).toInt(&ok);
+        if (ok && idx >= 1 && idx <= 12)
+            m_radioModel.cwxModel().sendMacro(idx);
+    }
+
+    syncFlexControlDialog();
+}
+
+void MainWindow::handleVirtualFlexControlWheel(const QString& actionId, int steps)
+{
+    applyFlexControlWheelAction(actionId, steps);
+}
+
+void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
+{
+    if (steps == 0)
+        return;
+
+    if (actionId == "WheelFrequency") {
+        auto* s = activeSlice();
+        if (!s || s->isLocked()) return;
+        auto* sw = spectrumForSlice(s);
+        const int stepHz = sw ? sw->stepSize()
+                              : (s->stepHz() > 0 ? s->stepHz() : 100);
+        if (m_flexTargetMhz < 0.0 ||
+            (!m_flexCoalesceTimer.isActive() &&
+             std::abs(m_flexTargetMhz - s->frequency()) > 0.001))
+            m_flexTargetMhz = s->frequency();
+        m_flexTargetMhz += steps * stepHz / 1e6;
+        if (sw) sw->setVfoFrequency(m_flexTargetMhz);
+        if (!m_flexCoalesceTimer.isActive())
+            m_flexCoalesceTimer.start();
+    } else if (actionId == "WheelRit") {
+        if (auto* s = activeSlice()) {
+            const int hz = std::clamp(s->ritFreq() + steps * 10, -9999, 9999);
+            s->setRit(true, hz);
+        }
+    } else if (actionId == "WheelXit") {
+        if (auto* s = activeSlice()) {
+            const int hz = std::clamp(s->xitFreq() + steps * 10, -9999, 9999);
+            s->setXit(true, hz);
+        }
+    } else if (actionId == "WheelVolume") {
+        if (auto* s = activeSlice()) {
+            const float gain = s->audioGain() + steps * 2.0f;
+            s->setAudioGain(std::clamp(gain, 0.0f, 100.0f));
+        }
+    } else if (actionId == "WheelMasterAf") {
+        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
+        const int next = std::clamp(current + steps * 2, 0, 100);
+        if (m_titleBar)
+            m_titleBar->setMasterVolume(next);
+        applyMasterVolume(next);
+    } else if (actionId == "WheelHeadphoneVolume") {
+        const int next = std::clamp(m_radioModel.headphoneGain() + steps * 2, 0, 100);
+        if (m_titleBar)
+            m_titleBar->setHeadphoneVolume(next);
+        m_radioModel.setHeadphoneGain(next);
+    } else if (actionId == "WheelAgct") {
+        if (auto* s = activeSlice())
+            s->setAgcThreshold(std::clamp(s->agcThreshold() + steps, 0, 100));
+    } else if (actionId == "WheelApf") {
+        if (auto* s = activeSlice())
+            s->setApfLevel(std::clamp(s->apfLevel() + steps, 0, 100));
+    } else if (actionId == "NextSlice" || actionId == "PrevSlice") {
+        const auto& slices = m_radioModel.slices();
+        if (slices.size() <= 1) return;
+        int idx = 0;
+        for (int i = 0; i < slices.size(); ++i) {
+            if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+        }
+        const int direction = actionId == "PrevSlice" ? -1 : 1;
+        int next = (idx + steps * direction) % slices.size();
+        if (next < 0)
+            next += slices.size();
+        setActiveSlice(slices[next]->sliceId());
+    } else if (actionId == "WheelPower") {
+        auto& tx = m_radioModel.transmitModel();
+        tx.setRfPower(std::clamp(tx.rfPower() + steps, 0, 100));
+    } else if (actionId == "WheelCwSpeed") {
+        auto& tx = m_radioModel.transmitModel();
+        tx.setCwSpeed(std::clamp(tx.cwSpeed() + steps, 5, 100));
+    }
+}
+
 QJsonObject MainWindow::buildControlDevicesSnapshot() const
 {
     auto stringArray = [](const QStringList& values) {
@@ -5610,6 +5945,12 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
         case FlexWheelMode::Power:     return QStringLiteral("Power");
         case FlexWheelMode::Rit:       return QStringLiteral("Rit");
         case FlexWheelMode::Xit:       return QStringLiteral("Xit");
+        case FlexWheelMode::MasterAf:  return QStringLiteral("MasterAf");
+        case FlexWheelMode::HeadphoneVolume:
+            return QStringLiteral("HeadphoneVolume");
+        case FlexWheelMode::Agct:      return QStringLiteral("Agct");
+        case FlexWheelMode::Apf:       return QStringLiteral("Apf");
+        case FlexWheelMode::CwSpeed:   return QStringLiteral("CwSpeed");
         }
         return QStringLiteral("Unknown");
     };
@@ -6572,20 +6913,11 @@ void MainWindow::buildMenuBar()
         toggleConnectionDialog();
     });
 
-#ifdef HAVE_SERIALPORT
-    auto* flexControlAction = settingsMenu->addAction("FlexControl...");
-    connect(flexControlAction, &QAction::triggered, this, [this] {
-        const QString prevComp = m_radioModel.audioCompressionParam();
-        const bool wasFresh = !m_radioSetupDialog;
-        showOrRaisePersistent(m_radioSetupDialog,
-                              &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius);
-        if (wasFresh && m_radioSetupDialog)
-            wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
-        if (m_radioSetupDialog)
-            m_radioSetupDialog->selectTab(QStringLiteral("Serial"));
-    });
-#endif
+    auto* flexControlAction = settingsMenu->addAction("AetherControl...");
+    flexControlAction->setMenuRole(QAction::NoRole);
+    connect(flexControlAction, &QAction::triggered,
+            this, &MainWindow::showFlexControlDialog);
+
     auto* networkAction = settingsMenu->addAction("Network...");
     connect(networkAction, &QAction::triggered, this, [this] {
         showNetworkDiagnosticsDialog();
@@ -9882,6 +10214,9 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     } else if (s->stepHz() > 0) {
         m_appletPanel->rxApplet()->syncStepFromSlice(s->stepHz(), s->stepList());
     }
+
+    if (m_flexControlDialog)
+        syncFlexControlDialog();
 
     // Update filter limits for the active slice's mode
     updateFilterLimitsForMode(s->mode());

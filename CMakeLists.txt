@@ -565,6 +565,7 @@ set(GUI_SOURCES
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
+    src/gui/FlexControlDialog.cpp
     src/gui/PropDashboardDialog.cpp
     src/gui/MemoryCommands.cpp
     src/gui/MemoryBrowsePanel.cpp

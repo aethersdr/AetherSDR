@@ -1986,6 +1986,10 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 
     const double oldCenterMhz = m_centerMhz;
     const double oldBandwidthMhz = m_bandwidthMhz;
+    const bool panAnimationRunning = m_panCenterAnim &&
+        m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    const double waterfallFrameCenterMhz =
+        panAnimationRunning ? m_panCenterTarget : oldCenterMhz;
 
     // Stale-echo guard: if animation is running and the incoming center equals
     // the value m_centerMhz had when the animation started, this is a status
@@ -2027,7 +2031,8 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
             m_panCenterAnim->stop();
         }
         if (oldBandwidthMhz > 0.0 && bandwidthMhz > 0.0) {
-            reprojectWaterfall(oldCenterMhz, oldBandwidthMhz, centerMhz, bandwidthMhz);
+            reprojectWaterfall(waterfallFrameCenterMhz, oldBandwidthMhz,
+                               centerMhz, bandwidthMhz);
         }
         const bool keptSpectrum = reprojectSpectrum(oldCenterMhz, oldBandwidthMhz,
                                                     centerMhz, bandwidthMhz);
@@ -2055,26 +2060,23 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
         return;
     }
 
-    // Only reproject the waterfall when starting a fresh animation.  If we are
-    // already animating toward a different target (rapid edge scroll: multiple
-    // echo-backs arrive before the first animation finishes), skip the reproject.
-    // The waterfall was already shifted at the start of this animation session;
-    // re-shifting on every retarget causes repeated horizontal jumps.
     const bool animAlreadyRunning = m_panCenterAnim &&
         m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    const double waterfallSourceCenterMhz =
+        animAlreadyRunning ? m_panCenterTarget : m_centerMhz;
 
     if (!animAlreadyRunning) {
         // Record the start position so the stale-echo guard above can
         // recognise echo-backs that refer to the pre-animation center.
         m_panCenterStart = m_centerMhz;
-
-        // Scroll waterfall history to align with the new center before the
-        // animation begins.  Without this, old rows (at old center) and new
-        // rows (at new center) are at different pixel positions, so signals
-        // appear to jump vertically.  We do NOT reset m_wfWriteRow or clear
-        // bins — the shift is small and new rows fill in naturally.
-        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, centerMhz, m_bandwidthMhz);
     }
+
+    // Scroll waterfall history to align with the new center before the visual
+    // center animation lands. During rapid edge-follow retargets the waterfall
+    // image is already in the previous target's coordinate frame, so reproject
+    // from m_panCenterTarget rather than the mid-animation visual center.
+    reprojectWaterfall(waterfallSourceCenterMhz, m_bandwidthMhz,
+                       centerMhz, m_bandwidthMhz);
 
     m_panCenterTarget = centerMhz;
 

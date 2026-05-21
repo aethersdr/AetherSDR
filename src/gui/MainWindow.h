@@ -90,6 +90,7 @@ class AetherDspDialog;
 class WaveformsDialog;
 class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
+class FlexControlDialog;
 class MidiMappingDialog;
 class CwxPanel;
 class DvkPanel;
@@ -105,8 +106,19 @@ using DaxBridge = PipeWireAudioBridge;
 #endif
 class VfoWidget;
 
-// Wheel mode for FlexControl: determines what the encoder knob adjusts
-enum class FlexWheelMode { Frequency, Volume, Power, Rit, Xit };
+// Wheel mode for FlexControl: determines what the encoder knob adjusts.
+enum class FlexWheelMode {
+    Frequency,
+    Volume,
+    Power,
+    Rit,
+    Xit,
+    MasterAf,
+    HeadphoneVolume,
+    Agct,
+    Apf,
+    CwSpeed
+};
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -306,6 +318,14 @@ private:
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
     void showAx25HfPacketDecodeDialog();
+    void showFlexControlDialog();
+    void handleFlexControlTuneSteps(int steps);
+    void handleFlexControlButton(int button, int action);
+    void handleVirtualFlexControlWheel(const QString& actionId, int steps);
+    void applyFlexControlWheelAction(const QString& actionId, int steps);
+    void syncFlexControlDialog();
+    void syncFlexControlIndicatorForSettings();
+    void setFlexControlHardwareIndicator(int button);
     QJsonObject buildControlDevicesSnapshot() const;
     void showPropDashboard();
     bool confirmClientSlotAvailability(const RadioInfo& info, QList<quint32>* disconnectHandles);
@@ -470,10 +490,14 @@ private:
 #ifdef HAVE_SERIALPORT
     SerialPortController* m_serialPort{nullptr};
     FlexControlManager*   m_flexControl{nullptr};
+    bool                  m_flexControlConnected{false};
+#endif
     QTimer               m_flexCoalesceTimer;
     double               m_flexTargetMhz{-1.0};
     FlexWheelMode        m_flexWheelMode{FlexWheelMode::Frequency};
-#endif
+    int                  m_flexActiveLedButton{0};
+    bool                 m_flexVirtualBandZoomOn{false};
+    bool                 m_flexVirtualSegmentZoomOn{false};
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     QTimer               m_hidCoalesceTimer;
@@ -519,6 +543,7 @@ private:
     QPointer<TxBandDialog> m_txBandDialog;
     QPointer<MemoryDialog> m_memoryDialog;
     QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
+    QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<AetherDspDialog> m_dspDialog;
     QPointer<WaveformsDialog> m_waveformsDialog;
