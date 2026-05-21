@@ -17,6 +17,7 @@
 #include <QWebSocket>
 #include <QStringList>
 #include <QTimer>
+#include <QPointer>
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
@@ -1181,6 +1182,32 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         const int trx = TciProtocol::tciTrxForSlice(m_model, slice);
         broadcast(QStringLiteral("rx_volume:%1,%2;")
                       .arg(trx).arg(static_cast<int>(gain)));
+    });
+
+    // State sync on (re)wire, deferred. A Flex band change (display pan set
+    // band=) tears down and recreates the slice, so wireSlice() runs again for
+    // the new slice. The handlers above only fire on *subsequent* changes; if
+    // the radio's restored band frequency equals the recreated slice's init
+    // value no frequencyChanged fires and the new band's vfo: is never
+    // announced to TCI clients (silent for 160/80/60/17/10m; #2824).
+    //
+    // Pushing immediately is wrong: the recreated slice briefly holds an
+    // intermediate frequency before the radio restores the band-stack value
+    // (slices settle in ~250-340 ms observed), so an immediate push emits a
+    // transient wrong vfo:. Defer ~400 ms and read the *settled* frequency so
+    // every band announces exactly one correct vfo:. QPointer guards rapid
+    // band changes that destroy the slice before the timer fires (the new
+    // slice schedules its own deferred push, so the final band still wins).
+    QPointer<SliceModel> guard(slice);
+    QTimer::singleShot(400, this, [this, guard]() {
+        if (!guard || m_clients.isEmpty()) return;
+        SliceModel* s = guard;
+        const int trx = TciProtocol::tciTrxForSlice(m_model, s);
+        const double mhz = s->frequency();
+        if (mhz > 0.0) {
+            long long hz = static_cast<long long>(std::round(mhz * 1e6));
+            broadcast(QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz));
+        }
     });
 }
 
