@@ -2188,8 +2188,13 @@ MainWindow::MainWindow(QWidget* parent)
             // Restore PC mic gain from client-side settings
             int gain = AppSettings::instance().value("PcMicGain", 100).toInt();
             m_audio->setPcMicGain(gain);
-            // Only start if TX stream ID is already assigned (avoid streamId=0)
-            if (!m_audio->isTxStreaming() && m_audio->txStreamId() != 0) {
+            // Only start if a TX stream is already assigned (avoid streamId=0).
+            // Voice TX (USB/LSB/AM/FM) flows over remote_audio_tx, NOT dax_tx —
+            // gating solely on txStreamId() (the dax_tx id) meant that when no
+            // DAX bridge was running, switching mic_selection to PC for plain
+            // SSB never started mic capture, so onTxAudioReady never fired and
+            // there was no modulating audio. Accept either stream.
+            if (!m_audio->isTxStreaming() && m_audio->hasAnyTxStream()) {
                 audioStartTx(m_radioModel.radioAddress(), 4991);
             }
         } else {

@@ -234,6 +234,17 @@ QList<int> macTxInputRateCandidates(const QAudioDevice& qtDevice)
     if (const auto nativeRate = macBluetoothNativeInputRate(qtDevice)) {
         rates << *nativeRate;
     }
+    // Try the device's preferred (native) rate FIRST. CoreAudio reports
+    // isFormatSupported(48000)==true for many capture devices that actually
+    // run at a lower native rate (e.g. USB webcam mics at 16 kHz). Opening
+    // QAudioSource at 48 kHz then "succeeds" (state=Active, no error) but the
+    // device delivers zero samples — processedUSecs stays 0 and TX is silent.
+    // Honouring the device's preferred rate avoids that dead-stream trap and
+    // lets the existing resampler convert to 24 kHz radio-native.
+    const int preferredRate = qtDevice.preferredFormat().sampleRate();
+    if (preferredRate > 0 && !rates.contains(preferredRate)) {
+        rates << preferredRate;
+    }
     rates << 48000 << 44100 << AudioEngine::DEFAULT_SAMPLE_RATE;
     return rates;
 }

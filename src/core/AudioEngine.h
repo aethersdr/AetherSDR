@@ -95,6 +95,10 @@ public:
     quint32 txStreamId() const { return m_txStreamId; }
     // Set the remote audio TX stream ID (for voice TX and VOX monitoring)
     void setRemoteTxStreamId(quint32 id) { m_remoteTxStreamId = id; }
+    quint32 remoteTxStreamId() const { return m_remoteTxStreamId; }
+    // True when either TX stream (dax_tx or remote_audio_tx) is assigned —
+    // mic capture should run if any TX route to the radio exists.
+    bool hasAnyTxStream() const { return m_txStreamId != 0 || m_remoteTxStreamId != 0; }
 
     float rxVolume() const  { return m_rxVolume.load(); }
     void  setRxVolume(float v);
