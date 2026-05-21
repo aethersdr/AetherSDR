@@ -12,6 +12,15 @@ permissions:
   packages: write       # docker/build-push-action: push the image
   pull-requests: write  # peter-evans/create-pull-request: open the bump PR
 
+# Serialize concurrent runs so a Dockerfile push that lands during a
+# manual workflow_dispatch doesn't race on the auto-PR branch.
+# cancel-in-progress: false — never kill a run that may already be
+# mid-publish to the registry; let the second run queue and overwrite
+# the auto-PR with its newer digest.
+concurrency:
+  group: docker-ci-image
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
