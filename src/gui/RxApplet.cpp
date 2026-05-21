@@ -1,5 +1,6 @@
 #include "RxApplet.h"
 #include "FilterPassbandWidget.h"
+#include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
@@ -465,16 +466,14 @@ void RxApplet::buildUI()
         connect(m_freqEdit, &QLineEdit::returnPressed, this, [this] {
             const QString text = m_freqEdit->text().trimmed();
             if (!text.isEmpty() && m_slice) {
-                QString clean = text;
-                int firstDot = clean.indexOf('.');
-                if (firstDot >= 0) {
-                    clean = clean.left(firstDot) + "." + clean.mid(firstDot + 1).remove('.');
-                }
+                QString clean = FrequencyEntryParser::normalizedMhzText(text);
                 bool ok = false;
                 double freqMhz = clean.toDouble(&ok);
+                const bool explicitMhzEntry = FrequencyEntryParser::isExplicitMhzEntry(text, clean);
                 const bool onXvtr = m_slice &&
                     (m_slice->rxAntenna().startsWith("XVT") || m_slice->frequency() > 54.0);
-                const double maxMhz = onXvtr ? 50000.0 : 54.0;
+                const bool highExplicitMhzEntry = ok && explicitMhzEntry && freqMhz > 54.0;
+                const double maxMhz = (onXvtr || highExplicitMhzEntry) ? 50000.0 : 54.0;
                 if (onXvtr) {
                     // 3-digit-band convenience (2m/70cm): 1446 → 144.6.
                     // Skip for 23cm/microwave — 1296 means 1296 MHz.
@@ -487,12 +486,12 @@ void RxApplet::buildUI()
                             freqMhz = clean.toDouble(&ok);
                         }
                     }
-                } else {
+                } else if (!highExplicitMhzEntry) {
                     if (ok && freqMhz > 54000.0) freqMhz /= 1e6;
                     else if (ok && freqMhz > 54.0) freqMhz /= 1e3;
                 }
                 if (ok && freqMhz >= 0.001 && freqMhz <= maxMhz)
-                    m_slice->tuneAndRecenter(freqMhz);
+                    emit directEntryCommitted(freqMhz, QStringLiteral("rx-direct-entry"));
             }
             m_freqStack->setCurrentIndex(0);
         });

@@ -2979,6 +2979,14 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_appletPanel->rxApplet(), &RxApplet::afGainChanged, this, [this](int v) {
         if (auto* s = activeSlice()) s->setAudioGain(v);
     });
+    connect(m_appletPanel->rxApplet(), &RxApplet::directEntryCommitted,
+            this, [this](double mhz, const QString& source) {
+        if (auto* s = activeSlice()) {
+            const QByteArray sourceUtf8 = source.toUtf8();
+            applyTuneRequest(s, mhz, TuneIntent::CommandedTargetCenter,
+                             sourceUtf8.constData());
+        }
+    });
 
     // ── Slice tab toggle: click A/B/C/D → switch active slice (#1278) ──
     connect(m_appletPanel->rxApplet(), &RxApplet::sliceActivationRequested,
@@ -8556,7 +8564,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             QVector<SpectrumOverlayMenu::XvtrBand> xvtrBands;
             for (const auto& x : m_radioModel.xvtrList()) {
                 if (x.isValid)
-                    xvtrBands.append({x.name, x.rfFreq});
+                    xvtrBands.append({x.name, x.rfFreq, QString("X%1").arg(x.index)});
             }
             const ModelCapabilities caps = m_radioModel.capabilities();
             for (auto* applet : m_panStack->allApplets()) {
@@ -9040,7 +9048,8 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
         const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
         if (memoryBand != currentBand) {
             const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
-            const auto stackKeyResult = XvtrPolicy::resolveBandStackKey(memoryBand, xvtrs);
+            const auto stackKeyResult =
+                XvtrPolicy::resolveBandStackKey(memoryBand, xvtrs, m_radioModel.capabilities());
             if (stackKeyResult.isSupported()) {
                 qCDebug(lcProtocol).noquote().nospace()
                     << "MainWindow: memory recall preselecting band stack memory="
@@ -9761,6 +9770,59 @@ void MainWindow::mirrorDiversityChildFrequency(SliceModel* slice, double mhz)
     }
 }
 
+MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
+    SliceModel* slice, double mhz, const char* source)
+{
+    if (!slice || slice->panId().isEmpty())
+        return BandStackPreselectResult::NotNeeded;
+    if (mhz <= 54.0 && slice->frequency() <= 54.0)
+        return BandStackPreselectResult::NotNeeded;
+
+    const QString targetBand = BandSettings::bandForFrequency(mhz);
+    const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
+    if (targetBand == currentBand)
+        return BandStackPreselectResult::NotNeeded;
+
+    const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
+    const auto stackKeyResult =
+        XvtrPolicy::resolveBandStackKey(targetBand, xvtrs, m_radioModel.capabilities());
+    if (!stackKeyResult.isSupported()) {
+        QString unsupportedReason = stackKeyResult.unsupportedReason;
+        if (mhz > 54.0 && xvtrs.isEmpty()) {
+            unsupportedReason =
+                QString("Band %1 requires a configured XVTR before Aether can tune it.")
+                    .arg(targetBand);
+        }
+        qCWarning(lcProtocol).noquote().nospace()
+            << "MainWindow: direct tune cannot preselect band stack source="
+            << (source ? source : "(unknown)")
+            << " pan=" << slice->panId()
+            << " from_band=" << currentBand
+            << " to_band=" << targetBand
+            << " freq_mhz=" << QString::number(mhz, 'f', 6)
+            << " reason=" << unsupportedReason
+            << " available_xvtrs=" << xvtrListSummary(xvtrs);
+        statusBar()->showMessage(unsupportedReason, 5000);
+        return BandStackPreselectResult::Unsupported;
+    }
+
+    qCDebug(lcProtocol).noquote().nospace()
+        << "MainWindow: direct tune preselecting band stack source="
+        << (source ? source : "(unknown)")
+        << " pan=" << slice->panId()
+        << " from_band=" << currentBand
+        << " to_band=" << targetBand
+        << " key=" << stackKeyResult.key;
+    clearSwrSweepForBandChange(-1, slice->panId(), targetBand);
+    m_bandSettings.setCurrentBand(targetBand);
+    m_radioModel.sendCommand(
+        QString("display pan set %1 band=%2").arg(slice->panId(), stackKeyResult.key));
+    QTimer::singleShot(300, this, [this, panId = slice->panId()]() {
+        reassertUnmutedSliceAudioForPan(panId);
+    });
+    return BandStackPreselectResult::Selected;
+}
+
 void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
                                   TuneIntent intent, const char* source)
 {
@@ -9782,6 +9844,42 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
 
     if (slice->sliceId() == m_activeSliceId && sw)
         sw->setVfoFrequency(mhz);
+
+    const BandStackPreselectResult bandPreselect =
+        (intent == TuneIntent::CommandedTargetCenter)
+            ? preselectBandStackForTune(slice, mhz, source)
+            : BandStackPreselectResult::NotNeeded;
+    if (bandPreselect == BandStackPreselectResult::Unsupported) {
+        if (slice->sliceId() == m_activeSliceId && sw)
+            sw->setVfoFrequency(oldFreqMhz);
+        return;
+    }
+
+    if (bandPreselect == BandStackPreselectResult::Selected) {
+        const int sliceId = slice->sliceId();
+        const QString sourceName = QString::fromUtf8(source ? source : "");
+        QTimer::singleShot(250, this, [this, sliceId, mhz, sourceName, oldFreqMhz]() {
+            auto* pendingSlice = m_radioModel.slice(sliceId);
+            if (!pendingSlice || pendingSlice->isLocked() || m_swrSweep.running)
+                return;
+            if (pendingSlice->sliceId() == m_activeSliceId) {
+                if (auto* pendingSw = spectrumForSlice(pendingSlice))
+                    pendingSw->setVfoFrequency(mhz);
+            }
+            pendingSlice->tuneAndRecenter(mhz);
+            mirrorDiversityChildFrequency(pendingSlice, mhz);
+
+            const QByteArray sourceUtf8 = sourceName.toUtf8();
+            const char* delayedSource = sourceUtf8.constData();
+            const TuneCenteringResult result =
+                revealFrequencyIfNeeded(pendingSlice, mhz,
+                                        TuneIntent::CommandedTargetCenter,
+                                        delayedSource);
+            logTunePolicyDecision(delayedSource, TuneIntent::CommandedTargetCenter,
+                                  oldFreqMhz, mhz, result);
+        });
+        return;
+    }
 
     slice->setFrequency(mhz);
     mirrorDiversityChildFrequency(slice, mhz);
@@ -11155,7 +11253,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
     // ── Band selection ───────────────────────────────────────────────────
     connect(menu, &SpectrumOverlayMenu::bandSelected,
-            this, [this, applet](const QString& bandName, double freqMhz, const QString& mode) {
+            this, [this, applet](const QString& bandName, double freqMhz, const QString& mode,
+                                 const QString& stackKeyHint) {
         qDebug() << "MainWindow: switching to band" << bandName
                  << "freq:" << freqMhz << "mode:" << mode;
 
@@ -11179,15 +11278,25 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         //     (0-based), not the radio's 1-based setup-order field (#2342).
         //   - WWV / GEN use numeric band-stack slots 33 / 34 from SmartSDR
         //     capture history (#1540/#1211).
+        //   - Built-in 4m / 2m hardware bands use bare keys "4" / "2" only
+        //     when the connected model reports those capabilities.
+        //   - Configured XVTR buttons also pass explicit X<n> keys so a
+        //     user XVTR named "4m" can still be selected on a radio that
+        //     also has native 4m hardware.
         //
-        // If no exact mapping exists, refuse the band change and leave the
+        // If no supported mapping exists, refuse the band change and leave the
         // current slice/pan state untouched. Guessing is worse than failing
         // visibly because a wrong tune destroys the very band-stack state this
         // path exists to preserve.
         const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
-        const auto stackKeyResult = XvtrPolicy::resolveBandStackKey(bandName, xvtrs);
-        const QString stackKey = stackKeyResult.key;
-        QString unsupportedBandReason = stackKeyResult.unsupportedReason;
+        QString stackKey = stackKeyHint;
+        QString unsupportedBandReason;
+        if (stackKey.isEmpty()) {
+            const auto stackKeyResult =
+                XvtrPolicy::resolveBandStackKey(bandName, xvtrs, m_radioModel.capabilities());
+            stackKey = stackKeyResult.key;
+            unsupportedBandReason = stackKeyResult.unsupportedReason;
+        }
 
         if (stackKey.isEmpty()) {
             qCWarning(lcProtocol).noquote().nospace()

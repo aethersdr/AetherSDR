@@ -147,6 +147,12 @@ private:
         RevealOffscreen,
     };
 
+    enum class BandStackPreselectResult {
+        NotNeeded,
+        Selected,
+        Unsupported,
+    };
+
     struct TuneCenteringResult {
         double oldCenterMhz{0.0};
         double newCenterMhz{0.0};
@@ -178,6 +184,8 @@ private:
     SliceModel* activeSlice() const;
     static const char* tuneIntentName(TuneIntent intent);
     bool panFollowEnabled() const;
+    BandStackPreselectResult preselectBandStackForTune(SliceModel* slice, double mhz,
+                                                       const char* source);
     void applyTuneRequest(SliceModel* slice, double mhz,
                           TuneIntent intent, const char* source);
     void applyPanRangeRequest(const QString& panId, double centerMhz,

@@ -112,6 +112,7 @@ signals:
     void autoSqlMarginDbChanged(int dB);
     // Emitted when the radio reports a squelch state change (for spectrum line).
     void squelchStateChanged(bool on, int level);
+    void directEntryCommitted(double mhz, const QString& source);
 
 #ifdef HAVE_RADE
     // Emitted when user selects/deselects RADE digital voice mode

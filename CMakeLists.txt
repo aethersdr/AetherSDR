@@ -559,6 +559,7 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrequencyEntryParser.cpp
     src/gui/SliceColorManager.cpp
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
@@ -1453,6 +1454,14 @@ add_executable(xvtr_policy_test
 )
 target_include_directories(xvtr_policy_test PRIVATE src)
 target_link_libraries(xvtr_policy_test PRIVATE Qt6::Core)
+
+add_executable(frequency_entry_parser_test
+    tests/frequency_entry_parser_test.cpp
+    src/gui/FrequencyEntryParser.cpp
+)
+target_include_directories(frequency_entry_parser_test PRIVATE src)
+target_link_libraries(frequency_entry_parser_test PRIVATE Qt6::Core)
+add_test(NAME frequency_entry_parser_test COMMAND frequency_entry_parser_test)
 
 add_executable(radio_status_ownership_test
     tests/radio_status_ownership_test.cpp

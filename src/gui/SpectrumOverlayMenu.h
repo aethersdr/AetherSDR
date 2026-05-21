@@ -68,7 +68,7 @@ public:
     void syncNoiseFloorPosition(int pos);
 
     // Populate XVTR band sub-panel
-    struct XvtrBand { QString name; double rfFreqMhz; };
+    struct XvtrBand { QString name; double rfFreqMhz; QString stackKey; };
     void setXvtrBands(const QVector<XvtrBand>& bands);
 
     // Surface the connected radio's built-in transverter bands (4m on
@@ -118,8 +118,11 @@ signals:
     void wfColorSchemeChanged(int scheme);
     void noiseFloorPositionChanged(int pos);
     void noiseFloorEnableChanged(bool on);
-    // Emitted when user selects a band from the sub-panel.
-    void bandSelected(const QString& bandName, double freqMhz, const QString& mode);
+    // Emitted when user selects a band from the sub-panel.  stackKeyHint is
+    // populated only when the clicked control already knows the exact Flex
+    // band-stack key, such as a configured XVTR button.
+    void bandSelected(const QString& bandName, double freqMhz, const QString& mode,
+                      const QString& stackKeyHint = {});
     // Emitted when user clicks XVTR button to open Radio Setup XVTR tab.
     void xvtrSetupRequested();
     // Emitted when WNB toggle changes.
