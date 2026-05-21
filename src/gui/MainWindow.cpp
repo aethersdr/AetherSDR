@@ -3521,6 +3521,20 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_flexControl, &FlexControlManager::buttonPressed,
             this, [this](int button, int action) {
+        auto setFlexControlLed = [this](int activeButton) {
+            if (!m_flexControl)
+                return;
+            QMetaObject::invokeMethod(m_flexControl,
+                                      [manager = m_flexControl, activeButton] {
+                manager->setActiveLedButton(activeButton);
+            });
+        };
+
+        if (button >= 1 && button <= 3)
+            setFlexControlLed(button);
+        else if (button == 4)
+            setFlexControlLed(0);
+
         // Knob press while wheel function is active → return to frequency mode (#1354)
         if (button == 4 && action == 0 && m_flexWheelMode != FlexWheelMode::Frequency) {
             m_flexWheelMode = FlexWheelMode::Frequency;
