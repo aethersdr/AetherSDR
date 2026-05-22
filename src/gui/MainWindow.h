@@ -106,7 +106,7 @@ using DaxBridge = PipeWireAudioBridge;
 class VfoWidget;
 
 // Wheel mode for FlexControl: determines what the encoder knob adjusts
-enum class FlexWheelMode { Frequency, Volume, Power, Rit, Xit };
+enum class FlexWheelMode { Frequency, Volume, Power, Rit, Xit, AgcT };
 
 class MainWindow : public QMainWindow {
     Q_OBJECT

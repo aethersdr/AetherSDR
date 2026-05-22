@@ -2870,6 +2870,12 @@ void RadioModel::createRxAudioStream()
     m_rxAudio.createPending = true;
     m_rxAudio.removeRequested = false;
     logRemoteAudioRxSummary(QStringLiteral("create requested"));
+    // Push our mute preference before opening the stream. Firmware defaults
+    // mute_local_audio_when_remote=1, silencing hardware outputs whenever any
+    // remote_audio_rx stream exists. Overriding here covers multi-client
+    // scenarios where another client (e.g. SmartSDR) has set it to 1. (#1069)
+    sendCmd(QString("radio set mute_local_audio_when_remote=%1")
+                .arg(m_muteLocalWhenRemote ? 1 : 0));
     sendCmd(QString("stream create type=remote_audio_rx compression=%1").arg(audioCompressionParam()),
         [this](int code, const QString& body) {
             m_rxAudio.createPending = false;
@@ -2920,6 +2926,11 @@ void RadioModel::removeRxAudioStream()
     }
 
     const quint32 streamId = m_rxAudio.streamId;
+    // Reassert our mute preference when tearing down. If another client's
+    // stream remains open after ours is removed, this prevents the global
+    // mute_local_audio_when_remote from silencing hardware outputs. (#1110)
+    sendCmd(QString("radio set mute_local_audio_when_remote=%1")
+                .arg(m_muteLocalWhenRemote ? 1 : 0));
     sendCmd(QString("stream remove %1").arg(RadioStatusOwnership::hexId(streamId)));
     qCDebug(lcProtocol) << "RadioModel: removed remote_audio_rx stream"
                         << RadioStatusOwnership::hexId(streamId);
@@ -4182,8 +4193,12 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
         changed = true;
     }
     if (kvs.contains("auto_save")) {
-        m_autoSave = kvs["auto_save"] == "1";
-        changed = true;
+        const bool newAutoSave = kvs["auto_save"] == "1";
+        if (m_autoSave != newAutoSave) {
+            m_autoSave = newAutoSave;
+            emit autoSaveChanged(newAutoSave);
+            changed = true;
+        }
     }
     if (kvs.contains("freq_error_ppb")) {
         m_freqErrorPpb = kvs["freq_error_ppb"].toInt();

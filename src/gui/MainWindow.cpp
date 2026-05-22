@@ -228,12 +228,33 @@ constexpr int kSwrSweepTgxlRestoreTimeoutMs = 3500;
 constexpr int kSwrSweepMaxPoints = 260;
 constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
 
+bool isTransientAudioDeviceId(const QByteArray& id)
+{
+#ifdef Q_OS_LINUX
+    // PipeWire/pulse-shim churns these constantly (monitor sources, per-app
+    // loopbacks, fallback auto-null sink, echo-cancel/combine virtuals).
+    // They are never useful as a PC mic or local speaker target; treating
+    // them as "new devices" is what re-fires the dialog in #2864.
+    if (id.contains(".monitor"))               return true;
+    if (id.startsWith("pulse_input_loopback")) return true;
+    if (id.contains("auto_null"))              return true;
+    if (id.contains("echo-cancel"))            return true;
+    if (id.contains("combined"))               return true;
+#else
+    Q_UNUSED(id);
+#endif
+    return false;
+}
+
 QList<QByteArray> audioDeviceIds(const QList<QAudioDevice>& devices)
 {
     QList<QByteArray> ids;
     ids.reserve(devices.size());
-    for (const QAudioDevice& device : devices)
+    for (const QAudioDevice& device : devices) {
+        if (isTransientAudioDeviceId(device.id()))
+            continue;
         ids.append(device.id());
+    }
     return ids;
 }
 
@@ -250,6 +271,8 @@ QList<QByteArray> newlyAddedAudioDeviceIds(const QList<QAudioDevice>& devices,
 {
     QList<QByteArray> added;
     for (const QAudioDevice& device : devices) {
+        if (isTransientAudioDeviceId(device.id()))
+            continue;
         if (!containsAudioDeviceId(knownIds, device.id()))
             added.append(device.id());
     }
@@ -3499,6 +3522,12 @@ MainWindow::MainWindow(QWidget* parent)
             s->setXit(true, hz);
             return;
         }
+        case FlexWheelMode::AgcT: {
+            auto* s = activeSlice();
+            if (!s) return;
+            s->setAgcThreshold(std::clamp(s->agcThreshold() + steps, 0, 100));
+            return;
+        }
         case FlexWheelMode::Frequency:
         default:
             break;
@@ -3599,6 +3628,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_flexWheelMode = FlexWheelMode::Rit;
         } else if (actionName == "WheelXit") {
             m_flexWheelMode = FlexWheelMode::Xit;
+        } else if (actionName == "WheelAgcT") {
+            m_flexWheelMode = FlexWheelMode::AgcT;
         } else if (actionName.startsWith("CwxF")) {
             bool ok = false;
             int idx = actionName.mid(4).toInt(&ok);
@@ -5612,6 +5643,7 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
         case FlexWheelMode::Power:     return QStringLiteral("Power");
         case FlexWheelMode::Rit:       return QStringLiteral("Rit");
         case FlexWheelMode::Xit:       return QStringLiteral("Xit");
+        case FlexWheelMode::AgcT:      return QStringLiteral("AgcT");
         }
         return QStringLiteral("Unknown");
     };
@@ -6441,7 +6473,14 @@ void MainWindow::handleAudioDeviceListChanged()
         && m_radioModel.transmitModel().micSelection() == "PC";
 
     const bool deviceAdded = !addedInputIds.isEmpty() || !addedOutputIds.isEmpty();
-    if (!deviceAdded) {
+    // Only prompt when the user's existing selection is no longer usable;
+    // a new arrival while both selections still work is platform-audio
+    // churn, not an actionable change (issue #2864).
+    const bool currentSelectionStillValid =
+        audioDevicePresent(inputDevices, currentInput)
+        && audioDevicePresent(outputDevices, currentOutput);
+    const bool userChoiceRequired = deviceAdded && !currentSelectionStillValid;
+    if (!userChoiceRequired) {
         if (resetInput || resetOutput)
             resetMissingAudioDevicesToDefault(resetInput,
                                               resetOutput,
@@ -10799,8 +10838,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setWfBlankerThreshold);
     connect(menu, &SpectrumOverlayMenu::backgroundImageRequested,
             this, [this, sw] {
-        QString path = QFileDialog::getOpenFileName(sw, "Choose Background Image",
-            QString(), "Images (*.png *.jpg *.jpeg *.bmp)");
+        QString path = QFileDialog::getOpenFileName(
+            sw->window(),
+            "Choose Background Image",
+            QString(),
+            "Images (*.png *.jpg *.jpeg *.bmp)",
+            nullptr,
+            QFileDialog::DontUseNativeDialog);
         if (path.isEmpty()) return;
         sw->setBackgroundImage(path);
         auto& s = AppSettings::instance();
@@ -12515,6 +12559,16 @@ void MainWindow::registerShortcutActions()
             } else {
                 disableSplit();
             }
+        });
+    m_shortcutManager.registerAction("cycle_tx_slice", "Cycle TX Slice", "Slice",
+        QKeySequence(), [this]() {
+            const auto slices = m_radioModel.slices();
+            if (slices.size() <= 1) return;
+            int txIdx = 0;
+            for (int i = 0; i < slices.size(); ++i) {
+                if (slices[i]->isTxSlice()) { txIdx = i; break; }
+            }
+            slices[(txIdx + 1) % slices.size()]->setTxSlice(true);
         });
 
     // ── Filter ──────────────────────────────────────────────────────────
@@ -14854,6 +14908,52 @@ void MainWindow::registerMidiParams()
                 int prev = (idx - 1 + slices.size()) % slices.size();
                 setActiveSlice(slices[prev]->sliceId());
             }
+        });
+
+    // ── QSO Recorder ────────────────────────────────────────────────────
+    // Mirror the exact dual routing used by the VFO ⏺/▶ buttons
+    // (MainWindow.cpp:11413-11443): RecordingMode=="Client" → QsoRecorder,
+    // otherwise → SliceModel::setRecordOn / setPlayOn (radio-side).
+    reg("global.qsoRecord", "QSO Record", "Global", P::Toggle, 0, 1,
+        [this](float v) {
+            const bool on = v > 0.5f;
+            const bool clientSide =
+                AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+            if (clientSide) {
+                if (on) m_qsoRecorder->startRecording();
+                else    m_qsoRecorder->stopRecording();
+            } else if (auto* s = activeSlice()) {
+                s->setRecordOn(on);
+            }
+        },
+        [this]() -> float {
+            const bool clientSide =
+                AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+            if (clientSide)
+                return (m_qsoRecorder && m_qsoRecorder->isRecording()) ? 1.0f : 0.0f;
+            auto* s = activeSlice();
+            return (s && s->recordOn()) ? 1.0f : 0.0f;
+        });
+
+    reg("global.qsoPlay", "QSO Playback", "Global", P::Toggle, 0, 1,
+        [this](float v) {
+            const bool on = v > 0.5f;
+            const bool clientSide =
+                AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+            if (clientSide) {
+                if (on) m_qsoRecorder->startPlayback();
+                else    m_qsoRecorder->stopPlayback();
+            } else if (auto* s = activeSlice()) {
+                s->setPlayOn(on);
+            }
+        },
+        [this]() -> float {
+            const bool clientSide =
+                AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+            if (clientSide)
+                return (m_qsoRecorder && m_qsoRecorder->isPlaying()) ? 1.0f : 0.0f;
+            auto* s = activeSlice();
+            return (s && s->playOn()) ? 1.0f : 0.0f;
         });
 }
 #endif

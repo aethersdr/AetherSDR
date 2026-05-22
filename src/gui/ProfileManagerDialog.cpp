@@ -221,15 +221,10 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
                     box.setDefaultButton(enableBtn);
                     box.exec();
                     if (box.clickedButton() == enableBtn) {
+                        // The sibling Auto-Save tab checkbox is wired to
+                        // RadioModel::autoSaveChanged below, so the radio's
+                        // confirmation of auto_save=1 will sync it.
                         m_model->sendCommand("profile autosave on");
-                        // Keep the sibling Auto-Save tab checkbox in sync —
-                        // RadioModel has no autoSaveChanged signal, so the
-                        // checkbox would otherwise read stale until the
-                        // dialog is reopened.
-                        if (m_autoSaveTx) {
-                            QSignalBlocker block(m_autoSaveTx);
-                            m_autoSaveTx->setChecked(true);
-                        }
                     }
                     return;
                 }
@@ -295,6 +290,17 @@ QWidget* ProfileManagerDialog::buildAutoSaveTab()
 
     connect(m_autoSaveTx, &QCheckBox::toggled, this, [this](bool on) {
         m_model->sendCommand(QString("profile autosave %1").arg(on ? "on" : "off"));
+    });
+
+    // React to Auto-Save flips that originate outside this checkbox —
+    // the Profile Manager "Enable Auto-Save" affirmation, TCI clients,
+    // profile load, or remote SmartSDR clients all flip auto_save via
+    // the radio.  QSignalBlocker prevents the resulting setChecked from
+    // bouncing back into ::toggled and re-issuing the radio command.
+    connect(m_model, &RadioModel::autoSaveChanged, this, [this](bool on) {
+        if (!m_autoSaveTx) return;
+        QSignalBlocker block(m_autoSaveTx);
+        m_autoSaveTx->setChecked(on);
     });
 
     vbox->addWidget(m_autoSaveTx);

@@ -138,6 +138,22 @@ private:
     Dir m_dir;
 };
 
+// QStackedWidget::sizeHint() returns the max of all pages, not the current page.
+// When DSP tab is taller than Mode tab (digContainer visible in DIGU/DIGL), this
+// causes VfoWidget to over-allocate height and produce a gap inside the Mode tab.
+// Override sizeHint/minimumSizeHint to report only the current page's preferred size.
+class TabStack : public QStackedWidget {
+public:
+    using QStackedWidget::QStackedWidget;
+    QSize sizeHint() const override {
+        const QWidget* w = currentWidget();
+        return w ? w->sizeHint() : QStackedWidget::sizeHint();
+    }
+    QSize minimumSizeHint() const override {
+        const QWidget* w = currentWidget();
+        return w ? w->minimumSizeHint() : QStackedWidget::minimumSizeHint();
+    }
+};
 
 namespace AetherSDR {
 
@@ -714,7 +730,7 @@ void VfoWidget::buildUI()
     root->addWidget(m_tabBar);
 
     // ── Tab content (stacked) ──────────────────────────────────────────────
-    m_tabStack = new QStackedWidget;
+    m_tabStack = new TabStack(this);
     m_tabStack->hide();
     buildTabContent();
     root->addWidget(m_tabStack);

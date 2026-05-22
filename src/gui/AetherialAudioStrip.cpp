@@ -304,8 +304,8 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
             "}"
             "QPushButton:checked:hover { background: #5a4a28; }");
         m_bypassBtn->setToolTip(
-            tr("Disable every stage in the active chain.  Click again "
-               "to restore the stages that were on before."));
+            tr("Bypass every stage in the active chain except the Final Output "
+               "Stage (Trim, LIM, DC).  Click again to restore."));
         connect(m_bypassBtn, &QPushButton::toggled,
                 this, &AetherialAudioStrip::onBypassToggled);
         // Initial visual state from engine, then keep it in lock-step

@@ -4071,6 +4071,30 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
     }
     if (steps == 0) { ev->ignore(); return; }
 
+    // Ctrl+wheel → zoom bandwidth anchored on the frequency under the cursor.
+    // Mirrors the pinch-to-zoom gesture and the Ctrl-drag convention used on
+    // the dBm scale strip (PR #2717) and waterfall time scale (PR #2783).
+    if (ev->modifiers() & Qt::ControlModifier) {
+        const double factor  = (steps > 0) ? (1.0 / 1.5) : 1.5;
+        const double newBw   = std::clamp(m_bandwidthMhz * factor, m_minBwMhz, m_maxBwMhz);
+        if (qFuzzyCompare(newBw, m_bandwidthMhz)) { ev->accept(); return; }
+        const double mouseXFrac = ev->position().x() / width() - 0.5;
+        const double anchorMhz  = m_centerMhz + mouseXFrac * m_bandwidthMhz;
+        const double newCenter  = std::max(anchorMhz - mouseXFrac * newBw, newBw / 2.0);
+        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
+        if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
+            m_bins.clear();
+            m_smoothed.clear();
+        }
+        m_centerMhz    = newCenter;
+        m_bandwidthMhz = newBw;
+        resetNoiseFloorBaseline();
+        markOverlayDirty();
+        emit frequencyRangeChangeRequested(newCenter, newBw);
+        ev->accept();
+        return;
+    }
+
     const auto* ao = activeOverlay();
     const double vfoMhz = ao ? ao->freqMhz : m_centerMhz;
     // Snap the base frequency to the step grid first, then add the delta.

@@ -12,13 +12,19 @@ on:
   push:
     branches: [main]
 
+# Least-privilege GITHUB_TOKEN. CI only needs to read repo contents to
+# build and test — no writes, no token-bearing API calls. Any future job
+# that needs more (e.g. publishing a comment) must opt in at the job level.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
     container: ghcr.io/ten9876/aethersdr-ci:latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - name: Setup DeepFilterNet3 (DFNR)
         run: bash setup-deepfilter.sh
@@ -35,8 +41,8 @@ jobs:
     outputs:
       build-changed: ${{ steps.filter.outputs.build }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4
         id: filter
         with:
           filters: |
@@ -64,10 +70,10 @@ jobs:
     env:
       SCCACHE_GHA_ENABLED: 'true'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730  # v4.3.1
         with:
           # 6.8.3 matches what community Windows builders are running and
           # exposes Qt 6.8.x MOC volume so we catch issues like #1910 (MSVC
@@ -77,7 +83,7 @@ jobs:
           cache: true
 
       - name: Cache FFTW3
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
         with:
           path: third_party/fftw3
           key: ${{ runner.os }}-fftw3-3.3.5-${{ hashFiles('setup-fftw.ps1') }}
@@ -94,7 +100,7 @@ jobs:
         run: .\setup-deepfilter.ps1
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@1583d6b38d7be47f593cb472781bbb21cab4321e  # v0.0.10
 
       # CMAKE_CXX_COMPILER_LAUNCHER is honoured by Ninja and Make
       # generators, NOT by the Visual Studio / MSBuild generator that
@@ -103,7 +109,7 @@ jobs:
       # puts the MSVC toolchain on PATH (cl.exe, link.exe, etc.) so
       # Ninja can find them.
       - name: Setup MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1
         with:
           arch: x64
 
