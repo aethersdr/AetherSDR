@@ -14,6 +14,14 @@
 
 namespace AetherSDR {
 
+// Apply log-style PII redaction (IPv4 → *.*.*.X, radio serial →
+// ****-****-****-XXXX, Auth0 tokens, MAC addresses).  Defined in
+// AsyncLogWriter.cpp; thread-safe (pure function over local copies of
+// static const QRegularExpressions).  Used by AsyncLogWriter for every
+// log line and by SupportBundle to scrub radio-info.json fields per
+// the operator-PII redaction policy (GHSA-ccrg-j8cp-qhc4).
+QString redactPii(const QString& msg);
+
 class AsyncLogWriter {
 public:
     struct Counters {
