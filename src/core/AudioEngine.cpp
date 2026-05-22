@@ -959,15 +959,15 @@ bool AudioEngine::startRxStream()
     });
     qCWarning(lcAudio) << "AudioEngine: RX stream started at" << fmt.sampleRate() << "Hz"
                        << "device:" << dev.description();
-    AudioSummaryLogger::RxSinkSummary summary;
-    summary.deviceDescription = dev.description();
-    summary.sampleRate = fmt.sampleRate();
-    summary.channelCount = fmt.channelCount();
-    summary.sampleFormat = fmt.sampleFormat();
-    summary.resamplingActive = m_resampleTo48k;
-    summary.fallbackOccurred = rxFallbackOccurred;
-    summary.fallbackReason = rxFallbackReasons.join(QStringLiteral("; "));
-    AudioSummaryLogger::logRxSink(summary);
+    AudioSummaryLogger::RxSinkSummary windowsRxSummary;
+    windowsRxSummary.deviceDescription = dev.description();
+    windowsRxSummary.sampleRate = fmt.sampleRate();
+    windowsRxSummary.channelCount = fmt.channelCount();
+    windowsRxSummary.sampleFormat = fmt.sampleFormat();
+    windowsRxSummary.resamplingActive = m_resampleTo48k;
+    windowsRxSummary.fallbackOccurred = rxFallbackOccurred;
+    windowsRxSummary.fallbackReason = rxFallbackReasons.join(QStringLiteral("; "));
+    AudioSummaryLogger::logRxSink(windowsRxSummary);
     m_rxBufferSampleRate.store(fmt.sampleRate());
     startSidetoneStream();
     emit rxStarted();
