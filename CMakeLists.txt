@@ -95,7 +95,7 @@ if(PkgConfig_FOUND)
 endif()
 
 # FFTW3 (required for NR2 spectral noise reduction)
-# Windows: run setup-fftw.ps1 first to download prebuilt DLLs
+# Windows: run scripts/setup/setup-fftw.ps1 first to download prebuilt DLLs
 # Linux:   apt install libfftw3-dev
 # macOS:   brew install fftw
 if(WIN32)
@@ -106,7 +106,7 @@ if(WIN32)
         set(FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/fftw3.lib")
         set(FFTW3_DLL "${FFTW3_ROOT}/bin/libfftw3-3.dll")
     else()
-        message(WARNING "FFTW3 not found. Run setup-fftw.ps1 to download it. NR2 will use fallback FFT.")
+        message(WARNING "FFTW3 not found. Run scripts/setup/setup-fftw.ps1 to download it. NR2 will use fallback FFT.")
     endif()
 else()
     if(PkgConfig_FOUND)
@@ -179,7 +179,7 @@ endif()
 # When RADE is enabled, Opus comes from AetherSDR's vendored RADE snapshot
 # (with FARGAN/OSCE).
 # When RADE is disabled, find system libopus.
-# Windows: run setup-opus.ps1 first to download prebuilt DLLs
+# Windows: run scripts/setup/setup-opus.ps1 first to download prebuilt DLLs
 # Linux:   apt install libopus-dev
 # macOS:   brew install opus
 if(RADE_FOUND)
@@ -194,7 +194,7 @@ elseif(WIN32)
         message(STATUS "Opus: using prebuilt Windows library (static)")
     else()
         set(OPUS_FOUND FALSE)
-        message(WARNING "Opus not found. Run setup-opus.ps1 to download it. "
+        message(WARNING "Opus not found. Run scripts/setup/setup-opus.ps1 to download it. "
                         "SmartLink compressed audio will be unavailable.")
     endif()
 else()
@@ -392,7 +392,7 @@ if(ENABLE_DFNR)
     else()
         set(ENABLE_DFNR OFF)
         message(STATUS "DFNR (DeepFilterNet3) disabled — library not found at ${DFNR_LIB} "
-                       "(run ./setup-deepfilter.sh before cmake to enable)")
+                       "(run ./scripts/setup/setup-deepfilter.sh before cmake to enable)")
     endif()
 endif()
 
@@ -926,7 +926,7 @@ else()
 endif()
 
 # hidapi — USB HID encoder support (Stream Deck, Icom RC-28, Griffin PowerMate, Contour Shuttle)
-# Windows: run setup-hidapi.ps1 first to download and build hidapi
+# Windows: run scripts/setup/setup-hidapi.ps1 first to download and build hidapi
 # Linux:   apt install libhidapi-dev
 # macOS:   brew install hidapi
 if(WIN32)
@@ -937,7 +937,7 @@ if(WIN32)
         set(HIDAPI_LIBRARIES "${HIDAPI_ROOT}/lib/hidapi.lib")
         set(HIDAPI_DLL "${HIDAPI_ROOT}/bin/hidapi.dll")
     else()
-        message(WARNING "hidapi not found. Run setup-hidapi.ps1 to download it. "
+        message(WARNING "hidapi not found. Run scripts/setup/setup-hidapi.ps1 to download it. "
                         "USB HID device support (Stream Deck, etc.) will be disabled.")
     endif()
 else()
@@ -985,7 +985,7 @@ else()
 endif()
 
 # ONNX Runtime — optional CNN signal classifier for S-History v2
-# Windows: run setup-onnxruntime.ps1 first to download prebuilt DLLs
+# Windows: run scripts/setup/setup-onnxruntime.ps1 first to download prebuilt DLLs
 # Linux:   apt install libonnxruntime-dev  (or build from source)
 # macOS:   brew install onnxruntime
 if(WIN32)
@@ -997,7 +997,7 @@ if(WIN32)
         file(GLOB ORT_DLLS "${ORT_ROOT}/bin/*.dll")
     else()
         message(STATUS "ONNX Runtime not found — CNN signal classifier disabled. "
-                       "Run setup-onnxruntime.ps1 to enable.")
+                       "Run scripts/setup/setup-onnxruntime.ps1 to enable.")
     endif()
 else()
     if(PkgConfig_FOUND)
@@ -1102,7 +1102,7 @@ if(ENABLE_SPECBLEACH)
                     "${FFTW3F_DLL}" "$<TARGET_FILE_DIR:AetherSDR>"
                 COMMENT "Copying libfftw3f-3.dll to build directory")
         else()
-            message(WARNING "fftw3f.lib not found — run setup-fftw.ps1 and gen-fftw3f-lib.bat")
+            message(WARNING "fftw3f.lib not found — run scripts/setup/setup-fftw.ps1 and gen-fftw3f-lib.bat")
         endif()
     else()
         # libspecbleach C sources include <fftw3.h> directly — ensure it's findable

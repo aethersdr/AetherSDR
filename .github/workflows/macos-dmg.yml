@@ -75,7 +75,7 @@ jobs:
           cmake --install .
 
       - name: Setup DeepFilterNet3 (DFNR)
-        run: bash setup-deepfilter.sh
+        run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@77c3f8fd59034e6f3d5c58867ded0185b48d534f  # v1

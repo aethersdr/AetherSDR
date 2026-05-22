@@ -43,44 +43,44 @@ jobs:
         id: cache-opus
         with:
           path: third_party/opus
-          key: opus-${{ runner.os }}-${{ hashFiles('setup-opus.ps1') }}
+          key: opus-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-opus.ps1') }}
 
       - name: Setup Opus (SmartLink audio codec)
         if: steps.cache-opus.outputs.cache-hit != 'true'
-        run: .\setup-opus.ps1
+        run: .\scripts\setup\setup-opus.ps1
 
       - name: Cache FFTW3
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
         id: cache-fftw
         with:
           path: third_party/fftw3
-          key: fftw-${{ runner.os }}-${{ hashFiles('setup-fftw.ps1') }}
+          key: fftw-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-fftw.ps1') }}
 
       - name: Setup FFTW3 float (NR4 dependency)
         if: steps.cache-fftw.outputs.cache-hit != 'true'
-        run: .\setup-fftw.ps1
+        run: .\scripts\setup\setup-fftw.ps1
 
       - name: Cache hidapi
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
         id: cache-hidapi
         with:
           path: third_party/hidapi
-          key: hidapi-${{ runner.os }}-${{ hashFiles('setup-hidapi.ps1') }}
+          key: hidapi-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-hidapi.ps1') }}
 
       - name: Setup hidapi (USB HID device support)
         if: steps.cache-hidapi.outputs.cache-hit != 'true'
-        run: .\setup-hidapi.ps1
+        run: .\scripts\setup\setup-hidapi.ps1
 
       - name: Cache DeepFilterNet3
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
-          key: deepfilter-${{ runner.os }}-${{ hashFiles('setup-deepfilter.ps1') }}
+          key: deepfilter-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-deepfilter.ps1') }}
 
       - name: Setup DeepFilterNet3 (DFNR)
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
-        run: .\setup-deepfilter.ps1
+        run: .\scripts\setup\setup-deepfilter.ps1
 
       - name: Configure
         run: |

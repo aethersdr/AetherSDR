@@ -61,7 +61,7 @@ jobs:
           echo "LD_LIBRARY_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
       - name: Setup DeepFilterNet3 (DFNR)
-        run: bash setup-deepfilter.sh
+        run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Configure
         run: |
