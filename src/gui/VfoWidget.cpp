@@ -202,6 +202,8 @@ static const QString kSliderStyle =
 static const QString kLabelStyle =
     "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }";
 
+static constexpr int kLockedFrequencyFeedbackMs = 500;
+
 static bool likelyTxAntennaFallbackToken(const QString& token)
 {
     const QString upper = token.toUpper();
@@ -230,6 +232,9 @@ VfoWidget::VfoWidget(QWidget* parent)
     m_signalMeterAnimation.setTimerType(Qt::PreciseTimer);
     m_signalMeterAnimation.setInterval(kSignalMeterAnimationIntervalMs);
     connect(&m_signalMeterAnimation, &QTimer::timeout, this, &VfoWidget::animateSignalMeter);
+    m_lockedFrequencyTimer.setSingleShot(true);
+    connect(&m_lockedFrequencyTimer, &QTimer::timeout,
+            this, &VfoWidget::clearLockedFrequencyFeedback);
 
     buildUI();
 
@@ -248,16 +253,21 @@ void VfoWidget::wheelEvent(QWheelEvent* ev)
 
     // Determine whether we should handle this event at all.
     bool shouldTune = false;
-    if (m_collapsed && m_slice && !m_slice->isLocked()) {
+    if (m_collapsed && m_slice) {
         // In collapsed mode, scroll anywhere to tune by step size
         shouldTune = true;
-    } else if (m_freqStack && m_slice && !m_slice->isLocked()) {
+    } else if (m_freqStack && m_slice) {
         // Scroll over the frequency display tunes by step size.
         QPoint local = m_freqStack->mapFrom(this, ev->position().toPoint());
         shouldTune = m_freqStack->rect().contains(local);
     }
 
     if (!shouldTune) { ev->accept(); return; }
+    if (m_slice->isLocked()) {
+        m_slice->notifyTuneBlockedByLock();
+        ev->accept();
+        return;
+    }
 
     int stepHz = m_slice->stepHz();
     if (stepHz <= 0) { ev->accept(); return; }
@@ -2501,6 +2511,7 @@ void VfoWidget::setSlice(SliceModel* slice)
 {
     qDebug() << "VfoWidget::setSlice:" << (slice ? slice->sliceId() : -1)
              << "old:" << (m_slice ? m_slice->sliceId() : -1);
+    clearLockedFrequencyFeedback();
     if (m_slice)
         m_slice->disconnect(this);
     m_slice = slice;
@@ -2514,6 +2525,8 @@ void VfoWidget::setSlice(SliceModel* slice)
 
     // Frequency
     connect(m_slice, &SliceModel::frequencyChanged, this, [this](double) { updateFreqLabel(); });
+    connect(m_slice, &SliceModel::tuneBlockedByLock,
+            this, &VfoWidget::showLockedFrequencyFeedback);
 
     // Per-client letter — refresh the slice badge when index_letter arrives
     // or changes (Multi-Flex sessions, see #2606).
@@ -2873,6 +2886,11 @@ void VfoWidget::setSlice(SliceModel* slice)
         QSignalBlocker b(m_lockVfoBtn);
         m_lockVfoBtn->setChecked(locked);
         m_lockVfoBtn->setText(locked ? "\xF0\x9F\x94\x92" : "\xF0\x9F\x94\x93");
+        if (locked) {
+            cancelDirectEntry();
+        } else {
+            clearLockedFrequencyFeedback();
+        }
     });
 
     // Restore collapsed state from AppSettings
@@ -2969,6 +2987,11 @@ void VfoWidget::setPlayEnabled(bool enabled)
 
 void VfoWidget::beginDirectEntry(QString source)
 {
+    if (m_slice && m_slice->isLocked()) {
+        m_slice->notifyTuneBlockedByLock();
+        return;
+    }
+
     m_directEntrySource = source;
     if (m_slice) {
         m_freqEdit->setText(QString::number(m_slice->frequency(), 'f', 6));
@@ -3170,6 +3193,15 @@ void VfoWidget::syncFromSlice()
 void VfoWidget::updateFreqLabel()
 {
     if (!m_slice) return;
+    if (m_showingLockedFrequencyFeedback) {
+        m_freqLabel->setText(QStringLiteral("LOCKED"));
+        if (m_collapsed && m_collapsedFreqLabel) {
+            m_collapsedFreqLabel->setText(QStringLiteral("LOCKED"));
+            m_collapsedFreqLabel->adjustSize();
+        }
+        return;
+    }
+
     long long hz = static_cast<long long>(std::round(m_slice->frequency() * 1e6));
     int mhzPart = static_cast<int>(hz / 1000000);
     int khzPart = static_cast<int>((hz / 1000) % 1000);
@@ -3185,6 +3217,29 @@ void VfoWidget::updateFreqLabel()
         m_collapsedFreqLabel->setText(freqText);
         m_collapsedFreqLabel->adjustSize();
     }
+}
+
+void VfoWidget::showLockedFrequencyFeedback()
+{
+    if (!m_slice || !m_slice->isLocked())
+        return;
+
+    if (m_freqStack && m_freqStack->currentIndex() == 1)
+        cancelDirectEntry();
+
+    m_showingLockedFrequencyFeedback = true;
+    updateFreqLabel();
+    m_lockedFrequencyTimer.start(kLockedFrequencyFeedbackMs);
+}
+
+void VfoWidget::clearLockedFrequencyFeedback()
+{
+    if (!m_showingLockedFrequencyFeedback)
+        return;
+
+    m_lockedFrequencyTimer.stop();
+    m_showingLockedFrequencyFeedback = false;
+    updateFreqLabel();
 }
 
 void VfoWidget::updateFilterLabel()
