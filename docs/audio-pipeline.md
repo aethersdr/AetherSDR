@@ -227,6 +227,24 @@ so `AudioEngine::startTxStream()` opens the current system default. If AetherSDR
 was already following the system default, the TX source is still restarted so Qt
 binds the capture stream to the replacement endpoint.
 
+### Default audio summary logging
+
+The normal support log includes `aether.audio.summary` at info level. This
+category emits compact one-block summaries at audio lifecycle points rather than
+turning on the detailed `aether.audio` info/debug stream:
+
+- Startup logs selected/default input and output devices, saved-device presence,
+  PC Audio state, and the current TX mic route intent. This startup snapshot is
+  deliberately shallow and does not probe device formats.
+- Successful RX, TX, CW sidetone, Quindar, and Aetherial monitor starts log the
+  actual device/backend and negotiated format that opened.
+- Final open failures log a single failure summary with the already-attempted
+  sample rates, channel counts, formats, fallback history, and backend error.
+
+These summaries are deduped by canonical text so no-op restarts do not spam the
+support log. They should not add extra audio-device probing to startup or to a
+failure path; record only negotiation work the audio path already performed.
+
 ## Local sidetone and Quindar local output
 
 CW sidetone and Quindar local monitor output are independent local paths:

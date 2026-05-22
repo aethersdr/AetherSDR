@@ -434,6 +434,7 @@ set(CORE_SOURCES
     src/core/NetworkPathResolver.cpp
     src/core/TgxlConnection.cpp
     src/core/CommandParser.cpp
+    src/core/AudioSummaryLogger.cpp
     src/core/AudioEngine.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp

@@ -25,6 +25,9 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& /*device*/,
 {
     if (m_stream) return true;
     if (!generator) return false;
+    m_deviceDescription.clear();
+    m_fallbackOccurred = false;
+    m_fallbackReason.clear();
 
     if (!m_paInitialized) {
         const PaError err = Pa_Initialize();
@@ -62,6 +65,8 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& /*device*/,
             if (qstrncmp(api->name, "JACK", 4) == 0
                 && api->defaultOutputDevice != paNoDevice) {
                 devIdx = api->defaultOutputDevice;
+                m_fallbackOccurred = true;
+                m_fallbackReason = QStringLiteral("backend selected JACK default output");
                 qCInfo(lcAudio) << "CwSidetonePortAudioSink: using JACK host API"
                                 << "(device" << devIdx << ")";
                 break;
@@ -81,6 +86,7 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& /*device*/,
         qCWarning(lcAudio) << "CwSidetonePortAudioSink: Pa_GetDeviceInfo returned null";
         return false;
     }
+    m_deviceDescription = QString::fromLocal8Bit(devInfo->name ? devInfo->name : "");
 
     // Prefer 48 kHz; fall back to the device's native rate only if the
     // device explicitly rejects 48 kHz.
@@ -96,6 +102,12 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& /*device*/,
         sampleRate = devInfo->defaultSampleRate > 0
             ? devInfo->defaultSampleRate
             : 48000;
+        m_fallbackOccurred = true;
+        const QString detail = QStringLiteral("48000Hz unsupported -> %1Hz")
+            .arg(static_cast<int>(sampleRate));
+        m_fallbackReason = m_fallbackReason.isEmpty()
+            ? detail
+            : m_fallbackReason + QStringLiteral("; ") + detail;
         qCInfo(lcAudio) << "CwSidetonePortAudioSink: 48000 unsupported, using"
                         << sampleRate;
     }
@@ -180,6 +192,9 @@ void CwSidetonePortAudioSink::stop()
         m_generator.store(nullptr, std::memory_order_release);
     }
     m_actualRate = 0;
+    m_deviceDescription.clear();
+    m_fallbackOccurred = false;
+    m_fallbackReason.clear();
 }
 
 } // namespace AetherSDR

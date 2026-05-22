@@ -1,4 +1,5 @@
 #include "ClientPuduMonitor.h"
+#include "AudioSummaryLogger.h"
 #include "Resampler.h"
 
 #include <QAudioDevice>
@@ -8,6 +9,7 @@
 #include <QFile>
 #include <QIODevice>
 #include <QMediaDevices>
+#include <QStringList>
 
 #include <algorithm>
 #include <cstring>
@@ -186,20 +188,44 @@ void ClientPuduMonitor::startPlayback()
     // (typical on macOS and Windows) with a one-shot r8brain upsample
     // of the whole captured buffer up-front.
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
-    if (dev.isNull()) return;
+    if (dev.isNull()) {
+        AudioSummaryLogger::OpenFailureSummary failure;
+        failure.path = QStringLiteral("Aetherial monitor playback");
+        failure.backend = QStringLiteral("QAudioSink");
+        failure.deviceDescription = QStringLiteral("Unavailable");
+        failure.attemptedFormats = QStringLiteral("system default output");
+        failure.failureReason = QStringLiteral("no audio output device");
+        AudioSummaryLogger::logOpenFailure(failure);
+        return;
+    }
 
     QAudioFormat fmt;
     fmt.setChannelCount(kChannels);
     fmt.setSampleFormat(QAudioFormat::Int16);
     fmt.setSampleRate(kSampleRate);
     int sinkRate = kSampleRate;
+    bool fallbackOccurred = false;
+    QStringList fallbackReasons;
+    QStringList attemptedFormats;
+    attemptedFormats << QStringLiteral("24000Hz 2ch Int16");
 
     if (!dev.isFormatSupported(fmt)) {
         fmt.setSampleRate(48000);
         sinkRate = 48000;
+        fallbackOccurred = true;
+        fallbackReasons << QStringLiteral("24000Hz Int16 stereo unsupported -> 48000Hz");
+        attemptedFormats << QStringLiteral("48000Hz 2ch Int16");
         if (!dev.isFormatSupported(fmt)) {
             // Neither 24 kHz nor 48 kHz int16 — extremely rare.  Give up
             // quietly; playback was best-effort anyway.
+            AudioSummaryLogger::OpenFailureSummary failure;
+            failure.path = QStringLiteral("Aetherial monitor playback");
+            failure.backend = QStringLiteral("QAudioSink");
+            failure.deviceDescription = dev.description();
+            failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
+            failure.failureReason = QStringLiteral("output device supports neither 24000Hz nor 48000Hz Int16 stereo");
+            failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+            AudioSummaryLogger::logOpenFailure(failure);
             return;
         }
     }
@@ -229,6 +255,31 @@ void ClientPuduMonitor::startPlayback()
     connect(m_playSink, &QAudioSink::stateChanged,
             this, &ClientPuduMonitor::onPlaybackSinkState);
     m_playSink->start(&m_playBuffer);
+    if (m_playSink->state() == QAudio::StoppedState
+        && m_playSink->error() != QAudio::NoError) {
+        AudioSummaryLogger::OpenFailureSummary failure;
+        failure.path = QStringLiteral("Aetherial monitor playback");
+        failure.backend = QStringLiteral("QAudioSink");
+        failure.deviceDescription = dev.description();
+        failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
+        failure.failureReason = QStringLiteral("QAudioSink stopped immediately after start (error %1)")
+            .arg(static_cast<int>(m_playSink->error()));
+        failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+        AudioSummaryLogger::logOpenFailure(failure);
+        delete m_playSink;
+        m_playSink = nullptr;
+        return;
+    }
+    AudioSummaryLogger::AuxiliarySinkSummary summary;
+    summary.sinkName = QStringLiteral("Aetherial monitor playback");
+    summary.deviceDescription = dev.description();
+    summary.sampleRate = fmt.sampleRate();
+    summary.channelCount = fmt.channelCount();
+    summary.sampleFormat = fmt.sampleFormat();
+    summary.resamplingActive = sinkRate != kSampleRate;
+    summary.fallbackOccurred = fallbackOccurred;
+    summary.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+    AudioSummaryLogger::logAuxiliarySink(summary);
 
     m_playing = true;
     // When playback is triggered as part of auto-play after a

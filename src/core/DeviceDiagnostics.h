@@ -42,6 +42,7 @@ inline AudioBusType inferAudioBusType(const QString& description, const QByteArr
 }
 
 QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObject& snapshot);
+QJsonObject buildAudioStartupSnapshot(const AudioEngine* audio, const QJsonObject& snapshot);
 void annotateSliceAudioRoutes(QJsonObject* snapshot, const QJsonObject& audioDevices);
 
 } // namespace DeviceDiagnostics

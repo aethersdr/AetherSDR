@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAudioDevice>
+#include <QString>
 
 namespace AetherSDR {
 
@@ -47,6 +48,11 @@ public:
 
     // Short backend name for logs ("QAudioSink" / "PortAudio").
     virtual const char* name() const = 0;
+
+    // Runtime details used by the default-on audio summary log.
+    virtual QString deviceDescription() const { return {}; }
+    virtual bool fallbackOccurred() const { return false; }
+    virtual QString fallbackReason() const { return {}; }
 };
 
 } // namespace AetherSDR

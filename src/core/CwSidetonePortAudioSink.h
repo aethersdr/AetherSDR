@@ -4,6 +4,8 @@
 
 #include <portaudio.h>
 
+#include <QString>
+
 #include <atomic>
 
 namespace AetherSDR {
@@ -32,6 +34,9 @@ public:
     bool isRunning() const override { return m_stream != nullptr; }
     int  actualRateHz() const override { return m_actualRate; }
     const char* name() const override { return "PortAudio"; }
+    QString deviceDescription() const override { return m_deviceDescription; }
+    bool fallbackOccurred() const override { return m_fallbackOccurred; }
+    QString fallbackReason() const override { return m_fallbackReason; }
 
 private:
     static int paCallback(const void* input, void* output,
@@ -43,6 +48,9 @@ private:
     PaStream*                          m_stream{nullptr};
     std::atomic<CwSidetoneGenerator*>  m_generator{nullptr};
     int                                m_actualRate{0};
+    QString                            m_deviceDescription;
+    bool                               m_fallbackOccurred{false};
+    QString                            m_fallbackReason;
     bool                               m_paInitialized{false};
 };
 
