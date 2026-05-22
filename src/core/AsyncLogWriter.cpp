@@ -43,6 +43,10 @@ QString labelForType(QtMsgType type)
     return QStringLiteral("???");
 }
 
+} // namespace (anonymous)
+
+// Public so SupportBundle and other callers can scrub PII the same way
+// log lines are scrubbed.  Declared in AsyncLogWriter.h.
 QString redactPii(const QString& msg)
 {
     QString out = msg;
@@ -73,6 +77,8 @@ QString redactPii(const QString& msg)
 
     return out;
 }
+
+namespace {
 
 QByteArray formatLine(QtMsgType type,
                       const QTime& timestamp,

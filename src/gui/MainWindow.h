@@ -106,7 +106,7 @@ using DaxBridge = PipeWireAudioBridge;
 class VfoWidget;
 
 // Wheel mode for FlexControl: determines what the encoder knob adjusts
-enum class FlexWheelMode { Frequency, Volume, Power, Rit, Xit };
+enum class FlexWheelMode { Frequency, Volume, Power, Rit, Xit, AgcT };
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -147,6 +147,12 @@ private:
         RevealOffscreen,
     };
 
+    enum class BandStackPreselectResult {
+        NotNeeded,
+        Selected,
+        Unsupported,
+    };
+
     struct TuneCenteringResult {
         double oldCenterMhz{0.0};
         double newCenterMhz{0.0};
@@ -178,6 +184,8 @@ private:
     SliceModel* activeSlice() const;
     static const char* tuneIntentName(TuneIntent intent);
     bool panFollowEnabled() const;
+    BandStackPreselectResult preselectBandStackForTune(SliceModel* slice, double mhz,
+                                                       const char* source);
     void applyTuneRequest(SliceModel* slice, double mhz,
                           TuneIntent intent, const char* source);
     void applyPanRangeRequest(const QString& panId, double centerMhz,
@@ -641,6 +649,8 @@ private:
     };
     QHash<QString, PanFpsReconcileState> m_panFpsReconcile;
     QHash<QString, QMetaObject::Connection> m_panFpsReconcileConnections;
+    bool m_adaptiveThrottleActive{false}; // fps/wf reconcile suppressed while true
+    int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
     struct WaterfallLineDurationReconcileState {
         QTimer* timer{nullptr};
         QPointer<SpectrumWidget> spectrum;

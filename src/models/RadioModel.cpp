@@ -2379,6 +2379,11 @@ void RadioModel::startNetworkMonitor()
     m_maxPingRtt = 0;
     m_pingMissCount = 0;
     m_pingDisconnectTriggered = false;
+    m_pendingThrottleLift = false;
+    // Safety: ensure MainWindow's m_adaptiveThrottleActive is cleared even if
+    // the connectionStateChanged(false) path was somehow skipped.  Pans are not
+    // yet rebuilt at this point so the fps-restore loop in the handler is a no-op.
+    emit adaptiveThrottleChanged(false, 0);
 
     // RTT is read from kernel TCP_INFO (smoothed RTT from TCP ACK timing),
     // completely independent of Qt event loop buffering. Falls back to
@@ -2400,14 +2405,18 @@ void RadioModel::startNetworkMonitor()
             return;
         }
         ++m_pingMissCount;
-        if (m_pingMissCount >= PING_MISS_DISCONNECT) {
+        const int missThreshold = (m_netState == NetState::Poor)
+                                      ? PING_MISS_DISCONNECT_POOR
+                                      : PING_MISS_DISCONNECT;
+        if (m_pingMissCount >= missThreshold) {
             if (m_pingDisconnectTriggered)
                 return;
 
             m_pingDisconnectTriggered = true;
             m_pingTimer.stop();
-            qDebug() << "RadioModel:" << PING_MISS_DISCONNECT
-                     << "consecutive pings unanswered — forcing disconnect";
+            qCDebug(lcProtocol) << "RadioModel:" << missThreshold
+                                << "consecutive pings unanswered — forcing disconnect"
+                                << "(state:" << static_cast<int>(m_netState) << ")";
             forceDisconnect();
             return;
         }
@@ -2439,8 +2448,25 @@ void RadioModel::evaluateNetworkQuality()
                              ? (targetScore <= 45.0 ? 0.45 : 0.30)
                              : 0.12;
     m_networkQualityScore += (targetScore - m_networkQualityScore) * alpha;
+    const NetState prevState = m_netState;
     m_netState = networkStateForScore(m_networkQualityScore, m_netState);
     if (ping > m_maxPingRtt) m_maxPingRtt = ping;
+
+    if (m_netState != prevState)
+        applyAdaptiveFrameRate(m_netState, prevState);
+
+    // Fire a deferred throttle lift once the min-dwell has elapsed and the
+    // state has not re-entered a throttled tier since the engage.
+    if (m_pendingThrottleLift
+            && m_netState != NetState::Good
+            && m_netState != NetState::Fair
+            && m_netState != NetState::Poor) {
+        if (QDateTime::currentMSecsSinceEpoch() - m_lastThrottleEngageMs >= THROTTLE_MIN_DWELL_MS) {
+            m_pendingThrottleLift = false;
+            qCDebug(lcProtocol) << "RadioModel: deferred adaptive throttle lift firing after min-dwell";
+            emit adaptiveThrottleChanged(false, 0);
+        }
+    }
 
     static const char* names[] = {"Off", "Excellent", "Very Good", "Good", "Fair", "Poor"};
     emit networkQualityChanged(names[static_cast<int>(m_netState)], ping);
@@ -2562,6 +2588,83 @@ RadioModel::NetState RadioModel::networkStateForScore(double score, NetState cur
     if (score >= 45.0)
         return NetState::Fair;
     return NetState::Poor;
+}
+
+// Single source of truth for the state→fps-cap mapping.
+// currentAdaptiveFpsCap(), applyAdaptiveFrameRate(), and any future
+// callers must all go through here so adding a new tier (e.g. Critical=2)
+// never silently diverges between code paths.
+int RadioModel::fpsCapForState(NetState s)
+{
+    switch (s) {
+    case NetState::Poor: return 4;
+    case NetState::Fair: return 8;
+    case NetState::Good: return 15;
+    default:             return 0;
+    }
+}
+
+int RadioModel::currentAdaptiveFpsCap() const
+{
+    return fpsCapForState(m_netState);
+}
+
+
+int RadioModel::adaptiveWfMsForCap(int fpsCap) const
+{
+    if (fpsCap <= 0)  return 0;
+    if (fpsCap <= 4)  return 500;
+    if (fpsCap <= 8)  return 250;
+    if (fpsCap <= 15) return 150;
+    return 0;
+}
+
+void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
+{
+    if (panId.isEmpty() || fpsCap <= 0) return;
+    auto* pan = m_panadapters.value(panId, nullptr);
+    if (!pan) return;
+    sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fpsCap));
+    if (!pan->waterfallId().isEmpty())
+        sendCommand(QString("display panafall set %1 line_duration=%2")
+                        .arg(pan->waterfallId()).arg(adaptiveWfMsForCap(fpsCap)));
+}
+
+void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
+{
+    const int newCap = fpsCapForState(newState);
+    const int oldCap = fpsCapForState(oldState);
+    if (newCap == oldCap)
+        return;
+
+    const bool throttling = (newCap > 0);
+
+    if (throttling) {
+        m_lastThrottleEngageMs = QDateTime::currentMSecsSinceEpoch();
+        m_pendingThrottleLift = false;
+        qCDebug(lcProtocol) << "RadioModel: adaptive throttle engaged — fps cap"
+                            << newCap << "/ wf line" << adaptiveWfMsForCap(newCap) << "ms";
+        for (auto it = m_panadapters.cbegin(); it != m_panadapters.cend(); ++it)
+            sendAdaptiveCapToPan(it.key(), newCap);
+        emit adaptiveThrottleChanged(throttling, newCap);
+    } else {
+        // Min-dwell guard: if we just engaged, don't lift yet — let the link
+        // stabilise before restoring full fps. evaluateNetworkQuality() will
+        // fire the deferred lift once THROTTLE_MIN_DWELL_MS has elapsed.
+        if (QDateTime::currentMSecsSinceEpoch() - m_lastThrottleEngageMs < THROTTLE_MIN_DWELL_MS) {
+            m_pendingThrottleLift = true;
+            qCDebug(lcProtocol) << "RadioModel: adaptive throttle lift deferred"
+                                << "(min-dwell not reached)";
+            return;
+        }
+        m_pendingThrottleLift = false;
+        qCDebug(lcProtocol) << "RadioModel: adaptive throttle lifted — signalling fps restore";
+        // Intentionally no fps push here — RadioModel doesn't own the user-configured
+        // fps (that lives in each SpectrumWidget). MainWindow restores it via
+        // adaptiveThrottleChanged(false, 0). A headless consumer connecting to
+        // RadioModel without MainWindow receives the engage but must handle restore itself.
+        emit adaptiveThrottleChanged(false, 0);
+    }
 }
 
 bool RadioModel::usesRemoteNetworkThresholds() const
@@ -2870,6 +2973,12 @@ void RadioModel::createRxAudioStream()
     m_rxAudio.createPending = true;
     m_rxAudio.removeRequested = false;
     logRemoteAudioRxSummary(QStringLiteral("create requested"));
+    // Push our mute preference before opening the stream. Firmware defaults
+    // mute_local_audio_when_remote=1, silencing hardware outputs whenever any
+    // remote_audio_rx stream exists. Overriding here covers multi-client
+    // scenarios where another client (e.g. SmartSDR) has set it to 1. (#1069)
+    sendCmd(QString("radio set mute_local_audio_when_remote=%1")
+                .arg(m_muteLocalWhenRemote ? 1 : 0));
     sendCmd(QString("stream create type=remote_audio_rx compression=%1").arg(audioCompressionParam()),
         [this](int code, const QString& body) {
             m_rxAudio.createPending = false;
@@ -2920,6 +3029,11 @@ void RadioModel::removeRxAudioStream()
     }
 
     const quint32 streamId = m_rxAudio.streamId;
+    // Reassert our mute preference when tearing down. If another client's
+    // stream remains open after ours is removed, this prevents the global
+    // mute_local_audio_when_remote from silencing hardware outputs. (#1110)
+    sendCmd(QString("radio set mute_local_audio_when_remote=%1")
+                .arg(m_muteLocalWhenRemote ? 1 : 0));
     sendCmd(QString("stream remove %1").arg(RadioStatusOwnership::hexId(streamId)));
     qCDebug(lcProtocol) << "RadioModel: removed remote_audio_rx stream"
                         << RadioStatusOwnership::hexId(streamId);
@@ -3094,6 +3208,23 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
     m_panadapters[normalizedPanId] = pan;
     if (m_activePanId.isEmpty())
         m_activePanId = normalizedPanId;
+
+    // Apply active throttle cap immediately — applyAdaptiveFrameRate only fires
+    // on tier transitions, so a pan opened mid-throttle would run at the radio
+    // default (~25 fps) until the next state change.
+    const int activeCap = currentAdaptiveFpsCap();
+    if (activeCap > 0) {
+        qCDebug(lcProtocol) << "RadioModel: applying active throttle cap" << activeCap
+                            << "to newly-claimed pan" << normalizedPanId;
+        sendAdaptiveCapToPan(normalizedPanId, activeCap);
+        // waterfallId may not be assigned yet (arrives in a subsequent status
+        // message) — re-apply the cap once it lands.
+        connect(pan, &PanadapterModel::waterfallIdChanged,
+                this, [this, normalizedPanId]() {
+            const int cap = currentAdaptiveFpsCap();
+            if (cap > 0) sendAdaptiveCapToPan(normalizedPanId, cap);
+        });
+    }
 
     connect(pan, &PanadapterModel::waterfallIdChanged,
             this, &RadioModel::updateStreamFilters);
@@ -4182,8 +4313,12 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
         changed = true;
     }
     if (kvs.contains("auto_save")) {
-        m_autoSave = kvs["auto_save"] == "1";
-        changed = true;
+        const bool newAutoSave = kvs["auto_save"] == "1";
+        if (m_autoSave != newAutoSave) {
+            m_autoSave = newAutoSave;
+            emit autoSaveChanged(newAutoSave);
+            changed = true;
+        }
     }
     if (kvs.contains("freq_error_ppb")) {
         m_freqErrorPpb = kvs["freq_error_ppb"].toInt();

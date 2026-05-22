@@ -56,18 +56,19 @@ public:
                                   int freqGridSpacingKhz = 0);
 
     // Set the panadapter ID this overlay belongs to (for +RX routing).
-    void setPanId(const QString& id) { m_panId = id; }
+    void setPanId(const QString& id);
     QString panId() const { return m_panId; }
 
     // Connect/disconnect the ANT panel to a slice model.
     void setSlice(SliceModel* slice);
     void setWnbState(bool on, int level);
+    void syncWnbState(bool on, int level, bool updating);
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step);
     void syncNoiseFloorPosition(int pos);
 
     // Populate XVTR band sub-panel
-    struct XvtrBand { QString name; double rfFreqMhz; };
+    struct XvtrBand { QString name; double rfFreqMhz; QString stackKey; };
     void setXvtrBands(const QVector<XvtrBand>& bands);
 
     // Surface the connected radio's built-in transverter bands (4m on
@@ -117,8 +118,11 @@ signals:
     void wfColorSchemeChanged(int scheme);
     void noiseFloorPositionChanged(int pos);
     void noiseFloorEnableChanged(bool on);
-    // Emitted when user selects a band from the sub-panel.
-    void bandSelected(const QString& bandName, double freqMhz, const QString& mode);
+    // Emitted when user selects a band from the sub-panel.  stackKeyHint is
+    // populated only when the clicked control already knows the exact Flex
+    // band-stack key, such as a configured XVTR button.
+    void bandSelected(const QString& bandName, double freqMhz, const QString& mode,
+                      const QString& stackKeyHint = {});
     // Emitted when user clicks XVTR button to open Radio Setup XVTR tab.
     void xvtrSetupRequested();
     // Emitted when WNB toggle changes.
@@ -139,6 +143,8 @@ signals:
 
 private:
     QString m_panId;
+    QPointer<PanadapterModel> m_panadapter;
+    QMetaObject::Connection m_panRxAntennaConnection;
     void toggle();
     void updateLayout();
     void toggleBandPanel();
@@ -155,8 +161,10 @@ private:
     void hideAllSubPanels();
     void showBandPanelAt(const QPoint& pos);
     void syncAntPanel();
+    void wirePanadapterRxAntenna();
     void refreshAntennaCombo();
     void setRxAntennaComboToken(const QString& token);
+    QString currentRxAntennaToken() const;
 
     static constexpr int kBtnAddRx = 0;
     static constexpr int kBtnAddTnf = 1;

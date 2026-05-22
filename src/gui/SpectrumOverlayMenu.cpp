@@ -304,13 +304,19 @@ void SpectrumOverlayMenu::buildAntPanel()
 
     connect(m_rxAntCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int index) {
-        if (m_updatingFromModel || !m_slice || index < 0)
+        if (m_updatingFromModel || index < 0)
             return;
         QString ant = m_rxAntCmb->itemData(index).toString();
         if (ant.isEmpty())
             ant = m_rxAntCmb->itemText(index);
-        if (!ant.isEmpty())
+        if (ant.isEmpty())
+            return;
+        if (m_radioModel && !m_panId.isEmpty()) {
+            m_radioModel->sendCommand(
+                QStringLiteral("display pan set %1 rxant=%2").arg(m_panId, ant));
+        } else if (m_slice) {
             m_slice->setRxAntenna(ant);
+        }
     });
 
     // RF Gain row
@@ -355,7 +361,7 @@ void SpectrumOverlayMenu::buildAntPanel()
         if (!m_updatingFromModel && snapped != m_lastEmittedRfGain) {
             m_lastEmittedRfGain = snapped;
             emit rfGainChanged(snapped);
-            if (m_slice)
+            if ((!m_radioModel || m_panId.isEmpty()) && m_slice)
                 m_slice->setRfGain(static_cast<float>(snapped));
         }
     });
@@ -421,7 +427,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     });
 
     // ANT panel tooltips
-    m_rxAntCmb->setToolTip("Select the receive antenna port for this slice.");
+    m_rxAntCmb->setToolTip("Select the receive antenna port for this panadapter.");
     m_rfGainSlider->setToolTip("Adjusts receiver IF gain. Lower values reduce strong-signal overload.");
     m_wnbBtn->setToolTip("Wideband noise blanker \u2014 suppresses correlated impulse noise across the full panadapter bandwidth.");
     m_wnbSlider->setToolTip("Adjusts WNB threshold. Higher values blank more aggressively.");
@@ -438,25 +444,72 @@ void SpectrumOverlayMenu::setAntennaList(const QStringList& ants)
     refreshAntennaCombo();
 }
 
+void SpectrumOverlayMenu::setPanId(const QString& id)
+{
+    if (m_panId == id)
+        return;
+    m_panId = id;
+    wirePanadapterRxAntenna();
+    refreshAntennaCombo();
+}
+
 void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
 {
     if (m_radioModel)
         disconnect(m_radioModel, &RadioModel::antennaAliasesChanged,
                    this, &SpectrumOverlayMenu::refreshAntennaCombo);
+    if (m_panRxAntennaConnection) {
+        disconnect(m_panRxAntennaConnection);
+        m_panRxAntennaConnection = {};
+    }
+    m_panadapter = nullptr;
     m_radioModel = model;
     if (m_radioModel) {
         connect(m_radioModel, &RadioModel::antennaAliasesChanged,
                 this, &SpectrumOverlayMenu::refreshAntennaCombo);
     }
+    wirePanadapterRxAntenna();
     refreshAntennaCombo();
+}
+
+void SpectrumOverlayMenu::wirePanadapterRxAntenna()
+{
+    if (m_panRxAntennaConnection) {
+        disconnect(m_panRxAntennaConnection);
+        m_panRxAntennaConnection = {};
+    }
+    m_panadapter = nullptr;
+
+    if (!m_radioModel || m_panId.isEmpty())
+        return;
+
+    m_panadapter = m_radioModel->panadapter(m_panId);
+    if (!m_panadapter)
+        return;
+
+    m_panRxAntennaConnection =
+        connect(m_panadapter, &PanadapterModel::rxAntennaChanged,
+                this, [this](const QString& ant) {
+        m_updatingFromModel = true;
+        setRxAntennaComboToken(ant);
+        m_updatingFromModel = false;
+    });
+}
+
+QString SpectrumOverlayMenu::currentRxAntennaToken() const
+{
+    if (m_panadapter && !m_panadapter->rxAntenna().isEmpty())
+        return m_panadapter->rxAntenna();
+    if (m_slice)
+        return m_slice->rxAntenna();
+    return m_rxAntCmb ? m_rxAntCmb->currentData().toString() : QString();
 }
 
 void SpectrumOverlayMenu::refreshAntennaCombo()
 {
     if (!m_rxAntCmb)
         return;
-    const QString cur = m_slice ? m_slice->rxAntenna()
-                                : m_rxAntCmb->currentData().toString();
+    const QString cur = currentRxAntennaToken();
     QSignalBlocker sb(m_rxAntCmb);
     m_rxAntCmb->clear();
     for (const QString& ant : m_antList) {
@@ -490,12 +543,16 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
     if (!m_slice) return;
 
     connect(m_slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
+        if (m_panadapter && !m_panadapter->rxAntenna().isEmpty())
+            return;
         m_updatingFromModel = true;
         setRxAntennaComboToken(ant);
         m_updatingFromModel = false;
     });
 
     connect(m_slice, &SliceModel::rfGainChanged, this, [this](float gain) {
+        if (m_panadapter)
+            return;
         m_updatingFromModel = true;
         QSignalBlocker sb(m_rfGainSlider);
         m_rfGainSlider->setValue(static_cast<int>(gain));
@@ -514,14 +571,16 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
 
 void SpectrumOverlayMenu::syncAntPanel()
 {
-    if (!m_slice) return;
+    if (!m_slice && !m_panadapter) return;
     m_updatingFromModel = true;
-    setRxAntennaComboToken(m_slice->rxAntenna());
+    setRxAntennaComboToken(currentRxAntennaToken());
+    const int gain = m_panadapter ? m_panadapter->rfGain()
+                                  : static_cast<int>(m_slice->rfGain());
     {
         QSignalBlocker sb(m_rfGainSlider);
-        m_rfGainSlider->setValue(static_cast<int>(m_slice->rfGain()));
+        m_rfGainSlider->setValue(gain);
     }
-    m_rfGainLabel->setText(QString("%1 dB").arg(static_cast<int>(m_slice->rfGain())));
+    m_rfGainLabel->setText(QString("%1 dB").arg(gain));
     m_updatingFromModel = false;
 }
 
@@ -1264,7 +1323,13 @@ void SpectrumOverlayMenu::toggleDisplayPanel()
 
 void SpectrumOverlayMenu::setWnbState(bool on, int level)
 {
+    syncWnbState(on, level, false);
+}
+
+void SpectrumOverlayMenu::syncWnbState(bool on, int level, bool updating)
+{
     QSignalBlocker b1(m_wnbBtn), b2(m_wnbSlider);
+    Q_UNUSED(updating);
     m_wnbBtn->setChecked(on);
     m_wnbSlider->setValue(level);
     m_wnbLabel->setText(QString::number(level));
@@ -1404,9 +1469,10 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         btn->setStyleSheet(xvtrBtnStyle);
         const double freq = bands[i].rfFreqMhz;
         const QString name = bands[i].name;
-        connect(btn, &QPushButton::clicked, this, [this, name, freq]() {
+        const QString stackKey = bands[i].stackKey;
+        connect(btn, &QPushButton::clicked, this, [this, name, freq, stackKey]() {
             hideAllSubPanels();
-            emit bandSelected(name, freq, "USB");
+            emit bandSelected(name, freq, "USB", stackKey);
         });
         grid->addWidget(btn, row + i / 3, i % 3);
         m_xvtrBandBtns.append(btn);
@@ -1496,8 +1562,9 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
 
         const double freq = xvtr.rfFreqMhz;
         const QString name = xvtr.name;
-        connect(btn, &QPushButton::clicked, this, [this, name, freq]() {
-            emit bandSelected(name, freq, "FM");
+        const QString stackKey = xvtr.stackKey;
+        connect(btn, &QPushButton::clicked, this, [this, name, freq, stackKey]() {
+            emit bandSelected(name, freq, "FM", stackKey);
             m_xvtrPanel->hide();
             m_xvtrPanelVisible = false;
         });

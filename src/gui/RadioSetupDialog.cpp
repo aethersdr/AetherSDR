@@ -3751,7 +3751,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             "NextSlice", "PrevSlice",
             "ToggleAgc", "VolumeUp", "VolumeDown",
             "WheelFrequency", "WheelVolume", "WheelPower",
-            "WheelRit", "WheelXit",
+            "WheelRit", "WheelXit", "WheelAgcT",
             "CwxF1", "CwxF2", "CwxF3", "CwxF4",
             "CwxF5", "CwxF6", "CwxF7", "CwxF8",
             "CwxF9", "CwxF10", "CwxF11", "CwxF12"

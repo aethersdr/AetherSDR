@@ -112,6 +112,7 @@ signals:
     void autoSqlMarginDbChanged(int dB);
     // Emitted when the radio reports a squelch state change (for spectrum line).
     void squelchStateChanged(bool on, int level);
+    void directEntryCommitted(double mhz, const QString& source);
     // Emitted when the user presses the Mute All button.
     // Logic lives in MainWindow::onMuteAllSlicesToggle() which has RADE context.
     void muteAllToggled();

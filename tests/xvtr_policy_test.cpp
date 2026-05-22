@@ -42,9 +42,10 @@ std::string detailFor(const XvtrPolicy::WaterfallTileRange& range)
 
 void expectBandKey(const char* label, const QString& bandName,
                    const QVector<XvtrPolicy::Transverter>& xvtrs,
-                   const QString& expectedKey)
+                   const QString& expectedKey,
+                   ModelCapabilities caps = {})
 {
-    const auto result = XvtrPolicy::resolveBandStackKey(bandName, xvtrs);
+    const auto result = XvtrPolicy::resolveBandStackKey(bandName, xvtrs, caps);
     report(label,
            result.isSupported() && result.key == expectedKey,
            QStringLiteral("key=%1 reason=%2")
@@ -105,6 +106,22 @@ void testBandStackKeysRefuseGuesses()
                           "70cm", xvtrs, "has no Flex display pan band= mapping");
     expectUnsupportedBand("unknown band does not use freq/mode fallback",
                           "1.2G", xvtrs, "has no Flex display pan band= mapping");
+}
+
+void testBandStackKeysUseNativeVhfOnlyWhenCapable()
+{
+    const QVector<XvtrPolicy::Transverter> xvtrs = {
+        xvtr(12, 3, "2m", 144.0, 28.0),
+    };
+
+    expectBandKey("FLEX-6700 native 2m strips UI suffix",
+                  "2m", {}, "2", {false, true});
+    expectBandKey("FLEX-6500/6700 native 4m strips UI suffix",
+                  "4m", {}, "4", {true, false});
+    expectBandKey("native 2m wins over same-named XVTR on capable radio",
+                  "2m", xvtrs, "2", {false, true});
+    expectBandKey("without 2m capability, same-named XVTR still resolves",
+                  "2m", xvtrs, "X12");
 }
 
 void testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan()
@@ -222,6 +239,7 @@ int main()
 {
     testBandStackKeysUseFlexIndex();
     testBandStackKeysRefuseGuesses();
+    testBandStackKeysUseNativeVhfOnlyWhenCapable();
     testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan();
     testXvtrWaterfallMapsIfToRfBands();
     testXvtrWaterfallGuardrails();
