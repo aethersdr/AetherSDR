@@ -8774,6 +8774,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
         m_wfLineDurationReconcile.clear();
         m_adaptiveThrottleActive = false;
+        m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
 
         // Clear spectrum/waterfall so the display doesn't look frozen
         if (m_panStack) {
