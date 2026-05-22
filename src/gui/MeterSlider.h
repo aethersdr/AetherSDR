@@ -1,5 +1,6 @@
 #pragma once
 
+#include "DragValuePopup.h"
 #include "MeterSmoother.h"
 
 #include <QElapsedTimer>
@@ -9,6 +10,8 @@
 #include <QWidget>
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -21,6 +24,8 @@ class MeterSlider : public QWidget {
     Q_OBJECT
 
 public:
+    using DragValueFormatter = std::function<QString(float)>;
+
     explicit MeterSlider(QWidget* parent = nullptr)
         : QWidget(parent)
     {
@@ -39,6 +44,16 @@ public:
 
     float gain() const { return m_gain; }
     float level() const { return m_smooth.value(); }
+
+    void setDragValueFormatter(DragValueFormatter formatter) {
+        m_dragValueFormatter = std::move(formatter);
+    }
+
+    void setDragValuePopupEnabled(bool enabled) {
+        m_dragValuePopupEnabled = enabled;
+        if (!enabled && m_dragValuePopup)
+            m_dragValuePopup->hideNow();
+    }
 
     void setGain(float g) {
         g = std::clamp(g, 0.0f, 1.0f);
@@ -127,17 +142,33 @@ protected:
         if (e->button() == Qt::LeftButton) {
             m_dragging = true;
             updateGainFromMouse(e->pos().x());
+            showDragValuePopup(e->globalPosition().toPoint());
+            e->accept();
+            return;
         }
+        QWidget::mousePressEvent(e);
     }
 
     void mouseMoveEvent(QMouseEvent* e) override {
-        if (m_dragging)
+        if (m_dragging) {
             updateGainFromMouse(e->pos().x());
+            showDragValuePopup(e->globalPosition().toPoint());
+            e->accept();
+            return;
+        }
+        QWidget::mouseMoveEvent(e);
     }
 
     void mouseReleaseEvent(QMouseEvent* e) override {
-        if (e->button() == Qt::LeftButton)
+        if (m_dragging && e->button() == Qt::LeftButton) {
+            showDragValuePopup(e->globalPosition().toPoint());
             m_dragging = false;
+            if (m_dragValuePopup)
+                m_dragValuePopup->linger();
+            e->accept();
+            return;
+        }
+        QWidget::mouseReleaseEvent(e);
     }
 
 private:
@@ -151,10 +182,38 @@ private:
         }
     }
 
+    QString dragValueText() const {
+        if (m_dragValueFormatter)
+            return m_dragValueFormatter(m_gain);
+        return QStringLiteral("%1%").arg(std::lround(m_gain * 100.0f));
+    }
+
+    QPoint dragValueAnchor(const QPoint& fallbackGlobal) const {
+        const int margin = 1;
+        const int barW = width() - 2 * margin;
+        if (barW <= 0)
+            return fallbackGlobal;
+        int thumbX = margin + static_cast<int>(m_gain * barW);
+        thumbX = std::clamp(thumbX, margin, margin + barW);
+        return mapToGlobal(QPoint(thumbX, height() / 2));
+    }
+
+    void showDragValuePopup(const QPoint& fallbackGlobal) {
+        if (!m_dragValuePopupEnabled)
+            return;
+        if (!m_dragValuePopup)
+            m_dragValuePopup = new DragValuePopup(this);
+        m_dragValuePopup->showValue(dragValueAnchor(fallbackGlobal),
+                                    dragValueText());
+    }
+
     float         m_gain{0.5f};
     MeterSmoother m_smooth;
     QTimer        m_animTimer;
     QElapsedTimer m_animElapsed;
+    DragValueFormatter m_dragValueFormatter;
+    DragValuePopup* m_dragValuePopup{nullptr};
+    bool          m_dragValuePopupEnabled{true};
     bool          m_dragging{false};
 };
 

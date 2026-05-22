@@ -574,6 +574,7 @@ set(GUI_SOURCES
     src/gui/AetherDspWidget.cpp
     src/gui/WaveformsDialog.cpp
     src/gui/ClientRxDspApplet.cpp
+    src/gui/DragValuePopup.cpp
     src/gui/DspParamPopup.cpp
     src/gui/DxClusterDialog.cpp
     src/gui/DxClusterStartupCommandsDialog.cpp

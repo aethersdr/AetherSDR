@@ -1,11 +1,17 @@
 #pragma once
 
+#include "DragValuePopup.h"
+
 #include <QSlider>
 #include <QComboBox>
 #include <QAbstractItemView>
 #include <QLabel>
 #include <QMouseEvent>
+#include <QStyle>
+#include <QStyleOptionSlider>
 #include <QWheelEvent>
+#include <functional>
+#include <utility>
 
 // Global lock for sidebar controls — when locked, sliders, combo boxes,
 // and scrollable labels ignore wheel/mouse events so the user can scroll
@@ -25,13 +31,57 @@ private:
 // parent scroll area handle them.
 class GuardedSlider : public QSlider {
 public:
-    using QSlider::QSlider;
+    using DragValueFormatter = std::function<QString(int)>;
+
+    explicit GuardedSlider(QWidget* parent = nullptr)
+        : QSlider(parent)
+    {
+    }
+
+    explicit GuardedSlider(Qt::Orientation orientation, QWidget* parent = nullptr)
+        : QSlider(orientation, parent)
+    {
+    }
+
+    void setDragValueFormatter(DragValueFormatter formatter) {
+        m_dragValueFormatter = std::move(formatter);
+    }
+
+    void setDragValuePopupEnabled(bool enabled) {
+        m_dragValuePopupEnabled = enabled;
+        if (!enabled && m_dragValuePopup)
+            m_dragValuePopup->hideNow();
+    }
+
     void mousePressEvent(QMouseEvent* ev) override {
         if (ControlsLock::isLocked()) {
             ev->ignore();
             return;
         }
         QSlider::mousePressEvent(ev);
+        if (ev->button() == Qt::LeftButton) {
+            m_dragValueActive = true;
+            showDragValuePopup(ev->globalPosition().toPoint());
+        }
+    }
+    void mouseMoveEvent(QMouseEvent* ev) override {
+        if (ControlsLock::isLocked()) {
+            ev->ignore();
+            return;
+        }
+        QSlider::mouseMoveEvent(ev);
+        if (m_dragValueActive || isSliderDown())
+            showDragValuePopup(ev->globalPosition().toPoint());
+    }
+    void mouseReleaseEvent(QMouseEvent* ev) override {
+        const bool wasActive = m_dragValueActive;
+        QSlider::mouseReleaseEvent(ev);
+        if (wasActive && ev->button() == Qt::LeftButton) {
+            showDragValuePopup(ev->globalPosition().toPoint());
+            m_dragValueActive = false;
+            if (m_dragValuePopup)
+                m_dragValuePopup->linger();
+        }
     }
     void wheelEvent(QWheelEvent* ev) override {
         if (ControlsLock::isLocked()) {
@@ -45,6 +95,37 @@ public:
             setValue(value() + (delta > 0 ? singleStep() : -singleStep()));
         ev->accept();
     }
+
+private:
+    QString dragValueText() const {
+        if (m_dragValueFormatter)
+            return m_dragValueFormatter(value());
+        return QString::number(value());
+    }
+
+    QPoint dragValueAnchor(const QPoint& fallbackGlobal) const {
+        QStyleOptionSlider opt;
+        initStyleOption(&opt);
+        const QRect handle = style()->subControlRect(
+            QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
+        if (handle.isValid())
+            return mapToGlobal(handle.center());
+        return fallbackGlobal;
+    }
+
+    void showDragValuePopup(const QPoint& fallbackGlobal) {
+        if (!m_dragValuePopupEnabled)
+            return;
+        if (!m_dragValuePopup)
+            m_dragValuePopup = new AetherSDR::DragValuePopup(this);
+        m_dragValuePopup->showValue(dragValueAnchor(fallbackGlobal),
+                                    dragValueText());
+    }
+
+    DragValueFormatter m_dragValueFormatter;
+    AetherSDR::DragValuePopup* m_dragValuePopup{nullptr};
+    bool m_dragValuePopupEnabled{true};
+    bool m_dragValueActive{false};
 };
 
 // QComboBox subclass that only responds to wheel events when the dropdown

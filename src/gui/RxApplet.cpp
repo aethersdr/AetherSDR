@@ -105,6 +105,19 @@ namespace AetherSDR {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+static QString percentText(int value)
+{
+    return QStringLiteral("%1%").arg(value);
+}
+
+static QString panText(int value)
+{
+    if (value == 50)
+        return QStringLiteral("C");
+    return QStringLiteral("%1%2").arg(value < 50 ? QStringLiteral("L") : QStringLiteral("R"))
+                                .arg(std::abs(value - 50));
+}
+
 // ── Style constants (matching docs/applet-style-guide.md) ──────────────────
 
 static constexpr const char* kButtonBase =
@@ -738,6 +751,7 @@ void RxApplet::buildUI()
         m_afSlider = new GuardedSlider(Qt::Horizontal);
         m_afSlider->setRange(0, 100);
         m_afSlider->setValue(70);
+        static_cast<GuardedSlider*>(m_afSlider)->setDragValueFormatter(percentText);
         m_afSlider->setStyleSheet(kSliderStyle);
         row->addWidget(m_afSlider, 1);
 
@@ -760,6 +774,7 @@ void RxApplet::buildUI()
         m_panSlider = new CenterMarkSlider(50, Qt::Horizontal);
         m_panSlider->setRange(0, 100);
         m_panSlider->setValue(50);
+        static_cast<GuardedSlider*>(m_panSlider)->setDragValueFormatter(panText);
         m_panSlider->setStyleSheet(kSliderStyle);
         row->addWidget(m_panSlider, 1);
 
@@ -789,6 +804,11 @@ void RxApplet::buildUI()
         m_sqlSlider = new GuardedSlider(Qt::Horizontal);
         m_sqlSlider->setRange(0, 100);
         m_sqlSlider->setValue(20);
+        static_cast<GuardedSlider*>(m_sqlSlider)->setDragValueFormatter([this](int v) {
+            if (m_sqlMode == SqlMode::Auto)
+                return QStringLiteral("%1 dB").arg(v);
+            return QString::number(v);
+        });
         m_sqlSlider->setStyleSheet(kSliderStyle);
         row->addWidget(m_sqlSlider, 1);
 
