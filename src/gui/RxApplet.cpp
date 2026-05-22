@@ -105,7 +105,7 @@ namespace AetherSDR {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// ── Style constants (matching STYLEGUIDE.md) ────────────────────────────────
+// ── Style constants (matching docs/applet-style-guide.md) ──────────────────
 
 static constexpr const char* kButtonBase =
     "QPushButton { background: #1a2a3a; border: 1px solid #205070; "
