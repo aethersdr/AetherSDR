@@ -5352,6 +5352,17 @@ void MainWindow::closeEvent(QCloseEvent* event)
     }
 
     m_discovery.stopListening();
+
+#ifdef HAVE_RADE
+    // Deactivate RADE before disconnecting so the mute-restore command
+    // reaches the radio while the connection is still alive. Without this,
+    // the destructor's deactivateRADE() runs after disconnectFromRadio()
+    // has already closed the socket — audio_mute=1 is left stranded on
+    // the radio and the slice appears muted on the next session.
+    if (m_radeSliceId >= 0)
+        deactivateRADE();
+#endif
+
     m_radioModel.disconnectFromRadio();
     audioStopRx();
 
