@@ -2,7 +2,7 @@
     <qresource prefix="/">
         <file alias="icon.png">docs/assets/logo-circle.png</file>
         <file alias="bg-default.jpg">docs/assets/logo.jpg</file>
-        <file alias="cty.dat">cty.dat</file>
+        <file alias="cty.dat">resources/cty.dat</file>
     </qresource>
     <qresource prefix="/bandplans">
         <file alias="arrl-us.json">resources/bandplans/arrl-us.json</file>

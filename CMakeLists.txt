@@ -1699,7 +1699,7 @@ else()
     install(TARGETS AetherSDR
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
-    install(FILES AetherSDR.desktop
+    install(FILES packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )
     install(FILES docs/assets/logo-circle.png
