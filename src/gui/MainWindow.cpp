@@ -2598,13 +2598,15 @@ MainWindow::MainWindow(QWidget* parent)
             if (!sw) return;  // pan not yet available
             m_displaySettingsPushed = true;
             m_radioModel.setPanAverage(sw->fftAverage());
-            m_radioModel.setPanFps(sw->fftFps());
+            if (!m_adaptiveThrottleActive)
+                m_radioModel.setPanFps(sw->fftFps());
             m_radioModel.setPanWeightedAverage(sw->fftWeightedAvg());
             m_radioModel.setWaterfallColorGain(sw->wfColorGain());
             m_radioModel.setWaterfallBlackLevel(sw->wfBlackLevel());
             m_radioModel.setWaterfallAutoBlack(sw->wfAutoBlack());
             int rate = sw->wfLineDuration();
-            m_radioModel.setWaterfallLineDuration(rate);
+            if (!m_adaptiveThrottleActive)
+                m_radioModel.setWaterfallLineDuration(rate);
             // Restore saved WNB and RF gain
             auto& s = AppSettings::instance();
             bool wnbOn = s.value(sw->settingsKey("DisplayWnbEnabled"), "False").toString() == "True";
@@ -2623,10 +2625,12 @@ MainWindow::MainWindow(QWidget* parent)
             int bgOpacity = s.value(sw->settingsKey("BackgroundOpacity"), "80").toInt();
             sw->setBackgroundOpacity(bgOpacity);
             // Nudge rate to force waterfall tile re-sync
-            QTimer::singleShot(500, this, [this, rate]() {
-                m_radioModel.setWaterfallLineDuration(rate + 1);
-                m_radioModel.setWaterfallLineDuration(rate);
-            });
+            if (!m_adaptiveThrottleActive) {
+                QTimer::singleShot(500, this, [this, rate]() {
+                    m_radioModel.setWaterfallLineDuration(rate + 1);
+                    m_radioModel.setWaterfallLineDuration(rate);
+                });
+            }
         }
     });
     // NOTE: panadapterLevelChanged → spectrum()::setDbmRange has been removed.
@@ -4457,10 +4461,54 @@ MainWindow::MainWindow(QWidget* parent)
         if (quality == "Fair") color = "#cc9900";
         else if (quality == "Poor") color = "#cc3333";
         else if (quality == "Good") color = "#00b4d8";
+        // Append fps cap so users understand why moving the fps slider has no effect.
+        // Show "(restoring)" during the min-dwell hold so testers can distinguish
+        // stuck throttle from a deliberate stability wait.
+        const bool dwellPending = m_adaptiveFpsCap > 0 && m_radioModel.pendingThrottleLift();
+        const QString capSuffix = m_adaptiveFpsCap > 0
+            ? (dwellPending
+               ? QStringLiteral(" · %1 fps cap (restoring)").arg(m_adaptiveFpsCap)
+               : QStringLiteral(" · %1 fps cap").arg(m_adaptiveFpsCap))
+            : QString();
         m_networkLabel->setText(QString("[<span style='color:%1'>%2</span>]")
-            .arg(color, quality));
+            .arg(color, quality + capSuffix));
         Q_UNUSED(pingMs);
-        m_networkLabel->setToolTip(buildNetworkTooltip(m_radioModel));
+        QString tooltip = buildNetworkTooltip(m_radioModel);
+        if (m_adaptiveFpsCap > 0) {
+            const QString throttleMsg = dwellPending
+                ? QStringLiteral("Adaptive throttle holding for link stability — restoring shortly\n\n")
+                : QString("Adaptive throttle active: %1 fps cap\n\n").arg(m_adaptiveFpsCap);
+            tooltip.prepend(throttleMsg);
+        }
+        m_networkLabel->setToolTip(tooltip);
+    });
+
+    connect(&m_radioModel, &RadioModel::adaptiveThrottleChanged,
+            this, [this](bool active, int fpsCap) {
+        m_adaptiveThrottleActive = active;
+        m_adaptiveFpsCap = active ? fpsCap : 0;
+        if (!active) {
+            // Throttle lifted — push each pan's user-configured fps back to the radio.
+            // The reconcile timers are suppressed while throttle is active, so they
+            // won't have done this automatically.
+            if (!m_panStack) return;
+            for (auto* applet : m_panStack->allApplets()) {
+                if (!applet) continue;
+                auto* sw = applet->spectrumWidget();
+                if (!sw) continue;
+                const QString panId = applet->panId();
+                const int userFps = sw->fftFps();
+                if (userFps > 0)
+                    m_radioModel.sendCommand(
+                        QString("display pan set %1 fps=%2").arg(panId).arg(userFps));
+                const int userWfMs = sw->wfLineDuration();
+                auto* pan = m_radioModel.panadapter(panId);
+                if (pan && !pan->waterfallId().isEmpty() && userWfMs > 0)
+                    m_radioModel.sendCommand(
+                        QString("display panafall set %1 line_duration=%2")
+                            .arg(pan->waterfallId()).arg(userWfMs));
+            }
+        }
     });
 
     connect(&m_radioModel.meterModel(), &MeterModel::hwTelemetryChanged,
@@ -8776,6 +8824,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
         m_wfLineDurationReconcile.clear();
+        m_adaptiveThrottleActive = false;
+        m_adaptiveFpsCap = 0;  // clear cap alongside throttle flag — see #2829 review
 
         // Clear spectrum/waterfall so the display doesn't look frozen
         if (m_panStack) {
@@ -10294,6 +10344,15 @@ void MainWindow::schedulePanFpsReconcile(const QString& panId, int reportedFps)
 {
     if (panId.isEmpty() || reportedFps <= 0)
         return;
+    // While adaptive throttle is active the radio fps is intentionally below the
+    // user's desired value. Don't fight the throttle — MainWindow restores fps
+    // when adaptiveThrottleChanged(false) fires.
+    if (m_adaptiveThrottleActive) {
+        qCDebug(lcProtocol).noquote().nospace()
+            << "MainWindow: fps reconcile suppressed for pan=" << panId
+            << " reported=" << reportedFps << " (adaptive throttle active)";
+        return;
+    }
 
     auto* pan = m_radioModel.panadapter(panId);
     if (!pan)
@@ -10371,6 +10430,12 @@ void MainWindow::scheduleWaterfallLineDurationReconcile(const QString& panId, in
 {
     if (panId.isEmpty() || reportedMs <= 0)
         return;
+    if (m_adaptiveThrottleActive) {
+        qCDebug(lcProtocol).noquote().nospace()
+            << "MainWindow: wf line_duration reconcile suppressed for pan=" << panId
+            << " reported=" << reportedMs << "ms (adaptive throttle active)";
+        return;
+    }
 
     auto* pan = m_radioModel.panadapter(panId);
     if (!pan)
@@ -10901,7 +10966,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::fftFpsChanged,
             this, [this, applet, sw](int v) {
-        sw->setFftFps(v);
+        sw->setFftFps(v);  // always update restore target for when throttle lifts
+        if (m_adaptiveThrottleActive)
+            return;
         m_radioModel.sendCommand(
             QString("display pan set %1 fps=%2").arg(applet->panId()).arg(v));
     });
@@ -10938,7 +11005,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfAutoBlackOffset(offset);
     });
     const auto applyWaterfallLineDuration = [this, applet, sw](int ms) {
-        sw->setWfLineDuration(ms);
+        sw->setWfLineDuration(ms);  // always update restore target for when throttle lifts
+        if (m_adaptiveThrottleActive)
+            return;
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan && !pan->waterfallId().isEmpty())
             m_radioModel.sendCommand(
@@ -11007,11 +11076,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setNoiseFloorPosition(75);
         sw->setFreqGridSpacing(0);  // Auto (#1390)
 
-        // Radio commands for radio-authoritative display settings
+        // Radio commands for radio-authoritative display settings.
+        // fps and line_duration are suppressed while adaptive throttle is active
+        // so the reset doesn't fight the congestion-aware cap. The SpectrumWidget
+        // values above (sw->setFftFps / sw->setWfLineDuration) are already updated,
+        // so they become the new restore targets when the throttle lifts.
         m_radioModel.sendCommand(
             QString("display pan set %1 average=0").arg(applet->panId()));
-        m_radioModel.sendCommand(
-            QString("display pan set %1 fps=25").arg(applet->panId()));
+        if (!m_adaptiveThrottleActive)
+            m_radioModel.sendCommand(
+                QString("display pan set %1 fps=25").arg(applet->panId()));
         m_radioModel.sendCommand(
             QString("display pan set %1 weighted_average=0").arg(applet->panId()));
         auto* pan = m_radioModel.panadapter(applet->panId());
@@ -11020,8 +11094,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 QString("display panafall set %1 color_gain=50").arg(pan->waterfallId()));
             m_radioModel.sendCommand(
                 QString("display panafall set %1 black_level=15").arg(pan->waterfallId()));
-            m_radioModel.sendCommand(
-                QString("display panafall set %1 line_duration=100").arg(pan->waterfallId()));
+            if (!m_adaptiveThrottleActive)
+                m_radioModel.sendCommand(
+                    QString("display panafall set %1 line_duration=100").arg(pan->waterfallId()));
         }
 
         // Persist all defaults to AppSettings
