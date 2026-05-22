@@ -776,7 +776,7 @@ else()
     target_compile_options(aether_libmodem_core PRIVATE -w)
 endif()
 
-qt_add_resources(RESOURCES resources.qrc)
+qt_add_resources(RESOURCES resources/resources.qrc)
 
 add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES})
 
