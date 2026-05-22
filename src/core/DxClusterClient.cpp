@@ -11,6 +11,14 @@
 
 namespace AetherSDR {
 
+// Cap the line-assembly buffer.  A buggy or hostile cluster server that
+// dribbles bytes without ever sending '\n' would otherwise grow m_readBuffer
+// unbounded until QByteArray refuses to allocate (process OOM).  DX cluster
+// banners can be multi-paragraph, but 16 MiB without a newline is well past
+// any legitimate burst.  Same pattern as RadioConnection / WanConnection
+// (issue #2955) and GHSA-7w4w-wfqm-wh93 (M2, RigctlServer).
+static constexpr int kMaxReadBuffer = 16 * 1024 * 1024;
+
 DxClusterClient::DxClusterClient(QObject* parent)
     : QObject(parent)
 {
@@ -188,7 +196,16 @@ void DxClusterClient::stripTelnetIAC()
 void DxClusterClient::onReadyRead()
 {
     m_readBuffer.append(m_socket->readAll());
+    // Cap check goes *after* stripTelnetIAC() so a flood of IAC noise that
+    // compresses away doesn't spuriously trip the limit.
     stripTelnetIAC();
+    if (m_readBuffer.size() > kMaxReadBuffer) {
+        qCWarning(lcDxCluster) << "DxClusterClient: read buffer exceeded"
+                               << kMaxReadBuffer << "bytes without newline — disconnecting";
+        m_socket->disconnectFromHost();
+        m_readBuffer.clear();
+        return;
+    }
 
     while (true) {
         int idx = m_readBuffer.indexOf('\n');
