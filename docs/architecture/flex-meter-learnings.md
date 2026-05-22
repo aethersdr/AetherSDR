@@ -4,7 +4,7 @@ This document captures the working conclusions from AetherSDR compression
 meter debugging across FLEX-8000 series radios and a FLEX-6600. It is meant to
 record capture-backed behavior, not API guesses.
 
-Related implementation context lives in `docs/tx-audio-signal-path.md`.
+Related implementation context lives in [`tx-audio-signal-path.md`](tx-audio-signal-path.md).
 
 ## Core Rules
 

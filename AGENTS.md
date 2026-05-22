@@ -203,7 +203,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 - `MainWindow` — wires everything together, signal routing hub
 - `PanadapterStream` — VITA-49 UDP parsing, routes FFT/waterfall/audio/meters
 
-**Threading:** up to 11 threads — see `docs/architecture-pipelines.md` for the
+**Threading:** up to 11 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
 
 **Design principle:** RadioModel owns all sub-models on the main thread.
@@ -256,7 +256,7 @@ key=value pairs by locating the last space before the first `=` sign.
 - `transmit set break_in=1` wrong — correct: `cw break_in 1`
 
 VITA-49 packet format, PCC codes, FFT bin conversion, waterfall tile format,
-audio payload, meter data — see `docs/vita49-format.md`.
+audio payload, meter data — see `docs/architecture/vita49-format.md`.
 
 ---
 
@@ -264,7 +264,7 @@ audio payload, meter data — see `docs/vita49-format.md`.
 
 ### Adding or converting a dialog
 
-See **[`docs/dialog-patterns.md`](docs/dialog-patterns.md)** before writing
+See **[`docs/style/dialog-patterns.md`](docs/style/dialog-patterns.md)** before writing
 or modifying a `QDialog`. It documents the canonical
 lazy-construct + non-modal + geometry-persist + frameless-chrome pattern,
 the common pitfalls that have hit real PRs, and the existing dialogs to
@@ -376,7 +376,7 @@ signal wiring), spectrumForSlice() (overlay routing).
 - Push `xpixels`/`ypixels` on pan creation (radio defaults to 50×20)
 - FFT stream ID = pan ID (0x40xx), waterfall stream ID = waterfall ID (0x42xx)
 
-See `docs/multi-pan-pitfalls.md` for 20 numbered lessons learned.
+See `docs/architecture/multi-pan-pitfalls.md` for 20 numbered lessons learned.
 
 ---
 
