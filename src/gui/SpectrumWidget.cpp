@@ -1263,7 +1263,6 @@ void SpectrumWidget::setFftLineWidth(float w) {
     auto& s = AppSettings::instance();
     s.setValue(settingsKey("DisplayFftLineWidth"), QString::number(m_fftLineWidth, 'f', 1));
     s.save();
-    update();
 }
 void SpectrumWidget::setFftFillAlpha(float a) {
     m_fftFillAlpha = std::clamp(a, 0.0f, 1.0f);
@@ -5687,14 +5686,6 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    // Mirror GPU-path semantics (renderGpuFrame, ~L5065): width 0 = "Off"
-    // (line draw skipped); otherwise honor the slider with a cosmetic pen so
-    // the requested pixel width survives high-DPI on Windows.
-    const bool drawLine = m_fftLineWidth > 0.0f;
-    QPen linePen;
-    linePen.setCosmetic(true);
-    linePen.setWidthF(m_fftLineWidth);
-
     if (m_fftHeatMap) {
         // Heat map fill: per-column vertical gradient from heat color at top to dark blue at base
         const int bottom = r.bottom();
@@ -5718,13 +5709,10 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
         }
 
         // Heat map line: per-segment coloring
-        if (drawLine) {
-            for (int i = 0; i < n - 1; ++i) {
-                float avgT = (pts[i].t + pts[i+1].t) * 0.5f;
-                linePen.setColor(heatColor(avgT));
-                p.setPen(linePen);
-                p.drawLine(pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y);
-            }
+        for (int i = 0; i < n - 1; ++i) {
+            float avgT = (pts[i].t + pts[i+1].t) * 0.5f;
+            p.setPen(QPen(heatColor(avgT), 1.5));
+            p.drawLine(pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y);
         }
     } else {
         // Solid color fill + line
@@ -5750,11 +5738,8 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
         grad.setColorAt(1.0, botColor);
 
         p.fillPath(fillPath, grad);
-        if (drawLine) {
-            linePen.setColor(m_fftFillColor);
-            p.setPen(linePen);
-            p.drawPath(linePath);
-        }
+        p.setPen(QPen(m_fftFillColor, 1.5));
+        p.drawPath(linePath);
     }
 
     p.setRenderHint(QPainter::Antialiasing, false);

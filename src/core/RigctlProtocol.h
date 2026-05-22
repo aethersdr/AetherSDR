@@ -43,6 +43,7 @@ private:
     QString cmdGetPtt();
     QString cmdSetPtt(const QString& arg);
     QString cmdGetInfo();
+    QString cmdGetRigInfo();
     QString cmdGetSplitVfo();
     QString cmdSetSplitVfo(const QString& args);
     QString cmdGetSplitFreq();
@@ -51,6 +52,23 @@ private:
     QString cmdSetSplitMode(const QString& args);
     QString cmdGetLevel(const QString& arg);
     QString cmdSetLevel(const QString& args);
+    QString cmdGetFunc(const QString& arg);
+    QString cmdSetFunc(const QString& args);
+    QString cmdGetRit();
+    QString cmdSetRit(const QString& arg);
+    QString cmdGetXit();
+    QString cmdSetXit(const QString& arg);
+    QString cmdGetAnt();
+    QString cmdSetAnt(const QString& arg);
+    QString cmdGetTs();
+    QString cmdSetTs(const QString& arg);
+    QString cmdGetDcd();
+    QString cmdGetTrn();
+    QString cmdSetTrn(const QString& arg);
+    QString cmdVfoOp(const QString& arg);
+    QString cmdGetVfoInfo(const QString& arg);
+    QString cmdPower2mW(const QString& args);
+    QString cmdMW2power(const QString& args);
     QString cmdDumpState();
     QString cmdSendMorse(const QString& text);  // b <text> / \send_morse
     QString cmdStopMorse();                     // \stop_morse
@@ -58,7 +76,11 @@ private:
 
     // Helpers
     SliceModel* currentSlice() const;
-    SliceModel* findTxSlice() const;
+    SliceModel* findTxSlice();         // non-const: calls tryPromoteTxSlice()
+    // If a split-enable arrived when only one slice existed, this promotes the
+    // newly-created second slice to TX as soon as it appears in the model,
+    // then applies any stashed split freq/mode from the burst that preceded it.
+    void tryPromoteTxSlice();
     QString rprt(int code) const;
 
     // Mode conversion tables
@@ -73,6 +95,15 @@ private:
     // The next line is consumed verbatim as the morse text. Hamlib spec
     // allows this two-line form and Not1MM contest CW relies on it.
     bool m_pendingMorseLine{false};
+    bool m_pendingSplitEnable{false};    // set when split enabled but no second slice existed yet
+    bool m_pendingTxSliceChange{false};  // set when setTxSlice(true) was queued for a non-rx slice
+    // Slice we intend to be TX — set synchronously when we queue setTxSlice(true)
+    // so findTxSlice() returns the right slice before the event loop fires.
+    SliceModel* m_pendingTxSlice{nullptr};
+    // Stashed split freq/mode from commands that arrived before the new slice
+    // existed (single-slice path).  Applied in tryPromoteTxSlice().
+    double  m_pendingSplitFreqMHz{0.0};
+    QString m_pendingSplitMode;
 };
 
 } // namespace AetherSDR

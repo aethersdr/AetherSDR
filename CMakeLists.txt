@@ -1696,6 +1696,15 @@ target_link_libraries(container_nesting_test PRIVATE
 )
 set_target_properties(container_nesting_test PROPERTIES AUTOMOC ON)
 
+# Integration test — requires a running AetherSDR instance.
+# Not added to ctest; run manually:
+#   ./build/rigctld_test [--host HOST] [--port PORT] [--ptt] [--cw]
+add_executable(rigctld_test
+    tests/rigctld_test.cpp
+)
+target_include_directories(rigctld_test PRIVATE src)
+target_link_libraries(rigctld_test PRIVATE Qt6::Core Qt6::Network)
+
 
 # ── Install rules ────────────────────────────────────────────────────────────
 include(GNUInstallDirs)
