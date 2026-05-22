@@ -1,7 +1,7 @@
 <RCC>
     <qresource prefix="/">
-        <file alias="icon.png">docs/logo-circle.png</file>
-        <file alias="bg-default.jpg">docs/logo.jpg</file>
+        <file alias="icon.png">docs/assets/logo-circle.png</file>
+        <file alias="bg-default.jpg">docs/assets/logo.jpg</file>
         <file alias="cty.dat">cty.dat</file>
     </qresource>
     <qresource prefix="/bandplans">

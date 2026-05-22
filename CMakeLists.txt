@@ -799,10 +799,10 @@ if(APPLE)
     target_link_libraries(AetherSDR PRIVATE "-framework AVFoundation" "-framework Accelerate")
     target_sources(AetherSDR PRIVATE src/core/MacNRFilter.cpp)
 
-    # Generate AetherSDR.icns at build time from docs/logo-circle.png so local
+    # Generate AetherSDR.icns at build time from docs/assets/logo-circle.png so local
     # builds get an app icon without any extra setup (sips and iconutil are
     # part of macOS).
-    set(ICON_SOURCE "${CMAKE_SOURCE_DIR}/docs/logo-circle.png")
+    set(ICON_SOURCE "${CMAKE_SOURCE_DIR}/docs/assets/logo-circle.png")
     set(ICNS_PATH "${CMAKE_BINARY_DIR}/AetherSDR.icns")
     set(ICONSET_PATH "${CMAKE_BINARY_DIR}/AetherSDR.iconset")
     add_custom_command(
@@ -1702,7 +1702,7 @@ else()
     install(FILES AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )
-    install(FILES docs/logo-circle.png
+    install(FILES docs/assets/logo-circle.png
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps
         RENAME aethersdr.png
     )

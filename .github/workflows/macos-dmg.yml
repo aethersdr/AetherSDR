@@ -274,7 +274,7 @@ jobs:
           create-dmg \
             --volname "AetherSDR" \
             --volicon "build/AetherSDR.icns" \
-            --background "docs/logo-invert.png" \
+            --background "docs/assets/logo-invert.png" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
