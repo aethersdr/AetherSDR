@@ -73,6 +73,14 @@ private:
     // The next line is consumed verbatim as the morse text. Hamlib spec
     // allows this two-line form and Not1MM contest CW relies on it.
     bool m_pendingMorseLine{false};
+
+    // Tracks the last split state this client reported, so set_split_vfo only
+    // reclaims TX on an actual split→non-split *transition* — not on every
+    // periodic poll. -1 = unknown (first call records state without acting),
+    // 0 = split disabled, 1 = split enabled.  Without this, a logger that
+    // polls `set_split_vfo 0` every few seconds on a CAT channel bound to a
+    // non-TX slice keeps re-seizing TX away from the slice the user chose.
+    int m_lastSplitEnable{-1};
 };
 
 } // namespace AetherSDR

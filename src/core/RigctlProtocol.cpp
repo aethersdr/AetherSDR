@@ -438,12 +438,22 @@ QString RigctlProtocol::cmdSetSplitVfo(const QString& args)
     QStringList parts = args.split(' ', Qt::SkipEmptyParts);
     if (parts.isEmpty()) return rprt(-1);
     bool enable = (parts[0] == "1");
-    if (!enable) {
-        // Disable split — move TX back to our slice (idempotent).
-        // Hamlib clients (VARA/VARAC/N1MM) poll this every ~3s; without the
-        // isTxSlice() guard the radio gets bombarded with `slice set N tx=1`
-        // commands, which appears to interfere with radio-side TX state
-        // tracking and causes spurious unkey after ~1s during PTT.
+
+    // Only reclaim TX on an actual split→non-split transition, never on a
+    // steady-state poll.  Hamlib loggers (VARA/VARAC/N1MM) poll
+    // `set_split_vfo 0 VFOA` every few seconds.  Each CAT channel is bound to
+    // a fixed slice; reassigning TX to this channel's slice on every poll
+    // (the prior !isTxSlice() guard only suppressed the already-TX case) means
+    // the moment the user moves TX to another slice, the next poll on a non-TX
+    // channel re-seizes it — TX visibly ping-pongs back to this channel's
+    // slice within a couple of seconds. Acting only on the 1→0 edge lets a
+    // logger that never toggles split leave the user's TX choice alone. (#2722)
+    const bool wasEnabled = (m_lastSplitEnable == 1);
+    const bool firstReport = (m_lastSplitEnable < 0);
+    m_lastSplitEnable = enable ? 1 : 0;
+
+    if (!enable && wasEnabled && !firstReport) {
+        // Genuine split-off transition — move TX back to this client's slice.
         if (auto* s = currentSlice(); s && !s->isTxSlice())
             s->setTxSlice(true);
     }
