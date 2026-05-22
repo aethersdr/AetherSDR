@@ -26,6 +26,17 @@
 
 namespace AetherSDR {
 
+namespace {
+// Server-side caps closing the unbounded-frame / unbounded-client surface
+// flagged in GHSA-7w4w-wfqm-wh93 (M2).  QWebSocket message/frame sizes
+// default to 1 GiB in Qt6 — wildly more than any legitimate TCI command
+// or audio frame.  64 KiB easily covers the largest legitimate TCI text
+// command and is enforced at the framing layer.  Eight concurrent clients
+// matches the rigctld cap.
+constexpr qint64 kMaxWsMessageBytes = 64 * 1024;
+constexpr int    kMaxClients        = 8;
+}
+
 // ── TCI binary audio frame header (per ExpertSDR3 TCI spec v2.0) ────────
 // 9 × uint32 = 36 bytes, followed by sample payload
 // TCI audio header: 16 × uint32 = 64 bytes
@@ -289,6 +300,24 @@ void TciServer::onNewConnection()
 {
     while (m_server->hasPendingConnections()) {
         auto* ws = m_server->nextPendingConnection();
+
+        // Refuse new connections once at-capacity (GHSA-7w4w-wfqm-wh93).
+        if (m_clients.size() >= kMaxClients) {
+            qCWarning(lcCat) << "TciServer: refusing connection from"
+                             << ws->peerAddress().toString()
+                             << "— at max-clients cap (" << kMaxClients << ")";
+            ws->close(QWebSocketProtocol::CloseCodeTooMuchData,
+                      QStringLiteral("server at max-clients cap"));
+            ws->deleteLater();
+            continue;
+        }
+
+        // Cap per-message and per-frame size to refuse OOM-by-huge-frame
+        // (GHSA-7w4w-wfqm-wh93).  Qt6 default is 1 GiB per message; legit
+        // TCI text commands and audio frames are well under 64 KiB.
+        ws->setMaxAllowedIncomingMessageSize(kMaxWsMessageBytes);
+        ws->setMaxAllowedIncomingFrameSize(kMaxWsMessageBytes);
+
         auto* protocol = new TciProtocol(m_model);
 
         ClientState cs;
