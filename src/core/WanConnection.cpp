@@ -134,6 +134,7 @@ quint32 WanConnection::sendCommand(const QString& command, ResponseCallback call
         qCDebug(lcSmartLink) << "WAN TX:" << data.trimmed();
     }
     m_socket.write(data);
+    m_socket.flush();  // push SSL plaintext buffer to OS TCP buffer immediately (#rade-shutdown)
     return seq;
 }
 
