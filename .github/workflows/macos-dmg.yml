@@ -196,7 +196,7 @@ jobs:
 
           # 3. Sign the main app bundle last (no --deep)
           codesign --force --options runtime --timestamp \
-            --entitlements macos/AetherSDR.entitlements \
+            --entitlements packaging/macos/AetherSDR.entitlements \
             --sign "$SIGN_ID" \
             "$APP"
 
