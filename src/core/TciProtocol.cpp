@@ -233,6 +233,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
 {
     m_pendingNotification.clear();
     m_pendingMasterVolume = -1;
+    m_pendingTxGain = -1;
 
     if (cmd.isEmpty()) return {};
 
@@ -326,6 +327,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     // AetherSDR extensions (not in TCI v2.0 spec)
     if (name == "rx_record")        return cmdRxRecord(args, isSet);
     if (name == "rx_play")          return cmdRxPlay(args, isSet);
+    if (name == "tx_gain")          return cmdTxGain(args, isSet);
 
     // Unknown command — ignore silently per TCI spec
     return {};
@@ -528,6 +530,28 @@ QString TciProtocol::cmdTuneDrive(const QStringList& args, bool /*isSet*/)
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("tune_drive:%1;").arg(pwr);
+    return {};
+}
+
+// ── TX_GAIN: get/set TCI TX audio gain (AetherSDR extension) ────────────────
+
+// tx_gain is an AetherSDR extension — not in the TCI v2.0 spec. It controls
+// TciServer's outbound TX gain (m_txGain), applied to WSJT-X/JTDX audio before
+// the radio. Global command, 0-100 (percent of unity), matching the
+// drive/tune_drive convention. Like cmdVolume, TciProtocol cannot reach
+// TciServer directly, so a SET stashes the value in m_pendingTxGain and
+// TciServer applies it via setTxGain() after handleCommand() returns.
+QString TciProtocol::cmdTxGain(const QStringList& args, bool /*isSet*/)
+{
+    if (args.isEmpty()) {
+        // GET — current TCI TX gain (0-100). TciServer persists the 0.0-1.0
+        // value to TciTxGain whenever it changes.
+        float g = AppSettings::instance().value("TciTxGain", "1.00").toFloat();
+        return QStringLiteral("tx_gain:%1;").arg(qBound(0, qRound(g * 100.0f), 100));
+    }
+    int pct = qBound(0, args[args.size() == 1 ? 0 : 1].toInt(), 100);
+    m_pendingTxGain = pct;
+    m_pendingNotification = QStringLiteral("tx_gain:%1;").arg(pct);
     return {};
 }
 

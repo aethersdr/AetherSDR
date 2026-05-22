@@ -178,6 +178,7 @@ private:
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
     float             m_cachedMicLevel{-50.0f};
+    float             m_cachedAlc{0.0f};       // SW-ALC peak, dBFS
 };
 
 } // namespace AetherSDR

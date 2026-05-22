@@ -98,6 +98,10 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 this, [this](float micLevel, float, float, float) {
             m_cachedMicLevel = micLevel;
         });
+        connect(&m_model->meterModel(), &MeterModel::swAlcChanged,
+                this, [this](float dbfs) {
+            m_cachedAlc = dbfs;
+        });
     }
 
     // Capture DAX RX stream creation responses so we can register them
@@ -583,6 +587,11 @@ void TciServer::onTextMessage(const QString& msg)
         // above to the requesting client and broadcast to others.
         int mvol = client.protocol->pendingMasterVolume();
         if (mvol >= 0) emit masterVolumeRequested(mvol);
+
+        // tx_gain SET — same pattern: TciProtocol can't reach TciServer, so it
+        // stashes the 0-100 value and we apply it here via setTxGain().
+        int txg = client.protocol->pendingTxGain();
+        if (txg >= 0) setTxGain(txg / 100.0f);
 
         // Start/stop TX_CHRONO when a TCI client sets trx state.
         // WSJT-X only sends TX audio in response to TX_CHRONO (type=3) frames.
@@ -1467,13 +1476,16 @@ void TciServer::broadcastStatus()
             }
         }
         if (cs.txSensorsEnabled && m_model->transmitModel().isTransmitting()) {
-            // tx_sensors:trx,mic_dbm,fwd_watts,peak_watts,swr
+            // tx_sensors:trx,mic_dbm,fwd_watts,peak_watts,swr,alc_dbfs
+            // alc_dbfs (trailing field, AetherSDR extension) is the SW-ALC
+            // peak; index-based parsers safely ignore the extra field.
             cs.socket->sendTextMessage(
-                QStringLiteral("tx_sensors:0,%1,%2,%3,%4;")
+                QStringLiteral("tx_sensors:0,%1,%2,%3,%4,%5;")
                     .arg(m_cachedMicLevel, 0, 'f', 1)
                     .arg(m_cachedFwdPower, 0, 'f', 1)
                     .arg(m_cachedFwdPower, 0, 'f', 1)  // peak ≈ avg for now
-                    .arg(m_cachedSwr, 0, 'f', 1));
+                    .arg(m_cachedSwr, 0, 'f', 1)
+                    .arg(m_cachedAlc, 0, 'f', 1));
         }
     }
 
