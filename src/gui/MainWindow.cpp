@@ -196,6 +196,15 @@
 #include <QFile>
 #include <QStandardPaths>
 
+// CMake captures the short git SHA at configure time and passes it as a
+// preprocessor definition (see CMakeLists.txt).  Defaulted to "unknown" so
+// non-CMake builds (e.g. raw clang invocations during local experiments)
+// still compile.  See issue #2991 for the rationale on hoisting this to
+// file scope rather than the inline definition inside buildMenuBar().
+#ifndef AETHER_GIT_SHA
+#define AETHER_GIT_SHA "unknown"
+#endif
+
 namespace AetherSDR {
 
 namespace {
@@ -8022,10 +8031,8 @@ void MainWindow::buildMenuBar()
         // Header
         // The git SHA captured at CMake configure time identifies the build —
         // useful when bug-reporting against a dev/test build that doesn't
-        // correspond to a tagged release.  See CMakeLists.txt for the capture.
-#ifndef AETHER_GIT_SHA
-#define AETHER_GIT_SHA "unknown"
-#endif
+        // correspond to a tagged release.  See CMakeLists.txt for the capture
+        // and the file-top #define for the non-CMake-build fallback.
         auto* header = new QLabel(QString(
             "<div style='text-align:center;'>"
             "<h2 style='margin-bottom:2px; color:#c8d8e8;'>AetherSDR</h2>"
@@ -8042,6 +8049,15 @@ void MainWindow::buildMenuBar()
                  QStringLiteral(AETHER_GIT_SHA)));
         header->setAlignment(Qt::AlignCenter);
         header->setWordWrap(true);
+        // Tooltip explains the staleness possibility — the SHA is baked at
+        // CMake configure time, so a dev who runs `cmake --build` after a
+        // new commit without re-configuring sees the previous SHA here.
+        // Re-running `cmake --fresh` (or deleting CMakeCache.txt) captures
+        // the current HEAD.
+        header->setToolTip(
+            QStringLiteral("Build identity. SHA is captured at CMake "
+                           "configure time — re-run `cmake -B build` after "
+                           "a new commit if you need the current value."));
         vbox->addWidget(header);
 
         // Separator

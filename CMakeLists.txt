@@ -794,7 +794,11 @@ if(Git_FOUND)
     endif()
 endif()
 target_compile_definitions(AetherSDR PRIVATE AETHER_GIT_SHA="${AETHER_GIT_SHA}")
-message(STATUS "Build SHA: ${AETHER_GIT_SHA}")
+if(Git_FOUND AND _aether_git_sha_rv EQUAL 0 AND NOT "${_aether_git_sha_out}" STREQUAL "")
+    message(STATUS "Build SHA: ${AETHER_GIT_SHA}")
+else()
+    message(STATUS "Build SHA: ${AETHER_GIT_SHA} (git unavailable or not a git checkout)")
+endif()
 
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
