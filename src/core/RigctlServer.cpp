@@ -5,6 +5,16 @@
 
 namespace AetherSDR {
 
+namespace {
+// Server-side caps closing the unbounded-read / unbounded-client surface
+// flagged in GHSA-7w4w-wfqm-wh93 (M2).  Rigctld commands top out around a
+// few dozen bytes; 64 KiB is wildly generous and still forbids a slow-byte
+// OOM attacker.  Eight concurrent clients covers WSJT-X + logger + a few
+// spares while preventing fd-exhaustion.
+constexpr int kMaxBufferBytes = 64 * 1024;
+constexpr int kMaxClients     = 8;
+}
+
 RigctlServer::RigctlServer(RadioModel* model, QObject* parent)
     : QObject(parent)
     , m_model(model)
@@ -75,6 +85,17 @@ void RigctlServer::onNewConnection()
 {
     while (m_server->hasPendingConnections()) {
         auto* socket = m_server->nextPendingConnection();
+
+        // Refuse new connections once at-capacity (GHSA-7w4w-wfqm-wh93).
+        if (m_clients.size() >= kMaxClients) {
+            qCWarning(lcCat) << "RigctlServer: refusing connection from"
+                             << socket->peerAddress().toString()
+                             << "— at max-clients cap (" << kMaxClients << ")";
+            socket->disconnectFromHost();
+            socket->deleteLater();
+            continue;
+        }
+
         socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);  // TCP_NODELAY
         auto* protocol = new RigctlProtocol(m_model);
         protocol->setSliceIndex(m_sliceIndex);
@@ -106,6 +127,18 @@ void RigctlServer::onClientData()
 
     auto& cs = m_clients[idx];
     cs.buffer.append(socket->readAll());
+
+    // Cap the per-client buffer: an attacker that drips bytes without ever
+    // sending '\n' would otherwise grow this to multi-GB and OOM the
+    // process.  See GHSA-7w4w-wfqm-wh93.  Legitimate rigctld commands are
+    // tens of bytes, so 64 KiB without a newline is unambiguously hostile.
+    if (cs.buffer.size() > kMaxBufferBytes) {
+        qCWarning(lcCat) << "RigctlServer: client" << socket->peerAddress().toString()
+                         << "exceeded" << kMaxBufferBytes
+                         << "byte buffer without newline — disconnecting";
+        socket->disconnectFromHost();
+        return;
+    }
 
     // Process complete lines
     while (true) {

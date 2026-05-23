@@ -1,6 +1,7 @@
 #include "VfoWidget.h"
 #include "PhaseKnob.h"
 #include "ComboStyle.h"
+#include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
 #include "RxApplet.h"
 #include "SliceColorManager.h"
@@ -581,21 +582,16 @@ void VfoWidget::buildUI()
             double freqMhz = 0.0;
 
             // Try parsing as MHz (e.g. "14.225", "14.225.000", "14225", "14225.0")
-            QString clean = text;
-            // Handle "14.225.000" format — remove dots beyond the first
-            int firstDot = clean.indexOf('.');
-            if (firstDot >= 0) {
-                QString beforeDot = clean.left(firstDot);
-                QString afterDot = clean.mid(firstDot + 1).remove('.');
-                clean = beforeDot + "." + afterDot;
-            }
+            QString clean = FrequencyEntryParser::normalizedMhzText(text);
             freqMhz = clean.toDouble(&ok);
+            const bool explicitMhzEntry = FrequencyEntryParser::isExplicitMhzEntry(text, clean);
 
             // If value looks like Hz or kHz (> 54 MHz is out of HF range)
             // Context-aware parsing: on XVTR bands, accept higher freqs
             const bool onXvtr = m_slice &&
                 (m_slice->rxAntenna().startsWith("XVT") || m_slice->frequency() > 54.0);
-            const double maxMhz = onXvtr ? 50000.0 : 54.0;
+            const bool highExplicitMhzEntry = ok && explicitMhzEntry && freqMhz > 54.0;
+            const double maxMhz = (onXvtr || highExplicitMhzEntry) ? 50000.0 : 54.0;
 
             if (onXvtr) {
                 // 3-digit-band convenience: on 2m/70cm a bare integer like
@@ -612,7 +608,7 @@ void VfoWidget::buildUI()
                         freqMhz = clean.toDouble(&ok);
                     }
                 }
-            } else {
+            } else if (!highExplicitMhzEntry) {
                 // HF: 14225 = kHz, 14225000 = Hz
                 if (ok && freqMhz > 54000.0)
                     freqMhz /= 1e6;
@@ -3376,7 +3372,7 @@ struct ModeFilterPresets {
 
 static const ModeFilterPresets& filterPresetsFor(const QString& mode)
 {
-    // From docs/vfo_mode_filters.csv — 8 presets per mode, 4x2 grid
+    // From docs/data/vfo_mode_filters.csv — 8 presets per mode, 4x2 grid
     static const ModeFilterPresets usb{{1800, 2100, 2400, 2700, 2900, 3300, 4000, 6000}};
     static const ModeFilterPresets am {{5600, 6000, 8000, 10000, 12000, 14000, 16000, 20000}};
     static const ModeFilterPresets cw {{50, 100, 250, 400}};

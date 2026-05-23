@@ -74,6 +74,11 @@ private:
     quint32 m_lastPingSeq{0};
     QElapsedTimer m_pingStopwatch;
 
+    // TOFU cert pin (GHSA-wfx7-w6p8-4jr2 phase 1).  Captured on first
+    // connect to a given host; subsequent connects warn on mismatch.
+    QString m_host;
+    QString m_expectedFingerprintHex;
+
     QMap<quint32, ResponseCallback> m_pendingCallbacks;
 };
 

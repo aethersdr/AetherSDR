@@ -292,6 +292,22 @@ corner of the spectrum, below the propagation and WNB indicators. This lets
 you see beam heading, selected antenna, or other station status at a glance
 without leaving the panadapter view.
 
+#### Antenna Display Names
+
+AetherSDR can update its local antenna display names from MQTT. Subscribe to
+the topics you want in the MQTT applet while a radio is connected. Retained
+broker messages work well when they arrive after AetherSDR has identified the
+connected radio.
+
+- Per-port topic: `aethersdr/antenna/name/ANT1` with payload `80m Dipole`
+- Bulk topic: `aethersdr/antenna/names` with payload
+  `{"ANT1":"80m Dipole","ANT2":"Hexbeam","RX_A":"Beverage NE"}`
+- Empty per-port payload clears that port's local name.
+- In bulk JSON, an empty string or `null` clears that port's local name.
+
+These are display names only. AetherSDR still sends canonical radio antenna
+tokens such as `ANT1`, `ANT2`, `RX_A`, and `XVTA` to the radio.
+
 #### Use Case: Rotator Control via Node-RED
 
 Many operators use Node-RED to control rotators via serial, USB, or IP.
@@ -311,6 +327,8 @@ without switching windows.
 If you use an MQTT-connected antenna switch (via Node-RED, ESP32, etc.):
 
 - Subscribe to `*ant/selected` to see the active antenna on the panadapter
+- Subscribe to `aethersdr/antenna/name/+` or `aethersdr/antenna/names` if
+  your automation publishes the current local antenna display names
 - Create buttons for each antenna: **Hexbeam** (topic `ant/select`, payload `1`),
   **Vertical** (payload `2`), **Wire** (payload `3`)
 

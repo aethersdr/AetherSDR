@@ -44,7 +44,7 @@ bool FlexControlManager::open(const QString& portName)
     m_port.setStopBits(QSerialPort::OneStop);
     m_port.setFlowControl(QSerialPort::NoFlowControl);
 
-    if (!m_port.open(QIODevice::ReadOnly)) {
+    if (!m_port.open(QIODevice::ReadWrite)) {
         qCWarning(lcDevices) << "FlexControlManager: failed to open" << portName
                    << m_port.errorString();
         return false;
@@ -52,17 +52,34 @@ bool FlexControlManager::open(const QString& portName)
 
     m_buffer.clear();
     qCDebug(lcDevices) << "FlexControlManager: opened" << portName;
+    writeLedState();
     emit connectionChanged(true);
     return true;
 }
 
 void FlexControlManager::close()
 {
-    if (!m_port.isOpen()) return;
+    if (!m_port.isOpen()) {
+        return;
+    }
+    writeLedCommand(0);
+    m_port.waitForBytesWritten(50);
     m_port.close();
     m_buffer.clear();
     qCDebug(lcDevices) << "FlexControlManager: closed";
     emit connectionChanged(false);
+}
+
+void FlexControlManager::setActiveLedButton(int button)
+{
+    if (button < 1 || button > 3) {
+        button = 0;
+    }
+    if (m_activeLedButton == button) {
+        return;
+    }
+    m_activeLedButton = button;
+    writeLedState();
 }
 
 void FlexControlManager::onReadyRead()
@@ -120,6 +137,32 @@ void FlexControlManager::processCommand(const QByteArray& cmd)
         // Init/reset — log and ignore
         qCDebug(lcDevices) << "FlexControlManager: device reset" << cmd;
     }
+}
+
+void FlexControlManager::writeLedState()
+{
+    writeLedCommand(m_activeLedButton);
+}
+
+void FlexControlManager::writeLedCommand(int button)
+{
+    if (!m_port.isOpen() || !m_port.isWritable()) {
+        return;
+    }
+
+    QByteArray cmd("I000;");
+    if (button >= 1 && button <= 3) {
+        cmd[button] = '1';
+    }
+
+    const qint64 written = m_port.write(cmd);
+    if (written != cmd.size()) {
+        qCWarning(lcDevices) << "FlexControlManager: failed to write LED command"
+                             << cmd << m_port.errorString();
+        return;
+    }
+    qCDebug(lcDevices) << "FlexControlManager: LED command" << cmd;
+    m_port.flush();
 }
 
 } // namespace AetherSDR

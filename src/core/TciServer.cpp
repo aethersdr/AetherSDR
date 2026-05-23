@@ -8,6 +8,7 @@
 #include "LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/PanadapterModel.h"
 #include "models/DaxIqModel.h"
 #include "models/MeterModel.h"
 #include "models/TransmitModel.h"
@@ -15,6 +16,7 @@
 
 #include <QWebSocketServer>
 #include <QWebSocket>
+#include <QHostAddress>
 #include <QStringList>
 #include <QTimer>
 #include <QPointer>
@@ -24,6 +26,17 @@
 #include <cstring>
 
 namespace AetherSDR {
+
+namespace {
+// Server-side caps closing the unbounded-frame / unbounded-client surface
+// flagged in GHSA-7w4w-wfqm-wh93 (M2).  QWebSocket message/frame sizes
+// default to 1 GiB in Qt6 — wildly more than any legitimate TCI command
+// or audio frame.  64 KiB easily covers the largest legitimate TCI text
+// command and is enforced at the framing layer.  Eight concurrent clients
+// matches the rigctld cap.
+constexpr qint64 kMaxWsMessageBytes = 64 * 1024;
+constexpr int    kMaxClients        = 8;
+}
 
 // ── TCI binary audio frame header (per ExpertSDR3 TCI spec v2.0) ────────
 // 9 × uint32 = 36 bytes, followed by sample payload
@@ -288,6 +301,24 @@ void TciServer::onNewConnection()
 {
     while (m_server->hasPendingConnections()) {
         auto* ws = m_server->nextPendingConnection();
+
+        // Refuse new connections once at-capacity (GHSA-7w4w-wfqm-wh93).
+        if (m_clients.size() >= kMaxClients) {
+            qCWarning(lcCat) << "TciServer: refusing connection from"
+                             << ws->peerAddress().toString()
+                             << "— at max-clients cap (" << kMaxClients << ")";
+            ws->close(QWebSocketProtocol::CloseCodeTooMuchData,
+                      QStringLiteral("server at max-clients cap"));
+            ws->deleteLater();
+            continue;
+        }
+
+        // Cap per-message and per-frame size to refuse OOM-by-huge-frame
+        // (GHSA-7w4w-wfqm-wh93).  Qt6 default is 1 GiB per message; legit
+        // TCI text commands and audio frames are well under 64 KiB.
+        ws->setMaxAllowedIncomingMessageSize(kMaxWsMessageBytes);
+        ws->setMaxAllowedIncomingFrameSize(kMaxWsMessageBytes);
+
         auto* protocol = new TciProtocol(m_model);
 
         ClientState cs;
@@ -307,6 +338,7 @@ void TciServer::onNewConnection()
         qCInfo(lcCat) << "TciServer: client connected from"
                       << ws->peerAddress().toString();
         emit clientCountChanged(m_clients.size());
+        emit clientsChanged();
 
         sendInitBurst(ws);
     }
@@ -364,6 +396,38 @@ void TciServer::onClientDisconnected()
     qCInfo(lcCat) << "TciServer: client disconnected,"
                   << m_clients.size() << "remaining";
     emit clientCountChanged(m_clients.size());
+    emit clientsChanged();
+}
+
+QVector<TciClientInfo> TciServer::connectedClients() const
+{
+    QVector<TciClientInfo> out;
+    out.reserve(m_clients.size());
+    for (const auto& cs : m_clients) {
+        if (!cs.socket)
+            continue;
+        TciClientInfo info;
+        // Normalise the peer address so it is both readable and a STABLE
+        // alias key: collapse IPv4-mapped IPv6 (::ffff:a.b.c.d) to plain
+        // IPv4, and IPv6 loopback (::1) to 127.0.0.1. Otherwise the same
+        // physical client could key its saved Name under two spellings.
+        QHostAddress ha = cs.socket->peerAddress();
+        bool isV4 = false;
+        const quint32 v4 = ha.toIPv4Address(&isV4);
+        if (isV4)
+            ha = QHostAddress(v4);
+        else if (ha.isLoopback())
+            ha = QHostAddress(QHostAddress::LocalHost);
+        info.peerAddress  = ha.toString();
+        info.peerPort     = cs.socket->peerPort();
+        info.audio        = cs.audioEnabled;
+        info.audioReceiver= cs.audioReceiver;
+        info.iq           = cs.iqEnabled;
+        info.rxSensors    = cs.rxSensorsEnabled;
+        info.txSensors    = cs.txSensorsEnabled;
+        out.append(info);
+    }
+    return out;
 }
 
 void TciServer::onTextMessage(const QString& msg)
@@ -384,6 +448,7 @@ void TciServer::onTextMessage(const QString& msg)
     // forks (Improved, Improved Plus, KN4CRD fork…) send commands our
     // parser doesn't match.  Truncate long ones to keep logs readable.
     qCDebug(lcCat) << "TCI rx:" << msg.left(256);
+    emit tciMessage(QStringLiteral("rx"), msg);
 
     // TCI messages are semicolon-terminated; may contain multiple commands
     const QStringList cmds = msg.split(';', Qt::SkipEmptyParts);
@@ -418,6 +483,7 @@ void TciServer::onTextMessage(const QString& msg)
                           << "rate=" << client.audioSampleRate
                           << "ch=" << client.audioChannels
                           << "fmt=" << client.audioFormat;
+            emit clientsChanged();
             continue;
         }
         if (trimmed.startsWith("audio_stop")) {
@@ -432,6 +498,7 @@ void TciServer::onTextMessage(const QString& msg)
             ws->sendTextMessage(cmd.trimmed() + ";");
             qCInfo(lcCat) << "TCI: audio stopped for client"
                           << ws->peerAddress().toString();
+            emit clientsChanged();
             continue;
         }
 
@@ -477,6 +544,7 @@ void TciServer::onTextMessage(const QString& msg)
             ws->sendTextMessage(QStringLiteral("rx_sensors_enable:%1;")
                                     .arg(client.rxSensorsEnabled ? "true" : "false"));
             qCInfo(lcCat) << "TCI: rx_sensors" << (client.rxSensorsEnabled ? "enabled" : "disabled");
+            emit clientsChanged();
             continue;
         }
         if (trimmed.startsWith("tx_sensors_enable:")) {
@@ -486,6 +554,7 @@ void TciServer::onTextMessage(const QString& msg)
             ws->sendTextMessage(QStringLiteral("tx_sensors_enable:%1;")
                                     .arg(client.txSensorsEnabled ? "true" : "false"));
             qCInfo(lcCat) << "TCI: tx_sensors" << (client.txSensorsEnabled ? "enabled" : "disabled");
+            emit clientsChanged();
             continue;
         }
 
@@ -502,6 +571,7 @@ void TciServer::onTextMessage(const QString& msg)
             QString response = client.protocol->handleCommand(cmd.trimmed());
             if (!response.isEmpty())
                 ws->sendTextMessage(response);
+            emit clientsChanged();
             continue;
         }
         if (trimmed.startsWith("iq_stop:")) {
@@ -515,6 +585,21 @@ void TciServer::onTextMessage(const QString& msg)
             QString response = client.protocol->handleCommand(cmd.trimmed());
             if (!response.isEmpty())
                 ws->sendTextMessage(response);
+            emit clientsChanged();
+            continue;
+        }
+
+        // Spectrum event subscribe/unsubscribe — enables waterfall row forwarding
+        if (trimmed == "spectrum_event:on") {
+            client.spectrumEnabled = true;
+            qCInfo(lcCat) << "TCI: spectrum_event enabled for client"
+                          << ws->peerAddress().toString();
+            continue;
+        }
+        if (trimmed == "spectrum_event:off") {
+            client.spectrumEnabled = false;
+            qCInfo(lcCat) << "TCI: spectrum_event disabled for client"
+                          << ws->peerAddress().toString();
             continue;
         }
 
@@ -1264,6 +1349,7 @@ void TciServer::broadcast(const QString& msg)
 {
     for (auto& cs : m_clients)
         cs.socket->sendTextMessage(msg);
+    emit tciMessage(QStringLiteral("tx"), msg);
 }
 
 void TciServer::broadcastBinary(const QByteArray& data)
@@ -1523,6 +1609,65 @@ void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sam
 
     for (auto& cs : m_clients) {
         if (cs.iqEnabled && cs.iqChannel == trx)
+            cs.socket->sendBinaryMessage(frame);
+    }
+}
+
+// ── Waterfall row → TCI binary spectrum frames (type=4) ──────────────────────
+
+void TciServer::onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
+                                    double lowMhz, double highMhz,
+                                    quint32 timecode, qint64 emittedNs)
+{
+    Q_UNUSED(timecode); Q_UNUSED(emittedNs);
+
+    bool anySpectrum = false;
+    for (const auto& cs : m_clients) {
+        if (cs.spectrumEnabled) { anySpectrum = true; break; }
+    }
+    if (!anySpectrum) return;
+
+    const int nBins = binsDbm.size();
+    if (nBins == 0) return;
+
+    // Resolve waterfall streamId → TRX for multi-pan disambiguation.
+    // Waterfall IDs are 0x42xx; each PanadapterModel knows its wfStreamId().
+    int trx = 0;
+    if (m_model) {
+        for (auto* pan : m_model->panadapters()) {
+            if (pan->wfStreamId() == streamId) {
+                for (auto* s : m_model->slices()) {
+                    if (s->panId() == pan->panId()) {
+                        trx = TciProtocol::tciTrxForSlice(m_model, s);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // TciAudioHeader (64 bytes) + float32 dBm bins.
+    // type=4 (SPECTRUM, AetherSDR extension — not in TCI spec v2.0).
+    // reserved[0] = low edge in Hz, reserved[1] = high edge in Hz.
+    QByteArray frame(static_cast<int>(sizeof(TciAudioHeader)) + nBins * static_cast<int>(sizeof(float)),
+                     Qt::Uninitialized);
+
+    TciAudioHeader hdr{};
+    hdr.receiver    = static_cast<quint32>(trx);
+    hdr.format      = 3;      // float32
+    hdr.length      = static_cast<quint32>(nBins);
+    hdr.type        = 4;      // SPECTRUM (AetherSDR extension)
+    hdr.channels    = 1;
+    hdr.reserved[0] = static_cast<quint32>(lowMhz  * 1'000'000.0);
+    hdr.reserved[1] = static_cast<quint32>(highMhz * 1'000'000.0);
+    std::memcpy(frame.data(), &hdr, sizeof(hdr));
+
+    auto* dst = reinterpret_cast<float*>(frame.data() + sizeof(hdr));
+    std::memcpy(dst, binsDbm.constData(), nBins * sizeof(float));
+
+    for (auto& cs : m_clients) {
+        if (cs.spectrumEnabled)
             cs.socket->sendBinaryMessage(frame);
     }
 }

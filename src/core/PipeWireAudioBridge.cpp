@@ -8,6 +8,7 @@
 #include <QTimer>
 #include <QProcess>
 #include <QDateTime>
+#include <QDir>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -17,6 +18,70 @@
 #include <algorithm>
 
 namespace AetherSDR {
+
+namespace {
+
+// Resolve the per-user DAX FIFO directory.  Creates it 0700 if missing.
+// Returns empty QString on irrecoverable failure (caller logs and bails).
+// Path precedence: $XDG_RUNTIME_DIR → /run/user/<uid>/ → /tmp/aethersdr-<uid>/.
+// See GHSA-x8xf-4g5v-ppf9 — pre-fix code created world-writable FIFOs in
+// /tmp/aethersdr-dax-*.pipe, exposing the operator's TX path to local-user
+// audio injection (an FCC liability for licensed stations).
+QString daxFifoDir()
+{
+    QString base = QString::fromLocal8Bit(qgetenv("XDG_RUNTIME_DIR"));
+    if (base.isEmpty()) {
+        const QString runUser = QStringLiteral("/run/user/%1").arg(::getuid());
+        base = QDir(runUser).exists()
+            ? runUser
+            : QStringLiteral("/tmp/aethersdr-%1").arg(::getuid());
+    }
+    const QString dir = base + QStringLiteral("/aethersdr");
+    if (::mkdir(dir.toUtf8().constData(), 0700) != 0 && errno != EEXIST) {
+        qCWarning(lcDax) << "PipeWireAudioBridge: mkdir failed for"
+                         << dir << ":" << strerror(errno);
+        return {};
+    }
+    // Tighten perms in case the dir pre-existed with looser settings.
+    ::chmod(dir.toUtf8().constData(), 0700);
+    return dir;
+}
+
+// Atomic-ish owner-only FIFO creation.  Tries mkfifo(0600) first; on EEXIST,
+// verifies the existing entry is our FIFO before unlinking and retrying.
+// Refuses to clobber symlinks or files owned by other users — closes the
+// /tmp-FIFO TOCTOU vector documented in GHSA-x8xf-4g5v-ppf9.
+bool makeOwnedFifo(const QString& path)
+{
+    const QByteArray pathBytes = path.toUtf8();
+    if (::mkfifo(pathBytes.constData(), 0600) == 0) return true;
+    if (errno != EEXIST) {
+        qCWarning(lcDax) << "PipeWireAudioBridge: mkfifo failed for"
+                         << path << ":" << strerror(errno);
+        return false;
+    }
+    struct stat st{};
+    if (::lstat(pathBytes.constData(), &st) != 0
+        || !S_ISFIFO(st.st_mode)
+        || st.st_uid != ::getuid()) {
+        qCWarning(lcDax) << "PipeWireAudioBridge: refusing to replace foreign file at"
+                         << path;
+        return false;
+    }
+    if (::unlink(pathBytes.constData()) != 0) {
+        qCWarning(lcDax) << "PipeWireAudioBridge: unlink stale FIFO failed for"
+                         << path << ":" << strerror(errno);
+        return false;
+    }
+    if (::mkfifo(pathBytes.constData(), 0600) != 0) {
+        qCWarning(lcDax) << "PipeWireAudioBridge: mkfifo (retry) failed for"
+                         << path << ":" << strerror(errno);
+        return false;
+    }
+    return true;
+}
+
+} // namespace
 
 PipeWireAudioBridge::PipeWireAudioBridge(QObject* parent)
     : QObject(parent)
@@ -165,16 +230,18 @@ static uint32_t runPactl(const QStringList& args)
 
 bool PipeWireAudioBridge::loadPipeSource(int index)
 {
-    auto pipePath = QStringLiteral("/tmp/aethersdr-dax-%1.pipe").arg(index + 1);
+    // FIFO lives in the per-user XDG runtime directory with mode 0600.
+    // Pre-fix code used /tmp/aethersdr-dax-%1.pipe with mode 0666, which
+    // any local user could read (operator RX audio) or write (operator
+    // TX audio with the licensed callsign — an FCC liability).
+    // See GHSA-x8xf-4g5v-ppf9.
+    const QString fifoDir = daxFifoDir();
+    if (fifoDir.isEmpty()) return false;
+    auto pipePath = QStringLiteral("%1/dax-%2.pipe").arg(fifoDir).arg(index + 1);
     auto sourceName = QStringLiteral("aethersdr-dax-%1").arg(index + 1);
     auto sourceDesc = QStringLiteral("AetherSDR DAX %1").arg(index + 1);
 
-    // Create the named pipe (FIFO)
-    ::unlink(pipePath.toUtf8().constData());
-    if (::mkfifo(pipePath.toUtf8().constData(), 0666) != 0) {
-        qCWarning(lcDax) << "PipeWireAudioBridge: mkfifo failed:" << strerror(errno);
-        return false;
-    }
+    if (!makeOwnedFifo(pipePath)) return false;
 
     // Load PulseAudio pipe-source module.
     // Format/rate match the PipeWire graph (48 kHz float32) so PipeWire does
@@ -222,15 +289,15 @@ bool PipeWireAudioBridge::loadPipeSource(int index)
 
 bool PipeWireAudioBridge::loadPipeSink()
 {
-    auto pipePath = QStringLiteral("/tmp/aethersdr-tx.pipe");
+    // FIFO lives in the per-user XDG runtime directory with mode 0600.
+    // See GHSA-x8xf-4g5v-ppf9.
+    const QString fifoDir = daxFifoDir();
+    if (fifoDir.isEmpty()) return false;
+    auto pipePath = QStringLiteral("%1/tx.pipe").arg(fifoDir);
     auto sinkName = QStringLiteral("aethersdr-tx");
     auto sinkDesc = QStringLiteral("AetherSDR TX");
 
-    ::unlink(pipePath.toUtf8().constData());
-    if (::mkfifo(pipePath.toUtf8().constData(), 0666) != 0) {
-        qCWarning(lcDax) << "PipeWireAudioBridge: mkfifo failed:" << strerror(errno);
-        return false;
-    }
+    if (!makeOwnedFifo(pipePath)) return false;
 
     // Use a small pipe buffer (2048 bytes ~ 42ms at 24kHz mono s16le)
     // to keep latency low for digital modes like FT8/FT4.

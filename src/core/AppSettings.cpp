@@ -254,10 +254,21 @@ void AppSettings::save()
         const QString bakPath = m_filePath + ".bak";
         QFile::remove(bakPath);
         QFile::rename(m_filePath, bakPath);
+        // Tighten the backup the same way as the live file — see below.
+        QFile::setPermissions(bakPath,
+                              QFileDevice::ReadOwner | QFileDevice::WriteOwner);
     }
     if (!QFile::rename(tmpPath, m_filePath)) {
         qWarning() << "AppSettings: atomic rename failed from" << tmpPath << "to" << m_filePath;
+        return;
     }
+
+    // Restrict permissions to owner read/write (mode 0600).  Default umask
+    // leaves these XML files world-readable, exposing MQTT broker creds,
+    // SmartLink email, radio nicknames, etc.  Matches AsyncLogWriter
+    // precedent.  See GHSA-mmqp-cm4w-cvpp (L5).
+    QFile::setPermissions(m_filePath,
+                          QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 }
 
 void AppSettings::reset()
