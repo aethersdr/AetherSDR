@@ -9873,6 +9873,16 @@ void MainWindow::onSliceAdded(SliceModel* s)
     };
     connect(s, &SliceModel::modeChanged, this, updateDaxTxMode);
     connect(s, &SliceModel::txSliceChanged, this, updateDaxTxMode);
+
+    // Status-bar toast on the first blocked tune of a sustained sequence.
+    // Driven by SliceModel's lockedFeedbackActiveChanged (false→true edge),
+    // which gives natural dedup — a stuck MIDI knob or held keyboard arrow
+    // generates one toast, not one per event. The on-screen LOCKED overlay
+    // on the VFO/RX freq label handles the per-event visual feedback. (#2984)
+    connect(s, &SliceModel::lockedFeedbackActiveChanged, this, [this](bool active) {
+        if (active)
+            statusBar()->showMessage(tr("Slice is locked — unlock to tune."), 3000);
+    });
     updateDaxTxMode();  // set initial state from current TX slice mode
 
     // Push overlay for this slice to the spectrum widget
