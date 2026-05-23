@@ -157,6 +157,26 @@ compression work.
 `SC_MIC` is used as a 6000-series compression reference only when `AFTEREQ` is
 not present. It is not used as a strict replacement for the P/CW level meter.
 
+### Level Meter During Receive
+
+The Radio Setup "Level Meter During Receive" toggle controls the radio-side
+`met_in_rx` transmit setting. AetherSDR does not persist a separate local
+preference for this control; it sends `transmit set met_in_rx=0/1` and then
+mirrors the `met_in_rx` value reported by transmit status.
+
+The `remote_audio_tx` stream should still be created for remote mic audio and
+VOX-related audio transport, but creating that stream must not force
+`met_in_rx` on. If AetherSDR sends `transmit set met_in_rx=1` during startup,
+it overwrites the radio/profile-owned setting before the operator can observe
+whether the previous toggle state persisted. The startup path should therefore
+leave `met_in_rx` untouched and let the radio-reported value drive the meter
+gate.
+
+When `met_in_rx=false` and the radio is not transmitting, the P/CW level meter
+display should be blanked/gated for both radio-provided and client-side mic
+level paths. The gate is display behavior; it should not require stopping the
+remote TX audio stream or adding local persistence state.
+
 ## Two-Tone Tune Observations
 
 Two-tone tune is useful for producing deterministic RF output and checking the

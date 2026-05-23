@@ -2113,9 +2113,9 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                         // owns that stream on Windows; AetherSDR creates one lazily only
                         // when its own bridge/TCI path needs to feed DAX TX audio.
 
-                        // Request remote audio TX stream (voice mode, VOX monitoring)
-                        // This stream carries mic audio to the radio for voice TX and
-                        // VOX detection. met_in_rx=1 tells the radio to monitor it during RX.
+                        // Request remote audio TX stream (voice mode, VOX monitoring).
+                        // The radio-owned met_in_rx setting controls whether level
+                        // meter data is reported while receiving.
                         // Create netcw stream for low-latency CW keying via UDP
                         sendCmd("stream create netcw",
                             [this](int code, const QString& body) {
@@ -2141,7 +2141,6 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                                     quint32 id = body.trimmed().toUInt(nullptr, 16);
                                     qCDebug(lcProtocol) << "RadioModel: remote_audio_tx stream created, id:"
                                              << Qt::hex << id;
-                                    sendCmd("transmit set met_in_rx=1");
                                     emit remoteTxStreamReady(id);
                                 } else {
                                     qCWarning(lcProtocol) << "RadioModel: stream create remote_audio_tx failed, code"

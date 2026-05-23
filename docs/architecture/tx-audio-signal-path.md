@@ -237,8 +237,10 @@ PC Mic Audio (Opus via remote_audio_tx) — arrives with client-side
   The COD- meters (MICPEAK/MIC) only respond to hardware mic inputs.
 - **mic_level**: Radio-side gain applied after CODEC/SC_MIC, before TXAGC. Affects both
   hardware and PC mic paths.
-- **met_in_rx=1**: Tells the radio to meter incoming remote_audio_tx during RX for
-  VOX detection and P/CW mic level display.
+- **met_in_rx=1**: Tells the radio to report level meter data from incoming
+  `remote_audio_tx` while receiving. AetherSDR still creates `remote_audio_tx`
+  for remote mic audio transport, but startup must not force this setting on;
+  the radio/profile-owned value should drive the P/CW receive-meter gate.
 - **Meter IDs are dynamic**: The radio assigns meter IDs on connection. The IDs shown
   here are from one session — match by name, not by ID.
 - **Multi-slice TX chains**: Radios can expose one TX waveform meter block per
