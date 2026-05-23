@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QByteArray>
@@ -10,7 +10,7 @@
 class QTimer;
 class QFile;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 #ifdef HAVE_PIPEWIRE_NATIVE
 class PipeWireNativeRxSource;
@@ -19,7 +19,7 @@ class PipeWireNativeRxSource;
 // DAX virtual audio bridge for Linux using PulseAudio pipe modules.
 // Creates named pipes in /tmp and loads module-pipe-source (RX, 4 channels)
 // and module-pipe-sink (TX, 1 channel) so that apps like WSJT-X, VARA, fldigi
-// see "AetherSDR DAX 1-4" as audio input and "AetherSDR TX" as audio output.
+// see "MasterSDR DAX 1-4" as audio input and "MasterSDR TX" as audio output.
 // Works with both PulseAudio and PipeWire (via pipewire-pulse).
 class PipeWireAudioBridge : public QObject {
     Q_OBJECT
@@ -115,4 +115,4 @@ private:
 #endif
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

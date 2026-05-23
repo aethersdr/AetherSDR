@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class SliceModel;
@@ -75,4 +75,4 @@ private:
     bool m_pendingMorseLine{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

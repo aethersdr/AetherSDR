@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <atomic>
 #include <cstdint>
 #include <functional>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Apollo-era Quindar tones for MOX/PTT engage and disengage events
 // (#2262).  When enabled and the active TX slice is on a phone mode,
@@ -218,4 +218,4 @@ private:
     PhaseCompleteCallback m_phaseCompleteCb;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

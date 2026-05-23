@@ -1,4 +1,4 @@
-#include "WsjtxClient.h"
+﻿#include "WsjtxClient.h"
 #include "LogManager.h"
 
 #include <QDataStream>
@@ -9,7 +9,7 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 WsjtxClient::WsjtxClient(QObject* parent)
     : QObject(parent)
@@ -33,7 +33,7 @@ WsjtxClient::~WsjtxClient()
 QString WsjtxClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/wsjtx.log";
+           + "/MasterSDR/wsjtx.log";
 }
 
 void WsjtxClient::startListening(const QString& address, quint16 port)
@@ -269,4 +269,4 @@ bool WsjtxClient::readBool(QDataStream& ds, bool& out)
     return true;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

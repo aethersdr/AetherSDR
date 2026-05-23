@@ -1,7 +1,7 @@
-#include "SliceColorManager.h"
+﻿#include "SliceColorManager.h"
 #include "core/AppSettings.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static SliceColorManager* s_instance = nullptr;
 
@@ -133,4 +133,4 @@ void SliceColorManager::load()
     rebuildHexCache();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

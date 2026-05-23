@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QVector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Pure-math helper: generates evenly-spaced sweep center frequencies (MHz)
 // for an ATU pre-tune across [lowMhz, highMhz] using segmentKhz-wide
@@ -39,4 +39,4 @@ inline QVector<double> computeCenters(double lowMhz, double highMhz, int segment
     return out;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QVector>
 #include <QString>
 #include <QPair>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // A voice-bandwidth SSB signal detected in a single FFT frame.
 struct DetectedVoiceSignal {
@@ -48,4 +48,4 @@ QVector<DetectedVoiceSignal> detectVoiceSignals(
 // Scale: S9 = -73 dBm, 6 dB/S-unit.  Examples: -85 → "S8", -63 → "S9+10".
 QString sLabel(float dbm);
 
-} // namespace AetherSDR
+} // namespace MasterSDR

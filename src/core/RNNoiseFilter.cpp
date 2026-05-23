@@ -1,11 +1,11 @@
-#include "RNNoiseFilter.h"
+﻿#include "RNNoiseFilter.h"
 #include "Resampler.h"
 #include "rnnoise.h"
 
 #include <cstring>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // RNNoise frame size: 480 samples at 48kHz = 10ms
 static constexpr int FRAME_SIZE = 480;
@@ -108,4 +108,4 @@ QByteArray RNNoiseFilter::process(const QByteArray& pcm24kStereo)
     return QByteArray(needed, '\0');
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

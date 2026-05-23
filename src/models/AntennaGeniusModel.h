@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QMap>
@@ -11,7 +11,7 @@ class QUdpSocket;
 class QTcpSocket;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Information about a discovered Antenna Genius device on the network.
 struct AgDeviceInfo {
@@ -225,4 +225,4 @@ private:
     int m_seqSubRelay{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

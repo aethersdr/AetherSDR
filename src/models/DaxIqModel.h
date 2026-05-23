@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QByteArray>
@@ -6,7 +6,7 @@
 #include <QString>
 #include <QThread>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Manages up to 4 DAX IQ channels for raw I/Q streaming to SDR apps.
 // Each channel provides complex float32 data (I=left, Q=right) from the
@@ -96,4 +96,4 @@ private:
     double m_sumSq[DaxIqModel::NUM_CHANNELS]{};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

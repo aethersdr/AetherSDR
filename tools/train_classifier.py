@@ -1,5 +1,5 @@
-"""
-Signal classifier training script for AetherSDR S-History v2.
+﻿"""
+Signal classifier training script for MasterSDR S-History v2.
 
 Trains a small 2D CNN on synthetic spectrogram patches to distinguish:
   Class 0 — voice/SSB  (1.8–3.3 kHz wide, time-varying amplitude with gaps)
@@ -243,14 +243,14 @@ def export_onnx(model: torch.nn.Module, output_path: str):
     print(f"  Input:  [N, 1, {TIME_FRAMES}, {FREQ_BINS}]  (NCHW, float32, normalised [0,1])")
     print(f"  Output: [N, 2]  — [voice_prob, carrier_prob]  (softmax, sums to 1)")
     print()
-    print("Place signal_classifier.onnx next to the AetherSDR executable")
-    print("or in ~/.config/AetherSDR/ to enable CNN-assisted classification.")
+    print("Place signal_classifier.onnx next to the MasterSDR executable")
+    print("or in ~/.config/MasterSDR/ to enable CNN-assisted classification.")
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train AetherSDR signal classifier")
+    parser = argparse.ArgumentParser(description="Train MasterSDR signal classifier")
     parser.add_argument("--output",  default="signal_classifier.onnx",
                         help="Output ONNX model path (default: signal_classifier.onnx)")
     parser.add_argument("--epochs",  type=int, default=40,

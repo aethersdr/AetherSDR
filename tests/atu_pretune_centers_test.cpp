@@ -1,4 +1,4 @@
-// Unit test for computeCenters() — pure-math helper that drives the ATU
+﻿// Unit test for computeCenters() — pure-math helper that drives the ATU
 // pre-tune sweep.  Reference oracle is the IARU Region 1 per-band point
 // count table from issue #2624.  Closes #2648.
 
@@ -9,7 +9,7 @@
 #include <cmath>
 #include <iostream>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

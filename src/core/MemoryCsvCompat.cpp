@@ -1,10 +1,10 @@
-#include "MemoryCsvCompat.h"
+﻿#include "MemoryCsvCompat.h"
 
 #include <QRegularExpression>
 
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -457,4 +457,4 @@ MemoryCsvRecord MemoryCsvCompat::fromMemoryEntry(const MemoryEntry& memory)
     return record;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

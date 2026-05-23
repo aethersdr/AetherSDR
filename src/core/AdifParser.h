@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QVector>
 #include <QObject>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class CtyDatParser;  // forward declaration for optional DXCC resolution
 
@@ -55,4 +55,4 @@ private:
     const CtyDatParser* m_ctyParser{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

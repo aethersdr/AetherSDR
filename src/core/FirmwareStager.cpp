@@ -1,4 +1,4 @@
-#include "FirmwareStager.h"
+﻿#include "FirmwareStager.h"
 #include "CabExtractor.h"
 #include "LogManager.h"
 #include "OleCompoundFile.h"
@@ -12,7 +12,7 @@
 #include <QStandardPaths>
 #include <QUrl>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 FirmwareStager::FirmwareStager(QObject* parent)
     : QObject(parent)
@@ -580,4 +580,4 @@ bool FirmwareStager::extractFromMsi(const QString& msiPath, const QString& outPa
     return true;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

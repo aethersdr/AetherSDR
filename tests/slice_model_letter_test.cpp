@@ -1,4 +1,4 @@
-#include "models/SliceModel.h"
+﻿#include "models/SliceModel.h"
 
 #include <QCoreApplication>
 #include <QMap>
@@ -6,7 +6,7 @@
 #include <QString>
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 static int g_failures = 0;
 

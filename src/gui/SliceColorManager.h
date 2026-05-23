@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "SliceColors.h"
 #include <QColor>
@@ -6,7 +6,7 @@
 #include <QString>
 #include <array>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Manages per-slice color overrides.  Consumers call activeColor()/dimColor()
 // instead of reading kSliceColors[] directly.  Connect to colorsChanged() to
@@ -22,7 +22,7 @@ public:
     // Returns the hex string for CSS stylesheets (e.g. "#00d4ff").
     QString hexActive(int sliceId) const;
 
-    // Whether custom colors are enabled (false = Aether defaults).
+    // Whether custom colors are enabled (false = MasterSDR defaults).
     bool useCustomColors() const { return m_useCustom; }
     void setUseCustomColors(bool enabled);
 
@@ -54,4 +54,4 @@ private:
     void rebuildHexCache();
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

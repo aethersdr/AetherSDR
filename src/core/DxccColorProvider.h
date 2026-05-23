@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CtyDatParser.h"
 #include "DxccWorkedStatus.h"
@@ -10,7 +10,7 @@
 #include <QTimer>
 #include <QFileSystemWatcher>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct QsoRecord;
 class AdifParser;
@@ -88,4 +88,4 @@ private:
     QString            m_watchedPath;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

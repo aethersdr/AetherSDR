@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QTcpSocket>
@@ -6,7 +6,7 @@
 #include <QMap>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Direct TCP connection to a 4O3A Tuner Genius XL on port 9010.
 // Provides manual relay control (C1/L/C2) via the TGXL's native protocol,
@@ -71,4 +71,4 @@ private:
     QString    m_version;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

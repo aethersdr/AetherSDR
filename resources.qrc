@@ -1,4 +1,4 @@
-<RCC>
+﻿<RCC>
     <qresource prefix="/">
         <file alias="icon.png">docs/logo-circle.png</file>
         <file alias="bg-default.jpg">docs/logo.jpg</file>
@@ -13,14 +13,14 @@
         <file alias="ssa-sweden.json">resources/bandplans/ssa-sweden.json</file>
     </qresource>
     <qresource prefix="/sounds">
-        <file alias="aetherial.wav">resources/aetherial.wav</file>
+        <file alias="masterial.wav">resources/masterial.wav</file>
     </qresource>
     <qresource prefix="/help">
         <file alias="getting-started.md">resources/help/getting-started.md</file>
-        <file alias="aethersdr-help.md">resources/help/aethersdr-help.md</file>
-        <file alias="configuring-aethersdr-controls.md">resources/help/configuring-aethersdr-controls.md</file>
+        <file alias="mastersdr-help.md">resources/help/mastersdr-help.md</file>
+        <file alias="configuring-mastersdr-controls.md">resources/help/configuring-mastersdr-controls.md</file>
         <file alias="understanding-noise-cancellation.md">resources/help/understanding-noise-cancellation.md</file>
         <file alias="understanding-data-modes.md">resources/help/understanding-data-modes.md</file>
-        <file alias="contributing-to-aethersdr.md">resources/help/contributing-to-aethersdr.md</file>
+        <file alias="contributing-to-mastersdr.md">resources/help/contributing-to-mastersdr.md</file>
     </qresource>
 </RCC>

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "core/CommandParser.h"   // MessageSeverity for radioMessageReceived
 #include "core/RadioConnection.h"
@@ -36,7 +36,7 @@
 #include <QTimer>
 #include <QElapsedTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection, processes incoming status messages,
@@ -377,7 +377,7 @@ signals:
     void panDimensionsNeeded(const QString& panId);
     // Emitted when the radio reports its antenna list (e.g. "ANT1,ANT2,RX_A,RX_B").
     void antListChanged(QStringList ants);
-    // Local AetherSDR display aliases changed. The radio still uses canonical tokens.
+    // Local MasterSDR display aliases changed. The radio still uses canonical tokens.
     void antennaAliasesChanged();
     // Emitted when a power amplifier (e.g. PGXL) is detected or lost.
     void amplifierChanged(bool present);
@@ -860,4 +860,4 @@ public:
     PanadapterStream::CategoryStats categoryStats(PanadapterStream::StreamCategory cat) const;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

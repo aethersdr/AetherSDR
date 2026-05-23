@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <mutex>
 
@@ -6,7 +6,7 @@ struct pw_context;
 struct pw_core;
 struct pw_thread_loop;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Process-wide owner of the PipeWire client context used by native RX sources.
 // pw_thread_loop runs its own dedicated thread; all pw_* calls outside of
@@ -55,4 +55,4 @@ private:
     int        m_refCount{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

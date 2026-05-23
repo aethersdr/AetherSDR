@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QWebSocket>
@@ -10,7 +10,7 @@
 #include <atomic>
 #include "DxClusterClient.h"  // for DxSpot
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // FreeDV Reporter spot client — connects to qso.freedv.org via WebSocket
 // with manual Engine.IO v4 / Socket.IO v4 framing. Tracks station state
@@ -126,4 +126,4 @@ private:
     static constexpr int InitialReconnectDelayMs  = 5000;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

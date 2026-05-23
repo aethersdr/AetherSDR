@@ -1,8 +1,8 @@
-#include "NavtexModel.h"
+﻿#include "NavtexModel.h"
 #include <QDebug>
 #include <QDateTime>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 NavtexModel::NavtexModel(QObject* parent)
     : QObject(parent)
@@ -171,4 +171,4 @@ NavtexStatus NavtexModel::parseStatusString(const QString& str)
     return NavtexStatus::Error;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,9 +1,9 @@
-#include "CwDecoder.h"
+﻿#include "CwDecoder.h"
 #include "LogManager.h"
 #include "ggmorse/ggmorse.h"
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 CwDecoder::CwDecoder(QObject* parent)
     : QObject(parent)
@@ -237,4 +237,4 @@ void CwDecoder::decodeLoop()
     qCDebug(lcDsp) << "CwDecoder: decode loop exiting, total frames:" << feedCount;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

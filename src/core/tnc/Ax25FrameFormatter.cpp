@@ -1,10 +1,10 @@
-#include "core/tnc/Ax25FrameFormatter.h"
+﻿#include "core/tnc/Ax25FrameFormatter.h"
 
 #include <QChar>
 
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -161,4 +161,4 @@ quint16 Ax25FrameFormatter::computeFcs(const QByteArray& bytes)
     return static_cast<quint16>(crc ^ 0xffffu);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

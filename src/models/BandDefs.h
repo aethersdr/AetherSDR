@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <array>
 #include <cstddef>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct BandDef {
     const char* name;        // "20m", "40m", "GEN", "WWV"
@@ -43,4 +43,4 @@ inline constexpr int kBandCount = static_cast<int>(std::size(kBands));
 inline constexpr BandDef kWwvBand = {"WWV", 0.0, 0.0, 10.000, "AM"};
 inline constexpr BandDef kGenBand = {"GEN", 0.0, 54.0, 0.500, "AM"};
 
-} // namespace AetherSDR
+} // namespace MasterSDR

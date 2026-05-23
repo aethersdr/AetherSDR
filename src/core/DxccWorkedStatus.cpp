@@ -1,7 +1,7 @@
-#include "DxccWorkedStatus.h"
+﻿#include "DxccWorkedStatus.h"
 #include "AdifParser.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 void DxccWorkedStatus::load(const QVector<QsoRecord>& records)
 {
@@ -41,4 +41,4 @@ DxccStatus DxccWorkedStatus::query(const QString& primaryPrefix,
     return DxccStatus::Worked;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

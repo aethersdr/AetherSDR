@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <atomic>
 #include <cstdint>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Client-side TX dynamics processor — the foundation of the Pro-XL-style
 // compression chain (#1661).  Phase 1 scope: core feed-forward compressor
@@ -126,4 +126,4 @@ private:
     float    m_limEnvLin{0.0f};       // limiter envelope (linear)
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

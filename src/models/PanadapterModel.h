@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QMap>
 #include <QString>
 #include <QStringList>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Per-panadapter state model. Replaces the single-pan fields that were
 // previously in RadioModel. Each PanadapterModel represents one FFT/waterfall
@@ -100,4 +100,4 @@ private:
     bool        m_wfConfigured{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "AudioEngine.h"
+﻿#include "AudioEngine.h"
 #include "AppSettings.h"
 #include "ClientEq.h"
 #include "ClientComp.h"
@@ -54,7 +54,7 @@
 #include <cstring>
 #include <optional>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 constexpr qint64 kTxAutoRestartMinRuntimeMs = 60000;
@@ -65,7 +65,7 @@ constexpr qint64 kScopeEmitMinIntervalMs = 25;  // ~40 fps, per RX/TX source
 // to draw on every frame.  ~120 Hz max — emissions over the strip
 // widget's repaint rate are simply ignored by the panel.
 constexpr qint64 kTxPostChainEmitMinIntervalMs = 8;
-// RX strip-panel mirror — same 8 ms throttle so the strip's "Aetherial
+// RX strip-panel mirror — same 8 ms throttle so the strip's "Masterial
 // Waveform — RX" panel sees one emission per audio callback (no dropped
 // blocks).  The shared scopeSamplesReady throttle stays at 25 ms for
 // the floating WaveApplet which doesn't need this fidelity.
@@ -569,7 +569,7 @@ AudioEngine::AudioEngine(QObject* parent)
     loadClientFinalLimiterSettings();  // restore persisted final-limiter params
     loadClientQuindarSettings();       // restore persisted Quindar tone params
     loadClientRxChainOrder();    // restore persisted RX chain order (Phase 0+)
-    loadAetherialTubePreampTxSettings(); // restore TX mic pre-amp toggles (#2813)
+    loadMasterialTubePreampTxSettings(); // restore TX mic pre-amp toggles (#2813)
 
     // Restore saved audio device selections
     auto& s = AppSettings::instance();
@@ -2338,7 +2338,7 @@ void AudioEngine::loadClientRxChainOrder()
         }
     }
     // Any unknown name in the stored list is a strong signal that the
-    // settings file is from a different (or old) version of AetherSDR.
+    // settings file is from a different (or old) version of MasterSDR.
     // Reset to the canonical default rather than silently filtering the
     // unknown entries — that filtering shuffles the remaining stages
     // into a misleading order.
@@ -3004,15 +3004,15 @@ void AudioEngine::saveClientFinalLimiterSettings() const
         m_clientFinalLimiterTx->dcBlockEnabled() ? QString("True") : QString("False"));
 }
 
-// Aetherial Tube Pre-Amp TX — nested-JSON persistence (Principle V).
+// Masterial Tube Pre-Amp TX — nested-JSON persistence (Principle V).
 // One AppSettings key holds a JSON object so future mic-preamp toggles
 // (high-pass, phase invert, polarity, etc.) can be added without further
 // migration.  Shape today: {"rn2": bool}.  (#2813)
 
-void AudioEngine::loadAetherialTubePreampTxSettings()
+void AudioEngine::loadMasterialTubePreampTxSettings()
 {
     auto& s = AppSettings::instance();
-    const QString raw = s.value("AetherialTubePreampTx", "{}").toString();
+    const QString raw = s.value("MasterialTubePreampTx", "{}").toString();
     QJsonParseError err;
     const auto doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
     if (err.error != QJsonParseError::NoError || !doc.isObject()) {
@@ -3027,14 +3027,14 @@ void AudioEngine::loadAetherialTubePreampTxSettings()
     }
 }
 
-void AudioEngine::saveAetherialTubePreampTxSettings() const
+void AudioEngine::saveMasterialTubePreampTxSettings() const
 {
     QJsonObject obj;
     obj["rn2"] = m_rn2TxEnabled.load();
     const QString raw = QString::fromUtf8(
         QJsonDocument(obj).toJson(QJsonDocument::Compact));
     auto& s = AppSettings::instance();
-    s.setValue("AetherialTubePreampTx", raw);
+    s.setValue("MasterialTubePreampTx", raw);
     s.save();
 }
 
@@ -3088,10 +3088,10 @@ void AudioEngine::saveClientQuindarSettings() const
 static QString wisdomDir()
 {
 #ifdef _WIN32
-    // Windows: use %APPDATA%/AetherSDR/
-    QString dir = QDir::homePath() + "/AppData/Roaming/AetherSDR/";
+    // Windows: use %APPDATA%/MasterSDR/
+    QString dir = QDir::homePath() + "/AppData/Roaming/MasterSDR/";
 #else
-    QString dir = QDir::homePath() + "/.config/AetherSDR/AetherSDR/";
+    QString dir = QDir::homePath() + "/.config/MasterSDR/MasterSDR/";
 #endif
     QDir().mkpath(dir);
     return dir;
@@ -3099,7 +3099,7 @@ static QString wisdomDir()
 
 QString AudioEngine::wisdomFilePath()
 {
-    return wisdomDir() + "aethersdr_fftw_wisdom";
+    return wisdomDir() + "MasterSDR_fftw_wisdom";
 }
 
 bool AudioEngine::needsWisdomGeneration()
@@ -3310,7 +3310,7 @@ void AudioEngine::setRn2Enabled(bool on)
 // Mirrors the RX RN2 setter above (lazy-alloc under m_dspMutex, atomic guard
 // for the audio-thread read).  No mutual-exclusion with other TX-side NR
 // because there is none — RN2 is the only neural denoiser on the mic path
-// today.  Persistence is via the AetherialTubePreampTx nested-JSON key.
+// today.  Persistence is via the MasterialTubePreampTx nested-JSON key.
 
 void AudioEngine::setRn2TxEnabled(bool on)
 {
@@ -3329,7 +3329,7 @@ void AudioEngine::setRn2TxEnabled(bool on)
         m_rn2TxEnabled.store(false);
         m_rn2Tx.reset();
     }
-    saveAetherialTubePreampTxSettings();
+    saveMasterialTubePreampTxSettings();
     qCDebug(lcAudio) << "AudioEngine: RN2 TX (RNNoise mic pre-amp)" << (on ? "enabled" : "disabled");
     emit rn2TxEnabledChanged(on);
 }
@@ -4606,4 +4606,4 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

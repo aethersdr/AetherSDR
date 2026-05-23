@@ -1,4 +1,4 @@
-#include "ClientTubeEditor.h"
+﻿#include "ClientTubeEditor.h"
 #include "ClientCompKnob.h"
 #include "ClientLevelMeter.h"
 #include "ClientTubeCurveWidget.h"
@@ -21,7 +21,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -67,7 +67,7 @@ ClientTubeEditor::ClientTubeEditor(AudioEngine* engine, QWidget* parent)
     : QWidget(parent, Qt::Window | Qt::FramelessWindowHint)
     , m_audio(engine)
 {
-    setWindowTitle("Aetherial Tube");
+    setWindowTitle("Masterial Tube");
     setStyleSheet(kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
@@ -320,7 +320,7 @@ void ClientTubeEditor::showForTx()
 {
     m_side = Side::Tx;
     if (m_curve && tube()) m_curve->setTube(tube());
-    const QString title = QString::fromUtf8("Aetherial Tube \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial Tube \xe2\x80\x94 TX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -336,7 +336,7 @@ void ClientTubeEditor::showForRx()
 {
     m_side = Side::Rx;
     if (m_curve && tube()) m_curve->setTube(tube());
-    const QString title = QString::fromUtf8("Aetherial Tube \xe2\x80\x94 RX");
+    const QString title = QString::fromUtf8("Masterial Tube \xe2\x80\x94 RX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -475,4 +475,4 @@ void ClientTubeEditor::showEvent(QShowEvent* ev)
 void ClientTubeEditor::hideEvent(QHideEvent* ev)
 { saveGeometryToSettings(); QWidget::hideEvent(ev); }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

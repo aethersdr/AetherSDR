@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <vector>
 
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ClientGate;
 
@@ -51,4 +51,4 @@ private:
     int                 m_writeIdx{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

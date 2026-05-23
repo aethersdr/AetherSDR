@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 
@@ -7,7 +7,7 @@ class QLabel;
 class QTableWidget;
 class QLineEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ShortcutManager;
 class KeyboardMapWidget;
@@ -47,4 +47,4 @@ private:
     bool m_capturingKey{false};   // true when waiting for a keypress to assign
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

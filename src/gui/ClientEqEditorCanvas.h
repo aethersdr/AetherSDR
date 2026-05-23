@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "ClientEqCurveWidget.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 
@@ -68,4 +68,4 @@ private:
     CutoffEdge m_draggingCutoff{CutoffEdge::None};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 
 class QSocketNotifier;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class RigctlProtocol;
@@ -12,7 +12,7 @@ class RigctlProtocol;
 // Virtual serial port (PTY) implementing the Hamlib rigctld protocol.
 // Creates a pseudo-terminal pair using openpty(). The slave device path
 // (e.g. /dev/ttys004) can be pointed to by CAT-capable software.
-// A symlink at /tmp/AetherSDR-CAT is also created for convenience.
+// A symlink at /tmp/MasterSDR-CAT is also created for convenience.
 class RigctlPty : public QObject {
     Q_OBJECT
 
@@ -31,7 +31,7 @@ public:
     void setSliceIndex(int idx) { m_sliceIndex = idx; }
     int  sliceIndex() const     { return m_sliceIndex; }
 
-    // Override the default symlink path (e.g. /tmp/AetherSDR-CAT-B).
+    // Override the default symlink path (e.g. /tmp/MasterSDR-CAT-B).
     void setSymlinkPath(const QString& path) { m_symlinkPath = path; }
 
 signals:
@@ -48,9 +48,9 @@ private:
     int              m_masterFd{-1};
     int              m_slaveFd{-1};
     QString          m_slavePath;
-    QString          m_symlinkPath{"/tmp/AetherSDR-CAT"};
+    QString          m_symlinkPath{"/tmp/MasterSDR-CAT"};
     QSocketNotifier* m_notifier{nullptr};
     QByteArray       m_buffer;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

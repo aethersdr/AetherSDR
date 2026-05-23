@@ -1,4 +1,4 @@
-#ifdef HAVE_MIDI
+﻿#ifdef HAVE_MIDI
 
 #include "MidiSettings.h"
 
@@ -9,7 +9,7 @@
 #include <QStandardPaths>
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -35,13 +35,13 @@ MidiSettings& MidiSettings::instance()
 QString MidiSettings::settingsFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/midi.settings";
+           + "/MasterSDR/midi.settings";
 }
 
 QString MidiSettings::profileDir() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/midi";
+           + "/MasterSDR/midi";
 }
 
 // ── Load / Save ─────────────────────────────────────────────────────────────
@@ -220,6 +220,6 @@ void MidiSettings::deleteProfile(const QString& name)
     QFile::remove(profileDir() + "/" + name + ".xml");
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_MIDI

@@ -1,4 +1,4 @@
-#include "PanLayoutDialog.h"
+﻿#include "PanLayoutDialog.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -9,7 +9,7 @@
 #include <QRect>
 #include <QSize>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── Layout definitions ───────────────────────────────────────────────────────
 
@@ -184,4 +184,4 @@ void PanLayoutDialog::buildUI(int maxPans, const QString& currentLayout)
     vbox->addWidget(cancelBtn, 0, Qt::AlignCenter);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

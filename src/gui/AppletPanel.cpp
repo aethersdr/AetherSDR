@@ -1,4 +1,4 @@
-#include "AppletPanel.h"
+﻿#include "AppletPanel.h"
 #include "containers/ContainerManager.h"
 #include "containers/ContainerTitleBar.h"
 #include "containers/ContainerWidget.h"
@@ -57,7 +57,7 @@
 #include <QPixmap>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 const QStringList AppletPanel::kDefaultOrder = {
     "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "AG", "SS"
@@ -73,12 +73,12 @@ public:
 
 protected:
     void dragEnterEvent(QDragEnterEvent* ev) override {
-        if (ev->mimeData()->hasFormat("application/x-aethersdr-applet"))
+        if (ev->mimeData()->hasFormat("application/x-MasterSDR-applet"))
             ev->acceptProposedAction();
     }
 
     void dragMoveEvent(QDragMoveEvent* ev) override {
-        if (!ev->mimeData()->hasFormat("application/x-aethersdr-applet")) return;
+        if (!ev->mimeData()->hasFormat("application/x-MasterSDR-applet")) return;
         ev->acceptProposedAction();
         m_panel->m_dropIndicator->setVisible(true);
 
@@ -127,9 +127,9 @@ protected:
 
     void dropEvent(QDropEvent* ev) override {
         m_panel->m_dropIndicator->setVisible(false);
-        if (!ev->mimeData()->hasFormat("application/x-aethersdr-applet")) return;
+        if (!ev->mimeData()->hasFormat("application/x-MasterSDR-applet")) return;
 
-        QString draggedId = QString::fromUtf8(ev->mimeData()->data("application/x-aethersdr-applet"));
+        QString draggedId = QString::fromUtf8(ev->mimeData()->data("application/x-MasterSDR-applet"));
         int localY = ev->position().toPoint().y() + verticalScrollBar()->value();
         int dropIdx = m_panel->dropIndexFromY(localY);
 
@@ -229,7 +229,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_txSelect->addItems({"Power", "SWR", "Level", "Compression"});
     m_txSelect->setAccessibleName("TX meter mode");
     m_txSelect->setAccessibleDescription("Select which TX parameter the S-meter displays");
-    AetherSDR::applyComboStyle(m_txSelect);
+    MasterSDR::applyComboStyle(m_txSelect);
 
     auto* txCol = new QVBoxLayout;
     txCol->setSpacing(1);
@@ -244,7 +244,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_rxSelect->setCurrentIndex(0);
     m_rxSelect->setAccessibleName("RX meter mode");
     m_rxSelect->setAccessibleDescription("Select which RX parameter the S-meter displays");
-    AetherSDR::applyComboStyle(m_rxSelect);
+    MasterSDR::applyComboStyle(m_rxSelect);
 
     auto* rxCol = new QVBoxLayout;
     rxCol->setSpacing(1);
@@ -304,7 +304,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     decayCombo->setAccessibleDescription("Speed at which peak hold marker decays");
     decayCombo->setCurrentText(
         AppSettings::instance().value("PeakDecayRate", "Medium").toString());
-    AetherSDR::applyComboStyle(decayCombo);
+    MasterSDR::applyComboStyle(decayCombo);
 
     auto* resetBtn = new QPushButton("RST", peakRow);
     resetBtn->setFixedSize(32, 20);
@@ -437,7 +437,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
                     && (me->pos() - m_dragStart).manhattanLength() > 10) {
                     auto* drag = new QDrag(w);
                     auto* mimeData = new QMimeData;
-                    mimeData->setData("application/x-aethersdr-applet", m_id.toUtf8());
+                    mimeData->setData("application/x-MasterSDR-applet", m_id.toUtf8());
                     drag->setMimeData(mimeData);
                     QPixmap pm(w->width(), 16);
                     pm.fill(Qt::transparent);
@@ -682,7 +682,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_clientChainApplet = new ClientChainApplet;
 
     auto* txDsp = m_containerMgr->createContainer(
-        "tx_dsp", QString::fromUtf8("Aetherial Audio\xe2\x84\xa2"));
+        "tx_dsp", QString::fromUtf8("Masterial Audio\xe2\x84\xa2"));
     // Cap the column width so popped-out floating windows don't grow
     // wider than the chain visualisation needs.  Docked columns are
     // already narrower so this is a no-op there.
@@ -703,19 +703,19 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // pop-outable sub-containers since users commonly want them
     // floating while working on the chain.)
     if (txDsp) txDsp->insertChildWidget(-1, m_clientChainApplet);
-    makeChildContainer("gate",    "Aetherial TX Gate",       m_clientGateApplet,   -1);
-    makeChildContainer("gate-rx", "Aetherial AGC-G",          m_clientGateRxApplet, -1);
-    makeChildContainer("ceq",     "Aetherial TX EQ",          m_clientEqTxApplet,   -1);
-    makeChildContainer("ceq-rx",  "Aetherial RX EQ",          m_clientEqRxApplet,   -1);
-    makeChildContainer("dess",    "Aetherial De-Esser",       m_clientDeEssApplet,  -1);
-    makeChildContainer("cmp",     "Aetherial Compressor",     m_clientCompApplet,   -1);
-    makeChildContainer("cmp-rx",  "Aetherial AGC-C",          m_clientCompRxApplet, -1);
-    makeChildContainer("tube",    "Aetherial Mic-PreAmp",     m_clientTubeApplet,   -1);
-    makeChildContainer("tube-rx", "Aetherial Dynamic Tube",   m_clientTubeRxApplet, -1);
-    makeChildContainer("pudu",    QStringLiteral("Aetherial TX Voice Processor"), m_clientPuduApplet,   -1);
-    makeChildContainer("pudu-rx", QString::fromUtf8("Aetherial RX Poodoo\xe2\x84\xa2"), m_clientPuduRxApplet, -1);
-    makeChildContainer("reverb",  "Aetherial FreeVerb",       m_clientReverbApplet, -1);
-    makeChildContainer("dsp-rx",  "Aetherial Noise Reduction", m_clientRxDspApplet, -1);
+    makeChildContainer("gate",    "Masterial TX Gate",       m_clientGateApplet,   -1);
+    makeChildContainer("gate-rx", "Masterial AGC-G",          m_clientGateRxApplet, -1);
+    makeChildContainer("ceq",     "Masterial TX EQ",          m_clientEqTxApplet,   -1);
+    makeChildContainer("ceq-rx",  "Masterial RX EQ",          m_clientEqRxApplet,   -1);
+    makeChildContainer("dess",    "Masterial De-Esser",       m_clientDeEssApplet,  -1);
+    makeChildContainer("cmp",     "Masterial Compressor",     m_clientCompApplet,   -1);
+    makeChildContainer("cmp-rx",  "Masterial AGC-C",          m_clientCompRxApplet, -1);
+    makeChildContainer("tube",    "Masterial Mic-PreAmp",     m_clientTubeApplet,   -1);
+    makeChildContainer("tube-rx", "Masterial Dynamic Tube",   m_clientTubeRxApplet, -1);
+    makeChildContainer("pudu",    QStringLiteral("Masterial TX Voice Processor"), m_clientPuduApplet,   -1);
+    makeChildContainer("pudu-rx", QString::fromUtf8("Masterial RX Poodoo\xe2\x84\xa2"), m_clientPuduRxApplet, -1);
+    makeChildContainer("reverb",  "Masterial FreeVerb",       m_clientReverbApplet, -1);
+    makeChildContainer("dsp-rx",  "Masterial Noise Reduction", m_clientRxDspApplet, -1);
 
     // One-shot settings migration (#1713 Phase 4b): carry over the
     // legacy Applet_CHAIN visibility to the new Applet_TXDSP key so
@@ -1185,4 +1185,4 @@ void AppletPanel::setScrollHandleActive(bool active)
     sb->style()->polish(sb);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

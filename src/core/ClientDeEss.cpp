@@ -1,9 +1,9 @@
-#include "ClientDeEss.h"
+﻿#include "ClientDeEss.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -236,4 +236,4 @@ void ClientDeEss::process(float* interleaved, int frames, int channels) noexcept
     m_meters.gainReductionDb.store(worstGrDb, std::memory_order_relaxed);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

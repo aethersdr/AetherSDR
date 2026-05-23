@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QUdpSocket>
@@ -8,7 +8,7 @@
 #include <atomic>
 #include "DxClusterClient.h"  // for DxSpot
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // WSJT-X UDP multicast client — listens for Decode messages (type 2)
 // from WSJT-X and emits spotReceived() for each decoded station.
@@ -64,4 +64,4 @@ private:
     QString m_mode;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

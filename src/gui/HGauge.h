@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "MeterSmoother.h"
 
@@ -11,7 +11,7 @@
 #include <cmath>
 #include <limits>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── HGauge: reusable horizontal bar gauge ─────────────────────────────────────
 //
@@ -310,4 +310,4 @@ private:
     int m_angleAccum{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

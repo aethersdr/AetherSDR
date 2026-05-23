@@ -1,4 +1,4 @@
-#include "ClientCompKnob.h"
+﻿#include "ClientCompKnob.h"
 
 #include <QDoubleValidator>
 #include <QEvent>
@@ -18,7 +18,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -433,4 +433,4 @@ bool ClientCompKnob::eventFilter(QObject* obj, QEvent* ev)
     return QWidget::eventFilter(obj, ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

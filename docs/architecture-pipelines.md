@@ -1,11 +1,11 @@
-# AetherSDR — Thread Architecture & Data Pipelines
+﻿# MasterSDR — Thread Architecture & Data Pipelines
 
 Extracted from CLAUDE.md for on-demand reference. Read this when debugging
 thread safety, signal routing, or data flow issues.
 
 For the authoritative audio ordering, sample formats, channel handling,
 downmixing, metering taps, and VITA/Opus packetization details, see
-[AetherSDR Audio Pipeline](audio-pipeline.md). This page is a thread and
+[MasterSDR Audio Pipeline](audio-pipeline.md). This page is a thread and
 high-level routing overview; it intentionally omits many audio-stage details.
 
 ### Data Pipelines
@@ -203,7 +203,7 @@ on the main thread — GUI accesses models directly with no pointer indirection.
 Each worker thread has a single responsibility and communicates exclusively via
 auto-queued signals. The main thread handles only paintEvent + model updates.
 
-**GPU-accelerated rendering (#391):** When `AETHER_GPU_SPECTRUM=ON` (default),
+**GPU-accelerated rendering (#391):** When `MASTERSDR_GPU_SPECTRUM=ON` (default),
 `SpectrumWidget` inherits `QRhiWidget` instead of `QWidget`. The waterfall is
 a GPU texture with incremental row uploads (~6KB/frame via ring buffer offset
 in fragment shader). The FFT spectrum is a vertex buffer with per-vertex heat

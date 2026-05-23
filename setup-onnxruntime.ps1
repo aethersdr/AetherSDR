@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Download ONNX Runtime prebuilt binaries for Windows x64.
 
@@ -8,7 +8,7 @@
     ready for CMake (find_library / find_path).
 
     Required only for the S_History_v2-AI CNN signal classifier.
-    AetherSDR compiles and runs without it — ONNX is an optional enhancement.
+    MasterSDR compiles and runs without it — ONNX is an optional enhancement.
 
 .EXAMPLE
     .\setup-onnxruntime.ps1

@@ -1,10 +1,10 @@
-#include "DxccColorProvider.h"
+﻿#include "DxccColorProvider.h"
 #include "AdifParser.h"
 
 #include <QFileInfo>
 #include <QMetaObject>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 DxccColorProvider::DxccColorProvider(QObject* parent)
     : QObject(parent)
@@ -235,4 +235,4 @@ QColor DxccColorProvider::colorForSpot(const QString& callsign,
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

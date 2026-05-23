@@ -1,4 +1,4 @@
-#include "AmpApplet.h"
+﻿#include "AmpApplet.h"
 #include "HGauge.h"
 
 #include <QVBoxLayout>
@@ -6,7 +6,7 @@
 #include <QLabel>
 #include <QSignalBlocker>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 AmpApplet::AmpApplet(QWidget* parent)
     : QWidget(parent)
@@ -140,4 +140,4 @@ void AmpApplet::setMeff(const QString& meff)
     m_meffLabel->show();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

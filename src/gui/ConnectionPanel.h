@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "core/RadioDiscovery.h"
 #include "core/SmartLinkClient.h"
@@ -17,7 +17,7 @@
 
 class QVBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Novice-first dialog for local, SmartLink, and manual/VPN radio connections.
 class ConnectionPanel : public QWidget {
@@ -143,4 +143,4 @@ private:
     QCheckBox*   m_lowBwCheck{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

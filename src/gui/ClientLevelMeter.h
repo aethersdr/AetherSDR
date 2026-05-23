@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QLabel;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Vertical level meter — gradient-filled bar with dB scale labels and a
 // numeric readout below.  Same visual language as the meter half of
@@ -44,4 +44,4 @@ private:
     static constexpr int   kStripBottomPad = 4;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

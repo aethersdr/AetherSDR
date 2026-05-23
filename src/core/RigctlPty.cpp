@@ -1,4 +1,4 @@
-#include "RigctlPty.h"
+﻿#include "RigctlPty.h"
 #include "LogManager.h"
 #include "RigctlProtocol.h"
 #include "models/RadioModel.h"
@@ -17,7 +17,7 @@
 #endif
 #endif // !_WIN32
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 RigctlPty::RigctlPty(RadioModel* model, QObject* parent)
     : QObject(parent)
@@ -148,4 +148,4 @@ void RigctlPty::onDataReady()
 #endif
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "PipeWireAudioBridge.h"
+﻿#include "PipeWireAudioBridge.h"
 #include "LogManager.h"
 
 #ifdef HAVE_PIPEWIRE_NATIVE
@@ -16,7 +16,7 @@
 #include <cstring>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 PipeWireAudioBridge::PipeWireAudioBridge(QObject* parent)
     : QObject(parent)
@@ -29,7 +29,7 @@ PipeWireAudioBridge::~PipeWireAudioBridge()
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
-// Unload any stale aethersdr pipe modules from a previous crashed session
+// Unload any stale MasterSDR pipe modules from a previous crashed session
 static void cleanupStaleModules()
 {
     QProcess proc;
@@ -37,7 +37,7 @@ static void cleanupStaleModules()
     if (!proc.waitForFinished(3000)) return;
 
     for (const auto& line : proc.readAllStandardOutput().split('\n')) {
-        if (line.contains("aethersdr-")) {
+        if (line.contains("MasterSDR-")) {
             auto parts = line.split('\t');
             if (parts.size() >= 1) {
                 QProcess::execute("pactl", {"unload-module", parts[0].trimmed()});
@@ -165,9 +165,9 @@ static uint32_t runPactl(const QStringList& args)
 
 bool PipeWireAudioBridge::loadPipeSource(int index)
 {
-    auto pipePath = QStringLiteral("/tmp/aethersdr-dax-%1.pipe").arg(index + 1);
-    auto sourceName = QStringLiteral("aethersdr-dax-%1").arg(index + 1);
-    auto sourceDesc = QStringLiteral("AetherSDR DAX %1").arg(index + 1);
+    auto pipePath = QStringLiteral("/tmp/MasterSDR-dax-%1.pipe").arg(index + 1);
+    auto sourceName = QStringLiteral("MasterSDR-dax-%1").arg(index + 1);
+    auto sourceDesc = QStringLiteral("MasterSDR DAX %1").arg(index + 1);
 
     // Create the named pipe (FIFO)
     ::unlink(pipePath.toUtf8().constData());
@@ -222,9 +222,9 @@ bool PipeWireAudioBridge::loadPipeSource(int index)
 
 bool PipeWireAudioBridge::loadPipeSink()
 {
-    auto pipePath = QStringLiteral("/tmp/aethersdr-tx.pipe");
-    auto sinkName = QStringLiteral("aethersdr-tx");
-    auto sinkDesc = QStringLiteral("AetherSDR TX");
+    auto pipePath = QStringLiteral("/tmp/MasterSDR-tx.pipe");
+    auto sinkName = QStringLiteral("MasterSDR-tx");
+    auto sinkDesc = QStringLiteral("MasterSDR TX");
 
     ::unlink(pipePath.toUtf8().constData());
     if (::mkfifo(pipePath.toUtf8().constData(), 0666) != 0) {
@@ -468,4 +468,4 @@ void PipeWireAudioBridge::readTxPipe()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

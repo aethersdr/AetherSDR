@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "core/AudioEngine.h"
 
@@ -7,7 +7,7 @@
 #include <QVector>
 #include <QWidget>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Visual RX DSP signal chain — strip variant.  Paints a single
 // horizontal row of nine boxes:
@@ -17,7 +17,7 @@ namespace AetherSDR {
 //
 // RADIO and SPEAK are status-only endpoints.  ADSP is a clickable
 // launcher that opens / focuses the in-strip ADSP panel (the
-// AetherDsp NR cluster).  The six middle stages
+// MasterDsp NR cluster).  The six middle stages
 // (AGC-T / EQ / AGC-C / DESS / TUBE / EVO) are user-controllable;
 // click toggles bypass, double-click opens the editor, drag
 // reorders within the chain.
@@ -45,11 +45,11 @@ public:
 
 signals:
     // Emitted on double-click of an implemented stage tile —
-    // AetherialAudioStrip routes this to focus the corresponding
+    // MasterialAudioStrip routes this to focus the corresponding
     // RX panel.
     void editRequested(AudioEngine::RxChainStage stage);
 
-    // Emitted when the user clicks ADSP — AetherialAudioStrip
+    // Emitted when the user clicks ADSP — MasterialAudioStrip
     // focuses the ADSP panel (or opens it if it isn't visible).
     void dspEditRequested();
 
@@ -126,4 +126,4 @@ private:
     int           m_pendingClickIdx{-1};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

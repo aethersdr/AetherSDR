@@ -1,4 +1,4 @@
-#include "core/tnc/Ax25FrameFormatter.h"
+﻿#include "core/tnc/Ax25FrameFormatter.h"
 
 #include <QByteArray>
 #include <QDateTime>
@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <optional>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

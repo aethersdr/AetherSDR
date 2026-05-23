@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QtGlobal>
 
 #include <atomic>
 #include <chrono>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 inline quint64 cwTraceNowMs() noexcept
 {
@@ -22,4 +22,4 @@ inline quint64 nextCwTraceId() noexcept
     return next.fetch_add(1, std::memory_order_relaxed);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

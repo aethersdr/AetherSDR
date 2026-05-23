@@ -1,4 +1,4 @@
-#include "core/MidiSettings.h"
+﻿#include "core/MidiSettings.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -8,7 +8,7 @@
 
 #include <iostream>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 
@@ -32,7 +32,7 @@ bool sameBinding(const MidiBinding& a, const MidiBinding& b)
 
 int main(int argc, char** argv)
 {
-    QTemporaryDir fakeHome(QDir::tempPath() + "/aether-midi-settings-test-XXXXXX");
+    QTemporaryDir fakeHome(QDir::tempPath() + "/mastersdr-midi-settings-test-XXXXXX");
     if (!fakeHome.isValid()) {
         std::cerr << "[FAIL] create temporary home\n";
         return 1;
@@ -44,7 +44,7 @@ int main(int argc, char** argv)
 
     const QString configRoot =
         QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation);
-    QDir(configRoot + "/AetherSDR").removeRecursively();
+    QDir(configRoot + "/MasterSDR").removeRecursively();
 
     MidiBinding afGain;
     afGain.channel = 2;
@@ -96,7 +96,7 @@ int main(int argc, char** argv)
         }
     }
 
-    QFile midiFile(configRoot + "/AetherSDR/midi.settings");
+    QFile midiFile(configRoot + "/MasterSDR/midi.settings");
     ok &= expect(midiFile.open(QIODevice::ReadOnly | QIODevice::Text),
                  "MIDI settings file is written");
     const QString xml = midiFile.isOpen() ? QString::fromUtf8(midiFile.readAll()) : QString();
@@ -114,8 +114,8 @@ int main(int argc, char** argv)
     ok &= expect(!settings.autoConnect(),
                  "preference-only save updates auto-connect");
 
-    QFile::remove(configRoot + "/AetherSDR/midi.settings");
-    QDir(configRoot + "/AetherSDR").removeRecursively();
+    QFile::remove(configRoot + "/MasterSDR/midi.settings");
+    QDir(configRoot + "/MasterSDR").removeRecursively();
 
     return ok ? 0 : 1;
 }

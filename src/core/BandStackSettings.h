@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QVector>
 #include <QMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct BandStackEntry {
     double frequencyMhz{0.0};
@@ -27,7 +27,7 @@ struct BandStackEntry {
 };
 
 // Persistence for user frequency bookmarks, stored per-radio in
-// ~/.config/AetherSDR/BandStack.settings (XML, atomic save).
+// ~/.config/MasterSDR/BandStack.settings (XML, atomic save).
 class BandStackSettings {
 public:
     static BandStackSettings& instance();
@@ -69,4 +69,4 @@ private:
     int m_autoSaveDwellSeconds{0};   // 0 = disabled
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

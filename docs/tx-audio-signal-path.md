@@ -1,4 +1,4 @@
-# FlexRadio TX Audio Signal Path
+﻿# FlexRadio TX Audio Signal Path
 
 Documented from FLEX-8600 firmware v4.1.5 meter definitions.
 All meters are source `TX-` unless noted. Units are dBFS unless noted.
@@ -8,12 +8,12 @@ For capture-backed 8000/6000-series compression formulas and FPS notes, see
 
 For the complete current client-side audio ordering, sample formats, DAX/RADE
 branches, metering taps, downmixing, and packetization details, see
-[AetherSDR Audio Pipeline](audio-pipeline.md). This page focuses on how the
+[MasterSDR Audio Pipeline](audio-pipeline.md). This page focuses on how the
 client-shaped PC mic voice stream relates to FlexRadio firmware meters.
 
-## Client-side TX DSP (AetherialAudio, before the radio)
+## Client-side TX DSP (MasterialAudio, before the radio)
 
-Since v0.8.15 AetherSDR applies its own client-side DSP chain to the
+Since v0.8.15 MasterSDR applies its own client-side DSP chain to the
 PC mic voice TX stream before VITA/Opus packetization. The radio receives
 the already-shaped voice signal and treats it identically to any other
 PC-mic input (enters at SC_MIC, meter 26).
@@ -23,7 +23,7 @@ DAX/TCI bypasses client voice DSP in `AudioEngine::feedDaxTxAudio()`.
 RADE branches early from `AudioEngine::onTxAudioReady()` and bypasses
 Opus voice TX.
 
-As of v0.8.18 the full **AetherialAudio** chain is in place: seven
+As of v0.8.18 the full **MasterialAudio** chain is in place: seven
 ordered stages, drag-to-reorder inside the CHAIN widget, single-click
 to bypass, double-click to open the floating editor.
 
@@ -206,7 +206,7 @@ PC Mic Audio (Opus via remote_audio_tx) — arrives with client-side
 
 ## Meter Summary Table
 
-| ID | Source | Name | Unit | FPS | Description | Used in AetherSDR |
+| ID | Source | Name | Unit | FPS | Description | Used in MasterSDR |
 |----|--------|------|------|-----|-------------|-------------------|
 | 1 | COD- | MICPEAK | dBFS | 40 | Hardware mic peak level | P/CW mic gauge (BAL/LINE/ACC) |
 | 2 | COD- | MIC | dBFS | 20 | Hardware mic average level | P/CW mic gauge (BAL/LINE/ACC) |
@@ -242,14 +242,14 @@ PC Mic Audio (Opus via remote_audio_tx) — arrives with client-side
 - **Meter IDs are dynamic**: The radio assigns meter IDs on connection. The IDs shown
   here are from one session — match by name, not by ID.
 - **Multi-slice TX chains**: Radios can expose one TX waveform meter block per
-  active slice. AetherSDR resolves compression meters through the active TX
+  active slice. MasterSDR resolves compression meters through the active TX
   slice. FLEX-6600 captures expose distinct TX waveform `sourceIndex` values,
   while FLEX-8000 captures can repeat `TX- num=0` blocks after each `SLC`
   slice block. In both cases `COMPPEAK` is paired with the matching `AFTEREQ`
   or `SC_MIC` from the same slice. The code derives the active TX source or
   implicit slice context first, then looks up the manifest IDs for that slice;
   it never assumes fixed IDs like `22/23`.
-- **Compression meter input**: AetherSDR derives the compression gauge from
+- **Compression meter input**: MasterSDR derives the compression gauge from
   radio-provided TX meters only. FLEX-8000 series radios use
   `max(0, COMPPEAK - AFTEREQ)`. 6000-series radios that do not expose `AFTEREQ`
   use `max(0, COMPPEAK - SC_MIC)`. `COMPPEAK` is a dBFS level tap, not a
@@ -303,7 +303,7 @@ guessing at radio commands.
   arrives.
 - **Debug workflow**: ask reporters to enable protocol logging and capture the
   full lifecycle, not just TX/RX command lines:
-  `QT_LOGGING_RULES="aether.protocol.debug=true" ./AetherSDR`. Useful breadcrumbs
+  `QT_LOGGING_RULES="mastersdr.protocol.debug=true" ./MasterSDR`. Useful breadcrumbs
   are request, `pll_start` response code/body, every `pll_done` transition,
   final `freq_error_ppb`, and timeout if `pll_done=1` never arrives.
 - **Capture gotcha**: Flex command traffic is TCP, normally port 4992. UDP ports

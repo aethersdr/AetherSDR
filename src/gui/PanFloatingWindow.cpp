@@ -1,4 +1,4 @@
-#include "PanFloatingWindow.h"
+﻿#include "PanFloatingWindow.h"
 #include "FramelessResizer.h"
 #include "PanadapterApplet.h"
 #include "Theme.h"
@@ -7,7 +7,7 @@
 #include <QCloseEvent>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 PanFloatingWindow::PanFloatingWindow(QWidget* parent)
     : QWidget(parent, Qt::Window)
@@ -39,7 +39,7 @@ void PanFloatingWindow::adoptApplet(PanadapterApplet* applet)
     QString title = applet->sliceTitle();
     if (title.isEmpty())
         title = QString("Pan %1").arg(applet->panId());
-    setWindowTitle(QString("AetherSDR — %1").arg(title));
+    setWindowTitle(QString("MasterSDR — %1").arg(title));
 
     // Reparent directly into this window — addWidget() calls setParent()
     // internally, so the widget goes straight from the splitter to the
@@ -111,4 +111,4 @@ void PanFloatingWindow::restoreWindowGeometry()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

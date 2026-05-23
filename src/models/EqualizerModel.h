@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QMap>
 #include <QString>
 #include <array>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // 8-band graphic equalizer model for TX and RX.
 //
@@ -55,4 +55,4 @@ private:
     std::array<int, BandCount> m_rxBands{};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

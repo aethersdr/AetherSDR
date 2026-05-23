@@ -1,9 +1,9 @@
-#include "ClientComp.h"
+﻿#include "ClientComp.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -278,4 +278,4 @@ void ClientComp::process(float* interleaved, int frames, int channels) noexcept
     m_meters.limiterActive.store(limFired, std::memory_order_relaxed);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

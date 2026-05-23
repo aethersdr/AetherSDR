@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
 class QCheckBox;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Modal license-confirmation dialog gating the Antenna SWR sweep.
 //
@@ -33,4 +33,4 @@ private:
     QCheckBox* m_rememberCheck{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

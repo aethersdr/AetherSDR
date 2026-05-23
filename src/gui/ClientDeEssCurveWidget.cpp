@@ -1,4 +1,4 @@
-#include "ClientDeEssCurveWidget.h"
+﻿#include "ClientDeEssCurveWidget.h"
 #include "core/ClientDeEss.h"
 
 #include <QPainter>
@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -221,4 +221,4 @@ void ClientDeEssCurveWidget::paintEvent(QPaintEvent*)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

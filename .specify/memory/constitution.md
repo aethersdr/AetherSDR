@@ -1,6 +1,6 @@
-# AetherSDR Constitution
+﻿# MasterSDR Constitution
 
-This constitution governs AetherSDR — an open-source Qt6 client for
+This constitution governs MasterSDR — an open-source Qt6 client for
 FlexRadio SmartSDR-compatible radios. It captures the load-bearing
 project conventions that any contribution (human or automated) must
 honor. The principles below are inviolable in the sense that violating
@@ -9,7 +9,7 @@ not because they are arbitrary style preferences.
 
 Authored using the [github/spec-kit](https://github.com/github/spec-kit)
 constitution template. Consumed at PR-time by the
-[AetherClaude](https://github.com/ten9876/aetherclaude) issue-triage
+[MasterClaude](https://github.com/ten9876/MasterClaude) issue-triage
 agent, which is required to cite the principle it is honoring when
 implementing a fix.
 
@@ -35,7 +35,7 @@ because it is the implementation the radio side was built against.
 
 ### II. The Canonical MeterSmoother Owns All Meter Ballistics
 
-Every meter UI in AetherSDR uses `src/gui/MeterSmoother.h` (30 ms
+Every meter UI in MasterSDR uses `src/gui/MeterSmoother.h` (30 ms
 attack / 180 ms release at 120 Hz / 8 ms interval). Targets are
 normalized to `[0, 1]` via a `dbToRatio` helper before being passed
 to `setTarget()`. Asymmetric `kAlphaUp`/`kAlphaDown` blenders,
@@ -81,7 +81,7 @@ source for new features. The dialog should display the active plan
 read-only ("Using band plan: IARU Region 1 — change in View > Band
 Plan").
 
-*Why this is inviolable:* AetherSDR's user base spans IARU regions
+*Why this is inviolable:* MasterSDR's user base spans IARU regions
 1/2/3. A feature that hardcodes ARRL band edges is wrong for everyone
 outside Region 2 and silently transmits outside the band plan in
 specific cases.
@@ -129,7 +129,7 @@ dialog is not.
 
 ## Technology Constraints
 
-- **Qt 6**: AetherSDR targets Qt 6.x. Qt 5 fallback code paths must
+- **Qt 6**: MasterSDR targets Qt 6.x. Qt 5 fallback code paths must
   not be introduced into new features. (Existing Qt 5 compatibility
   in vendored third-party code is grandfathered.)
 - **Cross-platform**: features must build and run on Linux x86_64,
@@ -142,7 +142,7 @@ dialog is not.
 
 ## Development Workflow
 
-- **PR gate**: every PR must pass the AetherClaude validation gate
+- **PR gate**: every PR must pass the MasterClaude validation gate
   (`bin/validate-diff.sh` in the agent repo): allowed paths only, no
   credentials or protected-file edits, no binary additions, no
   suspicious patterns, plus per-file CodeGuard static analysis.
@@ -152,22 +152,22 @@ dialog is not.
 - **Merge strategy**: squash-merge for community PRs. Stale-base PRs
   on hot files use `git merge`, not `git rebase` (rebase silently
   drops adjacent additions on hot files).
-- **AI-assisted contributions**: route through AetherClaude — issues
-  labeled `aetherclaude-eligible` are picked up by the agent, which
+- **AI-assisted contributions**: route through MasterClaude — issues
+  labeled `MasterClaude-eligible` are picked up by the agent, which
   honors this constitution when implementing.
 
 ## Governance
 
 This constitution supersedes ad-hoc style preferences and applies
-equally to human contributors and the AetherClaude agent.
+equally to human contributors and the MasterClaude agent.
 
 Amendments require a PR that updates this file and is reviewed under
 the same rules as any source change. When an amendment changes the
 expected behavior of in-progress work, that work is paused until the
 amendment is decided.
 
-AetherClaude, when implementing a fix under issue label
-`aetherclaude-eligible`, is required to:
+MasterClaude, when implementing a fix under issue label
+`MasterClaude-eligible`, is required to:
 1. Read this constitution at the start of every implement-pass run.
 2. Identify any principle that bears on the change being made.
 3. Cite the principle by Roman numeral and title in the commit message

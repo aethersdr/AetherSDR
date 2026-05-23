@@ -1,10 +1,10 @@
-#include "ClientCompLimiterButton.h"
+﻿#include "ClientCompLimiterButton.h"
 
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRadialGradient>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -105,4 +105,4 @@ void ClientCompLimiterButton::paintEvent(QPaintEvent*)
     p.drawText(r, Qt::AlignCenter, text());
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

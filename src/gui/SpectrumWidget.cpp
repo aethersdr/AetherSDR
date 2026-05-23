@@ -1,4 +1,4 @@
-#include "SpectrumWidget.h"
+﻿#include "SpectrumWidget.h"
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "SliceColors.h"
@@ -6,7 +6,7 @@
 #include "SliceLabel.h"
 #include <QVariantAnimation>
 
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
 #include <rhi/qrhi.h>
 #include <QFile>
 #endif
@@ -52,13 +52,13 @@
 #include <cstring>
 #include <utility>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 bool SpectrumWidget::s_starstruckMode = false;
 QSoundEffect* SpectrumWidget::s_starstruckSound = nullptr;
 
-static const QColor kAetherBrandBlue(0x00, 0xb4, 0xd8);
-static const QColor kAetherBrandGreen(0x20, 0xc0, 0x60);
+static const QColor kMasterBrandBlue(0x00, 0xb4, 0xd8);
+static const QColor kMasterBrandGreen(0x20, 0xc0, 0x60);
 static const QColor kConnectionTextColor(0xd8, 0xe6, 0xf0);
 static constexpr float kMinDisplayDbm = -180.0f;
 static constexpr int kWaterfallLineDurationMinMs = 50;
@@ -265,7 +265,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAutoFillBackground(false);
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
     // Explicitly request Metal on macOS.
 #  ifdef Q_OS_MAC
     setApi(QRhiWidget::Api::Metal);
@@ -431,7 +431,7 @@ SpectrumWidget::~SpectrumWidget()
 
 void SpectrumWidget::prepareForTopLevelChange()
 {
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
 #ifdef Q_OS_MAC
     // QRhiWidget registers a cleanup callback with the current top-level
     // backing-store QRhi. Direct splitter/floating-window reparenting can miss
@@ -453,7 +453,7 @@ void SpectrumWidget::prepareForShutdown()
     setUpdatesEnabled(false);
     hide();
 
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
 #ifndef Q_OS_LINUX
     releaseResources();
 #endif
@@ -1584,7 +1584,7 @@ void SpectrumWidget::rebuildWaterfallViewport()
         std::memcpy(dst, src, rowWidthBytes);
     }
 
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
     if (PerfTelemetry::instance().enabled())
@@ -1736,8 +1736,8 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
 
     QRadialGradient glow(QPointF(centerX, topY + towerHeight * 0.42),
                          towerHeight * 1.05);
-    glow.setColorAt(0.0, withAlpha(kAetherBrandBlue, 48));
-    glow.setColorAt(0.55, withAlpha(kAetherBrandGreen, 22));
+    glow.setColorAt(0.0, withAlpha(kMasterBrandBlue, 48));
+    glow.setColorAt(0.55, withAlpha(kMasterBrandGreen, 22));
     glow.setColorAt(1.0, QColor(0, 0, 0, 0));
     p.setPen(Qt::NoPen);
     p.setBrush(glow);
@@ -1751,7 +1751,7 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
         const qreal ringProgress = std::fmod(phase + ring * 0.24, 1.0);
         const qreal radiusX = towerWidth * 0.50 + ringProgress * towerHeight * 0.68;
         const qreal radiusY = radiusX * 0.86;
-        QColor waveColor = (ring % 2 == 0) ? kAetherBrandBlue : kAetherBrandGreen;
+        QColor waveColor = (ring % 2 == 0) ? kMasterBrandBlue : kMasterBrandGreen;
         const qreal fade = 1.0 - ringProgress;
         waveColor.setAlphaF(qBound(0.10, 0.16 + fade * 0.48 * pulse, 0.70));
         QPen wavePen(waveColor,
@@ -1770,9 +1770,9 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     }
 
     QLinearGradient towerGradient(QPointF(centerX, topY), QPointF(centerX, baseY));
-    towerGradient.setColorAt(0.0, kAetherBrandBlue.lighter(115));
-    towerGradient.setColorAt(0.55, kAetherBrandBlue);
-    towerGradient.setColorAt(1.0, kAetherBrandGreen);
+    towerGradient.setColorAt(0.0, kMasterBrandBlue.lighter(115));
+    towerGradient.setColorAt(0.55, kMasterBrandBlue);
+    towerGradient.setColorAt(1.0, kMasterBrandGreen);
 
     QPainterPath towerFill;
     towerFill.moveTo(centerX - towerWidth * 0.48, baseY);
@@ -1780,8 +1780,8 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     towerFill.lineTo(centerX + towerWidth * 0.48, baseY);
     towerFill.closeSubpath();
     QLinearGradient fillGradient(QPointF(centerX, topY), QPointF(centerX, baseY));
-    fillGradient.setColorAt(0.0, withAlpha(kAetherBrandBlue, 28));
-    fillGradient.setColorAt(1.0, withAlpha(kAetherBrandGreen, 12));
+    fillGradient.setColorAt(0.0, withAlpha(kMasterBrandBlue, 28));
+    fillGradient.setColorAt(1.0, withAlpha(kMasterBrandGreen, 12));
     p.fillPath(towerFill, fillGradient);
 
     QPen towerPen(QBrush(towerGradient), qMax(2.2, towerWidth * 0.11),
@@ -1813,7 +1813,7 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
 
     p.drawLine(QPointF(centerX - towerWidth * 0.72, baseY),
                QPointF(centerX + towerWidth * 0.72, baseY));
-    p.setBrush(kAetherBrandBlue);
+    p.setBrush(kMasterBrandBlue);
     p.setPen(Qt::NoPen);
     p.drawEllipse(QPointF(centerX, topY - towerHeight * 0.10),
                   towerWidth * 0.10, towerWidth * 0.10);
@@ -1843,8 +1843,8 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
                               available.width(), subtitleFm.height() + 4.0);
 
     QLinearGradient titleGradient(titleRect.topLeft(), titleRect.topRight());
-    titleGradient.setColorAt(0.0, kAetherBrandBlue.lighter(108));
-    titleGradient.setColorAt(1.0, kAetherBrandGreen.lighter(105));
+    titleGradient.setColorAt(0.0, kMasterBrandBlue.lighter(108));
+    titleGradient.setColorAt(1.0, kMasterBrandGreen.lighter(105));
     p.setFont(titleFont);
     p.setPen(QPen(QBrush(titleGradient), 1.0));
     p.drawText(titleRect, Qt::AlignHCenter | Qt::AlignTop, m_connectionAnimationLabel);
@@ -1858,7 +1858,7 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
 
 void SpectrumWidget::resetGpuResources()
 {
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
     // On macOS/Windows, the GPU surface doesn't survive reparenting — tear
     // down old pipelines so initialize() rebuilds them for the new window.
     // On Linux (OpenGL), a simple update() is sufficient (#1240).
@@ -1920,7 +1920,7 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
     reprojectImage(m_waterfall);
     reprojectImage(m_waterfallHistory);
     m_prevTileScanline.clear();
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
 }
@@ -3983,7 +3983,7 @@ void SpectrumWidget::ensureStarstruckSoundLoaded()
 {
     if (s_starstruckSound) return;
     s_starstruckSound = new QSoundEffect(qApp);
-    s_starstruckSound->setSource(QUrl("qrc:/sounds/aetherial.wav"));
+    s_starstruckSound->setSource(QUrl("qrc:/sounds/masterial.wav"));
     s_starstruckSound->setVolume(0.03f);
     // The WAV is a forward+reverse palindrome, so infinite looping while
     // the drag is held produces a seamless back-and-forth effect.
@@ -4268,7 +4268,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
         PerfTelemetry::instance().recordWaterfallFallbackRows(1);
 }
 
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
 
 // Fullscreen quad: position (x,y) + texcoord (u,v)
 static const float kQuadData[] = {
@@ -5112,7 +5112,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     cb->endPass();
 
     // Reposition VFO widgets. paintEvent() is compiled only in software mode
-    // (#else !AETHER_GPU_SPECTRUM), so in GPU mode this is the sole place VFOs
+    // (#else !MASTERSDR_GPU_SPECTRUM), so in GPU mode this is the sole place VFOs
     // are repositioned. Logic mirrors the paintEvent() block below exactly.
     {
         struct VfoPos { int sliceId; int x; VfoWidget* w; int splitPartner; };
@@ -5237,13 +5237,13 @@ void SpectrumWidget::releaseResources()
     qDebug() << "SpectrumWidget: QRhi resources released";
 }
 
-#else // !AETHER_GPU_SPECTRUM
+#else // !MASTERSDR_GPU_SPECTRUM
 
 void SpectrumWidget::paintEvent(QPaintEvent* ev)
 {
     if (width() <= 0 || height() <= FREQ_SCALE_H + DIVIDER_H + 2) return;
 
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
     // GPU mode: render() handles everything via QRhi. Skip the full
     // QPainter path to avoid redundant rendering + compositing overhead.
     // This is the single biggest CPU optimization on macOS (100% → 20%).
@@ -5565,7 +5565,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     }
 }
 
-#endif // AETHER_GPU_SPECTRUM
+#endif // MASTERSDR_GPU_SPECTRUM
 
 // ─── Grid ─────────────────────────────────────────────────────────────────────
 
@@ -7233,4 +7233,4 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

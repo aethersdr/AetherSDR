@@ -1,4 +1,4 @@
-#include "ClientEqParamRow.h"
+﻿#include "ClientEqParamRow.h"
 #include "ClientEqCurveWidget.h"
 
 #include <QDoubleValidator>
@@ -14,7 +14,7 @@
 #include <QWheelEvent>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -416,4 +416,4 @@ void ClientEqParamRow::rebuild()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

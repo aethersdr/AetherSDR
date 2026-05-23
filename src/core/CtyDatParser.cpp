@@ -1,11 +1,11 @@
-#include "CtyDatParser.h"
+﻿#include "CtyDatParser.h"
 
 #include <QFile>
 #include <QTextStream>
 #include <QRegularExpression>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -201,4 +201,4 @@ const DxccEntity* CtyDatParser::entityByPrefix(const QString& primaryPrefix) con
     return &it.value();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

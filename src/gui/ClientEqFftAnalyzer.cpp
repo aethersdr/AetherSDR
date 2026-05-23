@@ -1,10 +1,10 @@
-#include "ClientEqFftAnalyzer.h"
+﻿#include "ClientEqFftAnalyzer.h"
 
 #include <algorithm>
 #include <cmath>
 #include <complex>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -101,4 +101,4 @@ void ClientEqFftAnalyzer::update(const float* samples, int count) noexcept
     m_primed = true;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

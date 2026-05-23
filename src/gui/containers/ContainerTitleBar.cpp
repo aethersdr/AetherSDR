@@ -1,4 +1,4 @@
-#include "ContainerTitleBar.h"
+﻿#include "ContainerTitleBar.h"
 #include "gui/FramelessMoveHelper.h"
 
 #include <QHBoxLayout>
@@ -9,7 +9,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -205,4 +205,4 @@ void ContainerTitleBar::mouseReleaseEvent(QMouseEvent* ev)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

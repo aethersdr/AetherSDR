@@ -1,4 +1,4 @@
-#include "BandPlanManager.h"
+﻿#include "BandPlanManager.h"
 #include "core/AppSettings.h"
 
 #include <QDir>
@@ -7,7 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 BandPlanManager::BandPlanManager(QObject* parent)
     : QObject(parent)
@@ -106,4 +106,4 @@ bool BandPlanManager::loadPlanFromJson(const QString& path, PlanData& out)
     return true;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

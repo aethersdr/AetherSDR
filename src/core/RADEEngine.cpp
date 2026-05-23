@@ -1,4 +1,4 @@
-#include "RADEEngine.h"
+﻿#include "RADEEngine.h"
 #include "LogManager.h"
 #include "Resampler.h"
 #include <QString>
@@ -15,7 +15,7 @@ extern "C" {
 }
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 #ifdef HAVE_RADE
 static void radeTextCallbackFn(rade_text_t, const char *txt, int len, void *state)
@@ -340,7 +340,7 @@ QString RADEEngine::versionString()
 #endif
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #if 0 // Old resampling helpers replaced by r8brain Resampler
 QByteArray RADEEngine::downsample24kTo8k(const QByteArray& stereo24k)

@@ -1,4 +1,4 @@
-#include "RadioSetupDialog.h"
+﻿#include "RadioSetupDialog.h"
 #include "CwDecodeSettings.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
@@ -58,7 +58,7 @@
 
 #include <memory>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const QString kGroupStyle =
     "QGroupBox { border: 1px solid #304050; border-radius: 4px; "
@@ -960,7 +960,7 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* profCmb = new QComboBox;
         profCmb->addItems(tx.profileList());
         profCmb->setCurrentText(tx.activeProfile());
-        AetherSDR::applyComboStyle(profCmb);
+        MasterSDR::applyComboStyle(profCmb);
         grid->addWidget(profCmb, 2, 2, 1, 2);
         connect(profCmb, &QComboBox::currentTextChanged, this, [this](const QString& name) {
             m_model->transmitModel().loadProfile(name);
@@ -1000,7 +1000,7 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* rcaCmb = new QComboBox;
         rcaCmb->addItems({"Active Low", "Active High"});
         rcaCmb->setCurrentIndex(tx.rcaTxReqPolarity());
-        AetherSDR::applyComboStyle(rcaCmb);
+        MasterSDR::applyComboStyle(rcaCmb);
         grid->addWidget(rcaCmb, 0, 1);
 
         auto* accLbl = new QLabel("Accessory:");
@@ -1009,7 +1009,7 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* accCmb = new QComboBox;
         accCmb->addItems({"Active Low", "Active High"});
         accCmb->setCurrentIndex(tx.accTxReqPolarity());
-        AetherSDR::applyComboStyle(accCmb);
+        MasterSDR::applyComboStyle(accCmb);
         grid->addWidget(accCmb, 0, 3);
 
         vbox->addWidget(group);
@@ -1567,7 +1567,7 @@ QWidget* RadioSetupDialog::buildRxTab()
         grid->addWidget(srcLbl, 0, 0);
 
         auto* srcCmb = new QComboBox;
-        AetherSDR::applyComboStyle(srcCmb);
+        MasterSDR::applyComboStyle(srcCmb);
         refreshOscillatorSourceCombo(srcCmb, m_model);
         connect(srcCmb, &QComboBox::currentIndexChanged, this, [this, srcCmb](int i) {
             m_model->sendCommand(
@@ -1858,7 +1858,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     inLabel->setStyleSheet(kLabelStyle);
     inLabel->setFixedWidth(90);
     auto* inCombo = new QComboBox;
-    AetherSDR::applyComboStyle(inCombo);
+    MasterSDR::applyComboStyle(inCombo);
     const auto inDevices = QMediaDevices::audioInputs();
     for (const auto& dev : inDevices)
         inCombo->addItem(dev.description(), dev.id());
@@ -1876,7 +1876,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     outLabel->setStyleSheet(kLabelStyle);
     outLabel->setFixedWidth(90);
     auto* outCombo = new QComboBox;
-    AetherSDR::applyComboStyle(outCombo);
+    MasterSDR::applyComboStyle(outCombo);
     const auto outDevices = QMediaDevices::audioOutputs();
     for (const auto& dev : outDevices)
         outCombo->addItem(dev.description(), dev.id());
@@ -2046,7 +2046,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         auto* dirEdit = new QLineEdit;
         dirEdit->setText(settings.value("QsoRecordingDir",
             QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-            + "/AetherSDR/Recordings").toString());
+            + "/MasterSDR/Recordings").toString());
         dirEdit->setStyleSheet(
             "QLineEdit { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050; "
             "border-radius: 3px; padding: 2px 4px; font-size: 11px; }");
@@ -2569,7 +2569,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
     groupLayout->addWidget(scroll);
     vbox->addWidget(group, 1);
 
-    // Antenna display names are intentionally local to AetherSDR. FlexLib exposes
+    // Antenna display names are intentionally local to MasterSDR. FlexLib exposes
     // canonical RX/TX antenna lists and rxant/txant setters, but no verified
     // writable display-name API; radio commands must keep using ANT1/XVTR/etc.
     auto refresh = std::make_shared<std::function<void()>>();
@@ -2722,7 +2722,7 @@ QWidget* RadioSetupDialog::buildApdTab()
             const auto s = tx.apdSampler(ant);
             combo->addItems(s.available);
             combo->setCurrentText(s.selected);
-            AetherSDR::applyComboStyle(combo);
+            MasterSDR::applyComboStyle(combo);
             grid->addWidget(combo, row, colBase + 1);
 
             m_apdSamplerCombos.insert(ant, combo);
@@ -4212,7 +4212,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     grpLayout->setSpacing(10);
 
     auto* modeLayout = new QHBoxLayout;
-    auto* defaultsRadio = new QRadioButton("Use Aether defaults");
+    auto* defaultsRadio = new QRadioButton("Use MasterSDR defaults");
     auto* customRadio   = new QRadioButton("Custom colors");
     defaultsRadio->setStyleSheet("QRadioButton { color: #c8d8e8; font-size: 12px; }");
     customRadio->setStyleSheet("QRadioButton { color: #c8d8e8; font-size: 12px; }");
@@ -4234,7 +4234,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     static const char kLetters[] = "ABCDEFGH";
     // One button per slice; holds the current color as its background.
     QVector<QPushButton*> colorBtns;
-    for (int i = 0; i < AetherSDR::kSliceColorCount; ++i) {
+    for (int i = 0; i < MasterSDR::kSliceColorCount; ++i) {
         auto* col = new QVBoxLayout;
         col->setSpacing(4);
 
@@ -4282,7 +4282,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     };
 
     auto refreshAllBtns = [applyBtnColor]() mutable {
-        for (int i = 0; i < AetherSDR::kSliceColorCount; ++i)
+        for (int i = 0; i < MasterSDR::kSliceColorCount; ++i)
             applyBtnColor(i);
     };
 
@@ -4318,7 +4318,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         refreshAllBtns();
     });
 
-    for (int i = 0; i < AetherSDR::kSliceColorCount; ++i) {
+    for (int i = 0; i < MasterSDR::kSliceColorCount; ++i) {
         connect(colorBtns[i], &QPushButton::clicked, page,
                 [i, pMgr, applyBtnColor, page]() mutable {
             QColor initial = pMgr->customColor(i);
@@ -4333,7 +4333,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
 
     connect(resetBtn, &QPushButton::clicked, page,
             [pMgr, refreshAllBtns]() mutable {
-        for (int i = 0; i < AetherSDR::kSliceColorCount; ++i)
+        for (int i = 0; i < MasterSDR::kSliceColorCount; ++i)
             pMgr->resetToDefault(i);
         refreshAllBtns();
     });
@@ -4348,4 +4348,4 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     return page;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

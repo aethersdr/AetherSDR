@@ -1,9 +1,9 @@
-#include "PhaseKnob.h"
+﻿#include "PhaseKnob.h"
 
 #include <QPainter>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 PhaseKnob::PhaseKnob(QWidget* parent)
     : QWidget(parent)
@@ -77,4 +77,4 @@ void PhaseKnob::paintEvent(QPaintEvent*)
     p.drawEllipse(center, 2, 2);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

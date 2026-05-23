@@ -1,4 +1,4 @@
-#include "DvkWavTransfer.h"
+﻿#include "DvkWavTransfer.h"
 #include "../models/RadioModel.h"
 #include "../core/RadioConnection.h"
 
@@ -8,7 +8,7 @@
 #include <QHostAddress>
 #include <QtEndian>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 DvkWavTransfer::DvkWavTransfer(RadioModel* model, QObject* parent)
     : QObject(parent), m_model(model)
@@ -400,4 +400,4 @@ void DvkWavTransfer::cleanup(bool removeFile)
     m_bytesSent = 0;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "PhoneApplet.h"
+﻿#include "PhoneApplet.h"
 #include "GuardedSlider.h"
 #include "models/TransmitModel.h"
 #include "core/AppSettings.h"
@@ -12,7 +12,7 @@
 #include <QFrame>
 #include <QPainter>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── Triangle step button (reused from RxApplet pattern) ─────────────────────
 
@@ -441,4 +441,4 @@ void PhoneApplet::syncFromModel()
     m_updatingFromModel = false;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

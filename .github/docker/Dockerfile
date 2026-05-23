@@ -1,8 +1,8 @@
-FROM ubuntu:24.04
+﻿FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Build dependencies for AetherSDR CI
+# Build dependencies for MasterSDR CI
 # Must include everything CMakeLists.txt can find_package() for
 RUN apt-get update && apt-get install -y \
     cmake \

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QUdpSocket>
@@ -8,7 +8,7 @@
 #include <QString>
 #include <QHostAddress>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 enum class RadioBindMode : quint8 {
     Auto,
@@ -137,4 +137,4 @@ private:
     QMap<QString, qint64> m_lastSeen;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

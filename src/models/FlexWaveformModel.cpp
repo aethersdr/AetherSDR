@@ -1,7 +1,7 @@
-#include "FlexWaveformModel.h"
+﻿#include "FlexWaveformModel.h"
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 FlexWaveformModel::FlexWaveformModel(QObject* parent)
     : QObject(parent)
@@ -142,4 +142,4 @@ void FlexWaveformModel::requestRestart(const QString& name)
     emit commandReady(QStringLiteral("waveform restart ") + name);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

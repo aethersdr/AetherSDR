@@ -1,6 +1,6 @@
-# AetherSDR Applet Style Guide
+﻿# MasterSDR Applet Style Guide
 
-Design language reference for all applet panels in AetherSDR. Every applet
+Design language reference for all applet panels in MasterSDR. Every applet
 should follow these conventions to maintain visual consistency across the UI.
 
 ---
@@ -161,7 +161,7 @@ All combo boxes **must** use the shared style from `src/gui/ComboStyle.h`:
 #include "ComboStyle.h"
 
 auto* combo = new QComboBox;
-AetherSDR::applyComboStyle(combo);
+MasterSDR::applyComboStyle(combo);
 ```
 
 This applies the standard dark theme with a painted down-arrow triangle:
@@ -240,7 +240,7 @@ constants via `MeterSmoother::Ballistics`.
 ### ClientCompKnob (Rotary Knob)
 
 Reusable knob widget from `src/gui/ClientCompKnob.h` used throughout the
-TX/RX DSP chain editors and the Aetherial Audio Channel Strip.
+TX/RX DSP chain editors and the Masterial Audio Channel Strip.
 
 - **Standard size:** 76×76 px (channel-strip / editor); 38×48 px on
   applet tiles for compact mode

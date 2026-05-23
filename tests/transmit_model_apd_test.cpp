@@ -1,4 +1,4 @@
-// Unit tests for External APD plumbing on TransmitModel — covers status
+﻿// Unit tests for External APD plumbing on TransmitModel — covers status
 // parsing, sampler-port commands, equalizer reset, and idempotency.
 
 #include "models/TransmitModel.h"
@@ -8,7 +8,7 @@
 
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

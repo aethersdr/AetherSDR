@@ -1,9 +1,9 @@
-#include "ClientGate.h"
+﻿#include "ClientGate.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -332,4 +332,4 @@ void ClientGate::process(float* interleaved, int frames, int channels) noexcept
     m_meters.gateOpen.store(openAny, std::memory_order_relaxed);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

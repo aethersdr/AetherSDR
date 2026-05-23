@@ -1,4 +1,4 @@
-#include "core/IambicKeyer.h"
+﻿#include "core/IambicKeyer.h"
 
 #include <atomic>
 #include <chrono>
@@ -7,7 +7,7 @@
 #include <thread>
 #include <vector>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 using namespace std::chrono_literals;
 
 namespace {

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "models/RadioModel.h"
 #include "models/BandSettings.h"
@@ -68,7 +68,7 @@ class QMediaDevices;
 #include "gui/PersistentDialog.h" // showOrRaisePersistent template needs
                                    // PersistentDialog visible at point of use.
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ConnectionPanel;
 class TitleBar;
@@ -86,7 +86,7 @@ class NetworkDiagnosticsDialog;
 class MemoryDialog;
 class PropDashboardDialog;
 class TxBandDialog;
-class AetherDspDialog;
+class MasterDspDialog;
 class WaveformsDialog;
 class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
@@ -230,12 +230,12 @@ private:
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
     void toggleMinimalMode(bool on);
-    // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
+    // Toggle the Masterial Audio Channel Strip — unified TX DSP window.
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
-    // and persists visibility via AppSettings("AetherialStripVisible").
-    void toggleAetherialStrip();
+    // and persists visibility via AppSettings("MasterialStripVisible").
+    void toggleMasterialStrip();
     // Cutoff-line drag handler shared between the floating ClientEqEditor
-    // and the embedded EQ panel inside AetherialAudioStrip.  Writes TX
+    // and the embedded EQ panel inside MasterialAudioStrip.  Writes TX
     // filter cutoffs to TransmitModel, or RX filter offsets to the
     // active SliceModel (with mode-aware audio→slice conversion).
     void onEqCutoffsDragRequested(ClientEqApplet::Path path,
@@ -262,12 +262,12 @@ private:
     template <class T, class... Args>
     void showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs);
 
-    // Create-or-raise helper for the AetherDSP Settings dialog.  Centralizes
+    // Create-or-raise helper for the MasterDsp Settings dialog.  Centralizes
     // the ~17 audio-parameter signal connections that every call site was
     // duplicating; on first construction wires them once, on subsequent calls
     // just raises the existing instance.  Returns nullptr only if construction
     // failed (e.g. allocation failure).
-    AetherDspDialog* ensureAetherDspDialog();
+    MasterDspDialog* ensureMasterDspDialog();
 
     // Wire the txBandSettingsRequested, serialSettingsChanged (HAVE_SERIALPORT),
     // sliceLetterDisplayModeChanged, and QDialog::finished handlers on a freshly-
@@ -458,8 +458,8 @@ private:
     // Per-pan spectrogram ring buffer for CNN classification.
     // shared_ptr so QHash COW can copy the pointer on detach without deep-copying
     // the 32-frame ring buffer (unique_ptr is non-copyable, which breaks QHash::operator[]).
-    QHash<QString, std::shared_ptr<AetherSDR::SpectrogramBuffer>> m_spectrogramBuffers;
-    AetherSDR::SignalClassifier m_signalClassifier;
+    QHash<QString, std::shared_ptr<MasterSDR::SpectrogramBuffer>> m_spectrogramBuffers;
+    MasterSDR::SignalClassifier m_signalClassifier;
 
     // Batched spot add commands (flushed 1/sec)
     QStringList m_spotCmdBatch;
@@ -520,7 +520,7 @@ private:
     QPointer<MemoryDialog> m_memoryDialog;
     QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
-    QPointer<AetherDspDialog> m_dspDialog;
+    QPointer<MasterDspDialog> m_dspDialog;
     QPointer<WaveformsDialog> m_waveformsDialog;
     QPointer<ProfileManagerDialog> m_profileManagerDialog;
     QPointer<ProfileImportExportDialog> m_profileImportExportDialog;
@@ -613,15 +613,15 @@ private:
     class ClientTubeEditor* ensureClientTubeEditor();
     class ClientPuduEditor* ensureClientPuduEditor();
 
-    // Wire AetherDspWidget parameter signals to AudioEngine setters.  Used
-    // by both the modeless AetherDspDialog and the docked ClientRxDspApplet
+    // Wire MasterDspWidget parameter signals to AudioEngine setters.  Used
+    // by both the modeless MasterDspDialog and the docked ClientRxDspApplet
     // so they push every change into the engine identically.
-    void wireAetherDspWidget(class AetherDspWidget* widget);
+    void wireMasterDspWidget(class MasterDspWidget* widget);
     class ClientCompEditor* m_clientCompEditor{nullptr}; // lazy — created on first Edit… click
     class ClientGateEditor* m_clientGateEditor{nullptr}; // lazy — created on first Edit… click
     class ClientTubeEditor* m_clientTubeEditor{nullptr}; // lazy — created on first Edit… click
     class ClientPuduEditor* m_clientPuduEditor{nullptr}; // lazy — created on first Edit… click
-    class AetherialAudioStrip* m_aetherialStrip{nullptr};    // lazy — created on first egg-nub click (#2301)
+    class MasterialAudioStrip* m_MasterialStrip{nullptr};    // lazy — created on first egg-nub click (#2301)
 
     // Applet-panel pop-out support (#1713 Phase 6).  When floating,
     // the panel lives inside m_appletPanelFloatWindow and its splitter
@@ -777,4 +777,4 @@ void MainWindow::showOrRaisePersistent(QPointer<T>& slot, Args&&... ctorArgs)
     slot->activateWindow();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

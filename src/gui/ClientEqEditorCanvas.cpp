@@ -1,4 +1,4 @@
-#include "ClientEqEditorCanvas.h"
+﻿#include "ClientEqEditorCanvas.h"
 #include "core/AudioEngine.h"
 #include "core/ClientEq.h"
 
@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 constexpr float kHandleHitRadius = 8.0f;
@@ -299,4 +299,4 @@ void ClientEqEditorCanvas::contextMenuEvent(QContextMenuEvent* ev)
     ev->accept();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

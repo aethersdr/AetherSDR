@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
@@ -7,7 +7,7 @@
 
 class QWidget;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Layout ID encoding:
 //   "1"    — single pan (full)
@@ -44,4 +44,4 @@ private:
     QString m_selected;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

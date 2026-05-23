@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #ifdef HAVE_HIDAPI
 
 #include <QObject>
@@ -7,7 +7,7 @@
 #include <hidapi/hidapi.h>
 #include "HidDeviceParser.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Manages a USB HID encoder device (Icom RC-28, Griffin PowerMate,
 // Contour ShuttleXpress/Pro). Runs on the ExtControllers thread.
@@ -60,5 +60,5 @@ private:
     static constexpr int HOTPLUG_INTERVAL_MS = 3000;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 #endif

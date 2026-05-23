@@ -1,11 +1,11 @@
-#include "ClientEqApplet.h"
+﻿#include "ClientEqApplet.h"
 #include "ClientEqCurveWidget.h"
 #include "core/AudioEngine.h"
 #include "core/ClientEq.h"
 
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 ClientEqApplet::ClientEqApplet(Path path, QWidget* parent)
     : QWidget(parent)
@@ -63,4 +63,4 @@ void ClientEqApplet::setRxFilterCutoffs(int audioLowHz, int audioHighHz)
     m_curve->setFilterCutoffs(audioLowHz, audioHighHz);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

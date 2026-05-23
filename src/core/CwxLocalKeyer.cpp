@@ -1,8 +1,8 @@
-#include "CwxLocalKeyer.h"
+﻿#include "CwxLocalKeyer.h"
 
 #include <QHash>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -148,4 +148,4 @@ void CwxLocalKeyer::onTick()
     scheduleNext();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

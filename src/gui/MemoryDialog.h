@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
@@ -14,7 +14,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 
@@ -67,4 +67,4 @@ private:
     Qt::SortOrder m_sortOrder{Qt::AscendingOrder};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

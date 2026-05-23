@@ -1,8 +1,8 @@
-#include "DvkModel.h"
+﻿#include "DvkModel.h"
 #include <QRegularExpression>
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 DvkModel::DvkModel(QObject* parent) : QObject(parent) {}
 
@@ -108,4 +108,4 @@ void DvkModel::applyStatus(const QString& object, const QMap<QString, QString>& 
         emit recordingsLoaded();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

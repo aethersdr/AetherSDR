@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <array>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Semver-style version comparison supporting X.Y.Z and X.Y.Z.P formats.
 // Strips non-numeric suffixes (e.g., "0.4.7a" → 0.4.7.0).
@@ -44,4 +44,4 @@ private:
     std::array<int, 4> m_seg{0, 0, 0, 0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

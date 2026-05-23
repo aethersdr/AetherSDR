@@ -1,11 +1,11 @@
-#include "TunerModel.h"
+﻿#include "TunerModel.h"
 #include "core/TgxlConnection.h"
 #include "core/LogManager.h"
 
 #include <QDebug>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 TunerModel::TunerModel(QObject* parent)
     : QObject(parent)
@@ -246,4 +246,4 @@ void TunerModel::adjustRelay(int relay, int direction)
     m_directConn->adjustRelay(relay, direction);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

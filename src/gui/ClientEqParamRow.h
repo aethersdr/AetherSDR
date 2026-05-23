@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "core/ClientEq.h"
 #include <QWidget>
 
 class QHBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Bottom-of-editor strip: one column per active band, stacking frequency
 // (Hz), gain (dB), and Q as text labels in the band's palette colour.
@@ -47,4 +47,4 @@ private:
     int          m_selectedBand{-1};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

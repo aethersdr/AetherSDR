@@ -1,4 +1,4 @@
-#include "TxApplet.h"
+﻿#include "TxApplet.h"
 #include "AtuPreTuneDialog.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
@@ -19,7 +19,7 @@
 #include <QSignalBlocker>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 
 
@@ -172,7 +172,7 @@ void TxApplet::buildUI()
         row->setSpacing(4);
 
         m_profileCombo = new GuardedComboBox;
-        AetherSDR::applyComboStyle(m_profileCombo);
+        MasterSDR::applyComboStyle(m_profileCombo);
         m_profileCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_profileCombo->setAccessibleName("TX profile");
         m_profileCombo->setAccessibleDescription("Select transmit profile");
@@ -611,7 +611,7 @@ void TxApplet::showTuneContextMenu(const QPoint& pos)
     // Reflect the radio's current tune_mode in the check marks so the user
     // can see what the next Tune press will do.  Selecting either entry is
     // a one-shot — the radio's tune_mode lives in volatile state and reverts
-    // to single_tone on its own across power cycles; AetherSDR does not
+    // to single_tone on its own across power cycles; MasterSDR does not
     // persist the choice in AppSettings.
     const QString current = m_model->tuneMode();
 
@@ -698,4 +698,4 @@ void TxApplet::setPowerScale(int maxWatts, bool hasAmplifier)
     m_peakDecayWattsPerSec = gaugeFullScaleW / 2.5f;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

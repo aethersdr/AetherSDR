@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QMap>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class TgxlConnection;
 
@@ -91,4 +91,4 @@ private:
     bool            m_directPresence{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "AntennaGeniusModel.h"
+﻿#include "AntennaGeniusModel.h"
 
 #include <QUdpSocket>
 #include <QTcpSocket>
@@ -9,7 +9,7 @@
 #include <QDebug>
 #include <QRegularExpression>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Antenna Genius uses port 9007 for both UDP discovery and TCP control.
 static constexpr quint16 kAgPort = 9007;
@@ -161,7 +161,7 @@ void AntennaGeniusModel::connectToDevice(const AgDeviceInfo& info)
     // Always clean up any existing socket — connected or still pending.
     // Multiple auto-connect triggers (radio connect + UDP beacon) can fire
     // in quick succession; without this the R4 accepts the first socket and
-    // sends its greeting there while AetherSDR's active socket is a later one.
+    // sends its greeting there while MasterSDR's active socket is a later one.
     if (m_tcpSocket) {
         m_tcpSocket->abort();
         m_tcpSocket->deleteLater();
@@ -839,4 +839,4 @@ AgPortStatus AntennaGeniusModel::parsePortStatus(const QString& text) const
     return ps;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

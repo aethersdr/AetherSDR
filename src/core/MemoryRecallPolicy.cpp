@@ -1,10 +1,10 @@
-#include "core/MemoryRecallPolicy.h"
+﻿#include "core/MemoryRecallPolicy.h"
 
 #include <QStringList>
 
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -62,4 +62,4 @@ QString buildMemoryRecallSliceFixupCommand(int sliceId, const MemoryEntry& memor
     return QString("slice set %1 %2").arg(sliceId).arg(fields.join(' '));
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

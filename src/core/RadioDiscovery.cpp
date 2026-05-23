@@ -1,10 +1,10 @@
-#include "RadioDiscovery.h"
+﻿#include "RadioDiscovery.h"
 #include "LogManager.h"
 
 #include <QNetworkDatagram>
 #include <QDateTime>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 RadioDiscovery::RadioDiscovery(QObject* parent)
     : QObject(parent)
@@ -200,4 +200,4 @@ void RadioDiscovery::onStaleCheck()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

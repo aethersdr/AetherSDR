@@ -1,7 +1,7 @@
-#include "EqualizerModel.h"
+﻿#include "EqualizerModel.h"
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Band key strings used in protocol messages (e.g. "63Hz", "1000Hz")
 static constexpr const char* kBandKeys[] = {
@@ -92,4 +92,4 @@ void EqualizerModel::setRxBand(Band b, int dB)
     emit rxStateChanged();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

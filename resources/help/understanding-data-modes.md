@@ -1,4 +1,4 @@
-# Configuring Data Modes
+﻿# Configuring Data Modes
 
 ## Why Digital Operation Feels More Complicated
 
@@ -15,12 +15,12 @@ and predictable so you can wire things up once and get back to operating.
 
 ---
 
-## The Digital Signal Paths Inside AetherSDR
+## The Digital Signal Paths Inside MasterSDR
 
 ### Control path
 
 This is how outside software reads frequency, mode, PTT, and other radio state.
-AetherSDR offers three options:
+MasterSDR offers three options:
 
 | Method | Transport | Protocol | Best for |
 |---|---|---|---|
@@ -30,18 +30,18 @@ AetherSDR offers three options:
 
 ### Receive audio path (DAX RX)
 
-This is how digital software hears the radio. AetherSDR creates virtual audio
+This is how digital software hears the radio. MasterSDR creates virtual audio
 devices that appear as microphone inputs to other applications.
 
 ### Transmit audio path (DAX TX)
 
-This is how digital software sends audio back into the radio. AetherSDR creates
+This is how digital software sends audio back into the radio. MasterSDR creates
 a virtual audio output device that captures audio from your digital program.
 
 ### IQ path (DAX IQ)
 
 For applications that need raw baseband IQ instead of demodulated audio.
-AetherSDR supports four DAX IQ channels with selectable sample rates
+MasterSDR supports four DAX IQ channels with selectable sample rates
 (24k, 48k, 96k, 192k).
 
 ---
@@ -71,7 +71,7 @@ Each button toggles its tile on or off. You can have any combination of tiles
 visible at the same time.
 
 > **Tip:** Keep the relevant tiles visible during setup. They answer the
-> question "What endpoints is AetherSDR offering to the rest of the station?"
+> question "What endpoints is MasterSDR offering to the rest of the station?"
 
 > **Tile controls:** Each tile's title bar has a **float/dock** button that
 > pops the tile out into its own window or docks it back into the panel.
@@ -113,7 +113,7 @@ visible at the same time.
 
 ### CAT over TCP
 
-When you click **Enable TCP** in the CAT Control tile, AetherSDR starts four
+When you click **Enable TCP** in the CAT Control tile, MasterSDR starts four
 independent TCP servers that speak the **Hamlib rigctld protocol**. Any
 application that can talk to rigctld can connect directly.
 
@@ -139,23 +139,23 @@ CAT over TCP works identically on **Linux, macOS, and Windows**.
 
 ### CAT over TTY/PTY (virtual serial ports)
 
-When you click **Enable TTY**, AetherSDR creates four virtual serial ports
+When you click **Enable TTY**, MasterSDR creates four virtual serial ports
 using Unix pseudo-terminals (PTYs). These look like real serial ports to
 other applications.
 
 | Channel | Symlink path |
 |---|---|
-| A | `/tmp/AetherSDR-CAT-A` |
-| B | `/tmp/AetherSDR-CAT-B` |
-| C | `/tmp/AetherSDR-CAT-C` |
-| D | `/tmp/AetherSDR-CAT-D` |
+| A | `/tmp/MasterSDR-CAT-A` |
+| B | `/tmp/MasterSDR-CAT-B` |
+| C | `/tmp/MasterSDR-CAT-C` |
+| D | `/tmp/MasterSDR-CAT-D` |
 
 **How to use it:**
 
 1. In the CAT Control tile, click **Enable TTY**.
 2. The channel rows will show the actual PTY device paths.
 3. In your digital program, select the symlink path as the serial port
-   (e.g. `/tmp/AetherSDR-CAT-A`).
+   (e.g. `/tmp/MasterSDR-CAT-A`).
 
 > **Platform note:** Virtual serial ports via PTY are available on **Linux and
 > macOS** only. On Windows, use CAT over TCP instead — most modern digital
@@ -163,7 +163,7 @@ other applications.
 
 ### What commands does CAT support?
 
-AetherSDR's CAT interface implements the Hamlib rigctld command set, including:
+MasterSDR's CAT interface implements the Hamlib rigctld command set, including:
 
 - **Frequency:** get/set VFO frequency
 - **Mode:** get/set operating mode and passband
@@ -171,9 +171,9 @@ AetherSDR's CAT interface implements the Hamlib rigctld command set, including:
 - **VFO:** VFO selection and split operation
 - **CW:** CW keying via the `b` (send Morse) command
 
-Mode mapping between AetherSDR and Hamlib:
+Mode mapping between MasterSDR and Hamlib:
 
-| AetherSDR mode | Hamlib mode |
+| MasterSDR mode | Hamlib mode |
 |---|---|
 | USB | USB |
 | LSB | LSB |
@@ -195,13 +195,13 @@ that digital programs can receive audio from the radio and send audio back.
 
 #### Linux (PipeWire / PulseAudio)
 
-AetherSDR uses PulseAudio pipe modules (compatible with both PulseAudio and
+MasterSDR uses PulseAudio pipe modules (compatible with both PulseAudio and
 PipeWire via `pipewire-pulse`) to create virtual audio devices:
 
 - **RX devices** appear as audio *sources* (microphone inputs):
-  `AetherSDR DAX 1` through `AetherSDR DAX 4`
+  `MasterSDR DAX 1` through `MasterSDR DAX 4`
 - **TX device** appears as an audio *sink* (speaker output):
-  `AetherSDR TX`
+  `MasterSDR TX`
 
 Audio format: **24 kHz, mono, 16-bit integer**.
 
@@ -210,11 +210,11 @@ Audio format: **24 kHz, mono, 16-bit integer**.
 **Finding the devices:**
 
 ```bash
-# List all audio sources (look for AetherSDR DAX)
-pactl list sources short | grep -i aether
+# List all audio sources (look for MasterSDR DAX)
+pactl list sources short | grep -i mastersdr
 
-# List all audio sinks (look for AetherSDR TX)
-pactl list sinks short | grep -i aether
+# List all audio sinks (look for MasterSDR TX)
+pactl list sinks short | grep -i mastersdr
 ```
 
 In most applications, DAX devices will appear in the audio input/output
@@ -222,7 +222,7 @@ dropdown menus once DAX is enabled and the radio is connected.
 
 #### macOS (Core Audio HAL plugin)
 
-AetherSDR uses a Core Audio HAL plugin with shared memory to create virtual
+MasterSDR uses a Core Audio HAL plugin with shared memory to create virtual
 audio devices:
 
 - **RX devices** appear as audio inputs in System Preferences and app settings
@@ -233,8 +233,8 @@ Audio format: **24 kHz, stereo, 32-bit float** (shared memory ring buffer).
 **Finding the devices:**
 
 1. Open **System Settings > Sound** (or **System Preferences > Sound** on older macOS).
-2. Look for devices named `AetherSDR DAX 1` through `AetherSDR DAX 4` under Input.
-3. Look for `AetherSDR TX` under Output.
+2. Look for devices named `MasterSDR DAX 1` through `MasterSDR DAX 4` under Input.
+3. Look for `MasterSDR TX` under Output.
 4. In your digital program's audio settings, select these devices.
 
 #### Windows
@@ -262,18 +262,18 @@ The DAX Audio tile provides gain sliders for each DAX channel:
 ## Enabling Auto-Start
 
 By default, CAT, TCI, and DAX services must be started manually each session.
-You can configure them to start automatically whenever AetherSDR connects to
+You can configure them to start automatically whenever MasterSDR connects to
 the radio.
 
 ### Where to find auto-start settings
 
 1. Open the **Settings** menu in the menu bar.
 2. You will see three checkable options:
-   - **Autostart CAT with AetherSDR** — auto-starts the four virtual serial
+   - **Autostart CAT with MasterSDR** — auto-starts the four virtual serial
      ports (TTY/PTY) on connection. *(Linux and macOS only.)*
-   - **Autostart TCI with AetherSDR** — auto-starts the TCI WebSocket server
+   - **Autostart TCI with MasterSDR** — auto-starts the TCI WebSocket server
      on connection.
-   - **Autostart DAX with AetherSDR** — auto-starts the DAX virtual audio
+   - **Autostart DAX with MasterSDR** — auto-starts the DAX virtual audio
      bridge on connection. *(Linux with PipeWire, or macOS only.)*
 
 3. Check the options you want. The setting is saved immediately and persists
@@ -289,8 +289,8 @@ the radio.
 
 When you connect to the radio with auto-start enabled:
 
-- **CAT:** The four PTY symlinks at `/tmp/AetherSDR-CAT-A` through
-  `/tmp/AetherSDR-CAT-D` are created and begin accepting connections.
+- **CAT:** The four PTY symlinks at `/tmp/MasterSDR-CAT-A` through
+  `/tmp/MasterSDR-CAT-D` are created and begin accepting connections.
 - **TCI:** The WebSocket server starts on the configured port (default `50001`).
 - **DAX:** The virtual audio devices are created after a short delay (about
   3 seconds, to allow the radio to finish session setup). The DAX Enable
@@ -309,7 +309,7 @@ digital modes. WSJT-X 3.0 supports both traditional CAT+DAX and native TCI.
 
 This method works on **Linux and macOS**.
 
-**Step 1 — Prepare AetherSDR**
+**Step 1 — Prepare MasterSDR**
 
 1. Connect to the radio.
 2. Select or create a slice and set the mode to **DIGU** (for FT8/FT4) or the
@@ -334,10 +334,10 @@ This method works on **Linux and macOS**.
    - Click **Test CAT** — the button should turn green.
    - Click **Test PTT** — the radio should briefly key up.
 3. Go to the **Audio** tab:
-   - **Input (Soundcard):** select `AetherSDR DAX 1`
-     - On Linux: may appear as `AetherSDR DAX 1` or the PulseAudio source name
-     - On macOS: appears as `AetherSDR DAX 1` in the dropdown
-   - **Output (Soundcard):** select `AetherSDR TX`
+   - **Input (Soundcard):** select `MasterSDR DAX 1`
+     - On Linux: may appear as `MasterSDR DAX 1` or the PulseAudio source name
+     - On macOS: appears as `MasterSDR DAX 1` in the dropdown
+   - **Output (Soundcard):** select `MasterSDR TX`
 4. Click **OK** to save settings.
 
 **Step 3 — Verify**
@@ -353,7 +353,7 @@ This method works on **Linux and macOS**.
 This method works on **Linux, macOS, and Windows** — no virtual audio devices
 needed.
 
-**Step 1 — Prepare AetherSDR**
+**Step 1 — Prepare MasterSDR**
 
 1. Connect to the radio.
 2. Select or create a slice and set the mode to **DIGU**.
@@ -396,7 +396,7 @@ and audio routing. This walkthrough covers the CAT+DAX method.
 > under Wine. On macOS, use a Windows VM. The CAT+DAX configuration is the same
 > regardless of how VARA is running.
 
-**Step 1 — Prepare AetherSDR**
+**Step 1 — Prepare MasterSDR**
 
 1. Connect to the radio.
 2. Select or create a slice and set the mode to **DIGU** (for VARA HF) or
@@ -412,8 +412,8 @@ and audio routing. This walkthrough covers the CAT+DAX method.
 
 1. Open VARA HF (or VARA FM).
 2. Go to **Settings > Soundcard**:
-   - **Input:** select `AetherSDR DAX 1`
-   - **Output:** select `AetherSDR TX`
+   - **Input:** select `MasterSDR DAX 1`
+   - **Output:** select `MasterSDR TX`
    - On Linux under Wine: you may need to configure the Wine audio to use
      PulseAudio and the devices will appear with their PulseAudio names.
 3. Go to **Settings > PTT** (or **CAT Control** depending on VARA version):
@@ -430,7 +430,7 @@ and audio routing. This walkthrough covers the CAT+DAX method.
      - **Rig type:** `Hamlib NET rigctl` or `Kenwood TS-2000` (rigctld is
        compatible with this selection in many Winlink builds)
      - If using TCP: **Host:** `localhost`, **Port:** `4532`
-     - If using serial: **Port:** `/tmp/AetherSDR-CAT-A` (Linux/macOS)
+     - If using serial: **Port:** `/tmp/MasterSDR-CAT-A` (Linux/macOS)
    - Verify that Winlink can read the frequency from the radio.
 4. Click **Start** to begin a Winlink session.
 
@@ -449,7 +449,7 @@ and audio routing. This walkthrough covers the CAT+DAX method.
 fldigi supports a wide range of digital modes (PSK31, RTTY, Olivia, etc.)
 and integrates with Hamlib for rig control.
 
-**Step 1 — Prepare AetherSDR**
+**Step 1 — Prepare MasterSDR**
 
 1. Connect to the radio.
 2. Select or create a slice and set the mode to **DIGU** (for most digital
@@ -479,16 +479,16 @@ and integrates with Hamlib for rig control.
    - Under **Rig Control > Hamlib**:
      - **Rig:** select `NET rigctl`
      - Or under **Rig Control > RigCAT** or **Rig Control > Hardware PTT**:
-       - **Device:** `/tmp/AetherSDR-CAT-A`
+       - **Device:** `/tmp/MasterSDR-CAT-A`
        - **Baud rate:** does not matter for virtual serial ports, but
          set it to `9600` if the field is required.
 
 4. Under **Audio > Devices** (or **Soundcard**):
-   - **Capture (Input):** select `AetherSDR DAX 1`
+   - **Capture (Input):** select `MasterSDR DAX 1`
      - On Linux with PulseAudio/PipeWire: select **PulseAudio** as the audio
-       system, then choose `AetherSDR DAX 1` from the capture device list.
-     - On macOS: select `AetherSDR DAX 1` from the PortAudio device list.
-   - **Playback (Output):** select `AetherSDR TX`
+       system, then choose `MasterSDR DAX 1` from the capture device list.
+     - On macOS: select `MasterSDR DAX 1` from the PortAudio device list.
+   - **Playback (Output):** select `MasterSDR TX`
 5. Click **Save** and **Close**.
 
 **Step 3 — Verify**
@@ -525,7 +525,7 @@ and set frequency, mode, and PTT.
 ### TTY / PTY
 
 The virtual serial port version of CAT. Some older or more rigid software
-expects a serial port instead of a TCP socket. AetherSDR creates Unix
+expects a serial port instead of a TCP socket. MasterSDR creates Unix
 pseudo-terminals that behave like real serial ports.
 
 ### TCI
@@ -542,17 +542,17 @@ demodulated audio (e.g. SDR receivers, digital mode research tools).
 
 ---
 
-## How AetherSDR Maps Channels
+## How MasterSDR Maps Channels
 
 The data mode tiles are organized around four channels (A, B, C, D) that align with
 the four-slice workflow:
 
 | Channel | CAT TCP port (default) | TTY path | DAX audio |
 |---|---|---|---|
-| A | 4532 | `/tmp/AetherSDR-CAT-A` | DAX 1 |
-| B | 4533 | `/tmp/AetherSDR-CAT-B` | DAX 2 |
-| C | 4534 | `/tmp/AetherSDR-CAT-C` | DAX 3 |
-| D | 4535 | `/tmp/AetherSDR-CAT-D` | DAX 4 |
+| A | 4532 | `/tmp/MasterSDR-CAT-A` | DAX 1 |
+| B | 4533 | `/tmp/MasterSDR-CAT-B` | DAX 2 |
+| C | 4534 | `/tmp/MasterSDR-CAT-C` | DAX 3 |
+| D | 4535 | `/tmp/MasterSDR-CAT-D` | DAX 4 |
 
 Keep your channel numbering consistent with your slice usage so you do not have
 to rediscover the routing every session.
@@ -623,7 +623,7 @@ slice you are watching.
 selected in the external program.
 
 **Fix:** Confirm TX ownership first (check which slice has the TX indicator),
-then confirm the application's transmit audio is routed to `AetherSDR TX`.
+then confirm the application's transmit audio is routed to `MasterSDR TX`.
 
 ### CAT works, but there is no decode audio
 
@@ -631,7 +631,7 @@ then confirm the application's transmit audio is routed to `AetherSDR TX`.
 is not.
 
 **Fix:** Leave CAT alone. Check that DAX is enabled in the DAX Audio tile and
-that the application's audio input is set to the correct `AetherSDR DAX`
+that the application's audio input is set to the correct `MasterSDR DAX`
 channel.
 
 ### Audio is present, but the application does not tune the radio
@@ -650,7 +650,7 @@ PulseAudio/PipeWire service is not running.
 - Verify the radio is connected.
 - Click **Enable** in the DAX Audio tile.
 - On Linux: run `pactl list sources short` to check if the devices exist.
-- On macOS: check **System Settings > Sound > Input** for AetherSDR devices.
+- On macOS: check **System Settings > Sound > Input** for MasterSDR devices.
 - On Windows: use TCI instead — DAX virtual audio is not available on Windows.
 
 ### Everything works locally, but remote digital operation is choppy

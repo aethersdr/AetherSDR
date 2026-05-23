@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
@@ -24,7 +24,7 @@ class QPlainTextEdit;
 class QTabWidget;
 class QTableView;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class DxClusterClient;
 class RadioModel;
@@ -236,4 +236,4 @@ private:
     DxccColorProvider* m_dxccProvider{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

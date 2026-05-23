@@ -1,4 +1,4 @@
-#include "ClientCompThresholdFader.h"
+﻿#include "ClientCompThresholdFader.h"
 
 #include <QEvent>
 #include <QFocusEvent>
@@ -16,7 +16,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -338,4 +338,4 @@ void ClientCompThresholdFader::wheelEvent(QWheelEvent* ev)
     ev->accept();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

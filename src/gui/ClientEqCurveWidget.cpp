@@ -1,4 +1,4 @@
-#include "ClientEqCurveWidget.h"
+﻿#include "ClientEqCurveWidget.h"
 #include "core/ClientEq.h"
 
 #include <QPainter>
@@ -10,7 +10,7 @@
 #include <array>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -575,4 +575,4 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

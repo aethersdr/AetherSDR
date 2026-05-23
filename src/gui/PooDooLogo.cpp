@@ -1,4 +1,4 @@
-#include "PooDooLogo.h"
+﻿#include "PooDooLogo.h"
 #include "core/ClientPudu.h"
 
 #include <QFont>
@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -113,4 +113,4 @@ void PooDooLogo::paintEvent(QPaintEvent*)
     p.drawLine(QPointF(ux1, uy), QPointF(ux2, uy));
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

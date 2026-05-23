@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifdef HAVE_MIDI
 
@@ -9,14 +9,14 @@
 #include <QLabel>
 #include <QPushButton>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class MidiControlManager;
 
 // MIDI Mapping dialog — dedicated settings window for configuring MIDI
 // controller bindings. Opened from Settings → MIDI Mapping.
 // Shows device selector, binding table with Learn mode, and profile
-// save/load. All bindings stored in ~/.config/AetherSDR/midi.settings.
+// save/load. All bindings stored in ~/.config/MasterSDR/midi.settings.
 class MidiMappingDialog : public PersistentDialog {
     Q_OBJECT
 
@@ -40,6 +40,6 @@ private:
     QComboBox*    m_profileCombo;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_MIDI

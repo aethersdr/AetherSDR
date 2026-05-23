@@ -1,15 +1,15 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QtGlobal>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 enum class DaxTxRequestReason {
     HostedDaxBridge,
     TciTxAudio,
     RadeModemTx,
-    AetherModemAx25Tx,
+    MasterModemAx25Tx,
     ExternalDaxRouteOnly,
     GenericAudioRecreate
 };
@@ -46,7 +46,7 @@ inline QString daxTxRequestReasonName(DaxTxRequestReason reason)
     case DaxTxRequestReason::HostedDaxBridge:     return QStringLiteral("hosted_dax_bridge");
     case DaxTxRequestReason::TciTxAudio:          return QStringLiteral("tci_tx_audio");
     case DaxTxRequestReason::RadeModemTx:         return QStringLiteral("rade_modem_tx");
-    case DaxTxRequestReason::AetherModemAx25Tx:   return QStringLiteral("aethermodem_ax25_tx");
+    case DaxTxRequestReason::MasterModemAx25Tx:   return QStringLiteral("MasterModem_ax25_tx");
     case DaxTxRequestReason::ExternalDaxRouteOnly:return QStringLiteral("external_dax_route_only");
     case DaxTxRequestReason::GenericAudioRecreate:return QStringLiteral("generic_audio_recreate");
     }
@@ -133,7 +133,7 @@ inline DaxTxPolicyDecision evaluateDaxTxPolicy(const DaxTxPolicyContext& context
 
     case DaxTxRequestReason::TciTxAudio:
         // TCI's audio source is the WebSocket from WSJT-X / JTDX / MSHV, not
-        // a local audio device.  AetherSDR feeds those packets into a
+        // a local audio device.  MasterSDR feeds those packets into a
         // dedicated dax_tx stream that's independent of SmartSDR DAX2 (which
         // owns the Windows DAX *audio devices*, not the radio's dax_tx
         // stream slot — multiple GUI clients can each register their own).
@@ -145,15 +145,15 @@ inline DaxTxPolicyDecision evaluateDaxTxPolicy(const DaxTxPolicyContext& context
         // directly via sendModemTxAudio() — exactly like TCI, it never
         // touches Windows audio devices.  SmartSDR DAX2 owning the audio
         // device layer is irrelevant: the radio's dax_tx stream slot is
-        // independent and AetherSDR must register its own.
+        // independent and MasterSDR must register its own.
         return {true, QStringLiteral("rade_sends_vita49_directly")};
 
-    case DaxTxRequestReason::AetherModemAx25Tx:
-        // AetherModem generates an AX.25 AFSK waveform internally and sends
+    case DaxTxRequestReason::MasterModemAx25Tx:
+        // MasterModem generates an AX.25 AFSK waveform internally and sends
         // VITA-49 packets directly via AudioEngine::sendModemTxAudio(). Like
         // RADE/TCI, it does not claim a Windows audio device, so it needs its
         // own dax_tx stream even on platforms where external DAX owns devices.
-        return {true, QStringLiteral("aethermodem_sends_vita49_directly")};
+        return {true, QStringLiteral("MasterModem_sends_vita49_directly")};
 
     case DaxTxRequestReason::ExternalDaxRouteOnly:
         if (context.mode == DaxTxMode::ExternalDax2) {
@@ -168,4 +168,4 @@ inline DaxTxPolicyDecision evaluateDaxTxPolicy(const DaxTxPolicyContext& context
     return {false, QStringLiteral("unknown_reason")};
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

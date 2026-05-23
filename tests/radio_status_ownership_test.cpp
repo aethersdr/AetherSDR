@@ -1,12 +1,12 @@
-#include "models/RadioStatusOwnership.h"
+﻿#include "models/RadioStatusOwnership.h"
 #include "core/DaxTxPolicy.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
 
 #include <cstdio>
 
-using namespace AetherSDR;
-using namespace AetherSDR::RadioStatusOwnership;
+using namespace MasterSDR;
+using namespace MasterSDR::RadioStatusOwnership;
 
 namespace {
 

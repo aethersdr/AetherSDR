@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class MeterModel;
 class HGauge;
@@ -37,4 +37,4 @@ private:
     bool m_resolved{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

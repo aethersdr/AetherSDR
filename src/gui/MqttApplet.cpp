@@ -1,4 +1,4 @@
-#include "MqttApplet.h"
+﻿#include "MqttApplet.h"
 #include "core/AppSettings.h"
 #include "core/MqttClient.h"
 
@@ -18,7 +18,7 @@
 #include <QDialogButtonBox>
 #include <QMenu>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const QString kLabelStyle =
     "QLabel { color: #8090a0; font-size: 10px; background: transparent; }";
@@ -429,4 +429,4 @@ void MqttApplet::loadButtons()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

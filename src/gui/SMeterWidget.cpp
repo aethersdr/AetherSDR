@@ -1,4 +1,4 @@
-#include "SMeterWidget.h"
+﻿#include "SMeterWidget.h"
 
 #include <QPainter>
 #include <QPainterPath>
@@ -6,7 +6,7 @@
 #include <QtMath>
 #include <QFontMetrics>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // --- Construction ------------------------------------------------------------
 
@@ -697,4 +697,4 @@ void SMeterWidget::resetPeak()
     update();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

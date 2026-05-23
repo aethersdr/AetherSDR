@@ -1,15 +1,15 @@
-#include "ClientRxDspApplet.h"
-#include "AetherDspWidget.h"
+﻿#include "ClientRxDspApplet.h"
+#include "MasterDspWidget.h"
 #include "core/AudioEngine.h"
 
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 ClientRxDspApplet::ClientRxDspApplet(QWidget* parent) : QWidget(parent)
 {
     setStyleSheet("QWidget { background: transparent; }");
-    // Cap horizontal width so the embedded AetherDspWidget can't push the
+    // Cap horizontal width so the embedded MasterDspWidget can't push the
     // PooDoo container wider than its 280 px slot — sliders + tab bar
     // shrink to fit instead of clipping.
     setMaximumWidth(250);
@@ -23,10 +23,10 @@ void ClientRxDspApplet::setAudioEngine(AudioEngine* engine)
 {
     m_audio = engine;
     if (!m_audio || m_widget) return;
-    m_widget = new AetherDspWidget(m_audio, this);
+    m_widget = new MasterDspWidget(m_audio, this);
     m_widget->setCompactMode(true);
     if (auto* lay = qobject_cast<QVBoxLayout*>(layout()))
         lay->addWidget(m_widget);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

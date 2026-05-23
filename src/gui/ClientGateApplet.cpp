@@ -1,4 +1,4 @@
-#include "ClientGateApplet.h"
+﻿#include "ClientGateApplet.h"
 #include "ClientCompKnob.h"
 #include "ClientGateCurveWidget.h"
 #include "MeterSmoother.h"
@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Gain-reduction mini-strip for the applet.  Named at file scope (not
 // an anonymous namespace) so ClientGateApplet.h can forward-declare it
@@ -303,4 +303,4 @@ void ClientGateApplet::tickMeter()
     if (m_floor)   { QSignalBlocker b(m_floor);   m_floor->setValue(g->floorDb()); }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

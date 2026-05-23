@@ -1,9 +1,9 @@
-#include "SpectrogramBuffer.h"
+﻿#include "SpectrogramBuffer.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 void SpectrogramBuffer::push(const QVector<float>& binsDbm,
                               double centerMhz, double bandwidthMhz)
@@ -80,4 +80,4 @@ QVector<float> SpectrogramBuffer::extractPatch(double sigFreqMhz,
     return patch;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

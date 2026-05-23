@@ -1,19 +1,19 @@
-#pragma once
+﻿#pragma once
 
 #include <QJsonObject>
 #include <QObject>
 #include <QString>
 #include <QStringList>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 
-// JSON-backed preset library for the Aetherial Audio Channel Strip.
+// JSON-backed preset library for the Masterial Audio Channel Strip.
 //
-// Stored at ~/.config/AetherSDR/ChannelStrip.settings as a single
+// Stored at ~/.config/MasterSDR/ChannelStrip.settings as a single
 // JSON document.  Live working state continues to live in
-// AetherSDR.settings via the existing per-DSP-module load/save paths
+// MasterSDR.settings via the existing per-DSP-module load/save paths
 // — this file is purely a preset library that the user explicitly
 // saves into and recalls from.
 //
@@ -22,7 +22,7 @@ class AudioEngine;
 //     "version": 1,
 //     "presets": {
 //       "Broadcast Voice": {
-//         "createdBy": "AetherSDR x.y.z",
+//         "createdBy": "MasterSDR x.y.z",
 //         "createdAt": "ISO-8601",
 //         "chain":     ["Gate","Eq",...],
 //         "gate":      { ... },
@@ -95,4 +95,4 @@ private:
     QJsonObject  m_root;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QAudio>
 #include <QBuffer>
@@ -13,7 +13,7 @@
 
 class QAudioSink;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // PUDU monitor — captures up to 30 seconds of post-DSP TX audio (the
 // output of the full client-side PooDoo™ chain) into an in-memory
@@ -112,4 +112,4 @@ private:
     QBuffer                m_playBuffer;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

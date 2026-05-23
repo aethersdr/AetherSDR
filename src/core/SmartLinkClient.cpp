@@ -1,4 +1,4 @@
-#include "SmartLinkClient.h"
+﻿#include "SmartLinkClient.h"
 #include "AppSettings.h"
 #include "LogManager.h"
 
@@ -13,7 +13,7 @@
 #include <qt6keychain/keychain.h>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 SmartLinkClient::SmartLinkClient(QObject* parent)
     : QObject(parent)
@@ -170,7 +170,7 @@ void SmartLinkClient::saveCredentials()
 #ifdef HAVE_KEYCHAIN
     if (m_refreshToken.isEmpty()) return;
 
-    auto* job = new QKeychain::WritePasswordJob("AetherSDR");
+    auto* job = new QKeychain::WritePasswordJob("MasterSDR");
     job->setAutoDelete(true);
     job->setKey("smartlink_refresh_token");
     job->setTextData(m_refreshToken);
@@ -187,7 +187,7 @@ void SmartLinkClient::saveCredentials()
 void SmartLinkClient::clearCredentials()
 {
 #ifdef HAVE_KEYCHAIN
-    auto* job = new QKeychain::DeletePasswordJob("AetherSDR");
+    auto* job = new QKeychain::DeletePasswordJob("MasterSDR");
     job->setAutoDelete(true);
     job->setKey("smartlink_refresh_token");
     connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
@@ -205,7 +205,7 @@ void SmartLinkClient::clearCredentials()
 void SmartLinkClient::tryAutoLogin()
 {
 #ifdef HAVE_KEYCHAIN
-    auto* job = new QKeychain::ReadPasswordJob("AetherSDR");
+    auto* job = new QKeychain::ReadPasswordJob("MasterSDR");
     job->setAutoDelete(true);
     job->setKey("smartlink_refresh_token");
     connect(job, &QKeychain::Job::finished, this, [this](QKeychain::Job* j) {
@@ -320,7 +320,7 @@ void SmartLinkClient::onSslConnected()
 
     // Register with the server
     qCDebug(lcSmartLink) << "SmartLinkClient: sending application register (token length:" << m_idToken.length() << ")";
-    QString cmd = QString("application register name=AetherSDR platform=Linux token=%1\n")
+    QString cmd = QString("application register name=MasterSDR platform=Linux token=%1\n")
                       .arg(m_idToken);
     m_socket.write(cmd.toUtf8());
 
@@ -543,4 +543,4 @@ void SmartLinkClient::parseTestResults(const QString& msg)
     );
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

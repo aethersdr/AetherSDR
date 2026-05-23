@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QTcpServer>
@@ -6,7 +6,7 @@
 #include <QFile>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 
@@ -81,4 +81,4 @@ private:
     static constexpr int UPLOAD_CHUNK_SIZE = 65536;      // 64KB chunks
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

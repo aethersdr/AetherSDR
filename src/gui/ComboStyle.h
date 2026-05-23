@@ -1,7 +1,7 @@
-#pragma once
+﻿#pragma once
 
 // Shared combo box styling for consistent down-arrow appearance across all
-// QComboBox instances in AetherSDR. Use applyComboStyle(combo) on any
+// QComboBox instances in MasterSDR. Use applyComboStyle(combo) on any
 // QComboBox to get the standard dark-themed look with painted down-arrow.
 
 #include <QComboBox>
@@ -10,14 +10,14 @@
 #include <QPixmap>
 #include <QPainter>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Generate a small down-arrow PNG (cached in temp dir, created once).
 inline QString comboArrowPath()
 {
     static QString path;
     if (!path.isEmpty()) return path;
-    path = QDir::temp().filePath("aethersdr_combo_arrow.png");
+    path = QDir::temp().filePath("MasterSDR_combo_arrow.png");
     if (QFile::exists(path)) return path;
     QPixmap pm(8, 6);
     pm.fill(Qt::transparent);
@@ -51,4 +51,4 @@ inline void applyComboStyle(QComboBox* combo)
     combo->setStyleSheet(comboStyleSheet());
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

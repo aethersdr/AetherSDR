@@ -1,4 +1,4 @@
-#include "PipeWireNativeRxSource.h"
+﻿#include "PipeWireNativeRxSource.h"
 #include "PipeWireNativeContext.h"
 #include "LogManager.h"
 
@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -77,8 +77,8 @@ bool PipeWireNativeRxSource::open()
     }
     m_contextAcquired = true;
 
-    const QByteArray nodeName = QString("aethersdr-dax-%1").arg(m_channel).toUtf8();
-    const QByteArray nodeDesc = QString("AetherSDR DAX %1").arg(m_channel).toUtf8();
+    const QByteArray nodeName = QString("MasterSDR-dax-%1").arg(m_channel).toUtf8();
+    const QByteArray nodeDesc = QString("MasterSDR DAX %1").arg(m_channel).toUtf8();
 
     // Latency strategy:
      //   node.latency       — the *request*: 256-sample quantum (~5.3 ms @ 48 kHz)
@@ -283,4 +283,4 @@ void PipeWireNativeRxSource::onProcess(void* userdata)
     pw_stream_queue_buffer(self->m_stream, b);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "ContainerWidget.h"
+﻿#include "ContainerWidget.h"
 #include "ContainerTitleBar.h"
 
 #include <QDrag>
@@ -6,7 +6,7 @@
 #include <QPixmap>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 ContainerWidget::ContainerWidget(const QString& id, const QString& title,
                                  QWidget* parent)
@@ -147,7 +147,7 @@ void ContainerWidget::onTitleBarDragStart(const QPoint& /*globalPos*/)
     // MIME type is shared with AppletDropArea's drag-reorder handling.
     auto* drag = new QDrag(m_titleBar);
     auto* mime = new QMimeData;
-    mime->setData("application/x-aethersdr-applet", m_id.toUtf8());
+    mime->setData("application/x-MasterSDR-applet", m_id.toUtf8());
     drag->setMimeData(mime);
 
     // Drag pixmap: a semi-opaque snapshot of the titlebar strip so
@@ -161,4 +161,4 @@ void ContainerWidget::onTitleBarDragStart(const QPoint& /*globalPos*/)
     drag->exec(Qt::MoveAction);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "TunerApplet.h"
+﻿#include "TunerApplet.h"
 #include "HGauge.h"
 #include "models/TunerModel.h"
 #include "models/MeterModel.h"
@@ -10,7 +10,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 
 
@@ -346,7 +346,7 @@ void TunerApplet::updateAntennaButtons(int antA)
     m_ant3Btn->setStyleSheet(antA == 2 ? kActive : kDefault);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 // RelayBar has Q_OBJECT in a header-only class — include MOC output here
 #include "moc_HGauge.cpp"

@@ -1,4 +1,4 @@
-#include "MeterModel.h"
+﻿#include "MeterModel.h"
 #include "core/LogManager.h"
 #include <QDebug>
 #include <QDateTime>
@@ -6,7 +6,7 @@
 #include <QJsonObject>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -795,4 +795,4 @@ QJsonArray MeterModel::metersForSource(const QString& source, int sourceIndex) c
     return meters;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

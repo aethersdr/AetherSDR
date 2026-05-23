@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QLineEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Combined input-level meter + threshold fader for the compressor
 // editor.  Visual + interaction pattern mirrors ClientEqOutputFader —
@@ -70,4 +70,4 @@ private:
     int m_stripH{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

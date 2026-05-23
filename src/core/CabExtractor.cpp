@@ -1,4 +1,4 @@
-#include "CabExtractor.h"
+﻿#include "CabExtractor.h"
 #include "LogManager.h"
 
 extern "C" {
@@ -9,7 +9,7 @@ extern "C" {
 #include <cstdlib>
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -214,4 +214,4 @@ bool CabExtractor::extractFirstMatchingMagic(const QByteArray& cabBytes,
     return false;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

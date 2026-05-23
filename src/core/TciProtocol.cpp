@@ -1,4 +1,4 @@
-#ifdef HAVE_WEBSOCKETS
+﻿#ifdef HAVE_WEBSOCKETS
 #include "TciProtocol.h"
 #include "AppSettings.h"
 #include "models/RadioModel.h"
@@ -12,7 +12,7 @@
 #include <QMetaObject>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 int TciProtocol::tciTrxForSlice(RadioModel* model, const SliceModel* slice)
 {
@@ -67,7 +67,7 @@ SliceModel* TciProtocol::sliceForTrx(int trx) const
         return slices.at(trx);
 
     // Compatibility fallback for clients that learned raw Flex slice ids from
-    // older AetherSDR builds.
+    // older MasterSDR builds.
     for (auto* s : m_model->slices()) {
         if (s->sliceId() == trx) return s;
     }
@@ -108,18 +108,18 @@ QString TciProtocol::generateInitBurst()
     //   protocol != starts-with "ExpertSDR3"
     // Either branch alone keeps the K1 (full-amplitude) path; both branches
     // satisfied makes it doubly safe.
-    //   - device: literal "AetherSDR" avoids the SunSDR-specific gain trap
+    //   - device: literal "MasterSDR" avoids the SunSDR-specific gain trap
     //     AND avoids the leading-space bug in the older "<name> <model>"
     //     form when the radio's nickname is empty.
     //   - protocol: "ExpertSDR3,1.5" sets WSJT-X's ESDR3 flag, which both
     //     gates the gain reduction off and selects WSJT-X command formats
-    //     that AetherSDR already handles correctly (proven in v26.5.1).
+    //     that MasterSDR already handles correctly (proven in v26.5.1).
     // RF2K-S amp whitelist (which keyed on SunSDR2DX + ExpertSDR2) is
     // regressed by this change; a configurable / adaptive identity is
     // tracked in #2806.  Everything else from #2597 (init-burst order,
     // vfo_limits, if_limits, channels_count, split_enable) is preserved
     // and is what the RF2K-S TCI parser actually needs to engage.
-    burst += QStringLiteral("device:AetherSDR;");
+    burst += QStringLiteral("device:MasterSDR;");
     burst += QStringLiteral("receive_only:false;");
     burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,fm,nfm,digu,digl,rtty;");
     burst += QStringLiteral("protocol:ExpertSDR3,1.5;");
@@ -128,7 +128,7 @@ QString TciProtocol::generateInitBurst()
     // ── Phase 2: Current state notifications ──────────────────────────
     // After READY these are plain event notifications, indistinguishable
     // from the events fired by a live tuning operation.  All current TCI
-    // clients (WSJT-X, JTDX, aether_pad) should process them identically.
+    // clients (WSJT-X, JTDX, mastersdr_pad) should process them identically.
     if (m_model) {
         for (auto* s : slices) {
             int trx = tciTrxForSlice(m_model, s);
@@ -323,7 +323,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "rx_anf_enable")    return cmdRxAnfEnable(args, isSet);
     if (name == "rx_apf_enable")    return cmdRxApfEnable(args, isSet);
 
-    // AetherSDR extensions (not in TCI v2.0 spec)
+    // MasterSDR extensions (not in TCI v2.0 spec)
     if (name == "rx_record")        return cmdRxRecord(args, isSet);
     if (name == "rx_play")          return cmdRxPlay(args, isSet);
 
@@ -989,7 +989,7 @@ QString TciProtocol::cmdRxApfEnable(const QStringList& args, bool isSet)
     return {};
 }
 
-// ── AetherSDR extensions (DVK record/play) ─────────────────────────────────
+// ── MasterSDR extensions (DVK record/play) ─────────────────────────────────
 
 QString TciProtocol::cmdRxRecord(const QStringList& args, bool isSet)
 {
@@ -1524,6 +1524,6 @@ QString TciProtocol::cmdTxFrequency()
     return {};
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_WEBSOCKETS

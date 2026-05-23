@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <atomic>
 #include <cstdint>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Client-side reverb — TX DSP chain Phase 6 (Freeverb).  Eight parallel
 // lowpass-feedback comb filters in parallel summed through four series
@@ -130,4 +130,4 @@ private:
     std::atomic<float> m_wetRmsDb{-120.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

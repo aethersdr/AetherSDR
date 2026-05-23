@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "BandDefs.h"
 
@@ -6,7 +6,7 @@
 #include <QMap>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Snapshot of all per-band settings that should be saved/restored.
 struct BandSnapshot {
@@ -65,4 +65,4 @@ private:
     QString m_currentBand;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "PhoneCwApplet.h"
+﻿#include "PhoneCwApplet.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "HGauge.h"
@@ -20,7 +20,7 @@
 #include <QDir>
 #include <QStandardPaths>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── Triangle button (same as RxApplet) ──────────────────────────────────────
 
@@ -165,7 +165,7 @@ void PhoneCwApplet::buildPhonePanel()
     m_micProfileCombo->setFixedHeight(22);
     m_micProfileCombo->setAccessibleName("Microphone profile");
     m_micProfileCombo->setAccessibleDescription("Select microphone processing profile");
-    AetherSDR::applyComboStyle(m_micProfileCombo);
+    MasterSDR::applyComboStyle(m_micProfileCombo);
     connect(m_micProfileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this](int) {
         if (!m_updatingFromModel && m_model) {
@@ -186,7 +186,7 @@ void PhoneCwApplet::buildPhonePanel()
         m_micSourceCombo->setFixedHeight(22);
         m_micSourceCombo->setAccessibleName("Microphone source");
         m_micSourceCombo->setAccessibleDescription("Select microphone input source");
-        AetherSDR::applyComboStyle(m_micSourceCombo);
+        MasterSDR::applyComboStyle(m_micSourceCombo);
         m_micSourceCombo->addItems({"MIC", "BAL", "LINE", "ACC", "PC"});
         connect(m_micSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int) {
@@ -844,4 +844,4 @@ bool PhoneCwApplet::eventFilter(QObject* obj, QEvent* ev)
     return QWidget::eventFilter(obj, ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

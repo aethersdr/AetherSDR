@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PacketLossConcealment.h"
 
@@ -14,7 +14,7 @@
 #include <QMutexLocker>
 #include <atomic>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioConnection;
 class OpusCodec;
@@ -269,4 +269,4 @@ private:
     QElapsedTimer m_routedPrimeElapsed;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

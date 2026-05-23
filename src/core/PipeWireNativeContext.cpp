@@ -1,9 +1,9 @@
-#include "PipeWireNativeContext.h"
+﻿#include "PipeWireNativeContext.h"
 #include "LogManager.h"
 
 #include <pipewire/pipewire.h>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 PipeWireNativeContext& PipeWireNativeContext::instance()
 {
@@ -40,7 +40,7 @@ bool PipeWireNativeContext::acquire()
     // First user — initialize PipeWire.
     pw_init(nullptr, nullptr);
 
-    m_loop = pw_thread_loop_new("aethersdr-dax", nullptr);
+    m_loop = pw_thread_loop_new("MasterSDR-dax", nullptr);
     if (!m_loop) {
         qCWarning(lcDax) << "PipeWireNativeContext: pw_thread_loop_new failed";
         m_refCount = 0;
@@ -131,4 +131,4 @@ void PipeWireNativeContext::unlock()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

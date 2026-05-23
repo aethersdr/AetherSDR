@@ -1,7 +1,7 @@
-#include "TgxlConnection.h"
+﻿#include "TgxlConnection.h"
 #include "LogManager.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 TgxlConnection::TgxlConnection(QObject* parent)
     : QObject(parent)
@@ -180,4 +180,4 @@ void TgxlConnection::pollStatus()
         sendCommand("status");
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

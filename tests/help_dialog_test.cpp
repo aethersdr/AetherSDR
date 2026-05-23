@@ -1,4 +1,4 @@
-// Standalone test harness for HelpDialog guide search.
+﻿// Standalone test harness for HelpDialog guide search.
 // Build: CMake target `help_dialog_test`. Exit 0 = pass.
 
 #include "gui/HelpDialog.h"
@@ -14,7 +14,7 @@
 #include <cstdio>
 #include <string>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <atomic>
 #include <cstdint>
 #include <functional>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Client-side CW sidetone generator.  Produces a clean sine tone in the
 // AudioEngine's RX output stream while the operator's CW key is held,
@@ -95,4 +95,4 @@ private:
     SampleTap m_sampleTap;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "StripDeEssPanel.h"
+﻿#include "StripDeEssPanel.h"
 #include "ClientCompKnob.h"
 #include "ClientDeEssCurveWidget.h"
 #include "EditorFramelessTitleBar.h"
@@ -22,7 +22,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -110,7 +110,7 @@ StripDeEssPanel::StripDeEssPanel(AudioEngine* engine, QWidget* parent)
     : QWidget(parent)
     , m_audio(engine)
 {
-    const QString title = QString::fromUtf8("Aetherial De-Esser \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial De-Esser \xe2\x80\x94 TX");
     setWindowTitle(title);
     setStyleSheet(kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
@@ -288,7 +288,7 @@ StripDeEssPanel::~StripDeEssPanel() = default;
 void StripDeEssPanel::showForTx()
 {
     m_side = Side::Tx;
-    const QString title = QString::fromUtf8("Aetherial De-Esser \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial De-Esser \xe2\x80\x94 TX");
     setWindowTitle(title);
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
@@ -304,7 +304,7 @@ void StripDeEssPanel::showForTx()
 void StripDeEssPanel::showForRx()
 {
     m_side = Side::Rx;
-    const QString title = QString::fromUtf8("Aetherial De-Esser \xe2\x80\x94 RX");
+    const QString title = QString::fromUtf8("Masterial De-Esser \xe2\x80\x94 RX");
     setWindowTitle(title);
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
@@ -420,4 +420,4 @@ void StripDeEssPanel::showEvent(QShowEvent* ev)
 void StripDeEssPanel::hideEvent(QHideEvent* ev)
 { saveGeometryToSettings(); QWidget::hideEvent(ev); }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

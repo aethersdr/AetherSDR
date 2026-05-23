@@ -1,10 +1,10 @@
-#include "core/SpotModeResolver.h"
+﻿#include "core/SpotModeResolver.h"
 
 #include <QMap>
 #include <QSet>
 #include <QStringList>
 
-namespace AetherSDR::SpotModeResolver {
+namespace MasterSDR::SpotModeResolver {
 
 namespace {
 
@@ -91,4 +91,4 @@ QString resolveSpotRadioMode(const QString& explicitMode,
     return mapSpotModeToRadioMode(spotMode, rxFreqMhz);
 }
 
-} // namespace AetherSDR::SpotModeResolver
+} // namespace MasterSDR::SpotModeResolver

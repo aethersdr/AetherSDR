@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Per-model feature flags mirroring FlexLib/ModelInfo.cs (Has2Meters,
 // Has4Meters, ...).  Authority for any UI surface that varies by model
@@ -20,4 +20,4 @@ struct ModelCapabilities {
 // compatible for radios released after this build.
 ModelCapabilities capabilitiesFor(const QString& model);
 
-} // namespace AetherSDR
+} // namespace MasterSDR

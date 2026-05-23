@@ -1,4 +1,4 @@
-#include "StripTubePanel.h"
+﻿#include "StripTubePanel.h"
 #include "ClientCompKnob.h"
 #include "ClientLevelMeter.h"
 #include "ClientTubeCurveWidget.h"
@@ -21,7 +21,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -67,7 +67,7 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
     : QWidget(parent)
     , m_audio(engine)
 {
-    setWindowTitle("Aetherial Dynamic Tube Pre-Amp");
+    setWindowTitle("Masterial Dynamic Tube Pre-Amp");
     setStyleSheet(kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
@@ -354,7 +354,7 @@ void StripTubePanel::showForTx()
     m_side = Side::Tx;
     if (m_curve && tube()) m_curve->setTube(tube());
     const QString title = QString::fromUtf8(
-        "Aetherial Dynamic Tube Pre-Amp \xe2\x80\x94 TX");
+        "Masterial Dynamic Tube Pre-Amp \xe2\x80\x94 TX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -381,11 +381,11 @@ void StripTubePanel::showForRx()
     m_side = Side::Rx;
     if (m_curve && tube()) m_curve->setTube(tube());
     const QString title = QString::fromUtf8(
-        "Aetherial Dynamic Tube Pre-Amp \xe2\x80\x94 RX");
+        "Masterial Dynamic Tube Pre-Amp \xe2\x80\x94 RX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
-    // RX side has its own RN2 toggle elsewhere (AetherDspWidget /
+    // RX side has its own RN2 toggle elsewhere (MasterDspWidget /
     // ClientRxChainWidget).  Hide our copy — meter keeps its default
     // Expanding policy so it fills the full column.  (#2813)
     if (m_rn2Btn) m_rn2Btn->setVisible(false);
@@ -524,4 +524,4 @@ void StripTubePanel::showEvent(QShowEvent* ev)
 void StripTubePanel::hideEvent(QHideEvent* ev)
 { saveGeometryToSettings(); QWidget::hideEvent(ev); }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

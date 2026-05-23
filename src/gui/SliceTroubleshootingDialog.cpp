@@ -1,4 +1,4 @@
-#include "SliceTroubleshootingDialog.h"
+﻿#include "SliceTroubleshootingDialog.h"
 #include "GuardedSlider.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -23,7 +23,7 @@
 #include <QStringList>
 #include <utility>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -321,7 +321,7 @@ SliceTroubleshootingDialog::SliceTroubleshootingDialog(RadioModel* model,
     root->setSpacing(8);
 
     auto* intro = new QLabel(
-        "Capture AetherSDR's current in-memory radio, panadapter, slice, and meter state. "
+        "Capture MasterSDR's current in-memory radio, panadapter, slice, and meter state. "
         "Use <b>Issue Summary</b> for GitHub reports and <b>JSON</b> for AI-assisted troubleshooting. "
         "This dialog does not re-query the radio.");
     intro->setWordWrap(true);
@@ -435,7 +435,7 @@ void SliceTroubleshootingDialog::copyJson()
 
 void SliceTroubleshootingDialog::exportJson()
 {
-    const QString defaultPath = QDir::homePath() + QString("/aethersdr-slice-troubleshooting-%1.json")
+    const QString defaultPath = QDir::homePath() + QString("/MasterSDR-slice-troubleshooting-%1.json")
         .arg(QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss"));
 
     const QString path = QFileDialog::getSaveFileName(
@@ -504,14 +504,14 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
 
     lines << "# Slice Troubleshooting Snapshot";
     lines << "";
-    lines << "> Captured from AetherSDR's in-memory models and cached meter values.";
+    lines << "> Captured from MasterSDR's in-memory models and cached meter values.";
     lines << "> This report does not query the radio directly.";
     lines << "> Client DSP enable state comes from the live audio engine; parameter values come from saved app settings.";
     lines << "> Privacy filter is enabled: radio name, nickname, callsign, serials, MAC/IPs, GPS data, and client station names are omitted.";
     lines << "";
     lines << QString("- Captured: `%1`").arg(orPlaceholder(snapshot["captured_at"].toString()));
     lines << QString("- App: `%1 %2` on `%3` (`Qt %4`, `%5`)")
-                 .arg(orPlaceholder(app["name"].toString(), "AetherSDR"))
+                 .arg(orPlaceholder(app["name"].toString(), "MasterSDR"))
                  .arg(orPlaceholder(app["version"].toString()))
                  .arg(orPlaceholder(app["os"].toString()))
                  .arg(orPlaceholder(app["qt_version"].toString()))
@@ -988,4 +988,4 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
     return lines.join('\n').trimmed() + '\n';
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

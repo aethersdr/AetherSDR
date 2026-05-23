@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "MeterSmoother.h"
 
@@ -6,7 +6,7 @@
 #include <QElapsedTimer>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Vertical peak + peak-hold meter for the compressor editor.  Two
 // visual modes are supported via setMode():
@@ -71,4 +71,4 @@ private:
     float m_limGrDb{0.0f};        // 0 means "no limiting this frame"
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

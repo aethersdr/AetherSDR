@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QElapsedTimer>
 #include <QWidget>
@@ -9,7 +9,7 @@ class QLabel;
 class QPushButton;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class ClientCompKnob;
@@ -91,4 +91,4 @@ private:
     bool     m_limitFlashOn{false};   // toggled each tick while active
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

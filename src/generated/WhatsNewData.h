@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 enum class ChangeCategory { Feature, BugFix, Improvement, Infrastructure };
 
@@ -24,4 +24,4 @@ struct ReleaseEntry {
 // Generated from CHANGELOG.md by scripts/gen_whatsnew.py at build time.
 const std::vector<ReleaseEntry>& whatsNewEntries();
 
-} // namespace AetherSDR
+} // namespace MasterSDR

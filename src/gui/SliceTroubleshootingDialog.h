@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 #include <QJsonObject>
@@ -7,7 +7,7 @@
 class QLabel;
 class QPlainTextEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class AudioEngine;
@@ -44,4 +44,4 @@ private:
     QLabel* m_statusLabel{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

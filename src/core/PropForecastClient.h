@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QNetworkAccessManager>
@@ -6,7 +6,7 @@
 #include <QString>
 #include <array>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct PropForecast {
     double kIndex{-1.0};  // Planetary K-index 0-9; -1 = not yet fetched
@@ -110,4 +110,4 @@ private:
     static constexpr int kIntervalMs  = 60 * 60 * 1000;  // 1 hour
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

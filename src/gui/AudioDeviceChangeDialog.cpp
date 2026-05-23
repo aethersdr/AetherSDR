@@ -1,4 +1,4 @@
-#include "AudioDeviceChangeDialog.h"
+﻿#include "AudioDeviceChangeDialog.h"
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
 #include "core/AppSettings.h"
@@ -19,7 +19,7 @@
 
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -269,7 +269,7 @@ AudioDeviceChangeDialog::AudioDeviceChangeDialog(
     m_bodyLayout = root;
 
     auto* message = new QLabel(tr(
-        "Select the PC microphone input and speaker output AetherSDR should use."),
+        "Select the PC microphone input and speaker output MasterSDR should use."),
         content);
     message->setObjectName("body");
     message->setWordWrap(true);
@@ -377,4 +377,4 @@ QAudioDevice AudioDeviceChangeDialog::selectedOutputDevice() const
     return selectedDevice(m_outputList, m_outputDevices);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

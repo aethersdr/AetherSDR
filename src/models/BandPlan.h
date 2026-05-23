@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QColor>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ARRL US Amateur Radio Band Plan
 // Sources: ARRL band chart (rev. 1/16/2026) + Considerate Operator's Frequency Guide
@@ -258,4 +258,4 @@ inline constexpr BandSpot kBandSpots[] = {
 
 inline constexpr int kBandSpotCount = static_cast<int>(std::size(kBandSpots));
 
-} // namespace AetherSDR
+} // namespace MasterSDR

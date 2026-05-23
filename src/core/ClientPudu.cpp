@@ -1,9 +1,9 @@
-#include "ClientPudu.h"
+﻿#include "ClientPudu.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -377,4 +377,4 @@ void ClientPudu::process(float* interleaved, int frames, int channels) noexcept
                             std::memory_order_relaxed);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

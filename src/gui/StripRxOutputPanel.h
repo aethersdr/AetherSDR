@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QElapsedTimer>
 #include <QWidget>
@@ -9,12 +9,12 @@ class QLabel;
 class QPushButton;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class ClientCompKnob;
 
-// "Aetherial Output — RX" — RX-side counterpart of the TX
+// "Masterial Output — RX" — RX-side counterpart of the TX
 // `StripFinalOutputPanel`.  Sits at the very end of the RX panel grid,
 // directly mirroring the TX final-output placement (#2425).
 //
@@ -71,4 +71,4 @@ private:
     float           m_rmsDb{-120.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

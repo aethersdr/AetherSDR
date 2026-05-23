@@ -1,4 +1,4 @@
-#include "SpotSettingsDialog.h"
+﻿#include "SpotSettingsDialog.h"
 #include "GuardedSlider.h"
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
@@ -8,7 +8,7 @@
 #include <QGridLayout>
 #include <QColorDialog>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     : QDialog(parent), m_model(model)
@@ -317,4 +317,4 @@ void SpotSettingsDialog::updateColorSwatch(QPushButton* btn, const QColor& color
         "QPushButton:hover { border-color: #c8d8e8; }").arg(color.name()));
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "StripChainWidget.h"
+﻿#include "StripChainWidget.h"
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
@@ -27,7 +27,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -52,7 +52,7 @@ constexpr int   kRowGap        = 12;     // vertical space between wrapped rows
 constexpr int   kTurnOffset    = 4;      // horizontal stub length at a row transition
 constexpr int   kArrowTip      = 3;
 
-const char*     kMimeFormat  = "application/x-aethersdr-chain-stage";
+const char*     kMimeFormat  = "application/x-MasterSDR-chain-stage";
 constexpr qreal kRadius      = 5.0;
 
 const QColor kBgBox        ("#0e1b28");
@@ -796,4 +796,4 @@ QSize StripChainWidget::sizeHint() const
                  2 * kMarginY + kBoxHeight);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

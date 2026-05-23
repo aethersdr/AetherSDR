@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QPushButton>
 #include <QElapsedTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // LIMIT toggle with a built-in activity indicator.  When the user
 // enables the limiter (checkable), the button reads as "armed".
@@ -38,4 +38,4 @@ private:
     static constexpr int kHoldMs = 500;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

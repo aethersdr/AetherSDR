@@ -1,4 +1,4 @@
-// Standalone test harness for ClientEq DSP.
+﻿// Standalone test harness for ClientEq DSP.
 // Build: produced by CMake as `client_eq_test` target (Debug or RelWithDebInfo).
 // Run:   ./build/client_eq_test
 // Exit code 0 on all pass, 1 on any failure.
@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::ClientEq;
+using MasterSDR::ClientEq;
 
 namespace {
 

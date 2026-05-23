@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QUdpSocket>
@@ -7,7 +7,7 @@
 #include <atomic>
 #include "DxClusterClient.h"  // for DxSpot
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // DXLab SpotCollector UDP listener — receives spot push packets
 // in standard "DX de" cluster format on a configurable UDP port (default 9999).
@@ -46,4 +46,4 @@ private:
     std::atomic<bool> m_listening{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

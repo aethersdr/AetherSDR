@@ -1,4 +1,4 @@
-#include "gui/MainWindow.h"
+﻿#include "gui/MainWindow.h"
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
@@ -27,10 +27,10 @@
 // Minimal forward declarations matching the Xlib error-handler ABI.
 // Field order must match X11/Xlib.h's XErrorEvent exactly — otherwise
 // ev->error_code etc. read the wrong bytes.
-struct AetherX11Display;
-struct AetherX11ErrorEvent {
+struct MasterX11Display;
+struct MasterX11ErrorEvent {
     int               type;
-    AetherX11Display* display;      // Display the event was read from
+    MasterX11Display* display;      // Display the event was read from
     unsigned long     resourceid;   // XID of failed resource
     unsigned long     serial;       // serial of failed request
     unsigned char     error_code;   // BadAccess == 10
@@ -42,10 +42,10 @@ struct AetherX11ErrorEvent {
 // On systems with non-free FFmpeg (e.g. openSUSE Packman), Qt Multimedia's
 // FFmpeg backend may trigger X11 hardware-acceleration probing that causes a
 // BadAccess error, even under native Wayland.  Xlib's default handler calls
-// exit() on any error; ours logs and continues.  AetherSDR only uses Qt
+// exit() on any error; ours logs and continues.  MasterSDR only uses Qt
 // Multimedia for audio device enumeration and PCM I/O, so X11 errors from
 // video hwaccel probing are harmless.  (#1839)
-static int aetherTolerantX11ErrorHandler(AetherX11Display*, AetherX11ErrorEvent* ev)
+static int masterTolerantX11ErrorHandler(MasterX11Display*, MasterX11ErrorEvent* ev)
 {
     qWarning("Non-fatal X11 error suppressed (error_code=%d, request=%d) — "
              "see issue #1839",
@@ -57,17 +57,17 @@ static int aetherTolerantX11ErrorHandler(AetherX11Display*, AetherX11ErrorEvent*
 
 static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
 {
-    AetherSDR::LogManager::instance().enqueueMessage(type, ctx, msg);
+    MasterSDR::LogManager::instance().enqueueMessage(type, ctx, msg);
 }
 
 int main(int argc, char* argv[])
 {
     // ── Pre-QApplication environment setup ────────────────────────────────
 
-    // AETHER_NO_GPU: runtime toggle to force software OpenGL rendering.
-    // Unlike the compile-time AETHER_GPU_SPECTRUM CMake flag, this works on
+    // MASTERSDR_NO_GPU: runtime toggle to force software OpenGL rendering.
+    // Unlike the compile-time MASTERSDR_GPU_SPECTRUM CMake flag, this works on
     // already-built binaries. Avoids hardware GLX/EGL entirely.
-    if (qEnvironmentVariableIsSet("AETHER_NO_GPU")) {
+    if (qEnvironmentVariableIsSet("MASTERSDR_NO_GPU")) {
         qputenv("QT_OPENGL", "software");
     }
 
@@ -96,14 +96,14 @@ int main(int argc, char* argv[])
     //
     // dlopen avoids a build-time dependency on libX11-dev.
     {
-        using XErrHandler = int (*)(AetherX11Display*, AetherX11ErrorEvent*);
+        using XErrHandler = int (*)(MasterX11Display*, MasterX11ErrorEvent*);
         using XSetErrHandlerFn = XErrHandler (*)(XErrHandler);
         void* x11 = dlopen("libX11.so.6", RTLD_LAZY);
         if (x11) {
             auto fn = reinterpret_cast<XSetErrHandlerFn>(
                 dlsym(x11, "XSetErrorHandler"));
             if (fn)
-                fn(aetherTolerantX11ErrorHandler);
+                fn(masterTolerantX11ErrorHandler);
             // Do not dlclose — libX11 must stay loaded for the handler to
             // remain registered for connections opened later by FFmpeg.
         }
@@ -116,15 +116,15 @@ int main(int argc, char* argv[])
     // QStandardPaths before QApplication exists).
     {
 #ifdef Q_OS_MAC
-        QString settingsPath = QDir::homePath() + "/Library/Preferences/AetherSDR/AetherSDR.settings";
+        QString settingsPath = QDir::homePath() + "/Library/Preferences/MasterSDR/MasterSDR.settings";
 #elif defined(Q_OS_WIN)
-        // AppSettings uses GenericConfigLocation (%LOCALAPPDATA%) + "/AetherSDR".
+        // AppSettings uses GenericConfigLocation (%LOCALAPPDATA%) + "/MasterSDR".
         // QStandardPaths isn't available before QApplication, so we reproduce
         // the path manually using the LOCALAPPDATA env var.
         QString settingsPath = QDir::fromNativeSeparators(qEnvironmentVariable("LOCALAPPDATA"))
-                               + "/AetherSDR/AetherSDR.settings";
+                               + "/MasterSDR/MasterSDR.settings";
 #else
-        QString settingsPath = QDir::homePath() + "/.config/AetherSDR/AetherSDR.settings";
+        QString settingsPath = QDir::homePath() + "/.config/MasterSDR/MasterSDR.settings";
 #endif
         QFile f(settingsPath);
         if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -147,30 +147,30 @@ int main(int argc, char* argv[])
     }
 
     QApplication app(argc, argv);
-    app.setApplicationName("AetherSDR");
-    app.setApplicationVersion(AETHERSDR_VERSION);
-    app.setOrganizationName("AetherSDR");
-    app.setDesktopFileName("AetherSDR");  // matches .desktop file for taskbar icon
+    app.setApplicationName("MasterSDR");
+    app.setApplicationVersion(MASTERSDR_VERSION);
+    app.setOrganizationName("MasterSDR");
+    app.setDesktopFileName("MasterSDR");  // matches .desktop file for taskbar icon
 
     // Request microphone permission early (macOS only).
     // Shows the system prompt on first launch so it's ready before PTT.
     requestMicrophonePermission();
 
-    // Set up file logging in ~/.config/AetherSDR/ (works inside AppImage where
+    // Set up file logging in ~/.config/MasterSDR/ (works inside AppImage where
     // applicationDirPath() is read-only).
     // Use GenericConfigLocation + app name to avoid the double-nested
-    // ~/.config/AetherSDR/AetherSDR/ path that AppConfigLocation produces.
+    // ~/.config/MasterSDR/MasterSDR/ path that AppConfigLocation produces.
     const QString logDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                           + "/AetherSDR";
+                           + "/MasterSDR";
     QDir().mkpath(logDir);
 
     // Load AppSettings before pruning/log-start so retention config and the
     // active-file size cap (AppSettings["LogRetention"], #2498) are available
     // to LogManager. SHistorySoftEdgeDb migration moved here for the same
     // reason.
-    AetherSDR::AppSettings::instance().load();
+    MasterSDR::AppSettings::instance().load();
     {
-        auto& s = AetherSDR::AppSettings::instance();
+        auto& s = MasterSDR::AppSettings::instance();
         if (s.contains("SHistorySoftEdgeDb")) {
             s.remove("SHistorySoftEdgeDb");
             s.save();
@@ -178,23 +178,23 @@ int main(int argc, char* argv[])
     }
 
     const QString timestamp = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
-    const QString logPath = logDir + "/aethersdr-" + timestamp + ".log";
+    const QString logPath = logDir + "/mastersdr-" + timestamp + ".log";
 
     // Bounded historical footprint: retention by age + total size cap,
     // both configurable in AppSettings["LogRetention"]. (#2498)
-    AetherSDR::LogManager::instance().pruneOldLogs(logDir);
+    MasterSDR::LogManager::instance().pruneOldLogs(logDir);
 
     // Skip stderr when it's a pipe to a non-draining parent (Stream Deck
     // "Run Command", systemd user services, GUI launchers).  Once the
     // ~64 KB pipe buffer fills, a blocking write could lock up the logger.
     static const bool stderrIsTty = isatty(fileno(stderr));
 
-    auto& logManager = AetherSDR::LogManager::instance();
+    auto& logManager = MasterSDR::LogManager::instance();
     if (logManager.startLogging(logPath, stderrIsTty)) {
         qInstallMessageHandler(messageHandler);
 
-        // Symlink aethersdr.log → latest timestamped file (for Support dialog)
-        const QString symlink = logDir + "/aethersdr.log";
+        // Symlink mastersdr.log → latest timestamped file (for Support dialog)
+        const QString symlink = logDir + "/mastersdr.log";
         QFile::remove(symlink);
         QFile::link(logPath, symlink);
     } else {
@@ -206,16 +206,16 @@ int main(int argc, char* argv[])
     app.setStyle(QStyleFactory::create("Fusion"));
 
     // Load slice color overrides (must be after AppSettings::load)
-    AetherSDR::SliceColorManager::instance().load();
+    MasterSDR::SliceColorManager::instance().load();
 
     // Load per-module logging toggles (must be after AppSettings::load)
-    AetherSDR::LogManager::instance().loadSettings();
+    MasterSDR::LogManager::instance().loadSettings();
 
-    qDebug() << "Starting AetherSDR" << app.applicationVersion();
+    qDebug() << "Starting MasterSDR" << app.applicationVersion();
 
     int exitCode = 0;
     {
-        AetherSDR::MainWindow window;
+        MasterSDR::MainWindow window;
         window.show();
         exitCode = app.exec();
     }

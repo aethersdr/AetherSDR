@@ -1,4 +1,4 @@
-#include "WhatsNewDialog.h"
+﻿#include "WhatsNewDialog.h"
 #include "generated/WhatsNewData.h"
 #include "core/VersionNumber.h"
 #include "core/AppSettings.h"
@@ -11,7 +11,7 @@
 #include <QHBoxLayout>
 #include <QDesktopServices>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 WhatsNewDialog::WhatsNewDialog(const QString& lastSeenVersion,
                                const QString& currentVersion,
@@ -35,7 +35,7 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
                               const QString& currentVersion,
                               bool showUpgrade)
 {
-    setWindowTitle("What's New — AetherSDR");
+    setWindowTitle("What's New — MasterSDR");
     resize(580, 540);
     setMinimumSize(420, 320);
 
@@ -69,13 +69,13 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
     if (isWelcome) {
         header->setText(QString("<div style='padding: 16px;'>"
             "<span style='color: #00b4d8; font-size: 11px; letter-spacing: 3px;'>"
-            "AETHERSDR V%1</span><br>"
+            "MasterSDR V%1</span><br>"
             "<span style='color: #c8d8e8; font-size: 20px; font-weight: bold;'>"
             "Welcome!</span></div>").arg(currentVersion));
     } else {
         header->setText(QString("<div style='padding: 16px;'>"
             "<span style='color: #00b4d8; font-size: 11px; letter-spacing: 3px;'>"
-            "AETHERSDR V%1</span><br>"
+            "MasterSDR V%1</span><br>"
             "<span style='color: #c8d8e8; font-size: 20px; font-weight: bold;'>"
             "What's New</span></div>").arg(currentVersion));
     }
@@ -138,7 +138,7 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
             "font-size: 14px; border-radius: 18px; padding: 0 32px; }"
             "QPushButton:hover { background: #28c050; }");
         connect(upgradeBtn, &QPushButton::clicked, this, [this] {
-            QDesktopServices::openUrl(QUrl("https://github.com/aethersdr/AetherSDR/releases/latest"));
+            QDesktopServices::openUrl(QUrl("https://github.com/MasterSDR/MasterSDR/releases/latest"));
             close();
         });
         btnRow->addWidget(upgradeBtn);
@@ -232,4 +232,4 @@ QString WhatsNewDialog::renderHtml(const std::vector<ReleaseEntry>& entries,
     return html;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

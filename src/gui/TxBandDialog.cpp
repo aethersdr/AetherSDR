@@ -1,4 +1,4 @@
-#include "TxBandDialog.h"
+﻿#include "TxBandDialog.h"
 
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -12,7 +12,7 @@
 #include <QVBoxLayout>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     : PersistentDialog(
@@ -137,4 +137,4 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
     vb->addStretch();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

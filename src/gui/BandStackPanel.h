@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "core/BandStackSettings.h"
 
@@ -10,7 +10,7 @@
 class QVBoxLayout;
 class QScrollArea;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class BandPlanManager;
 
@@ -72,4 +72,4 @@ private:
     int m_autoSaveDwellSeconds{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

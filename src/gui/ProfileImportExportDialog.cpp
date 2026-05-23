@@ -1,4 +1,4 @@
-#include "ProfileImportExportDialog.h"
+﻿#include "ProfileImportExportDialog.h"
 
 #include "core/AppSettings.h"
 #include "models/RadioModel.h"
@@ -24,7 +24,7 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -139,7 +139,7 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
         m_progress->setRange(0, 100);
         m_progress->setValue(100);
         const QString message = operation == ProfileTransfer::Operation::ExportDatabase
-            ? QStringLiteral("Export complete. The radio created the backup package and AetherSDR saved it.")
+            ? QStringLiteral("Export complete. The radio created the backup package and MasterSDR saved it.")
             : QStringLiteral("Import sent. The radio accepted the package and profile lists are being refreshed.");
         setStatus(message);
         rememberProfileTransferDirectory(path);
@@ -191,7 +191,7 @@ QWidget* ProfileImportExportDialog::buildExportPage()
     root->setSpacing(10);
 
     auto* intro = new QLabel(
-        QStringLiteral("Export is radio-driven: AetherSDR tells the radio which categories you selected, then saves the .ssdr_cfg backup package the radio creates. The package is not edited locally."),
+        QStringLiteral("Export is radio-driven: MasterSDR tells the radio which categories you selected, then saves the .ssdr_cfg backup package the radio creates. The package is not edited locally."),
         page);
     intro->setWordWrap(true);
     intro->setStyleSheet(QStringLiteral("QLabel { color: #9fb0c0; }"));
@@ -273,7 +273,7 @@ QWidget* ProfileImportExportDialog::buildImportPage()
     root->setSpacing(10);
 
     auto* intro = new QLabel(
-        QStringLiteral("Import is radio-driven too: AetherSDR uploads the .ssdr_cfg package, then the radio unpacks it and applies the database contents."),
+        QStringLiteral("Import is radio-driven too: MasterSDR uploads the .ssdr_cfg package, then the radio unpacks it and applies the database contents."),
         page);
     intro->setWordWrap(true);
     intro->setStyleSheet(QStringLiteral("QLabel { color: #9fb0c0; }"));
@@ -372,7 +372,7 @@ bool ProfileImportExportDialog::confirmImport()
     box.setWindowTitle(QStringLiteral("Confirm Profile Import"));
     box.setText(QStringLiteral("Import this .ssdr_cfg backup to the radio?"));
     box.setInformativeText(
-        QStringLiteral("AetherSDR will upload the backup package, but the radio does the actual import. AetherSDR does not rewrite the database inside the package.\n\n"
+        QStringLiteral("MasterSDR will upload the backup package, but the radio does the actual import. MasterSDR does not rewrite the database inside the package.\n\n"
                        "Profiles, memories, and other included settings can replace matching items already on the radio, including defaults.\n"
                        "Packages from newer firmware may fail or leave the radio database in an unexpected state.\n"
                        "Packages that include Preferences can close or reopen slices, panadapters, and other saved radio state.\n\n"
@@ -478,7 +478,7 @@ void ProfileImportExportDialog::updateControls()
     if (!reason.isEmpty())
         setStatus(reason);
     else
-        setStatus(QStringLiteral("Ready. Import and export are radio-driven; AetherSDR handles the .ssdr_cfg transfer."));
+        setStatus(QStringLiteral("Ready. Import and export are radio-driven; MasterSDR handles the .ssdr_cfg transfer."));
 }
 
 void ProfileImportExportDialog::updateSelectAllFromOptions()
@@ -499,4 +499,4 @@ void ProfileImportExportDialog::setStatus(const QString& text)
         m_statusLabel->setText(text);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

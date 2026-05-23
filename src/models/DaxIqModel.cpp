@@ -1,4 +1,4 @@
-#include "DaxIqModel.h"
+﻿#include "DaxIqModel.h"
 #include "core/LogManager.h"
 
 #include <QDebug>
@@ -11,7 +11,7 @@
 #include <fcntl.h>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ─── DaxIqModel ──────────────────────────────────────────────────────────────
 
@@ -169,15 +169,15 @@ void DaxIqWorker::createPipe(int channel, int sampleRate)
     if (idx < 0 || idx >= DaxIqModel::NUM_CHANNELS) return;
     if (m_pipeFds[idx] >= 0) destroyPipe(channel);
 
-    QString pipePath = QString("/tmp/aethersdr-iq-%1.pipe").arg(channel);
+    QString pipePath = QString("/tmp/MasterSDR-iq-%1.pipe").arg(channel);
 
     // Create PulseAudio pipe source for IQ data (float32 stereo)
     QString cmd = QString(
         "pactl load-module module-pipe-source "
-        "source_name=aethersdr-iq-%1 "
+        "source_name=MasterSDR-iq-%1 "
         "file=%2 "
         "format=float32le rate=%3 channels=2 "
-        "source_properties=device.description=\"AetherSDR\\ IQ\\ %1\"")
+        "source_properties=device.description=\"MasterSDR\\ IQ\\ %1\"")
         .arg(channel).arg(pipePath).arg(sampleRate);
 
     QProcess::startDetached("bash", {"-c", cmd});
@@ -209,7 +209,7 @@ void DaxIqWorker::destroyPipe(int channel)
     }
     // Unload the PulseAudio module
     QString cmd = QString(
-        "pactl list short modules | grep aethersdr-iq-%1 | awk '{print $1}' | "
+        "pactl list short modules | grep MasterSDR-iq-%1 | awk '{print $1}' | "
         "xargs -r -n1 pactl unload-module").arg(channel);
     QProcess::startDetached("bash", {"-c", cmd});
 #else
@@ -258,4 +258,4 @@ void DaxIqWorker::processIqPacket(int channel, const QByteArray& rawPayload, int
 #endif
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QAudioSink>
@@ -25,7 +25,7 @@ class QMediaDevices;
 #include <vector>
 #include <cstdint>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class SpectralNR;
 class SpecbleachFilter;
@@ -394,11 +394,11 @@ public:
     void saveClientReverbSettings();
     void loadClientFinalLimiterSettings();
     void saveClientFinalLimiterSettings() const;
-    // Aetherial Tube Pre-Amp TX state — nested-JSON shape under one key
+    // Masterial Tube Pre-Amp TX state — nested-JSON shape under one key
     // so future mic-preamp toggles (high-pass, phase invert, etc.) can
     // land without further migration.  Today: {"rn2": bool}.  (#2813)
-    void loadAetherialTubePreampTxSettings();
-    void saveAetherialTubePreampTxSettings() const;
+    void loadMasterialTubePreampTxSettings();
+    void saveMasterialTubePreampTxSettings() const;
     void loadClientQuindarSettings();
     void saveClientQuindarSettings() const;
 
@@ -501,7 +501,7 @@ signals:
     void txPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
     // Mirror of txPostChainScopeReady for the RX side: high-rate emit
     // (~125 Hz, no sample loss across audio callbacks) so the channel
-    // strip's "Aetherial Waveform — RX" panel sees a wall-clock-accurate
+    // strip's "Masterial Waveform — RX" panel sees a wall-clock-accurate
     // scope.  The shared scopeSamplesReady throttles at 25 ms which made
     // the strip's RX scroll lag wall clock at short time-window settings.
     void rxPostChainScopeReady(const QByteArray& monoFloat32Pcm, int sampleRate);
@@ -850,4 +850,4 @@ private:
     static constexpr quint16 PCC_DAX_REDUCED = 0x0123;  // reduced BW DAX (24kHz int16 mono)
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

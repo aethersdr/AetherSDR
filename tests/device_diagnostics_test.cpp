@@ -1,4 +1,4 @@
-// Standalone test harness for portable device diagnostics helpers.
+﻿// Standalone test harness for portable device diagnostics helpers.
 // Run:   ./build/device_diagnostics_test
 
 #include "core/DeviceDiagnostics.h"
@@ -6,7 +6,7 @@
 #include <cstdio>
 #include <string>
 
-using AetherSDR::DeviceDiagnostics::inferAudioBusType;
+using MasterSDR::DeviceDiagnostics::inferAudioBusType;
 
 namespace {
 

@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QWidget>
 
 class QVBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ContainerTitleBar;
 
@@ -137,4 +137,4 @@ private:
     bool               m_visible{true};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

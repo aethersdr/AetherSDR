@@ -1,17 +1,17 @@
-#pragma once
+﻿#pragma once
 
 #include <QChar>
 #include <QPainter>
 #include <QRect>
 #include <QString>
 
-namespace AetherSDR::SliceLabel {
+namespace MasterSDR::SliceLabel {
 
 // Two display modes for slice letters, selected by AppSettings key
 // "SliceLetterDisplay":
 //
 //   "Global"       (default) — show 'A' + globalSliceId.  This is how
-//                  AetherSDR has always rendered slice letters and gives
+//                  MasterSDR has always rendered slice letters and gives
 //                  Multi-Flex users immediate awareness of which global
 //                  slot they're on.
 //   "RadioIndexed" — show the radio-provided per-client letter (from the
@@ -62,4 +62,4 @@ void drawSliceBadge(QPainter& p, const QRect& rect,
                     int globalSliceId,
                     const QString& radioLetter = QString());
 
-} // namespace AetherSDR::SliceLabel
+} // namespace MasterSDR::SliceLabel

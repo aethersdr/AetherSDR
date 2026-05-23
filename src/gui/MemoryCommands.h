@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "models/RadioModel.h"
 
@@ -6,7 +6,7 @@
 
 class QObject;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class SliceModel;
 
@@ -29,4 +29,4 @@ void createMemoryFromSlice(RadioModel* model,
                            QObject* callbackContext = nullptr,
                            MemoryCreateCallback cb = {});
 
-} // namespace AetherSDR
+} // namespace MasterSDR

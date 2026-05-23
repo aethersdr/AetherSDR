@@ -1,4 +1,4 @@
-#include "core/ProfileTransfer.h"
+﻿#include "core/ProfileTransfer.h"
 
 #include <QByteArray>
 #include <QString>
@@ -20,7 +20,7 @@ int main()
 {
     bool ok = true;
 
-    AetherSDR::ExportSelection profilesOnly;
+    MasterSDR::ExportSelection profilesOnly;
     profilesOnly.globalProfiles = true;
     profilesOnly.txProfiles = true;
     profilesOnly.micProfiles = true;
@@ -31,10 +31,10 @@ int main()
         "GLOBAL_PROFILES^Morning^Contest^\r\n"
         "HW_PROFILES^Ragchew^\r\n"
         "MIC_PROFILES^Studio Mic^\r\n";
-    ok &= expect(AetherSDR::buildMetaSubset(profilesOnly) == expectedProfilesOnly,
+    ok &= expect(MasterSDR::buildMetaSubset(profilesOnly) == expectedProfilesOnly,
                  "profiles-only meta_subset matches SmartSDR caret format");
 
-    AetherSDR::ExportSelection selectAll = profilesOnly;
+    MasterSDR::ExportSelection selectAll = profilesOnly;
     selectAll.memories = true;
     selectAll.preferences = true;
     selectAll.tnf = true;
@@ -50,12 +50,12 @@ int main()
                      "TNFS^\r\n"
                      "XVTRS^\r\n"
                      "USB_CABLES^\r\n");
-    ok &= expect(AetherSDR::buildMetaSubset(selectAll) == expectedAll,
+    ok &= expect(MasterSDR::buildMetaSubset(selectAll) == expectedAll,
                  "select-all meta_subset includes memories, persistence, TNF, XVTR, and USB cables");
 
-    AetherSDR::ExportSelection noPreferences = selectAll;
+    MasterSDR::ExportSelection noPreferences = selectAll;
     noPreferences.preferences = false;
-    const QByteArray noPreferencesBytes = AetherSDR::buildMetaSubset(noPreferences);
+    const QByteArray noPreferencesBytes = MasterSDR::buildMetaSubset(noPreferences);
     ok &= expect(!noPreferencesBytes.contains("BAND_PERSISTENCE"),
                  "select-all-except-preferences omits band persistence");
     ok &= expect(!noPreferencesBytes.contains("MODE_PERSISTENCE"),
@@ -68,35 +68,35 @@ int main()
                  "select-all-except-preferences keeps the other selected categories");
 
     const QVersionNumber parsed =
-        AetherSDR::parseSmartSdrVersionFromFilename(
+        MasterSDR::parseSmartSdrVersionFromFilename(
             QStringLiteral("ASDR_Config_2026-05-13_10-30-00_v4.1.5.123.ssdr_cfg"));
     ok &= expect(!parsed.isNull() && parsed.toString() == QStringLiteral("4.1.5.123"),
-                 "AetherSDR filename version parser extracts firmware version");
+                 "MasterSDR filename version parser extracts firmware version");
     const QVersionNumber legacyParsed =
-        AetherSDR::parseSmartSdrVersionFromFilename(
+        MasterSDR::parseSmartSdrVersionFromFilename(
             QStringLiteral("SSDR_Config_2026-05-13_10-30-00_v3.7.9.ssdr_cfg"));
     ok &= expect(!legacyParsed.isNull() && legacyParsed.toString() == QStringLiteral("3.7.9"),
                  "SmartSDR filename version parser still accepts legacy export names");
-    ok &= expect(AetherSDR::parseSmartSdrVersionFromFilename(
+    ok &= expect(MasterSDR::parseSmartSdrVersionFromFilename(
                      QStringLiteral("backup.ssdr_cfg")).isNull(),
                  "SmartSDR filename version parser tolerates absent version");
-    ok &= expect(AetherSDR::compareFirmwareVersions(QStringLiteral("4.1.5"),
+    ok &= expect(MasterSDR::compareFirmwareVersions(QStringLiteral("4.1.5"),
                                                      QStringLiteral("4.0.9")) > 0,
                  "firmware comparison detects newer version");
-    ok &= expect(AetherSDR::compareFirmwareVersions(QStringLiteral("3.7.9"),
+    ok &= expect(MasterSDR::compareFirmwareVersions(QStringLiteral("3.7.9"),
                                                      QStringLiteral("4.0.0")) < 0,
                  "firmware comparison detects older version");
-    ok &= expect(AetherSDR::compareFirmwareVersions(QStringLiteral("4.1.5"),
+    ok &= expect(MasterSDR::compareFirmwareVersions(QStringLiteral("4.1.5"),
                                                      QStringLiteral("4.1.5.0")) == 0,
                  "firmware comparison normalizes equivalent versions");
 
-    ok &= expect(AetherSDR::parseTransferPort(QStringLiteral("4995")).value_or(0) == 4995,
+    ok &= expect(MasterSDR::parseTransferPort(QStringLiteral("4995")).value_or(0) == 4995,
                  "port parser accepts bare command reply body");
-    ok &= expect(AetherSDR::parseTransferPort(QStringLiteral("port=42607")).value_or(0) == 42607,
+    ok &= expect(MasterSDR::parseTransferPort(QStringLiteral("port=42607")).value_or(0) == 42607,
                  "port parser accepts key-value command reply body");
-    ok &= expect(AetherSDR::parseTransferPort(QStringLiteral("endpoint=192.168.1.10:4995")).value_or(0) == 4995,
+    ok &= expect(MasterSDR::parseTransferPort(QStringLiteral("endpoint=192.168.1.10:4995")).value_or(0) == 4995,
                  "port parser prefers endpoint port over IP address octets");
-    ok &= expect(!AetherSDR::parseTransferPort(QStringLiteral("no usable port")).has_value(),
+    ok &= expect(!MasterSDR::parseTransferPort(QStringLiteral("no usable port")).has_value(),
                  "port parser rejects replies without a valid TCP port");
 
     return ok ? 0 : 1;

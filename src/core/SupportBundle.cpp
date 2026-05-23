@@ -1,4 +1,4 @@
-#include "SupportBundle.h"
+﻿#include "SupportBundle.h"
 #include "AppSettings.h"
 #include "LogManager.h"
 #include "models/RadioModel.h"
@@ -16,7 +16,7 @@
 #include <QUrl>
 #include <QUrlQuery>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 SupportBundle::SystemInfo SupportBundle::collectSystemInfo()
 {
@@ -59,20 +59,20 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
     const QString tmp = tmpDir.path();
 
     // 1. Copy log files — grab the 3 most recent timestamped logs.
-    // On Windows, aethersdr.log can be a .lnk shortcut (binary garbage).
+    // On Windows, mastersdr.log can be a .lnk shortcut (binary garbage).
     // Bypasses symlink issues entirely by scanning for actual log files.
     {
         QDir logDir(QFileInfo(logMgr.logFilePath()).absolutePath());
         QStringList logs = logDir.entryList(
-            {"aethersdr-*.log", "aethersdr.log"}, QDir::Files, QDir::Time);
+            {"MasterSDR-*.log", "mastersdr.log"}, QDir::Files, QDir::Time);
         int copied = 0;
         for (const auto& name : logs) {
             if (copied >= 3) break;
             QFileInfo fi(logDir.absoluteFilePath(name));
             // Skip shortcuts and tiny files
             if (fi.isSymLink() || fi.size() < 100) continue;
-            QString dest = (copied == 0) ? "aethersdr.log"
-                                         : QString("aethersdr-%1.log").arg(copied);
+            QString dest = (copied == 0) ? "mastersdr.log"
+                                         : QString("MasterSDR-%1.log").arg(copied);
             QFile::copy(fi.absoluteFilePath(), tmp + "/" + dest);
             ++copied;
         }
@@ -82,7 +82,7 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
     {
         auto sys = collectSystemInfo();
         QJsonObject obj;
-        obj["aetherVersion"] = sys.aetherVersion;
+        obj["masterVersion"] = sys.masterVersion;
         obj["qtVersion"]     = sys.qtVersion;
         obj["os"]            = sys.osName;
         obj["kernel"]        = sys.kernelVersion;
@@ -180,12 +180,12 @@ void SupportBundle::openEmailClient(const QString& bundlePath,
                                     const SystemInfo& sys,
                                     const RadioInfo& radio)
 {
-    QString subject = QString("AetherSDR Support - %1 v%2")
-        .arg(radio.connected ? radio.model : "No Radio", sys.aetherVersion);
+    QString subject = QString("MasterSDR Support - %1 v%2")
+        .arg(radio.connected ? radio.model : "No Radio", sys.masterVersion);
 
     QString body;
-    body += "AetherSDR Support Bundle\n\n";
-    body += QString("App: AetherSDR v%1\n").arg(sys.aetherVersion);
+    body += "MasterSDR Support Bundle\n\n";
+    body += QString("App: MasterSDR v%1\n").arg(sys.masterVersion);
     body += QString("Qt: %1\n").arg(sys.qtVersion);
     body += QString("OS: %1 (kernel %2)\n").arg(sys.osName, sys.kernelVersion);
     body += QString("CPU: %1\n").arg(sys.cpuArch);
@@ -202,7 +202,7 @@ void SupportBundle::openEmailClient(const QString& bundlePath,
     body += QString("\nPlease attach the support bundle saved at:\n  %1\n").arg(bundlePath);
     body += "\nDescribe the issue below:\n---\n\n";
 
-    QUrl url("mailto:support@aethersdr.com");
+    QUrl url("mailto:support@MasterSDR.com");
     QUrlQuery query;
     query.addQueryItem("subject", subject);
     query.addQueryItem("body", body);
@@ -211,4 +211,4 @@ void SupportBundle::openEmailClient(const QString& bundlePath,
     QDesktopServices::openUrl(url);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

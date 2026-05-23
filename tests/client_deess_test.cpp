@@ -1,4 +1,4 @@
-// Standalone test harness for ClientDeEss DSP.
+﻿// Standalone test harness for ClientDeEss DSP.
 // Build: produced by CMake as `client_deess_test` target.
 // Run:   ./build/client_deess_test
 // Exit code 0 on all pass, 1 on any failure.
@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::ClientDeEss;
+using MasterSDR::ClientDeEss;
 
 namespace {
 

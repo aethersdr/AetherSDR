@@ -1,17 +1,17 @@
-# AetherSDR Dialog Patterns
+﻿# MasterSDR Dialog Patterns
 
-When you add a new dialog to AetherSDR — or convert an existing modal one to
+When you add a new dialog to MasterSDR — or convert an existing modal one to
 non-modal — there's a canonical pattern that the project's existing dialogs
 follow. This doc captures it in one place so contributors (human or agent)
 don't have to reverse-engineer it from 8+ existing dialogs.
 
-Long-term, the [`PersistentDialog` base class issue (#2605)](https://github.com/aethersdr/AetherSDR/issues/2605)
+Long-term, the [`PersistentDialog` base class issue (#2605)](https://github.com/MasterSDR/MasterSDR/issues/2605)
 will collapse this boilerplate into a parent class with `bodyWidget()`. Until
 then, every new dialog needs to wire these pieces by hand.
 
 ## The four concerns every persistent dialog handles
 
-A persistent dialog in AetherSDR is **non-modal**, **lazy-constructed**,
+A persistent dialog in MasterSDR is **non-modal**, **lazy-constructed**,
 **geometry-persistent**, and **frameless-chrome-aware**. Skip any of the four
 and the dialog will misbehave in a predictable way.
 
@@ -197,7 +197,7 @@ connect(action, &QAction::triggered, this, [this] {
 In `MainWindow.h`:
 
 ```cpp
-class FooDialog;   // forward-declare in namespace AetherSDR
+class FooDialog;   // forward-declare in namespace MasterSDR
 ...
 QPointer<FooDialog> m_fooDialog;
 ```
@@ -224,7 +224,7 @@ replace these with a single `QSet<QPointer<PersistentDialog>>` walk.
 
 - `src/gui/NetworkDiagnosticsDialog.{h,cpp}` — most complete reference, has all the patterns
 - `src/gui/MemoryDialog.{h,cpp}`
-- `src/gui/AetherDspDialog.{h,cpp}`
+- `src/gui/MasterDspDialog.{h,cpp}`
 - `src/gui/DxClusterDialog.{h,cpp}` (SpotHub)
 - `src/gui/MultiFlexDialog.{h,cpp}`
 - `src/gui/MidiMappingDialog.{h,cpp}`

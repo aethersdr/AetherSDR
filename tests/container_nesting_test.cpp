@@ -1,4 +1,4 @@
-// Phase 3 tests — the 8 nested-float/dock/hide edge cases spelled
+﻿// Phase 3 tests — the 8 nested-float/dock/hide edge cases spelled
 // out in the container-system plan.  Each test builds a small tree,
 // drives a specific sequence of manager calls, and asserts the
 // resulting state.
@@ -13,7 +13,7 @@
 #include <QWidget>
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

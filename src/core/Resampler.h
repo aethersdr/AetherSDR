@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <memory>
@@ -7,7 +7,7 @@
 
 namespace r8b { class CDSPResampler24; }
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // High-quality sample rate converter using r8brain-free-src (MIT).
 // Wraps r8b::CDSPResampler24 with float32 ↔ double conversion.
@@ -46,4 +46,4 @@ private:
     std::vector<double> m_inBuf;   // float32 → double conversion buffer
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

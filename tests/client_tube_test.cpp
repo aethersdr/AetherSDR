@@ -1,4 +1,4 @@
-// Standalone test harness for ClientTube DSP.
+﻿// Standalone test harness for ClientTube DSP.
 // Build: CMake target `client_tube_test`.  Exit 0 = pass.
 
 #include "core/ClientTube.h"
@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::ClientTube;
+using MasterSDR::ClientTube;
 
 namespace {
 

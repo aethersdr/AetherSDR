@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "ClientEqApplet.h"  // for Path enum
 #include <QWidget>
@@ -9,7 +9,7 @@ class QLabel;
 class QPushButton;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class ClientEqEditorCanvas;
@@ -97,7 +97,7 @@ private:
     int                        m_rxFilterHighCutHz{0};
     int                        m_savedSmoothingFraction{96};
     // The frameless title bar carries the active path label (e.g.
-    // "Aetherial Parametric EQ — TX").  Held as a void* + cast at use
+    // "Masterial Parametric EQ — TX").  Held as a void* + cast at use
     // site to keep the inline EditorFramelessTitleBar class out of the
     // public header.
     QWidget*                   m_titleBar{nullptr};
@@ -112,4 +112,4 @@ private:
     bool                       m_restoring{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

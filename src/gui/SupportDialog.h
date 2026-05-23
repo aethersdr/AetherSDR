@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 #include <QMap>
@@ -7,7 +7,7 @@ class QCheckBox;
 class QPlainTextEdit;
 class QLabel;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 
@@ -39,4 +39,4 @@ private:
     QLabel*         m_sizeLabel{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

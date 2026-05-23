@@ -1,4 +1,4 @@
-#include "core/AppSettings.h"
+﻿#include "core/AppSettings.h"
 #include "core/ShortcutManager.h"
 
 #include <QCoreApplication>
@@ -9,7 +9,7 @@
 
 #include <iostream>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 
@@ -33,7 +33,7 @@ void registerCwActions(ShortcutManager& manager)
 
 int main(int argc, char** argv)
 {
-    QTemporaryDir fakeHome(QDir::tempPath() + "/aether-shortcut-manager-test-XXXXXX");
+    QTemporaryDir fakeHome(QDir::tempPath() + "/mastersdr-shortcut-manager-test-XXXXXX");
     if (!fakeHome.isValid()) {
         std::cerr << "[FAIL] create temporary home\n";
         return 1;
@@ -45,7 +45,7 @@ int main(int argc, char** argv)
 
     const QString configRoot =
         QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    QDir(configRoot + "/AetherSDR").removeRecursively();
+    QDir(configRoot + "/MasterSDR").removeRecursively();
 
     auto& settings = AppSettings::instance();
     settings.reset();
@@ -94,6 +94,6 @@ int main(int argc, char** argv)
     ok &= expect(dah && dah->currentKey == QKeySequence(Qt::Key_F11),
                  "dah shortcut reloads");
 
-    QDir(configRoot + "/AetherSDR").removeRecursively();
+    QDir(configRoot + "/MasterSDR").removeRecursively();
     return ok ? 0 : 1;
 }

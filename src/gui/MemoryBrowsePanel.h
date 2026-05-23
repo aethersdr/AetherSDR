@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "models/RadioModel.h"
 
@@ -8,7 +8,7 @@ class QLabel;
 class QPushButton;
 class QTableWidget;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class MemoryBrowsePanel : public QWidget {
     Q_OBJECT
@@ -35,4 +35,4 @@ private:
     int m_highlightedMemoryIndex{-1};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

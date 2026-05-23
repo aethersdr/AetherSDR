@@ -1,4 +1,4 @@
-#include "ClientGateEditor.h"
+﻿#include "ClientGateEditor.h"
 #include "ClientCompKnob.h"
 #include "ClientGateLevelView.h"
 #include "EditorFramelessTitleBar.h"
@@ -20,7 +20,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -76,7 +76,7 @@ ClientGateEditor::ClientGateEditor(AudioEngine* engine, QWidget* parent)
     : QWidget(parent, Qt::Window | Qt::FramelessWindowHint)
     , m_audio(engine)
 {
-    setWindowTitle("Aetherial Gate");
+    setWindowTitle("Masterial Gate");
     setStyleSheet(kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
@@ -318,7 +318,7 @@ void ClientGateEditor::showForTx()
 {
     m_side = Side::Tx;
     if (m_levelView && gate()) m_levelView->setGate(gate());
-    const QString title = QString::fromUtf8("Aetherial Gate \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial Gate \xe2\x80\x94 TX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -334,7 +334,7 @@ void ClientGateEditor::showForRx()
 {
     m_side = Side::Rx;
     if (m_levelView && gate()) m_levelView->setGate(gate());
-    const QString title = QString::fromUtf8("Aetherial Gate \xe2\x80\x94 RX");
+    const QString title = QString::fromUtf8("Masterial Gate \xe2\x80\x94 RX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -511,4 +511,4 @@ void ClientGateEditor::hideEvent(QHideEvent* ev)
     QWidget::hideEvent(ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-// Standalone test harness for NavtexModel state machine.
+﻿// Standalone test harness for NavtexModel state machine.
 //
 // Build: produced by CMake as `navtex_model_test`.
 // Run:   ./build/navtex_model_test
@@ -12,10 +12,10 @@
 #include <cstdio>
 #include <cstdlib>
 
-using AetherSDR::NavtexModel;
-using AetherSDR::NavtexMsg;
-using AetherSDR::NavtexMsgStatus;
-using AetherSDR::NavtexStatus;
+using MasterSDR::NavtexModel;
+using MasterSDR::NavtexMsg;
+using MasterSDR::NavtexMsgStatus;
+using MasterSDR::NavtexStatus;
 
 namespace {
 

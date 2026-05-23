@@ -1,4 +1,4 @@
-#include "MemoryDialog.h"
+﻿#include "MemoryDialog.h"
 #include "MemoryCommands.h"
 #include "core/MemoryCsvCompat.h"
 #include "models/RadioModel.h"
@@ -35,7 +35,7 @@
 
 #include <functional>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -62,13 +62,13 @@ bool buildMemoryFieldUpdate(int col, const QTableWidgetItem* item,
     const QString value = item->text();
     switch (col) {
     case 0: {
-        const QString encoded = AetherSDR::encodeMemoryText(value);
+        const QString encoded = MasterSDR::encodeMemoryText(value);
         commandSuffix = "group=" + encoded;
         kvs["group"] = encoded;
         return true;
     }
     case 1: {
-        const QString encoded = AetherSDR::encodeMemoryText(value);
+        const QString encoded = MasterSDR::encodeMemoryText(value);
         commandSuffix = "owner=" + encoded;
         kvs["owner"] = encoded;
         return true;
@@ -78,7 +78,7 @@ bool buildMemoryFieldUpdate(int col, const QTableWidgetItem* item,
         kvs["freq"] = value;
         return true;
     case 3: {
-        const QString encoded = AetherSDR::encodeMemoryText(value);
+        const QString encoded = MasterSDR::encodeMemoryText(value);
         commandSuffix = "name=" + encoded;
         kvs["name"] = encoded;
         return true;
@@ -148,7 +148,7 @@ bool buildMemoryFieldUpdate(int col, const QTableWidgetItem* item,
 
 QString defaultExportFilePath()
 {
-    const QString baseName = QString("AetherSDR_Memories_%1_v%2.csv")
+    const QString baseName = QString("MasterSDR_Memories_%1_v%2.csv")
         .arg(QDateTime::currentDateTime().toString("MM-dd-yy_hh_mm"))
         .arg(QCoreApplication::applicationVersion());
     return QDir::home().filePath(QString("Documents/%1").arg(baseName));
@@ -1234,4 +1234,4 @@ void MemoryDialog::updateSelectionActions()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

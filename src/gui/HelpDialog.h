@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 #include <QString>
@@ -8,7 +8,7 @@ class QLineEdit;
 class QPushButton;
 class QTextBrowser;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class HelpDialog : public QDialog {
     Q_OBJECT
@@ -35,4 +35,4 @@ private:
     QLabel* m_findStatus{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

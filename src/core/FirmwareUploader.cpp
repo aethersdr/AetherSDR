@@ -1,4 +1,4 @@
-#include "FirmwareUploader.h"
+﻿#include "FirmwareUploader.h"
 #include "LogManager.h"
 #include "../models/RadioModel.h"
 #include "../core/RadioConnection.h"
@@ -8,7 +8,7 @@
 #include <QHostAddress>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 FirmwareUploader::FirmwareUploader(RadioModel* model, QObject* parent)
     : QObject(parent), m_model(model)
@@ -186,4 +186,4 @@ void FirmwareUploader::onError()
     emit finished(false, "Upload failed: " + m_socket.errorString());
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

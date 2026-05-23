@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifdef HAVE_DFNR
 
@@ -8,7 +8,7 @@
 
 struct DFState;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class Resampler;
 
@@ -58,6 +58,6 @@ private:
     std::atomic<bool>  m_paramsDirty{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_DFNR

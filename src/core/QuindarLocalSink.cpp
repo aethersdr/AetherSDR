@@ -1,4 +1,4 @@
-#include "QuindarLocalSink.h"
+﻿#include "QuindarLocalSink.h"
 #include "ClientQuindarTone.h"
 #include "LogManager.h"
 
@@ -9,7 +9,7 @@
 #include <QMediaDevices>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 QuindarLocalSink::QuindarLocalSink(QObject* parent)
     : QObject(parent)
@@ -112,4 +112,4 @@ void QuindarLocalSink::stop()
     m_tone = nullptr;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

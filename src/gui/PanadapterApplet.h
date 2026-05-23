@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -7,7 +7,7 @@ class QPushButton;
 class QSlider;
 class QTextEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class SpectrumWidget;
 
@@ -94,4 +94,4 @@ private:
     CwTextSource  m_lastCwTextSource{CwTextSource::None};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

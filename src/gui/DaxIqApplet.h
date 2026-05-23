@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -7,7 +7,7 @@ class QLabel;
 class QComboBox;
 class QProgressBar;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 
@@ -40,4 +40,4 @@ private:
     QProgressBar* m_iqMeter[kChannels]{};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

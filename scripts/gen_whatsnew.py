@@ -1,9 +1,9 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """Parse CHANGELOG.md and generate WhatsNewData.cpp with structured release data.
 
 Usage: python3 gen_whatsnew.py <CHANGELOG.md> <output.cpp>
 
-The generated file is compiled into the AetherSDR binary and provides
+The generated file is compiled into the MasterSDR binary and provides
 the data for the What's New dialog (#483).
 """
 
@@ -133,7 +133,7 @@ def generate_cpp(releases, output_path):
     lines.append('// Do not edit — changes will be overwritten on next build.')
     lines.append('#include "generated/WhatsNewData.h"')
     lines.append('')
-    lines.append('namespace AetherSDR {')
+    lines.append('namespace MasterSDR {')
     lines.append('')
     lines.append('const std::vector<ReleaseEntry>& whatsNewEntries() {')
     lines.append('    static const std::vector<ReleaseEntry> entries = {')
@@ -161,7 +161,7 @@ def generate_cpp(releases, output_path):
     lines.append('    return entries;')
     lines.append('}')
     lines.append('')
-    lines.append('} // namespace AetherSDR')
+    lines.append('} // namespace MasterSDR')
     lines.append('')
 
     with open(output_path, 'w', encoding='utf-8') as f:

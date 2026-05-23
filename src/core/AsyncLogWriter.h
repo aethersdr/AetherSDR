@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QTime>
 #include <QString>
@@ -12,7 +12,7 @@
 #include <mutex>
 #include <thread>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AsyncLogWriter {
 public:
@@ -108,4 +108,4 @@ private:
     quint64 m_pendingDroppedHighPriority{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

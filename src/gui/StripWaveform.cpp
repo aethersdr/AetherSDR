@@ -1,4 +1,4 @@
-#include "StripWaveform.h"
+﻿#include "StripWaveform.h"
 
 #include "core/AppSettings.h"
 
@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // WAVE is intentionally QPainter-only for v1: the sidebar scope is small,
 // cross-platform, and cheap to repaint; future QRhi support can follow the
@@ -944,4 +944,4 @@ float StripWaveform::linearToDb(float value)
     return std::max(db, -120.0f);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,7 +1,7 @@
-#include "SliceModel.h"
+﻿#include "SliceModel.h"
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -882,4 +882,4 @@ QStringList SliceModel::drainPendingCommands()
     return cmds;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

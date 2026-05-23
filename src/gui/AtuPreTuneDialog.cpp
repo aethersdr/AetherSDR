@@ -1,4 +1,4 @@
-#include "AtuPreTuneDialog.h"
+﻿#include "AtuPreTuneDialog.h"
 #include "AtuPreTuneCenters.h"
 #include "FramelessWindowTitleBar.h"
 #include "FramelessResizer.h"
@@ -25,7 +25,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -60,7 +60,7 @@ constexpr const char* kDisclaimerText =
     "do not interfere with other radio traffic. Always verify that the selected "
     "frequency is clear before tuning, and never leave this process unattended "
     "unless you fully understand its behavior, failure modes, and risks. "
-    "AetherSDR transmits at tune power on each frequency in the sweep. You are "
+    "MasterSDR transmits at tune power on each frequency in the sweep. You are "
     "responsible for compliance with your license and local regulations. Do not "
     "use this function for unattended or automated transmission unless you "
     "fully understand its behavior, failure modes, and risks.";
@@ -760,4 +760,4 @@ void AtuPreTuneDialog::restoreOriginalFrequency()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

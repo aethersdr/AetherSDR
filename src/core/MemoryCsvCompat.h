@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "models/RadioModel.h"
 
@@ -7,7 +7,7 @@
 #include <QString>
 #include <QStringList>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct MemoryCsvRecord {
     MemoryEntry memory;
@@ -31,4 +31,4 @@ public:
     static MemoryCsvRecord fromMemoryEntry(const MemoryEntry& memory);
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

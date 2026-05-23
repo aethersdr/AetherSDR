@@ -1,11 +1,11 @@
-#include "EditorFramelessTitleBar.h"
+﻿#include "EditorFramelessTitleBar.h"
 #include "FramelessMoveHelper.h"
 
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 EditorFramelessTitleBar::EditorFramelessTitleBar(QWidget* parent)
     : QWidget(parent)
@@ -134,4 +134,4 @@ bool EditorFramelessTitleBar::eventFilter(QObject* obj, QEvent* ev)
     return QWidget::eventFilter(obj, ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

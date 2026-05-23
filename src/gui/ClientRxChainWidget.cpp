@@ -1,4 +1,4 @@
-#include "ClientRxChainWidget.h"
+﻿#include "ClientRxChainWidget.h"
 
 #include "core/AppSettings.h"
 #include "core/ClientComp.h"
@@ -25,7 +25,7 @@
 #include <cmath>
 #include <limits>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -65,7 +65,7 @@ const QColor kDropIndicator  ("#4db8d4");
 
 // Distinct from the TX chain's mime so a stray drag from one widget
 // can't be dropped on the other.
-constexpr const char* kMimeFormat = "application/x-aethersdr-rx-chain-stage";
+constexpr const char* kMimeFormat = "application/x-MasterSDR-rx-chain-stage";
 
 // Short label per RX stage — kept ≤5 chars to fit inside the narrow box.
 QString stageLabel(AudioEngine::RxChainStage s)
@@ -244,7 +244,7 @@ void ClientRxChainWidget::toggleStageBypass(int boxIdx)
     // DSP status tile toggle: client-side NR is exclusive, so a click
     // here means "turn off whichever module is currently on", and a
     // click while everything is off re-enables the last-active module
-    // saved by AetherDspWidget::onDspButtonClicked.
+    // saved by MasterDspWidget::onDspButtonClicked.
     if (box.kind == TileKind::StatusDsp) {
         const bool anyOn = m_audio->nr2Enabled()  || m_audio->nr4Enabled()
                         || m_audio->mnrEnabled()  || m_audio->dfnrEnabled()
@@ -745,4 +745,4 @@ void ClientRxChainWidget::paintEvent(QPaintEvent*)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

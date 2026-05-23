@@ -1,4 +1,4 @@
-name: Stream Deck Plugins
+﻿name: Stream Deck Plugins
 
 on:
   push:
@@ -16,13 +16,13 @@ jobs:
 
       - name: Package Elgato plugin
         run: |
-          cd plugins/elgato-aethersdr
-          zip -r ../../com.aethersdr.radio.streamDeckPlugin com.aethersdr.radio.sdPlugin/
+          cd plugins/elgato-MasterSDR
+          zip -r ../../com.MasterSDR.radio.streamDeckPlugin com.MasterSDR.radio.sdPlugin/
 
       - name: Package StreamController plugin
         run: |
           cd plugins
-          zip -r ../streamcontroller-aethersdr.zip streamcontroller-aethersdr/ \
+          zip -r ../streamcontroller-MasterSDR.zip streamcontroller-MasterSDR/ \
             -x "*/__pycache__/*"
 
       - name: Attach to release
@@ -43,6 +43,6 @@ jobs:
             gh release create "$TAG" --title "$TAG" --notes "Release $TAG" --draft
           fi
           gh release upload "$TAG" \
-            com.aethersdr.radio.streamDeckPlugin \
-            streamcontroller-aethersdr.zip \
+            com.MasterSDR.radio.streamDeckPlugin \
+            streamcontroller-MasterSDR.zip \
             --clobber

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <algorithm>
 #include <QHash>
@@ -16,7 +16,7 @@
 class QVariantAnimation;
 class QSoundEffect;
 
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
 #include <QRhiWidget>
 #include <rhi/qrhi.h>
 #define SPECTRUM_BASE_CLASS QRhiWidget
@@ -24,7 +24,7 @@ class QSoundEffect;
 #define SPECTRUM_BASE_CLASS QWidget
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class SpectrumOverlayMenu;
 class VfoWidget;
@@ -68,7 +68,7 @@ const char* wfSchemeName(WfColorScheme scheme);
 //   - VFO marker: vertical orange line at the tuned VFO frequency
 //
 // Click anywhere in the spectrum/waterfall area to emit frequencyClicked().
-// When AETHER_GPU_SPECTRUM is enabled, inherits QRhiWidget for GPU-accelerated
+// When MASTERSDR_GPU_SPECTRUM is enabled, inherits QRhiWidget for GPU-accelerated
 // waterfall rendering. Otherwise falls back to QPainter (QWidget).
 class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_OBJECT
@@ -497,7 +497,7 @@ signals:
     void spotRemoveRequested(int spotIndex);
 
 protected:
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
     void initialize(QRhiCommandBuffer* cb) override;
     void render(QRhiCommandBuffer* cb) override;
     void releaseResources() override;
@@ -954,7 +954,7 @@ private:
     QPushButton* m_zoomOutBtn{nullptr};
     QPushButton* m_zoomInBtn{nullptr};
 
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
     bool m_rhiInitialized{false};
 
     // Waterfall GPU resources
@@ -1000,7 +1000,7 @@ private:
     // Mark the static overlay for repaint and schedule a frame update.
     // In non-GPU mode this is just update().
     void markOverlayDirty() {
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
         m_overlayStaticDirty = true;
 #endif
         update();
@@ -1012,4 +1012,4 @@ private:
                            double newCenterMhz, double newBandwidthMhz);
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

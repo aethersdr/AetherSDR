@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <QElapsedTimer>
@@ -12,7 +12,7 @@ class QMouseEvent;
 class QPainter;
 class QPaintEvent;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class WaveformWidget : public QWidget {
     Q_OBJECT
@@ -115,4 +115,4 @@ private:
     ViewMode m_viewMode{ViewMode::Graph};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

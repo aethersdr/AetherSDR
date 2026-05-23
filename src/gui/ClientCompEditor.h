@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -6,7 +6,7 @@ class QLabel;
 class QPushButton;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class ClientCompEditorCanvas;
@@ -100,4 +100,4 @@ private:
     bool                     m_restoring{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

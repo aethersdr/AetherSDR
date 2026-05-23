@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QTcpSocket>
@@ -8,7 +8,7 @@
 #include <QTime>
 #include <atomic>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct DxSpot {
     QString spotterCall;    // W3LPL
@@ -107,4 +107,4 @@ private:
     static constexpr int ConnectTimeoutMs        = 10000;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

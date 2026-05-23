@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "Ax25DecodedFrame.h"
 
@@ -8,7 +8,7 @@
 
 #include <optional>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class Ax25FrameFormatter {
 public:
@@ -26,4 +26,4 @@ private:
     static quint16 computeFcs(const QByteArray& bytes);
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

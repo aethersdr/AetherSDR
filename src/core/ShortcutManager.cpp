@@ -1,10 +1,10 @@
-#include "ShortcutManager.h"
+﻿#include "ShortcutManager.h"
 #include "AppSettings.h"
 #include <QHash>
 #include <QWidget>
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 ShortcutManager::ShortcutManager(QObject* parent)
     : QObject(parent)
@@ -180,4 +180,4 @@ QStringList ShortcutManager::categories()
             "Filter", "Tuning", "DSP", "AGC", "EQ", "Display", "RIT/XIT"};
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

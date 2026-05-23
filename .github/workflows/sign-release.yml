@@ -1,4 +1,4 @@
-name: Sign Release Artifacts
+﻿name: Sign Release Artifacts
 
 # GPG signs Linux AppImage, Windows binaries, and source archives.
 # macOS artifacts are signed via Apple codesign + notarization.
@@ -48,8 +48,8 @@ jobs:
 
       - name: Generate source archive
         run: |
-          git archive --format=tar.gz --prefix="AetherSDR-${{ steps.tag.outputs.tag }}/" \
-            HEAD > "artifacts/AetherSDR-${{ steps.tag.outputs.tag }}-source.tar.gz"
+          git archive --format=tar.gz --prefix="MasterSDR-${{ steps.tag.outputs.tag }}/" \
+            HEAD > "artifacts/MasterSDR-${{ steps.tag.outputs.tag }}-source.tar.gz"
 
       - name: Import GPG key
         env:

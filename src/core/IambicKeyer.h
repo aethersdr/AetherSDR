@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <atomic>
 #include <chrono>
@@ -7,7 +7,7 @@
 #include <mutex>
 #include <thread>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Software iambic keyer state machine — drives the local CW sidetone in
 // real time when an operator's paddle is wired to the PC instead of the
@@ -129,4 +129,4 @@ private:
     bool                    m_lastEmittedDah{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

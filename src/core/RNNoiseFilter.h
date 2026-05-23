@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <memory>
 
 struct DenoiseState;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class Resampler;
 
@@ -40,4 +40,4 @@ private:
     QByteArray    m_outAccum;           // accumulate 24kHz stereo int16 output
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

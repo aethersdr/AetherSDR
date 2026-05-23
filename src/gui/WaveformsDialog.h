@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
 class QLabel;
 class QVBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class FlexWaveformModel;
 
@@ -30,4 +30,4 @@ private:
     QVBoxLayout*       m_listLayout{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

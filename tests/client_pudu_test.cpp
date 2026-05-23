@@ -1,4 +1,4 @@
-// Standalone test harness for ClientPudu DSP.
+﻿// Standalone test harness for ClientPudu DSP.
 // CMake target `client_pudu_test`.  Exit 0 = pass.
 
 #include "core/ClientPudu.h"
@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::ClientPudu;
+using MasterSDR::ClientPudu;
 
 namespace {
 

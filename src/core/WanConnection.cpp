@@ -1,8 +1,8 @@
-#include "WanConnection.h"
+﻿#include "WanConnection.h"
 #include "LogManager.h"
 #include <QSslConfiguration>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static constexpr int HEARTBEAT_INTERVAL_MS = 10000; // 10s ping (same as FlexLib)
 
@@ -203,4 +203,4 @@ void WanConnection::processLine(const QString& line)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

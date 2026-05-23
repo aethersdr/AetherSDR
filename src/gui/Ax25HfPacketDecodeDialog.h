@@ -1,7 +1,7 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
-#include "core/tnc/AetherAx25LibmodemShim.h"
+#include "core/tnc/MasterAx25LibmodemShim.h"
 
 #include <QMetaObject>
 #include <QPointer>
@@ -14,7 +14,7 @@ class QRadioButton;
 class QTextEdit;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class PacketActivityWidget;
@@ -61,7 +61,7 @@ private:
 
     AudioEngine* m_audio{nullptr};
     RadioModel* m_radio{nullptr};
-    AetherAx25LibmodemShim* m_shim{nullptr};
+    MasterAx25LibmodemShim* m_shim{nullptr};
     QRadioButton* m_hf300Profile{nullptr};
     QRadioButton* m_vhf1200Profile{nullptr};
     QCheckBox* m_enableDecode{nullptr};
@@ -110,4 +110,4 @@ private:
     bool m_txPreviousTransmitDax{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <array>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Small, self-contained FFT analyzer used by the Client EQ editor to
 // render a live spectrum behind the response curve. Fixed 2048-point
@@ -54,4 +54,4 @@ private:
     bool                          m_primed{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

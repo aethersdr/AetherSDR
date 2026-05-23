@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class ClientCompKnob;
@@ -12,7 +12,7 @@ class ClientCompKnob;
 // Docked tile for the client-side TX reverb (Freeverb).  Compact
 // 5-knob row — Size, Decay, Damping, PreDly, Mix — matches the PUDU
 // applet footprint.  Bypass lives on the CHAIN widget single-click;
-// the Aetherial Audio Channel Strip hosts the full editor.
+// the Masterial Audio Channel Strip hosts the full editor.
 class ClientReverbApplet : public QWidget {
     Q_OBJECT
 
@@ -35,4 +35,4 @@ private:
     QWidget*        m_viz{nullptr};   // ReverbVizBox (defined in .cpp)
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

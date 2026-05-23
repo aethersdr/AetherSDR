@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QHash>
@@ -10,7 +10,7 @@
 
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ATU tune status values (from FlexLib ATUTuneStatus enum).
 enum class ATUStatus {
@@ -353,4 +353,4 @@ private:
     QStringList m_micInputList;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

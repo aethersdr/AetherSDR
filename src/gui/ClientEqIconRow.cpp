@@ -1,4 +1,4 @@
-#include "ClientEqIconRow.h"
+﻿#include "ClientEqIconRow.h"
 #include "ClientEqCurveWidget.h"
 #include "core/AudioEngine.h"
 
@@ -7,7 +7,7 @@
 #include <QPainter>
 #include <QPainterPath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // A small custom-painted button drawing one filter's curve shape. The
 // shape is derived from the filter type; colour comes from the band's
@@ -222,4 +222,4 @@ void ClientEqIconRow::rebuild()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

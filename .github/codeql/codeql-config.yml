@@ -1,6 +1,6 @@
-name: AetherSDR CodeQL configuration
+﻿name: MasterSDR CodeQL configuration
 
-# Restrict analysis to AetherSDR's own first-party C++ sources.  Vendored
+# Restrict analysis to MasterSDR's own first-party C++ sources.  Vendored
 # upstream deps and build-time-extracted source trees are out of scope —
 # their security posture is the responsibility of upstream, and scanning
 # them inflates alert noise that masks signal in our own code.

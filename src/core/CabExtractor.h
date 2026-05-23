@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <QList>
 #include <QPair>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Extract files from a Microsoft CAB archive that lives entirely in
 // memory. Used by the firmware-update path to unpack `cab*.cab` streams
@@ -36,4 +36,4 @@ private:
     QString m_lastError;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,12 +1,12 @@
-# Security Policy
+﻿# Security Policy
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in AetherSDR, please report it
+If you discover a security vulnerability in MasterSDR, please report it
 **privately** rather than opening a public issue.
 
 **Email:** Send details to the repository owner via GitHub private messaging,
-or use [GitHub's private vulnerability reporting](https://github.com/aethersdr/AetherSDR/security/advisories/new).
+or use [GitHub's private vulnerability reporting](https://github.com/MasterSDR/MasterSDR/security/advisories/new).
 
 Please include:
 - A description of the vulnerability
@@ -18,7 +18,7 @@ before any public disclosure.
 
 ## Scope
 
-AetherSDR communicates with FlexRadio hardware over local network protocols
+MasterSDR communicates with FlexRadio hardware over local network protocols
 (TCP/UDP). Security concerns include:
 
 - Buffer overflows in VITA-49 packet parsing

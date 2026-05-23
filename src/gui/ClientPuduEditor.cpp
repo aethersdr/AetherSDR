@@ -1,4 +1,4 @@
-#include "ClientPuduEditor.h"
+﻿#include "ClientPuduEditor.h"
 #include "ClientCompKnob.h"
 #include "EditorFramelessTitleBar.h"
 #include "PooDooLogo.h"
@@ -21,7 +21,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -90,7 +90,7 @@ ClientPuduEditor::ClientPuduEditor(AudioEngine* engine, QWidget* parent)
     : QWidget(parent, Qt::Window | Qt::FramelessWindowHint)
     , m_audio(engine)
 {
-    setWindowTitle(QString::fromUtf8("Aetherial Poodoo\xe2\x84\xa2"));
+    setWindowTitle(QString::fromUtf8("Masterial Poodoo\xe2\x84\xa2"));
     setStyleSheet(kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
@@ -289,7 +289,7 @@ void ClientPuduEditor::showForTx()
 {
     m_side = Side::Tx;
     if (m_logo && pudu()) m_logo->setPudu(pudu());
-    const QString title = QString::fromUtf8("Aetherial Poodoo\xe2\x84\xa2 \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial Poodoo\xe2\x84\xa2 \xe2\x80\x94 TX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -304,7 +304,7 @@ void ClientPuduEditor::showForRx()
 {
     m_side = Side::Rx;
     if (m_logo && pudu()) m_logo->setPudu(pudu());
-    const QString title = QString::fromUtf8("Aetherial Poodoo\xe2\x84\xa2 \xe2\x80\x94 RX");
+    const QString title = QString::fromUtf8("Masterial Poodoo\xe2\x84\xa2 \xe2\x80\x94 RX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -413,4 +413,4 @@ void ClientPuduEditor::showEvent(QShowEvent* ev)
 void ClientPuduEditor::hideEvent(QHideEvent* ev)
 { saveGeometryToSettings(); QWidget::hideEvent(ev); }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

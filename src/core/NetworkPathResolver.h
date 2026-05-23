@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QHostAddress>
 #include <QList>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct NetworkPathCandidate {
     QString      interfaceId;
@@ -25,4 +25,4 @@ public:
     static bool isUsableIpv4(const QHostAddress& address);
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

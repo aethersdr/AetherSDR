@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CommandParser.h"
 
@@ -12,7 +12,7 @@
 #include <functional>
 #include <atomic>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Manages a TLS connection to a FlexRadio over the internet (SmartLink).
 // Speaks the same V/H/R/S/M protocol as RadioConnection but over TLS,
@@ -77,4 +77,4 @@ private:
     QMap<quint32, ResponseCallback> m_pendingCallbacks;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

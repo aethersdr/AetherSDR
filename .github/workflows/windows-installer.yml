@@ -1,4 +1,4 @@
-name: Windows Installer
+﻿name: Windows Installer
 
 on:
   push:
@@ -98,8 +98,8 @@ jobs:
       - name: Deploy Qt
         run: |
           mkdir deploy
-          copy build\AetherSDR.exe deploy\
-          windeployqt deploy\AetherSDR.exe --release --no-translations --no-system-d3d-compiler
+          copy build\MasterSDR.exe deploy\
+          windeployqt deploy\MasterSDR.exe --release --no-translations --no-system-d3d-compiler
           if (Test-Path "third_party\fftw3\bin\libfftw3-3.dll") {
             copy third_party\fftw3\bin\libfftw3-3.dll deploy\
           }
@@ -110,7 +110,7 @@ jobs:
             copy third_party\hidapi\bin\hidapi.dll deploy\
           }
           # zlib is statically linked from third_party/zlib (#2651) — no
-          # DLL copy needed; zlibstatic is baked into AetherSDR.exe.
+          # DLL copy needed; zlibstatic is baked into MasterSDR.exe.
           if (Test-Path "third_party\deepfilter\lib\windows-x86_64\deepfilter.dll") {
             copy third_party\deepfilter\lib\windows-x86_64\deepfilter.dll deploy\
           }
@@ -131,7 +131,7 @@ jobs:
         run: |
           # Keep portable ZIP app-local runtime behavior aligned with the installer.
           Copy-Item -Path installer-runtime\*.dll -Destination deploy\ -Force
-          Compress-Archive -Path deploy\* -DestinationPath "AetherSDR-${{ github.ref_name }}-Windows-x64-portable.zip"
+          Compress-Archive -Path deploy\* -DestinationPath "MasterSDR-${{ github.ref_name }}-Windows-x64-portable.zip"
 
       - name: Create installer (Inno Setup)
         run: |
@@ -144,13 +144,13 @@ jobs:
         with:
           name: Windows-Installer
           path: |
-            AetherSDR-*.zip
-            AetherSDR-*-setup.exe
+            MasterSDR-*.zip
+            MasterSDR-*-setup.exe
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3
         with:
           files: |
-            AetherSDR-*.zip
-            AetherSDR-*-setup.exe
+            MasterSDR-*.zip
+            MasterSDR-*-setup.exe

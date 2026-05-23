@@ -1,8 +1,8 @@
-#include "IambicKeyer.h"
+﻿#include "IambicKeyer.h"
 
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -244,4 +244,4 @@ void IambicKeyer::workerLoop()
     emitPaddleEvent(false, false);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

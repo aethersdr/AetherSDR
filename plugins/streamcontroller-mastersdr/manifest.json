@@ -1,0 +1,14 @@
+﻿{
+    "version": "1.0.0",
+    "id": "com_MasterSDR_radio",
+    "name": "MasterSDR",
+    "descriptions": {
+        "en_US": "Full MasterSDR radio control via TCI — 40+ actions for TX, bands, modes, DSP, audio, and DVK."
+    },
+    "short-descriptions": {
+        "en_US": "MasterSDR radio control"
+    },
+    "tags": ["Ham Radio", "SDR"],
+    "minimum-app-version": "1.0.0",
+    "app-version": "1.4.11-beta"
+}

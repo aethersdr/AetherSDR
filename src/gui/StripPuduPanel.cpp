@@ -1,4 +1,4 @@
-#include "StripPuduPanel.h"
+﻿#include "StripPuduPanel.h"
 #include "ClientCompKnob.h"
 #include "EditorFramelessTitleBar.h"
 #include "PooDooLogo.h"
@@ -21,7 +21,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -90,7 +90,7 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
     : QWidget(parent)
     , m_audio(engine)
 {
-    setWindowTitle(QStringLiteral("Aetherial Voice Processor"));
+    setWindowTitle(QStringLiteral("Masterial Voice Processor"));
     setStyleSheet(kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
@@ -107,7 +107,7 @@ StripPuduPanel::StripPuduPanel(AudioEngine* engine, QWidget* parent)
     // Strip-side rebrand — the docked applet keeps the legacy
     // "PooDoo™" mark; this strip panel uses the operator-facing
     // marketing name.
-    m_logo->setWordmark(QString::fromUtf8("AetherVoice\xe2\x84\xa2"));
+    m_logo->setWordmark(QString::fromUtf8("MasterVoice\xe2\x84\xa2"));
     m_logo->setMinimumHeight(80);
     root->addWidget(m_logo);
 
@@ -295,7 +295,7 @@ void StripPuduPanel::showForTx()
     m_side = Side::Tx;
     if (m_logo && pudu()) m_logo->setPudu(pudu());
     const QString title = QString::fromUtf8(
-        "Aetherial Voice Processor \xe2\x80\x94 TX");
+        "Masterial Voice Processor \xe2\x80\x94 TX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -311,7 +311,7 @@ void StripPuduPanel::showForRx()
     m_side = Side::Rx;
     if (m_logo && pudu()) m_logo->setPudu(pudu());
     const QString title = QString::fromUtf8(
-        "Aetherial Voice Processor \xe2\x80\x94 RX");
+        "Masterial Voice Processor \xe2\x80\x94 RX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -420,4 +420,4 @@ void StripPuduPanel::showEvent(QShowEvent* ev)
 void StripPuduPanel::hideEvent(QHideEvent* ev)
 { saveGeometryToSettings(); QWidget::hideEvent(ev); }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

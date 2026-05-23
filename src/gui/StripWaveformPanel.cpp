@@ -1,4 +1,4 @@
-#include "StripWaveformPanel.h"
+﻿#include "StripWaveformPanel.h"
 
 #include "EditorFramelessTitleBar.h"
 #include "StripWaveform.h"
@@ -12,7 +12,7 @@
 #include <QSlider>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 constexpr const char* kWindowStyle =
@@ -24,7 +24,7 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     : QWidget(parent)
     , m_audio(engine)
 {
-    const QString title = QString::fromUtf8("Aetherial Waveform \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial Waveform \xe2\x80\x94 TX");
     setWindowTitle(title);
     setStyleSheet(kWindowStyle);
 
@@ -149,7 +149,7 @@ StripWaveformPanel::~StripWaveformPanel() = default;
 void StripWaveformPanel::showForTx()
 {
     m_side = Side::Tx;
-    const QString title = QString::fromUtf8("Aetherial Waveform \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial Waveform \xe2\x80\x94 TX");
     setWindowTitle(title);
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
@@ -171,7 +171,7 @@ void StripWaveformPanel::showForTx()
 void StripWaveformPanel::showForRx()
 {
     m_side = Side::Rx;
-    const QString title = QString::fromUtf8("Aetherial Waveform \xe2\x80\x94 RX");
+    const QString title = QString::fromUtf8("Masterial Waveform \xe2\x80\x94 RX");
     setWindowTitle(title);
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
@@ -195,7 +195,7 @@ void StripWaveformPanel::showForRx()
 void StripWaveformPanel::syncControlsFromEngine()
 {
     // No engine-driven controls yet — kept for API symmetry with the
-    // other strip panels so the AetherialAudioStrip can iterate every
+    // other strip panels so the MasterialAudioStrip can iterate every
     // panel uniformly when applying a preset.
 }
 
@@ -218,8 +218,8 @@ QString StripWaveformPanel::windowSettingsKey() const
     // Independent persistence per side so TX zoom and RX zoom don't
     // overwrite each other when the user toggles the strip mode.
     return m_side == Side::Rx
-        ? QStringLiteral("AetherialStripWaveformRxWindowSec")
-        : QStringLiteral("AetherialStripWaveformWindowSec");
+        ? QStringLiteral("MasterialStripWaveformRxWindowSec")
+        : QStringLiteral("MasterialStripWaveformWindowSec");
 }
 
 void StripWaveformPanel::applyViewMode()
@@ -236,4 +236,4 @@ void StripWaveformPanel::applyViewMode()
     if (m_modeBtn) m_modeBtn->setText(label);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

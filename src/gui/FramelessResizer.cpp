@@ -1,4 +1,4 @@
-#include "FramelessResizer.h"
+﻿#include "FramelessResizer.h"
 
 #include <QEvent>
 #include <QGuiApplication>
@@ -6,7 +6,7 @@
 #include <QWidget>
 #include <QWindow>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 void FramelessResizer::install(QWidget* window, int margin)
 {
@@ -132,4 +132,4 @@ bool FramelessResizer::eventFilter(QObject* obj, QEvent* ev)
     return false;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

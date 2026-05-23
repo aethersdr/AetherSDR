@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifdef HAVE_MIDI
 
@@ -6,12 +6,12 @@
 #include <QVector>
 #include "MidiControlManager.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Dedicated settings file for MIDI controller configuration.
-// Stored at ~/.config/AetherSDR/midi.settings (XML format).
+// Stored at ~/.config/MasterSDR/midi.settings (XML format).
 // Keeps MIDI bindings, device preferences, and profiles separate
-// from the main AetherSDR.settings file.
+// from the main MasterSDR.settings file.
 class MidiSettings {
 public:
     static MidiSettings& instance();
@@ -31,7 +31,7 @@ public:
     bool autoConnect() const { return m_autoConnect; }
     void setAutoConnect(bool on) { m_autoConnect = on; }
 
-    // Profile management (~/.config/AetherSDR/midi/<name>.xml)
+    // Profile management (~/.config/MasterSDR/midi/<name>.xml)
     QStringList availableProfiles() const;
     void saveProfile(const QString& name, const QVector<MidiBinding>& bindings);
     QVector<MidiBinding> loadProfile(const QString& name) const;
@@ -50,6 +50,6 @@ private:
     bool    m_autoConnect{true};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_MIDI

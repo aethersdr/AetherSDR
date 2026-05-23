@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QByteArray>
@@ -14,7 +14,7 @@ struct LPCNetEncState;
 using rade_text_t = void*;
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class Resampler;
 
@@ -86,4 +86,4 @@ private:
 #endif
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

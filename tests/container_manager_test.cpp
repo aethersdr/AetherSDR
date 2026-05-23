@@ -1,4 +1,4 @@
-// Phase 2 tests — ContainerManager lifecycle, factory, persistence.
+﻿// Phase 2 tests — ContainerManager lifecycle, factory, persistence.
 // Headless via QApplication with offscreen platform.
 
 #include "gui/containers/ContainerManager.h"
@@ -11,7 +11,7 @@
 #include <QWidget>
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

@@ -1,4 +1,4 @@
-#include "SleepInhibitor.h"
+﻿#include "SleepInhibitor.h"
 #include <QDebug>
 
 #ifdef Q_OS_MAC
@@ -14,7 +14,7 @@
 #include <QDBusReply>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 SleepInhibitor::~SleepInhibitor()
 {
@@ -56,7 +56,7 @@ void SleepInhibitor::acquire(const QString& reason)
                          "/org/freedesktop/ScreenSaver",
                          "org.freedesktop.ScreenSaver");
     if (iface.isValid()) {
-        QDBusReply<uint32_t> reply = iface.call("Inhibit", "AetherSDR", reason);
+        QDBusReply<uint32_t> reply = iface.call("Inhibit", "MasterSDR", reason);
         if (reply.isValid()) {
             m_cookie = reply.value();
             m_held = true;
@@ -101,4 +101,4 @@ void SleepInhibitor::release()
     m_held = false;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

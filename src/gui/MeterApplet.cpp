@@ -1,11 +1,11 @@
-#include "MeterApplet.h"
+﻿#include "MeterApplet.h"
 #include "HGauge.h"
 #include "models/MeterModel.h"
 
 #include <QVBoxLayout>
 #include <QLabel>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const char* kSectionStyle =
     "QLabel { color: #8090a0; font-size: 10px; font-weight: bold; "
@@ -74,4 +74,4 @@ void MeterApplet::onMeterUpdated(int index, float value)
         m_fanGauge->setValue(value);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

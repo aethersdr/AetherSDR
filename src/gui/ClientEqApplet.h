@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class ClientEqCurveWidget;
@@ -58,4 +58,4 @@ private:
     ClientEqCurveWidget* m_curve{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

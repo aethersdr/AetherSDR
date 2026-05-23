@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QMap>
 #include <QVariant>
 #include <optional>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Message types in the SmartSDR TCP protocol:
 //   V<version>             – version announcement
@@ -62,4 +62,4 @@ public:
     static QMap<QString, QString> parseKVs(const QString& body);
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

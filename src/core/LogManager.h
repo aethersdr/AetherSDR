@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "AsyncLogWriter.h"
 
@@ -9,9 +9,9 @@
 #include <QMutex>
 #include <QtCore/qlogging.h>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
-// Declares all logging categories used throughout AetherSDR.
+// Declares all logging categories used throughout MasterSDR.
 // Include this header and use qCDebug(lcXxx) / qCWarning(lcXxx) / qCInfo(lcXxx).
 
 Q_DECLARE_LOGGING_CATEGORY(lcDiscovery)
@@ -51,7 +51,7 @@ class LogManager : public QObject {
 
 public:
     struct Category {
-        QString id;           // e.g. "aether.connection"
+        QString id;           // e.g. "mastersdr.connection"
         QString label;        // e.g. "Connection"
         QString description;  // e.g. "TCP command channel, protocol parsing"
         bool enabled{false};
@@ -106,4 +106,4 @@ private:
     mutable AsyncLogWriter m_writer;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

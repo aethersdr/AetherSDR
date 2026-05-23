@@ -1,4 +1,4 @@
-name: RFC (Request for Comments)
+﻿name: RFC (Request for Comments)
 description: Propose a significant change requiring maintainer approval before implementation
 labels: [rfc]
 body:
@@ -8,7 +8,7 @@ body:
         ## Before you write any code
 
         Some changes require an approved RFC before a PR will be accepted.
-        See [GOVERNANCE.md](https://github.com/aethersdr/AetherSDR/blob/main/GOVERNANCE.md#rfc-process)
+        See [GOVERNANCE.md](https://github.com/MasterSDR/MasterSDR/blob/main/GOVERNANCE.md#rfc-process)
         for the full list, which includes:
 
         - Visual design changes (colors, fonts, layout, theme)
@@ -26,7 +26,7 @@ body:
     attributes:
       label: Preflight
       options:
-        - label: "I have read [GOVERNANCE.md](https://github.com/aethersdr/AetherSDR/blob/main/GOVERNANCE.md) and confirmed this change requires an RFC"
+        - label: "I have read [GOVERNANCE.md](https://github.com/MasterSDR/MasterSDR/blob/main/GOVERNANCE.md) and confirmed this change requires an RFC"
           required: true
         - label: "I have searched existing issues and this RFC has not been proposed before"
           required: true
@@ -59,7 +59,7 @@ body:
     id: crossplatform
     attributes:
       label: Cross-platform impact
-      description: How does this affect Linux, macOS, and Windows? AetherSDR is Linux-native first.
+      description: How does this affect Linux, macOS, and Windows? MasterSDR is Linux-native first.
       placeholder: |
         Linux: ...
         macOS: ...

@@ -1,4 +1,4 @@
-#include "DspParamPopup.h"
+﻿#include "DspParamPopup.h"
 #include "GuardedSlider.h"
 
 #include <QVBoxLayout>
@@ -13,7 +13,7 @@
 #include <QApplication>
 #include <QScreen>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const QString kPopupStyle = QStringLiteral(
     "QWidget#DspParamPopup { background: rgba(15, 15, 26, 240);"
@@ -127,7 +127,7 @@ void DspParamPopup::finalize(std::function<void()> onMore, std::function<void()>
 
     auto* btnRow = new QHBoxLayout;
 
-    auto* moreBtn = new QPushButton("AetherDSP Settings...");
+    auto* moreBtn = new QPushButton("MasterDsp Settings...");
     connect(moreBtn, &QPushButton::clicked, this, [this, onMore]() {
         if (onMore) onMore();
         close();
@@ -164,4 +164,4 @@ bool DspParamPopup::event(QEvent* ev)
     return QWidget::event(ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

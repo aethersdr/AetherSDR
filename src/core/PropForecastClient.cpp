@@ -1,4 +1,4 @@
-#include "PropForecastClient.h"
+﻿#include "PropForecastClient.h"
 #include "AppSettings.h"
 
 #include <QDateTime>
@@ -12,9 +12,9 @@
 #include <QUrl>
 #include <cmath>
 
-Q_LOGGING_CATEGORY(lcPropForecast, "aether.propforecast")
+Q_LOGGING_CATEGORY(lcPropForecast, "mastersdr.propforecast")
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 PropForecastClient::PropForecastClient(QObject* parent)
     : QObject(parent)
@@ -57,7 +57,7 @@ void PropForecastClient::fetch()
     m_fetchInFlight = true;
 
     QNetworkRequest req{QUrl{QString(kUrl)}};
-    req.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
+    req.setHeader(QNetworkRequest::UserAgentHeader, "MasterSDR");
     auto* reply = m_nam.get(req);
 
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
@@ -115,7 +115,7 @@ void PropForecastClient::fetchDetail()
 
     auto makeReq = [](const char* url) {
         QNetworkRequest req{QUrl{QString(url)}};
-        req.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
+        req.setHeader(QNetworkRequest::UserAgentHeader, "MasterSDR");
         return req;
     };
 
@@ -387,4 +387,4 @@ void PropForecastClient::parseXrayFlux(const QByteArray& json)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

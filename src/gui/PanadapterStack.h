@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QMap>
 #include <QSet>
 #include <QSplitter>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class BandStackPanel;
 class PanFloatingWindow;
@@ -85,4 +85,4 @@ private:
     bool m_shutdownPrepared{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

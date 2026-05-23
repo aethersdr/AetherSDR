@@ -1,4 +1,4 @@
-# AetherSDR Audio Pipeline Test Plan
+﻿# MasterSDR Audio Pipeline Test Plan
 
 **Version:** v0.8.15.1
 **Last updated:** 2026-04-15
@@ -19,7 +19,7 @@
 ## A. Basic RX Audio (Radio → Speaker)
 
 ### A1. Audio plays on connect
-1. Launch AetherSDR, connect to radio
+1. Launch MasterSDR, connect to radio
 2. Tune to an active frequency (e.g., WWV 10 MHz, or a busy band)
 3. Audio should play immediately — no silence, no stuttering
 
@@ -40,7 +40,7 @@
 3. Smooth transition, no clicks
 
 ### A5. Audio survives idle (15+ minutes)
-1. Leave AetherSDR connected and idle for 15+ minutes
+1. Leave MasterSDR connected and idle for 15+ minutes
 2. Return — audio should still be playing
 3. Check log for "no audio data received" warnings — should NOT appear during normal operation
 4. If liveness watchdog fires, note the circumstances
@@ -241,8 +241,8 @@
 
 #### G7. DAX TX with SmartSDR DAX coexistence (Windows)
 1. On Windows with SmartSDR DAX 4.1.5 installed
-2. Launch AetherSDR — should not lock up SmartSDR DAX TX
-3. Close AetherSDR — SmartSDR DAX should recover without restart
+2. Launch MasterSDR — should not lock up SmartSDR DAX TX
+3. Close MasterSDR — SmartSDR DAX should recover without restart
 4. This was the #1394 bug — verify streams are cleaned up on disconnect
 
 ### DAX IQ Streaming
@@ -353,7 +353,7 @@
 
 ### H1. USB audio device disconnect
 1. If using USB audio, unplug the device during playback
-2. AetherSDR should detect the change and attempt restart
+2. MasterSDR should detect the change and attempt restart
 3. Plug device back in — audio should resume
 4. Check log for "audio output device list changed, restarting RX"
 

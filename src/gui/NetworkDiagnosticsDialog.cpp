@@ -1,4 +1,4 @@
-#include "NetworkDiagnosticsDialog.h"
+﻿#include "NetworkDiagnosticsDialog.h"
 #include "core/AudioEngine.h"
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
@@ -31,7 +31,7 @@
 #include <QTextCharFormat>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class LogSyntaxHighlighter : public QSyntaxHighlighter {
 public:
@@ -1704,4 +1704,4 @@ void NetworkDiagnosticsDialog::updateCharts()
     m_audioGraph->setSeries(audioBufferSeries, rangeSeconds);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QLabel;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class FramelessWindowTitleBar : public QWidget {
     Q_OBJECT
@@ -24,4 +24,4 @@ private:
     QLabel* m_titleLabel{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

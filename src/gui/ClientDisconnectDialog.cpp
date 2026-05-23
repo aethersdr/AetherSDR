@@ -1,4 +1,4 @@
-#include "ClientDisconnectDialog.h"
+﻿#include "ClientDisconnectDialog.h"
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -14,7 +14,7 @@
 #include <QWindow>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -214,4 +214,4 @@ void ClientDisconnectDialog::acceptWithHandles(const QList<quint32>& handles)
     accept();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

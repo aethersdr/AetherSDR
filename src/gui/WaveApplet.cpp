@@ -1,4 +1,4 @@
-#include "WaveApplet.h"
+﻿#include "WaveApplet.h"
 
 #include "ComboStyle.h"
 #include "GuardedSlider.h"
@@ -16,7 +16,7 @@
 
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -148,7 +148,7 @@ WaveApplet::WaveApplet(QWidget* parent)
     // linear) to the new "TimeWindowMs" discrete-step storage.  Existing
     // users keep their value, snapped to the nearest available step.
     // Remove the old key + save so the legacy entry doesn't linger in
-    // AetherSDR.settings forever (CLAUDE.md migration pattern).
+    // MasterSDR.settings forever (CLAUDE.md migration pattern).
     if (settings.contains("WaveApplet_TimeWindowSec")
         && !settings.contains("WaveApplet_TimeWindowMs")) {
         const int legacySec = settings.value("WaveApplet_TimeWindowSec", 1).toInt();
@@ -388,4 +388,4 @@ void WaveApplet::setTransmitting(bool tx)
         m_waveform->setTransmitting(tx);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

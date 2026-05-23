@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <QWidget>
@@ -8,7 +8,7 @@ class QFrame;
 class GuardedComboBox;
 class GuardedSlider;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class WaveformWidget;
 
@@ -43,4 +43,4 @@ private:
     QLabel* m_windowValue{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "ClientCompMeter.h"
+﻿#include "ClientCompMeter.h"
 
 #include <QPainter>
 #include <QPaintEvent>
@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -216,4 +216,4 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-// Standalone test harness for ClientReverb DSP (Freeverb).
+﻿// Standalone test harness for ClientReverb DSP (Freeverb).
 // Build: CMake target `client_reverb_test`.  Exit 0 = pass.
 
 #include "core/ClientReverb.h"
@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::ClientReverb;
+using MasterSDR::ClientReverb;
 
 namespace {
 

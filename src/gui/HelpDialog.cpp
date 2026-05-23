@@ -1,4 +1,4 @@
-#include "HelpDialog.h"
+﻿#include "HelpDialog.h"
 
 #include <QDialogButtonBox>
 #include <QFile>
@@ -12,7 +12,7 @@
 #include <QTextCursor>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -65,7 +65,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
     headerLayout->setContentsMargins(20, 18, 20, 14);
     headerLayout->setSpacing(6);
 
-    auto* eyebrow = new QLabel("AETHERSDR OFFLINE HELP", header);
+    auto* eyebrow = new QLabel("MasterSDR OFFLINE HELP", header);
     eyebrow->setStyleSheet("color: #00b4d8; font-size: 11px; letter-spacing: 2px;");
     headerLayout->addWidget(eyebrow);
 
@@ -332,7 +332,7 @@ QString HelpDialog::loadMarkdown(const QString& resourcePath) const
     if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
         return QStringLiteral(
             "# Help file not available\n\n"
-            "AetherSDR could not open this bundled help topic.\n\n"
+            "MasterSDR could not open this bundled help topic.\n\n"
             "Please reinstall the application or report the missing help asset.");
     }
 
@@ -364,4 +364,4 @@ void HelpDialog::updateFindFeedback(const QString& message, bool noMatch)
         m_findEdit->setStyleSheet(noMatch ? kFindEditNoMatchStyle : kFindEditStyle);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 
@@ -16,4 +16,4 @@ private:
     RadioModel* m_model{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

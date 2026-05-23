@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.20)
-project(AetherSDR VERSION 26.5.2.1 LANGUAGES C CXX)
+﻿cmake_minimum_required(VERSION 3.20)
+project(MasterSDR VERSION 26.5.2.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -176,7 +176,7 @@ else()
 endif()
 
 # Opus codec — required for SmartLink compressed audio, independent of RADE.
-# When RADE is enabled, Opus comes from AetherSDR's vendored RADE snapshot
+# When RADE is enabled, Opus comes from MasterSDR's vendored RADE snapshot
 # (with FARGAN/OSCE).
 # When RADE is disabled, find system libopus.
 # Windows: run setup-opus.ps1 first to download prebuilt DLLs
@@ -221,10 +221,10 @@ endif()
 # GPU-accelerated spectrum/waterfall rendering via QRhi (#391)
 # Requires: Qt 6.7+ (QRhiWidget), Qt6::ShaderTools (build-time shader compilation)
 # Defaults to ON but auto-disables on Qt < 6.7 (e.g. Ubuntu 24.04 ships Qt 6.4).
-option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
-if(AETHER_GPU_SPECTRUM)
+option(MASTERSDR_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
+if(MASTERSDR_GPU_SPECTRUM)
     if(Qt6_VERSION VERSION_LESS "6.7")
-        set(AETHER_GPU_SPECTRUM OFF)
+        set(MASTERSDR_GPU_SPECTRUM OFF)
         message(STATUS "GPU spectrum rendering disabled (requires Qt 6.7+, found ${Qt6_VERSION} — pass -DCMAKE_PREFIX_PATH=/path/to/Qt/6.7.x/gcc_64 to use a newer Qt installation)")
     else()
         find_package(Qt6 REQUIRED COMPONENTS ShaderTools)
@@ -248,13 +248,13 @@ if(AETHER_GPU_SPECTRUM)
         if(Qt6GuiPrivate_FOUND)
             message(STATUS "GPU spectrum rendering enabled (QRhi, Qt ${Qt6_VERSION})")
         else()
-            set(AETHER_GPU_SPECTRUM OFF)
+            set(MASTERSDR_GPU_SPECTRUM OFF)
             message(STATUS "GPU spectrum rendering disabled — Qt6GuiPrivate not found "
                            "(install qt6-base-private-dev / qt6-qtbase-private-devel)")
         endif()
     endif()
 else()
-    message(STATUS "GPU spectrum rendering disabled (use -DAETHER_GPU_SPECTRUM=ON to enable)")
+    message(STATUS "GPU spectrum rendering disabled (use -DMASTERSDR_GPU_SPECTRUM=ON to enable)")
 endif()
 
 # NVIDIA NIM BNR (Background Noise Removal) — GPU-accelerated neural denoising
@@ -505,7 +505,7 @@ set(CORE_SOURCES
     src/core/SleepInhibitor.cpp
     src/core/MemoryCsvCompat.cpp
     src/core/MemoryRecallPolicy.cpp
-    src/core/tnc/AetherAx25LibmodemShim.cpp
+    src/core/tnc/MasterAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
 )
 
@@ -570,8 +570,8 @@ set(GUI_SOURCES
     src/gui/MemoryBrowsePanel.cpp
     src/gui/MemoryDialog.cpp
     src/gui/SpotSettingsDialog.cpp
-    src/gui/AetherDspDialog.cpp
-    src/gui/AetherDspWidget.cpp
+    src/gui/MasterDspDialog.cpp
+    src/gui/MasterDspWidget.cpp
     src/gui/WaveformsDialog.cpp
     src/gui/ClientRxDspApplet.cpp
     src/gui/DspParamPopup.cpp
@@ -649,7 +649,7 @@ set(GUI_SOURCES
     src/gui/StripWaveform.cpp
     src/gui/StripWaveformPanel.cpp
     src/gui/StripFinalOutputPanel.cpp
-    src/gui/AetherialAudioStrip.cpp
+    src/gui/MasterialAudioStrip.cpp
     src/gui/PooDooLogo.cpp
     src/gui/ClientCompLimiterButton.cpp
     src/gui/ClientCompMeter.cpp
@@ -758,53 +758,53 @@ else()
     set_source_files_properties(${GGMORSE_SOURCES} PROPERTIES COMPILE_FLAGS "-w")
 endif()
 
-add_library(aether_libmodem_core STATIC
+add_library(mastersdr_libmodem_core STATIC
     third_party/libmodem_core/bitstream.cpp
     third_party/libmodem_core/demodulator.cpp
 )
-target_include_directories(aether_libmodem_core PUBLIC
+target_include_directories(mastersdr_libmodem_core PUBLIC
     ${CMAKE_SOURCE_DIR}/third_party/libmodem_core
 )
-target_compile_features(aether_libmodem_core PUBLIC cxx_std_20)
-target_compile_definitions(aether_libmodem_core PUBLIC
-    LIBMODEM_NAMESPACE=aether_libmodem_core
-    "LIBMODEM_NAMESPACE_REFERENCE=aether_libmodem_core::"
+target_compile_features(mastersdr_libmodem_core PUBLIC cxx_std_20)
+target_compile_definitions(mastersdr_libmodem_core PUBLIC
+    LIBMODEM_NAMESPACE=mastersdr_libmodem_core
+    "LIBMODEM_NAMESPACE_REFERENCE=mastersdr_libmodem_core::"
 )
 if(MSVC)
-    target_compile_options(aether_libmodem_core PRIVATE /w)
+    target_compile_options(mastersdr_libmodem_core PRIVATE /w)
 else()
-    target_compile_options(aether_libmodem_core PRIVATE -w)
+    target_compile_options(mastersdr_libmodem_core PRIVATE -w)
 endif()
 
 qt_add_resources(RESOURCES resources.qrc)
 
-add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES})
+add_executable(MasterSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES})
 
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
-    set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)
+    set_target_properties(MasterSDR PROPERTIES WIN32_EXECUTABLE TRUE)
 endif()
 
 # macOS app bundle
 if(APPLE)
-    set_target_properties(AetherSDR PROPERTIES
+    set_target_properties(MasterSDR PROPERTIES
         MACOSX_BUNDLE TRUE
-        MACOSX_BUNDLE_GUI_IDENTIFIER "com.aethersdr.AetherSDR"
-        MACOSX_BUNDLE_BUNDLE_NAME "AetherSDR"
+        MACOSX_BUNDLE_GUI_IDENTIFIER "com.mastersdr.MasterSDR"
+        MACOSX_BUNDLE_BUNDLE_NAME "MasterSDR"
         MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
         MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
-        MACOSX_BUNDLE_ICON_FILE "AetherSDR.icns"
+        MACOSX_BUNDLE_ICON_FILE "MasterSDR.icns"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_SOURCE_DIR}/packaging/macos/Info.plist.in"
     )
-    target_link_libraries(AetherSDR PRIVATE "-framework AVFoundation" "-framework Accelerate")
-    target_sources(AetherSDR PRIVATE src/core/MacNRFilter.cpp)
+    target_link_libraries(MasterSDR PRIVATE "-framework AVFoundation" "-framework Accelerate")
+    target_sources(MasterSDR PRIVATE src/core/MacNRFilter.cpp)
 
-    # Generate AetherSDR.icns at build time from docs/logo-circle.png so local
+    # Generate MasterSDR.icns at build time from docs/logo-circle.png so local
     # builds get an app icon without any extra setup (sips and iconutil are
     # part of macOS).
     set(ICON_SOURCE "${CMAKE_SOURCE_DIR}/docs/logo-circle.png")
-    set(ICNS_PATH "${CMAKE_BINARY_DIR}/AetherSDR.icns")
-    set(ICONSET_PATH "${CMAKE_BINARY_DIR}/AetherSDR.iconset")
+    set(ICNS_PATH "${CMAKE_BINARY_DIR}/MasterSDR.icns")
+    set(ICONSET_PATH "${CMAKE_BINARY_DIR}/MasterSDR.iconset")
     add_custom_command(
         OUTPUT "${ICNS_PATH}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${ICONSET_PATH}"
@@ -820,19 +820,19 @@ if(APPLE)
         COMMAND sips -z 1024 1024 "${ICON_SOURCE}" --out "${ICONSET_PATH}/icon_512x512@2x.png"
         COMMAND iconutil -c icns "${ICONSET_PATH}" -o "${ICNS_PATH}"
         DEPENDS "${ICON_SOURCE}"
-        COMMENT "Generating AetherSDR.icns"
+        COMMENT "Generating MasterSDR.icns"
     )
-    target_sources(AetherSDR PRIVATE "${ICNS_PATH}")
+    target_sources(MasterSDR PRIVATE "${ICNS_PATH}")
     set_source_files_properties("${ICNS_PATH}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 elseif(WIN32)
     # Windows application icon (taskbar, Start Menu, Alt-Tab)
-    set(WIN_RC "${CMAKE_SOURCE_DIR}/docs/AetherSDR.rc")
+    set(WIN_RC "${CMAKE_SOURCE_DIR}/docs/MasterSDR.rc")
     if(EXISTS "${WIN_RC}")
-        target_sources(AetherSDR PRIVATE "${WIN_RC}")
+        target_sources(MasterSDR PRIVATE "${WIN_RC}")
     endif()
 endif()
 
-target_include_directories(AetherSDR PRIVATE
+target_include_directories(MasterSDR PRIVATE
     src/
     ${RNNOISE_DIR}/include
     ${RNNOISE_DIR}/src
@@ -840,55 +840,55 @@ target_include_directories(AetherSDR PRIVATE
     ${CMAKE_SOURCE_DIR}/third_party/r8brain
 )
 
-target_link_libraries(AetherSDR PRIVATE
+target_link_libraries(MasterSDR PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
     Qt6::Multimedia
-    aether_libmodem_core
+    mastersdr_libmodem_core
     zlibstatic           # bundled third_party/zlib 1.3.1
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
 
 if(Qt6SerialPort_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_SERIALPORT)
-    target_link_libraries(AetherSDR PRIVATE Qt6::SerialPort)
+    target_compile_definitions(MasterSDR PRIVATE HAVE_SERIALPORT)
+    target_link_libraries(MasterSDR PRIVATE Qt6::SerialPort)
 endif()
 
 if(Qt6WebSockets_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_WEBSOCKETS)
-    target_sources(AetherSDR PRIVATE src/core/FreeDvClient.cpp)
-    target_link_libraries(AetherSDR PRIVATE Qt6::WebSockets)
+    target_compile_definitions(MasterSDR PRIVATE HAVE_WEBSOCKETS)
+    target_sources(MasterSDR PRIVATE src/core/FreeDvClient.cpp)
+    target_link_libraries(MasterSDR PRIVATE Qt6::WebSockets)
 endif()
 
 if(Qt6Keychain_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_KEYCHAIN)
-    target_link_libraries(AetherSDR PRIVATE Qt6Keychain::Qt6Keychain)
+    target_compile_definitions(MasterSDR PRIVATE HAVE_KEYCHAIN)
+    target_link_libraries(MasterSDR PRIVATE Qt6Keychain::Qt6Keychain)
 endif()
 
 if(Qt6DBus_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_DBUS)
-    target_link_libraries(AetherSDR PRIVATE Qt6::DBus)
+    target_compile_definitions(MasterSDR PRIVATE HAVE_DBUS)
+    target_link_libraries(MasterSDR PRIVATE Qt6::DBus)
 endif()
 
-if(AETHER_GPU_SPECTRUM)
-    target_compile_definitions(AetherSDR PRIVATE AETHER_GPU_SPECTRUM)
+if(MASTERSDR_GPU_SPECTRUM)
+    target_compile_definitions(MasterSDR PRIVATE MASTERSDR_GPU_SPECTRUM)
 
-    # Apply the Debian include paths now that AetherSDR exists
+    # Apply the Debian include paths now that MasterSDR exists
     if(DEBIAN_GPU_FIX_REQUIRED)
-        message(STATUS "Applying Debian GPU include paths to AetherSDR")
-        target_include_directories(AetherSDR PRIVATE
+        message(STATUS "Applying Debian GPU include paths to MasterSDR")
+        target_include_directories(MasterSDR PRIVATE
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}"
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}/QtGui"
         )
     endif()
 
     if(TARGET Qt6::GuiPrivate)
-        target_link_libraries(AetherSDR PRIVATE Qt6::GuiPrivate)
+        target_link_libraries(MasterSDR PRIVATE Qt6::GuiPrivate)
     endif()
 
-    qt_add_shaders(AetherSDR "aether_shaders"
+    qt_add_shaders(MasterSDR "mastersdr_shaders"
         PREFIX "/shaders"
         FILES
             resources/shaders/texturedquad.vert
@@ -903,26 +903,26 @@ endif()
 # Bundled libmspack (LGPL-2.1) — CAB+LZX decompression for the v4.2+ MSI
 # firmware-installer extraction path. See third_party/libmspack/README.md.
 add_subdirectory(third_party/libmspack)
-target_link_libraries(AetherSDR PRIVATE mspack_static)
+target_link_libraries(MasterSDR PRIVATE mspack_static)
 
 # Bundled RtMidi (MIT license) — MIDI controller support on all platforms
 message(STATUS "MIDI controller support enabled (bundled RtMidi)")
-target_compile_definitions(AetherSDR PRIVATE HAVE_MIDI)
-target_sources(AetherSDR PRIVATE
+target_compile_definitions(MasterSDR PRIVATE HAVE_MIDI)
+target_sources(MasterSDR PRIVATE
     third_party/rtmidi/RtMidi.cpp
     src/core/MidiControlManager.cpp
     src/core/MidiSettings.cpp
     src/gui/MidiMappingDialog.cpp)
-target_include_directories(AetherSDR PRIVATE third_party/rtmidi)
+target_include_directories(MasterSDR PRIVATE third_party/rtmidi)
 if(APPLE)
-    target_compile_definitions(AetherSDR PRIVATE __MACOSX_CORE__)
-    target_link_libraries(AetherSDR PRIVATE "-framework CoreMIDI" "-framework CoreAudio" "-framework CoreFoundation" "-framework IOKit")
+    target_compile_definitions(MasterSDR PRIVATE __MACOSX_CORE__)
+    target_link_libraries(MasterSDR PRIVATE "-framework CoreMIDI" "-framework CoreAudio" "-framework CoreFoundation" "-framework IOKit")
 elseif(WIN32)
-    target_compile_definitions(AetherSDR PRIVATE __WINDOWS_MM__)
-    target_link_libraries(AetherSDR PRIVATE winmm)
+    target_compile_definitions(MasterSDR PRIVATE __WINDOWS_MM__)
+    target_link_libraries(MasterSDR PRIVATE winmm)
 else()
-    target_compile_definitions(AetherSDR PRIVATE __LINUX_ALSA__)
-    target_link_libraries(AetherSDR PRIVATE asound)
+    target_compile_definitions(MasterSDR PRIVATE __LINUX_ALSA__)
+    target_link_libraries(MasterSDR PRIVATE asound)
 endif()
 
 # hidapi — USB HID encoder support (Stream Deck, Icom RC-28, Griffin PowerMate, Contour Shuttle)
@@ -953,8 +953,8 @@ else()
 endif()
 if(HIDAPI_FOUND)
     message(STATUS "hidapi found — USB HID encoder support enabled")
-    target_compile_definitions(AetherSDR PRIVATE HAVE_HIDAPI)
-    target_sources(AetherSDR PRIVATE
+    target_compile_definitions(MasterSDR PRIVATE HAVE_HIDAPI)
+    target_sources(MasterSDR PRIVATE
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
@@ -970,13 +970,13 @@ if(HIDAPI_FOUND)
         endif()
     endforeach()
     list(REMOVE_DUPLICATES HIDAPI_NORMALIZED_INCLUDE_DIRS)
-    target_include_directories(AetherSDR PRIVATE ${HIDAPI_NORMALIZED_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${HIDAPI_LIBRARIES})
+    target_include_directories(MasterSDR PRIVATE ${HIDAPI_NORMALIZED_INCLUDE_DIRS})
+    target_link_libraries(MasterSDR PRIVATE ${HIDAPI_LIBRARIES})
     # Copy DLL to build dir on Windows
     if(WIN32 AND HIDAPI_DLL)
-        add_custom_command(TARGET AetherSDR POST_BUILD
+        add_custom_command(TARGET MasterSDR POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${HIDAPI_DLL}" "$<TARGET_FILE_DIR:AetherSDR>"
+                "${HIDAPI_DLL}" "$<TARGET_FILE_DIR:MasterSDR>"
             COMMENT "Copying hidapi.dll to build directory"
         )
     endif()
@@ -1020,86 +1020,86 @@ else()
 endif()
 
 if(PORTAUDIO_FOUND)
-    target_sources(AetherSDR PRIVATE src/core/CwSidetonePortAudioSink.cpp)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_PORTAUDIO)
-    target_include_directories(AetherSDR PRIVATE ${PORTAUDIO_INCLUDE_DIRS})
-    target_link_directories(AetherSDR PRIVATE ${PORTAUDIO_LIBRARY_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${PORTAUDIO_LIBRARIES})
+    target_sources(MasterSDR PRIVATE src/core/CwSidetonePortAudioSink.cpp)
+    target_compile_definitions(MasterSDR PRIVATE HAVE_PORTAUDIO)
+    target_include_directories(MasterSDR PRIVATE ${PORTAUDIO_INCLUDE_DIRS})
+    target_link_directories(MasterSDR PRIVATE ${PORTAUDIO_LIBRARY_DIRS})
+    target_link_libraries(MasterSDR PRIVATE ${PORTAUDIO_LIBRARIES})
 endif()
 
 if(FFTW3_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_FFTW3
+    target_compile_definitions(MasterSDR PRIVATE HAVE_FFTW3
         # On Windows lld-link (used by ClangCL) requires explicit dllimport
         # declarations; define FFTW_DLL so fftw3.h emits __declspec(dllimport)
         # and the linker can resolve __imp_fftwf_* symbols from the import lib.
         $<$<BOOL:${WIN32}>:FFTW_DLL>)
-    target_include_directories(AetherSDR PRIVATE ${FFTW3_INCLUDE_DIRS})
-    target_link_directories(AetherSDR PRIVATE ${FFTW3_LIBRARY_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${FFTW3_LIBRARIES})
+    target_include_directories(MasterSDR PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_link_directories(MasterSDR PRIVATE ${FFTW3_LIBRARY_DIRS})
+    target_link_libraries(MasterSDR PRIVATE ${FFTW3_LIBRARIES})
     # Copy DLL to build dir on Windows
     if(WIN32 AND FFTW3_DLL)
-        add_custom_command(TARGET AetherSDR POST_BUILD
+        add_custom_command(TARGET MasterSDR POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${FFTW3_DLL}" "$<TARGET_FILE_DIR:AetherSDR>"
+                "${FFTW3_DLL}" "$<TARGET_FILE_DIR:MasterSDR>"
             COMMENT "Copying libfftw3-3.dll to build directory"
         )
     endif()
 endif()
 
 if(ORT_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_ONNX)
-    target_include_directories(AetherSDR PRIVATE ${ORT_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${ORT_LIBRARIES})
+    target_compile_definitions(MasterSDR PRIVATE HAVE_ONNX)
+    target_include_directories(MasterSDR PRIVATE ${ORT_INCLUDE_DIRS})
+    target_link_libraries(MasterSDR PRIVATE ${ORT_LIBRARIES})
     if(WIN32 AND ORT_DLLS)
         foreach(_ort_dll IN LISTS ORT_DLLS)
-            add_custom_command(TARGET AetherSDR POST_BUILD
+            add_custom_command(TARGET MasterSDR POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_ort_dll}" "$<TARGET_FILE_DIR:AetherSDR>"
+                    "${_ort_dll}" "$<TARGET_FILE_DIR:MasterSDR>"
                 COMMENT "Copying ONNX Runtime DLL to build directory")
         endforeach()
     endif()
 endif()
 
 if(RADE_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_RADE HAVE_OPUS IS_BUILDING_RADE_API=1)
-    target_include_directories(AetherSDR PRIVATE ${RADE_DIR}/src)
+    target_compile_definitions(MasterSDR PRIVATE HAVE_RADE HAVE_OPUS IS_BUILDING_RADE_API=1)
+    target_include_directories(MasterSDR PRIVATE ${RADE_DIR}/src)
     if(WIN32)
-        target_link_libraries(AetherSDR PRIVATE opus)
+        target_link_libraries(MasterSDR PRIVATE opus)
     else()
-        target_link_libraries(AetherSDR PRIVATE opus m)
+        target_link_libraries(MasterSDR PRIVATE opus m)
     endif()
 elseif(OPUS_FOUND)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_OPUS)
-    target_include_directories(AetherSDR PRIVATE ${OPUS_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${OPUS_LIBRARIES})
+    target_compile_definitions(MasterSDR PRIVATE HAVE_OPUS)
+    target_include_directories(MasterSDR PRIVATE ${OPUS_INCLUDE_DIRS})
+    target_link_libraries(MasterSDR PRIVATE ${OPUS_LIBRARIES})
 endif()
 
 if(ENABLE_BNR)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_BNR)
-    target_include_directories(AetherSDR PRIVATE
+    target_compile_definitions(MasterSDR PRIVATE HAVE_BNR)
+    target_include_directories(MasterSDR PRIVATE
         ${BNR_GEN_DIR}
         ${GRPC_INCLUDE_DIRS}
         ${PROTOBUF_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${GRPC_LIBRARIES} ${PROTOBUF_LIBRARIES})
+    target_link_libraries(MasterSDR PRIVATE ${GRPC_LIBRARIES} ${PROTOBUF_LIBRARIES})
 endif()
 
 if(ENABLE_SPECBLEACH)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_SPECBLEACH)
-    target_include_directories(AetherSDR PRIVATE
+    target_compile_definitions(MasterSDR PRIVATE HAVE_SPECBLEACH)
+    target_include_directories(MasterSDR PRIVATE
         ${CMAKE_SOURCE_DIR}/third_party/libspecbleach/include
         ${CMAKE_SOURCE_DIR}/third_party/libspecbleach/src)
     if(MSVC AND SPECBLEACH_STATIC_LIB)
         # Link pre-built clang-cl static lib
-        add_dependencies(AetherSDR specbleach_build)
-        target_link_libraries(AetherSDR PRIVATE ${SPECBLEACH_STATIC_LIB})
+        add_dependencies(MasterSDR specbleach_build)
+        target_link_libraries(MasterSDR PRIVATE ${SPECBLEACH_STATIC_LIB})
         # fftw3f (float precision) for Windows
         set(FFTW3F_LIB "${CMAKE_SOURCE_DIR}/third_party/fftw3/lib/fftw3f.lib")
         if(EXISTS ${FFTW3F_LIB})
-            target_link_libraries(AetherSDR PRIVATE ${FFTW3F_LIB})
+            target_link_libraries(MasterSDR PRIVATE ${FFTW3F_LIB})
             set(FFTW3F_DLL "${CMAKE_SOURCE_DIR}/third_party/fftw3/bin/libfftw3f-3.dll")
-            add_custom_command(TARGET AetherSDR POST_BUILD
+            add_custom_command(TARGET MasterSDR POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${FFTW3F_DLL}" "$<TARGET_FILE_DIR:AetherSDR>"
+                    "${FFTW3F_DLL}" "$<TARGET_FILE_DIR:MasterSDR>"
                 COMMENT "Copying libfftw3f-3.dll to build directory")
         else()
             message(WARNING "fftw3f.lib not found — run setup-fftw.ps1 and gen-fftw3f-lib.bat")
@@ -1107,17 +1107,17 @@ if(ENABLE_SPECBLEACH)
     else()
         # libspecbleach C sources include <fftw3.h> directly — ensure it's findable
         if(FFTW3_INCLUDE_DIRS)
-            target_include_directories(AetherSDR PRIVATE ${FFTW3_INCLUDE_DIRS})
+            target_include_directories(MasterSDR PRIVATE ${FFTW3_INCLUDE_DIRS})
         else()
             find_path(FFTW3_H_DIR fftw3.h HINTS ${CMAKE_SOURCE_DIR}/third_party/fftw3/include)
             if(FFTW3_H_DIR)
-                target_include_directories(AetherSDR PRIVATE ${FFTW3_H_DIR})
+                target_include_directories(MasterSDR PRIVATE ${FFTW3_H_DIR})
             endif()
         endif()
         # libspecbleach uses fftwf (float precision FFTW3)
         find_library(FFTW3F_LIB fftw3f HINTS /opt/homebrew/lib /usr/local/lib ${CMAKE_SOURCE_DIR}/third_party/fftw3/lib)
         if(FFTW3F_LIB)
-            target_link_libraries(AetherSDR PRIVATE ${FFTW3F_LIB})
+            target_link_libraries(MasterSDR PRIVATE ${FFTW3F_LIB})
         else()
             message(WARNING "fftw3f not found — NR4 will fail to link")
         endif()
@@ -1127,23 +1127,23 @@ if(ENABLE_SPECBLEACH)
 endif()
 
 if(ENABLE_DFNR)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_DFNR)
-    target_include_directories(AetherSDR PRIVATE ${DEEPFILTER_DIR}/include)
-    target_link_libraries(AetherSDR PRIVATE ${DFNR_LIB})
+    target_compile_definitions(MasterSDR PRIVATE HAVE_DFNR)
+    target_include_directories(MasterSDR PRIVATE ${DEEPFILTER_DIR}/include)
+    target_link_libraries(MasterSDR PRIVATE ${DFNR_LIB})
     if(WIN32)
-        target_link_libraries(AetherSDR PRIVATE ws2_32 bcrypt userenv ntdll)
+        target_link_libraries(MasterSDR PRIVATE ws2_32 bcrypt userenv ntdll)
     elseif(APPLE)
         # Rust runtime deps on macOS
-        target_link_libraries(AetherSDR PRIVATE "-framework Security" "-framework CoreFoundation")
+        target_link_libraries(MasterSDR PRIVATE "-framework Security" "-framework CoreFoundation")
     else()
         # Rust runtime deps on Linux
-        target_link_libraries(AetherSDR PRIVATE pthread dl m)
+        target_link_libraries(MasterSDR PRIVATE pthread dl m)
     endif()
     # Copy DLL and model to build directory
     if(DFNR_DLL AND EXISTS ${DFNR_DLL})
-        add_custom_command(TARGET AetherSDR POST_BUILD
+        add_custom_command(TARGET MasterSDR POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${DFNR_DLL}" "$<TARGET_FILE_DIR:AetherSDR>"
+                "${DFNR_DLL}" "$<TARGET_FILE_DIR:MasterSDR>"
             COMMENT "Copying deepfilter.dll to build directory")
     endif()
     set(DFNR_MODEL "${DEEPFILTER_DIR}/models/DeepFilterNet3_onnx.tar.gz")
@@ -1151,57 +1151,57 @@ if(ENABLE_DFNR)
         if(APPLE)
             # macOS: place in Resources/ so notarization doesn't reject a
             # non-Mach-O file inside Contents/MacOS/
-            add_custom_command(TARGET AetherSDR POST_BUILD
+            add_custom_command(TARGET MasterSDR POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E make_directory
-                    "$<TARGET_BUNDLE_DIR:AetherSDR>/Contents/Resources"
+                    "$<TARGET_BUNDLE_DIR:MasterSDR>/Contents/Resources"
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${DFNR_MODEL}" "$<TARGET_BUNDLE_DIR:AetherSDR>/Contents/Resources/"
+                    "${DFNR_MODEL}" "$<TARGET_BUNDLE_DIR:MasterSDR>/Contents/Resources/"
                 COMMENT "Copying DeepFilterNet3 model to app bundle Resources")
         else()
-            add_custom_command(TARGET AetherSDR POST_BUILD
+            add_custom_command(TARGET MasterSDR POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${DFNR_MODEL}" "$<TARGET_FILE_DIR:AetherSDR>"
+                    "${DFNR_MODEL}" "$<TARGET_FILE_DIR:MasterSDR>"
                 COMMENT "Copying DeepFilterNet3 model to build directory")
         endif()
     endif()
     # Install the model alongside the binary for cmake --install
     if(NOT APPLE)
         install(FILES "${DFNR_MODEL}"
-            DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/AetherSDR"
+            DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/MasterSDR"
             OPTIONAL)
     endif()
 endif()
 
 if(ENABLE_MQTT)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT)
-    target_include_directories(AetherSDR PRIVATE
+    target_compile_definitions(MasterSDR PRIVATE HAVE_MQTT)
+    target_include_directories(MasterSDR PRIVATE
         ${MOSQUITTO_DIR}/include
         ${MOSQUITTO_DIR}/src)
-    target_sources(AetherSDR PRIVATE ${MOSQUITTO_SOURCES})
+    target_sources(MasterSDR PRIVATE ${MOSQUITTO_SOURCES})
     if(OpenSSL_FOUND)
         set(MQTT_TLS_FLAG " -DWITH_TLS")
-        target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT_TLS)
-        target_link_libraries(AetherSDR PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        target_compile_definitions(MasterSDR PRIVATE HAVE_MQTT_TLS)
+        target_link_libraries(MasterSDR PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     else()
         set(MQTT_TLS_FLAG "")
     endif()
     if(WIN32)
         set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES
             COMPILE_FLAGS "-w -DLIBMOSQUITTO_STATIC -DLIBMOSQCOMMON_STATIC${MQTT_TLS_FLAG}")
-        target_compile_definitions(AetherSDR PRIVATE LIBMOSQUITTO_STATIC LIBMOSQCOMMON_STATIC)
+        target_compile_definitions(MasterSDR PRIVATE LIBMOSQUITTO_STATIC LIBMOSQCOMMON_STATIC)
     else()
         set_source_files_properties(${MOSQUITTO_SOURCES} PROPERTIES
             COMPILE_FLAGS "-w -DWITH_THREADING${MQTT_TLS_FLAG}")
     endif()
     if(NOT WIN32)
-        target_link_libraries(AetherSDR PRIVATE pthread)
+        target_link_libraries(MasterSDR PRIVATE pthread)
     endif()
 endif()
 
-if(AETHER_GPU_SPECTRUM)
-    target_compile_definitions(AetherSDR PRIVATE AETHER_GPU_SPECTRUM)
+if(MASTERSDR_GPU_SPECTRUM)
+    target_compile_definitions(MasterSDR PRIVATE MASTERSDR_GPU_SPECTRUM)
     if(TARGET Qt6::GuiPrivate)
-        target_link_libraries(AetherSDR PRIVATE Qt6::GuiPrivate)
+        target_link_libraries(MasterSDR PRIVATE Qt6::GuiPrivate)
     else()
         # Qt6::GuiPrivate not available (macOS/skipped) — find rhi/ headers manually
         get_target_property(_qt_gui_inc Qt6::Gui INTERFACE_INCLUDE_DIRECTORIES)
@@ -1214,14 +1214,14 @@ if(AETHER_GPU_SPECTRUM)
             file(GLOB _priv_dirs "${_dir}/${Qt6_VERSION}/QtGui")
             foreach(_pd IN LISTS _priv_dirs)
                 if(EXISTS "${_pd}/rhi/qrhi.h")
-                    target_include_directories(AetherSDR PRIVATE "${_pd}/..")
+                    target_include_directories(MasterSDR PRIVATE "${_pd}/..")
                     message(STATUS "QRhi headers found at ${_pd}/rhi/")
                     break()
                 endif()
             endforeach()
         endforeach()
     endif()
-    qt_add_shaders(AetherSDR "aether_shaders"
+    qt_add_shaders(MasterSDR "mastersdr_shaders"
         PREFIX "/shaders"
         FILES
             resources/shaders/texturedquad.vert
@@ -1234,33 +1234,33 @@ if(AETHER_GPU_SPECTRUM)
 endif()
 
 if(HAVE_PIPEWIRE)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_PIPEWIRE)
+    target_compile_definitions(MasterSDR PRIVATE HAVE_PIPEWIRE)
     message(STATUS "Linux DAX bridge enabled (PulseAudio pipe modules)")
 endif()
 
 if(HAVE_PIPEWIRE_NATIVE)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_PIPEWIRE_NATIVE)
-    target_include_directories(AetherSDR PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${PIPEWIRE_NATIVE_LIBRARIES})
-    target_compile_options(AetherSDR PRIVATE ${PIPEWIRE_NATIVE_CFLAGS_OTHER})
+    target_compile_definitions(MasterSDR PRIVATE HAVE_PIPEWIRE_NATIVE)
+    target_include_directories(MasterSDR PRIVATE ${PIPEWIRE_NATIVE_INCLUDE_DIRS})
+    target_link_libraries(MasterSDR PRIVATE ${PIPEWIRE_NATIVE_LIBRARIES})
+    target_compile_options(MasterSDR PRIVATE ${PIPEWIRE_NATIVE_CFLAGS_OTHER})
     message(STATUS "Linux DAX RX uses native pw_stream (libpipewire-0.3 ${PIPEWIRE_NATIVE_VERSION})")
 endif()
 
 # Pass project version to code
-target_compile_definitions(AetherSDR PRIVATE
-    AETHERSDR_VERSION="${PROJECT_VERSION}"
+target_compile_definitions(MasterSDR PRIVATE
+    MASTERSDR_VERSION="${PROJECT_VERSION}"
 )
 
 # Compiler warnings
 if(MSVC)
-    target_compile_options(AetherSDR PRIVATE /W3 /Zc:__cplusplus /permissive- /utf-8 /bigobj)
+    target_compile_options(MasterSDR PRIVATE /W3 /Zc:__cplusplus /permissive- /utf-8 /bigobj)
 else()
-    target_compile_options(AetherSDR PRIVATE
+    target_compile_options(MasterSDR PRIVATE
         -Wall -Wextra -Wpedantic
         $<$<CONFIG:Debug>:-g3 -fsanitize=address>
         $<$<CONFIG:Debug>:-fno-omit-frame-pointer>
     )
-    target_link_options(AetherSDR PRIVATE
+    target_link_options(MasterSDR PRIVATE
         $<$<CONFIG:Debug>:-fsanitize=address>
     )
 endif()
@@ -1498,7 +1498,7 @@ add_test(NAME ax25_frame_formatter_test COMMAND ax25_frame_formatter_test)
 
 add_executable(ax25_libmodem_shim_test
     tests/ax25_libmodem_shim_test.cpp
-    src/core/tnc/AetherAx25LibmodemShim.cpp
+    src/core/tnc/MasterAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
     # LogManager.cpp provides lcAx25 (the shim's qCDebug category, #2763);
     # LogManager.cpp depends on AsyncLogWriter via the m_writer member, so
@@ -1509,7 +1509,7 @@ add_executable(ax25_libmodem_shim_test
     src/core/AppSettings.cpp
 )
 target_include_directories(ax25_libmodem_shim_test PRIVATE src)
-target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core)
+target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core mastersdr_libmodem_core)
 add_test(NAME ax25_libmodem_shim_test COMMAND ax25_libmodem_shim_test)
 
 add_executable(cwx_panel_test
@@ -1680,18 +1680,18 @@ set_target_properties(container_nesting_test PROPERTIES AUTOMOC ON)
 include(GNUInstallDirs)
 
 if(APPLE)
-    install(TARGETS AetherSDR
+    install(TARGETS MasterSDR
         BUNDLE DESTINATION .
     )
 else()
-    install(TARGETS AetherSDR
+    install(TARGETS MasterSDR
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
-    install(FILES AetherSDR.desktop
+    install(FILES MasterSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )
     install(FILES docs/logo-circle.png
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps
-        RENAME aethersdr.png
+        RENAME MasterSDR.png
     )
 endif()

@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QtGlobal>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Shared asymmetric attack / release envelope follower for UI meter
 // bars.  Every metering surface in the app (HGauge, ClientCompMeter,
@@ -110,4 +110,4 @@ private:
 // smoothly, cheap enough to run on every active meter simultaneously.
 constexpr int kMeterSmootherIntervalMs = 8;
 
-} // namespace AetherSDR
+} // namespace MasterSDR

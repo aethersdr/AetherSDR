@@ -1,4 +1,4 @@
-#include "CwxPanel.h"
+﻿#include "CwxPanel.h"
 #include "models/CwxModel.h"
 
 #include <QVBoxLayout>
@@ -20,7 +20,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── Painted chat bubble widget ──────────────────────────────────────────
 class CwxBubble : public QWidget {
@@ -450,10 +450,10 @@ void CwxPanel::onSpeedChanged(int wpm)
     m_speedSpin->setValue(wpm);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 // Event filter for text edit — handle Enter and per-key sending
-bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
+bool MasterSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
 {
     if (obj == m_textEdit && event->type() == QEvent::KeyPress) {
         auto* ke = static_cast<QKeyEvent*>(event);
@@ -508,7 +508,7 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
     return QWidget::eventFilter(obj, event);
 }
 
-void AetherSDR::CwxPanel::resendText(const QString& text)
+void MasterSDR::CwxPanel::resendText(const QString& text)
 {
     if (!m_model || !m_historyLayout || text.isEmpty()) { return; }
     QString ts = QDateTime::currentDateTime().toString("HH:mm:ss");
@@ -522,7 +522,7 @@ void AetherSDR::CwxPanel::resendText(const QString& text)
     m_model->send(text);
 }
 
-void AetherSDR::CwxPanel::clearHistory()
+void MasterSDR::CwxPanel::clearHistory()
 {
     if (!m_historyLayout) { return; }
     // Index 0 is the stretch spacer added in buildSendView(); indices 1+ are bubbles.

@@ -1,7 +1,7 @@
-#include "CommandParser.h"
+﻿#include "CommandParser.h"
 #include <QStringList>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ─── Static helpers ──────────────────────────────────────────────────────────
 
@@ -128,4 +128,4 @@ QByteArray CommandParser::buildCommand(quint32 seq, const QString& command)
     return QString("C%1|%2\n").arg(seq).arg(command).toUtf8();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

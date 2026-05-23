@@ -1,4 +1,4 @@
-# AetherSDR — Project Context for Claude
+﻿# MasterSDR — Project Context for Claude
 
 ## Project Goal
 
@@ -9,7 +9,7 @@ look, feel, and every function SmartSDR is capable of. The reference radio is a
 
 ## AI Agent Guidelines
 
-When helping with AetherSDR:
+When helping with MasterSDR:
 - Prefer C++20 / Qt6 idioms (std::ranges, concepts if clean, Qt signals/slots over lambdas when possible)
 - Keep classes small and single-responsibility
 - Use RAII everywhere (no naked new/delete)
@@ -25,7 +25,7 @@ When helping with AetherSDR:
 
 ### Autonomous Agent Boundaries
 
-AI agents (including AetherClaude/pi-claude) may autonomously fix:
+AI agents (including MasterClaude/pi-claude) may autonomously fix:
 - **Bugs with clear root cause** — persistence missing, guard missing, crash fix
 - **Protocol compliance** — matching SmartSDR behavior confirmed by pcap/FlexLib
 - **Build/CI fixes** — missing dependencies, platform compat
@@ -59,7 +59,7 @@ is the sole authority on visual design and UX direction.
 ```bash
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
-./build/AetherSDR
+./build/MasterSDR
 ```
 
 Full dependency list is in `README.md` — don't duplicate it here.
@@ -73,7 +73,7 @@ Earlier tags used semver through v0.9.8.
 
 ## CI/CD Workflow
 
-CI runs in Docker image `ghcr.io/ten9876/aethersdr-ci:latest` (~3.5 min builds).
+CI runs in Docker image `ghcr.io/ten9876/MasterSDR-ci:latest` (~3.5 min builds).
 **If you add a new `find_package(...)` to CMakeLists.txt, also add the
 corresponding `-dev` package to `.github/docker/Dockerfile` and push.** The
 `docker-ci-image.yml` workflow rebuilds the image automatically (~3 min); wait
@@ -131,7 +131,7 @@ key=value pairs by locating the last space before the first `=` sign.
 1. TCP connect → radio sends `V<version>` then `H<handle>`
 2. `sub <topic> all` for each of: `slice`, `pan`, `tx`, `amplifier`, `atu`,
    `meter`, `audio`, `gps`, `apd`, `client`, `xvtr`
-3. `client gui` + `client program AetherSDR` + `client station AetherSDR`
+3. `client gui` + `client program MasterSDR` + `client station MasterSDR`
 4. Bind UDP socket, send `\x00` to radio:4992 (port registration)
 5. `client udpport <port>` (returns error 0x50001000 on v1.4.0.0 — expected)
 6. `slice list` → if empty, create default slice (14.225 MHz USB ANT1)
@@ -190,9 +190,9 @@ document why.
 
 ### Settings Persistence (AppSettings — NOT QSettings)
 
-**IMPORTANT:** Do NOT use `QSettings` anywhere in AetherSDR. All client-side
+**IMPORTANT:** Do NOT use `QSettings` anywhere in MasterSDR. All client-side
 settings are stored via `AppSettings` (`src/core/AppSettings.h`), which writes
-an XML file at `~/.config/AetherSDR/AetherSDR.settings`. Key names use
+an XML file at `~/.config/MasterSDR/MasterSDR.settings`. Key names use
 PascalCase (e.g. `LastConnectedRadioSerial`, `DisplayFftAverage`). Boolean
 values are stored as `"True"` / `"False"` strings.
 
@@ -220,7 +220,7 @@ Run once at app or feature startup, not on every access.
 
 ### Radio-Authoritative Settings Policy
 
-**The radio is always authoritative for any setting it stores.** AetherSDR
+**The radio is always authoritative for any setting it stores.** MasterSDR
 must never save, recall, or override radio-side settings from client-side
 persistence. Only save client-side settings for things the radio does NOT save.
 

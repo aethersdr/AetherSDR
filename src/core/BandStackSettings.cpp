@@ -1,4 +1,4 @@
-#include "BandStackSettings.h"
+﻿#include "BandStackSettings.h"
 
 #include <QStandardPaths>
 #include <QDir>
@@ -10,12 +10,12 @@
 
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 BandStackSettings::BandStackSettings()
 {
     m_filePath = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                 + "/AetherSDR/BandStack.settings";
+                 + "/MasterSDR/BandStack.settings";
 }
 
 BandStackSettings& BandStackSettings::instance()
@@ -245,4 +245,4 @@ void BandStackSettings::save()
     QFile::rename(tmpPath, m_filePath);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,10 +1,10 @@
-#include "AntennaAliasStore.h"
+﻿#include "AntennaAliasStore.h"
 #include "core/AppSettings.h"
 
 #include <QJsonDocument>
 #include <QJsonObject>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -92,4 +92,4 @@ QString AntennaAliasStore::shortDisplayName(const QMap<QString, QString>& aliase
     return label;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

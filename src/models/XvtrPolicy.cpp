@@ -1,11 +1,11 @@
-#include "XvtrPolicy.h"
+﻿#include "XvtrPolicy.h"
 
 #include <QMap>
 #include <QSet>
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR::XvtrPolicy {
+namespace MasterSDR::XvtrPolicy {
 
 namespace {
 
@@ -135,4 +135,4 @@ WaterfallTileRange mapWaterfallTileRange(double lowMhz, double highMhz,
     return {lowMhz + offset, highMhz + offset, true};
 }
 
-} // namespace AetherSDR::XvtrPolicy
+} // namespace MasterSDR::XvtrPolicy

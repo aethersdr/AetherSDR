@@ -1,10 +1,10 @@
-#include "ClientReverb.h"
+﻿#include "ClientReverb.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -328,4 +328,4 @@ void ClientReverb::process(float* interleaved, int frames, int channels) noexcep
                      std::memory_order_relaxed);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

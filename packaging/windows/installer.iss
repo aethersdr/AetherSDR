@@ -1,4 +1,4 @@
-; AetherSDR Inno Setup Installer Script
+﻿; MasterSDR Inno Setup Installer Script
 ; Version is passed via /DAPP_VERSION=x.y.z from the CI workflow
 
 #ifndef APP_VERSION
@@ -6,18 +6,18 @@
 #endif
 
 [Setup]
-AppName=AetherSDR
+AppName=MasterSDR
 AppVersion={#APP_VERSION}
-AppPublisher=AetherSDR Project
-AppPublisherURL=https://github.com/ten9876/AetherSDR
-AppSupportURL=https://github.com/ten9876/AetherSDR/issues
-AppCopyright=Copyright (C) AetherSDR contributors
+AppPublisher=MasterSDR Project
+AppPublisherURL=https://github.com/ten9876/MasterSDR
+AppSupportURL=https://github.com/ten9876/MasterSDR/issues
+AppCopyright=Copyright (C) MasterSDR contributors
 LicenseFile=..\..\LICENSE
-DefaultDirName={autopf}\AetherSDR
-DefaultGroupName=AetherSDR
-UninstallDisplayIcon={app}\AetherSDR.exe
-SetupIconFile=..\..\docs\AetherSDR.ico
-OutputBaseFilename=AetherSDR-v{#APP_VERSION}-Windows-x64-setup
+DefaultDirName={autopf}\MasterSDR
+DefaultGroupName=MasterSDR
+UninstallDisplayIcon={app}\MasterSDR.exe
+SetupIconFile=..\..\docs\MasterSDR.ico
+OutputBaseFilename=MasterSDR-v{#APP_VERSION}-Windows-x64-setup
 OutputDir=..\..
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -50,9 +50,9 @@ Source: "..\..\deploy\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 #endif
 
 [Icons]
-Name: "{group}\AetherSDR"; Filename: "{app}\AetherSDR.exe"
-Name: "{group}\Uninstall AetherSDR"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\AetherSDR"; Filename: "{app}\AetherSDR.exe"; Tasks: desktopicon
+Name: "{group}\MasterSDR"; Filename: "{app}\MasterSDR.exe"
+Name: "{group}\Uninstall MasterSDR"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\MasterSDR"; Filename: "{app}\MasterSDR.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\AetherSDR.exe"; Description: "Launch AetherSDR"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\MasterSDR.exe"; Description: "Launch MasterSDR"; Flags: nowait postinstall skipifsilent

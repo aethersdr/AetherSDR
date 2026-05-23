@@ -1,8 +1,8 @@
-#include "Resampler.h"
+﻿#include "Resampler.h"
 
 #include "CDSPResampler.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 Resampler::Resampler(double srcRate, double dstRate, int maxBlockSamples)
     : m_srcRate(srcRate)
@@ -141,4 +141,4 @@ QByteArray Resampler::processStereoToStereo(const float* stereoIn, int numStereo
     return result;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

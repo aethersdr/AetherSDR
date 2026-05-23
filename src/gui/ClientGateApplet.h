@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QPushButton;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class ClientCompKnob;
@@ -68,4 +68,4 @@ private:
     float m_grDb{0.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,8 +1,8 @@
-# TX Audio Sync Fix Report (DAX + SSB)
+﻿# TX Audio Sync Fix Report (DAX + SSB)
 
 ## Executive Summary
 
-This report documents how the TX audio timing issue was fixed in AetherSDR, including:
+This report documents how the TX audio timing issue was fixed in MasterSDR, including:
 
 - The original DAX edge-sync problem (unstable start/stop timing).
 - The SSB regression introduced during iterative tuning (voice delay after PTT).

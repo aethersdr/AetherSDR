@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QVector>
@@ -11,7 +11,7 @@ class QPushButton;
 class QTextEdit;
 class QGridLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class MqttClient;
 
@@ -80,4 +80,4 @@ private:
     QVector<MqttTopicDef> m_topicDefs;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

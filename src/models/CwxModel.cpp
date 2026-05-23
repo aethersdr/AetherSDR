@@ -1,8 +1,8 @@
-#include "CwxModel.h"
+﻿#include "CwxModel.h"
 #include <QDebug>
 #include <QMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 CwxModel::CwxModel(QObject* parent)
     : QObject(parent)
@@ -165,4 +165,4 @@ void CwxModel::applyStatus(const QMap<QString, QString>& kvs)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

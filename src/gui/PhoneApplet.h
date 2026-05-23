@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -7,7 +7,7 @@ class QLabel;
 class QSlider;
 class ScrollableLabel;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class TransmitModel;
 
@@ -66,4 +66,4 @@ private:
     bool m_updatingFromModel{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

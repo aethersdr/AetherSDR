@@ -1,9 +1,9 @@
-#include "RigctlServer.h"
+﻿#include "RigctlServer.h"
 #include "LogManager.h"
 #include "RigctlProtocol.h"
 #include "models/RadioModel.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 RigctlServer::RigctlServer(RadioModel* model, QObject* parent)
     : QObject(parent)
@@ -149,4 +149,4 @@ void RigctlServer::onClientDisconnected()
     emit clientCountChanged(m_clients.size());
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

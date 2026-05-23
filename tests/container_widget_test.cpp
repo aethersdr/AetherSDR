@@ -1,4 +1,4 @@
-// Phase 1 smoke tests for the container system — exercises the
+﻿// Phase 1 smoke tests for the container system — exercises the
 // ContainerWidget <-> FloatingContainerWindow float/dock cycle.
 //
 // Headless-ish: uses QApplication so the widgets can instantiate and
@@ -16,7 +16,7 @@
 #include <QWidget>
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

@@ -1,10 +1,10 @@
-#include "core/PacketLossConcealment.h"
+﻿#include "core/PacketLossConcealment.h"
 
 #include <QByteArray>
 #include <cmath>
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

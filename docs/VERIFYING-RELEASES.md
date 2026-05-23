@@ -1,4 +1,4 @@
-# Verifying AetherSDR Releases
+﻿# Verifying MasterSDR Releases
 
 ## Signing Overview
 
@@ -23,7 +23,7 @@ Linux and source artifacts.
 From the repository:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/aethersdr/AetherSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
+curl -sSL https://raw.githubusercontent.com/MasterSDR/MasterSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
 ```
 
 Or from keys.openpgp.org:
@@ -37,7 +37,7 @@ gpg --keyserver keys.openpgp.org --recv-keys <KEY_ID>
 ### Option 1: Verify the artifact directly
 
 ```bash
-gpg --verify AetherSDR-v1.0.0-x86_64.AppImage.asc AetherSDR-v1.0.0-x86_64.AppImage
+gpg --verify MasterSDR-v1.0.0-x86_64.AppImage.asc MasterSDR-v1.0.0-x86_64.AppImage
 ```
 
 ### Option 2: Verify checksums first, then check the file
@@ -47,7 +47,7 @@ gpg --verify SHA256SUMS.txt.asc SHA256SUMS.txt
 sha256sum -c SHA256SUMS.txt
 ```
 
-Expected output should show **"Good signature from AetherSDR Release Signing"**.
+Expected output should show **"Good signature from MasterSDR Release Signing"**.
 
 GPG is typically pre-installed on Linux. If not:
 
@@ -74,7 +74,7 @@ without an EV code signing certificate. To verify the download:
 ```powershell
 # Install Gpg4win from https://gpg4win.org/
 gpg --import RELEASE-SIGNING-KEY.pub.asc
-gpg --verify AetherSDR-Setup-vX.Y.Z.exe.asc AetherSDR-Setup-vX.Y.Z.exe
+gpg --verify MasterSDR-Setup-vX.Y.Z.exe.asc MasterSDR-Setup-vX.Y.Z.exe
 ```
 
 ## Commit Signing

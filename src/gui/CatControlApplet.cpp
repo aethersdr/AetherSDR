@@ -1,4 +1,4 @@
-#include "CatControlApplet.h"
+﻿#include "CatControlApplet.h"
 #include "SliceColorManager.h"
 #include "core/RigctlServer.h"
 #include "core/RigctlPty.h"
@@ -11,7 +11,7 @@
 #include <QPushButton>
 #include <QLineEdit>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -183,7 +183,7 @@ void CatControlApplet::buildUI()
 
         // PTY path
         m_rows[i].ptyPath = new QLabel(
-            QStringLiteral("/tmp/AetherSDR-CAT-%1").arg(kLetters[i]));
+            QStringLiteral("/tmp/MasterSDR-CAT-%1").arg(kLetters[i]));
         m_rows[i].ptyPath->setStyleSheet("QLabel { color: #506070; font-size: 10px; }");
         row->addWidget(m_rows[i].ptyPath, 1);
 
@@ -228,7 +228,7 @@ void CatControlApplet::setRigctlPtys(RigctlPty** ptys, int count)
                     [this, i]() {
                         static const char kLetters[] = "ABCD";
                         m_rows[i].ptyPath->setText(
-                            QStringLiteral("/tmp/AetherSDR-CAT-%1").arg(kLetters[i]));
+                            QStringLiteral("/tmp/MasterSDR-CAT-%1").arg(kLetters[i]));
                     });
         }
     }
@@ -279,4 +279,4 @@ void CatControlApplet::setPtyEnabled(bool on)
     updateAllChannelStatus();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

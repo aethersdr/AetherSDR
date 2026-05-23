@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <QJsonObject>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 
@@ -45,4 +45,4 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
 void annotateSliceAudioRoutes(QJsonObject* snapshot, const QJsonObject& audioDevices);
 
 } // namespace DeviceDiagnostics
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#ifdef HAVE_SPECBLEACH
+﻿#ifdef HAVE_SPECBLEACH
 
 #include "SpecbleachFilter.h"
 #include <specbleach_denoiser.h>
@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static constexpr int kSampleRate = 24000;
 static constexpr float kFrameSizeMs = 40.0f;  // 40ms frames (~960 samples)
@@ -113,6 +113,6 @@ void SpecbleachFilter::setNoiseEstimationMethod(int m) { m_noiseMethod = std::cl
 void SpecbleachFilter::setMaskingDepth(float v)        { m_maskingDepth = std::clamp(v, 0.0f, 1.0f); m_paramsDirty = true; }
 void SpecbleachFilter::setSuppressionStrength(float v) { m_suppression = std::clamp(v, 0.0f, 1.0f); m_paramsDirty = true; }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_SPECBLEACH

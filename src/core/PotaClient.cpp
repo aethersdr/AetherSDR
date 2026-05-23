@@ -1,4 +1,4 @@
-#include "PotaClient.h"
+﻿#include "PotaClient.h"
 #include "LogManager.h"
 #include "AppSettings.h"
 
@@ -11,7 +11,7 @@
 #include <QDir>
 #include <QFileInfo>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 PotaClient::PotaClient(QObject* parent)
     : QObject(parent)
@@ -37,7 +37,7 @@ PotaClient::~PotaClient()
 QString PotaClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/pota.log";
+           + "/MasterSDR/pota.log";
 }
 
 void PotaClient::startPolling(int intervalSec)
@@ -75,7 +75,7 @@ void PotaClient::stopPolling()
 void PotaClient::onPollTimer()
 {
     QNetworkRequest req{QUrl{ApiUrl}};
-    req.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
+    req.setHeader(QNetworkRequest::UserAgentHeader, "MasterSDR");
     auto* reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         reply->deleteLater();
@@ -164,4 +164,4 @@ void PotaClient::onPollTimer()
     });
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

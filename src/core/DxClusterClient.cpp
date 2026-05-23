@@ -1,4 +1,4 @@
-#include "DxClusterClient.h"
+﻿#include "DxClusterClient.h"
 #include "AppSettings.h"
 #include "LogManager.h"
 
@@ -9,7 +9,7 @@
 #include <QStringList>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 DxClusterClient::DxClusterClient(QObject* parent)
     : QObject(parent)
@@ -46,7 +46,7 @@ DxClusterClient::~DxClusterClient()
 QString DxClusterClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/" + m_logFileName;
+           + "/MasterSDR/" + m_logFileName;
 }
 
 void DxClusterClient::connectToCluster(const QString& host, quint16 port, const QString& callsign)
@@ -324,4 +324,4 @@ bool DxClusterClient::parseDxSpotLine(const QString& line, DxSpot& spot) const
     return spot.freqMhz > 0.0 && !spot.dxCall.isEmpty();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

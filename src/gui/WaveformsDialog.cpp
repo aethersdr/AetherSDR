@@ -1,4 +1,4 @@
-#include "WaveformsDialog.h"
+﻿#include "WaveformsDialog.h"
 #include "models/FlexWaveformModel.h"
 
 #include <QFrame>
@@ -9,7 +9,7 @@
 #include <QScrollArea>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 WaveformsDialog::WaveformsDialog(FlexWaveformModel* model, QWidget* parent)
     : PersistentDialog(tr("Waveforms"), QStringLiteral("WaveformsDialogGeometry"), parent)
@@ -153,4 +153,4 @@ void WaveformsDialog::refreshWaveformList()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

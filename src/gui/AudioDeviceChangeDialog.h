@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QAudioDevice>
 #include <QByteArray>
@@ -9,7 +9,7 @@ class QListWidget;
 class QVBoxLayout;
 class QWidget;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioDeviceChangeDialog : public QDialog {
 public:
@@ -37,4 +37,4 @@ private:
     QList<QAudioDevice> m_outputDevices;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

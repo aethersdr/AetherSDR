@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Per-audio-stream packet-loss concealment state.  Plain-data struct
 // owned by PanadapterStream's per-stream map; mutated by
@@ -33,4 +33,4 @@ constexpr int kMaxConcealPackets = 8;
 QByteArray applyConcealmentFade(QByteArray pcm, AudioPlcState& plc,
                                 bool enabled);
 
-} // namespace AetherSDR
+} // namespace MasterSDR

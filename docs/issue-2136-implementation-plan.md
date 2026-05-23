@@ -1,4 +1,4 @@
-# Implementation Plan: Issue #2136 — FlexWaveformModel
+﻿# Implementation Plan: Issue #2136 — FlexWaveformModel
 
 **Date:** 2026-05-16
 **Branch:** `feat/flex-waveform-model`
@@ -125,4 +125,4 @@ Five test cases:
 6. Audited build output — no warnings from our files
 7. Squash all commits to one
 8. `git push fork feat/flex-waveform-model`
-9. PR opened against `ten9876/AetherSDR`
+9. PR opened against `ten9876/MasterSDR`

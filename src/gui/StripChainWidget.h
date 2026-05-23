@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "core/AudioEngine.h"
 
 #include <QVector>
 #include <QWidget>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Visual TX DSP signal chain.  Paints a horizontal strip:
 //
@@ -117,4 +117,4 @@ private:
     int           m_pendingClickIdx{-1};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

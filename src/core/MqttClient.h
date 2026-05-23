@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QString>
@@ -12,7 +12,7 @@ struct mosquitto;
 struct mosquitto_message;
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Qt wrapper around libmosquitto for MQTT subscribe/publish (#699).
 // Uses mosquitto_loop_start() for threaded I/O; callbacks marshal
@@ -66,4 +66,4 @@ private:
     static constexpr int kMaxReconnectMs = 60000;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,6 +1,6 @@
-# FlexRadio Meter Learnings
+﻿# FlexRadio Meter Learnings
 
-This document captures the working conclusions from AetherSDR compression
+This document captures the working conclusions from MasterSDR compression
 meter debugging across FLEX-8000 series radios and a FLEX-6600. It is meant to
 record capture-backed behavior, not API guesses.
 
@@ -22,7 +22,7 @@ Related implementation context lives in `docs/tx-audio-signal-path.md`.
   compression pair is available, rather than adding new N/A rendering.
 - `COMPPEAK` is a dBFS signal-level tap near the speech processor/clipper. It
   is not, by itself, the SmartSDR compression display value.
-- The AetherSDR P/CW compression gauge is reversed: `0 dB` means no visible
+- The MasterSDR P/CW compression gauge is reversed: `0 dB` means no visible
   compression and `-25 dB` means full-scale/heavy compression.
 
 ## Compression Formulas
@@ -41,7 +41,7 @@ display_db = -clamp(compression_lift_db, 0, 25)
 is the processor/clipper-stage tap. Both meters advertise `20 fps`, so the two
 inputs are naturally well matched for a derived compression display.
 
-If either meter is missing, AetherSDR should not show a derived compression
+If either meter is missing, MasterSDR should not show a derived compression
 value.
 
 ### FLEX-6600 / 6000-Series Evidence
@@ -73,7 +73,7 @@ Why this is the current model:
   pre-processor mic-chain reference.
 
 The remaining engineering caution is timing. On the 6600, `SC_MIC` advertises
-`10 fps` while `COMPPEAK` advertises `20 fps`. AetherSDR guards the derived
+`10 fps` while `COMPPEAK` advertises `20 fps`. MasterSDR guards the derived
 6600 compression value by requiring the reference sample and `COMPPEAK` sample
 to be close in time before marking the compression meter available.
 
@@ -84,9 +84,9 @@ captured FLEX-6600 four-slice manifest, `SC_MIC` / `COMPPEAK` appeared as
 `22/23`, `44/45`, `66/67`, and `88/89`. Those numeric IDs are not stable API
 contracts; they are manifest slots for that session.
 
-AetherSDR stores compression meter IDs by explicit TX waveform `sourceIndex`
+MasterSDR stores compression meter IDs by explicit TX waveform `sourceIndex`
 when the manifest provides one. In 8000-series captures where repeated TX
-blocks all report `num=0`, AetherSDR keys those block-local meters to the most
+blocks all report `num=0`, MasterSDR keys those block-local meters to the most
 recent `SLC` slice context from the manifest. The formula remains
 family-specific by available meter name: use active-slice `AFTEREQ` when
 present, otherwise active-slice `SC_MIC`, paired with active-slice `COMPPEAK`.
@@ -162,7 +162,7 @@ not present. It is not used as a strict replacement for the P/CW level meter.
 Two-tone tune is useful for producing deterministic RF output and checking the
 radio-side signal path. During two-tone testing, the transmitted RF can contain
 only the radio-generated two-tone audio even while local PC mic meters move.
-For this reason, AetherSDR should not use local mic activity to drive the
+For this reason, MasterSDR should not use local mic activity to drive the
 compression gauge.
 
 The current implementation does not add special UI behavior for two-tone tune;

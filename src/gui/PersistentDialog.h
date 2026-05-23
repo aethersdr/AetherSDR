@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 
@@ -7,7 +7,7 @@ class QMoveEvent;
 class QResizeEvent;
 class QShowEvent;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class FramelessWindowTitleBar;
 
@@ -71,4 +71,4 @@ private:
     bool                     m_geometryRestored{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

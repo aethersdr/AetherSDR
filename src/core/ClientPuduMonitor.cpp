@@ -1,4 +1,4 @@
-#include "ClientPuduMonitor.h"
+﻿#include "ClientPuduMonitor.h"
 #include "Resampler.h"
 
 #include <QAudioDevice>
@@ -13,7 +13,7 @@
 #include <cstring>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -306,4 +306,4 @@ void ClientPuduMonitor::writeWavFile()
     f.close();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

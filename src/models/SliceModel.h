@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QString>
 #include <QStringList>
 #include <QMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // A "slice" in SmartSDR terminology is an independent receive channel.
 // Each slice has its own frequency, mode, filter, and audio settings.
@@ -334,4 +334,4 @@ private:
     QStringList m_pendingCommands;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

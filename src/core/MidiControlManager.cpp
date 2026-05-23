@@ -1,4 +1,4 @@
-#ifdef HAVE_MIDI
+﻿#ifdef HAVE_MIDI
 
 #include "MidiControlManager.h"
 #include "CwTrace.h"
@@ -9,7 +9,7 @@
 #include <QDebug>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -509,6 +509,6 @@ void MidiControlManager::flushRelativeAccum()
         m_relativeTimer->stop();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_MIDI

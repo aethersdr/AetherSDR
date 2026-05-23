@@ -1,4 +1,4 @@
-#include "SerialPortController.h"
+﻿#include "SerialPortController.h"
 #include "AppSettings.h"
 #include "LogManager.h"
 
@@ -16,7 +16,7 @@
 #include <QMetaObject>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 SerialPortController::SerialPortController(QObject* parent)
     : QObject(parent)
@@ -668,4 +668,4 @@ void SerialPortController::saveSettings()
     s.save();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

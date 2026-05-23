@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QPointer>
@@ -20,7 +20,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QGridLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class SliceModel;
 class TransmitModel;
@@ -70,7 +70,7 @@ public:
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) were
     // removed from the VFO DSP grid; that family lives in the spectrum
-    // overlay menu and the AetherDSP applet only.
+    // overlay menu and the MasterDsp applet only.
     void setAfGain(int pct);
     void setEscLevel(float dbm);
     void syncFromSlice();
@@ -104,14 +104,14 @@ Q_SIGNALS:
     void closeSliceRequested();
     void lockToggled(bool locked);
     // Client-side DSP signals deleted with the buttons — overlay menu
-    // and AetherDSP applet handle those toggles directly now.
+    // and MasterDsp applet handle those toggles directly now.
 #ifdef HAVE_RADE
     void radeActivated(bool on, int sliceId);
 #endif
     void recordToggled(bool on);
     void playToggled(bool on);
-    void aetherDspRequested();     // user clicked the ADSP button on the DSP tab
-    void aetherVoiceRequested();   // user clicked the AetherVoice button on the DSP tab
+    void MasterDspRequested();     // user clicked the ADSP button on the DSP tab
+    void MasterVoiceRequested();   // user clicked the MasterVoice button on the DSP tab
     void splitToggled();
     void swapRequested();
     void autotuneRequested(bool intermittent);  // CW auto-tune: false=stop, true=loop
@@ -273,8 +273,8 @@ private:
     QPushButton* m_anflBtn{nullptr};
     QPushButton* m_anftBtn{nullptr};
     QPushButton* m_apfBtn{nullptr};
-    QPushButton* m_aetherDspBtn{nullptr};    // launches AetherDSP Settings dialog
-    QPushButton* m_aetherVoiceBtn{nullptr};  // toggles Aetherial Audio Channel Strip
+    QPushButton* m_MasterDspBtn{nullptr};    // launches MasterDsp Settings dialog
+    QPushButton* m_MasterVoiceBtn{nullptr};  // toggles Masterial Audio Channel Strip
 
     // Shared DSP-level row at the bottom of the DSP grid: one slider whose
     // target switches based on which leveled DSP the user most recently
@@ -366,4 +366,4 @@ private:
     static constexpr int COLLAPSED_W = 34;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

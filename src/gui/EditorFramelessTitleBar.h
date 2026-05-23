@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QLabel;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Reusable 20 px-tall title bar for the PooDoo Audio editor windows
 // (parametric EQ, compressor, gate, tube, PUDU, reverb, de-esser).
@@ -27,7 +27,7 @@ public:
     void setTitleText(const QString& text);
 
     // Hide the min / max / close trio while leaving the title label
-    // visible.  Used by the AetherialAudioStrip when it embeds the
+    // visible.  Used by the MasterialAudioStrip when it embeds the
     // per-stage editors — the strip owns its own window controls, so
     // each embedded panel just needs the name plate (#2301).
     void setControlsVisible(bool on);
@@ -46,4 +46,4 @@ private:
     QLabel* m_closeLbl{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

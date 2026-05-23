@@ -1,10 +1,10 @@
-#include "NetworkPathResolver.h"
+﻿#include "NetworkPathResolver.h"
 
 #include <QNetworkInterface>
 
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -124,4 +124,4 @@ bool NetworkPathResolver::isUsableIpv4(const QHostAddress& address)
         && !address.isLoopback();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ClientEq;
 
@@ -128,4 +128,4 @@ private:
     void applySmoothing();
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

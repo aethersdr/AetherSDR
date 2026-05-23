@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -23,9 +23,9 @@
 	<key>NSHumanReadableCopyright</key>
 	<string></string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>AetherSDR needs microphone access for voice transmission (SSB, AM, FM, RADE digital voice).</string>
+	<string>MasterSDR needs microphone access for voice transmission (SSB, AM, FM, RADE digital voice).</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>AetherSDR needs local network access to discover and communicate with FlexRadio devices via UDP broadcast on port 4992.</string>
+	<string>MasterSDR needs local network access to discover and communicate with FlexRadio devices via UDP broadcast on port 4992.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>

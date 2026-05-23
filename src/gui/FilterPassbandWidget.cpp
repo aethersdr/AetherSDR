@@ -1,11 +1,11 @@
-#include "FilterPassbandWidget.h"
+﻿#include "FilterPassbandWidget.h"
 
 #include <QPainterPath>
 #include <QFontMetrics>
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 FilterPassbandWidget::FilterPassbandWidget(QWidget* parent)
     : QWidget(parent)
@@ -206,4 +206,4 @@ void FilterPassbandWidget::mouseReleaseEvent(QMouseEvent*)
     m_dragMode = DragNone;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

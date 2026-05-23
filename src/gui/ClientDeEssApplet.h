@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QPushButton;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class ClientCompKnob;
@@ -15,7 +15,7 @@ class ClientDeEssGrBar;
 // Docked tile for the client-side TX de-esser.  View-only — shows the
 // sidechain bandpass response curve with a live ball at the current
 // centre frequency and a compact GR strip.  Bypass via the CHAIN
-// widget single-click; editing via the Aetherial Audio Channel Strip.
+// widget single-click; editing via the Masterial Audio Channel Strip.
 class ClientDeEssApplet : public QWidget {
     Q_OBJECT
 
@@ -46,4 +46,4 @@ private:
     float m_grDb{0.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

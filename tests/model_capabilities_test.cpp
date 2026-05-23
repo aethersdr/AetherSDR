@@ -1,4 +1,4 @@
-// Verifies the per-model feature-flag table in ModelCapabilities mirrors
+﻿// Verifies the per-model feature-flag table in ModelCapabilities mirrors
 // FlexLib/ModelInfo.cs row-for-row for Has4Meters / Has2Meters (#695).
 // Catches drift if FlexLib ever flips a flag — re-sync the C++ table
 // and update this test together.
@@ -7,7 +7,7 @@
 
 #include <iostream>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

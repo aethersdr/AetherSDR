@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QString>
 #include <QVector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class CwxModel : public QObject {
     Q_OBJECT
@@ -61,4 +61,4 @@ private:
     QString m_macros[12];
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

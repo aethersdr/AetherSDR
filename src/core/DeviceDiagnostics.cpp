@@ -1,4 +1,4 @@
-#include "DeviceDiagnostics.h"
+﻿#include "DeviceDiagnostics.h"
 #include "AppSettings.h"
 #include "AudioEngine.h"
 
@@ -12,7 +12,7 @@
 
 #include <cmath>
 
-namespace AetherSDR::DeviceDiagnostics {
+namespace MasterSDR::DeviceDiagnostics {
 
 namespace {
 
@@ -262,4 +262,4 @@ void annotateSliceAudioRoutes(QJsonObject* snapshot, const QJsonObject& audioDev
     (*snapshot)["slices"] = updatedSlices;
 }
 
-} // namespace AetherSDR::DeviceDiagnostics
+} // namespace MasterSDR::DeviceDiagnostics

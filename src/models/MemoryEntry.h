@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct MemoryEntry {
     int     index{-1};
@@ -26,4 +26,4 @@ struct MemoryEntry {
     int     diguOffset{1500};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

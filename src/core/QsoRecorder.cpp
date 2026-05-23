@@ -1,4 +1,4 @@
-#include "QsoRecorder.h"
+﻿#include "QsoRecorder.h"
 #include "AppSettings.h"
 #include "LogManager.h"
 #include "Resampler.h"
@@ -15,14 +15,14 @@
 #include <algorithm>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 QsoRecorder::QsoRecorder(QObject* parent)
     : QObject(parent)
 {
-    // Default recording directory: ~/Documents/AetherSDR/Recordings
+    // Default recording directory: ~/Documents/MasterSDR/Recordings
     m_recordingDir = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
-                     + "/AetherSDR/Recordings";
+                     + "/MasterSDR/Recordings";
 
     // Restore settings
     auto& s = AppSettings::instance();
@@ -409,4 +409,4 @@ void QsoRecorder::onPlaybackSinkState(QAudio::State state)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

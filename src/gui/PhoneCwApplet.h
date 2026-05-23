@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -9,7 +9,7 @@ class QSlider;
 class QComboBox;
 class QStackedWidget;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class HGauge;
 class TransmitModel;
@@ -125,4 +125,4 @@ private:
     static constexpr float kCompDecayRate = 0.5f;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

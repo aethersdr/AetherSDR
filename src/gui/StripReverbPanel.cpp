@@ -1,4 +1,4 @@
-#include "StripReverbPanel.h"
+﻿#include "StripReverbPanel.h"
 #include "ClientCompKnob.h"
 #include "EditorFramelessTitleBar.h"
 #include "core/AppSettings.h"
@@ -19,7 +19,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -183,7 +183,7 @@ StripReverbPanel::StripReverbPanel(AudioEngine* engine, QWidget* parent)
     : QWidget(parent)
     , m_audio(engine)
 {
-    const QString title = QString::fromUtf8("Aetherial FreeVerb \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial FreeVerb \xe2\x80\x94 TX");
     setWindowTitle(title);
     setStyleSheet(kWindowStyle);
     resize(480, 180);
@@ -392,4 +392,4 @@ void StripReverbPanel::hideEvent(QHideEvent* ev)
     QWidget::hideEvent(ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

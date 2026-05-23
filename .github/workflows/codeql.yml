@@ -1,4 +1,4 @@
-name: CodeQL
+﻿name: CodeQL
 
 on:
   pull_request:
@@ -44,7 +44,7 @@ permissions:
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    container: ghcr.io/ten9876/aethersdr-ci:latest
+    container: ghcr.io/ten9876/mastersdr-ci:latest
 
     strategy:
       matrix:

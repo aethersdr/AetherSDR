@@ -1,4 +1,4 @@
-#include "CwSidetoneQAudioSink.h"
+﻿#include "CwSidetoneQAudioSink.h"
 #include "CwSidetoneGenerator.h"
 #include "LogManager.h"
 
@@ -9,7 +9,7 @@
 #include <QMediaDevices>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 CwSidetoneQAudioSink::CwSidetoneQAudioSink(QObject* parent)
     : QObject(parent)
@@ -153,4 +153,4 @@ void CwSidetoneQAudioSink::stop()
     m_scratch.clear();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

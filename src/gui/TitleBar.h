@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QWidget>
@@ -11,7 +11,7 @@ class QMenuBar;
 class QHBoxLayout;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class TitleBar : public QWidget {
     Q_OBJECT
@@ -129,4 +129,4 @@ private:
     void updateMaximizeIcon();
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

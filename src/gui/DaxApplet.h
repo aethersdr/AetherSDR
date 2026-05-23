@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QPushButton;
 class QLabel;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class SliceModel;
@@ -45,4 +45,4 @@ private:
     QLabel*       m_daxTxStatus{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

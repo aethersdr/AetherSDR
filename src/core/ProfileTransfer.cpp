@@ -1,4 +1,4 @@
-#include "ProfileTransfer.h"
+﻿#include "ProfileTransfer.h"
 
 #include "LogManager.h"
 #include "../models/MemoryEntry.h"
@@ -20,7 +20,7 @@
 
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -995,4 +995,4 @@ bool ProfileTransfer::commitExportFile(QString* error)
     return true;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

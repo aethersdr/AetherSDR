@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 #include <QList>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Shown when multiFLEX is disabled and another client is already connected.
 // Mirrors the SmartSDR "Connected Stations" dialog: lists connected stations
@@ -37,4 +37,4 @@ private:
     quint32 m_selectedHandle{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

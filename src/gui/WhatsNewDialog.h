@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct ReleaseEntry;
 
@@ -31,4 +31,4 @@ private:
     QString renderHtml(const std::vector<ReleaseEntry>& entries, bool isWelcome) const;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

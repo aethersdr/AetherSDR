@@ -1,14 +1,14 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QQueue>
 #include <QString>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Local Morse keyer — generates dit/dah timing events from CWX text so the
-// AetherSDR sidetone path can play a tone matching what the radio is
+// MasterSDR sidetone path can play a tone matching what the radio is
 // transmitting.  Independent of the radio's own keyer; both use the same
 // configured WPM, so they stay in sync within ±1 element on typical
 // hardware.  If they drift, sidetone is informational only — the radio
@@ -55,4 +55,4 @@ private:
     bool          m_currentlyDown{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

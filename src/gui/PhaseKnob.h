@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Polar display for ESC (Enhanced Signal Clarity).
 // Shows a crosshair circle with a dot positioned by phase (angle) and
@@ -26,4 +26,4 @@ private:
     float m_gain{1.0f};    // 0.0 – 2.0 (1.0 = half radius)
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

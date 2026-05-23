@@ -1,4 +1,4 @@
-name: Feature Request
+﻿name: Feature Request
 description: Suggest a new feature or improvement
 labels: [enhancement]
 body:
@@ -7,12 +7,12 @@ body:
       value: |
         ## Thank you for your feature idea! 🙏
 
-        AetherSDR is maintained by a solo developer with AI assistance. To help us evaluate and implement your request as quickly as possible, **we strongly encourage using an AI assistant to help structure your request.**
+        MasterSDR is maintained by a solo developer with AI assistance. To help us evaluate and implement your request as quickly as possible, **we strongly encourage using an AI assistant to help structure your request.**
 
         ### How to create a great feature request in 2 minutes:
 
         1. Go to [claude.ai](https://claude.ai) (free) or any AI assistant
-        2. Paste the prompt from our [Contributing Guide](https://github.com/aethersdr/AetherSDR/blob/main/CONTRIBUTING.md#ai-assisted-feature-requests)
+        2. Paste the prompt from our [Contributing Guide](https://github.com/MasterSDR/MasterSDR/blob/main/CONTRIBUTING.md#ai-assisted-feature-requests)
         3. Describe your idea in plain English — the AI will structure it with protocol hints and implementation details
         4. Paste the AI's output into the form below
 

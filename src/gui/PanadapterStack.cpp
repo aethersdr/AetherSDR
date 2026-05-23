@@ -1,4 +1,4 @@
-#include "PanadapterStack.h"
+﻿#include "PanadapterStack.h"
 #include "BandStackPanel.h"
 #include "PanFloatingWindow.h"
 #include "PanadapterApplet.h"
@@ -17,10 +17,10 @@
 // cycle so Metal binds to the new NSView. The backing-store notification is sent
 // before the actual reparent; sending it again here can make QRhiWidget remove a
 // stale cleanup callback from the wrong QRhi during startup floating restore.
-static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
+static void refreshAfterReparent(MasterSDR::SpectrumWidget* sw)
 {
     if (!sw) return;
-#if defined(Q_OS_MAC) && defined(AETHER_GPU_SPECTRUM)
+#if defined(Q_OS_MAC) && defined(MASTERSDR_GPU_SPECTRUM)
     const bool wasVisible = sw->isVisible();
     sw->hide();
     sw->resetGpuResources();
@@ -37,7 +37,7 @@ static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
 #endif
 }
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -914,4 +914,4 @@ void PanadapterStack::restoreFloatingState()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

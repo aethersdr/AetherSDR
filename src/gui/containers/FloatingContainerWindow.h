@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QTimer>
@@ -6,7 +6,7 @@
 
 class QVBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ContainerWidget;
 
@@ -87,4 +87,4 @@ private:
     QTimer           m_saveTimer;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

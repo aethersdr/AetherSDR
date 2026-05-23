@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "core/CommandParser.h"
 #include "core/StreamStatus.h"
@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <utility>
 
-namespace AetherSDR::RadioStatusOwnership {
+namespace MasterSDR::RadioStatusOwnership {
 
 inline QString hexId(quint32 value)
 {
@@ -227,4 +227,4 @@ inline RemoteAudioRxAction applyRemoteAudioRxStatus(RemoteAudioRxTracking& state
     return adopted ? RemoteAudioRxAction::Adopted : RemoteAudioRxAction::Updated;
 }
 
-} // namespace AetherSDR::RadioStatusOwnership
+} // namespace MasterSDR::RadioStatusOwnership

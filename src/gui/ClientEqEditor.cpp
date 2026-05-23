@@ -1,4 +1,4 @@
-#include "ClientEqEditor.h"
+﻿#include "ClientEqEditor.h"
 #include "ClientEqEditorCanvas.h"
 #include "ClientEqFftAnalyzer.h"
 #include "ClientEqIconRow.h"
@@ -24,7 +24,7 @@
 #include <QVBoxLayout>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -61,7 +61,7 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
     : QWidget(parent, Qt::Window | Qt::FramelessWindowHint)
     , m_audio(engine)
 {
-    setWindowTitle("Aetherial Parametric EQ");
+    setWindowTitle("Masterial Parametric EQ");
     setStyleSheet(kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
@@ -111,7 +111,7 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
             "Fractional-octave smoothing applied to the analyzer trace.\n"
             "Lower fraction = smoother (1/3 = most, 1/96 = off).\n"
             "Affects display only — EQ math is unchanged.");
-        AetherSDR::applyComboStyle(smoothingCombo);
+        MasterSDR::applyComboStyle(smoothingCombo);
 
         const int savedFraction = AppSettings::instance()
             .value("ClientEqSmoothingFraction", "96").toInt();
@@ -177,7 +177,7 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
             "• Chebyshev — steeper transition, 1 dB passband ripple\n"
             "• Bessel — linear phase, gentler rolloff\n"
             "• Elliptic — steepest transition, ripple in both bands");
-        AetherSDR::applyComboStyle(m_familyCombo);
+        MasterSDR::applyComboStyle(m_familyCombo);
         connect(m_familyCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int idx) {
             ClientEq* eq = (m_path == ClientEqApplet::Path::Rx)
@@ -397,8 +397,8 @@ void ClientEqEditor::showForPath(ClientEqApplet::Path path)
     // almost certainly doesn't correspond to the other path's bands.
     syncSelection(-1);
     const QString title = path == ClientEqApplet::Path::Rx
-        ? QStringLiteral("Aetherial Parametric EQ — RX")
-        : QStringLiteral("Aetherial Parametric EQ — TX");
+        ? QStringLiteral("Masterial Parametric EQ — RX")
+        : QStringLiteral("Masterial Parametric EQ — TX");
     // m_titleBar is always an EditorFramelessTitleBar* — kept as
     // QWidget* in the header so the inline class stays cpp-only.
     if (m_titleBar)
@@ -503,4 +503,4 @@ void ClientEqEditor::restoreGeometryFromSettings()
     m_restoring = false;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

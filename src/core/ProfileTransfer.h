@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QByteArray>
@@ -16,7 +16,7 @@ class QTcpServer;
 class QTcpSocket;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 
@@ -211,10 +211,10 @@ public:
     void cancel();
 
 signals:
-    void started(AetherSDR::ProfileTransfer::Operation operation);
+    void started(MasterSDR::ProfileTransfer::Operation operation);
     void progress(QString status, qint64 bytesDone, qint64 bytesTotal);
-    void finished(AetherSDR::ProfileTransfer::Operation operation, QString path);
-    void failed(AetherSDR::ProfileTransfer::Operation operation, QString error);
+    void finished(MasterSDR::ProfileTransfer::Operation operation, QString path);
+    void failed(MasterSDR::ProfileTransfer::Operation operation, QString error);
 
 private:
     enum class Phase {
@@ -296,4 +296,4 @@ private:
     static constexpr qint64 kMaxImportSize = 250LL * 1024LL * 1024LL;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

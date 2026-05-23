@@ -1,8 +1,8 @@
-# AetherSDR CODEOWNERS
+﻿# MasterSDR CODEOWNERS
 #
 # Four tiers, last-matching-pattern wins:
 #   1. Broad default — jensenpat + maintainer
-#   2. Mechanical/safe paths — also approvable by @AetherClaude (machine user)
+#   2. Mechanical/safe paths — also approvable by @MasterClaude (machine user)
 #   3. Architecture & infrastructure — jensenpat + maintainer (no bot approval)
 #   4. Project policy — reserved to @ten9876
 #
@@ -13,12 +13,12 @@
 *                            @ten9876 @jensenpat
 
 # ── Tier 2: mechanical/safe paths — bot can also approve ───────────────────
-tests/                       @ten9876 @jensenpat @AetherClaude
-docs/                        @ten9876 @jensenpat @AetherClaude
-*.md                         @ten9876 @jensenpat @AetherClaude
-.github/dependabot.yml       @ten9876 @jensenpat @AetherClaude
-.github/docker/              @ten9876 @jensenpat @AetherClaude
-.github/ISSUE_TEMPLATE/      @ten9876 @jensenpat @AetherClaude
+tests/                       @ten9876 @jensenpat @MasterClaude
+docs/                        @ten9876 @jensenpat @MasterClaude
+*.md                         @ten9876 @jensenpat @MasterClaude
+.github/dependabot.yml       @ten9876 @jensenpat @MasterClaude
+.github/docker/              @ten9876 @jensenpat @MasterClaude
+.github/ISSUE_TEMPLATE/      @ten9876 @jensenpat @MasterClaude
 
 # ── Tier 3: architecture & infrastructure — bot cannot approve ─────────────
 # Visual/UX direction (per CLAUDE.md "AI Agent Boundaries")

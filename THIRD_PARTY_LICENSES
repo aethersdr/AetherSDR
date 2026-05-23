@@ -1,17 +1,17 @@
-AetherSDR Third-Party Software Licenses
+﻿MasterSDR Third-Party Software Licenses
 ========================================
 
-AetherSDR incorporates or links against the following third-party software.
+MasterSDR incorporates or links against the following third-party software.
 Each component retains its original license. Full license texts are included
 in the corresponding third_party/ subdirectories where the source is bundled.
 
 
 Protocol References
 -------------------
-AetherSDR implements the SmartSDR protocol to communicate with FlexRadio
+MasterSDR implements the SmartSDR protocol to communicate with FlexRadio
 transceivers. The protocol behavior was determined by consulting the FlexLib
 API source code, which is Copyright FlexRadio Systems and All Rights Reserved.
-No FlexLib code is incorporated into AetherSDR — the protocol implementation
+No FlexLib code is incorporated into MasterSDR — the protocol implementation
 is entirely original. SmartSDR is a trademark of FlexRadio Systems.
 
   FlexLib:   Copyright (c) 2012-2025 FlexRadio Systems
@@ -130,7 +130,7 @@ Only present when setup-onnxruntime.ps1 has been run.
   Note: the tools/train_classifier.py training script requires PyTorch
   (BSD-3-Clause, https://pytorch.org/) as a separate installation.
   PyTorch is a build tool only — it is not linked into or distributed
-  with AetherSDR.  The trained .onnx model file produced by the script
+  with MasterSDR.  The trained .onnx model file produced by the script
   is entirely the user's own work.
 
 

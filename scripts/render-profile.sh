@@ -1,27 +1,27 @@
-#!/bin/bash
-# Profile AetherSDR render performance by watching log output
+﻿#!/bin/bash
+# Profile MasterSDR render performance by watching log output
 # Usage: ./scripts/render-profile.sh [duration_seconds]
 #
-# Requires AetherSDR built with render timing enabled (lcPerf log category).
+# Requires MasterSDR built with render timing enabled (lcPerf log category).
 # Captures paint event timing and computes statistics.
 
 DURATION=${1:-30}
 
-PID=$(pidof AetherSDR)
+PID=$(pidof MasterSDR)
 if [ -z "$PID" ]; then
-    echo "AetherSDR is not running"
+    echo "MasterSDR is not running"
     exit 1
 fi
 
-LOGDIR="$HOME/.config/AetherSDR"
-LATEST=$(ls -t "$LOGDIR"/aethersdr-*.log 2>/dev/null | head -1)
+LOGDIR="$HOME/.config/MasterSDR"
+LATEST=$(ls -t "$LOGDIR"/MasterSDR-*.log 2>/dev/null | head -1)
 
 if [ -z "$LATEST" ]; then
-    echo "No AetherSDR log file found in $LOGDIR"
+    echo "No MasterSDR log file found in $LOGDIR"
     exit 1
 fi
 
-echo "Profiling AetherSDR render for ${DURATION}s..."
+echo "Profiling MasterSDR render for ${DURATION}s..."
 echo "Log: $LATEST"
 echo ""
 

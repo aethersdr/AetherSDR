@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -6,7 +6,7 @@ class QPushButton;
 class QLabel;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class TunerModel;
 class MeterModel;
@@ -83,4 +83,4 @@ private:
     QTimer* m_postTuneTimer{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

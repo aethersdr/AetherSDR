@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <atomic>
 #include <cstdint>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Client-side TX exciter — TX DSP chain Phase 5 (#1661).  The
 // centrepiece of the PooDoo Audio™ chain.  Two parallel bands ("Poo"
@@ -161,4 +161,4 @@ private:
     float        m_lfEnvLin{0.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

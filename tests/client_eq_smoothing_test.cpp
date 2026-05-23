@@ -1,4 +1,4 @@
-// Unit tests for fractional-octave smoothing on ClientEqCurveWidget.
+﻿// Unit tests for fractional-octave smoothing on ClientEqCurveWidget.
 //
 // The smoothing function is exposed as a free static method so this
 // harness doesn't need a QApplication / live widget.
@@ -9,7 +9,7 @@
 #include <cstdio>
 #include <vector>
 
-using AetherSDR::ClientEqCurveWidget;
+using MasterSDR::ClientEqCurveWidget;
 
 namespace {
 

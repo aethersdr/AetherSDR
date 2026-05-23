@@ -1,10 +1,10 @@
-#include "VoiceSignalDetector.h"
+﻿#include "VoiceSignalDetector.h"
 #include "LogManager.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
     // Minimum width for a detected region to be considered a voice signal.
@@ -311,4 +311,4 @@ QString sLabel(float dbm)
     return QString("S%1").arg(sNum);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

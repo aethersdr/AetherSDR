@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QHash>
 #include <QSet>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct DxccEntity {
     QString primaryPrefix;   // e.g. "G"
@@ -48,4 +48,4 @@ private:
     int m_maxPrefixLen{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

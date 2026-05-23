@@ -1,4 +1,4 @@
-#include "PerfTelemetry.h"
+﻿#include "PerfTelemetry.h"
 #include "LogManager.h"
 
 #include <QLoggingCategory>
@@ -11,7 +11,7 @@
 #include <cmath>
 #include <utility>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -619,4 +619,4 @@ void PerfTelemetry::maybeLogSummary(qint64 now)
     qCDebug(lcPerf).noquote() << fields.join(QLatin1Char(' '));
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

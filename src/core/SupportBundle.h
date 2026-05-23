@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class LogManager;
@@ -13,7 +13,7 @@ class LogManager;
 class SupportBundle {
 public:
     struct SystemInfo {
-        QString aetherVersion;
+        QString masterVersion;
         QString qtVersion;
         QString osName;
         QString kernelVersion;
@@ -47,4 +47,4 @@ public:
                                 const RadioInfo& radio);
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

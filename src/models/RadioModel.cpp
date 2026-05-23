@@ -1,4 +1,4 @@
-#include "RadioModel.h"
+﻿#include "RadioModel.h"
 #include "AntennaAliasStore.h"
 #include "BandSettings.h"
 #include "core/CommandParser.h"
@@ -21,7 +21,7 @@
 #include <cmath>
 #include <memory>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -1607,7 +1607,7 @@ void RadioModel::onConnected()
 
     // Inhibit system sleep while connected if the user has opted in (#1420)
     if (AppSettings::instance().value("InhibitSleepWhileConnected", "False").toString() == "True")
-        m_sleepInhibitor.acquire("AetherSDR connected to radio");
+        m_sleepInhibitor.acquire("MasterSDR connected to radio");
 
     emit connectionStateChanged(true);
     // Delay network monitor until after client gui registration
@@ -1807,7 +1807,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
     // into the client session.  Sending these out of order — as we did
     // previously — caused the radio to silently ignore low_bw_connect
     // (#2447: "Low Bandwidth checkbox doesn't do anything meaningful").
-    sendCmd("client program AetherSDR");
+    sendCmd("client program MasterSDR");
     if (AppSettings::instance().value("LowBandwidthConnect", "False").toString() == "True")
         sendCmd("client low_bw_connect");
 
@@ -1930,9 +1930,9 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
                     if (!rebound) {
                         qCWarning(lcProtocol) << "RadioModel: UDP port" << udpPort
-                                              << "is already registered and AetherSDR could not rebind";
+                                              << "is already registered and MasterSDR could not rebind";
                         emit connectionError(tr("UDP port %1 is already in use by another Flex client, "
-                                                "and AetherSDR could not switch to a free UDP port.")
+                                                "and MasterSDR could not switch to a free UDP port.")
                                                  .arg(udpPort));
                         QTimer::singleShot(0, this, &RadioModel::disconnectFromRadio);
                         return;
@@ -2066,7 +2066,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                         scheduleRxAudioStreamEnsure(QStringLiteral("connect"));
 
                         // Do not claim a dax_tx stream at GUI attach time. SmartSDR DAX
-                        // owns that stream on Windows; AetherSDR creates one lazily only
+                        // owns that stream on Windows; MasterSDR creates one lazily only
                         // when its own bridge/TCI path needs to feed DAX TX audio.
 
                         // Request remote audio TX stream (voice mode, VOX monitoring)
@@ -4862,7 +4862,7 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     QJsonObject snapshot;
     snapshot["schema_version"] = 1;
     snapshot["captured_at"] = QDateTime::currentDateTime().toString(Qt::ISODate);
-    snapshot["captured_from"] = "AetherSDR in-memory application state";
+    snapshot["captured_from"] = "MasterSDR in-memory application state";
     snapshot["note"] =
         "This snapshot is built from the app's cached radio, panadapter, slice, "
         "and meter models. It does not query the radio directly.";
@@ -5268,4 +5268,4 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
     return snapshot;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

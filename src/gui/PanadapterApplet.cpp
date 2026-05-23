@@ -1,4 +1,4 @@
-#include "PanadapterApplet.h"
+﻿#include "PanadapterApplet.h"
 #include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
 #include "SliceLabel.h"
@@ -19,7 +19,7 @@
 #include <QGuiApplication>
 #include <QClipboard>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 PanadapterApplet::PanadapterApplet(QWidget* parent)
     : QWidget(parent)
@@ -439,4 +439,4 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
     return QWidget::eventFilter(obj, ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "Ax25HfPacketDecodeDialog.h"
+﻿#include "Ax25HfPacketDecodeDialog.h"
 
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
@@ -35,7 +35,7 @@
 #include <cmath>
 #include <functional>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -48,7 +48,7 @@ constexpr int kTxLeadMs = 200;
 constexpr int kTxTailMs = 250;
 constexpr int kTxChunkMs = 20;
 
-constexpr const char* kAetherModemStyle = R"(
+constexpr const char* kMasterModemStyle = R"(
 QWidget {
     color: #aeb9cc;
     background: #07101c;
@@ -495,7 +495,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
                                                    RadioModel* radio,
                                                    SliceModel* initialSlice,
                                                    QWidget* parent)
-    : PersistentDialog(QStringLiteral("AetherModem - Packet Decoder (Experimental)"),
+    : PersistentDialog(QStringLiteral("MasterModem - Packet Decoder (Experimental)"),
                        QStringLiteral("Ax25HfPacketDecodeDialogGeometry"),
                        parent)
     , m_audio(audio)
@@ -503,12 +503,12 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 {
     setMinimumSize(1080, 680);
 
-    m_shim = new AetherAx25LibmodemShim(this);
+    m_shim = new MasterAx25LibmodemShim(this);
     m_heartbeatTimer = new QTimer(this);
     m_heartbeatTimer->setInterval(1000);
     m_txPaceTimer = new QTimer(this);
     m_txPaceTimer->setInterval(kTxChunkMs);
-    bodyWidget()->setStyleSheet(QString::fromLatin1(kAetherModemStyle));
+    bodyWidget()->setStyleSheet(QString::fromLatin1(kMasterModemStyle));
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(10);
@@ -729,11 +729,11 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             return;
         setTonePolarity(Ax25TonePolarity::Inverted, true);
     });
-    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded,
+    connect(m_shim, &MasterAx25LibmodemShim::frameDecoded,
             this, &Ax25HfPacketDecodeDialog::appendFrame);
-    connect(m_shim, &AetherAx25LibmodemShim::diagnosticsUpdated,
+    connect(m_shim, &MasterAx25LibmodemShim::diagnosticsUpdated,
             this, &Ax25HfPacketDecodeDialog::updateDiagnostics);
-    connect(m_shim, &AetherAx25LibmodemShim::statusChanged,
+    connect(m_shim, &MasterAx25LibmodemShim::statusChanged,
             this, &Ax25HfPacketDecodeDialog::refreshStatus);
     connect(m_heartbeatTimer, &QTimer::timeout,
             this, &Ax25HfPacketDecodeDialog::updateHeartbeat);
@@ -759,7 +759,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
                 Qt::QueuedConnection);
     }
 
-    appendSystemLine(QStringLiteral("AetherModem initialized."));
+    appendSystemLine(QStringLiteral("MasterModem initialized."));
     appendSystemLine(QStringLiteral("Enable Modem to start the RX audio tap."));
     appendSystemLine(QStringLiteral("TX accepts raw payload text or full SRC>DST,path:payload syntax."));
     setAttachedSlice(initialSlice);
@@ -770,7 +770,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
 {
     if (m_txActive || m_txPendingStream)
-        finishTransmit(true, QStringLiteral("AetherModem window closing"));
+        finishTransmit(true, QStringLiteral("MasterModem window closing"));
     if (m_captureActive)
         finishAudioCapture(false);
     if (m_audio)
@@ -1033,9 +1033,9 @@ void Ax25HfPacketDecodeDialog::startTransmitFromUi()
     if (m_audio->txStreamId() == 0) {
         m_txPendingStream = true;
         refreshTransmitControls();
-        appendSystemLine(QStringLiteral("Requesting DAX TX stream for AetherModem TX."));
+        appendSystemLine(QStringLiteral("Requesting DAX TX stream for MasterModem TX."));
         qCInfo(lcAx25) << "AX.25 TX requesting DAX TX stream";
-        if (!m_radio->ensureDaxTxStream(DaxTxRequestReason::AetherModemAx25Tx))
+        if (!m_radio->ensureDaxTxStream(DaxTxRequestReason::MasterModemAx25Tx))
             finishTransmit(true, QStringLiteral("DAX TX stream policy rejected stream creation"));
         return;
     }
@@ -1263,7 +1263,7 @@ void Ax25HfPacketDecodeDialog::updateHeartbeat()
         if (waited >= 2
             && (!m_lastNoAudioNoticeUtc.isValid() || m_lastNoAudioNoticeUtc.secsTo(now) >= 5)) {
             appendSystemLine(QStringLiteral(
-                "Waiting for RX audio blocks. Confirm PC Audio is enabled, a slice is active, and AetherSDR is receiving the packet audio stream."));
+                "Waiting for RX audio blocks. Confirm PC Audio is enabled, a slice is active, and MasterSDR is receiving the packet audio stream."));
             m_lastNoAudioNoticeUtc = now;
         }
     } else if (m_lastDiagnosticsUtc.secsTo(now) >= 4
@@ -1576,4 +1576,4 @@ QString Ax25HfPacketDecodeDialog::formatTerminalLine(const Ax25DecodedFrame& fra
              payload.toHtmlEscaped());
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

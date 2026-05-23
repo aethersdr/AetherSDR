@@ -1,4 +1,4 @@
-#include "DaxApplet.h"
+﻿#include "DaxApplet.h"
 #include "MeterSlider.h"
 #include "SliceLabel.h"
 #include "core/AppSettings.h"
@@ -11,7 +11,7 @@
 #include <QPushButton>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -217,4 +217,4 @@ void DaxApplet::setDaxTxLevel(float rms)
     m_daxTxMeter->setLevel(std::clamp(rms * 2.0f, 0.0f, 1.0f));
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

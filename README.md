@@ -1,21 +1,21 @@
-# AetherSDR
+﻿# MasterSDR
 
 **A Linux-native client for FlexRadio Systems transceivers**
 
-[![CI](https://github.com/aethersdr/AetherSDR/actions/workflows/ci.yml/badge.svg)](https://github.com/aethersdr/AetherSDR/actions/workflows/ci.yml)
+[![CI](https://github.com/MasterSDR/MasterSDR/actions/workflows/ci.yml/badge.svg)](https://github.com/MasterSDR/MasterSDR/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![C++20](https://img.shields.io/badge/C%2B%2B-20-blue.svg)](https://en.cppreference.com/w/cpp/20)
 [![Qt6](https://img.shields.io/badge/Qt-6-green.svg)](https://www.qt.io/)
-[![Signed Commits](https://img.shields.io/badge/commits-GPG%20signed-brightgreen?logo=gnuprivacyguard)](https://github.com/aethersdr/AetherSDR/commits/main)
+[![Signed Commits](https://img.shields.io/badge/commits-GPG%20signed-brightgreen?logo=gnuprivacyguard)](https://github.com/MasterSDR/MasterSDR/commits/main)
 
-AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
+MasterSDR brings FlexRadio operation to Linux without Wine or virtual machines. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.5.2.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.5.2.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/MasterSDR/MasterSDR/releases/latest) | [Discussions](https://github.com/MasterSDR/MasterSDR/discussions) | [What's New](https://github.com/MasterSDR/MasterSDR/releases)
 
 > **Cross-platform downloads available:** Linux AppImage, macOS universal DMG, Windows installer and portable ZIP.
 > Linux is the primary supported platform. macOS and Windows builds are provided as a courtesy.
 
-![AetherSDR Screenshot](docs/screenshot-v5.png)
+![MasterSDR Screenshot](docs/screenshot-v5.png)
 
 <p><i>Native. Open. Yours.</i></p>
 
@@ -27,9 +27,9 @@ AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. 
 - **Multi-slice operation** — color-coded VFO overlays, independent TX assignment, diversity mode with ESC beamforming
 - **Multi-panadapter** — up to 8 pans (FLEX-6700) with 6 layout options, detachable pop-out windows, per-pan display controls, native VITA-49 waterfall tiles
 - **Full RX/TX controls** — filter presets, custom filter edges, AGC, DSP, EQ, mic/compression gauges, ATU, TUNE/MOX
-- **Aetherial Audio Channel Strip** — unified RX **and** TX DSP suite (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, Freeverb on TX, plus brickwall limiter on TX / output trim on RX) with savable preset library and a wall-clock-accurate scope on each side
+- **Masterial Audio Channel Strip** — unified RX **and** TX DSP suite (gate, EQ, compressor, de-esser, tube, MasterVoice exciter, Freeverb on TX, plus brickwall limiter on TX / output trim on RX) with savable preset library and a wall-clock-accurate scope on each side
 - **Client-side noise reduction** — NR2 (spectral), RN2 (RNNoise neural), NR4 (libspecbleach), DFNR (DeepFilterNet3 neural), BNR (NVIDIA GPU AI denoiser), MNR (macOS MMSE-Wiener)
-- **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, interpolated bandwidth at SWR ≤ 1.5 / 2.0
+- **MasterSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **Network Diagnostics** — per-metric trend graphs, packet loss / RTT / jitter metrics, live log tail
 - **Memory channels + profiles** — memory bank with quick-recall, global / mic / TX profile management synced with the radio
 - **CW operator suite** — real-time Morse decoder with auto pitch/speed detection, keyboard + MIDI-mapped straight key and iambic paddles with full break-in / QSK respect, optional Apollo-era Quindar tones on PTT
@@ -66,7 +66,7 @@ earlier 4.x firmware works; v3.x is unsupported.
 
 ## Tested Controller Devices
 
-AetherSDR supports external station-control hardware through USB serial, USB HID,
+MasterSDR supports external station-control hardware through USB serial, USB HID,
 MIDI, Stream Deck/StreamController plugins, and generic USB-serial adapters:
 
 - FlexRadio FlexControl USB tuning knob
@@ -83,15 +83,15 @@ MIDI, Stream Deck/StreamController plugins, and generic USB-serial adapters:
 
 ## Download
 
-Pre-built binaries are available from [Releases](https://github.com/aethersdr/AetherSDR/releases/latest):
+Pre-built binaries are available from [Releases](https://github.com/MasterSDR/MasterSDR/releases/latest):
 
 | Platform | Download | Notes |
 |----------|----------|-------|
-| **Linux x86_64** | `AetherSDR-*-x86_64.AppImage` | Single file, no install needed. `chmod +x` and run. |
-| **Linux ARM** | `AetherSDR-*-aarch64.AppImage` | Raspberry Pi, ARM laptops. `chmod +x` and run. |
-| **macOS** | `AetherSDR-*-macOS-apple-silicon.dmg` | Apple Silicon (M1+). Intel Macs via Rosetta. Signed & notarized. |
-| **Windows Installer** | `AetherSDR-*-Windows-x64-setup.exe` | Setup wizard with Start Menu shortcut and uninstaller. |
-| **Windows Portable** | `AetherSDR-*-Windows-x64-portable.zip` | No install needed. Extract and run. |
+| **Linux x86_64** | `MasterSDR-*-x86_64.AppImage` | Single file, no install needed. `chmod +x` and run. |
+| **Linux ARM** | `MasterSDR-*-aarch64.AppImage` | Raspberry Pi, ARM laptops. `chmod +x` and run. |
+| **macOS** | `MasterSDR-*-macOS-apple-silicon.dmg` | Apple Silicon (M1+). Intel Macs via Rosetta. Signed & notarized. |
+| **Windows Installer** | `MasterSDR-*-Windows-x64-setup.exe` | Setup wizard with Start Menu shortcut and uninstaller. |
+| **Windows Portable** | `MasterSDR-*-Windows-x64-portable.zip` | No install needed. Extract and run. |
 
 ---
 
@@ -147,7 +147,7 @@ brew install qt@6 ninja cmake pkgconf autoconf automake libtool \
 > **Linux Mint / Ubuntu note:** If PC audio devices show as "Dummy Output",
 > install `gstreamer1.0-pulseaudio`. For PipeWire systems, also install `gstreamer1.0-pipewire`.
 >
-> **Ubuntu 26.04 note:** If AetherSDR fails to start with a missing
+> **Ubuntu 26.04 note:** If MasterSDR fails to start with a missing
 > `libOpenGL.so.0` error, install `libopengl0`.  26.04 stopped pulling it in
 > by default for the desktop image; the build-deps line above includes it
 > explicitly so this only bites users who install just the AppImage.
@@ -155,11 +155,11 @@ brew install qt@6 ninja cmake pkgconf autoconf automake libtool \
 ### Build & Run
 
 ```bash
-git clone https://github.com/aethersdr/AetherSDR.git
-cd AetherSDR
+git clone https://github.com/MasterSDR/MasterSDR.git
+cd MasterSDR
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 cmake --build build -j$(nproc)
-./build/AetherSDR
+./build/MasterSDR
 ```
 
 RADE-enabled builds use a vendored Opus snapshot, so no additional Opus download
@@ -200,7 +200,7 @@ sudo cmake --install build
 - [ ] CW ultimatic keyer mode (#416)
 - [ ] Native DAX audio channels on Windows
 
-See the full [issue tracker](https://github.com/aethersdr/AetherSDR/issues) for all planned features.
+See the full [issue tracker](https://github.com/MasterSDR/MasterSDR/issues) for all planned features.
 
 ---
 
@@ -208,9 +208,9 @@ See the full [issue tracker](https://github.com/aethersdr/AetherSDR/issues) for 
 
 PRs, bug reports, and feature requests welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
-**Development environment:** AetherSDR is developed using [Claude Code](https://claude.com/claude-code) as the primary development tool. We encourage contributors to use Claude Code for consistency. PRs must follow project conventions, pass CI, and include GPG-signed commits.
+**Development environment:** MasterSDR is developed using [Claude Code](https://claude.com/claude-code) as the primary development tool. We encourage contributors to use Claude Code for consistency. PRs must follow project conventions, pass CI, and include GPG-signed commits.
 
-**Not a developer?** Click the lightbulb button in AetherSDR's title bar to create an AI-assisted bug report or feature request.
+**Not a developer?** Click the lightbulb button in MasterSDR's title bar to create an AI-assisted bug report or feature request.
 
 ---
 
@@ -219,8 +219,8 @@ PRs, bug reports, and feature requests welcome! See [CONTRIBUTING.md](CONTRIBUTI
 Linux and Windows binaries are GPG-signed. macOS artifacts are Apple notarized. Each release includes `.asc` signatures and `SHA256SUMS.txt`.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/aethersdr/AetherSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
-gpg --verify AetherSDR-vX.Y.Z-x86_64.AppImage.asc AetherSDR-vX.Y.Z-x86_64.AppImage
+curl -sSL https://raw.githubusercontent.com/MasterSDR/MasterSDR/main/docs/RELEASE-SIGNING-KEY.pub.asc | gpg --import
+gpg --verify MasterSDR-vX.Y.Z-x86_64.AppImage.asc MasterSDR-vX.Y.Z-x86_64.AppImage
 ```
 
 See [docs/VERIFYING-RELEASES.md](docs/VERIFYING-RELEASES.md) for full instructions.
@@ -229,6 +229,6 @@ See [docs/VERIFYING-RELEASES.md](docs/VERIFYING-RELEASES.md) for full instructio
 
 ## License
 
-AetherSDR is free and open-source software licensed under the [GNU General Public License v3](LICENSE).
+MasterSDR is free and open-source software licensed under the [GNU General Public License v3](LICENSE).
 
-*AetherSDR is an independent project and is not affiliated with or endorsed by FlexRadio Systems.*
+*MasterSDR is an independent project and is not affiliated with or endorsed by FlexRadio Systems.*

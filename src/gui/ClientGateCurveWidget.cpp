@@ -1,4 +1,4 @@
-#include "ClientGateCurveWidget.h"
+﻿#include "ClientGateCurveWidget.h"
 #include "core/ClientGate.h"
 
 #include <QPainter>
@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -246,4 +246,4 @@ void ClientGateCurveWidget::drawBall(QPainter& p, const QRectF& r) const
     p.restore();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

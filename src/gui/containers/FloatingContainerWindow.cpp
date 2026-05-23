@@ -1,4 +1,4 @@
-#include "FloatingContainerWindow.h"
+﻿#include "FloatingContainerWindow.h"
 #include "ContainerWidget.h"
 #include "core/AppSettings.h"
 #include "gui/FramelessResizer.h"
@@ -12,7 +12,7 @@
 #include <QScreen>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -206,4 +206,4 @@ void FloatingContainerWindow::resizeEvent(QResizeEvent* ev)
     if (!m_restoring) m_saveTimer.start();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

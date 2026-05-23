@@ -1,4 +1,4 @@
-#include "AdifParser.h"
+﻿#include "AdifParser.h"
 #include "CtyDatParser.h"
 
 #include <QFile>
@@ -6,7 +6,7 @@
 #include <QThread>
 #include <QtAlgorithms>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ---------------------------------------------------------------------------
 // Static helpers
@@ -181,4 +181,4 @@ void AdifParser::parseFileAsync(const QString& path)
     emit openFailed(path);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

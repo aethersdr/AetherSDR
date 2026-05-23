@@ -1,9 +1,9 @@
-#include "OleCompoundFile.h"
+﻿#include "OleCompoundFile.h"
 #include "LogManager.h"
 
 #include <QtEndian>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -396,4 +396,4 @@ QByteArray OleCompoundFile::readMiniChain(quint32 startSector, quint64 totalSize
     return out;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
@@ -12,7 +12,7 @@
 class QNetworkAccessManager;
 class QFrame;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class PropDashboardDialog : public PersistentDialog {
     Q_OBJECT
@@ -76,4 +76,4 @@ private:
     QLabel* m_esEuLabel{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

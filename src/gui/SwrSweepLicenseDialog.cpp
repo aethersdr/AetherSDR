@@ -1,4 +1,4 @@
-#include "SwrSweepLicenseDialog.h"
+﻿#include "SwrSweepLicenseDialog.h"
 #include "core/AppSettings.h"
 
 #include <QCheckBox>
@@ -7,7 +7,7 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -98,4 +98,4 @@ bool SwrSweepLicenseDialog::confirm(QWidget* parent)
     return true;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

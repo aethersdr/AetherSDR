@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QList>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class RigctlProtocol;
@@ -51,4 +51,4 @@ private:
     int              m_sliceIndex{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

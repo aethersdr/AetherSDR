@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QString>
@@ -6,7 +6,7 @@
 
 class QLineEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Shared rotary knob for the compressor editor.  Click-drag vertical to
 // change the value, wheel for fine adjustment, double-click to reset to
@@ -110,4 +110,4 @@ private:
     QLineEdit*  m_valueEdit{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

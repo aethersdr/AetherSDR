@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QVector>
 #include <QKeySequence>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ShortcutManager;
 
@@ -53,4 +53,4 @@ private:
     float m_originY{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

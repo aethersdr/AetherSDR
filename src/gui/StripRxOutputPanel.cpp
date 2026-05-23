@@ -1,4 +1,4 @@
-#include "StripRxOutputPanel.h"
+﻿#include "StripRxOutputPanel.h"
 
 #include "ClientCompKnob.h"
 #include "EditorFramelessTitleBar.h"
@@ -24,7 +24,7 @@ namespace {
 // Same dark panel chrome as the other strip cells — frameless title
 // bar on transparent background, dark inner fill.
 constexpr const char* kWindowStyle =
-    "AetherSDR--StripRxOutputPanel { background: #0e1b28;"
+    "MasterSDR--StripRxOutputPanel { background: #0e1b28;"
     " border: 1px solid #2a3a4a; border-radius: 4px; }"
     "QLabel { background: transparent; color: #8aa8c0; font-size: 11px; }";
 
@@ -156,13 +156,13 @@ private:
 
 } // namespace
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 StripRxOutputPanel::StripRxOutputPanel(AudioEngine* engine, QWidget* parent)
     : QWidget(parent)
     , m_audio(engine)
 {
-    const QString title = QString::fromUtf8("Aetherial Output \xe2\x80\x94 RX");
+    const QString title = QString::fromUtf8("Masterial Output \xe2\x80\x94 RX");
     setWindowTitle(title);
     setStyleSheet(kWindowStyle);
 
@@ -440,4 +440,4 @@ void StripRxOutputPanel::tick()
     if (m_meter)   m_meter->update();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

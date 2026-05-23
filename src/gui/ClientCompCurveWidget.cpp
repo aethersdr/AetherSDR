@@ -1,4 +1,4 @@
-#include "ClientCompCurveWidget.h"
+﻿#include "ClientCompCurveWidget.h"
 #include "core/ClientComp.h"
 
 #include <QPainter>
@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -260,4 +260,4 @@ void ClientCompCurveWidget::drawBall(QPainter& p, const QRectF& r) const
     p.restore();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

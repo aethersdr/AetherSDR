@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QMap>
 #include <QString>
 #include <QDateTime>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct SpotData {
     int index{-1};
@@ -48,4 +48,4 @@ private:
     QMap<int, SpotData> m_spots;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

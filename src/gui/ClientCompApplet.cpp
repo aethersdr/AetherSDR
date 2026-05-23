@@ -1,4 +1,4 @@
-#include "ClientCompApplet.h"
+﻿#include "ClientCompApplet.h"
 #include "ClientCompCurveWidget.h"
 #include "ClientCompKnob.h"
 #include "MeterSmoother.h"
@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Gain-reduction mini-strip used by the applet.  Named at file scope
 // (not in an anonymous namespace) so ClientCompApplet.h can forward-
@@ -306,4 +306,4 @@ void ClientCompApplet::tickMeter()
     if (m_makeup)  { QSignalBlocker b(m_makeup);  m_makeup->setValue(c->makeupDb()); }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

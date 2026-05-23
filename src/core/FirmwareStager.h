@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Downloads SmartSDR installer, verifies integrity, extracts .ssdr firmware
 // files, and stages them for upload.
@@ -93,4 +93,4 @@ private:
         "https://www.flexradio.com/software/";
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

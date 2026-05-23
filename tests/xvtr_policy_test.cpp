@@ -1,4 +1,4 @@
-// Standalone regression tests for XVTR band-stack keys and waterfall IF/RF
+﻿// Standalone regression tests for XVTR band-stack keys and waterfall IF/RF
 // mapping. Build target: xvtr_policy_test.
 
 #include "models/XvtrPolicy.h"
@@ -7,7 +7,7 @@
 #include <cstdio>
 #include <string>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

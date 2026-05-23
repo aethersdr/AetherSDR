@@ -1,4 +1,4 @@
-#include "CwSidetoneGenerator.h"
+﻿#include "CwSidetoneGenerator.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,7 +6,7 @@
 
 #include <QVarLengthArray>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -220,4 +220,4 @@ bool CwSidetoneGenerator::process(float* out, int frames) noexcept
     return wroteAny;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

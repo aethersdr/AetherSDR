@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifdef __APPLE__
 
@@ -7,7 +7,7 @@
 #include <vector>
 #include <Accelerate/Accelerate.h>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // macOS spectral noise reduction using Apple Accelerate (vDSP).
 //
@@ -95,6 +95,6 @@ private:
     std::atomic<float> m_strength{1.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // __APPLE__

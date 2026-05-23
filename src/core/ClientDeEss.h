@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <atomic>
 #include <cstdint>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Client-side de-esser — TX DSP chain Phase 3 (#1661).  Sibilant
 // suppression via sidechain-filtered dynamics: the input is split
@@ -118,4 +118,4 @@ private:
     float m_envLin{0.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

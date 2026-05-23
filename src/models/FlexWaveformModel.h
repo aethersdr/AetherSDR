@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QList>
 #include <QMap>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // A single installed waveform (legacy or Docker container).
 // Mirrors FlexLib's Waveform record (Waveform.cs).
@@ -67,4 +67,4 @@ private:
     QString m_wfpIpAddress;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#include "ConnectionPanel.h"
+﻿#include "ConnectionPanel.h"
 #include "core/AppSettings.h"
 #include "core/NetworkPathResolver.h"
 #include "FramelessResizer.h"
@@ -20,7 +20,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -347,7 +347,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
         "background: transparent; border: none; }");
     emptyCalloutLayout->addWidget(emptyTitle);
     emptyCalloutLayout->addWidget(makeWrappedLabel(
-        "AetherSDR is still listening for discovery packets. If your station is on a VPN "
+        "MasterSDR is still listening for discovery packets. If your station is on a VPN "
         "or another routed network, switch to \"Connect by IP\" instead.",
         kHintLabelStyle));
 
@@ -457,7 +457,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualLayout->setSpacing(8);
     manualLayout->addWidget(makeWrappedLabel(
         "Use this path for VPN or other routed networks where discovery broadcasts cannot reach "
-        "the radio. Enter the radio IP address and AetherSDR will take care of the probe.",
+        "the radio. Enter the radio IP address and MasterSDR will take care of the probe.",
         kHintLabelStyle));
 
     auto* manualGroup = new QGroupBox("Radio IP address", manualPage);
@@ -1312,7 +1312,7 @@ void ConnectionPanel::probeRadio(const QString& ip)
                 .arg(bindSettings.bindAddress.toString(), sock->errorString()));
         m_manualSourceWarningLabel->setVisible(true);
         updateManualAdvancedVisibility();
-        setManualMessage("AetherSDR could not use that VPN source path. Try Auto or choose another path.", true);
+        setManualMessage("MasterSDR could not use that VPN source path. Try Auto or choose another path.", true);
         sock->deleteLater();
         m_manualConnectPending = false;
         m_manualConnectBtn->setText("Connect by IP");
@@ -1487,4 +1487,4 @@ void ConnectionPanel::probeRadio(const QString& ip)
     });
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

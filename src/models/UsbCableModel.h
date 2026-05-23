@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QMap>
 #include <QString>
 #include <QVariantMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Per-bit configuration for Bit cables (8 bits, indices 0-7)
 struct UsbCableBit {
@@ -98,4 +98,4 @@ private:
     QMap<QString, UsbCable> m_cables;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

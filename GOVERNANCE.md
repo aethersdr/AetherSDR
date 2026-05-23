@@ -1,6 +1,6 @@
-# AetherSDR Project Governance
+﻿# MasterSDR Project Governance
 
-This document describes how AetherSDR is governed — who has authority over
+This document describes how MasterSDR is governed — who has authority over
 what, how decisions are made, and how contributors can earn expanded roles.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the mechanics of submitting code.
@@ -9,7 +9,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the mechanics of submitting code.
 
 ## Project Direction
 
-AetherSDR's goal is a **Linux-native, cross-platform** FlexRadio client that
+MasterSDR's goal is a **Linux-native, cross-platform** FlexRadio client that
 matches SmartSDR feature-for-feature. Every technical and design decision
 should be evaluated against that goal.
 
@@ -152,12 +152,12 @@ above are hard gates — no merge without maintainer sign-off.
 
 ## AI Contributors
 
-AetherSDR has two categories of AI involvement:
+MasterSDR has two categories of AI involvement:
 
-### AetherClaude (automated agent)
+### MasterClaude (automated agent)
 
-AetherClaude is an official automated contributor that monitors the issue
-tracker and opens PRs for issues labeled `aetherclaude`. It operates within
+MasterClaude is an official automated contributor that monitors the issue
+tracker and opens PRs for issues labeled `MasterClaude`. It operates within
 strict boundaries defined in `CLAUDE.md`:
 
 - **May autonomously fix:** bugs with clear root cause, protocol compliance
@@ -165,7 +165,7 @@ strict boundaries defined in `CLAUDE.md`:
 - **May not autonomously change:** visual design, UX behavior, architecture,
   feature scope, default values
 
-AetherClaude PRs are reviewed by the maintainer before merge.
+MasterClaude PRs are reviewed by the maintainer before merge.
 
 ### AI-assisted human contributions
 

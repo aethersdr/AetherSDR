@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
     Build DeepFilterNet3 libdf library for Windows x64.
 
@@ -29,7 +29,7 @@ if ((Test-Path "$LibDir\deepfilter.dll") -and (Test-Path "$OutDir\models\$ModelN
 }
 
 # ── Try downloading pre-built binary ────────────────────────────────────
-$ReleaseRepo = if ($env:DFNR_RELEASE_REPO) { $env:DFNR_RELEASE_REPO } else { "ten9876/AetherSDR" }
+$ReleaseRepo = if ($env:DFNR_RELEASE_REPO) { $env:DFNR_RELEASE_REPO } else { "ten9876/MasterSDR" }
 $ReleaseTag  = "dfnr-libs"
 $Platform    = "windows-x86_64"
 $Tarball     = "libdeepfilter-$Platform.tar.gz"

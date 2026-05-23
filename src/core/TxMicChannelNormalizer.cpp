@@ -1,11 +1,11 @@
-#include "TxMicChannelNormalizer.h"
+﻿#include "TxMicChannelNormalizer.h"
 
 #include <QtEndian>
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR::TxMicChannelNormalizer {
+namespace MasterSDR::TxMicChannelNormalizer {
 
 namespace {
 constexpr float kSilenceFloor = 0.0005623413f; // -65 dBFS
@@ -411,4 +411,4 @@ const char* channelModeName(ChannelMode mode)
     return "Unknown";
 }
 
-} // namespace AetherSDR::TxMicChannelNormalizer
+} // namespace MasterSDR::TxMicChannelNormalizer

@@ -1,12 +1,12 @@
----
+﻿---
 name: triage
-description: Triage all open GitHub issues — label, respond, prioritize, and flag for AetherClaude agent
+description: Triage all open GitHub issues — label, respond, prioritize, and flag for MasterClaude agent
 user_invocable: true
 ---
 
 # Issue Triage
 
-Perform a full triage of all open GitHub issues on the AetherSDR repository. Execute each step thoroughly.
+Perform a full triage of all open GitHub issues on the MasterSDR repository. Execute each step thoroughly.
 
 ## Step 1: Fetch Issues
 
@@ -30,7 +30,7 @@ Apply appropriate labels from our label set:
 - **Priority:** `priority: high`, `priority: medium`, `priority: low`
 - **Build:** `github_actions`, `dependencies`
 - **Safety:** `safety`, `upstream`
-- **Agent:** `aetherclaude-eligible` (see criteria below)
+- **Agent:** `MasterClaude-eligible` (see criteria below)
 
 ## Step 4: Respond to Issues
 
@@ -53,9 +53,9 @@ Close issues that are:
 
 Always explain why when closing and thank the reporter.
 
-## Step 6: Flag for AetherClaude Agent
+## Step 6: Flag for MasterClaude Agent
 
-Apply `aetherclaude-eligible` label ONLY to issues that meet ALL criteria:
+Apply `MasterClaude-eligible` label ONLY to issues that meet ALL criteria:
 - Clear, well-defined bug with obvious fix
 - No protocol investigation or radio interaction needed
 - No architectural decisions required

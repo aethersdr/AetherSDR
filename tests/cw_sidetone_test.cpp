@@ -1,4 +1,4 @@
-#include "core/CwSidetoneGenerator.h"
+﻿#include "core/CwSidetoneGenerator.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,7 +6,7 @@
 #include <cstdlib>
 #include <vector>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

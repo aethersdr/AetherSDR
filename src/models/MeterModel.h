@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QMap>
 #include <QJsonArray>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Describes a single meter definition received from the radio via TCP status.
 // Format: "meter N N.src=SLC N.num=0 N.nam=LEVEL N.unit=dBm N.low=-150 N.hi=20"
@@ -241,4 +241,4 @@ private:
     float m_ampTemp{0.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

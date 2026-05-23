@@ -1,11 +1,11 @@
-#include "gui/SliceLabel.h"
+﻿#include "gui/SliceLabel.h"
 #include "core/AppSettings.h"
 
 #include <QChar>
 #include <QString>
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 static int g_failures = 0;
 

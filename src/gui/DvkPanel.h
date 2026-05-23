@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QPushButton>
@@ -11,7 +11,7 @@
 class QFrame;
 class QShortcut;
 
-namespace AetherSDR {
+namespace MasterSDR {
 class DvkModel;
 class DvkWavTransfer;
 
@@ -74,4 +74,4 @@ private:
     int durationForSlot(int id) const;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,6 +1,6 @@
-/*  SpectralNR.h
+﻿/*  SpectralNR.h
 
-This file is part of AetherSDR.
+This file is part of MasterSDR.
 
 Portions of this file are derived from WDSP (emnr.c):
   Copyright (C) 2015, 2025 Warren Pratt, NR0V
@@ -10,8 +10,8 @@ The WDSP-derived portions are licensed under the GNU General Public License
 as published by the Free Software Foundation; either version 2 of the
 License, or (at your option) any later version.
 
-AetherSDR integration and C++20/Qt6 adaptation:
-  Copyright (C) 2024-2026 AetherSDR Contributors
+MasterSDR integration and C++20/Qt6 adaptation:
+  Copyright (C) 2024-2026 MasterSDR Contributors
 
 This program is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -40,7 +40,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include <fftw3.h>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Client-side spectral noise reduction using the Ephraim-Malah MMSE
 // Log-Spectral Amplitude estimator with OSMS noise floor tracking.
@@ -235,4 +235,4 @@ private:
     static double bessI1(double x);
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

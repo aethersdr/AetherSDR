@@ -1,4 +1,4 @@
-#include "EqApplet.h"
+﻿#include "EqApplet.h"
 #include "GuardedSlider.h"
 #include "core/AppSettings.h"
 
@@ -13,7 +13,7 @@
 #include <QJsonObject>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── ResetButton: draws a 3/4-circle revert arrow ─────────────────────────────
 
@@ -360,4 +360,4 @@ void EqApplet::syncFromModel()
     m_updatingFromModel = false;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

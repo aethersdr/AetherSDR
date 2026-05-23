@@ -1,6 +1,6 @@
-#include "ModelCapabilities.h"
+﻿#include "ModelCapabilities.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -50,4 +50,4 @@ ModelCapabilities capabilitiesFor(const QString& model)
     return {};
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

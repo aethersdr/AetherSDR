@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <atomic>
 #include <cstdint>
 #include <vector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Downward expander / noise gate — TX DSP chain Phase 2 (#1661).  The
 // same DSP core covers both behaviours: a low ratio with a shallow range
@@ -135,4 +135,4 @@ private:
     int m_delayWrite{0};               // write index (frame-space)
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QStaticText>
 #include <QVector>
@@ -6,7 +6,7 @@
 
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ClientDeEss;
 
@@ -59,4 +59,4 @@ private:
     mutable bool                 m_labelsDirty{true};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

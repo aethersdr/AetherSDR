@@ -1,4 +1,4 @@
-#include "TciApplet.h"
+﻿#include "TciApplet.h"
 #include "SliceLabel.h"
 
 #ifdef HAVE_WEBSOCKETS
@@ -16,7 +16,7 @@
 #include <algorithm>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -365,4 +365,4 @@ void TciApplet::setTciTxLevel(float rms)
 #endif
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

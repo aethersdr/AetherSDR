@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -7,7 +7,7 @@ class QSlider;
 class QLabel;
 class QComboBox;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class SliceModel;
 
@@ -111,4 +111,4 @@ private:
     static constexpr int RIT_STEP_HZ = 10;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

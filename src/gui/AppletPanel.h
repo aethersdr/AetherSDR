@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "core/AudioEngine.h"
 
@@ -13,12 +13,12 @@ class QScrollArea;
 class QTimer;
 class QVBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 class ContainerManager;
 class ContainerWidget;
-} // namespace AetherSDR
+} // namespace MasterSDR
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class SliceModel;
 class RxApplet;
@@ -253,4 +253,4 @@ private:
     static const QStringList kDefaultOrder;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

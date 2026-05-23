@@ -1,4 +1,4 @@
-#include "AppSettings.h"
+﻿#include "AppSettings.h"
 
 #include <QStandardPaths>
 #include <QDir>
@@ -11,7 +11,7 @@
 #include <QCoreApplication>
 #include <QRegularExpression>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 AppSettings& AppSettings::instance()
 {
@@ -24,14 +24,14 @@ AppSettings::AppSettings()
     // GenericConfigLocation gives a plain base dir (no org/app suffix) on all
     // platforms: ~/.config on Linux/macOS, %LOCALAPPDATA% on Windows.
     // ConfigLocation on Windows Qt 6 resolves to AppConfigLocation
-    // (%LOCALAPPDATA%/OrgName/AppName), so appending "/AetherSDR" produces a
+    // (%LOCALAPPDATA%/OrgName/AppName), so appending "/MasterSDR" produces a
     // triple-nested path. GenericConfigLocation avoids this and stays consistent
     // with the log-dir path used in main.cpp.
     const QString configDir =
         QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-        + "/AetherSDR";
+        + "/MasterSDR";
     QDir().mkpath(configDir);
-    m_filePath = configDir + "/AetherSDR.settings";
+    m_filePath = configDir + "/MasterSDR.settings";
 
     migrateSettingsPath();
 }
@@ -45,12 +45,12 @@ void AppSettings::migrateSettingsPath()
 
 #if defined(Q_OS_WIN) || defined(Q_OS_MAC)
     // On Windows and macOS, Qt 6's ConfigLocation resolves to AppConfigLocation
-    // (%LOCALAPPDATA%/AetherSDR/AetherSDR on Windows,
-    //  ~/Library/Preferences/AetherSDR/AetherSDR on macOS), so appending
-    // "/AetherSDR" produced a triple-nested path. Move the file if found there.
+    // (%LOCALAPPDATA%/MasterSDR/MasterSDR on Windows,
+    //  ~/Library/Preferences/MasterSDR/MasterSDR on macOS), so appending
+    // "/MasterSDR" produced a triple-nested path. Move the file if found there.
     const QString oldPath =
         QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
-        + "/AetherSDR/AetherSDR.settings";
+        + "/MasterSDR/MasterSDR.settings";
     if (QFile::exists(oldPath)) {
         if (QFile::rename(oldPath, m_filePath)) {
             qDebug() << "AppSettings: migrated settings from" << oldPath << "to" << m_filePath;
@@ -169,7 +169,7 @@ void AppSettings::load()
 void AppSettings::save()
 {
     if (QCoreApplication* app = QCoreApplication::instance()) {
-        if (app->property("AetherSettingsResetInProgress").toBool()) {
+        if (app->property("MasterSettingsResetInProgress").toBool()) {
             qWarning() << "AppSettings: skipping save during reset-triggered shutdown";
             return;
         }
@@ -264,7 +264,7 @@ void AppSettings::reset()
 {
     m_settings.clear();
     m_stationSettings.clear();
-    m_stationName = "AetherSDR";
+    m_stationName = "MasterSDR";
     m_loadedCount = 0;
 }
 
@@ -321,7 +321,7 @@ void AppSettings::setStationName(const QString& name)
 
 void AppSettings::migrateFromQSettings()
 {
-    QSettings old("AetherSDR", "AetherSDR");
+    QSettings old("MasterSDR", "MasterSDR");
     const QStringList keys = old.allKeys();
 
     if (keys.isEmpty()) {
@@ -399,4 +399,4 @@ void AppSettings::migrateFromQSettings()
     qDebug() << "AppSettings: migration complete, saved to" << m_filePath;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

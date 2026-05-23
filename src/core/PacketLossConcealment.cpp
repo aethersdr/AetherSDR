@@ -1,10 +1,10 @@
-#include "PacketLossConcealment.h"
+﻿#include "PacketLossConcealment.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -77,4 +77,4 @@ QByteArray applyConcealmentFade(QByteArray pcm, AudioPlcState& plc, bool enabled
     return out;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

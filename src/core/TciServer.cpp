@@ -1,4 +1,4 @@
-#ifdef HAVE_WEBSOCKETS
+﻿#ifdef HAVE_WEBSOCKETS
 #include "TciServer.h"
 #include "TciProtocol.h"
 #include "StreamStatus.h"
@@ -22,7 +22,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── TCI binary audio frame header (per ExpertSDR3 TCI spec v2.0) ────────
 // 9 × uint32 = 36 bytes, followed by sample payload
@@ -194,7 +194,7 @@ bool TciServer::start(quint16 port)
         return m_server->isListening();
 
     m_server = new QWebSocketServer(
-        QStringLiteral("AetherSDR-TCI"),
+        QStringLiteral("MasterSDR-TCI"),
         QWebSocketServer::NonSecureMode, this);
 
     if (!m_server->listen(QHostAddress::Any, port)) {
@@ -1618,6 +1618,6 @@ void TciServer::releaseDaxForTci()
     m_tciDaxSlices.clear();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_WEBSOCKETS

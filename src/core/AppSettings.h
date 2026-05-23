@@ -1,14 +1,14 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QVariant>
 #include <QMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // XML-based application settings, structured to match SmartSDR's SSDR.settings.
-// Stored at ~/.config/AetherSDR/AetherSDR.settings (Linux/macOS) or
-// %LOCALAPPDATA%/AetherSDR/AetherSDR.settings (Windows).
+// Stored at ~/.config/MasterSDR/MasterSDR.settings (Linux/macOS) or
+// %LOCALAPPDATA%/MasterSDR/MasterSDR.settings (Windows).
 //
 // Usage:
 //   auto& s = AppSettings::instance();
@@ -40,7 +40,7 @@ public:
     QVariant stationValue(const QString& key, const QVariant& defaultValue = {}) const;
     void setStationValue(const QString& key, const QVariant& val);
 
-    // Station name (defaults to "AetherSDR").
+    // Station name (defaults to "MasterSDR").
     QString stationName() const;
     void setStationName(const QString& name);
 
@@ -66,8 +66,8 @@ private:
     QString m_filePath;
     QMap<QString, QString> m_settings;          // top-level key=value
     QMap<QString, QString> m_stationSettings;   // per-station key=value
-    QString m_stationName{"AetherSDR"};
+    QString m_stationName{"MasterSDR"};
     int m_loadedCount{0};  // settings count at load time (guard against truncated saves)
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

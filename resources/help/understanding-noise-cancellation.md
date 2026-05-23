@@ -1,4 +1,4 @@
-# Understanding Noise Cancellation
+﻿# Understanding Noise Cancellation
 
 ## What Is Noise Cancellation and Why Does It Matter?
 
@@ -15,7 +15,7 @@ Think of it like noise-cancelling headphones, but instead of blocking airplane
 cabin rumble, it is cleaning up a weak signal from the other side of the world.
 
 You do not need to understand the math behind any of this. The short version:
-turn on one of the NR options in AetherSDR, adjust the strength until the
+turn on one of the NR options in MasterSDR, adjust the strength until the
 background noise drops without making the voice sound robotic, and enjoy
 cleaner audio. The sections below explain what each option does and when to
 reach for it.
@@ -46,7 +46,7 @@ Starting in the late 1990s and into the 2000s, researchers developed more
 sophisticated approaches. Instead of simply subtracting noise, these methods
 use probability and statistics to estimate what the clean speech "should"
 sound like. Algorithms like the Ephraim-Malah estimator (the foundation of
-what AetherSDR calls NR2) track the noise floor in real time, adapt to
+what MasterSDR calls NR2) track the noise floor in real time, adapt to
 changing conditions, and apply just enough suppression to reduce noise without
 damaging the voice. The result is cleaner audio with fewer artifacts, though
 you still have knobs to turn if the conditions are unusual.
@@ -66,7 +66,7 @@ GPU-accelerated AI denoising that can run in real time alongside your radio
 software.
 
 The trend is clear: each generation gets better at separating voice from noise,
-needs less manual tuning, and handles a wider range of noise types. AetherSDR
+needs less manual tuning, and handles a wider range of noise types. MasterSDR
 gives you access to options from every era so you can pick what works best for
 your station and your computer.
 
@@ -74,20 +74,20 @@ your station and your computer.
 
 ## Noise Cancellation Options at a Glance
 
-Your FlexRadio and AetherSDR each provide their own noise reduction tools.
+Your FlexRadio and MasterSDR each provide their own noise reduction tools.
 They run in different places — the radio-side options run inside your
-FlexRadio's own DSP hardware, while AetherSDR's options run on your computer
+FlexRadio's own DSP hardware, while MasterSDR's options run on your computer
 after the audio arrives from the radio. Understanding which is which will help
 you get the most out of both.
 
-You can use one radio-side option and one AetherSDR option at the same time —
-they stack. Many operators use light radio-side NR plus one of AetherSDR's
+You can use one radio-side option and one MasterSDR option at the same time —
+they stack. Many operators use light radio-side NR plus one of MasterSDR's
 modes for the best result.
 
 ### Radio-Side (FlexRadio Hardware)
 
 These are built into your FlexRadio and processed on the radio itself.
-AetherSDR gives you access to them through the DSP buttons on the VFO bar
+MasterSDR gives you access to them through the DSP buttons on the VFO bar
 and the spectrum overlay panel, but the processing happens on the radio —
 not on your PC.
 
@@ -98,11 +98,11 @@ not on your PC.
 | ANF | Automatic Notch Filter | ANF Level slider | Removing carriers, heterodynes, and steady tones |
 
 If you are wondering "where are NB, NR, and ANF?" — they are right here,
-controlled through AetherSDR but running on your FlexRadio hardware.
+controlled through MasterSDR but running on your FlexRadio hardware.
 
-### Client-Side (AetherSDR Software)
+### Client-Side (MasterSDR Software)
 
-These are unique to AetherSDR and run on your computer's CPU (or GPU in the
+These are unique to MasterSDR and run on your computer's CPU (or GPU in the
 case of BNR). They process the audio after it leaves the radio, giving you an
 additional layer of noise reduction beyond what the radio provides. Only one
 client-side mode can be active at a time.
@@ -124,7 +124,7 @@ available in your installation — this is normal and nothing is broken.
 
 ### A Note About CW and Digital Modes
 
-AetherSDR's client-side noise reduction modes are designed for voice (SSB)
+MasterSDR's client-side noise reduction modes are designed for voice (SSB)
 operation. They work by identifying and preserving human speech while removing
 everything else — which is exactly the wrong thing to do when the signal you
 want is a CW tone or a digital mode like FT8, JS8Call, or RTTY.
@@ -147,7 +147,7 @@ processing and are designed to work across all modes.
 
 NR2 is based on the Ephraim-Malah Minimum Mean Square Error Log-Spectral
 Amplitude (MMSE-LSA) estimator, a well-regarded algorithm originally published
-by Yariv Ephraim and David Malah in 1985. The implementation in AetherSDR is
+by Yariv Ephraim and David Malah in 1985. The implementation in MasterSDR is
 derived from the open-source WDSP library written by Warren Pratt, NR0V, which
 has been a staple in FlexRadio and other SDR platforms for over a decade.
 
@@ -310,7 +310,7 @@ gradually — over-processing can make voices sound robotic or hollow.
 
 - **Quick toggle:** The DSP buttons on the VFO bar (NR2, RN2, NR4, MNR, BNR, DFNR)
 - **Overlay panel:** Right-click the spectrum display, open the DSP panel
-- **Full settings:** Settings menu → AetherDSP Settings (or right-click any DSP applet)
+- **Full settings:** Settings menu → MasterDsp Settings (or right-click any DSP applet)
 - **Right-click shortcut:** Right-click the NR2 button on the VFO bar for a quick parameter popup
 
 ---

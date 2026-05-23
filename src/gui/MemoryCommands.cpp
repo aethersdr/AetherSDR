@@ -1,10 +1,10 @@
-#include "MemoryCommands.h"
+﻿#include "MemoryCommands.h"
 
 #include "models/SliceModel.h"
 
 #include <QPointer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 QString encodeMemoryText(const QString& value)
 {
@@ -141,4 +141,4 @@ void createMemoryFromSlice(RadioModel* model,
     });
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

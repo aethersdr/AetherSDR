@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QList>
@@ -8,7 +8,7 @@
 #include <QTimer>
 #include <QNetworkAccessManager>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Information about a radio discovered via SmartLink (WAN).
 struct WanRadioInfo {
@@ -137,4 +137,4 @@ private:
     QString m_userLastName;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

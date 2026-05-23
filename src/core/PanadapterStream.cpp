@@ -1,4 +1,4 @@
-#include "PanadapterStream.h"
+﻿#include "PanadapterStream.h"
 #include "AppSettings.h"
 #include "LogManager.h"
 #include "OpusCodec.h"
@@ -14,7 +14,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -1225,4 +1225,4 @@ void PanadapterStream::sendToRadio(const QByteArray& packet)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

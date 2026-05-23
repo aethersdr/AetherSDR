@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 #ifdef HAVE_HIDAPI
 
 #include <cstdint>
 #include <cstddef>
 #include <memory>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct HidEvent {
     enum Type { None, Rotate, Button };
@@ -75,5 +75,5 @@ private:
     bool m_firstReport{true};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 #endif

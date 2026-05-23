@@ -1,4 +1,4 @@
-#include "models/MeterModel.h"
+﻿#include "models/MeterModel.h"
 
 #include <QCoreApplication>
 #include <QThread>
@@ -7,7 +7,7 @@
 #include <cmath>
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

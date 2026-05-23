@@ -1,10 +1,10 @@
-#include "KeyboardMapWidget.h"
+﻿#include "KeyboardMapWidget.h"
 #include "core/ShortcutManager.h"
 
 #include <QPainter>
 #include <QMouseEvent>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ─── Category colors ────────────────────────────────────────────────────────
 
@@ -337,4 +337,4 @@ void KeyboardMapWidget::leaveEvent(QEvent*)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

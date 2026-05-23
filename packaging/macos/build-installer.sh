@@ -1,15 +1,15 @@
-#!/bin/bash
+﻿#!/bin/bash
 set -euo pipefail
 
-# Build AetherSDR macOS installer (.pkg)
+# Build MasterSDR macOS installer (.pkg)
 # Usage: ./packaging/macos/build-installer.sh [build-dir]
 
 BUILD_DIR="${1:-build}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PKG_DIR="${BUILD_DIR}/pkg-staging"
-VERSION=$(grep 'project(AetherSDR' CMakeLists.txt | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
+VERSION=$(grep 'project(MasterSDR' CMakeLists.txt | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || echo "0.0.0")
 
-echo "=== Building AetherSDR macOS installer v${VERSION} ==="
+echo "=== Building MasterSDR macOS installer v${VERSION} ==="
 
 # 1. Build app
 cmake -B "${BUILD_DIR}" -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
@@ -28,13 +28,13 @@ rm -rf "${PKG_DIR}"
 mkdir -p "${PKG_DIR}/app" "${PKG_DIR}/hal" "${PKG_DIR}/scripts"
 
 # Copy app bundle
-cp -R "${BUILD_DIR}/AetherSDR.app" "${PKG_DIR}/app/"
+cp -R "${BUILD_DIR}/MasterSDR.app" "${PKG_DIR}/app/"
 
 # Copy HAL plugin (check both possible build locations)
-if [ -d "${HAL_BUILD}/AetherSDRDAX.driver" ]; then
-    cp -R "${HAL_BUILD}/AetherSDRDAX.driver" "${PKG_DIR}/hal/"
-elif [ -d "${BUILD_DIR}/AetherSDRDAX.driver" ]; then
-    cp -R "${BUILD_DIR}/AetherSDRDAX.driver" "${PKG_DIR}/hal/"
+if [ -d "${HAL_BUILD}/MasterSDRDAX.driver" ]; then
+    cp -R "${HAL_BUILD}/MasterSDRDAX.driver" "${PKG_DIR}/hal/"
+elif [ -d "${BUILD_DIR}/MasterSDRDAX.driver" ]; then
+    cp -R "${BUILD_DIR}/MasterSDRDAX.driver" "${PKG_DIR}/hal/"
 else
     echo "WARNING: HAL plugin not found"
     echo "The installer will only contain the app."
@@ -53,35 +53,35 @@ chmod +x "${PKG_DIR}/scripts/postinstall"
 pkgbuild \
     --root "${PKG_DIR}/app" \
     --install-location /Applications \
-    --identifier com.aethersdr.app \
+    --identifier com.mastersdr.app \
     --version "${VERSION}" \
-    "${PKG_DIR}/AetherSDR-app.pkg"
+    "${PKG_DIR}/MasterSDR-app.pkg"
 
-if [ -d "${PKG_DIR}/hal/AetherSDRDAX.driver" ]; then
+if [ -d "${PKG_DIR}/hal/MasterSDRDAX.driver" ]; then
     pkgbuild \
         --root "${PKG_DIR}/hal" \
         --install-location "/Library/Audio/Plug-Ins/HAL" \
-        --identifier com.aethersdr.dax \
+        --identifier com.mastersdr.dax \
         --version "${VERSION}" \
         --scripts "${PKG_DIR}/scripts" \
-        "${PKG_DIR}/AetherSDR-dax.pkg"
+        "${PKG_DIR}/MasterSDR-dax.pkg"
 fi
 
 # 5. Create distribution XML
 cat > "${PKG_DIR}/Distribution.xml" << DISTXML
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="2">
-    <title>AetherSDR ${VERSION}</title>
+    <title>MasterSDR ${VERSION}</title>
     <welcome file="welcome.html"/>
     <options customize="allow" require-scripts="false"/>
 
     <script>
     function daxDriverInstalled() {
-        return system.files.fileExistsAtPath('/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver');
+        return system.files.fileExistsAtPath('/Library/Audio/Plug-Ins/HAL/MasterSDRDAX.driver');
     }
     function daxDriverNeedsUpdate() {
         // Always offer update if installed version differs
-        var plist = system.files.plistAtPath('/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver/Contents/Info.plist');
+        var plist = system.files.plistAtPath('/Library/Audio/Plug-Ins/HAL/MasterSDRDAX.driver/Contents/Info.plist');
         if (plist) {
             var installed = plist['CFBundleShortVersionString'] || '0';
             return (installed !== '${VERSION}');
@@ -95,20 +95,20 @@ cat > "${PKG_DIR}/Distribution.xml" << DISTXML
         <line choice="dax"/>
     </choices-outline>
 
-    <choice id="app" title="AetherSDR Application"
+    <choice id="app" title="MasterSDR Application"
             description="SmartSDR-compatible client for FlexRadio">
-        <pkg-ref id="com.aethersdr.app"/>
+        <pkg-ref id="com.mastersdr.app"/>
     </choice>
 
     <choice id="dax" title="DAX Virtual Audio Driver"
             description="Virtual audio devices for digital mode apps (WSJT-X, fldigi, etc.). Uncheck if already installed."
             selected="!daxDriverInstalled() || daxDriverNeedsUpdate()"
             tooltip="Currently installed: will skip unless a newer version is available">
-        <pkg-ref id="com.aethersdr.dax"/>
+        <pkg-ref id="com.mastersdr.dax"/>
     </choice>
 
-    <pkg-ref id="com.aethersdr.app" version="${VERSION}" onConclusion="none">AetherSDR-app.pkg</pkg-ref>
-    <pkg-ref id="com.aethersdr.dax" version="${VERSION}" onConclusion="none">AetherSDR-dax.pkg</pkg-ref>
+    <pkg-ref id="com.mastersdr.app" version="${VERSION}" onConclusion="none">MasterSDR-app.pkg</pkg-ref>
+    <pkg-ref id="com.mastersdr.dax" version="${VERSION}" onConclusion="none">MasterSDR-dax.pkg</pkg-ref>
 </installer-gui-script>
 DISTXML
 
@@ -116,11 +116,11 @@ DISTXML
 mkdir -p "${PKG_DIR}/resources"
 cat > "${PKG_DIR}/resources/welcome.html" << 'WELCOME'
 <html><body>
-<h1>AetherSDR</h1>
+<h1>MasterSDR</h1>
 <p>A native SmartSDR client for FlexRadio on macOS.</p>
 <p>This installer includes:</p>
 <ul>
-<li><b>AetherSDR.app</b> — the main application</li>
+<li><b>MasterSDR.app</b> — the main application</li>
 <li><b>DAX Virtual Audio Driver</b> — creates virtual audio devices for digital mode apps (WSJT-X, fldigi, VARA, etc.)</li>
 </ul>
 <p>After installation, the CoreAudio daemon will restart automatically to register the new audio devices.</p>
@@ -132,7 +132,7 @@ productbuild \
     --distribution "${PKG_DIR}/Distribution.xml" \
     --resources "${PKG_DIR}/resources" \
     --package-path "${PKG_DIR}" \
-    "${BUILD_DIR}/AetherSDR-${VERSION}-macOS.pkg"
+    "${BUILD_DIR}/MasterSDR-${VERSION}-macOS.pkg"
 
 echo ""
-echo "=== Installer created: ${BUILD_DIR}/AetherSDR-${VERSION}-macOS.pkg ==="
+echo "=== Installer created: ${BUILD_DIR}/MasterSDR-${VERSION}-macOS.pkg ==="

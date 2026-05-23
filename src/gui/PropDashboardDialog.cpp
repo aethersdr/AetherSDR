@@ -1,4 +1,4 @@
-#include "PropDashboardDialog.h"
+﻿#include "PropDashboardDialog.h"
 #include "core/AppSettings.h"
 
 #include <QColor>
@@ -21,7 +21,7 @@
 #include <QSizePolicy>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -827,7 +827,7 @@ void PropDashboardDialog::fetchImages()
 
     QString ts = QDateTime::currentDateTimeUtc().toString("yyyy-MM-ddTHH:mm");
     QNetworkRequest lReq{QUrl{QString("https://svs.gsfc.nasa.gov/api/dialamoon/%1").arg(ts)}};
-    lReq.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
+    lReq.setHeader(QNetworkRequest::UserAgentHeader, "MasterSDR");
     auto* lr = m_nam->get(lReq);
     connect(lr, &QNetworkReply::finished, this, [this, lr]() {
         lr->deleteLater();
@@ -854,7 +854,7 @@ void PropDashboardDialog::fetchImages()
         if (imgUrl.isEmpty()) return;
 
         QNetworkRequest ir{QUrl{imgUrl}};
-        ir.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
+        ir.setHeader(QNetworkRequest::UserAgentHeader, "MasterSDR");
         auto* imgR = m_nam->get(ir);
         connect(imgR, &QNetworkReply::finished, this, [this, imgR]() {
             imgR->deleteLater();
@@ -1094,7 +1094,7 @@ void PropDashboardDialog::fetchSolarImage()
     updateLearningNotes();
 
     QNetworkRequest req{QUrl{url}};
-    req.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
+    req.setHeader(QNetworkRequest::UserAgentHeader, "MasterSDR");
     auto* reply = m_nam->get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
         reply->deleteLater();
@@ -1123,4 +1123,4 @@ bool PropDashboardDialog::eventFilter(QObject* obj, QEvent* ev)
     return QDialog::eventFilter(obj, ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

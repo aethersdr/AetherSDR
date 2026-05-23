@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QTimer>
@@ -9,7 +9,7 @@ class QLabel;
 class QSlider;
 class QComboBox;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AtuPreTuneDialog;
 class BandPlanManager;
@@ -131,4 +131,4 @@ private:
     QTimer m_peakTick;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

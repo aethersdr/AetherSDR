@@ -1,4 +1,4 @@
-name: AppImage
+﻿name: AppImage
 
 on:
   push:
@@ -86,8 +86,8 @@ jobs:
         run: |
           DESTDIR=${{ github.workspace }}/AppDir cmake --install build
           # Resize icon to 256x256 (source is 768x768)
-          convert AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
-            -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png
+          convert AppDir/usr/share/icons/hicolor/256x256/apps/MasterSDR.png \
+            -resize 256x256 AppDir/usr/share/icons/hicolor/256x256/apps/MasterSDR.png
 
           # Bundle DeepFilterNet3 model for DFNR
           if [ -f third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz ]; then
@@ -120,7 +120,7 @@ jobs:
 
       - name: Build AppImage
         env:
-          LDAI_OUTPUT: AetherSDR-${{ github.ref_name }}-${{ matrix.arch }}.AppImage
+          LDAI_OUTPUT: MasterSDR-${{ github.ref_name }}-${{ matrix.arch }}.AppImage
           QT_SELECT: qt6
           EXTRA_QT_PLUGINS: multimedia
         run: |
@@ -132,18 +132,18 @@ jobs:
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
             --plugin qt \
-            --desktop-file AppDir/usr/share/applications/AetherSDR.desktop \
-            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/aethersdr.png \
+            --desktop-file AppDir/usr/share/applications/MasterSDR.desktop \
+            --icon-file AppDir/usr/share/icons/hicolor/256x256/apps/MasterSDR.png \
             --output appimage
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: AppImage-${{ matrix.arch }}
-          path: AetherSDR-*.AppImage
+          path: MasterSDR-*.AppImage
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3
         with:
-          files: AetherSDR-*.AppImage
+          files: MasterSDR-*.AppImage

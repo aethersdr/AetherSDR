@@ -1,4 +1,4 @@
-#include "ClientEqOutputFader.h"
+﻿#include "ClientEqOutputFader.h"
 
 #include <QEvent>
 #include <QFocusEvent>
@@ -15,7 +15,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -347,4 +347,4 @@ void ClientEqOutputFader::wheelEvent(QWheelEvent* ev)
     ev->accept();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

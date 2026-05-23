@@ -1,8 +1,8 @@
-#include "PanadapterModel.h"
+﻿#include "PanadapterModel.h"
 #include "core/PerfTelemetry.h"
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 PanadapterModel::PanadapterModel(const QString& panId, QObject* parent)
     : QObject(parent)
@@ -161,4 +161,4 @@ void PanadapterModel::applyWaterfallStatus(const QMap<QString, QString>& kvs)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

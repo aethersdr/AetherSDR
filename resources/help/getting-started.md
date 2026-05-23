@@ -1,8 +1,8 @@
-# Getting Started
+﻿# Getting Started
 
-## Welcome to AetherSDR
+## Welcome to MasterSDR
 
-AetherSDR is a native SmartSDR-compatible desktop client for FlexRadio transceivers. It is built to let you discover a radio, create slices and panadapters, manage receive and transmit paths, and run daily operating tasks without relying on a browser or an always-online station computer.
+MasterSDR is a native SmartSDR-compatible desktop client for FlexRadio transceivers. It is built to let you discover a radio, create slices and panadapters, manage receive and transmit paths, and run daily operating tasks without relying on a browser or an always-online station computer.
 
 If this is your first day with software defined radio, do not try to learn every control at once. Your first goal is much simpler:
 
@@ -24,7 +24,7 @@ Make sure:
 
 ### Local LAN connection
 
-1. Start AetherSDR.
+1. Start MasterSDR.
 2. Wait for the `Connect to Radio` dialog to show radios on the `On This Network` page.
 3. If the dialog is not visible, open `Settings -> Connect to Radio...`.
 4. Select the radio you want.
@@ -51,7 +51,7 @@ Remote operation depends more heavily on Internet quality, latency, and firewall
 
 ## Learn the Main Window
 
-The AetherSDR main window has four areas that matter immediately.
+The MasterSDR main window has four areas that matter immediately.
 
 ### Title bar
 
@@ -181,6 +181,6 @@ If a change follows only slice `A`, `B`, `C`, or `D`, it is probably slice-speci
 
 Once you are comfortable getting connected and identifying the main window areas:
 
-- Open `Help -> AetherSDR Help...` for a deeper window-by-window reference.
+- Open `Help -> MasterSDR Help...` for a deeper window-by-window reference.
 - Open `Help -> Configuring Data Modes...` before setting up WSJT-X, Winlink, fldigi, JS8Call, VARA, or IQ software.
-- Open `Help -> Contributing to AetherSDR...` if you want to report confusing behavior, request workflow improvements, or help improve the documentation itself.
+- Open `Help -> Contributing to MasterSDR...` if you want to report confusing behavior, request workflow improvements, or help improve the documentation itself.

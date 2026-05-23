@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QString>
 #include <QVector>
 #include <QMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct DvkRecording {
     int id{0};
@@ -54,4 +54,4 @@ private:
     DvkRecording* findRecording(int id);
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

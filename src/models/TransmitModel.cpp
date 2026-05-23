@@ -1,10 +1,10 @@
-#include "TransmitModel.h"
+﻿#include "TransmitModel.h"
 #include "core/ClientQuindarTone.h"
 #include "core/LogManager.h"
 #include <QDebug>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 TransmitModel::TransmitModel(QObject* parent)
     : QObject(parent)
@@ -900,4 +900,4 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
     m_pendingMoxOffTimer->start();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

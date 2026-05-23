@@ -1,4 +1,4 @@
-#include "ClientChainApplet.h"
+﻿#include "ClientChainApplet.h"
 #include "ClientChainWidget.h"
 #include "ClientRxChainWidget.h"
 #include "core/AppSettings.h"
@@ -18,7 +18,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -203,14 +203,14 @@ ClientChainApplet::ClientChainApplet(QWidget* parent) : QWidget(parent)
 
     outer->addWidget(m_hint);
 
-    // Double-click on any TX chain tile launches the Aetherial Audio
+    // Double-click on any TX chain tile launches the Masterial Audio
     // Channel Strip — the unified TX DSP window.  The legacy per-
     // stage floating editors are still reachable via the strip's own
     // controls; double-click on the chain is now the canonical
     // "edit my TX audio" gesture.
     connect(m_chain, &ClientChainWidget::editRequested, this,
             [this](AudioEngine::TxChainStage /*stage*/) {
-        emit aetherialStripToggleRequested();
+        emit MasterialStripToggleRequested();
     });
     connect(m_chain, &ClientChainWidget::stageEnabledChanged,
             this, &ClientChainApplet::stageEnabledChanged);
@@ -458,4 +458,4 @@ void ClientChainApplet::onBypassToggled(bool checked)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

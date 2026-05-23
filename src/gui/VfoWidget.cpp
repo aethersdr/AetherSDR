@@ -1,4 +1,4 @@
-#include "VfoWidget.h"
+﻿#include "VfoWidget.h"
 #include "PhaseKnob.h"
 #include "ComboStyle.h"
 #include "GuardedSlider.h"
@@ -155,7 +155,7 @@ public:
     }
 };
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── Styles ────────────────────────────────────────────────────────────────────
 
@@ -825,7 +825,7 @@ void VfoWidget::buildTabContent()
         m_agcCmb->setFixedHeight(20);
         m_agcCmb->setFixedWidth(60);
         m_sqlBtn->setFixedWidth(60);  // match AGC combo width
-        AetherSDR::applyComboStyle(m_agcCmb);
+        MasterSDR::applyComboStyle(m_agcCmb);
         agcRow->addWidget(m_agcCmb);
         m_agcTSlider = new GuardedSlider(Qt::Horizontal);
         m_agcTSlider->setAccessibleName("AGC threshold");
@@ -1101,32 +1101,32 @@ void VfoWidget::buildTabContent()
         m_anftBtn->setAccessibleName("FFT notch filter");
         m_apfBtn->hide();  // only visible in CW mode
 
-        // Client-side AetherDSP launcher — same kDspToggle styling and
+        // Client-side MasterDsp launcher — same kDspToggle styling and
         // single-cell width as the radio-side toggles, but non-checkable.
         // Placed by relayoutDspGrid() at the end of the radio-side toggle list.
-        m_aetherDspBtn = new QPushButton("ADSP");
-        m_aetherDspBtn->setCheckable(false);
-        m_aetherDspBtn->setMinimumHeight(22);
-        m_aetherDspBtn->setStyleSheet(kDspToggle);
-        m_aetherDspBtn->setAccessibleName("AetherDSP Settings");
-        m_aetherDspBtn->setToolTip("Open AetherDSP Settings (client-side NR2 / NR4 / DFNR / RN2 / BNR / MNR)");
-        connect(m_aetherDspBtn, &QPushButton::clicked, this,
-                &VfoWidget::aetherDspRequested);
+        m_MasterDspBtn = new QPushButton("ADSP");
+        m_MasterDspBtn->setCheckable(false);
+        m_MasterDspBtn->setMinimumHeight(22);
+        m_MasterDspBtn->setStyleSheet(kDspToggle);
+        m_MasterDspBtn->setAccessibleName("MasterDsp Settings");
+        m_MasterDspBtn->setToolTip("Open MasterDsp Settings (client-side NR2 / NR4 / DFNR / RN2 / BNR / MNR)");
+        connect(m_MasterDspBtn, &QPushButton::clicked, this,
+                &VfoWidget::MasterDspRequested);
 
-        // AetherVoice launcher — opens the Aetherial Audio Channel Strip.
+        // MasterVoice launcher — opens the Masterial Audio Channel Strip.
         // 2 columns wide (cols 2-3 of the same row that hosts ADSP).
-        m_aetherVoiceBtn = new QPushButton("AetherVoice");
-        m_aetherVoiceBtn->setCheckable(false);
-        m_aetherVoiceBtn->setMinimumHeight(22);
-        m_aetherVoiceBtn->setStyleSheet(kDspToggle);
-        m_aetherVoiceBtn->setAccessibleName("Aetherial Audio Channel Strip");
-        m_aetherVoiceBtn->setToolTip("Open Aetherial Audio Channel Strip — unified TX DSP suite");
-        connect(m_aetherVoiceBtn, &QPushButton::clicked, this,
-                &VfoWidget::aetherVoiceRequested);
+        m_MasterVoiceBtn = new QPushButton("MasterVoice");
+        m_MasterVoiceBtn->setCheckable(false);
+        m_MasterVoiceBtn->setMinimumHeight(22);
+        m_MasterVoiceBtn->setStyleSheet(kDspToggle);
+        m_MasterVoiceBtn->setAccessibleName("Masterial Audio Channel Strip");
+        m_MasterVoiceBtn->setToolTip("Open Masterial Audio Channel Strip — unified TX DSP suite");
+        connect(m_MasterVoiceBtn, &QPushButton::clicked, this,
+                &VfoWidget::MasterVoiceRequested);
 
         // Radio-side DSP buttons only \u2014 client-side modules (NR2 / NR4 /
         // MNR / BNR / DFNR / RN2) live in the spectrum overlay menu and
-        // the AetherDSP applet; users toggle them there to keep the VFO
+        // the MasterDsp applet; users toggle them there to keep the VFO
         // grid focused on what the radio supplies.  4-column layout:
         m_dspGrid->addWidget(m_nrBtn,   0, 0);
         m_dspGrid->addWidget(m_nbBtn,   0, 1);
@@ -1474,7 +1474,7 @@ void VfoWidget::buildTabContent()
             m_fmToneModeCmb = new GuardedComboBox;
             m_fmToneModeCmb->addItem("Off", QString("off"));
             m_fmToneModeCmb->addItem("CTCSS TX", QString("ctcss_tx"));
-            AetherSDR::applyComboStyle(m_fmToneModeCmb);
+            MasterSDR::applyComboStyle(m_fmToneModeCmb);
             toneRow->addWidget(m_fmToneModeCmb, 1);
 
             // Tone value — simplified list of common CTCSS tones
@@ -1486,7 +1486,7 @@ void VfoWidget::buildTabContent()
             for (double f : tones)
                 m_fmToneValueCmb->addItem(QString::number(f, 'f', 1),
                                            QString::number(f, 'f', 1));
-            AetherSDR::applyComboStyle(m_fmToneValueCmb);
+            MasterSDR::applyComboStyle(m_fmToneValueCmb);
             m_fmToneValueCmb->setEnabled(false);
             toneRow->addWidget(m_fmToneValueCmb, 1);
             fvb->addLayout(toneRow);
@@ -1630,7 +1630,7 @@ void VfoWidget::buildTabContent()
 #ifdef HAVE_RADE
         m_modeCombo->addItem("RADE");
 #endif
-        AetherSDR::applyComboStyle(m_modeCombo);
+        MasterSDR::applyComboStyle(m_modeCombo);
         m_modeCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
         connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int) {
@@ -1883,7 +1883,7 @@ void VfoWidget::buildTabContent()
         row->addWidget(lbl);
         m_daxCmb = new GuardedComboBox;
         m_daxCmb->addItems({"Off", "1", "2", "3", "4"});
-        AetherSDR::applyComboStyle(m_daxCmb);
+        MasterSDR::applyComboStyle(m_daxCmb);
         row->addWidget(m_daxCmb, 1);
         vb->addLayout(row);
 
@@ -3203,10 +3203,10 @@ void VfoWidget::relayoutDspGrid()
                           m_nrsBtn, m_rnnBtn, m_nrfBtn, m_anflBtn, m_anftBtn};
     for (auto* btn : all)
         m_dspGrid->removeWidget(btn);
-    if (m_aetherDspBtn)
-        m_dspGrid->removeWidget(m_aetherDspBtn);
-    if (m_aetherVoiceBtn)
-        m_dspGrid->removeWidget(m_aetherVoiceBtn);
+    if (m_MasterDspBtn)
+        m_dspGrid->removeWidget(m_MasterDspBtn);
+    if (m_MasterVoiceBtn)
+        m_dspGrid->removeWidget(m_MasterVoiceBtn);
 
     // Re-add only non-hidden buttons in 4-column rows
     int col = 0, row = 0;
@@ -3216,14 +3216,14 @@ void VfoWidget::relayoutDspGrid()
             if (++col >= 4) { col = 0; ++row; }
         }
     }
-    // Client-side launchers: ADSP (1 col) + AetherVoice (2 cols spanning
+    // Client-side launchers: ADSP (1 col) + MasterVoice (2 cols spanning
     // the rightmost 2 columns) live on the same row.  If ADSP would land
-    // beyond col 1, wrap the pair to a fresh row first so AetherVoice
+    // beyond col 1, wrap the pair to a fresh row first so MasterVoice
     // always occupies cols 2-3.
-    if (m_aetherDspBtn && m_aetherVoiceBtn) {
+    if (m_MasterDspBtn && m_MasterVoiceBtn) {
         if (col > 1) { col = 0; ++row; }
-        m_dspGrid->addWidget(m_aetherDspBtn, row, col);
-        m_dspGrid->addWidget(m_aetherVoiceBtn, row, 2, 1, 2);
+        m_dspGrid->addWidget(m_MasterDspBtn, row, col);
+        m_dspGrid->addWidget(m_MasterVoiceBtn, row, 2, 1, 2);
     }
 }
 
@@ -4089,4 +4089,4 @@ void VfoWidget::setRadeCallsign(const QString& callsign)
 }
 #endif
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-name: Sanitizers
+﻿name: Sanitizers
 
 # Weekly debug-heavy build that runs the test suite under AddressSanitizer +
 # UndefinedBehaviorSanitizer (one matrix entry) and ThreadSanitizer (separate
@@ -19,7 +19,7 @@ jobs:
   sanitize:
     name: ${{ matrix.sanitizer.label }}
     runs-on: ubuntu-latest
-    container: ghcr.io/ten9876/aethersdr-ci:latest
+    container: ghcr.io/ten9876/mastersdr-ci:latest
     strategy:
       fail-fast: false
       matrix:
@@ -30,11 +30,11 @@ jobs:
             # ASan + UBSan applied via CXXFLAGS / LDFLAGS so the flags
             # reach every target the build produces — including the
             # standalone unit-test executables (CMakeLists.txt:1273+),
-            # which are NOT linked against the AetherSDR target and
+            # which are NOT linked against the MasterSDR target and
             # therefore don't inherit the per-target -fsanitize=address
             # option set at CMakeLists.txt:1260. Setting the flags here
             # also lets us drop that coupling in a future
-            # -DAETHERSDR_SANITIZER=... cleanup without touching this
+            # -DMasterSDR_SANITIZER=... cleanup without touching this
             # workflow.
             extra_cxx: "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
             extra_ld:  "-fsanitize=address,undefined"

@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 #include <QList>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ClientDisconnectDialog : public QDialog {
 public:
@@ -37,4 +37,4 @@ private:
     QList<quint32> m_selectedHandles;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

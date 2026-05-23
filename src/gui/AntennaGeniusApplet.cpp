@@ -1,4 +1,4 @@
-#include "AntennaGeniusApplet.h"
+﻿#include "AntennaGeniusApplet.h"
 #include "GuardedSlider.h"
 #include "models/AntennaGeniusModel.h"
 
@@ -14,7 +14,7 @@
 #include <QDebug>
 #include "core/AppSettings.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 
 
@@ -526,4 +526,4 @@ void AntennaGeniusApplet::syncFromModel()
     updatePortDisplay(2);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

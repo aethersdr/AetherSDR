@@ -1,4 +1,4 @@
-#include "StripRxChainWidget.h"
+﻿#include "StripRxChainWidget.h"
 #include "core/ClientComp.h"
 #include "core/ClientDeEss.h"
 #include "core/ClientEq.h"
@@ -26,7 +26,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -42,7 +42,7 @@ constexpr int   kRowLeftPad    = 16;
 constexpr int   kMarginY       = 4;
 constexpr int   kArrowTip      = 3;
 
-const char*     kMimeFormat  = "application/x-aethersdr-rxchain-stage";
+const char*     kMimeFormat  = "application/x-MasterSDR-rxchain-stage";
 constexpr qreal kRadius      = 5.0;
 
 const QColor kBgBox        ("#0e1b28");
@@ -97,7 +97,7 @@ StripRxChainWidget::StripRxChainWidget(QWidget* parent) : QWidget(parent)
             m_pendingClickIdx = -1;
             // ADSP single-click toggles cluster bypass; stages do
             // their own bypass toggle.  Double-click on ADSP opens
-            // the AetherDsp dialog (handled separately below).
+            // the MasterDsp dialog (handled separately below).
             if (idx >= 0 && idx < m_boxes.size()) {
                 if (m_boxes[idx].kind == TileKind::StatusAdsp) {
                     toggleAdspBypass();
@@ -704,7 +704,7 @@ void StripRxChainWidget::toggleAdspBypass()
     } else {
         // Restore snapshot.  If nothing was on at bypass-time (or no
         // snapshot persisted), fall back to NR2 — sensible default
-        // matching the AetherDspWidget's first-use behaviour.
+        // matching the MasterDspWidget's first-use behaviour.
         if (m_adspBypassSnapshot.isEmpty()) {
             m_audio->setNr2Enabled(true);
         } else {
@@ -722,4 +722,4 @@ void StripRxChainWidget::toggleAdspBypass()
     update();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

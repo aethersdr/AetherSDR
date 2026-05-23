@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "core/AppSettings.h"
 
@@ -6,7 +6,7 @@
 #include <QJsonObject>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Persistence helper for the two independent CW decode toggles (#2417).
 //
@@ -74,4 +74,4 @@ private:
     }
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

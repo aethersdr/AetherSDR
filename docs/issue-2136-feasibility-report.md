@@ -1,4 +1,4 @@
-# Feasibility Report: Issue #2136 — Protocol v4.2.18 Waveform Sub-Shape Parser
+﻿# Feasibility Report: Issue #2136 — Protocol v4.2.18 Waveform Sub-Shape Parser
 
 **Date:** 2026-05-16
 **Status:** Completed — implemented as `FlexWaveformModel` on branch `feat/flex-waveform-model`
@@ -7,7 +7,7 @@
 
 ## Summary
 
-FlexRadio firmware v4.2.18 introduced three `waveform` status sub-shapes that AetherSDR
+FlexRadio firmware v4.2.18 introduced three `waveform` status sub-shapes that MasterSDR
 had no handler for. This report assessed the feasibility of adding protocol compliance.
 
 **Verdict:** Straightforward. Medium-low effort, low risk. The parser already disambiguated
@@ -108,7 +108,7 @@ FlexLib's `Waveform` is a record with `Name`, `Version`, `IsContainer`, and a co
 | `src/models/FlexWaveformModel.{h,cpp}` | Tier 1 (default) | @ten9876 or @jensenpat |
 | `src/models/RadioModel.{h,cpp}` | Tier 1 (default) | @ten9876 or @jensenpat |
 | `CMakeLists.txt` | **Tier 3 (maintainer-only)** | **@ten9876 only** |
-| `tests/flex_waveform_model_test.cpp` | Tier 2 (bot-approvable) | @AetherClaude or above |
+| `tests/flex_waveform_model_test.cpp` | Tier 2 (bot-approvable) | @MasterClaude or above |
 
 Note: CODEOWNERS protects `src/core/RadioModel.{h,cpp}` (stale path from earlier layout).
 The actual files are in `src/models/` — Tier 1 only.

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
@@ -10,7 +10,7 @@ class QPushButton;
 class QCheckBox;
 class QTabWidget;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 
@@ -42,4 +42,4 @@ private:
     QCheckBox* m_autoSaveTx{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

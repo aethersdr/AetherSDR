@@ -1,6 +1,6 @@
-# Contributing to AetherSDR
+﻿# Contributing to MasterSDR
 
-Thanks for your interest in AetherSDR! We're building a native SmartSDR
+Thanks for your interest in MasterSDR! We're building a native SmartSDR
 client for FlexRadio on Linux, macOS, and Windows. Community contributions
 are welcome.
 
@@ -11,7 +11,7 @@ the RFC process for significant changes.
 
 ## Quick Start
 
-1. Browse [open issues](https://github.com/aethersdr/AetherSDR/issues) —
+1. Browse [open issues](https://github.com/MasterSDR/MasterSDR/issues) —
    issues labeled `good first issue` are great starting points.
 2. Fork the repo and create a feature branch from `main`.
 3. Implement the fix or feature (one issue per PR).
@@ -21,10 +21,10 @@ the RFC process for significant changes.
 
 ## Reporting Bugs
 
-- Use the **lightbulb button** in AetherSDR's title bar for AI-assisted bug
-  reports, or open a [GitHub issue](https://github.com/aethersdr/AetherSDR/issues/new) directly.
-- Include: OS/distro, AetherSDR version, radio model, firmware version.
-- Attach logs (`~/.config/AetherSDR/aethersdr.log`) or use Help → Support → Send to Support.
+- Use the **lightbulb button** in MasterSDR's title bar for AI-assisted bug
+  reports, or open a [GitHub issue](https://github.com/MasterSDR/MasterSDR/issues/new) directly.
+- Include: OS/distro, MasterSDR version, radio model, firmware version.
+- Attach logs (`~/.config/MasterSDR/MasterSDR.log`) or use Help → Support → Send to Support.
 - Check existing issues first to avoid duplicates.
 
 ## Suggesting Features
@@ -38,7 +38,7 @@ the RFC process for significant changes.
 
 ## Submitting Code
 
-**Development tool:** AetherSDR is developed using [Claude Code](https://claude.com/claude-code)
+**Development tool:** MasterSDR is developed using [Claude Code](https://claude.com/claude-code)
 as the primary development environment. We **strongly encourage all contributors to use
 Claude Code** — it has full codebase context via `CLAUDE.md` and naturally produces code
 that matches our conventions.
@@ -198,7 +198,7 @@ GitHub on every tier — your own PR always needs review from someone else.
 | Tier | Paths | Who can approve |
 |---|---|---|
 | **Default** | Everything not listed below | @ten9876, @jensenpat |
-| **Mechanical / safe** | `tests/`, `docs/`, `*.md`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | @ten9876, @jensenpat, @AetherClaude |
+| **Mechanical / safe** | `tests/`, `docs/`, `*.md`, `.github/dependabot.yml`, `.github/docker/`, `.github/ISSUE_TEMPLATE/` | @ten9876, @jensenpat, @MasterClaude |
 | **Maintainer-only** | `src/gui/MainWindow.{h,cpp}`, `src/core/RadioModel.{h,cpp}`, `src/core/AudioEngine.{h,cpp}`, `src/core/PanadapterStream.{h,cpp}`, `CMakeLists.txt`, `CLAUDE.md`, `CONTRIBUTING.md`, `.github/CODEOWNERS`, `.github/workflows/` | @ten9876 |
 
 The maintainer-only tier covers *direction-impacting* paths: visual/UX,
@@ -207,7 +207,7 @@ configuration, and project policy. Per
 [CLAUDE.md](CLAUDE.md#autonomous-agent-boundaries), changes here need
 maintainer eyes regardless of who wrote them.
 
-The mechanical tier exists so the @AetherClaude bot can land low-risk
+The mechanical tier exists so the @MasterClaude bot can land low-risk
 changes (test additions, documentation tweaks, dependency bumps,
 template updates) without queueing on human review.
 
@@ -217,7 +217,7 @@ Draft status carries different meaning depending on who opened the PR:
 
 - **Human-authored draft** — work-in-progress; reviewers should skip
   these until the author marks Ready for Review.
-- **`@AetherClaude` / `aethersdr-agent[bot]` draft** — auto-generated
+- **`@MasterClaude` / `MasterSDR-agent[bot]` draft** — auto-generated
   from an issue and **awaiting human review**. The draft state holds
   the PR back from auto-merge; it is not "WIP". Treat it like a
   ready-to-review PR for triage purposes.
@@ -233,7 +233,7 @@ merging. The reasoning:
 - Squash-merge already runs a fresh three-way merge against `main`, so
   textual conflicts are caught at merge time regardless of branch age.
 - Forcing every PR to rebase after every other merge cost ~15–25 min
-  of CI per stale PR per batch day, which adds up fast when AetherClaude
+  of CI per stale PR per batch day, which adds up fast when MasterClaude
   is processing a queue of triaged issues.
 - Post-merge CI on `main` runs on every commit (see
   [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and
@@ -254,7 +254,7 @@ If post-merge CI on `main` fails after a merge:
    broad: `git revert -m 1 <merge-sha>` on a new branch, push, open a
    PR, merge. Never force-push `main`.
 4. For agent-authored regressions: re-open the source issue, remove
-   the `aetherclaude-eligible` label, then re-add it. The orchestrator's
+   the `MasterClaude-eligible` label, then re-add it. The orchestrator's
    State Override C (`failed` → `implement` re-entry) creates a fresh
    worktree from current `main` and retries the implementation.
 
@@ -274,7 +274,7 @@ If post-merge CI on `main` fails after a merge:
 ## AI-Assisted Feature Requests
 
 **You don't need to be a developer to contribute.** Click the lightbulb
-button in AetherSDR's title bar — it copies a structured prompt to your
+button in MasterSDR's title bar — it copies a structured prompt to your
 clipboard and opens your choice of AI assistant. Describe your idea in
 plain English, and the AI generates a well-structured GitHub issue.
 
@@ -324,5 +324,5 @@ of helping each other learn — bring that spirit here.
 
 ## License
 
-By contributing to AetherSDR, you agree that your contributions will be
+By contributing to MasterSDR, you agree that your contributions will be
 licensed under the [GNU General Public License v3.0](LICENSE).

@@ -1,4 +1,4 @@
-// Standalone test harness for ClientQuindarTone DSP (#2262).
+﻿// Standalone test harness for ClientQuindarTone DSP (#2262).
 // Build: produced by CMake as `client_quindar_test` target.
 // Run:   ./build/client_quindar_test
 // Exit code 0 on all pass, 1 on any failure.
@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::ClientQuindarTone;
+using MasterSDR::ClientQuindarTone;
 using Phase = ClientQuindarTone::Phase;
 using Style = ClientQuindarTone::Style;
 

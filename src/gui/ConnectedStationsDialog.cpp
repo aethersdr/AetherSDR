@@ -1,4 +1,4 @@
-#include "ConnectedStationsDialog.h"
+﻿#include "ConnectedStationsDialog.h"
 
 #include <QApplication>
 #include <QButtonGroup>
@@ -14,7 +14,7 @@
 #include <QVBoxLayout>
 #include <QWindow>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -145,7 +145,7 @@ ConnectedStationsDialog::ConnectedStationsDialog(const RadioMeta& radio,
 
     auto* infoLabel = new QLabel(
         tr("multiFLEX is disabled on this radio. Select a station to disconnect "
-           "before connecting AetherSDR."),
+           "before connecting MasterSDR."),
         stationsFrame);
     infoLabel->setObjectName("infoLabel");
     infoLabel->setWordWrap(true);
@@ -224,4 +224,4 @@ void ConnectedStationsDialog::showEvent(QShowEvent* event)
     move(area.center() - rect().center());
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,11 +1,11 @@
-#ifdef HAVE_HIDAPI
+﻿#ifdef HAVE_HIDAPI
 #include "HidEncoderManager.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // HID logging now uses lcDevices from LogManager (shared with serial, FlexControl, MIDI)
 
@@ -163,5 +163,5 @@ void HidEncoderManager::loadSettings()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 #endif

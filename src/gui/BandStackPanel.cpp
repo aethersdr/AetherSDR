@@ -1,4 +1,4 @@
-#include "BandStackPanel.h"
+﻿#include "BandStackPanel.h"
 #include "core/BandStackSettings.h"
 #include "models/BandPlanManager.h"
 #include "models/BandDefs.h"
@@ -9,7 +9,7 @@
 #include <QMenu>
 #include <QMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const char* kMenuStyle =
     "QMenu { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050; }"
@@ -353,4 +353,4 @@ void BandStackPanel::clear()
     m_bookmarks.clear();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

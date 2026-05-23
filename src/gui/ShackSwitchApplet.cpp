@@ -1,4 +1,4 @@
-#include "ShackSwitchApplet.h"
+﻿#include "ShackSwitchApplet.h"
 #include "models/AntennaGeniusModel.h"
 #include "core/AppSettings.h"
 
@@ -14,7 +14,7 @@
 #include <QStandardPaths>
 #include <QUrl>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── Styling ─────────────────────────────────────────────────────────────────
 
@@ -565,4 +565,4 @@ void ShackSwitchApplet::updateDummyLoadBtn()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

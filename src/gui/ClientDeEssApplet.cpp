@@ -1,4 +1,4 @@
-#include "ClientDeEssApplet.h"
+﻿#include "ClientDeEssApplet.h"
 #include "ClientCompKnob.h"
 #include "ClientDeEssCurveWidget.h"
 #include "MeterSmoother.h"
@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // GR mini-strip for the de-esser.  File-scope so the applet can hold
 // a typed pointer.  Max reduction ≤ 24 dB so scale the full bar to
@@ -268,4 +268,4 @@ void ClientDeEssApplet::tickMeter()
     if (m_amount) { QSignalBlocker b(m_amount); m_amount->setValue(d->amountDb()); }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

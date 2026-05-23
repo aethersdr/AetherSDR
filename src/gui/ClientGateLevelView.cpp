@@ -1,4 +1,4 @@
-#include "ClientGateLevelView.h"
+﻿#include "ClientGateLevelView.h"
 #include "core/ClientGate.h"
 
 #include <QPainter>
@@ -8,7 +8,7 @@
 #include <QTimer>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -215,4 +215,4 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 
 #include <cstdint>
 
-namespace AetherSDR::TxMicChannelNormalizer {
+namespace MasterSDR::TxMicChannelNormalizer {
 
 enum class ChannelMode : uint8_t {
     Auto = 0,
@@ -62,4 +62,4 @@ float rmsFromLevelBlock(const LevelBlock& block);
 float dbfs(float linear);
 const char* channelModeName(ChannelMode mode);
 
-} // namespace AetherSDR::TxMicChannelNormalizer
+} // namespace MasterSDR::TxMicChannelNormalizer

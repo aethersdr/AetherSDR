@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QAudioDevice>
 #include <QObject>
@@ -8,7 +8,7 @@ class QAudioSink;
 class QIODevice;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ClientQuindarTone;
 
@@ -51,4 +51,4 @@ private:
     int                  m_actualRate{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

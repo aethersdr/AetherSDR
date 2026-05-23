@@ -1,9 +1,9 @@
-#include "BandSettings.h"
+﻿#include "BandSettings.h"
 
 // Band persistence is deprecated (issue #9). Save/load are no-ops.
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 BandSettings::BandSettings(QObject* parent)
     : QObject(parent)
@@ -65,4 +65,4 @@ void BandSettings::loadFromFile()
     // Deprecated — band persistence pending redesign (issue #9)
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

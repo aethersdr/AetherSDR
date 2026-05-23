@@ -1,4 +1,4 @@
-#include "DvkPanel.h"
+﻿#include "DvkPanel.h"
 #include "models/DvkModel.h"
 #include "core/DvkWavTransfer.h"
 #include <QVBoxLayout>
@@ -13,7 +13,7 @@
 #include <QDir>
 #include <QRegularExpression>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const char* kFKeyStyle =
     "QPushButton { background: #1a2a3a; color: #00b4d8; border: 1px solid #203040; "
@@ -582,4 +582,4 @@ void DvkPanel::cancelRename()
     m_renameSlot = -1;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

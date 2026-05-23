@@ -1,7 +1,7 @@
-#include "SpotModel.h"
+﻿#include "SpotModel.h"
 #include <QDateTime>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 void SpotModel::applySpotStatus(int index, const QMap<QString, QString>& kvs)
 {
@@ -68,4 +68,4 @@ void SpotModel::refresh()
     emit spotsRefreshed();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QByteArray>
@@ -10,7 +10,7 @@
 
 class GGMorse;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Client-side CW (Morse code) decoder using ggmorse.
 // Runs decoding on a worker thread. Feed it 24kHz stereo int16 PCM
@@ -77,4 +77,4 @@ private:
     std::atomic<float> m_pitchRangeMax{700.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

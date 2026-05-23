@@ -1,4 +1,4 @@
-#include "models/TransmitModel.h"
+﻿#include "models/TransmitModel.h"
 
 #include <QCoreApplication>
 #include <QObject>
@@ -6,7 +6,7 @@
 
 #include <iostream>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

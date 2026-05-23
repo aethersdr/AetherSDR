@@ -1,6 +1,6 @@
-# AetherModem AX.25 Notes
+﻿# MasterModem AX.25 Notes
 
-This file captures the current 300 baud HF AX.25 modem bring-up notes for the AetherSDR AetherModem window.
+This file captures the current 300 baud HF AX.25 modem bring-up notes for the MasterSDR MasterModem window.
 
 The working test packet has been:
 
@@ -24,9 +24,9 @@ KI6BCJ-1>APDW18:!3644.00N\11947.00W-KI6BCJ HF APRS test via Direwolf 300 baud
 
 | Label | File | Notes |
 | --- | --- | --- |
-| Capture A | `/Users/patj/Library/Preferences/AetherSDR/ax25-rx-capture-20260517-020519Z-float32.wav` | Earlier 3 minute recording. Current best replay is 20 accepted frames. |
-| Capture B | `/Users/patj/Library/Preferences/AetherSDR/ax25-rx-capture-20260517-023828Z-float32.wav` | Latest 3 minute recording. User observed 13 of 21 live with the older 5-lane build. Current best replay is 18 of 21. |
-| Capture C | `/Users/patj/Library/Preferences/AetherSDR/ax25-rx-capture-20260517-033512Z-float32.wav` | Latest live test with the 21-lane build. Window reached 19 accepted frames; replay of the saved capture produced 18 accepted frames because the 19th live decode happened after the capture file had already been saved. |
+| Capture A | `/Users/patj/Library/Preferences/MasterSDR/ax25-rx-capture-20260517-020519Z-float32.wav` | Earlier 3 minute recording. Current best replay is 20 accepted frames. |
+| Capture B | `/Users/patj/Library/Preferences/MasterSDR/ax25-rx-capture-20260517-023828Z-float32.wav` | Latest 3 minute recording. User observed 13 of 21 live with the older 5-lane build. Current best replay is 18 of 21. |
+| Capture C | `/Users/patj/Library/Preferences/MasterSDR/ax25-rx-capture-20260517-033512Z-float32.wav` | Latest live test with the 21-lane build. Window reached 19 accepted frames; replay of the saved capture produced 18 accepted frames because the 19th live decode happened after the capture file had already been saved. |
 | Short captures | `ax25-rx-capture-20260516-190036Z-float32.wav`, `ax25-rx-capture-20260516-192810Z-float32.wav` | 30 second captures. Replayed 2 accepted frames each after phase-diversity work, likely matching the number of packet bursts in those files. |
 
 Capture B contains 21 transmit bursts. Each burst was about 2.4 seconds long and arrived at a similar level, with burst RMS around -18 dBFS and peaks around -11 dBFS. The missing frames were therefore not simply low-level audio events.
@@ -100,13 +100,13 @@ The first TX pass is intentionally narrow:
 - The transmit field accepts raw payload text or full `SRC>DST,path:payload`
   monitor syntax.
 - Raw text defaults to `<radio callsign> > APRS` with no digipeater path.
-- AetherModem generates 24 kHz stereo float AFSK, pads it to the VITA packet
+- MasterModem generates 24 kHz stereo float AFSK, pads it to the VITA packet
   boundary, and paces it through the app-owned DAX TX stream.
 - The window sets DAX TX routing, keys PTT with a short settle/lead time,
   feeds the generated audio in 20 ms chunks, then unkeys and restores the
   previous DAX state.
 
-TX diagnostics in the `aether.ax25` category include packet source/destination,
+TX diagnostics in the `mastersdr.ax25` category include packet source/destination,
 path, payload bytes, AX.25 frame bytes, bit count, waveform duration, RMS/peak,
 DAX TX stream id, PTT lead/tail timing, and paced chunk progress when debug is
 enabled.
@@ -122,7 +122,7 @@ Next work should focus on:
 - reducing dependence on many parallel fixed phase lanes
 - using bad-FCS AX.25-like candidates to diagnose where bit errors cluster
 - possibly adapting lane activation only while the receive gate is open, if CPU becomes a concern
-- validating over-the-air AetherModem TX level, timing, and FCS decode with a
+- validating over-the-air MasterModem TX level, timing, and FCS decode with a
   second receiver
 
 Out of scope remains KISS, APRS-IS, maps, digipeating, and connected-mode AX.25.

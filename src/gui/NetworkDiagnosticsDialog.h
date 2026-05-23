@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 #include "core/PanadapterStream.h"
@@ -15,7 +15,7 @@ class QCheckBox;
 class QPlainTextEdit;
 class QPushButton;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class AudioEngine;
@@ -162,4 +162,4 @@ private:
     bool m_handlingLogScroll{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

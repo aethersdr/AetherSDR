@@ -1,24 +1,24 @@
-#!/bin/bash
-# Monitor AetherSDR per-thread CPU usage in real-time
+﻿#!/bin/bash
+# Monitor MasterSDR per-thread CPU usage in real-time
 # Usage: ./scripts/cpu-monitor.sh [interval_seconds]
 #
 # Shows each thread's CPU%, sorted by usage. Updates every N seconds (default 2).
 
 INTERVAL=${1:-2}
 
-PID=$(pidof AetherSDR)
+PID=$(pidof MasterSDR)
 if [ -z "$PID" ]; then
-    echo "AetherSDR is not running"
+    echo "MasterSDR is not running"
     exit 1
 fi
 
-echo "Monitoring AetherSDR (PID $PID) — per-thread CPU usage"
+echo "Monitoring MasterSDR (PID $PID) — per-thread CPU usage"
 echo "Press Ctrl+C to stop"
 echo ""
 
 while true; do
     clear
-    echo "=== AetherSDR Thread CPU Usage (PID $PID) — $(date +%H:%M:%S) ==="
+    echo "=== MasterSDR Thread CPU Usage (PID $PID) — $(date +%H:%M:%S) ==="
     echo ""
     printf "%-8s %-25s %6s %6s %8s\n" "TID" "THREAD NAME" "%CPU" "%MEM" "TIME+"
     echo "------------------------------------------------------------"

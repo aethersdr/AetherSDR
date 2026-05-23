@@ -1,4 +1,4 @@
-#include "ClientReverbApplet.h"
+﻿#include "ClientReverbApplet.h"
 #include "ClientCompKnob.h"
 #include "core/AudioEngine.h"
 #include "core/ClientReverb.h"
@@ -14,7 +14,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -301,4 +301,4 @@ void ClientReverbApplet::syncKnobsFromEngine()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

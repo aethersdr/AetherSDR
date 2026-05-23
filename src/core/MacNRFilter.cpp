@@ -1,11 +1,11 @@
-#ifdef __APPLE__
+﻿#ifdef __APPLE__
 
 #include "MacNRFilter.h"
 #include <cmath>
 #include <algorithm>
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── Constructor / destructor ────────────────────────────────────────────────
 
@@ -243,6 +243,6 @@ QByteArray MacNRFilter::process(const QByteArray& pcm24kStereo)
     return out;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // __APPLE__

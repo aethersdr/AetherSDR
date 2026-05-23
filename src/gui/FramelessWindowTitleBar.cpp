@@ -1,4 +1,4 @@
-#include "FramelessWindowTitleBar.h"
+﻿#include "FramelessWindowTitleBar.h"
 #include "FramelessMoveHelper.h"
 
 #include <QHBoxLayout>
@@ -6,7 +6,7 @@
 #include <QMouseEvent>
 #include <QPushButton>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -133,4 +133,4 @@ void FramelessWindowTitleBar::mouseDoubleClickEvent(QMouseEvent* event)
     QWidget::mouseDoubleClickEvent(event);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

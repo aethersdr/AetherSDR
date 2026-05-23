@@ -1,4 +1,4 @@
-name: macOS DMG
+﻿name: macOS DMG
 
 on:
   push:
@@ -96,7 +96,7 @@ jobs:
           # older Metal/OpenGL hardware. Apple Silicon uses GPU by default.
           GPU_FLAG=""
           if [ "${{ matrix.label }}" = "intel" ]; then
-            GPU_FLAG="-DAETHER_GPU_SPECTRUM=OFF"
+            GPU_FLAG="-DMASTERSDR_GPU_SPECTRUM=OFF"
           fi
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
@@ -113,9 +113,9 @@ jobs:
       - name: Bundle DFNR model
         run: |
           if [ -f third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz ]; then
-            mkdir -p build/AetherSDR.app/Contents/Resources
+            mkdir -p build/MasterSDR.app/Contents/Resources
             cp third_party/deepfilter/models/DeepFilterNet3_onnx.tar.gz \
-              build/AetherSDR.app/Contents/Resources/
+              build/MasterSDR.app/Contents/Resources/
           fi
 
       - name: Build DAX audio driver
@@ -134,11 +134,11 @@ jobs:
       - name: Verify binaries
         run: |
           echo "=== App architecture check ==="
-          file build/AetherSDR.app/Contents/MacOS/AetherSDR
-          lipo -info build/AetherSDR.app/Contents/MacOS/AetherSDR
+          file build/MasterSDR.app/Contents/MacOS/MasterSDR
+          lipo -info build/MasterSDR.app/Contents/MacOS/MasterSDR
           echo "=== DAX driver architecture check ==="
-          file driver-root/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver/Contents/MacOS/AetherSDRDAX
-          lipo -info driver-root/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver/Contents/MacOS/AetherSDRDAX
+          file driver-root/Library/Audio/Plug-Ins/HAL/MasterSDRDAX.driver/Contents/MacOS/MasterSDRDAX
+          lipo -info driver-root/Library/Audio/Plug-Ins/HAL/MasterSDRDAX.driver/Contents/MacOS/MasterSDRDAX
 
       - name: Bundle Qt frameworks
         run: |
@@ -147,7 +147,7 @@ jobs:
           else
             DEPLOYQT="$(brew --prefix qt@6)/bin/macdeployqt"
           fi
-          "$DEPLOYQT" build/AetherSDR.app \
+          "$DEPLOYQT" build/MasterSDR.app \
             -verbose=1 \
             -always-overwrite
 
@@ -173,7 +173,7 @@ jobs:
         env:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          APP="build/AetherSDR.app"
+          APP="build/MasterSDR.app"
           SIGN_ID="Developer ID Application"
 
           # 1. Sign all dylibs (plugins, helpers, etc.)
@@ -196,7 +196,7 @@ jobs:
 
           # 3. Sign the main app bundle last (no --deep)
           codesign --force --options runtime --timestamp \
-            --entitlements macos/AetherSDR.entitlements \
+            --entitlements macos/MasterSDR.entitlements \
             --sign "$SIGN_ID" \
             "$APP"
 
@@ -208,9 +208,9 @@ jobs:
         run: |
           codesign --force --options runtime --timestamp \
             --sign "Developer ID Application" \
-            driver-root/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver
+            driver-root/Library/Audio/Plug-Ins/HAL/MasterSDRDAX.driver
           codesign --verify --deep --strict \
-            driver-root/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver
+            driver-root/Library/Audio/Plug-Ins/HAL/MasterSDRDAX.driver
           echo "DAX driver signing verified"
 
       - name: Import installer certificate for PKG signing
@@ -227,29 +227,29 @@ jobs:
       - name: Build DAX driver PKG
         run: |
           # Extract version from CMakeLists.txt to keep driver PKG in sync
-          APP_VERSION=$(sed -n 's/^project(AetherSDR VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)
+          APP_VERSION=$(sed -n 's/^project(MasterSDR VERSION \([^ ]*\).*/\1/p' CMakeLists.txt)
 
           # Component package (unsigned — only the outer product archive needs signing)
           pkgbuild \
             --root driver-root \
             --install-location / \
-            --identifier com.aethersdr.dax \
+            --identifier com.MasterSDR.dax \
             --version "$APP_VERSION" \
-            AetherSDRDAX-component.pkg
+            MasterSDRDAX-component.pkg
 
           # Distribution XML — onConclusion="RequireRestart" triggers the reboot prompt
           cat > distribution.xml <<'DISTXML'
           <?xml version="1.0" encoding="UTF-8"?>
           <installer-gui-script minSpecVersion="2">
-              <title>AetherSDR DAX Audio Drivers</title>
+              <title>MasterSDR DAX Audio Drivers</title>
               <options customize="never" require-scripts="false"/>
-              <pkg-ref id="com.aethersdr.dax" version="__VERSION__"
-                       onConclusion="RequireRestart">AetherSDRDAX-component.pkg</pkg-ref>
+              <pkg-ref id="com.MasterSDR.dax" version="__VERSION__"
+                       onConclusion="RequireRestart">MasterSDRDAX-component.pkg</pkg-ref>
               <choices-outline>
-                  <line choice="com.aethersdr.dax"/>
+                  <line choice="com.MasterSDR.dax"/>
               </choices-outline>
-              <choice id="com.aethersdr.dax" title="AetherSDR DAX Audio Drivers">
-                  <pkg-ref id="com.aethersdr.dax"/>
+              <choice id="com.MasterSDR.dax" title="MasterSDR DAX Audio Drivers">
+                  <pkg-ref id="com.MasterSDR.dax"/>
               </choice>
           </installer-gui-script>
           DISTXML
@@ -260,29 +260,29 @@ jobs:
             --distribution distribution.xml \
             --package-path . \
             --sign "Developer ID Installer" \
-            "AetherSDR DAX Drivers.pkg"
+            "MasterSDR DAX Drivers.pkg"
 
           echo "DAX driver PKG v${APP_VERSION} built and signed"
 
       - name: Create DMG
         run: |
           mkdir -p dmg-stage
-          ditto build/AetherSDR.app dmg-stage/AetherSDR.app
-          cp "AetherSDR DAX Drivers.pkg" dmg-stage/
+          ditto build/MasterSDR.app dmg-stage/MasterSDR.app
+          cp "MasterSDR DAX Drivers.pkg" dmg-stage/
 
           # Layout: app (left) + Applications link (right), PKG below Applications
           create-dmg \
-            --volname "AetherSDR" \
-            --volicon "build/AetherSDR.icns" \
+            --volname "MasterSDR" \
+            --volicon "build/MasterSDR.icns" \
             --background "docs/logo-invert.png" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
-            --icon "AetherSDR.app" 150 120 \
-            --hide-extension "AetherSDR.app" \
+            --icon "MasterSDR.app" 150 120 \
+            --hide-extension "MasterSDR.app" \
             --app-drop-link 450 120 \
-            --icon "AetherSDR DAX Drivers.pkg" 450 290 \
-            "AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg" \
+            --icon "MasterSDR DAX Drivers.pkg" 450 290 \
+            "MasterSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg" \
             "dmg-stage/" \
           || true
 
@@ -292,7 +292,7 @@ jobs:
         run: |
           codesign --force --timestamp \
             --sign "Developer ID Application" \
-            AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg
+            MasterSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg
 
       - name: Notarize DMG
         env:
@@ -301,7 +301,7 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           xcrun notarytool submit \
-            AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg \
+            MasterSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
@@ -319,17 +319,17 @@ jobs:
           fi
 
           xcrun stapler staple \
-            AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg
+            MasterSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg
           echo "Notarization and stapling complete"
 
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: macOS-DMG-${{ matrix.label }}
-          path: AetherSDR-*.dmg
+          path: MasterSDR-*.dmg
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3
         with:
-          files: AetherSDR-*.dmg
+          files: MasterSDR-*.dmg

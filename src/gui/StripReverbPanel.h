@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class ClientCompKnob;
@@ -52,4 +52,4 @@ private:
     bool            m_restoring{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

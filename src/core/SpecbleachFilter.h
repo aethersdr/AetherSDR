@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifdef HAVE_SPECBLEACH
 
@@ -8,7 +8,7 @@
 
 typedef void* SpectralBleachHandle;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // SpecbleachFilter — wrapper around libspecbleach for NR4 noise reduction.
 // Processes 24 kHz stereo int16 audio (same interface as RNNoiseFilter).
@@ -65,6 +65,6 @@ private:
     std::vector<float> m_monoOut;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_SPECBLEACH

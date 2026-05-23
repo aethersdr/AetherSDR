@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
     "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -6,13 +6,13 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>AetherSDRDAX</string>
+    <string>MasterSDRDAX</string>
     <key>CFBundleIdentifier</key>
-    <string>com.aethersdr.dax</string>
+    <string>com.mastersdr.dax</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>AetherSDR DAX</string>
+    <string>MasterSDR DAX</string>
     <key>CFBundlePackageType</key>
     <string>BNDL</string>
     <key>CFBundleShortVersionString</key>
@@ -20,11 +20,11 @@
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>AudioServerPlugIn_BundleResourceID</key>
-    <string>com.aethersdr.dax</string>
+    <string>com.mastersdr.dax</string>
     <key>CFPlugInFactories</key>
     <dict>
         <key>415B3B00-A202-4F38-8B5A-D9A1E2B7F001</key>
-        <string>AetherSDRDAX_Create</string>
+        <string>MasterSDRDAX_Create</string>
     </dict>
     <key>CFPlugInTypes</key>
     <dict>

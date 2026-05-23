@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <QDateTime>
@@ -6,7 +6,7 @@
 #include <QStringList>
 #include <QtGlobal>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 enum class Ax25ModemProfile {
     Hf300,
@@ -29,6 +29,6 @@ struct Ax25DecodedFrame {
     int decodePhaseOffsetSamples{-1};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
-Q_DECLARE_METATYPE(AetherSDR::Ax25DecodedFrame)
+Q_DECLARE_METATYPE(MasterSDR::Ax25DecodedFrame)

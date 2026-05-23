@@ -1,4 +1,4 @@
-#include "ClientCompEditorCanvas.h"
+﻿#include "ClientCompEditorCanvas.h"
 #include "core/ClientComp.h"
 
 #include <QEvent>
@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -198,4 +198,4 @@ bool ClientCompEditorCanvas::event(QEvent* ev)
     return ClientCompCurveWidget::event(ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

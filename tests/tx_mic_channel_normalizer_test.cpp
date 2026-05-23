@@ -1,4 +1,4 @@
-// Standalone tests for TX mic channel canonicalization.
+﻿// Standalone tests for TX mic channel canonicalization.
 // Run: ./build/tx_mic_channel_normalizer_test
 
 #include "core/Resampler.h"
@@ -14,15 +14,15 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::Resampler;
-using AetherSDR::TxMicChannelNormalizer::AutoState;
-using AetherSDR::TxMicChannelNormalizer::ChannelMode;
-using AetherSDR::TxMicChannelNormalizer::Diagnostics;
-using AetherSDR::TxMicChannelNormalizer::LevelBlock;
-using AetherSDR::TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo;
-using AetherSDR::TxMicChannelNormalizer::collapseFloat32ToInt16MonoBigEndian;
-using AetherSDR::TxMicChannelNormalizer::measureInt16StereoLevelBlock;
-using AetherSDR::TxMicChannelNormalizer::rmsFromLevelBlock;
+using MasterSDR::Resampler;
+using MasterSDR::TxMicChannelNormalizer::AutoState;
+using MasterSDR::TxMicChannelNormalizer::ChannelMode;
+using MasterSDR::TxMicChannelNormalizer::Diagnostics;
+using MasterSDR::TxMicChannelNormalizer::LevelBlock;
+using MasterSDR::TxMicChannelNormalizer::canonicalizeInt16ToMonoStereo;
+using MasterSDR::TxMicChannelNormalizer::collapseFloat32ToInt16MonoBigEndian;
+using MasterSDR::TxMicChannelNormalizer::measureInt16StereoLevelBlock;
+using MasterSDR::TxMicChannelNormalizer::rmsFromLevelBlock;
 
 namespace {
 

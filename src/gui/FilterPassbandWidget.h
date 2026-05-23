@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QPainter>
 #include <QMouseEvent>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Visual filter passband display with drag-to-adjust interaction.
 // Static trapezoid shape with numeric lo/hi/bandwidth labels.
@@ -48,4 +48,4 @@ private:
     static constexpr int MIN_BW = 50;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

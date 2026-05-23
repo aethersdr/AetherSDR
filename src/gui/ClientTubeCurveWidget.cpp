@@ -1,4 +1,4 @@
-#include "ClientTubeCurveWidget.h"
+﻿#include "ClientTubeCurveWidget.h"
 #include "core/ClientTube.h"
 
 #include <QPainter>
@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -160,4 +160,4 @@ void ClientTubeCurveWidget::paintEvent(QPaintEvent*)
     p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

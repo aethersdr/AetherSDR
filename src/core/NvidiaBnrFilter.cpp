@@ -1,4 +1,4 @@
-#include "NvidiaBnrFilter.h"
+﻿#include "NvidiaBnrFilter.h"
 
 #include <QDebug>
 
@@ -6,7 +6,7 @@
 #include <cstring>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 NvidiaBnrFilter::NvidiaBnrFilter(QObject* parent)
     : QObject(parent)
@@ -225,4 +225,4 @@ void NvidiaBnrFilter::setIntensityRatio(float ratio)
 
 #endif // HAVE_BNR
 
-} // namespace AetherSDR
+} // namespace MasterSDR

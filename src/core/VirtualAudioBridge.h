@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QByteArray>
@@ -9,26 +9,26 @@
 
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Shared memory layout for one DAX audio channel.
-// Used by both AetherSDR (writer) and the HAL plugin (reader).
+// Used by both MasterSDR (writer) and the HAL plugin (reader).
 // Sample rate matches FLEX-8600 fw v1.4.0.0 native DAX rate: 24 kHz stereo.
 struct DaxShmBlock {
     std::atomic<uint32_t> writePos{0};
     std::atomic<uint32_t> readPos{0};
     uint32_t sampleRate{24000};
     uint32_t channels{2};           // stereo
-    uint32_t active{0};             // 1 = AetherSDR is feeding data
+    uint32_t active{0};             // 1 = MasterSDR is feeding data
     uint32_t reserved[3]{};
     // Ring buffer: 2 seconds @ 24kHz stereo = 96000 float samples
     static constexpr uint32_t RING_SIZE = 24000 * 2 * 2;
     float ringBuffer[RING_SIZE]{};
 };
 
-// Bridge between AetherSDR and the HAL plugin via POSIX shared memory.
-// Creates 4 RX shared memory segments (/aethersdr-dax-1 through /aethersdr-dax-4)
-// for DAX audio from radio to apps, plus 1 TX segment (/aethersdr-dax-tx)
+// Bridge between MasterSDR and the HAL plugin via POSIX shared memory.
+// Creates 4 RX shared memory segments (/MasterSDR-dax-1 through /MasterSDR-dax-4)
+// for DAX audio from radio to apps, plus 1 TX segment (/MasterSDR-dax-tx)
 // for audio from apps to radio.
 class VirtualAudioBridge : public QObject {
     Q_OBJECT
@@ -121,4 +121,4 @@ private:
     RxTimingStats m_rxTiming[NUM_CHANNELS];
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QKeySequence>
@@ -7,7 +7,7 @@
 #include <QVector>
 #include <functional>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ShortcutManager : public QObject {
     Q_OBJECT
@@ -67,4 +67,4 @@ private:
     QVector<QShortcut*> m_shortcuts;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

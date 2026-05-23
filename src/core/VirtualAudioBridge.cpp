@@ -1,4 +1,4 @@
-#include "VirtualAudioBridge.h"
+﻿#include "VirtualAudioBridge.h"
 #include "LogManager.h"
 
 #include <QDateTime>
@@ -10,7 +10,7 @@
 #include <cmath>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -43,7 +43,7 @@ VirtualAudioBridge::~VirtualAudioBridge()
 
 QString VirtualAudioBridge::shmName(int channel)
 {
-    return QStringLiteral("/aethersdr-dax-%1").arg(channel);
+    return QStringLiteral("/MasterSDR-dax-%1").arg(channel);
 }
 
 static bool openShmSegment(const char* name, int& fd, DaxShmBlock*& block)
@@ -103,7 +103,7 @@ bool VirtualAudioBridge::open()
     }
 
     // Open TX shared memory segment
-    if (!openShmSegment("/aethersdr-dax-tx", m_txShmFd, m_txBlock)) {
+    if (!openShmSegment("/MasterSDR-dax-tx", m_txShmFd, m_txBlock)) {
         close();
         return false;
     }
@@ -436,4 +436,4 @@ QByteArray VirtualAudioBridge::readTxAudio(int maxFrames)
     return result;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QTcpSocket>
 #include <QByteArray>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 
@@ -53,4 +53,4 @@ private:
     static constexpr int FALLBACK_PORT = 42607;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

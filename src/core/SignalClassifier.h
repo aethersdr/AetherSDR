@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QVector>
 #include <QString>
@@ -8,7 +8,7 @@
 #include <onnxruntime_cxx_api.h>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Result from the spectrogram CNN classifier.
 struct ClassifierResult {
@@ -44,4 +44,4 @@ private:
 #endif
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

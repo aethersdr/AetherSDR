@@ -1,4 +1,4 @@
-#include "MainWindow.h"
+﻿#include "MainWindow.h"
 
 #include "CwDecodeSettings.h"
 #ifdef HAVE_MQTT
@@ -21,7 +21,7 @@
 #include "models/PanadapterModel.h"
 #include "models/RadioStatusOwnership.h"
 #include "SpectrumWidget.h"
-#ifdef AETHER_GPU_SPECTRUM
+#ifdef MASTERSDR_GPU_SPECTRUM
 #include <QRhiWidget>
 #endif
 #include "SpectrumOverlayMenu.h"
@@ -48,7 +48,7 @@
 #include "ClientPuduApplet.h"
 #include "ClientPuduEditor.h"
 #include "ClientReverbApplet.h"
-#include "AetherialAudioStrip.h"
+#include "MasterialAudioStrip.h"
 #include "StripFinalOutputPanel.h"
 #include "ClientChainApplet.h"
 #include "core/ClientComp.h"
@@ -106,8 +106,8 @@
 #include "core/MidiSettings.h"
 #include "MidiMappingDialog.h"
 #endif
-#include "AetherDspDialog.h"
-#include "AetherDspWidget.h"
+#include "MasterDspDialog.h"
+#include "MasterDspWidget.h"
 #include "WaveformsDialog.h"
 #include "ClientRxDspApplet.h"
 #include "DspParamPopup.h"
@@ -194,7 +194,7 @@
 #include <QFile>
 #include <QStandardPaths>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -470,12 +470,12 @@ double quantizeIncrementalFollowDelta(double overshootMhz, double stepMhz)
 static bool macDaxDriverInstalled()
 {
 #ifdef Q_OS_MAC
-    const QFileInfo driverBundle("/Library/Audio/Plug-Ins/HAL/AetherSDRDAX.driver");
+    const QFileInfo driverBundle("/Library/Audio/Plug-Ins/HAL/MasterSDRDAX.driver");
     if (!driverBundle.exists() || !driverBundle.isDir())
         return false;
 
     const QString bundlePath = driverBundle.absoluteFilePath();
-    const QFileInfo driverExec(bundlePath + "/Contents/MacOS/AetherSDRDAX");
+    const QFileInfo driverExec(bundlePath + "/Contents/MacOS/MasterSDRDAX");
     const QFileInfo infoPlist(bundlePath + "/Contents/Info.plist");
     return driverExec.exists() && driverExec.isFile() && infoPlist.exists() && infoPlist.isFile();
 #else
@@ -1135,7 +1135,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
     layout->setSpacing(14);
 
     auto* body = new QLabel(
-        tr("Another client requested this AetherSDR session to disconnect. "
+        tr("Another client requested this MasterSDR session to disconnect. "
            "Automatic reconnect has been paused so the other operator can use the radio safely."),
         content);
     body->setObjectName("body");
@@ -1221,7 +1221,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
-    setWindowTitle(QString("AetherSDR v%1").arg(QCoreApplication::applicationVersion()));
+    setWindowTitle(QString("MasterSDR v%1").arg(QCoreApplication::applicationVersion()));
     setWindowIcon(QIcon(":/icon.png"));
     setMinimumSize(1024, 400);
     resize(1400, 800);
@@ -1340,8 +1340,8 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(),
             &TransmitModel::quindarActiveChanged,
             this, [this](bool active) {
-        if (m_aetherialStrip) {
-            if (auto* p = m_aetherialStrip->finalOutputPanel())
+        if (m_MasterialStrip) {
+            if (auto* p = m_MasterialStrip->finalOutputPanel())
                 p->setQuindarActive(active);
         }
     });
@@ -1463,10 +1463,10 @@ MainWindow::MainWindow(QWidget* parent)
     if (AppSettings::instance().value("MinimalModeEnabled", "False").toString() == "True")
         toggleMinimalMode(true);
 
-    // Restore the Aetherial Audio Channel Strip if it was open on last
-    // exit (#2301).  toggleAetherialStrip() lazy-creates and shows.
-    if (AppSettings::instance().value("AetherialStripVisible", "False").toString() == "True")
-        toggleAetherialStrip();
+    // Restore the Masterial Audio Channel Strip if it was open on last
+    // exit (#2301).  toggleMasterialStrip() lazy-creates and shows.
+    if (AppSettings::instance().value("MasterialStripVisible", "False").toString() == "True")
+        toggleMasterialStrip();
 
     // ── Wire up discovery ──────────────────────────────────────────────────
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
@@ -1877,7 +1877,7 @@ MainWindow::MainWindow(QWidget* parent)
         QString call = QString(spot.dxCall).replace(' ', QChar(0x7f));
         QString freq = QString::number(spot.freqMhz, 'f', 6);
         // trigger_action=none disables the radio's internal tune/mode-set on
-        // spot click. AetherSDR handles freq via frequencyClicked and mode
+        // spot click. MasterSDR handles freq via frequencyClicked and mode
         // via SpotAutoSwitchMode client-side, so the radio's stored-mode
         // path (which mishandles non-Flex tokens like "SSB") never fires.
         // Clicks still emit SpotTriggered for external loggers (#341, #1846).
@@ -2210,9 +2210,9 @@ MainWindow::MainWindow(QWidget* parent)
             m_appletPanel->clientChainApplet()->setMicInputReady(ready);
             m_appletPanel->clientChainApplet()->setTxActive(
                 ready && tx.isTransmitting());
-            if (m_aetherialStrip) {
-                m_aetherialStrip->setMicInputReady(ready);
-                m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
+            if (m_MasterialStrip) {
+                m_MasterialStrip->setMicInputReady(ready);
+                m_MasterialStrip->setTxActive(ready && tx.isTransmitting());
             }
 
             // If the user pulls the plug on readiness mid-recording
@@ -2990,7 +2990,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) now
-    // live only in the AetherDSP applet, which owns its own
+    // live only in the MasterDsp applet, which owns its own
     // *EnabledChanged subscriptions.
 
 #ifdef HAVE_RADE
@@ -3073,7 +3073,7 @@ MainWindow::MainWindow(QWidget* parent)
         connect(m_titleBar, &TitleBar::pcAudioToggled, this,
                 [this, chain](bool on) {
             chain->setRxPcAudioEnabled(on);
-            if (m_aetherialStrip) m_aetherialStrip->setRxPcAudioEnabled(on);
+            if (m_MasterialStrip) m_MasterialStrip->setRxPcAudioEnabled(on);
         });
 
         // DSP — aggregate of every client-side NR module.  These are
@@ -3103,8 +3103,8 @@ MainWindow::MainWindow(QWidget* parent)
             else if (dspState->nr2)  label = "NR2";
             const bool anyOn = !label.isEmpty();
             chain->setRxClientDspActive(anyOn, label);
-            if (m_aetherialStrip)
-                m_aetherialStrip->setRxClientDspActive(anyOn, label);
+            if (m_MasterialStrip)
+                m_MasterialStrip->setRxClientDspActive(anyOn, label);
         };
         connect(m_audio, &AudioEngine::nr2EnabledChanged, chain,
                 [dspState, pushDsp](bool on) { dspState->nr2 = on; pushDsp(); });
@@ -3123,7 +3123,7 @@ MainWindow::MainWindow(QWidget* parent)
         connect(m_audio, &AudioEngine::mutedChanged, this,
                 [this, chain](bool muted) {
             chain->setRxOutputUnmuted(!muted);
-            if (m_aetherialStrip) m_aetherialStrip->setRxOutputUnmuted(!muted);
+            if (m_MasterialStrip) m_MasterialStrip->setRxOutputUnmuted(!muted);
         });
 
         // Seed initial state — settings and engine values are already
@@ -3133,7 +3133,7 @@ MainWindow::MainWindow(QWidget* parent)
         const bool pcOn = AppSettings::instance()
             .value("PcAudioEnabled", "True").toString() == "True";
         chain->setRxPcAudioEnabled(pcOn);
-        if (m_aetherialStrip) m_aetherialStrip->setRxPcAudioEnabled(pcOn);
+        if (m_MasterialStrip) m_MasterialStrip->setRxPcAudioEnabled(pcOn);
         dspState->nr2  = m_audio->nr2Enabled();
         dspState->rn2  = m_audio->rn2Enabled();
         dspState->nr4  = m_audio->nr4Enabled();
@@ -3142,8 +3142,8 @@ MainWindow::MainWindow(QWidget* parent)
         dspState->bnr  = m_audio->bnrEnabled();
         pushDsp();
         chain->setRxOutputUnmuted(!m_audio->isMuted());
-        if (m_aetherialStrip)
-            m_aetherialStrip->setRxOutputUnmuted(!m_audio->isMuted());
+        if (m_MasterialStrip)
+            m_MasterialStrip->setRxOutputUnmuted(!m_audio->isMuted());
     }
     connect(m_titleBar, &TitleBar::headphoneMuteChanged, this, [this](bool muted) {
         m_radioModel.sendCommand(QString("mixer headphone mute %1").arg(muted ? 1 : 0));
@@ -3864,8 +3864,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_appletPanel->clientEqTxApplet()->setTxFilterCutoffs(lo, hi);
         if (m_clientEqEditor)
             m_clientEqEditor->setTxFilterCutoffs(lo, hi);
-        if (m_aetherialStrip)
-            m_aetherialStrip->setTxFilterCutoffs(lo, hi);
+        if (m_MasterialStrip)
+            m_MasterialStrip->setTxFilterCutoffs(lo, hi);
     };
     {
         const auto& tx = m_radioModel.transmitModel();
@@ -3923,14 +3923,14 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Client Reverb applet: TX reverb (Freeverb) ─
     m_appletPanel->clientReverbApplet()->setAudioEngine(m_audio);
 
-    // ── RX-side AetherDSP applet — same controls as the Settings menu
+    // ── RX-side MasterDsp applet — same controls as the Settings menu
     // dialog, embedded as a docked tile in PooDoo Audio (RX).  Parameter
     // changes route through the same per-signal wiring used by the dialog,
-    // factored into wireAetherDspWidget() to keep dialog + applet in sync.
+    // factored into wireMasterDspWidget() to keep dialog + applet in sync.
     if (auto* a = m_appletPanel->clientRxDspApplet()) {
         a->setAudioEngine(m_audio);
         if (auto* w = a->widget())
-            wireAetherDspWidget(w);
+            wireMasterDspWidget(w);
     }
 
     // ── Client PUDU applets: TX (#1661 Phase 5) + RX (Phase 7.5) ───────────
@@ -3977,9 +3977,9 @@ MainWindow::MainWindow(QWidget* parent)
         m_appletPanel->clientChainApplet()->setMicInputReady(ready);
         m_appletPanel->clientChainApplet()->setTxActive(
             ready && tx.isTransmitting());
-        if (m_aetherialStrip) {
-            m_aetherialStrip->setMicInputReady(ready);
-            m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
+        if (m_MasterialStrip) {
+            m_MasterialStrip->setMicInputReady(ready);
+            m_MasterialStrip->setTxActive(ready && tx.isTransmitting());
         }
     }
     // Pulse the TX endpoint red when we're transmitting AND PooDoo
@@ -3991,19 +3991,19 @@ MainWindow::MainWindow(QWidget* parent)
         const auto& tx = m_radioModel.transmitModel();
         const bool ready = (tx.micSelection() == "PC") && !tx.daxOn();
         m_appletPanel->clientChainApplet()->setTxActive(ready && txActive);
-        if (m_aetherialStrip)
-            m_aetherialStrip->setTxActive(ready && txActive);
+        if (m_MasterialStrip)
+            m_MasterialStrip->setTxActive(ready && txActive);
     });
 
     // ── PUDU monitor wiring ─────────────────────────────────────
     auto* chainApplet = m_appletPanel->clientChainApplet();
     chainApplet->setMonitorHasRecording(m_finalMonitor->hasRecording());
 
-    // Easter-egg nub on the chain applet → toggle the Aetherial Audio
+    // Easter-egg nub on the chain applet → toggle the Masterial Audio
     // Channel Strip.  Stubbed in step 1 of the strip plan (#2301);
     // step 4 lazy-creates the strip window and toggles visibility.
-    connect(chainApplet, &ClientChainApplet::aetherialStripToggleRequested,
-            this, &MainWindow::toggleAetherialStrip);
+    connect(chainApplet, &ClientChainApplet::MasterialStripToggleRequested,
+            this, &MainWindow::toggleMasterialStrip);
 
     // User-click → start/stop based on current monitor state.  The
     // monitor's own signals drive the button visuals back.
@@ -4030,13 +4030,13 @@ MainWindow::MainWindow(QWidget* parent)
     // Monitor state → UI updates.  RX audio gating is handled
     // separately via the muteRxRequested wiring above.  State is
     // forwarded both to the docked ClientChainApplet AND to the
-    // AetherialAudioStrip's mirrored buttons (when the strip exists).
+    // MasterialAudioStrip's mirrored buttons (when the strip exists).
     connect(m_finalMonitor, &ClientPuduMonitor::recordingStarted,
             this, [this]() {
         if (m_appletPanel && m_appletPanel->clientChainApplet())
             m_appletPanel->clientChainApplet()->setMonitorRecording(true);
-        if (m_aetherialStrip)
-            m_aetherialStrip->setMonitorRecording(true);
+        if (m_MasterialStrip)
+            m_MasterialStrip->setMonitorRecording(true);
     });
     connect(m_finalMonitor, &ClientPuduMonitor::recordingStopped,
             this, [this](int /*durationMs*/) {
@@ -4045,9 +4045,9 @@ MainWindow::MainWindow(QWidget* parent)
             a->setMonitorRecording(false);
             a->setMonitorHasRecording(true);
         }
-        if (m_aetherialStrip) {
-            m_aetherialStrip->setMonitorRecording(false);
-            m_aetherialStrip->setMonitorHasRecording(true);
+        if (m_MasterialStrip) {
+            m_MasterialStrip->setMonitorRecording(false);
+            m_MasterialStrip->setMonitorHasRecording(true);
         }
         // Auto-start playback — the mute stays installed across the
         // transition because the monitor only emits muteRxRequested
@@ -4058,15 +4058,15 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this]() {
         if (m_appletPanel && m_appletPanel->clientChainApplet())
             m_appletPanel->clientChainApplet()->setMonitorPlaying(true);
-        if (m_aetherialStrip)
-            m_aetherialStrip->setMonitorPlaying(true);
+        if (m_MasterialStrip)
+            m_MasterialStrip->setMonitorPlaying(true);
     });
     connect(m_finalMonitor, &ClientPuduMonitor::playbackStopped,
             this, [this]() {
         if (m_appletPanel && m_appletPanel->clientChainApplet())
             m_appletPanel->clientChainApplet()->setMonitorPlaying(false);
-        if (m_aetherialStrip)
-            m_aetherialStrip->setMonitorPlaying(false);
+        if (m_MasterialStrip)
+            m_MasterialStrip->setMonitorPlaying(false);
     });
     // TX chain applet visibility is independent of bypass state — the
     // user controls show/hide via the applet header ✕ and toolbar
@@ -4260,7 +4260,7 @@ MainWindow::MainWindow(QWidget* parent)
             m_rigctlPtys[i] = new RigctlPty(&m_radioModel, this);
             m_rigctlPtys[i]->setSliceIndex(i);
             m_rigctlPtys[i]->setSymlinkPath(
-                QString("/tmp/AetherSDR-CAT-%1").arg(kLetters[i]));
+                QString("/tmp/MasterSDR-CAT-%1").arg(kLetters[i]));
         }
     }
     m_appletPanel->catControlApplet()->setRadioModel(&m_radioModel);
@@ -4938,8 +4938,8 @@ void MainWindow::onTxChainStageEnabledChanged(
     // from it on paint, so a plain update() is enough.
     if (m_appletPanel && m_appletPanel->clientChainApplet())
         m_appletPanel->clientChainApplet()->refreshFromEngine();
-    if (m_aetherialStrip)
-        m_aetherialStrip->refreshChainPaint();
+    if (m_MasterialStrip)
+        m_MasterialStrip->refreshChainPaint();
 }
 
 void MainWindow::onEqCutoffsDragRequested(ClientEqApplet::Path path,
@@ -5071,12 +5071,12 @@ ClientPuduEditor* MainWindow::ensureClientPuduEditor()
     return m_clientPuduEditor;
 }
 
-AetherDspDialog* MainWindow::ensureAetherDspDialog()
+MasterDspDialog* MainWindow::ensureMasterDspDialog()
 {
     const bool wasFresh = !m_dspDialog;
     showOrRaisePersistent(m_dspDialog, m_audio);
     if (wasFresh && m_dspDialog) {
-        if (auto* w = m_dspDialog->widget()) wireAetherDspWidget(w);
+        if (auto* w = m_dspDialog->widget()) wireMasterDspWidget(w);
     }
     return m_dspDialog.data();
 }
@@ -5135,70 +5135,70 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     });
 }
 
-void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
+void MainWindow::wireMasterDspWidget(MasterDspWidget* w)
 {
     if (!w || !m_audio) return;
 
     // NR2
-    connect(w, &AetherDspWidget::nr2GainMaxChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::nr2GainMaxChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainMax(v); });
     });
-    connect(w, &AetherDspWidget::nr2GainSmoothChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::nr2GainSmoothChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2GainSmooth(v); });
     });
-    connect(w, &AetherDspWidget::nr2QsppChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::nr2QsppChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2Qspp(v); });
     });
-    connect(w, &AetherDspWidget::nr2GainMethodChanged, this, [this](int m) {
+    connect(w, &MasterDspWidget::nr2GainMethodChanged, this, [this](int m) {
         QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2GainMethod(m); });
     });
-    connect(w, &AetherDspWidget::nr2NpeMethodChanged, this, [this](int m) {
+    connect(w, &MasterDspWidget::nr2NpeMethodChanged, this, [this](int m) {
         QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr2NpeMethod(m); });
     });
-    connect(w, &AetherDspWidget::nr2AeFilterChanged, this, [this](bool on) {
+    connect(w, &MasterDspWidget::nr2AeFilterChanged, this, [this](bool on) {
         QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr2AeFilter(on); });
     });
     // NR4
-    connect(w, &AetherDspWidget::nr4ReductionChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::nr4ReductionChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4ReductionAmount(v); });
     });
-    connect(w, &AetherDspWidget::nr4SmoothingChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::nr4SmoothingChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SmoothingFactor(v); });
     });
-    connect(w, &AetherDspWidget::nr4WhiteningChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::nr4WhiteningChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4WhiteningFactor(v); });
     });
-    connect(w, &AetherDspWidget::nr4AdaptiveNoiseChanged, this, [this](bool on) {
+    connect(w, &MasterDspWidget::nr4AdaptiveNoiseChanged, this, [this](bool on) {
         QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr4AdaptiveNoise(on); });
     });
-    connect(w, &AetherDspWidget::nr4NoiseMethodChanged, this, [this](int m) {
+    connect(w, &MasterDspWidget::nr4NoiseMethodChanged, this, [this](int m) {
         QMetaObject::invokeMethod(m_audio, [this, m]() { m_audio->setNr4NoiseEstimationMethod(m); });
     });
-    connect(w, &AetherDspWidget::nr4MaskingDepthChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::nr4MaskingDepthChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4MaskingDepth(v); });
     });
-    connect(w, &AetherDspWidget::nr4SuppressionChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::nr4SuppressionChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SuppressionStrength(v); });
     });
     // DFNR
-    connect(w, &AetherDspWidget::dfnrAttenLimitChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::dfnrAttenLimitChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrAttenLimit(v); });
     });
-    connect(w, &AetherDspWidget::dfnrPostFilterBetaChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::dfnrPostFilterBetaChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setDfnrPostFilterBeta(v); });
     });
     // MNR
-    connect(w, &AetherDspWidget::mnrEnabledChanged, this, [this](bool on) {
+    connect(w, &MasterDspWidget::mnrEnabledChanged, this, [this](bool on) {
         QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setMnrEnabled(on); });
     });
-    connect(w, &AetherDspWidget::mnrStrengthChanged, this, [this](float v) {
+    connect(w, &MasterDspWidget::mnrStrengthChanged, this, [this](float v) {
         QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setMnrStrength(v); });
     });
     // NR2 enable: route through enableNr2WithWisdom so FFTW plans are
     // ready before AudioEngine constructs SpectralNR — direct enable on
     // the audio thread can leave plans incompatible with the runtime
     // FFTW version and crash the next feedAudioData. (#2275 / NR4→NR2)
-    connect(w, &AetherDspWidget::nr2EnableWithWisdomRequested,
+    connect(w, &MasterDspWidget::nr2EnableWithWisdomRequested,
             this, &MainWindow::enableNr2WithWisdom);
 }
 
@@ -6882,12 +6882,12 @@ void MainWindow::buildMenuBar()
         });
     }
 
-    auto* dspAction = settingsMenu->addAction("AetherDSP Settings...");
+    auto* dspAction = settingsMenu->addAction("MasterDsp Settings...");
     dspAction->setMenuRole(QAction::NoRole);        // prevent macOS auto-reparenting (#883)
     connect(dspAction, &QAction::triggered, this, [this] {
-        ensureAetherDspDialog();
+        ensureMasterDspDialog();
     });
-    // RX chain DSP tile double-click also opens the full AetherDSP
+    // RX chain DSP tile double-click also opens the full MasterDsp
     // Settings dialog — same entry point as the Settings menu action.
     if (m_appletPanel && m_appletPanel->clientChainApplet()) {
         connect(m_appletPanel->clientChainApplet(),
@@ -6902,7 +6902,7 @@ void MainWindow::buildMenuBar()
 
     settingsMenu->addSeparator();
 
-    auto* autoRigctlAction = settingsMenu->addAction("Autostart rigctld with AetherSDR");
+    auto* autoRigctlAction = settingsMenu->addAction("Autostart rigctld with MasterSDR");
     autoRigctlAction->setCheckable(true);
     autoRigctlAction->setChecked(
         AppSettings::instance().value("AutoStartRigctld", "False").toString() == "True");
@@ -6935,7 +6935,7 @@ void MainWindow::buildMenuBar()
         }
     }
 #else
-    auto* autoCatAction = settingsMenu->addAction("Autostart CAT with AetherSDR");
+    auto* autoCatAction = settingsMenu->addAction("Autostart CAT with MasterSDR");
     autoCatAction->setCheckable(true);
     autoCatAction->setChecked(
         AppSettings::instance().value("AutoStartCAT", "False").toString() == "True");
@@ -6956,7 +6956,7 @@ void MainWindow::buildMenuBar()
     });
 #endif
 
-    auto* autoTciAction = settingsMenu->addAction("Autostart TCI with AetherSDR");
+    auto* autoTciAction = settingsMenu->addAction("Autostart TCI with MasterSDR");
     autoTciAction->setCheckable(true);
     autoTciAction->setChecked(
         AppSettings::instance().value("AutoStartTCI", "False").toString() == "True");
@@ -6989,7 +6989,7 @@ void MainWindow::buildMenuBar()
         }
     }
 #else
-    auto* autoDaxAction = settingsMenu->addAction("Autostart DAX with AetherSDR");
+    auto* autoDaxAction = settingsMenu->addAction("Autostart DAX with MasterSDR");
     autoDaxAction->setCheckable(true);
     autoDaxAction->setChecked(
         AppSettings::instance().value("AutoStartDAX", "False").toString() == "True");
@@ -7200,7 +7200,7 @@ void MainWindow::buildMenuBar()
     framelessAct->setCheckable(true);
     framelessAct->setShortcut(QKeySequence("Ctrl+Shift+F"));
     framelessAct->setToolTip(
-        "Hide the OS title bar.  Drag the AetherSDR title bar to move,\n"
+        "Hide the OS title bar.  Drag the MasterSDR title bar to move,\n"
         "double-click to maximize, or use the min/max/close buttons on\n"
         "the right.  Toggle off if your compositor mishandles it.");
     framelessAct->setChecked(
@@ -7230,7 +7230,7 @@ void MainWindow::buildMenuBar()
         }
     });
 
-    auto* packetDecoderAction = viewMenu->addAction("AetherModem...");
+    auto* packetDecoderAction = viewMenu->addAction("MasterModem...");
     packetDecoderAction->setMenuRole(QAction::NoRole);
     connect(packetDecoderAction, &QAction::triggered,
             this, &MainWindow::showAx25HfPacketDecodeDialog);
@@ -7314,8 +7314,8 @@ void MainWindow::buildMenuBar()
         dlg->raise();
         dlg->activateWindow();
     });
-    helpMenu->addAction("AetherSDR Help...", this, [this]() {
-        auto* dlg = new HelpDialog("AetherSDR Help", ":/help/aethersdr-help.md", this);
+    helpMenu->addAction("MasterSDR Help...", this, [this]() {
+        auto* dlg = new HelpDialog("MasterSDR Help", ":/help/MasterSDR-help.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setModal(false);
         dlg->show();
@@ -7330,8 +7330,8 @@ void MainWindow::buildMenuBar()
         dlg->raise();
         dlg->activateWindow();
     });
-    auto* controlsHelpAction = helpMenu->addAction("Configuring AetherSDR Controls...", this, [this]() {
-        auto* dlg = new HelpDialog("Configuring AetherSDR Controls", ":/help/configuring-aethersdr-controls.md", this);
+    auto* controlsHelpAction = helpMenu->addAction("Configuring MasterSDR Controls...", this, [this]() {
+        auto* dlg = new HelpDialog("Configuring MasterSDR Controls", ":/help/configuring-MasterSDR-controls.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setModal(false);
         dlg->show();
@@ -7348,8 +7348,8 @@ void MainWindow::buildMenuBar()
         dlg->activateWindow();
     });
     dataModesAction->setMenuRole(QAction::NoRole); // prevent macOS auto-reparenting (#883)
-    helpMenu->addAction("Contributing to AetherSDR...", this, [this]() {
-        auto* dlg = new HelpDialog("Contributing to AetherSDR", ":/help/contributing-to-aethersdr.md", this);
+    helpMenu->addAction("Contributing to MasterSDR...", this, [this]() {
+        auto* dlg = new HelpDialog("Contributing to MasterSDR", ":/help/contributing-to-MasterSDR.md", this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setModal(false);
         dlg->show();
@@ -7382,10 +7382,10 @@ void MainWindow::buildMenuBar()
         m_whatsNewDialog = WhatsNewDialog::showAll(this);
     });
     helpMenu->addSeparator();
-    helpMenu->addAction("About AetherSDR", this, [this]{
+    helpMenu->addAction("About MasterSDR", this, [this]{
         auto* dlg = new QDialog(this);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->setWindowTitle("About AetherSDR");
+        dlg->setWindowTitle("About MasterSDR");
         dlg->setFixedWidth(380);
         dlg->setStyleSheet("QDialog { background: #0f0f1a; }");
 
@@ -7402,7 +7402,7 @@ void MainWindow::buildMenuBar()
         // Header
         auto* header = new QLabel(QString(
             "<div style='text-align:center;'>"
-            "<h2 style='margin-bottom:2px; color:#c8d8e8;'>AetherSDR</h2>"
+            "<h2 style='margin-bottom:2px; color:#c8d8e8;'>MasterSDR</h2>"
             "<p style='margin-top:0; color:#8aa8c0;'>v%1</p>"
             "<p style='color:#c8d8e8;'>Linux-native SmartSDR-compatible client<br>"
             "for FlexRadio transceivers.</p>"
@@ -7455,12 +7455,12 @@ void MainWindow::buildMenuBar()
         auto* footer = new QLabel(
             "<div style='text-align:center;'>"
             "<p style='font-size:11px; color:#8aa8c0;'>"
-            "&copy; 2026 AetherSDR Contributors<br>"
+            "&copy; 2026 MasterSDR Contributors<br>"
             "Licensed under "
             "<a href='https://www.gnu.org/licenses/gpl-3.0.html' style='color:#00b4d8;'>GPLv3</a></p>"
             "<p style='font-size:11px;'>"
-            "<a href='https://github.com/aethersdr/AetherSDR' style='color:#00b4d8;'>"
-            "github.com/aethersdr/AetherSDR</a></p>"
+            "<a href='https://github.com/MasterSDR/MasterSDR' style='color:#00b4d8;'>"
+            "github.com/MasterSDR/MasterSDR</a></p>"
             "<p style='font-size:10px; color:#6a8090;'>"
             "SmartSDR protocol &copy; FlexRadio Systems</p>"
             "<p style='font-size:10px; color:#6a8090;'>"
@@ -7486,7 +7486,7 @@ void MainWindow::buildMenuBar()
         // Fetch live contributor list from GitHub API
         auto* nam = new QNetworkAccessManager(dlg);
         auto* reply = nam->get(QNetworkRequest(
-            QUrl("https://api.github.com/repos/aethersdr/AetherSDR/contributors")));
+            QUrl("https://api.github.com/repos/MasterSDR/MasterSDR/contributors")));
         connect(reply, &QNetworkReply::finished, dlg, [contribLabel, reply] {
             reply->deleteLater();
             if (reply->error() != QNetworkReply::NoError) return;
@@ -8128,11 +8128,11 @@ void MainWindow::buildUI()
         m_cpuLabel = new QLabel("CPU: \u2014");
         m_cpuLabel->setStyleSheet("QLabel { color: #8aa8c0; font-size: 12px; }");
         m_cpuLabel->setAlignment(Qt::AlignCenter);
-        m_cpuLabel->setToolTip("AetherSDR process CPU usage");
+        m_cpuLabel->setToolTip("MasterSDR process CPU usage");
         m_memLabel = new QLabel("Mem: \u2014");
         m_memLabel->setStyleSheet("QLabel { color: #607080; font-size: 12px; }");
         m_memLabel->setAlignment(Qt::AlignCenter);
-        m_memLabel->setToolTip("AetherSDR process memory (RSS)");
+        m_memLabel->setToolTip("MasterSDR process memory (RSS)");
         cpuVbox->addWidget(m_cpuLabel);
         cpuVbox->addWidget(m_memLabel);
         hbox->addWidget(cpuStack);
@@ -8334,7 +8334,7 @@ void MainWindow::buildUI()
             this, &MainWindow::expireSHistoryMarkers);
     m_sHistoryExpireTimer->start();
 
-    // CNN signal classifier — load model from next to the executable or ~/.config/AetherSDR/
+    // CNN signal classifier — load model from next to the executable or ~/.config/MasterSDR/
     {
         const QString exeDir  = QCoreApplication::applicationDirPath();
         const QString cfgDir  = QStandardPaths::writableLocation(
@@ -8776,7 +8776,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             title->setAlignment(Qt::AlignCenter);
             layout->addWidget(title);
 
-            auto* body = new QLabel(tr("AetherSDR is attempting to reconnect automatically."), content);
+            auto* body = new QLabel(tr("MasterSDR is attempting to reconnect automatically."), content);
             body->setObjectName(QStringLiteral("reconnectBody"));
             body->setAlignment(Qt::AlignCenter);
             body->setWordWrap(true);
@@ -9028,7 +9028,7 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
     m_pendingMemoryRevealTargetMhz = hasMemoryFrequency ? memoryFreqMhz : 0.0;
     m_radioModel.sendCommand(QString("memory apply %1").arg(memoryIndex));
     const QString retuneCommand =
-        AetherSDR::buildMemoryRecallRetuneCommand(sliceId, it.value());
+        MasterSDR::buildMemoryRecallRetuneCommand(sliceId, it.value());
     if (!retuneCommand.isEmpty())
         m_radioModel.sendCommand(retuneCommand);
     QTimer::singleShot(750, this, [this, sliceId]() {
@@ -9055,7 +9055,7 @@ bool MainWindow::activateMemorySpot(int memoryIndex, const QString& preferredPan
         m_radioModel.sendCommand(QString("slice set %1 step=%2")
             .arg(sliceId).arg(it->step));
     const QString repeaterFixup =
-        AetherSDR::buildMemoryRecallSliceFixupCommand(sliceId, it.value());
+        MasterSDR::buildMemoryRecallSliceFixupCommand(sliceId, it.value());
     if (!repeaterFixup.isEmpty())
         m_radioModel.sendCommand(repeaterFixup);
     return true;
@@ -9161,7 +9161,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Keep the radio-side TX DAX flag aligned when the TX slice or mode changes.
     // SmartSDR DAX2 on Windows owns both the dax_tx stream and the radio's
-    // `transmit dax` flag, so Windows is a no-op here — AetherSDR must not
+    // `transmit dax` flag, so Windows is a no-op here — MasterSDR must not
     // toggle that flag on slice-mode transitions (e.g. band-stack restore)
     // because doing so parks DAX2's TX Stream in Busy. (#2315)
     auto updateDaxTxMode = [this]() {
@@ -9177,7 +9177,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
             }
         }
         // Digital modes need dax=1 for TX audio routing through DAX, but only
-        // on platforms where AetherSDR actually owns the dax_tx feed — hosted
+        // on platforms where MasterSDR actually owns the dax_tx feed — hosted
         // DAX (macOS / PipeWire).  Linux non-PipeWire builds have no DAX feed
         // available, so leave the radio's dax flag alone to keep digital TX
         // on the physical mic input. (#2273)
@@ -9453,7 +9453,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // special handling needed here for active slice timing.
 
 #ifdef HAVE_RADE
-    // Reconnect scenario: slice may already be in FDVU/FDVL when AetherSDR connects
+    // Reconnect scenario: slice may already be in FDVU/FDVL when MasterSDR connects
     if (s->mode().startsWith("FDV"))
         activateFdvDisplay(s->sliceId());
 #endif
@@ -10993,7 +10993,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         QString call = QString(callsign).replace(' ', QChar(0x7f));
         QString freq = QString::number(freqMhz, 'f', 6);
         QString myCall = as.value("DxClusterCallsign").toString();
-        if (myCall.isEmpty()) myCall = "AetherSDR";
+        if (myCall.isEmpty()) myCall = "MasterSDR";
         QString cmd = "spot add callsign=" + call + " rx_freq=" + freq
                      + " tx_freq=" + freq
                      + " source=Manual"
@@ -11107,7 +11107,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         //
         // The Flex band stack owns the state users expect to survive a band
         // jump: frequency, mode, filters, pan center, bandwidth/zoom, and
-        // built-in antenna selection. Aether should therefore send exactly one
+        // built-in antenna selection. MasterSDR should therefore send exactly one
         // `display pan set <panId> band=<key>` command when it can form a
         // spec-correct key. Do not use the `freqMhz` / `mode` arguments as a
         // local fallback; those are static UI defaults, and the old fallback
@@ -11205,7 +11205,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, &MainWindow::clearSwrSweepPlot);
 
     // Client-side DSP toggles (NR2 / RN2 / NR4 / MNR / BNR / DFNR) now
-    // live exclusively in the AetherDSP applet; the spectrum overlay menu
+    // live exclusively in the MasterDsp applet; the spectrum overlay menu
     // no longer surfaces them.
 }
 
@@ -11529,7 +11529,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 
     // Client-side DSP toggles (NR2 / NR4 / MNR / BNR / DFNR / RN2) used
     // to live on the VFO DSP grid; they were removed from there in
-    // favour of the spectrum overlay menu and the AetherDSP applet, so
+    // favour of the spectrum overlay menu and the MasterDsp applet, so
     // the per-VFO connect block that handled them is gone.
 
 #ifdef HAVE_RADE
@@ -11539,17 +11539,17 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
 #endif
 
-    // AetherDSP button on the per-slice DSP tab — same entry point as the
+    // MasterDsp button on the per-slice DSP tab — same entry point as the
     // Settings menu action and the RX chain double-click; reuses the
     // existing modeless m_dspDialog when one is already open.
-    connect(w, &VfoWidget::aetherDspRequested, this, [this] {
-        ensureAetherDspDialog();
+    connect(w, &VfoWidget::MasterDspRequested, this, [this] {
+        ensureMasterDspDialog();
     });
 
-    // AetherVoice button on the per-slice DSP tab — toggles the Aetherial
+    // MasterVoice button on the per-slice DSP tab — toggles the Masterial
     // Audio Channel Strip, matching the existing menu / chain entry points.
-    connect(w, &VfoWidget::aetherVoiceRequested,
-            this, &MainWindow::toggleAetherialStrip);
+    connect(w, &VfoWidget::MasterVoiceRequested,
+            this, &MainWindow::toggleMasterialStrip);
 
     // Per-slice VFO marker style (#1526): push user's saved line thickness and
     // filter-edge visibility preferences to this slice's overlay whenever they
@@ -11602,9 +11602,9 @@ void MainWindow::updateNr2Availability()
         statusBar()->showMessage("NR2 disabled — not available with compressed (SmartLink) audio", 4000);
     }
 
-    // Update the NR2 selector in the AetherDSP applet — the only
+    // Update the NR2 selector in the MasterDsp applet — the only
     // remaining surface for client-side NR controls.  The modeless
-    // AetherDspDialog is created on demand and owns its own enable
+    // MasterDspDialog is created on demand and owns its own enable
     // sync via nr2EnabledChanged + setEnabled-on-show.
     if (auto* a = m_appletPanel ? m_appletPanel->clientRxDspApplet() : nullptr) {
         if (auto* w = a->widget())
@@ -11619,7 +11619,7 @@ void MainWindow::enableNr2WithWisdom()
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
 
         auto* dlg = new QDialog(this);
-        dlg->setWindowTitle("AetherSDR — FFTW Wisdom");
+        dlg->setWindowTitle("MasterSDR — FFTW Wisdom");
         if (frameless)
             dlg->setWindowFlag(Qt::FramelessWindowHint, true);
         dlg->setWindowModality(Qt::ApplicationModal);
@@ -11636,7 +11636,7 @@ void MainWindow::enableNr2WithWisdom()
         root->setContentsMargins(0, 0, 0, 0);
         root->setSpacing(0);
 
-        auto* titleBar = new FramelessWindowTitleBar(QStringLiteral("AetherSDR — FFTW Wisdom"), dlg);
+        auto* titleBar = new FramelessWindowTitleBar(QStringLiteral("MasterSDR — FFTW Wisdom"), dlg);
         titleBar->setVisible(frameless);
         root->addWidget(titleBar);
 
@@ -11721,7 +11721,7 @@ void MainWindow::applyUiScale(int pct)
     AppSettings::instance().save();
 
     auto answer = QMessageBox::question(this, "UI Scale",
-        QString("UI scale changed to %1%. Restart AetherSDR now to apply?").arg(pct),
+        QString("UI scale changed to %1%. Restart MasterSDR now to apply?").arg(pct),
         QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
     if (answer == QMessageBox::Yes) {
 #ifdef Q_OS_MAC
@@ -11892,8 +11892,8 @@ void MainWindow::setFramelessWindow(bool on)
     if (m_reconnectDlg && m_reconnectDlg->findChild<QWidget*>("framelessWindowTitleBar")) {
         setDialogFramelessMode(m_reconnectDlg, on);
     }
-    if (m_aetherialStrip)
-        m_aetherialStrip->setFramelessMode(on);
+    if (m_MasterialStrip)
+        m_MasterialStrip->setFramelessMode(on);
     // Propagate to every PersistentDialog-derived dialog created via
     // showOrRaisePersistent().  QPointer entries auto-null on dialog close
     // (WA_DeleteOnClose); prune those as we go so the list doesn't grow
@@ -11918,42 +11918,42 @@ void MainWindow::setFramelessWindow(bool on)
     }
 }
 
-void MainWindow::toggleAetherialStrip()
+void MainWindow::toggleMasterialStrip()
 {
-    if (!m_aetherialStrip) {
-        m_aetherialStrip = new AetherialAudioStrip(m_audio, this);
+    if (!m_MasterialStrip) {
+        m_MasterialStrip = new MasterialAudioStrip(m_audio, this);
         // Override the parent-window relationship so the strip behaves as
         // an independent window (own taskbar entry, raisable separately).
-        m_aetherialStrip->setWindowFlag(Qt::Window, true);
+        m_MasterialStrip->setWindowFlag(Qt::Window, true);
         // Secondary window — must not gate quitOnLastWindowClosed on Windows.
-        m_aetherialStrip->setAttribute(Qt::WA_QuitOnClose, false);
+        m_MasterialStrip->setAttribute(Qt::WA_QuitOnClose, false);
         // Seed the embedded EQ with the current TX filter cutoff values
         // so the dashed yellow guide lines render immediately rather than
         // waiting for the next txFilterCutoffChanged signal.
         const auto& tx = m_radioModel.transmitModel();
-        m_aetherialStrip->setTxFilterCutoffs(tx.txFilterLow(), tx.txFilterHigh());
+        m_MasterialStrip->setTxFilterCutoffs(tx.txFilterLow(), tx.txFilterHigh());
         // Drag-to-adjust on the strip's EQ cutoff lines → same handler
         // the floating ClientEqEditor uses, so dragging in the strip
         // writes the same TX filter command to the radio.
-        connect(m_aetherialStrip, &AetherialAudioStrip::cutoffsDragRequested,
+        connect(m_MasterialStrip, &MasterialAudioStrip::cutoffsDragRequested,
                 this, &MainWindow::onEqCutoffsDragRequested);
         // Wire the strip's RX ADSP widget through the same parameter-
         // change handlers the Settings dialog and docked applet use.
         // Without this, NR2/NR4/DFNR/BNR/MNR controls in the strip
         // emit signals that nothing receives.
-        if (auto* adsp = m_aetherialStrip->adspWidget())
-            wireAetherDspWidget(adsp);
+        if (auto* adsp = m_MasterialStrip->adspWidget())
+            wireMasterDspWidget(adsp);
         // Stage bypass via the strip's chain tiles → same handler the
         // docked Chain applet's signal connects to, so both chain
         // widgets repaint and the matching applet refreshes.
-        connect(m_aetherialStrip, &AetherialAudioStrip::stageEnabledChanged,
+        connect(m_MasterialStrip, &MasterialAudioStrip::stageEnabledChanged,
                 this, &MainWindow::onTxChainStageEnabledChanged);
 
         // RX chain wiring — sibling of the TX hookups above (#2425).
         // Stage bypass on an RX tile fans out to: docked chain applet
         // (so its painted tile repaints), and per-stage RX applets so
         // their Enable toggles stay aligned with the engine state.
-        connect(m_aetherialStrip, &AetherialAudioStrip::rxStageEnabledChanged,
+        connect(m_MasterialStrip, &MasterialAudioStrip::rxStageEnabledChanged,
                 this, [this](AudioEngine::RxChainStage stage, bool /*enabled*/) {
             if (auto* dockedChain = m_appletPanel
                     ? m_appletPanel->clientChainApplet() : nullptr) {
@@ -11987,7 +11987,7 @@ void MainWindow::toggleAetherialStrip()
         });
         // RX stage double-click → open the RX-side floating editor for
         // that stage.  Mirrors the docked applet's rxEditRequested hook.
-        connect(m_aetherialStrip, &AetherialAudioStrip::rxStageEditRequested,
+        connect(m_MasterialStrip, &MasterialAudioStrip::rxStageEditRequested,
                 this, [this](AudioEngine::RxChainStage stage) {
             switch (stage) {
                 case AudioEngine::RxChainStage::Eq:
@@ -12009,13 +12009,13 @@ void MainWindow::toggleAetherialStrip()
                     break;
             }
         });
-        // ADSP launcher tile → open / focus the AetherDsp Settings
+        // ADSP launcher tile → open / focus the MasterDsp Settings
         // dialog, same as the Settings menu action.
-        connect(m_aetherialStrip, &AetherialAudioStrip::rxDspEditRequested,
-                this, [this]() { ensureAetherDspDialog(); });
+        connect(m_MasterialStrip, &MasterialAudioStrip::rxDspEditRequested,
+                this, [this]() { ensureMasterDspDialog(); });
         // PUDU monitor record / play — same toggle logic as the docked
         // ClientChainApplet.
-        connect(m_aetherialStrip, &AetherialAudioStrip::monitorRecordClicked,
+        connect(m_MasterialStrip, &MasterialAudioStrip::monitorRecordClicked,
                 this, [this]() {
             if (m_finalMonitor->isRecording()) {
                 m_finalMonitor->stopRecording();
@@ -12024,27 +12024,27 @@ void MainWindow::toggleAetherialStrip()
                 m_finalMonitor->startRecording();
             }
         });
-        connect(m_aetherialStrip, &AetherialAudioStrip::monitorPlayClicked,
+        connect(m_MasterialStrip, &MasterialAudioStrip::monitorPlayClicked,
                 this, [this]() {
             if (m_finalMonitor->isPlaying()) m_finalMonitor->stopPlayback();
             else                            m_finalMonitor->startPlayback();
         });
         // Seed the strip with the monitor's current state.
-        m_aetherialStrip->setMonitorRecording(m_finalMonitor->isRecording());
-        m_aetherialStrip->setMonitorPlaying(m_finalMonitor->isPlaying());
-        m_aetherialStrip->setMonitorHasRecording(m_finalMonitor->hasRecording());
+        m_MasterialStrip->setMonitorRecording(m_finalMonitor->isRecording());
+        m_MasterialStrip->setMonitorPlaying(m_finalMonitor->isPlaying());
+        m_MasterialStrip->setMonitorHasRecording(m_finalMonitor->hasRecording());
         // Seed the chain's MIC-ready + TX-active indicators (reuse the
         // tx alias declared above for the EQ cutoff seeding).
         const bool ready = (tx.micSelection() == "PC") && !tx.daxOn();
-        m_aetherialStrip->setMicInputReady(ready);
-        m_aetherialStrip->setTxActive(ready && tx.isTransmitting());
+        m_MasterialStrip->setMicInputReady(ready);
+        m_MasterialStrip->setTxActive(ready && tx.isTransmitting());
     }
-    if (m_aetherialStrip->isVisible()) {
-        m_aetherialStrip->hide();
+    if (m_MasterialStrip->isVisible()) {
+        m_MasterialStrip->hide();
     } else {
-        m_aetherialStrip->show();
-        m_aetherialStrip->raise();
-        m_aetherialStrip->activateWindow();
+        m_MasterialStrip->show();
+        m_MasterialStrip->raise();
+        m_MasterialStrip->activateWindow();
     }
 }
 
@@ -12868,7 +12868,7 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
         });
 
     popup->finalize(
-        [this]() { ensureAetherDspDialog(); },
+        [this]() { ensureMasterDspDialog(); },
         nullptr  // Reset handled by individual control resetters
     );
 
@@ -12933,7 +12933,7 @@ void MainWindow::showNr4ParamPopup(const QPoint& globalPos)
         });
 
     popup->finalize(
-        [this]() { ensureAetherDspDialog(); },
+        [this]() { ensureMasterDspDialog(); },
         nullptr  // Reset handled by individual control resetters
     );
 
@@ -12968,7 +12968,7 @@ void MainWindow::showDfnrParamPopup(const QPoint& globalPos)
         });
 
     popup->finalize(
-        [this]() { ensureAetherDspDialog(); },
+        [this]() { ensureMasterDspDialog(); },
         nullptr
     );
 
@@ -12977,7 +12977,7 @@ void MainWindow::showDfnrParamPopup(const QPoint& globalPos)
 
 void MainWindow::showMnrSettings()
 {
-    if (auto* dlg = ensureAetherDspDialog()) {
+    if (auto* dlg = ensureMasterDspDialog()) {
         dlg->selectTab("MNR");
     }
 }
@@ -13805,7 +13805,7 @@ void MainWindow::activateRADE(int sliceId)
     // despite being below 10 MHz (#875).
     double freqMhz = s->frequency();
     QString mode = "DIGU";
-    for (const auto& band : AetherSDR::kBands) {
+    for (const auto& band : MasterSDR::kBands) {
         if (freqMhz >= band.lowMhz && freqMhz <= band.highMhz) {
             mode = (QString(band.defaultMode) == "LSB") ? "DIGL" : "DIGU";
             break;
@@ -14176,7 +14176,7 @@ void MainWindow::startFreeDvReporting(int sliceId)
     }
 
     const QString message = cs.value("FreeDvMyMessage", "").toString();
-    const QString swVer   = QString("AetherSDR %1").arg(QCoreApplication::applicationVersion());
+    const QString swVer   = QString("MasterSDR %1").arg(QCoreApplication::applicationVersion());
     const double  freqMhz = m_radioModel.slice(sliceId)
                             ? m_radioModel.slice(sliceId)->frequency() : 0.0;
 
@@ -14249,8 +14249,8 @@ bool MainWindow::startDax()
     if (!macDaxDriverInstalled()) {
         qWarning() << "MainWindow: DAX HAL plugin not installed";
         QMessageBox::warning(this, "DAX Audio Driver Missing",
-            "The AetherSDR DAX audio driver is not installed on this Mac.\n\n"
-            "Install the DAX Virtual Audio Driver from the AetherSDR DMG package, "
+            "The MasterSDR DAX audio driver is not installed on this Mac.\n\n"
+            "Install the DAX Virtual Audio Driver from the MasterSDR DMG package, "
             "then enable DAX again.");
         return false;
     }
@@ -14260,8 +14260,8 @@ bool MainWindow::startDax()
     if (!m_daxBridge->open()) {
         qWarning() << "MainWindow: failed to open DAX audio bridge";
         QMessageBox::warning(this, "DAX Audio Bridge Error",
-            "AetherSDR could not open the DAX audio bridge.\n\n"
-            "If the DAX driver was just installed, quit and relaunch AetherSDR and try again.");
+            "MasterSDR could not open the DAX audio bridge.\n\n"
+            "If the DAX driver was just installed, quit and relaunch MasterSDR and try again.");
         delete m_daxBridge;
         m_daxBridge = nullptr;
         return false;
@@ -14895,7 +14895,7 @@ void MainWindow::floatAppletPanel()
     if (frameless) flags |= Qt::FramelessWindowHint;
 
     m_appletPanelFloatWindow = new QWidget(nullptr, flags);
-    m_appletPanelFloatWindow->setWindowTitle("AetherSDR — Applet Panel");
+    m_appletPanelFloatWindow->setWindowTitle("MasterSDR — Applet Panel");
     m_appletPanelFloatWindow->setAttribute(Qt::WA_DeleteOnClose, false);
     m_appletPanelFloatWindow->setAttribute(Qt::WA_QuitOnClose, false);
     m_appletPanelFloatWindow->setAttribute(Qt::WA_StyledBackground, true);
@@ -14909,7 +14909,7 @@ void MainWindow::floatAppletPanel()
     // frame supplies its own title bar in non-frameless mode.
     if (frameless) {
         auto* titleBar = new FramelessWindowTitleBar(
-            QStringLiteral("AetherSDR — Applet Panel"),
+            QStringLiteral("MasterSDR — Applet Panel"),
             m_appletPanelFloatWindow);
         layout->addWidget(titleBar);
     }
@@ -15144,8 +15144,8 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
         if (!e.visible) { continue; }
         const bool isQrm = e.suspectQrm;
         const QString label = isQrm
-            ? (QStringLiteral("QRM") + AetherSDR::sLabel(e.peakDbm).mid(1))
-            : AetherSDR::sLabel(e.peakDbm);
+            ? (QStringLiteral("QRM") + MasterSDR::sLabel(e.peakDbm).mid(1))
+            : MasterSDR::sLabel(e.peakDbm);
         const QColor col = isQrm ? qrmCol : signalsCol;
         const QString comment = isQrm
             ? QStringLiteral("QRM width=%1 Hz").arg(e.widthHz, 0, 'f', 0)
@@ -15171,7 +15171,7 @@ void MainWindow::rebuildSHistoryForPan(const QString& panId)
         if (isQrm && (now - e.voiceOverQrmLastMs) < kHideAfterMs) {
             markers.append({
                 -1,
-                AetherSDR::sLabel(e.peakDbm),
+                MasterSDR::sLabel(e.peakDbm),
                 roundToHundredHz(e.freqMhz),
                 signalsCol.name(),
                 e.mode,
@@ -15230,7 +15230,7 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
     QVector<QPair<double, double>> voiceRanges;
     if (m_bandPlanMgr) {
         for (const auto& seg : m_bandPlanMgr->segments()) {
-            if (AetherSDR::isVoiceSegmentLabel(seg.label))
+            if (MasterSDR::isVoiceSegmentLabel(seg.label))
                 voiceRanges.append({seg.lowMhz, seg.highMhz});
         }
     }
@@ -15285,11 +15285,11 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
 
         // Push this frame into the spectrogram buffer for CNN classification.
         auto& bufPtr = m_spectrogramBuffers[panId];
-        if (!bufPtr) { bufPtr = std::make_shared<AetherSDR::SpectrogramBuffer>(); }
+        if (!bufPtr) { bufPtr = std::make_shared<MasterSDR::SpectrogramBuffer>(); }
         bufPtr->push(bins, pan->centerMhz(), pan->bandwidthMhz());
 
         const auto detected =
-            AetherSDR::detectVoiceSignals(bins, pan->centerMhz(), pan->bandwidthMhz(),
+            MasterSDR::detectVoiceSignals(bins, pan->centerMhz(), pan->bandwidthMhz(),
                                           voiceRanges, noiseFloor, sliceMode);
         auto& entries = m_sHistoryData[panId];
         for (const auto& sig : detected) {
@@ -15341,20 +15341,20 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
         // Runs only when the model is loaded; gracefully skipped otherwise.
         if (m_signalClassifier.isLoaded()) {
             const auto cit = m_spectrogramBuffers.constFind(panId);
-            AetherSDR::SpectrogramBuffer* buf = (cit != m_spectrogramBuffers.constEnd()) ? cit->get() : nullptr;
+            MasterSDR::SpectrogramBuffer* buf = (cit != m_spectrogramBuffers.constEnd()) ? cit->get() : nullptr;
             if (buf != nullptr) {
-                if (buf->frameCount() >= AetherSDR::SpectrogramBuffer::kMaxFrames) {
+                if (buf->frameCount() >= MasterSDR::SpectrogramBuffer::kMaxFrames) {
                     for (auto& e : entries) {
                         if (e.widthHz >= 1800.0 && e.widthHz <= 2500.0) {
                             const double patchWidthMhz = e.widthHz * 2.0 / 1.0e6;
                             const QVector<float> patch =
                                 buf->extractPatch(e.freqMhz, patchWidthMhz);
                             if (!patch.isEmpty()) {
-                                const AetherSDR::ClassifierResult res =
+                                const MasterSDR::ClassifierResult res =
                                     m_signalClassifier.classify(
                                         patch,
-                                        AetherSDR::SpectrogramBuffer::kMaxFrames,
-                                        AetherSDR::SpectrogramBuffer::kPatchFreqBins);
+                                        MasterSDR::SpectrogramBuffer::kMaxFrames,
+                                        MasterSDR::SpectrogramBuffer::kPatchFreqBins);
                                 if (res.valid) {
                                     // EMA α = 0.15 — gradual update, resilient to
                                     // single-frame misclassification
@@ -15385,4 +15385,4 @@ void MainWindow::onSpectrumReadyForSHistory(quint32 streamId, const QVector<floa
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

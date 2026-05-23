@@ -1,4 +1,4 @@
-#include "ChannelStripPresets.h"
+﻿#include "ChannelStripPresets.h"
 
 #include "AudioEngine.h"
 #include "ClientComp.h"
@@ -20,7 +20,7 @@
 #include <QStandardPaths>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -216,7 +216,7 @@ ChannelStripPresets::ChannelStripPresets(AudioEngine* engine,
 
 QString ChannelStripPresets::filePath() const
 {
-    // Sibling of AetherSDR.settings under XDG_CONFIG_HOME.
+    // Sibling of MasterSDR.settings under XDG_CONFIG_HOME.
     const QString dir = QStandardPaths::writableLocation(
         QStandardPaths::AppConfigLocation);
     QDir().mkpath(dir);
@@ -303,7 +303,7 @@ bool ChannelStripPresets::exportPresetToFile(const QString& name,
     // even if the file was renamed on disk.
     QJsonObject out = presets.value(name).toObject();
     out["name"] = name;
-    out["schema"] = "AetherSDR ChannelStripPreset v1";
+    out["schema"] = "MasterSDR ChannelStripPreset v1";
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
@@ -326,7 +326,7 @@ bool ChannelStripPresets::exportCurrentToFile(const QString& presetName,
 {
     QJsonObject out = capturePresetJson();
     out["name"] = presetName;
-    out["schema"] = "AetherSDR ChannelStripPreset v1";
+    out["schema"] = "MasterSDR ChannelStripPreset v1";
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
@@ -404,7 +404,7 @@ QString ChannelStripPresets::importPresetFromFile(const QString& path)
 QJsonObject ChannelStripPresets::capturePresetJson() const
 {
     QJsonObject preset;
-    preset["createdBy"] = "AetherSDR";
+    preset["createdBy"] = "MasterSDR";
     preset["createdAt"] = QDateTime::currentDateTimeUtc()
         .toString(Qt::ISODate);
 
@@ -935,4 +935,4 @@ void ChannelStripPresets::applyPresetJson(const QJsonObject& preset)
     m_engine->saveClientRxChainOrder();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

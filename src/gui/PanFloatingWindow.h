@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QVBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class PanadapterApplet;
 
@@ -41,4 +41,4 @@ private:
     bool m_shuttingDown{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

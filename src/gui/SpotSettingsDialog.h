@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 #include <QLabel>
@@ -6,7 +6,7 @@
 #include <QPushButton>
 #include <QColor>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 
@@ -54,4 +54,4 @@ private:
     int    m_bgOpacity{48};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

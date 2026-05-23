@@ -1,4 +1,4 @@
-#include "DxClusterStartupCommandsDialog.h"
+﻿#include "DxClusterStartupCommandsDialog.h"
 #include "core/AppSettings.h"
 
 #include <QHBoxLayout>
@@ -7,7 +7,7 @@
 #include <QPushButton>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -92,4 +92,4 @@ void DxClusterStartupCommandsDialog::edit(
     s.save();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

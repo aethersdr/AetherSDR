@@ -1,17 +1,17 @@
-#pragma once
+﻿#pragma once
 
 #include <QMouseEvent>
 #include <QPoint>
 #include <QWidget>
 #include <QWindow>
 
-namespace AetherSDR::FramelessMoveHelper {
+namespace MasterSDR::FramelessMoveHelper {
 
 namespace Detail {
 
-constexpr const char* kActiveProperty = "_aetherManualWindowMoveActive";
-constexpr const char* kPressGlobalProperty = "_aetherManualWindowMovePressGlobal";
-constexpr const char* kStartPosProperty = "_aetherManualWindowMoveStartPos";
+constexpr const char* kActiveProperty = "_masterManualWindowMoveActive";
+constexpr const char* kPressGlobalProperty = "_masterManualWindowMovePressGlobal";
+constexpr const char* kStartPosProperty = "_masterManualWindowMoveStartPos";
 
 inline void startManualMove(QWidget* handle, QWidget* window, QMouseEvent* ev)
 {
@@ -108,4 +108,4 @@ inline void toggleMaximized(QWidget* handle)
     }
 }
 
-} // namespace AetherSDR::FramelessMoveHelper
+} // namespace MasterSDR::FramelessMoveHelper

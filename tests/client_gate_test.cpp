@@ -1,4 +1,4 @@
-// Standalone test harness for ClientGate DSP.
+﻿// Standalone test harness for ClientGate DSP.
 // Build: produced by CMake as `client_gate_test` target.
 // Run:   ./build/client_gate_test
 // Exit code 0 on all pass, 1 on any failure.
@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::ClientGate;
+using MasterSDR::ClientGate;
 
 namespace {
 

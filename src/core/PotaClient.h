@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QNetworkAccessManager>
@@ -8,7 +8,7 @@
 #include <atomic>
 #include "DxClusterClient.h"  // for DxSpot
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // POTA (Parks on the Air) spot client — polls https://api.pota.app/spot/activator
 // every 30 seconds for active activations. Emits spotReceived() for each new spot.
@@ -51,4 +51,4 @@ private:
     static constexpr const char* ApiUrl = "https://api.pota.app/spot/activator";
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

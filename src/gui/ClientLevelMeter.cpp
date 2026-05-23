@@ -1,4 +1,4 @@
-#include "ClientLevelMeter.h"
+﻿#include "ClientLevelMeter.h"
 
 #include <QFontMetrics>
 #include <QLabel>
@@ -9,7 +9,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -150,4 +150,4 @@ void ClientLevelMeter::paintEvent(QPaintEvent*)
                Qt::AlignCenter, readout);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

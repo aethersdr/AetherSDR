@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifdef HAVE_MIDI
 
@@ -11,7 +11,7 @@
 #include <memory>
 #include <RtMidi.h>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ── Data types ──────────────────────────────────────────────────────────────
 
@@ -141,6 +141,6 @@ private:
     void flushRelativeAccum();
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_MIDI

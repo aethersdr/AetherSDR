@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QVector>
@@ -14,7 +14,7 @@ class QScrollArea;
 class QVBoxLayout;
 class QShortcut;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class CwxModel;
 
@@ -93,4 +93,4 @@ private:
     QVector<QShortcut*> m_shortcuts;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

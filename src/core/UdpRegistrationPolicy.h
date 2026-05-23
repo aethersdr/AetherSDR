@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 inline constexpr int kFlexUdpPortInUseCode = 0x500000A9;
 
@@ -17,4 +17,4 @@ inline bool shouldRetryLanUdpPortRegistration(bool isWan, int code, const QStrin
     return !isWan && isUdpPortInUseError(code, body);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

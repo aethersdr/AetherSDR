@@ -1,4 +1,4 @@
-#include "StripGatePanel.h"
+﻿#include "StripGatePanel.h"
 #include "ClientCompKnob.h"
 #include "ClientGateCurveWidget.h"
 #include "ClientGateLevelView.h"
@@ -22,7 +22,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -78,7 +78,7 @@ StripGatePanel::StripGatePanel(AudioEngine* engine, QWidget* parent)
     : QWidget(parent)
     , m_audio(engine)
 {
-    setWindowTitle("Aetherial Gate");
+    setWindowTitle("Masterial Gate");
     setStyleSheet(kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
@@ -348,7 +348,7 @@ void StripGatePanel::showForTx()
         if (m_levelView) m_levelView->setGate(gate());
         if (m_curveView) m_curveView->setGate(gate());
     }
-    const QString title = QString::fromUtf8("Aetherial Gate \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial Gate \xe2\x80\x94 TX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -367,7 +367,7 @@ void StripGatePanel::showForRx()
         if (m_levelView) m_levelView->setGate(gate());
         if (m_curveView) m_curveView->setGate(gate());
     }
-    const QString title = QString::fromUtf8("Aetherial Gate \xe2\x80\x94 RX");
+    const QString title = QString::fromUtf8("Masterial Gate \xe2\x80\x94 RX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -546,4 +546,4 @@ void StripGatePanel::hideEvent(QHideEvent* ev)
     QWidget::hideEvent(ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

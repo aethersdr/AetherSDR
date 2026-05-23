@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QTimer>
 #include <QElapsedTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Analog S-Meter gauge widget matching the SmartSDR look.
 //
@@ -130,4 +130,4 @@ private:
     static constexpr float ARC_END_DEG   = 125.0f;  // left end
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

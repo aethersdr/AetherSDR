@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QVector>
 
 class ScrollableLabel;
-namespace AetherSDR { class FilterPassbandWidget; }
+namespace MasterSDR { class FilterPassbandWidget; }
 
 class QButtonGroup;
 class QHBoxLayout;
@@ -18,7 +18,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QToolButton;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class SliceModel;
 class RadioModel;
@@ -190,7 +190,7 @@ private:
     QVector<QPushButton*>   m_filterBtns;
     QGridLayout*            m_filterGrid{nullptr};
     QWidget*                m_filterContainer{nullptr};
-    AetherSDR::FilterPassbandWidget* m_filterPassband{nullptr};
+    MasterSDR::FilterPassbandWidget* m_filterPassband{nullptr};
 
     // FM duplex/repeater controls (shown only in FM/NFM/DFM modes)
     QWidget*        m_fmContainer{nullptr};
@@ -255,4 +255,4 @@ private:
     static constexpr int RIT_STEP_HZ = 10;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

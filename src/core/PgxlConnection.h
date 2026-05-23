@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QTcpSocket>
@@ -6,7 +6,7 @@
 #include <QMap>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Direct TCP connection to a 4O3A Power Genius XL on port 9008.
 // Same protocol as TgxlConnection (C/R/S/V message format).
@@ -52,4 +52,4 @@ private:
     QString    m_version;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

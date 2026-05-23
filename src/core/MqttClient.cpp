@@ -1,11 +1,11 @@
-#include "MqttClient.h"
+﻿#include "MqttClient.h"
 #include "LogManager.h"
 
 #ifdef HAVE_MQTT
 #include <mosquitto.h>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 #ifdef HAVE_MQTT
 static bool s_mosquittoInitialized = false;
@@ -246,4 +246,4 @@ void MqttClient::onMessage(struct mosquitto*, void* obj,
 }
 #endif
 
-} // namespace AetherSDR
+} // namespace MasterSDR

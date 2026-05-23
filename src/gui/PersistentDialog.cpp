@@ -1,4 +1,4 @@
-#include "PersistentDialog.h"
+﻿#include "PersistentDialog.h"
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
 #include "core/AppSettings.h"
@@ -9,7 +9,7 @@
 #include <QShowEvent>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 PersistentDialog::PersistentDialog(const QString& title,
                                    const QString& geomKey,
@@ -93,7 +93,7 @@ void PersistentDialog::closeEvent(QCloseEvent* event)
     saveGeometryToSettings();
     // Move/resize saves are in-memory only; close-time save flushes to disk.
     // Matches the crash-resilient persistence contract established by
-    // ProfileManagerDialog: if AetherSDR is force-quit, the last known
+    // ProfileManagerDialog: if MasterSDR is force-quit, the last known
     // position is already in AppSettings even if the disk flush never ran.
     if (!m_geomKey.isEmpty()) {
         AppSettings::instance().save();
@@ -138,4 +138,4 @@ void PersistentDialog::restoreGeometryFromSettings()
     m_restoringGeometry = false;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "core/AudioEngine.h"
 
 #include <QVector>
 #include <QWidget>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Visual RX DSP signal chain.  Paints a horizontal strip:
 //
@@ -14,7 +14,7 @@ namespace AetherSDR {
 // Three of the eight tiles are status-only (non-interactive):
 //   - RADIO  — green when PC Audio (standard SSB stream) is enabled
 //   - DSP    — green when any client-side NR (NR4 / DFNR / BNR) is on
-//   - SPEAK  — green when AetherSDR's audio output is unmuted
+//   - SPEAK  — green when MasterSDR's audio output is unmuted
 //
 // The remaining five (RX EQ / GATE / COMP / TUBE / PUDU) are user-
 // controllable DSP stages.  Phase 0 ships them as greyed "coming
@@ -44,7 +44,7 @@ signals:
     // MainWindow maps this to opening the right editor in RX mode.
     void editRequested(AudioEngine::RxChainStage stage);
     // Emitted when the user double-clicks the DSP status tile —
-    // MainWindow opens the full AetherDSP Settings dialog.
+    // MainWindow opens the full MasterDsp Settings dialog.
     void dspEditRequested();
     // Emitted when single-click re-enables NR2 from the AppSettings-
     // persisted LastClientNr — MainWindow runs FFTW wisdom prep before
@@ -112,4 +112,4 @@ private:
     bool         m_outputUnmuted{true};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

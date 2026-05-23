@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ClientTube;
 
@@ -46,4 +46,4 @@ private:
     float       m_lastInputLin{0.0f};   // smoothed ball position
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

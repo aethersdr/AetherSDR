@@ -1,10 +1,10 @@
-# TCI Receiver Index Policy
+﻿# TCI Receiver Index Policy
 
-_Changed in [e49875b2](https://github.com/aethersdr/AetherSDR/commit/e49875b2) (#2140)._
+_Changed in [e49875b2](https://github.com/MasterSDR/MasterSDR/commit/e49875b2) (#2140)._
 
 ## Overview
 
-AetherSDR exposes Flex 6000-series slices to TCI clients (WSJT-X, JTDX,
+MasterSDR exposes Flex 6000-series slices to TCI clients (WSJT-X, JTDX,
 etc.) as numbered **receivers** (`trx` indexes in the TCI protocol).
 Since #2140 these indexes follow a contiguous numbering scheme rather
 than passing through raw Flex slice IDs.

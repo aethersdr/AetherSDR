@@ -1,4 +1,4 @@
-#ifdef HAVE_DFNR
+﻿#ifdef HAVE_DFNR
 
 #include "DeepFilterFilter.h"
 #include "Resampler.h"
@@ -11,7 +11,7 @@
 #include <QDebug>
 #include <QStandardPaths>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static constexpr const char* kModelFileName = "DeepFilterNet3_onnx.tar.gz";
 
@@ -41,7 +41,7 @@ static QByteArray findModelPath()
     // 4. XDG data directory (Linux installed via package or cmake --install)
     QString dataDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
     if (!dataDir.isEmpty()) {
-        path = dataDir + "/AetherSDR/" + kModelFileName;
+        path = dataDir + "/MasterSDR/" + kModelFileName;
         searched << path;
         if (QFile::exists(path)) {
             return path.toUtf8();
@@ -49,7 +49,7 @@ static QByteArray findModelPath()
     }
     // 5. System-wide install paths (Linux)
     for (const QString& prefix : {QStringLiteral("/usr/share"), QStringLiteral("/usr/local/share")}) {
-        path = prefix + "/AetherSDR/" + kModelFileName;
+        path = prefix + "/MasterSDR/" + kModelFileName;
         searched << path;
         if (QFile::exists(path)) {
             return path.toUtf8();
@@ -195,6 +195,6 @@ QByteArray DeepFilterFilter::process(const QByteArray& pcm24kStereo)
     return QByteArray(needed, '\0');
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_DFNR

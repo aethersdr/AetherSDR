@@ -1,4 +1,4 @@
-// Standalone test harness for ClientComp DSP.
+﻿// Standalone test harness for ClientComp DSP.
 // Build: produced by CMake as `client_comp_test` target.
 // Run:   ./build/client_comp_test
 // Exit code 0 on all pass, 1 on any failure.
@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::ClientComp;
+using MasterSDR::ClientComp;
 
 namespace {
 

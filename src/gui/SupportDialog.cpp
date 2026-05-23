@@ -1,4 +1,4 @@
-#include "SupportDialog.h"
+﻿#include "SupportDialog.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/LogManager.h"
@@ -27,7 +27,7 @@
 #include <QApplication>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 SupportDialog::SupportDialog(QWidget* parent)
     : QDialog(parent)
@@ -124,7 +124,7 @@ void SupportDialog::buildUI()
     clearBtn->setFixedHeight(26);
     openBtn->setFixedHeight(26);
     resetBtn->setFixedHeight(26);
-    resetBtn->setToolTip("Delete AetherSDR's local settings and NR2 wisdom cache. Radio settings stay on the radio.");
+    resetBtn->setToolTip("Delete MasterSDR's local settings and NR2 wisdom cache. Radio settings stay on the radio.");
     connect(refreshBtn, &QPushButton::clicked, this, &SupportDialog::refreshLog);
     connect(clearBtn, &QPushButton::clicked, this, &SupportDialog::clearLog);
     connect(openBtn, &QPushButton::clicked, this, &SupportDialog::openLogFolder);
@@ -167,15 +167,15 @@ void SupportDialog::buildUI()
 
         // Diagnostic prompt for AI
         static const QString kPromptTemplate =
-            "I'm experiencing an issue with AetherSDR, a Linux/macOS/Windows SDR client\n"
-            "for FlexRadio transceivers (https://github.com/aethersdr/AetherSDR).\n\n"
+            "I'm experiencing an issue with MasterSDR, a Linux/macOS/Windows SDR client\n"
+            "for FlexRadio transceivers (https://github.com/MasterSDR/MasterSDR).\n\n"
             "My system:\n"
-            "- AetherSDR version: %1\n"
+            "- MasterSDR version: %1\n"
             "- Qt version: %2\n"
             "- OS: %3\n"
             "- Radio: %4\n\n"
-            "Before writing the bug report, please read the AetherSDR project context at\n"
-            "https://raw.githubusercontent.com/aethersdr/AetherSDR/main/CLAUDE.md\n"
+            "Before writing the bug report, please read the MasterSDR project context at\n"
+            "https://raw.githubusercontent.com/MasterSDR/MasterSDR/main/CLAUDE.md\n"
             "for architecture overview, data flow, protocol details, and known issues.\n\n"
             "Based on my description below, write a complete GitHub bug report.\n"
             "Do NOT ask me follow-up questions — just write the best report you can\n"
@@ -251,7 +251,7 @@ void SupportDialog::buildUI()
             QDesktopServices::openUrl(QUrl("https://www.perplexity.ai/"));
             openedLLM = true;
         } else if (clicked == issueBtn) {
-            QUrl url("https://github.com/aethersdr/AetherSDR/issues/new");
+            QUrl url("https://github.com/MasterSDR/MasterSDR/issues/new");
             QUrlQuery query;
             query.addQueryItem("labels", "bug");
             url.setQuery(query);
@@ -288,7 +288,7 @@ void SupportDialog::buildUI()
         "<p style='color:#c8d8e8; font-size: 13px;'>"
         "To report an issue:<br>"
         "1. Enable logging for the relevant module(s) above<br>"
-        "2. <b>Restart AetherSDR</b> (logging changes take effect on next launch)<br>"
+        "2. <b>Restart MasterSDR</b> (logging changes take effect on next launch)<br>"
         "3. Reproduce the problem<br>"
         "4. Click <b>File an Issue</b> and drag your log file into the GitHub form</p>");
     instructions->setTextFormat(Qt::RichText);
@@ -356,13 +356,13 @@ void SupportDialog::resetSettings()
         AudioEngine::wisdomFilePath()
     };
 #ifdef Q_OS_MAC
-    resetPaths << (QDir::homePath() + "/Library/Preferences/com.aethersdr.AetherSDR.plist");
+    resetPaths << (QDir::homePath() + "/Library/Preferences/com.mastersdr.MasterSDR.plist");
 #endif
 
     const QString prompt = QString(
-        "This will remove AetherSDR's app-specific settings only.\n"
+        "This will remove MasterSDR's app-specific settings only.\n"
         "It will not change settings stored on the radio.\n"
-        "AetherSDR will close immediately after reset so these files are not recreated.\n\n"
+        "MasterSDR will close immediately after reset so these files are not recreated.\n\n"
         "Files to remove:\n"
         "%1\n\n"
         "Continue?")
@@ -373,7 +373,7 @@ void SupportDialog::resetSettings()
         return;
     }
 
-    QCoreApplication::instance()->setProperty("AetherSettingsResetInProgress", true);
+    QCoreApplication::instance()->setProperty("MasterSettingsResetInProgress", true);
 
     QStringList removed;
     QStringList failed;
@@ -403,7 +403,7 @@ void SupportDialog::resetSettings()
             "Some files could not be removed.\n\n"
             "Removed: %1\n"
             "Failed: %2\n\n"
-            "AetherSDR will now close to avoid rewriting settings.")
+            "MasterSDR will now close to avoid rewriting settings.")
             .arg(removed.isEmpty() ? "none" : removed.join("\n"),
                  failed.join("\n")));
     QApplication::quit();
@@ -454,4 +454,4 @@ QString SupportDialog::formatFileSize(qint64 bytes) const
     return QString("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

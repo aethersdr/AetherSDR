@@ -1,4 +1,4 @@
-#!/bin/bash
+﻿#!/bin/bash
 # setup-deepfilter.sh — Build DeepFilterNet3 libdf for DFNR noise reduction.
 #
 # Downloads the DeepFilterNet source, builds the C API library using Cargo,
@@ -54,7 +54,7 @@ fi
 # ── Try downloading pre-built binary ────────────────────────────────────
 # Pre-built libraries are hosted on the GitHub Release tagged 'dfnr-libs'.
 # Override the repo with DFNR_RELEASE_REPO if building from a fork.
-RELEASE_REPO="${DFNR_RELEASE_REPO:-ten9876/AetherSDR}"
+RELEASE_REPO="${DFNR_RELEASE_REPO:-ten9876/MasterSDR}"
 RELEASE_TAG="dfnr-libs"
 TARBALL="libdeepfilter-${PLATFORM}.tar.gz"
 DOWNLOAD_URL="https://github.com/${RELEASE_REPO}/releases/download/${RELEASE_TAG}/${TARBALL}"

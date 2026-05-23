@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
 class QPlainTextEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Modal editor for the per-instance startup-commands list (#2683).  One
 // command per line; the backend (DxClusterClient::sendStartupCommands)
@@ -35,4 +35,4 @@ private:
     QString m_key;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

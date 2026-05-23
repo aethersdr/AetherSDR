@@ -1,4 +1,4 @@
-#include "RxApplet.h"
+﻿#include "RxApplet.h"
 #include "FilterPassbandWidget.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
@@ -101,7 +101,7 @@ private:
     Dir m_dir;
 };
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -418,7 +418,7 @@ void RxApplet::buildUI()
 #ifdef HAVE_RADE
         m_modeCombo->addItem("RADE");
 #endif
-        AetherSDR::applyComboStyle(m_modeCombo);
+        MasterSDR::applyComboStyle(m_modeCombo);
         m_modeCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
         connect(m_modeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int) {
@@ -568,10 +568,10 @@ void RxApplet::buildUI()
 
     // Visual filter passband widget (draggable lo/hi edges)
     {
-        m_filterPassband = new AetherSDR::FilterPassbandWidget;
+        m_filterPassband = new MasterSDR::FilterPassbandWidget;
         m_filterPassband->setMinimumHeight(40);
         m_filterPassband->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        connect(m_filterPassband, &AetherSDR::FilterPassbandWidget::filterChanged,
+        connect(m_filterPassband, &MasterSDR::FilterPassbandWidget::filterChanged,
                 this, [this](int lo, int hi) {
             if (m_slice) m_slice->setFilterWidth(lo, hi);
         });
@@ -593,7 +593,7 @@ void RxApplet::buildUI()
             m_toneModeCmb = new GuardedComboBox;
             m_toneModeCmb->addItem("Off",      QString("off"));
             m_toneModeCmb->addItem("CTCSS TX", QString("ctcss_tx"));
-            AetherSDR::applyComboStyle(m_toneModeCmb);
+            MasterSDR::applyComboStyle(m_toneModeCmb);
             row->addWidget(m_toneModeCmb, 1);
             fmLayout->addLayout(row);
 
@@ -616,7 +616,7 @@ void RxApplet::buildUI()
                         .arg(t.frequency, 0, 'f', 1),
                     QString::number(t.frequency, 'f', 1));
             }
-            AetherSDR::applyComboStyle(m_toneValueCmb);
+            MasterSDR::applyComboStyle(m_toneValueCmb);
             m_toneValueCmb->setEnabled(false);  // enabled only when CTCSS TX
             fmLayout->addWidget(m_toneValueCmb);
 
@@ -836,7 +836,7 @@ void RxApplet::buildUI()
         m_agcCombo->addItem("Fast", QString("fast"));
         m_agcCombo->setCurrentIndex(2);
         m_agcCombo->setFixedWidth(52);
-        AetherSDR::applyComboStyle(m_agcCombo);
+        MasterSDR::applyComboStyle(m_agcCombo);
         connect(m_agcCombo, &QComboBox::currentIndexChanged, this, [this](int idx) {
             if (m_slice) m_slice->setAgcMode(m_agcCombo->itemData(idx).toString());
         });
@@ -2559,5 +2559,5 @@ bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
     return QWidget::eventFilter(obj, ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 #include "moc_GuardedSlider.cpp"

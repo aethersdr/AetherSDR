@@ -1,4 +1,4 @@
-#include "TitleBar.h"
+﻿#include "TitleBar.h"
 #include "GuardedSlider.h"
 #include "core/AppSettings.h"
 
@@ -28,10 +28,10 @@
 #include <QJsonObject>
 #include "core/VersionNumber.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
-constexpr const char* kTitleDragHandleProperty = "aetherTitleDragHandle";
+constexpr const char* kTitleDragHandleProperty = "masterTitleDragHandle";
 
 // Build a 16×18 dock-side indicator: hollow rectangle (the main window)
 // with a thin shaded strip flush against one inner wall, representing
@@ -173,7 +173,7 @@ TitleBar::TitleBar(QWidget* parent)
 #endif
 
     m_appNameLabel = new QLabel(
-        QString("AetherSDR v%1").arg(QCoreApplication::applicationVersion()));
+        QString("MasterSDR v%1").arg(QCoreApplication::applicationVersion()));
     m_appNameLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 14px; font-weight: bold; }");
     m_appNameLabel->setAlignment(Qt::AlignCenter);
     markDragHandle(m_appNameLabel);
@@ -787,7 +787,7 @@ void TitleBar::showFeatureRequestDialog()
     // Version check guard (#486) — warn if not on latest release
     auto* nam = new QNetworkAccessManager(this);
     auto* reply = nam->get(QNetworkRequest(
-        QUrl("https://api.github.com/repos/aethersdr/AetherSDR/releases/latest")));
+        QUrl("https://api.github.com/repos/MasterSDR/MasterSDR/releases/latest")));
     connect(reply, &QNetworkReply::finished, this, [this, reply, nam] {
         reply->deleteLater();
         nam->deleteLater();
@@ -819,13 +819,13 @@ void TitleBar::showFeatureRequestDialogImpl()
     static const QString kPrompt =
         "IMPORTANT — before doing anything else, fetch the complete list of open\n"
         "issues by reading pages sequentially until you get fewer than 100 results:\n"
-        "  Page 1: https://github.com/aethersdr/AetherSDR/issues?state=open&per_page=100&page=1\n"
-        "  Page 2: https://github.com/aethersdr/AetherSDR/issues?state=open&per_page=100&page=2\n"
+        "  Page 1: https://github.com/MasterSDR/MasterSDR/issues?state=open&per_page=100&page=1\n"
+        "  Page 2: https://github.com/MasterSDR/MasterSDR/issues?state=open&per_page=100&page=2\n"
         "  ... continue until a page returns fewer than 100 issues.\n"
         "Do NOT rely on cached or training data for the issue list.\n\n"
         "Also fetch CLAUDE.md fresh (do not use cached versions):\n"
-        "  https://raw.githubusercontent.com/aethersdr/AetherSDR/main/CLAUDE.md\n\n"
-        "I want to report an issue or request a feature for AetherSDR, a Linux-native\n"
+        "  https://raw.githubusercontent.com/MasterSDR/MasterSDR/main/CLAUDE.md\n\n"
+        "I want to report an issue or request a feature for MasterSDR, a Linux-native\n"
         "Qt6/C++20 client for FlexRadio transceivers. It uses the FlexLib API over TCP/UDP.\n\n"
         "DUPLICATE CHECK — this is mandatory. Search the fetched issue list for keywords\n"
         "related to my description below. Check titles AND bodies. If you find an existing\n"
@@ -842,7 +842,7 @@ void TitleBar::showFeatureRequestDialogImpl()
         "3. ## Why — what problem it solves\n"
         "4. ## How Other Clients Do It — how SmartSDR, GQRX, SDR++, etc. handle this\n"
         "5. ## Suggested Behavior — specific UX: what the user clicks, sees, what happens.\n"
-        "   Reference AetherSDR UI elements (AppletPanel, VfoWidget, RxApplet, etc.)\n"
+        "   Reference MasterSDR UI elements (AppletPanel, VfoWidget, RxApplet, etc.)\n"
         "6. ## Protocol Hints — relevant FlexLib commands, or \"Unknown — needs research\"\n"
         "7. ## Acceptance Criteria — 3-5 bullet points defining done vs not-done\n\n"
         "FOR BUG REPORTS include:\n"
@@ -938,7 +938,7 @@ void TitleBar::showFeatureRequestDialogImpl()
         "QPushButton:hover { background: #00c8f0; }");
     connect(submitBtn, &QPushButton::clicked, dlg, [dlg] {
         QDesktopServices::openUrl(QUrl(
-            "https://github.com/aethersdr/AetherSDR/issues/new?template=feature_request.yml"));
+            "https://github.com/MasterSDR/MasterSDR/issues/new?template=feature_request.yml"));
         QTimer::singleShot(500, dlg, &QDialog::close);
     });
     btnRow2->addWidget(submitBtn);
@@ -950,7 +950,7 @@ void TitleBar::showFeatureRequestDialogImpl()
         "QPushButton:hover { background: #dd5050; }");
     connect(bugBtn, &QPushButton::clicked, dlg, [dlg] {
         QDesktopServices::openUrl(QUrl(
-            "https://github.com/aethersdr/AetherSDR/issues/new?template=bug_report.yml"));
+            "https://github.com/MasterSDR/MasterSDR/issues/new?template=bug_report.yml"));
         QTimer::singleShot(500, dlg, &QDialog::close);
     });
     btnRow2->addWidget(bugBtn);
@@ -1077,4 +1077,4 @@ void TitleBar::setMinimalMode(bool on)
     updateMaximizeIcon();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

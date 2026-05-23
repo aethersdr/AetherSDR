@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QPoint>
 #include <QString>
@@ -7,7 +7,7 @@
 class QLabel;
 class QPushButton;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Header strip that sits at the top of every ContainerWidget.  Owns
 // the title text, float/dock toggle button, close (hide) button,
@@ -63,4 +63,4 @@ private:
     bool         m_alwaysOnTop{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

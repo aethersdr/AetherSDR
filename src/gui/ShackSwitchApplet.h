@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QList>
@@ -8,7 +8,7 @@ class QPushButton;
 class QLabel;
 class QFrame;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AntennaGeniusModel;
 
@@ -85,4 +85,4 @@ private:
     bool   m_autoRoutedToDummy{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

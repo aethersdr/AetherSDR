@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QDialog>
 #include <QVector>
@@ -11,7 +11,7 @@ class QStackedWidget;
 class QTimer;
 class QVBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class BandPlanManager;
@@ -141,4 +141,4 @@ private:
     bool  m_swrTracking{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-// Unit tests for PerfTelemetry — issue #2500.
+﻿// Unit tests for PerfTelemetry — issue #2500.
 //
 // Drives the singleton through its public record* API with a synthetic
 // clock seam (setClockOverrideForTest) so window cadence is deterministic
@@ -30,7 +30,7 @@
 #include <string>
 #include <vector>
 
-using AetherSDR::PerfTelemetry;
+using MasterSDR::PerfTelemetry;
 
 namespace {
 
@@ -39,7 +39,7 @@ QStringList g_capturedLines;
 
 void messageHandler(QtMsgType, const QMessageLogContext& ctx, const QString& msg)
 {
-    if (ctx.category && QString::fromUtf8(ctx.category) == QLatin1String("aether.perf"))
+    if (ctx.category && QString::fromUtf8(ctx.category) == QLatin1String("mastersdr.perf"))
         g_capturedLines << msg;
 }
 
@@ -105,7 +105,7 @@ QString flushSummary(qint64 windowStartNs)
 
 void testDisabledHotPath()
 {
-    QLoggingCategory::setFilterRules(QStringLiteral("aether.perf.debug=false"));
+    QLoggingCategory::setFilterRules(QStringLiteral("mastersdr.perf.debug=false"));
     PerfTelemetry::setClockOverrideForTest(1'000'000'000LL);
     PerfTelemetry::instance().resetForTest();
     resetCapture();
@@ -117,7 +117,7 @@ void testDisabledHotPath()
            g_capturedLines.isEmpty(),
            g_capturedLines.isEmpty() ? "" : std::string("got ") + std::to_string(g_capturedLines.size()) + " lines");
 
-    QLoggingCategory::setFilterRules(QStringLiteral("aether.perf.debug=true"));
+    QLoggingCategory::setFilterRules(QStringLiteral("mastersdr.perf.debug=true"));
 }
 
 // --- Window aggregation -----------------------------------------------------
@@ -395,7 +395,7 @@ void testWindowTiming()
 int main(int argc, char** argv)
 {
     QCoreApplication app(argc, argv);
-    QLoggingCategory::setFilterRules(QStringLiteral("aether.perf.debug=true"));
+    QLoggingCategory::setFilterRules(QStringLiteral("mastersdr.perf.debug=true"));
     qInstallMessageHandler(messageHandler);
 
     testDisabledHotPath();

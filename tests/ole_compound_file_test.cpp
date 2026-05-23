@@ -1,10 +1,10 @@
-// Standalone test harness for OleCompoundFile.
+﻿// Standalone test harness for OleCompoundFile.
 //
 // Verifies the reader against a real WiX MSI containing six cab*.cab
 // streams. The test fixture is the SmartSDR v4.2.18 installer, which
 // is FlexRadio's licensed property and therefore not checked into the
 // repo. The test:
-//   1. Looks for the MSI at $AETHERSDR_TEST_MSI
+//   1. Looks for the MSI at $MasterSDR_TEST_MSI
 //   2. Falls back to ~/build/reference/SmartSDR_v4.2.18_x64.msi
 //   3. Skips with code 77 (autotools "skipped") if neither is present.
 //
@@ -24,8 +24,8 @@
 #include <cstdio>
 #include <cstdlib>
 
-using AetherSDR::OleCompoundFile;
-using AetherSDR::CabExtractor;
+using MasterSDR::OleCompoundFile;
+using MasterSDR::CabExtractor;
 
 namespace {
 
@@ -38,7 +38,7 @@ void report(const char* name, bool ok, const QString& detail = {}) {
 }
 
 QString locateFixture() {
-    if (auto* env = std::getenv("AETHERSDR_TEST_MSI")) {
+    if (auto* env = std::getenv("MasterSDR_TEST_MSI")) {
         const QString p = QString::fromUtf8(env);
         if (QFileInfo::exists(p)) return p;
     }
@@ -59,7 +59,7 @@ QString md5Of(const QByteArray& data) {
 int main(int /*argc*/, char** /*argv*/) {
     const QString fixture = locateFixture();
     if (fixture.isEmpty()) {
-        std::printf("[SKIP] no MSI fixture available — set AETHERSDR_TEST_MSI\n");
+        std::printf("[SKIP] no MSI fixture available — set MasterSDR_TEST_MSI\n");
         return 77;
     }
     std::printf("Using fixture: %s\n", fixture.toUtf8().constData());

@@ -1,4 +1,4 @@
-#include "DaxIqApplet.h"
+﻿#include "DaxIqApplet.h"
 #include "ComboStyle.h"
 #include "GuardedSlider.h"
 #include "core/AppSettings.h"
@@ -16,7 +16,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -217,4 +217,4 @@ void DaxIqApplet::setDaxIqLevel(int channel, float rms)
     m_iqMeter[channel - 1]->setValue(level);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

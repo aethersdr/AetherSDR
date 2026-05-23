@@ -1,9 +1,9 @@
-#include "TnfModel.h"
+﻿#include "TnfModel.h"
 #include "core/LogManager.h"
 #include <QDebug>
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 TnfModel::TnfModel(QObject* parent)
     : QObject(parent)
@@ -138,4 +138,4 @@ void TnfModel::clear()
     m_tnfs.clear();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

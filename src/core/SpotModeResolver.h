@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 
-namespace AetherSDR::SpotModeResolver {
+namespace MasterSDR::SpotModeResolver {
 
 QString extractSpotModeFromComment(const QString& comment);
 
@@ -16,4 +16,4 @@ QString resolveSpotRadioMode(const QString& explicitMode,
                              const QString& comment,
                              double rxFreqMhz);
 
-} // namespace AetherSDR::SpotModeResolver
+} // namespace MasterSDR::SpotModeResolver

@@ -1,4 +1,4 @@
-#import <AVFoundation/AVFoundation.h>
+﻿#import <AVFoundation/AVFoundation.h>
 #import <stdio.h>
 
 void requestMicrophonePermission()
@@ -30,7 +30,7 @@ void requestMicrophonePermission()
         fprintf(stderr,
             "MacMicPermission: microphone access denied/restricted.\n"
             "  Open System Settings → Privacy & Security → Microphone\n"
-            "  and enable access for AetherSDR.\n");
+            "  and enable access for MasterSDR.\n");
         break;
     }
 }

@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QPushButton>
 
 class QLabel;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class HGauge;
 
@@ -38,4 +38,4 @@ private:
     float    m_drainAmps{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

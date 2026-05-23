@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include "core/ClientEq.h"
 #include <QWidget>
 
 class QHBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 
@@ -48,4 +48,4 @@ private:
     int          m_selectedBand{-1};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

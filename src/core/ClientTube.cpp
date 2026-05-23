@@ -1,9 +1,9 @@
-#include "ClientTube.h"
+﻿#include "ClientTube.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -287,4 +287,4 @@ void ClientTube::process(float* interleaved, int frames, int channels) noexcept
                                   std::memory_order_relaxed);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

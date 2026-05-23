@@ -1,11 +1,11 @@
-#include "core/AppSettings.h"
+﻿#include "core/AppSettings.h"
 #include "core/SpotCommandPolicy.h"
 
 #include <QCoreApplication>
 #include <QString>
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #ifdef HAVE_WEBSOCKETS
 
 #include <QObject>
@@ -14,7 +14,7 @@ class QWebSocketServer;
 class QWebSocket;
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class AudioEngine;
@@ -43,7 +43,7 @@ public:
 
     // Broadcast a master-volume change to all connected TCI clients. Called
     // by MainWindow whenever the GUI master volume slider moves so remote
-    // controllers (e.g. aether_pad) stay in sync. Idempotent — clients
+    // controllers (e.g. mastersdr_pad) stay in sync. Idempotent — clients
     // re-applying the value they just sent is harmless.
     void broadcastMasterVolume(int pct);
 
@@ -175,6 +175,6 @@ private:
     float             m_cachedMicLevel{-50.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_WEBSOCKETS

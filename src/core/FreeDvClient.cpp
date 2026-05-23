@@ -1,4 +1,4 @@
-#include "FreeDvClient.h"
+﻿#include "FreeDvClient.h"
 #include "LogManager.h"
 #include "AppSettings.h"
 #include <QCoreApplication>
@@ -10,7 +10,7 @@
 #include <QFileInfo>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 FreeDvClient::FreeDvClient(QObject* parent)
     : QObject(parent)
@@ -60,7 +60,7 @@ FreeDvClient::~FreeDvClient()
 QString FreeDvClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/freedv.log";
+           + "/MasterSDR/freedv.log";
 }
 
 void FreeDvClient::startConnection()
@@ -174,7 +174,7 @@ void FreeDvClient::handleEngineIO(const QString& raw)
         // Send Socket.IO Connect packet ("40" = Engine.IO Message + Socket.IO Connect).
         // role="report" is required for full-participant auth — without it the server
         // immediately disconnects. rx_only and os are also required by the server.
-        // version carries "AetherSDR <ver> RADE v<N>" so both app and engine version
+        // version carries "MasterSDR <ver> RADE v<N>" so both app and engine version
         // are visible on the FreeDV Reporter website.
         QJsonObject auth;
         if (m_reportingEnabled && !m_myCallsign.isEmpty()) {
@@ -565,4 +565,4 @@ void FreeDvClient::onSnrTimer()
     });
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

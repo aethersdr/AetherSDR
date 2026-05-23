@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QAudioDevice>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class CwSidetoneGenerator;
 
@@ -49,4 +49,4 @@ public:
     virtual const char* name() const = 0;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

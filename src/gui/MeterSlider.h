@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "MeterSmoother.h"
 
@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Combined horizontal level meter + gain slider used by the TCI and
 // DAX applets (4 RX channels + 1 TX per applet).  Background shows
@@ -158,4 +158,4 @@ private:
     bool          m_dragging{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

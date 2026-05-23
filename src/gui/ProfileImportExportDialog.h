@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
@@ -11,7 +11,7 @@ class QProgressBar;
 class QPushButton;
 class QTabWidget;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ProfileTransfer;
 class RadioModel;
@@ -68,4 +68,4 @@ private:
     QPushButton* m_closeButton{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

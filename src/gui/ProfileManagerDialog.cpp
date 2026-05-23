@@ -1,4 +1,4 @@
-#include "ProfileManagerDialog.h"
+﻿#include "ProfileManagerDialog.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -13,7 +13,7 @@
 #include <QMessageBox>
 #include <QSignalBlocker>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const QString kDialogStyle =
     "QDialog { background: #0f0f1a; color: #c8d8e8; }"
@@ -337,4 +337,4 @@ void ProfileManagerDialog::refreshTab(const QString& type)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

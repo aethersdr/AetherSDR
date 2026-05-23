@@ -1,4 +1,4 @@
-name: Build CI Docker Image
+﻿name: Build CI Docker Image
 
 on:
   push:
@@ -41,7 +41,7 @@ jobs:
         with:
           context: .github/docker
           push: true
-          tags: ghcr.io/ten9876/aethersdr-ci:latest
+          tags: ghcr.io/ten9876/mastersdr-ci:latest
 
       - name: Update workflow consumers to new digest
         id: pin
@@ -63,7 +63,7 @@ jobs:
                    .github/workflows/sanitizers.yml; do
             [ -f "$f" ] || continue
             sed -i -E \
-              "s#(ghcr\.io/ten9876/aethersdr-ci)(@sha256:[a-f0-9]+|:[A-Za-z0-9._-]+)#\1@${DIGEST}#g" \
+              "s#(ghcr\.io/ten9876/mastersdr-ci)(@sha256:[a-f0-9]+|:[A-Za-z0-9._-]+)#\1@${DIGEST}#g" \
               "$f"
           done
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
@@ -76,14 +76,14 @@ jobs:
         with:
           branch: ci-image/digest-bump
           delete-branch: true
-          commit-message: "ci: pin aethersdr-ci to ${{ steps.pin.outputs.digest }}"
-          title: "ci: pin aethersdr-ci image to latest build"
+          commit-message: "ci: pin mastersdr-ci to ${{ steps.pin.outputs.digest }}"
+          title: "ci: pin mastersdr-ci image to latest build"
           body: |
             Automated update from `docker-ci-image.yml` after building and
             publishing a new CI image from the current
             `.github/docker/Dockerfile`.
 
-            Updates the `ghcr.io/ten9876/aethersdr-ci` reference in
+            Updates the `ghcr.io/ten9876/mastersdr-ci` reference in
             `ci.yml`, `codeql.yml`, and `sanitizers.yml` (where present) to:
 
                 ${{ steps.pin.outputs.digest }}

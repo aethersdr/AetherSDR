@@ -1,4 +1,4 @@
-# AetherSDR — USB HID encoder access for non-root users
+﻿# MasterSDR — USB HID encoder access for non-root users
 # Install: sudo cp 60-hid-encoders.rules /etc/udev/rules.d/
 # Reload: sudo udevadm control --reload-rules && sudo udevadm trigger
 

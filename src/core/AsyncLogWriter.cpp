@@ -1,4 +1,4 @@
-#include "AsyncLogWriter.h"
+﻿#include "AsyncLogWriter.h"
 
 #include <QDir>
 #include <QElapsedTimer>
@@ -11,7 +11,7 @@
 #include <cstdio>
 #include <utility>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -364,7 +364,7 @@ void AsyncLogWriter::run(std::promise<bool> opened)
         item.kind = ItemKind::Log;
         item.log.type = type;
         item.log.timestamp = QTime::currentTime();
-        item.log.category = QStringLiteral("aether.logging");
+        item.log.category = QStringLiteral("mastersdr.logging");
         item.log.message = message;
         return item;
     };
@@ -497,4 +497,4 @@ void AsyncLogWriter::run(std::promise<bool> opened)
     file.close();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

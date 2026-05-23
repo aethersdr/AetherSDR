@@ -1,4 +1,4 @@
-#include "ClientCompEditor.h"
+﻿#include "ClientCompEditor.h"
 #include "ClientCompEditorCanvas.h"
 #include "ClientCompKnob.h"
 #include "ClientCompLimiterButton.h"
@@ -22,7 +22,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -67,7 +67,7 @@ ClientCompEditor::ClientCompEditor(AudioEngine* engine, QWidget* parent)
     : QWidget(parent, Qt::Window | Qt::FramelessWindowHint)
     , m_audio(engine)
 {
-    setWindowTitle("Aetherial Compressor");
+    setWindowTitle("Masterial Compressor");
     setStyleSheet(kWindowStyle);
     resize(kDefaultWidth, kDefaultHeight);
 
@@ -293,7 +293,7 @@ void ClientCompEditor::showForTx()
 {
     m_side = Side::Tx;
     if (m_canvas && comp()) m_canvas->setComp(comp());
-    const QString title = QString::fromUtf8("Aetherial Compressor \xe2\x80\x94 TX");
+    const QString title = QString::fromUtf8("Masterial Compressor \xe2\x80\x94 TX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -309,7 +309,7 @@ void ClientCompEditor::showForRx()
 {
     m_side = Side::Rx;
     if (m_canvas && comp()) m_canvas->setComp(comp());
-    const QString title = QString::fromUtf8("Aetherial Compressor \xe2\x80\x94 RX");
+    const QString title = QString::fromUtf8("Masterial Compressor \xe2\x80\x94 RX");
     if (m_titleBar)
         static_cast<EditorFramelessTitleBar*>(m_titleBar)->setTitleText(title);
     setWindowTitle(title);
@@ -506,4 +506,4 @@ void ClientCompEditor::hideEvent(QHideEvent* ev)
     if (m_meterTimer) m_meterTimer->stop();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <array>
@@ -8,7 +8,7 @@ class QPushButton;
 class QLabel;
 class QSlider;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // EQ applet — 8-band graphic equalizer for TX and RX.
 //
@@ -46,4 +46,4 @@ private:
     std::array<QLabel*,  EqualizerModel::BandCount> m_valueLabels{};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

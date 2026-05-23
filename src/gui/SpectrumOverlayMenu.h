@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "models/RadioModel.h"
 
@@ -16,7 +16,7 @@ class QComboBox;
 class QSlider;
 class QLabel;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class MemoryBrowsePanel;
 class SliceModel;
@@ -78,7 +78,7 @@ public:
     void syncDaxIqChannel(int channel);
     // DSP button accessors and the DSP sub-panel were removed — radio-
     // side DSP lives on VfoWidget only, client-side DSP lives on the
-    // AetherDSP applet only.
+    // MasterDsp applet only.
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -253,4 +253,4 @@ private:
     int          m_lastEmittedRfGain{INT_MIN};  // dedupe rfgain emits across drag snap ticks (#1498)
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

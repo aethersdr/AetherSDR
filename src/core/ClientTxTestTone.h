@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <atomic>
 #include <cstdint>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // 1 kHz sine test-tone generator, injected at the head of the TX
 // audio path so users can verify the strip's processing chain
@@ -65,4 +65,4 @@ private:
     float    m_phase{0.0f};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

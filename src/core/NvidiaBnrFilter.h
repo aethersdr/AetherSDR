@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QByteArray>
@@ -13,7 +13,7 @@
 #include "bnr.grpc.pb.h"
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // gRPC client for NVIDIA NIM BNR (Background Noise Removal).
 // All gRPC I/O runs on a dedicated worker thread to avoid blocking
@@ -76,4 +76,4 @@ private:
 #endif
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

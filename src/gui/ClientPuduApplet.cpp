@@ -1,4 +1,4 @@
-#include "ClientPuduApplet.h"
+﻿#include "ClientPuduApplet.h"
 #include "ClientCompKnob.h"
 #include "PooDooLogo.h"
 #include "core/AudioEngine.h"
@@ -15,7 +15,7 @@
 #include <QVBoxLayout>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -111,7 +111,7 @@ void ClientPuduApplet::buildUI()
     // ── Logo ────────────────────────────────────────────────────
     m_logo = new PooDooLogo;
     m_logo->setMinimumHeight(40);
-    m_logo->setWordmark(QString::fromUtf8("AetherVoice\xe2\x84\xa2"));
+    m_logo->setWordmark(QString::fromUtf8("MasterVoice\xe2\x84\xa2"));
     outer->addWidget(m_logo);
 
     // ── A/B mode toggle ─────────────────────────────────────────
@@ -363,4 +363,4 @@ void ClientPuduApplet::applyDooMix(float v)
     savePuduSettings();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

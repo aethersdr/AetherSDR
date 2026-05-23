@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QHash>
 #include <QSet>
 #include <QVector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct QsoRecord;
 
@@ -43,4 +43,4 @@ private:
     int m_totalQsos{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

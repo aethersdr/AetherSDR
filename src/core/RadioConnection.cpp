@@ -1,4 +1,4 @@
-#include "RadioConnection.h"
+﻿#include "RadioConnection.h"
 #include "LogManager.h"
 
 #include <QEventLoop>
@@ -42,7 +42,7 @@ typedef struct _TCP_INFO_v0 {
 #endif
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static constexpr int HEARTBEAT_INTERVAL_MS = 30000;
 
@@ -408,4 +408,4 @@ void RadioConnection::writeDisconnectMarker()
     m_socket->waitForBytesWritten(250);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

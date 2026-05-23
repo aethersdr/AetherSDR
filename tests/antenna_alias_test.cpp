@@ -1,4 +1,4 @@
-#include "core/AppSettings.h"
+﻿#include "core/AppSettings.h"
 #include "models/AntennaAliasStore.h"
 #include "models/SliceModel.h"
 
@@ -10,7 +10,7 @@
 
 #include <iostream>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 
@@ -24,7 +24,7 @@ bool expect(bool condition, const char* label)
 
 int main(int argc, char** argv)
 {
-    QTemporaryDir fakeHome(QDir::tempPath() + "/aether-antenna-alias-test-XXXXXX");
+    QTemporaryDir fakeHome(QDir::tempPath() + "/mastersdr-antenna-alias-test-XXXXXX");
     if (!fakeHome.isValid()) {
         std::cerr << "[FAIL] create temporary home\n";
         return 1;
@@ -36,7 +36,7 @@ int main(int argc, char** argv)
 
     const QString configRoot =
         QStandardPaths::writableLocation(QStandardPaths::ConfigLocation);
-    QDir(configRoot + "/AetherSDR").removeRecursively();
+    QDir(configRoot + "/MasterSDR").removeRecursively();
 
     auto& settings = AppSettings::instance();
     settings.reset();
@@ -86,6 +86,6 @@ int main(int argc, char** argv)
     ok &= expect(commands == QStringList({QStringLiteral("slice set 3 txant=XVTR")}),
                  "slice TX antenna command keeps canonical token");
 
-    QDir(configRoot + "/AetherSDR").removeRecursively();
+    QDir(configRoot + "/MasterSDR").removeRecursively();
     return ok ? 0 : 1;
 }

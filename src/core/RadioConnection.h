@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CommandParser.h"
 #include "RadioDiscovery.h"
@@ -13,7 +13,7 @@
 #include <functional>
 #include <atomic>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 enum class ConnectionState {
     Disconnected,
@@ -106,4 +106,4 @@ private:
     // Callbacks removed — responses emitted via commandResponse signal (#502)
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

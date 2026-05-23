@@ -1,4 +1,4 @@
-#include "MemoryBrowsePanel.h"
+﻿#include "MemoryBrowsePanel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -12,7 +12,7 @@
 #include <QTableWidget>
 #include <QVBoxLayout>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -214,4 +214,4 @@ void MemoryBrowsePanel::populateTable()
         scrollToHighlightedRow();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

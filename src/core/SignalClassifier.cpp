@@ -1,13 +1,13 @@
-#include "SignalClassifier.h"
+﻿#include "SignalClassifier.h"
 #include "LogManager.h"
 
 #include <QFile>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 SignalClassifier::SignalClassifier()
 #ifdef HAVE_ONNX
-    : m_env(ORT_LOGGING_LEVEL_WARNING, "AetherSDR")
+    : m_env(ORT_LOGGING_LEVEL_WARNING, "MasterSDR")
     , m_memInfo(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault))
 #endif
 {
@@ -85,4 +85,4 @@ ClassifierResult SignalClassifier::classify(const QVector<float>& patch,
     return res;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

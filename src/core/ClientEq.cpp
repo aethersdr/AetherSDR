@@ -1,9 +1,9 @@
-#include "ClientEq.h"
+﻿#include "ClientEq.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -671,4 +671,4 @@ ClientEq::BandParams ClientEq::defaultBand(int idx)
     return p;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

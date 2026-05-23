@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QLineEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Combined vertical fader + level meter.  One custom-painted bar shows
 // the post-EQ peak level as a gradient fill rising from the bottom, with
@@ -72,4 +72,4 @@ private:
     int m_stripH{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

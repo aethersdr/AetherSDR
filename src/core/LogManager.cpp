@@ -1,4 +1,4 @@
-#include "LogManager.h"
+﻿#include "LogManager.h"
 #include "AppSettings.h"
 
 #include <QDateTime>
@@ -11,61 +11,61 @@
 #include <QStandardPaths>
 #include <QTime>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Define all logging categories (disabled by default)
-Q_LOGGING_CATEGORY(lcDiscovery,  "aether.discovery",  QtDebugMsg)
-Q_LOGGING_CATEGORY(lcConnection, "aether.connection",  QtDebugMsg)
-Q_LOGGING_CATEGORY(lcProtocol,   "aether.protocol",    QtDebugMsg)
-Q_LOGGING_CATEGORY(lcAudio,      "aether.audio",       QtWarningMsg)
-Q_LOGGING_CATEGORY(lcVita49,     "aether.vita49",      QtWarningMsg)
-Q_LOGGING_CATEGORY(lcDsp,        "aether.dsp",         QtWarningMsg)
-Q_LOGGING_CATEGORY(lcRade,       "aether.rade",        QtWarningMsg)
-Q_LOGGING_CATEGORY(lcSmartLink,  "aether.smartlink",   QtWarningMsg)
-Q_LOGGING_CATEGORY(lcCat,        "aether.cat",         QtWarningMsg)
-Q_LOGGING_CATEGORY(lcDax,        "aether.dax",         QtWarningMsg)
-Q_LOGGING_CATEGORY(lcMeters,     "aether.meters",      QtWarningMsg)
-Q_LOGGING_CATEGORY(lcTransmit,   "aether.transmit",    QtWarningMsg)
-Q_LOGGING_CATEGORY(lcFirmware,   "aether.firmware",    QtWarningMsg)
-Q_LOGGING_CATEGORY(lcTuner,      "aether.tuner",       QtWarningMsg)
-Q_LOGGING_CATEGORY(lcGui,        "aether.gui",         QtWarningMsg)
-Q_LOGGING_CATEGORY(lcDxCluster,  "aether.dxcluster",   QtWarningMsg)
-Q_LOGGING_CATEGORY(lcMqtt,       "aether.mqtt",        QtWarningMsg)
-Q_LOGGING_CATEGORY(lcRbn,        "aether.rbn",         QtWarningMsg)
-Q_LOGGING_CATEGORY(lcDevices,    "aether.devices",     QtWarningMsg)
-Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
-Q_LOGGING_CATEGORY(lcCw,         "aether.cw",          QtWarningMsg)
-Q_LOGGING_CATEGORY(lcSHistory,  "aether.shistory",    QtWarningMsg)
-Q_LOGGING_CATEGORY(lcAx25,       "aether.ax25",        QtWarningMsg)
+Q_LOGGING_CATEGORY(lcDiscovery,  "mastersdr.discovery",  QtDebugMsg)
+Q_LOGGING_CATEGORY(lcConnection, "mastersdr.connection",  QtDebugMsg)
+Q_LOGGING_CATEGORY(lcProtocol,   "mastersdr.protocol",    QtDebugMsg)
+Q_LOGGING_CATEGORY(lcAudio,      "mastersdr.audio",       QtWarningMsg)
+Q_LOGGING_CATEGORY(lcVita49,     "mastersdr.vita49",      QtWarningMsg)
+Q_LOGGING_CATEGORY(lcDsp,        "mastersdr.dsp",         QtWarningMsg)
+Q_LOGGING_CATEGORY(lcRade,       "mastersdr.rade",        QtWarningMsg)
+Q_LOGGING_CATEGORY(lcSmartLink,  "mastersdr.smartlink",   QtWarningMsg)
+Q_LOGGING_CATEGORY(lcCat,        "mastersdr.cat",         QtWarningMsg)
+Q_LOGGING_CATEGORY(lcDax,        "mastersdr.dax",         QtWarningMsg)
+Q_LOGGING_CATEGORY(lcMeters,     "mastersdr.meters",      QtWarningMsg)
+Q_LOGGING_CATEGORY(lcTransmit,   "mastersdr.transmit",    QtWarningMsg)
+Q_LOGGING_CATEGORY(lcFirmware,   "mastersdr.firmware",    QtWarningMsg)
+Q_LOGGING_CATEGORY(lcTuner,      "mastersdr.tuner",       QtWarningMsg)
+Q_LOGGING_CATEGORY(lcGui,        "mastersdr.gui",         QtWarningMsg)
+Q_LOGGING_CATEGORY(lcDxCluster,  "mastersdr.dxcluster",   QtWarningMsg)
+Q_LOGGING_CATEGORY(lcMqtt,       "mastersdr.mqtt",        QtWarningMsg)
+Q_LOGGING_CATEGORY(lcRbn,        "mastersdr.rbn",         QtWarningMsg)
+Q_LOGGING_CATEGORY(lcDevices,    "mastersdr.devices",     QtWarningMsg)
+Q_LOGGING_CATEGORY(lcPerf,       "mastersdr.perf",        QtWarningMsg)
+Q_LOGGING_CATEGORY(lcCw,         "mastersdr.cw",          QtWarningMsg)
+Q_LOGGING_CATEGORY(lcSHistory,  "mastersdr.shistory",    QtWarningMsg)
+Q_LOGGING_CATEGORY(lcAx25,       "mastersdr.ax25",        QtWarningMsg)
 
 LogManager::LogManager()
 {
     // Register categories with human-readable labels and descriptions
     m_categories = {
-        {"aether.discovery",  "Discovery",    "UDP radio discovery broadcasts"},
-        {"aether.connection", "Connection / Commands", "Raw TCP command channel lines: TX commands, RX responses, and socket state"},
-        {"aether.protocol",   "Protocol / Status",     "Parsed SmartSDR protocol handling and model status updates"},
-        {"aether.audio",      "Audio",        "RX/TX audio, device negotiation, volume"},
-        {"aether.vita49",     "VITA-49",      "UDP packet routing: FFT, waterfall, meters, DAX"},
-        {"aether.dsp",        "DSP",          "NR2, RN2, CW decoder processing"},
-        {"aether.rade",       "RADE",         "FreeDV Radio Autoencoder digital voice"},
-        {"aether.smartlink",  "SmartLink",    "Auth0 login, TLS tunnel, WAN streaming"},
-        {"aether.cat",        "CAT/rigctld",  "rigctld TCP servers, PTY virtual serial ports"},
-        {"aether.dax",        "DAX",          "Virtual audio bridge (PipeWire/CoreAudio)"},
-        {"aether.meters",     "Meters",       "Meter definitions and value conversion"},
-        {"aether.transmit",   "Transmit",     "TX state, ATU, profiles, power control"},
-        {"aether.firmware",   "Firmware",     "Firmware download, staging, upload"},
-        {"aether.tuner",      "Tuner/AGM",    "TGXL tuner, Antenna Genius state"},
-        {"aether.gui",        "GUI",          "Window, applets, dialogs"},
-        {"aether.dxcluster",  "DX Cluster",   "DX cluster telnet connection and spot parsing"},
-        {"aether.mqtt",       "MQTT",         "MQTT telemetry client connection and messages"},
-        {"aether.rbn",        "RBN",          "Reverse Beacon Network connection and spots"},
-        {"aether.devices",    "Ext Devices",  "Serial port, FlexControl, MIDI, HID encoder"},
-        {"aether.perf",       "Performance",  "Render timing and CPU profiling data"},
-        {"aether.propforecast", "Propagation",  "Solar and propagation forecast updates"},
-        {"aether.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
-        {"aether.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},
-        {"aether.ax25",       "AetherModem", "AX.25 modem lifecycle, RX/TX audio, demod, framing, and packet diagnostics"},
+        {"mastersdr.discovery",  "Discovery",    "UDP radio discovery broadcasts"},
+        {"mastersdr.connection", "Connection / Commands", "Raw TCP command channel lines: TX commands, RX responses, and socket state"},
+        {"mastersdr.protocol",   "Protocol / Status",     "Parsed SmartSDR protocol handling and model status updates"},
+        {"mastersdr.audio",      "Audio",        "RX/TX audio, device negotiation, volume"},
+        {"mastersdr.vita49",     "VITA-49",      "UDP packet routing: FFT, waterfall, meters, DAX"},
+        {"mastersdr.dsp",        "DSP",          "NR2, RN2, CW decoder processing"},
+        {"mastersdr.rade",       "RADE",         "FreeDV Radio Autoencoder digital voice"},
+        {"mastersdr.smartlink",  "SmartLink",    "Auth0 login, TLS tunnel, WAN streaming"},
+        {"mastersdr.cat",        "CAT/rigctld",  "rigctld TCP servers, PTY virtual serial ports"},
+        {"mastersdr.dax",        "DAX",          "Virtual audio bridge (PipeWire/CoreAudio)"},
+        {"mastersdr.meters",     "Meters",       "Meter definitions and value conversion"},
+        {"mastersdr.transmit",   "Transmit",     "TX state, ATU, profiles, power control"},
+        {"mastersdr.firmware",   "Firmware",     "Firmware download, staging, upload"},
+        {"mastersdr.tuner",      "Tuner/AGM",    "TGXL tuner, Antenna Genius state"},
+        {"mastersdr.gui",        "GUI",          "Window, applets, dialogs"},
+        {"mastersdr.dxcluster",  "DX Cluster",   "DX cluster telnet connection and spot parsing"},
+        {"mastersdr.mqtt",       "MQTT",         "MQTT telemetry client connection and messages"},
+        {"mastersdr.rbn",        "RBN",          "Reverse Beacon Network connection and spots"},
+        {"mastersdr.devices",    "Ext Devices",  "Serial port, FlexControl, MIDI, HID encoder"},
+        {"mastersdr.perf",       "Performance",  "Render timing and CPU profiling data"},
+        {"mastersdr.propforecast", "Propagation",  "Solar and propagation forecast updates"},
+        {"mastersdr.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
+        {"mastersdr.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},
+        {"mastersdr.ax25",       "MasterModem", "AX.25 modem lifecycle, RX/TX audio, demod, framing, and packet diagnostics"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.
@@ -113,9 +113,9 @@ void LogManager::setAllEnabled(bool on)
 void LogManager::applyFilterRules()
 {
     // Build a filter rule string for QLoggingCategory
-    // Default: all aether.* debug messages off, then enable selected ones
+    // Default: all mastersdr.* debug messages off, then enable selected ones
     QStringList rules;
-    rules << "aether.*.debug=false";
+    rules << "mastersdr.*.debug=false";
     for (const auto& c : m_categories) {
         if (c.enabled)
             rules << QString("%1.debug=true").arg(c.id);
@@ -132,7 +132,7 @@ bool LogManager::startLogging(const QString& path, bool mirrorToStderr)
 
     // Rotation callback runs on the writer thread. It picks a fresh
     // timestamped path under the same dir, updates the active path, and
-    // re-points the aethersdr.log symlink so the Support dialog and
+    // re-points the MasterSDR.log symlink so the Support dialog and
     // support-bundle scan continue to find the live file. Writer hands us
     // the closed file via currentPath; we never touch the writer's file
     // handle here. (#2498)
@@ -140,17 +140,17 @@ bool LogManager::startLogging(const QString& path, bool mirrorToStderr)
         [this](const QString& currentPath) -> QString {
             const QString dir = QFileInfo(currentPath).absolutePath();
             const QString ts = QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
-            QString candidate = dir + "/aethersdr-" + ts + ".log";
+            QString candidate = dir + "/MasterSDR-" + ts + ".log";
             int suffix = 1;
             while (QFile::exists(candidate) && suffix <= 100) {
-                candidate = dir + QString("/aethersdr-%1-%2.log").arg(ts).arg(suffix++);
+                candidate = dir + QString("/MasterSDR-%1-%2.log").arg(ts).arg(suffix++);
             }
             if (QFile::exists(candidate))
                 return {};
 
             setActiveLogFilePath(candidate);
 
-            const QString symlink = dir + "/aethersdr.log";
+            const QString symlink = dir + "/MasterSDR.log";
             QFile::remove(symlink);
             QFile::link(candidate, symlink);
             return candidate;
@@ -195,7 +195,7 @@ QString LogManager::logFilePath() const
         return m_activeLogFilePath;
     }
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/aethersdr.log";
+           + "/MasterSDR/MasterSDR.log";
 }
 
 void LogManager::setActiveLogFilePath(const QString& path)
@@ -244,7 +244,7 @@ void LogManager::loadSettings()
     auto& s = AppSettings::instance();
     // Default Discovery, Commands, and Status to on
     static const QStringList defaultOn = {
-        "aether.discovery", "aether.connection", "aether.protocol"
+        "mastersdr.discovery", "mastersdr.connection", "mastersdr.protocol"
     };
     for (auto& c : m_categories) {
         QString def = defaultOn.contains(c.id) ? "True" : "False";
@@ -283,7 +283,7 @@ void LogManager::pruneOldLogs(const QString& dir)
     // Newest-first scan; keep at least the two most-recent so "yesterday's
     // log" remains available for support cases even under aggressive caps.
     const QFileInfoList entries = d.entryInfoList(
-        {"aethersdr-*.log"}, QDir::Files, QDir::Time);
+        {"MasterSDR-*.log"}, QDir::Files, QDir::Time);
 
     const QDateTime cutoff = (cfg.retentionDays > 0)
         ? QDateTime::currentDateTime().addDays(-cfg.retentionDays)
@@ -309,4 +309,4 @@ void LogManager::pruneOldLogs(const QString& dir)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

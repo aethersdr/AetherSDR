@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QMap>
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AntennaAliasStore {
 public:
@@ -21,4 +21,4 @@ public:
                                     int maxChars = 6);
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

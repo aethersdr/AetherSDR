@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct TnfEntry {
     int    id{0};
@@ -51,4 +51,4 @@ private:
     bool m_globalEnabled{true};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

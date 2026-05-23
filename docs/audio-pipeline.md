@@ -1,6 +1,6 @@
-# AetherSDR Audio Pipeline
+﻿# MasterSDR Audio Pipeline
 
-This document describes the current client-side audio paths in AetherSDR as
+This document describes the current client-side audio paths in MasterSDR as
 implemented in `src/core` and the GUI wiring. It focuses on the details a
 contributor needs when changing audio code: ordering, sample formats, sample
 rates, channel handling, downmixing, resampling, metering taps, gain stages, and
@@ -8,7 +8,7 @@ packetization.
 
 ## Executive summary
 
-AetherSDR has several distinct audio paths that share some helpers but do not
+MasterSDR has several distinct audio paths that share some helpers but do not
 all run through the same DSP chain:
 
 - **RX speaker path**: radio audio from `PanadapterStream` is decoded to 24 kHz
@@ -189,10 +189,10 @@ when input has been quiet long enough that the sink likely needs a restart.
 ### macOS Bluetooth/HFP/telephony output guard
 
 On macOS, Bluetooth devices can expose a telephony/HFP output profile with audio
-formats that are unsuitable for AetherSDR speaker playback. During
-`startRxStream()`, AetherSDR checks whether the selected output supports the
+formats that are unsuitable for MasterSDR speaker playback. During
+`startRxStream()`, MasterSDR checks whether the selected output supports the
 desired 24 kHz float32 stereo format or a 48 kHz fallback. If it appears to be a
-telephony-only output and `allowBluetoothTelephonyOutput` is false, AetherSDR
+telephony-only output and `allowBluetoothTelephonyOutput` is false, MasterSDR
 switches to a safer default or sibling output device.
 
 `AudioEngine::setAllowBluetoothTelephonyOutput()` controls that guard and
@@ -205,7 +205,7 @@ mic operation is not forcibly moved away from the telephony profile.
 `MainWindow` owns Qt audio device change monitoring because user prompting must
 run on the GUI thread. `QMediaDevices::audioInputsChanged()` and
 `QMediaDevices::audioOutputsChanged()` are debounced before any action is taken.
-When at least one new device appears, AetherSDR shows a selection dialog with
+When at least one new device appears, MasterSDR shows a selection dialog with
 the current input/output highlighted, newly detected devices marked, and system
 defaults available as explicit choices.
 
@@ -214,7 +214,7 @@ Accepting the dialog queues `AudioEngine::setInputDevice()` and
 the only place that persists the chosen device IDs and restarts the affected
 `QAudioSource`/`QAudioSink` paths. Cancel leaves the current selection alone
 unless the selected device disappeared during the same change batch, in which
-case AetherSDR falls back to the system default device without prompting.
+case MasterSDR falls back to the system default device without prompting.
 
 When the accepted selection changes the input device while the radio mic source
 is `PC`, `MainWindow` immediately re-arms PC mic capture by restarting the local
@@ -223,7 +223,7 @@ no hardware-mic fallback route is used.
 
 The same local re-arm applies when an input device is removed while PC mic
 capture is active. If the selected input disappeared, the selection is cleared
-so `AudioEngine::startTxStream()` opens the current system default. If AetherSDR
+so `AudioEngine::startTxStream()` opens the current system default. If MasterSDR
 was already following the system default, the TX source is still restarted so Qt
 binds the capture stream to the replacement endpoint.
 
@@ -277,7 +277,7 @@ flowchart TD
 - The requested format starts as 24 kHz, stereo, Int16.
 - macOS prefers sample rates in this order for general devices: 48 kHz,
   44.1 kHz, then 24 kHz. For Bluetooth headset inputs that CoreAudio reports
-  as native 8, 16, or 24 kHz-only, AetherSDR opens the mic at that native rate
+  as native 8, 16, or 24 kHz-only, MasterSDR opens the mic at that native rate
   first and then uses its normal radio-native conversion when needed.
 - Linux and other non-Windows platforms prefer 24 kHz, then 48 kHz, then
   44.1 kHz.
@@ -533,7 +533,7 @@ ignored.
 
 ## Metering and scopes
 
-AetherSDR has local/client meters and radio-provided meters. They are not
+MasterSDR has local/client meters and radio-provided meters. They are not
 equivalent taps.
 
 Local/client taps:

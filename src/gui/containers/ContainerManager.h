@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "ContainerWidget.h"
 
@@ -10,7 +10,7 @@
 
 #include <functional>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class FloatingContainerWindow;
 
@@ -140,4 +140,4 @@ private:
     QMap<QString, Meta>                     m_meta;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

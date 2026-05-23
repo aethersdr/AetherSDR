@@ -1,4 +1,4 @@
-#include "RigctlProtocol.h"
+﻿#include "RigctlProtocol.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -8,7 +8,7 @@
 #include <QStringList>
 #include <QtGlobal>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -405,7 +405,7 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
 QString RigctlProtocol::cmdGetInfo()
 {
     if (!m_model || !m_model->isConnected())
-        return QStringLiteral("AetherSDR\n");
+        return QStringLiteral("MasterSDR\n");
     return QStringLiteral("%1 %2 v%3\n")
         .arg(m_model->name(), m_model->model(), m_model->version());
 }
@@ -713,4 +713,4 @@ QString RigctlProtocol::cmdSetKeySpeed(const QString& arg)
     return rprt(0);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "PersistentDialog.h"
 
@@ -15,7 +15,7 @@ class QPushButton;
 class QComboBox;
 class QVBoxLayout;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class AudioEngine;
@@ -119,4 +119,4 @@ private:
     QVector<std::function<void()>> m_peripheralRowSavers;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

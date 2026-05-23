@@ -1,9 +1,9 @@
-#include "ClientTxTestTone.h"
+﻿#include "ClientTxTestTone.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 constexpr float kTwoPi = 6.28318530717958647692f;
@@ -89,4 +89,4 @@ void ClientTxTestTone::process(int16_t* interleaved, int frames, int channels) n
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

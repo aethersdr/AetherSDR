@@ -1,6 +1,6 @@
-# Recenter Architecture
+﻿# Recenter Architecture
 
-This document describes the current pan-follow / recenter architecture implemented in the `aether/recenter-policy` worktree.
+This document describes the current pan-follow / recenter architecture implemented in the `mastersdr/recenter-policy` worktree.
 
 It is intentionally a description of the code as it exists today, not an aspirational rewrite. The goal is to give future review and iteration work a stable reference point.
 

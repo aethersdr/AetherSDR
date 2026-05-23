@@ -1,4 +1,4 @@
-#include "SpectrumOverlayMenu.h"
+﻿#include "SpectrumOverlayMenu.h"
 #include "DspParamPopup.h"
 #include "MemoryBrowsePanel.h"
 #include "SpectrumWidget.h"
@@ -22,7 +22,7 @@
 
 #include <algorithm>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static constexpr int BTN_W = 68;
 static constexpr int BTN_H = 22;
@@ -298,7 +298,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     antLabel->setFixedWidth(kLabelW);
     antRow->addWidget(antLabel);
     m_rxAntCmb = new GuardedComboBox;
-    AetherSDR::applyComboStyle(m_rxAntCmb);
+    MasterSDR::applyComboStyle(m_rxAntCmb);
     antRow->addWidget(m_rxAntCmb, 1);
     vbox->addLayout(antRow);
 
@@ -505,7 +505,7 @@ void SpectrumOverlayMenu::setSlice(SliceModel* slice)
 
     // DSP toggle/level wiring lived here when the overlay carried a DSP
     // sub-panel.  Slice DSP now lives on VfoWidget (radio-side) and the
-    // AetherDSP applet (client-side) — those widgets own their own slice
+    // MasterDsp applet (client-side) — those widgets own their own slice
     // bindings.
 
     syncAntPanel();
@@ -544,7 +544,7 @@ void SpectrumOverlayMenu::buildDaxPanel()
     iqRow->addWidget(iqLbl);
     m_daxIqCmb = new GuardedComboBox;
     m_daxIqCmb->addItems({"None", "1", "2", "3", "4"});
-    AetherSDR::applyComboStyle(m_daxIqCmb);
+    MasterSDR::applyComboStyle(m_daxIqCmb);
     iqRow->addWidget(m_daxIqCmb, 1);
     vb->addLayout(iqRow);
 
@@ -1552,4 +1552,4 @@ bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
     return QWidget::eventFilter(obj, event);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

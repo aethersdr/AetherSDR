@@ -1,4 +1,4 @@
-#include "StripFinalOutputPanel.h"
+﻿#include "StripFinalOutputPanel.h"
 
 #include "ClientCompKnob.h"
 #include "EditorFramelessTitleBar.h"
@@ -34,7 +34,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -354,7 +354,7 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
     , m_audio(engine)
 {
     const QString title = QString::fromUtf8(
-        "Aetherial Final Output Stage \xe2\x80\x94 TX");
+        "Masterial Final Output Stage \xe2\x80\x94 TX");
     setWindowTitle(title);
     setStyleSheet(kWindowStyle);
 
@@ -1256,4 +1256,4 @@ void StripFinalOutputPanel::setQuindarActive(bool active)
     m_quinBtn->setStyleSheet(css);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

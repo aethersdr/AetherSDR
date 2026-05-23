@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Shared dark-theme stylesheet applied to MainWindow and every
 // top-level floating window so that pop-out panels inherit the
@@ -74,4 +74,4 @@ inline QString darkThemeStylesheet()
     )");
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

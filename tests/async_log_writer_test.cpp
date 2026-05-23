@@ -1,4 +1,4 @@
-#include "core/AsyncLogWriter.h"
+﻿#include "core/AsyncLogWriter.h"
 
 #include <QByteArray>
 #include <QCoreApplication>
@@ -14,7 +14,7 @@
 #include <cstdlib>
 #include <string>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 
@@ -51,10 +51,10 @@ void testFormatPreservation(const QString& dir)
 {
     const QString path = dir + "/format.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
-                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("mastersdr.x"),
                                           QStringLiteral("hello"));
-    // Expected: "[12:34:56.789] DBG aether.x: hello\n"
-    const bool ok = contents == QStringLiteral("[12:34:56.789] DBG aether.x: hello\n");
+    // Expected: "[12:34:56.789] DBG mastersdr.x: hello\n"
+    const bool ok = contents == QStringLiteral("[12:34:56.789] DBG mastersdr.x: hello\n");
     report("produced line matches [HH:mm:ss.zzz] LVL cat: msg shape", ok);
 }
 
@@ -70,9 +70,9 @@ void testLabelForEachMsgType(const QString& dir)
     for (const Case& c : cases) {
         const QString path = QString("%1/label_%2.log").arg(dir).arg(c.label);
         const QString contents = writeAndRead(path, c.type,
-                                              QStringLiteral("aether.x"),
+                                              QStringLiteral("mastersdr.x"),
                                               QStringLiteral("payload"));
-        const QString expected = QString("[12:34:56.789] %1 aether.x: payload\n").arg(c.label);
+        const QString expected = QString("[12:34:56.789] %1 mastersdr.x: payload\n").arg(c.label);
         report(c.name, contents == expected);
     }
 }
@@ -81,7 +81,7 @@ void testIpv4Redaction(const QString& dir)
 {
     const QString path = dir + "/ipv4.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
-                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("mastersdr.x"),
                                           QStringLiteral("client 192.168.50.121 connected"));
     report("IPv4 redaction preserves last octet",
            contents.contains(QStringLiteral("*.*.*. 121"))
@@ -92,7 +92,7 @@ void testIpv4VersionExemption(const QString& dir)
 {
     const QString path = dir + "/ipv4_ver.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
-                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("mastersdr.x"),
                                           QStringLiteral("software_ver=4.2.18.41174"));
     report("IPv4 redaction skips ver= firmware versions",
            contents.contains(QStringLiteral("software_ver=4.2.18.41174")));
@@ -104,7 +104,7 @@ void testIpv4ThreeOctetNotRedacted(const QString& dir)
     // This case in the original ticket was a misread of the regex; lock in current behavior.
     const QString path = dir + "/ipv4_three.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
-                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("mastersdr.x"),
                                           QStringLiteral("version \"0.9.8\""));
     report("three-octet versions are not touched by IPv4 redaction",
            contents.contains(QStringLiteral("\"0.9.8\"")));
@@ -115,7 +115,7 @@ void testIpv4QuotedFourOctetIsStillRedacted(const QString& dir)
     // Quoting four-octet IPs does NOT exempt them — quoting is not authentication of intent.
     const QString path = dir + "/ipv4_quoted.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
-                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("mastersdr.x"),
                                           QStringLiteral("peer \"10.0.0.5\""));
     report("quoted four-octet IPv4 is still redacted",
            contents.contains(QStringLiteral("*.*.*. 5"))
@@ -126,7 +126,7 @@ void testSerialRedaction(const QString& dir)
 {
     const QString path = dir + "/serial.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
-                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("mastersdr.x"),
                                           QStringLiteral("radio serial 4424-1213-8600-7836"));
     report("radio serial redaction preserves last group",
            contents.contains(QStringLiteral("****-****-****-7836"))
@@ -137,7 +137,7 @@ void testTokenRedaction(const QString& dir)
 {
     const QString path = dir + "/token.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
-                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("mastersdr.x"),
                                           QStringLiteral("auth id_token=ABCDEF12345678901234extra_payload_more"));
     report("id_token redaction keeps prefix and adds REDACTED",
            contents.contains(QStringLiteral("ABCDEF12345678901234...REDACTED"))
@@ -148,7 +148,7 @@ void testMacDashRedaction(const QString& dir)
 {
     const QString path = dir + "/mac_dash.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
-                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("mastersdr.x"),
                                           QStringLiteral("mac 00-1C-2D-05-37-2A here"));
     report("MAC dash redaction preserves last octet",
            contents.contains(QStringLiteral("**-**-**-**-**-2A"))
@@ -159,7 +159,7 @@ void testMacColonRedaction(const QString& dir)
 {
     const QString path = dir + "/mac_colon.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
-                                          QStringLiteral("aether.x"),
+                                          QStringLiteral("mastersdr.x"),
                                           QStringLiteral("mac 00:1C:2D:05:37:2A here"));
     report("MAC colon redaction preserves last octet",
            contents.contains(QStringLiteral("**:**:**:**:**:2A"))
@@ -174,11 +174,11 @@ void testClearLogTruncatesPriorButPreservesSubsequent(const QString& dir)
         report("clearLog precondition: writer starts", false);
         return;
     }
-    w.enqueue(QtDebugMsg, QTime(1, 0, 0, 0), QStringLiteral("aether.x"),
+    w.enqueue(QtDebugMsg, QTime(1, 0, 0, 0), QStringLiteral("mastersdr.x"),
               QStringLiteral("before-clear-line"));
     w.flush();
     w.clearLog();
-    w.enqueue(QtDebugMsg, QTime(1, 0, 0, 1), QStringLiteral("aether.x"),
+    w.enqueue(QtDebugMsg, QTime(1, 0, 0, 1), QStringLiteral("mastersdr.x"),
               QStringLiteral("after-clear-line"));
     w.flush();
     const QString contents = QString::fromUtf8(readAll(path));
@@ -201,7 +201,7 @@ void testShutdownDrainsAllEnqueuedLines(const QString& dir)
     constexpr int kCount = 200;
     for (int i = 0; i < kCount; ++i) {
         w.enqueue(QtDebugMsg, QTime(0, 0, 0, i % 1000),
-                  QStringLiteral("aether.x"),
+                  QStringLiteral("mastersdr.x"),
                   QString("payload-%1").arg(i));
     }
     // No explicit flush — shutdown must drain remaining queue.
@@ -226,7 +226,7 @@ void testDropAccountingEmitsSummaryAndCounters(const QString& dir)
     constexpr int kBurst = 30000;
     for (int i = 0; i < kBurst; ++i) {
         w.enqueue(QtDebugMsg, QTime(0, 0, 0, i % 1000),
-                  QStringLiteral("aether.x"),
+                  QStringLiteral("mastersdr.x"),
                   QString("burst-%1").arg(i));
     }
     w.flush();
@@ -238,7 +238,7 @@ void testDropAccountingEmitsSummaryAndCounters(const QString& dir)
            c.droppedDebugInfoLines > 0);
     report("drop accounting: summary line is written for dropped debug/info",
            contents.contains(QStringLiteral("Logging dropped debug/info lines count="))
-           && contents.contains(QStringLiteral("aether.logging")));
+           && contents.contains(QStringLiteral("mastersdr.logging")));
 }
 
 void testHighPriorityReservePreservesCritical(const QString& dir)
@@ -253,11 +253,11 @@ void testHighPriorityReservePreservesCritical(const QString& dir)
     constexpr int kDebugBurst = 12000;
     for (int i = 0; i < kDebugBurst; ++i) {
         w.enqueue(QtDebugMsg, QTime(0, 0, 0, i % 1000),
-                  QStringLiteral("aether.x"),
+                  QStringLiteral("mastersdr.x"),
                   QString("dbg-%1").arg(i));
     }
     w.enqueue(QtCriticalMsg, QTime(0, 0, 0, 0),
-              QStringLiteral("aether.x"),
+              QStringLiteral("mastersdr.x"),
               QStringLiteral("MUST_SURVIVE_critical_marker"));
     w.flush();
     const auto c = w.counters();
@@ -289,10 +289,10 @@ void testStderrMirroring(const QString& dir)
             report("stderr mirroring: writer starts", false);
         } else {
             w.enqueue(QtWarningMsg, QTime(8, 0, 0, 0),
-                      QStringLiteral("aether.x"),
+                      QStringLiteral("mastersdr.x"),
                       QStringLiteral("mirror-payload-1"));
             w.enqueue(QtCriticalMsg, QTime(8, 0, 0, 1),
-                      QStringLiteral("aether.x"),
+                      QStringLiteral("mastersdr.x"),
                       QStringLiteral("mirror-payload-2"));
             w.flush();
             w.shutdown();

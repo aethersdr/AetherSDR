@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QVector>
 
-namespace AetherSDR::XvtrPolicy {
+namespace MasterSDR::XvtrPolicy {
 
 struct Transverter {
     int     index{0};
@@ -55,4 +55,4 @@ WaterfallTileRange mapWaterfallTileRange(double lowMhz, double highMhz,
                                          const QVector<Transverter>& xvtrs,
                                          bool hasXvtrSliceAntenna);
 
-} // namespace AetherSDR::XvtrPolicy
+} // namespace MasterSDR::XvtrPolicy

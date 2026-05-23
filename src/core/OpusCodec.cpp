@@ -1,4 +1,4 @@
-#include "OpusCodec.h"
+﻿#include "OpusCodec.h"
 #include "LogManager.h"
 
 #ifdef HAVE_OPUS
@@ -7,7 +7,7 @@
 
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 OpusCodec::OpusCodec()
 {
@@ -133,4 +133,4 @@ void OpusCodec::setBitrate(int bps)
 #endif
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

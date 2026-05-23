@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CwSidetoneSinkBackend.h"
 
@@ -6,7 +6,7 @@
 
 #include <atomic>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class CwSidetoneGenerator;
 
@@ -46,4 +46,4 @@ private:
     bool                               m_paInitialized{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

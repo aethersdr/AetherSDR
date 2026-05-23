@@ -1,4 +1,4 @@
-#include "ClientTubeApplet.h"
+﻿#include "ClientTubeApplet.h"
 #include "ClientCompKnob.h"
 #include "ClientTubeCurveWidget.h"
 #include "core/AudioEngine.h"
@@ -11,7 +11,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -208,4 +208,4 @@ void ClientTubeApplet::onEnableToggled(bool on)
     if (m_curve) m_curve->update();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

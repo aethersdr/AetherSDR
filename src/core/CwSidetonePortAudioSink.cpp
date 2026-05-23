@@ -1,4 +1,4 @@
-#include "CwSidetonePortAudioSink.h"
+﻿#include "CwSidetonePortAudioSink.h"
 #include "CwSidetoneGenerator.h"
 #include "LogManager.h"
 
@@ -6,7 +6,7 @@
 
 #include <cstring>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 CwSidetonePortAudioSink::CwSidetonePortAudioSink() = default;
 
@@ -182,4 +182,4 @@ void CwSidetonePortAudioSink::stop()
     m_actualRate = 0;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

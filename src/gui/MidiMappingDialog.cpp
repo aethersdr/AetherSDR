@@ -1,4 +1,4 @@
-#ifdef HAVE_MIDI
+﻿#ifdef HAVE_MIDI
 
 #include "MidiMappingDialog.h"
 #include "core/MidiControlManager.h"
@@ -14,7 +14,7 @@
 #include <QInputDialog>
 #include <QMessageBox>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const QString kGroupStyle =
     "QGroupBox { border: 1px solid #304050; border-radius: 4px; "
@@ -345,6 +345,6 @@ void MidiMappingDialog::refreshProfileList()
         m_profileCombo->setCurrentText(current);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_MIDI

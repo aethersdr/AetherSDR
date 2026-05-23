@@ -1,4 +1,4 @@
-#include "core/tnc/AetherAx25LibmodemShim.h"
+﻿#include "core/tnc/MasterAx25LibmodemShim.h"
 
 #include "bitstream.h"
 
@@ -15,8 +15,8 @@
 #include <cstring>
 #include <vector>
 
-using namespace AetherSDR;
-namespace lm = aether_libmodem_core;
+using namespace MasterSDR;
+namespace lm = mastersdr_libmodem_core;
 
 namespace {
 
@@ -288,7 +288,7 @@ int replayCapture(const QString& path)
                 audio.sampleRate);
 
     for (Ax25TonePolarity polarity : {Ax25TonePolarity::Normal, Ax25TonePolarity::Inverted}) {
-        AetherAx25LibmodemShim shim;
+        MasterAx25LibmodemShim shim;
         shim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300, polarity));
         QVector<Ax25DecodedFrame> frames;
         QVector<double> frameTimesSeconds;
@@ -329,7 +329,7 @@ int replayCapture(const QString& path)
 
 void testConstructsWithHf300Config()
 {
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     const auto cfg = shim.config();
     report("default profile is HF 300", cfg.profile == Ax25ModemProfile::Hf300);
     report("default sample rate", cfg.sampleRate == 24000);
@@ -340,7 +340,7 @@ void testConstructsWithHf300Config()
 
 void testVhf1200ProfileConfig()
 {
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     shim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200));
     const auto cfg = shim.config();
     report("VHF profile is retained", cfg.profile == Ax25ModemProfile::Vhf1200);
@@ -353,7 +353,7 @@ void testVhf1200ProfileConfig()
 
 void testKnownGoodBitstreamDecodes()
 {
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     lm::ax25_bitstream_converter converter;
     const auto bits = converter.encode(knownPacket(), 6, 2);
     const auto frames = shim.processRecoveredBitsForTest(toQtBits(bits));
@@ -378,7 +378,7 @@ void testSyntheticHf300AfskLoopbackDecodes()
 {
     const auto cfg = ax25DemodConfigForProfile(Ax25ModemProfile::Hf300);
 
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     shim.configure(cfg);
 
     const auto frameBytes = lm::ax25::encode_frame(fixedAprsTestPacket());
@@ -406,24 +406,24 @@ void testSyntheticHf300AfskLoopbackDecodes()
 
 void testTransmitRawPayloadBuildsLoopbackAudio()
 {
-    AetherAx25LibmodemShim txShim;
+    MasterAx25LibmodemShim txShim;
     txShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
 
     const Ax25TransmitResult tx = txShim.buildTransmitAudio(
-        QStringLiteral("hello from AetherModem"),
+        QStringLiteral("hello from MasterModem"),
         QStringLiteral("N0CALL-9"));
     report("TX raw payload packetizes", tx.ok);
     if (!tx.ok)
         return;
     report("TX raw source", tx.frame.source == QStringLiteral("N0CALL-9"));
     report("TX raw destination defaults APRS", tx.frame.destination == QStringLiteral("APRS"));
-    report("TX raw payload preserved", tx.frame.payloadText == QStringLiteral("hello from AetherModem"));
+    report("TX raw payload preserved", tx.frame.payloadText == QStringLiteral("hello from MasterModem"));
     report("TX raw stereo PCM generated", !tx.stereoFloat32Pcm.isEmpty() && tx.audioFrames > 0);
     report("TX raw audio padded to VITA packet frames", (tx.audioFrames % tx.vitaPacketFrames) == 0);
     report("TX raw waveform has sane level", tx.peakDbfs < -6.0 && tx.peakDbfs > -12.0);
 
     const std::vector<float> mono = monoFromStereoFloat32(tx.stereoFloat32Pcm);
-    AetherAx25LibmodemShim rxShim;
+    MasterAx25LibmodemShim rxShim;
     rxShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
     const auto frames = rxShim.processMonoFloat(mono.data(),
                                                 static_cast<int>(mono.size()),
@@ -432,12 +432,12 @@ void testTransmitRawPayloadBuildsLoopbackAudio()
     if (frames.isEmpty())
         return;
     report("TX raw loopback source", frames.first().source == QStringLiteral("N0CALL-9"));
-    report("TX raw loopback payload", frames.first().payloadText == QStringLiteral("hello from AetherModem"));
+    report("TX raw loopback payload", frames.first().payloadText == QStringLiteral("hello from MasterModem"));
 }
 
 void testTransmitMonitorSyntaxBuildsLoopbackAudio()
 {
-    AetherAx25LibmodemShim txShim;
+    MasterAx25LibmodemShim txShim;
     txShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
 
     const Ax25TransmitResult tx = txShim.buildTransmitAudio(
@@ -451,7 +451,7 @@ void testTransmitMonitorSyntaxBuildsLoopbackAudio()
     report("TX monitor path", tx.frame.path == QStringList({QStringLiteral("WIDE1-1")}));
 
     const std::vector<float> mono = monoFromStereoFloat32(tx.stereoFloat32Pcm);
-    AetherAx25LibmodemShim rxShim;
+    MasterAx25LibmodemShim rxShim;
     rxShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
     const auto frames = rxShim.processMonoFloat(mono.data(),
                                                 static_cast<int>(mono.size()),
@@ -466,7 +466,7 @@ void testTransmitMonitorSyntaxBuildsLoopbackAudio()
 
 void testMalformedTransmitMonitorSyntaxIsRejected()
 {
-    AetherAx25LibmodemShim txShim;
+    MasterAx25LibmodemShim txShim;
     txShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
 
     const Ax25TransmitResult tx = txShim.buildTransmitAudio(
@@ -489,7 +489,7 @@ void testChunkedSyntheticReplayUsesReceiveGate()
     std::vector<float> audio(static_cast<size_t>(cfg.sampleRate * 2), 0.002f);
     audio.insert(audio.end(), packetAudio.begin(), packetAudio.end());
 
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     shim.configure(cfg);
 
     QVector<Ax25DecodedFrame> frames;
@@ -517,7 +517,7 @@ void testReplayWavLoaderFeedsShim()
     const auto audio = afskPcmFromBits(bits, cfg);
 
     QTemporaryFile file;
-    file.setFileTemplate(QStringLiteral("aether-ax25-capture-XXXXXX.wav"));
+    file.setFileTemplate(QStringLiteral("mastersdr-ax25-capture-XXXXXX.wav"));
     const bool opened = file.open();
     report("temporary replay WAV opened", opened);
     if (!opened)
@@ -533,7 +533,7 @@ void testReplayWavLoaderFeedsShim()
     report("temporary replay WAV sample rate", loaded.sampleRate == cfg.sampleRate);
     report("temporary replay WAV sample count", loaded.samples.size() == audio.size());
 
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     shim.configure(cfg);
     const auto frames = shim.processMonoFloat(loaded.samples.data(),
                                               static_cast<int>(loaded.samples.size()),
@@ -543,7 +543,7 @@ void testReplayWavLoaderFeedsShim()
 
 void testBadFcsDoesNotEmit()
 {
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     std::vector<uint8_t> frameBytes = lm::ax25::encode_frame(knownPacket());
     if (!frameBytes.empty())
         frameBytes.back() ^= 0x40u;
@@ -563,7 +563,7 @@ void testBadFcsDoesNotEmit()
 
 void testTooShortRejectDiagnostics()
 {
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     const std::vector<uint8_t> shortFrame = { 0x13, 0x37 };
     const auto bits = lm::ax25::encode_bitstream(shortFrame, 3, 2);
     const auto frames = shim.processRecoveredBitsForTest(toQtBits(bits));
@@ -581,7 +581,7 @@ void testTooShortRejectDiagnostics()
 
 void testTonePolarityConfig()
 {
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     const QString normal = shim.demodDescription();
 
     auto cfg = shim.config();
@@ -595,7 +595,7 @@ void testTonePolarityConfig()
 
 void testSampleRateMismatchIsIgnored()
 {
-    AetherAx25LibmodemShim shim;
+    MasterAx25LibmodemShim shim;
     const float samples[8] = {};
     const auto frames = shim.processMonoFloat(samples, 8, 48000);
     report("non-24k sample-rate input is ignored for now", frames.isEmpty());
@@ -605,10 +605,10 @@ void testToneDiagnosticsSeparateMarkAndSpace()
 {
     constexpr int sampleRate = 24000;
 
-    AetherAx25LibmodemShim markShim;
+    MasterAx25LibmodemShim markShim;
     Ax25DecoderDiagnostics markDiagnostics;
     bool sawMarkDiagnostics = false;
-    QObject::connect(&markShim, &AetherAx25LibmodemShim::diagnosticsUpdated,
+    QObject::connect(&markShim, &MasterAx25LibmodemShim::diagnosticsUpdated,
                      [&markDiagnostics, &sawMarkDiagnostics](const Ax25DecoderDiagnostics& diagnostics) {
         markDiagnostics = diagnostics;
         sawMarkDiagnostics = true;
@@ -619,10 +619,10 @@ void testToneDiagnosticsSeparateMarkAndSpace()
     report("1600 Hz mark tone level is plausible",
            markDiagnostics.markToneDbfs > -8.0 && markDiagnostics.markToneDbfs < -4.0);
 
-    AetherAx25LibmodemShim spaceShim;
+    MasterAx25LibmodemShim spaceShim;
     Ax25DecoderDiagnostics spaceDiagnostics;
     bool sawSpaceDiagnostics = false;
-    QObject::connect(&spaceShim, &AetherAx25LibmodemShim::diagnosticsUpdated,
+    QObject::connect(&spaceShim, &MasterAx25LibmodemShim::diagnosticsUpdated,
                      [&spaceDiagnostics, &sawSpaceDiagnostics](const Ax25DecoderDiagnostics& diagnostics) {
         spaceDiagnostics = diagnostics;
         sawSpaceDiagnostics = true;

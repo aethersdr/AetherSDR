@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include "ClientCompCurveWidget.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Interactive transfer curve for the floating editor.  Extends the
 // read-only ClientCompCurveWidget with two draggable handles:
@@ -51,4 +51,4 @@ private:
     bool ratioHandleHit(const QPointF& pos) const;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

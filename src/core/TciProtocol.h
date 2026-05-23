@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 #ifdef HAVE_WEBSOCKETS
 
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class SliceModel;
@@ -61,7 +61,7 @@ private:
     QString cmdRxNrEnable(const QStringList& args, bool isSet);
     QString cmdRxAnfEnable(const QStringList& args, bool isSet);
     QString cmdRxApfEnable(const QStringList& args, bool isSet);
-    // AetherSDR extensions (DVK record/play)
+    // MasterSDR extensions (DVK record/play)
     QString cmdRxRecord(const QStringList& args, bool isSet);
     QString cmdRxPlay(const QStringList& args, bool isSet);
     QString cmdSpot(const QStringList& args);
@@ -118,6 +118,6 @@ private:
     bool        m_started{false};  // client sent START
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_WEBSOCKETS

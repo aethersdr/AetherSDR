@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -6,7 +6,7 @@ class QPushButton;
 class QLabel;
 class QLineEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class RigctlServer;
@@ -49,9 +49,9 @@ private:
     struct ChannelRow {
         QLabel* badge{nullptr};      // coloured "A"/"B"/"C"/"D"
         QLabel* tcpStatus{nullptr};  // ":4532 (1 client)" or "(stopped)"
-        QLabel* ptyPath{nullptr};    // "/tmp/AetherSDR-CAT-A"
+        QLabel* ptyPath{nullptr};    // "/tmp/MasterSDR-CAT-A"
     };
     ChannelRow m_rows[kChannels];
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

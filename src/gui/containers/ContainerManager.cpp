@@ -1,4 +1,4 @@
-#include "ContainerManager.h"
+﻿#include "ContainerManager.h"
 #include "ContainerTitleBar.h"
 #include "FloatingContainerWindow.h"
 #include "core/AppSettings.h"
@@ -11,7 +11,7 @@
 #include <QString>
 #include <QStringList>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -478,4 +478,4 @@ void ContainerManager::restoreState()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

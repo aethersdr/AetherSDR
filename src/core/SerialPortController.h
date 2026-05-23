@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QString>
@@ -18,7 +18,7 @@
 #include <QThread>
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Controls DTR/RTS lines on a USB-serial adapter for hardware PTT
 // and CW keying, and monitors CTS/DSR for external PTT and CW key/paddle input.
@@ -153,4 +153,4 @@ private slots:
 #endif
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

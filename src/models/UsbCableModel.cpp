@@ -1,7 +1,7 @@
-#include "UsbCableModel.h"
+﻿#include "UsbCableModel.h"
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 UsbCableModel::UsbCableModel(QObject* parent)
     : QObject(parent)
@@ -171,4 +171,4 @@ void UsbCableModel::sendRemove(const QString& sn)
     emit commandReady(QString("usb_cable remove %1").arg(sn));
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

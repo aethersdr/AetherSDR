@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
 #include <QVector>
 #include <array>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Circular ring buffer of the last N FFT frames for one panadapter.
 // Used by the CNN signal classifier to extract per-signal spectrogram patches.
@@ -40,4 +40,4 @@ private:
     int m_count{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

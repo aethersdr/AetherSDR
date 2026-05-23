@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QString>
@@ -6,7 +6,7 @@
 #include <QMap>
 #include <optional>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // NAVTEX waveform status (per FlexLib v4.2.18)
 enum class NavtexStatus {
@@ -74,4 +74,4 @@ private:
     int m_nextSeq{1};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <QColor>
 #include <QString>
 #include <QVector>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Manages selectable band plan overlays for the spectrum display.
 // Plans are loaded from bundled Qt resource JSON files.
@@ -59,4 +59,4 @@ private:
     QVector<Spot> m_spots;        // active plan's spots
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

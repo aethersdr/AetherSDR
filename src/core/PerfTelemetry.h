@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QMutex>
 #include <QString>
@@ -8,7 +8,7 @@
 
 #include <atomic>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class PerfTelemetry final {
 public:
@@ -130,4 +130,4 @@ private:
     std::atomic<int> m_waterfallLineDurationMs{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

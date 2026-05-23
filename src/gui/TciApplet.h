@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -6,7 +6,7 @@ class QPushButton;
 class QLabel;
 class QLineEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class RadioModel;
 class TciServer;
@@ -58,4 +58,4 @@ private:
 #endif
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

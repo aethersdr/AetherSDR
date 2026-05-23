@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // Shared helpers for parsing SmartSDR stream-status fields.
 // Deduplicated from MainWindow.cpp, TciServer.cpp, and RadioModel.cpp (#2142).
@@ -6,7 +6,7 @@
 #include <QString>
 #include <QMap>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Parse a hex-or-decimal handle/token string (e.g. "0x12345678" or "305419896")
 // into a quint32.  Returns 0 on failure.
@@ -61,4 +61,4 @@ inline bool daxTxStatusCanUpdateLocalState(quint32 streamId,
     return owner != 0 && owner == ourHandle;
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

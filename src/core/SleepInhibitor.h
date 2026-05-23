@@ -1,8 +1,8 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Prevents the operating system from entering idle sleep while an assertion
 // is held. Used to keep TCP/UDP/audio streams alive during radio connections.
@@ -35,4 +35,4 @@ private:
 #endif
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

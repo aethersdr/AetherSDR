@@ -1,9 +1,9 @@
-#include "ClientFinalLimiter.h"
+﻿#include "ClientFinalLimiter.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -278,4 +278,4 @@ void ClientFinalLimiter::process(float* interleaved, int frames, int channels) n
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

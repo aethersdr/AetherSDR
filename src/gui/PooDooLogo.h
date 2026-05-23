@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
 class QTimer;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ClientPudu;
 
@@ -25,7 +25,7 @@ public:
     void setPudu(ClientPudu* p);
     // Override the rendered wordmark.  Default is "PooDoo™" (used by
     // the docked applet + floating editor).  The strip panel sets it
-    // to "AetherExciter™" for the rebranded final-stage version.
+    // to "MasterExciter™" for the rebranded final-stage version.
     void setWordmark(const QString& mark);
 
 protected:
@@ -40,4 +40,4 @@ private:
     QString     m_wordmark;                 // empty ⇒ default "PooDoo™"
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

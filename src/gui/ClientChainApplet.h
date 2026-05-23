@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "core/AudioEngine.h"
 
@@ -7,7 +7,7 @@
 class QLabel;
 class QPushButton;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class ClientChainWidget;
 class ClientRxChainWidget;
@@ -68,9 +68,9 @@ public:
 
 signals:
     // Easter-egg launch nub at the bottom-right of the chain applet.
-    // Wired in MainWindow to toggle the Aetherial Audio Channel Strip
+    // Wired in MainWindow to toggle the Masterial Audio Channel Strip
     // (unified TX DSP window).  See issue #2301.
-    void aetherialStripToggleRequested();
+    void MasterialStripToggleRequested();
     void stageEnabledChanged(AudioEngine::TxChainStage stage, bool enabled);
     // RX equivalents — forwarded from ClientRxChainWidget so MainWindow
     // can route them to the right editor / applet without depending on
@@ -135,4 +135,4 @@ private:
     ChainMode          m_mode{ChainMode::Tx};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

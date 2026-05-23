@@ -1,4 +1,4 @@
-#include "SliceLabel.h"
+﻿#include "SliceLabel.h"
 
 #include "core/AppSettings.h"
 
@@ -6,7 +6,7 @@
 #include <QFontMetrics>
 #include <algorithm>
 
-namespace AetherSDR::SliceLabel {
+namespace MasterSDR::SliceLabel {
 
 namespace {
 
@@ -114,4 +114,4 @@ void drawSliceBadge(QPainter& p, const QRect& rect,
     p.setFont(mainFont);
 }
 
-} // namespace AetherSDR::SliceLabel
+} // namespace MasterSDR::SliceLabel

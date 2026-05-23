@@ -1,10 +1,10 @@
-#pragma once
+﻿#pragma once
 
 // Shared per-slice colour definitions used by SpectrumWidget, VfoWidget, and
 // RxApplet to ensure all slice markers/badges use identical colours.
 // Index by sliceId % 8.
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 struct SliceColorEntry {
     int r, g, b;           // active colour (bright)
@@ -25,4 +25,4 @@ inline constexpr SliceColorEntry kSliceColors[] = {
 
 inline constexpr int kSliceColorCount = 8;
 
-} // namespace AetherSDR
+} // namespace MasterSDR

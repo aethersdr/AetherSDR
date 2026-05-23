@@ -1,7 +1,7 @@
-#ifdef HAVE_HIDAPI
+﻿#ifdef HAVE_HIDAPI
 #include "HidDeviceParser.h"
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const HidDeviceId kSupportedDevices[] = {
     {0x0C26, 0x001E, "Icom RC-28"},
@@ -178,5 +178,5 @@ HidEvent ShuttleProV2Parser::parse(const uint8_t* buf, size_t len)
     return {};
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 #endif

@@ -1,4 +1,4 @@
-// Focused CWX panel behavior tests.
+﻿// Focused CWX panel behavior tests.
 // Run: ./build/cwx_panel_test
 
 #include "gui/CwxPanel.h"
@@ -13,7 +13,7 @@
 #include <cstdio>
 #include <string>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

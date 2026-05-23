@@ -1,4 +1,4 @@
-#include "DxClusterDialog.h"
+﻿#include "DxClusterDialog.h"
 #include "DxClusterStartupCommandsDialog.h"
 #include "GuardedSlider.h"
 #include "core/DxClusterClient.h"
@@ -32,7 +32,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // GuardedSlider variant that resets to a stored default on left
 // double-click.  Used for the Filter Match Window slider (#2609) so
@@ -2696,4 +2696,4 @@ void DxClusterDialog::updateStatus()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

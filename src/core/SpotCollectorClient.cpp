@@ -1,4 +1,4 @@
-#include "SpotCollectorClient.h"
+﻿#include "SpotCollectorClient.h"
 #include "LogManager.h"
 
 #include <QRegularExpression>
@@ -7,7 +7,7 @@
 #include <QDir>
 #include <QFileInfo>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 SpotCollectorClient::SpotCollectorClient(QObject* parent)
     : QObject(parent)
@@ -31,7 +31,7 @@ SpotCollectorClient::~SpotCollectorClient()
 QString SpotCollectorClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/spotcollector.log";
+           + "/MasterSDR/spotcollector.log";
 }
 
 void SpotCollectorClient::startListening(quint16 port)
@@ -132,4 +132,4 @@ bool SpotCollectorClient::parseDxSpotLine(const QString& line, DxSpot& spot) con
     return spot.freqMhz > 0.0 && !spot.dxCall.isEmpty();
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

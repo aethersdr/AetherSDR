@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QAudio>
 #include <QBuffer>
@@ -12,7 +12,7 @@
 
 class QAudioSink;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class SliceModel;
 class TransmitModel;
@@ -143,4 +143,4 @@ private:
     static constexpr int WAV_HEADER_SIZE = 44;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

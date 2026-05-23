@@ -1,9 +1,9 @@
-#include "ClientQuindarTone.h"
+﻿#include "ClientQuindarTone.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 namespace {
 
@@ -633,4 +633,4 @@ void ClientQuindarTone::process(int16_t* interleaved, int frames, int channels) 
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

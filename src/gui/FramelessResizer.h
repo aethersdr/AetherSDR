@@ -1,11 +1,11 @@
-#pragma once
+﻿#pragma once
 
 #include <QObject>
 #include <Qt>
 
 class QWidget;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Adds all-edge resize to a Qt::FramelessWindowHint top-level QWidget using
 // QWindow::startSystemResize() — the same compositor-managed path used for
@@ -46,4 +46,4 @@ private:
     Qt::Edges m_lastEdges{};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

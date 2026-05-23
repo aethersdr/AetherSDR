@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #ifdef HAVE_SERIALPORT
 
@@ -6,7 +6,7 @@
 #include <QSerialPort>
 #include <QByteArray>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // FlexControl USB tuning knob driver.
 //
@@ -59,6 +59,6 @@ private:
     bool        m_invertDirection{false};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_SERIALPORT

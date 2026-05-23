@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <spa/utils/hook.h>
 
@@ -7,7 +7,7 @@
 
 struct pw_stream;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // One PipeWire native virtual source (Audio/Source) per DAX RX channel.
 // Replaces module-pipe-source on Linux when libpipewire-0.3 dev headers are
@@ -78,4 +78,4 @@ private:
     std::atomic<uint32_t>  m_readIdx{0};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

@@ -1,10 +1,10 @@
-#include "core/SpotModeResolver.h"
+﻿#include "core/SpotModeResolver.h"
 
 #include <QCoreApplication>
 #include <QString>
 #include <cstdio>
 
-using namespace AetherSDR;
+using namespace MasterSDR;
 
 namespace {
 

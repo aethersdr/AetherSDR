@@ -1,8 +1,8 @@
-#include "SpotCommandPolicy.h"
+﻿#include "SpotCommandPolicy.h"
 
 #include "AppSettings.h"
 
-namespace AetherSDR::SpotCommandPolicy {
+namespace MasterSDR::SpotCommandPolicy {
 
 bool passiveModeFromSetting(const QVariant& value)
 {
@@ -20,4 +20,4 @@ bool shouldSendSpotAddCommands()
     return !passiveSpotsModeEnabled();
 }
 
-} // namespace AetherSDR::SpotCommandPolicy
+} // namespace MasterSDR::SpotCommandPolicy

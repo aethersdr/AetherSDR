@@ -1,13 +1,13 @@
-name: Bug Report
+﻿name: Bug Report
 description: Something isn't working right
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
-        ## Thank you for helping improve AetherSDR! 🙏
+        ## Thank you for helping improve MasterSDR! 🙏
 
-        AetherSDR is maintained by a solo developer with AI assistance. To help us resolve your issue as quickly as possible, **please use the built-in AI-assisted bug report tool**:
+        MasterSDR is maintained by a solo developer with AI assistance. To help us resolve your issue as quickly as possible, **please use the built-in AI-assisted bug report tool**:
 
         **Help → Support → File an Issue**
 
@@ -15,7 +15,7 @@ body:
 
         **Why this matters:** AI-assisted reports include the technical detail we need to diagnose and fix issues quickly. Well-structured reports with logs and reproduction steps are resolved significantly faster. Reports without sufficient detail will be deprioritized as we work through the queue.
 
-        If you can't use the in-app tool, please fill out the form below with as much detail as possible. Attach your support bundle (Help → Support → File an Issue creates one automatically) or log file (`~/.config/AetherSDR/aethersdr.log`).
+        If you can't use the in-app tool, please fill out the form below with as much detail as possible. Attach your support bundle (Help → Support → File an Issue creates one automatically) or log file (`~/.config/MasterSDR/MasterSDR.log`).
 
   - type: checkboxes
     id: ai_assisted
@@ -56,9 +56,9 @@ body:
       required: true
 
   - type: input
-    id: aethersdr_version
+    id: MasterSDR_version
     attributes:
-      label: AetherSDR version
+      label: MasterSDR version
       description: "Shown in Help → About (e.g., 0.8.18)"
       placeholder: "0.8.18"
     validations:

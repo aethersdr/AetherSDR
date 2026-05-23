@@ -1,4 +1,4 @@
-#include "MultiFlexDialog.h"
+﻿#include "MultiFlexDialog.h"
 #include "models/RadioModel.h"
 
 #include <QBoxLayout>
@@ -7,7 +7,7 @@
 #include <QPushButton>
 #include <QTableWidget>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const char* kDialogStyle =
     "QDialog { background: #0f0f1a; }"
@@ -231,4 +231,4 @@ void MultiFlexDialog::refresh()
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

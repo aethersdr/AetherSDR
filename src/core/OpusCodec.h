@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 
@@ -7,7 +7,7 @@ struct OpusDecoder;
 struct OpusEncoder;
 #endif
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Thin wrapper around libopus for SmartLink compressed audio.
 // Encodes/decodes stereo 24kHz audio in 10ms frames (240 samples).
@@ -59,4 +59,4 @@ private:
 #endif
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

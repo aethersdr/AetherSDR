@@ -1,4 +1,4 @@
-// Standalone test harness for FlexWaveformModel protocol parsing.
+﻿// Standalone test harness for FlexWaveformModel protocol parsing.
 //
 // Build: produced by CMake as `flex_waveform_model_test`.
 // Run:   ./build/flex_waveform_model_test
@@ -12,8 +12,8 @@
 #include <cstdio>
 #include <cstdlib>
 
-using AetherSDR::FlexWaveformModel;
-using AetherSDR::FlexWaveformEntry;
+using MasterSDR::FlexWaveformModel;
+using MasterSDR::FlexWaveformEntry;
 
 namespace {
 

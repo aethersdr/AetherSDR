@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 
@@ -6,7 +6,7 @@ class QPushButton;
 class QLabel;
 class QSlider;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AudioEngine;
 class StripWaveform;
@@ -50,4 +50,4 @@ private:
     int             m_modeIdx{1};   // 0=Scope, 1=Envelope, 2=History
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

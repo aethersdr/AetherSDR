@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QList>
@@ -8,7 +8,7 @@ class QLabel;
 class QComboBox;
 class QLineEdit;
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 class AntennaGeniusModel;
 
@@ -66,4 +66,4 @@ private:
     QWidget*     m_portBSection{nullptr};
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

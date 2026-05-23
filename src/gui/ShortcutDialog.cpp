@@ -1,4 +1,4 @@
-#include "ShortcutDialog.h"
+﻿#include "ShortcutDialog.h"
 #include "KeyboardMapWidget.h"
 #include "core/ShortcutManager.h"
 
@@ -12,7 +12,7 @@
 #include <QPushButton>
 #include <QTableWidget>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 static const char* kDialogStyle =
     "QDialog { background: #0f0f1a; }"
@@ -300,4 +300,4 @@ void ShortcutDialog::keyPressEvent(QKeyEvent* ev)
     QDialog::keyPressEvent(ev);
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR

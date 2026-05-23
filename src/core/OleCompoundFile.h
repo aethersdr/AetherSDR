@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QByteArray>
 #include <QFile>
@@ -6,7 +6,7 @@
 #include <QString>
 #include <QStringList>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 // Read-only reader for the Microsoft OLE Compound File Binary (CFB)
 // format, also known as Compound Document, Structured Storage, or
@@ -134,4 +134,4 @@ private:
     mutable QString   m_lastError;
 };
 
-} // namespace AetherSDR
+} // namespace MasterSDR

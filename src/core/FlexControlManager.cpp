@@ -1,4 +1,4 @@
-#ifdef HAVE_SERIALPORT
+﻿#ifdef HAVE_SERIALPORT
 
 #include "FlexControlManager.h"
 #include "LogManager.h"
@@ -6,7 +6,7 @@
 #include <QSerialPortInfo>
 #include <QDebug>
 
-namespace AetherSDR {
+namespace MasterSDR {
 
 FlexControlManager::FlexControlManager(QObject* parent)
     : QObject(parent)
@@ -122,6 +122,6 @@ void FlexControlManager::processCommand(const QByteArray& cmd)
     }
 }
 
-} // namespace AetherSDR
+} // namespace MasterSDR
 
 #endif // HAVE_SERIALPORT
