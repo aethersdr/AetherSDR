@@ -241,7 +241,7 @@ QString QsoRecorder::buildFilename() const
     }
 
     if (m_includeMode && !m_mode.isEmpty())
-        parts << m_mode;
+        parts << sanitizeForPath(m_mode);
 
     if (!m_callsign.isEmpty())
         parts << sanitizeForPath(m_callsign);
@@ -258,9 +258,11 @@ QString QsoRecorder::sanitizeForPath(const QString& s)
     // already uppercased + trimmed by setCallsign(), so this class is
     // sufficient. Keeps '/' in portable-suffix callsigns (KK7GWY/P) from
     // punching into a subdirectory or failing QFile::open() on Windows.
+    // Also applied to m_mode so a future digital sub-mode label with '/'
+    // can't re-introduce the same bug class.
+    static const QRegularExpression re(QStringLiteral("[^A-Z0-9]"));
     QString out = s;
-    out.replace(QRegularExpression(QStringLiteral("[^A-Z0-9]")),
-                QStringLiteral("_"));
+    out.replace(re, QStringLiteral("_"));
     return out;
 }
 
