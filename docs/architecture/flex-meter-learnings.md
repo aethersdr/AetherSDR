@@ -24,6 +24,13 @@ Related implementation context lives in [`tx-audio-signal-path.md`](tx-audio-sig
   is not, by itself, the SmartSDR compression display value.
 - The AetherSDR P/CW compression gauge is reversed: `0 dB` means no visible
   compression and `-25 dB` means full-scale/heavy compression.
+- `met_in_rx=1` means the radio is allowed to publish TX-chain/mic metering
+  during receive. It does not mean RF is keyed, and neither do `slice tx=1` or
+  TX stream `tx=1`; those identify the selected TX slice or stream direction.
+- UI meters that represent active TX-chain output, including compression and
+  software ALC, should be gated by the raw radio interlock state
+  `TRANSMITTING` (`RadioModel::isRadioTransmitting()`), not by slice `tx=1`,
+  `met_in_rx`, stream presence, or local optimistic MOX intent.
 
 ## Compression Formulas
 
@@ -106,6 +113,39 @@ indexes were last-match-wins, so a multi-slice 6600 session could bind to the
 highest-numbered slice's `SC_MIC` / `COMPPEAK` pair while the VITA meter stream
 was publishing values for a different active TX slice.
 
+## ALC vs. HWALC and RX Gating
+
+Flex exposes at least two ALC-looking concepts:
+
+- `HWALC` is the external Hardware ALC RCA voltage. It is useful telemetry for
+  diagnostics, but it is normally zero unless the radio has an external HWALC
+  connection. It should not drive the operator-facing ALC gauge.
+- `ALC` is the post-software-ALC SSB peak in the TX chain. This is the meter
+  users expect to see on the Phone/CW ALC gauges.
+
+The important display rule is that `ALC` is still a TX-chain meter. On captured
+FLEX-8000 sessions, with `met_in_rx=1` and PC mic streaming active while the
+operator was not transmitting, the radio defined and updated TX-chain meters in
+RX. Some of those quiescent values can sit near `0 dBFS`; if the UI blindly
+maps them into the `-20..0 dBFS` ALC range, the gauge pins full red while the
+radio is receiving.
+
+AetherSDR therefore initializes and resets the P/CW ALC gauges to the empty
+floor (`-20 dBFS`) and only displays `TX-/ALC` samples while the radio
+interlock reports actual RF transmit (`state=TRANSMITTING`). This is the same
+class of guard as the compression gauge: TX-chain samples may exist in RX, but
+they are not an active TX warning until the radio is keyed.
+
+Do not use these as an ALC display gate:
+
+- `slice ... tx=1`: selected TX slice, not PTT.
+- `stream ... type=dax_tx ... tx=1`: TX-direction stream, not PTT.
+- `stream create type=remote_audio_tx`: mic stream setup for PC audio,
+  VOX, and `met_in_rx`, not PTT.
+- `met_in_rx=1`: request for TX-chain metering during receive, not PTT.
+- local optimistic `TransmitModel::isTransmitting()` alone: useful for edge
+  alignment, but it can be true before RF is confirmed.
+
 ## Diagnostic Logging
 
 Enable `Meters` in Help > Support to capture compression diagnostics. The log
@@ -122,8 +162,8 @@ reason.
 |---|---:|---:|---|
 | `MICPEAK` | 40 | 40 | Codec hardware mic peak |
 | `MIC` | 20 | 20 | Codec hardware mic average |
-| `HWALC` | 20 | 20 | External Hardware ALC RCA voltage — zero without an external HWALC connection.  Used by SliceTroubleshootingDialog telemetry only; do **not** drive UI ALC gauges from this meter. |
-| `ALC` | 20 | 20 | Post-software-ALC SSB peak (dBFS).  This is the meter that drives the in-app ALC gauges (mirrored across Phone and CW panels). |
+| `HWALC` | 20 | 20 | External Hardware ALC RCA voltage — zero without an external HWALC connection. Used by SliceTroubleshootingDialog telemetry only; do **not** drive UI ALC gauges from this meter. |
+| `ALC` | 20 | 20 | Post-software-ALC SSB peak (dBFS). This is the meter that drives the in-app ALC gauges, but only while the radio interlock reports `TRANSMITTING`. |
 | `FWDPWR` | 20 | 20 | Forward RF power |
 | `REFPWR` | 20 | 20 | Reflected RF power |
 | `SWR` | 20 | 20 | RF SWR |
@@ -134,7 +174,7 @@ reason.
 | `AFTEREQ` | 20 | Not present | 8000 compression reference |
 | `COMPPEAK` | 20 | 20 | Processor/clipper-stage tap |
 | `SC_FILT_1` | 20 | 10 | Post TX filter 1 |
-| `ALC` | 10 | 10 | SW ALC / SSB peak |
+| `ALC` | 10 | 10 | SW ALC / SSB peak. Observed FPS varies by manifest; match by source/name and keep the UI gated on actual radio TX. |
 | `RM_TX_AGC` | 10 | Not seen | Present in 8000 captures |
 | `PRE_WAVE_AGC` | Not seen | 10 | Present in 6600 manifest |
 | `SC_FILT_2` | 10 | 10 | Post TX filter 2 |

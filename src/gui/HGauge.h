@@ -70,6 +70,15 @@ public:
         }
     }
 
+    void setValueImmediate(float v) {
+        if (m_animTimer.isActive()) m_animTimer.stop();
+        m_value = v;
+        m_smooth.setTarget(
+            qBound(0.0f, (v - m_min) / (m_max - m_min), 1.0f));
+        m_smooth.snapToTarget();
+        update();
+    }
+
     void setPeakValue(float v) {
         if (qFuzzyCompare(m_peakValue, v)) return;
         m_peakValue = v;

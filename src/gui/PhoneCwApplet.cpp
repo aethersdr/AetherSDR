@@ -99,6 +99,8 @@ static constexpr const char* kInsetEditStyle =
     "border-radius: 3px; padding: 1px 2px; color: #c8d8e8; }"
     "QLineEdit:focus { border: 1px solid #00b4d8; }";
 
+static constexpr float kAlcGaugeFloorDbfs = -20.0f;
+
 
 // ── PhoneCwApplet ────────────────────────────────────────────────────────────
 
@@ -152,9 +154,10 @@ void PhoneCwApplet::buildPhonePanel()
     // Mirrored in m_cwPanel; both gauges read from MeterModel::swAlcChanged
     // so SSB operators watching mic gain see the same indicator CW
     // operators use to verify clean keying envelope shape.
-    m_alcGaugePhone = new HGauge(-20.0f, 0.0f, -3.0f, "ALC", "dBFS",
+    m_alcGaugePhone = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
     m_alcGaugePhone->setFillFromRight(true);  // empty at -20, fills leftward toward 0
+    m_alcGaugePhone->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugePhone->setAccessibleName("ALC gauge (Phone)");
     m_alcGaugePhone->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
     vbox->addWidget(m_alcGaugePhone);
@@ -373,9 +376,10 @@ void PhoneCwApplet::buildCwPanel()
     // Mirrors the Phone-panel ALC gauge — both read from the same
     // MeterModel::swAlcChanged source.  Range covers normal operating
     // window (-20…0 dBFS); excessive ALC pins at 0.
-    m_alcGaugeCw = new HGauge(-20.0f, 0.0f, -3.0f, "ALC", "dBFS",
+    m_alcGaugeCw = new HGauge(kAlcGaugeFloorDbfs, 0.0f, -3.0f, "ALC", "dBFS",
         {{-20, "-20"}, {-15, "-15"}, {-10, "-10"}, {-5, "-5"}, {0, "0"}});
     m_alcGaugeCw->setFillFromRight(true);  // empty at -20, fills leftward toward 0
+    m_alcGaugeCw->setValueImmediate(kAlcGaugeFloorDbfs);
     m_alcGaugeCw->setAccessibleName("ALC gauge (CW)");
     m_alcGaugeCw->setAccessibleDescription("Automatic level control — post-software-ALC SSB peak (dBFS)");
     vbox->addWidget(m_alcGaugeCw);
