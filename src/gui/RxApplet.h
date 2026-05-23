@@ -183,13 +183,11 @@ private:
     QVector<QToolButton*>   m_sliceBtns;
     bool                    m_sliceButtonClicksConnected{false};
 
-    // Mute button click handling — single click toggles this slice, double
-    // click toggles all owned slices.  Single click is deferred by the
-    // platform double-click interval (typically 400 ms) so we can
-    // distinguish; m_muteSuppressNextClick swallows the second clicked()
-    // emission Qt sends after a double-click sequence completes.
+    // Mute button click handling — single click toggles this slice (timer-
+    // deferred by the platform double-click interval, typically 400 ms),
+    // double click toggles all owned slices (handled in eventFilter, which
+    // cancels the timer and emits muteAllToggled).
     QTimer*                 m_muteClickTimer{nullptr};
-    bool                    m_muteSuppressNextClick{false};
 
     // ── Header row ────────────────────────────────────────────────────────
     QLabel*      m_sliceBadge{nullptr};   // "A" / "B" / "C" / "D"

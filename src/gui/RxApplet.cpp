@@ -20,7 +20,6 @@
 #include <QGridLayout>
 #include <QMenu>
 #include <QApplication>
-#include <QGraphicsOpacityEffect>
 #include <QToolButton>
 #include <QButtonGroup>
 #include <QSpinBox>
@@ -751,19 +750,18 @@ void RxApplet::buildUI()
         // click interval so the second click can override it; the visual
         // 🔊/🔇 update is driven by SliceModel::audioMuteChanged so the
         // icon flips when the radio acks, not on click.
+        //
+        // No suppress flag is needed for the trailing clicked() of a
+        // double-click sequence: the eventFilter returns true on
+        // MouseButtonDblClick, so QAbstractButton::mouseDoubleClickEvent
+        // is never called, the button never enters pressed-state on the
+        // second press, and the second release does not emit clicked().
         m_muteClickTimer = new QTimer(this);
         m_muteClickTimer->setSingleShot(true);
         connect(m_muteClickTimer, &QTimer::timeout, this, [this]() {
             if (m_slice) m_slice->setAudioMute(!m_slice->audioMute());
         });
         connect(m_muteBtn, &QPushButton::clicked, this, [this]() {
-            if (m_muteSuppressNextClick) {
-                // Qt fires a second clicked() after MouseButtonDblClick; eat
-                // it so the double-click doesn't end with a stray single-
-                // click action queued behind it.
-                m_muteSuppressNextClick = false;
-                return;
-            }
             m_muteClickTimer->start(QApplication::doubleClickInterval());
         });
         m_muteBtn->installEventFilter(this);
@@ -1608,23 +1606,27 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
         });
         // All-muted dim feedback: hook audioMuteChanged on every owned
         // slice so the slice-tab row dims when every owned slice is
-        // muted (and brightens the moment any one unmutes).  UniqueConn
-        // protects against double-attaches when setRadioModel is invoked
-        // more than once with the same model.
+        // muted (and brightens the moment any one unmutes).
+        //
+        // Critical: connect via member-function pointer, NOT a lambda —
+        // Qt::UniqueConnection silently rejects lambda slots (the
+        // connection is not made and Qt emits a runtime warning).  A
+        // member-function pointer pairs correctly with UniqueConnection
+        // so we get exactly one listener per (slice, applet) pair.
         connect(m_radioModel, &RadioModel::sliceAdded, this,
                 [this](SliceModel* slice) {
             if (!slice) return;
-            connect(slice, &SliceModel::audioMuteChanged, this,
-                    [this](bool) { refreshAllMutedDim(); },
+            connect(slice, &SliceModel::audioMuteChanged,
+                    this, &RxApplet::refreshAllMutedDim,
                     Qt::UniqueConnection);
             refreshAllMutedDim();
         });
-        connect(m_radioModel, &RadioModel::sliceRemoved, this,
-                [this](int) { refreshAllMutedDim(); });
+        connect(m_radioModel, &RadioModel::sliceRemoved,
+                this, &RxApplet::refreshAllMutedDim);
         for (SliceModel* s : m_radioModel->slices()) {
             if (!s) continue;
-            connect(s, &SliceModel::audioMuteChanged, this,
-                    [this](bool) { refreshAllMutedDim(); },
+            connect(s, &SliceModel::audioMuteChanged,
+                    this, &RxApplet::refreshAllMutedDim,
                     Qt::UniqueConnection);
         }
         refreshAllMutedDim();
@@ -2562,7 +2564,6 @@ bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
     // a real double-click cancels that timer and emits muteAllToggled.
     if (obj == m_muteBtn && ev->type() == QEvent::MouseButtonDblClick) {
         if (m_muteClickTimer) m_muteClickTimer->stop();
-        m_muteSuppressNextClick = true;
         emit muteAllToggled();
         return true;
     }
@@ -2723,23 +2724,46 @@ void RxApplet::refreshAllMutedDim()
 
 void RxApplet::setSliceButtonsDimmed(bool dim)
 {
-    const qreal opacity = dim ? 0.35 : 1.0;
-    auto apply = [opacity](QWidget* w) {
-        if (!w) return;
-        auto* eff = qobject_cast<QGraphicsOpacityEffect*>(w->graphicsEffect());
-        if (!eff) {
-            eff = new QGraphicsOpacityEffect(w);
-            w->setGraphicsEffect(eff);
+    // QGraphicsOpacityEffect doesn't always compose cleanly with QSS-
+    // styled widgets on Linux X11 (the effect is silently dropped on some
+    // configurations).  Swap the stylesheet directly instead so the dim
+    // is guaranteed to render.  Each slice button's QSS carries a per-
+    // slice color baked in by setMaxSlices, so cache that original on
+    // first-dim and restore it on un-dim.
+    for (QToolButton* btn : m_sliceBtns) {
+        if (!btn) continue;
+        const QVariant cached = btn->property("originalStyleSheet");
+        if (cached.isNull())
+            btn->setProperty("originalStyleSheet", btn->styleSheet());
+        if (dim) {
+            // Uniform dark gray, no per-slice color — visually
+            // distinct from the foreign-slot grey and the empty-slot
+            // look so the operator can tell at a glance: "all my
+            // receivers are muted."
+            btn->setStyleSheet(
+                "QToolButton { background: #15181c; color: #383d44; "
+                "border: 1px solid #2a2e34; border-radius: 3px; "
+                "font-weight: bold; font-size: 10px; padding: 0; }"
+                "QToolButton:checked { background: #25292f; color: #4a5058; "
+                "border: 1px solid #383d44; }");
+        } else {
+            btn->setStyleSheet(cached.toString());
         }
-        eff->setOpacity(opacity);
-    };
-    // Dim each slice tab button (works in both inline ≤4 and overflow >4
-    // layouts since the buttons themselves carry the visual identity).
-    for (QToolButton* btn : m_sliceBtns)
-        apply(btn);
-    // Also dim the static badge — shown only when maxSlices <= 1, but
-    // keeps the indicator consistent across all radio configurations.
-    apply(m_sliceBadge);
+    }
+    // Slice badge (shown on single-slice radios) — same uniform dim.
+    if (m_sliceBadge) {
+        const QVariant cached = m_sliceBadge->property("originalStyleSheet");
+        if (cached.isNull())
+            m_sliceBadge->setProperty("originalStyleSheet",
+                                       m_sliceBadge->styleSheet());
+        if (dim) {
+            m_sliceBadge->setStyleSheet(
+                "QLabel { background: #25292f; color: #4a5058; "
+                "border-radius: 3px; font-weight: bold; font-size: 11px; }");
+        } else {
+            m_sliceBadge->setStyleSheet(cached.toString());
+        }
+    }
 }
 
 } // namespace AetherSDR
