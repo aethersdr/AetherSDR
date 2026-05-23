@@ -822,6 +822,15 @@ private:
     QElapsedTimer m_lastAudioFeedTime;
     static constexpr qint64 kAudioLivenessTimeoutMs = 15000;
 
+    // TCI client active-audio gate: started on every feedDaxTxAudio() frame
+    // so onTxAudioReady() can step the local mic capture aside while a TCI
+    // client is feeding TX audio. Otherwise both paths emit txPacketReady
+    // concurrently and the higher-rate mic stream drowns out the TCI tone
+    // — most visible on macOS, where the default CoreAudio input is a real
+    // webcam mic that produces continuous ambient packets.
+    QElapsedTimer m_tciAudioTimer;
+    static constexpr qint64 kTciAudioActiveWindowMs = 200;
+
     // Stale session watchdog: detects when audio data is being written but
     // processedUSecs() hasn't advanced, indicating the WASAPI session is
     // silently discarding audio (e.g. after Teams/Zoom reconfigures the

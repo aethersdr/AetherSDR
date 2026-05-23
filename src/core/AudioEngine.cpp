@@ -3963,6 +3963,17 @@ void AudioEngine::stopTxStream()
 
 void AudioEngine::onTxAudioReady()
 {
+    // If a TCI client is actively feeding TX audio (binary frames via
+    // TciServer → feedDaxTxAudio), step the local mic capture aside.
+    // Both producers emit txPacketReady; the higher-rate mic stream would
+    // otherwise drown out the TCI tone — particularly visible on macOS,
+    // where the default CoreAudio input is a real webcam mic that
+    // produces continuous ambient packets. The 200 ms window comfortably
+    // covers the 50 ms TCI frame cadence.
+    if (m_tciAudioTimer.isValid()
+        && m_tciAudioTimer.elapsed() < kTciAudioActiveWindowMs) {
+        return;
+    }
 #ifdef Q_OS_MAC
     if (!m_micBuffer || !m_audioSource) return;
     if (m_audioSource->state() == QAudio::StoppedState) return;
@@ -4462,6 +4473,11 @@ void AudioEngine::setDaxTxUseRadioRoute(bool on)
 void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
 {
     if (m_txStreamId == 0 || inPcm.isEmpty()) return;
+
+    // Mark TCI as the active TX-audio source. While this timer is fresh,
+    // onTxAudioReady() suppresses the local mic capture path so the two
+    // packet producers don't collide on the same UDP path to the radio.
+    m_tciAudioTimer.start();
 
     // Client-side TX DSP (compressor + EQ) is intentionally NOT
     // applied here.  This path is fed exclusively by TCI and DAX
