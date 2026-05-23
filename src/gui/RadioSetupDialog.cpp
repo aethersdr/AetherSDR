@@ -6,6 +6,7 @@
 #include "models/RadioModel.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include <QApplication>
 #include <QSysInfo>
 #include "core/AudioEngine.h"
 #ifdef HAVE_SERIALPORT
@@ -4707,6 +4708,81 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         syncModeRadios(pMgr->useCustomColors());
         refreshAllBtns();
     });
+
+    // ── Single-click delay group (#3009) ────────────────────────────────────
+    // Several widgets (slice-mute button, RX chain stages, waveform widgets)
+    // defer the single-click action by this interval so a double click can
+    // override it.  Default is the platform's QApplication::doubleClickInterval
+    // (typically 400 ms on Linux, 500 ms on Windows).  Power users who never
+    // double-click can set this to 0 for instant single-click response;
+    // double-click affordances become unreachable in that case but the
+    // mute-all keyboard shortcut still works for the most common use.
+    {
+        auto* clickGrp = new QGroupBox("Single-click delay");
+        clickGrp->setStyleSheet(kGroupStyle);
+        auto* clickLayout = new QVBoxLayout(clickGrp);
+        clickLayout->setSpacing(8);
+
+        auto* row = new QHBoxLayout;
+        row->setSpacing(8);
+
+        auto* clickLabel = new QLabel("Delay (ms):");
+        clickLabel->setStyleSheet("QLabel { color: #c8d8e8; font-size: 12px; }");
+        row->addWidget(clickLabel);
+
+        auto& s = AppSettings::instance();
+        const int platformDefault = QApplication::doubleClickInterval();
+        const int current = s.value("ClickDiscriminationIntervalMs",
+                                     platformDefault).toInt();
+
+        auto* clickSpin = new QSpinBox;
+        clickSpin->setRange(0, 1000);
+        clickSpin->setSingleStep(50);
+        clickSpin->setSuffix(" ms");
+        clickSpin->setValue(qBound(0, current, 1000));
+        clickSpin->setFixedWidth(110);
+        clickSpin->setStyleSheet(
+            "QSpinBox { background: #1a2230; color: #c8d8e8; "
+            "border: 1px solid #304050; border-radius: 3px; padding: 2px 4px; }");
+        row->addWidget(clickSpin);
+
+        auto* resetBtn = new QPushButton("Reset");
+        resetBtn->setStyleSheet(
+            "QPushButton { background: #1a2230; color: #c8d8e8; "
+            "border: 1px solid #304050; border-radius: 3px; padding: 4px 12px; }"
+            "QPushButton:hover { border-color: #60a0c0; }");
+        resetBtn->setToolTip(QString("Reset to platform default (%1 ms)")
+                             .arg(platformDefault));
+        row->addWidget(resetBtn);
+
+        row->addStretch();
+        clickLayout->addLayout(row);
+
+        auto* clickDesc = new QLabel(QString(
+            "Time AetherSDR waits after a single click on a widget that "
+            "also has a double-click action (e.g. the slice mute button) "
+            "before firing the single-click. The platform default is "
+            "%1 ms. Set to 0 to fire single-click actions instantly — "
+            "this also disables the double-click affordances on those "
+            "widgets.").arg(platformDefault));
+        clickDesc->setStyleSheet("QLabel { color: #7090a0; font-size: 11px; }");
+        clickDesc->setWordWrap(true);
+        clickLayout->addWidget(clickDesc);
+
+        connect(clickSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+                this, [](int v) {
+            auto& s = AppSettings::instance();
+            s.setValue("ClickDiscriminationIntervalMs", QString::number(v));
+            s.save();
+        });
+        connect(resetBtn, &QPushButton::clicked, this,
+                [clickSpin, platformDefault]() {
+            clickSpin->setValue(platformDefault);
+            // valueChanged handler above persists the value.
+        });
+
+        vbox->addWidget(clickGrp);
+    }
 
     return page;
 }

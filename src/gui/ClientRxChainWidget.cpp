@@ -1,5 +1,6 @@
 #include "ClientRxChainWidget.h"
 
+#include "InteractionSettings.h"
 #include "core/AppSettings.h"
 #include "core/ClientComp.h"
 #include "core/ClientDeEss.h"
@@ -429,7 +430,7 @@ void ClientRxChainWidget::mouseReleaseEvent(QMouseEvent* ev)
     if (!clickableStage && !clickableDsp) return;
     m_pendingClickIdx = idx;
     if (m_clickTimer)
-        m_clickTimer->start(QApplication::doubleClickInterval());
+        m_clickTimer->start(clickDiscriminationIntervalMs());
 }
 
 void ClientRxChainWidget::mouseDoubleClickEvent(QMouseEvent* ev)

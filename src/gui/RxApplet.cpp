@@ -3,6 +3,7 @@
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
+#include "InteractionSettings.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
 #include "models/RadioModel.h"
@@ -762,7 +763,7 @@ void RxApplet::buildUI()
             if (m_slice) m_slice->setAudioMute(!m_slice->audioMute());
         });
         connect(m_muteBtn, &QPushButton::clicked, this, [this]() {
-            m_muteClickTimer->start(QApplication::doubleClickInterval());
+            m_muteClickTimer->start(clickDiscriminationIntervalMs());
         });
         m_muteBtn->installEventFilter(this);
         row->addWidget(m_muteBtn);

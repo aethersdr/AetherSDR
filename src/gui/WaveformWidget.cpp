@@ -1,5 +1,6 @@
 #include "WaveformWidget.h"
 
+#include "InteractionSettings.h"
 #include "core/AppSettings.h"
 
 #include <QApplication>
@@ -84,7 +85,8 @@ WaveformWidget::WaveformWidget(QWidget* parent)
     setToolTip("Click to pause/resume waveform capture; double-click for WAVE settings");
 
     m_clickTimer.setSingleShot(true);
-    m_clickTimer.setInterval(QApplication::doubleClickInterval());
+    // Interval read at click time from clickDiscriminationIntervalMs() so
+    // a user-adjusted Radio Setup value propagates without an app restart.
     connect(&m_clickTimer, &QTimer::timeout, this, [this]() {
         setPaused(!m_paused);
     });
@@ -277,7 +279,7 @@ void WaveformWidget::mouseReleaseEvent(QMouseEvent* event)
         if (m_ignoreNextRelease) {
             m_ignoreNextRelease = false;
         } else if (!m_clickTimer.isActive()) {
-            m_clickTimer.start();
+            m_clickTimer.start(clickDiscriminationIntervalMs());
         }
         event->accept();
         return;

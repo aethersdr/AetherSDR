@@ -1,4 +1,5 @@
 #include "StripChainWidget.h"
+#include "InteractionSettings.h"
 #include "core/ClientComp.h"
 #include "core/ClientEq.h"
 #include "core/ClientGate.h"
@@ -592,7 +593,7 @@ void StripChainWidget::mouseReleaseEvent(QMouseEvent* ev)
     if (m_boxes[idx].isEndpoint) return;
     m_pendingClickIdx = idx;
     if (m_clickTimer) {
-        m_clickTimer->start(QApplication::doubleClickInterval());
+        m_clickTimer->start(clickDiscriminationIntervalMs());
     }
     ev->accept();
 }

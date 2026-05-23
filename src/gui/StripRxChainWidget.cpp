@@ -1,4 +1,5 @@
 #include "StripRxChainWidget.h"
+#include "InteractionSettings.h"
 #include "core/ClientComp.h"
 #include "core/ClientDeEss.h"
 #include "core/ClientEq.h"
@@ -495,7 +496,7 @@ void StripRxChainWidget::mouseReleaseEvent(QMouseEvent* ev)
     if (kind != TileKind::Stage && kind != TileKind::StatusAdsp) return;
     m_pendingClickIdx = idx;
     if (m_clickTimer) {
-        m_clickTimer->start(QApplication::doubleClickInterval());
+        m_clickTimer->start(clickDiscriminationIntervalMs());
     }
     ev->accept();
 }
