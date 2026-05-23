@@ -13,6 +13,7 @@ class QGroupBox;
 class QProgressBar;
 class QPushButton;
 class QComboBox;
+class QCheckBox;
 class QVBoxLayout;
 
 namespace AetherSDR {
@@ -37,6 +38,8 @@ public:
                               AntennaGeniusModel* ag = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
+    void refreshFlexControlButtonActions();
+    void setFlexControlConnectionStatus(bool connected, const QString& port = {});
 
 signals:
     void txBandSettingsRequested();
@@ -77,6 +80,12 @@ private:
     PgxlConnection*    m_pgxl{nullptr};
     AntennaGeniusModel* m_ag{nullptr};
     QTabWidget*  m_tabs{nullptr};
+    QHash<QString, QComboBox*> m_flexControlActionCombos;
+    QHash<QString, QString> m_flexControlActionDefaults;
+    QLabel* m_flexControlStatusLabel{nullptr};
+    QPushButton* m_flexControlDetectButton{nullptr};
+    QPushButton* m_flexControlCloseButton{nullptr};
+    QCheckBox* m_flexControlInvertCheck{nullptr};
 
     // Radio tab fields
     QLabel* m_serialLabel{nullptr};

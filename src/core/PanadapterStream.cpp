@@ -1,5 +1,6 @@
 #include "PanadapterStream.h"
 #include "AppSettings.h"
+#include "AudioEngine.h"
 #include "LogManager.h"
 #include "OpusCodec.h"
 #include "PerfTelemetry.h"
@@ -20,6 +21,8 @@ namespace {
 
 constexpr QAbstractSocket::BindMode kLanVitaBindMode = QAbstractSocket::DontShareAddress;
 constexpr float kMinSpectrumDbm = -180.0f;
+constexpr int kAudioSampleRate = AudioEngine::DEFAULT_SAMPLE_RATE;
+constexpr int kOpusFramesPerPacket = 240;
 
 QHostAddress chooseLanBindAddress(RadioConnection* conn,
                                   QString* chosenReason,
@@ -156,12 +159,7 @@ bool PanadapterStream::start(RadioConnection* conn)
 {
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
 
-    m_audioPacketGapMs.store(0);
-    m_audioPacketGapMaxMs.store(0);
-    m_audioPacketJitterMs.store(0);
-    m_audioPacketTimerStarted = false;
-    m_previousAudioPacketGapMs = 0;
-    m_audioPacketJitterEstimateMs = 0.0;
+    resetAudioStreamStats();
 
     m_isWanMode = false;
     m_hasReceivedPacket = false;
@@ -237,12 +235,7 @@ bool PanadapterStream::rebindToEphemeralPort(RadioConnection* conn)
     if (m_socket->state() != QAbstractSocket::UnconnectedState)
         m_socket->close();
 
-    m_audioPacketGapMs.store(0);
-    m_audioPacketGapMaxMs.store(0);
-    m_audioPacketJitterMs.store(0);
-    m_audioPacketTimerStarted = false;
-    m_previousAudioPacketGapMs = 0;
-    m_audioPacketJitterEstimateMs = 0.0;
+    resetAudioStreamStats();
     m_isWanMode = false;
     m_hasReceivedPacket = false;
 
@@ -299,12 +292,7 @@ bool PanadapterStream::startWan(const QHostAddress& radioAddr, quint16 radioUdpP
 {
     if (isRunning()) stop();  // clean up previous session before rebinding (#561)
 
-    m_audioPacketGapMs.store(0);
-    m_audioPacketGapMaxMs.store(0);
-    m_audioPacketJitterMs.store(0);
-    m_audioPacketTimerStarted = false;
-    m_previousAudioPacketGapMs = 0;
-    m_audioPacketJitterEstimateMs = 0.0;
+    resetAudioStreamStats();
 
     // For WAN: bind to any port. The actual UDP registration happens later
     // in startWanUdpRegister() once the client handle is known.
@@ -370,12 +358,7 @@ void PanadapterStream::stop()
     m_radioPort = 0;
     m_localAddress = QHostAddress();
     m_localPort = 0;
-    m_audioPacketGapMs.store(0);
-    m_audioPacketGapMaxMs.store(0);
-    m_audioPacketJitterMs.store(0);
-    m_audioPacketTimerStarted = false;
-    m_previousAudioPacketGapMs = 0;
-    m_audioPacketJitterEstimateMs = 0.0;
+    resetAudioStreamStats();
 }
 
 // ─── Datagram reception ───────────────────────────────────────────────────────
@@ -427,6 +410,7 @@ void PanadapterStream::clearRegisteredStreams()
     // the disconnect-time reset hook, so anything keyed by VITA-49 stream
     // id can be cleared safely (#2738).
     m_audioPlc.clear();
+    resetAudioStreamStats();
     qCDebug(lcVita49) << "PanadapterStream: cleared all registered streams";
 }
 
@@ -627,6 +611,8 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         stats.lastSeq = vitaSeq;
 
         if (cat == CatAudio) {
+            const int payloadBytes = data.size() - VITA49_HEADER_BYTES - (hasTrailer ? 4 : 0);
+            recordAudioStreamPacketLocked(streamId, pcc, payloadBytes, sequenceError);
             if (m_audioPacketTimerStarted) {
                 const int gapMs = static_cast<int>(m_audioPacketTimer.restart());
                 m_audioPacketGapMs.store(gapMs);
@@ -1116,6 +1102,96 @@ void PanadapterStream::decodeMeterData(const uchar* raw, int totalBytes, bool ha
     emit meterDataReady(ids, vals);
 }
 
+int PanadapterStream::audioPayloadFrames(quint16 pcc, int payloadBytes)
+{
+    if (payloadBytes <= 0) {
+        return 0;
+    }
+
+    switch (pcc) {
+    case PCC_IF_NARROW:
+        return payloadBytes / (2 * static_cast<int>(sizeof(float)));
+    case PCC_IF_NARROW_REDUCED:
+        return payloadBytes / static_cast<int>(sizeof(qint16));
+    case PCC_OPUS:
+        return kOpusFramesPerPacket;
+    default:
+        return 0;
+    }
+}
+
+void PanadapterStream::resetAudioStreamStats()
+{
+    QMutexLocker statsLock(&m_statsMutex);
+    m_audioStreamStats.clear();
+    m_audioStreamStatsTimer.restart();
+    m_audioPacketGapMs.store(0);
+    m_audioPacketGapMaxMs.store(0);
+    m_audioPacketJitterMs.store(0);
+    m_audioPacketTimerStarted = false;
+    m_previousAudioPacketGapMs = 0;
+    m_audioPacketJitterEstimateMs = 0.0;
+}
+
+void PanadapterStream::resetAudioStreamDiagnostics()
+{
+    resetAudioStreamStats();
+}
+
+void PanadapterStream::recordAudioStreamPacketLocked(quint32 streamId,
+                                                     quint16 pcc,
+                                                     int payloadBytes,
+                                                     bool sequenceError)
+{
+    const int frames = audioPayloadFrames(pcc, payloadBytes);
+    if (frames <= 0) {
+        return;
+    }
+
+    if (!m_audioStreamStatsTimer.isValid()) {
+        m_audioStreamStatsTimer.start();
+    }
+
+    const qint64 nowMs = m_audioStreamStatsTimer.elapsed();
+    AudioStreamTracker& tracker = m_audioStreamStats[streamId];
+    tracker.packetClassCode = pcc;
+    ++tracker.packets;
+    tracker.frames += frames;
+    if (sequenceError) {
+        ++tracker.sequenceErrors;
+    }
+
+    tracker.expectedPacketMs = frames * 1000.0 / kAudioSampleRate;
+    if (tracker.lastArrivalMs >= 0) {
+        const int gapMs = static_cast<int>(std::max<qint64>(0, nowMs - tracker.lastArrivalMs));
+        tracker.lastGapMs = gapMs;
+        tracker.maxGapMs = std::max(tracker.maxGapMs, gapMs);
+
+        const double lateThresholdMs =
+            std::max(tracker.expectedPacketMs * 2.0, tracker.expectedPacketMs + 5.0);
+        if (gapMs > lateThresholdMs) {
+            ++tracker.latePackets;
+        }
+    }
+    tracker.lastArrivalMs = nowMs;
+
+    if (tracker.windowStartMs < 0) {
+        tracker.windowStartMs = nowMs;
+    }
+    tracker.windowFrames += frames;
+
+    const qint64 windowMs = std::max<qint64>(1, nowMs - tracker.windowStartMs);
+    if (windowMs >= 250) {
+        tracker.feedRateHz = tracker.windowFrames * 1000.0 / windowMs;
+        const double mediaMs = tracker.windowFrames * 1000.0 / kAudioSampleRate;
+        tracker.deficitMs = windowMs - mediaMs;
+    }
+    if (windowMs >= 1000) {
+        tracker.windowStartMs = nowMs;
+        tracker.windowFrames = 0;
+    }
+}
+
 int PanadapterStream::packetErrorCount() const
 {
     QMutexLocker lock(&m_statsMutex);
@@ -1141,6 +1217,50 @@ PanadapterStream::CategoryStats PanadapterStream::categoryStats(StreamCategory c
     }
     QMutexLocker lock(&m_statsMutex);
     return m_catStats[cat];
+}
+
+QVector<PanadapterStream::AudioStreamDiagnostics> PanadapterStream::audioStreamDiagnostics() const
+{
+    QMutexLocker lock(&m_statsMutex);
+    const qint64 nowMs = m_audioStreamStatsTimer.isValid()
+        ? m_audioStreamStatsTimer.elapsed()
+        : 0;
+
+    QVector<AudioStreamDiagnostics> snapshot;
+    snapshot.reserve(m_audioStreamStats.size());
+    for (auto it = m_audioStreamStats.constBegin(); it != m_audioStreamStats.constEnd(); ++it) {
+        const AudioStreamTracker& tracker = it.value();
+        AudioStreamDiagnostics diag;
+        diag.streamId = it.key();
+        diag.packetClassCode = tracker.packetClassCode;
+        diag.packets = tracker.packets;
+        diag.frames = tracker.frames;
+        diag.sequenceErrors = tracker.sequenceErrors;
+        diag.latePackets = tracker.latePackets;
+        diag.lastGapMs = tracker.lastGapMs;
+        diag.maxGapMs = tracker.maxGapMs;
+        diag.expectedPacketMs = tracker.expectedPacketMs;
+        diag.feedRateHz = tracker.feedRateHz;
+        diag.deficitMs = tracker.deficitMs;
+        if (tracker.windowStartMs >= 0 && tracker.windowFrames > 0) {
+            const qint64 windowMs = std::max<qint64>(1, nowMs - tracker.windowStartMs);
+            if (windowMs >= 250) {
+                diag.feedRateHz = tracker.windowFrames * 1000.0 / windowMs;
+                const double mediaMs = tracker.windowFrames * 1000.0 / kAudioSampleRate;
+                diag.deficitMs = windowMs - mediaMs;
+            }
+        }
+        diag.lastPacketAgeMs = tracker.lastArrivalMs >= 0
+            ? std::max<qint64>(0, nowMs - tracker.lastArrivalMs)
+            : 0;
+        snapshot.push_back(diag);
+    }
+
+    std::sort(snapshot.begin(), snapshot.end(),
+              [](const AudioStreamDiagnostics& a, const AudioStreamDiagnostics& b) {
+        return a.streamId < b.streamId;
+    });
+    return snapshot;
 }
 
 void PanadapterStream::registerDaxStream(quint32 streamId, int channel)

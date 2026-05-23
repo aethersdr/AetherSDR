@@ -9,6 +9,7 @@
 #include <QAudioSink>
 #include <QDir>
 #include <QMediaDevices>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QtEndian>
 
@@ -240,15 +241,29 @@ QString QsoRecorder::buildFilename() const
     }
 
     if (m_includeMode && !m_mode.isEmpty())
-        parts << m_mode;
+        parts << sanitizeForPath(m_mode);
 
     if (!m_callsign.isEmpty())
-        parts << m_callsign;
+        parts << sanitizeForPath(m_callsign);
 
     if (parts.isEmpty())
         parts << "QSO";
 
     return parts.join("_") + ".wav";
+}
+
+QString QsoRecorder::sanitizeForPath(const QString& s)
+{
+    // Replace any character that isn't A-Z or 0-9 with '_'. m_callsign is
+    // already uppercased + trimmed by setCallsign(), so this class is
+    // sufficient. Keeps '/' in portable-suffix callsigns (KK7GWY/P) from
+    // punching into a subdirectory or failing QFile::open() on Windows.
+    // Also applied to m_mode so a future digital sub-mode label with '/'
+    // can't re-introduce the same bug class.
+    static const QRegularExpression re(QStringLiteral("[^A-Z0-9]"));
+    QString out = s;
+    out.replace(re, QStringLiteral("_"));
+    return out;
 }
 
 void QsoRecorder::writeWavHeader()

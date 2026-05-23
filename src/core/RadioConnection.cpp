@@ -46,6 +46,14 @@ namespace AetherSDR {
 
 static constexpr int HEARTBEAT_INTERVAL_MS = 30000;
 
+// Cap the line-assembly buffer.  A buggy or hostile peer that dribbles bytes
+// without ever sending '\n' would otherwise grow m_readBuffer unbounded until
+// QByteArray refuses to allocate (process OOM).  CAT lines are tens of bytes;
+// 16 MiB is wildly larger than any legitimate radio command or status burst.
+// Mirrors the pattern from GHSA-7w4w-wfqm-wh93 (M2, RigctlServer) with a
+// looser cap appropriate to the chattier status stream.
+static constexpr int kMaxReadBuffer = 16 * 1024 * 1024;
+
 static QString formatHexId(quint32 value)
 {
     return QStringLiteral("0x%1").arg(value, 0, 16);
@@ -255,6 +263,13 @@ void RadioConnection::onReadyRead()
 {
     if (!m_socket) return;
     m_readBuffer.append(m_socket->readAll());
+    if (m_readBuffer.size() > kMaxReadBuffer) {
+        qCWarning(lcConnection) << "RadioConnection: read buffer exceeded"
+                                << kMaxReadBuffer << "bytes without newline — disconnecting";
+        m_socket->disconnectFromHost();
+        m_readBuffer.clear();
+        return;
+    }
     int newlinePos;
     while ((newlinePos = m_readBuffer.indexOf('\n')) >= 0) {
         const QString line = QString::fromUtf8(m_readBuffer.left(newlinePos)).trimmed();

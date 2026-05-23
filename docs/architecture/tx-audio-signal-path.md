@@ -4,7 +4,7 @@ Documented from FLEX-8600 firmware v4.1.5 meter definitions.
 All meters are source `TX-` unless noted. Units are dBFS unless noted.
 
 For capture-backed 8000/6000-series compression formulas and FPS notes, see
-`docs/flex-meter-learnings.md`.
+[`flex-meter-learnings.md`](flex-meter-learnings.md).
 
 For the complete current client-side audio ordering, sample formats, DAX/RADE
 branches, metering taps, downmixing, and packetization details, see

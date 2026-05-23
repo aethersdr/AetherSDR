@@ -8,6 +8,8 @@
 #include <QList>
 #include <QMap>
 #include <QSet>
+#include <QString>
+#include <QVector>
 #include <memory>
 
 class QWebSocketServer;
@@ -21,6 +23,20 @@ class AudioEngine;
 class SliceModel;
 class TciProtocol;
 class Resampler;
+
+// Read-only snapshot of one connected TCI client, surfaced to the Radio
+// Setup → TCI tab. TCI has no client-identity handshake, so a client is
+// only ever known by its network endpoint plus the stream subscriptions
+// it has requested.
+struct TciClientInfo {
+    QString peerAddress;
+    quint16 peerPort{0};
+    bool    audio{false};
+    int     audioReceiver{-1};   // -1 = all receivers
+    bool    iq{false};
+    bool    rxSensors{false};
+    bool    txSensors{false};
+};
 
 // TCI WebSocket server — exposes radio state and audio over the TCI protocol.
 // Phase 1: text commands (VFO, mode, filter, TX, RIT/XIT, CW, spots)
@@ -38,6 +54,11 @@ public:
     bool isRunning() const;
     quint16 port() const;
     int clientCount() const { return m_clients.size(); }
+
+    // Snapshot of all currently connected clients (endpoint + subscriptions).
+    // Cheap to call; intended for the Radio Setup → TCI tab on demand and
+    // whenever clientsChanged() fires.
+    QVector<TciClientInfo> connectedClients() const;
 
     void setAudioEngine(AudioEngine* audio) { m_audio = audio; }
 
@@ -78,6 +99,17 @@ public slots:
 
 signals:
     void clientCountChanged(int count);
+    // Fired whenever the client list or any client's subscriptions change
+    // (connect, disconnect, audio start/stop). The TCI tab repopulates on
+    // this signal.
+    void clientsChanged();
+    // Raw TCI text traffic for the embedded monitor. direction is
+    // "rx" (received from a client) or "tx" (broadcast to clients).
+    // One emission per logical message. Binary audio/IQ frames are
+    // never emitted; high-rate text broadcasts like rx_smeter ARE
+    // emitted but can be muted per-command via the monitor's
+    // suppression list to keep the stream readable.
+    void tciMessage(const QString& direction, const QString& text);
     void rxLevel(int channel, float rms);  // 1-based channel, RMS of TCI-gained RX audio
     void txLevel(float rms);                // RMS of post-gain TCI TX audio
     // Emitted when a TCI client sends `volume:N;` (master volume SET).
@@ -178,6 +210,7 @@ private:
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
     float             m_cachedMicLevel{-50.0f};
+    float             m_cachedAlc{0.0f};       // SW-ALC peak, dBFS
 };
 
 } // namespace AetherSDR

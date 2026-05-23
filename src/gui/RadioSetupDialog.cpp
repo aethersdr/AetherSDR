@@ -174,14 +174,20 @@ protected:
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
 
-        if (underMouse() || hasFocus()) {
+        const bool hasCopyableValue = [this] {
+            if (!m_valueProvider) return false;
+            const QString text = m_valueProvider().trimmed();
+            return !text.isEmpty() && text != QStringLiteral("—");
+        }();
+
+        if (hasCopyableValue && (underMouse() || hasFocus())) {
             painter.setPen(Qt::NoPen);
             painter.setBrush(QColor(255, 255, 255, 16));
             painter.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 3, 3);
         }
 
         QColor stroke = QColor(QStringLiteral("#8090a0"));
-        if (!isEnabled()) {
+        if (!hasCopyableValue) {
             stroke = QColor(QStringLiteral("#405060"));
         } else if (isDown()) {
             stroke = QColor(QStringLiteral("#00b4d8"));
@@ -251,13 +257,18 @@ static void showCopiedPopup(QWidget* anchor)
     QPoint pos(globalCenter.x() - popupSize.width() / 2,
                globalCenter.y() - anchor->height() / 2 - popupSize.height() - 6);
 
-    const QRect screenRect = anchor->screen()
-        ? anchor->screen()->availableGeometry()
-        : QRect(pos, popupSize);
-    pos.setX(std::clamp(pos.x(), screenRect.left(),
-                        screenRect.right() - popupSize.width()));
-    if (pos.y() < screenRect.top()) {
-        pos.setY(globalCenter.y() + anchor->height() / 2 + 6);
+    QRect screenRect;
+    if (auto* screen = anchor->screen()) {
+        screenRect = screen->availableGeometry();
+    } else if (auto* primary = QGuiApplication::primaryScreen()) {
+        screenRect = primary->availableGeometry();
+    }
+    if (screenRect.isValid()) {
+        pos.setX(std::clamp(pos.x(), screenRect.left(),
+                            screenRect.right() - popupSize.width()));
+        if (pos.y() < screenRect.top()) {
+            pos.setY(globalCenter.y() + anchor->height() / 2 + 6);
+        }
     }
 
     popup->move(pos);
@@ -309,6 +320,9 @@ static QWidget* makeCopyableInfoField(const QString& fieldName, const QString& l
 
     return wrapper;
 }
+
+static constexpr const char* kSuppressAudioDeviceNotificationsKey =
+    "SuppressAudioDeviceNotifications";
 
 static QString normalizedOscillatorValue(QString value)
 {
@@ -2177,6 +2191,21 @@ QWidget* RadioSetupDialog::buildAudioTab()
     outRow->addWidget(outCombo, 1);
     pcLayout->addLayout(outRow);
 
+    auto* promptCheck = new QCheckBox("Prompt on Audio Device Changes");
+    promptCheck->setStyleSheet("QCheckBox { color: #c8d8e8; font-size: 11px; }");
+    promptCheck->setToolTip("Show the Audio Device Detected dialog when a new PC audio device appears.");
+    const bool suppressAudioDeviceNotifications =
+        AppSettings::instance()
+            .value(kSuppressAudioDeviceNotificationsKey, "False")
+            .toString() == "True";
+    promptCheck->setChecked(!suppressAudioDeviceNotifications);
+    connect(promptCheck, &QCheckBox::toggled, this, [](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue(kSuppressAudioDeviceNotificationsKey, on ? "False" : "True");
+        s.save();
+    });
+    pcLayout->addWidget(promptCheck);
+
     // Wire device changes to AudioEngine
     if (m_audio) {
         // Route through QueuedConnection so setInputDevice/setOutputDevice
@@ -3968,6 +3997,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
         // Status
         auto* fcStatusLabel = new QLabel("Not detected");
         fcStatusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
+        m_flexControlStatusLabel = fcStatusLabel;
         grid->addWidget(new QLabel("Status:"), 0, 0);
         grid->addWidget(fcStatusLabel, 0, 1);
 
@@ -3982,6 +4012,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         fcCloseBtn->setFixedWidth(80);
         fcCloseBtn->setStyleSheet(fcDetectBtn->styleSheet());
         fcCloseBtn->setEnabled(false);
+        m_flexControlDetectButton = fcDetectBtn;
+        m_flexControlCloseButton = fcCloseBtn;
 
         auto* btnRow = new QHBoxLayout;
         btnRow->addWidget(fcDetectBtn);
@@ -3990,56 +4022,47 @@ QWidget* RadioSetupDialog::buildSerialTab()
         grid->addLayout(btnRow, 0, 2);
 
         // Update status display
-        auto updateFcStatus = [fcStatusLabel, fcCloseBtn, fcDetectBtn]
-                              (bool connected, const QString& port = {}) {
-            if (connected) {
-                fcStatusLabel->setText(QString("Connected (%1)").arg(port));
-                fcStatusLabel->setStyleSheet("QLabel { color: #30d050; font-size: 11px; }");
-                fcCloseBtn->setEnabled(true);
-                fcDetectBtn->setEnabled(false);
-            } else {
-                fcStatusLabel->setText("Not detected");
-                fcStatusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
-                fcCloseBtn->setEnabled(false);
-                fcDetectBtn->setEnabled(true);
-            }
-        };
-
-        connect(fcDetectBtn, &QPushButton::clicked, this, [updateFcStatus] {
+        connect(fcDetectBtn, &QPushButton::clicked, this, [this] {
             QString port = FlexControlManager::detectPort();
             if (port.isEmpty()) {
-                updateFcStatus(false);
+                setFlexControlConnectionStatus(false);
                 return;
             }
-            updateFcStatus(true, port);
             // Store port for MainWindow to open
             auto& s = AppSettings::instance();
             s.setValue("FlexControlPort", port);
             s.setValue("FlexControlOpen", "True");
             s.save();
+            emit serialSettingsChanged();
         });
-        connect(fcCloseBtn, &QPushButton::clicked, this, [updateFcStatus] {
-            updateFcStatus(false);
+        connect(fcCloseBtn, &QPushButton::clicked, this, [this] {
             auto& s = AppSettings::instance();
             s.setValue("FlexControlOpen", "False");
             s.save();
+            setFlexControlConnectionStatus(false);
+            emit serialSettingsChanged();
         });
 
         // Show current state from settings
         if (settings.value("FlexControlOpen", "False").toString() == "True") {
             QString port = settings.value("FlexControlPort").toString();
             if (!port.isEmpty())
-                updateFcStatus(true, port);
+                setFlexControlConnectionStatus(true, port);
         }
 
         // Button action configuration
         static const QStringList actions = {
             "None", "StepUp", "StepDown", "ToggleMox",
             "ToggleTune", "ToggleMute", "ToggleLock",
+            "BandZoom", "SegmentZoom",
             "NextSlice", "PrevSlice",
+            "SplitActiveSlice",
             "ToggleAgc", "VolumeUp", "VolumeDown",
             "WheelFrequency", "WheelVolume", "WheelPower",
-            "WheelRit", "WheelXit", "WheelAgcT",
+            "WheelRit", "WheelXit",
+            "WheelMasterAf", "WheelHeadphoneVolume",
+            "WheelAgcT", "WheelApf", "WheelCwSpeed",
+            "ClearRit", "ClearXit", "ToggleApf",
             "CwxF1", "CwxF2", "CwxF3", "CwxF4",
             "CwxF5", "CwxF6", "CwxF7", "CwxF8",
             "CwxF9", "CwxF10", "CwxF11", "CwxF12"
@@ -4065,10 +4088,13 @@ QWidget* RadioSetupDialog::buildSerialTab()
                 QString current = settings.value(key, defaultActions[b][a]).toString();
                 int idx = actions.indexOf(current);
                 if (idx >= 0) combo->setCurrentIndex(idx);
-                connect(combo, &QComboBox::currentTextChanged, this, [key](const QString& text) {
+                m_flexControlActionCombos.insert(key, combo);
+                m_flexControlActionDefaults.insert(key, QString::fromLatin1(defaultActions[b][a]));
+                connect(combo, &QComboBox::currentTextChanged, this, [this, key](const QString& text) {
                     auto& s = AppSettings::instance();
                     s.setValue(key, text);
                     s.save();
+                    emit serialSettingsChanged();
                 });
                 row->addWidget(combo);
             }
@@ -4080,20 +4106,23 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* autoDetect = new QCheckBox("Auto-detect on startup");
         autoDetect->setStyleSheet("QCheckBox { color: #c8d8e8; }");
         autoDetect->setChecked(settings.value("FlexControlAutoDetect", "True").toString() == "True");
-        connect(autoDetect, &QCheckBox::toggled, this, [](bool on) {
+        connect(autoDetect, &QCheckBox::toggled, this, [this](bool on) {
             auto& s = AppSettings::instance();
             s.setValue("FlexControlAutoDetect", on ? "True" : "False");
             s.save();
+            emit serialSettingsChanged();
         });
         grid->addWidget(autoDetect, 5, 0, 1, 3);
 
         auto* invertDir = new QCheckBox("Invert tuning direction");
         invertDir->setStyleSheet("QCheckBox { color: #c8d8e8; }");
         invertDir->setChecked(settings.value("FlexControlInvertDir", "False").toString() == "True");
-        connect(invertDir, &QCheckBox::toggled, this, [](bool on) {
+        m_flexControlInvertCheck = invertDir;
+        connect(invertDir, &QCheckBox::toggled, this, [this](bool on) {
             auto& s = AppSettings::instance();
             s.setValue("FlexControlInvertDir", on ? "True" : "False");
             s.save();
+            emit serialSettingsChanged();
         });
         grid->addWidget(invertDir, 6, 0, 1, 3);
 
@@ -4414,6 +4443,52 @@ void RadioSetupDialog::selectTab(const QString& tabName)
             return;
         }
     }
+}
+
+void RadioSetupDialog::refreshFlexControlButtonActions()
+{
+    auto& settings = AppSettings::instance();
+    for (auto it = m_flexControlActionCombos.begin();
+         it != m_flexControlActionCombos.end(); ++it) {
+        auto* combo = it.value();
+        if (!combo)
+            continue;
+        const QString fallback = m_flexControlActionDefaults.value(it.key(), QStringLiteral("None"));
+        const QString saved = settings.value(it.key(), fallback).toString();
+        const int idx = combo->findText(saved);
+        if (idx < 0)
+            continue;
+        const QSignalBlocker blocker(combo);
+        combo->setCurrentIndex(idx);
+    }
+    if (m_flexControlInvertCheck) {
+        const bool inverted =
+            settings.value("FlexControlInvertDir", "False").toString() == "True";
+        const QSignalBlocker blocker(m_flexControlInvertCheck);
+        m_flexControlInvertCheck->setChecked(inverted);
+    }
+}
+
+void RadioSetupDialog::setFlexControlConnectionStatus(bool connected, const QString& port)
+{
+    if (m_flexControlStatusLabel) {
+        if (connected) {
+            const QString displayPort = port.isEmpty()
+                ? AppSettings::instance().value("FlexControlPort").toString()
+                : port;
+            m_flexControlStatusLabel->setText(QString("Connected (%1)").arg(displayPort));
+            m_flexControlStatusLabel->setStyleSheet(
+                "QLabel { color: #30d050; font-size: 11px; }");
+        } else {
+            m_flexControlStatusLabel->setText("Not detected");
+            m_flexControlStatusLabel->setStyleSheet(
+                "QLabel { color: #808080; font-size: 11px; }");
+        }
+    }
+    if (m_flexControlCloseButton)
+        m_flexControlCloseButton->setEnabled(connected);
+    if (m_flexControlDetectButton)
+        m_flexControlDetectButton->setEnabled(!connected);
 }
 
 // ── UI Enhancements tab ───────────────────────────────────────────────────────

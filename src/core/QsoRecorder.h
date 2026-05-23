@@ -98,6 +98,7 @@ private:
     void startFile();
     void finalizeFile();
     QString buildFilename() const;
+    static QString sanitizeForPath(const QString& s);
     void writeWavHeader();
     void patchWavHeader();
     bool preparePlaybackPcm(int sinkRateHz);

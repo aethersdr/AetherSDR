@@ -200,6 +200,29 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
     txRoute["mic_selection"] = mic["selection"].toString();
     txRoute["dax_on"] = mic["dax_on"].toBool();
     txRoute["selected_input_device"] = selectedInput.description();
+    // Surface the active TX slice's id, mode, and per-slice DAX channel here
+    // so the bundle's TX route summary has the same context a triager would
+    // otherwise have to cross-reference from the per-slice section. WSJT-X /
+    // JTDX issues frequently come down to a mismatch between the audio device
+    // they're configured to use (DAX RESERVED CH N) and the TX slice's
+    // `slice dax=M` — having both visible in one line makes that mismatch
+    // obvious without re-reading every slice block. (#2885)
+    QJsonValue txSliceId = QJsonValue::Null;
+    QJsonValue txSliceMode = QJsonValue::Null;
+    QJsonValue txSliceDaxChannel = QJsonValue::Null;
+    const QJsonArray slices = snapshot["slices"].toArray();
+    for (const QJsonValue& value : slices) {
+        const QJsonObject slice = value.toObject();
+        if (slice["tx_slice"].toBool()) {
+            txSliceId = slice["slice_id"];
+            txSliceMode = slice["mode"];
+            txSliceDaxChannel = slice["digital"].toObject().value("dax_channel");
+            break;
+        }
+    }
+    txRoute["tx_slice_id"] = txSliceId;
+    txRoute["tx_slice_mode"] = txSliceMode;
+    txRoute["tx_slice_dax_channel"] = txSliceDaxChannel;
     obj["tx_route"] = txRoute;
 
     QJsonObject volumes;

@@ -19,6 +19,8 @@
 #define fileno _fileno
 #else
 #include <unistd.h>
+#include <cerrno>
+#include <cstring>
 #endif
 
 #ifdef __linux__
@@ -195,8 +197,28 @@ int main(int argc, char* argv[])
 
         // Symlink aethersdr.log → latest timestamped file (for Support dialog)
         const QString symlink = logDir + "/aethersdr.log";
+#ifdef Q_OS_UNIX
+        // Atomic replace: create temp symlink, then rename() over the old one.
+        // POSIX guarantees rename() is atomic within a single filesystem,
+        // closing the TOCTOU window that the previous remove()+link() pair
+        // left open between the two calls. (Principle XIV)
+        const QByteArray symlinkBytes = symlink.toLocal8Bit();
+        const QByteArray tmpBytes     = (symlink + QStringLiteral(".new")).toLocal8Bit();
+        const QByteArray targetBytes  = logPath.toLocal8Bit();
+        ::unlink(tmpBytes.constData());  // clear stale temp from a prior crash
+        if (::symlink(targetBytes.constData(), tmpBytes.constData()) != 0) {
+            qWarning("failed to create temp log symlink: %s", strerror(errno));
+        } else if (::rename(tmpBytes.constData(), symlinkBytes.constData()) != 0) {
+            qWarning("failed to rename log symlink into place: %s", strerror(errno));
+            ::unlink(tmpBytes.constData());
+        }
+#else
+        // Windows: QFile::link creates a .lnk shortcut; non-atomic is
+        // acceptable here since the symlink is only consumed by the
+        // Support dialog locally.
         QFile::remove(symlink);
         QFile::link(logPath, symlink);
+#endif
     } else {
         fprintf(stderr, "Warning: could not open log file %s\n", logPath.toLocal8Bit().constData());
     }

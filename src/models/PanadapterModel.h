@@ -30,8 +30,8 @@ public:
     double bandwidthMhz() const { return m_bandwidthMhz; }
     float minDbm() const { return m_minDbm; }
     float maxDbm() const { return m_maxDbm; }
-    QStringList antList() const { return m_antList; }
     QString rxAntenna() const { return m_rxAntenna; }
+    QStringList antList() const { return m_antList; }
     int rfGain() const { return m_rfGain; }
     int rfGainLow() const { return m_rfGainLow; }
     int rfGainHigh() const { return m_rfGainHigh; }
@@ -41,6 +41,8 @@ public:
     int wnbLevel() const { return m_wnbLevel; }
     bool wnbUpdating() const { return m_wnbUpdating; }
     bool wideActive() const { return m_wideActive; }
+    bool loopA() const { return m_loopA; }
+    bool loopB() const { return m_loopB; }
     int fps() const { return m_fps; }
     int waterfallLineDuration() const { return m_waterfallLineDuration; }
     QString preamp() const { return m_preamp; }
@@ -66,13 +68,14 @@ public:
 signals:
     void infoChanged(double centerMhz, double bandwidthMhz);
     void levelChanged(float minDbm, float maxDbm);
-    void antListChanged(const QStringList& ants);
     void rxAntennaChanged(const QString& ant);
+    void antListChanged(const QStringList& ants);
     void rfGainChanged(int gain);
     void rfGainInfoChanged(int low, int high, int step);
     void wnbChanged(bool active, int level);
     void wnbStateChanged(bool active, int level, bool updating);
     void wideChanged(bool active);
+    void loopChanged(bool loopA, bool loopB);
     void fpsChanged(int fps);
     void fpsReported(int fps);
     void waterfallLineDurationChanged(int ms);
@@ -88,8 +91,8 @@ private:
     double      m_bandwidthMhz{0.2};
     float       m_minDbm{-130.0f};
     float       m_maxDbm{-40.0f};
-    QStringList m_antList;
     QString     m_rxAntenna;
+    QStringList m_antList;
     int         m_rfGain{0};
     int         m_rfGainLow{-8};
     int         m_rfGainHigh{32};
@@ -97,6 +100,8 @@ private:
     bool        m_wnbActive{false};
     bool        m_wnbUpdating{false};
     bool        m_wideActive{false};
+    bool        m_loopA{false};
+    bool        m_loopB{false};
     int         m_wnbLevel{50};
     int         m_fps{-1};
     int         m_waterfallLineDuration{-1};

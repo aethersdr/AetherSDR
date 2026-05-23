@@ -5,6 +5,7 @@
 
 #include <QAudioDevice>
 #include <QColor>
+#include <QCheckBox>
 #include <QFrame>
 #include <QFont>
 #include <QHBoxLayout>
@@ -37,6 +38,11 @@ const char* kDialogStyle =
     "QLabel#title { color: #ffffff; background: transparent; font-size: 18px; font-weight: bold; }"
     "QLabel#body { color: #c8d8e8; background: transparent; }"
     "QLabel#sectionLabel { color: #00b4d8; background: transparent; font-weight: bold; }"
+    "QCheckBox { color: #c8d8e8; spacing: 8px; }"
+    "QCheckBox::indicator { width: 16px; height: 16px;"
+    "  border: 1px solid #304050; border-radius: 3px; background: #0a0a14; }"
+    "QCheckBox::indicator:hover { border-color: #00b4d8; }"
+    "QCheckBox::indicator:checked { background: #00b4d8; border-color: #00c8f0; }"
     "QListWidget {"
     "  background: #0a0a14;"
     "  border: 1px solid #304050;"
@@ -299,6 +305,11 @@ AudioDeviceChangeDialog::AudioDeviceChangeDialog(
     buttonRow->setContentsMargins(0, 4, 0, 0);
     buttonRow->setSpacing(8);
 
+    m_dontAskAgainCheck = new QCheckBox(tr("Don't ask me again"), content);
+    m_dontAskAgainCheck->setCursor(Qt::PointingHandCursor);
+    buttonRow->addWidget(m_dontAskAgainCheck);
+    buttonRow->addStretch(1);
+
     auto* cancel = new QPushButton(tr("Cancel"), content);
     cancel->setObjectName("cancelButton");
     cancel->setCursor(Qt::PointingHandCursor);
@@ -375,6 +386,11 @@ QAudioDevice AudioDeviceChangeDialog::selectedInputDevice() const
 QAudioDevice AudioDeviceChangeDialog::selectedOutputDevice() const
 {
     return selectedDevice(m_outputList, m_outputDevices);
+}
+
+bool AudioDeviceChangeDialog::dontAskAgainChecked() const
+{
+    return m_dontAskAgainCheck && m_dontAskAgainCheck->isChecked();
 }
 
 } // namespace AetherSDR

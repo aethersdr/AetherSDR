@@ -90,6 +90,7 @@ class AetherDspDialog;
 class WaveformsDialog;
 class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
+class FlexControlDialog;
 class MidiMappingDialog;
 class CwxPanel;
 class DvkPanel;
@@ -105,8 +106,19 @@ using DaxBridge = PipeWireAudioBridge;
 #endif
 class VfoWidget;
 
-// Wheel mode for FlexControl: determines what the encoder knob adjusts
-enum class FlexWheelMode { Frequency, Volume, Power, Rit, Xit, AgcT };
+// Wheel mode for FlexControl: determines what the encoder knob adjusts.
+enum class FlexWheelMode {
+    Frequency,
+    Volume,
+    Power,
+    Rit,
+    Xit,
+    MasterAf,
+    HeadphoneVolume,
+    AgcT,
+    Apf,
+    CwSpeed
+};
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -220,6 +232,7 @@ private:
     void schedulePanFpsReconcile(const QString& panId, int reportedFps);
     void scheduleWaterfallLineDurationReconcile(const QString& panId, int reportedMs);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
+    void onMuteAllSlicesToggle();
     void showPanadapterInterlockNotification(const QString& message);
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();  // wire CW decoder to the pan owning the active slice
@@ -314,6 +327,14 @@ private:
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
     void showAx25HfPacketDecodeDialog();
+    void showFlexControlDialog();
+    void handleFlexControlTuneSteps(int steps);
+    void handleFlexControlButton(int button, int action);
+    void handleVirtualFlexControlWheel(const QString& actionId, int steps);
+    void applyFlexControlWheelAction(const QString& actionId, int steps);
+    void syncFlexControlDialog();
+    void syncFlexControlIndicatorForSettings();
+    void setFlexControlHardwareIndicator(int button);
     QJsonObject buildControlDevicesSnapshot() const;
     void showPropDashboard();
     bool confirmClientSlotAvailability(const RadioInfo& info, QList<quint32>* disconnectHandles);
@@ -372,6 +393,8 @@ private:
     QTimer            m_audioDeviceChangeTimer;
     QList<QByteArray> m_knownAudioInputIds;
     QList<QByteArray> m_knownAudioOutputIds;
+    QByteArray        m_knownDefaultAudioInputId;
+    QByteArray        m_knownDefaultAudioOutputId;
     bool              m_audioDeviceDialogOpen{false};
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
     QsoRecorder*      m_qsoRecorder{nullptr};
@@ -478,10 +501,14 @@ private:
 #ifdef HAVE_SERIALPORT
     SerialPortController* m_serialPort{nullptr};
     FlexControlManager*   m_flexControl{nullptr};
+    bool                  m_flexControlConnected{false};
+#endif
     QTimer               m_flexCoalesceTimer;
     double               m_flexTargetMhz{-1.0};
     FlexWheelMode        m_flexWheelMode{FlexWheelMode::Frequency};
-#endif
+    int                  m_flexActiveLedButton{0};
+    bool                 m_flexVirtualBandZoomOn{false};
+    bool                 m_flexVirtualSegmentZoomOn{false};
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     QTimer               m_hidCoalesceTimer;
@@ -527,6 +554,7 @@ private:
     QPointer<TxBandDialog> m_txBandDialog;
     QPointer<MemoryDialog> m_memoryDialog;
     QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
+    QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<AetherDspDialog> m_dspDialog;
     QPointer<WaveformsDialog> m_waveformsDialog;

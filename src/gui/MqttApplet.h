@@ -45,6 +45,7 @@ signals:
     void disconnectRequested();
     void displayValueChanged(const QString& key, const QString& value);
     void displayCleared();
+    void antennaAliasRequested(const QString& token, const QString& alias);
 
 private:
     void buildUI();
