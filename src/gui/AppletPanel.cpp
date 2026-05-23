@@ -390,7 +390,21 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     connect(m_scrollDimTimer, &QTimer::timeout, this,
             [this]() { setScrollHandleActive(false); });
 
-    auto* container = new QWidget;
+    // Override sizeHint/minimumSizeHint so QScrollArea::setWidgetResizable
+    // always sizes this container to the viewport width rather than "sticking"
+    // at the AppletPanel's fixed width (260px).  Without this, the VBox layout's
+    // sizeHint stays at 260px after the initial layout pass, and the 12px
+    // scrollbar track (always visible) pushes the viewport to 248px — but Qt
+    // keeps the container at max(248, sizeHint=260)=260px, silently clipping
+    // the right 12px of every applet header (including the × close button).
+    struct FlexContainer : QWidget {
+        using QWidget::QWidget;
+        QSize sizeHint() const override
+            { return QSize(0, QWidget::sizeHint().height()); }
+        QSize minimumSizeHint() const override
+            { return QSize(0, QWidget::minimumSizeHint().height()); }
+    };
+    auto* container = new FlexContainer;
     m_stack = new QVBoxLayout(container);
     m_stack->setContentsMargins(0, 0, 0, 0);
     m_stack->setSpacing(0);
