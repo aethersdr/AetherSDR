@@ -3149,8 +3149,16 @@ void AudioEngine::loadClientFinalLimiterSettings()
 {
     if (!m_clientFinalLimiterTx) return;
     auto& s = AppSettings::instance();
+    // Default OFF: SmartSDR has no client-side brickwall limiter, so a fresh
+    // install with the limiter on at a -1 dBFS ceiling produces noticeably
+    // less forward power than SmartSDR for the same mic level (radio's SW ALC
+    // sees ~1 dB less peak to set its working point off of).  The limiter is
+    // still available for users who want headroom protection when running
+    // hot Comp/Tube/PUDU/Reverb settings — they can flip LIM on in the
+    // Aetherial Final Output Stage panel.  Existing users whose setting was
+    // already persisted keep their previous behavior.
     m_clientFinalLimiterTx->setEnabled(
-        s.value("ClientFinalLimiterTxEnabled", "True").toString() == "True");
+        s.value("ClientFinalLimiterTxEnabled", "False").toString() == "True");
     m_clientFinalLimiterTx->setCeilingDb(
         s.value("ClientFinalLimiterTxCeilingDb", "-1.0").toFloat());
     m_clientFinalLimiterTx->setOutputTrimDb(
