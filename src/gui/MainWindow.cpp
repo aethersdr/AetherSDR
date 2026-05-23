@@ -6648,10 +6648,17 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
     }
     if (obj == m_fdxIndicator && event->type() == QEvent::MouseButtonPress) {
         bool on = !m_radioModel.fullDuplexEnabled();
-        m_radioModel.sendCommand(QString("radio set full_duplex_enabled=%1").arg(on ? 1 : 0));
-        // Optimistic update — radio accepts this command (R|0) but doesn't
-        // echo back a status update with the new value.
-        m_radioModel.setFullDuplex(on);
+        m_radioModel.sendCmdPublic(
+            QString("radio set full_duplex_enabled=%1").arg(on ? 1 : 0),
+            [this, on](int code, const QString& body) {
+                if (code != 0) {
+                    showPanadapterInterlockNotification(
+                        QString("FDX not available: %1").arg(body.trimmed()));
+                    return;
+                }
+                // Radio accepted; no status echo follows, so apply manually.
+                m_radioModel.setFullDuplex(on);
+            });
         return true;
     }
     if (obj == m_bandStackIndicator && event->type() == QEvent::MouseButtonPress) {
