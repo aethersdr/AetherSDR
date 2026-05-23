@@ -1466,39 +1466,39 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
     {
         auto* group = new QGroupBox("Microphone");
         group->setStyleSheet(kGroupStyle);
-        auto* gvb = new QVBoxLayout(group);
-        gvb->setSpacing(4);
+        auto* grid = new QGridLayout(group);
+        grid->setHorizontalSpacing(8);
+        grid->setVerticalSpacing(6);
+        grid->setColumnStretch(2, 1);
 
-        // BIAS / +20dB row
-        auto* row1 = new QHBoxLayout;
-        row1->setSpacing(4);
+        constexpr int kMicControlButtonWidth = 104;
+        auto addMicRow = [&](int row, const QString& labelText, QPushButton* button) {
+            auto* label = new QLabel(labelText);
+            label->setStyleSheet(kLabelStyle);
+            label->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+            button->setMinimumWidth(kMicControlButtonWidth);
+            button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+            grid->addWidget(label, row, 0);
+            grid->addWidget(button, row, 1);
+        };
+
         auto* biasBtn = mkTogBtn("BIAS", tx.micBias());
         connect(biasBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->transmitModel().setMicBias(on);
         });
-        row1->addWidget(biasBtn);
         auto* boostBtn = mkTogBtn("+20dB", tx.micBoost());
         connect(boostBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->transmitModel().setMicBoost(on);
         });
-        row1->addWidget(boostBtn);
-        row1->addStretch(1);
-        gvb->addLayout(row1);
-
-        // Meter in RX
-        auto* row2 = new QHBoxLayout;
-        row2->setSpacing(4);
-        auto* metBtn = mkTogBtn("Enabled", tx.metInRx());
+        auto* metBtn = mkTogBtn(tx.metInRx() ? "Enabled" : "Disabled", tx.metInRx());
         connect(metBtn, &QPushButton::toggled, this, [this, metBtn](bool on) {
             metBtn->setText(on ? "Enabled" : "Disabled");
             m_model->sendCommand(QString("transmit set met_in_rx=%1").arg(on ? 1 : 0));
         });
-        row2->addWidget(metBtn);
-        auto* metLbl = new QLabel("Enable/Disable the Level Meter During Receive");
-        metLbl->setStyleSheet(kLabelStyle);
-        row2->addWidget(metLbl);
-        row2->addStretch(1);
-        gvb->addLayout(row2);
+
+        addMicRow(0, "Mic Bias Voltage:", biasBtn);
+        addMicRow(1, "Mic +20 dB Boost:", boostBtn);
+        addMicRow(2, "Level Meter During Receive:", metBtn);
 
         vbox->addWidget(group);
     }
