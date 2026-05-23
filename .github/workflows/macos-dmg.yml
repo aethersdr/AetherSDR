@@ -78,7 +78,7 @@ jobs:
         run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@77c3f8fd59034e6f3d5c58867ded0185b48d534f  # v1
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639  # v1
         with:
           key: ccache-macos-${{ matrix.label }}
           max-size: 500M
