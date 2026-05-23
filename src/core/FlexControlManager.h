@@ -20,6 +20,7 @@ namespace AetherSDR {
 //   X2S;    — button 2 tap
 //   X3S;    — button 3 tap
 //   X4S;    — knob button tap
+//   I100;   — host sets Aux1 LED on (Ixyz; = Aux1/Aux2/Aux3)
 //   F0304;  — device init/reset
 class FlexControlManager : public QObject {
     Q_OBJECT
@@ -37,6 +38,7 @@ public:
     static QString detectPort();
 
     void setInvertDirection(bool invert) { m_invertDirection = invert; }
+    void setActiveLedButton(int button);
 
     static constexpr quint16 VendorId  = 0x2192;
     static constexpr quint16 ProductId = 0x0010;
@@ -53,10 +55,13 @@ private slots:
 
 private:
     void processCommand(const QByteArray& cmd);
+    void writeLedState();
+    void writeLedCommand(int button);
 
     QSerialPort m_port;
     QByteArray  m_buffer;
     bool        m_invertDirection{false};
+    int         m_activeLedButton{0};
 };
 
 } // namespace AetherSDR

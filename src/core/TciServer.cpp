@@ -16,6 +16,7 @@
 
 #include <QWebSocketServer>
 #include <QWebSocket>
+#include <QHostAddress>
 #include <QStringList>
 #include <QTimer>
 #include <QPointer>
@@ -337,6 +338,7 @@ void TciServer::onNewConnection()
         qCInfo(lcCat) << "TciServer: client connected from"
                       << ws->peerAddress().toString();
         emit clientCountChanged(m_clients.size());
+        emit clientsChanged();
 
         sendInitBurst(ws);
     }
@@ -394,6 +396,38 @@ void TciServer::onClientDisconnected()
     qCInfo(lcCat) << "TciServer: client disconnected,"
                   << m_clients.size() << "remaining";
     emit clientCountChanged(m_clients.size());
+    emit clientsChanged();
+}
+
+QVector<TciClientInfo> TciServer::connectedClients() const
+{
+    QVector<TciClientInfo> out;
+    out.reserve(m_clients.size());
+    for (const auto& cs : m_clients) {
+        if (!cs.socket)
+            continue;
+        TciClientInfo info;
+        // Normalise the peer address so it is both readable and a STABLE
+        // alias key: collapse IPv4-mapped IPv6 (::ffff:a.b.c.d) to plain
+        // IPv4, and IPv6 loopback (::1) to 127.0.0.1. Otherwise the same
+        // physical client could key its saved Name under two spellings.
+        QHostAddress ha = cs.socket->peerAddress();
+        bool isV4 = false;
+        const quint32 v4 = ha.toIPv4Address(&isV4);
+        if (isV4)
+            ha = QHostAddress(v4);
+        else if (ha.isLoopback())
+            ha = QHostAddress(QHostAddress::LocalHost);
+        info.peerAddress  = ha.toString();
+        info.peerPort     = cs.socket->peerPort();
+        info.audio        = cs.audioEnabled;
+        info.audioReceiver= cs.audioReceiver;
+        info.iq           = cs.iqEnabled;
+        info.rxSensors    = cs.rxSensorsEnabled;
+        info.txSensors    = cs.txSensorsEnabled;
+        out.append(info);
+    }
+    return out;
 }
 
 void TciServer::onTextMessage(const QString& msg)
@@ -414,6 +448,7 @@ void TciServer::onTextMessage(const QString& msg)
     // forks (Improved, Improved Plus, KN4CRD fork…) send commands our
     // parser doesn't match.  Truncate long ones to keep logs readable.
     qCDebug(lcCat) << "TCI rx:" << msg.left(256);
+    emit tciMessage(QStringLiteral("rx"), msg);
 
     // TCI messages are semicolon-terminated; may contain multiple commands
     const QStringList cmds = msg.split(';', Qt::SkipEmptyParts);
@@ -448,6 +483,7 @@ void TciServer::onTextMessage(const QString& msg)
                           << "rate=" << client.audioSampleRate
                           << "ch=" << client.audioChannels
                           << "fmt=" << client.audioFormat;
+            emit clientsChanged();
             continue;
         }
         if (trimmed.startsWith("audio_stop")) {
@@ -462,6 +498,7 @@ void TciServer::onTextMessage(const QString& msg)
             ws->sendTextMessage(cmd.trimmed() + ";");
             qCInfo(lcCat) << "TCI: audio stopped for client"
                           << ws->peerAddress().toString();
+            emit clientsChanged();
             continue;
         }
 
@@ -507,6 +544,7 @@ void TciServer::onTextMessage(const QString& msg)
             ws->sendTextMessage(QStringLiteral("rx_sensors_enable:%1;")
                                     .arg(client.rxSensorsEnabled ? "true" : "false"));
             qCInfo(lcCat) << "TCI: rx_sensors" << (client.rxSensorsEnabled ? "enabled" : "disabled");
+            emit clientsChanged();
             continue;
         }
         if (trimmed.startsWith("tx_sensors_enable:")) {
@@ -516,6 +554,7 @@ void TciServer::onTextMessage(const QString& msg)
             ws->sendTextMessage(QStringLiteral("tx_sensors_enable:%1;")
                                     .arg(client.txSensorsEnabled ? "true" : "false"));
             qCInfo(lcCat) << "TCI: tx_sensors" << (client.txSensorsEnabled ? "enabled" : "disabled");
+            emit clientsChanged();
             continue;
         }
 
@@ -532,6 +571,7 @@ void TciServer::onTextMessage(const QString& msg)
             QString response = client.protocol->handleCommand(cmd.trimmed());
             if (!response.isEmpty())
                 ws->sendTextMessage(response);
+            emit clientsChanged();
             continue;
         }
         if (trimmed.startsWith("iq_stop:")) {
@@ -545,6 +585,7 @@ void TciServer::onTextMessage(const QString& msg)
             QString response = client.protocol->handleCommand(cmd.trimmed());
             if (!response.isEmpty())
                 ws->sendTextMessage(response);
+            emit clientsChanged();
             continue;
         }
 
@@ -1308,6 +1349,7 @@ void TciServer::broadcast(const QString& msg)
 {
     for (auto& cs : m_clients)
         cs.socket->sendTextMessage(msg);
+    emit tciMessage(QStringLiteral("tx"), msg);
 }
 
 void TciServer::broadcastBinary(const QByteArray& data)

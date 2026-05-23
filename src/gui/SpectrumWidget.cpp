@@ -405,6 +405,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
             if (ao)
                 newCenter = ao->freqMhz;
         }
+        newCenter = std::max(newCenter, newBw / 2.0);
 
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
@@ -1986,6 +1987,10 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 
     const double oldCenterMhz = m_centerMhz;
     const double oldBandwidthMhz = m_bandwidthMhz;
+    const bool panAnimationRunning = m_panCenterAnim &&
+        m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    const double waterfallFrameCenterMhz =
+        panAnimationRunning ? m_panCenterTarget : oldCenterMhz;
 
     // Stale-echo guard: if animation is running and the incoming center equals
     // the value m_centerMhz had when the animation started, this is a status
@@ -2027,7 +2032,8 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
             m_panCenterAnim->stop();
         }
         if (oldBandwidthMhz > 0.0 && bandwidthMhz > 0.0) {
-            reprojectWaterfall(oldCenterMhz, oldBandwidthMhz, centerMhz, bandwidthMhz);
+            reprojectWaterfall(waterfallFrameCenterMhz, oldBandwidthMhz,
+                               centerMhz, bandwidthMhz);
         }
         const bool keptSpectrum = reprojectSpectrum(oldCenterMhz, oldBandwidthMhz,
                                                     centerMhz, bandwidthMhz);
@@ -2055,26 +2061,23 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
         return;
     }
 
-    // Only reproject the waterfall when starting a fresh animation.  If we are
-    // already animating toward a different target (rapid edge scroll: multiple
-    // echo-backs arrive before the first animation finishes), skip the reproject.
-    // The waterfall was already shifted at the start of this animation session;
-    // re-shifting on every retarget causes repeated horizontal jumps.
     const bool animAlreadyRunning = m_panCenterAnim &&
         m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    const double waterfallSourceCenterMhz =
+        animAlreadyRunning ? m_panCenterTarget : m_centerMhz;
 
     if (!animAlreadyRunning) {
         // Record the start position so the stale-echo guard above can
         // recognise echo-backs that refer to the pre-animation center.
         m_panCenterStart = m_centerMhz;
-
-        // Scroll waterfall history to align with the new center before the
-        // animation begins.  Without this, old rows (at old center) and new
-        // rows (at new center) are at different pixel positions, so signals
-        // appear to jump vertically.  We do NOT reset m_wfWriteRow or clear
-        // bins — the shift is small and new rows fill in naturally.
-        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, centerMhz, m_bandwidthMhz);
     }
+
+    // Scroll waterfall history to align with the new center before the visual
+    // center animation lands. During rapid edge-follow retargets the waterfall
+    // image is already in the previous target's coordinate frame, so reproject
+    // from m_panCenterTarget rather than the mid-animation visual center.
+    reprojectWaterfall(waterfallSourceCenterMhz, m_bandwidthMhz,
+                       centerMhz, m_bandwidthMhz);
 
     m_panCenterTarget = centerMhz;
 
@@ -3443,7 +3446,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const double scale = std::pow(2.0, static_cast<double>(-dx) / (width() / 4.0));
         const double newBw = std::clamp(m_bwDragStartBw * scale, m_minBwMhz, m_maxBwMhz);
         const double mouseXFrac = static_cast<double>(m_bwDragStartX) / width() - 0.5;
-        const double zoomCenter = m_bwDragAnchorMhz - mouseXFrac * newBw;
+        const double zoomCenter = std::max(m_bwDragAnchorMhz - mouseXFrac * newBw,
+                                           newBw / 2.0);
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw);
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw)) {
             m_bins.clear();
@@ -3492,7 +3496,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const int dx = static_cast<int>(ev->position().x()) - m_panDragStartX;
         // Dragging right moves the view right → center shifts left
         const double deltaMhz = -(static_cast<double>(dx) / width()) * m_bandwidthMhz;
-        const double newCenter = m_panDragStartCenter + deltaMhz;
+        const double newCenter = std::max(m_panDragStartCenter + deltaMhz,
+                                          m_bandwidthMhz / 2.0);
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
         m_centerMhz = newCenter;
         markOverlayDirty();
@@ -3960,7 +3965,8 @@ bool SpectrumWidget::event(QEvent* ev)
             // Anchor: keep the frequency under the cursor at the same pixel.
             const double mouseXFrac = ge->position().x() / width() - 0.5;
             const double anchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
-            const double newCenter = anchorMhz - mouseXFrac * newBw;
+            const double newCenter = std::max(anchorMhz - mouseXFrac * newBw,
+                                              newBw / 2.0);
             reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
             if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
                 m_bins.clear();

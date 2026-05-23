@@ -1,6 +1,7 @@
 #include "MqttApplet.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "core/MqttAntennaAlias.h"
 #include "core/MqttClient.h"
 
 #include <QVBoxLayout>
@@ -128,6 +129,7 @@ void MqttApplet::buildUI()
     m_topicsEdit->setPlaceholderText("topic1, topic2, ...");
     m_topicsEdit->setToolTip("Comma-separated MQTT topics to subscribe to.\n"
                              "Prefix with * to display on panadapter overlay.\n"
+                             "Antenna names: aethersdr/antenna/name/+, aethersdr/antenna/names\n"
                              "Example: *rotator/pos, *ant/selected, station/log");
     grid->addWidget(m_topicsEdit, 4, 1);
 
@@ -314,6 +316,10 @@ void MqttApplet::onMessageReceived(const QString& topic, const QByteArray& paylo
         cursor.select(QTextCursor::BlockUnderCursor);
         cursor.removeSelectedText();
         cursor.deleteChar();
+    }
+
+    for (const auto& update : parseMqttAntennaAliasMessage(topic, payload)) {
+        emit antennaAliasRequested(update.token, update.alias);
     }
 
     // Update panadapter overlay for display-enabled topics

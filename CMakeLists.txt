@@ -466,6 +466,7 @@ set(CORE_SOURCES
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
     src/core/PropForecastClient.cpp
+    src/core/MqttAntennaAlias.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
     src/core/RigctlServer.cpp
@@ -559,12 +560,14 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrequencyEntryParser.cpp
     src/gui/SliceColorManager.cpp
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
+    src/gui/FlexControlDialog.cpp
     src/gui/PropDashboardDialog.cpp
     src/gui/MemoryCommands.cpp
     src/gui/MemoryBrowsePanel.cpp
@@ -574,6 +577,7 @@ set(GUI_SOURCES
     src/gui/AetherDspWidget.cpp
     src/gui/WaveformsDialog.cpp
     src/gui/ClientRxDspApplet.cpp
+    src/gui/DragValuePopup.cpp
     src/gui/DspParamPopup.cpp
     src/gui/DxClusterDialog.cpp
     src/gui/DxClusterStartupCommandsDialog.cpp
@@ -1454,6 +1458,14 @@ add_executable(xvtr_policy_test
 target_include_directories(xvtr_policy_test PRIVATE src)
 target_link_libraries(xvtr_policy_test PRIVATE Qt6::Core)
 
+add_executable(frequency_entry_parser_test
+    tests/frequency_entry_parser_test.cpp
+    src/gui/FrequencyEntryParser.cpp
+)
+target_include_directories(frequency_entry_parser_test PRIVATE src)
+target_link_libraries(frequency_entry_parser_test PRIVATE Qt6::Core)
+add_test(NAME frequency_entry_parser_test COMMAND frequency_entry_parser_test)
+
 add_executable(radio_status_ownership_test
     tests/radio_status_ownership_test.cpp
     src/core/CommandParser.cpp
@@ -1482,6 +1494,14 @@ target_include_directories(antenna_alias_test PRIVATE src)
 target_link_libraries(antenna_alias_test PRIVATE Qt6::Core)
 set_target_properties(antenna_alias_test PROPERTIES AUTOMOC ON)
 add_test(NAME antenna_alias_test COMMAND antenna_alias_test)
+
+add_executable(mqtt_antenna_alias_test
+    tests/mqtt_antenna_alias_test.cpp
+    src/core/MqttAntennaAlias.cpp
+)
+target_include_directories(mqtt_antenna_alias_test PRIVATE src)
+target_link_libraries(mqtt_antenna_alias_test PRIVATE Qt6::Core)
+add_test(NAME mqtt_antenna_alias_test COMMAND mqtt_antenna_alias_test)
 
 # Pure-math test for the ATU pre-tune center-frequency calculator.
 # Locks in the IARU R1 reference table from issue #2624 so future edits

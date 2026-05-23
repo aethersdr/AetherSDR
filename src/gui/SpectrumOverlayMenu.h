@@ -65,10 +65,11 @@ public:
     void syncWnbState(bool on, int level, bool updating);
     void setRfGain(int gain);
     void setRfGainRange(int low, int high, int step);
+    void setLoopState(bool loopA, bool loopB);
     void syncNoiseFloorPosition(int pos);
 
     // Populate XVTR band sub-panel
-    struct XvtrBand { QString name; double rfFreqMhz; };
+    struct XvtrBand { QString name; double rfFreqMhz; QString stackKey; };
     void setXvtrBands(const QVector<XvtrBand>& bands);
 
     // Surface the connected radio's built-in transverter bands (4m on
@@ -118,12 +119,17 @@ signals:
     void wfColorSchemeChanged(int scheme);
     void noiseFloorPositionChanged(int pos);
     void noiseFloorEnableChanged(bool on);
-    // Emitted when user selects a band from the sub-panel.
-    void bandSelected(const QString& bandName, double freqMhz, const QString& mode);
+    // Emitted when user selects a band from the sub-panel.  stackKeyHint is
+    // populated only when the clicked control already knows the exact Flex
+    // band-stack key, such as a configured XVTR button.
+    void bandSelected(const QString& bandName, double freqMhz, const QString& mode,
+                      const QString& stackKeyHint = {});
     // Emitted when user clicks XVTR button to open Radio Setup XVTR tab.
     void xvtrSetupRequested();
     // Emitted when WNB toggle changes.
     void wnbToggled(bool on);
+    void loopAToggled(bool on);
+    void loopBToggled(bool on);
     // Emitted when WNB level slider changes (0–100).
     void wnbLevelChanged(int level);
     // Emitted when RF gain slider changes (panadapter-level).
@@ -142,6 +148,7 @@ private:
     QString m_panId;
     QPointer<PanadapterModel> m_panadapter;
     QMetaObject::Connection m_panRxAntennaConnection;
+    QMetaObject::Connection m_panLoopConnection;
     void toggle();
     void updateLayout();
     void toggleBandPanel();
@@ -162,6 +169,7 @@ private:
     void refreshAntennaCombo();
     void setRxAntennaComboToken(const QString& token);
     QString currentRxAntennaToken() const;
+    void updateLoopButtonVisibility();
 
     static constexpr int kBtnAddRx = 0;
     static constexpr int kBtnAddTnf = 1;
@@ -193,6 +201,9 @@ private:
     QWidget*     m_antPanel{nullptr};
     bool         m_antPanelVisible{false};
     QComboBox*   m_rxAntCmb{nullptr};
+    QWidget*     m_loopRow{nullptr};
+    QPushButton* m_loopABtn{nullptr};
+    QPushButton* m_loopBBtn{nullptr};
     QSlider*     m_rfGainSlider{nullptr};
     QLabel*      m_rfGainLabel{nullptr};
     QPushButton* m_wnbBtn{nullptr};
