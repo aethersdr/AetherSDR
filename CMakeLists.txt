@@ -784,6 +784,27 @@ qt_add_resources(RESOURCES resources/resources.qrc)
 
 add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES})
 
+# Capture the git short SHA at configure time and surface it in the About
+# dialog so dev/test builds are identifiable.  Falls back to "unknown" for
+# source-tarball builds where .git is absent.
+find_package(Git QUIET)
+set(AETHER_GIT_SHA "unknown")
+if(Git_FOUND)
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        OUTPUT_VARIABLE _aether_git_sha_out
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE _aether_git_sha_rv
+    )
+    if(_aether_git_sha_rv EQUAL 0 AND NOT "${_aether_git_sha_out}" STREQUAL "")
+        set(AETHER_GIT_SHA "${_aether_git_sha_out}")
+    endif()
+endif()
+target_compile_definitions(AetherSDR PRIVATE AETHER_GIT_SHA="${AETHER_GIT_SHA}")
+message(STATUS "Build SHA: ${AETHER_GIT_SHA}")
+
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
     set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)

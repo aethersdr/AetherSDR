@@ -7941,10 +7941,17 @@ void MainWindow::buildMenuBar()
         vbox->addWidget(iconLbl);
 
         // Header
+        // The git SHA captured at CMake configure time identifies the build —
+        // useful when bug-reporting against a dev/test build that doesn't
+        // correspond to a tagged release.  See CMakeLists.txt for the capture.
+#ifndef AETHER_GIT_SHA
+#define AETHER_GIT_SHA "unknown"
+#endif
         auto* header = new QLabel(QString(
             "<div style='text-align:center;'>"
             "<h2 style='margin-bottom:2px; color:#c8d8e8;'>AetherSDR</h2>"
-            "<p style='margin-top:0; color:#8aa8c0;'>v%1</p>"
+            "<p style='margin-top:0; color:#8aa8c0;'>v%1<br>"
+            "<span style='font-size:10px; color:#6a8090;'>(%4)</span></p>"
             "<p style='color:#c8d8e8;'>Linux-native SmartSDR-compatible client<br>"
             "for FlexRadio transceivers.</p>"
             "<p style='font-size:11px; color:#6a8090;'>"
@@ -7952,7 +7959,8 @@ void MainWindow::buildMenuBar()
             "Compiled: %3</p>"
             "</div>")
             .arg(QCoreApplication::applicationVersion(), qVersion(),
-                 QStringLiteral(__DATE__)));
+                 QStringLiteral(__DATE__),
+                 QStringLiteral(AETHER_GIT_SHA)));
         header->setAlignment(Qt::AlignCenter);
         header->setWordWrap(true);
         vbox->addWidget(header);
