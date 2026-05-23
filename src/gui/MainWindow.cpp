@@ -4857,6 +4857,20 @@ MainWindow::~MainWindow()
 #ifdef HAVE_SERIALPORT
         QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->close(); },
                                   Qt::BlockingQueuedConnection);
+        // FlexControlManager owns its own QSerialPort.  Close it
+        // synchronously on the ExtControllers thread before tearing the
+        // thread down — otherwise on Windows the OS handle for the
+        // FlexController COM port stays held by the zombie AetherSDR.exe
+        // process (deleteLater's DeferredDelete event isn't guaranteed
+        // to fire before the worker thread's event loop exits via quit).
+        // Other clients of the same port (e.g. SmartSDR's Tuning Knob
+        // serial open) then fail until the user kills AetherSDR.exe via
+        // TaskManager.  Same pattern as the m_midiControl /
+        // m_hidEncoder closes below.
+        if (m_flexControl) {
+            QMetaObject::invokeMethod(m_flexControl, &FlexControlManager::close,
+                                      Qt::BlockingQueuedConnection);
+        }
 #endif
 #ifdef HAVE_MIDI
         if (m_midiControl) {
