@@ -232,8 +232,7 @@ const FlexActionDef kFlexActions[] = {
     {"SegmentZoom", "Segment Zoom"},
     {"WheelRit", "RIT (Receive Incremental Tuning)"},
     {"WheelXit", "XIT (Transmit Incremental Tuning)"},
-    {"WheelVolume", "Slice AF"},
-    {"WheelMasterAf", "Master AF"},
+    {"WheelVolume", "Master Volume"},
     {"WheelHeadphoneVolume", "Headphone Volume"},
     {"WheelAgcT", "AGCT (Automatic Gain Control Threshold)"},
     {"WheelApf", "APF (Audio Peaking Filter)"},
@@ -352,10 +351,14 @@ bool isWheelActionId(const QString& actionId)
     // active-slice advance, split, and macros should not leave an Aux mode on.
     return actionId == QLatin1String("WheelFrequency")
         || actionId == QLatin1String("WheelVolume")
+        // "WheelMasterAf" is the legacy alias for WheelVolume (see #2986
+        // and flexWheelModeForAction in MainWindow.cpp).  Recognized here
+        // so saved bindings made before consolidation still register as
+        // wheel actions in this predicate.
+        || actionId == QLatin1String("WheelMasterAf")
         || actionId == QLatin1String("WheelPower")
         || actionId == QLatin1String("WheelRit")
         || actionId == QLatin1String("WheelXit")
-        || actionId == QLatin1String("WheelMasterAf")
         || actionId == QLatin1String("WheelHeadphoneVolume")
         || actionId == QLatin1String("WheelAgcT")
         || actionId == QLatin1String("WheelApf")

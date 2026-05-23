@@ -4060,7 +4060,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             "ToggleAgc", "VolumeUp", "VolumeDown",
             "WheelFrequency", "WheelVolume", "WheelPower",
             "WheelRit", "WheelXit",
-            "WheelMasterAf", "WheelHeadphoneVolume",
+            "WheelHeadphoneVolume",
             "WheelAgcT", "WheelApf", "WheelCwSpeed",
             "ClearRit", "ClearXit", "ToggleApf",
             "CwxF1", "CwxF2", "CwxF3", "CwxF4",

@@ -107,13 +107,19 @@ using DaxBridge = PipeWireAudioBridge;
 class VfoWidget;
 
 // Wheel mode for FlexControl: determines what the encoder knob adjusts.
+//
+// MasterAf was previously a separate enum value that routed identically
+// to Volume (see issue #2986).  PR #2925 changed Volume to route to
+// master-volume as well, making the two modes byte-identical.  MasterAf
+// was removed; the "WheelMasterAf" action string is still accepted in
+// flexWheelModeForAction() and mapped to Volume so saved FlexControl
+// button bindings keep working.
 enum class FlexWheelMode {
     Frequency,
     Volume,
     Power,
     Rit,
     Xit,
-    MasterAf,
     HeadphoneVolume,
     AgcT,
     Apf,

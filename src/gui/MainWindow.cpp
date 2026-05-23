@@ -334,7 +334,9 @@ bool flexWheelModeForAction(const QString& actionName, FlexWheelMode& mode)
     } else if (actionName == QLatin1String("WheelXit")) {
         mode = FlexWheelMode::Xit;
     } else if (actionName == QLatin1String("WheelMasterAf")) {
-        mode = FlexWheelMode::MasterAf;
+        // Back-compat for saved FlexControl bindings made before #2986
+        // consolidation.  Routes to the same Volume mode (master volume).
+        mode = FlexWheelMode::Volume;
     } else if (actionName == QLatin1String("WheelHeadphoneVolume")) {
         mode = FlexWheelMode::HeadphoneVolume;
     } else if (actionName == QLatin1String("WheelAgcT")) {
@@ -5924,9 +5926,6 @@ void MainWindow::handleFlexControlTuneSteps(int steps)
     case FlexWheelMode::Xit:
         applyFlexControlWheelAction(QStringLiteral("WheelXit"), steps);
         break;
-    case FlexWheelMode::MasterAf:
-        applyFlexControlWheelAction(QStringLiteral("WheelMasterAf"), steps);
-        break;
     case FlexWheelMode::HeadphoneVolume:
         applyFlexControlWheelAction(QStringLiteral("WheelHeadphoneVolume"), steps);
         break;
@@ -6112,16 +6111,11 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             const int hz = std::clamp(s->xitFreq() + steps * 10, -9999, 9999);
             s->setXit(true, hz);
         }
-    } else if (actionId == "WheelVolume") {
+    } else if (actionId == "WheelVolume" || actionId == "WheelMasterAf") {
         // Route to master volume to match SmartSDR behavior (#2921).
-        // Identical body to WheelMasterAf below; see #2986 for the
-        // consolidation follow-up tracking removal of one of these.
-        const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
-        const int next = std::clamp(current + steps * 2, 0, 100);
-        if (m_titleBar)
-            m_titleBar->setMasterVolume(next);
-        applyMasterVolume(next);
-    } else if (actionId == "WheelMasterAf") {
+        // "WheelMasterAf" is the legacy action name from #2888; accepted
+        // here for back-compat with saved FlexControl bindings made
+        // before the #2986 consolidation but routes to the same code path.
         const int current = AppSettings::instance().value("MasterVolume", "100").toInt();
         const int next = std::clamp(current + steps * 2, 0, 100);
         if (m_titleBar)
@@ -6203,7 +6197,6 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
         case FlexWheelMode::Power:     return QStringLiteral("Power");
         case FlexWheelMode::Rit:       return QStringLiteral("Rit");
         case FlexWheelMode::Xit:       return QStringLiteral("Xit");
-        case FlexWheelMode::MasterAf:  return QStringLiteral("MasterAf");
         case FlexWheelMode::HeadphoneVolume:
             return QStringLiteral("HeadphoneVolume");
         case FlexWheelMode::AgcT:      return QStringLiteral("AgcT");
