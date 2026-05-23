@@ -311,8 +311,8 @@ bool flexWheelModeForAction(const QString& actionName, FlexWheelMode& mode)
         mode = FlexWheelMode::MasterAf;
     } else if (actionName == QLatin1String("WheelHeadphoneVolume")) {
         mode = FlexWheelMode::HeadphoneVolume;
-    } else if (actionName == QLatin1String("WheelAgct")) {
-        mode = FlexWheelMode::Agct;
+    } else if (actionName == QLatin1String("WheelAgcT")) {
+        mode = FlexWheelMode::AgcT;
     } else if (actionName == QLatin1String("WheelApf")) {
         mode = FlexWheelMode::Apf;
     } else if (actionName == QLatin1String("WheelCwSpeed")) {
@@ -5689,8 +5689,8 @@ void MainWindow::handleFlexControlTuneSteps(int steps)
     case FlexWheelMode::HeadphoneVolume:
         applyFlexControlWheelAction(QStringLiteral("WheelHeadphoneVolume"), steps);
         break;
-    case FlexWheelMode::Agct:
-        applyFlexControlWheelAction(QStringLiteral("WheelAgct"), steps);
+    case FlexWheelMode::AgcT:
+        applyFlexControlWheelAction(QStringLiteral("WheelAgcT"), steps);
         break;
     case FlexWheelMode::Apf:
         applyFlexControlWheelAction(QStringLiteral("WheelApf"), steps);
@@ -5874,7 +5874,7 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         if (m_titleBar)
             m_titleBar->setHeadphoneVolume(next);
         m_radioModel.setHeadphoneGain(next);
-    } else if (actionId == "WheelAgct") {
+    } else if (actionId == "WheelAgcT") {
         if (auto* s = activeSlice())
             s->setAgcThreshold(std::clamp(s->agcThreshold() + steps, 0, 100));
     } else if (actionId == "WheelApf") {
@@ -5948,7 +5948,7 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
         case FlexWheelMode::MasterAf:  return QStringLiteral("MasterAf");
         case FlexWheelMode::HeadphoneVolume:
             return QStringLiteral("HeadphoneVolume");
-        case FlexWheelMode::Agct:      return QStringLiteral("Agct");
+        case FlexWheelMode::AgcT:      return QStringLiteral("AgcT");
         case FlexWheelMode::Apf:       return QStringLiteral("Apf");
         case FlexWheelMode::CwSpeed:   return QStringLiteral("CwSpeed");
         }

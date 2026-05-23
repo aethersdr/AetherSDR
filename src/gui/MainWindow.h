@@ -115,7 +115,7 @@ enum class FlexWheelMode {
     Xit,
     MasterAf,
     HeadphoneVolume,
-    Agct,
+    AgcT,
     Apf,
     CwSpeed
 };

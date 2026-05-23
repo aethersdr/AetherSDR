@@ -235,7 +235,7 @@ const FlexActionDef kFlexActions[] = {
     {"WheelVolume", "Slice AF"},
     {"WheelMasterAf", "Master AF"},
     {"WheelHeadphoneVolume", "Headphone Volume"},
-    {"WheelAgct", "AGCT (Automatic Gain Control Threshold)"},
+    {"WheelAgcT", "AGCT (Automatic Gain Control Threshold)"},
     {"WheelApf", "APF (Audio Peaking Filter)"},
     {"ClearRit", "Clear RIT"},
     {"ClearXit", "Clear XIT"},
@@ -357,7 +357,7 @@ bool isWheelActionId(const QString& actionId)
         || actionId == QLatin1String("WheelXit")
         || actionId == QLatin1String("WheelMasterAf")
         || actionId == QLatin1String("WheelHeadphoneVolume")
-        || actionId == QLatin1String("WheelAgct")
+        || actionId == QLatin1String("WheelAgcT")
         || actionId == QLatin1String("WheelApf")
         || actionId == QLatin1String("WheelCwSpeed");
 }
