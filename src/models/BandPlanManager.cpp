@@ -7,6 +7,8 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <algorithm>
+
 namespace AetherSDR {
 
 BandPlanManager::BandPlanManager(QObject* parent)
@@ -60,6 +62,33 @@ QStringList BandPlanManager::availablePlans() const
     for (const auto& p : m_plans)
         names << p.name;
     return names;
+}
+
+QVector<BandPlanManager::Region>
+BandPlanManager::contiguousRegionsForBand(double searchLowMhz,
+                                         double searchHighMhz) const
+{
+    QVector<Region> regions;
+    for (const auto& seg : m_segments) {
+        const double mid = (seg.lowMhz + seg.highMhz) / 2.0;
+        if (mid >= searchLowMhz && mid <= searchHighMhz)
+            regions.append({seg.lowMhz, seg.highMhz});
+    }
+    if (regions.isEmpty()) return regions;
+
+    std::sort(regions.begin(), regions.end(),
+              [](const Region& a, const Region& b) { return a.lowMhz < b.lowMhz; });
+    QVector<Region> merged;
+    merged.append(regions.front());
+    constexpr double kAdjacencyEpsMhz = 1.0e-6;  // 1 Hz
+    for (int i = 1; i < regions.size(); ++i) {
+        if (regions[i].lowMhz <= merged.last().highMhz + kAdjacencyEpsMhz) {
+            merged.last().highMhz = std::max(merged.last().highMhz, regions[i].highMhz);
+        } else {
+            merged.append(regions[i]);
+        }
+    }
+    return merged;
 }
 
 bool BandPlanManager::loadPlanFromJson(const QString& path, PlanData& out)

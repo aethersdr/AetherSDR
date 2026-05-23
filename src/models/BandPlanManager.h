@@ -27,6 +27,18 @@ public:
         QString label;
     };
 
+    // A contiguous, gap-free [low, high] band region produced by merging the
+    // active plan's segments. Discrete-channel bands (e.g. US 60 m: 5
+    // channels separated by tens of kHz of regulatory gap) collapse to one
+    // Region per legal channel; continuous bands collapse to a single
+    // Region spanning the band's regulatory edges. Consumers that need
+    // gap-aware TX walking (ATU pre-tune, SWR sweep) read these instead of
+    // a naive min/max across segments(). (#2822)
+    struct Region {
+        double lowMhz;
+        double highMhz;
+    };
+
     explicit BandPlanManager(QObject* parent = nullptr);
 
     // Load all bundled plans from Qt resources
@@ -40,6 +52,14 @@ public:
 
     // Available plans (display names)
     QStringList availablePlans() const;
+
+    // Walk the active plan's segments whose midpoint falls inside
+    // [searchLowMhz, searchHighMhz], sort by low edge, and merge adjacent
+    // or overlapping segments (1 Hz adjacency tolerance) into contiguous
+    // regions. Returns regions sorted by ascending lowMhz. Empty if no
+    // segment matches. (#2822)
+    QVector<Region> contiguousRegionsForBand(double searchLowMhz,
+                                             double searchHighMhz) const;
 
 signals:
     void planChanged();

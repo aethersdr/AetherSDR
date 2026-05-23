@@ -14288,21 +14288,20 @@ void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts)
     // sweep transmits outside the user's region (e.g. past 7.200 MHz on
     // 40 m for IARU R1) and trips the radio's interlock.  Mirrors the
     // pattern used by AtuPreTuneDialog::recomputeBands. (#2800)
+    //
+    // Today the SWR sweep treats the band as a single contiguous range —
+    // discrete-channel bands like US 60 m are hard-blocked above. We use
+    // contiguousRegionsForBand() (#2822) and union the regions so a
+    // future enhancement can walk each region individually without
+    // touching the per-region calculation.
     double effectiveLow = band.lowMhz;
     double effectiveHigh = band.highMhz;
     if (m_bandPlanMgr) {
-        double planLow = std::numeric_limits<double>::infinity();
-        double planHigh = -std::numeric_limits<double>::infinity();
-        for (const auto& seg : m_bandPlanMgr->segments()) {
-            const double mid = (seg.lowMhz + seg.highMhz) / 2.0;
-            if (mid >= band.lowMhz && mid <= band.highMhz) {
-                planLow = std::min(planLow, seg.lowMhz);
-                planHigh = std::max(planHigh, seg.highMhz);
-            }
-        }
-        if (std::isfinite(planLow) && std::isfinite(planHigh) && planHigh > planLow) {
-            effectiveLow = std::max(effectiveLow, planLow);
-            effectiveHigh = std::min(effectiveHigh, planHigh);
+        const auto regions =
+            m_bandPlanMgr->contiguousRegionsForBand(band.lowMhz, band.highMhz);
+        if (!regions.isEmpty()) {
+            effectiveLow = std::max(effectiveLow, regions.first().lowMhz);
+            effectiveHigh = std::min(effectiveHigh, regions.last().highMhz);
         }
     }
 
