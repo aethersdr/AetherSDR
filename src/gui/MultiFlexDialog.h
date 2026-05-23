@@ -2,6 +2,8 @@
 
 #include "PersistentDialog.h"
 
+#include <QString>
+
 class QTableWidget;
 class QPushButton;
 class QLabel;
@@ -14,6 +16,9 @@ class MultiFlexDialog : public PersistentDialog {
     Q_OBJECT
 public:
     explicit MultiFlexDialog(RadioModel* model, QWidget* parent = nullptr);
+
+signals:
+    void disconnectClientRequested(quint32 handle, const QString& displayName);
 
 private:
     void refresh();

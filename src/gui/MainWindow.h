@@ -317,8 +317,11 @@ private:
     void showAx25HfPacketDecodeDialog();
     QJsonObject buildControlDevicesSnapshot() const;
     void showPropDashboard();
+    void showMultiFlexDialog();
+    void handleMultiFlexClientDisconnect(quint32 handle, const QString& displayName);
     bool confirmClientSlotAvailability(const RadioInfo& info, QList<quint32>* disconnectHandles);
     bool confirmClientSlotAvailability(const WanRadioInfo& info, QList<quint32>* disconnectHandles);
+    bool sendWanRadioClientDisconnects(const QString& serial, const QList<quint32>& handles);
     void disconnectWanRadioClients(const WanRadioInfo& info);
     void startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots = true);
     void requestWanReconnect();

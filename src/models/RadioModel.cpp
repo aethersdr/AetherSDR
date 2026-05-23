@@ -905,6 +905,15 @@ void RadioModel::setPendingClientDisconnects(const QList<quint32>& handles)
     }
 }
 
+bool RadioModel::disconnectClient(quint32 handle)
+{
+    if (handle == 0 || handle == clientHandle())
+        return false;
+
+    disconnectClientHandlesThen({handle});
+    return true;
+}
+
 void RadioModel::setKnownGuiClients(const QStringList& handles,
                                     const QStringList& programs,
                                     const QStringList& stations,
@@ -1663,26 +1672,38 @@ void RadioModel::onConnected()
 
 void RadioModel::disconnectPendingClientsThen(std::function<void()> continuation)
 {
+    const QList<quint32> handles = m_pendingClientDisconnects;
+    m_pendingClientDisconnects.clear();
+    disconnectClientHandlesThen(handles, std::move(continuation));
+}
+
+void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHandles,
+                                             std::function<void()> continuation)
+{
     QList<quint32> handles;
     const quint32 ours = clientHandle();
-    for (quint32 handle : m_pendingClientDisconnects) {
+    for (quint32 handle : requestedHandles) {
         if (handle != 0 && handle != ours && !handles.contains(handle))
             handles.append(handle);
     }
-    m_pendingClientDisconnects.clear();
-
     if (handles.isEmpty()) {
-        continuation();
+        if (continuation)
+            continuation();
         return;
     }
 
     auto remaining = std::make_shared<QList<quint32>>(handles);
+    auto completion = std::make_shared<std::function<void()>>(std::move(continuation));
     auto step = std::make_shared<std::function<void()>>();
-    *step = [this, remaining, continuation, step]() mutable {
+    *step = [this, remaining, completion, step]() mutable {
         if (remaining->isEmpty()) {
-            QTimer::singleShot(250, this, [continuation]() mutable {
-                continuation();
-            });
+            if (*completion) {
+                QTimer::singleShot(250, this, [completion]() mutable {
+                    auto continuation = std::move(*completion);
+                    if (continuation)
+                        continuation();
+                });
+            }
             return;
         }
 
@@ -1768,18 +1789,14 @@ void RadioModel::resolveMultiFlexConflict(quint32 handle)
     auto continuation = std::move(m_multiFlexContinuation);
     m_multiFlexContinuation = nullptr;
 
-    const QString cmd = QString("client disconnect 0x%1").arg(handle, 0, 16);
     qCDebug(lcProtocol) << "RadioModel: resolving multiFLEX conflict, disconnecting" << Qt::hex << handle;
-    sendCmd(cmd, [this, continuation = std::move(continuation)](int code, const QString& body) mutable {
-        if (code != 0)
-            qCWarning(lcProtocol) << "RadioModel: conflict client disconnect failed:" << body.trimmed();
+    disconnectClientHandlesThen({handle}, [this, continuation = std::move(continuation)]() mutable {
         // After eviction, re-run the full peek rather than jumping straight to the
         // continuation. This catches any remaining clients (e.g., two sessions, or
         // a stale handle that hadn't been cleaned up yet) and re-shows the dialog if
         // needed, preventing phantom slices from a partially-disconnected session.
-        QTimer::singleShot(250, this, [this, continuation = std::move(continuation)]() mutable {
+        if (continuation)
             peekForMultiFlexConflictThen(std::move(continuation));
-        });
     });
 }
 

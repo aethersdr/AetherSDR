@@ -981,13 +981,31 @@ bool MainWindow::confirmClientSlotAvailability(const WanRadioInfo& info,
     return !dialog.selectedHandles().isEmpty();
 }
 
-void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
+bool MainWindow::sendWanRadioClientDisconnects(const QString& serial,
+                                               const QList<quint32>& handles)
 {
     if (!m_smartLink.isConnected()) {
         m_connPanel->setStatusText("SmartLink is not connected");
-        return;
+        statusBar()->showMessage("SmartLink is not connected.", 4000);
+        return false;
     }
 
+    if (serial.trimmed().isEmpty()) {
+        m_connPanel->setStatusText("SmartLink radio serial unavailable");
+        return false;
+    }
+
+    if (handles.isEmpty()) {
+        m_connPanel->setStatusText("No remote clients to disconnect");
+        return false;
+    }
+
+    m_smartLink.disconnectRadioClients(serial, handles);
+    return true;
+}
+
+void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
+{
     const auto clients = buildDisconnectClients(info);
     if (clients.isEmpty()) {
         m_connPanel->setStatusText("No remote clients to disconnect");
@@ -1006,9 +1024,43 @@ void MainWindow::disconnectWanRadioClients(const WanRadioInfo& info)
     if (handles.isEmpty())
         return;
 
-    m_smartLink.disconnectRadioClients(info.serial, handles);
-    m_connPanel->setStatusText("Disconnect request sent");
-    statusBar()->showMessage("Remote client disconnect request sent through SmartLink.", 4000);
+    if (sendWanRadioClientDisconnects(info.serial, handles)) {
+        m_connPanel->setStatusText("Disconnect request sent");
+        statusBar()->showMessage("Remote client disconnect request sent through SmartLink.", 4000);
+    }
+}
+
+void MainWindow::showMultiFlexDialog()
+{
+    MultiFlexDialog dlg(&m_radioModel, this);
+    connect(&dlg, &MultiFlexDialog::disconnectClientRequested,
+            this, &MainWindow::handleMultiFlexClientDisconnect);
+    dlg.exec();
+}
+
+void MainWindow::handleMultiFlexClientDisconnect(quint32 handle, const QString& displayName)
+{
+    if (handle == 0 || handle == m_radioModel.ourClientHandle())
+        return;
+
+    QString name = cleanClientDisplayText(displayName);
+    if (name.isEmpty())
+        name = QString("client 0x%1").arg(handle, 8, 16, QChar('0')).toUpper();
+
+    if (m_radioModel.isWan()) {
+        const QString serial = !m_pendingWanRadio.serial.isEmpty()
+            ? m_pendingWanRadio.serial
+            : m_radioModel.serial();
+        if (sendWanRadioClientDisconnects(serial, {handle})) {
+            m_connPanel->setStatusText("Disconnect request sent");
+            statusBar()->showMessage(
+                QString("SmartLink disconnect request sent for %1.").arg(name), 4000);
+        }
+        return;
+    }
+
+    if (m_radioModel.disconnectClient(handle))
+        statusBar()->showMessage(QString("Disconnect request sent for %1.").arg(name), 4000);
 }
 
 void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForClientSlots)
@@ -1053,7 +1105,7 @@ void MainWindow::startWanRadioConnect(const WanRadioInfo& info, bool promptForCl
         m_smartLink.requestConnect(serial, udpPort);
     };
     if (!disconnectHandles.isEmpty()) {
-        m_smartLink.disconnectRadioClients(info.serial, disconnectHandles);
+        sendWanRadioClientDisconnects(info.serial, disconnectHandles);
         QTimer::singleShot(350, this, requestSmartLinkConnect);
     } else {
         requestSmartLinkConnect();
@@ -6881,11 +6933,8 @@ void MainWindow::buildMenuBar()
         connect(dlg, &QDialog::finished, this, refreshSpots);  // refresh on close
     });
     auto* multiFlexAction = settingsMenu->addAction("multiFLEX...");
-    auto openMultiFlex = [this] {
-        MultiFlexDialog dlg(&m_radioModel, this);
-        dlg.exec();
-    };
-    connect(multiFlexAction, &QAction::triggered, this, openMultiFlex);
+    connect(multiFlexAction, &QAction::triggered,
+            this, &MainWindow::showMultiFlexDialog);
     // m_titleBar connect deferred — see after TitleBar creation (~line 2530)
     m_txBandAction = settingsMenu->addAction("TX Band Settings...");
     m_txBandAction->setMenuRole(QAction::NoRole);   // prevent macOS auto-reparenting (#883)
@@ -7631,10 +7680,8 @@ void MainWindow::buildUI()
             this, &MainWindow::updatePcAudioTooltip, Qt::QueuedConnection);
     connect(m_audio, &AudioEngine::outputDeviceChanged,
             this, &MainWindow::updatePcAudioTooltip, Qt::QueuedConnection);
-    connect(m_titleBar, &TitleBar::multiFlexClicked, this, [this] {
-        MultiFlexDialog dlg(&m_radioModel, this);
-        dlg.exec();
-    });
+    connect(m_titleBar, &TitleBar::multiFlexClicked,
+            this, &MainWindow::showMultiFlexDialog);
     connect(m_titleBar, &TitleBar::minimalModeRequested, this, [this]() {
         toggleMinimalMode(!m_minimalMode);
         if (m_minimalModeAction) {

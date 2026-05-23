@@ -298,6 +298,7 @@ public:
     void connectToRadio(const RadioInfo& info);
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
     void setPendingClientDisconnects(const QList<quint32>& handles);
+    bool disconnectClient(quint32 handle);
     // Called by MainWindow in response to multiFlexConflictDetected().
     // Disconnects handle and resumes the connection sequence.
     void resolveMultiFlexConflict(quint32 handle);
@@ -526,6 +527,8 @@ private:
                                   const QString& source,
                                   const QString& station,
                                   const QString& program);
+    void disconnectClientHandlesThen(const QList<quint32>& handles,
+                                     std::function<void()> continuation = {});
 
     // Route command to active connection (LAN or WAN)
     using ResponseCallback = RadioConnection::ResponseCallback;
