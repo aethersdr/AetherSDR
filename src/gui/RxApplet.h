@@ -112,6 +112,10 @@ signals:
     void autoSqlMarginDbChanged(int dB);
     // Emitted when the radio reports a squelch state change (for spectrum line).
     void squelchStateChanged(bool on, int level);
+    void directEntryCommitted(double mhz, const QString& source);
+    // Emitted when the user presses the Mute All button.
+    // Logic lives in MainWindow::onMuteAllSlicesToggle() which has RADE context.
+    void muteAllToggled();
 
 #ifdef HAVE_RADE
     // Emitted when user selects/deselects RADE digital voice mode
@@ -166,6 +170,7 @@ private:
     QButtonGroup*           m_sliceGroup{nullptr};
     QVector<QToolButton*>   m_sliceBtns;
     bool                    m_sliceButtonClicksConnected{false};
+    QPushButton*            m_muteAllBtn{nullptr};
 
     // ── Header row ────────────────────────────────────────────────────────
     QLabel*      m_sliceBadge{nullptr};   // "A" / "B" / "C" / "D"

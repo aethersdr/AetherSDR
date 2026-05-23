@@ -2081,7 +2081,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Levels:"), row, 0);
     auto* levelsRow = new QHBoxLayout;
     auto* levelsSlider = new GuardedSlider(Qt::Horizontal);
-    levelsSlider->setRange(1, 10);
+    levelsSlider->setRange(1, 15);
     levelsSlider->setValue(levels);
     auto* levelsValue = new QLabel(QString::number(levels));
     levelsValue->setFixedWidth(24);

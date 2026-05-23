@@ -885,9 +885,15 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     }
 
     // ── Waterfall frame assembly ─────────────────────────────────────────
-    // Start a new frame if timecode changed
+    // Start a new frame if timecode changed OR if totalBinsInFrame changed.
+    // Without the totalBins check, a spoofed packet that reuses a timecode
+    // with an inflated totalBinsInFrame leaves wfFrame.buf undersized
+    // relative to the bounds calculation below, and the inner write loop
+    // then writes past the buffer's end with attacker-chosen bytes.
+    // See GHSA-7gvg-x594-pprq.
     auto& wfFrame = m_wfFrames[streamId];
-    if (timecode != wfFrame.timecode) {
+    if (timecode != wfFrame.timecode
+        || totalBinsInFrame != wfFrame.totalBins) {
         if (wfFrame.totalBins > 0 && !wfFrame.isComplete())
             PerfTelemetry::instance().recordFrameRestart(PerfTelemetry::FrameKind::Waterfall);
         wfFrame.reset(timecode, totalBinsInFrame, lowFreqMhz, binBwMhz, autoBlack);
@@ -899,6 +905,12 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
     const int binsToRead = qMin(static_cast<int>(tileWidth),
                                 static_cast<int>(totalBinsInFrame) - static_cast<int>(firstBinIndex));
     if (binsToRead <= 0) return;
+
+    // Defense in depth: even with the reset condition above, validate that
+    // the upper write index fits the buffer.  Guards against any future
+    // refactor that breaks the wfFrame.buf.size() <-> wfFrame.totalBins
+    // invariant.  GHSA-7gvg-x594-pprq.
+    if (firstBinIndex + binsToRead > wfFrame.buf.size()) return;
 
     for (int i = 0; i < binsToRead; ++i) {
         const auto raw16 = static_cast<qint16>(qFromBigEndian<quint16>(tilePayload + i * 2));

@@ -25,25 +25,39 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # weekly Monday 06:00 UTC
 
+# Workflow-level least-privilege GITHUB_TOKEN. CodeQL's official guidance
+# (https://github.com/github/codeql-action#permissions) is:
+#   actions: read           — needed by the CodeQL action to inspect this
+#                              workflow's metadata for category info.
+#   contents: read          — needed by actions/checkout to fetch the repo.
+#   security-events: write  — needed by the analyze step to upload SARIF.
+# Previously the block sat at job level and declared only
+# `security-events: write`, which (per GitHub's "specify any → unspecified
+# default to none" rule) dropped contents and actions to none. It worked
+# only because the repo is public; tightening to documented scopes makes
+# the intent explicit and survives a hypothetical visibility change.
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
 jobs:
   analyze:
     runs-on: ubuntu-latest
     container: ghcr.io/ten9876/aethersdr-ci:latest
-    permissions:
-      security-events: write
 
     strategy:
       matrix:
         language: [cpp]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - name: Fix git ownership for container
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v4
+        uses: github/codeql-action/init@7c1e4cf0b20d7c1872b26569c00ba908797a59bf  # v4
         with:
           languages: ${{ matrix.language }}
           config-file: ./.github/codeql/codeql-config.yml
@@ -55,4 +69,4 @@ jobs:
         run: cmake --build build -j$(nproc)
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@7c1e4cf0b20d7c1872b26569c00ba908797a59bf  # v4
