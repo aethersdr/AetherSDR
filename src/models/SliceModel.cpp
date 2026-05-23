@@ -33,7 +33,10 @@ void SliceModel::sendCommand(const QString& cmd)
 
 void SliceModel::setFrequency(double mhz)
 {
-    if (m_locked) return;
+    if (m_locked) {
+        notifyTuneBlockedByLock();
+        return;
+    }
     if (qFuzzyCompare(m_frequency, mhz)) return;
     m_frequency = mhz;
     // autopan=0 prevents the radio from recentering the pan (#292).
@@ -44,7 +47,10 @@ void SliceModel::setFrequency(double mhz)
 
 void SliceModel::tuneAndRecenter(double mhz)
 {
-    if (m_locked) return;
+    if (m_locked) {
+        notifyTuneBlockedByLock();
+        return;
+    }
     if (qFuzzyCompare(m_frequency, mhz)) return;
     m_frequency = mhz;
     // Without autopan=0, the radio recenters the pan on the new frequency.
@@ -93,6 +99,12 @@ void SliceModel::setLocked(bool locked)
     sendCommand(locked ? QString("slice lock %1").arg(m_id)
                        : QString("slice unlock %1").arg(m_id));
     emit lockedChanged(locked);
+}
+
+void SliceModel::notifyTuneBlockedByLock()
+{
+    if (m_locked)
+        emit tuneBlockedByLock();
 }
 
 void SliceModel::setQsk(bool on)

@@ -125,6 +125,7 @@ public:
     void setRxAntenna(const QString& ant);
     void setTxAntenna(const QString& ant);
     void setLocked(bool locked);
+    void notifyTuneBlockedByLock();
     void setQsk(bool on);
     void setNb(bool on);
     void setNr(bool on);
@@ -197,6 +198,7 @@ signals:
     void rxAntennaListChanged(const QStringList& ants);
     void txAntennaListChanged(const QStringList& ants);
     void lockedChanged(bool locked);
+    void tuneBlockedByLock();
     void qskChanged(bool on);
     void nbChanged(bool on);
     void nrChanged(bool on);
