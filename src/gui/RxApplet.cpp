@@ -20,6 +20,7 @@
 #include <QGridLayout>
 #include <QMenu>
 #include <QApplication>
+#include <QGraphicsOpacityEffect>
 #include <QToolButton>
 #include <QButtonGroup>
 #include <QSpinBox>
@@ -1356,6 +1357,11 @@ void RxApplet::setMaxSlices(int maxSlices)
     if (!useInline) {
         m_sliceTabRow->setVisible(true);
     }
+
+    // Re-apply the all-muted dim to the freshly-rebuilt buttons so the
+    // visual stays in sync if the rebuild happens while the user is in
+    // the all-muted state.
+    refreshAllMutedDim();
 }
 
 void RxApplet::clearSliceButtons()
@@ -1600,6 +1606,28 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
             const int active = m_slice ? m_slice->sliceId() : -1;
             updateSliceButtons(m_radioModel->slices(), active);
         });
+        // All-muted dim feedback: hook audioMuteChanged on every owned
+        // slice so the slice-tab row dims when every owned slice is
+        // muted (and brightens the moment any one unmutes).  UniqueConn
+        // protects against double-attaches when setRadioModel is invoked
+        // more than once with the same model.
+        connect(m_radioModel, &RadioModel::sliceAdded, this,
+                [this](SliceModel* slice) {
+            if (!slice) return;
+            connect(slice, &SliceModel::audioMuteChanged, this,
+                    [this](bool) { refreshAllMutedDim(); },
+                    Qt::UniqueConnection);
+            refreshAllMutedDim();
+        });
+        connect(m_radioModel, &RadioModel::sliceRemoved, this,
+                [this](int) { refreshAllMutedDim(); });
+        for (SliceModel* s : m_radioModel->slices()) {
+            if (!s) continue;
+            connect(s, &SliceModel::audioMuteChanged, this,
+                    [this](bool) { refreshAllMutedDim(); },
+                    Qt::UniqueConnection);
+        }
+        refreshAllMutedDim();
     }
     updateAntennaButtons();
 }
@@ -2669,6 +2697,49 @@ void RxApplet::clearLockedFrequencyFeedback()
     m_lockedFrequencyTimer.stop();
     m_showingLockedFrequencyFeedback = false;
     updateFreqLabel();
+}
+
+void RxApplet::refreshAllMutedDim()
+{
+    if (!m_radioModel) {
+        setSliceButtonsDimmed(false);
+        return;
+    }
+    const auto slices = m_radioModel->slices();
+    // RadioModel::slices() returns only owned slices (foreign clients are
+    // pruned on client_handle).  The dim should reflect whether every one
+    // of the user's own slices is muted — empty list means "no slices to
+    // indicate state for", treat as not-all-muted.
+    if (slices.isEmpty()) {
+        setSliceButtonsDimmed(false);
+        return;
+    }
+    bool anyUnmuted = false;
+    for (const SliceModel* s : slices) {
+        if (s && !s->audioMute()) { anyUnmuted = true; break; }
+    }
+    setSliceButtonsDimmed(!anyUnmuted);
+}
+
+void RxApplet::setSliceButtonsDimmed(bool dim)
+{
+    const qreal opacity = dim ? 0.35 : 1.0;
+    auto apply = [opacity](QWidget* w) {
+        if (!w) return;
+        auto* eff = qobject_cast<QGraphicsOpacityEffect*>(w->graphicsEffect());
+        if (!eff) {
+            eff = new QGraphicsOpacityEffect(w);
+            w->setGraphicsEffect(eff);
+        }
+        eff->setOpacity(opacity);
+    };
+    // Dim each slice tab button (works in both inline ≤4 and overflow >4
+    // layouts since the buttons themselves carry the visual identity).
+    for (QToolButton* btn : m_sliceBtns)
+        apply(btn);
+    // Also dim the static badge — shown only when maxSlices <= 1, but
+    // keeps the indicator consistent across all radio configurations.
+    apply(m_sliceBadge);
 }
 
 } // namespace AetherSDR

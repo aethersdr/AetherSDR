@@ -157,6 +157,14 @@ private:
     static QString formatHz(int hz);
     static QString formatStepLabel(int hz);
 
+    // Recomputes the "all owned slices muted" state from RadioModel and
+    // dims the slice-tab buttons accordingly.  Called on any owned-slice
+    // audioMuteChanged + on slice add/remove + after slice-button rebuild.
+    // The dim is the visual ack the user gets after a double-click on
+    // m_muteBtn that toggles every slice.
+    void refreshAllMutedDim();
+    void setSliceButtonsDimmed(bool dim);
+
     SliceModel* m_slice{nullptr};
     TransmitModel* m_txModel{nullptr};
     RadioModel* m_radioModel{nullptr};
