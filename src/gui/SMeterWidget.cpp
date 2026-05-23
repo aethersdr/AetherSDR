@@ -96,9 +96,8 @@ void SMeterWidget::setMicMeters(float micLevel, float compLevel, float micPeak, 
     Q_UNUSED(micLevel);
     Q_UNUSED(compLevel);
     m_micLevel = micPeak;
-    // compPeak is raw dBFS from COMPPEAK. Silence gate at -30.
-    const float comp = (compPeak > -30.0f) ? qBound(-25.0f, compPeak, 0.0f) : 0.0f;
-    m_compLevel = comp;
+    // MeterModel normalizes COMPPEAK to a 0..25 dB compression amount.
+    m_compLevel = qBound(0.0f, compPeak, 25.0f);
 
     updateNeedleTarget();
 
@@ -269,8 +268,8 @@ float SMeterWidget::txValueToFraction(float value) const
         // -40 to +5
         return qBound(0.0f, (value + 40.0f) / 45.0f, 1.0f);
     case TxMode::Compression:
-        // Gain reduction: 0 = none, -25 = heavy compression
-        return qBound(0.0f, (value + 25.0f) / 25.0f, 1.0f);
+        // Compression: 0 = none, 25 = heavy compression
+        return qBound(0.0f, value / 25.0f, 1.0f);
     }
     return 0.0f;
 }
@@ -500,9 +499,9 @@ void SMeterWidget::paintEvent(QPaintEvent*)
         break;
     }
     case TxMode::Compression: {
-        // -25 to 0, ticks at -25, -20, -15, -10, -5, 0.  All default color.
-        for (int db : {-25, -20, -15, -10, -5, 0}) {
-            const float frac = (db + 25.0f) / 25.0f;
+        // Visible face is 0 to -25 dB, while the stored value is 0..25.
+        for (int db : {0, -5, -10, -15, -20, -25}) {
+            const float frac = -db / 25.0f;
             drawInsideTick(frac, QString::number(db), blueColor, whiteColor, true);
         }
         break;
@@ -609,7 +608,7 @@ void SMeterWidget::paintEvent(QPaintEvent*)
         case TxMode::Power:       valText = QString("%1 W").arg(m_txPower, 0, 'f', 0); break;
         case TxMode::SWR:         valText = QString("%1").arg(m_txSwr, 0, 'f', 1); break;
         case TxMode::Level:       valText = QString("%1 dB").arg(m_micLevel, 0, 'f', 0); break;
-        case TxMode::Compression: valText = QString("%1 dB").arg(m_compLevel, 0, 'f', 0); break;
+        case TxMode::Compression: valText = QString("%1 dB").arg(-m_compLevel, 0, 'f', 0); break;
         }
         p.setPen(QColor(0xc8, 0xd8, 0xe8));
         p.drawText(w - vfm.horizontalAdvance(valText) - 6, topY, valText);

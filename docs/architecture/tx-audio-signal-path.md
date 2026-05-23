@@ -118,7 +118,7 @@ PC Mic Audio (Opus via remote_audio_tx) — arrives with client-side
 ┌─────────────────────────────┐
 │  Equalizer (8-band)         │  ◄── "eq txsc" command
 │  AFTEREQ (meter 27)         │  ◄── "Signal strength after the EQ"
-│  src=TX-, fps=20            │      Compression reference tap
+│  src=TX-, fps=20            │      Post-EQ diagnostic tap
 └─────────┬───────────────────┘
           │
           ▼
@@ -126,7 +126,7 @@ PC Mic Audio (Opus via remote_audio_tx) — arrives with client-side
 │  Speech Processor           │  ◄── "transmit set speech_processor_enable/level"
 │  (Compander + Clipper)      │
 │  COMPPEAK (meter 28)        │  ◄── "Signal strength before CLIPPER (Compression)"
-│  src=TX-, fps=20            │      Paired with AFTEREQ for compression gauge
+│  src=TX-, fps=20            │      Compression gauge input
 └─────────┬───────────────────┘
           │
           ▼
@@ -218,9 +218,9 @@ PC Mic Audio (Opus via remote_audio_tx) — arrives with client-side
 | 11 | TX- | PATEMP | degC | 0 | PA temperature | Status bar |
 | 24 | TX- | CODEC | dBFS | 10 | CODEC output (post mic gain) | — |
 | 25 | TX- | TXAGC | dBFS | 10 | Post AGC/fixed gain | — |
-| 26 | TX- | SC_MIC | dBFS | 10 | MIC output (PC audio entry point) | P/CW mic gauge (PC mic); 6000-series compression reference |
-| 27 | TX- | AFTEREQ | dBFS | 20 | Post equalizer / processor input reference | 8000-series compression derivation |
-| 28 | TX- | COMPPEAK | dBFS | 20 | Processor/clipper-stage level tap | P/CW compression derivation |
+| 26 | TX- | SC_MIC | dBFS | 10 | MIC output (PC audio entry point) | P/CW mic gauge (PC mic); diagnostics |
+| 27 | TX- | AFTEREQ | dBFS | 20 | Post equalizer / processor input tap | Diagnostics |
+| 28 | TX- | COMPPEAK | dB | 20 | Radio-provided compression amount | P/CW compression gauge |
 | 29 | TX- | SC_FILT_1 | dBFS | 20 | Post TX filter 1 | — |
 | 30 | TX- | ALC | dBFS | 10 | Post SW ALC (SSB peak) | P/CW ALC indicator |
 | 31 | TX- | RM_TX_AGC | dBFS | 10 | Post remote TX AGC | — |
@@ -247,21 +247,21 @@ PC Mic Audio (Opus via remote_audio_tx) — arrives with client-side
   active slice. AetherSDR resolves compression meters through the active TX
   slice. FLEX-6600 captures expose distinct TX waveform `sourceIndex` values,
   while FLEX-8000 captures can repeat `TX- num=0` blocks after each `SLC`
-  slice block. In both cases `COMPPEAK` is paired with the matching `AFTEREQ`
-  or `SC_MIC` from the same slice. The code derives the active TX source or
-  implicit slice context first, then looks up the manifest IDs for that slice;
+  slice block. In both cases the active slice selects the matching `COMPPEAK`
+  meter directly. The code derives the active TX source or implicit slice
+  context first, then looks up the manifest ID for that slice;
   it never assumes fixed IDs like `22/23`.
-- **Compression meter input**: AetherSDR derives the compression gauge from
-  radio-provided TX meters only. FLEX-8000 series radios use
-  `max(0, COMPPEAK - AFTEREQ)`. 6000-series radios that do not expose `AFTEREQ`
-  use `max(0, COMPPEAK - SC_MIC)`. `COMPPEAK` is a dBFS level tap, not a
-  ready-to-display gain-reduction meter. If the required pair is missing or not
-  fresh enough, `MeterModel` marks the compression value unavailable and emits
-  `0 dB` to preserve the existing gauge presentation; it does not fall back to
-  local PC mic level or a raw `COMPPEAK` display.
+- **Compression meter input**: AetherSDR uses the radio-provided active-slice
+  `COMPPEAK` meter directly across model families. `MeterModel` clamps it to
+  `0..25 dB` as a radio-provided compression amount; the Phone/CW and TX
+  S-meter gauge faces display that amount as `0..-25 dB`. If active-slice
+  `COMPPEAK` is missing or has not produced data, `MeterModel` marks the
+  compression value unavailable and emits `0 dB` to preserve the existing gauge
+  presentation; it does not fall back to local PC mic level, `AFTEREQ`,
+  `SC_MIC`, or `CODEC`.
 - **P/CW level display**: The Phone/CW level meter UI and smoothing are
-  unchanged by the compression derivation. `AFTEREQ` and `SC_MIC` are used only
-  as compression reference taps.
+  unchanged by direct `COMPPEAK` compression handling. `AFTEREQ` and `SC_MIC`
+  remain TX audio-path context, not compression inputs.
 - **Unit conversion**: dBm meters (FWDPWR) need watts = 10^(dBm/10)/1000.
   SWR is raw. degC/degF use raw/64.0f. Volts/Amps use raw/1024.0f.
 

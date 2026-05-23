@@ -834,10 +834,10 @@ void PhoneCwApplet::applyLevelMeterReceiveGate()
 
 void PhoneCwApplet::updateCompression(float compPeak)
 {
-    // compPeak is the MeterModel-derived compression display dB.
-    // Silence/no compression -> 0. Reduction -> clamp to the -25..0 gauge range.
-    float gauge = (compPeak > -30.0f) ? qBound(-25.0f, compPeak, 0.0f) : 0.0f;
-    m_compGauge->setValue(gauge);
+    // MeterModel exposes COMPPEAK as a positive 0..25 dB compression amount.
+    // The P/CW gauge face is reversed: 0 = none, -25 = full.
+    const float compressionDb = qBound(0.0f, compPeak, 25.0f);
+    m_compGauge->setValue(-compressionDb);
 }
 
 void PhoneCwApplet::updateAlc(float alc)

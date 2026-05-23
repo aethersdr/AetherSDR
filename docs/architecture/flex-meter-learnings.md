@@ -1,8 +1,8 @@
 # FlexRadio Meter Learnings
 
 This document captures the working conclusions from AetherSDR compression
-meter debugging across FLEX-8000 series radios and a FLEX-6600. It is meant to
-record capture-backed behavior, not API guesses.
+meter debugging across FLEX-6000 and FLEX-8000 family radios. It records the
+behavior we are matching, and the parts we intentionally are not deriving.
 
 Related implementation context lives in [`tx-audio-signal-path.md`](tx-audio-signal-path.md).
 
@@ -10,20 +10,19 @@ Related implementation context lives in [`tx-audio-signal-path.md`](tx-audio-sig
 
 - Match meters by `source` and `name`, not by numeric ID. Flex meter IDs are
   assigned per session and differ by platform.
+- Use the active-slice TX `COMPPEAK` meter directly for compression across
+  model families. Do not derive compression from `AFTEREQ`, `SC_MIC`, `CODEC`,
+  local PC mic audio, or any other fallback source.
 - Compression TX-chain meters are repeated per active slice on multi-slice
-  radios. Track `COMPPEAK`, `AFTEREQ`, and `SC_MIC` by active slice. Some
-  radios expose distinct TX waveform `sourceIndex` values, while 8000-series
-  captures can repeat `TX- num=0` blocks after each `SLC` slice block.
-- Do not synthesize compression when required radio meters are unavailable. A
-  missing compression input should make the compression meter unavailable, not
-  approximate a value from local mic audio.
-- This work preserves the existing Phone/CW gauge presentation. Availability is
-  tracked in `MeterModel`; the UI still receives `0 dB` when no valid
-  compression pair is available, rather than adding new N/A rendering.
-- `COMPPEAK` is a dBFS signal-level tap near the speech processor/clipper. It
-  is not, by itself, the SmartSDR compression display value.
-- The AetherSDR P/CW compression gauge is reversed: `0 dB` means no visible
-  compression and `-25 dB` means full-scale/heavy compression.
+  radios. AetherSDR resolves `COMPPEAK` by active TX slice before accepting a
+  sample.
+- `MeterModel` stores compression as a positive radio-provided amount:
+  `0 dB` means none, `25 dB` means full-scale/heavy compression.
+- The Phone/CW compression gauge and the TX S-meter compression face are
+  visually reversed: they display the stored `0..25 dB` amount as `0..-25 dB`.
+- Compression visibility is a UI/radio-state decision, not a meter derivation.
+  The P/CW compression gauge is fed with `0 dB` unless the radio is
+  transmitting and the speech processor is enabled.
 - `met_in_rx=1` means the radio is allowed to publish TX-chain/mic metering
   during receive. It does not mean RF is keyed, and neither do `slice tx=1` or
   TX stream `tx=1`; those identify the selected TX slice or stream direction.
@@ -32,86 +31,53 @@ Related implementation context lives in [`tx-audio-signal-path.md`](tx-audio-sig
   `TRANSMITTING` (`RadioModel::isRadioTransmitting()`), not by slice `tx=1`,
   `met_in_rx`, stream presence, or local optimistic MOX intent.
 
-## Compression Formulas
+## Direct COMPPEAK Model
 
-### FLEX-8000 Series
-
-The 8000-series model validated against SmartSDR uses `AFTEREQ` and
-`COMPPEAK`:
-
-```text
-compression_lift_db = max(0, COMPPEAK - AFTEREQ)
-display_db = -clamp(compression_lift_db, 0, 25)
-```
-
-`AFTEREQ` is the processor input reference after the TX equalizer. `COMPPEAK`
-is the processor/clipper-stage tap. Both meters advertise `20 fps`, so the two
-inputs are naturally well matched for a derived compression display.
-
-If either meter is missing, AetherSDR should not show a derived compression
-value.
-
-### FLEX-6600 / 6000-Series Evidence
-
-The captured FLEX-6600 manifest does not expose `AFTEREQ`. The relevant TX
-meters observed were:
-
-- `CODEC` as TX meter `21`
-- `SC_MIC` as TX meter `22`
-- `COMPPEAK` as TX meter `23`
-
-The strongest candidate formula is:
+AetherSDR treats the active-slice `COMPPEAK` sample as the compression value
+supplied by the radio. Adjacent TX audio meters are still valuable for
+diagnostics, but they are not compression inputs.
 
 ```text
-compression_lift_db = max(0, COMPPEAK - SC_MIC)
-display_db = -clamp(compression_lift_db, 0, 25)
+compression_db = clamp(COMPPEAK, 0, 25)
+pcw_gauge_db = -compression_db
 ```
 
-Why this is the current model:
+Earlier derivation attempts paired `COMPPEAK` with adjacent TX audio meters and
+then mapped the result into the reversed `0..-25 dB` gauge range. That masked
+strong rows where `COMPPEAK` moved positive, because a positive sample was
+effectively displayed as no compression. The current model keeps the radio
+sample positive in `MeterModel` and reverses only at the visible gauge.
 
-- Raw `COMPPEAK` does not behave like the SmartSDR compression display. In
-  strong RF-output rows it often goes positive and would clamp to `0 dB`, just
-  when compression should be visible.
-- The opposite direction, `SC_MIC - COMPPEAK`, was effectively dead in the
-  user captures and stayed at `0 dB`.
-- `CODEC` is a plausible alternate reference, but in the 6600 captures it was
-  consistently about 3 dB lower than `SC_MIC`, which would make
-  `COMPPEAK - CODEC` read slightly heavier. `SC_MIC` is the better named
-  pre-processor mic-chain reference.
-
-The remaining engineering caution is timing. On the 6600, `SC_MIC` advertises
-`10 fps` while `COMPPEAK` advertises `20 fps`. AetherSDR guards the derived
-6600 compression value by requiring the reference sample and `COMPPEAK` sample
-to be close in time before marking the compression meter available.
+If no active-slice `COMPPEAK` meter exists, or if the active `COMPPEAK` meter
+has not produced data, `MeterModel` marks compression unavailable and keeps the
+value at `0 dB`. It does not synthesize a value from local audio activity.
 
 ## Multi-Slice Meter Resolution
 
-FLEX radios can repeat the TX waveform meter block once per active slice. In a
-captured FLEX-6600 four-slice manifest, `SC_MIC` / `COMPPEAK` appeared as
-`22/23`, `44/45`, `66/67`, and `88/89`. Those numeric IDs are not stable API
+FLEX radios can expose one TX waveform meter block per active slice. In a
+captured FLEX-6600 four-slice manifest, `COMPPEAK` appeared in repeated TX
+blocks such as `23`, `45`, `67`, and `89`. Those numeric IDs are not stable API
 contracts; they are manifest slots for that session.
 
-AetherSDR stores compression meter IDs by explicit TX waveform `sourceIndex`
-when the manifest provides one. In 8000-series captures where repeated TX
+AetherSDR stores `COMPPEAK` meter IDs by explicit TX waveform `sourceIndex`
+when the manifest provides one. In 8000-style captures where repeated TX
 blocks all report `num=0`, AetherSDR keys those block-local meters to the most
-recent `SLC` slice context from the manifest. The formula remains
-family-specific by available meter name: use active-slice `AFTEREQ` when
-present, otherwise active-slice `SC_MIC`, paired with active-slice `COMPPEAK`.
+recent `SLC` slice context from the manifest. Runtime updates then resolve the
+active TX slice to the correct manifest meter ID.
 
 The implementation intentionally derives a slice/source key and then looks up
-the manifest IDs for that key. It does not calculate the final meter IDs
-directly.
+the manifest ID for that key. It does not calculate final meter IDs directly.
 
-| Radio family / manifest shape | Slice/source resolution | Reference meter | Compression meter | Gauge formula |
+| Radio family / manifest shape | Slice/source resolution | Compression meter | Model value | UI gauge value |
 |---|---|---|---|---|
-| FLEX-6600 / 6000-style explicit TX source | `txBase = min(TX sourceIndex >= 8) - min(SLC sourceIndex)`, then `activeTxSource = txBase + activeTxSlice` | `SC_MIC` at `activeTxSource` | `COMPPEAK` at `activeTxSource` | `-clamp(max(0, COMPPEAK - SC_MIC), 0, 25)` |
-| FLEX-8000-style explicit TX source | Same explicit TX-source lookup when the manifest provides per-slice TX source indices | `AFTEREQ` at `activeTxSource` | `COMPPEAK` at `activeTxSource` | `-clamp(max(0, COMPPEAK - AFTEREQ), 0, 25)` |
-| FLEX-8000-style repeated `TX- num=0` blocks | Use the most recent `SLC` source index as manifest context, then resolve by `activeTxSlice` at runtime | `AFTEREQ` mapped to `activeTxSlice` | `COMPPEAK` mapped to `activeTxSlice` | `-clamp(max(0, COMPPEAK - AFTEREQ), 0, 25)` |
+| FLEX-6000-style explicit TX source | `txBase = min(TX sourceIndex >= 8) - min(SLC sourceIndex)`, then `activeTxSource = txBase + activeTxSlice` | `COMPPEAK` at `activeTxSource` | `clamp(COMPPEAK, 0, 25)` | `-modelValue` |
+| FLEX-8000-style explicit TX source | Same explicit TX-source lookup when the manifest provides per-slice TX source indices | `COMPPEAK` at `activeTxSource` | `clamp(COMPPEAK, 0, 25)` | `-modelValue` |
+| FLEX-8000-style repeated `TX- num=0` blocks | Use the most recent `SLC` source index as manifest context, then resolve by `activeTxSlice` at runtime | `COMPPEAK` mapped to `activeTxSlice` | `clamp(COMPPEAK, 0, 25)` | `-modelValue` |
 
-Issue #2040 describes the 6600 failure mode this avoids: the old scalar
-indexes were last-match-wins, so a multi-slice 6600 session could bind to the
-highest-numbered slice's `SC_MIC` / `COMPPEAK` pair while the VITA meter stream
-was publishing values for a different active TX slice.
+Issue #2040 describes the 6600 failure mode this avoids: the old scalar meter
+index approach was last-match-wins, so a multi-slice session could bind to the
+highest-numbered slice's compression meter while the VITA meter stream was
+publishing values for a different active TX slice.
 
 ## ALC vs. HWALC and RX Gating
 
@@ -149,12 +115,14 @@ Do not use these as an ALC display gate:
 ## Diagnostic Logging
 
 Enable `Meters` in Help > Support to capture compression diagnostics. The log
-emits a `compression meter map` row for each discovered `COMPPEAK`, `AFTEREQ`,
-or `SC_MIC` meter, then throttles live `compression summary` rows to twice per
-second unless the state changes. The summary includes active TX slice,
-waveform `sourceIndex`, selected reference meter, reference and `COMPPEAK`
-values, sample skew, computed lift, displayed gauge value, and availability
-reason.
+emits a `compression meter map` row for each discovered `COMPPEAK` meter, then
+throttles live `compression summary` rows to twice per second unless the state
+changes. The summary includes active TX slice, resolved TX waveform
+`sourceIndex`, whether the implicit slice map was used, `COMPPEAK` meter ID,
+the raw converted `COMPPEAK` sample, displayed model value, and availability.
+
+`AFTEREQ` and `SC_MIC` are no longer logged as compression map participants
+because they do not drive the compression display.
 
 ## Meter FPS Comparison
 
@@ -170,9 +138,9 @@ reason.
 | `PATEMP` | 0 | 0 | PA temperature |
 | `CODEC` | 10 | 10 | TX codec/mic-chain level |
 | `TXAGC` | 10 | Not seen | Present in 8000 captures |
-| `SC_MIC` | 10 | 10 | TX mic-chain tap; 6600 compression reference when `AFTEREQ` is absent |
-| `AFTEREQ` | 20 | Not present | 8000 compression reference |
-| `COMPPEAK` | 20 | 20 | Processor/clipper-stage tap |
+| `SC_MIC` | 10 | 10 | TX mic-chain tap; diagnostic/level-path context, not a compression fallback |
+| `AFTEREQ` | 20 | Not present | Post-EQ tap; diagnostic context, not a compression input |
+| `COMPPEAK` | 20 | 20 | Radio-provided compression value used by AetherSDR |
 | `SC_FILT_1` | 20 | 10 | Post TX filter 1 |
 | `ALC` | 10 | 10 | SW ALC / SSB peak. Observed FPS varies by manifest; match by source/name and keep the UI gated on actual radio TX. |
 | `RM_TX_AGC` | 10 | Not seen | Present in 8000 captures |
@@ -187,15 +155,13 @@ reason.
 
 ## P/CW Level Meter
 
-The P/CW level meter is intentionally separate from the compression derivation.
-The FPS-testing experiment that drove voice/CW level strictly from `SC_MIC` was
+The P/CW level meter is intentionally separate from compression. The
+FPS-testing experiment that drove voice/CW level strictly from `SC_MIC` was
 backed out. Current behavior keeps the existing UI path: hardware mic meters
-for hardware inputs, and client-side PC metering for PC audio. The Phone/CW
-level gauge and `HGauge`/`MeterSmoother` dampening are not changed by the
-compression work.
+for hardware inputs, and client-side PC metering for PC audio.
 
-`SC_MIC` is used as a 6000-series compression reference only when `AFTEREQ` is
-not present. It is not used as a strict replacement for the P/CW level meter.
+Changing compression to direct `COMPPEAK` does not alter the Phone/CW level
+gauge, `HGauge`, `SMeterWidget`, or `MeterSmoother` level dampening behavior.
 
 ### Level Meter During Receive
 
@@ -228,8 +194,3 @@ compression gauge.
 The current implementation does not add special UI behavior for two-tone tune;
 this note records why future work should be careful not to derive compression
 from local mic activity during radio-generated test tones.
-
-## Open Questions
-
-- Confirm the 6600 scale against SmartSDR with a capture that includes the
-  visible SmartSDR Comp reading at the same time as `SC_MIC` and `COMPPEAK`.

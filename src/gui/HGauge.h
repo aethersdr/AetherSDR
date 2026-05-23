@@ -10,6 +10,7 @@
 #include <QVector>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -86,7 +87,19 @@ public:
         update();
     }
 
-    void setReversed(bool rev) { m_reversed = rev; update(); }
+    void setReversed(bool rev) {
+        if (m_reversed == rev) return;
+        m_reversed = rev;
+
+        // In reversed gauges, visible fill increases as the normalized target
+        // decreases. Swap the current time constants so custom ballistics are
+        // preserved while increasing fill still uses attack and falling fill
+        // still uses release.
+        MeterSmoother::Ballistics ballistics = m_smooth.ballistics();
+        std::swap(ballistics.attackSeconds, ballistics.releaseSeconds);
+        m_smooth.setBallistics(ballistics);
+        update();
+    }
     // Anchor the fill bar to the right edge instead of the left.  Unlike
     // setReversed (which also inverts the value mapping for compression-
     // style gauges), this just mirrors the fill direction — min still
