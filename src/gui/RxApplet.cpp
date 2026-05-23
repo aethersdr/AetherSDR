@@ -157,8 +157,6 @@ static const QString kAmberActive =
     "QPushButton:checked { background-color: #604000; color: #ffb800; "
     "border: 1px solid #906000; }";
 
-static constexpr int kLockedFrequencyFeedbackMs = 500;
-
 static bool likelyTxAntennaFallbackToken(const QString& token)
 {
     const QString upper = token.toUpper();
@@ -270,9 +268,6 @@ RxApplet::RxApplet(QWidget* parent) : QWidget(parent)
     m_sqlManualLevel = std::clamp(
         AppSettings::instance().value("LastManualSquelchLevel", "20").toInt(),
         0, 100);
-    m_lockedFrequencyTimer.setSingleShot(true);
-    connect(&m_lockedFrequencyTimer, &QTimer::timeout,
-            this, &RxApplet::clearLockedFrequencyFeedback);
     buildUI();
 }
 
@@ -1571,10 +1566,10 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
 
 void RxApplet::setSlice(SliceModel* slice)
 {
-    clearLockedFrequencyFeedback();
     if (m_slice) disconnectSlice(m_slice);
     m_slice = slice;
     if (m_slice) connectSlice(m_slice);
+    updateFreqLabel();
 }
 
 void RxApplet::setAntennaList(const QStringList& ants)
@@ -1745,8 +1740,6 @@ void RxApplet::connectSlice(SliceModel* s)
             m_freqEdit->setText(QString::number(s->frequency(), 'f', 6));
             m_freqStack->setCurrentIndex(0);
             m_freqEdit->clearFocus();
-        } else if (!locked) {
-            clearLockedFrequencyFeedback();
         }
     });
 
@@ -1849,8 +1842,18 @@ void RxApplet::connectSlice(SliceModel* s)
     connect(s, &SliceModel::frequencyChanged, this, [this](double) {
         updateFreqLabel();
     });
-    connect(s, &SliceModel::tuneBlockedByLock,
-            this, &RxApplet::showLockedFrequencyFeedback);
+    // Blocked tune: cancel any in-flight direct-entry (widget-local side
+    // effect), then let lockedFeedbackActiveChanged drive the LOCKED repaint
+    // (single source of truth in SliceModel — see #2983).
+    connect(s, &SliceModel::tuneBlockedByLock, this, [this] {
+        if (m_freqStack && m_freqStack->currentIndex() == 1) {
+            m_freqEdit->setText(QString::number(m_slice->frequency(), 'f', 6));
+            m_freqStack->setCurrentIndex(0);
+            m_freqEdit->clearFocus();
+        }
+    });
+    connect(s, &SliceModel::lockedFeedbackActiveChanged,
+            this, [this](bool) { updateFreqLabel(); });
 
     // ── Filter ─────────────────────────────────────────────────────────────
     updateFilterButtons();
@@ -2660,7 +2663,7 @@ void RxApplet::updateFreqLabel()
     if (!m_slice)
         return;
 
-    if (m_showingLockedFrequencyFeedback) {
+    if (m_slice->isLockedFeedbackActive()) {
         m_freqLabel->setText(QStringLiteral("LOCKED"));
         return;
     }
@@ -2673,32 +2676,6 @@ void RxApplet::updateFreqLabel()
         .arg(mhzPart)
         .arg(khzPart, 3, 10, QChar('0'))
         .arg(hzPart, 3, 10, QChar('0')));
-}
-
-void RxApplet::showLockedFrequencyFeedback()
-{
-    if (!m_slice || !m_slice->isLocked())
-        return;
-
-    if (m_freqStack && m_freqStack->currentIndex() == 1) {
-        m_freqEdit->setText(QString::number(m_slice->frequency(), 'f', 6));
-        m_freqStack->setCurrentIndex(0);
-        m_freqEdit->clearFocus();
-    }
-
-    m_showingLockedFrequencyFeedback = true;
-    updateFreqLabel();
-    m_lockedFrequencyTimer.start(kLockedFrequencyFeedbackMs);
-}
-
-void RxApplet::clearLockedFrequencyFeedback()
-{
-    if (!m_showingLockedFrequencyFeedback)
-        return;
-
-    m_lockedFrequencyTimer.stop();
-    m_showingLockedFrequencyFeedback = false;
-    updateFreqLabel();
 }
 
 void RxApplet::refreshAllMutedDim()

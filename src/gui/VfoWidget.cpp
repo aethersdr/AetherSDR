@@ -203,8 +203,6 @@ static const QString kSliderStyle =
 static const QString kLabelStyle =
     "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }";
 
-static constexpr int kLockedFrequencyFeedbackMs = 500;
-
 static bool likelyTxAntennaFallbackToken(const QString& token)
 {
     const QString upper = token.toUpper();
@@ -233,9 +231,6 @@ VfoWidget::VfoWidget(QWidget* parent)
     m_signalMeterAnimation.setTimerType(Qt::PreciseTimer);
     m_signalMeterAnimation.setInterval(kSignalMeterAnimationIntervalMs);
     connect(&m_signalMeterAnimation, &QTimer::timeout, this, &VfoWidget::animateSignalMeter);
-    m_lockedFrequencyTimer.setSingleShot(true);
-    connect(&m_lockedFrequencyTimer, &QTimer::timeout,
-            this, &VfoWidget::clearLockedFrequencyFeedback);
 
     buildUI();
 
@@ -2507,11 +2502,13 @@ void VfoWidget::setSlice(SliceModel* slice)
 {
     qDebug() << "VfoWidget::setSlice:" << (slice ? slice->sliceId() : -1)
              << "old:" << (m_slice ? m_slice->sliceId() : -1);
-    clearLockedFrequencyFeedback();
     if (m_slice)
         m_slice->disconnect(this);
     m_slice = slice;
-    if (!m_slice) return;
+    if (!m_slice) {
+        updateFreqLabel();
+        return;
+    }
 
     // Load per-slice display prefs now that we know the slice ID, then push
     // them out so the SpectrumWidget's overlay picks up the saved style. This
@@ -2521,8 +2518,14 @@ void VfoWidget::setSlice(SliceModel* slice)
 
     // Frequency
     connect(m_slice, &SliceModel::frequencyChanged, this, [this](double) { updateFreqLabel(); });
-    connect(m_slice, &SliceModel::tuneBlockedByLock,
-            this, &VfoWidget::showLockedFrequencyFeedback);
+    // Blocked tune: cancel any in-flight direct-entry (widget-local side
+    // effect), then let lockedFeedbackActiveChanged drive the LOCKED repaint.
+    connect(m_slice, &SliceModel::tuneBlockedByLock, this, [this] {
+        if (m_freqStack && m_freqStack->currentIndex() == 1)
+            cancelDirectEntry();
+    });
+    connect(m_slice, &SliceModel::lockedFeedbackActiveChanged,
+            this, [this](bool) { updateFreqLabel(); });
 
     // Per-client letter — refresh the slice badge when index_letter arrives
     // or changes (Multi-Flex sessions, see #2606).
@@ -2884,9 +2887,8 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_lockVfoBtn->setText(locked ? "\xF0\x9F\x94\x92" : "\xF0\x9F\x94\x93");
         if (locked) {
             cancelDirectEntry();
-        } else {
-            clearLockedFrequencyFeedback();
         }
+        // Unlock clears the LOCKED overlay centrally in SliceModel (#2983).
     });
 
     // Restore collapsed state from AppSettings
@@ -3189,7 +3191,7 @@ void VfoWidget::syncFromSlice()
 void VfoWidget::updateFreqLabel()
 {
     if (!m_slice) return;
-    if (m_showingLockedFrequencyFeedback) {
+    if (m_slice->isLockedFeedbackActive()) {
         m_freqLabel->setText(QStringLiteral("LOCKED"));
         if (m_collapsed && m_collapsedFreqLabel) {
             m_collapsedFreqLabel->setText(QStringLiteral("LOCKED"));
@@ -3213,29 +3215,6 @@ void VfoWidget::updateFreqLabel()
         m_collapsedFreqLabel->setText(freqText);
         m_collapsedFreqLabel->adjustSize();
     }
-}
-
-void VfoWidget::showLockedFrequencyFeedback()
-{
-    if (!m_slice || !m_slice->isLocked())
-        return;
-
-    if (m_freqStack && m_freqStack->currentIndex() == 1)
-        cancelDirectEntry();
-
-    m_showingLockedFrequencyFeedback = true;
-    updateFreqLabel();
-    m_lockedFrequencyTimer.start(kLockedFrequencyFeedbackMs);
-}
-
-void VfoWidget::clearLockedFrequencyFeedback()
-{
-    if (!m_showingLockedFrequencyFeedback)
-        return;
-
-    m_lockedFrequencyTimer.stop();
-    m_showingLockedFrequencyFeedback = false;
-    updateFreqLabel();
 }
 
 void VfoWidget::updateFilterLabel()

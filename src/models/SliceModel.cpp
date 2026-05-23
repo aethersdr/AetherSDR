@@ -20,7 +20,19 @@ QStringList splitAntennaList(const QString& value)
 
 SliceModel::SliceModel(int id, QObject* parent)
     : QObject(parent), m_id(id)
-{}
+{
+    m_lockedFeedbackTimer.setSingleShot(true);
+    m_lockedFeedbackTimer.setInterval(kLockedFeedbackMs);
+    connect(&m_lockedFeedbackTimer, &QTimer::timeout,
+            this, [this] { setLockedFeedbackActive(false); });
+}
+
+void SliceModel::setLockedFeedbackActive(bool on)
+{
+    if (m_lockedFeedbackActive == on) return;
+    m_lockedFeedbackActive = on;
+    emit lockedFeedbackActiveChanged(on);
+}
 
 // ─── Setters ──────────────────────────────────────────────────────────────────
 
@@ -98,13 +110,21 @@ void SliceModel::setLocked(bool locked)
     // FlexAPI: "slice lock <id>" / "slice unlock <id>"
     sendCommand(locked ? QString("slice lock %1").arg(m_id)
                        : QString("slice unlock %1").arg(m_id));
+    if (!locked) {
+        m_lockedFeedbackTimer.stop();
+        setLockedFeedbackActive(false);
+    }
     emit lockedChanged(locked);
 }
 
 void SliceModel::notifyTuneBlockedByLock()
 {
-    if (m_locked)
-        emit tuneBlockedByLock();
+    if (!m_locked) return;
+    emit tuneBlockedByLock();
+    // Sustained 500ms gate so every consumer (VFO, RX applet, future
+    // status-bar / spectrum / hardware LED) repaints from one source.
+    setLockedFeedbackActive(true);
+    m_lockedFeedbackTimer.start();
 }
 
 void SliceModel::setQsk(bool on)
@@ -698,6 +718,10 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
     // Status key is "lock" (not "locked") per FlexAPI
     if (kvs.contains("lock")) {
         m_locked = kvs["lock"] == "1";
+        if (!m_locked) {
+            m_lockedFeedbackTimer.stop();
+            setLockedFeedbackActive(false);
+        }
         emit lockedChanged(m_locked);
     }
     if (kvs.contains("qsk")) {

@@ -145,8 +145,6 @@ private:
     void updateTxBadgeStyle(bool isTx);
     void showTab(int index);
     void updateFreqLabel();
-    void showLockedFrequencyFeedback();
-    void clearLockedFrequencyFeedback();
     bool cancelDirectEntry();
     void updateFilterLabel();
     void updateModeTab();
@@ -202,8 +200,6 @@ private:
     QLabel* m_freqLabel{nullptr};
     QLineEdit* m_freqEdit{nullptr};
     QStackedWidget* m_freqStack{nullptr};
-    QTimer m_lockedFrequencyTimer;
-    bool m_showingLockedFrequencyFeedback{false};
     QLabel* m_dbmLabel{nullptr};
     QString m_directEntrySource{"vfo-direct-entry"};
 

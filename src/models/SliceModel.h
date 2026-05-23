@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QMap>
+#include <QTimer>
 
 namespace AetherSDR {
 
@@ -126,6 +127,15 @@ public:
     void setTxAntenna(const QString& ant);
     void setLocked(bool locked);
     void notifyTuneBlockedByLock();
+
+    // Centralized 500ms "LOCKED" visual-feedback gate (see #2983).
+    // Widgets that render a sustained LOCKED overlay connect to
+    // lockedFeedbackActiveChanged() and read isLockedFeedbackActive() in
+    // their repaint paths. Widgets that only need a one-shot reaction to a
+    // blocked tune attempt (e.g. cancel direct-entry, status-bar message)
+    // continue to use tuneBlockedByLock().
+    bool isLockedFeedbackActive() const { return m_lockedFeedbackActive; }
+    static constexpr int kLockedFeedbackMs = 500;
     void setQsk(bool on);
     void setNb(bool on);
     void setNr(bool on);
@@ -199,6 +209,7 @@ signals:
     void txAntennaListChanged(const QStringList& ants);
     void lockedChanged(bool locked);
     void tuneBlockedByLock();
+    void lockedFeedbackActiveChanged(bool active);
     void qskChanged(bool on);
     void nbChanged(bool on);
     void nrChanged(bool on);
@@ -337,6 +348,13 @@ private:
     bool    m_recordOn{false};
     bool    m_playOn{false};
     bool    m_playEnabled{false};
+
+    // Centralized LOCKED feedback gate — single source of truth for
+    // widgets rendering the "LOCKED" overlay after a blocked tune (#2983).
+    QTimer  m_lockedFeedbackTimer;
+    bool    m_lockedFeedbackActive{false};
+
+    void setLockedFeedbackActive(bool on);
 
     void sendCommand(const QString& cmd);
 

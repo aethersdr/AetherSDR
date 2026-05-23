@@ -140,8 +140,6 @@ private:
     void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
     void updateAntennaButtons();
     void updateFreqLabel();
-    void showLockedFrequencyFeedback();
-    void clearLockedFrequencyFeedback();
     QStringList txAntennaOptions() const;
     QString antennaMenuLabel(const QString& token, const QStringList& options) const;
 
@@ -203,8 +201,6 @@ private:
     QLabel*      m_freqLabel{nullptr};     // frequency readout e.g. "14.289.510"
     QLineEdit*   m_freqEdit{nullptr};
     QStackedWidget* m_freqStack{nullptr};
-    QTimer       m_lockedFrequencyTimer;
-    bool         m_showingLockedFrequencyFeedback{false};
 
     // Filter presets (Hz widths) — per-mode, swapped on mode change
     QVector<int>            m_filterWidths{1800, 2100, 2400, 2700, 3300, 6000};
