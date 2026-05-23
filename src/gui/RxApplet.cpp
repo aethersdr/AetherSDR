@@ -1287,8 +1287,9 @@ void RxApplet::setMaxSlices(int maxSlices)
         // no-op if already here; otherwise it reparents from m_headerRow.
         layout->addWidget(m_muteAllBtn);
         targetLayout = layout;
-        // Button is now the last item; insert slice buttons before it.
-        insertIdx = layout->count() - 1;
+        // Insert slice buttons before the stretch so receiver letters stay
+        // left-aligned and the mute-all speaker stays right-aligned.
+        insertIdx = 0;
         m_sliceTabRow->setVisible(true);
         m_muteAllBtn->show();
     }
