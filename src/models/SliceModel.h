@@ -125,6 +125,7 @@ public:
     void setRxAntenna(const QString& ant);
     void setTxAntenna(const QString& ant);
     void setLocked(bool locked);
+    void notifyTuneBlockedByLock();
     void setQsk(bool on);
     void setNb(bool on);
     void setNr(bool on);
@@ -197,6 +198,7 @@ signals:
     void rxAntennaListChanged(const QStringList& ants);
     void txAntennaListChanged(const QStringList& ants);
     void lockedChanged(bool locked);
+    void tuneBlockedByLock();
     void qskChanged(bool on);
     void nbChanged(bool on);
     void nrChanged(bool on);
@@ -312,6 +314,13 @@ private:
     int     m_rttyMark{2125};
     int     m_rttyMarkDefault{2125};
     bool    m_rttyMarkUserOverride{false};
+    // Flex firmware's `profile global` snapshot does not persist
+    // speex_nr_level — on recall the radio reports the firmware default of
+    // 50, even when the user set a different value before saving. Cache the
+    // user's explicit choice so applyStatus() can re-push it when the radio
+    // comes back at 50 with no user-initiated change to that value.
+    int     m_nrsLevelUser{50};
+    bool    m_nrsLevelUserOverride{false};
     int     m_rttyShift{170};
     int     m_diglOffset{2210};
     int     m_diguOffset{1500};

@@ -233,6 +233,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
 {
     m_pendingNotification.clear();
     m_pendingMasterVolume = -1;
+    m_pendingTxGain = -1;
 
     if (cmd.isEmpty()) return {};
 
@@ -326,6 +327,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     // AetherSDR extensions (not in TCI v2.0 spec)
     if (name == "rx_record")        return cmdRxRecord(args, isSet);
     if (name == "rx_play")          return cmdRxPlay(args, isSet);
+    if (name == "tx_gain")          return cmdTxGain(args, isSet);
 
     // Unknown command — ignore silently per TCI spec
     return {};
@@ -421,14 +423,15 @@ QString TciProtocol::cmdTrx(const QStringList& args, bool isSet)
 
     if (args.size() < 2) return {};
     bool tx = (args[1].toLower() == "true");
-    QMetaObject::invokeMethod(m_model, [this, tx, trx]() {
+    // Capture m_model by value, never `this`: this queued lambda can outlive
+    // the TciProtocol, which TciServer deletes synchronously when the client
+    // disconnects (#2814 use-after-free). Resolve the slice up front too.
+    auto* txSlice = tx ? sliceForTrx(trx) : nullptr;
+    QMetaObject::invokeMethod(m_model, [model = m_model, tx, txSlice]() {
         // Assign TX to this TRX's slice before keying
-        if (tx) {
-            auto* s = sliceForTrx(trx);
-            if (s && !s->isTxSlice())
-                s->setTxSlice(true);
-        }
-        m_model->setTransmit(tx, TransmitModel::PttSource::Dax);
+        if (tx && txSlice && !txSlice->isTxSlice())
+            txSlice->setTxSlice(true);
+        model->setTransmit(tx, TransmitModel::PttSource::Dax);
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("trx:%1,%2;")
@@ -476,11 +479,11 @@ QString TciProtocol::cmdTune(const QStringList& args, bool isSet)
 
     if (args.size() < 2) return {};
     bool tune = (args[1].toLower() == "true");
-    QMetaObject::invokeMethod(m_model, [this, tune]() {
+    QMetaObject::invokeMethod(m_model, [model = m_model, tune]() {
         if (tune)
-            m_model->transmitModel().startTune(TransmitModel::PttSource::Dax);
+            model->transmitModel().startTune(TransmitModel::PttSource::Dax);
         else
-            m_model->transmitModel().stopTune();
+            model->transmitModel().stopTune();
     }, Qt::QueuedConnection);
 
     return {};
@@ -504,8 +507,8 @@ QString TciProtocol::cmdDrive(const QStringList& args, bool /*isSet*/)
     bool ok;
     int pwr = args[args.size() == 1 ? 0 : 1].toInt(&ok);
     if (!ok) return {};
-    QMetaObject::invokeMethod(m_model, [this, pwr]() {
-        m_model->transmitModel().setRfPower(pwr);
+    QMetaObject::invokeMethod(m_model, [model = m_model, pwr]() {
+        model->transmitModel().setRfPower(pwr);
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("drive:%1;").arg(pwr);
@@ -523,11 +526,33 @@ QString TciProtocol::cmdTuneDrive(const QStringList& args, bool /*isSet*/)
     bool ok;
     int pwr = args[args.size() == 1 ? 0 : 1].toInt(&ok);
     if (!ok) return {};
-    QMetaObject::invokeMethod(m_model, [this, pwr]() {
-        m_model->transmitModel().setTunePower(pwr);
+    QMetaObject::invokeMethod(m_model, [model = m_model, pwr]() {
+        model->transmitModel().setTunePower(pwr);
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("tune_drive:%1;").arg(pwr);
+    return {};
+}
+
+// ── TX_GAIN: get/set TCI TX audio gain (AetherSDR extension) ────────────────
+
+// tx_gain is an AetherSDR extension — not in the TCI v2.0 spec. It controls
+// TciServer's outbound TX gain (m_txGain), applied to WSJT-X/JTDX audio before
+// the radio. Global command, 0-100 (percent of unity), matching the
+// drive/tune_drive convention. Like cmdVolume, TciProtocol cannot reach
+// TciServer directly, so a SET stashes the value in m_pendingTxGain and
+// TciServer applies it via setTxGain() after handleCommand() returns.
+QString TciProtocol::cmdTxGain(const QStringList& args, bool /*isSet*/)
+{
+    if (args.isEmpty()) {
+        // GET — current TCI TX gain (0-100). TciServer persists the 0.0-1.0
+        // value to TciTxGain whenever it changes.
+        float g = AppSettings::instance().value("TciTxGain", "1.00").toFloat();
+        return QStringLiteral("tx_gain:%1;").arg(qBound(0, qRound(g * 100.0f), 100));
+    }
+    int pct = qBound(0, args[args.size() == 1 ? 0 : 1].toInt(), 100);
+    m_pendingTxGain = pct;
+    m_pendingNotification = QStringLiteral("tx_gain:%1;").arg(pct);
     return {};
 }
 
@@ -692,8 +717,8 @@ QString TciProtocol::cmdCwMacrosSpeed(const QStringList& args, bool isSet)
     int wpm = args[0].toInt();
     if (wpm < 5 || wpm > 100) return {};
     QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [this, cmd]() {
-        m_model->sendCmdPublic(cmd, nullptr);
+    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+        model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("cw_macros_speed:%1;").arg(wpm);
@@ -707,8 +732,8 @@ QString TciProtocol::cmdCwMsg(const QStringList& args)
     QString text = args.join(',');  // rejoin in case text had commas
     if (text.isEmpty()) return {};
     QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [this, cmd]() {
-        m_model->sendCmdPublic(cmd, nullptr);
+    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+        model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1060,9 +1085,9 @@ QString TciProtocol::cmdSpot(const QStringList& args)
     if (!comment.isEmpty()) kvs["comment"] = comment;
     kvs["lifetime_seconds"] = "1800";
 
-    QMetaObject::invokeMethod(m_model, [this, kvs]() {
+    QMetaObject::invokeMethod(m_model, [model = m_model, kvs]() {
         static int idx = 10000;
-        m_model->spotModel().applySpotStatus(idx++, kvs);
+        model->spotModel().applySpotStatus(idx++, kvs);
     }, Qt::QueuedConnection);
 
     return {};
@@ -1077,8 +1102,8 @@ QString TciProtocol::cmdSpotDelete(const QStringList& args)
     if (!ok) return {};
     double freqMhz = freqHz / 1e6;
 
-    QMetaObject::invokeMethod(m_model, [this, callsign, freqMhz]() {
-        auto& sm = m_model->spotModel();
+    QMetaObject::invokeMethod(m_model, [model = m_model, callsign, freqMhz]() {
+        auto& sm = model->spotModel();
         for (auto it = sm.spots().begin(); it != sm.spots().end(); ++it) {
             if (it->callsign == callsign &&
                 std::abs(it->rxFreqMhz - freqMhz) < 0.0001) {
@@ -1094,8 +1119,8 @@ QString TciProtocol::cmdSpotDelete(const QStringList& args)
 QString TciProtocol::cmdSpotClear()
 {
     if (!m_model) return {};
-    QMetaObject::invokeMethod(m_model, [this]() {
-        m_model->spotModel().clear();
+    QMetaObject::invokeMethod(m_model, [model = m_model]() {
+        model->spotModel().clear();
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1108,8 +1133,8 @@ QString TciProtocol::cmdCwMacros(const QStringList& args)
     QString text = args.join(',');
     if (text.isEmpty()) return {};
     QString cmd = QStringLiteral("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [this, cmd]() {
-        m_model->sendCmdPublic(cmd, nullptr);
+    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+        model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1117,8 +1142,8 @@ QString TciProtocol::cmdCwMacros(const QStringList& args)
 QString TciProtocol::cmdCwMacrosStop()
 {
     if (!m_model) return {};
-    QMetaObject::invokeMethod(m_model, [this]() {
-        m_model->sendCmdPublic("cwx clear", nullptr);
+    QMetaObject::invokeMethod(m_model, [model = m_model]() {
+        model->sendCmdPublic("cwx clear", nullptr);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1130,8 +1155,8 @@ QString TciProtocol::cmdIqStart(const QStringList& args)
     if (!m_model || args.isEmpty()) return {};
     int channel = args[0].toInt() + 1;  // TRX 0 → DAX IQ channel 1
     if (channel < 1 || channel > 4) return {};
-    QMetaObject::invokeMethod(m_model, [this, channel]() {
-        m_model->daxIqModel().createStream(channel);
+    QMetaObject::invokeMethod(m_model, [model = m_model, channel]() {
+        model->daxIqModel().createStream(channel);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1141,8 +1166,8 @@ QString TciProtocol::cmdIqStop(const QStringList& args)
     if (!m_model || args.isEmpty()) return {};
     int channel = args[0].toInt() + 1;
     if (channel < 1 || channel > 4) return {};
-    QMetaObject::invokeMethod(m_model, [this, channel]() {
-        m_model->daxIqModel().removeStream(channel);
+    QMetaObject::invokeMethod(m_model, [model = m_model, channel]() {
+        model->daxIqModel().removeStream(channel);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1162,8 +1187,8 @@ QString TciProtocol::cmdIqSampleRate(const QStringList& args, bool isSet)
     if (rate != 24000 && rate != 48000 && rate != 96000 && rate != 192000)
         return {};
     if (m_model) {
-        QMetaObject::invokeMethod(m_model, [this, rate]() {
-            m_model->daxIqModel().setSampleRate(1, rate);
+        QMetaObject::invokeMethod(m_model, [model = m_model, rate]() {
+            model->daxIqModel().setSampleRate(1, rate);
         }, Qt::QueuedConnection);
     }
     m_pendingNotification = QStringLiteral("iq_samplerate:%1;").arg(rate);
@@ -1178,8 +1203,8 @@ QString TciProtocol::cmdKeyer(const QStringList& args)
     // state: true=key down, false=key up
     if (!m_model || args.size() < 2) return {};
     bool down = (args[1].toLower() == "true");
-    QMetaObject::invokeMethod(m_model, [this, down]() {
-        m_model->sendCwKey(down);
+    QMetaObject::invokeMethod(m_model, [model = m_model, down]() {
+        model->sendCwKey(down);
     }, Qt::QueuedConnection);
     return {};
 }
@@ -1194,8 +1219,8 @@ QString TciProtocol::cmdCwKeyerSpeed(const QStringList& args, bool isSet)
     int wpm = args[0].toInt();
     if (wpm < 5 || wpm > 100) return {};
     QString cmd = QStringLiteral("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [this, cmd]() {
-        m_model->sendCmdPublic(cmd, nullptr);
+    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+        model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("cw_keyer_speed:%1;").arg(wpm);
     return {};
@@ -1211,8 +1236,8 @@ QString TciProtocol::cmdCwMacrosDelay(const QStringList& args, bool isSet)
     delay = args[0].toInt();
     if (m_model) {
         QString cmd = QStringLiteral("cw delay %1").arg(delay);
-        QMetaObject::invokeMethod(m_model, [this, cmd]() {
-            m_model->sendCmdPublic(cmd, nullptr);
+        QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+            model->sendCmdPublic(cmd, nullptr);
         }, Qt::QueuedConnection);
     }
     m_pendingNotification = QStringLiteral("cw_macros_delay:%1;").arg(delay);
@@ -1361,8 +1386,8 @@ QString TciProtocol::cmdMonEnable(const QStringList& args, bool isSet)
     }
     if (args.isEmpty()) return {};
     bool on = (args[0].toLower() == "true");
-    QMetaObject::invokeMethod(m_model, [this, on]() {
-        m_model->transmitModel().setSbMonitor(on);
+    QMetaObject::invokeMethod(m_model, [model = m_model, on]() {
+        model->transmitModel().setSbMonitor(on);
     }, Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("mon_enable:%1;")
                                 .arg(on ? "true" : "false");
@@ -1378,8 +1403,8 @@ QString TciProtocol::cmdMonVolume(const QStringList& args, bool isSet)
     }
     if (args.isEmpty()) return {};
     int vol = args[0].toInt();
-    QMetaObject::invokeMethod(m_model, [this, vol]() {
-        m_model->transmitModel().setMonGainSb(vol);
+    QMetaObject::invokeMethod(m_model, [model = m_model, vol]() {
+        model->transmitModel().setMonGainSb(vol);
     }, Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("mon_volume:%1;").arg(vol);
     return {};

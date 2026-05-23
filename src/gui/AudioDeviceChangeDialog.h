@@ -6,6 +6,7 @@
 #include <QList>
 
 class QListWidget;
+class QCheckBox;
 class QVBoxLayout;
 class QWidget;
 
@@ -23,6 +24,7 @@ public:
 
     QAudioDevice selectedInputDevice() const;
     QAudioDevice selectedOutputDevice() const;
+    bool dontAskAgainChecked() const;
     void setFramelessMode(bool on);
 
 private:
@@ -33,6 +35,7 @@ private:
     QVBoxLayout* m_bodyLayout{nullptr};
     QListWidget* m_inputList{nullptr};
     QListWidget* m_outputList{nullptr};
+    QCheckBox* m_dontAskAgainCheck{nullptr};
     QList<QAudioDevice> m_inputDevices;
     QList<QAudioDevice> m_outputDevices;
 };

@@ -251,5 +251,5 @@ Listing them so they don't bite the next contributor.
 ## See also
 
 - `CLAUDE.md` — project-wide AI agent guidelines including settings persistence
-- `docs/architecture-pipelines.md` — broader project architecture overview
+- [`../architecture/pipelines.md`](../architecture/pipelines.md) — broader project architecture overview
 - Issue #2605 — `PersistentDialog` base class proposal that will eliminate this boilerplate

@@ -249,6 +249,11 @@ void EqApplet::buildUI()
             auto* slider = new GuardedSlider(Qt::Vertical);
             slider->setRange(-10, 10);
             slider->setValue(0);
+            slider->setDragValueFormatter([](int v) {
+                return QStringLiteral("%1%2 dB")
+                    .arg(v > 0 ? QStringLiteral("+") : QString())
+                    .arg(v);
+            });
             slider->setTickPosition(QSlider::NoTicks);
             slider->setStyleSheet(kVSliderStyle);
             slider->setFixedHeight(100);

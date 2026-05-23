@@ -117,6 +117,34 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
             emit wideChanged(m_wideActive);
         }
     }
+    if (kvs.contains("loopa") || kvs.contains("loopb")) {
+        bool changed = false;
+        if (kvs.contains("loopa")) {
+            const bool loopA = kvs["loopa"].toInt() != 0;
+            if (loopA != m_loopA) {
+                m_loopA = loopA;
+                changed = true;
+            }
+            if (loopA && m_loopB) {
+                m_loopB = false;
+                changed = true;
+            }
+        }
+        if (kvs.contains("loopb")) {
+            const bool loopB = kvs["loopb"].toInt() != 0;
+            if (loopB != m_loopB) {
+                m_loopB = loopB;
+                changed = true;
+            }
+            if (loopB && m_loopA) {
+                m_loopA = false;
+                changed = true;
+            }
+        }
+        if (changed) {
+            emit loopChanged(m_loopA, m_loopB);
+        }
+    }
     if (kvs.contains("fps")) {
         bool ok = false;
         const int fps = kvs["fps"].toInt(&ok);

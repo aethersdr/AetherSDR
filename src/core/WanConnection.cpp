@@ -12,6 +12,14 @@ namespace AetherSDR {
 
 static constexpr int HEARTBEAT_INTERVAL_MS = 10000; // 10s ping (same as FlexLib)
 
+// Cap the line-assembly buffer.  A buggy or hostile SmartLink peer that
+// dribbles bytes without ever sending '\n' would otherwise grow m_readBuffer
+// unbounded until QByteArray refuses to allocate (process OOM).  CAT lines
+// are tens of bytes; 16 MiB is wildly larger than any legitimate radio
+// command or status burst.  Same pattern as RadioConnection (issue #2955)
+// and GHSA-7w4w-wfqm-wh93 (M2, RigctlServer).
+static constexpr int kMaxReadBuffer = 16 * 1024 * 1024;
+
 namespace {
 
 // TOFU cert-pin cache.  Stored as a JSON object in AppSettings under the
@@ -134,6 +142,7 @@ quint32 WanConnection::sendCommand(const QString& command, ResponseCallback call
         qCDebug(lcSmartLink) << "WAN TX:" << data.trimmed();
     }
     m_socket.write(data);
+    m_socket.flush();  // push SSL plaintext buffer to OS TCP buffer immediately (#rade-shutdown)
     return seq;
 }
 
@@ -206,6 +215,16 @@ void WanConnection::onSocketError(QAbstractSocket::SocketError /*error*/)
 void WanConnection::onReadyRead()
 {
     m_readBuffer.append(m_socket.readAll());
+    if (m_readBuffer.size() > kMaxReadBuffer) {
+        qCWarning(lcSmartLink) << "WanConnection: read buffer exceeded"
+                               << kMaxReadBuffer << "bytes without newline — disconnecting";
+        m_socket.disconnectFromHost();
+        // disconnectFromHost() is async on TLS sockets; clear the buffer so a
+        // stale onReadyRead() before the disconnect completes can't trip the
+        // cap again.
+        m_readBuffer.clear();
+        return;
+    }
 
     int newlinePos;
     while ((newlinePos = m_readBuffer.indexOf('\n')) >= 0) {

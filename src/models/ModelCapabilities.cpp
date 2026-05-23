@@ -9,32 +9,32 @@ struct Entry {
     ModelCapabilities caps;
 };
 
-// Mirrors FlexLib/ModelInfo.cs Has4Meters / Has2Meters columns.  Keep
-// this table in sync with FlexLib when Flex ships a new model — the
-// tests/model_capabilities_test harness will fail loudly if a flag
-// drifts away from the upstream source.
+// Mirrors FlexLib/ModelInfo.cs Has4Meters / Has2Meters / HasLoopA /
+// HasLoopB columns.  Keep this table in sync with FlexLib when Flex
+// ships a new model — the tests/model_capabilities_test harness will
+// fail loudly if a flag drifts away from the upstream source.
 //
 // Ordering matters: capabilitiesFor() returns the first substring
 // match, so longer/suffix variants (FLEX-6400M, FLEX-6700R) must come
 // before their base model (FLEX-6400, FLEX-6700) so that an exact
 // "FLEX-6700R" status string doesn't match "FLEX-6700" first.
 constexpr Entry kTable[] = {
-    {"FLEX-6300",  {false, false}},
-    {"FLEX-6400M", {false, false}},
-    {"FLEX-6400",  {false, false}},
-    {"FLEX-6500",  {true,  false}},  // Region 1 4m mod
-    {"FLEX-6600M", {false, false}},
-    {"FLEX-6600",  {false, false}},
-    {"FLEX-6700R", {false, false}},  // Receive-only, per FlexLib
-    {"FLEX-6700",  {true,  true }},  // Both built-in
-    {"FLEX-8400M", {false, false}},
-    {"FLEX-8400",  {false, false}},
-    {"FLEX-8600M", {false, false}},
-    {"FLEX-8600",  {false, false}},
-    {"AU-520",     {false, false}},
-    {"ML-380",     {false, false}},
-    {"CL-200",     {false, false}},
-    {"RT-100",     {false, false}},
+    {"FLEX-6300",  {false, false, false, false}},
+    {"FLEX-6400M", {false, false, false, false}},
+    {"FLEX-6400",  {false, false, false, false}},
+    {"FLEX-6500",  {true,  false, true,  false}},  // Region 1 4m mod, LoopA only
+    {"FLEX-6600M", {false, false, false, false}},
+    {"FLEX-6600",  {false, false, false, false}},
+    {"FLEX-6700R", {false, false, false, false}},  // Receive-only, per FlexLib
+    {"FLEX-6700",  {true,  true,  true,  true }},  // Both built-in, LoopA + LoopB
+    {"FLEX-8400M", {false, false, false, false}},
+    {"FLEX-8400",  {false, false, false, false}},
+    {"FLEX-8600M", {false, false, false, false}},
+    {"FLEX-8600",  {false, false, false, false}},
+    {"AU-520",     {false, false, false, false}},
+    {"ML-380",     {false, false, false, false}},
+    {"CL-200",     {false, false, false, false}},
+    {"RT-100",     {false, false, false, false}},
 };
 
 } // namespace
