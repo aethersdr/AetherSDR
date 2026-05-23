@@ -3704,8 +3704,11 @@ MainWindow::MainWindow(QWidget* parent)
                 m_midiTuneIdleTimer.stop();
                 return;
             }
-            int stepHz = s->stepHz();
-            if (stepHz <= 0) return;  // radio hasn't sent step yet
+            // Prefer spectrum widget's step (updates immediately on UI change,
+            // consistent with keyboard and HID encoder tuning paths).
+            int stepHz = (spectrum() && spectrum()->stepSize() > 0)
+                         ? spectrum()->stepSize() : s->stepHz();
+            if (stepHz <= 0) return;
             // Keep an in-flight target while the wheel is moving.  Radio
             // RF_frequency echoes can lag behind command sends; using the echo
             // as the next base makes rapid MIDI tuning jump backward/forward.

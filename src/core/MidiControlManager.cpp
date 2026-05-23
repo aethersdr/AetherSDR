@@ -376,10 +376,15 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2,
 
     // ── Relative knob mode: decode delta and accumulate ────────────────
     if (binding.relative && msgType == MidiBinding::CC) {
-        // Relative CC encoding (two's complement style):
-        // 1-63 = clockwise (1=slow, 63=fast)
-        // 65-127 = counter-clockwise (127=-1, 126=-2)
-        int delta = relativeCcDelta(data2);
+        int delta;
+        if (isVfoTuneKnobParamId(binding.paramId) && (data2 == 0 || data2 == 127)) {
+            // Binary/Thetis convention for VFO: 127 = CW (+1), 0 = CCW (-1).
+            // relativeCcDelta would give 0 and -1 respectively — wrong for this style.
+            delta = (data2 == 127) ? 1 : -1;
+        } else {
+            // Standard two's complement: 1-63 = CW, 65-127 = CCW (127=-1, 126=-2)
+            delta = relativeCcDelta(data2);
+        }
         if (binding.inverted) delta = -delta;
 
         accumulateRelativeStep(binding.paramId, delta);
@@ -388,15 +393,30 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2,
         return;
     }
 
-    // Existing VFO tune bindings learned before relative mode could treat
-    // common endless-encoder pulses (1 / 127) as absolute endpoints, turning a
-    // single detent into roughly +/-63 tuning steps.  Decode those unit pulses
-    // as relative even if the saved binding did not mark the control relative.
+    // Backward-compat for VFO tune bindings not explicitly marked relative.
+    //
+    // Tier 1 — unit-step pulses (binary/Thetis convention and two's-complement unit CW):
+    //   0   → CCW -1  (binary mode: 0 = CCW)
+    //   1   → CW  +1  (two's-complement unit CW, kept for legacy encoders)
+    //   127 → CW  +1  (binary/Thetis convention: 127 = CW)
     if (!binding.relative
         && isVfoTuneKnobParamId(binding.paramId)
         && msgType == MidiBinding::CC
-        && isUnitRelativeCcPulse(data2)) {
-        int delta = relativeCcDelta(data2);
+        && (data2 == 0 || data2 == 1 || data2 == 127)) {
+        int delta = (data2 == 0) ? -1 : 1;
+        if (binding.inverted) delta = -delta;
+        accumulateRelativeStep(binding.paramId, delta);
+        emit paramValueChanged(binding.paramId, delta > 0 ? 1.0f : 0.0f);
+        return;
+    }
+
+    // Tier 2 — center-64 encoding (MidiController Continuous, Behringer, Arturia):
+    //   value - 64 = signed step count.  64 = neutral; 0/1/127 consumed by Tier 1.
+    if (!binding.relative
+        && isVfoTuneKnobParamId(binding.paramId)
+        && msgType == MidiBinding::CC
+        && data2 != 64) {
+        int delta = data2 - 64;
         if (binding.inverted) delta = -delta;
         accumulateRelativeStep(binding.paramId, delta);
         emit paramValueChanged(binding.paramId, delta > 0 ? 1.0f : 0.0f);
