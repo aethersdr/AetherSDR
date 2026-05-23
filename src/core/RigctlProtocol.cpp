@@ -679,9 +679,12 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
         m_pendingMorseLine = true;
         return {};
     }
-    QString cmd = QString("cwx send \"%1\"").arg(text);
-    QMetaObject::invokeMethod(m_model, [this, cmd]() {
-        m_model->sendCmdPublic(cmd, nullptr);
+    // Route through CwxModel so the local sidetone keyer (driven by
+    // CwxModel::transmissionRequested) fires alongside the radio command.
+    // Going through sendCmdPublic directly would silently bypass the
+    // sidetone path used by the MIDI key and CWX panel. (#2909)
+    QMetaObject::invokeMethod(m_model, [this, text]() {
+        m_model->cwxModel().send(text);
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -689,8 +692,10 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
 QString RigctlProtocol::cmdStopMorse()
 {
     if (!m_model) return rprt(-1);
+    // CwxModel::clearBuffer emits transmissionCancelled, which cuts any
+    // in-flight local sidetone in addition to sending "cwx clear". (#2909)
     QMetaObject::invokeMethod(m_model, [this]() {
-        m_model->sendCmdPublic("cwx clear", nullptr);
+        m_model->cwxModel().clearBuffer();
     }, Qt::QueuedConnection);
     return rprt(0);
 }

@@ -23,42 +23,52 @@ std::unique_ptr<HidDeviceParser> HidDeviceParser::create(uint16_t vid, uint16_t 
 }
 
 // ── Icom RC-28 ──────────────────────────────────────────────────────────────
-// 64-byte HID reports. Byte 0 = encoder position (0-255 wrapping).
-// Byte 1 = button bits (bit 0 = encoder push, bit 1 = secondary).
+// 32-byte reports. hidapi prepends the 1-byte report ID on Windows/Linux so
+// hid_read(buf, 33) returns 33; on macOS it strips the ID and returns 32.
+// We request 33 bytes (reportSize) and use len to tell the two apart — no
+// value-based heuristic that could collide with data bytes.
+// Data layout (0-indexed, after stripping report ID where present):
+//   [0] seq counter: 0x01 = first report of knob step, 0x02 = second
+//   [1] unused (0x00)
+//   [2] direction: 0x01 = CW (+1), 0x02 = CCW (-1), 0x00 = no rotation
+//   [3] unused (0x00)
+//   [4] button state enum: 0x07 = idle, 0x05 = F1, 0x03 = F2, 0x06 = TX bar
+// Each knob detent fires two reports (seq 0x01 then 0x02); we emit only on
+// seq 0x01 to produce exactly one tuning step per detent.
 
 HidEvent IcomRC28Parser::parse(const uint8_t* buf, size_t len)
 {
-    if (len < 2) return {};
+    if (len < 5) return {};
 
-    uint8_t enc = buf[0];
-    uint8_t btns = buf[1];
+    // Windows/Linux: hidapi includes the report ID → hid_read returns 33 bytes.
+    // macOS: hidapi strips the report ID → hid_read returns 32 bytes.
+    const uint8_t* data = (len >= 33) ? buf + 1 : buf;
 
-    // Check buttons first (priority over encoder)
-    if (btns != m_prevButtons) {
-        for (int b = 0; b < 2; ++b) {
-            uint8_t mask = 1 << b;
-            if ((btns & mask) != (m_prevButtons & mask)) {
-                m_prevButtons = btns;
-                return {HidEvent::Button, 0, b + 1, (btns & mask) ? 0 : 1};
-            }
+    const uint8_t seq  = data[0];
+    const uint8_t dir  = data[2];
+    const uint8_t btns = data[4];
+
+    // Button events use absolute state, not bitmask.
+    // RC-28 has 3 buttons: F1 (1), F2 (2), TX bar (3).
+    if (btns != m_prevButtonState) {
+        const uint8_t prev = m_prevButtonState;
+        m_prevButtonState  = btns;
+        if (btns == 0x07) {
+            // Release — identify which button was just released.
+            if (prev == 0x05) return {HidEvent::Button, 0, 1, 1};  // F1
+            if (prev == 0x03) return {HidEvent::Button, 0, 2, 1};  // F2
+            if (prev == 0x06) return {HidEvent::Button, 0, 3, 1};  // TX bar
+        } else {
+            if (btns == 0x05) return {HidEvent::Button, 0, 1, 0};  // F1
+            if (btns == 0x03) return {HidEvent::Button, 0, 2, 0};  // F2
+            if (btns == 0x06) return {HidEvent::Button, 0, 3, 0};  // TX bar
         }
-        m_prevButtons = btns;
     }
 
-    // Encoder rotation
-    if (m_firstReport) {
-        m_firstReport = false;
-        m_prevEncoder = enc;
-        return {};
-    }
-
-    if (enc != m_prevEncoder) {
-        int delta = static_cast<int>(enc) - static_cast<int>(m_prevEncoder);
-        // Handle wrap-around (0→255 = -1, 255→0 = +1)
-        if (delta > 128) delta -= 256;
-        if (delta < -128) delta += 256;
-        m_prevEncoder = enc;
-        return {HidEvent::Rotate, delta, 0, 0};
+    // Rotation: only emit on first report of each pair (seq == 0x01) to
+    // produce exactly one step per detent (the device sends two reports per click).
+    if (seq == 0x01 && dir != 0x00) {
+        return {HidEvent::Rotate, (dir == 0x01) ? 1 : -1, 0, 0};
     }
 
     return {};

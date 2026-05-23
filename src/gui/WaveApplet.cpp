@@ -168,7 +168,9 @@ WaveApplet::WaveApplet(QWidget* parent)
     m_waveform->setZoomWindowMs(snappedMs);
     updateWindowLabel();
 
-    setSettingsExpanded(true);
+    const bool drawerExpanded =
+        settings.value("WaveApplet_DrawerExpanded", "True").toString() == "True";
+    setSettingsExpanded(drawerExpanded);
     setMinimumHeight(minimumSizeHint().height());
 
     connect(m_waveform, &WaveformWidget::settingsDrawerToggleRequested,
@@ -340,6 +342,9 @@ void WaveApplet::setSettingsExpanded(bool expanded)
         return;
 
     m_settingsDrawer->setVisible(expanded);
+    auto& settings = AppSettings::instance();
+    settings.setValue("WaveApplet_DrawerExpanded", expanded ? "True" : "False");
+    settings.save();
     setMinimumHeight(minimumSizeHint().height());
     updateGeometry();
     adjustSize();

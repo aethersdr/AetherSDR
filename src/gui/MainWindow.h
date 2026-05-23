@@ -159,6 +159,12 @@ private:
         RevealOffscreen,
     };
 
+    enum class BandStackPreselectResult {
+        NotNeeded,
+        Selected,
+        Unsupported,
+    };
+
     struct TuneCenteringResult {
         double oldCenterMhz{0.0};
         double newCenterMhz{0.0};
@@ -190,6 +196,8 @@ private:
     SliceModel* activeSlice() const;
     static const char* tuneIntentName(TuneIntent intent);
     bool panFollowEnabled() const;
+    BandStackPreselectResult preselectBandStackForTune(SliceModel* slice, double mhz,
+                                                       const char* source);
     void applyTuneRequest(SliceModel* slice, double mhz,
                           TuneIntent intent, const char* source);
     void applyPanRangeRequest(const QString& panId, double centerMhz,
@@ -224,6 +232,7 @@ private:
     void schedulePanFpsReconcile(const QString& panId, int reportedFps);
     void scheduleWaterfallLineDurationReconcile(const QString& panId, int reportedMs);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
+    void onMuteAllSlicesToggle();
     void showPanadapterInterlockNotification(const QString& message);
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();  // wire CW decoder to the pan owning the active slice
@@ -665,6 +674,8 @@ private:
     };
     QHash<QString, PanFpsReconcileState> m_panFpsReconcile;
     QHash<QString, QMetaObject::Connection> m_panFpsReconcileConnections;
+    bool m_adaptiveThrottleActive{false}; // fps/wf reconcile suppressed while true
+    int  m_adaptiveFpsCap{0};             // current cap (> 0 when throttle active); shown in network label
     struct WaterfallLineDurationReconcileState {
         QTimer* timer{nullptr};
         QPointer<SpectrumWidget> spectrum;

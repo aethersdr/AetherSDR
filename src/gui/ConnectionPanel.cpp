@@ -384,9 +384,22 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     loginLayout->setContentsMargins(0, 0, 0, 0);
     loginLayout->setHorizontalSpacing(8);
     loginLayout->setVerticalSpacing(6);
+    // Accessibility + password-manager hints.  macOS Passwords, Windows
+    // Authenticator, and KDE Wallet read the OS accessibility tree to
+    // associate credential fields; the objectName + accessibleName +
+    // accessibleDescription tuple is what they look for.  m_loginForm
+    // is named so the password manager can scope the credential pair
+    // ("SmartLink login form" vs "MQTT login form").
+    m_loginForm->setObjectName(QStringLiteral("smartlinkLoginForm"));
+    m_loginForm->setAccessibleName(tr("SmartLink account login"));
+
     m_emailEdit = new QLineEdit(m_loginForm);
     m_emailEdit->setStyleSheet(editStyle);
     m_emailEdit->setPlaceholderText("flexradio account email");
+    m_emailEdit->setObjectName(QStringLiteral("smartlinkEmail"));
+    m_emailEdit->setAccessibleName(tr("SmartLink account email"));
+    m_emailEdit->setAccessibleDescription(
+        tr("FlexRadio account email address used to sign in to SmartLink"));
     QString storedEmail = AppSettings::instance().value("SmartLinkEmail").toString();
     if (!storedEmail.isEmpty())
         m_emailEdit->setText(QString::fromUtf8(QByteArray::fromBase64(storedEmail.toUtf8())));
@@ -394,6 +407,10 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_passwordEdit->setStyleSheet(editStyle);
     m_passwordEdit->setEchoMode(QLineEdit::Password);
     m_passwordEdit->setPlaceholderText("password");
+    m_passwordEdit->setObjectName(QStringLiteral("smartlinkPassword"));
+    m_passwordEdit->setAccessibleName(tr("SmartLink account password"));
+    m_passwordEdit->setAccessibleDescription(
+        tr("FlexRadio account password used to sign in to SmartLink"));
     loginLayout->addRow("Email:", m_emailEdit);
     loginLayout->addRow("Password:", m_passwordEdit);
     m_loginBtn = new QPushButton("Sign In", m_loginForm);
