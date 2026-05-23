@@ -5,6 +5,7 @@
 class QPushButton;
 class QLabel;
 class QSlider;
+class GuardedSlider;
 class ScrollableLabel;
 
 namespace AetherSDR {
@@ -35,12 +36,12 @@ private:
     TransmitModel* m_model{nullptr};
 
     // AM Carrier
-    QSlider* m_amCarrierSlider{nullptr};
+    GuardedSlider* m_amCarrierSlider{nullptr};
     QLabel*  m_amCarrierLabel{nullptr};
 
     // VOX
     QPushButton* m_voxBtn{nullptr};
-    QSlider*     m_voxLevelSlider{nullptr};
+    GuardedSlider* m_voxLevelSlider{nullptr};
     QLabel*      m_voxLevelLabel{nullptr};
 
     // VOX delay
@@ -49,7 +50,7 @@ private:
 
     // DEXP (non-functional on fw v1.4.0.0 — see GitHub issue)
     QPushButton* m_dexpBtn{nullptr};
-    QSlider*     m_dexpSlider{nullptr};
+    GuardedSlider* m_dexpSlider{nullptr};
     QLabel*      m_dexpLabel{nullptr};
 
     // TX filter

@@ -8,6 +8,7 @@ class QPushButton;
 class QLabel;
 class QSlider;
 class QComboBox;
+class GuardedSlider;
 
 namespace AetherSDR {
 
@@ -85,8 +86,8 @@ private:
     QWidget* m_swrGauge{nullptr};
 
     // Sliders
-    QSlider* m_rfPowerSlider{nullptr};
-    QSlider* m_tunePowerSlider{nullptr};
+    GuardedSlider* m_rfPowerSlider{nullptr};
+    GuardedSlider* m_tunePowerSlider{nullptr};
     QLabel*  m_rfPowerLabel{nullptr};
     QLabel*  m_tunePowerLabel{nullptr};
 

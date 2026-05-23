@@ -134,7 +134,7 @@ void TxApplet::buildUI()
 
         m_rfPowerSlider = new GuardedSlider(Qt::Horizontal);
         m_rfPowerSlider->setRange(0, 100);
-        static_cast<GuardedSlider*>(m_rfPowerSlider)->setDragValueFormatter(wattsText);
+        m_rfPowerSlider->setDragValueFormatter(wattsText);
         m_rfPowerSlider->setStyleSheet(kSliderStyle);
         m_rfPowerSlider->setAccessibleName("RF power");
         m_rfPowerSlider->setAccessibleDescription("Transmit RF power level, 0 to 100 watts");
@@ -159,7 +159,7 @@ void TxApplet::buildUI()
 
         m_tunePowerSlider = new GuardedSlider(Qt::Horizontal);
         m_tunePowerSlider->setRange(0, 100);
-        static_cast<GuardedSlider*>(m_tunePowerSlider)->setDragValueFormatter(wattsText);
+        m_tunePowerSlider->setDragValueFormatter(wattsText);
         m_tunePowerSlider->setStyleSheet(kSliderStyle);
         m_tunePowerSlider->setAccessibleName("Tune power");
         m_tunePowerSlider->setAccessibleDescription("Tune carrier power level, 0 to 100 watts");

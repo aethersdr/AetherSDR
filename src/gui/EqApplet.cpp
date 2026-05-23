@@ -82,6 +82,16 @@ static constexpr const char* kVSliderStyle =
     "QSlider::handle:vertical { height: 10px; width: 16px; margin: 0 -6px;"
     "background: #00b4d8; border-radius: 5px; }";
 
+// Drag-popup formatter for EQ band sliders.  Matches the file-scope
+// free-function shape used by the other applets (wattsText, percentText,
+// panText) so the EQ sliders read consistently with neighbouring code.
+static QString dbWithSignText(int v)
+{
+    return QStringLiteral("%1%2 dB")
+        .arg(v > 0 ? QStringLiteral("+") : QString())
+        .arg(v);
+}
+
 // ── EqApplet ────────────────────────────────────────────────────────────────
 
 EqApplet::EqApplet(QWidget* parent)
@@ -249,11 +259,7 @@ void EqApplet::buildUI()
             auto* slider = new GuardedSlider(Qt::Vertical);
             slider->setRange(-10, 10);
             slider->setValue(0);
-            slider->setDragValueFormatter([](int v) {
-                return QStringLiteral("%1%2 dB")
-                    .arg(v > 0 ? QStringLiteral("+") : QString())
-                    .arg(v);
-            });
+            slider->setDragValueFormatter(dbWithSignText);
             slider->setTickPosition(QSlider::NoTicks);
             slider->setStyleSheet(kVSliderStyle);
             slider->setFixedHeight(100);

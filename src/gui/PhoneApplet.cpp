@@ -120,7 +120,7 @@ void PhoneApplet::buildUI()
 
         m_amCarrierSlider = new GuardedSlider(Qt::Horizontal);
         m_amCarrierSlider->setRange(0, 100);
-        static_cast<GuardedSlider*>(m_amCarrierSlider)->setDragValueFormatter(percentText);
+        m_amCarrierSlider->setDragValueFormatter(percentText);
         m_amCarrierSlider->setAccessibleName("AM carrier level");
         m_amCarrierSlider->setAccessibleDescription("AM carrier power level, 0 to 100 percent");
         m_amCarrierSlider->setStyleSheet(kSliderStyle);
@@ -161,7 +161,7 @@ void PhoneApplet::buildUI()
 
         m_voxLevelSlider = new GuardedSlider(Qt::Horizontal);
         m_voxLevelSlider->setRange(0, 100);
-        static_cast<GuardedSlider*>(m_voxLevelSlider)->setDragValueFormatter(percentText);
+        m_voxLevelSlider->setDragValueFormatter(percentText);
         m_voxLevelSlider->setAccessibleName("VOX level");
         m_voxLevelSlider->setAccessibleDescription("VOX activation threshold");
         m_voxLevelSlider->setStyleSheet(kSliderStyle);
@@ -245,7 +245,7 @@ void PhoneApplet::buildUI()
 
         m_dexpSlider = new GuardedSlider(Qt::Horizontal);
         m_dexpSlider->setRange(0, 100);
-        static_cast<GuardedSlider*>(m_dexpSlider)->setDragValueFormatter(percentText);
+        m_dexpSlider->setDragValueFormatter(percentText);
         m_dexpSlider->setAccessibleName("DEXP threshold");
         m_dexpSlider->setAccessibleDescription("Downward expander gate threshold");
         m_dexpSlider->setStyleSheet(kSliderStyle);
