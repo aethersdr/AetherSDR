@@ -7,15 +7,6 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# Verify What's New data includes the current version.
-# Run scripts/gen_whatsnew.py after updating CHANGELOG.md for a new release.
-file(READ "${CMAKE_SOURCE_DIR}/src/generated/WhatsNewData.cpp" _whatsnew_content)
-if(NOT _whatsnew_content MATCHES "\"${PROJECT_VERSION}\"")
-    message(FATAL_ERROR
-        "WhatsNewData.cpp has no entry for version ${PROJECT_VERSION}. "
-        "Update CHANGELOG.md and run: python3 scripts/gen_whatsnew.py CHANGELOG.md src/generated/WhatsNewData.cpp")
-endif()
-
 # macOS: ensure Homebrew lib/include paths are in the search path
 # (universal builds with CMAKE_OSX_ARCHITECTURES may not search /opt/homebrew by default)
 if(APPLE)
@@ -682,7 +673,6 @@ set(ALL_SOURCES
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
     ${GUI_SOURCES}
-    src/generated/WhatsNewData.cpp
 )
 
 # Bundled RNNoise (Mozilla/Xiph BSD-3) — client-side neural noise suppression
