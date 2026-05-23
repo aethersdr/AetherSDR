@@ -19,6 +19,7 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QMenu>
+#include <QApplication>
 #include <QToolButton>
 #include <QButtonGroup>
 #include <QSpinBox>
@@ -297,18 +298,6 @@ void RxApplet::buildUI()
         m_sliceGroup = new QButtonGroup(this);
         m_sliceGroup->setExclusive(true);
         tabLayout->addStretch();
-
-        m_muteAllBtn = new QPushButton(QString::fromUtf8("\xF0\x9F\x94\x87"));  // 🔇
-        m_muteAllBtn->setToolTip("Mute all slices (click again to unmute all)");
-        m_muteAllBtn->setFixedSize(28, 20);
-        m_muteAllBtn->setStyleSheet(
-            "QPushButton { background: #2a2a2a; border: 1px solid #504040; "
-            "border-radius: 3px; font-size: 12px; padding: 0; }"
-            "QPushButton:hover { background: #3a3030; border-color: #a06060; }"
-            "QPushButton:pressed { background: #6a2020; }");
-        connect(m_muteAllBtn, &QPushButton::clicked,
-                this, &RxApplet::muteAllToggled);
-        tabLayout->addWidget(m_muteAllBtn);
 
         root->addWidget(m_sliceTabRow);
     }
@@ -752,17 +741,31 @@ void RxApplet::buildUI()
         row->setSpacing(4);
 
         m_muteBtn = new QPushButton(QString::fromUtf8("\xF0\x9F\x94\x8A")); // 🔊
-        m_muteBtn->setCheckable(true);
         m_muteBtn->setFixedSize(18, 18);
         m_muteBtn->setStyleSheet(
             "QPushButton { background: transparent; border: none; font-size: 12px; padding: 0px; }"
             "QPushButton:hover { background: #204060; border-radius: 3px; }");
-        connect(m_muteBtn, &QPushButton::toggled, this, [this](bool muted) {
-            m_muteBtn->setText(muted
-                ? QString::fromUtf8("\xF0\x9F\x94\x87")    // 🔇
-                : QString::fromUtf8("\xF0\x9F\x94\x8A"));  // 🔊
-            if (m_slice) m_slice->setAudioMute(muted);
+        // Single click toggles this slice; double click toggles all owned
+        // slices.  Defer the single-click action by the platform double-
+        // click interval so the second click can override it; the visual
+        // 🔊/🔇 update is driven by SliceModel::audioMuteChanged so the
+        // icon flips when the radio acks, not on click.
+        m_muteClickTimer = new QTimer(this);
+        m_muteClickTimer->setSingleShot(true);
+        connect(m_muteClickTimer, &QTimer::timeout, this, [this]() {
+            if (m_slice) m_slice->setAudioMute(!m_slice->audioMute());
         });
+        connect(m_muteBtn, &QPushButton::clicked, this, [this]() {
+            if (m_muteSuppressNextClick) {
+                // Qt fires a second clicked() after MouseButtonDblClick; eat
+                // it so the double-click doesn't end with a stray single-
+                // click action queued behind it.
+                m_muteSuppressNextClick = false;
+                return;
+            }
+            m_muteClickTimer->start(QApplication::doubleClickInterval());
+        });
+        m_muteBtn->installEventFilter(this);
         row->addWidget(m_muteBtn);
 
         m_afSlider = new GuardedSlider(Qt::Horizontal);
@@ -1018,7 +1021,9 @@ void RxApplet::buildUI()
     m_stepDown->setToolTip("Decrease tuning step size.");
     m_stepLabel->setToolTip("Current tuning step size. Scroll to change.");
     m_stepUp->setToolTip("Increase tuning step size.");
-    m_muteBtn->setToolTip("Mutes this slice's audio output.");
+    m_muteBtn->setToolTip(
+        "Click to mute/unmute this slice. Double-click to mute/unmute "
+        "all owned slices.");
     m_afSlider->setToolTip("Audio output volume for this slice.");
     m_sqlBtn->setToolTip("Squelch gate \u2014 silences audio when the signal drops below the threshold.");
     m_sqlSlider->setToolTip("Squelch threshold. Increase to require a stronger signal before audio opens.");
@@ -1281,7 +1286,6 @@ void RxApplet::setMaxSlices(int maxSlices)
 
     if (maxSlices <= 1) {
         m_sliceTabRow->setVisible(false);
-        m_muteAllBtn->hide();
         return;
     }
 
@@ -1294,24 +1298,18 @@ void RxApplet::setMaxSlices(int maxSlices)
     if (useInline) {
         m_sliceBadge->setVisible(false);
         targetLayout = m_headerRow;
-        // Insert at position 0 (where the badge was)
+        // Insert at position 0 (where the badge was).  Hide the now-empty
+        // slice-tab row above so it doesn't reserve a strip of vertical
+        // space — the inline path uses the header row for slice tabs.
         insertIdx = 0;
-        // Move mute-all button to the right end of the header row.
-        // addWidget() reparents it from m_sliceTabRow if needed.
-        m_headerRow->addWidget(m_muteAllBtn);
-        m_muteAllBtn->show();
+        m_sliceTabRow->setVisible(false);
     } else {
         auto* layout = qobject_cast<QHBoxLayout*>(m_sliceTabRow->layout());
-        // Ensure button is in the tab row (may have been reparented to
-        // m_headerRow during a previous inline call). addWidget() is a
-        // no-op if already here; otherwise it reparents from m_headerRow.
-        layout->addWidget(m_muteAllBtn);
         targetLayout = layout;
         // Insert slice buttons before the stretch so receiver letters stay
-        // left-aligned and the mute-all speaker stays right-aligned.
+        // left-aligned across the tab row.
         insertIdx = 0;
         m_sliceTabRow->setVisible(true);
-        m_muteAllBtn->show();
     }
 
     for (int i = 0; i < maxSlices; ++i) {
@@ -1374,7 +1372,6 @@ void RxApplet::clearSliceButtons()
     }
 
     m_sliceTabRow->setVisible(false);
-    m_muteAllBtn->hide();
     m_sliceBadge->setVisible(true);
 }
 
@@ -1882,17 +1879,14 @@ void RxApplet::connectSlice(SliceModel* s)
         }
     });
 
-    // Audio mute
-    {
-        QSignalBlocker b(m_muteBtn);
-        m_muteBtn->setChecked(s->audioMute());
-        m_muteBtn->setText(s->audioMute()
-            ? QString::fromUtf8("\xF0\x9F\x94\x87")
-            : QString::fromUtf8("\xF0\x9F\x94\x8A"));
-    }
+    // Audio mute — icon-only state (button is not checkable; double-click
+    // routes to muteAllToggled via eventFilter).  The icon flips when the
+    // radio acks the mute change via audioMuteChanged so the source of
+    // truth is the slice state, not the click.
+    m_muteBtn->setText(s->audioMute()
+        ? QString::fromUtf8("\xF0\x9F\x94\x87")
+        : QString::fromUtf8("\xF0\x9F\x94\x8A"));
     connect(s, &SliceModel::audioMuteChanged, this, [this](bool muted) {
-        QSignalBlocker b(m_muteBtn);
-        m_muteBtn->setChecked(muted);
         m_muteBtn->setText(muted
             ? QString::fromUtf8("\xF0\x9F\x94\x87")
             : QString::fromUtf8("\xF0\x9F\x94\x8A"));
@@ -2535,6 +2529,16 @@ void RxApplet::applyOffsetDir(const QString& dir)
 
 bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
 {
+    // Mute button double-click → mute/unmute all owned slices.  The single-
+    // click action is deferred via m_muteClickTimer (see m_muteBtn setup);
+    // a real double-click cancels that timer and emits muteAllToggled.
+    if (obj == m_muteBtn && ev->type() == QEvent::MouseButtonDblClick) {
+        if (m_muteClickTimer) m_muteClickTimer->stop();
+        m_muteSuppressNextClick = true;
+        emit muteAllToggled();
+        return true;
+    }
+
     if (obj == m_freqEdit
         && (ev->type() == QEvent::ShortcutOverride
             || ev->type() == QEvent::KeyPress)) {
