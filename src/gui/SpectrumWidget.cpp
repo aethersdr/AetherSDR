@@ -1337,7 +1337,7 @@ void SpectrumWidget::setWfLineDuration(int ms) {
     // Re-calibrate the time scale for the new rate
     resetWfTimeScale();
     // (#2666) Apply the new cadence to FFT-derived rows on the next frame
-    m_lastFftRowMs = 0;
+    resetFftWaterfallAccumulator();
     markOverlayDirty();
 }
 
@@ -2125,6 +2125,15 @@ void SpectrumWidget::setSpectrumFrac(float f)
 
 void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 {
+    if (m_transmitting && txWaterfallAffectsThisPan()) {
+        if (!m_txDbmRangeFrozen)
+            beginTxDbmRangeFreeze();
+        if (m_txDbmRangeFrozen) {
+            deferTxDbmRange(minDbm, maxDbm);
+            return;
+        }
+    }
+
     if (m_pendingDbmRangeEcho) {
         const bool matchesPending = std::abs(minDbm - m_pendingMinDbm) < 0.01f
             && std::abs(maxDbm - m_pendingMaxDbm) < 0.01f;
@@ -2152,6 +2161,11 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
         }
     }
 
+    applyDbmRangeImmediate(minDbm, maxDbm);
+}
+
+void SpectrumWidget::applyDbmRangeImmediate(float minDbm, float maxDbm)
+{
     const float clampedMinDbm = std::max(minDbm, kMinDisplayDbm);
     float ref = maxDbm;
     float dyn = std::max(10.0f, maxDbm - clampedMinDbm);
@@ -2198,6 +2212,229 @@ const SpectrumWidget::SliceOverlay* SpectrumWidget::activeOverlay() const
     for (const auto& o : m_sliceOverlays)
         if (o.isActive) return &o;
     return m_sliceOverlays.isEmpty() ? nullptr : &m_sliceOverlays.first();
+}
+
+const SpectrumWidget::SliceOverlay* SpectrumWidget::txOverlay() const
+{
+    for (const auto& o : m_sliceOverlays)
+        if (o.isTxSlice) return &o;
+    return nullptr;
+}
+
+void SpectrumWidget::resetFftWaterfallAccumulator()
+{
+    m_lastFftRowMs = 0;
+    m_lastFftFrameMs = 0;
+    m_fftRowDebtMs = static_cast<double>(m_wfLineDuration);
+    std::fill(m_fftAccumPower.begin(), m_fftAccumPower.end(), 0.0f);
+    m_fftAccumCount = 0;
+}
+
+void SpectrumWidget::beginTxDbmRangeFreeze()
+{
+    if (!txWaterfallAffectsThisPan()) {
+        resetTxDbmRangeFreeze();
+        return;
+    }
+
+    const float frozenMinDbm = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
+    m_txDbmRangeFrozen = true;
+    m_txFrozenMinDbm = frozenMinDbm;
+    m_txFrozenMaxDbm = m_refLevel;
+    m_txSourceMinDbm = frozenMinDbm;
+    m_txSourceMaxDbm = m_refLevel;
+    m_txDeferredDbmRangeValid = false;
+    m_txDeferredMinDbm = 0.0f;
+    m_txDeferredMaxDbm = 0.0f;
+
+    m_pendingDbmRangeEcho = false;
+    m_pendingDbmRangeEchoFromAutoFloor = false;
+    m_pendingDbmRangeEchoStartMs = 0;
+    clearDbmReleaseRebase();
+}
+
+void SpectrumWidget::endTxDbmRangeFreeze()
+{
+    const bool applyDeferred = m_txDbmRangeFrozen && m_txDeferredDbmRangeValid;
+    const float deferredMinDbm = m_txDeferredMinDbm;
+    const float deferredMaxDbm = m_txDeferredMaxDbm;
+
+    resetTxDbmRangeFreeze();
+
+    if (applyDeferred)
+        applyDbmRangeImmediate(deferredMinDbm, deferredMaxDbm);
+}
+
+void SpectrumWidget::resetTxDbmRangeFreeze()
+{
+    m_txDbmRangeFrozen = false;
+    m_txFrozenMinDbm = 0.0f;
+    m_txFrozenMaxDbm = 0.0f;
+    m_txSourceMinDbm = 0.0f;
+    m_txSourceMaxDbm = 0.0f;
+    m_txDeferredDbmRangeValid = false;
+    m_txDeferredMinDbm = 0.0f;
+    m_txDeferredMaxDbm = 0.0f;
+}
+
+void SpectrumWidget::deferTxDbmRange(float minDbm, float maxDbm)
+{
+    const float clampedMinDbm = std::max(minDbm, kMinDisplayDbm);
+    const float clampedMaxDbm = std::max(maxDbm, clampedMinDbm + 10.0f);
+
+    m_txSourceMinDbm = clampedMinDbm;
+    m_txSourceMaxDbm = clampedMaxDbm;
+    m_txDeferredDbmRangeValid = true;
+    m_txDeferredMinDbm = clampedMinDbm;
+    m_txDeferredMaxDbm = clampedMaxDbm;
+}
+
+void SpectrumWidget::reprojectBinsToFrozenTxDbmRange(QVector<float>& bins) const
+{
+    if (!m_txDbmRangeFrozen || bins.isEmpty())
+        return;
+
+    const float sourceRange = m_txSourceMaxDbm - m_txSourceMinDbm;
+    const float targetRange = m_txFrozenMaxDbm - m_txFrozenMinDbm;
+    if (sourceRange <= 0.0f || targetRange <= 0.0f)
+        return;
+    if (std::abs(m_txSourceMinDbm - m_txFrozenMinDbm) < 0.01f &&
+        std::abs(m_txSourceMaxDbm - m_txFrozenMaxDbm) < 0.01f) {
+        return;
+    }
+
+    for (float& bin : bins) {
+        if (!std::isfinite(bin))
+            continue;
+        const float frac = (m_txSourceMaxDbm - bin) / sourceRange;
+        bin = m_txFrozenMaxDbm - frac * targetRange;
+    }
+}
+
+void SpectrumWidget::setTransmitting(bool tx)
+{
+    if (tx && !m_transmitting) {
+        m_preTxAutoBlack = m_autoBlackThresh;  // save before TX
+        resetFftWaterfallAccumulator();  // (#2666) first TX row scrolls immediately
+        beginTxDbmRangeFreeze();
+    }
+    if (!tx && m_transmitting) {
+        m_autoBlackThresh = m_preTxAutoBlack;  // restore after TX
+        m_hasNativeWaterfall = false;  // force FFT fallback until tiles resume
+        m_wfPrevTimecode   = 0;
+        m_wfPrevTimecodeMs = 0;
+        m_txEndMs = QDateTime::currentMSecsSinceEpoch(); // post-TX blanking (#2117)
+        m_wfBlankerRingCount = 0;                        // reset stale blanker baseline
+        m_wfLastGoodRow.clear();                          // forget any TX-era last-good scanline
+        endTxDbmRangeFreeze();
+    }
+    m_transmitting = tx;
+}
+
+void SpectrumWidget::setTxWaterfallSlice(double freqMhz, int filterLowHz,
+                                         int filterHighHz, bool xitOn,
+                                         int xitFreq)
+{
+    const bool valid = freqMhz > 0.0 && filterHighHz > filterLowHz;
+    const bool changed =
+        m_txWaterfallSliceValid != valid ||
+        m_txWaterfallFreqMhz != freqMhz ||
+        m_txWaterfallFilterLowHz != filterLowHz ||
+        m_txWaterfallFilterHighHz != filterHighHz ||
+        m_txWaterfallXitOn != xitOn ||
+        m_txWaterfallXitFreq != xitFreq;
+
+    m_txWaterfallSliceValid = valid;
+    m_txWaterfallFreqMhz = freqMhz;
+    m_txWaterfallFilterLowHz = filterLowHz;
+    m_txWaterfallFilterHighHz = filterHighHz;
+    m_txWaterfallXitOn = xitOn;
+    m_txWaterfallXitFreq = xitFreq;
+
+    if (changed && m_transmitting) {
+        resetFftWaterfallAccumulator();
+        if (txWaterfallAffectsThisPan()) {
+            if (!m_txDbmRangeFrozen)
+                beginTxDbmRangeFreeze();
+        } else if (m_txDbmRangeFrozen) {
+            endTxDbmRangeFreeze();
+        }
+    }
+}
+
+void SpectrumWidget::clearTxWaterfallSlice()
+{
+    if (!m_txWaterfallSliceValid &&
+        m_txWaterfallFreqMhz == 0.0 &&
+        m_txWaterfallFilterLowHz == 0 &&
+        m_txWaterfallFilterHighHz == 0 &&
+        !m_txWaterfallXitOn &&
+        m_txWaterfallXitFreq == 0) {
+        return;
+    }
+
+    m_txWaterfallSliceValid = false;
+    m_txWaterfallFreqMhz = 0.0;
+    m_txWaterfallFilterLowHz = 0;
+    m_txWaterfallFilterHighHz = 0;
+    m_txWaterfallXitOn = false;
+    m_txWaterfallXitFreq = 0;
+
+    if (m_transmitting) {
+        resetFftWaterfallAccumulator();
+        if (m_txDbmRangeFrozen)
+            endTxDbmRangeFreeze();
+    }
+}
+
+bool SpectrumWidget::txWaterfallMaskRange(double& lowMhz, double& highMhz) const
+{
+    if (m_txWaterfallSliceValid &&
+        m_txWaterfallFreqMhz > 0.0 &&
+        m_txWaterfallFilterHighHz > m_txWaterfallFilterLowHz) {
+        const double txCarrierMhz =
+            m_txWaterfallFreqMhz +
+            (m_txWaterfallXitOn ? m_txWaterfallXitFreq / 1.0e6 : 0.0);
+        lowMhz = txCarrierMhz + m_txWaterfallFilterLowHz / 1.0e6;
+        highMhz = txCarrierMhz + m_txWaterfallFilterHighHz / 1.0e6;
+        if (lowMhz > highMhz)
+            std::swap(lowMhz, highMhz);
+        return true;
+    }
+
+    if (const SliceOverlay* tx = txOverlay()) {
+        if (tx->freqMhz > 0.0 && tx->filterHighHz > tx->filterLowHz) {
+            const double txCarrierMhz =
+                tx->freqMhz + (tx->xitOn ? tx->xitFreq / 1.0e6 : 0.0);
+            lowMhz = txCarrierMhz + tx->filterLowHz / 1.0e6;
+            highMhz = txCarrierMhz + tx->filterHighHz / 1.0e6;
+            if (lowMhz > highMhz)
+                std::swap(lowMhz, highMhz);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool SpectrumWidget::txWaterfallAffectsThisPan() const
+{
+    double txLowMhz = 0.0;
+    double txHighMhz = 0.0;
+    if (!txWaterfallMaskRange(txLowMhz, txHighMhz))
+        return m_hasTxSlice;
+
+    if (m_bandwidthMhz <= 0.0)
+        return m_hasTxSlice;
+
+    const double panLowMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+    const double panHighMhz = m_centerMhz + m_bandwidthMhz / 2.0;
+    const double edgePadMhz = width() > 0
+        ? m_bandwidthMhz / static_cast<double>(width())
+        : 0.0;
+
+    return txHighMhz >= panLowMhz - edgePadMhz &&
+           txLowMhz <= panHighMhz + edgePadMhz;
 }
 
 void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHigh,
@@ -2320,28 +2557,36 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
             PerfTelemetry::instance().recordPanFrame();
     }
 
+    QVector<float> txRangeAdjustedBins;
     QVector<float> adjustedBins;
     const QVector<float>* spectrumBins = &binsDbm;
+    if (m_txDbmRangeFrozen && m_transmitting && !binsDbm.isEmpty()) {
+        txRangeAdjustedBins = binsDbm;
+        reprojectBinsToFrozenTxDbmRange(txRangeAdjustedBins);
+        spectrumBins = &txRangeAdjustedBins;
+    }
+
     // The stream decoder switches to the requested dBm range immediately, but
     // the radio can still send a few FFT frames encoded with the old range.
     // Rebase those frames so the drag preview does not snap back on release.
     if (m_holdFftUpdatesAfterDbmRelease > 0) {
+        const QVector<float>& sourceBins = *spectrumBins;
         const float oldRange =
             m_dbmReleasePreviewOldMaxDbm - m_dbmReleasePreviewOldMinDbm;
         const float newRange =
             m_dbmReleasePreviewNewMaxDbm - m_dbmReleasePreviewNewMinDbm;
         if (oldRange <= 0.0f || newRange <= 0.0f) {
             clearDbmReleaseRebase();
-        } else if (!m_bins.isEmpty() && m_bins.size() == binsDbm.size()) {
+        } else if (!m_bins.isEmpty() && m_bins.size() == sourceBins.size()) {
             --m_holdFftUpdatesAfterDbmRelease;
             QVarLengthArray<float, kDbmReleaseErrorSampleCount> directErrors;
             QVarLengthArray<float, kDbmReleaseErrorSampleCount> rebasedErrors;
-            const int step = qMax(1, binsDbm.size() / kDbmReleaseErrorSampleCount);
-            const int sampleCount = (binsDbm.size() + step - 1) / step;
+            const int step = qMax(1, sourceBins.size() / kDbmReleaseErrorSampleCount);
+            const int sampleCount = (sourceBins.size() + step - 1) / step;
             directErrors.reserve(sampleCount);
             rebasedErrors.reserve(sampleCount);
-            for (int i = 0; i < binsDbm.size(); i += step) {
-                const float directDbm = binsDbm[i];
+            for (int i = 0; i < sourceBins.size(); i += step) {
+                const float directDbm = sourceBins[i];
                 const float frac = (m_dbmReleasePreviewNewMaxDbm - directDbm) / newRange;
                 const float rebasedDbm = m_dbmReleasePreviewOldMaxDbm - frac * oldRange;
                 directErrors.append(std::abs(directDbm - m_bins[i]));
@@ -2355,7 +2600,7 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
             const float directMedian = median(directErrors);
             const float rebasedMedian = median(rebasedErrors);
             if (rebasedMedian + kDbmReleaseRebaseMinImprovementDb < directMedian) {
-                adjustedBins = binsDbm;
+                adjustedBins = sourceBins;
                 for (float& bin : adjustedBins) {
                     const float frac = (m_dbmReleasePreviewNewMaxDbm - bin) / newRange;
                     bin = m_dbmReleasePreviewOldMaxDbm - frac * oldRange;
@@ -2449,12 +2694,24 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     // During TX: immediately use FFT-derived rows (radio stops sending tiles).
     // During RX: use native tiles, fall back to FFT after 2s timeout.
     if (m_transmitting) {
-        // TX: push FFT-derived rows only if show-tx-in-waterfall is enabled,
-        // or if this pan doesn't contain the TX slice (multi-pan: non-TX pan
-        // keeps scrolling regardless).
-        bool freeze = !m_showTxInWaterfall && m_hasTxSlice;
-        if (!freeze && !m_waterfall.isNull())
+        // TX rendering is global, not limited to the pan that owns the TX
+        // slice. Any pan whose visible range intersects the TX passband uses
+        // the same paced FFT rows and TX filter mask; unrelated pans keep their
+        // native waterfall path.
+        const bool txAffectsPan = txWaterfallAffectsThisPan();
+        if (txAffectsPan && m_showTxInWaterfall && !m_waterfall.isNull()) {
             pushWaterfallRow(*spectrumBins, m_waterfall.width());
+        } else if (!txAffectsPan) {
+            if (m_hasNativeWaterfall) {
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                if (now - m_lastNativeTileMs > 2000) {
+                    m_hasNativeWaterfall = false;
+                    qDebug() << "SpectrumWidget: native waterfall tiles timed out during TX, falling back to FFT-derived";
+                }
+            }
+            if (!m_hasNativeWaterfall && !m_waterfall.isNull())
+                pushWaterfallRow(*spectrumBins, m_waterfall.width());
+        }
     } else {
         // Suppress post-TX transient noise rows (#2117).  The receiver AGC
         // needs ~400 ms to settle after TX→RX; discard waterfall data during
@@ -2496,9 +2753,10 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
 
     if (m_waterfall.isNull()) return;
 
-    // Freeze waterfall during TX if show-tx-in-waterfall is off and this pan
-    // contains the TX slice. Non-TX pans keep scrolling in multi-pan.
-    if (m_transmitting && !m_showTxInWaterfall && m_hasTxSlice) return;
+    // During TX, any pan that can see the TX passband uses FFT-derived rows as
+    // the sole waterfall source. Mixing native tiles with FFT rows double-
+    // advances the waterfall and produces timing/row artifacts.
+    if (m_transmitting && txWaterfallAffectsThisPan()) return;
 
     // Suppress post-TX transient noise rows (#2117). The receiver AGC needs
     // ~400 ms to settle after TX→RX; discard waterfall data during that
@@ -4242,26 +4500,92 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     const int h = m_waterfall.height();
     if (h <= 1) return;
 
-    // Throttle FFT-derived rows to the radio's line_duration cadence so the
-    // TX waterfall (and the RX FFT-fallback path) scroll at the same rate as
-    // RX native tiles. FFT frames arrive at the panadapter fps (e.g. 25),
-    // which is ~2.5× faster than the default 100 ms/row line_duration; without
-    // this gate, TX scrolls visibly faster than RX (#2666). Native RX tiles
-    // bypass this path entirely via updateWaterfallRow().
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (m_lastFftRowMs != 0 && (now - m_lastFftRowMs) < m_wfLineDuration)
+    const int cadenceMs = std::max(1, m_wfLineDuration);
+    if (m_lastFftFrameMs == 0) {
+        m_fftRowDebtMs = std::max(m_fftRowDebtMs, static_cast<double>(cadenceMs));
+    } else {
+        const qint64 elapsedMs = now - m_lastFftFrameMs;
+        if (elapsedMs > 0) {
+            const double cappedElapsed =
+                static_cast<double>(std::min<qint64>(elapsedMs, cadenceMs * 2));
+            m_fftRowDebtMs = std::min(m_fftRowDebtMs + cappedElapsed,
+                                      static_cast<double>(cadenceMs * 2));
+        }
+    }
+    m_lastFftFrameMs = now;
+
+    if (bins.isEmpty()) return;
+    if (m_fftAccumPower.size() != bins.size()) {
+        m_fftAccumPower.fill(0.0f, bins.size());
+        m_fftAccumCount = 0;
+    }
+    for (int i = 0; i < bins.size(); ++i) {
+        const float dbm = std::max(bins[i], kMinDisplayDbm);
+        m_fftAccumPower[i] += std::pow(10.0f, dbm / 10.0f);
+    }
+    ++m_fftAccumCount;
+
+    // Pace FFT-derived rows to the radio's line_duration cadence so TX
+    // scrolls at the same configured speed as RX native tiles. We accumulate
+    // all FFT frames inside each visible-row window instead of dropping the
+    // intermediates, which avoids dotted/jagged TX rows without changing the
+    // waterfall rate.
+    if (m_fftRowDebtMs + 0.5 < static_cast<double>(cadenceMs))
         return;
+    m_fftRowDebtMs = std::max(0.0, m_fftRowDebtMs - static_cast<double>(cadenceMs));
     m_lastFftRowMs = now;
 
     Q_UNUSED(tileLowMhz);
     Q_UNUSED(tileHighMhz);
 
+    bool useTxFilterMask = false;
+    double txMaskLowMhz = 0.0;
+    double txMaskHighMhz = 0.0;
+    if (m_transmitting && txWaterfallAffectsThisPan())
+        useTxFilterMask = txWaterfallMaskRange(txMaskLowMhz, txMaskHighMhz);
+
+    const float invCount = (m_fftAccumCount > 0)
+        ? 1.0f / static_cast<float>(m_fftAccumCount)
+        : 1.0f;
+    const int accumSize = m_fftAccumPower.size();
+    const double panStartMhz = m_centerMhz - m_bandwidthMhz / 2.0;
+
     QVector<QRgb> scanline(destWidth, qRgb(0, 0, 0));
     for (int x = 0; x < destWidth; ++x) {
-        const int binIdx = x * bins.size() / destWidth;
-        const float dbm = (binIdx >= 0 && binIdx < bins.size()) ? bins[binIdx] : m_wfMinDbm;
+        if (useTxFilterMask) {
+            const double freqMhz = panStartMhz
+                + (static_cast<double>(x) / static_cast<double>(destWidth))
+                    * m_bandwidthMhz;
+            if (freqMhz < txMaskLowMhz || freqMhz > txMaskHighMhz) {
+                scanline[x] = qRgb(0, 0, 0);
+                continue;
+            }
+        }
+
+        float avgPower = 0.0f;
+        if (accumSize == 1) {
+            avgPower = m_fftAccumPower[0] * invCount;
+        } else if (accumSize > 1) {
+            const float binF = (destWidth > 1)
+                ? static_cast<float>(x) * static_cast<float>(accumSize - 1)
+                      / static_cast<float>(destWidth - 1)
+                : 0.0f;
+            const int binIdx = std::clamp(static_cast<int>(binF), 0, accumSize - 1);
+            const int nextIdx = std::min(binIdx + 1, accumSize - 1);
+            const float frac = binF - static_cast<float>(binIdx);
+            const float p0 = m_fftAccumPower[binIdx] * invCount;
+            const float p1 = m_fftAccumPower[nextIdx] * invCount;
+            avgPower = p0 + frac * (p1 - p0);
+        }
+        const float dbm = (avgPower > 0.0f)
+            ? 10.0f * std::log10(avgPower)
+            : m_wfMinDbm;
         scanline[x] = dbmToRgb(dbm);
     }
+
+    std::fill(m_fftAccumPower.begin(), m_fftAccumPower.end(), 0.0f);
+    m_fftAccumCount = 0;
 
     appendHistoryRow(scanline.constData(), QDateTime::currentMSecsSinceEpoch());
     if (m_wfLive) {
