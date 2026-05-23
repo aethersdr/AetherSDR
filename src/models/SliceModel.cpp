@@ -33,7 +33,10 @@ void SliceModel::sendCommand(const QString& cmd)
 
 void SliceModel::setFrequency(double mhz)
 {
-    if (m_locked) return;
+    if (m_locked) {
+        notifyTuneBlockedByLock();
+        return;
+    }
     if (qFuzzyCompare(m_frequency, mhz)) return;
     m_frequency = mhz;
     // autopan=0 prevents the radio from recentering the pan (#292).
@@ -44,7 +47,10 @@ void SliceModel::setFrequency(double mhz)
 
 void SliceModel::tuneAndRecenter(double mhz)
 {
-    if (m_locked) return;
+    if (m_locked) {
+        notifyTuneBlockedByLock();
+        return;
+    }
     if (qFuzzyCompare(m_frequency, mhz)) return;
     m_frequency = mhz;
     // Without autopan=0, the radio recenters the pan on the new frequency.
@@ -93,6 +99,12 @@ void SliceModel::setLocked(bool locked)
     sendCommand(locked ? QString("slice lock %1").arg(m_id)
                        : QString("slice unlock %1").arg(m_id));
     emit lockedChanged(locked);
+}
+
+void SliceModel::notifyTuneBlockedByLock()
+{
+    if (m_locked)
+        emit tuneBlockedByLock();
 }
 
 void SliceModel::setQsk(bool on)
@@ -223,6 +235,10 @@ void SliceModel::setNrlLevel(int v)
 void SliceModel::setNrsLevel(int v)
 {
     v = std::clamp(v, 0, 100);
+    // Record any explicit user choice (including a deliberate 50) so the
+    // applyStatus() re-push won't fight a value the user picked themselves.
+    m_nrsLevelUser = v;
+    m_nrsLevelUserOverride = true;
     if (m_nrsLevel == v) return;
     m_nrsLevel = v;
     sendCommand(QString("slice set %1 speex_nr_level=%2").arg(m_id).arg(v));
@@ -616,6 +632,13 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
             m_audioMute = mute;
             emit audioMuteChanged(mute);
         }
+    } else if (kvs.value("in_use") == "1" && m_audioMute) {
+        // Full status w/o audio_mute key → radio reset to default (0)
+        // on (re)connect. Resync so UI doesn't show a stale 🔇 while
+        // audio is actually playing. Radio does not persist audio_mute
+        // (see MainWindow.cpp migration note ~line 1264).
+        m_audioMute = false;
+        emit audioMuteChanged(false);
     }
     // Parse child/parent flags before emitting diversityChanged so handlers
     // can check isDiversityChild() to gate ESC panel visibility.
@@ -744,6 +767,15 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
     }
     if (kvs.contains("speex_nr_level")) {
         int v = kvs["speex_nr_level"].toInt();
+        // The radio's `profile global` snapshot does not persist
+        // speex_nr_level. On recall the firmware reports its default of 50
+        // even when the user previously set a different value. If we have a
+        // cached user choice that differs, push it back. Same precedent as
+        // the rtty_mark workaround below.
+        if (v == 50 && m_nrsLevelUserOverride && m_nrsLevelUser != 50) {
+            v = m_nrsLevelUser;
+            sendCommand(QString("slice set %1 speex_nr_level=%2").arg(m_id).arg(v));
+        }
         if (m_nrsLevel != v) { m_nrsLevel = v; emit nrsLevelChanged(v); }
     }
     if (kvs.contains("nrf_level")) {

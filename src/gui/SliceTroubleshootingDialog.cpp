@@ -670,6 +670,19 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
                  .arg(formatBoolValue(audioDevices["tx_streaming"]))
                  .arg(formatBoolValue(audioDevices["dax_tx_mode"]))
                  .arg(formatBoolValue(audioDevices["dax_tx_use_radio_route"]));
+    // TX slice context — colocated with the global mic/DAX state so DAX-channel
+    // mismatches with WSJT-X / JTDX are visible without cross-referencing the
+    // per-slice section. (#2885)
+    const QString txSliceIdText = txRoute["tx_slice_id"].isDouble()
+        ? QString::number(txRoute["tx_slice_id"].toInt())
+        : QStringLiteral("n/a");
+    const QString txSliceDaxText = txRoute["tx_slice_dax_channel"].isDouble()
+        ? QString::number(txRoute["tx_slice_dax_channel"].toInt())
+        : QStringLiteral("n/a");
+    lines << QString("- TX slice context: slice `%1`, mode `%2`, slice DAX channel `%3`")
+                 .arg(txSliceIdText)
+                 .arg(orPlaceholder(txRoute["tx_slice_mode"].toString()))
+                 .arg(txSliceDaxText);
     lines << QString("- Selected input: %1 (source `%2`, present `%3`)")
                  .arg(formatAudioDeviceShort(audioDevices["selected_input"].toObject()))
                  .arg(orPlaceholder(audioDevices["selected_input_source"].toString()))

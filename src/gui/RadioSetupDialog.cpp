@@ -52,11 +52,21 @@
 #include <QSplitter>
 #include <QScrollArea>
 #include <QHostAddress>
+#include <QClipboard>
 #include <QDebug>
+#include <QGuiApplication>
+#include <QPainter>
+#include <QPaintEvent>
 #include <QPointer>
+#include <QScreen>
 #include <QSignalBlocker>
+#include <QSizePolicy>
+#include <QToolButton>
 
+#include <algorithm>
+#include <functional>
 #include <memory>
+#include <utility>
 
 namespace AetherSDR {
 
@@ -75,6 +85,244 @@ static const QString kValueStyle =
 static const QString kEditStyle =
     "QLineEdit { background: #1a2a3a; border: 1px solid #304050; "
     "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
+
+static constexpr int kInfoLeftLabelWidth = 112;
+static constexpr int kInfoRightLabelWidth = 160;
+
+static QString displayOrDash(const QString& value)
+{
+    const QString trimmed = value.trimmed();
+    return trimmed.isEmpty() ? QStringLiteral("—") : trimmed;
+}
+
+static QString radioSerialNumber(const RadioModel* model)
+{
+    if (!model) {
+        return QStringLiteral("—");
+    }
+    return displayOrDash(model->chassisSerial().isEmpty()
+                             ? model->serial()
+                             : model->chassisSerial());
+}
+
+static QString prefixedVersion(const QString& version)
+{
+    const QString trimmed = version.trimmed();
+    if (trimmed.isEmpty()) {
+        return QStringLiteral("—");
+    }
+    if (trimmed.startsWith(QLatin1Char('v'), Qt::CaseInsensitive)) {
+        return trimmed;
+    }
+    return QStringLiteral("v%1").arg(trimmed);
+}
+
+static QString radioOptionsText(const RadioModel* model)
+{
+    if (!model) {
+        return QStringLiteral("—");
+    }
+    if (!model->radioOptions().isEmpty()) {
+        return model->radioOptions();
+    }
+    return model->hasAmplifier() ? QStringLiteral("GPS, PGXL") : QStringLiteral("GPS");
+}
+
+static void showCopiedPopup(QWidget* anchor);
+
+class CopyValueButton final : public QToolButton {
+public:
+    explicit CopyValueButton(QString fieldName,
+                             std::function<QString()> valueProvider,
+                             QWidget* parent = nullptr)
+        : QToolButton(parent),
+          m_fieldName(std::move(fieldName)),
+          m_valueProvider(std::move(valueProvider))
+    {
+        setAutoRaise(true);
+        setCursor(Qt::PointingHandCursor);
+        setFocusPolicy(Qt::TabFocus);
+        setFixedSize(20, 20);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        setStyleSheet(
+            "QToolButton { background: transparent; border: 0; padding: 0; margin: 0; }"
+            "QToolButton:focus { outline: none; }");
+        resetToolTip();
+        setAccessibleName(toolTip());
+
+        connect(this, &QToolButton::clicked, this, [this] {
+            if (!m_valueProvider) {
+                return;
+            }
+
+            const QString text = m_valueProvider().trimmed();
+            if (text.isEmpty() || text == QStringLiteral("—")) {
+                return;
+            }
+
+            if (QClipboard* clipboard = QGuiApplication::clipboard()) {
+                clipboard->setText(text);
+            }
+
+            showCopiedPopup(this);
+        });
+    }
+
+protected:
+    void paintEvent(QPaintEvent*) override
+    {
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+
+        const bool hasCopyableValue = [this] {
+            if (!m_valueProvider) return false;
+            const QString text = m_valueProvider().trimmed();
+            return !text.isEmpty() && text != QStringLiteral("—");
+        }();
+
+        if (hasCopyableValue && (underMouse() || hasFocus())) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(QColor(255, 255, 255, 16));
+            painter.drawRoundedRect(rect().adjusted(1, 1, -1, -1), 3, 3);
+        }
+
+        QColor stroke = QColor(QStringLiteral("#8090a0"));
+        if (!hasCopyableValue) {
+            stroke = QColor(QStringLiteral("#405060"));
+        } else if (isDown()) {
+            stroke = QColor(QStringLiteral("#00b4d8"));
+        } else if (underMouse() || hasFocus()) {
+            stroke = QColor(QStringLiteral("#c8d8e8"));
+        }
+
+        painter.setPen(QPen(stroke, 1.25));
+        painter.setBrush(Qt::NoBrush);
+
+        const qreal left = (width() - 16.0) / 2.0;
+        const qreal top = (height() - 16.0) / 2.0;
+        const QRectF back(left + 3.0, top + 1.5, 8.5, 11.0);
+        const QRectF front(left + 5.5, top + 4.0, 8.5, 11.0);
+
+        painter.drawRoundedRect(back, 1.5, 1.5);
+        painter.fillRect(front.adjusted(0.8, 0.8, -0.8, -0.8), QColor(QStringLiteral("#0f0f1a")));
+        painter.drawRoundedRect(front, 1.5, 1.5);
+    }
+
+private:
+    void resetToolTip()
+    {
+        setToolTip(QStringLiteral("Copy %1").arg(m_fieldName));
+    }
+
+    QString m_fieldName;
+    std::function<QString()> m_valueProvider;
+};
+
+static QWidget* makeCopyableValueLabel(const QString& fieldName, QLabel* valueLabel)
+{
+    auto* wrapper = new QWidget;
+    auto* layout = new QHBoxLayout(wrapper);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(4);
+
+    valueLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    valueLabel->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
+    layout->addWidget(valueLabel);
+    layout->addStretch(1);
+    layout->addWidget(new CopyValueButton(fieldName, [valueLabel] {
+        return valueLabel->text();
+    }, wrapper));
+
+    return wrapper;
+}
+
+static void showCopiedPopup(QWidget* anchor)
+{
+    if (!anchor) {
+        return;
+    }
+
+    auto* popup = new QLabel(QStringLiteral("Copied"), nullptr,
+                             Qt::ToolTip | Qt::FramelessWindowHint);
+    popup->setAttribute(Qt::WA_DeleteOnClose);
+    popup->setAttribute(Qt::WA_ShowWithoutActivating);
+    popup->setStyleSheet(
+        "QLabel { background: #0f0f1a; border: 1px solid #304050;"
+        " border-radius: 4px; color: #c8d8e8; font-size: 11px;"
+        " font-weight: bold; padding: 4px 8px; }");
+    popup->adjustSize();
+
+    const QPoint globalCenter = anchor->mapToGlobal(anchor->rect().center());
+    const QSize popupSize = popup->sizeHint();
+    QPoint pos(globalCenter.x() - popupSize.width() / 2,
+               globalCenter.y() - anchor->height() / 2 - popupSize.height() - 6);
+
+    QRect screenRect;
+    if (auto* screen = anchor->screen()) {
+        screenRect = screen->availableGeometry();
+    } else if (auto* primary = QGuiApplication::primaryScreen()) {
+        screenRect = primary->availableGeometry();
+    }
+    if (screenRect.isValid()) {
+        pos.setX(std::clamp(pos.x(), screenRect.left(),
+                            screenRect.right() - popupSize.width()));
+        if (pos.y() < screenRect.top()) {
+            pos.setY(globalCenter.y() + anchor->height() / 2 + 6);
+        }
+    }
+
+    popup->move(pos);
+    popup->show();
+    QTimer::singleShot(1000, popup, &QLabel::close);
+}
+
+static QWidget* makeInfoField(const QString& labelText, QWidget* valueWidget,
+                              int labelWidth = kInfoLeftLabelWidth)
+{
+    auto* wrapper = new QWidget;
+    auto* layout = new QHBoxLayout(wrapper);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    auto* label = new QLabel(labelText);
+    label->setStyleSheet(kLabelStyle);
+    label->setFixedWidth(labelWidth);
+    layout->addWidget(label);
+    QSizePolicy policy = valueWidget->sizePolicy();
+    if (policy.horizontalPolicy() != QSizePolicy::Fixed) {
+        policy.setHorizontalPolicy(QSizePolicy::Expanding);
+        valueWidget->setSizePolicy(policy);
+    }
+    layout->addWidget(valueWidget, 1);
+
+    return wrapper;
+}
+
+static QWidget* makeCopyableInfoField(const QString& fieldName, const QString& labelText,
+                                      QLabel* valueLabel, int labelWidth = kInfoLeftLabelWidth)
+{
+    auto* wrapper = new QWidget;
+    auto* layout = new QHBoxLayout(wrapper);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(8);
+
+    auto* label = new QLabel(labelText);
+    label->setStyleSheet(kLabelStyle);
+    label->setFixedWidth(labelWidth);
+    layout->addWidget(label);
+
+    valueLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    valueLabel->setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
+    layout->addWidget(valueLabel, 1);
+    layout->addWidget(new CopyValueButton(fieldName, [valueLabel] {
+        return valueLabel->text();
+    }, wrapper));
+
+    return wrapper;
+}
+
+static constexpr const char* kSuppressAudioDeviceNotificationsKey =
+    "SuppressAudioDeviceNotifications";
 
 static QString normalizedOscillatorValue(QString value)
 {
@@ -256,7 +504,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         "QPushButton:checked { background: #1a5030; color: #00e060; "
         "border: 1px solid #20a040; }";
 
-    auto makeToggle = [](const QString& text, bool checked) {
+    auto makeToggle = [](bool checked) {
         auto* btn = new QPushButton(checked ? "Enabled" : "Disabled");
         btn->setCheckable(true);
         btn->setChecked(checked);
@@ -273,51 +521,72 @@ QWidget* RadioSetupDialog::buildRadioTab()
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
+        grid->setColumnStretch(0, 1);
+        grid->setColumnStretch(1, 1);
 
-        grid->addWidget(new QLabel("Radio SN:"), 0, 0);
-        m_serialLabel = new QLabel(m_model->chassisSerial().isEmpty()
-            ? m_model->serial() : m_model->chassisSerial());
+        m_serialLabel = new QLabel(radioSerialNumber(m_model));
         m_serialLabel->setStyleSheet(kValueStyle);
-        grid->addWidget(m_serialLabel, 0, 1);
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("Radio Serial Number"),
+                                              QStringLiteral("Serial:"),
+                                              m_serialLabel),
+                        0, 0);
 
-        grid->addWidget(new QLabel("Region:"), 0, 2);
         m_regionLabel = new QLabel(m_model->region().isEmpty() ? "USA" : m_model->region());
         m_regionLabel->setStyleSheet(
             "QLabel { background: #1a2a3a; border: 1px solid #304050; "
             "border-radius: 3px; color: #00c8ff; font-size: 11px; font-weight: bold; "
             "padding: 3px 10px; }");
         m_regionLabel->setAlignment(Qt::AlignCenter);
-        grid->addWidget(m_regionLabel, 0, 3);
+        grid->addWidget(makeInfoField(QStringLiteral("Region:"), m_regionLabel,
+                                      kInfoRightLabelWidth),
+                        0, 1);
 
-        grid->addWidget(new QLabel("HW Version:"), 1, 0);
-        m_hwVersionLabel = new QLabel("v" + m_model->version());
+        m_hwVersionLabel = new QLabel(prefixedVersion(m_model->version()));
         m_hwVersionLabel->setStyleSheet(kValueStyle);
-        grid->addWidget(m_hwVersionLabel, 1, 1);
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("HW Version"),
+                                              QStringLiteral("HW Version:"),
+                                              m_hwVersionLabel),
+                        1, 0);
 
-        grid->addWidget(new QLabel("Remote On:"), 1, 2);
-        m_remoteOnBtn = makeToggle("", m_model->remoteOnEnabled());
+        m_remoteOnBtn = makeToggle(m_model->remoteOnEnabled());
         connect(m_remoteOnBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->setRemoteOnEnabled(on);
         });
-        grid->addWidget(m_remoteOnBtn, 1, 3);
+        grid->addWidget(makeInfoField(QStringLiteral("Remote On:"), m_remoteOnBtn,
+                                      kInfoRightLabelWidth),
+                        1, 1);
 
-        grid->addWidget(new QLabel("Options:"), 2, 0);
-        m_optionsLabel = new QLabel(m_model->radioOptions().isEmpty()
-            ? (m_model->hasAmplifier() ? "GPS, PGXL" : "GPS")
-            : m_model->radioOptions());
+        m_optionsLabel = new QLabel(radioOptionsText(m_model));
         m_optionsLabel->setStyleSheet(kValueStyle);
-        grid->addWidget(m_optionsLabel, 2, 1);
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("Options"),
+                                              QStringLiteral("Options:"),
+                                              m_optionsLabel),
+                        2, 0);
 
-        grid->addWidget(new QLabel("FlexControl:"), 2, 2);
-        auto* fcBtn = makeToggle("", true);
-        grid->addWidget(fcBtn, 2, 3);
+        auto* fcBtn = makeToggle(true);
+        grid->addWidget(makeInfoField(QStringLiteral("FlexControl:"), fcBtn,
+                                      kInfoRightLabelWidth),
+                        2, 1);
 
-        grid->addWidget(new QLabel("multiFLEX:"), 3, 2);
-        auto* mfBtn = makeToggle("", m_model->multiFlexEnabled());
+        auto* mfBtn = makeToggle(m_model->multiFlexEnabled());
         connect(mfBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->setMultiFlexEnabled(on);
         });
-        grid->addWidget(mfBtn, 3, 3);
+        grid->addWidget(makeInfoField(QStringLiteral("multiFLEX:"), mfBtn,
+                                      kInfoRightLabelWidth),
+                        3, 1);
+
+        connect(m_model, &RadioModel::infoChanged, this, [this] {
+            if (m_serialLabel) {
+                m_serialLabel->setText(radioSerialNumber(m_model));
+            }
+            if (m_hwVersionLabel) {
+                m_hwVersionLabel->setText(prefixedVersion(m_model->version()));
+            }
+            if (m_optionsLabel) {
+                m_optionsLabel->setText(radioOptionsText(m_model));
+            }
+        });
 
         for (auto* lbl : group->findChildren<QLabel*>()) {
             if (lbl->styleSheet().isEmpty())
@@ -333,22 +602,27 @@ QWidget* RadioSetupDialog::buildRadioTab()
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
+        grid->setColumnStretch(0, 1);
+        grid->setColumnStretch(1, 1);
 
-        grid->addWidget(new QLabel("Model:"), 0, 0);
-        m_modelLabel = new QLabel(m_model->model());
+        m_modelLabel = new QLabel(displayOrDash(m_model->model()));
         m_modelLabel->setStyleSheet(kValueStyle);
-        grid->addWidget(m_modelLabel, 0, 1);
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("Model"),
+                                              QStringLiteral("Model:"),
+                                              m_modelLabel),
+                        0, 0);
 
-        grid->addWidget(new QLabel("Nickname:"), 0, 2);
         m_nicknameEdit = new QLineEdit(m_model->nickname().isEmpty()
             ? m_model->name() : m_model->nickname());
         m_nicknameEdit->setStyleSheet(kEditStyle);
-        grid->addWidget(m_nicknameEdit, 0, 3);
+        grid->addWidget(makeInfoField(QStringLiteral("Nickname:"), m_nicknameEdit,
+                                      kInfoRightLabelWidth),
+                        0, 1);
 
-        grid->addWidget(new QLabel("Callsign:"), 1, 0);
         m_callsignEdit = new QLineEdit(m_model->callsign());
         m_callsignEdit->setStyleSheet(kEditStyle);
-        grid->addWidget(m_callsignEdit, 1, 1);
+        grid->addWidget(makeInfoField(QStringLiteral("Callsign:"), m_callsignEdit),
+                        1, 0);
 
         connect(m_nicknameEdit, &QLineEdit::editingFinished, this, [this] {
             m_model->sendCommand("radio name " + m_nicknameEdit->text());
@@ -357,14 +631,21 @@ QWidget* RadioSetupDialog::buildRadioTab()
             m_model->sendCommand("radio callsign " + m_callsignEdit->text());
         });
 
-        grid->addWidget(new QLabel("Station Name:"), 1, 2);
+        connect(m_model, &RadioModel::infoChanged, this, [this] {
+            if (m_modelLabel) {
+                m_modelLabel->setText(displayOrDash(m_model->model()));
+            }
+        });
+
         QString stationVal = AppSettings::instance().value("StationName", "").toString();
         auto* stationEdit = new QLineEdit(
             stationVal.isEmpty() ? QSysInfo::machineHostName() : stationVal);
         stationEdit->setStyleSheet(kEditStyle);
         stationEdit->setToolTip("Identifies this client to other Multi-Flex stations.\n"
                                 "Defaults to OS hostname if empty.");
-        grid->addWidget(stationEdit, 1, 3);
+        grid->addWidget(makeInfoField(QStringLiteral("Station Name:"), stationEdit,
+                                      kInfoRightLabelWidth),
+                        1, 1);
         connect(stationEdit, &QLineEdit::editingFinished, this, [this, stationEdit] {
             auto& s = AppSettings::instance();
             s.setValue("StationName", stationEdit->text());
@@ -386,34 +667,44 @@ QWidget* RadioSetupDialog::buildRadioTab()
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
+        grid->setColumnStretch(0, 1);
         grid->setColumnStretch(1, 1);
-        grid->setColumnStretch(3, 1);
 
         // Row 0: Subscription | Expiration
-        grid->addWidget(new QLabel("Subscription:"), 0, 0);
         m_licSubscriptionLabel = new QLabel(
             m_model->licenseSubscription().isEmpty() ? "—" : m_model->licenseSubscription());
         m_licSubscriptionLabel->setStyleSheet(kValueStyle);
-        grid->addWidget(m_licSubscriptionLabel, 0, 1);
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("Subscription"),
+                                              QStringLiteral("Subscription:"),
+                                              m_licSubscriptionLabel),
+                        0, 0);
 
-        grid->addWidget(new QLabel("Expiration:"), 0, 2);
         m_licExpirationLabel = new QLabel(
             m_model->licenseExpirationDate().isEmpty() ? "—" : m_model->licenseExpirationDate());
         m_licExpirationLabel->setStyleSheet(kValueStyle);
-        grid->addWidget(m_licExpirationLabel, 0, 3);
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("Expiration"),
+                                              QStringLiteral("Expiration:"),
+                                              m_licExpirationLabel,
+                                              kInfoRightLabelWidth),
+                        0, 1);
 
         // Row 1: Radio ID | Licensed version
-        grid->addWidget(new QLabel("Radio ID:"), 1, 0);
         m_licRadioIdLabel = new QLabel(
             m_model->licenseRadioId().isEmpty() ? "—" : m_model->licenseRadioId());
         m_licRadioIdLabel->setStyleSheet(kValueStyle);
-        grid->addWidget(m_licRadioIdLabel, 1, 1);
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("Radio ID"),
+                                              QStringLiteral("Radio ID:"),
+                                              m_licRadioIdLabel),
+                        1, 0);
 
-        grid->addWidget(new QLabel("Licensed version:"), 1, 2);
         m_licMaxVersionLabel = new QLabel(
             m_model->licenseMaxVersion().isEmpty() ? "—" : m_model->licenseMaxVersion());
         m_licMaxVersionLabel->setStyleSheet(kValueStyle);
-        grid->addWidget(m_licMaxVersionLabel, 1, 3);
+        grid->addWidget(makeCopyableInfoField(QStringLiteral("Licensed version"),
+                                              QStringLiteral("Licensed version:"),
+                                              m_licMaxVersionLabel,
+                                              kInfoRightLabelWidth),
+                        1, 1);
 
         for (auto* lbl : group->findChildren<QLabel*>()) {
             if (lbl->styleSheet().isEmpty())
@@ -444,12 +735,15 @@ QWidget* RadioSetupDialog::buildRadioTab()
 
         // Current version row
         auto* infoRow = new QHBoxLayout;
-        infoRow->addWidget(new QLabel("Current:"));
-        auto* curFw = new QLabel(m_model->softwareVersion());
+        infoRow->addWidget(new QLabel("FW Version:"));
+        auto* curFw = new QLabel(displayOrDash(m_model->softwareVersion()));
         curFw->setStyleSheet(kValueStyle);
-        infoRow->addWidget(curFw);
-        infoRow->addStretch(1);
+        infoRow->addWidget(makeCopyableValueLabel(QStringLiteral("FW Version"), curFw), 1);
         vlay->addLayout(infoRow);
+
+        connect(m_model, &RadioModel::infoChanged, this, [this, curFw] {
+            curFw->setText(displayOrDash(m_model->softwareVersion()));
+        });
 
         // Progress bar
         m_fwProgress = new QProgressBar;
@@ -659,21 +953,29 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
         grid->setSpacing(6);
+        grid->setColumnStretch(1, 1);
+        grid->setColumnStretch(3, 1);
 
         grid->addWidget(new QLabel("IP Address:"), 0, 0);
-        auto* ipLbl = new QLabel(m_model->ip());
+        auto* ipLbl = new QLabel(displayOrDash(m_model->ip()));
         ipLbl->setStyleSheet(kValueStyle);
-        grid->addWidget(ipLbl, 0, 1);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("IP Address"), ipLbl), 0, 1);
 
-        grid->addWidget(new QLabel("Mask:"), 0, 2);
-        auto* maskLbl = new QLabel(m_model->netmask());
+        grid->addWidget(new QLabel("Subnet Mask:"), 0, 2);
+        auto* maskLbl = new QLabel(displayOrDash(m_model->netmask()));
         maskLbl->setStyleSheet(kValueStyle);
-        grid->addWidget(maskLbl, 0, 3);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("Subnet Mask"), maskLbl), 0, 3);
 
         grid->addWidget(new QLabel("MAC Address:"), 1, 0);
-        auto* macLbl = new QLabel(m_model->mac());
+        auto* macLbl = new QLabel(displayOrDash(m_model->mac()));
         macLbl->setStyleSheet(kValueStyle);
-        grid->addWidget(macLbl, 1, 1);
+        grid->addWidget(makeCopyableValueLabel(QStringLiteral("MAC Address"), macLbl), 1, 1);
+
+        connect(m_model, &RadioModel::infoChanged, this, [this, ipLbl, maskLbl, macLbl] {
+            ipLbl->setText(displayOrDash(m_model->ip()));
+            maskLbl->setText(displayOrDash(m_model->netmask()));
+            macLbl->setText(displayOrDash(m_model->mac()));
+        });
 
         for (auto* lbl : group->findChildren<QLabel*>())
             if (lbl->styleSheet().isEmpty()) lbl->setStyleSheet(kLabelStyle);
@@ -1888,6 +2190,21 @@ QWidget* RadioSetupDialog::buildAudioTab()
     outRow->addWidget(outLabel);
     outRow->addWidget(outCombo, 1);
     pcLayout->addLayout(outRow);
+
+    auto* promptCheck = new QCheckBox("Prompt on Audio Device Changes");
+    promptCheck->setStyleSheet("QCheckBox { color: #c8d8e8; font-size: 11px; }");
+    promptCheck->setToolTip("Show the Audio Device Detected dialog when a new PC audio device appears.");
+    const bool suppressAudioDeviceNotifications =
+        AppSettings::instance()
+            .value(kSuppressAudioDeviceNotificationsKey, "False")
+            .toString() == "True";
+    promptCheck->setChecked(!suppressAudioDeviceNotifications);
+    connect(promptCheck, &QCheckBox::toggled, this, [](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue(kSuppressAudioDeviceNotificationsKey, on ? "False" : "True");
+        s.save();
+    });
+    pcLayout->addWidget(promptCheck);
 
     // Wire device changes to AudioEngine
     if (m_audio) {
@@ -3680,6 +3997,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
         // Status
         auto* fcStatusLabel = new QLabel("Not detected");
         fcStatusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
+        m_flexControlStatusLabel = fcStatusLabel;
         grid->addWidget(new QLabel("Status:"), 0, 0);
         grid->addWidget(fcStatusLabel, 0, 1);
 
@@ -3694,6 +4012,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         fcCloseBtn->setFixedWidth(80);
         fcCloseBtn->setStyleSheet(fcDetectBtn->styleSheet());
         fcCloseBtn->setEnabled(false);
+        m_flexControlDetectButton = fcDetectBtn;
+        m_flexControlCloseButton = fcCloseBtn;
 
         auto* btnRow = new QHBoxLayout;
         btnRow->addWidget(fcDetectBtn);
@@ -3702,56 +4022,47 @@ QWidget* RadioSetupDialog::buildSerialTab()
         grid->addLayout(btnRow, 0, 2);
 
         // Update status display
-        auto updateFcStatus = [fcStatusLabel, fcCloseBtn, fcDetectBtn]
-                              (bool connected, const QString& port = {}) {
-            if (connected) {
-                fcStatusLabel->setText(QString("Connected (%1)").arg(port));
-                fcStatusLabel->setStyleSheet("QLabel { color: #30d050; font-size: 11px; }");
-                fcCloseBtn->setEnabled(true);
-                fcDetectBtn->setEnabled(false);
-            } else {
-                fcStatusLabel->setText("Not detected");
-                fcStatusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
-                fcCloseBtn->setEnabled(false);
-                fcDetectBtn->setEnabled(true);
-            }
-        };
-
-        connect(fcDetectBtn, &QPushButton::clicked, this, [updateFcStatus] {
+        connect(fcDetectBtn, &QPushButton::clicked, this, [this] {
             QString port = FlexControlManager::detectPort();
             if (port.isEmpty()) {
-                updateFcStatus(false);
+                setFlexControlConnectionStatus(false);
                 return;
             }
-            updateFcStatus(true, port);
             // Store port for MainWindow to open
             auto& s = AppSettings::instance();
             s.setValue("FlexControlPort", port);
             s.setValue("FlexControlOpen", "True");
             s.save();
+            emit serialSettingsChanged();
         });
-        connect(fcCloseBtn, &QPushButton::clicked, this, [updateFcStatus] {
-            updateFcStatus(false);
+        connect(fcCloseBtn, &QPushButton::clicked, this, [this] {
             auto& s = AppSettings::instance();
             s.setValue("FlexControlOpen", "False");
             s.save();
+            setFlexControlConnectionStatus(false);
+            emit serialSettingsChanged();
         });
 
         // Show current state from settings
         if (settings.value("FlexControlOpen", "False").toString() == "True") {
             QString port = settings.value("FlexControlPort").toString();
             if (!port.isEmpty())
-                updateFcStatus(true, port);
+                setFlexControlConnectionStatus(true, port);
         }
 
         // Button action configuration
         static const QStringList actions = {
             "None", "StepUp", "StepDown", "ToggleMox",
             "ToggleTune", "ToggleMute", "ToggleLock",
+            "BandZoom", "SegmentZoom",
             "NextSlice", "PrevSlice",
+            "SplitActiveSlice",
             "ToggleAgc", "VolumeUp", "VolumeDown",
             "WheelFrequency", "WheelVolume", "WheelPower",
-            "WheelRit", "WheelXit", "WheelAgcT",
+            "WheelRit", "WheelXit",
+            "WheelMasterAf", "WheelHeadphoneVolume",
+            "WheelAgcT", "WheelApf", "WheelCwSpeed",
+            "ClearRit", "ClearXit", "ToggleApf",
             "CwxF1", "CwxF2", "CwxF3", "CwxF4",
             "CwxF5", "CwxF6", "CwxF7", "CwxF8",
             "CwxF9", "CwxF10", "CwxF11", "CwxF12"
@@ -3777,10 +4088,13 @@ QWidget* RadioSetupDialog::buildSerialTab()
                 QString current = settings.value(key, defaultActions[b][a]).toString();
                 int idx = actions.indexOf(current);
                 if (idx >= 0) combo->setCurrentIndex(idx);
-                connect(combo, &QComboBox::currentTextChanged, this, [key](const QString& text) {
+                m_flexControlActionCombos.insert(key, combo);
+                m_flexControlActionDefaults.insert(key, QString::fromLatin1(defaultActions[b][a]));
+                connect(combo, &QComboBox::currentTextChanged, this, [this, key](const QString& text) {
                     auto& s = AppSettings::instance();
                     s.setValue(key, text);
                     s.save();
+                    emit serialSettingsChanged();
                 });
                 row->addWidget(combo);
             }
@@ -3792,20 +4106,23 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* autoDetect = new QCheckBox("Auto-detect on startup");
         autoDetect->setStyleSheet("QCheckBox { color: #c8d8e8; }");
         autoDetect->setChecked(settings.value("FlexControlAutoDetect", "True").toString() == "True");
-        connect(autoDetect, &QCheckBox::toggled, this, [](bool on) {
+        connect(autoDetect, &QCheckBox::toggled, this, [this](bool on) {
             auto& s = AppSettings::instance();
             s.setValue("FlexControlAutoDetect", on ? "True" : "False");
             s.save();
+            emit serialSettingsChanged();
         });
         grid->addWidget(autoDetect, 5, 0, 1, 3);
 
         auto* invertDir = new QCheckBox("Invert tuning direction");
         invertDir->setStyleSheet("QCheckBox { color: #c8d8e8; }");
         invertDir->setChecked(settings.value("FlexControlInvertDir", "False").toString() == "True");
-        connect(invertDir, &QCheckBox::toggled, this, [](bool on) {
+        m_flexControlInvertCheck = invertDir;
+        connect(invertDir, &QCheckBox::toggled, this, [this](bool on) {
             auto& s = AppSettings::instance();
             s.setValue("FlexControlInvertDir", on ? "True" : "False");
             s.save();
+            emit serialSettingsChanged();
         });
         grid->addWidget(invertDir, 6, 0, 1, 3);
 
@@ -4126,6 +4443,52 @@ void RadioSetupDialog::selectTab(const QString& tabName)
             return;
         }
     }
+}
+
+void RadioSetupDialog::refreshFlexControlButtonActions()
+{
+    auto& settings = AppSettings::instance();
+    for (auto it = m_flexControlActionCombos.begin();
+         it != m_flexControlActionCombos.end(); ++it) {
+        auto* combo = it.value();
+        if (!combo)
+            continue;
+        const QString fallback = m_flexControlActionDefaults.value(it.key(), QStringLiteral("None"));
+        const QString saved = settings.value(it.key(), fallback).toString();
+        const int idx = combo->findText(saved);
+        if (idx < 0)
+            continue;
+        const QSignalBlocker blocker(combo);
+        combo->setCurrentIndex(idx);
+    }
+    if (m_flexControlInvertCheck) {
+        const bool inverted =
+            settings.value("FlexControlInvertDir", "False").toString() == "True";
+        const QSignalBlocker blocker(m_flexControlInvertCheck);
+        m_flexControlInvertCheck->setChecked(inverted);
+    }
+}
+
+void RadioSetupDialog::setFlexControlConnectionStatus(bool connected, const QString& port)
+{
+    if (m_flexControlStatusLabel) {
+        if (connected) {
+            const QString displayPort = port.isEmpty()
+                ? AppSettings::instance().value("FlexControlPort").toString()
+                : port;
+            m_flexControlStatusLabel->setText(QString("Connected (%1)").arg(displayPort));
+            m_flexControlStatusLabel->setStyleSheet(
+                "QLabel { color: #30d050; font-size: 11px; }");
+        } else {
+            m_flexControlStatusLabel->setText("Not detected");
+            m_flexControlStatusLabel->setStyleSheet(
+                "QLabel { color: #808080; font-size: 11px; }");
+        }
+    }
+    if (m_flexControlCloseButton)
+        m_flexControlCloseButton->setEnabled(connected);
+    if (m_flexControlDetectButton)
+        m_flexControlDetectButton->setEnabled(!connected);
 }
 
 // ── UI Enhancements tab ───────────────────────────────────────────────────────

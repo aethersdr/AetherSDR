@@ -30,7 +30,14 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
     // Fall back if device doesn't support the desired rate.  Some devices
     // (DAX, HFP, USB cards) only support a subset.
     QAudioDevice dev = device;
-    if (dev.isNull()) dev = QMediaDevices::defaultAudioOutput();
+    m_fallbackOccurred = false;
+    m_fallbackReason.clear();
+    if (dev.isNull()) {
+        dev = QMediaDevices::defaultAudioOutput();
+        m_fallbackOccurred = true;
+        m_fallbackReason = QStringLiteral("requested output unavailable -> system default");
+    }
+    m_deviceDescription = dev.description();
 
     const int kCandidateRates[] = { desiredRateHz > 0 ? desiredRateHz : 48000,
                                     48000, 44100, 24000 };
@@ -60,6 +67,17 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
     fmt.setSampleRate(chosenRate);
     m_actualRate   = chosenRate;
     m_sampleFormat = chosenFmt;
+    if (chosenRate != (desiredRateHz > 0 ? desiredRateHz : 48000)
+        || chosenFmt != QAudioFormat::Float) {
+        m_fallbackOccurred = true;
+        const QString detail = QStringLiteral("negotiated %1Hz %2")
+            .arg(chosenRate)
+            .arg(chosenFmt == QAudioFormat::Float ? QStringLiteral("Float")
+                                                   : QStringLiteral("Int16"));
+        m_fallbackReason = m_fallbackReason.isEmpty()
+            ? detail
+            : m_fallbackReason + QStringLiteral("; ") + detail;
+    }
 
     m_sink = new QAudioSink(dev, fmt, this);
     // 50 ms buffer — Pulse/PipeWire happily honour ≥40 ms; <30 ms causes
@@ -149,6 +167,9 @@ void CwSidetoneQAudioSink::stop()
     }
     m_generator = nullptr;
     m_actualRate = 0;
+    m_deviceDescription.clear();
+    m_fallbackOccurred = false;
+    m_fallbackReason.clear();
     m_sampleFormat = QAudioFormat::Float;
     m_scratch.clear();
 }

@@ -205,7 +205,23 @@ public:
         int    packets{0};
         int    errors{0};
     };
+    struct AudioStreamDiagnostics {
+        quint32 streamId{0};
+        quint16 packetClassCode{0};
+        qint64 packets{0};
+        qint64 frames{0};
+        int sequenceErrors{0};
+        int latePackets{0};
+        int lastGapMs{0};
+        int maxGapMs{0};
+        double expectedPacketMs{0.0};
+        double feedRateHz{0.0};
+        double deficitMs{0.0};
+        qint64 lastPacketAgeMs{0};
+    };
     CategoryStats categoryStats(StreamCategory cat) const;
+    QVector<AudioStreamDiagnostics> audioStreamDiagnostics() const;
+    Q_INVOKABLE void resetAudioStreamDiagnostics();
 private:
 
     // Mutex guards stream ID sets, dBm ranges, yPixels, and DAX/IQ maps.
@@ -223,6 +239,30 @@ private:
     QMap<quint32, StreamStats> m_streamStats;  // keyed by stream ID
     mutable QMutex m_statsMutex;
     CategoryStats m_catStats[CatCount]{};
+
+    struct AudioStreamTracker {
+        quint16 packetClassCode{0};
+        qint64 packets{0};
+        qint64 frames{0};
+        int sequenceErrors{0};
+        int latePackets{0};
+        int lastGapMs{0};
+        int maxGapMs{0};
+        double expectedPacketMs{0.0};
+        double feedRateHz{0.0};
+        double deficitMs{0.0};
+        qint64 lastArrivalMs{-1};
+        qint64 windowStartMs{-1};
+        qint64 windowFrames{0};
+    };
+    QMap<quint32, AudioStreamTracker> m_audioStreamStats;
+    QElapsedTimer m_audioStreamStatsTimer;
+    void resetAudioStreamStats();
+    void recordAudioStreamPacketLocked(quint32 streamId,
+                                       quint16 pcc,
+                                       int payloadBytes,
+                                       bool sequenceError);
+    static int audioPayloadFrames(quint16 pcc, int payloadBytes);
 
 public:
     // Packet error/total counts across all owned streams (for network quality monitor).

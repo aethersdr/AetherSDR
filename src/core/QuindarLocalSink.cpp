@@ -1,4 +1,5 @@
 #include "QuindarLocalSink.h"
+#include "AudioSummaryLogger.h"
 #include "ClientQuindarTone.h"
 #include "LogManager.h"
 
@@ -7,6 +8,7 @@
 #include <QByteArray>
 #include <QIODevice>
 #include <QMediaDevices>
+#include <QStringList>
 #include <QTimer>
 
 namespace AetherSDR {
@@ -26,10 +28,24 @@ bool QuindarLocalSink::start(const QAudioDevice& device,
     if (m_sink) return true;
     if (!tone) return false;
 
-    QAudioDevice dev = device.isNull() ? QMediaDevices::defaultAudioOutput()
-                                       : device;
+    bool fallbackOccurred = false;
+    QStringList fallbackReasons;
+    QAudioDevice dev = device;
+    if (dev.isNull()) {
+        dev = QMediaDevices::defaultAudioOutput();
+        fallbackOccurred = true;
+        fallbackReasons << QStringLiteral("requested output unavailable -> system default");
+    }
     if (dev.isNull()) {
         qCWarning(lcAudio) << "QuindarLocalSink: no audio output device";
+        AudioSummaryLogger::OpenFailureSummary failure;
+        failure.path = QStringLiteral("Quindar local sink");
+        failure.backend = QStringLiteral("QAudioSink");
+        failure.deviceDescription = QStringLiteral("Unavailable");
+        failure.attemptedFormats = QStringLiteral("system default output");
+        failure.failureReason = QStringLiteral("no audio output device");
+        failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+        AudioSummaryLogger::logOpenFailure(failure);
         return false;
     }
 
@@ -37,12 +53,20 @@ bool QuindarLocalSink::start(const QAudioDevice& device,
     fmt.setSampleRate(48000);
     fmt.setChannelCount(2);
     fmt.setSampleFormat(QAudioFormat::Float);
+    QStringList attemptedFormats;
+    attemptedFormats << QStringLiteral("48000Hz 2ch Float");
     if (!dev.isFormatSupported(fmt)) {
+        fallbackOccurred = true;
+        fallbackReasons << QStringLiteral("48000Hz Float stereo unsupported -> preferred output format");
         fmt = dev.preferredFormat();
         if (fmt.sampleFormat() != QAudioFormat::Float) {
             fmt.setSampleFormat(QAudioFormat::Float);
         }
         fmt.setChannelCount(2);
+        attemptedFormats << QStringLiteral("%1Hz %2ch %3")
+            .arg(fmt.sampleRate())
+            .arg(fmt.channelCount())
+            .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat()));
     }
     m_actualRate = fmt.sampleRate();
 
@@ -55,6 +79,15 @@ bool QuindarLocalSink::start(const QAudioDevice& device,
     m_device = m_sink->start();
     if (!m_device) {
         qCWarning(lcAudio) << "QuindarLocalSink: failed to start sink";
+        AudioSummaryLogger::OpenFailureSummary failure;
+        failure.path = QStringLiteral("Quindar local sink");
+        failure.backend = QStringLiteral("QAudioSink");
+        failure.deviceDescription = dev.description();
+        failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
+        failure.failureReason = QStringLiteral("QAudioSink::start returned null (error %1)")
+            .arg(static_cast<int>(m_sink->error()));
+        failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+        AudioSummaryLogger::logOpenFailure(failure);
         delete m_sink;
         m_sink = nullptr;
         return false;
@@ -72,6 +105,16 @@ bool QuindarLocalSink::start(const QAudioDevice& device,
     qCInfo(lcAudio) << "QuindarLocalSink: started"
                     << "rate=" << m_actualRate
                     << "buffer=" << m_sink->bufferSize() << "bytes";
+    AudioSummaryLogger::AuxiliarySinkSummary summary;
+    summary.sinkName = QStringLiteral("Quindar local sink");
+    summary.deviceDescription = dev.description();
+    summary.sampleRate = fmt.sampleRate();
+    summary.channelCount = fmt.channelCount();
+    summary.sampleFormat = fmt.sampleFormat();
+    summary.resamplingActive = fmt.sampleRate() != 48000;
+    summary.fallbackOccurred = fallbackOccurred;
+    summary.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+    AudioSummaryLogger::logAuxiliarySink(summary);
     return true;
 }
 

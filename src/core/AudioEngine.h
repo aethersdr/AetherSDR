@@ -764,18 +764,22 @@ private:
     // implementations today, so the others are no-op pass-throughs.
     std::atomic<uint64_t> m_txChainPacked{0};
     // Master-bypass snapshot — the stages that were enabled at the
-    // moment setTxBypassed(true) was called.  Lives on the engine so
-    // both the Chain applet and the channel-strip BYPASS buttons
-    // share one source of truth.  Empty ⇒ not bypassed.
+    // moment setTxBypassed(true) was called.  Used solely to restore
+    // exactly that set when bypass is released; m_txBypassActive is
+    // the source of truth for "currently bypassed" (see issue #2892:
+    // clicking BYPASS when all stages are already disabled yields an
+    // empty snapshot, so the snapshot alone cannot represent state).
     QVector<TxChainStage> m_txBypassSnapshot;
+    bool m_txBypassActive{false};
     // RX chain — same packing convention.  RxChainStage::None terminates
     // the list.  Phase 0 dispatcher iterates this but every stage is a
     // no-op until its DSP class lands in a later phase.
     std::atomic<uint64_t> m_rxChainPacked{0};
-    // RX bypass snapshot — sibling of m_txBypassSnapshot.  Empty ⇒ not
-    // bypassed; non-empty ⇒ holds the stages that were enabled when
-    // bypass engaged so we can restore exactly that set on un-bypass.
+    // RX bypass snapshot — sibling of m_txBypassSnapshot.  Used solely
+    // to restore the stages that were enabled when bypass engaged;
+    // m_rxBypassActive is the source of truth for "currently bypassed".
     QVector<RxChainStage> m_rxBypassSnapshot;
+    bool m_rxBypassActive{false};
     // Scratch buffer for in-place EQ on the RX path (avoids per-call alloc).
     QByteArray m_clientEqRxScratch;
     QByteArray m_clientEqTxScratch;
@@ -821,6 +825,15 @@ private:
     // Restarts the RX stream after ~15 seconds of silence. (#1411)
     QElapsedTimer m_lastAudioFeedTime;
     static constexpr qint64 kAudioLivenessTimeoutMs = 15000;
+
+    // TCI client active-audio gate: started on every feedDaxTxAudio() frame
+    // so onTxAudioReady() can step the local mic capture aside while a TCI
+    // client is feeding TX audio. Otherwise both paths emit txPacketReady
+    // concurrently and the higher-rate mic stream drowns out the TCI tone
+    // — most visible on macOS, where the default CoreAudio input is a real
+    // webcam mic that produces continuous ambient packets.
+    QElapsedTimer m_tciAudioTimer;
+    static constexpr qint64 kTciAudioActiveWindowMs = 200;
 
     // Stale session watchdog: detects when audio data is being written but
     // processedUSecs() hasn't advanced, indicating the WASAPI session is

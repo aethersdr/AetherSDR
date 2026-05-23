@@ -405,6 +405,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
             if (ao)
                 newCenter = ao->freqMhz;
         }
+        newCenter = std::max(newCenter, newBw / 2.0);
 
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
@@ -1986,6 +1987,10 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 
     const double oldCenterMhz = m_centerMhz;
     const double oldBandwidthMhz = m_bandwidthMhz;
+    const bool panAnimationRunning = m_panCenterAnim &&
+        m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    const double waterfallFrameCenterMhz =
+        panAnimationRunning ? m_panCenterTarget : oldCenterMhz;
 
     // Stale-echo guard: if animation is running and the incoming center equals
     // the value m_centerMhz had when the animation started, this is a status
@@ -2027,7 +2032,8 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
             m_panCenterAnim->stop();
         }
         if (oldBandwidthMhz > 0.0 && bandwidthMhz > 0.0) {
-            reprojectWaterfall(oldCenterMhz, oldBandwidthMhz, centerMhz, bandwidthMhz);
+            reprojectWaterfall(waterfallFrameCenterMhz, oldBandwidthMhz,
+                               centerMhz, bandwidthMhz);
         }
         const bool keptSpectrum = reprojectSpectrum(oldCenterMhz, oldBandwidthMhz,
                                                     centerMhz, bandwidthMhz);
@@ -2055,26 +2061,23 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
         return;
     }
 
-    // Only reproject the waterfall when starting a fresh animation.  If we are
-    // already animating toward a different target (rapid edge scroll: multiple
-    // echo-backs arrive before the first animation finishes), skip the reproject.
-    // The waterfall was already shifted at the start of this animation session;
-    // re-shifting on every retarget causes repeated horizontal jumps.
     const bool animAlreadyRunning = m_panCenterAnim &&
         m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    const double waterfallSourceCenterMhz =
+        animAlreadyRunning ? m_panCenterTarget : m_centerMhz;
 
     if (!animAlreadyRunning) {
         // Record the start position so the stale-echo guard above can
         // recognise echo-backs that refer to the pre-animation center.
         m_panCenterStart = m_centerMhz;
-
-        // Scroll waterfall history to align with the new center before the
-        // animation begins.  Without this, old rows (at old center) and new
-        // rows (at new center) are at different pixel positions, so signals
-        // appear to jump vertically.  We do NOT reset m_wfWriteRow or clear
-        // bins — the shift is small and new rows fill in naturally.
-        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, centerMhz, m_bandwidthMhz);
     }
+
+    // Scroll waterfall history to align with the new center before the visual
+    // center animation lands. During rapid edge-follow retargets the waterfall
+    // image is already in the previous target's coordinate frame, so reproject
+    // from m_panCenterTarget rather than the mid-animation visual center.
+    reprojectWaterfall(waterfallSourceCenterMhz, m_bandwidthMhz,
+                       centerMhz, m_bandwidthMhz);
 
     m_panCenterTarget = centerMhz;
 
@@ -3443,7 +3446,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const double scale = std::pow(2.0, static_cast<double>(-dx) / (width() / 4.0));
         const double newBw = std::clamp(m_bwDragStartBw * scale, m_minBwMhz, m_maxBwMhz);
         const double mouseXFrac = static_cast<double>(m_bwDragStartX) / width() - 0.5;
-        const double zoomCenter = m_bwDragAnchorMhz - mouseXFrac * newBw;
+        const double zoomCenter = std::max(m_bwDragAnchorMhz - mouseXFrac * newBw,
+                                           newBw / 2.0);
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw);
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw)) {
             m_bins.clear();
@@ -3492,7 +3496,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const int dx = static_cast<int>(ev->position().x()) - m_panDragStartX;
         // Dragging right moves the view right → center shifts left
         const double deltaMhz = -(static_cast<double>(dx) / width()) * m_bandwidthMhz;
-        const double newCenter = m_panDragStartCenter + deltaMhz;
+        const double newCenter = std::max(m_panDragStartCenter + deltaMhz,
+                                          m_bandwidthMhz / 2.0);
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
         m_centerMhz = newCenter;
         markOverlayDirty();
@@ -3960,7 +3965,8 @@ bool SpectrumWidget::event(QEvent* ev)
             // Anchor: keep the frequency under the cursor at the same pixel.
             const double mouseXFrac = ge->position().x() / width() - 0.5;
             const double anchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
-            const double newCenter = anchorMhz - mouseXFrac * newBw;
+            const double newCenter = std::max(anchorMhz - mouseXFrac * newBw,
+                                              newBw / 2.0);
             reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
             if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
                 m_bins.clear();
@@ -4575,13 +4581,17 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         if (m_centerMhz != m_lastDetectCenter || m_bandwidthMhz != m_lastDetectBw ||
             m_refLevel != m_lastDetectRef || m_dynamicRange != m_lastDetectDyn ||
             m_spectrumFrac != m_lastDetectFrac ||
-            m_wnbActive != m_lastDetectWnb || m_rfGainValue != m_lastDetectRfGain ||
+            m_wnbActive != m_lastDetectWnb ||
+            m_wnbUpdating != m_lastDetectWnbUpdating ||
+            m_rfGainValue != m_lastDetectRfGain ||
             m_wideActive != m_lastDetectWide) {
             markOverlayDirty();
             m_lastDetectCenter = m_centerMhz; m_lastDetectBw = m_bandwidthMhz;
             m_lastDetectRef = m_refLevel; m_lastDetectDyn = m_dynamicRange;
             m_lastDetectFrac = m_spectrumFrac;
-            m_lastDetectWnb = m_wnbActive; m_lastDetectRfGain = m_rfGainValue;
+            m_lastDetectWnb = m_wnbActive;
+            m_lastDetectWnbUpdating = m_wnbUpdating;
+            m_lastDetectRfGain = m_rfGainValue;
             m_lastDetectWide = m_wideActive;
         }
     }
@@ -4750,50 +4760,56 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 if (m_wnbActive || m_rfGainValue != 0 || showProp || m_wideActive) {
                     QFont indFont(p.font().family(), 14, QFont::Bold);
                     p.setFont(indFont);
-                    p.setPen(QColor(0xc8, 0xd8, 0xe8, 180));
+                    const QColor indicatorColor(0xc8, 0xd8, 0xe8, 180);
+                    const QColor wnbDimColor(0xc8, 0xd8, 0xe8, 84);
                     const QFontMetrics fm(indFont);
-                    int y = specRect.top() + fm.ascent() + 4;
-                    // Build combined label (left to right: prop, WNB, RF gain, WIDE), right-align
-                    QString label;
-                    if (showProp) {
-                        label += QString("K%1  A%2  SFI %3")
-                            .arg(m_propKIndex, 0, 'f', 2)
-                            .arg(m_propAIndex)
-                            .arg(m_propSfi);
-                    }
-                    if (m_wnbActive) {
-                        if (!label.isEmpty()) { label += QStringLiteral("   "); }
-                        label += QStringLiteral("WNB");
+                    const int y = specRect.top() + fm.ascent() + 4;
+                    const int rightEdge = specRect.right() - DBM_STRIP_W - 8;
+                    int x = rightEdge;
+                    int leftEdge = rightEdge;
+                    auto drawSegment = [&](const QString& text, const QColor& color) {
+                        const int textWidth = fm.horizontalAdvance(text);
+                        x -= textWidth;
+                        leftEdge = x;
+                        p.setPen(color);
+                        p.drawText(x, y, text);
+                        x -= 10;
+                    };
+
+                    if (m_wideActive) {
+                        drawSegment(QStringLiteral("WIDE"), indicatorColor);
                     }
                     if (m_rfGainValue != 0) {
-                        if (!label.isEmpty()) { label += QStringLiteral("   "); }
-                        label += QStringLiteral("%1%2 dB")
-                            .arg(m_rfGainValue > 0 ? "+" : "").arg(m_rfGainValue);
+                        drawSegment(
+                            QStringLiteral("%1%2 dB")
+                                .arg(m_rfGainValue > 0 ? "+" : "")
+                                .arg(m_rfGainValue),
+                            indicatorColor);
                     }
-                    if (m_wideActive) {
-                        if (!label.isEmpty()) { label += QStringLiteral("   "); }
-                        label += QStringLiteral("WIDE");
+                    if (m_wnbActive) {
+                        drawSegment(QStringLiteral("WNB"),
+                                    m_wnbUpdating ? wnbDimColor : indicatorColor);
                     }
-                    int x = specRect.right() - DBM_STRIP_W - 8 - fm.horizontalAdvance(label);
-                    p.drawText(x, y, label);
-
-                    // Bounding rect of the full strip — used to suppress
-                    // single-click-to-tune when clicking on these indicators (#1564).
-                    m_indicatorStripRect = QRect(x, y - fm.ascent(),
-                                                 fm.horizontalAdvance(label),
-                                                 fm.height());
-
-                    // Store click rect for the prop portion only
                     if (showProp) {
-                        QString propText = QString("K%1  A%2  SFI %3")
+                        const QString propText = QString("K%1  A%2  SFI %3")
                             .arg(m_propKIndex, 0, 'f', 2)
                             .arg(m_propAIndex)
                             .arg(m_propSfi);
-                        int propW = fm.horizontalAdvance(propText);
+                        const int propW = fm.horizontalAdvance(propText);
+                        x -= propW;
+                        leftEdge = x;
+                        p.setPen(indicatorColor);
+                        p.drawText(x, y, propText);
                         m_propClickRect = QRect(x, y - fm.ascent(), propW, fm.height());
                     } else {
                         m_propClickRect = QRect();
                     }
+
+                    // Bounding rect of the full strip — used to suppress
+                    // single-click-to-tune when clicking on these indicators (#1564).
+                    m_indicatorStripRect = QRect(leftEdge, y - fm.ascent(),
+                                                 rightEdge - leftEdge,
+                                                 fm.height());
                 } else {
                     m_indicatorStripRect = QRect();
                 }
@@ -5437,49 +5453,54 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             indFont.setPointSize(18);
             indFont.setBold(true);
             p.setFont(indFont);
-            p.setPen(QColor(255, 255, 255, 84));
+            const QColor indicatorColor(255, 255, 255, 84);
+            const QColor wnbActiveColor(0xc8, 0xd8, 0xe8, 180);
+            const QColor wnbDimColor(0xc8, 0xd8, 0xe8, 84);
 
             const QFontMetrics fm(indFont);
             const int rightEdge = specRect.right() - DBM_STRIP_W - 6;
             const int topY = specRect.top() + fm.ascent() + 2;
 
             int x = rightEdge;
+            int leftEdge = rightEdge;
+            auto drawSegment = [&](const QString& text, const QColor& color) {
+                const int textWidth = fm.horizontalAdvance(text);
+                x -= textWidth;
+                leftEdge = x;
+                p.setPen(color);
+                p.drawText(x, topY, text);
+                x -= 10;
+            };
 
             // WIDE (rightmost)
             if (m_wideActive) {
-                int ww = fm.horizontalAdvance("WIDE");
-                x -= ww;
-                p.drawText(x, topY, "WIDE");
-                x -= 10;
+                drawSegment(QStringLiteral("WIDE"), indicatorColor);
             }
 
             // RF Gain (to the left of WIDE)
             if (m_rfGainValue != 0) {
-                QString gainStr = (m_rfGainValue > 0)
+                const QString gainStr = (m_rfGainValue > 0)
                     ? QString("+%1dB").arg(m_rfGainValue)
                     : QString("%1dB").arg(m_rfGainValue);
-                int gw = fm.horizontalAdvance(gainStr);
-                x -= gw;
-                p.drawText(x, topY, gainStr);
-                x -= 10;  // gap between labels
+                drawSegment(gainStr, indicatorColor);
             }
 
             // WNB (to the left of RF Gain)
             if (m_wnbActive) {
-                int ww = fm.horizontalAdvance("WNB");
-                x -= ww;
-                p.drawText(x, topY, "WNB");
-                x -= 10;
+                drawSegment(QStringLiteral("WNB"),
+                            m_wnbUpdating ? wnbDimColor : wnbActiveColor);
             }
 
             // Prop forecast (leftmost: "K3  A12  SFI 110")
             if (showProp) {
-                QString propStr = QString("K%1  A%2  SFI %3")
+                const QString propStr = QString("K%1  A%2  SFI %3")
                     .arg(m_propKIndex, 0, 'f', 2)
                     .arg(m_propAIndex)
                     .arg(m_propSfi);
-                int pw = fm.horizontalAdvance(propStr);
+                const int pw = fm.horizontalAdvance(propStr);
                 x -= pw;
+                leftEdge = x;
+                p.setPen(indicatorColor);
                 p.drawText(x, topY, propStr);
                 m_propClickRect = QRect(x, topY - fm.ascent(), pw, fm.height());
             } else {
@@ -5488,8 +5509,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
             // Bounding rect of the full strip (prop + WNB + RF Gain + WIDE) —
             // used to suppress single-click-to-tune within (#1564).
-            m_indicatorStripRect = QRect(x, topY - fm.ascent(),
-                                         rightEdge - x, fm.height());
+            m_indicatorStripRect = QRect(leftEdge, topY - fm.ascent(),
+                                         rightEdge - leftEdge, fm.height());
         } else {
             m_indicatorStripRect = QRect();
         }

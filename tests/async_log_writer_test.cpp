@@ -135,13 +135,68 @@ void testSerialRedaction(const QString& dir)
 
 void testTokenRedaction(const QString& dir)
 {
-    const QString path = dir + "/token.log";
+    struct Case {
+        const char* name;
+        QString input;
+        QString mustContain;
+        QString mustNotContain;
+    };
+    // The redactor keeps a 4-char prefix of the token for cross-line correlation
+    // and substitutes "***REDACTED***" for the remainder. (#2954)
+    const Case cases[] = {
+        { "id_token= keyword scrubs tail, preserves prefix",
+          QStringLiteral("auth id_token=ABCDEF12345678901234extra_payload_more"),
+          QStringLiteral("id_token=ABCD***REDACTED***"),
+          QStringLiteral("extra_payload_more") },
+        { "ID_TOKEN= keyword matches case-insensitively",
+          QStringLiteral("ID_TOKEN=ABCDEFGHIJKLMNOPQRSTextra_payload_more"),
+          QStringLiteral("ID_TOKEN=ABCD***REDACTED***"),
+          QStringLiteral("extra_payload_more") },
+        { "access_token= keyword is covered",
+          QStringLiteral("access_token=ABCDEFGHIJKLMNOPextra_payload_more"),
+          QStringLiteral("access_token=ABCD***REDACTED***"),
+          QStringLiteral("extra_payload_more") },
+        { "refresh_token= keyword is covered",
+          QStringLiteral("refresh_token=ABCDEFGHIJKLMNOPextra_payload_more"),
+          QStringLiteral("refresh_token=ABCD***REDACTED***"),
+          QStringLiteral("extra_payload_more") },
+        { "auth= keyword is covered",
+          QStringLiteral("auth=ABCDEFGHIJKLMNOPextra_payload_more"),
+          QStringLiteral("auth=ABCD***REDACTED***"),
+          QStringLiteral("extra_payload_more") },
+        { "Authorization: header with no scheme",
+          QStringLiteral("Authorization: ABCDEFGHIJKLMNOPextra_payload_more"),
+          QStringLiteral("Authorization: ABCD***REDACTED***"),
+          QStringLiteral("extra_payload_more") },
+        { "Authorization: Bearer scheme preserves \"Bearer \"",
+          QStringLiteral("Authorization: Bearer ABCDEFGHIJKLMNOPextra_payload_more"),
+          QStringLiteral("Authorization: Bearer ABCD***REDACTED***"),
+          QStringLiteral("extra_payload_more") },
+        { "bare bearer scheme preserves \"bearer \"",
+          QStringLiteral("got bearer ABCDEFGHIJKLMNOPextra_payload_more from header"),
+          QStringLiteral("bearer ABCD***REDACTED***"),
+          QStringLiteral("extra_payload_more") },
+    };
+    for (const Case& c : cases) {
+        const QString path = QString("%1/token_%2.log").arg(dir).arg(QString::fromUtf8(c.name).left(20));
+        const QString contents = writeAndRead(path, QtDebugMsg,
+                                              QStringLiteral("aether.x"),
+                                              c.input);
+        report(c.name, contents.contains(c.mustContain)
+                       && !contents.contains(c.mustNotContain));
+    }
+}
+
+void testTokenFalsePositiveBoundary(const QString& dir)
+{
+    // The \b word boundary keeps app-specific identifiers that end in "token"
+    // (e.g. "keytoken") from being scrubbed as if they were the token keyword. (#2954)
+    const QString path = dir + "/token_boundary.log";
     const QString contents = writeAndRead(path, QtDebugMsg,
                                           QStringLiteral("aether.x"),
-                                          QStringLiteral("auth id_token=ABCDEF12345678901234extra_payload_more"));
-    report("id_token redaction keeps prefix and adds REDACTED",
-           contents.contains(QStringLiteral("ABCDEF12345678901234...REDACTED"))
-           && !contents.contains(QStringLiteral("extra_payload_more")));
+                                          QStringLiteral("loaded keytoken=fixture_value_unchanged"));
+    report("\\b prevents \"keytoken=\" from being treated as a token keyword",
+           contents.contains(QStringLiteral("keytoken=fixture_value_unchanged")));
 }
 
 void testMacDashRedaction(const QString& dir)
@@ -329,6 +384,7 @@ int main(int argc, char** argv)
     testIpv4QuotedFourOctetIsStillRedacted(dir);
     testSerialRedaction(dir);
     testTokenRedaction(dir);
+    testTokenFalsePositiveBoundary(dir);
     testMacDashRedaction(dir);
     testMacColonRedaction(dir);
     testClearLogTruncatesPriorButPreservesSubsequent(dir);

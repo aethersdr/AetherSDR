@@ -114,6 +114,32 @@ QJsonObject deviceToJson(const QAudioDevice& device,
     return obj;
 }
 
+QJsonObject basicDeviceToJson(const QAudioDevice& device,
+                              const QAudioDevice& selected,
+                              const QAudioDevice& defaultDevice,
+                              const QString& direction)
+{
+    QJsonObject obj;
+    obj["direction"] = direction;
+    obj["available"] = !device.isNull();
+    if (device.isNull()) {
+        obj["description"] = "Unavailable";
+        obj["bus_type"] = "Unknown";
+        obj["bus_type_source"] = "no device";
+        return obj;
+    }
+
+    const AudioBusType bus = inferAudioBusType(device.description(), device.id());
+    obj["description"] = device.description();
+    obj["id_available"] = !device.id().isEmpty();
+    obj["id_fingerprint"] = idFingerprint(device.id());
+    obj["bus_type"] = bus.type;
+    obj["bus_type_source"] = bus.source;
+    obj["selected"] = sameDevice(device, selected);
+    obj["default"] = sameDevice(device, defaultDevice);
+    return obj;
+}
+
 QJsonArray deviceListToJson(const QList<QAudioDevice>& devices,
                             const QAudioDevice& selected,
                             const QAudioDevice& defaultDevice,
@@ -134,8 +160,25 @@ bool devicePresent(const QList<QAudioDevice>& devices, const QAudioDevice& selec
     return false;
 }
 
+bool deviceIdPresent(const QList<QAudioDevice>& devices, const QByteArray& id)
+{
+    if (id.isEmpty())
+        return false;
+
+    for (const QAudioDevice& device : devices) {
+        if (device.id() == id)
+            return true;
+    }
+    return false;
+}
+
 QString micRouteName(const QJsonObject& mic)
 {
+    if (!mic.contains(QStringLiteral("selection"))
+        && !mic.contains(QStringLiteral("dax_on"))) {
+        return QStringLiteral("Unknown (radio status not received)");
+    }
+
     const QString selection = mic["selection"].toString();
     if (selection.compare(QStringLiteral("PC"), Qt::CaseInsensitive) == 0)
         return QStringLiteral("PC audio input");
@@ -159,18 +202,28 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
     const QAudioDevice selectedOutput = (audio && !audio->outputDevice().isNull())
         ? audio->outputDevice()
         : defaultOutput;
+    const QByteArray savedInputId = AppSettings::instance()
+        .value(QStringLiteral("AudioInputDeviceId"), QString()).toByteArray();
+    const QByteArray savedOutputId = AppSettings::instance()
+        .value(QStringLiteral("AudioOutputDeviceId"), QString()).toByteArray();
 
     QJsonObject obj;
     obj["available"] = audio != nullptr;
     obj["qt_multimedia"] = true;
     obj["input_device_count"] = inputs.size();
     obj["output_device_count"] = outputs.size();
+    obj["saved_input_configured"] = !savedInputId.isEmpty();
+    obj["saved_output_configured"] = !savedOutputId.isEmpty();
+    obj["saved_input_present"] = deviceIdPresent(inputs, savedInputId);
+    obj["saved_output_present"] = deviceIdPresent(outputs, savedOutputId);
     obj["selected_input_source"] = (audio && !audio->inputDevice().isNull()) ? "saved selection" : "system default";
     obj["selected_output_source"] = (audio && !audio->outputDevice().isNull()) ? "saved selection" : "system default";
     obj["selected_input_present"] = devicePresent(inputs, selectedInput);
     obj["selected_output_present"] = devicePresent(outputs, selectedOutput);
     obj["selected_input"] = deviceToJson(selectedInput, selectedInput, defaultInput, QStringLiteral("input"));
     obj["selected_output"] = deviceToJson(selectedOutput, selectedOutput, defaultOutput, QStringLiteral("output"));
+    obj["default_input"] = deviceToJson(defaultInput, selectedInput, defaultInput, QStringLiteral("input"));
+    obj["default_output"] = deviceToJson(defaultOutput, selectedOutput, defaultOutput, QStringLiteral("output"));
     obj["input_devices"] = deviceListToJson(inputs, selectedInput, defaultInput, QStringLiteral("input"));
     obj["output_devices"] = deviceListToJson(outputs, selectedOutput, defaultOutput, QStringLiteral("output"));
 
@@ -197,9 +250,34 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
     QJsonObject txRoute;
     txRoute["input"] = micRouteName(mic);
     txRoute["source"] = "transmit mic/DAX state";
-    txRoute["mic_selection"] = mic["selection"].toString();
-    txRoute["dax_on"] = mic["dax_on"].toBool();
+    if (mic.contains(QStringLiteral("selection")))
+        txRoute["mic_selection"] = mic["selection"].toString();
+    if (mic.contains(QStringLiteral("dax_on")))
+        txRoute["dax_on"] = mic["dax_on"].toBool();
     txRoute["selected_input_device"] = selectedInput.description();
+    // Surface the active TX slice's id, mode, and per-slice DAX channel here
+    // so the bundle's TX route summary has the same context a triager would
+    // otherwise have to cross-reference from the per-slice section. WSJT-X /
+    // JTDX issues frequently come down to a mismatch between the audio device
+    // they're configured to use (DAX RESERVED CH N) and the TX slice's
+    // `slice dax=M` — having both visible in one line makes that mismatch
+    // obvious without re-reading every slice block. (#2885)
+    QJsonValue txSliceId = QJsonValue::Null;
+    QJsonValue txSliceMode = QJsonValue::Null;
+    QJsonValue txSliceDaxChannel = QJsonValue::Null;
+    const QJsonArray slices = snapshot["slices"].toArray();
+    for (const QJsonValue& value : slices) {
+        const QJsonObject slice = value.toObject();
+        if (slice["tx_slice"].toBool()) {
+            txSliceId = slice["slice_id"];
+            txSliceMode = slice["mode"];
+            txSliceDaxChannel = slice["digital"].toObject().value("dax_channel");
+            break;
+        }
+    }
+    txRoute["tx_slice_id"] = txSliceId;
+    txRoute["tx_slice_mode"] = txSliceMode;
+    txRoute["tx_slice_dax_channel"] = txSliceDaxChannel;
     obj["tx_route"] = txRoute;
 
     QJsonObject volumes;
@@ -214,6 +292,90 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
     volumes["radio_headphone_gain"] = radioAudio["headphone_gain"];
     volumes["radio_headphone_mute"] = radioAudio["headphone_mute"];
     volumes["radio_front_speaker_mute"] = radioAudio["front_speaker_mute"];
+
+    if (audio) {
+        volumes["engine_rx_volume_pct"] = qRound(audio->rxVolume() * 100.0f);
+        volumes["engine_rx_muted"] = audio->isMuted();
+        volumes["engine_rx_boost"] = audio->rxBoost();
+        obj["rx_streaming"] = audio->isRxStreaming();
+        obj["tx_streaming"] = audio->isTxStreaming();
+        obj["dax_tx_mode"] = audio->isDaxTxMode();
+        obj["dax_tx_use_radio_route"] = audio->daxTxUseRadioRoute();
+    } else {
+        volumes["engine_rx_volume_pct"] = QJsonValue();
+        volumes["engine_rx_muted"] = QJsonValue();
+        volumes["engine_rx_boost"] = QJsonValue();
+        obj["rx_streaming"] = QJsonValue();
+        obj["tx_streaming"] = QJsonValue();
+        obj["dax_tx_mode"] = QJsonValue();
+        obj["dax_tx_use_radio_route"] = QJsonValue();
+    }
+
+    obj["volumes"] = volumes;
+    return obj;
+}
+
+QJsonObject buildAudioStartupSnapshot(const AudioEngine* audio, const QJsonObject& snapshot)
+{
+    const QList<QAudioDevice> inputs = QMediaDevices::audioInputs();
+    const QList<QAudioDevice> outputs = QMediaDevices::audioOutputs();
+    const QAudioDevice defaultInput = QMediaDevices::defaultAudioInput();
+    const QAudioDevice defaultOutput = QMediaDevices::defaultAudioOutput();
+
+    const QAudioDevice selectedInput = (audio && !audio->inputDevice().isNull())
+        ? audio->inputDevice()
+        : defaultInput;
+    const QAudioDevice selectedOutput = (audio && !audio->outputDevice().isNull())
+        ? audio->outputDevice()
+        : defaultOutput;
+    const QByteArray savedInputId = AppSettings::instance()
+        .value(QStringLiteral("AudioInputDeviceId"), QString()).toByteArray();
+    const QByteArray savedOutputId = AppSettings::instance()
+        .value(QStringLiteral("AudioOutputDeviceId"), QString()).toByteArray();
+
+    QJsonObject obj;
+    obj["available"] = audio != nullptr;
+    obj["qt_multimedia"] = true;
+    obj["input_device_count"] = inputs.size();
+    obj["output_device_count"] = outputs.size();
+    obj["saved_input_configured"] = !savedInputId.isEmpty();
+    obj["saved_output_configured"] = !savedOutputId.isEmpty();
+    obj["saved_input_present"] = deviceIdPresent(inputs, savedInputId);
+    obj["saved_output_present"] = deviceIdPresent(outputs, savedOutputId);
+    obj["selected_input_source"] = (audio && !audio->inputDevice().isNull()) ? "saved selection" : "system default";
+    obj["selected_output_source"] = (audio && !audio->outputDevice().isNull()) ? "saved selection" : "system default";
+    obj["selected_input_present"] = devicePresent(inputs, selectedInput);
+    obj["selected_output_present"] = devicePresent(outputs, selectedOutput);
+    obj["selected_input"] = basicDeviceToJson(selectedInput, selectedInput, defaultInput, QStringLiteral("input"));
+    obj["selected_output"] = basicDeviceToJson(selectedOutput, selectedOutput, defaultOutput, QStringLiteral("output"));
+    obj["default_input"] = basicDeviceToJson(defaultInput, selectedInput, defaultInput, QStringLiteral("input"));
+    obj["default_output"] = basicDeviceToJson(defaultOutput, selectedOutput, defaultOutput, QStringLiteral("output"));
+
+    const QJsonObject transmit = snapshot["transmit"].toObject();
+    const QJsonObject mic = transmit["mic"].toObject();
+    const bool pcAudioEnabled = isSavedTrue(QStringLiteral("PcAudioEnabled"), QStringLiteral("True"));
+
+    QJsonObject rxRoute;
+    rxRoute["output"] = pcAudioEnabled ? "PC audio" : "Radio audio";
+    rxRoute["source"] = "PcAudioEnabled app setting";
+    rxRoute["selected_output_device"] = selectedOutput.description();
+    obj["rx_route"] = rxRoute;
+
+    QJsonObject txRoute;
+    txRoute["input"] = micRouteName(mic);
+    txRoute["source"] = "transmit mic/DAX state";
+    if (mic.contains(QStringLiteral("selection")))
+        txRoute["mic_selection"] = mic["selection"].toString();
+    if (mic.contains(QStringLiteral("dax_on")))
+        txRoute["dax_on"] = mic["dax_on"].toBool();
+    txRoute["selected_input_device"] = selectedInput.description();
+    obj["tx_route"] = txRoute;
+
+    QJsonObject volumes;
+    volumes["pc_audio_enabled"] = pcAudioEnabled;
+    volumes["pc_audio_muted"] = isSavedTrue(QStringLiteral("PcAudioMuted"));
+    volumes["pc_master_volume_pct"] = AppSettings::instance().value("MasterVolume", "100").toInt();
+    volumes["pc_mic_gain_pct"] = AppSettings::instance().value("PcMicGain", 100).toInt();
 
     if (audio) {
         volumes["engine_rx_volume_pct"] = qRound(audio->rxVolume() * 100.0f);

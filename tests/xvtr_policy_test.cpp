@@ -42,9 +42,10 @@ std::string detailFor(const XvtrPolicy::WaterfallTileRange& range)
 
 void expectBandKey(const char* label, const QString& bandName,
                    const QVector<XvtrPolicy::Transverter>& xvtrs,
-                   const QString& expectedKey)
+                   const QString& expectedKey,
+                   ModelCapabilities caps = {})
 {
-    const auto result = XvtrPolicy::resolveBandStackKey(bandName, xvtrs);
+    const auto result = XvtrPolicy::resolveBandStackKey(bandName, xvtrs, caps);
     report(label,
            result.isSupported() && result.key == expectedKey,
            QStringLiteral("key=%1 reason=%2")
@@ -105,6 +106,22 @@ void testBandStackKeysRefuseGuesses()
                           "70cm", xvtrs, "has no Flex display pan band= mapping");
     expectUnsupportedBand("unknown band does not use freq/mode fallback",
                           "1.2G", xvtrs, "has no Flex display pan band= mapping");
+}
+
+void testBandStackKeysUseNativeVhfOnlyWhenCapable()
+{
+    const QVector<XvtrPolicy::Transverter> xvtrs = {
+        xvtr(12, 3, "2m", 144.0, 28.0),
+    };
+
+    expectBandKey("FLEX-6700 native 2m strips UI suffix",
+                  "2m", {}, "2", {false, true});
+    expectBandKey("FLEX-6500/6700 native 4m strips UI suffix",
+                  "4m", {}, "4", {true, false});
+    expectBandKey("native 2m wins over same-named XVTR on capable radio",
+                  "2m", xvtrs, "2", {false, true});
+    expectBandKey("without 2m capability, same-named XVTR still resolves",
+                  "2m", xvtrs, "X12");
 }
 
 void testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan()
@@ -187,14 +204,14 @@ void testXvtrWaterfallMapsIfToRfBands()
 
 void testXvtrWaterfallGuardrails()
 {
-    const QVector<XvtrPolicy::Transverter> unvalidatedXvtr = {
+    const QVector<XvtrPolicy::Transverter> invalidXvtr = {
         xvtr(12, 3, "2m", 144.0, 28.0, false),
     };
 
-    const auto unvalidated = XvtrPolicy::mapWaterfallTileRange(
-        28.125, 28.625, 144.375, unvalidatedXvtr, false);
-    expectRange("unvalidated XVTR with RF/IF offset maps waterfall range",
-                unvalidated, 144.125, 144.625, true);
+    const auto invalid = XvtrPolicy::mapWaterfallTileRange(
+        28.125, 28.625, 144.375, invalidXvtr, false);
+    expectRange("invalid XVTR does not trigger IF/RF waterfall shift",
+                invalid, 28.125, 28.625, false);
 
     const QVector<XvtrPolicy::Transverter> missingIfXvtr = {
         xvtr(12, 3, "2m", 144.0, 0.0, false),
@@ -222,6 +239,7 @@ int main()
 {
     testBandStackKeysUseFlexIndex();
     testBandStackKeysRefuseGuesses();
+    testBandStackKeysUseNativeVhfOnlyWhenCapable();
     testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan();
     testXvtrWaterfallMapsIfToRfBands();
     testXvtrWaterfallGuardrails();

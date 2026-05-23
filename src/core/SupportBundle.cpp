@@ -1,5 +1,6 @@
 #include "SupportBundle.h"
 #include "AppSettings.h"
+#include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
 #include "LogManager.h"
 #include "models/RadioModel.h"
 
@@ -99,11 +100,16 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
         obj["connected"] = radio.connected;
         if (radio.connected) {
             obj["model"]           = radio.model;
-            obj["serial"]          = radio.serial;
+            // Serial and IP are PII per project policy — redact to match
+            // the form used in logs (****-****-****-XXXX, *.*.*. XXX) so
+            // support recipients can correlate but never see the cleartext
+            // values.  Callsign is FCC public record; leave as-is.
+            // See GHSA-ccrg-j8cp-qhc4.
+            obj["serial"]          = redactPii(radio.serial);
             obj["firmware"]        = radio.firmware;
             obj["protocolVersion"] = radio.protocolVersion;
             obj["callsign"]        = radio.callsign;
-            obj["ip"]              = radio.ip;
+            obj["ip"]              = redactPii(radio.ip);
         }
         QFile f(tmp + "/radio-info.json");
         if (f.open(QIODevice::WriteOnly))

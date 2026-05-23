@@ -5,7 +5,9 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QTableWidget>
+#include <QTableWidgetItem>
 
 namespace AetherSDR {
 
@@ -15,18 +17,25 @@ static const char* kDialogStyle =
     "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
     "  border-radius: 3px; color: #c8d8e8; padding: 6px 20px; font-weight: bold; }"
     "QPushButton:hover { background: #203040; border-color: #00b4d8; }"
+    "QPushButton#disconnectClientButton { background: #3a1a22; border-color: #7a2836; "
+    "  color: #ffd6d6; padding: 4px 12px; }"
+    "QPushButton#disconnectClientButton:hover { background: #4a202a; border-color: #d84a5f; }"
+    "QPushButton#disconnectClientButton:disabled { background: #24242e; border-color: #404050; color: #8a8a94; }"
     "QTableWidget { background: #0f0f1a; color: #c8d8e8; "
     "  gridline-color: #203040; border: 1px solid #304050; }"
     "QTableWidget::item { padding: 4px 8px; }"
     "QHeaderView::section { background: #1a2a3a; color: #8aa8c0; "
     "  border: 1px solid #203040; padding: 6px; font-weight: bold; }";
 
+constexpr int kDisconnectActionColumnWidth = 144;
+constexpr int kDisconnectButtonWidth = 128;
+
 MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
     : PersistentDialog("multiFLEX Dashboard", "MultiFlexDialogGeometry", parent),
       m_model(model)
 {
-    setMinimumSize(550, 280);
-    resize(600, 320);
+    setMinimumSize(680, 280);
+    resize(760, 320);
     setStyleSheet(kDialogStyle);
 
     auto* root = new QVBoxLayout(bodyWidget());
@@ -52,13 +61,16 @@ MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
 
     // Client table
     m_table = new QTableWidget;
-    m_table->setColumnCount(4);
-    m_table->setHorizontalHeaderLabels({"LOCAL PTT", "STATION", "TX ANT", "TX FREQ (MHz)"});
+    m_table->setColumnCount(5);
+    m_table->setHorizontalHeaderLabels({"LOCAL PTT", "STATION", "TX ANT", "TX FREQ (MHz)", ""});
     m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Fixed);
+    m_table->setColumnWidth(4, kDisconnectActionColumnWidth);
     m_table->verticalHeader()->setVisible(false);
+    m_table->verticalHeader()->setDefaultSectionSize(36);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     root->addWidget(m_table);
@@ -112,6 +124,17 @@ void MultiFlexDialog::refresh()
     const auto& infoMap = m_model->clientInfoMap();
     const quint32 ourHandle = m_model->ourClientHandle();
 
+    // Drop pending-disconnect entries whose handle has actually left the
+    // client list — the radio has confirmed the eviction, so a fresh
+    // future appearance (impossible today but defensive) gets a normal
+    // button again.
+    for (auto it = m_pendingDisconnects.begin(); it != m_pendingDisconnects.end(); ) {
+        if (!infoMap.contains(*it))
+            it = m_pendingDisconnects.erase(it);
+        else
+            ++it;
+    }
+
     // Build local TX info override from our own slices (ClientInfo may not
     // have TX data if slice status arrived before client connected status)
     QString ourTxAnt;
@@ -133,6 +156,7 @@ void MultiFlexDialog::refresh()
     }
 
     // Populate table
+    m_table->clearContents();
     m_table->setRowCount(infoMap.size());
 
     bool weHavePtt = false;
@@ -162,9 +186,15 @@ void MultiFlexDialog::refresh()
         m_table->setItem(row, 0, pttItem);
 
         // STATION — program: station
-        QString displayName = info.program;
-        if (!info.station.isEmpty() && info.station != info.program)
-            displayName = info.program + ": " + info.station;
+        const QString program = info.program.trimmed();
+        const QString station = info.station.trimmed();
+        QString displayName = program;
+        if (!program.isEmpty() && !station.isEmpty() && station != program)
+            displayName = program + ": " + station;
+        else if (!station.isEmpty())
+            displayName = station;
+        if (displayName.trimmed().isEmpty())
+            displayName = QString("client 0x%1").arg(handle, 8, 16, QChar('0')).toUpper();
         auto* stationItem = new QTableWidgetItem(displayName);
         stationItem->setTextAlignment(Qt::AlignCenter);
         if (isUs)
@@ -187,6 +217,27 @@ void MultiFlexDialog::refresh()
         auto* freqItem = new QTableWidgetItem(freq);
         freqItem->setTextAlignment(Qt::AlignCenter);
         m_table->setItem(row, 3, freqItem);
+
+        auto* actionItem = new QTableWidgetItem;
+        actionItem->setData(Qt::UserRole, handle);
+        m_table->setItem(row, 4, actionItem);
+        if (!isUs) {
+            const bool pending = m_pendingDisconnects.contains(handle);
+            auto* disconnectBtn = new QPushButton(
+                pending ? "Disconnecting" : "Disconnect", m_table);
+            disconnectBtn->setObjectName("disconnectClientButton");
+            disconnectBtn->setCursor(Qt::PointingHandCursor);
+            disconnectBtn->setFixedWidth(kDisconnectButtonWidth);
+            disconnectBtn->setEnabled(!pending);
+            connect(disconnectBtn, &QPushButton::clicked,
+                    this, [this, disconnectBtn, handle, displayName]() {
+                disconnectBtn->setEnabled(false);
+                disconnectBtn->setText("Disconnecting");
+                m_pendingDisconnects.insert(handle);
+                emit disconnectClientRequested(handle, displayName);
+            });
+            m_table->setCellWidget(row, 4, disconnectBtn);
+        }
 
         ++row;
     }

@@ -1,235 +1,469 @@
 #include "WhatsNewDialog.h"
-#include "generated/WhatsNewData.h"
 #include "core/VersionNumber.h"
 #include "core/AppSettings.h"
 
 #include <QCoreApplication>
-#include <QLabel>
-#include <QPushButton>
-#include <QTextBrowser>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
+#include <QDateTime>
 #include <QDesktopServices>
+#include <QHBoxLayout>
+#include <QInputDialog>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonParseError>
+#include <QLabel>
+#include <QLineEdit>
+#include <QLocale>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
+#include <QPushButton>
+#include <QRegularExpression>
+#include <QTextBrowser>
+#include <QTextBlock>
+#include <QTextBlockFormat>
+#include <QTextCursor>
+#include <QTextDocument>
+#include <QTextList>
+#include <QUrl>
+#include <QVBoxLayout>
 
 namespace AetherSDR {
+namespace {
+
+constexpr auto kReleaseApiBase =
+    "https://api.github.com/repos/aethersdr/AetherSDR/releases/tags/%1";
+
+QString normalizedTag(const QString& version)
+{
+    QString tag = version.trimmed();
+    if (!tag.startsWith('v', Qt::CaseInsensitive))
+        tag.prepend('v');
+    return tag;
+}
+
+QUrl githubUrlForMaybeRelativeLink(const QUrl& url)
+{
+    if (!url.isRelative())
+        return url;
+    return QUrl("https://github.com/aethersdr/AetherSDR/").resolved(url);
+}
+
+QString releaseApiUrl(const QString& tagName)
+{
+    return QString(kReleaseApiBase).arg(QString::fromLatin1(QUrl::toPercentEncoding(tagName)));
+}
+
+QString formattedPublishedAt(const QString& publishedAt)
+{
+    if (publishedAt.isEmpty())
+        return {};
+
+    QDateTime dateTime = QDateTime::fromString(publishedAt, Qt::ISODate);
+    if (!dateTime.isValid())
+        return publishedAt;
+
+    return QLocale().toString(dateTime.toLocalTime(), QLocale::LongFormat);
+}
+
+QString stripDuplicateHeading(QString markdown, const QString& title, const QString& tagName)
+{
+    markdown = markdown.trimmed();
+    if (!markdown.startsWith("# "))
+        return markdown;
+
+    const qsizetype newline = markdown.indexOf('\n');
+    const QString firstLine = (newline >= 0 ? markdown.left(newline) : markdown).trimmed();
+    const QString heading = firstLine.mid(2).trimmed();
+
+    const bool matchesTitle = !title.isEmpty()
+        && heading.compare(title, Qt::CaseInsensitive) == 0;
+    const bool matchesTag = !tagName.isEmpty()
+        && heading.contains(tagName, Qt::CaseInsensitive);
+    if (!matchesTitle && !matchesTag)
+        return markdown;
+
+    return newline >= 0 ? markdown.mid(newline + 1).trimmed() : QString();
+}
+
+QString enrichGitHubReferences(QString markdown)
+{
+    markdown.replace("\r\n", "\n");
+    markdown.replace('\r', '\n');
+    markdown.replace(
+        QRegularExpression(QStringLiteral(R"((?<![\w\]/\[])#(\d+))")),
+        QStringLiteral("[#\\1](https://github.com/aethersdr/AetherSDR/issues/\\1)"));
+    markdown.replace(
+        QRegularExpression(QStringLiteral(R"((?<![\w\]/\[])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38}[A-Za-z0-9])?))")),
+        QStringLiteral("[@\\1](https://github.com/\\1)"));
+    return markdown;
+}
+
+QString releaseErrorText(QNetworkReply* reply, const QByteArray& payload)
+{
+    const QVariant status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+    QString message;
+
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(payload, &parseError);
+    if (parseError.error == QJsonParseError::NoError && doc.isObject())
+        message = doc.object().value("message").toString();
+
+    if (message.isEmpty())
+        message = reply->errorString();
+
+    if (status.isValid())
+        return QString("GitHub returned HTTP %1 (%2).").arg(status.toInt()).arg(message);
+
+    return message;
+}
+
+QString releaseMarkdownStyleSheet()
+{
+    return QStringLiteral(
+        "body { color: #d6e2ee; font-family: sans-serif; font-size: 13px; line-height: 1.42; }"
+        "h1 { color: #f2f7fb; font-size: 22px; margin-top: 4px; margin-bottom: 12px; }"
+        "h2 { color: #00b4d8; font-size: 18px; margin-top: 20px; margin-bottom: 8px; }"
+        "h3 { color: #f2f7fb; font-size: 15px; margin-top: 14px; margin-bottom: 6px; }"
+        "p { margin-top: 6px; margin-bottom: 10px; }"
+        "ul, ol { margin-top: 6px; margin-bottom: 12px; }"
+        "li { margin-bottom: 5px; }"
+        "blockquote { color: #aebfce; border-left: 3px solid #00b4d8; margin-left: 0; padding-left: 12px; }"
+        "code { background: #172433; color: #d8eef8; padding: 1px 4px; }"
+        "pre { background: #101a26; color: #d8eef8; padding: 10px; }"
+        "a { color: #56ccf2; text-decoration: none; }"
+        "hr { color: #304050; background-color: #304050; height: 1px; }");
+}
+
+QString secondaryButtonStyle()
+{
+    return QStringLiteral(
+        "QPushButton { background: #1a2a3a; color: #d6e2ee; font-weight: bold; "
+        "font-size: 13px; border-radius: 6px; padding: 0 24px; "
+        "border: 1px solid #304050; }"
+        "QPushButton:hover { background: #20384c; }"
+        "QPushButton:pressed { background: #162838; }");
+}
+
+QString primaryButtonStyle()
+{
+    return QStringLiteral(
+        "QPushButton { background: #00b4d8; color: #071018; font-weight: bold; "
+        "font-size: 13px; border-radius: 6px; padding: 0 28px; border: none; }"
+        "QPushButton:hover { background: #17c9ea; }"
+        "QPushButton:pressed { background: #0798b6; }");
+}
+
+void applyReleaseMarkdownSpacing(QTextDocument* document)
+{
+    if (!document)
+        return;
+
+    document->setDocumentMargin(18);
+
+    for (QTextBlock block = document->begin(); block.isValid(); block = block.next()) {
+        QTextBlockFormat format = block.blockFormat();
+        const int headingLevel = format.headingLevel();
+        const bool isListItem = block.textList() != nullptr;
+        const bool isBlank = block.text().trimmed().isEmpty();
+
+        if (isBlank) {
+            format.setTopMargin(0);
+            format.setBottomMargin(8);
+        } else if (headingLevel > 0) {
+            format.setTopMargin(headingLevel == 1 ? 2 : 18);
+            format.setBottomMargin(headingLevel == 1 ? 12 : 8);
+            format.setLineHeight(125, QTextBlockFormat::ProportionalHeight);
+        } else if (isListItem) {
+            format.setTopMargin(2);
+            format.setBottomMargin(5);
+            format.setLineHeight(138, QTextBlockFormat::ProportionalHeight);
+        } else {
+            format.setTopMargin(0);
+            format.setBottomMargin(12);
+            format.setLineHeight(145, QTextBlockFormat::ProportionalHeight);
+        }
+
+        QTextCursor cursor(block);
+        cursor.mergeBlockFormat(format);
+    }
+}
+
+} // namespace
 
 WhatsNewDialog::WhatsNewDialog(const QString& lastSeenVersion,
                                const QString& currentVersion,
                                QWidget* parent,
-                               bool showUpgrade)
-    : QDialog(parent)
+                               bool showUpgrade,
+                               bool currentVersionOnly)
+    : PersistentDialog("What's New - AetherSDR", "WhatsNewDialogGeometry", parent)
+    , m_currentVersion(currentVersion)
 {
     setAttribute(Qt::WA_DeleteOnClose);
-    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
-    buildUI(lastSeenVersion, currentVersion, showUpgrade);
+    buildUI(lastSeenVersion, currentVersion, showUpgrade, currentVersionOnly);
 }
 
 WhatsNewDialog* WhatsNewDialog::showAll(QWidget* parent)
 {
-    auto* dlg = new WhatsNewDialog("", QCoreApplication::applicationVersion(), parent);
+    auto* dlg = new WhatsNewDialog("", QCoreApplication::applicationVersion(), parent,
+                                   false, true);
     dlg->show();
     return dlg;
 }
 
 void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
-                              const QString& currentVersion,
-                              bool showUpgrade)
+                             const QString& currentVersion,
+                             bool showUpgrade,
+                             bool currentVersionOnly)
 {
-    setWindowTitle("What's New — AetherSDR");
-    resize(580, 540);
-    setMinimumSize(420, 320);
+    resize(820, 680);
+    setMinimumSize(560, 420);
 
     auto lastSeen = VersionNumber::parse(lastSeenVersion);
-    auto current = VersionNumber::parse(currentVersion);
-    bool isWelcome = lastSeen.isNull();
+    m_isWelcome = lastSeen.isNull() && !currentVersionOnly;
 
-    // Filter entries: show releases where lastSeen < version <= current
-    std::vector<ReleaseEntry> visible;
-    for (const auto& entry : whatsNewEntries()) {
-        auto v = VersionNumber::parse(entry.version);
-        if (isWelcome) {
-            // First install: only show current version
-            if (v == current) visible.push_back(entry);
-        } else {
-            if (v > lastSeen && v <= current)
-                visible.push_back(entry);
-        }
-    }
-    // Cap at 5 most recent to avoid overwhelming the user
-    if (visible.size() > 5)
-        visible.resize(5);
-
-    auto* layout = new QVBoxLayout(this);
+    auto* layout = new QVBoxLayout(bodyWidget());
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
-    // Header
     auto* header = new QLabel;
     header->setAlignment(Qt::AlignCenter);
-    if (isWelcome) {
-        header->setText(QString("<div style='padding: 16px;'>"
-            "<span style='color: #00b4d8; font-size: 11px; letter-spacing: 3px;'>"
-            "AETHERSDR V%1</span><br>"
-            "<span style='color: #c8d8e8; font-size: 20px; font-weight: bold;'>"
-            "Welcome!</span></div>").arg(currentVersion));
-    } else {
-        header->setText(QString("<div style='padding: 16px;'>"
-            "<span style='color: #00b4d8; font-size: 11px; letter-spacing: 3px;'>"
-            "AETHERSDR V%1</span><br>"
-            "<span style='color: #c8d8e8; font-size: 20px; font-weight: bold;'>"
-            "What's New</span></div>").arg(currentVersion));
-    }
+    const QString heading = m_isWelcome ? "Welcome!" : "What's New";
+    header->setText(QString("<div style='padding: 18px 20px 12px 20px;'>"
+        "<span style='color: #00b4d8; font-size: 11px; letter-spacing: 3px;'>"
+        "AETHERSDR V%1</span><br>"
+        "<span style='color: #dce8f3; font-size: 24px; font-weight: bold;'>"
+        "%2</span></div>").arg(currentVersion, heading));
     header->setStyleSheet("QLabel { background: #0a0a14; }");
     layout->addWidget(header);
 
-    // Lightbulb hint (#485)
-    auto* hint = new QLabel(
-        "<span style='color: #8090a0; font-size: 11px;'>"
-        "Found a bug or have an idea? Click the \xf0\x9f\x92\xa1 button in the title bar.</span>");
-    hint->setAlignment(Qt::AlignCenter);
-    hint->setContentsMargins(16, 0, 16, 4);
-    hint->setStyleSheet("QLabel { background: #0a0a14; }");
-    layout->addWidget(hint);
+    m_statusLabel = new QLabel;
+    m_statusLabel->setAlignment(Qt::AlignCenter);
+    m_statusLabel->setWordWrap(true);
+    m_statusLabel->setContentsMargins(18, 0, 18, 8);
+    m_statusLabel->setStyleSheet(
+        "QLabel { background: #0a0a14; color: #8aa8c0; font-size: 12px; }");
+    layout->addWidget(m_statusLabel);
 
-    // Separator
     auto* sep = new QWidget;
     sep->setFixedHeight(1);
     sep->setStyleSheet("background: #203040;");
     layout->addWidget(sep);
 
-    // Content
-    auto* browser = new QTextBrowser;
-    browser->setOpenExternalLinks(false);
-    browser->setReadOnly(true);
-    browser->setStyleSheet(
-        "QTextBrowser { background: #0f0f1a; color: #c8d8e8; border: none; "
-        "padding: 12px; font-size: 12px; }"
-        "QScrollBar:vertical { background: #0a0a14; width: 8px; }"
-        "QScrollBar::handle:vertical { background: #304050; border-radius: 4px; }"
+    m_browser = new QTextBrowser;
+    m_browser->setOpenExternalLinks(false);
+    m_browser->setOpenLinks(false);
+    m_browser->setReadOnly(true);
+    m_browser->setStyleSheet(
+        "QTextBrowser { background: #0f0f1a; color: #d6e2ee; border: none; "
+        "padding: 18px; font-size: 13px; }"
+        "QScrollBar:vertical { background: #0a0a14; width: 10px; }"
+        "QScrollBar::handle:vertical { background: #304050; border-radius: 5px; }"
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
-    browser->setHtml(renderHtml(visible, isWelcome));
-    layout->addWidget(browser, 1);
+    connect(m_browser, &QTextBrowser::anchorClicked, this, [](const QUrl& url) {
+        QDesktopServices::openUrl(githubUrlForMaybeRelativeLink(url));
+    });
+    layout->addWidget(m_browser, 1);
 
-    // Footer with button
     auto* footer = new QWidget;
     footer->setStyleSheet("background: #0a0a14;");
-    auto* footerLayout = new QVBoxLayout(footer);
+    auto* footerLayout = new QHBoxLayout(footer);
     footerLayout->setContentsMargins(16, 12, 16, 16);
+    footerLayout->setSpacing(12);
+    footerLayout->addStretch(1);
 
-    auto* btnRow = new QHBoxLayout;
-    btnRow->setSpacing(12);
-
-    auto* gotItBtn = new QPushButton("Got it \xe2\x80\x94 73!");
-    gotItBtn->setFixedHeight(36);
-    gotItBtn->setCursor(Qt::PointingHandCursor);
-    gotItBtn->setStyleSheet(
-        "QPushButton { background: #00b4d8; color: #0f0f1a; font-weight: bold; "
-        "font-size: 14px; border-radius: 18px; padding: 0 32px; }"
-        "QPushButton:hover { background: #00c8f0; }");
-    connect(gotItBtn, &QPushButton::clicked, this, &QDialog::close);
-    btnRow->addWidget(gotItBtn);
+    auto* findBtn = new QPushButton("Find");
+    findBtn->setMinimumWidth(96);
+    findBtn->setFixedHeight(36);
+    findBtn->setCursor(Qt::PointingHandCursor);
+    findBtn->setStyleSheet(secondaryButtonStyle());
+    connect(findBtn, &QPushButton::clicked, this, &WhatsNewDialog::promptFind);
+    footerLayout->addWidget(findBtn, 0, Qt::AlignCenter);
 
     if (showUpgrade) {
         auto* upgradeBtn = new QPushButton("Upgrade");
         upgradeBtn->setFixedHeight(36);
         upgradeBtn->setCursor(Qt::PointingHandCursor);
-        upgradeBtn->setStyleSheet(
-            "QPushButton { background: #20a040; color: #ffffff; font-weight: bold; "
-            "font-size: 14px; border-radius: 18px; padding: 0 32px; }"
-            "QPushButton:hover { background: #28c050; }");
+        upgradeBtn->setStyleSheet(secondaryButtonStyle());
         connect(upgradeBtn, &QPushButton::clicked, this, [this] {
             QDesktopServices::openUrl(QUrl("https://github.com/aethersdr/AetherSDR/releases/latest"));
             close();
         });
-        btnRow->addWidget(upgradeBtn);
+        footerLayout->addWidget(upgradeBtn, 0, Qt::AlignCenter);
 
         auto* skipBtn = new QPushButton("Skip this version");
         skipBtn->setFixedHeight(36);
         skipBtn->setCursor(Qt::PointingHandCursor);
-        skipBtn->setStyleSheet(
-            "QPushButton { background: #1a2a3a; color: #8090a0; font-weight: bold; "
-            "font-size: 14px; border-radius: 18px; padding: 0 24px; "
-            "border: 1px solid #304050; }"
-            "QPushButton:hover { background: #203040; color: #c8d8e8; }");
+        skipBtn->setStyleSheet(secondaryButtonStyle());
         connect(skipBtn, &QPushButton::clicked, this, [currentVersion, this] {
             auto& s = AppSettings::instance();
             s.setValue("LastSeenVersion", currentVersion);
             s.save();
             close();
         });
-        btnRow->addWidget(skipBtn);
+        footerLayout->addWidget(skipBtn, 0, Qt::AlignCenter);
     }
 
-    footerLayout->addLayout(btnRow);
-    footerLayout->setAlignment(btnRow, Qt::AlignCenter);
+    auto* closeBtn = new QPushButton("Close");
+    closeBtn->setMinimumWidth(96);
+    closeBtn->setFixedHeight(36);
+    closeBtn->setCursor(Qt::PointingHandCursor);
+    closeBtn->setStyleSheet(primaryButtonStyle());
+    connect(closeBtn, &QPushButton::clicked, this, &QDialog::close);
+    footerLayout->addWidget(closeBtn, 0, Qt::AlignCenter);
+    footerLayout->addStretch(1);
     layout->addWidget(footer);
 
     setStyleSheet("WhatsNewDialog { background: #0f0f1a; }");
+
+    showLoadingState();
+    fetchLiveReleaseNotes();
 }
 
-QString WhatsNewDialog::renderHtml(const std::vector<ReleaseEntry>& entries,
-                                    bool isWelcome) const
+void WhatsNewDialog::fetchLiveReleaseNotes()
 {
-    // Category dot colors
-    auto dotColor = [](ChangeCategory cat) -> const char* {
-        switch (cat) {
-        case ChangeCategory::Feature:        return "#00b4d8";
-        case ChangeCategory::BugFix:         return "#e06040";
-        case ChangeCategory::Improvement:    return "#40c060";
-        case ChangeCategory::Infrastructure: return "#8898a8";
-        }
-        return "#c8d8e8";
-    };
+    if (!m_browser)
+        return;
 
-    QString html;
-    html += "<style>"
-            "body { font-family: sans-serif; color: #c8d8e8; }"
-            ".release { margin-bottom: 16px; }"
-            ".release-header { color: #00b4d8; font-size: 13px; font-weight: bold; "
-            "  margin-bottom: 2px; }"
-            ".headline { color: #8898a8; font-style: italic; font-size: 12px; "
-            "  margin-bottom: 10px; }"
-            ".item { margin-bottom: 10px; padding-left: 4px; }"
-            ".item-title { font-weight: bold; font-size: 12px; color: #c8d8e8; }"
-            ".item-desc { color: #8898a8; font-size: 11px; margin-top: 2px; }"
-            ".release-date { color:#8aa8c0; font-size:11px; margin-top:2px; margin-bottom:4px; }"
-            ".dot { font-size: 14px; }"
-            "</style>";
+    const QString tagName = releaseTag();
+    setStatusText(QString("Loading detailed release notes from GitHub for %1...").arg(tagName));
 
-    for (const auto& entry : entries) {
-        html += "<div class='release'>";
+    QNetworkRequest request{QUrl(releaseApiUrl(tagName))};
+    request.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
+    request.setRawHeader("Accept", "application/vnd.github+json");
+    request.setTransferTimeout(15000);
 
-        // Release header
-        if (!isWelcome || entries.size() > 1) {
-            html += QString("<div class='release-header'>v%1</div>").arg(entry.version);
-            if (!entry.date.isEmpty())
-                html += QString("<div class='release-date'>%1</div>")
-                    .arg(entry.date);
+    auto* nam = new QNetworkAccessManager(this);
+    auto* reply = nam->get(request);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, nam] {
+        const QByteArray payload = reply->readAll();
+        const bool ok = reply->error() == QNetworkReply::NoError;
+        const QString errorText = ok ? QString() : releaseErrorText(reply, payload);
+        reply->deleteLater();
+        nam->deleteLater();
+
+        if (!ok) {
+            showReleaseLoadError(errorText);
+            return;
         }
 
-        if (!entry.headline.isEmpty())
-            html += QString("<div class='headline'>%1</div>").arg(entry.headline.toHtmlEscaped());
-
-        // Items
-        for (const auto& item : entry.items) {
-            html += "<div class='item'>";
-            html += QString("<span class='dot' style='color:%1;'>&#x25CF;</span> ")
-                .arg(dotColor(item.category));
-            html += QString("<span class='item-title'>%1</span>").arg(item.title.toHtmlEscaped());
-            if (!item.description.isEmpty())
-                html += QString("<div class='item-desc'>%1</div>").arg(item.description.toHtmlEscaped());
-            html += "</div>";
+        QJsonParseError parseError;
+        const QJsonDocument doc = QJsonDocument::fromJson(payload, &parseError);
+        if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+            showReleaseLoadError("GitHub returned unreadable release data.");
+            return;
         }
 
-        html += "</div>";
-    }
+        const QJsonObject obj = doc.object();
+        const QString body = obj.value("body").toString().trimmed();
+        if (body.isEmpty()) {
+            showReleaseLoadError("This GitHub release has no published notes.");
+            return;
+        }
 
-    if (entries.empty()) {
-        html += "<div style='text-align:center; color:#8aa8c0; padding:40px;'>"
-                "No new changes to report.</div>";
-    }
+        showLiveReleaseNotes(obj.value("name").toString(),
+                             obj.value("tag_name").toString(),
+                             obj.value("published_at").toString(),
+                             body);
+    });
+}
 
-    return html;
+void WhatsNewDialog::showLoadingState()
+{
+    if (!m_browser)
+        return;
+
+    setStatusText(QString("Loading release notes for %1...").arg(releaseTag()));
+    m_browser->setHtml(
+        "<div style='color:#8aa8c0; font-family:sans-serif; font-size:13px; "
+        "padding:40px; text-align:center;'>Loading release notes from GitHub...</div>");
+}
+
+void WhatsNewDialog::showReleaseLoadError(const QString& message)
+{
+    if (!m_browser)
+        return;
+
+    setStatusText(QString("Could not load release notes for %1").arg(releaseTag()));
+    m_browser->setHtml(QString(
+        "<div style='color:#c8d8e8; font-family:sans-serif; font-size:13px; "
+        "padding:32px; line-height:1.45;'>"
+        "<h3 style='color:#f2f7fb; margin-top:0;'>GitHub release notes unavailable</h3>"
+        "<p style='color:#aebfce;'>%1</p>"
+        "<p style='color:#8aa8c0;'>Check your network connection and reopen What's New to try again.</p>"
+        "</div>").arg(message.toHtmlEscaped()));
+}
+
+void WhatsNewDialog::showLiveReleaseNotes(const QString& title,
+                                          const QString& tagName,
+                                          const QString& publishedAt,
+                                          const QString& bodyMarkdown)
+{
+    if (!m_browser)
+        return;
+
+    QString markdown = enrichGitHubReferences(stripDuplicateHeading(bodyMarkdown, title, tagName));
+    if (markdown.isEmpty())
+        markdown = QString("_No detailed release notes were published for %1._")
+            .arg(tagName.isEmpty() ? releaseTag() : tagName);
+
+    m_browser->document()->setDefaultStyleSheet(releaseMarkdownStyleSheet());
+    m_browser->document()->setMarkdown(markdown, QTextDocument::MarkdownDialectGitHub);
+    applyReleaseMarkdownSpacing(m_browser->document());
+    m_browser->moveCursor(QTextCursor::Start);
+
+    const QString releaseTitle = title.isEmpty()
+        ? (tagName.isEmpty() ? releaseTag() : tagName)
+        : title;
+    const QString dateText = formattedPublishedAt(publishedAt);
+    const QString source = dateText.isEmpty()
+        ? releaseTitle
+        : QString("%1\n\nReleased %2").arg(releaseTitle, dateText);
+    setStatusText(source);
+}
+
+void WhatsNewDialog::promptFind()
+{
+    if (!m_browser)
+        return;
+
+    bool ok = false;
+    const QString text = QInputDialog::getText(this,
+                                               "Find",
+                                               "Find:",
+                                               QLineEdit::Normal,
+                                               m_lastFindText,
+                                               &ok).trimmed();
+    if (!ok || text.isEmpty())
+        return;
+
+    m_lastFindText = text;
+    if (!findInNotes(text))
+        setStatusText(QString("No matches for \"%1\"").arg(text));
+}
+
+bool WhatsNewDialog::findInNotes(const QString& text)
+{
+    if (!m_browser)
+        return false;
+
+    if (m_browser->find(text))
+        return true;
+
+    QTextCursor cursor = m_browser->textCursor();
+    cursor.movePosition(QTextCursor::Start);
+    m_browser->setTextCursor(cursor);
+    return m_browser->find(text);
+}
+
+void WhatsNewDialog::setStatusText(const QString& text)
+{
+    if (m_statusLabel)
+        m_statusLabel->setText(Qt::convertFromPlainText(text));
+}
+
+QString WhatsNewDialog::releaseTag() const
+{
+    return normalizedTag(m_currentVersion);
 }
 
 } // namespace AetherSDR

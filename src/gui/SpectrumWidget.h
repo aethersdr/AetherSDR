@@ -189,9 +189,18 @@ public:
 
     // WNB and RF gain state for on-screen indicators.
     bool wnbActive()   const { return m_wnbActive; }
+    bool wnbUpdating() const { return m_wnbUpdating; }
     int  rfGainValue() const { return m_rfGainValue; }
     bool wideActive()  const { return m_wideActive; }
-    void setWnbActive(bool on) { m_wnbActive = on; markOverlayDirty(); }
+    void setWnbActive(bool on) { syncWnbState(on, 0, false); }
+    void syncWnbState(bool on, int level, bool updating) {
+        Q_UNUSED(level);
+        if (m_wnbActive != on || m_wnbUpdating != updating) {
+            m_wnbActive = on;
+            m_wnbUpdating = updating;
+            markOverlayDirty();
+        }
+    }
     void setRfGain(int gain) {
         if (m_rfGainValue != gain) {
             m_rfGainValue = gain;
@@ -800,6 +809,7 @@ private:
 
     // On-screen indicators (WNB, RF Gain)
     bool m_wnbActive{false};
+    bool m_wnbUpdating{false};
     int  m_rfGainValue{0};
     bool m_wideActive{false};
 
@@ -849,6 +859,7 @@ private:
     float  m_lastDetectDyn{0};
     float  m_lastDetectFrac{0};
     bool   m_lastDetectWnb{false};
+    bool   m_lastDetectWnbUpdating{false};
     int    m_lastDetectRfGain{0};
     bool   m_lastDetectWide{false};
 

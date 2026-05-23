@@ -192,6 +192,14 @@ QString clientConnectionSource(const QMap<QString, QString>& kvs)
     return {};
 }
 
+bool isRoutineClientConnectionInfo(const QString& text)
+{
+    static const QRegularExpression clientInfoRe(
+        QStringLiteral(R"(^Client\s+(?:connected|disconnected)\s+from\s+IP\b)"),
+        QRegularExpression::CaseInsensitiveOption);
+    return clientInfoRe.match(text.trimmed()).hasMatch();
+}
+
 QJsonObject panToJson(const PanadapterModel* pan, const QString& activePanId)
 {
     QJsonObject obj;
@@ -897,6 +905,15 @@ void RadioModel::setPendingClientDisconnects(const QList<quint32>& handles)
     }
 }
 
+bool RadioModel::disconnectClient(quint32 handle)
+{
+    if (handle == 0 || handle == clientHandle())
+        return false;
+
+    disconnectClientHandlesThen({handle});
+    return true;
+}
+
 void RadioModel::setKnownGuiClients(const QStringList& handles,
                                     const QStringList& programs,
                                     const QStringList& stations,
@@ -964,6 +981,24 @@ void RadioModel::applyKnownGuiClients(const QStringList& handles,
     }
 }
 
+void RadioModel::armClientConnectionNoticeSuppression()
+{
+    m_clientConnectionNoticeTimer.restart();
+}
+
+bool RadioModel::clientConnectionNoticeSuppressionActive() const
+{
+    return m_clientConnectionNoticeTimer.isValid()
+        && m_clientConnectionNoticeTimer.elapsed() < CLIENT_CONNECTION_STARTUP_SUPPRESS_MS;
+}
+
+bool RadioModel::shouldSuppressRadioMessageNotice(const QString& text, MessageSeverity severity) const
+{
+    return severity == MessageSeverity::Info
+        && clientConnectionNoticeSuppressionActive()
+        && isRoutineClientConnectionInfo(text);
+}
+
 bool RadioModel::shouldSuppressClientConnectionNotice(quint32 handle)
 {
     if (handle == 0 || handle == clientHandle())
@@ -974,8 +1009,7 @@ bool RadioModel::shouldSuppressClientConnectionNotice(quint32 handle)
         return true;
     }
 
-    if (m_clientConnectionNoticeTimer.isValid()
-            && m_clientConnectionNoticeTimer.elapsed() < CLIENT_CONNECTION_STARTUP_SUPPRESS_MS) {
+    if (clientConnectionNoticeSuppressionActive()) {
         m_announcedClientConnections.insert(handle);
         return true;
     }
@@ -1602,7 +1636,7 @@ void RadioModel::onConnected()
 {
     qCDebug(lcProtocol) << "RadioModel: connected";
     m_reconnectTimer.stop();
-    m_clientConnectionNoticeTimer.restart();
+    armClientConnectionNoticeSuppression();
     setActivePanResized(false);
 
     // Inhibit system sleep while connected if the user has opted in (#1420)
@@ -1638,26 +1672,38 @@ void RadioModel::onConnected()
 
 void RadioModel::disconnectPendingClientsThen(std::function<void()> continuation)
 {
+    const QList<quint32> handles = m_pendingClientDisconnects;
+    m_pendingClientDisconnects.clear();
+    disconnectClientHandlesThen(handles, std::move(continuation));
+}
+
+void RadioModel::disconnectClientHandlesThen(const QList<quint32>& requestedHandles,
+                                             std::function<void()> continuation)
+{
     QList<quint32> handles;
     const quint32 ours = clientHandle();
-    for (quint32 handle : m_pendingClientDisconnects) {
+    for (quint32 handle : requestedHandles) {
         if (handle != 0 && handle != ours && !handles.contains(handle))
             handles.append(handle);
     }
-    m_pendingClientDisconnects.clear();
-
     if (handles.isEmpty()) {
-        continuation();
+        if (continuation)
+            continuation();
         return;
     }
 
     auto remaining = std::make_shared<QList<quint32>>(handles);
+    auto completion = std::make_shared<std::function<void()>>(std::move(continuation));
     auto step = std::make_shared<std::function<void()>>();
-    *step = [this, remaining, continuation, step]() mutable {
+    *step = [this, remaining, completion, step]() mutable {
         if (remaining->isEmpty()) {
-            QTimer::singleShot(250, this, [continuation]() mutable {
-                continuation();
-            });
+            if (*completion) {
+                QTimer::singleShot(250, this, [completion]() mutable {
+                    auto continuation = std::move(*completion);
+                    if (continuation)
+                        continuation();
+                });
+            }
             return;
         }
 
@@ -1743,18 +1789,14 @@ void RadioModel::resolveMultiFlexConflict(quint32 handle)
     auto continuation = std::move(m_multiFlexContinuation);
     m_multiFlexContinuation = nullptr;
 
-    const QString cmd = QString("client disconnect 0x%1").arg(handle, 0, 16);
     qCDebug(lcProtocol) << "RadioModel: resolving multiFLEX conflict, disconnecting" << Qt::hex << handle;
-    sendCmd(cmd, [this, continuation = std::move(continuation)](int code, const QString& body) mutable {
-        if (code != 0)
-            qCWarning(lcProtocol) << "RadioModel: conflict client disconnect failed:" << body.trimmed();
+    disconnectClientHandlesThen({handle}, [this, continuation = std::move(continuation)]() mutable {
         // After eviction, re-run the full peek rather than jumping straight to the
         // continuation. This catches any remaining clients (e.g., two sessions, or
         // a stale handle that hadn't been cleaned up yet) and re-shows the dialog if
         // needed, preventing phantom slices from a partially-disconnected session.
-        QTimer::singleShot(250, this, [this, continuation = std::move(continuation)]() mutable {
+        if (continuation)
             peekForMultiFlexConflictThen(std::move(continuation));
-        });
     });
 }
 
@@ -1812,6 +1854,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         sendCmd("client low_bw_connect");
 
     sendCmd(QString("client gui %1").arg(clientId), [this](int code, const QString& body) {
+        armClientConnectionNoticeSuppression();
         if (code != 0) {
             qCWarning(lcProtocol) << "RadioModel: client gui failed, code" << Qt::hex << code;
         } else if (!body.trimmed().isEmpty()) {
@@ -1848,6 +1891,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             sendCmd("sub audio all", [this](int, const QString&) {
             sendCmd("sub gps all", [this](int, const QString&) {
             sendCmd("sub apd all", [this](int, const QString&) {
+            armClientConnectionNoticeSuppression();
             sendCmd("sub client all", [this](int, const QString&) {
             sendCmd("sub xvtr all", [this](int, const QString&) {
             // Memory status arrives via normal status handler — no subscription needed.
@@ -2379,6 +2423,11 @@ void RadioModel::startNetworkMonitor()
     m_maxPingRtt = 0;
     m_pingMissCount = 0;
     m_pingDisconnectTriggered = false;
+    m_pendingThrottleLift = false;
+    // Safety: ensure MainWindow's m_adaptiveThrottleActive is cleared even if
+    // the connectionStateChanged(false) path was somehow skipped.  Pans are not
+    // yet rebuilt at this point so the fps-restore loop in the handler is a no-op.
+    emit adaptiveThrottleChanged(false, 0);
 
     // RTT is read from kernel TCP_INFO (smoothed RTT from TCP ACK timing),
     // completely independent of Qt event loop buffering. Falls back to
@@ -2400,14 +2449,18 @@ void RadioModel::startNetworkMonitor()
             return;
         }
         ++m_pingMissCount;
-        if (m_pingMissCount >= PING_MISS_DISCONNECT) {
+        const int missThreshold = (m_netState == NetState::Poor)
+                                      ? PING_MISS_DISCONNECT_POOR
+                                      : PING_MISS_DISCONNECT;
+        if (m_pingMissCount >= missThreshold) {
             if (m_pingDisconnectTriggered)
                 return;
 
             m_pingDisconnectTriggered = true;
             m_pingTimer.stop();
-            qDebug() << "RadioModel:" << PING_MISS_DISCONNECT
-                     << "consecutive pings unanswered — forcing disconnect";
+            qCDebug(lcProtocol) << "RadioModel:" << missThreshold
+                                << "consecutive pings unanswered — forcing disconnect"
+                                << "(state:" << static_cast<int>(m_netState) << ")";
             forceDisconnect();
             return;
         }
@@ -2439,8 +2492,25 @@ void RadioModel::evaluateNetworkQuality()
                              ? (targetScore <= 45.0 ? 0.45 : 0.30)
                              : 0.12;
     m_networkQualityScore += (targetScore - m_networkQualityScore) * alpha;
+    const NetState prevState = m_netState;
     m_netState = networkStateForScore(m_networkQualityScore, m_netState);
     if (ping > m_maxPingRtt) m_maxPingRtt = ping;
+
+    if (m_netState != prevState)
+        applyAdaptiveFrameRate(m_netState, prevState);
+
+    // Fire a deferred throttle lift once the min-dwell has elapsed and the
+    // state has not re-entered a throttled tier since the engage.
+    if (m_pendingThrottleLift
+            && m_netState != NetState::Good
+            && m_netState != NetState::Fair
+            && m_netState != NetState::Poor) {
+        if (QDateTime::currentMSecsSinceEpoch() - m_lastThrottleEngageMs >= THROTTLE_MIN_DWELL_MS) {
+            m_pendingThrottleLift = false;
+            qCDebug(lcProtocol) << "RadioModel: deferred adaptive throttle lift firing after min-dwell";
+            emit adaptiveThrottleChanged(false, 0);
+        }
+    }
 
     static const char* names[] = {"Off", "Excellent", "Very Good", "Good", "Fair", "Poor"};
     emit networkQualityChanged(names[static_cast<int>(m_netState)], ping);
@@ -2564,6 +2634,83 @@ RadioModel::NetState RadioModel::networkStateForScore(double score, NetState cur
     return NetState::Poor;
 }
 
+// Single source of truth for the state→fps-cap mapping.
+// currentAdaptiveFpsCap(), applyAdaptiveFrameRate(), and any future
+// callers must all go through here so adding a new tier (e.g. Critical=2)
+// never silently diverges between code paths.
+int RadioModel::fpsCapForState(NetState s)
+{
+    switch (s) {
+    case NetState::Poor: return 4;
+    case NetState::Fair: return 8;
+    case NetState::Good: return 15;
+    default:             return 0;
+    }
+}
+
+int RadioModel::currentAdaptiveFpsCap() const
+{
+    return fpsCapForState(m_netState);
+}
+
+
+int RadioModel::adaptiveWfMsForCap(int fpsCap) const
+{
+    if (fpsCap <= 0)  return 0;
+    if (fpsCap <= 4)  return 500;
+    if (fpsCap <= 8)  return 250;
+    if (fpsCap <= 15) return 150;
+    return 0;
+}
+
+void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
+{
+    if (panId.isEmpty() || fpsCap <= 0) return;
+    auto* pan = m_panadapters.value(panId, nullptr);
+    if (!pan) return;
+    sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fpsCap));
+    if (!pan->waterfallId().isEmpty())
+        sendCommand(QString("display panafall set %1 line_duration=%2")
+                        .arg(pan->waterfallId()).arg(adaptiveWfMsForCap(fpsCap)));
+}
+
+void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
+{
+    const int newCap = fpsCapForState(newState);
+    const int oldCap = fpsCapForState(oldState);
+    if (newCap == oldCap)
+        return;
+
+    const bool throttling = (newCap > 0);
+
+    if (throttling) {
+        m_lastThrottleEngageMs = QDateTime::currentMSecsSinceEpoch();
+        m_pendingThrottleLift = false;
+        qCDebug(lcProtocol) << "RadioModel: adaptive throttle engaged — fps cap"
+                            << newCap << "/ wf line" << adaptiveWfMsForCap(newCap) << "ms";
+        for (auto it = m_panadapters.cbegin(); it != m_panadapters.cend(); ++it)
+            sendAdaptiveCapToPan(it.key(), newCap);
+        emit adaptiveThrottleChanged(throttling, newCap);
+    } else {
+        // Min-dwell guard: if we just engaged, don't lift yet — let the link
+        // stabilise before restoring full fps. evaluateNetworkQuality() will
+        // fire the deferred lift once THROTTLE_MIN_DWELL_MS has elapsed.
+        if (QDateTime::currentMSecsSinceEpoch() - m_lastThrottleEngageMs < THROTTLE_MIN_DWELL_MS) {
+            m_pendingThrottleLift = true;
+            qCDebug(lcProtocol) << "RadioModel: adaptive throttle lift deferred"
+                                << "(min-dwell not reached)";
+            return;
+        }
+        m_pendingThrottleLift = false;
+        qCDebug(lcProtocol) << "RadioModel: adaptive throttle lifted — signalling fps restore";
+        // Intentionally no fps push here — RadioModel doesn't own the user-configured
+        // fps (that lives in each SpectrumWidget). MainWindow restores it via
+        // adaptiveThrottleChanged(false, 0). A headless consumer connecting to
+        // RadioModel without MainWindow receives the engage but must handle restore itself.
+        emit adaptiveThrottleChanged(false, 0);
+    }
+}
+
 bool RadioModel::usesRemoteNetworkThresholds() const
 {
     return m_wanConn != nullptr || m_lastInfo.isRouted;
@@ -2671,6 +2818,21 @@ PanadapterStream::CategoryStats RadioModel::categoryStats(PanadapterStream::Stre
     return m_panStream->categoryStats(cat);
 }
 
+QVector<PanadapterStream::AudioStreamDiagnostics> RadioModel::audioStreamDiagnostics() const
+{
+    return m_panStream ? m_panStream->audioStreamDiagnostics()
+                       : QVector<PanadapterStream::AudioStreamDiagnostics>{};
+}
+
+void RadioModel::resetAudioStreamDiagnostics()
+{
+    if (m_panStream) {
+        QMetaObject::invokeMethod(m_panStream,
+                                  &PanadapterStream::resetAudioStreamDiagnostics,
+                                  Qt::AutoConnection);
+    }
+}
+
 void RadioModel::handleMemoryStatus(int index, const QMap<QString, QString>& kvs)
 {
     // Check for removal — radio sends either "in_use=0" or "removed" (no value)
@@ -2713,7 +2875,21 @@ void RadioModel::handleMemoryStatus(int index, const QMap<QString, QString>& kvs
 
 void RadioModel::onMessageReceived(const ParsedMessage& msg)
 {
+    if (msg.type == MessageType::Handle) {
+        // The radio can send routine "Client connected from IP ..." M-messages
+        // immediately after H<handle>, before onConnected() is delivered to
+        // this object. Arm the startup gate here so our own connect notice stays
+        // silent even on that ordering.
+        armClientConnectionNoticeSuppression();
+        return;
+    }
+
     if (msg.type == MessageType::Message) {
+        if (shouldSuppressRadioMessageNotice(msg.object, msg.severity)) {
+            qCInfo(lcProtocol) << "Radio M-message [Info suppressed during connect]:" << msg.object;
+            return;
+        }
+
         // Log everything to the protocol channel at the matching level so the
         // diagnostic trail is uniform.  The user-facing decision (silent log,
         // warning dialog, error dialog) is made in MainWindow::onRadioMessage
@@ -2869,6 +3045,7 @@ void RadioModel::createRxAudioStream()
 
     m_rxAudio.createPending = true;
     m_rxAudio.removeRequested = false;
+    resetAudioStreamDiagnostics();
     logRemoteAudioRxSummary(QStringLiteral("create requested"));
     // Push our mute preference before opening the stream. Firmware defaults
     // mute_local_audio_when_remote=1, silencing hardware outputs whenever any
@@ -2900,6 +3077,7 @@ void RadioModel::createRxAudioStream()
                 m_rxAudio.streamId = streamId;
                 m_rxAudio.clientHandle = clientHandle();
                 m_rxAudio.compression = audioCompressionParam();
+                resetAudioStreamDiagnostics();
                 qCDebug(lcProtocol) << "RadioModel: remote_audio_rx stream created, id:"
                                     << RadioStatusOwnership::hexId(streamId);
                 logRemoteAudioRxSummary(QStringLiteral("create response adopted"));
@@ -2939,6 +3117,7 @@ void RadioModel::removeRxAudioStream()
     m_rxAudio.statusSeen = false;
     m_rxAudio.removeRequested = false;
     m_rxAudio.compression.clear();
+    resetAudioStreamDiagnostics();
     logRemoteAudioRxSummary(QStringLiteral("remove requested"));
 }
 
@@ -3000,6 +3179,7 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
     case RadioStatusOwnership::RemoteAudioRxAction::Adopted:
         qCDebug(lcProtocol) << "RadioModel: adopted owned remote_audio_rx status"
                             << streamText;
+        resetAudioStreamDiagnostics();
         logRemoteAudioRxSummary(QStringLiteral("status adopted"));
         break;
     case RadioStatusOwnership::RemoteAudioRxAction::Updated:
@@ -3010,6 +3190,7 @@ bool RadioModel::handleRemoteAudioRxStreamStatus(const QString& object,
     case RadioStatusOwnership::RemoteAudioRxAction::Removed:
         qCDebug(lcProtocol) << "RadioModel: owned remote_audio_rx removed"
                             << streamText;
+        resetAudioStreamDiagnostics();
         logRemoteAudioRxSummary(QStringLiteral("status removed"));
         break;
     case RadioStatusOwnership::RemoteAudioRxAction::NotRemoteAudio:
@@ -3105,6 +3286,23 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
     m_panadapters[normalizedPanId] = pan;
     if (m_activePanId.isEmpty())
         m_activePanId = normalizedPanId;
+
+    // Apply active throttle cap immediately — applyAdaptiveFrameRate only fires
+    // on tier transitions, so a pan opened mid-throttle would run at the radio
+    // default (~25 fps) until the next state change.
+    const int activeCap = currentAdaptiveFpsCap();
+    if (activeCap > 0) {
+        qCDebug(lcProtocol) << "RadioModel: applying active throttle cap" << activeCap
+                            << "to newly-claimed pan" << normalizedPanId;
+        sendAdaptiveCapToPan(normalizedPanId, activeCap);
+        // waterfallId may not be assigned yet (arrives in a subsequent status
+        // message) — re-apply the cap once it lands.
+        connect(pan, &PanadapterModel::waterfallIdChanged,
+                this, [this, normalizedPanId]() {
+            const int cap = currentAdaptiveFpsCap();
+            if (cap > 0) sendAdaptiveCapToPan(normalizedPanId, cap);
+        });
+    }
 
     connect(pan, &PanadapterModel::waterfallIdChanged,
             this, &RadioModel::updateStreamFilters);

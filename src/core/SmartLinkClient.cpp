@@ -15,6 +15,15 @@
 
 namespace AetherSDR {
 
+// Cap the line-assembly buffer.  A buggy or hostile SmartLink discovery/auth
+// peer that dribbles bytes without ever sending '\n' would otherwise grow
+// m_readBuffer unbounded until QByteArray refuses to allocate (process OOM).
+// SmartLink auth messages are tens of bytes; 16 MiB is wildly larger than any
+// legitimate handshake burst.  Same pattern as WanConnection /
+// RadioConnection / DxClusterClient (issue #2955) and GHSA-7w4w-wfqm-wh93
+// (M2, RigctlServer).
+static constexpr int kMaxReadBuffer = 16 * 1024 * 1024;
+
 SmartLinkClient::SmartLinkClient(QObject* parent)
     : QObject(parent)
 {
@@ -349,6 +358,16 @@ void SmartLinkClient::onSslError(const QList<QSslError>& errors)
 void SmartLinkClient::onReadyRead()
 {
     m_readBuffer.append(m_socket.readAll());
+    if (m_readBuffer.size() > kMaxReadBuffer) {
+        qCWarning(lcSmartLink) << "SmartLinkClient: read buffer exceeded"
+                               << kMaxReadBuffer << "bytes without newline — disconnecting";
+        m_socket.disconnectFromHost();
+        // disconnectFromHost() is async on TLS sockets; clear the buffer so a
+        // stale onReadyRead() before the disconnect completes can't trip the
+        // cap again.
+        m_readBuffer.clear();
+        return;
+    }
 
     while (true) {
         int idx = m_readBuffer.indexOf('\n');

@@ -209,6 +209,15 @@ When at least one new device appears, AetherSDR shows a selection dialog with
 the current input/output highlighted, newly detected devices marked, and system
 defaults available as explicit choices.
 
+The dialog includes a "Don't ask me again" checkbox. Checking it persists
+`SuppressAudioDeviceNotifications=True` in `AppSettings`; future device-add
+events skip the selection dialog while preserving the existing fallback to
+system default when a selected device disappears.
+
+The same setting is exposed in Radio Setup > Audio > PC Audio Devices as
+"Prompt on Audio Device Changes"; that checkbox is checked when notifications
+are enabled and unchecked when the suppression setting is active.
+
 Accepting the dialog queues `AudioEngine::setInputDevice()` and
 `AudioEngine::setOutputDevice()` onto the audio worker thread. Those setters are
 the only place that persists the chosen device IDs and restarts the affected
@@ -221,11 +230,35 @@ is `PC`, `MainWindow` immediately re-arms PC mic capture by restarting the local
 `QAudioSource` on the selected device. The radio mic source is not toggled and
 no hardware-mic fallback route is used.
 
+If AetherSDR is following the system default input or output, a default-device
+change also restarts the affected local audio path even when no device was
+removed. This keeps existing `QAudioSource`/`QAudioSink` handles, the CW
+sidetone sink, and the title-bar PC audio labels aligned with the OS-selected
+endpoint.
+
 The same local re-arm applies when an input device is removed while PC mic
 capture is active. If the selected input disappeared, the selection is cleared
 so `AudioEngine::startTxStream()` opens the current system default. If AetherSDR
 was already following the system default, the TX source is still restarted so Qt
 binds the capture stream to the replacement endpoint.
+
+### Default audio summary logging
+
+The normal support log includes `aether.audio.summary` at info level. This
+category emits compact one-block summaries at audio lifecycle points rather than
+turning on the detailed `aether.audio` info/debug stream:
+
+- Startup logs selected/default input and output devices, saved-device presence,
+  PC Audio state, and the current TX mic route intent. This startup snapshot is
+  deliberately shallow and does not probe device formats.
+- Successful RX, TX, CW sidetone, Quindar, and Aetherial monitor starts log the
+  actual device/backend and negotiated format that opened.
+- Final open failures log a single failure summary with the already-attempted
+  sample rates, channel counts, formats, fallback history, and backend error.
+
+These summaries are deduped by canonical text so no-op restarts do not spam the
+support log. They should not add extra audio-device probing to startup or to a
+failure path; record only negotiation work the audio path already performed.
 
 ## Local sidetone and Quindar local output
 
@@ -237,6 +270,14 @@ CW sidetone and Quindar local monitor output are independent local paths:
 - `QuindarLocalSink` is a separate 48 kHz stereo float32 local sink. It calls
   `ClientQuindarTone::processSidetone()` so the operator hears the local
   Quindar tones corresponding to TX tone insertion.
+
+The sidetone backend is opened against the same PC output selection as RX audio.
+When the operator has selected a specific output, the PortAudio backend maps the
+Qt device name to a PortAudio output; if that mapping is missing or ambiguous,
+startup falls back to the Qt `QAudioSink` backend so the sidetone routes to the
+selected device instead of PortAudio's default. When AetherSDR follows the
+system default, the sidetone backend is restarted whenever Qt reports that the
+default output changed.
 
 Neither path is mixed into `m_rxBuffer`. They are local monitor outputs, not
 radio audio streams.

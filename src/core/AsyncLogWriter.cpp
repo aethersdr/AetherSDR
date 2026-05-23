@@ -43,6 +43,10 @@ QString labelForType(QtMsgType type)
     return QStringLiteral("???");
 }
 
+} // namespace (anonymous)
+
+// Public so SupportBundle and other callers can scrub PII the same way
+// log lines are scrubbed.  Declared in AsyncLogWriter.h.
 QString redactPii(const QString& msg)
 {
     QString out = msg;
@@ -60,10 +64,24 @@ QString redactPii(const QString& msg)
         R"(\d{4}-\d{4}-\d{4}-(\d{4}))");
     out.replace(*serialRe, QStringLiteral("****-****-****-\\1"));
 
-    // Auth0 tokens (long base64 strings after id_token or token)
+    // Auth tokens. Case-insensitive; \b prevents app-specific identifiers
+    // that end in "token" (e.g. keytoken=) from being scrubbed. The separator
+    // and any "Bearer "/"Basic "/"Digest " scheme are preserved so the
+    // scrubbed line still reads in context; a 4-char prefix is kept for
+    // cross-line correlation without leaking JWT header entropy. (#2954)
+    //
+    // Split into two passes so "auth id_token=…" doesn't get eaten by the
+    // "auth"-keyword match and leave the real token unscrubbed: pass 1
+    // requires a "[:=]" separator (catches keyword=value and Authorization:),
+    // pass 2 handles the standalone "bearer <token>" scheme.
     static const QRegularExpression* tokenRe = new QRegularExpression(
-        R"((id_token[= :]|token[= :])\s*([A-Za-z0-9_\-\.]{20})[A-Za-z0-9_\-\.]+)");
-    out.replace(*tokenRe, QStringLiteral("\\1 \\2...REDACTED"));
+        R"(\b(id_token|access_token|refresh_token|token|authorization|auth)(\s*[:=]\s*)(?:(bearer|basic|digest)(\s+))?([A-Za-z0-9_\-\.]{4})[A-Za-z0-9_\-\.]+)",
+        QRegularExpression::CaseInsensitiveOption);
+    out.replace(*tokenRe, QStringLiteral("\\1\\2\\3\\4\\5***REDACTED***"));
+    static const QRegularExpression* bearerRe = new QRegularExpression(
+        R"(\b(bearer)(\s+)([A-Za-z0-9_\-\.]{4})[A-Za-z0-9_\-\.]+)",
+        QRegularExpression::CaseInsensitiveOption);
+    out.replace(*bearerRe, QStringLiteral("\\1\\2\\3***REDACTED***"));
 
     // MAC addresses: 00-1C-2D-05-37-2A -> **-**-**-**-**-2A
     //                00:1C:2D:05:37:2A -> **:**:**:**:**:2A
@@ -73,6 +91,8 @@ QString redactPii(const QString& msg)
 
     return out;
 }
+
+namespace {
 
 QByteArray formatLine(QtMsgType type,
                       const QTime& timestamp,

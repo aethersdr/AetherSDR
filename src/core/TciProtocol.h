@@ -34,6 +34,12 @@ public:
     // Per TCI v2.0 spec, `volume:N;` is the global master volume command.
     int pendingMasterVolume() const { return m_pendingMasterVolume; }
 
+    // After handleCommand(), if the command was a `tx_gain:N;` SET, this
+    // returns the requested TCI TX gain (0-100); -1 means no change. TciServer
+    // reads it and applies it via setTxGain() — TciProtocol can't reach
+    // TciServer directly (same pattern as pendingMasterVolume).
+    int pendingTxGain() const { return m_pendingTxGain; }
+
 private:
     // Command handlers — return response string or empty
     QString cmdVfo(const QStringList& args, bool isSet);
@@ -42,6 +48,7 @@ private:
     QString cmdTune(const QStringList& args, bool isSet);
     QString cmdDrive(const QStringList& args, bool isSet);
     QString cmdTuneDrive(const QStringList& args, bool isSet);
+    QString cmdTxGain(const QStringList& args, bool isSet);
     QString cmdRitEnable(const QStringList& args, bool isSet);
     QString cmdXitEnable(const QStringList& args, bool isSet);
     QString cmdRitOffset(const QStringList& args, bool isSet);
@@ -115,6 +122,7 @@ private:
     RadioModel* m_model;
     QString     m_pendingNotification;
     int         m_pendingMasterVolume{-1};   // -1 = no change requested
+    int         m_pendingTxGain{-1};         // -1 = no change requested
     bool        m_started{false};  // client sent START
 };
 

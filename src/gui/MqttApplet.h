@@ -45,6 +45,7 @@ signals:
     void disconnectRequested();
     void displayValueChanged(const QString& key, const QString& value);
     void displayCleared();
+    void antennaAliasRequested(const QString& token, const QString& alias);
 
 private:
     void buildUI();
@@ -56,6 +57,12 @@ private:
     void editButton(int index);
     void addButton();
     void removeButton(int index);
+
+    // MQTT broker password lives in QKeychain rather than AppSettings
+    // (GHSA-mmqp-cm4w-cvpp).  Both calls are async and no-op on builds
+    // without HAVE_KEYCHAIN defined.
+    void loadPasswordFromKeychain();
+    void savePasswordToKeychain(const QString& password);
 
     MqttClient* m_client{nullptr};
     QLineEdit*   m_hostEdit{nullptr};

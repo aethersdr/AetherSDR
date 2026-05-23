@@ -44,11 +44,25 @@ Claude Code** — it has full codebase context via `CLAUDE.md` and naturally pro
 that matches our conventions.
 
 1. **Fork the repo** and create a feature branch from `main`.
-2. **One issue per PR.** Keep changes focused and reviewable.
-3. **Follow the coding conventions** below.
-4. **Test your changes** against a real FlexRadio if possible.
-5. **Sign your commits** with GPG (required by branch protection).
-6. **Open a pull request** against `main` with a clear description.
+2. **Read the [AetherSDR Constitution](CONSTITUTION.md).** (Canonical
+   source: [`.specify/memory/constitution.md`](.specify/memory/constitution.md);
+   the root [`CONSTITUTION.md`](CONSTITUTION.md) is a byte-identical
+   mirror.) **14 principles total**: 7 AetherSDR-specific (FlexLib
+   authority, MeterSmoother, UI labels, BandPlanManager, nested-JSON
+   config, CHAIN widget, auto-generated Contributors) + 7 defensive
+   engineering principles adopted from Cisco's
+   [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
+   (Evidence Over Assertion, Surface Only What Survives, Atomic Claims,
+   Demonstrated Fixes, Infra Sandbox, Operator Outranks Agents, Atomic
+   Persistence). Your PR's commit message will cite the principle it
+   honors (e.g. `Principle V.` for nested-JSON persistence or
+   `Principle X.` for verified-base patch generation).
+3. **One issue per PR.** Keep changes focused and reviewable.
+4. **Follow the coding conventions** below.
+5. **Test your changes** against a real FlexRadio if possible.
+6. **Sign your commits** (required by branch protection — SSH or GPG;
+   see [Commit Signing](#commit-signing) below).
+7. **Open a pull request** against `main` with a clear description.
 
 ---
 
@@ -171,21 +185,45 @@ Use `#ifdef HAVE_*` guards. Features must degrade gracefully when unavailable.
 
 ### Commit Signing
 
-All commits to `main` must be GPG-signed. Setup:
+All commits to `main` must be signed (branch protection enforces this).
+SSH and GPG signing are both supported; **SSH signing is recommended**
+if you already push via SSH because it reuses your existing key.
+
+**Full setup guide:** [`docs/COMMIT-SIGNING.md`](docs/COMMIT-SIGNING.md)
+— covers Windows, macOS, Linux, WSL, and Raspberry Pi OS, with both
+SSH and GPG paths. **The top of that doc has explicit AI-assistant
+instructions**, so if you'd rather have your AI coding assistant walk
+you through setup, just tell it
+*"read `docs/COMMIT-SIGNING.md` and help me set up commit signing"*
+and it will follow the algorithm there.
+
+#### Quick reference (SSH signing, the simple path)
 
 ```bash
-# Generate key
-gpg --quick-gen-key "Your Name <email@example.com>" ed25519 sign 0
+# 1. Confirm or generate an SSH key
+ls -la ~/.ssh/id_ed25519.pub || ssh-keygen -t ed25519 -C "you@example.com"
 
-# Add to GitHub: Settings → SSH and GPG keys → New GPG key
-gpg --armor --export <KEY_ID>
-
-# Configure git
-git config --global user.signingkey <KEY_ID>
+# 2. Configure git to sign with it
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
 git config --global commit.gpgsign true
+git config --global tag.gpgsign true
+git config --global user.email "you@example.com"   # must match GitHub
+
+# 3. Register the key on GitHub
+cat ~/.ssh/id_ed25519.pub
+# Paste at GitHub > Settings > SSH and GPG keys > New SSH key
+# Set Key Type: "Signing Key" (NOT Authentication — that's a different
+# role on the same key; you may need both entries for the same pubkey)
+
+# 4. Verify
+git commit --allow-empty -m "signing test"
+git log --show-signature -1   # expect "Good \"git\" signature"
 ```
 
-If `gpg` hangs, set `export GPG_TTY=$(tty)` in your shell profile.
+For GPG, Windows-specific tweaks, Touch ID integration on macOS, or
+troubleshooting "Unverified" badges, see
+[`docs/COMMIT-SIGNING.md`](docs/COMMIT-SIGNING.md).
 
 ---
 

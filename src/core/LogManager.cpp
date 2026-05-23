@@ -18,6 +18,7 @@ Q_LOGGING_CATEGORY(lcDiscovery,  "aether.discovery",  QtDebugMsg)
 Q_LOGGING_CATEGORY(lcConnection, "aether.connection",  QtDebugMsg)
 Q_LOGGING_CATEGORY(lcProtocol,   "aether.protocol",    QtDebugMsg)
 Q_LOGGING_CATEGORY(lcAudio,      "aether.audio",       QtWarningMsg)
+Q_LOGGING_CATEGORY(lcAudioSummary, "aether.audio.summary", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcVita49,     "aether.vita49",      QtWarningMsg)
 Q_LOGGING_CATEGORY(lcDsp,        "aether.dsp",         QtWarningMsg)
 Q_LOGGING_CATEGORY(lcRade,       "aether.rade",        QtWarningMsg)
@@ -46,6 +47,7 @@ LogManager::LogManager()
         {"aether.connection", "Connection / Commands", "Raw TCP command channel lines: TX commands, RX responses, and socket state"},
         {"aether.protocol",   "Protocol / Status",     "Parsed SmartSDR protocol handling and model status updates"},
         {"aether.audio",      "Audio",        "RX/TX audio, device negotiation, volume"},
+        {"aether.audio.summary", "Audio Summary", "Default support log summaries for audio routing and sink/source negotiation"},
         {"aether.vita49",     "VITA-49",      "UDP packet routing: FFT, waterfall, meters, DAX"},
         {"aether.dsp",        "DSP",          "NR2, RN2, CW decoder processing"},
         {"aether.rade",       "RADE",         "FreeDV Radio Autoencoder digital voice"},
@@ -116,6 +118,7 @@ void LogManager::applyFilterRules()
     // Default: all aether.* debug messages off, then enable selected ones
     QStringList rules;
     rules << "aether.*.debug=false";
+    rules << "aether.audio.summary.info=true";
     for (const auto& c : m_categories) {
         if (c.enabled)
             rules << QString("%1.debug=true").arg(c.id);
@@ -244,7 +247,8 @@ void LogManager::loadSettings()
     auto& s = AppSettings::instance();
     // Default Discovery, Commands, and Status to on
     static const QStringList defaultOn = {
-        "aether.discovery", "aether.connection", "aether.protocol"
+        "aether.discovery", "aether.connection", "aether.protocol",
+        "aether.audio.summary"
     };
     for (auto& c : m_categories) {
         QString def = defaultOn.contains(c.id) ? "True" : "False";

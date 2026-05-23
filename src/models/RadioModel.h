@@ -298,6 +298,7 @@ public:
     void connectToRadio(const RadioInfo& info);
     void connectViaWan(WanConnection* wan, const QString& publicIp, quint16 udpPort);
     void setPendingClientDisconnects(const QList<quint32>& handles);
+    bool disconnectClient(quint32 handle);
     // Called by MainWindow in response to multiFlexConflictDetected().
     // Disconnects handle and resumes the connection sequence.
     void resolveMultiFlexConflict(quint32 handle);
@@ -441,6 +442,10 @@ signals:
     void autoSaveChanged(bool autoSave);
     // Emitted on each successful ping response from the radio.
     void pingReceived();
+    // Emitted when adaptive frame-rate throttling engages or lifts.
+    // active=true: all pans are being throttled to fpsCap fps to reduce UDP load.
+    // active=false: throttle lifted; receivers should restore user-configured fps.
+    void adaptiveThrottleChanged(bool active, int fpsCap);
     // Generic status relay — for dialogs that need to listen for specific objects.
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
     // Emitted when the radio sends an M-prefix informational, warning, error,
@@ -514,11 +519,16 @@ private:
                               const QStringList& ips,
                               const QStringList& hosts,
                               bool replaceExisting);
+    void armClientConnectionNoticeSuppression();
+    bool clientConnectionNoticeSuppressionActive() const;
+    bool shouldSuppressRadioMessageNotice(const QString& text, MessageSeverity severity) const;
     bool shouldSuppressClientConnectionNotice(quint32 handle);
     void announceClientConnection(quint32 handle,
                                   const QString& source,
                                   const QString& station,
                                   const QString& program);
+    void disconnectClientHandlesThen(const QList<quint32>& handles,
+                                     std::function<void()> continuation = {});
 
     // Route command to active connection (LAN or WAN)
     using ResponseCallback = RadioConnection::ResponseCallback;
@@ -799,8 +809,12 @@ private:
     void evaluateNetworkQuality();
     void resetNetworkHealthSamples();
     void recordNetworkHealthSample(int currentErrors, int currentPackets);
-
     enum class NetState { Off, Excellent, VeryGood, Good, Fair, Poor };
+    void applyAdaptiveFrameRate(NetState newState, NetState oldState);
+    static int fpsCapForState(NetState s);  // single source of truth; see obs. 1 in PR review
+    int  currentAdaptiveFpsCap() const;
+    int  adaptiveWfMsForCap(int fpsCap) const;
+    void sendAdaptiveCapToPan(const QString& panId, int fpsCap);
     double networkQualityTargetScore(int pingMs) const;
     NetState networkStateForScore(double score, NetState currentState) const;
     bool usesRemoteNetworkThresholds() const;
@@ -829,7 +843,19 @@ private:
     NetState      m_netState{NetState::Off};
     int           m_pingMissCount{0};          // consecutive unanswered pings
     bool          m_pingDisconnectTriggered{false};
-    static constexpr int PING_MISS_DISCONNECT = 5; // force disconnect after 5 missed pings (~5s)
+    // Normal: disconnect after 5 unanswered pings (~5 s).
+    // Poor: allow 15 (~15 s) — adaptive throttle has already cut UDP load, so
+    // brief TCP stalls are more likely to be transient congestion than a dead link.
+    static constexpr int PING_MISS_DISCONNECT      = 5;
+    static constexpr int PING_MISS_DISCONNECT_POOR = 15;
+    // Minimum time at a throttled state before the throttle is allowed to lift.
+    // Prevents Good<->VeryGood oscillation: reducing fps lowers UDP load which
+    // improves the score, which would immediately lift the throttle and restart
+    // the cycle. 5 s of hysteresis breaks the loop without delaying recovery
+    // on a genuinely improving link.
+    static constexpr qint64 THROTTLE_MIN_DWELL_MS = 5000;
+    qint64 m_lastThrottleEngageMs{0};   // QDateTime::currentMSecsSinceEpoch() at last engage
+    bool   m_pendingThrottleLift{false}; // lift deferred by min-dwell; fired in evaluateNetworkQuality()
 
     // Network diagnostics — byte counters for rate calculation
 
@@ -837,6 +863,7 @@ public:
     // Network diagnostics getters
     int     lastPingRtt()      const { return m_lastPingRtt; }
     int     maxPingRtt()       const { return m_maxPingRtt; }
+    bool    pendingThrottleLift() const { return m_pendingThrottleLift; }
     QString networkQuality()   const;
     int     packetLossWindowSeconds() const { return NETWORK_LOSS_WINDOW_SAMPLES; }
     int     packetLossWindowDrops() const { return m_packetLossWindowErrors; }
@@ -858,6 +885,8 @@ public:
 
     // Per-category stream stats (Audio, FFT, Waterfall, Meter, DAX)
     PanadapterStream::CategoryStats categoryStats(PanadapterStream::StreamCategory cat) const;
+    QVector<PanadapterStream::AudioStreamDiagnostics> audioStreamDiagnostics() const;
+    void resetAudioStreamDiagnostics();
 };
 
 } // namespace AetherSDR

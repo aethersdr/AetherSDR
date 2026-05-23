@@ -1,5 +1,6 @@
 #include "AudioEngine.h"
 #include "AppSettings.h"
+#include "AudioSummaryLogger.h"
 #include "ClientEq.h"
 #include "ClientComp.h"
 #include "ClientGate.h"
@@ -15,6 +16,7 @@
 #include "CwSidetoneGenerator.h"
 #include "CwSidetoneQAudioSink.h"
 #include "CwSidetoneSinkBackend.h"
+#include "DeviceDiagnostics.h"
 #ifdef HAVE_PORTAUDIO
 #include "CwSidetonePortAudioSink.h"
 #endif
@@ -50,6 +52,7 @@
 #include <QThread>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QStringList>
 #include <algorithm>
 #include <cstring>
 #include <optional>
@@ -80,6 +83,47 @@ bool devicePresent(const QList<QAudioDevice>& devices, const QAudioDevice& targe
     return std::any_of(devices.begin(), devices.end(), [&target](const QAudioDevice& device) {
         return device.id() == target.id();
     });
+}
+
+QString formatAudioAttempt(int sampleRate,
+                           int channelCount,
+                           QAudioFormat::SampleFormat sampleFormat)
+{
+    return QStringLiteral("%1Hz %2ch %3")
+        .arg(sampleRate)
+        .arg(channelCount)
+        .arg(AudioSummaryLogger::sampleFormatName(sampleFormat));
+}
+
+QString audioErrorName(QAudio::Error error)
+{
+    switch (error) {
+    case QAudio::NoError: return QStringLiteral("NoError");
+    case QAudio::OpenError: return QStringLiteral("OpenError");
+    case QAudio::IOError: return QStringLiteral("IOError");
+#if QT_VERSION < QT_VERSION_CHECK(6, 11, 0)
+    case QAudio::UnderrunError: return QStringLiteral("UnderrunError");
+#endif
+    case QAudio::FatalError: return QStringLiteral("FatalError");
+    default: return QStringLiteral("UnknownError");
+    }
+}
+
+void logAudioOpenFailure(const QString& path,
+                         const QString& backend,
+                         const QAudioDevice& device,
+                         const QStringList& attemptedFormats,
+                         const QString& failureReason,
+                         const QStringList& fallbackReasons = {})
+{
+    AudioSummaryLogger::OpenFailureSummary summary;
+    summary.path = path;
+    summary.backend = backend;
+    summary.deviceDescription = device.description();
+    summary.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
+    summary.failureReason = failureReason;
+    summary.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+    AudioSummaryLogger::logOpenFailure(summary);
 }
 
 #ifdef Q_OS_MAC
@@ -587,6 +631,9 @@ AudioEngine::AudioEngine(QObject* parent)
         }
     }
 
+    AudioSummaryLogger::logStartupEnvironment(
+        DeviceDiagnostics::buildAudioStartupSnapshot(this, QJsonObject{}));
+
     // Opus TX pacing timer — sends one queued packet every 10ms for even
     // delivery timing. Without this, QAudioSource delivers bursts of samples
     // that get Opus-encoded and sent back-to-back, causing jitter-induced
@@ -772,12 +819,30 @@ bool AudioEngine::startRxStream()
 
     QAudioFormat fmt = makeFormat();
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    bool rxFallbackOccurred = false;
+    QStringList rxFallbackReasons;
+    QStringList rxFormatAttempts;
+    const auto noteRxFallback = [&rxFallbackOccurred, &rxFallbackReasons](const QString& reason) {
+        rxFallbackOccurred = true;
+        if (!reason.isEmpty() && !rxFallbackReasons.contains(reason)) {
+            rxFallbackReasons << reason;
+        }
+    };
+    const auto noteRxAttempt = [&rxFormatAttempts](const QAudioFormat& format) {
+        const QString attempt = formatAudioAttempt(format.sampleRate(),
+                                                  format.channelCount(),
+                                                  format.sampleFormat());
+        if (!rxFormatAttempts.contains(attempt)) {
+            rxFormatAttempts << attempt;
+        }
+    };
     if (!m_outputDevice.isNull()) {
         const auto outputs = QMediaDevices::audioOutputs();
         if (devicePresent(outputs, m_outputDevice)) {
             dev = m_outputDevice;
         } else {
             qCWarning(lcAudio) << "AudioEngine: saved output device is unavailable, using the system default output instead";
+            noteRxFallback(QStringLiteral("saved output unavailable -> system default"));
             m_outputDevice = QAudioDevice{};
         }
     }
@@ -804,6 +869,7 @@ bool AudioEngine::startRxStream()
             if (supportsPreferredOutput(defaultDev)) {
                 qCWarning(lcAudio) << "AudioEngine: selected output route looks telephony-only, using default 48k-capable output instead:"
                                    << defaultDev.description();
+                noteRxFallback(QStringLiteral("telephony output substituted with default output"));
                 dev = defaultDev;
             } else {
                 const QString selectedDescription = dev.description();
@@ -815,6 +881,7 @@ bool AudioEngine::startRxStream()
                         && supportsPreferredOutput(candidate)) {
                         qCWarning(lcAudio) << "AudioEngine: selected output route looks telephony-only, using sibling 48k-capable output instead:"
                                            << candidate.description();
+                        noteRxFallback(QStringLiteral("telephony output substituted with sibling output"));
                         dev = candidate;
                         break;
                     }
@@ -831,20 +898,32 @@ bool AudioEngine::startRxStream()
     // the macOS TX-side fix for the same class of issue. (#2120)
 #ifdef Q_OS_WIN
     fmt.setSampleRate(48000);
+    noteRxAttempt(fmt);
     m_resampleTo48k = true;
     m_audioSink = new QAudioSink(dev, fmt, this);
     m_audioSink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
     m_audioDevice = m_audioSink->start();
     if (!m_audioDevice) {
+        const QString firstError = audioErrorName(m_audioSink->error());
         qCWarning(lcAudio) << "AudioEngine: 48kHz sink failed to open, trying 24kHz";
+        noteRxFallback(QStringLiteral("48kHz sink failed -> 24kHz"));
         delete m_audioSink;
         fmt.setSampleRate(DEFAULT_SAMPLE_RATE);
+        noteRxAttempt(fmt);
         m_resampleTo48k = false;
         m_audioSink = new QAudioSink(dev, fmt, this);
         m_audioSink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
         m_audioDevice = m_audioSink->start();
         if (!m_audioDevice) {
+            const QString secondError = audioErrorName(m_audioSink->error());
             qCWarning(lcAudio) << "AudioEngine: 24kHz sink also failed";
+            logAudioOpenFailure(QStringLiteral("RX sink"),
+                                QStringLiteral("QAudioSink"),
+                                dev,
+                                rxFormatAttempts,
+                                QStringLiteral("QAudioSink::start failed at 48000Hz (%1) and 24000Hz (%2)")
+                                    .arg(firstError, secondError),
+                                rxFallbackReasons);
             delete m_audioSink;
             m_audioSink = nullptr;
             return false;
@@ -880,17 +959,28 @@ bool AudioEngine::startRxStream()
     });
     qCWarning(lcAudio) << "AudioEngine: RX stream started at" << fmt.sampleRate() << "Hz"
                        << "device:" << dev.description();
+    AudioSummaryLogger::RxSinkSummary windowsRxSummary;
+    windowsRxSummary.deviceDescription = dev.description();
+    windowsRxSummary.sampleRate = fmt.sampleRate();
+    windowsRxSummary.channelCount = fmt.channelCount();
+    windowsRxSummary.sampleFormat = fmt.sampleFormat();
+    windowsRxSummary.resamplingActive = m_resampleTo48k;
+    windowsRxSummary.fallbackOccurred = rxFallbackOccurred;
+    windowsRxSummary.fallbackReason = rxFallbackReasons.join(QStringLiteral("; "));
+    AudioSummaryLogger::logRxSink(windowsRxSummary);
+    m_rxBufferSampleRate.store(fmt.sampleRate());
     startSidetoneStream();
     emit rxStarted();
     return true;
 #else
-    auto configureOutputFormat = [this, &dev](QAudioFormat& candidateFmt) {
+    auto configureOutputFormat = [this, &dev, &noteRxFallback, &noteRxAttempt](QAudioFormat& candidateFmt) {
         candidateFmt = makeFormat();
 #ifdef Q_OS_MAC
         // CoreAudio can route Bluetooth headsets onto the HFP/telephony
         // transport when opened directly at 24 kHz. Prefer 48 kHz on macOS
         // so A2DP-capable devices stay on the normal output profile.
         candidateFmt.setSampleRate(48000);
+        noteRxAttempt(candidateFmt);
         if (dev.isFormatSupported(candidateFmt)) {
             m_resampleTo48k = true;
             return true;
@@ -898,7 +988,9 @@ bool AudioEngine::startRxStream()
 
         qCWarning(lcAudio) << "AudioEngine: output device does not support 48kHz stereo float, trying 24kHz";
         candidateFmt.setSampleRate(DEFAULT_SAMPLE_RATE);
+        noteRxAttempt(candidateFmt);
         if (dev.isFormatSupported(candidateFmt)) {
+            noteRxFallback(QStringLiteral("48kHz stereo float unsupported -> 24kHz"));
             m_resampleTo48k = false;
             return true;
         }
@@ -906,6 +998,7 @@ bool AudioEngine::startRxStream()
         qCWarning(lcAudio) << "AudioEngine: output device does not support 24kHz stereo float either";
         return false;
 #else
+        noteRxAttempt(candidateFmt);
         if (dev.isFormatSupported(candidateFmt)) {
             m_resampleTo48k = false;
             return true;
@@ -913,7 +1006,9 @@ bool AudioEngine::startRxStream()
 
         qCWarning(lcAudio) << "AudioEngine: output device does not support 24kHz stereo Int16, trying 48kHz";
         candidateFmt.setSampleRate(48000);
+        noteRxAttempt(candidateFmt);
         if (dev.isFormatSupported(candidateFmt)) {
+            noteRxFallback(QStringLiteral("24kHz stereo float unsupported -> 48kHz"));
             m_resampleTo48k = true;
             return true;
         }
@@ -925,6 +1020,12 @@ bool AudioEngine::startRxStream()
 
     if (!configureOutputFormat(fmt)) {
         qCWarning(lcAudio) << "No audio device detected";
+        logAudioOpenFailure(QStringLiteral("RX sink"),
+                            QStringLiteral("QAudioSink"),
+                            dev,
+                            rxFormatAttempts,
+                            QStringLiteral("output device supports no usable RX format"),
+                            rxFallbackReasons);
         return false;
     }
 #endif
@@ -934,7 +1035,17 @@ bool AudioEngine::startRxStream()
     m_audioDevice = m_audioSink->start();   // push-mode
 
     if (!m_audioDevice) {
+        const QString error = audioErrorName(m_audioSink->error());
         qCWarning(lcAudio) << "AudioEngine: failed to open audio sink";
+        if (rxFormatAttempts.isEmpty()) {
+            noteRxAttempt(fmt);
+        }
+        logAudioOpenFailure(QStringLiteral("RX sink"),
+                            QStringLiteral("QAudioSink"),
+                            dev,
+                            rxFormatAttempts,
+                            QStringLiteral("QAudioSink::start returned null (%1)").arg(error),
+                            rxFallbackReasons);
         delete m_audioSink;
         m_audioSink = nullptr;
         return false;
@@ -970,6 +1081,15 @@ bool AudioEngine::startRxStream()
     });
     qCDebug(lcAudio) << "AudioEngine: RX stream started";
     m_rxBufferSampleRate.store(fmt.sampleRate());
+    AudioSummaryLogger::RxSinkSummary summary;
+    summary.deviceDescription = dev.description();
+    summary.sampleRate = fmt.sampleRate();
+    summary.channelCount = fmt.channelCount();
+    summary.sampleFormat = fmt.sampleFormat();
+    summary.resamplingActive = m_resampleTo48k;
+    summary.fallbackOccurred = rxFallbackOccurred;
+    summary.fallbackReason = rxFallbackReasons.join(QStringLiteral("; "));
+    AudioSummaryLogger::logRxSink(summary);
     // Open the dedicated sidetone sink alongside the RX sink.  Cheap when
     // sidetone is disabled — the timer fires but writes silence to a tiny
     // primed buffer; no audible output, no extra CPU on the operator side.
@@ -1049,27 +1169,61 @@ bool AudioEngine::startSidetoneStream()
     if (!m_outputDevice.isNull()) {
         const auto outputs = QMediaDevices::audioOutputs();
         for (const auto& d : outputs) {
-            if (d.id() == m_outputDevice.id()) { dev = m_outputDevice; break; }
+            // Use the freshly enumerated Qt device object so backend-specific
+            // handles follow the selected endpoint after hotplug/default churn.
+            if (d.id() == m_outputDevice.id()) { dev = d; break; }
+        }
+        if (dev.id() != m_outputDevice.id()) {
+            qCWarning(lcAudio) << "AudioEngine: saved sidetone output device is unavailable, using the system default output instead";
         }
     }
 
     m_sidetoneSink = makeSidetoneBackend(this);
+    bool sidetoneFallbackOccurred = false;
+    QStringList sidetoneFallbackReasons;
+    QStringList sidetoneAttempts;
+    const QString portAudioAttempt = QStringLiteral("PortAudio 48000Hz 2ch Float, native-rate fallback if needed");
+    const QString qAudioSinkAttempt = QStringLiteral("QAudioSink 48000Hz/44100Hz/24000Hz 2ch Float, then Int16");
+    sidetoneAttempts << (qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0
+        ? portAudioAttempt
+        : qAudioSinkAttempt);
     if (!m_sidetoneSink->start(dev, 48000, m_cwSidetone.get())) {
         // Backend failed — try the other one before giving up.  Most likely
         // path: PortAudio init failed on a quirky device, fall back to Qt.
 #ifdef HAVE_PORTAUDIO
         if (qstrcmp(m_sidetoneSink->name(), "PortAudio") == 0) {
             qCWarning(lcAudio) << "AudioEngine: PortAudio sidetone failed, falling back to QAudioSink";
+            sidetoneFallbackOccurred = true;
+            sidetoneFallbackReasons << QStringLiteral("PortAudio failed -> QAudioSink");
             m_sidetoneSink.reset(new CwSidetoneQAudioSink(this));
+            sidetoneAttempts << qAudioSinkAttempt;
             if (!m_sidetoneSink->start(dev, 48000, m_cwSidetone.get())) {
+                logAudioOpenFailure(QStringLiteral("CW sidetone"),
+                                    QStringLiteral("PortAudio -> QAudioSink"),
+                                    dev,
+                                    sidetoneAttempts,
+                                    QStringLiteral("all sidetone backends failed"),
+                                    sidetoneFallbackReasons);
                 m_sidetoneSink.reset();
                 return false;
             }
         } else {
+            logAudioOpenFailure(QStringLiteral("CW sidetone"),
+                                QString::fromLatin1(m_sidetoneSink->name()),
+                                dev,
+                                sidetoneAttempts,
+                                QStringLiteral("sidetone backend failed"),
+                                sidetoneFallbackReasons);
             m_sidetoneSink.reset();
             return false;
         }
 #else
+        logAudioOpenFailure(QStringLiteral("CW sidetone"),
+                            QString::fromLatin1(m_sidetoneSink->name()),
+                            dev,
+                            sidetoneAttempts,
+                            QStringLiteral("sidetone backend failed"),
+                            sidetoneFallbackReasons);
         m_sidetoneSink.reset();
         return false;
 #endif
@@ -1077,6 +1231,19 @@ bool AudioEngine::startSidetoneStream()
 
     qCInfo(lcAudio) << "AudioEngine: sidetone running on" << m_sidetoneSink->name()
                     << "rate=" << m_sidetoneSink->actualRateHz() << "Hz";
+    if (m_sidetoneSink->fallbackOccurred()) {
+        sidetoneFallbackOccurred = true;
+        if (!m_sidetoneSink->fallbackReason().isEmpty()) {
+            sidetoneFallbackReasons << m_sidetoneSink->fallbackReason();
+        }
+    }
+    AudioSummaryLogger::CwSidetoneSummary summary;
+    summary.backend = QString::fromLatin1(m_sidetoneSink->name());
+    summary.deviceDescription = m_sidetoneSink->deviceDescription();
+    summary.sampleRate = m_sidetoneSink->actualRateHz();
+    summary.fallbackOccurred = sidetoneFallbackOccurred;
+    summary.fallbackReason = sidetoneFallbackReasons.join(QStringLiteral("; "));
+    AudioSummaryLogger::logCwSidetone(summary);
     return true;
 }
 
@@ -2121,7 +2288,7 @@ QVector<AudioEngine::TxChainStage> AudioEngine::txChainStages() const
 
 bool AudioEngine::isTxBypassed() const
 {
-    return !m_txBypassSnapshot.isEmpty();
+    return m_txBypassActive;
 }
 
 void AudioEngine::setTxBypassed(bool on)
@@ -2214,12 +2381,13 @@ void AudioEngine::setTxBypassed(bool on)
         m_txBypassSnapshot.clear();
     }
 
+    m_txBypassActive = on;
     emit txBypassChanged(on);
 }
 
 bool AudioEngine::isRxBypassed() const
 {
-    return !m_rxBypassSnapshot.isEmpty();
+    return m_rxBypassActive;
 }
 
 void AudioEngine::setRxBypassed(bool on)
@@ -2304,6 +2472,7 @@ void AudioEngine::setRxBypassed(bool on)
         m_rxBypassSnapshot.clear();
     }
 
+    m_rxBypassActive = on;
     emit rxBypassChanged(on);
 }
 
@@ -3705,12 +3874,30 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     fmt.setChannelCount(2);
     fmt.setSampleFormat(QAudioFormat::Int16);
     QAudioDevice dev = QMediaDevices::defaultAudioInput();
+    bool txFallbackOccurred = false;
+    QStringList txFallbackReasons;
+    QStringList txFormatAttempts;
+    const auto noteTxFallback = [&txFallbackOccurred, &txFallbackReasons](const QString& reason) {
+        txFallbackOccurred = true;
+        if (!reason.isEmpty() && !txFallbackReasons.contains(reason)) {
+            txFallbackReasons << reason;
+        }
+    };
+    const auto noteTxAttempt = [&txFormatAttempts](const QAudioFormat& format) {
+        const QString attempt = formatAudioAttempt(format.sampleRate(),
+                                                  format.channelCount(),
+                                                  format.sampleFormat());
+        if (!txFormatAttempts.contains(attempt)) {
+            txFormatAttempts << attempt;
+        }
+    };
     if (!m_inputDevice.isNull()) {
         const auto inputs = QMediaDevices::audioInputs();
         if (devicePresent(inputs, m_inputDevice)) {
             dev = m_inputDevice;
         } else {
             qCWarning(lcAudio) << "AudioEngine: saved input device is unavailable, using the system default input instead";
+            noteTxFallback(QStringLiteral("saved input unavailable -> system default"));
             m_inputDevice = QAudioDevice{};
         }
     }
@@ -3729,12 +3916,17 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     // inputs at their HAL-native low rate when CoreAudio reports no high-rate
     // capture mode. That avoids a hidden native->48k conversion before the
     // app's normal radio-native conversion.
-    // Linux/Windows: prefer 24kHz (radio native — no resampling needed).
+    // Linux: prefer 24kHz (radio native, no resampling). Windows uses 48kHz
+    // WASAPI shared mode and relies on the app's normal 48k->24k resampler.
     bool formatFound = false;
 #ifdef Q_OS_MAC
     const QList<int> rates = macTxInputRateCandidates(dev);
+    const int preferredTxRate = rates.isEmpty() ? 48000 : rates.first();
+#elif defined(Q_OS_WIN)
+    constexpr int preferredTxRate = 48000;
 #else
     constexpr int rates[] = {24000, 48000, 44100};
+    constexpr int preferredTxRate = 24000;
 #endif
 #ifdef Q_OS_WIN
     // Windows WASAPI shared mode handles rate conversion transparently,
@@ -3743,12 +3935,14 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     // let WASAPI handle it — only fall back if open actually fails later.
     fmt.setSampleRate(48000);
     fmt.setChannelCount(2);
+    noteTxAttempt(fmt);
     formatFound = true;
 #else
     for (int channels : {2, 1}) {
         for (int rate : rates) {
             fmt.setChannelCount(channels);
             fmt.setSampleRate(rate);
+            noteTxAttempt(fmt);
             if (dev.isFormatSupported(fmt)) {
                 formatFound = true;
                 break;
@@ -3761,7 +3955,19 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     if (!formatFound) {
         qCWarning(lcAudio) << "AudioEngine: input device supports no usable format"
             << "(tried preferred platform rates, stereo and mono)";
+        logAudioOpenFailure(QStringLiteral("TX source"),
+                            QStringLiteral("QAudioSource"),
+                            dev,
+                            txFormatAttempts,
+                            QStringLiteral("input device supports no usable TX format"),
+                            txFallbackReasons);
         return false;
+    }
+    if (fmt.sampleRate() != preferredTxRate || fmt.channelCount() != 2) {
+        noteTxFallback(QStringLiteral("negotiated %1Hz %2ch instead of preferred %3Hz stereo")
+                           .arg(fmt.sampleRate())
+                           .arg(fmt.channelCount())
+                           .arg(preferredTxRate));
     }
 
     qCInfo(lcAudio) << "AudioEngine: selected TX input format:"
@@ -3793,7 +3999,14 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     m_audioSource->start(m_micBuffer);
 
     if (m_audioSource->state() == QAudio::StoppedState) {
+        const QString error = audioErrorName(m_audioSource->error());
         qCWarning(lcAudio) << "AudioEngine: failed to start audio source";
+        logAudioOpenFailure(QStringLiteral("TX source"),
+                            QStringLiteral("QAudioSource"),
+                            dev,
+                            txFormatAttempts,
+                            QStringLiteral("QAudioSource stopped immediately after start (%1)").arg(error),
+                            txFallbackReasons);
         delete m_audioSource; m_audioSource = nullptr;
         delete m_micBuffer; m_micBuffer = nullptr;
         return false;
@@ -3858,6 +4071,7 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     m_audioSource = new QAudioSource(dev, fmt, this);
     m_micDevice = m_audioSource->start();
     if (!m_micDevice) {
+        const QString firstError = audioErrorName(m_audioSource->error());
         qCWarning(lcAudio) << "AudioEngine: failed to open audio source at"
                            << fmt.sampleRate() << "Hz" << fmt.channelCount() << "ch"
                            << "error:" << m_audioSource->error()
@@ -3873,11 +4087,15 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
             for (int ch : {2, 1}) {
                 fmt.setSampleRate(rate);
                 fmt.setChannelCount(ch);
+                noteTxAttempt(fmt);
                 m_audioSource = new QAudioSource(dev, fmt, this);
                 m_micDevice = m_audioSource->start();
                 if (m_micDevice) {
                     qCInfo(lcAudio) << "AudioEngine: TX source opened at fallback"
                                     << rate << "Hz" << ch << "ch";
+                    noteTxFallback(QStringLiteral("initial TX source open failed -> %1Hz %2ch")
+                                       .arg(rate)
+                                       .arg(ch));
                     m_txInputRate = rate;
                     m_txInputChannels = ch;
                     m_txInputMono = (m_txInputChannels == 1);
@@ -3896,9 +4114,22 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
         }
         if (!txOpened) {
             qCWarning(lcAudio) << "AudioEngine: all TX source formats failed";
+            logAudioOpenFailure(QStringLiteral("TX source"),
+                                QStringLiteral("QAudioSource"),
+                                dev,
+                                txFormatAttempts,
+                                QStringLiteral("QAudioSource::start failed for all TX formats (initial %1)")
+                                    .arg(firstError),
+                                txFallbackReasons);
             return false;
         }
 #else
+        logAudioOpenFailure(QStringLiteral("TX source"),
+                            QStringLiteral("QAudioSource"),
+                            dev,
+                            txFormatAttempts,
+                            QStringLiteral("QAudioSource::start returned null (%1)").arg(firstError),
+                            txFallbackReasons);
         delete m_audioSource; m_audioSource = nullptr;
         return false;
 #endif
@@ -3912,6 +4143,15 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
              << Qt::dec << "device:" << dev.description() << "id:" << dev.id()
              << "rate:" << m_txInputRate << "ch:" << m_txInputChannels
              << "resample:" << m_txNeedsResample;
+    AudioSummaryLogger::TxSourceSummary summary;
+    summary.deviceDescription = dev.description();
+    summary.sampleRate = m_txInputRate;
+    summary.channelCount = m_txInputChannels;
+    summary.sampleFormat = fmt.sampleFormat();
+    summary.resamplingTo24k = m_txNeedsResample;
+    summary.fallbackOccurred = txFallbackOccurred;
+    summary.fallbackReason = txFallbackReasons.join(QStringLiteral("; "));
+    AudioSummaryLogger::logTxSource(summary);
     return true;
 }
 
@@ -3963,6 +4203,17 @@ void AudioEngine::stopTxStream()
 
 void AudioEngine::onTxAudioReady()
 {
+    // If a TCI client is actively feeding TX audio (binary frames via
+    // TciServer → feedDaxTxAudio), step the local mic capture aside.
+    // Both producers emit txPacketReady; the higher-rate mic stream would
+    // otherwise drown out the TCI tone — particularly visible on macOS,
+    // where the default CoreAudio input is a real webcam mic that
+    // produces continuous ambient packets. The 200 ms window comfortably
+    // covers the 50 ms TCI frame cadence.
+    if (m_tciAudioTimer.isValid()
+        && m_tciAudioTimer.elapsed() < kTciAudioActiveWindowMs) {
+        return;
+    }
 #ifdef Q_OS_MAC
     if (!m_micBuffer || !m_audioSource) return;
     if (m_audioSource->state() == QAudio::StoppedState) return;
@@ -4462,6 +4713,11 @@ void AudioEngine::setDaxTxUseRadioRoute(bool on)
 void AudioEngine::feedDaxTxAudio(const QByteArray& inPcm)
 {
     if (m_txStreamId == 0 || inPcm.isEmpty()) return;
+
+    // Mark TCI as the active TX-audio source. While this timer is fresh,
+    // onTxAudioReady() suppresses the local mic capture path so the two
+    // packet producers don't collide on the same UDP path to the radio.
+    m_tciAudioTimer.start();
 
     // Client-side TX DSP (compressor + EQ) is intentionally NOT
     // applied here.  This path is fed exclusively by TCI and DAX

@@ -34,6 +34,9 @@ public:
     bool isRunning() const override { return m_sink != nullptr; }
     int  actualRateHz() const override { return m_actualRate; }
     const char* name() const override { return "QAudioSink"; }
+    QString deviceDescription() const override { return m_deviceDescription; }
+    bool fallbackOccurred() const override { return m_fallbackOccurred; }
+    QString fallbackReason() const override { return m_fallbackReason; }
 
 private:
     void onTimerTick();
@@ -43,6 +46,9 @@ private:
     QTimer*              m_timer{nullptr};
     CwSidetoneGenerator* m_generator{nullptr};
     int                  m_actualRate{0};
+    QString              m_deviceDescription;
+    bool                 m_fallbackOccurred{false};
+    QString              m_fallbackReason;
     // VB-Audio Virtual Cable's WASAPI driver only advertises Int16, so the
     // sink probes Float first and falls back to Int16 with a float scratch
     // buffer; the chosen format is stored to keep the pump hot path branchless.
