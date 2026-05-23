@@ -1,5 +1,7 @@
 #include "MqttApplet.h"
 #include "core/AppSettings.h"
+#include "core/LogManager.h"
+#include "core/MqttAntennaAlias.h"
 #include "core/MqttClient.h"
 
 #include <QVBoxLayout>
@@ -18,7 +20,19 @@
 #include <QDialogButtonBox>
 #include <QMenu>
 
+#ifdef HAVE_KEYCHAIN
+#include <qt6keychain/keychain.h>
+#endif
+
 namespace AetherSDR {
+
+// Keychain identifiers for the MQTT broker password.  See
+// GHSA-mmqp-cm4w-cvpp — previously stored as plaintext in
+// ~/.config/AetherSDR/AetherSDR.settings (default umask 0644, world-
+// readable on most Linux systems).
+static constexpr const char* kKeychainService = "AetherSDR";
+static constexpr const char* kKeychainKey     = "mqtt_password";
+static constexpr const char* kLegacySetting   = "MqttPass";
 
 static const QString kLabelStyle =
     "QLabel { color: #8090a0; font-size: 10px; background: transparent; }";
@@ -58,28 +72,54 @@ void MqttApplet::buildUI()
     header->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
     vbox->addWidget(header);
 
-    // Broker settings grid
+    // Broker settings grid.  Accessibility hints (objectName +
+    // accessibleName + accessibleDescription) help macOS Passwords,
+    // Windows Authenticator, and KDE Wallet associate user/pass fields
+    // when offering autofill.  No-op on platforms / password managers
+    // that don't read the accessibility tree.
     auto* grid = new QGridLayout;
     grid->setSpacing(2);
     grid->setContentsMargins(0, 0, 0, 0);
 
+    setObjectName(QStringLiteral("mqttLoginForm"));
+    setAccessibleName(tr("MQTT broker connection"));
+
     auto& s = AppSettings::instance();
 
     auto addRow = [&](int row, const QString& label, QLineEdit*& edit,
-                      const QString& key, const QString& def, bool password = false) {
+                      const QString& key, const QString& def,
+                      const QString& objName, const QString& a11yName,
+                      const QString& a11yDesc, bool password = false) {
         auto* lbl = new QLabel(label);
         lbl->setStyleSheet(kLabelStyle);
         grid->addWidget(lbl, row, 0);
         edit = new QLineEdit(s.value(key, def).toString());
         edit->setStyleSheet(kEditStyle);
         if (password) { edit->setEchoMode(QLineEdit::Password); }
+        if (!objName.isEmpty())  edit->setObjectName(objName);
+        if (!a11yName.isEmpty()) edit->setAccessibleName(a11yName);
+        if (!a11yDesc.isEmpty()) edit->setAccessibleDescription(a11yDesc);
         grid->addWidget(edit, row, 1);
     };
 
-    addRow(0, "Host:", m_hostEdit, "MqttHost", "localhost");
-    addRow(1, "Port:", m_portEdit, "MqttPort", "1883");
-    addRow(2, "User:", m_userEdit, "MqttUser", "");
-    addRow(3, "Pass:", m_passEdit, "MqttPass", "", true);
+    addRow(0, "Host:", m_hostEdit, "MqttHost", "localhost",
+           QStringLiteral("mqttHost"), tr("MQTT broker host"),
+           tr("Hostname or IP address of the MQTT broker"));
+    addRow(1, "Port:", m_portEdit, "MqttPort", "1883",
+           QStringLiteral("mqttPort"), tr("MQTT broker port"),
+           tr("TCP port for the MQTT broker (1883 plaintext, 8883 TLS)"));
+    addRow(2, "User:", m_userEdit, "MqttUser", "",
+           QStringLiteral("mqttUsername"), tr("MQTT broker username"),
+           tr("Username for MQTT broker authentication"));
+    // Password is not stored in AppSettings (see GHSA-mmqp-cm4w-cvpp).
+    // addRow with an empty default + sentinel key leaves the QLineEdit
+    // empty; we populate it asynchronously from the keychain below, and
+    // migrate any legacy plaintext value found in AppSettings on first
+    // launch.
+    addRow(3, "Pass:", m_passEdit, QStringLiteral("MqttPass_unused"), QString(),
+           QStringLiteral("mqttPassword"), tr("MQTT broker password"),
+           tr("Password for MQTT broker authentication"), true);
+    loadPasswordFromKeychain();
 
     auto* topicLbl = new QLabel("Topics:");
     topicLbl->setStyleSheet(kLabelStyle);
@@ -89,6 +129,7 @@ void MqttApplet::buildUI()
     m_topicsEdit->setPlaceholderText("topic1, topic2, ...");
     m_topicsEdit->setToolTip("Comma-separated MQTT topics to subscribe to.\n"
                              "Prefix with * to display on panadapter overlay.\n"
+                             "Antenna names: aethersdr/antenna/name/+, aethersdr/antenna/names\n"
                              "Example: *rotator/pos, *ant/selected, station/log");
     grid->addWidget(m_topicsEdit, 4, 1);
 
@@ -195,7 +236,10 @@ void MqttApplet::buildUI()
             ss.setValue("MqttHost",   m_hostEdit->text().trimmed());
             ss.setValue("MqttPort",   m_portEdit->text().trimmed());
             ss.setValue("MqttUser",   m_userEdit->text().trimmed());
-            ss.setValue("MqttPass",   m_passEdit->text().trimmed());
+            // Password lives in QKeychain — see GHSA-mmqp-cm4w-cvpp.
+            // Belt-and-braces: ensure no legacy plaintext entry survives.
+            ss.remove(kLegacySetting);
+            savePasswordToKeychain(m_passEdit->text().trimmed());
             ss.setValue("MqttTopics", m_topicsEdit->text().trimmed());
             ss.setValue("MqttTls",    m_tlsCheck->isChecked() ? "True" : "False");
             ss.setValue("MqttCaFile", m_caFileEdit->text().trimmed());
@@ -272,6 +316,10 @@ void MqttApplet::onMessageReceived(const QString& topic, const QByteArray& paylo
         cursor.select(QTextCursor::BlockUnderCursor);
         cursor.removeSelectedText();
         cursor.deleteChar();
+    }
+
+    for (const auto& update : parseMqttAntennaAliasMessage(topic, payload)) {
+        emit antennaAliasRequested(update.token, update.alias);
     }
 
     // Update panadapter overlay for display-enabled topics
@@ -427,6 +475,104 @@ void MqttApplet::loadButtons()
             obj["payload"].toString()
         });
     }
+}
+
+// ── Keychain-backed password persistence (GHSA-mmqp-cm4w-cvpp) ──────────────
+
+void MqttApplet::loadPasswordFromKeychain()
+{
+#ifdef HAVE_KEYCHAIN
+    auto& s = AppSettings::instance();
+    const QString legacy = s.value(kLegacySetting).toString();
+    if (!legacy.isEmpty()) {
+        // First-launch migration on an upgraded install.  Populate the
+        // UI immediately so the user doesn't see an empty field, write
+        // the value to the keychain, then strip the plaintext entry
+        // from AppSettings.  Keychain failure leaves the plaintext in
+        // place — better that than losing the user's credentials.
+        m_passEdit->setText(legacy);
+        auto* job = new QKeychain::WritePasswordJob(QLatin1String(kKeychainService));
+        job->setAutoDelete(true);
+        job->setKey(QLatin1String(kKeychainKey));
+        job->setTextData(legacy);
+        connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
+            if (j->error() != QKeychain::NoError) {
+                qCWarning(lcMqtt) << "MqttApplet: keychain migration write failed:"
+                                  << j->errorString()
+                                  << "— legacy plaintext entry preserved for retry";
+                return;
+            }
+            AppSettings::instance().remove(kLegacySetting);
+            AppSettings::instance().save();
+            qCInfo(lcMqtt) << "MqttApplet: migrated MQTT password to keychain"
+                           << "(legacy plaintext entry removed)";
+        });
+        job->start();
+        return;
+    }
+
+    auto* job = new QKeychain::ReadPasswordJob(QLatin1String(kKeychainService));
+    job->setAutoDelete(true);
+    job->setKey(QLatin1String(kKeychainKey));
+    connect(job, &QKeychain::Job::finished, this, [this](QKeychain::Job* j) {
+        if (!m_passEdit) return;  // applet may have been destroyed mid-flight
+        if (j->error() == QKeychain::NoError) {
+            auto* read = static_cast<QKeychain::ReadPasswordJob*>(j);
+            m_passEdit->setText(read->textData());
+        } else if (j->error() != QKeychain::EntryNotFound) {
+            qCWarning(lcMqtt) << "MqttApplet: keychain read failed:" << j->errorString();
+        }
+    });
+    job->start();
+#else
+    // Keychain not available at build time.  Fall back to reading the
+    // legacy plaintext setting if it exists, with a warning.  This keeps
+    // the applet usable on builds that opt out of Qt6Keychain at the
+    // cost of leaving the password readable on disk (the bug this fix
+    // is meant to address).
+    auto& s = AppSettings::instance();
+    const QString legacy = s.value(kLegacySetting).toString();
+    if (!legacy.isEmpty()) {
+        qCWarning(lcMqtt) << "MqttApplet: HAVE_KEYCHAIN not set — MQTT password "
+                             "remains in plaintext AppSettings";
+        m_passEdit->setText(legacy);
+    }
+#endif
+}
+
+void MqttApplet::savePasswordToKeychain(const QString& password)
+{
+#ifdef HAVE_KEYCHAIN
+    if (password.isEmpty()) {
+        // Empty password = user cleared the field.  Drop any keychain
+        // entry so the next load doesn't surprise them with a stale value.
+        auto* job = new QKeychain::DeletePasswordJob(QLatin1String(kKeychainService));
+        job->setAutoDelete(true);
+        job->setKey(QLatin1String(kKeychainKey));
+        connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
+            if (j->error() != QKeychain::NoError
+                && j->error() != QKeychain::EntryNotFound) {
+                qCWarning(lcMqtt) << "MqttApplet: keychain delete failed:" << j->errorString();
+            }
+        });
+        job->start();
+        return;
+    }
+    auto* job = new QKeychain::WritePasswordJob(QLatin1String(kKeychainService));
+    job->setAutoDelete(true);
+    job->setKey(QLatin1String(kKeychainKey));
+    job->setTextData(password);
+    connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
+        if (j->error() != QKeychain::NoError)
+            qCWarning(lcMqtt) << "MqttApplet: keychain save failed:" << j->errorString();
+    });
+    job->start();
+#else
+    qCWarning(lcMqtt) << "MqttApplet: HAVE_KEYCHAIN not set — falling back to "
+                         "plaintext AppSettings for MQTT password";
+    AppSettings::instance().setValue(kLegacySetting, password);
+    AppSettings::instance().save();
+#endif
 }
 
 } // namespace AetherSDR

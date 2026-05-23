@@ -1,0 +1,26 @@
+<RCC>
+    <qresource prefix="/">
+        <file alias="icon.png">../docs/assets/logo-circle.png</file>
+        <file alias="bg-default.jpg">../docs/assets/logo.jpg</file>
+        <file alias="cty.dat">cty.dat</file>
+    </qresource>
+    <qresource prefix="/bandplans">
+        <file alias="arrl-us.json">bandplans/arrl-us.json</file>
+        <file alias="iaru-region1.json">bandplans/iaru-region1.json</file>
+        <file alias="iaru-region2.json">bandplans/iaru-region2.json</file>
+        <file alias="iaru-region3.json">bandplans/iaru-region3.json</file>
+        <file alias="rac-canada.json">bandplans/rac-canada.json</file>
+        <file alias="ssa-sweden.json">bandplans/ssa-sweden.json</file>
+    </qresource>
+    <qresource prefix="/sounds">
+        <file alias="aetherial.wav">aetherial.wav</file>
+    </qresource>
+    <qresource prefix="/help">
+        <file alias="getting-started.md">help/getting-started.md</file>
+        <file alias="aethersdr-help.md">help/aethersdr-help.md</file>
+        <file alias="configuring-aethersdr-controls.md">help/configuring-aethersdr-controls.md</file>
+        <file alias="understanding-noise-cancellation.md">help/understanding-noise-cancellation.md</file>
+        <file alias="understanding-data-modes.md">help/understanding-data-modes.md</file>
+        <file alias="contributing-to-aethersdr.md">help/contributing-to-aethersdr.md</file>
+    </qresource>
+</RCC>

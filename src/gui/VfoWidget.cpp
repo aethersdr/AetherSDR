@@ -1,6 +1,7 @@
 #include "VfoWidget.h"
 #include "PhaseKnob.h"
 #include "ComboStyle.h"
+#include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
 #include "RxApplet.h"
 #include "SliceColorManager.h"
@@ -202,6 +203,8 @@ static const QString kSliderStyle =
 static const QString kLabelStyle =
     "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }";
 
+static constexpr int kLockedFrequencyFeedbackMs = 500;
+
 static bool likelyTxAntennaFallbackToken(const QString& token)
 {
     const QString upper = token.toUpper();
@@ -230,6 +233,9 @@ VfoWidget::VfoWidget(QWidget* parent)
     m_signalMeterAnimation.setTimerType(Qt::PreciseTimer);
     m_signalMeterAnimation.setInterval(kSignalMeterAnimationIntervalMs);
     connect(&m_signalMeterAnimation, &QTimer::timeout, this, &VfoWidget::animateSignalMeter);
+    m_lockedFrequencyTimer.setSingleShot(true);
+    connect(&m_lockedFrequencyTimer, &QTimer::timeout,
+            this, &VfoWidget::clearLockedFrequencyFeedback);
 
     buildUI();
 
@@ -248,16 +254,21 @@ void VfoWidget::wheelEvent(QWheelEvent* ev)
 
     // Determine whether we should handle this event at all.
     bool shouldTune = false;
-    if (m_collapsed && m_slice && !m_slice->isLocked()) {
+    if (m_collapsed && m_slice) {
         // In collapsed mode, scroll anywhere to tune by step size
         shouldTune = true;
-    } else if (m_freqStack && m_slice && !m_slice->isLocked()) {
+    } else if (m_freqStack && m_slice) {
         // Scroll over the frequency display tunes by step size.
         QPoint local = m_freqStack->mapFrom(this, ev->position().toPoint());
         shouldTune = m_freqStack->rect().contains(local);
     }
 
     if (!shouldTune) { ev->accept(); return; }
+    if (m_slice->isLocked()) {
+        m_slice->notifyTuneBlockedByLock();
+        ev->accept();
+        return;
+    }
 
     int stepHz = m_slice->stepHz();
     if (stepHz <= 0) { ev->accept(); return; }
@@ -571,21 +582,16 @@ void VfoWidget::buildUI()
             double freqMhz = 0.0;
 
             // Try parsing as MHz (e.g. "14.225", "14.225.000", "14225", "14225.0")
-            QString clean = text;
-            // Handle "14.225.000" format — remove dots beyond the first
-            int firstDot = clean.indexOf('.');
-            if (firstDot >= 0) {
-                QString beforeDot = clean.left(firstDot);
-                QString afterDot = clean.mid(firstDot + 1).remove('.');
-                clean = beforeDot + "." + afterDot;
-            }
+            QString clean = FrequencyEntryParser::normalizedMhzText(text);
             freqMhz = clean.toDouble(&ok);
+            const bool explicitMhzEntry = FrequencyEntryParser::isExplicitMhzEntry(text, clean);
 
             // If value looks like Hz or kHz (> 54 MHz is out of HF range)
             // Context-aware parsing: on XVTR bands, accept higher freqs
             const bool onXvtr = m_slice &&
                 (m_slice->rxAntenna().startsWith("XVT") || m_slice->frequency() > 54.0);
-            const double maxMhz = onXvtr ? 50000.0 : 54.0;
+            const bool highExplicitMhzEntry = ok && explicitMhzEntry && freqMhz > 54.0;
+            const double maxMhz = (onXvtr || highExplicitMhzEntry) ? 50000.0 : 54.0;
 
             if (onXvtr) {
                 // 3-digit-band convenience: on 2m/70cm a bare integer like
@@ -602,7 +608,7 @@ void VfoWidget::buildUI()
                         freqMhz = clean.toDouble(&ok);
                     }
                 }
-            } else {
+            } else if (!highExplicitMhzEntry) {
                 // HF: 14225 = kHz, 14225000 = Hz
                 if (ok && freqMhz > 54000.0)
                     freqMhz /= 1e6;
@@ -2501,6 +2507,7 @@ void VfoWidget::setSlice(SliceModel* slice)
 {
     qDebug() << "VfoWidget::setSlice:" << (slice ? slice->sliceId() : -1)
              << "old:" << (m_slice ? m_slice->sliceId() : -1);
+    clearLockedFrequencyFeedback();
     if (m_slice)
         m_slice->disconnect(this);
     m_slice = slice;
@@ -2514,6 +2521,8 @@ void VfoWidget::setSlice(SliceModel* slice)
 
     // Frequency
     connect(m_slice, &SliceModel::frequencyChanged, this, [this](double) { updateFreqLabel(); });
+    connect(m_slice, &SliceModel::tuneBlockedByLock,
+            this, &VfoWidget::showLockedFrequencyFeedback);
 
     // Per-client letter — refresh the slice badge when index_letter arrives
     // or changes (Multi-Flex sessions, see #2606).
@@ -2873,6 +2882,11 @@ void VfoWidget::setSlice(SliceModel* slice)
         QSignalBlocker b(m_lockVfoBtn);
         m_lockVfoBtn->setChecked(locked);
         m_lockVfoBtn->setText(locked ? "\xF0\x9F\x94\x92" : "\xF0\x9F\x94\x93");
+        if (locked) {
+            cancelDirectEntry();
+        } else {
+            clearLockedFrequencyFeedback();
+        }
     });
 
     // Restore collapsed state from AppSettings
@@ -2969,6 +2983,11 @@ void VfoWidget::setPlayEnabled(bool enabled)
 
 void VfoWidget::beginDirectEntry(QString source)
 {
+    if (m_slice && m_slice->isLocked()) {
+        m_slice->notifyTuneBlockedByLock();
+        return;
+    }
+
     m_directEntrySource = source;
     if (m_slice) {
         m_freqEdit->setText(QString::number(m_slice->frequency(), 'f', 6));
@@ -3170,6 +3189,15 @@ void VfoWidget::syncFromSlice()
 void VfoWidget::updateFreqLabel()
 {
     if (!m_slice) return;
+    if (m_showingLockedFrequencyFeedback) {
+        m_freqLabel->setText(QStringLiteral("LOCKED"));
+        if (m_collapsed && m_collapsedFreqLabel) {
+            m_collapsedFreqLabel->setText(QStringLiteral("LOCKED"));
+            m_collapsedFreqLabel->adjustSize();
+        }
+        return;
+    }
+
     long long hz = static_cast<long long>(std::round(m_slice->frequency() * 1e6));
     int mhzPart = static_cast<int>(hz / 1000000);
     int khzPart = static_cast<int>((hz / 1000) % 1000);
@@ -3185,6 +3213,29 @@ void VfoWidget::updateFreqLabel()
         m_collapsedFreqLabel->setText(freqText);
         m_collapsedFreqLabel->adjustSize();
     }
+}
+
+void VfoWidget::showLockedFrequencyFeedback()
+{
+    if (!m_slice || !m_slice->isLocked())
+        return;
+
+    if (m_freqStack && m_freqStack->currentIndex() == 1)
+        cancelDirectEntry();
+
+    m_showingLockedFrequencyFeedback = true;
+    updateFreqLabel();
+    m_lockedFrequencyTimer.start(kLockedFrequencyFeedbackMs);
+}
+
+void VfoWidget::clearLockedFrequencyFeedback()
+{
+    if (!m_showingLockedFrequencyFeedback)
+        return;
+
+    m_lockedFrequencyTimer.stop();
+    m_showingLockedFrequencyFeedback = false;
+    updateFreqLabel();
 }
 
 void VfoWidget::updateFilterLabel()
@@ -3321,7 +3372,7 @@ struct ModeFilterPresets {
 
 static const ModeFilterPresets& filterPresetsFor(const QString& mode)
 {
-    // From docs/vfo_mode_filters.csv — 8 presets per mode, 4x2 grid
+    // From docs/data/vfo_mode_filters.csv — 8 presets per mode, 4x2 grid
     static const ModeFilterPresets usb{{1800, 2100, 2400, 2700, 2900, 3300, 4000, 6000}};
     static const ModeFilterPresets am {{5600, 6000, 8000, 10000, 12000, 14000, 16000, 20000}};
     static const ModeFilterPresets cw {{50, 100, 250, 400}};

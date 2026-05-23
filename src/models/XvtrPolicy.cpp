@@ -9,24 +9,30 @@ namespace AetherSDR::XvtrPolicy {
 
 namespace {
 
-bool isNativeBandKey(const QString& key)
+bool isNativeBandKey(const QString& key, ModelCapabilities caps)
 {
-    static const QSet<QString> kNativeBandKeys = {
+    static const QSet<QString> kAlwaysNativeBandKeys = {
         QStringLiteral("160"), QStringLiteral("80"), QStringLiteral("60"),
         QStringLiteral("40"),  QStringLiteral("30"), QStringLiteral("20"),
         QStringLiteral("17"),  QStringLiteral("15"), QStringLiteral("12"),
         QStringLiteral("10"),  QStringLiteral("6"),
         QStringLiteral("2200"), QStringLiteral("630")
     };
-    return kNativeBandKeys.contains(key);
+    if (kAlwaysNativeBandKeys.contains(key))
+        return true;
+    if (caps.has4Meters && key == QLatin1String("4"))
+        return true;
+    if (caps.has2Meters && key == QLatin1String("2"))
+        return true;
+    return false;
 }
 
-QString normalizedNativeBandKey(const QString& bandName)
+QString normalizedNativeBandKey(const QString& bandName, ModelCapabilities caps)
 {
     QString key = bandName;
     if (key.endsWith('m') && key.length() > 1) {
         const QString stripped = key.chopped(1);
-        if (isNativeBandKey(stripped))
+        if (isNativeBandKey(stripped, caps))
             key = stripped;
     }
     return key;
@@ -45,15 +51,16 @@ double tileCenter(double lowMhz, double highMhz)
 } // namespace
 
 BandStackKeyResult resolveBandStackKey(const QString& bandName,
-                                       const QVector<Transverter>& xvtrs)
+                                       const QVector<Transverter>& xvtrs,
+                                       ModelCapabilities caps)
 {
     static const QMap<QString, int> kNumericBandSlots = {
         { QStringLiteral("WWV"), 33 },
         { QStringLiteral("GEN"), 34 },
     };
 
-    const QString radioKey = normalizedNativeBandKey(bandName);
-    if (isNativeBandKey(radioKey))
+    const QString radioKey = normalizedNativeBandKey(bandName, caps);
+    if (isNativeBandKey(radioKey, caps))
         return {radioKey, {}};
 
     if (kNumericBandSlots.contains(bandName))
@@ -93,7 +100,7 @@ WaterfallTileMatch matchWaterfallTileTransverterOffset(double lowMhz, double hig
     match.observedOffsetMhz = panCenterMhz - tileCenter(lowMhz, highMhz);
     match.toleranceMhz = std::max(bw, 0.25);
     for (const auto& xvtr : xvtrs) {
-        if (xvtr.rfFreqMhz <= 0.0 || xvtr.ifFreqMhz <= 0.0)
+        if (!xvtr.isValid || xvtr.rfFreqMhz <= 0.0 || xvtr.ifFreqMhz <= 0.0)
             continue;
 
         const double expectedOffset = xvtr.rfFreqMhz - xvtr.ifFreqMhz;

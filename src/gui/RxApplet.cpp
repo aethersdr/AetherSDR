@@ -1,5 +1,6 @@
 #include "RxApplet.h"
 #include "FilterPassbandWidget.h"
+#include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
@@ -105,7 +106,7 @@ namespace AetherSDR {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// ── Style constants (matching STYLEGUIDE.md) ────────────────────────────────
+// ── Style constants (matching docs/applet-style-guide.md) ──────────────────
 
 static constexpr const char* kButtonBase =
     "QPushButton { background: #1a2a3a; border: 1px solid #205070; "
@@ -140,6 +141,8 @@ static const QString kDisabledBtn =
 static const QString kAmberActive =
     "QPushButton:checked { background-color: #604000; color: #ffb800; "
     "border: 1px solid #906000; }";
+
+static constexpr int kLockedFrequencyFeedbackMs = 500;
 
 static bool likelyTxAntennaFallbackToken(const QString& token)
 {
@@ -252,6 +255,9 @@ RxApplet::RxApplet(QWidget* parent) : QWidget(parent)
     m_sqlManualLevel = std::clamp(
         AppSettings::instance().value("LastManualSquelchLevel", "20").toInt(),
         0, 100);
+    m_lockedFrequencyTimer.setSingleShot(true);
+    connect(&m_lockedFrequencyTimer, &QTimer::timeout,
+            this, &RxApplet::clearLockedFrequencyFeedback);
     buildUI();
 }
 
@@ -278,6 +284,19 @@ void RxApplet::buildUI()
         m_sliceGroup = new QButtonGroup(this);
         m_sliceGroup->setExclusive(true);
         tabLayout->addStretch();
+
+        m_muteAllBtn = new QPushButton(QString::fromUtf8("\xF0\x9F\x94\x87"));  // 🔇
+        m_muteAllBtn->setToolTip("Mute all slices (click again to unmute all)");
+        m_muteAllBtn->setFixedSize(28, 20);
+        m_muteAllBtn->setStyleSheet(
+            "QPushButton { background: #2a2a2a; border: 1px solid #504040; "
+            "border-radius: 3px; font-size: 12px; padding: 0; }"
+            "QPushButton:hover { background: #3a3030; border-color: #a06060; }"
+            "QPushButton:pressed { background: #6a2020; }");
+        connect(m_muteAllBtn, &QPushButton::clicked,
+                this, &RxApplet::muteAllToggled);
+        tabLayout->addWidget(m_muteAllBtn);
+
         root->addWidget(m_sliceTabRow);
     }
 
@@ -465,16 +484,14 @@ void RxApplet::buildUI()
         connect(m_freqEdit, &QLineEdit::returnPressed, this, [this] {
             const QString text = m_freqEdit->text().trimmed();
             if (!text.isEmpty() && m_slice) {
-                QString clean = text;
-                int firstDot = clean.indexOf('.');
-                if (firstDot >= 0) {
-                    clean = clean.left(firstDot) + "." + clean.mid(firstDot + 1).remove('.');
-                }
+                QString clean = FrequencyEntryParser::normalizedMhzText(text);
                 bool ok = false;
                 double freqMhz = clean.toDouble(&ok);
+                const bool explicitMhzEntry = FrequencyEntryParser::isExplicitMhzEntry(text, clean);
                 const bool onXvtr = m_slice &&
                     (m_slice->rxAntenna().startsWith("XVT") || m_slice->frequency() > 54.0);
-                const double maxMhz = onXvtr ? 50000.0 : 54.0;
+                const bool highExplicitMhzEntry = ok && explicitMhzEntry && freqMhz > 54.0;
+                const double maxMhz = (onXvtr || highExplicitMhzEntry) ? 50000.0 : 54.0;
                 if (onXvtr) {
                     // 3-digit-band convenience (2m/70cm): 1446 → 144.6.
                     // Skip for 23cm/microwave — 1296 means 1296 MHz.
@@ -487,12 +504,12 @@ void RxApplet::buildUI()
                             freqMhz = clean.toDouble(&ok);
                         }
                     }
-                } else {
+                } else if (!highExplicitMhzEntry) {
                     if (ok && freqMhz > 54000.0) freqMhz /= 1e6;
                     else if (ok && freqMhz > 54.0) freqMhz /= 1e3;
                 }
                 if (ok && freqMhz >= 0.001 && freqMhz <= maxMhz)
-                    m_slice->tuneAndRecenter(freqMhz);
+                    emit directEntryCommitted(freqMhz, QStringLiteral("rx-direct-entry"));
             }
             m_freqStack->setCurrentIndex(0);
         });
@@ -1244,6 +1261,7 @@ void RxApplet::setMaxSlices(int maxSlices)
 
     if (maxSlices <= 1) {
         m_sliceTabRow->setVisible(false);
+        m_muteAllBtn->hide();
         return;
     }
 
@@ -1258,10 +1276,21 @@ void RxApplet::setMaxSlices(int maxSlices)
         targetLayout = m_headerRow;
         // Insert at position 0 (where the badge was)
         insertIdx = 0;
+        // Move mute-all button to the right end of the header row.
+        // addWidget() reparents it from m_sliceTabRow if needed.
+        m_headerRow->addWidget(m_muteAllBtn);
+        m_muteAllBtn->show();
     } else {
         auto* layout = qobject_cast<QHBoxLayout*>(m_sliceTabRow->layout());
+        // Ensure button is in the tab row (may have been reparented to
+        // m_headerRow during a previous inline call). addWidget() is a
+        // no-op if already here; otherwise it reparents from m_headerRow.
+        layout->addWidget(m_muteAllBtn);
         targetLayout = layout;
-        insertIdx = layout->count() - 1;  // before trailing stretch
+        // Button is now the last item; insert slice buttons before it.
+        insertIdx = layout->count() - 1;
+        m_sliceTabRow->setVisible(true);
+        m_muteAllBtn->show();
     }
 
     for (int i = 0; i < maxSlices; ++i) {
@@ -1324,6 +1353,7 @@ void RxApplet::clearSliceButtons()
     }
 
     m_sliceTabRow->setVisible(false);
+    m_muteAllBtn->hide();
     m_sliceBadge->setVisible(true);
 }
 
@@ -1518,6 +1548,7 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
 
 void RxApplet::setSlice(SliceModel* slice)
 {
+    clearLockedFrequencyFeedback();
     if (m_slice) disconnectSlice(m_slice);
     m_slice = slice;
     if (m_slice) connectSlice(m_slice);
@@ -1657,10 +1688,17 @@ void RxApplet::connectSlice(SliceModel* s)
         m_lockBtn->setChecked(s->isLocked());
         m_lockBtn->setText(s->isLocked() ? "\U0001F512" : "\U0001F513");
     }
-    connect(s, &SliceModel::lockedChanged, this, [this](bool locked) {
+    connect(s, &SliceModel::lockedChanged, this, [this, s](bool locked) {
         QSignalBlocker b(m_lockBtn);
         m_lockBtn->setChecked(locked);
         m_lockBtn->setText(locked ? "\U0001F512" : "\U0001F513");
+        if (locked && m_freqStack && m_freqStack->currentIndex() == 1) {
+            m_freqEdit->setText(QString::number(s->frequency(), 'f', 6));
+            m_freqStack->setCurrentIndex(0);
+            m_freqEdit->clearFocus();
+        } else if (!locked) {
+            clearLockedFrequencyFeedback();
+        }
     });
 
     // Per-client letter refresh — Multi-Flex sessions can deliver
@@ -1758,20 +1796,12 @@ void RxApplet::connectSlice(SliceModel* s)
     updateModeSettings(s->mode());
 
     // Frequency display (XX.XXX.XXX format)
-    auto fmtFreq = [](double mhz) -> QString {
-        long long hz = static_cast<long long>(std::round(mhz * 1e6));
-        int mhzPart  = static_cast<int>(hz / 1000000);
-        int khzPart  = static_cast<int>((hz / 1000) % 1000);
-        int hzPart   = static_cast<int>(hz % 1000);
-        return QString("%1.%2.%3")
-            .arg(mhzPart)
-            .arg(khzPart, 3, 10, QChar('0'))
-            .arg(hzPart, 3, 10, QChar('0'));
-    };
-    m_freqLabel->setText(fmtFreq(s->frequency()));
-    connect(s, &SliceModel::frequencyChanged, this, [this, fmtFreq](double mhz) {
-        m_freqLabel->setText(fmtFreq(mhz));
+    updateFreqLabel();
+    connect(s, &SliceModel::frequencyChanged, this, [this](double) {
+        updateFreqLabel();
     });
+    connect(s, &SliceModel::tuneBlockedByLock,
+            this, &RxApplet::showLockedFrequencyFeedback);
 
     // ── Filter ─────────────────────────────────────────────────────────────
     updateFilterButtons();
@@ -2501,6 +2531,11 @@ bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
 
     // Double-click frequency label → inline edit
     if (obj == m_freqLabel && ev->type() == QEvent::MouseButtonDblClick) {
+        if (m_slice && m_slice->isLocked()) {
+            m_slice->notifyTuneBlockedByLock();
+            return true;
+        }
+
         if (m_slice) {
             m_freqEdit->setText(QString::number(m_slice->frequency(), 'f', 6));
             m_freqEdit->selectAll();
@@ -2512,6 +2547,12 @@ bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
 
     if (obj == m_freqLabel && ev->type() == QEvent::Wheel) {
         auto* we = static_cast<QWheelEvent*>(ev);
+        if (m_slice && m_slice->isLocked()) {
+            m_slice->notifyTuneBlockedByLock();
+            we->accept();
+            return true;
+        }
+
         // Clamp to ±1: KDE/Cinnamon send 960 per notch (#504)
         const int raw = we->angleDelta().y() / 120;
         const int steps = qBound(-1, raw, 1);
@@ -2557,6 +2598,52 @@ bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
         return true;
     }
     return QWidget::eventFilter(obj, ev);
+}
+
+void RxApplet::updateFreqLabel()
+{
+    if (!m_slice)
+        return;
+
+    if (m_showingLockedFrequencyFeedback) {
+        m_freqLabel->setText(QStringLiteral("LOCKED"));
+        return;
+    }
+
+    long long hz = static_cast<long long>(std::round(m_slice->frequency() * 1e6));
+    int mhzPart  = static_cast<int>(hz / 1000000);
+    int khzPart  = static_cast<int>((hz / 1000) % 1000);
+    int hzPart   = static_cast<int>(hz % 1000);
+    m_freqLabel->setText(QString("%1.%2.%3")
+        .arg(mhzPart)
+        .arg(khzPart, 3, 10, QChar('0'))
+        .arg(hzPart, 3, 10, QChar('0')));
+}
+
+void RxApplet::showLockedFrequencyFeedback()
+{
+    if (!m_slice || !m_slice->isLocked())
+        return;
+
+    if (m_freqStack && m_freqStack->currentIndex() == 1) {
+        m_freqEdit->setText(QString::number(m_slice->frequency(), 'f', 6));
+        m_freqStack->setCurrentIndex(0);
+        m_freqEdit->clearFocus();
+    }
+
+    m_showingLockedFrequencyFeedback = true;
+    updateFreqLabel();
+    m_lockedFrequencyTimer.start(kLockedFrequencyFeedbackMs);
+}
+
+void RxApplet::clearLockedFrequencyFeedback()
+{
+    if (!m_showingLockedFrequencyFeedback)
+        return;
+
+    m_lockedFrequencyTimer.stop();
+    m_showingLockedFrequencyFeedback = false;
+    updateFreqLabel();
 }
 
 } // namespace AetherSDR

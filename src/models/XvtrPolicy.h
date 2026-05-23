@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ModelCapabilities.h"
+
 #include <QString>
 #include <QVector>
 
@@ -38,7 +40,8 @@ struct WaterfallTileMatch {
 };
 
 BandStackKeyResult resolveBandStackKey(const QString& bandName,
-                                       const QVector<Transverter>& xvtrs);
+                                       const QVector<Transverter>& xvtrs,
+                                       ModelCapabilities caps = {});
 
 bool isWaterfallTileOutsidePan(double lowMhz, double highMhz, double panCenterMhz);
 

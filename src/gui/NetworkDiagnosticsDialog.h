@@ -5,21 +5,26 @@
 
 #include <QComboBox>
 #include <QFile>
+#include <QHeaderView>
 #include <QLabel>
 #include <QObject>
 #include <QSet>
+#include <QTableWidget>
 #include <QTimer>
 #include <QVector>
 
 class QCheckBox;
 class QPlainTextEdit;
 class QPushButton;
+class QTableWidget;
+class QLineEdit;
 
 namespace AetherSDR {
 
 class RadioModel;
 class AudioEngine;
 class TimeSeriesGraphWidget;
+class TciServer;
 
 struct NetworkDiagnosticsSample {
     qint64 timestampMs{0};
@@ -41,6 +46,14 @@ struct NetworkDiagnosticsSample {
     double daxLossPct{0.0};
     double audioBufferMs{0.0};
     double underrunsPerSecond{0.0};
+    double audioFeedRateHz{0.0};
+    double audioFeedDeficitMs{0.0};
+    double audioLatePacketsPerSecond{0.0};
+    qint64 audioLatePackets{0};
+    qint64 audioPacketGaps{0};
+    qint64 audioLastPacketAgeMs{0};
+    quint16 audioPacketClassCode{0};
+    int audioStreamCount{0};
 };
 
 class NetworkDiagnosticsHistory : public QObject {
@@ -62,6 +75,7 @@ private:
     qint64 m_lastTxBytes{0};
     qint64 m_lastSampleMs{0};
     quint64 m_lastAudioUnderrunCount{0};
+    qint64 m_lastAudioLatePackets{0};
     qint64 m_lastCatBytes[PanadapterStream::CatCount]{};
 };
 
@@ -72,6 +86,7 @@ public:
     explicit NetworkDiagnosticsDialog(RadioModel* model,
                                       AudioEngine* audio,
                                       NetworkDiagnosticsHistory* history,
+                                      TciServer* tci = nullptr,
                                       QWidget* parent = nullptr);
 
 private:
@@ -83,6 +98,13 @@ private:
     void refresh();
     void updateCharts();
     QWidget* buildLogsTab();
+    QWidget* buildTciTab();
+    void     refreshTciClientTable();
+    void     appendTciMessage(const QString& direction, const QString& text);
+    void     onTciSaveLog();
+    void     onTciLogContextMenu(const QPoint& pos);
+    void     tciSuppress(const QString& cmd);
+    void     refreshTciSuppressLabel();
     void initializeLogTail();
     bool reopenLogFile(bool keepExistingLines);
     void appendNewLogData();
@@ -98,6 +120,14 @@ private:
     RadioModel* m_model;
     AudioEngine* m_audio;
     NetworkDiagnosticsHistory* m_history{nullptr};
+    TciServer*  m_tci{nullptr};
+    QTableWidget* m_tciClientTable{nullptr};
+    QLabel*       m_tciClientSummary{nullptr};
+    QTableWidget*   m_tciLogTable{nullptr};
+    QLabel*         m_tciSuppressLabel{nullptr};
+    QPushButton*    m_tciPauseBtn{nullptr};
+    bool            m_tciMonitorPaused{false};
+    QSet<QString>   m_tciSuppressed;   // command prefixes muted by the user
     QTimer      m_refreshTimer;
     QTimer      m_logRefreshTimer;
     QComboBox*  m_rangeCombo{nullptr};
@@ -134,6 +164,12 @@ private:
     QLabel* m_audioPacketGapLabel;
     QLabel* m_audioPacketGapMaxLabel;
     QLabel* m_audioJitterLabel;
+    QLabel* m_audioStreamLabel;
+    QLabel* m_audioFeedRateLabel;
+    QLabel* m_audioFeedDeficitLabel;
+    QLabel* m_audioLateGapLabel;
+    QLabel* m_audioStreamHealthLabel;
+    QLabel* m_audioStreamsDetailLabel;
     QLabel* m_overviewStatusValue{nullptr};
     QLabel* m_overviewLatencyValue{nullptr};
     QLabel* m_overviewLossValue{nullptr};
@@ -147,6 +183,8 @@ private:
     TimeSeriesGraphWidget* m_ratesGraph{nullptr};
     TimeSeriesGraphWidget* m_lossGraph{nullptr};
     TimeSeriesGraphWidget* m_audioGraph{nullptr};
+    TimeSeriesGraphWidget* m_audioFeedGraph{nullptr};
+    QTableWidget* m_audioStreamsTable{nullptr};
 
     QPlainTextEdit* m_logViewer{nullptr};
     QLabel* m_logPathLabel{nullptr};

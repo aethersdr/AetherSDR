@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QVector>
+#include <QTimer>
 
 class ScrollableLabel;
 namespace AetherSDR { class FilterPassbandWidget; }
@@ -112,6 +113,10 @@ signals:
     void autoSqlMarginDbChanged(int dB);
     // Emitted when the radio reports a squelch state change (for spectrum line).
     void squelchStateChanged(bool on, int level);
+    void directEntryCommitted(double mhz, const QString& source);
+    // Emitted when the user presses the Mute All button.
+    // Logic lives in MainWindow::onMuteAllSlicesToggle() which has RADE context.
+    void muteAllToggled();
 
 #ifdef HAVE_RADE
     // Emitted when user selects/deselects RADE digital voice mode
@@ -134,6 +139,9 @@ private:
     void disconnectSlice(SliceModel* s);
     void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
     void updateAntennaButtons();
+    void updateFreqLabel();
+    void showLockedFrequencyFeedback();
+    void clearLockedFrequencyFeedback();
     QStringList txAntennaOptions() const;
     QString antennaMenuLabel(const QString& token, const QStringList& options) const;
 
@@ -166,6 +174,7 @@ private:
     QButtonGroup*           m_sliceGroup{nullptr};
     QVector<QToolButton*>   m_sliceBtns;
     bool                    m_sliceButtonClicksConnected{false};
+    QPushButton*            m_muteAllBtn{nullptr};
 
     // ── Header row ────────────────────────────────────────────────────────
     QLabel*      m_sliceBadge{nullptr};   // "A" / "B" / "C" / "D"
@@ -181,6 +190,8 @@ private:
     QLabel*      m_freqLabel{nullptr};     // frequency readout e.g. "14.289.510"
     QLineEdit*   m_freqEdit{nullptr};
     QStackedWidget* m_freqStack{nullptr};
+    QTimer       m_lockedFrequencyTimer;
+    bool         m_showingLockedFrequencyFeedback{false};
 
     // Filter presets (Hz widths) — per-mode, swapped on mode change
     QVector<int>            m_filterWidths{1800, 2100, 2400, 2700, 3300, 6000};

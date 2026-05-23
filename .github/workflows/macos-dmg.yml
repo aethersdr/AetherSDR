@@ -75,7 +75,7 @@ jobs:
           cmake --install .
 
       - name: Setup DeepFilterNet3 (DFNR)
-        run: bash setup-deepfilter.sh
+        run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Set up ccache
         uses: hendrikmuhs/ccache-action@77c3f8fd59034e6f3d5c58867ded0185b48d534f  # v1
@@ -196,7 +196,7 @@ jobs:
 
           # 3. Sign the main app bundle last (no --deep)
           codesign --force --options runtime --timestamp \
-            --entitlements macos/AetherSDR.entitlements \
+            --entitlements packaging/macos/AetherSDR.entitlements \
             --sign "$SIGN_ID" \
             "$APP"
 
@@ -274,7 +274,7 @@ jobs:
           create-dmg \
             --volname "AetherSDR" \
             --volicon "build/AetherSDR.icns" \
-            --background "docs/logo-invert.png" \
+            --background "docs/assets/logo-invert.png" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
