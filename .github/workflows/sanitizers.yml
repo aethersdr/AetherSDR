@@ -1,0 +1,180 @@
+name: Sanitizers
+
+# Weekly debug-heavy build that runs the test suite under AddressSanitizer +
+# UndefinedBehaviorSanitizer (one matrix entry) and ThreadSanitizer (separate
+# entry, incompatible with ASan). Failures are uploaded as artifacts and
+# tracked in a sticky GitHub issue per sanitizer kind so the queue does not
+# fill with duplicates.
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'  # Mondays 07:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  sanitize:
+    name: ${{ matrix.sanitizer.label }}
+    runs-on: ubuntu-latest
+    container: ghcr.io/ten9876/aethersdr-ci:latest
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer:
+          - id: asan-ubsan
+            label: ASan + UBSan
+            build_type: Debug
+            # ASan + UBSan applied via CXXFLAGS / LDFLAGS so the flags
+            # reach every target the build produces — including the
+            # standalone unit-test executables (CMakeLists.txt:1273+),
+            # which are NOT linked against the AetherSDR target and
+            # therefore don't inherit the per-target -fsanitize=address
+            # option set at CMakeLists.txt:1260. Setting the flags here
+            # also lets us drop that coupling in a future
+            # -DAETHERSDR_SANITIZER=... cleanup without touching this
+            # workflow.
+            extra_cxx: "-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer"
+            extra_ld:  "-fsanitize=address,undefined"
+            runtime_env: |
+              ASAN_OPTIONS=detect_leaks=1:abort_on_error=0:halt_on_error=0:strict_string_checks=1:detect_stack_use_after_return=1:print_summary=1
+              UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=0:print_summary=1
+              LSAN_OPTIONS=print_suppressions=0
+          - id: tsan
+            label: TSan
+            # TSan cannot coexist with ASan, so build RelWithDebInfo and
+            # inject the TSan flags ourselves.
+            build_type: RelWithDebInfo
+            extra_cxx: "-fsanitize=thread -g3 -fno-omit-frame-pointer -O1"
+            extra_ld:  "-fsanitize=thread"
+            runtime_env: |
+              TSAN_OPTIONS=halt_on_error=0:second_deadlock_stack=1:history_size=7:print_summary=1
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Configure
+        env:
+          CXXFLAGS: ${{ matrix.sanitizer.extra_cxx }}
+          LDFLAGS:  ${{ matrix.sanitizer.extra_ld }}
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=${{ matrix.sanitizer.build_type }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Run tests under sanitizer
+        id: ctest
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set -o pipefail
+          # Export each KEY=value line from runtime_env into the test env.
+          while IFS= read -r line; do
+            [ -n "$line" ] && export "$line"
+          done <<'EOF'
+          ${{ matrix.sanitizer.runtime_env }}
+          EOF
+          ctest --test-dir build --output-on-failure 2>&1 | tee sanitizer.log
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Extract failure report
+        id: extract
+        if: steps.ctest.outputs.exit != '0'
+        run: |
+          # Sanitizer error blocks all end with a `SUMMARY:` line. Capture
+          # ~80 lines of leading context per match, which is enough for the
+          # full stack on ASan/UBSan/TSan output.
+          grep -B 80 '^SUMMARY:' sanitizer.log > report.txt || true
+          if [ ! -s report.txt ]; then
+            tail -c 50000 sanitizer.log > report.txt
+          fi
+          # Cap at ~45KB to stay well under GitHub's ~65KB issue-body limit
+          # once we wrap it in markdown.
+          head -c 45000 report.txt > report.trim && mv report.trim report.txt
+          # Stable fingerprint from the first SUMMARY line, used to detect
+          # whether a re-run is the same bug.
+          fp=$(grep -m1 '^SUMMARY:' sanitizer.log | sha256sum | cut -c1-12)
+          echo "fingerprint=${fp:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload sanitizer artifacts
+        if: steps.ctest.outputs.exit != '0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: ${{ matrix.sanitizer.id }}-${{ github.run_id }}
+          path: |
+            sanitizer.log
+            report.txt
+          retention-days: 30
+
+      - name: Open or update tracking issue
+        if: steps.ctest.outputs.exit != '0'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        env:
+          SAN_ID:     ${{ matrix.sanitizer.id }}
+          SAN_LABEL:  ${{ matrix.sanitizer.label }}
+          FP:         ${{ steps.extract.outputs.fingerprint }}
+          RUN_URL:    ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('report.txt', 'utf8');
+            const title  = `[sanitizer] ${process.env.SAN_LABEL} weekly run failure`;
+            const labels = ['sanitizer', process.env.SAN_ID];
+            const sha    = context.sha.substring(0, 7);
+            const date   = new Date().toISOString().split('T')[0];
+
+            const body = [
+              `**Run:** ${process.env.RUN_URL}`,
+              `**Commit:** \`${sha}\``,
+              `**Date:** ${date}`,
+              `**Fingerprint:** \`${process.env.FP}\``,
+              '',
+              '<details><summary>Sanitizer report (first SUMMARY block)</summary>',
+              '',
+              '```',
+              report,
+              '```',
+              '</details>',
+              '',
+              'Full `sanitizer.log` attached to the workflow run artifacts.',
+            ].join('\n');
+
+            // The label combo (sanitizer + asan-ubsan|tsan) uniquely
+            // identifies the bucket, so the first open match is the
+            // sticky issue regardless of any title edits made by hand.
+            const open = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              state: 'open',
+              labels: labels.join(','),
+              per_page: 100,
+            });
+            const existing = open.data[0];
+
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+              core.notice(`Appended to #${existing.number}`);
+            } else {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo:  context.repo.repo,
+                title,
+                labels,
+                body,
+              });
+              core.notice(`Opened #${created.data.number}`);
+            }
+
+      - name: Fail the job if sanitizer reported errors
+        if: steps.ctest.outputs.exit != '0'
+        run: exit 1

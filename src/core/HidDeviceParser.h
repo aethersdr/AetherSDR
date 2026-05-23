@@ -33,14 +33,15 @@ public:
 };
 
 // Icom RC-28 (VID 0x0C26, PID 0x001E)
+// 32-byte reports. hidapi prepends the 1-byte report ID on Windows/Linux (hid_read
+// returns 33); strips it on macOS (hid_read returns 32). Use len to discriminate.
+// Layout (after report ID): [0]=seq, [2]=direction, [4]=button state enum.
 class IcomRC28Parser : public HidDeviceParser {
 public:
     HidEvent parse(const uint8_t* buf, size_t len) override;
-    size_t reportSize() const override { return 64; }
+    size_t reportSize() const override { return 33; }
 private:
-    uint8_t m_prevEncoder{0};
-    uint8_t m_prevButtons{0};
-    bool m_firstReport{true};
+    uint8_t m_prevButtonState{0x07};  // 0x07 = all released (idle)
 };
 
 // Griffin PowerMate (VID 0x077D, PID 0x0410)

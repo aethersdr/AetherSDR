@@ -15,7 +15,7 @@ AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. 
 > **Cross-platform downloads available:** Linux AppImage, macOS universal DMG, Windows installer and portable ZIP.
 > Linux is the primary supported platform. macOS and Windows builds are provided as a courtesy.
 
-![AetherSDR Screenshot](docs/screenshot-v5.png)
+![AetherSDR Screenshot](docs/assets/screenshot-current.png)
 
 <p><i>Native. Open. Yours.</i></p>
 
@@ -46,6 +46,22 @@ AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. 
 - **4o3a Tuner Genius XL** — relay control, autotune, 3x1 antenna switch, SWR/power gauges
 - **Multi-Flex** — independent operation alongside SmartSDR/Maestro with clickable dashboard
 - **Adaptive predistortion (APD)** — SmartSignal toggle and status display for FLEX-8000 series, including **External APD** sampler-port selection (firmware 4.2.18+) for training APD against an external linear amplifier's output
+
+---
+
+## How AetherSDR Is Built
+
+AetherSDR is developed using an AI-augmented open-source workflow:
+
+- **Project lead (Jeremy KK7GWY) + a core contributor team** working primarily through Claude Code and a mix of AI development tools — every commit goes through the merge gate; nothing reaches `main` without human review
+- **[AetherClaude](https://github.com/aethersdr/aetherclaude) orchestrator bot** auto-triages incoming issues, drafts implementation plans, and produces PRs for issues labelled `aetherclaude-eligible`
+- **Contributors use a mix of AI tools** (Codex, Copilot, Cursor, Gemini, Aider) — the project's [Constitution](CONSTITUTION.md) (14 principles, structured per [Cisco's Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec) spec) codifies the conventions every contributor and every AI tool follows
+- **Branch protection enforces signed commits, CI green, and CODEOWNERS review** — every change goes through the same gate regardless of which AI tool (or human) produced it
+- **At active pace: ~50 PRs per week, ~15,000–30,000 lifetime downloads, ≥6 distinct AI tools touching the codebase**
+
+See [`AGENTS.md`](AGENTS.md) for the canonical project guide that every AI assistant reads first, and [`CONSTITUTION.md`](CONSTITUTION.md) for the principles that gate the contribution model.
+
+The full list of code contributors is auto-generated from GitHub commit attribution — see the [Contributors graph](https://github.com/aethersdr/AetherSDR/graphs/contributors).
 
 ---
 

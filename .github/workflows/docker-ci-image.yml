@@ -8,25 +8,90 @@ on:
   workflow_dispatch:
 
 permissions:
-  packages: write
+  contents: write       # peter-evans/create-pull-request: push the bump branch
+  packages: write       # docker/build-push-action: push the image
+  pull-requests: write  # peter-evans/create-pull-request: open the bump PR
+
+# Serialize concurrent runs so a Dockerfile push that lands during a
+# manual workflow_dispatch doesn't race on the auto-PR branch.
+# cancel-in-progress: false — never kill a run that may already be
+# mid-publish to the registry; let the second run queue and overwrite
+# the auto-PR with its newer digest.
+concurrency:
+  group: docker-ci-image
+  cancel-in-progress: false
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v4
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        uses: docker/build-push-action@v7
+        id: build
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f  # v7
         with:
           context: .github/docker
           push: true
           tags: ghcr.io/ten9876/aethersdr-ci:latest
+
+      - name: Update workflow consumers to new digest
+        id: pin
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          if [ -z "$DIGEST" ]; then
+            echo "::error::docker/build-push-action did not return a digest"
+            exit 1
+          fi
+          # Rewrite any existing reference (digest form OR tag form) to the
+          # newly published digest. Idempotent both ways: re-runs producing
+          # the same digest leave the files unchanged, and the bootstrap
+          # run swaps the legacy ":latest" reference cleanly.
+          # The `[ -f ]` guard lets the loop run cleanly even if a consumer
+          # file isn't on main yet (e.g. sanitizers.yml until PR #2866 lands).
+          for f in .github/workflows/ci.yml \
+                   .github/workflows/codeql.yml \
+                   .github/workflows/sanitizers.yml; do
+            [ -f "$f" ] || continue
+            sed -i -E \
+              "s#(ghcr\.io/ten9876/aethersdr-ci)(@sha256:[a-f0-9]+|:[A-Za-z0-9._-]+)#\1@${DIGEST}#g" \
+              "$f"
+          done
+          echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Pinned workflow consumers to ${DIGEST}"
+          git diff --stat .github/workflows/
+
+      - name: Open PR to bump pinned digest
+        if: steps.pin.outputs.digest != ''
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1  # v8
+        with:
+          branch: ci-image/digest-bump
+          delete-branch: true
+          commit-message: "ci: pin aethersdr-ci to ${{ steps.pin.outputs.digest }}"
+          title: "ci: pin aethersdr-ci image to latest build"
+          body: |
+            Automated update from `docker-ci-image.yml` after building and
+            publishing a new CI image from the current
+            `.github/docker/Dockerfile`.
+
+            Updates the `ghcr.io/ten9876/aethersdr-ci` reference in
+            `ci.yml`, `codeql.yml`, and `sanitizers.yml` (where present) to:
+
+                ${{ steps.pin.outputs.digest }}
+
+            The image is still tagged `:latest` at the registry; pinning the
+            workflow consumers by digest gives each CI run a reproducible,
+            immutable reference even if the `:latest` tag is republished later.
+
+            Review the linked Dockerfile change(s) and the resulting digest
+            before merging.
+          labels: ci

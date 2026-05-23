@@ -95,7 +95,7 @@ if(PkgConfig_FOUND)
 endif()
 
 # FFTW3 (required for NR2 spectral noise reduction)
-# Windows: run setup-fftw.ps1 first to download prebuilt DLLs
+# Windows: run scripts/setup/setup-fftw.ps1 first to download prebuilt DLLs
 # Linux:   apt install libfftw3-dev
 # macOS:   brew install fftw
 if(WIN32)
@@ -106,7 +106,7 @@ if(WIN32)
         set(FFTW3_LIBRARIES "${FFTW3_ROOT}/lib/fftw3.lib")
         set(FFTW3_DLL "${FFTW3_ROOT}/bin/libfftw3-3.dll")
     else()
-        message(WARNING "FFTW3 not found. Run setup-fftw.ps1 to download it. NR2 will use fallback FFT.")
+        message(WARNING "FFTW3 not found. Run scripts/setup/setup-fftw.ps1 to download it. NR2 will use fallback FFT.")
     endif()
 else()
     if(PkgConfig_FOUND)
@@ -179,7 +179,7 @@ endif()
 # When RADE is enabled, Opus comes from AetherSDR's vendored RADE snapshot
 # (with FARGAN/OSCE).
 # When RADE is disabled, find system libopus.
-# Windows: run setup-opus.ps1 first to download prebuilt DLLs
+# Windows: run scripts/setup/setup-opus.ps1 first to download prebuilt DLLs
 # Linux:   apt install libopus-dev
 # macOS:   brew install opus
 if(RADE_FOUND)
@@ -194,7 +194,7 @@ elseif(WIN32)
         message(STATUS "Opus: using prebuilt Windows library (static)")
     else()
         set(OPUS_FOUND FALSE)
-        message(WARNING "Opus not found. Run setup-opus.ps1 to download it. "
+        message(WARNING "Opus not found. Run scripts/setup/setup-opus.ps1 to download it. "
                         "SmartLink compressed audio will be unavailable.")
     endif()
 else()
@@ -392,7 +392,7 @@ if(ENABLE_DFNR)
     else()
         set(ENABLE_DFNR OFF)
         message(STATUS "DFNR (DeepFilterNet3) disabled — library not found at ${DFNR_LIB} "
-                       "(run ./setup-deepfilter.sh before cmake to enable)")
+                       "(run ./scripts/setup/setup-deepfilter.sh before cmake to enable)")
     endif()
 endif()
 
@@ -559,6 +559,7 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/FrequencyEntryParser.cpp
     src/gui/SliceColorManager.cpp
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
@@ -776,7 +777,7 @@ else()
     target_compile_options(aether_libmodem_core PRIVATE -w)
 endif()
 
-qt_add_resources(RESOURCES resources.qrc)
+qt_add_resources(RESOURCES resources/resources.qrc)
 
 add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES})
 
@@ -799,10 +800,10 @@ if(APPLE)
     target_link_libraries(AetherSDR PRIVATE "-framework AVFoundation" "-framework Accelerate")
     target_sources(AetherSDR PRIVATE src/core/MacNRFilter.cpp)
 
-    # Generate AetherSDR.icns at build time from docs/logo-circle.png so local
+    # Generate AetherSDR.icns at build time from docs/assets/logo-circle.png so local
     # builds get an app icon without any extra setup (sips and iconutil are
     # part of macOS).
-    set(ICON_SOURCE "${CMAKE_SOURCE_DIR}/docs/logo-circle.png")
+    set(ICON_SOURCE "${CMAKE_SOURCE_DIR}/docs/assets/logo-circle.png")
     set(ICNS_PATH "${CMAKE_BINARY_DIR}/AetherSDR.icns")
     set(ICONSET_PATH "${CMAKE_BINARY_DIR}/AetherSDR.iconset")
     add_custom_command(
@@ -826,7 +827,7 @@ if(APPLE)
     set_source_files_properties("${ICNS_PATH}" PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 elseif(WIN32)
     # Windows application icon (taskbar, Start Menu, Alt-Tab)
-    set(WIN_RC "${CMAKE_SOURCE_DIR}/docs/AetherSDR.rc")
+    set(WIN_RC "${CMAKE_SOURCE_DIR}/packaging/windows/AetherSDR.rc")
     if(EXISTS "${WIN_RC}")
         target_sources(AetherSDR PRIVATE "${WIN_RC}")
     endif()
@@ -926,7 +927,7 @@ else()
 endif()
 
 # hidapi — USB HID encoder support (Stream Deck, Icom RC-28, Griffin PowerMate, Contour Shuttle)
-# Windows: run setup-hidapi.ps1 first to download and build hidapi
+# Windows: run scripts/setup/setup-hidapi.ps1 first to download and build hidapi
 # Linux:   apt install libhidapi-dev
 # macOS:   brew install hidapi
 if(WIN32)
@@ -937,7 +938,7 @@ if(WIN32)
         set(HIDAPI_LIBRARIES "${HIDAPI_ROOT}/lib/hidapi.lib")
         set(HIDAPI_DLL "${HIDAPI_ROOT}/bin/hidapi.dll")
     else()
-        message(WARNING "hidapi not found. Run setup-hidapi.ps1 to download it. "
+        message(WARNING "hidapi not found. Run scripts/setup/setup-hidapi.ps1 to download it. "
                         "USB HID device support (Stream Deck, etc.) will be disabled.")
     endif()
 else()
@@ -985,7 +986,7 @@ else()
 endif()
 
 # ONNX Runtime — optional CNN signal classifier for S-History v2
-# Windows: run setup-onnxruntime.ps1 first to download prebuilt DLLs
+# Windows: run scripts/setup/setup-onnxruntime.ps1 first to download prebuilt DLLs
 # Linux:   apt install libonnxruntime-dev  (or build from source)
 # macOS:   brew install onnxruntime
 if(WIN32)
@@ -997,7 +998,7 @@ if(WIN32)
         file(GLOB ORT_DLLS "${ORT_ROOT}/bin/*.dll")
     else()
         message(STATUS "ONNX Runtime not found — CNN signal classifier disabled. "
-                       "Run setup-onnxruntime.ps1 to enable.")
+                       "Run scripts/setup/setup-onnxruntime.ps1 to enable.")
     endif()
 else()
     if(PkgConfig_FOUND)
@@ -1102,7 +1103,7 @@ if(ENABLE_SPECBLEACH)
                     "${FFTW3F_DLL}" "$<TARGET_FILE_DIR:AetherSDR>"
                 COMMENT "Copying libfftw3f-3.dll to build directory")
         else()
-            message(WARNING "fftw3f.lib not found — run setup-fftw.ps1 and gen-fftw3f-lib.bat")
+            message(WARNING "fftw3f.lib not found — run scripts/setup/setup-fftw.ps1 and gen-fftw3f-lib.bat")
         endif()
     else()
         # libspecbleach C sources include <fftw3.h> directly — ensure it's findable
@@ -1310,6 +1311,18 @@ target_include_directories(slice_model_letter_test PRIVATE src)
 target_link_libraries(slice_model_letter_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_letter_test COMMAND slice_model_letter_test)
 
+add_executable(panadapter_model_rx_antenna_test
+    tests/panadapter_model_rx_antenna_test.cpp
+    src/models/PanadapterModel.cpp
+    src/core/PerfTelemetry.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(panadapter_model_rx_antenna_test PRIVATE src)
+target_link_libraries(panadapter_model_rx_antenna_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME panadapter_model_rx_antenna_test COMMAND panadapter_model_rx_antenna_test)
+
 add_executable(packet_loss_concealment_test
     tests/packet_loss_concealment_test.cpp
     src/core/PacketLossConcealment.cpp
@@ -1441,6 +1454,14 @@ add_executable(xvtr_policy_test
 )
 target_include_directories(xvtr_policy_test PRIVATE src)
 target_link_libraries(xvtr_policy_test PRIVATE Qt6::Core)
+
+add_executable(frequency_entry_parser_test
+    tests/frequency_entry_parser_test.cpp
+    src/gui/FrequencyEntryParser.cpp
+)
+target_include_directories(frequency_entry_parser_test PRIVATE src)
+target_link_libraries(frequency_entry_parser_test PRIVATE Qt6::Core)
+add_test(NAME frequency_entry_parser_test COMMAND frequency_entry_parser_test)
 
 add_executable(radio_status_ownership_test
     tests/radio_status_ownership_test.cpp
@@ -1687,10 +1708,10 @@ else()
     install(TARGETS AetherSDR
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
-    install(FILES AetherSDR.desktop
+    install(FILES packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )
-    install(FILES docs/logo-circle.png
+    install(FILES docs/assets/logo-circle.png
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps
         RENAME aethersdr.png
     )

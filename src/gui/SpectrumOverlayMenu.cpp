@@ -1411,7 +1411,13 @@ void SpectrumOverlayMenu::toggleDisplayPanel()
 
 void SpectrumOverlayMenu::setWnbState(bool on, int level)
 {
+    syncWnbState(on, level, false);
+}
+
+void SpectrumOverlayMenu::syncWnbState(bool on, int level, bool updating)
+{
     QSignalBlocker b1(m_wnbBtn), b2(m_wnbSlider);
+    Q_UNUSED(updating);
     m_wnbBtn->setChecked(on);
     m_wnbSlider->setValue(level);
     m_wnbLabel->setText(QString::number(level));
@@ -1601,9 +1607,10 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
         btn->setStyleSheet(xvtrBtnStyle);
         const double freq = bands[i].rfFreqMhz;
         const QString name = bands[i].name;
-        connect(btn, &QPushButton::clicked, this, [this, name, freq]() {
+        const QString stackKey = bands[i].stackKey;
+        connect(btn, &QPushButton::clicked, this, [this, name, freq, stackKey]() {
             hideAllSubPanels();
-            emit bandSelected(name, freq, "USB");
+            emit bandSelected(name, freq, "USB", stackKey);
         });
         grid->addWidget(btn, row + i / 3, i % 3);
         m_xvtrBandBtns.append(btn);
@@ -1693,8 +1700,9 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
 
         const double freq = xvtr.rfFreqMhz;
         const QString name = xvtr.name;
-        connect(btn, &QPushButton::clicked, this, [this, name, freq]() {
-            emit bandSelected(name, freq, "FM");
+        const QString stackKey = xvtr.stackKey;
+        connect(btn, &QPushButton::clicked, this, [this, name, freq, stackKey]() {
+            emit bandSelected(name, freq, "FM", stackKey);
             m_xvtrPanel->hide();
             m_xvtrPanelVisible = false;
         });

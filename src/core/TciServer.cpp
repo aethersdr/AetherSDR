@@ -8,6 +8,7 @@
 #include "LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/PanadapterModel.h"
 #include "models/DaxIqModel.h"
 #include "models/MeterModel.h"
 #include "models/TransmitModel.h"
@@ -17,12 +18,24 @@
 #include <QWebSocket>
 #include <QStringList>
 #include <QTimer>
+#include <QPointer>
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 
 namespace AetherSDR {
+
+namespace {
+// Server-side caps closing the unbounded-frame / unbounded-client surface
+// flagged in GHSA-7w4w-wfqm-wh93 (M2).  QWebSocket message/frame sizes
+// default to 1 GiB in Qt6 — wildly more than any legitimate TCI command
+// or audio frame.  64 KiB easily covers the largest legitimate TCI text
+// command and is enforced at the framing layer.  Eight concurrent clients
+// matches the rigctld cap.
+constexpr qint64 kMaxWsMessageBytes = 64 * 1024;
+constexpr int    kMaxClients        = 8;
+}
 
 // ── TCI binary audio frame header (per ExpertSDR3 TCI spec v2.0) ────────
 // 9 × uint32 = 36 bytes, followed by sample payload
@@ -287,6 +300,24 @@ void TciServer::onNewConnection()
 {
     while (m_server->hasPendingConnections()) {
         auto* ws = m_server->nextPendingConnection();
+
+        // Refuse new connections once at-capacity (GHSA-7w4w-wfqm-wh93).
+        if (m_clients.size() >= kMaxClients) {
+            qCWarning(lcCat) << "TciServer: refusing connection from"
+                             << ws->peerAddress().toString()
+                             << "— at max-clients cap (" << kMaxClients << ")";
+            ws->close(QWebSocketProtocol::CloseCodeTooMuchData,
+                      QStringLiteral("server at max-clients cap"));
+            ws->deleteLater();
+            continue;
+        }
+
+        // Cap per-message and per-frame size to refuse OOM-by-huge-frame
+        // (GHSA-7w4w-wfqm-wh93).  Qt6 default is 1 GiB per message; legit
+        // TCI text commands and audio frames are well under 64 KiB.
+        ws->setMaxAllowedIncomingMessageSize(kMaxWsMessageBytes);
+        ws->setMaxAllowedIncomingFrameSize(kMaxWsMessageBytes);
+
         auto* protocol = new TciProtocol(m_model);
 
         ClientState cs;
@@ -514,6 +545,20 @@ void TciServer::onTextMessage(const QString& msg)
             QString response = client.protocol->handleCommand(cmd.trimmed());
             if (!response.isEmpty())
                 ws->sendTextMessage(response);
+            continue;
+        }
+
+        // Spectrum event subscribe/unsubscribe — enables waterfall row forwarding
+        if (trimmed == "spectrum_event:on") {
+            client.spectrumEnabled = true;
+            qCInfo(lcCat) << "TCI: spectrum_event enabled for client"
+                          << ws->peerAddress().toString();
+            continue;
+        }
+        if (trimmed == "spectrum_event:off") {
+            client.spectrumEnabled = false;
+            qCInfo(lcCat) << "TCI: spectrum_event disabled for client"
+                          << ws->peerAddress().toString();
             continue;
         }
 
@@ -1182,6 +1227,32 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
         broadcast(QStringLiteral("rx_volume:%1,%2;")
                       .arg(trx).arg(static_cast<int>(gain)));
     });
+
+    // State sync on (re)wire, deferred. A Flex band change (display pan set
+    // band=) tears down and recreates the slice, so wireSlice() runs again for
+    // the new slice. The handlers above only fire on *subsequent* changes; if
+    // the radio's restored band frequency equals the recreated slice's init
+    // value no frequencyChanged fires and the new band's vfo: is never
+    // announced to TCI clients (silent for 160/80/60/17/10m; #2824).
+    //
+    // Pushing immediately is wrong: the recreated slice briefly holds an
+    // intermediate frequency before the radio restores the band-stack value
+    // (slices settle in ~250-340 ms observed), so an immediate push emits a
+    // transient wrong vfo:. Defer ~400 ms and read the *settled* frequency so
+    // every band announces exactly one correct vfo:. QPointer guards rapid
+    // band changes that destroy the slice before the timer fires (the new
+    // slice schedules its own deferred push, so the final band still wins).
+    QPointer<SliceModel> guard(slice);
+    QTimer::singleShot(400, this, [this, guard]() {
+        if (!guard || m_clients.isEmpty()) return;
+        SliceModel* s = guard;
+        const int trx = TciProtocol::tciTrxForSlice(m_model, s);
+        const double mhz = s->frequency();
+        if (mhz > 0.0) {
+            long long hz = static_cast<long long>(std::round(mhz * 1e6));
+            broadcast(QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz));
+        }
+    });
 }
 
 // ── Wire spot click notifications ───────────────────────────────────────
@@ -1496,6 +1567,65 @@ void TciServer::onIqDataReady(int channel, const QByteArray& rawPayload, int sam
 
     for (auto& cs : m_clients) {
         if (cs.iqEnabled && cs.iqChannel == trx)
+            cs.socket->sendBinaryMessage(frame);
+    }
+}
+
+// ── Waterfall row → TCI binary spectrum frames (type=4) ──────────────────────
+
+void TciServer::onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
+                                    double lowMhz, double highMhz,
+                                    quint32 timecode, qint64 emittedNs)
+{
+    Q_UNUSED(timecode); Q_UNUSED(emittedNs);
+
+    bool anySpectrum = false;
+    for (const auto& cs : m_clients) {
+        if (cs.spectrumEnabled) { anySpectrum = true; break; }
+    }
+    if (!anySpectrum) return;
+
+    const int nBins = binsDbm.size();
+    if (nBins == 0) return;
+
+    // Resolve waterfall streamId → TRX for multi-pan disambiguation.
+    // Waterfall IDs are 0x42xx; each PanadapterModel knows its wfStreamId().
+    int trx = 0;
+    if (m_model) {
+        for (auto* pan : m_model->panadapters()) {
+            if (pan->wfStreamId() == streamId) {
+                for (auto* s : m_model->slices()) {
+                    if (s->panId() == pan->panId()) {
+                        trx = TciProtocol::tciTrxForSlice(m_model, s);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    // TciAudioHeader (64 bytes) + float32 dBm bins.
+    // type=4 (SPECTRUM, AetherSDR extension — not in TCI spec v2.0).
+    // reserved[0] = low edge in Hz, reserved[1] = high edge in Hz.
+    QByteArray frame(static_cast<int>(sizeof(TciAudioHeader)) + nBins * static_cast<int>(sizeof(float)),
+                     Qt::Uninitialized);
+
+    TciAudioHeader hdr{};
+    hdr.receiver    = static_cast<quint32>(trx);
+    hdr.format      = 3;      // float32
+    hdr.length      = static_cast<quint32>(nBins);
+    hdr.type        = 4;      // SPECTRUM (AetherSDR extension)
+    hdr.channels    = 1;
+    hdr.reserved[0] = static_cast<quint32>(lowMhz  * 1'000'000.0);
+    hdr.reserved[1] = static_cast<quint32>(highMhz * 1'000'000.0);
+    std::memcpy(frame.data(), &hdr, sizeof(hdr));
+
+    auto* dst = reinterpret_cast<float*>(frame.data() + sizeof(hdr));
+    std::memcpy(dst, binsDbm.constData(), nBins * sizeof(float));
+
+    for (auto& cs : m_clients) {
+        if (cs.spectrumEnabled)
             cs.socket->sendBinaryMessage(frame);
     }
 }

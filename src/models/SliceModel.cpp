@@ -616,6 +616,13 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
             m_audioMute = mute;
             emit audioMuteChanged(mute);
         }
+    } else if (kvs.value("in_use") == "1" && m_audioMute) {
+        // Full status w/o audio_mute key → radio reset to default (0)
+        // on (re)connect. Resync so UI doesn't show a stale 🔇 while
+        // audio is actually playing. Radio does not persist audio_mute
+        // (see MainWindow.cpp migration note ~line 1264).
+        m_audioMute = false;
+        emit audioMuteChanged(false);
     }
     // Parse child/parent flags before emitting diversityChanged so handlers
     // can check isDiversityChild() to gate ESC panel visibility.

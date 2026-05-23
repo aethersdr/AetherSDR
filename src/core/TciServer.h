@@ -71,6 +71,10 @@ public slots:
     void onDaxAudioReady(int channel, const QByteArray& pcm);
     // IQ data from DAX IQ stream (big-endian float32 I/Q pairs)
     void onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
+    // Waterfall row from PanadapterStream — forwarded to spectrum_event subscribers
+    void onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
+                             double lowMhz, double highMhz,
+                             quint32 timecode, qint64 emittedNs);
 
 signals:
     void clientCountChanged(int count);
@@ -128,6 +132,7 @@ private:
         bool         txSensorsEnabled{false};
         bool         iqEnabled{false};       // client sent IQ_START
         int          iqChannel{0};           // TCI TRX → DAX IQ channel (0-based)
+        bool         spectrumEnabled{false}; // client sent spectrum_event:on;
     };
 
     // Minimum frames to accumulate before flushing to r8brain.
