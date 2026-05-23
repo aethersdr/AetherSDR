@@ -330,6 +330,7 @@ void WhatsNewDialog::fetchLiveReleaseNotes()
     QNetworkRequest request{QUrl(releaseApiUrl(tagName))};
     request.setHeader(QNetworkRequest::UserAgentHeader, "AetherSDR");
     request.setRawHeader("Accept", "application/vnd.github+json");
+    request.setTransferTimeout(15000);
 
     auto* nam = new QNetworkAccessManager(this);
     auto* reply = nam->get(request);
