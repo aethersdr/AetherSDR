@@ -2,6 +2,7 @@
 
 #include "PersistentDialog.h"
 
+#include <QSet>
 #include <QString>
 
 class QTableWidget;
@@ -29,6 +30,12 @@ private:
     QLabel* m_pttLabel;
     QPushButton* m_pttBtn;
     bool m_refreshing{false};
+    // Handles the user has clicked Disconnect for but the radio has not
+    // yet evicted from the client list.  Keeps the row's button in the
+    // disabled "Disconnecting" state across refresh() rebuilds so a
+    // second click can't queue a duplicate disconnect for a handle
+    // already on its way out.
+    QSet<quint32> m_pendingDisconnects;
 };
 
 } // namespace AetherSDR

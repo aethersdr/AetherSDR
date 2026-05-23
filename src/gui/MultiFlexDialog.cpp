@@ -124,6 +124,17 @@ void MultiFlexDialog::refresh()
     const auto& infoMap = m_model->clientInfoMap();
     const quint32 ourHandle = m_model->ourClientHandle();
 
+    // Drop pending-disconnect entries whose handle has actually left the
+    // client list — the radio has confirmed the eviction, so a fresh
+    // future appearance (impossible today but defensive) gets a normal
+    // button again.
+    for (auto it = m_pendingDisconnects.begin(); it != m_pendingDisconnects.end(); ) {
+        if (!infoMap.contains(*it))
+            it = m_pendingDisconnects.erase(it);
+        else
+            ++it;
+    }
+
     // Build local TX info override from our own slices (ClientInfo may not
     // have TX data if slice status arrived before client connected status)
     QString ourTxAnt;
@@ -211,14 +222,18 @@ void MultiFlexDialog::refresh()
         actionItem->setData(Qt::UserRole, handle);
         m_table->setItem(row, 4, actionItem);
         if (!isUs) {
-            auto* disconnectBtn = new QPushButton("Disconnect", m_table);
+            const bool pending = m_pendingDisconnects.contains(handle);
+            auto* disconnectBtn = new QPushButton(
+                pending ? "Disconnecting" : "Disconnect", m_table);
             disconnectBtn->setObjectName("disconnectClientButton");
             disconnectBtn->setCursor(Qt::PointingHandCursor);
             disconnectBtn->setFixedWidth(kDisconnectButtonWidth);
+            disconnectBtn->setEnabled(!pending);
             connect(disconnectBtn, &QPushButton::clicked,
                     this, [this, disconnectBtn, handle, displayName]() {
                 disconnectBtn->setEnabled(false);
                 disconnectBtn->setText("Disconnecting");
+                m_pendingDisconnects.insert(handle);
                 emit disconnectClientRequested(handle, displayName);
             });
             m_table->setCellWidget(row, 4, disconnectBtn);
