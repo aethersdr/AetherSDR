@@ -666,6 +666,10 @@ void PhoneCwApplet::setTransmitModel(TransmitModel* model)
     // Phone signals
     connect(m_model, &TransmitModel::micStateChanged,
             this, &PhoneCwApplet::syncPhoneFromModel);
+    connect(m_model, &TransmitModel::stateChanged,
+            this, &PhoneCwApplet::applyLevelMeterReceiveGate);
+    connect(m_model, &TransmitModel::moxChanged,
+            this, [this](bool) { applyLevelMeterReceiveGate(); });
 
     connect(m_model, &TransmitModel::micProfileListChanged, this, [this]() {
         m_updatingFromModel = true;
@@ -789,6 +793,7 @@ void PhoneCwApplet::setRadeActive(bool on)
     // Refresh slider to show PcMicGain when RADE is active (client-authoritative)
     // or the radio's mic_level when reverting to a hardware mic path.
     syncPhoneFromModel();
+    applyLevelMeterReceiveGate();
     if (!on) {
         m_levelGauge->setValue(-150.0f);
         m_levelGauge->setPeakValue(-150.0f);
@@ -803,19 +808,24 @@ void PhoneCwApplet::updateMeters(float micLevel, float compLevel,
     Q_UNUSED(compLevel);
     Q_UNUSED(compPeak);
 
-    // Suppress mic meter when met_in_rx is off and not transmitting.
-    // Exception: PC mic and RADE both use client-side metering independent of
-    // met_in_rx — RADE should show level during RX ("Level Meter During Receive").
-    if (m_model && !m_model->metInRx() && !m_model->isTransmitting()
-        && m_model->micSelection() != QStringLiteral("PC") && !m_radeActive) {
-        m_levelGauge->setValue(-150.0f);
-        m_levelGauge->setPeakValue(-150.0f);
+    // Suppress every mic level source while receiving when the user disables
+    // the level meter during receive.
+    if (m_model && !m_model->metInRx() && !m_model->isTransmitting()) {
+        applyLevelMeterReceiveGate();
         return;
     }
 
     m_levelGauge->setValue(micLevel);
     m_levelGauge->setPeakValue(micPeak);
     // Compression gauge is now driven exclusively by updateCompression()
+}
+
+void PhoneCwApplet::applyLevelMeterReceiveGate()
+{
+    if (m_model && !m_model->metInRx() && !m_model->isTransmitting()) {
+        m_levelGauge->setValue(-150.0f);
+        m_levelGauge->setPeakValue(-150.0f);
+    }
 }
 
 void PhoneCwApplet::updateCompression(float compPeak)

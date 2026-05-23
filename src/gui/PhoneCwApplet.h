@@ -61,6 +61,7 @@ private:
     void buildCwPanel();
     void syncPhoneFromModel();
     void syncCwFromModel();
+    void applyLevelMeterReceiveGate();
 
     TransmitModel* m_model{nullptr};
     QStackedWidget* m_stack{nullptr};
