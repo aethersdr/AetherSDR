@@ -724,15 +724,21 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
     if (!ok) return rprt(-1);
 
     bool tx = (ptt != 0);
-    QMetaObject::invokeMethod(m_model, [this, tx]() {
+    QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx]() {
         // When keying TX, move the TX badge to this protocol's bound slice
         // so the correct slice is used for transmission.
-        if (tx) {
-            auto* slice = currentSlice();
+        if (tx && model->isConnected()) {
+            const auto slices = model->slices();
+            SliceModel* slice = nullptr;
+            for (auto* s : slices) {
+                if (s->sliceId() == sliceId) { slice = s; break; }
+            }
+            if (!slice && !slices.isEmpty())
+                slice = slices.first();
             if (slice && !slice->isTxSlice())
                 slice->setTxSlice(true);
         }
-        m_model->setTransmit(tx, TransmitModel::PttSource::Dax);
+        model->setTransmit(tx, TransmitModel::PttSource::Dax);
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -1077,8 +1083,8 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
         // scale and let TransmitModel::setRfPower clamp.
         const int percent = qRound(qBound(0.0, ratio, 1.0) * 100.0);
         if (!m_model) return rprt(-8);
-        QMetaObject::invokeMethod(m_model, [this, percent]() {
-            m_model->transmitModel().setRfPower(percent);
+        QMetaObject::invokeMethod(m_model, [model = m_model, percent]() {
+            model->transmitModel().setRfPower(percent);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
@@ -1093,52 +1099,52 @@ QString RigctlProtocol::cmdSetLevel(const QString& args)
     // TX/radio-wide setters
     if (level == "CWPITCH") {
         const int hz = qBound(100, qRound(val), 6000);
-        QMetaObject::invokeMethod(m_model, [this, hz]() {
-            m_model->transmitModel().setCwPitch(hz);
+        QMetaObject::invokeMethod(m_model, [model = m_model, hz]() {
+            model->transmitModel().setCwPitch(hz);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (level == "MICGAIN") {
         const int lvl = qBound(0, qRound(val * 100.0), 100);
-        QMetaObject::invokeMethod(m_model, [this, lvl]() {
-            m_model->transmitModel().setMicLevel(lvl);
+        QMetaObject::invokeMethod(m_model, [model = m_model, lvl]() {
+            model->transmitModel().setMicLevel(lvl);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (level == "COMP") {
         const int lvl = qBound(0, qRound(val * 100.0), 100);
-        QMetaObject::invokeMethod(m_model, [this, lvl]() {
-            m_model->transmitModel().setSpeechProcessorLevel(lvl);
+        QMetaObject::invokeMethod(m_model, [model = m_model, lvl]() {
+            model->transmitModel().setSpeechProcessorLevel(lvl);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (level == "VOXGAIN") {
         const int lvl = qBound(0, qRound(val * 100.0), 100);
-        QMetaObject::invokeMethod(m_model, [this, lvl]() {
-            m_model->transmitModel().setVoxLevel(lvl);
+        QMetaObject::invokeMethod(m_model, [model = m_model, lvl]() {
+            model->transmitModel().setVoxLevel(lvl);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (level == "VOXDELAY") {
         // Hamlib seconds → raw 0-100 (1 unit = 20 ms)
         const int raw = qBound(0, qRound(val * 50.0), 100);
-        QMetaObject::invokeMethod(m_model, [this, raw]() {
-            m_model->transmitModel().setVoxDelay(raw);
+        QMetaObject::invokeMethod(m_model, [model = m_model, raw]() {
+            model->transmitModel().setVoxDelay(raw);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (level == "MONITOR_GAIN") {
         const int lvl = qBound(0, qRound(val * 100.0), 100);
-        QMetaObject::invokeMethod(m_model, [this, lvl]() {
-            m_model->transmitModel().setMonGainSb(lvl);
+        QMetaObject::invokeMethod(m_model, [model = m_model, lvl]() {
+            model->transmitModel().setMonGainSb(lvl);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (level == "BKINDL") {
         // Hamlib seconds → ms (0–2000 ms)
         const int ms = qBound(0, qRound(val * 1000.0), 2000);
-        QMetaObject::invokeMethod(m_model, [this, ms]() {
-            m_model->transmitModel().setCwDelay(ms);
+        QMetaObject::invokeMethod(m_model, [model = m_model, ms]() {
+            model->transmitModel().setCwDelay(ms);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
@@ -1284,8 +1290,8 @@ QString RigctlProtocol::cmdSendMorse(const QString& text)
     // CwxModel::transmissionRequested) fires alongside the radio command.
     // Going through sendCmdPublic directly would silently bypass the
     // sidetone path used by the MIDI key and CWX panel. (#2909)
-    QMetaObject::invokeMethod(m_model, [this, text]() {
-        m_model->cwxModel().send(text);
+    QMetaObject::invokeMethod(m_model, [model = m_model, text]() {
+        model->cwxModel().send(text);
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -1295,8 +1301,8 @@ QString RigctlProtocol::cmdStopMorse()
     if (!m_model) return rprt(-1);
     // CwxModel::clearBuffer emits transmissionCancelled, which cuts any
     // in-flight local sidetone in addition to sending "cwx clear". (#2909)
-    QMetaObject::invokeMethod(m_model, [this]() {
-        m_model->cwxModel().clearBuffer();
+    QMetaObject::invokeMethod(m_model, [model = m_model]() {
+        model->cwxModel().clearBuffer();
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -1308,8 +1314,8 @@ QString RigctlProtocol::cmdSetKeySpeed(const QString& arg)
     int wpm = arg.toInt(&ok);
     if (!ok || wpm < 5 || wpm > 100) return rprt(-1);
     QString cmd = QString("cw wpm %1").arg(wpm);
-    QMetaObject::invokeMethod(m_model, [this, cmd]() {
-        m_model->sendCmdPublic(cmd, nullptr);
+    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+        model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
     return rprt(0);
 }
@@ -1454,20 +1460,20 @@ QString RigctlProtocol::cmdSetFunc(const QString& args)
         return rprt(0);
     }
     if (func == "VOX") {
-        QMetaObject::invokeMethod(m_model, [this, on]() {
-            m_model->transmitModel().setVoxEnable(on);
+        QMetaObject::invokeMethod(m_model, [model = m_model, on]() {
+            model->transmitModel().setVoxEnable(on);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (func == "COMP") {
-        QMetaObject::invokeMethod(m_model, [this, on]() {
-            m_model->transmitModel().setSpeechProcessorEnable(on);
+        QMetaObject::invokeMethod(m_model, [model = m_model, on]() {
+            model->transmitModel().setSpeechProcessorEnable(on);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
     if (func == "FBKIN") {
-        QMetaObject::invokeMethod(m_model, [this, on]() {
-            m_model->transmitModel().setCwBreakIn(on);
+        QMetaObject::invokeMethod(m_model, [model = m_model, on]() {
+            model->transmitModel().setCwBreakIn(on);
         }, Qt::QueuedConnection);
         return rprt(0);
     }
@@ -1540,8 +1546,8 @@ QString RigctlProtocol::cmdSetTs(const QString& arg)
     if (!ok || hz < 0) return rprt(-1);
     const int id = slice->sliceId();
     const QString cmd = QStringLiteral("slice set %1 step=%2").arg(id).arg(hz);
-    QMetaObject::invokeMethod(m_model, [this, cmd]() {
-        m_model->sendCmdPublic(cmd, nullptr);
+    QMetaObject::invokeMethod(m_model, [model = m_model, cmd]() {
+        model->sendCmdPublic(cmd, nullptr);
     }, Qt::QueuedConnection);
     return rprt(0);
 }
