@@ -111,8 +111,22 @@ QString releaseErrorText(QNetworkReply* reply, const QByteArray& payload)
     if (message.isEmpty())
         message = reply->errorString();
 
+    // GitHub rate-limit (60/hr unauthenticated, per IP) is a confusing
+    // outcome to surface as a raw HTTP 403 — busy networks and shared NAT
+    // gateways trip it for users who have done nothing wrong.  Detect the
+    // rate-limit case (status 403 + "rate limit" substring in the GitHub
+    // error message) and rewrite to a friendlier line that points at the
+    // direct release URL as the escape hatch.
+    const int statusCode = status.isValid() ? status.toInt() : 0;
+    if (statusCode == 403 && message.contains("rate limit", Qt::CaseInsensitive)) {
+        return QStringLiteral(
+            "GitHub is rate-limiting requests from your network — try again "
+            "in a few minutes.  You can also read the release notes directly "
+            "at github.com/aethersdr/AetherSDR/releases.");
+    }
+
     if (status.isValid())
-        return QString("GitHub returned HTTP %1 (%2).").arg(status.toInt()).arg(message);
+        return QString("GitHub returned HTTP %1 (%2).").arg(statusCode).arg(message);
 
     return message;
 }
@@ -457,8 +471,14 @@ bool WhatsNewDialog::findInNotes(const QString& text)
 
 void WhatsNewDialog::setStatusText(const QString& text)
 {
-    if (m_statusLabel)
-        m_statusLabel->setText(Qt::convertFromPlainText(text));
+    if (!m_statusLabel)
+        return;
+    // Avoid Qt::convertFromPlainText — it wraps in <p> and on some Qt
+    // versions includes <!--StartFragment--> clipboard-format artifacts.
+    // Predictable plain-text→HTML: escape special characters, then map
+    // newlines to <br/> so multi-line status messages render as
+    // intended without surprises across Qt versions.
+    m_statusLabel->setText(text.toHtmlEscaped().replace('\n', "<br/>"));
 }
 
 QString WhatsNewDialog::releaseTag() const
