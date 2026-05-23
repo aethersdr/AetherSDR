@@ -1,6 +1,7 @@
 #include "PanadapterModel.h"
 #include "core/PerfTelemetry.h"
 #include <QDebug>
+#include <algorithm>
 
 namespace AetherSDR {
 
@@ -79,20 +80,69 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
             m_preamp = pre;
         }
     }
+    // FlexLib v4.2.18 exposes wnb_updating on display pan status while the
+    // radio normalizes the SCU-level WNB threshold; keep it distinct from
+    // the per-pan WNB enable flag.
+    bool wnbStateDirty = false;
     if (kvs.contains("wnb")) {
-        bool w = kvs["wnb"].toInt() != 0;
-        int lvl = kvs.value("wnb_level", QString::number(m_wnbLevel)).toInt();
-        if (w != m_wnbActive || lvl != m_wnbLevel) {
+        const bool w = kvs["wnb"].toInt() != 0;
+        if (w != m_wnbActive) {
             m_wnbActive = w;
-            m_wnbLevel = lvl;
-            emit wnbChanged(m_wnbActive, m_wnbLevel);
+            wnbStateDirty = true;
         }
+    }
+    if (kvs.contains("wnb_level")) {
+        bool ok = false;
+        const int lvl = std::clamp(kvs["wnb_level"].toInt(&ok), 0, 100);
+        if (ok && lvl != m_wnbLevel) {
+            m_wnbLevel = lvl;
+            wnbStateDirty = true;
+        }
+    }
+    if (kvs.contains("wnb_updating")) {
+        const bool updating = kvs["wnb_updating"].toInt() != 0;
+        if (updating != m_wnbUpdating) {
+            m_wnbUpdating = updating;
+            wnbStateDirty = true;
+        }
+    }
+    if (wnbStateDirty) {
+        emit wnbChanged(m_wnbActive, m_wnbLevel);
+        emit wnbStateChanged(m_wnbActive, m_wnbLevel, m_wnbUpdating);
     }
     if (kvs.contains("wide")) {
         bool wide = kvs["wide"].toInt() != 0;
         if (wide != m_wideActive) {
             m_wideActive = wide;
             emit wideChanged(m_wideActive);
+        }
+    }
+    if (kvs.contains("loopa") || kvs.contains("loopb")) {
+        bool changed = false;
+        if (kvs.contains("loopa")) {
+            const bool loopA = kvs["loopa"].toInt() != 0;
+            if (loopA != m_loopA) {
+                m_loopA = loopA;
+                changed = true;
+            }
+            if (loopA && m_loopB) {
+                m_loopB = false;
+                changed = true;
+            }
+        }
+        if (kvs.contains("loopb")) {
+            const bool loopB = kvs["loopb"].toInt() != 0;
+            if (loopB != m_loopB) {
+                m_loopB = loopB;
+                changed = true;
+            }
+            if (loopB && m_loopA) {
+                m_loopA = false;
+                changed = true;
+            }
+        }
+        if (changed) {
+            emit loopChanged(m_loopA, m_loopB);
         }
     }
     if (kvs.contains("fps")) {
@@ -111,6 +161,13 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
         if (ants != m_antList) {
             m_antList = ants;
             emit antListChanged(m_antList);
+        }
+    }
+    if (kvs.contains("rxant")) {
+        const QString ant = kvs["rxant"];
+        if (ant != m_rxAntenna) {
+            m_rxAntenna = ant;
+            emit rxAntennaChanged(m_rxAntenna);
         }
     }
     if (kvs.contains("waterfall")) {
