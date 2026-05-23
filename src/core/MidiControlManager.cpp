@@ -375,10 +375,16 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2,
     }
 
     // ── Relative knob mode: decode delta and accumulate ────────────────
+    //
+    // Explicit-relative bindings (user picked Relative in MIDI Learn) are
+    // assumed to use two's-complement encoding — that's what the relative
+    // flag has always meant, and overloading it with a binary-mode override
+    // for the VFO would silently flip CCW pulses (data2=127, two's-complement
+    // -1) to CW for users with existing two's-complement encoders bound to
+    // the VFO knob.  Binary-mode encoders (data2 ∈ {0, 127}) instead fall
+    // through to the backward-compat Tier 1 below, which handles them
+    // without requiring the relative flag.
     if (binding.relative && msgType == MidiBinding::CC) {
-        // Relative CC encoding (two's complement style):
-        // 1-63 = clockwise (1=slow, 63=fast)
-        // 65-127 = counter-clockwise (127=-1, 126=-2)
         int delta = relativeCcDelta(data2);
         if (binding.inverted) delta = -delta;
 
@@ -388,15 +394,35 @@ void MidiControlManager::onMidiMessage(int status, int data1, int data2,
         return;
     }
 
-    // Existing VFO tune bindings learned before relative mode could treat
-    // common endless-encoder pulses (1 / 127) as absolute endpoints, turning a
-    // single detent into roughly +/-63 tuning steps.  Decode those unit pulses
-    // as relative even if the saved binding did not mark the control relative.
+    // Backward-compat for VFO tune bindings not explicitly marked relative.
+    //
+    // Tier 1 — unit-step pulses (binary/Thetis convention and two's-complement unit CW):
+    //   0   → CCW -1  (binary mode: 0 = CCW)
+    //   1   → CW  +1  (two's-complement unit CW, kept for legacy encoders)
+    //   127 → CW  +1  (binary/Thetis convention: 127 = CW)
     if (!binding.relative
         && isVfoTuneKnobParamId(binding.paramId)
         && msgType == MidiBinding::CC
-        && isUnitRelativeCcPulse(data2)) {
-        int delta = relativeCcDelta(data2);
+        && (data2 == 0 || data2 == 1 || data2 == 127)) {
+        int delta = (data2 == 0) ? -1 : 1;
+        if (binding.inverted) delta = -delta;
+        accumulateRelativeStep(binding.paramId, delta);
+        emit paramValueChanged(binding.paramId, delta > 0 ? 1.0f : 0.0f);
+        return;
+    }
+
+    // Tier 2 — center-64 encoding (MidiController Continuous, Behringer, Arturia):
+    //   value - 64 = signed step count.  64 = neutral; 0/1/127 consumed by Tier 1.
+    //
+    // Intentionally swallows absolute-mode handling for VFO bindings: absolute
+    // control of an endless dial is nonsensical, and routing any non-64 value
+    // here keeps a single dial bound to the VFO knob doing useful work
+    // regardless of which encoding the controller actually uses.
+    if (!binding.relative
+        && isVfoTuneKnobParamId(binding.paramId)
+        && msgType == MidiBinding::CC
+        && data2 != 64) {
+        int delta = data2 - 64;
         if (binding.inverted) delta = -delta;
         accumulateRelativeStep(binding.paramId, delta);
         emit paramValueChanged(binding.paramId, delta > 0 ? 1.0f : 0.0f);
