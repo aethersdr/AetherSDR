@@ -87,6 +87,7 @@ private:
     QPushButton* m_reverseButton{nullptr};
     QPushButton* m_pushButton{nullptr};
     QSlider* m_spinSlider{nullptr};
+    QSlider* m_sensitivitySlider{nullptr};
     QShortcut* m_releaseShortcut{nullptr};
     QFrame* m_controlStrip{nullptr};
     QFrame* m_deviceFrame{nullptr};

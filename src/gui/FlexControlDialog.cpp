@@ -15,6 +15,8 @@
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHideEvent>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLayout>
@@ -45,6 +47,15 @@ constexpr double kWheelDetentsPerRev = 48.0;
 constexpr double kWheelDetentsPerRad = kWheelDetentsPerRev / (2.0 * kWheelPi);
 constexpr int kButtonHoldMs = 650;
 constexpr int kDoubleTapGuardMs = 230;
+constexpr int kDefaultWheelLooseness = 45;
+constexpr int kDefaultWheelSensitivity = 50;
+constexpr const char* kVirtualWheelSettingsKey = "FlexControlVirtualWheel";
+constexpr const char* kLegacyWheelLoosenessKey = "FlexControlVirtualWheelLooseness";
+constexpr double kWheelPointerAnchorRadiusRatio = 0.10;
+constexpr double kWheelMaxPointerDelta = kWheelPi / 12.0;
+constexpr double kWheelCoastStartVelocity = 4.0;
+constexpr double kWheelCoastStopVelocity = 0.35;
+constexpr qint64 kWheelCoastInputQuietMs = 32;
 
 constexpr const char* kFlexControlStyle = R"(
 QWidget {
@@ -80,6 +91,11 @@ QLabel#SubMark,
 QLabel#SectionLabel {
     color: #8d99ad;
     font-size: 11px;
+    font-weight: 700;
+}
+QLabel#SliderTitle {
+    color: #d8e2ef;
+    font-size: 12px;
     font-weight: 700;
 }
 QLabel#StatusValue {
@@ -286,6 +302,11 @@ double normalizeWheelAngle(double radians)
     return radians;
 }
 
+double clampWheelPointerDelta(double radians)
+{
+    return std::clamp(radians, -kWheelMaxPointerDelta, kWheelMaxPointerDelta);
+}
+
 int consumeWholeWheelSteps(double& accumulator)
 {
     if (accumulator >= 1.0) {
@@ -299,6 +320,73 @@ int consumeWholeWheelSteps(double& accumulator)
         return steps;
     }
     return 0;
+}
+
+QJsonObject loadVirtualWheelSettings()
+{
+    auto& appSettings = AppSettings::instance();
+    const QString raw = appSettings.value(kVirtualWheelSettingsKey, QStringLiteral("{}")).toString();
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &error);
+    QJsonObject settings;
+    if (error.error != QJsonParseError::NoError || !doc.isObject()) {
+        settings = {};
+    } else {
+        settings = doc.object();
+    }
+
+    if (!settings.contains(QStringLiteral("looseness"))
+        && appSettings.contains(kLegacyWheelLoosenessKey)) {
+        settings[QStringLiteral("looseness")] =
+            std::clamp(appSettings.value(kLegacyWheelLoosenessKey, kDefaultWheelLooseness).toInt(),
+                       0, 100);
+    }
+
+    if (appSettings.contains(kLegacyWheelLoosenessKey)) {
+        appSettings.setValue(kVirtualWheelSettingsKey, QString::fromUtf8(
+            QJsonDocument(settings).toJson(QJsonDocument::Compact)));
+        appSettings.remove(kLegacyWheelLoosenessKey);
+        appSettings.save();
+    }
+    return settings;
+}
+
+void saveVirtualWheelSettings(const QJsonObject& settings)
+{
+    auto& appSettings = AppSettings::instance();
+    appSettings.setValue(kVirtualWheelSettingsKey, QString::fromUtf8(
+        QJsonDocument(settings).toJson(QJsonDocument::Compact)));
+    appSettings.save();
+}
+
+int loadVirtualWheelLooseness()
+{
+    const QJsonObject settings = loadVirtualWheelSettings();
+    return std::clamp(settings.value(QStringLiteral("looseness"))
+                          .toInt(kDefaultWheelLooseness),
+                      0, 100);
+}
+
+void saveVirtualWheelLooseness(int value)
+{
+    QJsonObject settings = loadVirtualWheelSettings();
+    settings[QStringLiteral("looseness")] = std::clamp(value, 0, 100);
+    saveVirtualWheelSettings(settings);
+}
+
+int loadVirtualWheelSensitivity()
+{
+    const QJsonObject settings = loadVirtualWheelSettings();
+    return std::clamp(settings.value(QStringLiteral("sensitivity"))
+                          .toInt(kDefaultWheelSensitivity),
+                      0, 100);
+}
+
+void saveVirtualWheelSensitivity(int value)
+{
+    QJsonObject settings = loadVirtualWheelSettings();
+    settings[QStringLiteral("sensitivity")] = std::clamp(value, 0, 100);
+    saveVirtualWheelSettings(settings);
 }
 
 QString formatFrequency(double mhz)
@@ -381,7 +469,8 @@ public:
         setAccessibleDescription(QStringLiteral(
             "Click to capture mouse input for circular tuning. Press Escape to release."));
 
-        m_frameClock.start();
+        m_pointerClock.start();
+        m_spinClock.start();
         m_spinTimer.setInterval(16);
         m_spinTimer.setTimerType(Qt::PreciseTimer);
         connect(&m_spinTimer, &QTimer::timeout, this, [this] {
@@ -406,6 +495,11 @@ public:
         m_looseness = std::clamp(value, 0, 100);
     }
 
+    void setSensitivity(int value)
+    {
+        m_sensitivity = std::clamp(value, 0, 100);
+    }
+
     void animateExternalSteps(int steps)
     {
         if (steps == 0 || m_captured)
@@ -414,9 +508,10 @@ public:
         const double kick = static_cast<double>(limitedSteps) * 0.34;
         m_velocity = std::clamp(m_velocity + kick, -22.0, 22.0);
         m_spinDispatchesSteps = false;
-        m_frameClock.restart();
-        if (!m_spinTimer.isActive())
+        m_spinClock.restart();
+        if (!m_spinTimer.isActive()) {
             m_spinTimer.start();
+        }
     }
 
     void releaseCapture()
@@ -426,6 +521,7 @@ public:
         m_captured = false;
         m_velocity = 0.0;
         m_stepAccumulator = 0.0;
+        m_hasPointerAnchor = false;
         m_spinDispatchesSteps = false;
         m_spinTimer.stop();
         if (mouseGrabber() == this)
@@ -596,54 +692,88 @@ private:
         return std::atan2(pos.y() - center.y(), pos.x() - center.x());
     }
 
+    bool pointerCanAnchor(const QPointF& pos, const QRectF& knob) const
+    {
+        const QPointF center = knob.center();
+        const double radius = std::hypot(pos.x() - center.x(), pos.y() - center.y());
+        return radius >= knob.width() * kWheelPointerAnchorRadiusRatio;
+    }
+
     void captureAt(const QPointF& pos)
     {
         m_captured = true;
         m_velocity = 0.0;
         m_stepAccumulator = 0.0;
         m_spinDispatchesSteps = true;
-        m_lastAngle = angleForPoint(pos);
-        m_frameClock.restart();
+        const QRectF knob = wheelRect();
+        m_hasPointerAnchor = pointerCanAnchor(pos, knob);
+        if (m_hasPointerAnchor) {
+            m_lastAngle = angleForPoint(pos);
+        }
+        m_pointerClock.restart();
+        m_spinClock.restart();
         setFocus(Qt::MouseFocusReason);
         grabMouse(QCursor(Qt::ClosedHandCursor));
-        if (m_captureCallback)
+        if (m_captureCallback) {
             m_captureCallback(true);
+        }
         update();
     }
 
     void updateFromPoint(const QPointF& pos)
     {
         const QRectF knob = wheelRect();
-        const QPointF center = knob.center();
-        const double dx = pos.x() - center.x();
-        const double dy = pos.y() - center.y();
-        const double radius = std::hypot(dx, dy);
-        if (radius < knob.width() * 0.10)
+        if (!pointerCanAnchor(pos, knob)) {
+            m_hasPointerAnchor = false;
+            m_pointerClock.restart();
             return;
+        }
 
-        const double angle = std::atan2(dy, dx);
-        const double delta = normalizeWheelAngle(angle - m_lastAngle);
+        const double angle = angleForPoint(pos);
+        if (!m_hasPointerAnchor) {
+            m_hasPointerAnchor = true;
+            m_lastAngle = angle;
+            m_pointerClock.restart();
+            m_spinClock.restart();
+            return;
+        }
+        const double delta = clampWheelPointerDelta(
+            normalizeWheelAngle(angle - m_lastAngle));
         m_lastAngle = angle;
+        const double scaledDelta = delta * sensitivityScale();
 
-        const double elapsedMs = std::max<qint64>(m_frameClock.restart(), 1);
+        const double elapsedMs = std::max<qint64>(m_pointerClock.restart(), 1);
         const double dt = static_cast<double>(elapsedMs) / 1000.0;
-        const double instantVelocity = delta / dt;
+        const double instantVelocity = scaledDelta / dt;
         m_stepMultiplier = accelerationForVelocity(instantVelocity);
-        applyRotationDelta(delta, true);
+        applyRotationDelta(scaledDelta, true);
 
         const double loose = static_cast<double>(m_looseness) / 100.0;
         const double blend = 0.24 + loose * 0.34;
         m_velocity = m_velocity * (1.0 - blend) + instantVelocity * blend;
         m_spinDispatchesSteps = true;
-        if (std::abs(m_velocity) > 0.05 && !m_spinTimer.isActive())
+        const bool fastEnoughToCoast =
+            std::abs(instantVelocity) >= kWheelCoastStartVelocity
+            && std::abs(m_velocity) >= kWheelCoastStartVelocity;
+        if (fastEnoughToCoast && !m_spinTimer.isActive()) {
+            m_spinClock.restart();
             m_spinTimer.start();
+        } else if (!fastEnoughToCoast && m_spinTimer.isActive()) {
+            m_spinTimer.stop();
+        }
     }
 
     void tickSpin()
     {
-        const double elapsedMs = std::max<qint64>(m_frameClock.restart(), 1);
+        if (m_captured && m_pointerClock.isValid()
+            && m_pointerClock.elapsed() < kWheelCoastInputQuietMs) {
+            m_spinClock.restart();
+            return;
+        }
+
+        const double elapsedMs = std::max<qint64>(m_spinClock.restart(), 1);
         const double dt = static_cast<double>(elapsedMs) / 1000.0;
-        if (std::abs(m_velocity) < 0.032) {
+        if (std::abs(m_velocity) < kWheelCoastStopVelocity) {
             m_velocity = 0.0;
             m_spinDispatchesSteps = false;
             m_spinTimer.stop();
@@ -668,6 +798,12 @@ private:
         return 1;
     }
 
+    double sensitivityScale() const
+    {
+        const double normalized = static_cast<double>(m_sensitivity) / 100.0;
+        return 0.25 + normalized * 1.5;
+    }
+
     void applyRotationDelta(double delta, bool dispatchSteps)
     {
         if (delta == 0.0)
@@ -686,14 +822,17 @@ private:
     std::function<void(int)> m_stepCallback;
     std::function<void(bool)> m_captureCallback;
     QTimer m_spinTimer;
-    QElapsedTimer m_frameClock;
+    QElapsedTimer m_pointerClock;
+    QElapsedTimer m_spinClock;
     double m_rotation{0.0};
     double m_lastAngle{0.0};
     double m_velocity{0.0};
     double m_stepAccumulator{0.0};
-    int m_looseness{45};
+    int m_looseness{kDefaultWheelLooseness};
+    int m_sensitivity{kDefaultWheelSensitivity};
     int m_stepMultiplier{1};
     bool m_captured{false};
+    bool m_hasPointerAnchor{false};
     bool m_spinDispatchesSteps{false};
 };
 
@@ -1002,10 +1141,10 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     m_wheel->setCaptureCallback([this](bool active) {
         setCaptureHintActive(active);
     });
-    const int looseness = std::clamp(
-        AppSettings::instance().value("FlexControlVirtualWheelLooseness", "45").toInt(),
-        0, 100);
+    const int looseness = loadVirtualWheelLooseness();
     m_wheel->setLooseness(looseness);
+    const int sensitivity = loadVirtualWheelSensitivity();
+    m_wheel->setSensitivity(sensitivity);
     knobLayout->addWidget(m_wheel, 1);
 
     auto* pushButton = new FlexControlButton(QStringLiteral("PUSH"), knobPanel);
@@ -1087,30 +1226,83 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     controlStrip->setObjectName(QStringLiteral("ControlStrip"));
     const QString spinTooltip = QStringLiteral(
         "Adjusts only the mouse/trackpad coasting feel of the virtual tuning wheel. "
-        "It does not affect the physical FlexControl device.");
+        "Primarily intended for trackpads; does not affect the physical FlexControl device.");
     controlStrip->setToolTip(spinTooltip);
     auto* controlLayout = new QHBoxLayout(controlStrip);
     controlLayout->setContentsMargins(14, 10, 14, 10);
-    controlLayout->setSpacing(12);
+    controlLayout->setSpacing(14);
+    auto* sliderColumnLayout = new QVBoxLayout;
+    sliderColumnLayout->setContentsMargins(0, 0, 0, 0);
+    sliderColumnLayout->setSpacing(6);
+    auto* spinGroupLayout = new QVBoxLayout;
+    spinGroupLayout->setContentsMargins(0, 0, 0, 0);
+    spinGroupLayout->setSpacing(2);
+    auto* spinLayout = new QHBoxLayout;
+    spinLayout->setContentsMargins(0, 0, 0, 0);
+    spinLayout->setSpacing(8);
+    auto* sensitivityGroupLayout = new QVBoxLayout;
+    sensitivityGroupLayout->setContentsMargins(0, 0, 0, 0);
+    sensitivityGroupLayout->setSpacing(2);
+    auto* sensitivityLayout = new QHBoxLayout;
+    sensitivityLayout->setContentsMargins(0, 0, 0, 0);
+    sensitivityLayout->setSpacing(8);
+    auto* buttonLayout = new QVBoxLayout;
+    buttonLayout->setContentsMargins(0, 0, 0, 0);
+    buttonLayout->setSpacing(6);
 
-    auto* tightLabel = new QLabel(QStringLiteral("TIGHT"));
+    auto* wheelTightnessLabel = new QLabel(QStringLiteral("Wheel Tightness"));
+    wheelTightnessLabel->setObjectName(QStringLiteral("SliderTitle"));
+    wheelTightnessLabel->setAlignment(Qt::AlignHCenter);
+    wheelTightnessLabel->setToolTip(spinTooltip);
+    auto* tightLabel = new QLabel(QStringLiteral("Tight"));
     tightLabel->setObjectName(QStringLiteral("SectionLabel"));
-    auto* looseLabel = new QLabel(QStringLiteral("LOOSE"));
+    tightLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    tightLabel->setMinimumWidth(36);
+    auto* looseLabel = new QLabel(QStringLiteral("Loose"));
     looseLabel->setObjectName(QStringLiteral("SectionLabel"));
+    looseLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    looseLabel->setMinimumWidth(36);
     m_spinSlider = new GuardedSlider(Qt::Horizontal);
     m_spinSlider->setRange(0, 100);
     m_spinSlider->setValue(looseness);
-    m_spinSlider->setMinimumWidth(110);
-    m_spinSlider->setMaximumWidth(145);
+    m_spinSlider->setMinimumWidth(150);
+    m_spinSlider->setMaximumWidth(190);
     m_spinSlider->setToolTip(spinTooltip);
     tightLabel->setToolTip(spinTooltip);
     looseLabel->setToolTip(spinTooltip);
     connect(m_spinSlider, &QSlider::valueChanged, this, [this](int value) {
         if (m_wheel)
             m_wheel->setLooseness(value);
-        auto& settings = AppSettings::instance();
-        settings.setValue("FlexControlVirtualWheelLooseness", QString::number(value));
-        settings.save();
+        saveVirtualWheelLooseness(value);
+    });
+    const QString sensitivityTooltip = QStringLiteral(
+        "Adjusts how much captured mouse/trackpad movement turns the virtual tuning wheel. "
+        "It does not affect the physical FlexControl device.");
+    auto* mouseSensitivityLabel = new QLabel(QStringLiteral("Mouse Sensitivity"));
+    mouseSensitivityLabel->setObjectName(QStringLiteral("SliderTitle"));
+    mouseSensitivityLabel->setAlignment(Qt::AlignHCenter);
+    mouseSensitivityLabel->setToolTip(sensitivityTooltip);
+    auto* lessSensitiveLabel = new QLabel(QStringLiteral("Less"));
+    lessSensitiveLabel->setObjectName(QStringLiteral("SectionLabel"));
+    lessSensitiveLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    lessSensitiveLabel->setMinimumWidth(36);
+    auto* moreSensitiveLabel = new QLabel(QStringLiteral("More"));
+    moreSensitiveLabel->setObjectName(QStringLiteral("SectionLabel"));
+    moreSensitiveLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    moreSensitiveLabel->setMinimumWidth(36);
+    m_sensitivitySlider = new GuardedSlider(Qt::Horizontal);
+    m_sensitivitySlider->setRange(0, 100);
+    m_sensitivitySlider->setValue(sensitivity);
+    m_sensitivitySlider->setMinimumWidth(150);
+    m_sensitivitySlider->setMaximumWidth(190);
+    m_sensitivitySlider->setToolTip(sensitivityTooltip);
+    lessSensitiveLabel->setToolTip(sensitivityTooltip);
+    moreSensitiveLabel->setToolTip(sensitivityTooltip);
+    connect(m_sensitivitySlider, &QSlider::valueChanged, this, [this](int value) {
+        if (m_wheel) {
+            m_wheel->setSensitivity(value);
+        }
+        saveVirtualWheelSensitivity(value);
     });
     m_externalSpinButton = new QPushButton(QStringLiteral("Auto Spin"), controlStrip);
     m_externalSpinButton->setObjectName(QStringLiteral("OptionButton"));
@@ -1136,12 +1328,24 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
         updateOptionButtons();
         emit flexControlSettingsChanged();
     });
-    controlLayout->addWidget(tightLabel);
-    controlLayout->addWidget(m_spinSlider, 0);
-    controlLayout->addWidget(looseLabel);
-    controlLayout->addStretch(1);
-    controlLayout->addWidget(m_externalSpinButton);
-    controlLayout->addWidget(m_reverseButton);
+    spinLayout->addWidget(tightLabel);
+    spinLayout->addWidget(m_spinSlider, 1);
+    spinLayout->addWidget(looseLabel);
+    spinGroupLayout->addWidget(wheelTightnessLabel);
+    spinGroupLayout->addLayout(spinLayout);
+    sensitivityLayout->addWidget(lessSensitiveLabel);
+    sensitivityLayout->addWidget(m_sensitivitySlider, 1);
+    sensitivityLayout->addWidget(moreSensitiveLabel);
+    sensitivityGroupLayout->addWidget(mouseSensitivityLabel);
+    sensitivityGroupLayout->addLayout(sensitivityLayout);
+    sliderColumnLayout->addLayout(spinGroupLayout);
+    sliderColumnLayout->addLayout(sensitivityGroupLayout);
+    buttonLayout->addStretch(1);
+    buttonLayout->addWidget(m_externalSpinButton);
+    buttonLayout->addWidget(m_reverseButton);
+    buttonLayout->addStretch(1);
+    controlLayout->addLayout(sliderColumnLayout, 1);
+    controlLayout->addLayout(buttonLayout);
     root->addWidget(controlStrip);
     m_compactHiddenWidgets.append(controlStrip);
 
