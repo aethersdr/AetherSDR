@@ -433,24 +433,12 @@ public:
     void setSpotColor(const QColor& c) { m_spotColor = c; update(); }
     void setSpotBgColor(const QColor& c) { m_spotBgColor = c; update(); }
     void setSpotBgOpacity(int pct) { m_spotBgOpacity = pct; update(); }
-    void setTransmitting(bool tx) {
-        if (tx && !m_transmitting) {
-            m_preTxAutoBlack = m_autoBlackThresh;  // save before TX
-            m_lastFftRowMs = 0;  // (#2666) first TX row scrolls immediately
-        }
-        if (!tx && m_transmitting) {
-            m_autoBlackThresh = m_preTxAutoBlack;  // restore after TX
-            m_hasNativeWaterfall = false;  // force FFT fallback until tiles resume
-            m_wfPrevTimecode   = 0;
-            m_wfPrevTimecodeMs = 0;
-            m_txEndMs = QDateTime::currentMSecsSinceEpoch(); // post-TX blanking (#2117)
-            m_wfBlankerRingCount = 0;                        // reset stale blanker baseline
-            m_wfLastGoodRow.clear();                          // forget any TX-era last-good scanline
-        }
-        m_transmitting = tx;
-    }
+    void setTransmitting(bool tx);
     void setShowTxInWaterfall(bool on) { m_showTxInWaterfall = on; }
     void setHasTxSlice(bool has) { m_hasTxSlice = has; }
+    void setTxWaterfallSlice(double freqMhz, int filterLowHz, int filterHighHz,
+                             bool xitOn, int xitFreq);
+    void clearTxWaterfallSlice();
 
 signals:
     // Emitted when auto-squelch computes a new suggested level (0-100 radio units).
@@ -613,6 +601,17 @@ private:
     int overlayIndex(int sliceId) const;
     // Helper: find active overlay (or nullptr).
     const SliceOverlay* activeOverlay() const;
+    // Helper: find TX overlay (or nullptr).
+    const SliceOverlay* txOverlay() const;
+    bool txWaterfallMaskRange(double& lowMhz, double& highMhz) const;
+    bool txWaterfallAffectsThisPan() const;
+    void resetFftWaterfallAccumulator();
+    void beginTxDbmRangeFreeze();
+    void endTxDbmRangeFreeze();
+    void resetTxDbmRangeFreeze();
+    void deferTxDbmRange(float minDbm, float maxDbm);
+    void applyDbmRangeImmediate(float minDbm, float maxDbm);
+    void reprojectBinsToFrozenTxDbmRange(QVector<float>& bins) const;
 
     void pushWaterfallRow(const QVector<float>& bins, int destWidth,
                           double tileLowMhz = -1, double tileHighMhz = -1);
@@ -740,6 +739,13 @@ private:
     // FFT-fallback path after native tiles time out) scrolls at the same
     // line_duration cadence as RX native tiles (#2666).
     qint64 m_lastFftRowMs{0};
+    qint64 m_lastFftFrameMs{0};
+    double m_fftRowDebtMs{0.0};
+    // Accumulate FFT-derived waterfall frames inside each line_duration
+    // window so TX rows use all available samples instead of dropping the
+    // intermediates between visible rows.
+    QVector<float> m_fftAccumPower;
+    int            m_fftAccumCount{0};
 
     // Waterfall colour range for FFT-derived fallback (dBm).
     float m_wfMinDbm{-130.0f};
@@ -879,6 +885,21 @@ private:
     bool   m_spotClickConsumed{false}; // suppress release-to-tune after spot click (#530)
     bool m_showTxInWaterfall{false};  // default matches radio default (off)
     bool m_hasTxSlice{false};  // true if this pan contains the TX slice
+    bool m_txWaterfallSliceValid{false};
+    double m_txWaterfallFreqMhz{0.0};
+    int m_txWaterfallFilterLowHz{0};
+    int m_txWaterfallFilterHighHz{0};
+    bool m_txWaterfallXitOn{false};
+    int m_txWaterfallXitFreq{0};
+
+    bool m_txDbmRangeFrozen{false};
+    float m_txFrozenMinDbm{0.0f};
+    float m_txFrozenMaxDbm{0.0f};
+    float m_txSourceMinDbm{0.0f};
+    float m_txSourceMaxDbm{0.0f};
+    bool m_txDeferredDbmRangeValid{false};
+    float m_txDeferredMinDbm{0.0f};
+    float m_txDeferredMaxDbm{0.0f};
 
     bool     m_transmitting{false};
     float    m_preTxAutoBlack{145.0f}; // auto-black threshold saved before TX

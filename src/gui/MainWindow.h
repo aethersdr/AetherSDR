@@ -232,6 +232,7 @@ private:
     void updateFilterLimitsForMode(const QString& mode);
     void centerActiveSliceInPanadapter(bool forceRadioCenter, double centerMhz = -1.0);
     void pushSliceOverlay(SliceModel* s);
+    void syncTxWaterfallSliceToSpectrums();
     void updateSplitState();
     void disableSplit();
     void wirePanadapter(PanadapterApplet* applet);

@@ -9880,6 +9880,16 @@ void MainWindow::onSliceAdded(SliceModel* s)
     };
     connect(s, &SliceModel::modeChanged, this, updateDaxTxMode);
     connect(s, &SliceModel::txSliceChanged, this, updateDaxTxMode);
+
+    // Status-bar toast on the first blocked tune of a sustained sequence.
+    // Driven by SliceModel's lockedFeedbackActiveChanged (false→true edge),
+    // which gives natural dedup — a stuck MIDI knob or held keyboard arrow
+    // generates one toast, not one per event. The on-screen LOCKED overlay
+    // on the VFO/RX freq label handles the per-event visual feedback. (#2984)
+    connect(s, &SliceModel::lockedFeedbackActiveChanged, this, [this](bool active) {
+        if (active)
+            statusBar()->showMessage(tr("Slice is locked — unlock to tune."), 3000);
+    });
     updateDaxTxMode();  // set initial state from current TX slice mode
 
     // Push overlay for this slice to the spectrum widget
@@ -9902,6 +9912,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     if (auto* sw = spectrumForSlice(s))
         sw->setShowTxInWaterfall(
             m_radioModel.transmitModel().showTxInWaterfall());
+    syncTxWaterfallSliceToSpectrums();
 
     // Per-client letter (#2606) — keep spectrum overlay synced so the
     // slice marker / passband colour follows the badge in RadioIndexed
@@ -9938,6 +9949,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 s->mode(), s->rttyMark(), s->rttyShift(),
                 s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq());
         m_updatingFromModel = false;
+        if (s->isTxSlice())
+            syncTxWaterfallSliceToSpectrums();
 
         if (memoryRevealPending) {
             const double targetMhz = m_pendingMemoryRevealTargetMhz;
@@ -9984,6 +9997,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
             lo, hi, s->isTxSlice(), s->sliceId() == m_activeSliceId,
             s->mode(), s->rttyMark(), s->rttyShift(),
             s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq());
+        if (s->isTxSlice())
+            syncTxWaterfallSliceToSpectrums();
     });
     // Squelch threshold line on the spectrum overlay — only update for the
     // active slice so that inactive slices sharing a pan don't overwrite it.
@@ -10011,6 +10026,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 s->sliceId() == m_activeSliceId,
                 s->mode(), s->rttyMark(), s->rttyShift(),
                 s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq());
+        syncTxWaterfallSliceToSpectrums();
         updateSplitState();
 
         // Active follows TX slice (#1351) — switch the displayed/active slice
@@ -10038,6 +10054,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
         // Update spectrum overlay with new mode (for RTTY mark/space lines)
         pushSliceOverlay(s);
+        if (s->isTxSlice())
+            syncTxWaterfallSliceToSpectrums();
 
         // Show/hide CW decode panel and start/stop decoder.  Centralised
         // through refreshCwDecodeState() so the RX/TX toggle pair and
@@ -10079,7 +10097,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
     connect(s, &SliceModel::rttyMarkChanged, this, [this, s](int) { pushSliceOverlay(s); });
     connect(s, &SliceModel::rttyShiftChanged, this, [this, s](int) { pushSliceOverlay(s); });
     connect(s, &SliceModel::ritChanged, this, [this, s](bool, int) { pushSliceOverlay(s); });
-    connect(s, &SliceModel::xitChanged, this, [this, s](bool, int) { pushSliceOverlay(s); });
+    connect(s, &SliceModel::xitChanged, this, [this, s](bool, int) {
+        pushSliceOverlay(s);
+        if (s->isTxSlice())
+            syncTxWaterfallSliceToSpectrums();
+    });
 
     // Handle slice migration between panadapters
     connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
@@ -10098,6 +10120,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         auto* vfo = sw->addVfoWidget(s->sliceId());
         wireVfoWidget(vfo, s);
         pushSliceOverlay(s);
+        if (s->isTxSlice())
+            syncTxWaterfallSliceToSpectrums();
     });
 
     // Create a VfoWidget for this slice on the correct panadapter
@@ -10725,6 +10749,39 @@ void MainWindow::pushSliceOverlay(SliceModel* s)
         s->ritOn(), s->ritFreq(), s->xitOn(), s->xitFreq());
 }
 
+void MainWindow::syncTxWaterfallSliceToSpectrums()
+{
+    SliceModel* txSlice = nullptr;
+    for (auto* s : m_radioModel.slices()) {
+        if (s && s->isTxSlice()) {
+            txSlice = s;
+            break;
+        }
+    }
+
+    auto apply = [txSlice](SpectrumWidget* sw) {
+        if (!sw) return;
+        if (txSlice) {
+            sw->setTxWaterfallSlice(txSlice->frequency(),
+                                    txSlice->filterLow(),
+                                    txSlice->filterHigh(),
+                                    txSlice->xitOn(),
+                                    txSlice->xitFreq());
+        } else {
+            sw->clearTxWaterfallSlice();
+        }
+    };
+
+    if (m_panStack) {
+        for (auto* applet : m_panStack->allApplets()) {
+            if (applet)
+                apply(applet->spectrumWidget());
+        }
+    } else if (m_panApplet) {
+        apply(m_panApplet->spectrumWidget());
+    }
+}
+
 void MainWindow::disableSplit()
 {
     if (!m_splitActive) return;
@@ -11269,6 +11326,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         scheduleWaterfallLineDurationReconcile(applet->panId(),
                                                pan->waterfallLineDuration());
     }
+    syncTxWaterfallSliceToSpectrums();
 
     // ── Debounced resize → re-push xpixels/ypixels to the radio (#1511) ───
     // When the layout changes (e.g. adding a second pan, splitting, resizing),
