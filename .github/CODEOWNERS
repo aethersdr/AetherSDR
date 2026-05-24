@@ -48,18 +48,6 @@ docs/                        @ten9876 @jensenpat @NF0T @rfoust
 .github/docker/              @ten9876 @jensenpat @NF0T @rfoust
 .github/ISSUE_TEMPLATE/      @ten9876 @jensenpat @NF0T @rfoust
 
-# Visual / UX direction (per CLAUDE.md "AI Agent Boundaries")
-src/gui/MainWindow.h         @ten9876 @jensenpat @NF0T @rfoust
-src/gui/MainWindow.cpp       @ten9876 @jensenpat @NF0T @rfoust
-
-# Architecture — central state, threading, protocol bedrock
-src/models/RadioModel.h      @ten9876 @jensenpat @NF0T @rfoust
-src/models/RadioModel.cpp    @ten9876 @jensenpat @NF0T @rfoust
-src/core/AudioEngine.h       @ten9876 @jensenpat @NF0T @rfoust
-src/core/AudioEngine.cpp     @ten9876 @jensenpat @NF0T @rfoust
-src/core/PanadapterStream.h  @ten9876 @jensenpat @NF0T @rfoust
-src/core/PanadapterStream.cpp @ten9876 @jensenpat @NF0T @rfoust
-
 # Build configuration
 CMakeLists.txt               @ten9876 @jensenpat @NF0T @rfoust
 
