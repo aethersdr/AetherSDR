@@ -9,6 +9,7 @@
 #include <QStandardPaths>
 
 #ifndef _WIN32
+#include <cerrno>
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -112,7 +113,13 @@ bool RigctlPty::start()
     if (!QDir().mkpath(parentDir)) {
         qCWarning(lcCat) << "RigctlPty: failed to mkpath" << parentDir;
     }
-    ::chmod(parentDir.toLocal8Bit().constData(), 0700);
+    if (::chmod(parentDir.toLocal8Bit().constData(), 0700) != 0) {
+        // Best-effort hardening — log so we notice if it ever fails on
+        // the CacheLocation fallback path (where the dir may have
+        // landed at the umask default rather than 0700).
+        qCWarning(lcCat) << "RigctlPty: chmod 0700 failed on" << parentDir
+                         << "errno=" << errno;
+    }
 
     // Atomic replacement via symlink(tmp) + rename(tmp, final) avoids
     // the TOCTOU window the old unlink-then-symlink had on non-sticky

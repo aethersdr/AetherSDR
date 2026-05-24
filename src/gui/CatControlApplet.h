@@ -49,7 +49,7 @@ private:
     struct ChannelRow {
         QLabel* badge{nullptr};      // coloured "A"/"B"/"C"/"D"
         QLabel* tcpStatus{nullptr};  // ":4532 (1 client)" or "(stopped)"
-        QLabel* ptyPath{nullptr};    // "/tmp/AetherSDR-CAT-A"
+        QLabel* ptyPath{nullptr};    // RigctlPty::defaultSymlinkPath(i)
     };
     ChannelRow m_rows[kChannels];
 };

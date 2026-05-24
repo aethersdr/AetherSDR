@@ -145,17 +145,28 @@ other applications.
 
 | Channel | Symlink path |
 |---|---|
-| A | `/tmp/AetherSDR-CAT-A` |
-| B | `/tmp/AetherSDR-CAT-B` |
-| C | `/tmp/AetherSDR-CAT-C` |
-| D | `/tmp/AetherSDR-CAT-D` |
+| A | `<runtime>/aethersdr/cat-A` |
+| B | `<runtime>/aethersdr/cat-B` |
+| C | `<runtime>/aethersdr/cat-C` |
+| D | `<runtime>/aethersdr/cat-D` |
+
+`<runtime>` resolves to a per-user directory so two users on the same
+machine don't collide:
+
+- **Linux (systemd):** `$XDG_RUNTIME_DIR` (typically `/run/user/<uid>`)
+- **Linux (fallback):** `~/.cache/aethersdr/`
+- **macOS:** `~/Library/Caches/AetherSDR/`
+
+The CAT Control tile shows the actual fully-resolved path for each
+channel — copy from there if you're not sure which case applies on your
+system.
 
 **How to use it:**
 
 1. In the CAT Control tile, click **Enable TTY**.
-2. The channel rows will show the actual PTY device paths.
-3. In your digital program, select the symlink path as the serial port
-   (e.g. `/tmp/AetherSDR-CAT-A`).
+2. The channel rows will show the actual PTY device paths (and the
+   resolved symlink path for the current user).
+3. In your digital program, select that symlink path as the serial port.
 
 > **Platform note:** Virtual serial ports via PTY are available on **Linux and
 > macOS** only. On Windows, use CAT over TCP instead — most modern digital
@@ -289,8 +300,9 @@ the radio.
 
 When you connect to the radio with auto-start enabled:
 
-- **CAT:** The four PTY symlinks at `/tmp/AetherSDR-CAT-A` through
-  `/tmp/AetherSDR-CAT-D` are created and begin accepting connections.
+- **CAT:** The four PTY symlinks at `<runtime>/aethersdr/cat-A` through
+  `<runtime>/aethersdr/cat-D` are created and begin accepting connections
+  (the CAT Control tile shows the resolved per-user path).
 - **TCI:** The WebSocket server starts on the configured port (default `50001`).
 - **DAX:** The virtual audio devices are created after a short delay (about
   3 seconds, to allow the radio to finish session setup). The DAX Enable
@@ -430,7 +442,8 @@ and audio routing. This walkthrough covers the CAT+DAX method.
      - **Rig type:** `Hamlib NET rigctl` or `Kenwood TS-2000` (rigctld is
        compatible with this selection in many Winlink builds)
      - If using TCP: **Host:** `localhost`, **Port:** `4532`
-     - If using serial: **Port:** `/tmp/AetherSDR-CAT-A` (Linux/macOS)
+     - If using serial: **Port:** copy the channel-A path shown in the
+       CAT Control tile (e.g. `/run/user/1000/aethersdr/cat-A` on Linux)
    - Verify that Winlink can read the frequency from the radio.
 4. Click **Start** to begin a Winlink session.
 
@@ -479,7 +492,9 @@ and integrates with Hamlib for rig control.
    - Under **Rig Control > Hamlib**:
      - **Rig:** select `NET rigctl`
      - Or under **Rig Control > RigCAT** or **Rig Control > Hardware PTT**:
-       - **Device:** `/tmp/AetherSDR-CAT-A`
+       - **Device:** copy the channel-A path from the CAT Control tile
+         (e.g. `/run/user/1000/aethersdr/cat-A` on Linux,
+         `~/Library/Caches/AetherSDR/cat-A` on macOS)
        - **Baud rate:** does not matter for virtual serial ports, but
          set it to `9600` if the field is required.
 
@@ -549,10 +564,13 @@ the four-slice workflow:
 
 | Channel | CAT TCP port (default) | TTY path | DAX audio |
 |---|---|---|---|
-| A | 4532 | `/tmp/AetherSDR-CAT-A` | DAX 1 |
-| B | 4533 | `/tmp/AetherSDR-CAT-B` | DAX 2 |
-| C | 4534 | `/tmp/AetherSDR-CAT-C` | DAX 3 |
-| D | 4535 | `/tmp/AetherSDR-CAT-D` | DAX 4 |
+| A | 4532 | `<runtime>/aethersdr/cat-A` | DAX 1 |
+| B | 4533 | `<runtime>/aethersdr/cat-B` | DAX 2 |
+| C | 4534 | `<runtime>/aethersdr/cat-C` | DAX 3 |
+| D | 4535 | `<runtime>/aethersdr/cat-D` | DAX 4 |
+
+(`<runtime>` is the per-user runtime/cache dir — see *CAT over TTY/PTY*
+above for how it resolves on each platform.)
 
 Keep your channel numbering consistent with your slice usage so you do not have
 to rediscover the routing every session.
