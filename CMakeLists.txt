@@ -1311,6 +1311,7 @@ set_target_properties(client_eq_smoothing_test PROPERTIES AUTOMOC ON)
 add_executable(client_comp_test
     tests/client_comp_test.cpp
     src/core/ClientComp.cpp
+    src/core/ClientPhaseRotator.cpp
 )
 target_include_directories(client_comp_test PRIVATE src)
 

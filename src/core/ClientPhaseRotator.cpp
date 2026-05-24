@@ -82,7 +82,8 @@ void ClientPhaseRotator::designSections() noexcept
     const double fs = m_sampleRate > 0.0 ? m_sampleRate : 24000.0;
     for (int i = 0; i < kMaxStages; ++i) {
         const double f0 = kCentreHz[i];
-        const double w0 = 2.0 * M_PI * f0 / fs;
+        constexpr double kPi = 3.14159265358979323846;
+        const double w0 = 2.0 * kPi * f0 / fs;
         const double alpha = std::sin(w0) / (2.0 * kQ);
         const double a0 = 1.0 + alpha;
         const double a1 = -2.0 * std::cos(w0);
