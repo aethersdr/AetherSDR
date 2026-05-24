@@ -87,6 +87,7 @@ class MemoryDialog;
 class PropDashboardDialog;
 class TxBandDialog;
 class AetherDspDialog;
+class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
@@ -332,6 +333,9 @@ private:
     void showNr4ParamPopup(const QPoint& globalPos);
     void showDfnrParamPopup(const QPoint& globalPos);
     void showMnrSettings();
+#ifdef HAVE_MQTT
+    void showMqttSettingsDialog();
+#endif
     void applyPanLayout(const QString& layoutId);
     void createPansSequentially(const QString& layoutId, int total,
                                 std::shared_ptr<QStringList> panIds, int created);
@@ -572,6 +576,9 @@ private:
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<AetherDspDialog> m_dspDialog;
+#ifdef HAVE_MQTT
+    QPointer<MqttSettingsDialog> m_mqttSettingsDialog;
+#endif
     QPointer<WaveformsDialog> m_waveformsDialog;
     QPointer<ProfileManagerDialog> m_profileManagerDialog;
     QPointer<ProfileImportExportDialog> m_profileImportExportDialog;

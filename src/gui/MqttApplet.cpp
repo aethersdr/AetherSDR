@@ -1,24 +1,20 @@
 #include "MqttApplet.h"
+
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 #include "core/MqttAntennaAlias.h"
 #include "core/MqttClient.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
 #include <QGridLayout>
-#include <QCheckBox>
+#include <QHBoxLayout>
 #include <QLabel>
-#include <QLineEdit>
+#include <QLayoutItem>
 #include <QPushButton>
-#include <QTextEdit>
 #include <QTextBlock>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QJsonArray>
-#include <QDialog>
-#include <QDialogButtonBox>
-#include <QMenu>
+#include <QTextCursor>
+#include <QTextDocument>
+#include <QTextEdit>
+#include <QVBoxLayout>
 
 #ifdef HAVE_KEYCHAIN
 #include <qt6keychain/keychain.h>
@@ -26,19 +22,6 @@
 
 namespace AetherSDR {
 
-// Keychain identifiers for the MQTT broker password.  See
-// GHSA-mmqp-cm4w-cvpp — previously stored as plaintext in
-// ~/.config/AetherSDR/AetherSDR.settings (default umask 0644, world-
-// readable on most Linux systems).
-static constexpr const char* kKeychainService = "AetherSDR";
-static constexpr const char* kKeychainKey     = "mqtt_password";
-static constexpr const char* kLegacySetting   = "MqttPass";
-
-static const QString kLabelStyle =
-    "QLabel { color: #8090a0; font-size: 10px; background: transparent; }";
-static const QString kEditStyle =
-    "QLineEdit { background: #0a0a14; color: #c8d8e8; border: 1px solid #203040; "
-    "padding: 2px 4px; font-size: 10px; }";
 static const QString kBtnOff =
     "QPushButton { background: #1a2a3a; color: #8090a0; "
     "border: 1px solid #205070; padding: 2px 8px; border-radius: 3px; font-size: 10px; }";
@@ -50,127 +33,43 @@ static const QString kPubBtn =
     "border: 1px solid #306080; padding: 4px 6px; border-radius: 3px; font-size: 10px; }"
     "QPushButton:hover { background: #203850; }"
     "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }";
-static const QString kPubBtnEdit =
-    "QPushButton { background: #2a1a1a; color: #d8a080; "
-    "border: 1px dashed #805030; padding: 4px 6px; border-radius: 3px; font-size: 10px; }";
 
 MqttApplet::MqttApplet(QWidget* parent)
     : QWidget(parent)
 {
-    loadButtons();
+    refreshSettings();
     buildUI();
+    loadPasswordFromKeychain();
 }
 
 void MqttApplet::buildUI()
 {
     auto* vbox = new QVBoxLayout(this);
     vbox->setContentsMargins(4, 4, 4, 4);
-    vbox->setSpacing(3);
+    vbox->setSpacing(5);
 
-    // Header
+    auto* headerRow = new QHBoxLayout;
     auto* header = new QLabel("MQTT");
     header->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
-    vbox->addWidget(header);
+    headerRow->addWidget(header);
+    headerRow->addStretch();
 
-    // Broker settings grid.  Accessibility hints (objectName +
-    // accessibleName + accessibleDescription) help macOS Passwords,
-    // Windows Authenticator, and KDE Wallet associate user/pass fields
-    // when offering autofill.  No-op on platforms / password managers
-    // that don't read the accessibility tree.
-    auto* grid = new QGridLayout;
-    grid->setSpacing(2);
-    grid->setContentsMargins(0, 0, 0, 0);
+    auto* settingsBtn = new QPushButton("Settings...");
+    settingsBtn->setFixedHeight(18);
+    settingsBtn->setStyleSheet(
+        "QPushButton { background: transparent; color: #8090a0; "
+        "border: none; font-size: 9px; padding: 0 4px; }"
+        "QPushButton:hover { color: #c8d8e8; }");
+    headerRow->addWidget(settingsBtn);
+    vbox->addLayout(headerRow);
 
-    setObjectName(QStringLiteral("mqttLoginForm"));
-    setAccessibleName(tr("MQTT broker connection"));
+    connect(settingsBtn, &QPushButton::clicked, this, &MqttApplet::settingsRequested);
 
-    auto& s = AppSettings::instance();
+    auto* note = new QLabel("Antenna alias topics are subscribed automatically.");
+    note->setWordWrap(true);
+    note->setStyleSheet("QLabel { color: #8090a0; font-size: 10px; background: transparent; }");
+    vbox->addWidget(note);
 
-    auto addRow = [&](int row, const QString& label, QLineEdit*& edit,
-                      const QString& key, const QString& def,
-                      const QString& objName, const QString& a11yName,
-                      const QString& a11yDesc, bool password = false) {
-        auto* lbl = new QLabel(label);
-        lbl->setStyleSheet(kLabelStyle);
-        grid->addWidget(lbl, row, 0);
-        edit = new QLineEdit(s.value(key, def).toString());
-        edit->setStyleSheet(kEditStyle);
-        if (password) { edit->setEchoMode(QLineEdit::Password); }
-        if (!objName.isEmpty())  edit->setObjectName(objName);
-        if (!a11yName.isEmpty()) edit->setAccessibleName(a11yName);
-        if (!a11yDesc.isEmpty()) edit->setAccessibleDescription(a11yDesc);
-        grid->addWidget(edit, row, 1);
-    };
-
-    addRow(0, "Host:", m_hostEdit, "MqttHost", "localhost",
-           QStringLiteral("mqttHost"), tr("MQTT broker host"),
-           tr("Hostname or IP address of the MQTT broker"));
-    addRow(1, "Port:", m_portEdit, "MqttPort", "1883",
-           QStringLiteral("mqttPort"), tr("MQTT broker port"),
-           tr("TCP port for the MQTT broker (1883 plaintext, 8883 TLS)"));
-    addRow(2, "User:", m_userEdit, "MqttUser", "",
-           QStringLiteral("mqttUsername"), tr("MQTT broker username"),
-           tr("Username for MQTT broker authentication"));
-    // Password is not stored in AppSettings (see GHSA-mmqp-cm4w-cvpp).
-    // addRow with an empty default + sentinel key leaves the QLineEdit
-    // empty; we populate it asynchronously from the keychain below, and
-    // migrate any legacy plaintext value found in AppSettings on first
-    // launch.
-    addRow(3, "Pass:", m_passEdit, QStringLiteral("MqttPass_unused"), QString(),
-           QStringLiteral("mqttPassword"), tr("MQTT broker password"),
-           tr("Password for MQTT broker authentication"), true);
-    loadPasswordFromKeychain();
-
-    auto* topicLbl = new QLabel("Topics:");
-    topicLbl->setStyleSheet(kLabelStyle);
-    grid->addWidget(topicLbl, 4, 0, Qt::AlignTop);
-    m_topicsEdit = new QLineEdit(s.value("MqttTopics", "").toString());
-    m_topicsEdit->setStyleSheet(kEditStyle);
-    m_topicsEdit->setPlaceholderText("topic1, topic2, ...");
-    m_topicsEdit->setToolTip("Comma-separated MQTT topics to subscribe to.\n"
-                             "Prefix with * to display on panadapter overlay.\n"
-                             "Antenna names: aethersdr/antenna/name/+, aethersdr/antenna/names\n"
-                             "Example: *rotator/pos, *ant/selected, station/log");
-    grid->addWidget(m_topicsEdit, 4, 1);
-
-    // TLS row
-    auto* tlsLbl = new QLabel("TLS:");
-    tlsLbl->setStyleSheet(kLabelStyle);
-    grid->addWidget(tlsLbl, 5, 0);
-    m_tlsCheck = new QCheckBox;
-    m_tlsCheck->setChecked(s.value("MqttTls", "False").toString() == "True");
-    m_tlsCheck->setStyleSheet("QCheckBox { color: #8090a0; font-size: 10px; }");
-    m_tlsCheck->setToolTip("Enable TLS encryption (requires broker on port 8883)");
-    grid->addWidget(m_tlsCheck, 5, 1);
-
-    // CA certificate row (shown only when TLS is checked)
-    auto* caLbl = new QLabel("CA cert:");
-    caLbl->setStyleSheet(kLabelStyle);
-    grid->addWidget(caLbl, 6, 0);
-    m_caFileEdit = new QLineEdit(s.value("MqttCaFile", "").toString());
-    m_caFileEdit->setStyleSheet(kEditStyle);
-    m_caFileEdit->setPlaceholderText("optional, blank = system CA bundle");
-    m_caFileEdit->setToolTip("Path to CA certificate file.\nLeave blank to use the system CA bundle.");
-    grid->addWidget(m_caFileEdit, 6, 1);
-
-    // Show/hide CA row based on TLS checkbox state
-    auto updateCaVisibility = [caLbl, this](bool checked) {
-        caLbl->setVisible(checked);
-        m_caFileEdit->setVisible(checked);
-        // Auto-switch port between 1883 and 8883
-        QString port = m_portEdit->text().trimmed();
-        if (checked && port == "1883") {
-            m_portEdit->setText("8883");
-        } else if (!checked && port == "8883") {
-            m_portEdit->setText("1883");
-        }
-    };
-    updateCaVisibility(m_tlsCheck->isChecked());
-    connect(m_tlsCheck, &QCheckBox::toggled, this, updateCaVisibility);
-
-    vbox->addLayout(grid);
-
-    // Enable button + status
     auto* ctrlRow = new QHBoxLayout;
     ctrlRow->setSpacing(4);
     m_enableBtn = new QPushButton("Off");
@@ -183,93 +82,45 @@ void MqttApplet::buildUI()
     ctrlRow->addWidget(m_statusLabel, 1);
     vbox->addLayout(ctrlRow);
 
-    // Publish buttons section
-    {
-        auto* pubHeader = new QHBoxLayout;
-        auto* pubLbl = new QLabel("Publish");
-        pubLbl->setStyleSheet("QLabel { color: #8090a0; font-size: 10px; font-weight: bold; }");
-        pubHeader->addWidget(pubLbl);
-        pubHeader->addStretch();
+    auto* pubLbl = new QLabel("Publish");
+    pubLbl->setStyleSheet("QLabel { color: #8090a0; font-size: 10px; font-weight: bold; }");
+    vbox->addWidget(pubLbl);
 
-        m_editBtn = new QPushButton("Edit");
-        m_editBtn->setFixedHeight(16);
-        m_editBtn->setStyleSheet(
-            "QPushButton { background: transparent; color: #607080; "
-            "border: none; font-size: 9px; padding: 0 4px; }"
-            "QPushButton:hover { color: #c8d8e8; }");
-        pubHeader->addWidget(m_editBtn);
-        vbox->addLayout(pubHeader);
+    auto* btnContainer = new QWidget;
+    m_buttonGrid = new QGridLayout(btnContainer);
+    m_buttonGrid->setContentsMargins(0, 0, 0, 0);
+    m_buttonGrid->setSpacing(2);
+    vbox->addWidget(btnContainer);
+    rebuildButtons();
 
-        auto* btnContainer = new QWidget;
-        m_buttonGrid = new QGridLayout(btnContainer);
-        m_buttonGrid->setContentsMargins(0, 0, 0, 0);
-        m_buttonGrid->setSpacing(2);
-        vbox->addWidget(btnContainer);
-
-        rebuildButtons();
-
-        connect(m_editBtn, &QPushButton::clicked, this, [this] {
-            m_editMode = !m_editMode;
-            m_editBtn->setText(m_editMode ? "Done" : "Edit");
-            rebuildButtons();
-        });
-    }
-
-    // Message log
     m_messageLog = new QTextEdit;
     m_messageLog->setReadOnly(true);
-    m_messageLog->setMaximumHeight(80);
+    m_messageLog->setMaximumHeight(95);
     m_messageLog->setStyleSheet(
         "QTextEdit { background: #0a0a14; color: #c8d8e8; border: 1px solid #203040; "
         "font-size: 10px; font-family: monospace; }");
     vbox->addWidget(m_messageLog);
 
-    // Enable toggle
     connect(m_enableBtn, &QPushButton::clicked, this, [this] {
-        bool wasOn = m_enableBtn->text() == "On";
+        const bool wasOn = m_enableBtn->text() == QLatin1String("On");
         if (wasOn) {
+            saveMqttConnectionEnabled(false);
+            m_restoreConnectPending = false;
             emit disconnectRequested();
             m_enableBtn->setText("Off");
             m_enableBtn->setStyleSheet(kBtnOff);
-        } else {
-            auto& ss = AppSettings::instance();
-            ss.setValue("MqttHost",   m_hostEdit->text().trimmed());
-            ss.setValue("MqttPort",   m_portEdit->text().trimmed());
-            ss.setValue("MqttUser",   m_userEdit->text().trimmed());
-            // Password lives in QKeychain — see GHSA-mmqp-cm4w-cvpp.
-            // Belt-and-braces: ensure no legacy plaintext entry survives.
-            ss.remove(kLegacySetting);
-            savePasswordToKeychain(m_passEdit->text().trimmed());
-            ss.setValue("MqttTopics", m_topicsEdit->text().trimmed());
-            ss.setValue("MqttTls",    m_tlsCheck->isChecked() ? "True" : "False");
-            ss.setValue("MqttCaFile", m_caFileEdit->text().trimmed());
-            ss.save();
+            return;
+        }
 
-            // Parse topics — * prefix means display on panadapter
-            m_topicDefs.clear();
-            QStringList topicNames;
-            for (const QString& raw : m_topicsEdit->text().split(',', Qt::SkipEmptyParts)) {
-                QString t = raw.trimmed();
-                bool display = t.startsWith('*');
-                if (display) { t = t.mid(1).trimmed(); }
-                if (!t.isEmpty()) {
-                    m_topicDefs.append({t, display});
-                    topicNames.append(t);
-                }
-            }
-
-            emit connectRequested(
-                m_hostEdit->text().trimmed(),
-                m_portEdit->text().trimmed().toUShort(),
-                m_userEdit->text().trimmed(),
-                m_passEdit->text().trimmed(),
-                topicNames,
-                m_tlsCheck->isChecked(),
-                m_caFileEdit->text().trimmed());
-
+        saveMqttConnectionEnabled(true);
+        if (!m_passwordLoaded) {
+            m_restoreConnectPending = true;
             m_enableBtn->setText("On");
             m_enableBtn->setStyleSheet(kBtnOn);
+            updateStatus("Waiting for keychain", false);
+            return;
         }
+        requestConnectFromSettings();
     });
 }
 
@@ -293,6 +144,40 @@ void MqttApplet::setMqttClient(MqttClient* client)
     connect(client, &MqttClient::messageReceived, this, &MqttApplet::onMessageReceived);
 }
 
+void MqttApplet::refreshSettings()
+{
+    m_topicDefs = loadMqttTopicConfig();
+    m_buttonDefs = loadMqttButtonConfig();
+    if (m_buttonGrid) {
+        rebuildButtons();
+    }
+}
+
+void MqttApplet::setCachedPassword(const QString& password)
+{
+    m_password = password;
+    m_passwordLoaded = true;
+}
+
+void MqttApplet::restoreConnectionState()
+{
+    if (!mqttConnectionEnabled()) {
+        return;
+    }
+
+    if (!m_passwordLoaded) {
+        m_restoreConnectPending = true;
+        if (m_enableBtn) {
+            m_enableBtn->setText("On");
+            m_enableBtn->setStyleSheet(kBtnOn);
+        }
+        updateStatus("Waiting for keychain", false);
+        return;
+    }
+
+    requestConnectFromSettings();
+}
+
 void MqttApplet::updateStatus(const QString& text, bool ok)
 {
     m_statusLabel->setText(text);
@@ -305,9 +190,9 @@ void MqttApplet::onMessageReceived(const QString& topic, const QByteArray& paylo
 {
     QString shortTopic = topic.section('/', -1);
     if (shortTopic.isEmpty()) { shortTopic = topic; }
-    QString value = QString::fromUtf8(payload).left(80);
+    const QString value = QString::fromUtf8(payload).left(80);
 
-    QString line = QString("%1: %2").arg(shortTopic, value);
+    const QString line = QString("%1: %2").arg(shortTopic, value);
     m_messageLog->append(line);
 
     QTextDocument* doc = m_messageLog->document();
@@ -322,8 +207,8 @@ void MqttApplet::onMessageReceived(const QString& topic, const QByteArray& paylo
         emit antennaAliasRequested(update.token, update.alias);
     }
 
-    // Update panadapter overlay for display-enabled topics
-    for (const auto& td : m_topicDefs) {
+    // Update panadapter overlay for display-enabled user topics only.
+    for (const MqttTopicDef& td : m_topicDefs) {
         if (td.displayOnPan && td.topic == topic) {
             emit displayValueChanged(shortTopic, value);
             break;
@@ -331,150 +216,59 @@ void MqttApplet::onMessageReceived(const QString& topic, const QByteArray& paylo
     }
 }
 
-// ── Publish Buttons ──────────────────────────────────────────────────────────
-
 void MqttApplet::rebuildButtons()
 {
-    // Clear existing
-    for (auto* btn : m_buttons) { delete btn; }
-    m_buttons.clear();
-
-    // Remove the "+" button if it exists
-    QLayoutItem* item;
+    QLayoutItem* item = nullptr;
     while ((item = m_buttonGrid->takeAt(0)) != nullptr) {
         delete item->widget();
         delete item;
     }
+    m_buttons.clear();
 
-    // Add buttons from defs
     for (int i = 0; i < m_buttonDefs.size(); ++i) {
         auto* btn = new QPushButton(m_buttonDefs[i].label);
-        btn->setStyleSheet(m_editMode ? kPubBtnEdit : kPubBtn);
-        btn->setToolTip(m_editMode
-            ? QString("Click to edit\nTopic: %1\nPayload: %2")
-                .arg(m_buttonDefs[i].topic, m_buttonDefs[i].payload)
-            : QString("%1 → %2")
-                .arg(m_buttonDefs[i].topic, m_buttonDefs[i].payload));
-
-        if (m_editMode) {
-            btn->setContextMenuPolicy(Qt::CustomContextMenu);
-            connect(btn, &QPushButton::clicked, this, [this, i] { editButton(i); });
-            connect(btn, &QPushButton::customContextMenuRequested, this, [this, i](const QPoint& pos) {
-                QMenu menu;
-                menu.addAction("Remove", this, [this, i] { removeButton(i); });
-                menu.exec(m_buttons[i]->mapToGlobal(pos));
-            });
-        } else {
-            connect(btn, &QPushButton::clicked, this, [this, i] {
-                if (m_client && m_client->isConnected()) {
-                    m_client->publish(m_buttonDefs[i].topic,
-                                      m_buttonDefs[i].payload.toUtf8());
-                }
-            });
-        }
-
+        btn->setStyleSheet(kPubBtn);
+        btn->setToolTip(QString("%1 -> %2")
+                            .arg(m_buttonDefs[i].topic, m_buttonDefs[i].payload));
+        connect(btn, &QPushButton::clicked, this, [this, i] {
+            if (m_client && m_client->isConnected()) {
+                m_client->publish(m_buttonDefs[i].topic,
+                                  m_buttonDefs[i].payload.toUtf8());
+            }
+        });
         m_buttons.append(btn);
         m_buttonGrid->addWidget(btn, i / 3, i % 3);
     }
+}
 
-    // Add "+" button in edit mode
-    if (m_editMode && m_buttonDefs.size() < 12) {
-        auto* addBtn = new QPushButton("+");
-        addBtn->setStyleSheet(
-            "QPushButton { background: #1a2a1a; color: #60a060; "
-            "border: 1px dashed #305030; padding: 4px 6px; border-radius: 3px; font-size: 14px; }");
-        connect(addBtn, &QPushButton::clicked, this, &MqttApplet::addButton);
-        int idx = m_buttonDefs.size();
-        m_buttonGrid->addWidget(addBtn, idx / 3, idx % 3);
+void MqttApplet::requestConnectFromSettings()
+{
+    refreshSettings();
+    const MqttConnectionConfig config = loadMqttConnectionConfig();
+    emit connectRequested(config.host,
+                          config.port,
+                          config.username,
+                          m_password,
+                          mqttUserSubscriptionTopics(m_topicDefs),
+                          config.useTls,
+                          config.caFile);
+
+    if (m_enableBtn) {
+        m_enableBtn->setText("On");
+        m_enableBtn->setStyleSheet(kBtnOn);
     }
+    updateStatus("Connecting", false);
 }
 
-void MqttApplet::editButton(int index)
+void MqttApplet::finishPasswordLoad()
 {
-    if (index < 0 || index >= m_buttonDefs.size()) return;
-
-    QDialog dlg(this);
-    dlg.setWindowTitle("Edit MQTT Button");
-    dlg.setFixedWidth(280);
-    auto* vb = new QVBoxLayout(&dlg);
-
-    auto* labelEdit = new QLineEdit(m_buttonDefs[index].label);
-    auto* topicEdit = new QLineEdit(m_buttonDefs[index].topic);
-    auto* payloadEdit = new QLineEdit(m_buttonDefs[index].payload);
-
-    auto addField = [&](const QString& name, QLineEdit* edit) {
-        auto* row = new QHBoxLayout;
-        auto* lbl = new QLabel(name);
-        lbl->setFixedWidth(55);
-        row->addWidget(lbl);
-        row->addWidget(edit);
-        vb->addLayout(row);
-    };
-
-    addField("Label:", labelEdit);
-    addField("Topic:", topicEdit);
-    addField("Payload:", payloadEdit);
-
-    auto* btns = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    connect(btns, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(btns, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-    vb->addWidget(btns);
-
-    if (dlg.exec() == QDialog::Accepted) {
-        m_buttonDefs[index].label = labelEdit->text().trimmed();
-        m_buttonDefs[index].topic = topicEdit->text().trimmed();
-        m_buttonDefs[index].payload = payloadEdit->text().trimmed();
-        saveButtons();
-        rebuildButtons();
+    m_passwordLoaded = true;
+    if (!m_restoreConnectPending) {
+        return;
     }
-}
 
-void MqttApplet::addButton()
-{
-    if (m_buttonDefs.size() >= 12) return;
-    m_buttonDefs.append({"New", "topic", "payload"});
-    saveButtons();
-    editButton(m_buttonDefs.size() - 1);
-}
-
-void MqttApplet::removeButton(int index)
-{
-    if (index < 0 || index >= m_buttonDefs.size()) return;
-    m_buttonDefs.remove(index);
-    saveButtons();
-    rebuildButtons();
-}
-
-void MqttApplet::saveButtons()
-{
-    QJsonArray arr;
-    for (const auto& def : m_buttonDefs) {
-        QJsonObject obj;
-        obj["label"] = def.label;
-        obj["topic"] = def.topic;
-        obj["payload"] = def.payload;
-        arr.append(obj);
-    }
-    auto& s = AppSettings::instance();
-    s.setValue("MqttButtons", QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
-    s.save();
-}
-
-void MqttApplet::loadButtons()
-{
-    auto& s = AppSettings::instance();
-    QString json = s.value("MqttButtons", "").toString();
-    if (json.isEmpty()) return;
-
-    QJsonArray arr = QJsonDocument::fromJson(json.toUtf8()).array();
-    for (const auto& val : arr) {
-        QJsonObject obj = val.toObject();
-        m_buttonDefs.append({
-            obj["label"].toString(),
-            obj["topic"].toString(),
-            obj["payload"].toString()
-        });
-    }
+    m_restoreConnectPending = false;
+    requestConnectFromSettings();
 }
 
 // ── Keychain-backed password persistence (GHSA-mmqp-cm4w-cvpp) ──────────────
@@ -482,96 +276,51 @@ void MqttApplet::loadButtons()
 void MqttApplet::loadPasswordFromKeychain()
 {
 #ifdef HAVE_KEYCHAIN
-    auto& s = AppSettings::instance();
-    const QString legacy = s.value(kLegacySetting).toString();
+    auto& settings = AppSettings::instance();
+    const QString legacy = settings.value(legacyMqttPasswordSettingKey()).toString();
     if (!legacy.isEmpty()) {
-        // First-launch migration on an upgraded install.  Populate the
-        // UI immediately so the user doesn't see an empty field, write
-        // the value to the keychain, then strip the plaintext entry
-        // from AppSettings.  Keychain failure leaves the plaintext in
-        // place — better that than losing the user's credentials.
-        m_passEdit->setText(legacy);
-        auto* job = new QKeychain::WritePasswordJob(QLatin1String(kKeychainService));
+        m_password = legacy;
+        finishPasswordLoad();
+        auto* job = new QKeychain::WritePasswordJob(mqttKeychainService());
         job->setAutoDelete(true);
-        job->setKey(QLatin1String(kKeychainKey));
+        job->setKey(mqttKeychainKey());
         job->setTextData(legacy);
         connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
             if (j->error() != QKeychain::NoError) {
                 qCWarning(lcMqtt) << "MqttApplet: keychain migration write failed:"
                                   << j->errorString()
-                                  << "— legacy plaintext entry preserved for retry";
+                                  << "- legacy plaintext entry preserved for retry";
                 return;
             }
-            AppSettings::instance().remove(kLegacySetting);
+            AppSettings::instance().remove(legacyMqttPasswordSettingKey());
             AppSettings::instance().save();
-            qCInfo(lcMqtt) << "MqttApplet: migrated MQTT password to keychain"
-                           << "(legacy plaintext entry removed)";
+            qCInfo(lcMqtt) << "MqttApplet: migrated MQTT password to keychain";
         });
         job->start();
         return;
     }
 
-    auto* job = new QKeychain::ReadPasswordJob(QLatin1String(kKeychainService));
+    auto* job = new QKeychain::ReadPasswordJob(mqttKeychainService());
     job->setAutoDelete(true);
-    job->setKey(QLatin1String(kKeychainKey));
+    job->setKey(mqttKeychainKey());
     connect(job, &QKeychain::Job::finished, this, [this](QKeychain::Job* j) {
-        if (!m_passEdit) return;  // applet may have been destroyed mid-flight
         if (j->error() == QKeychain::NoError) {
             auto* read = static_cast<QKeychain::ReadPasswordJob*>(j);
-            m_passEdit->setText(read->textData());
+            m_password = read->textData();
         } else if (j->error() != QKeychain::EntryNotFound) {
             qCWarning(lcMqtt) << "MqttApplet: keychain read failed:" << j->errorString();
         }
+        finishPasswordLoad();
     });
     job->start();
 #else
-    // Keychain not available at build time.  Fall back to reading the
-    // legacy plaintext setting if it exists, with a warning.  This keeps
-    // the applet usable on builds that opt out of Qt6Keychain at the
-    // cost of leaving the password readable on disk (the bug this fix
-    // is meant to address).
-    auto& s = AppSettings::instance();
-    const QString legacy = s.value(kLegacySetting).toString();
+    const QString legacy = AppSettings::instance().value(legacyMqttPasswordSettingKey()).toString();
     if (!legacy.isEmpty()) {
-        qCWarning(lcMqtt) << "MqttApplet: HAVE_KEYCHAIN not set — MQTT password "
+        qCWarning(lcMqtt) << "MqttApplet: HAVE_KEYCHAIN not set - MQTT password "
                              "remains in plaintext AppSettings";
-        m_passEdit->setText(legacy);
+        m_password = legacy;
     }
-#endif
-}
-
-void MqttApplet::savePasswordToKeychain(const QString& password)
-{
-#ifdef HAVE_KEYCHAIN
-    if (password.isEmpty()) {
-        // Empty password = user cleared the field.  Drop any keychain
-        // entry so the next load doesn't surprise them with a stale value.
-        auto* job = new QKeychain::DeletePasswordJob(QLatin1String(kKeychainService));
-        job->setAutoDelete(true);
-        job->setKey(QLatin1String(kKeychainKey));
-        connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
-            if (j->error() != QKeychain::NoError
-                && j->error() != QKeychain::EntryNotFound) {
-                qCWarning(lcMqtt) << "MqttApplet: keychain delete failed:" << j->errorString();
-            }
-        });
-        job->start();
-        return;
-    }
-    auto* job = new QKeychain::WritePasswordJob(QLatin1String(kKeychainService));
-    job->setAutoDelete(true);
-    job->setKey(QLatin1String(kKeychainKey));
-    job->setTextData(password);
-    connect(job, &QKeychain::Job::finished, this, [](QKeychain::Job* j) {
-        if (j->error() != QKeychain::NoError)
-            qCWarning(lcMqtt) << "MqttApplet: keychain save failed:" << j->errorString();
-    });
-    job->start();
-#else
-    qCWarning(lcMqtt) << "MqttApplet: HAVE_KEYCHAIN not set — falling back to "
-                         "plaintext AppSettings for MQTT password";
-    AppSettings::instance().setValue(kLegacySetting, password);
-    AppSettings::instance().save();
+    finishPasswordLoad();
 #endif
 }
 

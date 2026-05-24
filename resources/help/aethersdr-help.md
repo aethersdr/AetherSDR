@@ -265,39 +265,42 @@ ham shack automation tools.
 
 #### Quick Start
 
-1. Click the **MQTT** button in the applet toggle row to open the applet.
+1. Open `Settings -> MQTT...`.
 2. Enter your MQTT broker's **Host** and **Port** (default: `localhost:1883`).
-3. Enter comma-separated **Topics** to subscribe to.
-   Prefix a topic with `*` to display its value on the panadapter overlay.
-   Example: `*rotator/pos, *ant/selected, station/log`
-4. Click **On** to connect.
+3. Add subscription topics as rows on the **Subscriptions** tab.
+   Enable **Display** for any topic that should show its latest value on the
+   panadapter overlay.
+4. Open the MQTT applet and click **On** to connect.
+
+The applet remembers the On/Off state. If MQTT was On when AetherSDR closed,
+it reconnects automatically on the next start after the saved password has
+loaded from the keychain.
 
 #### Publish Buttons
 
 You can create custom buttons that publish MQTT messages when clicked:
 
-1. Click **Edit** in the Publish section.
-2. Click the **+** button to add a new button.
+1. Open `Settings -> MQTT...`.
+2. Use the **Publish Buttons** tab to add a new button.
 3. Enter a **Label** (what the button shows), **Topic** (where to publish),
    and **Payload** (the message body).
-4. Click **Done** to exit edit mode.
-5. Click any button to send its message to the broker.
+4. Click any button in the MQTT applet to send its message to the broker.
 
-Right-click a button in edit mode to remove it. Buttons are saved across restarts.
+Buttons are saved across restarts. Up to 12 publish buttons can be configured.
 
 #### Panadapter Overlay
 
-Topics prefixed with `*` display their last received value in the top-right
-corner of the spectrum, below the propagation and WNB indicators. This lets
-you see beam heading, selected antenna, or other station status at a glance
-without leaving the panadapter view.
+Topics with **Display** enabled in `Settings -> MQTT...` show their last
+received value in the top-right corner of the spectrum, below the propagation
+and WNB indicators. Existing settings that use the legacy `*topic` convention
+are loaded as display-enabled rows.
 
 #### Antenna Display Names
 
-AetherSDR can update its local antenna display names from MQTT. Subscribe to
-the topics you want in the MQTT applet while a radio is connected. Retained
-broker messages work well when they arrive after AetherSDR has identified the
-connected radio.
+AetherSDR can update its local antenna display names from MQTT. The AetherSDR
+antenna alias topics are subscribed automatically whenever MQTT connects, so
+they do not need to be added to your user topic rows. Retained broker messages
+work well when they arrive after AetherSDR has identified the connected radio.
 
 - Per-port topic: `aethersdr/antenna/name/ANT1` with payload `80m Dipole`
 - Bulk topic: `aethersdr/antenna/names` with payload
@@ -315,7 +318,7 @@ A typical setup:
 
 - Node-RED publishes `rotator/pos` with the current heading (e.g., `240`)
 - Node-RED subscribes to `rotator/cmd` for control commands
-- In AetherSDR, subscribe to `*rotator/pos` (displays heading on panadapter)
+- In AetherSDR, add `rotator/pos` as a subscription row and enable **Display**
 - Create publish buttons: **CW** (topic `rotator/cmd`, payload `CW`),
   **CCW** (payload `CCW`), **Stop** (payload `STOP`)
 
@@ -326,9 +329,10 @@ without switching windows.
 
 If you use an MQTT-connected antenna switch (via Node-RED, ESP32, etc.):
 
-- Subscribe to `*ant/selected` to see the active antenna on the panadapter
-- Subscribe to `aethersdr/antenna/name/+` or `aethersdr/antenna/names` if
-  your automation publishes the current local antenna display names
+- Add `ant/selected` as a subscription row and enable **Display** to see the
+  active antenna on the panadapter
+- Publish local antenna display names to `aethersdr/antenna/name/+` or
+  `aethersdr/antenna/names`; AetherSDR subscribes to those topics automatically
 - Create buttons for each antenna: **Hexbeam** (topic `ant/select`, payload `1`),
   **Vertical** (payload `2`), **Wire** (payload `3`)
 
@@ -336,7 +340,8 @@ If you use an MQTT-connected antenna switch (via Node-RED, ESP32, etc.):
 
 For SteppIR antennas controlled via MQTT:
 
-- Subscribe to `*steppir/band` and `*steppir/direction`
+- Add `steppir/band` and `steppir/direction` as subscription rows and enable
+  **Display**
 - Create buttons: **Normal** (topic `steppir/cmd`, payload `normal`),
   **180°** (payload `reverse`), **Bi-Dir** (payload `bidir`)
 
@@ -346,7 +351,8 @@ For SteppIR antennas controlled via MQTT:
 - The broker connection auto-reconnects with exponential backoff (5s–60s).
 - Username and password are optional; leave blank for unauthenticated brokers.
 - Enable the `TLS` checkbox to encrypt the connection. The port will switch automatically to 8883. Leave `CA cert` blank to use the system certificate bundle, or enter a path to a custom CA file for self-signed broker certificates.
-- Up to 12 publish buttons can be configured (4 rows × 3 columns).
+- User topics are operator-configurable; AetherSDR-owned antenna alias topics
+  are stable internal API topics and are subscribed automatically.
 
 ## Status Bar
 

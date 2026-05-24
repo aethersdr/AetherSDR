@@ -3,7 +3,9 @@
 #include "CwDecodeSettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
+#include "MqttSettingsDialog.h"
 #include "core/MqttAntennaAlias.h"
+#include "core/MqttSettings.h"
 #endif
 #include "ConnectionPanel.h"
 #include "Theme.h"
@@ -1835,13 +1837,14 @@ MainWindow::MainWindow(QWidget* parent)
                          const QString& user, const QString& pass,
                          const QStringList& topics,
                          bool useTls, const QString& caFile) {
+        m_mqttClient->setSubscriptions(mqttSubscriptionTopics(topics));
         m_mqttClient->connectToBroker(host, port, user, pass, useTls, caFile);
-        for (const QString& t : topics) {
-            m_mqttClient->subscribe(t);
-        }
     });
     connect(m_appletPanel->mqttApplet(), &MqttApplet::disconnectRequested,
             this, [this] { m_mqttClient->disconnect(); });
+    connect(m_appletPanel->mqttApplet(), &MqttApplet::settingsRequested,
+            this, &MainWindow::showMqttSettingsDialog);
+    m_appletPanel->mqttApplet()->restoreConnectionState();
 
     // MQTT → panadapter overlay display
     connect(m_appletPanel->mqttApplet(), &MqttApplet::displayValueChanged,
@@ -5262,6 +5265,28 @@ AetherDspDialog* MainWindow::ensureAetherDspDialog()
     return m_dspDialog.data();
 }
 
+#ifdef HAVE_MQTT
+void MainWindow::showMqttSettingsDialog()
+{
+    const bool wasFresh = !m_mqttSettingsDialog;
+    showOrRaisePersistent(m_mqttSettingsDialog);
+    if (!wasFresh || !m_mqttSettingsDialog)
+        return;
+
+    connect(m_mqttSettingsDialog, &MqttSettingsDialog::settingsSaved,
+            this, [this](const QString& password) {
+        if (!m_appletPanel || !m_appletPanel->mqttApplet())
+            return;
+        auto* mqttApplet = m_appletPanel->mqttApplet();
+        mqttApplet->setCachedPassword(password);
+        mqttApplet->refreshSettings();
+        if (m_mqttClient) {
+            m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
+        }
+    });
+}
+#endif
+
 void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QString& prevComp)
 {
     if (!dlg) return;
@@ -7246,6 +7271,12 @@ void MainWindow::buildMenuBar()
     connect(networkAction, &QAction::triggered, this, [this] {
         showNetworkDiagnosticsDialog();
     });
+#ifdef HAVE_MQTT
+    auto* mqttAction = settingsMenu->addAction("MQTT...");
+    mqttAction->setMenuRole(QAction::NoRole);
+    connect(mqttAction, &QAction::triggered,
+            this, &MainWindow::showMqttSettingsDialog);
+#endif
     auto* memoryAction = settingsMenu->addAction("Memory...");
     connect(memoryAction, &QAction::triggered, this, [this] {
         showMemoryDialog();

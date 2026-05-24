@@ -30,6 +30,7 @@ public:
                          bool useTls = false,
                          const QString& caFile = {});
     void disconnect();
+    void setSubscriptions(const QStringList& topics);
     void subscribe(const QString& topic);
     void unsubscribe(const QString& topic);
     void publish(const QString& topic, const QByteArray& payload);
