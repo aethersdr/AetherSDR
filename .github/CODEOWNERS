@@ -10,14 +10,14 @@
 #   Tier 2 (project infrastructure)           — middle (specific paths)
 #   Tier 1 (governance, security, bot policy) — bottom (most specific paths)
 #
-# Tier 1 — @ten9876.
+# Tier 1 — @aethersdr/maintainers (currently: @ten9876).
 #         Project governance and direction (CONSTITUTION, GOVERNANCE,
 #         CONTRIBUTING, CODE_OF_CONDUCT, LICENSE, ROADMAP), security
 #         controls (SECURITY*, signing keys, CODEOWNERS itself, CodeQL
 #         configs, CI workflow definitions), legal/compliance
 #         (THIRD_PARTY_LICENSES), and bot/agent instruction
 #         (AGENTS.md, CLAUDE.md, GEMINI.md, .claude/commands/).
-# Tier 2 — @ten9876 + @jensenpat.
+# Tier 2 — @aethersdr/infrastructure (currently: @ten9876, @jensenpat).
 #         Project infrastructure: CI/CD configuration not in T1
 #         (dependabot, docker, issue templates), documentation
 #         (docs/, *.md catchall, including README/CHANGELOG/SUPPORT
@@ -25,15 +25,21 @@
 #         build configuration (CMakeLists.txt). Narrower owner set
 #         than Tier 3 because infrastructure changes need deeper
 #         repo context than routine source review.
-# Tier 3 — @ten9876 + @jensenpat + @NF0T + @rfoust.
+# Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T, @rfoust).
 #         AetherSDR source code and anything else not enumerated
 #         above (src/, third_party/, plugins/, hal-plugin/,
 #         resources/, packaging/, scripts/). Broadest collaborator
 #         roster because routine source review benefits from more
 #         eyes.
 #
+# Team rosters are managed in the GitHub org settings:
+#   https://github.com/orgs/aethersdr/teams
+# Adding or removing a code owner is a single team-membership change
+# rather than an edit to this file. The roster lists above are
+# documentation only — the live source of truth is the org team.
+#
 # All approvals are human-only. @AetherClaude (the project's machine
-# user) is intentionally NOT in any owner set — bot-generated PRs
+# user) is intentionally NOT a member of any team — bot-generated PRs
 # still need a human reviewer regardless of which paths they touch.
 #
 # CODEOWNERS has no permission hierarchy — each path matches exactly one
@@ -46,51 +52,49 @@
 # paths they own.
 
 # ── Tier 3: source code, broad default — catches anything not enumerated ───
-*                            @ten9876 @jensenpat @NF0T @rfoust
+*                            @aethersdr/reviewers
 
 # ── Tier 2: project infrastructure — narrower owner set than Tier 3 ────────
 # CI/CD configuration not in Tier 1, documentation, tests, build config.
-# Approvers are @ten9876 + @jensenpat only — infrastructure changes need
-# deeper repo context than the broader source-review roster.
 
 # Documentation & tests
-tests/                       @ten9876 @jensenpat
-docs/                        @ten9876 @jensenpat
-*.md                         @ten9876 @jensenpat
+tests/                       @aethersdr/infrastructure
+docs/                        @aethersdr/infrastructure
+*.md                         @aethersdr/infrastructure
 
 # GitHub-specific tooling
-.github/dependabot.yml       @ten9876 @jensenpat
-.github/docker/              @ten9876 @jensenpat
-.github/ISSUE_TEMPLATE/      @ten9876 @jensenpat
+.github/dependabot.yml       @aethersdr/infrastructure
+.github/docker/              @aethersdr/infrastructure
+.github/ISSUE_TEMPLATE/      @aethersdr/infrastructure
 
 # Build configuration
-CMakeLists.txt               @ten9876 @jensenpat
+CMakeLists.txt               @aethersdr/infrastructure
 
 # ── Tier 1: governance, security, bot policy — maintainer-only ────────────
 # Project governance & direction
-AGENTS.md                    @ten9876
-CLAUDE.md                    @ten9876
-CODE_OF_CONDUCT.md           @ten9876
-CONSTITUTION.md              @ten9876
-CONTRIBUTING.md              @ten9876
-GEMINI.md                    @ten9876
-GOVERNANCE.md                @ten9876
-LICENSE                      @ten9876
-ROADMAP.md                   @ten9876
+AGENTS.md                    @aethersdr/maintainers
+CLAUDE.md                    @aethersdr/maintainers
+CODE_OF_CONDUCT.md           @aethersdr/maintainers
+CONSTITUTION.md              @aethersdr/maintainers
+CONTRIBUTING.md              @aethersdr/maintainers
+GEMINI.md                    @aethersdr/maintainers
+GOVERNANCE.md                @aethersdr/maintainers
+LICENSE                      @aethersdr/maintainers
+ROADMAP.md                   @aethersdr/maintainers
 
 # Security & compliance
-SECURITY.md                  @ten9876
-SECURITY-AUDIT.md            @ten9876
-THIRD_PARTY_LICENSES         @ten9876
-.github/CODEOWNERS           @ten9876
-.github/codeql/              @ten9876
-docs/RELEASE-SIGNING-KEY.pub.asc  @ten9876
+SECURITY.md                  @aethersdr/maintainers
+SECURITY-AUDIT.md            @aethersdr/maintainers
+THIRD_PARTY_LICENSES         @aethersdr/maintainers
+.github/CODEOWNERS           @aethersdr/maintainers
+.github/codeql/              @aethersdr/maintainers
+docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 
 # CI runtime — release artifacts, registry pushes, GITHUB_TOKEN scopes.
 # Kept at Tier 1 despite the framework's CI/CD-in-T2 default because a
 # malicious workflow change can exfiltrate secrets or publish unsigned
 # releases. Workflow-config sensitivity outweighs the categorical match.
-.github/workflows/           @ten9876
+.github/workflows/           @aethersdr/maintainers
 
 # Bot / agent instruction (source of truth for AI tool behaviour)
-.claude/commands/            @ten9876
+.claude/commands/            @aethersdr/maintainers
