@@ -143,11 +143,25 @@ CHECK_SIMD(C "AVX" " ;-mavx;/arch:AVX")
 CHECK_SIMD(C "AVX2" " ;-mavx2 -mfma -mf16c;/arch:AVX2")
 CHECK_SIMD(C "AVX512" " ;-mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma;/arch:AVX512")
 CHECK_SIMD(C "NEON" " ;-ffast-math;/arch:armv8.0;/arch:armv9.0")
-CHECK_SIMD(C "ALTIVEC" " ;-fno-common -faltivec;/arch:altivec")
 
 CHECK_SIMD(CXX "SSE4" " ;-msse4.2;/arch:SSE")
 CHECK_SIMD(CXX "AVX" " ;-mavx;/arch:AVX")
 CHECK_SIMD(CXX "AVX2" " ;-mavx2 -mfma -mf16c;/arch:AVX2")
 CHECK_SIMD(CXX "AVX512" " ;-mavx512f -mavx512dq -mavx512vl -mavx512bw -mfma;/arch:AVX512")
 CHECK_SIMD(CXX "NEON" " ;-ffast-math;/arch:armv8.0;/arch:armv9.0")
-CHECK_SIMD(CXX "ALTIVEC" " ;-fno-common -faltivec;/arch:altivec")
+
+# AetherSDR patch: AltiVec is PowerPC-only.  The probe always fails on
+# x86_64 / aarch64 with confusing-looking GCC errors in CMakeError.log
+# (`vector` keyword undeclared, `/arch:altivec` flag rejected) that
+# alarm first-time source builders even though the failure is harmless.
+# Gate the probe to PowerPC hosts so the log stays clean everywhere
+# else.  AetherSDR has zero known PowerPC users; revisit if that changes.
+IF(CMAKE_SYSTEM_PROCESSOR MATCHES "^(ppc|powerpc|ppc64|ppc64le)")
+    CHECK_SIMD(C "ALTIVEC" " ;-fno-common -faltivec;/arch:altivec")
+    CHECK_SIMD(CXX "ALTIVEC" " ;-fno-common -faltivec;/arch:altivec")
+ELSE()
+    SET(C_ALTIVEC_FOUND FALSE CACHE BOOL "C ALTIVEC support")
+    SET(C_ALTIVEC_FLAGS "" CACHE STRING "C ALTIVEC flags")
+    SET(CXX_ALTIVEC_FOUND FALSE CACHE BOOL "CXX ALTIVEC support")
+    SET(CXX_ALTIVEC_FLAGS "" CACHE STRING "CXX ALTIVEC flags")
+ENDIF()
