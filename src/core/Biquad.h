@@ -21,6 +21,19 @@
 // thread.  Holding a Biquad across threads is the caller's
 // responsibility — wrap it with whatever atomics + version counter
 // the surrounding DSP module already uses.
+//
+// Cascade pattern: for higher-order filters that need N biquad stages
+// in series (DESS bandpass cascade, PhaseRotator's 4-stage all-pass,
+// EqApplet's per-band sections), use std::array<Biquad, N> for fixed
+// stage counts or std::vector<Biquad> for runtime-variable counts and
+// iterate explicitly:
+//
+//   for (auto& stage : stages) sample = stage.process(sample);
+//
+// No dedicated BiquadCascade class — the std::array/std::vector idiom
+// is simpler than a wrapper and lets each consumer choose its own
+// stage-count semantics (compile-time vs. runtime, reset granularity,
+// per-stage coefficient sets).
 
 namespace AetherSDR {
 
@@ -39,8 +52,11 @@ public:
     };
 
     // Compute and store coefficients per Audio EQ Cookbook.
-    //   sampleRateHz : audio thread sample rate, > 0
-    //   centerHz     : corner / centre / shelf-midpoint, clamped to (0, fs/2)
+    //   sampleRateHz : audio thread sample rate, clamped to >= 1.0 Hz
+    //   centerHz     : corner / centre / shelf-midpoint, clamped to
+    //                  [1.0, sampleRateHz * 0.499].  Avoids the
+    //                  sin(0)=0 / cos(π)=-1 collapse the cookbook math
+    //                  exhibits at the closed endpoints.
     //   Q            : resonance / bandwidth control, clamped to >= 0.1
     //   gainDb       : used only by PeakingEq / LowShelf / HighShelf
     // Does NOT touch state — call reset() separately if a discontinuous
@@ -65,6 +81,14 @@ public:
     // successive process(x) calls, which is the property the
     // block-process-matches-per-sample test pins down so future
     // SIMD vectorisation has a known reference.
+    //
+    // Caveat for future SIMD work: the bit-identity guarantee assumes
+    // the compiler doesn't introduce FMA contraction or reassociation
+    // asymmetrically between this path and the per-sample inline
+    // process(x) above.  Block-form locals pre-narrow to float, which
+    // can tempt vectorisation in a way the per-call narrowing doesn't.
+    // Any SIMD rewrite of this function must preserve the test's
+    // bit-identity assertion — break it and the test fails loudly.
     void process(const float* in, float* out, int n) noexcept;
 
     // Zero state (z1, z2) without touching coefficients.  After
