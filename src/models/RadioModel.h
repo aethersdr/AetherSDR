@@ -667,7 +667,12 @@ private:
 
     QMap<QString, PanadapterModel*> m_panadapters;  // panId → model
     QString m_activePanId;       // currently active panadapter
-    QMap<QString, QMap<QString, QString>> m_pendingPanStatuses;
+    // Deferred "display pan" status pending ownership confirmation. Paired
+    // with QDateTime::currentSecsSinceEpoch() at insert so a sweep on insert
+    // can drop entries that the radio never resolved with a client_handle
+    // frame (#2228 — would otherwise leak for non-owned pans that also never
+    // emit "removed").
+    QMap<QString, QPair<qint64, QMap<QString, QString>>> m_pendingPanStatuses;
 
     bool    m_hasAmplifier{false};  // true if a power amp (PGXL) is detected
     QString m_ampHandle;             // amplifier handle for commands

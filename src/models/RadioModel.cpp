@@ -3337,10 +3337,10 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
     emit panadapterAdded(pan);
 
     const auto pending = m_pendingPanStatuses.take(normalizedPanId);
-    if (!pending.isEmpty()) {
+    if (!pending.second.isEmpty()) {
         qCDebug(lcProtocol) << "RadioModel: applying deferred panadapter status for"
                             << normalizedPanId;
-        handlePanadapterStatus(normalizedPanId, pending);
+        handlePanadapterStatus(normalizedPanId, pending.second);
     }
 
     return pan;
@@ -3853,7 +3853,22 @@ void RadioModel::onStatusReceived(const QString& object,
             const auto ownershipAction = RadioStatusOwnership::classifyOwnedStatus(
                 knownPan, kvs, false, clientHandle());
             if (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Defer) {
-                m_pendingPanStatuses[panId] = kvs;
+                // Stamp the deferred entry and sweep any stale ones (#2228).
+                // Entries older than 30 s reflect pans the radio never
+                // resolved with a client_handle frame and never marked
+                // "removed" — dropping them is never observably wrong
+                // because consumption only happens on ownership confirm
+                // (which is exactly the missing signal here).
+                const qint64 now = QDateTime::currentSecsSinceEpoch();
+                m_pendingPanStatuses[panId] = qMakePair(now, kvs);
+                constexpr qint64 kPendingPanStatusTtlSec = 30;
+                for (auto it = m_pendingPanStatuses.begin();
+                     it != m_pendingPanStatuses.end();) {
+                    if (now - it.value().first > kPendingPanStatusTtlSec)
+                        it = m_pendingPanStatuses.erase(it);
+                    else
+                        ++it;
+                }
                 return;  // defer — can't confirm ownership yet
             }
             if (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Ignore) {
