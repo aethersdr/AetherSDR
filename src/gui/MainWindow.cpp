@@ -5623,6 +5623,18 @@ void MainWindow::changeEvent(QEvent* event)
 
 void MainWindow::closeEvent(QCloseEvent* event)
 {
+    // Release the TGXL/PGXL native control sockets explicitly so the radio
+    // can resume polling them on behalf of other clients (e.g. Maestro).
+    // The radio-disconnect handler does this via a queued connection on
+    // RadioModel::connectionStateChanged(false), but closeEvent does not
+    // pump the event loop before QMainWindow::closeEvent() returns — so
+    // without an explicit call the QTcpSockets are destroyed implicitly
+    // during MainWindow tear-down, leaving the TGXL's single control slot
+    // in a half-open state and producing the flickering Tun/SWR meters
+    // reported on Maestro (#3079).
+    m_tgxlConn.disconnect();
+    m_pgxlConn.disconnect();
+
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
