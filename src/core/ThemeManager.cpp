@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QRegularExpression>
+#include <QWidget>
 
 namespace AetherSDR {
 
@@ -61,6 +62,12 @@ ThemeManager::ThemeManager()
 {
     seedBuiltinDefaults();
     scanAvailableThemes();
+
+    // Stylesheet-painted widgets registered via applyStyleSheet() get
+    // free live-reload on theme change — re-resolve the template, push
+    // the new stylesheet, no consumer plumbing required.
+    connect(this, &ThemeManager::themeChanged,
+            this, &ThemeManager::reapplyAllTrackedStyleSheets);
 
     const QString saved = AppSettings::instance()
                               .value("ActiveTheme", "Default Dark").toString();
@@ -325,6 +332,85 @@ QString ThemeManager::resolve(const QString& stylesheetTemplate) const
         offset += (val.length() - m.capturedLength(0));
     }
     return out;
+}
+
+QStringList ThemeManager::extractReferencedTokens(const QString& stylesheetTemplate)
+{
+    static const QRegularExpression kRe(QStringLiteral(R"(\{\{([^}]+)\}\})"));
+    QStringList tokens;
+    QRegularExpressionMatchIterator it = kRe.globalMatch(stylesheetTemplate);
+    while (it.hasNext()) {
+        const QString token = it.next().captured(1).trimmed();
+        if (!token.isEmpty() && !tokens.contains(token)) {
+            tokens.append(token);
+        }
+    }
+    return tokens;
+}
+
+void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTemplate)
+{
+    if (!widget) return;
+
+    // Resolve and apply right away so the caller gets the same visual
+    // result they'd have gotten from setStyleSheet(resolve(...)) — the
+    // tracking is an additive side-effect, not a behaviour change.
+    widget->setStyleSheet(resolve(stylesheetTemplate));
+
+    // First-time registration: connect to destroyed() so the entry
+    // disappears when the widget does.  Subsequent calls on the same
+    // widget just overwrite the recorded template / token list.
+    if (!m_trackedWidgets.contains(widget)) {
+        connect(widget, &QObject::destroyed,
+                this, &ThemeManager::onTrackedWidgetDestroyed);
+    }
+    TrackedWidget ctx;
+    ctx.stylesheetTemplate = stylesheetTemplate;
+    ctx.tokens = extractReferencedTokens(stylesheetTemplate);
+    m_trackedWidgets.insert(widget, ctx);
+}
+
+void ThemeManager::clearWidgetTracking(QWidget* widget)
+{
+    if (!widget) return;
+    if (m_trackedWidgets.remove(widget) > 0) {
+        QObject::disconnect(widget, &QObject::destroyed,
+                            this, &ThemeManager::onTrackedWidgetDestroyed);
+    }
+}
+
+QStringList ThemeManager::tokensForWidget(const QWidget* widget) const
+{
+    // const_cast is safe — the QHash lookup doesn't mutate the widget,
+    // we just need a non-const key to match the storage type used by
+    // applyStyleSheet().
+    const auto it = m_trackedWidgets.constFind(const_cast<QWidget*>(widget));
+    if (it == m_trackedWidgets.constEnd()) return QStringList();
+    return it.value().tokens;
+}
+
+void ThemeManager::onTrackedWidgetDestroyed(QObject* obj)
+{
+    // The sender is the QWidget being destroyed.  By the time the
+    // destroyed() signal fires, ~QWidget has already run; obj is a
+    // QObject* in its destruction phase — safe to use as a hash key
+    // (we just need its address for lookup) but we can NOT call any
+    // QWidget methods on it.
+    m_trackedWidgets.remove(static_cast<QWidget*>(obj));
+}
+
+void ThemeManager::reapplyAllTrackedStyleSheets()
+{
+    // Snapshot the keys before iterating — re-applying a stylesheet can
+    // trigger arbitrary widget code (lazy-builds, focus shifts, etc.)
+    // that might in turn touch m_trackedWidgets.  Iterating a copy
+    // avoids the QHash-mutation-during-iteration undefined behaviour.
+    const auto widgets = m_trackedWidgets.keys();
+    for (QWidget* w : widgets) {
+        const auto it = m_trackedWidgets.constFind(w);
+        if (it == m_trackedWidgets.constEnd()) continue;  // dropped mid-sweep
+        w->setStyleSheet(resolve(it.value().stylesheetTemplate));
+    }
 }
 
 } // namespace AetherSDR

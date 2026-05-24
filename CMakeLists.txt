@@ -1408,7 +1408,7 @@ add_executable(theme_manager_test
     ${THEME_TEST_RESOURCES}
 )
 target_include_directories(theme_manager_test PRIVATE src)
-target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Test)
 add_test(NAME theme_manager_test COMMAND theme_manager_test)
 
 add_executable(panadapter_model_rx_antenna_test

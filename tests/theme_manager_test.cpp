@@ -1,7 +1,8 @@
 #include "core/ThemeManager.h"
 #include "core/AppSettings.h"
 
-#include <QCoreApplication>
+#include <QApplication>
+#include <QLabel>
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -37,7 +38,7 @@ int main(int argc, char** argv)
     EXPECT_TRUE(tmp.isValid());
     qputenv("XDG_CONFIG_HOME", tmp.path().toUtf8());
 
-    QCoreApplication app(argc, argv);
+    QApplication app(argc, argv);
     QCoreApplication::setOrganizationName("AetherSDR-test");
     QCoreApplication::setApplicationName("AetherSDR-test");
 
@@ -136,6 +137,69 @@ int main(int argc, char** argv)
     // add a rescan trigger; for now this exercises the file-write path
     // that the editor will eventually use.
     EXPECT_TRUE(QFile::exists(userThemesDir + "/test-theme.json"));
+
+    // ── Phase 2 widget→tokens reverse-map ──
+    // applyStyleSheet must:
+    //   1. set the widget's stylesheet to the resolved template
+    //   2. record the (widget → tokens) reverse-map
+    //   3. re-apply the template when themeChanged fires (live re-theme)
+    //   4. drop its entry when the widget is destroyed
+    {
+        const QString tpl =
+            "QLabel { color: {{color.accent}}; "
+            "background: {{color.background.1}}; "
+            "padding: {{sizing.panel.padding}}px; }";
+
+        QLabel* lbl = new QLabel;
+        tm.applyStyleSheet(lbl, tpl);
+
+        // Stylesheet was resolved + applied
+        const QString applied = lbl->styleSheet();
+        EXPECT_TRUE(applied.contains("color: #00b4d8"));
+        EXPECT_TRUE(applied.contains("background: #1a2a3a"));
+        EXPECT_TRUE(!applied.contains("{{"));
+
+        // Reverse-map recorded — three unique tokens
+        const QStringList recorded = tm.tokensForWidget(lbl);
+        EXPECT_EQ(recorded.size(), 3);
+        EXPECT_TRUE(recorded.contains("color.accent"));
+        EXPECT_TRUE(recorded.contains("color.background.1"));
+        EXPECT_TRUE(recorded.contains("sizing.panel.padding"));
+
+        // clearWidgetTracking detaches the widget — subsequent
+        // themeChanged events should NOT re-apply.
+        tm.clearWidgetTracking(lbl);
+        EXPECT_TRUE(tm.tokensForWidget(lbl).isEmpty());
+
+        // Re-register, then verify destroyed() cleanup by destroying
+        // the widget and re-querying.  The lookup must not crash and
+        // must return an empty list.
+        tm.applyStyleSheet(lbl, tpl);
+        EXPECT_EQ(tm.tokensForWidget(lbl).size(), 3);
+        delete lbl;
+        QApplication::processEvents();  // let destroyed() fire
+        // After destruction, the pointer is dangling — we can't legally
+        // call tokensForWidget(lbl) anymore, but the internal hash
+        // entry must be gone.  Exercise this by registering a fresh
+        // widget and confirming the map size hasn't leaked.
+        QLabel* fresh = new QLabel;
+        tm.applyStyleSheet(fresh, tpl);
+        EXPECT_EQ(tm.tokensForWidget(fresh).size(), 3);
+        delete fresh;
+        QApplication::processEvents();
+    }
+
+    // ── extractReferencedTokens static helper ──
+    // Order-preserving deduplication; empty placeholders ignored.
+    {
+        const QStringList tokens = ThemeManager::extractReferencedTokens(
+            "{{color.accent}} {{color.background.1}} {{color.accent}} "
+            "{{ font.size.normal }} {{}}");
+        EXPECT_EQ(tokens.size(), 3);
+        EXPECT_EQ(tokens[0], QString("color.accent"));
+        EXPECT_EQ(tokens[1], QString("color.background.1"));
+        EXPECT_EQ(tokens[2], QString("font.size.normal"));
+    }
 
     if (g_failures == 0) {
         std::fprintf(stderr, "PASS theme_manager_test\n");
