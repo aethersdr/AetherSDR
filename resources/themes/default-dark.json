@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "name": "Default Dark",
   "author": "AetherSDR Team",
-  "version": "1.1",
-  "description": "AetherSDR's original dark theme — expanded to the Phase 2 canonical taxonomy (51 tokens). Visually compatible with v26.5.3; sub-perceptual diffs at sites where close-variant colours collapsed onto canonical tokens (see docs/theming/canonical-tokens.md).",
+  "version": "1.2",
+  "description": "AetherSDR's original dark theme — Phase 2 canonical taxonomy (51 tokens) plus the waterfall colormap gradient validating gradient-token support. Visually compatible with v26.5.3; sub-perceptual diffs at sites where close-variant colours collapsed onto canonical tokens (see docs/theming/canonical-tokens.md).",
   "tokens": {
     "color": {
       "background": {
@@ -45,6 +45,20 @@
         "peakHold": "#ffb84d",
         "average": "#8ea8c0",
         "grid": "#1a2330"
+      },
+      "waterfall.colormap": {
+        "type": "linear-gradient",
+        "angle": 180,
+        "stops": [
+          { "at": 0.00, "color": "#000000" },
+          { "at": 0.15, "color": "#000040" },
+          { "at": 0.30, "color": "#0040c0" },
+          { "at": 0.45, "color": "#00c0c0" },
+          { "at": 0.60, "color": "#00c040" },
+          { "at": 0.75, "color": "#c0c000" },
+          { "at": 0.90, "color": "#c04000" },
+          { "at": 1.00, "color": "#ffffff" }
+        ]
       },
       "slice": {
         "a": "#ff4040",

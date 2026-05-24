@@ -6,15 +6,56 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QLinearGradient>
+#include <QRadialGradient>
 #include <QRegularExpression>
 #include <QWidget>
+#include <QtMath>
+#include <cmath>
 
 namespace AetherSDR {
 
 namespace {
+
+// Parse a JSON gradient object into the structured ThemeGradient form.
+// Recognised schema (linear):
+//   { "type": "linear-gradient", "angle": 180,
+//     "stops": [ { "at": 0.0, "color": "#aabbcc" }, ... ] }
+// Recognised schema (radial):
+//   { "type": "radial-gradient", "center": [0.5, 0.5], "radius": 0.7,
+//     "stops": [ ... ] }
+// Unknown "type" values default to Linear with an empty stop list — the
+// downstream brush()/cssFragment() handles empty-stop gradients as
+// transparent black.
+ThemeGradient parseGradient(const QJsonObject& obj)
+{
+    ThemeGradient g;
+    const QString type = obj.value("type").toString();
+    g.type = (type == QLatin1String("radial-gradient")) ? ThemeGradient::Radial
+                                                        : ThemeGradient::Linear;
+    g.angle = obj.value("angle").toDouble(180.0);
+    if (g.type == ThemeGradient::Radial) {
+        const QJsonArray c = obj.value("center").toArray();
+        if (c.size() >= 2) {
+            g.center = QPointF(c.at(0).toDouble(0.5), c.at(1).toDouble(0.5));
+        }
+        g.radius = obj.value("radius").toDouble(0.5);
+    }
+    const QJsonArray stops = obj.value("stops").toArray();
+    g.stops.reserve(stops.size());
+    for (const QJsonValue& v : stops) {
+        const QJsonObject so = v.toObject();
+        ThemeGradientStop s;
+        s.at = so.value("at").toDouble(0.0);
+        s.color = QColor(so.value("color").toString());
+        g.stops.append(s);
+    }
+    return g;
+}
 
 // Recursively walk a JSON object, emitting `category.subkey...leaf = value`
 // pairs into `out`.  Schema lets users group tokens under "color", "font",
@@ -27,16 +68,11 @@ void flattenTokens(const QJsonObject& obj, const QString& prefix,
                                              : prefix + QLatin1Char('.') + it.key();
         const QJsonValue v = it.value();
         if (v.isObject()) {
-            // Plain nested object — keep recursing.  Gradient objects
-            // (which also start with "type": "linear-gradient" etc.) land
-            // in Phase 2; for now we ignore them on load so an early
-            // theme file with a gradient still loads its scalars cleanly.
             const QJsonObject inner = v.toObject();
+            // Gradient objects carry a "type" string discriminator that
+            // distinguishes them from plain nested token groups.
             if (inner.contains("type") && inner.value("type").isString()) {
-                // Phase 2 will store gradients as a structured QVariant.
-                // For Phase 1, log and skip so the rest of the theme loads.
-                qCDebug(lcGui) << "ThemeManager: gradient token" << key
-                                << "skipped (Phase 2 work)";
+                out.insert(key, QVariant::fromValue(parseGradient(inner)));
                 continue;
             }
             flattenTokens(inner, key, out);
@@ -48,6 +84,56 @@ void flattenTokens(const QJsonObject& obj, const QString& prefix,
             out.insert(key, v.toBool());
         }
     }
+}
+
+// Convert a CSS-convention angle (0deg = bottom→top, 90deg = left→right,
+// 180deg = top→bottom, 270deg = right→left) to a 0–1 normalised
+// (x1, y1, x2, y2) endpoint pair that covers a unit square.
+//
+// Used by both brush() (mapping onto a real QRect) and cssFragment()
+// (emitting normalised stylesheet coords).  Extracted so the two paths
+// stay in lock-step — a future bug in one would otherwise produce subtle
+// mismatches between the painted gradient and the stylesheet-emitted
+// preview.
+void linearAngleToEndpoints(qreal angleDeg,
+                            qreal& x1, qreal& y1, qreal& x2, qreal& y2)
+{
+    const qreal rad = qDegreesToRadians(angleDeg);
+    // Half-diagonal of the unit square — guarantees the gradient line
+    // reaches the corners regardless of angle.  sqrt(2)/2 ≈ 0.7071.
+    constexpr qreal kHalfDiagonal = 0.7071067811865476;
+    const qreal dx = std::sin(rad);
+    const qreal dy = -std::cos(rad);  // CSS Y axis is inverted vs screen
+    x1 = 0.5 - dx * kHalfDiagonal;
+    y1 = 0.5 - dy * kHalfDiagonal;
+    x2 = 0.5 + dx * kHalfDiagonal;
+    y2 = 0.5 + dy * kHalfDiagonal;
+}
+
+// Emit a Qt stylesheet gradient fragment for the given gradient.
+QString gradientCssFragment(const ThemeGradient& g)
+{
+    QString out;
+    if (g.type == ThemeGradient::Linear) {
+        qreal x1, y1, x2, y2;
+        linearAngleToEndpoints(g.angle, x1, y1, x2, y2);
+        out = QStringLiteral("qlineargradient(x1:%1, y1:%2, x2:%3, y2:%4")
+                  .arg(x1, 0, 'f', 4).arg(y1, 0, 'f', 4)
+                  .arg(x2, 0, 'f', 4).arg(y2, 0, 'f', 4);
+    } else {
+        out = QStringLiteral("qradialgradient(cx:%1, cy:%2, radius:%3, "
+                             "fx:%1, fy:%2")
+                  .arg(g.center.x(), 0, 'f', 4)
+                  .arg(g.center.y(), 0, 'f', 4)
+                  .arg(g.radius,     0, 'f', 4);
+    }
+    for (const auto& s : g.stops) {
+        out += QStringLiteral(", stop:%1 %2")
+                   .arg(s.at, 0, 'f', 4)
+                   .arg(s.color.name(QColor::HexRgb));
+    }
+    out += QLatin1Char(')');
+    return out;
 }
 
 } // namespace
@@ -271,7 +357,81 @@ QColor ThemeManager::color(const QString& token) const
         qCWarning(lcGui) << "ThemeManager: missing color token" << token;
         return QColor(Qt::transparent);
     }
+    // Gradient tokens: graceful fallback to the first stop's colour so
+    // existing callers asking for a flat colour on what's now a gradient
+    // token don't crash.  Callers that actually want the gradient should
+    // use brush() or cssFragment().
+    if (it.value().canConvert<ThemeGradient>()) {
+        const auto g = it.value().value<ThemeGradient>();
+        if (!g.stops.isEmpty()) return g.stops.first().color;
+        return QColor(Qt::transparent);
+    }
     return QColor(it.value().toString());
+}
+
+QBrush ThemeManager::brush(const QString& token, const QRect& bounds) const
+{
+    const auto it = m_tokens.constFind(token);
+    if (it == m_tokens.constEnd()) {
+        qCWarning(lcGui) << "ThemeManager: missing brush token" << token;
+        return QBrush(Qt::transparent);
+    }
+    if (!it.value().canConvert<ThemeGradient>()) {
+        // Scalar — wrap the colour into a solid brush.
+        return QBrush(QColor(it.value().toString()));
+    }
+    const auto g = it.value().value<ThemeGradient>();
+    if (g.type == ThemeGradient::Linear) {
+        qreal nx1, ny1, nx2, ny2;
+        linearAngleToEndpoints(g.angle, nx1, ny1, nx2, ny2);
+        QPointF start, end;
+        if (bounds.isValid()) {
+            // Map normalised endpoints onto the requested rect.
+            start = QPointF(bounds.x() + bounds.width()  * nx1,
+                            bounds.y() + bounds.height() * ny1);
+            end   = QPointF(bounds.x() + bounds.width()  * nx2,
+                            bounds.y() + bounds.height() * ny2);
+        } else {
+            // Default to ObjectBoundingMode (0-1 normalised) — useful when
+            // the caller intends to assign the brush via QPalette and let
+            // Qt scale it to the widget at paint time.
+            start = QPointF(nx1, ny1);
+            end   = QPointF(nx2, ny2);
+        }
+        QLinearGradient lg(start, end);
+        if (!bounds.isValid()) {
+            lg.setCoordinateMode(QGradient::ObjectBoundingMode);
+        }
+        for (const auto& s : g.stops) lg.setColorAt(s.at, s.color);
+        return QBrush(lg);
+    }
+    // Radial.
+    QPointF center;
+    qreal radius;
+    if (bounds.isValid()) {
+        center = QPointF(bounds.x() + bounds.width()  * g.center.x(),
+                         bounds.y() + bounds.height() * g.center.y());
+        radius = std::min(bounds.width(), bounds.height()) * g.radius;
+    } else {
+        center = g.center;
+        radius = g.radius;
+    }
+    QRadialGradient rg(center, radius);
+    if (!bounds.isValid()) {
+        rg.setCoordinateMode(QGradient::ObjectBoundingMode);
+    }
+    for (const auto& s : g.stops) rg.setColorAt(s.at, s.color);
+    return QBrush(rg);
+}
+
+QString ThemeManager::cssFragment(const QString& token) const
+{
+    const auto it = m_tokens.constFind(token);
+    if (it == m_tokens.constEnd()) return QString();
+    if (it.value().canConvert<ThemeGradient>()) {
+        return gradientCssFragment(it.value().value<ThemeGradient>());
+    }
+    return it.value().toString();
 }
 
 QFont ThemeManager::font(const QString& token) const
@@ -307,16 +467,20 @@ QString ThemeManager::value(const QString& token) const
 {
     const auto it = m_tokens.constFind(token);
     if (it == m_tokens.constEnd()) return QString();
+    // Gradient tokens have no meaningful raw scalar — return empty so
+    // callers that expected a string don't accidentally inline the
+    // QVariant::toString() of a structured value.  Use cssFragment()
+    // for the stylesheet form or brush() for paint code.
+    if (it.value().canConvert<ThemeGradient>()) return QString();
     return it.value().toString();
 }
 
 QString ThemeManager::resolve(const QString& stylesheetTemplate) const
 {
     // Replace every {{token.name}} with the token's stylesheet fragment.
-    // Today: scalar colour tokens emit "#rrggbb"; numeric tokens emit
-    // their value as a plain string ("12" -> "12px" is the caller's
-    // responsibility).  Phase 2 routes gradient tokens through
-    // cssFragment() and emits qlineargradient(...) directly.
+    // Routes through cssFragment(): scalar colour tokens emit "#rrggbb",
+    // numeric tokens emit their plain value ("12" — caller adds "px"),
+    // gradient tokens emit qlineargradient(...) / qradialgradient(...).
     static const QRegularExpression kRe(QStringLiteral(R"(\{\{([^}]+)\}\})"));
     QString out = stylesheetTemplate;
     QRegularExpressionMatchIterator it = kRe.globalMatch(stylesheetTemplate);
@@ -324,7 +488,7 @@ QString ThemeManager::resolve(const QString& stylesheetTemplate) const
     while (it.hasNext()) {
         const QRegularExpressionMatch m = it.next();
         const QString token = m.captured(1).trimmed();
-        const QString val = value(token);
+        const QString val = cssFragment(token);
         // Adjust for the running offset as substitutions change length.
         out.replace(m.capturedStart(0) + offset,
                     m.capturedLength(0),
