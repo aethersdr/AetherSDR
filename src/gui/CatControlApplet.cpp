@@ -181,9 +181,10 @@ void CatControlApplet::buildUI()
         m_rows[i].tcpStatus->setFixedWidth(100);
         row->addWidget(m_rows[i].tcpStatus);
 
-        // PTY path
-        m_rows[i].ptyPath = new QLabel(
-            QStringLiteral("/tmp/AetherSDR-CAT-%1").arg(kLetters[i]));
+        // PTY path — canonical per-user location, computed by
+        // RigctlPty so the displayed path stays in sync with where
+        // the actual symlink is created (#2940 / GHSA-qxhr-cwrc-pvrm).
+        m_rows[i].ptyPath = new QLabel(RigctlPty::defaultSymlinkPath(i));
         m_rows[i].ptyPath->setStyleSheet("QLabel { color: #506070; font-size: 10px; }");
         row->addWidget(m_rows[i].ptyPath, 1);
 
@@ -226,9 +227,7 @@ void CatControlApplet::setRigctlPtys(RigctlPty** ptys, int count)
                     });
             connect(ptys[i], &RigctlPty::stopped, this,
                     [this, i]() {
-                        static const char kLetters[] = "ABCD";
-                        m_rows[i].ptyPath->setText(
-                            QStringLiteral("/tmp/AetherSDR-CAT-%1").arg(kLetters[i]));
+                        m_rows[i].ptyPath->setText(RigctlPty::defaultSymlinkPath(i));
                     });
         }
     }

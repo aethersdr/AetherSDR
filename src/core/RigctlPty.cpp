@@ -3,11 +3,15 @@
 #include "RigctlProtocol.h"
 #include "models/RadioModel.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QSocketNotifier>
+#include <QStandardPaths>
 
 #ifndef _WIN32
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <termios.h>
 
 #ifdef __APPLE__
@@ -18,6 +22,42 @@
 #endif // !_WIN32
 
 namespace AetherSDR {
+
+QString RigctlPty::defaultSymlinkPath(int sliceIndex)
+{
+    // Per GHSA-qxhr-cwrc-pvrm — keep this symlink out of /tmp (no
+    // cross-user collisions; no TOCTOU window on non-sticky-bit /tmp).
+    //
+    // Letter scheme matches the existing CAT applet UI conventions:
+    //   slice 0 → "A", 1 → "B", 2 → "C", 3 → "D", >= 4 → numeric.
+    QString leaf;
+    if (sliceIndex >= 0 && sliceIndex < 4) {
+        const char letter = static_cast<char>('A' + sliceIndex);
+        leaf = QStringLiteral("cat-%1").arg(QChar(letter));
+    } else {
+        leaf = QStringLiteral("cat-%1").arg(sliceIndex);
+    }
+
+    // Linux: prefer $XDG_RUNTIME_DIR (systemd /run/user/${UID}, mode 0700,
+    //        tmpfs, cleaned on logout). Falls back to QStandardPaths
+    //        CacheLocation if XDG isn't set (containers, minimal init).
+    // macOS: QStandardPaths::CacheLocation = ~/Library/Caches/AetherSDR
+    //        (per-user, mode 0700 by default).
+    QString base = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (base.isEmpty())
+        base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (base.isEmpty())
+        base = QDir::homePath() + QStringLiteral("/.cache/aethersdr");
+
+    // QStandardPaths::CacheLocation already includes the application
+    // name (e.g. ~/Library/Caches/AetherSDR); RuntimeLocation does not.
+    // Add an aethersdr/ subdir only if the base doesn't already carry
+    // an AetherSDR-named segment.
+    if (!base.contains(QStringLiteral("aethersdr"), Qt::CaseInsensitive)) {
+        base += QStringLiteral("/aethersdr");
+    }
+    return base + QChar('/') + leaf;
+}
 
 RigctlPty::RigctlPty(RadioModel* model, QObject* parent)
     : QObject(parent)
@@ -59,10 +99,33 @@ bool RigctlPty::start()
         tcsetattr(m_slaveFd, TCSANOW, &tio);
     }
 
-    // Create symlink for convenience
-    ::unlink(m_symlinkPath.toLocal8Bit().constData());
-    if (::symlink(slaveName, m_symlinkPath.toLocal8Bit().constData()) != 0) {
-        qCWarning(lcCat) << "RigctlPty: symlink failed:" << m_symlinkPath;
+    // Create the convenience symlink for CAT-software auto-discovery
+    // (GHSA-qxhr-cwrc-pvrm — per-user dir + atomic replace).
+    //
+    // Ensure the parent dir exists. On Linux $XDG_RUNTIME_DIR is
+    // created mode 0700 by systemd; CacheLocation is mode 0755 by
+    // default. We tighten our subdir to mode 0700 so another local
+    // user can't readlink() the PTY path even if they share a primary
+    // group.
+    const QFileInfo info(m_symlinkPath);
+    const QString parentDir = info.absolutePath();
+    if (!QDir().mkpath(parentDir)) {
+        qCWarning(lcCat) << "RigctlPty: failed to mkpath" << parentDir;
+    }
+    ::chmod(parentDir.toLocal8Bit().constData(), 0700);
+
+    // Atomic replacement via symlink(tmp) + rename(tmp, final) avoids
+    // the TOCTOU window the old unlink-then-symlink had on non-sticky
+    // /tmp filesystems. rename() is atomic across the same filesystem
+    // and is the canonical way to swap a symlink in place.
+    const QByteArray finalPath = m_symlinkPath.toLocal8Bit();
+    const QByteArray tmpPath = finalPath + ".tmp";
+    ::unlink(tmpPath.constData());    // clean stale .tmp from prior run
+    if (::symlink(slaveName, tmpPath.constData()) != 0) {
+        qCWarning(lcCat) << "RigctlPty: symlink(tmp) failed:" << m_symlinkPath;
+    } else if (::rename(tmpPath.constData(), finalPath.constData()) != 0) {
+        ::unlink(tmpPath.constData());
+        qCWarning(lcCat) << "RigctlPty: rename(tmp,final) failed:" << m_symlinkPath;
     }
 
     // Set up protocol handler

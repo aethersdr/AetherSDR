@@ -4368,14 +4368,14 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── 8-channel CAT: rigctld + PTY (A-H, each bound to a slice) ────────────
     {
-        static const char kLetters[] = "ABCDEFGH";
         for (int i = 0; i < kCatChannels; ++i) {
             m_rigctlServers[i] = new RigctlServer(&m_radioModel, this);
             m_rigctlServers[i]->setSliceIndex(i);
             m_rigctlPtys[i] = new RigctlPty(&m_radioModel, this);
             m_rigctlPtys[i]->setSliceIndex(i);
-            m_rigctlPtys[i]->setSymlinkPath(
-                QString("/tmp/AetherSDR-CAT-%1").arg(kLetters[i]));
+            // Symlink path is computed per-user via
+            // RigctlPty::defaultSymlinkPath() (#2940 / GHSA-qxhr-cwrc-pvrm).
+            m_rigctlPtys[i]->setSymlinkPath(RigctlPty::defaultSymlinkPath(i));
         }
     }
     m_appletPanel->catControlApplet()->setRadioModel(&m_radioModel);
