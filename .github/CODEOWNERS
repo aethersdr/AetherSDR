@@ -22,23 +22,23 @@ docs/                        @ten9876 @jensenpat @AetherClaude
 
 # ── Tier 3: architecture & infrastructure — bot cannot approve ─────────────
 # Visual/UX direction (per CLAUDE.md "AI Agent Boundaries")
-src/gui/MainWindow.h         @ten9876 @jensenpat
-src/gui/MainWindow.cpp       @ten9876 @jensenpat
+src/gui/MainWindow.h         @ten9876 @jensenpat @NF0T @rfoust
+src/gui/MainWindow.cpp       @ten9876 @jensenpat @NF0T @rfoust
 
 # Architecture — central state, threading, protocol bedrock
-src/models/RadioModel.h      @ten9876 @jensenpat
-src/models/RadioModel.cpp    @ten9876 @jensenpat
-src/core/AudioEngine.h       @ten9876 @jensenpat
-src/core/AudioEngine.cpp     @ten9876 @jensenpat
-src/core/PanadapterStream.h  @ten9876 @jensenpat
-src/core/PanadapterStream.cpp @ten9876 @jensenpat
+src/models/RadioModel.h      @ten9876 @jensenpat @NF0T @rfoust
+src/models/RadioModel.cpp    @ten9876 @jensenpat @NF0T @rfoust
+src/core/AudioEngine.h       @ten9876 @jensenpat @NF0T @rfoust
+src/core/AudioEngine.cpp     @ten9876 @jensenpat @NF0T @rfoust
+src/core/PanadapterStream.h  @ten9876 @jensenpat @NF0T @rfoust
+src/core/PanadapterStream.cpp @ten9876 @jensenpat @NF0T @rfoust
 
 # Build configuration
-CMakeLists.txt               @ten9876 @jensenpat
+CMakeLists.txt               @ten9876 @jensenpat @NF0T @rfoust
 
 # Security tooling & agent configuration
-.github/codeql/              @ten9876 @jensenpat
-.claude/commands/            @ten9876 @jensenpat
+.github/codeql/              @ten9876 @jensenpat @NF0T @rfoust
+.claude/commands/            @ten9876 @jensenpat @NF0T @rfoust
 
 # ── Tier 4: project policy — maintainer-only ──────────────────────────────
 # Every file in the repo's root directory is project-policy / repo-canon
