@@ -796,12 +796,23 @@ set(BUILD_DOC OFF CACHE BOOL "" FORCE)
 set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
 set(FIND_FFTW OFF CACHE BOOL "" FORCE)
 set(ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
-# Save/restore BUILD_SHARED_LIBS so disabling shared libliquid here doesn't
-# affect any other third_party library that respects the standard variable.
-set(_aether_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
-set(BUILD_SHARED_LIBS OFF)
+# liquid-dsp's cmake_minimum_required(VERSION 3.10) puts its option() calls
+# under CMP0077 OLD behavior — option() with that policy does NOT honor a
+# same-name *normal* variable. We must use CACHE BOOL FORCE so the override
+# takes effect. Without this, BUILD_SHARED_LIBS stays at the option's ON
+# default, and on Windows both the SHARED target (liquid.dll's import lib
+# `liquid.lib`) and the STATIC target (renamed via OUTPUT_NAME `liquid` at
+# upstream CMakeLists.txt:444 → also `liquid.lib`) collide in ninja with
+# "multiple rules generate ... liquid.lib". Linux silently ships both via
+# different extensions (libliquid.so / libliquid.a) but the collision is
+# the same and we want exactly one library here.
+#
+# Cache pollution is undone with unset(CACHE) after add_subdirectory so
+# this doesn't leak into the rest of the project's BUILD_SHARED_LIBS
+# semantics.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/liquid-dsp EXCLUDE_FROM_ALL)
-set(BUILD_SHARED_LIBS ${_aether_saved_BUILD_SHARED_LIBS})
+unset(BUILD_SHARED_LIBS CACHE)
 # Suppress warnings from vendored code (same pattern as other third_party
 # integrations — we don't want -Werror surfaces on code we don't own).
 if(TARGET liquid-static)
