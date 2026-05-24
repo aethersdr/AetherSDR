@@ -101,6 +101,48 @@ int main(int argc, char** argv)
     const QString badOut = tm.resolve(badTpl);
     EXPECT_TRUE(!badOut.contains("{{"));
 
+    // ── Phase 2 gradient token support ──
+    // The waterfall.colormap token is the canonical 8-stop linear gradient
+    // covering the RF visualisation range from silent (black) to clipped
+    // (white).  Verifies the full gradient parsing + brush construction +
+    // cssFragment emission + resolve() routing path end-to-end.
+    {
+        // color() on a gradient token returns the first stop as a
+        // graceful fallback for callers that don't know about gradients.
+        EXPECT_EQ(tm.color("color.waterfall.colormap").name().toLower(),
+                  QString("#000000"));
+
+        // value() on a gradient token returns empty — the structured
+        // form has no meaningful raw scalar.
+        EXPECT_TRUE(tm.value("color.waterfall.colormap").isEmpty());
+
+        // brush() on a gradient token returns a non-Solid brush.
+        QBrush b = tm.brush("color.waterfall.colormap", QRect(0, 0, 100, 50));
+        EXPECT_TRUE(b.style() == Qt::LinearGradientPattern);
+        const QGradient* grad = b.gradient();
+        EXPECT_TRUE(grad != nullptr);
+        EXPECT_EQ(grad->stops().size(), 8);
+
+        // cssFragment() emits Qt's qlineargradient(...) syntax with the
+        // angle properly mapped to (x1,y1,x2,y2) endpoints + every stop
+        // present.
+        const QString css = tm.cssFragment("color.waterfall.colormap");
+        EXPECT_TRUE(css.startsWith("qlineargradient("));
+        EXPECT_TRUE(css.contains("stop:0.0000 #000000"));
+        EXPECT_TRUE(css.contains("stop:1.0000 #ffffff"));
+        EXPECT_TRUE(css.contains("stop:0.4500 #00c0c0"));  // mid colormap
+
+        // resolve() routes gradient tokens through cssFragment(), so an
+        // existing {{token}} stylesheet template substitutes the
+        // qlineargradient(...) string seamlessly.
+        const QString gradTpl =
+            "QWidget { background: {{color.waterfall.colormap}}; }";
+        const QString gradOut = tm.resolve(gradTpl);
+        EXPECT_TRUE(gradOut.contains("background: qlineargradient("));
+        EXPECT_TRUE(gradOut.contains("stop:1.0000 #ffffff"));
+        EXPECT_TRUE(!gradOut.contains("{{"));
+    }
+
     // ── themeChanged signal fires on setActiveTheme ──
     QSignalSpy spy(&tm, &ThemeManager::themeChanged);
     // Setting the same theme is a no-op (already active) — no signal expected

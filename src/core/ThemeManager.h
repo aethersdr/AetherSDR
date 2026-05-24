@@ -6,46 +6,96 @@
 #include <QHash>
 #include <QColor>
 #include <QFont>
+#include <QBrush>
+#include <QPointF>
+#include <QRect>
 #include <QVariant>
+#include <QVector>
 
 namespace AetherSDR {
 
-// Token-based theming subsystem (RFC #3076 Phase 1).
+// Token-based theming subsystem (RFC #3076 Phase 1+2).
 //
 // Every visual decision in the GUI — colours, fonts, key spacings —
 // resolves through a named token (e.g. "color.accent", "font.size.normal").
 // Themes are JSON files at ~/.config/AetherSDR/themes/<name>.json plus the
 // built-in default-dark / default-light shipped under :/themes/.
 //
-// Phase 1 ships:
-//   - the manager singleton + token API
-//   - JSON loader (scalar values only — gradient support lands in Phase 2)
-//   - stylesheet template resolver ({{token.name}} substitution)
-//   - active-theme persistence via AppSettings (ActiveTheme key)
-//   - default-dark.json baked into Qt resources, bit-identical to today's
-//     hardcoded palette so v0 ships with zero visual diff
+// Phase 1 shipped: manager singleton, scalar token API, JSON loader,
+// stylesheet template resolver, ActiveTheme persistence, default-dark.json
+// baked into resources.
 //
-// Phase 2 will: add the migration audit tool, convert shared stylesheets
-// to the template form, and start recording the widget→token reverse-map
-// for the eventual inspector-mode editor.
+// Phase 2 adds (this commit): first-class gradient tokens.  A color token
+// can be a scalar (#rrggbb) or a gradient object describing a linear or
+// radial gradient with N stops.  brush() returns a QBrush wrapping the
+// resolved Qt gradient; cssFragment() emits the matching qlineargradient
+// / qradialgradient stylesheet syntax; resolve() routes through
+// cssFragment() so existing {{token}} templating "just works" for
+// gradient-typed tokens.
+
+// Gradient definition stored inside m_tokens.  Lives in the public header
+// so the audit/editor tooling can inspect / mutate themes by value.
+struct ThemeGradientStop {
+    qreal  at    = 0.0;   // 0.0–1.0 position
+    QColor color;
+};
+
+struct ThemeGradient {
+    enum Type { Linear, Radial };
+
+    Type    type   = Linear;
+    // Linear: CSS-convention angle.  0deg = bottom→top, 90deg = left→right,
+    // 180deg = top→bottom, 270deg = right→left.  Mirrors the CSS3
+    // linear-gradient() syntax so designers can pull values straight from
+    // CSS or DevTools.
+    qreal   angle  = 180.0;
+    // Radial: normalised centre + radius in 0–1 units of the painted area.
+    QPointF center{0.5, 0.5};
+    qreal   radius = 0.5;
+    QVector<ThemeGradientStop> stops;
+};
+
 class ThemeManager : public QObject {
     Q_OBJECT
 public:
     static ThemeManager& instance();
 
-    // Token accessors.  Missing tokens log a warning and return the
-    // compiled-in default for the type (transparent black / default
-    // QFont / 0).  Phase 5's editor will surface missing-token warnings
-    // to the user; for now they're warning logs only.
+    // Scalar accessors.  Missing tokens log a warning and return the
+    // compiled-in default for the type.  For gradient-typed tokens,
+    // color() returns the gradient's first stop as a graceful fallback;
+    // callers that want the full gradient should use brush() or
+    // cssFragment().
     QColor   color(const QString& token) const;
     QFont    font(const QString& token) const;
     int      sizing(const QString& token) const;
-    QString  value(const QString& token) const;   // raw token resolution
+    QString  value(const QString& token) const;   // raw scalar value, "" for gradients
+
+    // Brush accessor — returns the right Qt brush type for the token.
+    //   - scalar token  → QBrush(QColor)
+    //   - linear        → QBrush(QLinearGradient) mapped onto `bounds`
+    //   - radial        → QBrush(QRadialGradient) mapped onto `bounds`
+    // `bounds` only matters for gradient tokens; pass the widget rect or
+    // the paint area when drawing into a specific QPainter.  An empty
+    // QRect produces a 0–1 normalised gradient suitable for stylesheets
+    // that reference the brush via QPalette or Qt's stylesheet system.
+    QBrush   brush(const QString& token, const QRect& bounds = QRect()) const;
+
+    // Stylesheet fragment.  Emits the right syntax for use inside a Qt
+    // stylesheet:
+    //   - scalar token  → "#rrggbb"
+    //   - linear        → "qlineargradient(x1:.., y1:.., x2:.., y2:..,
+    //                       stop:0 #aabbcc, stop:1 #ddeeff)"
+    //   - radial        → "qradialgradient(cx:.., cy:.., radius:.., fx:.., fy:..,
+    //                       stop:0 #aabbcc, stop:1 #ddeeff)"
+    // Numeric tokens emit their value as a plain string ("12" — adding
+    // "px" / unit suffix is the caller's responsibility).
+    QString  cssFragment(const QString& token) const;
 
     // Stylesheet template resolver.  Replaces every "{{token.name}}"
-    // placeholder with the corresponding token's stylesheet fragment
-    // (today: #rrggbb for colours, raw value for sizing).  Phase 2 will
-    // add gradient tokens emitting qlineargradient(...) syntax.
+    // placeholder by calling cssFragment(), so a stylesheet like
+    //   "QPushButton { background: {{color.button.idle}}; }"
+    // gets a literal "#aabbcc" or a "qlineargradient(...)" inlined
+    // depending on whether the token is scalar or gradient.
     QString  resolve(const QString& stylesheetTemplate) const;
 
     // Theme management.
@@ -53,7 +103,7 @@ public:
     QString     activeTheme() const;
     bool        setActiveTheme(const QString& name);
 
-    // Phase 1 doesn't implement save / import / export — those land with
+    // Phase 1 didn't implement save / import / export — those land with
     // the editor in Phase 5.  Reserved on the API surface so consumers
     // can be written against the final shape from day 1.
 
@@ -82,8 +132,12 @@ private:
 
     // Resource path or filesystem path indexed by theme display name.
     QHash<QString, QString> m_themePaths;
+    // QVariant holds either a QString (scalar) or a ThemeGradient
+    // (typed via Q_DECLARE_METATYPE below).
     QHash<QString, QVariant> m_tokens;
     QString m_activeTheme;
 };
 
 } // namespace AetherSDR
+
+Q_DECLARE_METATYPE(AetherSDR::ThemeGradient)
