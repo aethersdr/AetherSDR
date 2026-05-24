@@ -75,7 +75,15 @@ private:
     // (host, sha256 fingerprint, pinned date) with per-row Forget and a
     // Forget All button. Backed by WanCertCache in WanConnection.cpp.
     QWidget* buildSmartLinkTab();
+
+public:
+    // Public so MainWindow can refresh the table from outside this
+    // dialog when an accept-after-mismatch flow rewrites the pin
+    // cache. No-op if the SmartLink tab hasn't been built yet
+    // (m_pinnedCertsTable == nullptr).
     void     refreshPinnedCertsTable();
+
+private:
 #ifdef HAVE_SERIALPORT
     QWidget* buildSerialTab();
 #endif

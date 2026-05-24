@@ -9530,6 +9530,11 @@ void MainWindow::onWanCertFingerprintMismatch(const QString& host,
         statusBar()->showMessage(
             tr("SmartLink certificate updated for %1").arg(host), 4000);
         m_radioModel.acceptPresentedWanCert();
+        // If the Radio Setup dialog is open with the SmartLink tab
+        // showing, the just-updated pin needs to surface in the table
+        // without requiring the operator to close+re-open the tab.
+        if (m_radioSetupDialog)
+            m_radioSetupDialog->refreshPinnedCertsTable();
     } else {
         statusBar()->showMessage(
             tr("SmartLink certificate rejected for %1").arg(host), 5000);

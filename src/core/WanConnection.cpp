@@ -112,7 +112,7 @@ void forgetPinnedCert(const QString& host)
 
 void forgetAllPinnedCerts()
 {
-    AppSettings::instance().setValue(kCertCacheKey, QByteArray());
+    AppSettings::instance().remove(kCertCacheKey);
 }
 } // namespace WanCertCache
 
@@ -362,6 +362,21 @@ void WanConnection::onHeartbeat()
 
 void WanConnection::processLine(const QString& line)
 {
+    // GHSA-wfx7-w6p8-4jr2 phase 2: while the operator is being prompted
+    // about a cert mismatch, the TLS channel stays open but we must not
+    // act on anything that arrives. A MITM on the path (the exact threat
+    // we're defending against) could otherwise fabricate V<version>\n
+    // and H<handle>\n bytes before the operator answers, causing this
+    // client to fire connected() / start heartbeats on attacker-controlled
+    // data. The radio never sees wan validate, but downstream code reacts
+    // to connected() — so we extend the suppression symmetrically:
+    // nothing gets parsed until the operator's decision lands.
+    if (m_awaitingCertDecision) {
+        qCDebug(lcSmartLink)
+            << "WAN RX (suppressed during cert-pin decision):" << line;
+        return;
+    }
+
     // Suppress noisy messages
     const bool isGps = line.contains("|gps ");
     bool isPingReply = false;
