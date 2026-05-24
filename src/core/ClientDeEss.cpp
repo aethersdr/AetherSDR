@@ -131,11 +131,22 @@ void ClientDeEss::setReleaseMs(float ms) noexcept
 float ClientDeEss::releaseMs() const noexcept
 { return m_atomics.releaseMs.load(std::memory_order_relaxed); }
 
+void ClientDeEss::setSlopeStages(int stages) noexcept
+{
+    m_atomics.slopeStages.store(std::clamp(stages, 1, kMaxSlopeStages),
+                                std::memory_order_relaxed);
+    m_atomics.version.fetch_add(1, std::memory_order_release);
+}
+int ClientDeEss::slopeStages() const noexcept
+{ return m_atomics.slopeStages.load(std::memory_order_relaxed); }
+
 void ClientDeEss::reset() noexcept
 {
     m_envLin = 0.0f;
-    m_bpL = {};
-    m_bpR = {};
+    for (int i = 0; i < kMaxSlopeStages; ++i) {
+        m_bpL[i] = {};
+        m_bpR[i] = {};
+    }
 }
 
 float ClientDeEss::inputPeakDb() const noexcept
@@ -164,6 +175,9 @@ void ClientDeEss::recacheIfDirty() noexcept
         m_atomics.attackMs.load(std::memory_order_relaxed), m_sampleRate);
     m_cached.releaseCoeff = coeffFromMs(
         m_atomics.releaseMs.load(std::memory_order_relaxed), m_sampleRate);
+    m_cached.slopeStages = std::clamp(
+        m_atomics.slopeStages.load(std::memory_order_relaxed),
+        1, kMaxSlopeStages);
 }
 
 float ClientDeEss::staticCurveGainDb(float envDb) const noexcept
@@ -203,11 +217,22 @@ void ClientDeEss::process(float* interleaved, int frames, int channels) noexcept
         const float inAbs = std::max(std::fabs(l), std::fabs(r));
         if (inAbs > inPeakLin) inPeakLin = inAbs;
 
-        // Sidechain: run the full signal through the bandpass filter
-        // per channel.  The filters stay live even when disabled so
-        // their state is warm if the user toggles enable.
-        const float scL = processBiquad(l, bp, m_bpL);
-        const float scR = (channels == 2) ? processBiquad(r, bp, m_bpR) : scL;
+        // Sidechain: cascade N bandpass biquads per channel where N
+        // is the user-selectable slope-stage count (1..kMaxSlopeStages).
+        // Each stage adds 12 dB/oct of rolloff, so the de-esser
+        // notch can be dialled from broad (1 stage, 12 dB/oct) to
+        // surgical (4 stages, 48 dB/oct). Filters stay live even
+        // when disabled so their state is warm if the user toggles
+        // enable.
+        float scL = l;
+        float scR = (channels == 2) ? r : l;
+        const int stages = m_cached.slopeStages;
+        for (int s = 0; s < stages; ++s) {
+            scL = processBiquad(scL, bp, m_bpL[s]);
+            if (channels == 2)
+                scR = processBiquad(scR, bp, m_bpR[s]);
+        }
+        if (channels != 2) scR = scL;
         const float scAbs = std::max(std::fabs(scL), std::fabs(scR));
         if (scAbs > scPeakLin) scPeakLin = scAbs;
 
@@ -223,8 +248,21 @@ void ClientDeEss::process(float* interleaved, int frames, int channels) noexcept
             gainLin = dbToLin(gainDb);
         }
 
-        l *= gainLin;
-        r *= gainLin;
+        // Split-band de-essing: only attenuate the sibilant band
+        // (the bandpass output), leave lows + mids untouched. The
+        // bandpass is a constant-0-dB-peak filter, so subtracting
+        // bp*(1-gain) from the full signal reduces only the 4-8 kHz
+        // slice by the gain amount. The original broadband-attenuate
+        // implementation pulled the whole signal down on sibilance,
+        // crashing RMS during S-heavy phrases.
+        //   output = full + bp * (gain - 1)
+        // gain = 1  → output = full       (no change, perfect pass-through)
+        // gain = 0.5→ output = full - 0.5*bp (HF band reduced by 6 dB)
+        if (enabled && gainLin < 0.9999f) {
+            const float scGainDelta = gainLin - 1.0f;
+            l += scL * scGainDelta;
+            r += scR * scGainDelta;
+        }
         interleaved[f * channels] = l;
         if (channels == 2) interleaved[f * channels + 1] = r;
     }

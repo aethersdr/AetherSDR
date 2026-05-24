@@ -78,6 +78,8 @@ private:
     void applyMakeup(float db);
     void applyLimiterEnabled(bool on);
     void applyLimiterCeiling(float db);
+    void applyDrive(float db);
+    void applyPhase(float stages);
 
     AudioEngine*             m_audio{nullptr};
     Side                     m_side{Side::Tx};
@@ -91,6 +93,8 @@ private:
     ClientCompKnob*          m_knee{nullptr};
     ClientCompKnob*          m_makeup{nullptr};
     ClientCompKnob*          m_ceiling{nullptr};
+    ClientCompKnob*          m_drive{nullptr};
+    ClientCompKnob*          m_phase{nullptr};
     ClientCompThresholdFader* m_threshFader{nullptr};
     ClientCompMeter*         m_grMeter{nullptr};
     ClientCompMeter*         m_outputMeter{nullptr};

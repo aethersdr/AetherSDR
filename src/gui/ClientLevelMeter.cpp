@@ -1,5 +1,7 @@
 #include "ClientLevelMeter.h"
 
+#include "MeterSmoother.h"
+
 #include <QFontMetrics>
 #include <QLabel>
 #include <QLinearGradient>
@@ -137,17 +139,24 @@ void ClientLevelMeter::paintEvent(QPaintEvent*)
         p.drawLine(textRight, y, barLeft - 1, y);
     }
 
-    // Numeric readout below the strip.
+    // Numeric readout below the strip.  Re-formatted at the project-
+    // canonical 10 Hz cadence so digits stay readable while the bar
+    // animates every paint.
+    if (!m_readoutClock.isValid()
+        || m_readoutClock.elapsed() >= kMeterReadoutUpdateMs
+        || m_cachedReadout.isEmpty()) {
+        m_cachedReadout = (m_smoothedPeak <= kMeterMinDb + 0.5f)
+            ? QStringLiteral("-inf")
+            : QString::asprintf("%+.1f dB", m_smoothedPeak);
+        m_readoutClock.restart();
+    }
     QFont vf = p.font();
     vf.setPixelSize(10);
     vf.setBold(true);
     p.setFont(vf);
     p.setPen(QColor("#d7e7f2"));
-    const QString readout = (m_smoothedPeak <= kMeterMinDb + 0.5f)
-        ? QStringLiteral("-inf")
-        : QString::asprintf("%+.1f dB", m_smoothedPeak);
     p.drawText(QRect(0, height() - botLabelH, width(), botLabelH),
-               Qt::AlignCenter, readout);
+               Qt::AlignCenter, m_cachedReadout);
 }
 
 } // namespace AetherSDR

@@ -1779,7 +1779,12 @@ void AudioEngine::applyClientEqTxFloat32(QByteArray& float32)
 
 void AudioEngine::applyClientCompTxInt16(QByteArray& int16stereo)
 {
-    if (!m_clientCompTx || !m_clientCompTx->isEnabled()) return;
+    if (!m_clientCompTx) return;
+    const bool compOn   = m_clientCompTx->isEnabled();
+    const bool driveOn  = m_clientCompTx->driveDb() > 0.0f;
+    const bool phaseOn  = m_clientCompTx->phaseRotatorStages() > 0;
+    const bool limOn    = m_clientCompTx->limiterEnabled();
+    if (!compOn && !driveOn && !phaseOn && !limOn) return;
     if (int16stereo.isEmpty()) return;
 
     const int samples = int16stereo.size() / static_cast<int>(sizeof(int16_t));
@@ -1802,7 +1807,16 @@ void AudioEngine::applyClientCompTxInt16(QByteArray& int16stereo)
 
 void AudioEngine::applyClientCompTxFloat32(QByteArray& float32)
 {
-    if (!m_clientCompTx || !m_clientCompTx->isEnabled()) return;
+    if (!m_clientCompTx) return;
+    // Drive and Phase (#2887) and the brickwall limiter inside the comp
+    // are useful even when the comp curve itself is bypassed, so the
+    // dispatch only short-circuits when none of the four sub-stages
+    // need to run.
+    const bool compOn   = m_clientCompTx->isEnabled();
+    const bool driveOn  = m_clientCompTx->driveDb() > 0.0f;
+    const bool phaseOn  = m_clientCompTx->phaseRotatorStages() > 0;
+    const bool limOn    = m_clientCompTx->limiterEnabled();
+    if (!compOn && !driveOn && !phaseOn && !limOn) return;
     if (float32.isEmpty()) return;
     const int samples  = float32.size() / static_cast<int>(sizeof(float));
     const int channels = (samples % 2 == 0) ? 2 : 1;
@@ -2608,6 +2622,10 @@ void AudioEngine::loadClientCompSettings()
         s.value("ClientCompTxLimEnabled", "True").toString() == "True");
     m_clientCompTx->setLimiterCeilingDb(
         s.value("ClientCompTxLimCeilingDb", "-1.0").toFloat());
+    m_clientCompTx->setDriveDb(
+        s.value("ClientCompTxDriveDb", "0.0").toFloat());
+    m_clientCompTx->setPhaseRotatorStages(
+        s.value("ClientCompTxPhaseRotatorStages", "0").toInt());
 
     // Load the generalised chain — stored as a comma-separated list of
     // stage names (e.g. "Gate,Eq,DeEss,Comp,Tube,Enh").  Migrate from
@@ -2661,6 +2679,10 @@ void AudioEngine::saveClientCompSettings() const
     s.setValue("ClientCompTxLimEnabled",  toBool(m_clientCompTx->limiterEnabled()));
     s.setValue("ClientCompTxLimCeilingDb",
                QString::number(m_clientCompTx->limiterCeilingDb()));
+    s.setValue("ClientCompTxDriveDb",
+               QString::number(m_clientCompTx->driveDb()));
+    s.setValue("ClientCompTxPhaseRotatorStages",
+               QString::number(m_clientCompTx->phaseRotatorStages()));
     // Chain stages persist as a comma-separated name list — already
     // written live by setTxChainStages() but re-emitted here so a
     // saveClientCompSettings() call dumps everything in sync.
@@ -2841,6 +2863,8 @@ void AudioEngine::loadClientDeEssSettings()
         s.value("ClientDeEssTxAttackMs", "1.0").toFloat());
     m_clientDeEssTx->setReleaseMs(
         s.value("ClientDeEssTxReleaseMs", "100.0").toFloat());
+    m_clientDeEssTx->setSlopeStages(
+        s.value("ClientDeEssTxSlopeStages", "2").toInt());
 }
 
 void AudioEngine::saveClientDeEssSettings() const
@@ -2862,6 +2886,8 @@ void AudioEngine::saveClientDeEssSettings() const
         QString::number(m_clientDeEssTx->attackMs()));
     s.setValue("ClientDeEssTxReleaseMs",
         QString::number(m_clientDeEssTx->releaseMs()));
+    s.setValue("ClientDeEssTxSlopeStages",
+        QString::number(m_clientDeEssTx->slopeStages()));
 }
 
 void AudioEngine::loadClientDeEssRxSettings()
@@ -2882,6 +2908,8 @@ void AudioEngine::loadClientDeEssRxSettings()
         s.value("ClientDeEssRxAttackMs", "1.0").toFloat());
     m_clientDeEssRx->setReleaseMs(
         s.value("ClientDeEssRxReleaseMs", "100.0").toFloat());
+    m_clientDeEssRx->setSlopeStages(
+        s.value("ClientDeEssRxSlopeStages", "2").toInt());
 }
 
 void AudioEngine::saveClientDeEssRxSettings() const
@@ -2903,6 +2931,8 @@ void AudioEngine::saveClientDeEssRxSettings() const
         QString::number(m_clientDeEssRx->attackMs()));
     s.setValue("ClientDeEssRxReleaseMs",
         QString::number(m_clientDeEssRx->releaseMs()));
+    s.setValue("ClientDeEssRxSlopeStages",
+        QString::number(m_clientDeEssRx->slopeStages()));
 }
 
 void AudioEngine::loadClientTubeSettings()

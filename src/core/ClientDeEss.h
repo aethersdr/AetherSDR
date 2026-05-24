@@ -54,6 +54,16 @@ public:
     void  setReleaseMs(float ms) noexcept;           // 10..500 ms
     float releaseMs() const noexcept;
 
+    // Sidechain / split-band filter slope (#2887). Each cascade stage
+    // adds 12 dB/oct of rolloff, so the user-facing values are:
+    //   1 → 12 dB/oct,  2 → 24 dB/oct,
+    //   3 → 36 dB/oct,  4 → 48 dB/oct.
+    // Higher slope = narrower effective notch around the centre
+    // frequency = de-esser hits sibilants without eating mids.
+    static constexpr int kMaxSlopeStages = 4;
+    void  setSlopeStages(int stages) noexcept;       // 1..4
+    int   slopeStages() const noexcept;
+
     // Audio thread — process in place.  channels must be 1 or 2.
     void process(float* interleaved, int frames, int channels) noexcept;
 
@@ -86,6 +96,7 @@ private:
         std::atomic<float>    amountDb{-6.0f};
         std::atomic<float>    attackMs{1.0f};
         std::atomic<float>    releaseMs{100.0f};
+        std::atomic<int>      slopeStages{2};   // default 24 dB/oct
         std::atomic<uint64_t> version{0};
     };
 
@@ -95,6 +106,7 @@ private:
         float amountDb{-6.0f};       // negative — max attenuation
         float attackCoeff{0.0f};
         float releaseCoeff{0.0f};
+        int   slopeStages{2};
     };
 
     struct Meters {
@@ -113,8 +125,13 @@ private:
 
     // Audio-thread state — accessed only from process().
     uint64_t m_lastVersion{0};
-    BiquadState m_bpL{};
-    BiquadState m_bpR{};
+    // Up to kMaxSlopeStages cascaded bandpass biquads per channel.
+    // Each stage adds 12 dB/oct of rolloff outside the band, so the
+    // user can dial the de-esser between a wide (12 dB/oct) and a
+    // surgical (48 dB/oct) sibilant cut without touching Q. Peak
+    // remains 0 dB at centre frequency at any stage count.
+    BiquadState m_bpL[kMaxSlopeStages]{};
+    BiquadState m_bpR[kMaxSlopeStages]{};
     float m_envLin{0.0f};
 };
 

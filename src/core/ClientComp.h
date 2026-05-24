@@ -2,8 +2,11 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 
 namespace AetherSDR {
+
+class ClientPhaseRotator;
 
 // Client-side TX dynamics processor — the foundation of the Pro-XL-style
 // compression chain (#1661).  Phase 1 scope: core feed-forward compressor
@@ -22,7 +25,7 @@ namespace AetherSDR {
 class ClientComp {
 public:
     ClientComp();
-    ~ClientComp() = default;
+    ~ClientComp();
 
     ClientComp(const ClientComp&)            = delete;
     ClientComp& operator=(const ClientComp&) = delete;
@@ -54,6 +57,20 @@ public:
     void  setLimiterCeilingDb(float db) noexcept;
     float limiterCeilingDb() const noexcept;
 
+    // Pre-comp Drive (#2887). Linear gain in dB applied BEFORE the
+    // compressor sees the signal. Pushes more material across the
+    // threshold so the comp engages harder, raising RMS while the
+    // existing limiter holds peaks. 0 dB = bypass.
+    void  setDriveDb(float db) noexcept;          // 0 .. 18 dB
+    float driveDb() const noexcept;
+
+    // Pre-comp phase rotator (#2887). Cascade of N second-order all-pass
+    // filters at staggered audio centres — symmetrizes asymmetric voice
+    // peaks so the harder compression and downstream limiting don't
+    // sound trashy. 0 = off (bypass), 4 = broadcast default, 6 = max.
+    void  setPhaseRotatorStages(int stages) noexcept;
+    int   phaseRotatorStages() const noexcept;
+
     // Audio thread — process in place.  channels must be 1 or 2.
     void process(float* interleaved, int frames, int channels) noexcept;
 
@@ -82,6 +99,8 @@ private:
         std::atomic<float>    makeupDb{0.0f};
         std::atomic<bool>     limEnabled{true};
         std::atomic<float>    limCeilingDb{-1.0f};
+        std::atomic<float>    driveDb{0.0f};
+        std::atomic<int>      phaseRotatorStages{0};
         std::atomic<uint64_t> version{0};
     };
 
@@ -96,6 +115,8 @@ private:
         float limCeilingLin{0.891f};       // 10^(-1/20)
         float limAttackCoeff{0.0f};
         float limReleaseCoeff{0.0f};
+        float driveLin{1.0f};              // 10^(driveDb / 20)
+        int   phaseRotatorStages{0};
     };
 
     // Meter snapshots — atomic stores on the audio thread after each
@@ -124,6 +145,11 @@ private:
     // the peak (average of log|sin|), which is wrong for a peak compressor.
     float    m_envLin{0.0f};
     float    m_limEnvLin{0.0f};       // limiter envelope (linear)
+
+    // Pre-compressor phase rotator (#2887). Owned here so the comp's
+    // Drive + Phase + threshold + ratio + ceiling all act as a single
+    // PAPR-reducing block on the chain's COMP card.
+    std::unique_ptr<ClientPhaseRotator> m_phaseRotator;
 };
 
 } // namespace AetherSDR

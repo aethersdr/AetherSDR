@@ -62,6 +62,22 @@ void ClientCompMeter::setLabel(const QString& label)
     update();
 }
 
+void ClientCompMeter::setTickSide(TickSide s)
+{
+    if (s == m_tickSide) return;
+    m_tickSide = s;
+    updateGeometry();
+    update();
+}
+
+void ClientCompMeter::setShowValueLabel(bool on)
+{
+    if (on == m_showValueLabel) return;
+    m_showValueLabel = on;
+    updateGeometry();
+    update();
+}
+
 void ClientCompMeter::setLimiterCeilingDb(float db)
 {
     if (std::fabs(db - m_ceilingDb) < 0.01f) return;
@@ -127,23 +143,46 @@ void ClientCompMeter::setValueDb(float db)
 void ClientCompMeter::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setRenderHint(QPainter::Antialiasing, false);
+    p.setRenderHint(QPainter::TextAntialiasing, true);
 
     const int w = width();
     const int h = height();
     const int labelH = m_label.isEmpty() ? 0 : 12;
-    const QRectF bar(2.0, labelH + 2.0, w - 4.0, h - labelH - 4.0);
+    // Carve out room for an optional bottom value readout (mirrors the
+    // THRESH fader's "-16.3 dB" footer).
+    const int valueH = m_showValueLabel ? 14 : 0;
+
+    // Tick column reservation (mirrors the THRESH fader). The bar
+    // shifts toward the opposite side to leave room for tick labels
+    // + the short tick-mark lines.
+    constexpr int kTickColW = 22;
+    constexpr int kTickGap  = 2;
+    const int leftPad  = (m_tickSide == TickSide::Left)  ? kTickColW + kTickGap : 2;
+    const int rightPad = (m_tickSide == TickSide::Right) ? kTickColW + kTickGap : 2;
+    const QRectF bar(leftPad,
+                     labelH + 2.0,
+                     std::max(1, w - leftPad - rightPad),
+                     std::max(1, h - labelH - 4 - valueH));
 
     if (!m_label.isEmpty()) {
         QFont f = p.font();
         f.setPixelSize(9);
         f.setBold(true);
         p.setFont(f);
-        p.setPen(kLabelColor);
+        // Amber matches the THRESH fader's label colour so the paired
+        // meters read as one consistent strip header.
+        p.setPen(QColor("#e8a540"));
         p.drawText(QRectF(0, 0, w, labelH), Qt::AlignCenter, m_label);
     }
 
     p.fillRect(bar, kBarBg);
+    // Border matches the THRESH fader so the paired meters read as
+    // one visual idiom across the comp editor.
+    p.setPen(QPen(QColor("#243a4e"), 1));
+    p.setBrush(Qt::NoBrush);
+    p.drawRect(QRectF(bar.left(), bar.top(),
+                      bar.width() - 1, bar.height() - 1));
 
     if (m_mode == Mode::Level) {
         const float fillH = m_smooth.value() * bar.height();
@@ -213,6 +252,94 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
             p.setPen(QPen(kPeakLine, 1.0));
             p.drawLine(QPointF(bar.left(), y), QPointF(bar.right(), y));
         }
+    }
+
+    // Tick column (#2887, matching THRESH fader). Labels + short
+    // horizontal stub lines into the bar so the eye links the number
+    // to the position on the scale.
+    if (m_tickSide != TickSide::None) {
+        QFont f = p.font();
+        f.setPixelSize(9);
+        // The header label above set bold=true on the painter font;
+        // explicitly clear it here so the tick labels render in the
+        // same regular weight as the THRESH fader's tick column.
+        f.setBold(false);
+        p.setFont(f);
+        const QFontMetrics fm(f);
+
+        struct Tick { float db; const char* label; };
+        // Level: 0 / -12 / -24 / -36 / -48 (matches THRESH fader).
+        // GR: 0 / -5 / -10 / -15 / -20 (matches GR display range).
+        static constexpr Tick kLevelTicks[] = {
+            {   0.0f,  "0" }, { -12.0f, "-12" }, { -24.0f, "-24" },
+            { -36.0f, "-36" }, { -48.0f, "-48" }
+        };
+        static constexpr Tick kGrTicks[] = {
+            {   0.0f,  "0"  }, {  -5.0f,  "-5"  }, { -10.0f, "-10" },
+            { -15.0f, "-15" }, { -20.0f, "-20" }
+        };
+        const Tick* ticks = (m_mode == Mode::Level) ? kLevelTicks : kGrTicks;
+        const int   nTicks = 5;
+        const float minDb = (m_mode == Mode::Level) ? kLevelMinDb : -kGrMaxMag;
+        const float maxDb = (m_mode == Mode::Level) ? kLevelMaxDb :        0.0f;
+
+        const int textRight = (m_tickSide == TickSide::Left)
+            ? leftPad - kTickGap - 1
+            : w - 2;
+        const bool tickLeft = (m_tickSide == TickSide::Left);
+
+        for (int i = 0; i < nTicks; ++i) {
+            const float norm = (ticks[i].db - minDb) / (maxDb - minDb);
+            const int y = static_cast<int>(bar.bottom() - norm * bar.height());
+
+            p.setPen(QColor("#7f93a5"));
+            const QString s = QString::fromLatin1(ticks[i].label);
+            const int tw = fm.horizontalAdvance(s);
+            const int ty = std::clamp(y + fm.ascent() / 2 - 1,
+                                      static_cast<int>(bar.top()) + fm.ascent() - 1,
+                                      static_cast<int>(bar.bottom()) - 1);
+            if (tickLeft) {
+                p.drawText(textRight - tw, ty, s);
+                p.setPen(QColor("#405060"));
+                p.drawLine(textRight, y,
+                           static_cast<int>(bar.left()) - 1, y);
+            } else {
+                // Right side — labels grow from the bar outward.
+                const int textLeft = static_cast<int>(bar.right()) + kTickGap + 1;
+                p.drawText(textLeft, ty, s);
+                p.setPen(QColor("#405060"));
+                p.drawLine(static_cast<int>(bar.right()), y,
+                           textLeft - 1, y);
+            }
+        }
+    }
+
+    // Numeric value footer (#2887, matching THRESH fader's "-16.3 dB"
+    // styling: 10 px bold, light text). Right-anchored with a fixed
+    // pad so the digits don't wander left/right as the value's digit
+    // count changes — the " dB" suffix stays pinned at the right edge.
+    // The text itself is re-formatted only every ~200 ms so the
+    // numbers are readable while the bar above continues to animate
+    // at the full 125 Hz smoother rate.
+    if (m_showValueLabel) {
+        if (!m_valueLabelClock.isValid()
+            || m_valueLabelClock.elapsed() >= kMeterReadoutUpdateMs
+            || m_cachedValueText.isEmpty()) {
+            m_cachedValueText = (m_currentDb <= -100.0f)
+                ? QStringLiteral("-∞ dB")
+                : QString::asprintf("%+.1f dB", m_currentDb);
+            m_valueLabelClock.restart();
+        }
+        QFont f = p.font();
+        f.setPixelSize(10);
+        f.setBold(true);
+        p.setFont(f);
+        p.setPen(QColor("#e8e8e8"));
+        constexpr int kFooterRightPad = 3;
+        const QRectF footer(0, h - valueH,
+                            w - kFooterRightPad, valueH);
+        p.drawText(footer, Qt::AlignRight | Qt::AlignVCenter,
+                   m_cachedValueText);
     }
 }
 

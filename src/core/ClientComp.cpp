@@ -1,5 +1,7 @@
 #include "ClientComp.h"
 
+#include "ClientPhaseRotator.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -28,13 +30,26 @@ float coeffFromMs(float ms, double sampleRate) noexcept
 
 } // namespace
 
-ClientComp::ClientComp() = default;
+ClientComp::ClientComp()
+    : m_phaseRotator(std::make_unique<ClientPhaseRotator>())
+{
+    // Phase rotator stays internally "always enabled" — its stages
+    // count gates whether it does anything (0 = pass-through). Drive
+    // is owned by ClientComp; the rotator runs unconditionally and is
+    // followed by the drive gain before the comp curve sees the signal.
+    m_phaseRotator->setEnabled(true);
+    m_phaseRotator->setStages(0);
+}
+
+ClientComp::~ClientComp() = default;
 
 void ClientComp::prepare(double sampleRate)
 {
     m_sampleRate = sampleRate;
     m_envLin     = 0.0f;
     m_limEnvLin  = 0.0f;
+
+    if (m_phaseRotator) m_phaseRotator->prepare(sampleRate);
 
     // Bump version so recacheIfDirty rebuilds coefficients on first block.
     m_atomics.version.fetch_add(1, std::memory_order_release);
@@ -122,6 +137,24 @@ void ClientComp::setLimiterCeilingDb(float db) noexcept
 float ClientComp::limiterCeilingDb() const noexcept
 { return m_atomics.limCeilingDb.load(std::memory_order_relaxed); }
 
+void ClientComp::setDriveDb(float db) noexcept
+{
+    m_atomics.driveDb.store(std::clamp(db, 0.0f, 18.0f),
+                            std::memory_order_relaxed);
+    m_atomics.version.fetch_add(1, std::memory_order_release);
+}
+float ClientComp::driveDb() const noexcept
+{ return m_atomics.driveDb.load(std::memory_order_relaxed); }
+
+void ClientComp::setPhaseRotatorStages(int stages) noexcept
+{
+    m_atomics.phaseRotatorStages.store(std::clamp(stages, 0, 6),
+                                       std::memory_order_relaxed);
+    m_atomics.version.fetch_add(1, std::memory_order_release);
+}
+int ClientComp::phaseRotatorStages() const noexcept
+{ return m_atomics.phaseRotatorStages.load(std::memory_order_relaxed); }
+
 void ClientComp::reset() noexcept
 {
     m_envLin = 0.0f;
@@ -162,6 +195,13 @@ void ClientComp::recacheIfDirty() noexcept
     // Limiter ballistics: very fast attack, moderately fast release.
     m_cached.limAttackCoeff  = coeffFromMs(0.1f, m_sampleRate);
     m_cached.limReleaseCoeff = coeffFromMs(50.0f, m_sampleRate);
+
+    m_cached.driveLin = dbToLin(
+        m_atomics.driveDb.load(std::memory_order_relaxed));
+    m_cached.phaseRotatorStages =
+        m_atomics.phaseRotatorStages.load(std::memory_order_relaxed);
+    if (m_phaseRotator)
+        m_phaseRotator->setStages(m_cached.phaseRotatorStages);
 }
 
 float ClientComp::staticCurveGainDb(float envDb) const noexcept
@@ -198,6 +238,24 @@ void ClientComp::process(float* interleaved, int frames, int channels) noexcept
     recacheIfDirty();
     const bool enabled = m_atomics.enabled.load(std::memory_order_acquire);
 
+    // Pre-comp PAPR shaping (#2887). The rotator runs first to
+    // symmetrize asymmetric voice peaks; the drive gain then pushes
+    // more material across the threshold so the existing comp curve
+    // engages harder and the brickwall limiter below contains the
+    // resulting hot peaks. These run independent of the comp's enabled
+    // flag — they're a useful pair even when the comp curve itself is
+    // bypassed (Drive + Limiter alone is the simplest broadcast PAPR
+    // setup). Their work happens *before* the input peak meter so the
+    // GR readout reflects the comp's workload at the boosted level.
+    if (m_cached.phaseRotatorStages > 0 && m_phaseRotator) {
+        m_phaseRotator->process(interleaved, frames, channels);
+    }
+    if (m_cached.driveLin != 1.0f) {
+        const float gain = m_cached.driveLin;
+        const int n = frames * channels;
+        for (int i = 0; i < n; ++i) interleaved[i] *= gain;
+    }
+
     float inPeakLin  = 0.0f;
     float outPeakLin = 0.0f;
     float worstGrDb  = 0.0f;  // most negative (largest reduction)
@@ -230,7 +288,14 @@ void ClientComp::process(float* interleaved, int frames, int channels) noexcept
             const float envDb = linToDb(std::max(m_envLin, 1e-6f));
             const float gainDb = staticCurveGainDb(envDb);
             if (gainDb < worstGrDb) worstGrDb = gainDb;
-            gainLin = dbToLin(gainDb) * makeup;
+            // Auto-makeup tracks Drive (#2887). Without this, dialing
+            // Drive up makes the comp do more GR than the fixed Makeup
+            // can compensate, and net RMS DROPS. Linking the post-curve
+            // gain to Drive matches the broadcast-Optimod model: Drive
+            // pushes more material into the curve AND adds equal gain
+            // back at the output, so the user's fixed Makeup setting
+            // stays a clean "post-everything trim" knob.
+            gainLin = dbToLin(gainDb) * makeup * m_cached.driveLin;
         }
         l *= gainLin;
         r *= gainLin;

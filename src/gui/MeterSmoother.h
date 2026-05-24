@@ -110,4 +110,13 @@ private:
 // smoothly, cheap enough to run on every active meter simultaneously.
 constexpr int kMeterSmootherIntervalMs = 8;
 
+// Recommended cadence for *numeric* meter readouts (dB labels next to
+// or beneath a bar meter).  100 ms = 10 Hz is the eye-readable sweet
+// spot — fast enough to feel live as a knob is turned, slow enough
+// that digits actually settle.  Use this for QLabel::setText (or the
+// cached drawText pattern in ClientCompMeter) so every numeric meter
+// readout across the app updates in lockstep.  The bar fill itself
+// should continue to animate at kMeterSmootherIntervalMs.
+constexpr int kMeterReadoutUpdateMs = 100;
+
 } // namespace AetherSDR
