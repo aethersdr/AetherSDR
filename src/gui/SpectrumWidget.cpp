@@ -4493,48 +4493,24 @@ QRgb SpectrumWidget::intensityToRgb(float intensity) const
 void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
                                       double tileLowMhz, double tileHighMhz)
 {
-    // (time scale uses m_wfLineDuration from radio status — no measurement needed)
+    // One row per FFT frame, matching the native-tile path's behaviour
+    // (updateWaterfallRow pushes one row per incoming tile too). The earlier
+    // debt-based gate paced this path to m_wfLineDuration on the premise that
+    // native tiles arrive at line_duration cadence — they don't: native tiles
+    // arrive at the FFT rate (~30 Hz), so gating the FFT-derived path made TX
+    // scroll ~3× slower than RX after #3019 suppressed the simultaneous native-
+    // tile fill. Removing the gate restores rate parity between RX and TX.
+    //
+    // Time-axis labelling uses m_wfMsPerRow, which is measured from native
+    // tile timecodes (resetWfTimeScale -> measured wallDelta/tcDelta), so the
+    // time scale stays correct regardless of which path produces the row.
 
     if (m_waterfall.isNull() || destWidth <= 0) return;
 
     const int h = m_waterfall.height();
     if (h <= 1) return;
 
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    const int cadenceMs = std::max(1, m_wfLineDuration);
-    if (m_lastFftFrameMs == 0) {
-        m_fftRowDebtMs = std::max(m_fftRowDebtMs, static_cast<double>(cadenceMs));
-    } else {
-        const qint64 elapsedMs = now - m_lastFftFrameMs;
-        if (elapsedMs > 0) {
-            const double cappedElapsed =
-                static_cast<double>(std::min<qint64>(elapsedMs, cadenceMs * 2));
-            m_fftRowDebtMs = std::min(m_fftRowDebtMs + cappedElapsed,
-                                      static_cast<double>(cadenceMs * 2));
-        }
-    }
-    m_lastFftFrameMs = now;
-
     if (bins.isEmpty()) return;
-    if (m_fftAccumPower.size() != bins.size()) {
-        m_fftAccumPower.fill(0.0f, bins.size());
-        m_fftAccumCount = 0;
-    }
-    for (int i = 0; i < bins.size(); ++i) {
-        const float dbm = std::max(bins[i], kMinDisplayDbm);
-        m_fftAccumPower[i] += std::pow(10.0f, dbm / 10.0f);
-    }
-    ++m_fftAccumCount;
-
-    // Pace FFT-derived rows to the radio's line_duration cadence so TX
-    // scrolls at the same configured speed as RX native tiles. We accumulate
-    // all FFT frames inside each visible-row window instead of dropping the
-    // intermediates, which avoids dotted/jagged TX rows without changing the
-    // waterfall rate.
-    if (m_fftRowDebtMs + 0.5 < static_cast<double>(cadenceMs))
-        return;
-    m_fftRowDebtMs = std::max(0.0, m_fftRowDebtMs - static_cast<double>(cadenceMs));
-    m_lastFftRowMs = now;
 
     Q_UNUSED(tileLowMhz);
     Q_UNUSED(tileHighMhz);
@@ -4545,10 +4521,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     if (m_transmitting && txWaterfallAffectsThisPan())
         useTxFilterMask = txWaterfallMaskRange(txMaskLowMhz, txMaskHighMhz);
 
-    const float invCount = (m_fftAccumCount > 0)
-        ? 1.0f / static_cast<float>(m_fftAccumCount)
-        : 1.0f;
-    const int accumSize = m_fftAccumPower.size();
+    const int srcSize = bins.size();
     const double panStartMhz = m_centerMhz - m_bandwidthMhz / 2.0;
 
     QVector<QRgb> scanline(destWidth, qRgb(0, 0, 0));
@@ -4563,29 +4536,23 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
             }
         }
 
-        float avgPower = 0.0f;
-        if (accumSize == 1) {
-            avgPower = m_fftAccumPower[0] * invCount;
-        } else if (accumSize > 1) {
+        float dbm = m_wfMinDbm;
+        if (srcSize == 1) {
+            dbm = std::max(bins[0], kMinDisplayDbm);
+        } else if (srcSize > 1) {
             const float binF = (destWidth > 1)
-                ? static_cast<float>(x) * static_cast<float>(accumSize - 1)
+                ? static_cast<float>(x) * static_cast<float>(srcSize - 1)
                       / static_cast<float>(destWidth - 1)
                 : 0.0f;
-            const int binIdx = std::clamp(static_cast<int>(binF), 0, accumSize - 1);
-            const int nextIdx = std::min(binIdx + 1, accumSize - 1);
+            const int binIdx = std::clamp(static_cast<int>(binF), 0, srcSize - 1);
+            const int nextIdx = std::min(binIdx + 1, srcSize - 1);
             const float frac = binF - static_cast<float>(binIdx);
-            const float p0 = m_fftAccumPower[binIdx] * invCount;
-            const float p1 = m_fftAccumPower[nextIdx] * invCount;
-            avgPower = p0 + frac * (p1 - p0);
+            const float b0 = std::max(bins[binIdx], kMinDisplayDbm);
+            const float b1 = std::max(bins[nextIdx], kMinDisplayDbm);
+            dbm = b0 + frac * (b1 - b0);
         }
-        const float dbm = (avgPower > 0.0f)
-            ? 10.0f * std::log10(avgPower)
-            : m_wfMinDbm;
         scanline[x] = dbmToRgb(dbm);
     }
-
-    std::fill(m_fftAccumPower.begin(), m_fftAccumPower.end(), 0.0f);
-    m_fftAccumCount = 0;
 
     appendHistoryRow(scanline.constData(), QDateTime::currentMSecsSinceEpoch());
     if (m_wfLive) {
