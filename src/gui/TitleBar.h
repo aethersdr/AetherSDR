@@ -44,6 +44,10 @@ public:
     // own Qt::Window.
     void setAppletFloating(bool floating);
 
+    // Windows native hit-testing uses this to expose custom title-bar gaps
+    // as caption drag zones while keeping controls interactive.
+    bool isSystemMoveAreaAt(const QPoint& globalPos) const;
+
 signals:
     void pcAudioToggled(bool on);
     void masterVolumeChanged(int pct);

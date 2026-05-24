@@ -130,6 +130,7 @@
 #include <QDateTime>
 #include <QPropertyAnimation>
 #include <QIcon>
+#include <QCursor>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QHelpEvent>
@@ -190,6 +191,7 @@
 #ifdef Q_OS_WIN
 #define NOMINMAX
 #include <windows.h>
+#include <windowsx.h>
 #include <psapi.h>
 #else
 #include <sys/resource.h>
@@ -331,6 +333,21 @@ bool memoryRevealTargetMatches(double actualMhz, double targetMhz)
     return targetMhz <= 0.0
         || std::abs(actualMhz - targetMhz) <= kMemoryRevealTargetToleranceMhz;
 }
+
+#ifdef Q_OS_WIN
+bool mainWindowCustomFrameEnabled()
+{
+    return AppSettings::instance()
+        .value("FramelessWindow", "True").toString() == "True";
+}
+
+int windowsResizeBorderThickness(HWND hwnd)
+{
+    const UINT dpi = GetDpiForWindow(hwnd);
+    return GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+        + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+}
+#endif
 
 bool flexWheelModeForAction(const QString& actionName, FlexWheelMode& mode)
 {
@@ -1378,8 +1395,11 @@ MainWindow::MainWindow(QWidget* parent)
             s.setValue("FramelessMigratedV0823", "True");
             s.save();
         }
-        if (s.value("FramelessWindow", "True").toString() == "True")
+        if (s.value("FramelessWindow", "True").toString() == "True") {
+#ifndef Q_OS_WIN
             setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
+#endif
+        }
 
         // 8-axis edge resize for frameless mode — same install pattern
         // as the floating dialogs (SpotHub, RadioSetup, MemoryDialog).
@@ -1521,6 +1541,9 @@ MainWindow::MainWindow(QWidget* parent)
 
     buildMenuBar();
     buildUI();
+#ifdef Q_OS_WIN
+    applyWindowsCustomFrame();
+#endif
     registerShortcutActions();
 
     m_swrSweepTimer.setTimerType(Qt::PreciseTimer);
@@ -5454,6 +5477,122 @@ void MainWindow::resizeEvent(QResizeEvent* event)
         m_sizeGrip->raise();
     }
 }
+
+#if defined(Q_OS_WIN)
+void MainWindow::applyWindowsCustomFrame()
+{
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd) {
+        return;
+    }
+
+    LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+    const LONG_PTR desiredStyle = style
+        | WS_CAPTION
+        | WS_THICKFRAME
+        | WS_SYSMENU
+        | WS_MINIMIZEBOX
+        | WS_MAXIMIZEBOX;
+    if (style != desiredStyle) {
+        SetWindowLongPtr(hwnd, GWL_STYLE, desiredStyle);
+    }
+
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER
+                 | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
+{
+    MSG* msg = static_cast<MSG*>(message);
+    if (!msg || !result || !mainWindowCustomFrameEnabled()) {
+        return QMainWindow::nativeEvent(eventType, message, result);
+    }
+
+    if (msg->message == WM_NCCALCSIZE && msg->wParam) {
+        if (IsZoomed(msg->hwnd) && windowHandle()
+            && windowHandle()->visibility() != QWindow::FullScreen) {
+            auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(msg->lParam);
+            RECT* clientArea = &params->rgrc[0];
+            const int border = windowsResizeBorderThickness(msg->hwnd);
+            clientArea->top += border;
+            clientArea->bottom -= border;
+            clientArea->left += border;
+            clientArea->right -= border;
+        }
+        *result = 0;
+        return true;
+    }
+
+    if (msg->message == WM_NCHITTEST) {
+        RECT windowRect;
+        if (!GetWindowRect(msg->hwnd, &windowRect)) {
+            return QMainWindow::nativeEvent(eventType, message, result);
+        }
+
+        const POINT nativePos{GET_X_LPARAM(msg->lParam), GET_Y_LPARAM(msg->lParam)};
+        if (nativePos.x < windowRect.left || nativePos.x > windowRect.right
+            || nativePos.y < windowRect.top || nativePos.y > windowRect.bottom) {
+            return QMainWindow::nativeEvent(eventType, message, result);
+        }
+
+        const bool canResize = !IsZoomed(msg->hwnd)
+            && !(windowState() & Qt::WindowFullScreen);
+        if (canResize) {
+            const int border = windowsResizeBorderThickness(msg->hwnd);
+            const bool onLeft = nativePos.x >= windowRect.left
+                && nativePos.x < windowRect.left + border;
+            const bool onRight = nativePos.x > windowRect.right - border
+                && nativePos.x <= windowRect.right;
+            const bool onTop = nativePos.y >= windowRect.top
+                && nativePos.y < windowRect.top + border;
+            const bool onBottom = nativePos.y > windowRect.bottom - border
+                && nativePos.y <= windowRect.bottom;
+
+            if (onTop && onLeft) {
+                *result = HTTOPLEFT;
+                return true;
+            }
+            if (onTop && onRight) {
+                *result = HTTOPRIGHT;
+                return true;
+            }
+            if (onBottom && onLeft) {
+                *result = HTBOTTOMLEFT;
+                return true;
+            }
+            if (onBottom && onRight) {
+                *result = HTBOTTOMRIGHT;
+                return true;
+            }
+            if (onLeft) {
+                *result = HTLEFT;
+                return true;
+            }
+            if (onRight) {
+                *result = HTRIGHT;
+                return true;
+            }
+            if (onTop) {
+                *result = HTTOP;
+                return true;
+            }
+            if (onBottom) {
+                *result = HTBOTTOM;
+                return true;
+            }
+        }
+
+        if (m_titleBar && m_titleBar->isVisible()
+            && m_titleBar->isSystemMoveAreaAt(QCursor::pos())) {
+            *result = HTCAPTION;
+            return true;
+        }
+    }
+
+    return QMainWindow::nativeEvent(eventType, message, result);
+}
+#endif
 
 void MainWindow::changeEvent(QEvent* event)
 {
@@ -12903,6 +13042,17 @@ void MainWindow::setFramelessWindow(bool on)
     const QRect geom = geometry();
     const bool wasVisible = isVisible();
     Qt::WindowFlags flags = windowFlags();
+#ifdef Q_OS_WIN
+    if (flags & Qt::FramelessWindowHint) {
+        flags &= ~Qt::FramelessWindowHint;
+        setWindowFlags(flags);
+        setGeometry(geom);
+        if (wasVisible) {
+            show();
+        }
+    }
+    applyWindowsCustomFrame();
+#else
     if (on)
         flags |= Qt::FramelessWindowHint;
     else
@@ -12911,6 +13061,7 @@ void MainWindow::setFramelessWindow(bool on)
     setGeometry(geom);
     if (wasVisible)
         show();
+#endif
 
     // Keep the bottom-right size grip in sync — only useful when frameless.
     if (m_sizeGrip) m_sizeGrip->setVisible(on);

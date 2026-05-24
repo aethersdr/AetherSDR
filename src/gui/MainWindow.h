@@ -141,6 +141,10 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void keyReleaseEvent(QKeyEvent* event) override;
     bool eventFilter(QObject* obj, QEvent* event) override;
+#if defined(Q_OS_WIN)
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
+    void applyWindowsCustomFrame();
+#endif
 
 private slots:
     // Radio/connection events
@@ -280,9 +284,8 @@ private:
     // both chain widgets so they stay in lock-step.
     void onTxChainStageEnabledChanged(AudioEngine::TxChainStage stage,
                                       bool enabled);
-    // Toggle OS window-chrome on/off (Qt::FramelessWindowHint).  Persists
-    // to AppSettings("FramelessWindow"). When on, users move/close the
-    // window via keyboard shortcuts or taskbar.
+    // Toggle OS window-chrome on/off. Persists to AppSettings("FramelessWindow").
+    // When on, TitleBar provides the drag surface and window-control buttons.
     void setFramelessWindow(bool on);
 
     // Lazy-construct + show + raise + activate for a PersistentDialog

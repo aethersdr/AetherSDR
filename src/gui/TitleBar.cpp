@@ -28,6 +28,13 @@
 #include <QJsonObject>
 #include "core/VersionNumber.h"
 
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace AetherSDR {
 
 namespace {
@@ -454,6 +461,33 @@ bool TitleBar::isDragHandle(QObject* obj) const
     return obj && obj->property(kTitleDragHandleProperty).toBool();
 }
 
+bool TitleBar::isSystemMoveAreaAt(const QPoint& globalPos) const
+{
+    const QPoint localPos = mapFromGlobal(globalPos);
+    if (!rect().contains(localPos)) {
+        return false;
+    }
+
+    QWidget* child = childAt(localPos);
+    if (!child) {
+        return true;
+    }
+
+    if (m_menuBar && (child == m_menuBar || m_menuBar->isAncestorOf(child))) {
+        const QPoint menuPos = m_menuBar->mapFromGlobal(globalPos);
+        return !m_menuBar->actionAt(menuPos);
+    }
+
+    for (QWidget* widget = child; widget && widget != this;
+         widget = widget->parentWidget()) {
+        if (isDragHandle(widget)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
 {
     if (!ev || ev->button() != Qt::LeftButton)
@@ -463,15 +497,25 @@ bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
     if (!w)
         return false;
 
-    m_windowMoveActive = true;
-    m_windowMoveUsesSystem = false;
-    m_windowMovePressGlobal = ev->globalPosition().toPoint();
-    m_windowMoveStartPos = w->pos();
-
     if (useSystemMove) {
-#ifndef Q_OS_MAC
+#ifdef Q_OS_WIN
+        HWND hwnd = reinterpret_cast<HWND>(w->winId());
+        if (hwnd) {
+            const QPoint globalPos = ev->globalPosition().toPoint();
+            ReleaseCapture();
+            SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION,
+                         MAKELPARAM(globalPos.x(), globalPos.y()));
+            ev->accept();
+            return true;
+        }
+#elif !defined(Q_OS_MAC)
         if (auto* h = w->windowHandle())
-            m_windowMoveUsesSystem = h->startSystemMove();
+            if (h->startSystemMove()) {
+                m_windowMoveActive = true;
+                m_windowMoveUsesSystem = true;
+                ev->accept();
+                return true;
+            }
 #endif
     }
 
@@ -480,8 +524,11 @@ bool TitleBar::startWindowMove(QMouseEvent* ev, bool useSystemMove)
     // so subsequent mouse-move events stop reaching us as soon as the
     // cursor leaves the widget that was clicked.  Explicitly grab on
     // TitleBar so all moves/releases route to our handlers.
-    if (!m_windowMoveUsesSystem)
-        grabMouse();
+    m_windowMoveActive = true;
+    m_windowMoveUsesSystem = false;
+    m_windowMovePressGlobal = ev->globalPosition().toPoint();
+    m_windowMoveStartPos = w->pos();
+    grabMouse();
 
     ev->accept();
     return true;
@@ -563,7 +610,7 @@ bool TitleBar::eventFilter(QObject* obj, QEvent* ev)
         } else if (ev->type() == QEvent::MouseButtonPress) {
             auto* me = static_cast<QMouseEvent*>(ev);
             if (me->button() == Qt::LeftButton && !m_menuBar->actionAt(me->pos()))
-                return startWindowMove(me, false);
+                return startWindowMove(me);
         }
     }
 
