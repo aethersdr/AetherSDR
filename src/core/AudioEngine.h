@@ -780,6 +780,12 @@ private:
     // clicking BYPASS when all stages are already disabled yields an
     // empty snapshot, so the snapshot alone cannot represent state).
     QVector<TxChainStage> m_txBypassSnapshot;
+    // RN2 TX is functionally a chain member but lives outside the
+    // user-orderable TxChainStage enum (it runs ahead of the chain in
+    // onTxAudioReady — see #2813), so BYPASS has to snapshot/restore it
+    // alongside the stages or RN2 keeps processing while every visible
+    // stage is bypassed (#3054).
+    bool m_txBypassSnapshotRn2{false};
     bool m_txBypassActive{false};
     // RX chain — same packing convention.  RxChainStage::None terminates
     // the list.  Phase 0 dispatcher iterates this but every stage is a
@@ -789,6 +795,10 @@ private:
     // to restore the stages that were enabled when bypass engaged;
     // m_rxBypassActive is the source of truth for "currently bypassed".
     QVector<RxChainStage> m_rxBypassSnapshot;
+    // RX RN2 lives in the NR cluster, not the RxChainStage enum, but
+    // BYPASS must still suppress it so the post-bypass RX path is truly
+    // transparent (#3054).  Same parallel-bool pattern as TX above.
+    bool m_rxBypassSnapshotRn2{false};
     bool m_rxBypassActive{false};
     // Scratch buffer for in-place EQ on the RX path (avoids per-call alloc).
     QByteArray m_clientEqRxScratch;

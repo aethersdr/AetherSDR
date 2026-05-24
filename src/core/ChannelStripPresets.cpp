@@ -529,6 +529,14 @@ QJsonObject ChannelStripPresets::capturePresetJson() const
         preset["reverb"] = o;
     }
 
+    // RN2 mic pre-amp (#3054).  Sibling of the per-stage objects so a
+    // future NR-cluster addition can extend `rn2` into an object —
+    // today we only persist the enable bit because that is the entire
+    // user-tunable surface for RN2 TX.  Old preset files without the
+    // key leave RN2 state untouched on apply, matching the precedent
+    // of the v0.9.8 `rx` block.
+    preset["rn2"] = m_engine->rn2TxEnabled();
+
     // Final brickwall limiter (always present, not in user chain).
     // Test-tone state is intentionally NOT in presets — it's a
     // session-time setup tool, not a "voice mix" parameter.
@@ -645,6 +653,11 @@ QJsonObject ChannelStripPresets::capturePresetJson() const
             o["dooMix"]         = p->dooMix();
             rx["pudu"] = o;
         }
+        // RX RN2 — same per-profile semantics as the TX `rn2` field
+        // above (#3054).  Lives inside the `rx` block because the RX
+        // RN2 toggle is bound to m_rn2Enabled, separate from the
+        // TX-side m_rn2TxEnabled atomic.
+        rx["rn2"] = m_engine->rn2Enabled();
         preset["rx"] = rx;
     }
 
@@ -797,6 +810,16 @@ void ChannelStripPresets::applyPresetJson(const QJsonObject& preset)
         lim->setDcBlockEnabled(jbool(o, "dcBlock", lim->dcBlockEnabled()));
     }
 
+    // RN2 mic pre-amp (#3054).  Only applies the key when present —
+    // old preset files without `rn2` leave the engine's current RN2
+    // state untouched (the v0.9.8 `rx` block uses the same convention).
+    // setRn2TxEnabled() routes through the lazy-alloc + persistence
+    // path so AppSettings stays in sync with the preset.
+    if (preset.contains("rn2")) {
+        m_engine->setRn2TxEnabled(jbool(preset, "rn2",
+                                        m_engine->rn2TxEnabled()));
+    }
+
     // ── RX-side apply (#2425) ─────────────────────────────────────
     // Reads the optional top-level "rx" block.  Old preset files
     // (no rx key) leave RX state untouched.
@@ -909,6 +932,15 @@ void ChannelStripPresets::applyPresetJson(const QJsonObject& preset)
             p->setDooTuneHz(jnum(o, "dooTuneHz", p->dooTuneHz()));
             p->setDooHarmonicsDb(jnum(o, "dooHarmonicsDb", p->dooHarmonicsDb()));
             p->setDooMix(jnum(o, "dooMix", p->dooMix()));
+        }
+
+        // RX RN2 (#3054).  Only applies when the key is present — old
+        // preset files leave RN2 untouched.  setRn2Enabled() handles
+        // the NR cluster's mutual exclusion (turning RN2 on disables
+        // NR2/NR4/BNR/DFNR/MNR) and the lazy RNNoise allocation.
+        if (rx.contains("rn2")) {
+            m_engine->setRn2Enabled(jbool(rx, "rn2",
+                                          m_engine->rn2Enabled()));
         }
     }
 

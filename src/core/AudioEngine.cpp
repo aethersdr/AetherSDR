@@ -2401,9 +2401,20 @@ void AudioEngine::setTxBypassed(bool on)
                 setStageEnabled(s, false);
             }
         }
+        // RN2 TX is not in TxChainStage but is conceptually part of the
+        // chain — it runs on the voice path ahead of the user DSP chain
+        // (AudioEngine.cpp onTxAudioReady, #2813).  Without snapshotting
+        // it here, BYPASS leaves RN2 actively denoising while every
+        // visible stage is off, which makes BYPASS appear to almost
+        // work — voice passes (RN2 was trained on it) but other audio
+        // is suppressed.  See #3054.
+        m_txBypassSnapshotRn2 = m_rn2TxEnabled.load();
+        if (m_txBypassSnapshotRn2) setRn2TxEnabled(false);
     } else {
         for (auto s : m_txBypassSnapshot) setStageEnabled(s, true);
         m_txBypassSnapshot.clear();
+        if (m_txBypassSnapshotRn2) setRn2TxEnabled(true);
+        m_txBypassSnapshotRn2 = false;
     }
 
     m_txBypassActive = on;
@@ -2492,9 +2503,17 @@ void AudioEngine::setRxBypassed(bool on)
                 setStageEnabled(s, false);
             }
         }
+        // RX RN2 lives in the NR cluster — not in RxChainStage — but
+        // BYPASS must still suppress it so the bypassed RX path is
+        // genuinely transparent rather than "everything except the
+        // neural denoiser".  Mirrors the TX-side fix above (#3054).
+        m_rxBypassSnapshotRn2 = m_rn2Enabled.load();
+        if (m_rxBypassSnapshotRn2) setRn2Enabled(false);
     } else {
         for (auto s : m_rxBypassSnapshot) setStageEnabled(s, true);
         m_rxBypassSnapshot.clear();
+        if (m_rxBypassSnapshotRn2) setRn2Enabled(true);
+        m_rxBypassSnapshotRn2 = false;
     }
 
     m_rxBypassActive = on;

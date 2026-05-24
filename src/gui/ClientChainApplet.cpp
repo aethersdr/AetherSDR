@@ -168,8 +168,10 @@ ClientChainApplet::ClientChainApplet(QWidget* parent) : QWidget(parent)
         m_bypassBtn->setStyleSheet(kBypassBtnStyle);
         m_bypassBtn->setFixedHeight(22);
         m_bypassBtn->setToolTip(
-            "Disable every stage in the selected chain.  Click again "
-            "to restore the stages that were on before.");
+            "Disable every stage in the selected chain (including RN2).  "
+            "Click again to restore the stages that were on before.  "
+            "Scope is global (per audio engine), not per-profile — the "
+            "button stays pressed across Channel Strip profile switches.");
         connect(m_bypassBtn, &QPushButton::toggled,
                 this, &ClientChainApplet::onBypassToggled);
         row->addWidget(m_bypassBtn);

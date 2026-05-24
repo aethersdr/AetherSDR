@@ -298,7 +298,9 @@ StripTubePanel::StripTubePanel(AudioEngine* engine, QWidget* parent)
         "Toggle RNNoise neural denoiser on the mic input.  Runs before "
         "any DSP chain stage so noise is suppressed before it can be "
         "amplified by gate / compressor / saturator.  Voice modes only — "
-        "digital modes (RADE, DAX, RTTY, FT8, FDV, CW) bypass this stage."));
+        "digital modes (RADE, DAX, RTTY, FT8, FDV, CW) bypass this stage.  "
+        "Saved per Channel Strip profile, and suppressed by the strip's "
+        "BYPASS button alongside every other voice stage."));
     // Reuse the A/B/C model-button stylesheet so all four compact
     // buttons in this panel share one visual idiom.  (#2813)
     m_rn2Btn->setStyleSheet(kModelStyle);
