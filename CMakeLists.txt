@@ -772,6 +772,46 @@ else()
     target_compile_options(aether_libmodem_core PRIVATE -w)
 endif()
 
+# Bundled liquid-dsp (MIT) — comprehensive DSP toolkit covering modems
+# (PSK/QAM/FSK/GMSK/OFDM), FEC (Hamming/Golay/RS/convolutional), adaptive
+# filters (LMS/RLS), AGC, NCO, polyphase resampling, and equalizers.
+# Vendored proactively under #3043 as foundation infrastructure for future
+# digital-mode work (e.g. native FT8/FT4 — #85 Phase 4 — or PSK31 / RTTY).
+#
+# Built via the upstream CMakeLists.txt with examples / tests / benchmarks /
+# sandbox / docs disabled to keep the build slim. FFTW lookup is disabled
+# (FIND_FFTW=OFF) so liquid-dsp uses its own internal FFT — wiring it to our
+# bundled third_party/fftw3 can be a follow-up if a future consumer wants
+# FFTW-accelerated transforms.
+#
+# AetherSDR links against liquid-static so the build verifies clean even
+# though no module currently consumes liquid symbols. Standard linker dead-
+# code elimination (--gc-sections on ELF, /OPT:REF on MSVC) drops the unused
+# static lib from the final binary.
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
+set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
+set(BUILD_DOC OFF CACHE BOOL "" FORCE)
+set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+set(FIND_FFTW OFF CACHE BOOL "" FORCE)
+set(ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
+# Save/restore BUILD_SHARED_LIBS so disabling shared libliquid here doesn't
+# affect any other third_party library that respects the standard variable.
+set(_aether_saved_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)
+add_subdirectory(third_party/liquid-dsp EXCLUDE_FROM_ALL)
+set(BUILD_SHARED_LIBS ${_aether_saved_BUILD_SHARED_LIBS})
+# Suppress warnings from vendored code (same pattern as other third_party
+# integrations — we don't want -Werror surfaces on code we don't own).
+if(TARGET liquid-static)
+    if(MSVC)
+        target_compile_options(liquid-static PRIVATE /w)
+    else()
+        target_compile_options(liquid-static PRIVATE -w)
+    endif()
+endif()
+
 qt_add_resources(RESOURCES resources/resources.qrc)
 
 add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES})
@@ -868,6 +908,7 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::Network
     Qt6::Multimedia
     aether_libmodem_core
+    liquid-static        # bundled third_party/liquid-dsp (#3043 — vendored, no current consumer; dead-code-eliminated until used)
     zlibstatic           # bundled third_party/zlib 1.3.1
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
