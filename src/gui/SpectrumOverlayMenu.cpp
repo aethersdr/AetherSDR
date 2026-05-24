@@ -1212,7 +1212,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         grid->addWidget(lbl, row, 0);
         m_freqGridSpacingCmb = new QComboBox;
         m_freqGridSpacingCmb->setFixedHeight(18);
-        m_freqGridSpacingCmb->setStyleSheet(comboStyleSheet());
+        applyComboStyle(m_freqGridSpacingCmb);
         m_freqGridSpacingCmb->addItem("Auto", 0);
         for (int khz : {1, 2, 5, 10, 25, 50, 100})
             m_freqGridSpacingCmb->addItem(QString("%1 kHz").arg(khz), khz);
@@ -1231,7 +1231,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         grid->addWidget(lbl, row, 0);
         m_colorSchemeCmb = new QComboBox;
         m_colorSchemeCmb->setFixedHeight(18);
-        m_colorSchemeCmb->setStyleSheet(comboStyleSheet());
+        applyComboStyle(m_colorSchemeCmb);
         for (int i = 0; i < static_cast<int>(WfColorScheme::Count); ++i)
             m_colorSchemeCmb->addItem(wfSchemeName(static_cast<WfColorScheme>(i)));
         grid->addWidget(m_colorSchemeCmb, row, 1, 1, 3);
