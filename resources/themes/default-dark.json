@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "name": "Default Dark",
+  "author": "AetherSDR Team",
+  "version": "1.0",
+  "description": "AetherSDR's original dark theme — bit-identical to the colours hardcoded in src/gui through v26.5.3. Reference baseline for the theming subsystem (RFC #3076).",
+  "tokens": {
+    "color": {
+      "background": {
+        "0": "#0a0e14",
+        "1": "#0d1119",
+        "2": "#13192a"
+      },
+      "accent": "#00b4d8",
+      "accent.warning": "#ffb84d",
+      "accent.danger": "#ff4d4d",
+      "accent.success": "#4dd87a",
+      "text": {
+        "primary": "#e6f0fa",
+        "secondary": "#8ea8c0",
+        "disabled": "#506070",
+        "label": "#506070"
+      },
+      "border": {
+        "subtle": "#1a2330",
+        "strong": "#2a3a4d"
+      }
+    },
+    "font": {
+      "family": {
+        "ui": "Inter",
+        "mono": "monospace"
+      },
+      "size": {
+        "tiny": 9,
+        "small": 10,
+        "normal": 12,
+        "large": 14
+      }
+    },
+    "sizing": {
+      "panel": {
+        "padding": 4,
+        "spacing": 4,
+        "cornerRadius": 4
+      },
+      "border": {
+        "subtle": 1,
+        "strong": 2
+      }
+    }
+  }
+}

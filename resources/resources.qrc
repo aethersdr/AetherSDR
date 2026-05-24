@@ -15,6 +15,9 @@
     <qresource prefix="/sounds">
         <file alias="aetherial.wav">aetherial.wav</file>
     </qresource>
+    <qresource prefix="/themes">
+        <file alias="default-dark.json">themes/default-dark.json</file>
+    </qresource>
     <qresource prefix="/help">
         <file alias="getting-started.md">help/getting-started.md</file>
         <file alias="aethersdr-help.md">help/aethersdr-help.md</file>

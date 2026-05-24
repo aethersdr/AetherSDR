@@ -419,6 +419,7 @@ endif()
 # Sources
 set(CORE_SOURCES
     src/core/AppSettings.cpp
+    src/core/ThemeManager.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
@@ -1393,6 +1394,22 @@ add_executable(slice_model_letter_test
 target_include_directories(slice_model_letter_test PRIVATE src)
 target_link_libraries(slice_model_letter_test PRIVATE Qt6::Core Qt6::Test)
 add_test(NAME slice_model_letter_test COMMAND slice_model_letter_test)
+
+# ThemeManager — RFC #3076 Phase 1.  Verifies the built-in default-dark
+# theme loads from Qt resources, scalar tokens resolve, missing tokens
+# don't crash, and the stylesheet template resolver substitutes correctly.
+qt_add_resources(THEME_TEST_RESOURCES resources/resources.qrc)
+add_executable(theme_manager_test
+    tests/theme_manager_test.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    ${THEME_TEST_RESOURCES}
+)
+target_include_directories(theme_manager_test PRIVATE src)
+target_link_libraries(theme_manager_test PRIVATE Qt6::Core Qt6::Gui Qt6::Test)
+add_test(NAME theme_manager_test COMMAND theme_manager_test)
 
 add_executable(panadapter_model_rx_antenna_test
     tests/panadapter_model_rx_antenna_test.cpp
