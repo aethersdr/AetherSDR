@@ -6737,6 +6737,13 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
     }
 }
 
+QRect SpectrumWidget::leftOccludedRect() const
+{
+    if (m_overlayMenu && m_overlayMenu->isVisible())
+        return m_overlayMenu->geometry();
+    return {};
+}
+
 void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
 {
     if (m_swrSweepPoints.isEmpty())
@@ -7039,9 +7046,10 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
         labelY = plotRect.top() + 3;
 
     QRect labelRect(labelX, labelY, labelW, labelH);
-    if (m_overlayMenu && m_overlayMenu->isVisible()
-        && labelRect.intersects(m_overlayMenu->geometry().adjusted(-4, -4, 8, 4))) {
-        labelX = m_overlayMenu->geometry().right() + 8;
+    const QRect occluded = leftOccludedRect();
+    if (!occluded.isNull()
+        && labelRect.intersects(occluded.adjusted(-4, -4, 8, 4))) {
+        labelX = occluded.right() + 8;
         const int maxLabelX = qMax(plotRect.left() + 4, plotRect.right() - labelW - 4);
         labelX = qBound(plotRect.left() + 4, labelX, maxLabelX);
         labelRect.moveLeft(labelX);
@@ -7549,8 +7557,9 @@ void SpectrumWidget::drawOffScreenSlices(QPainter& p, const QRect& specRect)
             boxX = specRect.right() - DBM_STRIP_W - boxW - 4;
         } else {
             int leftMargin = 4;
-            if (m_overlayMenu && m_overlayMenu->isVisible())
-                leftMargin = m_overlayMenu->width() + 2;
+            const QRect occluded = leftOccludedRect();
+            if (!occluded.isNull())
+                leftMargin = occluded.width() + 2;
             boxX = specRect.left() + leftMargin;
         }
 

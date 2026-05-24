@@ -527,6 +527,7 @@ private:
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
+    QRect leftOccludedRect() const;
     void showSpotClusterPopup(const SpotCluster& cluster, const QPoint& globalPos);
     const TnfMarker* tnfMarkerById(int id) const;
     QColor tnfColor(const TnfMarker& tnf) const;
