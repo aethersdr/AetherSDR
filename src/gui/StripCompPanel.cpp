@@ -183,12 +183,18 @@ StripCompPanel::StripCompPanel(AudioEngine* engine, QWidget* parent)
             m_grMeter = new ClientCompMeter;
             m_grMeter->setMode(ClientCompMeter::Mode::GainReduction);
             m_grMeter->setLabel("GR");
-            m_grMeter->setMinimumWidth(20);
+            m_grMeter->setTickSide(ClientCompMeter::TickSide::Left);
+            m_grMeter->setShowValueLabel(true);
+            // Match THRESH fader's compact width — tick column + bar
+            // is roughly 22 + 16 = 38 px, plus padding.
+            m_grMeter->setFixedWidth(42);
 
             m_outputMeter = new ClientCompMeter;
             m_outputMeter->setMode(ClientCompMeter::Mode::Level);
             m_outputMeter->setLabel("Out");
-            m_outputMeter->setMinimumWidth(20);
+            m_outputMeter->setTickSide(ClientCompMeter::TickSide::Right);
+            m_outputMeter->setShowValueLabel(true);
+            m_outputMeter->setFixedWidth(42);
 
             col->addWidget(m_grMeter, 1);
             body->addLayout(col);
@@ -231,6 +237,44 @@ StripCompPanel::StripCompPanel(AudioEngine* engine, QWidget* parent)
             });
             m_makeup->setFixedSize(76, 76);
             col->addWidget(m_makeup);
+
+            // Pre-comp PAPR controls (#2887). Drive pushes more material
+            // across the threshold so the comp engages harder; Phase
+            // rotates voice peaks to be more symmetric so the harder
+            // compression doesn't sound trashy. Together they raise RMS
+            // without exceeding the ceiling.
+            m_drive = new ClientCompKnob;
+            m_drive->setCenterLabelMode(true);
+            m_drive->setLabel("Drive");
+            m_drive->setRange(0.0f, 18.0f);
+            m_drive->setDefault(0.0f);
+            m_drive->setLabelFormat([](float v) {
+                return "+" + QString::number(v, 'f', 1) + " dB";
+            });
+            m_drive->setFixedSize(76, 76);
+            m_drive->setToolTip(
+                "Pre-comp drive (#2887). Linear gain before the threshold "
+                "so the compressor engages harder and average power lifts. "
+                "Pair with Phase to keep peaks clean as drive increases.");
+            col->addWidget(m_drive);
+
+            m_phase = new ClientCompKnob;
+            m_phase->setCenterLabelMode(true);
+            m_phase->setLabel("Phase");
+            m_phase->setRange(0.0f, 6.0f);
+            m_phase->setDefault(0.0f);
+            m_phase->setLabelFormat([](float v) {
+                const int stages = static_cast<int>(std::round(v));
+                return (stages == 0) ? QString("Off")
+                                     : QString::number(stages) + " stg";
+            });
+            m_phase->setFixedSize(76, 76);
+            m_phase->setToolTip(
+                "Pre-comp phase rotator (#2887). All-pass cascade that "
+                "symmetrizes asymmetric voice peaks before compression. "
+                "0 = off, 4 = broadcast default.");
+            col->addWidget(m_phase);
+
             col->addStretch();
             body->addLayout(col);
         }
@@ -264,6 +308,10 @@ StripCompPanel::StripCompPanel(AudioEngine* engine, QWidget* parent)
             this, &StripCompPanel::applyLimiterCeiling);
     connect(m_limiterEnable, &QPushButton::toggled,
             this, &StripCompPanel::applyLimiterEnabled);
+    connect(m_drive, &ClientCompKnob::valueChanged,
+            this, &StripCompPanel::applyDrive);
+    connect(m_phase, &ClientCompKnob::valueChanged,
+            this, &StripCompPanel::applyPhase);
 
     syncControlsFromEngine();
 
@@ -333,6 +381,8 @@ void StripCompPanel::syncControlsFromEngine()
     QSignalBlocker bm(m_makeup);
     QSignalBlocker bce(m_ceiling);
     QSignalBlocker ble(m_limiterEnable);
+    QSignalBlocker bdv(m_drive);
+    QSignalBlocker bph(m_phase);
 
     m_ratio->setValue(c->ratio());
     m_attack->setValue(c->attackMs());
@@ -341,6 +391,8 @@ void StripCompPanel::syncControlsFromEngine()
     m_makeup->setValue(c->makeupDb());
     m_ceiling->setValue(c->limiterCeilingDb());
     m_limiterEnable->setChecked(c->limiterEnabled());
+    m_drive->setValue(c->driveDb());
+    m_phase->setValue(static_cast<float>(c->phaseRotatorStages()));
     if (m_threshFader) m_threshFader->setThresholdDb(c->thresholdDb());
     if (m_canvas) m_canvas->update();
 }
@@ -375,6 +427,8 @@ void StripCompPanel::tickMeters()
     if (m_knee)    { QSignalBlocker b(m_knee);    m_knee->setValue(c->kneeDb()); }
     if (m_makeup)  { QSignalBlocker b(m_makeup);  m_makeup->setValue(c->makeupDb()); }
     if (m_ceiling) { QSignalBlocker b(m_ceiling); m_ceiling->setValue(c->limiterCeilingDb()); }
+    if (m_drive)   { QSignalBlocker b(m_drive);   m_drive->setValue(c->driveDb()); }
+    if (m_phase)   { QSignalBlocker b(m_phase);   m_phase->setValue(static_cast<float>(c->phaseRotatorStages())); }
     if (m_threshFader) {
         QSignalBlocker b(m_threshFader);
         m_threshFader->setThresholdDb(c->thresholdDb());
@@ -433,6 +487,20 @@ void StripCompPanel::applyKnee(float db)
     if (auto* c = comp()) c->setKneeDb(db);
     saveCompSettings();
     if (m_canvas) m_canvas->update();
+}
+
+void StripCompPanel::applyDrive(float db)
+{
+    if (!m_audio) return;
+    if (auto* c = comp()) c->setDriveDb(db);
+    saveCompSettings();
+}
+
+void StripCompPanel::applyPhase(float stages)
+{
+    if (!m_audio) return;
+    if (auto* c = comp()) c->setPhaseRotatorStages(static_cast<int>(std::round(stages)));
+    saveCompSettings();
 }
 
 void StripCompPanel::applyMakeup(float db)

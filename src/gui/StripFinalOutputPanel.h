@@ -70,6 +70,7 @@ private:
     QWidget*        m_ovrLed{nullptr};
     QLabel*         m_limitLed{nullptr};
     QLabel*         m_activityLbl{nullptr};
+    QPushButton*    m_holdBtn{nullptr};   // Peak-hold toggle (#2887)
     QTimer*         m_meterTimer{nullptr};
     QElapsedTimer   m_animClock;
 
@@ -89,6 +90,24 @@ private:
     quint64  m_lastClipCount{0};
     qint64   m_ovrLatchUntilMs{0};
     bool     m_limitFlashOn{false};   // toggled each tick while active
+
+    // Throttle the numeric PK / RMS / GR / CRST text labels to the
+    // project-canonical 10 Hz readout cadence (kMeterReadoutUpdateMs
+    // in MeterSmoother.h) so the operator can actually read them.
+    // The bar animations continue to tick at the full 125 Hz
+    // MeterSmoother rate; only the QLabel::setText calls are gated.
+    qint64   m_lastReadoutUpdateMs{0};
+
+    // Peak-hold (#2887). When enabled, the PK/RMS/GR/CRST readouts
+    // track the worst-case value seen since hold was engaged so the
+    // operator can read off the max over a TX burst without having
+    // to watch the live meter the whole time. Click HOLD to engage;
+    // click again to release (resets the held maxima).
+    bool     m_holdEnabled{false};
+    float    m_holdPkDb{-120.0f};
+    float    m_holdRmsDb{-120.0f};
+    float    m_holdGrDb{0.0f};
+    float    m_holdCrestDb{0.0f};
 };
 
 } // namespace AetherSDR

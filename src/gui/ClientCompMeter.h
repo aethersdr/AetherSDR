@@ -4,6 +4,7 @@
 
 #include <QWidget>
 #include <QElapsedTimer>
+#include <QString>
 #include <QTimer>
 
 namespace AetherSDR {
@@ -25,10 +26,25 @@ class ClientCompMeter : public QWidget {
 public:
     enum class Mode { Level, GainReduction };
 
+    // Optional scale-tick rendering side. Matches the THRESH fader's
+    // tick layout so paired meters in the compressor editor read as
+    // one consistent vocabulary. None preserves the original compact
+    // bar-only style for places that still use it.
+    enum class TickSide { None, Left, Right };
+
     explicit ClientCompMeter(QWidget* parent = nullptr);
 
     void setMode(Mode m);
     Mode mode() const { return m_mode; }
+
+    // Show dB ticks on the chosen side of the bar (mirrors the THRESH
+    // fader's tick column). Level mode uses 0/-12/-24/-36/-48; GR
+    // uses 0/-5/-10/-15/-20.
+    void setTickSide(TickSide s);
+
+    // Show the current dB value as a bottom-aligned numeric label
+    // (mirrors the "-16.3 dB" footer on the THRESH fader).
+    void setShowValueLabel(bool on);
 
     // Feed the latest dB value.  Bar fill smoothly animates toward
     // the new value; peak-hold line still jumps instantly to any
@@ -69,6 +85,19 @@ private:
     // Optional limiter overlay state — Level mode only.
     float m_ceilingDb{1.0f};      // >0 means "no overlay"
     float m_limGrDb{0.0f};        // 0 means "no limiting this frame"
+
+    // THRESH-style scale chrome (off by default to preserve existing
+    // usage in other surfaces).
+    TickSide m_tickSide{TickSide::None};
+    bool     m_showValueLabel{false};
+
+    // Cached value-label text + throttle clock so the footer dB
+    // readout only re-formats at the project-canonical 10 Hz
+    // (kMeterReadoutUpdateMs in MeterSmoother.h) instead of the
+    // 125 Hz paint cadence. Keeps the digits readable without
+    // slowing the bar.
+    QString       m_cachedValueText;
+    QElapsedTimer m_valueLabelClock;
 };
 
 } // namespace AetherSDR

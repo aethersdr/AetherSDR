@@ -69,6 +69,11 @@ private:
     MeterSmoother   m_rmsSmooth;
     float           m_peakDb{-120.0f};
     float           m_rmsDb{-120.0f};
+
+    // Throttle the PK / RMS / CRST QLabel updates to the project-
+    // canonical 10 Hz cadence (kMeterReadoutUpdateMs) so the digits
+    // are readable while the bar continues to animate every tick.
+    qint64          m_lastReadoutUpdateMs{0};
 };
 
 } // namespace AetherSDR

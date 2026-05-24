@@ -611,6 +611,43 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
             "time — back off upstream gain)."));
         col->addWidget(m_activityLbl);
 
+        // Peak-hold toggle (#2887). When green, the PK/RMS/GR/CRST
+        // numeric readouts track the worst-case value seen since hold
+        // engaged so the operator can read off the max over a TX
+        // burst without having to watch the live meter the whole time.
+        // Click again to release; the held maxima reset on engage.
+        m_holdBtn = new QPushButton("HOLD", this);
+        m_holdBtn->setCheckable(true);
+        m_holdBtn->setFixedSize(56, 18);
+        m_holdBtn->setCursor(Qt::PointingHandCursor);
+        m_holdBtn->setFlat(true);
+        m_holdBtn->setStyleSheet(
+            "QPushButton { background: #1a2230; border: 1px solid #2a3744;"
+            " border-radius: 3px; color: #506070; font-size: 10px;"
+            " font-weight: bold; padding: 1px; }"
+            "QPushButton:hover { color: #c8d8e8; }"
+            "QPushButton:checked { background: #183020; border: 1px solid #2eb872;"
+            " color: #2eb872; }"
+            "QPushButton:checked:hover { color: #6ffaa9; }");
+        m_holdBtn->setToolTip(tr(
+            "Peak-hold. When engaged (green), the PK / RMS / GR / CRST "
+            "readouts latch their worst-case value since this button was "
+            "clicked. Click again to release and reset.\n\n"
+            "Use it to capture the peaks of a TX burst without staring "
+            "at the live meter."));
+        connect(m_holdBtn, &QPushButton::toggled, this, [this](bool on) {
+            m_holdEnabled = on;
+            // Engaging hold resets the latches to the current live
+            // values; releasing leaves them at whatever they reached.
+            if (on) {
+                m_holdPkDb    = m_outPeakDb;
+                m_holdRmsDb   = m_outRmsDb;
+                m_holdGrDb    = m_grDb;
+                m_holdCrestDb = m_outPeakDb - m_outRmsDb;
+            }
+        });
+        col->addWidget(m_holdBtn);
+
         row->addLayout(col);
     }
 
@@ -1164,12 +1201,33 @@ void StripFinalOutputPanel::tickMeters()
         if (v <= -100.0f) return QString("-∞");
         return QString::number(v, 'f', 1);
     };
-    if (m_pkValue)    m_pkValue->setText(fmtDb(m_outPeakDb));
-    if (m_rmsValue)   m_rmsValue->setText(fmtDb(m_outRmsDb));
-    if (m_grValue)    m_grValue->setText(fmtDb(m_grDb));
-    if (m_crestValue) {
-        const float crest = m_outPeakDb - m_outRmsDb;
-        m_crestValue->setText(QString::number(crest, 'f', 1));
+    // Peak-hold latches worst-case-since-engaged (#2887). PK / RMS
+    // hold the MAX; GR holds the most-negative (largest reduction).
+    // CRST always tracks live so the operator can see adjustments
+    // land in real time — latching a single-transient worst-instant
+    // value clamps CRST at an unrepresentative number that never
+    // updates while the user is tuning. The held PK/RMS/GR remain
+    // useful as reference points for the burst.
+    const float liveCrest = m_outPeakDb - m_outRmsDb;
+    if (m_holdEnabled) {
+        if (m_outPeakDb > m_holdPkDb)  m_holdPkDb  = m_outPeakDb;
+        if (m_outRmsDb  > m_holdRmsDb) m_holdRmsDb = m_outRmsDb;
+        if (m_grDb      < m_holdGrDb)  m_holdGrDb  = m_grDb;
+    }
+    const float showPk    = m_holdEnabled ? m_holdPkDb  : m_outPeakDb;
+    const float showRms   = m_holdEnabled ? m_holdRmsDb : m_outRmsDb;
+    const float showGr    = m_holdEnabled ? m_holdGrDb  : m_grDb;
+
+    // Throttle text updates to the project-canonical 10 Hz readout
+    // cadence (kMeterReadoutUpdateMs) so digits are readable while
+    // the bars below them animate smoothly at the underlying 125 Hz
+    // smoother rate.
+    if (nowMs - m_lastReadoutUpdateMs >= kMeterReadoutUpdateMs) {
+        m_lastReadoutUpdateMs = nowMs;
+        if (m_pkValue)    m_pkValue->setText(fmtDb(showPk));
+        if (m_rmsValue)   m_rmsValue->setText(fmtDb(showRms));
+        if (m_grValue)    m_grValue->setText(fmtDb(showGr));
+        if (m_crestValue) m_crestValue->setText(QString::number(liveCrest, 'f', 1));
     }
 
     // OVR + LIMIT styling.

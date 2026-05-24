@@ -221,7 +221,7 @@ void ClientCompThresholdFader::paintEvent(QPaintEvent*)
 
     // dB scale on the left.
     QFont f = p.font();
-    f.setPixelSize(8);
+    f.setPixelSize(9);
     p.setFont(f);
     const QFontMetrics fm(f);
     const int textRight = kLabelColW - 2;

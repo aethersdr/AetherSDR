@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QElapsedTimer>
+#include <QString>
 #include <QWidget>
 
 class QLabel;
@@ -34,6 +36,12 @@ protected:
 private:
     QString m_headerText{"OUT"};
     float   m_smoothedPeak{-120.0f};
+
+    // Numeric readout throttling — re-format the dB text only at
+    // kMeterReadoutUpdateMs (10 Hz) so the digits are eye-readable
+    // while the bar above continues to animate every paint.
+    QString       m_cachedReadout;
+    QElapsedTimer m_readoutClock;
 
     static constexpr float kMeterMinDb = -60.0f;
     static constexpr float kMeterMaxDb =   0.0f;

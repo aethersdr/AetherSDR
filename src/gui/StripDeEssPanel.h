@@ -60,6 +60,8 @@ private:
     void applyAmount(float db);
     void applyAttack(float ms);
     void applyRelease(float ms);
+    void cycleSlope();
+    void refreshSlopeButton();
 
     // Side-aware accessors so the panel binds to either TX or RX
     // ClientDeEss without duplicating the entire control surface.
@@ -78,6 +80,7 @@ private:
     ClientCompKnob*         m_attack{nullptr};
     ClientCompKnob*         m_release{nullptr};
     QPushButton*            m_bypass{nullptr};
+    QPushButton*            m_slopeBtn{nullptr};    // cycling 12/24/36/48 dB/oct
     QTimer*                 m_syncTimer{nullptr};   // mirror engine → knobs
     bool                    m_restoring{false};
 };

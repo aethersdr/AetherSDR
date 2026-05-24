@@ -419,22 +419,29 @@ void StripRxOutputPanel::tick()
     m_peakDb = kMeterMinDb + m_peakSmooth.value() * kRange;
     m_rmsDb  = kMeterMinDb + m_rmsSmooth.value()  * kRange;
 
-    // Update text readouts and repaint the bar.
-    auto fmt = [](float db) -> QString {
-        if (db <= -60.0f) return QString::fromUtf8("-\xe2\x88\x9e");
-        return QString::number(db, 'f', 1);
-    };
-    if (m_peakLbl) m_peakLbl->setText(fmt(m_peakDb));
-    if (m_rmsLbl)  m_rmsLbl->setText(fmt(m_rmsDb));
-    if (m_crestLbl) {
-        // Crest factor (peak − RMS) — only meaningful when both readings
-        // are above the noise floor; show "--" otherwise so the user
-        // doesn't read a misleading 60 dB value while idle.
-        if (m_peakDb > -60.0f && m_rmsDb > -60.0f) {
-            const float crest = m_peakDb - m_rmsDb;
-            m_crestLbl->setText(QString::number(crest, 'f', 1));
-        } else {
-            m_crestLbl->setText("--");
+    // Update text readouts and repaint the bar. Text labels are
+    // throttled to the project-canonical 10 Hz cadence so the digits
+    // stay readable; the bar keeps animating every tick.
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    if (nowMs - m_lastReadoutUpdateMs >= kMeterReadoutUpdateMs) {
+        m_lastReadoutUpdateMs = nowMs;
+        auto fmt = [](float db) -> QString {
+            if (db <= -60.0f) return QString::fromUtf8("-\xe2\x88\x9e");
+            return QString::number(db, 'f', 1);
+        };
+        if (m_peakLbl) m_peakLbl->setText(fmt(m_peakDb));
+        if (m_rmsLbl)  m_rmsLbl->setText(fmt(m_rmsDb));
+        if (m_crestLbl) {
+            // Crest factor (peak − RMS) — only meaningful when both
+            // readings are above the noise floor; show "--" otherwise
+            // so the user doesn't read a misleading 60 dB value while
+            // idle.
+            if (m_peakDb > -60.0f && m_rmsDb > -60.0f) {
+                const float crest = m_peakDb - m_rmsDb;
+                m_crestLbl->setText(QString::number(crest, 'f', 1));
+            } else {
+                m_crestLbl->setText("--");
+            }
         }
     }
     if (m_meter)   m_meter->update();

@@ -188,7 +188,37 @@ StripDeEssPanel::StripDeEssPanel(AudioEngine* engine, QWidget* parent)
             this, &StripDeEssPanel::applyThreshold);
     left->addWidget(m_threshold, 0, Qt::AlignHCenter);
 
+    // Stretch pushes the slope button below to the bottom of the
+    // column so it lines up with the bottom edge of the curve area.
     left->addStretch();
+
+    // Slope-stage cycle button (#2887) anchored to the bottom of
+    // the left knob column. Click cycles 12 → 24 → 36 → 48 dB/oct
+    // (1 to 4 cascaded bandpass biquads). Higher slope = narrower
+    // notch around the sibilant frequency = less mid-band collateral
+    // on Ess-heavy phrases. Dimensions match the LIMIT button in
+    // the comp panel.
+    m_slopeBtn = new QPushButton("24 dB/oct");
+    m_slopeBtn->setFixedHeight(22);
+    m_slopeBtn->setMinimumWidth(76);
+    m_slopeBtn->setMaximumWidth(76);
+    m_slopeBtn->setCursor(Qt::PointingHandCursor);
+    m_slopeBtn->setStyleSheet(
+        "QPushButton { background: #1a2230; border: 1px solid #2a3744;"
+        " border-radius: 3px; color: #b0c4d6; font-size: 11px;"
+        " font-weight: bold; padding: 1px; }"
+        "QPushButton:hover { background: #243044; color: #e8e8e8; }"
+        "QPushButton:pressed { background: #2a3a52; }");
+    m_slopeBtn->setToolTip(tr(
+        "Sidechain / notch filter slope.\n\n"
+        "Each click steps through 12 → 24 → 36 → 48 dB/oct (1 to 4 "
+        "cascaded bandpass biquads). Higher slope narrows the band "
+        "the de-esser acts on, so sibilants get cut without "
+        "collateral attenuation of the mid speech band."));
+    connect(m_slopeBtn, &QPushButton::clicked,
+            this, &StripDeEssPanel::cycleSlope);
+    left->addWidget(m_slopeBtn, 0, Qt::AlignHCenter);
+
     body->addLayout(left, 0);
 
     // Center: sidechain bandpass response curve (bigger than the
@@ -203,9 +233,11 @@ StripDeEssPanel::StripDeEssPanel(AudioEngine* engine, QWidget* parent)
     m_curve->setCompactMode(false);
     m_curve->setMinimumHeight(140);
     centre->addWidget(m_curve, 1);
+
     auto* grBar = new DeEssGrBar;
     m_grBar = grBar;
     centre->addWidget(grBar);
+
     body->addLayout(centre, 1);
 
     // Right column: Amount / Attack / Release
@@ -344,10 +376,33 @@ void StripDeEssPanel::syncControlsFromEngine()
     { QSignalBlocker b(m_attack);    m_attack->setValue(d->attackMs()); }
     { QSignalBlocker b(m_release);   m_release->setValue(d->releaseMs()); }
 
+    refreshSlopeButton();
+
     if (auto* bar = static_cast<DeEssGrBar*>(m_grBar))
         bar->setGrDb(d->gainReductionDb());
 
     m_restoring = false;
+}
+
+void StripDeEssPanel::refreshSlopeButton()
+{
+    if (!m_slopeBtn) return;
+    const int stages = (m_audio && deEss())
+        ? std::clamp(deEss()->slopeStages(),
+                     1, ClientDeEss::kMaxSlopeStages)
+        : 2;
+    m_slopeBtn->setText(QString::number(stages * 12) + " dB/oct");
+}
+
+void StripDeEssPanel::cycleSlope()
+{
+    if (m_restoring || !m_audio || !deEss()) return;
+    int next = deEss()->slopeStages() + 1;
+    if (next > ClientDeEss::kMaxSlopeStages) next = 1;
+    deEss()->setSlopeStages(next);
+    saveDeEssSettings();
+    refreshSlopeButton();
+    if (m_curve) m_curve->update();
 }
 
 void StripDeEssPanel::applyFrequency(float hz)
