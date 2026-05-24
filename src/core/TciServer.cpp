@@ -283,6 +283,17 @@ void TciServer::setTxGain(float gain)
     s.save();
 }
 
+void TciServer::setOverflowMode(int mode)
+{
+    if (mode < 0 || mode > 2) return;
+    auto next = static_cast<OverflowMode>(mode);
+    if (m_overflowMode == next) return;
+    m_overflowMode = next;
+    auto& s = AppSettings::instance();
+    s.setValue("TciTxOverflowMode", QString::number(mode));
+    s.save();
+}
+
 void TciServer::setRxChannelGain(int channel, float gain)
 {
     if (channel < 1 || channel > 4) return;
@@ -853,18 +864,49 @@ void TciServer::onBinaryMessage(const QByteArray& data)
     double sumSq = 0.0;
     float peak = 0.0f;
     qint64 clipSamples = 0;
-    for (int i = 0; i < outputSamples; ++i) {
-        float v = dst[i] * m_txGain;
-        if (v > 1.0f) {
-            v = 1.0f;
-            ++clipSamples;
-        } else if (v < -1.0f) {
-            v = -1.0f;
-            ++clipSamples;
+    // Three overflow regimes selectable via right-click on the TCI TX slider:
+    //   Clip     — saturating clamp at ±1.0; cheap defensive limiter,
+    //              introduces harmonics on overshoots but protects the
+    //              radio float→int16 stage from out-of-range input.
+    //   NaNGuard — pass everything except NaN/Inf (which the radio can't
+    //              digest); preserves bit-exact tones for well-formed
+    //              digital clients, accepts that a malformed >1.0 client
+    //              will reach the radio.
+    //   Measure  — pure bypass: count overshoots for telemetry but never
+    //              touch sample data.  100% client-side passthrough.
+    switch (m_overflowMode) {
+    case OverflowMode::Clip:
+        for (int i = 0; i < outputSamples; ++i) {
+            float v = dst[i] * m_txGain;
+            if (v > 1.0f) { v = 1.0f; ++clipSamples; }
+            else if (v < -1.0f) { v = -1.0f; ++clipSamples; }
+            dst[i] = v;
+            peak = std::max(peak, std::abs(v));
+            sumSq += static_cast<double>(v) * static_cast<double>(v);
         }
-        dst[i] = v;
-        peak = std::max(peak, std::abs(v));
-        sumSq += static_cast<double>(v) * static_cast<double>(v);
+        break;
+    case OverflowMode::NaNGuard:
+        for (int i = 0; i < outputSamples; ++i) {
+            float v = dst[i] * m_txGain;
+            if (!std::isfinite(v)) { v = 0.0f; ++clipSamples; }
+            else if (std::abs(v) > 1.0f) ++clipSamples;
+            dst[i] = v;
+            peak = std::max(peak, std::abs(v));
+            sumSq += static_cast<double>(v) * static_cast<double>(v);
+        }
+        break;
+    case OverflowMode::Measure:
+        for (int i = 0; i < outputSamples; ++i) {
+            const float v = dst[i] * m_txGain;
+            dst[i] = v;
+            if (!std::isfinite(v) || std::abs(v) > 1.0f) ++clipSamples;
+            const float absV = std::isfinite(v) ? std::abs(v) : 0.0f;
+            peak = std::max(peak, absV);
+            sumSq += std::isfinite(v)
+                       ? static_cast<double>(v) * static_cast<double>(v)
+                       : 0.0;
+        }
+        break;
     }
 
     ++m_txAudioBlocks;
@@ -1397,6 +1439,12 @@ void TciServer::startTxChrono(QWebSocket* client, int trx)
     m_txGain = std::clamp(
         txGainSettings.value("TciTxGain", "0.5").toString().toFloat(),
         0.0f, 1.0f);
+    {
+        bool ok = false;
+        int rawMode = txGainSettings.value("TciTxOverflowMode", "0").toString().toInt(&ok);
+        if (!ok || rawMode < 0 || rawMode > 2) rawMode = 0;
+        m_overflowMode = static_cast<OverflowMode>(rawMode);
+    }
     m_txChronoAccumNs = 0;
     m_txChronoRequestedFrames = 0;
     m_txAudioBlocks = 0;

@@ -38,6 +38,8 @@ signals:
     void tciToggled(bool on);
     void tciRxGainChanged(int channel, float gain);  // 1-4, 0.0–1.0
     void tciTxGainChanged(float gain);
+    // 0=Clip, 1=NaNGuard, 2=Measure — selected via right-click on TX slider.
+    void tciTxOverflowModeChanged(int mode);
 
 private:
 #ifdef HAVE_WEBSOCKETS

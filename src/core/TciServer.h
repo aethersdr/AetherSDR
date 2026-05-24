@@ -74,6 +74,18 @@ public:
     void setTxGain(float gain);
     float txGain() const { return m_txGain; }
 
+    // TCI TX overflow handling.  After gain, samples whose magnitude
+    // exceeds full-scale (±1.0) are handled per this mode:
+    //   Clip     — saturating clamp to ±1.0 (legacy default, defensive)
+    //   NaNGuard — pass-through; only zero NaN/Inf (preserves bit-exactness
+    //              for legitimate digital-mode tones at the cost of letting
+    //              malformed >1.0 clients through)
+    //   Measure  — pure bypass; count clip events but never mutate samples
+    // Persists to TciTxOverflowMode (0/1/2).
+    enum class OverflowMode : int { Clip = 0, NaNGuard = 1, Measure = 2 };
+    void setOverflowMode(int mode);
+    int overflowMode() const { return static_cast<int>(m_overflowMode); }
+
     // Per-channel TCI RX gain (0.0–1.0), applied to outbound DAX audio before
     // resampling and sending to TCI clients.  Decoupled from DaxRxGain<n> so
     // DAX bridge and TCI maintain independent per-channel gains.
@@ -193,6 +205,7 @@ private:
     qint64            m_txChronoRequestedFrames{0};
     bool              m_txUseRadioRoute{true};
     float             m_txGain{1.0f};
+    OverflowMode      m_overflowMode{OverflowMode::Clip};
     float             m_rxChannelGain[4]{1.0f, 1.0f, 1.0f, 1.0f};
     qint64            m_txAudioBlocks{0};
     qint64            m_txInputFrames{0};

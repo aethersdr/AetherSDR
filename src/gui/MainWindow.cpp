@@ -4403,6 +4403,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_tciServer, &TciServer::setRxChannelGain);
     connect(m_appletPanel->tciApplet(), &TciApplet::tciTxGainChanged,
             m_tciServer, &TciServer::setTxGain);
+    connect(m_appletPanel->tciApplet(), &TciApplet::tciTxOverflowModeChanged,
+            m_tciServer, &TciServer::setOverflowMode);
 
     // TciServer level signals → TCI applet meters
     connect(m_tciServer, &TciServer::rxLevel,

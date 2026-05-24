@@ -13,6 +13,8 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
+#include <QMenu>
+#include <QActionGroup>
 #include <algorithm>
 #endif
 
@@ -131,6 +133,57 @@ void TciApplet::buildUI()
             // TciServer::setTxGain() persists TciTxGain internally.
             emit tciTxGainChanged(g);
         });
+
+        // Right-click on the TX slider → overflow-mode picker.  Lets users
+        // choose how out-of-range (>1.0) samples from TCI clients are
+        // handled before the radio sees them.  Default Clip preserves the
+        // legacy defensive limiter; NaNGuard / Measure are progressively
+        // less destructive for digital-mode tone fidelity.
+        m_txMeter->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_txMeter, &QWidget::customContextMenuRequested,
+                this, [this](const QPoint& pos) {
+            int saved = AppSettings::instance()
+                          .value("TciTxOverflowMode", "0").toString().toInt();
+            saved = std::clamp(saved, 0, 2);
+
+            QMenu menu(this);
+            menu.setTitle("TX overflow handling");
+            auto* group = new QActionGroup(&menu);
+            group->setExclusive(true);
+
+            struct Item { int mode; const char* label; const char* tip; };
+            const Item items[] = {
+                { 0, "Clip (saturating ±1.0)",
+                  "Hard-clamp overshoots to ±1.0.  Defensive default; "
+                  "introduces harmonics on overshoot but protects downstream "
+                  "int16 conversion." },
+                { 1, "NaN guard (zero NaN/Inf only)",
+                  "Pass samples through bit-exact; only zero pathological "
+                  "NaN/Inf values.  Preserves digital-mode tone fidelity; "
+                  "out-of-range floats reach the radio." },
+                { 2, "Measure only (true bypass)",
+                  "Never mutate samples.  Count overshoots for telemetry; "
+                  "the downstream int16 conversion still clamps in the "
+                  "radio-native DAX route." },
+            };
+
+            for (const auto& it : items) {
+                auto* act = menu.addAction(QString::fromUtf8(it.label));
+                act->setToolTip(QString::fromUtf8(it.tip));
+                act->setCheckable(true);
+                act->setChecked(it.mode == saved);
+                act->setData(it.mode);
+                group->addAction(act);
+            }
+
+            connect(&menu, &QMenu::triggered, this, [this](QAction* act) {
+                if (!act) return;
+                emit tciTxOverflowModeChanged(act->data().toInt());
+            });
+
+            menu.exec(m_txMeter->mapToGlobal(pos));
+        });
+
         row->addWidget(m_txMeter, 1);
 
         outer->addLayout(row);
