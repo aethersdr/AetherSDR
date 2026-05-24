@@ -429,6 +429,8 @@ set(CORE_SOURCES
     src/core/AudioEngine.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp
+    src/core/Biquad.cpp
+    src/core/StereoBiquad.cpp
     src/core/ClientEq.cpp
     src/core/ClientComp.cpp
     src/core/ClientGate.cpp
@@ -1385,6 +1387,14 @@ add_executable(profile_transfer_test
 target_include_directories(profile_transfer_test PRIVATE src)
 target_link_libraries(profile_transfer_test PRIVATE Qt6::Core)
 add_test(NAME profile_transfer_test COMMAND profile_transfer_test)
+
+add_executable(biquad_test
+    tests/biquad_test.cpp
+    src/core/Biquad.cpp
+    src/core/StereoBiquad.cpp
+)
+target_include_directories(biquad_test PRIVATE src)
+add_test(NAME biquad_test COMMAND biquad_test)
 
 add_executable(client_gate_test
     tests/client_gate_test.cpp
