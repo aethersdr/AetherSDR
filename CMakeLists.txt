@@ -819,7 +819,17 @@ if(MSVC)
             CMAKE_GENERATOR   "Ninja"
             CMAKE_ARGS
                 -DCMAKE_BUILD_TYPE=$<CONFIG>
+                # liquid-dsp's project() declares LANGUAGES C CXX. CMake's
+                # Windows-Clang platform module refuses to mix clang-cl C
+                # with MSVC C++ (Modules/Platform/Windows-Clang.cmake:168
+                # — "Use either clang/clang++ or clang-cl as all C, C++,
+                # CUDA, ..."). Set both compilers so the inner project's
+                # language detection stays consistent. The C++ compiler
+                # isn't actually invoked (examples / autotests /
+                # benchmarks / sandbox are disabled) but CMake still
+                # validates the toolchain at configure time.
                 -DCMAKE_C_COMPILER=${CLANG_CL_EXE}
+                -DCMAKE_CXX_COMPILER=${CLANG_CL_EXE}
                 -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
                 -DBUILD_EXAMPLES=OFF
                 -DBUILD_AUTOTESTS=OFF
