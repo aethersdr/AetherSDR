@@ -48,6 +48,7 @@ void BandPlanManager::setActivePlan(const QString& name)
             m_activeName = name;
             m_segments = p.segments;
             m_spots = p.spots;
+            m_licenseClasses = p.licenseClasses;
             AppSettings::instance().setValue("BandPlanName", name);
             AppSettings::instance().save();
             emit planChanged();
@@ -68,11 +69,31 @@ QVector<BandPlanManager::Region>
 BandPlanManager::contiguousRegionsForBand(double searchLowMhz,
                                          double searchHighMhz) const
 {
+    return contiguousRegionsForBand(searchLowMhz, searchHighMhz, QString());
+}
+
+QVector<BandPlanManager::Region>
+BandPlanManager::contiguousRegionsForBand(double searchLowMhz,
+                                         double searchHighMhz,
+                                         const QString& allowedClass) const
+{
     QVector<Region> regions;
     for (const auto& seg : m_segments) {
         const double mid = (seg.lowMhz + seg.highMhz) / 2.0;
-        if (mid >= searchLowMhz && mid <= searchHighMhz)
-            regions.append({seg.lowMhz, seg.highMhz});
+        if (mid < searchLowMhz || mid > searchHighMhz) continue;
+        // Filter BEFORE the merge so that an allowed segment adjacent to a
+        // disallowed one stays as two separate regions instead of merging
+        // into one and reintroducing the disallowed centers. Empty-license
+        // segments (BCN markers, general-purpose) always pass through. (#2649)
+        if (!allowedClass.isEmpty() && !seg.license.isEmpty()) {
+            const auto codes = seg.license.split(',', Qt::SkipEmptyParts);
+            bool allowed = false;
+            for (const auto& code : codes) {
+                if (code.trimmed() == allowedClass) { allowed = true; break; }
+            }
+            if (!allowed) continue;
+        }
+        regions.append({seg.lowMhz, seg.highMhz});
     }
     if (regions.isEmpty()) return regions;
 
@@ -106,6 +127,15 @@ bool BandPlanManager::loadPlanFromJson(const QString& path, PlanData& out)
     QJsonObject root = doc.object();
     out.name = root.value("name").toString();
     if (out.name.isEmpty()) return false;
+
+    // Optional license-class table: {"T": "Technician", "G": "General", ...}.
+    // Plans without the block leave the map empty so the dialog hides its
+    // class-filter UI entirely. (#2649)
+    const QJsonObject classes = root.value("license_classes").toObject();
+    for (auto it = classes.begin(); it != classes.end(); ++it) {
+        if (it.value().isString())
+            out.licenseClasses.insert(it.key(), it.value().toString());
+    }
 
     // Parse segments
     const auto segs = root.value("segments").toArray();

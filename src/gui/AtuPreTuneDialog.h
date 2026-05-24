@@ -63,6 +63,8 @@ private:
     void buildConfigPage();
     void buildSweepPage();
     void populateBands();
+    void populateLicenseClassRow();
+    QString selectedLicenseClass() const;
     QVector<double> centersForBand(const BandRow& row) const;
     void onStartClicked();
     void onTuneClicked();
@@ -90,6 +92,8 @@ private:
     QWidget* m_configPage{nullptr};
     QLabel*  m_planNameLabel{nullptr};
     QComboBox* m_modeCombo{nullptr};
+    QWidget*   m_licenseClassRow{nullptr};
+    QComboBox* m_licenseClassCombo{nullptr};
     QWidget* m_bandsContainer{nullptr};
     QVBoxLayout* m_bandsLayout{nullptr};
     QVector<BandRow> m_bands;

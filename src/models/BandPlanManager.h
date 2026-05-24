@@ -2,6 +2,7 @@
 
 #include <QObject>
 #include <QColor>
+#include <QMap>
 #include <QString>
 #include <QVector>
 
@@ -50,6 +51,12 @@ public:
     const QVector<Segment>& segments() const { return m_segments; }
     const QVector<Spot>& spots() const { return m_spots; }
 
+    // Active plan's optional license-class table: code → human label
+    // (e.g. {"T": "Technician", "G": "General", "E": "Extra"} for ARRL US).
+    // Empty when the plan declares no class structure — callers should hide
+    // class-filter UI entirely in that case. (#2649)
+    const QMap<QString, QString>& licenseClasses() const { return m_licenseClasses; }
+
     // Available plans (display names)
     QStringList availablePlans() const;
 
@@ -61,6 +68,17 @@ public:
     QVector<Region> contiguousRegionsForBand(double searchLowMhz,
                                              double searchHighMhz) const;
 
+    // License-class-aware overload. When allowedClass is non-empty, segments
+    // whose license field is non-empty and does NOT contain allowedClass are
+    // dropped BEFORE the sort+merge — adjacent allowed and disallowed
+    // segments stay separate regions instead of merging into one. Segments
+    // with empty license (BCN markers, general-purpose) always pass through.
+    // Plans that don't carry license markings collapse to the two-arg
+    // behavior. (#2649)
+    QVector<Region> contiguousRegionsForBand(double searchLowMhz,
+                                             double searchHighMhz,
+                                             const QString& allowedClass) const;
+
 signals:
     void planChanged();
 
@@ -69,6 +87,7 @@ private:
         QString name;
         QVector<Segment> segments;
         QVector<Spot> spots;
+        QMap<QString, QString> licenseClasses;  // code → human label (#2649)
     };
 
     bool loadPlanFromJson(const QString& path, PlanData& out);
@@ -77,6 +96,7 @@ private:
     QString m_activeName;
     QVector<Segment> m_segments;  // active plan's segments
     QVector<Spot> m_spots;        // active plan's spots
+    QMap<QString, QString> m_licenseClasses;  // active plan's class table (#2649)
 };
 
 } // namespace AetherSDR

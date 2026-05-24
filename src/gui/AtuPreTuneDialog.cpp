@@ -10,12 +10,14 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
+#include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QStackedWidget>
@@ -70,6 +72,23 @@ constexpr int kPerPointTimeoutMs = 30 * 1000;
 constexpr int kSettleMs = 300;
 constexpr int kMaxConsecutiveFailBypass = 3;
 
+// Operator-attention guardrail: warn if the planned sweep exceeds this many
+// points across all selected bands. Catches the "select-all on a wide
+// regional plan" footgun where 100+ keyings can run for tens of minutes
+// unattended. (#2649 #4)
+constexpr int kMaxPointsSoftCap = 100;
+
+// Equipment guardrail: warn if tune power exceeds this watts when entering
+// Auto mode. Some amps need higher drive, so the gate is a warning rather
+// than a refusal — Principle XIII (the operator outranks the agent). (#2649 #5)
+constexpr int kAutoModeTunePowerWarnW = 20;
+
+// AppSettings key for the operator's licence class code (e.g. "G" for
+// General). Stored as a single nested-JSON-equivalent flat string per
+// Principle V's pragmatic note about standalone keys when no related block
+// exists yet to nest under. (#2649 #8)
+constexpr const char* kLicenseClassKey = "OperatorLicenseClass";
+
 // computeCenters() is now in AtuPreTuneCenters.h (header-only) so the
 // unit test can exercise it without dragging in this dialog. (#2648)
 int pointsForRange(double lowMhz, double highMhz, int segmentKhz)
@@ -87,12 +106,18 @@ int pointsForRange(double lowMhz, double highMhz, int segmentKhz)
 // even-stride walk. (#2647)
 QVector<double> computeCentersForBand(
     const BandPlanManager& bandPlan,
-    double searchLowMhz, double searchHighMhz, int segmentKhz)
+    double searchLowMhz, double searchHighMhz, int segmentKhz,
+    const QString& allowedLicenseClass = QString())
 {
     QVector<double> out;
     if (segmentKhz <= 0) return out;
 
-    const auto regions = bandPlan.contiguousRegionsForBand(searchLowMhz, searchHighMhz);
+    // License-class filter (#2649 #8): when set, drop segments whose
+    // non-empty license field doesn't include the operator's class. The
+    // filter runs before the merge so an allowed segment adjacent to a
+    // disallowed one stays as a separate region.
+    const auto regions = bandPlan.contiguousRegionsForBand(
+        searchLowMhz, searchHighMhz, allowedLicenseClass);
     if (regions.isEmpty()) return out;
 
     // If a region is narrower than one full tune segment (e.g. US 60m's
@@ -161,7 +186,19 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
     buildSweepPage();
     m_pages->setCurrentWidget(m_configPage);
 
+    populateLicenseClassRow();
     populateBands();
+
+    if (m_licenseClassCombo) {
+        connect(m_licenseClassCombo,
+                QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this](int) {
+            const QString code = selectedLicenseClass();
+            AppSettings::instance().setValue(kLicenseClassKey, code);
+            AppSettings::instance().save();
+            populateBands();  // re-filter centers under the new class
+        });
+    }
 
     if (m_radio) {
         connect(&m_radio->transmitModel(), &TransmitModel::atuStateChanged,
@@ -230,6 +267,21 @@ void AtuPreTuneDialog::buildConfigPage()
         row->addWidget(m_modeCombo, 1);
         layout->addLayout(row);
     }
+
+    // Licence-class filter row (#2649 #8). Populated in populateLicenseClassRow();
+    // hidden entirely when the active plan declares no license_classes block.
+    m_licenseClassRow = new QWidget(m_configPage);
+    {
+        auto* row = new QHBoxLayout(m_licenseClassRow);
+        row->setContentsMargins(0, 0, 0, 0);
+        auto* lbl = new QLabel("License class:", m_licenseClassRow);
+        lbl->setStyleSheet("color: #8aa8c0; font-size: 11px;");
+        row->addWidget(lbl);
+        m_licenseClassCombo = new QComboBox(m_licenseClassRow);
+        row->addWidget(m_licenseClassCombo, 1);
+    }
+    layout->addWidget(m_licenseClassRow);
+    m_licenseClassRow->setVisible(false);
 
     auto* scroll = new QScrollArea(m_configPage);
     scroll->setWidgetResizable(true);
@@ -310,6 +362,52 @@ void AtuPreTuneDialog::buildSweepPage()
     m_pages->addWidget(m_sweepPage);
 }
 
+void AtuPreTuneDialog::populateLicenseClassRow()
+{
+    if (!m_licenseClassRow || !m_licenseClassCombo) return;
+    m_licenseClassCombo->blockSignals(true);
+    m_licenseClassCombo->clear();
+
+    if (!m_bandPlan || m_bandPlan->licenseClasses().isEmpty()) {
+        // Plan has no class structure — keep the row hidden so the feature
+        // is inert and the operator's stored class is preserved untouched
+        // for when they switch back to a class-aware plan. (#2649 #8)
+        m_licenseClassRow->setVisible(false);
+        m_licenseClassCombo->blockSignals(false);
+        return;
+    }
+
+    // Always-present "no filter" entry — safety floor: if we can't prove
+    // the operator's class authorizes a segment, leave them unfiltered and
+    // let the disclaimer + TX interlock backstop. (#2649 #8)
+    m_licenseClassCombo->addItem("All classes (no filter)", QString());
+
+    const auto classes = m_bandPlan->licenseClasses();
+    for (auto it = classes.begin(); it != classes.end(); ++it) {
+        m_licenseClassCombo->addItem(
+            QString("%1 (%2)").arg(it.value(), it.key()), it.key());
+    }
+
+    // Default to the operator's stored class when it exists in this plan;
+    // otherwise default to "no filter" rather than auto-picking — keeps
+    // the safety floor honest across plan switches.
+    const QString stored =
+        AppSettings::instance().value(kLicenseClassKey).toString();
+    int idx = stored.isEmpty() ? 0 : m_licenseClassCombo->findData(stored);
+    if (idx < 0) idx = 0;
+    m_licenseClassCombo->setCurrentIndex(idx);
+
+    m_licenseClassRow->setVisible(true);
+    m_licenseClassCombo->blockSignals(false);
+}
+
+QString AtuPreTuneDialog::selectedLicenseClass() const
+{
+    if (!m_licenseClassRow || !m_licenseClassRow->isVisible()) return QString();
+    if (!m_licenseClassCombo) return QString();
+    return m_licenseClassCombo->currentData().toString();
+}
+
 void AtuPreTuneDialog::populateBands()
 {
     for (auto& row : m_bands) {
@@ -325,6 +423,7 @@ void AtuPreTuneDialog::populateBands()
 
     if (!m_bandPlan) return;
     const auto& segments = m_bandPlan->segments();
+    const QString allowedClass = selectedLicenseClass();
 
     for (const auto& spec : kBandSpecs) {
         BandRow row;
@@ -338,7 +437,8 @@ void AtuPreTuneDialog::populateBands()
         row.centers = computeCentersForBand(*m_bandPlan,
                                             spec.searchLowMhz,
                                             spec.searchHighMhz,
-                                            row.segmentKhz);
+                                            row.segmentKhz,
+                                            allowedClass);
         if (row.centers.isEmpty()) continue;  // no coverage in active plan
         double lo = 1e9;
         double hi = -1.0;
@@ -453,6 +553,43 @@ void AtuPreTuneDialog::onStartClicked()
         m_continueAfterFailBtn->setVisible(false);
         setAbortButtonCloseMode();
         return;
+    }
+
+    // Operator-attention guardrail (#2649 #4): warn before kicking off a
+    // sweep large enough to keep the radio transmitting for tens of minutes
+    // unattended. Catches the "select all bands on a wide regional plan"
+    // footgun (e.g. ~129 points × 15 s ≈ 32 min of TX on R1 with everything
+    // checked).
+    if (m_points.size() > kMaxPointsSoftCap) {
+        const int estSecs = m_points.size() * kSecondsPerPointEstimate;
+        const auto reply = QMessageBox::warning(this,
+            "Large Pre-Tune Sweep",
+            QString("Selected bands total %1 points "
+                    "(estimated %2 min %3 s of intermittent TX).\n\n"
+                    "Continue?")
+                .arg(m_points.size())
+                .arg(estSecs / 60)
+                .arg(estSecs % 60, 2, 10, QChar('0')),
+            QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
+        if (reply != QMessageBox::Ok) return;
+    }
+
+    // Equipment guardrail (#2649 #5): warn — never refuse — if tune power
+    // is high when entering Auto mode. Some amps need higher drive (per
+    // Principle XIII the operator outranks the agent); the gate exists to
+    // force a deliberate choice before unattended TX.
+    if (m_mode == Mode::Auto && m_radio) {
+        const int tunePower = m_radio->transmitModel().tunePower();
+        if (tunePower > kAutoModeTunePowerWarnW) {
+            const auto reply = QMessageBox::warning(this,
+                "High Tune Power",
+                QString("Tune power is %1 W — higher than the recommended "
+                        "%2 W ceiling for unattended Auto mode.\n\n"
+                        "Continue?")
+                    .arg(tunePower).arg(kAutoModeTunePowerWarnW),
+                QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
+            if (reply != QMessageBox::Ok) return;
+        }
     }
 
     m_currentIndex = -1;
@@ -602,6 +739,7 @@ void AtuPreTuneDialog::onPerPointTimeout()
         QString("No ATU status within %1 s — ATU may be stuck. Aborting.")
             .arg(kPerPointTimeoutMs / 1000));
     if (m_radio) m_radio->transmitModel().atuBypass();
+    QApplication::beep();  // terminal-fail cue for operators not watching (#2649 #7)
     finishSweep(" Aborted: per-point timeout.");
 }
 
@@ -644,6 +782,7 @@ void AtuPreTuneDialog::onAtuStateChanged()
             m_sweepResult->setText(
                 QString("Tune failed (fail-bypass) %1 times in a row — aborting.")
                     .arg(m_consecutiveFailBypass));
+            QApplication::beep();  // terminal-fail cue (#2649 #7)
             finishSweep(QString(" Aborted: %1 consecutive fail-bypass.")
                             .arg(m_consecutiveFailBypass));
             return;

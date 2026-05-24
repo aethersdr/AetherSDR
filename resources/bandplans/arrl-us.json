@@ -2,6 +2,11 @@
   "name": "ARRL (US)",
   "description": "ARRL US Amateur Radio Band Plan with license class markings",
   "version": 1,
+  "license_classes": {
+    "T": "Technician",
+    "G": "General",
+    "E": "Extra"
+  },
   "segments": [
     {"low": 0.1357, "high": 0.1378, "label": "CW", "license": "E,G", "color": "#3060ff"},
     {"low": 0.472, "high": 0.479, "label": "CW", "license": "E,G", "color": "#3060ff"},
