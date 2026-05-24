@@ -12234,8 +12234,12 @@ MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
 
     const bool isSpectrumClick = source && qstrcmp(source, "spectrum-click") == 0;
     const bool revealOffscreen = (intent == TuneIntent::RevealOffscreen);
+    // RevealOffscreen previously used 0.0, which settled the slice exactly on the
+    // visible edge — partially clipped and indistinguishable from "still off-screen"
+    // to the user.  Reuse the comfort margin so a single click on the off-screen
+    // indicator brings the slice fully into view.  (#2941, regression of #2371.)
     const double comfortMargin =
-        revealOffscreen   ? 0.0
+        revealOffscreen   ? kRevealComfortEdgeMarginFrac
         : isSpectrumClick ? kSpectrumClickEdgeMarginFrac
                           : kRevealComfortEdgeMarginFrac;
     const double triggerEdgeMarginFrac =
