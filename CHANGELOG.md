@@ -26,13 +26,15 @@ handle, TCI architecture), **@NF0T** (Ryan B, 12 commits — Windows
 installer + RADE + various), **@rfoust** (Robbie Foust, 9 commits —
 FlexControl wheel UX overhaul), **@Ozy311** (5 commits — BYPASS state
 persistence, applet float/dock title-bar sync, ProfileManager auto-save
-signal, DX Spots slider cap, BYPASS tooltip), **@M7HNF-Ian** (Nigel
-Fenton, 5 commits), **@chibondking** (CJ Johnson, 5 commits — panadapter
-dBm prime fix), **@M8WLO** (Andy, 4 commits), **@s53zo** (2 commits —
+signal, DX Spots slider cap, BYPASS tooltip), **@nigelfenton** (Nigel
+Fenton, G0JKN, 5 commits — TCI Network dialog tab, tx_gain + ALC, use-
+after-free fix, vfo emit on band-change, mic-capture suppress during
+TCI feed), **@chibondking** (CJ Johnson, 5 commits — panadapter dBm
+prime fix), **@M8WLO** (Andy, 4 commits), **@s53zo** (2 commits —
 substantial MQTT settings dialog refactor with self-found subscription-
 state fix), **@pepefrog1234** (2 commits — the macOS silent-SSB-TX fix
-+ set_split_vfo ping-pong fix), **@K5PTB** (2 commits), **@chrisb1964**
-(1 commit), and **@aethersdr-agent** (the AetherClaude orchestrator,
++ set_split_vfo ping-pong fix), **@K5PTB** (2 commits), **@G6PWY-Chris**
+(Chris G6PWY, 1 commit), and **@aethersdr-agent** (the AetherClaude orchestrator,
 22 commits — automated fixes on `aetherclaude-eligible` issues).
 Dependabot contributed 6 security and version bumps.
 
