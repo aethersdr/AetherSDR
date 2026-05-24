@@ -778,16 +778,26 @@ endif()
 # Vendored proactively under #3043 as foundation infrastructure for future
 # digital-mode work (e.g. native FT8/FT4 — #85 Phase 4 — or PSK31 / RTTY).
 #
+# Linux + macOS only — liquid-dsp upstream targets GCC/Clang/MinGW; its
+# include/liquid.h:473 uses C99 `float _Complex` typedefs which the MSVC C
+# compiler doesn't accept (syntax error: identifier 'liquid_float_complex').
+# Upstream has no first-class MSVC support and patching the header for
+# `_Fcomplex`/`_Dcomplex` would be invasive against future upstream syncs.
+# Tracked as a follow-up; today the Windows build skips this vendor and
+# any future consumer that needs liquid-dsp on Windows needs to land MSVC
+# support first.
+#
 # Built via the upstream CMakeLists.txt with examples / tests / benchmarks /
 # sandbox / docs disabled to keep the build slim. FFTW lookup is disabled
 # (FIND_FFTW=OFF) so liquid-dsp uses its own internal FFT — wiring it to our
 # bundled third_party/fftw3 can be a follow-up if a future consumer wants
 # FFTW-accelerated transforms.
 #
-# AetherSDR links against liquid-static so the build verifies clean even
-# though no module currently consumes liquid symbols. Standard linker dead-
-# code elimination (--gc-sections on ELF, /OPT:REF on MSVC) drops the unused
-# static lib from the final binary.
+# AetherSDR links against liquid-static (conditionally on non-MSVC) so the
+# build verifies clean on Linux + macOS even though no module currently
+# consumes liquid symbols. Standard linker dead-code elimination
+# (--gc-sections on ELF) drops the unused static lib from the final binary.
+if(NOT MSVC)
 set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
 set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
@@ -800,12 +810,9 @@ set(ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
 # under CMP0077 OLD behavior — option() with that policy does NOT honor a
 # same-name *normal* variable. We must use CACHE BOOL FORCE so the override
 # takes effect. Without this, BUILD_SHARED_LIBS stays at the option's ON
-# default, and on Windows both the SHARED target (liquid.dll's import lib
-# `liquid.lib`) and the STATIC target (renamed via OUTPUT_NAME `liquid` at
-# upstream CMakeLists.txt:444 → also `liquid.lib`) collide in ninja with
-# "multiple rules generate ... liquid.lib". Linux silently ships both via
-# different extensions (libliquid.so / libliquid.a) but the collision is
-# the same and we want exactly one library here.
+# default. Linux silently ships both libliquid.so and libliquid.a (different
+# extensions); the OUTPUT_NAME `liquid` at upstream CMakeLists.txt:444
+# renames the STATIC target's archive to drop the -static suffix.
 #
 # Cache pollution is undone with unset(CACHE) after add_subdirectory so
 # this doesn't leak into the rest of the project's BUILD_SHARED_LIBS
@@ -816,12 +823,9 @@ unset(BUILD_SHARED_LIBS CACHE)
 # Suppress warnings from vendored code (same pattern as other third_party
 # integrations — we don't want -Werror surfaces on code we don't own).
 if(TARGET liquid-static)
-    if(MSVC)
-        target_compile_options(liquid-static PRIVATE /w)
-    else()
-        target_compile_options(liquid-static PRIVATE -w)
-    endif()
+    target_compile_options(liquid-static PRIVATE -w)
 endif()
+endif()  # NOT MSVC
 
 qt_add_resources(RESOURCES resources/resources.qrc)
 
@@ -919,7 +923,9 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::Network
     Qt6::Multimedia
     aether_libmodem_core
-    liquid-static        # bundled third_party/liquid-dsp (#3043 — vendored, no current consumer; dead-code-eliminated until used)
+    # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
+    # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
+    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>
     zlibstatic           # bundled third_party/zlib 1.3.1
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )

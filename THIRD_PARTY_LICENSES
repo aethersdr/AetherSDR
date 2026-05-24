@@ -173,8 +173,8 @@ libraries.  See #2651.
   Source:  https://github.com/madler/zlib
 
 
-14. liquid-dsp — Comprehensive DSP Toolkit
--------------------------------------------
+14. liquid-dsp — Comprehensive DSP Toolkit (Linux + macOS only)
+----------------------------------------------------------------
 Bundled at third_party/liquid-dsp/ (commit 4df6fc2ba99b3a584e9f1ad9888094013ae07b2f).
 Comprehensive DSP library covering modems (PSK/QAM/FSK/GMSK/OFDM), forward
 error correction (Hamming/Golay/Reed-Solomon/convolutional), adaptive filters
@@ -185,6 +185,11 @@ linker dead-code elimination drops the unused static lib from the final
 binary until a consumer arrives.  Upstream dev infrastructure (autotests,
 benchmarks, sandbox, docs, autotools wiring) trimmed before vendoring; the
 upstream CMakeLists.txt drives the build via add_subdirectory.
+
+Linux + macOS only — liquid-dsp upstream targets GCC/Clang/MinGW; its
+include/liquid.h uses C99 `float _Complex` typedefs which MSVC's C compiler
+doesn't accept.  Skipped on MSVC; future consumers needing liquid-dsp on
+Windows will need to land MSVC support first.
 
   Copyright (c) 2007-2016 Joseph Gaeddert
   License: MIT
