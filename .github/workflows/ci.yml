@@ -50,6 +50,18 @@ jobs:
               - 'CMakeLists.txt'
               - 'third_party/**'
               - '.github/workflows/**'
+              # MainWindow.cpp / .h carry dozens of `#ifdef Q_OS_WIN`,
+              # `Q_OS_MAC`, and `HAVE_PIPEWIRE` branches; a change that
+              # looks Linux-only can break Windows in non-obvious ways.
+              # Post-mortems: #2633 → #2662 (unconditional m_daxBridge
+              # reference inside macOS-only guard) and #2670 (Windows
+              # behaviour change wasn't exercised by CI). Most recently
+              # the v26.5.3 ClientPhaseRotator.cpp M_PI MSVC break also
+              # slipped past check-windows because the file's path
+              # wasn't on the filter — same class of issue. Force the
+              # Windows CI build whenever this file changes. (#2671)
+              - 'src/gui/MainWindow.cpp'
+              - 'src/gui/MainWindow.h'
 
   # Cross-platform build check — runs only when CMakeLists.txt, third_party/,
   # or workflows are modified, to catch MSVC issues before release. (#796 lesson)
