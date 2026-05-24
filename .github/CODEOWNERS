@@ -1,33 +1,45 @@
 # AetherSDR CODEOWNERS
 #
-# Four tiers, last-matching-pattern wins:
-#   1. Broad default — co-maintainers (ten9876, jensenpat, NF0T, rfoust)
-#   2. Mechanical/safe paths — co-maintainers + @AetherClaude (machine user)
-#   3. Architecture & infrastructure — co-maintainers (no bot approval)
-#   4. Project policy — reserved to @ten9876
+# Three tiers, last-matching-pattern wins. Numbered by exclusivity, not
+# by file position — Tier 1 is the smallest, most-exclusive owner set;
+# Tier 3 is the broadest fall-through default. The file is laid out
+# broad → specific so the more restrictive tiers override the broader
+# defaults via CODEOWNERS' last-match-wins semantics:
 #
-# CODEOWNERS has no permission hierarchy — each path matches exactly one line
-# (last wins) and that line's owners completely replace any earlier match.
-# Co-maintainers are listed on Tier 1, 2, and 3 explicitly so they can
-# approve any non-Tier-4 PR. The tiers differ only by whether the bot
-# (@AetherClaude) or the maintainer (@ten9876 only) is also in the owner set.
+#   Tier 3 (broad default)             — top of file (the `*` line)
+#   Tier 2 (project collaborators)     — middle (specific paths)
+#   Tier 1 (project policy)            — bottom (most specific paths)
 #
-# Self-approval is hard-blocked by GitHub regardless of CODEOWNERS membership,
-# so a contributor cannot approve their own PR even on paths they own.
+# Tier 1 — @ten9876 only (project policy & repo-canon).
+# Tier 2 — @ten9876 + @jensenpat + @NF0T + @rfoust (humans only, no bot).
+# Tier 3 — Tier 2 + @AetherClaude (bot may approve broad-default PRs).
+#
+# CODEOWNERS has no permission hierarchy — each path matches exactly one
+# line (last wins) and that line's owners completely replace any earlier
+# match. The numbering above is documentary; the operative semantics
+# come from the file's pattern order plus last-match-wins.
+#
+# Self-approval is hard-blocked by GitHub regardless of CODEOWNERS
+# membership, so a contributor cannot approve their own PR even on
+# paths they own.
 
-# ── Tier 1: broad default ──────────────────────────────────────────────────
-*                            @ten9876 @jensenpat @NF0T @rfoust
+# ── Tier 3: broad default — bot can approve fall-through paths ─────────────
+*                            @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
 
-# ── Tier 2: mechanical/safe paths — bot can also approve ───────────────────
-tests/                       @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
-docs/                        @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
-*.md                         @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
-.github/dependabot.yml       @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
-.github/docker/              @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
-.github/ISSUE_TEMPLATE/      @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
+# ── Tier 2: project collaborators — humans only, no bot approval ───────────
+# Specific paths that need human judgment: mechanical/safe surfaces (docs,
+# tests, GitHub config) plus the architecture & infrastructure hot files.
+# Removing the bot from these forces a human reviewer for any change.
 
-# ── Tier 3: architecture & infrastructure — bot cannot approve ─────────────
-# Visual/UX direction (per CLAUDE.md "AI Agent Boundaries")
+# Mechanical / safe surfaces
+tests/                       @ten9876 @jensenpat @NF0T @rfoust
+docs/                        @ten9876 @jensenpat @NF0T @rfoust
+*.md                         @ten9876 @jensenpat @NF0T @rfoust
+.github/dependabot.yml       @ten9876 @jensenpat @NF0T @rfoust
+.github/docker/              @ten9876 @jensenpat @NF0T @rfoust
+.github/ISSUE_TEMPLATE/      @ten9876 @jensenpat @NF0T @rfoust
+
+# Visual / UX direction (per CLAUDE.md "AI Agent Boundaries")
 src/gui/MainWindow.h         @ten9876 @jensenpat @NF0T @rfoust
 src/gui/MainWindow.cpp       @ten9876 @jensenpat @NF0T @rfoust
 
@@ -46,13 +58,13 @@ CMakeLists.txt               @ten9876 @jensenpat @NF0T @rfoust
 .github/codeql/              @ten9876 @jensenpat @NF0T @rfoust
 .claude/commands/            @ten9876 @jensenpat @NF0T @rfoust
 
-# ── Tier 4: project policy — maintainer-only ──────────────────────────────
+# ── Tier 1: project policy — maintainer-only ──────────────────────────────
 # Every file in the repo's root directory is project-policy / repo-canon
-# (with the explicit exception of CMakeLists.txt — kept at Tier 3 because
-# build-config edits are appropriate for the architecture-owner subset).
+# (with the explicit exception of CMakeLists.txt — kept at Tier 2 because
+# build-config edits are appropriate for the broader collaborator set).
 # Listed individually rather than via `/*` so the intent is auditable and
-# new root-dir files trigger a deliberate review of which tier they belong
-# in (added or omitted by the PR that introduces them).
+# new root-dir files trigger a deliberate review of which tier they
+# belong in (added or omitted by the PR that introduces them).
 AGENTS.md                    @ten9876
 CHANGELOG.md                 @ten9876
 CLAUDE.md                    @ten9876
@@ -73,5 +85,5 @@ THIRD_PARTY_LICENSES         @ten9876
 # CI runtime — release artifacts, registry pushes, GITHUB_TOKEN scopes.
 .github/workflows/           @ten9876
 
-# Release signing key — overrides the tier-2 docs/ pattern.
+# Release signing key — overrides the Tier 2 docs/ pattern.
 docs/RELEASE-SIGNING-KEY.pub.asc  @ten9876
