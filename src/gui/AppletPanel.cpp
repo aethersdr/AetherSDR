@@ -133,25 +133,13 @@ protected:
         int localY = ev->position().toPoint().y() + verticalScrollBar()->value();
         int dropIdx = m_panel->dropIndexFromY(localY);
 
-        // Find the dragged applet's current index
+        // Find the dragged applet's current index.  Composite tiles
+        // (e.g. TXDSP) set ContainerWidget::setDragId() at construction
+        // so the drag MIME payload matches AppletEntry.id directly — no
+        // fallback lookup needed (#3057, supersedes #1836 workaround).
         int srcIdx = -1;
         for (int i = 0; i < m_panel->m_appletOrder.size(); ++i) {
             if (m_panel->m_appletOrder[i].id == draggedId) { srcIdx = i; break; }
-        }
-        // Composite tiles (e.g. TXDSP) have an internal ContainerWidget
-        // whose m_id ("tx_dsp") differs from the AppletEntry.id ("TXDSP")
-        // that owns it. The drag MIME data is set from the container's id
-        // in ContainerWidget; without this fallback, dragging TXDSP's title
-        // bar silently fails the AppletEntry lookup above. The container id
-        // "tx_dsp" is persisted (ContainerGeometry_tx_dsp, ContainerTree
-        // parent refs) so we can't rename it without a migration — aliasing
-        // here is the cheaper, regression-safe fix. (#1836)
-        if (srcIdx < 0) {
-            for (int i = 0; i < m_panel->m_appletOrder.size(); ++i) {
-                auto* c = qobject_cast<ContainerWidget*>(
-                    m_panel->m_appletOrder[i].widget);
-                if (c && c->id() == draggedId) { srcIdx = i; break; }
-            }
         }
         if (srcIdx < 0) return;
 
@@ -767,6 +755,12 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         auto entry = makeEntry("TXDSP", "VUDU", txDsp, false,
                                btnRow2, btnLayout2);
         if (entry.btn) entry.btn->setText("VUDU");
+        // Make the composite's drag MIME match its owning AppletEntry.id
+        // so the drop handler's fast lookup hits directly.  Container
+        // persistence keys still use the internal id ("tx_dsp") — drag
+        // identity and container identity are deliberately separate
+        // concepts here. (#3057, supersedes #1836 dropEvent fallback)
+        if (txDsp) txDsp->setDragId("TXDSP");
         m_appletOrder.append(entry);
     }
 

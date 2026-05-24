@@ -147,7 +147,7 @@ void ContainerWidget::onTitleBarDragStart(const QPoint& /*globalPos*/)
     // MIME type is shared with AppletDropArea's drag-reorder handling.
     auto* drag = new QDrag(m_titleBar);
     auto* mime = new QMimeData;
-    mime->setData("application/x-aethersdr-applet", m_id.toUtf8());
+    mime->setData("application/x-aethersdr-applet", dragId().toUtf8());
     drag->setMimeData(mime);
 
     // Drag pixmap: a semi-opaque snapshot of the titlebar strip so

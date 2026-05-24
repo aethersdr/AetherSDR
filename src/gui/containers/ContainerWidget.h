@@ -35,6 +35,15 @@ public:
     // and by persistence to key each container's state.
     QString id() const { return m_id; }
 
+    // Identifier written into the drag MIME payload when the user
+    // grabs the titlebar.  Defaults to id() so non-composite tiles
+    // are unchanged, but composite tiles whose owning AppletEntry.id
+    // differs from their container id() (e.g. TXDSP wraps "tx_dsp")
+    // can call setDragId() so the AppletPanel drop handler's fast
+    // lookup hits without needing a fallback. (#3057)
+    QString dragId() const { return m_dragId.isEmpty() ? m_id : m_dragId; }
+    void setDragId(const QString& dragId) { m_dragId = dragId; }
+
     // Human-readable title shown in the header bar.  Changing it
     // updates the titlebar in place.
     void setTitle(const QString& title);
@@ -129,6 +138,7 @@ private:
     void setDockMode(DockMode mode);
 
     QString            m_id;
+    QString            m_dragId;   // empty → dragId() returns m_id (#3057)
     ContainerTitleBar* m_titleBar{nullptr};
     QWidget*           m_body{nullptr};
     QVBoxLayout*       m_bodyLayout{nullptr};
