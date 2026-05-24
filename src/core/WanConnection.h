@@ -9,10 +9,27 @@
 #include <QString>
 #include <QHostAddress>
 #include <QTimer>
+#include <QVector>
 #include <functional>
 #include <atomic>
 
 namespace AetherSDR {
+
+// Pinned-cert cache management for the Pinned Certificates settings UI
+// (#2951 / GHSA-wfx7-w6p8-4jr2). Backs the same store WanConnection
+// uses for TOFU pin enforcement; defined in WanConnection.cpp so the
+// JSON shape stays in one place.
+struct PinnedCertInfo {
+    QString host;
+    QString fingerprintHex;
+    QString pinnedAtIso;   // empty for legacy Phase 1 entries
+};
+
+namespace WanCertCache {
+    QVector<PinnedCertInfo> listPinnedCerts();
+    void forgetPinnedCert(const QString& host);
+    void forgetAllPinnedCerts();
+}
 
 // Manages a TLS connection to a FlexRadio over the internet (SmartLink).
 // Speaks the same V/H/R/S/M protocol as RadioConnection but over TLS,
@@ -42,6 +59,18 @@ public:
     quint32 sendCommand(const QString& command,
                         ResponseCallback callback = nullptr);
 
+    // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): operator decides whether
+    // to accept a new cert presented during a mismatch.  Connection is
+    // paused — wan validate has NOT been sent — until one of these
+    // methods is called by the UI in response to certFingerprintMismatch.
+    //
+    //   accept → overwrite the stored pin with the presented fingerprint
+    //            and resume the WAN handshake.
+    //   reject → tear the TLS session down and surface an error to the
+    //            caller; the radio never sees an authenticated session.
+    void acceptPresentedCert();
+    void rejectPresentedCert();
+
 signals:
     void connected();
     void disconnected();
@@ -50,6 +79,15 @@ signals:
     void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
     void versionReceived(const QString& version);
     void pingRttMeasured(int ms);
+
+    // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951). Fired when onTlsConnected
+    // detects a fingerprint mismatch against the stored pin. The UI is
+    // expected to prompt the operator and respond with accept/reject.
+    // While waiting for the response no wan validate is sent — an
+    // attacker on a hostile path never sees an authenticated session.
+    void certFingerprintMismatch(const QString& host,
+                                 const QString& expectedHex,
+                                 const QString& presentedHex);
 
 private slots:
     void onTlsConnected();
@@ -74,10 +112,18 @@ private:
     quint32 m_lastPingSeq{0};
     QElapsedTimer m_pingStopwatch;
 
-    // TOFU cert pin (GHSA-wfx7-w6p8-4jr2 phase 1).  Captured on first
-    // connect to a given host; subsequent connects warn on mismatch.
+    // TOFU cert pin (GHSA-wfx7-w6p8-4jr2). Captured on first connect
+    // to a given host; subsequent connects enforce on mismatch via the
+    // certFingerprintMismatch signal + accept/reject methods (phase 2).
     QString m_host;
     QString m_expectedFingerprintHex;
+    QString m_presentedFingerprintHex;  // pending on mismatch, awaiting UI decision
+    bool    m_awaitingCertDecision{false};
+    // Send wan validate once the pin decision lands (and at the end of
+    // the normal first-use / match path too). Factored out so the
+    // mismatch-accept path lands at exactly the same handshake step
+    // the no-prompt paths use.
+    void sendWanValidate();
 
     QMap<quint32, ResponseCallback> m_pendingCallbacks;
 };

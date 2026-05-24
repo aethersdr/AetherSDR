@@ -2215,6 +2215,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::onConnectionStateChanged);
     connect(&m_radioModel, &RadioModel::connectionError,
             this, &MainWindow::onConnectionError);
+    connect(&m_radioModel, &RadioModel::certFingerprintMismatch,
+            this, &MainWindow::onWanCertFingerprintMismatch);
     connect(&m_radioModel, &RadioModel::forcedDisconnectRequested,
             this, [this] {
         const bool wasWan = m_radioModel.isWan();
@@ -9478,6 +9480,61 @@ void MainWindow::onConnectionError(const QString& msg)
     statusBar()->showMessage("Connection error: " + msg, 5000);
     if (!m_reconnectDlg)
         setPanadapterConnectionAnimation(false);
+}
+
+void MainWindow::onWanCertFingerprintMismatch(const QString& host,
+                                              const QString& expectedHex,
+                                              const QString& presentedHex)
+{
+    // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951). The WAN handshake is
+    // paused — no wan validate has been sent. Block here on a modal
+    // for the operator's decision, then route accept/reject back
+    // through RadioModel to the underlying WanConnection.
+    //
+    // Display formatting: insert a colon every two hex chars so the
+    // 64-char SHA-256 is scannable. The radio nickname isn't reliably
+    // available at this point in the handshake, so we use the host
+    // string (IP or hostname) as the user-facing identifier.
+    auto pretty = [](QString hex) {
+        hex = hex.toLower();
+        QString out;
+        out.reserve(hex.size() + hex.size() / 2);
+        for (int i = 0; i < hex.size(); ++i) {
+            if (i > 0 && (i % 2 == 0)) out.append(':');
+            out.append(hex.at(i));
+        }
+        return out;
+    };
+
+    QMessageBox box(this);
+    box.setIcon(QMessageBox::Warning);
+    box.setWindowTitle(tr("SmartLink certificate changed"));
+    box.setText(tr("<b>Certificate changed for %1</b>").arg(host.toHtmlEscaped()));
+    box.setInformativeText(tr(
+        "<p><b>Expected (pinned):</b><br/><tt>%1</tt></p>"
+        "<p><b>Presented:</b><br/><tt>%2</tt></p>"
+        "<p>This may be normal (radio firmware update, replaced radio) "
+        "or it may indicate a man-in-the-middle attack on the SmartLink "
+        "session.</p>"
+        "<p>Accept only if you recently updated firmware, replaced the "
+        "radio, or otherwise expect the certificate to change.</p>")
+        .arg(pretty(expectedHex), pretty(presentedHex)));
+    auto* acceptBtn = box.addButton(tr("Accept new certificate"),
+                                    QMessageBox::AcceptRole);
+    auto* rejectBtn = box.addButton(tr("Reject and disconnect"),
+                                    QMessageBox::RejectRole);
+    box.setDefaultButton(rejectBtn);
+    box.exec();
+
+    if (box.clickedButton() == acceptBtn) {
+        statusBar()->showMessage(
+            tr("SmartLink certificate updated for %1").arg(host), 4000);
+        m_radioModel.acceptPresentedWanCert();
+    } else {
+        statusBar()->showMessage(
+            tr("SmartLink certificate rejected for %1").arg(host), 5000);
+        m_radioModel.rejectPresentedWanCert();
+    }
 }
 
 void MainWindow::onRadioMessage(const QString& text, MessageSeverity severity)

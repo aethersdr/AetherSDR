@@ -145,6 +145,11 @@ private slots:
     // Radio/connection events
     void onConnectionStateChanged(bool connected);
     void onConnectionError(const QString& msg);
+    // GHSA-wfx7-w6p8-4jr2 phase 2 (#2951): show mismatch modal and
+    // forward the operator's decision back to the WanConnection.
+    void onWanCertFingerprintMismatch(const QString& host,
+                                      const QString& expectedHex,
+                                      const QString& presentedHex);
     void onRadioMessage(const QString& text, MessageSeverity severity);
     void onSliceAdded(SliceModel* slice);
     void onSliceRemoved(int id);

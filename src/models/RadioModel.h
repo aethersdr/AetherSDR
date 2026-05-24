@@ -307,6 +307,12 @@ public:
     void disconnectFromRadio();
     void forceDisconnect();  // Close TCP but allow auto-reconnect
     bool isWan() const { return m_wanConn != nullptr; }
+
+    // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forward the user's
+    // cert-mismatch decision down to the active WAN connection. No-op
+    // if not connected via WAN or no decision is pending.
+    void acceptPresentedWanCert();
+    void rejectPresentedWanCert();
     void setTransmit(bool tx, TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
     void setDigitalVoiceTxSlice(int sliceId);
     QString audioCompressionParam() const;        // "none" or "opus" based on settings
@@ -361,6 +367,12 @@ signals:
     void sliceRemoved(int sliceId);
     void metersChanged();
     void connectionError(const QString& msg);
+    // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forwarded from
+    // WanConnection. UI is expected to prompt the operator and call
+    // accept/rejectPresentedWanCert() in response.
+    void certFingerprintMismatch(const QString& host,
+                                 const QString& expectedHex,
+                                 const QString& presentedHex);
     // Emitted when another GUI client forces this client to disconnect.
     void forcedDisconnectRequested();
     // Emitted when a panadapter's center frequency or bandwidth changes.

@@ -876,6 +876,8 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
     connect(wan, &WanConnection::connected, this, &RadioModel::onConnected);
     connect(wan, &WanConnection::disconnected, this, &RadioModel::onDisconnected);
     connect(wan, &WanConnection::errorOccurred, this, &RadioModel::onConnectionError);
+    connect(wan, &WanConnection::certFingerprintMismatch,
+            this, &RadioModel::certFingerprintMismatch);
     connect(wan, &WanConnection::versionReceived, this, &RadioModel::onVersionReceived);
     connect(wan, &WanConnection::messageReceived, this, &RadioModel::onMessageReceived);
     connect(wan, &WanConnection::statusReceived, this, &RadioModel::onStatusReceived);
@@ -1084,6 +1086,18 @@ void RadioModel::disconnectFromRadio()
         QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio,
                                   Qt::BlockingQueuedConnection);
     }
+}
+
+void RadioModel::acceptPresentedWanCert()
+{
+    if (m_wanConn)
+        m_wanConn->acceptPresentedCert();
+}
+
+void RadioModel::rejectPresentedWanCert()
+{
+    if (m_wanConn)
+        m_wanConn->rejectPresentedCert();
 }
 
 void RadioModel::forceDisconnect()

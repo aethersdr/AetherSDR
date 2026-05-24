@@ -18,6 +18,7 @@
 #include "core/FirmwareStager.h"
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
+#include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
 #include "models/AntennaGeniusModel.h"
 
 #include <QCloseEvent>
@@ -26,6 +27,9 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHeaderView>
+#include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -463,6 +467,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addDeferred("USB Cables",      [this] { return buildUsbCablesTab(); });
     addDeferred("Peripherals",     [this] { return buildPeripheralsTab(); });
     addDeferred("Themes",          [this] { return buildUiEnhancementsTab(); });
+    addDeferred("SmartLink",       [this] { return buildSmartLinkTab(); });
 #ifdef HAVE_SERIALPORT
     addDeferred("Serial",          [this] { return buildSerialTab(); });
 #endif
@@ -4785,6 +4790,125 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     }
 
     return page;
+}
+
+QWidget* RadioSetupDialog::buildSmartLinkTab()
+{
+    // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): Pinned Certificates panel.
+    // Lists every SmartLink host this client has TOFU-pinned a cert
+    // fingerprint for, when it was pinned, and lets the operator
+    // forget individual pins or clear the whole cache. Used when the
+    // operator deliberately rotates a radio's cert (firmware update,
+    // hardware replacement) and wants the next connect to re-pin
+    // silently instead of triggering the mismatch dialog.
+
+    auto* page = new QWidget;
+    auto* root = new QVBoxLayout(page);
+    root->setContentsMargins(16, 16, 16, 16);
+    root->setSpacing(12);
+
+    auto* grp = new QGroupBox("Pinned SmartLink Certificates");
+    grp->setStyleSheet(kGroupStyle);
+    auto* grpLay = new QVBoxLayout(grp);
+    grpLay->setSpacing(8);
+
+    auto* desc = new QLabel(
+        "AetherSDR pins each SmartLink radio's TLS certificate the first "
+        "time you connect (trust-on-first-use). Subsequent connects "
+        "compare against the pin; a mismatch shows a warning dialog and "
+        "pauses the connection until you accept or reject it.\n\n"
+        "Forget a pin when you deliberately change a radio's certificate "
+        "(firmware update, hardware replacement) so the next connect can "
+        "re-pin silently. See GHSA-wfx7-w6p8-4jr2 for the threat model.");
+    desc->setStyleSheet("QLabel { color: #7090a0; font-size: 11px; }");
+    desc->setWordWrap(true);
+    grpLay->addWidget(desc);
+
+    auto* table = new QTableWidget(0, 3, grp);
+    m_pinnedCertsTable = table;
+    table->setHorizontalHeaderLabels({"Host", "SHA-256 fingerprint", "Pinned"});
+    table->horizontalHeader()->setStretchLastSection(false);
+    table->horizontalHeader()->setSectionResizeMode(
+        0, QHeaderView::ResizeToContents);
+    table->horizontalHeader()->setSectionResizeMode(
+        1, QHeaderView::Stretch);
+    table->horizontalHeader()->setSectionResizeMode(
+        2, QHeaderView::ResizeToContents);
+    table->verticalHeader()->setVisible(false);
+    table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    table->setSelectionBehavior(QAbstractItemView::SelectRows);
+    table->setStyleSheet(
+        "QTableWidget { background: #0a1420; color: #c8d8e8;"
+        " gridline-color: #1a2a3a; }"
+        "QHeaderView::section { background: #1a2a3a; color: #b0c4d6;"
+        " padding: 4px; border: none; }");
+    grpLay->addWidget(table);
+
+    auto* btnRow = new QHBoxLayout;
+    btnRow->setSpacing(8);
+    auto* forgetSel = new QPushButton("Forget selected");
+    auto* forgetAll = new QPushButton("Forget all");
+    static const QString kPinnedBtnStyle =
+        "QPushButton { background: #1a2230; border: 1px solid #2a3744;"
+        " border-radius: 3px; color: #c8d8e8; font-size: 11px;"
+        " padding: 4px 12px; }"
+        "QPushButton:hover { background: #243044; color: #e8e8e8; }"
+        "QPushButton:pressed { background: #2a3a52; }";
+    forgetSel->setStyleSheet(kPinnedBtnStyle);
+    forgetAll->setStyleSheet(kPinnedBtnStyle);
+    btnRow->addWidget(forgetSel);
+    btnRow->addStretch();
+    btnRow->addWidget(forgetAll);
+    grpLay->addLayout(btnRow);
+
+    connect(forgetSel, &QPushButton::clicked, this, [this, table]() {
+        const int row = table->currentRow();
+        if (row < 0) return;
+        auto* item = table->item(row, 0);
+        if (!item) return;
+        const QString host = item->text();
+        WanCertCache::forgetPinnedCert(host);
+        refreshPinnedCertsTable();
+    });
+
+    connect(forgetAll, &QPushButton::clicked, this, [this]() {
+        if (QMessageBox::question(this, tr("Forget all SmartLink certificates"),
+                tr("Clear every pinned SmartLink cert fingerprint?\n\n"
+                   "Next connect to each radio will silently re-pin "
+                   "whatever certificate it presents (no mismatch warning)."))
+            != QMessageBox::Yes) {
+            return;
+        }
+        WanCertCache::forgetAllPinnedCerts();
+        refreshPinnedCertsTable();
+    });
+
+    root->addWidget(grp);
+    root->addStretch();
+
+    refreshPinnedCertsTable();
+    return page;
+}
+
+void RadioSetupDialog::refreshPinnedCertsTable()
+{
+    if (!m_pinnedCertsTable) return;
+    const QVector<PinnedCertInfo> pins = WanCertCache::listPinnedCerts();
+    m_pinnedCertsTable->setRowCount(pins.size());
+    for (int i = 0; i < pins.size(); ++i) {
+        const PinnedCertInfo& pin = pins.at(i);
+        m_pinnedCertsTable->setItem(i, 0, new QTableWidgetItem(pin.host));
+        // Use a monospace cell for the fingerprint so the hex aligns.
+        auto* fpItem = new QTableWidgetItem(pin.fingerprintHex);
+        QFont mono("monospace");
+        fpItem->setFont(mono);
+        fpItem->setToolTip(pin.fingerprintHex);
+        m_pinnedCertsTable->setItem(i, 1, fpItem);
+        const QString when = pin.pinnedAtIso.isEmpty()
+            ? QStringLiteral("(pre-phase 2)")
+            : pin.pinnedAtIso.left(10);   // YYYY-MM-DD
+        m_pinnedCertsTable->setItem(i, 2, new QTableWidgetItem(when));
+    }
 }
 
 } // namespace AetherSDR

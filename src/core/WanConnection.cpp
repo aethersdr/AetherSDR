@@ -2,9 +2,11 @@
 #include "AppSettings.h"
 #include "LogManager.h"
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QJsonValue>
 #include <QSslCertificate>
 #include <QSslConfiguration>
 
@@ -22,13 +24,23 @@ static constexpr int kMaxReadBuffer = 16 * 1024 * 1024;
 
 namespace {
 
-// TOFU cert-pin cache.  Stored as a JSON object in AppSettings under the
-// key "SmartLinkCertFingerprintCache": { "<host>": "<sha256-hex>", … }.
-// See GHSA-wfx7-w6p8-4jr2 — WAN TLS still uses VerifyNone (radio is
-// self-signed), but we silently capture each host's cert fingerprint on
-// first connect and log a warning if it changes.  Phase 1 is warn-only;
-// no user prompt, no enforcement.
+// TOFU cert-pin cache.  Stored as a JSON object in AppSettings under
+// the key "SmartLinkCertFingerprintCache".  See GHSA-wfx7-w6p8-4jr2.
+//
+// Phase 1 shape (warn-only): { "<host>": "<sha256-hex>", ... }
+// Phase 2 shape (#2951, enforcement): {
+//     "<host>": { "fp": "<sha256-hex>", "pinnedAt": "<iso8601>" },
+//     ...
+// }
+//
+// Cache reader handles both shapes so upgrades don't lose existing
+// pins; the writer always emits Phase 2 shape.
 constexpr const char* kCertCacheKey = "SmartLinkCertFingerprintCache";
+
+struct PinEntry {
+    QString fingerprintHex;
+    QString pinnedAtIso;   // empty for Phase 1 entries (no timestamp recorded)
+};
 
 QJsonObject loadCertCache()
 {
@@ -40,21 +52,69 @@ QJsonObject loadCertCache()
     return doc.object();
 }
 
+PinEntry pinEntryFromValue(const QJsonValue& v)
+{
+    PinEntry e{};
+    if (v.isString()) {
+        // Phase 1 string-only entry — no timestamp available.
+        e.fingerprintHex = v.toString();
+    } else if (v.isObject()) {
+        const QJsonObject obj = v.toObject();
+        e.fingerprintHex = obj.value(QStringLiteral("fp")).toString();
+        e.pinnedAtIso    = obj.value(QStringLiteral("pinnedAt")).toString();
+    }
+    return e;
+}
+
 QString loadStoredFingerprint(const QString& host)
 {
-    return loadCertCache().value(host).toString();
+    return pinEntryFromValue(loadCertCache().value(host)).fingerprintHex;
 }
 
 void storeFingerprint(const QString& host, const QString& fingerprintHex)
 {
     QJsonObject obj = loadCertCache();
-    obj[host] = fingerprintHex;
+    QJsonObject entry;
+    entry[QStringLiteral("fp")] = fingerprintHex;
+    entry[QStringLiteral("pinnedAt")] =
+        QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    obj[host] = entry;
     AppSettings::instance().setValue(
         kCertCacheKey,
         QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 
 } // namespace
+
+// File-scope helpers exposed for the Pinned Certs UI (#2951).
+namespace WanCertCache {
+QVector<PinnedCertInfo> listPinnedCerts()
+{
+    QVector<PinnedCertInfo> out;
+    const QJsonObject obj = loadCertCache();
+    out.reserve(obj.size());
+    for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+        const PinEntry e = pinEntryFromValue(it.value());
+        if (!e.fingerprintHex.isEmpty())
+            out.append({it.key(), e.fingerprintHex, e.pinnedAtIso});
+    }
+    return out;
+}
+
+void forgetPinnedCert(const QString& host)
+{
+    QJsonObject obj = loadCertCache();
+    obj.remove(host);
+    AppSettings::instance().setValue(
+        kCertCacheKey,
+        QJsonDocument(obj).toJson(QJsonDocument::Compact));
+}
+
+void forgetAllPinnedCerts()
+{
+    AppSettings::instance().setValue(kCertCacheKey, QByteArray());
+}
+} // namespace WanCertCache
 
 WanConnection::WanConnection(QObject* parent)
     : QObject(parent)
@@ -119,6 +179,8 @@ void WanConnection::disconnectFromRadio()
     m_handle     = 0;
     m_connected  = false;
     m_validated  = false;
+    m_awaitingCertDecision   = false;
+    m_presentedFingerprintHex.clear();
 }
 
 // ─── Command dispatch ────────────────────────────────────────────────────────
@@ -152,40 +214,95 @@ void WanConnection::onTlsConnected()
 {
     qCDebug(lcSmartLink) << "WanConnection: TLS handshake complete";
 
-    // TOFU cert-pin check (GHSA-wfx7-w6p8-4jr2 phase 1, warn-only).
+    // TOFU cert-pin check (GHSA-wfx7-w6p8-4jr2 phase 2, enforced).
     const QSslCertificate cert = m_socket.peerCertificate();
-    if (!cert.isNull()) {
-        const QString fpHex = QString::fromLatin1(
-            cert.digest(QCryptographicHash::Sha256).toHex());
-        if (m_expectedFingerprintHex.isEmpty()) {
-            storeFingerprint(m_host, fpHex);
-            m_expectedFingerprintHex = fpHex;
-            qCInfo(lcSmartLink) << "WanConnection: pinned cert fingerprint for"
-                                << m_host << "(first-use TOFU; sha256=" << fpHex << ")";
-        } else if (m_expectedFingerprintHex != fpHex) {
-            qCWarning(lcSmartLink)
-                << "WanConnection: cert fingerprint MISMATCH for" << m_host
-                << "— expected" << m_expectedFingerprintHex
-                << "got" << fpHex
-                << "— possible MITM, radio replaced, or firmware update."
-                << "Phase 1 is warn-only; connection proceeds. See GHSA-wfx7-w6p8-4jr2.";
-        } else {
-            qCDebug(lcSmartLink) << "WanConnection: cert fingerprint matches stored pin for" << m_host;
-        }
-    } else {
+    if (cert.isNull()) {
         qCWarning(lcSmartLink) << "WanConnection: peer presented no certificate; skipping TOFU check";
+        sendWanValidate();
+        return;
     }
 
+    const QString fpHex = QString::fromLatin1(
+        cert.digest(QCryptographicHash::Sha256).toHex());
+    if (m_expectedFingerprintHex.isEmpty()) {
+        // First-use TOFU pin — silent, matches Phase 1 behaviour.
+        storeFingerprint(m_host, fpHex);
+        m_expectedFingerprintHex = fpHex;
+        qCInfo(lcSmartLink) << "WanConnection: pinned cert fingerprint for"
+                            << m_host << "(first-use TOFU; sha256=" << fpHex << ")";
+        sendWanValidate();
+        return;
+    }
+
+    if (m_expectedFingerprintHex == fpHex) {
+        qCDebug(lcSmartLink) << "WanConnection: cert fingerprint matches stored pin for" << m_host;
+        sendWanValidate();
+        return;
+    }
+
+    // Mismatch — Phase 2 holds the handshake. Do NOT send wan validate.
+    // The UI will catch certFingerprintMismatch, show a modal, and call
+    // either acceptPresentedCert() or rejectPresentedCert(). Until then
+    // the radio sees an open TLS channel but no authenticated session.
+    qCWarning(lcSmartLink)
+        << "WanConnection: cert fingerprint MISMATCH for" << m_host
+        << "— expected" << m_expectedFingerprintHex
+        << "got" << fpHex
+        << "— possible MITM, radio replaced, or firmware update."
+        << "Phase 2: handshake paused pending operator decision. See GHSA-wfx7-w6p8-4jr2.";
+    m_presentedFingerprintHex = fpHex;
+    m_awaitingCertDecision = true;
+    emit certFingerprintMismatch(m_host, m_expectedFingerprintHex, fpHex);
+}
+
+void WanConnection::sendWanValidate()
+{
     // Send wan validate as a proper command (C<seq>|wan validate handle=...)
     // FlexLib uses SendCommand() for this, not raw write.
     const quint32 seq = m_seqCounter.fetch_add(1);
-    const QByteArray data = CommandParser::buildCommand(seq, QString("wan validate handle=%1").arg(m_wanHandle));
+    const QByteArray data = CommandParser::buildCommand(
+        seq, QString("wan validate handle=%1").arg(m_wanHandle));
     qCDebug(lcSmartLink) << "WAN TX: C" << seq << "|wan validate handle=***REDACTED***";
     m_socket.write(data);
     m_validated = true;
-
+    m_awaitingCertDecision = false;
+    m_presentedFingerprintHex.clear();
     // The radio will now send V<version>\n then H<handle>\n
     // just like a LAN connection. processLine() handles it.
+}
+
+void WanConnection::acceptPresentedCert()
+{
+    if (!m_awaitingCertDecision) {
+        qCWarning(lcSmartLink) << "WanConnection::acceptPresentedCert: no pending decision; ignoring";
+        return;
+    }
+    if (m_presentedFingerprintHex.isEmpty()) {
+        qCWarning(lcSmartLink) << "WanConnection::acceptPresentedCert: no presented fingerprint cached; ignoring";
+        m_awaitingCertDecision = false;
+        return;
+    }
+    storeFingerprint(m_host, m_presentedFingerprintHex);
+    m_expectedFingerprintHex = m_presentedFingerprintHex;
+    qCInfo(lcSmartLink) << "WanConnection: operator accepted new cert pin for" << m_host
+                        << "sha256=" << m_presentedFingerprintHex;
+    sendWanValidate();
+}
+
+void WanConnection::rejectPresentedCert()
+{
+    if (!m_awaitingCertDecision) {
+        qCWarning(lcSmartLink) << "WanConnection::rejectPresentedCert: no pending decision; ignoring";
+        return;
+    }
+    qCWarning(lcSmartLink) << "WanConnection: operator rejected new cert pin for" << m_host
+                           << "expected=" << m_expectedFingerprintHex
+                           << "presented=" << m_presentedFingerprintHex
+                           << "— tearing down WAN session.";
+    m_awaitingCertDecision = false;
+    m_presentedFingerprintHex.clear();
+    emit errorOccurred(QStringLiteral("Certificate rejected by user"));
+    disconnectFromRadio();
 }
 
 void WanConnection::onTlsDisconnected()
