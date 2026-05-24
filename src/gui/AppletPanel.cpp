@@ -138,6 +138,21 @@ protected:
         for (int i = 0; i < m_panel->m_appletOrder.size(); ++i) {
             if (m_panel->m_appletOrder[i].id == draggedId) { srcIdx = i; break; }
         }
+        // Composite tiles (e.g. TXDSP) have an internal ContainerWidget
+        // whose m_id ("tx_dsp") differs from the AppletEntry.id ("TXDSP")
+        // that owns it. The drag MIME data is set from the container's id
+        // in ContainerWidget; without this fallback, dragging TXDSP's title
+        // bar silently fails the AppletEntry lookup above. The container id
+        // "tx_dsp" is persisted (ContainerGeometry_tx_dsp, ContainerTree
+        // parent refs) so we can't rename it without a migration — aliasing
+        // here is the cheaper, regression-safe fix. (#1836)
+        if (srcIdx < 0) {
+            for (int i = 0; i < m_panel->m_appletOrder.size(); ++i) {
+                auto* c = qobject_cast<ContainerWidget*>(
+                    m_panel->m_appletOrder[i].widget);
+                if (c && c->id() == draggedId) { srcIdx = i; break; }
+            }
+        }
         if (srcIdx < 0) return;
 
         // Adjust drop index if moving down (after removing source)
