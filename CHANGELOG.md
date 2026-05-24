@@ -6,6 +6,479 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 > **Versioning:** Starting with **v26.5.1**, AetherSDR moves to **CalVer**
 > (`YY.M.patch`). Earlier tags used semver through v0.9.8.
 
+## [v26.5.3] — 2026-05-24
+
+### Aetherial Audio TX completion + security hardening + 100-commit reliability sweep
+
+138 commits across 14 contributors landed in this cycle. The headline
+work is the **TX path of the Aetherial Audio Channel Strip** reaching
+feature-complete with the new PAPR processor and split-band de-esser,
+**two published security advisories** landing their enforcement phases
+(SmartLink TLS cert pinning + CAT PTY symlink hardening), the **MQTT
+configuration moves into a dedicated Settings dialog** (separating
+config from the live applet), and a substantial reliability sweep
+across audio (WASAPI / CoreAudio / macOS mic), spectrum (TX waterfall
+scroll rate, panadapter dBm prime), and CAT (rigctld, TCI, MIDI).
+Native Hamlib NET rigctl ships as a first-class CAT path alongside TCI.
+
+Big thanks to **@jensenpat** (16 commits — macOS audio, Windows COM
+handle, TCI architecture), **@NF0T** (Ryan B, 12 commits — Windows
+installer + RADE + various), **@rfoust** (Robbie Foust, 9 commits —
+FlexControl wheel UX overhaul), **@Ozy311** (5 commits — BYPASS state
+persistence, applet float/dock title-bar sync, ProfileManager auto-save
+signal, DX Spots slider cap, BYPASS tooltip), **@M7HNF-Ian** (Nigel
+Fenton, 5 commits), **@chibondking** (CJ Johnson, 5 commits — panadapter
+dBm prime fix), **@M8WLO** (Andy, 4 commits), **@s53zo** (2 commits —
+substantial MQTT settings dialog refactor with self-found subscription-
+state fix), **@pepefrog1234** (2 commits — the macOS silent-SSB-TX fix
++ set_split_vfo ping-pong fix), **@K5PTB** (2 commits), **@chrisb1964**
+(1 commit), and **@aethersdr-agent** (the AetherClaude orchestrator,
+22 commits — automated fixes on `aetherclaude-eligible` issues).
+Dependabot contributed 6 security and version bumps.
+
+### Security advisories landed in this release
+
+**GHSA-wfx7-w6p8-4jr2 — SmartLink TLS cert pin enforcement (Phase 2, #3026)**
+
+Phase 1 (warn-only) shipped in v26.5.2; Phase 2 promotes the cert-
+fingerprint mismatch to a **hard handshake-pause**. On a mismatch the
+client emits a modal dialog (Accept new cert / Reject and disconnect)
+before sending `wan validate`, so a MITM-side attacker never sees an
+authenticated session. New SmartLink tab in Radio Setup lists pinned
+certificates with per-row Forget and Forget All. Pin cache schema
+migrates Phase 1 string entries to Phase 2 `{fp, pinnedAt}` objects
+on first save.
+
+**GHSA-qxhr-cwrc-pvrm — RigctlPty symlink out of /tmp (#3027)**
+
+The convenience symlink for CAT software auto-discovery now lives in
+`$XDG_RUNTIME_DIR/aethersdr/cat-A` (Linux) or
+`~/Library/Caches/AetherSDR/cat-A` (macOS) instead of the cross-user
+`/tmp` location. Atomic symlink replacement via `symlink(.tmp)` +
+`rename(.tmp, final)` closes the TOCTOU window the old
+unlink-then-symlink had on non-sticky filesystems.
+
+Additional defense-in-depth fixes: PII log-redactor regex tightening
+(#2954), read-buffer caps on radio/WAN/DxCluster sockets (#2955),
+callsign sanitisation in WAV recording paths to handle `/M`/`/P`/`/MM`
+(#2956), atomic-rename log symlink (#2957).
+
+### Headline features
+
+**Aetherial Audio Channel Strip TX path completion (#3024)**
+
+- **PAPR processor** — new all-pass biquad cascade (4 stages at
+  300/700/1500/2500 Hz) for peak-to-average-power-ratio reduction.
+  Drive (0–18 dB) + Phase knobs in the channel strip; auto-makeup gain
+  linked to Drive so RMS lifts alongside peaks instead of disappearing
+  into the compressor's gain reduction.
+- **Split-band de-esser** — replaces the old broadband-attenuation
+  pattern (`l *= gainLin; r *= gainLin;`) with
+  `output = full + bandpass × (gain − 1)`. Fixes the broadband-
+  attenuation bug that was costing operators ~30W of forward power on
+  voice content (reported externally as "DESS reduces TX power to ~70W
+  of 100W expected"). User-selectable cascade stages (12/24/36/48 dB/oct)
+  via a left-aligned toggle in the DESS panel.
+- **Peak-hold toggle** on all meters; CRST + RMS + THRESH styling
+  unified via the canonical `MeterSmoother` (30 ms attack / 180 ms
+  release at 120 Hz).
+- **10 Hz throttle** on text readouts; live response at 125 Hz —
+  meters track the audio without spamming the GUI thread.
+
+**Native Hamlib NET rigctl implementation (#2975)**
+
+Full 149-test rigctld implementation for WSJT-X / JTDX / fldigi /
+Winlink VARA / N1MM+ / DXLog interoperability without a standalone
+rigctld bridge. Slices A–H each expose a TTY (per-user runtime path
+on Linux + macOS, see #3027) and a TCP port (4532–4539).
+
+**TX waterfall scroll rate matches RX (#3031)**
+
+After #3019 stabilised TX waterfall rendering across slices, the FFT-
+derived row path scrolled at `line_duration` cadence (~10 rows/sec)
+while RX native tiles arrived at the FFT rate (~30 rows/sec) — TX
+appeared 3× slower than RX. Diagnosed via inline probe; corrected by
+dropping the FFT row throttle and emitting one row per FFT frame,
+matching native-tile behaviour. The original assumption that native
+tiles arrive at `line_duration` was wrong; they arrive at FFT rate.
+
+**WASAPI mono-only USB PnP mic silent-open recovery (#2929)**
+
+Some USB PnP mics report mono-only capture natively; Qt accepts an
+unsupported stereo open and returns a non-null `QIODevice` that
+delivers zero bytes. Three-layer fix:
+
+1. Pre-emptive channel-count clamp from `dev.maximumChannelCount()`
+   before format selection (catches the obvious mono-only mics).
+2. Fallback-ladder fix to skip only the exact failed `(rate, ch)`
+   combo instead of the whole rate (catches mono-only mics whose
+   fallback was suppressed).
+3. 1.5 s silent-open watchdog that tears down and retries as mono if
+   no bytes arrive — covers mics that lie about `maximumChannelCount`.
+
+**Panadapter dBm range prime on reconnect (#3034 — @chibondking)**
+
+Secondary panadapters (Slices B–H) could go completely flat on
+reconnect with the dBm scale stuck at the default `[-50, +50]` while
+the radio's saved range was different. Cause traced end-to-end: noise-
+floor auto-adjust animated from the wrong baseline, fired
+`dbmRangeChangeRequested` with bogus values, and the `pendingDbm`
+guard locked them in. Fix: prime the spectrum widget with the pan's
+current dBm range immediately on wire so the auto-adjust starts from
+the right baseline. Solid community contribution.
+
+**FlexControl wheel tuning overhaul (#3029 — @rfoust)**
+
+Two-axis quality-of-life improvement to the virtual FlexControl wheel:
+
+- New **Mouse Sensitivity** slider alongside the existing Wheel
+  Tightness, with midpoint (50) returning `1.0` scale — old behaviour
+  preserved as default.
+- **De-jitter**: clamps single-event pointer deltas to 15° (`π/12`),
+  prevents huge wheel kicks from fast mouse jumps.
+- **Lazy re-anchoring**: when the pointer crosses through the centre
+  dead-zone, the anchor is dropped; next movement out of the dead-zone
+  re-anchors without computing a delta. Stops the "wild swing on
+  centre crossing" pattern.
+- **Coast / pointer clock separation**: coast only starts when both
+  instant and blended velocities exceed 4.0 rad/s; pointer input within
+  32 ms of a tick suppresses coast ticks. Slow mouse drags no longer
+  trigger free coasting.
+- UI: centred slider title labels, Tight/Loose + Less/More endpoints,
+  two-column layout.
+
+**ATU pre-tune Auto-mode safety nets (#3050)**
+
+Four-layer guardrail bundle for the unattended ATU sweep:
+
+- **License-class filter** (data-driven from active bandplan's optional
+  `license_classes` block — ARRL US ships with `{T, G, E}` populated;
+  combobox hidden when active plan has no class structure). Prevents a
+  Tech-class operator from keying into General/Extra-only sub-bands
+  during the unattended sweep.
+- **Max-points soft cap** at 100 with mm:ss TX-duration warning.
+- **High-power warning** (warn, not refuse, per Principle XIII) when
+  Auto-mode tune power exceeds 20 W.
+- **Audible cue** on per-point timeout + 3-fail bypass abort.
+
+**ATU pre-tune per-band early exit (#3063)**
+
+Three consecutive fail-bypass on a band now skips past that band's
+remaining points and continues on the next band instead of aborting
+the whole sweep. Useful when only one antenna is bad (broken feedline
+on 80m, fine on 40m/20m/15m).
+
+**Windows hybrid-GPU support (#1921)**
+
+`NvOptimusEnablement = 1` and `AmdPowerXpressRequestHighPerformance = 1`
+exports so the Windows binary launches on the discrete GPU on hybrid
+laptops. Sidesteps the Intel iGPU D3D11 driver bug that crashed
+AetherSDR during `QRhiWidget` reparenting (panadapter pop-out).
+
+**Status-bar slice-locked toast (#2984)**
+
+LOCKED feedback for blocked slice tuning surfaces as a status-bar
+toast for 2 seconds. Centralised in `SliceModel` — previously each
+tune-feedback site managed its own timer.
+
+**TCI panadapter spectrum forwarding (#2841) + tx_gain + ALC (#2950)**
+
+TCI server forwards panadapter FFT rows to subscribed clients (third-
+party tools can render AetherSDR spectrum). New `tx_gain` command +
+ALC reading exposed via `tx_sensors`.
+
+**AetherControl virtual FlexControl controller (#2888)**
+
+Software-only FlexControl panel mirrors the physical USB knob layout.
+Settings → FlexControl.
+
+**Adaptive frame-rate throttle + graceful reconnect (#2829)**
+
+Network-congestion-adaptive panadapter FPS throttle; reconnect
+semantics that don't drop slice state on transient TLS drops.
+
+**Mute-all-slices + reconnect mute fix (#2833)**
+
+Master mute button in the RX panel; fixes stale mute display when
+reconnecting to a radio.
+
+**Spectrum Ctrl+wheel zoom anchored on cursor (#1518 / #2869)**
+
+Ctrl+wheel zoom now centres on the cursor frequency rather than the
+visible centre, matching common spectrum-analyser UX.
+
+**multiFLEX dashboard disconnect controls (#2981)**
+
+Per-client disconnect buttons in the multiFLEX dashboard.
+
+**MQTT settings dialog refactor (#3051 — @s53zo)**
+
+Substantial community PR that moves MQTT configuration out of the live
+applet into a dedicated **Settings → MQTT…** dialog. The applet stays
+as the live surface (connect/disconnect, status, message log, publish
+buttons); the dialog owns broker credentials, TLS/CA config,
+subscription rows, display-on-panadapter flags, and publish button
+definitions. Persists the On/Off state as `MqttEnabled` for auto-
+reconnect on startup. Also self-found and fixed a subscription-state
+bug where removed topics could survive across reconnects.
+
+Maintainer follow-up commits on top of the PR (subscribe-diff
+optimisation; consolidation of the 8 MQTT flat AppSettings keys into a
+single nested `MqttSettings` JSON block per Principle V, with one-shot
+transparent migration from legacy keys).
+
+**Loop antenna controls (#2863)**
+
+Antenna A/B loop selection exposed via the RX panel.
+
+**MQTT antenna display names (#2881)**
+
+MQTT-driven antenna name overrides; pairs with the existing antenna-
+alias store for radio-side identification.
+
+**Cycle TX slice shortcut (#2836)**
+
+New `cycle_tx_slice` action assignable to FlexControl, MIDI, or
+keyboard.
+
+**Drag value popups on sliders (#2944)**
+
+All sliders show a value popup during drag, dismissing on release.
+
+**Audio device prompt suppression (#2926)**
+
+Hotplug-prompt suppression controls when the current selection still
+works.
+
+**FlexControl new wheel mode WheelAgcT (#2907)**
+
+New wheel-mode action driving the AGC threshold slider, joining the
+existing volume/AF/RIT/XIT modes.
+
+**FlexControl master volume routing (#2925)**
+
+FlexControl volume action now routes to master volume instead of the
+active slice volume — matches operator expectation across most setups.
+
+**ATU SWR sweep respects active band plan (#2800)**
+
+The SWR sweep now restricts its scan to band-plan segments instead of
+sweeping the full radio frequency range.
+
+### Bug fixes — audio
+
+- **Silent SSB/voice TX on macOS** (#2930) — mic native rate vs Qt
+  request mismatch caused capture stream to deliver no frames. Fixed
+  by honouring the mic's native rate and explicitly starting capture
+  for `remote_audio_tx` mode.
+- **CW sidetone routes to selected output** (#2899) — was routed to
+  the default audio output regardless of the user's selection. Fixed
+  via the same `AudioEngine` sink path as RX audio.
+- **Windows COM port handle release** (#3010) — FlexControl USB
+  serial port stayed open across application restart, blocking
+  subsequent connections. Synchronous close on shutdown releases the
+  handle.
+- **TX final limiter default-off** (#3004) — client TX final limiter
+  was on by default, dropping AetherSDR's drive level below SmartSDR's.
+  Now off-by-default to match the parity expectation.
+- **RN2 (RNNoise) on Tube Pre-Amp TX** (#2813) — Channel strip Tube
+  Pre-Amp section gains an RN2 toggle for client-side TX noise
+  reduction in addition to the existing RX RN2.
+- **BYPASS persistence** (#2892) — Channel strip BYPASS state now
+  persisted across application restart via the section-active flag.
+- **mute_local_audio_when_remote restored** (#1110) — behaviour
+  inadvertently removed in a v0.9.x refactor.
+- **Hotplug dialog suppression** (#2864) — Linux audio hotplug dialog
+  spammed users when an unrelated device appeared. Suppress when the
+  currently-selected device is still available.
+- **RADE state restoration on engine failure** (#2898, #2861) — slice
+  state fully restores when the RADE engine fails to start.
+- **FreeDV mode-string coverage** (#2820) — extended `FDVU`/`FDVL`
+  checks to all RADE-related code paths.
+- **Default audio summary logging** (#2973) — startup logs the
+  active sinks / sources / resampler so support bundles surface the
+  audio path without operator instrumentation.
+- **RX audio stream diagnostics** (#2889) — per-stream RX diagnostics
+  exposed in the support bundle.
+
+### Bug fixes — spectrum + waterfall
+
+- **TX waterfall stability across slices** (#3019) — TX waterfall on
+  multi-pan setups had inconsistent row cadence and dBm range jitter.
+  Fixed by computing TX waterfall mask from active TX filter +
+  carrier, applying mask to all overlapping pans, and freezing dBm
+  range during TX.
+- **Panadapter center clamp** (#783 → #2867) — 7-year-old bug:
+  panadapter centre could be set below 0 Hz when zooming aggressively.
+  Clamped to non-negative.
+- **Off-screen slice indicator comfort margin** (#2941) — single click
+  on the chevron now reveals the slice 18% inside the visible band
+  rather than landing on the edge.
+- **Right-side applet clipping** (#3023) — applet content was clipped
+  on the right when the applet panel scrollbar was visible. Adjusted
+  viewport width.
+- **FDX indicator ignores radio rejection** (#3016) — FDX showed
+  enabled when the radio actually rejected the command. UI now
+  downstream of authoritative radio state.
+- **FFT line slider on QPainter path** (#2722) — FFT line height
+  slider was honoured on the GPU path but ignored on the software-
+  render path.
+- **Native 4m/2m band selection** (#2831) — 4m + 2m bands route to
+  the radio's native band selector via `ModelCapabilities` instead of
+  the legacy `model.contains()` checks.
+- **TXDSP drag silent-fail** (#1836 → #3044, #3058) — composite tile
+  didn't reorder via drag because its internal container id (`tx_dsp`)
+  differed from its `AppletEntry.id` (`TXDSP`). First fix landed an
+  aliasing fallback in `dropEvent` (#3044); cleanup PR introduced
+  `ContainerWidget::setDragId()` so the composite explicitly sets the
+  drag identity, eliminating the fallback (#3058).
+- **XVTR validity guard for waterfall remapping** (#2853) —
+  regression fix from earlier waterfall work.
+
+### Bug fixes — CAT, protocol, MIDI
+
+- **TCI use-after-free in queued lambdas** (#2814) — `TciProtocol`
+  could be destroyed while queued lambdas held a raw pointer.
+  Captured by `QPointer`.
+- **RigctlProtocol use-after-free in queued lambdas** (#2995) — same
+  pattern, different file.
+- **set_split_vfo TX slice ping-pong** (#2931) — rigctld
+  `set_split_vfo` poll could ping-pong TX between slices.
+- **rigctld cwx routing through CwxModel** (#2909) — `cwx send`/clear
+  now produce CAT sidetone consistent with manual keyer input.
+- **MIDI VFO encoder direction + step size** (#2993) — binary VFO
+  encoder direction was inverted; step size now reads from the
+  encoder's actual config, not the slice's default.
+- **MIDI tx.mox uses isTransmitting** (#2859) — toggle now reads
+  `isTransmitting()` not `isMox()`, avoiding feedback loops on QSK or
+  hardware-keyed PTT.
+- **TCI emit vfo after band-change slice recreate** (#2828) — TCI
+  clients weren't notified of the new VFO frequency after a band-
+  change forced slice recreation.
+- **HID IcomRC28Parser byte offsets** (#1896) — 7-year-old bug:
+  parser had wrong byte offsets and report-size assumption.
+- **NRS level re-push after profile global recall** (#2849) — slice
+  state cache wasn't replayed for radio-default-on settings.
+- **Slice state cached and replayed for profile recall** (#2917) —
+  re-pushes cached NRS / NB / etc. after a profile global recall.
+
+### Bug fixes — UI & UX
+
+- **Single-click discrimination interval setting** (#3009) — exposed
+  the single-vs-double-click discrimination interval as a user
+  setting; old hardcoded 230 ms was too short for slower-tap operators.
+- **Slice-mute UI consolidation** (#3006) — single-click mutes this
+  slice; double-click mutes all slices.
+- **WheelMasterAf consolidated into WheelVolume** (#2986) — two
+  near-identical FlexControl wheel modes folded.
+- **Radio Setup microphone control alignment** (#3008) — visual
+  cleanup of the mic config row.
+- **GuardedSlider type tightening + EQ formatter extraction** (#2987)
+- **About dialog: hoist AETHER_GIT_SHA fallback + CMake clarity**
+  (#2991, #2988)
+- **What's New dialog refactor** (#2979) + WhatsNew generator cleanup
+  (#2992)
+- **Background image dialog parented to top-level** (#2865)
+- **VFO `QStackedWidget` cross-tab height inflation** (#2821)
+- **Suppress routine connect notices during startup** (#2852)
+- **Suppress interlock error dialogs** (#2851) — these were noise
+  during normal TX handovers.
+- **WaveApplet drawer collapsed state persistence** (#2827)
+- **Applet panel float / dock title-bar icon sync** (#2896)
+- **Antenna SWR sweep respects active band plan** (#2800)
+- **Drag value popups during slider drag** (#2944)
+- **Clipboard copy controls in Radio Setup details** (#2976)
+- **Native 4m/2m band selection routing** (#2831)
+- **Sync RX antenna status to panadapter** (#2862) + **sync WNB
+  status from radio** (#2860)
+
+### Bug fixes — security
+
+- **PII log redactor regex tightening** (#2954)
+- **Read-buffer caps on radio/WAN/DxCluster sockets** (#2955)
+- **Callsign sanitisation in WAV recording paths** (#2956) —
+  callsigns containing `/` (e.g. `/M`, `/P`, `/MM`) could escape the
+  WAV recording directory.
+- **Atomic-rename log symlink** (#2957) — was remove + symlink, brief
+  window where the symlink didn't exist.
+
+### Refactor & internals
+
+- **LOCKED tune-feedback timer centralization** (#2983 → #3017) —
+  per-site timers consolidated into `SliceModel`.
+- **Band-plan contiguous-regions walker** (#2822 → #3018) — single
+  canonical walker for ATU pre-tune + SWR sweep.
+- **Canonical Biquad utility** (#3042 → #3045) — new
+  `src/core/Biquad.{h,cpp}` + `StereoBiquad` with 9 filter types
+  (LowPass / HighPass / BandPassConstQ / BandPassPeak / Notch /
+  AllPass / PeakingEq / LowShelf / HighShelf), DF-II Transposed
+  topology, double-coeffs + float-state precision split.
+  Migration of the 5+ scattered biquad implementations
+  (DESS / Pudu / PhaseRotator / Eq) to follow in subsequent PRs.
+- **`ContainerWidget::dragId`** (#3057 → #3058) — optional drag-
+  identity property separates "drag MIME identity" from "container
+  persistence identity". Composite tiles (TXDSP) can set `dragId`
+  without renaming their persisted `m_id`.
+- **`RadioModel::m_pendingPanStatuses` TTL** (#2228 → #3037) — 30 s
+  TTL sweep on insert bounds the deferred-pan-status map for
+  never-claimed pans.
+- **AetherSweep decouple from `m_overlayMenu`** (#2205 → #3035) —
+  `leftOccludedRect()` helper abstracts overlay-menu geometry queries.
+- **Comfort margin ternary cleanup** (#3033 → #3039) — collapsed
+  redundant branches after #3030 made the `revealOffscreen` and
+  default arms return identical values.
+- **Dead FFT accumulator state cleanup** (#3038 → #3040) — removed
+  five unused members after #3031's debt-gate removal.
+- **CODEOWNERS framework + teams** (#3053, #3055) — three-tier
+  CODEOWNERS with team mentions (`@aethersdr/maintainers`,
+  `@aethersdr/infrastructure`, `@aethersdr/reviewers`) replacing
+  per-user ownership. Tier 1 = governance/security/bot policy,
+  Tier 2 = infrastructure, Tier 3 = source code.
+- **liquid-dsp vendored** (#3043 → #3046) — comprehensive DSP toolkit
+  (modems / FEC / adaptive filters / AGC / NCO) vendored at
+  `third_party/liquid-dsp/`. Built static, linked into AetherSDR on
+  Linux + macOS. MSVC build skipped due to C99 `_Complex` syntax
+  incompatibility (tracked separately as #3049).
+
+### Diagnostics & support bundles
+
+- **TX route diagnostics in support bundle** (#2885 → #2919) —
+  support-bundle `tx_route` section surfaces TX slice id / mode /
+  DAX channel.
+- **About dialog git short SHA** (#2988) — surfaces git short SHA
+  under the version line.
+- **What's New dialog refactor** (#2979) — UX overhaul of the
+  release-notes browser.
+
+### Build & CI
+
+- **`check-windows` path filter for MainWindow.{cpp,h}** (#2671 →
+  #3028) — file is densely guarded with `#ifdef Q_OS_WIN` and was
+  previously the source of most MSVC-only regressions. Triggers
+  Windows CI on changes to it now.
+- **Weekly ASan / UBSan / TSan workflow** (#2866) — weekly sanitizer
+  build with sticky-issue tracking.
+- **Pin all third-party action references by commit SHA** (#2920)
+- **Auto-pin docker image digest** (#2918) — ci.yml and codeql.yml.
+- **Least-privilege `GITHUB_TOKEN` scopes** (#2916) — ci.yml and
+  codeql.yml drop default token scopes; jobs that need more opt in
+  explicitly.
+- **CODEOWNERS @jensenpat scope expansion** (#2915) — landed
+  pre-#3053 framework refactor.
+- Multiple dependabot bumps (#2996–#3000, #2922) — docker actions,
+  ccache-action, sccache-action, github-script, ws npm dep in the
+  Stream Deck plugin.
+
+### Documentation
+
+- **Restructure `docs/`** (#2963) — split into `architecture/`,
+  `style/`, `qa/` subdirectories + `tests/README`. No content lost,
+  just structure.
+- **Community-response style guide** (#2966) — added to
+  `.specify/memory/` for AetherClaude orchestrator + maintainer use.
+
+---
+
 ## [v26.5.2.1] — 2026-05-17
 
 ### Hotfix — TCI TX audio level, Windows process-hang, SSA Sweden band plan, AppImage build
