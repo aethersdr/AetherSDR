@@ -779,12 +779,35 @@ void AtuPreTuneDialog::onAtuStateChanged()
         m_failCount++;
         m_consecutiveFailBypass++;
         if (m_consecutiveFailBypass >= kMaxConsecutiveFailBypass) {
-            m_sweepResult->setText(
-                QString("Tune failed (fail-bypass) %1 times in a row — aborting.")
-                    .arg(m_consecutiveFailBypass));
             QApplication::beep();  // terminal-fail cue (#2649 #7)
-            finishSweep(QString(" Aborted: %1 consecutive fail-bypass.")
-                            .arg(m_consecutiveFailBypass));
+            // Per-band early exit (#3062): skip past the remaining points on
+            // the dying band instead of aborting the whole sweep. Lets a
+            // multi-band run keep producing useful results when only one
+            // band's antenna is bad (e.g. broken feedline on 80m while
+            // 40m/20m/15m are fine). If the dying band is the last one,
+            // the loop body never runs and beginNextPoint() falls through
+            // to finishSweep() — matches the prior terminal-abort behaviour
+            // for single-band sweeps and last-band failures.
+            const QString bandName = m_points.at(m_currentIndex).bandName;
+            const int skipStart = m_currentIndex;
+            while (m_currentIndex + 1 < m_points.size()
+                   && m_points.at(m_currentIndex + 1).bandName == bandName) {
+                ++m_currentIndex;
+            }
+            // The point that triggered the abort was already counted in
+            // m_failCount above; only the remaining points on the band
+            // count as skips.
+            m_skipCount += (m_currentIndex - skipStart);
+            const QString nextBand = (m_currentIndex + 1 < m_points.size())
+                ? m_points.at(m_currentIndex + 1).bandName
+                : QString();
+            m_sweepResult->setText(nextBand.isEmpty()
+                ? QString("Band %1 aborted after %2 consecutive fails.")
+                      .arg(bandName).arg(kMaxConsecutiveFailBypass)
+                : QString("Band %1 aborted after %2 consecutive fails — continuing on %3.")
+                      .arg(bandName).arg(kMaxConsecutiveFailBypass).arg(nextBand));
+            m_consecutiveFailBypass = 0;
+            beginNextPoint();
             return;
         }
         showFailControls(/*failBypass=*/true);
