@@ -782,54 +782,97 @@ endif()
 # Vendored proactively under #3043 as foundation infrastructure for future
 # digital-mode work (e.g. native FT8/FT4 — #85 Phase 4 — or PSK31 / RTTY).
 #
-# Linux + macOS only — liquid-dsp upstream targets GCC/Clang/MinGW; its
-# include/liquid.h:473 uses C99 `float _Complex` typedefs which the MSVC C
-# compiler doesn't accept (syntax error: identifier 'liquid_float_complex').
-# Upstream has no first-class MSVC support and patching the header for
-# `_Fcomplex`/`_Dcomplex` would be invasive against future upstream syncs.
-# Tracked as a follow-up; today the Windows build skips this vendor and
-# any future consumer that needs liquid-dsp on Windows needs to land MSVC
-# support first.
-#
 # Built via the upstream CMakeLists.txt with examples / tests / benchmarks /
 # sandbox / docs disabled to keep the build slim. FFTW lookup is disabled
 # (FIND_FFTW=OFF) so liquid-dsp uses its own internal FFT — wiring it to our
 # bundled third_party/fftw3 can be a follow-up if a future consumer wants
 # FFTW-accelerated transforms.
 #
-# AetherSDR links against liquid-static (conditionally on non-MSVC) so the
-# build verifies clean on Linux + macOS even though no module currently
-# consumes liquid symbols. Standard linker dead-code elimination
-# (--gc-sections on ELF) drops the unused static lib from the final binary.
-if(NOT MSVC)
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
-set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
-set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
-set(BUILD_DOC OFF CACHE BOOL "" FORCE)
-set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
-set(FIND_FFTW OFF CACHE BOOL "" FORCE)
-set(ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
-# liquid-dsp's cmake_minimum_required(VERSION 3.10) puts its option() calls
-# under CMP0077 OLD behavior — option() with that policy does NOT honor a
-# same-name *normal* variable. We must use CACHE BOOL FORCE so the override
-# takes effect. Without this, BUILD_SHARED_LIBS stays at the option's ON
-# default. Linux silently ships both libliquid.so and libliquid.a (different
-# extensions); the OUTPUT_NAME `liquid` at upstream CMakeLists.txt:444
-# renames the STATIC target's archive to drop the -static suffix.
+# Linux + macOS: built in-tree via add_subdirectory.  liquid-dsp's source
+# uses C99 `_Complex` arithmetic everywhere, which GCC/Clang handle natively.
 #
-# Cache pollution is undone with unset(CACHE) after add_subdirectory so
-# this doesn't leak into the rest of the project's BUILD_SHARED_LIBS
-# semantics.
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-add_subdirectory(third_party/liquid-dsp EXCLUDE_FROM_ALL)
-unset(BUILD_SHARED_LIBS CACHE)
-# Suppress warnings from vendored code (same pattern as other third_party
-# integrations — we don't want -Werror surfaces on code we don't own).
-if(TARGET liquid-static)
-    target_compile_options(liquid-static PRIVATE -w)
+# Windows (MSVC): cl.exe rejects the C99 `_Complex` type and operator usage,
+# so we instead build liquid-dsp in an isolated ExternalProject_Add sub-build
+# that uses clang-cl (LLVM's MSVC-ABI-compatible frontend, ships with VS 2022
+# under the "C++ Clang Compiler for Windows" component).  clang-cl supports
+# `_Complex` natively while producing MSVC-compatible .lib output, so the
+# resulting liquid.lib links cleanly into the main AetherSDR/MSVC binary.
+# Closes #3049.
+#
+# AetherSDR links against liquid-static so the build verifies clean even
+# though no module currently consumes liquid symbols. Standard linker
+# dead-code elimination (--gc-sections on ELF, /OPT:REF on link.exe) drops
+# the unused static lib from the final binary.
+if(MSVC)
+    find_program(CLANG_CL_EXE NAMES clang-cl clang-cl.exe)
+    if(CLANG_CL_EXE)
+        message(STATUS "liquid-dsp: building via clang-cl (${CLANG_CL_EXE})")
+        include(ExternalProject)
+        set(LIQUID_INSTALL_DIR "${CMAKE_BINARY_DIR}/liquid-dsp-install")
+        # Stub the include dir so INTERFACE_INCLUDE_DIRECTORIES validates at
+        # configure time — the real headers land here when ExternalProject
+        # runs its install step at build time.
+        file(MAKE_DIRECTORY "${LIQUID_INSTALL_DIR}/include")
+        ExternalProject_Add(liquid_dsp_external
+            SOURCE_DIR        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/liquid-dsp"
+            INSTALL_DIR       "${LIQUID_INSTALL_DIR}"
+            CMAKE_GENERATOR   "Ninja"
+            CMAKE_ARGS
+                -DCMAKE_BUILD_TYPE=$<CONFIG>
+                -DCMAKE_C_COMPILER=${CLANG_CL_EXE}
+                -DCMAKE_INSTALL_PREFIX=<INSTALL_DIR>
+                -DBUILD_EXAMPLES=OFF
+                -DBUILD_AUTOTESTS=OFF
+                -DBUILD_BENCHMARKS=OFF
+                -DBUILD_SANDBOX=OFF
+                -DBUILD_DOC=OFF
+                -DBUILD_STATIC_LIBS=ON
+                -DBUILD_SHARED_LIBS=OFF
+                -DFIND_FFTW=OFF
+                -DENABLE_LOGGING=OFF
+            BUILD_BYPRODUCTS  "<INSTALL_DIR>/lib/liquid.lib"
+            EXCLUDE_FROM_ALL  TRUE
+        )
+        add_library(liquid-static STATIC IMPORTED GLOBAL)
+        set_target_properties(liquid-static PROPERTIES
+            IMPORTED_LOCATION             "${LIQUID_INSTALL_DIR}/lib/liquid.lib"
+            INTERFACE_INCLUDE_DIRECTORIES "${LIQUID_INSTALL_DIR}/include")
+        add_dependencies(liquid-static liquid_dsp_external)
+    else()
+        message(STATUS "liquid-dsp: clang-cl not found on PATH; skipping (set "
+                       "CLANG_CL_EXE or install VS 2022 'C++ Clang Compiler for "
+                       "Windows' component to enable)")
+    endif()
+else()
+    set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
+    set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
+    set(BUILD_SANDBOX OFF CACHE BOOL "" FORCE)
+    set(BUILD_DOC OFF CACHE BOOL "" FORCE)
+    set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    set(FIND_FFTW OFF CACHE BOOL "" FORCE)
+    set(ENABLE_LOGGING OFF CACHE BOOL "" FORCE)
+    # liquid-dsp's cmake_minimum_required(VERSION 3.10) puts its option()
+    # calls under CMP0077 OLD behavior — option() with that policy does NOT
+    # honor a same-name *normal* variable. We must use CACHE BOOL FORCE so
+    # the override takes effect. Without this, BUILD_SHARED_LIBS stays at
+    # the option's ON default. Linux silently ships both libliquid.so and
+    # libliquid.a (different extensions); the OUTPUT_NAME `liquid` at
+    # upstream CMakeLists.txt:444 renames the STATIC target's archive to
+    # drop the -static suffix.
+    #
+    # Cache pollution is undone with unset(CACHE) after add_subdirectory so
+    # this doesn't leak into the rest of the project's BUILD_SHARED_LIBS
+    # semantics.
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/liquid-dsp EXCLUDE_FROM_ALL)
+    unset(BUILD_SHARED_LIBS CACHE)
+    # Suppress warnings from vendored code (same pattern as other third_party
+    # integrations — we don't want -Werror surfaces on code we don't own).
+    if(TARGET liquid-static)
+        target_compile_options(liquid-static PRIVATE -w)
+    endif()
 endif()
-endif()  # NOT MSVC
 
 qt_add_resources(RESOURCES resources/resources.qrc)
 
@@ -927,9 +970,6 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::Network
     Qt6::Multimedia
     aether_libmodem_core
-    # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
-    # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>
     zlibstatic           # bundled third_party/zlib 1.3.1
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
@@ -937,6 +977,14 @@ target_link_libraries(AetherSDR PRIVATE
 if(Qt6SerialPort_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SERIALPORT)
     target_link_libraries(AetherSDR PRIVATE Qt6::SerialPort)
+endif()
+
+# bundled third_party/liquid-dsp (#3043, #3049 closes the MSVC gap via clang-cl
+# sub-build).  Linked only when the target exists — on Windows MSVC without
+# clang-cl on PATH, the target is intentionally absent and the link line
+# simply omits it.
+if(TARGET liquid-static)
+    target_link_libraries(AetherSDR PRIVATE liquid-static)
 endif()
 
 if(Qt6WebSockets_FOUND)
