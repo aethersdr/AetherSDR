@@ -620,6 +620,12 @@ private:
     std::atomic<bool>  m_daxTxMode{false};    // DAX TX mode: VirtualAudioBridge handles TX
     QElapsedTimer      m_txSourceStartTime;
     quint64            m_txLifecycleGeneration{0};
+    // WASAPI silent-open watchdog (#2929): some USB PnP mics report mono-only
+    // capture but Qt accepts an unsupported stereo open and then delivers no
+    // bytes. The watchdog reopens as mono if no bytes arrive within ~1.5 s.
+    bool               m_txReceivedAnyBytes{false};
+    bool               m_txForceMonoOnNextOpen{false};
+    bool               m_txSilenceRetryDone{false};
 #ifdef Q_OS_MAC
     std::atomic<bool>  m_allowBluetoothTelephonyOutput{false};
 #endif

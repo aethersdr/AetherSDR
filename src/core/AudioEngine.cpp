@@ -3909,6 +3909,16 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 {
     if (m_audioSource) return true;  // already running
 
+    // WASAPI silent-open recovery (#2929). If the previous open was driven
+    // by the silence watchdog, m_txForceMonoOnNextOpen is true; consume it
+    // here. A fresh (non-watchdog) start re-enables the one-shot retry budget.
+    const bool isWatchdogRetry = m_txForceMonoOnNextOpen;
+    m_txForceMonoOnNextOpen = false;
+    if (!isWatchdogRetry) {
+        m_txSilenceRetryDone = false;
+    }
+    m_txReceivedAnyBytes = false;
+
     m_txAddress = radioAddress;
     m_txPort    = radioPort;
     m_txPacketCount = 0;
@@ -3980,10 +3990,17 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 #ifdef Q_OS_WIN
     // Windows WASAPI shared mode handles rate conversion transparently,
     // but Qt's isFormatSupported() returns false for many valid devices
-    // (Voicemeeter, FlexRadio DAX, etc.). Default to 48kHz stereo and
-    // let WASAPI handle it — only fall back if open actually fails later.
+    // (Voicemeeter, FlexRadio DAX, etc.). Default to 48kHz and let WASAPI
+    // handle the rate. For channel count, clamp to the device's reported
+    // maximumChannelCount() so mono-only USB PnP mics open as mono on the
+    // first attempt — opening them as stereo silently returns a non-null
+    // QIODevice that delivers zero bytes (#2929). Stereo-capable virtual
+    // devices (Voicemeeter / DAX) still open at stereo because they report
+    // maximumChannelCount() >= 2.
     fmt.setSampleRate(48000);
-    fmt.setChannelCount(2);
+    const int maxCh = dev.maximumChannelCount();
+    const int initialCh = (isWatchdogRetry || (maxCh > 0 && maxCh < 2)) ? 1 : 2;
+    fmt.setChannelCount(initialCh);
     noteTxAttempt(fmt);
     formatFound = true;
 #else
@@ -4131,9 +4148,13 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
         delete m_audioSource; m_audioSource = nullptr;
         bool txOpened = false;
         constexpr int fallbackRates[] = {48000, 44100, 24000, 16000};
+        const int initialRate = fmt.sampleRate();
+        const int initialChannels = fmt.channelCount();
         for (int rate : fallbackRates) {
-            if (rate == fmt.sampleRate()) continue;
             for (int ch : {2, 1}) {
+                // Skip only the exact (rate, ch) combo that just failed —
+                // a mono-only 48 kHz USB mic needs a 48 kHz mono retry (#2929).
+                if (rate == initialRate && ch == initialChannels) continue;
                 fmt.setSampleRate(rate);
                 fmt.setChannelCount(ch);
                 noteTxAttempt(fmt);
@@ -4184,6 +4205,34 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
 #endif
     }
     connect(m_micDevice, &QIODevice::readyRead, this, &AudioEngine::onTxAudioReady);
+
+#ifdef Q_OS_WIN
+    // WASAPI silent-open watchdog (#2929): some USB PnP mics report their
+    // native mono format but Qt's QAudioSource::start() returns a non-null
+    // QIODevice for an unsupported stereo open, then delivers zero bytes.
+    // The null-open fallback ladder above never sees this case (start did
+    // not return null). One-shot retry as mono if no bytes arrive in 1.5 s.
+    if (!m_txSilenceRetryDone) {
+        const quint64 watchdogGen = m_txLifecycleGeneration;
+        const QHostAddress watchdogAddr = m_txAddress;
+        const quint16 watchdogPort = m_txPort;
+        QTimer::singleShot(1500, this, [this, watchdogGen, watchdogAddr, watchdogPort]() {
+            if (!m_audioSource) return;
+            if (watchdogGen != m_txLifecycleGeneration) return;
+            if (m_audioSource->state() != QAudio::ActiveState) return;
+            if (m_txReceivedAnyBytes) return;
+            qCWarning(lcAudio) << "AudioEngine: TX source opened but produced no bytes in 1.5 s — "
+                                  "retrying as mono (likely WASAPI mono-only USB mic, #2929)"
+                               << "rate:" << m_txInputRate << "ch:" << m_txInputChannels;
+            m_txSilenceRetryDone = true;
+            m_txForceMonoOnNextOpen = true;
+            QMetaObject::invokeMethod(this, [this, watchdogAddr, watchdogPort]() {
+                stopTxStream();
+                startTxStream(watchdogAddr, watchdogPort);
+            }, Qt::QueuedConnection);
+        });
+    }
+#endif
 #endif
 
     m_txSourceStartTime.restart();
@@ -4278,6 +4327,7 @@ void AudioEngine::onTxAudioReady()
     if (!m_micDevice || (m_txStreamId == 0 && m_remoteTxStreamId == 0)) return;
     QByteArray data = m_micDevice->readAll();
     if (data.isEmpty()) return;
+    m_txReceivedAnyBytes = true;  // disarms the WASAPI silent-open watchdog (#2929)
 #endif
 
     // Canonicalize immediately after capture: TX voice is logically mono
