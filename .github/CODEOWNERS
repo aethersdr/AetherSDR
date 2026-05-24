@@ -11,8 +11,15 @@
 #   Tier 1 (project policy)            — bottom (most specific paths)
 #
 # Tier 1 — @ten9876 only (project policy & repo-canon).
-# Tier 2 — @ten9876 + @jensenpat + @NF0T + @rfoust (humans only, no bot).
-# Tier 3 — Tier 2 + @AetherClaude (bot may approve broad-default PRs).
+# Tier 2 — @ten9876 + @jensenpat + @NF0T + @rfoust (project collaborators).
+# Tier 3 — same human roster as Tier 2 (broad default fall-through).
+#
+# All approvals are human-only. @AetherClaude (the project's machine user)
+# is intentionally NOT in any owner set — bot-generated PRs still need a
+# human reviewer regardless of which paths they touch. The Tier 2 / Tier 3
+# split is preserved for documentary purposes: Tier 2 enumerates the
+# specific architecture / collaborator surfaces; Tier 3 is the broad
+# default that catches everything else with the same human roster.
 #
 # CODEOWNERS has no permission hierarchy — each path matches exactly one
 # line (last wins) and that line's owners completely replace any earlier
@@ -23,13 +30,15 @@
 # membership, so a contributor cannot approve their own PR even on
 # paths they own.
 
-# ── Tier 3: broad default — bot can approve fall-through paths ─────────────
-*                            @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
+# ── Tier 3: broad default — fall-through for any path not enumerated ───────
+*                            @ten9876 @jensenpat @NF0T @rfoust
 
-# ── Tier 2: project collaborators — humans only, no bot approval ───────────
-# Specific paths that need human judgment: mechanical/safe surfaces (docs,
-# tests, GitHub config) plus the architecture & infrastructure hot files.
-# Removing the bot from these forces a human reviewer for any change.
+# ── Tier 2: project collaborators — explicit human-attention surfaces ──────
+# Specific paths called out as collaborator territory. Functionally
+# identical to Tier 3 today (same owner set), but enumerated explicitly
+# so a future tier change (e.g. expanding the collaborator roster, or
+# reintroducing bot approval on the broad default) doesn't accidentally
+# alter coverage of these high-touch surfaces.
 
 # Mechanical / safe surfaces
 tests/                       @ten9876 @jensenpat @NF0T @rfoust
