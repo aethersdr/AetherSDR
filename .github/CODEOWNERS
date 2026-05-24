@@ -41,12 +41,27 @@ CMakeLists.txt               @ten9876 @jensenpat
 .claude/commands/            @ten9876 @jensenpat
 
 # ── Tier 4: project policy — maintainer-only ──────────────────────────────
+# Every file in the repo's root directory is project-policy / repo-canon
+# (with the explicit exception of CMakeLists.txt — kept at Tier 3 because
+# build-config edits are appropriate for the architecture-owner subset).
+# Listed individually rather than via `/*` so the intent is auditable and
+# new root-dir files trigger a deliberate review of which tier they belong
+# in (added or omitted by the PR that introduces them).
+AGENTS.md                    @ten9876
+CHANGELOG.md                 @ten9876
 CLAUDE.md                    @ten9876
-CONTRIBUTING.md              @ten9876
-GOVERNANCE.md                @ten9876
 CODE_OF_CONDUCT.md           @ten9876
-SECURITY.md                  @ten9876
+CONSTITUTION.md              @ten9876
+CONTRIBUTING.md              @ten9876
+GEMINI.md                    @ten9876
+GOVERNANCE.md                @ten9876
 LICENSE                      @ten9876
+README.md                    @ten9876
+ROADMAP.md                   @ten9876
+SECURITY-AUDIT.md            @ten9876
+SECURITY.md                  @ten9876
+SUPPORT.md                   @ten9876
+THIRD_PARTY_LICENSES         @ten9876
 .github/CODEOWNERS           @ten9876
 
 # CI runtime — release artifacts, registry pushes, GITHUB_TOKEN scopes.
