@@ -1,24 +1,30 @@
 # AetherSDR CODEOWNERS
 #
 # Four tiers, last-matching-pattern wins:
-#   1. Broad default — jensenpat + maintainer
-#   2. Mechanical/safe paths — also approvable by @AetherClaude (machine user)
-#   3. Architecture & infrastructure — jensenpat + maintainer (no bot approval)
+#   1. Broad default — co-maintainers (ten9876, jensenpat, NF0T, rfoust)
+#   2. Mechanical/safe paths — co-maintainers + @AetherClaude (machine user)
+#   3. Architecture & infrastructure — co-maintainers (no bot approval)
 #   4. Project policy — reserved to @ten9876
+#
+# CODEOWNERS has no permission hierarchy — each path matches exactly one line
+# (last wins) and that line's owners completely replace any earlier match.
+# Co-maintainers are listed on Tier 1, 2, and 3 explicitly so they can
+# approve any non-Tier-4 PR. The tiers differ only by whether the bot
+# (@AetherClaude) or the maintainer (@ten9876 only) is also in the owner set.
 #
 # Self-approval is hard-blocked by GitHub regardless of CODEOWNERS membership,
 # so a contributor cannot approve their own PR even on paths they own.
 
 # ── Tier 1: broad default ──────────────────────────────────────────────────
-*                            @ten9876 @jensenpat
+*                            @ten9876 @jensenpat @NF0T @rfoust
 
 # ── Tier 2: mechanical/safe paths — bot can also approve ───────────────────
-tests/                       @ten9876 @jensenpat @AetherClaude
-docs/                        @ten9876 @jensenpat @AetherClaude
-*.md                         @ten9876 @jensenpat @AetherClaude
-.github/dependabot.yml       @ten9876 @jensenpat @AetherClaude
-.github/docker/              @ten9876 @jensenpat @AetherClaude
-.github/ISSUE_TEMPLATE/      @ten9876 @jensenpat @AetherClaude
+tests/                       @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
+docs/                        @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
+*.md                         @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
+.github/dependabot.yml       @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
+.github/docker/              @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
+.github/ISSUE_TEMPLATE/      @ten9876 @jensenpat @NF0T @rfoust @AetherClaude
 
 # ── Tier 3: architecture & infrastructure — bot cannot approve ─────────────
 # Visual/UX direction (per CLAUDE.md "AI Agent Boundaries")
