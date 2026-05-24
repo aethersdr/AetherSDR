@@ -1,25 +1,36 @@
 # AetherSDR CODEOWNERS
 #
-# Three tiers, last-matching-pattern wins. Numbered by exclusivity, not
-# by file position — Tier 1 is the smallest, most-exclusive owner set;
-# Tier 3 is the broadest fall-through default. The file is laid out
-# broad → specific so the more restrictive tiers override the broader
-# defaults via CODEOWNERS' last-match-wins semantics:
+# Three tiers, last-matching-pattern wins. Numbered by exclusivity, not by
+# file position — Tier 1 is the smallest, most-exclusive owner set; Tier 3
+# is the broadest fall-through default. The file is laid out broad →
+# specific so the more restrictive tiers override the broader defaults via
+# CODEOWNERS' last-match-wins semantics:
 #
-#   Tier 3 (broad default)             — top of file (the `*` line)
-#   Tier 2 (project collaborators)     — middle (specific paths)
-#   Tier 1 (project policy)            — bottom (most specific paths)
+#   Tier 3 (source code, broad default)       — top of file (the `*` line)
+#   Tier 2 (project infrastructure)           — middle (specific paths)
+#   Tier 1 (governance, security, bot policy) — bottom (most specific paths)
 #
-# Tier 1 — @ten9876 only (project policy & repo-canon).
-# Tier 2 — @ten9876 + @jensenpat + @NF0T + @rfoust (project collaborators).
+# Tier 1 — @ten9876 only.
+#         Project governance and direction (CONSTITUTION, GOVERNANCE,
+#         CONTRIBUTING, CODE_OF_CONDUCT, LICENSE, ROADMAP), security
+#         controls (SECURITY*, signing keys, CODEOWNERS itself, CodeQL
+#         configs, CI workflow definitions), legal/compliance
+#         (THIRD_PARTY_LICENSES), and bot/agent instruction
+#         (AGENTS.md, CLAUDE.md, GEMINI.md, .claude/commands/).
+# Tier 2 — @ten9876 + @jensenpat + @NF0T + @rfoust.
+#         Project infrastructure: CI/CD configuration not in T1
+#         (dependabot, docker, issue templates), documentation
+#         (docs/, *.md catchall, including README/CHANGELOG/SUPPORT
+#         which fall through here from the *.md glob), tests, and
+#         build configuration (CMakeLists.txt).
 # Tier 3 — same human roster as Tier 2 (broad default fall-through).
+#         AetherSDR source code and anything else not enumerated
+#         above (src/, third_party/, plugins/, hal-plugin/,
+#         resources/, packaging/, scripts/).
 #
-# All approvals are human-only. @AetherClaude (the project's machine user)
-# is intentionally NOT in any owner set — bot-generated PRs still need a
-# human reviewer regardless of which paths they touch. The Tier 2 / Tier 3
-# split is preserved for documentary purposes: Tier 2 enumerates the
-# specific architecture / collaborator surfaces; Tier 3 is the broad
-# default that catches everything else with the same human roster.
+# All approvals are human-only. @AetherClaude (the project's machine
+# user) is intentionally NOT in any owner set — bot-generated PRs
+# still need a human reviewer regardless of which paths they touch.
 #
 # CODEOWNERS has no permission hierarchy — each path matches exactly one
 # line (last wins) and that line's owners completely replace any earlier
@@ -30,20 +41,21 @@
 # membership, so a contributor cannot approve their own PR even on
 # paths they own.
 
-# ── Tier 3: broad default — fall-through for any path not enumerated ───────
+# ── Tier 3: source code, broad default — catches anything not enumerated ───
 *                            @ten9876 @jensenpat @NF0T @rfoust
 
-# ── Tier 2: project collaborators — explicit human-attention surfaces ──────
-# Specific paths called out as collaborator territory. Functionally
-# identical to Tier 3 today (same owner set), but enumerated explicitly
-# so a future tier change (e.g. expanding the collaborator roster, or
-# reintroducing bot approval on the broad default) doesn't accidentally
-# alter coverage of these high-touch surfaces.
+# ── Tier 2: project infrastructure — explicit collaborator surfaces ────────
+# CI/CD configuration not in Tier 1, documentation, tests, build config.
+# Functionally identical to Tier 3's owner set today, but enumerated
+# explicitly so a future tier change doesn't accidentally alter coverage
+# of these surfaces.
 
-# Mechanical / safe surfaces
+# Documentation & tests
 tests/                       @ten9876 @jensenpat @NF0T @rfoust
 docs/                        @ten9876 @jensenpat @NF0T @rfoust
 *.md                         @ten9876 @jensenpat @NF0T @rfoust
+
+# GitHub-specific tooling
 .github/dependabot.yml       @ten9876 @jensenpat @NF0T @rfoust
 .github/docker/              @ten9876 @jensenpat @NF0T @rfoust
 .github/ISSUE_TEMPLATE/      @ten9876 @jensenpat @NF0T @rfoust
@@ -51,19 +63,9 @@ docs/                        @ten9876 @jensenpat @NF0T @rfoust
 # Build configuration
 CMakeLists.txt               @ten9876 @jensenpat @NF0T @rfoust
 
-# Security tooling & agent configuration
-.github/codeql/              @ten9876 @jensenpat @NF0T @rfoust
-.claude/commands/            @ten9876 @jensenpat @NF0T @rfoust
-
-# ── Tier 1: project policy — maintainer-only ──────────────────────────────
-# Every file in the repo's root directory is project-policy / repo-canon
-# (with the explicit exception of CMakeLists.txt — kept at Tier 2 because
-# build-config edits are appropriate for the broader collaborator set).
-# Listed individually rather than via `/*` so the intent is auditable and
-# new root-dir files trigger a deliberate review of which tier they
-# belong in (added or omitted by the PR that introduces them).
+# ── Tier 1: governance, security, bot policy — maintainer-only ────────────
+# Project governance & direction
 AGENTS.md                    @ten9876
-CHANGELOG.md                 @ten9876
 CLAUDE.md                    @ten9876
 CODE_OF_CONDUCT.md           @ten9876
 CONSTITUTION.md              @ten9876
@@ -71,16 +73,21 @@ CONTRIBUTING.md              @ten9876
 GEMINI.md                    @ten9876
 GOVERNANCE.md                @ten9876
 LICENSE                      @ten9876
-README.md                    @ten9876
 ROADMAP.md                   @ten9876
-SECURITY-AUDIT.md            @ten9876
+
+# Security & compliance
 SECURITY.md                  @ten9876
-SUPPORT.md                   @ten9876
+SECURITY-AUDIT.md            @ten9876
 THIRD_PARTY_LICENSES         @ten9876
 .github/CODEOWNERS           @ten9876
+.github/codeql/              @ten9876
+docs/RELEASE-SIGNING-KEY.pub.asc  @ten9876
 
 # CI runtime — release artifacts, registry pushes, GITHUB_TOKEN scopes.
+# Kept at Tier 1 despite the framework's CI/CD-in-T2 default because a
+# malicious workflow change can exfiltrate secrets or publish unsigned
+# releases. Workflow-config sensitivity outweighs the categorical match.
 .github/workflows/           @ten9876
 
-# Release signing key — overrides the Tier 2 docs/ pattern.
-docs/RELEASE-SIGNING-KEY.pub.asc  @ten9876
+# Bot / agent instruction (source of truth for AI tool behaviour)
+.claude/commands/            @ten9876
