@@ -2836,7 +2836,7 @@ MainWindow::MainWindow(QWidget* parent)
                                                 pan->wnbUpdating());
                 // Prime the spectrum widget with the pan's current dBm range on
                 // reconnect so the noise-floor auto-adjust starts from the correct
-                // position. (#3029)
+                // position. (#3034)
                 sw->setDbmRange(pan->minDbm(), pan->maxDbm());
             }
             return;
@@ -11368,7 +11368,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // while the radio model already knows the saved range (e.g. -130 to -40).
         // On reconnect the auto-adjust would animate from the wrong baseline and
         // fire dbmRangeChangeRequested with bogus values — which then locks out the
-        // correct radio-reported range via the pendingDbm guard. (#3029)
+        // correct radio-reported range via the pendingDbm guard. (#3034)
         sw->setDbmRange(pan->minDbm(), pan->maxDbm());
 
         auto oldFpsConnection = m_panFpsReconcileConnections.take(applet->panId());
