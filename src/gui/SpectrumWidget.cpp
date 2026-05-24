@@ -1336,8 +1336,6 @@ void SpectrumWidget::setWfLineDuration(int ms) {
     }
     // Re-calibrate the time scale for the new rate
     resetWfTimeScale();
-    // (#2666) Apply the new cadence to FFT-derived rows on the next frame
-    resetFftWaterfallAccumulator();
     markOverlayDirty();
 }
 
@@ -2221,15 +2219,6 @@ const SpectrumWidget::SliceOverlay* SpectrumWidget::txOverlay() const
     return nullptr;
 }
 
-void SpectrumWidget::resetFftWaterfallAccumulator()
-{
-    m_lastFftRowMs = 0;
-    m_lastFftFrameMs = 0;
-    m_fftRowDebtMs = static_cast<double>(m_wfLineDuration);
-    std::fill(m_fftAccumPower.begin(), m_fftAccumPower.end(), 0.0f);
-    m_fftAccumCount = 0;
-}
-
 void SpectrumWidget::beginTxDbmRangeFreeze()
 {
     if (!txWaterfallAffectsThisPan()) {
@@ -2315,7 +2304,6 @@ void SpectrumWidget::setTransmitting(bool tx)
 {
     if (tx && !m_transmitting) {
         m_preTxAutoBlack = m_autoBlackThresh;  // save before TX
-        resetFftWaterfallAccumulator();  // (#2666) first TX row scrolls immediately
         beginTxDbmRangeFreeze();
     }
     if (!tx && m_transmitting) {
@@ -2352,7 +2340,6 @@ void SpectrumWidget::setTxWaterfallSlice(double freqMhz, int filterLowHz,
     m_txWaterfallXitFreq = xitFreq;
 
     if (changed && m_transmitting) {
-        resetFftWaterfallAccumulator();
         if (txWaterfallAffectsThisPan()) {
             if (!m_txDbmRangeFrozen)
                 beginTxDbmRangeFreeze();
@@ -2381,7 +2368,6 @@ void SpectrumWidget::clearTxWaterfallSlice()
     m_txWaterfallXitFreq = 0;
 
     if (m_transmitting) {
-        resetFftWaterfallAccumulator();
         if (m_txDbmRangeFrozen)
             endTxDbmRangeFreeze();
     }

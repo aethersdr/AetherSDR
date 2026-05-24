@@ -605,7 +605,6 @@ private:
     const SliceOverlay* txOverlay() const;
     bool txWaterfallMaskRange(double& lowMhz, double& highMhz) const;
     bool txWaterfallAffectsThisPan() const;
-    void resetFftWaterfallAccumulator();
     void beginTxDbmRangeFreeze();
     void endTxDbmRangeFreeze();
     void resetTxDbmRangeFreeze();
@@ -735,17 +734,6 @@ private:
     WfColorScheme m_wfColorScheme{WfColorScheme::Default};
     float m_autoBlackThresh{145.0f}; // client-side auto-black: tracked noise floor
     int   m_wfLineDuration{100};     // ms per waterfall row
-    // Pacing timestamp for FFT-derived waterfall rows so TX (and the RX
-    // FFT-fallback path after native tiles time out) scrolls at the same
-    // line_duration cadence as RX native tiles (#2666).
-    qint64 m_lastFftRowMs{0};
-    qint64 m_lastFftFrameMs{0};
-    double m_fftRowDebtMs{0.0};
-    // Accumulate FFT-derived waterfall frames inside each line_duration
-    // window so TX rows use all available samples instead of dropping the
-    // intermediates between visible rows.
-    QVector<float> m_fftAccumPower;
-    int            m_fftAccumCount{0};
 
     // Waterfall colour range for FFT-derived fallback (dBm).
     float m_wfMinDbm{-130.0f};
