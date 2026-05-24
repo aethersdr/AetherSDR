@@ -75,23 +75,68 @@ ThemeManager::ThemeManager()
 
 void ThemeManager::seedBuiltinDefaults()
 {
-    // A minimal viable set of compiled-in defaults so the UI is usable
-    // even with zero theme files on disk.  Bit-identical to the colours
-    // hardcoded in src/gui today.  Phase 2 expands this set in lockstep
-    // with the migration audit.
-    m_tokens.insert("color.background.0",   QString("#0a0e14"));
-    m_tokens.insert("color.background.1",   QString("#0d1119"));
-    m_tokens.insert("color.background.2",   QString("#13192a"));
-    m_tokens.insert("color.accent",         QString("#00b4d8"));
-    m_tokens.insert("color.accent.warning", QString("#ffb84d"));
-    m_tokens.insert("color.accent.danger",  QString("#ff4d4d"));
-    m_tokens.insert("color.accent.success", QString("#4dd87a"));
+    // Compiled-in defaults — the Phase 2 canonical taxonomy from
+    // docs/theming/canonical-tokens.md.  Mirrors default-dark.json so
+    // the UI is usable even with zero theme files on disk.  Kept in sync
+    // with the JSON resource manually; Phase 5's editor will eventually
+    // generate this table from the resource at compile time.
+
+    // Backgrounds (6 tiers)
+    m_tokens.insert("color.background.0",        QString("#0a0e14"));
+    m_tokens.insert("color.background.1",        QString("#1a2a3a"));
+    m_tokens.insert("color.background.2",        QString("#304050"));
+    m_tokens.insert("color.background.3",        QString("#506070"));
+    m_tokens.insert("color.background.tx",       QString("#3a2a0e"));
+    m_tokens.insert("color.background.spectrum", QString("#000000"));
+
+    // Accents
+    m_tokens.insert("color.accent",          QString("#00b4d8"));
+    m_tokens.insert("color.accent.bright",   QString("#00c8f0"));
+    m_tokens.insert("color.accent.dim",      QString("#0090e0"));
+    m_tokens.insert("color.accent.warning",  QString("#ffb84d"));
+    m_tokens.insert("color.accent.danger",   QString("#ff4d4d"));
+    m_tokens.insert("color.accent.success",  QString("#4dd87a"));
+
+    // Text (4 tiers — label and disabled distinct for Phase 4 contrast tuning)
     m_tokens.insert("color.text.primary",   QString("#e6f0fa"));
     m_tokens.insert("color.text.secondary", QString("#8ea8c0"));
-    m_tokens.insert("color.text.disabled",  QString("#506070"));
     m_tokens.insert("color.text.label",     QString("#506070"));
-    m_tokens.insert("color.border.subtle",  QString("#1a2330"));
-    m_tokens.insert("color.border.strong",  QString("#2a3a4d"));
+    m_tokens.insert("color.text.disabled",  QString("#3a4a5a"));
+
+    // Borders
+    m_tokens.insert("color.border.subtle", QString("#1a2330"));
+    m_tokens.insert("color.border.strong", QString("#2a3a4d"));
+    m_tokens.insert("color.border.accent", QString("#00b4d8"));
+    m_tokens.insert("color.border.tx",     QString("#5a4a28"));
+
+    // Meters (paint code only)
+    m_tokens.insert("color.meter.crst",          QString("#ff4d4d"));
+    m_tokens.insert("color.meter.rms",           QString("#00b4d8"));
+    m_tokens.insert("color.meter.thresh",        QString("#ffb84d"));
+    m_tokens.insert("color.meter.peak",          QString("#e6f0fa"));
+    m_tokens.insert("color.meter.gainReduction", QString("#f2c14e"));
+    m_tokens.insert("color.meter.bar.fill",      QString("#405060"));
+
+    // Spectrum + waterfall (paint code only — gradient waterfall.colormap
+    // lands when gradient-token support follows this PR)
+    m_tokens.insert("color.spectrum.trace",    QString("#00b4d8"));
+    m_tokens.insert("color.spectrum.peakHold", QString("#ffb84d"));
+    m_tokens.insert("color.spectrum.average",  QString("#8ea8c0"));
+    m_tokens.insert("color.spectrum.grid",     QString("#1a2330"));
+
+    // Slice indicators A-H + TX-active highlight.  Preliminary values —
+    // a dedicated slice-colour audit may tune these in a follow-up.
+    m_tokens.insert("color.slice.a",  QString("#ff4040"));
+    m_tokens.insert("color.slice.b",  QString("#ff8c00"));
+    m_tokens.insert("color.slice.c",  QString("#ffd040"));
+    m_tokens.insert("color.slice.d",  QString("#40c060"));
+    m_tokens.insert("color.slice.e",  QString("#00b4d8"));
+    m_tokens.insert("color.slice.f",  QString("#4080ff"));
+    m_tokens.insert("color.slice.g",  QString("#c060ff"));
+    m_tokens.insert("color.slice.h",  QString("#ff60a0"));
+    m_tokens.insert("color.slice.tx", QString("#ff4d4d"));
+
+    // Font + sizing (unchanged from Phase 1 seed)
     m_tokens.insert("font.family.ui",       QString("Inter"));
     m_tokens.insert("font.family.mono",     QString("monospace"));
     m_tokens.insert("font.size.tiny",       9);

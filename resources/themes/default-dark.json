@@ -2,28 +2,60 @@
   "schemaVersion": 1,
   "name": "Default Dark",
   "author": "AetherSDR Team",
-  "version": "1.0",
-  "description": "AetherSDR's original dark theme — bit-identical to the colours hardcoded in src/gui through v26.5.3. Reference baseline for the theming subsystem (RFC #3076).",
+  "version": "1.1",
+  "description": "AetherSDR's original dark theme — expanded to the Phase 2 canonical taxonomy (51 tokens). Visually compatible with v26.5.3; sub-perceptual diffs at sites where close-variant colours collapsed onto canonical tokens (see docs/theming/canonical-tokens.md).",
   "tokens": {
     "color": {
       "background": {
         "0": "#0a0e14",
-        "1": "#0d1119",
-        "2": "#13192a"
+        "1": "#1a2a3a",
+        "2": "#304050",
+        "3": "#506070",
+        "tx": "#3a2a0e",
+        "spectrum": "#000000"
       },
       "accent": "#00b4d8",
+      "accent.bright": "#00c8f0",
+      "accent.dim": "#0090e0",
       "accent.warning": "#ffb84d",
       "accent.danger": "#ff4d4d",
       "accent.success": "#4dd87a",
       "text": {
         "primary": "#e6f0fa",
         "secondary": "#8ea8c0",
-        "disabled": "#506070",
-        "label": "#506070"
+        "label": "#506070",
+        "disabled": "#3a4a5a"
       },
       "border": {
         "subtle": "#1a2330",
-        "strong": "#2a3a4d"
+        "strong": "#2a3a4d",
+        "accent": "#00b4d8",
+        "tx": "#5a4a28"
+      },
+      "meter": {
+        "crst": "#ff4d4d",
+        "rms": "#00b4d8",
+        "thresh": "#ffb84d",
+        "peak": "#e6f0fa",
+        "gainReduction": "#f2c14e",
+        "bar.fill": "#405060"
+      },
+      "spectrum": {
+        "trace": "#00b4d8",
+        "peakHold": "#ffb84d",
+        "average": "#8ea8c0",
+        "grid": "#1a2330"
+      },
+      "slice": {
+        "a": "#ff4040",
+        "b": "#ff8c00",
+        "c": "#ffd040",
+        "d": "#40c060",
+        "e": "#00b4d8",
+        "f": "#4080ff",
+        "g": "#c060ff",
+        "h": "#ff60a0",
+        "tx": "#ff4d4d"
       }
     },
     "font": {

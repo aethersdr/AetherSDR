@@ -64,17 +64,34 @@ int main(int argc, char** argv)
     EXPECT_EQ(tm.sizing("font.size.normal"), 12);
     EXPECT_EQ(tm.sizing("sizing.panel.padding"), 4);
 
+    // ── Phase 2 canonical taxonomy expansion ──
+    // Representative slice of the 51-token set proves the JSON loader
+    // handles the larger nested structure and the seed/JSON stays in sync.
+    EXPECT_EQ(tm.color("color.background.1").name().toLower(),        QString("#1a2a3a"));
+    EXPECT_EQ(tm.color("color.background.tx").name().toLower(),       QString("#3a2a0e"));
+    EXPECT_EQ(tm.color("color.background.spectrum").name().toLower(), QString("#000000"));
+    EXPECT_EQ(tm.color("color.accent.bright").name().toLower(),       QString("#00c8f0"));
+    EXPECT_EQ(tm.color("color.text.disabled").name().toLower(),       QString("#3a4a5a"));
+    EXPECT_EQ(tm.color("color.border.accent").name().toLower(),       QString("#00b4d8"));
+    EXPECT_EQ(tm.color("color.meter.crst").name().toLower(),          QString("#ff4d4d"));
+    EXPECT_EQ(tm.color("color.spectrum.trace").name().toLower(),      QString("#00b4d8"));
+    EXPECT_EQ(tm.color("color.slice.a").name().toLower(),             QString("#ff4040"));
+    EXPECT_EQ(tm.color("color.slice.h").name().toLower(),             QString("#ff60a0"));
+    EXPECT_EQ(tm.color("color.slice.tx").name().toLower(),            QString("#ff4d4d"));
+
     // ── Missing token returns transparent + logs (no crash) ──
     EXPECT_EQ(tm.color("color.nonexistent.token").alpha(), 0);
     EXPECT_EQ(tm.sizing("sizing.nonexistent"), 0);
 
     // ── Stylesheet template resolution ──
+    // background.1 changed from v1.0 (#0d1119) to v1.1 (#1a2a3a) as part
+    // of the Phase 2 canonicalisation; this test asserts the new value.
     const QString tpl =
         "QPushButton { background: {{color.background.1}}; "
         "color: {{color.accent}}; "
         "padding: {{sizing.panel.padding}}px; }";
     const QString out = tm.resolve(tpl);
-    EXPECT_TRUE(out.contains("background: #0d1119"));
+    EXPECT_TRUE(out.contains("background: #1a2a3a"));
     EXPECT_TRUE(out.contains("color: #00b4d8"));
     EXPECT_TRUE(out.contains("padding: 4px"));
     EXPECT_TRUE(!out.contains("{{"));
