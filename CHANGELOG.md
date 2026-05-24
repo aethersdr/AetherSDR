@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Aetherial Audio TX completion + security hardening + 100-commit reliability sweep
 
-138 commits across 14 contributors landed in this cycle. The headline
+139 commits across 14 contributors landed in this cycle. The headline
 work is the **TX path of the Aetherial Audio Channel Strip** reaching
 feature-complete with the new PAPR processor and split-band de-esser,
 **two published security advisories** landing their enforcement phases
@@ -186,6 +186,17 @@ tune-feedback site managed its own timer.
 TCI server forwards panadapter FFT rows to subscribed clients (third-
 party tools can render AetherSDR spectrum). New `tx_gain` command +
 ALC reading exposed via `tx_sensors`.
+
+**TCI TX overflow-mode picker (#3065)**
+
+Right-click the TCI TX slider to choose how out-of-range (>1.0)
+samples from digital-mode clients are handled before the radio sees
+them: **Clip** (saturating ±1.0, legacy default), **NaNGuard** (pass
+through bit-exact; only zero NaN/Inf), or **Measure** (true bypass —
+count overshoots for telemetry, never mutate samples). WSJT-X / FT8
+operators chasing bit-exact tone fidelity can drop the float-domain
+limiter entirely. Default stays Clip so existing users see no
+behavior change.
 
 **AetherControl virtual FlexControl controller (#2888)**
 
