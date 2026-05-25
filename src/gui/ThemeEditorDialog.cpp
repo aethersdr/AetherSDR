@@ -7,8 +7,14 @@
 #include <QAction>
 #include <QColorDialog>
 #include <QCursor>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFileDialog>
+#include <QFileInfo>
 #include <QFontDialog>
 #include <QFontMetrics>
+#include <QMimeData>
+#include <QUrl>
 #include <QHBoxLayout>
 #include <QLinearGradient>
 #include <QMenu>
@@ -166,10 +172,15 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // actions on the right.  Built-in themes can't be renamed or
     // deleted; actions are disabled at click time when the active
     // theme is built-in.
-    auto* themeActionsBtn = new QPushButton(QStringLiteral("Theme actions ▾"), bodyWidget());
+    // No trailing ▾ in the label — QPushButton auto-renders a dropdown
+    // arrow once setMenu() is called below, and the two collide visually.
+    auto* themeActionsBtn = new QPushButton(QStringLiteral("Theme actions"), bodyWidget());
     auto* themeActionsMenu = new QMenu(themeActionsBtn);
     auto* renameAct = themeActionsMenu->addAction(QStringLiteral("Rename theme…"));
     auto* deleteAct = themeActionsMenu->addAction(QStringLiteral("Delete theme…"));
+    themeActionsMenu->addSeparator();
+    auto* exportAct = themeActionsMenu->addAction(QStringLiteral("Export to file…"));
+    auto* importAct = themeActionsMenu->addAction(QStringLiteral("Import from file…"));
     themeActionsBtn->setMenu(themeActionsMenu);
     btnRow->addWidget(themeActionsBtn);
 
@@ -184,6 +195,15 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
             this, &ThemeEditorDialog::onRenameThemeClicked);
     connect(deleteAct, &QAction::triggered,
             this, &ThemeEditorDialog::onDeleteThemeClicked);
+    connect(exportAct, &QAction::triggered,
+            this, &ThemeEditorDialog::onExportThemeClicked);
+    connect(importAct, &QAction::triggered,
+            this, &ThemeEditorDialog::onImportThemeClicked);
+
+    // Accept .aethertheme / .json drag-and-drop on the dialog body — the
+    // PersistentDialog base widget gets the drop events as long as the
+    // outermost dialog has setAcceptDrops(true).
+    setAcceptDrops(true);
 
     refreshTokenList();
     updateTitle();
@@ -436,6 +456,91 @@ void ThemeEditorDialog::onRenameThemeClicked()
                            "that name may already exist, or the theme file "
                            "may be unwriteable.").arg(current, newName));
     }
+}
+
+void ThemeEditorDialog::onExportThemeClicked()
+{
+    auto& tm = ThemeManager::instance();
+    const QString current = tm.activeTheme();
+    if (current.isEmpty()) return;
+
+    // Suggest a filename matching the theme name + the `.aethertheme`
+    // extension so shared files are recognisable on sight.  The OS file
+    // picker remembers the last directory across invocations.
+    const QString suggested = QDir::homePath()
+                              + QLatin1Char('/')
+                              + current + QStringLiteral(".aethertheme");
+    const QString path = QFileDialog::getSaveFileName(this,
+        QStringLiteral("Export theme"), suggested,
+        QStringLiteral("AetherSDR themes (*.aethertheme *.json)"));
+    if (path.isEmpty()) return;
+
+    QString err;
+    if (!tm.exportThemeToFile(current, path, &err)) {
+        QMessageBox::warning(this, QStringLiteral("Export failed"),
+            QStringLiteral("Could not write \"%1\":\n\n%2").arg(path, err));
+        return;
+    }
+}
+
+void ThemeEditorDialog::onImportThemeClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(this,
+        QStringLiteral("Import theme"), QDir::homePath(),
+        QStringLiteral("AetherSDR themes (*.aethertheme *.json)"));
+    if (path.isEmpty()) return;
+    importThemeFromPath(path);
+}
+
+void ThemeEditorDialog::importThemeFromPath(const QString& filePath)
+{
+    auto& tm = ThemeManager::instance();
+    QString err;
+    const QString name = tm.importThemeFromFile(filePath, &err);
+    if (name.isEmpty()) {
+        QMessageBox::warning(this, QStringLiteral("Import failed"),
+            QStringLiteral("Could not import \"%1\":\n\n%2").arg(filePath, err));
+        return;
+    }
+    QMessageBox::information(this, QStringLiteral("Theme imported"),
+        QStringLiteral("Installed \"%1\" and made it the active theme.").arg(name));
+}
+
+void ThemeEditorDialog::dragEnterEvent(QDragEnterEvent* event)
+{
+    if (!event->mimeData()->hasUrls()) {
+        PersistentDialog::dragEnterEvent(event);
+        return;
+    }
+    // Only accept drops where every URL is a theme-shaped file — refusing
+    // the drop is the cleanest signal that an arbitrary file isn't valid.
+    const auto urls = event->mimeData()->urls();
+    for (const QUrl& u : urls) {
+        if (!u.isLocalFile()) {
+            PersistentDialog::dragEnterEvent(event);
+            return;
+        }
+        const QString suffix = QFileInfo(u.toLocalFile()).suffix().toLower();
+        if (suffix != QStringLiteral("aethertheme")
+            && suffix != QStringLiteral("json")) {
+            PersistentDialog::dragEnterEvent(event);
+            return;
+        }
+    }
+    event->acceptProposedAction();
+}
+
+void ThemeEditorDialog::dropEvent(QDropEvent* event)
+{
+    if (!event->mimeData()->hasUrls()) {
+        PersistentDialog::dropEvent(event);
+        return;
+    }
+    const auto urls = event->mimeData()->urls();
+    for (const QUrl& u : urls) {
+        if (u.isLocalFile()) importThemeFromPath(u.toLocalFile());
+    }
+    event->acceptProposedAction();
 }
 
 void ThemeEditorDialog::onDeleteThemeClicked()

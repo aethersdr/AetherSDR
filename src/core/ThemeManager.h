@@ -227,6 +227,33 @@ public:
 
     bool        saveCurrentThemeAs(const QString& newThemeName);
 
+    // Phase 6 — share-friendly file format.  `.aethertheme` is plain JSON
+    // (same shape `saveCurrentThemeAs` writes to the user-dir) with a
+    // `schemaVersion` discriminator.  Missing tokens on import fall back
+    // to the built-in defaults; unknown tokens round-trip unchanged so
+    // a future v2 theme still loads on this v1 build (just with the
+    // unknown tokens unused).
+    //
+    // exportThemeToFile():
+    //   * `themeName` — name registered with ThemeManager.  Pass
+    //     `activeTheme()` to dump the live state.
+    //   * `filePath`  — absolute target path.  Caller picks the dialog;
+    //     this method just writes JSON.
+    //
+    // importThemeFromFile():
+    //   * Validates magic + schema, picks a theme name from the JSON's
+    //     "name" field (fallback: file stem), copies the file into
+    //     `~/.config/AetherSDR/themes/`, registers it in m_themePaths,
+    //     and makes it the active theme.
+    //   * Returns the imported theme's display name on success, empty
+    //     on failure.  Caller surfaces the failure reason via the
+    //     `errorMessage` out-param.
+    bool    exportThemeToFile(const QString& themeName,
+                              const QString& filePath,
+                              QString* errorMessage = nullptr) const;
+    QString importThemeFromFile(const QString& filePath,
+                                QString* errorMessage = nullptr);
+
 signals:
     // Fired whenever the active theme changes.  Every widget that reads
     // tokens connects here and calls update() / re-applies its stylesheet.

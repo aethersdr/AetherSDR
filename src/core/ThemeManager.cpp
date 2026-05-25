@@ -778,6 +778,172 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
     return true;
 }
 
+bool ThemeManager::exportThemeToFile(const QString& themeName,
+                                     const QString& filePath,
+                                     QString* errorMessage) const
+{
+    auto fail = [errorMessage](const QString& msg) {
+        if (errorMessage) *errorMessage = msg;
+        return false;
+    };
+    if (themeName.isEmpty()) return fail(QStringLiteral("Empty theme name."));
+    if (filePath.isEmpty())  return fail(QStringLiteral("Empty file path."));
+
+    // For the *active* theme, the live m_tokens already holds the operator's
+    // session edits — saveCurrentThemeAs uses that snapshot.  For any other
+    // theme, re-read its on-disk JSON so we don't accidentally export the
+    // active theme's tokens under a different name.
+    QJsonObject doc;
+    if (themeName == m_activeTheme) {
+        QJsonObject tokensObj;
+        const int gradMetaId = qMetaTypeId<ThemeGradient>();
+        for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
+            const QVariant& v = it.value();
+            const int ut = v.userType();
+            QJsonValue leaf;
+            if (ut == QMetaType::QString)      leaf = v.toString();
+            else if (ut == QMetaType::Int)     leaf = v.toInt();
+            else if (ut == QMetaType::Double)  leaf = v.toDouble();
+            else if (ut == QMetaType::Bool)    leaf = v.toBool();
+            else if (ut == gradMetaId) {
+                const ThemeGradient g = v.value<ThemeGradient>();
+                QJsonObject gj;
+                gj.insert("type", g.type == ThemeGradient::Radial
+                                    ? QStringLiteral("radial-gradient")
+                                    : QStringLiteral("linear-gradient"));
+                gj.insert("angle", g.angle);
+                if (g.type == ThemeGradient::Radial) {
+                    gj.insert("centerX", g.center.x());
+                    gj.insert("centerY", g.center.y());
+                    gj.insert("radius",  g.radius);
+                }
+                QJsonArray stops;
+                for (const auto& s : g.stops) {
+                    QJsonObject sj;
+                    sj.insert("at",    s.at);
+                    sj.insert("color", colorToTokenString(s.color));
+                    stops.append(sj);
+                }
+                gj.insert("stops", stops);
+                leaf = gj;
+            }
+            else continue;
+            tokensObj.insert(it.key(), leaf);
+        }
+        doc.insert("schemaVersion", 1);
+        doc.insert("name",          themeName);
+        doc.insert("author",        QStringLiteral("AetherSDR user"));
+        doc.insert("version",       QStringLiteral("1.0"));
+        doc.insert("description",   QStringLiteral("Exported via the Theme Editor."));
+        doc.insert("tokens",        tokensObj);
+    } else {
+        const auto pit = m_themePaths.constFind(themeName);
+        if (pit == m_themePaths.constEnd())
+            return fail(QStringLiteral("Theme \"%1\" is not registered.").arg(themeName));
+        QFile src(pit.value());
+        if (!src.open(QIODevice::ReadOnly))
+            return fail(QStringLiteral("Cannot read source theme: %1").arg(src.errorString()));
+        QJsonParseError perr;
+        const auto parsed = QJsonDocument::fromJson(src.readAll(), &perr);
+        if (perr.error != QJsonParseError::NoError || !parsed.isObject())
+            return fail(QStringLiteral("Source theme is not valid JSON: %1").arg(perr.errorString()));
+        doc = parsed.object();
+    }
+
+    QFile f(filePath);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return fail(QStringLiteral("Cannot write file: %1").arg(f.errorString()));
+    f.write(QJsonDocument(doc).toJson(QJsonDocument::Indented));
+    f.close();
+    return true;
+}
+
+QString ThemeManager::importThemeFromFile(const QString& filePath,
+                                          QString* errorMessage)
+{
+    auto fail = [errorMessage](const QString& msg) -> QString {
+        if (errorMessage) *errorMessage = msg;
+        return QString();
+    };
+    if (filePath.isEmpty()) return fail(QStringLiteral("Empty file path."));
+
+    QFile in(filePath);
+    if (!in.open(QIODevice::ReadOnly))
+        return fail(QStringLiteral("Cannot open file: %1").arg(in.errorString()));
+    QJsonParseError perr;
+    const auto doc = QJsonDocument::fromJson(in.readAll(), &perr);
+    in.close();
+    if (perr.error != QJsonParseError::NoError || !doc.isObject())
+        return fail(QStringLiteral("File is not a valid theme JSON: %1").arg(perr.errorString()));
+
+    const QJsonObject root = doc.object();
+    const int schemaVersion = root.value(QStringLiteral("schemaVersion")).toInt(0);
+    if (schemaVersion <= 0)
+        return fail(QStringLiteral("Missing or invalid schemaVersion — file may not be a theme."));
+    if (schemaVersion > 1) {
+        // Forward-compatible-ish: load anyway, but warn the operator.
+        // Unknown tokens round-trip; missing tokens fall back to factory.
+        qCWarning(lcGui) << "ThemeManager::importThemeFromFile: schemaVersion"
+                         << schemaVersion << "is newer than this build supports;"
+                         << "loading anyway with unknown tokens preserved.";
+    }
+
+    // Pick a destination name: prefer the JSON's "name" field, fall back
+    // to the file's basename.  Sanitise so we can't path-traverse via
+    // a malicious name field — slashes get replaced with underscores.
+    QString name = root.value(QStringLiteral("name")).toString().trimmed();
+    if (name.isEmpty()) name = QFileInfo(filePath).completeBaseName();
+    name.replace(QLatin1Char('/'),  QLatin1Char('_'));
+    name.replace(QLatin1Char('\\'), QLatin1Char('_'));
+    if (name.isEmpty()) return fail(QStringLiteral("Cannot derive a theme name from the file."));
+
+    // Refuse to clobber a built-in theme by name — the user can't edit
+    // those anyway and the resource-bundle copy shadows whatever lands
+    // on disk, which would be confusing.
+    if (isBuiltInTheme(name))
+        return fail(QStringLiteral("\"%1\" matches a built-in theme name. "
+                                   "Rename the file's \"name\" field or "
+                                   "rename the file itself.").arg(name));
+
+    const QString userDir = QStandardPaths::writableLocation(
+                                QStandardPaths::GenericConfigLocation)
+                            + QStringLiteral("/AetherSDR/themes");
+    QDir().mkpath(userDir);
+    const QString destPath = userDir + QLatin1Char('/')
+                           + name + QStringLiteral(".json");
+
+    // If a same-named user theme already exists, append a numeric suffix
+    // instead of overwriting — operators sharing themes shouldn't have
+    // to be paranoid about collisions destroying their existing work.
+    QString finalName = name;
+    QString finalPath = destPath;
+    int suffix = 2;
+    while (QFile::exists(finalPath)) {
+        finalName = QStringLiteral("%1 (%2)").arg(name).arg(suffix++);
+        finalPath = userDir + QLatin1Char('/')
+                  + finalName + QStringLiteral(".json");
+        if (suffix > 99) return fail(QStringLiteral("Too many collisions on name \"%1\".").arg(name));
+    }
+
+    // Rewrite "name" so the destination JSON matches its on-disk filename
+    // (otherwise the editor's "Editing: …" header would show the file's
+    // original name even after we suffixed it).
+    QJsonObject patched = root;
+    patched.insert("name", finalName);
+    QFile out(finalPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return fail(QStringLiteral("Cannot write destination: %1").arg(out.errorString()));
+    out.write(QJsonDocument(patched).toJson(QJsonDocument::Indented));
+    out.close();
+
+    m_themePaths.insert(finalName, finalPath);
+    if (!setActiveTheme(finalName)) {
+        return fail(QStringLiteral("Imported file at %1 but failed to apply it.")
+                        .arg(finalPath));
+    }
+    return finalName;
+}
+
 QColor ThemeManager::color(const QString& token) const
 {
     const auto it = m_tokens.constFind(token);

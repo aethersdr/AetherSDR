@@ -4,6 +4,8 @@
 
 #include <QPointer>
 
+class QDragEnterEvent;
+class QDropEvent;
 class QListWidget;
 class QListWidgetItem;
 class QLabel;
@@ -58,10 +60,20 @@ private slots:
     void editTokenSizing(const QString& key, QListWidgetItem* item);
     void resetTokenToFactory(const QString& key, QListWidgetItem* item);
 
-    // Theme-file management — Rename / Delete on the "Theme actions ▾"
-    // menu next to Save As.
+    // Theme-file management — Rename / Delete / Export / Import on the
+    // "Theme actions ▾" menu next to Save As.
     void onRenameThemeClicked();
     void onDeleteThemeClicked();
+    void onExportThemeClicked();
+    void onImportThemeClicked();
+    // Shared body for both the menu Import and the drag-and-drop path.
+    void importThemeFromPath(const QString& filePath);
+
+protected:
+    // Drag-and-drop: drop a `.aethertheme` (or `.json` theme) on the
+    // dialog to install + activate it.
+    void dragEnterEvent(QDragEnterEvent* event) override;
+    void dropEvent(QDropEvent* event) override;
 
 private:
     void updateTitle();
