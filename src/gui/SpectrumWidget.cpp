@@ -600,6 +600,11 @@ void SpectrumWidget::loadSettings()
     if (bgPath != "none" && !bgPath.isEmpty())
         setBackgroundImage(bgPath);
     m_bgOpacity = s.value(settingsKey("BackgroundOpacity"), "80").toInt();
+    {
+        const QString hex = s.value(settingsKey("BackgroundFillColor"), "#0a0a14").toString();
+        QColor c(hex);
+        if (c.isValid()) m_bgFillColor = c;
+    }
 
     // Sync overlay menu sliders with restored settings
     if (m_overlayMenu) {
@@ -611,7 +616,7 @@ void SpectrumWidget::loadSettings()
             m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
             m_fftLineWidth);
         m_overlayMenu->syncExtraDisplaySettings(m_wfBlankerEnabled,
-            m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz);
+            m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz, m_bgFillColor);
     }
     // Refresh the noise-floor target so the slider position takes effect
     // even when the overlay menu is built but not yet shown.
@@ -4241,6 +4246,16 @@ void SpectrumWidget::setBackgroundImage(const QString& path)
     markOverlayDirty();
 }
 
+void SpectrumWidget::setBackgroundFillColor(const QColor& c)
+{
+    if (!c.isValid() || c == m_bgFillColor) return;
+    m_bgFillColor = c;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("BackgroundFillColor"), m_bgFillColor.name());
+    s.save();
+    markOverlayDirty();
+}
+
 bool SpectrumWidget::event(QEvent* ev)
 {
     // Re-assert mouse tracking after native window changes (reparenting into
@@ -5051,12 +5066,17 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         // Background-image layer — kept separate from the static overlay so
         // it can render BELOW the FFT trace (parity with software paint).
         // Rebuilt whenever the static overlay is rebuilt, since markOverlayDirty
-        // also fires when m_bgImage or m_bgOpacity change.
+        // also fires when m_bgImage, m_bgOpacity, or m_bgFillColor change.
+        //
+        // Composition (bottom → top):
+        //     m_bgFillColor (full opacity)
+        //     m_bgImage     (opacity = 1 - m_bgOpacity/100, lets fill bleed through)
         if (m_overlayStaticDirty) {
             m_overlayBg.fill(Qt::transparent);
+            QPainter bp(&m_overlayBg);
+            bp.setRenderHint(QPainter::Antialiasing, false);
+            bp.fillRect(specRect, m_bgFillColor);
             if (!m_bgImage.isNull()) {
-                QPainter bp(&m_overlayBg);
-                bp.setRenderHint(QPainter::Antialiasing, false);
                 if (m_bgScaledSize != specRect.size()) {
                     QImage expanded = m_bgImage.scaled(specRect.size(),
                         Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
@@ -5678,23 +5698,24 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     const QRect wfRect   (0, wfY,     width(), wfH);
 
     {
-        // Software fallback: full QPainter rendering
-        if (m_bgImage.isNull()) {
-            p.fillRect(specRect, AetherSDR::ThemeManager::instance().color("color.background.0"));
-        } else {
-            // Cache scaled image to avoid per-frame scaling
+        // Software fallback: full QPainter rendering.  Composition z-order:
+        //   bottom: m_bgFillColor (user-pickable, default #0a0a14)
+        //   middle: bg image at opacity (1 - m_bgOpacity/100) so the fill
+        //           bleeds through as the slider moves toward 100
+        //   above:  grid → FFT trace → band plan → markers
+        p.fillRect(specRect, m_bgFillColor);
+        if (!m_bgImage.isNull()) {
             if (m_bgScaledSize != specRect.size()) {
-                // Scale to cover (keep aspect ratio, expand to fill) then crop to fit
-                QImage expanded = m_bgImage.scaled(specRect.size(), Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
+                QImage expanded = m_bgImage.scaled(specRect.size(),
+                    Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
                 int cx = (expanded.width()  - specRect.width())  / 2;
                 int cy = (expanded.height() - specRect.height()) / 2;
                 m_bgScaled = expanded.copy(cx, cy, specRect.width(), specRect.height());
                 m_bgScaledSize = specRect.size();
             }
+            p.setOpacity(1.0 - m_bgOpacity / 100.0);
             p.drawImage(specRect.topLeft(), m_bgScaled);
-            // Dark overlay to mute the image (0%=full image, 100%=solid dark)
-            int alpha = m_bgOpacity * 255 / 100;
-            p.fillRect(specRect, QColor(0x0a, 0x0a, 0x14, alpha));
+            p.setOpacity(1.0);
         }
         drawGrid(p, specRect);
         drawSpectrum(p, specRect);

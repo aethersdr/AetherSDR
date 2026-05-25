@@ -257,6 +257,8 @@ public:
     QString backgroundImagePath() const { return m_bgImagePath; }
     void setBackgroundOpacity(int pct) { m_bgOpacity = qBound(0, pct, 100); markOverlayDirty(); }
     int backgroundOpacity() const { return m_bgOpacity; }
+    void setBackgroundFillColor(const QColor& c);
+    QColor backgroundFillColor() const { return m_bgFillColor; }
     bool showBandPlan() const { return m_bandPlanFontSize > 0; }
     int  bandPlanFontSize() const { return m_bandPlanFontSize; }
 
@@ -829,6 +831,11 @@ private:
     QString m_bgImagePath;
     QSize   m_bgScaledSize;
     int     m_bgOpacity{80};  // 0=full image, 100=solid dark (default 80%)
+    // Solid fill colour painted BENEATH the bg image (#1741).  Default
+    // matches the pre-feature compositing colour so visual is unchanged
+    // until the operator picks something else via the spectrum overlay
+    // menu's "Background:" colour swatch.
+    QColor  m_bgFillColor{QColor(0x0a, 0x0a, 0x14)};
 
     // Cursor frequency label
     bool   m_showCursorFreq{false};

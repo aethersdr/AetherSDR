@@ -11981,6 +11981,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("BackgroundOpacity"), QString::number(pct));
         s.save();
     });
+    connect(menu, &SpectrumOverlayMenu::backgroundFillColorChanged,
+            this, [sw, menu](const QColor& c) {
+        sw->setBackgroundFillColor(c);
+        // Update the swatch button so it reflects the chosen colour without
+        // waiting for the next syncExtraDisplaySettings round.
+        menu->syncExtraDisplaySettings(sw->wfBlankerEnabled(),
+            sw->wfBlankerThreshold(), sw->backgroundOpacity(),
+            sw->freqGridSpacing(), c);
+    });
     connect(menu, &SpectrumOverlayMenu::displaySettingsReset,
             this, [this, applet, sw, menu] {
         // Apply all SpectrumWidget defaults

@@ -20,6 +20,8 @@
 #include <QEvent>
 #include <QFrame>
 #include <QColorDialog>
+#include <QRegularExpression>
+#include <QColorDialog>
 
 #include <algorithm>
 #include "core/ThemeManager.h"
@@ -1170,11 +1172,39 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         ++row;
     }
 
-    // ── Background buttons ────────────────────────────────────────────────
+    // ── Background row: colour swatch + Choose + Clear ────────────────────
+    // Layout:  "Background:"   [color]  [Choose...]  [Clear]
+    // The colour swatch picks the solid fill that paints BENEATH the
+    // background image — fade the BG Opacity slider to see this colour
+    // bleed through.  Z-order in the spectrum area, bottom to top:
+    //     [fill colour]  →  [bg image w/ opacity]  →  [FFT trace]
     {
         auto* lbl = new QLabel("Background:");
         lbl->setStyleSheet(labelStyle);
-        grid->addWidget(lbl, row, 0, 1, 2);
+        grid->addWidget(lbl, row, 0);
+
+        m_bgFillColorBtn = new QPushButton;
+        m_bgFillColorBtn->setFixedHeight(18);
+        m_bgFillColorBtn->setToolTip("Solid fill colour painted beneath the background image");
+        // Initial styling — overridden by syncExtraDisplaySettings once the
+        // SpectrumWidget reports its loaded m_bgFillColor.
+        m_bgFillColorBtn->setStyleSheet(
+            "QPushButton { background: #0a0a14; border: 1px solid #2a3a4d; border-radius: 2px; }"
+            "QPushButton:hover { border: 1px solid #00b4d8; }");
+        connect(m_bgFillColorBtn, &QPushButton::clicked, this, [this] {
+            // Seed the picker with the current swatch colour by parsing its
+            // own background hex out of the inline stylesheet.
+            QRegularExpression hexRe(QStringLiteral("background:\\s*(#[0-9a-fA-F]{6})"));
+            QColor initial(QStringLiteral("#0a0a14"));
+            const auto m = hexRe.match(m_bgFillColorBtn->styleSheet());
+            if (m.hasMatch()) initial = QColor(m.captured(1));
+            QColor chosen = QColorDialog::getColor(initial, this,
+                QStringLiteral("Spectrum background fill"));
+            if (chosen.isValid())
+                emit backgroundFillColorChanged(chosen);
+        });
+        grid->addWidget(m_bgFillColorBtn, row, 1);
+
         auto* bgBtn = new QPushButton("Choose...");
         bgBtn->setFixedHeight(18);
         bgBtn->setStyleSheet(btnStyle);
@@ -1182,6 +1212,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             emit backgroundImageRequested();
         });
         grid->addWidget(bgBtn, row, 2);
+
         auto* clearBtn = new QPushButton("Clear");
         clearBtn->setFixedHeight(18);
         clearBtn->setStyleSheet(btnStyle);
@@ -1353,7 +1384,8 @@ void SpectrumOverlayMenu::syncWfLineDuration(int rate)
 
 void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                                     int bgOpacity,
-                                                    int freqGridSpacingKhz)
+                                                    int freqGridSpacingKhz,
+                                                    const QColor& bgFillColor)
 {
     if (m_freqGridSpacingCmb) {
         QSignalBlocker b(m_freqGridSpacingCmb);
@@ -1378,6 +1410,11 @@ void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blanker
         m_bgOpacitySlider->setValue(bgOpacity);
         if (m_bgOpacityLabel)
             m_bgOpacityLabel->setText(QString::number(bgOpacity));
+    }
+    if (m_bgFillColorBtn && bgFillColor.isValid()) {
+        m_bgFillColorBtn->setStyleSheet(QStringLiteral(
+            "QPushButton { background: %1; border: 1px solid #2a3a4d; border-radius: 2px; }"
+            "QPushButton:hover { border: 1px solid #00b4d8; }").arg(bgFillColor.name()));
     }
 }
 

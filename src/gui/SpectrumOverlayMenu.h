@@ -53,7 +53,8 @@ public:
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
     void syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                   int bgOpacity,
-                                  int freqGridSpacingKhz = 0);
+                                  int freqGridSpacingKhz = 0,
+                                  const QColor& bgFillColor = QColor());
 
     // Set the panadapter ID this overlay belongs to (for +RX routing).
     void setPanId(const QString& id);
@@ -142,6 +143,7 @@ signals:
     void backgroundImageRequested();
     void backgroundImageCleared();
     void backgroundOpacityChanged(int pct);
+    void backgroundFillColorChanged(const QColor& color);
     void displaySettingsReset();
 
 private:
@@ -261,6 +263,7 @@ private:
     QComboBox*   m_freqGridSpacingCmb{nullptr};
     QSlider*     m_bgOpacitySlider{nullptr};
     QLabel*      m_bgOpacityLabel{nullptr};
+    QPushButton* m_bgFillColorBtn{nullptr};  // colour swatch below the bg image
 
     QStringList  m_antList;
     RadioModel*  m_radioModel{nullptr};
