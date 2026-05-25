@@ -57,6 +57,30 @@ ThemeGradient parseGradient(const QJsonObject& obj)
     return g;
 }
 
+// Round-trip-safe hex encoding for token storage.  Qt's QColor::name()
+// defaults to "#rrggbb" and silently drops alpha — so any caller storing
+// `color.name()` loses translucency.  Always use the explicit format that
+// keeps alpha when present.
+QString colorToTokenString(const QColor& c)
+{
+    return c.alpha() == 255 ? c.name(QColor::HexRgb)
+                            : c.name(QColor::HexArgb);
+}
+
+// Convert a stored hex string ("#rrggbb" or "#aarrggbb") to a Qt
+// stylesheet fragment.  Qt's stylesheet parser doesn't accept the 8-digit
+// "#aarrggbb" form, so we route translucent colours through rgba(...)
+// instead.  Opaque colours pass through verbatim — preserves the diffable
+// rendering output every test asserts against.
+QString colorHexToCssFragment(const QString& hex)
+{
+    const QColor c(hex);
+    if (!c.isValid() || c.alpha() == 255) return hex;
+    return QStringLiteral("rgba(%1, %2, %3, %4)")
+        .arg(c.red()).arg(c.green()).arg(c.blue())
+        .arg(c.alphaF(), 0, 'f', 3);
+}
+
 // Recursively walk a JSON object, emitting `category.subkey...leaf = value`
 // pairs into `out`.  Schema lets users group tokens under "color", "font",
 // "sizing" without having to repeat the prefix at every leaf.
@@ -130,7 +154,7 @@ QString gradientCssFragment(const ThemeGradient& g)
     for (const auto& s : g.stops) {
         out += QStringLiteral(", stop:%1 %2")
                    .arg(s.at, 0, 'f', 4)
-                   .arg(s.color.name(QColor::HexRgb));
+                   .arg(colorHexToCssFragment(colorToTokenString(s.color)));
     }
     out += QLatin1Char(')');
     return out;
@@ -200,6 +224,12 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.background.tx",       QString("#3a2a0e"));
     m_tokens.insert("color.background.success",  QString("#006040"));
     m_tokens.insert("color.background.spectrum", QString("#000000"));
+    // App-level backdrop painted by MainWindow itself.  Honours alpha for
+    // the "fade to desktop" experiment — when this token's value is
+    // translucent, the compositor renders the desktop wallpaper through
+    // any pixels the rest of the app didn't claim.  Opaque by default so
+    // existing installs see no visual change.
+    m_tokens.insert("color.background.app",      QString("#0f0f1a"));
 
     // Accents
     m_tokens.insert("color.accent",          QString("#00b4d8"));
@@ -405,9 +435,11 @@ void ThemeManager::setColor(const QString& token, const QColor& color)
     if (!color.isValid()) return;
     // Live-edit path stores the QColor as a hex string so cssFragment() /
     // resolve() pick it up the same way they pick up freshly-loaded tokens.
+    // Use colorToTokenString() — bare QColor::name() drops alpha, which
+    // breaks rgba editing through the picker.
     // Skip the emit if nothing actually changed (avoids burning a re-paint
     // cycle on a no-op edit).
-    const QString hex = color.name();
+    const QString hex = colorToTokenString(color);
     const auto it = m_tokens.constFind(token);
     if (it != m_tokens.constEnd() && it.value().toString() == hex) return;
     m_tokens.insert(token, QVariant(hex));
@@ -471,7 +503,7 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
             for (const auto& s : g.stops) {
                 QJsonObject sj;
                 sj.insert("at",    s.at);
-                sj.insert("color", s.color.name());
+                sj.insert("color", colorToTokenString(s.color));
                 stops.append(sj);
             }
             gj.insert("stops", stops);
@@ -605,7 +637,10 @@ QString ThemeManager::cssFragment(const QString& token) const
     if (it.value().canConvert<ThemeGradient>()) {
         return gradientCssFragment(it.value().value<ThemeGradient>());
     }
-    return it.value().toString();
+    // Scalar tokens: route translucent values through rgba(...) so Qt's
+    // stylesheet parser actually honours alpha.  Opaque values pass
+    // through verbatim ("#rrggbb").
+    return colorHexToCssFragment(it.value().toString());
 }
 
 QFont ThemeManager::font(const QString& token) const
@@ -728,13 +763,55 @@ void ThemeManager::declareWidgetTokens(QWidget* widget, const QStringList& token
         connect(widget, &QObject::destroyed,
                 this, &ThemeManager::onTrackedWidgetDestroyed);
     }
-    TrackedWidget ctx;
-    // Empty template marks this entry as paint-code-declared so
-    // reapplyAllTrackedStyleSheets() skips it (no setStyleSheet on a
-    // paint-only widget).
+    // Preserve any regions previously declared for the widget — token
+    // updates and region updates are independent facets.
+    TrackedWidget ctx = m_trackedWidgets.value(widget);
     ctx.stylesheetTemplate.clear();
     ctx.tokens = tokens;
     m_trackedWidgets.insert(widget, ctx);
+}
+
+void ThemeManager::declareWidgetRegions(QWidget* widget,
+                                        const QList<ThemeRegion>& regions)
+{
+    if (!widget) return;
+
+    if (!m_trackedWidgets.contains(widget)) {
+        connect(widget, &QObject::destroyed,
+                this, &ThemeManager::onTrackedWidgetDestroyed);
+    }
+    TrackedWidget ctx = m_trackedWidgets.value(widget);
+    ctx.regions = regions;
+    // Mirror each region's token into the coarse token list so
+    // tokensForWidget() (the fallback path) still returns sensible
+    // results when the click point misses every hit-test.
+    QStringList rt;
+    for (const auto& r : regions) {
+        if (!r.token.isEmpty() && !rt.contains(r.token))
+            rt.append(r.token);
+    }
+    if (ctx.tokens.isEmpty()) ctx.tokens = rt;
+    m_trackedWidgets.insert(widget, ctx);
+}
+
+QStringList ThemeManager::tokensAtPoint(const QWidget* widget,
+                                       const QPoint& localPos) const
+{
+    if (!widget) return QStringList();
+    const auto it = m_trackedWidgets.constFind(const_cast<QWidget*>(widget));
+    if (it == m_trackedWidgets.constEnd()) return QStringList();
+
+    const auto& ctx = it.value();
+    QStringList hits;
+    for (const auto& r : ctx.regions) {
+        if (r.hitTest && r.hitTest(localPos) && !hits.contains(r.token)) {
+            hits.append(r.token);
+        }
+    }
+    if (!hits.isEmpty()) return hits;
+    // No region claimed the point — fall back to the coarse token list
+    // so the inspector still surfaces something useful for the widget.
+    return ctx.tokens;
 }
 
 QStringList ThemeManager::tokensForWidget(const QWidget* widget) const

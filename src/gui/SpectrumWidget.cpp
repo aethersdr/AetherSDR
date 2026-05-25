@@ -518,6 +518,37 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         markOverlayDirty();
         update();
     });
+
+    // Phase 5 PR 3 — inspector coverage.  SpectrumWidget paints through
+    // raw QPainter calls keyed off ThemeManager::instance().color(),
+    // bypassing the applyStyleSheet reverse-map.  Declare the tokens it
+    // reads so an Inspect-mode click anywhere on the panadapter or
+    // waterfall surfaces a meaningful (if coarse) hit-list.  Sub-region
+    // splits (trace vs grid vs waterfall vs slice triangles) come in a
+    // follow-up PR via declareWidgetRegions().
+    ThemeManager::instance().declareWidgetTokens(this, QStringList{
+        "color.background.0",
+        "color.background.1",
+        "color.background.2",
+        "color.background.3",
+        "color.background.spectrum",
+        "color.spectrum.trace",
+        "color.spectrum.peakHold",
+        "color.spectrum.average",
+        "color.spectrum.grid",
+        "color.text.primary",
+        "color.text.secondary",
+        "color.text.label",
+        "color.accent",
+        "color.accent.bright",
+        "color.accent.dim",
+        "color.accent.warning",
+        "color.accent.success",
+        "color.waterfall.colormap",
+        "color.slice.a", "color.slice.b", "color.slice.c", "color.slice.d",
+        "color.slice.e", "color.slice.f", "color.slice.g", "color.slice.h",
+        "color.slice.tx",
+    });
 }
 
 SpectrumWidget::~SpectrumWidget()

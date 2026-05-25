@@ -1403,6 +1403,19 @@ MainWindow::MainWindow(QWidget* parent)
 #endif
         }
 
+        // Theming layer-0 backdrop (Phase 5 PR 3 — "fade to desktop"
+        // experiment).  Disabling the default opaque window background
+        // lets MainWindow::paintEvent() honour color.background.app's
+        // alpha.  Today's installs see no visual change because the
+        // bundled themes ship the token fully opaque (#0f0f1a / #f5f5f8) —
+        // the architectural hook just lets operators dial alpha down
+        // through the Theme Editor to A/B test which applets/docks still
+        // need their own opaque backgrounds.
+        setAttribute(Qt::WA_TranslucentBackground, true);
+        setAutoFillBackground(false);
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                this, qOverload<>(&QWidget::update));
+
         // 8-axis edge resize for frameless mode — same install pattern
         // as the floating dialogs (SpotHub, RadioSetup, MemoryDialog).
         // Filter sits on the native QWindow so it doesn't compete with
@@ -5491,6 +5504,23 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     // FFTW version and crash the next feedAudioData. (#2275 / NR4→NR2)
     connect(w, &AetherDspWidget::nr2EnableWithWisdomRequested,
             this, &MainWindow::enableNr2WithWisdom);
+}
+
+void MainWindow::paintEvent(QPaintEvent* event)
+{
+    // Layer-0 app backdrop.  WA_TranslucentBackground (set in the
+    // constructor) disables Qt's default opaque window fill, so this
+    // paintEvent is the single source of pixels for any region the rest
+    // of the widget tree doesn't paint.  Honours alpha so operators can
+    // edit color.background.app down toward translucency and see the
+    // desktop bleed through anywhere a child widget doesn't have its own
+    // opaque background — useful for A/B testing which applets/docks
+    // still need explicit fills before a "glass-mode" theme is viable.
+    QPainter p(this);
+    const QColor bg = ThemeManager::instance().color("color.background.app");
+    p.setCompositionMode(QPainter::CompositionMode_Source);
+    p.fillRect(rect(), bg.isValid() ? bg : QColor("#0f0f1a"));
+    QMainWindow::paintEvent(event);
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
