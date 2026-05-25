@@ -13,6 +13,7 @@
 #include <QListWidgetItem>
 #include <QMessageBox>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QPushButton>
 #include <QSet>
@@ -25,17 +26,37 @@ namespace AetherSDR {
 namespace {
 // Build a tiny coloured square QIcon for use as a swatch on a list row.
 // Re-rendered whenever a token's value changes so the swatch tracks the
-// live value.
+// live value.  A 2x2 checkerboard sits under the colour fill so the
+// operator can see translucency at a glance — opaque colours render
+// identically to a solid swatch (the checkerboard is fully covered).
 QIcon swatchIcon(const QColor& c)
 {
     QPixmap pm(16, 16);
     pm.fill(Qt::transparent);
     QPainter p(&pm);
     p.setRenderHint(QPainter::Antialiasing);
+
+    QPainterPath clip;
+    clip.addRoundedRect(QRectF(0.5, 0.5, 15.0, 15.0), 3, 3);
+    p.save();
+    p.setClipPath(clip);
+    p.fillRect(QRect(0, 0, 16, 16), QColor(0xc8, 0xc8, 0xc8));
+    p.fillRect(QRect(0, 0, 8, 8),   QColor(0x80, 0x80, 0x80));
+    p.fillRect(QRect(8, 8, 8, 8),   QColor(0x80, 0x80, 0x80));
+    p.restore();
+
     p.setBrush(c);
     p.setPen(QPen(QColor(0, 0, 0, 80), 1));
     p.drawRoundedRect(QRectF(0.5, 0.5, 15.0, 15.0), 3, 3);
     return QIcon(pm);
+}
+
+// Token hex serialisation matching ThemeManager's storage convention:
+// "#rrggbb" for opaque, "#aarrggbb" for translucent.
+QString colorToTokenHex(const QColor& c)
+{
+    return c.alpha() == 255 ? c.name(QColor::HexRgb)
+                            : c.name(QColor::HexArgb);
 }
 } // namespace
 
@@ -149,7 +170,7 @@ void ThemeEditorDialog::refreshTokenList()
 
         const QColor c = tm.color(key);
         auto* item = new QListWidgetItem(swatchIcon(c),
-            QStringLiteral("%1   %2").arg(key, -36).arg(c.name()));
+            QStringLiteral("%1   %2").arg(key, -36).arg(colorToTokenHex(c)));
         item->setData(Qt::UserRole, key);
         m_tokenList->addItem(item);
     }
@@ -161,7 +182,7 @@ void ThemeEditorDialog::updateRow(QListWidgetItem* item)
     const QString key = item->data(Qt::UserRole).toString();
     const QColor c = ThemeManager::instance().color(key);
     item->setIcon(swatchIcon(c));
-    item->setText(QStringLiteral("%1   %2").arg(key, -36).arg(c.name()));
+    item->setText(QStringLiteral("%1   %2").arg(key, -36).arg(colorToTokenHex(c)));
 }
 
 void ThemeEditorDialog::updateTitle()
@@ -249,7 +270,7 @@ void ThemeEditorDialog::onInspectorActiveChanged(bool active)
     }
 }
 
-void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint /*localPos*/)
+void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint localPos)
 {
     if (!target) return;
     auto& tm = ThemeManager::instance();
@@ -257,14 +278,23 @@ void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint /*localPos*/)
     // Walk up the parent chain until we find a widget with a declared
     // token list — that's how a click on a deep child (e.g. the QLabel
     // inside a QPushButton inside a themed panel) still surfaces the
-    // panel-level tokens.
+    // panel-level tokens.  Use tokensAtPoint() instead of plain
+    // tokensForWidget() so custom-paint widgets that declared sub-regions
+    // (panadapter trace vs waterfall vs slice triangles) get the narrowed
+    // hit-list rather than every token they paint with.  The point is
+    // mapped from the original target's coordinate space into each
+    // ancestor's space as we walk.
     QStringList tokens;
     QWidget* w = target;
     QString hitName = target->metaObject()->className();
+    QPoint scanPos = localPos;
     while (w && tokens.isEmpty()) {
-        tokens = tm.tokensForWidget(w);
+        tokens = tm.tokensAtPoint(w, scanPos);
         if (!tokens.isEmpty()) break;
-        w = w->parentWidget();
+        QWidget* parent = w->parentWidget();
+        if (!parent) break;
+        scanPos = parent->mapFromGlobal(w->mapToGlobal(scanPos));
+        w = parent;
     }
 
     if (tokens.isEmpty()) {

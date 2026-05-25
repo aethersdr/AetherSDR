@@ -1,16 +1,20 @@
 #pragma once
 
 #include <QObject>
+#include <QPoint>
 #include <QString>
 #include <QStringList>
 #include <QHash>
 #include <QColor>
 #include <QFont>
 #include <QBrush>
+#include <QList>
 #include <QPointF>
 #include <QRect>
 #include <QVariant>
 #include <QVector>
+
+#include <functional>
 
 class QWidget;
 
@@ -138,6 +142,33 @@ public:
     // themselves to themeChanged and call update().
     void declareWidgetTokens(QWidget* widget, const QStringList& tokens);
 
+    // Sub-region-aware inspector lookup for custom-paint widgets.  Each
+    // ThemeRegion ties a token to a hit-test function evaluated in the
+    // widget's local coordinate system.  Inspector clicks call
+    // tokensAtPoint() to narrow the broad declareWidgetTokens() list down
+    // to just the tokens painting the clicked sub-region.
+    //
+    // Example — a panadapter with separate trace + waterfall areas:
+    //   tm.declareWidgetRegions(spectrum, {
+    //     { "color.spectrum.trace",      [this](QPoint p){ return panRect().contains(p); }, "FFT trace" },
+    //     { "color.waterfall.colormap",  [this](QPoint p){ return wfRect().contains(p);  }, "Waterfall" },
+    //   });
+    //
+    // Multiple regions may match a single point — caller receives all
+    // matches in declaration order so the editor can disambiguate.
+    struct ThemeRegion {
+        QString  token;
+        std::function<bool(QPoint localPos)> hitTest;
+        QString  description;  // optional; shown alongside the token name
+    };
+    void declareWidgetRegions(QWidget* widget, const QList<ThemeRegion>& regions);
+
+    // Returns the tokens whose ThemeRegion::hitTest() matches at `localPos`
+    // for the widget.  Falls back to tokensForWidget() if the widget has
+    // no declared regions (or no region matches the point) — guarantees
+    // the inspector always has something to surface for a tracked widget.
+    QStringList tokensAtPoint(const QWidget* widget, const QPoint& localPos) const;
+
     // Stateless helper exposing the same token-extraction regex used
     // by applyStyleSheet().  Tooling (audit scripts, the Phase 5
     // editor's inspector preview) can call this to list every token
@@ -202,10 +233,12 @@ private:
     QString m_activeTheme;
 
     // Reverse-map: widget instance → (template, tokens-it-references).
-    // Populated by applyStyleSheet, drained by onTrackedWidgetDestroyed.
+    // Populated by applyStyleSheet / declareWidgetTokens / declareWidgetRegions,
+    // drained by onTrackedWidgetDestroyed.
     struct TrackedWidget {
-        QString     stylesheetTemplate;
-        QStringList tokens;
+        QString             stylesheetTemplate;
+        QStringList         tokens;
+        QList<ThemeRegion>  regions;
     };
     QHash<QWidget*, TrackedWidget> m_trackedWidgets;
 };

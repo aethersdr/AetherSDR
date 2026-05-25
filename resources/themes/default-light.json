@@ -13,7 +13,8 @@
         "3": "#b0bcc8",
         "tx": "#ffeacc",
         "success": "#c8e8d0",
-        "spectrum": "#ffffff"
+        "spectrum": "#ffffff",
+        "app": "#f5f5f8"
       },
       "accent": "#0088b0",
       "accent.bright": "#0098c0",
