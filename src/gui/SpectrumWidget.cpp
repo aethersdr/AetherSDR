@@ -5650,6 +5650,12 @@ void SpectrumWidget::releaseResources()
     delete m_ovGpuTex;       m_ovGpuTex = nullptr;
     delete m_ovSampler;      m_ovSampler = nullptr;
 
+    // Bg-image layer (added with the FFT-above-bg fix) — same lifecycle
+    // as the overlay scaffolding it lives alongside; release in the same
+    // teardown sweep.
+    delete m_bgSrb;          m_bgSrb = nullptr;
+    delete m_bgGpuTex;       m_bgGpuTex = nullptr;
+
     delete m_fftLinePipeline; m_fftLinePipeline = nullptr;
     delete m_fftFillPipeline; m_fftFillPipeline = nullptr;
     delete m_fftSrb;          m_fftSrb = nullptr;
