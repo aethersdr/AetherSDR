@@ -62,9 +62,9 @@ AmpApplet::AmpApplet(QWidget* parent)
 
     m_operateBtn = new QPushButton("OPERATE");
     m_operateBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-    m_operateBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; }");
     m_operateBtn->hide();
     connect(m_operateBtn, &QPushButton::clicked, this, [this]() {
         // Toggle: if currently operating → standby, else → operate
@@ -120,14 +120,14 @@ void AmpApplet::setState(const QString& state)
                       || state.startsWith("TRANSMIT"));
     if (operating) {
         m_operateBtn->setText("OPERATE");
-        m_operateBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #006030; border: 1px solid #008040; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background: #007040; }"));
+            "QPushButton:hover { background: #007040; }");
     } else {
         m_operateBtn->setText("STANDBY");
-        m_operateBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+            "QPushButton:hover { background: {{color.background.1}}; }");
     }
     m_operateBtn->show();
 }

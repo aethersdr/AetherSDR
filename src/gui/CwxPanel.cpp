@@ -100,7 +100,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     : QWidget(parent), m_model(model)
 {
     setFixedWidth(250);
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: {{color.background.0}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QWidget { background: {{color.background.0}}; }");
 
     auto* vbox = new QVBoxLayout(this);
     vbox->setContentsMargins(0, 0, 0, 0);
@@ -108,8 +108,8 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
 
     // Title
     auto* title = new QLabel("CWX");
-    title->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
-                         "padding: 6px 8px; background: {{color.background.0}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(title, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; "
+                         "padding: 6px 8px; background: {{color.background.0}}; }");
     vbox->addWidget(title);
 
     // Stacked widget for Send/Live vs Setup
@@ -125,7 +125,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
 
     // ── Bottom bar ─────────────────────────────────────────────
     auto* bar = new QWidget;
-    bar->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: {{color.background.0}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(bar, "QWidget { background: {{color.background.0}}; }");
     auto* barLayout = new QHBoxLayout(bar);
     barLayout->setContentsMargins(4, 4, 4, 4);
     barLayout->setSpacing(4);
@@ -146,15 +146,15 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     barLayout->addWidget(m_setupBtn);
 
     auto* speedLabel = new QLabel("Speed:");
-    speedLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(speedLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
     barLayout->addWidget(speedLabel);
 
     m_speedSpin = new QSpinBox;
     m_speedSpin->setRange(5, 100);
     m_speedSpin->setValue(20);
     m_speedSpin->setFixedWidth(50);
-    m_speedSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 2px; font-size: 11px; padding: 2px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_speedSpin, "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 2px; font-size: 11px; padding: 2px; }");
     barLayout->addWidget(m_speedSpin);
 
     vbox->addWidget(bar);
@@ -292,10 +292,10 @@ void CwxPanel::buildSendView()
     // History — scroll area with painted bubbles, scrolls from bottom up
     m_historyScroll = new QScrollArea;
     m_historyScroll->setWidgetResizable(true);
-    m_historyScroll->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QScrollArea { background: {{color.background.0}}; border: none; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_historyScroll, "QScrollArea { background: {{color.background.0}}; border: none; }");
     m_historyScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_historyContainer = new QWidget;
-    m_historyContainer->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: {{color.background.0}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_historyContainer, "QWidget { background: {{color.background.0}}; }");
     m_historyLayout = new QVBoxLayout(m_historyContainer);
     m_historyLayout->setContentsMargins(0, 0, 0, 4);
     m_historyLayout->setSpacing(4);
@@ -328,8 +328,8 @@ void CwxPanel::buildSetupView()
     m_delaySpin->setRange(0, 2000);
     m_delaySpin->setValue(5);
     m_delaySpin->setFixedWidth(60);
-    m_delaySpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
-        "border-radius: 2px; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_delaySpin, "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 2px; font-size: 11px; }");
     topRow->addWidget(m_delaySpin);
 
     m_qskBtn = new QPushButton("QSK");
@@ -346,7 +346,7 @@ void CwxPanel::buildSetupView()
 
     // Style labels
     for (auto* lbl : m_setupPage->findChildren<QLabel*>())
-        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
 
     // F1-F12 macro slots — each stretches to fill available height
     auto* macroWidget = new QWidget;
@@ -358,15 +358,15 @@ void CwxPanel::buildSetupView()
         auto* label = new QPushButton(QString("F%1").arg(i + 1));
         label->setFixedWidth(28);
         label->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
-        label->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(label, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 2px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; "
             "padding: 2px; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+            "QPushButton:hover { background: {{color.background.1}}; }");
         macroGrid->addWidget(label, i, 0);
 
         m_macroEdits[i] = new QTextEdit;
-        m_macroEdits[i]->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTextEdit { background: {{color.text.primary}}; color: {{color.background.spectrum}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 2px; padding: 2px; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_macroEdits[i], "QTextEdit { background: {{color.text.primary}}; color: {{color.background.spectrum}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 2px; padding: 2px; font-size: 11px; }");
         m_macroEdits[i]->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         m_macroEdits[i]->setPlaceholderText(QString("F%1 macro...").arg(i + 1));
         m_macroEdits[i]->setAcceptRichText(false);
@@ -391,7 +391,7 @@ void CwxPanel::buildSetupView()
 
     // Prosign legend
     auto* legend = new QLabel("Prosigns: = (BT)  + (AR)  ( (KN)  & (BK)  $ (SK)");
-    legend->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 9px; padding: 4px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(legend, "QLabel { color: {{color.text.label}}; font-size: 9px; padding: 4px; }");
     legend->setWordWrap(true);
     vbox->addWidget(legend);
 }
@@ -486,9 +486,9 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
         if (event->type() == QEvent::ContextMenu) {
             auto* ce = static_cast<QContextMenuEvent*>(event);
             QMenu menu(this);
-            menu.setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
+            AetherSDR::ThemeManager::instance().applyStyleSheet(&menu, "QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
                 "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.spectrum}}; }"
-                "QMenu::separator { height: 1px; background: {{color.background.2}}; margin: 4px 8px; }"));
+                "QMenu::separator { height: 1px; background: {{color.background.2}}; margin: 4px 8px; }");
             QAction* resendAction = menu.addAction("Resend");
             menu.addSeparator();
             QAction* clearAction  = menu.addAction("Clear History");

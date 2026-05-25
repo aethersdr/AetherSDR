@@ -863,7 +863,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     auto makeNote = [](const QString& text) {
         auto* l = new QLabel(text);
         l->setWordWrap(true);
-        l->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; line-height: 1.1; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(l, "QLabel { color: {{color.text.secondary}}; font-size: 10px; line-height: 1.1; }");
         return l;
     };
 
@@ -874,10 +874,10 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
         auto* value = new QLabel("--");
         value->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
         value->setMinimumHeight(value->fontMetrics().height() + 4);
-        value->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: 700; font-size: 18px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(value, "QLabel { color: {{color.text.primary}}; font-weight: 700; font-size: 18px; }");
         auto* hint = new QLabel(subtitle);
         hint->setWordWrap(true);
-        hint->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
         layout->addWidget(value);
         layout->addWidget(hint);
         layout->addStretch();
@@ -1087,7 +1087,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     m_audioStreamsDetailLabel->setWordWrap(true);
     m_audioStreamsDetailLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_audioStreamsDetailLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_audioStreamsDetailLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_audioStreamsDetailLabel, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
     m_audioStreamsDetailLabel->setToolTip(
         "The radio normally sends one mixed PC speaker stream. Use the Audio tab for per-stream timing rows.");
     audioGrid->addWidget(m_audioStreamsDetailLabel, row++, 1);
@@ -1160,7 +1160,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
                 "each row below is shown separately; slice letters list the unmuted slices feeding the speaker mix.",
                 audioPage);
             audioNote->setWordWrap(true);
-            audioNote->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(audioNote, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
             audioLayout->insertWidget(0, audioNote);
 
             m_audioStreamsTable = new QTableWidget(0, 9, audioPage);
@@ -1288,16 +1288,16 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
         "client has subscribed to. You can type your own label in the "
         "Name column — it is saved locally, keyed by IP address.");
     intro->setWordWrap(true);
-    intro->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(intro, "QLabel { color: {{color.text.secondary}}; }");
     layout->addWidget(intro);
 
     auto* clientsHdr = new QLabel(QStringLiteral("Connected clients"));
-    clientsHdr->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-weight: bold; "
-        "letter-spacing: 0.06em; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(clientsHdr, "QLabel { color: {{color.text.secondary}}; font-weight: bold; "
+        "letter-spacing: 0.06em; }");
     layout->addWidget(clientsHdr);
 
     m_tciClientSummary = new QLabel;
-    m_tciClientSummary->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciClientSummary, "QLabel { color: {{color.text.primary}}; font-weight: bold; }");
     layout->addWidget(m_tciClientSummary);
 
     m_tciClientTable = new QTableWidget(0, 7, this);
@@ -1320,11 +1320,11 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     hh->setSectionResizeMode(2, QHeaderView::Stretch);            // Likely role
     for (int c = 3; c < 7; ++c)
         hh->setSectionResizeMode(c, QHeaderView::ResizeToContents);
-    m_tciClientTable->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciClientTable, "QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}}; "
         "gridline-color: {{color.background.1}}; border: 1px solid {{color.background.1}}; }"
         "QTableWidget::item:selected { background: #173049; }"
         "QHeaderView::section { background: {{color.background.0}}; color: {{color.text.secondary}}; "
-        "border: 1px solid {{color.background.1}}; padding: 3px 6px; font-weight: bold; }"));
+        "border: 1px solid {{color.background.1}}; padding: 3px 6px; font-weight: bold; }");
     // Keep the roster compact (~6 rows then scroll) so the monitor below
     // gets the bulk of the page.
     m_tciClientTable->setSizePolicy(QSizePolicy::Expanding,
@@ -1355,8 +1355,8 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
 
     // ── Live traffic monitor ──────────────────────────────────────────────
     auto* monHdr = new QLabel(QStringLiteral("TCI traffic monitor"));
-    monHdr->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-weight: bold; "
-        "letter-spacing: 0.06em; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(monHdr, "QLabel { color: {{color.text.secondary}}; font-weight: bold; "
+        "letter-spacing: 0.06em; }");
     layout->addWidget(monHdr);
 
     auto* mHelp = new QLabel(QStringLiteral(
@@ -1364,7 +1364,7 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
         "to suppress all messages of that command — same as the standalone "
         "TCI Monitor."));
     mHelp->setWordWrap(true);
-    mHelp->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(mHelp, "QLabel { color: {{color.text.secondary}}; }");
     layout->addWidget(mHelp);
 
     const QString btnStyle = QStringLiteral(
@@ -1439,12 +1439,12 @@ QWidget* NetworkDiagnosticsDialog::buildTciTab()
     m_tciLogTable->horizontalHeader()->setStretchLastSection(true);
     m_tciLogTable->setColumnWidth(0, 96);
     m_tciLogTable->setColumnWidth(1, 150);
-    m_tciLogTable->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTableWidget { background: #07070e; color: #dde6f0; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tciLogTable, "QTableWidget { background: #07070e; color: #dde6f0; "
         "border: 1px solid {{color.background.1}}; font-family: Consolas, monospace; "
         "font-size: 11px; gridline-color: transparent; }"
         "QTableWidget::item:selected { background: #173049; }"
         "QHeaderView::section { background: {{color.background.0}}; color: {{color.text.secondary}}; "
-        "border: 1px solid {{color.background.1}}; padding: 2px 6px; }"));
+        "border: 1px solid {{color.background.1}}; padding: 2px 6px; }");
     m_tciLogTable->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_tciLogTable, &QTableWidget::customContextMenuRequested,
             this, &NetworkDiagnosticsDialog::onTciLogContextMenu);
@@ -1775,7 +1775,7 @@ QWidget* NetworkDiagnosticsDialog::buildLogsTab()
     auto* infoRow = new QHBoxLayout;
     m_logPathLabel = new QLabel(page);
     m_logPathLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_logPathLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_logPathLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     infoRow->addWidget(m_logPathLabel, 1);
 
     m_logLiveToggle = new QPushButton("Live", page);
@@ -2656,7 +2656,7 @@ void NetworkDiagnosticsDialog::refresh()
         m_audioFeedDeficitLabel->setText("Unavailable");
         m_audioLateGapLabel->setText("Unavailable");
         m_audioStreamHealthLabel->setText("Unavailable");
-        m_audioStreamHealthLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-weight: 700; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_audioStreamHealthLabel, "QLabel { color: {{color.text.secondary}}; font-weight: 700; }");
         m_audioStreamsDetailLabel->setText("Unavailable");
         updateAudioStreamTable(m_audioStreamsTable, m_model, {});
         m_overviewAudioValue->setText("Unavailable");
@@ -2671,14 +2671,14 @@ void NetworkDiagnosticsDialog::refresh()
         m_statusLabel->setStyleSheet("QLabel { color: #80ed91; font-weight: 700; }");
         m_overviewStatusValue->setStyleSheet("QLabel { color: #80ed91; font-weight: 700; font-size: 18px; }");
     } else if (q == "Fair") {
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.warning}}; font-weight: 700; }"));
-        m_overviewStatusValue->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.warning}}; font-weight: 700; font-size: 18px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.warning}}; font-weight: 700; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.accent.warning}}; font-weight: 700; font-size: 18px; }");
     } else if (q == "Poor") {
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.danger}}; font-weight: 700; }"));
-        m_overviewStatusValue->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.danger}}; font-weight: 700; font-size: 18px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.danger}}; font-weight: 700; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.accent.danger}}; font-weight: 700; font-size: 18px; }");
     } else {
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: 700; }"));
-        m_overviewStatusValue->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: 700; font-size: 18px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.primary}}; font-weight: 700; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.text.primary}}; font-weight: 700; font-size: 18px; }");
     }
 
     updateCharts();

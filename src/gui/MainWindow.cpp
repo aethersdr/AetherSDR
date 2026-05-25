@@ -1238,7 +1238,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
     dialog->setWindowModality(Qt::ApplicationModal);
     dialog->setWindowFlags(dialog->windowFlags() & ~Qt::WindowContextHelpButtonHint);
     dialog->setFixedWidth(460);
-    dialog->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(dialog, "QDialog { background: {{color.background.0}}; }"
         "QFrame#forcedDisconnectHeader {"
         "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
         "    stop:0 #103626, stop:1 #10283a);"
@@ -1262,7 +1262,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
         "  color: {{color.background.0}};"
         "  font-weight: bold;"
         "}"
-        "QPushButton#primaryButton:hover { background: {{color.accent.bright}}; }"));
+        "QPushButton#primaryButton:hover { background: {{color.accent.bright}}; }");
 
     auto* outer = new QVBoxLayout(dialog);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -2655,8 +2655,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);
         }
         if (tx) {
-            m_txIndicator->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: white; background: {{color.accent.danger}}; font-weight: bold; "
-                "font-size: 21px; border-radius: 4px; padding: 0px 1px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_txIndicator, "QLabel { color: white; background: {{color.accent.danger}}; font-weight: bold; "
+                "font-size: 21px; border-radius: 4px; padding: 0px 1px; }");
         } else {
             m_txIndicator->setStyleSheet(
                 "QLabel { color: rgba(255,255,255,128); font-weight: bold; "
@@ -7054,7 +7054,7 @@ void MainWindow::showQuickAddMemoryDialog(const QString& preferredPanId)
     root->addWidget(nameEdit);
 
     auto* freqLabel = new QLabel(QString("Current Frequency: %1 MHz").arg(frequencyText), &dialog);
-    freqLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(freqLabel, "QLabel { color: {{color.text.primary}}; font-size: 12px; }");
     root->addWidget(freqLabel);
 
     auto* summaryLabel = new QLabel(summaryText, &dialog);
@@ -7662,10 +7662,10 @@ void MainWindow::buildMenuBar()
 
     for (const auto& def : inhibitDefs) {
         auto* cb = new QCheckBox(def.label);
-        cb->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; padding: 4px 12px; }"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(cb, "QCheckBox { color: {{color.text.primary}}; padding: 4px 12px; }"
             "QCheckBox::indicator { width: 14px; height: 14px; }"
             "QCheckBox::indicator:unchecked { border: 1px solid {{color.background.3}}; background: {{color.background.1}}; border-radius: 2px; }"
-            "QCheckBox::indicator:checked { border: 1px solid {{color.accent}}; background: {{color.accent}}; border-radius: 2px; }"));
+            "QCheckBox::indicator:checked { border: 1px solid {{color.accent}}; background: {{color.accent}}; border-radius: 2px; }");
         bool on = settings.value(def.key, "False").toString() == "True";
         cb->setChecked(on);
 
@@ -8258,7 +8258,7 @@ void MainWindow::buildMenuBar()
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setWindowTitle("About AetherSDR");
         dlg->setFixedWidth(380);
-        dlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: {{color.background.0}}; }");
 
         auto* vbox = new QVBoxLayout(dlg);
         vbox->setSpacing(8);
@@ -8315,7 +8315,7 @@ void MainWindow::buildMenuBar()
         // Separator
         auto* sep1 = new QFrame;
         sep1->setFrameShape(QFrame::HLine);
-        sep1->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.background.2}};"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(sep1, "color: {{color.background.2}};");
         vbox->addWidget(sep1);
 
         // Contributors label
@@ -8326,7 +8326,7 @@ void MainWindow::buildMenuBar()
         // Scrollable contributors list
         auto* contribLabel = new QLabel("Jeremy (KK7GWY)<br>Claude &middot; Anthropic<br>rfoust<br>Ian (M7HNF)<br>VE3NEM<br>jensenpat<br>chibondking<br>Dependabot");
         contribLabel->setAlignment(Qt::AlignCenter);
-        contribLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(contribLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
         contribLabel->setWordWrap(true);
 
         auto* scroll = new QScrollArea;
@@ -8334,16 +8334,16 @@ void MainWindow::buildMenuBar()
         scroll->setWidgetResizable(true);
         scroll->setFixedHeight(80);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QScrollArea { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 4px; }"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(scroll, "QScrollArea { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 4px; }"
             "QScrollBar:vertical { background: {{color.background.0}}; width: 6px; }"
             "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
         vbox->addWidget(scroll);
 
         // Separator
         auto* sep2 = new QFrame;
         sep2->setFrameShape(QFrame::HLine);
-        sep2->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.background.2}};"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(sep2, "color: {{color.background.2}};");
         vbox->addWidget(sep2);
 
         // Footer
@@ -8369,9 +8369,9 @@ void MainWindow::buildMenuBar()
 
         // OK button
         auto* okBtn = new QPushButton("OK");
-        okBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(okBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
             "border-radius: 4px; padding: 6px 24px; }"
-            "QPushButton:hover { background: {{color.accent.bright}}; }"));
+            "QPushButton:hover { background: {{color.accent.bright}}; }");
         connect(okBtn, &QPushButton::clicked, dlg, &QDialog::close);
         vbox->addWidget(okBtn, 0, Qt::AlignCenter);
 
@@ -8832,9 +8832,9 @@ void MainWindow::buildUI()
     m_sizeGrip->raise();
     m_sizeGrip->setVisible(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    statusBar()->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QStatusBar { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(statusBar(), "QStatusBar { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }"
         "QStatusBar::item { border: none; }"
-        "QLabel { font-size: 21px; background: transparent; }"));
+        "QLabel { font-size: 21px; background: transparent; }");
 
     const QString valStyle  = "QLabel { color: #8aa8c0; font-size: 21px; }";
     const QString sepStyle  = "QLabel { color: #304050; font-size: 21px; }";
@@ -8961,10 +8961,10 @@ void MainWindow::buildUI()
     radioVbox->setContentsMargins(0, 0, 0, 0);
     radioVbox->setSpacing(0);
     m_radioInfoLabel = new QLabel("");
-    m_radioInfoLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_radioInfoLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_radioInfoLabel->setAlignment(Qt::AlignCenter);
     m_radioVersionLabel = new QLabel("");
-    m_radioVersionLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_radioVersionLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_radioVersionLabel->setAlignment(Qt::AlignCenter);
     radioVbox->addWidget(m_radioInfoLabel);
     radioVbox->addWidget(m_radioVersionLabel);
@@ -8974,8 +8974,8 @@ void MainWindow::buildUI()
     hbox->addStretch(1);
 
     m_stationNickLabel = new QLabel("N0CALL");
-    m_stationNickLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 21px; background: {{color.background.0}}; "
-        "border: 1px solid rgba(255,255,255,128); padding: 2px 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_stationNickLabel, "QLabel { color: {{color.text.primary}}; font-size: 21px; background: {{color.background.0}}; "
+        "border: 1px solid rgba(255,255,255,128); padding: 2px 12px; }");
     m_stationNickLabel->setAlignment(Qt::AlignCenter);
     m_stationNickLabel->setCursor(Qt::PointingHandCursor);
     m_stationNickLabel->setToolTip("Double-click to connect/disconnect");
@@ -8997,10 +8997,10 @@ void MainWindow::buildUI()
     gpsVbox->setContentsMargins(0, 0, 0, 0);
     gpsVbox->setSpacing(0);
     m_gpsLabel = new QLabel("");
-    m_gpsLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsLabel->setAlignment(Qt::AlignCenter);
     m_gpsStatusLabel = new QLabel("");
-    m_gpsStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsStatusLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsStatusLabel->setAlignment(Qt::AlignCenter);
     gpsVbox->addWidget(m_gpsLabel);
     gpsVbox->addWidget(m_gpsStatusLabel);
@@ -9016,11 +9016,11 @@ void MainWindow::buildUI()
         cpuVbox->setContentsMargins(0, 0, 0, 0);
         cpuVbox->setSpacing(0);
         m_cpuLabel = new QLabel("CPU: \u2014");
-        m_cpuLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_cpuLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
         m_cpuLabel->setAlignment(Qt::AlignCenter);
         m_cpuLabel->setToolTip("AetherSDR process CPU usage");
         m_memLabel = new QLabel("Mem: \u2014");
-        m_memLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_memLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
         m_memLabel->setAlignment(Qt::AlignCenter);
         m_memLabel->setToolTip("AetherSDR process memory (RSS)");
         cpuVbox->addWidget(m_cpuLabel);
@@ -9111,13 +9111,13 @@ void MainWindow::buildUI()
     paVbox->setContentsMargins(0, 0, 0, 0);
     paVbox->setSpacing(0);
     m_paTempLabel = new QLabel("");
-    m_paTempLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_paTempLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_paTempLabel->setAlignment(Qt::AlignCenter);
     m_paTempLabel->setCursor(Qt::PointingHandCursor);
     m_paTempLabel->installEventFilter(this);
     updatePaTempLabel();
     m_supplyVoltLabel = new QLabel("");
-    m_supplyVoltLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_supplyVoltLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
     m_supplyVoltLabel->setAlignment(Qt::AlignCenter);
     paVbox->addWidget(m_paTempLabel);
     paVbox->addWidget(m_supplyVoltLabel);
@@ -9133,11 +9133,11 @@ void MainWindow::buildUI()
     netVbox->setContentsMargins(0, 0, 0, 0);
     netVbox->setSpacing(0);
     auto* netTitle = new QLabel("Network:");
-    netTitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(netTitle, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     netTitle->setAlignment(Qt::AlignCenter);
     netVbox->addWidget(netTitle);
     m_networkLabel = new QLabel("");
-    m_networkLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_networkLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
     m_networkLabel->setTextFormat(Qt::RichText);
     m_networkLabel->setAlignment(Qt::AlignCenter);
     m_networkLabel->setToolTip(buildNetworkTooltip(m_radioModel));
@@ -9203,11 +9203,11 @@ void MainWindow::buildUI()
     timeVbox->setContentsMargins(0, 0, 0, 0);
     timeVbox->setSpacing(0);
     m_gpsDateLabel = new QLabel("");
-    m_gpsDateLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsDateLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsDateLabel->setAlignment(Qt::AlignCenter);
     m_gpsDateLabel->setMinimumWidth(kTelemetryStackMinWidth);
     m_gpsTimeLabel = new QLabel("");
-    m_gpsTimeLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsTimeLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsTimeLabel->setAlignment(Qt::AlignCenter);
     m_gpsTimeLabel->setMinimumWidth(kTelemetryStackMinWidth);
     timeVbox->addWidget(m_gpsDateLabel);
@@ -9637,7 +9637,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_radioInfoLabel->setText("");
         m_radioVersionLabel->setText("");
         m_stationLabel->setText("N0CALL");
-        m_tnfIndicator->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.background.2}}; font-weight: bold; font-size: 24px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_tnfIndicator, "QLabel { color: {{color.background.2}}; font-weight: bold; font-size: 24px; }");
         m_tnfIndicator->setToolTip(buildTnfTooltip(m_radioModel.tnfModel()));
         if (auto* bandStackPanel = m_panStack ? m_panStack->bandStackPanel() : nullptr) {
             bandStackPanel->clear();
@@ -9714,14 +9714,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
             m_reconnectDlg->setWindowFlag(Qt::FramelessWindowHint, frameless);
             m_reconnectDlg->setModal(false);
             m_reconnectDlg->setFixedSize(400, 150);
-            m_reconnectDlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; }"
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_reconnectDlg, "QDialog { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; }"
                 "QLabel { color: {{color.text.primary}}; background: transparent; }"
                 "QLabel#reconnectTitle { color: {{color.text.primary}}; font-size: 16px; font-weight: bold; }"
                 "QLabel#reconnectBody { color: {{color.text.secondary}}; font-size: 12px; }"
                 "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; "
                 "font-weight: bold; padding: 6px 20px; }"
-                "QPushButton:hover { background: {{color.background.1}}; }"));
+                "QPushButton:hover { background: {{color.background.1}}; }");
 
             auto* root = new QVBoxLayout(m_reconnectDlg);
             root->setContentsMargins(0, 0, 0, 0);
@@ -12975,12 +12975,12 @@ void MainWindow::enableNr2WithWisdom()
         dlg->setWindowFlag(Qt::Tool, true);
         dlg->setAttribute(Qt::WA_ShowWithoutActivating, true);
         dlg->setMinimumWidth(500);
-        dlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: #050710; }"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: #050710; }"
             "QLabel { color: {{color.text.secondary}}; background: transparent; }"
             "QProgressBar { text-align: center; font-size: 13px;"
             " font-weight: bold; color: {{color.text.primary}};"
             " background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 3px; }"
-            "QProgressBar::chunk { background: {{color.accent}}; }"));
+            "QProgressBar::chunk { background: {{color.accent}}; }");
 
         auto* root = new QVBoxLayout(dlg);
         root->setContentsMargins(0, 0, 0, 0);

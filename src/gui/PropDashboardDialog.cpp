@@ -519,7 +519,7 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
         ++row;
         auto* sep = new QLabel;
         sep->setFixedHeight(1);
-        sep->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.1}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(sep, "QLabel { background: {{color.background.1}}; }");
         g->addWidget(sep, row, 0, 1, 4);
 
         ++row;
@@ -553,14 +553,14 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
         m_rationale = new QLabel;
         m_rationale->setWordWrap(true);
         m_rationale->setText("Forecast rationale will appear when NOAA publishes the current discussion.");
-        m_rationale->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel {"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_rationale, "QLabel {"
             " color: #9cb0c0;"
             " font-size: 10px;"
             " background: #0f1d2b;"
             " border: 1px solid {{color.background.1}};"
             " border-radius: 10px;"
             " padding: 8px;"
-            "}"));
+            "}");
         g->addWidget(m_rationale, row, 0, 1, 4);
 
         row1->addWidget(group, 3);
@@ -613,11 +613,11 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
 
         auto* learnPanel = new QFrame;
         learnPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        learnPanel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QFrame {"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(learnPanel, "QFrame {"
             " background: {{color.background.0}};"
             " border: 1px solid #22384d;"
             " border-radius: 10px;"
-            "}"));
+            "}");
         auto* learnLayout = new QVBoxLayout(learnPanel);
         learnLayout->setContentsMargins(10, 10, 10, 10);
         learnLayout->setSpacing(8);
@@ -746,11 +746,11 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
         note->setStyleSheet(kMutedStyle);
 
         auto* learnPanel = new QFrame;
-        learnPanel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QFrame {"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(learnPanel, "QFrame {"
             " background: {{color.background.0}};"
             " border: 1px solid #22384d;"
             " border-radius: 10px;"
-            "}"));
+            "}");
         auto* learnLayout = new QVBoxLayout(learnPanel);
         learnLayout->setContentsMargins(10, 10, 10, 10);
         learnLayout->setSpacing(8);

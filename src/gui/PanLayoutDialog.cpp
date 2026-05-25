@@ -110,8 +110,8 @@ PanLayoutDialog::PanLayoutDialog(int maxPans, const QString& currentLayout,
                                  QWidget* parent)
     : PersistentDialog("Panadapter Layout", /*geomKey*/ QString(), parent)
 {
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"
-                  "QLabel { color: {{color.text.primary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; }"
+                  "QLabel { color: {{color.text.primary}}; }");
     // Fixed-size grid of thumbnails — body content is the same regardless of
     // chrome state; the dialog wraps it.  Modal dialog; no geometry persist.
     bodyWidget()->setFixedSize(560, 502);
@@ -124,7 +124,7 @@ void PanLayoutDialog::buildUI(int maxPans, const QString& currentLayout)
     vbox->setSpacing(8);
 
     auto* title = new QLabel("Choose panadapter layout:");
-    title->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 13px; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(title, "QLabel { color: {{color.text.secondary}}; font-size: 13px; font-weight: bold; }");
     title->setAlignment(Qt::AlignCenter);
     vbox->addWidget(title);
 
@@ -142,9 +142,9 @@ void PanLayoutDialog::buildUI(int maxPans, const QString& currentLayout)
 
         auto* btn = new QPushButton;
         btn->setFixedSize(130, 115);
-        btn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: transparent; border: none; }"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(btn, "QPushButton { background: transparent; border: none; }"
             "QPushButton:hover { background: rgba(0, 180, 216, 30); "
-            "border: 1px solid {{color.accent}}; border-radius: 4px; }"));
+            "border: 1px solid {{color.accent}}; border-radius: 4px; }");
 
         auto* btnLayout = new QVBoxLayout(btn);
         btnLayout->setContentsMargins(4, 4, 4, 2);
@@ -176,9 +176,9 @@ void PanLayoutDialog::buildUI(int maxPans, const QString& currentLayout)
 
     auto* cancelBtn = new QPushButton("Cancel");
     cancelBtn->setFixedWidth(80);
-    cancelBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(cancelBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 4px; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; }");
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     vbox->addWidget(cancelBtn, 0, Qt::AlignCenter);
 }

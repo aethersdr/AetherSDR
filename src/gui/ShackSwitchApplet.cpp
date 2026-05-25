@@ -369,8 +369,8 @@ void ShackSwitchApplet::rebuildAntennaRows()
         hl->setSpacing(2);
 
         auto* nameLbl = new QLabel(ant.name);
-        nameLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.0}}; border: 1px solid #1c2a40; border-radius: 3px; "
-            "padding: 4px 6px; font-size: 11px; color: #dde6f0; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(nameLbl, "QLabel { background: {{color.background.0}}; border: 1px solid #1c2a40; border-radius: 3px; "
+            "padding: 4px 6px; font-size: 11px; color: #dde6f0; }");
         nameLbl->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         hl->addWidget(nameLbl, 1);
 

@@ -886,7 +886,7 @@ QWidget* AetherDspWidget::buildMnrPage()
     auto* info = new QLabel("Asymmetric temporal smoothing: fast release (~15ms) for quick noise suppression,\n"
                             "gentle attack (~64ms) to preserve speech transients without artifacts.");
     info->setWordWrap(true);
-    info->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(info, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     vbox->addSpacing(8);
     vbox->addWidget(info);
 
@@ -907,7 +907,7 @@ QWidget* AetherDspWidget::buildRn2Page()
         "parameters.");
     lbl->setWordWrap(true);
     lbl->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     vbox->addWidget(lbl);
     vbox->addStretch();
     return page;
@@ -926,7 +926,7 @@ QWidget* AetherDspWidget::buildBnrPage()
         "controlled from the slice overlay menu.");
     lbl->setWordWrap(true);
     lbl->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     vbox->addWidget(lbl);
     vbox->addStretch();
     return page;
@@ -953,7 +953,7 @@ QWidget* AetherDspWidget::buildDfnrPage()
     auto* info = new QLabel("AI-powered speech enhancement — higher fidelity than RNNoise "
                             "in high-noise HF environments. CPU-only, 10 ms latency, 48 kHz.");
     info->setWordWrap(true);
-    info->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(info, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     {
         auto* infoRow = new QHBoxLayout;
         infoRow->setContentsMargins(0, 0, 10, 0);

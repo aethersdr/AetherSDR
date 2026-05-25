@@ -680,6 +680,7 @@ set(GUI_SOURCES
     src/gui/HelpDialog.cpp
     src/gui/WhatsNewDialog.cpp
     src/gui/ThemeEditorDialog.cpp
+    src/gui/ThemeInspector.cpp
 )
 
 set(ALL_SOURCES

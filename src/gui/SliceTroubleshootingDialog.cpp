@@ -402,22 +402,22 @@ SliceTroubleshootingDialog::SliceTroubleshootingDialog(RadioModel* model,
         "Use <b>Issue Summary</b> for GitHub reports and <b>JSON</b> for AI-assisted troubleshooting. "
         "This dialog does not re-query the radio.");
     intro->setWordWrap(true);
-    intro->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(intro, "QLabel { color: {{color.text.primary}}; }");
     root->addWidget(intro);
 
     auto* searchRow = new QHBoxLayout;
     searchRow->setSpacing(8);
     auto* searchLabel = new QLabel("Find:");
-    searchLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(searchLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     m_searchEdit = new QLineEdit;
     m_searchEdit->setClearButtonEnabled(true);
     m_searchEdit->setPlaceholderText("Search snapshot...");
-    m_searchEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_searchEdit, "QLineEdit {"
         "  background: {{color.background.0}};"
         "  color: {{color.text.primary}};"
         "  border: 1px solid {{color.background.2}};"
         "  padding: 4px 6px;"
-        "}"));
+        "}");
     auto* findNextBtn = new QPushButton("Find Next");
     searchRow->addWidget(searchLabel);
     searchRow->addWidget(m_searchEdit, 1);
@@ -428,31 +428,31 @@ SliceTroubleshootingDialog::SliceTroubleshootingDialog(RadioModel* model,
     m_summaryView = new QPlainTextEdit;
     m_summaryView->setReadOnly(true);
     m_summaryView->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_summaryView->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_summaryView, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: #d6e4f2;"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
-        "}"));
+        "}");
     m_tabs->addTab(m_summaryView, "Issue Summary");
 
     m_jsonView = new QPlainTextEdit;
     m_jsonView->setReadOnly(true);
     m_jsonView->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_jsonView->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_jsonView, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: #9ed4ff;"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
-        "}"));
+        "}");
     m_tabs->addTab(m_jsonView, "JSON");
     root->addWidget(m_tabs, 1);
 
     auto* footer = new QHBoxLayout;
     m_statusLabel = new QLabel;
-    m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     footer->addWidget(m_statusLabel, 1);
 
     auto* refreshBtn = new QPushButton("Refresh Snapshot");

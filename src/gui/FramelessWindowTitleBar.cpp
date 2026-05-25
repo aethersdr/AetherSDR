@@ -46,7 +46,7 @@ FramelessWindowTitleBar::FramelessWindowTitleBar(const QString& title, QWidget* 
     row->setSpacing(4);
 
     auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"), this);
-    grip->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.text.secondary}}; font-size: 10px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(grip, "QLabel { background: transparent; color: {{color.text.secondary}}; font-size: 10px; }");
     row->addWidget(grip);
 
     m_titleLabel = new QLabel(title, this);

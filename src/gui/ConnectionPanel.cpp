@@ -183,13 +183,13 @@ QString normalizedStatus(QString status)
 ConnectionPanel::ConnectionPanel(QWidget* parent)
     : QWidget(parent)
 {
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("ConnectionPanel { background: {{color.background.0}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "ConnectionPanel { background: {{color.background.0}}; }"
         "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 7px; margin-top: 10px; "
         "color: {{color.text.primary}}; font-weight: bold; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
         "QListWidget { background: #09111b; border: 1px solid {{color.background.2}}; border-radius: 4px; "
         "color: {{color.text.primary}}; padding: 2px; }"
-        "QPushButton { padding: 5px 12px; }"));
+        "QPushButton { padding: 5px 12px; }");
 
     const QString editStyle =
         "QLineEdit { border: 1px solid #304050; border-radius: 4px; padding: 4px 6px; "
@@ -240,8 +240,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     outer->addWidget(content, 1);
 
     auto* titleLabel = new QLabel("Connect to a Radio", this);
-    titleLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 18px; font-weight: bold; "
-        "background: transparent; border: none; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(titleLabel, "QLabel { color: {{color.text.primary}}; font-size: 18px; font-weight: bold; "
+        "background: transparent; border: none; }");
     root->addWidget(titleLabel);
 
     auto* introLabel = makeWrappedLabel(
@@ -341,8 +341,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     emptyCalloutLayout->setContentsMargins(14, 14, 14, 14);
     emptyCalloutLayout->setSpacing(8);
     auto* emptyTitle = new QLabel("No local radios found yet", emptyCallout);
-    emptyTitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 15px; font-weight: bold; "
-        "background: transparent; border: none; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(emptyTitle, "QLabel { color: {{color.text.primary}}; font-size: 15px; font-weight: bold; "
+        "background: transparent; border: none; }");
     emptyCalloutLayout->addWidget(emptyTitle);
     emptyCalloutLayout->addWidget(makeWrappedLabel(
         "AetherSDR is still listening for discovery packets. If your station is on a VPN "
@@ -544,7 +544,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     optionsLayout->setContentsMargins(12, 10, 12, 10);
     optionsLayout->setSpacing(6);
     auto* optionsTitle = new QLabel("Connection options for slower links", m_linkOptionsWidget);
-    optionsTitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: bold; background: transparent; border: none; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(optionsTitle, "QLabel { color: {{color.text.primary}}; font-weight: bold; background: transparent; border: none; }");
     optionsLayout->addWidget(optionsTitle);
     m_lowBwHintLabel = makeWrappedLabel(QString(), kHintLabelStyle);
     optionsLayout->addWidget(m_lowBwHintLabel);

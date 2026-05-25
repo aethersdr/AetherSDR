@@ -123,9 +123,20 @@ public:
     void clearWidgetTracking(QWidget* widget);
 
     // Inspector lookup: tokens referenced by the widget's last-applied
-    // stylesheet template.  Empty list if the widget was never themed
-    // through applyStyleSheet().
+    // stylesheet template OR declared explicitly via declareWidgetTokens().
+    // Empty list if the widget was never tracked.
     QStringList tokensForWidget(const QWidget* widget) const;
+
+    // Custom-paint widgets (panadapter, waterfall, meters, slice indicators)
+    // read tokens directly inside paintEvent rather than going through a
+    // stylesheet template, so applyStyleSheet's reverse-map never sees them.
+    // declareWidgetTokens() lets such widgets advertise the tokens they
+    // paint with, so the Phase 5 inspector can answer "what paints this?"
+    // for paint-code regions too.  Re-call to update; entries are cleared
+    // automatically when the widget is destroyed.  Paint-code widgets are
+    // not auto-repainted on themeChanged — they're expected to connect
+    // themselves to themeChanged and call update().
+    void declareWidgetTokens(QWidget* widget, const QStringList& tokens);
 
     // Stateless helper exposing the same token-extraction regex used
     // by applyStyleSheet().  Tooling (audit scripts, the Phase 5

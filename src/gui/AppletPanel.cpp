@@ -295,9 +295,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     peakBtn->setAccessibleName("Peak hold");
     peakBtn->setAccessibleDescription("Toggle peak hold line on S-meter");
     peakBtn->setFixedHeight(20);
-    peakBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.0}}; color: {{color.text.secondary}}; border: 1px solid #334; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(peakBtn, "QPushButton { background: {{color.background.0}}; color: {{color.text.secondary}}; border: 1px solid #334; "
         "border-radius: 3px; font-size: 10px; padding: 0 6px; } "
-        "QPushButton:checked { background: #0a3060; color: {{color.accent}}; border-color: {{color.accent}}; }"));
+        "QPushButton:checked { background: #0a3060; color: {{color.accent}}; border-color: {{color.accent}}; }");
 
     auto* decayLabel = new QLabel("Decay", peakRow);
     decayLabel->setStyleSheet(labelStyle);
@@ -313,9 +313,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     resetBtn->setFixedSize(32, 20);
     resetBtn->setToolTip("Reset peak hold");
     resetBtn->setAccessibleName("Reset peak hold");
-    resetBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.0}}; color: {{color.text.secondary}}; border: 1px solid #334; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(resetBtn, "QPushButton { background: {{color.background.0}}; color: {{color.text.secondary}}; border: 1px solid #334; "
         "border-radius: 3px; font-size: 10px; padding: 0 4px; } "
-        "QPushButton:pressed { background: #2a2a4e; color: {{color.text.primary}}; }"));
+        "QPushButton:pressed { background: #2a2a4e; color: {{color.text.primary}}; }");
 
     peakLayout->addWidget(peakBtn);
     peakLayout->addWidget(decayLabel);
@@ -376,10 +376,10 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_scrollArea->setWidgetResizable(true);
     // Handle dims to #2a3a4a at rest, brightens to #4a6880 on hover/drag.
     // 500 ms delay before dimming back so quick drags don't flicker.
-    m_scrollArea->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QScrollBar:vertical { background: {{color.background.0}}; width: 12px; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scrollArea, "QScrollBar:vertical { background: {{color.background.0}}; width: 12px; }"
         "QScrollBar::handle:vertical { background: {{color.background.1}}; border-radius: 4px; min-height: 20px; }"
         "QScrollBar::handle:vertical[active=\"true\"] { background: #4a6880; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
 
     if (auto* sb = m_scrollArea->verticalScrollBar()) {
         sb->setProperty("active", false);
@@ -416,7 +416,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // Drop indicator line (cyan, hidden by default)
     m_dropIndicator = new QWidget(container);
     m_dropIndicator->setFixedHeight(2);
-    m_dropIndicator->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: {{color.accent}};"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_dropIndicator, "background: {{color.accent}};");
     m_dropIndicator->hide();
 
     auto& settings = AppSettings::instance();

@@ -74,11 +74,11 @@ void AntennaGeniusApplet::buildUI()
         row->setSpacing(4);
 
         m_deviceCombo = new GuardedComboBox;
-        m_deviceCombo->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_deviceCombo, "QComboBox { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
             "border-radius: 3px; padding: 2px 4px; color: {{color.text.primary}}; font-size: 10px; }"
             "QComboBox::drop-down { border: none; }"
             "QComboBox QAbstractItemView { background: {{color.background.1}}; color: {{color.text.primary}}; "
-            "selection-background-color: {{color.background.2}}; }"));
+            "selection-background-color: {{color.background.2}}; }");
         m_deviceCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_deviceCombo->setMinimumWidth(0);
         row->addWidget(m_deviceCombo, 1);
@@ -109,8 +109,8 @@ void AntennaGeniusApplet::buildUI()
         row->addWidget(label);
 
         m_manualIpEdit = new QLineEdit;
-        m_manualIpEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
-            "border-radius: 3px; padding: 2px 4px; color: {{color.text.primary}}; font-size: 10px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_manualIpEdit, "QLineEdit { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
+            "border-radius: 3px; padding: 2px 4px; color: {{color.text.primary}}; font-size: 10px; }");
         m_manualIpEdit->setPlaceholderText("IP address");
         m_manualIpEdit->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_manualIpEdit->setMinimumWidth(0);
@@ -147,7 +147,7 @@ void AntennaGeniusApplet::buildUI()
         hdr->addStretch();
 
         m_portAAntLabel = new QLabel("—");
-        m_portAAntLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent.success}}; font-size: 11px; font-weight: bold;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_portAAntLabel, "color: {{color.accent.success}}; font-size: 11px; font-weight: bold;");
         m_portAAntLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         m_portAAntLabel->setMinimumWidth(0);
         hdr->addWidget(m_portAAntLabel, 1);
@@ -173,7 +173,7 @@ void AntennaGeniusApplet::buildUI()
     // Separator
     auto* sep = new QWidget;
     sep->setFixedHeight(1);
-    sep->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: {{color.background.1}};"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(sep, "background: {{color.background.1}};");
     vbox->addWidget(sep);
 
     // ── Port B section ──────────────────────────────────────────────────────
@@ -196,7 +196,7 @@ void AntennaGeniusApplet::buildUI()
         hdr->addStretch();
 
         m_portBAntLabel = new QLabel("—");
-        m_portBAntLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent.success}}; font-size: 11px; font-weight: bold;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_portBAntLabel, "color: {{color.accent.success}}; font-size: 11px; font-weight: bold;");
         m_portBAntLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         m_portBAntLabel->setMinimumWidth(0);
         hdr->addWidget(m_portBAntLabel, 1);
@@ -264,7 +264,7 @@ void AntennaGeniusApplet::tryManualConnect()
     QHostAddress addr(ip);
     if (addr.isNull()) {
         m_statusLabel->setText("Invalid IP address");
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.danger}}; font-size: 10px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.danger}}; font-size: 10px; }");
         return;
     }
     AppSettings::instance().setValue("AG_ManualIp", ip);
@@ -301,7 +301,7 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
         m_statusLabel->setText(QString("Connected — %1 v%2")
             .arg(m_model->connectedDevice().name,
                  m_model->connectedDevice().version));
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent}}; font-size: 10px;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "color: {{color.accent}}; font-size: 10px;");
 
         // Hide Port B if device has only 1 radio port.
         m_portBSection->setVisible(m_model->connectedDevice().radioPorts >= 2);
@@ -319,7 +319,7 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
     connect(m_model, &AntennaGeniusModel::connectionError, this,
             [this](const QString& msg) {
         m_statusLabel->setText("Error: " + msg);
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent.danger}}; font-size: 10px;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "color: {{color.accent.danger}}; font-size: 10px;");
     });
 
     // Antenna list loaded → rebuild button grids.
@@ -422,9 +422,9 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
 
     // TX indicator — highlight antenna label red when transmitting.
     if (ps.transmitting) {
-        antLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent.danger}}; font-size: 11px; font-weight: bold;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(antLabel, "color: {{color.accent.danger}}; font-size: 11px; font-weight: bold;");
     } else {
-        antLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent.success}}; font-size: 11px; font-weight: bold;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(antLabel, "color: {{color.accent.success}}; font-size: 11px; font-weight: bold;");
     }
 
     // Get the other port's selected antenna so we can block duplicates.
@@ -444,10 +444,10 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
         btns[i]->setChecked(inUseByOther ? false : isActive);
 
         if (inUseByOther) {
-            btns[i]->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #101820; border: 1px solid #182028; "
+            AetherSDR::ThemeManager::instance().applyStyleSheet(btns[i], "QPushButton { background: #101820; border: 1px solid #182028; "
                 "border-radius: 3px; padding: 2px 2px; font-size: 10px; color: {{color.background.2}}; }"
                 "QPushButton:checked { background: #202830; color: #606878; "
-                "border: 1px solid #303848; }"));
+                "border: 1px solid #303848; }");
             QString otherLabel = (portId == 1) ? "Port B" : "Port A";
             btns[i]->setToolTip(QString("%1 — in use by %2")
                 .arg(antennas[i].name, otherLabel));
@@ -467,10 +467,10 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
             btns[i]->setToolTip(antennas[i].name);
         } else if (!canRx && !canTx) {
             // No permission on this band — dim the button
-            btns[i]->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #101820; border: 1px solid #182028; "
+            AetherSDR::ThemeManager::instance().applyStyleSheet(btns[i], "QPushButton { background: #101820; border: 1px solid #182028; "
                 "border-radius: 3px; padding: 2px 2px; font-size: 10px; color: {{color.background.2}}; }"
                 "QPushButton:checked { background: #202830; color: #606878; "
-                "border: 1px solid #303848; }"));
+                "border: 1px solid #303848; }");
             btns[i]->setToolTip(QString("%1 — no RX/TX on %2")
                 .arg(antennas[i].name, m_model->bandName(band)));
         } else if (canRx && !canTx) {
@@ -492,7 +492,7 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
         // RX antenna can't TX — show TX antenna separately
         QString txName = m_model->antennaName(ps.txAntenna);
         antLabel->setText(antName + "  TX:" + txName);
-        antLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent.warning}}; font-size: 10px; font-weight: bold;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(antLabel, "color: {{color.accent.warning}}; font-size: 10px; font-weight: bold;");
     }
 
     // AUTO button state.
@@ -504,7 +504,7 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
     // Inhibit indicator
     if (ps.inhibited) {
         antLabel->setText(antName + " [INHIBIT]");
-        antLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent.warning}}; font-size: 11px; font-weight: bold;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(antLabel, "color: {{color.accent.warning}}; font-size: 11px; font-weight: bold;");
     }
 
     m_updatingFromModel = false;

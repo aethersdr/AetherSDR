@@ -43,7 +43,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 
     // Title
     auto* title = new QLabel("Digital Voice Keyer");
-    title->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-weight: bold; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(title, "QLabel { color: {{color.accent}}; font-weight: bold; font-size: 12px; }");
     outerVbox->addWidget(title);
 
     // Grid of slots — each row gets equal stretch
@@ -57,7 +57,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 
         // Inset container per row: VBox with content row + progress bar
         auto* rowFrame = new QFrame;
-        rowFrame->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QFrame { background: #0f1520; border: 1px solid {{color.background.1}}; border-radius: 3px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(rowFrame, "QFrame { background: #0f1520; border: 1px solid {{color.background.1}}; border-radius: 3px; }");
         rowFrame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
         auto* rowVbox = new QVBoxLayout(rowFrame);
         rowVbox->setContentsMargins(3, 2, 3, 1);
@@ -160,7 +160,7 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
 
     // Status label
     m_statusLabel = new QLabel("Status: Idle");
-    m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 10px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.label}}; font-size: 10px; }");
     outerVbox->addWidget(m_statusLabel);
 
     // Wire buttons
@@ -511,10 +511,10 @@ void DvkPanel::showContextMenu(int id, const QPoint& globalPos)
         m_wavTransfer->download(id, path);
     });
 
-    menu.setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(&menu, "QMenu { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; }"
         "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.spectrum}}; }"
         "QMenu::item:disabled { color: #505060; }"
-        "QMenu::separator { height: 1px; background: {{color.background.1}}; margin: 2px 6px; }"));
+        "QMenu::separator { height: 1px; background: {{color.background.1}}; margin: 2px 6px; }");
 
     menu.exec(globalPos);
 }
@@ -533,8 +533,8 @@ void DvkPanel::startRename(int id)
 
     m_renameSlot = id;
     m_renameEdit = new QLineEdit;
-    m_renameEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.accent}}; "
-        "border-radius: 2px; font-size: 10px; padding: 0px 2px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_renameEdit, "QLineEdit { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.accent}}; "
+        "border-radius: 2px; font-size: 10px; padding: 0px 2px; }");
     m_renameEdit->setText(label->text());
     m_renameEdit->selectAll();
     m_renameEdit->setMaxLength(40);

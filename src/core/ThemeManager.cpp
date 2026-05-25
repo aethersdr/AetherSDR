@@ -717,6 +717,26 @@ void ThemeManager::clearWidgetTracking(QWidget* widget)
     }
 }
 
+void ThemeManager::declareWidgetTokens(QWidget* widget, const QStringList& tokens)
+{
+    if (!widget) return;
+
+    // Hook the destroyed() signal exactly once per widget — same convention
+    // as applyStyleSheet so the inspector reverse-map never holds a
+    // dangling pointer.
+    if (!m_trackedWidgets.contains(widget)) {
+        connect(widget, &QObject::destroyed,
+                this, &ThemeManager::onTrackedWidgetDestroyed);
+    }
+    TrackedWidget ctx;
+    // Empty template marks this entry as paint-code-declared so
+    // reapplyAllTrackedStyleSheets() skips it (no setStyleSheet on a
+    // paint-only widget).
+    ctx.stylesheetTemplate.clear();
+    ctx.tokens = tokens;
+    m_trackedWidgets.insert(widget, ctx);
+}
+
 QStringList ThemeManager::tokensForWidget(const QWidget* widget) const
 {
     // const_cast is safe — the QHash lookup doesn't mutate the widget,
@@ -747,7 +767,13 @@ void ThemeManager::reapplyAllTrackedStyleSheets()
     for (QWidget* w : widgets) {
         const auto it = m_trackedWidgets.constFind(w);
         if (it == m_trackedWidgets.constEnd()) continue;  // dropped mid-sweep
-        w->setStyleSheet(resolve(it.value().stylesheetTemplate));
+        // Paint-code widgets registered via declareWidgetTokens() have an
+        // empty template — skip them so we don't wipe any stylesheet they
+        // may have inherited from a parent / Theme.h helper.  They handle
+        // theme changes by connecting to themeChanged themselves.
+        const QString& tmpl = it.value().stylesheetTemplate;
+        if (tmpl.isEmpty()) continue;
+        w->setStyleSheet(resolve(tmpl));
     }
 }
 

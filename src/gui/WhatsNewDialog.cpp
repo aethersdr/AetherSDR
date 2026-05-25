@@ -248,37 +248,37 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
         "AETHERSDR V%1</span><br>"
         "<span style='color: #dce8f3; font-size: 24px; font-weight: bold;'>"
         "%2</span></div>").arg(currentVersion, heading));
-    header->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.0}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(header, "QLabel { background: {{color.background.0}}; }");
     layout->addWidget(header);
 
     m_statusLabel = new QLabel;
     m_statusLabel->setAlignment(Qt::AlignCenter);
     m_statusLabel->setWordWrap(true);
     m_statusLabel->setContentsMargins(18, 0, 18, 8);
-    m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.0}}; color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { background: {{color.background.0}}; color: {{color.text.secondary}}; font-size: 12px; }");
     layout->addWidget(m_statusLabel);
 
     auto* sep = new QWidget;
     sep->setFixedHeight(1);
-    sep->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: {{color.background.1}};"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(sep, "background: {{color.background.1}};");
     layout->addWidget(sep);
 
     m_browser = new QTextBrowser;
     m_browser->setOpenExternalLinks(false);
     m_browser->setOpenLinks(false);
     m_browser->setReadOnly(true);
-    m_browser->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTextBrowser { background: {{color.background.0}}; color: #d6e2ee; border: none; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_browser, "QTextBrowser { background: {{color.background.0}}; color: #d6e2ee; border: none; "
         "padding: 18px; font-size: 13px; }"
         "QScrollBar:vertical { background: {{color.background.0}}; width: 10px; }"
         "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 5px; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
     connect(m_browser, &QTextBrowser::anchorClicked, this, [](const QUrl& url) {
         QDesktopServices::openUrl(githubUrlForMaybeRelativeLink(url));
     });
     layout->addWidget(m_browser, 1);
 
     auto* footer = new QWidget;
-    footer->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: {{color.background.0}};"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(footer, "background: {{color.background.0}};");
     auto* footerLayout = new QHBoxLayout(footer);
     footerLayout->setContentsMargins(16, 12, 16, 16);
     footerLayout->setSpacing(12);
@@ -326,7 +326,7 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
     footerLayout->addStretch(1);
     layout->addWidget(footer);
 
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("WhatsNewDialog { background: {{color.background.0}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "WhatsNewDialog { background: {{color.background.0}}; }");
 
     showLoadingState();
     fetchLiveReleaseNotes();

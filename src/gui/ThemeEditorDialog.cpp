@@ -1,8 +1,10 @@
 #include "ThemeEditorDialog.h"
 #include "Theme.h"
+#include "ThemeInspector.h"
 #include "core/ThemeManager.h"
 
 #include <QColorDialog>
+#include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
@@ -13,7 +15,10 @@
 #include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
+#include <QSet>
+#include <QSignalBlocker>
 #include <QVBoxLayout>
+#include <QWidget>
 
 namespace AetherSDR {
 
@@ -64,6 +69,23 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     m_tokenList->setSelectionMode(QAbstractItemView::SingleSelection);
     root->addWidget(m_tokenList, 1);
 
+    // Inspector toggle row — sits above the filter so it reads as a mode
+    // switch ("am I clicking on the main UI to pick a token?") rather than
+    // a button buried with Save As / Close.
+    auto* inspectRow = new QHBoxLayout;
+    m_inspectBtn = new QPushButton(QStringLiteral("🎯  Inspect"), this);
+    m_inspectBtn->setCheckable(true);
+    m_inspectBtn->setToolTip(QStringLiteral(
+        "Click, then point at any region of the main UI to find the\n"
+        "token(s) painting it.  ESC cancels."));
+    inspectRow->addWidget(m_inspectBtn);
+    m_inspectStatus = new QLabel(this);
+    m_inspectStatus->setWordWrap(true);
+    m_inspectStatus->setStyleSheet(QStringLiteral(
+        "QLabel { font-style: italic; }"));
+    inspectRow->addWidget(m_inspectStatus, 1);
+    root->addLayout(inspectRow);
+
     auto* btnRow = new QHBoxLayout;
     btnRow->addStretch(1);
     m_saveAsBtn = new QPushButton(QStringLiteral("Save As…"), this);
@@ -78,13 +100,11 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
 
     connect(m_tokenList, &QListWidget::itemClicked,
             this, &ThemeEditorDialog::onTokenRowClicked);
-    connect(m_filterEdit, &QLineEdit::textChanged, this, [this](const QString& q) {
-        const QString needle = q.trimmed().toLower();
-        for (int i = 0; i < m_tokenList->count(); ++i) {
-            auto* item = m_tokenList->item(i);
-            item->setHidden(!needle.isEmpty()
-                            && !item->data(Qt::UserRole).toString().contains(needle));
-        }
+    connect(m_filterEdit, &QLineEdit::textChanged, this, [this](const QString&) {
+        // Re-evaluate visibility against both the text filter and the
+        // last inspector-picked subset (if any) — filterTokensTo() reads
+        // the QLineEdit's current text directly.
+        filterTokensTo(m_activeSubset);
     });
     connect(m_saveAsBtn, &QPushButton::clicked,
             this, &ThemeEditorDialog::onSaveAsClicked);
@@ -95,6 +115,20 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // doesn't lie about what it's editing.
     connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &ThemeEditorDialog::onActiveThemeChanged);
+
+    // Inspector wiring.  The inspector is owned by the dialog (parent),
+    // so it dies when the dialog does and removes its event filter
+    // cleanly.
+    m_inspector = new ThemeInspector(this, this);
+    connect(m_inspectBtn, &QPushButton::toggled,
+            this, &ThemeEditorDialog::onInspectToggled);
+    connect(m_inspector, &ThemeInspector::widgetPicked,
+            this, &ThemeEditorDialog::onInspectorPicked);
+    connect(m_inspector, &ThemeInspector::activeChanged,
+            this, &ThemeEditorDialog::onInspectorActiveChanged);
+    connect(m_inspector, &ThemeInspector::canceled, this, [this]() {
+        updateInspectorStatus(QStringLiteral("Inspector canceled."));
+    });
 }
 
 void ThemeEditorDialog::refreshTokenList()
@@ -187,6 +221,112 @@ void ThemeEditorDialog::onSaveAsClicked()
     }
     // saveCurrentThemeAs() makes the new theme active; onActiveThemeChanged
     // will fire from themeChanged and refresh the title.
+}
+
+void ThemeEditorDialog::onInspectToggled(bool on)
+{
+    if (!m_inspector) return;
+    if (on) {
+        m_activeSubset.clear();
+        filterTokensTo({});                       // clear any prior subset
+        m_filterEdit->clear();
+        updateInspectorStatus(QStringLiteral(
+            "Move the cursor over the main UI and click a region.  "
+            "ESC cancels."));
+        m_inspector->start();
+    } else {
+        m_inspector->stop();
+    }
+}
+
+void ThemeEditorDialog::onInspectorActiveChanged(bool active)
+{
+    // Keep the toggle button's checked state in lock-step with the
+    // inspector — covers self-deactivation paths (post-pick, ESC).
+    if (m_inspectBtn && m_inspectBtn->isChecked() != active) {
+        QSignalBlocker sb(m_inspectBtn);
+        m_inspectBtn->setChecked(active);
+    }
+}
+
+void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint /*localPos*/)
+{
+    if (!target) return;
+    auto& tm = ThemeManager::instance();
+
+    // Walk up the parent chain until we find a widget with a declared
+    // token list — that's how a click on a deep child (e.g. the QLabel
+    // inside a QPushButton inside a themed panel) still surfaces the
+    // panel-level tokens.
+    QStringList tokens;
+    QWidget* w = target;
+    QString hitName = target->metaObject()->className();
+    while (w && tokens.isEmpty()) {
+        tokens = tm.tokensForWidget(w);
+        if (!tokens.isEmpty()) break;
+        w = w->parentWidget();
+    }
+
+    if (tokens.isEmpty()) {
+        updateInspectorStatus(QStringLiteral(
+            "%1: no theme tokens registered for this region yet.  Use the "
+            "filter or browse the full token list below.").arg(hitName));
+        m_activeSubset.clear();
+        filterTokensTo({});
+        return;
+    }
+
+    m_activeSubset = tokens;
+    filterTokensTo(tokens);
+
+    const QString matchedClass = w ? w->metaObject()->className() : hitName;
+    if (w && w != target) {
+        updateInspectorStatus(QStringLiteral(
+            "%1 (via %2): %3 token%4.").arg(matchedClass).arg(hitName)
+            .arg(tokens.size()).arg(tokens.size() == 1 ? "" : "s"));
+    } else {
+        updateInspectorStatus(QStringLiteral(
+            "%1: %2 token%3.").arg(matchedClass)
+            .arg(tokens.size()).arg(tokens.size() == 1 ? "" : "s"));
+    }
+
+    // Convenience: if exactly one color token matched, open the picker
+    // straight away — that's the "click ugly thing → fix it" flow.
+    if (tokens.size() == 1) {
+        for (int i = 0; i < m_tokenList->count(); ++i) {
+            auto* item = m_tokenList->item(i);
+            if (item->isHidden()) continue;
+            if (item->data(Qt::UserRole).toString() == tokens.first()) {
+                m_tokenList->setCurrentItem(item);
+                onTokenRowClicked(item);
+                break;
+            }
+        }
+    }
+}
+
+void ThemeEditorDialog::updateInspectorStatus(const QString& text)
+{
+    if (m_inspectStatus) m_inspectStatus->setText(text);
+}
+
+void ThemeEditorDialog::filterTokensTo(const QStringList& subset)
+{
+    // Empty subset → unhide everything that the text filter doesn't
+    // already exclude (i.e. fall back to the QLineEdit's current
+    // textChanged behaviour).
+    const QString needle = m_filterEdit
+                               ? m_filterEdit->text().trimmed().toLower()
+                               : QString();
+    const QSet<QString> wanted(subset.begin(), subset.end());
+    for (int i = 0; i < m_tokenList->count(); ++i) {
+        auto* item = m_tokenList->item(i);
+        const QString key = item->data(Qt::UserRole).toString();
+        bool hidden = false;
+        if (!subset.isEmpty() && !wanted.contains(key)) hidden = true;
+        if (!hidden && !needle.isEmpty() && !key.contains(needle)) hidden = true;
+        item->setHidden(hidden);
+    }
 }
 
 void ThemeEditorDialog::onActiveThemeChanged()

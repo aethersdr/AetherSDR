@@ -246,7 +246,7 @@ void AtuPreTuneDialog::buildConfigPage()
 
     m_planNameLabel = new QLabel(m_configPage);
     m_planNameLabel->setWordWrap(true);
-    m_planNameLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.primary}}; font-size: 11px;"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_planNameLabel, "color: {{color.text.primary}}; font-size: 11px;");
     layout->addWidget(m_planNameLabel);
 
     auto* disclaimer = new QLabel(kDisclaimerText, m_configPage);
@@ -260,7 +260,7 @@ void AtuPreTuneDialog::buildConfigPage()
     {
         auto* row = new QHBoxLayout;
         auto* lbl = new QLabel("Mode:", m_configPage);
-        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.secondary}}; font-size: 11px;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "color: {{color.text.secondary}}; font-size: 11px;");
         row->addWidget(lbl);
         m_modeCombo = new QComboBox(m_configPage);
         m_modeCombo->addItem("Step (confirm each point)", static_cast<int>(Mode::Step));
@@ -276,7 +276,7 @@ void AtuPreTuneDialog::buildConfigPage()
         auto* row = new QHBoxLayout(m_licenseClassRow);
         row->setContentsMargins(0, 0, 0, 0);
         auto* lbl = new QLabel("License class:", m_licenseClassRow);
-        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.secondary}}; font-size: 11px;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "color: {{color.text.secondary}}; font-size: 11px;");
         row->addWidget(lbl);
         m_licenseClassCombo = new QComboBox(m_licenseClassRow);
         row->addWidget(m_licenseClassCombo, 1);
@@ -298,10 +298,10 @@ void AtuPreTuneDialog::buildConfigPage()
     btnRow->addStretch(1);
     m_cancelBtn = new QPushButton("Cancel", m_configPage);
     m_startBtn  = new QPushButton("START", m_configPage);
-    m_startBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #006030; border: 1px solid #008040; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_startBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
         "color: {{color.text.primary}}; padding: 4px 12px; font-weight: bold; }"
         "QPushButton:hover { background: #007038; }"
-        "QPushButton:disabled { background: #1a2a1a; color: #556070; }"));
+        "QPushButton:disabled { background: #1a2a1a; color: #556070; }");
     btnRow->addWidget(m_cancelBtn);
     btnRow->addWidget(m_startBtn);
     layout->addLayout(btnRow);
@@ -321,24 +321,24 @@ void AtuPreTuneDialog::buildSweepPage()
 
     m_sweepStatus = new QLabel("", m_sweepPage);
     m_sweepStatus->setWordWrap(true);
-    m_sweepStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 13px; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_sweepStatus, "QLabel { color: {{color.text.primary}}; font-size: 13px; font-weight: bold; }");
     layout->addWidget(m_sweepStatus);
 
     m_sweepProgress = new QLabel("", m_sweepPage);
-    m_sweepProgress->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_sweepProgress, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     layout->addWidget(m_sweepProgress);
 
     m_sweepResult = new QLabel("", m_sweepPage);
     m_sweepResult->setWordWrap(true);
-    m_sweepResult->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_sweepResult, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
     layout->addWidget(m_sweepResult, 1);
 
     auto* row = new QHBoxLayout;
     m_tuneBtn  = new QPushButton("Tune this frequency", m_sweepPage);
-    m_tuneBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #006030; border: 1px solid #008040; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
         "color: {{color.text.primary}}; padding: 4px 12px; font-weight: bold; }"
         "QPushButton:hover { background: #007038; }"
-        "QPushButton:disabled { background: #1a2a1a; color: #556070; }"));
+        "QPushButton:disabled { background: #1a2a1a; color: #556070; }");
     m_skipBtn  = new QPushButton("Skip", m_sweepPage);
     m_continueAfterFailBtn = new QPushButton("Continue", m_sweepPage);
     m_continueAfterFailBtn->setVisible(false);
@@ -457,7 +457,7 @@ void AtuPreTuneDialog::populateBands()
         lineLayout->setSpacing(8);
         row.check = new QCheckBox(row.name, lineWidget);
         row.check->setChecked(true);
-        row.check->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.primary}}; font-size: 11px; font-weight: bold;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(row.check, "color: {{color.text.primary}}; font-size: 11px; font-weight: bold;");
         row.check->setMinimumWidth(54);
         lineLayout->addWidget(row.check);
 
@@ -472,7 +472,7 @@ void AtuPreTuneDialog::populateBands()
             .arg(estSecs % 60, 2, 10, QChar('0'));
         row.info = new QLabel(infoText, lineWidget);
         row.info->setTextFormat(Qt::RichText);
-        row.info->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.secondary}}; font-size: 10px;"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(row.info, "color: {{color.text.secondary}}; font-size: 10px;");
         lineLayout->addWidget(row.info, 1);
         m_bandsLayout->addWidget(lineWidget);
 
@@ -842,9 +842,9 @@ void AtuPreTuneDialog::setAbortButtonAbortMode()
 {
     if (!m_abortBtn) return;
     m_abortBtn->setText("ABORT");
-    m_abortBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #802020; border: 1px solid {{color.accent.danger}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_abortBtn, "QPushButton { background: #802020; border: 1px solid {{color.accent.danger}}; "
         "color: {{color.text.primary}}; padding: 4px 12px; font-weight: bold; }"
-        "QPushButton:hover { background: #903030; }"));
+        "QPushButton:hover { background: #903030; }");
 }
 
 void AtuPreTuneDialog::setAbortButtonCloseMode()

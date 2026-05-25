@@ -110,16 +110,16 @@ void TunerApplet::buildUI()
 
     m_tuneBtn = new QPushButton("TUNE");
     m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-    m_tuneBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; }");
     btnCol->addWidget(m_tuneBtn);
 
     m_operateBtn = new QPushButton("OPERATE");
     m_operateBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-    m_operateBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; }");
     btnCol->addWidget(m_operateBtn);
 
     bottomRow->addLayout(btnCol, 3);  // stretch 3 (30%)
@@ -138,9 +138,9 @@ void TunerApplet::buildUI()
             auto* btn = new QPushButton(text);
             btn->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             btn->setFixedHeight(22);
-            btn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            AetherSDR::ThemeManager::instance().applyStyleSheet(btn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-                "QPushButton:hover { background: {{color.background.1}}; }"));
+                "QPushButton:hover { background: {{color.background.1}}; }");
             return btn;
         };
 
@@ -228,14 +228,14 @@ void TunerApplet::setTunerModel(TunerModel* model)
             m_postTuneCapture = false;
             m_postTuneTimer->stop();
             m_tuneSwr = 999.0f;  // reset high so capture tracking works
-            m_tuneBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #cc2222; border: 1px solid {{color.accent.danger}}; "
-                "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: #cc2222; border: 1px solid {{color.accent.danger}}; "
+                "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }");
             m_tuneBtn->setText("TUNING...");
         } else {
             // Restore normal style
-            m_tuneBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-                "QPushButton:hover { background: {{color.background.1}}; }"));
+                "QPushButton:hover { background: {{color.background.1}}; }");
 
             // Don't display result immediately — the final settled SWR from
             // the TGXL often arrives after tuning=0 via TCP.  Start a short
@@ -273,19 +273,19 @@ void TunerApplet::syncFromModel()
     // operate=0            → STANDBY (default)
     if (m_model->isOperate() && !m_model->isBypass()) {
         m_operateBtn->setText("OPERATE");
-        m_operateBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #006030; border: 1px solid #008040; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background: #007040; }"));
+            "QPushButton:hover { background: #007040; }");
     } else if (m_model->isOperate() && m_model->isBypass()) {
         m_operateBtn->setText("BYPASS");
-        m_operateBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #8a6000; border: 1px solid #a07000; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: #8a6000; border: 1px solid #a07000; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background: #9a7000; }"));
+            "QPushButton:hover { background: #9a7000; }");
     } else {
         m_operateBtn->setText("STANDBY");
-        m_operateBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+            "QPushButton:hover { background: {{color.background.1}}; }");
     }
 }
 

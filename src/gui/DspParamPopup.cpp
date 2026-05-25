@@ -44,7 +44,7 @@ void DspParamPopup::addRadioGroup(const QString& label, const QStringList& optio
                                    int defaultIdx, std::function<void(int)> onChange)
 {
     auto* lbl = new QLabel(label);
-    lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 10px; font-weight: bold; }");
     m_layout->addWidget(lbl);
 
     auto* row = new QHBoxLayout;
@@ -85,7 +85,7 @@ void DspParamPopup::addSlider(const QString& label, int min, int max, int defaul
     row->addWidget(slider);
 
     auto* val = new QLabel(format ? format(defaultVal) : QString::number(defaultVal));
-    val->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; min-width: 36px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(val, "QLabel { color: {{color.text.primary}}; min-width: 36px; }");
     val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     row->addWidget(val);
 

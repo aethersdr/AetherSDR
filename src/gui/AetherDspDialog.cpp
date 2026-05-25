@@ -9,7 +9,7 @@ namespace AetherSDR {
 AetherDspDialog::AetherDspDialog(AudioEngine* audio, QWidget* parent)
     : PersistentDialog("AetherDSP Settings", "AetherDspDialogGeometry", parent)
 {
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");
 
     auto* body = new QVBoxLayout(bodyWidget());
     body->setSpacing(0);

@@ -50,13 +50,13 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     // envelope behaviour.
     m_modeBtn = new QPushButton(this);
     m_modeBtn->setFixedSize(78, 18);
-    m_modeBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_modeBtn, "QPushButton {"
         "  background: {{color.background.1}}; border: 1px solid {{color.background.1}};"
         "  border-radius: 3px; color: #c8a070;"
         "  font-size: 10px; font-weight: bold; padding: 1px 6px;"
         "}"
         "QPushButton:hover { background: #3a2818; color: {{color.accent.warning}};"
-        "                    border: 1px solid {{color.accent.warning}}; }"));
+        "                    border: 1px solid {{color.accent.warning}}; }");
     m_modeBtn->setToolTip("Cycle waveform view: Scope → Envelope → History");
     connect(m_modeBtn, &QPushButton::clicked,
             this, &StripWaveformPanel::cycleViewMode);
@@ -79,8 +79,8 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     m_windowLbl = new QLabel(this);
     m_windowLbl->setFixedWidth(28);
     m_windowLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_windowLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.text.secondary}};"
-        " font-size: 10px; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_windowLbl, "QLabel { background: transparent; color: {{color.text.secondary}};"
+        " font-size: 10px; font-weight: bold; }");
 
     auto* titleRow = new QHBoxLayout;
     titleRow->setContentsMargins(0, 0, 0, 0);
