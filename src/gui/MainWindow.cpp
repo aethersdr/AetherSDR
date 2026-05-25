@@ -3452,8 +3452,16 @@ MainWindow::MainWindow(QWidget* parent)
         if (sliceIndex == m_activeSliceId)
             m_appletPanel->sMeterWidget()->setLevel(dbm);
     });
+    // Symmetric with the amp-side guard at line ~3654 and the PGXL TCP path
+    // at line ~3525: in OPERATE the amp owns the analog S-Meter, so drop the
+    // exciter sample here to stop the alternating-writer pulse where exciter
+    // (~100 W) and amp (~1500 W) values race into the same widget. (#2927)
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
-            m_appletPanel->sMeterWidget(), &SMeterWidget::setTxMeters);
+            this, [this](float fwd, float swr) {
+        if (m_radioModel.hasAmplifier() && m_radioModel.ampOperate())
+            return;
+        m_appletPanel->sMeterWidget()->setTxMeters(fwd, swr);
+    });
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
             m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
