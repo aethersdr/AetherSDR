@@ -225,9 +225,13 @@ if(AETHER_GPU_SPECTRUM)
         # Detect Debian paths early (support any multiarch tuple, e.g. aarch64-linux-gnu)
         if(NOT Qt6GuiPrivate_FOUND)
             message(STATUS "Qt6GuiPrivate not found, checking Debian multi-arch paths...")
-            execute_process(COMMAND dpkg-architecture -qDEB_HOST_MULTIARCH
-                OUTPUT_VARIABLE DEB_HOST_MULTIARCH OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_QUIET)
+            set(DEB_HOST_MULTIARCH "")
+            find_program(DPKG_ARCH dpkg-architecture)
+            if(DPKG_ARCH)
+                execute_process(COMMAND ${DPKG_ARCH} -qDEB_HOST_MULTIARCH
+                    OUTPUT_VARIABLE DEB_HOST_MULTIARCH OUTPUT_STRIP_TRAILING_WHITESPACE
+                    ERROR_QUIET)
+            endif()
             find_path(DEBIAN_PRIVATE_INC
                 NAMES "QtGui/${Qt6_VERSION}/QtGui/private/qhighdpiscaling_p.h"
                 PATHS "/usr/include/${DEB_HOST_MULTIARCH}/qt6" "/usr/include/qt6"
