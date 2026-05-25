@@ -158,11 +158,19 @@ ThemeManager::ThemeManager()
     const QString saved = AppSettings::instance()
                               .value("ActiveTheme", "Default Dark").toString();
     if (!setActiveTheme(saved)) {
-        // Fall through to compiled-in defaults — UI still works, no theme
-        // loaded.  Most commonly hit on a fresh install before the resource
-        // bundle is in place.
-        qCWarning(lcGui) << "ThemeManager: failed to load theme" << saved
-                          << "— using compiled-in defaults";
+        // Saved theme is gone (most commonly: user saved a custom theme
+        // via the editor and later removed the file out-of-band).  Don't
+        // limp along on seedBuiltinDefaults() — its scalar-only token set
+        // lacks the waterfall.colormap gradients and the operator gets a
+        // baffling all-grayscale waterfall.  Fall back to "Default Dark"
+        // explicitly so the bundled JSON loads and every token is populated.
+        qCWarning(lcGui) << "ThemeManager: saved theme" << saved
+                          << "is unavailable — falling back to Default Dark";
+        if (!setActiveTheme(QStringLiteral("Default Dark"))) {
+            qCWarning(lcGui) << "ThemeManager: Default Dark also failed to load"
+                              << "— UI will render with compiled-in defaults"
+                              << "(rebuild resources?)";
+        }
     }
 }
 
