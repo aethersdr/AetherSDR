@@ -71,6 +71,14 @@ jobs:
         continue-on-error: true
         env:
           QT_QPA_PLATFORM: offscreen
+        # The container image's /bin/sh is Dash, which doesn't understand
+        # `set -o pipefail` or ${PIPESTATUS[0]} — without `shell: bash`
+        # the step exits at code 2 before reaching ctest, the
+        # continue-on-error swallows it, and downstream gating on
+        # `outputs.exit` sees an empty string.  Net result: every run
+        # appears green and no tests actually execute under the
+        # sanitizers.  Pin to bash so the bashisms work as intended.
+        shell: bash
         run: |
           set -o pipefail
           # Export each KEY=value line from runtime_env into the test env.
