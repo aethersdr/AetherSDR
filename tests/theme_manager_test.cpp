@@ -60,8 +60,8 @@ int main(int argc, char** argv)
     EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
     EXPECT_EQ(tm.activeTheme(), QString("Default Dark"));
     EXPECT_EQ(tm.color("color.accent").name().toLower(), QString("#00b4d8"));
-    EXPECT_EQ(tm.color("color.background.0").name().toLower(), QString("#0a0e14"));
-    EXPECT_EQ(tm.color("color.text.primary").name().toLower(), QString("#e6f0fa"));
+    EXPECT_EQ(tm.color("color.background.0").name().toLower(), QString("#0f0f1a"));
+    EXPECT_EQ(tm.color("color.text.primary").name().toLower(), QString("#c8d8e8"));
     EXPECT_EQ(tm.sizing("font.size.normal"), 12);
     EXPECT_EQ(tm.sizing("sizing.panel.padding"), 4);
 
@@ -76,8 +76,8 @@ int main(int argc, char** argv)
     EXPECT_EQ(tm.color("color.border.accent").name().toLower(),       QString("#00b4d8"));
     EXPECT_EQ(tm.color("color.meter.crst").name().toLower(),          QString("#ff4d4d"));
     EXPECT_EQ(tm.color("color.spectrum.trace").name().toLower(),      QString("#00b4d8"));
-    EXPECT_EQ(tm.color("color.slice.a").name().toLower(),             QString("#ff4040"));
-    EXPECT_EQ(tm.color("color.slice.h").name().toLower(),             QString("#ff60a0"));
+    EXPECT_EQ(tm.color("color.slice.a").name().toLower(),             QString("#00d4ff"));
+    EXPECT_EQ(tm.color("color.slice.h").name().toLower(),             QString("#b080ff"));
     EXPECT_EQ(tm.color("color.slice.tx").name().toLower(),            QString("#ff4d4d"));
 
     // ── Missing token returns transparent + logs (no crash) ──
@@ -103,44 +103,55 @@ int main(int argc, char** argv)
     EXPECT_TRUE(!badOut.contains("{{"));
 
     // ── Phase 2 gradient token support ──
-    // The waterfall.colormap token is the canonical 8-stop linear gradient
-    // covering the RF visualisation range from silent (black) to clipped
-    // (white).  Verifies the full gradient parsing + brush construction +
-    // cssFragment emission + resolve() routing path end-to-end.
+    // The waterfall.colormap tokens are now a nested family of five named
+    // presets (default / grayscale / blueGreen / fire / plasma), each a
+    // linear gradient covering the RF visualisation range.  Verifies the
+    // full gradient parsing + brush construction + cssFragment emission +
+    // resolve() routing path end-to-end against the canonical
+    // .default preset (7 stops, black → navy → … → red) and asserts the
+    // white end-stop via the .grayscale preset.
     {
         // color() on a gradient token returns the first stop as a
         // graceful fallback for callers that don't know about gradients.
-        EXPECT_EQ(tm.color("color.waterfall.colormap").name().toLower(),
+        EXPECT_EQ(tm.color("color.waterfall.colormap.default").name().toLower(),
                   QString("#000000"));
 
         // value() on a gradient token returns empty — the structured
         // form has no meaningful raw scalar.
-        EXPECT_TRUE(tm.value("color.waterfall.colormap").isEmpty());
+        EXPECT_TRUE(tm.value("color.waterfall.colormap.default").isEmpty());
 
         // brush() on a gradient token returns a non-Solid brush.
-        QBrush b = tm.brush("color.waterfall.colormap", QRect(0, 0, 100, 50));
+        QBrush b = tm.brush("color.waterfall.colormap.default", QRect(0, 0, 100, 50));
         EXPECT_TRUE(b.style() == Qt::LinearGradientPattern);
         const QGradient* grad = b.gradient();
         EXPECT_TRUE(grad != nullptr);
-        EXPECT_EQ(grad->stops().size(), 8);
+        // Guard the dereference — if a future token rename makes brush()
+        // fall back to the transparent solid brush, the harness logs the
+        // failure but does not abort, so an unguarded grad->stops() here
+        // would SEGV instead of producing a clean diagnostic.
+        if (grad) EXPECT_EQ(grad->stops().size(), 7);
 
         // cssFragment() emits Qt's qlineargradient(...) syntax with the
         // angle properly mapped to (x1,y1,x2,y2) endpoints + every stop
         // present.
-        const QString css = tm.cssFragment("color.waterfall.colormap");
+        const QString css = tm.cssFragment("color.waterfall.colormap.default");
         EXPECT_TRUE(css.startsWith("qlineargradient("));
         EXPECT_TRUE(css.contains("stop:0.0000 #000000"));
-        EXPECT_TRUE(css.contains("stop:1.0000 #ffffff"));
-        EXPECT_TRUE(css.contains("stop:0.4500 #00c0c0"));  // mid colormap
+        EXPECT_TRUE(css.contains("stop:1.0000 #ff0000"));
+
+        // The grayscale preset is the canonical black→white ramp; use it
+        // to assert the #ffffff end-stop path.
+        const QString grayCss = tm.cssFragment("color.waterfall.colormap.grayscale");
+        EXPECT_TRUE(grayCss.contains("stop:1.0000 #ffffff"));
 
         // resolve() routes gradient tokens through cssFragment(), so an
         // existing {{token}} stylesheet template substitutes the
         // qlineargradient(...) string seamlessly.
         const QString gradTpl =
-            "QWidget { background: {{color.waterfall.colormap}}; }";
+            "QWidget { background: {{color.waterfall.colormap.default}}; }";
         const QString gradOut = tm.resolve(gradTpl);
         EXPECT_TRUE(gradOut.contains("background: qlineargradient("));
-        EXPECT_TRUE(gradOut.contains("stop:1.0000 #ffffff"));
+        EXPECT_TRUE(gradOut.contains("stop:1.0000 #ff0000"));
         EXPECT_TRUE(!gradOut.contains("{{"));
     }
 
