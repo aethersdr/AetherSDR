@@ -7965,9 +7965,41 @@ void MainWindow::buildMenuBar()
         });
     }
 
+    // Theme submenu — list every theme ThemeManager discovered in
+    // :/themes/ (built-ins) + ~/.config/AetherSDR/themes/ (user themes).
+    // setActiveTheme() handles persistence + emits themeChanged so every
+    // widget registered through applyStyleSheet re-themes on the next
+    // paint, no app restart required.
+    auto* themeMenu = viewMenu->addMenu("Theme");
+    auto* themeGroup = new QActionGroup(themeMenu);
+    auto rebuildThemeMenu = [themeMenu, themeGroup]() {
+        themeMenu->clear();
+        for (auto* a : themeGroup->actions())
+            themeGroup->removeAction(a);
+        auto& tm = ThemeManager::instance();
+        const QString active = tm.activeTheme();
+        for (const QString& name : tm.availableThemes()) {
+            auto* act = themeMenu->addAction(name);
+            act->setCheckable(true);
+            act->setChecked(name == active);
+            themeGroup->addAction(act);
+            QObject::connect(act, &QAction::triggered, themeMenu, [name] {
+                ThemeManager::instance().setActiveTheme(name);
+            });
+        }
+    };
+    rebuildThemeMenu();
+    // Rebuild whenever the active theme changes (covers in-app theme
+    // switches re-checking the right entry, and Phase-5 user themes
+    // saved from the editor below appearing in the list immediately).
+    QObject::connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                     themeMenu, rebuildThemeMenu);
+
     // Theme Editor (Phase 5 PR 1) — modeless dialog for live-editing
-    // the active theme's colour tokens.  Open-on-demand; only one
-    // instance at a time, cleaned up via WA_DeleteOnClose.
+    // the active theme's colour tokens.  Sits as a sibling of the
+    // Theme submenu above (which switches between saved themes);
+    // the editor is for authoring a new one.  Open-on-demand; only
+    // one instance at a time, cleaned up via WA_DeleteOnClose.
     auto* themeEditorAct = viewMenu->addAction("Theme Editor…");
     connect(themeEditorAct, &QAction::triggered, this, [this] {
         if (!m_themeEditorDialog) {

@@ -17,6 +17,7 @@
     </qresource>
     <qresource prefix="/themes">
         <file alias="default-dark.json">themes/default-dark.json</file>
+        <file alias="default-light.json">themes/default-light.json</file>
     </qresource>
     <qresource prefix="/help">
         <file alias="getting-started.md">help/getting-started.md</file>

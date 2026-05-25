@@ -1,0 +1,151 @@
+{
+  "schemaVersion": 1,
+  "name": "Default Light",
+  "author": "AetherSDR Team",
+  "version": "1.0",
+  "description": "AetherSDR's first light theme — daylight-readable variant of the canonical token taxonomy. Backgrounds invert (panel ramp goes light→dark for elevation), text colours invert (primary text now dark on light), accents darken to maintain contrast against the light canvas. Slice and meter colours keep semantic meaning. Waterfall colormaps are unchanged (intensity gradients render the same in both themes — they're opaque, not transparent).",
+  "tokens": {
+    "color": {
+      "background": {
+        "0": "#f5f5f8",
+        "1": "#dde5ed",
+        "2": "#c8d2dc",
+        "3": "#b0bcc8",
+        "tx": "#ffeacc",
+        "spectrum": "#ffffff"
+      },
+      "accent": "#0088b0",
+      "accent.bright": "#0098c0",
+      "accent.dim": "#005080",
+      "accent.warning": "#d08010",
+      "accent.danger": "#c02020",
+      "accent.success": "#1a8040",
+      "text": {
+        "primary": "#1a2a3a",
+        "secondary": "#506070",
+        "label": "#7090a8",
+        "disabled": "#a0b0c0"
+      },
+      "border": {
+        "subtle": "#c0c8d0",
+        "strong": "#90a0b0",
+        "accent": "#0088b0",
+        "tx": "#b08840"
+      },
+      "meter": {
+        "crst": "#c02020",
+        "rms": "#0088b0",
+        "thresh": "#d08010",
+        "peak": "#1a2a3a",
+        "gainReduction": "#a06010",
+        "bar.fill": "#c0c8d0"
+      },
+      "spectrum": {
+        "trace": "#0088b0",
+        "peakHold": "#c08020",
+        "average": "#506070",
+        "grid": "#d0d8e0"
+      },
+      "waterfall.colormap": {
+        "default": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 0.15, "color": "#000080" },
+            { "at": 0.30, "color": "#0040ff" },
+            { "at": 0.45, "color": "#00c8ff" },
+            { "at": 0.60, "color": "#00dc00" },
+            { "at": 0.80, "color": "#ffff00" },
+            { "at": 1.00, "color": "#ff0000" }
+          ]
+        },
+        "grayscale": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 1.00, "color": "#ffffff" }
+          ]
+        },
+        "blueGreen": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 0.25, "color": "#001e78" },
+            { "at": 0.50, "color": "#0064b4" },
+            { "at": 0.75, "color": "#00c882" },
+            { "at": 1.00, "color": "#dcffdc" }
+          ]
+        },
+        "fire": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 0.25, "color": "#800000" },
+            { "at": 0.50, "color": "#dc5000" },
+            { "at": 0.75, "color": "#ffc800" },
+            { "at": 1.00, "color": "#ffffdc" }
+          ]
+        },
+        "plasma": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 0.25, "color": "#50008c" },
+            { "at": 0.50, "color": "#c80078" },
+            { "at": 0.75, "color": "#f07800" },
+            { "at": 1.00, "color": "#ffff50" }
+          ]
+        }
+      },
+      "slice": {
+        "a": "#0088b0",
+        "b": "#a020a0",
+        "c": "#208020",
+        "d": "#a08000",
+        "e": "#c06000",
+        "f": "#008070",
+        "g": "#a04060",
+        "h": "#604090",
+        "tx": "#c02020",
+        "dim": {
+          "a": "#a0c8e0",
+          "b": "#e0c0e0",
+          "c": "#c0e0c0",
+          "d": "#e0e0c0",
+          "e": "#e0c8a0",
+          "f": "#c0e0d8",
+          "g": "#e0c0c8",
+          "h": "#d0c0e0"
+        }
+      }
+    },
+    "font": {
+      "family": {
+        "ui": "Inter",
+        "mono": "monospace"
+      },
+      "size": {
+        "tiny": 9,
+        "small": 10,
+        "normal": 12,
+        "large": 14
+      }
+    },
+    "sizing": {
+      "panel": {
+        "padding": 4,
+        "spacing": 4,
+        "cornerRadius": 4
+      },
+      "border": {
+        "subtle": 1,
+        "strong": 2
+      }
+    }
+  }
+}
