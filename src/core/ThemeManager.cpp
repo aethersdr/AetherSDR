@@ -355,6 +355,130 @@ bool ThemeManager::setActiveTheme(const QString& name)
     return true;
 }
 
+QStringList ThemeManager::allTokenKeys() const
+{
+    QStringList keys = m_tokens.keys();
+    keys.sort(Qt::CaseInsensitive);
+    return keys;
+}
+
+void ThemeManager::setColor(const QString& token, const QColor& color)
+{
+    if (!color.isValid()) return;
+    // Live-edit path stores the QColor as a hex string so cssFragment() /
+    // resolve() pick it up the same way they pick up freshly-loaded tokens.
+    // Skip the emit if nothing actually changed (avoids burning a re-paint
+    // cycle on a no-op edit).
+    const QString hex = color.name();
+    const auto it = m_tokens.constFind(token);
+    if (it != m_tokens.constEnd() && it.value().toString() == hex) return;
+    m_tokens.insert(token, QVariant(hex));
+    emit themeChanged();
+}
+
+void ThemeManager::setSizing(const QString& token, int value)
+{
+    const auto it = m_tokens.constFind(token);
+    if (it != m_tokens.constEnd() && it.value().toInt() == value) return;
+    m_tokens.insert(token, QVariant(value));
+    emit themeChanged();
+}
+
+bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
+{
+    if (newThemeName.trimmed().isEmpty()) return false;
+
+    // Rebuild a nested JSON object from the flat dotted keys so the on-disk
+    // shape matches the bundled themes (`color.background.0` round-trips to
+    // `{ "color": { "background": { "0": "..." } } }`).
+    QJsonObject root;
+    for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
+        const QStringList parts = it.key().split(QLatin1Char('.'));
+        QJsonValue leaf;
+        const QVariant& v = it.value();
+        if (v.userType() == QMetaType::QString)        leaf = v.toString();
+        else if (v.userType() == QMetaType::Int)       leaf = v.toInt();
+        else if (v.userType() == QMetaType::Double)    leaf = v.toDouble();
+        else if (v.userType() == QMetaType::Bool)      leaf = v.toBool();
+        else if (v.canConvert<ThemeGradient>()) {
+            // Gradient round-trip — preserves the {type, angle, stops}
+            // shape so the existing parseGradient() can re-read it.
+            const ThemeGradient g = v.value<ThemeGradient>();
+            QJsonObject gj;
+            gj.insert("type", g.type == ThemeGradient::Radial
+                                ? QStringLiteral("radial-gradient")
+                                : QStringLiteral("linear-gradient"));
+            gj.insert("angle", g.angle);
+            if (g.type == ThemeGradient::Radial) {
+                gj.insert("centerX", g.center.x());
+                gj.insert("centerY", g.center.y());
+                gj.insert("radius",  g.radius);
+            }
+            QJsonArray stops;
+            for (const auto& s : g.stops) {
+                QJsonObject sj;
+                sj.insert("at",    s.at);
+                sj.insert("color", s.color.name());
+                stops.append(sj);
+            }
+            gj.insert("stops", stops);
+            leaf = gj;
+        }
+        else continue;
+
+        // Walk the dotted path, materializing nested objects as we go.
+        QJsonObject* cursor = &root;
+        QList<std::pair<QJsonObject*, QString>> stack;
+        for (int i = 0; i < parts.size() - 1; ++i) {
+            QJsonObject child = cursor->value(parts[i]).toObject();
+            stack.push_back({cursor, parts[i]});
+            // Swap to a working copy we mutate, write back later.
+            cursor = new QJsonObject(child);
+        }
+        cursor->insert(parts.last(), leaf);
+        // Unwind: write each working copy back into its parent.
+        for (int i = stack.size() - 1; i >= 0; --i) {
+            stack[i].first->insert(stack[i].second, *cursor);
+            if (cursor != &root) delete cursor;
+            cursor = stack[i].first;
+        }
+    }
+
+    QJsonObject doc;
+    doc.insert("schemaVersion", 1);
+    doc.insert("name",          newThemeName);
+    doc.insert("author",        QStringLiteral("AetherSDR user"));
+    doc.insert("version",       QStringLiteral("1.0"));
+    doc.insert("description",   QStringLiteral("Created via the Theme Editor."));
+    doc.insert("tokens",        root);
+
+    const QString userDir = QStandardPaths::writableLocation(
+                                QStandardPaths::AppConfigLocation)
+                            + QStringLiteral("/themes");
+    QDir().mkpath(userDir);
+    const QString path = userDir + QLatin1Char('/')
+                       + newThemeName + QStringLiteral(".json");
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        qCWarning(lcGui) << "ThemeManager: saveCurrentThemeAs failed to open"
+                         << path << f.errorString();
+        return false;
+    }
+    f.write(QJsonDocument(doc).toJson(QJsonDocument::Indented));
+    f.close();
+
+    // Register the new theme in the path map so availableThemes() picks it
+    // up immediately, then make it the active theme (loads cleanly from
+    // the file we just wrote, so the on-disk shape doubles as a validation
+    // check).
+    m_themePaths.insert(newThemeName, path);
+    m_activeTheme = newThemeName;
+    AppSettings::instance().setValue("ActiveTheme", newThemeName);
+    AppSettings::instance().save();
+    emit themeChanged();
+    return true;
+}
+
 QColor ThemeManager::color(const QString& token) const
 {
     const auto it = m_tokens.constFind(token);

@@ -138,9 +138,16 @@ public:
     QString     activeTheme() const;
     bool        setActiveTheme(const QString& name);
 
-    // Phase 1 didn't implement save / import / export — those land with
-    // the editor in Phase 5.  Reserved on the API surface so consumers
-    // can be written against the final shape from day 1.
+    // Phase 5 — editor support.  Enumerate every token and mutate
+    // scalar values in-memory.  Mutations emit themeChanged so every
+    // widget registered through applyStyleSheet re-paints with the new
+    // value on the next event-loop turn.  Edits are session-local
+    // until saved through saveCurrentThemeAs() (writes m_tokens to
+    // `~/.config/AetherSDR/themes/<name>.json`).
+    QStringList allTokenKeys() const;
+    void        setColor(const QString& token, const QColor& color);
+    void        setSizing(const QString& token, int value);
+    bool        saveCurrentThemeAs(const QString& newThemeName);
 
 signals:
     // Fired whenever the active theme changes.  Every widget that reads

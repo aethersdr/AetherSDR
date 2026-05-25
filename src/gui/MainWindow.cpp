@@ -95,6 +95,7 @@
 #include "ShortcutDialog.h"
 #include "MultiFlexDialog.h"
 #include "HelpDialog.h"
+#include "ThemeEditorDialog.h"
 #include "WhatsNewDialog.h"
 #include "models/SliceModel.h"
 #include "models/MeterModel.h"
@@ -7963,6 +7964,22 @@ void MainWindow::buildMenuBar()
             m_bandPlanMgr->setActivePlan(name);
         });
     }
+
+    // Theme Editor (Phase 5 PR 1) — modeless dialog for live-editing
+    // the active theme's colour tokens.  Open-on-demand; only one
+    // instance at a time, cleaned up via WA_DeleteOnClose.
+    auto* themeEditorAct = viewMenu->addAction("Theme Editor…");
+    connect(themeEditorAct, &QAction::triggered, this, [this] {
+        if (!m_themeEditorDialog) {
+            m_themeEditorDialog = new ThemeEditorDialog(this);
+            m_themeEditorDialog->setAttribute(Qt::WA_DeleteOnClose);
+            connect(m_themeEditorDialog, &QObject::destroyed, this,
+                    [this] { m_themeEditorDialog = nullptr; });
+        }
+        m_themeEditorDialog->show();
+        m_themeEditorDialog->raise();
+        m_themeEditorDialog->activateWindow();
+    });
 
     auto* singleClickTuneAct = viewMenu->addAction("Single-Click to Tune");
     singleClickTuneAct->setCheckable(true);

@@ -677,6 +677,7 @@ set(GUI_SOURCES
     src/gui/MultiFlexDialog.cpp
     src/gui/HelpDialog.cpp
     src/gui/WhatsNewDialog.cpp
+    src/gui/ThemeEditorDialog.cpp
 )
 
 set(ALL_SOURCES
