@@ -298,6 +298,12 @@ Current behavior:
 - determine the panadapter that owns the gesture
 - if the active slice is already on that pan, use it
 - otherwise choose a slice whose `panId()` matches that pan
+- if the gesture's pan has zero slices (the user closed the last slice's
+  VFO with ✕ but the pan stays open), the resolver returns `nullptr`
+  rather than hijacking the active slice from a different pan:
+  - click → spawn a new slice on the empty pan at the clicked frequency
+    via `RadioModel::addSliceOnPan(panId, mhz)` (matches SmartSDR; #3086)
+  - wheel scroll → no-op (a stray scroll shouldn't conjure a slice)
 
 Important implementation detail:
 

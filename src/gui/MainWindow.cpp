@@ -12059,15 +12059,18 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         menu->syncExtraDisplaySettings(false, 1.15f, 80, 0);
     });
 
-    auto resolveSpectrumTuneTarget = [this, sw]() -> SliceModel* {
-        QString panId;
+    auto resolveClickedPanId = [this, sw]() -> QString {
         for (auto* panApplet : m_panStack->allApplets()) {
-            if (panApplet->spectrumWidget() == sw) {
-                panId = panApplet->panId();
-                break;
-            }
+            if (panApplet->spectrumWidget() == sw)
+                return panApplet->panId();
         }
+        return {};
+    };
 
+    auto resolveSpectrumTuneTarget = [this, resolveClickedPanId]() -> SliceModel* {
+        const QString panId = resolveClickedPanId();
+
+        // Pan not in stack — legacy fallback to the active slice.
         if (panId.isEmpty())
             return activeSlice();
 
@@ -12079,18 +12082,29 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 return candidate;
         }
 
-        return activeSlice();
+        // Empty pan (user closed the last slice with ✕ — the pan stays open
+        // by design). Do NOT fall back to activeSlice(): that slice lives on
+        // a *different* pan and would get dragged onto this band. Let the
+        // caller decide (click → spawn slice; scroll → no-op). Fixes #3086.
+        return nullptr;
     };
 
     // ── Click-to-tune ────────────────────────────────────────────────────
     // Same-pan and cross-pan tune requests both resolve a target slice first,
     // then run through the shared absolute/incremental tuning policy.
     connect(sw, &SpectrumWidget::frequencyClicked,
-            this, [this, resolveSpectrumTuneTarget](double mhz) {
+            this, [this, resolveSpectrumTuneTarget, resolveClickedPanId](double mhz) {
         if (auto* target = resolveSpectrumTuneTarget()) {
             queueActiveSliceForSpectrumTarget(target->sliceId());
             applyTuneRequest(target, mhz, TuneIntent::AbsoluteJump, "spectrum-click");
+            return;
         }
+        // Empty pan → spawn a new slice on it at the clicked frequency,
+        // matching SmartSDR. addSliceOnPan honors the radio's max-slices
+        // limit via sliceCreateFailed. Fixes #3086.
+        const QString panId = resolveClickedPanId();
+        if (!panId.isEmpty())
+            m_radioModel.addSliceOnPan(panId, mhz);
     });
     connect(sw, &SpectrumWidget::incrementalTuneRequested,
             this, [this, resolveSpectrumTuneTarget](double mhz) {
@@ -12098,6 +12112,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             queueActiveSliceForSpectrumTarget(target->sliceId());
             applyTuneRequest(target, mhz, TuneIntent::IncrementalTune, "spectrum-incremental");
         }
+        // Empty pan + wheel scroll → no-op. A stray scroll gesture shouldn't
+        // conjure a slice; click is the explicit "create here" affordance.
     });
 
     // ── Spot trigger — notify the radio when a spot label is clicked (#341)
