@@ -3525,7 +3525,6 @@ MainWindow::MainWindow(QWidget* parent)
             else if (kvs.contains("state") && !kvs.value("state").startsWith("TRANSMIT"))
                 m_appletPanel->sMeterWidget()->setTransmitting(false);
             m_appletPanel->sMeterWidget()->setTxMeters(watts, swr);
-            m_appletPanel->healthApplet()->updateAmplifierMeters(watts, swr);
         }
     });
     connect(&m_pgxlConn, &PgxlConnection::connected, this, [this]() {

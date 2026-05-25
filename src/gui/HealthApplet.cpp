@@ -5,11 +5,13 @@
 
 #include <QDateTime>
 #include <QEvent>
+#include <QHideEvent>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QShowEvent>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -66,20 +68,29 @@ float returnLossDbForSwr(float swr)
     return std::clamp(-20.0f * std::log10(reflectionCoefficient), 0.0f, kMaxReturnLossDb);
 }
 
-QString labelStyle(const QString& color, int px = 10, bool bold = false)
+QColor themeColor(const QString& token, int alpha = 255)
 {
-    return QStringLiteral("QLabel { color: %1; font-size: %2px; %3 }")
-        .arg(color)
-        .arg(px)
-        .arg(bold ? QStringLiteral("font-weight: bold;") : QString());
+    QColor c = ThemeManager::instance().color(token);
+    c.setAlpha(alpha);
+    return c;
 }
 
-QString pillStyle(const QString& bg, const QString& border, const QString& fg)
+QString labelStyle(const QString& colorToken, int px = 10, bool bold = false)
 {
-    return QStringLiteral(
-        "QLabel { background: %1; border: 1px solid %2; border-radius: 3px; "
-        "color: %3; font-size: 10px; font-weight: bold; padding: 1px 5px; }")
-        .arg(bg, border, fg);
+    return ThemeManager::instance().resolve(QStringLiteral(
+        "QLabel { color: {{%1}}; font-size: %2px; %3 }")
+        .arg(colorToken)
+        .arg(px)
+        .arg(bold ? QStringLiteral("font-weight: bold;") : QString()));
+}
+
+QString pillStyle(const QString& bgToken, const QString& borderToken,
+                  const QString& fgToken)
+{
+    return ThemeManager::instance().resolve(QStringLiteral(
+        "QLabel { background: {{%1}}; border: 1px solid {{%2}}; border-radius: 3px; "
+        "color: {{%3}}; font-size: 10px; font-weight: bold; padding: 1px 5px; }")
+        .arg(bgToken, borderToken, fgToken));
 }
 
 QRectF laneRect(const QRectF& graphArea, int lane)
@@ -100,6 +111,8 @@ public:
     {
         setMinimumHeight(126);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                this, [this]() { update(); });
     }
 
     void setSamples(const QVector<AntennaHealthSample>& samples)
@@ -115,8 +128,8 @@ protected:
         p.setRenderHint(QPainter::Antialiasing, true);
 
         const QRectF r = rect().adjusted(1, 1, -1, -1);
-        p.setPen(QPen(QColor(0x20, 0x30, 0x42), 1));
-        p.setBrush(QColor(0x08, 0x0d, 0x14));
+        p.setPen(QPen(themeColor(QStringLiteral("color.border.strong")), 1));
+        p.setBrush(themeColor(QStringLiteral("color.background.0")));
         p.drawRoundedRect(r, 5, 5);
 
         const QRectF area = r.adjusted(5, 5, -5, -5);
@@ -129,16 +142,19 @@ protected:
         drawGrid(p, powerLane, QStringLiteral("PWR"));
 
         if (m_samples.size() < 2) {
-            p.setPen(QColor(0x55, 0x66, 0x74));
+            p.setPen(themeColor(QStringLiteral("color.text.secondary")));
             p.drawText(area, Qt::AlignCenter, QStringLiteral("RF IDLE"));
             return;
         }
 
         drawSeverityBands(p, area);
         drawIncidentMarkers(p, area);
-        drawTrace(p, swrLane, GraphMetric::Swr, QColor(0x56, 0xd8, 0xa3));
-        drawTrace(p, returnLossLane, GraphMetric::ReturnLoss, QColor(0xff, 0xd0, 0x66));
-        drawTrace(p, powerLane, GraphMetric::Power, QColor(0x55, 0xa7, 0xff));
+        drawTrace(p, swrLane, GraphMetric::Swr,
+                  themeColor(QStringLiteral("color.accent.success")));
+        drawTrace(p, returnLossLane, GraphMetric::ReturnLoss,
+                  themeColor(QStringLiteral("color.accent.warning")));
+        drawTrace(p, powerLane, GraphMetric::Power,
+                  themeColor(QStringLiteral("color.accent")));
     }
 
 private:
@@ -151,15 +167,15 @@ private:
 
     void drawGrid(QPainter& p, const QRectF& lane, const QString& title)
     {
-        p.setPen(QPen(QColor(0x18, 0x24, 0x30), 1));
+        p.setPen(QPen(themeColor(QStringLiteral("color.border.subtle")), 1));
         p.drawLine(QPointF(lane.left(), lane.center().y()),
                    QPointF(lane.right(), lane.center().y()));
-        p.setPen(QPen(QColor(0x26, 0x36, 0x46), 1, Qt::DashLine));
+        p.setPen(QPen(themeColor(QStringLiteral("color.background.2")), 1, Qt::DashLine));
         p.drawLine(QPointF(lane.left(), lane.top() + lane.height() * 0.22),
                    QPointF(lane.right(), lane.top() + lane.height() * 0.22));
         p.drawLine(QPointF(lane.left(), lane.bottom() - lane.height() * 0.22),
                    QPointF(lane.right(), lane.bottom() - lane.height() * 0.22));
-        p.setPen(QColor(0x62, 0x72, 0x82));
+        p.setPen(themeColor(QStringLiteral("color.text.secondary")));
         QFont f = p.font();
         f.setPixelSize(9);
         f.setBold(true);
@@ -178,8 +194,8 @@ private:
             const qreal x1 = xForIndex(i, area);
             const int alpha = static_cast<int>(45 + clamp01(s.severity) * 92);
             const QColor c = s.severity > 0.72f
-                ? QColor(0xff, 0x5a, 0x4a, alpha)
-                : QColor(0xff, 0xb8, 0x3d, alpha);
+                ? themeColor(QStringLiteral("color.accent.danger"), alpha)
+                : themeColor(QStringLiteral("color.accent.warning"), alpha);
             p.fillRect(QRectF(std::min(x0, x1), area.top(),
                               std::abs(x1 - x0) + 1.0, area.height()), c);
         }
@@ -202,13 +218,15 @@ private:
                 continue;
 
             const bool critical = s.incidentSeverity >= 0.72f;
-            QColor c = critical ? QColor(0xff, 0x68, 0x58) : QColor(0xff, 0xc1, 0x4f);
+            QColor c = critical
+                ? themeColor(QStringLiteral("color.accent.danger"))
+                : themeColor(QStringLiteral("color.accent.warning"));
             p.setPen(QPen(c, critical ? 1.8 : 1.3));
             p.drawLine(QPointF(x, area.top() + 1.0), QPointF(x, area.bottom() - 1.0));
             p.setBrush(c);
             p.drawEllipse(QPointF(x, area.top() + 3.5), 2.6, 2.6);
 
-            QColor textBg(0x08, 0x0d, 0x14, 215);
+            const QColor textBg = themeColor(QStringLiteral("color.background.0"), 215);
             const qreal labelX = std::clamp(x + 3.0, area.left(), area.right() - 22.0);
             const QRectF labelRect(labelX, area.top(), 22.0, 11.0);
             p.setPen(Qt::NoPen);
@@ -284,7 +302,7 @@ private:
         p.setPen(QPen(color, 1.55, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPath(path);
 
-        p.setPen(QPen(QColor(0xd8, 0xe6, 0xef, 82), 1, Qt::DashLine));
+        p.setPen(QPen(themeColor(QStringLiteral("color.meter.peak"), 82), 1, Qt::DashLine));
         p.drawLine(QPointF(lane.left(), lane.center().y()),
                    QPointF(lane.right(), lane.center().y()));
     }
@@ -313,12 +331,10 @@ HealthApplet::HealthApplet(QWidget* parent)
     m_statusLabel = new QLabel(QStringLiteral("IDLE"), body);
     m_statusLabel->setAlignment(Qt::AlignCenter);
     m_statusLabel->setMinimumWidth(58);
-    m_statusLabel->setStyleSheet(pillStyle("#151c25", "#263546", "#9fb0c2"));
     m_statusLabel->setToolTip(QStringLiteral("Overall antenna health state. Click HLTH to pause or resume the graph."));
     topRow->addWidget(m_statusLabel);
 
     m_sourceLabel = new QLabel(QStringLiteral("SRC --"), body);
-    m_sourceLabel->setStyleSheet(labelStyle("#7f91a4", 10, true));
     m_sourceLabel->setToolTip(QStringLiteral("Current meter source: AMP, TUN, or RAD. HLTH uses the freshest active source."));
     topRow->addWidget(m_sourceLabel);
     topRow->addStretch();
@@ -326,7 +342,6 @@ HealthApplet::HealthApplet(QWidget* parent)
     m_scoreLabel = new QLabel(QStringLiteral("--"), body);
     m_scoreLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_scoreLabel->setMinimumWidth(28);
-    m_scoreLabel->setStyleSheet(labelStyle("#d8e6ef", 11, true));
     m_scoreLabel->setToolTip(QStringLiteral("Health score from 0 to 100 based on SWR, return loss, variance, and power sag."));
     topRow->addWidget(m_scoreLabel);
 
@@ -339,17 +354,13 @@ HealthApplet::HealthApplet(QWidget* parent)
     auto* valueRow = new QHBoxLayout;
     valueRow->setSpacing(5);
     m_swrLabel = new QLabel(QStringLiteral("SWR 1.00"), body);
-    m_swrLabel->setStyleSheet(labelStyle("#56d8a3", 10, true));
     m_swrLabel->setToolTip(QStringLiteral("Standing wave ratio from the active RF meter source."));
     m_returnLossLabel = new QLabel(QStringLiteral("RL --"), body);
-    m_returnLossLabel->setStyleSheet(labelStyle("#ffd066", 10, true));
     m_returnLossLabel->setToolTip(QStringLiteral("Return loss in dB calculated from SWR. Higher is better."));
     m_powerLabel = new QLabel(QStringLiteral("PWR 0 W"), body);
-    m_powerLabel->setStyleSheet(labelStyle("#55a7ff", 10, true));
     m_powerLabel->setToolTip(QStringLiteral("Smoothed forward output power from the active RF meter source."));
     m_varianceLabel = new QLabel(QStringLiteral("VAR --"), body);
     m_varianceLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_varianceLabel->setStyleSheet(labelStyle("#8fa1b4", 10, false));
     m_varianceLabel->setToolTip(QStringLiteral("Recent SWR span. Broad variance can point to grounding or counterpoise problems."));
     valueRow->addWidget(m_swrLabel);
     valueRow->addWidget(m_returnLossLabel);
@@ -377,7 +388,9 @@ HealthApplet::HealthApplet(QWidget* parent)
     m_tickTimer = new QTimer(this);
     m_tickTimer->setInterval(kTickMs);
     connect(m_tickTimer, &QTimer::timeout, this, &HealthApplet::appendFrame);
-    m_tickTimer->start();
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &HealthApplet::applyTheme);
+    applyTheme();
 }
 
 bool HealthApplet::eventFilter(QObject*, QEvent* event)
@@ -393,6 +406,13 @@ bool HealthApplet::eventFilter(QObject*, QEvent* event)
     return false;
 }
 
+void HealthApplet::hideEvent(QHideEvent* event)
+{
+    if (m_tickTimer)
+        m_tickTimer->stop();
+    QWidget::hideEvent(event);
+}
+
 void HealthApplet::mouseReleaseEvent(QMouseEvent* event)
 {
     if (event->button() == Qt::LeftButton) {
@@ -402,6 +422,15 @@ void HealthApplet::mouseReleaseEvent(QMouseEvent* event)
     }
 
     QWidget::mouseReleaseEvent(event);
+}
+
+void HealthApplet::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    if (m_tickTimer && !m_paused) {
+        m_tickTimer->start();
+        appendFrame();
+    }
 }
 
 void HealthApplet::setMeterModel(MeterModel* model)
@@ -519,7 +548,7 @@ HealthApplet::MeterSnapshot HealthApplet::bestSnapshot(qint64 nowMs,
 
 void HealthApplet::appendFrame()
 {
-    if (m_paused)
+    if (m_paused || !isVisible())
         return;
 
     MeterSource source = MeterSource::None;
@@ -618,12 +647,39 @@ void HealthApplet::appendFrame()
     updateStatusLabels(sample, source);
 }
 
+void HealthApplet::applyTheme()
+{
+    if (!m_statusLabel)
+        return;
+
+    m_sourceLabel->setStyleSheet(labelStyle(QStringLiteral("color.text.secondary"), 10, true));
+    m_swrLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.success"), 10, true));
+    m_returnLossLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.warning"), 10, true));
+    m_powerLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent"), 10, true));
+    m_varianceLabel->setStyleSheet(labelStyle(QStringLiteral("color.text.secondary"), 10, false));
+
+    if (m_graph)
+        m_graph->update();
+
+    if (m_paused) {
+        showPausedState();
+    } else if (!m_history.isEmpty()) {
+        updateStatusLabels(m_history.constLast(), m_lastSource);
+    } else {
+        updateStatusLabels({}, MeterSource::None);
+    }
+}
+
 void HealthApplet::togglePaused()
 {
     m_paused = !m_paused;
     if (m_paused) {
+        if (m_tickTimer)
+            m_tickTimer->stop();
         showPausedState();
     } else {
+        if (m_tickTimer && isVisible())
+            m_tickTimer->start();
         appendFrame();
     }
 }
@@ -634,9 +690,11 @@ void HealthApplet::showPausedState()
         return;
 
     m_statusLabel->setText(QStringLiteral("PAUSED"));
-    m_statusLabel->setStyleSheet(pillStyle("#182539", "#4d7eba", "#d8ecff"));
+    m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.1"),
+                                            QStringLiteral("color.accent"),
+                                            QStringLiteral("color.text.primary")));
     m_scoreLabel->setText(QStringLiteral("II"));
-    m_scoreLabel->setStyleSheet(labelStyle("#d8ecff", 11, true));
+    m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent"), 11, true));
 }
 
 void HealthApplet::pushRecent(float powerWatts, float swr, float returnLossDb)
@@ -711,6 +769,7 @@ void HealthApplet::updateStatusLabels(const AntennaHealthSample& sample,
     if (!m_statusLabel)
         return;
 
+    m_lastSource = source;
     m_sourceLabel->setText(QStringLiteral("SRC %1").arg(sourceText(source)));
     m_swrLabel->setText(QStringLiteral("SWR %1").arg(sample.swr, 0, 'f', 2));
     m_returnLossLabel->setText(sample.active
@@ -723,9 +782,11 @@ void HealthApplet::updateStatusLabels(const AntennaHealthSample& sample,
 
     if (!sample.active) {
         m_statusLabel->setText(QStringLiteral("IDLE"));
-        m_statusLabel->setStyleSheet(pillStyle("#151c25", "#263546", "#9fb0c2"));
+        m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.0"),
+                                                QStringLiteral("color.border.strong"),
+                                                QStringLiteral("color.text.secondary")));
         m_scoreLabel->setText(QStringLiteral("--"));
-        m_scoreLabel->setStyleSheet(labelStyle("#d8e6ef", 11, true));
+        m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.text.primary"), 11, true));
         return;
     }
 
@@ -735,16 +796,22 @@ void HealthApplet::updateStatusLabels(const AntennaHealthSample& sample,
 
     if (sample.severity >= 0.72f) {
         m_statusLabel->setText(QStringLiteral("GROUND?"));
-        m_statusLabel->setStyleSheet(pillStyle("#3a1516", "#d0473b", "#ffd8d2"));
-        m_scoreLabel->setStyleSheet(labelStyle("#ffb0a8", 11, true));
+        m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.tx"),
+                                                QStringLiteral("color.accent.danger"),
+                                                QStringLiteral("color.accent.danger")));
+        m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.danger"), 11, true));
     } else if (sample.severity >= 0.34f) {
         m_statusLabel->setText(QStringLiteral("WATCH"));
-        m_statusLabel->setStyleSheet(pillStyle("#332511", "#c8892a", "#ffe2a8"));
-        m_scoreLabel->setStyleSheet(labelStyle("#ffd28a", 11, true));
+        m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.tx"),
+                                                QStringLiteral("color.accent.warning"),
+                                                QStringLiteral("color.accent.warning")));
+        m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.warning"), 11, true));
     } else {
         m_statusLabel->setText(QStringLiteral("OK"));
-        m_statusLabel->setStyleSheet(pillStyle("#103021", "#2ca66a", "#bdf8d8"));
-        m_scoreLabel->setStyleSheet(labelStyle("#bdf8d8", 11, true));
+        m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.1"),
+                                                QStringLiteral("color.accent.success"),
+                                                QStringLiteral("color.accent.success")));
+        m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.success"), 11, true));
     }
 }
 

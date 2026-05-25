@@ -5,7 +5,9 @@
 #include <QWidget>
 
 class QLabel;
+class QHideEvent;
 class QMouseEvent;
+class QShowEvent;
 class QTimer;
 
 namespace AetherSDR {
@@ -45,7 +47,9 @@ public:
 
 private:
     bool eventFilter(QObject* watched, QEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void showEvent(QShowEvent* event) override;
 
     enum class MeterSource {
         None,
@@ -64,6 +68,7 @@ private:
     void cacheMeters(MeterSource source, float fwdPowerWatts, float swr);
     MeterSnapshot bestSnapshot(qint64 nowMs, MeterSource* source) const;
     void appendFrame();
+    void applyTheme();
     void togglePaused();
     void showPausedState();
     void updateStatusLabels(const AntennaHealthSample& sample, MeterSource source);
@@ -87,6 +92,7 @@ private:
     MeterSnapshot m_radioSnapshot;
     MeterSnapshot m_tunerSnapshot;
     MeterSnapshot m_ampSnapshot;
+    MeterSource m_lastSource{MeterSource::None};
 
     QVector<AntennaHealthSample> m_history;
     QVector<float> m_recentPower;
