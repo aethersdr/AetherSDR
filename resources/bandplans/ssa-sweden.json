@@ -1,6 +1,6 @@
 {
   "name": "SSA (Sweden)",
-  "description": "Swedish band plan: IARU Region 1 with PTSFS 2025:1 national constraints. 6 m capped at 52 MHz, power notes on 30 m and 60 m, Swedish segment labels.",
+  "description": "Swedish band plan: IARU Region 1 with PTSFS 2025:1 national constraints. 6 m capped at 52 MHz, power notes on 30 m and 60 m, Swedish segment labels. No 'license_classes' block is declared: PTSFS 2025:1 treats Swedish amateurs as a single qualification tier (the older CEPT Class 1 / Class 2 split was retired), so per-segment class filtering would be misleading; the ATU pre-tune dialog hides the class combobox accordingly.",
   "version": 1,
   "segments": [
     {"low": 1.810, "high": 1.838, "label": "CW", "license": "", "color": "#3060ff"},
