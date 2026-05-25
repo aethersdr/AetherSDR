@@ -117,10 +117,12 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     // Sample initial pin state
     DWORD modemStat = 0;
     ::GetCommModemStatus(hPort, &modemStat);
-    bool cts = (modemStat & MS_CTS_ON) != 0;
-    bool dsr = (modemStat & MS_DSR_ON) != 0;
+    bool cts = (modemStat & MS_CTS_ON)  != 0;
+    bool dsr = (modemStat & MS_DSR_ON)  != 0;
+    bool dcd = (modemStat & MS_RLSD_ON) != 0;   // RLSD = Receive Line Signal Detect = DCD
     m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
     m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
+    m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
     m_debounceTimer.start();
 
     m_hWin        = static_cast<void*>(hPort);
@@ -128,9 +130,10 @@ bool SerialPortController::open(const QString& portName, int baudRate,
     m_winBaudRate = baudRate;
 
     qCDebug(lcDevices) << "SerialPortController: opened" << portName << "at" << baudRate
-                       << "(Win32) DSR=" << dsr << "CTS=" << cts
+                       << "(Win32) DSR=" << dsr << "CTS=" << cts << "DCD=" << dcd
                        << "dsrFn=" << static_cast<int>(m_dsrFn)
-                       << "ctsFn=" << static_cast<int>(m_ctsFn);
+                       << "ctsFn=" << static_cast<int>(m_ctsFn)
+                       << "dcdFn=" << static_cast<int>(m_dcdFn);
 
     // Start the WaitCommEvent watcher thread
     m_stopWinWatch.store(false);
@@ -149,12 +152,14 @@ void SerialPortController::close()
 
     // Emit PTT release before closing to avoid stuck TX
     bool pttWasActive = (m_ctsFn == InputFunction::PttInput && m_lastCtsActive)
-                     || (m_dsrFn == InputFunction::PttInput && m_lastDsrActive);
+                     || (m_dsrFn == InputFunction::PttInput && m_lastDsrActive)
+                     || (m_dcdFn == InputFunction::PttInput && m_lastDcdActive);
     if (pttWasActive)
         emit externalPttChanged(false);
 
     m_lastCtsActive = false;
     m_lastDsrActive = false;
+    m_lastDcdActive = false;
 
     // Deassert configured output pins
     if (m_dtrFn != PinFunction::None)
@@ -231,26 +236,29 @@ void SerialPortController::runWinWatcher()
         // GetCommModemStatus in the context of a WaitCommEvent completion.
         DWORD modemStat = 0;
         ::GetCommModemStatus(hPort, &modemStat);
-        bool dsr = (modemStat & MS_DSR_ON) != 0;
-        bool cts = (modemStat & MS_CTS_ON) != 0;
+        bool dsr = (modemStat & MS_DSR_ON)  != 0;
+        bool cts = (modemStat & MS_CTS_ON)  != 0;
+        bool dcd = (modemStat & MS_RLSD_ON) != 0;
 
         qCDebug(lcDevices) << "SerialPortController: WaitCommEvent"
-                           << Qt::hex << evtMask << "DSR=" << dsr << "CTS=" << cts;
+                           << Qt::hex << evtMask
+                           << "DSR=" << dsr << "CTS=" << cts << "DCD=" << dcd;
 
         // Marshal the pin state back to this object's thread
-        QMetaObject::invokeMethod(this, [this, dsr, cts]() {
-            processWinPinChange(dsr, cts);
+        QMetaObject::invokeMethod(this, [this, dsr, cts, dcd]() {
+            processWinPinChange(dsr, cts, dcd);
         }, Qt::QueuedConnection);
     }
 
     qCDebug(lcDevices) << "SerialPortController: watcher thread exiting";
 }
 
-void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw)
+void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw, bool dcdRaw)
 {
     if (!isOpen()) return;
     bool ctsActive = m_ctsActiveHigh ? ctsRaw : !ctsRaw;
     bool dsrActive = m_dsrActiveHigh ? dsrRaw : !dsrRaw;
+    bool dcdActive = m_dcdActiveHigh ? dcdRaw : !dcdRaw;
 
     bool debounceOk = m_debounceTimer.elapsed() >= DEBOUNCE_MS;
 
@@ -267,12 +275,19 @@ void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw)
         m_debounceTimer.restart();
         emit externalPttChanged(dsrActive);
     }
+    if (m_dcdFn == InputFunction::PttInput && dcdActive != m_lastDcdActive && debounceOk) {
+        qCDebug(lcDevices) << "SerialPortController: DCD PTT edge →" << dcdActive;
+        m_lastDcdActive = dcdActive;
+        m_debounceTimer.restart();
+        emit externalPttChanged(dcdActive);
+    }
 
     // ── CW straight key ──────────────────────────────────────────────────
     bool keyDown = false;
     bool hasKey = false;
     if (m_ctsFn == InputFunction::CwKeyInput) { keyDown = ctsActive; hasKey = true; }
     if (m_dsrFn == InputFunction::CwKeyInput) { keyDown = dsrActive; hasKey = true; }
+    if (m_dcdFn == InputFunction::CwKeyInput) { keyDown = dcdActive; hasKey = true; }
     if (hasKey && keyDown != m_lastKeyDown) {
         m_lastKeyDown = keyDown;
         emit cwKeyChanged(keyDown);
@@ -283,8 +298,15 @@ void SerialPortController::processWinPinChange(bool dsrRaw, bool ctsRaw)
     bool hasPaddle = false;
     if (m_ctsFn == InputFunction::CwDitInput) { ditActive = ctsActive; hasPaddle = true; }
     if (m_dsrFn == InputFunction::CwDitInput) { ditActive = dsrActive; hasPaddle = true; }
+    if (m_dcdFn == InputFunction::CwDitInput) { ditActive = dcdActive; hasPaddle = true; }
     if (m_ctsFn == InputFunction::CwDahInput) { dahActive = ctsActive; hasPaddle = true; }
     if (m_dsrFn == InputFunction::CwDahInput) { dahActive = dsrActive; hasPaddle = true; }
+    if (m_dcdFn == InputFunction::CwDahInput) { dahActive = dcdActive; hasPaddle = true; }
+
+    // Track DCD edge even when it isn't driving paddle/key, so the
+    // close-time stuck-PTT check above and the polarity-flip rebaseline
+    // in loadSettings() both see the latest state.
+    m_lastDcdActive = dcdActive;
 
     if (m_paddleSwap) std::swap(ditActive, dahActive);
 
@@ -332,15 +354,19 @@ bool SerialPortController::open(const QString& portName, int baudRate,
         auto pinState = m_port.pinoutSignals();
         bool cts = pinState.testFlag(QSerialPort::ClearToSendSignal);
         bool dsr = pinState.testFlag(QSerialPort::DataSetReadySignal);
+        bool dcd = pinState.testFlag(QSerialPort::DataCarrierDetectSignal);
         m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
         m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
+        m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
         qCDebug(lcDevices) << "SerialPortController: open() initial pin sample —"
                            << "raw=" << Qt::hex << static_cast<int>(pinState)
-                           << "DSR=" << dsr << "CTS=" << cts
+                           << "DSR=" << dsr << "CTS=" << cts << "DCD=" << dcd
                            << "dsrActiveHigh=" << m_dsrActiveHigh
                            << "ctsActiveHigh=" << m_ctsActiveHigh
+                           << "dcdActiveHigh=" << m_dcdActiveHigh
                            << "→ lastDsrActive=" << m_lastDsrActive
-                           << "lastCtsActive=" << m_lastCtsActive;
+                           << "lastCtsActive=" << m_lastCtsActive
+                           << "lastDcdActive=" << m_lastDcdActive;
     }
     m_pollLogged = false;
     m_debounceTimer.start();
@@ -365,12 +391,14 @@ void SerialPortController::close()
     m_pollTimer.stop();
     if (m_port.isOpen()) {
         bool pttWasActive = (m_ctsFn == InputFunction::PttInput && m_lastCtsActive)
-                         || (m_dsrFn == InputFunction::PttInput && m_lastDsrActive);
+                         || (m_dsrFn == InputFunction::PttInput && m_lastDsrActive)
+                         || (m_dcdFn == InputFunction::PttInput && m_lastDcdActive);
         if (pttWasActive)
             emit externalPttChanged(false);
 
         m_lastCtsActive = false;
         m_lastDsrActive = false;
+        m_lastDcdActive = false;
 
         if (m_dtrFn != PinFunction::None)
             m_port.setDataTerminalReady(!m_dtrActiveHigh);
@@ -421,7 +449,9 @@ void SerialPortController::applyPin(PinFunction targetFn, bool active)
 void SerialPortController::updatePolling()
 {
 #ifdef HAVE_SERIALPORT
-    bool needsPoll = (m_ctsFn != InputFunction::None || m_dsrFn != InputFunction::None);
+    bool needsPoll = (m_ctsFn != InputFunction::None
+                    || m_dsrFn != InputFunction::None
+                    || m_dcdFn != InputFunction::None);
     if (needsPoll && m_port.isOpen() && !m_pollTimer.isActive())
         m_pollTimer.start(POLL_INTERVAL_MS);
     else if (!needsPoll && m_pollTimer.isActive())
@@ -444,13 +474,17 @@ void SerialPortController::pollInputPins()
 
     bool cts = pinState.testFlag(QSerialPort::ClearToSendSignal);
     bool dsr = pinState.testFlag(QSerialPort::DataSetReadySignal);
+    bool dcd = pinState.testFlag(QSerialPort::DataCarrierDetectSignal);
 
     bool ctsActive = m_ctsActiveHigh ? cts : !cts;
     bool dsrActive = m_dsrActiveHigh ? dsr : !dsr;
+    bool dcdActive = m_dcdActiveHigh ? dcd : !dcd;
 
     bool debounceOk = m_debounceTimer.elapsed() >= DEBOUNCE_MS;
 
-    bool hasPttInput = (m_ctsFn == InputFunction::PttInput || m_dsrFn == InputFunction::PttInput);
+    bool hasPttInput = (m_ctsFn == InputFunction::PttInput
+                     || m_dsrFn == InputFunction::PttInput
+                     || m_dcdFn == InputFunction::PttInput);
     if (hasPttInput) {
         if (pinState != m_lastRawPins || debounceOk != m_lastDebounceLogged || !m_pollLogged) {
             m_lastRawPins = pinState;
@@ -458,15 +492,17 @@ void SerialPortController::pollInputPins()
             qCDebug(lcDevices)
                 << "SerialPortController poll:"
                 << "raw=" << Qt::hex << static_cast<int>(pinState)
-                << "CTS=" << cts << "DSR=" << dsr
-                << "ctsActive=" << ctsActive << "dsrActive=" << dsrActive
-                << "lastCts=" << m_lastCtsActive << "lastDsr=" << m_lastDsrActive
+                << "CTS=" << cts << "DSR=" << dsr << "DCD=" << dcd
+                << "ctsActive=" << ctsActive << "dsrActive=" << dsrActive << "dcdActive=" << dcdActive
+                << "lastCts=" << m_lastCtsActive << "lastDsr=" << m_lastDsrActive << "lastDcd=" << m_lastDcdActive
                 << "debounceOk=" << debounceOk
                 << "debounceElapsed=" << m_debounceTimer.elapsed() << "ms"
                 << "ctsFn=" << static_cast<int>(m_ctsFn)
                 << "dsrFn=" << static_cast<int>(m_dsrFn)
+                << "dcdFn=" << static_cast<int>(m_dcdFn)
                 << "ctsPolActiveHigh=" << m_ctsActiveHigh
-                << "dsrPolActiveHigh=" << m_dsrActiveHigh;
+                << "dsrPolActiveHigh=" << m_dsrActiveHigh
+                << "dcdPolActiveHigh=" << m_dcdActiveHigh;
         }
     }
 
@@ -474,7 +510,7 @@ void SerialPortController::pollInputPins()
         m_pollLogged = true;
         qCDebug(lcDevices) << "SerialPortController: first poll — raw pinoutSignals ="
                            << Qt::hex << static_cast<int>(pinState)
-                           << "DSR=" << dsr << "CTS=" << cts;
+                           << "DSR=" << dsr << "CTS=" << cts << "DCD=" << dcd;
     }
 
     // ── PTT input ────────────────────────────────────────────────────────
@@ -490,12 +526,19 @@ void SerialPortController::pollInputPins()
         m_debounceTimer.restart();
         emit externalPttChanged(dsrActive);
     }
+    if (m_dcdFn == InputFunction::PttInput && dcdActive != m_lastDcdActive && debounceOk) {
+        qCDebug(lcDevices) << "SerialPortController: DCD PTT edge →" << dcdActive;
+        m_lastDcdActive = dcdActive;
+        m_debounceTimer.restart();
+        emit externalPttChanged(dcdActive);
+    }
 
     // ── CW straight key ──────────────────────────────────────────────────
     bool keyDown = false;
     bool hasKey = false;
     if (m_ctsFn == InputFunction::CwKeyInput) { keyDown = ctsActive; hasKey = true; }
     if (m_dsrFn == InputFunction::CwKeyInput) { keyDown = dsrActive; hasKey = true; }
+    if (m_dcdFn == InputFunction::CwKeyInput) { keyDown = dcdActive; hasKey = true; }
     if (hasKey && keyDown != m_lastKeyDown) {
         m_lastKeyDown = keyDown;
         emit cwKeyChanged(keyDown);
@@ -506,8 +549,14 @@ void SerialPortController::pollInputPins()
     bool hasPaddle = false;
     if (m_ctsFn == InputFunction::CwDitInput) { ditActive = ctsActive; hasPaddle = true; }
     if (m_dsrFn == InputFunction::CwDitInput) { ditActive = dsrActive; hasPaddle = true; }
+    if (m_dcdFn == InputFunction::CwDitInput) { ditActive = dcdActive; hasPaddle = true; }
     if (m_ctsFn == InputFunction::CwDahInput) { dahActive = ctsActive; hasPaddle = true; }
     if (m_dsrFn == InputFunction::CwDahInput) { dahActive = dsrActive; hasPaddle = true; }
+    if (m_dcdFn == InputFunction::CwDahInput) { dahActive = dcdActive; hasPaddle = true; }
+
+    // Track DCD edge regardless of role so close-time stuck-PTT detection
+    // and polarity-flip rebaselines see fresh state.
+    m_lastDcdActive = dcdActive;
 
     if (m_paddleSwap) std::swap(ditActive, dahActive);
 
@@ -563,8 +612,10 @@ void SerialPortController::loadSettings()
 
     m_ctsFn = strToInputFn(s.value("SerialCtsFunction", "None").toString());
     m_dsrFn = strToInputFn(s.value("SerialDsrFunction", "None").toString());
+    m_dcdFn = strToInputFn(s.value("SerialDcdFunction", "None").toString());
     m_ctsActiveHigh = s.value("SerialCtsPolarity", "ActiveHigh").toString() == "ActiveHigh";
     m_dsrActiveHigh = s.value("SerialDsrPolarity", "ActiveHigh").toString() == "ActiveHigh";
+    m_dcdActiveHigh = s.value("SerialDcdPolarity", "ActiveHigh").toString() == "ActiveHigh";
     m_paddleSwap = s.value("SerialPaddleSwap", "False").toString() == "True";
 
     bool shouldOpen = s.value("SerialAutoOpen", "False").toString() == "True"
@@ -576,8 +627,10 @@ void SerialPortController::loadSettings()
                        << "isOpen=" << isOpen()
                        << "dsrFn=" << static_cast<int>(m_dsrFn)
                        << "ctsFn=" << static_cast<int>(m_ctsFn)
+                       << "dcdFn=" << static_cast<int>(m_dcdFn)
                        << "dsrActiveHigh=" << m_dsrActiveHigh
-                       << "ctsActiveHigh=" << m_ctsActiveHigh;
+                       << "ctsActiveHigh=" << m_ctsActiveHigh
+                       << "dcdActiveHigh=" << m_dcdActiveHigh;
 
     if (!port.isEmpty() && shouldOpen) {
         int baud = s.value("SerialBaudRate", "9600").toInt();
@@ -603,10 +656,12 @@ void SerialPortController::loadSettings()
             {
                 DWORD modemStat = 0;
                 ::GetCommModemStatus(static_cast<HANDLE>(m_hWin), &modemStat);
-                bool cts = (modemStat & MS_CTS_ON) != 0;
-                bool dsr = (modemStat & MS_DSR_ON) != 0;
+                bool cts = (modemStat & MS_CTS_ON)  != 0;
+                bool dsr = (modemStat & MS_DSR_ON)  != 0;
+                bool dcd = (modemStat & MS_RLSD_ON) != 0;
                 m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
                 m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
+                m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
             }
 #else
 #  ifdef HAVE_SERIALPORT
@@ -614,8 +669,10 @@ void SerialPortController::loadSettings()
                 auto pinState = m_port.pinoutSignals();
                 bool cts = pinState.testFlag(QSerialPort::ClearToSendSignal);
                 bool dsr = pinState.testFlag(QSerialPort::DataSetReadySignal);
+                bool dcd = pinState.testFlag(QSerialPort::DataCarrierDetectSignal);
                 m_lastCtsActive = m_ctsActiveHigh ? cts : !cts;
                 m_lastDsrActive = m_dsrActiveHigh ? dsr : !dsr;
+                m_lastDcdActive = m_dcdActiveHigh ? dcd : !dcd;
             }
             updatePolling();
 #  endif
@@ -660,8 +717,10 @@ void SerialPortController::saveSettings()
     s.setValue("SerialRtsPolarity", m_rtsActiveHigh ? "ActiveHigh" : "ActiveLow");
     s.setValue("SerialCtsFunction", inputFnToStr(m_ctsFn));
     s.setValue("SerialDsrFunction", inputFnToStr(m_dsrFn));
+    s.setValue("SerialDcdFunction", inputFnToStr(m_dcdFn));
     s.setValue("SerialCtsPolarity", m_ctsActiveHigh ? "ActiveHigh" : "ActiveLow");
     s.setValue("SerialDsrPolarity", m_dsrActiveHigh ? "ActiveHigh" : "ActiveLow");
+    s.setValue("SerialDcdPolarity", m_dcdActiveHigh ? "ActiveHigh" : "ActiveLow");
     s.setValue("SerialPaddleSwap", m_paddleSwap ? "True" : "False");
     s.setValue("SerialAutoOpen", isOpen() ? "True" : "False");
     s.setValue("SerialPortOpen", isOpen() ? "True" : "False");

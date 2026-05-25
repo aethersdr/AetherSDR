@@ -3882,6 +3882,15 @@ QWidget* RadioSetupDialog::buildSerialTab()
         grid->addWidget(makeInputFnCombo("SerialDsrFunction"), 4, 1);
         grid->addWidget(makePolCombo("SerialDsrPolarity"), 4, 2);
 
+        // DCD row (input) — added for accessories that wire to the FTDI
+        // chip's DCD# pin (e.g. HaliKey Serial from Halibut Electronics,
+        // whose TRS Ring is wired to both DSR and DCD).
+        auto* dcdLabel = new QLabel("DCD");
+        dcdLabel->setStyleSheet("QLabel { color: #60a0c0; }");
+        grid->addWidget(dcdLabel, 5, 0);
+        grid->addWidget(makeInputFnCombo("SerialDcdFunction"), 5, 1);
+        grid->addWidget(makePolCombo("SerialDcdPolarity"), 5, 2);
+
         // Paddle swap
         auto* swapCb = new QCheckBox("Paddle Swap (swap dit/dah)");
         swapCb->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; }"));
@@ -3891,7 +3900,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
             s.setValue("SerialPaddleSwap", on ? "True" : "False");
             s.save();
         });
-        grid->addWidget(swapCb, 5, 0, 1, 3);
+        grid->addWidget(swapCb, 6, 0, 1, 3);
 
         vbox->addWidget(group);
     }

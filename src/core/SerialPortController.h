@@ -21,10 +21,14 @@
 namespace AetherSDR {
 
 // Controls DTR/RTS lines on a USB-serial adapter for hardware PTT
-// and CW keying, and monitors CTS/DSR for external PTT and CW key/paddle input.
+// and CW keying, and monitors CTS/DSR/DCD for external PTT and CW key/paddle input.
 //
 // Output: Assert DTR/RTS when transmitting (amplifier keying, sequencer)
-// Input:  Monitor CTS/DSR for foot switch PTT, straight key, or iambic paddle
+// Input:  Monitor CTS/DSR/DCD for foot switch PTT, straight key, or iambic paddle.
+//         DCD was added so accessories that wire to the FTDI chip's DCD# pin
+//         (such as Halibut Electronics' HaliKey Serial, where TRS Ring is
+//         wired to both DSR and DCD) work without requiring users to also
+//         have the DSR# pin physically connected.
 //
 // On Windows, uses Win32 WaitCommEvent directly — QSerialPort::pinoutSignals()
 // (backed by GetCommModemStatus) returns stale data on FTDI and similar drivers
@@ -41,7 +45,7 @@ class SerialPortController : public QObject {
 public:
     // Output functions (DTR/RTS)
     enum class PinFunction { None, PTT, CwKey, CwPTT };
-    // Input functions (CTS/DSR)
+    // Input functions (CTS/DSR/DCD)
     enum class InputFunction { None, PttInput, CwKeyInput, CwDitInput, CwDahInput };
 
     explicit SerialPortController(QObject* parent = nullptr);
@@ -64,16 +68,20 @@ public:
     bool dtrPolarity() const { return m_dtrActiveHigh; }
     bool rtsPolarity() const { return m_rtsActiveHigh; }
 
-    // Input pin config (CTS/DSR)
+    // Input pin config (CTS/DSR/DCD)
     void setCtsFunction(InputFunction fn) { m_ctsFn = fn; updatePolling(); }
     void setDsrFunction(InputFunction fn) { m_dsrFn = fn; updatePolling(); }
+    void setDcdFunction(InputFunction fn) { m_dcdFn = fn; updatePolling(); }
     void setCtsPolarity(bool activeHigh) { m_ctsActiveHigh = activeHigh; }
     void setDsrPolarity(bool activeHigh) { m_dsrActiveHigh = activeHigh; }
+    void setDcdPolarity(bool activeHigh) { m_dcdActiveHigh = activeHigh; }
 
     InputFunction ctsFunction() const { return m_ctsFn; }
     InputFunction dsrFunction() const { return m_dsrFn; }
+    InputFunction dcdFunction() const { return m_dcdFn; }
     bool ctsPolarity() const { return m_ctsActiveHigh; }
     bool dsrPolarity() const { return m_dsrActiveHigh; }
+    bool dcdPolarity() const { return m_dcdActiveHigh; }
 
     // Paddle swap (swap dit/dah without rewiring)
     void setPaddleSwap(bool swap) { m_paddleSwap = swap; }
@@ -106,14 +114,17 @@ private:
     // Input state
     InputFunction m_ctsFn{InputFunction::None};
     InputFunction m_dsrFn{InputFunction::None};
+    InputFunction m_dcdFn{InputFunction::None};
     bool m_ctsActiveHigh{false};
     bool m_dsrActiveHigh{false};
+    bool m_dcdActiveHigh{false};
     bool m_paddleSwap{false};
 
 #if defined(HAVE_SERIALPORT) || defined(Q_OS_WIN)
     // Shared input tracking state (always accessed on this object's thread)
     bool          m_lastCtsActive{false};
     bool          m_lastDsrActive{false};
+    bool          m_lastDcdActive{false};
     bool          m_lastKeyDown{false};
     bool          m_lastDitActive{false};
     bool          m_lastDahActive{false};
@@ -135,7 +146,7 @@ private:
     void runWinWatcher();
 
 private slots:
-    void processWinPinChange(bool dsrRaw, bool ctsRaw);
+    void processWinPinChange(bool dsrRaw, bool ctsRaw, bool dcdRaw);
 
 #elif defined(HAVE_SERIALPORT)
     // Non-Windows path: poll via QSerialPort timer
