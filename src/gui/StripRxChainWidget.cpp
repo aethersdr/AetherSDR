@@ -52,7 +52,8 @@ inline QColor kBgEndpoint() { return AetherSDR::ThemeManager::instance().color("
 inline QColor kBgActive() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
 inline QColor kBorderIdle() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
 inline QColor kBorderActive() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
-inline QColor kBorderGrey() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }  // Status-tile "active" colour — green, matches the TX-side mic-ready
+inline QColor kBorderGrey() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+// Status-tile "active" colour — green, matches the TX-side mic-ready
 // tone so the language reads consistently across both strips.
 inline QColor kBgStatusOn() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
 inline QColor kBorderStatusOn() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
@@ -62,7 +63,9 @@ inline QColor kTextLabel() { return AetherSDR::ThemeManager::instance().color("c
 inline QColor kTextDim() { return AetherSDR::ThemeManager::instance().color("color.background.3"); }
 inline QColor kLedActive() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
 inline QColor kLedBypass() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kDropIndicator() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // User-facing short label for each RX stage.  Mirrors the docked
+inline QColor kDropIndicator() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
+
+// User-facing short label for each RX stage.  Mirrors the docked
 // `ClientRxChainWidget::stageLabel` so both surfaces read the same.
 QString stageLabel(AudioEngine::RxChainStage s)
 {

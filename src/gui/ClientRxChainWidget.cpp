@@ -52,7 +52,8 @@ inline QColor kBgEndpoint() { return AetherSDR::ThemeManager::instance().color("
 inline QColor kBgActive() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
 inline QColor kBorderIdle() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
 inline QColor kBorderActive() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
-inline QColor kBorderGrey() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }  // Status-tile "active" treatment — matches the MIC-ready green from
+inline QColor kBorderGrey() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+// Status-tile "active" treatment — matches the MIC-ready green from
 // the TX widget so the visual language carries across.
 inline QColor kBgStatusActive() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
 inline QColor kBorderStatusActive() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
@@ -60,7 +61,9 @@ inline QColor kTextStatusActive() { return AetherSDR::ThemeManager::instance().c
 inline QColor kConnector() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
 inline QColor kTextLabel() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
 inline QColor kTextDim() { return AetherSDR::ThemeManager::instance().color("color.background.3"); }
-inline QColor kDropIndicator() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // Distinct from the TX chain's mime so a stray drag from one widget
+inline QColor kDropIndicator() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
+
+// Distinct from the TX chain's mime so a stray drag from one widget
 // can't be dropped on the other.
 constexpr const char* kMimeFormat = "application/x-aethersdr-rx-chain-stage";
 

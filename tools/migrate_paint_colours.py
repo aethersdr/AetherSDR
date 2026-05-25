@@ -91,9 +91,14 @@ QCOLOR_HEX_STR_RE = re.compile(r'QColor\s*\(\s*"(#[0-9a-fA-F]{3,6})"\s*\)')
 # Matches:  const QColor kName ("#aabbcc");
 #           static const QColor kName("#aabbcc");
 # Captures: 1=identifier  2=hex literal
+#
+# The trailing `[ \t]*` (not `\s*`) keeps the optional inline comment scoped to
+# the same line as the semicolon — `\s*` would let the engine swallow the
+# newline before a section-header comment on the next line and re-emit it as
+# an inline comment on the converted declaration. See #3119.
 FILE_SCOPE_HEX_RE = re.compile(
     r'^(?:static\s+)?const\s+QColor\s+([A-Za-z_][A-Za-z0-9_]*)\s*'
-    r'\(\s*"(#[0-9a-fA-F]{3,6})"\s*\)\s*;\s*'
+    r'\(\s*"(#[0-9a-fA-F]{3,6})"\s*\)\s*;[ \t]*'
     r'(//[^\n]*)?$',
     re.MULTILINE,
 )
@@ -101,12 +106,15 @@ FILE_SCOPE_HEX_RE = re.compile(
 # Matches:  const QColor kName(0xAA, 0xBB, 0xCC);
 #           static const QColor kName(0xAA, 0xBB, 0xCC, 0xDD);
 # Captures: 1=ident  2=R  3=G  4=B  5=optional alpha
+#
+# Same `[ \t]*` rationale as FILE_SCOPE_HEX_RE — keep the inline comment
+# capture from swallowing the newline before a section-header comment.
 FILE_SCOPE_RGB_RE = re.compile(
     r'^(?:static\s+)?const\s+QColor\s+([A-Za-z_][A-Za-z0-9_]*)\s*'
     r'\(\s*(0x[0-9a-fA-F]{1,2}|\d{1,3})\s*,\s*'
     r'(0x[0-9a-fA-F]{1,2}|\d{1,3})\s*,\s*'
     r'(0x[0-9a-fA-F]{1,2}|\d{1,3})'
-    r'(?:\s*,\s*(0x[0-9a-fA-F]{1,3}|\d{1,3}))?\s*\)\s*;\s*'
+    r'(?:\s*,\s*(0x[0-9a-fA-F]{1,3}|\d{1,3}))?\s*\)\s*;[ \t]*'
     r'(//[^\n]*)?$',
     re.MULTILINE,
 )

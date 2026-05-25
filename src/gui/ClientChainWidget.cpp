@@ -62,11 +62,13 @@ inline QColor kBgEndpoint() { return AetherSDR::ThemeManager::instance().color("
 inline QColor kBgActive() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
 inline QColor kBorderIdle() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
 inline QColor kBorderActive() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
-inline QColor kBorderGrey() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }  // MIC endpoint "ready" state — matches RxApplet's SQL-button green
+inline QColor kBorderGrey() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+// MIC endpoint "ready" state — matches RxApplet's SQL-button green
 // so users recognise the visual language across the sidebar.
 inline QColor kBgMicReady() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
 inline QColor kBorderMicReady() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
-inline QColor kTextMicReady() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }  // TX endpoint "active" state — red, pulsing via setTxActive().
+inline QColor kTextMicReady() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+// TX endpoint "active" state — red, pulsing via setTxActive().
 // Two shades lerped by the pulse factor give a breathing effect.
 inline QColor kBgTxActiveDim() { return AetherSDR::ThemeManager::instance().color("color.background.tx"); }
 inline QColor kBgTxActiveHot() { return AetherSDR::ThemeManager::instance().color("color.accent.danger"); }
@@ -77,7 +79,9 @@ inline QColor kTextLabel() { return AetherSDR::ThemeManager::instance().color("c
 inline QColor kTextDim() { return AetherSDR::ThemeManager::instance().color("color.background.3"); }
 inline QColor kLedActive() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
 inline QColor kLedBypass() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kDropIndicator() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // User-facing short label for each stage.  Kept 4 chars or fewer so
+inline QColor kDropIndicator() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
+
+// User-facing short label for each stage.  Kept 4 chars or fewer so
 // it fits inside the narrow boxes when the chain is crowded.
 QString stageLabel(AudioEngine::TxChainStage s)
 {
