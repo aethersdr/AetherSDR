@@ -259,6 +259,60 @@ static QRgb interpolateGradient(float t, const WfGradientStop* stops, int n)
     return qRgb(qBound(0, r, 255), qBound(0, g, 255), qBound(0, b, 255));
 }
 
+#ifdef AETHER_GPU_SPECTRUM
+static bool qtSoftwareOpenGlRequested()
+{
+    return qEnvironmentVariableIsSet("AETHER_NO_GPU")
+        || qEnvironmentVariable("QT_OPENGL").compare(
+            QStringLiteral("software"), Qt::CaseInsensitive) == 0;
+}
+
+static bool qrhiDeviceNameLooksSoftware(const QString& deviceName)
+{
+    const QString lower = deviceName.toLower();
+    return lower.contains(QStringLiteral("llvmpipe"))
+        || lower.contains(QStringLiteral("softpipe"))
+        || lower.contains(QStringLiteral("swiftshader"))
+        || lower.contains(QStringLiteral("software"))
+        || lower.contains(QStringLiteral("warp"))
+        || lower.contains(QStringLiteral("microsoft basic render"));
+}
+#endif
+
+QString SpectrumWidget::rendererDescription() const
+{
+#ifdef AETHER_GPU_SPECTRUM
+    QRhi* currentRhi = rhi();
+    if (!currentRhi) {
+        return QStringLiteral("QRhi initializing");
+    }
+
+    const QString backendName = QString::fromLatin1(currentRhi->backendName());
+    const QRhiDriverInfo driverInfo = currentRhi->driverInfo();
+    const QString deviceName = QString::fromUtf8(driverInfo.deviceName).trimmed();
+    const bool softwareOpenGl = currentRhi->backend() == QRhi::OpenGLES2
+        && qtSoftwareOpenGlRequested();
+    const bool cpuDevice = driverInfo.deviceType == QRhiDriverInfo::CpuDevice
+        || softwareOpenGl
+        || qrhiDeviceNameLooksSoftware(deviceName);
+
+    QStringList details;
+    details << backendName;
+    if (!deviceName.isEmpty()) {
+        details << deviceName;
+    }
+    if (softwareOpenGl) {
+        details << QStringLiteral("software OpenGL");
+    }
+
+    return QStringLiteral("%1 QRhi (%2)")
+        .arg(cpuDevice ? QStringLiteral("CPU") : QStringLiteral("GPU"),
+             details.join(QStringLiteral("; ")));
+#else
+    return QStringLiteral("CPU QPainter");
+#endif
+}
+
 SpectrumWidget::SpectrumWidget(QWidget* parent)
     : SPECTRUM_BASE_CLASS(parent)
 {

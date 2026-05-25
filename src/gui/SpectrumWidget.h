@@ -92,6 +92,7 @@ public:
     void resetGpuResources();  // tear down GPU pipelines for reparenting (#1240)
     void prepareForTopLevelChange(); // unregister QRhiWidget from the current backing-store QRhi
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
+    QString rendererDescription() const;
     void setConnectionAnimationVisible(bool on, const QString& label = {});
     void showInterlockNotification(const QString& message, int durationMs = 5000);
 

@@ -8237,6 +8237,12 @@ void MainWindow::buildMenuBar()
         // useful when bug-reporting against a dev/test build that doesn't
         // correspond to a tagged release.  See CMakeLists.txt for the capture
         // and the file-top #define for the non-CMake-build fallback.
+        const QString rendererDescription = [this]() {
+            if (SpectrumWidget* sw = spectrum()) {
+                return sw->rendererDescription();
+            }
+            return QStringLiteral("No active pan");
+        }();
         auto* header = new QLabel(QString(
             "<div style='text-align:center;'>"
             "<h2 style='margin-bottom:2px; color:#c8d8e8;'>AetherSDR</h2>"
@@ -8246,20 +8252,24 @@ void MainWindow::buildMenuBar()
             "for FlexRadio transceivers.</p>"
             "<p style='font-size:11px; color:#6a8090;'>"
             "Built with Qt %2 &middot; C++20<br>"
-            "Compiled: %3</p>"
+            "Compiled: %3<br>"
+            "Renderer: %5</p>"
             "</div>")
             .arg(QCoreApplication::applicationVersion(), qVersion(),
                  QStringLiteral(__DATE__),
-                 QStringLiteral(AETHER_GIT_SHA)));
+                 QStringLiteral(AETHER_GIT_SHA),
+                 rendererDescription.toHtmlEscaped()));
         header->setAlignment(Qt::AlignCenter);
         header->setWordWrap(true);
         // Tooltip explains the staleness possibility — the SHA is baked at
         // CMake configure time, so a dev who runs `cmake --build` after a
         // new commit without re-configuring sees the previous SHA here.
         // Re-running `cmake --fresh` (or deleting CMakeCache.txt) captures
-        // the current HEAD.
+        // the current HEAD. The renderer line comes from the active pan at
+        // dialog-open time, after Qt has picked a real QRhi backend when the
+        // GPU path is active.
         header->setToolTip(
-            QStringLiteral("Build identity. SHA is captured at CMake "
+            QStringLiteral("Build identity and active pan renderer. SHA is captured at CMake "
                            "configure time — re-run `cmake -B build` after "
                            "a new commit if you need the current value."));
         vbox->addWidget(header);
