@@ -1676,6 +1676,12 @@ add_executable(cwx_panel_test
     src/gui/CwxPanel.h
     src/models/CwxModel.cpp
     src/models/CwxModel.h
+    # CwxPanel.cpp calls ThemeManager::resolve() post-Phase-2 migration;
+    # pull in the manager + its logging deps so the test links.
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
 )
 target_include_directories(cwx_panel_test PRIVATE src)
 target_link_libraries(cwx_panel_test PRIVATE
@@ -1752,6 +1758,12 @@ set_target_properties(transmit_model_apd_test PROPERTIES AUTOMOC ON)
 add_executable(help_dialog_test
     tests/help_dialog_test.cpp
     src/gui/HelpDialog.cpp
+    # HelpDialog.cpp calls ThemeManager::resolve() post-Phase-2 migration;
+    # pull in the manager + its logging deps so the test links.
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
 )
 target_include_directories(help_dialog_test PRIVATE src)
 target_link_libraries(help_dialog_test PRIVATE
