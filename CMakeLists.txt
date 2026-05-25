@@ -7,6 +7,8 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
+option(BUILD_TIMESTAMPS "Place build timestamps in the final binary" ON)
+
 # macOS: ensure Homebrew lib/include paths are in the search path
 # (universal builds with CMAKE_OSX_ARCHITECTURES may not search /opt/homebrew by default)
 if(APPLE)
@@ -836,6 +838,10 @@ endif()  # NOT MSVC
 qt_add_resources(RESOURCES resources/resources.qrc)
 
 add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES})
+
+if (BUILD_TIMESTAMPS)
+    target_compile_definitions(AetherSDR PUBLIC BUILD_TIMESTAMPS)
+endif()
 
 # Capture the git short SHA at configure time and surface it in the About
 # dialog so dev/test builds are identifiable.  Falls back to "unknown" for

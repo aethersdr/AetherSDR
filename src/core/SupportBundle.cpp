@@ -27,7 +27,11 @@ SupportBundle::SystemInfo SupportBundle::collectSystemInfo()
         QSysInfo::prettyProductName(),
         QSysInfo::kernelVersion(),
         QSysInfo::currentCpuArchitecture(),
+        #ifdef BUILD_TIMESTAMPS
         QString::fromLatin1(__DATE__)
+        #else
+        QString::fromLatin1("---")
+        #endif
     };
 }
 

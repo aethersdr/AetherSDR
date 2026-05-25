@@ -8292,10 +8292,18 @@ void MainWindow::buildMenuBar()
             "Compiled: %3<br>"
             "Renderer: %5</p>"
             "</div>")
+            #ifdef BUILD_TIMESTAMPS
             .arg(QCoreApplication::applicationVersion(), qVersion(),
                  QStringLiteral(__DATE__),
                  QStringLiteral(AETHER_GIT_SHA),
                  rendererDescription.toHtmlEscaped()));
+
+            #else
+            .arg(QCoreApplication::applicationVersion(), qVersion(), 
+                 QStringLiteral("---"),
+                 QStringLiteral("---"),
+                 rendererDescription.toHtmlEscaped()));
+            #endif
         header->setAlignment(Qt::AlignCenter);
         header->setWordWrap(true);
         // Tooltip explains the staleness possibility — the SHA is baked at
