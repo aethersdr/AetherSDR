@@ -1435,7 +1435,21 @@ void RadioModel::addSliceOnPan(const QString& panId)
             break;
         }
     }
-    const QString freq = QString::number(newFreq, 'f', 6);
+    addSliceOnPan(panId, newFreq);
+}
+
+void RadioModel::addSliceOnPan(const QString& panId, double freqMhz)
+{
+    if (panId.isEmpty()) {
+        qCWarning(lcProtocol) << "RadioModel::addSliceOnPan: no panadapter, cannot create slice";
+        return;
+    }
+    if (!std::isfinite(freqMhz)) {
+        qCWarning(lcProtocol) << "RadioModel::addSliceOnPan: invalid frequency" << freqMhz;
+        return;
+    }
+
+    const QString freq = QString::number(freqMhz, 'f', 6);
     const QString cmd = QString("slice create pan=%1 freq=%2").arg(panId, freq);
 
     qCDebug(lcProtocol) << "RadioModel::addSliceOnPan:" << cmd;

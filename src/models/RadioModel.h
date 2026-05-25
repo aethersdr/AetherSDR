@@ -331,6 +331,7 @@ public:
     void cwAutoTuneOnce(int sliceId);                // one-shot (no int= param)
     void addSlice();           // Create a new slice on the active panadapter
     void addSliceOnPan(const QString& panId); // Create a new slice on a specific pan
+    void addSliceOnPan(const QString& panId, double freqMhz); // Create slice on specific pan/frequency
     void createPanadapter();   // Create a new independent panadapter
     void removePanadapter(const QString& panId);
     void setPanBandwidth(double bandwidthMhz);

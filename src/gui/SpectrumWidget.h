@@ -479,6 +479,7 @@ signals:
     void tnfWidthRequested(int id, int widthHz);
     void tnfDepthRequested(int id, int depthDb);
     void tnfPermanentRequested(int id, bool permanent);
+    void sliceCreateRequested(double freqMhz);
     void sliceCloseRequested(int sliceId);
     void propForecastClicked();  // click on K/A/SFI overlay text
     void sliceTuneRequested(int sliceId, double freqMhz);

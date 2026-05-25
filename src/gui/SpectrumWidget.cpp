@@ -3373,6 +3373,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 [this, snappedMhz]{ showAddSpotDialog(snappedMhz); });
             menu.addAction(QString("Add TNF at %1 MHz").arg(freqStr), this,
                 [this, freqMhz]{ emit tnfCreateRequested(freqMhz); });
+            menu.addAction(QString("Add Slice at %1 MHz").arg(freqStr), this,
+                [this, snappedMhz]{ emit sliceCreateRequested(snappedMhz); });
         }
 
         if (hitTnf < 0) {

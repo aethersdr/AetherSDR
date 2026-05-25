@@ -12242,6 +12242,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (m_radioModel.slices().size() <= 1) return;
         m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
     });
+    connect(sw, &SpectrumWidget::sliceCreateRequested,
+            this, [this, applet](double freqMhz) {
+        const int limit = m_radioModel.maxSlices();
+        if (m_radioModel.slices().size() < limit) {
+            m_radioModel.addSliceOnPan(applet->panId(), freqMhz);
+        } else {
+            statusBar()->showMessage(
+                QString("%1 supports a maximum of %2 slices")
+                    .arg(m_radioModel.model()).arg(limit), 4000);
+        }
+    });
     connect(sw, &SpectrumWidget::sliceTuneRequested,
             this, [this](int sliceId, double freqMhz) {
         if (auto* s = m_radioModel.slice(sliceId))
