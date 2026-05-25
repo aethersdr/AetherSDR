@@ -9568,7 +9568,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
             // Auto-start POTA polling if enabled
             if (cs.value("PotaAutoStart", "False").toString() == "True") {
-                int pInterval = cs.value("PotaPollInterval", 30).toInt();
+                int pInterval = cs.value("PotaPollInterval", 60).toInt();
                 if (!m_potaClient->isPolling())
                     QMetaObject::invokeMethod(m_potaClient, [=] { m_potaClient->startPolling(pInterval); });
             }

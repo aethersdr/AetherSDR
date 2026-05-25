@@ -1415,7 +1415,7 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Poll Interval:"), row, 0);
     m_potaIntervalSpin = new QSpinBox;
     m_potaIntervalSpin->setRange(15, 300);
-    m_potaIntervalSpin->setValue(s.value("PotaPollInterval", 30).toInt());
+    m_potaIntervalSpin->setValue(s.value("PotaPollInterval", 60).toInt());
     m_potaIntervalSpin->setSuffix(" sec");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaIntervalSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(m_potaIntervalSpin, &QSpinBox::valueChanged, this, [](int v) {

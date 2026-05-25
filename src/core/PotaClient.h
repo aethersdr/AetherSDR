@@ -11,7 +11,7 @@
 namespace AetherSDR {
 
 // POTA (Parks on the Air) spot client — polls https://api.pota.app/spot/activator
-// every 30 seconds for active activations. Emits spotReceived() for each new spot.
+// every 60 seconds for active activations. Emits spotReceived() for each new spot.
 class PotaClient : public QObject {
     Q_OBJECT
 
@@ -19,7 +19,7 @@ public:
     explicit PotaClient(QObject* parent = nullptr);
     ~PotaClient() override;
 
-    void startPolling(int intervalSec = 30);
+    void startPolling(int intervalSec = 60);
     void stopPolling();
     bool isPolling() const { return m_polling; }
 
