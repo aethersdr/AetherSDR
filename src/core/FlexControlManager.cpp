@@ -25,10 +25,21 @@ FlexControlManager::~FlexControlManager()
 
 QString FlexControlManager::detectPort()
 {
+    // Compatible devices: FlexRadio's native FlexControl plus open-hardware
+    // controllers that speak the documented FlexControl token stream
+    // (D;/U;/X.S;/etc + I...; LED commands). The aether-pad project uses
+    // an Arduino Giga R1 in its AetherControl persona; this mirrors the
+    // existing HID-path alias for the RC-28 persona.
+    static constexpr struct { quint16 vid; quint16 pid; } kCompatibleDevices[] = {
+        { VendorId, ProductId },   // FlexRadio FlexControl (native)
+        { 0x2341,   0x0266   },    // Arduino Giga R1 CDC (aether-pad)
+    };
     for (const auto& info : QSerialPortInfo::availablePorts()) {
-        if (info.vendorIdentifier() == VendorId &&
-            info.productIdentifier() == ProductId)
-            return info.portName();
+        for (const auto& dev : kCompatibleDevices) {
+            if (info.vendorIdentifier() == dev.vid &&
+                info.productIdentifier() == dev.pid)
+                return info.portName();
+        }
     }
     return {};
 }
