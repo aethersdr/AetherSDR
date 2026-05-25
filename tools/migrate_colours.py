@@ -179,6 +179,25 @@ CANONICAL_TOKENS: dict[str, str] = {
     "#9cb0c0": "color.text.secondary",  # 1 refs, ΔRGB=4
     "#9fb3c8": "color.text.secondary",  # 1 refs, ΔRGB=2
     "#8190a3": "color.text.secondary",  # 1 refs, ΔRGB=4
+
+    # ── Meter/curve widget close-mappings (PR 4/5 paint migration) ──
+    # File-scope const QColor declarations in ClientCompKnob/Meter/
+    # CurveWidget/ThresholdFader/LimiterButton/GateLevelView. Each is
+    # close to an existing canonical value; absorbing them lets the
+    # entire compressor + gate + tube panel respond to theme switching.
+    "#0a1a28": "color.background.0",         # dark panel base, ΔRGB≈10 from #0a0e14
+    "#1f2a38": "color.background.1",         # raised panel, ΔRGB≈9 from #1a2a3a
+    "#56c48b": "color.accent.success",       # meter level-lo green, ΔRGB≈46 from #4dd87a
+    "#607888": "color.text.label",           # axis labels, ΔRGB≈8 from #607080
+    "#b0c4d6": "color.text.secondary",       # knob/meter labels, ΔRGB≈16 from #a0b4c8
+    "#c8a040": "color.accent.warning",       # gate curve amber, ΔRGB≈55 from #e8a540
+    "#d03030": "color.accent.danger",        # limiter active red, ΔRGB≈16 from #c03030
+    "#d47272": "color.accent.danger",        # de-ess soft red sibilant band
+    "#e85a5a": "color.accent.danger",        # meter level-hi red, ΔRGB≈23 from #ff4d4d
+    "#e8a540": "color.accent.warning",       # threshold/peak amber, canonical family member
+    "#e8d65a": "color.accent.warning",       # meter level-mid yellow
+    "#e8e8e8": "color.text.primary",         # knob pointer/value off-white, ΔRGB≈32 from #c8d8e8
+    "#f0f4f8": "color.text.primary",         # gate input outline near-white, ΔRGB≈10 from #e6f0fa
 }
 
 # Build a regex that matches any of our known hex codes, longest first

@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -17,16 +18,14 @@ namespace {
 constexpr float kBallSmoothAlpha = 0.30f;
 constexpr float kTwoPi = 6.283185307179586476f;
 
-const QColor kBgColor       ("#0a1420");
-const QColor kGridColor     ("#1e3040");
-const QColor kGridMajorColor("#2a4458");
-const QColor kAxisLabelColor("#607888");
-const QColor kCurveColor    ("#d47272");   // soft red — "sibilant band"
-const QColor kThreshColor   ("#4db8d4");
-const QColor kBallGlowColor ("#ffd070");
-const QColor kBallCoreColor ("#ffffff");
-
-// Log-freq major ticks.
+inline QColor kBgColor() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
+inline QColor kGridColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kGridMajorColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kAxisLabelColor() { return AetherSDR::ThemeManager::instance().color("color.text.label"); }
+inline QColor kCurveColor() { return AetherSDR::ThemeManager::instance().color("color.accent.danger"); }  // soft red — "sibilant band"
+inline QColor kThreshColor() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
+inline QColor kBallGlowColor() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
+inline QColor kBallCoreColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }  // Log-freq major ticks.
 const float kFreqMajor[] = { 100.0f, 500.0f, 1000.0f, 2000.0f,
                              5000.0f, 10000.0f };
 
@@ -122,16 +121,16 @@ void ClientDeEssCurveWidget::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF r = rect();
-    p.fillRect(r, kBgColor);
+    p.fillRect(r, kBgColor());
 
     // Grid — vertical at major freqs, horizontal at 0 / -12 / -24.
     p.save();
-    p.setPen(QPen(kGridColor, 1.0));
+    p.setPen(QPen(kGridColor(), 1.0));
     for (float db : { 0.0f, -12.0f, -24.0f }) {
         const float y = dbToY(db);
         p.drawLine(QPointF(r.left(), y), QPointF(r.right(), y));
     }
-    p.setPen(QPen(kGridMajorColor, 1.0));
+    p.setPen(QPen(kGridMajorColor(), 1.0));
     QFont font = p.font();
     font.setPixelSize(8);
     p.setFont(font);
@@ -163,10 +162,10 @@ void ClientDeEssCurveWidget::paintEvent(QPaintEvent*)
         p.drawLine(QPointF(x, r.top()), QPointF(x, r.bottom()));
         if (!m_compact) {
             m_axisLabels[i].prepare(p.transform(), font);
-            p.setPen(kAxisLabelColor);
+            p.setPen(kAxisLabelColor());
             p.drawStaticText(QPointF(x + 2.0f, r.bottom() - 2.0f - ascent),
                              m_axisLabels[i]);
-            p.setPen(QPen(kGridMajorColor, 1.0));
+            p.setPen(QPen(kGridMajorColor(), 1.0));
         }
     }
     p.restore();
@@ -186,7 +185,7 @@ void ClientDeEssCurveWidget::paintEvent(QPaintEvent*)
             if (i == 0) path.moveTo(pt);
             else        path.lineTo(pt);
         }
-        QPen curvePen(kCurveColor, m_compact ? 1.5 : 2.0);
+        QPen curvePen(kCurveColor(), m_compact ? 1.5 : 2.0);
         curvePen.setJoinStyle(Qt::RoundJoin);
         curvePen.setCapStyle(Qt::RoundCap);
         p.setPen(curvePen);
@@ -201,19 +200,19 @@ void ClientDeEssCurveWidget::paintEvent(QPaintEvent*)
         const float y = dbToY(scDb);
         const float glow = m_compact ? 6.0f : 9.0f;
         QRadialGradient g(QPointF(x, y), glow);
-        QColor gc = kBallGlowColor; gc.setAlpha(200);
+        QColor gc = kBallGlowColor(); gc.setAlpha(200);
         g.setColorAt(0.0, gc);
         gc.setAlpha(0);
         g.setColorAt(1.0, gc);
         p.setBrush(g);
         p.setPen(Qt::NoPen);
         p.drawEllipse(QPointF(x, y), glow, glow);
-        p.setBrush(kBallCoreColor);
+        p.setBrush(kBallCoreColor());
         p.drawEllipse(QPointF(x, y), m_compact ? 2.0 : 3.0,
                                       m_compact ? 2.0 : 3.0);
 
         // Threshold horizontal line — dim cyan.
-        QColor tc = kThreshColor; tc.setAlpha(150);
+        QColor tc = kThreshColor(); tc.setAlpha(150);
         p.setPen(QPen(tc, 1.2, Qt::DashLine));
         const float yT = dbToY(std::clamp(m_deEss->thresholdDb(),
                                           kMinDb, kMaxDb));

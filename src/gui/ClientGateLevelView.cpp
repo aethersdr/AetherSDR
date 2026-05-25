@@ -7,6 +7,7 @@
 #include <QPen>
 #include <QTimer>
 #include <algorithm>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -15,15 +16,15 @@ namespace {
 constexpr int kHistoryCount = 120;      // ~4 s at 30 Hz
 constexpr int kPollMs       = 33;
 
-const QColor kBgColor     ("#0a1420");
-const QColor kFrameColor  ("#2a3a4a");
-const QColor kGridColor   ("#1e3040");
-const QColor kAxisLabel   ("#607888");
-const QColor kInputColor  ("#f0f4f8");   // white input outline
-const QColor kAudibleColor("#f2c14e");   // amber — audio that passes through
-const QColor kReduceColor ("#1f2a38");   // dark gray reduction overlay
-const QColor kThreshColor ("#4db8d4");   // cyan threshold lines
-const QColor kPeakColor   ("#e8a540");   // amber peak bar
+inline QColor kBgColor() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
+inline QColor kFrameColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kGridColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kAxisLabel() { return AetherSDR::ThemeManager::instance().color("color.text.label"); }
+inline QColor kInputColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }  // white input outline
+inline QColor kAudibleColor() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }  // amber — audio that passes through
+inline QColor kReduceColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }  // dark gray reduction overlay
+inline QColor kThreshColor() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // cyan threshold lines
+inline QColor kPeakColor() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }  // amber peak bar
 
 // dB ticks shown on the left gutter.
 const float kTicks[] = { 6.0f, 0.0f, -6.0f, -12.0f, -18.0f,
@@ -79,7 +80,7 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF full = rect();
-    p.fillRect(full, kBgColor);
+    p.fillRect(full, kBgColor());
 
     // Plot region: inset the left gutter for dB labels and the right
     // strip for the peak bar.
@@ -88,7 +89,7 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
                       full.height() - 8);
 
     // Frame the plot.
-    p.setPen(QPen(kFrameColor, 1.0));
+    p.setPen(QPen(kFrameColor(), 1.0));
     p.drawRect(plot);
 
     // Horizontal grid + labels.
@@ -97,9 +98,9 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
     p.setFont(f);
     for (float db : kTicks) {
         const float y = dbToY(db);
-        p.setPen(QPen(kGridColor, 1.0));
+        p.setPen(QPen(kGridColor(), 1.0));
         p.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
-        p.setPen(kAxisLabel);
+        p.setPen(kAxisLabel());
         QString s = (db > 0.0f ? "+" : "") + QString::number(static_cast<int>(db));
         p.drawText(QPointF(full.left() + 2.0f, y + 3.0f), s);
     }
@@ -138,7 +139,7 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
     audiblePath.lineTo(plot.left(),  plot.bottom());
     audiblePath.closeSubpath();
 
-    QColor audibleFill = kAudibleColor; audibleFill.setAlpha(90);
+    QColor audibleFill = kAudibleColor(); audibleFill.setAlpha(90);
     p.setBrush(audibleFill);
     p.setPen(Qt::NoPen);
     p.drawPath(audiblePath);
@@ -162,7 +163,7 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
     }
     gatedPath.closeSubpath();
 
-    p.setBrush(kReduceColor);
+    p.setBrush(kReduceColor());
     p.setPen(Qt::NoPen);
     p.drawPath(gatedPath);
 
@@ -176,7 +177,7 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
         if (i == 0) inputOutline.moveTo(x, yIn);
         else        inputOutline.lineTo(x, yIn);
     }
-    p.setPen(QPen(kInputColor, 1.2));
+    p.setPen(QPen(kInputColor(), 1.2));
     p.setBrush(Qt::NoBrush);
     p.drawPath(inputOutline);
 
@@ -186,11 +187,11 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
     if (m_gate) {
         const float T  = m_gate->thresholdDb();
         const float Tc = T - m_gate->returnDb();
-        QPen pen(kThreshColor, 1.5);
+        QPen pen(kThreshColor(), 1.5);
         p.setPen(pen);
         const float yT  = dbToY(std::clamp(T,  kBottomDb, kTopDb));
         p.drawLine(QPointF(plot.left(), yT), QPointF(plot.right(), yT));
-        QColor returnCol = kThreshColor; returnCol.setAlpha(180);
+        QColor returnCol = kThreshColor(); returnCol.setAlpha(180);
         p.setPen(QPen(returnCol, 1.2));
         const float yTc = dbToY(std::clamp(Tc, kBottomDb, kTopDb));
         p.drawLine(QPointF(plot.left(), yTc), QPointF(plot.right(), yTc));
@@ -200,8 +201,8 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
     {
         const QRectF bar(full.right() - kPeakBarPx - 2, plot.top(),
                          kPeakBarPx, plot.height());
-        p.fillRect(bar, kBgColor);
-        p.setPen(QPen(kFrameColor, 1.0));
+        p.fillRect(bar, kBgColor());
+        p.setPen(QPen(kFrameColor(), 1.0));
         p.drawRect(bar);
 
         if (m_gate) {
@@ -210,7 +211,7 @@ void ClientGateLevelView::paintEvent(QPaintEvent*)
             const float yIn = dbToY(inDb);
             const QRectF fill(bar.left() + 1, yIn,
                               bar.width() - 2, bar.bottom() - yIn - 1);
-            p.fillRect(fill, kPeakColor);
+            p.fillRect(fill, kPeakColor());
         }
     }
 }

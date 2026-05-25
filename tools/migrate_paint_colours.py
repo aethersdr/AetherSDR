@@ -88,6 +88,85 @@ QCOLOR_4ARG_RE = re.compile(
 # Matches: QColor("#aabbcc")
 QCOLOR_HEX_STR_RE = re.compile(r'QColor\s*\(\s*"(#[0-9a-fA-F]{3,6})"\s*\)')
 
+# Matches:  const QColor kName ("#aabbcc");
+#           static const QColor kName("#aabbcc");
+# Captures: 1=identifier  2=hex literal
+FILE_SCOPE_HEX_RE = re.compile(
+    r'^(?:static\s+)?const\s+QColor\s+([A-Za-z_][A-Za-z0-9_]*)\s*'
+    r'\(\s*"(#[0-9a-fA-F]{3,6})"\s*\)\s*;\s*'
+    r'(//[^\n]*)?$',
+    re.MULTILINE,
+)
+
+# Matches:  const QColor kName(0xAA, 0xBB, 0xCC);
+#           static const QColor kName(0xAA, 0xBB, 0xCC, 0xDD);
+# Captures: 1=ident  2=R  3=G  4=B  5=optional alpha
+FILE_SCOPE_RGB_RE = re.compile(
+    r'^(?:static\s+)?const\s+QColor\s+([A-Za-z_][A-Za-z0-9_]*)\s*'
+    r'\(\s*(0x[0-9a-fA-F]{1,2}|\d{1,3})\s*,\s*'
+    r'(0x[0-9a-fA-F]{1,2}|\d{1,3})\s*,\s*'
+    r'(0x[0-9a-fA-F]{1,2}|\d{1,3})'
+    r'(?:\s*,\s*(0x[0-9a-fA-F]{1,3}|\d{1,3}))?\s*\)\s*;\s*'
+    r'(//[^\n]*)?$',
+    re.MULTILINE,
+)
+
+
+def rewrite_file_scope_consts(content: str) -> tuple[str, int, int]:
+    """Convert file-scope `const QColor kName("#hex");` declarations to
+    `inline QColor kName() { return ThemeManager::instance().color("token"); }`
+    plus rewrite every bare `kName` reference in the file to `kName()`.
+
+    Returns (new_content, replacements, skipped)."""
+    rep = 0
+    skipped = 0
+    renamed_idents: list[str] = []
+
+    def replace_decl_hex(m: re.Match) -> str:
+        nonlocal rep, skipped
+        ident, hex_str = m.group(1), m.group(2).lower()
+        comment = m.group(3) or ''
+        tok = hex_to_token(hex_str)
+        if tok is None:
+            skipped += 1
+            return m.group(0)
+        rep += 1
+        renamed_idents.append(ident)
+        tail = f'  {comment}' if comment else ''
+        return (f'inline QColor {ident}() {{ return '
+                f'AetherSDR::ThemeManager::instance().color("{tok}"); }}{tail}')
+
+    def replace_decl_rgb(m: re.Match) -> str:
+        nonlocal rep, skipped
+        ident = m.group(1)
+        hex_str = rgb_components_to_hex([m.group(2), m.group(3), m.group(4)])
+        alpha = m.group(5)
+        comment = m.group(6) or ''
+        tok = hex_to_token(hex_str)
+        if tok is None:
+            skipped += 1
+            return m.group(0)
+        rep += 1
+        renamed_idents.append(ident)
+        tail = f'  {comment}' if comment else ''
+        if alpha is not None:
+            body = f'AetherSDR::theme::withAlpha("{tok}", {alpha.strip()})'
+        else:
+            body = f'AetherSDR::ThemeManager::instance().color("{tok}")'
+        return f'inline QColor {ident}() {{ return {body}; }}{tail}'
+
+    content = FILE_SCOPE_HEX_RE.sub(replace_decl_hex, content)
+    content = FILE_SCOPE_RGB_RE.sub(replace_decl_rgb, content)
+
+    # Now rewrite call sites: any bare `ident` not followed by `(` becomes
+    # `ident()`. The negative lookahead avoids double-rewriting our own
+    # injected `ident() { ... }` declaration line.
+    for ident in renamed_idents:
+        call_site_re = re.compile(rf'\b{re.escape(ident)}\b(?!\s*\()')
+        content = call_site_re.sub(f'{ident}()', content)
+
+    return content, rep, skipped
+
 
 def rewrite_paint_qcolor(content: str) -> tuple[str, int, int]:
     """Returns (new_content, replacements, skipped_unmatched_hex)."""
@@ -135,13 +214,20 @@ def process_file(path: Path, apply: bool) -> tuple[int, int]:
         text = path.read_text(encoding='utf-8', errors='replace')
     except OSError:
         return 0, 0
+    # File-scope `const QColor kName(...);` first — those declarations also
+    # match the QColor(...) regexes below, so we lift them out into inline
+    # functions first and the remaining QColor(...) literals inside paint
+    # functions get handled by the regular pass.
+    text, fs_rep, fs_skipped = rewrite_file_scope_consts(text)
     new_text, rep, skipped = rewrite_paint_qcolor(text)
-    if rep == 0:
-        return 0, skipped
+    total_rep = fs_rep + rep
+    total_skipped = fs_skipped + skipped
+    if total_rep == 0:
+        return 0, total_skipped
     new_text = ensure_themeManager_include(new_text)
     if apply:
         path.write_text(new_text, encoding='utf-8')
-    return rep, skipped
+    return total_rep, total_skipped
 
 
 def main() -> int:

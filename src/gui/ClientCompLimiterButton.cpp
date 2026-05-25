@@ -3,6 +3,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QRadialGradient>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -12,16 +13,15 @@ namespace {
 //   - Disarmed (limiter disabled) — dim, grey, clearly "off"
 //   - Armed (limiter enabled, not firing) — dark green body, bright green text
 //   - Active (firing, held 500 ms) — red body + halo, white text
-const QColor kBgArmed    ("#006040");
-const QColor kBgDisarmed ("#0e1b28");
-const QColor kBgActive   ("#d03030");
-const QColor kBorderArm  ("#00a060");
-const QColor kBorderOff  ("#2a3a4a");
-const QColor kBorderHit  ("#ff8080");
-const QColor kTextArmed  ("#00ff88");
-const QColor kTextOff    ("#607888");
-const QColor kTextActive ("#ffffff");
-
+inline QColor kBgArmed() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kBgDisarmed() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
+inline QColor kBgActive() { return AetherSDR::ThemeManager::instance().color("color.accent.danger"); }
+inline QColor kBorderArm() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kBorderOff() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kBorderHit() { return AetherSDR::ThemeManager::instance().color("color.accent.danger"); }
+inline QColor kTextArmed() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kTextOff() { return AetherSDR::ThemeManager::instance().color("color.text.label"); }
+inline QColor kTextActive() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
 } // namespace
 
 ClientCompLimiterButton::ClientCompLimiterButton(QWidget* parent)
@@ -61,17 +61,17 @@ void ClientCompLimiterButton::paintEvent(QPaintEvent*)
     QColor border;
     QColor textColor;
     if (m_active) {
-        bg = kBgActive;
-        border = kBorderHit;
-        textColor = kTextActive;
+        bg = kBgActive();
+        border = kBorderHit();
+        textColor = kTextActive();
     } else if (isChecked()) {
-        bg = kBgArmed;
-        border = kBorderArm;
-        textColor = kTextArmed;
+        bg = kBgArmed();
+        border = kBorderArm();
+        textColor = kTextArmed();
     } else {
-        bg = kBgDisarmed;
-        border = kBorderOff;
-        textColor = kTextOff;
+        bg = kBgDisarmed();
+        border = kBorderOff();
+        textColor = kTextOff();
     }
 
     if (underMouse() && !m_active) {
@@ -87,7 +87,7 @@ void ClientCompLimiterButton::paintEvent(QPaintEvent*)
     // indicator on hardware gear.
     if (m_active) {
         QRadialGradient g(r.center(), r.width() * 0.6);
-        QColor glow = kBgActive;
+        QColor glow = kBgActive();
         glow.setAlpha(90);
         g.setColorAt(0.0, glow);
         glow.setAlpha(0);

@@ -9,6 +9,7 @@
 #include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -16,14 +17,13 @@ namespace {
 
 constexpr float kBallSmoothAlpha = 0.30f;
 
-const QColor kBgColor       ("#0a1420");
-const QColor kFrameColor    ("#2a3a4a");
-const QColor kGridColor     ("#1e3040");
-const QColor kAxisColor     ("#2a4458");
-const QColor kCurveColor    ("#4db8d4");   // cyan
-const QColor kBallGlowColor ("#ffd070");
-const QColor kBallCoreColor ("#ffffff");
-
+inline QColor kBgColor() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
+inline QColor kFrameColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kGridColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kAxisColor() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kCurveColor() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // cyan
+inline QColor kBallGlowColor() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
+inline QColor kBallCoreColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
 float dbToLin(float db) noexcept
 {
     return std::pow(10.0f, db * 0.05f);
@@ -104,17 +104,17 @@ void ClientTubeCurveWidget::paintEvent(QPaintEvent*)
     p.setRenderHint(QPainter::Antialiasing, true);
 
     const QRectF r = rect();
-    p.fillRect(r, kBgColor);
+    p.fillRect(r, kBgColor());
 
     // Grid — a few reference lines at ±0.5, ±1.0.
-    p.setPen(QPen(kGridColor, 1.0));
+    p.setPen(QPen(kGridColor(), 1.0));
     for (float v : { -1.0f, -0.5f, 0.5f, 1.0f }) {
         p.drawLine(QPointF(xToPx(v), r.top()), QPointF(xToPx(v), r.bottom()));
         p.drawLine(QPointF(r.left(), yToPx(v)), QPointF(r.right(), yToPx(v)));
     }
 
     // Centre axes — slightly brighter.
-    p.setPen(QPen(kAxisColor, 1.0));
+    p.setPen(QPen(kAxisColor(), 1.0));
     p.drawLine(QPointF(xToPx(0.0f), r.top()),  QPointF(xToPx(0.0f), r.bottom()));
     p.drawLine(QPointF(r.left(), yToPx(0.0f)), QPointF(r.right(), yToPx(0.0f)));
 
@@ -130,7 +130,7 @@ void ClientTubeCurveWidget::paintEvent(QPaintEvent*)
             if (i == 0) path.moveTo(pt);
             else        path.lineTo(pt);
         }
-        QPen curvePen(kCurveColor, m_compact ? 1.5 : 2.0);
+        QPen curvePen(kCurveColor(), m_compact ? 1.5 : 2.0);
         curvePen.setJoinStyle(Qt::RoundJoin);
         curvePen.setCapStyle(Qt::RoundCap);
         p.setPen(curvePen);
@@ -142,20 +142,20 @@ void ClientTubeCurveWidget::paintEvent(QPaintEvent*)
         const QPointF pt(xToPx(x), yToPx(y));
         const float glow = m_compact ? 7.0f : 10.0f;
         QRadialGradient g(pt, glow);
-        QColor gc = kBallGlowColor; gc.setAlpha(200);
+        QColor gc = kBallGlowColor(); gc.setAlpha(200);
         g.setColorAt(0.0, gc);
         gc.setAlpha(0);
         g.setColorAt(1.0, gc);
         p.setBrush(g);
         p.setPen(Qt::NoPen);
         p.drawEllipse(pt, glow, glow);
-        p.setBrush(kBallCoreColor);
+        p.setBrush(kBallCoreColor());
         p.drawEllipse(pt, m_compact ? 2.2 : 3.0,
                           m_compact ? 2.2 : 3.0);
     }
 
     // Frame.
-    p.setPen(QPen(kFrameColor, 1.0));
+    p.setPen(QPen(kFrameColor(), 1.0));
     p.setBrush(Qt::NoBrush);
     p.drawRect(r.adjusted(0.5, 0.5, -0.5, -0.5));
 }

@@ -5,6 +5,7 @@
 #include <QLinearGradient>
 #include <algorithm>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -16,16 +17,16 @@ constexpr float kGrMaxMag   =  20.0f;    // GR range 0..-20 dB
 constexpr int   kPeakHoldMs =  700;
 constexpr float kPeakDecayDbPer100Ms = 1.0f;
 
-const QColor kBarBg    ("#0a1420");
-const QColor kLevelLo  ("#56c48b");
-const QColor kLevelMid ("#e8d65a");
-const QColor kLevelHi  ("#e85a5a");
-const QColor kGrColor  ("#e8a540");
-const QColor kLabelColor("#b0c4d6");
-const QColor kPeakLine ("#ffffff");
-const QColor kCeilingLine("#f2c14e");     // bright amber — matches LIMIT button
+inline QColor kBarBg() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
+inline QColor kLevelLo() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kLevelMid() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
+inline QColor kLevelHi() { return AetherSDR::ThemeManager::instance().color("color.accent.danger"); }
+inline QColor kGrColor() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
+inline QColor kLabelColor() { return AetherSDR::ThemeManager::instance().color("color.text.secondary"); }
+inline QColor kPeakLine() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
+inline QColor kCeilingLine() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }  // bright amber — matches LIMIT button
 const QColor kCeilingZone("#3a1810");     // dim red tint for the "no-go" zone
-const QColor kLimGrTick ("#4db8d4");      // cyan, distinct from the white peak line
+inline QColor kLimGrTick() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // cyan, distinct from the white peak line
 
 } // namespace
 
@@ -172,14 +173,14 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
         p.setFont(f);
         // Amber matches the THRESH fader's label colour so the paired
         // meters read as one consistent strip header.
-        p.setPen(QColor("#e8a540"));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.warning"));
         p.drawText(QRectF(0, 0, w, labelH), Qt::AlignCenter, m_label);
     }
 
-    p.fillRect(bar, kBarBg);
+    p.fillRect(bar, kBarBg());
     // Border matches the THRESH fader so the paired meters read as
     // one visual idiom across the comp editor.
-    p.setPen(QPen(QColor("#243a4e"), 1));
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.background.1"), 1));
     p.setBrush(Qt::NoBrush);
     p.drawRect(QRectF(bar.left(), bar.top(),
                       bar.width() - 1, bar.height() - 1));
@@ -189,9 +190,9 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
         QRectF fill(bar.left(), bar.bottom() - fillH, bar.width(), fillH);
 
         QLinearGradient g(0, bar.bottom(), 0, bar.top());
-        g.setColorAt(0.0, kLevelLo);
-        g.setColorAt(0.7, kLevelMid);
-        g.setColorAt(1.0, kLevelHi);
+        g.setColorAt(0.0, kLevelLo());
+        g.setColorAt(0.7, kLevelMid());
+        g.setColorAt(1.0, kLevelHi());
         p.fillRect(fill, g);
 
         // Limiter overlay — draw ceiling zone + line if a ceiling has
@@ -215,7 +216,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
             // Ceiling line — bright amber, slightly thicker than the
             // peak line so it reads as a structural limit, not a meter
             // value.
-            p.setPen(QPen(kCeilingLine, 1.5));
+            p.setPen(QPen(kCeilingLine(), 1.5));
             p.drawLine(QPointF(bar.left() - 2.0, cy),
                        QPointF(bar.right() + 2.0, cy));
 
@@ -227,7 +228,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
                 const float grSpanDb = std::min(-m_limGrDb, 12.0f);
                 const float tickH =
                     (grSpanDb / (kLevelMaxDb - kLevelMinDb)) * bar.height();
-                p.setPen(QPen(kLimGrTick, 2.0));
+                p.setPen(QPen(kLimGrTick(), 2.0));
                 p.drawLine(QPointF(bar.center().x(), cy),
                            QPointF(bar.center().x(), cy + tickH));
             }
@@ -238,18 +239,18 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
                 (m_peakDb - kLevelMinDb) / (kLevelMaxDb - kLevelMinDb),
                 0.0f, 1.0f);
             const float y = bar.bottom() - tp * bar.height();
-            p.setPen(QPen(kPeakLine, 1.0));
+            p.setPen(QPen(kPeakLine(), 1.0));
             p.drawLine(QPointF(bar.left(), y), QPointF(bar.right(), y));
         }
     } else {
         const float fillH = m_smooth.value() * bar.height();
         QRectF fill(bar.left(), bar.top(), bar.width(), fillH);
-        p.fillRect(fill, kGrColor);
+        p.fillRect(fill, kGrColor());
 
         const float peakMag = std::clamp(-m_peakDb, 0.0f, kGrMaxMag);
         if (peakMag > 0.0f) {
             const float y = bar.top() + (peakMag / kGrMaxMag) * bar.height();
-            p.setPen(QPen(kPeakLine, 1.0));
+            p.setPen(QPen(kPeakLine(), 1.0));
             p.drawLine(QPointF(bar.left(), y), QPointF(bar.right(), y));
         }
     }
@@ -292,7 +293,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
             const float norm = (ticks[i].db - minDb) / (maxDb - minDb);
             const int y = static_cast<int>(bar.bottom() - norm * bar.height());
 
-            p.setPen(QColor("#7f93a5"));
+            p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
             const QString s = QString::fromLatin1(ticks[i].label);
             const int tw = fm.horizontalAdvance(s);
             const int ty = std::clamp(y + fm.ascent() / 2 - 1,
@@ -300,14 +301,14 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
                                       static_cast<int>(bar.bottom()) - 1);
             if (tickLeft) {
                 p.drawText(textRight - tw, ty, s);
-                p.setPen(QColor("#405060"));
+                p.setPen(AetherSDR::ThemeManager::instance().color("color.meter.bar.fill"));
                 p.drawLine(textRight, y,
                            static_cast<int>(bar.left()) - 1, y);
             } else {
                 // Right side — labels grow from the bar outward.
                 const int textLeft = static_cast<int>(bar.right()) + kTickGap + 1;
                 p.drawText(textLeft, ty, s);
-                p.setPen(QColor("#405060"));
+                p.setPen(AetherSDR::ThemeManager::instance().color("color.meter.bar.fill"));
                 p.drawLine(static_cast<int>(bar.right()), y,
                            textLeft - 1, y);
             }
@@ -334,7 +335,7 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
         f.setPixelSize(10);
         f.setBold(true);
         p.setFont(f);
-        p.setPen(QColor("#e8e8e8"));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
         constexpr int kFooterRightPad = 3;
         const QRectF footer(0, h - valueH,
                             w - kFooterRightPad, valueH);
