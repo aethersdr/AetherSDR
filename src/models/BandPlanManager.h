@@ -60,6 +60,11 @@ public:
     // Available plans (display names)
     QStringList availablePlans() const;
 
+    // Test hook: replace the active plan's segments without going through
+    // resource loading / AppSettings. Used by the license-filter unit tests
+    // (tests/band_plan_license_filter_test.cpp). (#3060)
+    void setSegmentsForTest(const QVector<Segment>& segs) { m_segments = segs; }
+
     // Walk the active plan's segments whose midpoint falls inside
     // [searchLowMhz, searchHighMhz], sort by low edge, and merge adjacent
     // or overlapping segments (1 Hz adjacency tolerance) into contiguous

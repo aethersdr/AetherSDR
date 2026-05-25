@@ -1465,6 +1465,17 @@ target_include_directories(profile_transfer_test PRIVATE src)
 target_link_libraries(profile_transfer_test PRIVATE Qt6::Core)
 add_test(NAME profile_transfer_test COMMAND profile_transfer_test)
 
+# Pins the filter-before-merge invariant on the license-class-aware overload
+# of BandPlanManager::contiguousRegionsForBand (PR #3050, closing #2649). (#3060)
+add_executable(band_plan_license_filter_test
+    tests/band_plan_license_filter_test.cpp
+    src/models/BandPlanManager.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(band_plan_license_filter_test PRIVATE src)
+target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core)
+add_test(NAME band_plan_license_filter_test COMMAND band_plan_license_filter_test)
+
 add_executable(biquad_test
     tests/biquad_test.cpp
     src/core/Biquad.cpp

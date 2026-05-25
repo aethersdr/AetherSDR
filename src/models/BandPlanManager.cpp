@@ -86,10 +86,11 @@ BandPlanManager::contiguousRegionsForBand(double searchLowMhz,
         // into one and reintroducing the disallowed centers. Empty-license
         // segments (BCN markers, general-purpose) always pass through. (#2649)
         if (!allowedClass.isEmpty() && !seg.license.isEmpty()) {
+            const QString needle = allowedClass.trimmed();
             const auto codes = seg.license.split(',', Qt::SkipEmptyParts);
             bool allowed = false;
             for (const auto& code : codes) {
-                if (code.trimmed() == allowedClass) { allowed = true; break; }
+                if (code.trimmed() == needle) { allowed = true; break; }
             }
             if (!allowed) continue;
         }
