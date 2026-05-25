@@ -119,6 +119,7 @@
 #include "FramelessWindowTitleBar.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <functional>
@@ -12791,6 +12792,10 @@ void MainWindow::updateNr2Availability()
 void MainWindow::enableNr2WithWisdom()
 {
     if (AudioEngine::needsWisdomGeneration()) {
+        const auto cancelled = std::make_shared<std::atomic_bool>(false);
+        const auto result = std::make_shared<std::atomic<int>>(
+            static_cast<int>(SpectralNR::WisdomResult::Failed));
+
         const bool frameless =
             AppSettings::instance().value("FramelessWindow", "True").toString() == "True";
 
@@ -12832,6 +12837,14 @@ void MainWindow::enableNr2WithWisdom()
         progress->setRange(0, 100);
         progress->setValue(0);
         body->addWidget(progress);
+
+        auto* buttonRow = new QHBoxLayout();
+        buttonRow->addStretch();
+        auto* cancelButton = new QPushButton("Cancel", content);
+        cancelButton->setAutoDefault(false);
+        cancelButton->setDefault(false);
+        buttonRow->addWidget(cancelButton);
+        body->addLayout(buttonRow);
         root->addWidget(content);
 
         dlg->show();
@@ -12843,29 +12856,75 @@ void MainWindow::enableNr2WithWisdom()
         breathe->setEndValue(1.0);
         breathe->setLoopCount(-1);
 
-        auto* thread = QThread::create([dlg, breathe, label, progress]() {
-            AudioEngine::generateWisdom([dlg, breathe, label, progress](int step, int total, const std::string& desc) {
-                int pct = total > 0 ? (step * 100 / total) : 0;
-                QString d = QString::fromStdString(desc);
-                QMetaObject::invokeMethod(dlg, [breathe, label, progress, pct, d]() {
-                    if (!d.isEmpty()) {
-                        label->setText(d + "\n\n"
-                            "This window will automatically close when wisdom generation is complete.");
-                        if (progress->value() >= 90 && breathe->state() != QAbstractAnimation::Running)
-                            breathe->start();
-                    } else {
-                        progress->setValue(pct);
-                    }
-                });
-            });
+        const auto requestCancel = [cancelled, label, progress, cancelButton]() {
+            if (cancelled->exchange(true))
+                return;
+            cancelButton->setEnabled(false);
+            progress->setRange(0, 0);
+            label->setText("Canceling FFTW wisdom generation...\n\n"
+                           "Audio will continue unchanged. This may take a moment while the current FFT plan finishes.");
+        };
+        connect(cancelButton, &QPushButton::clicked, dlg, requestCancel);
+        connect(dlg, &QDialog::rejected, dlg, requestCancel);
+
+        const QPointer<QDialog> dlgGuard(dlg);
+        auto* thread = QThread::create([cancelled, result, dlgGuard, breathe, label, progress]() {
+            const auto wisdomResult = AudioEngine::generateWisdom(
+                [cancelled, dlgGuard, breathe, label, progress](int step, int total, const std::string& desc) {
+                    if (!dlgGuard)
+                        return;
+                    if (cancelled->load())
+                        return;
+                    int pct = total > 0 ? (step * 100 / total) : 0;
+                    QString d = QString::fromStdString(desc);
+                    QMetaObject::invokeMethod(dlgGuard.data(), [dlgGuard, breathe, label, progress, pct, d]() {
+                        if (!dlgGuard)
+                            return;
+                        if (!d.isEmpty()) {
+                            label->setText(d + "\n\n"
+                                "This window will automatically close when wisdom generation is complete.");
+                            if (progress->value() >= 90 && breathe->state() != QAbstractAnimation::Running)
+                                breathe->start();
+                        } else {
+                            progress->setValue(pct);
+                        }
+                    });
+                },
+                [cancelled]() { return cancelled->load(); });
+            result->store(static_cast<int>(wisdomResult));
         });
-        connect(thread, &QThread::finished, this, [this, dlg, breathe, progress, label, thread]() {
+        connect(thread, &QThread::finished, this, [this, dlg, breathe, progress, label, thread, result]() {
+            const auto wisdomResult =
+                static_cast<SpectralNR::WisdomResult>(result->load());
+            const bool ready = wisdomResult == SpectralNR::WisdomResult::Ready
+                            || wisdomResult == SpectralNR::WisdomResult::Generated;
             breathe->stop();
             dlg->setWindowOpacity(1.0);
-            progress->setValue(100);
+            progress->setRange(0, 100);
+            progress->setValue(ready ? 100 : 0);
+
+            if (!ready) {
+                label->setText(wisdomResult == SpectralNR::WisdomResult::Cancelled
+                    ? "Wisdom generation canceled. Audio was left unchanged."
+                    : "Wisdom generation failed. Audio was left unchanged.");
+                if (auto* a = m_appletPanel ? m_appletPanel->clientRxDspApplet() : nullptr) {
+                    if (auto* w = a->widget())
+                        w->syncFromEngine();
+                }
+                if (m_dspDialog)
+                    m_dspDialog->syncFromEngine();
+                statusBar()->showMessage("NR2 was not enabled; audio is unchanged", 4000);
+                QTimer::singleShot(800, this, [dlg, thread]() {
+                    dlg->accept();
+                    dlg->deleteLater();
+                    thread->deleteLater();
+                });
+                return;
+            }
+
             label->setText("Wisdom generation complete!");
             QTimer::singleShot(800, this, [this, dlg, thread]() {
-                dlg->close();
+                dlg->accept();
                 dlg->deleteLater();
                 thread->deleteLater();
                 QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr2Enabled(true); });
@@ -13812,9 +13871,13 @@ void MainWindow::registerShortcutActions()
         });
     m_shortcutManager.registerAction("nr2_toggle", "NR2 Toggle", "DSP",
         QKeySequence(), [this]() {
-            QMetaObject::invokeMethod(m_audio, [this]() {
-                m_audio->setNr2Enabled(!m_audio->nr2Enabled());
-            });
+            if (m_audio->nr2Enabled()) {
+                QMetaObject::invokeMethod(m_audio, [this]() {
+                    m_audio->setNr2Enabled(false);
+                });
+            } else {
+                enableNr2WithWisdom();
+            }
         });
     m_shortcutManager.registerAction("rn2_toggle", "RN2 (RNNoise) Toggle", "DSP",
         QKeySequence(), [this]() {
@@ -15742,7 +15805,13 @@ void MainWindow::registerMidiParams()
         [this]() -> float { auto* s = activeSlice(); return s && s->xitOn() ? 1 : 0; });
 
     reg("rx.nr2Enable", "NR2 (Spectral)", "RX", P::Toggle, 0, 1,
-        [this](float v) { QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr2Enabled(v > 0.5f); }); },
+        [this](float v) {
+            if (v > 0.5f) {
+                enableNr2WithWisdom();
+            } else {
+                QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr2Enabled(false); });
+            }
+        },
         [this]() -> float { return m_audio->nr2Enabled() ? 1 : 0; });
 
     reg("rx.rn2Enable", "RN2 (RNNoise)", "RX", P::Toggle, 0, 1,

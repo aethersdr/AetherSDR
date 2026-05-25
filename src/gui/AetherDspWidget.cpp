@@ -1036,6 +1036,8 @@ QWidget* AetherDspWidget::buildDfnrPage()
 
 void AetherDspWidget::syncFromEngine()
 {
+    syncDspSelectorFromEngine();
+
     auto& s = AppSettings::instance();
 
     int gainMethod = s.value("NR2GainMethod", "2").toInt();

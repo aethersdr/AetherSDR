@@ -96,12 +96,19 @@ public:
 
     // Generate FFTW wisdom file for optimal FFT performance.
     // Call once on first use; subsequent runs load existing wisdom.
-    // Returns true if wisdom was generated (slow — several minutes), false if loaded.
     // The progress callback receives (currentStep, totalSteps, description).
     using WisdomProgressCb = std::function<void(int, int, const std::string&)>;
+    using WisdomCancelCb = std::function<bool()>;
+    enum class WisdomResult {
+        Ready,      // existing or imported wisdom is ready
+        Generated,  // new wisdom was generated and saved
+        Cancelled,  // caller cancelled before wisdom was ready
+        Failed,     // generation or export failed
+    };
     static bool loadWisdom(const std::string& directory);
-    static bool generateWisdom(const std::string& directory,
-                               WisdomProgressCb progress = nullptr);
+    static WisdomResult generateWisdom(const std::string& directory,
+                                       WisdomProgressCb progress = nullptr,
+                                       WisdomCancelCb shouldCancel = nullptr);
 
 private:
     // FFTW plan creation/destruction is NOT thread-safe. This mutex guards

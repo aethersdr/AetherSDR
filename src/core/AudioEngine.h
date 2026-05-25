@@ -17,6 +17,7 @@
 #include <QPointer>
 
 #include "TxMicChannelNormalizer.h"
+#include "SpectralNR.h"
 
 class QMediaDevices;
 
@@ -27,7 +28,6 @@ class QMediaDevices;
 
 namespace AetherSDR {
 
-class SpectralNR;
 class SpecbleachFilter;
 class RNNoiseFilter;
 class NvidiaBnrFilter;
@@ -427,7 +427,9 @@ public:
     static bool needsWisdomGeneration();
     static QString wisdomFilePath();
     // Must be called from a worker thread — blocks for several minutes.
-    static void generateWisdom(std::function<void(int,int,const std::string&)> progress = nullptr);
+    static SpectralNR::WisdomResult generateWisdom(
+        SpectralNR::WisdomProgressCb progress = nullptr,
+        SpectralNR::WisdomCancelCb shouldCancel = nullptr);
 
     // Device selection (restarts the stream if currently running)
     void setOutputDevice(const QAudioDevice& dev);

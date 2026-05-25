@@ -641,6 +641,15 @@ Radio-provided taps:
 | DAX low-latency TX | `AudioEngine::feedDaxTxAudio()` | float32 stereo | VITA PCC `0x03E3` float32 stereo | 24 kHz | 2 | 128 stereo frames per packet |
 | DAX radio-native TX | `AudioEngine::feedDaxTxAudio()` | float32 stereo | VITA PCC `0x0123` Int16 mono | 24 kHz | 2 -> 1 | Safe stronger-channel/average mono collapse; radio `dax=1` route |
 
+NR2 enable is gated by `MainWindow::enableNr2WithWisdom()`. If FFTW wisdom
+needs first-run generation, cancellation leaves the current audio path untouched:
+NR2 is not initialized, other client DSP state is not reset, and wisdom is only
+installed after a complete temp-file export.
+Startup and NR2-enable preflight emit an `aether.audio.summary` "Audio NR2
+wisdom summary" that records whether cached wisdom is valid, missing, or
+invalid/stale and where the wisdom file lives. Invalid/stale wisdom also emits a
+warning before it is discarded and regenerated.
+
 ## Downmix, duplication, resampling, and format-change table
 
 | Location | Operation | Input | Output | Notes |

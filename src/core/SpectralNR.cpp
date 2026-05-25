@@ -30,6 +30,7 @@ along with this program.  If not, see <https://www.gnu.org/licenses/>.
 #include "SpectralNR.h"
 #include "LogManager.h"
 #include <algorithm>
+#include <cstdio>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -50,6 +51,37 @@ std::string wisdomPathForDirectory(const std::string& directory)
     wisdomFile += "aethersdr_fftw_wisdom";
     return wisdomFile;
 }
+
+std::string wisdomTempPathForDirectory(const std::string& directory)
+{
+    return wisdomPathForDirectory(directory) + ".tmp";
+}
+
+#ifdef HAVE_FFTW3
+bool exportWisdomAtomically(const std::string& directory)
+{
+    const std::string wisdomFile = wisdomPathForDirectory(directory);
+    const std::string tempFile = wisdomTempPathForDirectory(directory);
+
+    std::remove(tempFile.c_str());
+    if (!fftw_export_wisdom_to_filename(tempFile.c_str())) {
+        std::remove(tempFile.c_str());
+        qCWarning(lcDsp) << "SpectralNR: failed to export FFTW wisdom to"
+                         << QString::fromStdString(tempFile);
+        return false;
+    }
+
+    std::remove(wisdomFile.c_str());
+    if (std::rename(tempFile.c_str(), wisdomFile.c_str()) != 0) {
+        qCWarning(lcDsp) << "SpectralNR: failed to install FFTW wisdom at"
+                         << QString::fromStdString(wisdomFile);
+        std::remove(tempFile.c_str());
+        return false;
+    }
+
+    return true;
+}
+#endif
 
 } // namespace
 
@@ -223,15 +255,26 @@ bool SpectralNR::loadWisdom(const std::string& directory)
 #endif
 }
 
-bool SpectralNR::generateWisdom(const std::string& directory,
-                                WisdomProgressCb progress)
+SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory,
+                                                    WisdomProgressCb progress,
+                                                    WisdomCancelCb shouldCancel)
 {
 #ifdef HAVE_FFTW3
-    const std::string wisdomFile = wisdomPathForDirectory(directory);
+    const auto cancelled = [&shouldCancel]() {
+        return shouldCancel && shouldCancel();
+    };
+
+    std::remove(wisdomTempPathForDirectory(directory).c_str());
+
+    if (cancelled())
+        return WisdomResult::Cancelled;
 
     if (loadWisdom(directory)) {
-        return false;  // wisdom loaded from file — no generation needed
+        return WisdomResult::Ready;  // wisdom loaded from file — no generation needed
     }
+    // If a wisdom file exists but cannot be imported, treat it as stale/partial
+    // and remove it before attempting a replacement.
+    std::remove(wisdomPathForDirectory(directory).c_str());
 
     // Try to import Thetis/WDSP wisdom (compatible FFTW3 format)
     // This gives us a head start if Thetis is installed
@@ -243,9 +286,17 @@ bool SpectralNR::generateWisdom(const std::string& directory,
                 + "\\OpenHPSDR\\Thetis-x64\\wdspWisdom00";
             std::lock_guard<std::mutex> lock(s_fftwMutex);
             if (fftw_import_wisdom_from_filename(thetisWisdom.c_str())) {
-                // Save as our own so we don't depend on Thetis in future
-                fftw_export_wisdom_to_filename(wisdomFile.c_str());
-                return false;
+                if (cancelled())
+                    return WisdomResult::Cancelled;
+                // Save as our own so we don't depend on Thetis in future.
+                if (!exportWisdomAtomically(directory))
+                    return WisdomResult::Failed;
+                if (cancelled()) {
+                    std::remove(wisdomPathForDirectory(directory).c_str());
+                    std::remove(wisdomTempPathForDirectory(directory).c_str());
+                    return WisdomResult::Cancelled;
+                }
+                return WisdomResult::Ready;
             }
         }
     }
@@ -257,6 +308,13 @@ bool SpectralNR::generateWisdom(const std::string& directory,
     constexpr int maxSize = 262144;
     auto* cbuf = fftw_alloc_complex(maxSize);
     auto* rbuf = static_cast<double*>(fftw_malloc(maxSize * sizeof(double)));
+    if (!cbuf || !rbuf) {
+        fftw_free(rbuf);
+        fftw_free(cbuf);
+        std::remove(wisdomTempPathForDirectory(directory).c_str());
+        qCWarning(lcDsp) << "SpectralNR: failed to allocate buffers for FFTW wisdom";
+        return WisdomResult::Failed;
+    }
 
     // Count total steps for progress reporting
     // Sizes: 64, 128, 256, ... 262144 = 13 sizes × 4 plan types = 52 steps
@@ -269,6 +327,12 @@ bool SpectralNR::generateWisdom(const std::string& directory,
         // preventing concurrent plan creation (#467)
 
         // 1. Complex forward
+        if (cancelled()) {
+            fftw_free(rbuf);
+            fftw_free(cbuf);
+            std::remove(wisdomTempPathForDirectory(directory).c_str());
+            return WisdomResult::Cancelled;
+        }
         if (progress) progress(step, totalSteps,
             "Computing COMPLEX FORWARD FFT size " + std::to_string(psize) + "...");
         {   std::lock_guard<std::mutex> lock(s_fftwMutex);
@@ -279,6 +343,12 @@ bool SpectralNR::generateWisdom(const std::string& directory,
         if (progress) progress(++step, totalSteps, "");
 
         // 2. Complex backward (same size)
+        if (cancelled()) {
+            fftw_free(rbuf);
+            fftw_free(cbuf);
+            std::remove(wisdomTempPathForDirectory(directory).c_str());
+            return WisdomResult::Cancelled;
+        }
         if (progress) progress(step, totalSteps,
             "Computing COMPLEX BACKWARD FFT size " + std::to_string(psize) + "...");
         {   std::lock_guard<std::mutex> lock(s_fftwMutex);
@@ -289,6 +359,12 @@ bool SpectralNR::generateWisdom(const std::string& directory,
         if (progress) progress(++step, totalSteps, "");
 
         // 3. Real-to-complex forward
+        if (cancelled()) {
+            fftw_free(rbuf);
+            fftw_free(cbuf);
+            std::remove(wisdomTempPathForDirectory(directory).c_str());
+            return WisdomResult::Cancelled;
+        }
         if (progress) progress(step, totalSteps,
             "Computing REAL-TO-COMPLEX FFT size " + std::to_string(psize) + "...");
         {   std::lock_guard<std::mutex> lock(s_fftwMutex);
@@ -298,6 +374,12 @@ bool SpectralNR::generateWisdom(const std::string& directory,
         if (progress) progress(++step, totalSteps, "");
 
         // 4. Complex-to-real inverse
+        if (cancelled()) {
+            fftw_free(rbuf);
+            fftw_free(cbuf);
+            std::remove(wisdomTempPathForDirectory(directory).c_str());
+            return WisdomResult::Cancelled;
+        }
         if (progress) progress(step, totalSteps,
             "Computing COMPLEX-TO-REAL FFT size " + std::to_string(psize) + "...");
         {   std::lock_guard<std::mutex> lock(s_fftwMutex);
@@ -307,19 +389,31 @@ bool SpectralNR::generateWisdom(const std::string& directory,
         if (progress) progress(++step, totalSteps, "");
     }
 
+    if (cancelled()) {
+        fftw_free(rbuf);
+        fftw_free(cbuf);
+        std::remove(wisdomTempPathForDirectory(directory).c_str());
+        return WisdomResult::Cancelled;
+    }
+
+    bool exported = false;
     {
         std::lock_guard<std::mutex> lock(s_fftwMutex);
-        if (!fftw_export_wisdom_to_filename(wisdomFile.c_str()))
-            qCWarning(lcDsp) << "SpectralNR: failed to export FFTW wisdom to"
-                             << QString::fromStdString(wisdomFile);
+        exported = exportWisdomAtomically(directory);
     }
     fftw_free(rbuf);
     fftw_free(cbuf);
-    return true;  // wisdom was generated
+    if (cancelled()) {
+        std::remove(wisdomPathForDirectory(directory).c_str());
+        std::remove(wisdomTempPathForDirectory(directory).c_str());
+        return WisdomResult::Cancelled;
+    }
+    return exported ? WisdomResult::Generated : WisdomResult::Failed;
 #else
     (void)directory;
     (void)progress;
-    return false;
+    (void)shouldCancel;
+    return WisdomResult::Ready;
 #endif
 }
 

@@ -45,9 +45,11 @@
 #include <limits>
 #include <QIODevice>
 #include <QFile>
+#include <QFileInfo>
 #include <QMediaDevices>
 #include <QAudioDevice>
 #include <QDir>
+#include <QDateTime>
 #include <QtEndian>
 #include <QThread>
 #include <QJsonDocument>
@@ -58,6 +60,10 @@
 #include <optional>
 
 namespace AetherSDR {
+
+static QString wisdomDir();
+static void logNr2WisdomSummary(const QString& context);
+static void logNr2WisdomGenerationSummary(SpectralNR::WisdomResult result);
 
 namespace {
 constexpr qint64 kTxAutoRestartMinRuntimeMs = 60000;
@@ -644,6 +650,7 @@ AudioEngine::AudioEngine(QObject* parent)
 
     AudioSummaryLogger::logStartupEnvironment(
         DeviceDiagnostics::buildAudioStartupSnapshot(this, QJsonObject{}));
+    logNr2WisdomSummary(QStringLiteral("startup"));
 
     // Opus TX pacing timer — sends one queued packet every 10ms for even
     // delivery timing. Without this, QAudioSource delivers bursts of samples
@@ -3339,18 +3346,110 @@ QString AudioEngine::wisdomFilePath()
     return wisdomDir() + "aethersdr_fftw_wisdom";
 }
 
+static QString wisdomFileDetailText(const QFileInfo& info)
+{
+    if (!info.exists()) {
+        return QStringLiteral("path=\"%1\"")
+            .arg(QDir::toNativeSeparators(info.absoluteFilePath()));
+    }
+
+    return QStringLiteral("path=\"%1\" size=%2B modified=\"%3\"")
+        .arg(QDir::toNativeSeparators(info.absoluteFilePath()))
+        .arg(info.size())
+        .arg(info.lastModified().toString(Qt::ISODateWithMs));
+}
+
+static QString wisdomResultText(SpectralNR::WisdomResult result)
+{
+    switch (result) {
+    case SpectralNR::WisdomResult::Ready:     return QStringLiteral("ready");
+    case SpectralNR::WisdomResult::Generated: return QStringLiteral("generated");
+    case SpectralNR::WisdomResult::Cancelled: return QStringLiteral("cancelled");
+    case SpectralNR::WisdomResult::Failed:    return QStringLiteral("failed");
+    }
+    return QStringLiteral("unknown");
+}
+
+static void logNr2WisdomSummary(const QString& context)
+{
+#ifndef HAVE_FFTW3
+    QStringList lines;
+    lines << QStringLiteral("Audio NR2 wisdom summary:")
+          << QStringLiteral("  context=%1 status=unavailable action=runtime-plans reason=\"built without FFTW3\"")
+                 .arg(context);
+    qCInfo(lcAudioSummary).noquote() << lines.join(QLatin1Char('\n'));
+#else
+    const QString directory = wisdomDir();
+    const QString path = directory + "aethersdr_fftw_wisdom";
+    const QFileInfo info(path);
+
+    QString status;
+    QString action;
+    bool warn = false;
+
+    if (!info.exists()) {
+        status = QStringLiteral("missing");
+        action = QStringLiteral("train-on-first-enable");
+    } else if (!info.isFile()) {
+        status = QStringLiteral("invalid");
+        action = QStringLiteral("discard-and-regenerate-on-first-enable");
+        warn = true;
+    } else if (SpectralNR::loadWisdom(directory.toStdString())) {
+        status = QStringLiteral("valid");
+        action = QStringLiteral("use-cached-wisdom");
+    } else {
+        status = QStringLiteral("invalid-or-stale");
+        action = QStringLiteral("discard-and-regenerate-on-first-enable");
+        warn = true;
+    }
+
+    QStringList lines;
+    lines << QStringLiteral("Audio NR2 wisdom summary:")
+          << QStringLiteral("  context=%1 status=%2 action=%3")
+                 .arg(context, status, action)
+          << QStringLiteral("  %1").arg(wisdomFileDetailText(info));
+
+    const QString summary = lines.join(QLatin1Char('\n'));
+    if (warn) {
+        qCWarning(lcAudioSummary).noquote() << summary;
+        qCWarning(lcAudio).noquote()
+            << QStringLiteral("AudioEngine: NR2 FFTW wisdom %1; %2 %3")
+                   .arg(status, action, wisdomFileDetailText(info));
+    } else {
+        qCInfo(lcAudioSummary).noquote() << summary;
+    }
+#endif
+}
+
+static void logNr2WisdomGenerationSummary(SpectralNR::WisdomResult result)
+{
+    const QFileInfo info(AudioEngine::wisdomFilePath());
+    QStringList lines;
+    lines << QStringLiteral("Audio NR2 wisdom generation summary:")
+          << QStringLiteral("  result=%1").arg(wisdomResultText(result))
+          << QStringLiteral("  %1").arg(wisdomFileDetailText(info));
+
+    const QString summary = lines.join(QLatin1Char('\n'));
+    if (result == SpectralNR::WisdomResult::Failed) {
+        qCWarning(lcAudioSummary).noquote() << summary;
+    } else {
+        qCInfo(lcAudioSummary).noquote() << summary;
+    }
+}
+
 bool AudioEngine::needsWisdomGeneration()
 {
 #ifndef HAVE_FFTW3
     return false;
 #else
     const QString path = wisdomFilePath();
-    if (!QFile::exists(path))
+    if (!QFile::exists(path)) {
+        logNr2WisdomSummary(QStringLiteral("NR2 enable preflight"));
         return true;
+    }
 
     if (!SpectralNR::loadWisdom(wisdomDir().toStdString())) {
-        qCWarning(lcAudio) << "AudioEngine: NR2 FFTW wisdom exists but could not be imported;"
-                           << "will regenerate" << path;
+        logNr2WisdomSummary(QStringLiteral("NR2 enable preflight"));
         return true;
     }
 
@@ -3358,9 +3457,15 @@ bool AudioEngine::needsWisdomGeneration()
 #endif
 }
 
-void AudioEngine::generateWisdom(std::function<void(int,int,const std::string&)> progress)
+SpectralNR::WisdomResult AudioEngine::generateWisdom(
+    SpectralNR::WisdomProgressCb progress,
+    SpectralNR::WisdomCancelCb shouldCancel)
 {
-    SpectralNR::generateWisdom(wisdomDir().toStdString(), std::move(progress));
+    const auto result = SpectralNR::generateWisdom(wisdomDir().toStdString(),
+                                                   std::move(progress),
+                                                   std::move(shouldCancel));
+    logNr2WisdomGenerationSummary(result);
+    return result;
 }
 
 void AudioEngine::setNr2Enabled(bool on)
