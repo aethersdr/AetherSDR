@@ -6,6 +6,7 @@
 #include <QAudioDevice>
 #include <QAudioFormat>
 #include <QIODevice>
+#include <QJsonArray>
 #include <QUdpSocket>
 #include <QTimer>
 #include <atomic>
@@ -124,6 +125,11 @@ public:
     void setMuted(bool m);
     bool isRxStreaming() const { return m_audioSink != nullptr; }
     bool isTxStreaming() const { return m_audioSource != nullptr; }
+    int  txInputSampleRate() const { return m_txInputRate; }
+    int  txInputChannelCount() const { return m_txInputChannels; }
+    bool txInputResamplingTo24k() const { return m_txNeedsResample; }
+    bool rxOutputResamplingActive() const { return m_resampleTo48k; }
+    QJsonArray audioEndpointDiagnostics() const;
 
     // Client-side PC mic gain (0-100 → 0.0-1.0, applied before Opus encoding)
     void setPcMicGain(int level) { m_pcMicGain.store(qBound(0, level, 100) / 100.0f); }
