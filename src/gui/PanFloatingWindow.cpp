@@ -21,7 +21,7 @@ PanFloatingWindow::PanFloatingWindow(QWidget* parent)
     setWindowFlags(flags);
     setMinimumSize(400, 300);
     setAttribute(Qt::WA_StyledBackground, true);
-    setStyleSheet(darkThemeStylesheet());
+    applyAppTheme(this);
 
     m_layout = new QVBoxLayout(this);
     m_layout->setContentsMargins(0, 0, 0, 0);

@@ -34,7 +34,7 @@ FloatingContainerWindow::FloatingContainerWindow(QWidget* parent)
     setAttribute(Qt::WA_DeleteOnClose, false);
     setAttribute(Qt::WA_QuitOnClose, false);
     setAttribute(Qt::WA_StyledBackground, true);
-    setStyleSheet(darkThemeStylesheet());
+    applyAppTheme(this);
     m_layout = new QVBoxLayout(this);
     m_layout->setContentsMargins(0, 0, 0, 0);
     m_layout->setSpacing(0);

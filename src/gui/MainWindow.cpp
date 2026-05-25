@@ -9202,7 +9202,7 @@ void MainWindow::buildUI()
 
 void MainWindow::applyDarkTheme()
 {
-    setStyleSheet(darkThemeStylesheet());
+    applyAppTheme(this);
 }
 
 // ─── Radio/model event handlers ───────────────────────────────────────────────
@@ -16183,7 +16183,7 @@ void MainWindow::floatAppletPanel()
     m_appletPanelFloatWindow->setAttribute(Qt::WA_DeleteOnClose, false);
     m_appletPanelFloatWindow->setAttribute(Qt::WA_QuitOnClose, false);
     m_appletPanelFloatWindow->setAttribute(Qt::WA_StyledBackground, true);
-    m_appletPanelFloatWindow->setStyleSheet(darkThemeStylesheet());
+    applyAppTheme(m_appletPanelFloatWindow);
     auto* layout = new QVBoxLayout(m_appletPanelFloatWindow);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
