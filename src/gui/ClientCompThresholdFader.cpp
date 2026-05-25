@@ -205,11 +205,11 @@ void ClientCompThresholdFader::paintEvent(QPaintEvent*)
         const QRect fill(barR.x(), barR.y() + m_stripH - fillH,
                          kBarW, fillH);
         QLinearGradient grad(0, barR.y() + m_stripH, 0, barR.y());
-        grad.setColorAt(0.0, QColor("#2f9e6a"));
-        grad.setColorAt(0.55, QColor("#6cc56a"));
-        grad.setColorAt(0.80, QColor("#e8b94c"));
-        grad.setColorAt(0.95, QColor("#e8553c"));
-        grad.setColorAt(1.0, QColor("#f2362a"));
+        grad.setColorAt(0.0, AetherSDR::ThemeManager::instance().color("color.accent.success"));
+        grad.setColorAt(0.55, AetherSDR::ThemeManager::instance().color("color.accent.success"));
+        grad.setColorAt(0.80, AetherSDR::ThemeManager::instance().color("color.accent.warning"));
+        grad.setColorAt(0.95, AetherSDR::ThemeManager::instance().color("color.accent.danger"));
+        grad.setColorAt(1.0, AetherSDR::ThemeManager::instance().color("color.accent.danger"));
         p.fillRect(fill, grad);
     }
 

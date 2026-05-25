@@ -3,19 +3,19 @@
 
 #include <QPainter>
 #include <QMouseEvent>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
 // ─── Category colors ────────────────────────────────────────────────────────
 
-static const QColor kUnboundFill(0x1a, 0x2a, 0x3a);
-static const QColor kUnboundBorder(0x30, 0x40, 0x50);
-
+inline QColor kUnboundFill() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kUnboundBorder() { return AetherSDR::ThemeManager::instance().color("color.background.2"); }
 QColor KeyboardMapWidget::categoryColor(const QString& cat) const
 {
-    if (cat == "Frequency") return QColor(0x00, 0x60, 0x80);
+    if (cat == "Frequency") return AetherSDR::ThemeManager::instance().color("color.accent.dim");
     if (cat == "TX")        return QColor(0x80, 0x00, 0x20);
-    if (cat == "Audio")     return QColor(0x00, 0x60, 0x40);
+    if (cat == "Audio")     return AetherSDR::ThemeManager::instance().color("color.accent.success");
     if (cat == "Display")   return QColor(0x60, 0x60, 0x00);
     if (cat == "Slice")     return QColor(0x40, 0x00, 0x80);
     if (cat == "Mode")      return QColor(0x40, 0x00, 0x80);
@@ -23,9 +23,9 @@ QColor KeyboardMapWidget::categoryColor(const QString& cat) const
     if (cat == "Tuning")    return QColor(0x00, 0x60, 0x60);
     if (cat == "AGC")       return QColor(0x00, 0x40, 0x80);
     if (cat == "Filter")    return QColor(0x00, 0x40, 0x80);
-    if (cat == "Band")      return QColor(0x00, 0x60, 0x80);
+    if (cat == "Band")      return AetherSDR::ThemeManager::instance().color("color.accent.dim");
     if (cat == "RIT/XIT")   return QColor(0x00, 0x60, 0x60);
-    return kUnboundFill;
+    return kUnboundFill();
 }
 
 // ─── Construction ───────────────────────────────────────────────────────────
@@ -220,7 +220,7 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    p.fillRect(rect(), QColor(0x0a, 0x0a, 0x14));
+    p.fillRect(rect(), AetherSDR::ThemeManager::instance().color("color.background.0"));
 
     // Compute key unit size to fit the layout (23 key units wide for main + numpad)
     constexpr float totalKeysW = 23.5f;
@@ -251,8 +251,8 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
         const auto* act = m_mgr->actionForKey(seq);
 
         // Determine colors
-        QColor fill = kUnboundFill;
-        QColor border = kUnboundBorder;
+        QColor fill = kUnboundFill();
+        QColor border = kUnboundBorder();
         if (act) {
             fill = categoryColor(act->category);
             border = fill.lighter(140);
@@ -266,7 +266,7 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
 
         // Selected highlight
         if (i == m_selectedIdx) {
-            border = QColor(0x00, 0xb4, 0xd8);
+            border = AetherSDR::ThemeManager::instance().color("color.accent");
             fill = fill.lighter(150);
         }
 
@@ -278,7 +278,7 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
         // Extra label (shift character, top-left)
         if (!k.extraLabel.isEmpty()) {
             p.setFont(actionFont);
-            p.setPen(QColor(0x80, 0x90, 0xa0));
+            p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
             QRectF extraR = r.adjusted(3, 2, -3, -r.height() * 0.6);
             p.drawText(extraR, Qt::AlignLeft | Qt::AlignTop, k.extraLabel);
         }

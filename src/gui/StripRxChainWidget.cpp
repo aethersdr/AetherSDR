@@ -26,6 +26,7 @@
 #include <QToolTip>
 #include <algorithm>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -46,25 +47,22 @@ constexpr int   kArrowTip      = 3;
 const char*     kMimeFormat  = "application/x-aethersdr-rxchain-stage";
 constexpr qreal kRadius      = 5.0;
 
-const QColor kBgBox        ("#0e1b28");
-const QColor kBgEndpoint   ("#1a2030");
-const QColor kBgActive     ("#14253a");
-const QColor kBorderIdle   ("#2a3a4a");
-const QColor kBorderActive ("#4db8d4");
-const QColor kBorderGrey   ("#1e2a38");
-// Status-tile "active" colour — green, matches the TX-side mic-ready
+inline QColor kBgBox() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
+inline QColor kBgEndpoint() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kBgActive() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kBorderIdle() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kBorderActive() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
+inline QColor kBorderGrey() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }  // Status-tile "active" colour — green, matches the TX-side mic-ready
 // tone so the language reads consistently across both strips.
-const QColor kBgStatusOn      ("#006040");
-const QColor kBorderStatusOn  ("#00a060");
-const QColor kTextStatusOn    ("#00ff88");
-const QColor kConnector    ("#2a3a4a");
-const QColor kTextLabel    ("#c8d8e8");
-const QColor kTextDim      ("#506070");
-const QColor kLedActive    ("#00ff88");
-const QColor kLedBypass    ("#2a3a4a");
-const QColor kDropIndicator("#4db8d4");
-
-// User-facing short label for each RX stage.  Mirrors the docked
+inline QColor kBgStatusOn() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kBorderStatusOn() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kTextStatusOn() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kConnector() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kTextLabel() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
+inline QColor kTextDim() { return AetherSDR::ThemeManager::instance().color("color.background.3"); }
+inline QColor kLedActive() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kLedBypass() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kDropIndicator() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // User-facing short label for each RX stage.  Mirrors the docked
 // `ClientRxChainWidget::stageLabel` so both surfaces read the same.
 QString stageLabel(AudioEngine::RxChainStage s)
 {
@@ -284,7 +282,7 @@ void StripRxChainWidget::paintEvent(QPaintEvent*)
 
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
-    p.fillRect(rect(), QColor("#0f0f1a"));
+    p.fillRect(rect(), AetherSDR::ThemeManager::instance().color("color.background.0"));
 
     if (m_boxes.isEmpty()) return;
 
@@ -301,18 +299,18 @@ void StripRxChainWidget::paintEvent(QPaintEvent*)
         head.lineTo(tip.x() - u.x() * kArrowTip - perp.x() * kArrowTip,
                     tip.y() - u.y() * kArrowTip - perp.y() * kArrowTip);
         head.closeSubpath();
-        p.setBrush(kConnector);
+        p.setBrush(kConnector());
         p.setPen(Qt::NoPen);
         p.drawPath(head);
     };
 
-    p.setPen(QPen(kConnector, 2.0));
+    p.setPen(QPen(kConnector(), 2.0));
     for (int i = 0; i + 1 < m_boxes.size(); ++i) {
         const QRectF a = m_boxes[i].rect;
         const QRectF b = m_boxes[i + 1].rect;
         const QPointF from(a.right(), a.center().y());
         const QPointF to(b.left() - 1, b.center().y());
-        p.setPen(QPen(kConnector, 2.0));
+        p.setPen(QPen(kConnector(), 2.0));
         p.drawLine(from, to);
         drawArrowHead(to, from);
     }
@@ -338,8 +336,8 @@ void StripRxChainWidget::paintEvent(QPaintEvent*)
                     break;
                 case TileKind::StatusAdsp:
                     // Render the ADSP tile as a Stage-style toggle
-                    // (same look as EQ): kBgActive + LED when at
-                    // least one NR module is on; kBgBox + dim border
+                    // (same look as EQ): kBgActive() + LED when at
+                    // least one NR module is on; kBgBox() + dim border
                     // when bypassed.  Label rotates the active NR
                     // module's short name; falls back to "ADSP".
                     {
@@ -347,14 +345,14 @@ void StripRxChainWidget::paintEvent(QPaintEvent*)
                         labelText = (m_dspLabel.isEmpty() || bypassed)
                                   ? QStringLiteral("ADSP")
                                   : m_dspLabel;
-                        p.setBrush(bypassed ? kBgBox : kBgActive);
-                        p.setPen(QPen(bypassed ? kBorderIdle : kBorderActive, 1.0));
+                        p.setBrush(bypassed ? kBgBox() : kBgActive());
+                        p.setPen(QPen(bypassed ? kBorderIdle() : kBorderActive(), 1.0));
                         p.drawRoundedRect(b.rect, kRadius, kRadius);
                         const QPointF led(b.rect.right() - 4, b.rect.top() + 4);
-                        p.setBrush(bypassed ? kLedBypass : kLedActive);
+                        p.setBrush(bypassed ? kLedBypass() : kLedActive());
                         p.setPen(Qt::NoPen);
                         p.drawEllipse(led, 1.8, 1.8);
-                        p.setPen(kTextLabel);
+                        p.setPen(kTextLabel());
                         p.drawText(b.rect, Qt::AlignCenter, labelText);
                         continue;
                     }
@@ -366,13 +364,13 @@ void StripRxChainWidget::paintEvent(QPaintEvent*)
                     break;  // unreachable
             }
 
-            QBrush body(kBgEndpoint);
-            QColor borderCol = kBorderGrey;
-            QColor textCol   = kTextLabel;
+            QBrush body(kBgEndpoint());
+            QColor borderCol = kBorderGrey();
+            QColor textCol   = kTextLabel();
             if (isOn) {
-                body      = kBgStatusOn;
-                borderCol = kBorderStatusOn;
-                textCol   = kTextStatusOn;
+                body      = kBgStatusOn();
+                borderCol = kBorderStatusOn();
+                textCol   = kTextStatusOn();
             }
             p.setBrush(body);
             p.setPen(QPen(borderCol, 1.0));
@@ -385,19 +383,19 @@ void StripRxChainWidget::paintEvent(QPaintEvent*)
         const bool implemented = isStageImplemented(b.stage);
         const bool bypassed    = isStageBypassed(b.stage);
 
-        p.setBrush(bypassed ? kBgBox : kBgActive);
-        p.setPen(QPen(implemented ? (bypassed ? kBorderIdle : kBorderActive)
-                                  : kBorderGrey, 1.0));
+        p.setBrush(bypassed ? kBgBox() : kBgActive());
+        p.setPen(QPen(implemented ? (bypassed ? kBorderIdle() : kBorderActive())
+                                  : kBorderGrey(), 1.0));
         p.drawRoundedRect(b.rect, kRadius, kRadius);
 
         if (implemented) {
             const QPointF led(b.rect.right() - 4, b.rect.top() + 4);
-            p.setBrush(bypassed ? kLedBypass : kLedActive);
+            p.setBrush(bypassed ? kLedBypass() : kLedActive());
             p.setPen(Qt::NoPen);
             p.drawEllipse(led, 1.8, 1.8);
         }
 
-        p.setPen(implemented ? kTextLabel : kTextDim);
+        p.setPen(implemented ? kTextLabel() : kTextDim());
         p.drawText(b.rect, Qt::AlignCenter, stageLabel(b.stage));
     }
 
@@ -411,7 +409,7 @@ void StripRxChainWidget::paintEvent(QPaintEvent*)
             const QRectF lr = m_boxes[leftIdx].rect;
             const QRectF rr = m_boxes[rightIdx].rect;
             const qreal x = (lr.right() + rr.left()) * 0.5;
-            p.setPen(QPen(kDropIndicator, 3.0));
+            p.setPen(QPen(kDropIndicator(), 3.0));
             p.drawLine(QPointF(x, rr.top() - 2),
                        QPointF(x, rr.bottom() + 2));
         }
@@ -465,15 +463,15 @@ void StripRxChainWidget::mouseMoveEvent(QMouseEvent* ev)
     {
         QPainter pp(&pix);
         pp.setRenderHint(QPainter::Antialiasing, true);
-        pp.setBrush(kBgActive);
-        pp.setPen(QPen(kBorderActive, 1.0));
+        pp.setBrush(kBgActive());
+        pp.setPen(QPen(kBorderActive(), 1.0));
         pp.drawRoundedRect(QRectF(0, 0, pix.width() - 1, pix.height() - 1),
                            kRadius, kRadius);
         QFont f = pp.font();
         f.setPixelSize(12);
         f.setBold(true);
         pp.setFont(f);
-        pp.setPen(kTextLabel);
+        pp.setPen(kTextLabel());
         pp.drawText(pix.rect(), Qt::AlignCenter, stageLabel(b.stage));
     }
     drag->setPixmap(pix);

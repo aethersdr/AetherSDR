@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -36,23 +37,22 @@ constexpr int kMinRefreshRateHz = 5;
 constexpr int kMaxRefreshRateHz = 30;
 constexpr double kPi = 3.14159265358979323846;
 
-const QColor kBackground(0x0a, 0x0a, 0x14);
-const QColor kGridMajor(0x30, 0x40, 0x50, 130);
-const QColor kGridMinor(0x18, 0x28, 0x38, 150);
-const QColor kCenterLine(0x58, 0x78, 0x90, 150);
-const QColor kWaveFallback(0x00, 0xe5, 0xff);
-const QColor kPeakColor(0x00, 0xb4, 0xd8, 180);
-const QColor kRmsColor(0x20, 0xc0, 0x60, 210);
-const QColor kLabelColor(0xd8, 0xe6, 0xf0);
-const QColor kMutedLabel(0x90, 0xa0, 0xb0);
-const QColor kClipColor(0xff, 0x50, 0x50);
-const QColor kBarEmpty(0x14, 0x24, 0x32, 170);
-const QColor kBarPeakHold(0xff, 0xd1, 0x66);
-
+inline QColor kBackground() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
+inline QColor kGridMajor() { return AetherSDR::theme::withAlpha("color.background.2", 130); }
+inline QColor kGridMinor() { return AetherSDR::theme::withAlpha("color.background.1", 150); }
+inline QColor kCenterLine() { return AetherSDR::theme::withAlpha("color.text.label", 150); }
+inline QColor kWaveFallback() { return AetherSDR::ThemeManager::instance().color("color.accent.bright"); }
+inline QColor kPeakColor() { return AetherSDR::theme::withAlpha("color.accent", 180); }
+inline QColor kRmsColor() { return AetherSDR::theme::withAlpha("color.accent.success", 210); }
+inline QColor kLabelColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
+inline QColor kMutedLabel() { return AetherSDR::ThemeManager::instance().color("color.text.secondary"); }
+inline QColor kClipColor() { return AetherSDR::ThemeManager::instance().color("color.accent.danger"); }
+inline QColor kBarEmpty() { return AetherSDR::theme::withAlpha("color.background.1", 170); }
+inline QColor kBarPeakHold() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
 QColor waveformColor()
 {
     QColor c(AppSettings::instance().value("DisplayFftFillColor", "#00e5ff").toString());
-    return c.isValid() ? c : kWaveFallback;
+    return c.isValid() ? c : kWaveFallback();
 }
 
 float waveformLineWidth()
@@ -171,7 +171,7 @@ void WaveformWidget::paintEvent(QPaintEvent* event)
 
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, false);
-    painter.fillRect(rect(), kBackground);
+    painter.fillRect(rect(), kBackground());
 
     QRectF plotRect = QRectF(rect()).adjusted(5.0, 18.0, -34.0, -17.0);
     if (plotRect.width() < 24.0 || plotRect.height() < 36.0)
@@ -228,7 +228,7 @@ void WaveformWidget::paintEvent(QPaintEvent* event)
     QFont labelFont = font();
     labelFont.setPointSizeF(std::max(7.0, labelFont.pointSizeF() - 1.0));
     painter.setFont(labelFont);
-    painter.setPen(kLabelColor);
+    painter.setPen(kLabelColor());
     const QString readout = QStringLiteral("%1  RMS %2 dBFS  PK %3 dBFS")
         .arg(source)
         .arg(rmsDb, 0, 'f', 1)
@@ -241,14 +241,14 @@ void WaveformWidget::paintEvent(QPaintEvent* event)
         QFont clipFont = labelFont;
         clipFont.setBold(true);
         painter.setFont(clipFont);
-        painter.setPen(kClipColor);
+        painter.setPen(kClipColor());
         painter.drawText(QRectF(7.0, 3.0, width() - 14.0, 16.0),
                          Qt::AlignRight | Qt::AlignVCenter,
                          QStringLiteral("CLIP %1").arg(clipCount));
         painter.setFont(labelFont);
     }
 
-    painter.setPen(kMutedLabel);
+    painter.setPen(kMutedLabel());
     const QString timeText = m_viewMode == ViewMode::VerticalBars
         ? QString::fromUtf8("%1 \xc2\xb7 %2 ms \xc2\xb7 frequency bands")
             .arg(formatSampleRate(sampleRate))
@@ -493,16 +493,16 @@ void WaveformWidget::drawGraph(QPainter& painter,
     }
 
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.setPen(QPen(kPeakColor, 1.0));
+    painter.setPen(QPen(kPeakColor(), 1.0));
     painter.drawPath(peakTop);
     painter.drawPath(peakBottom);
-    painter.setPen(QPen(kRmsColor, 1.4));
+    painter.setPen(QPen(kRmsColor(), 1.4));
     painter.drawPath(rmsTop);
     painter.drawPath(rmsBottom);
     painter.setRenderHint(QPainter::Antialiasing, false);
 
     if (clipCount > 0) {
-        painter.setPen(QPen(kClipColor, 1.0));
+        painter.setPen(QPen(kClipColor(), 1.0));
         for (int x = 0; x < m_columns.size(); ++x) {
             if (m_columns[x].clipped <= 0)
                 continue;
@@ -580,17 +580,17 @@ void WaveformWidget::drawEnvelope(QPainter& painter,
     fill.setAlpha(65);
     painter.fillPath(fillPath, fill);
 
-    QColor centerFill = kRmsColor;
+    QColor centerFill = kRmsColor();
     centerFill.setAlpha(55);
     painter.setPen(QPen(centerFill, 1.0));
     painter.drawLine(QPointF(plotRect.left(), centerY),
                      QPointF(plotRect.right(), centerY));
 
-    painter.setPen(QPen(kRmsColor, 1.3));
+    painter.setPen(QPen(kRmsColor(), 1.3));
     painter.drawPath(rmsLineTop);
     painter.drawPath(rmsLineBottom);
 
-    QColor peak = kPeakColor;
+    QColor peak = kPeakColor();
     peak.setAlpha(210);
     painter.setPen(QPen(peak, 1.0));
     painter.drawPath(peakTop);
@@ -599,7 +599,7 @@ void WaveformWidget::drawEnvelope(QPainter& painter,
     painter.restore();
 
     if (clipCount > 0) {
-        painter.setPen(QPen(kClipColor, 1.0));
+        painter.setPen(QPen(kClipColor(), 1.0));
         for (int x = 0; x < m_columns.size(); ++x) {
             if (m_columns[x].clipped <= 0)
                 continue;
@@ -632,7 +632,7 @@ void WaveformWidget::drawBars(QPainter& painter, const QRectF& plotRect)
         const ColumnStats& c = m_columns[i];
         const qreal x = plotRect.left() + i * slot + (slot - barWidth) * 0.5;
         const QRectF rail(x, plotRect.top(), barWidth, maxHeight);
-        painter.fillRect(rail, kBarEmpty);
+        painter.fillRect(rail, kBarEmpty());
 
         const qreal peak = std::clamp(c.peak * m_amplitudeZoom, 0.0f, 1.0f);
         const qreal rms = std::clamp(c.rms * m_amplitudeZoom, 0.0f, 1.0f);
@@ -641,11 +641,11 @@ void WaveformWidget::drawBars(QPainter& painter, const QRectF& plotRect)
 
         QColor fill = wave;
         if (c.clipped > 0 || peak >= 0.96)
-            fill = kClipColor;
+            fill = kClipColor();
         else if (peak >= 0.78)
-            fill = QColor(0xff, 0xd1, 0x66);
+            fill = AetherSDR::ThemeManager::instance().color("color.accent.warning");
         else if (peak < 0.42)
-            fill = kRmsColor;
+            fill = kRmsColor();
 
         const qreal h = std::max<qreal>(1.0, peak * maxHeight);
         const QRectF bar(x, bottom - h, barWidth, h);
@@ -655,11 +655,11 @@ void WaveformWidget::drawBars(QPainter& painter, const QRectF& plotRect)
         painter.fillRect(bar, grad);
 
         const qreal rmsY = bottom - std::max<qreal>(1.0, rms * maxHeight);
-        painter.setPen(QPen(kRmsColor.lighter(115), 1.0));
+        painter.setPen(QPen(kRmsColor().lighter(115), 1.0));
         painter.drawLine(QPointF(x, rmsY), QPointF(x + barWidth, rmsY));
 
         const qreal capY = std::max(plotRect.top(), bar.top() - 2.0);
-        painter.setPen(QPen(c.clipped > 0 ? kClipColor : kBarPeakHold, 1.0));
+        painter.setPen(QPen(c.clipped > 0 ? kClipColor() : kBarPeakHold(), 1.0));
         painter.drawLine(QPointF(x, capY), QPointF(x + barWidth, capY));
     }
 
@@ -724,15 +724,15 @@ void WaveformWidget::drawVerticalBars(QPainter& painter,
 
         const qreal x = plotRect.left() + band * slot + (slot - barWidth) * 0.5;
         const QRectF rail(x, plotRect.top(), barWidth, maxHeight);
-        painter.fillRect(rail, kBarEmpty);
+        painter.fillRect(rail, kBarEmpty());
 
         QColor fill = wave;
         if (amplitude >= 0.96)
-            fill = kClipColor;
+            fill = kClipColor();
         else if (level >= 0.82)
-            fill = QColor(0xff, 0xd1, 0x66);
+            fill = AetherSDR::ThemeManager::instance().color("color.accent.warning");
         else if (level < 0.42)
-            fill = kRmsColor;
+            fill = kRmsColor();
 
         const qreal h = std::max<qreal>(1.0, level * maxHeight);
         const QRectF bar(x, bottom - h, barWidth, h);
@@ -743,7 +743,7 @@ void WaveformWidget::drawVerticalBars(QPainter& painter,
         painter.fillRect(bar, grad);
 
         const qreal capY = std::max(plotRect.top(), bar.top() - 2.0);
-        painter.setPen(QPen(amplitude >= 0.96 ? kClipColor : kBarPeakHold, 1.0));
+        painter.setPen(QPen(amplitude >= 0.96 ? kClipColor() : kBarPeakHold(), 1.0));
         painter.drawLine(QPointF(x, capY), QPointF(x + barWidth, capY));
     }
 
@@ -755,7 +755,7 @@ void WaveformWidget::drawBarsGrid(QPainter& painter, const QRectF& plotRect) con
     painter.save();
 
     if (showGrid()) {
-        painter.setPen(QPen(kGridMinor, 1.0));
+        painter.setPen(QPen(kGridMinor(), 1.0));
         for (int i = 0; i <= 10; ++i) {
             const qreal x = plotRect.left() + plotRect.width() * i / 10.0;
             painter.drawLine(QPointF(x, plotRect.top()),
@@ -775,17 +775,17 @@ void WaveformWidget::drawBarsGrid(QPainter& painter, const QRectF& plotRect) con
             continue;
         const qreal y = plotRect.bottom() - std::min(rawHeight, plotRect.height());
 
-        painter.setPen(QPen(db >= -12 ? kGridMajor : kGridMinor, 1.0));
+        painter.setPen(QPen(db >= -12 ? kGridMajor() : kGridMinor(), 1.0));
         painter.drawLine(QPointF(plotRect.left(), y), QPointF(plotRect.right(), y));
 
-        painter.setPen(kMutedLabel);
+        painter.setPen(kMutedLabel());
         painter.drawText(QRectF(plotRect.right() + 4.0, y - 7.0,
                                 width() - plotRect.right() - 5.0, 14.0),
                          Qt::AlignLeft | Qt::AlignVCenter,
                          QString::number(db));
     }
 
-    painter.setPen(kMutedLabel);
+    painter.setPen(kMutedLabel());
     painter.drawText(QRectF(plotRect.right() + 4.0, plotRect.bottom() - 12.0,
                             width() - plotRect.right() - 5.0, 12.0),
                      Qt::AlignLeft | Qt::AlignVCenter,
@@ -803,7 +803,7 @@ void WaveformWidget::drawGrid(QPainter& painter,
     painter.save();
 
     if (showGrid()) {
-        painter.setPen(QPen(kGridMinor, 1.0));
+        painter.setPen(QPen(kGridMinor(), 1.0));
         for (int i = 0; i <= 10; ++i) {
             const qreal x = plotRect.left() + plotRect.width() * i / 10.0;
             painter.drawLine(QPointF(x, plotRect.top()),
@@ -825,7 +825,7 @@ void WaveformWidget::drawGrid(QPainter& painter,
             continue;
         const qreal offset = std::min(rawOffset, halfHeight);
 
-        painter.setPen(QPen(db >= -12 ? kGridMajor : kGridMinor, 1.0));
+        painter.setPen(QPen(db >= -12 ? kGridMajor() : kGridMinor(), 1.0));
         const qreal yTop = centerY - offset;
         const qreal yBottom = centerY + offset;
         if (rawOffset <= halfHeight + 0.5) {
@@ -838,18 +838,18 @@ void WaveformWidget::drawGrid(QPainter& painter,
                              QPointF(plotRect.right(), plotRect.bottom()));
         }
 
-        painter.setPen(kMutedLabel);
+        painter.setPen(kMutedLabel());
         painter.drawText(QRectF(plotRect.right() + 4.0, yTop - 7.0,
                                 width() - plotRect.right() - 5.0, 14.0),
                          Qt::AlignLeft | Qt::AlignVCenter,
                          QString::number(db));
     }
 
-    painter.setPen(QPen(kCenterLine, 1.0));
+    painter.setPen(QPen(kCenterLine(), 1.0));
     painter.drawLine(QPointF(plotRect.left(), centerY),
                      QPointF(plotRect.right(), centerY));
 
-    painter.setPen(kMutedLabel);
+    painter.setPen(kMutedLabel());
     painter.drawText(QRectF(plotRect.right() + 4.0, plotRect.bottom() - 12.0,
                             width() - plotRect.right() - 5.0, 12.0),
                      Qt::AlignLeft | Qt::AlignVCenter,
@@ -866,7 +866,7 @@ void WaveformWidget::drawNoAudio(QPainter& painter,
     QFont f = font();
     f.setPointSizeF(std::max(8.0, f.pointSizeF() - 1.0));
     painter.setFont(f);
-    painter.setPen(kMutedLabel);
+    painter.setPen(kMutedLabel());
     const QString message = source == QStringLiteral("RX")
         ? QStringLiteral("Enable PC Audio")
         : QStringLiteral("no %1 audio").arg(source);
@@ -881,7 +881,7 @@ void WaveformWidget::drawPausedBadge(QPainter& painter, const QRectF& footerRect
     f.setBold(true);
     f.setPointSizeF(std::max(7.0, f.pointSizeF() - 1.0));
     painter.setFont(f);
-    painter.setPen(QColor(0xff, 0xd1, 0x66));
+    painter.setPen(AetherSDR::ThemeManager::instance().color("color.accent.warning"));
     painter.drawText(footerRect, Qt::AlignRight | Qt::AlignVCenter,
                      QStringLiteral("PAUSED"));
     painter.restore();

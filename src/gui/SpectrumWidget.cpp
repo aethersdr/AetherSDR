@@ -58,9 +58,9 @@ namespace AetherSDR {
 bool SpectrumWidget::s_starstruckMode = false;
 QSoundEffect* SpectrumWidget::s_starstruckSound = nullptr;
 
-static const QColor kAetherBrandBlue(0x00, 0xb4, 0xd8);
-static const QColor kAetherBrandGreen(0x20, 0xc0, 0x60);
-static const QColor kConnectionTextColor(0xd8, 0xe6, 0xf0);
+inline QColor kAetherBrandBlue() { return AetherSDR::ThemeManager::instance().color("color.accent"); }
+inline QColor kAetherBrandGreen() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kConnectionTextColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
 static constexpr float kMinDisplayDbm = -180.0f;
 static constexpr int kWaterfallLineDurationMinMs = 50;
 static constexpr int kWaterfallLineDurationMaxMs = 500;
@@ -1415,13 +1415,13 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
     const float norm = (m_refLevel - m_sqlNoiseFloorDbm) / m_dynamicRange;
     const int y = specRect.top()
         + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
-    p.setPen(QPen(QColor(0xFF, 0xA0, 0x20, 200), 1, Qt::DashLine));
+    p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 200), 1, Qt::DashLine));
     p.drawLine(specRect.left(), y, specRect.right(), y);
     QFont f = p.font();
     f.setPointSize(8);
     f.setBold(true);
     p.setFont(f);
-    p.setPen(QColor(0xFF, 0xA0, 0x20, 200));
+    p.setPen(AetherSDR::theme::withAlpha("color.accent.warning", 200));
     const QString lbl = QString("Floor %1 dBm").arg(static_cast<int>(m_sqlNoiseFloorDbm));
     p.drawText(specRect.right() - p.fontMetrics().horizontalAdvance(lbl) - 4, y - 2, lbl);
 }
@@ -1789,8 +1789,8 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
 
     QRadialGradient glow(QPointF(centerX, topY + towerHeight * 0.42),
                          towerHeight * 1.05);
-    glow.setColorAt(0.0, withAlpha(kAetherBrandBlue, 48));
-    glow.setColorAt(0.55, withAlpha(kAetherBrandGreen, 22));
+    glow.setColorAt(0.0, withAlpha(kAetherBrandBlue(), 48));
+    glow.setColorAt(0.55, withAlpha(kAetherBrandGreen(), 22));
     glow.setColorAt(1.0, AetherSDR::theme::withAlpha("color.background.spectrum", 0));
     p.setPen(Qt::NoPen);
     p.setBrush(glow);
@@ -1804,7 +1804,7 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
         const qreal ringProgress = std::fmod(phase + ring * 0.24, 1.0);
         const qreal radiusX = towerWidth * 0.50 + ringProgress * towerHeight * 0.68;
         const qreal radiusY = radiusX * 0.86;
-        QColor waveColor = (ring % 2 == 0) ? kAetherBrandBlue : kAetherBrandGreen;
+        QColor waveColor = (ring % 2 == 0) ? kAetherBrandBlue() : kAetherBrandGreen();
         const qreal fade = 1.0 - ringProgress;
         waveColor.setAlphaF(qBound(0.10, 0.16 + fade * 0.48 * pulse, 0.70));
         QPen wavePen(waveColor,
@@ -1823,9 +1823,9 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     }
 
     QLinearGradient towerGradient(QPointF(centerX, topY), QPointF(centerX, baseY));
-    towerGradient.setColorAt(0.0, kAetherBrandBlue.lighter(115));
-    towerGradient.setColorAt(0.55, kAetherBrandBlue);
-    towerGradient.setColorAt(1.0, kAetherBrandGreen);
+    towerGradient.setColorAt(0.0, kAetherBrandBlue().lighter(115));
+    towerGradient.setColorAt(0.55, kAetherBrandBlue());
+    towerGradient.setColorAt(1.0, kAetherBrandGreen());
 
     QPainterPath towerFill;
     towerFill.moveTo(centerX - towerWidth * 0.48, baseY);
@@ -1833,8 +1833,8 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     towerFill.lineTo(centerX + towerWidth * 0.48, baseY);
     towerFill.closeSubpath();
     QLinearGradient fillGradient(QPointF(centerX, topY), QPointF(centerX, baseY));
-    fillGradient.setColorAt(0.0, withAlpha(kAetherBrandBlue, 28));
-    fillGradient.setColorAt(1.0, withAlpha(kAetherBrandGreen, 12));
+    fillGradient.setColorAt(0.0, withAlpha(kAetherBrandBlue(), 28));
+    fillGradient.setColorAt(1.0, withAlpha(kAetherBrandGreen(), 12));
     p.fillPath(towerFill, fillGradient);
 
     QPen towerPen(QBrush(towerGradient), qMax(2.2, towerWidth * 0.11),
@@ -1866,7 +1866,7 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
 
     p.drawLine(QPointF(centerX - towerWidth * 0.72, baseY),
                QPointF(centerX + towerWidth * 0.72, baseY));
-    p.setBrush(kAetherBrandBlue);
+    p.setBrush(kAetherBrandBlue());
     p.setPen(Qt::NoPen);
     p.drawEllipse(QPointF(centerX, topY - towerHeight * 0.10),
                   towerWidth * 0.10, towerWidth * 0.10);
@@ -1896,14 +1896,14 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
                               available.width(), subtitleFm.height() + 4.0);
 
     QLinearGradient titleGradient(titleRect.topLeft(), titleRect.topRight());
-    titleGradient.setColorAt(0.0, kAetherBrandBlue.lighter(108));
-    titleGradient.setColorAt(1.0, kAetherBrandGreen.lighter(105));
+    titleGradient.setColorAt(0.0, kAetherBrandBlue().lighter(108));
+    titleGradient.setColorAt(1.0, kAetherBrandGreen().lighter(105));
     p.setFont(titleFont);
     p.setPen(QPen(QBrush(titleGradient), 1.0));
     p.drawText(titleRect, Qt::AlignHCenter | Qt::AlignTop, m_connectionAnimationLabel);
 
     p.setFont(subtitleFont);
-    p.setPen(withAlpha(kConnectionTextColor, 180));
+    p.setPen(withAlpha(kConnectionTextColor(), 180));
     p.drawText(subtitleRect, Qt::AlignHCenter | Qt::AlignTop, subtitle);
 
     p.restore();
@@ -5151,7 +5151,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 if (!m_mqttDisplayValues.isEmpty()) {
                     QFont mqttFont(p.font().family(), 12, QFont::Bold);
                     p.setFont(mqttFont);
-                    p.setPen(QColor(0x80, 0xd0, 0xff, 200));
+                    p.setPen(AetherSDR::theme::withAlpha("color.accent.bright", 200));
                     const QFontMetrics fm2(mqttFont);
                     QString mqttLabel;
                     for (auto it = m_mqttDisplayValues.constBegin();
@@ -5646,7 +5646,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         drawSpectrum(p, specRect);
         if (m_bandPlanFontSize > 0) drawBandPlan(p, specRect);
 
-        p.fillRect(divRect, QColor(0x18, 0x28, 0x38));
+        p.fillRect(divRect, AetherSDR::ThemeManager::instance().color("color.background.1"));
         p.setPen(QColor(m_draggingDivider ? 0x00b4d8 : 0x304050));
         p.drawLine(divRect.left(), divRect.center().y(), divRect.right(), divRect.center().y());
 
@@ -5985,7 +5985,7 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
 void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 {
     if (m_smoothed.isEmpty()) {
-        p.setPen(QColor(0x00, 0x60, 0x80));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.dim"));
         p.drawText(r, Qt::AlignCenter, "No panadapter data — waiting for radio stream");
         return;
     }
@@ -6347,7 +6347,7 @@ const SpectrumWidget::TnfMarker* SpectrumWidget::tnfMarkerById(int id) const
 
 QColor SpectrumWidget::tnfColor(const TnfMarker& tnf) const
 {
-    return tnf.permanent ? QColor(0x30, 0xc0, 0x30) : QColor(0xff, 0xc0, 0x00);
+    return tnf.permanent ? AetherSDR::ThemeManager::instance().color("color.accent.success") : AetherSDR::ThemeManager::instance().color("color.accent.warning");
 }
 
 QColor SpectrumWidget::tnfFillColor(const TnfMarker& tnf) const
@@ -6702,10 +6702,10 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
 
             // Draw badge with distinct style
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor(0x30, 0x50, 0x70, 200));
+            p.setBrush(AetherSDR::theme::withAlpha("color.background.2", 200));
             p.drawRoundedRect(badgeRect, 3, 3);
 
-            p.setPen(QColor(0xff, 0xc0, 0x40));  // amber text
+            p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.warning"));  // amber text
             p.drawText(badgeRect, Qt::AlignCenter, badgeText);
 
             // Store for click detection
@@ -6885,7 +6885,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
     p.setRenderHint(QPainter::Antialiasing, true);
 
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0x06, 0x0d, 0x12, 190));
+    p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 190));
     p.drawRoundedRect(plotRect, 3, 3);
 
     auto fillThresholdBand = [&](float lowSwr, float highSwr, const QColor& color) {
@@ -6896,9 +6896,9 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
         const qreal bottom = yForSwr(lowSwr);
         p.fillRect(QRectF(plotRect.left(), top, plotRect.width(), bottom - top), color);
     };
-    fillThresholdBand(1.0f, 1.5f, QColor(0x20, 0xc0, 0x60, 28));
-    fillThresholdBand(1.5f, 2.0f, QColor(0xff, 0xc0, 0x40, 22));
-    fillThresholdBand(2.0f, maxSwr, QColor(0xff, 0x58, 0x58, 16));
+    fillThresholdBand(1.0f, 1.5f, AetherSDR::theme::withAlpha("color.accent.success", 28));
+    fillThresholdBand(1.5f, 2.0f, AetherSDR::theme::withAlpha("color.accent.warning", 22));
+    fillThresholdBand(2.0f, maxSwr, AetherSDR::theme::withAlpha("color.accent.danger", 16));
 
     p.setPen(QPen(AetherSDR::theme::withAlpha("color.text.secondary", 120), 1, Qt::DotLine));
     const float gridSwrs[] = {1.5f, 2.0f, 3.0f, 5.0f, 10.0f};
@@ -6928,14 +6928,14 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
     }
 
     if (poly.size() >= 2) {
-        QPen sweepPen(QColor(0xff, 0xc0, 0x40, 235), 2);
+        QPen sweepPen(AetherSDR::theme::withAlpha("color.accent.warning", 235), 2);
         sweepPen.setCapStyle(Qt::RoundCap);
         sweepPen.setJoinStyle(Qt::RoundJoin);
         p.setPen(sweepPen);
         p.drawPolyline(poly);
     }
     p.setPen(QPen(AetherSDR::theme::withAlpha("color.background.0", 220), 1));
-    p.setBrush(QColor(0xff, 0xc0, 0x40, 240));
+    p.setBrush(AetherSDR::theme::withAlpha("color.accent.warning", 240));
     for (const QPointF& pt : poly)
         p.drawEllipse(pt, 3.2, 3.2);
 
@@ -6948,7 +6948,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
             p.drawLine(QPointF(pt.x(), top), QPointF(pt.x(), bottom));
         };
 
-        QPen endpointPen(QColor(0xff, 0xe0, 0x90, 245), 2);
+        QPen endpointPen(AetherSDR::theme::withAlpha("color.accent.warning", 245), 2);
         endpointPen.setCapStyle(Qt::RoundCap);
         p.setPen(endpointPen);
         drawEndpointNotch(visiblePoints.first().pos);
@@ -6958,7 +6958,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
 
     if (bestVisibleIndex >= 0 && bestVisibleIndex < visiblePoints.size()) {
         const QPointF bestPos = visiblePoints[bestVisibleIndex].pos;
-        QPen resonancePen(QColor(0x7c, 0xf4, 0xa4, 245), 2);
+        QPen resonancePen(AetherSDR::theme::withAlpha("color.accent.success", 245), 2);
         resonancePen.setCapStyle(Qt::RoundCap);
         resonancePen.setJoinStyle(Qt::RoundJoin);
         p.setPen(resonancePen);
@@ -6999,8 +6999,8 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
         p.drawLine(QPointF(x1, y - 3.0), QPointF(x1, y + 3.0));
         p.drawLine(QPointF(x2, y - 3.0), QPointF(x2, y + 3.0));
     };
-    drawBandwidthSpan(bw20, 0, QColor(0xff, 0xc0, 0x40, 205));
-    drawBandwidthSpan(bw15, 1, QColor(0x7c, 0xf4, 0xa4, 225));
+    drawBandwidthSpan(bw20, 0, AetherSDR::theme::withAlpha("color.accent.warning", 205));
+    drawBandwidthSpan(bw15, 1, AetherSDR::theme::withAlpha("color.accent.success", 225));
 
     if (m_swrSweepCurrentFreqMhz > 0.0) {
         const int cx = mhzToX(m_swrSweepCurrentFreqMhz);
@@ -7109,7 +7109,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
             p.setPen(Qt::NoPen);
             p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 230));
             p.drawRoundedRect(valueRect, 2, 2);
-            p.setPen(QColor(0xff, 0xe0, 0x90));
+            p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.warning"));
             p.drawText(valueRect, Qt::AlignCenter, text);
 
             lastLabelRight = valueRect.right();
@@ -7232,11 +7232,11 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             const int spaceX = mhzToX(spaceMhz);
 
             // Mark line — green, dashed
-            p.setPen(QPen(QColor(0, 200, 80, 200), 1, Qt::DashLine));
+            p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.success", 200), 1, Qt::DashLine));
             p.drawLine(markX, specRect.top(), markX, freqLineBottom);
 
             // Space line — red, dashed
-            p.setPen(QPen(QColor(220, 60, 60, 200), 1, Qt::DashLine));
+            p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.danger", 200), 1, Qt::DashLine));
             p.drawLine(spaceX, specRect.top(), spaceX, freqLineBottom);
 
             // Labels at top
@@ -7244,9 +7244,9 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
             f.setPixelSize(10);
             f.setBold(true);
             p.setFont(f);
-            p.setPen(QColor(0, 200, 80, 240));
+            p.setPen(AetherSDR::theme::withAlpha("color.accent.success", 240));
             p.drawText(markX + 2, specRect.top() + 12, "M");
-            p.setPen(QColor(220, 60, 60, 240));
+            p.setPen(AetherSDR::theme::withAlpha("color.accent.danger", 240));
             p.drawText(spaceX + 2, specRect.top() + 12, "S");
         } else if (so.markerWidth > 0) {
             // ── Standard VFO center line ─────────────────────────────────
@@ -7286,14 +7286,14 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         }
         if (so.xitOn && so.xitFreq != 0) {
             const int xitX = mhzToX(so.freqMhz + so.xitFreq / 1.0e6);
-            QPen xitPen(QColor(220, 80, 80, 180), 1, Qt::DashLine);
+            QPen xitPen(AetherSDR::theme::withAlpha("color.accent.danger", 180), 1, Qt::DashLine);
             p.setPen(xitPen);
             p.drawLine(xitX, specRect.top(), xitX, wfRect.bottom());
             QFont f = p.font();
             f.setPixelSize(10);
             f.setBold(true);
             p.setFont(f);
-            p.setPen(QColor(220, 80, 80, 220));
+            p.setPen(AetherSDR::theme::withAlpha("color.accent.danger", 220));
             p.drawText(xitX + 2, specRect.top() + 12, "X");
         }
 
@@ -7312,7 +7312,7 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
 
 void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 {
-    p.fillRect(r, QColor(0x06, 0x06, 0x10));
+    p.fillRect(r, AetherSDR::ThemeManager::instance().color("color.background.0"));
 
     const double startMhz = m_centerMhz - m_bandwidthMhz / 2.0;
     const double endMhz   = m_centerMhz + m_bandwidthMhz / 2.0;
@@ -7348,7 +7348,7 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
         const int x = mhzToX(freq);
 
         // Tick mark on every grid line
-        p.setPen(QColor(0x40, 0x60, 0x80));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.background.3"));
         p.drawLine(x, r.top(), x, r.top() + 4);
 
         // Label only every Nth line to prevent overlap
@@ -7358,7 +7358,7 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
         const int tw = fm.horizontalAdvance(label);
         const int lx = qBound(0, x - tw / 2, width() - tw);
 
-        p.setPen(QColor(0x70, 0x90, 0xb0));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
         p.drawText(lx, r.bottom() - 2, label);
     }
 }
@@ -7385,7 +7385,7 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
     const int arrowBot = specRect.top() + DBM_ARROW_H - 2;
 
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0x60, 0x80, 0xa0));
+    p.setBrush(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
 
     // Up arrow (▲) — left side
     QPolygon upTri;
@@ -7421,11 +7421,11 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
     const float firstLabel = std::ceil(bottomDbm / stepDb) * stepDb;
 
     auto drawTickLabel = [&](float dbm, int y, int textBaseline) {
-        p.setPen(QColor(0x50, 0x70, 0x80));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.background.3"));
         p.drawLine(stripX, y, stripX + 4, y);
 
         const QString label = QString::number(static_cast<int>(std::lround(dbm)));
-        p.setPen(QColor(0x80, 0xa0, 0xb0));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
         p.drawText(stripX + 6, textBaseline, label);
     };
 
@@ -7459,14 +7459,14 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
 
     const QRect liveRect = waterfallLiveButtonRect(wfRect);
     p.setPen(AetherSDR::ThemeManager::instance().color("color.meter.bar.fill"));
-    p.setBrush(m_wfLive ? QColor(0x45, 0x45, 0x45) : QColor(0xc0, 0x20, 0x20));
+    p.setBrush(m_wfLive ? AetherSDR::ThemeManager::instance().color("color.text.label") : AetherSDR::ThemeManager::instance().color("color.accent.danger"));
     p.drawRoundedRect(liveRect, 3, 3);
 
     QFont liveFont = p.font();
     liveFont.setPointSize(7);
     liveFont.setBold(true);
     p.setFont(liveFont);
-    p.setPen(m_wfLive ? QColor(0xb0, 0xb0, 0xb0) : Qt::white);
+    p.setPen(m_wfLive ? AetherSDR::ThemeManager::instance().color("color.text.primary") : Qt::white);
     p.drawText(liveRect, Qt::AlignCenter, "LIVE");
 
     // Total time depth follows the visible row duration, including client-side
@@ -7490,7 +7490,7 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
         if (y > wfRect.bottom() - 5) continue;
 
         // Tick mark
-        p.setPen(QColor(0x50, 0x70, 0x80));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.background.3"));
         p.drawLine(stripX, y, stripX + 4, y);
 
         const QString label = m_wfLive
@@ -7498,7 +7498,7 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
             : pausedTimeLabelForAge(m_wfHistoryOffsetRows
                                     + static_cast<int>(std::round(sec * 1000.0f / msPerRow)));
 
-        p.setPen(QColor(0x80, 0xa0, 0xb0));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
         if (m_wfLive) {
             p.drawText(stripX + 6, y + fm.ascent() / 2, label);
         } else {

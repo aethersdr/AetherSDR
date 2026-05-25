@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -46,25 +47,20 @@ constexpr int   kTurnOffset    = 4;
 constexpr int   kArrowTip      = 3;
 constexpr qreal kRadius        = 5.0;
 
-const QColor kBgBox          ("#0e1b28");
-const QColor kBgEndpoint     ("#1a2030");
-const QColor kBgActive       ("#14253a");
-const QColor kBorderIdle     ("#2a3a4a");
-const QColor kBorderActive   ("#4db8d4");
-const QColor kBorderGrey     ("#1e2a38");
-
-// Status-tile "active" treatment — matches the MIC-ready green from
+inline QColor kBgBox() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
+inline QColor kBgEndpoint() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kBgActive() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kBorderIdle() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kBorderActive() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
+inline QColor kBorderGrey() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }  // Status-tile "active" treatment — matches the MIC-ready green from
 // the TX widget so the visual language carries across.
-const QColor kBgStatusActive ("#006040");
-const QColor kBorderStatusActive("#00a060");
-const QColor kTextStatusActive("#00ff88");
-
-const QColor kConnector      ("#2a3a4a");
-const QColor kTextLabel      ("#c8d8e8");
-const QColor kTextDim        ("#506070");
-const QColor kDropIndicator  ("#4db8d4");
-
-// Distinct from the TX chain's mime so a stray drag from one widget
+inline QColor kBgStatusActive() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kBorderStatusActive() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kTextStatusActive() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
+inline QColor kConnector() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
+inline QColor kTextLabel() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
+inline QColor kTextDim() { return AetherSDR::ThemeManager::instance().color("color.background.3"); }
+inline QColor kDropIndicator() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }  // Distinct from the TX chain's mime so a stray drag from one widget
 // can't be dropped on the other.
 constexpr const char* kMimeFormat = "application/x-aethersdr-rx-chain-stage";
 
@@ -386,15 +382,15 @@ void ClientRxChainWidget::mouseMoveEvent(QMouseEvent* ev)
     {
         QPainter pp(&pix);
         pp.setRenderHint(QPainter::Antialiasing, true);
-        pp.setBrush(kBgActive);
-        pp.setPen(QPen(kBorderActive, 1.0));
+        pp.setBrush(kBgActive());
+        pp.setPen(QPen(kBorderActive(), 1.0));
         pp.drawRoundedRect(QRectF(0, 0, pix.width() - 1, pix.height() - 1),
                            kRadius, kRadius);
         QFont f = pp.font();
         f.setPixelSize(9);
         f.setBold(true);
         pp.setFont(f);
-        pp.setPen(kTextLabel);
+        pp.setPen(kTextLabel());
         pp.drawText(pix.rect(), Qt::AlignCenter, stageLabel(b.stage));
     }
     drag->setPixmap(pix);
@@ -574,7 +570,7 @@ void ClientRxChainWidget::paintEvent(QPaintEvent*)
 
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
-    p.fillRect(rect(), QColor("#08121d"));
+    p.fillRect(rect(), AetherSDR::ThemeManager::instance().color("color.background.0"));
 
     if (m_boxes.isEmpty()) return;
 
@@ -592,12 +588,12 @@ void ClientRxChainWidget::paintEvent(QPaintEvent*)
         head.lineTo(tip.x() - u.x() * kArrowTip - perp.x() * kArrowTip,
                     tip.y() - u.y() * kArrowTip - perp.y() * kArrowTip);
         head.closeSubpath();
-        p.setBrush(kConnector);
+        p.setBrush(kConnector());
         p.setPen(Qt::NoPen);
         p.drawPath(head);
     };
 
-    p.setPen(QPen(kConnector, 2.0));
+    p.setPen(QPen(kConnector(), 2.0));
     for (int i = 0; i + 1 < m_boxes.size(); ++i) {
         const QRectF a = m_boxes[i].rect;
         const QRectF b = m_boxes[i + 1].rect;
@@ -612,7 +608,7 @@ void ClientRxChainWidget::paintEvent(QPaintEvent*)
                 from = QPointF(a.right(), a.center().y());
                 to   = QPointF(b.left() - 1, b.center().y());
             }
-            p.setPen(QPen(kConnector, 2.0));
+            p.setPen(QPen(kConnector(), 2.0));
             p.drawLine(from, to);
             drawArrowHead(to, from);
         } else {
@@ -625,7 +621,7 @@ void ClientRxChainWidget::paintEvent(QPaintEvent*)
                 : QPointF(b.left(),  b.center().y());
             const qreal turnX = turnRight ? aEdge.x() + kTurnOffset
                                           : aEdge.x() - kTurnOffset;
-            p.setPen(QPen(kConnector, 2.0));
+            p.setPen(QPen(kConnector(), 2.0));
             p.drawLine(aEdge,                       QPointF(turnX, aEdge.y()));
             p.drawLine(QPointF(turnX, aEdge.y()),   QPointF(turnX, bEdge.y()));
             p.drawLine(QPointF(turnX, bEdge.y()),   bEdge);
@@ -667,9 +663,9 @@ void ClientRxChainWidget::paintEvent(QPaintEvent*)
                 break;
         }
 
-        QBrush bodyBrush(kBgEndpoint);
-        QColor borderCol = kBorderGrey;
-        QColor textCol   = kTextLabel;
+        QBrush bodyBrush(kBgEndpoint());
+        QColor borderCol = kBorderGrey();
+        QColor textCol   = kTextLabel();
 
         // The DSP tile reads as a stage indicator (which client-side
         // NR is running) more than a binary status, so it adopts the
@@ -680,28 +676,28 @@ void ClientRxChainWidget::paintEvent(QPaintEvent*)
 
         if (b.kind == TileKind::StatusRadio || b.kind == TileKind::StatusSpeak) {
             if (active) {
-                bodyBrush = kBgStatusActive;
-                borderCol = kBorderStatusActive;
-                textCol   = kTextStatusActive;
+                bodyBrush = kBgStatusActive();
+                borderCol = kBorderStatusActive();
+                textCol   = kTextStatusActive();
             }
         } else if (dspStyleAsStage) {
             // Mirror the implemented-stage paint: dim body when
             // inactive, blue ring when active, with a green LED dot
             // top-right echoing the on/off state.
-            bodyBrush = active ? kBgActive : kBgBox;
-            borderCol = active ? kBorderActive : kBorderIdle;
-            textCol   = kTextLabel;
+            bodyBrush = active ? kBgActive() : kBgBox();
+            borderCol = active ? kBorderActive() : kBorderIdle();
+            textCol   = kTextLabel();
         } else if (implemented) {
             const bool bypassed = isStageBypassed(b.stage);
-            bodyBrush = bypassed ? kBgBox : kBgActive;
-            borderCol = bypassed ? kBorderIdle : kBorderActive;
-            textCol   = kTextLabel;
+            bodyBrush = bypassed ? kBgBox() : kBgActive();
+            borderCol = bypassed ? kBorderIdle() : kBorderActive();
+            textCol   = kTextLabel();
         } else {
             // Coming-soon placeholder: greyed body, dim text — reads as
             // "this slot exists but the DSP isn't here yet."
-            bodyBrush = kBgBox;
-            borderCol = kBorderGrey;
-            textCol   = kTextDim;
+            bodyBrush = kBgBox();
+            borderCol = kBorderGrey();
+            textCol   = kTextDim();
         }
 
         p.setBrush(bodyBrush);
@@ -718,7 +714,7 @@ void ClientRxChainWidget::paintEvent(QPaintEvent*)
                 ? !isStageBypassed(b.stage)
                 : active;
             const QPointF led(b.rect.right() - 4, b.rect.top() + 4);
-            p.setBrush(ledOn ? QColor("#00ff88") : QColor("#2a3a4a"));
+            p.setBrush(ledOn ? AetherSDR::ThemeManager::instance().color("color.accent.success") : AetherSDR::ThemeManager::instance().color("color.background.1"));
             p.setPen(Qt::NoPen);
             p.drawEllipse(led, 1.8, 1.8);
         }
@@ -739,7 +735,7 @@ void ClientRxChainWidget::paintEvent(QPaintEvent*)
             const QRectF rr = m_boxes[rightSignal].rect;
             const QPointF mid((lr.center().x() + rr.center().x()) * 0.5,
                               (lr.center().y() + rr.center().y()) * 0.5);
-            p.setPen(QPen(kDropIndicator, 3.0));
+            p.setPen(QPen(kDropIndicator(), 3.0));
             p.drawLine(QPointF(mid.x(), rr.top() - 2),
                        QPointF(mid.x(), rr.bottom() + 2));
         }

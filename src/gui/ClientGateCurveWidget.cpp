@@ -122,7 +122,7 @@ void ClientGateCurveWidget::drawHysteresisBand(QPainter& p, const QRectF& r) con
     p.save();
     p.setPen(Qt::NoPen);
     p.fillRect(QRectF(xL, r.top(), xR - xL, r.height()),
-               QColor(80, 180, 220, 45));   // soft cyan, low alpha
+               AetherSDR::theme::withAlpha("color.accent.dim", 45));   // soft cyan, low alpha
     p.restore();
 }
 

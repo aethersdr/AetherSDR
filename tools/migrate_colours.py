@@ -198,6 +198,63 @@ CANONICAL_TOKENS: dict[str, str] = {
     "#e8d65a": "color.accent.warning",       # meter level-mid yellow
     "#e8e8e8": "color.text.primary",         # knob pointer/value off-white, ΔRGB≈32 from #c8d8e8
     "#f0f4f8": "color.text.primary",         # gate input outline near-white, ΔRGB≈10 from #e6f0fa
+
+    # ── Chain / waveform widget close-mappings (PR 5/5) ──
+    # File-scope const QColor in RxChain / KeyboardMap / StripChain /
+    # StripWaveform / WaveformWidget / ChainWidget / CompEditorCanvas
+    "#14253a": "color.background.1",         # raised panel variant, ΔRGB≈9 from #1a2a3a
+    "#1e2a38": "color.background.1",         # raised panel variant, ΔRGB≈4 from #1a2a3a
+    "#3a1010": "color.background.tx",        # TX warning tint, ΔRGB≈30 from #3a2a0e
+    "#ff9090": "color.accent.danger",        # soft alert red, ΔRGB≈18 from #ff8080
+
+    # ── Spectrum paint code close-mappings (PR 5/5) ──
+    # 25 hex literals across SpectrumWidget axis/trace/marker paint. Each
+    # gets the closest canonical token so the panadapter participates in
+    # theme switching across the board.
+    "#060610": "color.background.0",         # near-black canvas, ΔRGB≈4 from #0a0a14
+    "#060d12": "color.background.0",         # near-black grid floor
+    "#182838": "color.background.1",         # axis backdrop, ΔRGB≈2 from #1a2a3a
+    "#305070": "color.background.2",         # raised axis, ΔRGB≈0 from canonical
+    "#406080": "color.background.3",         # crosshair backdrop
+    "#507080": "color.background.3",         # axis surround, ΔRGB≈0 from #506070
+    "#6080a0": "color.text.secondary",       # axis label dim, ΔRGB≈0 from #a0b0c0
+    "#7090b0": "color.text.secondary",       # axis label brighter
+    "#80a0b0": "color.text.secondary",       # tooltip surround
+    "#454545": "color.text.label",           # neutral gray label
+    "#b0b0b0": "color.text.primary",         # bright neutral gray
+    "#006080": "color.accent.dim",           # cool deep-blue marker, ΔRGB≈10 from #0070b8
+    "#00c850": "color.accent.success",       # bright signal green, ΔRGB≈20 from #00e060
+    "#20c060": "color.accent.success",       # signal marker green
+    "#30c030": "color.accent.success",       # validation green, ΔRGB≈0 from #30d050
+    "#7cf4a4": "color.accent.success",       # soft signal green
+    "#80d0ff": "color.accent.bright",        # peak hold light cyan, ΔRGB≈0 from #00c8ff family
+    "#c02020": "color.accent.danger",        # overload red, ΔRGB≈16 from #c03030
+    "#dc3c3c": "color.accent.danger",        # alert red mid
+    "#dc5050": "color.accent.danger",        # alert red soft
+    "#ff5858": "color.accent.danger",        # bright alert red
+    "#ffa020": "color.accent.warning",       # warning orange, ΔRGB≈18 from #ff8c00
+    "#ffc000": "color.accent.warning",       # bright warning, ΔRGB≈20 from #ffb84d
+    "#ffc040": "color.accent.warning",       # warning amber, ΔRGB≈0 from #ffb84d
+    "#ffe090": "color.accent.warning",       # warning highlight
+
+    # ── Threshold fader / gate curve gradient stops (PR 5/5) ──
+    # Inline gradient stops in paint code (not file-scope const).
+    "#2f9e6a": "color.accent.success",       # comp meter lo green
+    "#6cc56a": "color.accent.success",       # comp meter mid-lo green
+    "#e8b94c": "color.accent.warning",       # comp meter mid amber
+    "#e8553c": "color.accent.danger",        # comp meter hi red
+    "#f2362a": "color.accent.danger",        # comp meter peak red
+    "#50b4dc": "color.accent.dim",           # gate curve translucent cyan
+
+    # ── Waveform widget close-mappings (PR 5/5) ──
+    # Shared by WaveformWidget + StripWaveform (rx + strip-mode rendering).
+    "#587890": "color.text.label",           # waveform centerline, ΔRGB≈8 from #607080
+    "#00e5ff": "color.accent.bright",        # waveform fallback cyan, ΔRGB≈29 from #00c8ff
+    "#d8e6f0": "color.text.primary",         # waveform label, ΔRGB≈16 from #c8d8e8
+    "#90a0b0": "color.text.secondary",       # waveform muted label, ΔRGB≈16 from #a0b0c0
+    "#ff5050": "color.accent.danger",        # waveform clip, ΔRGB≈3 from #ff4d4d
+    "#142432": "color.background.1",         # waveform bar-empty bg
+    "#ffd166": "color.accent.warning",       # waveform peak-hold, ΔRGB≈1 from #ffd070
 }
 
 # Build a regex that matches any of our known hex codes, longest first

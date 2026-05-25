@@ -11,6 +11,7 @@
 #include <QToolTip>
 #include <algorithm>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -18,10 +19,9 @@ namespace {
 
 constexpr float kHandleHitRadius = 10.0f;
 
-const QColor kThresholdHandle("#e8a540");
-const QColor kRatioHandle    ("#4db8d4");
-const QColor kHandleOutline  ("#ffffff");
-
+inline QColor kThresholdHandle() { return AetherSDR::ThemeManager::instance().color("color.accent.warning"); }
+inline QColor kRatioHandle() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
+inline QColor kHandleOutline() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
 } // namespace
 
 ClientCompEditorCanvas::ClientCompEditorCanvas(QWidget* parent)
@@ -73,7 +73,7 @@ void ClientCompEditorCanvas::paintEvent(QPaintEvent* ev)
     const float tx = dbToX(T);
 
     const float curveY = dbToY(std::clamp(curveOutputDb(T), kMinDb, kMaxDb));
-    QColor guideColor = kThresholdHandle;
+    QColor guideColor = kThresholdHandle();
     guideColor.setAlpha(160);
     QPen guidePen(guideColor, 1.5, Qt::DashLine);
     guidePen.setDashPattern({4.0, 3.0});
@@ -86,8 +86,8 @@ void ClientCompEditorCanvas::paintEvent(QPaintEvent* ev)
     tri.lineTo(tx - 9.0f,   by);
     tri.lineTo(tx + 9.0f,   by);
     tri.closeSubpath();
-    p.setBrush(kThresholdHandle);
-    p.setPen(QPen(kHandleOutline, 1.5));
+    p.setBrush(kThresholdHandle());
+    p.setPen(QPen(kHandleOutline(), 1.5));
     p.drawPath(tri);
 
     // Ratio handle — larger filled dot at the knee centre so it reads
@@ -95,8 +95,8 @@ void ClientCompEditorCanvas::paintEvent(QPaintEvent* ev)
     // visible against the cyan curve even when GR is 0.
     const float outDb = curveOutputDb(T);
     const QPointF rh(tx, dbToY(outDb));
-    p.setBrush(kRatioHandle);
-    p.setPen(QPen(kHandleOutline, 1.2));
+    p.setBrush(kRatioHandle());
+    p.setPen(QPen(kHandleOutline(), 1.2));
     p.drawEllipse(rh, 6.5, 6.5);
 }
 
