@@ -88,6 +88,7 @@ inline QString appStylesheetTemplate()
         QMenuBar::item:selected { background-color: {{color.background.1}}; }
         QMenu { background-color: {{color.background.0}}; border: 1px solid {{color.border.strong}}; }
         QMenu::item:selected { background-color: {{color.accent}}; color: #000; }
+        QMenu::separator { height: 1px; background: {{color.border.strong}}; margin: 4px 8px; }
         QStatusBar { background-color: {{color.background.0}}; border-top: 1px solid {{color.border.strong}}; }
         QProgressBar {
             background-color: {{color.background.0}};

@@ -491,7 +491,8 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
             QMenu menu(this);
             menu.setStyleSheet(
                 "QMenu { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050; }"
-                "QMenu::item:selected { background: #00b4d8; color: #000; }");
+                "QMenu::item:selected { background: #00b4d8; color: #000; }"
+                "QMenu::separator { height: 1px; background: #304050; margin: 4px 8px; }");
             QAction* resendAction = menu.addAction("Resend");
             menu.addSeparator();
             QAction* clearAction  = menu.addAction("Clear History");

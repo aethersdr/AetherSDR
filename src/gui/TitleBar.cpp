@@ -736,7 +736,8 @@ void TitleBar::setMenuBar(QMenuBar* mb)
         "QMenuBar::item { padding: 4px 8px; }"
         "QMenuBar::item:selected { background: #203040; color: #ffffff; }"
         "QMenu { background: #0f0f1a; color: #c8d8e8; border: 1px solid #304050; }"
-        "QMenu::item:selected { background: #0070c0; }");
+        "QMenu::item:selected { background: #0070c0; }"
+        "QMenu::separator { height: 1px; background: #304050; margin: 4px 8px; }");
     mb->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     m_menuBar = mb;
     m_menuBar->installEventFilter(this);
