@@ -3335,7 +3335,11 @@ static QString wisdomDir()
     // Windows: use %APPDATA%/AetherSDR/
     QString dir = QDir::homePath() + "/AppData/Roaming/AetherSDR/";
 #else
-    QString dir = QDir::homePath() + "/.config/AetherSDR/AetherSDR/";
+    // Singular ~/.config/AetherSDR/ — matches AppSettings, the log dir,
+    // and the other ConfigLocation users.  Pre-fix this was the
+    // double-nested ~/.config/AetherSDR/AetherSDR/ path, which forced an
+    // FFTW wisdom regeneration on first launch after the dir unified.
+    QString dir = QDir::homePath() + "/.config/AetherSDR/";
 #endif
     QDir().mkpath(dir);
     return dir;

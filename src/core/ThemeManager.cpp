@@ -146,6 +146,13 @@ ThemeManager& ThemeManager::instance()
 
 ThemeManager::ThemeManager()
 {
+    // Explicit metatype registration so qMetaTypeId<ThemeGradient>() and
+    // direct userType comparisons resolve correctly even before the first
+    // QVariant::fromValue<ThemeGradient>() call.  Q_DECLARE_METATYPE in
+    // the header sets up the template machinery, but explicit registration
+    // here makes saveCurrentThemeAs()'s type check timing-independent.
+    qRegisterMetaType<ThemeGradient>("AetherSDR::ThemeGradient");
+
     seedBuiltinDefaults();
     scanAvailableThemes();
 
@@ -289,8 +296,12 @@ void ThemeManager::scanAvailableThemes()
     // overrides the corrected bundled version and produces baffling
     // partial-render bugs.  Users wanting a tweaked version should Save
     // As under a new name through the editor.
-    const QString userDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
-                                + QStringLiteral("/themes");
+    // Use GenericConfigLocation + "/AetherSDR" so the path is ~/.config/AetherSDR/themes,
+    // not the double-nested ~/.config/AetherSDR/AetherSDR/themes that
+    // AppConfigLocation produces when both org and app names are "AetherSDR".
+    // Matches the convention AppSettings and the log dir already use.
+    const QString userDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+                                + QStringLiteral("/AetherSDR/themes");
     QDir d(userDir);
     if (d.exists()) {
         const auto entries = d.entryList({"*.json"}, QDir::Files);
@@ -414,21 +425,36 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
 {
     if (newThemeName.trimmed().isEmpty()) return false;
 
-    // Rebuild a nested JSON object from the flat dotted keys so the on-disk
-    // shape matches the bundled themes (`color.background.0` round-trips to
-    // `{ "color": { "background": { "0": "..." } } }`).
-    QJsonObject root;
+    // Round-trip-safe flat dotted-key serialization.  The bundled themes
+    // organize tokens into nested objects for human readability, but the
+    // earlier deep-walk version of this code had two bugs that lost data
+    // when it tried to reproduce that layout:
+    //
+    //   * Prefix-conflict — a scalar like `color.accent` collided with
+    //     nested children like `color.accent.bright`; whichever was
+    //     processed second clobbered the first.
+    //   * Gradient tokens were silently skipped via a fragile
+    //     canConvert<ThemeGradient>() check (false negatives observed
+    //     under some metatype-registration timings).
+    //
+    // The flat output below is a strict subset of what flattenTokens()
+    // accepts (`{"tokens": {"color.background.0": "#0f0f1a", ...}}`):
+    // each dotted key becomes a literal JSON key inside `tokens`.  Less
+    // pretty than the bundled themes, but every token round-trips
+    // perfectly with zero conflict surface.  Future-Phase-5 polish can
+    // group these into the bundled nested layout once the editor is
+    // doing more than dump-and-reload.
+    QJsonObject tokensObj;
+    const int gradMetaId = qMetaTypeId<ThemeGradient>();
     for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
-        const QStringList parts = it.key().split(QLatin1Char('.'));
-        QJsonValue leaf;
         const QVariant& v = it.value();
-        if (v.userType() == QMetaType::QString)        leaf = v.toString();
-        else if (v.userType() == QMetaType::Int)       leaf = v.toInt();
-        else if (v.userType() == QMetaType::Double)    leaf = v.toDouble();
-        else if (v.userType() == QMetaType::Bool)      leaf = v.toBool();
-        else if (v.canConvert<ThemeGradient>()) {
-            // Gradient round-trip — preserves the {type, angle, stops}
-            // shape so the existing parseGradient() can re-read it.
+        const int ut = v.userType();
+        QJsonValue leaf;
+        if (ut == QMetaType::QString)      leaf = v.toString();
+        else if (ut == QMetaType::Int)     leaf = v.toInt();
+        else if (ut == QMetaType::Double)  leaf = v.toDouble();
+        else if (ut == QMetaType::Bool)    leaf = v.toBool();
+        else if (ut == gradMetaId) {
             const ThemeGradient g = v.value<ThemeGradient>();
             QJsonObject gj;
             gj.insert("type", g.type == ThemeGradient::Radial
@@ -450,25 +476,14 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
             gj.insert("stops", stops);
             leaf = gj;
         }
-        else continue;
-
-        // Walk the dotted path, materializing nested objects as we go.
-        QJsonObject* cursor = &root;
-        QList<std::pair<QJsonObject*, QString>> stack;
-        for (int i = 0; i < parts.size() - 1; ++i) {
-            QJsonObject child = cursor->value(parts[i]).toObject();
-            stack.push_back({cursor, parts[i]});
-            // Swap to a working copy we mutate, write back later.
-            cursor = new QJsonObject(child);
+        else {
+            qCWarning(lcGui) << "ThemeManager::saveCurrentThemeAs: skipping token"
+                             << it.key() << "with unsupported metatype" << ut;
+            continue;
         }
-        cursor->insert(parts.last(), leaf);
-        // Unwind: write each working copy back into its parent.
-        for (int i = stack.size() - 1; i >= 0; --i) {
-            stack[i].first->insert(stack[i].second, *cursor);
-            if (cursor != &root) delete cursor;
-            cursor = stack[i].first;
-        }
+        tokensObj.insert(it.key(), leaf);
     }
+    QJsonObject root = tokensObj;
 
     QJsonObject doc;
     doc.insert("schemaVersion", 1);
@@ -478,9 +493,12 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
     doc.insert("description",   QStringLiteral("Created via the Theme Editor."));
     doc.insert("tokens",        root);
 
+    // Mirror scanAvailableThemes — GenericConfigLocation + "/AetherSDR"
+    // keeps the saved theme alongside the existing user-dir layout
+    // (singular path, not the double-nested AppConfigLocation form).
     const QString userDir = QStandardPaths::writableLocation(
-                                QStandardPaths::AppConfigLocation)
-                            + QStringLiteral("/themes");
+                                QStandardPaths::GenericConfigLocation)
+                            + QStringLiteral("/AetherSDR/themes");
     QDir().mkpath(userDir);
     const QString path = userDir + QLatin1Char('/')
                        + newThemeName + QStringLiteral(".json");
