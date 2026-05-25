@@ -166,12 +166,23 @@ static QString panText(int value)
 }
 
 // ── Style constants (matching docs/style/applet-style-guide.md) ───────────────
+//
+// kButtonBase() + kBlueActive() are tokenised through ThemeManager so the
+// filter-preset buttons (1.8K, 2.1K, …) live re-theme alongside the
+// rest of the UI.  Resolved once per file at first use via a Meyer's
+// static — ThemeManager's singleton is up by the time any RxApplet is
+// constructed.
 
-static constexpr const char* kButtonBase =
-    "QPushButton { background: #1a2a3a; border: 1px solid #205070; "
-    "border-radius: 3px; color: #c8d8e8; font-size: 10px; font-weight: bold; "
-    "padding: 1px 2px; }"
-    "QPushButton:hover { background: #204060; }";
+static const QString& kButtonBase()
+{
+    static const QString s = AetherSDR::ThemeManager::instance().resolve(
+        "QPushButton { background: {{color.background.1}}; "
+        "border: 1px solid {{color.background.2}}; "
+        "border-radius: 3px; color: {{color.text.primary}}; "
+        "font-size: 10px; font-weight: bold; padding: 1px 2px; }"
+        "QPushButton:hover { background: {{color.background.2}}; }");
+    return s;
+}
 
 static constexpr const char* kDimLabelStyle =
     "QLabel { color: #8090a0; font-size: 11px; }";
@@ -180,9 +191,14 @@ static constexpr const char* kInsetValueStyle =
     "QLabel { font-size: 10px; background: #0a0a18; border: 1px solid #1e2e3e; "
     "border-radius: 3px; padding: 1px 2px; color: #c8d8e8; }";
 
-static const QString kBlueActive =
-    "QPushButton:checked { background-color: #0070c0; color: #ffffff; "
-    "border: 1px solid #0090e0; }";
+static const QString& kBlueActive()
+{
+    static const QString s = AetherSDR::ThemeManager::instance().resolve(
+        "QPushButton:checked { background: {{color.accent.dim}}; "
+        "color: {{color.text.primary}}; "
+        "border: 1px solid {{color.accent.bright}}; }");
+    return s;
+}
 
 static const QString kGreenActive =
     "QPushButton:checked { background-color: #006040; color: #00ff88; "
@@ -287,7 +303,7 @@ static QPushButton* mkToggle(const QString& text, QWidget* parent = nullptr)
     b->setCheckable(true);
     b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     b->setFixedHeight(20);
-    b->setStyleSheet(kButtonBase);
+    b->setStyleSheet(kButtonBase());
     return b;
 }
 
@@ -711,14 +727,14 @@ void RxApplet::buildUI()
             row->setSpacing(2);
 
             m_offsetDown = mkToggle(QString::fromUtf8("\xe2\x88\x92")); // −
-            m_offsetDown->setStyleSheet(QString(kButtonBase) + kBlueActive);
+            m_offsetDown->setStyleSheet(kButtonBase() + kBlueActive());
             connect(m_offsetDown, &QPushButton::clicked, this, [this] {
                 applyOffsetDir("down");
             });
             row->addWidget(m_offsetDown);
 
             m_simplexBtn = mkToggle("Simplex");
-            m_simplexBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
+            m_simplexBtn->setStyleSheet(kButtonBase() + kBlueActive());
             m_simplexBtn->setChecked(true);
             connect(m_simplexBtn, &QPushButton::clicked, this, [this] {
                 applyOffsetDir("simplex");
@@ -726,14 +742,14 @@ void RxApplet::buildUI()
             row->addWidget(m_simplexBtn);
 
             m_offsetUp = mkToggle("+");
-            m_offsetUp->setStyleSheet(QString(kButtonBase) + kBlueActive);
+            m_offsetUp->setStyleSheet(kButtonBase() + kBlueActive());
             connect(m_offsetUp, &QPushButton::clicked, this, [this] {
                 applyOffsetDir("up");
             });
             row->addWidget(m_offsetUp);
 
             m_revBtn = mkToggle("REV");
-            m_revBtn->setStyleSheet(QString(kButtonBase) + kAmberActive);
+            m_revBtn->setStyleSheet(kButtonBase() + kAmberActive);
             connect(m_revBtn, &QPushButton::toggled, this, [this](bool on) {
                 if (m_revBtn->signalsBlocked()) return;
                 if (!m_slice) return;
@@ -936,12 +952,12 @@ void RxApplet::buildUI()
         row->setSpacing(0);
 
         m_ritOnBtn = mkToggle("RIT");
-        m_ritOnBtn->setStyleSheet(QString(kButtonBase) + kAmberActive);
+        m_ritOnBtn->setStyleSheet(kButtonBase() + kAmberActive);
         row->addWidget(m_ritOnBtn);
 
         m_ritZero = new QPushButton("0");
         m_ritZero->setStyleSheet(
-            QString(kButtonBase) + "QPushButton { padding: 1px 4px; }");
+            kButtonBase() + "QPushButton { padding: 1px 4px; }");
         connect(m_ritZero, &QPushButton::clicked, this, [this] {
             if (m_slice) m_slice->setRit(m_ritOnBtn->isChecked(), 0);
         });
@@ -988,12 +1004,12 @@ void RxApplet::buildUI()
         row->setSpacing(0);
 
         m_xitOnBtn = mkToggle("XIT");
-        m_xitOnBtn->setStyleSheet(QString(kButtonBase) + kAmberActive);
+        m_xitOnBtn->setStyleSheet(kButtonBase() + kAmberActive);
         row->addWidget(m_xitOnBtn);
 
         m_xitZero = new QPushButton("0");
         m_xitZero->setStyleSheet(
-            QString(kButtonBase) + "QPushButton { padding: 1px 4px; }");
+            kButtonBase() + "QPushButton { padding: 1px 4px; }");
         connect(m_xitZero, &QPushButton::clicked, this, [this] {
             if (m_slice) m_slice->setXit(m_xitOnBtn->isChecked(), 0);
         });
@@ -1139,7 +1155,7 @@ void RxApplet::applySqlModeVisuals()
     switch (m_sqlMode) {
     case SqlMode::Off:
         m_sqlBtn->setText("SQL");
-        m_sqlBtn->setStyleSheet(QString(kButtonBase) + kDisabledBtn);
+        m_sqlBtn->setStyleSheet(kButtonBase() + kDisabledBtn);
         break;
     case SqlMode::Manual:
         m_sqlBtn->setText("SQL");
@@ -2385,7 +2401,7 @@ void RxApplet::rebuildFilterButtons()
     for (int i = 0; i < m_filterWidths.size(); ++i) {
         const int w = m_filterWidths[i];
         auto* btn = mkToggle(formatStepLabel(w));
-        btn->setStyleSheet(QString(kButtonBase) + kBlueActive);
+        btn->setStyleSheet(kButtonBase() + kBlueActive());
         connect(btn, &QPushButton::clicked, this, [this, i](bool) {
             if (!m_slice) return;
             if (m_filterCustomLo[i] != INT_MIN) {

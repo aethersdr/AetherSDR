@@ -597,6 +597,7 @@ set(GUI_SOURCES
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
     src/gui/AppletPanel.cpp
+    src/gui/FavoritesPickerDialog.cpp
     src/gui/RxApplet.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/SMeterWidget.cpp
