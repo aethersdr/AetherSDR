@@ -272,6 +272,15 @@ void ThemeManager::scanAvailableThemes()
     // other platforms via QStandardPaths.  Loaded only if the directory
     // exists — Phase 1 doesn't create it (Phase 5's editor does on first
     // save).
+    //
+    // Built-in names are RESERVED — user-dir files with a colliding name
+    // are skipped with a warning rather than allowed to shadow the
+    // bundled theme.  Otherwise a stale user-dir copy of "Default Dark"
+    // saved before a schema change (e.g. the Phase 3 waterfall colormap
+    // restructure that broke flat → nested gradient layout) silently
+    // overrides the corrected bundled version and produces baffling
+    // partial-render bugs.  Users wanting a tweaked version should Save
+    // As under a new name through the editor.
     const QString userDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
                                 + QStringLiteral("/themes");
     QDir d(userDir);
@@ -286,7 +295,16 @@ void ThemeManager::scanAvailableThemes()
             f.close();
             if (err.error != QJsonParseError::NoError || !doc.isObject()) continue;
             const QString name = doc.object().value("name").toString();
-            if (!name.isEmpty()) m_themePaths.insert(name, full);
+            if (name.isEmpty()) continue;
+            const auto existing = m_themePaths.constFind(name);
+            if (existing != m_themePaths.constEnd()
+                && existing.value().startsWith(QStringLiteral(":/themes/"))) {
+                qCWarning(lcGui) << "ThemeManager: ignoring user-dir theme"
+                                 << full << "— name collides with built-in"
+                                 << name << "(use Save As under a new name)";
+                continue;
+            }
+            m_themePaths.insert(name, full);
         }
     }
 }
