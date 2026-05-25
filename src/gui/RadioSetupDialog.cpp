@@ -3719,7 +3719,9 @@ QWidget* RadioSetupDialog::buildSerialTab()
         grid->addWidget(portCombo, 0, 1);
 
         auto* refreshBtn = new QPushButton("Refresh");
-        refreshBtn->setFixedHeight(24);
+        // Let native style (notably macOS) drive the button height; a fixed
+        // 24 px clipped the macOS button bezel and label baseline.
+        refreshBtn->setMinimumHeight(24);
         grid->addWidget(refreshBtn, 0, 3);
 
         // Custom port row — hidden unless "Custom..." selected or saved port is custom
@@ -3936,10 +3938,12 @@ QWidget* RadioSetupDialog::buildSerialTab()
             "QPushButton:disabled { background: #203040; color: #506070; border-color: #304050; }";
 
         auto* openBtn = new QPushButton("Open");
-        openBtn->setFixedWidth(80);
+        // Min-width rather than fixed-width: macOS native button metrics need
+        // more horizontal room than the 80 px Windows/Fusion baseline.
+        openBtn->setMinimumWidth(80);
         openBtn->setStyleSheet(btnStyle);
         auto* closeBtn = new QPushButton("Close");
-        closeBtn->setFixedWidth(80);
+        closeBtn->setMinimumWidth(80);
         closeBtn->setStyleSheet(btnStyle);
 
         auto* statusLabel = new QLabel;
@@ -4009,13 +4013,14 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         // Detect / Close buttons
         auto* fcDetectBtn = new QPushButton("Detect");
-        fcDetectBtn->setFixedWidth(80);
+        // Same macOS-native-metrics consideration as the Open/Close pair above.
+        fcDetectBtn->setMinimumWidth(80);
         fcDetectBtn->setStyleSheet(
             "QPushButton { background: #00b4d8; color: #0f0f1a; font-weight: bold; "
             "border: 1px solid #008ba8; padding: 3px; border-radius: 3px; }"
             "QPushButton:hover { background: #00c8f0; }");
         auto* fcCloseBtn = new QPushButton("Close");
-        fcCloseBtn->setFixedWidth(80);
+        fcCloseBtn->setMinimumWidth(80);
         fcCloseBtn->setStyleSheet(fcDetectBtn->styleSheet());
         fcCloseBtn->setEnabled(false);
         m_flexControlDetectButton = fcDetectBtn;
