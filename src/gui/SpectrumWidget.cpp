@@ -1791,7 +1791,7 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
                          towerHeight * 1.05);
     glow.setColorAt(0.0, withAlpha(kAetherBrandBlue, 48));
     glow.setColorAt(0.55, withAlpha(kAetherBrandGreen, 22));
-    glow.setColorAt(1.0, QColor(0, 0, 0, 0));
+    glow.setColorAt(1.0, AetherSDR::theme::withAlpha("color.background.spectrum", 0));
     p.setPen(Qt::NoPen);
     p.setBrush(glow);
     p.drawEllipse(QPointF(centerX, topY + towerHeight * 0.44),
@@ -5050,7 +5050,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 drawBandPlan(p, specRect);
 
             // Divider bar
-            p.fillRect(0, specH, w, DIVIDER_H, QColor(0x30, 0x40, 0x50));
+            p.fillRect(0, specH, w, DIVIDER_H, AetherSDR::ThemeManager::instance().color("color.background.2"));
 
             drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, FREQ_SCALE_H));
             drawTnfMarkers(p, specRect);
@@ -5073,13 +5073,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 const float norm = (m_refLevel - squelchDbm) / m_dynamicRange;
                 const int sy = specRect.top()
                     + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
-                p.setPen(QPen(QColor(0xFF, 0xFF, 0x00, 220), 1));
+                p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 220), 1));
                 p.drawLine(specRect.left(), sy, specRect.right(), sy);
                 QFont f = p.font();
                 f.setPointSize(8);
                 f.setBold(true);
                 p.setFont(f);
-                p.setPen(QColor(0xFF, 0xFF, 0x00, 220));
+                p.setPen(AetherSDR::theme::withAlpha("color.accent.warning", 220));
                 const QString lbl = QString("SQL %1").arg(m_squelchLevel);
                 p.drawText(4, sy - 2, lbl);
             }
@@ -5189,8 +5189,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 if (lx + tw > w) lx = m_cursorPos.x() - tw - 4;
                 int ly = m_cursorPos.y() - th - 4;
                 if (ly < 0) ly = m_cursorPos.y() + 16;
-                p.fillRect(lx, ly, tw, th, QColor(0x0f, 0x0f, 0x1a, 200));
-                p.setPen(QColor(0xc8, 0xd8, 0xe8));
+                p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
+                p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
                 p.drawText(lx + 4, ly + fm.ascent() + 2, label);
             }
 
@@ -5198,7 +5198,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             if (m_showTuneGuides && m_hoveredTnfId < 0 && m_tuneGuideVisible
                 && m_cursorPos.x() >= 0 && m_cursorPos.y() >= 0) {
                 const int cx = m_cursorPos.x();
-                p.setPen(QPen(QColor(0x60, 0x70, 0x80), 1));
+                p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.text.label"), 1));
                 p.drawLine(cx, 0, cx, h);
 
                 const double freqMhz = xToMhz(cx);
@@ -5220,8 +5220,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 if (lx + tw > w) { lx = cx - tw - 4; }
                 int ly = m_cursorPos.y() - th - 4;
                 if (ly < 0) { ly = m_cursorPos.y() + 16; }
-                p.fillRect(lx, ly, tw, th, QColor(0x0f, 0x0f, 0x1a, 200));
-                p.setPen(QColor(0xc8, 0xd8, 0xe8));
+                p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
+                p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
                 p.drawText(lx + 4, ly + fm.ascent() + 2, label);
             }
 
@@ -5626,7 +5626,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     {
         // Software fallback: full QPainter rendering
         if (m_bgImage.isNull()) {
-            p.fillRect(specRect, QColor(0x0a, 0x0a, 0x14));
+            p.fillRect(specRect, AetherSDR::ThemeManager::instance().color("color.background.0"));
         } else {
             // Cache scaled image to avoid per-frame scaling
             if (m_bgScaledSize != specRect.size()) {
@@ -5667,10 +5667,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
             const float norm = (m_refLevel - squelchDbm) / m_dynamicRange;
             const int sy = specRect.top()
                 + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
-            p.setPen(QPen(QColor(0xFF, 0xFF, 0x00, 220), 1));
+            p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 220), 1));
             p.drawLine(specRect.left(), sy, specRect.right(), sy);
             QFont f = p.font(); f.setPointSize(8); f.setBold(true); p.setFont(f);
-            p.setPen(QColor(0xFF, 0xFF, 0x00, 220));
+            p.setPen(AetherSDR::theme::withAlpha("color.accent.warning", 220));
             p.drawText(4, sy - 2, QString("SQL %1").arg(m_squelchLevel));
         }
 
@@ -5874,8 +5874,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         if (lx + tw > width()) lx = m_cursorPos.x() - tw - 4;
         int ly = m_cursorPos.y() - th - 4;
         if (ly < 0) ly = m_cursorPos.y() + 16;
-        p.fillRect(lx, ly, tw, th, QColor(0x0f, 0x0f, 0x1a, 200));
-        p.setPen(QColor(0xc8, 0xd8, 0xe8));
+        p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
     }
 
@@ -5883,7 +5883,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     if (m_showTuneGuides && m_hoveredTnfId < 0 && m_tuneGuideVisible
         && m_cursorPos.x() >= 0 && m_cursorPos.y() >= 0) {
         const int cx = m_cursorPos.x();
-        p.setPen(QPen(QColor(0x60, 0x70, 0x80), 1));
+        p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.text.label"), 1));
         p.drawLine(cx, 0, cx, height());
 
         const double freqMhz = xToMhz(cx);
@@ -5905,8 +5905,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         if (lx + tw > width()) { lx = cx - tw - 4; }
         int ly = m_cursorPos.y() - th - 4;
         if (ly < 0) { ly = m_cursorPos.y() + 16; }
-        p.fillRect(lx, ly, tw, th, QColor(0x0f, 0x0f, 0x1a, 200));
-        p.setPen(QColor(0xc8, 0xd8, 0xe8));
+        p.fillRect(lx, ly, tw, th, AetherSDR::theme::withAlpha("color.background.0", 200));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
     }
 
@@ -5962,7 +5962,7 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
 
     const float bottomDbm = m_refLevel - m_dynamicRange;
     const float firstDb = std::ceil(bottomDbm / dbStep) * dbStep;
-    p.setPen(QPen(QColor(0x20, 0x30, 0x40), 1, Qt::DotLine));
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.background.1"), 1, Qt::DotLine));
     for (float dbm = firstDb; dbm <= m_refLevel; dbm += dbStep) {
         const float frac = (m_refLevel - dbm) / m_dynamicRange;
         const int y = r.top() + static_cast<int>(frac * h);
@@ -5975,7 +5975,7 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
     const double gridStep = effectiveGridStepMhz(w);
     const double firstLine = std::ceil(startMhz / gridStep) * gridStep;
 
-    p.setPen(QPen(QColor(0x20, 0x30, 0x40), 1, Qt::DotLine));
+    p.setPen(QPen(AetherSDR::ThemeManager::instance().color("color.background.1"), 1, Qt::DotLine));
     for (double f = firstLine; f <= endMhz; f += gridStep)
         p.drawLine(mhzToX(f), r.top(), mhzToX(f), r.bottom());
 }
@@ -6173,7 +6173,7 @@ void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
         p.fillRect(x1, bandY, x2 - x1, bandH, fill);
 
         // Draw separator lines between adjacent segments
-        p.setPen(QColor(0x0f, 0x0f, 0x1a, 200));
+        p.setPen(AetherSDR::theme::withAlpha("color.background.0", 200));
         p.drawLine(x1, bandY, x1, bandY + bandH);
 
         // Label: mode + lowest license class allowed
@@ -6900,7 +6900,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
     fillThresholdBand(1.5f, 2.0f, QColor(0xff, 0xc0, 0x40, 22));
     fillThresholdBand(2.0f, maxSwr, QColor(0xff, 0x58, 0x58, 16));
 
-    p.setPen(QPen(QColor(0x80, 0x90, 0xa0, 120), 1, Qt::DotLine));
+    p.setPen(QPen(AetherSDR::theme::withAlpha("color.text.secondary", 120), 1, Qt::DotLine));
     const float gridSwrs[] = {1.5f, 2.0f, 3.0f, 5.0f, 10.0f};
     for (float gridSwr : gridSwrs) {
         if (gridSwr < maxSwr)
@@ -6934,7 +6934,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
         p.setPen(sweepPen);
         p.drawPolyline(poly);
     }
-    p.setPen(QPen(QColor(0x0a, 0x0a, 0x14, 220), 1));
+    p.setPen(QPen(AetherSDR::theme::withAlpha("color.background.0", 220), 1));
     p.setBrush(QColor(0xff, 0xc0, 0x40, 240));
     for (const QPointF& pt : poly)
         p.drawEllipse(pt, 3.2, 3.2);
@@ -7005,7 +7005,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
     if (m_swrSweepCurrentFreqMhz > 0.0) {
         const int cx = mhzToX(m_swrSweepCurrentFreqMhz);
         if (cx >= plotRect.left() && cx <= plotRect.right()) {
-            p.setPen(QPen(QColor(0x00, 0xb4, 0xd8, 210), 1, Qt::DashLine));
+            p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent", 210), 1, Qt::DashLine));
             p.drawLine(cx, plotRect.top(), cx, plotRect.bottom());
         }
     }
@@ -7064,9 +7064,9 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
         labelRect.moveLeft(labelX);
     }
     p.setPen(Qt::NoPen);
-    p.setBrush(QColor(0x0a, 0x0a, 0x14, 220));
+    p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 220));
     p.drawRoundedRect(labelRect, 2, 2);
-    p.setPen(QColor(0xff, 0xd0, 0x70));
+    p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.warning"));
     for (int i = 0; i < labelLines.size(); ++i) {
         const QRect lineRect(labelRect.left() + 4,
                              labelRect.top() + 2 + i * fm.lineSpacing(),
@@ -7097,7 +7097,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
             if (!force && valueRect.left() <= lastLabelRight + 6)
                 return;
 
-            p.setPen(QPen(QColor(0xff, 0xd0, 0x70, 130), 1));
+            p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 130), 1));
             const qreal notchY = std::clamp(point.pos.y(),
                                             qreal(plotRect.top() + 2),
                                             qreal(plotRect.bottom()));
@@ -7107,7 +7107,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
             p.drawLine(notchTop, notchBottom);
 
             p.setPen(Qt::NoPen);
-            p.setBrush(QColor(0x0a, 0x0a, 0x14, 230));
+            p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 230));
             p.drawRoundedRect(valueRect, 2, 2);
             p.setPen(QColor(0xff, 0xe0, 0x90));
             p.drawText(valueRect, Qt::AlignCenter, text);
@@ -7129,7 +7129,7 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
     }
 
     const QString scaleLabel = QStringLiteral("%1").arg(maxSwr, 0, 'f', 1);
-    p.setPen(QColor(0x80, 0x90, 0xa0, 180));
+    p.setPen(AetherSDR::theme::withAlpha("color.text.secondary", 180));
     p.drawText(plotRect.right() - fm.horizontalAdvance(scaleLabel) - 4,
                plotRect.top() + fm.ascent() + 3,
                scaleLabel);
@@ -7371,10 +7371,10 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
     const QRect strip(stripX, specRect.top(), DBM_STRIP_W, specRect.height());
 
     // Semi-opaque background
-    p.fillRect(strip, QColor(0x0a, 0x0a, 0x18, 220));
+    p.fillRect(strip, AetherSDR::theme::withAlpha("color.background.0", 220));
 
     // Left border line
-    p.setPen(QColor(0x30, 0x40, 0x50));
+    p.setPen(AetherSDR::ThemeManager::instance().color("color.background.2"));
     p.drawLine(stripX, specRect.top(), stripX, specRect.bottom());
 
     // ── Up/Down arrows side by side at top ─────────────────────────────
@@ -7451,14 +7451,14 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
     const int stripX = strip.x();
 
     // Semi-opaque background
-    p.fillRect(strip, QColor(0x0a, 0x0a, 0x18, 220));
+    p.fillRect(strip, AetherSDR::theme::withAlpha("color.background.0", 220));
 
     // Left border line
-    p.setPen(QColor(0x30, 0x40, 0x50));
+    p.setPen(AetherSDR::ThemeManager::instance().color("color.background.2"));
     p.drawLine(stripX, wfRect.top(), stripX, wfRect.bottom());
 
     const QRect liveRect = waterfallLiveButtonRect(wfRect);
-    p.setPen(QColor(0x40, 0x50, 0x60));
+    p.setPen(AetherSDR::ThemeManager::instance().color("color.meter.bar.fill"));
     p.setBrush(m_wfLive ? QColor(0x45, 0x45, 0x45) : QColor(0xc0, 0x20, 0x20));
     p.drawRoundedRect(liveRect, 3, 3);
 

@@ -192,6 +192,24 @@ private:
     QHash<QWidget*, TrackedWidget> m_trackedWidgets;
 };
 
+// Convenience helper for paint code that needs a themed colour with a
+// specific alpha (translucent overlays, glow effects, alpha-modulated
+// level meter fills).  Returns ThemeManager::color(token) with the
+// alpha channel overridden.
+//
+// Used by tools/migrate_paint_colours.py output — it emits
+// `theme::withAlpha("token", N)` for 4-arg `QColor(R, G, B, A)`
+// literals so the resolved colour stays alpha-correct after the
+// migration.
+namespace theme {
+inline QColor withAlpha(const QString& token, int alpha)
+{
+    QColor c = ThemeManager::instance().color(token);
+    c.setAlpha(alpha);
+    return c;
+}
+} // namespace theme
+
 } // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::ThemeGradient)
