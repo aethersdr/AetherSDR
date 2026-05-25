@@ -73,19 +73,26 @@ inline QString appStylesheetTemplate()
             alternate-background-color: {{color.background.1}};
         }
         QListWidget::item:selected { background-color: {{color.accent}}; color: #000; }
+        QSlider {
+            border: none;
+            background: transparent;
+        }
         QSlider::groove:horizontal {
             height: 4px;
             background: {{color.background.1}};
+            border: none;
             border-radius: 2px;
         }
         QSlider::sub-page:horizontal {
             background: {{color.accent}};
+            border: none;
             border-radius: 2px;
         }
         QSlider::handle:horizontal {
             width: 12px; height: 12px;
             margin: -4px 0;
             background: {{color.text.primary}};
+            border: none;
             border-radius: 6px;
         }
         QMenuBar { background-color: {{color.background.0}}; }
@@ -135,14 +142,17 @@ inline QString darkThemeStylesheet()
 inline QString primarySliderStyleTemplate(const QString& accentToken = QStringLiteral("color.accent"))
 {
     return QStringLiteral(
-        "QSlider::groove:horizontal { height: 4px; background: {{color.background.1}}; border-radius: 2px; }"
-        "QSlider::sub-page:horizontal { background: {{%1}}; border-radius: 2px; }"
+        "QSlider { border: none; background: transparent; }"
+        "QSlider::groove:horizontal { height: 4px; background: {{color.background.1}}; border: none; border-radius: 2px; }"
+        "QSlider::sub-page:horizontal { background: {{%1}}; border: none; border-radius: 2px; }"
+        "QSlider::add-page:horizontal { background: {{color.background.1}}; border: none; border-radius: 2px; }"
         "QSlider::handle:horizontal { width: 12px; height: 12px; margin: -4px 0;"
-        " background: {{color.text.primary}}; border-radius: 6px; }"
-        "QSlider::groove:vertical { width: 4px; background: {{color.background.1}}; border-radius: 2px; }"
-        "QSlider::sub-page:vertical { background: {{%1}}; border-radius: 2px; }"
+        " background: {{color.text.primary}}; border: none; border-radius: 6px; }"
+        "QSlider::groove:vertical { width: 4px; background: {{color.background.1}}; border: none; border-radius: 2px; }"
+        "QSlider::sub-page:vertical { background: {{%1}}; border: none; border-radius: 2px; }"
+        "QSlider::add-page:vertical { background: {{color.background.1}}; border: none; border-radius: 2px; }"
         "QSlider::handle:vertical { width: 12px; height: 12px; margin: 0 -4px;"
-        " background: {{color.text.primary}}; border-radius: 6px; }"
+        " background: {{color.text.primary}}; border: none; border-radius: 6px; }"
     ).arg(accentToken);
 }
 

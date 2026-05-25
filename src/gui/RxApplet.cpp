@@ -35,6 +35,8 @@
 #include <QWheelEvent>
 #include <QKeyEvent>
 #include <QStyle>
+#include <QStyleOptionSlider>
+#include <QPainterPath>
 #include <QDoubleSpinBox>
 #include <QDir>
 #include <algorithm>
@@ -54,7 +56,16 @@ private:
     int m_resetVal;
 };
 
-// ResetSlider with a small center-mark dot painted on the groove.
+// ResetSlider whose fill anchors from the centre outward — for L/R pan
+// and L/R balance controls where the meaningful zero is the midpoint,
+// not the left edge.  Also paints a small centre-mark dot on the groove
+// so the operator can see the neutral position at a glance.
+//
+// The default Qt stylesheet sub-page rule paints (0 → handle) which
+// reads wrong for centre-anchored controls.  We over-paint that region
+// here: erase the unwanted half of the sub-page with groove colour, then
+// add the desired (centre → handle) fill in accent colour.  Clipping
+// excludes the handle pixel disc so the overpaint never bleeds into it.
 class CenterMarkSlider : public ResetSlider {
 public:
     explicit CenterMarkSlider(int resetVal, Qt::Orientation o, QWidget* parent = nullptr)
@@ -64,9 +75,41 @@ protected:
         ResetSlider::paintEvent(ev);
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
-        int cx = width() / 2;
-        int cy = height() / 2;
+
+        auto& tm = AetherSDR::ThemeManager::instance();
+        const int cx = width() / 2;
+        const int cy = height() / 2;
+        const int grooveY = cy - 2;
+
+        QStyleOptionSlider opt;
+        initStyleOption(&opt);
+        const QRect handleRect = style()->subControlRect(
+            QStyle::CC_Slider, &opt, QStyle::SC_SliderHandle, this);
+        const int handleCx = handleRect.center().x();
+
+        // Clip out the handle so the overpaint never touches its pixels.
+        QPainterPath clip;
+        clip.addRect(rect());
+        QPainterPath handlePath;
+        handlePath.addEllipse(handleRect.adjusted(-1, -1, 1, 1));
+        p.setClipPath(clip.subtracted(handlePath));
+
         p.setPen(Qt::NoPen);
+        if (handleCx < cx) {
+            // Sub-page already painted (0 → handle); erase it with groove
+            // colour, then add accent (handle → centre).
+            p.setBrush(tm.color("color.background.1"));
+            p.drawRect(QRect(0, grooveY, handleCx, 4));
+            p.setBrush(tm.color("color.accent"));
+            p.drawRect(QRect(handleCx, grooveY, cx - handleCx, 4));
+        } else {
+            // Sub-page already paints (0 → handle); we only want (centre
+            // → handle), so erase (0 → centre) with groove colour.
+            p.setBrush(tm.color("color.background.1"));
+            p.drawRect(QRect(0, grooveY, cx, 4));
+        }
+
+        // Centre-mark dot — visual landmark for the neutral position.
         p.setBrush(QColor("#608090"));
         p.drawEllipse(QPointF(cx, cy), 2.5, 2.5);
     }
