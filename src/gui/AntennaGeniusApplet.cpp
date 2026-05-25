@@ -492,8 +492,7 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
         // RX antenna can't TX — show TX antenna separately
         QString txName = m_model->antennaName(ps.txAntenna);
         antLabel->setText(antName + "  TX:" + txName);
-        antLabel->setStyleSheet(
-            "color: #ff8800; font-size: 10px; font-weight: bold;");
+        antLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent.warning}}; font-size: 10px; font-weight: bold;"));
     }
 
     // AUTO button state.
@@ -505,8 +504,7 @@ void AntennaGeniusApplet::updatePortDisplay(int portId)
     // Inhibit indicator
     if (ps.inhibited) {
         antLabel->setText(antName + " [INHIBIT]");
-        antLabel->setStyleSheet(
-            "color: #ff8800; font-size: 11px; font-weight: bold;");
+        antLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent.warning}}; font-size: 11px; font-weight: bold;"));
     }
 
     m_updatingFromModel = false;

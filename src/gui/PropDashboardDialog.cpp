@@ -613,12 +613,11 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
 
         auto* learnPanel = new QFrame;
         learnPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-        learnPanel->setStyleSheet(
-            "QFrame {"
-            " background: #0e1926;"
+        learnPanel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QFrame {"
+            " background: {{color.background.0}};"
             " border: 1px solid #22384d;"
             " border-radius: 10px;"
-            "}");
+            "}"));
         auto* learnLayout = new QVBoxLayout(learnPanel);
         learnLayout->setContentsMargins(10, 10, 10, 10);
         learnLayout->setSpacing(8);
@@ -747,12 +746,11 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
         note->setStyleSheet(kMutedStyle);
 
         auto* learnPanel = new QFrame;
-        learnPanel->setStyleSheet(
-            "QFrame {"
-            " background: #0e1926;"
+        learnPanel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QFrame {"
+            " background: {{color.background.0}};"
             " border: 1px solid #22384d;"
             " border-radius: 10px;"
-            "}");
+            "}"));
         auto* learnLayout = new QVBoxLayout(learnPanel);
         learnLayout->setContentsMargins(10, 10, 10, 10);
         learnLayout->setSpacing(8);

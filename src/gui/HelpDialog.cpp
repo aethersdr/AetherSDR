@@ -136,7 +136,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
     m_findStatus = new QLabel(findRow);
     m_findStatus->setObjectName("helpFindStatus");
     m_findStatus->setMinimumWidth(96);
-    m_findStatus->setStyleSheet("color: #7f93a7; font-size: 11px;");
+    m_findStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.secondary}}; font-size: 11px;"));
     findLayout->addWidget(m_findStatus);
 
     headerLayout->addWidget(findRow);
@@ -236,7 +236,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
         "Tip: The Help menu keeps each guide separate so you can reopen just the topic you need.",
         footer);
     hint->setWordWrap(true);
-    hint->setStyleSheet("color: #7f93a7; font-size: 11px;");
+    hint->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.secondary}}; font-size: 11px;"));
     footerLayout->addWidget(hint, 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, footer);

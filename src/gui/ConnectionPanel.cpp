@@ -240,9 +240,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     outer->addWidget(content, 1);
 
     auto* titleLabel = new QLabel("Connect to a Radio", this);
-    titleLabel->setStyleSheet(
-        "QLabel { color: #e7f1fb; font-size: 18px; font-weight: bold; "
-        "background: transparent; border: none; }");
+    titleLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 18px; font-weight: bold; "
+        "background: transparent; border: none; }"));
     root->addWidget(titleLabel);
 
     auto* introLabel = makeWrappedLabel(
@@ -342,9 +341,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     emptyCalloutLayout->setContentsMargins(14, 14, 14, 14);
     emptyCalloutLayout->setSpacing(8);
     auto* emptyTitle = new QLabel("No local radios found yet", emptyCallout);
-    emptyTitle->setStyleSheet(
-        "QLabel { color: #e7f1fb; font-size: 15px; font-weight: bold; "
-        "background: transparent; border: none; }");
+    emptyTitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 15px; font-weight: bold; "
+        "background: transparent; border: none; }"));
     emptyCalloutLayout->addWidget(emptyTitle);
     emptyCalloutLayout->addWidget(makeWrappedLabel(
         "AetherSDR is still listening for discovery packets. If your station is on a VPN "
@@ -546,8 +544,7 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     optionsLayout->setContentsMargins(12, 10, 12, 10);
     optionsLayout->setSpacing(6);
     auto* optionsTitle = new QLabel("Connection options for slower links", m_linkOptionsWidget);
-    optionsTitle->setStyleSheet(
-        "QLabel { color: #e7f1fb; font-weight: bold; background: transparent; border: none; }");
+    optionsTitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: bold; background: transparent; border: none; }"));
     optionsLayout->addWidget(optionsTitle);
     m_lowBwHintLabel = makeWrappedLabel(QString(), kHintLabelStyle);
     optionsLayout->addWidget(m_lowBwHintLabel);
