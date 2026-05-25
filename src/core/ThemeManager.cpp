@@ -174,8 +174,11 @@ void ThemeManager::seedBuiltinDefaults()
     // with the JSON resource manually; Phase 5's editor will eventually
     // generate this table from the resource at compile time.
 
-    // Backgrounds (6 tiers)
-    m_tokens.insert("color.background.0",        QString("#0a0e14"));
+    // Backgrounds (6 tiers).  background.0 is the dominant codebase
+    // QWidget base (#0f0f1a, 84 refs); aligning the canonical token to
+    // that value makes the migration bit-identical at every QWidget
+    // that doesn't paint its own background.
+    m_tokens.insert("color.background.0",        QString("#0f0f1a"));
     m_tokens.insert("color.background.1",        QString("#1a2a3a"));
     m_tokens.insert("color.background.2",        QString("#304050"));
     m_tokens.insert("color.background.3",        QString("#506070"));
@@ -190,8 +193,10 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.accent.danger",   QString("#ff4d4d"));
     m_tokens.insert("color.accent.success",  QString("#4dd87a"));
 
-    // Text (4 tiers — label and disabled distinct for Phase 4 contrast tuning)
-    m_tokens.insert("color.text.primary",   QString("#e6f0fa"));
+    // Text (4 tiers — label and disabled distinct for Phase 4 contrast
+    // tuning).  text.primary aligned to the dominant codebase body-text
+    // value (#c8d8e8, 367 refs across applets / dialogs / labels).
+    m_tokens.insert("color.text.primary",   QString("#c8d8e8"));
     m_tokens.insert("color.text.secondary", QString("#8ea8c0"));
     m_tokens.insert("color.text.label",     QString("#506070"));
     m_tokens.insert("color.text.disabled",  QString("#3a4a5a"));
