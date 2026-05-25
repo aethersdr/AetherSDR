@@ -467,7 +467,8 @@ public:
         setCursor(Qt::PointingHandCursor);
         setAccessibleName(QStringLiteral("FlexControl tuning knob"));
         setAccessibleDescription(QStringLiteral(
-            "Click to capture mouse input for circular tuning. Press Escape to release."));
+            "Double-click to capture mouse input for circular tuning, and double-click "
+            "again to release. Press Escape as a secondary release path."));
 
         m_pointerClock.start();
         m_spinClock.start();
@@ -635,12 +636,33 @@ protected:
 
     void mousePressEvent(QMouseEvent* event) override
     {
+        // Capture/release is bound to double-click (see below), not
+        // single-click — accept the press so the parent dialog doesn't
+        // mis-interpret it as a window-drag start, but don't change
+        // capture state.  Escape stays as the secondary release path.
         if (event->button() == Qt::LeftButton && isEnabled()) {
-            captureAt(event->position());
             event->accept();
             return;
         }
         QWidget::mousePressEvent(event);
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* event) override
+    {
+        // Single binding for both directions: double-click toggles
+        // capture.  Cleaner UX than the prior "click to latch, Escape
+        // to unlatch" asymmetry, which left operators thinking the
+        // knob was permanently stuck if they couldn't find Escape.
+        if (event->button() == Qt::LeftButton && isEnabled()) {
+            if (m_captured) {
+                releaseCapture();
+            } else {
+                captureAt(event->position());
+            }
+            event->accept();
+            return;
+        }
+        QWidget::mouseDoubleClickEvent(event);
     }
 
     void mouseMoveEvent(QMouseEvent* event) override
@@ -1215,7 +1237,7 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     deviceLayout->addWidget(knobPanel);
     root->addWidget(device);
 
-    m_captureHint = new QLabel(QStringLiteral("Click the knob to capture circular tuning."));
+    m_captureHint = new QLabel(QStringLiteral("Double-click the knob to capture circular tuning."));
     m_captureHint->setObjectName(QStringLiteral("CaptureHint"));
     m_captureHint->setProperty("armed", false);
     root->addWidget(m_captureHint);
@@ -1899,8 +1921,9 @@ void FlexControlDialog::setCaptureHintActive(bool active)
     if (!m_captureHint)
         return;
     m_captureHint->setText(active
-        ? QStringLiteral("Mouse locked to FlexControl. Press ESC to release.")
-        : QStringLiteral("Click the knob to capture circular tuning."));
+        ? QStringLiteral("Mouse locked to FlexControl. Double-click the knob to release "
+                         "(or press ESC).")
+        : QStringLiteral("Double-click the knob to capture circular tuning."));
     m_captureHint->setProperty("armed", active);
     if (m_releaseShortcut)
         m_releaseShortcut->setEnabled(active);
