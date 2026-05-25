@@ -892,6 +892,23 @@ else()
     message(STATUS "Build SHA: ${AETHER_GIT_SHA} (git unavailable or not a git checkout)")
 endif()
 
+# Reproducible-builds.org SOURCE_DATE_EPOCH support.  When a distro
+# packager (Debian, Arch, NixOS, openSUSE, Fedora, etc.) sets
+#   export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+# before invoking cmake, GCC 7.2+ and Clang automatically substitute
+# __DATE__ and __TIME__ with that fixed timestamp.  Many archive tools
+# (ar, tar, zip, objcopy) honour the same variable, so the built binary
+# becomes byte-reproducible across hosts.
+#
+# No source-tree changes needed — this block just surfaces a configure-
+# time status line so packagers can confirm at a glance that their
+# env-var actually reached the build.  Originally proposed as
+# https://github.com/aethersdr/AetherSDR/pull/3139 (closed in favour
+# of this ecosystem-standard approach).
+if(DEFINED ENV{SOURCE_DATE_EPOCH})
+    message(STATUS "Reproducible build: honoring SOURCE_DATE_EPOCH=$ENV{SOURCE_DATE_EPOCH}")
+endif()
+
 # Windows: GUI app (no console window) + icon resource
 if(WIN32)
     set_target_properties(AetherSDR PROPERTIES WIN32_EXECUTABLE TRUE)
