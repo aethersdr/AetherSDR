@@ -33,7 +33,7 @@ WsjtxClient::~WsjtxClient()
 QString WsjtxClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/wsjtx.log";
+           + "/AetherSDR/spothub/wsjtx.log";
 }
 
 void WsjtxClient::startListening(const QString& address, quint16 port)

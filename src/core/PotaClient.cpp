@@ -37,7 +37,7 @@ PotaClient::~PotaClient()
 QString PotaClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/pota.log";
+           + "/AetherSDR/spothub/pota.log";
 }
 
 void PotaClient::startPolling(int intervalSec)

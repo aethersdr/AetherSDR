@@ -60,7 +60,7 @@ FreeDvClient::~FreeDvClient()
 QString FreeDvClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/freedv.log";
+           + "/AetherSDR/spothub/freedv.log";
 }
 
 void FreeDvClient::startConnection()

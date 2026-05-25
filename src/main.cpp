@@ -218,13 +218,48 @@ int main(int argc, char* argv[])
         }
     }
 
-    // Set up file logging in ~/.config/AetherSDR/ (works inside AppImage where
-    // applicationDirPath() is read-only).
-    // Use GenericConfigLocation + app name to avoid the double-nested
-    // ~/.config/AetherSDR/AetherSDR/ path that AppConfigLocation produces.
-    const QString logDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                           + "/AetherSDR";
+    // Set up file logging in ~/.config/AetherSDR/logs/.  The dedicated
+    // logs/ subdir keeps the rotated debug files out of the config-root
+    // listing (which was getting crowded with 50+ aethersdr-*.log files
+    // sitting alongside the actual settings).  GenericConfigLocation +
+    // app name still avoids the AppConfigLocation double-nest.
+    const QString configRoot = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+                               + "/AetherSDR";
+    const QString logDir = configRoot + "/logs";
     QDir().mkpath(logDir);
+    // Source-feed logs (dxcluster.log, rbn.log, wsjtx.log, …) live in
+    // their own subdir so they don't mingle with the application logs.
+    QDir().mkpath(configRoot + "/spothub");
+
+    // One-shot migration of the existing root-level log files into the
+    // new subdirs.  Each rename() is best-effort; failures fall through
+    // so the app keeps working with whatever can be moved.
+    {
+        QDir rootDir(configRoot);
+        // App debug logs — every aethersdr-*.log, plus the aethersdr.log
+        // symlink (we remove it; LogManager will recreate inside logs/).
+        for (const QString& f : rootDir.entryList({"aethersdr-*.log"},
+                                                  QDir::Files | QDir::Hidden)) {
+            const QString src = configRoot + "/" + f;
+            const QString dst = logDir     + "/" + f;
+            if (!QFileInfo::exists(dst))
+                QFile::rename(src, dst);
+        }
+        const QString oldSymlink = configRoot + "/aethersdr.log";
+        if (QFileInfo(oldSymlink).isSymLink() || QFile::exists(oldSymlink))
+            QFile::remove(oldSymlink);
+
+        // SpotHub source feeds.
+        for (const QString& f : QStringList{
+                 "dxcluster.log",   "spotcollector.log", "wsjtx.log",
+                 "freedv.log",      "pota.log",          "rbn.log",
+                 "pskreporter.log"}) {
+            const QString src = configRoot + "/" + f;
+            const QString dst = configRoot + "/spothub/" + f;
+            if (QFileInfo::exists(src) && !QFileInfo::exists(dst))
+                QFile::rename(src, dst);
+        }
+    }
 
     // Load AppSettings before pruning/log-start so retention config and the
     // active-file size cap (AppSettings["LogRetention"], #2498) are available

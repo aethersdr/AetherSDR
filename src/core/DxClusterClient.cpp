@@ -54,7 +54,7 @@ DxClusterClient::~DxClusterClient()
 QString DxClusterClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/" + m_logFileName;
+           + "/AetherSDR/spothub/" + m_logFileName;
 }
 
 void DxClusterClient::connectToCluster(const QString& host, quint16 port, const QString& callsign)
