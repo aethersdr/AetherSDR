@@ -18,6 +18,7 @@
 #include <QWindow>
 #include <QGuiApplication>
 #include <QClipboard>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -31,10 +32,9 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     // ── Title bar (16px gradient, matching applet style) ─────────────────
     m_titleBar = new QWidget;
     m_titleBar->setFixedHeight(16);
-    m_titleBar->setStyleSheet(
-        "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        "stop:0 #3a4a5a, stop:0.5 #2a3a4a, stop:1 #1a2a38); "
-        "border-bottom: 1px solid #0a1a28; }");
+    m_titleBar->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+        "stop:0 {{color.text.disabled}}, stop:0.5 {{color.background.1}}, stop:1 #1a2a38); "
+        "border-bottom: 1px solid #0a1a28; }"));
     m_titleBar->installEventFilter(this);  // drag-to-move when floating
     auto* titleBar = m_titleBar;
 
@@ -44,12 +44,12 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     // Drag grip dots (matching applet title bar style)
     auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"));
-    grip->setStyleSheet("QLabel { background: transparent; color: #607080; font-size: 10px; }");
+    grip->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.text.label}}; font-size: 10px; }"));
     barLayout->addWidget(grip);
 
     m_titleLabel = new QLabel("Slice A");
-    m_titleLabel->setStyleSheet("QLabel { background: transparent; color: #8aa8c0; "
-                                "font-size: 10px; font-weight: bold; }");
+    m_titleLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.text.secondary}}; "
+                                "font-size: 10px; font-weight: bold; }"));
     m_titleLabel->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
     barLayout->addWidget(m_titleLabel);
     barLayout->addStretch();
@@ -108,7 +108,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_cwPanel->setCursor(Qt::ArrowCursor);  // prevent invisible cursor from native-window parent (#1096)
     m_cwPanel->setFixedHeight(80);
     m_cwPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    m_cwPanel->setStyleSheet("QWidget { background: #0a0a14; border-top: 1px solid #203040; }");
+    m_cwPanel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }"));
 
     auto* cwLayout = new QVBoxLayout(m_cwPanel);
     cwLayout->setContentsMargins(4, 2, 4, 2);
@@ -118,30 +118,29 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     auto* cwBar = new QHBoxLayout;
     cwBar->setSpacing(6);
     auto* cwTitle = new QLabel("CW");
-    cwTitle->setStyleSheet("QLabel { color: #00b4d8; font-size: 10px; font-weight: bold; background: transparent; }");
+    cwTitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold; background: transparent; }"));
     cwBar->addWidget(cwTitle);
     auto* cwHint = new QLabel("(requires PC Audio)");
-    cwHint->setStyleSheet("QLabel { color: #405060; font-size: 9px; background: transparent; }");
+    cwHint->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; background: transparent; }"));
     cwBar->addWidget(cwHint);
 
     m_cwStatsLabel = new QLabel;
-    m_cwStatsLabel->setStyleSheet("QLabel { color: #6a8090; font-size: 10px; background: transparent; }");
+    m_cwStatsLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 10px; background: transparent; }"));
     m_cwStatsLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     m_cwStatsLabel->setFixedWidth(m_cwStatsLabel->fontMetrics().horizontalAdvance("1200 Hz  120 WPM"));
     cwBar->addWidget(m_cwStatsLabel);
 
     // Sensitivity slider — filters low-confidence decodes
     auto* sensLabel = new QLabel("Sens:");
-    sensLabel->setStyleSheet("QLabel { color: #6a8090; font-size: 9px; background: transparent; }");
+    sensLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }"));
     cwBar->addWidget(sensLabel);
     m_cwSensSlider = new GuardedSlider(Qt::Horizontal);
     m_cwSensSlider->setRange(0, 100);  // 0=show everything, 100=only high confidence
     int savedSens = AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt();
     m_cwSensSlider->setValue(savedSens);
     m_cwSensSlider->setFixedWidth(60);
-    m_cwSensSlider->setStyleSheet(
-        "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #00b4d8; width: 10px; margin: -3px 0; border-radius: 5px; }");
+    m_cwSensSlider->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSlider::groove:horizontal { background: {{color.background.1}}; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: {{color.accent}}; width: 10px; margin: -3px 0; border-radius: 5px; }"));
     m_cwCostThreshold = 1.0f - (savedSens / 100.0f) * 0.9f;
     connect(m_cwSensSlider, &QSlider::valueChanged, this, [this](int v) {
         // Map 0-100 slider to 1.0-0.1 cost threshold (inverted: higher sens = lower threshold)
@@ -156,11 +155,10 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_lockPitchBtn->setCheckable(true);
     m_lockPitchBtn->setFixedSize(28, 16);
     m_lockPitchBtn->setToolTip("Lock decoder pitch to current frequency");
-    m_lockPitchBtn->setStyleSheet(
-        "QPushButton { background: #1a2a3a; color: #6a8090; border: 1px solid #203040;"
+    m_lockPitchBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; color: {{color.text.label}}; border: 1px solid {{color.background.1}};"
         " border-radius: 2px; font-size: 8px; padding: 0; }"
-        "QPushButton:checked { color: #00b4d8; border-color: #00b4d8; }"
-        "QPushButton:hover { color: #c8d8e8; }");
+        "QPushButton:checked { color: {{color.accent}}; border-color: {{color.accent}}; }"
+        "QPushButton:hover { color: {{color.text.primary}}; }"));
     cwBar->addWidget(m_lockPitchBtn);
 
     // Lock Speed button
@@ -177,7 +175,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         "QSlider::handle:horizontal { background: #6a8090; width: 8px; margin: -3px 0; border-radius: 4px; }";
 
     auto* minLabel = new QLabel("Lo:");
-    minLabel->setStyleSheet("QLabel { color: #6a8090; font-size: 8px; background: transparent; }");
+    minLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }"));
     cwBar->addWidget(minLabel);
 
     m_pitchMinSlider = new GuardedSlider(Qt::Horizontal);
@@ -188,12 +186,12 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_pitchMinSlider->setToolTip("Decoder pitch search minimum (Hz)");
     cwBar->addWidget(m_pitchMinSlider);
     m_pitchMinValLabel = new QLabel(QString::number(m_pitchMinSlider->value()));
-    m_pitchMinValLabel->setStyleSheet("QLabel { color: #6a8090; font-size: 8px; background: transparent; }");
+    m_pitchMinValLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }"));
     m_pitchMinValLabel->setFixedWidth(24);
     cwBar->addWidget(m_pitchMinValLabel);
 
     auto* maxLabel = new QLabel("Hi:");
-    maxLabel->setStyleSheet("QLabel { color: #6a8090; font-size: 8px; background: transparent; }");
+    maxLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }"));
     cwBar->addWidget(maxLabel);
 
     m_pitchMaxSlider = new GuardedSlider(Qt::Horizontal);
@@ -204,7 +202,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_pitchMaxSlider->setToolTip("Decoder pitch search maximum (Hz)");
     cwBar->addWidget(m_pitchMaxSlider);
     m_pitchMaxValLabel = new QLabel(QString::number(m_pitchMaxSlider->value()));
-    m_pitchMaxValLabel->setStyleSheet("QLabel { color: #6a8090; font-size: 8px; background: transparent; }");
+    m_pitchMaxValLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }"));
     m_pitchMaxValLabel->setFixedWidth(24);
     cwBar->addWidget(m_pitchMaxValLabel);
 
@@ -267,11 +265,10 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     auto* closeBtn = new QPushButton("\u2715");
     closeBtn->setToolTip("Close CW decoder");
-    closeBtn->setStyleSheet(
-        "QPushButton { background: #1a2a3a; color: #8090a0; border: 1px solid #203040;"
+    closeBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; color: {{color.text.secondary}}; border: 1px solid {{color.background.1}};"
         " border-radius: 2px; font-size: 9px; font-weight: bold;"
         " padding: 1px 6px; }"
-        "QPushButton:hover { color: #ff6060; background: #2a3a4a; }");
+        "QPushButton:hover { color: #ff6060; background: {{color.background.1}}; }"));
     connect(closeBtn, &QPushButton::clicked, this, [this]() {
         m_cwPanel->hide();
         emit cwPanelCloseRequested();
@@ -284,12 +281,11 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_cwText = new QTextEdit;
     m_cwText->setReadOnly(true);
     m_cwText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_cwText->setStyleSheet(
-        "QTextEdit { background: #0a0a14; color: #00ff88; border: none;"
+    m_cwText->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTextEdit { background: {{color.background.0}}; color: {{color.accent.success}}; border: none;"
         " font-family: monospace; font-size: 13px; font-weight: bold; }"
-        "QScrollBar:vertical { width: 6px; background: #0a0a14; }"
-        "QScrollBar::handle:vertical { background: #304050; border-radius: 3px; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
+        "QScrollBar:vertical { width: 6px; background: {{color.background.0}}; }"
+        "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
     m_cwText->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     m_cwText->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_cwText->setWordWrapMode(QTextOption::WrapAnywhere);

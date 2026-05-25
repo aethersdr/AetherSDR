@@ -14,6 +14,7 @@
 #include <QWheelEvent>
 #include <algorithm>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -56,9 +57,8 @@ ClientEqOutputFader::ClientEqOutputFader(QWidget* parent) : QWidget(parent)
 
     auto* top = new QLabel("OUT");
     top->setAlignment(Qt::AlignCenter);
-    top->setStyleSheet(
-        "QLabel { color: #8aa8c0; font-size: 10px; font-weight: bold;"
-        " background: transparent; border: none; }");
+    top->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; font-weight: bold;"
+        " background: transparent; border: none; }"));
     root->addWidget(top);
 
     root->addStretch(1);
@@ -70,12 +70,11 @@ ClientEqOutputFader::ClientEqOutputFader(QWidget* parent) : QWidget(parent)
     m_valueEdit = new QLineEdit;
     m_valueEdit->setAlignment(Qt::AlignCenter);
     m_valueEdit->setFrame(false);
-    m_valueEdit->setStyleSheet(
-        "QLineEdit { color: #d7e7f2; font-size: 10px; font-weight: bold;"
+    m_valueEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { color: {{color.text.primary}}; font-size: 10px; font-weight: bold;"
         " background: transparent; border: 1px solid transparent;"
         " border-radius: 2px; padding: 0;"
-        " selection-background-color: #0070c0; }"
-        "QLineEdit:focus { background: #0a0a18; border: 1px solid #00b4d8; }");
+        " selection-background-color: {{color.background.2}}; }"
+        "QLineEdit:focus { background: {{color.background.0}}; border: 1px solid {{color.accent}}; }"));
     m_valueEdit->installEventFilter(this);
     root->addWidget(m_valueEdit);
 

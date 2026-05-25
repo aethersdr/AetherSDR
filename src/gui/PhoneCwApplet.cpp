@@ -19,6 +19,7 @@
 #include <QPainter>
 #include <QDir>
 #include <QStandardPaths>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -32,11 +33,10 @@ public:
     {
         setFlat(false);
         setFixedSize(22, 22);
-        setStyleSheet(
-            "QPushButton { background: #1a2a3a; border: 1px solid #203040; "
+        setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
             "border-radius: 3px; padding: 0; margin: 0; min-width: 0; min-height: 0; }"
-            "QPushButton:hover { background: #203040; }"
-            "QPushButton:pressed { background: #00b4d8; }");
+            "QPushButton:hover { background: {{color.background.1}}; }"
+            "QPushButton:pressed { background: {{color.accent}}; }"));
     }
 protected:
     void paintEvent(QPaintEvent* ev) override {
@@ -396,7 +396,7 @@ void PhoneCwApplet::buildCwPanel()
         row->setSpacing(4);
 
         auto* lbl = new QLabel("Delay:");
-        lbl->setStyleSheet("QLabel { color: #8090a0; font-size: 11px; }");
+        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
         lbl->setFixedWidth(kLeftColW);
         row->addWidget(lbl);
 
@@ -441,7 +441,7 @@ void PhoneCwApplet::buildCwPanel()
         row->setSpacing(4);
 
         auto* lbl = new QLabel("Speed:");
-        lbl->setStyleSheet("QLabel { color: #8090a0; font-size: 11px; }");
+        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
         lbl->setFixedWidth(kLeftColW);
         row->addWidget(lbl);
 
@@ -591,7 +591,7 @@ void PhoneCwApplet::buildCwPanel()
 
         // Pitch: label + < value > stepper (inset display matching RIT/XIT style)
         auto* pitchLbl = new QLabel("Pitch:");
-        pitchLbl->setStyleSheet("QLabel { color: #8090a0; font-size: 11px; }");
+        pitchLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
         row->addWidget(pitchLbl);
 
         m_pitchDown = new CwTriBtn(CwTriBtn::Left);
@@ -604,10 +604,9 @@ void PhoneCwApplet::buildCwPanel()
         m_pitchEdit->setAccessibleName("CW pitch frequency");
         m_pitchEdit->setAccessibleDescription("CW sidetone pitch in Hz, 100 to 6000");
         m_pitchEdit->setValidator(new QIntValidator(100, 6000, m_pitchEdit));
-        m_pitchEdit->setStyleSheet(
-            "QLineEdit { font-size: 11px; background: #0a0a18; border: 1px solid #1e2e3e; "
-            "border-radius: 3px; padding: 1px 3px; color: #c8d8e8; }"
-            "QLineEdit:focus { border: 1px solid #00b4d8; }");
+        m_pitchEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { font-size: 11px; background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
+            "border-radius: 3px; padding: 1px 3px; color: {{color.text.primary}}; }"
+            "QLineEdit:focus { border: 1px solid {{color.accent}}; }"));
         row->addWidget(m_pitchEdit);
 
         m_pitchUp = new CwTriBtn(CwTriBtn::Right);

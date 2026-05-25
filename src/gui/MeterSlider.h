@@ -2,6 +2,7 @@
 
 #include "DragValuePopup.h"
 #include "MeterSmoother.h"
+#include "core/ThemeManager.h"
 
 #include <QElapsedTimer>
 #include <QMouseEvent>
@@ -40,6 +41,11 @@ public:
                 m_animTimer.stop();
             update();
         });
+
+        // Live re-theme: repaint when the user switches themes so the
+        // background / level / accent tokens resolve to their new values.
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                this, [this]() { update(); });
     }
 
     float gain() const { return m_gain; }
@@ -96,9 +102,17 @@ protected:
         const int barH = h - 2 * margin;
         const int barW = w - 2 * margin;
 
+        // Resolve theme tokens once per paint — every QColor below uses
+        // these.  Alpha-modulated forms preserve the original level-fill
+        // translucency that lets the underlying gain fill show through.
+        auto& tm = ThemeManager::instance();
+        const QColor bgColour     = tm.color("color.background.0");
+        const QColor borderColour = tm.color("color.background.1");
+        const QColor accent       = tm.color("color.accent");
+
         // Background
-        p.fillRect(rect(), QColor(0x0a, 0x0a, 0x18));
-        p.setPen(QColor(0x1e, 0x2e, 0x3e));
+        p.fillRect(rect(), bgColour);
+        p.setPen(borderColour);
         p.drawRect(rect().adjusted(0, 0, -1, -1));
 
         // Level meter fill (behind the slider) — post-fader: the
@@ -108,9 +122,17 @@ protected:
         const float lvl = m_smooth.value() * m_gain;
         if (lvl > 0.0f) {
             int fillW = static_cast<int>(lvl * barW);
-            QColor fillColor = lvl < 0.7f ? QColor(0x00, 0x80, 0xa0, 120)
-                             : lvl < 0.9f ? QColor(0xa0, 0xa0, 0x20, 120)
-                                          : QColor(0xc0, 0x30, 0x30, 120);
+            // Three-stop "level-meter heat": dim-accent at safe levels,
+            // warning yellow approaching peak, danger red at clip.
+            QColor fillColor;
+            if (lvl < 0.7f) {
+                fillColor = tm.color("color.accent.dim");
+            } else if (lvl < 0.9f) {
+                fillColor = tm.color("color.accent.warning");
+            } else {
+                fillColor = tm.color("color.accent.danger");
+            }
+            fillColor.setAlpha(120);
             p.fillRect(margin, margin, fillW, barH, fillColor);
         }
 
@@ -121,11 +143,13 @@ protected:
         // Gain fill (solid, up to thumb)
         if (m_gain > 0.0f) {
             int gainW = static_cast<int>(m_gain * barW);
-            p.fillRect(margin, margin, gainW, barH, QColor(0x00, 0xb4, 0xd8, 60));
+            QColor gainFill = accent;
+            gainFill.setAlpha(60);
+            p.fillRect(margin, margin, gainW, barH, gainFill);
         }
 
         // Thumb line
-        p.setPen(QPen(QColor(0x00, 0xb4, 0xd8), 2));
+        p.setPen(QPen(accent, 2));
         p.drawLine(thumbX, margin, thumbX, margin + barH);
 
         // Thumb triangle (top)
@@ -133,7 +157,7 @@ protected:
         tri << QPoint(thumbX - 3, margin)
             << QPoint(thumbX + 3, margin)
             << QPoint(thumbX, margin + 4);
-        p.setBrush(QColor(0x00, 0xb4, 0xd8));
+        p.setBrush(accent);
         p.setPen(Qt::NoPen);
         p.drawPolygon(tri);
     }

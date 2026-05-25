@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -567,11 +568,10 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         ovrBtn->setFixedSize(56, 18);
         ovrBtn->setCursor(Qt::PointingHandCursor);
         ovrBtn->setFlat(true);
-        ovrBtn->setStyleSheet(
-            "QPushButton { background: #1a2230; border: 1px solid #2a3744;"
-            " border-radius: 3px; color: #506070; font-size: 10px;"
+        ovrBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}};"
+            " border-radius: 3px; color: {{color.background.3}}; font-size: 10px;"
             " font-weight: bold; padding: 1px; }"
-            "QPushButton:hover { color: #c8d8e8; }");
+            "QPushButton:hover { color: {{color.text.primary}}; }"));
         ovrBtn->setToolTip(tr("Latches red on any sample that hits "
                               "0 dBFS BEFORE the limiter — i.e. the "
                               "limiter is the only thing that saved "
@@ -591,18 +591,16 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         m_limitLed = new QLabel("LIMIT", this);
         m_limitLed->setAlignment(Qt::AlignCenter);
         m_limitLed->setFixedSize(56, 18);
-        m_limitLed->setStyleSheet(
-            "QLabel { background: #1a2230; border: 1px solid #2a3744;"
-            " border-radius: 3px; color: #506070; font-size: 10px;"
-            " font-weight: bold; padding: 1px; }");
+        m_limitLed->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.1}}; border: 1px solid {{color.background.1}};"
+            " border-radius: 3px; color: {{color.background.3}}; font-size: 10px;"
+            " font-weight: bold; padding: 1px; }"));
         col->addWidget(m_limitLed);
 
         m_activityLbl = new QLabel("Lim: 0%", this);
         m_activityLbl->setAlignment(Qt::AlignCenter);
         m_activityLbl->setFixedSize(56, 18);
-        m_activityLbl->setStyleSheet(
-            "QLabel { background: transparent; color: #506070;"
-            " font-size: 10px; font-weight: bold; padding: 1px; }");
+        m_activityLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.background.3}};"
+            " font-size: 10px; font-weight: bold; padding: 1px; }"));
         m_activityLbl->setToolTip(tr(
             "Limiter activity — what percentage of the trailing 3 s of "
             "audio the brickwall limiter was actively clamping peaks.\n\n"
@@ -621,14 +619,13 @@ StripFinalOutputPanel::StripFinalOutputPanel(AudioEngine* engine, QWidget* paren
         m_holdBtn->setFixedSize(56, 18);
         m_holdBtn->setCursor(Qt::PointingHandCursor);
         m_holdBtn->setFlat(true);
-        m_holdBtn->setStyleSheet(
-            "QPushButton { background: #1a2230; border: 1px solid #2a3744;"
-            " border-radius: 3px; color: #506070; font-size: 10px;"
+        m_holdBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}};"
+            " border-radius: 3px; color: {{color.background.3}}; font-size: 10px;"
             " font-weight: bold; padding: 1px; }"
-            "QPushButton:hover { color: #c8d8e8; }"
+            "QPushButton:hover { color: {{color.text.primary}}; }"
             "QPushButton:checked { background: #183020; border: 1px solid #2eb872;"
             " color: #2eb872; }"
-            "QPushButton:checked:hover { color: #6ffaa9; }");
+            "QPushButton:checked:hover { color: #6ffaa9; }"));
         m_holdBtn->setToolTip(tr(
             "Peak-hold. When engaged (green), the PK / RMS / GR / CRST "
             "readouts latch their worst-case value since this button was "
@@ -777,16 +774,15 @@ void StripFinalOutputPanel::showToneEditor()
     auto* dlg = new QDialog(this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->setWindowTitle(tr("Test Tone"));
-    dlg->setStyleSheet(
-        "QDialog { background: #08121d; }"
-        "QLabel  { color: #c8d8e8; font-size: 11px; }"
-        "QSlider::groove:horizontal { height: 4px; background: #203040;"
+    dlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"
+        "QLabel  { color: {{color.text.primary}}; font-size: 11px; }"
+        "QSlider::groove:horizontal { height: 4px; background: {{color.background.1}};"
         " border-radius: 2px; }"
-        "QSlider::sub-page:horizontal { background: #f2c14e;"
+        "QSlider::sub-page:horizontal { background: {{color.accent.warning}};"
         " border-radius: 2px; }"
         "QSlider::handle:horizontal { width: 12px; height: 12px;"
-        " margin: -4px 0; background: #c8d8e8; border: 1px solid #f2c14e;"
-        " border-radius: 6px; }");
+        " margin: -4px 0; background: {{color.text.primary}}; border: 1px solid {{color.accent.warning}};"
+        " border-radius: 6px; }"));
 
     auto* form = new QFormLayout(dlg);
     form->setContentsMargins(12, 12, 12, 12);
@@ -876,25 +872,24 @@ void StripFinalOutputPanel::showQuindarEditor()
         dlg->setWindowFlags(dlg->windowFlags() | Qt::FramelessWindowHint);
     }
     dlg->setWindowTitle(tr("Quindar Tones"));
-    dlg->setStyleSheet(
-        "QDialog { background: #08121d; }"
-        "QLabel  { color: #c8d8e8; font-size: 11px; }"
-        "QPushButton { background: #1a2230; color: #c8d8e8;"
-        " border: 1px solid #2a3744; border-radius: 3px;"
+    dlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"
+        "QLabel  { color: {{color.text.primary}}; font-size: 11px; }"
+        "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}};"
+        " border: 1px solid {{color.background.1}}; border-radius: 3px;"
         " padding: 4px 12px; font-size: 11px; }"
-        "QPushButton:hover { background: #243042; color: #f2c14e; }"
-        "QPushButton:checked { background: #3a2a0e; color: #f2c14e;"
-        " border: 1px solid #f2c14e; }"
-        "QSlider::groove:horizontal { height: 4px; background: #203040;"
+        "QPushButton:hover { background: #243042; color: {{color.accent.warning}}; }"
+        "QPushButton:checked { background: {{color.background.tx}}; color: {{color.accent.warning}};"
+        " border: 1px solid {{color.accent.warning}}; }"
+        "QSlider::groove:horizontal { height: 4px; background: {{color.background.1}};"
         " border-radius: 2px; }"
-        "QSlider::sub-page:horizontal { background: #f2c14e;"
+        "QSlider::sub-page:horizontal { background: {{color.accent.warning}};"
         " border-radius: 2px; }"
         "QSlider::handle:horizontal { width: 12px; height: 12px;"
-        " margin: -4px 0; background: #c8d8e8; border: 1px solid #f2c14e;"
+        " margin: -4px 0; background: {{color.text.primary}}; border: 1px solid {{color.accent.warning}};"
         " border-radius: 6px; }"
-        "QSpinBox { background: #1a2230; color: #c8d8e8;"
-        " border: 1px solid #2a3744; border-radius: 2px;"
-        " padding: 1px 4px; font-size: 11px; }");
+        "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}};"
+        " border: 1px solid {{color.background.1}}; border-radius: 2px;"
+        " padding: 1px 4px; font-size: 11px; }"));
 
     auto* dlgRoot = new QVBoxLayout(dlg);
     dlgRoot->setContentsMargins(0, 0, 0, 0);
@@ -911,10 +906,9 @@ void StripFinalOutputPanel::showQuindarEditor()
     titleBar->setFixedHeight(18);
     titleBar->setVisible(frameless);
     titleBar->setAttribute(Qt::WA_StyledBackground, true);
-    titleBar->setStyleSheet(
-        "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-        "stop:0 #5a7494, stop:0.5 #384e68, stop:1 #1e2e3e); "
-        "border-bottom: 1px solid #0a1a28; }");
+    titleBar->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+        "stop:0 #5a7494, stop:0.5 #384e68, stop:1 {{color.background.1}}); "
+        "border-bottom: 1px solid #0a1a28; }"));
     titleBar->setCursor(Qt::OpenHandCursor);
     auto* tbLayout = new QHBoxLayout(titleBar);
     tbLayout->setContentsMargins(6, 0, 2, 0);
@@ -927,11 +921,10 @@ void StripFinalOutputPanel::showQuindarEditor()
     tbLayout->addStretch();
     auto* tbCloseBtn = new QPushButton(QString::fromUtf8("\xc3\x97"), titleBar);
     tbCloseBtn->setFixedSize(16, 16);
-    tbCloseBtn->setStyleSheet(
-        "QPushButton { background: transparent; border: none;"
-        " color: #c8d8e8; font-size: 11px; font-weight: bold;"
+    tbCloseBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: transparent; border: none;"
+        " color: {{color.text.primary}}; font-size: 11px; font-weight: bold;"
         " padding: 0px 4px; }"
-        "QPushButton:hover { color: #ffffff; }");
+        "QPushButton:hover { color: {{color.text.primary}}; }"));
     tbCloseBtn->setCursor(Qt::ArrowCursor);
     tbCloseBtn->setToolTip(tr("Close"));
     connect(tbCloseBtn, &QPushButton::clicked, dlg, &QDialog::accept);

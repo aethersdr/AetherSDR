@@ -4,6 +4,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -12,16 +13,15 @@ EditorFramelessTitleBar::EditorFramelessTitleBar(QWidget* parent)
 {
     setObjectName(QStringLiteral("editorFramelessTitleBar"));
     setFixedHeight(20);
-    setStyleSheet("background: #08121d;");
+    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: {{color.background.0}};"));
 
     auto* row = new QHBoxLayout(this);
     row->setContentsMargins(8, 0, 4, 0);
     row->setSpacing(2);
 
     m_titleLbl = new QLabel(this);
-    m_titleLbl->setStyleSheet(
-        "QLabel { color: #d7e7f2; font-size: 11px; "
-        "font-weight: bold; background: transparent; }");
+    m_titleLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; "
+        "font-weight: bold; background: transparent; }"));
     m_titleLbl->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
     row->addWidget(m_titleLbl);
     row->addStretch();

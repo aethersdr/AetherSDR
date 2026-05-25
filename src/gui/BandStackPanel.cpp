@@ -8,6 +8,7 @@
 #include <QScrollArea>
 #include <QMenu>
 #include <QMap>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -21,7 +22,7 @@ BandStackPanel::BandStackPanel(QWidget* parent)
     : QWidget(parent)
 {
     setFixedWidth(80);
-    setStyleSheet("background: #0a0a14;");
+    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: {{color.background.0}};"));
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(4, 4, 4, 4);
@@ -31,11 +32,10 @@ BandStackPanel::BandStackPanel(QWidget* parent)
     m_scrollArea = new QScrollArea(this);
     m_scrollArea->setWidgetResizable(true);
     m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    m_scrollArea->setStyleSheet(
-        "QScrollArea { background: transparent; border: none; }"
-        "QScrollBar:vertical { background: #0a0a14; width: 6px; }"
-        "QScrollBar::handle:vertical { background: #304050; border-radius: 3px; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
+    m_scrollArea->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QScrollArea { background: transparent; border: none; }"
+        "QScrollBar:vertical { background: {{color.background.0}}; width: 6px; }"
+        "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
 
     auto* scrollContent = new QWidget;
     m_buttonLayout = new QVBoxLayout(scrollContent);
@@ -67,11 +67,10 @@ BandStackPanel::BandStackPanel(QWidget* parent)
 
     m_addButton = new QPushButton("+", this);
     m_addButton->setFixedSize(26, 26);
-    m_addButton->setStyleSheet(
-        "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
-        "border-radius: 3px; color: #8aa8c0; font-size: 16px; font-weight: bold; "
+    m_addButton->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 3px; color: {{color.text.secondary}}; font-size: 16px; font-weight: bold; "
         "padding: 0px; margin: 0px; }"
-        "QPushButton:hover { background: #203040; color: #c8d8e8; }");
+        "QPushButton:hover { background: {{color.background.1}}; color: {{color.text.primary}}; }"));
     m_addButton->setToolTip("Save current frequency as a bookmark");
     connect(m_addButton, &QPushButton::clicked, this, &BandStackPanel::addRequested);
     bottomRow->addWidget(m_addButton);
@@ -190,9 +189,8 @@ QLabel* BandStackPanel::createBandHeader(const QString& bandName,
     auto* label = new QLabel(bandName, m_scrollArea->widget());
     label->setFixedHeight(18);
     label->setAlignment(Qt::AlignCenter);
-    label->setStyleSheet(
-        "QLabel { color: #607080; font-size: 10px; font-weight: bold; "
-        "border-bottom: 1px solid #203040; padding-bottom: 1px; margin-top: 4px; }");
+    label->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 10px; font-weight: bold; "
+        "border-bottom: 1px solid {{color.background.1}}; padding-bottom: 1px; margin-top: 4px; }"));
 
     if (lowMhz > 0 || highMhz > 0) {
         label->setContextMenuPolicy(Qt::CustomContextMenu);

@@ -51,6 +51,7 @@
 #include <cmath>
 #include <cstring>
 #include <utility>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -360,10 +361,9 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     m_interlockNotificationLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_interlockNotificationLabel->setAlignment(Qt::AlignCenter);
     m_interlockNotificationLabel->setWordWrap(true);
-    m_interlockNotificationLabel->setStyleSheet(
-        "QLabel { background: rgba(10,10,20,225); color: #d7fbff; "
-        "border: 2px solid #00b4d8; padding: 10px 14px; "
-        "font-size: 13px; font-weight: bold; }");
+    m_interlockNotificationLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: rgba(10,10,20,225); color: #d7fbff; "
+        "border: 2px solid {{color.accent}}; padding: 10px 14px; "
+        "font-size: 13px; font-weight: bold; }"));
     m_interlockNotificationLabel->hide();
     m_interlockNotificationLabel->raise();
 
@@ -4112,11 +4112,11 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     auto& as = AppSettings::instance();
     QDialog dlg(this);
     dlg.setWindowTitle("Add Spot");
-    dlg.setStyleSheet("QDialog { background: #1a1a2e; color: #c8d8e8; }"
-                      "QLineEdit { background: #0f0f1a; color: #c8d8e8; border: 1px solid #304060; padding: 4px; }"
-                      "QComboBox { background: #0f0f1a; color: #c8d8e8; border: 1px solid #304060; padding: 4px; }"
-                      "QLabel { color: #c8d8e8; }"
-                      "QCheckBox { color: #c8d8e8; }");
+    dlg.setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+                      "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
+                      "QComboBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
+                      "QLabel { color: {{color.text.primary}}; }"
+                      "QCheckBox { color: {{color.text.primary}}; }"));
 
     auto* layout = new QFormLayout(&dlg);
 
@@ -7143,21 +7143,20 @@ void SpectrumWidget::drawSwrSweep(QPainter& p, const QRect& specRect)
 void SpectrumWidget::showSpotClusterPopup(const SpotCluster& cluster, const QPoint& globalPos)
 {
     auto* menu = new QMenu(this);
-    menu->setStyleSheet(
-        "QMenu {"
-        "  background: #0f0f1a;"
+    menu->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QMenu {"
+        "  background: {{color.background.0}};"
         "  border: 1px solid #305070;"
         "  padding: 4px;"
         "}"
         "QMenu::item {"
-        "  color: #c8d8e8;"
+        "  color: {{color.text.primary}};"
         "  padding: 4px 12px;"
         "  font-size: 12px;"
         "}"
         "QMenu::item:selected {"
-        "  background: #1a3a5a;"
-        "  color: #00b4d8;"
-        "}");
+        "  background: {{color.background.2}};"
+        "  color: {{color.accent}};"
+        "}"));
 
     for (const auto& spot : cluster.spots) {
         QString text = QString("%1  %2 kHz")

@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTimer>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -66,8 +67,7 @@ ContainerTitleBar::ContainerTitleBar(const QString& title, QWidget* parent)
     // Drag grip glyph (⋮⋮) — purely decorative; actual drag events
     // come from mouseMoveEvent on the bar as a whole.
     auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"));
-    grip->setStyleSheet(
-        "QLabel { background: transparent; color: #a0b4c8; font-size: 10px; }");
+    grip->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.text.secondary}}; font-size: 10px; }"));
     layout->addWidget(grip);
 
     m_titleLabel = new QLabel(title);

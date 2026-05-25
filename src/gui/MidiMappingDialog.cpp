@@ -1,3 +1,4 @@
+#include "core/ThemeManager.h"
 #ifdef HAVE_MIDI
 
 #include "MidiMappingDialog.h"
@@ -39,7 +40,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
       m_manager(manager)
 {
     setMinimumSize(700, 550);
-    setStyleSheet("QDialog { background: #0f0f1a; }");
+    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"));
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(8);
@@ -69,14 +70,14 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
                 m_manager->closePort();
                 m_connectBtn->setText("Connect");
                 m_statusLabel->setText("Disconnected");
-                m_statusLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
+                m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
             } else {
                 int idx = m_portCombo->currentIndex();
                 if (idx < 0) return;
                 if (m_manager->openPort(idx)) {
                     m_connectBtn->setText("Disconnect");
                     m_statusLabel->setText("Connected: " + m_manager->currentPortName());
-                    m_statusLabel->setStyleSheet("QLabel { color: #30d050; font-size: 11px; }");
+                    m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.success}}; font-size: 11px; }"));
                     // Save device preference
                     auto& ms = MidiSettings::instance();
                     ms.setLastDevice(m_manager->currentPortName());
@@ -94,11 +95,11 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         grid->addWidget(m_statusLabel, 1, 0, 1, 2);
 
         m_activityLabel = new QLabel("");
-        m_activityLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 10px; font-family: monospace; }");
+        m_activityLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 10px; font-family: monospace; }"));
         grid->addWidget(m_activityLabel, 1, 2, 1, 2);
 
         auto* autoConnect = new QCheckBox("Auto-connect on startup");
-        autoConnect->setStyleSheet("QCheckBox { color: #c8d8e8; }");
+        autoConnect->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; }"));
         autoConnect->setChecked(MidiSettings::instance().autoConnect());
         connect(autoConnect, &QCheckBox::toggled, this, [](bool on) {
             MidiSettings::instance().setAutoConnect(on);
@@ -128,12 +129,11 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
         m_bindingTable->setSelectionBehavior(QAbstractItemView::SelectRows);
         m_bindingTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
         m_bindingTable->verticalHeader()->setVisible(false);
-        m_bindingTable->setStyleSheet(
-            "QTableWidget { background: #0a0a14; color: #c8d8e8; "
-            "border: 1px solid #203040; font-size: 11px; gridline-color: #203040; }"
-            "QTableWidget::item:selected { background: #00b4d8; color: #0f0f1a; }"
-            "QHeaderView::section { background: #1a1a2e; color: #8aa8c0; "
-            "border: 1px solid #203040; padding: 3px; font-size: 11px; }");
+        m_bindingTable->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}}; "
+            "border: 1px solid {{color.background.1}}; font-size: 11px; gridline-color: {{color.background.1}}; }"
+            "QTableWidget::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }"
+            "QHeaderView::section { background: {{color.background.0}}; color: {{color.text.secondary}}; "
+            "border: 1px solid {{color.background.1}}; padding: 3px; font-size: 11px; }"));
         vbox->addWidget(m_bindingTable, 1);
 
         // Add binding row

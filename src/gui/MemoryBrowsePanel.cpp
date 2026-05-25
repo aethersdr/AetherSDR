@@ -11,6 +11,7 @@
 #include <QTableWidgetItem>
 #include <QTableWidget>
 #include <QVBoxLayout>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -31,7 +32,7 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
     : QWidget(parent)
 {
     setFixedSize(252, 460);
-    setStyleSheet("background: rgba(15, 15, 26, 220); border: 1px solid #304050; border-radius: 3px;");
+    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: rgba(15, 15, 26, 220); border: 1px solid {{color.background.2}}; border-radius: 3px;"));
 
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(3, 3, 3, 3);
@@ -40,8 +41,7 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
     m_emptyLabel = new QLabel("No memories are available yet.", this);
     m_emptyLabel->setAlignment(Qt::AlignCenter);
     m_emptyLabel->setWordWrap(true);
-    m_emptyLabel->setStyleSheet(
-        "QLabel { color: #607080; font-size: 12px; padding: 12px 8px; }");
+    m_emptyLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; padding: 12px 8px; }"));
     root->addWidget(m_emptyLabel, 1);
 
     m_table = new QTableWidget(0, 2, this);
@@ -61,14 +61,13 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
     m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Fixed);
     m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
     m_table->setColumnWidth(0, 96);
-    m_table->setStyleSheet(
-        "QTableWidget { background: #0f1720; border: 1px solid #203040; border-radius: 2px; "
-        "color: #d2dbe4; selection-background-color: #2060a0; selection-color: #ffffff; }"
+    m_table->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTableWidget { background: #0f1720; border: 1px solid {{color.background.1}}; border-radius: 2px; "
+        "color: #d2dbe4; selection-background-color: #2060a0; selection-color: {{color.text.primary}}; }"
         "QHeaderView::section { background: #101b26; color: #70879b; border: none; "
-        "border-bottom: 1px solid #203040; font-size: 11px; font-weight: bold; padding: 4px 3px; }"
-        "QScrollBar:vertical { background: #0a0a14; width: 6px; }"
-        "QScrollBar::handle:vertical { background: #304050; border-radius: 3px; }"
-        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
+        "border-bottom: 1px solid {{color.background.1}}; font-size: 11px; font-weight: bold; padding: 4px 3px; }"
+        "QScrollBar:vertical { background: {{color.background.0}}; width: 6px; }"
+        "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
     root->addWidget(m_table, 1);
     m_table->hide();
 
@@ -77,12 +76,11 @@ MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
     // Style matches the spectrum overlay menu buttons it replaces.
     m_addBtn = new QPushButton(QStringLiteral("Add Memory"), this);
     m_addBtn->setFixedHeight(22);
-    m_addBtn->setStyleSheet(
-        "QPushButton { background: rgba(20, 30, 45, 240); "
+    m_addBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: rgba(20, 30, 45, 240); "
         "border: 1px solid rgba(255, 255, 255, 40); border-radius: 2px; "
-        "color: #c8d8e8; font-size: 11px; font-weight: bold; }"
+        "color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"
         "QPushButton:hover { background: rgba(0, 112, 192, 180); "
-        "border: 1px solid #0090e0; }");
+        "border: 1px solid {{color.accent.dim}}; }"));
     m_addBtn->setToolTip("Save the current slice on this panadapter as a memory.");
     root->addWidget(m_addBtn, 0);
     connect(m_addBtn, &QPushButton::clicked, this,

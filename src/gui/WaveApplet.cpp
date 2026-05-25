@@ -15,6 +15,7 @@
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -66,7 +67,7 @@ QLabel* makeSettingLabel(const QString& text, QWidget* parent)
     auto* label = new QLabel(text, parent);
     label->setFixedWidth(62);
     label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    label->setStyleSheet("QLabel { color: #8aa8c0; font-size: 10px; }");
+    label->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; }"));
     return label;
 }
 
@@ -252,7 +253,7 @@ void WaveApplet::buildSettingsDrawer()
         m_zoomValue = new QLabel(m_settingsDrawer);
         m_zoomValue->setFixedWidth(38);
         m_zoomValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_zoomValue->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; }");
+        m_zoomValue->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 10px; }"));
         row->addWidget(m_zoomValue);
 
         connect(m_zoomSlider, &QSlider::valueChanged, this, [this](int value) {
@@ -283,7 +284,7 @@ void WaveApplet::buildSettingsDrawer()
         m_refreshValue = new QLabel(m_settingsDrawer);
         m_refreshValue->setFixedWidth(38);
         m_refreshValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_refreshValue->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; }");
+        m_refreshValue->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 10px; }"));
         row->addWidget(m_refreshValue);
 
         connect(m_refreshSlider, &QSlider::valueChanged, this, [this](int value) {
@@ -316,7 +317,7 @@ void WaveApplet::buildSettingsDrawer()
         m_windowValue = new QLabel(m_settingsDrawer);
         m_windowValue->setFixedWidth(48);
         m_windowValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_windowValue->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; }");
+        m_windowValue->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 10px; }"));
         row->addWidget(m_windowValue);
 
         connect(m_windowSlider, &QSlider::valueChanged, this, [this](int idx) {

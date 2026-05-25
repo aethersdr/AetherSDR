@@ -2,13 +2,14 @@
 #include "AetherDspWidget.h"
 
 #include <QVBoxLayout>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
 AetherDspDialog::AetherDspDialog(AudioEngine* audio, QWidget* parent)
     : PersistentDialog("AetherDSP Settings", "AetherDspDialogGeometry", parent)
 {
-    setStyleSheet("QDialog { background: #0f0f1a; color: #c8d8e8; }");
+    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"));
 
     auto* body = new QVBoxLayout(bodyWidget());
     body->setSpacing(0);

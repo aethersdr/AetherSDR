@@ -39,6 +39,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 // QSlider that always accepts wheel events, preventing propagation to parent
 // (e.g. SpectrumWidget frequency scroll) at min/max boundaries. (#547 BUG-002)
@@ -113,11 +114,10 @@ public:
     {
         setFlat(false);
         setFixedSize(22, 22);
-        setStyleSheet(
-            "QPushButton { background: #1a2a3a; border: 1px solid #203040; "
+        setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
             "border-radius: 3px; padding: 0; margin: 0; min-width: 0; min-height: 0; }"
-            "QPushButton:hover { background: #203040; }"
-            "QPushButton:pressed { background: #00b4d8; }");
+            "QPushButton:hover { background: {{color.background.1}}; }"
+            "QPushButton:pressed { background: {{color.accent}}; }"));
     }
 protected:
     void paintEvent(QPaintEvent* ev) override {
@@ -407,9 +407,9 @@ void VfoWidget::buildUI()
     hdr->addWidget(m_txAntBtn);
 
     m_filterWidthLbl = new QLabel("2.7K");
-    m_filterWidthLbl->setStyleSheet("QLabel { background: transparent; border: none; "
-                                     "color: #00c8ff; font-size: 13px; font-weight: bold; "
-                                     "margin: 0; padding: 0; }");
+    m_filterWidthLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; border: none; "
+                                     "color: {{color.accent.bright}}; font-size: 13px; font-weight: bold; "
+                                     "margin: 0; padding: 0; }"));
     hdr->addWidget(m_filterWidthLbl);
 
     hdr->addStretch(1);
@@ -445,9 +445,8 @@ void VfoWidget::buildUI()
     m_sliceBadge->setAlignment(Qt::AlignCenter);
     m_sliceBadge->setCursor(Qt::PointingHandCursor);
     m_sliceBadge->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
-    m_sliceBadge->setStyleSheet(
-        "QLabel { background: #0070c0; color: #ffffff; "
-        "border-radius: 3px; font-weight: bold; font-size: 11px; }");
+    m_sliceBadge->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.2}}; color: {{color.text.primary}}; "
+        "border-radius: 3px; font-weight: bold; font-size: 11px; }"));
     hdr->addWidget(m_sliceBadge);
 
     root->addLayout(hdr);
@@ -532,10 +531,9 @@ void VfoWidget::buildUI()
 
     // ── Collapsed-mode frequency label (child of parent like close/lock) ───
     m_collapsedFreqLabel = new QLabel(btnParent);
-    m_collapsedFreqLabel->setStyleSheet(
-        "QLabel { background: rgba(10,10,20,220); border: 1px solid rgba(255,255,255,60);"
-        " border-radius: 3px; color: #c8d8e8; font-size: 14px; font-weight: bold;"
-        " padding: 1px 4px; }");
+    m_collapsedFreqLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: rgba(10,10,20,220); border: 1px solid rgba(255,255,255,60);"
+        " border-radius: 3px; color: {{color.text.primary}}; font-size: 14px; font-weight: bold;"
+        " padding: 1px 4px; }"));
     m_collapsedFreqLabel->setAlignment(Qt::AlignCenter);
     m_collapsedFreqLabel->hide();
 
@@ -544,20 +542,19 @@ void VfoWidget::buildUI()
     m_freqStack->setFixedHeight(30);
 
     m_freqLabel = new QLabel("14.225.000");
-    m_freqLabel->setStyleSheet("QLabel { background: transparent;"
+    m_freqLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent;"
                                 " border: 1px solid rgba(255,255,255,80);"
                                 " border-radius: 3px;"
-                                " color: #c8d8e8; font-size: 26px; font-weight: bold;"
-                                " padding: 0 0 0 2px; }");
+                                " color: {{color.text.primary}}; font-size: 26px; font-weight: bold;"
+                                " padding: 0 0 0 2px; }"));
     m_freqLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_freqLabel->installEventFilter(this);
     m_freqStack->addWidget(m_freqLabel);
 
     m_freqEdit = new QLineEdit;
-    m_freqEdit->setStyleSheet(
-        "QLineEdit { background: #0a0a18; border: 1px solid #00b4d8;"
+    m_freqEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.accent}};"
         " border-radius: 3px; color: #00e5ff; font-size: 22px;"
-        " font-weight: bold; padding: 0 2px 0 0; }");
+        " font-weight: bold; padding: 0 2px 0 0; }"));
     m_freqEdit->setAlignment(Qt::AlignRight);
     // Size to fit "0000.000.000" at the label font size (4-digit MHz for XVTR/SHF)
     QFont labelFont;
@@ -631,9 +628,8 @@ void VfoWidget::buildUI()
         m_radeStatusLabel = new QLabel;
         m_radeStatusLabel->setFixedHeight(16);
         m_radeStatusLabel->setTextFormat(Qt::RichText);
-        m_radeStatusLabel->setStyleSheet(
-            "QLabel { color: #00b4d8; font-size: 10px; font-weight: bold;"
-            " background: transparent; border: none; padding: 0; margin: 0; }");
+        m_radeStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold;"
+            " background: transparent; border: none; padding: 0; margin: 0; }"));
         m_radeStatusLabel->hide();
         freqRow->addWidget(m_radeStatusLabel);
 #endif
@@ -660,9 +656,8 @@ void VfoWidget::buildUI()
             " background: transparent; border: none; padding: 0; margin: 0; }";
 
         m_radeCallsignLabel = new QLabel;
-        m_radeCallsignLabel->setStyleSheet(
-            "QLabel { color: #00b4d8; font-size: 10px; font-weight: bold;"
-            " background: transparent; border: none; padding: 0; margin: 0; }");
+        m_radeCallsignLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold;"
+            " background: transparent; border: none; padding: 0; margin: 0; }"));
         m_radeCallsignLabel->hide();
         infoLayout->addWidget(m_radeCallsignLabel);
 
@@ -775,12 +770,11 @@ void VfoWidget::buildTabContent()
         m_muteBtn->setCheckable(true);
         m_muteBtn->setFixedHeight(20);
         m_muteBtn->setFixedWidth(60);
-        m_muteBtn->setStyleSheet(
-            "QPushButton { background: #1a2a3a; border: 1px solid #304050;"
-            " border-radius: 2px; color: #c8d8e8; font-size: 13px;"
+        m_muteBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}};"
+            " border-radius: 2px; color: {{color.text.primary}}; font-size: 13px;"
             " font-weight: bold; padding: 1px 4px; }"
-            "QPushButton:checked { background: #6a2020; color: #ff8080;"
-            " border: 1px solid #a04040; }");
+            "QPushButton:checked { background: #6a2020; color: {{color.accent.danger}};"
+            " border: 1px solid #a04040; }"));
         gainRow->addWidget(m_muteBtn);
         m_afGainSlider = new GuardedSlider(Qt::Horizontal);
         m_afGainSlider->setAccessibleName("AF gain");
@@ -949,16 +943,14 @@ void VfoWidget::buildTabContent()
         escMeterRow->setContentsMargins(0, 0, 10, 0);
         escMeterRow->addStretch();
         m_escMeterLbl = new QLabel("ESC:");
-        m_escMeterLbl->setStyleSheet(
-            "QLabel { color: #00b4d8; font-size: 11px; font-family: monospace; }");
+        m_escMeterLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; font-family: monospace; }"));
         escMeterRow->addWidget(m_escMeterLbl);
         m_escMeterBar = new LevelBar(m_escLevelDbm);
         m_escMeterBar->setFixedHeight(8);
         m_escMeterBar->setFixedWidth(60);
         escMeterRow->addWidget(m_escMeterBar);
         m_escDbmLbl = new QLabel("--- dBm");
-        m_escDbmLbl->setStyleSheet(
-            "QLabel { color: #00b4d8; font-size: 11px; font-family: monospace; }");
+        m_escDbmLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; font-family: monospace; }"));
         m_escDbmLbl->setAlignment(Qt::AlignRight);
         escMeterRow->addWidget(m_escDbmLbl);
         escVbox->addLayout(escMeterRow);
@@ -1151,9 +1143,8 @@ void VfoWidget::buildTabContent()
             lvlHb->setSpacing(4);
 
             m_dspLevelLabel = new QLabel("NR");
-            m_dspLevelLabel->setStyleSheet(
-                "QLabel { color: #c8d8e8; font-size: 13px; font-weight: bold;"
-                "  min-width: 40px; }");
+            m_dspLevelLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 13px; font-weight: bold;"
+                "  min-width: 40px; }"));
             m_dspLevelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             lvlHb->addWidget(m_dspLevelLabel);
 
@@ -1163,9 +1154,8 @@ void VfoWidget::buildTabContent()
             lvlHb->addWidget(m_dspLevelSlider, 1);
 
             m_dspLevelValue = new QLabel("0");
-            m_dspLevelValue->setStyleSheet(
-                "QLabel { color: #c8d8e8; font-size: 10px; min-width: 24px;"
-                "  padding-right: 4px; }");
+            m_dspLevelValue->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 10px; min-width: 24px;"
+                "  padding-right: 4px; }"));
             m_dspLevelValue->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             lvlHb->addWidget(m_dspLevelValue);
 
@@ -1377,9 +1367,8 @@ void VfoWidget::buildTabContent()
 
             m_digOffsetEdit = new QLineEdit;
             m_digOffsetEdit->setAlignment(Qt::AlignCenter);
-            m_digOffsetEdit->setStyleSheet(
-                "QLineEdit { font-size: 10px; background: #0a0a18; border: 1px solid #00b4d8; "
-                "border-radius: 3px; padding: 0px 2px; color: #00e5ff; }");
+            m_digOffsetEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { font-size: 10px; background: {{color.background.0}}; border: 1px solid {{color.accent}}; "
+                "border-radius: 3px; padding: 0px 2px; color: #00e5ff; }"));
             m_digOffsetStack->addWidget(m_digOffsetEdit);   // index 1
 
             row->addWidget(m_digOffsetStack, 1);
@@ -1516,10 +1505,9 @@ void VfoWidget::buildTabContent()
             m_fmOffsetSpin->setDecimals(3);
             m_fmOffsetSpin->setSingleStep(0.1);
             m_fmOffsetSpin->setSuffix(" MHz");
-            m_fmOffsetSpin->setStyleSheet(
-                "QDoubleSpinBox { background: #0a0a18; border: 1px solid #1e2e3e; "
-                "border-radius: 3px; color: #c8d8e8; font-size: 10px; padding: 1px 2px; }"
-                "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0; }");
+            m_fmOffsetSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDoubleSpinBox { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
+                "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; padding: 1px 2px; }"
+                "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0; }"));
             offRow->addWidget(m_fmOffsetSpin, 1);
             fvb->addLayout(offRow);
 
@@ -2907,15 +2895,13 @@ void VfoWidget::setSlice(SliceModel* slice)
 void VfoWidget::updateTxBadgeStyle(bool isTx)
 {
     if (isTx) {
-        m_txBadge->setStyleSheet(
-            "QPushButton { background: #cc0000; color: #ffffff; border: none; "
+        m_txBadge->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #cc0000; color: {{color.text.primary}}; border: none; "
             "border-radius: 2px; font-size: 12px; font-weight: bold; padding: 0; }"
-            "QPushButton:hover { background: #ff2222; }");
+            "QPushButton:hover { background: #ff2222; }"));
     } else {
-        m_txBadge->setStyleSheet(
-            "QPushButton { background: #404040; color: #808080; border: none; "
+        m_txBadge->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #404040; color: {{color.text.label}}; border: none; "
             "border-radius: 2px; font-size: 12px; font-weight: bold; padding: 0; }"
-            "QPushButton:hover { background: #606060; color: #c0c0c0; }");
+            "QPushButton:hover { background: #606060; color: #c0c0c0; }"));
     }
 }
 
@@ -2925,19 +2911,17 @@ void VfoWidget::updateSplitBadge(bool isTxSlice, bool isRxSplit)
         // TX slice in split pair — show SWAP button
         m_splitBadge->show();
         m_splitBadge->setText("SWAP");
-        m_splitBadge->setStyleSheet(
-            "QPushButton { background: #204060; color: #80c0ff; border: none; "
+        m_splitBadge->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; color: #80c0ff; border: none; "
             "border-radius: 2px; font-size: 11px; font-weight: bold; "
             "padding: 0px 3px; }"
-            "QPushButton:hover { background: #306080; color: #ffffff; }");
+            "QPushButton:hover { background: #306080; color: {{color.text.primary}}; }"));
     } else if (isRxSplit) {
         // RX slice that initiated split — red badge, full opacity
         m_splitBadge->show();
-        m_splitBadge->setStyleSheet(
-            "QPushButton { background: #cc0000; color: #ffffff; border: none; "
+        m_splitBadge->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #cc0000; color: {{color.text.primary}}; border: none; "
             "border-radius: 2px; font-size: 11px; font-weight: bold; "
             "padding: 0px 3px; }"
-            "QPushButton:hover { background: #ee2222; }");
+            "QPushButton:hover { background: #ee2222; }"));
     } else {
         // Split not active — ghosted on all slices
         m_splitBadge->show();
@@ -4009,9 +3993,8 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
         auto* me = static_cast<QMouseEvent*>(event);
         if (me->button() == Qt::RightButton && m_slice) {
             QMenu menu(this);
-            menu.setStyleSheet(
-                "QMenu { background: #1a1a2e; color: #c8d8e8; border: 1px solid #304060; }"
-                "QMenu::item:selected { background: #00b4d8; color: #0f0f1a; }");
+            menu.setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QMenu { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; }"
+                "QMenu::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }"));
             menu.addAction("Add Spot", this, [this] {
                 emit addSpotRequested(m_slice->frequency());
             });
@@ -4058,9 +4041,8 @@ void VfoWidget::setRadeActive(bool on, const QString& label)
         m_radeInfoRow->setVisible(on);
         if (!on) {
             m_radeSnrLabel->setText("---");
-            m_radeSnrLabel->setStyleSheet(
-                "QLabel { color: #8090a0; font-size: 10px;"
-                " background: transparent; border: none; padding: 0; margin: 0; }");
+            m_radeSnrLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px;"
+                " background: transparent; border: none; padding: 0; margin: 0; }"));
             m_radeOffsetLabel->hide();
             m_radeCallsignLabel->hide();
         }
@@ -4075,9 +4057,8 @@ void VfoWidget::setRadeSynced(bool synced)
                                : "<font color='#505050'>\u25CB</font>";
     m_radeStatusLabel->setText(m_radeLabel + " " + led);
     if (!synced) {
-        m_radeSnrLabel->setStyleSheet(
-            "QLabel { color: #8090a0; font-size: 10px;"
-            " background: transparent; border: none; padding: 0; margin: 0; }");
+        m_radeSnrLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px;"
+            " background: transparent; border: none; padding: 0; margin: 0; }"));
         m_radeSnrLabel->setText("---");
         m_radeOffsetLabel->hide();
     } else {

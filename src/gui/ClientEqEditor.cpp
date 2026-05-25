@@ -23,6 +23,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <vector>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -88,7 +89,7 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
             "Drag peak/shelf = freq + gain · "
             "drag HP/LP = freq + Q · Shift + drag for Q · "
             "click icon to cycle type");
-        hint->setStyleSheet("QLabel { color: #506070; font-size: 10px; }");
+        hint->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.background.3}}; font-size: 10px; }"));
         row->addWidget(hint, 1);
 
         // Smoothing — fractional-octave display smoothing for the FFT
@@ -96,8 +97,7 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
         // Persisted globally (single user preference, shared between RX
         // and TX editors).
         auto* smoothingLbl = new QLabel("Smoothing:");
-        smoothingLbl->setStyleSheet(
-            "QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
+        smoothingLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"));
         row->addWidget(smoothingLbl);
 
         auto* smoothingCombo = new QComboBox;
@@ -142,18 +142,17 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
         peakHoldBtn->setToolTip(
             "Freeze the analyzer peak-hold trace at its highest level.\n"
             "Toggle off to resume normal decay.");
-        peakHoldBtn->setStyleSheet(
-            "QPushButton {"
-            "  background: #0e1b28; color: #c8d8e8;"
-            "  border: 1px solid #243a4e; border-radius: 3px;"
+        peakHoldBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton {"
+            "  background: {{color.background.0}}; color: {{color.text.primary}};"
+            "  border: 1px solid {{color.background.1}}; border-radius: 3px;"
             "  padding: 2px 12px; font-size: 11px; font-weight: bold;"
             "}"
-            "QPushButton:hover { background: #1a2a3a; }"
+            "QPushButton:hover { background: {{color.background.1}}; }"
             "QPushButton:checked {"
-            "  background: #c8a040; color: #0a0a18;"
+            "  background: #c8a040; color: {{color.background.0}};"
             "  border-color: #d4b050;"
             "}"
-            "QPushButton:checked:hover { background: #d4b050; }");
+            "QPushButton:checked:hover { background: #d4b050; }"));
         connect(peakHoldBtn, &QPushButton::toggled, this, [this](bool on) {
             if (m_canvas) m_canvas->setPeakHoldFrozen(on);
         });
@@ -196,14 +195,13 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
         auto* resetBtn = new QPushButton("Reset");
         resetBtn->setFixedHeight(24);
         resetBtn->setToolTip("Reset all bands to default values");
-        resetBtn->setStyleSheet(
-            "QPushButton {"
-            "  background: #0e1b28; color: #c8d8e8;"
-            "  border: 1px solid #243a4e; border-radius: 3px;"
+        resetBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton {"
+            "  background: {{color.background.0}}; color: {{color.text.primary}};"
+            "  border: 1px solid {{color.background.1}}; border-radius: 3px;"
             "  padding: 2px 12px; font-size: 11px; font-weight: bold;"
             "}"
-            "QPushButton:hover { background: #1a2a3a; }"
-            "QPushButton:pressed { background: #243a4e; }");
+            "QPushButton:hover { background: {{color.background.1}}; }"
+            "QPushButton:pressed { background: {{color.background.1}}; }"));
         connect(resetBtn, &QPushButton::clicked, this, [this]() {
             ClientEq* eq = (m_path == ClientEqApplet::Path::Rx)
                 ? m_audio->clientEqRx() : m_audio->clientEqTx();
