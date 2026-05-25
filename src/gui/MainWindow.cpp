@@ -12011,6 +12011,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setShowCursorFreq(false);
         sw->setBackgroundImage(":/bg-default.jpg");
         sw->setBackgroundOpacity(80);
+        sw->setBackgroundFillColor(QColor(0x0a, 0x0a, 0x14));
         sw->setNoiseFloorEnable(false);
         sw->setNoiseFloorPosition(75);
         sw->setFreqGridSpacing(0);  // Auto (#1390)
@@ -12057,6 +12058,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("CursorFreqLabel"),            "False");
         s.setValue(sw->settingsKey("BackgroundImage"),            ":/bg-default.jpg");
         s.setValue(sw->settingsKey("BackgroundOpacity"),          "80");
+        s.setValue(sw->settingsKey("BackgroundFillColor"),        "#0a0a14");
         s.setValue(sw->settingsKey("DisplayFreqGridSpacing"),     "0");
         s.setValue(sw->settingsKey("DisplayNoiseFloorEnable"),    "False");
         s.setValue(sw->settingsKey("DisplayNoiseFloorPosition"),  "75");
@@ -12065,7 +12067,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // Sync all Display panel UI controls
         menu->syncDisplaySettings(0, 25, 70, false, QColor(0x00, 0xe5, 0xff),
                                   50, 15, true, 50, 100, 75, false, true, 0);
-        menu->syncExtraDisplaySettings(false, 1.15f, 80, 0);
+        menu->syncExtraDisplaySettings(false, 1.15f, 80, 0,
+                                       QColor(0x0a, 0x0a, 0x14));
     });
 
     auto resolveSpectrumTuneTarget = [this, sw]() -> SliceModel* {
