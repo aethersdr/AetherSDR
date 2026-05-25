@@ -419,6 +419,7 @@ endif()
 # Sources
 set(CORE_SOURCES
     src/core/AppSettings.cpp
+    src/core/SettingsHelpers.cpp
     src/core/ThemeManager.cpp
     src/core/BandStackSettings.cpp
     src/core/RadioDiscovery.cpp

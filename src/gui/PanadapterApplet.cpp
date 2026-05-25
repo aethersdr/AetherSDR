@@ -4,6 +4,7 @@
 #include "SliceLabel.h"
 #include "SpectrumWidget.h"
 #include "core/AppSettings.h"
+#include "core/SettingsHelpers.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -143,12 +144,16 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
         "QSlider::handle:horizontal { background: #00b4d8; width: 10px; margin: -3px 0; border-radius: 5px; }");
     m_cwCostThreshold = 1.0f - (savedSens / 100.0f) * 0.9f;
-    connect(m_cwSensSlider, &QSlider::valueChanged, this, [this](int v) {
-        // Map 0-100 slider to 1.0-0.1 cost threshold (inverted: higher sens = lower threshold)
-        m_cwCostThreshold = 1.0f - (v / 100.0f) * 0.9f;
-        AppSettings::instance().setValue("CwDecoderSensitivity", QString::number(v));
-        AppSettings::instance().save();
-    });
+    connectSliderSetting(m_cwSensSlider,
+        [this](int v) {
+            // Map 0-100 slider to 1.0-0.1 cost threshold (inverted: higher sens = lower threshold)
+            m_cwCostThreshold = 1.0f - (v / 100.0f) * 0.9f;
+        },
+        [](int v) {
+            auto& settings = AppSettings::instance();
+            settings.setValue("CwDecoderSensitivity", QString::number(v));
+            settings.save();
+        });
     cwBar->addWidget(m_cwSensSlider);
 
     // Lock Pitch button
