@@ -46,6 +46,14 @@ private:
     QLineEdit*   m_filterEdit{nullptr};   // type-to-filter token names
     QListWidget* m_tokenList{nullptr};
     QPushButton* m_saveAsBtn{nullptr};
+
+    // Tracks the active-theme NAME we last rendered against, so the
+    // themeChanged handler can distinguish "user switched theme" (full
+    // rebuild) from "user just edited one token in the active theme"
+    // (no rebuild — would otherwise destroy the row the caller is
+    // still holding a pointer to and segfault during the post-edit
+    // updateRow()).
+    QString m_lastRenderedTheme;
 };
 
 } // namespace AetherSDR

@@ -74,6 +74,7 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
 
     refreshTokenList();
     updateTitle();
+    m_lastRenderedTheme = ThemeManager::instance().activeTheme();
 
     connect(m_tokenList, &QListWidget::itemClicked,
             this, &ThemeEditorDialog::onTokenRowClicked);
@@ -190,10 +191,21 @@ void ThemeEditorDialog::onSaveAsClicked()
 
 void ThemeEditorDialog::onActiveThemeChanged()
 {
+    // themeChanged fires for BOTH "user switched active theme" (View →
+    // Theme menu, Save As) AND "user edited one token in-place"
+    // (setColor / setSizing).  We must only rebuild the row list for
+    // the first case; for the second, the caller in onTokenRowClicked
+    // is still holding a pointer to the row it clicked and will run
+    // updateRow() on it — destroying the list mid-edit causes a SEGV
+    // in QPixmapIconEngine when the now-dangling row tries to repaint.
+    //
+    // Distinguish the two by comparing active-theme names.
+    const QString current = ThemeManager::instance().activeTheme();
     updateTitle();
-    // Active theme switch reloads tokens from the file — the list must
-    // re-read every swatch to stay honest.
-    refreshTokenList();
+    if (current != m_lastRenderedTheme) {
+        m_lastRenderedTheme = current;
+        refreshTokenList();
+    }
 }
 
 } // namespace AetherSDR
