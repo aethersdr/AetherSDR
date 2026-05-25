@@ -1000,10 +1000,19 @@ private:
     QRhiBuffer* m_ovVbo{nullptr};
     QRhiTexture* m_ovGpuTex{nullptr};
     QRhiSampler* m_ovSampler{nullptr};
-    QImage m_overlayStatic;     // grid, markers, scales — repainted on change
+    QImage m_overlayStatic;     // grid, band plan, scales, markers — drawn ABOVE FFT
     QImage m_overlayDynamic;    // FFT spectrum — repainted every frame
     bool m_overlayStaticDirty{true};
     bool m_overlayNeedsUpload{true};
+
+    // Background-image layer — kept separate from m_overlayStatic so it can
+    // render BELOW the FFT trace (parity with the software paint path).  Same
+    // pipeline + VBO + sampler as m_overlayStatic; we just rebind the SRB
+    // between draws so the same overlay shader can paint a different texture.
+    QRhiShaderResourceBindings* m_bgSrb{nullptr};
+    QRhiTexture* m_bgGpuTex{nullptr};
+    QImage m_overlayBg;
+    bool m_overlayBgNeedsUpload{true};
 
     void initWaterfallPipeline();
     void initOverlayPipeline();

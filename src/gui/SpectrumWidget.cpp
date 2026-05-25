@@ -4753,6 +4753,20 @@ void SpectrumWidget::initOverlayPipeline()
     m_overlayDynamic.setDevicePixelRatio(dpr);
     m_overlayDynamic.fill(Qt::transparent);
 
+    // Background-image layer — parallel texture + SRB so the same overlay
+    // pipeline can paint a separate quad BEFORE the FFT pass.  The image
+    // itself is built by the static-overlay paint pass below.
+    m_bgGpuTex = r->newTexture(QRhiTexture::RGBA8, QSize(pw, ph));
+    m_bgGpuTex->create();
+    m_bgSrb = r->newShaderResourceBindings();
+    m_bgSrb->setBindings({
+        QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_bgGpuTex, m_ovSampler),
+    });
+    m_bgSrb->create();
+    m_overlayBg = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
+    m_overlayBg.setDevicePixelRatio(dpr);
+    m_overlayBg.fill(Qt::transparent);
+
     qDebug() << "SpectrumWidget: overlay pipeline created" << pw << "x" << ph << "dpr:" << dpr;
 }
 
@@ -5020,19 +5034,30 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_ovGpuTex, m_ovSampler),
             });
             m_ovSrb->create();
+            // Background layer mirrors the resize so its texture stays the
+            // same pixel size as the framebuffer.
+            m_overlayBg = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
+            m_overlayBg.setDevicePixelRatio(dpr);
+            m_overlayBg.fill(Qt::transparent);
+            m_bgGpuTex->setPixelSize(QSize(pw, ph));
+            m_bgGpuTex->create();
+            m_bgSrb->setBindings({
+                QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_bgGpuTex, m_ovSampler),
+            });
+            m_bgSrb->create();
             m_overlayStaticDirty = true;
         }
 
-        // Static overlay: only repaint when state changes (markOverlayDirty).
+        // Background-image layer — kept separate from the static overlay so
+        // it can render BELOW the FFT trace (parity with software paint).
+        // Rebuilt whenever the static overlay is rebuilt, since markOverlayDirty
+        // also fires when m_bgImage or m_bgOpacity change.
         if (m_overlayStaticDirty) {
-            m_overlayStatic.fill(Qt::transparent);
-            QPainter p(&m_overlayStatic);
-            p.setRenderHint(QPainter::Antialiasing, false);
-
-            // Background image
+            m_overlayBg.fill(Qt::transparent);
             if (!m_bgImage.isNull()) {
+                QPainter bp(&m_overlayBg);
+                bp.setRenderHint(QPainter::Antialiasing, false);
                 if (m_bgScaledSize != specRect.size()) {
-                    // Scale to cover (keep aspect ratio, expand to fill) then center crop
                     QImage expanded = m_bgImage.scaled(specRect.size(),
                         Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation);
                     int cx = (expanded.width()  - specRect.width())  / 2;
@@ -5040,10 +5065,17 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     m_bgScaled = expanded.copy(cx, cy, specRect.width(), specRect.height());
                     m_bgScaledSize = specRect.size();
                 }
-                p.setOpacity(1.0 - m_bgOpacity / 100.0);
-                p.drawImage(specRect.topLeft(), m_bgScaled);
-                p.setOpacity(1.0);
+                bp.setOpacity(1.0 - m_bgOpacity / 100.0);
+                bp.drawImage(specRect.topLeft(), m_bgScaled);
             }
+            m_overlayBgNeedsUpload = true;
+        }
+
+        // Static overlay: only repaint when state changes (markOverlayDirty).
+        if (m_overlayStaticDirty) {
+            m_overlayStatic.fill(Qt::transparent);
+            QPainter p(&m_overlayStatic);
+            p.setRenderHint(QPainter::Antialiasing, false);
 
             drawGrid(p, specRect);
             if (m_bandPlanFontSize > 0)
@@ -5241,6 +5273,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::Overlay);
             m_overlayNeedsUpload = false;
         }
+        if (m_overlayBgNeedsUpload) {
+            QRhiTextureSubresourceUploadDescription bgDesc(m_overlayBg);
+            batch->uploadTexture(m_bgGpuTex, QRhiTextureUploadEntry(0, 0, bgDesc));
+            if (perfEnabled)
+                PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::Overlay);
+            m_overlayBgNeedsUpload = false;
+        }
 
         // Generate FFT spectrum vertices with baked colors
         if (!m_smoothed.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
@@ -5414,6 +5453,21 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
         cb->setViewport({vpX, vpY, vpW, vpH});
         const QRhiCommandBuffer::VertexInput vbuf(m_wfVbo, 0);
+        cb->setVertexInput(0, 1, &vbuf);
+        cb->draw(4);
+    }
+
+    // Draw background-image quad BELOW the FFT — same overlay pipeline,
+    // different SRB.  Sits between the waterfall pass and the FFT pass so
+    // the FFT trace ends up on top of any user-set bg image, matching the
+    // software paint path's ordering.
+    if (m_ovPipeline && m_bgSrb) {
+        cb->setGraphicsPipeline(m_ovPipeline);
+        cb->setShaderResources(m_bgSrb);
+        cb->setViewport({0, 0,
+            static_cast<float>(outputSize.width()),
+            static_cast<float>(outputSize.height())});
+        const QRhiCommandBuffer::VertexInput vbuf(m_ovVbo, 0);
         cb->setVertexInput(0, 1, &vbuf);
         cb->draw(4);
     }
