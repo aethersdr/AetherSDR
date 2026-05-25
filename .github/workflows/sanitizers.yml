@@ -78,6 +78,15 @@ jobs:
         # `outputs.exit` sees an empty string.  Net result: every run
         # appears green and no tests actually execute under the
         # sanitizers.  Pin to bash so the bashisms work as intended.
+        #
+        # `|| ec=$?` is also required: GitHub Actions' default bash flags
+        # include `-e`, so a non-zero pipeline exit (e.g. ctest reporting
+        # a test failure or sanitizer crash) would terminate the script
+        # before the `echo "exit=..."` line wrote outputs.exit.  Without
+        # outputs.exit set, the downstream `if: outputs.exit != '0'`
+        # gates all skip — the very failure path we wrote them for.
+        # Capturing into `ec` survives -e and lets us always emit the
+        # real ctest exit code.
         shell: bash
         run: |
           set -o pipefail
@@ -87,8 +96,9 @@ jobs:
           done <<'EOF'
           ${{ matrix.sanitizer.runtime_env }}
           EOF
-          ctest --test-dir build --output-on-failure 2>&1 | tee sanitizer.log
-          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          ec=0
+          ctest --test-dir build --output-on-failure 2>&1 | tee sanitizer.log || ec=$?
+          echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
       - name: Extract failure report
         id: extract
