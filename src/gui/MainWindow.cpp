@@ -2834,7 +2834,8 @@ MainWindow::MainWindow(QWidget* parent)
             // Nudge rate to force waterfall tile re-sync
             if (!m_adaptiveThrottleActive) {
                 QTimer::singleShot(500, this, [this, rate]() {
-                    m_radioModel.setWaterfallLineDuration(rate + 1);
+                    const int nudgeRate = (rate < 100) ? rate + 1 : rate - 1;
+                    m_radioModel.setWaterfallLineDuration(nudgeRate);
                     m_radioModel.setWaterfallLineDuration(rate);
                 });
             }
@@ -12112,13 +12113,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfAutoBlackOffset(offset);
     });
     const auto applyWaterfallLineDuration = [this, applet, sw](int ms) {
-        sw->setWfLineDuration(ms);  // always update restore target for when throttle lifts
-        if (m_adaptiveThrottleActive)
-            return;
+        const int clampedMs = std::clamp(ms, 1, 100);
+        sw->setWfLineDuration(clampedMs);
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan && !pan->waterfallId().isEmpty())
             m_radioModel.sendCommand(
-                QString("display panafall set %1 line_duration=%2").arg(pan->waterfallId()).arg(ms));
+                QString("display panafall set %1 line_duration=%2").arg(pan->waterfallId()).arg(clampedMs));
     };
     connect(menu, &SpectrumOverlayMenu::wfLineDurationChanged,
             this, applyWaterfallLineDuration);

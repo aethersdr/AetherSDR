@@ -563,6 +563,7 @@ private:
     int maxWaterfallHistoryOffsetRows() const;
     int historyRowIndexForAge(int ageRows) const;
     QString pausedTimeLabelForAge(int ageRows) const;
+    void updateWaterfallMsPerRowFromHistory();
     void applyFpsMeterVisibility(bool on);
     void resetFpsMeterWindow();
     void updateFpsMeterValues();
@@ -757,7 +758,7 @@ private:
     bool   m_draggingTimeScaleRate{false};
     int    m_timeScaleDragStartY{0};
     int    m_timeScaleDragStartOffsetRows{0};
-    int    m_timeScaleDragStartLineDuration{100};
+    int    m_timeScaleDragStartRatePercent{1};
     static constexpr qint64 kWaterfallHistoryMs = 20LL * 60LL * 1000LL;
 
     // True once we receive native waterfall tile data (PCC 0x8004).
@@ -903,14 +904,22 @@ private:
     float    m_preTxAutoBlack{145.0f}; // auto-black threshold saved before TX
     qint64   m_txEndMs{0};             // post-TX blanking: timestamp of TX→RX transition (#2117)
 
-    // Waterfall time scale: ms-per-row derived from tile timecodes + wall-clock.
-    // Calibrates over the first 50 tiles, then locks to prevent jitter.
-    // resetWfTimeScale() re-triggers calibration (called when rate slider changes).
-    float    m_wfMsPerRow{100.0f};     // calibrated ms per waterfall row
+    // Waterfall time scale: ms-per-row is seeded from the requested rate and
+    // corrected from real appended-row timestamps once the current rate has
+    // enough samples.  Per-rate measurements are cached so later drags can use
+    // the observed cadence immediately without re-jittering the visible scale.
+    float    m_wfMsPerRow{100.0f};
     quint32  m_wfPrevTimecode{0};      // previous tile timecode (frame counter)
     qint64   m_wfPrevTimecodeMs{0};    // wall-clock time of previous timecode
     int      m_wfCalibrationCount{0};  // tiles measured so far
     bool     m_wfTimeScaleLocked{false};
+    bool     m_wfHasMeasuredMsPerRow{false};
+    int      m_wfLastMeasuredLineDurationMs{100};
+    float    m_wfLastMeasuredMsPerRow{100.0f};
+    qint64   m_wfCalibrationResumeMs{0};
+    int      m_wfRowsSinceRateChange{0};
+    QHash<int, float> m_wfMeasuredMsPerRowByLineDuration;
+    QHash<int, int>   m_wfMeasuredSampleCountByLineDuration;
 
 
     // Lightweight diagnostics overlay toggled from View -> FPS Meters.

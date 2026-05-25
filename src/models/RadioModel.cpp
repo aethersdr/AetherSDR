@@ -26,6 +26,8 @@ namespace AetherSDR {
 namespace {
 
 constexpr int kMinUsablePanYpixels = 100;
+constexpr int kWaterfallLineDurationMinMs = 1;
+constexpr int kWaterfallLineDurationMaxMs = 100;
 
 QJsonArray toJsonArray(const QStringList& values)
 {
@@ -2782,11 +2784,10 @@ int RadioModel::currentAdaptiveFpsCap() const
 
 int RadioModel::adaptiveWfMsForCap(int fpsCap) const
 {
-    if (fpsCap <= 0)  return 0;
-    if (fpsCap <= 4)  return 500;
-    if (fpsCap <= 8)  return 250;
-    if (fpsCap <= 15) return 150;
-    return 0;
+    if (fpsCap <= 0) return 0;
+    return std::clamp((1000 + fpsCap / 2) / fpsCap,
+                      kWaterfallLineDurationMinMs,
+                      kWaterfallLineDurationMaxMs);
 }
 
 void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)

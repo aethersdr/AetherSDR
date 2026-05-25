@@ -62,14 +62,83 @@ inline QColor kAetherBrandBlue() { return AetherSDR::ThemeManager::instance().co
 inline QColor kAetherBrandGreen() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
 inline QColor kConnectionTextColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
 static constexpr float kMinDisplayDbm = -180.0f;
-static constexpr int kWaterfallLineDurationMinMs = 50;
-static constexpr int kWaterfallLineDurationMaxMs = 500;
-static constexpr int kWaterfallUiRateMinMs = 71;
-static constexpr int kWaterfallUiRateMaxMs = 100;
+static constexpr int kWaterfallLineDurationMinMs = 1;
+static constexpr int kWaterfallLineDurationMaxMs = 100;
+static constexpr int kWaterfallHistoryCapacityMsPerRow = 50;
+static constexpr int kWaterfallRatePercentMin = 1;
+static constexpr int kWaterfallRatePercentMax = 100;
 static constexpr int kDbmReleaseHoldFrames = 10;
 static constexpr int kDbmReleaseErrorSampleCount = 256;
 static constexpr float kDbmReleasePreviewChangeThresholdDb = 0.05f;
 static constexpr float kDbmReleaseRebaseMinImprovementDb = 0.75f;
+
+static constexpr int lineDurationToRatePercent(int lineDurationMs)
+{
+    return std::clamp(lineDurationMs,
+                      kWaterfallLineDurationMinMs,
+                      kWaterfallLineDurationMaxMs);
+}
+
+static constexpr int ratePercentToLineDuration(int ratePercent)
+{
+    // See SpectrumOverlayMenu.cpp: the rate control value is intentionally sent
+    // directly as line_duration. The tested behavior is 1 slowest, 100 fastest.
+    return std::clamp(ratePercent,
+                      kWaterfallRatePercentMin,
+                      kWaterfallRatePercentMax);
+}
+
+static_assert(ratePercentToLineDuration(1) == 1);
+static_assert(ratePercentToLineDuration(100) == 100);
+static_assert(lineDurationToRatePercent(1) == 1);
+static_assert(lineDurationToRatePercent(100) == 100);
+
+static float lineDurationToVisualMsPerRow(int lineDurationMs)
+{
+    const int clamped = std::clamp(lineDurationMs,
+                                   kWaterfallLineDurationMinMs,
+                                   kWaterfallLineDurationMaxMs);
+    struct RateCalibration {
+        int ratePercent;
+        float msPerRow;
+    };
+    static constexpr RateCalibration kMeasuredRateCurve[] = {
+        {1, 6000.0f},
+        {8, 4000.9f},
+        {50, 677.2f},
+        {56, 473.2f},
+        {67, 223.0f},
+        {69, 192.1f},
+        {71, 163.9f},
+        {75, 120.7f},
+        {77, 102.0f},
+        {78, 90.5f},
+        {79, 88.8f},
+        {80, 81.2f},
+        {83, 64.2f},
+        {90, 46.3f},
+        {93, 42.0f},
+        {100, 42.0f},
+    };
+
+    if (clamped <= kMeasuredRateCurve[0].ratePercent) {
+        return kMeasuredRateCurve[0].msPerRow;
+    }
+    constexpr int kMeasuredRateCurveSize =
+        static_cast<int>(sizeof(kMeasuredRateCurve) / sizeof(kMeasuredRateCurve[0]));
+    for (int i = 1; i < kMeasuredRateCurveSize; ++i) {
+        const RateCalibration& lower = kMeasuredRateCurve[i - 1];
+        const RateCalibration& upper = kMeasuredRateCurve[i];
+        if (clamped <= upper.ratePercent) {
+            const float fraction = static_cast<float>(clamped - lower.ratePercent)
+                / static_cast<float>(upper.ratePercent - lower.ratePercent);
+            const float lowerLog = std::log(lower.msPerRow);
+            const float upperLog = std::log(upper.msPerRow);
+            return std::exp(lowerLog + (upperLog - lowerLog) * fraction);
+        }
+    }
+    return kMeasuredRateCurve[kMeasuredRateCurveSize - 1].msPerRow;
+}
 
 static bool spotMarkersVisuallyEqual(const QVector<SpectrumWidget::SpotMarker>& lhs,
                                      const QVector<SpectrumWidget::SpotMarker>& rhs)
@@ -636,6 +705,7 @@ void SpectrumWidget::loadSettings()
                                   kWaterfallLineDurationMinMs,
                                   kWaterfallLineDurationMaxMs);
     PerfTelemetry::instance().setWaterfallLineDurationMs(m_wfLineDuration);
+    resetWfTimeScale();
     // NB Waterfall Blanker (#277)
     m_wfBlankerEnabled   = s.value(settingsKey("WaterfallBlankingEnabled"), "False").toString() == "True";
     m_wfBlankerMode      = s.value(settingsKey("WaterfallBlankingMode"), "0").toInt();
@@ -1564,19 +1634,56 @@ void SpectrumWidget::setWfBlankerMode(int mode)
 }
 
 void SpectrumWidget::resetWfTimeScale() {
-    m_wfMsPerRow = static_cast<float>(m_wfLineDuration);  // start from radio's value
+    // Seed the visible scale from the deterministic rate mapping so Ctrl-drag
+    // previews move with the mouse.  Real row timestamps update the per-rate
+    // cache after enough new rows arrive at this rate.
+    const int lineDuration = std::clamp(m_wfLineDuration,
+                                        kWaterfallLineDurationMinMs,
+                                        kWaterfallLineDurationMaxMs);
+    const float previewMsPerRow = lineDurationToVisualMsPerRow(lineDuration);
+    const auto measuredIt = m_wfMeasuredMsPerRowByLineDuration.constFind(lineDuration);
+    const bool hasMeasured = measuredIt != m_wfMeasuredMsPerRowByLineDuration.constEnd();
+    float estimatedMsPerRow = hasMeasured ? *measuredIt : previewMsPerRow;
+    if (!hasMeasured) {
+        int lowerRate = kWaterfallLineDurationMinMs - 1;
+        int upperRate = kWaterfallLineDurationMaxMs + 1;
+        float lowerMsPerRow = 0.0f;
+        float upperMsPerRow = 0.0f;
+        for (auto it = m_wfMeasuredMsPerRowByLineDuration.cbegin();
+             it != m_wfMeasuredMsPerRowByLineDuration.cend(); ++it) {
+            const int rate = it.key();
+            if (rate < lineDuration && rate > lowerRate) {
+                lowerRate = rate;
+                lowerMsPerRow = it.value();
+            }
+            if (rate > lineDuration && rate < upperRate) {
+                upperRate = rate;
+                upperMsPerRow = it.value();
+            }
+        }
+        if (lowerRate >= kWaterfallLineDurationMinMs
+            && upperRate <= kWaterfallLineDurationMaxMs) {
+            const float fraction = static_cast<float>(lineDuration - lowerRate)
+                / static_cast<float>(upperRate - lowerRate);
+            estimatedMsPerRow =
+                lowerMsPerRow + (upperMsPerRow - lowerMsPerRow) * fraction;
+        }
+    }
+    m_wfMsPerRow = estimatedMsPerRow;
     m_wfPrevTimecode = 0;
     m_wfPrevTimecodeMs = 0;
     m_wfCalibrationCount = 0;
     m_wfTimeScaleLocked = false;
+    m_wfRowsSinceRateChange = 0;
+    m_wfCalibrationResumeMs = QDateTime::currentMSecsSinceEpoch() + 500;
     ensureWaterfallHistory();
 }
 
 int SpectrumWidget::waterfallHistoryCapacityRows() const
 {
-    // Size for the fastest accepted line duration so rate changes do not
-    // resize the buffer and discard existing history.
-    const int msPerRow = kWaterfallLineDurationMinMs;
+    // Keep history capacity bounded; radio line_duration accepts 1 ms, but
+    // allocating 20 minutes at that cadence would be disproportionate.
+    const int msPerRow = kWaterfallHistoryCapacityMsPerRow;
     return static_cast<int>((kWaterfallHistoryMs + msPerRow - 1) / msPerRow);
 }
 
@@ -1607,6 +1714,75 @@ QString SpectrumWidget::pausedTimeLabelForAge(int ageRows) const
 
     const QDateTime utc = QDateTime::fromMSecsSinceEpoch(timestampMs, QTimeZone::utc());
     return "-" + utc.toString("HH:mm:ssZ");
+}
+
+void SpectrumWidget::updateWaterfallMsPerRowFromHistory()
+{
+    if (m_waterfallHistory.isNull() || m_wfHistoryTimestamps.isEmpty()
+        || m_wfHistoryRowCount < 2) {
+        return;
+    }
+    if (QDateTime::currentMSecsSinceEpoch() < m_wfCalibrationResumeMs) {
+        return;
+    }
+
+    constexpr int kSampleRows = 24;
+    constexpr int kMinSampleRows = 8;
+    constexpr int kSamplesBeforeVisibleUpdate = 3;
+    const int maxAgeRows = std::min({kSampleRows,
+                                     m_wfHistoryRowCount - 1,
+                                     m_wfRowsSinceRateChange - 1});
+    if (maxAgeRows < kMinSampleRows) {
+        return;
+    }
+
+    const int newestIndex = historyRowIndexForAge(0);
+    if (newestIndex < 0 || newestIndex >= m_wfHistoryTimestamps.size()) {
+        return;
+    }
+
+    const qint64 newestMs = m_wfHistoryTimestamps[newestIndex];
+    if (newestMs <= 0) {
+        return;
+    }
+
+    for (int ageRows = maxAgeRows; ageRows > 0; --ageRows) {
+        const int olderIndex = historyRowIndexForAge(ageRows);
+        if (olderIndex < 0 || olderIndex >= m_wfHistoryTimestamps.size()) {
+            continue;
+        }
+
+        const qint64 olderMs = m_wfHistoryTimestamps[olderIndex];
+        if (olderMs <= 0 || newestMs <= olderMs) {
+            continue;
+        }
+
+        const float measured = static_cast<float>(newestMs - olderMs)
+            / static_cast<float>(ageRows);
+        const int lineDuration = std::clamp(m_wfLineDuration,
+                                            kWaterfallLineDurationMinMs,
+                                            kWaterfallLineDurationMaxMs);
+        const int previousSamples =
+            m_wfMeasuredSampleCountByLineDuration.value(lineDuration, 0);
+        const float previousMeasured =
+            m_wfMeasuredMsPerRowByLineDuration.value(lineDuration, measured);
+        const float updatedMeasured = previousSamples > 0
+            ? (0.85f * previousMeasured + 0.15f * measured)
+            : measured;
+        const int updatedSamples = std::min(previousSamples + 1, 1000);
+
+        m_wfMeasuredMsPerRowByLineDuration.insert(lineDuration, updatedMeasured);
+        m_wfMeasuredSampleCountByLineDuration.insert(lineDuration, updatedSamples);
+        m_wfHasMeasuredMsPerRow = true;
+        m_wfLastMeasuredLineDurationMs = lineDuration;
+        m_wfLastMeasuredMsPerRow = updatedMeasured;
+        if (!m_wfTimeScaleLocked && updatedSamples >= kSamplesBeforeVisibleUpdate) {
+            m_wfMsPerRow = updatedMeasured;
+            m_wfTimeScaleLocked = true;
+            markOverlayDirty();
+        }
+        return;
+    }
 }
 
 void SpectrumWidget::ensureWaterfallHistory()
@@ -1682,6 +1858,10 @@ void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
     if (m_wfHistoryRowCount < h) {
         ++m_wfHistoryRowCount;
     }
+    if (m_wfRowsSinceRateChange < h) {
+        ++m_wfRowsSinceRateChange;
+    }
+    updateWaterfallMsPerRowFromHistory();
     if (!m_wfLive) {
         m_wfHistoryOffsetRows = std::min(m_wfHistoryOffsetRows + 1, maxWaterfallHistoryOffsetRows());
     }
@@ -2439,7 +2619,7 @@ void SpectrumWidget::setTransmitting(bool tx)
     }
     if (!tx && m_transmitting) {
         m_autoBlackThresh = m_preTxAutoBlack;  // restore after TX
-        m_hasNativeWaterfall = false;  // force FFT fallback until tiles resume
+        m_hasNativeWaterfall = false;  // wait for native tiles to resume
         m_wfPrevTimecode   = 0;
         m_wfPrevTimecodeMs = 0;
         m_txEndMs = QDateTime::currentMSecsSinceEpoch(); // post-TX blanking (#2117)
@@ -2806,10 +2986,9 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         markOverlayDirty();
     }
 
-    // Use FFT data for waterfall only when native tiles aren't available.
-    // If native tiles stop arriving (e.g., disconnect), fall back after 2 seconds.
-    // During TX: immediately use FFT-derived rows (radio stops sending tiles).
-    // During RX: use native tiles, fall back to FFT after 2s timeout.
+    // Use FFT-derived waterfall rows only for TX rendering. RX waterfall rows
+    // come from native VITA waterfall tiles; mixing FFT dBm rows into the native
+    // intensity path creates bright bands when the radio pauses native tiles.
     if (m_transmitting) {
         // TX rendering is global, not limited to the pan that owns the TX
         // slice. Any pan whose visible range intersects the TX passband uses
@@ -2846,11 +3025,8 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
                 const qint64 now = QDateTime::currentMSecsSinceEpoch();
                 if (now - m_lastNativeTileMs > 2000) {
                     m_hasNativeWaterfall = false;
-                    qDebug() << "SpectrumWidget: native waterfall tiles timed out, falling back to FFT-derived";
                 }
             }
-            if (!m_hasNativeWaterfall && !m_waterfall.isNull())
-                pushWaterfallRow(*spectrumBins, m_waterfall.width());
         }
     }
 
@@ -2885,28 +3061,7 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     }
 
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-
-    // Derive ms-per-row by measuring wall-clock / timecode delta.
-    // Collect data for the first 50 tiles to converge, then lock the value.
-    // Only re-measure when the user changes the waterfall rate slider
-    // (which calls resetWfTimeScale()).
-    if (!m_wfTimeScaleLocked) {
-        if (timecode > 0 && m_wfPrevTimecode > 0 && timecode > m_wfPrevTimecode && m_wfPrevTimecodeMs > 0) {
-            const float wallDelta = static_cast<float>(nowMs - m_wfPrevTimecodeMs);
-            const float tcDelta = static_cast<float>(timecode - m_wfPrevTimecode);
-            if (tcDelta > 0 && wallDelta > 0) {
-                const float measured = wallDelta / tcDelta;
-                m_wfMsPerRow = 0.9f * m_wfMsPerRow + 0.1f * measured;
-                if (++m_wfCalibrationCount >= 50) {
-                    m_wfTimeScaleLocked = true;  // lock — no more jitter
-                }
-            }
-        }
-        if (timecode > 0) {
-            m_wfPrevTimecode = timecode;
-            m_wfPrevTimecodeMs = nowMs;
-        }
-    }
+    Q_UNUSED(timecode);
 
     // Client-side auto-black: track the noise floor from tile data and adjust
     // the black threshold to sit just above it. This replaces the radio's
@@ -3247,8 +3402,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 #ifdef Q_OS_MAC
         const bool rateModifier = modifiers.testFlag(Qt::ControlModifier)
             || modifiers.testFlag(Qt::MetaModifier);
-        const bool rateClick = rateModifier
-            && (ev->button() == Qt::LeftButton || ev->button() == Qt::RightButton);
+        const bool rateClick = (rateModifier && ev->button() == Qt::LeftButton)
+            || ev->button() == Qt::RightButton;
 #else
         const bool rateModifier = modifiers.testFlag(Qt::ControlModifier);
         const bool rateClick = rateModifier && ev->button() == Qt::LeftButton;
@@ -3256,9 +3411,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         if (rateClick && timeScaleRect.contains(pos)) {
             m_draggingTimeScaleRate = true;
             m_timeScaleDragStartY = y;
-            m_timeScaleDragStartLineDuration = std::clamp(m_wfLineDuration,
-                                                          kWaterfallUiRateMinMs,
-                                                          kWaterfallUiRateMaxMs);
+            m_timeScaleDragStartRatePercent = lineDurationToRatePercent(m_wfLineDuration);
             setSpectrumCursor(Qt::SizeVerCursor);
             ev->accept();
             return;
@@ -3775,12 +3928,15 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
         const int dragHeight = std::max(1, timeScaleRect.height());
         const int dy = m_timeScaleDragStartY - y;
-        const int rangeMs = kWaterfallUiRateMaxMs - kWaterfallUiRateMinMs;
-        const int deltaMs = static_cast<int>(
-            std::round((static_cast<double>(dy) / dragHeight) * rangeMs));
-        const int newMs = std::clamp(m_timeScaleDragStartLineDuration + deltaMs,
-                                     kWaterfallUiRateMinMs,
-                                     kWaterfallUiRateMaxMs);
+        const int rangePct = kWaterfallRatePercentMax - kWaterfallRatePercentMin;
+        const int deltaPct = static_cast<int>(
+            std::round((static_cast<double>(dy) / dragHeight) * rangePct));
+        // Screen Y decreases while dragging up. On the time scale, dragging up
+        // should slow the waterfall, so reduce the rate percent.
+        const int newRatePct = std::clamp(m_timeScaleDragStartRatePercent - deltaPct,
+                                          kWaterfallRatePercentMin,
+                                          kWaterfallRatePercentMax);
+        const int newMs = ratePercentToLineDuration(newRatePct);
 
         if (newMs != m_wfLineDuration) {
             emit waterfallLineDurationChangeRequested(newMs);
@@ -7622,9 +7778,7 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
     p.setPen(m_wfLive ? AetherSDR::ThemeManager::instance().color("color.text.primary") : Qt::white);
     p.drawText(liveRect, Qt::AlignCenter, "LIVE");
 
-    // Total time depth follows the visible row duration, including client-side
-    // pacing for native waterfall tiles.
-    const float msPerRow = static_cast<float>(std::max(1, m_wfLineDuration));
+    const float msPerRow = std::max(1.0f, m_wfMsPerRow);
     const QRect labelRect = strip.adjusted(0, 4, 0, 0);
     const float totalSec = labelRect.height() * msPerRow / 1000.0f;
     if (totalSec <= 0) return;
@@ -7635,7 +7789,37 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
     p.setFont(f);
     const QFontMetrics fm(f);
 
-    const float stepSec = 5.0f;
+    const int minLabelSpacingPx = std::max(18, fm.height() + 4);
+    const int maxVisibleLabels =
+        std::max(1, labelRect.height() / minLabelSpacingPx);
+    const float rawStepSec = totalSec / static_cast<float>(maxVisibleLabels);
+    static constexpr float kNiceStepsSec[] = {
+        1.0f, 2.0f, 5.0f, 10.0f, 15.0f, 30.0f,
+        60.0f, 120.0f, 300.0f, 600.0f, 900.0f, 1800.0f,
+        3600.0f, 7200.0f, 14400.0f, 28800.0f
+    };
+    float stepSec = kNiceStepsSec[sizeof(kNiceStepsSec) / sizeof(kNiceStepsSec[0]) - 1];
+    for (const float candidate : kNiceStepsSec) {
+        if (candidate >= rawStepSec) {
+            stepSec = candidate;
+            break;
+        }
+    }
+
+    const auto liveLabelForSeconds = [](float seconds) {
+        const int roundedSec = static_cast<int>(std::lround(seconds));
+        if (roundedSec < 60) {
+            return QString("%1s").arg(roundedSec);
+        }
+        if (roundedSec < 3600) {
+            return QString("%1m").arg(static_cast<int>(std::lround(roundedSec / 60.0)));
+        }
+        const double hours = roundedSec / 3600.0;
+        if (hours < 10.0 && roundedSec % 3600 != 0) {
+            return QString("%1h").arg(QString::number(hours, 'f', 1));
+        }
+        return QString("%1h").arg(static_cast<int>(std::lround(hours)));
+    };
 
     for (float sec = 0; sec <= totalSec; sec += stepSec) {
         const float frac = sec / totalSec;
@@ -7647,15 +7831,16 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
         p.drawLine(stripX, y, stripX + 4, y);
 
         const QString label = m_wfLive
-            ? QString("%1s").arg(static_cast<int>(sec))
+            ? liveLabelForSeconds(sec)
             : pausedTimeLabelForAge(m_wfHistoryOffsetRows
                                     + static_cast<int>(std::round(sec * 1000.0f / msPerRow)));
 
         p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
+        const QRect textRect(stripX + 6, y - fm.height() / 2,
+                             strip.width() - 10, fm.height());
         if (m_wfLive) {
-            p.drawText(stripX + 6, y + fm.ascent() / 2, label);
+            p.drawText(textRect, Qt::AlignLeft | Qt::AlignVCenter, label);
         } else {
-            const QRect textRect(stripX + 6, y - fm.height() / 2, strip.width() - 10, fm.height());
             p.drawText(textRect, Qt::AlignRight | Qt::AlignVCenter, label);
         }
     }

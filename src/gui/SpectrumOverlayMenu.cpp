@@ -24,6 +24,8 @@
 #include <QColorDialog>
 
 #include <algorithm>
+#include <cmath>
+
 #include "core/ThemeManager.h"
 
 namespace AetherSDR {
@@ -31,21 +33,102 @@ namespace AetherSDR {
 static constexpr int BTN_W = 68;
 static constexpr int BTN_H = 22;
 static constexpr int WF_RATE_SLIDER_MIN = 1;
-static constexpr int WF_RATE_SLIDER_MAX = 30;
-static constexpr int WF_LINE_DURATION_OFFSET = 70;
+static constexpr int WF_RATE_SLIDER_MAX = 100;
+// The control is a 1..100 waterfall-rate value. The tooltip describes percent
+// semantics, but the label intentionally shows only the number.
+//
+// Firmware 4.2.18 behavior is counterintuitive from the field name: the tested
+// UI direction is value 1 slowest and value 100 fastest, and that value is sent
+// directly as line_duration. Do not invert this mapping based on the protocol
+// field name alone.
+static constexpr int WF_LINE_DURATION_MIN_MS = 1;
+static constexpr int WF_LINE_DURATION_MAX_MS = 100;
 
-static int lineDurationToRateSliderValue(int lineDuration)
+static QString rateSliderLabelText(int sliderValue)
 {
-    return std::clamp(lineDuration - WF_LINE_DURATION_OFFSET,
+    return QString::number(sliderValue);
+}
+
+static constexpr int lineDurationToRateSliderValue(int lineDuration)
+{
+    return std::clamp(lineDuration,
+                      WF_LINE_DURATION_MIN_MS,
+                      WF_LINE_DURATION_MAX_MS);
+}
+
+static constexpr int rateSliderValueToLineDuration(int sliderValue)
+{
+    return std::clamp(sliderValue,
                       WF_RATE_SLIDER_MIN,
                       WF_RATE_SLIDER_MAX);
 }
 
-static int rateSliderValueToLineDuration(int sliderValue)
-{
-    return std::clamp(sliderValue, WF_RATE_SLIDER_MIN, WF_RATE_SLIDER_MAX)
-        + WF_LINE_DURATION_OFFSET;
-}
+static_assert(rateSliderValueToLineDuration(1) == 1);
+static_assert(rateSliderValueToLineDuration(100) == 100);
+static_assert(lineDurationToRateSliderValue(1) == 1);
+static_assert(lineDurationToRateSliderValue(100) == 100);
+
+class WaterfallRateSlider : public GuardedSlider {
+public:
+    explicit WaterfallRateSlider(QWidget* parent = nullptr)
+        : GuardedSlider(Qt::Horizontal, parent)
+    {
+    }
+
+protected:
+    void mousePressEvent(QMouseEvent* ev) override
+    {
+        if (ControlsLock::isLocked()) {
+            ev->ignore();
+            return;
+        }
+        if (ev->button() == Qt::LeftButton) {
+            setSliderDown(true);
+            setValue(valueFromPosition(ev->position().x()));
+            ev->accept();
+            return;
+        }
+        GuardedSlider::mousePressEvent(ev);
+    }
+
+    void mouseMoveEvent(QMouseEvent* ev) override
+    {
+        if (ControlsLock::isLocked()) {
+            ev->ignore();
+            return;
+        }
+        if (isSliderDown() && ev->buttons().testFlag(Qt::LeftButton)) {
+            setValue(valueFromPosition(ev->position().x()));
+            ev->accept();
+            return;
+        }
+        GuardedSlider::mouseMoveEvent(ev);
+    }
+
+    void mouseReleaseEvent(QMouseEvent* ev) override
+    {
+        if (isSliderDown() && ev->button() == Qt::LeftButton) {
+            setValue(valueFromPosition(ev->position().x()));
+            setSliderDown(false);
+            ev->accept();
+            return;
+        }
+        GuardedSlider::mouseReleaseEvent(ev);
+    }
+
+private:
+    int valueFromPosition(qreal x) const
+    {
+        const int span = maximum() - minimum();
+        if (span <= 0) {
+            return minimum();
+        }
+        const qreal ratio = std::clamp(x / static_cast<qreal>(std::max(1, width() - 1)),
+                                       static_cast<qreal>(0.0),
+                                       static_cast<qreal>(1.0));
+        return minimum() + static_cast<int>(std::round(ratio * span));
+    }
+};
 
 static bool isLoopSelectableRxAntenna(const QString& token)
 {
@@ -1142,11 +1225,30 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     });
 
     // Rate
-    makeRow("WtrFall Rate:", WF_RATE_SLIDER_MIN, WF_RATE_SLIDER_MAX,
-            lineDurationToRateSliderValue(85), m_rateSlider, m_rateLabel);
+    {
+        auto* lbl = new QLabel("WtrFall Rate:");
+        lbl->setStyleSheet(labelStyle);
+        grid->addWidget(lbl, row, 0);
+
+        m_rateSlider = new WaterfallRateSlider;
+        m_rateSlider->setRange(WF_RATE_SLIDER_MIN, WF_RATE_SLIDER_MAX);
+        m_rateSlider->setValue(lineDurationToRateSliderValue(100));
+        applyPrimarySliderStyle(m_rateSlider);
+        grid->addWidget(m_rateSlider, row, 1, 1, 2);
+
+        m_rateLabel = new QLabel(rateSliderLabelText(m_rateSlider->value()));
+        m_rateLabel->setStyleSheet(valStyle);
+        m_rateLabel->setFixedWidth(34);
+        m_rateLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        grid->addWidget(m_rateLabel, row, 3);
+        ++row;
+    }
+    m_rateSlider->setLayoutDirection(Qt::LeftToRight);
+    m_rateSlider->setInvertedAppearance(false);
+    m_rateSlider->setInvertedControls(false);
     connect(m_rateSlider, &QSlider::valueChanged, this, [this](int v) {
         const int lineDurationMs = rateSliderValueToLineDuration(v);
-        m_rateLabel->setText(QString::number(v));
+        m_rateLabel->setText(rateSliderLabelText(v));
         emit wfLineDurationChanged(lineDurationMs);
     });
 
@@ -1281,7 +1383,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_gainSlider->setToolTip("Waterfall color gain. Higher values brighten weak signals.");
     m_blackSlider->setToolTip("Waterfall black level. Decrease to darken the noise floor.");
     if (m_autoBlackBtn) m_autoBlackBtn->setToolTip("Automatically adjusts the waterfall black level to match the current noise floor.");
-    m_rateSlider->setToolTip("Waterfall line duration. Higher values scroll slower.");
+    m_rateSlider->setToolTip("Waterfall rate. 1% = slowest; 100% = fastest.");
     if (m_wfBlankerThreshSlider) m_wfBlankerThreshSlider->setToolTip("Waterfall noise blanking threshold. Higher values blank more aggressively.");
     if (m_freqGridSpacingCmb) m_freqGridSpacingCmb->setToolTip("Frequency grid line spacing. Auto adapts to the current span.");
     if (m_colorSchemeCmb) m_colorSchemeCmb->setToolTip("Selects the waterfall color palette.");
@@ -1379,7 +1481,7 @@ void SpectrumOverlayMenu::syncWfLineDuration(int rate)
     QSignalBlocker blocker(m_rateSlider);
     const int sliderValue = lineDurationToRateSliderValue(rate);
     m_rateSlider->setValue(sliderValue);
-    m_rateLabel->setText(QString::number(sliderValue));
+    m_rateLabel->setText(rateSliderLabelText(sliderValue));
 }
 
 void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
