@@ -299,6 +299,7 @@ void TunerApplet::cycleOperateState()
         m_model->setBypass(true);
     } else if (m_model->isOperate() && m_model->isBypass()) {
         // Currently BYPASS → go to STANDBY
+        m_model->setBypass(false);
         m_model->setOperate(false);
     } else {
         // Currently STANDBY → go to OPERATE
