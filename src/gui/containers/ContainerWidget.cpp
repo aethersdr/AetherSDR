@@ -147,6 +147,11 @@ void ContainerWidget::onTitleBarDragStart(const QPoint& /*globalPos*/)
     // MIME type is shared with AppletDropArea's drag-reorder handling.
     auto* drag = new QDrag(m_titleBar);
     auto* mime = new QMimeData;
+    // Note: the MIME id here is the container's drag id (m_id by default).
+    // For composite tiles whose AppletEntry.id differs from m_id (e.g.
+    // TXDSP wraps a tx_dsp container), AppletPanel::dropEvent has an
+    // aliasing fallback that catches the mismatch by looking up the
+    // container instead of the AppletEntry. See #1836.
     mime->setData("application/x-aethersdr-applet", dragId().toUtf8());
     drag->setMimeData(mime);
 
