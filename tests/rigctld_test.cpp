@@ -1322,6 +1322,74 @@ void section13(const QString& host, quint16 port, int timeout,
             raw == QStringList{QStringLiteral("0"), QStringLiteral("RPRT 0")},
             raw.join(QStringLiteral(" | ")));
 
+    // 13.11–13.20  Hamlib protocol-compliance sweep for the remaining bare-mode
+    // getters that were missing the trailing RPRT terminator (issue #3120).
+    // Mirrors 13.10 / #3115 for every long-form bare-branch getter listed in
+    // the audit.  Hamlib's reference NET rigctl appends RPRT N on every
+    // response in both bare and extended modes; clients other than WSJT-X
+    // (fldigi, JTDX, hamlib-cli, …) may stall waiting for it.
+    raw = c.sendRaw(QStringLiteral("\\chk_vfo"), 2);
+    r.check(QStringLiteral("13.11 chk_vfo (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("0"), QStringLiteral("RPRT 0")},
+            raw.join(QStringLiteral(" | ")));
+
+    raw = c.sendRaw(QStringLiteral("\\get_powerstat"), 2);
+    r.check(QStringLiteral("13.12 get_powerstat (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("1"), QStringLiteral("RPRT 0")},
+            raw.join(QStringLiteral(" | ")));
+
+    raw = c.sendRaw(QStringLiteral("\\hamlib_version"), 2);
+    r.check(QStringLiteral("13.13 hamlib_version (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("AetherSDR"), QStringLiteral("RPRT 0")},
+            raw.join(QStringLiteral(" | ")));
+
+    raw = c.sendRaw(QStringLiteral("\\get_vfo_list"), 2);
+    r.check(QStringLiteral("13.14 get_vfo_list (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("VFOA VFOB"), QStringLiteral("RPRT 0")},
+            raw.join(QStringLiteral(" | ")));
+
+    raw = c.sendRaw(QStringLiteral("\\get_modes"), 2);
+    r.check(QStringLiteral("13.15 get_modes (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("USB LSB CW CWR AM AMS FM PKTUSB PKTLSB RTTY"),
+                               QStringLiteral("RPRT 0")},
+            raw.join(QStringLiteral(" | ")));
+
+    raw = c.sendRaw(QStringLiteral("\\get_rptr_shift"), 2);
+    r.check(QStringLiteral("13.16 get_rptr_shift (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("+"), QStringLiteral("RPRT 0")},
+            raw.join(QStringLiteral(" | ")));
+
+    raw = c.sendRaw(QStringLiteral("\\get_rptr_offs"), 2);
+    r.check(QStringLiteral("13.17 get_rptr_offs (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("0"), QStringLiteral("RPRT 0")},
+            raw.join(QStringLiteral(" | ")));
+
+    raw = c.sendRaw(QStringLiteral("\\get_ctcss_tone"), 2);
+    r.check(QStringLiteral("13.18 get_ctcss_tone (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("0"), QStringLiteral("RPRT 0")},
+            raw.join(QStringLiteral(" | ")));
+
+    raw = c.sendRaw(QStringLiteral("\\get_dcs_code"), 2);
+    r.check(QStringLiteral("13.19 get_dcs_code (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("0"), QStringLiteral("RPRT 0")},
+            raw.join(QStringLiteral(" | ")));
+
+    // get_split_freq_mode has three value lines (freq, mode, passband) plus the
+    // RPRT 0 terminator — 4 lines total in bare mode.  Value lines depend on
+    // TX-slice state, so only assert shape: integer freq, known mode, integer
+    // passband, RPRT 0.  If no TX slice exists the response collapses to a
+    // single "RPRT -1" line, which we accept as the alternate valid shape.
+    raw = c.sendRaw(QStringLiteral("\\get_split_freq_mode"), 4);
+    const bool sfmOk =
+        (raw.size() == 4
+         && isInt(raw.value(0))
+         && kKnownModes.contains(raw.value(1))
+         && isInt(raw.value(2))
+         && raw.value(3) == QLatin1String("RPRT 0"))
+        || (raw.size() == 1 && raw.value(0) == QLatin1String("RPRT -1"));
+    r.check(QStringLiteral("13.20 get_split_freq_mode (bare) ends with RPRT terminator"),
+            sfmOk, raw.join(QStringLiteral(" | ")));
+
     // Best-effort restore
     c.sendRaw(QStringLiteral("\\set_freq %1").arg(origFreq), 1);
     c.sendRaw(QStringLiteral("\\set_mode %1 %2").arg(origMode).arg(origPb), 1);

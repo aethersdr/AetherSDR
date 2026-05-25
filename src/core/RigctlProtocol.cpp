@@ -346,7 +346,7 @@ QString RigctlProtocol::processCommand(const QString& cmd)
         if (name == "chk_vfo") {
             if (m_extended)
                 return QStringLiteral("chk_vfo:\nVFO Mode: 0\n") + rprt(0);
-            return QStringLiteral("0\n");
+            return QStringLiteral("0\n") + rprt(0);
         }
         if (name == "send_morse")     return cmdSendMorse(args);
         if (name == "stop_morse")     return cmdStopMorse();
@@ -355,7 +355,7 @@ QString RigctlProtocol::processCommand(const QString& cmd)
             // Always report power on — AetherSDR is connected by definition.
             if (m_extended)
                 return QStringLiteral("get_powerstat:\nPower Status: 1\n") + rprt(0);
-            return QStringLiteral("1\n");
+            return QStringLiteral("1\n") + rprt(0);
         }
         if (name == "set_powerstat") {
             // "1" = power on: radio is already on, accept as no-op.
@@ -388,7 +388,7 @@ QString RigctlProtocol::processCommand(const QString& cmd)
         if (name == "hamlib_version")  {
             if (m_extended)
                 return QStringLiteral("hamlib_version:\nHamlib Version: AetherSDR\n") + rprt(0);
-            return QStringLiteral("AetherSDR\n");
+            return QStringLiteral("AetherSDR\n") + rprt(0);
         }
         if (name == "client_version")  return rprt(0);   // silently accept client's version announcement
 
@@ -402,7 +402,7 @@ QString RigctlProtocol::processCommand(const QString& cmd)
             if (m_extended)
                 return QStringLiteral("get_split_freq_mode:\nTX Frequency: %1\nTX Mode: %2\nTX Passband: %3\n")
                            .arg(hz).arg(mode).arg(passband) + rprt(0);
-            return QStringLiteral("%1\n%2\n%3\n").arg(hz).arg(mode).arg(passband);
+            return QStringLiteral("%1\n%2\n%3\n").arg(hz).arg(mode).arg(passband) + rprt(0);
         }
         if (name == "set_split_freq_mode") {
             // Args: "<freq> <mode> <passband>" — delegate to existing handlers
@@ -417,35 +417,35 @@ QString RigctlProtocol::processCommand(const QString& cmd)
         if (name == "get_vfo_list") {
             if (m_extended)
                 return QStringLiteral("get_vfo_list:\nVFO List: VFOA VFOB\n") + rprt(0);
-            return QStringLiteral("VFOA VFOB\n");
+            return QStringLiteral("VFOA VFOB\n") + rprt(0);
         }
         if (name == "get_modes") {
             static const QString kModes =
                 QStringLiteral("USB LSB CW CWR AM AMS FM PKTUSB PKTLSB RTTY");
             if (m_extended)
                 return QStringLiteral("get_modes:\nModes: %1\n").arg(kModes) + rprt(0);
-            return kModes + "\n";
+            return kModes + "\n" + rprt(0);
         }
 
         // FM / repeater stubs (not applicable to HF SDR, but prevent -4 noise)
         if (name == "get_rptr_shift") {
             if (m_extended) return QStringLiteral("get_rptr_shift:\nRptr Shift: +\n") + rprt(0);
-            return QStringLiteral("+\n");
+            return QStringLiteral("+\n") + rprt(0);
         }
         if (name == "set_rptr_shift") return rprt(0);
         if (name == "get_rptr_offs") {
             if (m_extended) return QStringLiteral("get_rptr_offs:\nRptr Offset: 0\n") + rprt(0);
-            return QStringLiteral("0\n");
+            return QStringLiteral("0\n") + rprt(0);
         }
         if (name == "set_rptr_offs")  return rprt(0);
         if (name == "get_ctcss_tone") {
             if (m_extended) return QStringLiteral("get_ctcss_tone:\nCTCSS Tone: 0\n") + rprt(0);
-            return QStringLiteral("0\n");
+            return QStringLiteral("0\n") + rprt(0);
         }
         if (name == "set_ctcss_tone") return rprt(0);
         if (name == "get_dcs_code") {
             if (m_extended) return QStringLiteral("get_dcs_code:\nDCS Code: 0\n") + rprt(0);
-            return QStringLiteral("0\n");
+            return QStringLiteral("0\n") + rprt(0);
         }
         if (name == "set_dcs_code")   return rprt(0);
 
