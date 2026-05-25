@@ -33,7 +33,7 @@ SwrSweepLicenseDialog::SwrSweepLicenseDialog(QWidget* parent)
 {
     setModal(true);
     setMinimumSize(520, 240);
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(14);
@@ -41,14 +41,14 @@ SwrSweepLicenseDialog::SwrSweepLicenseDialog(QWidget* parent)
     auto* disclaimer = new QLabel(kDisclaimerText);
     disclaimer->setWordWrap(true);
     disclaimer->setTextFormat(Qt::RichText);
-    disclaimer->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 12px; line-height: 1.4; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(disclaimer, "QLabel { color: {{color.text.primary}}; font-size: 12px; line-height: 1.4; }");
     root->addWidget(disclaimer);
 
     m_rememberCheck = new QCheckBox("Remember my answer");
-    m_rememberCheck->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.secondary}}; font-size: 11px; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rememberCheck, "QCheckBox { color: {{color.text.secondary}}; font-size: 11px; }"
         "QCheckBox::indicator { width: 14px; height: 14px;"
         " border: 1px solid #406080; border-radius: 2px; background: {{color.background.0}}; }"
-        "QCheckBox::indicator:checked { background: {{color.accent}}; }"));
+        "QCheckBox::indicator:checked { background: {{color.accent}}; }");
     root->addWidget(m_rememberCheck);
 
     auto* btnRow = new QHBoxLayout;
@@ -56,20 +56,20 @@ SwrSweepLicenseDialog::SwrSweepLicenseDialog(QWidget* parent)
     btnRow->addStretch();
 
     auto* cancelBtn = new QPushButton("Cancel");
-    cancelBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(cancelBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
         "border: 1px solid {{color.background.2}}; border-radius: 3px;"
         " padding: 6px 16px; font-size: 11px; }"
-        "QPushButton:hover { background: {{color.background.1}}; border-color: {{color.accent.dim}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; border-color: {{color.accent.dim}}; }");
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     btnRow->addWidget(cancelBtn);
 
     auto* acceptBtn = new QPushButton("I am licensed to use this feature");
     acceptBtn->setDefault(true);
-    acceptBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold;"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(acceptBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold;"
         " border: 1px solid {{color.accent.dim}}; border-radius: 3px;"
         " padding: 6px 16px; font-size: 11px; }"
         "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:default { border: 2px solid #00f0ff; }"));
+        "QPushButton:default { border: 2px solid #00f0ff; }");
     connect(acceptBtn, &QPushButton::clicked, this, &QDialog::accept);
     btnRow->addWidget(acceptBtn);
 

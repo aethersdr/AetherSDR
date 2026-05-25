@@ -29,7 +29,7 @@ DxClusterStartupCommandsDialog::DxClusterStartupCommandsDialog(
 {
     setModal(true);
     setMinimumSize(560, 380);
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(10);
@@ -37,20 +37,20 @@ DxClusterStartupCommandsDialog::DxClusterStartupCommandsDialog(
     auto* header = new QLabel(kHeaderText);
     header->setWordWrap(true);
     header->setTextFormat(Qt::RichText);
-    header->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; line-height: 1.4; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(header, "QLabel { color: {{color.text.secondary}}; font-size: 11px; line-height: 1.4; }");
     root->addWidget(header);
 
     m_edit = new QPlainTextEdit;
     m_edit->setPlaceholderText(
         "One cluster command per line — e.g. SET/NAME John");
-    m_edit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_edit, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: {{color.text.primary}};"
         "  font-family: monospace;"
         "  font-size: 12px;"
         "  border: 1px solid {{color.background.1}};"
         "  padding: 4px;"
-        "}"));
+        "}");
     m_edit->setPlainText(AppSettings::instance().value(m_key).toString());
     root->addWidget(m_edit, 1);
 
@@ -59,20 +59,20 @@ DxClusterStartupCommandsDialog::DxClusterStartupCommandsDialog(
     btnRow->addStretch();
 
     auto* cancelBtn = new QPushButton("Cancel");
-    cancelBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(cancelBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
         "border: 1px solid {{color.background.2}}; border-radius: 3px;"
         " padding: 6px 16px; font-size: 11px; }"
-        "QPushButton:hover { background: {{color.background.1}}; border-color: {{color.accent.dim}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; border-color: {{color.accent.dim}}; }");
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     btnRow->addWidget(cancelBtn);
 
     auto* okBtn = new QPushButton("OK");
     okBtn->setDefault(true);
-    okBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold;"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(okBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold;"
         " border: 1px solid {{color.accent.dim}}; border-radius: 3px;"
         " padding: 6px 16px; font-size: 11px; }"
         "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:default { border: 2px solid #00f0ff; }"));
+        "QPushButton:default { border: 2px solid #00f0ff; }");
     connect(okBtn, &QPushButton::clicked, this, &QDialog::accept);
     btnRow->addWidget(okBtn);
 

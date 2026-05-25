@@ -62,8 +62,8 @@ QWidget* makeBracketLabel(const QString& text)
     leftLine->setStyleSheet("QFrame { color: #4a5a6a; }");
 
     auto* lbl = new QLabel(text);
-    lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: bold; "
-                       "font-size: 10px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.primary}}; font-weight: bold; "
+                       "font-size: 10px; }");
     lbl->setAlignment(Qt::AlignCenter);
 
     auto* rightLine = new QFrame;

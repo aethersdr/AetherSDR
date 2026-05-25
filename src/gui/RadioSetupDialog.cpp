@@ -252,9 +252,9 @@ static void showCopiedPopup(QWidget* anchor)
                              Qt::ToolTip | Qt::FramelessWindowHint);
     popup->setAttribute(Qt::WA_DeleteOnClose);
     popup->setAttribute(Qt::WA_ShowWithoutActivating);
-    popup->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.0}}; border: 1px solid {{color.background.2}};"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(popup, "QLabel { background: {{color.background.0}}; border: 1px solid {{color.background.2}};"
         " border-radius: 4px; color: {{color.text.primary}}; font-size: 11px;"
-        " font-weight: bold; padding: 4px 8px; }"));
+        " font-weight: bold; padding: 4px 8px; }");
     popup->adjustSize();
 
     const QPoint globalCenter = anchor->mapToGlobal(anchor->rect().center());
@@ -423,17 +423,17 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag)
 {
     setMinimumSize(820, 620);
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; }");
 
     auto* layout = new QVBoxLayout(bodyWidget());
 
     auto* tabs = new QTabWidget;
     m_tabs = tabs;
-    tabs->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTabWidget::pane { border: 1px solid {{color.background.2}}; background: {{color.background.0}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(tabs, "QTabWidget::pane { border: 1px solid {{color.background.2}}; background: {{color.background.0}}; }"
         "QTabBar::tab { background: {{color.background.1}}; color: {{color.text.secondary}}; "
         "border: 1px solid {{color.background.2}}; padding: 4px 12px; margin-right: 2px; }"
         "QTabBar::tab:selected { background: {{color.background.0}}; color: {{color.text.primary}}; "
-        "border-bottom-color: {{color.background.0}}; }"));
+        "border-bottom-color: {{color.background.0}}; }");
 
     // Build only the default (Radio) tab eagerly; defer the rest until first
     // selected.  This avoids hardware-probing calls (QSerialPortInfo,
@@ -476,9 +476,9 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     layout->addWidget(tabs);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
-    buttons->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(buttons, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; padding: 4px 16px; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; }");
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     layout->addWidget(buttons);
 }
@@ -536,9 +536,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
                         0, 0);
 
         m_regionLabel = new QLabel(m_model->region().isEmpty() ? "USA" : m_model->region());
-        m_regionLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_regionLabel, "QLabel { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.accent.bright}}; font-size: 11px; font-weight: bold; "
-            "padding: 3px 10px; }"));
+            "padding: 3px 10px; }");
         m_regionLabel->setAlignment(Qt::AlignCenter);
         grid->addWidget(makeInfoField(QStringLiteral("Region:"), m_regionLabel,
                                       kInfoRightLabelWidth),
@@ -754,9 +754,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
         m_fwProgress->setValue(0);
         m_fwProgress->setTextVisible(true);
         m_fwProgress->setFixedHeight(20);
-        m_fwProgress->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QProgressBar { text-align: center; font-size: 11px; color: {{color.text.primary}};"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_fwProgress, "QProgressBar { text-align: center; font-size: 11px; color: {{color.text.primary}};"
             " background: {{color.background.1}}; border: 1px solid #2e4e6e; border-radius: 3px; }"
-            "QProgressBar::chunk { background: {{color.accent}}; }"));
+            "QProgressBar::chunk { background: {{color.accent}}; }");
         m_fwProgress->hide();
         vlay->addWidget(m_fwProgress);
 
@@ -769,9 +769,9 @@ QWidget* RadioSetupDialog::buildRadioTab()
         // Button row
         auto* btnRow = new QHBoxLayout;
         auto* checkBtn = new QPushButton("Check for Update");
-        checkBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid #2e4e6e;"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(checkBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid #2e4e6e;"
             " border-radius: 3px; padding: 4px 8px; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+            "QPushButton:hover { background: {{color.background.1}}; }");
         btnRow->addWidget(checkBtn);
 
         auto* browseBtn = new QPushButton("Select Installer...");
@@ -780,10 +780,10 @@ QWidget* RadioSetupDialog::buildRadioTab()
 
         m_fwUploadBtn = new QPushButton("Upload Firmware");
         m_fwUploadBtn->setEnabled(false);
-        m_fwUploadBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #1a3a1a; color: #80e080; border: 1px solid #2e6e2e;"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_fwUploadBtn, "QPushButton { background: #1a3a1a; color: #80e080; border: 1px solid #2e6e2e;"
             " border-radius: 3px; padding: 4px 8px; }"
             "QPushButton:hover { background: #2a4a2a; }"
-            "QPushButton:disabled { background: #1a1a2a; color: {{color.meter.bar.fill}}; border-color: {{color.background.1}}; }"));
+            "QPushButton:disabled { background: #1a1a2a; color: {{color.meter.bar.fill}}; border-color: {{color.background.1}}; }");
         btnRow->addWidget(m_fwUploadBtn);
         vlay->addLayout(btnRow);
 
@@ -942,7 +942,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         auto* hdr = new QHBoxLayout;
         hdr->addStretch(1);
         auto* modelLbl = new QLabel(m_model->model());
-        modelLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(modelLbl, "QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }");
         hdr->addWidget(modelLbl);
         vbox->addLayout(hdr);
     }
@@ -994,11 +994,11 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         auto* enforceBtn = new QPushButton(m_model->enforcePrivateIp() ? "Enabled" : "Disabled");
         enforceBtn->setCheckable(true);
         enforceBtn->setChecked(m_model->enforcePrivateIp());
-        enforceBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(enforceBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
             "padding: 3px 10px; }"
             "QPushButton:checked { background: #1a5030; color: {{color.accent.success}}; "
-            "border: 1px solid #20a040; }"));
+            "border: 1px solid #20a040; }");
         connect(enforceBtn, &QPushButton::toggled, this, [this, enforceBtn](bool on) {
             enforceBtn->setText(on ? "Enabled" : "Disabled");
             m_model->sendCommand(
@@ -1050,11 +1050,11 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
     auto* dhcpBtn = new QPushButton("DHCP");
     dhcpBtn->setCheckable(true);
     dhcpBtn->setChecked(!isStatic);
-    dhcpBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(dhcpBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
         "padding: 4px 16px; }"
         "QPushButton:checked { background: {{color.background.2}}; color: {{color.text.primary}}; "
-        "border: 1px solid {{color.accent.dim}}; }"));
+        "border: 1px solid {{color.accent.dim}}; }");
     btnRow->addWidget(dhcpBtn);
 
     auto* staticBtn = new QPushButton("Static");
@@ -1094,10 +1094,10 @@ QGroupBox* RadioSetupDialog::buildIpConfigGroup()
 
     auto* applyBtn = new QPushButton("Apply");
     applyBtn->setEnabled(false);
-    applyBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(applyBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
         "padding: 4px 16px; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; }");
     gvbox->addWidget(applyBtn, 0, Qt::AlignLeft);
 
     connect(dhcpBtn, &QPushButton::clicked, this,
@@ -1145,7 +1145,7 @@ QWidget* RadioSetupDialog::buildGpsTab()
         auto* hdr = new QHBoxLayout;
         hdr->addStretch(1);
         auto* modelLbl = new QLabel(m_model->model());
-        modelLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(modelLbl, "QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }");
         hdr->addWidget(modelLbl);
         vbox->addLayout(hdr);
     }
@@ -1206,7 +1206,7 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* hdr = new QHBoxLayout;
         hdr->addStretch(1);
         auto* modelLbl = new QLabel(m_model->model());
-        modelLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(modelLbl, "QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }");
         hdr->addWidget(modelLbl);
         vbox->addLayout(hdr);
     }
@@ -1270,10 +1270,10 @@ QWidget* RadioSetupDialog::buildTxTab()
 
         // TX Band Settings button
         auto* bandSetBtn = new QPushButton("TX Band Settings");
-        bandSetBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bandSetBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
             "padding: 4px 12px; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+            "QPushButton:hover { background: {{color.background.1}}; }");
         connect(bandSetBtn, &QPushButton::clicked, this, [this] {
             emit txBandSettingsRequested();
         });
@@ -1354,11 +1354,11 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* swBtn = new QPushButton(tx.showTxInWaterfall() ? "Enabled" : "Disabled");
         swBtn->setCheckable(true);
         swBtn->setChecked(tx.showTxInWaterfall());
-        swBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(swBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
             "padding: 3px 10px; }"
             "QPushButton:checked { background: #1a5030; color: {{color.accent.success}}; "
-            "border: 1px solid #20a040; }"));
+            "border: 1px solid #20a040; }");
         connect(swBtn, &QPushButton::toggled, this, [this, swBtn](bool on) {
             swBtn->setText(on ? "Enabled" : "Disabled");
             m_model->sendCommand(
@@ -1437,7 +1437,7 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         auto* hdr = new QHBoxLayout;
         hdr->addStretch(1);
         auto* modelLbl = new QLabel(m_model->model());
-        modelLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(modelLbl, "QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }");
         hdr->addWidget(modelLbl);
         vbox->addLayout(hdr);
     }
@@ -1626,7 +1626,7 @@ QWidget* RadioSetupDialog::buildRxTab()
         auto* hdr = new QHBoxLayout;
         hdr->addStretch(1);
         auto* modelLbl = new QLabel(m_model->model());
-        modelLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(modelLbl, "QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }");
         hdr->addWidget(modelLbl);
         vbox->addLayout(hdr);
     }
@@ -1674,7 +1674,7 @@ QWidget* RadioSetupDialog::buildRxTab()
         startBtn->setStyleSheet(kTogStyle);
         startBtn->setFixedWidth(60);
         auto* calStatus = new QLabel;
-        calStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(calStatus, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
         calStatus->setMinimumWidth(130);
 
         auto calibrationActive = std::make_shared<bool>(false);
@@ -1733,7 +1733,7 @@ QWidget* RadioSetupDialog::buildRxTab()
                     }
                     if (code == 0) {
                         statusGuard->setText("Calibrating...");
-                        statusGuard->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 11px; }"));
+                        AetherSDR::ThemeManager::instance().applyStyleSheet(statusGuard, "QLabel { color: {{color.accent.bright}}; font-size: 11px; }");
                         qCDebug(lcProtocol)
                             << "RadioSetupDialog: radio pll_start accepted";
                         return;
@@ -1819,7 +1819,7 @@ QWidget* RadioSetupDialog::buildRxTab()
             if (pllDone == QStringLiteral("0")) {
                 *pllRunningSeen = true;
                 calStatus->setText("Calibrating...");
-                calStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 11px; }"));
+                AetherSDR::ThemeManager::instance().applyStyleSheet(calStatus, "QLabel { color: {{color.accent.bright}}; font-size: 11px; }");
                 return;
             }
 
@@ -1838,7 +1838,7 @@ QWidget* RadioSetupDialog::buildRxTab()
                 calStatus->setText(freqError.isEmpty()
                     ? QStringLiteral("Complete")
                     : QStringLiteral("Complete (%1 ppb)").arg(freqError));
-                calStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.success}}; font-size: 11px; }"));
+                AetherSDR::ThemeManager::instance().applyStyleSheet(calStatus, "QLabel { color: {{color.accent.success}}; font-size: 11px; }");
                 qCDebug(lcProtocol)
                     << "RadioSetupDialog: frequency calibration completed"
                     << "freq_error_ppb=" << freqError
@@ -1951,9 +1951,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
     lineoutMute->setCheckable(true);
     lineoutMute->setChecked(m_model->lineoutMute());
     lineoutMute->setFixedWidth(50);
-    lineoutMute->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lineoutMute, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 2px; }"
-        "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }"));
+        "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }");
     lineoutRow->addWidget(lineoutLabel);
     lineoutRow->addWidget(lineoutSlider, 1);
     lineoutRow->addWidget(lineoutValue);
@@ -1981,9 +1981,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
     hpMute->setCheckable(true);
     hpMute->setChecked(m_model->headphoneMute());
     hpMute->setFixedWidth(50);
-    hpMute->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(hpMute, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 2px; }"
-        "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }"));
+        "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }");
     hpRow->addWidget(hpLabel);
     hpRow->addWidget(hpSlider, 1);
     hpRow->addWidget(hpValue);
@@ -2008,9 +2008,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
         spkMute->setCheckable(true);
         spkMute->setChecked(m_model->frontSpeakerMute());
         spkMute->setFixedWidth(50);
-        spkMute->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(spkMute, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 2px; }"
-            "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }"));
+            "QPushButton:checked { background: #8b0000; color: {{color.text.primary}}; }");
         spkRow->addWidget(spkLabel);
         spkRow->addStretch(1);
         spkRow->addWidget(spkMute);
@@ -2078,7 +2078,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         compLayout->addStretch();
 
         auto* hint = new QLabel("Auto = Opus on SmartLink, uncompressed on LAN");
-        hint->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 10px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "QLabel { color: {{color.text.label}}; font-size: 10px; }");
         compLayout->addWidget(hint);
 
         vbox->addWidget(compGroup);
@@ -2091,7 +2091,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     {
         auto* plcCheck = new QCheckBox(
             "Smooth packet loss (conceal dropped audio packets)");
-        plcCheck->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(plcCheck, "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
         plcCheck->setToolTip(
             "When the radio's audio stream loses a UDP packet, fade the gap\n"
             "to silence (uncompressed) or synthesize a perceptually smooth\n"
@@ -2124,7 +2124,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     // ── Prevent Sleep ───────────────────────────────────────────────────
     {
         auto* sleepCheck = new QCheckBox("Prevent system sleep while connected");
-        sleepCheck->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(sleepCheck, "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
         sleepCheck->setToolTip("Hold a system power assertion to prevent idle sleep\n"
                                "while connected to a radio. Keeps TCP/UDP/audio\n"
                                "streams alive during long sessions.");
@@ -2181,7 +2181,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
     pcLayout->addLayout(outRow);
 
     auto* promptCheck = new QCheckBox("Prompt on Audio Device Changes");
-    promptCheck->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(promptCheck, "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
     promptCheck->setToolTip("Show the Audio Device Detected dialog when a new PC audio device appears.");
     const bool suppressAudioDeviceNotifications =
         AppSettings::instance()
@@ -2232,11 +2232,11 @@ QWidget* RadioSetupDialog::buildAudioTab()
         boostBtn->setChecked(boostOn);
         boostBtn->setToolTip("Apply 50% software gain boost to PC audio output.\n"
                              "Compensates for lower levels with AGC-controlled audio.");
-        boostBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(boostBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
             "padding: 3px 10px; }"
             "QPushButton:checked { background: #1a5030; color: {{color.accent.success}}; "
-            "border: 1px solid #20a040; }"));
+            "border: 1px solid #20a040; }");
         connect(boostBtn, &QPushButton::toggled, this, [this, boostBtn](bool on) {
             boostBtn->setText(on ? "Enabled" : "Disabled");
             auto& s = AppSettings::instance();
@@ -2267,7 +2267,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         auto* bufUnit = new QLabel("ms");
         bufUnit->setStyleSheet(kLabelStyle);
         auto* bufHint = new QLabel("(50–1000, increase for VPN/SmartLink jitter)");
-        bufHint->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.background.3}}; font-size: 10px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bufHint, "QLabel { color: {{color.background.3}}; font-size: 10px; }");
         connect(bufEdit, &QLineEdit::editingFinished, this, [this, bufEdit] {
             int val = qBound(50, bufEdit->text().toInt(), 1000);
             bufEdit->setText(QString::number(val));
@@ -2352,8 +2352,8 @@ QWidget* RadioSetupDialog::buildAudioTab()
         dirEdit->setText(settings.value("QsoRecordingDir",
             QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
             + "/AetherSDR/Recordings").toString());
-        dirEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; padding: 2px 4px; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(dirEdit, "QLineEdit { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; padding: 2px 4px; font-size: 11px; }");
         auto* browseBtn = new QPushButton("...");
         browseBtn->setFixedWidth(30);
         browseBtn->setStyleSheet(modeBtnStyle);
@@ -2380,7 +2380,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         // Auto-record on TX
         auto* autoRow = new QHBoxLayout;
         auto* autoCheck = new QCheckBox("Auto-record on TX");
-        autoCheck->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(autoCheck, "QCheckBox { color: {{color.text.primary}}; }");
         autoCheck->setChecked(settings.value("QsoRecordingAutoRecord", "False").toString() == "True");
         connect(autoCheck, &QCheckBox::toggled, this, [](bool on) {
             auto& s = AppSettings::instance();
@@ -2391,13 +2391,13 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
         // Idle timeout
         auto* timeoutLabel = new QLabel("Idle timeout:");
-        timeoutLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(timeoutLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
         auto* timeoutSpin = new QSpinBox;
         timeoutSpin->setRange(10, 3600);
         timeoutSpin->setSuffix(" sec");
         timeoutSpin->setValue(settings.value("QsoRecordingIdleTimeout", "120").toInt());
-        timeoutSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; padding: 2px; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(timeoutSpin, "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; padding: 2px; font-size: 11px; }");
         connect(timeoutSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [](int v) {
             auto& s = AppSettings::instance();
             s.setValue("QsoRecordingIdleTimeout", QString::number(v));
@@ -2424,9 +2424,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
         autoStart->setCheckable(true);
         autoStart->setChecked(
             AppSettings::instance().value("BnrAutostart", "False").toString() == "True");
-        autoStart->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(autoStart, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 2px 10px; }"
-            "QPushButton:checked { background: #00607a; color: {{color.text.primary}}; border-color: {{color.accent}}; }"));
+            "QPushButton:checked { background: #00607a; color: {{color.text.primary}}; border-color: {{color.accent}}; }");
         autoRow->addWidget(autoStart);
 
         // Container name
@@ -2435,8 +2435,8 @@ QWidget* RadioSetupDialog::buildAudioTab()
         auto* nameEdit = new QLineEdit(
             AppSettings::instance().value("BnrContainerName", "maxine-bnr").toString());
         nameEdit->setFixedWidth(120);
-        nameEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 2px 4px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(nameEdit, "QLineEdit { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 2px 4px; }");
         autoRow->addWidget(nameLbl);
         autoRow->addWidget(nameEdit);
         autoRow->addStretch(1);
@@ -2453,9 +2453,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
 
         auto* checkBtn = new QPushButton("Check Status");
         checkBtn->setFixedWidth(90);
-        checkBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(checkBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 2px; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+            "QPushButton:hover { background: {{color.background.1}}; }");
         statusRow->addWidget(checkBtn);
 
         auto* startBtn = new QPushButton("Start");
@@ -2543,7 +2543,7 @@ QWidget* RadioSetupDialog::buildFiltersTab()
         auto* hdr = new QHBoxLayout;
         hdr->addStretch(1);
         auto* modelLbl = new QLabel(m_model->model());
-        modelLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(modelLbl, "QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }");
         hdr->addWidget(modelLbl);
         vbox->addLayout(hdr);
     }
@@ -2633,10 +2633,10 @@ QWidget* RadioSetupDialog::buildFiltersTab()
 
         auto* chk = new QCheckBox("Use Low Latency Filters for Digital Modes");
         chk->setChecked(m_model->lowLatencyDigital());
-        chk->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(chk, "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
             "QCheckBox::indicator { width: 16px; height: 16px; "
             "border: 2px solid {{color.background.3}}; border-radius: 3px; background: {{color.background.0}}; }"
-            "QCheckBox::indicator:checked { background: {{color.background.2}}; border: 2px solid #00a0e0; }"));
+            "QCheckBox::indicator:checked { background: {{color.background.2}}; border: 2px solid #00a0e0; }");
         connect(chk, &QCheckBox::toggled, this, [this](bool on) {
             m_model->sendCommand(
                 QString("radio set low_latency_digital_modes=%1").arg(on ? 1 : 0));
@@ -2660,18 +2660,18 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         auto* hdr = new QHBoxLayout;
         hdr->addStretch(1);
         auto* modelLbl = new QLabel(m_model->model());
-        modelLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(modelLbl, "QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }");
         hdr->addWidget(modelLbl);
         vbox->addLayout(hdr);
     }
 
     // Sub-tabs: one per XVTR + a "+" tab to add new
     auto* xvtrTabs = new QTabWidget;
-    xvtrTabs->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTabWidget::pane { border: 1px solid {{color.background.2}}; background: {{color.background.0}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(xvtrTabs, "QTabWidget::pane { border: 1px solid {{color.background.2}}; background: {{color.background.0}}; }"
         "QTabBar::tab { background: {{color.background.1}}; color: {{color.text.secondary}}; "
         "border: 1px solid {{color.background.2}}; padding: 3px 10px; margin-right: 2px; }"
         "QTabBar::tab:selected { background: {{color.background.0}}; color: {{color.text.primary}}; "
-        "border-bottom-color: {{color.background.0}}; }"));
+        "border-bottom-color: {{color.background.0}}; }");
 
     auto buildXvtrPage = [this, xvtrTabs](int idx, const RadioModel::XvtrInfo& x) {
         auto* pg = new QWidget;
@@ -2711,11 +2711,11 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         auto* rxOnlyBtn = new QPushButton(x.rxOnly ? "Enabled" : "Disabled");
         rxOnlyBtn->setCheckable(true);
         rxOnlyBtn->setChecked(x.rxOnly);
-        rxOnlyBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(rxOnlyBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; "
             "padding: 3px 10px; }"
             "QPushButton:checked { background: #1a5030; color: {{color.accent.success}}; "
-            "border: 1px solid #20a040; }"));
+            "border: 1px solid #20a040; }");
         connect(rxOnlyBtn, &QPushButton::toggled, this, [this, rxOnlyBtn, idx](bool on) {
             rxOnlyBtn->setText(on ? "Enabled" : "Disabled");
             m_model->sendCommand(
@@ -2786,10 +2786,10 @@ QWidget* RadioSetupDialog::buildXvtrTab()
     auto* addPage = new QWidget;
     auto* addVb = new QVBoxLayout(addPage);
     auto* addBtn = new QPushButton("Create New Transverter");
-    addBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(addBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; font-weight: bold; "
         "padding: 8px 20px; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; }");
     connect(addBtn, &QPushButton::clicked, this, [this, xvtrTabs, buildXvtrPage] {
         m_model->sendCmdPublic("xvtr create",
             [this, xvtrTabs, buildXvtrPage](int code, const QString& body) {
@@ -2837,7 +2837,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         auto* hdr = new QHBoxLayout;
         hdr->addStretch(1);
         auto* modelLbl = new QLabel(m_model->model());
-        modelLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(modelLbl, "QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }");
         hdr->addWidget(modelLbl);
         vbox->addLayout(hdr);
     }
@@ -2898,7 +2898,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
 
         auto addHeader = [grid](const QString& text, int col) {
             auto* lbl = new QLabel(text);
-            lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; }");
             grid->addWidget(lbl, 0, col);
         };
         addHeader("Port", 0);
@@ -2908,7 +2908,7 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
         const QStringList tokens = m_model->knownAntennaTokens();
         if (tokens.isEmpty()) {
             auto* empty = new QLabel("Waiting for antenna ports from the radio.");
-            empty->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; padding: 8px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(empty, "QLabel { color: {{color.text.label}}; font-size: 12px; padding: 8px; }");
             grid->addWidget(empty, 1, 0, 1, 4);
             return;
         }
@@ -2932,10 +2932,10 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             grid->addWidget(preview, row, 2);
 
             auto* clearBtn = new QPushButton("Clear");
-            clearBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            AetherSDR::ThemeManager::instance().applyStyleSheet(clearBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; "
                 "font-weight: bold; padding: 3px 10px; }"
-                "QPushButton:hover { background: {{color.background.1}}; }"));
+                "QPushButton:hover { background: {{color.background.1}}; }");
             grid->addWidget(clearBtn, row, 3);
 
             connect(edit, &QLineEdit::textChanged, this,
@@ -2992,7 +2992,7 @@ QWidget* RadioSetupDialog::buildApdTab()
         auto* hdr = new QHBoxLayout;
         hdr->addStretch(1);
         auto* modelLbl = new QLabel(m_model->model());
-        modelLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(modelLbl, "QLabel { color: {{color.accent.bright}}; font-size: 20px; font-weight: bold; }");
         hdr->addWidget(modelLbl);
         vbox->addLayout(hdr);
     }
@@ -3040,10 +3040,10 @@ QWidget* RadioSetupDialog::buildApdTab()
         grid->addWidget(resetLbl, 2, 0);
 
         auto* resetBtn = new QPushButton("Reset");
-        resetBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(resetBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; "
             "font-weight: bold; padding: 3px 16px; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+            "QPushButton:hover { background: {{color.background.1}}; }");
         connect(resetBtn, &QPushButton::clicked, this, [this] {
             m_model->transmitModel().resetApdEqualizer();
         });
@@ -3107,10 +3107,10 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     auto* listLayout = new QVBoxLayout(listGroup);
 
     auto* cableList = new QListWidget;
-    cableList->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QListWidget { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(cableList, "QListWidget { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; "
         "font-size: 11px; }"
         "QListWidget::item { padding: 4px; }"
-        "QListWidget::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }"));
+        "QListWidget::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }");
     listLayout->addWidget(cableList);
     hbox->addWidget(listGroup);
 
@@ -3229,7 +3229,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         catEnabledCheck->setStyleSheet(kCheck);
         hg->addWidget(catEnabledCheck, 1, 0, 1, 2);
         catStatusLabel = new QLabel("Unplugged");
-        catStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(catStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         hg->addWidget(new QLabel("Status:"), 2, 0);
         hg->addWidget(catStatusLabel, 2, 1);
         vbox->addWidget(headerGroup);
@@ -3280,7 +3280,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         bcdEnabledCheck->setStyleSheet(kCheck);
         hg->addWidget(bcdEnabledCheck, 1, 0, 1, 2);
         bcdStatusLabel = new QLabel("Unplugged");
-        bcdStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bcdStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         hg->addWidget(new QLabel("Status:"), 2, 0);
         hg->addWidget(bcdStatusLabel, 2, 1);
         vbox->addWidget(headerGroup);
@@ -3330,7 +3330,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         bitEnabledCheck->setStyleSheet(kCheck);
         hg->addWidget(bitEnabledCheck, 1, 0, 1, 2);
         bitStatusLabel = new QLabel("Unplugged");
-        bitStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bitStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         hg->addWidget(new QLabel("Status:"), 2, 0);
         hg->addWidget(bitStatusLabel, 2, 1);
         vbox->addWidget(headerGroup);
@@ -3345,7 +3345,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         int col = 0;
         for (const auto& h : {"Bit", "En", "Source", "Output", "Polarity", "Band"}) {
             auto* lbl = new QLabel(h);
-            lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; font-weight: bold; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 10px; font-weight: bold; }");
             lbl->setAlignment(Qt::AlignCenter);
             bitGrid->addWidget(lbl, 0, col++);
         }
@@ -3354,7 +3354,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             int row = b + 1;
             auto* bitLabel = new QLabel(QString::number(b));
             bitLabel->setAlignment(Qt::AlignCenter);
-            bitLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 10px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(bitLabel, "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
             bitGrid->addWidget(bitLabel, row, 0);
 
             auto* enCheck = new QCheckBox;
@@ -3441,7 +3441,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         ptEnabledCheck->setStyleSheet(kCheck);
         hg->addWidget(ptEnabledCheck, 1, 0, 1, 2);
         ptStatusLabel = new QLabel("Unplugged");
-        ptStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(ptStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         hg->addWidget(new QLabel("Status:"), 2, 0);
         hg->addWidget(ptStatusLabel, 2, 1);
         vbox->addWidget(headerGroup);
@@ -3893,7 +3893,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         // Paddle swap
         auto* swapCb = new QCheckBox("Paddle Swap (swap dit/dah)");
-        swapCb->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(swapCb, "QCheckBox { color: {{color.text.primary}}; }");
         swapCb->setChecked(AppSettings::instance().value("SerialPaddleSwap", "False").toString() == "True");
         connect(swapCb, &QCheckBox::toggled, this, [](bool on) {
             auto& s = AppSettings::instance();
@@ -3939,10 +3939,10 @@ QWidget* RadioSetupDialog::buildSerialTab()
             closeBtn->setEnabled(open);
             if (open) {
                 statusLabel->setText("Open");
-                statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.success}}; font-size: 11px; }"));
+                AetherSDR::ThemeManager::instance().applyStyleSheet(statusLabel, "QLabel { color: {{color.accent.success}}; font-size: 11px; }");
             } else {
                 statusLabel->setText("Closed");
-                statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+                AetherSDR::ThemeManager::instance().applyStyleSheet(statusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
             }
         };
 
@@ -3966,7 +3966,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
         vbox->addLayout(row);
 
         auto* autoOpen = new QCheckBox("Auto-open serial port on startup");
-        autoOpen->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(autoOpen, "QCheckBox { color: {{color.text.primary}}; }");
         autoOpen->setChecked(settings.value("SerialAutoOpen", "False").toString() == "True");
         connect(autoOpen, &QCheckBox::toggled, this, [](bool on) {
             auto& s = AppSettings::instance();
@@ -3985,7 +3985,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         // Status
         auto* fcStatusLabel = new QLabel("Not detected");
-        fcStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(fcStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_flexControlStatusLabel = fcStatusLabel;
         grid->addWidget(new QLabel("Status:"), 0, 0);
         grid->addWidget(fcStatusLabel, 0, 1);
@@ -3994,9 +3994,9 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* fcDetectBtn = new QPushButton("Detect");
         // Same macOS-native-metrics consideration as the Open/Close pair above.
         fcDetectBtn->setMinimumWidth(80);
-        fcDetectBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(fcDetectBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
             "border: 1px solid {{color.accent.dim}}; padding: 3px; border-radius: 3px; }"
-            "QPushButton:hover { background: {{color.accent.bright}}; }"));
+            "QPushButton:hover { background: {{color.accent.bright}}; }");
         auto* fcCloseBtn = new QPushButton("Close");
         fcCloseBtn->setMinimumWidth(80);
         fcCloseBtn->setStyleSheet(fcDetectBtn->styleSheet());
@@ -4093,7 +4093,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         // Auto-detect checkbox
         auto* autoDetect = new QCheckBox("Auto-detect on startup");
-        autoDetect->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(autoDetect, "QCheckBox { color: {{color.text.primary}}; }");
         autoDetect->setChecked(settings.value("FlexControlAutoDetect", "True").toString() == "True");
         connect(autoDetect, &QCheckBox::toggled, this, [this](bool on) {
             auto& s = AppSettings::instance();
@@ -4104,7 +4104,7 @@ QWidget* RadioSetupDialog::buildSerialTab()
         grid->addWidget(autoDetect, 5, 0, 1, 3);
 
         auto* invertDir = new QCheckBox("Invert tuning direction");
-        invertDir->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(invertDir, "QCheckBox { color: {{color.text.primary}}; }");
         invertDir->setChecked(settings.value("FlexControlInvertDir", "False").toString() == "True");
         m_flexControlInvertCheck = invertDir;
         connect(invertDir, &QCheckBox::toggled, this, [this](bool on) {
@@ -4141,7 +4141,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     // Column headers
     auto addHeader = [&](int col, const QString& text) {
         auto* lbl = new QLabel(text);
-        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; }");
         grid->addWidget(lbl, 0, col);
     };
     addHeader(0, "Device");
@@ -4192,8 +4192,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         } else {
             portSpin->setValue(defaultPort);
         }
-        portSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
-            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(portSpin, "QSpinBox { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+            "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; padding: 2px; }");
         grid->addWidget(portSpin, row, 2);
 
         // Status label
@@ -4401,7 +4401,7 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         "This is needed for remote, VPN, and SmartLink connections. "
         "Configured devices auto-connect when the radio connects.");
     note->setWordWrap(true);
-    note->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; padding: 8px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(note, "QLabel { color: {{color.text.label}}; font-size: 11px; padding: 8px; }");
     vbox->addWidget(note);
 
     vbox->addStretch();
@@ -4465,10 +4465,10 @@ void RadioSetupDialog::setFlexControlConnectionStatus(bool connected, const QStr
                 ? AppSettings::instance().value("FlexControlPort").toString()
                 : port;
             m_flexControlStatusLabel->setText(QString("Connected (%1)").arg(displayPort));
-            m_flexControlStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.success}}; font-size: 11px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_flexControlStatusLabel, "QLabel { color: {{color.accent.success}}; font-size: 11px; }");
         } else {
             m_flexControlStatusLabel->setText("Not detected");
-            m_flexControlStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_flexControlStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         }
     }
     if (m_flexControlCloseButton)
@@ -4513,8 +4513,8 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         auto* globalRadio = new QRadioButton("Global slot index (A=0, B=1, …)");
         auto* radioIdxRadio =
             new QRadioButton("Radio-assigned letter with global subscript (A₂)");
-        globalRadio->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QRadioButton { color: {{color.text.primary}}; font-size: 12px; }"));
-        radioIdxRadio->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QRadioButton { color: {{color.text.primary}}; font-size: 12px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(globalRadio, "QRadioButton { color: {{color.text.primary}}; font-size: 12px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(radioIdxRadio, "QRadioButton { color: {{color.text.primary}}; font-size: 12px; }");
         radioRow->addWidget(globalRadio);
         radioRow->addWidget(radioIdxRadio);
         radioRow->addStretch();
@@ -4563,8 +4563,8 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     auto* modeLayout = new QHBoxLayout;
     auto* defaultsRadio = new QRadioButton("Use Aether defaults");
     auto* customRadio   = new QRadioButton("Custom colors");
-    defaultsRadio->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QRadioButton { color: {{color.text.primary}}; font-size: 12px; }"));
-    customRadio->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QRadioButton { color: {{color.text.primary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(defaultsRadio, "QRadioButton { color: {{color.text.primary}}; font-size: 12px; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(customRadio, "QRadioButton { color: {{color.text.primary}}; font-size: 12px; }");
     modeLayout->addWidget(defaultsRadio);
     modeLayout->addWidget(customRadio);
     modeLayout->addStretch();
@@ -4589,7 +4589,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
 
         auto* lbl = new QLabel(QString(kLetters[i]));
         lbl->setAlignment(Qt::AlignCenter);
-        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
 
         auto* btn = new QPushButton(QString(kLetters[i]));
         btn->setStyleSheet(kBtnBase);
@@ -4605,9 +4605,9 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
     // Reset-all button
     auto* resetRow = new QHBoxLayout;
     auto* resetBtn = new QPushButton("Reset All to Defaults");
-    resetBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(resetBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 11px; padding: 3px 12px; }"
-        "QPushButton:hover { background: {{color.background.1}}; }"));
+        "QPushButton:hover { background: {{color.background.1}}; }");
     resetRow->addWidget(resetBtn);
     resetRow->addStretch();
     grpLayout->addLayout(resetRow);
@@ -4711,7 +4711,7 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         row->setSpacing(8);
 
         auto* clickLabel = new QLabel("Delay (ms):");
-        clickLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 12px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(clickLabel, "QLabel { color: {{color.text.primary}}; font-size: 12px; }");
         row->addWidget(clickLabel);
 
         auto& s = AppSettings::instance();
@@ -4725,14 +4725,14 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         clickSpin->setSuffix(" ms");
         clickSpin->setValue(qBound(0, current, 1000));
         clickSpin->setFixedWidth(110);
-        clickSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; "
-            "border: 1px solid {{color.background.2}}; border-radius: 3px; padding: 2px 4px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(clickSpin, "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; "
+            "border: 1px solid {{color.background.2}}; border-radius: 3px; padding: 2px 4px; }");
         row->addWidget(clickSpin);
 
         auto* resetBtn = new QPushButton("Reset");
-        resetBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(resetBtn, "QPushButton { background: {{color.background.1}}; color: {{color.text.primary}}; "
             "border: 1px solid {{color.background.2}}; border-radius: 3px; padding: 4px 12px; }"
-            "QPushButton:hover { border-color: #60a0c0; }"));
+            "QPushButton:hover { border-color: #60a0c0; }");
         resetBtn->setToolTip(QString("Reset to platform default (%1 ms)")
                              .arg(platformDefault));
         row->addWidget(resetBtn);
@@ -4814,10 +4814,10 @@ QWidget* RadioSetupDialog::buildSmartLinkTab()
     table->verticalHeader()->setVisible(false);
     table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    table->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}};"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(table, "QTableWidget { background: {{color.background.0}}; color: {{color.text.primary}};"
         " gridline-color: {{color.background.1}}; }"
         "QHeaderView::section { background: {{color.background.1}}; color: #b0c4d6;"
-        " padding: 4px; border: none; }"));
+        " padding: 4px; border: none; }");
     grpLay->addWidget(table);
 
     auto* btnRow = new QHBoxLayout;

@@ -29,6 +29,8 @@ public:
     bool extendedMode() const     { return m_extended; }
 
 private:
+    QString handleLineImpl(const QString& line);
+
     // Process a single command (short or long form).
     // Returns the response string.
     QString processCommand(const QString& cmd);

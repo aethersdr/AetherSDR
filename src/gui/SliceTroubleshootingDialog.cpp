@@ -7,6 +7,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QColor>
 #include <QDateTime>
 #include <QDir>
 #include <QFileDialog>
@@ -15,10 +16,14 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSaveFile>
 #include <QTabWidget>
+#include <QTextCursor>
+#include <QTextDocument>
+#include <QTextEdit>
 #include <QVBoxLayout>
 #include <QStringList>
 #include <utility>
@@ -90,9 +95,19 @@ QString formatMeterBullet(const QJsonObject& meter, const QString& prefix = "- "
     return line;
 }
 
+QString formatJsonIntArray(const QJsonArray& values)
+{
+    QStringList parts;
+    for (const QJsonValue& value : values) {
+        if (value.isDouble())
+            parts << QString::number(value.toInt());
+    }
+    return parts.isEmpty() ? QStringLiteral("none") : parts.join(QStringLiteral("`, `"));
+}
+
 QString formatPanBullet(const QJsonObject& pan)
 {
-    return QString(
+    QString line = QString(
         "- `%1` active `%2`, center `%3 MHz`, bandwidth `%4 MHz`, RF gain `%5`, "
         "preamp `%6`, WNB `%7` (`%8`), waterfall `%9`")
         .arg(orPlaceholder(pan["pan_id"].toString()))
@@ -104,6 +119,19 @@ QString formatPanBullet(const QJsonObject& pan)
         .arg(yesNo(pan["wnb_active"].toBool()))
         .arg(formatNumber(pan["wnb_level"], 0))
         .arg(orPlaceholder(pan["waterfall_id"].toString()));
+
+    const QJsonObject status = pan["slice_connection_status"].toObject();
+    if (!status.isEmpty()) {
+        line += QString(" — `%1`: %2 connected `%3`, active `%4`")
+            .arg(orPlaceholder(status["state"].toString(), "unknown"),
+                 orPlaceholder(status["summary"].toString(), "Slice link state unavailable."),
+                 formatJsonIntArray(status["connected_slice_ids"].toArray()),
+                 formatJsonIntArray(status["active_slice_ids"].toArray()));
+        if (status["attention_required"].toBool())
+            line += QStringLiteral(" (attention)");
+    }
+
+    return line;
 }
 
 QString formatXvtrBullet(const QJsonObject& xvtr)
@@ -142,6 +170,11 @@ QString formatBoolValue(const QJsonValue& value)
 QString formatPercentValue(const QJsonValue& value)
 {
     return value.isDouble() ? QString("%1%").arg(qRound(value.toDouble())) : QStringLiteral("n/a");
+}
+
+QString formatHzValue(const QJsonValue& value)
+{
+    return value.isDouble() ? QString("%1 Hz").arg(value.toInt()) : QStringLiteral("n/a");
 }
 
 QString formatAudioDeviceShort(const QJsonObject& device)
@@ -203,6 +236,47 @@ QString formatControlDeviceBullet(const QJsonObject& device)
                  ? QString::number(device["target_slice_id"].toInt())
                  : QStringLiteral("n/a"))
         .arg(orPlaceholder(device["detail"].toString(), "n/a"));
+}
+
+QString formatAudioEndpointBullet(const QJsonObject& endpoint)
+{
+    const QString direction = orPlaceholder(endpoint["direction"].toString(), "n/a").toUpper();
+    const QString kind = orPlaceholder(endpoint["kind"].toString(), "endpoint");
+    const QString backend = orPlaceholder(endpoint["backend"].toString());
+    const QString state = orPlaceholder(endpoint["state"].toString(), "n/a");
+    const QString error = orPlaceholder(endpoint["error"].toString(), "n/a");
+    const QString details = QString("rate `%1`, channels `%2`, format `%3`, resampling `%4`")
+        .arg(formatHzValue(endpoint["sample_rate_hz"]))
+        .arg(endpoint["channel_count"].isDouble()
+                 ? QString::number(endpoint["channel_count"].toInt())
+                 : QStringLiteral("n/a"))
+        .arg(orPlaceholder(endpoint["sample_format"].toString()))
+        .arg(formatBoolValue(endpoint["resampling_active"]));
+
+    QString line = QString("- `%1` [%2 %3]: operational `%4`, running `%5`, state `%6`, error `%7`, backend `%8`, device `%9`, %10")
+        .arg(orPlaceholder(endpoint["name"].toString()))
+        .arg(direction)
+        .arg(kind)
+        .arg(yesNo(endpoint["operational"].toBool()))
+        .arg(yesNo(endpoint["running"].toBool()))
+        .arg(state)
+        .arg(error)
+        .arg(backend)
+        .arg(orPlaceholder(endpoint["device"].toString(), "Unavailable"))
+        .arg(details);
+
+    if (endpoint.contains("buffer_bytes")) {
+        line += QString(", buffer `%1 B`, peak `%2 B`, underruns `%3`")
+            .arg(endpoint["buffer_bytes"].toInt())
+            .arg(endpoint["buffer_peak_bytes"].toInt())
+            .arg(QString::number(endpoint["underrun_count"].toDouble(), 'f', 0));
+    }
+
+    const QString note = endpoint["note"].toString().trimmed();
+    if (!note.isEmpty())
+        line += QString(" — %1").arg(note);
+
+    return line;
 }
 
 QString formatMidiBindingBullet(const QJsonObject& binding, const QString& prefix = "  - ")
@@ -307,11 +381,13 @@ QJsonObject buildClientDspSnapshot(const AudioEngine* audio)
 SliceTroubleshootingDialog::SliceTroubleshootingDialog(RadioModel* model,
                                                        AudioEngine* audio,
                                                        QWidget* parent,
-                                                       SnapshotProvider controlDevicesProvider)
+                                                       SnapshotProvider controlDevicesProvider,
+                                                       SnapshotProvider rendererProvider)
     : QDialog(parent)
     , m_model(model)
     , m_audio(audio)
     , m_controlDevicesProvider(std::move(controlDevicesProvider))
+    , m_rendererProvider(std::move(rendererProvider))
 {
     setWindowTitle("Slice Troubleshooting");
     setMinimumSize(920, 720);
@@ -326,38 +402,57 @@ SliceTroubleshootingDialog::SliceTroubleshootingDialog(RadioModel* model,
         "Use <b>Issue Summary</b> for GitHub reports and <b>JSON</b> for AI-assisted troubleshooting. "
         "This dialog does not re-query the radio.");
     intro->setWordWrap(true);
-    intro->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(intro, "QLabel { color: {{color.text.primary}}; }");
     root->addWidget(intro);
 
-    auto* tabs = new QTabWidget;
+    auto* searchRow = new QHBoxLayout;
+    searchRow->setSpacing(8);
+    auto* searchLabel = new QLabel("Find:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(searchLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    m_searchEdit = new QLineEdit;
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->setPlaceholderText("Search snapshot...");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_searchEdit, "QLineEdit {"
+        "  background: {{color.background.0}};"
+        "  color: {{color.text.primary}};"
+        "  border: 1px solid {{color.background.2}};"
+        "  padding: 4px 6px;"
+        "}");
+    auto* findNextBtn = new QPushButton("Find Next");
+    searchRow->addWidget(searchLabel);
+    searchRow->addWidget(m_searchEdit, 1);
+    searchRow->addWidget(findNextBtn);
+    root->addLayout(searchRow);
+
+    m_tabs = new QTabWidget;
     m_summaryView = new QPlainTextEdit;
     m_summaryView->setReadOnly(true);
     m_summaryView->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_summaryView->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_summaryView, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: #d6e4f2;"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
-        "}"));
-    tabs->addTab(m_summaryView, "Issue Summary");
+        "}");
+    m_tabs->addTab(m_summaryView, "Issue Summary");
 
     m_jsonView = new QPlainTextEdit;
     m_jsonView->setReadOnly(true);
     m_jsonView->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_jsonView->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_jsonView, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: #9ed4ff;"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
-        "}"));
-    tabs->addTab(m_jsonView, "JSON");
-    root->addWidget(tabs, 1);
+        "}");
+    m_tabs->addTab(m_jsonView, "JSON");
+    root->addWidget(m_tabs, 1);
 
     auto* footer = new QHBoxLayout;
     m_statusLabel = new QLabel;
-    m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     footer->addWidget(m_statusLabel, 1);
 
     auto* refreshBtn = new QPushButton("Refresh Snapshot");
@@ -378,6 +473,10 @@ SliceTroubleshootingDialog::SliceTroubleshootingDialog(RadioModel* model,
     connect(copyJsonBtn, &QPushButton::clicked, this, [this] { copyJson(); });
     connect(exportJsonBtn, &QPushButton::clicked, this, [this] { exportJson(); });
     connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+    connect(m_searchEdit, &QLineEdit::textChanged, this, [this] { updateSearchHighlights(); });
+    connect(m_searchEdit, &QLineEdit::returnPressed, this, [this] { findNextMatch(); });
+    connect(findNextBtn, &QPushButton::clicked, this, [this] { findNextMatch(); });
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this] { updateSearchHighlights(); });
 
     refreshSnapshot();
 }
@@ -392,6 +491,12 @@ void SliceTroubleshootingDialog::refreshSnapshot()
     QJsonObject ui;
     ui["controls_locked"] = ::ControlsLock::isLocked();
     m_snapshot["ui"] = ui;
+    m_snapshot["renderer"] = m_rendererProvider
+        ? m_rendererProvider()
+        : QJsonObject{
+            {"available", false},
+            {"description", "Renderer provider unavailable."}
+        };
     m_snapshot["client_dsp"] = buildClientDspSnapshot(m_audio);
 
     const QJsonObject audioDevices = DeviceDiagnostics::buildAudioDevicesSnapshot(m_audio, m_snapshot);
@@ -405,13 +510,14 @@ void SliceTroubleshootingDialog::refreshSnapshot()
             {"note", "No control device provider registered."},
             {"devices", QJsonArray{}}
         };
-    m_snapshot["schema_version"] = 3;
+    m_snapshot["schema_version"] = 5;
 
     m_summaryText = buildSummary(m_snapshot);
     m_jsonText = QString::fromUtf8(QJsonDocument(m_snapshot).toJson(QJsonDocument::Indented));
 
     m_summaryView->setPlainText(m_summaryText);
     m_jsonView->setPlainText(m_jsonText);
+    updateSearchHighlights();
 
     const QJsonObject counts = m_snapshot["counts"].toObject();
     setStatusMessage(QString("Snapshot refreshed: %1 slice(s), %2 global meter(s), %3 total meter(s).")
@@ -465,12 +571,80 @@ void SliceTroubleshootingDialog::setStatusMessage(const QString& message)
     m_statusLabel->setText(message);
 }
 
+QPlainTextEdit* SliceTroubleshootingDialog::activeTextView() const
+{
+    if (m_tabs && m_tabs->currentWidget() == m_jsonView)
+        return m_jsonView;
+    return m_summaryView;
+}
+
+void SliceTroubleshootingDialog::updateSearchHighlights()
+{
+    const QString needle = m_searchEdit ? m_searchEdit->text() : QString();
+    const QColor highlightColor(255, 214, 102, 90);
+
+    int activeMatchCount = 0;
+    for (QPlainTextEdit* view : {m_summaryView, m_jsonView}) {
+        if (!view)
+            continue;
+
+        QList<QTextEdit::ExtraSelection> selections;
+        if (!needle.isEmpty()) {
+            QTextCursor cursor(view->document());
+            while (true) {
+                cursor = view->document()->find(needle, cursor);
+                if (cursor.isNull())
+                    break;
+
+                QTextEdit::ExtraSelection selection;
+                selection.cursor = cursor;
+                selection.format.setBackground(highlightColor);
+                selections.append(selection);
+                if (view == activeTextView())
+                    ++activeMatchCount;
+            }
+        }
+        view->setExtraSelections(selections);
+    }
+
+    if (!needle.isEmpty())
+        setStatusMessage(QString("Search: %1 match(es) in current tab.").arg(activeMatchCount));
+}
+
+void SliceTroubleshootingDialog::findNextMatch()
+{
+    QPlainTextEdit* view = activeTextView();
+    const QString needle = m_searchEdit ? m_searchEdit->text() : QString();
+    if (!view || needle.isEmpty())
+        return;
+
+    QTextCursor cursor = view->textCursor();
+    if (cursor.hasSelection())
+        cursor.setPosition(cursor.selectionEnd());
+
+    QTextCursor match = view->document()->find(needle, cursor);
+    if (match.isNull()) {
+        cursor = QTextCursor(view->document());
+        match = view->document()->find(needle, cursor);
+    }
+
+    if (match.isNull()) {
+        setStatusMessage(QString("Search: `%1` was not found in the current tab.").arg(needle));
+        return;
+    }
+
+    view->setTextCursor(match);
+    view->centerCursor();
+    updateSearchHighlights();
+}
+
 QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
 {
     QStringList lines;
 
     const QJsonObject app = snapshot["app"].toObject();
     const QJsonObject ui = snapshot["ui"].toObject();
+    const QJsonObject renderer = snapshot["renderer"].toObject();
     const QJsonObject radio = snapshot["radio"].toObject();
     const QJsonObject network = radio["network"].toObject();
     const QJsonObject ownership = radio["ownership"].toObject();
@@ -499,6 +673,7 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
     const QJsonObject audioVolumes = audioDevices["volumes"].toObject();
     const QJsonObject rxRoute = audioDevices["rx_route"].toObject();
     const QJsonObject txRoute = audioDevices["tx_route"].toObject();
+    const QJsonArray audioEndpoints = audioDevices["audio_endpoints"].toArray();
     const QJsonObject controlDevices = snapshot["control_devices"].toObject();
 
     lines << "# Slice Troubleshooting Snapshot";
@@ -545,6 +720,15 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
     lines << "## App UI State";
     lines << QString("- Global LCK: `%1`")
                  .arg(yesNo(ui["controls_locked"].toBool()));
+    lines << "";
+
+    lines << "## Renderer";
+    if (!renderer["available"].toBool()) {
+        lines << QString("- %1").arg(orPlaceholder(renderer["description"].toString(), "Renderer state is unavailable."));
+    } else {
+        lines << QString("- Active pan renderer: `%1`")
+                     .arg(orPlaceholder(renderer["description"].toString(), "No active pan"));
+    }
     lines << "";
 
     lines << "## Global Radio State";
@@ -645,9 +829,10 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
     if (!audioDevices["available"].toBool()) {
         lines << "- Live audio engine state is unavailable; Qt Multimedia device enumeration is still included below.";
     }
-    lines << QString("- RX route: `%1` (source `%2`), PC audio enabled `%3`, PC mute `%4`, master `%5`, engine volume `%6`, engine mute `%7`, RX stream `%8`")
+    lines << QString("- RX route: `%1` (source `%2`), negotiated rate `%3`, PC audio enabled `%4`, PC mute `%5`, master `%6`, engine volume `%7`, engine mute `%8`, RX stream `%9`")
                  .arg(orPlaceholder(rxRoute["output"].toString(), "Unknown"))
                  .arg(orPlaceholder(rxRoute["source"].toString()))
+                 .arg(formatHzValue(rxRoute["actual_sample_rate_hz"]))
                  .arg(yesNo(audioVolumes["pc_audio_enabled"].toBool()))
                  .arg(yesNo(audioVolumes["pc_audio_muted"].toBool()))
                  .arg(formatPercentValue(audioVolumes["pc_master_volume_pct"]))
@@ -661,10 +846,14 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
                  .arg(formatBoolValue(rxRoute["remote_audio_rx_remove_requested"]))
                  .arg(formatBoolValue(rxRoute["remote_audio_rx_status_seen"]))
                  .arg(formatBoolValue(rxRoute["remote_audio_rx_owned_by_us"]));
-    lines << QString("- TX input route: `%1` (mic `%2`, DAX `%3`), PC mic gain `%4`, TX stream `%5`, DAX TX mode `%6`, DAX radio route `%7`")
+    lines << QString("- TX input route: `%1` (mic `%2`, DAX `%3`), negotiated rate `%4`, channels `%5`, PC mic gain `%6`, TX stream `%7`, DAX TX mode `%8`, DAX radio route `%9`")
                  .arg(orPlaceholder(txRoute["input"].toString(), "Unknown"))
                  .arg(orPlaceholder(txRoute["mic_selection"].toString()))
                  .arg(yesNo(txRoute["dax_on"].toBool()))
+                 .arg(formatHzValue(txRoute["actual_sample_rate_hz"]))
+                 .arg(txRoute["actual_channel_count"].isDouble()
+                          ? QString::number(txRoute["actual_channel_count"].toInt())
+                          : QStringLiteral("n/a"))
                  .arg(formatPercentValue(audioVolumes["pc_mic_gain_pct"]))
                  .arg(formatBoolValue(audioDevices["tx_streaming"]))
                  .arg(formatBoolValue(audioDevices["dax_tx_mode"]))
@@ -744,21 +933,21 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
     }
     lines << "";
 
+    lines << "## Audio Sinks / Sources";
+    if (audioEndpoints.isEmpty()) {
+        lines << "- No audio endpoint diagnostics are available.";
+    } else {
+        for (const QJsonValue& value : audioEndpoints)
+            lines << formatAudioEndpointBullet(value.toObject());
+    }
+    lines << "";
+
     lines << "## Clients";
     if (ownership["clients"].toArray().isEmpty()) {
         lines << "- No client metadata is currently tracked.";
     } else {
         for (const QJsonValue& value : ownership["clients"].toArray())
             lines << formatClientBullet(value.toObject());
-    }
-    lines << "";
-
-    lines << "## Panadapters";
-    if (snapshot["panadapters"].toArray().isEmpty()) {
-        lines << "- None";
-    } else {
-        for (const QJsonValue& value : snapshot["panadapters"].toArray())
-            lines << formatPanBullet(value.toObject());
     }
     lines << "";
 
@@ -859,6 +1048,15 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
     }
     lines << "";
 
+    lines << "## Panadapters";
+    if (snapshot["panadapters"].toArray().isEmpty()) {
+        lines << "- None";
+    } else {
+        for (const QJsonValue& value : snapshot["panadapters"].toArray())
+            lines << formatPanBullet(value.toObject());
+    }
+    lines << "";
+
     lines << "## Slices";
     const QJsonArray slices = snapshot["slices"].toArray();
     if (slices.isEmpty()) {
@@ -884,6 +1082,7 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
             const QJsonObject digital = slice["digital"].toObject();
             const QJsonObject fm = slice["fm"].toObject();
             const QJsonObject pan = slice["panadapter_state"].toObject();
+            const QJsonObject panConnection = slice["panadapter_connection_status"].toObject();
             const QString sliceRxRoute = orPlaceholder(audio["rx_route"].toString(), "Unknown");
             const QString sliceRxTarget = sliceRxRoute == QStringLiteral("PC audio")
                 ? orPlaceholder(audio["selected_output_device"].toString(), "Unavailable")
@@ -896,6 +1095,16 @@ QString SliceTroubleshootingDialog::buildSummary(const QJsonObject& snapshot)
                          .arg(yesNo(slice["tx_slice"].toBool()))
                          .arg(formatNumber(slice["frequency_mhz"], 6))
                          .arg(orPlaceholder(slice["mode"].toString()));
+            if (!panConnection.isEmpty()) {
+                QString linkLine = QString("- Pan link: `%1`, pan present `%2`, active pan `%3` — %4")
+                    .arg(orPlaceholder(panConnection["state"].toString(), "unknown"))
+                    .arg(yesNo(panConnection["panadapter_present"].toBool()))
+                    .arg(yesNo(panConnection["active_panadapter"].toBool()))
+                    .arg(orPlaceholder(panConnection["summary"].toString(), "Panadapter link state unavailable."));
+                if (panConnection["attention_required"].toBool())
+                    linkLine += QStringLiteral(" (attention)");
+                lines << linkLine;
+            }
             lines << QString("- Filter: `%1..%2 Hz`, step `%3 Hz`, modes `%4`")
                          .arg(filter["low_hz"].toInt())
                          .arg(filter["high_hz"].toInt())

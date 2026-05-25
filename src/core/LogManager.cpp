@@ -198,7 +198,7 @@ QString LogManager::logFilePath() const
         return m_activeLogFilePath;
     }
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/aethersdr.log";
+           + "/AetherSDR/logs/aethersdr.log";
 }
 
 void LogManager::setActiveLogFilePath(const QString& path)

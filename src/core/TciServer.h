@@ -96,6 +96,7 @@ public:
     // Wire slice signals for state change broadcasts
     void wireSlice(int trx, SliceModel* slice);
     void wireSpotModel();
+    void notifySpotClicked(int spotIndex, SliceModel* slice = nullptr);
 
 public slots:
     // RX audio from main audio pipeline (float32 stereo, 24 kHz)
@@ -139,6 +140,9 @@ private slots:
 
 private:
     void sendInitBurst(QWebSocket* client);
+    void broadcastSpotClicked(const QString& callsign, long long frequencyHz,
+                              int trx, int channel);
+    SliceModel* sliceForPanId(const QString& panId) const;
     void broadcast(const QString& msg);
     void broadcastBinary(const QByteArray& data);
     void startTxChrono(QWebSocket* client, int trx);

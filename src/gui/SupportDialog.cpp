@@ -60,7 +60,7 @@ void SupportDialog::buildUI()
         auto* cb = new QCheckBox(cat.label);
         cb->setToolTip(cat.description);
         cb->setChecked(cat.enabled);
-        cb->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(cb, "QCheckBox { color: {{color.text.primary}}; }");
         gridLayout->addWidget(cb, row, col);
 
         connect(cb, &QCheckBox::toggled, this, [id = cat.id](bool on) {
@@ -105,13 +105,13 @@ void SupportDialog::buildUI()
     m_logViewer = new QPlainTextEdit;
     m_logViewer->setReadOnly(true);
     m_logViewer->setMaximumBlockCount(2000);
-    m_logViewer->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_logViewer, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: {{color.text.secondary}};"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
-        "}"));
+        "}");
     layout->addWidget(m_logViewer, 1);  // stretch
 
     // ── Log action buttons ────────────────────────────────────────────────
@@ -131,7 +131,7 @@ void SupportDialog::buildUI()
     connect(resetBtn, &QPushButton::clicked, this, &SupportDialog::resetSettings);
     auto* sendBtn = new QPushButton("File an Issue");
     sendBtn->setFixedHeight(26);
-    sendBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #00607a; color: {{color.text.primary}}; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(sendBtn, "QPushButton { background: #00607a; color: {{color.text.primary}}; font-weight: bold; }");
     connect(sendBtn, &QPushButton::clicked, this, [this]() {
         // Create support bundle
         SupportBundle::RadioInfo radio;

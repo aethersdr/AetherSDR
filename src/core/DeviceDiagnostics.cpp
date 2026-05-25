@@ -237,6 +237,18 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
     rxRoute["output"] = pcAudioEnabled ? "PC audio" : "Radio audio";
     rxRoute["source"] = "PcAudioEnabled app setting";
     rxRoute["selected_output_device"] = selectedOutput.description();
+    rxRoute["actual_sample_rate_hz"] = (audio && audio->isRxStreaming())
+        ? QJsonValue(audio->rxBufferSampleRate())
+        : QJsonValue();
+    rxRoute["actual_channel_count"] = (audio && audio->isRxStreaming())
+        ? QJsonValue(2)
+        : QJsonValue();
+    rxRoute["actual_sample_format"] = (audio && audio->isRxStreaming())
+        ? QJsonValue(QStringLiteral("Float"))
+        : QJsonValue();
+    rxRoute["resampling_active"] = (audio && audio->isRxStreaming())
+        ? QJsonValue(audio->rxOutputResamplingActive())
+        : QJsonValue();
     rxRoute["radio_lineout_available"] = true;
     rxRoute["remote_audio_rx_stream_id"] = remoteAudioRx["stream_id"];
     rxRoute["remote_audio_rx_stream_id_known"] = remoteAudioRx["stream_id_known"];
@@ -255,6 +267,18 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
     if (mic.contains(QStringLiteral("dax_on")))
         txRoute["dax_on"] = mic["dax_on"].toBool();
     txRoute["selected_input_device"] = selectedInput.description();
+    txRoute["actual_sample_rate_hz"] = (audio && audio->isTxStreaming())
+        ? QJsonValue(audio->txInputSampleRate())
+        : QJsonValue();
+    txRoute["actual_channel_count"] = (audio && audio->isTxStreaming())
+        ? QJsonValue(audio->txInputChannelCount())
+        : QJsonValue();
+    txRoute["actual_sample_format"] = (audio && audio->isTxStreaming())
+        ? QJsonValue(QStringLiteral("Int16"))
+        : QJsonValue();
+    txRoute["resampling_to_24k"] = (audio && audio->isTxStreaming())
+        ? QJsonValue(audio->txInputResamplingTo24k())
+        : QJsonValue();
     // Surface the active TX slice's id, mode, and per-slice DAX channel here
     // so the bundle's TX route summary has the same context a triager would
     // otherwise have to cross-reference from the per-slice section. WSJT-X /
@@ -301,6 +325,7 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
         obj["tx_streaming"] = audio->isTxStreaming();
         obj["dax_tx_mode"] = audio->isDaxTxMode();
         obj["dax_tx_use_radio_route"] = audio->daxTxUseRadioRoute();
+        obj["audio_endpoints"] = audio->audioEndpointDiagnostics();
     } else {
         volumes["engine_rx_volume_pct"] = QJsonValue();
         volumes["engine_rx_muted"] = QJsonValue();
@@ -309,6 +334,7 @@ QJsonObject buildAudioDevicesSnapshot(const AudioEngine* audio, const QJsonObjec
         obj["tx_streaming"] = QJsonValue();
         obj["dax_tx_mode"] = QJsonValue();
         obj["dax_tx_use_radio_route"] = QJsonValue();
+        obj["audio_endpoints"] = QJsonArray{};
     }
 
     obj["volumes"] = volumes;

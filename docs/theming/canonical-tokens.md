@@ -59,7 +59,7 @@ single-use colours snap to the nearest canonical neighbour.
 |---|---|---|
 | `color.accent` | `#00b4d8` | `#00b4d8` (170) — primary brand cyan, untouched |
 | `color.accent.bright` | `#00c8f0` | `#00c8f0` (20), `#00c8ff` (15) ≈ 35 refs — hover / focused states |
-| `color.accent.dim` | `#0090e0` | `#0090e0` (35), `#0070c0` (27), `#008ba8` (13), `#4db8d4` (17) ≈ 92 refs — desaturated cyan for non-primary surfaces |
+| `color.accent.dim` | `#0070c0` | `#0090e0` (35), `#0070c0` (27), `#008ba8` (13), `#4db8d4` (17) ≈ 92 refs — desaturated cyan for non-primary surfaces; canonical value matches the legacy `kBlueActive` checked-button fill so tokenised active states render identically to pre-refactor sites |
 
 ### Status accents
 

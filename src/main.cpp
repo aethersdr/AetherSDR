@@ -158,13 +158,108 @@ int main(int argc, char* argv[])
     // Shows the system prompt on first launch so it's ready before PTT.
     requestMicrophonePermission();
 
-    // Set up file logging in ~/.config/AetherSDR/ (works inside AppImage where
-    // applicationDirPath() is read-only).
-    // Use GenericConfigLocation + app name to avoid the double-nested
-    // ~/.config/AetherSDR/AetherSDR/ path that AppConfigLocation produces.
-    const QString logDir = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-                           + "/AetherSDR";
+    // One-shot config-dir migration: the older releases wrote some user data
+    // (FFTW wisdom, ChannelStrip presets, firmware files, user themes, the
+    // ONNX signal-classifier model) under QStandardPaths::AppConfigLocation,
+    // which resolves to a double-nested ~/.config/AetherSDR/AetherSDR/ (or
+    // %LOCALAPPDATA%/AetherSDR/AetherSDR/ on Windows, or the equivalent on
+    // macOS) because both organizationName and applicationName are
+    // "AetherSDR".  The new release uses GenericConfigLocation + "/AetherSDR"
+    // everywhere — a single ~/.config/AetherSDR/ matching the AppSettings
+    // file's location.  This block migrates any data the operator already
+    // has at the old path up to the new path.
+    //
+    // Idempotent: skips items whose target already exists, then removes the
+    // old dir if it ends up empty.  Subsequent launches early-return because
+    // the old dir no longer exists.
+    {
+        const QString newDir = QStandardPaths::writableLocation(
+                                   QStandardPaths::GenericConfigLocation)
+                               + QStringLiteral("/AetherSDR");
+        const QString oldDir = QStandardPaths::writableLocation(
+                                   QStandardPaths::AppConfigLocation);
+        if (newDir != oldDir && QDir(oldDir).exists()) {
+            QDir().mkpath(newDir);
+            const QDir od(oldDir);
+            const auto entries = od.entryList(QDir::NoDotAndDotDot | QDir::AllEntries
+                                              | QDir::Hidden | QDir::System);
+            int moved = 0, skipped = 0;
+            for (const QString& entry : entries) {
+                const QString src = oldDir + QLatin1Char('/') + entry;
+                const QString dst = newDir + QLatin1Char('/') + entry;
+                if (QFileInfo::exists(dst)) {
+                    qDebug() << "Config-dir migration: skipping" << src
+                             << "— target already exists at" << dst;
+                    ++skipped;
+                    continue;
+                }
+                // QFile::rename handles both regular files and directories
+                // on Linux (rename(2) is happy with both as long as src and
+                // dst are on the same filesystem, which they are by
+                // construction).  Same path family on Windows / macOS.
+                if (QFile::rename(src, dst)) {
+                    qDebug() << "Config-dir migration: moved" << src << "to" << dst;
+                    ++moved;
+                } else {
+                    qWarning() << "Config-dir migration: failed to move"
+                               << src << "to" << dst;
+                }
+            }
+            // rmdir succeeds only if oldDir is empty after the moves —
+            // anything we skipped or couldn't move stays put.
+            if (QDir().rmdir(oldDir)) {
+                qDebug() << "Config-dir migration: removed empty" << oldDir
+                         << "(moved" << moved << "skipped" << skipped << ")";
+            } else if (moved + skipped > 0) {
+                qDebug() << "Config-dir migration:" << oldDir
+                         << "retained (contains unrecognised entries; moved"
+                         << moved << "skipped" << skipped << ")";
+            }
+        }
+    }
+
+    // Set up file logging in ~/.config/AetherSDR/logs/.  The dedicated
+    // logs/ subdir keeps the rotated debug files out of the config-root
+    // listing (which was getting crowded with 50+ aethersdr-*.log files
+    // sitting alongside the actual settings).  GenericConfigLocation +
+    // app name still avoids the AppConfigLocation double-nest.
+    const QString configRoot = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+                               + "/AetherSDR";
+    const QString logDir = configRoot + "/logs";
     QDir().mkpath(logDir);
+    // Source-feed logs (dxcluster.log, rbn.log, wsjtx.log, …) live in
+    // their own subdir so they don't mingle with the application logs.
+    QDir().mkpath(configRoot + "/spothub");
+
+    // One-shot migration of the existing root-level log files into the
+    // new subdirs.  Each rename() is best-effort; failures fall through
+    // so the app keeps working with whatever can be moved.
+    {
+        QDir rootDir(configRoot);
+        // App debug logs — every aethersdr-*.log, plus the aethersdr.log
+        // symlink (we remove it; LogManager will recreate inside logs/).
+        for (const QString& f : rootDir.entryList({"aethersdr-*.log"},
+                                                  QDir::Files | QDir::Hidden)) {
+            const QString src = configRoot + "/" + f;
+            const QString dst = logDir     + "/" + f;
+            if (!QFileInfo::exists(dst))
+                QFile::rename(src, dst);
+        }
+        const QString oldSymlink = configRoot + "/aethersdr.log";
+        if (QFileInfo(oldSymlink).isSymLink() || QFile::exists(oldSymlink))
+            QFile::remove(oldSymlink);
+
+        // SpotHub source feeds.
+        for (const QString& f : QStringList{
+                 "dxcluster.log",   "spotcollector.log", "wsjtx.log",
+                 "freedv.log",      "pota.log",          "rbn.log",
+                 "pskreporter.log"}) {
+            const QString src = configRoot + "/" + f;
+            const QString dst = configRoot + "/spothub/" + f;
+            if (QFileInfo::exists(src) && !QFileInfo::exists(dst))
+                QFile::rename(src, dst);
+        }
+    }
 
     // Load AppSettings before pruning/log-start so retention config and the
     // active-file size cap (AppSettings["LogRetention"], #2498) are available

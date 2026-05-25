@@ -133,11 +133,11 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
     // Toggle button (arrow)
     m_toggleBtn = new QPushButton(this);
     m_toggleBtn->setFixedSize(BTN_W, BTN_H);
-    m_toggleBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: rgba(20, 30, 45, 240); "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_toggleBtn, "QPushButton { background: rgba(20, 30, 45, 240); "
         "border: 1px solid rgba(255, 255, 255, 40); border-radius: 2px; "
         "color: {{color.text.primary}}; font-size: 13px; font-weight: bold; }"
         "QPushButton:hover { background: rgba(0, 112, 192, 180); "
-        "border: 1px solid {{color.accent.dim}}; }"));
+        "border: 1px solid {{color.accent.dim}}; }");
     connect(m_toggleBtn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggle);
 
     // Menu buttons — Band, ANT, DSP handled specially (sub-panels)
@@ -219,8 +219,8 @@ void SpectrumOverlayMenu::setMemories(const QMap<int, MemoryEntry>& memories)
 void SpectrumOverlayMenu::buildBandPanel()
 {
     m_bandPanel = new QWidget(parentWidget());
-    m_bandPanel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: rgba(15, 15, 26, 220); "
-                                "border: 1px solid {{color.background.2}}; border-radius: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bandPanel, "QWidget { background: rgba(15, 15, 26, 220); "
+                                "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
     m_bandPanel->hide();
 
     auto* grid = new QGridLayout(m_bandPanel);
@@ -435,11 +435,11 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_wnbBtn = new QPushButton("WNB");
     m_wnbBtn->setCheckable(true);
     m_wnbBtn->setFixedSize(48, 22);
-    m_wnbBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wnbBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 2px; color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"
         "QPushButton:checked { background: {{color.background.2}}; color: {{color.text.primary}}; "
         "border: 1px solid {{color.accent.dim}}; }"
-        "QPushButton:hover { border: 1px solid {{color.accent.dim}}; }"));
+        "QPushButton:hover { border: 1px solid {{color.accent.dim}}; }");
     wnbRow->addWidget(m_wnbBtn);
     m_wnbSlider = new GuardedSlider(Qt::Horizontal);
     m_wnbSlider->setRange(0, 100);
@@ -861,8 +861,8 @@ void SpectrumOverlayMenu::updateLayout()
 void SpectrumOverlayMenu::buildDisplayPanel()
 {
     m_displayPanel = new QWidget(parentWidget());
-    m_displayPanel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: rgba(15, 15, 26, 220); "
-                                   "border: 1px solid {{color.background.2}}; border-radius: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_displayPanel, "QWidget { background: rgba(15, 15, 26, 220); "
+                                   "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
     m_displayPanel->hide();
 
     auto* grid = new QGridLayout(m_displayPanel);
@@ -1556,8 +1556,8 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     }
 
     m_bandPanel = new QWidget(parentWidget());
-    m_bandPanel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: rgba(15, 15, 26, 220); "
-                                "border: 1px solid {{color.background.2}}; border-radius: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bandPanel, "QWidget { background: rgba(15, 15, 26, 220); "
+                                "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
     m_bandPanel->hide();
     m_bandPanel->installEventFilter(this);
 
@@ -1690,8 +1690,8 @@ void SpectrumOverlayMenu::setXvtrBands(const QVector<XvtrBand>& bands)
     }
 
     m_xvtrPanel = new QWidget(parentWidget());
-    m_xvtrPanel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: rgba(15, 15, 26, 220); "
-                                "border: 1px solid {{color.background.2}}; border-radius: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_xvtrPanel, "QWidget { background: rgba(15, 15, 26, 220); "
+                                "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
     m_xvtrPanel->hide();
     m_xvtrPanel->installEventFilter(this);
     m_xvtrPanelVisible = false;

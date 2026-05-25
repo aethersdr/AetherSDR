@@ -52,6 +52,7 @@
 #include <QDateTime>
 #include <QtEndian>
 #include <QThread>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStringList>
@@ -112,6 +113,17 @@ QString audioErrorName(QAudio::Error error)
 #endif
     case QAudio::FatalError: return QStringLiteral("FatalError");
     default: return QStringLiteral("UnknownError");
+    }
+}
+
+QString audioStateName(QAudio::State state)
+{
+    switch (state) {
+    case QAudio::ActiveState: return QStringLiteral("Active");
+    case QAudio::SuspendedState: return QStringLiteral("Suspended");
+    case QAudio::StoppedState: return QStringLiteral("Stopped");
+    case QAudio::IdleState: return QStringLiteral("Idle");
+    default: return QStringLiteral("Unknown");
     }
 }
 
@@ -817,6 +829,117 @@ QAudioFormat AudioEngine::makeFormat() const
     fmt.setChannelCount(2);                        // stereo
     fmt.setSampleFormat(QAudioFormat::Float);
     return fmt;
+}
+
+QJsonArray AudioEngine::audioEndpointDiagnostics() const
+{
+    const auto outputDescription = [this]() {
+        const QAudioDevice dev = m_outputDevice.isNull()
+            ? QMediaDevices::defaultAudioOutput()
+            : m_outputDevice;
+        return dev.isNull() ? QStringLiteral("Unavailable") : dev.description();
+    };
+    const auto inputDescription = [this]() {
+        const QAudioDevice dev = m_inputDevice.isNull()
+            ? QMediaDevices::defaultAudioInput()
+            : m_inputDevice;
+        return dev.isNull() ? QStringLiteral("Unavailable") : dev.description();
+    };
+
+    QJsonArray endpoints;
+
+    const bool rxRunning = m_audioSink != nullptr;
+    const bool rxDeviceOpen = !m_audioDevice.isNull() && m_audioDevice->isOpen();
+    QJsonObject rx;
+    rx["name"] = QStringLiteral("RX output");
+    rx["direction"] = QStringLiteral("rx");
+    rx["kind"] = QStringLiteral("sink");
+    rx["backend"] = QStringLiteral("QAudioSink");
+    rx["device"] = outputDescription();
+    rx["running"] = rxRunning;
+    rx["operational"] = rxRunning && rxDeviceOpen;
+    rx["device_open"] = rxDeviceOpen;
+    rx["state"] = rxRunning ? audioStateName(m_audioSink->state()) : QStringLiteral("Stopped");
+    rx["error"] = rxRunning ? audioErrorName(m_audioSink->error()) : QStringLiteral("NoError");
+    rx["sample_rate_hz"] = rxRunning ? QJsonValue(m_rxBufferSampleRate.load()) : QJsonValue();
+    rx["channel_count"] = rxRunning ? QJsonValue(2) : QJsonValue();
+    rx["sample_format"] = rxRunning ? QStringLiteral("Float") : QString();
+    rx["resampling_active"] = rxRunning ? QJsonValue(m_resampleTo48k) : QJsonValue();
+    rx["buffer_bytes"] = static_cast<double>(m_rxBufferBytes.load());
+    rx["buffer_peak_bytes"] = static_cast<double>(m_rxBufferPeakBytes.load());
+    rx["underrun_count"] = static_cast<double>(m_rxBufferUnderrunCount.load());
+    endpoints.append(rx);
+
+    const bool txRunning = m_audioSource != nullptr;
+#ifdef Q_OS_MAC
+    const bool txDeviceOpen = m_micBuffer && m_micBuffer->isOpen();
+#else
+    const bool txDeviceOpen = !m_micDevice.isNull() && m_micDevice->isOpen();
+#endif
+    QJsonObject tx;
+    tx["name"] = QStringLiteral("TX input");
+    tx["direction"] = QStringLiteral("tx");
+    tx["kind"] = QStringLiteral("source");
+    tx["backend"] = QStringLiteral("QAudioSource");
+    tx["device"] = inputDescription();
+    tx["running"] = txRunning;
+    tx["operational"] = txRunning && txDeviceOpen;
+    tx["device_open"] = txDeviceOpen;
+    tx["state"] = txRunning ? audioStateName(m_audioSource->state()) : QStringLiteral("Stopped");
+    tx["error"] = txRunning ? audioErrorName(m_audioSource->error()) : QStringLiteral("NoError");
+    tx["sample_rate_hz"] = txRunning ? QJsonValue(m_txInputRate) : QJsonValue();
+    tx["channel_count"] = txRunning ? QJsonValue(m_txInputChannels) : QJsonValue();
+    tx["sample_format"] = txRunning ? QStringLiteral("Int16") : QString();
+    tx["resampling_active"] = txRunning ? QJsonValue(m_txNeedsResample) : QJsonValue();
+    tx["note"] = m_txInputMono ? QStringLiteral("mono input promoted to stereo for radio TX") : QString();
+    endpoints.append(tx);
+
+    const bool sidetoneRunning = m_sidetoneSink && m_sidetoneSink->isRunning();
+    QJsonObject sidetone;
+    sidetone["name"] = QStringLiteral("CW sidetone");
+    sidetone["direction"] = QStringLiteral("tx");
+    sidetone["kind"] = QStringLiteral("sink");
+    sidetone["backend"] = m_sidetoneSink
+        ? QString::fromLatin1(m_sidetoneSink->name())
+        : QStringLiteral("not initialized");
+    sidetone["device"] = m_sidetoneSink && !m_sidetoneSink->deviceDescription().trimmed().isEmpty()
+        ? m_sidetoneSink->deviceDescription()
+        : outputDescription();
+    sidetone["running"] = sidetoneRunning;
+    sidetone["operational"] = sidetoneRunning;
+    sidetone["device_open"] = sidetoneRunning;
+    sidetone["state"] = sidetoneRunning ? QStringLiteral("Active") : QStringLiteral("Stopped");
+    sidetone["error"] = QStringLiteral("NoError");
+    sidetone["sample_rate_hz"] = sidetoneRunning ? QJsonValue(m_sidetoneSink->actualRateHz()) : QJsonValue();
+    sidetone["channel_count"] = sidetoneRunning ? QJsonValue(2) : QJsonValue();
+    sidetone["sample_format"] = QString();
+    sidetone["resampling_active"] = QJsonValue();
+    sidetone["note"] = m_sidetoneSink && m_sidetoneSink->fallbackOccurred()
+        ? m_sidetoneSink->fallbackReason()
+        : QString();
+    endpoints.append(sidetone);
+
+    const bool quindarRunning = m_quindarLocalSink && m_quindarLocalSink->isRunning();
+    QJsonObject quindar;
+    quindar["name"] = QStringLiteral("Quindar local monitor");
+    quindar["direction"] = QStringLiteral("tx");
+    quindar["kind"] = QStringLiteral("sink");
+    quindar["backend"] = QStringLiteral("QAudioSink");
+    quindar["device"] = outputDescription();
+    quindar["running"] = quindarRunning;
+    quindar["operational"] = quindarRunning;
+    quindar["device_open"] = quindarRunning;
+    quindar["state"] = quindarRunning ? QStringLiteral("Active") : QStringLiteral("Stopped");
+    quindar["error"] = QStringLiteral("NoError");
+    quindar["sample_rate_hz"] = quindarRunning ? QJsonValue(m_quindarLocalSink->actualRateHz()) : QJsonValue();
+    quindar["channel_count"] = quindarRunning ? QJsonValue(2) : QJsonValue();
+    quindar["sample_format"] = quindarRunning ? QStringLiteral("Float") : QString();
+    quindar["resampling_active"] = quindarRunning
+        ? QJsonValue(m_quindarLocalSink->actualRateHz() != 48000)
+        : QJsonValue();
+    endpoints.append(quindar);
+
+    return endpoints;
 }
 
 // ─── RX stream ───────────────────────────────────────────────────────────────
@@ -3335,7 +3458,11 @@ static QString wisdomDir()
     // Windows: use %APPDATA%/AetherSDR/
     QString dir = QDir::homePath() + "/AppData/Roaming/AetherSDR/";
 #else
-    QString dir = QDir::homePath() + "/.config/AetherSDR/AetherSDR/";
+    // Singular ~/.config/AetherSDR/ — matches AppSettings, the log dir,
+    // and the other ConfigLocation users.  Pre-fix this was the
+    // double-nested ~/.config/AetherSDR/AetherSDR/ path, which forced an
+    // FFTW wisdom regeneration on first launch after the dir unified.
+    QString dir = QDir::homePath() + "/.config/AetherSDR/";
 #endif
     QDir().mkpath(dir);
     return dir;

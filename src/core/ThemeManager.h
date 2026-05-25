@@ -1,16 +1,20 @@
 #pragma once
 
 #include <QObject>
+#include <QPoint>
 #include <QString>
 #include <QStringList>
 #include <QHash>
 #include <QColor>
 #include <QFont>
 #include <QBrush>
+#include <QList>
 #include <QPointF>
 #include <QRect>
 #include <QVariant>
 #include <QVector>
+
+#include <functional>
 
 class QWidget;
 
@@ -123,9 +127,47 @@ public:
     void clearWidgetTracking(QWidget* widget);
 
     // Inspector lookup: tokens referenced by the widget's last-applied
-    // stylesheet template.  Empty list if the widget was never themed
-    // through applyStyleSheet().
+    // stylesheet template OR declared explicitly via declareWidgetTokens().
+    // Empty list if the widget was never tracked.
     QStringList tokensForWidget(const QWidget* widget) const;
+
+    // Custom-paint widgets (panadapter, waterfall, meters, slice indicators)
+    // read tokens directly inside paintEvent rather than going through a
+    // stylesheet template, so applyStyleSheet's reverse-map never sees them.
+    // declareWidgetTokens() lets such widgets advertise the tokens they
+    // paint with, so the Phase 5 inspector can answer "what paints this?"
+    // for paint-code regions too.  Re-call to update; entries are cleared
+    // automatically when the widget is destroyed.  Paint-code widgets are
+    // not auto-repainted on themeChanged — they're expected to connect
+    // themselves to themeChanged and call update().
+    void declareWidgetTokens(QWidget* widget, const QStringList& tokens);
+
+    // Sub-region-aware inspector lookup for custom-paint widgets.  Each
+    // ThemeRegion ties a token to a hit-test function evaluated in the
+    // widget's local coordinate system.  Inspector clicks call
+    // tokensAtPoint() to narrow the broad declareWidgetTokens() list down
+    // to just the tokens painting the clicked sub-region.
+    //
+    // Example — a panadapter with separate trace + waterfall areas:
+    //   tm.declareWidgetRegions(spectrum, {
+    //     { "color.spectrum.trace",      [this](QPoint p){ return panRect().contains(p); }, "FFT trace" },
+    //     { "color.waterfall.colormap",  [this](QPoint p){ return wfRect().contains(p);  }, "Waterfall" },
+    //   });
+    //
+    // Multiple regions may match a single point — caller receives all
+    // matches in declaration order so the editor can disambiguate.
+    struct ThemeRegion {
+        QString  token;
+        std::function<bool(QPoint localPos)> hitTest;
+        QString  description;  // optional; shown alongside the token name
+    };
+    void declareWidgetRegions(QWidget* widget, const QList<ThemeRegion>& regions);
+
+    // Returns the tokens whose ThemeRegion::hitTest() matches at `localPos`
+    // for the widget.  Falls back to tokensForWidget() if the widget has
+    // no declared regions (or no region matches the point) — guarantees
+    // the inspector always has something to surface for a tracked widget.
+    QStringList tokensAtPoint(const QWidget* widget, const QPoint& localPos) const;
 
     // Stateless helper exposing the same token-extraction regex used
     // by applyStyleSheet().  Tooling (audit scripts, the Phase 5
@@ -138,9 +180,16 @@ public:
     QString     activeTheme() const;
     bool        setActiveTheme(const QString& name);
 
-    // Phase 1 didn't implement save / import / export — those land with
-    // the editor in Phase 5.  Reserved on the API surface so consumers
-    // can be written against the final shape from day 1.
+    // Phase 5 — editor support.  Enumerate every token and mutate
+    // scalar values in-memory.  Mutations emit themeChanged so every
+    // widget registered through applyStyleSheet re-paints with the new
+    // value on the next event-loop turn.  Edits are session-local
+    // until saved through saveCurrentThemeAs() (writes m_tokens to
+    // `~/.config/AetherSDR/themes/<name>.json`).
+    QStringList allTokenKeys() const;
+    void        setColor(const QString& token, const QColor& color);
+    void        setSizing(const QString& token, int value);
+    bool        saveCurrentThemeAs(const QString& newThemeName);
 
 signals:
     // Fired whenever the active theme changes.  Every widget that reads
@@ -184,10 +233,12 @@ private:
     QString m_activeTheme;
 
     // Reverse-map: widget instance → (template, tokens-it-references).
-    // Populated by applyStyleSheet, drained by onTrackedWidgetDestroyed.
+    // Populated by applyStyleSheet / declareWidgetTokens / declareWidgetRegions,
+    // drained by onTrackedWidgetDestroyed.
     struct TrackedWidget {
-        QString     stylesheetTemplate;
-        QStringList tokens;
+        QString             stylesheetTemplate;
+        QStringList         tokens;
+        QList<ThemeRegion>  regions;
     };
     QHash<QWidget*, TrackedWidget> m_trackedWidgets;
 };

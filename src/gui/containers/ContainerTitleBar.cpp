@@ -67,7 +67,7 @@ ContainerTitleBar::ContainerTitleBar(const QString& title, QWidget* parent)
     // Drag grip glyph (⋮⋮) — purely decorative; actual drag events
     // come from mouseMoveEvent on the bar as a whole.
     auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"));
-    grip->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.text.secondary}}; font-size: 10px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(grip, "QLabel { background: transparent; color: {{color.text.secondary}}; font-size: 10px; }");
     layout->addWidget(grip);
 
     m_titleLabel = new QLabel(title);

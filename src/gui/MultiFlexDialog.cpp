@@ -45,7 +45,7 @@ MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
     // Title
     auto* title = new QLabel("multiFLEX Stations");
     title->setAlignment(Qt::AlignCenter);
-    title->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { font-size: 16px; font-weight: bold; color: {{color.text.primary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(title, "QLabel { font-size: 16px; font-weight: bold; color: {{color.text.primary}}; }");
     root->addWidget(title);
 
     // Enable/disable button
@@ -80,7 +80,7 @@ MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
     auto* pttRow = new QHBoxLayout;
     pttRow->addStretch();
     m_pttLabel = new QLabel;
-    m_pttLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_pttLabel, "QLabel { color: {{color.text.secondary}}; }");
     pttRow->addWidget(m_pttLabel);
     m_pttBtn = new QPushButton("Enable");
     connect(m_pttBtn, &QPushButton::clicked, this, [this]() {

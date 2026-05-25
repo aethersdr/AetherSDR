@@ -61,25 +61,25 @@ void HelpDialog::buildUI(const QString& resourcePath)
     layout->setSpacing(0);
 
     auto* header = new QWidget(this);
-    header->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: {{color.background.0}};"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(header, "background: {{color.background.0}};");
     auto* headerLayout = new QVBoxLayout(header);
     headerLayout->setContentsMargins(20, 18, 20, 14);
     headerLayout->setSpacing(6);
 
     auto* eyebrow = new QLabel("AETHERSDR OFFLINE HELP", header);
-    eyebrow->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.accent}}; font-size: 11px; letter-spacing: 2px;"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(eyebrow, "color: {{color.accent}}; font-size: 11px; letter-spacing: 2px;");
     headerLayout->addWidget(eyebrow);
 
     auto* title = new QLabel(windowTitle(), header);
     title->setWordWrap(true);
-    title->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.primary}}; font-size: 22px; font-weight: 700;"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(title, "color: {{color.text.primary}}; font-size: 22px; font-weight: 700;");
     headerLayout->addWidget(title);
 
     auto* subtitle = new QLabel(
         "Bundled help is available even when your station computer is offline.",
         header);
     subtitle->setWordWrap(true);
-    subtitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.secondary}}; font-size: 12px;"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(subtitle, "color: {{color.text.secondary}}; font-size: 12px;");
     headerLayout->addWidget(subtitle);
 
     auto* findRow = new QWidget(header);
@@ -89,7 +89,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
     findLayout->setSpacing(8);
 
     auto* findLabel = new QLabel("Find:", findRow);
-    findLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.secondary}}; font-size: 12px; font-weight: 700;"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(findLabel, "color: {{color.text.secondary}}; font-size: 12px; font-weight: 700;");
     findLayout->addWidget(findLabel);
 
     m_findEdit = new QLineEdit(findRow);
@@ -136,7 +136,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
     m_findStatus = new QLabel(findRow);
     m_findStatus->setObjectName("helpFindStatus");
     m_findStatus->setMinimumWidth(96);
-    m_findStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.secondary}}; font-size: 11px;"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_findStatus, "color: {{color.text.secondary}}; font-size: 11px;");
     findLayout->addWidget(m_findStatus);
 
     headerLayout->addWidget(findRow);
@@ -145,7 +145,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
 
     auto* separator = new QWidget(this);
     separator->setFixedHeight(1);
-    separator->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: {{color.background.1}};"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(separator, "background: {{color.background.1}};");
     layout->addWidget(separator);
 
     m_browser = new QTextBrowser(this);
@@ -170,7 +170,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
         "code { color: #d8e4ee; background-color: #152230; }"
         "a { color: #00b4d8; text-decoration: none; }");
     m_browser->setMarkdown(loadMarkdown(resourcePath));
-    m_browser->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTextBrowser {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_browser, "QTextBrowser {"
         "  background: {{color.background.0}};"
         "  color: #d8e4ee;"
         "  border: none;"
@@ -207,7 +207,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
         "}"
         "QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {"
         "  width: 0px;"
-        "}"));
+        "}");
     layout->addWidget(m_browser, 1);
 
     connect(m_findEdit, &QLineEdit::textChanged, this, [this](const QString& text) {
@@ -228,7 +228,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
     prevShortcut->setContext(Qt::WidgetShortcut);
 
     auto* footer = new QWidget(this);
-    footer->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("background: {{color.background.0}};"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(footer, "background: {{color.background.0}};");
     auto* footerLayout = new QHBoxLayout(footer);
     footerLayout->setContentsMargins(16, 12, 16, 16);
 
@@ -236,7 +236,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
         "Tip: The Help menu keeps each guide separate so you can reopen just the topic you need.",
         footer);
     hint->setWordWrap(true);
-    hint->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.text.secondary}}; font-size: 11px;"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "color: {{color.text.secondary}}; font-size: 11px;");
     footerLayout->addWidget(hint, 1);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, footer);
@@ -244,7 +244,7 @@ void HelpDialog::buildUI(const QString& resourcePath)
     closeButton->setCursor(Qt::PointingHandCursor);
     closeButton->setAutoDefault(false);
     closeButton->setDefault(false);
-    closeButton->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(closeButton, "QPushButton {"
         "  background: {{color.accent}};"
         "  color: {{color.background.0}};"
         "  font-weight: 700;"
@@ -254,13 +254,13 @@ void HelpDialog::buildUI(const QString& resourcePath)
         "  min-height: 32px;"
         "  padding: 0 18px;"
         "}"
-        "QPushButton:hover { background: #18c8ea; }"));
+        "QPushButton:hover { background: #18c8ea; }");
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::close);
     footerLayout->addWidget(buttons, 0, Qt::AlignRight);
 
     layout->addWidget(footer);
 
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("HelpDialog { background: {{color.background.0}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "HelpDialog { background: {{color.background.0}}; }");
 }
 
 void HelpDialog::focusFindField()

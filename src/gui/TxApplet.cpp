@@ -30,7 +30,7 @@ namespace AetherSDR {
 static QLabel* makeIndicator(const QString& text)
 {
     auto* lbl = new QLabel(text);
-    lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }");
     lbl->setAlignment(Qt::AlignCenter);
     return lbl;
 }
@@ -41,7 +41,7 @@ static void setIndicatorActive(QLabel* lbl, bool active, const QColor& color = Q
         lbl->setStyleSheet(
             QString("QLabel { color: %1; font-size: 9px; font-weight: bold; }").arg(color.name()));
     } else {
-        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.meter.bar.fill}}; font-size: 9px; font-weight: bold; }");
     }
 }
 
@@ -125,7 +125,7 @@ void TxApplet::buildUI()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
         auto* label = new QLabel("RF Power:");
-        label->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(label, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
         label->setFixedWidth(62);
         row->addWidget(label);
 
@@ -138,7 +138,7 @@ void TxApplet::buildUI()
         row->addWidget(m_rfPowerSlider, 1);
 
         m_rfPowerLabel = new QLabel("100");
-        m_rfPowerLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 10px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_rfPowerLabel, "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
         m_rfPowerLabel->setFixedWidth(30);
         m_rfPowerLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row->addWidget(m_rfPowerLabel);
@@ -150,7 +150,7 @@ void TxApplet::buildUI()
         auto* row = new QHBoxLayout;
         row->setSpacing(4);
         auto* label = new QLabel("Tune Pwr:");
-        label->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(label, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
         label->setFixedWidth(62);
         row->addWidget(label);
 
@@ -163,7 +163,7 @@ void TxApplet::buildUI()
         row->addWidget(m_tunePowerSlider, 1);
 
         m_tunePowerLabel = new QLabel("10");
-        m_tunePowerLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 10px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_tunePowerLabel, "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
         m_tunePowerLabel->setFixedWidth(30);
         m_tunePowerLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         row->addWidget(m_tunePowerLabel);
@@ -266,10 +266,10 @@ void TxApplet::buildUI()
         m_apdBtn->setAccessibleName("APD pre-distortion");
         m_apdBtn->setAccessibleDescription("Toggle adaptive pre-distortion");
         m_apdBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
-        m_apdBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_apdBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
             "QPushButton:checked { background: #006030; border: 1px solid #008040; color: {{color.text.primary}}; }"
-            "QPushButton:hover { background: {{color.background.1}}; }"));
+            "QPushButton:hover { background: {{color.background.1}}; }");
         row->addWidget(m_apdBtn, 2);  // 40%
 
         // Inset container for ATU status words (styled like RIT/XIT readout)
@@ -277,8 +277,8 @@ void TxApplet::buildUI()
         inset->setFixedHeight(22);
         inset->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         inset->setObjectName("atuInset");
-        inset->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("#atuInset { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 3px; }"
-            "#atuInset QLabel { border: none; background: transparent; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(inset, "#atuInset { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 3px; }"
+            "#atuInset QLabel { border: none; background: transparent; }");
         auto* insetLayout = new QHBoxLayout(inset);
         insetLayout->setContentsMargins(4, 0, 4, 0);
         insetLayout->setSpacing(2);
@@ -388,15 +388,15 @@ void TxApplet::setTransmitModel(TransmitModel* model)
     // Tune state → red button
     connect(m_model, &TransmitModel::tuneChanged, this, [this](bool tuning) {
         if (tuning) {
-            m_tuneBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #cc2222; border: 1px solid {{color.accent.danger}}; "
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: #cc2222; border: 1px solid {{color.accent.danger}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; "
-                "padding: 2px; }"));
+                "padding: 2px; }");
             m_tuneBtn->setText("TUNING...");
         } else {
-            m_tuneBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; "
                 "padding: 2px; }"
-                "QPushButton:hover { background: {{color.background.1}}; }"));
+                "QPushButton:hover { background: {{color.background.1}}; }");
             m_tuneBtn->setText("TUNE");
         }
     });

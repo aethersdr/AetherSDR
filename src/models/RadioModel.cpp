@@ -223,6 +223,98 @@ QJsonObject panToJson(const PanadapterModel* pan, const QString& activePanId)
     return obj;
 }
 
+QJsonObject panSliceConnectionStatus(const QJsonObject& pan, const QJsonArray& slices)
+{
+    const QString panId = pan["pan_id"].toString();
+    QVector<int> connectedSliceIds;
+    QVector<int> activeSliceIds;
+    QVector<int> txSliceIds;
+
+    for (const QJsonValue& value : slices) {
+        const QJsonObject slice = value.toObject();
+        if (slice["pan_id"].toString() != panId || !slice["slice_id"].isDouble())
+            continue;
+
+        const int sliceId = slice["slice_id"].toInt();
+        connectedSliceIds.append(sliceId);
+        if (slice["active"].toBool())
+            activeSliceIds.append(sliceId);
+        if (slice["tx_slice"].toBool())
+            txSliceIds.append(sliceId);
+    }
+
+    QJsonObject status;
+    status["pan_id"] = panId;
+    status["connected_slice_ids"] = toJsonArray(connectedSliceIds);
+    status["active_slice_ids"] = toJsonArray(activeSliceIds);
+    status["tx_slice_ids"] = toJsonArray(txSliceIds);
+    status["connected_slice_count"] = connectedSliceIds.size();
+    status["active_slice_count"] = activeSliceIds.size();
+    status["has_connected_slice"] = !connectedSliceIds.isEmpty();
+    status["has_active_slice"] = !activeSliceIds.isEmpty();
+    status["has_tx_slice"] = !txSliceIds.isEmpty();
+
+    if (connectedSliceIds.isEmpty()) {
+        status["state"] = QStringLiteral("no_slice_connected");
+        status["attention_required"] = true;
+        status["summary"] = QStringLiteral("No slice connected.");
+        status["possible_issue"] =
+            QStringLiteral("Panadapter exists but no SliceModel references it; the slice may have been closed, failed to attach, or fallen out of the app cache.");
+    } else if (activeSliceIds.size() > 1) {
+        status["state"] = QStringLiteral("multiple_active_slices_connected");
+        status["attention_required"] = true;
+        status["summary"] = QStringLiteral("Multiple active slices are connected to this panadapter.");
+        status["possible_issue"] =
+            QStringLiteral("More than one connected slice is marked active for the same panadapter.");
+    } else if (activeSliceIds.isEmpty()) {
+        status["state"] = QStringLiteral("slice_connected_no_active");
+        status["attention_required"] = false;
+        status["summary"] = QStringLiteral("Slice connected, but none of the connected slices is currently active.");
+    } else {
+        status["state"] = QStringLiteral("active_slice_connected");
+        status["attention_required"] = false;
+        status["summary"] = QStringLiteral("Active slice connected.");
+    }
+
+    return status;
+}
+
+QJsonObject slicePanadapterConnectionStatus(int sliceId,
+                                            const QString& panId,
+                                            bool panadapterPresent,
+                                            bool activePanadapter)
+{
+    QJsonObject status;
+    status["slice_id"] = sliceId;
+    status["pan_id"] = panId;
+    status["panadapter_present"] = panadapterPresent;
+    status["active_panadapter"] = activePanadapter;
+
+    if (panId.trimmed().isEmpty()) {
+        status["state"] = QStringLiteral("no_panadapter_id");
+        status["attention_required"] = true;
+        status["summary"] = QStringLiteral("Slice has no panadapter id.");
+        status["possible_issue"] =
+            QStringLiteral("The slice exists in the app cache without a panadapter association.");
+    } else if (!panadapterPresent) {
+        status["state"] = QStringLiteral("panadapter_missing");
+        status["attention_required"] = true;
+        status["summary"] = QStringLiteral("Slice references a panadapter that is not currently tracked.");
+        status["possible_issue"] =
+            QStringLiteral("The linked panadapter may have closed, crashed, or failed to create before the slice cache was updated.");
+    } else if (!activePanadapter) {
+        status["state"] = QStringLiteral("panadapter_connected_inactive");
+        status["attention_required"] = false;
+        status["summary"] = QStringLiteral("Slice is connected to a tracked, inactive panadapter.");
+    } else {
+        status["state"] = QStringLiteral("active_panadapter_connected");
+        status["attention_required"] = false;
+        status["summary"] = QStringLiteral("Slice is connected to the active panadapter.");
+    }
+
+    return status;
+}
+
 QJsonObject xvtrToJson(const RadioModel::XvtrInfo& xvtr)
 {
     QJsonObject obj;
@@ -1565,6 +1657,13 @@ void RadioModel::setPanDbmRange(float minDbm, float maxDbm)
             .arg(m_activePanId)
             .arg(static_cast<double>(minDbm), 0, 'f', 2)
             .arg(static_cast<double>(maxDbm), 0, 'f', 2));
+}
+
+void RadioModel::setBinauralRx(bool on)
+{
+    if (m_binauralRx == on) return;
+    m_binauralRx = on;
+    sendCmd(QString("radio set binaural_rx=%1").arg(on ? 1 : 0));
 }
 
 void RadioModel::setPanWnb(bool on)
@@ -5489,13 +5588,28 @@ QJsonObject RadioModel::troubleshootingSnapshot() const
         fm["deviation_hz"] = sliceModel->fmDeviation();
         slice["fm"] = fm;
 
-        if (PanadapterModel* pan = panadapter(sliceModel->panId()))
+        PanadapterModel* pan = panadapter(sliceModel->panId());
+        slice["panadapter_connection_status"] =
+            slicePanadapterConnectionStatus(sliceModel->sliceId(),
+                                            sliceModel->panId(),
+                                            pan != nullptr,
+                                            pan && pan->panId() == m_activePanId);
+        if (pan)
             slice["panadapter_state"] = panToJson(pan, m_activePanId);
 
         slice["meters"] = m_meterModel.metersForSource("SLC", sliceModel->sliceId());
         slices.append(slice);
     }
     snapshot["slices"] = slices;
+
+    QJsonArray annotatedPanadapters;
+    for (const QJsonValue& value : panadapters) {
+        QJsonObject pan = value.toObject();
+        pan["slice_connection_status"] = panSliceConnectionStatus(pan, slices);
+        annotatedPanadapters.append(pan);
+    }
+    panadapters = annotatedPanadapters;
+    snapshot["panadapters"] = panadapters;
 
     QJsonObject counts;
     counts["panadapters"] = panadapters.size();

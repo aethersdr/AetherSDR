@@ -26,10 +26,10 @@ public:
     {
         setFlat(false);
         setFixedSize(22, 22);
-        setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
             "border-radius: 3px; padding: 0; margin: 0; min-width: 0; min-height: 0; }"
             "QPushButton:hover { background: {{color.background.1}}; }"
-            "QPushButton:pressed { background: {{color.accent}}; }"));
+            "QPushButton:pressed { background: {{color.accent}}; }");
     }
 protected:
     void paintEvent(QPaintEvent* ev) override {
@@ -109,7 +109,7 @@ void PhoneApplet::buildUI()
 
         auto* lbl = new QLabel("AM\nCarrier:");
         lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
         lbl->setFixedWidth(52);
         row->addWidget(lbl);
         row->addSpacing(10);
@@ -129,7 +129,7 @@ void PhoneApplet::buildUI()
         m_amCarrierLabel = new QLabel("48");
         m_amCarrierLabel->setFixedWidth(26);
         m_amCarrierLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_amCarrierLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_amCarrierLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
         row->addWidget(m_amCarrierLabel);
 
         vbox->addWidget(rowW);
@@ -170,7 +170,7 @@ void PhoneApplet::buildUI()
         m_voxLevelLabel = new QLabel("50");
         m_voxLevelLabel->setFixedWidth(26);
         m_voxLevelLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_voxLevelLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_voxLevelLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
         row->addWidget(m_voxLevelLabel);
 
         vbox->addWidget(rowW);
@@ -186,7 +186,7 @@ void PhoneApplet::buildUI()
 
         auto* lbl = new QLabel("Delay:");
         lbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
         lbl->setFixedWidth(52);
         row->addWidget(lbl);
         row->addSpacing(10);
@@ -205,7 +205,7 @@ void PhoneApplet::buildUI()
         m_voxDelayLabel = new QLabel("50");
         m_voxDelayLabel->setFixedWidth(26);
         m_voxDelayLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_voxDelayLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_voxDelayLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
         row->addWidget(m_voxDelayLabel);
 
         vbox->addWidget(rowW);
@@ -259,7 +259,7 @@ void PhoneApplet::buildUI()
         m_dexpLabel = new QLabel("0");
         m_dexpLabel->setFixedWidth(26);
         m_dexpLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_dexpLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_dexpLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
         row->addWidget(m_dexpLabel);
 
         vbox->addWidget(rowW);
@@ -278,14 +278,14 @@ void PhoneApplet::buildUI()
 
         auto* lowLbl = new QLabel("Low Cut");
         lowLbl->setAlignment(Qt::AlignCenter);
-        lowLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(lowLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
         lowCol->addWidget(lowLbl);
 
         auto* lowRow = new QHBoxLayout;
         lowRow->setSpacing(2);
 
         auto* txLbl = new QLabel("TX");
-        txLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(txLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; font-weight: bold; }");
         txLbl->setFixedWidth(18);
         lowRow->addWidget(txLbl);
 
@@ -314,8 +314,8 @@ void PhoneApplet::buildUI()
         m_lowCutLabel->setAccessibleName("TX low cut frequency");
         m_lowCutLabel->setFixedWidth(46);
         m_lowCutLabel->setAlignment(Qt::AlignCenter);
-        m_lowCutLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
-            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_lowCutLabel, "QLabel { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
+            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; }");
         connect(m_lowCutLabel, &ScrollableLabel::scrolled, this,
                 [lowCutUp, lowCutDown](int dir) {
             if (dir > 0) lowCutUp(); else lowCutDown();
@@ -338,7 +338,7 @@ void PhoneApplet::buildUI()
 
         auto* highLbl = new QLabel("High Cut");
         highLbl->setAlignment(Qt::AlignCenter);
-        highLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(highLbl, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
         highCol->addWidget(highLbl);
 
         auto* highRow = new QHBoxLayout;
@@ -365,8 +365,8 @@ void PhoneApplet::buildUI()
         m_highCutLabel->setAccessibleName("TX high cut frequency");
         m_highCutLabel->setFixedWidth(46);
         m_highCutLabel->setAlignment(Qt::AlignCenter);
-        m_highCutLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
-            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_highCutLabel, "QLabel { font-size: 11px; color: {{color.text.primary}}; background: {{color.background.0}}; "
+            "border: 1px solid {{color.background.1}}; border-radius: 3px; padding: 1px 3px; }");
         connect(m_highCutLabel, &ScrollableLabel::scrolled, this,
                 [highCutUp, highCutDown](int dir) {
             if (dir > 0) highCutUp(); else highCutDown();

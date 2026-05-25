@@ -124,10 +124,10 @@ public:
     {
         setFlat(false);
         setFixedSize(22, 22);
-        setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}}; "
             "border-radius: 3px; padding: 0; margin: 0; min-width: 0; min-height: 0; }"
             "QPushButton:hover { background: {{color.background.1}}; }"
-            "QPushButton:pressed { background: {{color.accent}}; }"));
+            "QPushButton:pressed { background: {{color.accent}}; }");
     }
 protected:
     void paintEvent(QPaintEvent* ev) override {
@@ -166,12 +166,23 @@ static QString panText(int value)
 }
 
 // ── Style constants (matching docs/style/applet-style-guide.md) ───────────────
+//
+// kButtonBase() + kBlueActive() are tokenised through ThemeManager so the
+// filter-preset buttons (1.8K, 2.1K, …) live re-theme alongside the
+// rest of the UI.  Resolved once per file at first use via a Meyer's
+// static — ThemeManager's singleton is up by the time any RxApplet is
+// constructed.
 
-static constexpr const char* kButtonBase =
-    "QPushButton { background: #1a2a3a; border: 1px solid #205070; "
-    "border-radius: 3px; color: #c8d8e8; font-size: 10px; font-weight: bold; "
-    "padding: 1px 2px; }"
-    "QPushButton:hover { background: #204060; }";
+static const QString& kButtonBase()
+{
+    static const QString s = AetherSDR::ThemeManager::instance().resolve(
+        "QPushButton { background: {{color.background.1}}; "
+        "border: 1px solid {{color.background.2}}; "
+        "border-radius: 3px; color: {{color.text.primary}}; "
+        "font-size: 10px; font-weight: bold; padding: 1px 2px; }"
+        "QPushButton:hover { background: {{color.background.2}}; }");
+    return s;
+}
 
 static constexpr const char* kDimLabelStyle =
     "QLabel { color: #8090a0; font-size: 11px; }";
@@ -180,9 +191,14 @@ static constexpr const char* kInsetValueStyle =
     "QLabel { font-size: 10px; background: #0a0a18; border: 1px solid #1e2e3e; "
     "border-radius: 3px; padding: 1px 2px; color: #c8d8e8; }";
 
-static const QString kBlueActive =
-    "QPushButton:checked { background-color: #0070c0; color: #ffffff; "
-    "border: 1px solid #0090e0; }";
+static const QString& kBlueActive()
+{
+    static const QString s = AetherSDR::ThemeManager::instance().resolve(
+        "QPushButton:checked { background: {{color.accent.dim}}; "
+        "color: {{color.text.primary}}; "
+        "border: 1px solid {{color.accent.bright}}; }");
+    return s;
+}
 
 static const QString kGreenActive =
     "QPushButton:checked { background-color: #006040; color: #00ff88; "
@@ -287,7 +303,7 @@ static QPushButton* mkToggle(const QString& text, QWidget* parent = nullptr)
     b->setCheckable(true);
     b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     b->setFixedHeight(20);
-    b->setStyleSheet(kButtonBase);
+    b->setStyleSheet(kButtonBase());
     return b;
 }
 
@@ -348,8 +364,8 @@ void RxApplet::buildUI()
         m_sliceBadge->setFixedSize(20, 20);
         m_sliceBadge->setAlignment(Qt::AlignCenter);
         m_sliceBadge->setTextFormat(Qt::RichText);  // slice letter may be HTML (#2606)
-        m_sliceBadge->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.2}}; color: {{color.text.primary}}; "
-            "border-radius: 3px; font-weight: bold; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_sliceBadge, "QLabel { background: {{color.background.2}}; color: {{color.text.primary}}; "
+            "border-radius: 3px; font-weight: bold; font-size: 11px; }");
         row->addWidget(m_sliceBadge);
 
         // Tune-lock toggle (🔓 unlocked / 🔒 locked)
@@ -397,9 +413,9 @@ void RxApplet::buildUI()
         // TX antenna dropdown (red text, no border)
         m_txAntBtn = new QPushButton("ANT1");
         m_txAntBtn->setFlat(true);
-        m_txAntBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { color: {{color.accent.danger}}; background: transparent; border: none; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_txAntBtn, "QPushButton { color: {{color.accent.danger}}; background: transparent; border: none; "
             "font-size: 10px; font-weight: bold; padding: 0 2px; }"
-            "QPushButton:hover { color: #ff6666; }"));
+            "QPushButton:hover { color: #ff6666; }");
         connect(m_txAntBtn, &QPushButton::clicked, this, [this] {
             QMenu menu(this);
             const QString cur = m_slice ? m_slice->txAntenna() : "";
@@ -424,7 +440,7 @@ void RxApplet::buildUI()
         // Filter width label (e.g. "2.7K") — centered between ANT and QSK
         m_filterWidthLbl = new QLabel("2.7K");
         m_filterWidthLbl->setAlignment(Qt::AlignCenter);
-        m_filterWidthLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.bright}}; font-size: 11px; font-weight: bold; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_filterWidthLbl, "QLabel { color: {{color.accent.bright}}; font-size: 11px; font-weight: bold; }");
         row->addWidget(m_filterWidthLbl);
 
         row->addStretch(1);
@@ -434,9 +450,9 @@ void RxApplet::buildUI()
         m_qskBtn->setCheckable(true);
         m_qskBtn->setFlat(true);
         m_qskBtn->setEnabled(false);
-        m_qskBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { color: {{color.text.secondary}}; background: transparent; border: none; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_qskBtn, "QPushButton { color: {{color.text.secondary}}; background: transparent; border: none; "
             "font-size: 10px; font-weight: bold; padding: 0 2px; }"
-            "QPushButton:checked { color: #ffb800; }"));
+            "QPushButton:checked { color: #ffb800; }");
         row->addWidget(m_qskBtn);
 
         root->addLayout(row);
@@ -451,10 +467,10 @@ void RxApplet::buildUI()
         // TX slice indicator badge — click to set this slice as TX
         m_txBadge = new QPushButton("TX");
         m_txBadge->setFixedSize(20, 20);
-        m_txBadge->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.meter.bar.fill}}; color: {{color.text.primary}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_txBadge, "QPushButton { background: {{color.meter.bar.fill}}; color: {{color.text.primary}}; "
             "border-radius: 3px; border: none; font-weight: bold; font-size: 10px;"
             " padding: 0px; margin: 0px; }"
-            "QPushButton:hover { background: {{color.background.3}}; }"));
+            "QPushButton:hover { background: {{color.background.3}}; }");
         connect(m_txBadge, &QPushButton::clicked, this, [this] {
             if (m_slice) m_slice->setTxSlice(!m_slice->isTxSlice());
         });
@@ -496,15 +512,15 @@ void RxApplet::buildUI()
 
         m_freqLabel = new QLabel("0.000.000");
         m_freqLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        m_freqLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 28px; font-weight: bold;"
-            " background: transparent; padding: 0; margin: 0; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqLabel, "QLabel { color: {{color.text.primary}}; font-size: 28px; font-weight: bold;"
+            " background: transparent; padding: 0; margin: 0; }");
         m_freqLabel->installEventFilter(this);
         m_freqStack->addWidget(m_freqLabel);
 
         m_freqEdit = new QLineEdit;
-        m_freqEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.accent}};"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqEdit, "QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.accent}};"
             " border-radius: 3px; color: #00e5ff; font-size: 20px;"
-            " font-weight: bold; padding: 0 4px; }"));
+            " font-weight: bold; padding: 0 4px; }");
         m_freqEdit->setAlignment(Qt::AlignRight);
         m_freqEdit->setPlaceholderText("MHz");
         m_freqEdit->installEventFilter(this);
@@ -572,8 +588,8 @@ void RxApplet::buildUI()
         m_stepDown  = mkLeft();
         m_stepLabel = new ScrollableLabel(formatStepLabel(m_stepSizes[m_stepIdx]));
         m_stepLabel->setAlignment(Qt::AlignCenter);
-        m_stepLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { font-size: 11px; background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
-            "border-radius: 3px; padding: 1px 2px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_stepLabel, "QLabel { font-size: 11px; background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
+            "border-radius: 3px; padding: 1px 2px; }");
         m_stepUp = mkRight();
 
         auto stepDown = [this] {
@@ -688,9 +704,9 @@ void RxApplet::buildUI()
             m_offsetSpin->setSingleStep(0.1);
             m_offsetSpin->setValue(0.0);
             m_offsetSpin->setSuffix(" Mhz");
-            m_offsetSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDoubleSpinBox { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_offsetSpin, "QDoubleSpinBox { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; padding: 1px 2px; }"
-                "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0; }"));
+                "QDoubleSpinBox::up-button, QDoubleSpinBox::down-button { width: 0; }");
             row->addWidget(m_offsetSpin, 1);
             fmLayout->addLayout(row);
 
@@ -711,14 +727,14 @@ void RxApplet::buildUI()
             row->setSpacing(2);
 
             m_offsetDown = mkToggle(QString::fromUtf8("\xe2\x88\x92")); // −
-            m_offsetDown->setStyleSheet(QString(kButtonBase) + kBlueActive);
+            m_offsetDown->setStyleSheet(kButtonBase() + kBlueActive());
             connect(m_offsetDown, &QPushButton::clicked, this, [this] {
                 applyOffsetDir("down");
             });
             row->addWidget(m_offsetDown);
 
             m_simplexBtn = mkToggle("Simplex");
-            m_simplexBtn->setStyleSheet(QString(kButtonBase) + kBlueActive);
+            m_simplexBtn->setStyleSheet(kButtonBase() + kBlueActive());
             m_simplexBtn->setChecked(true);
             connect(m_simplexBtn, &QPushButton::clicked, this, [this] {
                 applyOffsetDir("simplex");
@@ -726,14 +742,14 @@ void RxApplet::buildUI()
             row->addWidget(m_simplexBtn);
 
             m_offsetUp = mkToggle("+");
-            m_offsetUp->setStyleSheet(QString(kButtonBase) + kBlueActive);
+            m_offsetUp->setStyleSheet(kButtonBase() + kBlueActive());
             connect(m_offsetUp, &QPushButton::clicked, this, [this] {
                 applyOffsetDir("up");
             });
             row->addWidget(m_offsetUp);
 
             m_revBtn = mkToggle("REV");
-            m_revBtn->setStyleSheet(QString(kButtonBase) + kAmberActive);
+            m_revBtn->setStyleSheet(kButtonBase() + kAmberActive);
             connect(m_revBtn, &QPushButton::toggled, this, [this](bool on) {
                 if (m_revBtn->signalsBlocked()) return;
                 if (!m_slice) return;
@@ -768,8 +784,8 @@ void RxApplet::buildUI()
 
         m_muteBtn = new QPushButton(QString::fromUtf8("\xF0\x9F\x94\x8A")); // 🔊
         m_muteBtn->setFixedSize(18, 18);
-        m_muteBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: transparent; border: none; font-size: 12px; padding: 0px; }"
-            "QPushButton:hover { background: {{color.background.1}}; border-radius: 3px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_muteBtn, "QPushButton { background: transparent; border: none; font-size: 12px; padding: 0px; }"
+            "QPushButton:hover { background: {{color.background.1}}; border-radius: 3px; }");
         // Single click toggles this slice; double click toggles all owned
         // slices.  Defer the single-click action by the platform double-
         // click interval so the second click can override it; the visual
@@ -936,12 +952,12 @@ void RxApplet::buildUI()
         row->setSpacing(0);
 
         m_ritOnBtn = mkToggle("RIT");
-        m_ritOnBtn->setStyleSheet(QString(kButtonBase) + kAmberActive);
+        m_ritOnBtn->setStyleSheet(kButtonBase() + kAmberActive);
         row->addWidget(m_ritOnBtn);
 
         m_ritZero = new QPushButton("0");
         m_ritZero->setStyleSheet(
-            QString(kButtonBase) + "QPushButton { padding: 1px 4px; }");
+            kButtonBase() + "QPushButton { padding: 1px 4px; }");
         connect(m_ritZero, &QPushButton::clicked, this, [this] {
             if (m_slice) m_slice->setRit(m_ritOnBtn->isChecked(), 0);
         });
@@ -954,8 +970,8 @@ void RxApplet::buildUI()
 
         m_ritLabel = new ScrollableLabel("+0 Hz");
         m_ritLabel->setAlignment(Qt::AlignCenter);
-        m_ritLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { font-size: 10px; background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
-            "border-radius: 3px; padding: 0px 2px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_ritLabel, "QLabel { font-size: 10px; background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
+            "border-radius: 3px; padding: 0px 2px; }");
         row->addWidget(m_ritLabel, 1);
         connect(m_ritLabel, &ScrollableLabel::scrolled, this, [this](int dir) {
             if (m_slice) m_slice->setRit(m_ritOnBtn->isChecked(),
@@ -988,12 +1004,12 @@ void RxApplet::buildUI()
         row->setSpacing(0);
 
         m_xitOnBtn = mkToggle("XIT");
-        m_xitOnBtn->setStyleSheet(QString(kButtonBase) + kAmberActive);
+        m_xitOnBtn->setStyleSheet(kButtonBase() + kAmberActive);
         row->addWidget(m_xitOnBtn);
 
         m_xitZero = new QPushButton("0");
         m_xitZero->setStyleSheet(
-            QString(kButtonBase) + "QPushButton { padding: 1px 4px; }");
+            kButtonBase() + "QPushButton { padding: 1px 4px; }");
         connect(m_xitZero, &QPushButton::clicked, this, [this] {
             if (m_slice) m_slice->setXit(m_xitOnBtn->isChecked(), 0);
         });
@@ -1006,8 +1022,8 @@ void RxApplet::buildUI()
 
         m_xitLabel = new ScrollableLabel("+0 Hz");
         m_xitLabel->setAlignment(Qt::AlignCenter);
-        m_xitLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { font-size: 10px; background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
-            "border-radius: 3px; padding: 0px 2px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_xitLabel, "QLabel { font-size: 10px; background: {{color.background.0}}; border: 1px solid {{color.background.1}}; "
+            "border-radius: 3px; padding: 0px 2px; }");
         row->addWidget(m_xitLabel, 1);
         connect(m_xitLabel, &ScrollableLabel::scrolled, this, [this](int dir) {
             if (m_slice) m_slice->setXit(m_xitOnBtn->isChecked(),
@@ -1139,7 +1155,7 @@ void RxApplet::applySqlModeVisuals()
     switch (m_sqlMode) {
     case SqlMode::Off:
         m_sqlBtn->setText("SQL");
-        m_sqlBtn->setStyleSheet(QString(kButtonBase) + kDisabledBtn);
+        m_sqlBtn->setStyleSheet(kButtonBase() + kDisabledBtn);
         break;
     case SqlMode::Manual:
         m_sqlBtn->setText("SQL");
@@ -2385,7 +2401,7 @@ void RxApplet::rebuildFilterButtons()
     for (int i = 0; i < m_filterWidths.size(); ++i) {
         const int w = m_filterWidths[i];
         auto* btn = mkToggle(formatStepLabel(w));
-        btn->setStyleSheet(QString(kButtonBase) + kBlueActive);
+        btn->setStyleSheet(kButtonBase() + kBlueActive());
         connect(btn, &QPushButton::clicked, this, [this, i](bool) {
             if (!m_slice) return;
             if (m_filterCustomLo[i] != INT_MIN) {

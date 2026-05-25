@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.20)
 project(AetherSDR VERSION 26.5.3 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -7,12 +7,16 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
-# Libraries options
+# Libraries options — opt-in system-package replacements for vendored
+# dependencies.  Off by default so existing build hosts (CI containers,
+# release builds, contributor laptops) keep using the bundled, version-
+# pinned third_party/ snapshots.  Distro packagers turn these ON to
+# match their dynamic-linking policy.
 
-option(USE_SYSTEM_ZLIB "Use system zlib" OFF)
-option(USE_SYSTEM_MSPACK "Use system libmspack" OFF)
+option(USE_SYSTEM_ZLIB         "Use system zlib"         OFF)
+option(USE_SYSTEM_MSPACK       "Use system libmspack"    OFF)
 option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
-option(USE_SYSTEM_RTMIDI "Use system RtMidi" OFF)
+option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
 
 # Build features options
 
@@ -24,8 +28,7 @@ option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
-
-# ---
+option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
 
 # macOS: ensure Homebrew lib/include paths are in the search path
 # (universal builds with CMAKE_OSX_ARCHITECTURES may not search /opt/homebrew by default)
@@ -481,6 +484,9 @@ set(CORE_SOURCES
     src/core/PerfTelemetry.cpp
     src/core/RigctlProtocol.cpp
     src/core/RigctlPty.cpp
+    src/core/SmartCatProtocol.cpp
+    src/core/SmartCatSession.cpp
+    src/core/CatPort.cpp
     src/core/SmartLinkClient.cpp
     src/core/WanConnection.cpp
     src/core/DxClusterClient.cpp
@@ -492,7 +498,6 @@ set(CORE_SOURCES
     src/core/MqttSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
-    src/core/RigctlServer.cpp
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
     src/core/MqttClient.cpp
@@ -612,6 +617,7 @@ set(GUI_SOURCES
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
     src/gui/MeterApplet.cpp
+    src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp
     src/gui/ProfileManagerDialog.cpp
     src/gui/ProfileImportExportDialog.cpp
@@ -620,6 +626,7 @@ set(GUI_SOURCES
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
     src/gui/AppletPanel.cpp
+    src/gui/FavoritesPickerDialog.cpp
     src/gui/RxApplet.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/SMeterWidget.cpp
@@ -702,6 +709,8 @@ set(GUI_SOURCES
     src/gui/MultiFlexDialog.cpp
     src/gui/HelpDialog.cpp
     src/gui/WhatsNewDialog.cpp
+    src/gui/ThemeEditorDialog.cpp
+    src/gui/ThemeInspector.cpp
 )
 
 set(ALL_SOURCES
@@ -877,6 +886,20 @@ endif()
 if (USE_SYSTEM_LIBMOSQUITTO)
     target_link_libraries(AetherSDR PRIVATE PkgConfig::libmosquitto)
 endif()
+
+# Optionally change binary name to lower case on Linux
+if (LINUX AND LOWER_CASE_BINARY_NAME)
+    set_target_properties(AetherSDR PROPERTIES OUTPUT_NAME aethersdr)
+
+    set(AETHERSDR_OUTPUT_BINARY_NAME aethersdr)
+else()
+    set(AETHERSDR_OUTPUT_BINARY_NAME AetherSDR)
+endif()
+configure_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/packaging/linux/AetherSDR.desktop.in
+    ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
+    @ONLY
+)
 
 # Capture the git short SHA at configure time and surface it in the About
 # dialog so dev/test builds are identifiable.  Falls back to "unknown" for
@@ -1317,8 +1340,18 @@ if(ENABLE_DFNR)
 endif()
 
 if(ENABLE_MQTT)
-    if (NOT USE_SYSTEM_LIBMOSQUITTO)
-        target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT)
+    # HAVE_MQTT gates the project's MQTT client code (MqttApplet,
+    # RadioModel plumbing) — must be set regardless of whether
+    # libmosquitto is the bundled or the system copy.
+    target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT)
+    if (USE_SYSTEM_LIBMOSQUITTO)
+        # System libmosquitto is conventionally built with TLS support on
+        # distro packages — assume HAVE_MQTT_TLS unless the packager
+        # explicitly opted out via -DMQTT_TLS=OFF.
+        if(MQTT_TLS)
+            target_compile_definitions(AetherSDR PRIVATE HAVE_MQTT_TLS)
+        endif()
+    else()
         target_include_directories(AetherSDR PRIVATE
             ${MOSQUITTO_DIR}/include
             ${MOSQUITTO_DIR}/src)
@@ -1938,6 +1971,22 @@ add_executable(rigctld_test
 target_include_directories(rigctld_test PRIVATE src)
 target_link_libraries(rigctld_test PRIVATE Qt6::Core Qt6::Network)
 
+# Integration tests — require a running AetherSDR instance with CAT ports enabled.
+# Not added to ctest; run manually:
+#   ./build/CAT_TS-2000_test  [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
+#   ./build/CAT_Flex_test     [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
+add_executable(CAT_TS-2000_test
+    tests/CAT_TS-2000_test.cpp
+)
+target_include_directories(CAT_TS-2000_test PRIVATE src)
+target_link_libraries(CAT_TS-2000_test PRIVATE Qt6::Core Qt6::Network)
+
+add_executable(CAT_Flex_test
+    tests/CAT_Flex_test.cpp
+)
+target_include_directories(CAT_Flex_test PRIVATE src)
+target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
+
 
 # ── Install rules ────────────────────────────────────────────────────────────
 include(GNUInstallDirs)
@@ -1950,10 +1999,10 @@ else()
     install(TARGETS AetherSDR
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
-    install(FILES packaging/linux/AetherSDR.desktop
+    install(FILES ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )
-    install(FILES docs/assets/logo-circle.png
+    install(FILES docs/assets/logo-circle-256.png
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps
         RENAME aethersdr.png
     )

@@ -21,8 +21,11 @@ FirmwareStager::FirmwareStager(QObject* parent)
 
 QString FirmwareStager::stagingDir()
 {
+    // GenericConfigLocation + "/AetherSDR" matches the path convention
+    // AppSettings + the log dir already use, avoiding the double-nested
+    // ~/.config/AetherSDR/AetherSDR/ path that AppConfigLocation produces.
     const QString dir = QStandardPaths::writableLocation(
-        QStandardPaths::AppConfigLocation) + "/firmware";
+        QStandardPaths::GenericConfigLocation) + "/AetherSDR/firmware";
     QDir().mkpath(dir);
     return dir;
 }

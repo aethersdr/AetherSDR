@@ -86,6 +86,7 @@
 #include "core/DvkWavTransfer.h"
 #include "AmpApplet.h"
 #include "MeterApplet.h"
+#include "HealthApplet.h"
 #include "PersistentDialog.h"
 #include "ProfileManagerDialog.h"
 #include "ProfileImportExportDialog.h"
@@ -95,6 +96,7 @@
 #include "ShortcutDialog.h"
 #include "MultiFlexDialog.h"
 #include "HelpDialog.h"
+#include "ThemeEditorDialog.h"
 #include "WhatsNewDialog.h"
 #include "models/SliceModel.h"
 #include "models/MeterModel.h"
@@ -1237,7 +1239,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
     dialog->setWindowModality(Qt::ApplicationModal);
     dialog->setWindowFlags(dialog->windowFlags() & ~Qt::WindowContextHelpButtonHint);
     dialog->setFixedWidth(460);
-    dialog->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(dialog, "QDialog { background: {{color.background.0}}; }"
         "QFrame#forcedDisconnectHeader {"
         "  background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
         "    stop:0 #103626, stop:1 #10283a);"
@@ -1261,7 +1263,7 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
         "  color: {{color.background.0}};"
         "  font-weight: bold;"
         "}"
-        "QPushButton#primaryButton:hover { background: {{color.accent.bright}}; }"));
+        "QPushButton#primaryButton:hover { background: {{color.accent.bright}}; }");
 
     auto* outer = new QVBoxLayout(dialog);
     outer->setContentsMargins(0, 0, 0, 0);
@@ -1401,6 +1403,19 @@ MainWindow::MainWindow(QWidget* parent)
             setWindowFlags(windowFlags() | Qt::FramelessWindowHint);
 #endif
         }
+
+        // Theming layer-0 backdrop (Phase 5 PR 3 — "fade to desktop"
+        // experiment).  Disabling the default opaque window background
+        // lets MainWindow::paintEvent() honour color.background.app's
+        // alpha.  Today's installs see no visual change because the
+        // bundled themes ship the token fully opaque (#0f0f1a / #f5f5f8) —
+        // the architectural hook just lets operators dial alpha down
+        // through the Theme Editor to A/B test which applets/docks still
+        // need their own opaque backgrounds.
+        setAttribute(Qt::WA_TranslucentBackground, true);
+        setAutoFillBackground(false);
+        connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                this, qOverload<>(&QWidget::update));
 
         // 8-axis edge resize for frameless mode — same install pattern
         // as the floating dialogs (SpotHub, RadioSetup, MemoryDialog).
@@ -2654,8 +2669,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_appletPanel->phoneCwApplet()->updateAlc(-20.0f);
         }
         if (tx) {
-            m_txIndicator->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: white; background: {{color.accent.danger}}; font-weight: bold; "
-                "font-size: 21px; border-radius: 4px; padding: 0px 1px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_txIndicator, "QLabel { color: white; background: {{color.accent.danger}}; font-weight: bold; "
+                "font-size: 21px; border-radius: 4px; padding: 0px 1px; }");
         } else {
             m_txIndicator->setStyleSheet(
                 "QLabel { color: rgba(255,255,255,128); font-weight: bold; "
@@ -3577,6 +3592,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->sMeterWidget()->setPowerScale(maxW, ampActive);
+        m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
     };
     connect(&m_radioModel, &RadioModel::amplifierChanged, this, updatePowerScale);
     connect(&m_radioModel, &RadioModel::ampStateChanged, this, updatePowerScale);
@@ -3647,6 +3663,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── Meter applet: all meters consolidated ──────────────────────────────
     m_appletPanel->meterApplet()->setMeterModel(&m_radioModel.meterModel());
+
+    // ── HLTH applet: same meter model — derives antenna-health state from
+    //    SWR / power trends across radio / tuner / amp sources.
+    m_appletPanel->healthApplet()->setMeterModel(&m_radioModel.meterModel());
 
     // ── TX applet: meters + model ───────────────────────────────────────────
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
@@ -4407,21 +4427,40 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // ── 8-channel CAT: rigctld + PTY (A-H, each bound to a slice) ────────────
-    {
-        for (int i = 0; i < kCatChannels; ++i) {
-            m_rigctlServers[i] = new RigctlServer(&m_radioModel, this);
-            m_rigctlServers[i]->setSliceIndex(i);
-            m_rigctlPtys[i] = new RigctlPty(&m_radioModel, this);
-            m_rigctlPtys[i]->setSliceIndex(i);
-            // Symlink path is computed per-user via
-            // RigctlPty::defaultSymlinkPath() (#2940 / GHSA-qxhr-cwrc-pvrm).
-            m_rigctlPtys[i]->setSymlinkPath(RigctlPty::defaultSymlinkPath(i));
-        }
+    // ── Unified CAT ports (kCatPorts slots, configured from settings) ───────────
+    // Migrate old dual-server settings to the new per-port schema on first run.
+    migrateCatSettings();
+    for (int i = 0; i < kCatPorts; ++i) {
+        m_catPorts[i] = new CatPort(&m_radioModel, this);
+        // Per-user symlink path (GHSA-qxhr-cwrc-pvrm — matches RigctlPty fix).
+        m_catPorts[i]->setSymlinkPath(CatPort::defaultSymlinkPath(i));
+        // Load persisted dialect and VFO config; port and enabled are read
+        // in applyCatPortCount() just before starting.
+        const QString prefix = QString("CatPort_%1_").arg(i);
+        auto& s = AppSettings::instance();
+        QString d = s.value(prefix + "Dialect", "Rigctld").toString();
+        CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
+                        : (d == "TS2000")  ? CatDialect::TS2000
+                        : CatDialect::Rigctld;
+        m_catPorts[i]->setDialect(dial);
+        m_catPorts[i]->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+        m_catPorts[i]->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
     }
-    m_appletPanel->catControlApplet()->setRadioModel(&m_radioModel);
-    m_appletPanel->catControlApplet()->setRigctlServers(m_rigctlServers, kCatChannels);
-    m_appletPanel->catControlApplet()->setRigctlPtys(m_rigctlPtys, kCatChannels);
+
+    // Wire the applet to the port objects
+    m_appletPanel->catControlApplet()->setPorts(m_catPorts, kCatPorts);
+    m_appletPanel->catControlApplet()->setMaxSlices(catPortTargetCount());
+
+    // Wire master enable toggle from the docked applet
+    connect(m_appletPanel->catControlApplet(), &CatControlApplet::enableChanged,
+            this, [this](bool) { applyCatPortCount(); });
+
+    // Per-port config changes in the floating table → re-apply port states
+    connect(m_appletPanel->catControlApplet(), &CatControlApplet::configChanged,
+            this, [this]() { applyCatPortCount(); });
+
+    // Auto-start based on saved master enable
+    applyCatPortCount();
     m_appletPanel->daxApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->daxIqApplet()->setRadioModel(&m_radioModel);
 #ifdef HAVE_WEBSOCKETS
@@ -5471,6 +5510,23 @@ void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
     // FFTW version and crash the next feedAudioData. (#2275 / NR4→NR2)
     connect(w, &AetherDspWidget::nr2EnableWithWisdomRequested,
             this, &MainWindow::enableNr2WithWisdom);
+}
+
+void MainWindow::paintEvent(QPaintEvent* event)
+{
+    // Layer-0 app backdrop.  WA_TranslucentBackground (set in the
+    // constructor) disables Qt's default opaque window fill, so this
+    // paintEvent is the single source of pixels for any region the rest
+    // of the widget tree doesn't paint.  Honours alpha so operators can
+    // edit color.background.app down toward translucency and see the
+    // desktop bleed through anywhere a child widget doesn't have its own
+    // opaque background — useful for A/B testing which applets/docks
+    // still need explicit fills before a "glass-mode" theme is viable.
+    QPainter p(this);
+    const QColor bg = ThemeManager::instance().color("color.background.app");
+    p.setCompositionMode(QPainter::CompositionMode_Source);
+    p.fillRect(rect(), bg.isValid() ? bg : QColor("#0f0f1a"));
+    QMainWindow::paintEvent(event);
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
@@ -7034,7 +7090,7 @@ void MainWindow::showQuickAddMemoryDialog(const QString& preferredPanId)
     root->addWidget(nameEdit);
 
     auto* freqLabel = new QLabel(QString("Current Frequency: %1 MHz").arg(frequencyText), &dialog);
-    freqLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(freqLabel, "QLabel { color: {{color.text.primary}}; font-size: 12px; }");
     root->addWidget(freqLabel);
 
     auto* summaryLabel = new QLabel(summaryText, &dialog);
@@ -7642,10 +7698,10 @@ void MainWindow::buildMenuBar()
 
     for (const auto& def : inhibitDefs) {
         auto* cb = new QCheckBox(def.label);
-        cb->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QCheckBox { color: {{color.text.primary}}; padding: 4px 12px; }"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(cb, "QCheckBox { color: {{color.text.primary}}; padding: 4px 12px; }"
             "QCheckBox::indicator { width: 14px; height: 14px; }"
             "QCheckBox::indicator:unchecked { border: 1px solid {{color.background.3}}; background: {{color.background.1}}; border-radius: 2px; }"
-            "QCheckBox::indicator:checked { border: 1px solid {{color.accent}}; background: {{color.accent}}; border-radius: 2px; }"));
+            "QCheckBox::indicator:checked { border: 1px solid {{color.accent}}; background: {{color.accent}}; border-radius: 2px; }");
         bool on = settings.value(def.key, "False").toString() == "True";
         cb->setChecked(on);
 
@@ -7738,59 +7794,17 @@ void MainWindow::buildMenuBar()
 
     settingsMenu->addSeparator();
 
-    auto* autoRigctlAction = settingsMenu->addAction("Autostart rigctld with AetherSDR");
-    autoRigctlAction->setCheckable(true);
-    autoRigctlAction->setChecked(
-        AppSettings::instance().value("AutoStartRigctld", "False").toString() == "True");
-    connect(autoRigctlAction, &QAction::toggled, this, [this](bool on) {
-        auto& s = AppSettings::instance();
-        s.setValue("AutoStartRigctld", on ? "True" : "False");
-        s.save();
-        if (m_radioModel.isConnected()) {
-            const int basePort = s.value("CatTcpPort", "4532").toInt();
-            for (int i = 0; i < kCatChannels; ++i) {
-                if (on && m_rigctlServers[i] && !m_rigctlServers[i]->isRunning())
-                    m_rigctlServers[i]->start(static_cast<quint16>(basePort + i));
-                else if (!on && m_rigctlServers[i] && m_rigctlServers[i]->isRunning())
-                    m_rigctlServers[i]->stop();
-            }
-            if (m_appletPanel && m_appletPanel->catControlApplet())
-                m_appletPanel->catControlApplet()->setTcpEnabled(on);
-        }
-    });
-
-#ifdef _WIN32
-    // CAT virtual serial ports require macOS or Linux. Force the setting
-    // off so a saved True (e.g. from a Linux settings import) can't
-    // activate anything, and omit the menu entry entirely (#1556).
-    {
-        auto& s = AppSettings::instance();
-        if (s.value("AutoStartCAT", "False").toString() != "False") {
-            s.setValue("AutoStartCAT", "False");
-            s.save();
-        }
-    }
-#else
+    // CAT: unified port manager (rigctld / TS-2000 / FlexCAT per port)
     auto* autoCatAction = settingsMenu->addAction("Autostart CAT with AetherSDR");
     autoCatAction->setCheckable(true);
     autoCatAction->setChecked(
-        AppSettings::instance().value("AutoStartCAT", "False").toString() == "True");
+        AppSettings::instance().value("CatEnabled", "False").toString() == "True");
     connect(autoCatAction, &QAction::toggled, this, [this](bool on) {
         auto& s = AppSettings::instance();
-        s.setValue("AutoStartCAT", on ? "True" : "False");
+        s.setValue("CatEnabled", on ? "True" : "False");
         s.save();
-        if (m_radioModel.isConnected()) {
-            for (int i = 0; i < kCatChannels; ++i) {
-                if (on && m_rigctlPtys[i] && !m_rigctlPtys[i]->isRunning())
-                    m_rigctlPtys[i]->start();
-                else if (!on && m_rigctlPtys[i] && m_rigctlPtys[i]->isRunning())
-                    m_rigctlPtys[i]->stop();
-            }
-            if (m_appletPanel && m_appletPanel->catControlApplet())
-                m_appletPanel->catControlApplet()->setPtyEnabled(on);
-        }
+        applyCatPortCount();
     });
-#endif
 
     auto* autoTciAction = settingsMenu->addAction("Autostart TCI with AetherSDR");
     autoTciAction->setCheckable(true);
@@ -7863,10 +7877,7 @@ void MainWindow::buildMenuBar()
             && action != midiAction
 #endif
             && action != multiFlexAction
-            && action != autoRigctlAction
-#ifndef _WIN32
             && action != autoCatAction
-#endif
             && action != autoTciAction
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
             && action != autoDaxAction
@@ -7989,10 +8000,28 @@ void MainWindow::buildMenuBar()
     };
     rebuildThemeMenu();
     // Rebuild whenever the active theme changes (covers in-app theme
-    // switches re-checking the right entry, and Phase-5 user-theme
-    // additions appearing in the list once the editor lands).
+    // switches re-checking the right entry, and Phase-5 user themes
+    // saved from the editor below appearing in the list immediately).
     QObject::connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
                      themeMenu, rebuildThemeMenu);
+
+    // Theme Editor (Phase 5 PR 1) — modeless dialog for live-editing
+    // the active theme's colour tokens.  Sits as a sibling of the
+    // Theme submenu above (which switches between saved themes);
+    // the editor is for authoring a new one.  Open-on-demand; only
+    // one instance at a time, cleaned up via WA_DeleteOnClose.
+    auto* themeEditorAct = viewMenu->addAction("Theme Editor…");
+    connect(themeEditorAct, &QAction::triggered, this, [this] {
+        if (!m_themeEditorDialog) {
+            m_themeEditorDialog = new ThemeEditorDialog(this);
+            m_themeEditorDialog->setAttribute(Qt::WA_DeleteOnClose);
+            connect(m_themeEditorDialog, &QObject::destroyed, this,
+                    [this] { m_themeEditorDialog = nullptr; });
+        }
+        m_themeEditorDialog->show();
+        m_themeEditorDialog->raise();
+        m_themeEditorDialog->activateWindow();
+    });
 
     auto* singleClickTuneAct = viewMenu->addAction("Single-Click to Tune");
     singleClickTuneAct->setCheckable(true);
@@ -8248,7 +8277,15 @@ void MainWindow::buildMenuBar()
     });
     helpMenu->addAction("Slice Troubleshooting...", this, [this]() {
         SliceTroubleshootingDialog dlg(&m_radioModel, m_audio, this,
-                                       [this]() { return buildControlDevicesSnapshot(); });
+                                       [this]() { return buildControlDevicesSnapshot(); },
+                                       [this]() {
+                                           QJsonObject renderer;
+                                           renderer["available"] = true;
+                                           renderer["description"] = spectrum()
+                                               ? spectrum()->rendererDescription()
+                                               : QStringLiteral("No active pan");
+                                           return renderer;
+                                       });
         dlg.exec();
     });
     helpMenu->addSeparator();
@@ -8257,7 +8294,7 @@ void MainWindow::buildMenuBar()
         dlg->setAttribute(Qt::WA_DeleteOnClose);
         dlg->setWindowTitle("About AetherSDR");
         dlg->setFixedWidth(380);
-        dlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: {{color.background.0}}; }");
 
         auto* vbox = new QVBoxLayout(dlg);
         vbox->setSpacing(8);
@@ -8314,7 +8351,7 @@ void MainWindow::buildMenuBar()
         // Separator
         auto* sep1 = new QFrame;
         sep1->setFrameShape(QFrame::HLine);
-        sep1->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.background.2}};"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(sep1, "color: {{color.background.2}};");
         vbox->addWidget(sep1);
 
         // Contributors label
@@ -8325,7 +8362,7 @@ void MainWindow::buildMenuBar()
         // Scrollable contributors list
         auto* contribLabel = new QLabel("Jeremy (KK7GWY)<br>Claude &middot; Anthropic<br>rfoust<br>Ian (M7HNF)<br>VE3NEM<br>jensenpat<br>chibondking<br>Dependabot");
         contribLabel->setAlignment(Qt::AlignCenter);
-        contribLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(contribLabel, "QLabel { color: {{color.text.primary}}; font-size: 11px; }");
         contribLabel->setWordWrap(true);
 
         auto* scroll = new QScrollArea;
@@ -8333,16 +8370,16 @@ void MainWindow::buildMenuBar()
         scroll->setWidgetResizable(true);
         scroll->setFixedHeight(80);
         scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        scroll->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QScrollArea { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 4px; }"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(scroll, "QScrollArea { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 4px; }"
             "QScrollBar:vertical { background: {{color.background.0}}; width: 6px; }"
             "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"));
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
         vbox->addWidget(scroll);
 
         // Separator
         auto* sep2 = new QFrame;
         sep2->setFrameShape(QFrame::HLine);
-        sep2->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("color: {{color.background.2}};"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(sep2, "color: {{color.background.2}};");
         vbox->addWidget(sep2);
 
         // Footer
@@ -8368,9 +8405,9 @@ void MainWindow::buildMenuBar()
 
         // OK button
         auto* okBtn = new QPushButton("OK");
-        okBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(okBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
             "border-radius: 4px; padding: 6px 24px; }"
-            "QPushButton:hover { background: {{color.accent.bright}}; }"));
+            "QPushButton:hover { background: {{color.accent.bright}}; }");
         connect(okBtn, &QPushButton::clicked, dlg, &QDialog::close);
         vbox->addWidget(okBtn, 0, Qt::AlignCenter);
 
@@ -8831,9 +8868,9 @@ void MainWindow::buildUI()
     m_sizeGrip->raise();
     m_sizeGrip->setVisible(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
-    statusBar()->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QStatusBar { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(statusBar(), "QStatusBar { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }"
         "QStatusBar::item { border: none; }"
-        "QLabel { font-size: 21px; background: transparent; }"));
+        "QLabel { font-size: 21px; background: transparent; }");
 
     const QString valStyle  = "QLabel { color: #8aa8c0; font-size: 21px; }";
     const QString sepStyle  = "QLabel { color: #304050; font-size: 21px; }";
@@ -8960,10 +8997,10 @@ void MainWindow::buildUI()
     radioVbox->setContentsMargins(0, 0, 0, 0);
     radioVbox->setSpacing(0);
     m_radioInfoLabel = new QLabel("");
-    m_radioInfoLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_radioInfoLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_radioInfoLabel->setAlignment(Qt::AlignCenter);
     m_radioVersionLabel = new QLabel("");
-    m_radioVersionLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_radioVersionLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_radioVersionLabel->setAlignment(Qt::AlignCenter);
     radioVbox->addWidget(m_radioInfoLabel);
     radioVbox->addWidget(m_radioVersionLabel);
@@ -8973,8 +9010,8 @@ void MainWindow::buildUI()
     hbox->addStretch(1);
 
     m_stationNickLabel = new QLabel("N0CALL");
-    m_stationNickLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 21px; background: {{color.background.0}}; "
-        "border: 1px solid rgba(255,255,255,128); padding: 2px 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_stationNickLabel, "QLabel { color: {{color.text.primary}}; font-size: 21px; background: {{color.background.0}}; "
+        "border: 1px solid rgba(255,255,255,128); padding: 2px 12px; }");
     m_stationNickLabel->setAlignment(Qt::AlignCenter);
     m_stationNickLabel->setCursor(Qt::PointingHandCursor);
     m_stationNickLabel->setToolTip("Double-click to connect/disconnect");
@@ -8996,10 +9033,10 @@ void MainWindow::buildUI()
     gpsVbox->setContentsMargins(0, 0, 0, 0);
     gpsVbox->setSpacing(0);
     m_gpsLabel = new QLabel("");
-    m_gpsLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsLabel->setAlignment(Qt::AlignCenter);
     m_gpsStatusLabel = new QLabel("");
-    m_gpsStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsStatusLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsStatusLabel->setAlignment(Qt::AlignCenter);
     gpsVbox->addWidget(m_gpsLabel);
     gpsVbox->addWidget(m_gpsStatusLabel);
@@ -9015,11 +9052,11 @@ void MainWindow::buildUI()
         cpuVbox->setContentsMargins(0, 0, 0, 0);
         cpuVbox->setSpacing(0);
         m_cpuLabel = new QLabel("CPU: \u2014");
-        m_cpuLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_cpuLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
         m_cpuLabel->setAlignment(Qt::AlignCenter);
         m_cpuLabel->setToolTip("AetherSDR process CPU usage");
         m_memLabel = new QLabel("Mem: \u2014");
-        m_memLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_memLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
         m_memLabel->setAlignment(Qt::AlignCenter);
         m_memLabel->setToolTip("AetherSDR process memory (RSS)");
         cpuVbox->addWidget(m_cpuLabel);
@@ -9110,13 +9147,13 @@ void MainWindow::buildUI()
     paVbox->setContentsMargins(0, 0, 0, 0);
     paVbox->setSpacing(0);
     m_paTempLabel = new QLabel("");
-    m_paTempLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_paTempLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_paTempLabel->setAlignment(Qt::AlignCenter);
     m_paTempLabel->setCursor(Qt::PointingHandCursor);
     m_paTempLabel->installEventFilter(this);
     updatePaTempLabel();
     m_supplyVoltLabel = new QLabel("");
-    m_supplyVoltLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_supplyVoltLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
     m_supplyVoltLabel->setAlignment(Qt::AlignCenter);
     paVbox->addWidget(m_paTempLabel);
     paVbox->addWidget(m_supplyVoltLabel);
@@ -9132,11 +9169,11 @@ void MainWindow::buildUI()
     netVbox->setContentsMargins(0, 0, 0, 0);
     netVbox->setSpacing(0);
     auto* netTitle = new QLabel("Network:");
-    netTitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(netTitle, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     netTitle->setAlignment(Qt::AlignCenter);
     netVbox->addWidget(netTitle);
     m_networkLabel = new QLabel("");
-    m_networkLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_networkLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
     m_networkLabel->setTextFormat(Qt::RichText);
     m_networkLabel->setAlignment(Qt::AlignCenter);
     m_networkLabel->setToolTip(buildNetworkTooltip(m_radioModel));
@@ -9202,11 +9239,11 @@ void MainWindow::buildUI()
     timeVbox->setContentsMargins(0, 0, 0, 0);
     timeVbox->setSpacing(0);
     m_gpsDateLabel = new QLabel("");
-    m_gpsDateLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsDateLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsDateLabel->setAlignment(Qt::AlignCenter);
     m_gpsDateLabel->setMinimumWidth(kTelemetryStackMinWidth);
     m_gpsTimeLabel = new QLabel("");
-    m_gpsTimeLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsTimeLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsTimeLabel->setAlignment(Qt::AlignCenter);
     m_gpsTimeLabel->setMinimumWidth(kTelemetryStackMinWidth);
     timeVbox->addWidget(m_gpsDateLabel);
@@ -9226,8 +9263,12 @@ void MainWindow::buildUI()
     // CNN signal classifier — load model from next to the executable or ~/.config/AetherSDR/
     {
         const QString exeDir  = QCoreApplication::applicationDirPath();
+        // GenericConfigLocation + "/AetherSDR" matches the AppSettings convention
+        // and avoids the double-nested ~/.config/AetherSDR/AetherSDR/ path that
+        // AppConfigLocation produces when both org and app names are "AetherSDR".
         const QString cfgDir  = QStandardPaths::writableLocation(
-                                    QStandardPaths::AppConfigLocation);
+                                    QStandardPaths::GenericConfigLocation)
+                              + QStringLiteral("/AetherSDR");
         const QString modelFile = QStringLiteral("signal_classifier.onnx");
         QString modelPath;
         if (QFile::exists(exeDir + QLatin1Char('/') + modelFile)) {
@@ -9239,6 +9280,99 @@ void MainWindow::buildUI()
             m_signalClassifier.loadModel(modelPath);
         }
     }
+}
+
+// ─── CAT port helpers ─────────────────────────────────────────────────────────
+
+int MainWindow::catPortTargetCount() const
+{
+    if (!m_radioModel.isConnected()) return 1;
+    return RadioModel::maxSlicesForModel(m_radioModel.model());
+}
+
+void MainWindow::applyCatPortCount()
+{
+    auto& s = AppSettings::instance();
+    const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
+    const int  target   = catPortTargetCount();
+
+    for (int i = 0; i < kCatPorts; ++i) {
+        if (!m_catPorts[i]) continue;
+
+        const QString prefix = QString("CatPort_%1_").arg(i);
+        const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
+        const int  portNum     = s.value(prefix + "Port", "").toInt();
+        const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024) && (i < target);
+
+        if (shouldRun && !m_catPorts[i]->isRunning()) {
+            // Re-apply config in case dialect/VFO was changed while stopped
+            QString d = s.value(prefix + "Dialect", "Rigctld").toString();
+            CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
+                            : (d == "TS2000")  ? CatDialect::TS2000
+                            : CatDialect::Rigctld;
+            m_catPorts[i]->setDialect(dial);
+            m_catPorts[i]->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+            m_catPorts[i]->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
+            m_catPorts[i]->start(static_cast<quint16>(portNum));
+        } else if (!shouldRun && m_catPorts[i]->isRunning()) {
+            m_catPorts[i]->stop();
+        }
+    }
+
+    auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
+    if (applet) {
+        applet->setCatEnabled(masterOn);
+        // Show hardware max when connected; fall back to kMaxPorts (all letters) when not.
+        const int hwSlices = (target > 1) ? target : kCatPorts;
+        applet->setMaxSlices(hwSlices);
+    }
+}
+
+void MainWindow::migrateCatSettings()
+{
+    auto& s = AppSettings::instance();
+
+    // Only migrate if new schema not yet written
+    if (s.contains("CatPort_0_Port")) return;
+
+    // Port 0: old rigctld settings
+    QString rigPort = s.value("CatTcpPort", "4532").toString();
+    bool rigEnabled = s.value("AutoStartRigctld", "False").toString() == "True";
+    s.setValue("CatPort_0_Port",    rigPort);
+    s.setValue("CatPort_0_Dialect", "Rigctld");
+    s.setValue("CatPort_0_VfoA",    "0");
+    s.setValue("CatPort_0_VfoB",    "1");
+    s.setValue("CatPort_0_Enabled", rigEnabled ? "True" : "False");
+
+    // Port 1: old SmartCAT settings
+    QString catPort = s.value("SmartCatPort", "5001").toString();
+    bool catEnabled = s.value("AutoStartCAT", "False").toString() == "True";
+    s.setValue("CatPort_1_Port",    catPort);
+    s.setValue("CatPort_1_Dialect", "FlexCAT");
+    s.setValue("CatPort_1_VfoA",    "0");
+    s.setValue("CatPort_1_VfoB",    "1");
+    s.setValue("CatPort_1_Enabled", catEnabled ? "True" : "False");
+
+    // Remaining ports: disabled with no port
+    for (int i = 2; i < kCatPorts; ++i) {
+        const QString pfx = QString("CatPort_%1_").arg(i);
+        s.setValue(pfx + "Port",    "");
+        s.setValue(pfx + "Dialect", "FlexCAT");
+        s.setValue(pfx + "VfoA",    "0");
+        s.setValue(pfx + "VfoB",    "-1");
+        s.setValue(pfx + "Enabled", "False");
+    }
+
+    // Master enable: on if either old server was enabled
+    s.setValue("CatEnabled", (rigEnabled || catEnabled) ? "True" : "False");
+
+    s.save();
+}
+
+void MainWindow::adjustCatPortCounts(bool connected)
+{
+    Q_UNUSED(connected)
+    applyCatPortCount();
 }
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
@@ -9348,38 +9482,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_bsExpiryTimer && !m_bsExpiryTimer->isActive())
             m_bsExpiryTimer->start();
 
-        // Auto-start 4-channel rigctld TCP servers if enabled
-        auto& as = AppSettings::instance();
-        if (as.value("AutoStartRigctld", "False").toString() == "True") {
-            const int basePort = as.value("CatTcpPort", "4532").toInt();
-            for (int i = 0; i < kCatChannels; ++i) {
-                if (m_rigctlServers[i] && !m_rigctlServers[i]->isRunning()) {
-                    m_rigctlServers[i]->start(
-                        static_cast<quint16>(basePort + i));
-                    qDebug() << "AutoStart: rigctld ch" << i
-                             << "on port" << (basePort + i);
-                }
-            }
-            if (m_appletPanel && m_appletPanel->catControlApplet())
-                m_appletPanel->catControlApplet()->setTcpEnabled(true);
-        }
-        // Auto-start 8-channel CAT virtual serial ports if enabled
-        if (as.value("AutoStartCAT", "False").toString() == "True") {
-            for (int i = 0; i < kCatChannels; ++i) {
-                if (m_rigctlPtys[i] && !m_rigctlPtys[i]->isRunning()) {
-                    m_rigctlPtys[i]->start();
-                    qDebug() << "AutoStart: PTY ch" << i
-                             << m_rigctlPtys[i]->symlinkPath();
-                }
-            }
-            if (m_appletPanel && m_appletPanel->catControlApplet())
-                m_appletPanel->catControlApplet()->setPtyEnabled(true);
-        }
+        // Apply CAT port counts for the newly connected radio.
+        // applyCatPortCount() starts/stops ports up to maxSlicesForModel().
+        applyCatPortCount();
 #ifdef HAVE_WEBSOCKETS
         // Auto-start TCI WebSocket server if enabled
-        if (as.value("AutoStartTCI", "False").toString() == "True") {
+        if (AppSettings::instance().value("AutoStartTCI", "False").toString() == "True") {
             if (m_tciServer && !m_tciServer->isRunning()) {
-                int tciPort = as.value("TciPort", "50001").toInt();
+                int tciPort = AppSettings::instance().value("TciPort", "50001").toInt();
                 m_tciServer->start(static_cast<quint16>(tciPort));
                 qDebug() << "AutoStart: TCI on port" << tciPort
                          << " running=" << m_tciServer->isRunning();
@@ -9524,6 +9634,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
     } else {
+        // Radio disconnected: trim CAT ports back to 1 so apps on channel A
+        // stay connected through brief reconnects, higher channels stop cleanly.
+        applyCatPortCount();  // catPortTargetCount() returns 1 when !connected
+
         if (m_layoutRestoreTimer) {
             m_layoutRestoreTimer->stop();
         }
@@ -9559,7 +9673,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_radioInfoLabel->setText("");
         m_radioVersionLabel->setText("");
         m_stationLabel->setText("N0CALL");
-        m_tnfIndicator->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.background.2}}; font-weight: bold; font-size: 24px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_tnfIndicator, "QLabel { color: {{color.background.2}}; font-weight: bold; font-size: 24px; }");
         m_tnfIndicator->setToolTip(buildTnfTooltip(m_radioModel.tnfModel()));
         if (auto* bandStackPanel = m_panStack ? m_panStack->bandStackPanel() : nullptr) {
             bandStackPanel->clear();
@@ -9636,14 +9750,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
             m_reconnectDlg->setWindowFlag(Qt::FramelessWindowHint, frameless);
             m_reconnectDlg->setModal(false);
             m_reconnectDlg->setFixedSize(400, 150);
-            m_reconnectDlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; }"
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_reconnectDlg, "QDialog { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; }"
                 "QLabel { color: {{color.text.primary}}; background: transparent; }"
                 "QLabel#reconnectTitle { color: {{color.text.primary}}; font-size: 16px; font-weight: bold; }"
                 "QLabel#reconnectBody { color: {{color.text.secondary}}; font-size: 12px; }"
                 "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
                 "border-radius: 3px; color: {{color.text.primary}}; font-size: 12px; "
                 "font-weight: bold; padding: 6px 20px; }"
-                "QPushButton:hover { background: {{color.background.1}}; }"));
+                "QPushButton:hover { background: {{color.background.1}}; }");
 
             auto* root = new QVBoxLayout(m_reconnectDlg);
             root->setContentsMargins(0, 0, 0, 0);
@@ -12162,7 +12276,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // conjure a slice; click is the explicit "create here" affordance.
     });
 
-    // ── Spot trigger — notify the radio when a spot label is clicked (#341)
+    // ── Spot trigger — notify the radio/TCI clients when a spot label is clicked (#341)
     connect(sw, &SpectrumWidget::spotTriggered, this, [this, applet](int spotIndex) {
         const auto& spots = m_radioModel.spotModel().spots();
         auto it = spots.find(spotIndex);
@@ -12175,16 +12289,21 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
-        if (!isPassiveLocalSpotId(spotIndex))
+        auto* s = preferredMemorySlice(applet->panId());
+        const bool tciSpot = it->source.compare(QStringLiteral("TCI"), Qt::CaseInsensitive) == 0;
+        if (tciSpot) {
+            if (m_tciServer && s && !s->isLocked() && !m_swrSweep.running)
+                m_tciServer->notifySpotClicked(spotIndex, s);
+        } else if (!isPassiveLocalSpotId(spotIndex)) {
             m_radioModel.sendCommand(
                 QString("spot trigger %1 pan=%2").arg(spotIndex).arg(applet->panId()));
+        }
 
         // Auto-switch mode from spot metadata (#424). Default flipped to True
         // in #1846 since spots now ship with trigger_action=none — the radio
         // no longer changes mode on click, so auto-mode is the only path.
         if (AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() != "True")
             return;
-        auto* s = preferredMemorySlice(applet->panId());
         if (!s) return;
 
         // FreeDV spots imply RADE — activate the RADE engine on this slice
@@ -12883,14 +13002,26 @@ void MainWindow::enableNr2WithWisdom()
         dlg->setWindowTitle("AetherSDR — FFTW Wisdom");
         if (frameless)
             dlg->setWindowFlag(Qt::FramelessWindowHint, true);
-        dlg->setWindowModality(Qt::ApplicationModal);
+        // Modeless — wisdom generation can take minutes; locking the
+        // operator out of the radio for that whole window was a worse UX
+        // than letting them keep operating while the worker thread runs
+        // in the background.  The thread is already off the GUI thread
+        // (see QThread::create below); progress callbacks marshal back
+        // via QMetaObject::invokeMethod and the Cancel path is wired
+        // through QDialog::rejected.
+        dlg->setWindowModality(Qt::NonModal);
+        // Tool window flag so the dialog floats above the main window
+        // without claiming a separate taskbar entry, and stays visible
+        // when the operator clicks back to the main UI.
+        dlg->setWindowFlag(Qt::Tool, true);
+        dlg->setAttribute(Qt::WA_ShowWithoutActivating, true);
         dlg->setMinimumWidth(500);
-        dlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: #050710; }"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: #050710; }"
             "QLabel { color: {{color.text.secondary}}; background: transparent; }"
             "QProgressBar { text-align: center; font-size: 13px;"
             " font-weight: bold; color: {{color.text.primary}};"
             " background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 3px; }"
-            "QProgressBar::chunk { background: {{color.accent}}; }"));
+            "QProgressBar::chunk { background: {{color.accent}}; }");
 
         auto* root = new QVBoxLayout(dlg);
         root->setContentsMargins(0, 0, 0, 0);

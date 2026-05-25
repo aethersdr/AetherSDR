@@ -98,8 +98,8 @@ void DaxIqApplet::buildUI()
         m_iqMeter[i]->setValue(0);
         m_iqMeter[i]->setTextVisible(false);
         m_iqMeter[i]->setFixedHeight(14);
-        m_iqMeter[i]->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QProgressBar { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 2px; }"
-            "QProgressBar::chunk { background: {{color.accent}}; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_iqMeter[i], "QProgressBar { background: {{color.background.0}}; border: 1px solid {{color.background.1}}; border-radius: 2px; }"
+            "QProgressBar::chunk { background: {{color.accent}}; }");
         row->addWidget(m_iqMeter[i], 1);
 
         m_iqEnable[i] = new QPushButton("Off");

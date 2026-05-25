@@ -12,11 +12,13 @@
         "2": "#304050",
         "3": "#506070",
         "tx": "#3a2a0e",
-        "spectrum": "#000000"
+        "success": "#006040",
+        "spectrum": "#000000",
+        "app": "#0f0f1a"
       },
       "accent": "#00b4d8",
       "accent.bright": "#00c8f0",
-      "accent.dim": "#0090e0",
+      "accent.dim": "#0070c0",
       "accent.warning": "#ffb84d",
       "accent.danger": "#ff4d4d",
       "accent.success": "#4dd87a",

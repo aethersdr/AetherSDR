@@ -101,7 +101,7 @@ TitleBar::TitleBar(QWidget* parent)
     : QWidget(parent)
 {
     setFixedHeight(32);
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("TitleBar { background: {{color.background.0}}; border-bottom: 1px solid {{color.background.1}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "TitleBar { background: {{color.background.0}}; border-bottom: 1px solid {{color.background.1}}; }");
 
     m_hbox = new QHBoxLayout(this);
     m_hbox->setContentsMargins(4, 2, 8, 2);
@@ -121,7 +121,7 @@ TitleBar::TitleBar(QWidget* parent)
     // ── Heartbeat indicator ─────────────────────────────────────────────────
     m_heartbeat = new QLabel;
     m_heartbeat->setFixedSize(10, 10);
-    m_heartbeat->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.2}}; border-radius: 5px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_heartbeat, "QLabel { background: {{color.background.2}}; border-radius: 5px; }");
     m_heartbeat->setToolTip("Radio discovery heartbeat");
     m_heartbeat->setAccessibleName("Radio heartbeat");
     m_heartbeat->setAccessibleDescription("Flashes green when radio discovery packets are received");
@@ -132,7 +132,7 @@ TitleBar::TitleBar(QWidget* parent)
     m_heartbeatOffTimer->setSingleShot(true);
     m_heartbeatOffTimer->setInterval(100);
     connect(m_heartbeatOffTimer, &QTimer::timeout, this, [this]() {
-        m_heartbeat->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.2}}; border-radius: 5px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_heartbeat, "QLabel { background: {{color.background.2}}; border-radius: 5px; }");
     });
 
     // 500ms alarm blink timer (red/grey alternating)
@@ -180,7 +180,7 @@ TitleBar::TitleBar(QWidget* parent)
 
     m_appNameLabel = new QLabel(
         QString("AetherSDR v%1").arg(QCoreApplication::applicationVersion()));
-    m_appNameLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_appNameLabel, "QLabel { color: {{color.accent}}; font-size: 14px; font-weight: bold; }");
     m_appNameLabel->setAlignment(Qt::AlignCenter);
     markDragHandle(m_appNameLabel);
     m_hbox->addWidget(m_appNameLabel);
@@ -276,14 +276,14 @@ TitleBar::TitleBar(QWidget* parent)
     m_masterSlider->setFixedHeight(16);
     m_masterSlider->setAccessibleName("Master volume");
     m_masterSlider->setAccessibleDescription("Line out volume level, 0 to 100 percent");
-    m_masterSlider->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSlider::groove:horizontal { background: {{color.background.1}}; height: 4px; border-radius: 2px; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterSlider, "QSlider::groove:horizontal { background: {{color.background.1}}; height: 4px; border-radius: 2px; }"
         "QSlider::handle:horizontal { background: {{color.accent}}; width: 10px; margin: -3px 0; border-radius: 5px; }"
-        "QSlider::sub-page:horizontal { background: {{color.accent}}; border-radius: 2px; }"));
+        "QSlider::sub-page:horizontal { background: {{color.accent}}; border-radius: 2px; }");
     m_hbox->addWidget(m_masterSlider);
 
     m_masterLabel = new QLabel(QString::number(savedVol));
     m_masterLabel->setFixedWidth(22);
-    m_masterLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterLabel, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
     m_masterLabel->setAlignment(Qt::AlignCenter);
     markDragHandle(m_masterLabel);
     m_hbox->addWidget(m_masterLabel);
@@ -318,14 +318,14 @@ TitleBar::TitleBar(QWidget* parent)
     m_hpSlider->setFixedHeight(16);
     m_hpSlider->setAccessibleName("Headphone volume");
     m_hpSlider->setAccessibleDescription("Headphone volume level, 0 to 100 percent");
-    m_hpSlider->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSlider::groove:horizontal { background: {{color.background.1}}; height: 4px; border-radius: 2px; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpSlider, "QSlider::groove:horizontal { background: {{color.background.1}}; height: 4px; border-radius: 2px; }"
         "QSlider::handle:horizontal { background: {{color.accent}}; width: 10px; margin: -3px 0; border-radius: 5px; }"
-        "QSlider::sub-page:horizontal { background: {{color.accent}}; border-radius: 2px; }"));
+        "QSlider::sub-page:horizontal { background: {{color.accent}}; border-radius: 2px; }");
     m_hbox->addWidget(m_hpSlider);
 
     m_hpLabel = new QLabel("50");
     m_hpLabel->setFixedWidth(22);
-    m_hpLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpLabel, "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
     m_hpLabel->setAlignment(Qt::AlignCenter);
     markDragHandle(m_hpLabel);
     m_hbox->addWidget(m_hpLabel);
@@ -343,7 +343,7 @@ TitleBar::TitleBar(QWidget* parent)
 
     auto* sep = new QFrame;
     sep->setFixedSize(1, 20);
-    sep->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QFrame { background: {{color.background.2}}; border: none; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(sep, "QFrame { background: {{color.background.2}}; border: none; }");
     markDragHandle(sep);
     m_hbox->addWidget(sep);
 
@@ -397,7 +397,7 @@ TitleBar::TitleBar(QWidget* parent)
 
     m_dockSep = new QFrame;
     m_dockSep->setFixedSize(1, 20);
-    m_dockSep->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QFrame { background: {{color.background.2}}; border: none; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_dockSep, "QFrame { background: {{color.background.2}}; border: none; }");
     markDragHandle(m_dockSep);
     m_hbox->addWidget(m_dockSep);
 
@@ -728,12 +728,12 @@ void TitleBar::mouseDoubleClickEvent(QMouseEvent* ev)
 void TitleBar::setMenuBar(QMenuBar* mb)
 {
     if (!mb) return;
-    mb->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QMenuBar { background: transparent; color: {{color.text.secondary}}; font-size: 12px; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(mb, "QMenuBar { background: transparent; color: {{color.text.secondary}}; font-size: 12px; }"
         "QMenuBar::item { padding: 4px 8px; }"
         "QMenuBar::item:selected { background: {{color.background.1}}; color: {{color.text.primary}}; }"
         "QMenu { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; }"
         "QMenu::item:selected { background: {{color.background.2}}; }"
-        "QMenu::separator { height: 1px; background: {{color.background.2}}; margin: 4px 8px; }"));
+        "QMenu::separator { height: 1px; background: {{color.background.2}}; margin: 4px 8px; }");
     mb->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
     m_menuBar = mb;
     m_menuBar->installEventFilter(this);
@@ -913,7 +913,7 @@ void TitleBar::showFeatureRequestDialogImpl()
     sDlg = dlg;
     dlg->setWindowTitle("AI-Assisted Issue Reporter");
     dlg->setAttribute(Qt::WA_DeleteOnClose);
-    dlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(dlg, "QDialog { background: {{color.background.0}}; }");
     dlg->setMinimumWidth(620);
 
     auto* vbox = new QVBoxLayout(dlg);
@@ -976,9 +976,9 @@ void TitleBar::showFeatureRequestDialogImpl()
     auto* btnRow2 = new QHBoxLayout;
 
     auto* submitBtn = new QPushButton("Submit Your Idea", dlg);
-    submitBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(submitBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
         "border-radius: 4px; padding: 8px 20px; font-size: 13px; }"
-        "QPushButton:hover { background: {{color.accent.bright}}; }"));
+        "QPushButton:hover { background: {{color.accent.bright}}; }");
     connect(submitBtn, &QPushButton::clicked, dlg, [dlg] {
         QDesktopServices::openUrl(QUrl(
             "https://github.com/aethersdr/AetherSDR/issues/new?template=feature_request.yml"));
@@ -987,9 +987,9 @@ void TitleBar::showFeatureRequestDialogImpl()
     btnRow2->addWidget(submitBtn);
 
     auto* bugBtn = new QPushButton("Report a Bug", dlg);
-    bugBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: #cc4040; color: {{color.text.primary}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(bugBtn, "QPushButton { background: #cc4040; color: {{color.text.primary}}; font-weight: bold; "
         "border-radius: 4px; padding: 8px 20px; font-size: 13px; }"
-        "QPushButton:hover { background: #dd5050; }"));
+        "QPushButton:hover { background: #dd5050; }");
     connect(bugBtn, &QPushButton::clicked, dlg, [dlg] {
         QDesktopServices::openUrl(QUrl(
             "https://github.com/aethersdr/AetherSDR/issues/new?template=bug_report.yml"));
@@ -1022,7 +1022,7 @@ void TitleBar::setDiscovering(bool active)
     } else {
         m_heartbeat->setToolTip("Radio discovery heartbeat");
         // Return to idle gray — onHeartbeat() will take over once pings arrive
-        m_heartbeat->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.2}}; border-radius: 5px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_heartbeat, "QLabel { background: {{color.background.2}}; border-radius: 5px; }");
     }
 }
 

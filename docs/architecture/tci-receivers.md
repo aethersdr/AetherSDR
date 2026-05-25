@@ -29,6 +29,19 @@ than passing through raw Flex slice IDs.
    back to the first owned slice.  This keeps older clients that cached
    raw Flex IDs functional in the common single-slice case.
 
+## Spot Click Notifications
+
+When a visible spot is clicked, AetherSDR broadcasts the click to every
+connected TCI client using both protocol spellings:
+
+- `clicked_on_spot:<callsign>,<frequency_hz>;`
+- `rx_clicked_on_spot:<receiver>,0,<callsign>,<frequency_hz>;`
+
+The receiver is the same contiguous `trx` index used by `vfo:` and
+`modulation:` events.  The channel field is `0`, matching AetherSDR's
+single-VFO path for a slice.  This mirrors Thetis behavior and keeps older
+clients such as Log4OM working while giving TCI v2 clients receiver context.
+
 ## Why this changed
 
 Flex slice IDs are radio-global and not necessarily contiguous within a

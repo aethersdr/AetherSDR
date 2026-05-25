@@ -264,8 +264,8 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     m_table->setSortingEnabled(false);
     m_table->installEventFilter(this);
     m_table->viewport()->installEventFilter(this);
-    m_table->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTableWidget { alternate-background-color: {{color.background.0}}; }"
-        "QTableWidget::item:selected { background: #2060a0; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_table, "QTableWidget { alternate-background-color: {{color.background.0}}; }"
+        "QTableWidget::item:selected { background: #2060a0; }");
     auto* header = m_table->horizontalHeader();
     header->setSectionsClickable(true);
     header->setSortIndicatorShown(false);

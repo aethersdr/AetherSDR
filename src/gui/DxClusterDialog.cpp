@@ -281,10 +281,10 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     root->setContentsMargins(4, 4, 4, 4);
 
     auto* tabs = new QTabWidget;
-    tabs->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTabWidget::pane { border: 1px solid {{color.background.1}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(tabs, "QTabWidget::pane { border: 1px solid {{color.background.1}}; }"
         "QTabBar::tab { background: {{color.background.0}}; color: #808890; border: 1px solid {{color.background.1}}; "
         "  padding: 6px 16px; margin-right: 2px; }"
-        "QTabBar::tab:selected { background: {{color.background.0}}; color: {{color.accent}}; border-bottom: none; }"));
+        "QTabBar::tab:selected { background: {{color.background.0}}; color: {{color.accent}}; border-bottom: none; }");
 
     buildClusterTab(tabs);
     buildRbnTab(tabs);
@@ -327,7 +327,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 
     connect(clusterClient, &DxClusterClient::connected, this, [this] {
         m_statusLabel->setText(QString("Connected to %1:%2").arg(m_client->host()).arg(m_client->port()));
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_connectBtn->setText("Disconnect");
         m_cmdEdit->setEnabled(true);
         m_sendBtn->setEnabled(true);
@@ -335,7 +335,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
     connect(clusterClient, &DxClusterClient::disconnected, this, [this] {
         m_statusLabel->setText("Disconnected");
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_connectBtn->setText("Connect");
         m_cmdEdit->setEnabled(false);
         m_sendBtn->setEnabled(false);
@@ -343,7 +343,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
     connect(clusterClient, &DxClusterClient::connectionError, this, [this](const QString& err) {
         m_statusLabel->setText("Error: " + err);
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.danger}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
         m_console->appendPlainText("--- Error: " + err + " ---");
     });
 
@@ -379,7 +379,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 
     connect(rbnClient, &DxClusterClient::connected, this, [this] {
         m_rbnStatusLabel->setText(QString("Connected to %1:%2").arg(m_rbnClient->host()).arg(m_rbnClient->port()));
-        m_rbnStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_rbnConnectBtn->setText("Disconnect");
         m_rbnCmdEdit->setEnabled(true);
         m_rbnSendBtn->setEnabled(true);
@@ -387,7 +387,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
     connect(rbnClient, &DxClusterClient::disconnected, this, [this] {
         m_rbnStatusLabel->setText("Disconnected");
-        m_rbnStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_rbnConnectBtn->setText("Connect");
         m_rbnCmdEdit->setEnabled(false);
         m_rbnSendBtn->setEnabled(false);
@@ -395,7 +395,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
     connect(rbnClient, &DxClusterClient::connectionError, this, [this](const QString& err) {
         m_rbnStatusLabel->setText("Error: " + err);
-        m_rbnStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.danger}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnStatusLabel, "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
         m_rbnConsole->appendPlainText("--- Error: " + err + " ---");
     });
 
@@ -461,13 +461,13 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 
     connect(wsjtxClient, &WsjtxClient::listening, this, [this] {
         m_wsjtxStatusLabel->setText(QString("Listening on port %1").arg(m_wsjtxPortSpin->value()));
-        m_wsjtxStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_wsjtxStartBtn->setText("Stop");
         m_wsjtxConsole->appendPlainText("--- Listening ---");
     });
     connect(wsjtxClient, &WsjtxClient::stopped, this, [this] {
         m_wsjtxStatusLabel->setText("Stopped");
-        m_wsjtxStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_wsjtxStartBtn->setText("Start");
         m_wsjtxConsole->appendPlainText("--- Stopped ---");
     });
@@ -491,13 +491,13 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 
     connect(spotCollectorClient, &SpotCollectorClient::listening, this, [this] {
         m_scStatusLabel->setText(QString("Listening on port %1").arg(m_scPortSpin->value()));
-        m_scStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_scStartBtn->setText("Stop");
         m_scConsole->appendPlainText("--- Listening ---");
     });
     connect(spotCollectorClient, &SpotCollectorClient::stopped, this, [this] {
         m_scStatusLabel->setText("Stopped");
-        m_scStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_scStartBtn->setText("Start");
         m_scConsole->appendPlainText("--- Stopped ---");
     });
@@ -519,13 +519,13 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 
     connect(potaClient, &PotaClient::started, this, [this] {
         m_potaStatusLabel->setText("Polling...");
-        m_potaStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_potaStartBtn->setText("Stop");
         m_potaConsole->appendPlainText("--- Polling started ---");
     });
     connect(potaClient, &PotaClient::stopped, this, [this] {
         m_potaStatusLabel->setText("Stopped");
-        m_potaStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_potaStartBtn->setText("Start");
         m_potaConsole->appendPlainText("--- Stopped ---");
     });
@@ -554,13 +554,13 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     });
     connect(freedvClient, &FreeDvClient::started, this, [this] {
         m_freedvStatusLabel->setText("Connecting...");
-        m_freedvStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_freedvStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_freedvStartBtn->setText("Stop");
         m_freedvConsole->appendPlainText("--- Connecting ---");
     });
     connect(freedvClient, &FreeDvClient::stopped, this, [this] {
         m_freedvStatusLabel->setText("Stopped");
-        m_freedvStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_freedvStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_freedvStartBtn->setText("Start");
         m_freedvConsole->appendPlainText("--- Stopped ---");
     });
@@ -572,7 +572,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     connect(freedvClient, &FreeDvClient::rawLineReceived, this, [this](const QString& line) {
         if (line.startsWith("Connected to")) {
             m_freedvStatusLabel->setText("Connected");
-            m_freedvStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.success}}; font-size: 11px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_freedvStatusLabel, "QLabel { color: {{color.accent.success}}; font-size: 11px; }");
         }
     });
 
@@ -681,7 +681,7 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Server:"), row, 0);
     m_hostEdit = new QLineEdit(s.value("DxClusterHost", "dxc.nc7j.com").toString());
     m_hostEdit->setPlaceholderText("dxc.nc7j.com");
-    m_hostEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hostEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_hostEdit, row, 1);
     row++;
 
@@ -689,14 +689,14 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     m_portSpin = new QSpinBox;
     m_portSpin->setRange(1, 65535);
     m_portSpin->setValue(s.value("DxClusterPort", 7300).toInt());
-    m_portSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_portSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_portSpin, row, 1);
     row++;
 
     grid->addWidget(new QLabel("Callsign:"), row, 0);
     m_callEdit = new QLineEdit(s.value("DxClusterCallsign").toString());
     m_callEdit->setPlaceholderText("your callsign");
-    m_callEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_callEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_callEdit, row, 1);
     row++;
 
@@ -735,16 +735,16 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     btnRow->addStretch();
 
     m_statusLabel = new QLabel("Disconnected");
-    m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
     btnRow->addWidget(m_statusLabel);
     btnRow->addStretch();
 
     m_connectBtn = new QPushButton(m_client->isConnected() ? "Disconnect" : "Connect");
     m_connectBtn->setFixedWidth(100);
-    m_connectBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_connectBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
         "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
         "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }"));
+        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
     connect(m_connectBtn, &QPushButton::clicked, this, [this] {
         if (m_client->isConnected()) {
             emit disconnectRequested();
@@ -755,7 +755,7 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
         quint16 port = static_cast<quint16>(m_portSpin->value());
         if (host.isEmpty() || call.isEmpty()) {
             m_statusLabel->setText("Server and callsign are required");
-            m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.danger}}; font-size: 11px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
             return;
         }
         auto& s = AppSettings::instance();
@@ -773,12 +773,12 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     // ── Console output ──────────────────────────────────────────────────
     auto* consoleRow = new QHBoxLayout;
     auto* consoleLabel = new QLabel("Cluster Console");
-    consoleLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
     consoleRow->addWidget(consoleLabel);
     consoleRow->addStretch();
 
     auto* dxcColorLabel = new QLabel("Spot Color:");
-    dxcColorLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(dxcColorLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
     consoleRow->addWidget(dxcColorLabel);
 
     QColor dxcColor(s.value("DxClusterSpotColor", "#D2B48C").toString());
@@ -805,21 +805,21 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     m_console = new QPlainTextEdit;
     m_console->setReadOnly(true);
     m_console->setMaximumBlockCount(2000);
-    m_console->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_console, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: {{color.text.secondary}};"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
         "  padding: 4px;"
-        "}"));
+        "}");
     layout->addWidget(m_console, 1);
 
     // Command input row
     auto* cmdRow = new QHBoxLayout;
     m_cmdEdit = new QLineEdit;
     m_cmdEdit->setPlaceholderText("Type a cluster command (e.g. sh/dx 20, set/filter, bye)");
-    m_cmdEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; font-family: monospace; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_cmdEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; font-family: monospace; }");
     m_cmdEdit->setEnabled(m_client->isConnected());
     connect(m_cmdEdit, &QLineEdit::returnPressed, this, [this] {
         QString cmd = m_cmdEdit->text().trimmed();
@@ -864,7 +864,7 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Server:"), row, 0);
     m_rbnHostEdit = new QLineEdit(s.value("RbnHost", "telnet.reversebeacon.net").toString());
     m_rbnHostEdit->setPlaceholderText("telnet.reversebeacon.net");
-    m_rbnHostEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnHostEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_rbnHostEdit, row, 1);
     row++;
 
@@ -872,14 +872,14 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     m_rbnPortSpin = new QSpinBox;
     m_rbnPortSpin->setRange(1, 65535);
     m_rbnPortSpin->setValue(s.value("RbnPort", 7000).toInt());
-    m_rbnPortSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_rbnPortSpin, row, 1);
     row++;
 
     grid->addWidget(new QLabel("Callsign:"), row, 0);
     m_rbnCallEdit = new QLineEdit(defaultCall);
     m_rbnCallEdit->setPlaceholderText("your callsign");
-    m_rbnCallEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnCallEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_rbnCallEdit, row, 1);
     row++;
 
@@ -890,7 +890,7 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     rateSpin->setRange(1, 100);
     rateSpin->setValue(s.value("RbnRateLimit", 10).toInt());
     rateSpin->setSuffix(" spots/sec");
-    rateSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rateSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(rateSpin, &QSpinBox::valueChanged, this, [](int v) {
         auto& s = AppSettings::instance();
         s.setValue("RbnRateLimit", v);
@@ -936,16 +936,16 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     btnRow->addStretch();
 
     m_rbnStatusLabel = new QLabel("Disconnected");
-    m_rbnStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
     btnRow->addWidget(m_rbnStatusLabel);
     btnRow->addStretch();
 
     m_rbnConnectBtn = new QPushButton(m_rbnClient->isConnected() ? "Disconnect" : "Connect");
     m_rbnConnectBtn->setFixedWidth(100);
-    m_rbnConnectBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnConnectBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
         "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
         "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }"));
+        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
     connect(m_rbnConnectBtn, &QPushButton::clicked, this, [this] {
         if (m_rbnClient->isConnected()) {
             emit rbnDisconnectRequested();
@@ -956,7 +956,7 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
         quint16 port = static_cast<quint16>(m_rbnPortSpin->value());
         if (host.isEmpty() || call.isEmpty()) {
             m_rbnStatusLabel->setText("Server and callsign are required");
-            m_rbnStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent.danger}}; font-size: 11px; }"));
+            AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnStatusLabel, "QLabel { color: {{color.accent.danger}}; font-size: 11px; }");
             return;
         }
         auto& s = AppSettings::instance();
@@ -974,12 +974,12 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     // ── Console output ──────────────────────────────────────────────────
     auto* rbnConsoleRow = new QHBoxLayout;
     auto* rbnConsoleLabel = new QLabel("RBN Console");
-    rbnConsoleLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rbnConsoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
     rbnConsoleRow->addWidget(rbnConsoleLabel);
     rbnConsoleRow->addStretch();
 
     auto* rbnColorLabel = new QLabel("Spot Color:");
-    rbnColorLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rbnColorLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
     rbnConsoleRow->addWidget(rbnColorLabel);
 
     QColor rbnColor(s.value("RbnSpotColor", "#4488FF").toString());
@@ -1006,21 +1006,21 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     m_rbnConsole = new QPlainTextEdit;
     m_rbnConsole->setReadOnly(true);
     m_rbnConsole->setMaximumBlockCount(2000);
-    m_rbnConsole->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnConsole, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: {{color.text.secondary}};"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
         "  padding: 4px;"
-        "}"));
+        "}");
     layout->addWidget(m_rbnConsole, 1);
 
     // Command input row
     auto* cmdRow = new QHBoxLayout;
     m_rbnCmdEdit = new QLineEdit;
     m_rbnCmdEdit->setPlaceholderText("Type an RBN command (e.g. set/skimmer, set/ft8, bye)");
-    m_rbnCmdEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; font-family: monospace; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnCmdEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; font-family: monospace; }");
     m_rbnCmdEdit->setEnabled(m_rbnClient->isConnected());
     connect(m_rbnCmdEdit, &QLineEdit::returnPressed, this, [this] {
         QString cmd = m_rbnCmdEdit->text().trimmed();
@@ -1062,7 +1062,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Address:"), row, 0);
     m_wsjtxAddrEdit = new QLineEdit(s.value("WsjtxAddress", "224.0.0.1").toString());
     m_wsjtxAddrEdit->setPlaceholderText("224.0.0.1 (multicast) or 0.0.0.0 (any)");
-    m_wsjtxAddrEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxAddrEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_wsjtxAddrEdit, row, 1);
     row++;
 
@@ -1070,7 +1070,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     m_wsjtxPortSpin = new QSpinBox;
     m_wsjtxPortSpin->setRange(1, 65535);
     m_wsjtxPortSpin->setValue(s.value("WsjtxPort", 2237).toInt());
-    m_wsjtxPortSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_wsjtxPortSpin, row, 1);
     row++;
 
@@ -1094,16 +1094,16 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     btnRow->addStretch();
 
     m_wsjtxStatusLabel = new QLabel("Stopped");
-    m_wsjtxStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
     btnRow->addWidget(m_wsjtxStatusLabel);
     btnRow->addStretch();
 
     m_wsjtxStartBtn = new QPushButton(m_wsjtxClient->isListening() ? "Stop" : "Start");
     m_wsjtxStartBtn->setFixedWidth(100);
-    m_wsjtxStartBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
         "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
         "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }"));
+        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
     connect(m_wsjtxStartBtn, &QPushButton::clicked, this, [this] {
         if (m_wsjtxClient->isListening()) {
             emit wsjtxStopRequested();
@@ -1128,7 +1128,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     auto* filterRow = new QHBoxLayout;
     filterRow->setSpacing(6);
     auto* filterLabel = new QLabel("Spot Filter:");
-    filterLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 14px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(filterLabel, "QLabel { color: {{color.text.label}}; font-size: 14px; }");
     filterRow->addWidget(filterLabel);
 
     QString cbStyle = "QCheckBox { color: #a0b0c0; font-size: 14px; spacing: 3px; }"
@@ -1230,7 +1230,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     });
     filterRow->addWidget(m_wsjtxColorDefault);
     auto* defaultLabel = new QLabel("Default");
-    defaultLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 14px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(defaultLabel, "QLabel { color: {{color.text.secondary}}; font-size: 14px; }");
     filterRow->addWidget(defaultLabel);
 
     layout->addLayout(filterRow);
@@ -1239,12 +1239,12 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     // Decodes label + spot lifetime slider
     auto* decodeRow = new QHBoxLayout;
     auto* consoleLabel = new QLabel("WSJT-X Decodes");
-    consoleLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
     decodeRow->addWidget(consoleLabel);
     decodeRow->addStretch();
 
     auto* lifeLabel = new QLabel("Spot Life:");
-    lifeLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(lifeLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
     decodeRow->addWidget(lifeLabel);
 
     int wsjtxLife = s.value("WsjtxSpotLifetime", 120).toInt();
@@ -1257,7 +1257,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     auto* wsjtxLifeValue = new QLabel(QString("%1s").arg(wsjtxLife));
     wsjtxLifeValue->setFixedWidth(35);
     wsjtxLifeValue->setAlignment(Qt::AlignRight);
-    wsjtxLifeValue->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(wsjtxLifeValue, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     decodeRow->addWidget(wsjtxLifeValue);
 
     connect(wsjtxLifeSlider, &QSlider::valueChanged, this, [wsjtxLifeValue](int v) {
@@ -1271,14 +1271,14 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
     m_wsjtxConsole = new QPlainTextEdit;
     m_wsjtxConsole->setReadOnly(true);
     m_wsjtxConsole->setMaximumBlockCount(2000);
-    m_wsjtxConsole->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxConsole, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: {{color.text.secondary}};"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
         "  padding: 4px;"
-        "}"));
+        "}");
     layout->addWidget(m_wsjtxConsole, 1);
 
     tabs->addTab(page, "WSJT-X");
@@ -1304,7 +1304,7 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
     m_scPortSpin = new QSpinBox;
     m_scPortSpin->setRange(1, 65535);
     m_scPortSpin->setValue(s.value("SpotCollectorPort", 9999).toInt());
-    m_scPortSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scPortSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     grid->addWidget(m_scPortSpin, 0, 1);
 
     connLayout->addLayout(grid);
@@ -1314,7 +1314,7 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
         "In SpotCollector, enable UDP broadcast to this port (default 9999).\n"
         "Alternatively, use the DX Cluster tab to connect to SpotCollector's telnet interface.");
     helpLabel->setWordWrap(true);
-    helpLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(helpLabel, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     connLayout->addWidget(helpLabel);
 
     // Button row
@@ -1335,16 +1335,16 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
     btnRow->addStretch();
 
     m_scStatusLabel = new QLabel("Stopped");
-    m_scStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
     btnRow->addWidget(m_scStatusLabel);
     btnRow->addStretch();
 
     m_scStartBtn = new QPushButton(m_spotCollectorClient->isListening() ? "Stop" : "Start");
     m_scStartBtn->setFixedWidth(100);
-    m_scStartBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
         "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
         "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }"));
+        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
     connect(m_scStartBtn, &QPushButton::clicked, this, [this] {
         if (m_spotCollectorClient->isListening()) {
             emit spotCollectorStopRequested();
@@ -1363,26 +1363,26 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
 
     // ── Console output ──────────────────────────────────────────────────
     auto* consoleLabel = new QLabel("SpotCollector Spots");
-    consoleLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
     layout->addWidget(consoleLabel);
 
     m_scConsole = new QPlainTextEdit;
     m_scConsole->setReadOnly(true);
     m_scConsole->setMaximumBlockCount(2000);
-    m_scConsole->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_scConsole, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: {{color.text.secondary}};"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
         "  padding: 4px;"
-        "}"));
+        "}");
     layout->addWidget(m_scConsole, 1);
 
     // Update status if already listening
     if (m_spotCollectorClient->isListening()) {
         m_scStatusLabel->setText(QString("Listening on port %1").arg(m_scPortSpin->value()));
-        m_scStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_scStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_scStartBtn->setText("Stop");
     }
 
@@ -1417,7 +1417,7 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     m_potaIntervalSpin->setRange(15, 300);
     m_potaIntervalSpin->setValue(s.value("PotaPollInterval", 30).toInt());
     m_potaIntervalSpin->setSuffix(" sec");
-    m_potaIntervalSpin->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaIntervalSpin, "QSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(m_potaIntervalSpin, &QSpinBox::valueChanged, this, [](int v) {
         auto& s = AppSettings::instance();
         s.setValue("PotaPollInterval", v);
@@ -1446,16 +1446,16 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     btnRow->addStretch();
 
     m_potaStatusLabel = new QLabel("Stopped");
-    m_potaStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
     btnRow->addWidget(m_potaStatusLabel);
     btnRow->addStretch();
 
     m_potaStartBtn = new QPushButton(m_potaClient->isPolling() ? "Stop" : "Start");
     m_potaStartBtn->setFixedWidth(100);
-    m_potaStartBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
         "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
         "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }"));
+        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
     connect(m_potaStartBtn, &QPushButton::clicked, this, [this] {
         if (m_potaClient->isPolling()) {
             emit potaStopRequested();
@@ -1475,12 +1475,12 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     // ── Console output ──────────────────────────────────────────────────
     auto* consoleRow = new QHBoxLayout;
     auto* consoleLabel = new QLabel("POTA Activations");
-    consoleLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
     consoleRow->addWidget(consoleLabel);
     consoleRow->addStretch();
 
     auto* spotColorLabel = new QLabel("Spot Color:");
-    spotColorLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(spotColorLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
     consoleRow->addWidget(spotColorLabel);
 
     QColor potaColor(s.value("PotaSpotColor", "#FFFF00").toString());
@@ -1507,14 +1507,14 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
     m_potaConsole = new QPlainTextEdit;
     m_potaConsole->setReadOnly(true);
     m_potaConsole->setMaximumBlockCount(2000);
-    m_potaConsole->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaConsole, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: {{color.text.secondary}};"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
         "  padding: 4px;"
-        "}"));
+        "}");
     layout->addWidget(m_potaConsole, 1);
 
     tabs->addTab(page, "POTA");
@@ -1564,16 +1564,16 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     btnRow->addStretch();
 
     m_freedvStatusLabel = new QLabel("Stopped");
-    m_freedvStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_freedvStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
     btnRow->addWidget(m_freedvStatusLabel);
     btnRow->addStretch();
 
     m_freedvStartBtn = new QPushButton(m_freedvClient->isConnected() ? "Stop" : "Start");
     m_freedvStartBtn->setFixedWidth(100);
-    m_freedvStartBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_freedvStartBtn, "QPushButton { background: {{color.accent}}; color: {{color.background.0}}; font-weight: bold; "
         "border: 1px solid {{color.accent.dim}}; padding: 4px; border-radius: 3px; }"
         "QPushButton:hover { background: {{color.accent.bright}}; }"
-        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }"));
+        "QPushButton:disabled { background: #404060; color: {{color.text.label}}; }");
     connect(m_freedvStartBtn, &QPushButton::clicked, this, [this] {
         if (m_freedvClient->isConnected()) {
             emit freedvStopRequested();
@@ -1661,8 +1661,8 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
                                              : s.value("FreeDvMyCallsign", "").toString());
         m_fdvCallsignEdit->setReadOnly(useRadio);
     }
-    m_fdvCallsignEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"
-        "QLineEdit[readOnly=\"true\"] { color: {{color.text.label}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_fdvCallsignEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"
+        "QLineEdit[readOnly=\"true\"] { color: {{color.text.label}}; }");
     connect(m_fdvCallsignEdit, &QLineEdit::editingFinished, this, [this] {
         auto& as = AppSettings::instance();
         as.setValue("FreeDvMyCallsign", m_fdvCallsignEdit->text().trimmed().toUpper());
@@ -1696,8 +1696,8 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     m_fdvGridEdit->setPlaceholderText("AA00");
     m_fdvGridEdit->setMaxLength(6);
     m_fdvGridEdit->setText(s.value("FreeDvMyGrid", "").toString());
-    m_fdvGridEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"
-        "QLineEdit[readOnly=\"true\"] { color: {{color.text.label}}; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_fdvGridEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"
+        "QLineEdit[readOnly=\"true\"] { color: {{color.text.label}}; }");
     connect(m_fdvGridEdit, &QLineEdit::editingFinished, this, [this] {
         auto& as = AppSettings::instance();
         as.setValue("FreeDvMyGrid", m_fdvGridEdit->text().trimmed().toUpper());
@@ -1738,7 +1738,7 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     m_fdvMessageEdit = new QLineEdit;
     m_fdvMessageEdit->setPlaceholderText("Optional message shown on reporter map");
     m_fdvMessageEdit->setText(s.value("FreeDvMyMessage", "").toString());
-    m_fdvMessageEdit->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_fdvMessageEdit, "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; padding: 3px; }");
     connect(m_fdvMessageEdit, &QLineEdit::editingFinished, this, [this] {
         auto& as = AppSettings::instance();
         QString msg = m_fdvMessageEdit->text().trimmed();
@@ -1754,12 +1754,12 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     // ── Console output ──────────────────────────────────────────────────
     auto* consoleRow = new QHBoxLayout;
     auto* consoleLabel = new QLabel("FreeDV Spots");
-    consoleLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(consoleLabel, "QLabel { color: {{color.accent}}; font-weight: bold; }");
     consoleRow->addWidget(consoleLabel);
     consoleRow->addStretch();
 
     auto* spotColorLabel = new QLabel("Spot Color:");
-    spotColorLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 12px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(spotColorLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
     consoleRow->addWidget(spotColorLabel);
 
     QColor freedvColor(s.value("FreeDvSpotColor", "#FF8C00").toString());
@@ -1786,14 +1786,14 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
     m_freedvConsole = new QPlainTextEdit;
     m_freedvConsole->setReadOnly(true);
     m_freedvConsole->setMaximumBlockCount(2000);
-    m_freedvConsole->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_freedvConsole, "QPlainTextEdit {"
         "  background: {{color.background.0}};"
         "  color: {{color.text.secondary}};"
         "  font-family: monospace;"
         "  font-size: 11px;"
         "  border: 1px solid {{color.background.1}};"
         "  padding: 4px;"
-        "}"));
+        "}");
     layout->addWidget(m_freedvConsole, 1);
 
     tabs->addTab(page, "FreeDV");
@@ -1810,7 +1810,7 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     auto* filterRow = new QHBoxLayout;
     filterRow->setSpacing(2);
     auto* filterLabel = new QLabel("Bands:");
-    filterLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 13px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(filterLabel, "QLabel { color: {{color.text.label}}; font-size: 13px; }");
     filterRow->addWidget(filterLabel);
 
     // Table model + band filter proxy
@@ -1853,7 +1853,7 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     m_spotTable->verticalHeader()->setVisible(false);
     m_spotTable->verticalHeader()->setDefaultSectionSize(20);
     m_spotTable->horizontalHeader()->setStretchLastSection(true);
-    m_spotTable->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTableView {"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_spotTable, "QTableView {"
         "  background: {{color.background.0}};"
         "  alternate-background-color: #0f0f1e;"
         "  color: {{color.text.primary}};"
@@ -1872,7 +1872,7 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
         "  padding: 3px 6px;"
         "  font-weight: bold;"
         "  font-size: 11px;"
-        "}"));
+        "}");
 
     // Column widths
     m_spotTable->setColumnWidth(SpotTableModel::ColTime, 50);
@@ -1903,7 +1903,7 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     // Bottom bar: spot count + clear
     auto* bottomRow = new QHBoxLayout;
     auto* countLabel = new QLabel("0 spots");
-    countLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(countLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
     connect(m_spotModel, &QAbstractTableModel::rowsInserted, this, [this, countLabel] {
         countLabel->setText(QString("%1 spots").arg(m_spotModel->rowCount()));
     });
@@ -2252,7 +2252,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     // ── Total Spots ─────────────────────────────────────────────────────
     grid->addWidget(new QLabel("Total Spots:"), row, 0);
     m_totalSpotsLabel = new QLabel("0");
-    m_totalSpotsLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: bold; }"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_totalSpotsLabel, "QLabel { color: {{color.text.primary}}; font-weight: bold; }");
     grid->addWidget(m_totalSpotsLabel, row++, 1);
 
     layout->addLayout(grid);
@@ -2272,8 +2272,8 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     {
         auto* dxccTitle = new QLabel("DXCC Coloring");
         dxccTitle->setAlignment(Qt::AlignCenter);
-        dxccTitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { font-size: 13px; font-weight: bold; color: #80b0d0; "
-            "border-top: 1px solid {{color.background.2}}; padding-top: 8px; margin-top: 6px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(dxccTitle, "QLabel { font-size: 13px; font-weight: bold; color: #80b0d0; "
+            "border-top: 1px solid {{color.background.2}}; padding-top: 8px; margin-top: 6px; }");
         leftCol->addWidget(dxccTitle);
 
         auto* dxccGrid = new QGridLayout;
@@ -2393,8 +2393,8 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     {
         auto* shTitle = new QLabel("Signal History");
         shTitle->setAlignment(Qt::AlignCenter);
-        shTitle->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { font-size: 13px; font-weight: bold; color: #80b0d0; "
-            "border-top: 1px solid {{color.background.2}}; padding-top: 8px; margin-top: 6px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(shTitle, "QLabel { font-size: 13px; font-weight: bold; color: #80b0d0; "
+            "border-top: 1px solid {{color.background.2}}; padding-top: 8px; margin-top: 6px; }");
         rightCol->addWidget(shTitle);
 
         auto* shGrid = new QGridLayout;
@@ -2631,13 +2631,13 @@ void DxClusterDialog::updateStatus()
     // Cluster status
     if (m_client->isConnected()) {
         m_statusLabel->setText(QString("Connected to %1:%2").arg(m_client->host()).arg(m_client->port()));
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_connectBtn->setText("Disconnect");
         m_cmdEdit->setEnabled(true);
         m_sendBtn->setEnabled(true);
     } else {
         m_statusLabel->setText("Disconnected");
-        m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_connectBtn->setText("Connect");
         m_cmdEdit->setEnabled(false);
         m_sendBtn->setEnabled(false);
@@ -2645,13 +2645,13 @@ void DxClusterDialog::updateStatus()
     // RBN status
     if (m_rbnClient->isConnected()) {
         m_rbnStatusLabel->setText(QString("Connected to %1:%2").arg(m_rbnClient->host()).arg(m_rbnClient->port()));
-        m_rbnStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_rbnConnectBtn->setText("Disconnect");
         m_rbnCmdEdit->setEnabled(true);
         m_rbnSendBtn->setEnabled(true);
     } else {
         m_rbnStatusLabel->setText("Disconnected");
-        m_rbnStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_rbnStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_rbnConnectBtn->setText("Connect");
         m_rbnCmdEdit->setEnabled(false);
         m_rbnSendBtn->setEnabled(false);
@@ -2659,21 +2659,21 @@ void DxClusterDialog::updateStatus()
     // WSJT-X status
     if (m_wsjtxClient->isListening()) {
         m_wsjtxStatusLabel->setText(QString("Listening on port %1").arg(m_wsjtxPortSpin->value()));
-        m_wsjtxStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_wsjtxStartBtn->setText("Stop");
     } else {
         m_wsjtxStatusLabel->setText("Stopped");
-        m_wsjtxStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_wsjtxStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_wsjtxStartBtn->setText("Start");
     }
     // POTA status
     if (m_potaClient->isPolling()) {
         m_potaStatusLabel->setText("Polling...");
-        m_potaStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaStatusLabel, "QLabel { color: {{color.accent}}; font-size: 11px; }");
         m_potaStartBtn->setText("Stop");
     } else {
         m_potaStatusLabel->setText("Stopped");
-        m_potaStatusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.label}}; font-size: 11px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_potaStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
         m_potaStartBtn->setText("Start");
     }
 }

@@ -73,9 +73,9 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     });
     const QString title = QString::fromUtf8("Aetherial Audio \xe2\x80\x94 Channel Strip");
     setWindowTitle(title);
-    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QWidget { background: {{color.background.0}}; color: {{color.text.primary}}; }"
         "QFrame#stripGroupBox { border: 1px solid {{color.background.1}};"
-        " border-radius: 4px; background: transparent; }"));
+        " border-radius: 4px; background: transparent; }");
     // Width is hard — the chain row + 50 px tiles need the full
     // 1140 px to read.  Height drops to 900 so the strip fits on a
     // 1080p display (1080 minus taskbar/title chrome ≈ 1000); the
@@ -116,9 +116,9 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         m_titleBar = new QWidget(this);
         m_titleBar->setFixedHeight(18);
         m_titleBar->setAttribute(Qt::WA_StyledBackground, true);
-        m_titleBar->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_titleBar, "QWidget { background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
             "stop:0 #5a7494, stop:0.5 #384e68, stop:1 {{color.background.1}}); "
-            "border-bottom: 1px solid #0a1a28; }"));
+            "border-bottom: 1px solid #0a1a28; }");
         m_titleBar->installEventFilter(this);
 
         auto* row = new QHBoxLayout(m_titleBar);
@@ -130,8 +130,8 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         // event filter installed below.
         auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"),
                                 m_titleBar);
-        grip->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.text.secondary}};"
-            " font-size: 10px; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(grip, "QLabel { background: transparent; color: {{color.text.secondary}};"
+            " font-size: 10px; }");
         row->addWidget(grip);
 
         m_titleLbl = new QLabel(title + QString::fromUtf8(" \xe2\x80\x94 TX"),
@@ -289,7 +289,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         m_bypassBtn = new QPushButton("BYPASS", content);
         m_bypassBtn->setCheckable(true);
         m_bypassBtn->setFixedHeight(30);
-        m_bypassBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton {"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_bypassBtn, "QPushButton {"
             "  background: {{color.background.1}}; border: 1px solid #4a3020; border-radius: 3px;"
             "  color: #c8a070; font-size: 12px; font-weight: bold;"
             "  padding: 2px 10px;"
@@ -299,7 +299,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
             "QPushButton:checked {"
             "  background: #4a3818; color: {{color.accent.warning}}; border: 1px solid {{color.accent.warning}};"
             "}"
-            "QPushButton:checked:hover { background: #5a4a28; }"));
+            "QPushButton:checked:hover { background: #5a4a28; }");
         m_bypassBtn->setToolTip(
             tr("Bypass every stage in the active chain (including RN2) "
                "except the Final Output Stage (Trim, LIM, DC).  Click "
@@ -378,14 +378,14 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         m_presetCombo->setToolTip(
             "Channel-strip presets — pick a stored preset to load it, or use "
             "Import\xe2\x80\xa6 / Export\xe2\x80\xa6 to share presets via files.");
-        m_presetCombo->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QComboBox { background: {{color.background.1}}; color: {{color.text.primary}};"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_presetCombo, "QComboBox { background: {{color.background.1}}; color: {{color.text.primary}};"
             " border: 1px solid {{color.background.1}}; border-radius: 4px;"
             " padding: 1px 6px; font-size: 12px; }"
             "QComboBox:hover { border-color: #4a8fcf; }"
             "QComboBox::drop-down { width: 14px; border: none; }"
             "QComboBox QAbstractItemView { background: {{color.background.1}};"
             " color: {{color.text.primary}}; selection-background-color: #2a4a6a;"
-            " border: 1px solid {{color.background.1}}; }"));
+            " border: 1px solid {{color.background.1}}; }");
         connect(m_presetCombo,
                 QOverload<int>::of(&QComboBox::activated),
                 this, &AetherialAudioStrip::onPresetComboActivated);
@@ -513,7 +513,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
     gridScroll->setFrameShape(QFrame::NoFrame);
     gridScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     gridScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    gridScroll->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QScrollArea { background: transparent; border: none; }"
+    AetherSDR::ThemeManager::instance().applyStyleSheet(gridScroll, "QScrollArea { background: transparent; border: none; }"
         "QScrollArea > QWidget > QWidget { background: transparent; }"
         "QScrollBar:vertical { background: #0a1018; width: 10px; "
         "border: none; margin: 0; }"
@@ -523,7 +523,7 @@ AetherialAudioStrip::AetherialAudioStrip(AudioEngine* engine, QWidget* parent)
         "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical "
         "{ height: 0; border: none; background: none; }"
         "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical "
-        "{ background: none; }"));
+        "{ background: none; }");
 
     // RX panel grid (#2425) — same `wrap`-into-frame helper as TX, but
     // 4 rows of [ADSP|AGC-T] / [EQ wide] / [AGC-C|DESS] / [TUBE|EVO].

@@ -31,7 +31,7 @@ SpotCollectorClient::~SpotCollectorClient()
 QString SpotCollectorClient::logFilePath() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
-           + "/AetherSDR/spotcollector.log";
+           + "/AetherSDR/spothub/spotcollector.log";
 }
 
 void SpotCollectorClient::startListening(quint16 port)

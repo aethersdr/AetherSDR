@@ -2,17 +2,20 @@
 // Requires a running AetherSDR instance with rigctld enabled (default: localhost:4532).
 //
 // Build:  cmake --build build --target rigctld_test
-// Run:    ./build/rigctld_test [--host HOST] [--port PORT] [--ptt] [--cw]
+// Run:    ./build/rigctld_test [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
 //
 // PTT tests (section 6) and CW/Morse tests (section 11) are disabled by default.
 // Enable only when a dummy load or antenna is connected.
+// PTY test (section 16) runs automatically; skips if the per-user cat-A symlink cannot be opened.
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QDir>
 #include <QElapsedTimer>
 #include <QRegularExpression>
 #include <QSet>
+#include <QStandardPaths>
 #include <QTcpSocket>
 #include <QThread>
 
@@ -22,10 +25,29 @@
 #include <string>
 
 #if defined(Q_OS_UNIX)
+#include <cerrno>
+#include <fcntl.h>
+#include <termios.h>
 #include <unistd.h>
 #endif
 
 namespace {
+
+// ── Per-user PTY symlink path (matches CatPort::defaultSymlinkPath) ───────────
+
+static QString defaultPtyPath(int portIndex)
+{
+    const char letter = static_cast<char>('A' + portIndex);
+    const QString leaf = QStringLiteral("cat-") + QChar(letter);
+    QString base = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+    if (base.isEmpty())
+        base = QStandardPaths::writableLocation(QStandardPaths::CacheLocation);
+    if (base.isEmpty())
+        base = QDir::homePath() + QStringLiteral("/.cache/aethersdr");
+    if (!base.contains(QStringLiteral("aethersdr"), Qt::CaseInsensitive))
+        base += QStringLiteral("/aethersdr");
+    return base + QLatin1Char('/') + leaf;
+}
 
 // ── ANSI colour ───────────────────────────────────────────────────────────────
 
@@ -519,7 +541,7 @@ void section4(RigctlClient& c, Runner& r)
         do {
             freqDown = c.field(c.send(QStringLiteral("\\get_freq")),
                                QStringLiteral("Frequency")).toLongLong();
-            if (qAbs(freqDown - freqBefore) <= 1 || t.elapsed() >= 1000) break;
+            if (qAbs(freqDown - freqBefore) <= 1 || t.elapsed() >= 2000) break;
             QThread::msleep(100);
         } while (true);
     }
@@ -809,6 +831,24 @@ void section6Ptt(RigctlClient& c, Runner& r)
                     && qAbs(pwrRestored.toDouble() - origRfpower.toDouble()) < 0.02,
                 pwrRestored);
     }
+
+    // Safety: watch 2 s — firmware may briefly re-assert PTT after set_ptt 0
+    {
+        QElapsedTimer safeTimer; safeTimer.start();
+        bool sawTxOn = false;
+        c.send(QStringLiteral("\\set_ptt 0"));
+        do {
+            QThread::msleep(250);
+            lines = c.send(QStringLiteral("\\get_ptt"));
+            const QString pttSafe = c.field(lines, QStringLiteral("PTT"));
+            if (pttSafe == QLatin1String("1")) { sawTxOn = true; c.send(QStringLiteral("\\set_ptt 0")); }
+        } while (safeTimer.elapsed() < 2000);
+        if (sawTxOn)
+            qWarning("6.S: PTT re-asserted during 2-s safety watch — forced set_ptt 0; possible firmware bug");
+        r.check(QStringLiteral("6.S  safety: PTT confirmed 0 after 2-s watch"),
+                c.ok(lines) && c.field(lines, QStringLiteral("PTT")) == QLatin1String("0"),
+                c.field(lines, QStringLiteral("PTT")));
+    }
 }
 
 void section6Skip(Runner& r)
@@ -819,6 +859,7 @@ void section6Skip(Runner& r)
              "6.1  get_ptt baseline", "6.2  set_ptt 1", "6.3  get_ptt TX",
              "6.4  set_ptt 0",        "6.4b get_ptt RX", "6.5  get_dcd",
              "6.6  restore RFPOWER", "6.6b confirm RFPOWER restored",
+             "6.S  safety: PTT 0 after 2-s watch",
          })
         r.skip(QLatin1String(name), QStringLiteral("--ptt not set"));
 }
@@ -1155,9 +1196,27 @@ void section11Cw(RigctlClient& c, Runner& r)
     QThread::msleep(500);
     c.send(QStringLiteral("\\stop_morse"));
 
-    // 11.4  PTT releases cleanly after CW completes (manual verification)
-    std::cout << "  " << yellow(QStringLiteral("NOTE")).toStdString()
-              << "  11.4 TX release after CW — verify radio returns to RX manually\n";
+    // 11.4  Safety: watch 2 s — CW TX-tail may keep PTT on after stop_morse
+    {
+        QElapsedTimer safeTimer; safeTimer.start();
+        bool sawTxOn = false;
+        c.send(QStringLiteral("\\set_ptt 0"));
+        do {
+            QThread::msleep(250);
+            lines = c.send(QStringLiteral("\\get_ptt"));
+            const QString pttSafe = c.field(lines, QStringLiteral("PTT"));
+            if (pttSafe == QLatin1String("1")) {
+                sawTxOn = true;
+                c.send(QStringLiteral("\\set_ptt 0"));
+                c.send(QStringLiteral("\\stop_morse"));
+            }
+        } while (safeTimer.elapsed() < 2000);
+        if (sawTxOn)
+            qWarning("11.4: PTT re-asserted during 2-s safety watch — forced set_ptt 0; possible firmware bug");
+        r.check(QStringLiteral("11.4 safety: PTT confirmed 0 after 2-s watch"),
+                c.ok(lines) && c.field(lines, QStringLiteral("PTT")) == QLatin1String("0"),
+                c.field(lines, QStringLiteral("PTT")));
+    }
 
     // Restore break-in state and mode
     if (origFbkin == QLatin1String("0") || origFbkin == QLatin1String("1"))
@@ -1198,7 +1257,7 @@ void section11Skip(Runner& r)
              "11.0d set_mode CW 500", "11.0d2 mode confirmed CW",
              "11.0e get_func FBKIN", "11.0f set_func FBKIN 1",
              "11.1 send_morse inline", "11.2 stop_morse",
-             "11.3 two-line form",     "11.4 TX release",
+             "11.3 two-line form",     "11.4 safety: PTT 0 after 2-s watch",
              "11.5 restore RFPOWER",   "11.5b confirm RFPOWER restored",
          })
         r.skip(QLatin1String(name), QStringLiteral("--cw not set"));
@@ -1545,6 +1604,126 @@ void sectionEdge(RigctlClient& c, Runner& r)
     c.send(QStringLiteral("\\stop_morse"));
 }
 
+// ═════════════════════════════════════════════════════════════════════════════
+// Section 16 — PTY round-trip  (Unix only; skips if device cannot be opened)
+// ═════════════════════════════════════════════════════════════════════════════
+
+#if defined(Q_OS_UNIX)
+class PtyClient
+{
+public:
+    explicit PtyClient(int timeoutMs = 3000) : m_timeout(timeoutMs) {}
+    ~PtyClient() { if (m_fd >= 0) ::close(m_fd); }
+
+    bool openDevice(const QString& path)
+    {
+        errno = 0;
+        m_fd = ::open(path.toLocal8Bit().constData(), O_RDWR | O_NOCTTY | O_NONBLOCK);
+        if (m_fd < 0) return false;
+        struct termios tio;
+        if (::tcgetattr(m_fd, &tio) == 0) {
+            ::cfmakeraw(&tio);
+            tio.c_cc[VMIN]  = 0;
+            tio.c_cc[VTIME] = 0;
+            ::tcsetattr(m_fd, TCSANOW, &tio);
+        }
+        return true;
+    }
+
+    void send(const QString& cmd)
+    {
+        QByteArray ba = ('+' + cmd + QLatin1Char('\n')).toUtf8();
+        ::write(m_fd, ba.constData(), ba.size());
+    }
+
+    QStringList readUntilRprt()
+    {
+        QStringList result;
+        QByteArray lineBuf;
+        QElapsedTimer timer; timer.start();
+        while (timer.elapsed() < m_timeout) {
+            char ch;
+            if (::read(m_fd, &ch, 1) == 1) {
+                if (ch == '\n') {
+                    QString line = QString::fromUtf8(lineBuf).trimmed();
+                    lineBuf.clear();
+                    if (!line.isEmpty()) {
+                        result.append(line);
+                        if (line.startsWith(QLatin1String("RPRT"))) return result;
+                    }
+                } else if (ch != '\r') {
+                    lineBuf.append(ch);
+                }
+            } else {
+                QThread::msleep(10);
+            }
+        }
+        return result;
+    }
+
+    QStringList query(const QString& cmd) { send(cmd); return readUntilRprt(); }
+
+    static QString field(const QStringList& lines, const QString& label)
+    {
+        const QString prefix = label + QLatin1String(": ");
+        for (const QString& l : lines) {
+            if (l.startsWith(prefix)) return l.mid(prefix.size());
+        }
+        return {};
+    }
+
+    static bool ok(const QStringList& lines)
+    {
+        return lines.contains(QStringLiteral("RPRT 0"));
+    }
+
+private:
+    int m_fd{-1};
+    int m_timeout;
+};
+
+void sectionPty(Runner& r, const QString& ptyPath)
+{
+    r.section(QStringLiteral("Section 16 — PTY round-trip  (skips if device cannot be opened)"));
+
+    PtyClient p;
+    if (!p.openDevice(ptyPath)) {
+        const QString why = QStringLiteral("cannot open %1 (%2)")
+                                .arg(ptyPath, QString::fromLocal8Bit(::strerror(errno)));
+        for (const char* name : { "16.1 get_freq via PTY", "16.2 get_mode via PTY",
+                                   "16.3 get_info via PTY" })
+            r.skip(QString::fromLatin1(name), why);
+        return;
+    }
+
+    QStringList lines = p.query(QStringLiteral("\\get_freq"));
+    const QString freq = PtyClient::field(lines, QStringLiteral("Frequency"));
+    r.check(QStringLiteral("16.1 get_freq via PTY → Frequency: <integer>"),
+            PtyClient::ok(lines) && isInt(freq),
+            freq.isEmpty() ? QStringLiteral("(no response)") : freq);
+
+    lines = p.query(QStringLiteral("\\get_mode"));
+    const QString mode = PtyClient::field(lines, QStringLiteral("Mode"));
+    r.check(QStringLiteral("16.2 get_mode via PTY → Mode: <string>"),
+            PtyClient::ok(lines) && !mode.isEmpty(),
+            mode.isEmpty() ? QStringLiteral("(no response)") : mode);
+
+    lines = p.query(QStringLiteral("\\get_rig_info"));
+    const QString info = PtyClient::field(lines, QStringLiteral("Info"));
+    r.check(QStringLiteral("16.3 get_rig_info via PTY → Info: <string>"),
+            PtyClient::ok(lines) && !info.isEmpty(),
+            info.isEmpty() ? QStringLiteral("(no response)") : info);
+}
+#else
+void sectionPty(Runner& r, const QString&)
+{
+    r.section(QStringLiteral("Section 16 — PTY round-trip  (skipped — Unix only)"));
+    for (const char* name : { "16.1 get_freq via PTY", "16.2 get_mode via PTY",
+                               "16.3 get_info via PTY" })
+        r.skip(QString::fromLatin1(name), QStringLiteral("not Unix"));
+}
+#endif
+
 } // namespace
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1582,12 +1761,17 @@ int main(int argc, char** argv)
         QStringLiteral("enable PTT tests (section 6) — requires dummy load or antenna"));
     QCommandLineOption cwOpt({QStringLiteral("cw")},
         QStringLiteral("enable CW/Morse tests (section 11) — requires --ptt and CW mode"));
+    const QString defaultPty0 = defaultPtyPath(0);
+    QCommandLineOption ptyOpt({QStringLiteral("pty")},
+        QStringLiteral("PTY device path for section 16 (default: %1)").arg(defaultPty0),
+        QStringLiteral("PATH"), defaultPty0);
 
     parser.addOption(hostOpt);
     parser.addOption(portOpt);
     parser.addOption(timeoutOpt);
     parser.addOption(pttOpt);
     parser.addOption(cwOpt);
+    parser.addOption(ptyOpt);
     parser.process(app);
 
     const QString  host    = parser.value(hostOpt);
@@ -1595,6 +1779,7 @@ int main(int argc, char** argv)
     const int      timeout = parser.value(timeoutOpt).toInt();
     const bool     doPtt   = parser.isSet(pttOpt);
     const bool     doCw    = parser.isSet(cwOpt);
+    const QString  ptyPath = parser.value(ptyOpt);
 
     std::cout << '\n' << bold(QStringLiteral("AetherSDR rigctld Test Suite")).toStdString() << '\n'
               << "Connecting to " << host.toStdString() << ':' << port << " ...\n";
@@ -1654,6 +1839,7 @@ int main(int argc, char** argv)
     section14(c, r);
     section15(c, r);
     sectionEdge(c, r);
+    sectionPty(r, ptyPath);
 
     // Best-effort state restore.
     c.send(QStringLiteral("\\set_ptt 0"));
