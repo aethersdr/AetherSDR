@@ -2,6 +2,7 @@
 
 #include "ComboStyle.h"
 #include "GuardedSlider.h"
+#include "Theme.h"
 #include "WaveformWidget.h"
 #include "core/AppSettings.h"
 #include "core/SettingsHelpers.h"
@@ -56,12 +57,6 @@ int closestStepIdx(int targetMs)
     }
     return bestIdx;
 }
-
-const QString kSliderStyle =
-    "QSlider::groove:horizontal { height: 4px; background: #203040; border-radius: 2px; }"
-    "QSlider::sub-page:horizontal { background: #00b4d8; border-radius: 2px; }"
-    "QSlider::handle:horizontal { width: 12px; height: 12px; margin: -4px 0; "
-    "background: #c8d8e8; border: 1px solid #00b4d8; border-radius: 6px; }";
 
 QLabel* makeSettingLabel(const QString& text, QWidget* parent)
 {
@@ -248,7 +243,7 @@ void WaveApplet::buildSettingsDrawer()
         m_zoomSlider->setPageStep(50);
         m_zoomSlider->setTickInterval(100);
         m_zoomSlider->setTickPosition(QSlider::NoTicks);
-        m_zoomSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_zoomSlider);
         row->addWidget(m_zoomSlider, 1);
 
         m_zoomValue = new QLabel(m_settingsDrawer);
@@ -282,7 +277,7 @@ void WaveApplet::buildSettingsDrawer()
         m_refreshSlider->setPageStep(10);
         m_refreshSlider->setTickInterval(5);
         m_refreshSlider->setTickPosition(QSlider::NoTicks);
-        m_refreshSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_refreshSlider);
         row->addWidget(m_refreshSlider, 1);
 
         m_refreshValue = new QLabel(m_settingsDrawer);
@@ -315,7 +310,7 @@ void WaveApplet::buildSettingsDrawer()
         m_windowSlider->setSingleStep(1);
         m_windowSlider->setPageStep(1);
         m_windowSlider->setTickPosition(QSlider::NoTicks);
-        m_windowSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_windowSlider);
         m_windowSlider->setToolTip(
             "Time window. Steps: 240 ms, 480 ms, 1 s, then 1-second "
             "increments to 10 s.");

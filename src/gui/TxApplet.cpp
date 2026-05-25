@@ -3,6 +3,7 @@
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
 #include "HGauge.h"
+#include "Theme.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
@@ -45,11 +46,6 @@ static void setIndicatorActive(QLabel* lbl, bool active, const QColor& color = Q
 }
 
 // ── Compact slider row: "Label:  [slider] value" ────────────────────────────
-
-static constexpr const char* kSliderStyle =
-    "QSlider::groove:horizontal { height: 4px; background: #203040; border-radius: 2px; }"
-    "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
-    "background: #00b4d8; border-radius: 5px; }";
 
 static QString wattsText(int value)
 {
@@ -136,7 +132,7 @@ void TxApplet::buildUI()
         m_rfPowerSlider = new GuardedSlider(Qt::Horizontal);
         m_rfPowerSlider->setRange(0, 100);
         m_rfPowerSlider->setDragValueFormatter(wattsText);
-        m_rfPowerSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_rfPowerSlider);
         m_rfPowerSlider->setAccessibleName("RF power");
         m_rfPowerSlider->setAccessibleDescription("Transmit RF power level, 0 to 100 watts");
         row->addWidget(m_rfPowerSlider, 1);
@@ -161,7 +157,7 @@ void TxApplet::buildUI()
         m_tunePowerSlider = new GuardedSlider(Qt::Horizontal);
         m_tunePowerSlider->setRange(0, 100);
         m_tunePowerSlider->setDragValueFormatter(wattsText);
-        m_tunePowerSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_tunePowerSlider);
         m_tunePowerSlider->setAccessibleName("Tune power");
         m_tunePowerSlider->setAccessibleDescription("Tune carrier power level, 0 to 100 watts");
         row->addWidget(m_tunePowerSlider, 1);

@@ -1,5 +1,6 @@
 #include "DspParamPopup.h"
 #include "GuardedSlider.h"
+#include "Theme.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -25,12 +26,6 @@ static const QString kPopupStyle = QStringLiteral(
     "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050;"
     "  border-radius: 3px; padding: 3px 8px; font-size: 11px; }"
     "QPushButton:hover { background: rgba(0, 112, 192, 180); border: 1px solid #0090e0; }");
-
-static const QString kSliderStyle = QStringLiteral(
-    "QSlider::groove:horizontal { height: 4px; background: #304050; border-radius: 2px; }"
-    "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
-    "  background: #c8d8e8; border-radius: 5px; }"
-    "QSlider::handle:horizontal:hover { background: #00b4d8; }");
 
 DspParamPopup::DspParamPopup(QWidget* parent)
     : QWidget(parent, Qt::Popup | Qt::FramelessWindowHint)
@@ -86,7 +81,7 @@ void DspParamPopup::addSlider(const QString& label, int min, int max, int defaul
     auto* slider = new GuardedSlider(Qt::Horizontal);
     slider->setRange(min, max);
     slider->setValue(defaultVal);
-    slider->setStyleSheet(kSliderStyle);
+    applyPrimarySliderStyle(slider);
     row->addWidget(slider);
 
     auto* val = new QLabel(format ? format(defaultVal) : QString::number(defaultVal));

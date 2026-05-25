@@ -1,6 +1,7 @@
 #include "PhoneApplet.h"
 #include "GuardedSlider.h"
 #include "models/TransmitModel.h"
+#include "Theme.h"
 #include "core/AppSettings.h"
 
 #include <QPushButton>
@@ -52,11 +53,6 @@ private:
 
 
 // ── Style constants ──────────────────────────────────────────────────────────
-
-static constexpr const char* kSliderStyle =
-    "QSlider::groove:horizontal { height: 4px; background: #203040; border-radius: 2px; }"
-    "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
-    "background: #00b4d8; border-radius: 5px; }";
 
 static QString percentText(int value)
 {
@@ -123,7 +119,7 @@ void PhoneApplet::buildUI()
         m_amCarrierSlider->setDragValueFormatter(percentText);
         m_amCarrierSlider->setAccessibleName("AM carrier level");
         m_amCarrierSlider->setAccessibleDescription("AM carrier power level, 0 to 100 percent");
-        m_amCarrierSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_amCarrierSlider);
         connect(m_amCarrierSlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_updatingFromModel && m_model) m_model->setAmCarrierLevel(v);
             m_amCarrierLabel->setText(QString::number(v));
@@ -164,7 +160,7 @@ void PhoneApplet::buildUI()
         m_voxLevelSlider->setDragValueFormatter(percentText);
         m_voxLevelSlider->setAccessibleName("VOX level");
         m_voxLevelSlider->setAccessibleDescription("VOX activation threshold");
-        m_voxLevelSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_voxLevelSlider);
         connect(m_voxLevelSlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_updatingFromModel && m_model) m_model->setVoxLevel(v);
             m_voxLevelLabel->setText(QString::number(v));
@@ -199,7 +195,7 @@ void PhoneApplet::buildUI()
         m_voxDelaySlider->setRange(0, 100);
         m_voxDelaySlider->setAccessibleName("VOX delay");
         m_voxDelaySlider->setAccessibleDescription("VOX hang time before returning to receive");
-        m_voxDelaySlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_voxDelaySlider);
         connect(m_voxDelaySlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_updatingFromModel && m_model) m_model->setVoxDelay(v);
             m_voxDelayLabel->setText(QString::number(v));
@@ -248,7 +244,7 @@ void PhoneApplet::buildUI()
         m_dexpSlider->setDragValueFormatter(percentText);
         m_dexpSlider->setAccessibleName("DEXP threshold");
         m_dexpSlider->setAccessibleDescription("Downward expander gate threshold");
-        m_dexpSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_dexpSlider);
         connect(m_dexpSlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_updatingFromModel && m_model) {
                 m_model->setDexpLevel(v);

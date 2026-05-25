@@ -4,6 +4,7 @@
 #include "EditorFramelessTitleBar.h"
 #include "FramelessMoveHelper.h"
 #include "MeterSmoother.h"
+#include "Theme.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClientFinalLimiter.h"
@@ -775,14 +776,7 @@ void StripFinalOutputPanel::showToneEditor()
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->setWindowTitle(tr("Test Tone"));
     dlg->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QDialog { background: {{color.background.0}}; }"
-        "QLabel  { color: {{color.text.primary}}; font-size: 11px; }"
-        "QSlider::groove:horizontal { height: 4px; background: {{color.background.1}};"
-        " border-radius: 2px; }"
-        "QSlider::sub-page:horizontal { background: {{color.accent.warning}};"
-        " border-radius: 2px; }"
-        "QSlider::handle:horizontal { width: 12px; height: 12px;"
-        " margin: -4px 0; background: {{color.text.primary}}; border: 1px solid {{color.accent.warning}};"
-        " border-radius: 6px; }"));
+        "QLabel  { color: {{color.text.primary}}; font-size: 11px; }"));
 
     auto* form = new QFormLayout(dlg);
     form->setContentsMargins(12, 12, 12, 12);
@@ -790,6 +784,7 @@ void StripFinalOutputPanel::showToneEditor()
 
     // Frequency: log mapping 50 Hz → 5 kHz across slider 0..1000.
     auto* freqSlider = new QSlider(Qt::Horizontal, dlg);
+    applyPrimarySliderStyle(freqSlider, QStringLiteral("color.accent.warning"));
     freqSlider->setRange(0, 1000);
     auto freqToSlider = [](float hz) {
         const float n = std::log(std::clamp(hz, 50.0f, 5000.0f) / 50.0f)
@@ -824,6 +819,7 @@ void StripFinalOutputPanel::showToneEditor()
 
     // Level: linear -60..0 dBFS.
     auto* lvlSlider = new QSlider(Qt::Horizontal, dlg);
+    applyPrimarySliderStyle(lvlSlider, QStringLiteral("color.accent.warning"));
     lvlSlider->setRange(-60, 0);
     lvlSlider->setValue(static_cast<int>(std::round(tone->levelDb())));
     auto* lvlLbl = new QLabel(dlg);
@@ -880,13 +876,6 @@ void StripFinalOutputPanel::showQuindarEditor()
         "QPushButton:hover { background: #243042; color: {{color.accent.warning}}; }"
         "QPushButton:checked { background: {{color.background.tx}}; color: {{color.accent.warning}};"
         " border: 1px solid {{color.accent.warning}}; }"
-        "QSlider::groove:horizontal { height: 4px; background: {{color.background.1}};"
-        " border-radius: 2px; }"
-        "QSlider::sub-page:horizontal { background: {{color.accent.warning}};"
-        " border-radius: 2px; }"
-        "QSlider::handle:horizontal { width: 12px; height: 12px;"
-        " margin: -4px 0; background: {{color.text.primary}}; border: 1px solid {{color.accent.warning}};"
-        " border-radius: 6px; }"
         "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}};"
         " border: 1px solid {{color.background.1}}; border-radius: 2px;"
         " padding: 1px 4px; font-size: 11px; }"));
@@ -989,6 +978,7 @@ void StripFinalOutputPanel::showQuindarEditor()
 
     // Level
     auto* lvlSlider = new QSlider(Qt::Horizontal, dlg);
+    applyPrimarySliderStyle(lvlSlider, QStringLiteral("color.accent.warning"));
     lvlSlider->setRange(-20, 0);
     lvlSlider->setValue(static_cast<int>(std::round(q->levelDb())));
     auto* lvlLbl = new QLabel(dlg);
@@ -1031,6 +1021,7 @@ void StripFinalOutputPanel::showQuindarEditor()
     morseWpmSpin->setSuffix(" WPM");
     morseWpmSpin->setValue(q->morseWpm());
     auto* morsePitchSlider = new QSlider(Qt::Horizontal, dlg);
+    applyPrimarySliderStyle(morsePitchSlider, QStringLiteral("color.accent.warning"));
     morsePitchSlider->setRange(400, 1200);
     morsePitchSlider->setValue(static_cast<int>(std::round(q->morsePitchHz())));
     auto* morsePitchLbl = new QLabel(dlg);

@@ -2,6 +2,7 @@
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
 #include "GuardedSlider.h"
+#include "Theme.h"
 
 #include <QRegularExpression>
 #include <QSet>
@@ -23,12 +24,6 @@
 namespace AetherSDR {
 
 namespace {
-
-const QString kSliderStyle = QStringLiteral(
-    "QSlider::groove:horizontal { height: 4px; background: #304050; border-radius: 2px; }"
-    "QSlider::handle:horizontal { width: 12px; height: 12px; margin: -4px 0;"
-    "  background: #c8d8e8; border-radius: 6px; }"
-    "QSlider::handle:horizontal:hover { background: #00b4d8; }");
 
 const QString kWidgetStyle = QStringLiteral(
     "QWidget { color: #c8d8e8; }"
@@ -551,7 +546,7 @@ QWidget* AetherDspWidget::buildNr2Page()
         m_nr2GainMaxSlider = new GuardedSlider(Qt::Horizontal);
         m_nr2GainMaxSlider->setRange(50, 200);
         m_nr2GainMaxSlider->setValue(150);
-        m_nr2GainMaxSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_nr2GainMaxSlider);
         m_nr2GainMaxSlider->setToolTip("Maximum noise reduction depth. Higher values suppress more noise but risk distorting speech.");
         sliderGrid->addWidget(m_nr2GainMaxSlider, row, 1);
         m_nr2GainMaxLabel = new QLabel("1.50");
@@ -577,7 +572,7 @@ QWidget* AetherDspWidget::buildNr2Page()
         m_nr2SmoothSlider = new GuardedSlider(Qt::Horizontal);
         m_nr2SmoothSlider->setRange(50, 98);
         m_nr2SmoothSlider->setValue(85);
-        m_nr2SmoothSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_nr2SmoothSlider);
         m_nr2SmoothSlider->setToolTip("How smoothly the noise estimate tracks changes. Higher values give steadier but slower adaptation.");
         sliderGrid->addWidget(m_nr2SmoothSlider, row, 1);
         m_nr2SmoothLabel = new QLabel("0.85");
@@ -603,7 +598,7 @@ QWidget* AetherDspWidget::buildNr2Page()
         m_nr2QsppSlider = new GuardedSlider(Qt::Horizontal);
         m_nr2QsppSlider->setRange(5, 50);
         m_nr2QsppSlider->setValue(20);
-        m_nr2QsppSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_nr2QsppSlider);
         m_nr2QsppSlider->setToolTip("Speech detection threshold. Lower values preserve quiet speech but may pass more noise.");
         sliderGrid->addWidget(m_nr2QsppSlider, row, 1);
         m_nr2QsppLabel = new QLabel("0.20");
@@ -708,7 +703,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4ReductionSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4ReductionSlider->setRange(0, 400);
         m_nr4ReductionSlider->setValue(100);
-        m_nr4ReductionSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_nr4ReductionSlider);
         m_nr4ReductionSlider->setToolTip("Maximum noise reduction in dB. Higher values remove more noise but may affect speech.");
         sliderGrid->addWidget(m_nr4ReductionSlider, row, 1);
         m_nr4ReductionLabel = new QLabel("10.0");
@@ -733,7 +728,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4SmoothingSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4SmoothingSlider->setRange(0, 100);
         m_nr4SmoothingSlider->setValue(0);
-        m_nr4SmoothingSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_nr4SmoothingSlider);
         m_nr4SmoothingSlider->setToolTip("Time-domain smoothing of the noise estimate. Higher values produce steadier but slower reduction.");
         sliderGrid->addWidget(m_nr4SmoothingSlider, row, 1);
         m_nr4SmoothingLabel = new QLabel("0");
@@ -757,7 +752,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4WhiteningSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4WhiteningSlider->setRange(0, 100);
         m_nr4WhiteningSlider->setValue(0);
-        m_nr4WhiteningSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_nr4WhiteningSlider);
         m_nr4WhiteningSlider->setToolTip("Flattens the spectral shape of residual noise so it sounds more uniform.");
         sliderGrid->addWidget(m_nr4WhiteningSlider, row, 1);
         m_nr4WhiteningLabel = new QLabel("0");
@@ -781,7 +776,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4MaskingSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4MaskingSlider->setRange(0, 100);
         m_nr4MaskingSlider->setValue(50);
-        m_nr4MaskingSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_nr4MaskingSlider);
         m_nr4MaskingSlider->setToolTip("Depth of spectral masking. Higher values suppress more noise in masked frequency regions.");
         sliderGrid->addWidget(m_nr4MaskingSlider, row, 1);
         m_nr4MaskingLabel = new QLabel("0.50");
@@ -806,7 +801,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         m_nr4SuppressionSlider = new GuardedSlider(Qt::Horizontal);
         m_nr4SuppressionSlider->setRange(0, 100);
         m_nr4SuppressionSlider->setValue(50);
-        m_nr4SuppressionSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_nr4SuppressionSlider);
         m_nr4SuppressionSlider->setToolTip("Overall suppression strength. Higher values apply more aggressive noise removal.");
         sliderGrid->addWidget(m_nr4SuppressionSlider, row, 1);
         m_nr4SuppressionLabel = new QLabel("0.50");
@@ -869,7 +864,7 @@ QWidget* AetherDspWidget::buildMnrPage()
         m_mnrStrengthSlider = new GuardedSlider(Qt::Horizontal);
         m_mnrStrengthSlider->setRange(0, 100);
         m_mnrStrengthSlider->setValue(100);
-        m_mnrStrengthSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_mnrStrengthSlider);
         m_mnrStrengthSlider->setToolTip("Adjust noise reduction aggressiveness (0 = mild, 100 = maximum)");
         row->addWidget(m_mnrStrengthSlider, 1);
 
@@ -984,7 +979,7 @@ QWidget* AetherDspWidget::buildDfnrPage()
     m_dfnrAttenSlider = new QSlider(Qt::Horizontal);
     m_dfnrAttenSlider->setRange(0, 100);
     m_dfnrAttenSlider->setValue(static_cast<int>(s.value("DfnrAttenLimit", "100").toFloat()));
-    m_dfnrAttenSlider->setStyleSheet(kSliderStyle);
+    applyPrimarySliderStyle(m_dfnrAttenSlider);
     m_dfnrAttenSlider->setToolTip("Maximum noise attenuation in dB.\n"
                                    "0 dB = passthrough (no denoising)\n"
                                    "100 dB = maximum noise removal\n\n"
@@ -1009,7 +1004,7 @@ QWidget* AetherDspWidget::buildDfnrPage()
     m_dfnrBetaSlider = new QSlider(Qt::Horizontal);
     m_dfnrBetaSlider->setRange(0, 30);
     m_dfnrBetaSlider->setValue(static_cast<int>(s.value("DfnrPostFilterBeta", "0.0").toFloat() * 100));
-    m_dfnrBetaSlider->setStyleSheet(kSliderStyle);
+    applyPrimarySliderStyle(m_dfnrBetaSlider);
     m_dfnrBetaSlider->setToolTip("Post-filter strength for additional noise suppression.\n"
                                   "0 = disabled (default)\n"
                                   "0.05–0.15 = subtle additional filtering\n"

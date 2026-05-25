@@ -3,6 +3,7 @@
 #include "GuardedSlider.h"
 #include "SliceLabel.h"
 #include "SpectrumWidget.h"
+#include "Theme.h"
 #include "core/AppSettings.h"
 #include "core/SettingsHelpers.h"
 
@@ -140,8 +141,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     int savedSens = AppSettings::instance().value("CwDecoderSensitivity", "30").toString().toInt();
     m_cwSensSlider->setValue(savedSens);
     m_cwSensSlider->setFixedWidth(60);
-    m_cwSensSlider->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSlider::groove:horizontal { background: {{color.background.1}}; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: {{color.accent}}; width: 10px; margin: -3px 0; border-radius: 5px; }"));
+    applyPrimarySliderStyle(m_cwSensSlider);
     m_cwCostThreshold = 1.0f - (savedSens / 100.0f) * 0.9f;
     connectSliderSetting(m_cwSensSlider,
         [this](int v) {

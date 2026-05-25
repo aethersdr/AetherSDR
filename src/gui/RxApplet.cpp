@@ -8,6 +8,7 @@
 #include "SliceLabel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "Theme.h"
 #include "models/TransmitModel.h"
 
 #include <QPushButton>
@@ -128,11 +129,6 @@ static constexpr const char* kButtonBase =
     "border-radius: 3px; color: #c8d8e8; font-size: 10px; font-weight: bold; "
     "padding: 1px 2px; }"
     "QPushButton:hover { background: #204060; }";
-
-static constexpr const char* kSliderStyle =
-    "QSlider::groove:horizontal { height: 4px; background: #203040; border-radius: 2px; }"
-    "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
-    "background: #00b4d8; border-radius: 5px; }";
 
 static constexpr const char* kDimLabelStyle =
     "QLabel { color: #8090a0; font-size: 11px; }";
@@ -757,7 +753,7 @@ void RxApplet::buildUI()
         m_afSlider->setRange(0, 100);
         m_afSlider->setValue(70);
         static_cast<GuardedSlider*>(m_afSlider)->setDragValueFormatter(percentText);
-        m_afSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_afSlider);
         row->addWidget(m_afSlider, 1);
 
         connect(m_afSlider, &QSlider::valueChanged, this, [this](int v) {
@@ -780,7 +776,7 @@ void RxApplet::buildUI()
         m_panSlider->setRange(0, 100);
         m_panSlider->setValue(50);
         static_cast<GuardedSlider*>(m_panSlider)->setDragValueFormatter(panText);
-        m_panSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_panSlider);
         row->addWidget(m_panSlider, 1);
 
         auto* rLbl = new QLabel("R");
@@ -814,7 +810,7 @@ void RxApplet::buildUI()
                 return QStringLiteral("%1 dB").arg(v);
             return QString::number(v);
         });
-        m_sqlSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_sqlSlider);
         row->addWidget(m_sqlSlider, 1);
 
         applySqlModeVisuals();
@@ -870,7 +866,7 @@ void RxApplet::buildUI()
         m_agcTSlider = new GuardedSlider(Qt::Horizontal);
         m_agcTSlider->setRange(0, 100);
         m_agcTSlider->setValue(65);
-        m_agcTSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_agcTSlider);
         agcRow->addWidget(m_agcTSlider, 1);
 
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {

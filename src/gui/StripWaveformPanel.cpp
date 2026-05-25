@@ -2,6 +2,7 @@
 
 #include "EditorFramelessTitleBar.h"
 #include "StripWaveform.h"
+#include "Theme.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 
@@ -68,15 +69,7 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     m_windowSlider->setPageStep(1);   // mouse wheel notch = ±1 sec
     m_windowSlider->setFixedWidth(120);
     m_windowSlider->setFixedHeight(14);
-    m_windowSlider->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSlider::groove:horizontal { height: 4px; background: {{color.background.1}};"
-        " border-radius: 2px; }"
-        "QSlider::sub-page:horizontal { background: {{color.accent.warning}};"
-        " border-radius: 2px; }"
-        "QSlider::handle:horizontal { width: 10px; height: 10px;"
-        " margin: -3px 0; background: {{color.text.primary}}; border: 1px solid {{color.accent.warning}};"
-        " border-radius: 5px; }"
-        "QSlider::handle:horizontal:hover { background: {{color.text.primary}};"
-        " border: 1px solid #ffd060; }"));
+    applyPrimarySliderStyle(m_windowSlider, QStringLiteral("color.accent.warning"));
     m_windowSlider->setToolTip(
         tr("Waveform time window — how many seconds of audio fit across "
            "the plot.  Range 1–20 s."));

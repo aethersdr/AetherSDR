@@ -3,6 +3,7 @@
 #include "ComboStyle.h"
 #include "HGauge.h"
 #include "models/TransmitModel.h"
+#include "Theme.h"
 #include "core/AppSettings.h"
 
 #include <QPushButton>
@@ -60,11 +61,6 @@ private:
 
 
 // ── Style constants ──────────────────────────────────────────────────────────
-
-static constexpr const char* kSliderStyle =
-    "QSlider::groove:horizontal { height: 4px; background: #203040; border-radius: 2px; }"
-    "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
-    "background: #00b4d8; border-radius: 5px; }";
 
 static const QString kBlueActive =
     "QPushButton:checked { background-color: #0070c0; color: #ffffff; "
@@ -201,7 +197,7 @@ void PhoneCwApplet::buildPhonePanel()
 
         m_micLevelSlider = new GuardedSlider(Qt::Horizontal);
         m_micLevelSlider->setRange(0, 100);
-        m_micLevelSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_micLevelSlider);
         m_micLevelSlider->setAccessibleName("Microphone gain");
         m_micLevelSlider->setAccessibleDescription("Microphone input level, 0 to 100");
         row->addWidget(m_micLevelSlider, 1);
@@ -287,7 +283,7 @@ void PhoneCwApplet::buildPhonePanel()
         m_procSlider->setFixedHeight(14);
         m_procSlider->setAccessibleName("Processor level");
         m_procSlider->setAccessibleDescription("Speech processor level: Normal, DX, or DX+");
-        m_procSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_procSlider);
         procVbox->addWidget(m_procSlider);
 
         row->addWidget(procGroup, 1);
@@ -337,7 +333,7 @@ void PhoneCwApplet::buildPhonePanel()
 
         m_monSlider = new GuardedSlider(Qt::Horizontal);
         m_monSlider->setRange(0, 100);
-        m_monSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_monSlider);
         m_monSlider->setAccessibleName("Monitor volume");
         m_monSlider->setAccessibleDescription("TX sidetone monitor volume");
         row->addWidget(m_monSlider, 1);
@@ -408,7 +404,7 @@ void PhoneCwApplet::buildCwPanel()
         m_delaySlider->setPageStep(100);
         m_delaySlider->setAccessibleName("CW delay");
         m_delaySlider->setAccessibleDescription("CW break-in delay in milliseconds");
-        m_delaySlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_delaySlider);
         row->addWidget(m_delaySlider, 1);
 
         m_delayEdit = new QLineEdit("500");
@@ -451,7 +447,7 @@ void PhoneCwApplet::buildCwPanel()
         m_speedSlider->setRange(5, 100);
         m_speedSlider->setAccessibleName("CW speed");
         m_speedSlider->setAccessibleDescription("CW keying speed in words per minute");
-        m_speedSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_speedSlider);
         row->addWidget(m_speedSlider, 1);
 
         m_speedEdit = new QLineEdit("20");
@@ -498,7 +494,7 @@ void PhoneCwApplet::buildCwPanel()
         m_sidetoneSlider->setRange(0, 100);
         m_sidetoneSlider->setAccessibleName("Sidetone volume");
         m_sidetoneSlider->setAccessibleDescription("CW sidetone monitor volume");
-        m_sidetoneSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_sidetoneSlider);
         row->addWidget(m_sidetoneSlider, 1);
 
         m_sidetoneEdit = new QLineEdit("50");
@@ -549,7 +545,7 @@ void PhoneCwApplet::buildCwPanel()
         m_cwPanSlider->setValue(50);
         m_cwPanSlider->setAccessibleName("CW audio pan");
         m_cwPanSlider->setAccessibleDescription("CW monitor audio pan, left to right");
-        m_cwPanSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_cwPanSlider);
         row->addWidget(m_cwPanSlider, 1);
 
         auto* rLbl = new QLabel("R");

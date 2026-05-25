@@ -4,6 +4,7 @@
 #include "SpectrumWidget.h"
 #include "GuardedSlider.h"
 #include "ComboStyle.h"
+#include "Theme.h"
 #include "models/SliceModel.h"
 #include "models/BandDefs.h"
 #include "core/AppSettings.h"
@@ -61,13 +62,6 @@ static const QString kPanelStyle =
 static const QString kLabelStyle =
     "QLabel { background: transparent; border: none; "
     "color: #8aa8c0; font-size: 10px; font-weight: bold; }";
-
-static const QString kSliderStyle =
-    "QSlider { border: none; }"
-    "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; "
-    "border-radius: 2px; }"
-    "QSlider::handle:horizontal { background: #c8d8e8; width: 10px; "
-    "margin: -4px 0; border-radius: 5px; }";
 
 static const QString kMenuBtnNormal =
     "QPushButton { background: rgba(20, 30, 45, 240); "
@@ -399,7 +393,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_rfGainSlider->setPageStep(8);
     m_rfGainSlider->setTickInterval(8);
     m_rfGainSlider->setTickPosition(QSlider::TicksBelow);
-    m_rfGainSlider->setStyleSheet(kSliderStyle);
+    applyPrimarySliderStyle(m_rfGainSlider);
     m_rfGainSlider->setToolTip("RF Gain: −8 to +32 dB (8 dB steps)\n"
                                "Step size is determined by radio hardware.");
     gainRow->addWidget(m_rfGainSlider, 1);
@@ -448,7 +442,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_wnbSlider = new GuardedSlider(Qt::Horizontal);
     m_wnbSlider->setRange(0, 100);
     m_wnbSlider->setValue(50);
-    m_wnbSlider->setStyleSheet(kSliderStyle);
+    applyPrimarySliderStyle(m_wnbSlider);
     wnbRow->addWidget(m_wnbSlider, 1);
     m_wnbLabel = new QLabel("50");
     m_wnbLabel->setStyleSheet(kLabelStyle);
@@ -877,11 +871,6 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     auto labelStyle = QStringLiteral("QLabel { color: #8090a0; font-size: 10px; border: none; }");
     auto valStyle   = QStringLiteral("QLabel { color: #c8d8e8; font-size: 10px; border: none;"
                                       " min-width: 24px; }");
-    auto sliderStyle = QStringLiteral(
-        "QSlider { border: none; }"
-        "QSlider::groove:horizontal { height: 4px; background: #203040; border-radius: 2px; }"
-        "QSlider::handle:horizontal { width: 10px; height: 10px; margin: -3px 0;"
-        " background: #00b4d8; border-radius: 5px; }");
     auto btnStyle = QStringLiteral(
         "QPushButton { background: #1a2a3a; color: #c8d8e8; border: 1px solid #205070;"
         " border-radius: 3px; font-size: 10px; font-weight: bold; padding: 2px 6px; }"
@@ -901,7 +890,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         slider = new GuardedSlider(Qt::Horizontal);
         slider->setRange(lo, hi);
         slider->setValue(def);
-        slider->setStyleSheet(sliderStyle);
+        applyPrimarySliderStyle(slider);
         grid->addWidget(slider, row, 1, 1, 2);
 
         valLbl = new QLabel(QString::number(def));
@@ -929,7 +918,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         slider = new GuardedSlider(Qt::Horizontal);
         slider->setRange(lo, hi);
         slider->setValue(def);
-        slider->setStyleSheet(sliderStyle);
+        applyPrimarySliderStyle(slider);
         grid->addWidget(slider, row, 2);
 
         valLbl = new QLabel(QString::number(def));
@@ -1011,7 +1000,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         m_lineWidthSlider->setValue(4);
         m_lineWidthSlider->setSingleStep(1);
         m_lineWidthSlider->setPageStep(1);
-        m_lineWidthSlider->setStyleSheet(sliderStyle);
+        applyPrimarySliderStyle(m_lineWidthSlider);
         grid->addWidget(m_lineWidthSlider, row, 1, 1, 2);
 
         m_lineWidthLabel = new QLabel("2.0");
@@ -1046,7 +1035,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         m_fillSlider = new GuardedSlider(Qt::Horizontal);
         m_fillSlider->setRange(0, 100);
         m_fillSlider->setValue(70);
-        m_fillSlider->setStyleSheet(sliderStyle);
+        applyPrimarySliderStyle(m_fillSlider);
         grid->addWidget(m_fillSlider, row, 2);
 
         m_fillLabel = new QLabel("70");
@@ -1167,7 +1156,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         m_bgOpacitySlider = new GuardedSlider(Qt::Horizontal);
         m_bgOpacitySlider->setRange(0, 100);
         m_bgOpacitySlider->setValue(80);
-        m_bgOpacitySlider->setStyleSheet(sliderStyle);
+        applyPrimarySliderStyle(m_bgOpacitySlider);
         grid->addWidget(m_bgOpacitySlider, row, 1, 1, 2);
         m_bgOpacityLabel = new QLabel("80");
         m_bgOpacityLabel->setStyleSheet(valStyle);

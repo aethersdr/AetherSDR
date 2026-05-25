@@ -9,6 +9,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "Theme.h"
 #include "core/AppSettings.h"
 
 #include <QDateTime>
@@ -193,12 +194,6 @@ static const QString kModeBtn =
     "color: #c8d8e8; font-size: 13px; font-weight: bold; padding: 3px; }"
     "QPushButton:checked { background: #0070c0; color: #ffffff; border: 1px solid #0090e0; }"
     "QPushButton:hover { border: 1px solid #0090e0; }";
-
-static const QString kSliderStyle =
-    "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
-    "QSlider::handle:horizontal { background: #c8d8e8; width: 12px; margin: -4px 0; border-radius: 6px; }"
-    "QSlider::groove:vertical { background: #1a2a3a; width: 4px; border-radius: 2px; }"
-    "QSlider::handle:vertical { background: #c8d8e8; height: 12px; margin: 0 -4px; border-radius: 6px; }";
 
 static const QString kLabelStyle =
     "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }";
@@ -780,7 +775,7 @@ void VfoWidget::buildTabContent()
         m_afGainSlider->setAccessibleName("AF gain");
         m_afGainSlider->setAccessibleDescription("Audio output volume for this slice");
         m_afGainSlider->setRange(0, 100);
-        m_afGainSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_afGainSlider);
         gainRow->addWidget(m_afGainSlider, 1);
         auto* afVal = new QLabel("0");
         afVal->setStyleSheet(kLabelStyle);
@@ -802,7 +797,7 @@ void VfoWidget::buildTabContent()
         m_sqlSlider->setAccessibleName("Squelch threshold");
         m_sqlSlider->setRange(0, 100);
         m_sqlSlider->setValue(20);
-        m_sqlSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_sqlSlider);
         sqlRow->addWidget(m_sqlSlider, 1);
         m_sqlValueLbl = new QLabel("20");
         m_sqlValueLbl->setStyleSheet(kLabelStyle);
@@ -826,7 +821,7 @@ void VfoWidget::buildTabContent()
         m_agcTSlider->setAccessibleName("AGC threshold");
         m_agcTSlider->setRange(0, 100);
         m_agcTSlider->setValue(65);
-        m_agcTSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_agcTSlider);
         agcRow->addWidget(m_agcTSlider, 1);
         m_agcValueLbl = new QLabel("65");
         m_agcValueLbl->setStyleSheet(kLabelStyle);
@@ -854,7 +849,7 @@ void VfoWidget::buildTabContent()
         m_panSlider = new CenterMarkSlider(50, Qt::Horizontal);
         m_panSlider->setRange(0, 100);
         m_panSlider->setValue(50);
-        m_panSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_panSlider);
         panRow->addWidget(m_panSlider, 1);
         auto* panR = new QLabel("R");
         panR->setStyleSheet(kLabelStyle);
@@ -898,7 +893,7 @@ void VfoWidget::buildTabContent()
         m_escPhaseSlider->setAccessibleName("ESC phase");
         m_escPhaseSlider->setRange(0, 72);   // 0–360° in 5° steps
         m_escPhaseSlider->setValue(0);
-        m_escPhaseSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_escPhaseSlider);
         escTopRow->addWidget(m_escPhaseSlider, 1);
         m_escPhaseLbl = new QLabel("0\u00B0");
         m_escPhaseLbl->setStyleSheet(kLabelStyle);
@@ -923,7 +918,7 @@ void VfoWidget::buildTabContent()
         m_escGainSlider->setAccessibleName("ESC gain");
         m_escGainSlider->setRange(0, 200);   // 0.0 – 2.0
         m_escGainSlider->setValue(100);       // default 1.0
-        m_escGainSlider->setStyleSheet(kSliderStyle);
+        applyPrimarySliderStyle(m_escGainSlider);
         gainCol->addWidget(m_escGainSlider, 1);
         auto* gainLbl = new QLabel("G");
         gainLbl->setStyleSheet(kLabelStyle);
@@ -1150,7 +1145,7 @@ void VfoWidget::buildTabContent()
 
             m_dspLevelSlider = new GuardedSlider(Qt::Horizontal);
             m_dspLevelSlider->setRange(0, 100);
-            m_dspLevelSlider->setStyleSheet(kSliderStyle);
+            applyPrimarySliderStyle(m_dspLevelSlider);
             lvlHb->addWidget(m_dspLevelSlider, 1);
 
             m_dspLevelValue = new QLabel("0");
@@ -1217,7 +1212,7 @@ void VfoWidget::buildTabContent()
             m_apfSlider->setAccessibleDescription("CW audio peaking filter bandwidth");
             m_apfSlider->setRange(0, 100);
             m_apfSlider->setValue(50);
-            m_apfSlider->setStyleSheet(kSliderStyle);
+            applyPrimarySliderStyle(m_apfSlider);
             m_apfSlider->setToolTip("Adjusts APF bandwidth. Higher values narrow the peak for better CW selectivity.");
             apfVb->addWidget(m_apfSlider, 1);
             m_apfValueLbl = new QLabel("50");
