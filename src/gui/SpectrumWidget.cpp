@@ -2997,6 +2997,22 @@ void SpectrumWidget::setSpectrumCursor(Qt::CursorShape shape)
     // standard Qt cursor changes can pass through QImage::toCGImage() in the
     // Cocoa platform plugin; issue #2458 crashed in that path while dispatching
     // enter/leave events.
+#ifdef Q_OS_MAC
+    // Qt 6.11's Cocoa plugin can synthesize some standard cursors from bitmap
+    // resources before handing them to CoreGraphics. Avoid the bitmap-backed
+    // shapes used in the panadapter hot paths; issue #2910 reports the same
+    // QImage::toCGImage() crash after the redundant-install guard shipped.
+    switch (shape) {
+    case Qt::SplitVCursor:
+        shape = Qt::SizeVerCursor;
+        break;
+    case Qt::SizeAllCursor:
+        shape = Qt::OpenHandCursor;
+        break;
+    default:
+        break;
+    }
+#endif
     if (cursor().shape() == shape) {
         return;
     }
