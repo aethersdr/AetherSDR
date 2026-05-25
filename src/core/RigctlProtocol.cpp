@@ -1,4 +1,5 @@
 #include "RigctlProtocol.h"
+#include "LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -243,6 +244,17 @@ QString RigctlProtocol::rprt(int code) const
 // ── Main entry point ────────────────────────────────────────────────────────
 
 QString RigctlProtocol::handleLine(const QString& line)
+{
+    const QString trimmedIn = line.trimmed();
+    if (!trimmedIn.isEmpty())
+        qCDebug(lcCat).noquote() << "rigctld ←" << trimmedIn;
+    const QString resp = handleLineImpl(line);
+    if (!resp.isEmpty())
+        qCDebug(lcCat).noquote() << "rigctld →" << resp.trimmed();
+    return resp;
+}
+
+QString RigctlProtocol::handleLineImpl(const QString& line)
 {
     if (m_pendingMorseLine) {
         m_pendingMorseLine = false;

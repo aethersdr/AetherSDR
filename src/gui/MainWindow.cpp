@@ -4407,21 +4407,40 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // ── 8-channel CAT: rigctld + PTY (A-H, each bound to a slice) ────────────
-    {
-        for (int i = 0; i < kCatChannels; ++i) {
-            m_rigctlServers[i] = new RigctlServer(&m_radioModel, this);
-            m_rigctlServers[i]->setSliceIndex(i);
-            m_rigctlPtys[i] = new RigctlPty(&m_radioModel, this);
-            m_rigctlPtys[i]->setSliceIndex(i);
-            // Symlink path is computed per-user via
-            // RigctlPty::defaultSymlinkPath() (#2940 / GHSA-qxhr-cwrc-pvrm).
-            m_rigctlPtys[i]->setSymlinkPath(RigctlPty::defaultSymlinkPath(i));
-        }
+    // ── Unified CAT ports (kCatPorts slots, configured from settings) ───────────
+    // Migrate old dual-server settings to the new per-port schema on first run.
+    migrateCatSettings();
+    for (int i = 0; i < kCatPorts; ++i) {
+        m_catPorts[i] = new CatPort(&m_radioModel, this);
+        // Per-user symlink path (GHSA-qxhr-cwrc-pvrm — matches RigctlPty fix).
+        m_catPorts[i]->setSymlinkPath(CatPort::defaultSymlinkPath(i));
+        // Load persisted dialect and VFO config; port and enabled are read
+        // in applyCatPortCount() just before starting.
+        const QString prefix = QString("CatPort_%1_").arg(i);
+        auto& s = AppSettings::instance();
+        QString d = s.value(prefix + "Dialect", "Rigctld").toString();
+        CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
+                        : (d == "TS2000")  ? CatDialect::TS2000
+                        : CatDialect::Rigctld;
+        m_catPorts[i]->setDialect(dial);
+        m_catPorts[i]->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+        m_catPorts[i]->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
     }
-    m_appletPanel->catControlApplet()->setRadioModel(&m_radioModel);
-    m_appletPanel->catControlApplet()->setRigctlServers(m_rigctlServers, kCatChannels);
-    m_appletPanel->catControlApplet()->setRigctlPtys(m_rigctlPtys, kCatChannels);
+
+    // Wire the applet to the port objects
+    m_appletPanel->catControlApplet()->setPorts(m_catPorts, kCatPorts);
+    m_appletPanel->catControlApplet()->setMaxSlices(catPortTargetCount());
+
+    // Wire master enable toggle from the docked applet
+    connect(m_appletPanel->catControlApplet(), &CatControlApplet::enableChanged,
+            this, [this](bool) { applyCatPortCount(); });
+
+    // Per-port config changes in the floating table → re-apply port states
+    connect(m_appletPanel->catControlApplet(), &CatControlApplet::configChanged,
+            this, [this]() { applyCatPortCount(); });
+
+    // Auto-start based on saved master enable
+    applyCatPortCount();
     m_appletPanel->daxApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->daxIqApplet()->setRadioModel(&m_radioModel);
 #ifdef HAVE_WEBSOCKETS
@@ -7738,59 +7757,17 @@ void MainWindow::buildMenuBar()
 
     settingsMenu->addSeparator();
 
-    auto* autoRigctlAction = settingsMenu->addAction("Autostart rigctld with AetherSDR");
-    autoRigctlAction->setCheckable(true);
-    autoRigctlAction->setChecked(
-        AppSettings::instance().value("AutoStartRigctld", "False").toString() == "True");
-    connect(autoRigctlAction, &QAction::toggled, this, [this](bool on) {
-        auto& s = AppSettings::instance();
-        s.setValue("AutoStartRigctld", on ? "True" : "False");
-        s.save();
-        if (m_radioModel.isConnected()) {
-            const int basePort = s.value("CatTcpPort", "4532").toInt();
-            for (int i = 0; i < kCatChannels; ++i) {
-                if (on && m_rigctlServers[i] && !m_rigctlServers[i]->isRunning())
-                    m_rigctlServers[i]->start(static_cast<quint16>(basePort + i));
-                else if (!on && m_rigctlServers[i] && m_rigctlServers[i]->isRunning())
-                    m_rigctlServers[i]->stop();
-            }
-            if (m_appletPanel && m_appletPanel->catControlApplet())
-                m_appletPanel->catControlApplet()->setTcpEnabled(on);
-        }
-    });
-
-#ifdef _WIN32
-    // CAT virtual serial ports require macOS or Linux. Force the setting
-    // off so a saved True (e.g. from a Linux settings import) can't
-    // activate anything, and omit the menu entry entirely (#1556).
-    {
-        auto& s = AppSettings::instance();
-        if (s.value("AutoStartCAT", "False").toString() != "False") {
-            s.setValue("AutoStartCAT", "False");
-            s.save();
-        }
-    }
-#else
+    // CAT: unified port manager (rigctld / TS-2000 / FlexCAT per port)
     auto* autoCatAction = settingsMenu->addAction("Autostart CAT with AetherSDR");
     autoCatAction->setCheckable(true);
     autoCatAction->setChecked(
-        AppSettings::instance().value("AutoStartCAT", "False").toString() == "True");
+        AppSettings::instance().value("CatEnabled", "False").toString() == "True");
     connect(autoCatAction, &QAction::toggled, this, [this](bool on) {
         auto& s = AppSettings::instance();
-        s.setValue("AutoStartCAT", on ? "True" : "False");
+        s.setValue("CatEnabled", on ? "True" : "False");
         s.save();
-        if (m_radioModel.isConnected()) {
-            for (int i = 0; i < kCatChannels; ++i) {
-                if (on && m_rigctlPtys[i] && !m_rigctlPtys[i]->isRunning())
-                    m_rigctlPtys[i]->start();
-                else if (!on && m_rigctlPtys[i] && m_rigctlPtys[i]->isRunning())
-                    m_rigctlPtys[i]->stop();
-            }
-            if (m_appletPanel && m_appletPanel->catControlApplet())
-                m_appletPanel->catControlApplet()->setPtyEnabled(on);
-        }
+        applyCatPortCount();
     });
-#endif
 
     auto* autoTciAction = settingsMenu->addAction("Autostart TCI with AetherSDR");
     autoTciAction->setCheckable(true);
@@ -7863,10 +7840,7 @@ void MainWindow::buildMenuBar()
             && action != midiAction
 #endif
             && action != multiFlexAction
-            && action != autoRigctlAction
-#ifndef _WIN32
             && action != autoCatAction
-#endif
             && action != autoTciAction
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
             && action != autoDaxAction
@@ -9211,6 +9185,99 @@ void MainWindow::buildUI()
     }
 }
 
+// ─── CAT port helpers ─────────────────────────────────────────────────────────
+
+int MainWindow::catPortTargetCount() const
+{
+    if (!m_radioModel.isConnected()) return 1;
+    return RadioModel::maxSlicesForModel(m_radioModel.model());
+}
+
+void MainWindow::applyCatPortCount()
+{
+    auto& s = AppSettings::instance();
+    const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
+    const int  target   = catPortTargetCount();
+
+    for (int i = 0; i < kCatPorts; ++i) {
+        if (!m_catPorts[i]) continue;
+
+        const QString prefix = QString("CatPort_%1_").arg(i);
+        const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
+        const int  portNum     = s.value(prefix + "Port", "").toInt();
+        const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024) && (i < target);
+
+        if (shouldRun && !m_catPorts[i]->isRunning()) {
+            // Re-apply config in case dialect/VFO was changed while stopped
+            QString d = s.value(prefix + "Dialect", "Rigctld").toString();
+            CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
+                            : (d == "TS2000")  ? CatDialect::TS2000
+                            : CatDialect::Rigctld;
+            m_catPorts[i]->setDialect(dial);
+            m_catPorts[i]->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+            m_catPorts[i]->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
+            m_catPorts[i]->start(static_cast<quint16>(portNum));
+        } else if (!shouldRun && m_catPorts[i]->isRunning()) {
+            m_catPorts[i]->stop();
+        }
+    }
+
+    auto* applet = m_appletPanel ? m_appletPanel->catControlApplet() : nullptr;
+    if (applet) {
+        applet->setCatEnabled(masterOn);
+        // Show hardware max when connected; fall back to kMaxPorts (all letters) when not.
+        const int hwSlices = (target > 1) ? target : kCatPorts;
+        applet->setMaxSlices(hwSlices);
+    }
+}
+
+void MainWindow::migrateCatSettings()
+{
+    auto& s = AppSettings::instance();
+
+    // Only migrate if new schema not yet written
+    if (s.contains("CatPort_0_Port")) return;
+
+    // Port 0: old rigctld settings
+    QString rigPort = s.value("CatTcpPort", "4532").toString();
+    bool rigEnabled = s.value("AutoStartRigctld", "False").toString() == "True";
+    s.setValue("CatPort_0_Port",    rigPort);
+    s.setValue("CatPort_0_Dialect", "Rigctld");
+    s.setValue("CatPort_0_VfoA",    "0");
+    s.setValue("CatPort_0_VfoB",    "1");
+    s.setValue("CatPort_0_Enabled", rigEnabled ? "True" : "False");
+
+    // Port 1: old SmartCAT settings
+    QString catPort = s.value("SmartCatPort", "5001").toString();
+    bool catEnabled = s.value("AutoStartCAT", "False").toString() == "True";
+    s.setValue("CatPort_1_Port",    catPort);
+    s.setValue("CatPort_1_Dialect", "FlexCAT");
+    s.setValue("CatPort_1_VfoA",    "0");
+    s.setValue("CatPort_1_VfoB",    "1");
+    s.setValue("CatPort_1_Enabled", catEnabled ? "True" : "False");
+
+    // Remaining ports: disabled with no port
+    for (int i = 2; i < kCatPorts; ++i) {
+        const QString pfx = QString("CatPort_%1_").arg(i);
+        s.setValue(pfx + "Port",    "");
+        s.setValue(pfx + "Dialect", "FlexCAT");
+        s.setValue(pfx + "VfoA",    "0");
+        s.setValue(pfx + "VfoB",    "-1");
+        s.setValue(pfx + "Enabled", "False");
+    }
+
+    // Master enable: on if either old server was enabled
+    s.setValue("CatEnabled", (rigEnabled || catEnabled) ? "True" : "False");
+
+    s.save();
+}
+
+void MainWindow::adjustCatPortCounts(bool connected)
+{
+    Q_UNUSED(connected)
+    applyCatPortCount();
+}
+
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
 void MainWindow::applyDarkTheme()
@@ -9318,38 +9385,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_bsExpiryTimer && !m_bsExpiryTimer->isActive())
             m_bsExpiryTimer->start();
 
-        // Auto-start 4-channel rigctld TCP servers if enabled
-        auto& as = AppSettings::instance();
-        if (as.value("AutoStartRigctld", "False").toString() == "True") {
-            const int basePort = as.value("CatTcpPort", "4532").toInt();
-            for (int i = 0; i < kCatChannels; ++i) {
-                if (m_rigctlServers[i] && !m_rigctlServers[i]->isRunning()) {
-                    m_rigctlServers[i]->start(
-                        static_cast<quint16>(basePort + i));
-                    qDebug() << "AutoStart: rigctld ch" << i
-                             << "on port" << (basePort + i);
-                }
-            }
-            if (m_appletPanel && m_appletPanel->catControlApplet())
-                m_appletPanel->catControlApplet()->setTcpEnabled(true);
-        }
-        // Auto-start 8-channel CAT virtual serial ports if enabled
-        if (as.value("AutoStartCAT", "False").toString() == "True") {
-            for (int i = 0; i < kCatChannels; ++i) {
-                if (m_rigctlPtys[i] && !m_rigctlPtys[i]->isRunning()) {
-                    m_rigctlPtys[i]->start();
-                    qDebug() << "AutoStart: PTY ch" << i
-                             << m_rigctlPtys[i]->symlinkPath();
-                }
-            }
-            if (m_appletPanel && m_appletPanel->catControlApplet())
-                m_appletPanel->catControlApplet()->setPtyEnabled(true);
-        }
+        // Apply CAT port counts for the newly connected radio.
+        // applyCatPortCount() starts/stops ports up to maxSlicesForModel().
+        applyCatPortCount();
 #ifdef HAVE_WEBSOCKETS
         // Auto-start TCI WebSocket server if enabled
-        if (as.value("AutoStartTCI", "False").toString() == "True") {
+        if (AppSettings::instance().value("AutoStartTCI", "False").toString() == "True") {
             if (m_tciServer && !m_tciServer->isRunning()) {
-                int tciPort = as.value("TciPort", "50001").toInt();
+                int tciPort = AppSettings::instance().value("TciPort", "50001").toInt();
                 m_tciServer->start(static_cast<quint16>(tciPort));
                 qDebug() << "AutoStart: TCI on port" << tciPort
                          << " running=" << m_tciServer->isRunning();
@@ -9494,6 +9537,10 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
         }
     } else {
+        // Radio disconnected: trim CAT ports back to 1 so apps on channel A
+        // stay connected through brief reconnects, higher channels stop cleanly.
+        applyCatPortCount();  // catPortTargetCount() returns 1 when !connected
+
         if (m_layoutRestoreTimer) {
             m_layoutRestoreTimer->stop();
         }

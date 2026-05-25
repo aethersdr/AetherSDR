@@ -201,6 +201,8 @@ public:
     }
     bool    tcxoPresent()  const { return m_tcxoPresent; }
     bool    binauralRx()   const { return m_binauralRx; }
+    bool    cwxActive()    const { return m_cwxActive; }
+    void    setBinauralRx(bool on);  // optimistic update + radio command
     bool    muteLocalWhenRemote() const { return m_muteLocalWhenRemote; }
     bool    autoSave() const { return m_autoSave; }
     int     freqErrorPpb() const { return m_freqErrorPpb; }

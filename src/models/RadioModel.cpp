@@ -1567,6 +1567,13 @@ void RadioModel::setPanDbmRange(float minDbm, float maxDbm)
             .arg(static_cast<double>(maxDbm), 0, 'f', 2));
 }
 
+void RadioModel::setBinauralRx(bool on)
+{
+    if (m_binauralRx == on) return;
+    m_binauralRx = on;
+    sendCmd(QString("radio set binaural_rx=%1").arg(on ? 1 : 0));
+}
+
 void RadioModel::setPanWnb(bool on)
 {
     if (m_activePanId.isEmpty()) return;

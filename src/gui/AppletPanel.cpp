@@ -763,7 +763,17 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     }
 
     m_catControlApplet = new CatControlApplet;
-    m_appletOrder.append(makeEntry("CAT", "CAT Control", m_catControlApplet, false, btnRow2, btnLayout2));
+    {
+        auto catEntry = makeEntry("CAT", "CAT Control", m_catControlApplet, false, btnRow2, btnLayout2);
+        m_appletOrder.append(catEntry);
+        // Switch the applet between its simple (docked) and full-table (floating) views.
+        if (auto* c = qobject_cast<ContainerWidget*>(catEntry.widget)) {
+            connect(c, &ContainerWidget::dockModeChanged, m_catControlApplet,
+                    [this](ContainerWidget::DockMode mode) {
+                        m_catControlApplet->setFloating(mode == ContainerWidget::DockMode::Floating);
+                    });
+        }
+    }
 
     m_daxApplet = new DaxApplet;
     m_appletOrder.append(makeEntry("DAX", "DAX Audio", m_daxApplet, false, btnRow2, btnLayout2));

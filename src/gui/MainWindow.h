@@ -7,11 +7,10 @@
 #include "core/CommandParser.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
-#include "core/RigctlServer.h"
+#include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
 #endif
-#include "core/RigctlPty.h"
 #include "core/SmartLinkClient.h"
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
@@ -149,6 +148,7 @@ protected:
 private slots:
     // Radio/connection events
     void onConnectionStateChanged(bool connected);
+    void adjustCatPortCounts(bool connected);  // called from onConnectionStateChanged
     void onConnectionError(const QString& msg);
     // GHSA-wfx7-w6p8-4jr2 phase 2 (#2951): show mismatch modal and
     // forward the operator's decision back to the WanConnection.
@@ -422,10 +422,17 @@ private:
     QsoRecorder*      m_qsoRecorder{nullptr};
     ClientPuduMonitor* m_finalMonitor{nullptr};
     BandSettings      m_bandSettings;
-    // 8-channel CAT: each channel (A-H) binds to a slice index (0-7)
-    static constexpr int kCatChannels = 8;
-    RigctlServer*     m_rigctlServers[kCatChannels]{};
-    RigctlPty*        m_rigctlPtys[kCatChannels]{};
+    // CAT ports: up to 8 unified ports (rigctld / TS-2000 / FlexCAT), one per slice.
+    static constexpr int kCatPorts = 8;
+    CatPort* m_catPorts[kCatPorts]{};
+
+    // Returns how many CAT ports should be visible in the UI given radio state.
+    // 1 when no radio; maxSlicesForModel() when connected.
+    int catPortTargetCount() const;
+    // Start/stop ports to match CatEnabled master + per-port Enabled flags.
+    void applyCatPortCount();
+    // One-time settings migration from the old dual-server key schema.
+    void migrateCatSettings();
 #ifdef HAVE_WEBSOCKETS
     TciServer*        m_tciServer{nullptr};
 #endif

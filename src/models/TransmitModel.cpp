@@ -366,6 +366,10 @@ void TransmitModel::setActiveProfile(const QString& profile)
 void TransmitModel::setRfPower(int power)
 {
     power = qBound(0, power, 100);
+    if (m_rfPower != power) {
+        m_rfPower = power;
+        emit stateChanged();
+    }
     emit commandReady(QString("transmit set rfpower=%1").arg(power));
 }
 

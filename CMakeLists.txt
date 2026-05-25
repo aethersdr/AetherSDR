@@ -456,6 +456,9 @@ set(CORE_SOURCES
     src/core/PerfTelemetry.cpp
     src/core/RigctlProtocol.cpp
     src/core/RigctlPty.cpp
+    src/core/SmartCatProtocol.cpp
+    src/core/SmartCatSession.cpp
+    src/core/CatPort.cpp
     src/core/SmartLinkClient.cpp
     src/core/WanConnection.cpp
     src/core/DxClusterClient.cpp
@@ -467,7 +470,6 @@ set(CORE_SOURCES
     src/core/MqttSettings.cpp
     src/core/SpotCommandPolicy.cpp
     src/core/SpotModeResolver.cpp
-    src/core/RigctlServer.cpp
     src/core/TciServer.cpp
     src/core/TciProtocol.cpp
     src/core/MqttClient.cpp
@@ -1867,6 +1869,22 @@ add_executable(rigctld_test
 )
 target_include_directories(rigctld_test PRIVATE src)
 target_link_libraries(rigctld_test PRIVATE Qt6::Core Qt6::Network)
+
+# Integration tests — require a running AetherSDR instance with CAT ports enabled.
+# Not added to ctest; run manually:
+#   ./build/CAT_TS-2000_test  [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
+#   ./build/CAT_Flex_test     [--host HOST] [--port PORT] [--ptt] [--cw] [--pty PATH]
+add_executable(CAT_TS-2000_test
+    tests/CAT_TS-2000_test.cpp
+)
+target_include_directories(CAT_TS-2000_test PRIVATE src)
+target_link_libraries(CAT_TS-2000_test PRIVATE Qt6::Core Qt6::Network)
+
+add_executable(CAT_Flex_test
+    tests/CAT_Flex_test.cpp
+)
+target_include_directories(CAT_Flex_test PRIVATE src)
+target_link_libraries(CAT_Flex_test PRIVATE Qt6::Core Qt6::Network)
 
 
 # ── Install rules ────────────────────────────────────────────────────────────
