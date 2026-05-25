@@ -8,6 +8,15 @@ static const HidDeviceId kSupportedDevices[] = {
     {0x077D, 0x0410, "Griffin PowerMate"},
     {0x0B33, 0x0020, "Contour ShuttleXpress"},
     {0x0B33, 0x0030, "Contour ShuttlePro v2"},
+    // AetherPad (Arduino Giga R1) running its RC-28 emulator firmware
+    // (github.com/nigelfenton/aether-pad). The Giga's mbed PluggableUSB
+    // stack hardcodes the device-level VID/PID to Arduino's composite
+    // 0x2341:0x0266, so the emulator can't claim Icom's identity — we
+    // route the Arduino-default VID/PID to IcomRC28Parser instead.
+    // Gives a hardware-in-the-loop test bench for the RC-28 wire
+    // protocol; validated against PR #2870's report-layout fix
+    // (end-to-end test 2026-05-20).
+    {0x2341, 0x0266, "AetherPad RC-28 emulator (Arduino Giga R1)"},
 };
 
 const HidDeviceId* HidDeviceParser::supportedDevices() { return kSupportedDevices; }
@@ -19,6 +28,9 @@ std::unique_ptr<HidDeviceParser> HidDeviceParser::create(uint16_t vid, uint16_t 
     if (vid == 0x077D && pid == 0x0410) return std::make_unique<GriffinPowerMateParser>();
     if (vid == 0x0B33 && pid == 0x0020) return std::make_unique<ShuttleXpressParser>();
     if (vid == 0x0B33 && pid == 0x0030) return std::make_unique<ShuttleProV2Parser>();
+    // AetherPad emulator alias — same parser as the real RC-28 (see
+    // comment in kSupportedDevices above).
+    if (vid == 0x2341 && pid == 0x0266) return std::make_unique<IcomRC28Parser>();
     return nullptr;
 }
 
