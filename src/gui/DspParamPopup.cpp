@@ -12,6 +12,7 @@
 #include <QEvent>
 #include <QApplication>
 #include <QScreen>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -48,7 +49,7 @@ void DspParamPopup::addRadioGroup(const QString& label, const QStringList& optio
                                    int defaultIdx, std::function<void(int)> onChange)
 {
     auto* lbl = new QLabel(label);
-    lbl->setStyleSheet("QLabel { color: #8090a0; font-size: 10px; font-weight: bold; }");
+    lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; font-weight: bold; }"));
     m_layout->addWidget(lbl);
 
     auto* row = new QHBoxLayout;
@@ -89,7 +90,7 @@ void DspParamPopup::addSlider(const QString& label, int min, int max, int defaul
     row->addWidget(slider);
 
     auto* val = new QLabel(format ? format(defaultVal) : QString::number(defaultVal));
-    val->setStyleSheet("QLabel { color: #c8d8e8; min-width: 36px; }");
+    val->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; min-width: 36px; }"));
     val->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     row->addWidget(val);
 

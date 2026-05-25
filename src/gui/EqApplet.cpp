@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -25,11 +26,10 @@ public:
         setFixedSize(22, 22);
         setCursor(Qt::PointingHandCursor);
         setToolTip("Reset all bands to 0 dB");
-        setStyleSheet(
-            "QPushButton { background-color: #1a2a3a; border: 1px solid #205070; "
+        setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background-color: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; }"
-            "QPushButton:hover { background-color: #203040; }"
-            "QPushButton:pressed { background-color: #00b4d8; }");
+            "QPushButton:hover { background-color: {{color.background.1}}; }"
+            "QPushButton:pressed { background-color: {{color.accent}}; }"));
     }
 
 protected:
@@ -209,7 +209,7 @@ void EqApplet::buildUI()
         for (int i = 0; i < EqualizerModel::BandCount; ++i) {
             auto* lbl = new QLabel(EqualizerModel::bandLabel(static_cast<EqualizerModel::Band>(i)));
             lbl->setAlignment(Qt::AlignCenter);
-            lbl->setStyleSheet("QLabel { color: #8090a0; font-size: 10px; }");
+            lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; }"));
             row->addWidget(lbl, 1);
         }
 
@@ -231,19 +231,19 @@ void EqApplet::buildUI()
             auto* scaleCol = new QVBoxLayout;
             scaleCol->setSpacing(0);
             auto* topLbl = new QLabel("+10");
-            topLbl->setStyleSheet("QLabel { color: #8aa8c0; font-size: 9px; }");
+            topLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 9px; }"));
             topLbl->setAlignment(Qt::AlignRight | Qt::AlignTop);
             topLbl->setFixedWidth(20);
             scaleCol->addWidget(topLbl);
             scaleCol->addStretch();
             auto* midLbl = new QLabel("0");
-            midLbl->setStyleSheet("QLabel { color: #8090a0; font-size: 9px; }");
+            midLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 9px; }"));
             midLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
             midLbl->setFixedWidth(20);
             scaleCol->addWidget(midLbl);
             scaleCol->addStretch();
             auto* botLbl = new QLabel("-10");
-            botLbl->setStyleSheet("QLabel { color: #8aa8c0; font-size: 9px; }");
+            botLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 9px; }"));
             botLbl->setAlignment(Qt::AlignRight | Qt::AlignBottom);
             botLbl->setFixedWidth(20);
             scaleCol->addWidget(botLbl);
@@ -274,7 +274,7 @@ void EqApplet::buildUI()
 
             auto* valLbl = new QLabel("0");
             valLbl->setAlignment(Qt::AlignCenter);
-            valLbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 9px; }");
+            valLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 9px; }"));
             m_valueLabels[i] = valLbl;
             col->addWidget(valLbl);
 
@@ -298,19 +298,19 @@ void EqApplet::buildUI()
             auto* scaleCol = new QVBoxLayout;
             scaleCol->setSpacing(0);
             auto* topLbl = new QLabel("+10");
-            topLbl->setStyleSheet("QLabel { color: #8aa8c0; font-size: 9px; }");
+            topLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 9px; }"));
             topLbl->setAlignment(Qt::AlignLeft | Qt::AlignTop);
             topLbl->setFixedWidth(20);
             scaleCol->addWidget(topLbl);
             scaleCol->addStretch();
             auto* midLbl = new QLabel("0");
-            midLbl->setStyleSheet("QLabel { color: #8090a0; font-size: 9px; }");
+            midLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 9px; }"));
             midLbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
             midLbl->setFixedWidth(20);
             scaleCol->addWidget(midLbl);
             scaleCol->addStretch();
             auto* botLbl = new QLabel("-10");
-            botLbl->setStyleSheet("QLabel { color: #8aa8c0; font-size: 9px; }");
+            botLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 9px; }"));
             botLbl->setAlignment(Qt::AlignLeft | Qt::AlignBottom);
             botLbl->setFixedWidth(20);
             scaleCol->addWidget(botLbl);

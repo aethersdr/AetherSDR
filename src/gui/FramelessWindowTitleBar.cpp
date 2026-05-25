@@ -5,6 +5,7 @@
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPushButton>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -45,8 +46,7 @@ FramelessWindowTitleBar::FramelessWindowTitleBar(const QString& title, QWidget* 
     row->setSpacing(4);
 
     auto* grip = new QLabel(QString::fromUtf8("\xe2\x8b\xae\xe2\x8b\xae"), this);
-    grip->setStyleSheet(
-        "QLabel { background: transparent; color: #a0b4c8; font-size: 10px; }");
+    grip->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.text.secondary}}; font-size: 10px; }"));
     row->addWidget(grip);
 
     m_titleLabel = new QLabel(title, this);

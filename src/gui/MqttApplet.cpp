@@ -15,6 +15,7 @@
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QVBoxLayout>
+#include "core/ThemeManager.h"
 
 #ifdef HAVE_KEYCHAIN
 #include <qt6keychain/keychain.h>
@@ -50,16 +51,15 @@ void MqttApplet::buildUI()
 
     auto* headerRow = new QHBoxLayout;
     auto* header = new QLabel("MQTT");
-    header->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
+    header->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }"));
     headerRow->addWidget(header);
     headerRow->addStretch();
 
     auto* settingsBtn = new QPushButton("Settings...");
     settingsBtn->setFixedHeight(18);
-    settingsBtn->setStyleSheet(
-        "QPushButton { background: transparent; color: #8090a0; "
+    settingsBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: transparent; color: {{color.text.secondary}}; "
         "border: none; font-size: 9px; padding: 0 4px; }"
-        "QPushButton:hover { color: #c8d8e8; }");
+        "QPushButton:hover { color: {{color.text.primary}}; }"));
     headerRow->addWidget(settingsBtn);
     vbox->addLayout(headerRow);
 
@@ -67,7 +67,7 @@ void MqttApplet::buildUI()
 
     auto* note = new QLabel("Antenna alias topics are subscribed automatically.");
     note->setWordWrap(true);
-    note->setStyleSheet("QLabel { color: #8090a0; font-size: 10px; background: transparent; }");
+    note->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; background: transparent; }"));
     vbox->addWidget(note);
 
     auto* ctrlRow = new QHBoxLayout;
@@ -78,12 +78,12 @@ void MqttApplet::buildUI()
     ctrlRow->addWidget(m_enableBtn);
 
     m_statusLabel = new QLabel("Disconnected");
-    m_statusLabel->setStyleSheet("QLabel { color: #8aa8c0; font-size: 10px; }");
+    m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; }"));
     ctrlRow->addWidget(m_statusLabel, 1);
     vbox->addLayout(ctrlRow);
 
     auto* pubLbl = new QLabel("Publish");
-    pubLbl->setStyleSheet("QLabel { color: #8090a0; font-size: 10px; font-weight: bold; }");
+    pubLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 10px; font-weight: bold; }"));
     vbox->addWidget(pubLbl);
 
     auto* btnContainer = new QWidget;
@@ -96,9 +96,8 @@ void MqttApplet::buildUI()
     m_messageLog = new QTextEdit;
     m_messageLog->setReadOnly(true);
     m_messageLog->setMaximumHeight(95);
-    m_messageLog->setStyleSheet(
-        "QTextEdit { background: #0a0a14; color: #c8d8e8; border: 1px solid #203040; "
-        "font-size: 10px; font-family: monospace; }");
+    m_messageLog->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QTextEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; "
+        "font-size: 10px; font-family: monospace; }"));
     vbox->addWidget(m_messageLog);
 
     connect(m_enableBtn, &QPushButton::clicked, this, [this] {

@@ -19,6 +19,7 @@
 #include <QTcpSocket>
 #include <QTimer>
 #include <QVBoxLayout>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -182,14 +183,13 @@ QString normalizedStatus(QString status)
 ConnectionPanel::ConnectionPanel(QWidget* parent)
     : QWidget(parent)
 {
-    setStyleSheet(
-        "ConnectionPanel { background: #0f0f1a; }"
-        "QGroupBox { border: 1px solid #304050; border-radius: 7px; margin-top: 10px; "
-        "color: #c8d8e8; font-weight: bold; }"
+    setStyleSheet(AetherSDR::ThemeManager::instance().resolve("ConnectionPanel { background: {{color.background.0}}; }"
+        "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 7px; margin-top: 10px; "
+        "color: {{color.text.primary}}; font-weight: bold; }"
         "QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }"
-        "QListWidget { background: #09111b; border: 1px solid #304050; border-radius: 4px; "
-        "color: #d7e4f2; padding: 2px; }"
-        "QPushButton { padding: 5px 12px; }");
+        "QListWidget { background: #09111b; border: 1px solid {{color.background.2}}; border-radius: 4px; "
+        "color: {{color.text.primary}}; padding: 2px; }"
+        "QPushButton { padding: 5px 12px; }"));
 
     const QString editStyle =
         "QLineEdit { border: 1px solid #304050; border-radius: 4px; padding: 4px 6px; "

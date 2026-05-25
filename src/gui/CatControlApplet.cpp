@@ -10,6 +10,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -177,7 +178,7 @@ void CatControlApplet::buildUI()
 
         // TCP status
         m_rows[i].tcpStatus = new QLabel("(stopped)");
-        m_rows[i].tcpStatus->setStyleSheet("QLabel { color: #506070; font-size: 10px; }");
+        m_rows[i].tcpStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.background.3}}; font-size: 10px; }"));
         m_rows[i].tcpStatus->setFixedWidth(100);
         row->addWidget(m_rows[i].tcpStatus);
 
@@ -185,7 +186,7 @@ void CatControlApplet::buildUI()
         // RigctlPty so the displayed path stays in sync with where
         // the actual symlink is created (#2940 / GHSA-qxhr-cwrc-pvrm).
         m_rows[i].ptyPath = new QLabel(RigctlPty::defaultSymlinkPath(i));
-        m_rows[i].ptyPath->setStyleSheet("QLabel { color: #506070; font-size: 10px; }");
+        m_rows[i].ptyPath->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.background.3}}; font-size: 10px; }"));
         row->addWidget(m_rows[i].ptyPath, 1);
 
         root->addLayout(row);
@@ -242,7 +243,7 @@ void CatControlApplet::updateChannelStatus(int ch)
     auto* srv = m_servers[ch];
     if (!srv || !srv->isRunning()) {
         m_rows[ch].tcpStatus->setText("(stopped)");
-        m_rows[ch].tcpStatus->setStyleSheet("QLabel { color: #506070; font-size: 10px; }");
+        m_rows[ch].tcpStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.background.3}}; font-size: 10px; }"));
     } else {
         int n = srv->clientCount();
         m_rows[ch].tcpStatus->setText(

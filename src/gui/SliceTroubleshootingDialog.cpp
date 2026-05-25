@@ -22,6 +22,7 @@
 #include <QVBoxLayout>
 #include <QStringList>
 #include <utility>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -325,40 +326,38 @@ SliceTroubleshootingDialog::SliceTroubleshootingDialog(RadioModel* model,
         "Use <b>Issue Summary</b> for GitHub reports and <b>JSON</b> for AI-assisted troubleshooting. "
         "This dialog does not re-query the radio.");
     intro->setWordWrap(true);
-    intro->setStyleSheet("QLabel { color: #c8d8e8; }");
+    intro->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; }"));
     root->addWidget(intro);
 
     auto* tabs = new QTabWidget;
     m_summaryView = new QPlainTextEdit;
     m_summaryView->setReadOnly(true);
     m_summaryView->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_summaryView->setStyleSheet(
-        "QPlainTextEdit {"
-        "  background: #0a0a14;"
+    m_summaryView->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+        "  background: {{color.background.0}};"
         "  color: #d6e4f2;"
         "  font-family: monospace;"
         "  font-size: 11px;"
-        "  border: 1px solid #203040;"
-        "}");
+        "  border: 1px solid {{color.background.1}};"
+        "}"));
     tabs->addTab(m_summaryView, "Issue Summary");
 
     m_jsonView = new QPlainTextEdit;
     m_jsonView->setReadOnly(true);
     m_jsonView->setLineWrapMode(QPlainTextEdit::NoWrap);
-    m_jsonView->setStyleSheet(
-        "QPlainTextEdit {"
-        "  background: #0a0a14;"
+    m_jsonView->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPlainTextEdit {"
+        "  background: {{color.background.0}};"
         "  color: #9ed4ff;"
         "  font-family: monospace;"
         "  font-size: 11px;"
-        "  border: 1px solid #203040;"
-        "}");
+        "  border: 1px solid {{color.background.1}};"
+        "}"));
     tabs->addTab(m_jsonView, "JSON");
     root->addWidget(tabs, 1);
 
     auto* footer = new QHBoxLayout;
     m_statusLabel = new QLabel;
-    m_statusLabel->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
+    m_statusLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
     footer->addWidget(m_statusLabel, 1);
 
     auto* refreshBtn = new QPushButton("Refresh Snapshot");

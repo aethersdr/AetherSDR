@@ -20,6 +20,7 @@
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -69,8 +70,8 @@ QWidget* makeBracketLabel(const QString& text)
     leftLine->setStyleSheet("QFrame { color: #5a6a7a; }");
 
     auto* lbl = new QLabel(text);
-    lbl->setStyleSheet("QLabel { color: #c8d8e8; font-weight: bold; "
-                       "font-size: 13px; letter-spacing: 2px; }");
+    lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: bold; "
+                       "font-size: 13px; letter-spacing: 2px; }"));
     lbl->setAlignment(Qt::AlignCenter);
 
     auto* rightLine = new QFrame;

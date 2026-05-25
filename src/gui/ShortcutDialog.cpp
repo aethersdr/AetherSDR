@@ -11,6 +11,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QTableWidget>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -67,7 +68,7 @@ void ShortcutDialog::buildUI()
             .arg(c.name(), c.lighter(140).name()));
         legendRow->addWidget(swatch);
         auto* lbl = new QLabel(cat);
-        lbl->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
+        lbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; font-size: 11px; }"));
         legendRow->addWidget(lbl);
     }
     legendRow->addStretch();
@@ -79,7 +80,7 @@ void ShortcutDialog::buildUI()
 
     selGroup->addWidget(new QLabel("Key:"));
     m_selectedKeyLabel = new QLabel("(none)");
-    m_selectedKeyLabel->setStyleSheet("QLabel { color: #00b4d8; font-weight: bold; font-size: 14px; }");
+    m_selectedKeyLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.accent}}; font-weight: bold; font-size: 14px; }"));
     m_selectedKeyLabel->setFixedWidth(80);
     selGroup->addWidget(m_selectedKeyLabel);
 
@@ -96,7 +97,7 @@ void ShortcutDialog::buildUI()
     selGroup->addWidget(m_actionCombo);
 
     m_categoryLabel = new QLabel;
-    m_categoryLabel->setStyleSheet("QLabel { color: #8aa8c0; }");
+    m_categoryLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.secondary}}; }"));
     selGroup->addWidget(m_categoryLabel);
 
     auto* clearBtn = new QPushButton("Clear");

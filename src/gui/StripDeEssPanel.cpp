@@ -21,6 +21,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <cmath>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -203,12 +204,11 @@ StripDeEssPanel::StripDeEssPanel(AudioEngine* engine, QWidget* parent)
     m_slopeBtn->setMinimumWidth(76);
     m_slopeBtn->setMaximumWidth(76);
     m_slopeBtn->setCursor(Qt::PointingHandCursor);
-    m_slopeBtn->setStyleSheet(
-        "QPushButton { background: #1a2230; border: 1px solid #2a3744;"
+    m_slopeBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.1}};"
         " border-radius: 3px; color: #b0c4d6; font-size: 11px;"
         " font-weight: bold; padding: 1px; }"
         "QPushButton:hover { background: #243044; color: #e8e8e8; }"
-        "QPushButton:pressed { background: #2a3a52; }");
+        "QPushButton:pressed { background: #2a3a52; }"));
     m_slopeBtn->setToolTip(tr(
         "Sidechain / notch filter slope.\n\n"
         "Each click steps through 12 → 24 → 36 → 48 dB/oct (1 to 4 "

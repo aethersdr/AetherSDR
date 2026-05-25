@@ -1,5 +1,6 @@
 #include "TciApplet.h"
 #include "SliceLabel.h"
+#include "core/ThemeManager.h"
 
 #ifdef HAVE_WEBSOCKETS
 #include "MeterSlider.h"
@@ -205,7 +206,7 @@ void TciApplet::buildUI()
     enableRow->addWidget(m_tciPort);
 
     m_tciStatus = new QLabel("(stopped)");
-    m_tciStatus->setStyleSheet("QLabel { color: #506070; font-size: 10px; }");
+    m_tciStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.background.3}}; font-size: 10px; }"));
     enableRow->addWidget(m_tciStatus, 1);
 
     m_tciEnable = new QPushButton("Enable");
@@ -279,7 +280,7 @@ void TciApplet::updateTciStatus()
     }
     if (!m_tciServer || !m_tciServer->isRunning()) {
         m_tciStatus->setText("(stopped)");
-        m_tciStatus->setStyleSheet("QLabel { color: #506070; font-size: 10px; }");
+        m_tciStatus->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.background.3}}; font-size: 10px; }"));
     } else {
         int n = m_tciServer->clientCount();
         m_tciStatus->setText(

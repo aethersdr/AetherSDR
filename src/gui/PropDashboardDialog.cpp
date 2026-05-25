@@ -20,6 +20,7 @@
 #include <QScreen>
 #include <QSizePolicy>
 #include <QVBoxLayout>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -518,7 +519,7 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
         ++row;
         auto* sep = new QLabel;
         sep->setFixedHeight(1);
-        sep->setStyleSheet("QLabel { background: #243a4e; }");
+        sep->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: {{color.background.1}}; }"));
         g->addWidget(sep, row, 0, 1, 4);
 
         ++row;
@@ -552,15 +553,14 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
         m_rationale = new QLabel;
         m_rationale->setWordWrap(true);
         m_rationale->setText("Forecast rationale will appear when NOAA publishes the current discussion.");
-        m_rationale->setStyleSheet(
-            "QLabel {"
+        m_rationale->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel {"
             " color: #9cb0c0;"
             " font-size: 10px;"
             " background: #0f1d2b;"
-            " border: 1px solid #243a4e;"
+            " border: 1px solid {{color.background.1}};"
             " border-radius: 10px;"
             " padding: 8px;"
-            "}");
+            "}"));
         g->addWidget(m_rationale, row, 0, 1, 4);
 
         row1->addWidget(group, 3);

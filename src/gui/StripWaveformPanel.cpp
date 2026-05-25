@@ -11,6 +11,7 @@
 #include <QSignalBlocker>
 #include <QSlider>
 #include <QVBoxLayout>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -48,14 +49,13 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     // envelope behaviour.
     m_modeBtn = new QPushButton(this);
     m_modeBtn->setFixedSize(78, 18);
-    m_modeBtn->setStyleSheet(
-        "QPushButton {"
-        "  background: #1a2a3a; border: 1px solid #2a4458;"
+    m_modeBtn->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QPushButton {"
+        "  background: {{color.background.1}}; border: 1px solid {{color.background.1}};"
         "  border-radius: 3px; color: #c8a070;"
         "  font-size: 10px; font-weight: bold; padding: 1px 6px;"
         "}"
-        "QPushButton:hover { background: #3a2818; color: #f2c14e;"
-        "                    border: 1px solid #f2c14e; }");
+        "QPushButton:hover { background: #3a2818; color: {{color.accent.warning}};"
+        "                    border: 1px solid {{color.accent.warning}}; }"));
     m_modeBtn->setToolTip("Cycle waveform view: Scope → Envelope → History");
     connect(m_modeBtn, &QPushButton::clicked,
             this, &StripWaveformPanel::cycleViewMode);
@@ -68,16 +68,15 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     m_windowSlider->setPageStep(1);   // mouse wheel notch = ±1 sec
     m_windowSlider->setFixedWidth(120);
     m_windowSlider->setFixedHeight(14);
-    m_windowSlider->setStyleSheet(
-        "QSlider::groove:horizontal { height: 4px; background: #1a2a3a;"
+    m_windowSlider->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QSlider::groove:horizontal { height: 4px; background: {{color.background.1}};"
         " border-radius: 2px; }"
-        "QSlider::sub-page:horizontal { background: #f2c14e;"
+        "QSlider::sub-page:horizontal { background: {{color.accent.warning}};"
         " border-radius: 2px; }"
         "QSlider::handle:horizontal { width: 10px; height: 10px;"
-        " margin: -3px 0; background: #ffffff; border: 1px solid #f2c14e;"
+        " margin: -3px 0; background: {{color.text.primary}}; border: 1px solid {{color.accent.warning}};"
         " border-radius: 5px; }"
-        "QSlider::handle:horizontal:hover { background: #ffffff;"
-        " border: 1px solid #ffd060; }");
+        "QSlider::handle:horizontal:hover { background: {{color.text.primary}};"
+        " border: 1px solid #ffd060; }"));
     m_windowSlider->setToolTip(
         tr("Waveform time window — how many seconds of audio fit across "
            "the plot.  Range 1–20 s."));
@@ -87,9 +86,8 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     m_windowLbl = new QLabel(this);
     m_windowLbl->setFixedWidth(28);
     m_windowLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    m_windowLbl->setStyleSheet(
-        "QLabel { background: transparent; color: #8aa8c0;"
-        " font-size: 10px; font-weight: bold; }");
+    m_windowLbl->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { background: transparent; color: {{color.text.secondary}};"
+        " font-size: 10px; font-weight: bold; }"));
 
     auto* titleRow = new QHBoxLayout;
     titleRow->setContentsMargins(0, 0, 0, 0);

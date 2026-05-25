@@ -7,6 +7,7 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QColorDialog>
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
 
@@ -40,7 +41,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
 
     auto* title = new QLabel("Spot Settings");
     title->setAlignment(Qt::AlignCenter);
-    title->setStyleSheet("QLabel { font-size: 16px; font-weight: bold; color: #c8d8e8; }");
+    title->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { font-size: 16px; font-weight: bold; color: {{color.text.primary}}; }"));
     root->addWidget(title);
     root->addSpacing(8);
 
@@ -290,7 +291,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     // ── Total Spots ─────────────────────────────────────────────────────
     grid->addWidget(new QLabel("Total Spots:"), row, 0);
     m_totalSpotsLabel = new QLabel("0");
-    m_totalSpotsLabel->setStyleSheet("QLabel { color: #c8d8e8; font-weight: bold; }");
+    m_totalSpotsLabel->setStyleSheet(AetherSDR::ThemeManager::instance().resolve("QLabel { color: {{color.text.primary}}; font-weight: bold; }"));
     grid->addWidget(m_totalSpotsLabel, row++, 1);
 
     root->addLayout(grid);
