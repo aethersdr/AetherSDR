@@ -1,7 +1,20 @@
 #include "SliceColorManager.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 
 namespace AetherSDR {
+
+namespace {
+// 'a' + idx → letter token suffix.  kSliceColorCount = 8 keeps idx in
+// the 0..7 range so this never overflows past 'h'.
+QString sliceLetterToken(int idx, bool dim)
+{
+    const QChar letter = QChar(QLatin1Char(char('a' + (idx % kSliceColorCount))));
+    return dim
+        ? QStringLiteral("color.slice.dim.%1").arg(letter)
+        : QStringLiteral("color.slice.%1").arg(letter);
+}
+} // namespace
 
 static SliceColorManager* s_instance = nullptr;
 
@@ -17,6 +30,18 @@ SliceColorManager::SliceColorManager()
     for (int i = 0; i < kSliceColorCount; ++i)
         m_customColors[i] = defaultActive(i);
     rebuildHexCache();
+
+    // When the user switches themes, the eight slice-default tokens
+    // resolve to fresh hex values; rebuild the cache and notify every
+    // listener (spectrum overlay paint, VFO badge, RxApplet header) so
+    // they repaint with the new active/dim colours.  Custom-colour users
+    // also get the notification — their stored hex stays untouched, but
+    // anything that derives styling from the *defaults* still updates.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, [this]() {
+        rebuildHexCache();
+        emit colorsChanged();
+    });
 }
 
 int SliceColorManager::safeIdx(int sliceId)
@@ -29,14 +54,12 @@ int SliceColorManager::safeIdx(int sliceId)
 
 QColor SliceColorManager::defaultActive(int idx)
 {
-    const auto& c = kSliceColors[idx % kSliceColorCount];
-    return QColor(c.r, c.g, c.b);
+    return ThemeManager::instance().color(sliceLetterToken(idx, /*dim=*/false));
 }
 
 QColor SliceColorManager::defaultDim(int idx)
 {
-    const auto& c = kSliceColors[idx % kSliceColorCount];
-    return QColor(c.dr, c.dg, c.db);
+    return ThemeManager::instance().color(sliceLetterToken(idx, /*dim=*/true));
 }
 
 QColor SliceColorManager::activeColor(int sliceId) const
