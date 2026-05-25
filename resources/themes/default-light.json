@@ -12,6 +12,7 @@
         "2": "#c8d2dc",
         "3": "#b0bcc8",
         "tx": "#ffeacc",
+        "success": "#c8e8d0",
         "spectrum": "#ffffff"
       },
       "accent": "#0088b0",

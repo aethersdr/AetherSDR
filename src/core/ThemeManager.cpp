@@ -198,6 +198,7 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.background.2",        QString("#304050"));
     m_tokens.insert("color.background.3",        QString("#506070"));
     m_tokens.insert("color.background.tx",       QString("#3a2a0e"));
+    m_tokens.insert("color.background.success",  QString("#006040"));
     m_tokens.insert("color.background.spectrum", QString("#000000"));
 
     // Accents
