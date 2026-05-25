@@ -487,6 +487,18 @@ void ThemeManager::setGradient(const QString& token, const ThemeGradient& g)
     emit themeChanged();
 }
 
+void ThemeManager::setString(const QString& token, const QString& value)
+{
+    const auto it = m_tokens.constFind(token);
+    if (it != m_tokens.constEnd() &&
+        it.value().userType() == QMetaType::QString &&
+        it.value().toString() == value) {
+        return;
+    }
+    m_tokens.insert(token, QVariant(value));
+    emit themeChanged();
+}
+
 void ThemeManager::ensureFactoryLoaded() const
 {
     if (m_factoryLoaded) return;
@@ -515,6 +527,153 @@ ThemeGradient ThemeManager::factoryGradient(const QString& token) const
     if (it == m_factoryTokens.constEnd()) return {};
     if (!it.value().canConvert<ThemeGradient>()) return {};
     return it.value().value<ThemeGradient>();
+}
+
+QColor ThemeManager::factoryColor(const QString& token) const
+{
+    ensureFactoryLoaded();
+    const auto it = m_factoryTokens.constFind(token);
+    if (it == m_factoryTokens.constEnd()) return QColor();
+    if (it.value().canConvert<ThemeGradient>()) {
+        // Token is a gradient in the factory baseline — graceful fallback
+        // to the first stop's colour, matching ThemeManager::color()'s
+        // behaviour for gradient tokens.
+        const auto g = it.value().value<ThemeGradient>();
+        if (g.stops.isEmpty()) return QColor();
+        return g.stops.first().color;
+    }
+    if (it.value().userType() != QMetaType::QString) return QColor();
+    return QColor(it.value().toString());
+}
+
+int ThemeManager::factorySizing(const QString& token) const
+{
+    ensureFactoryLoaded();
+    const auto it = m_factoryTokens.constFind(token);
+    if (it == m_factoryTokens.constEnd()) return -1;
+    bool ok = false;
+    const int v = it.value().toInt(&ok);
+    if (!ok) return -1;
+    return v;
+}
+
+QString ThemeManager::factoryString(const QString& token) const
+{
+    ensureFactoryLoaded();
+    const auto it = m_factoryTokens.constFind(token);
+    if (it == m_factoryTokens.constEnd()) return QString();
+    if (it.value().userType() != QMetaType::QString) return QString();
+    return it.value().toString();
+}
+
+bool ThemeManager::hasFactoryValue(const QString& token) const
+{
+    ensureFactoryLoaded();
+    return m_factoryTokens.contains(token);
+}
+
+bool ThemeManager::isBuiltInTheme(const QString& name) const
+{
+    // Built-ins live inside the Qt resource bundle.  Path map records
+    // ":/themes/<file>.json" for them; user themes use absolute paths.
+    const auto it = m_themePaths.constFind(name);
+    if (it == m_themePaths.constEnd()) return false;
+    return it.value().startsWith(QStringLiteral(":/themes/"));
+}
+
+bool ThemeManager::deleteTheme(const QString& name)
+{
+    if (name.isEmpty()) return false;
+    if (isBuiltInTheme(name)) {
+        qCWarning(lcGui) << "ThemeManager::deleteTheme: refusing to delete "
+                            "built-in theme" << name;
+        return false;
+    }
+    const auto it = m_themePaths.constFind(name);
+    if (it == m_themePaths.constEnd()) return false;
+    const QString path = it.value();
+
+    // If the operator is deleting the currently active theme, fall back
+    // to Default Dark before unlinking — otherwise every consumer of the
+    // active theme would briefly render against an inconsistent token
+    // map while the file is still being closed.
+    if (m_activeTheme == name) {
+        setActiveTheme(QStringLiteral("Default Dark"));
+    }
+
+    QFile f(path);
+    if (!f.remove()) {
+        qCWarning(lcGui) << "ThemeManager::deleteTheme: unlink failed for"
+                         << path << f.errorString();
+        return false;
+    }
+    m_themePaths.remove(name);
+    return true;
+}
+
+bool ThemeManager::renameTheme(const QString& oldName, const QString& newName)
+{
+    const QString trimmed = newName.trimmed();
+    if (oldName.isEmpty() || trimmed.isEmpty()) return false;
+    if (oldName == trimmed) return true;  // no-op rename
+    if (isBuiltInTheme(oldName)) {
+        qCWarning(lcGui) << "ThemeManager::renameTheme: refusing to rename "
+                            "built-in theme" << oldName;
+        return false;
+    }
+    if (m_themePaths.contains(trimmed)) {
+        qCWarning(lcGui) << "ThemeManager::renameTheme: target already exists"
+                         << trimmed;
+        return false;
+    }
+    const auto it = m_themePaths.constFind(oldName);
+    if (it == m_themePaths.constEnd()) return false;
+    const QString oldPath = it.value();
+    const QFileInfo fi(oldPath);
+    const QString newPath = fi.absolutePath()
+                            + QLatin1Char('/') + trimmed + QStringLiteral(".json");
+
+    // The theme name is stored inside the JSON too — round-trip the file
+    // through QJsonDocument so the on-disk "name" field matches the new
+    // filename (otherwise the editor's "Editing: …" header would lie).
+    QFile f(oldPath);
+    if (!f.open(QIODevice::ReadOnly)) {
+        qCWarning(lcGui) << "ThemeManager::renameTheme: cannot read"
+                         << oldPath << f.errorString();
+        return false;
+    }
+    QJsonParseError perr;
+    auto doc = QJsonDocument::fromJson(f.readAll(), &perr);
+    f.close();
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) {
+        qCWarning(lcGui) << "ThemeManager::renameTheme: parse error"
+                         << perr.errorString();
+        return false;
+    }
+    QJsonObject root = doc.object();
+    root.insert("name", trimmed);
+    doc.setObject(root);
+
+    QFile out(newPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        qCWarning(lcGui) << "ThemeManager::renameTheme: cannot write"
+                         << newPath << out.errorString();
+        return false;
+    }
+    out.write(doc.toJson(QJsonDocument::Indented));
+    out.close();
+
+    QFile::remove(oldPath);
+    m_themePaths.remove(oldName);
+    m_themePaths.insert(trimmed, newPath);
+
+    if (m_activeTheme == oldName) {
+        m_activeTheme = trimmed;
+        AppSettings::instance().setValue("ActiveTheme", trimmed);
+        AppSettings::instance().save();
+        emit themeChanged();
+    }
+    return true;
 }
 
 bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)

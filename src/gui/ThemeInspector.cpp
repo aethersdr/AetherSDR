@@ -83,11 +83,14 @@ bool ThemeInspector::eventFilter(QObject* /*obj*/, QEvent* ev)
     if (!m_active) return false;
 
     // While the editor has spawned a modal child dialog (QColorDialog,
-    // GradientEditorDialog, "Theme exists" confirm, …), pause overlay
-    // tracking and let every event flow through unmolested.  The modal
-    // owns the user's attention; once it closes the inspector resumes
-    // on the next mouse move.
-    if (QApplication::activeModalWidget()) {
+    // GradientEditorDialog, "Theme exists" confirm, …) OR a popup widget
+    // (the row's type-chooser QMenu, the Theme actions dropdown, …),
+    // pause overlay tracking and let every event flow through unmolested.
+    // QMenu doesn't register as a modal dialog in Qt's bookkeeping —
+    // it's an "active popup" — so both checks are required to cover
+    // the full child-interaction surface.  The inspector resumes on
+    // the next mouse move after the popup / modal closes.
+    if (QApplication::activeModalWidget() || QApplication::activePopupWidget()) {
         if (m_overlay && m_overlay->isVisible()) m_overlay->hide();
         m_lastTarget.clear();
         return false;

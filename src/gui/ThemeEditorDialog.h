@@ -54,10 +54,19 @@ private slots:
     // so the initial visual output matches the previous flat colour.
     void editTokenAsFlat(const QString& key, QListWidgetItem* item);
     void editTokenAsGradient(const QString& key, QListWidgetItem* item);
+    void editTokenFontFamily(const QString& key, QListWidgetItem* item);
+    void editTokenSizing(const QString& key, QListWidgetItem* item);
+    void resetTokenToFactory(const QString& key, QListWidgetItem* item);
+
+    // Theme-file management — Rename / Delete on the "Theme actions ▾"
+    // menu next to Save As.
+    void onRenameThemeClicked();
+    void onDeleteThemeClicked();
 
 private:
     void updateTitle();
     void updateRow(QListWidgetItem* item);   // re-paint swatch + hex label
+    void populateRow(QListWidgetItem* item); // shared by refresh + update
     void updateInspectorStatus(const QString& text);
     // Filter the token list down to a specific subset, e.g. tokens
     // returned by tokensForWidget().  An empty list clears the filter.

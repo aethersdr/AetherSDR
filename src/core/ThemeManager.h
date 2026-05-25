@@ -199,13 +199,31 @@ public:
     ThemeGradient gradient(const QString& token) const;
     void          setGradient(const QString& token, const ThemeGradient& g);
 
-    // Factory-default lookup — reads from the bundled
-    // `:/themes/default-dark.json` so the gradient editor's
-    // "Reset to default" button can restore the canonical colormap
-    // shape after the operator wanders into territory they don't like.
-    // Returns an empty gradient if the token isn't a gradient in the
-    // bundled defaults (caller should check stops.size()).
+    // Family / font-family setter for the Phase 5 PR 4 font picker.
+    // Mirrors setColor()/setSizing() — overwrites whatever was at the
+    // token and emits themeChanged so consumers re-resolve their fonts.
+    void setString(const QString& token, const QString& value);
+
+    // Factory-default lookups — read from a one-shot snapshot of the
+    // bundled `:/themes/default-dark.json` so every Reset-to-default
+    // affordance in the editor restores the canonical value.  Each
+    // returns a sentinel (empty / invalid / 0 / -1) when the token has
+    // no factory baseline — callers should check before using.
     ThemeGradient factoryGradient(const QString& token) const;
+    QColor        factoryColor(const QString& token) const;
+    int           factorySizing(const QString& token) const;     // -1 = none
+    QString       factoryString(const QString& token) const;
+    bool          hasFactoryValue(const QString& token) const;
+
+    // Theme-file management — Delete / Rename for the user's saved
+    // themes living under ~/.config/AetherSDR/themes/.  Both refuse
+    // on built-in themes (those live inside the Qt resource bundle
+    // and aren't deletable).  Delete switches the active theme back
+    // to "Default Dark" before unlinking so the UI doesn't render
+    // half-blank during the file removal.
+    bool        deleteTheme(const QString& name);
+    bool        renameTheme(const QString& oldName, const QString& newName);
+    bool        isBuiltInTheme(const QString& name) const;
 
     bool        saveCurrentThemeAs(const QString& newThemeName);
 

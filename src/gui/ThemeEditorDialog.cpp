@@ -7,6 +7,7 @@
 #include <QAction>
 #include <QColorDialog>
 #include <QCursor>
+#include <QFontDialog>
 #include <QFontMetrics>
 #include <QHBoxLayout>
 #include <QLinearGradient>
@@ -160,12 +161,29 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     root->addLayout(inspectRow);
 
     auto* btnRow = new QHBoxLayout;
+    // Theme-management dropdown — left side, since it's a destructive
+    // group that shouldn't be confused with the Save / Close primary
+    // actions on the right.  Built-in themes can't be renamed or
+    // deleted; actions are disabled at click time when the active
+    // theme is built-in.
+    auto* themeActionsBtn = new QPushButton(QStringLiteral("Theme actions ▾"), bodyWidget());
+    auto* themeActionsMenu = new QMenu(themeActionsBtn);
+    auto* renameAct = themeActionsMenu->addAction(QStringLiteral("Rename theme…"));
+    auto* deleteAct = themeActionsMenu->addAction(QStringLiteral("Delete theme…"));
+    themeActionsBtn->setMenu(themeActionsMenu);
+    btnRow->addWidget(themeActionsBtn);
+
     btnRow->addStretch(1);
     m_saveAsBtn = new QPushButton(QStringLiteral("Save As…"), bodyWidget());
     auto* closeBtn = new QPushButton(QStringLiteral("Close"), bodyWidget());
     btnRow->addWidget(m_saveAsBtn);
     btnRow->addWidget(closeBtn);
     root->addLayout(btnRow);
+
+    connect(renameAct, &QAction::triggered,
+            this, &ThemeEditorDialog::onRenameThemeClicked);
+    connect(deleteAct, &QAction::triggered,
+            this, &ThemeEditorDialog::onDeleteThemeClicked);
 
     refreshTokenList();
     updateTitle();
@@ -209,43 +227,56 @@ void ThemeEditorDialog::refreshTokenList()
     m_tokenList->clear();
     auto& tm = ThemeManager::instance();
     for (const QString& key : tm.allTokenKeys()) {
-        // Color + gradient tokens are both editable through this list;
-        // sizing + font get their own editing surfaces in a follow-on PR.
-        if (!key.startsWith(QStringLiteral("color.")))
-            continue;
-        const QBrush br = tm.brush(key);
-        if (br.gradient()) {
-            // Gradient row — opens GradientEditorDialog on click.
-            const ThemeGradient g = tm.gradient(key);
-            auto* item = new QListWidgetItem(gradientSwatchIcon(g),
-                gradientRowText(key, g));
-            item->setData(Qt::UserRole, key);
-            m_tokenList->addItem(item);
+        // Editable token namespaces — gradient + scalar colours under
+        // "color.", string + integer leaves under "font." and "sizing.".
+        if (!key.startsWith(QStringLiteral("color."))
+            && !key.startsWith(QStringLiteral("font."))
+            && !key.startsWith(QStringLiteral("sizing."))) {
             continue;
         }
-
-        const QColor c = tm.color(key);
-        auto* item = new QListWidgetItem(swatchIcon(c),
-            QStringLiteral("%1   %2").arg(key, -36).arg(colorToTokenHex(c)));
+        auto* item = new QListWidgetItem;
         item->setData(Qt::UserRole, key);
         m_tokenList->addItem(item);
+        populateRow(item);
+    }
+}
+
+void ThemeEditorDialog::populateRow(QListWidgetItem* item)
+{
+    if (!item) return;
+    const QString key = item->data(Qt::UserRole).toString();
+    auto& tm = ThemeManager::instance();
+
+    if (key.startsWith(QStringLiteral("color."))) {
+        if (tm.brush(key).gradient()) {
+            const ThemeGradient g = tm.gradient(key);
+            item->setIcon(gradientSwatchIcon(g));
+            item->setText(gradientRowText(key, g));
+            return;
+        }
+        const QColor c = tm.color(key);
+        item->setIcon(swatchIcon(c));
+        item->setText(QStringLiteral("%1   %2").arg(key, -36).arg(colorToTokenHex(c)));
+        return;
+    }
+    if (key.startsWith(QStringLiteral("font.family."))) {
+        const QString family = tm.value(key);
+        item->setIcon(QIcon());
+        item->setText(QStringLiteral("%1   %2").arg(key, -36).arg(family));
+        return;
+    }
+    if (key.startsWith(QStringLiteral("font.size."))
+        || key.startsWith(QStringLiteral("sizing."))) {
+        const int v = tm.sizing(key);
+        item->setIcon(QIcon());
+        item->setText(QStringLiteral("%1   %2 px").arg(key, -36).arg(v));
+        return;
     }
 }
 
 void ThemeEditorDialog::updateRow(QListWidgetItem* item)
 {
-    if (!item) return;
-    const QString key = item->data(Qt::UserRole).toString();
-    auto& tm = ThemeManager::instance();
-    if (tm.brush(key).gradient()) {
-        const ThemeGradient g = tm.gradient(key);
-        item->setIcon(gradientSwatchIcon(g));
-        item->setText(gradientRowText(key, g));
-        return;
-    }
-    const QColor c = tm.color(key);
-    item->setIcon(swatchIcon(c));
-    item->setText(QStringLiteral("%1   %2").arg(key, -36).arg(colorToTokenHex(c)));
+    populateRow(item);
 }
 
 void ThemeEditorDialog::updateTitle()
@@ -262,29 +293,49 @@ void ThemeEditorDialog::onTokenRowClicked(QListWidgetItem* item)
     const QString key = item->data(Qt::UserRole).toString();
     auto& tm = ThemeManager::instance();
 
-    // Every color token can be either a flat colour or a gradient.  Show
-    // a small chooser menu at the cursor so the operator can decide each
-    // time — the "current" type stays as the first action, and the
-    // other appears as a "Convert to…" follow-up so an unintentional
-    // type-switch needs an explicit click.
-    const bool isGradient = tm.brush(key).gradient() != nullptr;
-
+    // Click-menu adapts to the token's namespace + current type:
+    //   * color.*   — flat ↔ gradient chooser
+    //   * font.family.* — font family picker
+    //   * font.size.* / sizing.* — numeric picker
+    // A "Reset to default" entry shows up at the bottom whenever the
+    // token has a factory baseline (every bundled token does).
     QMenu menu(this);
-    QAction* flatAct = nullptr;
-    QAction* gradAct = nullptr;
-    if (isGradient) {
-        gradAct = menu.addAction(QStringLiteral("Edit gradient…"));
-        menu.addSeparator();
-        flatAct = menu.addAction(QStringLiteral("Convert to flat colour…"));
-    } else {
-        flatAct = menu.addAction(QStringLiteral("Edit flat colour…"));
-        menu.addSeparator();
-        gradAct = menu.addAction(QStringLiteral("Convert to gradient…"));
+    QAction* flatAct   = nullptr;
+    QAction* gradAct   = nullptr;
+    QAction* familyAct = nullptr;
+    QAction* numAct    = nullptr;
+
+    if (key.startsWith(QStringLiteral("color."))) {
+        const bool isGradient = tm.brush(key).gradient() != nullptr;
+        if (isGradient) {
+            gradAct = menu.addAction(QStringLiteral("Edit gradient…"));
+            menu.addSeparator();
+            flatAct = menu.addAction(QStringLiteral("Convert to flat colour…"));
+        } else {
+            flatAct = menu.addAction(QStringLiteral("Edit flat colour…"));
+            menu.addSeparator();
+            gradAct = menu.addAction(QStringLiteral("Convert to gradient…"));
+        }
+    } else if (key.startsWith(QStringLiteral("font.family."))) {
+        familyAct = menu.addAction(QStringLiteral("Edit font family…"));
+    } else if (key.startsWith(QStringLiteral("font.size."))
+               || key.startsWith(QStringLiteral("sizing."))) {
+        numAct = menu.addAction(QStringLiteral("Edit size…"));
     }
+
+    QAction* resetAct = nullptr;
+    if (tm.hasFactoryValue(key)) {
+        if (!menu.isEmpty()) menu.addSeparator();
+        resetAct = menu.addAction(QStringLiteral("Reset to default"));
+    }
+
     QAction* chosen = menu.exec(QCursor::pos());
-    if (chosen == flatAct)      editTokenAsFlat(key, item);
-    else if (chosen == gradAct) editTokenAsGradient(key, item);
-    // else: dismissed without picking — no-op.
+    if (!chosen) return;
+    if      (chosen == flatAct)   editTokenAsFlat(key, item);
+    else if (chosen == gradAct)   editTokenAsGradient(key, item);
+    else if (chosen == familyAct) editTokenFontFamily(key, item);
+    else if (chosen == numAct)    editTokenSizing(key, item);
+    else if (chosen == resetAct)  resetTokenToFactory(key, item);
 }
 
 void ThemeEditorDialog::editTokenAsFlat(const QString& key, QListWidgetItem* item)
@@ -323,6 +374,123 @@ void ThemeEditorDialog::editTokenAsGradient(const QString& key, QListWidgetItem*
         tm.setGradient(key, dlg.currentGradient());  // overwrites any prior scalar
         updateRow(item);
     }
+}
+
+void ThemeEditorDialog::editTokenFontFamily(const QString& key,
+                                            QListWidgetItem* item)
+{
+    auto& tm = ThemeManager::instance();
+    const QString currentFamily = tm.value(key);
+    QFont seed;
+    if (!currentFamily.isEmpty()) seed.setFamily(currentFamily);
+
+    bool ok = false;
+    const QFont chosen = QFontDialog::getFont(&ok, seed, this,
+        QStringLiteral("Edit %1").arg(key));
+    if (!ok) return;
+    tm.setString(key, chosen.family());
+    updateRow(item);
+}
+
+void ThemeEditorDialog::editTokenSizing(const QString& key,
+                                        QListWidgetItem* item)
+{
+    auto& tm = ThemeManager::instance();
+    const int current = tm.sizing(key);
+    // Integer tokens span both font.size.* and sizing.*; allow a generous
+    // range and let the QSpinBox handle clamping.  Range chosen to cover
+    // realistic font sizes (4–96 px) and panel paddings (0–48 px) in one
+    // input — at the cost of letting a user dial a 96-px panel padding
+    // if they really want one.
+    bool ok = false;
+    const int chosen = QInputDialog::getInt(this,
+        QStringLiteral("Edit %1").arg(key),
+        QStringLiteral("Value (px):"),
+        current, 0, 96, 1, &ok);
+    if (!ok) return;
+    tm.setSizing(key, chosen);
+    updateRow(item);
+}
+
+void ThemeEditorDialog::onRenameThemeClicked()
+{
+    auto& tm = ThemeManager::instance();
+    const QString current = tm.activeTheme();
+    if (tm.isBuiltInTheme(current)) {
+        QMessageBox::information(this, QStringLiteral("Cannot rename"),
+            QStringLiteral("\"%1\" is a built-in theme and can't be renamed. "
+                           "Use Save As… to create an editable copy under a "
+                           "different name first.").arg(current));
+        return;
+    }
+    bool ok = false;
+    const QString newName = QInputDialog::getText(this,
+        QStringLiteral("Rename theme"),
+        QStringLiteral("New name for \"%1\":").arg(current),
+        QLineEdit::Normal, current, &ok).trimmed();
+    if (!ok || newName.isEmpty() || newName == current) return;
+
+    if (!tm.renameTheme(current, newName)) {
+        QMessageBox::warning(this, QStringLiteral("Rename failed"),
+            QStringLiteral("Could not rename \"%1\" to \"%2\".  A theme with "
+                           "that name may already exist, or the theme file "
+                           "may be unwriteable.").arg(current, newName));
+    }
+}
+
+void ThemeEditorDialog::onDeleteThemeClicked()
+{
+    auto& tm = ThemeManager::instance();
+    const QString current = tm.activeTheme();
+    if (tm.isBuiltInTheme(current)) {
+        QMessageBox::information(this, QStringLiteral("Cannot delete"),
+            QStringLiteral("\"%1\" is a built-in theme and can't be deleted.").arg(current));
+        return;
+    }
+    const auto reply = QMessageBox::question(this,
+        QStringLiteral("Delete theme"),
+        QStringLiteral("Permanently delete \"%1\"?\n\n"
+                       "The theme file at "
+                       "~/.config/AetherSDR/themes/%1.json will be removed. "
+                       "The active theme will switch to Default Dark.")
+            .arg(current),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    if (reply != QMessageBox::Yes) return;
+
+    if (!tm.deleteTheme(current)) {
+        QMessageBox::warning(this, QStringLiteral("Delete failed"),
+            QStringLiteral("Could not delete \"%1\". The theme file may be "
+                           "locked by another process.").arg(current));
+    }
+}
+
+void ThemeEditorDialog::resetTokenToFactory(const QString& key,
+                                            QListWidgetItem* item)
+{
+    auto& tm = ThemeManager::instance();
+    if (!tm.hasFactoryValue(key)) return;
+
+    if (key.startsWith(QStringLiteral("color."))) {
+        // Gradients restore through setGradient; scalars through setColor.
+        // The factory snapshot lookup goes through factoryGradient first,
+        // falls back to factoryColor.  An empty gradient with a valid
+        // factoryColor means the factory baseline is a scalar.
+        const ThemeGradient g = tm.factoryGradient(key);
+        if (!g.stops.isEmpty()) {
+            tm.setGradient(key, g);
+        } else {
+            const QColor c = tm.factoryColor(key);
+            if (c.isValid()) tm.setColor(key, c);
+        }
+    } else if (key.startsWith(QStringLiteral("font.family."))) {
+        const QString f = tm.factoryString(key);
+        if (!f.isEmpty()) tm.setString(key, f);
+    } else if (key.startsWith(QStringLiteral("font.size."))
+               || key.startsWith(QStringLiteral("sizing."))) {
+        const int v = tm.factorySizing(key);
+        if (v >= 0) tm.setSizing(key, v);
+    }
+    updateRow(item);
 }
 
 void ThemeEditorDialog::onSaveAsClicked()
