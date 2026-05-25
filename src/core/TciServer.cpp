@@ -1349,18 +1349,72 @@ void TciServer::wireSlice(int trx, SliceModel* slice)
 
 // ── Wire spot click notifications ───────────────────────────────────────
 
+SliceModel* TciServer::sliceForPanId(const QString& panId) const
+{
+    if (!m_model || panId.isEmpty())
+        return nullptr;
+
+    for (auto* slice : m_model->slices()) {
+        if (slice && slice->panId() == panId)
+            return slice;
+    }
+
+    return nullptr;
+}
+
+void TciServer::broadcastSpotClicked(const QString& callsign, long long frequencyHz,
+                                     int trx, int channel)
+{
+    if (m_clients.isEmpty())
+        return;
+
+    const QString call = callsign.trimmed();
+    if (call.isEmpty() || frequencyHz <= 0)
+        return;
+
+    const int safeTrx = std::max(0, trx);
+    const int safeChannel = std::max(0, channel);
+
+    // TCI v2 clients may listen for the receiver-qualified form; older
+    // Log4OM-style clients commonly use the original two-field message.
+    broadcast(QStringLiteral("clicked_on_spot:%1,%2;")
+                  .arg(call)
+                  .arg(frequencyHz));
+    broadcast(QStringLiteral("rx_clicked_on_spot:%1,%2,%3,%4;")
+                  .arg(safeTrx)
+                  .arg(safeChannel)
+                  .arg(call)
+                  .arg(frequencyHz));
+}
+
+void TciServer::notifySpotClicked(int spotIndex, SliceModel* slice)
+{
+    if (!m_model)
+        return;
+
+    const auto& spots = m_model->spotModel().spots();
+    auto it = spots.find(spotIndex);
+    if (it == spots.end())
+        return;
+
+    SliceModel* resolvedSlice = slice;
+    if (!resolvedSlice) {
+        const auto slices = m_model->slices();
+        if (!slices.isEmpty())
+            resolvedSlice = slices.first();
+    }
+
+    const int trx = TciProtocol::tciTrxForSlice(m_model, resolvedSlice);
+    const long long hz = static_cast<long long>(std::round(it->rxFreqMhz * 1e6));
+    broadcastSpotClicked(it->callsign, hz, trx, 0);
+}
+
 void TciServer::wireSpotModel()
 {
     if (!m_model) return;
     connect(&m_model->spotModel(), &SpotModel::spotTriggered,
-            this, [this](int index, const QString&) {
-        if (m_clients.isEmpty()) return;
-        auto& spots = m_model->spotModel().spots();
-        if (!spots.contains(index)) return;
-        const auto& spot = spots[index];
-        long long hz = static_cast<long long>(spot.rxFreqMhz * 1e6);
-        broadcast(QStringLiteral("clicked_on_spot:%1,%2;")
-                      .arg(spot.callsign).arg(hz));
+            this, [this](int index, const QString& panId) {
+        notifySpotClicked(index, sliceForPanId(panId));
     });
 }
 

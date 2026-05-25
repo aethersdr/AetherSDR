@@ -12240,7 +12240,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // conjure a slice; click is the explicit "create here" affordance.
     });
 
-    // ── Spot trigger — notify the radio when a spot label is clicked (#341)
+    // ── Spot trigger — notify the radio/TCI clients when a spot label is clicked (#341)
     connect(sw, &SpectrumWidget::spotTriggered, this, [this, applet](int spotIndex) {
         const auto& spots = m_radioModel.spotModel().spots();
         auto it = spots.find(spotIndex);
@@ -12253,16 +12253,21 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
-        if (!isPassiveLocalSpotId(spotIndex))
+        auto* s = preferredMemorySlice(applet->panId());
+        const bool tciSpot = it->source.compare(QStringLiteral("TCI"), Qt::CaseInsensitive) == 0;
+        if (tciSpot) {
+            if (m_tciServer && s && !s->isLocked() && !m_swrSweep.running)
+                m_tciServer->notifySpotClicked(spotIndex, s);
+        } else if (!isPassiveLocalSpotId(spotIndex)) {
             m_radioModel.sendCommand(
                 QString("spot trigger %1 pan=%2").arg(spotIndex).arg(applet->panId()));
+        }
 
         // Auto-switch mode from spot metadata (#424). Default flipped to True
         // in #1846 since spots now ship with trigger_action=none — the radio
         // no longer changes mode on click, so auto-mode is the only path.
         if (AppSettings::instance().value("SpotAutoSwitchMode", "True").toString() != "True")
             return;
-        auto* s = preferredMemorySlice(applet->panId());
         if (!s) return;
 
         // FreeDV spots imply RADE — activate the RADE engine on this slice
