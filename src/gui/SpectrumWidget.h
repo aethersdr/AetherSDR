@@ -564,6 +564,11 @@ private:
     int historyRowIndexForAge(int ageRows) const;
     QString pausedTimeLabelForAge(int ageRows) const;
     void updateWaterfallMsPerRowFromHistory();
+    int waterfallFallbackIntervalMs() const;
+    int waterfallFallbackTimeoutMs() const;
+    int nativeWaterfallFallbackHoldMs(int intervalMs) const;
+    void updateNativeWaterfallFallbackState(qint64 nowMs);
+    bool pushRxWaterfallFallbackIfDue(const QVector<float>& bins, qint64 nowMs);
     void applyFpsMeterVisibility(bool on);
     void resetFpsMeterWindow();
     void updateFpsMeterValues();
@@ -761,11 +766,16 @@ private:
     int    m_timeScaleDragStartRatePercent{1};
     static constexpr qint64 kWaterfallHistoryMs = 20LL * 60LL * 1000LL;
 
-    // True once we receive native waterfall tile data (PCC 0x8004).
-    // When set, updateSpectrum() skips pushing FFT rows to the waterfall
-    // because the radio provides dedicated waterfall tiles.
+    // True while native waterfall tile data (PCC 0x8004) is arriving on the
+    // expected cadence.  RX uses paced FFT-derived rows only as a stale-native
+    // fallback so slow requested waterfall rates do not look falsely timed out.
     bool m_hasNativeWaterfall{false};
     qint64 m_lastNativeTileMs{0};    // timestamp of last native tile (for fallback)
+    bool m_waterfallFallbackActive{false};
+    qint64 m_nextFallbackWaterfallRowMs{0};
+    // Before the first native tile, or after a rate change, hold fallback
+    // briefly so fast previews do not flash FFT rows while native data catches up.
+    qint64 m_nativeWaterfallFallbackHoldUntilMs{0};
     QVector<QRgb> m_prevTileScanline;  // previous tile row for interpolation
 
     static constexpr float SMOOTH_ALPHA    = 0.35f;

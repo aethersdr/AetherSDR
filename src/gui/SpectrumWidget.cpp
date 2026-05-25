@@ -67,6 +67,9 @@ static constexpr int kWaterfallLineDurationMaxMs = 100;
 static constexpr int kWaterfallHistoryCapacityMsPerRow = 50;
 static constexpr int kWaterfallRatePercentMin = 1;
 static constexpr int kWaterfallRatePercentMax = 100;
+static constexpr int kNativeWaterfallFallbackMinTimeoutMs = 2000;
+static constexpr int kNativeWaterfallFallbackMaxTimeoutMs = 20000;
+static constexpr int kNativeWaterfallRateChangeGraceMaxMs = 14000;
 static constexpr int kDbmReleaseHoldFrames = 10;
 static constexpr int kDbmReleaseErrorSampleCount = 256;
 static constexpr float kDbmReleasePreviewChangeThresholdDb = 0.05f;
@@ -1643,6 +1646,8 @@ void SpectrumWidget::resetWfTimeScale() {
     // Seed the visible scale from the deterministic rate mapping so Ctrl-drag
     // previews move with the mouse.  Real row timestamps update the per-rate
     // cache after enough new rows arrive at this rate.
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const int previousFallbackIntervalMs = waterfallFallbackIntervalMs();
     const int lineDuration = std::clamp(m_wfLineDuration,
                                         kWaterfallLineDurationMinMs,
                                         kWaterfallLineDurationMaxMs);
@@ -1681,7 +1686,21 @@ void SpectrumWidget::resetWfTimeScale() {
     m_wfCalibrationCount = 0;
     m_wfTimeScaleLocked = false;
     m_wfRowsSinceRateChange = 0;
-    m_wfCalibrationResumeMs = QDateTime::currentMSecsSinceEpoch() + 500;
+    m_wfCalibrationResumeMs = nowMs + 500;
+    m_nextFallbackWaterfallRowMs = 0;
+    if (m_hasNativeWaterfall && m_lastNativeTileMs > 0) {
+        const int graceMs = nativeWaterfallFallbackHoldMs(previousFallbackIntervalMs);
+        m_nativeWaterfallFallbackHoldUntilMs =
+            std::max(m_nativeWaterfallFallbackHoldUntilMs, nowMs + graceMs);
+        m_waterfallFallbackActive = false;
+    } else if (m_lastNativeTileMs <= 0) {
+        const int graceMs = nativeWaterfallFallbackHoldMs(waterfallFallbackIntervalMs());
+        m_nativeWaterfallFallbackHoldUntilMs =
+            std::max(m_nativeWaterfallFallbackHoldUntilMs, nowMs + graceMs);
+        m_waterfallFallbackActive = false;
+    } else {
+        m_nativeWaterfallFallbackHoldUntilMs = 0;
+    }
     ensureWaterfallHistory();
 }
 
@@ -1789,6 +1808,84 @@ void SpectrumWidget::updateWaterfallMsPerRowFromHistory()
         }
         return;
     }
+}
+
+int SpectrumWidget::waterfallFallbackIntervalMs() const
+{
+    return std::clamp(static_cast<int>(std::lround(std::max(1.0f, m_wfMsPerRow))),
+                      kWaterfallLineDurationMinMs,
+                      kNativeWaterfallFallbackMaxTimeoutMs);
+}
+
+int SpectrumWidget::waterfallFallbackTimeoutMs() const
+{
+    const float intervalMs = static_cast<float>(waterfallFallbackIntervalMs());
+    return std::clamp(static_cast<int>(std::ceil(intervalMs * 2.5f + 500.0f)),
+                      kNativeWaterfallFallbackMinTimeoutMs,
+                      kNativeWaterfallFallbackMaxTimeoutMs);
+}
+
+int SpectrumWidget::nativeWaterfallFallbackHoldMs(int intervalMs) const
+{
+    const float clampedIntervalMs = static_cast<float>(
+        std::clamp(intervalMs, kWaterfallLineDurationMinMs, kNativeWaterfallFallbackMaxTimeoutMs));
+    return std::clamp(static_cast<int>(std::ceil(clampedIntervalMs * 2.0f + 1000.0f)),
+                      kNativeWaterfallFallbackMinTimeoutMs,
+                      kNativeWaterfallRateChangeGraceMaxMs);
+}
+
+void SpectrumWidget::updateNativeWaterfallFallbackState(qint64 nowMs)
+{
+    if (m_hasNativeWaterfall) {
+        if (m_nativeWaterfallFallbackHoldUntilMs > nowMs) {
+            m_waterfallFallbackActive = false;
+            m_nextFallbackWaterfallRowMs = 0;
+            return;
+        }
+        const bool stillFresh = m_lastNativeTileMs > 0
+            && nowMs - m_lastNativeTileMs <= waterfallFallbackTimeoutMs();
+        if (stillFresh) {
+            m_waterfallFallbackActive = false;
+            m_nextFallbackWaterfallRowMs = 0;
+            m_nativeWaterfallFallbackHoldUntilMs = 0;
+            return;
+        }
+
+        m_hasNativeWaterfall = false;
+        m_waterfallFallbackActive = true;
+        m_nextFallbackWaterfallRowMs = nowMs;
+        return;
+    }
+
+    if (m_nativeWaterfallFallbackHoldUntilMs > nowMs) {
+        m_waterfallFallbackActive = false;
+        m_nextFallbackWaterfallRowMs = 0;
+        return;
+    }
+
+    if (!m_waterfallFallbackActive) {
+        m_waterfallFallbackActive = true;
+        if (m_nextFallbackWaterfallRowMs <= 0) {
+            m_nextFallbackWaterfallRowMs = nowMs;
+        }
+    }
+}
+
+bool SpectrumWidget::pushRxWaterfallFallbackIfDue(const QVector<float>& bins, qint64 nowMs)
+{
+    if (!m_waterfallFallbackActive || m_waterfall.isNull() || bins.isEmpty()) {
+        return false;
+    }
+    if (m_nextFallbackWaterfallRowMs <= 0) {
+        m_nextFallbackWaterfallRowMs = nowMs;
+    }
+    if (nowMs < m_nextFallbackWaterfallRowMs) {
+        return false;
+    }
+
+    pushWaterfallRow(bins, m_waterfall.width());
+    m_nextFallbackWaterfallRowMs = nowMs + waterfallFallbackIntervalMs();
+    return true;
 }
 
 void SpectrumWidget::ensureWaterfallHistory()
@@ -1961,6 +2058,12 @@ void SpectrumWidget::clearDisplay()
     m_wfHistoryRowCount = 0;
     m_wfHistoryOffsetRows = 0;
     m_wfLive = true;
+    m_hasNativeWaterfall = false;
+    m_lastNativeTileMs = 0;
+    m_waterfallFallbackActive = false;
+    m_nextFallbackWaterfallRowMs = 0;
+    const int graceMs = nativeWaterfallFallbackHoldMs(waterfallFallbackIntervalMs());
+    m_nativeWaterfallFallbackHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + graceMs;
     markOverlayDirty();
 }
 
@@ -2992,9 +3095,10 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         markOverlayDirty();
     }
 
-    // Use FFT-derived waterfall rows only for TX rendering. RX waterfall rows
-    // come from native VITA waterfall tiles; mixing FFT dBm rows into the native
-    // intensity path creates bright bands when the radio pauses native tiles.
+    // Native VITA waterfall tiles are the primary RX source. If they stop
+    // arriving, fall back to FFT-derived rows, but pace that fallback at the
+    // current observed/requested waterfall cadence so slow rates do not look
+    // falsely stale and so the rate slider still governs visible scrolling.
     if (m_transmitting) {
         // TX rendering is global, not limited to the pan that owns the TX
         // slice. Any pan whose visible range intersects the TX passband uses
@@ -3004,15 +3108,11 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         if (txAffectsPan && m_showTxInWaterfall && !m_waterfall.isNull()) {
             pushWaterfallRow(*spectrumBins, m_waterfall.width());
         } else if (!txAffectsPan) {
-            if (m_hasNativeWaterfall) {
-                const qint64 now = QDateTime::currentMSecsSinceEpoch();
-                if (now - m_lastNativeTileMs > 2000) {
-                    m_hasNativeWaterfall = false;
-                    qDebug() << "SpectrumWidget: native waterfall tiles timed out during TX, falling back to FFT-derived";
-                }
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            updateNativeWaterfallFallbackState(now);
+            if (!m_hasNativeWaterfall) {
+                pushRxWaterfallFallbackIfDue(*spectrumBins, now);
             }
-            if (!m_hasNativeWaterfall && !m_waterfall.isNull())
-                pushWaterfallRow(*spectrumBins, m_waterfall.width());
         }
     } else {
         // Suppress post-TX transient noise rows (#2117).  The receiver AGC
@@ -3027,11 +3127,10 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
                 m_txEndMs = 0;
         }
         if (!postTxBlanking) {
-            if (m_hasNativeWaterfall) {
-                const qint64 now = QDateTime::currentMSecsSinceEpoch();
-                if (now - m_lastNativeTileMs > 2000) {
-                    m_hasNativeWaterfall = false;
-                }
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            updateNativeWaterfallFallbackState(now);
+            if (!m_hasNativeWaterfall) {
+                pushRxWaterfallFallbackIfDue(*spectrumBins, now);
             }
         }
     }
@@ -3105,6 +3204,9 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
 
     m_hasNativeWaterfall = true;
     m_lastNativeTileMs = nowMs;
+    m_waterfallFallbackActive = false;
+    m_nextFallbackWaterfallRowMs = 0;
+    m_nativeWaterfallFallbackHoldUntilMs = 0;
 
     const int destWidth = m_waterfall.width();
     if (destWidth <= 0) return;
@@ -3408,8 +3510,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 #ifdef Q_OS_MAC
         const bool rateModifier = modifiers.testFlag(Qt::ControlModifier)
             || modifiers.testFlag(Qt::MetaModifier);
-        const bool rateClick = (rateModifier && ev->button() == Qt::LeftButton)
-            || ev->button() == Qt::RightButton;
+        const bool rateClick = rateModifier
+            && (ev->button() == Qt::LeftButton || ev->button() == Qt::RightButton);
 #else
         const bool rateModifier = modifiers.testFlag(Qt::ControlModifier);
         const bool rateClick = rateModifier && ev->button() == Qt::LeftButton;
@@ -4784,17 +4886,11 @@ QRgb SpectrumWidget::intensityToRgb(float intensity) const
 void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
                                       double tileLowMhz, double tileHighMhz)
 {
-    // One row per FFT frame, matching the native-tile path's behaviour
-    // (updateWaterfallRow pushes one row per incoming tile too). The earlier
-    // debt-based gate paced this path to m_wfLineDuration on the premise that
-    // native tiles arrive at line_duration cadence — they don't: native tiles
-    // arrive at the FFT rate (~30 Hz), so gating the FFT-derived path made TX
-    // scroll ~3× slower than RX after #3019 suppressed the simultaneous native-
-    // tile fill. Removing the gate restores rate parity between RX and TX.
-    //
-    // Time-axis labelling uses m_wfMsPerRow, which is measured from native
-    // tile timecodes (resetWfTimeScale -> measured wallDelta/tcDelta), so the
-    // time scale stays correct regardless of which path produces the row.
+    // Callers own cadence: TX can push one row per FFT frame, while RX stale-
+    // native fallback is explicitly paced by pushRxWaterfallFallbackIfDue().
+    // Time-axis labelling uses m_wfMsPerRow, seeded from the requested rate and
+    // corrected from appended-row timestamps, so the scale follows whichever
+    // path is currently producing visible rows.
 
     if (m_waterfall.isNull() || destWidth <= 0) return;
 
