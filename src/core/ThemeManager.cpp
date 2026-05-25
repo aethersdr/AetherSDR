@@ -299,9 +299,20 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.slice.h",  QString("#ff60a0"));
     m_tokens.insert("color.slice.tx", QString("#ff4d4d"));
 
-    // Font + sizing (unchanged from Phase 1 seed)
-    m_tokens.insert("font.family.ui",       QString("Inter"));
-    m_tokens.insert("font.family.mono",     QString("monospace"));
+    // Font + sizing
+    m_tokens.insert("font.family.ui",        QString("Inter"));
+    m_tokens.insert("font.family.mono",      QString("monospace"));
+    // Bundled DSEG fonts (SIL OFL 1.1) — third_party/dseg/, loaded into
+    // QFontDatabase at app startup so themes can resolve them by family
+    // name without depending on the system having them installed.
+    m_tokens.insert("font.family.segment7",  QString("DSEG7 Modern"));
+    m_tokens.insert("font.family.segment14", QString("DSEG14 Modern"));
+    m_tokens.insert("font.family.weather",   QString("DSEGWeather"));
+    // Widget-class tokens — paint a class of widgets (frequency displays,
+    // temperature readouts) so the operator can swap font families across
+    // all members of the class with one Theme Editor pick.
+    m_tokens.insert("font.family.freq",      QString("DSEG7 Modern"));
+    m_tokens.insert("font.family.temp",      QString("DSEG7 Modern"));
     m_tokens.insert("font.size.tiny",       9);
     m_tokens.insert("font.size.small",      10);
     m_tokens.insert("font.size.normal",     12);

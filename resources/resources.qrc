@@ -27,4 +27,25 @@
         <file alias="understanding-data-modes.md">help/understanding-data-modes.md</file>
         <file alias="contributing-to-aethersdr.md">help/contributing-to-aethersdr.md</file>
     </qresource>
+    <!-- Bundled DSEG fonts (SIL OFL 1.1 — third_party/dseg/DSEG-LICENSE.txt).
+         Modern variant of 7-segment + 14-segment families (all six weights)
+         plus the DSEGWeather icon set.  Loaded into the QFontDatabase at
+         startup so themes can reference them via the
+         `font.family.segment7` / `font.family.segment14` /
+         `font.family.weather` tokens.  ~295 KB total. -->
+    <qresource prefix="/fonts">
+        <file alias="DSEG7Modern-Light.ttf">../third_party/dseg/DSEG7-Modern/DSEG7Modern-Light.ttf</file>
+        <file alias="DSEG7Modern-LightItalic.ttf">../third_party/dseg/DSEG7-Modern/DSEG7Modern-LightItalic.ttf</file>
+        <file alias="DSEG7Modern-Regular.ttf">../third_party/dseg/DSEG7-Modern/DSEG7Modern-Regular.ttf</file>
+        <file alias="DSEG7Modern-Italic.ttf">../third_party/dseg/DSEG7-Modern/DSEG7Modern-Italic.ttf</file>
+        <file alias="DSEG7Modern-Bold.ttf">../third_party/dseg/DSEG7-Modern/DSEG7Modern-Bold.ttf</file>
+        <file alias="DSEG7Modern-BoldItalic.ttf">../third_party/dseg/DSEG7-Modern/DSEG7Modern-BoldItalic.ttf</file>
+        <file alias="DSEG14Modern-Light.ttf">../third_party/dseg/DSEG14-Modern/DSEG14Modern-Light.ttf</file>
+        <file alias="DSEG14Modern-LightItalic.ttf">../third_party/dseg/DSEG14-Modern/DSEG14Modern-LightItalic.ttf</file>
+        <file alias="DSEG14Modern-Regular.ttf">../third_party/dseg/DSEG14-Modern/DSEG14Modern-Regular.ttf</file>
+        <file alias="DSEG14Modern-Italic.ttf">../third_party/dseg/DSEG14-Modern/DSEG14Modern-Italic.ttf</file>
+        <file alias="DSEG14Modern-Bold.ttf">../third_party/dseg/DSEG14-Modern/DSEG14Modern-Bold.ttf</file>
+        <file alias="DSEG14Modern-BoldItalic.ttf">../third_party/dseg/DSEG14-Modern/DSEG14Modern-BoldItalic.ttf</file>
+        <file alias="DSEGWeather.ttf">../third_party/dseg/DSEGWeather/DSEGWeather.ttf</file>
+    </qresource>
 </RCC>

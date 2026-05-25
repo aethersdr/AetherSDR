@@ -575,10 +575,15 @@ void VfoWidget::buildUI()
     m_freqStack->setFixedHeight(30);
 
     m_freqLabel = new QLabel("14.225.000");
+    // font-family resolves via the user-pickable font.family.freq token —
+    // RxApplet's frequency label reads the same token so both surfaces
+    // re-theme in lockstep when the operator picks a new family in the
+    // Theme Editor.
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqLabel, "QLabel { background: transparent;"
                                 " border: 1px solid rgba(255,255,255,80);"
                                 " border-radius: 3px;"
                                 " color: {{color.text.primary}}; font-size: 26px; font-weight: bold;"
+                                " font-family: \"{{font.family.freq}}\";"
                                 " padding: 0 0 0 2px; }");
     m_freqLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     m_freqLabel->installEventFilter(this);
@@ -587,6 +592,7 @@ void VfoWidget::buildUI()
     m_freqEdit = new QLineEdit;
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqEdit, "QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.accent}};"
         " border-radius: 3px; color: #00e5ff; font-size: 22px;"
+        " font-family: \"{{font.family.freq}}\";"
         " font-weight: bold; padding: 0 2px 0 0; }");
     m_freqEdit->setAlignment(Qt::AlignRight);
     // Size to fit "0000.000.000" at the label font size (4-digit MHz for XVTR/SHF)

@@ -106,16 +106,21 @@ single-use colours snap to the nearest canonical neighbour.
 | `color.slice.a`–`color.slice.h` | TBD per slice | one per slice letter; current code uses scattered per-slice colours that need a consolidated palette |
 | `color.slice.tx` | `#ff4d4d` | active-TX slice highlight |
 
-### Font tokens (unchanged from Phase 1 seed)
+### Font tokens
 
-| Token | Value |
-|---|---|
-| `font.family.ui` | `Inter` |
-| `font.family.mono` | `monospace` |
-| `font.size.tiny` | 9 |
-| `font.size.small` | 10 |
-| `font.size.normal` | 12 |
-| `font.size.large` | 14 |
+| Token | Value | Notes |
+|---|---|---|
+| `font.family.ui` | `Inter` | |
+| `font.family.mono` | `monospace` | |
+| `font.family.segment7` | `DSEG7 Modern` | bundled (SIL OFL 1.1) via `third_party/dseg/`; all six weights loaded at startup from `:/fonts/DSEG7Modern-*.ttf` |
+| `font.family.segment14` | `DSEG14 Modern` | bundled (SIL OFL 1.1) via `third_party/dseg/`; all six weights loaded at startup from `:/fonts/DSEG14Modern-*.ttf` |
+| `font.family.weather` | `DSEGWeather` | bundled (SIL OFL 1.1) via `third_party/dseg/DSEGWeather/`; icon font keyed off ASCII letters. |
+| `font.family.freq` | `DSEG7 Modern` | widget-class token — `VfoWidget` + `RxApplet` frequency labels read this so the operator can swap font families across both surfaces with one pick in the Theme Editor.  Defaults to `DSEG7 Modern` so a fresh install gets the segment look out of the box; reset to `Inter` or `monospace` for a plain proportional / fixed look. |
+| `font.family.temp` | `DSEG7 Modern` | widget-class token — temperature readouts (band-conditions / propagation surfaces, future temperature widgets) read this so the operator can theme them independently from `font.family.freq`.  Same default as `freq` for visual consistency on a fresh install. |
+| `font.size.tiny` | 9 | |
+| `font.size.small` | 10 | |
+| `font.size.normal` | 12 | |
+| `font.size.large` | 14 | |
 
 ### Sizing tokens (unchanged from Phase 1 seed)
 

@@ -10,6 +10,7 @@
 #include <QDir>
 #include <QDebug>
 #include <QFile>
+#include <QFontDatabase>
 #include <QDateTime>
 #include <QStandardPaths>
 
@@ -153,6 +154,33 @@ int main(int argc, char* argv[])
     app.setApplicationVersion(AETHERSDR_VERSION);
     app.setOrganizationName("AetherSDR");
     app.setDesktopFileName("AetherSDR");  // matches .desktop file for taskbar icon
+
+    // ── Bundled DSEG fonts (SIL OFL 1.1) ──────────────────────────────────
+    // Register the 13 TTFs into QFontDatabase so themes can resolve
+    // "DSEG7 Modern" / "DSEG14 Modern" / "DSEGWeather" without depending
+    // on the system having them installed.  Files live in resources.qrc
+    // under /fonts/ and are baked into the binary at build time.
+    {
+        static constexpr const char* kDsegFonts[] = {
+            ":/fonts/DSEG7Modern-Light.ttf",
+            ":/fonts/DSEG7Modern-LightItalic.ttf",
+            ":/fonts/DSEG7Modern-Regular.ttf",
+            ":/fonts/DSEG7Modern-Italic.ttf",
+            ":/fonts/DSEG7Modern-Bold.ttf",
+            ":/fonts/DSEG7Modern-BoldItalic.ttf",
+            ":/fonts/DSEG14Modern-Light.ttf",
+            ":/fonts/DSEG14Modern-LightItalic.ttf",
+            ":/fonts/DSEG14Modern-Regular.ttf",
+            ":/fonts/DSEG14Modern-Italic.ttf",
+            ":/fonts/DSEG14Modern-Bold.ttf",
+            ":/fonts/DSEG14Modern-BoldItalic.ttf",
+            ":/fonts/DSEGWeather.ttf",
+        };
+        for (const char* path : kDsegFonts) {
+            if (QFontDatabase::addApplicationFont(QString::fromLatin1(path)) < 0)
+                qWarning() << "Failed to load bundled font:" << path;
+        }
+    }
 
     // Request microphone permission early (macOS only).
     // Shows the system prompt on first launch so it's ready before PTT.

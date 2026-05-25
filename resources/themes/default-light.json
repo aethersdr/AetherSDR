@@ -140,7 +140,12 @@
     "font": {
       "family": {
         "ui": "Inter",
-        "mono": "monospace"
+        "mono": "monospace",
+        "segment7": "DSEG7 Modern",
+        "segment14": "DSEG14 Modern",
+        "weather": "DSEGWeather",
+        "freq": "DSEG7 Modern",
+        "temp": "DSEG7 Modern"
       },
       "size": {
         "tiny": 9,
