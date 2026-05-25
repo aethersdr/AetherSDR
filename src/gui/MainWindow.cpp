@@ -86,6 +86,7 @@
 #include "core/DvkWavTransfer.h"
 #include "AmpApplet.h"
 #include "MeterApplet.h"
+#include "HealthApplet.h"
 #include "PersistentDialog.h"
 #include "ProfileManagerDialog.h"
 #include "ProfileImportExportDialog.h"
@@ -3578,6 +3579,7 @@ MainWindow::MainWindow(QWidget* parent)
         m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
         m_appletPanel->sMeterWidget()->setPowerScale(maxW, ampActive);
+        m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
     };
     connect(&m_radioModel, &RadioModel::amplifierChanged, this, updatePowerScale);
     connect(&m_radioModel, &RadioModel::ampStateChanged, this, updatePowerScale);
@@ -3648,6 +3650,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     // ── Meter applet: all meters consolidated ──────────────────────────────
     m_appletPanel->meterApplet()->setMeterModel(&m_radioModel.meterModel());
+
+    // ── HLTH applet: same meter model — derives antenna-health state from
+    //    SWR / power trends across radio / tuner / amp sources.
+    m_appletPanel->healthApplet()->setMeterModel(&m_radioModel.meterModel());
 
     // ── TX applet: meters + model ───────────────────────────────────────────
     connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,

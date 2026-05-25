@@ -75,22 +75,41 @@ QColor themeColor(const QString& token, int alpha = 255)
     return c;
 }
 
-QString labelStyle(const QString& colorToken, int px = 10, bool bold = false)
+// Template builders — return unresolved {{token}} strings so callers can
+// route them through ThemeManager::applyStyleSheet() (which registers the
+// widget in the inspector reverse-map for Phase 5 token discovery and
+// handles live re-theme on theme changes).  Matches the project-wide
+// pattern PR #3144 swept across the rest of the codebase.
+QString labelStyleTemplate(const QString& colorToken, int px = 10, bool bold = false)
 {
-    return ThemeManager::instance().resolve(QStringLiteral(
+    return QStringLiteral(
         "QLabel { color: {{%1}}; font-size: %2px; %3 }")
         .arg(colorToken)
         .arg(px)
-        .arg(bold ? QStringLiteral("font-weight: bold;") : QString()));
+        .arg(bold ? QStringLiteral("font-weight: bold;") : QString());
 }
 
-QString pillStyle(const QString& bgToken, const QString& borderToken,
-                  const QString& fgToken)
+QString pillStyleTemplate(const QString& bgToken, const QString& borderToken,
+                          const QString& fgToken)
 {
-    return ThemeManager::instance().resolve(QStringLiteral(
+    return QStringLiteral(
         "QLabel { background: {{%1}}; border: 1px solid {{%2}}; border-radius: 3px; "
         "color: {{%3}}; font-size: 10px; font-weight: bold; padding: 1px 5px; }")
-        .arg(bgToken, borderToken, fgToken));
+        .arg(bgToken, borderToken, fgToken);
+}
+
+void applyLabelStyle(QWidget* w, const QString& colorToken,
+                     int px = 10, bool bold = false)
+{
+    ThemeManager::instance().applyStyleSheet(
+        w, labelStyleTemplate(colorToken, px, bold));
+}
+
+void applyPillStyle(QWidget* w, const QString& bgToken,
+                    const QString& borderToken, const QString& fgToken)
+{
+    ThemeManager::instance().applyStyleSheet(
+        w, pillStyleTemplate(bgToken, borderToken, fgToken));
 }
 
 QRectF laneRect(const QRectF& graphArea, int lane)
@@ -438,8 +457,15 @@ void HealthApplet::setMeterModel(MeterModel* model)
     if (m_model == model)
         return;
 
-    if (m_model)
-        disconnect(m_model, nullptr, this, nullptr);
+    if (m_model) {
+        // Named-signal disconnects rather than the broad
+        // disconnect(m_model, nullptr, this, nullptr) form — keeps any
+        // other connections an outside party might have established to
+        // the same model intact.
+        disconnect(m_model, &MeterModel::txMetersChanged,   this, nullptr);
+        disconnect(m_model, &MeterModel::tgxlMetersChanged, this, nullptr);
+        disconnect(m_model, &MeterModel::ampMetersChanged,  this, nullptr);
+    }
 
     m_model = model;
     if (!m_model)
@@ -652,11 +678,11 @@ void HealthApplet::applyTheme()
     if (!m_statusLabel)
         return;
 
-    m_sourceLabel->setStyleSheet(labelStyle(QStringLiteral("color.text.secondary"), 10, true));
-    m_swrLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.success"), 10, true));
-    m_returnLossLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.warning"), 10, true));
-    m_powerLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent"), 10, true));
-    m_varianceLabel->setStyleSheet(labelStyle(QStringLiteral("color.text.secondary"), 10, false));
+    applyLabelStyle(m_sourceLabel,     QStringLiteral("color.text.secondary"), 10, true);
+    applyLabelStyle(m_swrLabel,        QStringLiteral("color.accent.success"), 10, true);
+    applyLabelStyle(m_returnLossLabel, QStringLiteral("color.accent.warning"), 10, true);
+    applyLabelStyle(m_powerLabel,      QStringLiteral("color.accent"),         10, true);
+    applyLabelStyle(m_varianceLabel,   QStringLiteral("color.text.secondary"), 10, false);
 
     if (m_graph)
         m_graph->update();
@@ -690,11 +716,11 @@ void HealthApplet::showPausedState()
         return;
 
     m_statusLabel->setText(QStringLiteral("PAUSED"));
-    m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.1"),
-                                            QStringLiteral("color.accent"),
-                                            QStringLiteral("color.text.primary")));
+    applyPillStyle(m_statusLabel, QStringLiteral("color.background.1"),
+                   QStringLiteral("color.accent"),
+                   QStringLiteral("color.text.primary"));
     m_scoreLabel->setText(QStringLiteral("II"));
-    m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent"), 11, true));
+    applyLabelStyle(m_scoreLabel, QStringLiteral("color.accent"), 11, true);
 }
 
 void HealthApplet::pushRecent(float powerWatts, float swr, float returnLossDb)
@@ -782,11 +808,11 @@ void HealthApplet::updateStatusLabels(const AntennaHealthSample& sample,
 
     if (!sample.active) {
         m_statusLabel->setText(QStringLiteral("IDLE"));
-        m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.0"),
-                                                QStringLiteral("color.border.strong"),
-                                                QStringLiteral("color.text.secondary")));
+        applyPillStyle(m_statusLabel, QStringLiteral("color.background.0"),
+                       QStringLiteral("color.border.strong"),
+                       QStringLiteral("color.text.secondary"));
         m_scoreLabel->setText(QStringLiteral("--"));
-        m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.text.primary"), 11, true));
+        applyLabelStyle(m_scoreLabel, QStringLiteral("color.text.primary"), 11, true);
         return;
     }
 
@@ -796,22 +822,22 @@ void HealthApplet::updateStatusLabels(const AntennaHealthSample& sample,
 
     if (sample.severity >= 0.72f) {
         m_statusLabel->setText(QStringLiteral("GROUND?"));
-        m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.tx"),
-                                                QStringLiteral("color.accent.danger"),
-                                                QStringLiteral("color.accent.danger")));
-        m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.danger"), 11, true));
+        applyPillStyle(m_statusLabel, QStringLiteral("color.background.tx"),
+                       QStringLiteral("color.accent.danger"),
+                       QStringLiteral("color.accent.danger"));
+        applyLabelStyle(m_scoreLabel, QStringLiteral("color.accent.danger"), 11, true);
     } else if (sample.severity >= 0.34f) {
         m_statusLabel->setText(QStringLiteral("WATCH"));
-        m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.tx"),
-                                                QStringLiteral("color.accent.warning"),
-                                                QStringLiteral("color.accent.warning")));
-        m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.warning"), 11, true));
+        applyPillStyle(m_statusLabel, QStringLiteral("color.background.tx"),
+                       QStringLiteral("color.accent.warning"),
+                       QStringLiteral("color.accent.warning"));
+        applyLabelStyle(m_scoreLabel, QStringLiteral("color.accent.warning"), 11, true);
     } else {
         m_statusLabel->setText(QStringLiteral("OK"));
-        m_statusLabel->setStyleSheet(pillStyle(QStringLiteral("color.background.1"),
-                                                QStringLiteral("color.accent.success"),
-                                                QStringLiteral("color.accent.success")));
-        m_scoreLabel->setStyleSheet(labelStyle(QStringLiteral("color.accent.success"), 11, true));
+        applyPillStyle(m_statusLabel, QStringLiteral("color.background.1"),
+                       QStringLiteral("color.accent.success"),
+                       QStringLiteral("color.accent.success"));
+        applyLabelStyle(m_scoreLabel, QStringLiteral("color.accent.success"), 11, true);
     }
 }
 
