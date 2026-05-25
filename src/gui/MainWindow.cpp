@@ -7964,6 +7964,36 @@ void MainWindow::buildMenuBar()
         });
     }
 
+    // Theme submenu — list every theme ThemeManager discovered in
+    // :/themes/ (built-ins) + ~/.config/AetherSDR/themes/ (user themes).
+    // setActiveTheme() handles persistence + emits themeChanged so every
+    // widget registered through applyStyleSheet re-themes on the next
+    // paint, no app restart required.
+    auto* themeMenu = viewMenu->addMenu("Theme");
+    auto* themeGroup = new QActionGroup(themeMenu);
+    auto rebuildThemeMenu = [themeMenu, themeGroup]() {
+        themeMenu->clear();
+        for (auto* a : themeGroup->actions())
+            themeGroup->removeAction(a);
+        auto& tm = ThemeManager::instance();
+        const QString active = tm.activeTheme();
+        for (const QString& name : tm.availableThemes()) {
+            auto* act = themeMenu->addAction(name);
+            act->setCheckable(true);
+            act->setChecked(name == active);
+            themeGroup->addAction(act);
+            QObject::connect(act, &QAction::triggered, themeMenu, [name] {
+                ThemeManager::instance().setActiveTheme(name);
+            });
+        }
+    };
+    rebuildThemeMenu();
+    // Rebuild whenever the active theme changes (covers in-app theme
+    // switches re-checking the right entry, and Phase-5 user-theme
+    // additions appearing in the list once the editor lands).
+    QObject::connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+                     themeMenu, rebuildThemeMenu);
+
     auto* singleClickTuneAct = viewMenu->addAction("Single-Click to Tune");
     singleClickTuneAct->setCheckable(true);
     singleClickTuneAct->setChecked(
