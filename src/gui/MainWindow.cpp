@@ -2812,6 +2812,10 @@ MainWindow::MainWindow(QWidget* parent)
                 sw->setBackgroundImage(bgPath);
             int bgOpacity = s.value(sw->settingsKey("BackgroundOpacity"), "80").toInt();
             sw->setBackgroundOpacity(bgOpacity);
+            QColor bgFill(s.value(sw->settingsKey("BackgroundFillColor"),
+                                  "#0a0a14").toString());
+            if (bgFill.isValid())
+                sw->setBackgroundFillColor(bgFill);
             // Nudge rate to force waterfall tile re-sync
             if (!m_adaptiveThrottleActive) {
                 QTimer::singleShot(500, this, [this, rate]() {
