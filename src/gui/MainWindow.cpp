@@ -1598,10 +1598,13 @@ MainWindow::MainWindow(QWidget* parent)
     // before child widgets (buttons, combos) consume the key event.
     qApp->installEventFilter(this);
 
-    // Ctrl+M toggle — must be a QShortcut on MainWindow, not a menu action,
-    // because the menu bar is hidden in minimal mode.
+    // Ctrl+M toggle — keep this as the single real shortcut owner.  Registering
+    // the same chord on the menu action can make Qt report an ambiguous
+    // shortcut on Windows, and the menu bar is hidden in minimal mode anyway.
     auto* minimalShortcut = new QShortcut(QKeySequence("Ctrl+M"), this);
-    connect(minimalShortcut, &QShortcut::activated, this, [this]() {
+    minimalShortcut->setContext(Qt::ApplicationShortcut);
+    minimalShortcut->setAutoRepeat(false);
+    const auto toggleMinimalModeShortcut = [this]() {
         bool next = !m_minimalMode;
         // Sync the menu action (with blocker to avoid double-toggle)
         if (m_minimalModeAction) {
@@ -1609,7 +1612,9 @@ MainWindow::MainWindow(QWidget* parent)
             m_minimalModeAction->setChecked(next);
         }
         toggleMinimalMode(next);
-    });
+    };
+    connect(minimalShortcut, &QShortcut::activated, this, toggleMinimalModeShortcut);
+    connect(minimalShortcut, &QShortcut::activatedAmbiguously, this, toggleMinimalModeShortcut);
 
     // Ctrl+Shift+A — starstruck easter egg: toggles pan-drag sound
     auto* starstruckShortcut = new QShortcut(QKeySequence("Ctrl+Shift+A"), this);
@@ -8015,9 +8020,8 @@ void MainWindow::buildMenuBar()
     });
 
     viewMenu->addSeparator();
-    m_minimalModeAction = viewMenu->addAction("Minimal Mode");
+    m_minimalModeAction = viewMenu->addAction("Minimal Mode\tCtrl+M");
     m_minimalModeAction->setCheckable(true);
-    m_minimalModeAction->setShortcut(QKeySequence("Ctrl+M"));
     m_minimalModeAction->setChecked(
         AppSettings::instance().value("MinimalModeEnabled", "False").toString() == "True");
     connect(m_minimalModeAction, &QAction::toggled, this, [this](bool on) {
