@@ -1883,7 +1883,7 @@ else()
     install(FILES packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )
-    install(FILES docs/assets/logo-circle.png
+    install(FILES docs/assets/logo-circle-256.png
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/256x256/apps
         RENAME aethersdr.png
     )
