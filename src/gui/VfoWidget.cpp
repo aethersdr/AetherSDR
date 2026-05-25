@@ -1083,6 +1083,31 @@ void VfoWidget::buildTabContent()
             if (!m_updatingFromModel && m_slice)
                 m_slice->setEscGain(gain);
         });
+        // Click-to-adjust on the polar display.  The knob emits the
+        // un-quantized radian/gain; we mirror it into the slider (which
+        // quantizes to 5° / 0.01 steps) and push the raw value to the
+        // model.  Slider signals are blocked so the slider lambdas above
+        // don't bounce back into setPhase/setGain.
+        connect(m_phaseKnob, &PhaseKnob::phaseChanged, this, [this](float rad) {
+            if (m_updatingFromModel) return;
+            int deg = static_cast<int>(std::lround(rad * 180.0f / static_cast<float>(M_PI))) % 360;
+            if (deg < 0) deg += 360;
+            {
+                QSignalBlocker sb(m_escPhaseSlider);
+                m_escPhaseSlider->setValue(deg / 5);
+            }
+            m_escPhaseLbl->setText(QString::number(deg) + QChar(0x00B0));
+            if (m_slice) m_slice->setEscPhaseShift(rad);
+        });
+        connect(m_phaseKnob, &PhaseKnob::gainChanged, this, [this](float gain) {
+            if (m_updatingFromModel) return;
+            {
+                QSignalBlocker sb(m_escGainSlider);
+                m_escGainSlider->setValue(static_cast<int>(std::lround(gain * 100.0f)));
+            }
+            m_escGainLbl->setText(QString::number(gain, 'f', 2));
+            if (m_slice) m_slice->setEscGain(gain);
+        });
 
         m_tabStack->addWidget(m_audioTab);
     }
