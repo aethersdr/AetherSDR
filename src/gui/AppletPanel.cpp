@@ -29,6 +29,7 @@
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
 #include "MeterApplet.h"
+#include "HealthApplet.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
 #endif
@@ -67,7 +68,7 @@
 namespace AetherSDR {
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "AG", "SS"
+    "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "HLTH", "AG", "SS"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -844,6 +845,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_meterApplet = new MeterApplet;
     m_appletOrder.append(makeEntry("MTR", "Meters", m_meterApplet, false, m_drawer, m_drawerLayout));
+
+    m_healthApplet = new HealthApplet;
+    m_appletOrder.append(makeEntry("HLTH", "Antenna Health", m_healthApplet, false, m_drawer, m_drawerLayout));
 
     m_agApplet = new AntennaGeniusApplet;
     {

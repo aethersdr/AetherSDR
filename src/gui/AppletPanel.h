@@ -50,6 +50,7 @@ class DaxIqApplet;
 class AntennaGeniusApplet;
 class ShackSwitchApplet;
 class MeterApplet;
+class HealthApplet;
 class MqttApplet;
 class FavoritesPickerDialog;
 
@@ -117,6 +118,7 @@ public:
     AntennaGeniusApplet* agApplet()  { return m_agApplet; }
     ShackSwitchApplet*   ssApplet()  { return m_ssApplet; }
     MeterApplet*  meterApplet()  { return m_meterApplet; }
+    HealthApplet* healthApplet() { return m_healthApplet; }
 #ifdef HAVE_MQTT
     MqttApplet*   mqttApplet()   { return m_mqttApplet; }
 #endif
@@ -275,6 +277,7 @@ private:
     AntennaGeniusApplet* m_agApplet{nullptr};
     ShackSwitchApplet*   m_ssApplet{nullptr};
     MeterApplet* m_meterApplet{nullptr};
+    HealthApplet* m_healthApplet{nullptr};
 #ifdef HAVE_MQTT
     MqttApplet*  m_mqttApplet{nullptr};
 #endif
