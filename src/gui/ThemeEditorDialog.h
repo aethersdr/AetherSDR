@@ -1,6 +1,7 @@
 #pragma once
 
-#include <QDialog>
+#include "PersistentDialog.h"
+
 #include <QPointer>
 
 class QListWidget;
@@ -30,7 +31,7 @@ class ThemeInspector;
 //   * Gradient editing (waterfall colormap stops, slice.dim block)
 //   * Font / sizing token editing
 //   * Import (drag-and-drop / file picker for arbitrary theme JSON)
-class ThemeEditorDialog : public QDialog {
+class ThemeEditorDialog : public PersistentDialog {
     Q_OBJECT
 public:
     explicit ThemeEditorDialog(QWidget* parent = nullptr);
@@ -45,6 +46,14 @@ private slots:
     void onInspectToggled(bool on);
     void onInspectorPicked(QWidget* target, QPoint localPos);
     void onInspectorActiveChanged(bool active);
+
+    // Routes wired from the type-chooser menu in onTokenRowClicked.
+    // editTokenAsFlat falls back to the first-stop colour when the token
+    // is currently a gradient.  editTokenAsGradient seeds a 2-stop
+    // gradient from the scalar value when the token is currently flat,
+    // so the initial visual output matches the previous flat colour.
+    void editTokenAsFlat(const QString& key, QListWidgetItem* item);
+    void editTokenAsGradient(const QString& key, QListWidgetItem* item);
 
 private:
     void updateTitle();

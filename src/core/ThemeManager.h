@@ -189,6 +189,24 @@ public:
     QStringList allTokenKeys() const;
     void        setColor(const QString& token, const QColor& color);
     void        setSizing(const QString& token, int value);
+
+    // Structured-gradient accessor + mutator for the Phase 5 gradient
+    // editor.  gradient() returns an empty ThemeGradient (zero stops)
+    // when the token isn't a gradient — callers should check stops.size()
+    // before treating the result as live data.  setGradient() emits
+    // themeChanged() so widgets re-paint with the new colormap on the
+    // next event-loop turn.
+    ThemeGradient gradient(const QString& token) const;
+    void          setGradient(const QString& token, const ThemeGradient& g);
+
+    // Factory-default lookup — reads from the bundled
+    // `:/themes/default-dark.json` so the gradient editor's
+    // "Reset to default" button can restore the canonical colormap
+    // shape after the operator wanders into territory they don't like.
+    // Returns an empty gradient if the token isn't a gradient in the
+    // bundled defaults (caller should check stops.size()).
+    ThemeGradient factoryGradient(const QString& token) const;
+
     bool        saveCurrentThemeAs(const QString& newThemeName);
 
 signals:
@@ -231,6 +249,14 @@ private:
     // (typed via Q_DECLARE_METATYPE below).
     QHash<QString, QVariant> m_tokens;
     QString m_activeTheme;
+
+    // Factory-default snapshot, loaded once from `:/themes/default-dark.json`
+    // at construction.  Drives the gradient editor's "Reset to default"
+    // button.  Lazy-initialised so a totally missing resource bundle
+    // doesn't take the whole singleton down.
+    mutable QHash<QString, QVariant> m_factoryTokens;
+    mutable bool m_factoryLoaded{false};
+    void ensureFactoryLoaded() const;
 
     // Reverse-map: widget instance → (template, tokens-it-references).
     // Populated by applyStyleSheet / declareWidgetTokens / declareWidgetRegions,

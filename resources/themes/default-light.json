@@ -40,7 +40,18 @@
         "thresh": "#d08010",
         "peak": "#1a2a3a",
         "gainReduction": "#a06010",
-        "bar.fill": "#c0c8d0"
+        "bar.fill": "#c0c8d0",
+        "bar.fillGradient": {
+          "type": "linear-gradient",
+          "angle": 0,
+          "stops": [
+            { "at": 0.00, "color": "#2f9e6a" },
+            { "at": 0.55, "color": "#6cc56a" },
+            { "at": 0.80, "color": "#e8b94c" },
+            { "at": 0.95, "color": "#e8553c" },
+            { "at": 1.00, "color": "#f2362a" }
+          ]
+        }
       },
       "spectrum": {
         "trace": "#0088b0",

@@ -82,6 +82,17 @@ bool ThemeInspector::eventFilter(QObject* /*obj*/, QEvent* ev)
 {
     if (!m_active) return false;
 
+    // While the editor has spawned a modal child dialog (QColorDialog,
+    // GradientEditorDialog, "Theme exists" confirm, …), pause overlay
+    // tracking and let every event flow through unmolested.  The modal
+    // owns the user's attention; once it closes the inspector resumes
+    // on the next mouse move.
+    if (QApplication::activeModalWidget()) {
+        if (m_overlay && m_overlay->isVisible()) m_overlay->hide();
+        m_lastTarget.clear();
+        return false;
+    }
+
     switch (ev->type()) {
     case QEvent::MouseMove: {
         auto* me = static_cast<QMouseEvent*>(ev);

@@ -684,6 +684,7 @@ set(GUI_SOURCES
     src/gui/WhatsNewDialog.cpp
     src/gui/ThemeEditorDialog.cpp
     src/gui/ThemeInspector.cpp
+    src/gui/GradientEditorDialog.cpp
 )
 
 set(ALL_SOURCES

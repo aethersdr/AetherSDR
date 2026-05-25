@@ -8006,15 +8006,7 @@ void MainWindow::buildMenuBar()
     // one instance at a time, cleaned up via WA_DeleteOnClose.
     auto* themeEditorAct = viewMenu->addAction("Theme Editor…");
     connect(themeEditorAct, &QAction::triggered, this, [this] {
-        if (!m_themeEditorDialog) {
-            m_themeEditorDialog = new ThemeEditorDialog(this);
-            m_themeEditorDialog->setAttribute(Qt::WA_DeleteOnClose);
-            connect(m_themeEditorDialog, &QObject::destroyed, this,
-                    [this] { m_themeEditorDialog = nullptr; });
-        }
-        m_themeEditorDialog->show();
-        m_themeEditorDialog->raise();
-        m_themeEditorDialog->activateWindow();
+        showOrRaisePersistent(m_themeEditorDialog);
     });
 
     auto* singleClickTuneAct = viewMenu->addAction("Single-Click to Tune");

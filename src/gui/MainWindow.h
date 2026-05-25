@@ -670,7 +670,7 @@ private:
     float m_lastPaTempC{0.0f};
     bool m_userDisconnected{false};  // true after explicit disconnect, blocks auto-connect
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
-    class ThemeEditorDialog* m_themeEditorDialog{nullptr}; // Phase 5 — lazy, modeless
+    QPointer<class ThemeEditorDialog> m_themeEditorDialog; // Phase 5 — lazy, modeless
     void cancelTransmitFromIndicator();
     class ClientEqEditor* m_clientEqEditor{nullptr}; // lazy — created on first Edit… click
     // Lazy-construct the floating EQ editor on first access, with all

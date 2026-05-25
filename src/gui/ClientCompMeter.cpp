@@ -44,6 +44,12 @@ ClientCompMeter::ClientCompMeter(QWidget* parent) : QWidget(parent)
             m_animTimer.stop();
         update();
     });
+
+    // Phase 5 PR 3b — repaint when the theme changes so live edits to
+    // color.meter.bar.fillGradient (shared with ClientLevelMeter) show
+    // up immediately.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, qOverload<>(&QWidget::update));
 }
 
 void ClientCompMeter::setMode(Mode m)
@@ -189,11 +195,16 @@ void ClientCompMeter::paintEvent(QPaintEvent*)
         const float fillH = m_smooth.value() * bar.height();
         QRectF fill(bar.left(), bar.bottom() - fillH, bar.width(), fillH);
 
-        QLinearGradient g(0, bar.bottom(), 0, bar.top());
-        g.setColorAt(0.0, kLevelLo());
-        g.setColorAt(0.7, kLevelMid());
-        g.setColorAt(1.0, kLevelHi());
-        p.fillRect(fill, g);
+        // Shared meter-bar gradient — same token ClientLevelMeter uses,
+        // so themes can recolour every level meter from one place via the
+        // gradient editor.  Map against the FULL bar rect so the visible
+        // portion always shows the stop colour the bar's bottom would
+        // have; the bar grows upward through the gradient as compression
+        // increases.
+        const QBrush brush =
+            AetherSDR::ThemeManager::instance()
+                .brush("color.meter.bar.fillGradient", bar.toRect());
+        p.fillRect(fill, brush);
 
         // Limiter overlay — draw ceiling zone + line if a ceiling has
         // been set.  m_ceilingDb > 0 is our sentinel for "no overlay"

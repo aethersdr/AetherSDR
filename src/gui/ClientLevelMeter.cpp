@@ -1,10 +1,10 @@
 #include "ClientLevelMeter.h"
 
 #include "MeterSmoother.h"
+#include "core/ThemeManager.h"
 
 #include <QFontMetrics>
 #include <QLabel>
-#include <QLinearGradient>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QVBoxLayout>
@@ -34,6 +34,12 @@ ClientLevelMeter::ClientLevelMeter(QWidget* parent) : QWidget(parent)
     setMinimumHeight(160);
     setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Expanding);
     setAttribute(Qt::WA_OpaquePaintEvent, false);
+
+    // Phase 5 PR 3b — refresh the meter when the theme changes so live
+    // edits to color.meter.bar.fillGradient (or any of the soon-to-be-
+    // tokenised label / outline colours) re-render without a restart.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, qOverload<>(&QWidget::update));
 }
 
 void ClientLevelMeter::setHeaderText(const QString& text)
@@ -84,8 +90,14 @@ void ClientLevelMeter::paintEvent(QPaintEvent*)
     // Bar background.
     p.fillRect(barR, QColor("#06111c"));
 
-    // Level fill — green→amber→red gradient, height proportional to
-    // the smoothed peak in dB.
+    // Level fill — bottom→top gradient from color.meter.bar.fillGradient,
+    // height proportional to the smoothed peak in dB.  The token is a
+    // single 5-stop linear gradient (angle 0°) themed through ThemeManager
+    // so the Theme Editor's gradient surface can recolour the meter
+    // without per-widget plumbing.  Map the gradient to the full strip
+    // rect (not the partial fill) so the visible portion always shows
+    // the colour the *bottom* of the strip would have — the bar grows
+    // upward through the gradient as the signal level rises.
     const float peakNorm = std::clamp(
         (m_smoothedPeak - kMeterMinDb) / (kMeterMaxDb - kMeterMinDb),
         0.0f, 1.0f);
@@ -93,13 +105,11 @@ void ClientLevelMeter::paintEvent(QPaintEvent*)
     if (fillH > 0) {
         const QRect fill(barR.x(), barR.y() + stripH - fillH,
                          kBarW, fillH);
-        QLinearGradient grad(0, barR.y() + stripH, 0, barR.y());
-        grad.setColorAt(0.0,  QColor("#2f9e6a"));   // green bottom
-        grad.setColorAt(0.55, QColor("#6cc56a"));   // lime
-        grad.setColorAt(0.80, QColor("#e8b94c"));   // amber
-        grad.setColorAt(0.95, QColor("#e8553c"));   // red top
-        grad.setColorAt(1.0,  QColor("#f2362a"));
-        p.fillRect(fill, grad);
+        const QRect stripBox(barR.x(), barR.y(), kBarW, stripH);
+        const QBrush brush =
+            AetherSDR::ThemeManager::instance()
+                .brush("color.meter.bar.fillGradient", stripBox);
+        p.fillRect(fill, brush);
     }
 
     // Bar outline.

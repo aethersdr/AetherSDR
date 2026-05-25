@@ -260,6 +260,25 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.meter.peak",          QString("#e6f0fa"));
     m_tokens.insert("color.meter.gainReduction", QString("#f2c14e"));
     m_tokens.insert("color.meter.bar.fill",      QString("#405060"));
+    // Vertical (bottom→top, angle 0°) green→amber→red ramp painted by
+    // ClientLevelMeter / ClientCompMeter into the level bar.  Seeded so
+    // a missing theme file doesn't fall back to whatever the meter
+    // widgets used to hardcode — the editor expects this token to always
+    // exist as a gradient.
+    {
+        ThemeGradient g;
+        g.type = ThemeGradient::Linear;
+        g.angle = 0.0;
+        g.stops = {
+            {0.00, QColor("#2f9e6a")},
+            {0.55, QColor("#6cc56a")},
+            {0.80, QColor("#e8b94c")},
+            {0.95, QColor("#e8553c")},
+            {1.00, QColor("#f2362a")},
+        };
+        m_tokens.insert("color.meter.bar.fillGradient",
+                        QVariant::fromValue(g));
+    }
 
     // Spectrum + waterfall (paint code only — gradient waterfall.colormap
     // lands when gradient-token support follows this PR)
@@ -452,6 +471,50 @@ void ThemeManager::setSizing(const QString& token, int value)
     if (it != m_tokens.constEnd() && it.value().toInt() == value) return;
     m_tokens.insert(token, QVariant(value));
     emit themeChanged();
+}
+
+ThemeGradient ThemeManager::gradient(const QString& token) const
+{
+    const auto it = m_tokens.constFind(token);
+    if (it == m_tokens.constEnd()) return {};
+    if (!it.value().canConvert<ThemeGradient>()) return {};
+    return it.value().value<ThemeGradient>();
+}
+
+void ThemeManager::setGradient(const QString& token, const ThemeGradient& g)
+{
+    m_tokens.insert(token, QVariant::fromValue(g));
+    emit themeChanged();
+}
+
+void ThemeManager::ensureFactoryLoaded() const
+{
+    if (m_factoryLoaded) return;
+    m_factoryLoaded = true;  // one shot — even if loading fails, don't re-try
+    QFile f(QStringLiteral(":/themes/default-dark.json"));
+    if (!f.open(QIODevice::ReadOnly)) {
+        qCWarning(lcGui) << "ThemeManager: factory snapshot — failed to open"
+                         << f.fileName();
+        return;
+    }
+    QJsonParseError err;
+    const auto doc = QJsonDocument::fromJson(f.readAll(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) {
+        qCWarning(lcGui) << "ThemeManager: factory snapshot — JSON parse error"
+                         << err.errorString();
+        return;
+    }
+    flattenTokens(doc.object().value("tokens").toObject(), QString(),
+                  m_factoryTokens);
+}
+
+ThemeGradient ThemeManager::factoryGradient(const QString& token) const
+{
+    ensureFactoryLoaded();
+    const auto it = m_factoryTokens.constFind(token);
+    if (it == m_factoryTokens.constEnd()) return {};
+    if (!it.value().canConvert<ThemeGradient>()) return {};
+    return it.value().value<ThemeGradient>();
 }
 
 bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
