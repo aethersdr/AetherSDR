@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QKeyEvent>
+#include <QMap>
 #include <QPushButton>
 #include <QStringList>
 #include <QTextEdit>

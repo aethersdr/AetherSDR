@@ -24,62 +24,100 @@
 namespace AetherSDR {
 
 // ── Painted chat bubble widget ──────────────────────────────────────────
-class CwxBubble : public QWidget {
-public:
-    CwxBubble(const QString& text, const QString& time, QWidget* parent = nullptr)
-        : QWidget(parent), m_text(text), m_time(time)
-    {
-        recalcSize();
+// CwxBubble's class declaration lives in CwxPanel.h so the test target
+// can dynamic_cast bubbles out of the history container and verify the
+// strikeout state set by ESC abort (#3146).
+CwxBubble::CwxBubble(const QString& text, const QString& time, QWidget* parent)
+    : QWidget(parent), m_text(text), m_time(time)
+{
+    recalcSize();
+}
+
+void CwxBubble::resizeEvent(QResizeEvent*) { recalcSize(); }
+
+void CwxBubble::recalcSize()
+{
+    QFont textFont("monospace", 12);
+    QFont timeFont("monospace", 8);
+    QFontMetrics tfm(textFont);
+    QFontMetrics sfm(timeFont);
+    int availW = (parentWidget() ? parentWidget()->width() : 240) - 28;
+    QRect textBound = tfm.boundingRect(QRect(0, 0, availW, 10000),
+                                       Qt::TextWordWrap | Qt::AlignLeft, m_text);
+    int h = textBound.height() + sfm.height() + 18;
+    setFixedHeight(h);
+}
+
+void CwxBubble::setSentCount(int n)
+{
+    n = qBound(0, n, m_text.length());
+    if (n == m_sentCount) return;
+    m_sentCount = n;
+    // While the bubble is in-flight (not aborted) the full text already
+    // renders normally — no repaint needed.  After abort the strikeout
+    // boundary depends on sentCount, so a paint is required.
+    if (m_aborted) update();
+}
+
+void CwxBubble::markAborted()
+{
+    if (m_aborted) return;
+    m_aborted = true;
+    update();
+}
+
+void CwxBubble::paintEvent(QPaintEvent*)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    QRect r(4, 2, width() - 12, height() - 4);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0x00, 0xb4, 0xd8));
+    p.drawRoundedRect(r, 10, 10);
+
+    // CW text — 12pt, left aligned, word wrap
+    QFont textFont("monospace", 12);
+    p.setFont(textFont);
+    p.setPen(QColor(0, 0, 0));
+    QFontMetrics tfm(textFont);
+    QRect textRect = r.adjusted(10, 4, -10, 0);
+    QRect textBound = tfm.boundingRect(textRect, Qt::TextWordWrap | Qt::AlignLeft, m_text);
+    QRect drawRect = textRect.adjusted(0, 0, 0, textBound.height());
+
+    if (!m_aborted) {
+        p.drawText(drawRect, Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, m_text);
+    } else {
+        const int sent = qBound(0, m_sentCount, m_text.length());
+        const QString sentPart   = m_text.left(sent);
+        const QString unsentPart = m_text.mid(sent);
+
+        p.drawText(drawRect, Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, sentPart);
+
+        if (!unsentPart.isEmpty()) {
+            // Two-pass paint: sent prefix at the bubble's text origin,
+            // unsent suffix offset by the prefix's horizontal advance
+            // with QFont::setStrikeOut(true) — exactly the AC #3 syntax
+            // the #3146 issue called out.  Correct for the single-line
+            // case (callsign + RST + serial fits the 250px panel width);
+            // multi-line wrapped strikeout would need a QTextDocument
+            // layout pass and is out of #3146 v1 scope.
+            QFont strikeFont = textFont;
+            strikeFont.setStrikeOut(true);
+            p.setFont(strikeFont);
+            int prefixW = tfm.horizontalAdvance(sentPart);
+            QRect strikeRect = drawRect.adjusted(prefixW, 0, 0, 0);
+            p.drawText(strikeRect, Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, unsentPart);
+        }
     }
 
-    QString text() const { return m_text; }
-
-    void resizeEvent(QResizeEvent*) override { recalcSize(); }
-
-    void recalcSize()
-    {
-        QFont textFont("monospace", 12);
-        QFont timeFont("monospace", 8);
-        QFontMetrics tfm(textFont);
-        QFontMetrics sfm(timeFont);
-        int availW = (parentWidget() ? parentWidget()->width() : 240) - 28;
-        QRect textBound = tfm.boundingRect(QRect(0, 0, availW, 10000),
-                                           Qt::TextWordWrap | Qt::AlignLeft, m_text);
-        int h = textBound.height() + sfm.height() + 18;
-        setFixedHeight(h);
-    }
-
-    void paintEvent(QPaintEvent*) override
-    {
-        QPainter p(this);
-        p.setRenderHint(QPainter::Antialiasing);
-
-        QRect r(4, 2, width() - 12, height() - 4);
-        p.setPen(Qt::NoPen);
-        p.setBrush(QColor(0x00, 0xb4, 0xd8));
-        p.drawRoundedRect(r, 10, 10);
-
-        // CW text — 12pt, left aligned, word wrap
-        QFont textFont("monospace", 12);
-        p.setFont(textFont);
-        p.setPen(QColor(0, 0, 0));
-        QFontMetrics tfm(textFont);
-        QRect textRect = r.adjusted(10, 4, -10, 0);
-        QRect textBound = tfm.boundingRect(textRect, Qt::TextWordWrap | Qt::AlignLeft, m_text);
-        p.drawText(textRect.adjusted(0, 0, 0, textBound.height()),
-                   Qt::TextWordWrap | Qt::AlignLeft | Qt::AlignTop, m_text);
-
-        // Timestamp — 8pt, right aligned, below text
-        QFont timeFont("monospace", 8);
-        p.setFont(timeFont);
-        p.setPen(QColor(0x00, 0x30, 0x40));
-        QRect timeRect = r.adjusted(10, textBound.height() + 6, -6, -2);
-        p.drawText(timeRect, Qt::AlignRight | Qt::AlignTop, m_time);
-    }
-
-private:
-    QString m_text, m_time;
-};
+    // Timestamp — 8pt, right aligned, below text
+    QFont timeFont("monospace", 8);
+    p.setFont(timeFont);
+    p.setPen(QColor(0x00, 0x30, 0x40));
+    QRect timeRect = r.adjusted(10, textBound.height() + 6, -6, -2);
+    p.drawText(timeRect, Qt::AlignRight | Qt::AlignTop, m_time);
+}
 
 static const char* kBtnStyle =
     "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
@@ -216,6 +254,10 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
                 if (mode != QLatin1String("CW") && mode != QLatin1String("CWL"))
                     return;
             }
+            // Log the macro text to the history feed BEFORE firing the
+            // command so the snapshot of m_model->sentIndex() lines up
+            // with the chars about to be keyed for this bubble. (#3146)
+            appendHistoryBubble(m_model->macro(i));
             m_model->sendMacro(i + 1);
         });
     }
@@ -251,6 +293,14 @@ void CwxPanel::setModel(CwxModel* model)
 
     connect(m_model, &CwxModel::charSent, this, &CwxPanel::onCharSent);
     connect(m_model, &CwxModel::speedChanged, this, &CwxPanel::onSpeedChanged);
+    connect(m_model, &CwxModel::transmissionCancelled,
+            this, &CwxPanel::onTransmissionCancelled);
+    // The radio also reports erases out-of-band via `erase=start,stop`;
+    // route those through the same abort slot so an ESC during a macro
+    // marks the bubble's unsent suffix struck-out even when the cancel
+    // path went radio-side rather than client-side. (#3146)
+    connect(m_model, &CwxModel::erased, this,
+            [this](int, int) { onTransmissionCancelled(); });
     connect(m_model, &CwxModel::macroChanged, this, [this](int idx, const QString& text) {
         if (idx >= 0 && idx < 12 && m_macroEdits[idx]) {
             QSignalBlocker b(m_macroEdits[idx]);
@@ -375,9 +425,11 @@ void CwxPanel::buildSetupView()
 
         macroGrid->setRowStretch(i, 1);
 
-        // Click F-key label → send macro
+        // Click F-key label → log macro text to history, then send. (#3146)
         connect(label, &QPushButton::clicked, this, [this, i]() {
-            if (m_model) m_model->sendMacro(i + 1);
+            if (!m_model) return;
+            appendHistoryBubble(m_model->macro(i));
+            m_model->sendMacro(i + 1);
         });
 
         // Edit → save macro (debounced — save when focus leaves)
@@ -413,22 +465,42 @@ void CwxPanel::sendBuffer()
     QString text = m_textEdit->toPlainText().trimmed();
     if (text.isEmpty()) return;
 
-    // Move text to history — painted bubble in scroll area
-    if (m_historyLayout) {
-        // Add painted bubble to history scroll area
-        QString ts = QDateTime::currentDateTime().toString("HH:mm:ss");
-        auto* bubble = new CwxBubble(text, ts, m_historyContainer);
-        bubble->installEventFilter(this);
-        m_historyLayout->addWidget(bubble);
-        // Keep scrolled to bottom
-        QTimer::singleShot(10, this, [this]() {
-            auto* sb = m_historyScroll->verticalScrollBar();
-            sb->setValue(sb->maximum());
-        });
-    }
+    appendHistoryBubble(text);
     m_textEdit->clear();
 
     m_model->send(text);
+}
+
+void CwxPanel::appendHistoryBubble(const QString& text)
+{
+    if (!m_historyLayout || text.isEmpty()) return;
+    const QString ts = QDateTime::currentDateTime().toString("HH:mm:ss");
+    auto* bubble = new CwxBubble(text, ts, m_historyContainer);
+    bubble->installEventFilter(this);
+    m_historyLayout->addWidget(bubble);
+    // Snapshot the radio's global cumulative sent index at append time —
+    // onCharSent() subtracts it to recover this bubble's per-message
+    // progress.  `sent=N` in CWX.cs is global, not per-block. (#3146)
+    m_pendingBubble     = bubble;
+    m_pendingStartIndex = m_model ? m_model->sentIndex() : -1;
+    m_pendingText       = text;
+    QTimer::singleShot(10, this, [this]() {
+        if (m_historyScroll) {
+            auto* sb = m_historyScroll->verticalScrollBar();
+            sb->setValue(sb->maximum());
+        }
+    });
+}
+
+int CwxPanel::historyBubbleCount() const
+{
+    if (!m_historyContainer) return 0;
+    int n = 0;
+    const auto kids = m_historyContainer->findChildren<QWidget*>();
+    for (auto* child : kids) {
+        if (dynamic_cast<CwxBubble*>(child)) ++n;
+    }
+    return n;
 }
 
 void CwxPanel::setShortcutsEnabled(bool enabled)
@@ -436,9 +508,27 @@ void CwxPanel::setShortcutsEnabled(bool enabled)
     for (auto* sc : m_shortcuts) sc->setEnabled(enabled);
 }
 
-void CwxPanel::onCharSent(int /*index*/)
+void CwxPanel::onCharSent(int index)
 {
-    // TODO: highlight individual characters in bubbles as they're keyed
+    if (!m_pendingBubble) return;
+    const int n = index - m_pendingStartIndex;
+    m_pendingBubble->setSentCount(n);
+    if (n >= m_pendingText.length()) {
+        // Transmission complete — release ownership so a later ESC
+        // doesn't strike out a message that already finished. (#3146)
+        m_pendingBubble     = nullptr;
+        m_pendingStartIndex = -1;
+        m_pendingText.clear();
+    }
+}
+
+void CwxPanel::onTransmissionCancelled()
+{
+    if (!m_pendingBubble) return;
+    m_pendingBubble->markAborted();
+    m_pendingBubble     = nullptr;
+    m_pendingStartIndex = -1;
+    m_pendingText.clear();
 }
 
 void CwxPanel::onSpeedChanged(int wpm)
@@ -508,14 +598,7 @@ bool AetherSDR::CwxPanel::eventFilter(QObject* obj, QEvent* event)
 void AetherSDR::CwxPanel::resendText(const QString& text)
 {
     if (!m_model || !m_historyLayout || text.isEmpty()) { return; }
-    QString ts = QDateTime::currentDateTime().toString("HH:mm:ss");
-    auto* bubble = new CwxBubble(text, ts, m_historyContainer);
-    bubble->installEventFilter(this);
-    m_historyLayout->addWidget(bubble);
-    QTimer::singleShot(10, this, [this]() {
-        auto* sb = m_historyScroll->verticalScrollBar();
-        sb->setValue(sb->maximum());
-    });
+    appendHistoryBubble(text);
     m_model->send(text);
 }
 
