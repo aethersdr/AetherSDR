@@ -1785,6 +1785,13 @@ add_executable(container_widget_test
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
     src/core/AppSettings.cpp
+    # FloatingContainerWindow now calls applyAppTheme() which routes
+    # through ThemeManager::applyStyleSheet — pull in the manager + its
+    # logging deps so the test links.  ThemeManager's compiled-in
+    # seedBuiltinDefaults() means we don't need the theme resource here.
+    src/core/ThemeManager.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
 )
 target_include_directories(container_widget_test PRIVATE src)
 target_link_libraries(container_widget_test PRIVATE
@@ -1800,6 +1807,9 @@ add_executable(container_manager_test
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
     src/core/AppSettings.cpp
+    src/core/ThemeManager.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
 )
 target_include_directories(container_manager_test PRIVATE src)
 target_link_libraries(container_manager_test PRIVATE
@@ -1815,6 +1825,9 @@ add_executable(container_nesting_test
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainerWindow.cpp
     src/core/AppSettings.cpp
+    src/core/ThemeManager.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
 )
 target_include_directories(container_nesting_test PRIVATE src)
 target_link_libraries(container_nesting_test PRIVATE
