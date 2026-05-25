@@ -596,10 +596,16 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
 
         // Radio sometimes sends wrong-polarity filter offsets after session
         // restore (e.g. negative offsets for USB/DIGU). Normalize based on mode.
+        //
+        // FDV/FDVU/FDVL are excluded: FreeDV passbands are asymmetric
+        // (e.g. 95..widthHz for FDVU; -widthHz..-95 for FDVL — see
+        // VfoWidget.cpp:3773-3777) and FlexLib only knows "FDV" as a
+        // USB-family mode (Slice.cs:545-550). When the radio echoes an
+        // asymmetric FDVL filter as USB-form (positive lo/hi), the
+        // anchored flip discards one edge and offsets the overlay (#3092).
         const bool isUsbFamily = (m_mode == "USB" || m_mode == "DIGU"
-                                  || m_mode == "FDV" || m_mode == "FDVU"
                                   || m_mode == "NT");  // NAVTEX: USB-family digital (v4.2.18)
-        const bool isLsbFamily = (m_mode == "LSB" || m_mode == "DIGL" || m_mode == "FDVL");
+        const bool isLsbFamily = (m_mode == "LSB" || m_mode == "DIGL");
         if (isUsbFamily && m_filterLow < 0 && m_filterHigh <= 0) {
             // Flip: -2700,0 → 0,2700
             int w = std::abs(m_filterLow);
