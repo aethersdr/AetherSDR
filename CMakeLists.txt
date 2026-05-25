@@ -1473,7 +1473,7 @@ add_executable(band_plan_license_filter_test
     src/core/AppSettings.cpp
 )
 target_include_directories(band_plan_license_filter_test PRIVATE src)
-target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core)
+target_link_libraries(band_plan_license_filter_test PRIVATE Qt6::Core Qt6::Gui)
 add_test(NAME band_plan_license_filter_test COMMAND band_plan_license_filter_test)
 
 add_executable(biquad_test
