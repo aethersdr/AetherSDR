@@ -189,52 +189,81 @@ static QString formatFlagFrequency(double freqMhz)
         .arg(hzPart, 3, 10, QChar('0'));
 }
 
-// ─── Waterfall color scheme gradient presets ─────────────────────────────────
+// ─── Waterfall color scheme gradient cache ────────────────────────────────────
+//
+// The five preset schemes (Default, Grayscale, Blue-Green, Fire, Plasma) used
+// to live as compile-time const tables.  They now resolve through ThemeManager
+// against `color.waterfall.colormap.{default,grayscale,blueGreen,fire,plasma}`
+// gradient tokens so a theme switch (or user theme override) reshapes any of
+// them.  Cached once per theme load — `intensityToRgb` and `fftDbmToRgb` hit
+// this hundreds of times per second per row, so we can't afford a token
+// lookup on every pixel.
+//
+// Invalidated by ThemeManager::themeChanged via a SpectrumWidget connection
+// in the constructor; first call lazily populates if the cache hasn't been
+// initialized yet.
 
-static constexpr WfGradientStop kDefaultStops[] = {
-    {0.00f,   0,   0,   0},   // black
-    {0.15f,   0,   0, 128},   // dark blue
-    {0.30f,   0,  64, 255},   // blue
-    {0.45f,   0, 200, 255},   // cyan
-    {0.60f,   0, 220,   0},   // green
-    {0.80f, 255, 255,   0},   // yellow
-    {1.00f, 255,   0,   0},   // red
+namespace {
+
+struct WfStopsCache {
+    std::array<std::vector<WfGradientStop>, static_cast<int>(WfColorScheme::Count)> stops;
+    bool initialized = false;
 };
-static constexpr WfGradientStop kGrayscaleStops[] = {
-    {0.00f,   0,   0,   0},
-    {1.00f, 255, 255, 255},
-};
-static constexpr WfGradientStop kBlueGreenStops[] = {
-    {0.00f,   0,   0,   0},
-    {0.25f,   0,  30, 120},
-    {0.50f,   0, 100, 180},
-    {0.75f,   0, 200, 130},
-    {1.00f, 220, 255, 220},
-};
-static constexpr WfGradientStop kFireStops[] = {
-    {0.00f,   0,   0,   0},
-    {0.25f, 128,   0,   0},
-    {0.50f, 220,  80,   0},
-    {0.75f, 255, 200,   0},
-    {1.00f, 255, 255, 220},
-};
-static constexpr WfGradientStop kPlasmaStops[] = {
-    {0.00f,   0,   0,   0},
-    {0.25f,  80,   0, 140},
-    {0.50f, 200,   0, 120},
-    {0.75f, 240, 120,   0},
-    {1.00f, 255, 255,  80},
-};
+
+WfStopsCache& wfStopsCache()
+{
+    static WfStopsCache c;
+    return c;
+}
+
+const char* wfSchemeToken(WfColorScheme s)
+{
+    switch (s) {
+    case WfColorScheme::Grayscale: return "color.waterfall.colormap.grayscale";
+    case WfColorScheme::BlueGreen: return "color.waterfall.colormap.blueGreen";
+    case WfColorScheme::Fire:      return "color.waterfall.colormap.fire";
+    case WfColorScheme::Plasma:    return "color.waterfall.colormap.plasma";
+    default:                       return "color.waterfall.colormap.default";
+    }
+}
+
+void rebuildWfStopsCacheFromTheme()
+{
+    auto& c = wfStopsCache();
+    auto& tm = ThemeManager::instance();
+    for (int i = 0; i < static_cast<int>(WfColorScheme::Count); ++i) {
+        const QBrush br = tm.brush(QString::fromLatin1(
+            wfSchemeToken(static_cast<WfColorScheme>(i))));
+        std::vector<WfGradientStop> v;
+        if (br.gradient()) {
+            for (const auto& gs : br.gradient()->stops()) {
+                WfGradientStop s;
+                s.pos = static_cast<float>(gs.first);
+                s.r   = gs.second.red();
+                s.g   = gs.second.green();
+                s.b   = gs.second.blue();
+                v.push_back(s);
+            }
+        }
+        // Fallback so a missing/malformed token still produces a usable
+        // black→white ramp instead of a divide-by-zero on the first paint.
+        if (v.size() < 2)
+            v = { {0.0f, 0, 0, 0}, {1.0f, 255, 255, 255} };
+        c.stops[i] = std::move(v);
+    }
+    c.initialized = true;
+}
+
+} // namespace
 
 const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
 {
-    switch (scheme) {
-    case WfColorScheme::Grayscale: count = 2; return kGrayscaleStops;
-    case WfColorScheme::BlueGreen: count = 5; return kBlueGreenStops;
-    case WfColorScheme::Fire:      count = 5; return kFireStops;
-    case WfColorScheme::Plasma:    count = 5; return kPlasmaStops;
-    default:                       count = 7; return kDefaultStops;
-    }
+    auto& c = wfStopsCache();
+    if (!c.initialized)
+        rebuildWfStopsCacheFromTheme();
+    const auto& v = c.stops[static_cast<int>(scheme)];
+    count = static_cast<int>(v.size());
+    return v.data();
 }
 
 const char* wfSchemeName(WfColorScheme scheme)
@@ -477,6 +506,18 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 
     connect(&SliceColorManager::instance(), &SliceColorManager::colorsChanged,
             this, [this]() { markOverlayDirty(); });
+
+    // Refresh the waterfall colormap cache when the theme changes.  Existing
+    // already-rendered rows keep their pre-switch colours (same behaviour as
+    // changing the Scheme: dropdown — recolouring history would force a full
+    // O(rows × cols) repaint we don't currently amortise).  New rows pick up
+    // the new palette on the next push.
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, [this]() {
+        rebuildWfStopsCacheFromTheme();
+        markOverlayDirty();
+        update();
+    });
 }
 
 SpectrumWidget::~SpectrumWidget()

@@ -47,18 +47,60 @@
         "grid": "#1a2330"
       },
       "waterfall.colormap": {
-        "type": "linear-gradient",
-        "angle": 180,
-        "stops": [
-          { "at": 0.00, "color": "#000000" },
-          { "at": 0.15, "color": "#000040" },
-          { "at": 0.30, "color": "#0040c0" },
-          { "at": 0.45, "color": "#00c0c0" },
-          { "at": 0.60, "color": "#00c040" },
-          { "at": 0.75, "color": "#c0c000" },
-          { "at": 0.90, "color": "#c04000" },
-          { "at": 1.00, "color": "#ffffff" }
-        ]
+        "default": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 0.15, "color": "#000080" },
+            { "at": 0.30, "color": "#0040ff" },
+            { "at": 0.45, "color": "#00c8ff" },
+            { "at": 0.60, "color": "#00dc00" },
+            { "at": 0.80, "color": "#ffff00" },
+            { "at": 1.00, "color": "#ff0000" }
+          ]
+        },
+        "grayscale": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 1.00, "color": "#ffffff" }
+          ]
+        },
+        "blueGreen": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 0.25, "color": "#001e78" },
+            { "at": 0.50, "color": "#0064b4" },
+            { "at": 0.75, "color": "#00c882" },
+            { "at": 1.00, "color": "#dcffdc" }
+          ]
+        },
+        "fire": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 0.25, "color": "#800000" },
+            { "at": 0.50, "color": "#dc5000" },
+            { "at": 0.75, "color": "#ffc800" },
+            { "at": 1.00, "color": "#ffffdc" }
+          ]
+        },
+        "plasma": {
+          "type": "linear-gradient",
+          "angle": 180,
+          "stops": [
+            { "at": 0.00, "color": "#000000" },
+            { "at": 0.25, "color": "#50008c" },
+            { "at": 0.50, "color": "#c80078" },
+            { "at": 0.75, "color": "#f07800" },
+            { "at": 1.00, "color": "#ffff50" }
+          ]
+        }
       },
       "slice": {
         "a": "#ff4040",
