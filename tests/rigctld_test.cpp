@@ -1248,7 +1248,7 @@ void section13(const QString& host, quint16 port, int timeout,
 
     RigctlClient c(timeout);
     if (!c.connectToServer(host, port)) {
-        for (int i = 1; i <= 9; ++i)
+        for (int i = 1; i <= 10; ++i)
             r.skip(QStringLiteral("13.%1").arg(i), QStringLiteral("could not connect"));
         return;
     }
@@ -1312,6 +1312,14 @@ void section13(const QString& host, quint16 port, int timeout,
     raw = c.sendRaw(QStringLiteral("\\nonexistent_bare_xyz"), 1);
     r.check(QStringLiteral("13.9  unknown command (bare) returns RPRT -4"),
             raw == QStringList{QStringLiteral("RPRT -4")},
+            raw.join(QStringLiteral(" | ")));
+
+    // 13.10  WSJT-X/Hamlib startup probe: value plus status terminator.
+    // Hamlib's NET rigctl backend waits for RPRT after this long-form getter;
+    // if the terminator is missing, startup CAT work queues behind a timeout.
+    raw = c.sendRaw(QStringLiteral("\\get_lock_mode"), 2);
+    r.check(QStringLiteral("13.10 get_lock_mode (bare) returns value and RPRT 0"),
+            raw == QStringList{QStringLiteral("0"), QStringLiteral("RPRT 0")},
             raw.join(QStringLiteral(" | ")));
 
     // Best-effort restore

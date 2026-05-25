@@ -369,7 +369,11 @@ QString RigctlProtocol::processCommand(const QString& cmd)
             // suppress their own mode-set commands.
             if (m_extended)
                 return QStringLiteral("get_lock_mode:\nLock Mode: 0\n") + rprt(0);
-            return QStringLiteral("0\n");
+            // Hamlib's NET rigctl backend probes this long-form command during
+            // WSJT-X startup and waits for a status terminator after the value.
+            // Without it, the client blocks until its command timeout, delaying
+            // the queued QSY after a USB->DIGU mode change.
+            return QStringLiteral("0\n") + rprt(0);
         }
         if (name == "set_lock_mode") {
             // "0" = unlock: already unlocked, accept as no-op.
