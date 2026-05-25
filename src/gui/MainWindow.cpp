@@ -12283,6 +12283,18 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
         auto* s = preferredMemorySlice(applet->panId());
         const bool tciSpot = it->source.compare(QStringLiteral("TCI"), Qt::CaseInsensitive) == 0;
+        // The two branches gate asymmetrically on purpose (#3145, #3152):
+        //   TCI branch  — must mirror AetherSDR's own local-tune outcome, so it
+        //                 suppresses when a local tune would also be blocked
+        //                 (no slice, slice locked, or SWR sweep in progress).
+        //                 Notifying Log4OM under lock/SWR would diverge the
+        //                 client's view from the radio's actual state.
+        //   Radio branch — delegates gating to the radio firmware via the
+        //                  `spot trigger` command; the firmware applies its
+        //                  own lock/SWR/passive checks. We only suppress
+        //                  passive-local spots that have no upstream trigger.
+        // Do not "normalise" these — collapsing the guards regresses Log4OM
+        // behavior under lock or SWR sweep.
         if (tciSpot) {
             if (m_tciServer && s && !s->isLocked() && !m_swrSweep.running)
                 m_tciServer->notifySpotClicked(spotIndex, s);

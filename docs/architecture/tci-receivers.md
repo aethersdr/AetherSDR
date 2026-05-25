@@ -42,6 +42,12 @@ The receiver is the same contiguous `trx` index used by `vfo:` and
 single-VFO path for a slice.  This mirrors Thetis behavior and keeps older
 clients such as Log4OM working while giving TCI v2 clients receiver context.
 
+Both spellings are emitted **unconditionally** for every spot click — there
+is no client-capability handshake.  This is the v2 protocol baseline
+introduced by #3145; third-party log clients writing TCI protocol parsers
+should expect to see both messages back-to-back for every click, not just
+the legacy `clicked_on_spot:` form.
+
 ## Why this changed
 
 Flex slice IDs are radio-global and not necessarily contiguous within a

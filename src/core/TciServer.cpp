@@ -1399,9 +1399,18 @@ void TciServer::notifySpotClicked(int spotIndex, SliceModel* slice)
 
     SliceModel* resolvedSlice = slice;
     if (!resolvedSlice) {
+        // The MainWindow caller always passes a non-null slice; the only path
+        // that reaches the fallback is wireSpotModel's sliceForPanId(panId)
+        // lookup returning nullptr. In a multi-pan setup that mis-attributes
+        // the rx_clicked_on_spot: trx field to slice index 0 — exactly the
+        // kind of bug invisible in single-slice testing (#3152).
         const auto slices = m_model->slices();
-        if (!slices.isEmpty())
+        if (!slices.isEmpty()) {
             resolvedSlice = slices.first();
+            qCWarning(lcCat) << "TciServer::notifySpotClicked falling back to "
+                                "first slice; panId lookup failed for spot"
+                             << spotIndex;
+        }
     }
 
     const int trx = TciProtocol::tciTrxForSlice(m_model, resolvedSlice);
