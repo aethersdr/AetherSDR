@@ -6,8 +6,8 @@
 
 class QDragEnterEvent;
 class QDropEvent;
-class QListWidget;
-class QListWidgetItem;
+class QTreeWidget;
+class QTreeWidgetItem;
 class QLabel;
 class QComboBox;
 class QLineEdit;
@@ -71,8 +71,9 @@ protected:
 
 private:
     void updateTitle();
-    void updateRow(QListWidgetItem* item);   // re-paint swatch + hex label
-    void populateRow(QListWidgetItem* item); // shared by refresh + update
+    void updateRow(QTreeWidgetItem* item);   // re-paint swatch + hex label
+    void populateRow(QTreeWidgetItem* item); // shared by refresh + update
+    void rebuildColumns();                   // adjust column count + headers to active scope
     void updateInspectorStatus(const QString& text);
     // Filter the token list down to a specific subset, e.g. tokens
     // returned by tokensForWidget().  An empty list clears the filter.
@@ -82,7 +83,7 @@ private:
     TokenEditorWidget* m_tokenEditor{nullptr};   // inline editor stack
     QComboBox*   m_containerCombo{nullptr};   // scope picker — root + declared paths
     QLineEdit*   m_filterEdit{nullptr};   // type-to-filter token names
-    QListWidget* m_tokenList{nullptr};
+    QTreeWidget* m_tokenList{nullptr};   // multi-column: Object | <scope chain…> | Value
     void         refreshContainerCombo();
     QString      m_activeContainerPath;  // empty == root scope
     QPushButton* m_saveAsBtn{nullptr};

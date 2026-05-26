@@ -21,8 +21,9 @@
 #include <QMimeData>
 #include <QUrl>
 #include <QLineEdit>
-#include <QListWidget>
-#include <QListWidgetItem>
+#include <QHeaderView>
+#include <QTreeWidget>
+#include <QTreeWidgetItem>
 #include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
@@ -215,10 +216,18 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     }
     root->addLayout(filterRow);
 
-    m_tokenList = new QListWidget(bodyWidget());
+    m_tokenList = new QTreeWidget(bodyWidget());
     m_tokenList->setIconSize(QSize(18, 18));
     m_tokenList->setAlternatingRowColors(true);
     m_tokenList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_tokenList->setRootIsDecorated(false);   // flat-table look
+    m_tokenList->setIndentation(0);
+    m_tokenList->setUniformRowHeights(true);
+    m_tokenList->setSortingEnabled(false);
+    // Columns rebuild dynamically as the scope picker changes — see
+    // rebuildColumns().  Initial setup with just the Object + Value
+    // pair so the widget has something to render before refreshTokenList.
+    rebuildColumns();
     root->addWidget(m_tokenList, 1);
 
     auto* btnRow = new QHBoxLayout;
@@ -268,7 +277,7 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // Selection-driven editing — `currentItemChanged` fires for both
     // mouse clicks and keyboard navigation so arrow-key walks through
     // the list also update the inline editor.
-    connect(m_tokenList, &QListWidget::currentItemChanged,
+    connect(m_tokenList, &QTreeWidget::currentItemChanged,
             this, &ThemeEditorDialog::onTokenRowSelectionChanged);
     connect(m_tokenEditor, &TokenEditorWidget::tokenChanged,
             this, &ThemeEditorDialog::onTokenEditedByEditor);
@@ -311,9 +320,56 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     });
 }
 
+void ThemeEditorDialog::rebuildColumns()
+{
+    if (!m_tokenList) return;
+    // Column layout: Object | <root, seg0, seg0/seg1, …, leaf> | Value
+    QStringList scopeLevels;       // canonical paths for each header column
+    QStringList headerLabels = { QStringLiteral("Object") };
+    if (m_activeContainerPath.isEmpty()) {
+        // No scope selected → just Object + Value.  Skip the "root"
+        // column since it would duplicate the Value column.
+    } else {
+        scopeLevels.append(QString());          // root
+        headerLabels.append(QStringLiteral("root"));
+        const QStringList segs = m_activeContainerPath.split(QLatin1Char('/'),
+                                                             Qt::SkipEmptyParts);
+        QString running;
+        for (const QString& s : segs) {
+            running = running.isEmpty() ? s : running + QLatin1Char('/') + s;
+            scopeLevels.append(running);
+            headerLabels.append(s);
+        }
+    }
+    headerLabels.append(QStringLiteral("Value"));
+
+    m_tokenList->setColumnCount(headerLabels.size());
+    m_tokenList->setHeaderLabels(headerLabels);
+    // The Object + Value columns size to content; intermediate scope
+    // columns get reasonable fixed widths so the table doesn't lurch
+    // every time the user picks a different leaf.
+    auto* hdr = m_tokenList->header();
+    if (hdr) {
+        hdr->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        for (int i = 1; i < headerLabels.size() - 1; ++i) {
+            hdr->setSectionResizeMode(i, QHeaderView::Stretch);
+        }
+        hdr->setSectionResizeMode(headerLabels.size() - 1,
+                                  QHeaderView::ResizeToContents);
+        hdr->setStretchLastSection(false);
+    }
+    // Stash scope paths on the header column index so populateRow()
+    // can use them to look up the override value at each level.
+    for (int i = 0; i < scopeLevels.size(); ++i) {
+        // header data slot per column: Qt::UserRole carries the path
+        m_tokenList->headerItem()->setData(i + 1, Qt::UserRole, scopeLevels.at(i));
+    }
+}
+
 void ThemeEditorDialog::refreshTokenList()
 {
     m_tokenList->clear();
+    rebuildColumns();
     auto& tm = ThemeManager::instance();
     for (const QString& key : tm.allTokenKeys()) {
         // Editable token namespaces — gradient + scalar colours under
@@ -323,47 +379,97 @@ void ThemeEditorDialog::refreshTokenList()
             && !key.startsWith(QStringLiteral("sizing."))) {
             continue;
         }
-        auto* item = new QListWidgetItem;
-        item->setData(Qt::UserRole, key);
-        m_tokenList->addItem(item);
+        auto* item = new QTreeWidgetItem;
+        item->setData(0, Qt::UserRole, key);
+        m_tokenList->addTopLevelItem(item);
         populateRow(item);
     }
 }
 
-void ThemeEditorDialog::populateRow(QListWidgetItem* item)
+void ThemeEditorDialog::populateRow(QTreeWidgetItem* item)
 {
     if (!item) return;
-    const QString key = item->data(Qt::UserRole).toString();
+    const QString key = item->data(0, Qt::UserRole).toString();
     auto& tm = ThemeManager::instance();
 
+    // Column 0 — Object: token name + swatch.
+    QIcon swatch;
     if (key.startsWith(QStringLiteral("color."))) {
         if (tm.brush(key).gradient()) {
-            const ThemeGradient g = tm.gradient(key);
-            item->setIcon(gradientSwatchIcon(g));
-            item->setText(gradientRowText(key, g));
-            return;
+            swatch = gradientSwatchIcon(tm.gradient(key));
+        } else {
+            swatch = swatchIcon(tm.color(key));
         }
-        const QColor c = tm.color(key);
-        item->setIcon(swatchIcon(c));
-        item->setText(QStringLiteral("%1   %2").arg(key, -36).arg(colorToTokenHex(c)));
-        return;
     }
-    if (key.startsWith(QStringLiteral("font.family."))) {
-        const QString family = tm.value(key);
-        item->setIcon(QIcon());
-        item->setText(QStringLiteral("%1   %2").arg(key, -36).arg(family));
-        return;
+    item->setIcon(0, swatch);
+    item->setText(0, key);
+
+    // Intermediate scope-chain columns (if any).  Each shows either
+    // the literal override stored at that scope, or "inherited" in
+    // italics when the scope inherits from an ancestor.
+    const int nCols = m_tokenList->columnCount();
+    const int lastCol = nCols - 1;
+    const QFont normalFont = m_tokenList->font();
+    QFont inheritedFont = normalFont; inheritedFont.setItalic(true);
+    for (int col = 1; col < lastCol; ++col) {
+        const QString scopePath = m_tokenList->headerItem()->data(col, Qt::UserRole).toString();
+        if (tm.isOverriddenAt(scopePath, key)) {
+            // Format the override succinctly: hex for colours, plain
+            // number / string for sizings and font families.
+            QString text;
+            if (key.startsWith(QStringLiteral("color."))) {
+                if (tm.brush(key).gradient()) {
+                    {
+                    const ThemeGradient g = tm.gradientAt(scopePath, key);
+                    text = g.type == ThemeGradient::Radial
+                        ? QStringLiteral("radial, %1 stops").arg(g.stops.size())
+                        : QStringLiteral("linear, %1°, %2 stops")
+                              .arg(static_cast<int>(std::round(g.angle)))
+                              .arg(g.stops.size());
+                }
+                } else {
+                    text = colorToTokenHex(tm.colorAt(scopePath, key));
+                }
+            } else if (key.startsWith(QStringLiteral("font.family."))) {
+                text = tm.valueAt(scopePath, key);
+            } else {
+                text = QStringLiteral("%1 px").arg(tm.sizingAt(scopePath, key));
+            }
+            item->setText(col, text);
+            item->setFont(col, normalFont);
+            item->setForeground(col, QBrush());
+        } else {
+            item->setText(col, QStringLiteral("inherited"));
+            item->setFont(col, inheritedFont);
+            item->setForeground(col, QBrush(QColor(0x60, 0x70, 0x80)));
+        }
     }
-    if (key.startsWith(QStringLiteral("font.size."))
-        || key.startsWith(QStringLiteral("sizing."))) {
-        const int v = tm.sizing(key);
-        item->setIcon(QIcon());
-        item->setText(QStringLiteral("%1   %2 px").arg(key, -36).arg(v));
-        return;
+
+    // Last column — Value: the resolved value walking the chain from
+    // the leaf container (or root, when no scope is selected).
+    const QString leafPath = m_activeContainerPath;
+    if (key.startsWith(QStringLiteral("color."))) {
+        if (tm.brush(key).gradient()) {
+            {
+                const ThemeGradient g = tm.gradientAt(leafPath, key);
+                const QString text = g.type == ThemeGradient::Radial
+                    ? QStringLiteral("radial, %1 stops").arg(g.stops.size())
+                    : QStringLiteral("linear, %1°, %2 stops")
+                          .arg(static_cast<int>(std::round(g.angle)))
+                          .arg(g.stops.size());
+                item->setText(lastCol, text);
+            }
+        } else {
+            item->setText(lastCol, colorToTokenHex(tm.colorAt(leafPath, key)));
+        }
+    } else if (key.startsWith(QStringLiteral("font.family."))) {
+        item->setText(lastCol, tm.valueAt(leafPath, key));
+    } else {
+        item->setText(lastCol, QStringLiteral("%1 px").arg(tm.sizingAt(leafPath, key)));
     }
 }
 
-void ThemeEditorDialog::updateRow(QListWidgetItem* item)
+void ThemeEditorDialog::updateRow(QTreeWidgetItem* item)
 {
     populateRow(item);
 }
@@ -386,7 +492,7 @@ void ThemeEditorDialog::onTokenRowSelectionChanged()
         m_tokenEditor->setToken(QString());
         return;
     }
-    m_tokenEditor->setToken(item->data(Qt::UserRole).toString());
+    m_tokenEditor->setToken(item->data(0, Qt::UserRole).toString());
 }
 
 void ThemeEditorDialog::onTokenEditedByEditor(const QString& key)
@@ -396,9 +502,9 @@ void ThemeEditorDialog::onTokenEditedByEditor(const QString& key)
     // the edit.  ThemeManager's themeChanged signal already drove a
     // repaint everywhere else; this just keeps the editor's own list
     // consistent.
-    for (int i = 0; i < m_tokenList->count(); ++i) {
-        auto* item = m_tokenList->item(i);
-        if (item->data(Qt::UserRole).toString() == key) {
+    for (int i = 0; i < m_tokenList->topLevelItemCount(); ++i) {
+        auto* item = m_tokenList->topLevelItem(i);
+        if (item->data(0, Qt::UserRole).toString() == key) {
             updateRow(item);
             break;
         }
@@ -633,9 +739,10 @@ void ThemeEditorDialog::onSaveAsBeforeCommit()
     // list highlight matches what the editor is showing.
     const QString committed = m_tokenEditor->currentToken();
     if (!committed.isEmpty()) {
-        for (int i = 0; i < m_tokenList->count(); ++i) {
-            if (m_tokenList->item(i)->data(Qt::UserRole).toString() == committed) {
-                m_tokenList->setCurrentRow(i);
+        for (int i = 0; i < m_tokenList->topLevelItemCount(); ++i) {
+            auto* it = m_tokenList->topLevelItem(i);
+            if (it->data(0, Qt::UserRole).toString() == committed) {
+                m_tokenList->setCurrentItem(it);
                 break;
             }
         }
@@ -722,10 +829,10 @@ void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint localPos)
     // inline editor surfaces it immediately — the "click ugly thing →
     // fix it" flow now happens in the editor above instead of a modal.
     if (tokens.size() == 1) {
-        for (int i = 0; i < m_tokenList->count(); ++i) {
-            auto* item = m_tokenList->item(i);
+        for (int i = 0; i < m_tokenList->topLevelItemCount(); ++i) {
+            auto* item = m_tokenList->topLevelItem(i);
             if (item->isHidden()) continue;
-            if (item->data(Qt::UserRole).toString() == tokens.first()) {
+            if (item->data(0, Qt::UserRole).toString() == tokens.first()) {
                 m_tokenList->setCurrentItem(item);
                 break;
             }
@@ -747,9 +854,9 @@ void ThemeEditorDialog::filterTokensTo(const QStringList& subset)
                                ? m_filterEdit->text().trimmed().toLower()
                                : QString();
     const QSet<QString> wanted(subset.begin(), subset.end());
-    for (int i = 0; i < m_tokenList->count(); ++i) {
-        auto* item = m_tokenList->item(i);
-        const QString key = item->data(Qt::UserRole).toString();
+    for (int i = 0; i < m_tokenList->topLevelItemCount(); ++i) {
+        auto* item = m_tokenList->topLevelItem(i);
+        const QString key = item->data(0, Qt::UserRole).toString();
         bool hidden = false;
         if (!subset.isEmpty() && !wanted.contains(key)) hidden = true;
         if (!hidden && !needle.isEmpty() && !key.contains(needle)) hidden = true;
@@ -794,6 +901,10 @@ void ThemeEditorDialog::onContainerChanged(int)
     if (!m_containerCombo) return;
     m_activeContainerPath = m_containerCombo->currentData().toString();
     if (m_tokenEditor) m_tokenEditor->setActiveContainerPath(m_activeContainerPath);
+    // Rebuild columns + repopulate cells — the per-scope override
+    // cells and the resolved-value column both depend on the active
+    // scope's path.
+    refreshTokenList();
 }
 
 void ThemeEditorDialog::onActiveThemeChanged()
