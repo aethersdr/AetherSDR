@@ -6909,9 +6909,10 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
 
         // Determine draw opacity.
         // QRM markers: always 30%.  Smart-filter unmatched/expired spots: user-configurable (default 20%).  Normal: 100%.
-        const bool isQrm = (spot.source == QStringLiteral("QRM"));
+        const bool isQrm    = (spot.source == QStringLiteral("QRM"));
+        const bool isMemory = (spot.source == QStringLiteral("Memory"));
         bool dimForFilter = false;
-        if (!isQrm && smartFilterReady && !sHistVoiceFreqs.isEmpty()) {
+        if (!isQrm && !isMemory && smartFilterReady && !sHistVoiceFreqs.isEmpty()) {
             // Only apply to voice/SSB spots; leave CW/digital at full opacity.
             const QString mu = spot.mode.toUpper();
             const bool isDigital = mu.contains("CW")   || mu.contains("FT")  ||

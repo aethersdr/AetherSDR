@@ -16829,9 +16829,7 @@ void MainWindow::expireSHistoryMarkers()
         // Rebuild unconditionally: hit-window timestamps age out every second
         // even when no new detections arrive, which hides markers whose peaks
         // have fallen below the 25% threshold.
-        if (!entries.isEmpty()) {
-            rebuildSHistoryForPan(it.key());
-        }
+        rebuildSHistoryForPan(it.key());
     }
 }
 
