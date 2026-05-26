@@ -7,6 +7,7 @@
 #include <QAction>
 #include <QComboBox>
 #include <QCursor>
+#include <QTimer>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
@@ -913,10 +914,16 @@ void ThemeEditorDialog::onContainerChanged(int)
     if (!m_containerCombo) return;
     m_activeContainerPath = m_containerCombo->currentData().toString();
     if (m_tokenEditor) m_tokenEditor->setActiveContainerPath(m_activeContainerPath);
-    // Rebuild columns + repopulate cells — the per-scope override
-    // cells and the resolved-value column both depend on the active
-    // scope's path.
-    refreshTokenList();
+    // Defer the heavy rebuild to the next event-loop tick.  When the
+    // inspector triggers a scope change via setCurrentIndex, the slot
+    // runs inside the synchronous signal cascade from
+    // ThemeInspector::eventFilter → widgetPicked → onInspectorPicked
+    // → setCurrentIndex; tearing down QTreeWidgetItems (and their
+    // QPixmap-backed icon QVariants) inside that stack has hit a
+    // destructor SEGV in the wild.  Deferring breaks the chain — the
+    // inspector callback completes, and the rebuild runs from a
+    // clean stack on the next iteration.
+    QTimer::singleShot(0, this, &ThemeEditorDialog::refreshTokenList);
 }
 
 void ThemeEditorDialog::onTokenCellClicked(QTreeWidgetItem* item, int column)
