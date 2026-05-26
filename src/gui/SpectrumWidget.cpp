@@ -26,6 +26,7 @@
 #include <QCheckBox>
 #include <QDialogButtonBox>
 #include <QFrame>
+#include <QDoubleSpinBox>
 #include <QLabel>
 #include <QVBoxLayout>
 #include <QWidgetAction>
@@ -4353,14 +4354,23 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     dlg.setWindowTitle("Add Spot");
     AetherSDR::ThemeManager::instance().applyStyleSheet(&dlg, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }"
                       "QLineEdit { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
+                      "QDoubleSpinBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
+                      "QDoubleSpinBox::up-button { background: #304060; width: 16px; }"
+                      "QDoubleSpinBox::down-button { background: #304060; width: 16px; }"
                       "QComboBox { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid #304060; padding: 4px; }"
                       "QLabel { color: {{color.text.primary}}; }"
                       "QCheckBox { color: {{color.text.primary}}; }");
 
     auto* layout = new QFormLayout(&dlg);
 
-    auto* freqLabel = new QLabel(QString("%1 MHz").arg(freqMhz, 0, 'f', 6));
-    layout->addRow("Frequency:", freqLabel);
+    auto* freqSpin = new QDoubleSpinBox;
+    freqSpin->setRange(0.030, 54.000);
+    freqSpin->setDecimals(6);
+    freqSpin->setSingleStep(m_stepHz > 0 ? m_stepHz / 1e6 : 0.001);
+    freqSpin->setSuffix(" MHz");
+    freqSpin->setValue(freqMhz);
+    freqSpin->setAlignment(Qt::AlignRight);
+    layout->addRow("Frequency (MHz):", freqSpin);
 
     auto* callEdit = new QLineEdit;
     callEdit->setPlaceholderText("Callsign (required)");
@@ -4394,8 +4404,12 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     connect(buttons, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
 
+    freqSpin->setFocus();
+    freqSpin->selectAll();
+
     if (dlg.exec() != QDialog::Accepted) return;
 
+    const double finalFreqMhz = freqSpin->value();
     const QString callsign = callEdit->text().trimmed().toUpper();
     if (callsign.isEmpty()) return;
 
@@ -4407,7 +4421,7 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     as.setValue("ManualSpotLifetime", QString::number(lifetimeSec));
     as.setValue("SpotForwardToCluster", forward ? "True" : "False");
 
-    emit spotAddRequested(freqMhz, callsign, comment, lifetimeSec, forward);
+    emit spotAddRequested(finalFreqMhz, callsign, comment, lifetimeSec, forward);
 }
 
 void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
