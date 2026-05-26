@@ -202,6 +202,31 @@
             "strong": 2
           }
         }
+      },
+      "scopes": {
+        "applet": {
+          "tokens": {},
+          "scopes": {
+            "tx": {
+              "tokens": {
+                "color.slider.foreground": "{color.red.500}",
+                "color.knob.foreground":   "{color.red.500}"
+              }
+            },
+            "rx": {
+              "tokens": {
+                "color.slider.foreground": "{color.green.500}",
+                "color.knob.foreground":   "{color.green.500}"
+              }
+            },
+            "comp": {
+              "tokens": {
+                "color.slider.foreground": "{color.amber.500}",
+                "color.knob.foreground":   "{color.amber.500}"
+              }
+            }
+          }
+        }
       }
     }
   }

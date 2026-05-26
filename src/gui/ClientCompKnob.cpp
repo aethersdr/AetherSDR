@@ -31,14 +31,17 @@ constexpr float kArcSpanDeg         = -270.0f; // 4:30  = 270° sweep
 
 // Knob components read from the dedicated color.knob.* namespace
 // (carved out of color.background.1 / color.accent.dim /
-// color.text.primary).  Designers can retint knobs per-applet without
-// rippling into other accent-consumers.  Label + value text below
-// the knob stay on color.text.* — those are text, not knob proper.
-inline QColor kRingBg() { return AetherSDR::ThemeManager::instance().color("color.knob.background"); }
-inline QColor kRingArc() { return AetherSDR::ThemeManager::instance().color("color.knob.foreground"); }
-inline QColor kPointer() { return AetherSDR::ThemeManager::instance().color("color.knob.handle"); }
-inline QColor kLabelColor() { return AetherSDR::ThemeManager::instance().color("color.text.secondary"); }
-inline QColor kValueColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
+// color.text.primary).  Each helper takes the owning widget so the
+// widget-aware overload walks the container chain — that's how
+// per-applet container overrides (e.g. applet/comp's amber knob
+// foreground) actually reach the rendered output.  Label + value
+// text below the knob stay on color.text.* — those are text, not
+// knob componentry.
+inline QColor kRingBg(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.knob.background"); }
+inline QColor kRingArc(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.knob.foreground"); }
+inline QColor kPointer(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.knob.handle"); }
+inline QColor kLabelColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.text.secondary"); }
+inline QColor kValueColor(const QWidget* w) { return AetherSDR::ThemeManager::instance().color(w, "color.text.primary"); }
 } // namespace
 
 ClientCompKnob::ClientCompKnob(QWidget* parent) : QWidget(parent)
@@ -271,13 +274,13 @@ void ClientCompKnob::paintEvent(QPaintEvent*)
             fm = QFontMetrics(labelFont);
         }
         p.setFont(labelFont);
-        p.setPen(kLabelColor());
+        p.setPen(kLabelColor(this));
         p.drawText(QRectF(0, 0, w, 12), Qt::AlignCenter, m_label);
     }
 
     // Background ring.
     const qreal thick = std::max(2.0, diameter * 0.10);
-    QPen bgPen(kRingBg(), thick);
+    QPen bgPen(kRingBg(this), thick);
     bgPen.setCapStyle(Qt::FlatCap);
     p.setPen(bgPen);
     p.drawArc(ring.adjusted(thick * 0.5, thick * 0.5,
@@ -286,7 +289,7 @@ void ClientCompKnob::paintEvent(QPaintEvent*)
               static_cast<int>(kArcSpanDeg * 16.0f));
 
     // Value arc.
-    QPen arcPen(kRingArc(), thick);
+    QPen arcPen(kRingArc(this), thick);
     arcPen.setCapStyle(Qt::FlatCap);
     p.setPen(arcPen);
     p.drawArc(ring.adjusted(thick * 0.5, thick * 0.5,
@@ -304,7 +307,7 @@ void ClientCompKnob::paintEvent(QPaintEvent*)
                        c.y() - rOut * std::sin(angle));
     const QPointF pIn (c.x() + rIn  * std::cos(angle),
                        c.y() - rIn  * std::sin(angle));
-    QPen pointerPen(kPointer(), thick * 0.6);
+    QPen pointerPen(kPointer(this), thick * 0.6);
     pointerPen.setCapStyle(Qt::RoundCap);
     p.setPen(pointerPen);
     p.drawLine(pIn, pOut);
@@ -335,7 +338,7 @@ void ClientCompKnob::paintEvent(QPaintEvent*)
         }
 
         p.setFont(centerFont);
-        p.setPen(kLabelColor());
+        p.setPen(kLabelColor(this));
         p.drawText(ring, Qt::AlignCenter, m_label);
     }
 
@@ -347,7 +350,7 @@ void ClientCompKnob::paintEvent(QPaintEvent*)
         valueFont.setBold(true);
         valueFont.setPixelSize(11);
         p.setFont(valueFont);
-        p.setPen(kValueColor());
+        p.setPen(kValueColor(this));
         p.drawText(valueRect(), Qt::AlignCenter, formatValue());
     }
 }

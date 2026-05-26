@@ -108,6 +108,11 @@ ClientCompApplet::ClientCompApplet(Side side, QWidget* parent)
     , m_side(side)
 {
     theme::setContainer(this, QStringLiteral("applet/comp"));
+    // Slider fill at applet/comp scope (amber — compression amount
+    // carries a warning-ish cast for "you are colouring the signal").
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this,
+        "QSlider::sub-page:horizontal { background: {{color.slider.foreground}}; }"
+        "QSlider::sub-page:vertical   { background: {{color.slider.foreground}}; }");
     buildUI();
     hide();  // hidden until toggled on from the button tray
 }

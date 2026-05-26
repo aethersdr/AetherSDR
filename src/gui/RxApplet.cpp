@@ -315,6 +315,10 @@ static QPushButton* mkRight(QWidget* parent = nullptr) { return new TriBtn(TriBt
 RxApplet::RxApplet(QWidget* parent) : QWidget(parent)
 {
     theme::setContainer(this, QStringLiteral("applet/rx"));
+    // Slider fill at applet/rx scope (green semantic — receive is passive).
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this,
+        "QSlider::sub-page:horizontal { background: {{color.slider.foreground}}; }"
+        "QSlider::sub-page:vertical   { background: {{color.slider.foreground}}; }");
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     // Recall the last user-chosen Manual squelch threshold from prior
     // sessions.  Auto mode clobbers the slice's squelchLevel with

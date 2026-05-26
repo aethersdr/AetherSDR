@@ -58,6 +58,13 @@ TxApplet::TxApplet(QWidget* parent)
     : QWidget(parent)
 {
     theme::setContainer(this, QStringLiteral("applet/tx"));
+    // Slider fill at applet/tx scope — the scope override gets applied
+    // via this applet-level stylesheet (Qt QSS cascades to descendants;
+    // resolveFor() picks up applet/tx → applet → root and finds the
+    // {color.red.500} alias).
+    AetherSDR::ThemeManager::instance().applyStyleSheet(this,
+        "QSlider::sub-page:horizontal { background: {{color.slider.foreground}}; }"
+        "QSlider::sub-page:vertical   { background: {{color.slider.foreground}}; }");
     hide();
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     buildUI();
