@@ -220,8 +220,17 @@ inline QString primarySliderStyleTemplate(const QString& accentToken = QStringLi
 // Apply the canonical primary slider style to `slider` and register it
 // for free live re-theme on theme changes.  Use this in place of every
 // previous `slider->setStyleSheet(kSliderStyle)` call.
+//
+// Default `accentToken` is `color.slider.foreground` — the canonical
+// slider fill token, carved out of `color.accent`.  Callers that
+// hard-code a specific token (e.g. `color.accent.warning` for
+// TX-adjacent panels, or `color.slice.a` for per-slice colour) still
+// work — that token name is what gets substituted.  Resolution is
+// widget-aware (walks the slider's container chain), so the applet's
+// scope override naturally reaches the rendered output without any
+// per-call-site change.
 inline void applyPrimarySliderStyle(QWidget* slider,
-                                    const QString& accentToken = QStringLiteral("color.accent"))
+                                    const QString& accentToken = QStringLiteral("color.slider.foreground"))
 {
     if (!slider) return;
     ThemeManager::instance().applyStyleSheet(slider, primarySliderStyleTemplate(accentToken));
