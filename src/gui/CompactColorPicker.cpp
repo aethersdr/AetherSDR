@@ -1,8 +1,11 @@
 #include "CompactColorPicker.h"
 
+#include <QApplication>
 #include <QGridLayout>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QImage>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLinearGradient>
@@ -10,6 +13,8 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPushButton>
+#include <QScreen>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -25,6 +30,42 @@ QString colorToTokenHex(const QColor& c)
     return c.alpha() == 255 ? c.name(QColor::HexRgb)
                             : c.name(QColor::HexArgb);
 }
+
+// Render a small eyedropper glyph for the picker button.  Drawn at
+// device-pixel resolution so HiDPI displays don't blur it.
+QIcon makeEyedropperIcon(const QColor& strokeColor)
+{
+    const qreal dpr = qApp ? qApp->devicePixelRatio() : 1.0;
+    const int side = 16;
+    QPixmap pm(QSize(side, side) * dpr);
+    pm.setDevicePixelRatio(dpr);
+    pm.fill(Qt::transparent);
+
+    QPainter p(&pm);
+    p.setRenderHint(QPainter::Antialiasing, true);
+    QPen pen(strokeColor);
+    pen.setWidthF(1.6);
+    pen.setCapStyle(Qt::RoundCap);
+    p.setPen(pen);
+    p.setBrush(strokeColor);
+
+    // Bulb at the top-right (the squeezable end of the pipette).
+    p.drawEllipse(QPointF(11.5, 4.5), 2.4, 2.4);
+    // Stem — diagonal pipe from bulb to tip.
+    p.setBrush(Qt::NoBrush);
+    p.drawLine(QPointF(10.2, 5.6), QPointF(3.4, 12.4));
+    // Drip at the tip.
+    p.setBrush(strokeColor);
+    p.drawEllipse(QPointF(3.0, 13.0), 1.1, 1.1);
+    return QIcon(pm);
+}
+
+// Screen colour picking is implemented via grabMouse(Qt::CrossCursor) +
+// grabKeyboard() on the picker widget — exactly the same approach
+// QColorDialog uses internally for its "Pick Screen Color" button.
+// The platform integration handles Wayland portal / X11 XGrabPointer /
+// Win32 SetCapture under the hood, so this works on every platform
+// where QColorDialog's eyedropper works.
 
 // Common 2x2 checkerboard tile painter, used by the alpha slider and
 // the live swatch so translucent values don't disappear into the
@@ -383,6 +424,17 @@ CompactColorPicker::CompactColorPicker(QWidget* parent) : QWidget(parent)
     m_hex->setMaxLength(9);
     m_hex->setFixedWidth(96);
     hexRow->addWidget(m_hex);
+
+    m_eyedropper = new QPushButton(this);
+    m_eyedropper->setIcon(makeEyedropperIcon(palette().color(QPalette::WindowText)));
+    m_eyedropper->setIconSize(QSize(14, 14));
+    m_eyedropper->setFixedSize(24, 24);
+    m_eyedropper->setToolTip(QStringLiteral(
+        "Pick a colour from anywhere on the screen.\n"
+        "Click to sample.  Esc or right-click cancels."));
+    m_eyedropper->setAccessibleName(QStringLiteral("Pick colour from screen"));
+    hexRow->addWidget(m_eyedropper);
+
     hexRow->addStretch(1);
     root->addLayout(hexRow);
 
@@ -393,6 +445,8 @@ CompactColorPicker::CompactColorPicker(QWidget* parent) : QWidget(parent)
     connect(m_alpha, &AlphaSlider::alphaPicked, this, &CompactColorPicker::onAlphaPicked);
     connect(m_hex,   &QLineEdit::editingFinished,
             this, &CompactColorPicker::onHexEdited);
+    connect(m_eyedropper, &QPushButton::clicked,
+            this, &CompactColorPicker::onEyedropperClicked);
     for (QSpinBox* sb : {m_r, m_g, m_b}) {
         connect(sb, qOverload<int>(&QSpinBox::valueChanged),
                 this, &CompactColorPicker::onRgbEdited);
@@ -497,6 +551,78 @@ void CompactColorPicker::onRgbEdited()
     if (m_updating) return;
     m_color = QColor(m_r->value(), m_g->value(), m_b->value(), m_alpha->alpha());
     emitChange();
+}
+
+void CompactColorPicker::onEyedropperClicked()
+{
+    if (m_pickingScreen) return;
+    m_pickingScreen = true;
+    // Same pair QColorDialog::pickScreenColor() uses internally — grabMouse
+    // routes every mouse event to us regardless of which app the cursor is
+    // over; grabKeyboard catches Esc-to-cancel before any other widget
+    // sees it.  Qt's platform integration handles the Wayland-portal /
+    // X11-XGrabPointer / Win32-SetCapture mechanics under the hood.
+    grabMouse(QCursor(Qt::CrossCursor));
+    grabKeyboard();
+}
+
+bool CompactColorPicker::event(QEvent* ev)
+{
+    if (!m_pickingScreen) return QWidget::event(ev);
+
+    switch (ev->type()) {
+    case QEvent::MouseButtonRelease: {
+        auto* me = static_cast<QMouseEvent*>(ev);
+        // Release the grabs FIRST so QScreen::grabWindow sees a clean
+        // composited image (no leftover crosshair cursor in the capture).
+        releaseMouse();
+        releaseKeyboard();
+        m_pickingScreen = false;
+
+        if (me->button() == Qt::LeftButton) {
+            const QPoint gp = me->globalPosition().toPoint();
+            if (auto* screen = QGuiApplication::screenAt(gp)) {
+                const QPoint local = gp - screen->geometry().topLeft();
+                const QPixmap pm = screen->grabWindow(
+                    0, local.x(), local.y(), 1, 1);
+                if (!pm.isNull()) {
+                    const QColor sampled = pm.toImage().pixelColor(0, 0);
+                    if (sampled.isValid()) {
+                        // Preserve the current alpha — the eyedropper
+                        // reads only RGB from the screen; the alpha
+                        // slider remains the source of truth.
+                        QColor next = sampled;
+                        next.setAlpha(m_color.alpha());
+                        setColor(next);
+                        emitChange();
+                    }
+                }
+            }
+        }
+        ev->accept();
+        return true;
+    }
+    case QEvent::MouseButtonPress: {
+        // Eat the press so it doesn't reach the underlying widget;
+        // the release handler does the actual sampling.
+        ev->accept();
+        return true;
+    }
+    case QEvent::KeyPress: {
+        auto* ke = static_cast<QKeyEvent*>(ev);
+        if (ke->key() == Qt::Key_Escape) {
+            releaseMouse();
+            releaseKeyboard();
+            m_pickingScreen = false;
+            ev->accept();
+            return true;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    return QWidget::event(ev);
 }
 
 } // namespace AetherSDR

@@ -5,6 +5,7 @@
 
 class QLabel;
 class QLineEdit;
+class QPushButton;
 class QSpinBox;
 
 namespace AetherSDR {
@@ -107,6 +108,7 @@ private slots:
     void onAlphaPicked(int a);
     void onHexEdited();
     void onRgbEdited();
+    void onEyedropperClicked();
 
 private:
     void rebuildFromColor();   // sync sub-widgets from m_color
@@ -116,12 +118,17 @@ private:
     SVSquare*   m_sv{nullptr};
     HueStrip*   m_hue{nullptr};
     AlphaSlider* m_alpha{nullptr};
-    QLineEdit*  m_hex{nullptr};
-    QSpinBox*   m_r{nullptr};
-    QSpinBox*   m_g{nullptr};
-    QSpinBox*   m_b{nullptr};
-    QLabel*     m_swatch{nullptr};
-    bool        m_updating{false};   // re-entrancy guard during sync
+    QLineEdit*   m_hex{nullptr};
+    QPushButton* m_eyedropper{nullptr};
+    QSpinBox*    m_r{nullptr};
+    QSpinBox*    m_g{nullptr};
+    QSpinBox*    m_b{nullptr};
+    QLabel*      m_swatch{nullptr};
+    bool         m_updating{false};   // re-entrancy guard during sync
+    bool         m_pickingScreen{false};  // grabMouse/grabKeyboard active
+
+protected:
+    bool event(QEvent* ev) override;  // intercepts events during screen pick
 };
 
 } // namespace AetherSDR
