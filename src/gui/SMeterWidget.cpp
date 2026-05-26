@@ -93,9 +93,9 @@ void SMeterWidget::setTxMeters(float fwdPower, float swr)
 
 void SMeterWidget::setMicMeters(float micLevel, float compLevel, float micPeak, float compPeak)
 {
-    Q_UNUSED(micLevel);
     Q_UNUSED(compLevel);
-    m_micLevel = micPeak;
+    m_micLevel = micLevel;   // MIC meter — live level, matches Phone/CW Level gauge
+    m_micPeak  = micPeak;    // MICPEAK meter — stored for future peak-tick rendering
     // MeterModel normalizes COMPPEAK to a 0..25 dB compression amount.
     m_compLevel = qBound(0.0f, compPeak, 25.0f);
 

@@ -85,7 +85,8 @@ private:
     // TX meter values (updated continuously, used when transmitting)
     float   m_txPower{0.0f};
     float   m_txSwr{1.0f};
-    float   m_micLevel{-50.0f};
+    float   m_micLevel{-50.0f};  // MIC meter — drives Level mode needle
+    float   m_micPeak{-50.0f};   // MICPEAK meter — reserved for future peak tick
     float   m_compLevel{0.0f};
 
     // Mode state
