@@ -271,6 +271,13 @@ public:
     // or just inherits it from an ancestor (false).
     bool          isOverriddenAt(const QString& containerPath, const QString& token) const;
 
+    // Drop the local override for `token` at `containerPath`, falling
+    // back to inheritance from the scope's parent.  No-op when there
+    // is no override to drop.  Emits themeChanged + persists to disk
+    // through saveActiveTheme() so the inheritance restoration
+    // survives a restart.
+    void          removeOverride(const QString& containerPath, const QString& token);
+
     // Container declarations — widgets call this through
     // theme::setContainer() to register their scope; ThemeManager keeps
     // the path alive in m_declaredContainers so it stays visible in

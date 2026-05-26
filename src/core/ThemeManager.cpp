@@ -1605,6 +1605,17 @@ bool ThemeManager::isOverriddenAt(const QString& containerPath, const QString& t
     return s->tokens.constFind(token) != s->tokens.constEnd();
 }
 
+void ThemeManager::removeOverride(const QString& containerPath, const QString& token)
+{
+    ThemeScope* s = scopeForPath(containerPath);
+    if (!s) return;
+    if (s->tokens.remove(token) == 0) return;  // nothing to drop
+    m_currentEditToken = token;
+    emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
+}
+
 QStringList ThemeManager::containerPaths() const
 {
     QStringList out;

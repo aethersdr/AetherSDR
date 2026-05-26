@@ -48,6 +48,13 @@ private slots:
     void onSaveAsBeforeCommit();     // fork built-in theme before committing an edit
     void onActiveThemeChanged();     // re-load when user picks a different theme
     void onContainerChanged(int);    // user picked a different scope from the container combo
+    // Click a scope-column cell in the columnar token table → focus
+    // that scope in the picker AND select the row's token for editing.
+    void onTokenCellClicked(QTreeWidgetItem* item, int column);
+    // Right-click a scope-column cell → context menu with
+    // "Clear override at <scope>" (enabled only when an override
+    // actually exists at that level for the row's token).
+    void onTokenContextMenu(const QPoint& pos);
 
     // Inspector-mode handlers.
     void onInspectToggled(bool on);

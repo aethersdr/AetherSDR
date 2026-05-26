@@ -268,6 +268,14 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // the list also update the inline editor.
     connect(m_tokenList, &QTreeWidget::currentItemChanged,
             this, &ThemeEditorDialog::onTokenRowSelectionChanged);
+    // Click on a scope-column cell focuses that scope in the picker AND
+    // selects the row's token — the columnar view becomes the primary
+    // navigation surface instead of being read-only.
+    connect(m_tokenList, &QTreeWidget::itemClicked,
+            this, &ThemeEditorDialog::onTokenCellClicked);
+    m_tokenList->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_tokenList, &QTreeWidget::customContextMenuRequested,
+            this, &ThemeEditorDialog::onTokenContextMenu);
     connect(m_tokenEditor, &TokenEditorWidget::tokenChanged,
             this, &ThemeEditorDialog::onTokenEditedByEditor);
     // Built-in themes can't be edited in place; the editor stashes
@@ -894,6 +902,57 @@ void ThemeEditorDialog::onContainerChanged(int)
     // cells and the resolved-value column both depend on the active
     // scope's path.
     refreshTokenList();
+}
+
+void ThemeEditorDialog::onTokenCellClicked(QTreeWidgetItem* item, int column)
+{
+    if (!item || !m_tokenList) return;
+    if (column == 0) return;                                  // Object column: already wired via currentItemChanged
+    if (column == m_tokenList->columnCount() - 1) return;     // Value column: just informational
+    // Scope-chain column — switch the active scope to that column's
+    // path so the editor's commit lands there.  The user's perspective
+    // becomes "I want to override this token at this exact scope".
+    const QString scopePath =
+        m_tokenList->headerItem()->data(column, Qt::UserRole).toString();
+    // Sync the picker, which fires onContainerChanged → updates the
+    // editor + columns + repopulates the rows.
+    const int idx = m_containerCombo
+                        ? m_containerCombo->findData(scopePath)
+                        : -1;
+    if (idx >= 0) m_containerCombo->setCurrentIndex(idx);
+    // After the picker change re-selects the previous current row,
+    // explicitly re-select this row so the editor reflects the clicked
+    // token (the refresh may have lost the highlight).
+    m_tokenList->setCurrentItem(item);
+}
+
+void ThemeEditorDialog::onTokenContextMenu(const QPoint& pos)
+{
+    if (!m_tokenList) return;
+    QTreeWidgetItem* item = m_tokenList->itemAt(pos);
+    if (!item) return;
+    const int column = m_tokenList->columnAt(pos.x());
+    // Right-click is only meaningful on a scope-chain column (not
+    // Object, not Value) where an actual override could exist.
+    if (column <= 0 || column >= m_tokenList->columnCount() - 1) return;
+    const QString scopePath =
+        m_tokenList->headerItem()->data(column, Qt::UserRole).toString();
+    const QString token = item->data(0, Qt::UserRole).toString();
+    auto& tm = ThemeManager::instance();
+    if (!tm.isOverriddenAt(scopePath, token)) return;  // nothing to clear
+
+    const QString scopeLabel = scopePath.isEmpty()
+                                   ? QStringLiteral("(root)")
+                                   : scopePath;
+    QMenu menu(this);
+    QAction* clearAct = menu.addAction(
+        QStringLiteral("Clear override at %1").arg(scopeLabel));
+    QAction* picked = menu.exec(m_tokenList->viewport()->mapToGlobal(pos));
+    if (picked == clearAct) {
+        tm.removeOverride(scopePath, token);
+        // Refresh the row so the column flips back to italic "inherited".
+        populateRow(item);
+    }
 }
 
 void ThemeEditorDialog::onActiveThemeChanged()
