@@ -130,12 +130,22 @@ jobs:
       - name: Create portable ZIP
         run: |
           # Keep portable ZIP app-local runtime behavior aligned with the installer.
+          # Sanitize github.ref_name — release-tag pushes give a slash-free
+          # "v26.5.3" but workflow_dispatch on a branch ref like
+          # "codex/windows-store-msix" injects slashes that break the
+          # Compress-Archive destination path.  Strip every filesystem-unsafe
+          # character so ad-hoc dispatch runs (e.g. validating new packaging
+          # work on a branch) reach the later Inno + MSIX steps instead of
+          # exiting 1 at the very first artifact-creation step.
           Copy-Item -Path installer-runtime\*.dll -Destination deploy\ -Force
-          Compress-Archive -Path deploy\* -DestinationPath "AetherSDR-${{ github.ref_name }}-Windows-x64-portable.zip"
+          $safeRefName = "${{ github.ref_name }}" -replace '[\\/:*?"<>|]', '_'
+          Compress-Archive -Path deploy\* -DestinationPath "AetherSDR-$safeRefName-Windows-x64-portable.zip"
 
       - name: Create installer (Inno Setup)
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
+          # Same sanitization as the portable ZIP step — Inno also pukes on
+          # filesystem-unsafe characters in /DAPP_VERSION.
+          $version = "${{ github.ref_name }}" -replace '^v', '' -replace '[\\/:*?"<>|]', '_'
           $runtimeDir = (Resolve-Path "installer-runtime").Path
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAPP_VERSION=$version "/DVC_RUNTIME_DIR=$runtimeDir" packaging\windows\installer.iss
 
