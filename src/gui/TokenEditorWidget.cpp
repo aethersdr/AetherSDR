@@ -223,10 +223,14 @@ void TokenEditorWidget::buildFontGroup(QVBoxLayout* root)
     row->addWidget(m_fontCombo);
 
     m_fontSizeCombo = new QComboBox(this);
-    // Hard-capped at 20 px — anything bigger overflows the freq display
-    // glyph cell, meter labels, and several status-row widgets that
-    // assume small/normal/large stays within their reserved height.
-    for (int sz : {7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20}) {
+    // Preset sizes — the 7-20 range covers `font.size.tiny/small/normal/large`
+    // (those scalar tokens are still hard-capped at 20 to keep label
+    // rows from overflowing).  Larger sizes are for the compound
+    // `font.family.<role>.size` field; the freq label defaults to 26
+    // and segment displays often go to 36+.  Bump clamps differ per
+    // target — see onFontSizeBumpUp/Down().
+    for (int sz : {7, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20,
+                   24, 28, 32, 36, 48, 60, 72}) {
         m_fontSizeCombo->addItem(QStringLiteral("%1 pt").arg(sz),
                                  QVariant(sz));
     }
@@ -1080,28 +1084,37 @@ void TokenEditorWidget::onFontSizeChanged(int v)
         // font.size.* / sizing.* token — the size combo IS the editor.
         m_bufferNumeric = v;
         markDirty();
+    } else if (m_target == TargetFontFamily) {
+        // font.family.* is now a compound (family + size + color), so
+        // the size combo IS part of what we commit.  Mark dirty so the
+        // OK button activates and commitBufferToThemeManager writes
+        // the new ThemeFont with the picked size.
+        markDirty();
     }
-    // For font.family.* tokens the combo is purely informational so
-    // there's nothing to mark dirty — operator must pick the
-    // corresponding font.size.* token to actually commit a size change.
 }
 
 void TokenEditorWidget::onFontSizeBumpUp()
 {
-    m_bufferFontSize = std::clamp(m_bufferFontSize + 1, 7, 20);
+    // font.size.*/sizing.* scalar tokens stay capped at 20 — overflowing
+    // those breaks status-row labels.  font.family.* compounds can go
+    // larger (the freq compound is 26 by default, segment displays
+    // commonly run to 36-48).
+    const int hi = (m_target == TargetFontFamily) ? 96 : 20;
+    m_bufferFontSize = std::clamp(m_bufferFontSize + 1, 7, hi);
     syncFontSizeComboToBuffer(m_bufferFontSize);
-    if (m_target == TargetNumeric) {
-        m_bufferNumeric = m_bufferFontSize;
+    if (m_target == TargetNumeric || m_target == TargetFontFamily) {
+        if (m_target == TargetNumeric) m_bufferNumeric = m_bufferFontSize;
         markDirty();
     }
 }
 
 void TokenEditorWidget::onFontSizeBumpDown()
 {
-    m_bufferFontSize = std::clamp(m_bufferFontSize - 1, 7, 20);
+    const int hi = (m_target == TargetFontFamily) ? 96 : 20;
+    m_bufferFontSize = std::clamp(m_bufferFontSize - 1, 7, hi);
     syncFontSizeComboToBuffer(m_bufferFontSize);
-    if (m_target == TargetNumeric) {
-        m_bufferNumeric = m_bufferFontSize;
+    if (m_target == TargetNumeric || m_target == TargetFontFamily) {
+        if (m_target == TargetNumeric) m_bufferNumeric = m_bufferFontSize;
         markDirty();
     }
 }
