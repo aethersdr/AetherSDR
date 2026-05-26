@@ -777,6 +777,16 @@ void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint localPos)
     if (!target) return;
     auto& tm = ThemeManager::instance();
 
+    // Auto-select the picked widget's container scope so any subsequent
+    // edit lands at the right level of the inheritance chain.  Walks
+    // `target`'s Qt parent chain to the nearest declared `themeContainer`
+    // (the same lookup widget-aware getters use for token resolution).
+    const QString pickedScope = tm.containerPathFor(target);
+    if (m_containerCombo) {
+        const int idx = m_containerCombo->findData(pickedScope);
+        if (idx >= 0) m_containerCombo->setCurrentIndex(idx);
+    }
+
     // Walk up the parent chain until we find a widget with a declared
     // token list — that's how a click on a deep child (e.g. the QLabel
     // inside a QPushButton inside a themed panel) still surfaces the
@@ -812,14 +822,19 @@ void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint localPos)
     filterTokensTo(tokens);
 
     const QString matchedClass = w ? w->metaObject()->className() : hitName;
+    const QString scopeSuffix = pickedScope.isEmpty()
+        ? QString()
+        : QStringLiteral("  ·  scope: %1").arg(pickedScope);
     if (w && w != target) {
         updateInspectorStatus(QStringLiteral(
-            "%1 (via %2): %3 token%4.").arg(matchedClass).arg(hitName)
-            .arg(tokens.size()).arg(tokens.size() == 1 ? "" : "s"));
+            "%1 (via %2): %3 token%4.%5").arg(matchedClass).arg(hitName)
+            .arg(tokens.size()).arg(tokens.size() == 1 ? "" : "s")
+            .arg(scopeSuffix));
     } else {
         updateInspectorStatus(QStringLiteral(
-            "%1: %2 token%3.").arg(matchedClass)
-            .arg(tokens.size()).arg(tokens.size() == 1 ? "" : "s"));
+            "%1: %2 token%3.%4").arg(matchedClass)
+            .arg(tokens.size()).arg(tokens.size() == 1 ? "" : "s")
+            .arg(scopeSuffix));
     }
 
     // Convenience: if exactly one token matched, select it so the
