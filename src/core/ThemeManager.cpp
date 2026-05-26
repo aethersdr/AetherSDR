@@ -682,10 +682,9 @@ void ThemeManager::setSizing(const QString& token, int value)
 
 ThemeGradient ThemeManager::gradient(const QString& token) const
 {
-    const auto it = m_tokens.constFind(token);
-    if (it == m_tokens.constEnd()) return {};
-    if (!it.value().canConvert<ThemeGradient>()) return {};
-    return it.value().value<ThemeGradient>();
+    const QVariant v = lookupRaw(QString(), token);
+    if (v.userType() != qMetaTypeId<ThemeGradient>()) return {};
+    return v.value<ThemeGradient>();
 }
 
 void ThemeManager::setGradient(const QString& token, const ThemeGradient& g)
@@ -1218,35 +1217,35 @@ QString ThemeManager::importThemeFromFile(const QString& filePath,
 
 QColor ThemeManager::color(const QString& token) const
 {
-    const auto it = m_tokens.constFind(token);
-    if (it == m_tokens.constEnd()) {
+    // Route through lookupRaw so `{primitive.key}` aliases stored in
+    // semantic tokens resolve through the primitives map.  Passing ""
+    // for the path reads root scope, matching legacy bare-token
+    // behaviour exactly when no aliases are in play.
+    const QVariant v = lookupRaw(QString(), token);
+    if (!v.isValid()) {
         qCWarning(lcGui) << "ThemeManager: missing color token" << token;
         return QColor(Qt::transparent);
     }
-    // Gradient tokens: graceful fallback to the first stop's colour so
-    // existing callers asking for a flat colour on what's now a gradient
-    // token don't crash.  Callers that actually want the gradient should
-    // use brush() or cssFragment().
-    if (it.value().canConvert<ThemeGradient>()) {
-        const auto g = it.value().value<ThemeGradient>();
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) {
+        const auto g = v.value<ThemeGradient>();
         if (!g.stops.isEmpty()) return g.stops.first().color;
         return QColor(Qt::transparent);
     }
-    return QColor(it.value().toString());
+    return QColor(v.toString());
 }
 
 QBrush ThemeManager::brush(const QString& token, const QRect& bounds) const
 {
-    const auto it = m_tokens.constFind(token);
-    if (it == m_tokens.constEnd()) {
+    const QVariant val = lookupRaw(QString(), token);
+    if (!val.isValid()) {
         qCWarning(lcGui) << "ThemeManager: missing brush token" << token;
         return QBrush(Qt::transparent);
     }
-    if (!it.value().canConvert<ThemeGradient>()) {
+    if (val.userType() != qMetaTypeId<ThemeGradient>()) {
         // Scalar — wrap the colour into a solid brush.
-        return QBrush(QColor(it.value().toString()));
+        return QBrush(QColor(val.toString()));
     }
-    const auto g = it.value().value<ThemeGradient>();
+    const auto g = val.value<ThemeGradient>();
     if (g.type == ThemeGradient::Linear) {
         qreal nx1, ny1, nx2, ny2;
         linearAngleToEndpoints(g.angle, nx1, ny1, nx2, ny2);
@@ -1292,15 +1291,16 @@ QBrush ThemeManager::brush(const QString& token, const QRect& bounds) const
 
 QString ThemeManager::cssFragment(const QString& token) const
 {
-    const auto it = m_tokens.constFind(token);
-    if (it == m_tokens.constEnd()) return QString();
-    if (it.value().canConvert<ThemeGradient>()) {
-        return gradientCssFragment(it.value().value<ThemeGradient>());
+    // Alias-aware: lookupRaw expands `{primitive.key}` references before
+    // returning, so QSS templates referencing semantic tokens that
+    // alias-resolve through the primitives palette emit the right
+    // literal value.
+    const QVariant v = lookupRaw(QString(), token);
+    if (!v.isValid()) return QString();
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) {
+        return gradientCssFragment(v.value<ThemeGradient>());
     }
-    // Scalar tokens: route translucent values through rgba(...) so Qt's
-    // stylesheet parser actually honours alpha.  Opaque values pass
-    // through verbatim ("#rrggbb").
-    return colorHexToCssFragment(it.value().toString());
+    return colorHexToCssFragment(v.toString());
 }
 
 QFont ThemeManager::font(const QString& token) const
@@ -1321,27 +1321,23 @@ QFont ThemeManager::font(const QString& token) const
 
 int ThemeManager::sizing(const QString& token) const
 {
-    const auto it = m_tokens.constFind(token);
-    if (it == m_tokens.constEnd()) {
+    const QVariant val = lookupRaw(QString(), token);
+    if (!val.isValid()) {
         qCWarning(lcGui) << "ThemeManager: missing sizing token" << token;
         return 0;
     }
     bool ok = false;
-    const int v = it.value().toInt(&ok);
+    const int v = val.toInt(&ok);
     if (ok) return v;
-    return static_cast<int>(it.value().toDouble());
+    return static_cast<int>(val.toDouble());
 }
 
 QString ThemeManager::value(const QString& token) const
 {
-    const auto it = m_tokens.constFind(token);
-    if (it == m_tokens.constEnd()) return QString();
-    // Gradient tokens have no meaningful raw scalar — return empty so
-    // callers that expected a string don't accidentally inline the
-    // QVariant::toString() of a structured value.  Use cssFragment()
-    // for the stylesheet form or brush() for paint code.
-    if (it.value().canConvert<ThemeGradient>()) return QString();
-    return it.value().toString();
+    const QVariant v = lookupRaw(QString(), token);
+    if (!v.isValid()) return QString();
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) return QString();
+    return v.toString();
 }
 
 QString ThemeManager::resolve(const QString& stylesheetTemplate) const
