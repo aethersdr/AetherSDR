@@ -155,6 +155,22 @@
               "g": "#803040",
               "h": "#584080"
             }
+          },
+          "slider": {
+            "background":          "{color.gray.800}",
+            "foreground":          "{color.blue.500}",
+            "handle":              "{color.gray.200}",
+            "background.disabled": "{color.gray.850}",
+            "foreground.disabled": "{color.gray.600}",
+            "handle.disabled":     "{color.gray.500}"
+          },
+          "knob": {
+            "background":          "{color.gray.700}",
+            "foreground":          "{color.blue.500}",
+            "handle":              "{color.gray.200}",
+            "background.disabled": "{color.gray.800}",
+            "foreground.disabled": "{color.gray.600}",
+            "handle.disabled":     "{color.gray.500}"
           }
         },
         "font": {
