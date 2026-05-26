@@ -15,6 +15,7 @@ class QPushButton;
 namespace AetherSDR {
 
 class ThemeInspector;
+class TokenEditorWidget;
 
 // Modeless dialog for live-editing the active theme's color tokens.
 //
@@ -40,8 +41,10 @@ public:
 
 private slots:
     void refreshTokenList();         // rebuild rows from ThemeManager
-    void onTokenRowClicked(QListWidgetItem* item);
+    void onTokenRowSelectionChanged();
+    void onTokenEditedByEditor(const QString& key);
     void onSaveAsClicked();
+    void onSaveAsBeforeCommit();     // fork built-in theme before committing an edit
     void onActiveThemeChanged();     // re-load when user picks a different theme
 
     // Inspector-mode handlers.
@@ -49,19 +52,8 @@ private slots:
     void onInspectorPicked(QWidget* target, QPoint localPos);
     void onInspectorActiveChanged(bool active);
 
-    // Routes wired from the type-chooser menu in onTokenRowClicked.
-    // editTokenAsFlat falls back to the first-stop colour when the token
-    // is currently a gradient.  editTokenAsGradient seeds a 2-stop
-    // gradient from the scalar value when the token is currently flat,
-    // so the initial visual output matches the previous flat colour.
-    void editTokenAsFlat(const QString& key, QListWidgetItem* item);
-    void editTokenAsGradient(const QString& key, QListWidgetItem* item);
-    void editTokenFontFamily(const QString& key, QListWidgetItem* item);
-    void editTokenSizing(const QString& key, QListWidgetItem* item);
-    void resetTokenToFactory(const QString& key, QListWidgetItem* item);
-
     // Theme-file management — Rename / Delete / Export / Import on the
-    // "Theme actions ▾" menu next to Save As.
+    // "Theme actions" menu next to Save As.
     void onRenameThemeClicked();
     void onDeleteThemeClicked();
     void onExportThemeClicked();
@@ -85,6 +77,7 @@ private:
     void filterTokensTo(const QStringList& subset);
 
     QLabel*      m_themeLabel{nullptr};   // "Editing: <name>"
+    TokenEditorWidget* m_tokenEditor{nullptr};   // inline editor stack
     QLineEdit*   m_filterEdit{nullptr};   // type-to-filter token names
     QListWidget* m_tokenList{nullptr};
     QPushButton* m_saveAsBtn{nullptr};

@@ -719,6 +719,8 @@ set(GUI_SOURCES
     src/gui/ThemeEditorDialog.cpp
     src/gui/ThemeInspector.cpp
     src/gui/GradientEditorDialog.cpp
+    src/gui/TokenEditorWidget.cpp
+    src/gui/CompactColorPicker.cpp
 )
 
 set(ALL_SOURCES

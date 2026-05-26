@@ -1,25 +1,24 @@
 #include "ThemeEditorDialog.h"
-#include "GradientEditorDialog.h"
 #include "Theme.h"
 #include "ThemeInspector.h"
+#include "TokenEditorWidget.h"
 #include "core/ThemeManager.h"
 
 #include <QAction>
-#include <QColorDialog>
 #include <QCursor>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileDialog>
 #include <QFileInfo>
-#include <QFontDialog>
 #include <QFontMetrics>
-#include <QMimeData>
-#include <QUrl>
+#include <QFrame>
 #include <QHBoxLayout>
-#include <QLinearGradient>
-#include <QMenu>
 #include <QInputDialog>
 #include <QLabel>
+#include <QLinearGradient>
+#include <QMenu>
+#include <QMimeData>
+#include <QUrl>
 #include <QLineEdit>
 #include <QListWidget>
 #include <QListWidgetItem>
@@ -127,7 +126,10 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // bodyWidget() with the actual editor controls.  Subclasses are
     // expected to be non-modal — MainWindow's showOrRaisePersistent
     // wires that up + the frameless chrome from AppSettings.
-    setMinimumSize(420, 560);
+    // Size budget — fits CompactColorPicker (~218×220) on the color
+    // page; the gradient page is taller (strip + stop list + picker
+    // + angle row).
+    setMinimumSize(440, 720);
     applyAppTheme(this);
 
     auto* root = new QVBoxLayout(bodyWidget());
@@ -139,6 +141,48 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
         "QLabel { font-weight: bold; }"));
     root->addWidget(m_themeLabel);
 
+    // Inline editor — swaps controls based on the currently selected
+    // token's namespace + value shape.  Sits above the filter + token
+    // list so the operator can see what they're editing without their
+    // gaze jumping to a separate window.  Every control writes live to
+    // ThemeManager, so the rest of the app re-themes as they edit.
+    m_tokenEditor = new TokenEditorWidget(bodyWidget());
+    root->addWidget(m_tokenEditor);
+
+    auto* divider = new QFrame(bodyWidget());
+    divider->setFrameShape(QFrame::HLine);
+    divider->setFrameShadow(QFrame::Sunken);
+    root->addWidget(divider);
+
+    // Inspector toggle row — global event filter; clicking the main UI
+    // surfaces the tokens painting that region into the list below.
+    auto* inspectRow = new QHBoxLayout;
+    m_inspectBtn = new QPushButton(QStringLiteral("🎯  Inspect"), bodyWidget());
+    m_inspectBtn->setCheckable(true);
+    m_inspectBtn->setToolTip(QStringLiteral(
+        "Click, then point at any region of the main UI to find the\n"
+        "token(s) painting it.  ESC cancels."));
+    inspectRow->addWidget(m_inspectBtn);
+    // "Editing: <token>" sits left-aligned right after the Inspect
+    // button.  Inspector status text takes the leftover stretch so
+    // transient messages ("Inspector canceled.") show between the
+    // header and the Reset button without nudging either side.
+    if (auto* hdr = m_tokenEditor->headerLabel()) {
+        inspectRow->addWidget(hdr, 0, Qt::AlignLeft | Qt::AlignVCenter);
+    }
+    m_inspectStatus = new QLabel(bodyWidget());
+    m_inspectStatus->setWordWrap(true);
+    m_inspectStatus->setStyleSheet(QStringLiteral(
+        "QLabel { font-style: italic; }"));
+    inspectRow->addWidget(m_inspectStatus, 1);
+    // Reset button reparents out of the editor's bottom row and sits
+    // right-aligned on the inspect row — keeps the editor's Cancel/OK
+    // pair clean, and Reset stays visible without scrolling.
+    if (auto* reset = m_tokenEditor->resetButton()) {
+        inspectRow->addWidget(reset, 0, Qt::AlignRight);
+    }
+    root->addLayout(inspectRow);
+
     m_filterEdit = new QLineEdit(bodyWidget());
     m_filterEdit->setPlaceholderText(QStringLiteral("Filter tokens (e.g. accent, slice, meter)…"));
     root->addWidget(m_filterEdit);
@@ -148,23 +192,6 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     m_tokenList->setAlternatingRowColors(true);
     m_tokenList->setSelectionMode(QAbstractItemView::SingleSelection);
     root->addWidget(m_tokenList, 1);
-
-    // Inspector toggle row — sits above the filter so it reads as a mode
-    // switch ("am I clicking on the main UI to pick a token?") rather than
-    // a button buried with Save As / Close.
-    auto* inspectRow = new QHBoxLayout;
-    m_inspectBtn = new QPushButton(QStringLiteral("🎯  Inspect"), bodyWidget());
-    m_inspectBtn->setCheckable(true);
-    m_inspectBtn->setToolTip(QStringLiteral(
-        "Click, then point at any region of the main UI to find the\n"
-        "token(s) painting it.  ESC cancels."));
-    inspectRow->addWidget(m_inspectBtn);
-    m_inspectStatus = new QLabel(bodyWidget());
-    m_inspectStatus->setWordWrap(true);
-    m_inspectStatus->setStyleSheet(QStringLiteral(
-        "QLabel { font-style: italic; }"));
-    inspectRow->addWidget(m_inspectStatus, 1);
-    root->addLayout(inspectRow);
 
     auto* btnRow = new QHBoxLayout;
     // Theme-management dropdown — left side, since it's a destructive
@@ -209,8 +236,18 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     updateTitle();
     m_lastRenderedTheme = ThemeManager::instance().activeTheme();
 
-    connect(m_tokenList, &QListWidget::itemClicked,
-            this, &ThemeEditorDialog::onTokenRowClicked);
+    // Selection-driven editing — `currentItemChanged` fires for both
+    // mouse clicks and keyboard navigation so arrow-key walks through
+    // the list also update the inline editor.
+    connect(m_tokenList, &QListWidget::currentItemChanged,
+            this, &ThemeEditorDialog::onTokenRowSelectionChanged);
+    connect(m_tokenEditor, &TokenEditorWidget::tokenChanged,
+            this, &ThemeEditorDialog::onTokenEditedByEditor);
+    // Built-in themes can't be edited in place; the editor stashes
+    // its buffered edit and asks us to run Save As, then we restore
+    // the snapshot into the new user copy.
+    connect(m_tokenEditor, &TokenEditorWidget::requestSaveAsBeforeCommit,
+            this, &ThemeEditorDialog::onSaveAsBeforeCommit);
     connect(m_filterEdit, &QLineEdit::textChanged, this, [this](const QString&) {
         // Re-evaluate visibility against both the text filter and the
         // last inspector-picked subset (if any) — filterTokensTo() reads
@@ -302,134 +339,38 @@ void ThemeEditorDialog::updateRow(QListWidgetItem* item)
 void ThemeEditorDialog::updateTitle()
 {
     const QString name = ThemeManager::instance().activeTheme();
-    m_themeLabel->setText(QStringLiteral("Editing: %1").arg(
+    m_themeLabel->setText(QStringLiteral("Profile: %1").arg(
         name.isEmpty() ? QStringLiteral("(no active theme)") : name));
     setWindowTitle(QStringLiteral("Theme Editor — %1").arg(name));
 }
 
-void ThemeEditorDialog::onTokenRowClicked(QListWidgetItem* item)
+void ThemeEditorDialog::onTokenRowSelectionChanged()
 {
-    if (!item) return;
-    const QString key = item->data(Qt::UserRole).toString();
-    auto& tm = ThemeManager::instance();
+    // Triggered by either mouse click or keyboard navigation on the
+    // token list — load the selected token into the inline editor so
+    // its controls reflect the value and the operator can edit in place.
+    auto* item = m_tokenList->currentItem();
+    if (!item) {
+        m_tokenEditor->setToken(QString());
+        return;
+    }
+    m_tokenEditor->setToken(item->data(Qt::UserRole).toString());
+}
 
-    // Click-menu adapts to the token's namespace + current type:
-    //   * color.*   — flat ↔ gradient chooser
-    //   * font.family.* — font family picker
-    //   * font.size.* / sizing.* — numeric picker
-    // A "Reset to default" entry shows up at the bottom whenever the
-    // token has a factory baseline (every bundled token does).
-    QMenu menu(this);
-    QAction* flatAct   = nullptr;
-    QAction* gradAct   = nullptr;
-    QAction* familyAct = nullptr;
-    QAction* numAct    = nullptr;
-
-    if (key.startsWith(QStringLiteral("color."))) {
-        const bool isGradient = tm.brush(key).gradient() != nullptr;
-        if (isGradient) {
-            gradAct = menu.addAction(QStringLiteral("Edit gradient…"));
-            menu.addSeparator();
-            flatAct = menu.addAction(QStringLiteral("Convert to flat colour…"));
-        } else {
-            flatAct = menu.addAction(QStringLiteral("Edit flat colour…"));
-            menu.addSeparator();
-            gradAct = menu.addAction(QStringLiteral("Convert to gradient…"));
+void ThemeEditorDialog::onTokenEditedByEditor(const QString& key)
+{
+    // The inline editor just wrote a new value for `key` to ThemeManager —
+    // refresh the matching list row so its swatch + descriptor reflect
+    // the edit.  ThemeManager's themeChanged signal already drove a
+    // repaint everywhere else; this just keeps the editor's own list
+    // consistent.
+    for (int i = 0; i < m_tokenList->count(); ++i) {
+        auto* item = m_tokenList->item(i);
+        if (item->data(Qt::UserRole).toString() == key) {
+            updateRow(item);
+            break;
         }
-    } else if (key.startsWith(QStringLiteral("font.family."))) {
-        familyAct = menu.addAction(QStringLiteral("Edit font family…"));
-    } else if (key.startsWith(QStringLiteral("font.size."))
-               || key.startsWith(QStringLiteral("sizing."))) {
-        numAct = menu.addAction(QStringLiteral("Edit size…"));
     }
-
-    QAction* resetAct = nullptr;
-    if (tm.hasFactoryValue(key)) {
-        if (!menu.isEmpty()) menu.addSeparator();
-        resetAct = menu.addAction(QStringLiteral("Reset to default"));
-    }
-
-    QAction* chosen = menu.exec(QCursor::pos());
-    if (!chosen) return;
-    if      (chosen == flatAct)   editTokenAsFlat(key, item);
-    else if (chosen == gradAct)   editTokenAsGradient(key, item);
-    else if (chosen == familyAct) editTokenFontFamily(key, item);
-    else if (chosen == numAct)    editTokenSizing(key, item);
-    else if (chosen == resetAct)  resetTokenToFactory(key, item);
-}
-
-void ThemeEditorDialog::editTokenAsFlat(const QString& key, QListWidgetItem* item)
-{
-    auto& tm = ThemeManager::instance();
-    // ThemeManager::color() returns the first-stop colour when the token
-    // is currently a gradient — exactly the right seed for "I want this
-    // flat now, starting from the dominant gradient colour."
-    const QColor current = tm.color(key);
-    const QColor chosen = QColorDialog::getColor(current, this,
-        QStringLiteral("Edit %1").arg(key),
-        QColorDialog::ShowAlphaChannel);
-    if (!chosen.isValid()) return;
-    tm.setColor(key, chosen);   // overwrites any previous gradient entry
-    updateRow(item);
-}
-
-void ThemeEditorDialog::editTokenAsGradient(const QString& key, QListWidgetItem* item)
-{
-    auto& tm = ThemeManager::instance();
-    ThemeGradient before = tm.gradient(key);
-    if (before.stops.isEmpty()) {
-        // Token is currently flat — seed a 2-stop linear gradient with
-        // the scalar colour at both ends.  The initial render matches
-        // the previous flat output exactly, so opening the editor
-        // doesn't perturb anything until the operator makes a deliberate
-        // edit.  Angle 0 (bottom→top) matches the canonical convention
-        // used by the meter and waterfall gradients.
-        const QColor c = tm.color(key);
-        before.type   = ThemeGradient::Linear;
-        before.angle  = 0.0;
-        before.stops  = { {0.0, c}, {1.0, c} };
-    }
-    GradientEditorDialog dlg(key, before, this);
-    if (dlg.exec() == QDialog::Accepted) {
-        tm.setGradient(key, dlg.currentGradient());  // overwrites any prior scalar
-        updateRow(item);
-    }
-}
-
-void ThemeEditorDialog::editTokenFontFamily(const QString& key,
-                                            QListWidgetItem* item)
-{
-    auto& tm = ThemeManager::instance();
-    const QString currentFamily = tm.value(key);
-    QFont seed;
-    if (!currentFamily.isEmpty()) seed.setFamily(currentFamily);
-
-    bool ok = false;
-    const QFont chosen = QFontDialog::getFont(&ok, seed, this,
-        QStringLiteral("Edit %1").arg(key));
-    if (!ok) return;
-    tm.setString(key, chosen.family());
-    updateRow(item);
-}
-
-void ThemeEditorDialog::editTokenSizing(const QString& key,
-                                        QListWidgetItem* item)
-{
-    auto& tm = ThemeManager::instance();
-    const int current = tm.sizing(key);
-    // Integer tokens span both font.size.* and sizing.*; allow a generous
-    // range and let the QSpinBox handle clamping.  Range chosen to cover
-    // realistic font sizes (4–96 px) and panel paddings (0–48 px) in one
-    // input — at the cost of letting a user dial a 96-px panel padding
-    // if they really want one.
-    bool ok = false;
-    const int chosen = QInputDialog::getInt(this,
-        QStringLiteral("Edit %1").arg(key),
-        QStringLiteral("Value (px):"),
-        current, 0, 96, 1, &ok);
-    if (!ok) return;
-    tm.setSizing(key, chosen);
-    updateRow(item);
 }
 
 void ThemeEditorDialog::onRenameThemeClicked()
@@ -569,34 +510,6 @@ void ThemeEditorDialog::onDeleteThemeClicked()
     }
 }
 
-void ThemeEditorDialog::resetTokenToFactory(const QString& key,
-                                            QListWidgetItem* item)
-{
-    auto& tm = ThemeManager::instance();
-    if (!tm.hasFactoryValue(key)) return;
-
-    if (key.startsWith(QStringLiteral("color."))) {
-        // Gradients restore through setGradient; scalars through setColor.
-        // The factory snapshot lookup goes through factoryGradient first,
-        // falls back to factoryColor.  An empty gradient with a valid
-        // factoryColor means the factory baseline is a scalar.
-        const ThemeGradient g = tm.factoryGradient(key);
-        if (!g.stops.isEmpty()) {
-            tm.setGradient(key, g);
-        } else {
-            const QColor c = tm.factoryColor(key);
-            if (c.isValid()) tm.setColor(key, c);
-        }
-    } else if (key.startsWith(QStringLiteral("font.family."))) {
-        const QString f = tm.factoryString(key);
-        if (!f.isEmpty()) tm.setString(key, f);
-    } else if (key.startsWith(QStringLiteral("font.size."))
-               || key.startsWith(QStringLiteral("sizing."))) {
-        const int v = tm.factorySizing(key);
-        if (v >= 0) tm.setSizing(key, v);
-    }
-    updateRow(item);
-}
 
 void ThemeEditorDialog::onSaveAsClicked()
 {
@@ -632,6 +545,69 @@ void ThemeEditorDialog::onSaveAsClicked()
     }
     // saveCurrentThemeAs() makes the new theme active; onActiveThemeChanged
     // will fire from themeChanged and refresh the title.
+}
+
+void ThemeEditorDialog::onSaveAsBeforeCommit()
+{
+    auto& tm = ThemeManager::instance();
+    const QString current = tm.activeTheme();
+    if (!tm.isBuiltInTheme(current)) {
+        // Race / stale signal — nothing to fork, just complete the
+        // commit directly.
+        m_tokenEditor->completeDeferredCommit();
+        return;
+    }
+
+    bool ok = false;
+    QString suggestion = QStringLiteral("My %1").arg(current);
+    const QString name = QInputDialog::getText(this,
+        QStringLiteral("Save Theme As"),
+        QStringLiteral("\"%1\" is a built-in theme and can't be modified "
+                       "directly.\nSave your changes as a new theme:")
+            .arg(current),
+        QLineEdit::Normal, suggestion, &ok).trimmed();
+    if (!ok || name.isEmpty()) return;  // user cancelled — buffer stays uncommitted
+
+    // Disallow accidentally writing to another built-in or overwriting
+    // an existing user theme without confirmation.
+    if (tm.isBuiltInTheme(name)) {
+        QMessageBox::warning(this, QStringLiteral("Reserved name"),
+            QStringLiteral("\"%1\" is a built-in theme name and can't be used.")
+                .arg(name));
+        return;
+    }
+    const QStringList existing = tm.availableThemes();
+    if (existing.contains(name)) {
+        const auto reply = QMessageBox::question(this,
+            QStringLiteral("Theme exists"),
+            QStringLiteral("A theme named \"%1\" already exists. Overwrite it?").arg(name),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+        if (reply != QMessageBox::Yes) return;
+    }
+
+    if (!tm.saveCurrentThemeAs(name)) {
+        QMessageBox::warning(this, QStringLiteral("Save failed"),
+            QStringLiteral("Could not write the theme file. Check that "
+                           "~/.config/AetherSDR/themes/ is writable."));
+        return;
+    }
+    // saveCurrentThemeAs() has switched the active theme and refreshed
+    // the list (clearing the editor's selection in the process).  The
+    // editor stashed its buffer in DeferredEdit before emitting; tell
+    // it to write that into the new user copy now.
+    m_tokenEditor->completeDeferredCommit();
+
+    // Re-select the row that matches the just-committed token so the
+    // list highlight matches what the editor is showing.
+    const QString committed = m_tokenEditor->currentToken();
+    if (!committed.isEmpty()) {
+        for (int i = 0; i < m_tokenList->count(); ++i) {
+            if (m_tokenList->item(i)->data(Qt::UserRole).toString() == committed) {
+                m_tokenList->setCurrentRow(i);
+                break;
+            }
+        }
+    }
 }
 
 void ThemeEditorDialog::onInspectToggled(bool on)
@@ -710,15 +686,15 @@ void ThemeEditorDialog::onInspectorPicked(QWidget* target, QPoint localPos)
             .arg(tokens.size()).arg(tokens.size() == 1 ? "" : "s"));
     }
 
-    // Convenience: if exactly one color token matched, open the picker
-    // straight away — that's the "click ugly thing → fix it" flow.
+    // Convenience: if exactly one token matched, select it so the
+    // inline editor surfaces it immediately — the "click ugly thing →
+    // fix it" flow now happens in the editor above instead of a modal.
     if (tokens.size() == 1) {
         for (int i = 0; i < m_tokenList->count(); ++i) {
             auto* item = m_tokenList->item(i);
             if (item->isHidden()) continue;
             if (item->data(Qt::UserRole).toString() == tokens.first()) {
                 m_tokenList->setCurrentItem(item);
-                onTokenRowClicked(item);
                 break;
             }
         }

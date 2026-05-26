@@ -473,7 +473,15 @@ void ThemeManager::setColor(const QString& token, const QColor& color)
     const auto it = m_tokens.constFind(token);
     if (it != m_tokens.constEnd() && it.value().toString() == hex) return;
     m_tokens.insert(token, QVariant(hex));
+    // Smart-invalidation hint scope — reapplyAllTrackedStyleSheets reads
+    // this during the synchronous themeChanged dispatch and skips every
+    // tracked widget whose template doesn't reference `token`.  Cleared
+    // before returning so subsequent full-theme reloads (setActiveTheme)
+    // walk every widget.
+    m_currentEditToken = token;
     emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
 }
 
 void ThemeManager::setSizing(const QString& token, int value)
@@ -481,7 +489,10 @@ void ThemeManager::setSizing(const QString& token, int value)
     const auto it = m_tokens.constFind(token);
     if (it != m_tokens.constEnd() && it.value().toInt() == value) return;
     m_tokens.insert(token, QVariant(value));
+    m_currentEditToken = token;
     emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
 }
 
 ThemeGradient ThemeManager::gradient(const QString& token) const
@@ -495,7 +506,10 @@ ThemeGradient ThemeManager::gradient(const QString& token) const
 void ThemeManager::setGradient(const QString& token, const ThemeGradient& g)
 {
     m_tokens.insert(token, QVariant::fromValue(g));
+    m_currentEditToken = token;
     emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
 }
 
 void ThemeManager::setString(const QString& token, const QString& value)
@@ -507,7 +521,25 @@ void ThemeManager::setString(const QString& token, const QString& value)
         return;
     }
     m_tokens.insert(token, QVariant(value));
+    m_currentEditToken = token;
     emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
+}
+
+bool ThemeManager::saveActiveTheme()
+{
+    if (m_activeTheme.isEmpty()) return false;
+    if (isBuiltInTheme(m_activeTheme)) {
+        // Built-ins live in :/themes/ and can't be overwritten.  The
+        // TokenEditorWidget gates OK clicks on built-in themes through a
+        // Save As prompt, so the only way we'd land here is a setter
+        // being called outside that flow — be defensive and skip.
+        return false;
+    }
+    const auto it = m_themePaths.constFind(m_activeTheme);
+    if (it == m_themePaths.constEnd()) return false;
+    return writeThemeFile(m_activeTheme, it.value());
 }
 
 void ThemeManager::ensureFactoryLoaded() const
@@ -687,10 +719,8 @@ bool ThemeManager::renameTheme(const QString& oldName, const QString& newName)
     return true;
 }
 
-bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
+bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
 {
-    if (newThemeName.trimmed().isEmpty()) return false;
-
     // Round-trip-safe flat dotted-key serialization.  The bundled themes
     // organize tokens into nested objects for human readability, but the
     // earlier deep-walk version of this code had two bugs that lost data
@@ -705,11 +735,7 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
     //
     // The flat output below is a strict subset of what flattenTokens()
     // accepts (`{"tokens": {"color.background.0": "#0f0f1a", ...}}`):
-    // each dotted key becomes a literal JSON key inside `tokens`.  Less
-    // pretty than the bundled themes, but every token round-trips
-    // perfectly with zero conflict surface.  Future-Phase-5 polish can
-    // group these into the bundled nested layout once the editor is
-    // doing more than dump-and-reload.
+    // each dotted key becomes a literal JSON key inside `tokens`.
     QJsonObject tokensObj;
     const int gradMetaId = qMetaTypeId<ThemeGradient>();
     for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
@@ -743,21 +769,35 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
             leaf = gj;
         }
         else {
-            qCWarning(lcGui) << "ThemeManager::saveCurrentThemeAs: skipping token"
+            qCWarning(lcGui) << "ThemeManager::writeThemeFile: skipping token"
                              << it.key() << "with unsupported metatype" << ut;
             continue;
         }
         tokensObj.insert(it.key(), leaf);
     }
-    QJsonObject root = tokensObj;
 
     QJsonObject doc;
     doc.insert("schemaVersion", 1);
-    doc.insert("name",          newThemeName);
+    doc.insert("name",          themeName);
     doc.insert("author",        QStringLiteral("AetherSDR user"));
     doc.insert("version",       QStringLiteral("1.0"));
-    doc.insert("description",   QStringLiteral("Created via the Theme Editor."));
-    doc.insert("tokens",        root);
+    doc.insert("description",   QStringLiteral("Edited via the Theme Editor."));
+    doc.insert("tokens",        tokensObj);
+
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        qCWarning(lcGui) << "ThemeManager::writeThemeFile failed to open"
+                         << path << f.errorString();
+        return false;
+    }
+    f.write(QJsonDocument(doc).toJson(QJsonDocument::Indented));
+    f.close();
+    return true;
+}
+
+bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
+{
+    if (newThemeName.trimmed().isEmpty()) return false;
 
     // Mirror scanAvailableThemes — GenericConfigLocation + "/AetherSDR"
     // keeps the saved theme alongside the existing user-dir layout
@@ -768,14 +808,7 @@ bool ThemeManager::saveCurrentThemeAs(const QString& newThemeName)
     QDir().mkpath(userDir);
     const QString path = userDir + QLatin1Char('/')
                        + newThemeName + QStringLiteral(".json");
-    QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        qCWarning(lcGui) << "ThemeManager: saveCurrentThemeAs failed to open"
-                         << path << f.errorString();
-        return false;
-    }
-    f.write(QJsonDocument(doc).toJson(QJsonDocument::Indented));
-    f.close();
+    if (!writeThemeFile(newThemeName, path)) return false;
 
     // Register the new theme in the path map so availableThemes() picks it
     // up immediately, then make it the active theme (loads cleanly from
@@ -1240,6 +1273,16 @@ void ThemeManager::reapplyAllTrackedStyleSheets()
     // that might in turn touch m_trackedWidgets.  Iterating a copy
     // avoids the QHash-mutation-during-iteration undefined behaviour.
     const auto widgets = m_trackedWidgets.keys();
+    // Smart invalidation: when this re-apply is the consequence of a
+    // single-token edit (setColor / setGradient / setSizing / setString),
+    // m_currentEditToken is set and we skip every widget whose recorded
+    // template doesn't reference that token.  For 500+ tracked widgets
+    // and a typical token consumed by ~5–10 sites, this is a 50–100x
+    // speedup over the full walk and is the difference between a
+    // smooth picker drag and "every mouse move stalls the UI".
+    // setActiveTheme leaves m_currentEditToken empty so the full theme
+    // switch still touches every tracked stylesheet.
+    const bool targeted = !m_currentEditToken.isEmpty();
     for (QWidget* w : widgets) {
         const auto it = m_trackedWidgets.constFind(w);
         if (it == m_trackedWidgets.constEnd()) continue;  // dropped mid-sweep
@@ -1247,9 +1290,10 @@ void ThemeManager::reapplyAllTrackedStyleSheets()
         // empty template — skip them so we don't wipe any stylesheet they
         // may have inherited from a parent / Theme.h helper.  They handle
         // theme changes by connecting to themeChanged themselves.
-        const QString& tmpl = it.value().stylesheetTemplate;
-        if (tmpl.isEmpty()) continue;
-        w->setStyleSheet(resolve(tmpl));
+        const auto& ctx = it.value();
+        if (ctx.stylesheetTemplate.isEmpty()) continue;
+        if (targeted && !ctx.tokens.contains(m_currentEditToken)) continue;
+        w->setStyleSheet(resolve(ctx.stylesheetTemplate));
     }
 }
 

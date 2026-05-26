@@ -227,6 +227,14 @@ public:
 
     bool        saveCurrentThemeAs(const QString& newThemeName);
 
+    // Persist the current in-memory token state back to the active
+    // theme's on-disk file.  No-op for built-in themes (their path
+    // points at the read-only resource bundle) and for unknown
+    // themes.  Called automatically by setColor / setSizing /
+    // setGradient / setString so edits survive a restart without
+    // requiring an explicit "Save" gesture.
+    bool        saveActiveTheme();
+
     // Phase 6 — share-friendly file format.  `.aethertheme` is plain JSON
     // (same shape `saveCurrentThemeAs` writes to the user-dir) with a
     // `schemaVersion` discriminator.  Missing tokens on import fall back
@@ -284,6 +292,12 @@ private:
     // are not committed (the previously-active theme stays loaded).
     bool loadThemeFromPath(const QString& path);
 
+    // Serialize the current m_tokens into AetherSDR's flat-dotted-key
+    // theme JSON and write it to `path`.  Shared by saveCurrentThemeAs
+    // (new user copy) and saveActiveTheme (rewrite the active file in
+    // place).  Returns false if the file can't be opened.
+    bool writeThemeFile(const QString& themeName, const QString& path);
+
     // Built-in compiled-in defaults so a totally missing theme file
     // still produces a usable UI.  Populated in the constructor.
     void seedBuiltinDefaults();
@@ -302,6 +316,15 @@ private:
     mutable QHash<QString, QVariant> m_factoryTokens;
     mutable bool m_factoryLoaded{false};
     void ensureFactoryLoaded() const;
+
+    // Smart-invalidation hint — set transiently by setColor / setGradient
+    // / setSizing / setString to the token that just changed, then
+    // cleared after the synchronous themeChanged emission.  Lets
+    // reapplyAllTrackedStyleSheets skip every widget whose template
+    // doesn't reference that token, which is the 50–100x speedup that
+    // makes a CompactColorPicker drag feel like 60fps live editing
+    // instead of a stuck slideshow.
+    QString m_currentEditToken;
 
     // Reverse-map: widget instance → (template, tokens-it-references).
     // Populated by applyStyleSheet / declareWidgetTokens / declareWidgetRegions,

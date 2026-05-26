@@ -66,7 +66,10 @@ QIcon stopSwatchIcon(const QColor& c)
 GradientStrip::GradientStrip(QWidget* parent)
     : QWidget(parent)
 {
-    setMinimumHeight(kStripHeight + kMarkerStripH + kStripMargin);
+    // Markers are now overlaid on the gradient itself, so the widget
+    // no longer needs a separate marker band below the strip.  Min
+    // height covers the gradient bar plus a small breathing margin.
+    setMinimumHeight(kStripHeight + kStripMargin);
     setMouseTracking(true);
     setFocusPolicy(Qt::StrongFocus);
 }
@@ -86,17 +89,30 @@ void GradientStrip::setSelectedStop(int index)
 
 QRect GradientStrip::stripRect() const
 {
-    return QRect(kStripMargin,
-                 kStripMargin / 2,
-                 width() - kStripMargin * 2,
-                 kStripHeight);
+    // Fill the available widget height (minus a small symmetric margin)
+    // so a small fixed-height widget — e.g. the 35px-tall strip embedded
+    // in TokenEditorWidget — still leaves room for both the gradient
+    // and the markers overlaid on it.
+    const int hMargin = kStripMargin;
+    const int vMargin = kStripMargin / 2;
+    return QRect(hMargin,
+                 vMargin,
+                 width() - hMargin * 2,
+                 std::max(8, height() - vMargin * 2));
 }
 
 QRect GradientStrip::markerRect(qreal at) const
 {
+    // Marker is overlaid on the gradient bar (anchored to the bottom
+    // edge of the strip and pointing up).  Sized to fit inside the
+    // strip even when the strip is shrunken to ~35px total.
+    const QRect r = stripRect();
     const int x = positionToX(at);
-    const int yTop = stripRect().bottom() + 2;
-    return QRect(x - kMarkerHalfW, yTop, kMarkerHalfW * 2, kMarkerStripH - 4);
+    const int h = std::clamp(r.height() - 4, 10, kMarkerStripH);
+    return QRect(x - kMarkerHalfW,
+                 r.bottom() - h + 1,
+                 kMarkerHalfW * 2,
+                 h);
 }
 
 int GradientStrip::positionToX(qreal at) const
@@ -166,28 +182,30 @@ void GradientStrip::paintEvent(QPaintEvent*)
     p.setPen(QPen(QColor(0, 0, 0, 80), 1));
     p.drawRoundedRect(r, 4, 4);
 
-    // Stop markers — small downward-pointing triangles below the strip,
-    // colour-matched to each stop.  Selected stop gets a cyan halo.
+    // Stop markers — square chip thumbs matching the HueStrip /
+    // AlphaSlider style: dark outer rect, white inner fill, with a
+    // narrow vertical band of the stop's color through the center
+    // (so each stop's color is still identifiable at a glance).
+    // Selected stop swaps the dark outer for the accent cyan.
     for (int i = 0; i < m_g.stops.size(); ++i) {
         const QRect mr = markerRect(m_g.stops[i].at);
+        const bool selected = (i == m_selectedIndex);
+
+        p.setPen(Qt::NoPen);
+        p.setBrush(selected ? QColor(0, 0x9b, 0xc4) : QColor(0, 0, 0, 220));
+        p.drawRect(mr);
+
+        const QRect inner = mr.adjusted(1, 1, -1, -1);
+        p.setBrush(Qt::white);
+        p.drawRect(inner);
+
+        // Stop's color shown as a vertical band through the center —
+        // ~3px wide on a 12px-wide marker so the white edges still
+        // read as the visible outline against any gradient under it.
         const int cx = mr.center().x();
-        const int top = mr.top() + 2;
-        const int bot = mr.bottom() - 2;
-        QPolygon tri;
-        tri << QPoint(cx, top)
-            << QPoint(cx - kMarkerHalfW, bot)
-            << QPoint(cx + kMarkerHalfW, bot);
-
-        if (i == m_selectedIndex) {
-            p.setBrush(Qt::NoBrush);
-            p.setPen(QPen(QColor(0, 0x9b, 0xc4), 2));
-            QRect halo = mr.adjusted(-2, -2, 2, 2);
-            p.drawRoundedRect(halo, 4, 4);
-        }
-
+        const QRect colorBand(cx - 1, inner.top(), 3, inner.height());
         p.setBrush(m_g.stops[i].color);
-        p.setPen(QPen(QColor(0, 0, 0, 160), 1));
-        p.drawPolygon(tri);
+        p.drawRect(colorBand);
     }
 }
 
@@ -284,7 +302,7 @@ GradientEditorDialog::GradientEditorDialog(const QString& tokenName,
     root->setSpacing(8);
 
     auto* hdr = new QLabel(QStringLiteral(
-        "<b>%1</b><br>Click a stop to recolour it, drag along the strip "
+        "<b>%1</b><br>Click a stop to recolor it, drag along the strip "
         "to reposition, right-click to delete, or double-click an empty "
         "spot to add a new stop.").arg(tokenName.toHtmlEscaped()), bodyWidget());
     hdr->setWordWrap(true);
@@ -304,7 +322,7 @@ GradientEditorDialog::GradientEditorDialog(const QString& tokenName,
     auto* stopBtnCol = new QVBoxLayout;
     auto* addBtn  = new QPushButton(QStringLiteral("+ Add stop"), bodyWidget());
     auto* delBtn  = new QPushButton(QStringLiteral("− Delete stop"), bodyWidget());
-    auto* editBtn = new QPushButton(QStringLiteral("Edit colour…"), bodyWidget());
+    auto* editBtn = new QPushButton(QStringLiteral("Edit color…"), bodyWidget());
     stopBtnCol->addWidget(addBtn);
     stopBtnCol->addWidget(delBtn);
     stopBtnCol->addWidget(editBtn);
@@ -600,7 +618,7 @@ void GradientEditorDialog::onEditColorBtnClicked()
     if (idx < 0 || idx >= m_gradient.stops.size()) return;
     const QColor current = m_gradient.stops[idx].color;
     const QColor chosen = QColorDialog::getColor(current, this,
-        QStringLiteral("Edit stop %1 colour").arg(idx),
+        QStringLiteral("Edit stop %1 color").arg(idx),
         QColorDialog::ShowAlphaChannel);
     if (!chosen.isValid()) return;
     m_gradient.stops[idx].color = chosen;
