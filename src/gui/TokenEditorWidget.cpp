@@ -585,14 +585,18 @@ void TokenEditorWidget::applyEnableState()
     m_typeFlat->setEnabled(colorTok);
     m_typeGradient->setEnabled(colorTok);
 
-    // Color group — picker is enabled for both scalar (binds to buffer)
-    // and gradient (binds to selected stop, requires a stop to be
-    // selected).  Disabled for font / numeric / nothing-selected.
+    // Color group — picker is enabled for scalar tokens (binds to buffer),
+    // gradient tokens (binds to selected stop), AND font.family.*
+    // compound tokens (binds to the compound's `color` field so family +
+    // size + color are all edited in one view).  Disabled for plain
+    // numeric / nothing-selected.
     const bool colorEnabled =
         m_target == TargetScalarColor ||
-        (m_target == TargetGradient && selectedGradientStopIndex() >= 0);
+        (m_target == TargetGradient && selectedGradientStopIndex() >= 0) ||
+        m_target == TargetFontFamily;
     m_colorGroupLabel->setEnabled(m_target == TargetScalarColor
-                                  || m_target == TargetGradient);
+                                  || m_target == TargetGradient
+                                  || m_target == TargetFontFamily);
     m_colorPicker->setEnabled(colorEnabled);
 
     // Font group — the row serves two distinct edits depending on
@@ -694,11 +698,25 @@ void TokenEditorWidget::loadCurrentTokenIntoBuffers()
         m_colorPicker->setColor(m_bufferColor);
     } else if (m_currentToken.startsWith(QStringLiteral("font.family."))) {
         m_target = TargetFontFamily;
-        m_bufferFontFamily = tm.valueAt(path, m_currentToken);
+        // Compound: load family + size + color from ThemeFont.  Falls
+        // through to legacy bare-string + font.size.normal when the
+        // token is still a v1 string (e.g. older imported themes).
+        const ThemeFont tf = tm.fontTokenAt(path, m_currentToken);
+        m_bufferFontFamily = tf.family;
         QSignalBlocker bCombo(m_fontCombo);
         m_fontCombo->setCurrentFont(QFont(m_bufferFontFamily));
-        m_bufferFontSize = std::max(1, tm.sizingAt(path, QStringLiteral("font.size.normal")));
+        m_bufferFontSize = tf.size > 0
+                              ? tf.size
+                              : std::max(1, tm.sizingAt(path, QStringLiteral("font.size.normal")));
         syncFontSizeComboToBuffer(m_bufferFontSize);
+        // Surface the embedded colour through the existing CompactColorPicker
+        // so the operator can edit it alongside family + size.  Invalid
+        // colour (legacy or fresh token) falls back to color.text.primary.
+        m_bufferColor = tf.color.isValid()
+                            ? tf.color
+                            : tm.colorAt(path, QStringLiteral("color.text.primary"));
+        QSignalBlocker bPick(m_colorPicker);
+        m_colorPicker->setColor(m_bufferColor);
     } else if (m_currentToken.startsWith(QStringLiteral("font.size."))
                || m_currentToken.startsWith(QStringLiteral("sizing."))) {
         m_target = TargetNumeric;
@@ -779,6 +797,12 @@ void TokenEditorWidget::onColorPickerChanged(const QColor& c)
     if (m_settingControlsFromToken || m_currentToken.isEmpty()) return;
     if (!c.isValid()) return;
     if (m_target == TargetScalarColor) {
+        m_bufferColor = c;
+        markDirty();
+    } else if (m_target == TargetFontFamily) {
+        // Font-compound editing — the colour field of the ThemeFont is
+        // edited through the same picker as scalar colour tokens; the
+        // commit pulls it from m_bufferColor.
         m_bufferColor = c;
         markDirty();
     } else if (m_target == TargetGradient) {
@@ -1177,7 +1201,18 @@ void TokenEditorWidget::commitBufferToThemeManager()
                 pushRecentColor(m_gradientBuf.stops[si].color);
             }
             break;
-        case TargetFontFamily:  tm.setString(path, m_currentToken, m_bufferFontFamily); break;
+        case TargetFontFamily: {
+            // Compound write — family + size + color all land in the
+            // same ThemeFont so the on-disk shape matches the editor's
+            // grouped UI.
+            ThemeFont tf;
+            tf.family = m_bufferFontFamily;
+            tf.size   = m_bufferFontSize;
+            tf.color  = m_bufferColor;
+            tm.setFontToken(path, m_currentToken, tf);
+            if (m_bufferColor.isValid()) pushRecentColor(m_bufferColor);
+            break;
+        }
         case TargetNumeric:     tm.setSizing(path, m_currentToken, m_bufferNumeric); break;
         default: break;
     }

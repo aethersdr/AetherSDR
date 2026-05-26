@@ -71,6 +71,23 @@ struct ThemeGradient {
     QVector<ThemeGradientStop> stops;
 };
 
+// Compound font token — bundles the typeface family, point size, and a
+// recommended foreground color for a typographic role.  Used by the
+// `font.family.*` token namespace (which historically stored a bare
+// family string).  JSON shape: { "family": "Inter", "size": 12,
+// "color": "#c8d8e8" }; the `family` field is required, `size` defaults
+// to 0 (caller uses its role-default), `color` defaults to invalid
+// (caller falls back to color.text.primary).
+//
+// Backward compat: `ThemeManager::value(token)` returns the .family
+// field when called on a ThemeFont so the ~35 sites that just want
+// the family name keep working unchanged.
+struct ThemeFont {
+    QString family;
+    int     size  {0};   // 0 = unset
+    QColor  color;       // invalid = unset
+};
+
 class ThemeManager : public QObject {
     Q_OBJECT
 public:
@@ -248,6 +265,19 @@ public:
     void setString(const QString& token, const QString& value);
     void setString(const QString& containerPath,
                    const QString& token, const QString& value);
+
+    // Compound font-token accessors.  font.family.* tokens may store
+    // either a bare family string (legacy v1 themes) or a structured
+    // ThemeFont (family + size + color).  These accessors abstract over
+    // both shapes — `fontToken*()` returns the ThemeFont with sensible
+    // defaults filled in from the legacy string + role-default size/color
+    // when the token isn't compound.
+    ThemeFont     fontToken(const QString& token) const;
+    ThemeFont     fontTokenAt(const QString& containerPath,
+                              const QString& token) const;
+    void          setFontToken(const QString& token, const ThemeFont& f);
+    void          setFontToken(const QString& containerPath,
+                               const QString& token, const ThemeFont& f);
 
     // Container-tree introspection (used by the v2 Theme Editor's
     // container picker — left rail tree + columnar overrides table).
@@ -503,3 +533,4 @@ QString containerOf(const QWidget* widget);
 } // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::ThemeGradient)
+Q_DECLARE_METATYPE(AetherSDR::ThemeFont)

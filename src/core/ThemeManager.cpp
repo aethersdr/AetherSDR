@@ -57,6 +57,22 @@ ThemeGradient parseGradient(const QJsonObject& obj)
     return g;
 }
 
+// Parse a JSON compound-font object into the structured ThemeFont form.
+// Schema: { "family": "Inter", "size": 12, "color": "#c8d8e8" }
+// Family is required; size defaults to 0 (caller uses role-default);
+// color defaults to invalid (caller falls back to color.text.primary).
+ThemeFont parseFont(const QJsonObject& obj)
+{
+    ThemeFont f;
+    f.family = obj.value("family").toString();
+    if (obj.contains("size")) f.size = obj.value("size").toInt(0);
+    if (obj.contains("color")) {
+        const QColor c(obj.value("color").toString());
+        if (c.isValid()) f.color = c;
+    }
+    return f;
+}
+
 // Round-trip-safe hex encoding for token storage.  Qt's QColor::name()
 // defaults to "#rrggbb" and silently drops alpha — so any caller storing
 // `color.name()` loses translucency.  Always use the explicit format that
@@ -97,6 +113,13 @@ void flattenTokens(const QJsonObject& obj, const QString& prefix,
             // distinguishes them from plain nested token groups.
             if (inner.contains("type") && inner.value("type").isString()) {
                 out.insert(key, QVariant::fromValue(parseGradient(inner)));
+                continue;
+            }
+            // Compound font object — required `family` field with no
+            // `type` discriminator.  Tells this layer apart from the
+            // legacy bare-string family tokens.
+            if (inner.contains("family") && inner.value("family").isString()) {
+                out.insert(key, QVariant::fromValue(parseFont(inner)));
                 continue;
             }
             flattenTokens(inner, key, out);
@@ -283,6 +306,7 @@ ThemeManager::ThemeManager()
     // the header sets up the template machinery, but explicit registration
     // here makes saveCurrentThemeAs()'s type check timing-independent.
     qRegisterMetaType<ThemeGradient>("AetherSDR::ThemeGradient");
+    qRegisterMetaType<ThemeFont>("AetherSDR::ThemeFont");
 
     seedBuiltinDefaults();
     scanAvailableThemes();
@@ -913,6 +937,7 @@ QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
     // bugs (color.accent vs. color.accent.bright) and because the
     // editor never reads the file in nested form.
     const int gradMetaId = qMetaTypeId<ThemeGradient>();
+    const int fontMetaId = qMetaTypeId<ThemeFont>();
     QJsonObject result;
     if (!scope->tokens.isEmpty()) {
         QJsonObject toks;
@@ -945,6 +970,14 @@ QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
                 }
                 gj.insert("stops", stops);
                 leaf = gj;
+            }
+            else if (ut == fontMetaId) {
+                const ThemeFont f = v.value<ThemeFont>();
+                QJsonObject fj;
+                fj.insert("family", f.family);
+                if (f.size > 0)       fj.insert("size",  f.size);
+                if (f.color.isValid()) fj.insert("color", colorToTokenString(f.color));
+                leaf = fj;
             }
             else {
                 qCWarning(lcGui) << "ThemeManager::scopeToJson: skipping token"
@@ -1068,6 +1101,7 @@ bool ThemeManager::exportThemeToFile(const QString& themeName,
     if (themeName == m_activeTheme) {
         QJsonObject tokensObj;
         const int gradMetaId = qMetaTypeId<ThemeGradient>();
+        const int fontMetaId = qMetaTypeId<ThemeFont>();
         for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
             const QVariant& v = it.value();
             const int ut = v.userType();
@@ -1097,6 +1131,14 @@ bool ThemeManager::exportThemeToFile(const QString& themeName,
                 }
                 gj.insert("stops", stops);
                 leaf = gj;
+            }
+            else if (ut == fontMetaId) {
+                const ThemeFont f = v.value<ThemeFont>();
+                QJsonObject fj;
+                fj.insert("family", f.family);
+                if (f.size > 0)        fj.insert("size",  f.size);
+                if (f.color.isValid()) fj.insert("color", colorToTokenString(f.color));
+                leaf = fj;
             }
             else continue;
             tokensObj.insert(it.key(), leaf);
@@ -1305,13 +1347,18 @@ QString ThemeManager::cssFragment(const QString& token) const
 
 QFont ThemeManager::font(const QString& token) const
 {
-    // Convention: font.* tokens are read as a (family, size) compound
-    // when the caller asks for a font object.  Sub-tokens (family / size
-    // / weight) come from sibling tokens — caller passes the *base*
-    // token (e.g. "font" for the UI default) and we assemble from
-    // "font.family.ui" + "font.size.normal".  Phase 1 ships only the
-    // direct read for the simplest path; richer font composition lands
-    // when Phase 5's font picker arrives.
+    // Compound-token fast path — if the operator passed a font.family.*
+    // (or any token that resolved to a ThemeFont), assemble directly
+    // from its family + embedded size.  Falls back to the legacy
+    // composition (font.family.ui family + sizing(token)) for callers
+    // that pass a font.size.* token name.
+    const QVariant v = lookupRaw(QString(), token);
+    if (v.userType() == qMetaTypeId<ThemeFont>()) {
+        const ThemeFont tf = v.value<ThemeFont>();
+        QFont qf(tf.family);
+        if (tf.size > 0) qf.setPointSize(tf.size);
+        return qf;
+    }
     QFont f;
     const QString family = value("font.family.ui");
     if (!family.isEmpty()) f.setFamily(family);
@@ -1337,7 +1384,48 @@ QString ThemeManager::value(const QString& token) const
     const QVariant v = lookupRaw(QString(), token);
     if (!v.isValid()) return QString();
     if (v.userType() == qMetaTypeId<ThemeGradient>()) return QString();
+    // Compound font tokens transparently downgrade to their family
+    // string so the ~35 sites that read `tm.value("font.family.ui")`
+    // keep working after the v1-string → v2-compound migration.
+    if (v.userType() == qMetaTypeId<ThemeFont>()) {
+        return v.value<ThemeFont>().family;
+    }
     return v.toString();
+}
+
+ThemeFont ThemeManager::fontToken(const QString& token) const
+{
+    return fontTokenAt(QString(), token);
+}
+
+ThemeFont ThemeManager::fontTokenAt(const QString& containerPath,
+                                    const QString& token) const
+{
+    const QVariant v = lookupRaw(containerPath, token);
+    if (v.userType() == qMetaTypeId<ThemeFont>()) return v.value<ThemeFont>();
+    // Legacy v1 path: bare family string with no embedded size / color.
+    ThemeFont f;
+    f.family = v.toString();
+    return f;
+}
+
+void ThemeManager::setFontToken(const QString& token, const ThemeFont& f)
+{
+    setFontToken(QString(), token, f);
+}
+
+void ThemeManager::setFontToken(const QString& containerPath,
+                                const QString& token, const ThemeFont& f)
+{
+    ThemeScope* scope = containerPath.isEmpty()
+                            ? m_rootScope.get()
+                            : scopeOrCreate(containerPath);
+    if (!scope) return;
+    scope->tokens.insert(token, QVariant::fromValue(f));
+    m_currentEditToken = token;
+    emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
 }
 
 QString ThemeManager::resolve(const QString& stylesheetTemplate) const
@@ -1588,6 +1676,11 @@ QString ThemeManager::valueAt(const QString& containerPath, const QString& token
     const QVariant v = lookupRaw(containerPath, token);
     if (!v.isValid()) return value(token);
     if (v.userType() == qMetaTypeId<ThemeGradient>()) return {};
+    // Compound font tokens transparently downgrade to .family — same
+    // contract as the bare `value(token)` overload.
+    if (v.userType() == qMetaTypeId<ThemeFont>()) {
+        return v.value<ThemeFont>().family;
+    }
     return v.toString();
 }
 

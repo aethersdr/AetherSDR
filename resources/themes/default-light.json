@@ -160,13 +160,13 @@
         },
         "font": {
           "family": {
-            "ui":         "Inter",
-            "mono":       "monospace",
-            "segment7":   "DSEG7 Modern",
-            "segment14":  "DSEG14 Modern",
-            "weather":    "DSEGWeather",
-            "freq":       "DSEG7 Modern",
-            "temp":       "DSEG7 Modern"
+            "ui":         { "family": "Inter",         "size": 12, "color": "#1a2a3a" },
+            "mono":       { "family": "monospace",     "size": 12, "color": "#1a2a3a" },
+            "segment7":   { "family": "DSEG7 Modern",  "size": 14, "color": "#0088b0" },
+            "segment14":  { "family": "DSEG14 Modern", "size": 14, "color": "#0088b0" },
+            "weather":    { "family": "DSEGWeather",   "size": 14, "color": "#1a2a3a" },
+            "freq":       { "family": "DSEG7 Modern",  "size": 14, "color": "#0088b0" },
+            "temp":       { "family": "DSEG7 Modern",  "size": 12, "color": "#506070" }
           },
           "size": {
             "tiny":   9,
