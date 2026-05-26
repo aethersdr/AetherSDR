@@ -133,6 +133,19 @@ jobs:
           Copy-Item -Path installer-runtime\*.dll -Destination deploy\ -Force
           Compress-Archive -Path deploy\* -DestinationPath "AetherSDR-${{ github.ref_name }}-Windows-x64-portable.zip"
 
+      - name: Create MSIX package
+        env:
+          AETHERSDR_MSIX_IDENTITY_NAME: ${{ vars.AETHERSDR_MSIX_IDENTITY_NAME }}
+          AETHERSDR_MSIX_PUBLISHER: ${{ vars.AETHERSDR_MSIX_PUBLISHER }}
+          AETHERSDR_MSIX_DISPLAY_NAME: ${{ vars.AETHERSDR_MSIX_DISPLAY_NAME }}
+          AETHERSDR_MSIX_PUBLISHER_DISPLAY_NAME: ${{ vars.AETHERSDR_MSIX_PUBLISHER_DISPLAY_NAME }}
+          AETHERSDR_MSIX_DESCRIPTION: ${{ vars.AETHERSDR_MSIX_DESCRIPTION }}
+          AETHERSDR_MSIX_BACKGROUND_COLOR: ${{ vars.AETHERSDR_MSIX_BACKGROUND_COLOR }}
+          AETHERSDR_MSIX_INSTALLER_ACCENT_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_ACCENT_COLOR }}
+          AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR }}
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -CreateUpload -SkipSign
+
       - name: Create installer (Inno Setup)
         run: |
           $version = "${{ github.ref_name }}" -replace '^v', ''
@@ -146,6 +159,8 @@ jobs:
           path: |
             AetherSDR-*.zip
             AetherSDR-*-setup.exe
+            AetherSDR-*.msix
+            AetherSDR-*.msixupload
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')

@@ -1,5 +1,9 @@
 build/
 build-*/
+deploy/
+deploy-*/
+installer-runtime/
+installer-runtime-*/
 .cache/
 *.user
 .qtc_clangd/
@@ -10,3 +14,13 @@ CMakeFiles/
 docs/logo-original.jpg
 docs/logo_upscayl.png
 SECURITY-AUDIT.md
+msix-root/
+*.appx
+*.appxbundle
+*.appxsym
+*.appxupload
+*.msix
+*.msixbundle
+*.msixupload
+*.pfx
+packaging/windows/certs/
