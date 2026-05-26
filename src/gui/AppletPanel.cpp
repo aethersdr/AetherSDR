@@ -173,6 +173,12 @@ private:
 
 AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 {
+    // Parent container for every applet hosted in this rail.  Each
+    // individual applet declares its own child scope ("applet.tx",
+    // "applet.rx", …) inside its own constructor so widgets inside
+    // an applet inherit applet.<name> → applet → root.
+    theme::setContainer(this, QStringLiteral("applet"));
+
     setFixedWidth(260);
 
     auto* root = new QVBoxLayout(this);

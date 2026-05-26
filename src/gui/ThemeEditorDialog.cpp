@@ -132,6 +132,11 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     setMinimumSize(440, 720);
     applyAppTheme(this);
 
+    // Container declaration — places this dialog under the "dialog"
+    // umbrella so step 3's editor UI can navigate from root → dialog →
+    // dialog.themeEditor when rendering its own scope tree.
+    theme::setContainer(this, QStringLiteral("dialog.themeEditor"));
+
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(6);

@@ -346,6 +346,12 @@ QString SpectrumWidget::rendererDescription() const
 SpectrumWidget::SpectrumWidget(QWidget* parent)
     : SPECTRUM_BASE_CLASS(parent)
 {
+    // Container declaration — every token lookup made by this widget or
+    // any of its children (without their own declaration) resolves
+    // through the "spectrum" scope chain.  Token migration into this
+    // scope happens in step 4 of the refactor.
+    theme::setContainer(this, QStringLiteral("spectrum"));
+
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAutoFillBackground(false);
