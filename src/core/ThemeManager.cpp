@@ -430,6 +430,24 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.slice.h",  QString("#ff60a0"));
     m_tokens.insert("color.slice.tx", QString("#ff4d4d"));
 
+    // Slider + knob component tokens — seeded so themes that pre-date
+    // the namespace (e.g. user copies forked before this PR) still
+    // resolve the canonical Wave-blue look instead of falling through
+    // to empty QSS.  Default Dark / Default Light's JSON aliases
+    // override these when those themes load.
+    m_tokens.insert("color.slider.background",          QString("#1a2a3a"));
+    m_tokens.insert("color.slider.foreground",          QString("#00b4d8"));
+    m_tokens.insert("color.slider.handle",              QString("#c8d8e8"));
+    m_tokens.insert("color.slider.background.disabled", QString("#1a2330"));
+    m_tokens.insert("color.slider.foreground.disabled", QString("#3a4a5a"));
+    m_tokens.insert("color.slider.handle.disabled",     QString("#506070"));
+    m_tokens.insert("color.knob.background",            QString("#1a2a3a"));
+    m_tokens.insert("color.knob.foreground",            QString("#0070c0"));
+    m_tokens.insert("color.knob.handle",                QString("#c8d8e8"));
+    m_tokens.insert("color.knob.background.disabled",   QString("#1a2330"));
+    m_tokens.insert("color.knob.foreground.disabled",   QString("#3a4a5a"));
+    m_tokens.insert("color.knob.handle.disabled",       QString("#506070"));
+
     // Font + sizing
     m_tokens.insert("font.family.ui",        QString("Inter"));
     m_tokens.insert("font.family.mono",      QString("monospace"));
@@ -453,6 +471,30 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("sizing.panel.cornerRadius", 4);
     m_tokens.insert("sizing.border.subtle",      1);
     m_tokens.insert("sizing.border.strong",      2);
+
+    // Per-applet slider + knob foreground overrides seeded into the
+    // scope tree so user themes that pre-date the v2 scope architecture
+    // (e.g. "My Default Dark" forked before this PR) still get the
+    // visible per-applet differentiation.  Bundled themes' JSON
+    // re-asserts these via {color.red.500} aliases — idempotent and
+    // editable in the Theme Editor.  Raw hex used here so the seeds
+    // don't depend on the primitives palette being loaded yet
+    // (older user themes have no primitives section).
+    {
+        ThemeScope* s = scopeOrCreate(QStringLiteral("applet/tx"));
+        s->tokens.insert("color.slider.foreground", QString("#ff4d4d"));
+        s->tokens.insert("color.knob.foreground",   QString("#ff4d4d"));
+    }
+    {
+        ThemeScope* s = scopeOrCreate(QStringLiteral("applet/rx"));
+        s->tokens.insert("color.slider.foreground", QString("#4dd87a"));
+        s->tokens.insert("color.knob.foreground",   QString("#4dd87a"));
+    }
+    {
+        ThemeScope* s = scopeOrCreate(QStringLiteral("applet/comp"));
+        s->tokens.insert("color.slider.foreground", QString("#ffb84d"));
+        s->tokens.insert("color.knob.foreground",   QString("#ffb84d"));
+    }
 }
 
 void ThemeManager::scanAvailableThemes()
