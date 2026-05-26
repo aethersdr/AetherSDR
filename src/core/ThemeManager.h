@@ -387,6 +387,19 @@ signals:
     // re-themed automatically; paint-code consumers connect themselves.
     void themeChanged();
 
+protected:
+    // Re-resolve a tracked widget's stylesheet template whenever it gets
+    // reparented.  Widgets that have applyStyleSheet() called before
+    // they're added to a layout (common — many widgets are configured
+    // pre-parenting in helper functions) would otherwise resolve their
+    // tokens against the WRONG scope chain (typically root, because
+    // containerPathFor walks Qt's parent chain).  This filter catches
+    // the subsequent QEvent::ParentChange and re-resolves so the
+    // widget's containing applet / dialog scope finally reaches its
+    // QSS — visible result: e.g. RF Power slider inside TxApplet
+    // takes the applet/tx scope's red foreground instead of root blue.
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private slots:
     // Cleanup hook — fired when a widget tracked through applyStyleSheet
     // is destroyed.  Removes its entry from the reverse-map.

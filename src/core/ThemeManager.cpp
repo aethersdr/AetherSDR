@@ -2,6 +2,7 @@
 #include "AppSettings.h"
 #include "LogManager.h"
 
+#include <QEvent>
 #include <QStandardPaths>
 #include <QDir>
 #include <QFile>
@@ -1558,16 +1559,40 @@ void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTem
     widget->setStyleSheet(resolveFor(widget, stylesheetTemplate));
 
     // First-time registration: connect to destroyed() so the entry
-    // disappears when the widget does.  Subsequent calls on the same
-    // widget just overwrite the recorded template / token list.
+    // disappears when the widget does, AND install ourselves as an
+    // event filter so a later QEvent::ParentChange re-resolves the
+    // template against the widget's now-correct scope chain.
+    // (Widgets configured pre-reparent — common for helpers like
+    // applyPrimarySliderStyle — would otherwise be stuck with their
+    // resolved-at-no-parent root-scope QSS.)  Subsequent calls on
+    // the same widget just overwrite the recorded template / token
+    // list without re-installing.
     if (!m_trackedWidgets.contains(widget)) {
         connect(widget, &QObject::destroyed,
                 this, &ThemeManager::onTrackedWidgetDestroyed);
+        widget->installEventFilter(this);
     }
     TrackedWidget ctx;
     ctx.stylesheetTemplate = stylesheetTemplate;
     ctx.tokens = extractReferencedTokens(stylesheetTemplate);
     m_trackedWidgets.insert(widget, ctx);
+}
+
+bool ThemeManager::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::ParentChange) {
+        QWidget* w = qobject_cast<QWidget*>(watched);
+        if (w) {
+            const auto it = m_trackedWidgets.constFind(w);
+            if (it != m_trackedWidgets.constEnd()
+                && !it.value().stylesheetTemplate.isEmpty()) {
+                // Re-resolve against the new scope chain.  Cheap: only
+                // fires on rare reparent events, not in any hot path.
+                w->setStyleSheet(resolveFor(w, it.value().stylesheetTemplate));
+            }
+        }
+    }
+    return QObject::eventFilter(watched, event);
 }
 
 void ThemeManager::clearWidgetTracking(QWidget* widget)
