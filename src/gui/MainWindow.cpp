@@ -1638,14 +1638,14 @@ MainWindow::MainWindow(QWidget* parent)
         SpectrumWidget::toggleStarstruckMode();
     });
 
-    // Restore minimal mode if it was active on last exit
-    if (AppSettings::instance().value("MinimalModeEnabled", "False").toString() == "True")
-        toggleMinimalMode(true);
-
-    // Restore the Aetherial Audio Channel Strip if it was open on last
-    // exit (#2301).  toggleAetherialStrip() lazy-creates and shows.
-    if (AppSettings::instance().value("AetherialStripVisible", "False").toString() == "True")
-        toggleAetherialStrip();
+    // Minimal-mode auto-enter and Aetherial Strip restore moved down to
+    // run AFTER the saved geometry restore at the bottom of the
+    // constructor — calling toggleMinimalMode(true) at this point in
+    // startup made it snapshot the default initial geometry into
+    // FullModeGeometry (corrupting the previous session's saved rect)
+    // and restoreGeometry(MinimalModeGeometry) against a window that
+    // hadn't been placed on the correct screen yet.  See the geometry
+    // restore block lower in the constructor. (#2483)
 
     // ── Wire up discovery ──────────────────────────────────────────────────
     connect(&m_discovery, &RadioDiscovery::radioDiscovered,
@@ -4845,6 +4845,21 @@ MainWindow::MainWindow(QWidget* parent)
     const QString stateB64 = s.value("MainWindowState").toString();
     if (!stateB64.isEmpty())
         restoreState(QByteArray::fromBase64(stateB64.toLatin1()));
+
+    // Restore minimal mode AFTER full-window geometry has been applied.
+    // Doing this earlier in the constructor caused toggleMinimalMode(true)
+    // to snapshot the default startup rect into FullModeGeometry and to
+    // restoreGeometry(MinimalModeGeometry) before the window had been
+    // placed on the correct screen — visible on Windows with
+    // FramelessWindowHint as a position drift each launch (DWM doesn't
+    // cache the position the way it does with native chrome). (#2483)
+    if (s.value("MinimalModeEnabled", "False").toString() == "True")
+        toggleMinimalMode(true);
+
+    // Restore the Aetherial Audio Channel Strip if it was open on last
+    // exit (#2301).  toggleAetherialStrip() lazy-creates and shows.
+    if (s.value("AetherialStripVisible", "False").toString() == "True")
+        toggleAetherialStrip();
     // Clear stale splitter state — layout has changed across versions.
     s.remove("SplitterState");
     // Force 4-pane sizing: CWX=0, DVK=0 (hidden), applet=260px, center=stretch.
@@ -5712,6 +5727,20 @@ void MainWindow::closeEvent(QCloseEvent* event)
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
     s.setValue("MainWindowState",   saveState().toBase64());
+
+    // Refresh MinimalModeGeometry on close so a user who launches in
+    // Minimal Mode, drags the window, and quits without ever toggling
+    // back to full mode still gets their position restored next launch.
+    // Without this, MinimalModeGeometry is only written by
+    // toggleMinimalMode(false) and stays stale — visible as a position
+    // drift each launch, most pronounced with FramelessWindowHint on
+    // Windows where the WM no longer caches pos() for us.  Skip when
+    // maximized/fullscreen to match the abnormal-state guard in
+    // toggleMinimalMode(false). (#2483)
+    if (m_minimalMode &&
+        !(windowState() & (Qt::WindowMaximized | Qt::WindowFullScreen))) {
+        s.setValue("MinimalModeGeometry", saveGeometry().toBase64());
+    }
 
     // Close the applet-panel pop-out window if it's floating.  We
     // must do this explicitly because the window has parent=nullptr
