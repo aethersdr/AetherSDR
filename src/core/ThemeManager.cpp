@@ -162,6 +162,103 @@ QString gradientCssFragment(const ThemeGradient& g)
 
 } // namespace
 
+// ─────────────────────────────────────────────── scope tree ──────────────
+
+// A single node in the container scope tree.  Lives in the .cpp so the
+// header doesn't need to expose its layout — public scope-aware API
+// references scopes only by string path.
+struct ThemeScope {
+    QString name;                    // segment name (e.g. "spectrum")
+    QString path;                    // full path "" / "spectrum" / "spectrum/panadapter"
+    ThemeScope* parent {nullptr};
+    QHash<QString, QVariant> tokens; // semantic tokens overridden at this scope
+    // Children kept in a std::map (move-only-friendly + deterministic
+    // iteration order) — QHash refuses unique_ptr values because its
+    // implicit-copy paths can't compile against move-only types.
+    std::map<QString, std::unique_ptr<ThemeScope>> children;
+};
+
+ThemeManager::~ThemeManager() = default;
+
+ThemeScope* ThemeManager::scopeForPath(const QString& path) const
+{
+    if (path.isEmpty() || path == QLatin1String("root")) {
+        return m_rootScope.get();
+    }
+    const auto it = m_scopeByPath.constFind(path);
+    return (it == m_scopeByPath.constEnd()) ? nullptr : it.value();
+}
+
+ThemeScope* ThemeManager::scopeOrCreate(const QString& path)
+{
+    if (path.isEmpty() || path == QLatin1String("root")) return m_rootScope.get();
+    if (auto* existing = scopeForPath(path)) return existing;
+
+    // Walk segments from root, creating any missing intermediate scopes.
+    ThemeScope* cur = m_rootScope.get();
+    const QStringList segs = path.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+    QString runningPath;
+    for (const QString& seg : segs) {
+        runningPath = runningPath.isEmpty()
+                          ? seg : runningPath + QLatin1Char('/') + seg;
+        auto it = cur->children.find(seg);
+        if (it == cur->children.end()) {
+            auto child = std::make_unique<ThemeScope>();
+            child->name   = seg;
+            child->path   = runningPath;
+            child->parent = cur;
+            ThemeScope* raw = child.get();
+            cur->children.emplace(seg, std::move(child));
+            m_scopeByPath.insert(runningPath, raw);
+            cur = raw;
+        } else {
+            cur = it->second.get();
+        }
+    }
+    return cur;
+}
+
+QVariant ThemeManager::resolveAlias(const QVariant& v) const
+{
+    if (v.userType() != QMetaType::QString) return v;
+    const QString s = v.toString();
+    if (s.size() < 3 || !s.startsWith(QLatin1Char('{')) || !s.endsWith(QLatin1Char('}'))) {
+        return v;
+    }
+    const QString key = s.mid(1, s.size() - 2);
+    const auto it = m_primitives.constFind(key);
+    if (it == m_primitives.constEnd()) return v;  // unresolved alias — return literal
+    return it.value();
+}
+
+QVariant ThemeManager::lookupRaw(const QString& containerPath, const QString& key) const
+{
+    const ThemeScope* scope = scopeForPath(containerPath);
+    if (!scope) scope = m_rootScope.get();
+    while (scope) {
+        const auto it = scope->tokens.constFind(key);
+        if (it != scope->tokens.constEnd()) return resolveAlias(it.value());
+        scope = scope->parent;
+    }
+    return {};
+}
+
+void ThemeManager::rebuildScopePathIndex()
+{
+    m_scopeByPath.clear();
+    if (!m_rootScope) return;
+    m_scopeByPath.insert(QString(), m_rootScope.get());      // empty key = root
+    m_scopeByPath.insert(QStringLiteral("root"), m_rootScope.get());
+    std::function<void(ThemeScope*)> walk = [&](ThemeScope* s) {
+        for (auto& kv : s->children) {
+            ThemeScope* child = kv.second.get();
+            m_scopeByPath.insert(child->path, child);
+            walk(child);
+        }
+    };
+    walk(m_rootScope.get());
+}
+
 ThemeManager& ThemeManager::instance()
 {
     static ThemeManager s_instance;
@@ -169,7 +266,17 @@ ThemeManager& ThemeManager::instance()
 }
 
 ThemeManager::ThemeManager()
+    : m_rootScope(std::make_unique<ThemeScope>())
+    , m_tokens(m_rootScope->tokens)
 {
+    // Root scope identity — empty name, empty path, no parent.  Indexed
+    // under both "" (canonical) and "root" so callers using either form
+    // resolve to the same node.
+    m_rootScope->name = QString();
+    m_rootScope->path = QString();
+    m_scopeByPath.insert(QString(),                m_rootScope.get());
+    m_scopeByPath.insert(QStringLiteral("root"),   m_rootScope.get());
+
     // Explicit metatype registration so qMetaTypeId<ThemeGradient>() and
     // direct userType comparisons resolve correctly even before the first
     // QVariant::fromValue<ThemeGradient>() call.  Q_DECLARE_METATYPE in
@@ -414,15 +521,88 @@ bool ThemeManager::loadThemeFromPath(const QString& path)
         return false;
     }
 
-    // Compiled-in defaults stay as the fallback layer; tokens defined in
-    // the file overwrite them.  This is how older theme files with fewer
-    // tokens still produce a fully-rendered UI on a newer build.
-    QHash<QString, QVariant> newTokens;
-    seedBuiltinDefaults();  // reset to defaults
-    newTokens = m_tokens;
-    flattenTokens(root.value("tokens").toObject(), QString(), newTokens);
-    m_tokens.swap(newTokens);
+    // Reset the scope tree before loading the new theme.  Compiled-in
+    // defaults stay as the fallback layer so older theme files with
+    // fewer tokens still produce a fully-rendered UI on a newer build.
+    m_rootScope->children.clear();
+    m_primitives.clear();
+    rebuildScopePathIndex();
+    seedBuiltinDefaults();  // resets m_tokens (= root scope tokens) to defaults
+
+    if (schemaVersion >= 2) {
+        // v2 — primitives + nested scopes.  Canonical shape is
+        // `scopes: { root: { tokens, scopes } }`; we unwrap the literal
+        // "root" here so readScopeFromJson only sees the recursive
+        // {tokens, scopes} shape.
+        readPrimitivesFromJson(root.value("primitives").toObject());
+        if (root.contains("scopes")) {
+            const QJsonObject scopesObj = root.value("scopes").toObject();
+            if (scopesObj.contains("root")) {
+                readScopeFromJson(scopesObj.value("root").toObject(),
+                                  m_rootScope.get());
+            } else {
+                // Tolerate files that drop the root wrapper — every
+                // entry under "scopes" becomes a direct child of root.
+                readScopeFromJson(QJsonObject{{"scopes", scopesObj}},
+                                  m_rootScope.get());
+            }
+        } else if (root.contains("tokens")) {
+            // Tolerated mixed shape: v2 file with no scope wrapper —
+            // tokens at the top level land in root scope.
+            flattenTokens(root.value("tokens").toObject(),
+                          QString(), m_rootScope->tokens);
+        }
+    } else {
+        // v1 — flat tokens, all in root scope.  Auto-migrated to v2 on
+        // the next saveActiveTheme().
+        flattenTokens(root.value("tokens").toObject(),
+                      QString(), m_rootScope->tokens);
+    }
+    rebuildScopePathIndex();
     return true;
+}
+
+void ThemeManager::readPrimitivesFromJson(const QJsonObject& obj)
+{
+    for (auto it = obj.constBegin(); it != obj.constEnd(); ++it) {
+        const QJsonValue v = it.value();
+        if (v.isString())      m_primitives.insert(it.key(), v.toString());
+        else if (v.isDouble()) m_primitives.insert(it.key(), v.toDouble());
+        else if (v.isBool())   m_primitives.insert(it.key(), v.toBool());
+        else if (v.isObject()) {
+            const QJsonObject o = v.toObject();
+            if (o.contains("type") && o.value("type").isString()) {
+                m_primitives.insert(it.key(),
+                                    QVariant::fromValue(parseGradient(o)));
+            }
+        }
+    }
+}
+
+void ThemeManager::readScopeFromJson(const QJsonObject& obj, ThemeScope* into)
+{
+    // Per-scope shape: `{tokens: {...}, scopes: {<name>: <subscope>}}`.
+    // The loader is responsible for unwrapping the outermost "root"
+    // before calling here; this function handles the recursive shape.
+    if (obj.contains("tokens")) {
+        flattenTokens(obj.value("tokens").toObject(),
+                      QString(), into->tokens);
+    }
+    if (obj.contains("scopes")) {
+        const QJsonObject children = obj.value("scopes").toObject();
+        for (auto it = children.constBegin(); it != children.constEnd(); ++it) {
+            const QString name = it.key();
+            auto child = std::make_unique<ThemeScope>();
+            child->name = name;
+            child->path = into->path.isEmpty()
+                              ? name
+                              : into->path + QLatin1Char('/') + name;
+            child->parent = into;
+            ThemeScope* raw = child.get();
+            into->children.emplace(name, std::move(child));
+            readScopeFromJson(it.value().toObject(), raw);
+        }
+    }
 }
 
 QStringList ThemeManager::availableThemes() const
@@ -719,45 +899,90 @@ bool ThemeManager::renameTheme(const QString& oldName, const QString& newName)
     return true;
 }
 
+QJsonObject ThemeManager::scopeToJson(const ThemeScope* scope) const
+{
+    // Per-scope shape: { "tokens": {...}, "scopes": {<child>: ...} }.
+    // Either / both may be omitted when empty.  Tokens are written flat
+    // (dotted keys) — the migration through scope tree doesn't try to
+    // re-nest token keys back into the legacy bundled layout, both
+    // because earlier deep-walk attempts at that hit prefix-conflict
+    // bugs (color.accent vs. color.accent.bright) and because the
+    // editor never reads the file in nested form.
+    const int gradMetaId = qMetaTypeId<ThemeGradient>();
+    QJsonObject result;
+    if (!scope->tokens.isEmpty()) {
+        QJsonObject toks;
+        for (auto it = scope->tokens.constBegin(); it != scope->tokens.constEnd(); ++it) {
+            const QVariant& v = it.value();
+            const int ut = v.userType();
+            QJsonValue leaf;
+            if (ut == QMetaType::QString)      leaf = v.toString();
+            else if (ut == QMetaType::Int)     leaf = v.toInt();
+            else if (ut == QMetaType::Double)  leaf = v.toDouble();
+            else if (ut == QMetaType::Bool)    leaf = v.toBool();
+            else if (ut == gradMetaId) {
+                const ThemeGradient g = v.value<ThemeGradient>();
+                QJsonObject gj;
+                gj.insert("type", g.type == ThemeGradient::Radial
+                                    ? QStringLiteral("radial-gradient")
+                                    : QStringLiteral("linear-gradient"));
+                gj.insert("angle", g.angle);
+                if (g.type == ThemeGradient::Radial) {
+                    gj.insert("centerX", g.center.x());
+                    gj.insert("centerY", g.center.y());
+                    gj.insert("radius",  g.radius);
+                }
+                QJsonArray stops;
+                for (const auto& s : g.stops) {
+                    QJsonObject sj;
+                    sj.insert("at",    s.at);
+                    sj.insert("color", colorToTokenString(s.color));
+                    stops.append(sj);
+                }
+                gj.insert("stops", stops);
+                leaf = gj;
+            }
+            else {
+                qCWarning(lcGui) << "ThemeManager::scopeToJson: skipping token"
+                                 << it.key() << "with unsupported metatype" << ut;
+                continue;
+            }
+            toks.insert(it.key(), leaf);
+        }
+        result.insert("tokens", toks);
+    }
+    if (!scope->children.empty()) {
+        QJsonObject scopesObj;
+        for (auto& kv : scope->children) {
+            scopesObj.insert(kv.first, scopeToJson(kv.second.get()));
+        }
+        result.insert("scopes", scopesObj);
+    }
+    return result;
+}
+
 bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
 {
-    // Round-trip-safe flat dotted-key serialization.  The bundled themes
-    // organize tokens into nested objects for human readability, but the
-    // earlier deep-walk version of this code had two bugs that lost data
-    // when it tried to reproduce that layout:
-    //
-    //   * Prefix-conflict — a scalar like `color.accent` collided with
-    //     nested children like `color.accent.bright`; whichever was
-    //     processed second clobbered the first.
-    //   * Gradient tokens were silently skipped via a fragile
-    //     canConvert<ThemeGradient>() check (false negatives observed
-    //     under some metatype-registration timings).
-    //
-    // The flat output below is a strict subset of what flattenTokens()
-    // accepts (`{"tokens": {"color.background.0": "#0f0f1a", ...}}`):
-    // each dotted key becomes a literal JSON key inside `tokens`.
-    QJsonObject tokensObj;
+    // v2 schema — primitives map + nested scope tree.  v1 themes loaded
+    // from disk auto-upgrade on first save through this writer.
+    QJsonObject primitives;
     const int gradMetaId = qMetaTypeId<ThemeGradient>();
-    for (auto it = m_tokens.constBegin(); it != m_tokens.constEnd(); ++it) {
+    for (auto it = m_primitives.constBegin(); it != m_primitives.constEnd(); ++it) {
         const QVariant& v = it.value();
         const int ut = v.userType();
-        QJsonValue leaf;
-        if (ut == QMetaType::QString)      leaf = v.toString();
-        else if (ut == QMetaType::Int)     leaf = v.toInt();
-        else if (ut == QMetaType::Double)  leaf = v.toDouble();
-        else if (ut == QMetaType::Bool)    leaf = v.toBool();
+        if (ut == QMetaType::QString)      primitives.insert(it.key(), v.toString());
+        else if (ut == QMetaType::Int)     primitives.insert(it.key(), v.toInt());
+        else if (ut == QMetaType::Double)  primitives.insert(it.key(), v.toDouble());
+        else if (ut == QMetaType::Bool)    primitives.insert(it.key(), v.toBool());
         else if (ut == gradMetaId) {
+            // Same gradient JSON shape as scope-level tokens; the loader
+            // recognises both ambient locations.
             const ThemeGradient g = v.value<ThemeGradient>();
             QJsonObject gj;
             gj.insert("type", g.type == ThemeGradient::Radial
                                 ? QStringLiteral("radial-gradient")
                                 : QStringLiteral("linear-gradient"));
             gj.insert("angle", g.angle);
-            if (g.type == ThemeGradient::Radial) {
-                gj.insert("centerX", g.center.x());
-                gj.insert("centerY", g.center.y());
-                gj.insert("radius",  g.radius);
-            }
             QJsonArray stops;
             for (const auto& s : g.stops) {
                 QJsonObject sj;
@@ -766,23 +991,21 @@ bool ThemeManager::writeThemeFile(const QString& themeName, const QString& path)
                 stops.append(sj);
             }
             gj.insert("stops", stops);
-            leaf = gj;
+            primitives.insert(it.key(), gj);
         }
-        else {
-            qCWarning(lcGui) << "ThemeManager::writeThemeFile: skipping token"
-                             << it.key() << "with unsupported metatype" << ut;
-            continue;
-        }
-        tokensObj.insert(it.key(), leaf);
     }
 
+    QJsonObject scopes;
+    scopes.insert(QStringLiteral("root"), scopeToJson(m_rootScope.get()));
+
     QJsonObject doc;
-    doc.insert("schemaVersion", 1);
+    doc.insert("schemaVersion", 2);
     doc.insert("name",          themeName);
     doc.insert("author",        QStringLiteral("AetherSDR user"));
     doc.insert("version",       QStringLiteral("1.0"));
     doc.insert("description",   QStringLiteral("Edited via the Theme Editor."));
-    doc.insert("tokens",        tokensObj);
+    if (!primitives.isEmpty()) doc.insert("primitives", primitives);
+    doc.insert("scopes",        scopes);
 
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -1296,5 +1519,186 @@ void ThemeManager::reapplyAllTrackedStyleSheets()
         w->setStyleSheet(resolve(ctx.stylesheetTemplate));
     }
 }
+
+// ─────────────────────────────────────── scope-aware public API ─────────
+
+QString ThemeManager::containerPathFor(const QWidget* widget) const
+{
+    // Walk the Qt parent chain looking for the nearest declared
+    // themeContainer property.  An empty / missing property is treated
+    // as "no declaration here" — the walk continues past it.  Returns
+    // an empty string (== root scope) if no ancestor declares one.
+    const QWidget* w = widget;
+    while (w) {
+        const QVariant prop = w->property("themeContainer");
+        if (prop.isValid()) {
+            const QString s = prop.toString();
+            if (!s.isEmpty()) return s;
+        }
+        w = w->parentWidget();
+    }
+    return QString();
+}
+
+QStringList ThemeManager::containerPaths() const
+{
+    QStringList out;
+    out.reserve(m_scopeByPath.size());
+    std::function<void(const ThemeScope*)> walk = [&](const ThemeScope* s) {
+        if (s == m_rootScope.get()) {
+            out.append(QString());
+        } else {
+            out.append(s->path);
+        }
+        // Deterministic alphabetical order at each level.
+        // std::map iterates in key order already — pass children
+        // through directly.
+        for (auto& kv : s->children) walk(kv.second.get());
+    };
+    walk(m_rootScope.get());
+    return out;
+}
+
+QColor ThemeManager::color(const QWidget* widget, const QString& token) const
+{
+    const QVariant v = lookupRaw(containerPathFor(widget), token);
+    if (!v.isValid()) {
+        // Same fallback rules as the bare-token color() overload.
+        return color(token);
+    }
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) {
+        const ThemeGradient g = v.value<ThemeGradient>();
+        return g.stops.isEmpty() ? QColor() : g.stops.first().color;
+    }
+    return QColor(v.toString());
+}
+
+int ThemeManager::sizing(const QWidget* widget, const QString& token) const
+{
+    const QVariant v = lookupRaw(containerPathFor(widget), token);
+    if (!v.isValid()) return sizing(token);
+    bool ok = false;
+    const int n = v.toInt(&ok);
+    return ok ? n : sizing(token);
+}
+
+QFont ThemeManager::font(const QWidget* widget, const QString& token) const
+{
+    Q_UNUSED(widget);
+    // Font tokens currently resolve as plain string family + a fixed
+    // size in the bare-token overload.  Scope-aware font resolution
+    // (where a container can override "font.family.ui" or
+    // "font.size.normal") falls through to the legacy code path
+    // unchanged until PR 4 starts populating container scopes.  The
+    // widget-aware lookup wired through containerPathFor will still
+    // pick up any overrides for tokens defined under nested scopes
+    // when callers route through here.
+    return font(token);
+}
+
+QString ThemeManager::value(const QWidget* widget, const QString& token) const
+{
+    const QVariant v = lookupRaw(containerPathFor(widget), token);
+    if (!v.isValid()) return value(token);
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) return {};
+    return v.toString();
+}
+
+QBrush ThemeManager::brush(const QWidget* widget, const QString& token,
+                           const QRect& bounds) const
+{
+    Q_UNUSED(widget);
+    // brush() / cssFragment() build off the same token resolution that
+    // bare-token color()/gradient() use — for now route through the
+    // legacy overload.  PR 4 wires this up to scope-aware lookup once
+    // gradient tokens start living under non-root scopes.
+    return brush(token, bounds);
+}
+
+QString ThemeManager::cssFragment(const QWidget* widget, const QString& token) const
+{
+    Q_UNUSED(widget);
+    return cssFragment(token);
+}
+
+ThemeGradient ThemeManager::gradient(const QWidget* widget, const QString& token) const
+{
+    const QVariant v = lookupRaw(containerPathFor(widget), token);
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) return v.value<ThemeGradient>();
+    return gradient(token);
+}
+
+void ThemeManager::setColor(const QString& containerPath, const QString& token, const QColor& color)
+{
+    if (!color.isValid()) return;
+    if (containerPath.isEmpty()) {
+        setColor(token, color);  // route through the root-scope overload
+        return;
+    }
+    const QString hex = colorToTokenString(color);
+    ThemeScope* scope = scopeOrCreate(containerPath);
+    const auto it = scope->tokens.constFind(token);
+    if (it != scope->tokens.constEnd() && it.value().toString() == hex) return;
+    scope->tokens.insert(token, QVariant(hex));
+    m_currentEditToken = token;
+    emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
+}
+
+void ThemeManager::setSizing(const QString& containerPath, const QString& token, int v)
+{
+    if (containerPath.isEmpty()) { setSizing(token, v); return; }
+    ThemeScope* scope = scopeOrCreate(containerPath);
+    const auto it = scope->tokens.constFind(token);
+    if (it != scope->tokens.constEnd() && it.value().toInt() == v) return;
+    scope->tokens.insert(token, QVariant(v));
+    m_currentEditToken = token;
+    emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
+}
+
+void ThemeManager::setGradient(const QString& containerPath, const QString& token, const ThemeGradient& g)
+{
+    if (containerPath.isEmpty()) { setGradient(token, g); return; }
+    ThemeScope* scope = scopeOrCreate(containerPath);
+    scope->tokens.insert(token, QVariant::fromValue(g));
+    m_currentEditToken = token;
+    emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
+}
+
+void ThemeManager::setString(const QString& containerPath, const QString& token, const QString& v)
+{
+    if (containerPath.isEmpty()) { setString(token, v); return; }
+    ThemeScope* scope = scopeOrCreate(containerPath);
+    const auto it = scope->tokens.constFind(token);
+    if (it != scope->tokens.constEnd()
+        && it.value().userType() == QMetaType::QString
+        && it.value().toString() == v) {
+        return;
+    }
+    scope->tokens.insert(token, QVariant(v));
+    m_currentEditToken = token;
+    emit themeChanged();
+    m_currentEditToken.clear();
+    saveActiveTheme();
+}
+
+namespace theme {
+void setContainer(QWidget* widget, const QString& containerPath)
+{
+    if (!widget) return;
+    widget->setProperty("themeContainer", containerPath);
+}
+
+QString containerOf(const QWidget* widget)
+{
+    if (!widget) return {};
+    return widget->property("themeContainer").toString();
+}
+} // namespace theme
 
 } // namespace AetherSDR
