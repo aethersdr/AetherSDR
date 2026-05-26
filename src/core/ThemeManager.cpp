@@ -824,8 +824,46 @@ void ThemeManager::ensureFactoryLoaded() const
                          << err.errorString();
         return;
     }
-    flattenTokens(doc.object().value("tokens").toObject(), QString(),
-                  m_factoryTokens);
+    const QJsonObject root = doc.object();
+    const int schemaVer = root.value("schemaVersion").toInt(0);
+    if (schemaVer >= 2) {
+        // v2: tokens live under scopes.root.tokens, and most values are
+        // {primitive} aliases that need resolving before factoryColor()
+        // can return a valid QColor.  The legacy single-line flattenTokens
+        // call below worked for v1 (flat tokens at the document root) but
+        // landed an empty m_factoryTokens against every v2 theme — which
+        // silently disabled the Reset button at root scope across the
+        // whole editor.
+        QHash<QString, QString> factoryPrims;
+        const QJsonObject primitives = root.value("primitives").toObject();
+        for (auto it = primitives.constBegin(); it != primitives.constEnd(); ++it) {
+            if (it.value().isString())
+                factoryPrims.insert(it.key(), it.value().toString());
+        }
+        const QJsonObject scopesObj = root.value("scopes").toObject();
+        const QJsonObject rootScope = scopesObj.value("root").toObject();
+        flattenTokens(rootScope.value("tokens").toObject(), QString(),
+                      m_factoryTokens);
+        // Resolve `{primitive}` aliases inline so factoryColor() /
+        // factoryString() see concrete hex / family values without
+        // needing a second lookup pass.  Single-hop resolution matches
+        // the live runtime resolver (resolveAlias in this file).
+        for (auto it = m_factoryTokens.begin(); it != m_factoryTokens.end(); ++it) {
+            if (it.value().userType() != QMetaType::QString) continue;
+            const QString s = it.value().toString();
+            if (s.size() < 3 ||
+                !s.startsWith(QLatin1Char('{')) ||
+                !s.endsWith(QLatin1Char('}'))) continue;
+            const auto pit = factoryPrims.constFind(s.mid(1, s.size() - 2));
+            if (pit != factoryPrims.constEnd()) it.value() = pit.value();
+        }
+    } else {
+        // v1: flat tokens at document root.  Auto-migrated to v2 on
+        // saveActiveTheme, but pre-migration files still load through
+        // this branch.
+        flattenTokens(root.value("tokens").toObject(), QString(),
+                      m_factoryTokens);
+    }
 }
 
 ThemeGradient ThemeManager::factoryGradient(const QString& token) const
