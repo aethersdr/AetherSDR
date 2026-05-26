@@ -1338,19 +1338,30 @@ QString ThemeManager::cssFragment(const QString& token) const
     // alias-resolve through the primitives palette emit the right
     // literal value.
     const QVariant v = lookupRaw(QString(), token);
-    if (!v.isValid()) return QString();
-    if (v.userType() == qMetaTypeId<ThemeGradient>()) {
-        return gradientCssFragment(v.value<ThemeGradient>());
+    if (v.isValid()) {
+        if (v.userType() == qMetaTypeId<ThemeGradient>()) {
+            return gradientCssFragment(v.value<ThemeGradient>());
+        }
+        if (v.userType() == qMetaTypeId<ThemeFont>()) {
+            return v.value<ThemeFont>().family;
+        }
+        return colorHexToCssFragment(v.toString());
     }
-    // Compound font tokens: QSS templates referencing {{font.family.X}}
-    // expect the family string (e.g. for `font-family: "{{font.family.ui}}"`).
-    // Emit just .family — the size + color from the compound are
-    // surfaced through font(token) / fontToken(token) for callers that
-    // need them.
-    if (v.userType() == qMetaTypeId<ThemeFont>()) {
-        return v.value<ThemeFont>().family;
+    // Virtual lookup: `font.size.<role>` falls through to the embedded
+    // size field on `font.family.<role>` when no direct token exists.
+    // Lets QSS templates write `font-size: {{font.size.freq}}px` and have
+    // edits to the freq compound's size take effect without needing a
+    // separate scalar token namespace.
+    if (token.startsWith(QStringLiteral("font.size."))) {
+        const QString role = token.mid(QStringLiteral("font.size.").size());
+        const QVariant compound = lookupRaw(QString(),
+                                            QStringLiteral("font.family.") + role);
+        if (compound.userType() == qMetaTypeId<ThemeFont>()) {
+            const int sz = compound.value<ThemeFont>().size;
+            if (sz > 0) return QString::number(sz);
+        }
     }
-    return colorHexToCssFragment(v.toString());
+    return QString();
 }
 
 QFont ThemeManager::font(const QString& token) const
@@ -1377,14 +1388,27 @@ QFont ThemeManager::font(const QString& token) const
 int ThemeManager::sizing(const QString& token) const
 {
     const QVariant val = lookupRaw(QString(), token);
-    if (!val.isValid()) {
-        qCWarning(lcGui) << "ThemeManager: missing sizing token" << token;
-        return 0;
+    if (val.isValid()) {
+        bool ok = false;
+        const int v = val.toInt(&ok);
+        if (ok) return v;
+        return static_cast<int>(val.toDouble());
     }
-    bool ok = false;
-    const int v = val.toInt(&ok);
-    if (ok) return v;
-    return static_cast<int>(val.toDouble());
+    // Virtual font.size.<role> fallback into font.family.<role>'s
+    // embedded size, mirroring the cssFragment path.  Paint code that
+    // composes a QFont sized off a per-role compound thus reads the
+    // same number QSS templates do.
+    if (token.startsWith(QStringLiteral("font.size."))) {
+        const QString role = token.mid(QStringLiteral("font.size.").size());
+        const QVariant compound = lookupRaw(QString(),
+                                            QStringLiteral("font.family.") + role);
+        if (compound.userType() == qMetaTypeId<ThemeFont>()) {
+            const int sz = compound.value<ThemeFont>().size;
+            if (sz > 0) return sz;
+        }
+    }
+    qCWarning(lcGui) << "ThemeManager: missing sizing token" << token;
+    return 0;
 }
 
 QString ThemeManager::value(const QString& token) const
@@ -1798,14 +1822,28 @@ QString ThemeManager::cssFragment(const QWidget* widget, const QString& token) c
     // when no scope sets the token — keeps every QSS template valid
     // even when the active theme has no per-container overrides yet.
     const QVariant v = lookupRaw(containerPathFor(widget), token);
-    if (!v.isValid()) return cssFragment(token);
-    if (v.userType() == qMetaTypeId<ThemeGradient>()) {
-        return gradientCssFragment(v.value<ThemeGradient>());
+    if (v.isValid()) {
+        if (v.userType() == qMetaTypeId<ThemeGradient>()) {
+            return gradientCssFragment(v.value<ThemeGradient>());
+        }
+        if (v.userType() == qMetaTypeId<ThemeFont>()) {
+            return v.value<ThemeFont>().family;
+        }
+        return colorHexToCssFragment(v.toString());
     }
-    if (v.userType() == qMetaTypeId<ThemeFont>()) {
-        return v.value<ThemeFont>().family;
+    // Virtual font.size.<role> → font.family.<role>'s embedded size,
+    // walking the widget's scope chain so the freq label can vary per
+    // applet too.
+    if (token.startsWith(QStringLiteral("font.size."))) {
+        const QString role = token.mid(QStringLiteral("font.size.").size());
+        const QVariant compound = lookupRaw(containerPathFor(widget),
+                                            QStringLiteral("font.family.") + role);
+        if (compound.userType() == qMetaTypeId<ThemeFont>()) {
+            const int sz = compound.value<ThemeFont>().size;
+            if (sz > 0) return QString::number(sz);
+        }
     }
-    return colorHexToCssFragment(v.toString());
+    return cssFragment(token);
 }
 
 ThemeGradient ThemeManager::gradient(const QWidget* widget, const QString& token) const

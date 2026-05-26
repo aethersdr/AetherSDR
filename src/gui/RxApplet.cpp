@@ -517,7 +517,7 @@ void RxApplet::buildUI()
         // VfoWidget's frequency label reads the same token so both surfaces
         // re-theme in lockstep when the operator picks a new family in the
         // Theme Editor.
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqLabel, "QLabel { color: {{color.text.primary}}; font-size: 28px; font-weight: bold;"
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqLabel, "QLabel { color: {{color.text.primary}}; font-size: {{font.size.freq}}px; font-weight: bold;"
             " font-family: \"{{font.family.freq}}\";"
             " background: transparent; padding: 0; margin: 0; }");
         m_freqLabel->installEventFilter(this);

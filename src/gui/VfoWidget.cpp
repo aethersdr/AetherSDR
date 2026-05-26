@@ -597,7 +597,7 @@ void VfoWidget::buildUI()
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqLabel, "QLabel { background: transparent;"
                                 " border: 1px solid rgba(255,255,255,80);"
                                 " border-radius: 3px;"
-                                " color: {{color.text.primary}}; font-size: 26px; font-weight: bold;"
+                                " color: {{color.text.primary}}; font-size: {{font.size.freq}}px; font-weight: bold;"
                                 " font-family: \"{{font.family.freq}}\";"
                                 " padding: 0 0 0 2px; }");
     m_freqLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);

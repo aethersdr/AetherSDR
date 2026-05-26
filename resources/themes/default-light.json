@@ -165,7 +165,7 @@
             "segment7":   { "family": "DSEG7 Modern",  "size": 14, "color": "#0088b0" },
             "segment14":  { "family": "DSEG14 Modern", "size": 14, "color": "#0088b0" },
             "weather":    { "family": "DSEGWeather",   "size": 14, "color": "#1a2a3a" },
-            "freq":       { "family": "DSEG7 Modern",  "size": 14, "color": "#0088b0" },
+            "freq":       { "family": "DSEG7 Modern",  "size": 26, "color": "#0088b0" },
             "temp":       { "family": "DSEG7 Modern",  "size": 12, "color": "#506070" }
           },
           "size": {
