@@ -559,6 +559,23 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     optionsLayout->addWidget(m_lowBwCheck);
     root->addWidget(m_linkOptionsWidget);
 
+    m_adaptiveThrottleCheck = new QCheckBox("Enable adaptive frame-rate throttle", this);
+    const bool adaptiveEnabled = AppSettings::instance()
+        .value("AdaptiveThrottleEnabled", "False").toString() == "True";
+    m_adaptiveThrottleCheck->setChecked(adaptiveEnabled);
+    m_adaptiveThrottleCheck->setToolTip(
+        "Automatically reduces FFT/waterfall frame rate when network quality degrades, "
+        "reducing the chance of a disconnect on congested links. "
+        "Toggling while connected takes effect at the next quality update; "
+        "reconnect to lift an already-applied cap immediately.");
+    m_adaptiveThrottleCheck->setStyleSheet(lowBandwidthCheckStyle);
+    connect(m_adaptiveThrottleCheck, &QCheckBox::toggled, this, [](bool on) {
+        auto& s = AppSettings::instance();
+        s.setValue("AdaptiveThrottleEnabled", on ? "True" : "False");
+        s.save();
+    });
+    root->addWidget(m_adaptiveThrottleCheck);
+
     m_autoConnectCheck = new QCheckBox("Connect to last radio on start up", this);
     m_autoConnectCheck->setChecked(
         AppSettings::instance().value("AutoConnectToLastRadio", "True").toString() == "True");
@@ -855,10 +872,10 @@ void ConnectionPanel::updateActionState()
 void ConnectionPanel::updateLowBandwidthVisibility()
 {
     const auto mode = static_cast<ConnectionMode>(m_modeStack->currentIndex());
-    const bool visible = mode == SmartLinkMode || mode == ManualMode;
-    m_linkOptionsWidget->setVisible(visible);
+    const bool slowLinksVisible = mode == SmartLinkMode || mode == ManualMode;
+    m_linkOptionsWidget->setVisible(slowLinksVisible);
 
-    if (!visible)
+    if (!slowLinksVisible)
         return;
 
     if (mode == SmartLinkMode) {

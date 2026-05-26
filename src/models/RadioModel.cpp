@@ -2802,6 +2802,8 @@ void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
 
 void RadioModel::applyAdaptiveFrameRate(NetState newState, NetState oldState)
 {
+    if (AppSettings::instance().value("AdaptiveThrottleEnabled", "False").toString() != "True")
+        return;
     const int newCap = fpsCapForState(newState);
     const int oldCap = fpsCapForState(oldState);
     if (newCap == oldCap)

@@ -141,6 +141,7 @@ private:
     QWidget*     m_linkOptionsWidget{nullptr};
     QLabel*      m_lowBwHintLabel{nullptr};
     QCheckBox*   m_lowBwCheck{nullptr};
+    QCheckBox*   m_adaptiveThrottleCheck{nullptr};
 };
 
 } // namespace AetherSDR
