@@ -314,7 +314,7 @@ static QPushButton* mkRight(QWidget* parent = nullptr) { return new TriBtn(TriBt
 
 RxApplet::RxApplet(QWidget* parent) : QWidget(parent)
 {
-    theme::setContainer(this, QStringLiteral("applet.rx"));
+    theme::setContainer(this, QStringLiteral("applet/rx"));
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     // Recall the last user-chosen Manual squelch threshold from prior
     // sessions.  Auto mode clobbers the slice's squelchLevel with

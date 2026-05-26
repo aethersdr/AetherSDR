@@ -105,17 +105,6 @@ QIcon gradientSwatchIcon(const ThemeGradient& g)
 
 // Build the short text shown on a gradient row: "N stops, Xdeg" so the
 // list stays scannable without having to open every gradient.
-QString gradientRowText(const QString& key, const ThemeGradient& g)
-{
-    const QString kind = g.type == ThemeGradient::Radial
-                             ? QStringLiteral("radial")
-                             : QStringLiteral("linear, %1°").arg(
-                                   static_cast<int>(std::round(g.angle)));
-    return QStringLiteral("%1   %2, %3 stops")
-        .arg(key, -36)
-        .arg(kind)
-        .arg(g.stops.size());
-}
 } // namespace
 
 ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
@@ -137,7 +126,7 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // Container declaration — places this dialog under the "dialog"
     // umbrella so step 3's editor UI can navigate from root → dialog →
     // dialog.themeEditor when rendering its own scope tree.
-    theme::setContainer(this, QStringLiteral("dialog.themeEditor"));
+    theme::setContainer(this, QStringLiteral("dialog/themeEditor"));
 
     auto* root = new QVBoxLayout(bodyWidget());
     root->setContentsMargins(8, 8, 8, 8);

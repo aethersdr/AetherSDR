@@ -103,7 +103,7 @@ static constexpr float kAlcGaugeFloorDbfs = -20.0f;
 PhoneCwApplet::PhoneCwApplet(QWidget* parent)
     : QWidget(parent)
 {
-    theme::setContainer(this, QStringLiteral("applet.digi"));
+    theme::setContainer(this, QStringLiteral("applet/digi"));
     hide();
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 

@@ -57,7 +57,7 @@ static QString wattsText(int value)
 TxApplet::TxApplet(QWidget* parent)
     : QWidget(parent)
 {
-    theme::setContainer(this, QStringLiteral("applet.tx"));
+    theme::setContainer(this, QStringLiteral("applet/tx"));
     hide();
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     buildUI();

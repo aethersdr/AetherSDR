@@ -332,7 +332,7 @@ private:
 HealthApplet::HealthApplet(QWidget* parent)
     : QWidget(parent)
 {
-    theme::setContainer(this, QStringLiteral("applet.hlth"));
+    theme::setContainer(this, QStringLiteral("applet/hlth"));
     hide();
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 
