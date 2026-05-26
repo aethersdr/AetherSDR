@@ -195,6 +195,19 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
         if (panel) panel->installEventFilter(this);
 
     updateLayout();
+
+    // Inspector coverage — every button + sub-panel inside the overlay
+    // menu paints via applyStyleSheet, so child widgets are tracked
+    // individually.  Declare the same token set on the overlay menu
+    // itself so an Inspect-mode click on the menu's empty area (or its
+    // toggle arrow / row dividers) still surfaces a useful hit-list
+    // rather than falling through to the SpectrumWidget catch-all.
+    AetherSDR::ThemeManager::instance().declareWidgetTokens(this, QStringList{
+        "color.background.0", "color.background.1",
+        "color.text.primary", "color.text.label",
+        "color.accent", "color.accent.bright", "color.accent.dim",
+        "color.border.subtle", "color.border.strong",
+    });
 }
 
 void SpectrumOverlayMenu::raiseAll()

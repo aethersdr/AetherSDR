@@ -272,6 +272,21 @@ VfoWidget::VfoWidget(QWidget* parent)
         syncFromSlice();  // refreshes badge stylesheet
         update();         // refreshes collapsed-mode painter
     });
+
+    // Inspector coverage — VfoWidget paints its background + signal meter
+    // through raw QPainter calls keyed off ThemeManager::color(), so
+    // applyStyleSheet's reverse-map never sees it.  Declare every token
+    // the widget reads so an Inspect-mode click on the flag, callsign
+    // badge, or signal meter strip surfaces a meaningful hit-list.
+    AetherSDR::ThemeManager::instance().declareWidgetTokens(this, QStringList{
+        "color.background.0", "color.background.1", "color.background.2",
+        "color.text.primary", "color.text.label",
+        "color.accent", "color.accent.bright", "color.accent.dim",
+        "color.accent.danger",
+        "color.slice.a", "color.slice.b", "color.slice.c", "color.slice.d",
+        "color.slice.e", "color.slice.f", "color.slice.g", "color.slice.h",
+        "color.slice.tx",
+    });
 }
 
 void VfoWidget::wheelEvent(QWheelEvent* ev)
