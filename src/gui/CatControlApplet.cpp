@@ -1,6 +1,7 @@
 #include "CatControlApplet.h"
 #include "core/AppSettings.h"
 #include "core/ThemeManager.h"
+#include "gui/Theme.h"
 
 #include <QCheckBox>
 #include <QClipboard>
@@ -25,12 +26,10 @@ namespace {
 // Stylesheet templates — tokens are resolved at runtime by ThemeManager.
 // Use ThemeManager::applyStyleSheet(widget, kXxx) so widgets re-style automatically
 // on theme changes.
-
-const char* kGreenToggle =
-    "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; border-radius: 3px;"
-    " color: {{color.text.primary}}; font-size: 11px; font-weight: bold; padding: 2px 8px; }"
-    "QPushButton:hover { background: {{color.background.2}}; }"
-    "QPushButton:checked { background: {{color.background.success}}; color: {{color.accent.success}}; border: 1px solid {{color.accent.success}}; }";
+//
+// The Enable CAT toggle was previously styled by an inline `kGreenToggle`
+// constant; it now uses the canonical applyToggleButtonStyle helper with
+// ToggleTribe::Success — same visual result, single source of truth.
 
 const char* kHintBtn =
     "QPushButton { background: transparent; border: none; color: {{color.text.label}};"
@@ -112,7 +111,7 @@ void CatControlApplet::buildDockedView(QWidget* page)
 
     m_enableBtn = new QPushButton("Enable CAT");
     m_enableBtn->setCheckable(true);
-    ThemeManager::instance().applyStyleSheet(m_enableBtn, kGreenToggle);
+    applyToggleButtonStyle(m_enableBtn, ToggleTribe::Success);
     m_enableBtn->setFixedSize(100, 22);
     {
         QSignalBlocker b(m_enableBtn);
@@ -173,7 +172,7 @@ void CatControlApplet::setFloating(bool on)
             enableRow->setSpacing(8);
             m_floatingEnableBtn = new QPushButton("Enable CAT");
             m_floatingEnableBtn->setCheckable(true);
-            ThemeManager::instance().applyStyleSheet(m_floatingEnableBtn, kGreenToggle);
+            applyToggleButtonStyle(m_floatingEnableBtn, ToggleTribe::Success);
             m_floatingEnableBtn->setFixedSize(100, 22);
             {
                 QSignalBlocker b(m_floatingEnableBtn);

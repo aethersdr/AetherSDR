@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "name": "Default Dark",
   "author": "AetherSDR Team",
-  "version": "1.4",
+  "version": "1.5",
   "description": "AetherSDR's original dark theme — v2 schema (primitives + nested scopes).  Semantic tokens resolve through a tailwind-style palette of shared colour primitives via {alias} references; the rendered output is bit-identical to v1.3.",
   "primitives": {
     "color.blue.500":  "#00b4d8",
@@ -33,6 +33,7 @@
             "3":        "{color.gray.500}",
             "tx":       "#3a2a0e",
             "success":  "#006040",
+            "warning":  "#5a3a0a",
             "spectrum": "{color.gray.950}",
             "app":      "{color.gray.900}"
           },
@@ -171,6 +172,23 @@
             "background.disabled": "{color.gray.850}",
             "foreground.disabled": "{color.gray.600}",
             "handle.disabled":     "{color.gray.500}"
+          },
+          "toggle": {
+            "background":          "{color.gray.800}",
+            "foreground":          "{color.gray.200}",
+            "border":              "{color.gray.700}",
+            "background.disabled": "{color.gray.900}",
+            "foreground.disabled": "{color.gray.600}",
+            "border.disabled":     "{color.gray.900}",
+            "accent.background.checked":  "{color.blue.700}",
+            "accent.foreground.checked":  "{color.blue.500}",
+            "accent.border.checked":      "{color.blue.500}",
+            "success.background.checked": "#006040",
+            "success.foreground.checked": "{color.green.500}",
+            "success.border.checked":     "{color.green.500}",
+            "warning.background.checked": "#5a3a0a",
+            "warning.foreground.checked": "{color.amber.500}",
+            "warning.border.checked":     "{color.amber.500}"
           }
         },
         "font": {
@@ -208,20 +226,23 @@
           "scopes": {
             "tx": {
               "tokens": {
-                "color.slider.foreground": "{color.red.500}",
-                "color.knob.foreground":   "{color.red.500}"
+                "color.slider.foreground":                "{color.red.500}",
+                "color.knob.foreground":                  "{color.red.500}",
+                "color.toggle.accent.background.checked": "{color.red.500}"
               }
             },
             "rx": {
               "tokens": {
-                "color.slider.foreground": "{color.green.500}",
-                "color.knob.foreground":   "{color.green.500}"
+                "color.slider.foreground":                "{color.green.500}",
+                "color.knob.foreground":                  "{color.green.500}",
+                "color.toggle.accent.background.checked": "{color.green.500}"
               }
             },
             "comp": {
               "tokens": {
-                "color.slider.foreground": "{color.amber.500}",
-                "color.knob.foreground":   "{color.amber.500}"
+                "color.slider.foreground":                "{color.amber.500}",
+                "color.knob.foreground":                  "{color.amber.500}",
+                "color.toggle.accent.background.checked": "{color.amber.500}"
               }
             }
           }

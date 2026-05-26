@@ -285,6 +285,60 @@ int main(int argc, char** argv)
         EXPECT_TRUE(!tm.isOverriddenAt("applet/tx", "color.text.primary"));
     }
 
+    // ── Toggle button tribes — base + per-tribe checked tokens ──
+    // The toggle namespace splits checked-state colours across three
+    // tribes (accent / success / warning); shared base + disabled
+    // tokens apply regardless of tribe.  seedBuiltinDefaults() and the
+    // bundled themes both must provide all 16 tokens so older user
+    // themes don't regress to empty QSS values.
+    {
+        auto& tm = ThemeManager::instance();
+        tm.setActiveTheme("Default Dark");
+        // Shared base tokens
+        EXPECT_TRUE(tm.color("color.toggle.background").isValid());
+        EXPECT_TRUE(tm.color("color.toggle.foreground").isValid());
+        EXPECT_TRUE(tm.color("color.toggle.border").isValid());
+        EXPECT_TRUE(tm.color("color.toggle.background.disabled").isValid());
+        // Per-tribe checked-state tokens — bundled theme aliases resolve.
+        EXPECT_EQ(tm.color("color.toggle.accent.background.checked").name().toLower(),
+                  QString("#0070c0"));   // {color.blue.700}
+        EXPECT_EQ(tm.color("color.toggle.success.background.checked").name().toLower(),
+                  QString("#006040"));   // color.background.success
+        EXPECT_EQ(tm.color("color.toggle.warning.background.checked").name().toLower(),
+                  QString("#5a3a0a"));   // color.background.warning (new primitive)
+    }
+
+    // ── Toggle button — Accent tribe per-applet cascade ──
+    // Only the Accent tribe carries per-applet overrides (TX red, RX
+    // green, comp amber).  Success + Warning tribes are semantic and
+    // must resolve to the same value inside any applet as at root.
+    {
+        auto& tm = ThemeManager::instance();
+        tm.setActiveTheme("Default Dark");
+        // Accent tribe — surface-tinted by applet.
+        EXPECT_EQ(tm.colorAt("applet/tx",   "color.toggle.accent.background.checked").name().toLower(),
+                  QString("#ff4d4d"));
+        EXPECT_EQ(tm.colorAt("applet/rx",   "color.toggle.accent.background.checked").name().toLower(),
+                  QString("#4dd87a"));
+        EXPECT_EQ(tm.colorAt("applet/comp", "color.toggle.accent.background.checked").name().toLower(),
+                  QString("#ffb84d"));
+        // Unrelated applet inherits root scope (blue).
+        EXPECT_EQ(tm.colorAt("applet/dax",  "color.toggle.accent.background.checked").name().toLower(),
+                  QString("#0070c0"));
+        // isOverriddenAt confirms the override is set at applet/tx itself,
+        // not inherited through the parent chain.
+        EXPECT_TRUE(tm.isOverriddenAt("applet/tx",   "color.toggle.accent.background.checked"));
+        EXPECT_TRUE(tm.isOverriddenAt("applet/rx",   "color.toggle.accent.background.checked"));
+        EXPECT_TRUE(tm.isOverriddenAt("applet/comp", "color.toggle.accent.background.checked"));
+        // Success + Warning tribes — semantic, no per-applet shift.
+        EXPECT_EQ(tm.colorAt("applet/tx",  "color.toggle.success.background.checked").name().toLower(),
+                  QString("#006040"));
+        EXPECT_EQ(tm.colorAt("applet/tx",  "color.toggle.warning.background.checked").name().toLower(),
+                  QString("#5a3a0a"));
+        EXPECT_TRUE(!tm.isOverriddenAt("applet/tx", "color.toggle.success.background.checked"));
+        EXPECT_TRUE(!tm.isOverriddenAt("applet/tx", "color.toggle.warning.background.checked"));
+    }
+
     // ── ParentChange re-resolution ──
     // applyStyleSheet on a widget with no parent locks the resolved
     // stylesheet to root scope.  After the widget is reparented to a

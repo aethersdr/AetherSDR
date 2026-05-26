@@ -355,6 +355,7 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.background.3",        QString("#506070"));
     m_tokens.insert("color.background.tx",       QString("#3a2a0e"));
     m_tokens.insert("color.background.success",  QString("#006040"));
+    m_tokens.insert("color.background.warning",  QString("#5a3a0a"));
     m_tokens.insert("color.background.spectrum", QString("#000000"));
     // App-level backdrop painted by MainWindow itself.  Honours alpha for
     // the "fade to desktop" experiment — when this token's value is
@@ -449,6 +450,29 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.knob.foreground.disabled",   QString("#3a4a5a"));
     m_tokens.insert("color.knob.handle.disabled",       QString("#506070"));
 
+    // Toggle button tribes — three semantic colour families (accent /
+    // success / warning), each providing background.checked /
+    // foreground.checked / border.checked.  Unchecked + disabled state
+    // tokens are shared across tribes.  Sites pick a tribe up-front via
+    // ToggleTribe in Theme.h; the accent tribe additionally carries
+    // per-applet background overrides (TX red / RX green / comp amber)
+    // seeded into the scope tree further down.
+    m_tokens.insert("color.toggle.background",          QString("#1a2a3a"));
+    m_tokens.insert("color.toggle.foreground",          QString("#c8d8e8"));
+    m_tokens.insert("color.toggle.border",              QString("#304050"));
+    m_tokens.insert("color.toggle.background.disabled", QString("#0f0f1a"));
+    m_tokens.insert("color.toggle.foreground.disabled", QString("#3a4a5a"));
+    m_tokens.insert("color.toggle.border.disabled",     QString("#0f0f1a"));
+    m_tokens.insert("color.toggle.accent.background.checked",  QString("#0070c0"));
+    m_tokens.insert("color.toggle.accent.foreground.checked",  QString("#00b4d8"));
+    m_tokens.insert("color.toggle.accent.border.checked",      QString("#00b4d8"));
+    m_tokens.insert("color.toggle.success.background.checked", QString("#006040"));
+    m_tokens.insert("color.toggle.success.foreground.checked", QString("#4dd87a"));
+    m_tokens.insert("color.toggle.success.border.checked",     QString("#4dd87a"));
+    m_tokens.insert("color.toggle.warning.background.checked", QString("#5a3a0a"));
+    m_tokens.insert("color.toggle.warning.foreground.checked", QString("#ffb84d"));
+    m_tokens.insert("color.toggle.warning.border.checked",     QString("#ffb84d"));
+
     // Font + sizing
     m_tokens.insert("font.family.ui",        QString("Inter"));
     m_tokens.insert("font.family.mono",      QString("monospace"));
@@ -490,18 +514,21 @@ void ThemeManager::seedBuiltinDefaults()
     // visible vs. seeded values diverge for pre-PR user themes).
     {
         ThemeScope* s = scopeOrCreate(QStringLiteral("applet/tx"));
-        s->tokens.insert("color.slider.foreground", QString("#ff4d4d"));
-        s->tokens.insert("color.knob.foreground",   QString("#ff4d4d"));
+        s->tokens.insert("color.slider.foreground",                QString("#ff4d4d"));
+        s->tokens.insert("color.knob.foreground",                  QString("#ff4d4d"));
+        s->tokens.insert("color.toggle.accent.background.checked", QString("#ff4d4d"));
     }
     {
         ThemeScope* s = scopeOrCreate(QStringLiteral("applet/rx"));
-        s->tokens.insert("color.slider.foreground", QString("#4dd87a"));
-        s->tokens.insert("color.knob.foreground",   QString("#4dd87a"));
+        s->tokens.insert("color.slider.foreground",                QString("#4dd87a"));
+        s->tokens.insert("color.knob.foreground",                  QString("#4dd87a"));
+        s->tokens.insert("color.toggle.accent.background.checked", QString("#4dd87a"));
     }
     {
         ThemeScope* s = scopeOrCreate(QStringLiteral("applet/comp"));
-        s->tokens.insert("color.slider.foreground", QString("#ffb84d"));
-        s->tokens.insert("color.knob.foreground",   QString("#ffb84d"));
+        s->tokens.insert("color.slider.foreground",                QString("#ffb84d"));
+        s->tokens.insert("color.knob.foreground",                  QString("#ffb84d"));
+        s->tokens.insert("color.toggle.accent.background.checked", QString("#ffb84d"));
     }
 }
 

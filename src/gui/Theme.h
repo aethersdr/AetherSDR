@@ -236,4 +236,78 @@ inline void applyPrimarySliderStyle(QWidget* slider,
     ThemeManager::instance().applyStyleSheet(slider, primarySliderStyleTemplate(accentToken));
 }
 
+// Toggle button tribes — three semantic colour families that a checkable
+// QPushButton can opt into.  Each tribe resolves to its own triple of
+// {background.checked, foreground.checked, border.checked} tokens at the
+// `color.toggle.<tribe>.*` paths; unchecked + disabled state styling is
+// shared across tribes.  The Accent tribe additionally picks up
+// per-applet background overrides (TX red / RX green / comp amber) via
+// the scope tree — sliders + knobs already follow the same pattern from
+// PR #3188.
+//
+// Convention: pick a tribe based on what the toggled state *means*
+// semantically, not what colour it should be in any particular applet:
+//   - Accent  — generic on/off, mode selectors, surface-tinted by applet
+//   - Success — enable / activate / connect actions (green family)
+//   - Warning — caution / armed / high-stakes actions (amber family)
+enum class ToggleTribe { Accent, Success, Warning };
+
+inline QLatin1String toggleTribePrefix(ToggleTribe tribe)
+{
+    switch (tribe) {
+        case ToggleTribe::Success: return QLatin1String("color.toggle.success");
+        case ToggleTribe::Warning: return QLatin1String("color.toggle.warning");
+        case ToggleTribe::Accent:
+        default:                   return QLatin1String("color.toggle.accent");
+    }
+}
+
+// Canonical primary toggle-button style — single source of truth for
+// checkable QPushButton appearance across the codebase.  The `tribe`
+// parameter picks one of the three checked-state colour families; the
+// unchecked + disabled state come from the shared `color.toggle.*` base
+// tokens regardless of tribe.
+//
+// Resolution is widget-aware (via applyStyleSheet's eventual
+// ThemeManager hook), so call sites inside an applet pick up the
+// per-applet override of `color.toggle.accent.background.checked`
+// automatically — a button in TxApplet renders red, in RxApplet green,
+// in ClientCompApplet amber, just like sliders + knobs.
+inline QString primaryToggleButtonStyleTemplate(ToggleTribe tribe = ToggleTribe::Accent)
+{
+    const QString prefix(toggleTribePrefix(tribe));
+    return QStringLiteral(
+        "QPushButton {"
+        " background: {{color.toggle.background}};"
+        " color: {{color.toggle.foreground}};"
+        " border: 1px solid {{color.toggle.border}};"
+        " border-radius: 3px;"
+        " padding: 2px 8px;"
+        " font-size: 11px;"
+        " font-weight: bold;"
+        " }"
+        "QPushButton:hover { background: {{color.background.2}}; }"
+        "QPushButton:checked {"
+        " background: {{%1.background.checked}};"
+        " color: {{%1.foreground.checked}};"
+        " border: 1px solid {{%1.border.checked}};"
+        " }"
+        "QPushButton:disabled {"
+        " background: {{color.toggle.background.disabled}};"
+        " color: {{color.toggle.foreground.disabled}};"
+        " border: 1px solid {{color.toggle.border.disabled}};"
+        " }"
+    ).arg(prefix);
+}
+
+// Apply the canonical primary toggle-button style to `btn` and register
+// it for free live re-theme on theme changes.  Use this in place of
+// per-site `applyStyleSheet(btn, kSomeInlineToggleStyle)` so the toggle
+// inherits the namespace + per-applet cascade automatically.
+inline void applyToggleButtonStyle(QWidget* btn, ToggleTribe tribe = ToggleTribe::Accent)
+{
+    if (!btn) return;
+    ThemeManager::instance().applyStyleSheet(btn, primaryToggleButtonStyleTemplate(tribe));
+}
+
 } // namespace AetherSDR
