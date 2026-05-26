@@ -277,9 +277,9 @@ TitleBar::TitleBar(QWidget* parent)
     m_masterSlider->setFixedHeight(16);
     m_masterSlider->setAccessibleName("Master volume");
     m_masterSlider->setAccessibleDescription("Line out volume level, 0 to 100 percent");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterSlider, "QSlider::groove:horizontal { background: {{color.background.1}}; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: {{color.accent}}; width: 10px; margin: -3px 0; border-radius: 5px; }"
-        "QSlider::sub-page:horizontal { background: {{color.accent}}; border-radius: 2px; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_masterSlider, "QSlider::groove:horizontal { background: {{color.slider.background}}; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: {{color.slider.handle}}; width: 10px; margin: -3px 0; border-radius: 5px; }"
+        "QSlider::sub-page:horizontal { background: {{color.slider.foreground}}; border-radius: 2px; }");
     m_hbox->addWidget(m_masterSlider);
 
     m_masterLabel = new QLabel(QString::number(savedVol));
@@ -319,9 +319,9 @@ TitleBar::TitleBar(QWidget* parent)
     m_hpSlider->setFixedHeight(16);
     m_hpSlider->setAccessibleName("Headphone volume");
     m_hpSlider->setAccessibleDescription("Headphone volume level, 0 to 100 percent");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpSlider, "QSlider::groove:horizontal { background: {{color.background.1}}; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: {{color.accent}}; width: 10px; margin: -3px 0; border-radius: 5px; }"
-        "QSlider::sub-page:horizontal { background: {{color.accent}}; border-radius: 2px; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_hpSlider, "QSlider::groove:horizontal { background: {{color.slider.background}}; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: {{color.slider.handle}}; width: 10px; margin: -3px 0; border-radius: 5px; }"
+        "QSlider::sub-page:horizontal { background: {{color.slider.foreground}}; border-radius: 2px; }");
     m_hbox->addWidget(m_hpSlider);
 
     m_hpLabel = new QLabel("50");
