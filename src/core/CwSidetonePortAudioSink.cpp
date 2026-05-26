@@ -30,45 +30,63 @@ PaDeviceIndex findPortAudioOutputDevice(const QAudioDevice& device)
         return paNoDevice;
     }
 
-    PaDeviceIndex partialMatch = paNoDevice;
-    QString partialMatchName;
-    bool partialMatchAmbiguous = false;
+    // Collect all partial-match candidates. On Windows a single physical
+    // device appears under multiple host APIs (MME, DirectSound, WASAPI);
+    // the partial-match list lets us prefer WASAPI instead of giving up. (#3193)
+    struct Candidate { PaDeviceIndex idx; QString rawName; PaHostApiTypeId apiType; };
+    QList<Candidate> partials;
+
     for (PaDeviceIndex i = 0; i < count; ++i) {
         const PaDeviceInfo* info = Pa_GetDeviceInfo(i);
         if (!info || info->maxOutputChannels <= 0 || !info->name)
             continue;
 
         const QString rawName = QString::fromUtf8(info->name);
-        const QString candidate =
-            normalizedDeviceName(rawName);
+        const QString candidate = normalizedDeviceName(rawName);
         if (candidate == target)
             return i;
 
         if (candidate.contains(target) || target.contains(candidate)) {
-            if (partialMatch == paNoDevice) {
-                partialMatch = i;
-                partialMatchName = rawName;
-            } else {
-                partialMatchAmbiguous = true;
-            }
+            PaHostApiTypeId apiType = paInDevelopment;
+            if (const PaHostApiInfo* api = Pa_GetHostApiInfo(info->hostApi))
+                apiType = api->type;
+            partials.append({i, rawName, apiType});
         }
     }
 
-    if (partialMatchAmbiguous) {
-        qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
-                           << device.description()
-                           << "matched multiple PortAudio outputs";
+    if (partials.isEmpty())
         return paNoDevice;
-    }
 
-    if (partialMatch != paNoDevice) {
+    if (partials.size() == 1) {
         qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
                            << device.description()
                            << "partially matched PortAudio output"
-                           << partialMatchName
+                           << partials[0].rawName
                            << "by name substring";
+        return partials[0].idx;
     }
-    return partialMatch;
+
+#ifdef Q_OS_WIN
+    // Multiple matches — prefer WASAPI to avoid MME/DirectSound latency. (#3193)
+    QList<Candidate> wasapiCandidates;
+    for (const Candidate& c : partials) {
+        if (c.apiType == paWASAPI)
+            wasapiCandidates.append(c);
+    }
+    if (wasapiCandidates.size() == 1) {
+        qCInfo(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
+                        << device.description()
+                        << "resolved to WASAPI output"
+                        << wasapiCandidates[0].rawName
+                        << "(preferred over" << partials.size() - 1 << "other host API(s))";
+        return wasapiCandidates[0].idx;
+    }
+#endif
+
+    qCWarning(lcAudio) << "CwSidetonePortAudioSink: selected Qt output device"
+                       << device.description()
+                       << "matched multiple PortAudio outputs";
+    return paNoDevice;
 }
 
 PaDeviceIndex defaultPortAudioOutputDevice()
@@ -84,6 +102,27 @@ PaDeviceIndex defaultPortAudioOutputDevice()
                 && api->defaultOutputDevice != paNoDevice) {
                 devIdx = api->defaultOutputDevice;
                 qCInfo(lcAudio) << "CwSidetonePortAudioSink: using JACK host API"
+                                << "(device" << devIdx << ")";
+                break;
+            }
+        }
+    }
+#endif
+#ifdef Q_OS_WIN
+    // Prefer WASAPI over MME/DirectSound/WDM-KS for lower CW timing jitter.
+    // Pa_GetDefaultOutputDevice() on Windows typically returns an MME device
+    // (first enumerated host API), which has 50–150 ms OS-level buffering.
+    // WASAPI shared mode runs at ~10 ms, eliminating the timing jitter that
+    // makes CW sidetone sound uneven on fast keying. (#3193)
+    if (devIdx == paNoDevice) {
+        const PaHostApiIndex apiCount = Pa_GetHostApiCount();
+        for (PaHostApiIndex i = 0; i < apiCount; ++i) {
+            const PaHostApiInfo* api = Pa_GetHostApiInfo(i);
+            if (!api || !api->name) continue;
+            if (qstrncmp(api->name, "Windows WASAPI", 14) == 0
+                && api->defaultOutputDevice != paNoDevice) {
+                devIdx = api->defaultOutputDevice;
+                qCInfo(lcAudio) << "CwSidetonePortAudioSink: using WASAPI host API"
                                 << "(device" << devIdx << ")";
                 break;
             }

@@ -1043,6 +1043,15 @@ bool AudioEngine::startRxStream()
     m_resampleTo48k = true;
     m_audioSink = new QAudioSink(dev, fmt, this);
     m_audioSink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
+    // Cap the WASAPI ring buffer to 100 ms. Class-compliant USB interfaces
+    // (Scarlett, Focusrite, etc.) advertise a 100–300 ms default ring that
+    // stacks on m_rxBufferCapMs and produces 500 ms+ speaker latency. (#3193)
+    {
+        constexpr int kWasapiTargetMs = 100;
+        const int bufBytes = (fmt.sampleRate() * fmt.channelCount()
+                              * fmt.bytesPerSample() * kWasapiTargetMs) / 1000;
+        m_audioSink->setBufferSize(bufBytes);
+    }
     m_audioDevice = m_audioSink->start();
     if (!m_audioDevice) {
         const QString firstError = audioErrorName(m_audioSink->error());
@@ -1054,6 +1063,12 @@ bool AudioEngine::startRxStream()
         m_resampleTo48k = false;
         m_audioSink = new QAudioSink(dev, fmt, this);
         m_audioSink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
+        {
+            constexpr int kWasapiTargetMs = 100;
+            const int bufBytes = (fmt.sampleRate() * fmt.channelCount()
+                                  * fmt.bytesPerSample() * kWasapiTargetMs) / 1000;
+            m_audioSink->setBufferSize(bufBytes);
+        }
         m_audioDevice = m_audioSink->start();
         if (!m_audioDevice) {
             const QString secondError = audioErrorName(m_audioSink->error());
