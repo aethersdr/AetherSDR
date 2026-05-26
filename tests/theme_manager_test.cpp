@@ -242,6 +242,74 @@ int main(int argc, char** argv)
         QApplication::processEvents();
     }
 
+    // ── Slider + knob token namespaces seeded from compiled defaults ──
+    // Older user themes (forked before the namespace existed) have no
+    // slider/knob entries in their on-disk JSON.  seedBuiltinDefaults()
+    // is responsible for ensuring those tokens still resolve to the
+    // canonical Wave-blue look instead of empty / Qt-default rendering.
+    {
+        auto& tm = ThemeManager::instance();
+        tm.setActiveTheme("Default Dark");
+        EXPECT_TRUE(tm.color("color.slider.foreground").isValid());
+        EXPECT_TRUE(tm.color("color.slider.background").isValid());
+        EXPECT_TRUE(tm.color("color.slider.handle").isValid());
+        EXPECT_TRUE(tm.color("color.knob.foreground").isValid());
+        EXPECT_EQ(tm.color("color.slider.foreground").name().toLower(),
+                  QString("#00b4d8"));
+    }
+
+    // ── Per-applet scope cascade ──
+    // The bundled themes ship nested-scope overrides under
+    // scopes.applet.scopes.{tx,rx,comp}.  A widget walking via
+    // applet/tx should resolve the foreground to red, not the root
+    // scope's blue.
+    {
+        auto& tm = ThemeManager::instance();
+        tm.setActiveTheme("Default Dark");
+        EXPECT_EQ(tm.colorAt("applet/tx",   "color.slider.foreground").name().toLower(),
+                  QString("#ff4d4d"));
+        EXPECT_EQ(tm.colorAt("applet/rx",   "color.slider.foreground").name().toLower(),
+                  QString("#4dd87a"));
+        EXPECT_EQ(tm.colorAt("applet/comp", "color.slider.foreground").name().toLower(),
+                  QString("#ffb84d"));
+        EXPECT_EQ(tm.colorAt("applet/tx",   "color.knob.foreground").name().toLower(),
+                  QString("#ff4d4d"));
+        // Unrelated applet inherits root scope.
+        EXPECT_EQ(tm.colorAt("applet/dax",  "color.slider.foreground").name().toLower(),
+                  QString("#00b4d8"));
+        // isOverriddenAt distinguishes "set here" from "inherited".
+        EXPECT_TRUE(tm.isOverriddenAt("applet/tx", "color.slider.foreground"));
+        EXPECT_TRUE(!tm.isOverriddenAt("applet/tx", "color.text.primary"));
+    }
+
+    // ── ParentChange re-resolution ──
+    // applyStyleSheet on a widget with no parent locks the resolved
+    // stylesheet to root scope.  After the widget is reparented to a
+    // container marked themeContainer = "applet/tx", the
+    // QEvent::ParentChange filter should kick in and re-resolve
+    // against the new chain.
+    {
+        auto& tm = ThemeManager::instance();
+        tm.setActiveTheme("Default Dark");
+
+        QWidget txHost;
+        theme::setContainer(&txHost, "applet/tx");
+
+        QLabel* probe = new QLabel;  // no parent yet
+        tm.applyStyleSheet(probe,
+            "QLabel { color: {{color.slider.foreground}}; }");
+        // At apply time probe has no parent → resolves to root blue.
+        EXPECT_TRUE(probe->styleSheet().contains("#00b4d8"));
+
+        probe->setParent(&txHost);
+        QApplication::processEvents();
+        // After reparent the filter re-resolves through applet/tx → red.
+        EXPECT_TRUE(probe->styleSheet().contains("#ff4d4d"));
+
+        delete probe;
+        QApplication::processEvents();
+    }
+
     // ── extractReferencedTokens static helper ──
     // Order-preserving deduplication; empty placeholders ignored.
     {
