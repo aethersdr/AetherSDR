@@ -1342,6 +1342,14 @@ QString ThemeManager::cssFragment(const QString& token) const
     if (v.userType() == qMetaTypeId<ThemeGradient>()) {
         return gradientCssFragment(v.value<ThemeGradient>());
     }
+    // Compound font tokens: QSS templates referencing {{font.family.X}}
+    // expect the family string (e.g. for `font-family: "{{font.family.ui}}"`).
+    // Emit just .family — the size + color from the compound are
+    // surfaced through font(token) / fontToken(token) for callers that
+    // need them.
+    if (v.userType() == qMetaTypeId<ThemeFont>()) {
+        return v.value<ThemeFont>().family;
+    }
     return colorHexToCssFragment(v.toString());
 }
 
@@ -1793,6 +1801,9 @@ QString ThemeManager::cssFragment(const QWidget* widget, const QString& token) c
     if (!v.isValid()) return cssFragment(token);
     if (v.userType() == qMetaTypeId<ThemeGradient>()) {
         return gradientCssFragment(v.value<ThemeGradient>());
+    }
+    if (v.userType() == qMetaTypeId<ThemeFont>()) {
+        return v.value<ThemeFont>().family;
     }
     return colorHexToCssFragment(v.toString());
 }
