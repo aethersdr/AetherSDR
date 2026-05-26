@@ -29,9 +29,14 @@ constexpr float kFineMultiplier     = 0.25f;   // Shift-drag scales ×0.25
 constexpr float kArcStartDeg        = 225.0f;  // 7:30 clockwise to
 constexpr float kArcSpanDeg         = -270.0f; // 4:30  = 270° sweep
 
-inline QColor kRingBg() { return AetherSDR::ThemeManager::instance().color("color.background.1"); }
-inline QColor kRingArc() { return AetherSDR::ThemeManager::instance().color("color.accent.dim"); }
-inline QColor kPointer() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
+// Knob components read from the dedicated color.knob.* namespace
+// (carved out of color.background.1 / color.accent.dim /
+// color.text.primary).  Designers can retint knobs per-applet without
+// rippling into other accent-consumers.  Label + value text below
+// the knob stay on color.text.* — those are text, not knob proper.
+inline QColor kRingBg() { return AetherSDR::ThemeManager::instance().color("color.knob.background"); }
+inline QColor kRingArc() { return AetherSDR::ThemeManager::instance().color("color.knob.foreground"); }
+inline QColor kPointer() { return AetherSDR::ThemeManager::instance().color("color.knob.handle"); }
 inline QColor kLabelColor() { return AetherSDR::ThemeManager::instance().color("color.text.secondary"); }
 inline QColor kValueColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
 } // namespace
