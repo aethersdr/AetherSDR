@@ -133,7 +133,20 @@ jobs:
           Copy-Item -Path installer-runtime\*.dll -Destination deploy\ -Force
           Compress-Archive -Path deploy\* -DestinationPath "AetherSDR-${{ github.ref_name }}-Windows-x64-portable.zip"
 
+      - name: Create installer (Inno Setup)
+        run: |
+          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $runtimeDir = (Resolve-Path "installer-runtime").Path
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAPP_VERSION=$version "/DVC_RUNTIME_DIR=$runtimeDir" packaging\windows\installer.iss
+
+      # MSIX runs AFTER the portable ZIP + Inno installer steps and is
+      # gated with continue-on-error so a future MSIX hiccup (missing SDK
+      # tool on a runner image bump, signtool flake, etc.) can't gate the
+      # established portable-zip + Inno installer delivery path that real
+      # users depend on.  When MSIX matures we can promote it back into
+      # the hard-required artifact set.
       - name: Create MSIX package
+        continue-on-error: true
         env:
           AETHERSDR_MSIX_IDENTITY_NAME: ${{ vars.AETHERSDR_MSIX_IDENTITY_NAME }}
           AETHERSDR_MSIX_PUBLISHER: ${{ vars.AETHERSDR_MSIX_PUBLISHER }}
@@ -145,12 +158,6 @@ jobs:
           AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR }}
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -CreateUpload -SkipSign
-
-      - name: Create installer (Inno Setup)
-        run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
-          $runtimeDir = (Resolve-Path "installer-runtime").Path
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAPP_VERSION=$version "/DVC_RUNTIME_DIR=$runtimeDir" packaging\windows\installer.iss
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
