@@ -24,14 +24,13 @@ namespace {
 
 // Stylesheet templates — tokens are resolved at runtime by ThemeManager.
 // Use ThemeManager::applyStyleSheet(widget, kXxx) so widgets re-style automatically
-// on theme changes.  The :checked colours on kGreenToggle have no matching token
-// (there is no dark-success-background token) so they stay hardcoded.
+// on theme changes.
 
 const char* kGreenToggle =
     "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; border-radius: 3px;"
     " color: {{color.text.primary}}; font-size: 11px; font-weight: bold; padding: 2px 8px; }"
     "QPushButton:hover { background: {{color.background.2}}; }"
-    "QPushButton:checked { background: #006040; color: {{color.accent.success}}; border: 1px solid {{color.accent.success}}; }";
+    "QPushButton:checked { background: {{color.background.success}}; color: {{color.accent.success}}; border: 1px solid {{color.accent.success}}; }";
 
 const char* kHintBtn =
     "QPushButton { background: transparent; border: none; color: {{color.text.label}};"
