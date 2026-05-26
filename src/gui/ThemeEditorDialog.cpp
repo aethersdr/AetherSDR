@@ -952,6 +952,10 @@ void ThemeEditorDialog::onTokenContextMenu(const QPoint& pos)
     if (column <= 0 || column >= m_tokenList->columnCount() - 1) return;
     const QString scopePath =
         m_tokenList->headerItem()->data(column, Qt::UserRole).toString();
+    // Root column has no parent to fall back to — "clear" there would
+    // delete the token tree-wide.  Reset-to-factory belongs to the
+    // dedicated Reset button on the inspect row.
+    if (scopePath.isEmpty()) return;
     const QString token = item->data(0, Qt::UserRole).toString();
     auto& tm = ThemeManager::instance();
     if (!tm.isOverriddenAt(scopePath, token)) return;  // nothing to clear

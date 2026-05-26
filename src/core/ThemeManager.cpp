@@ -1734,6 +1734,16 @@ void ThemeManager::removeOverride(const QString& containerPath, const QString& t
 {
     ThemeScope* s = scopeForPath(containerPath);
     if (!s) return;
+    // Root scope is the BASE — there's nothing for the token to
+    // inherit FROM if we drop its root entry, so a "clear" there would
+    // delete the value tree-wide rather than restore inheritance.
+    // Reject root-scope clears defensively; the editor surface
+    // already hides the menu for the root column.
+    if (s == m_rootScope.get()) {
+        qCWarning(lcGui) << "ThemeManager::removeOverride: refusing to drop"
+                         << token << "from root scope (would delete it tree-wide)";
+        return;
+    }
     if (s->tokens.remove(token) == 0) return;  // nothing to drop
     m_currentEditToken = token;
     emit themeChanged();
