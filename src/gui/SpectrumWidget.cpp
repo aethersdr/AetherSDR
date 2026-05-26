@@ -4364,7 +4364,7 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
     auto* layout = new QFormLayout(&dlg);
 
     auto* freqSpin = new QDoubleSpinBox;
-    freqSpin->setRange(0.030, 54.000);
+    freqSpin->setRange(0.030, 50000.000);  // 50 GHz cap matches VfoWidget convention
     freqSpin->setDecimals(6);
     freqSpin->setSingleStep(m_stepHz > 0 ? m_stepHz / 1e6 : 0.001);
     freqSpin->setSuffix(" MHz");
