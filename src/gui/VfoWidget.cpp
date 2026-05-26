@@ -251,6 +251,11 @@ static bool likelyTxAntennaFallbackToken(const QString& token)
 VfoWidget::VfoWidget(QWidget* parent)
     : QWidget(parent)
 {
+    // Container scope — VFO flags are their own theming surface; inspector
+    // clicks should land here, not bubble up to `spectrum`.  Lives under
+    // the spectrum scope so unset tokens inherit the spectrum overrides.
+    AetherSDR::theme::setContainer(this, QStringLiteral("spectrum/vfo"));
+
     setObjectName("VfoWidgetRoot");
     setMinimumWidth(WIDGET_W);
     setMaximumWidth(WIDGET_W);
