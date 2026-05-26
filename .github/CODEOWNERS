@@ -25,7 +25,7 @@
 #         build configuration (CMakeLists.txt). Narrower owner set
 #         than Tier 3 because infrastructure changes need deeper
 #         repo context than routine source review.
-# Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T, @rfoust).
+# Tier 3 — @aethersdr/reviewers (currently: @ten9876, @jensenpat, @NF0T, @rfoust, @chibondking).
 #         AetherSDR source code and anything else not enumerated
 #         above (src/, third_party/, plugins/, hal-plugin/,
 #         resources/, packaging/, scripts/). Broadest collaborator
