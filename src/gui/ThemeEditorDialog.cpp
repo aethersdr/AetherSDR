@@ -160,9 +160,22 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     divider->setFrameShadow(QFrame::Sunken);
     root->addWidget(divider);
 
-    // Inspector toggle row — global event filter; clicking the main UI
-    // surfaces the tokens painting that region into the list below.
+    // Inspector + scope picker row.  Layout left-to-right:
+    //   [Scope: combo] [Inspect btn] [Editing label] [status] [Reset btn]
+    // Scope picker sits leftmost so it visually anchors the row as
+    // "where this edit will land".  Combo width is clamped to the
+    // longest container-path label + 4 px pad on each side; no
+    // stretch so it doesn't grow with the dialog.
     auto* inspectRow = new QHBoxLayout;
+    inspectRow->addWidget(new QLabel(QStringLiteral("Scope:"), bodyWidget()));
+    m_containerCombo = new QComboBox(bodyWidget());
+    m_containerCombo->setSizeAdjustPolicy(QComboBox::AdjustToContents);
+    m_containerCombo->setToolTip(QStringLiteral(
+        "Container scope to edit.  \"(root)\" is the global namespace.\n"
+        "Selecting a nested scope (e.g. applet.tx) routes new overrides\n"
+        "into that scope, and only widgets inside that container see them."));
+    inspectRow->addWidget(m_containerCombo);
+
     m_inspectBtn = new QPushButton(QStringLiteral("🎯  Inspect"), bodyWidget());
     m_inspectBtn->setCheckable(true);
     m_inspectBtn->setToolTip(QStringLiteral(
@@ -188,21 +201,6 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
         inspectRow->addWidget(reset, 0, Qt::AlignRight);
     }
     root->addLayout(inspectRow);
-
-    // Container scope picker.  Selecting a non-root container scopes
-    // subsequent OK commits to that container — TokenEditorWidget routes
-    // setColor / setSizing / setGradient / setString through the
-    // scope-aware overloads when m_activeContainerPath is non-empty.
-    auto* containerRow = new QHBoxLayout;
-    containerRow->setSpacing(6);
-    containerRow->addWidget(new QLabel(QStringLiteral("Scope:"), bodyWidget()));
-    m_containerCombo = new QComboBox(bodyWidget());
-    m_containerCombo->setToolTip(QStringLiteral(
-        "Container scope to edit.  \"(root)\" is the global namespace.\n"
-        "Selecting a nested scope (e.g. applet.tx) routes new overrides\n"
-        "into that scope, and only widgets inside that container see them."));
-    containerRow->addWidget(m_containerCombo, 1);
-    root->addLayout(containerRow);
 
     m_filterEdit = new QLineEdit(bodyWidget());
     m_filterEdit->setPlaceholderText(QStringLiteral("Filter tokens (e.g. accent, slice, meter)…"));
@@ -762,6 +760,20 @@ void ThemeEditorDialog::refreshContainerCombo()
         if (path.isEmpty()) continue;  // already added as "(root)"
         m_containerCombo->addItem(path, path);
     }
+    // Clamp the combo to the longest label + 4 px pad on each side
+    // (plus arrow + frame allowance).  Sized once per refresh; combo
+    // stays exactly that wide regardless of which item is selected.
+    QFontMetrics fm(m_containerCombo->font());
+    int maxLabelW = 0;
+    for (int i = 0; i < m_containerCombo->count(); ++i) {
+        maxLabelW = std::max(maxLabelW,
+                             fm.horizontalAdvance(m_containerCombo->itemText(i)));
+    }
+    // 4 px L + 4 px R text padding (overrides Theme.h's 6/6 default),
+    // ~20 px dropdown arrow, ~2 px frame borders.
+    m_containerCombo->setStyleSheet(QStringLiteral(
+        "QComboBox { padding: 2px 4px; }"));
+    m_containerCombo->setFixedWidth(maxLabelW + 4 + 4 + 20 + 2);
     // Restore previous selection by path string, falling back to root.
     int idx = m_containerCombo->findData(m_activeContainerPath);
     if (idx < 0) idx = 0;
