@@ -5,6 +5,7 @@
 #include <QString>
 #include <QStringList>
 #include <QHash>
+#include <QSet>
 #include <QColor>
 #include <QFont>
 #include <QBrush>
@@ -259,6 +260,20 @@ public:
     QStringList containerPaths() const;
     QString     containerPathFor(const QWidget* widget) const;
 
+    // Container declarations — widgets call this through
+    // theme::setContainer() to register their scope; ThemeManager keeps
+    // the path alive in m_declaredContainers so it stays visible in
+    // containerPaths() even after a theme load wipes empty scopes from
+    // the tree.  Idempotent.
+    void        registerDeclaredContainer(const QString& containerPath);
+
+    // Widget-aware QSS resolver — replaces each {{token}} placeholder
+    // with the widget's-scope css fragment instead of the root-only
+    // value.  applyStyleSheet() routes through this so widgets nested
+    // under a declared container automatically pick up its overrides
+    // on the next reapplyAllTrackedStyleSheets() pass.
+    QString     resolveFor(const QWidget* widget, const QString& stylesheetTemplate) const;
+
     // Factory-default lookups — read from a one-shot snapshot of the
     // bundled `:/themes/default-dark.json` so every Reset-to-default
     // affordance in the editor restores the canonical value.  Each
@@ -398,6 +413,12 @@ private:
     QHash<QString, ThemeScope*>      m_scopeByPath;
     QHash<QString, QVariant>         m_primitives;
     QHash<QString, QVariant>&        m_tokens;
+    // Widget-declared container paths.  Persisted across theme loads so
+    // a fresh JSON file (which only writes scopes that own overrides)
+    // doesn't make a declared-but-unoverridden container vanish from
+    // the editor's tree picker.  Re-installed into m_scopeByPath after
+    // every loadThemeFromPath().
+    QSet<QString>                    m_declaredContainers;
     QString m_activeTheme;
 
     // Factory-default snapshot, loaded once from `:/themes/default-dark.json`

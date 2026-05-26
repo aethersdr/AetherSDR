@@ -559,6 +559,11 @@ bool ThemeManager::loadThemeFromPath(const QString& path)
                       QString(), m_rootScope->tokens);
     }
     rebuildScopePathIndex();
+    // Replay declared containers — the JSON load just wiped the scope
+    // tree's children, but widgets registered their container paths
+    // at construction time and we need those scopes to keep existing
+    // so the editor's tree picker can still navigate to them.
+    for (const QString& path : m_declaredContainers) scopeOrCreate(path);
     return true;
 }
 
@@ -1341,10 +1346,16 @@ QString ThemeManager::value(const QString& token) const
 
 QString ThemeManager::resolve(const QString& stylesheetTemplate) const
 {
+    return resolveFor(nullptr, stylesheetTemplate);
+}
+
+QString ThemeManager::resolveFor(const QWidget* widget,
+                                 const QString& stylesheetTemplate) const
+{
     // Replace every {{token.name}} with the token's stylesheet fragment.
-    // Routes through cssFragment(): scalar colour tokens emit "#rrggbb",
-    // numeric tokens emit their plain value ("12" — caller adds "px"),
-    // gradient tokens emit qlineargradient(...) / qradialgradient(...).
+    // When `widget` is non-null the token is resolved through its
+    // container chain (containerPathFor → scope tree walk).  When null
+    // (legacy resolve() callers) lookups go straight to root scope.
     static const QRegularExpression kRe(QStringLiteral(R"(\{\{([^}]+)\}\})"));
     QString out = stylesheetTemplate;
     QRegularExpressionMatchIterator it = kRe.globalMatch(stylesheetTemplate);
@@ -1352,8 +1363,8 @@ QString ThemeManager::resolve(const QString& stylesheetTemplate) const
     while (it.hasNext()) {
         const QRegularExpressionMatch m = it.next();
         const QString token = m.captured(1).trimmed();
-        const QString val = cssFragment(token);
-        // Adjust for the running offset as substitutions change length.
+        const QString val = widget ? cssFragment(widget, token)
+                                    : cssFragment(token);
         out.replace(m.capturedStart(0) + offset,
                     m.capturedLength(0),
                     val);
@@ -1383,7 +1394,10 @@ void ThemeManager::applyStyleSheet(QWidget* widget, const QString& stylesheetTem
     // Resolve and apply right away so the caller gets the same visual
     // result they'd have gotten from setStyleSheet(resolve(...)) — the
     // tracking is an additive side-effect, not a behaviour change.
-    widget->setStyleSheet(resolve(stylesheetTemplate));
+    // Scope-aware resolve — the widget's container chain decides which
+    // overrides apply.  Widgets with no declared ancestor fall through
+    // to root scope, matching the historical flat behaviour.
+    widget->setStyleSheet(resolveFor(widget, stylesheetTemplate));
 
     // First-time registration: connect to destroyed() so the entry
     // disappears when the widget does.  Subsequent calls on the same
@@ -1516,7 +1530,10 @@ void ThemeManager::reapplyAllTrackedStyleSheets()
         const auto& ctx = it.value();
         if (ctx.stylesheetTemplate.isEmpty()) continue;
         if (targeted && !ctx.tokens.contains(m_currentEditToken)) continue;
-        w->setStyleSheet(resolve(ctx.stylesheetTemplate));
+        // Scope-aware re-apply — same path as applyStyleSheet() so an
+        // edit at a non-root scope visibly takes effect for every
+        // tracked widget under that container.
+        w->setStyleSheet(resolveFor(w, ctx.stylesheetTemplate));
     }
 }
 
@@ -1538,6 +1555,16 @@ QString ThemeManager::containerPathFor(const QWidget* widget) const
         w = w->parentWidget();
     }
     return QString();
+}
+
+void ThemeManager::registerDeclaredContainer(const QString& containerPath)
+{
+    if (containerPath.isEmpty()) return;
+    m_declaredContainers.insert(containerPath);
+    // Ensure the scope exists in the tree even when no override is
+    // present yet — keeps the path visible to the editor's tree
+    // picker between theme loads.
+    scopeOrCreate(containerPath);
 }
 
 QStringList ThemeManager::containerPaths() const
@@ -1617,8 +1644,15 @@ QBrush ThemeManager::brush(const QWidget* widget, const QString& token,
 
 QString ThemeManager::cssFragment(const QWidget* widget, const QString& token) const
 {
-    Q_UNUSED(widget);
-    return cssFragment(token);
+    // Scope-walk via the widget's container chain.  Falls back to root
+    // when no scope sets the token — keeps every QSS template valid
+    // even when the active theme has no per-container overrides yet.
+    const QVariant v = lookupRaw(containerPathFor(widget), token);
+    if (!v.isValid()) return cssFragment(token);
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) {
+        return gradientCssFragment(v.value<ThemeGradient>());
+    }
+    return colorHexToCssFragment(v.toString());
 }
 
 ThemeGradient ThemeManager::gradient(const QWidget* widget, const QString& token) const
@@ -1692,6 +1726,12 @@ void setContainer(QWidget* widget, const QString& containerPath)
 {
     if (!widget) return;
     widget->setProperty("themeContainer", containerPath);
+    // Register the declared path with ThemeManager so it stays visible
+    // in the editor's container tree even when no override has been
+    // written to that scope yet.
+    if (!containerPath.isEmpty()) {
+        ThemeManager::instance().registerDeclaredContainer(containerPath);
+    }
 }
 
 QString containerOf(const QWidget* widget)
