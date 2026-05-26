@@ -62,6 +62,14 @@ jobs:
               # Windows CI build whenever this file changes. (#2671)
               - 'src/gui/MainWindow.cpp'
               - 'src/gui/MainWindow.h'
+              # AudioEngine.cpp / .h are equally dense with platform-guarded
+              # code (WASAPI, CoreAudio, ALSA/PipeWire paths). A Linux-passing
+              # change inside a Q_OS_WIN block will skip check-windows without
+              # this entry. Post-mortem: #2929 (WASAPI mono-mic recovery)
+              # landed on main unverified because AudioEngine wasn't in the
+              # filter. (#3052)
+              - 'src/core/AudioEngine.cpp'
+              - 'src/core/AudioEngine.h'
 
   # Cross-platform build check — runs only when CMakeLists.txt, third_party/,
   # or workflows are modified, to catch MSVC issues before release. (#796 lesson)
