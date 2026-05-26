@@ -8,6 +8,9 @@
 #include <QTemporaryDir>
 #include <QFile>
 #include <QDir>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -253,6 +256,333 @@ int main(int argc, char** argv)
         EXPECT_EQ(tokens[1], QString("color.background.1"));
         EXPECT_EQ(tokens[2], QString("font.size.normal"));
     }
+
+    // ── v2 schema: primitives + {alias} resolution end-to-end ──
+    // Default Dark is a v2 file whose semantic tokens (e.g. color.accent)
+    // reference primitives (e.g. {color.blue.500}).  Pin that the loader
+    // resolves through the primitives map rather than returning the literal
+    // alias string — the cssFragment-empty-for-ThemeFont bug fixed mid-PR
+    // sat right next to this code path, so the assertion guards both.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        // color() must produce the resolved hex, not the "{color.blue.500}"
+        // literal that would emerge if resolveAlias() ever short-circuited.
+        EXPECT_EQ(tm.color("color.accent").name().toLower(),
+                  QString("#00b4d8"));
+        // cssFragment routes through the same alias-aware lookup; an
+        // unresolved alias would emit the literal "{color.blue.500}"
+        // string into the QSS, which Qt would silently render as nothing.
+        EXPECT_EQ(tm.cssFragment("color.accent"), QString("#00b4d8"));
+        // resolve() shells templates through cssFragment, so a {{token}}
+        // referencing an aliased token must inline the primitive's value.
+        const QString sheet = tm.resolve(
+            "QPushButton { background: {{color.accent}}; }");
+        EXPECT_TRUE(sheet.contains("background: #00b4d8"));
+        EXPECT_TRUE(!sheet.contains("{color.blue.500}"));
+    }
+
+    // ── flattenTokens discriminator: gradient vs ThemeFont vs nested ──
+    // Write a v1 theme that exercises all three object shapes in the same
+    // tokens block, import it, and assert each leaf type-resolves correctly.
+    // The order of the discriminator checks in flattenTokens() matters
+    // (a font compound has no "type" field; a gradient has no "family"
+    // field; a plain nested object has neither and must recurse).
+    {
+        const QString discriminatorDir = tmp.path() + "/_discriminator_src";
+        QDir().mkpath(discriminatorDir);
+        const QString discriminatorPath =
+            discriminatorDir + "/discriminator.json";
+        QFile df(discriminatorPath);
+        EXPECT_TRUE(df.open(QIODevice::WriteOnly));
+        df.write(R"({
+            "schemaVersion": 1,
+            "name": "Discriminator Probe",
+            "tokens": {
+                "color": {
+                    "accent": "#abcdef",
+                    "waterfall": {
+                        "colormap": {
+                            "type": "linear-gradient",
+                            "angle": 90,
+                            "stops": [
+                                { "at": 0.0, "color": "#000000" },
+                                { "at": 1.0, "color": "#ffffff" }
+                            ]
+                        }
+                    }
+                },
+                "font": {
+                    "family": {
+                        "freq": {
+                            "family": "DSEG7 Modern",
+                            "size":   30,
+                            "color":  "#c8d8e8"
+                        }
+                    }
+                }
+            }
+        })");
+        df.close();
+
+        QString impErr;
+        const QString imported = tm.importThemeFromFile(
+            discriminatorPath, &impErr);
+        EXPECT_EQ(imported, QString("Discriminator Probe"));
+        EXPECT_TRUE(impErr.isEmpty());
+        EXPECT_EQ(tm.activeTheme(), QString("Discriminator Probe"));
+
+        // Plain scalar — recursed-into nested object, leaf string.
+        EXPECT_EQ(tm.color("color.accent").name().toLower(),
+                  QString("#abcdef"));
+        // Object with "type" → routed to parseGradient.
+        const ThemeGradient g = tm.gradient("color.waterfall.colormap");
+        EXPECT_EQ(g.stops.size(), 2);
+        EXPECT_TRUE(g.stops.size() == 2 &&
+                    g.stops.first().color.name().toLower() ==
+                        QString("#000000"));
+        // Object with "family" (no "type") → routed to parseFont.
+        const ThemeFont compound = tm.fontToken("font.family.freq");
+        EXPECT_EQ(compound.family, QString("DSEG7 Modern"));
+        EXPECT_EQ(compound.size,   30);
+        EXPECT_EQ(compound.color.name().toLower(), QString("#c8d8e8"));
+    }
+
+    // ── Scope tree: setColor at nested scope leaves root untouched ──
+    // setColor on a built-in keeps the mutation in memory only
+    // (saveActiveTheme silently fails for built-ins), which is exactly
+    // what we want for an in-memory scope-tree assertion.  Each scope-
+    // tree test uses a unique container path so state from one block
+    // doesn't bleed into the next.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        const QColor rootBefore = tm.color("color.accent");
+        const QColor scopedColor = QColor("#ff00aa");
+
+        tm.setColor("scopeA/leaf", "color.accent", scopedColor);
+
+        // Nested scope sees the override.
+        EXPECT_EQ(tm.colorAt("scopeA/leaf", "color.accent").name().toLower(),
+                  scopedColor.name().toLower());
+        // Root scope is unaffected — color() always reads from root.
+        EXPECT_EQ(tm.color("color.accent").name().toLower(),
+                  rootBefore.name().toLower());
+        // isOverriddenAt distinguishes own-override from inherited value.
+        EXPECT_TRUE(tm.isOverriddenAt("scopeA/leaf", "color.accent"));
+    }
+
+    // ── Scope tree: inheritance walk picks up parent's override ──
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        const QColor parentColor = QColor("#11aa33");
+
+        tm.setColor("scopeB", "color.accent", parentColor);
+
+        // scopeB/leaf has no own override — inheritance must walk up to
+        // scopeB and return its value.
+        EXPECT_EQ(tm.colorAt("scopeB/leaf", "color.accent").name().toLower(),
+                  parentColor.name().toLower());
+        // scopeB itself is the source of the override.
+        EXPECT_TRUE(tm.isOverriddenAt("scopeB", "color.accent"));
+        // scopeB/leaf inherits — must NOT report own-override.  Use
+        // scopeOrCreate (via a setSizing on an unrelated token) to make
+        // the leaf scope exist; otherwise scopeForPath returns nullptr
+        // and isOverriddenAt short-circuits to false anyway, but
+        // exercising the real path here matches the editor's behaviour.
+        tm.setSizing("scopeB/leaf", "sizing.panel.padding", 7);
+        EXPECT_TRUE(!tm.isOverriddenAt("scopeB/leaf", "color.accent"));
+    }
+
+    // ── Scope tree: removeOverride at nested scope falls back to parent ──
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        const QColor parentColor = QColor("#557799");
+        const QColor leafOverride = QColor("#aabbcc");
+
+        tm.setColor("scopeC", "color.accent", parentColor);
+        tm.setColor("scopeC/leaf", "color.accent", leafOverride);
+        EXPECT_EQ(tm.colorAt("scopeC/leaf", "color.accent").name().toLower(),
+                  leafOverride.name().toLower());
+
+        tm.removeOverride("scopeC/leaf", "color.accent");
+
+        // Own override gone — inheritance walk falls back to scopeC.
+        EXPECT_TRUE(!tm.isOverriddenAt("scopeC/leaf", "color.accent"));
+        EXPECT_EQ(tm.colorAt("scopeC/leaf", "color.accent").name().toLower(),
+                  parentColor.name().toLower());
+    }
+
+    // ── Scope tree: removeOverride at root scope is a defensive no-op ──
+    // The root scope is the BASE — dropping a token there would delete
+    // it tree-wide rather than restore inheritance.  Guarded explicitly
+    // in ThemeManager.cpp; this test pins the warning + no-op behaviour
+    // so a future "cleanup" doesn't accidentally re-enable the delete.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        const QColor before = tm.color("color.accent");
+        EXPECT_TRUE(before.isValid());
+
+        tm.removeOverride("", "color.accent");  // root scope
+
+        // Root token must still be present after the refused removal.
+        EXPECT_EQ(tm.color("color.accent").name().toLower(),
+                  before.name().toLower());
+    }
+
+    // ── Scope tree: scopeOrCreate("a/b/c") wires up the full chain ──
+    // scopeOrCreate is private; exercise it indirectly via the scope-aware
+    // setter, then verify every intermediate path is registered in the
+    // tree-walk that drives the editor's container picker.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        tm.setColor("deep/middle/leaf", "color.accent", QColor("#123456"));
+
+        const QStringList paths = tm.containerPaths();
+        EXPECT_TRUE(paths.contains(QString()));            // root sentinel
+        EXPECT_TRUE(paths.contains("deep"));
+        EXPECT_TRUE(paths.contains("deep/middle"));
+        EXPECT_TRUE(paths.contains("deep/middle/leaf"));
+        // Only the leaf carries the override; intermediates exist but are
+        // empty (they got created on the walk down from root).
+        EXPECT_TRUE(!tm.isOverriddenAt("deep", "color.accent"));
+        EXPECT_TRUE(!tm.isOverriddenAt("deep/middle", "color.accent"));
+        EXPECT_TRUE(tm.isOverriddenAt("deep/middle/leaf", "color.accent"));
+    }
+
+    // ── Compound font tokens: setFontToken round-trip ──
+    // setFontToken stores a ThemeFont; fontTokenAt reads it back via the
+    // same scope-walk used by every other accessor.  Pins the per-field
+    // round-trip (family + size + color) so a future field add doesn't
+    // accidentally drop a field at write or read.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        ThemeFont in;
+        in.family = QString("Inter Display");
+        in.size   = 18;
+        in.color  = QColor("#deadbe");
+
+        tm.setFontToken("font.family.ui", in);
+        const ThemeFont out = tm.fontToken("font.family.ui");
+        EXPECT_EQ(out.family, in.family);
+        EXPECT_EQ(out.size,   in.size);
+        EXPECT_EQ(out.color.name().toLower(), in.color.name().toLower());
+
+        // value() on a ThemeFont must downgrade to the family string —
+        // the ~35 legacy callers that read `tm.value("font.family.ui")`
+        // for the bare typeface name rely on this transparent shim.
+        EXPECT_EQ(tm.value("font.family.ui"), in.family);
+
+        // cssFragment("font.size.<role>") virtual lookup: when no scalar
+        // font.size.freq exists but font.family.freq is a ThemeFont with
+        // a non-zero size, cssFragment must return that embedded size.
+        // This is the bug we fixed mid-PR.
+        ThemeFont freq;
+        freq.family = QString("DSEG7 Modern");
+        freq.size   = 34;
+        tm.setFontToken("font.family.freq", freq);
+        EXPECT_EQ(tm.cssFragment("font.size.freq"), QString("34"));
+        // The corresponding sizing() virtual lookup must also pick it up
+        // so paint code that composes a QFont sized off the compound's
+        // embedded size reads the same number QSS templates do.
+        EXPECT_EQ(tm.sizing("font.size.freq"), 34);
+    }
+
+    // ── Compound font + JSON persistence: v1 → v2 migration round-trip ──
+    // Drive importThemeFromFile with a v1 file that contains both a
+    // primitives-eligible alias and a compound font, then mutate via
+    // setColor (which auto-saves) and assert:
+    //   1. the file on disk is now v2 schema (migrated cleanly),
+    //   2. the compound font persisted in {family, size, color} shape,
+    //   3. unloading + reloading the theme produces identical values.
+    {
+        const QString v1Dir = tmp.path() + "/_v1_src";
+        QDir().mkpath(v1Dir);
+        const QString v1Path = v1Dir + "/v1-source.json";
+        QFile v1(v1Path);
+        EXPECT_TRUE(v1.open(QIODevice::WriteOnly));
+        v1.write(R"({
+            "schemaVersion": 1,
+            "name": "V1 Migrate Probe",
+            "tokens": {
+                "color": { "accent": "#cafe42" },
+                "font": {
+                    "family": {
+                        "ui": {
+                            "family": "Inter",
+                            "size":   13,
+                            "color":  "#aabbcc"
+                        }
+                    }
+                }
+            }
+        })");
+        v1.close();
+
+        QString impErr;
+        const QString imported = tm.importThemeFromFile(v1Path, &impErr);
+        EXPECT_EQ(imported, QString("V1 Migrate Probe"));
+        EXPECT_TRUE(impErr.isEmpty());
+        EXPECT_EQ(tm.color("color.accent").name().toLower(),
+                  QString("#cafe42"));
+        EXPECT_EQ(tm.fontToken("font.family.ui").size, 13);
+
+        // Mutate a token at root — this calls saveActiveTheme(), which
+        // writes the file in v2 schema regardless of how it was loaded.
+        const QColor mutated = QColor("#abcdef");
+        tm.setColor("color.accent", mutated);
+
+        // Locate the on-disk file via the user-dir convention used by
+        // importThemeFromFile().
+        const QString userDir =
+            QStandardPaths::writableLocation(
+                QStandardPaths::GenericConfigLocation)
+            + "/AetherSDR/themes";
+        const QString savedPath = userDir + "/V1 Migrate Probe.json";
+        EXPECT_TRUE(QFile::exists(savedPath));
+
+        QFile saved(savedPath);
+        EXPECT_TRUE(saved.open(QIODevice::ReadOnly));
+        const QByteArray bytes = saved.readAll();
+        saved.close();
+        const QJsonDocument savedDoc = QJsonDocument::fromJson(bytes);
+        EXPECT_TRUE(savedDoc.isObject());
+        const QJsonObject savedRoot = savedDoc.object();
+        // Migrated v1 → v2: schemaVersion bumped, scopes wrapper present.
+        EXPECT_EQ(savedRoot.value("schemaVersion").toInt(), 2);
+        EXPECT_TRUE(savedRoot.contains("scopes"));
+        const QJsonObject scopes = savedRoot.value("scopes").toObject();
+        EXPECT_TRUE(scopes.contains("root"));
+        const QJsonObject rootScope =
+            scopes.value("root").toObject().value("tokens").toObject();
+        EXPECT_TRUE(rootScope.contains("color.accent"));
+        EXPECT_EQ(rootScope.value("color.accent").toString().toLower(),
+                  QString("#abcdef"));
+        // Compound font persisted as a JSON object with the documented
+        // {family, size, color} shape — NOT as a nested scope.  A
+        // future loader change that re-routes compound fonts through
+        // flattenTokens()'s recurse path would break this assertion.
+        EXPECT_TRUE(rootScope.contains("font.family.ui"));
+        const QJsonValue compoundVal = rootScope.value("font.family.ui");
+        EXPECT_TRUE(compoundVal.isObject());
+        const QJsonObject compoundObj = compoundVal.toObject();
+        EXPECT_EQ(compoundObj.value("family").toString(), QString("Inter"));
+        EXPECT_EQ(compoundObj.value("size").toInt(), 13);
+        EXPECT_EQ(compoundObj.value("color").toString().toLower(),
+                  QString("#aabbcc"));
+
+        // Reload from disk through a full theme switch and verify the
+        // values survive the v2 path.
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.setActiveTheme("V1 Migrate Probe"));
+        EXPECT_EQ(tm.color("color.accent").name().toLower(),
+                  mutated.name().toLower());
+        const ThemeFont rt = tm.fontToken("font.family.ui");
+        EXPECT_EQ(rt.family, QString("Inter"));
+        EXPECT_EQ(rt.size,   13);
+        EXPECT_EQ(rt.color.name().toLower(), QString("#aabbcc"));
+    }
+
+    // Restore Default Dark for any future test additions below.
+    tm.setActiveTheme("Default Dark");
 
     if (g_failures == 0) {
         std::fprintf(stderr, "PASS theme_manager_test\n");
