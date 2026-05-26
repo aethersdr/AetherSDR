@@ -662,13 +662,17 @@ void TokenEditorWidget::markDirty()
 void TokenEditorWidget::loadCurrentTokenIntoBuffers()
 {
     auto& tm = ThemeManager::instance();
+    const QString& path = m_activeContainerPath;
     m_settingControlsFromToken = true;
 
     if (m_currentToken.startsWith(QStringLiteral("color."))) {
+        // Gradient detection still uses root brush() — gradient tokens
+        // are namespace-shaped (color.waterfall.colormap.*) and not yet
+        // overridden in nested scopes.  PR step 4 may revisit this.
         const bool isGradient = tm.brush(m_currentToken).gradient() != nullptr;
         if (isGradient) {
             m_target = TargetGradient;
-            m_gradientBuf = tm.gradient(m_currentToken);
+            m_gradientBuf = tm.gradientAt(path, m_currentToken);
             m_bufferColor = m_gradientBuf.stops.isEmpty()
                                 ? QColor(255, 255, 255)
                                 : m_gradientBuf.stops.first().color;
@@ -680,11 +684,9 @@ void TokenEditorWidget::loadCurrentTokenIntoBuffers()
             m_typeGradient->setChecked(true);
         } else {
             m_target = TargetScalarColor;
-            m_bufferColor = tm.color(m_currentToken);
+            m_bufferColor = tm.colorAt(path, m_currentToken);
             QSignalBlocker bRadio(m_typeGroup);
             m_typeFlat->setChecked(true);
-            // Clear the gradient list visually so it doesn't show stale
-            // entries from a previously-loaded gradient token.
             m_gradientBuf = {};
             syncGradientStripAndList();
         }
@@ -692,19 +694,15 @@ void TokenEditorWidget::loadCurrentTokenIntoBuffers()
         m_colorPicker->setColor(m_bufferColor);
     } else if (m_currentToken.startsWith(QStringLiteral("font.family."))) {
         m_target = TargetFontFamily;
-        m_bufferFontFamily = tm.value(m_currentToken);
+        m_bufferFontFamily = tm.valueAt(path, m_currentToken);
         QSignalBlocker bCombo(m_fontCombo);
         m_fontCombo->setCurrentFont(QFont(m_bufferFontFamily));
-        // Size combo doesn't map to a specific token in family-mode —
-        // seed from the canonical font.size.normal so the UI shows
-        // *something* sensible.  Operator can A↑/A↓ but the commit
-        // only writes the family.
-        m_bufferFontSize = std::max(1, tm.sizing("font.size.normal"));
+        m_bufferFontSize = std::max(1, tm.sizingAt(path, QStringLiteral("font.size.normal")));
         syncFontSizeComboToBuffer(m_bufferFontSize);
     } else if (m_currentToken.startsWith(QStringLiteral("font.size."))
                || m_currentToken.startsWith(QStringLiteral("sizing."))) {
         m_target = TargetNumeric;
-        m_bufferNumeric = tm.sizing(m_currentToken);
+        m_bufferNumeric = tm.sizingAt(path, m_currentToken);
         m_bufferFontSize = std::max(1, m_bufferNumeric);
         syncFontSizeComboToBuffer(m_bufferNumeric);
     } else {
@@ -750,10 +748,28 @@ void TokenEditorWidget::setToken(const QString& key)
     // Single-line layout: "Editing:" and the token sit on the same
     // row.  Word-wrap is off so the label keeps its natural width
     // without breaking mid-string.
+    // Append the current scope to the header when editing a non-root
+    // container, so the operator can see where their commit will land
+    // alongside the token name + kind.
+    const QString scopeSuffix = m_activeContainerPath.isEmpty()
+        ? QString()
+        : QStringLiteral(" <span style=\"font-weight:normal;color:#00bcd4;\">"
+                         "@ %1</span>").arg(m_activeContainerPath.toHtmlEscaped());
     m_header->setText(QStringLiteral(
-        "Editing: %1 <span style=\"font-weight:normal;font-style:italic;\">(%2)</span>")
-        .arg(key.toHtmlEscaped(), typeLabel));
+        "Editing: %1 <span style=\"font-weight:normal;font-style:italic;\">(%2)</span>%3")
+        .arg(key.toHtmlEscaped(), typeLabel, scopeSuffix));
     applyEnableState();
+}
+
+void TokenEditorWidget::setActiveContainerPath(const QString& path)
+{
+    if (path == m_activeContainerPath) return;
+    m_activeContainerPath = path;
+    // Reload the currently-selected token so the buffer reflects the
+    // new scope's resolved value (the user just navigated containers,
+    // not tokens — their selection should keep pointing at the same
+    // semantic but the controls should now show the new scope's value).
+    if (!m_currentToken.isEmpty()) setToken(m_currentToken);
 }
 
 // ─────────────────────────────────────────────────────── color picker ───
@@ -1145,22 +1161,24 @@ void TokenEditorWidget::commitBufferToThemeManager()
 {
     if (m_currentToken.isEmpty()) return;
     auto& tm = ThemeManager::instance();
+    const QString& path = m_activeContainerPath;
+    // The scope-aware setters short-circuit to the bare-token (root)
+    // overload when `path` is empty, so the historical flat-namespace
+    // behaviour is preserved for the default selection.
     switch (m_target) {
         case TargetScalarColor:
-            tm.setColor(m_currentToken, m_bufferColor);
+            tm.setColor(path, m_currentToken, m_bufferColor);
             pushRecentColor(m_bufferColor);
             break;
         case TargetGradient:
-            tm.setGradient(m_currentToken, m_gradientBuf);
-            // The selected stop is the one the operator was actively
-            // editing — record its colour as the "most recent".
+            tm.setGradient(path, m_currentToken, m_gradientBuf);
             if (const int si = selectedGradientStopIndex();
                 si >= 0 && si < m_gradientBuf.stops.size()) {
                 pushRecentColor(m_gradientBuf.stops[si].color);
             }
             break;
-        case TargetFontFamily:  tm.setString(m_currentToken, m_bufferFontFamily); break;
-        case TargetNumeric:     tm.setSizing(m_currentToken, m_bufferNumeric); break;
+        case TargetFontFamily:  tm.setString(path, m_currentToken, m_bufferFontFamily); break;
+        case TargetNumeric:     tm.setSizing(path, m_currentToken, m_bufferNumeric); break;
         default: break;
     }
 }

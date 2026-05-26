@@ -260,6 +260,17 @@ public:
     QStringList containerPaths() const;
     QString     containerPathFor(const QWidget* widget) const;
 
+    // Path-string scope-aware getters.  Mirror the widget-aware
+    // overloads but accept a literal container path string — used by
+    // the v2 editor whose container picker holds a path, not a widget.
+    QColor        colorAt(const QString& containerPath, const QString& token) const;
+    int           sizingAt(const QString& containerPath, const QString& token) const;
+    QString       valueAt(const QString& containerPath, const QString& token) const;
+    ThemeGradient gradientAt(const QString& containerPath, const QString& token) const;
+    // Indicates whether `containerPath` itself overrides `token` (true)
+    // or just inherits it from an ancestor (false).
+    bool          isOverriddenAt(const QString& containerPath, const QString& token) const;
+
     // Container declarations — widgets call this through
     // theme::setContainer() to register their scope; ThemeManager keeps
     // the path alive in m_declaredContainers so it stays visible in

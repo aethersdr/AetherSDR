@@ -51,6 +51,14 @@ public:
     void setToken(const QString& key);
     const QString& currentToken() const { return m_currentToken; }
 
+    // Container scope this editor is editing under.  Empty = root.
+    // Setting a non-empty path routes commits through the scope-aware
+    // ThemeManager setters and reads through `valueAt(path, token)`
+    // so the buffer reflects the scope's resolved value (including
+    // inherited values from ancestors).
+    void setActiveContainerPath(const QString& path);
+    QString activeContainerPath() const { return m_activeContainerPath; }
+
     // Owned by this widget but placed by the parent dialog (typically
     // into the Inspect row).  Stays in sync with the current token +
     // dirty state via setToken() / markDirty().
@@ -190,6 +198,7 @@ private:
     static QString recentColorsKeyFor(const QString& themeName);
 
     QString    m_currentToken;
+    QString    m_activeContainerPath;  // empty == root scope
     EditTarget m_target{TargetNone};
 
     // Working copies — never written to ThemeManager until OK.

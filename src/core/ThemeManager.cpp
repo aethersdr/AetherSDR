@@ -1567,6 +1567,48 @@ void ThemeManager::registerDeclaredContainer(const QString& containerPath)
     scopeOrCreate(containerPath);
 }
 
+QColor ThemeManager::colorAt(const QString& containerPath, const QString& token) const
+{
+    const QVariant v = lookupRaw(containerPath, token);
+    if (!v.isValid()) return color(token);
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) {
+        const ThemeGradient g = v.value<ThemeGradient>();
+        return g.stops.isEmpty() ? QColor() : g.stops.first().color;
+    }
+    return QColor(v.toString());
+}
+
+int ThemeManager::sizingAt(const QString& containerPath, const QString& token) const
+{
+    const QVariant v = lookupRaw(containerPath, token);
+    if (!v.isValid()) return sizing(token);
+    bool ok = false;
+    const int n = v.toInt(&ok);
+    return ok ? n : sizing(token);
+}
+
+QString ThemeManager::valueAt(const QString& containerPath, const QString& token) const
+{
+    const QVariant v = lookupRaw(containerPath, token);
+    if (!v.isValid()) return value(token);
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) return {};
+    return v.toString();
+}
+
+ThemeGradient ThemeManager::gradientAt(const QString& containerPath, const QString& token) const
+{
+    const QVariant v = lookupRaw(containerPath, token);
+    if (v.userType() == qMetaTypeId<ThemeGradient>()) return v.value<ThemeGradient>();
+    return gradient(token);
+}
+
+bool ThemeManager::isOverriddenAt(const QString& containerPath, const QString& token) const
+{
+    const ThemeScope* s = scopeForPath(containerPath);
+    if (!s) return false;
+    return s->tokens.constFind(token) != s->tokens.constEnd();
+}
+
 QStringList ThemeManager::containerPaths() const
 {
     QStringList out;

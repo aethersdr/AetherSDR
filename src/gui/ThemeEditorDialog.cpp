@@ -5,6 +5,7 @@
 #include "core/ThemeManager.h"
 
 #include <QAction>
+#include <QComboBox>
 #include <QCursor>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -188,6 +189,21 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     }
     root->addLayout(inspectRow);
 
+    // Container scope picker.  Selecting a non-root container scopes
+    // subsequent OK commits to that container — TokenEditorWidget routes
+    // setColor / setSizing / setGradient / setString through the
+    // scope-aware overloads when m_activeContainerPath is non-empty.
+    auto* containerRow = new QHBoxLayout;
+    containerRow->setSpacing(6);
+    containerRow->addWidget(new QLabel(QStringLiteral("Scope:"), bodyWidget()));
+    m_containerCombo = new QComboBox(bodyWidget());
+    m_containerCombo->setToolTip(QStringLiteral(
+        "Container scope to edit.  \"(root)\" is the global namespace.\n"
+        "Selecting a nested scope (e.g. applet.tx) routes new overrides\n"
+        "into that scope, and only widgets inside that container see them."));
+    containerRow->addWidget(m_containerCombo, 1);
+    root->addLayout(containerRow);
+
     m_filterEdit = new QLineEdit(bodyWidget());
     m_filterEdit->setPlaceholderText(QStringLiteral("Filter tokens (e.g. accent, slice, meter)…"));
     root->addWidget(m_filterEdit);
@@ -237,6 +253,7 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // outermost dialog has setAcceptDrops(true).
     setAcceptDrops(true);
 
+    refreshContainerCombo();
     refreshTokenList();
     updateTitle();
     m_lastRenderedTheme = ThemeManager::instance().activeTheme();
@@ -253,6 +270,9 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // the snapshot into the new user copy.
     connect(m_tokenEditor, &TokenEditorWidget::requestSaveAsBeforeCommit,
             this, &ThemeEditorDialog::onSaveAsBeforeCommit);
+    connect(m_containerCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ThemeEditorDialog::onContainerChanged);
+
     connect(m_filterEdit, &QLineEdit::textChanged, this, [this](const QString&) {
         // Re-evaluate visibility against both the text filter and the
         // last inspector-picked subset (if any) — filterTokensTo() reads
@@ -730,6 +750,31 @@ void ThemeEditorDialog::filterTokensTo(const QStringList& subset)
     }
 }
 
+void ThemeEditorDialog::refreshContainerCombo()
+{
+    if (!m_containerCombo) return;
+    QSignalBlocker block(m_containerCombo);
+    m_containerCombo->clear();
+    // Friendlier label for the empty (root) path so the dropdown is
+    // self-explanatory; userData carries the real path string.
+    m_containerCombo->addItem(QStringLiteral("(root)"), QString());
+    for (const QString& path : ThemeManager::instance().containerPaths()) {
+        if (path.isEmpty()) continue;  // already added as "(root)"
+        m_containerCombo->addItem(path, path);
+    }
+    // Restore previous selection by path string, falling back to root.
+    int idx = m_containerCombo->findData(m_activeContainerPath);
+    if (idx < 0) idx = 0;
+    m_containerCombo->setCurrentIndex(idx);
+}
+
+void ThemeEditorDialog::onContainerChanged(int)
+{
+    if (!m_containerCombo) return;
+    m_activeContainerPath = m_containerCombo->currentData().toString();
+    if (m_tokenEditor) m_tokenEditor->setActiveContainerPath(m_activeContainerPath);
+}
+
 void ThemeEditorDialog::onActiveThemeChanged()
 {
     // themeChanged fires for BOTH "user switched active theme" (View →
@@ -745,6 +790,7 @@ void ThemeEditorDialog::onActiveThemeChanged()
     updateTitle();
     if (current != m_lastRenderedTheme) {
         m_lastRenderedTheme = current;
+        refreshContainerCombo();
         refreshTokenList();
     }
 }

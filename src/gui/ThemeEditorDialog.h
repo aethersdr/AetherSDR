@@ -9,6 +9,7 @@ class QDropEvent;
 class QListWidget;
 class QListWidgetItem;
 class QLabel;
+class QComboBox;
 class QLineEdit;
 class QPushButton;
 
@@ -46,6 +47,7 @@ private slots:
     void onSaveAsClicked();
     void onSaveAsBeforeCommit();     // fork built-in theme before committing an edit
     void onActiveThemeChanged();     // re-load when user picks a different theme
+    void onContainerChanged(int);    // user picked a different scope from the container combo
 
     // Inspector-mode handlers.
     void onInspectToggled(bool on);
@@ -78,8 +80,11 @@ private:
 
     QLabel*      m_themeLabel{nullptr};   // "Editing: <name>"
     TokenEditorWidget* m_tokenEditor{nullptr};   // inline editor stack
+    QComboBox*   m_containerCombo{nullptr};   // scope picker — root + declared paths
     QLineEdit*   m_filterEdit{nullptr};   // type-to-filter token names
     QListWidget* m_tokenList{nullptr};
+    void         refreshContainerCombo();
+    QString      m_activeContainerPath;  // empty == root scope
     QPushButton* m_saveAsBtn{nullptr};
     QPushButton* m_inspectBtn{nullptr};   // checkable
     QLabel*      m_inspectStatus{nullptr};
