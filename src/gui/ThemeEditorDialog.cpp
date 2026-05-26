@@ -186,12 +186,13 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     // button.  Inspector status text takes the leftover stretch so
     // transient messages ("Inspector canceled.") show between the
     // header and the Reset button without nudging either side.
-    if (auto* hdr = m_tokenEditor->headerLabel()) {
-        inspectRow->addWidget(hdr, 0, Qt::AlignLeft | Qt::AlignVCenter);
-    }
-    // Stretch spacer absorbs slack between the header and the Reset
-    // button now that the inspector status has moved to the filter row.
-    inspectRow->addStretch(1);
+    // Inspector status sits on the inspect row in transient-message
+    // territory; Editing label moves down to the filter row.
+    m_inspectStatus = new QLabel(bodyWidget());
+    m_inspectStatus->setWordWrap(true);
+    m_inspectStatus->setStyleSheet(QStringLiteral(
+        "QLabel { font-style: italic; }"));
+    inspectRow->addWidget(m_inspectStatus, 1);
     // Reset button reparents out of the editor's bottom row and sits
     // right-aligned on the inspect row — keeps the editor's Cancel/OK
     // pair clean, and Reset stays visible without scrolling.
@@ -200,20 +201,18 @@ ThemeEditorDialog::ThemeEditorDialog(QWidget* parent)
     }
     root->addLayout(inspectRow);
 
-    // Filter input + inspector status share one row: filter is clamped
-    // to ~50% of the body width, status takes the rest so transient
-    // inspector messages have room to render without spilling.
+    // Filter input + "Editing: <token>" header share one row: filter
+    // is clamped to ~50% of the body width, header takes the rest so
+    // its single-line layout always has the room it needs to render.
     auto* filterRow = new QHBoxLayout;
     filterRow->setSpacing(8);
     m_filterEdit = new QLineEdit(bodyWidget());
     m_filterEdit->setPlaceholderText(QStringLiteral("Filter tokens (e.g. accent, slice, meter)…"));
     m_filterEdit->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     filterRow->addWidget(m_filterEdit, 1);
-    m_inspectStatus = new QLabel(bodyWidget());
-    m_inspectStatus->setWordWrap(true);
-    m_inspectStatus->setStyleSheet(QStringLiteral(
-        "QLabel { font-style: italic; }"));
-    filterRow->addWidget(m_inspectStatus, 1);
+    if (auto* hdr = m_tokenEditor->headerLabel()) {
+        filterRow->addWidget(hdr, 1, Qt::AlignLeft | Qt::AlignVCenter);
+    }
     root->addLayout(filterRow);
 
     m_tokenList = new QListWidget(bodyWidget());
