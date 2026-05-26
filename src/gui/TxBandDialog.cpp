@@ -1,5 +1,6 @@
 #include "TxBandDialog.h"
 
+#include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -22,6 +23,7 @@ TxBandDialog::TxBandDialog(RadioModel* model, QWidget* parent)
         parent),
       m_model(model)
 {
+    theme::setContainer(this, QStringLiteral("dialog/txBand"));
     setMinimumSize(700, 450);
     setStyleSheet(QStringLiteral("QDialog { background: #0f0f1a; }"));
 

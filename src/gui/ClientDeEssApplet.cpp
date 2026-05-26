@@ -4,6 +4,7 @@
 #include "MeterSmoother.h"
 #include "core/AudioEngine.h"
 #include "core/ClientDeEss.h"
+#include "core/ThemeManager.h"
 
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
@@ -101,6 +102,7 @@ constexpr const char* kEditStyle =
 
 ClientDeEssApplet::ClientDeEssApplet(QWidget* parent) : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/deess"));
     buildUI();
     hide();
 }

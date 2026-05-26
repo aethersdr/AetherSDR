@@ -1,5 +1,7 @@
 #include "ClientDisconnectDialog.h"
 
+#include "core/ThemeManager.h"
+
 #include <QAbstractButton>
 #include <QApplication>
 #include <QCursor>
@@ -71,6 +73,7 @@ ClientDisconnectDialog::ClientDisconnectDialog(const QList<Client>& clients,
     : QDialog(parent)
     , m_clients(clients)
 {
+    theme::setContainer(this, QStringLiteral("dialog/clientDisconnect"));
     const bool remoteMode = mode == Mode::RemoteClientDisconnect;
 
     setWindowTitle(remoteMode ? tr("Disconnect remote clients") : tr("Radio in use"));

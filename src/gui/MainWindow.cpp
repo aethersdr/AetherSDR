@@ -1376,6 +1376,12 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
 {
+    // Status bar is the only top-level shell besides the spectrum / applet
+    // rail / titlebar that the operator can directly retheme.  Declare its
+    // container here — statusBar() lazy-creates the QStatusBar on first
+    // call, so this is also the construction point.
+    theme::setContainer(statusBar(), QStringLiteral("statusbar"));
+
     setWindowTitle(QString("AetherSDR v%1").arg(QCoreApplication::applicationVersion()));
     setWindowIcon(QIcon(":/icon.png"));
     setMinimumSize(1024, 400);

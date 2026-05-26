@@ -38,6 +38,7 @@ static const char* kDialogStyle =
 ShortcutDialog::ShortcutDialog(ShortcutManager* mgr, QWidget* parent)
     : QDialog(parent), m_mgr(mgr)
 {
+    theme::setContainer(this, QStringLiteral("dialog/shortcut"));
     setWindowTitle("Keyboard Shortcuts");
     setMinimumSize(950, 700);
     resize(1100, 800);

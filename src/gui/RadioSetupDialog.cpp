@@ -422,6 +422,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
       m_model(model), m_audio(audio),
       m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag)
 {
+    theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(820, 620);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; }");
 

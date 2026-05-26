@@ -213,6 +213,7 @@ WhatsNewDialog::WhatsNewDialog(const QString& lastSeenVersion,
     : PersistentDialog("What's New - AetherSDR", "WhatsNewDialogGeometry", parent)
     , m_currentVersion(currentVersion)
 {
+    theme::setContainer(this, QStringLiteral("dialog/whatsNew"));
     setAttribute(Qt::WA_DeleteOnClose);
     buildUI(lastSeenVersion, currentVersion, showUpgrade, currentVersionOnly);
 }

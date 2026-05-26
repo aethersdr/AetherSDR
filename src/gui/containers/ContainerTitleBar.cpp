@@ -55,6 +55,7 @@ constexpr int kDragThresholdPx = 6;
 ContainerTitleBar::ContainerTitleBar(const QString& title, QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("titlebar"));
     setFixedHeight(kHeight);
     setCursor(Qt::OpenHandCursor);
     setAttribute(Qt::WA_StyledBackground, true);

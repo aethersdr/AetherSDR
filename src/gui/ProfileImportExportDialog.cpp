@@ -1,6 +1,7 @@
 #include "ProfileImportExportDialog.h"
 
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -86,6 +87,7 @@ ProfileImportExportDialog::ProfileImportExportDialog(RadioModel* model, QWidget*
                        QStringLiteral("ProfileImportExportDialogGeometry"), parent),
       m_model(model)
 {
+    theme::setContainer(this, QStringLiteral("dialog/profileIO"));
     setMinimumSize(560, 430);
     setStyleSheet(kDialogStyle);
 

@@ -53,6 +53,7 @@ const QString kStatusLabel = "QLabel { color: #506070; font-size: 11px; }";
 
 TciApplet::TciApplet(QWidget* parent) : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/tci"));
 #ifdef HAVE_WEBSOCKETS
     buildUI();
     hide();  // hidden by default

@@ -1,4 +1,5 @@
 #include "WaveformsDialog.h"
+#include "core/ThemeManager.h"
 #include "models/FlexWaveformModel.h"
 
 #include <QFrame>
@@ -15,6 +16,7 @@ WaveformsDialog::WaveformsDialog(FlexWaveformModel* model, QWidget* parent)
     : PersistentDialog(tr("Waveforms"), QStringLiteral("WaveformsDialogGeometry"), parent)
     , m_model(model)
 {
+    theme::setContainer(this, QStringLiteral("dialog/waveforms"));
     setMinimumSize(440, 200);
 
     auto* root = new QVBoxLayout(bodyWidget());

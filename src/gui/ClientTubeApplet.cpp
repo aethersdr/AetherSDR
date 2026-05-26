@@ -3,6 +3,7 @@
 #include "ClientTubeCurveWidget.h"
 #include "core/AudioEngine.h"
 #include "core/ClientTube.h"
+#include "core/ThemeManager.h"
 
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
@@ -38,6 +39,7 @@ ClientTubeApplet::ClientTubeApplet(Side side, QWidget* parent)
     : QWidget(parent)
     , m_side(side)
 {
+    theme::setContainer(this, QStringLiteral("applet/tube"));
     buildUI();
     hide();
 }

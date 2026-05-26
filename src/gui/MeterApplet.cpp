@@ -1,5 +1,6 @@
 #include "MeterApplet.h"
 #include "HGauge.h"
+#include "core/ThemeManager.h"
 #include "models/MeterModel.h"
 
 #include <QVBoxLayout>
@@ -14,6 +15,7 @@ static const char* kSectionStyle =
 MeterApplet::MeterApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/meter"));
     auto* vbox = new QVBoxLayout(this);
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);

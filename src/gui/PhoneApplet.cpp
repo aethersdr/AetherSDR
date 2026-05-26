@@ -83,6 +83,7 @@ static const QString kStepBtnStyle =
 PhoneApplet::PhoneApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/phone"));
     buildUI();
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     setVisible(false);

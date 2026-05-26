@@ -1,6 +1,7 @@
 #include "GradientEditorDialog.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 
 #include <QApplication>
 #include <QColorDialog>
@@ -288,6 +289,7 @@ GradientEditorDialog::GradientEditorDialog(const QString& tokenName,
                        parent),
       m_tokenName(tokenName), m_gradient(initial)
 {
+    theme::setContainer(this, QStringLiteral("dialog/gradientEditor"));
     setModal(true);
     setMinimumSize(520, 420);
     applyAppTheme(this);

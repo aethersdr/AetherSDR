@@ -110,6 +110,7 @@ PanLayoutDialog::PanLayoutDialog(int maxPans, const QString& currentLayout,
                                  QWidget* parent)
     : PersistentDialog("Panadapter Layout", /*geomKey*/ QString(), parent)
 {
+    theme::setContainer(this, QStringLiteral("dialog/panLayout"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; }"
                   "QLabel { color: {{color.text.primary}}; }");
     // Fixed-size grid of thumbnails — body content is the same regardless of

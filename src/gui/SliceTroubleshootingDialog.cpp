@@ -389,6 +389,7 @@ SliceTroubleshootingDialog::SliceTroubleshootingDialog(RadioModel* model,
     , m_controlDevicesProvider(std::move(controlDevicesProvider))
     , m_rendererProvider(std::move(rendererProvider))
 {
+    theme::setContainer(this, QStringLiteral("dialog/sliceTroubleshoot"));
     setWindowTitle("Slice Troubleshooting");
     setMinimumSize(920, 720);
     resize(980, 760);

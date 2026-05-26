@@ -33,6 +33,7 @@ namespace AetherSDR {
 SupportDialog::SupportDialog(QWidget* parent)
     : QDialog(parent)
 {
+    theme::setContainer(this, QStringLiteral("dialog/support"));
     setWindowTitle("Support & Diagnostics");
     setMinimumSize(600, 520);
     resize(680, 600);

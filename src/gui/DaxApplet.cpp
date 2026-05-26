@@ -2,6 +2,7 @@
 #include "MeterSlider.h"
 #include "SliceLabel.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -37,6 +38,7 @@ const QString kStatusLabel = "QLabel { color: #506070; font-size: 11px; }";
 
 DaxApplet::DaxApplet(QWidget* parent) : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/dax"));
     buildUI();
     hide();  // hidden by default
 }

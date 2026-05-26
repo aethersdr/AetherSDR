@@ -784,6 +784,7 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     : PersistentDialog("Network Diagnostics", "NetworkDiagnosticsDialogGeometry", parent),
       m_model(model), m_audio(audio), m_history(history), m_tci(tci)
 {
+    theme::setContainer(this, QStringLiteral("dialog/networkDiag"));
     setMinimumSize(920, 680);
     resize(980, 760);
     bodyWidget()->setStyleSheet(QString::fromLatin1(kNetworkDiagnosticsStyle));

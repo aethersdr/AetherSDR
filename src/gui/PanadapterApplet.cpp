@@ -27,6 +27,7 @@ namespace AetherSDR {
 PanadapterApplet::PanadapterApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/panadapter"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);

@@ -31,6 +31,7 @@ QString displayMemoryName(const MemoryEntry& memory)
 MemoryBrowsePanel::MemoryBrowsePanel(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("panel/memoryBrowse"));
     setFixedSize(252, 460);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "background: rgba(15, 15, 26, 220); border: 1px solid {{color.background.2}}; border-radius: 3px;");
 

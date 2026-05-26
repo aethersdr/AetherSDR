@@ -225,6 +225,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     : PersistentDialog("Memory Channels", "MemoryDialogGeometry", parent),
       m_model(model)
 {
+    theme::setContainer(this, QStringLiteral("dialog/memory"));
     resize(1000, 500);
 
     auto* root = new QVBoxLayout(bodyWidget());

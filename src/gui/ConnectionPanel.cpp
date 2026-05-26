@@ -183,6 +183,7 @@ QString normalizedStatus(QString status)
 ConnectionPanel::ConnectionPanel(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("panel/connection"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "ConnectionPanel { background: {{color.background.0}}; }"
         "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 7px; margin-top: 10px; "
         "color: {{color.text.primary}}; font-weight: bold; }"

@@ -4,6 +4,7 @@
 #include "MeterSmoother.h"
 #include "core/AudioEngine.h"
 #include "core/ClientComp.h"
+#include "core/ThemeManager.h"
 
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
@@ -106,6 +107,7 @@ ClientCompApplet::ClientCompApplet(Side side, QWidget* parent)
     : QWidget(parent)
     , m_side(side)
 {
+    theme::setContainer(this, QStringLiteral("applet/comp"));
     buildUI();
     hide();  // hidden until toggled on from the button tray
 }

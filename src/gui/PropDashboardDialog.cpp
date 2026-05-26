@@ -370,6 +370,7 @@ PropDashboardDialog::PropDashboardDialog(PropForecastClient* client, QWidget* pa
                        QStringLiteral("PropDashboardDialogGeometry"), parent),
       m_client(client)
 {
+    theme::setContainer(this, QStringLiteral("dialog/propDashboard"));
     setStyleSheet(kDialogStyle);
 
     const QScreen* screen = parentWidget() && parentWidget()->screen()

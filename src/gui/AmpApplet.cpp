@@ -12,6 +12,7 @@ namespace AetherSDR {
 AmpApplet::AmpApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/amp"));
     auto* vbox = new QVBoxLayout(this);
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);

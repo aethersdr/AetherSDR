@@ -49,6 +49,7 @@ static constexpr const char* kValueStyle =
 AntennaGeniusApplet::AntennaGeniusApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/antgen"));
     hide();
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     setMaximumWidth(260);

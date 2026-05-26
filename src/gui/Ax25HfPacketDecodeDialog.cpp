@@ -4,6 +4,7 @@
 #include "core/AppSettings.h"
 #include "core/DaxTxPolicy.h"
 #include "core/LogManager.h"
+#include "core/ThemeManager.h"
 #include "core/tnc/Ax25FrameFormatter.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -501,6 +502,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     , m_audio(audio)
     , m_radio(radio)
 {
+    theme::setContainer(this, QStringLiteral("dialog/ax25Decode"));
     setMinimumSize(1080, 680);
 
     m_shim = new AetherAx25LibmodemShim(this);

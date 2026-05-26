@@ -20,6 +20,7 @@ namespace AetherSDR {
 TunerApplet::TunerApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/tuner"));
     hide();   // hidden by default until toggled on
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 

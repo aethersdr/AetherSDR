@@ -37,6 +37,7 @@ constexpr const char* kCloseButtonStyle =
 FramelessWindowTitleBar::FramelessWindowTitleBar(const QString& title, QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("titlebar"));
     setFixedHeight(18);
     setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet(kBarStyle);

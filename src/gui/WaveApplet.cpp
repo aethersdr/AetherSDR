@@ -98,6 +98,7 @@ QString settingForViewMode(WaveformWidget::ViewMode mode)
 WaveApplet::WaveApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/wave"));
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(2, 2, 2, 2);
     layout->setSpacing(3);

@@ -2,6 +2,7 @@
 #include "ClientEqCurveWidget.h"
 #include "core/AudioEngine.h"
 #include "core/ClientEq.h"
+#include "core/ThemeManager.h"
 
 #include <QVBoxLayout>
 
@@ -11,6 +12,7 @@ ClientEqApplet::ClientEqApplet(Path path, QWidget* parent)
     : QWidget(parent)
     , m_currentPath(path)
 {
+    theme::setContainer(this, QStringLiteral("applet/clientEq"));
     buildUI();
     hide();  // hidden until toggled on from the button tray
 }

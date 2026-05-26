@@ -2,6 +2,7 @@
 #include "ClientCompKnob.h"
 #include "core/AudioEngine.h"
 #include "core/ClientReverb.h"
+#include "core/ThemeManager.h"
 
 #include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
@@ -147,6 +148,7 @@ private:
 
 ClientReverbApplet::ClientReverbApplet(QWidget* parent) : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/reverb"));
     buildUI();
     hide();
 }

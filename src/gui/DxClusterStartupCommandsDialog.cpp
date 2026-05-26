@@ -27,6 +27,7 @@ DxClusterStartupCommandsDialog::DxClusterStartupCommandsDialog(
     : PersistentDialog(title, /*geomKey*/ QString(), parent)
     , m_key(appSettingsKey)
 {
+    theme::setContainer(this, QStringLiteral("dialog/dxClusterStartup"));
     setModal(true);
     setMinimumSize(560, 380);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");

@@ -14,6 +14,7 @@ namespace AetherSDR {
 SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     : QDialog(parent), m_model(model)
 {
+    theme::setContainer(this, QStringLiteral("dialog/spotSettings"));
     setWindowTitle("Spot Settings");
     setMinimumSize(380, 520);
     resize(380, 520);

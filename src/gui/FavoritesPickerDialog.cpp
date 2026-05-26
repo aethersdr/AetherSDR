@@ -131,6 +131,7 @@ FavoritesPickerDialog::FavoritesPickerDialog(const QList<Entry>& allEntries,
     , m_favoriteSplit(favoriteSplit)
     , m_entries(allEntries)
 {
+    theme::setContainer(this, QStringLiteral("dialog/favoritesPicker"));
     // Default height sized so the Active list shows the full default set
     // (~19 items at ~24 px + chrome ≈ 620 px) without a scrollbar on first
     // open.  Minimum stays smaller so the user can shrink it if they want.

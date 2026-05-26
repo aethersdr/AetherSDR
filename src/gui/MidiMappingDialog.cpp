@@ -39,6 +39,7 @@ MidiMappingDialog::MidiMappingDialog(MidiControlManager* manager, QWidget* paren
     : PersistentDialog("MIDI Controller Mapping", "MidiMappingDialogGeometry", parent),
       m_manager(manager)
 {
+    theme::setContainer(this, QStringLiteral("dialog/midiMapping"));
     setMinimumSize(700, 550);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; }");
 

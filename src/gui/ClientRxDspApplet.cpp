@@ -1,6 +1,7 @@
 #include "ClientRxDspApplet.h"
 #include "AetherDspWidget.h"
 #include "core/AudioEngine.h"
+#include "core/ThemeManager.h"
 
 #include <QVBoxLayout>
 
@@ -8,6 +9,7 @@ namespace AetherSDR {
 
 ClientRxDspApplet::ClientRxDspApplet(QWidget* parent) : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/rxdsp"));
     setStyleSheet("QWidget { background: transparent; }");
     // Cap horizontal width so the embedded AetherDspWidget can't push the
     // PooDoo container wider than its 280 px slot — sliders + tab bar

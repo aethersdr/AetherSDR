@@ -3,6 +3,7 @@
 #include "GuardedSlider.h"
 #include "SliceLabel.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 #include "models/SliceModel.h"
 
 #include <QApplication>
@@ -974,6 +975,7 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
                        QStringLiteral("FlexControlDialogGeometry"),
                        parent)
 {
+    theme::setContainer(this, QStringLiteral("dialog/flexControl"));
     setModal(false);
     setWindowModality(Qt::NonModal);
     setMinimumSize(430, 610);

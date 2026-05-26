@@ -46,6 +46,7 @@ HelpDialog::HelpDialog(const QString& windowTitle,
                        QWidget* parent)
     : QDialog(parent)
 {
+    theme::setContainer(this, QStringLiteral("dialog/help"));
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
     setWindowTitle(windowTitle);
     buildUI(resourcePath);

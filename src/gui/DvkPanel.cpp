@@ -37,6 +37,7 @@ static const char* kBtnStyle =
 DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     : QWidget(parent), m_model(model)
 {
+    theme::setContainer(this, QStringLiteral("panel/dvk"));
     auto* outerVbox = new QVBoxLayout(this);
     outerVbox->setContentsMargins(4, 4, 4, 4);
     outerVbox->setSpacing(4);

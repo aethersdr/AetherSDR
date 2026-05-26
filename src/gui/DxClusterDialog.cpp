@@ -273,6 +273,7 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 #endif
       m_radioModel(radioModel), m_dxccProvider(dxccProvider)
 {
+    theme::setContainer(this, QStringLiteral("dialog/dxCluster"));
     setMinimumSize(680, 560);
     resize(760, 640);
 

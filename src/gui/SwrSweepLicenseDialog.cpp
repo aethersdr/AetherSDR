@@ -31,6 +31,7 @@ SwrSweepLicenseDialog::SwrSweepLicenseDialog(QWidget* parent)
     : PersistentDialog("Antenna SWR Sweep — License Confirmation",
                        /*geomKey*/ QString(), parent)
 {
+    theme::setContainer(this, QStringLiteral("dialog/swrSweepLicense"));
     setModal(true);
     setMinimumSize(520, 240);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; color: {{color.text.primary}}; }");

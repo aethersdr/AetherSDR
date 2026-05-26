@@ -1,4 +1,5 @@
 #include "ProfileManagerDialog.h"
+#include "core/ThemeManager.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -39,6 +40,7 @@ ProfileManagerDialog::ProfileManagerDialog(RadioModel* model, QWidget* parent)
     : PersistentDialog("Profile Manager", "ProfileManagerDialogGeometry", parent),
       m_model(model)
 {
+    theme::setContainer(this, QStringLiteral("dialog/profileManager"));
     setMinimumSize(460, 400);
     setStyleSheet(kDialogStyle);
 

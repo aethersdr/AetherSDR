@@ -9,6 +9,7 @@
 #include "core/ClientPudu.h"
 #include "core/ClientReverb.h"
 #include "core/ClientTube.h"
+#include "core/ThemeManager.h"
 
 #include <QButtonGroup>
 #include <QHBoxLayout>
@@ -82,6 +83,7 @@ const QString kBypassBtnStyle = QStringLiteral(
 
 ClientChainApplet::ClientChainApplet(QWidget* parent) : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/chain"));
     setStyleSheet("QWidget { background: transparent; }");
 
     auto* outer = new QVBoxLayout(this);

@@ -145,6 +145,7 @@ AtuPreTuneDialog::AtuPreTuneDialog(RadioModel* radio,
       m_radio(radio),
       m_bandPlan(bandPlan)
 {
+    theme::setContainer(this, QStringLiteral("dialog/atuPreTune"));
     setWindowTitle("ATU Band Pre-Tune Sweep");
     setModal(false);
     resize(560, 640);

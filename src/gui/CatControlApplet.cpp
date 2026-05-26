@@ -81,6 +81,7 @@ QString sliceLetter(int idx)
 
 CatControlApplet::CatControlApplet(QWidget* parent) : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/cat"));
     setStyleSheet("QWidget { background: transparent; }");
 
     m_rootLayout = new QVBoxLayout(this);

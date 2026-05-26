@@ -2,6 +2,7 @@
 
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "core/ThemeManager.h"
 
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -67,6 +68,7 @@ MqttSettingsDialog::MqttSettingsDialog(QWidget* parent)
                        QStringLiteral("MqttSettingsDialogGeometry"),
                        parent)
 {
+    theme::setContainer(this, QStringLiteral("dialog/mqttSettings"));
     buildUi();
     loadSettings();
     loadPasswordFromKeychain();

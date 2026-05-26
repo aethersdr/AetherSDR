@@ -35,6 +35,7 @@ MultiFlexDialog::MultiFlexDialog(RadioModel* model, QWidget* parent)
     : PersistentDialog("multiFLEX Dashboard", "MultiFlexDialogGeometry", parent),
       m_model(model)
 {
+    theme::setContainer(this, QStringLiteral("dialog/multiFlex"));
     setMinimumSize(680, 280);
     resize(760, 320);
     setStyleSheet(kDialogStyle);

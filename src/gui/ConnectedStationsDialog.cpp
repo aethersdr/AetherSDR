@@ -1,5 +1,7 @@
 #include "ConnectedStationsDialog.h"
 
+#include "core/ThemeManager.h"
+
 #include <QApplication>
 #include <QButtonGroup>
 #include <QCursor>
@@ -95,6 +97,7 @@ ConnectedStationsDialog::ConnectedStationsDialog(const RadioMeta& radio,
                                                  QWidget* parent)
     : QDialog(parent)
 {
+    theme::setContainer(this, QStringLiteral("dialog/connectedStations"));
     setWindowTitle(tr("Connected Stations"));
     setModal(true);
     setWindowModality(Qt::ApplicationModal);

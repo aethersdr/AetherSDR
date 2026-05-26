@@ -2,6 +2,7 @@
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
 #include "core/AppSettings.h"
+#include "core/ThemeManager.h"
 
 #include <QAudioDevice>
 #include <QColor>
@@ -239,6 +240,7 @@ AudioDeviceChangeDialog::AudioDeviceChangeDialog(
     , m_inputDevices(inputDevices)
     , m_outputDevices(outputDevices)
 {
+    theme::setContainer(this, QStringLiteral("dialog/audioDeviceChange"));
     setWindowTitle(QStringLiteral("Audio Device Detected"));
     setModal(true);
     setWindowModality(Qt::ApplicationModal);

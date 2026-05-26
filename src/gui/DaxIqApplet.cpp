@@ -43,6 +43,7 @@ const QString kIqBtnOff =
 
 DaxIqApplet::DaxIqApplet(QWidget* parent) : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/daxiq"));
     buildUI();
     hide();  // hidden by default
 }

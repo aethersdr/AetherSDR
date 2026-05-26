@@ -21,6 +21,7 @@ static const char* kMenuStyle =
 BandStackPanel::BandStackPanel(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("panel/bandStack"));
     setFixedWidth(80);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "background: {{color.background.0}};");
 

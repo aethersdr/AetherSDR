@@ -38,6 +38,7 @@ static const QString kPubBtn =
 MqttApplet::MqttApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/mqtt"));
     refreshSettings();
     buildUI();
     loadPasswordFromKeychain();

@@ -76,6 +76,7 @@ static constexpr const char* kDummyLoadBtnActiveStyle =
 ShackSwitchApplet::ShackSwitchApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/shackSwitch"));
     hide();
     setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     setMaximumWidth(260);

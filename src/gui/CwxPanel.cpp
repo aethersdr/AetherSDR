@@ -137,6 +137,7 @@ static const char* kTextStyle =
 CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     : QWidget(parent), m_model(model)
 {
+    theme::setContainer(this, QStringLiteral("panel/cwx"));
     setFixedWidth(250);
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QWidget { background: {{color.background.0}}; }");
 

@@ -97,6 +97,7 @@ static QString dbWithSignText(int v)
 EqApplet::EqApplet(QWidget* parent)
     : QWidget(parent)
 {
+    theme::setContainer(this, QStringLiteral("applet/eq"));
     buildUI();
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     setVisible(false);

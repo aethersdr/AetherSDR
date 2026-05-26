@@ -83,6 +83,7 @@ ClientPuduApplet::ClientPuduApplet(Side side, QWidget* parent)
     : QWidget(parent)
     , m_side(side)
 {
+    theme::setContainer(this, QStringLiteral("applet/pudu"));
     buildUI();
     hide();
 }
