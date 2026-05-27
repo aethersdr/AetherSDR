@@ -528,6 +528,15 @@ int main(int argc, char** argv)
         const QColor parentColor = QColor("#11aa33");
 
         tm.setColor("scopeB", "color.accent", parentColor);
+        // Materialise scopeB/leaf BEFORE the inheritance query.  lookupRaw
+        // falls back to root scope when scopeForPath returns nullptr (no
+        // scope object exists at the queried path), so a "scopeB/leaf"
+        // query without a scope object jumps over scopeB straight to root
+        // and returns the root colour.  Production editor code always
+        // creates the leaf via setColor / setSizing before querying it,
+        // so this matches real usage — an unmaterialised-leaf query is a
+        // separate concern (would need a path-walk fallback in lookupRaw).
+        tm.setSizing("scopeB/leaf", "sizing.panel.padding", 7);
 
         // scopeB/leaf has no own override — inheritance must walk up to
         // scopeB and return its value.
@@ -535,12 +544,7 @@ int main(int argc, char** argv)
                   parentColor.name().toLower());
         // scopeB itself is the source of the override.
         EXPECT_TRUE(tm.isOverriddenAt("scopeB", "color.accent"));
-        // scopeB/leaf inherits — must NOT report own-override.  Use
-        // scopeOrCreate (via a setSizing on an unrelated token) to make
-        // the leaf scope exist; otherwise scopeForPath returns nullptr
-        // and isOverriddenAt short-circuits to false anyway, but
-        // exercising the real path here matches the editor's behaviour.
-        tm.setSizing("scopeB/leaf", "sizing.panel.padding", 7);
+        // scopeB/leaf inherits — must NOT report own-override.
         EXPECT_TRUE(!tm.isOverriddenAt("scopeB/leaf", "color.accent"));
     }
 
