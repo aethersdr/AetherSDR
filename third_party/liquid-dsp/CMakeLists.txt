@@ -465,7 +465,12 @@ foreach(target ${LIQUID_TARGETS})
     set_target_properties(${target}
         PROPERTIES
             PUBLIC_HEADER include/liquid.h)
-    target_link_libraries(${target} c m)
+    # -lc and -lm are POSIX/Linux conventions; on Windows (MinGW and MSVC)
+    # the CRT is linked automatically — explicitly passing them causes
+    # MinGW ld to error "cannot find -lc" since there is no libc.a.
+    if(NOT WIN32)
+        target_link_libraries(${target} c m)
+    endif()
     if (fftw3f_FOUND)
         target_link_libraries(${target} fftw3f)
     endif()
