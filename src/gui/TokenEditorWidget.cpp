@@ -643,8 +643,20 @@ void TokenEditorWidget::refreshResetButton()
         m_resetBtn->setEnabled(false);
         return;
     }
-    m_resetBtn->setEnabled(
-        ThemeManager::instance().hasFactoryValue(m_currentToken));
+    auto& tm = ThemeManager::instance();
+    if (m_activeContainerPath.isEmpty()) {
+        // Root scope: Reset loads the bundled factory value into the
+        // edit buffer for the user to confirm via OK.  Only useful
+        // when there's a factory value to fall back to.
+        m_resetBtn->setEnabled(tm.hasFactoryValue(m_currentToken));
+    } else {
+        // Nested scope: Reset means "clear my override here" — useful
+        // only when there IS an override at this scope to clear.
+        // Mirrors right-click → Clear Override on the scope-chain
+        // column, so the button's enable state matches that semantic.
+        m_resetBtn->setEnabled(
+            tm.isOverriddenAt(m_activeContainerPath, m_currentToken));
+    }
 }
 
 // ───────────────────────────────────────────────────────── markDirty ─────
@@ -1154,6 +1166,32 @@ void TokenEditorWidget::onResetClicked()
 {
     if (m_currentToken.isEmpty()) return;
     auto& tm = ThemeManager::instance();
+
+    // Nested scope: Reset means "clear my override here" so the
+    // scope falls back to inheriting from its parent.  Mirrors the
+    // right-click → Clear Override action on the scope-chain column
+    // (ThemeEditorDialog::showTokenContextMenu).  The previous
+    // behaviour — loading the bundled factory value into the buffer
+    // and writing a new override on OK — has been confusing here
+    // since the v2 scope tree landed (per #3184).
+    if (!m_activeContainerPath.isEmpty()) {
+        if (!tm.isOverriddenAt(m_activeContainerPath, m_currentToken)) return;
+        tm.removeOverride(m_activeContainerPath, m_currentToken);
+        // Reload the editor's buffer + controls from the now-inherited
+        // value so there's no stale pending edit.  setToken clears
+        // m_dirty / disables OK + Cancel internally.
+        setToken(m_currentToken);
+        // Trigger the parent dialog to repopulate the matching token-list
+        // row so the scope-chain column flips to italic "inherited" and
+        // the Value column shows the now-resolved value instead of the
+        // stale override.  onTokenEditedByEditor finds the row by token
+        // key and calls populateRow on it.
+        emit tokenChanged(m_currentToken);
+        return;
+    }
+
+    // Root scope: existing behaviour — load the bundled factory value
+    // into the edit buffer for the user to confirm via OK.
     if (!tm.hasFactoryValue(m_currentToken)) return;
 
     m_settingControlsFromToken = true;

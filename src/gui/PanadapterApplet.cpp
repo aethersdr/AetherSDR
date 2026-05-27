@@ -175,10 +175,14 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_lockSpeedBtn->setStyleSheet(m_lockPitchBtn->styleSheet());
     cwBar->addWidget(m_lockSpeedBtn);
 
-    // Pitch range sliders — constrain decoder frequency search
-    const QString rangeSliderStyle =
-        "QSlider::groove:horizontal { background: #1a2a3a; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: #6a8090; width: 8px; margin: -3px 0; border-radius: 4px; }";
+    // Pitch range sliders — constrain decoder frequency search.  Compact
+    // 50px-wide sliders for the CW bar; sizes kept site-local (deliberate
+    // narrow handle), colours routed through the color.slider.* namespace
+    // so the per-applet override path can retint them and live theme
+    // switching works without a per-site reapplication.
+    const QString rangeSliderStyle = QStringLiteral(
+        "QSlider::groove:horizontal { background: {{color.slider.background}}; height: 4px; border-radius: 2px; }"
+        "QSlider::handle:horizontal { background: {{color.slider.handle}}; width: 8px; margin: -3px 0; border-radius: 4px; }");
 
     auto* minLabel = new QLabel("Lo:");
     AetherSDR::ThemeManager::instance().applyStyleSheet(minLabel, "QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }");
@@ -188,7 +192,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_pitchMinSlider->setRange(300, 1200);
     m_pitchMinSlider->setValue(500);
     m_pitchMinSlider->setFixedWidth(50);
-    m_pitchMinSlider->setStyleSheet(rangeSliderStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_pitchMinSlider, rangeSliderStyle);
     m_pitchMinSlider->setToolTip("Decoder pitch search minimum (Hz)");
     cwBar->addWidget(m_pitchMinSlider);
     m_pitchMinValLabel = new QLabel(QString::number(m_pitchMinSlider->value()));
@@ -204,7 +208,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_pitchMaxSlider->setRange(300, 1200);
     m_pitchMaxSlider->setValue(700);
     m_pitchMaxSlider->setFixedWidth(50);
-    m_pitchMaxSlider->setStyleSheet(rangeSliderStyle);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_pitchMaxSlider, rangeSliderStyle);
     m_pitchMaxSlider->setToolTip("Decoder pitch search maximum (Hz)");
     cwBar->addWidget(m_pitchMaxSlider);
     m_pitchMaxValLabel = new QLabel(QString::number(m_pitchMaxSlider->value()));

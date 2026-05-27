@@ -81,6 +81,12 @@ public:
     // switched to a non-built-in copy.  No-op if no edit is pending.
     void completeDeferredCommit();
 
+    // AppSettings key for the per-theme recent-colors bucket.  Public
+    // so the editor dialog can clear the bucket when a theme is
+    // deleted (otherwise orphan entries accumulate forever in
+    // AppSettings.RecentColors/<deleted theme>).
+    static QString recentColorsKeyFor(const QString& themeName);
+
 private slots:
     void onColorPickerChanged(const QColor& c);
     void onColorTypeToggled();
@@ -195,7 +201,6 @@ private:
     void refreshRecentButtons();
     void applyRecentColor(int idx);
     void reloadRecentColorsIfThemeChanged();
-    static QString recentColorsKeyFor(const QString& themeName);
 
     QString    m_currentToken;
     QString    m_activeContainerPath;  // empty == root scope

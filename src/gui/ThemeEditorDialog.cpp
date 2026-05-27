@@ -2,6 +2,7 @@
 #include "Theme.h"
 #include "ThemeInspector.h"
 #include "TokenEditorWidget.h"
+#include "core/AppSettings.h"
 #include "core/ThemeManager.h"
 
 #include <QAction>
@@ -382,6 +383,11 @@ void ThemeEditorDialog::refreshTokenList()
         m_tokenList->addTopLevelItem(item);
         populateRow(item);
     }
+    // Re-apply the current filter (text + inspector subset) so the
+    // user's view doesn't suddenly fall back to "show everything"
+    // after a scope change / theme reload.  filterTokensTo reads the
+    // QLineEdit's current text directly.
+    filterTokensTo(m_activeSubset);
 }
 
 void ThemeEditorDialog::populateRow(QTreeWidgetItem* item)
@@ -643,6 +649,17 @@ void ThemeEditorDialog::onDeleteThemeClicked()
         QMessageBox::warning(this, QStringLiteral("Delete failed"),
             QStringLiteral("Could not delete \"%1\". The theme file may be "
                            "locked by another process.").arg(current));
+        return;
+    }
+
+    // The per-theme recent-colors bucket in AppSettings outlives the
+    // theme file by default; clean it up so deleted themes don't
+    // accumulate orphan entries under ThemeEditor.RecentColors/<name>.
+    auto& s = AppSettings::instance();
+    const QString recentsKey = TokenEditorWidget::recentColorsKeyFor(current);
+    if (s.contains(recentsKey)) {
+        s.remove(recentsKey);
+        s.save();
     }
 }
 
