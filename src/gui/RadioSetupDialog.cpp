@@ -2556,10 +2556,15 @@ QWidget* RadioSetupDialog::buildFiltersTab()
         "QPushButton:checked { background: #0070c0; color: #ffffff; "
         "border: 1px solid #0090e0; }";
 
-    static const QString kFilterSlider =
-        "QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
-        "QSlider::handle:horizontal { background: #c8d8e8; width: 14px; "
-        "margin: -5px 0; border-radius: 7px; }";
+    // Filter sharpness sliders — taller groove + wider handle than the
+    // canonical slider for the radio-setup dialog's heavier visual style.
+    // Sizes kept site-local (deliberate emphasis); colours routed through
+    // color.slider.* so live theme switching works and per-applet
+    // overrides could retint these in future without per-call-site work.
+    static const QString kFilterSlider = QStringLiteral(
+        "QSlider::groove:horizontal { background: {{color.slider.background}}; height: 6px; border-radius: 3px; }"
+        "QSlider::handle:horizontal { background: {{color.slider.handle}}; width: 14px; "
+        "margin: -5px 0; border-radius: 7px; }");
 
     // Filter Options group
     {
@@ -2601,7 +2606,7 @@ QWidget* RadioSetupDialog::buildFiltersTab()
             auto* slider = new GuardedSlider(Qt::Horizontal);
             slider->setRange(0, 3);
             slider->setValue(r.level);
-            slider->setStyleSheet(kFilterSlider);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(slider, kFilterSlider);
             slider->setEnabled(!r.autoOn);
             grid->addWidget(slider, row, 1, 1, 2);
 

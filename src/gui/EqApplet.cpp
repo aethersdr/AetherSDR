@@ -76,11 +76,17 @@ static const QString kBlueActive =
     "QPushButton:checked { background-color: #0070c0; color: #ffffff; "
     "border: 1px solid #0090e0; }";
 
-// Vertical slider style — thin groove, small handle
+// Vertical EQ band slider style — thin groove, accent-coloured handle.
+// Sizes kept site-local (intentional compact dimensions for the band
+// column rhythm); colours routed through color.slider.* so per-applet
+// override + live theme switching both light up.  Handle uses the
+// foreground (fill) token rather than the canonical handle token
+// because the EQ slider's visual idiom puts the accent colour on the
+// handle itself (there's no sub-page fill rule here).
 static constexpr const char* kVSliderStyle =
-    "QSlider::groove:vertical { width: 4px; background: #203040; border-radius: 2px; }"
+    "QSlider::groove:vertical { width: 4px; background: {{color.slider.background}}; border-radius: 2px; }"
     "QSlider::handle:vertical { height: 10px; width: 16px; margin: 0 -6px;"
-    "background: #00b4d8; border-radius: 5px; }";
+    "background: {{color.slider.foreground}}; border-radius: 5px; }";
 
 // Drag-popup formatter for EQ band sliders.  Matches the file-scope
 // free-function shape used by the other applets (wattsText, percentText,
@@ -262,7 +268,7 @@ void EqApplet::buildUI()
             slider->setValue(0);
             slider->setDragValueFormatter(dbWithSignText);
             slider->setTickPosition(QSlider::NoTicks);
-            slider->setStyleSheet(kVSliderStyle);
+            AetherSDR::ThemeManager::instance().applyStyleSheet(slider, kVSliderStyle);
             slider->setFixedHeight(100);
             slider->setAccessibleName(
                 QString("EQ %1").arg(EqualizerModel::bandLabel(static_cast<EqualizerModel::Band>(i))));

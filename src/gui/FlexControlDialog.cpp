@@ -197,21 +197,28 @@ QPushButton#OptionButton:checked {
     background: #173528;
     border-color: #65d379;
 }
+/* Slider rules tokenized as part of Pat's (b) hardcoded-slider sweep.
+   The wider handle (16 px) + bordered ring are deliberate FlexControl
+   visual identity, kept site-local.  Colours route through
+   color.slider.background / .handle for the structural tokens and
+   color.accent.success for the green fill + handle border, which
+   preserves the FlexControl green look while still letting a future
+   dialog/flexControl scope override retint it without touching code. */
 QSlider::groove:horizontal {
     height: 5px;
     border-radius: 2px;
-    background: #162437;
+    background: {{color.slider.background}};
 }
 QSlider::sub-page:horizontal {
-    background: #65d379;
+    background: {{color.accent.success}};
     border-radius: 2px;
 }
 QSlider::handle:horizontal {
     width: 16px;
     margin: -6px 0;
     border-radius: 8px;
-    background: #d8e2ef;
-    border: 1px solid #65d379;
+    background: {{color.slider.handle}};
+    border: 1px solid {{color.accent.success}};
 }
 QComboBox {
     color: #d8e2ef;
@@ -980,7 +987,15 @@ FlexControlDialog::FlexControlDialog(QWidget* parent)
     setWindowModality(Qt::NonModal);
     setMinimumSize(430, 610);
 
-    bodyWidget()->setStyleSheet(QString::fromLatin1(kFlexControlStyle));
+    // applyStyleSheet (not raw setStyleSheet) so the {{color.slider.*}} +
+    // {{color.accent.success}} tokens in the slider rules resolve at apply
+    // time, AND the body widget is registered for free live re-theme when
+    // the user switches Default Dark ↔ Default Light without restarting.
+    // Other (non-slider) hardcoded colours in the template remain as-is —
+    // out of scope for the slider-sweep PR; a follow-up could tokenize
+    // the rest of the FlexControl dialog stylesheet.
+    AetherSDR::ThemeManager::instance().applyStyleSheet(
+        bodyWidget(), QString::fromLatin1(kFlexControlStyle));
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSizeConstraint(QLayout::SetMinimumSize);
     root->setContentsMargins(14, 14, 14, 14);
