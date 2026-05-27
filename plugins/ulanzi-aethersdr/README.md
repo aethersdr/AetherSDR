@@ -27,13 +27,13 @@ npm install
 
 That installs the `ws` WebSocket library used by `plugin/app.js`. The bundled Ulanzi SDK (`libs/common-node/`, `libs/common-html/`) is vendored — no separate fetch required.
 
-To regenerate the SVG icons after editing the action list:
+To regenerate the PNG icons after editing the action list:
 
-```bash
-node scripts/generate-icons.js
+```powershell
+pwsh scripts/Generate-Icons.ps1
 ```
 
-Outputs into `com.g0jkn.aethersdr.ulanziPlugin/assets/icons/` and `…/assets/launchers/`.
+Outputs 196×196 PNGs into `com.g0jkn.aethersdr.ulanziPlugin/assets/icons/` and `…/assets/launchers/` — matching Ulanzi Studio's marketplace icon convention so text + glyphs render crisp on the device LCD. Pure PowerShell + System.Drawing; no npm / Node deps. Currently Windows-only — cross-platform port (ImageMagick / SkiaSharp) is future work.
 
 ## 18 Available Actions
 

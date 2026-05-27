@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 144">
-  <rect width="144" height="144" rx="20" fill="#0f0f1a"/>
-  <rect x="2" y="2" width="140" height="140" rx="18" fill="none" stroke="#56c6e8" stroke-width="2" opacity="0.5"/>
-  <text x="124" y="32" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="22" fill="#56c6e8" text-anchor="middle" font-weight="700">↗</text>
-  <text x="72" y="78"  font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="42" fill="#56c6e8"   text-anchor="middle" font-weight="800" letter-spacing="0.5">TCI</text>
-  <text x="72" y="114" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="42" fill="#ffffff" text-anchor="middle" font-weight="800" letter-spacing="0.5">MON</text>
-</svg>
