@@ -300,6 +300,15 @@ int main(int argc, char** argv)
         EXPECT_EQ(tm.factoryColor("color.accent").name().toLower(),
                   QString("#00b4d8"));  // alias {color.blue.500} resolved
         EXPECT_TRUE(tm.hasFactoryValue("color.background.0"));
+        // Gradient tokens land in m_factoryTokens as QVariant<ThemeGradient>
+        // rather than QString.  The alias-resolution loop must skip those
+        // (userType() != QMetaType::QString) — and factoryColor() must take
+        // the first-stop-fallback branch at ThemeManager.cpp:849-851 to
+        // return a valid colour.  Lock both in: color.meter.bar.fillGradient
+        // is bundled as a v2 gradient with first stop #2f9e6a.
+        EXPECT_TRUE(tm.hasFactoryValue("color.meter.bar.fillGradient"));
+        EXPECT_EQ(tm.factoryColor("color.meter.bar.fillGradient").name().toLower(),
+                  QString("#2f9e6a"));
         // Tokens that don't exist in the bundled theme should still
         // report no factory value (sanity check the lookup isn't
         // unconditionally returning true).
