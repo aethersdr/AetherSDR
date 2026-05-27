@@ -5352,12 +5352,15 @@ void MainWindow::showMqttSettingsDialog()
 
 void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
 {
-    if (!m_mqttClient || !m_mqttClient->isConnected()) return;
-    // Apply the same sensitivity threshold as the active CW panel so the
-    // MQTT stream matches exactly what the decoder window displays.
-    if (m_cwDecoderApplet && cost >= m_cwDecoderApplet->cwCostThreshold()) return;
+    if (!m_mqttClient) return;
+    // No CW panel active → nothing is displayed → don't publish.
+    if (!m_cwDecoderApplet || cost >= m_cwDecoderApplet->cwCostThreshold()) return;
+    // Mirror panel normalization: \n → space; drop whitespace-only TX chunks.
+    QString clean = text;
+    clean.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    if (!rx && clean.trimmed().isEmpty()) return;
     QJsonObject obj;
-    obj[QStringLiteral("text")] = text;
+    obj[QStringLiteral("text")] = clean;
     obj[QStringLiteral("rx")]   = rx;
     if (auto* s = activeSlice(); s && s->frequency() > 0.0)
         obj[QStringLiteral("freq")] = s->frequency();
