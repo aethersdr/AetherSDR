@@ -114,9 +114,8 @@ jobs:
           if (Test-Path "third_party\deepfilter\lib\windows-x86_64\deepfilter.dll") {
             copy third_party\deepfilter\lib\windows-x86_64\deepfilter.dll deploy\
           }
-          if (Test-Path "third_party\deepfilter\models\DeepFilterNet3_onnx.tar.gz") {
-            copy third_party\deepfilter\models\DeepFilterNet3_onnx.tar.gz deploy\
-          }
+          # Windows builds embed the DFNR model in AetherSDR.exe resources, so
+          # no loose DeepFilterNet3_onnx.tar.gz payload is deployed.
           # NOTE: MQTT TLS is disabled (-DMQTT_TLS=OFF) so no OpenSSL DLLs
           # are needed. This avoids the "libssl-3-x64.dll not found" crash
           # on systems without OpenSSL installed (#1341, #1362).

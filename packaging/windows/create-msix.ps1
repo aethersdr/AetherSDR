@@ -327,10 +327,12 @@ Get-ChildItem -LiteralPath $resolvedPackageRoot -File -Filter "vc_redist*.exe" -
     Remove-Item -Force
 
 if ($ExcludeDfnrModel) {
-    $dfnrModels = Get-ChildItem -LiteralPath $resolvedPackageRoot -Recurse -File -Filter "DeepFilterNet3_onnx.tar.gz" -ErrorAction SilentlyContinue
-    foreach ($model in $dfnrModels) {
-        Write-Host "Excluding DFNR model from MSIX package: $($model.FullName)"
-        Remove-Item -LiteralPath $model.FullName -Force
+    foreach ($filter in @("DeepFilterNet3_onnx.tar.gz", "DeepFilterNet3_onnx.dfmodel")) {
+        $dfnrModels = Get-ChildItem -LiteralPath $resolvedPackageRoot -Recurse -File -Filter $filter -ErrorAction SilentlyContinue
+        foreach ($model in $dfnrModels) {
+            Write-Host "Excluding loose DFNR model payload from MSIX package: $($model.FullName)"
+            Remove-Item -LiteralPath $model.FullName -Force
+        }
     }
 }
 

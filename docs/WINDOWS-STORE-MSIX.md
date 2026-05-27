@@ -13,9 +13,15 @@ manifest, visual assets, signing, and Store upload wrapper around it.
 
 The script creates `msix-root/`, writes `AppxManifest.xml`, generates package
 icons from `docs/assets/logo-circle.png`, adds App Installer UX metadata, runs
-`makeappx.exe`, optionally omits the DFNR model archive for Store readiness,
+`makeappx.exe`, optionally omits loose DFNR model payloads for Store readiness,
 optionally signs the MSIX with `signtool.exe`, and optionally creates a
 `.msixupload` archive for Partner Center.
+
+Windows DFNR builds embed the DeepFilterNet model payload in Qt resources by
+default (`AETHER_EMBED_DFNR_MODEL=ON`). At runtime, AetherSDR extracts that
+payload to writable app-local data as `DeepFilterNet3_onnx.dfmodel` because the
+DeepFilter C API requires a filesystem path. This keeps DFNR available in Store
+MSIX builds without packaging a loose `DeepFilterNet3_onnx.tar.gz` file.
 
 Development package:
 
@@ -87,12 +93,10 @@ signals, but some findings need follow-up before final submission:
 
 - `Blocked executables`: AetherSDR shells out to PowerShell for Windows support
   bundle ZIP creation. Replace that path with in-process ZIP creation.
-- `Archive files usage`: Store MSIX builds pass `-ExcludeDfnrModel` so the
-  package does not include `DeepFilterNet3_onnx.tar.gz`. The archive contains
-  `enc.onnx`, `erb_dec.onnx`, `df_dec.onnx`, and `config.ini`, but the current
-  DeepFilter C API expects the tar.gz path. Check whether `df_create(nullptr,
-  ...)` can use the embedded default model before restoring DFNR in Store
-  packages.
+- `Archive files usage`: Windows DFNR builds embed the model payload in Qt
+  resources and do not deploy a loose `DeepFilterNet3_onnx.tar.gz` file. The
+  `-ExcludeDfnrModel` switch remains as a packaging safety net for older deploy
+  directories or custom builds with loose DFNR payloads.
 - `DPIAwarenessValidation`: AetherSDR.exe now embeds a PerMonitorV2 desktop
   app manifest, and the Windows installer workflow verifies the deployed
   executable before MSIX packaging. WACK 10.0.26100.7705 reports

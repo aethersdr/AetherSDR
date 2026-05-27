@@ -29,6 +29,14 @@ option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
+if(WIN32)
+    set(AETHER_EMBED_DFNR_MODEL_DEFAULT ON)
+else()
+    set(AETHER_EMBED_DFNR_MODEL_DEFAULT OFF)
+endif()
+option(AETHER_EMBED_DFNR_MODEL
+       "Embed the DFNR model payload into application resources instead of deploying a loose archive"
+       ${AETHER_EMBED_DFNR_MODEL_DEFAULT})
 
 # macOS: ensure Homebrew lib/include paths are in the search path
 # (universal builds with CMAKE_OSX_ARCHITECTURES may not search /opt/homebrew by default)
@@ -376,9 +384,11 @@ else()
 endif()
 
 # DeepFilterNet3 DFNR — bundled neural noise reduction (MIT/Apache-2.0)
-# Pre-built static library from Rust crate (libdf), model weights embedded.
+# Pre-built libdf library from the Rust crate; model payload is handled below.
 if(ENABLE_DFNR)
     set(DEEPFILTER_DIR ${CMAKE_SOURCE_DIR}/third_party/deepfilter)
+    set(DFNR_MODEL "${DEEPFILTER_DIR}/models/DeepFilterNet3_onnx.tar.gz")
+    set(DFNR_EMBEDDED_MODEL_NAME "DeepFilterNet3_onnx.dfmodel")
     if(WIN32)
         set(DFNR_LIB_DIR "${DEEPFILTER_DIR}/lib/windows-x86_64")
         if(MINGW)
@@ -878,9 +888,28 @@ if(NOT MSVC)
     endif()
 endif()  # NOT MSVC
 
+set(DFNR_RESOURCES "")
+if(ENABLE_DFNR AND AETHER_EMBED_DFNR_MODEL)
+    if(EXISTS "${DFNR_MODEL}")
+        file(TO_CMAKE_PATH "${DFNR_MODEL}" DFNR_MODEL_QRC_PATH)
+        set(DFNR_MODEL_QRC "${CMAKE_CURRENT_BINARY_DIR}/dfnr_model.qrc")
+        file(WRITE "${DFNR_MODEL_QRC}"
+"<RCC>
+    <qresource prefix=\"/models\">
+        <file alias=\"${DFNR_EMBEDDED_MODEL_NAME}\">${DFNR_MODEL_QRC_PATH}</file>
+    </qresource>
+</RCC>
+")
+        qt_add_resources(DFNR_RESOURCES "${DFNR_MODEL_QRC}")
+        message(STATUS "DFNR model will be embedded in Qt resources")
+    else()
+        message(WARNING "AETHER_EMBED_DFNR_MODEL is ON, but DFNR model not found at ${DFNR_MODEL}")
+    endif()
+endif()
+
 qt_add_resources(RESOURCES resources/resources.qrc)
 
-add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES})
+add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES} ${DFNR_RESOURCES})
 
 if (USE_SYSTEM_ZLIB)
     target_link_libraries(AetherSDR PRIVATE PkgConfig::zlib)
@@ -1350,8 +1379,7 @@ if(ENABLE_DFNR)
                 "${DFNR_DLL}" "$<TARGET_FILE_DIR:AetherSDR>"
             COMMENT "Copying deepfilter.dll to build directory")
     endif()
-    set(DFNR_MODEL "${DEEPFILTER_DIR}/models/DeepFilterNet3_onnx.tar.gz")
-    if(EXISTS ${DFNR_MODEL})
+    if(EXISTS "${DFNR_MODEL}" AND NOT AETHER_EMBED_DFNR_MODEL)
         if(APPLE)
             # macOS: place in Resources/ so notarization doesn't reject a
             # non-Mach-O file inside Contents/MacOS/
@@ -1369,7 +1397,7 @@ if(ENABLE_DFNR)
         endif()
     endif()
     # Install the model alongside the binary for cmake --install
-    if(NOT APPLE)
+    if(NOT APPLE AND NOT AETHER_EMBED_DFNR_MODEL)
         install(FILES "${DFNR_MODEL}"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/AetherSDR"
             OPTIONAL)
