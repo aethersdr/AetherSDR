@@ -310,6 +310,10 @@ private:
     QTextCharFormat m_protocolFormat;
 };
 
+// Shared amber color for all adaptive-throttle UI elements (badge, graph band, fps-cap
+// trace, state label).  Matches qualityColor("Fair") in MainWindow.cpp.
+static constexpr auto kThrottleAmber = "#cc9900";
+
 class TimeSeriesGraphWidget : public QWidget {
 public:
     struct Series {
@@ -477,7 +481,7 @@ protected:
 
         // Amber shading for adaptive-throttle active spans
         if (!m_throttleSpans.isEmpty()) {
-            QColor bandColor("#cc9900");
+            QColor bandColor(kThrottleAmber);
             bandColor.setAlpha(28);
             painter.setBrush(bandColor);
             painter.setPen(Qt::NoPen);
@@ -939,9 +943,9 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     m_throttleBadge->setVisible(false);
     m_throttleBadge->setWordWrap(false);
     m_throttleBadge->setStyleSheet(
-        "QLabel { color: #cc9900; font-size: 10px; font-weight: 600; "
-        "background: rgba(204,153,0,0.12); border: 1px solid rgba(204,153,0,0.35); "
-        "border-radius: 3px; padding: 1px 5px; }");
+        QStringLiteral("QLabel { color: %1; font-size: 10px; font-weight: 600; "
+                       "background: rgba(204,153,0,0.12); border: 1px solid rgba(204,153,0,0.35); "
+                       "border-radius: 3px; padding: 1px 5px; }").arg(kThrottleAmber));
     if (auto* lay = diagnosticsPanelLayout(statusCard.first)) {
         // layout indices: 0=value, 1=hint, 2=stretch — insert badge before stretch
         lay->insertWidget(2, m_throttleBadge);
@@ -2521,8 +2525,7 @@ void NetworkDiagnosticsHistory::sampleNow()
             sample.audioLastPacketAgeMs = 0;
         }
     }
-    sample.adaptiveFpsCap      = m_currentFpsCap;
-    sample.adaptivePendingLift = (m_currentFpsCap > 0) && m_model->pendingThrottleLift();
+    sample.adaptiveFpsCap = m_currentFpsCap;
 
     m_lastSampleMs = nowMs;
 
@@ -2594,6 +2597,16 @@ void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
         }
     }
     m_samples = std::move(compacted);
+
+    // Prune throttle events on the same window as the sample history so the
+    // event vector doesn't grow unbounded during long-running sessions.
+    const qint64 eventCutoff = nowMs - kMaxHistoryMs;
+    m_throttleEvents.erase(
+        std::remove_if(m_throttleEvents.begin(), m_throttleEvents.end(),
+                       [eventCutoff](const ThrottleEvent& ev) {
+                           return ev.timestampMs < eventCutoff;
+                       }),
+        m_throttleEvents.end());
 }
 
 static void updateAudioStreamTable(QTableWidget* table,
@@ -2820,7 +2833,8 @@ void NetworkDiagnosticsDialog::refresh()
             if (m_throttleStateLabel) {
                 if (throttleActive) {
                     m_throttleStateLabel->setText(QString("%1 fps cap").arg(liveFpsCap));
-                    m_throttleStateLabel->setStyleSheet("QLabel { color: #cc9900; font-weight: 600; }");
+                    m_throttleStateLabel->setStyleSheet(
+                        QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(kThrottleAmber));
                 } else {
                     m_throttleStateLabel->setText("Inactive");
                     m_throttleStateLabel->setStyleSheet("QLabel { color: #b9c4d7; font-weight: 600; }");
@@ -2962,7 +2976,7 @@ void NetworkDiagnosticsDialog::updateCharts()
     }
 
     // ── fps-cap step-function series ─────────────────────────────────────
-    TimeSeriesGraphWidget::Series fpsCapSeries{"FPS cap", QColor("#cc9900"), {}, " fps"};
+    TimeSeriesGraphWidget::Series fpsCapSeries{"FPS cap", QColor(kThrottleAmber), {}, " fps"};
     fpsCapSeries.stepFunction = true;
     if (m_history) {
         for (const NetworkDiagnosticsSample& s : m_history->samples()) {

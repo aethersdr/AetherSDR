@@ -56,7 +56,6 @@ struct NetworkDiagnosticsSample {
     quint16 audioPacketClassCode{0};
     int audioStreamCount{0};
     int  adaptiveFpsCap{0};      // 0 = throttle inactive
-    bool adaptivePendingLift{false};
 };
 
 class NetworkDiagnosticsHistory : public QObject {
