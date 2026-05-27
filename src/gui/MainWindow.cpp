@@ -198,6 +198,11 @@
 #include <psapi.h>
 #else
 #include <sys/resource.h>
+#ifdef Q_OS_MAC
+#include <mach/mach.h>
+#include <mach/task.h>
+#include <mach/task_info.h>
+#endif
 #endif
 #include <QLocale>
 #include <QFile>
@@ -9094,7 +9099,13 @@ void MainWindow::buildUI()
         m_memLabel = new QLabel("Mem: \u2014");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_memLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
         m_memLabel->setAlignment(Qt::AlignCenter);
-        m_memLabel->setToolTip("AetherSDR process memory (RSS)");
+#if defined(Q_OS_WIN)
+        m_memLabel->setToolTip("AetherSDR process working set (matches Task Manager)");
+#elif defined(Q_OS_MAC)
+        m_memLabel->setToolTip("AetherSDR process physical footprint (matches Activity Monitor)");
+#else
+        m_memLabel->setToolTip("AetherSDR process resident set (VmRSS from /proc/self/status)");
+#endif
         cpuVbox->addWidget(m_cpuLabel);
         cpuVbox->addWidget(m_memLabel);
         hbox->addWidget(cpuStack);
@@ -9151,25 +9162,39 @@ void MainWindow::buildUI()
                 m_cpuLabel->setStyleSheet(QString("QLabel { color: %1; font-size: 12px; }").arg(color));
             }
 
-            // Memory (RSS)
+            // Memory: report the "what the OS sees right now" footprint, not the
+            // per-process high-water mark. ru_maxrss is monotonic and excludes
+            // compressed/IOKit/purgeable memory on macOS, so it disagrees badly
+            // with Activity Monitor — see issue #3197.
+            quint64 memBytes = 0;
 #ifdef Q_OS_WIN
             PROCESS_MEMORY_COUNTERS pmc;
             if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
-                double mb = pmc.WorkingSetSize / (1024.0 * 1024.0);
-                m_memLabel->setText(QString("Mem: %1 MB").arg(static_cast<int>(mb)));
+                memBytes = pmc.WorkingSetSize;
+            }
+#elif defined(Q_OS_MAC)
+            task_vm_info_data_t info{};
+            mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+            if (task_info(mach_task_self(), TASK_VM_INFO,
+                          reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
+                memBytes = info.phys_footprint;
             }
 #else
-            // getrusage ru_maxrss is in KB on Linux, bytes on macOS
-            struct rusage ruMem;
-            if (getrusage(RUSAGE_SELF, &ruMem) == 0) {
-#ifdef Q_OS_MAC
-                double mb = ruMem.ru_maxrss / (1024.0 * 1024.0);
-#else
-                double mb = ruMem.ru_maxrss / 1024.0;
-#endif
-                m_memLabel->setText(QString("Mem: %1 MB").arg(static_cast<int>(mb)));
+            QFile statusFile("/proc/self/status");
+            if (statusFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                while (!statusFile.atEnd()) {
+                    const QByteArray line = statusFile.readLine();
+                    if (line.startsWith("VmRSS:")) {
+                        memBytes = line.mid(6).trimmed().split(' ').first().toULongLong() * 1024ULL;
+                        break;
+                    }
+                }
             }
 #endif
+            if (memBytes > 0) {
+                double mb = memBytes / (1024.0 * 1024.0);
+                m_memLabel->setText(QString("Mem: %1 MB").arg(static_cast<int>(mb)));
+            }
         });
         m_cpuTimer->start();
     }
