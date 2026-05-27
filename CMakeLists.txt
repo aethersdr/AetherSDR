@@ -1008,6 +1008,10 @@ elseif(WIN32)
     if(EXISTS "${WIN_RC}")
         target_sources(AetherSDR PRIVATE "${WIN_RC}")
     endif()
+    if(MSVC)
+        target_link_options(AetherSDR PRIVATE
+            "/MANIFESTINPUT:${CMAKE_SOURCE_DIR}/packaging/windows/AetherSDR.exe.manifest")
+    endif()
 endif()
 
 target_include_directories(AetherSDR PRIVATE

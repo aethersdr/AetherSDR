@@ -123,6 +123,9 @@ jobs:
           if ($false) {
           }
 
+      - name: Verify DPI awareness manifest
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\check-dpi-awareness.ps1 -ExePath deploy\AetherSDR.exe
+
       - name: Stage MSVC runtime for installer
         run: |
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\stage-msvc-runtime.ps1 -OutputDir installer-runtime

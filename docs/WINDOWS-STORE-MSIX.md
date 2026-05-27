@@ -91,8 +91,10 @@ signals, but some findings need follow-up before final submission:
   `config.ini`, but the current DeepFilter C API expects the tar.gz path. Check
   whether `df_create(nullptr, ...)` can use the embedded default model before
   deciding whether to exclude the archive from the Store package.
-- `DPIAwarenessValidation`: add PerMonitorV2 DPI awareness to the desktop app
-  manifest or initialize DPI awareness explicitly before final Store testing.
+- `DPIAwarenessValidation`: AetherSDR.exe now embeds a PerMonitorV2 desktop
+  app manifest, and the Windows installer workflow verifies the deployed
+  executable before MSIX packaging. WACK 10.0.26100.7705 reports
+  `DPIAwarenessValidation` as passing on the generated MSIX.
 - Qt and vendor DLLs may still report process-launch imports or short blocked
   string matches. Treat those separately from app-owned launch behavior.
 
