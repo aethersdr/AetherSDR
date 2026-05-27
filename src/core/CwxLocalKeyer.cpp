@@ -55,6 +55,8 @@ void CwxLocalKeyer::stop()
     m_queue.clear();
     m_elements.clear();
     m_running = false;
+    m_elapsed.invalidate();
+    m_nextEdgeMs = 0;
     if (m_currentlyDown) {
         m_currentlyDown = false;
         emit keyStateChanged(false);
@@ -102,6 +104,8 @@ void CwxLocalKeyer::scheduleNext()
     if (m_elements.isEmpty()) {
         if (m_queue.isEmpty()) {
             m_running = false;
+            m_elapsed.invalidate();
+            m_nextEdgeMs = 0;
             if (m_currentlyDown) {
                 m_currentlyDown = false;
                 emit keyStateChanged(false);
@@ -140,7 +144,19 @@ void CwxLocalKeyer::scheduleNext()
         m_currentlyDown = keyDownNext;
         emit keyStateChanged(keyDownNext);
     }
-    m_timer.start(durationMs);
+    // Drift-correct against an absolute clock: the next edge should land
+    // at m_nextEdgeMs from the start of the run, not durationMs from now.
+    // Without this, GUI-thread event-loop coalescing on macOS (panadapter
+    // paint, VITA-49 burst handling) pushes each successive edge later
+    // and the slip accumulates — audible as stuttering and structurally
+    // wrong letter/word spacing on long contest macros (#2980).
+    if (!m_elapsed.isValid()) {
+        m_elapsed.start();
+        m_nextEdgeMs = 0;
+    }
+    m_nextEdgeMs += durationMs;
+    const qint64 wait = qMax<qint64>(1, m_nextEdgeMs - m_elapsed.elapsed());
+    m_timer.start(static_cast<int>(wait));
 }
 
 void CwxLocalKeyer::onTick()

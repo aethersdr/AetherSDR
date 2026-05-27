@@ -35,6 +35,7 @@ param(
     [string]$IconSource = "docs/assets/logo-circle.png",
     [string]$PdbPath = "build/AetherSDR.pdb",
     [switch]$CreateUpload,
+    [switch]$ExcludeDfnrModel,
 
     [string]$CertificateFile = $env:AETHERSDR_MSIX_CERTIFICATE_FILE,
     [string]$CertificatePassword = $env:AETHERSDR_MSIX_CERTIFICATE_PASSWORD,
@@ -324,6 +325,14 @@ Copy-Item -Path (Join-Path $resolvedDeployDir "*") -Destination $resolvedPackage
 # installer executable out of the package payload.
 Get-ChildItem -LiteralPath $resolvedPackageRoot -File -Filter "vc_redist*.exe" -ErrorAction SilentlyContinue |
     Remove-Item -Force
+
+if ($ExcludeDfnrModel) {
+    $dfnrModels = Get-ChildItem -LiteralPath $resolvedPackageRoot -Recurse -File -Filter "DeepFilterNet3_onnx.tar.gz" -ErrorAction SilentlyContinue
+    foreach ($model in $dfnrModels) {
+        Write-Host "Excluding DFNR model from MSIX package: $($model.FullName)"
+        Remove-Item -LiteralPath $model.FullName -Force
+    }
+}
 
 $assetsDir = Join-Path $resolvedPackageRoot "Assets"
 New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
