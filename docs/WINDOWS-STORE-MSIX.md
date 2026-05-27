@@ -32,10 +32,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ". 'C:\Users\patj\Documen
 Store identity package:
 
 ```powershell
-$env:AETHERSDR_MSIX_IDENTITY_NAME = "PartnerCenter.Assigned.Name"
-$env:AETHERSDR_MSIX_PUBLISHER = "CN=Partner-Center-Assigned-Publisher"
-$env:AETHERSDR_MSIX_PUBLISHER_DISPLAY_NAME = "AetherSDR"
-powershell -NoProfile -ExecutionPolicy Bypass -Command ". 'C:\Users\patj\Documents\AetherSDR\scripts\enter-msvc.ps1' -Arch x64; & '.\packaging\windows\create-msix.ps1' -DeployDir deploy -OutputDir . -CreateUpload -ExcludeDfnrModel"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ". 'C:\Users\patj\Documents\AetherSDR\scripts\enter-msvc.ps1' -Arch x64; . '.\packaging\windows\store-identity.ps1'; & '.\packaging\windows\create-msix.ps1' -DeployDir deploy -OutputDir . -CreateUpload -SkipSign -ExcludeDfnrModel"
 ```
 
 ## Manifest Values
@@ -50,16 +47,18 @@ Values we can automate:
   because the manifest uses `uap10:RuntimeBehavior`.
 - Visual assets: generated from the existing AetherSDR logo.
 
-Values that must come from Partner Center for the Store package:
+Partner Center Store package values:
 
-- `Identity.Name`: assigned after reserving the product name.
-- `Identity.Publisher`: assigned by Partner Center and tied to the developer
-  account/certificate identity.
+- `Identity.Name`: `AetherSDR.AetherSDR`
+- `Identity.Publisher`: `CN=E03F94A2-AEAB-46D2-8BF1-6419C305CC44`
+- `PublisherDisplayName`: `AetherSDR`
+
+These values are in `packaging/windows/store-identity.ps1`. The file only sets
+variables that are currently unset, so CI repository variables or local shell
+environment variables can still override them for testing.
 
 Values that need maintainer choice:
 
-- Public Store/product name: likely `AetherSDR`, but confirm before reserving.
-- `PublisherDisplayName`: `AetherSDR`.
 - Short manifest description:
   `Multi-platform SDR client for FlexRadio transceivers (6000/8600/Aurora).`
 - Capability disclosure comfort:
@@ -75,14 +74,13 @@ Already automatable:
 
 - Local MSIX creation from the existing Windows deploy folder.
 - CI artifact creation after the current `windeployqt` deployment step.
-- Store identity injection from GitHub repository variables.
+- Store identity injection from `packaging/windows/store-identity.ps1`, with
+  optional GitHub repository variable overrides.
 - Signing from GitHub secrets when a development/test PFX exists.
 - `.msixupload` creation for Partner Center.
 
 Not fully automatable until account setup:
 
-- Reserving the Store product name.
-- Copying the Partner Center package identity values into GitHub variables.
 - Final Store submission unless Partner Center API credentials are created and
   stored as secrets.
 
@@ -106,8 +104,9 @@ signals, but some findings need follow-up before final submission:
 
 ## GitHub Variables
 
-The Windows installer workflow reads these optional repository variables before
-building the MSIX artifact:
+The Windows installer workflow sources `packaging/windows/store-identity.ps1`
+before building the MSIX artifact. These optional repository variables override
+the checked-in defaults when set:
 
 - `AETHERSDR_MSIX_IDENTITY_NAME`
 - `AETHERSDR_MSIX_PUBLISHER`
@@ -118,9 +117,8 @@ building the MSIX artifact:
 - `AETHERSDR_MSIX_INSTALLER_ACCENT_COLOR`
 - `AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR`
 
-If the identity variables are unset, CI still builds a development package using
-`AetherSDR.AetherSDR` and `CN=AetherSDR Development`. That package is useful for
-manifest/package validation, but it is not the final Store identity.
+If the identity variables are unset, CI now uses the checked-in Partner Center
+identity defaults from `store-identity.ps1`.
 
 ## Local Sideload Signing
 

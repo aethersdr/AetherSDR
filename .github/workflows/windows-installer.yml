@@ -169,6 +169,7 @@ jobs:
           AETHERSDR_MSIX_INSTALLER_ACCENT_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_ACCENT_COLOR }}
           AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR: ${{ vars.AETHERSDR_MSIX_INSTALLER_BACKGROUND_COLOR }}
         run: |
+          . .\packaging\windows\store-identity.ps1
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -CreateUpload -SkipSign -ExcludeDfnrModel
 
       - name: Upload artifacts
