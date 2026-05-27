@@ -1241,7 +1241,10 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     makeGraphTab("Latency", &m_latencyGraph, "Latency, Arrival Gap, and Jitter", " ms");
     makeGraphTab("Rates", &m_ratesGraph, "Incoming Stream Rates", " kbps");
     m_ratesGraph->setLogScale(true);
-    // Add fps-cap step graph below the rates graph on the Rates tab
+    // Add fps-cap step graph below the rates graph on the Rates tab.
+    // Relies on the just-added Rates tab being last; assert so a future
+    // reorder fails loudly instead of silently landing on the wrong tab.
+    Q_ASSERT(tabs->tabText(tabs->count() - 1) == QStringLiteral("Rates"));
     if (auto* ratesPage = tabs->widget(tabs->count() - 1)) {
         if (auto* ratesLayout = qobject_cast<QVBoxLayout*>(ratesPage->layout())) {
             m_fpsCapGraph = new TimeSeriesGraphWidget("Adaptive Throttle — FPS Cap", " fps", ratesPage);
@@ -2412,6 +2415,21 @@ NetworkDiagnosticsHistory::NetworkDiagnosticsHistory(RadioModel* model, AudioEng
         if (active) ++m_throttleSessionCount;
     }, Qt::UniqueConnection);
 
+    // Seed adaptive-throttle state from the model in case the dialog opens
+    // while throttle is already engaged; without this seed the badge,
+    // step graph, and Details subsection would stay empty until the next
+    // adaptiveThrottleChanged transition — which may not arrive for a while
+    // on a stably-degraded link.
+    m_currentFpsCap = m_model->currentAdaptiveFpsCap();
+    if (m_currentFpsCap > 0) {
+        ThrottleEvent ev;
+        ev.timestampMs = QDateTime::currentMSecsSinceEpoch();
+        ev.active      = true;
+        ev.fpsCap      = m_currentFpsCap;
+        m_throttleEvents.push_back(ev);
+        ++m_throttleSessionCount;
+    }
+
     sampleNow();
 }
 
@@ -2816,10 +2834,11 @@ void NetworkDiagnosticsDialog::refresh()
 
     // ── Adaptive throttle badge and Details subsection ───────────────────
     {
-        const int  liveFpsCap   = sample.adaptiveFpsCap;
-        const bool throttleActive = liveFpsCap > 0;
-        // Read pendingThrottleLift() live from the model — more accurate than a
-        // sample-derived flag for a state that changes between 1-second polls.
+        // sampledFpsCap is up-to-1s stale (read from the 1 Hz sample history);
+        // pendingLift below is read live from the model because it can flip
+        // between sample boundaries.
+        const int  sampledFpsCap = sample.adaptiveFpsCap;
+        const bool throttleActive = sampledFpsCap > 0;
         const bool pendingLift  = throttleActive && m_model->pendingThrottleLift();
 
         if (m_throttleBadge) {
@@ -2827,7 +2846,7 @@ void NetworkDiagnosticsDialog::refresh()
             if (throttleActive) {
                 m_throttleBadge->setText(
                     QString("Adaptive throttle: %1 fps cap%2")
-                        .arg(liveFpsCap)
+                        .arg(sampledFpsCap)
                         .arg(pendingLift ? QStringLiteral(" (restoring)") : QString{}));
             }
         }
@@ -2839,7 +2858,7 @@ void NetworkDiagnosticsDialog::refresh()
         if (throttleActive || everThrottled) {
             if (m_throttleStateLabel) {
                 if (throttleActive) {
-                    m_throttleStateLabel->setText(QString("%1 fps cap").arg(liveFpsCap));
+                    m_throttleStateLabel->setText(QString("%1 fps cap").arg(sampledFpsCap));
                     m_throttleStateLabel->setStyleSheet(
                         QStringLiteral("QLabel { color: %1; font-weight: 600; }").arg(kThrottleAmber));
                 } else {
