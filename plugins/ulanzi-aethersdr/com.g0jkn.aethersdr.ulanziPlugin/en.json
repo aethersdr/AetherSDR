@@ -1,0 +1,21 @@
+{
+  "Name": "AetherSDR Controller",
+  "Description": "Drive AetherSDR over its TCI WebSocket interface from a Ulanzi keypad / dial.",
+  "Actions": [
+    { "Name": "VFO Tune",     "Tooltip": "Tune the active slice with the dial." },
+    { "Name": "MOX Toggle",   "Tooltip": "Toggle MOX (Manual transmit) on the active slice." },
+    { "Name": "TUNE / ATU",   "Tooltip": "Start a tune cycle." },
+    { "Name": "Mode Cycle",   "Tooltip": "Cycle modulation modes." },
+    { "Name": "Band Up",      "Tooltip": "Jump to the next higher amateur band." },
+    { "Name": "Band Down",    "Tooltip": "Jump to the next lower amateur band." },
+    { "Name": "Slice Cycle",  "Tooltip": "Cycle the active slice." },
+    { "Name": "RIT Toggle",   "Tooltip": "Toggle Receiver Incremental Tuning." }
+  ],
+  "Localization": {
+    "AetherSDR TCI URL": "AetherSDR TCI URL",
+    "Note": "Note",
+    "Step size (Hz)": "Step size (Hz)",
+    "Coarse step multiplier (press + rotate)": "Coarse step multiplier (press + rotate)",
+    "Dial press action": "Dial press action"
+  }
+}

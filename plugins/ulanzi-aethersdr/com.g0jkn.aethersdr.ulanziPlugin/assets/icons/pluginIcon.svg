@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 144 144">
+  <rect width="144" height="144" rx="20" fill="#0f0f1a"/>
+  <circle cx="72" cy="58" r="26" fill="none" stroke="#00b4d8" stroke-width="5"/>
+  <circle cx="72" cy="58" r="11" fill="#00b4d8"/>
+  <text x="72" y="116" font-family="Inter, Helvetica Neue, Arial, sans-serif" font-size="20" fill="#ffffff" text-anchor="middle" font-weight="700" letter-spacing="0.5">AetherSDR</text>
+</svg>

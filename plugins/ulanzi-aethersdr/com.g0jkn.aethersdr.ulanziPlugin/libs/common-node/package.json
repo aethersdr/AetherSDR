@@ -1,0 +1,22 @@
+{
+  "name": "ulanzideck-api",
+  "version": "0.1.0",
+  "description": "ulanzi websocket connect and events",
+  "main": "index.js",
+  "type": "module", 
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "ulanzi",
+    "stream deck",
+    "websocket",
+    "api",
+    "sdapi"
+  ],
+  "author": "ulanzi",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
