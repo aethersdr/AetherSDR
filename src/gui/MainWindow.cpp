@@ -4653,6 +4653,17 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](bool active, int fpsCap) {
         m_adaptiveThrottleActive = active;
         m_adaptiveFpsCap = active ? fpsCap : 0;
+        // Mirror the footer quality-color palette on the heartbeat indicator.
+        // Empty string restores the default green when throttle is lifted.
+        if (m_titleBar) {
+            QString throttleColor;
+            if (active) {
+                if (fpsCap <= 4)       throttleColor = "#cc3333"; // Poor
+                else if (fpsCap <= 8)  throttleColor = "#cc9900"; // Fair
+                else                   throttleColor = "#00b4d8"; // Good
+            }
+            m_titleBar->setThrottleFlashColor(throttleColor);
+        }
         if (!active) {
             // Throttle lifted — push each pan's user-configured fps back to the radio.
             // The reconcile timers are suppressed while throttle is active, so they

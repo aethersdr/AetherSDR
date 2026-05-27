@@ -34,6 +34,9 @@ public:
     void setDiscovering(bool active); // Solid amber while discovering / not yet connected
     void setMinimalMode(bool on);
     void setBlinkEnabled(bool enabled); // Toggle heartbeat animation on/off
+    // Set the flash color used while adaptive throttle is active (empty = restore green).
+    // Ignored while the disconnected-alarm blink is running.
+    void setThrottleFlashColor(const QString& hexColor);
 
     // Reflect applet-panel state on the dock-side icons:
     //  - visible=false: both icons dim (no active side).
@@ -115,6 +118,7 @@ private:
     bool         m_alarmRed{false};
     bool         m_blinkEnabled{true};  // persisted via AppSettings "HeartbeatBlinkEnabled"
     bool         m_discovering{false};  // solid amber while waiting for connection
+    QString      m_throttleFlashColor; // empty = default green; set while adaptive throttle is active
     QString      m_pcAudioInputDevice;
     QString      m_pcAudioOutputDevice;
 

@@ -1034,12 +1034,26 @@ void TitleBar::onHeartbeat()
     m_heartbeatAlarmTimer->stop();
     m_alarmRed = false;
     m_heartbeat->setToolTip("Radio discovery heartbeat");
+    const QString flashColor = m_throttleFlashColor.isEmpty() ? "#20c060" : m_throttleFlashColor;
     m_heartbeat->setStyleSheet(
-        "QLabel { background: #20c060; border-radius: 5px; }");
+        QString("QLabel { background: %1; border-radius: 5px; }").arg(flashColor));
     if (m_blinkEnabled) {
-        m_heartbeatOffTimer->start();  // flash green → gray after 100ms
+        m_heartbeatOffTimer->start();  // flash → gray after 100ms
     }
-    // When blink is off: stays static green — no timer, no animation
+    // When blink is off: stays static — no timer, no animation
+}
+
+void TitleBar::setThrottleFlashColor(const QString& hexColor)
+{
+    m_throttleFlashColor = hexColor;
+    // If blink is disabled and the indicator is currently static green,
+    // update it immediately so the color change is visible without waiting
+    // for the next heartbeat.  Alarm states are never overridden.
+    if (!m_blinkEnabled && m_missedBeats < 3 && !m_discovering) {
+        const QString color = hexColor.isEmpty() ? "#20c060" : hexColor;
+        m_heartbeat->setStyleSheet(
+            QString("QLabel { background: %1; border-radius: 5px; }").arg(color));
+    }
 }
 
 void TitleBar::onHeartbeatLost()
@@ -1087,10 +1101,11 @@ void TitleBar::setBlinkEnabled(bool enabled)
         m_heartbeat->setStyleSheet(
             "QLabel { background: #cc2020; border-radius: 5px; }");
     } else if (m_heartbeatOffTimer->isActive()) {
-        // Was mid green-flash — freeze to solid green (connected)
+        // Was mid flash — freeze to solid connected color
         m_heartbeatOffTimer->stop();
+        const QString color = m_throttleFlashColor.isEmpty() ? "#20c060" : m_throttleFlashColor;
         m_heartbeat->setStyleSheet(
-            "QLabel { background: #20c060; border-radius: 5px; }");
+            QString("QLabel { background: %1; border-radius: 5px; }").arg(color));
     }
 }
 

@@ -317,6 +317,7 @@ public:
         QColor  color;
         QVector<QPointF> points;
         QString unitSuffix;
+        bool    stepFunction{false};  // draw as horizontal-then-vertical steps
     };
 
     struct LegendHit {
@@ -370,6 +371,14 @@ public:
             return;
         }
         m_logScale = on;
+        update();
+    }
+
+    // Highlight time spans where adaptive throttle was active.
+    // Each pair is (startRatio, endRatio) in [0,1] over the visible range.
+    void setThrottleSpans(QVector<QPair<double,double>> spans)
+    {
+        m_throttleSpans = std::move(spans);
         update();
     }
 
@@ -466,6 +475,21 @@ protected:
             painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
         }
 
+        // Amber shading for adaptive-throttle active spans
+        if (!m_throttleSpans.isEmpty()) {
+            QColor bandColor("#cc9900");
+            bandColor.setAlpha(28);
+            painter.setBrush(bandColor);
+            painter.setPen(Qt::NoPen);
+            for (const auto& span : m_throttleSpans) {
+                const double x0 = plot.left() + plot.width() * std::clamp(span.first,  0.0, 1.0);
+                const double x1 = plot.left() + plot.width() * std::clamp(span.second, 0.0, 1.0);
+                if (x1 > x0)
+                    painter.fillRect(QRectF(x0, plot.top(), x1 - x0, plot.height()), bandColor);
+            }
+            painter.setBrush(Qt::NoBrush);
+        }
+
         for (const Series& series : visibleSeries) {
             if (series.points.isEmpty()) {
                 continue;
@@ -492,7 +516,7 @@ protected:
                 bucketCount = 0;
             };
 
-            for (const QPointF& point : series.points) {
+            auto mapPoint = [&](const QPointF& point) -> QPointF {
                 const double xRatio = std::clamp(point.x() / std::max(1, m_rangeSeconds), 0.0, 1.0);
                 double yRatio;
                 if (m_logScale) {
@@ -501,20 +525,42 @@ protected:
                 } else {
                     yRatio = std::clamp(point.y() / maxY, 0.0, 1.0);
                 }
-                const QPointF mapped(plot.left() + plot.width() * xRatio,
-                                     plot.bottom() - plot.height() * yRatio);
-                const int pixel = static_cast<int>(std::round(mapped.x()));
-                if (!hasBucket) {
-                    hasBucket = true;
-                    bucketPixel = pixel;
-                } else if (pixel != bucketPixel) {
-                    flushBucket();
-                    bucketPixel = pixel;
+                return {plot.left() + plot.width() * xRatio,
+                        plot.bottom() - plot.height() * yRatio};
+            };
+
+            if (series.stepFunction) {
+                // Step-function: horizontal run at current y, then vertical jump at each x
+                for (int pi = 0; pi < series.points.size(); ++pi) {
+                    const QPointF mapped = mapPoint(series.points[pi]);
+                    if (first) {
+                        path.moveTo(mapped);
+                        first = false;
+                    } else {
+                        // Horizontal to new x, then vertical to new y
+                        path.lineTo(QPointF(mapped.x(), path.currentPosition().y()));
+                        path.lineTo(mapped);
+                    }
                 }
-                bucketSum += mapped;
-                ++bucketCount;
+                // Extend last step to the right edge of the plot
+                if (!first)
+                    path.lineTo(QPointF(plot.right(), path.currentPosition().y()));
+            } else {
+                for (const QPointF& point : series.points) {
+                    const QPointF mapped = mapPoint(point);
+                    const int pixel = static_cast<int>(std::round(mapped.x()));
+                    if (!hasBucket) {
+                        hasBucket = true;
+                        bucketPixel = pixel;
+                    } else if (pixel != bucketPixel) {
+                        flushBucket();
+                        bucketPixel = pixel;
+                    }
+                    bucketSum += mapped;
+                    ++bucketCount;
+                }
+                flushBucket();
             }
-            flushBucket();
             painter.setPen(QPen(series.color, 2));
             painter.drawPath(path);
         }
@@ -774,6 +820,7 @@ private:
     QSet<QString> m_selectedLabels;
     QVector<LegendHit> m_legendHits;
     bool m_logScale{false};
+    QVector<QPair<double,double>> m_throttleSpans;
 };
 
 NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
@@ -887,6 +934,18 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
 
     const auto statusCard = makeHealthCard("Status", "Overall connection quality");
     m_overviewStatusValue = statusCard.second;
+    // Throttle badge: inserted before the stretch in the Status card layout
+    m_throttleBadge = new QLabel;
+    m_throttleBadge->setVisible(false);
+    m_throttleBadge->setWordWrap(false);
+    m_throttleBadge->setStyleSheet(
+        "QLabel { color: #cc9900; font-size: 10px; font-weight: 600; "
+        "background: rgba(204,153,0,0.12); border: 1px solid rgba(204,153,0,0.35); "
+        "border-radius: 3px; padding: 1px 5px; }");
+    if (auto* lay = diagnosticsPanelLayout(statusCard.first)) {
+        // layout indices: 0=value, 1=hint, 2=stretch — insert badge before stretch
+        lay->insertWidget(2, m_throttleBadge);
+    }
     overviewLayout->addWidget(statusCard.first, 0, 0);
     const auto latencyCard = makeHealthCard("Latency", "Round-trip time");
     m_overviewLatencyValue = latencyCard.second;
@@ -1126,6 +1185,35 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     contentLayout->addWidget(dropGroup, 1, 0);
     contentLayout->addWidget(audioGroup, 1, 1);
 
+    // ── Adaptive Throttle subsection ─────────────────────────────────────
+    m_throttleSection = makeDiagnosticsPanel("Adaptive Frame-Rate Throttle");
+    m_throttleSection->setVisible(false);
+    auto* throttleGrid = new QGridLayout;
+    throttleGrid->setContentsMargins(0, 0, 0, 0);
+    throttleGrid->setColumnStretch(1, 1);
+    throttleGrid->setVerticalSpacing(2);
+    throttleGrid->setHorizontalSpacing(12);
+    addDiagnosticsPanelContent(m_throttleSection, throttleGrid);
+
+    int throttleRow = 0;
+    throttleGrid->addWidget(makeNote(
+        "Adaptive throttle reduces panadapter frame rates when latency or loss is detected. "
+        "The cap lifts automatically once link quality stabilises."), throttleRow++, 0, 1, 2);
+
+    throttleGrid->addWidget(new QLabel("Current State:"), throttleRow, 0);
+    m_throttleStateLabel = makeVal();
+    throttleGrid->addWidget(m_throttleStateLabel, throttleRow++, 1);
+
+    throttleGrid->addWidget(new QLabel("Pending Lift:"), throttleRow, 0);
+    m_throttleDwellLabel = makeVal();
+    throttleGrid->addWidget(m_throttleDwellLabel, throttleRow++, 1);
+
+    throttleGrid->addWidget(new QLabel("Sessions This Run:"), throttleRow, 0);
+    m_throttleSessionLabel = makeVal();
+    throttleGrid->addWidget(m_throttleSessionLabel, throttleRow++, 1);
+
+    contentLayout->addWidget(m_throttleSection, 2, 0, 1, 2);
+
     m_overviewLatencyGraph = new TimeSeriesGraphWidget("Latency and Jitter", " ms");
     m_overviewLossGraph = new TimeSeriesGraphWidget("Recent Packet Loss", "%");
     m_overviewRatesGraph = new TimeSeriesGraphWidget("Total Stream Rates", " kbps");
@@ -1149,6 +1237,15 @@ NetworkDiagnosticsDialog::NetworkDiagnosticsDialog(RadioModel* model,
     makeGraphTab("Latency", &m_latencyGraph, "Latency, Arrival Gap, and Jitter", " ms");
     makeGraphTab("Rates", &m_ratesGraph, "Incoming Stream Rates", " kbps");
     m_ratesGraph->setLogScale(true);
+    // Add fps-cap step graph below the rates graph on the Rates tab
+    if (auto* ratesPage = tabs->widget(tabs->count() - 1)) {
+        if (auto* ratesLayout = qobject_cast<QVBoxLayout*>(ratesPage->layout())) {
+            m_fpsCapGraph = new TimeSeriesGraphWidget("Adaptive Throttle — FPS Cap", " fps", ratesPage);
+            m_fpsCapGraph->setMinimumHeight(120);
+            m_fpsCapGraph->setMaximumHeight(160);
+            ratesLayout->addWidget(m_fpsCapGraph);
+        }
+    }
     makeGraphTab("Packet Loss", &m_lossGraph, "Packet Loss by Stream", "%");
 
     makeGraphTab("Audio", &m_audioGraph, "RX Audio Buffer and Timing", " ms");
@@ -2299,6 +2396,18 @@ NetworkDiagnosticsHistory::NetworkDiagnosticsHistory(RadioModel* model, AudioEng
         sampleNow();
     });
     m_sampleTimer.start(1000);
+
+    connect(m_model, &RadioModel::adaptiveThrottleChanged,
+            this, [this](bool active, int fpsCap) {
+        m_currentFpsCap = active ? fpsCap : 0;
+        ThrottleEvent ev;
+        ev.timestampMs = QDateTime::currentMSecsSinceEpoch();
+        ev.active      = active;
+        ev.fpsCap      = fpsCap;
+        m_throttleEvents.push_back(ev);
+        if (active) ++m_throttleSessionCount;
+    }, Qt::UniqueConnection);
+
     sampleNow();
 }
 
@@ -2412,6 +2521,9 @@ void NetworkDiagnosticsHistory::sampleNow()
             sample.audioLastPacketAgeMs = 0;
         }
     }
+    sample.adaptiveFpsCap      = m_currentFpsCap;
+    sample.adaptivePendingLift = (m_currentFpsCap > 0) && m_model->pendingThrottleLift();
+
     m_lastSampleMs = nowMs;
 
     m_samples.push_back(sample);
@@ -2682,6 +2794,43 @@ void NetworkDiagnosticsDialog::refresh()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_overviewStatusValue, "QLabel { color: {{color.text.primary}}; font-weight: 700; font-size: 18px; }");
     }
 
+    // ── Adaptive throttle badge and Details subsection ───────────────────
+    {
+        const NetworkDiagnosticsSample& s = sample;
+        const bool throttleActive = s.adaptiveFpsCap > 0;
+
+        if (m_throttleBadge) {
+            m_throttleBadge->setVisible(throttleActive);
+            if (throttleActive) {
+                const QString suffix = s.adaptivePendingLift ? " (restoring)" : "";
+                m_throttleBadge->setText(
+                    QString("Adaptive throttle: %1 fps cap%2").arg(s.adaptiveFpsCap).arg(suffix));
+            }
+        }
+
+        if (m_throttleSection) {
+            m_throttleSection->setVisible(throttleActive || (m_history && m_history->throttleSessionCount() > 0));
+        }
+        if (throttleActive || (m_history && m_history->throttleSessionCount() > 0)) {
+            if (m_throttleStateLabel) {
+                if (throttleActive) {
+                    m_throttleStateLabel->setText(
+                        QString("%1 fps cap").arg(s.adaptiveFpsCap));
+                    m_throttleStateLabel->setStyleSheet("QLabel { color: #cc9900; font-weight: 600; }");
+                } else {
+                    m_throttleStateLabel->setText("Inactive");
+                    m_throttleStateLabel->setStyleSheet("QLabel { color: #b9c4d7; font-weight: 600; }");
+                }
+            }
+            if (m_throttleDwellLabel) {
+                m_throttleDwellLabel->setText(s.adaptivePendingLift ? "Yes — stabilising" : (throttleActive ? "No" : "--"));
+            }
+            if (m_throttleSessionLabel && m_history) {
+                m_throttleSessionLabel->setText(QString::number(m_history->throttleSessionCount()));
+            }
+        }
+    }
+
     updateCharts();
 }
 
@@ -2790,18 +2939,61 @@ void NetworkDiagnosticsDialog::updateCharts()
         })
     };
 
+    // ── Adaptive throttle spans for amber band ───────────────────────────
+    QVector<QPair<double,double>> throttleSpans;
+    if (m_history) {
+        const auto& events = m_history->throttleEvents();
+        double spanStart = -1.0;
+        for (const auto& ev : events) {
+            const double tSec = (ev.timestampMs - cutoffMs) / 1000.0;
+            if (ev.active) {
+                spanStart = std::clamp(tSec, 0.0, static_cast<double>(rangeSeconds));
+            } else if (spanStart >= 0.0) {
+                const double tEnd = std::clamp(tSec, 0.0, static_cast<double>(rangeSeconds));
+                throttleSpans.push_back({spanStart / rangeSeconds, tEnd / rangeSeconds});
+                spanStart = -1.0;
+            }
+        }
+        // Throttle still active at "now" — span extends to right edge
+        if (spanStart >= 0.0)
+            throttleSpans.push_back({spanStart / rangeSeconds, 1.0});
+    }
+
+    // ── fps-cap step-function series ─────────────────────────────────────
+    TimeSeriesGraphWidget::Series fpsCapSeries{"FPS cap", QColor("#cc9900"), {}, " fps"};
+    fpsCapSeries.stepFunction = true;
+    if (m_history) {
+        for (const NetworkDiagnosticsSample& s : m_history->samples()) {
+            if (s.timestampMs < cutoffMs || s.timestampMs > endMs) continue;
+            const double x = (s.timestampMs - cutoffMs) / 1000.0;
+            fpsCapSeries.points.push_back(QPointF(x, static_cast<double>(s.adaptiveFpsCap)));
+        }
+    }
+
     m_overviewLatencyGraph->setSeries(latencySeries, rangeSeconds);
+    m_overviewLatencyGraph->setThrottleSpans(throttleSpans);
     m_overviewLossGraph->setSeries({lossSeries.first()}, rangeSeconds);
+    m_overviewLossGraph->setThrottleSpans(throttleSpans);
     m_overviewRatesGraph->setSeries({
         buildSeriesWithUnit("RX total", QColor("#00b4d8"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.rxKbps; }),
         buildSeriesWithUnit("TX total", QColor("#f2c94c"), " kbps", [](const NetworkDiagnosticsSample& s) { return s.txKbps; })
     }, rangeSeconds);
+    m_overviewRatesGraph->setThrottleSpans(throttleSpans);
     m_overviewAudioGraph->setSeries(audioBufferSeries, rangeSeconds);
+    m_overviewAudioGraph->setThrottleSpans(throttleSpans);
     m_latencyGraph->setSeries(latencySeries, rangeSeconds);
+    m_latencyGraph->setThrottleSpans(throttleSpans);
     m_ratesGraph->setSeries(rateSeries, rangeSeconds);
+    m_ratesGraph->setThrottleSpans(throttleSpans);
     m_lossGraph->setSeries(lossSeries, rangeSeconds);
+    m_lossGraph->setThrottleSpans(throttleSpans);
     m_audioGraph->setSeries(audioBufferSeries, rangeSeconds);
+    m_audioGraph->setThrottleSpans(throttleSpans);
     m_audioFeedGraph->setSeries(audioFeedSeries, rangeSeconds);
+    m_audioFeedGraph->setThrottleSpans(throttleSpans);
+    if (m_fpsCapGraph) {
+        m_fpsCapGraph->setSeries({fpsCapSeries}, rangeSeconds);
+    }
 }
 
 } // namespace AetherSDR
