@@ -1882,9 +1882,9 @@ MainWindow::MainWindow(QWidget* parent)
     // Any MQTT subscriber (e.g. a contest logger) receives the stream
     // without additional AetherSDR interfaces.
     connect(&m_cwDecoder,   &CwDecoder::textDecoded, this,
-            [this](const QString& t, float) { publishCwDecodeMqtt(t, true);  });
+            [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, true);  });
     connect(&m_cwDecoderTx, &CwDecoder::textDecoded, this,
-            [this](const QString& t, float) { publishCwDecodeMqtt(t, false); });
+            [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, false); });
 
     // MQTT → panadapter overlay display
     connect(m_appletPanel->mqttApplet(), &MqttApplet::displayValueChanged,
@@ -5350,9 +5350,12 @@ void MainWindow::showMqttSettingsDialog()
     });
 }
 
-void MainWindow::publishCwDecodeMqtt(const QString& text, bool rx)
+void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
 {
     if (!m_mqttClient || !m_mqttClient->isConnected()) return;
+    // Apply the same sensitivity threshold as the active CW panel so the
+    // MQTT stream matches exactly what the decoder window displays.
+    if (m_cwDecoderApplet && cost >= m_cwDecoderApplet->cwCostThreshold()) return;
     QJsonObject obj;
     obj[QStringLiteral("text")] = text;
     obj[QStringLiteral("rx")]   = rx;

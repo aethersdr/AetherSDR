@@ -338,7 +338,7 @@ private:
     void showMnrSettings();
 #ifdef HAVE_MQTT
     void showMqttSettingsDialog();
-    void publishCwDecodeMqtt(const QString& text, bool rx);
+    void publishCwDecodeMqtt(const QString& text, float cost, bool rx);
 #endif
     void applyPanLayout(const QString& layoutId);
     void createPansSequentially(const QString& layoutId, int total,

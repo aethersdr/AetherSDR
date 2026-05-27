@@ -47,8 +47,9 @@ public:
     void appendCwTextTx(const QString& text, float cost = 0.0f);
     void setCwStats(float pitchHz, float speedWpm);
     void clearCwText();
-    QPushButton* lockPitchButton() const { return m_lockPitchBtn; }
-    QPushButton* lockSpeedButton() const { return m_lockSpeedBtn; }
+    QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
+    QPushButton* lockSpeedButton()  const { return m_lockSpeedBtn; }
+    float        cwCostThreshold()  const { return m_cwCostThreshold; }
 
     QSize sizeHint() const override { return {800, 316}; }
 
