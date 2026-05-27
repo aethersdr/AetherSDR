@@ -15,6 +15,7 @@ docs/logo-original.jpg
 docs/logo_upscayl.png
 SECURITY-AUDIT.md
 msix-root/
+msix-root-*/
 *.appx
 *.appxbundle
 *.appxsym

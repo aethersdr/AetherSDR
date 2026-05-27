@@ -2,6 +2,7 @@
 #include "AppSettings.h"
 #include "AsyncLogWriter.h"  // redactPii — GHSA-ccrg-j8cp-qhc4
 #include "LogManager.h"
+#include "ZipArchive.h"
 #include "models/RadioModel.h"
 
 #include <QCoreApplication>
@@ -9,15 +10,52 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QProcess>
+#include <QSaveFile>
 #include <QSysInfo>
 #include <QTemporaryDir>
 #include <QUrl>
 #include <QUrlQuery>
 
 namespace AetherSDR {
+
+namespace {
+
+QList<ZipEntryData> collectSupportBundleEntries(const QString& dirPath)
+{
+    QList<ZipEntryData> entries;
+    const QDir dir(dirPath);
+    const QFileInfoList files = dir.entryInfoList(QDir::Files, QDir::Name);
+    for (const QFileInfo& fileInfo : files) {
+        QFile file(fileInfo.absoluteFilePath());
+        if (!file.open(QIODevice::ReadOnly))
+            return {};
+        entries.append({fileInfo.fileName(), file.readAll()});
+    }
+    return entries;
+}
+
+bool writeSupportBundleZip(const QString& sourceDir, const QString& archivePath)
+{
+    const QList<ZipEntryData> entries = collectSupportBundleEntries(sourceDir);
+    if (entries.isEmpty())
+        return false;
+
+    const QByteArray zip = writeStoredZip(entries);
+    if (zip.isEmpty())
+        return false;
+
+    QSaveFile archive(archivePath);
+    if (!archive.open(QIODevice::WriteOnly))
+        return false;
+    if (archive.write(zip) != zip.size())
+        return false;
+    return archive.commit();
+}
+
+} // namespace
 
 SupportBundle::SystemInfo SupportBundle::collectSystemInfo()
 {
@@ -161,22 +199,11 @@ QString SupportBundle::createBundle(const RadioInfo& radio)
     const QString supportDir = configDir + "/support";
     QDir().mkpath(supportDir);
 
-#ifdef _WIN32
     const QString archivePath = supportDir + "/support-bundle-" + timestamp + ".zip";
-    QProcess proc;
-    proc.start("powershell", {"-Command",
-        QString("Compress-Archive -Path '%1/*' -DestinationPath '%2'")
-            .arg(tmp, archivePath)});
-#else
-    const QString archivePath = supportDir + "/support-bundle-" + timestamp + ".tar.gz";
-    QProcess proc;
-    proc.start("tar", {"czf", archivePath, "-C", tmp, "."});
-#endif
-
-    proc.waitForFinished(10000);
+    const bool archived = writeSupportBundleZip(tmp, archivePath);
     tmpDir.setAutoRemove(true);  // clean up temp files
 
-    if (proc.exitCode() != 0 || !QFile::exists(archivePath))
+    if (!archived || !QFile::exists(archivePath))
         return {};
 
     return archivePath;

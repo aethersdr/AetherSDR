@@ -2778,6 +2778,8 @@ int RadioModel::fpsCapForState(NetState s)
 
 int RadioModel::currentAdaptiveFpsCap() const
 {
+    if (AppSettings::instance().value("AdaptiveThrottleEnabled", "False").toString() != "True")
+        return 0;
     return fpsCapForState(m_netState);
 }
 
@@ -3418,7 +3420,12 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
 
     // Apply active throttle cap immediately — applyAdaptiveFrameRate only fires
     // on tier transitions, so a pan opened mid-throttle would run at the radio
-    // default (~25 fps) until the next state change.
+    // default (~25 fps) until the next state change. currentAdaptiveFpsCap()
+    // returns 0 when AdaptiveThrottleEnabled is off, so activeCap > 0 already
+    // gates both the push and the deferred lambda.
+    // Note: if the pan is created in a healthy state and the network degrades
+    // before waterfallId arrives, this connect is never made and the cap is
+    // applied by the next applyAdaptiveFrameRate() tier transition instead.
     const int activeCap = currentAdaptiveFpsCap();
     if (activeCap > 0) {
         qCDebug(lcProtocol) << "RadioModel: applying active throttle cap" << activeCap
@@ -3430,7 +3437,7 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
                 this, [this, normalizedPanId]() {
             const int cap = currentAdaptiveFpsCap();
             if (cap > 0) sendAdaptiveCapToPan(normalizedPanId, cap);
-        });
+        }, Qt::UniqueConnection);
     }
 
     connect(pan, &PanadapterModel::waterfallIdChanged,

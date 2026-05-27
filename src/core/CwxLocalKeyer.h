@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QElapsedTimer>
 #include <QObject>
 #include <QQueue>
 #include <QString>
@@ -53,6 +54,13 @@ private:
     int           m_unitMs{60};   // 60 ms = 20 WPM
     bool          m_running{false};
     bool          m_currentlyDown{false};
+    // Drift-corrected scheduling: absolute target edge time vs an elapsed
+    // reference, so a late tick is followed by a correspondingly shorter
+    // wait. Without this, every event-loop coalescing event on the GUI
+    // thread (panadapter paint, VITA-49 burst) pushes the next edge later
+    // and accumulates audible stutter / wrong word spacing on macOS (#2980).
+    QElapsedTimer m_elapsed;
+    qint64        m_nextEdgeMs{0};
 };
 
 } // namespace AetherSDR

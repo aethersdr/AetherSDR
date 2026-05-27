@@ -1027,6 +1027,11 @@ void TitleBar::setDiscovering(bool active)
     }
 }
 
+QString TitleBar::currentBeatColor() const
+{
+    return m_throttleFlashColor.isEmpty() ? QStringLiteral("#20c060") : m_throttleFlashColor;
+}
+
 void TitleBar::onHeartbeat()
 {
     m_discovering = false;
@@ -1035,11 +1040,24 @@ void TitleBar::onHeartbeat()
     m_alarmRed = false;
     m_heartbeat->setToolTip("Radio discovery heartbeat");
     m_heartbeat->setStyleSheet(
-        "QLabel { background: #20c060; border-radius: 5px; }");
+        QStringLiteral("QLabel { background: %1; border-radius: 5px; }").arg(currentBeatColor()));
     if (m_blinkEnabled) {
-        m_heartbeatOffTimer->start();  // flash green → gray after 100ms
+        m_heartbeatOffTimer->start();  // flash → gray after 100ms
     }
-    // When blink is off: stays static green — no timer, no animation
+    // When blink is off: stays static — no timer, no animation
+}
+
+void TitleBar::setThrottleFlashColor(const QString& color)
+{
+    if (m_throttleFlashColor == color) return;
+    m_throttleFlashColor = color;
+    // Alarm timer owns the indicator — never fight it.
+    if (m_missedBeats >= 3 || m_heartbeatAlarmTimer->isActive()) return;
+    // Blink-disabled freeze path: repaint immediately to the new static color.
+    if (!m_blinkEnabled && !m_heartbeatOffTimer->isActive()) {
+        m_heartbeat->setStyleSheet(
+            QStringLiteral("QLabel { background: %1; border-radius: 5px; }").arg(currentBeatColor()));
+    }
 }
 
 void TitleBar::onHeartbeatLost()
@@ -1087,10 +1105,10 @@ void TitleBar::setBlinkEnabled(bool enabled)
         m_heartbeat->setStyleSheet(
             "QLabel { background: #cc2020; border-radius: 5px; }");
     } else if (m_heartbeatOffTimer->isActive()) {
-        // Was mid green-flash — freeze to solid green (connected)
+        // Was mid flash — freeze to solid connected color
         m_heartbeatOffTimer->stop();
         m_heartbeat->setStyleSheet(
-            "QLabel { background: #20c060; border-radius: 5px; }");
+            QStringLiteral("QLabel { background: %1; border-radius: 5px; }").arg(currentBeatColor()));
     }
 }
 

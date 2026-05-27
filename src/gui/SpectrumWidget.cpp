@@ -3856,6 +3856,15 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
     (void)dragStatePublisher;
 
+    // Let child widgets (overlay menu buttons) own the pointer while hovered so
+    // their tooltips are not killed by SpectrumWidget's QToolTip::hideText() calls.
+    // Guard is skipped during active drags — those always start in the spectrum
+    // area, not over child widgets. (#2355)
+    if (!anyDragActive() && childAt(ev->position().toPoint())) {
+        ev->ignore();
+        return;
+    }
+
     const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);

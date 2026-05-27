@@ -198,6 +198,11 @@
 #include <psapi.h>
 #else
 #include <sys/resource.h>
+#ifdef Q_OS_MAC
+#include <mach/mach.h>
+#include <mach/task.h>
+#include <mach/task_info.h>
+#endif
 #endif
 #include <QLocale>
 #include <QFile>
@@ -1895,6 +1900,16 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_appletPanel->mqttApplet(), &MqttApplet::settingsRequested,
             this, &MainWindow::showMqttSettingsDialog);
     m_appletPanel->mqttApplet()->restoreConnectionState();
+
+    // CW decode → MQTT topic "aethersdr/cw/decode".
+    // Publishes {"text":"K","freq":14.025,"rx":true} per decoded character.
+    // RX decoder uses rx:true; TX sidetone decoder uses rx:false.
+    // Any MQTT subscriber (e.g. a contest logger) receives the stream
+    // without additional AetherSDR interfaces.
+    connect(&m_cwDecoder,   &CwDecoder::textDecoded, this,
+            [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, true);  });
+    connect(&m_cwDecoderTx, &CwDecoder::textDecoded, this,
+            [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, false); });
 
     // MQTT → panadapter overlay display
     connect(m_appletPanel->mqttApplet(), &MqttApplet::displayValueChanged,
@@ -4620,13 +4635,24 @@ MainWindow::MainWindow(QWidget* parent)
 #endif
 
     // ── Status bar telemetry ──────────────────────────────────────────────────
+    // Single source of truth for quality-level colors used by the footer label
+    // and the heartbeat throttle indicator.  Both must stay in sync.
+    auto qualityColor = [](const QString& quality) -> QString {
+        if (quality == "Fair") return QStringLiteral("#cc9900");
+        if (quality == "Poor") return QStringLiteral("#cc3333");
+        if (quality == "Good") return QStringLiteral("#00b4d8");
+        return QStringLiteral("#00cc66"); // Excellent / Very Good
+    };
+    // Map an fps cap to the matching quality-level color for the throttle indicator.
+    auto fpsCapColor = [](int fpsCap) -> QString {
+        if (fpsCap <= 4) return QStringLiteral("#cc3333"); // Poor
+        if (fpsCap <= 8) return QStringLiteral("#cc9900"); // Fair
+        return QStringLiteral("#00b4d8");                  // Good
+    };
+
     connect(&m_radioModel, &RadioModel::networkQualityChanged,
-            this, [this](const QString& quality, int pingMs) {
-        // Color code: Excellent/VeryGood=green, Good=cyan, Fair=amber, Poor=red
-        QString color = "#00cc66";
-        if (quality == "Fair") color = "#cc9900";
-        else if (quality == "Poor") color = "#cc3333";
-        else if (quality == "Good") color = "#00b4d8";
+            this, [this, qualityColor](const QString& quality, int pingMs) {
+        const QString color = qualityColor(quality);
         // Append fps cap so users understand why moving the fps slider has no effect.
         // Show "(restoring)" during the min-dwell hold so testers can distinguish
         // stuck throttle from a deliberate stability wait.
@@ -4650,9 +4676,11 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     connect(&m_radioModel, &RadioModel::adaptiveThrottleChanged,
-            this, [this](bool active, int fpsCap) {
+            this, [this, fpsCapColor](bool active, int fpsCap) {
         m_adaptiveThrottleActive = active;
         m_adaptiveFpsCap = active ? fpsCap : 0;
+        if (m_titleBar)
+            m_titleBar->setThrottleFlashColor(active ? fpsCapColor(fpsCap) : QString{});
         if (!active) {
             // Throttle lifted — push each pan's user-configured fps back to the radio.
             // The reconcile timers are suppressed while throttle is active, so they
@@ -5387,6 +5415,24 @@ void MainWindow::showMqttSettingsDialog()
             m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
         }
     });
+}
+
+void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
+{
+    if (!m_mqttClient) return;
+    // No CW panel active → nothing is displayed → don't publish.
+    if (!m_cwDecoderApplet || cost >= m_cwDecoderApplet->cwCostThreshold()) return;
+    // Mirror panel normalization: \n → space; drop whitespace-only TX chunks.
+    QString clean = text;
+    clean.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    if (!rx && clean.trimmed().isEmpty()) return;
+    QJsonObject obj;
+    obj[QStringLiteral("text")] = clean;
+    obj[QStringLiteral("rx")]   = rx;
+    if (auto* s = activeSlice(); s && s->frequency() > 0.0)
+        obj[QStringLiteral("freq")] = s->frequency();
+    m_mqttClient->publish(QStringLiteral("aethersdr/cw/decode"),
+                          QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 #endif
 
@@ -9094,7 +9140,13 @@ void MainWindow::buildUI()
         m_memLabel = new QLabel("Mem: \u2014");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_memLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
         m_memLabel->setAlignment(Qt::AlignCenter);
-        m_memLabel->setToolTip("AetherSDR process memory (RSS)");
+#if defined(Q_OS_WIN)
+        m_memLabel->setToolTip("AetherSDR process working set (matches Task Manager)");
+#elif defined(Q_OS_MAC)
+        m_memLabel->setToolTip("AetherSDR process physical footprint (matches Activity Monitor)");
+#else
+        m_memLabel->setToolTip("AetherSDR process resident set (VmRSS from /proc/self/status)");
+#endif
         cpuVbox->addWidget(m_cpuLabel);
         cpuVbox->addWidget(m_memLabel);
         hbox->addWidget(cpuStack);
@@ -9151,25 +9203,39 @@ void MainWindow::buildUI()
                 m_cpuLabel->setStyleSheet(QString("QLabel { color: %1; font-size: 12px; }").arg(color));
             }
 
-            // Memory (RSS)
+            // Memory: report the "what the OS sees right now" footprint, not the
+            // per-process high-water mark. ru_maxrss is monotonic and excludes
+            // compressed/IOKit/purgeable memory on macOS, so it disagrees badly
+            // with Activity Monitor — see issue #3197.
+            quint64 memBytes = 0;
 #ifdef Q_OS_WIN
             PROCESS_MEMORY_COUNTERS pmc;
             if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
-                double mb = pmc.WorkingSetSize / (1024.0 * 1024.0);
-                m_memLabel->setText(QString("Mem: %1 MB").arg(static_cast<int>(mb)));
+                memBytes = pmc.WorkingSetSize;
+            }
+#elif defined(Q_OS_MAC)
+            task_vm_info_data_t info{};
+            mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+            if (task_info(mach_task_self(), TASK_VM_INFO,
+                          reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS) {
+                memBytes = info.phys_footprint;
             }
 #else
-            // getrusage ru_maxrss is in KB on Linux, bytes on macOS
-            struct rusage ruMem;
-            if (getrusage(RUSAGE_SELF, &ruMem) == 0) {
-#ifdef Q_OS_MAC
-                double mb = ruMem.ru_maxrss / (1024.0 * 1024.0);
-#else
-                double mb = ruMem.ru_maxrss / 1024.0;
-#endif
-                m_memLabel->setText(QString("Mem: %1 MB").arg(static_cast<int>(mb)));
+            QFile statusFile("/proc/self/status");
+            if (statusFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                while (!statusFile.atEnd()) {
+                    const QByteArray line = statusFile.readLine();
+                    if (line.startsWith("VmRSS:")) {
+                        memBytes = line.mid(6).trimmed().split(' ').first().toULongLong() * 1024ULL;
+                        break;
+                    }
+                }
             }
 #endif
+            if (memBytes > 0) {
+                double mb = memBytes / (1024.0 * 1024.0);
+                m_memLabel->setText(QString("Mem: %1 MB").arg(static_cast<int>(mb)));
+            }
         });
         m_cpuTimer->start();
     }

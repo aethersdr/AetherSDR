@@ -14,6 +14,7 @@
 #include <QVector>
 
 class QCheckBox;
+class QFrame;
 class QPlainTextEdit;
 class QPushButton;
 class QTableWidget;
@@ -54,14 +55,23 @@ struct NetworkDiagnosticsSample {
     qint64 audioLastPacketAgeMs{0};
     quint16 audioPacketClassCode{0};
     int audioStreamCount{0};
+    int  adaptiveFpsCap{0};      // 0 = throttle inactive
 };
 
 class NetworkDiagnosticsHistory : public QObject {
 public:
+    struct ThrottleEvent {
+        qint64  timestampMs{0};
+        bool    active{false};
+        int     fpsCap{0};
+    };
+
     explicit NetworkDiagnosticsHistory(RadioModel* model, AudioEngine* audio, QObject* parent = nullptr);
 
     const QVector<NetworkDiagnosticsSample>& samples() const { return m_samples; }
     NetworkDiagnosticsSample latestSample() const;
+    const QVector<ThrottleEvent>& throttleEvents() const { return m_throttleEvents; }
+    int throttleSessionCount() const { return m_throttleSessionCount; }
 
 private:
     void sampleNow();
@@ -77,6 +87,9 @@ private:
     quint64 m_lastAudioUnderrunCount{0};
     qint64 m_lastAudioLatePackets{0};
     qint64 m_lastCatBytes[PanadapterStream::CatCount]{};
+    QVector<ThrottleEvent> m_throttleEvents;
+    int    m_throttleSessionCount{0};
+    int    m_currentFpsCap{0};  // tracks latest state for sampleNow()
 };
 
 class NetworkDiagnosticsDialog : public PersistentDialog {
@@ -184,7 +197,15 @@ private:
     TimeSeriesGraphWidget* m_lossGraph{nullptr};
     TimeSeriesGraphWidget* m_audioGraph{nullptr};
     TimeSeriesGraphWidget* m_audioFeedGraph{nullptr};
+    TimeSeriesGraphWidget* m_fpsCapGraph{nullptr};  // Rates tab: adaptive fps-cap step function
     QTableWidget* m_audioStreamsTable{nullptr};
+
+    // Adaptive-throttle diagnostics UI
+    QLabel* m_throttleBadge{nullptr};          // inline badge on Overview Status card
+    QFrame* m_throttleSection{nullptr};        // subsection on Details tab
+    QLabel* m_throttleStateLabel{nullptr};
+    QLabel* m_throttleDwellLabel{nullptr};
+    QLabel* m_throttleSessionLabel{nullptr};
 
     QPlainTextEdit* m_logViewer{nullptr};
     QLabel* m_logPathLabel{nullptr};
