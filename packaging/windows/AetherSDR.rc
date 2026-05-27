@@ -1,1 +1,7 @@
 IDI_ICON1 ICON "AetherSDR.ico"
+
+// Embed the application manifest (DPI awareness, UAC level, common-controls v6).
+// Resource type 24 (RT_MANIFEST), ID 1 = exe manifest.
+// Replaces the former /MANIFESTINPUT linker flag which broke on MSVC 14.50+
+// (LNK1220: requires /MANIFEST:EMBED — CMake vs_link_exe does not emit that flag).
+1 24 "AetherSDR.exe.manifest"

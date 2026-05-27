@@ -1031,8 +1031,14 @@ elseif(WIN32)
         target_sources(AetherSDR PRIVATE "${WIN_RC}")
     endif()
     if(MSVC)
-        target_link_options(AetherSDR PRIVATE
-            "/MANIFESTINPUT:${CMAKE_SOURCE_DIR}/packaging/windows/AetherSDR.exe.manifest")
+        # Suppress the linker's own manifest pipeline so vs_link_exe does not generate
+        # a competing manifest.res.  The manifest is embedded via AetherSDR.rc (type 24
+        # id 1) which is compiled into the binary as a regular Win32 resource.
+        # Background: MSVC 14.50+ (VS 2022 17.10) requires /MANIFEST:EMBED alongside
+        # /MANIFESTINPUT, but CMake's vs_link_exe (up through 4.2.3) still emits the
+        # old /MANIFEST /MANIFESTFILE: pair, producing LNK1220.  Switching to the .rc
+        # approach avoids the two-pass manifest pipeline entirely.
+        target_link_options(AetherSDR PRIVATE "/MANIFEST:NO")
     endif()
 endif()
 

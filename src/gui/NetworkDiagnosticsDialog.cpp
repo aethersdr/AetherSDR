@@ -2413,7 +2413,7 @@ NetworkDiagnosticsHistory::NetworkDiagnosticsHistory(RadioModel* model, AudioEng
         ev.fpsCap      = fpsCap;
         m_throttleEvents.push_back(ev);
         if (active) ++m_throttleSessionCount;
-    }, Qt::UniqueConnection);
+    });
 
     // Seed adaptive-throttle state from the model in case the dialog opens
     // while throttle is already engaged; without this seed the badge,
