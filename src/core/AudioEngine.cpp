@@ -4636,6 +4636,10 @@ void AudioEngine::onTxAudioReady()
             }
         }
         accumulatePcMicMeterInt16Stereo(data);
+
+        // Gate TX audio on PTT (prevents pre-MOX audio leakage into encoder)
+        if (!m_transmitting) return;
+
         const auto* i16 = reinterpret_cast<const int16_t*>(data.constData());
         const int ns = data.size() / static_cast<int>(sizeof(int16_t));
         QByteArray f32(ns * static_cast<int>(sizeof(float)), Qt::Uninitialized);
@@ -4997,6 +5001,13 @@ void AudioEngine::setRadeMode(bool on)
 void AudioEngine::sendModemTxAudio(const QByteArray& float32pcm)
 {
     if (m_txStreamId == 0) return;
+
+    // Gate modem audio on PTT (prevents radio pre-buffer build-up)
+    if (!m_transmitting) {
+        qCWarning(lcAudio) << "AudioEngine: sendModemTxAudio PTT gate closed —"
+                           << float32pcm.size() << "bytes dropped (EOO race?)";
+        return;
+    }
 
     if (m_radioTransmitting) {
         emitTxPostChainScopeFromFloat32Stereo(float32pcm, DEFAULT_SAMPLE_RATE);

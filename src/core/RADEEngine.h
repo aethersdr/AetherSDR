@@ -37,6 +37,12 @@ public:
     bool isActive() const;
     bool isSynced() const;
 
+    // EOO timing constants referenced by MainWindow's post-eooFinished PTT-release timer.
+    // kEooPlaybackMs (below) = kEooFrameMs + kEooSilenceTailMs + kEooTransportMarginMs
+    static constexpr int kEooFrameMs          = 144; // Duration of one rade_tx_eoo() output block
+    static constexpr int kEooSilenceTailMs    = 60;  // Silence appended to flush upsampler FIR through DAX
+    static constexpr int kEooTransportMarginMs = 50; // DAX UDP pipeline margin before set_mox=0
+
     // Returns "RADE vN" where N is the integer from rade_version(), or empty if RADE not compiled in.
     static QString versionString();
 
@@ -48,12 +54,22 @@ public slots:
     // Feed mic audio (24kHz stereo int16) for encoding.
     void feedTxAudio(const QByteArray& pcm);
 
+    // Request End-of-Over (EOO) transmission. Once requested, the engine
+    // will finish processing any queued voice audio, then append the EOO
+    // frame and a short silence tail before stopping.
+    void setEooRequested(bool requested);
+
+    // Set the operator callsign to embed in the EOO frame. Must be called
+    // before the first PTT press. Thread-safe: may be called from any thread.
+    void setTxCallsign(const QString& callsign);
+
     // Flush TX encoder state (call on MOX release to prevent stale audio)
     void resetTx();
 
 signals:
     void rxSpeechReady(const QByteArray& pcm);   // Decoded speech, 24kHz stereo int16
     void txModemReady(const QByteArray& pcm);     // Encoded modem, 24kHz stereo int16
+    void eooFinished();                           // Emitted after EOO frame and silence tail sent
     void syncChanged(bool synced);
     void snrChanged(float snrDb);
     void freqOffsetChanged(float hz);
@@ -67,6 +83,10 @@ private:
     rade_text_t          m_radeText{nullptr}; // EOO callsign encoder/decoder
     bool                 m_synced{false};
 
+    bool                 m_eooRequested{false};
+    bool                 m_eooSent{false};
+    bool                 m_eooFinished{false};
+
     // TX accumulation: 12 frames of NB_TOTAL_FEATURES = 432 floats
     QByteArray m_txAccum;
     QByteArray m_txFeatAccum;
@@ -77,6 +97,11 @@ private:
     QByteArray m_rxOutAccum;
 
     bool m_farganWarmedUp{false};
+
+#ifdef RADE_WAV_TAP
+    QByteArray m_tapVoiceAccum;     // 24kHz stereo voice frames accumulated per-PTT for Tap E
+    QByteArray m_tap8kVoiceAccum;   // 8kHz mono voice frames accumulated per-PTT for Tap F
+#endif
 
     // Resamplers (r8brain)
     std::unique_ptr<Resampler> m_down24to8;   // 24k→8k (modem RX input)

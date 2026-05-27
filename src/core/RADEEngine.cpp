@@ -5,6 +5,9 @@
 #include <cmath>
 #include <cstring>
 #include <vector>
+#ifdef RADE_WAV_TAP
+#include <QFile>
+#endif
 
 #ifdef HAVE_RADE
 extern "C" {
@@ -12,6 +15,48 @@ extern "C" {
 #include "rade_text.h"
 #include "lpcnet.h"
 #include "fargan.h"
+}
+#endif
+
+#ifdef RADE_WAV_TAP
+#ifndef RADE_TAP_DIR
+#  define RADE_TAP_DIR "."
+#endif
+static const char* kTapDir = RADE_TAP_DIR;
+
+static void writeWavFloat(const char* name, int sampleRate, int channels, const QByteArray& samples)
+{
+    QString path = QString("%1/rade_tap_%2.wav").arg(kTapDir).arg(name);
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly)) {
+        qWarning("RADE_WAV_TAP: cannot write %s", qPrintable(path));
+        return;
+    }
+    const quint32 dataSize   = static_cast<quint32>(samples.size());
+    const quint32 byteRate   = static_cast<quint32>(sampleRate * channels * 4);
+    const quint16 blockAlign = static_cast<quint16>(channels * 4);
+    const quint16 bitsPerSample = 32;
+    const quint16 audioFormat   = 3;  // IEEE_FLOAT
+    const quint16 numChannels   = static_cast<quint16>(channels);
+    const quint32 sampleRateU   = static_cast<quint32>(sampleRate);
+    const quint32 fmtSize  = 16;
+    const quint32 riffSize = 36 + dataSize;
+    f.write("RIFF", 4);
+    f.write(reinterpret_cast<const char*>(&riffSize),      4);
+    f.write("WAVE", 4);
+    f.write("fmt ", 4);
+    f.write(reinterpret_cast<const char*>(&fmtSize),       4);
+    f.write(reinterpret_cast<const char*>(&audioFormat),   2);
+    f.write(reinterpret_cast<const char*>(&numChannels),   2);
+    f.write(reinterpret_cast<const char*>(&sampleRateU),   4);
+    f.write(reinterpret_cast<const char*>(&byteRate),      4);
+    f.write(reinterpret_cast<const char*>(&blockAlign),    2);
+    f.write(reinterpret_cast<const char*>(&bitsPerSample), 2);
+    f.write("data", 4);
+    f.write(reinterpret_cast<const char*>(&dataSize),      4);
+    f.write(samples);
+    qDebug("RADE_WAV_TAP: wrote %s (%u bytes, %d Hz, %d ch)",
+           qPrintable(path), dataSize, sampleRate, channels);
 }
 #endif
 
@@ -66,7 +111,11 @@ bool RADEEngine::start()
 
     // Create resamplers
     m_down24to8  = std::make_unique<Resampler>(24000, 8000);
-    m_up8to24    = std::make_unique<Resampler>(8000, 24000);
+    // ReqTransBand=45 (max, ~42 taps, ~5ms FIR) instead of default 2.0 (~950 taps, ~118ms).
+    // RADE occupies 750-2200 Hz so the wider transition band is safe, and the short FIR
+    // clears within the 60ms silence tail so the EOO pilot frame reaches the far-end
+    // correlator intact (Prong A confirmed default band drops Dtmax12 below threshold).
+    m_up8to24    = std::make_unique<Resampler>(8000, 24000, 4096, 45.0);
     m_down24to16 = std::make_unique<Resampler>(24000, 16000);
     m_up16to24   = std::make_unique<Resampler>(16000, 24000);
 
@@ -121,6 +170,9 @@ void RADEEngine::stop()
     m_rxAccum.clear();
     m_synced = false;
     m_farganWarmedUp = false;
+    m_eooRequested = false;
+    m_eooSent = false;
+    m_eooFinished = false;
 
     qCDebug(lcRade) << "RADEEngine: stopped";
 #endif
@@ -149,20 +201,63 @@ void RADEEngine::resetTx()
 #ifdef HAVE_RADE
     m_txAccum.clear();
     m_txFeatAccum.clear();
+    m_eooRequested = false;
+    m_eooSent = false;
+    m_eooFinished = false;
+#ifdef RADE_WAV_TAP
+    m_tapVoiceAccum.clear();
+    m_tap8kVoiceAccum.clear();
+#endif
+#endif
+}
+
+void RADEEngine::setEooRequested(bool requested)
+{
+#ifdef HAVE_RADE
+    if (m_eooRequested == requested) return;
+    m_eooRequested = requested;
+    if (requested) {
+        qCDebug(lcRade) << "RADEEngine: EOO requested — draining pipeline...";
+        // Trigger a feed with empty audio to kick the drain logic if no more mic audio is coming
+        feedTxAudio(QByteArray());
+    }
+#else
+    Q_UNUSED(requested);
+#endif
+}
+
+void RADEEngine::setTxCallsign(const QString& callsign)
+{
+#ifdef HAVE_RADE
+    if (!m_rade || !m_radeText) return;
+    const QByteArray cs = callsign.toUpper().trimmed().toLatin1();
+    const int n_eoo_bits = rade_n_eoo_bits(m_rade);
+    std::vector<float> eooSyms(n_eoo_bits);
+    rade_text_generate_tx_string(m_radeText, cs.constData(), cs.size(),
+                                 eooSyms.data(), n_eoo_bits);
+    rade_tx_set_eoo_bits(m_rade, eooSyms.data());
+    qCDebug(lcRade) << "RADEEngine: TX EOO callsign encoded (LDPC) —" << cs;
+#else
+    Q_UNUSED(callsign);
 #endif
 }
 
 void RADEEngine::feedTxAudio(const QByteArray& pcm)
 {
 #ifdef HAVE_RADE
-    if (!m_rade || !m_lpcnetEnc) return;
+    if (!m_rade || !m_lpcnetEnc || m_eooFinished) return;
 
-    // 1. Downsample 24kHz stereo float32 → 16kHz mono float32 for LPCNet
-    const auto* srcF = reinterpret_cast<const float*>(pcm.constData());
-    QByteArray mono16k = m_down24to16->processStereoToMono(srcF, pcm.size() / (2 * static_cast<int>(sizeof(float))));
+    if (m_eooRequested && pcm.isEmpty())
+        qCDebug(lcRade) << "RADEEngine: drain kick —"
+                        << "txAccum=" << m_txAccum.size()
+                        << "featAccum=" << m_txFeatAccum.size();
 
-    // 2. Convert float32 mono → int16 mono for LPCNet (requires int16 API)
-    {
+    if (!pcm.isEmpty()) {
+        // 1. Downsample 24kHz stereo float32 → 16kHz mono float32 for LPCNet
+        const auto* srcF = reinterpret_cast<const float*>(pcm.constData());
+        QByteArray mono16k = m_down24to16->processStereoToMono(srcF, pcm.size() / (2 * static_cast<int>(sizeof(float))));
+
+        // 2. Convert float32 mono → int16 mono for LPCNet
         const auto* mf = reinterpret_cast<const float*>(mono16k.constData());
         const int nMono = mono16k.size() / static_cast<int>(sizeof(float));
         QByteArray mono16kInt16(nMono * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
@@ -173,45 +268,123 @@ void RADEEngine::feedTxAudio(const QByteArray& pcm)
     }
 
     // Process 10ms frames (LPCNET_FRAME_SIZE = 160 samples @ 16kHz)
-    while ((m_txAccum.size() / sizeof(int16_t)) >= LPCNET_FRAME_SIZE) {
-        auto sampleArray = m_txAccum.left(LPCNET_FRAME_SIZE * sizeof(int16_t));
-        const int16_t* samples = reinterpret_cast<const int16_t*>(sampleArray.constData());
+    while ((m_txAccum.size() / sizeof(int16_t)) >= LPCNET_FRAME_SIZE || (m_eooRequested && !m_txAccum.isEmpty())) {
+        int nToTake = std::min<int>(LPCNET_FRAME_SIZE, m_txAccum.size() / sizeof(int16_t));
+        QByteArray sampleArray = m_txAccum.left(nToTake * sizeof(int16_t));
         m_txAccum.remove(0, sampleArray.size());
+
+        // Pad partial frame with zeros if draining
+        if (sampleArray.size() < (int)(LPCNET_FRAME_SIZE * sizeof(int16_t))) {
+            sampleArray.append(QByteArray((LPCNET_FRAME_SIZE * sizeof(int16_t)) - sampleArray.size(), 0));
+        }
+
+        const int16_t* samples = reinterpret_cast<const int16_t*>(sampleArray.constData());
 
         // Extract features for one 10ms frame
         float features[NB_TOTAL_FEATURES];
-        // opus uses opus_int16 which is int16_t
-        lpcnet_compute_single_frame_features(
-            m_lpcnetEnc,
-            const_cast<int16_t*>(samples),
-            features, 0 /*arch=auto*/);
+        lpcnet_compute_single_frame_features(m_lpcnetEnc, const_cast<int16_t*>(samples), features, 0);
 
         // Accumulate features (RADE needs n_features_in features per call)
-        m_txFeatAccum.append(reinterpret_cast<const char*>(features),
-                             NB_TOTAL_FEATURES * sizeof(float));
+        m_txFeatAccum.append(reinterpret_cast<const char*>(features), NB_TOTAL_FEATURES * sizeof(float));
+    }
 
-        // RADE encoder needs 12 feature frames (120ms)
-        int n_features_in = rade_n_features_in_out(m_rade);
-        int n_tx_out = rade_n_tx_out(m_rade);
-        while ((m_txFeatAccum.size() / sizeof(float)) >= qsizetype(n_features_in)) {
-            std::vector<RADE_COMP> tx_out(n_tx_out);
+    // RADE encoder needs 12 feature frames (120ms)
+    int n_features_in = rade_n_features_in_out(m_rade);
+    int n_tx_out = rade_n_tx_out(m_rade);
+    while ((m_txFeatAccum.size() / sizeof(float)) >= qsizetype(n_features_in) || (m_eooRequested && !m_txFeatAccum.isEmpty())) {
+        int nFeatures = m_txFeatAccum.size() / sizeof(float);
+        int nToProcess = std::min(n_features_in, nFeatures);
+        
+        std::vector<float> feat_in(n_features_in, 0.0f);
+        memcpy(feat_in.data(), m_txFeatAccum.constData(), nToProcess * sizeof(float));
+        m_txFeatAccum.remove(0, nToProcess * sizeof(float));
 
-            rade_tx(m_rade, tx_out.data(),
-                    reinterpret_cast<float*>(m_txFeatAccum.data()));
+        std::vector<RADE_COMP> tx_out(n_tx_out);
+        rade_tx(m_rade, tx_out.data(), feat_in.data());
 
-            m_txFeatAccum.remove(0, n_features_in * sizeof(float));
+        // 3. Convert RADE_COMP → 8kHz mono float32 (take real part)
+        QByteArray modem8k(n_tx_out * static_cast<int>(sizeof(float)), Qt::Uninitialized);
+        auto* out = reinterpret_cast<float*>(modem8k.data());
+        for (int i = 0; i < n_tx_out; ++i)
+            out[i] = tx_out[i].real;
 
-            // 3. Convert RADE_COMP → 8kHz mono float32 (take real part)
-            QByteArray modem8k(n_tx_out * static_cast<int>(sizeof(float)), Qt::Uninitialized);
-            auto* out = reinterpret_cast<float*>(modem8k.data());
-            for (int i = 0; i < n_tx_out; ++i)
-                out[i] = tx_out[i].real;
+        // 4. Upsample 8kHz mono float32 → 24kHz stereo float32
+        QByteArray stereo24k = m_up8to24->processMonoToStereo(out, n_tx_out);
+#ifdef RADE_WAV_TAP
+        m_tapVoiceAccum.append(stereo24k);
+        m_tap8kVoiceAccum.append(modem8k);
+#endif
+        emit txModemReady(stereo24k);
+    }
 
-            // 4. Upsample 8kHz mono float32 → 24kHz stereo float32
-            QByteArray stereo24k = m_up8to24->processMonoToStereo(out, n_tx_out);
+    // Final Stage: Generate EOO frame if requested and voice pipeline is empty
+    if (m_eooRequested && !m_eooSent && m_txAccum.isEmpty() && m_txFeatAccum.isEmpty()) {
+        qCDebug(lcRade) << "RADEEngine: Voice pipeline drained — generating EOO frame";
+        
+        int n_eoo_out = rade_n_tx_eoo_out(m_rade);
+        std::vector<RADE_COMP> eoo_samples(n_eoo_out);
+        int n = rade_tx_eoo(m_rade, eoo_samples.data());
+        
+        if (n > 0) {
+            std::vector<float> eoo_mono(n);
+            for (int i = 0; i < n; ++i)
+                eoo_mono[i] = eoo_samples[i].real;
 
-            emit txModemReady(stereo24k);
+            QByteArray eoo24k = m_up8to24->processMonoToStereo(eoo_mono.data(), n);
+
+            // Append silence to push EOO through the upsampler's FIR taps
+            int silenceSamples = kEooSilenceTailMs * 24000 / 1000;
+            QByteArray silence(silenceSamples * 2 * static_cast<int>(sizeof(float)), 0);
+
+#ifdef RADE_WAV_TAP
+            // Tap A — raw 8kHz mono from rade_tx_eoo(), before any upsampling.
+            writeWavFloat("A_8k_mono_raw_eoo", 8000, 1,
+                QByteArray(reinterpret_cast<const char*>(eoo_mono.data()),
+                           n * static_cast<int>(sizeof(float))));
+            // Tap B — 24kHz stereo after r8brain upsample.
+            writeWavFloat("B_24k_stereo_eoo_upsampled", 24000, 2, eoo24k);
+            // Tap D — eoo24k + silence as emitted to AudioEngine.
+            {
+                QByteArray tapD;
+                tapD.reserve(eoo24k.size() + silence.size());
+                tapD.append(eoo24k);
+                tapD.append(silence);
+                writeWavFloat("D_24k_stereo_eoo_block", 24000, 2, tapD);
+            }
+            // Tap E — full TX session: all voice modem frames + eoo + silence.
+            {
+                QByteArray tapE;
+                tapE.reserve(m_tapVoiceAccum.size() + eoo24k.size() + silence.size());
+                tapE.append(m_tapVoiceAccum);
+                tapE.append(eoo24k);
+                tapE.append(silence);
+                writeWavFloat("E_24k_stereo_full_session", 24000, 2, tapE);
+            }
+            // Tap F — 8kHz mono full session (voice + EOO, no upsampling).
+            {
+                QByteArray eoo8k(reinterpret_cast<const char*>(eoo_mono.data()),
+                                 n * static_cast<int>(sizeof(float)));
+                QByteArray tapF;
+                tapF.reserve(m_tap8kVoiceAccum.size() + eoo8k.size());
+                tapF.append(m_tap8kVoiceAccum);
+                tapF.append(eoo8k);
+                writeWavFloat("F_8k_mono_full_session", 8000, 1, tapF);
+            }
+#endif
+            qCDebug(lcRade) << "RADEEngine: rade_tx_eoo n=" << n
+                            << "eoo24k=" << eoo24k.size() << "bytes"
+                            << "silence=" << silence.size() << "bytes"
+                            << "— emitting both before eooFinished";
+            emit txModemReady(eoo24k);
+            emit txModemReady(silence);
+        } else {
+            qCWarning(lcRade) << "RADEEngine: rade_tx_eoo returned" << n << "(no EOO samples generated)";
         }
+
+        m_eooSent = true;
+        m_eooFinished = true;
+        emit eooFinished();
+        qCDebug(lcRade) << "RADEEngine: EOO transmission complete — eooFinished emitted";
     }
 #else
     Q_UNUSED(pcm);

@@ -442,8 +442,19 @@ flowchart TD
     E --> F["processStereoToMono()<br/>average L/R, 24 kHz -> 16 kHz mono"]
     F --> G["LPCNet/RADE encode<br/>modem waveform"]
     G --> H["processMonoToStereo()<br/>8 kHz mono -> 24 kHz stereo"]
-    H --> I["AudioEngine::sendModemTxAudio()"]
-    I --> J["VITA packetization<br/>float32 stereo PCC 0x03E3"]
+    H --> I["txModemReady()"]
+    I --> AE["AudioEngine::sendModemTxAudio()"]
+    AE --> J["VITA packetization<br/>float32 stereo PCC 0x03E3"]
+
+    PTT["PTT release<br/>PttOffHook intercept"] --> EO1["setEooRequested(true)<br/>drain voice pipeline"]
+    EO1 --> EO2["rade_tx_eoo()<br/>EOO modem frame + LDPC callsign bits"]
+    EO2 --> EO3["processMonoToStereo()<br/>8 kHz mono -> 24 kHz stereo"]
+    EO3 --> EO4["+ 60 ms silence tail<br/>(flush FIR memory through radio DAX)"]
+    EO4 --> I
+    EO4 --> EF["eooFinished()"]
+    EF --> AG["AudioEngine::setTransmitting(false)<br/>(closes audio gate after EOO packets)"]
+    EF --> TM["254 ms timer<br/>(144 ms EOO + 60 ms tail + 50 ms margin)"]
+    TM --> RX["RadioModel::setTransmit(false)<br/>set_mox=0"]
 
     K["Radio DAX RX audio for RADE slice<br/>24 kHz stereo float32"] --> L["RADEEngine::feedRxAudio()"]
     L --> M["processStereoToMono()<br/>average L/R, 24 kHz -> 8 kHz mono"]
@@ -459,7 +470,11 @@ flowchart TD
 
 `MainWindow::activateRADE()` connects `AudioEngine::txRawPcmReady()` to
 `RADEEngine::feedTxAudio()` and connects `RADEEngine::txModemReady()` back to
-`AudioEngine::sendModemTxAudio()`.
+`AudioEngine::sendModemTxAudio()`. It also pre-encodes the operator callsign into
+EOO bits by calling `RADEEngine::setTxCallsign()`, which uses
+`rade_text_generate_tx_string()` to produce LDPC-encoded symbol bits and installs
+them via `rade_tx_set_eoo_bits()`. The bits remain resident in the RADE context for
+the life of the session.
 
 When `m_radeMode` is active, `AudioEngine::onTxAudioReady()` branches before the
 normal Opus voice TX path. RADE receives float32 PCM and bypasses the Opus
@@ -473,6 +488,51 @@ emits `txModemReady()`.
 `AudioEngine::sendModemTxAudio()` packetizes the 24 kHz stereo float32 modem
 waveform in 128-frame chunks using the normal VITA TX packet builder with PCC
 `0x03E3`. RADE TX relies on the radio DAX transmit route being active.
+
+### EOO transmission and PTT release sequencing
+
+RADE transmits an End-of-Over (EOO) frame on PTT release to signal the far end that
+the over is complete and carry the operator callsign in-band via LDPC-encoded
+rade_text.
+
+**Callsign pre-encoding.** `RADEEngine::setTxCallsign()` converts the callsign to
+uppercase ASCII, generates LDPC-encoded EOO symbol bits via
+`rade_text_generate_tx_string()`, and installs them with `rade_tx_set_eoo_bits()`.
+This happens at `activateRADE()` time, before any transmission.
+
+**Three-layer PTT intercept.** Dropping the carrier before the EOO pilot clears the
+far-end demodulator is the primary failure mode. Three layers guarantee playout order:
+
+- **Layer 1 — PttOffHook**: `TransmitModel::setPttOffHook()` installs a lambda that
+  intercepts `requestPttOff()` (MOX button, TciServer PTT) before `moxChanged(false)`
+  is emitted. The hook posts `setEooRequested(true)` to the RADEEngine worker thread
+  via `QueuedConnection`. The radio stays in TX because `setMox(false)` is never
+  reached through this path.
+
+- **Layer 2 — eooFinished timer**: Once `feedTxAudio()` drains the voice pipeline
+  and emits the EOO frame, it fires `eooFinished()`. The handler posts
+  `AudioEngine::setTransmitting(false)` via `QueuedConnection` — closing the audio
+  gate *after* any already-queued `txModemReady` EOO and silence signals have been
+  handed to the UDP send path — then starts a `QTimer::singleShot(254 ms)` before
+  calling `RadioModel::setTransmit(false)` to send `set_mox=0`. The 254 ms is
+  144 ms (EOO frame duration) + `RADEEngine::kEooSilenceTailMs` (60 ms) +
+  50 ms transport margin.
+
+- **Layer 3 — moxChanged fallback**: A `moxChanged` connection handles
+  radio-initiated unkeys and hardware PTT paths that bypass both layers above. On
+  `moxChanged(true)` it resets `m_radeEooPending` and calls `RADEEngine::resetTx()`
+  to clear EOO state for the new over. On `moxChanged(false)` when no hook intercept
+  fired, it posts `setEooRequested(true)` as a best-effort EOO.
+
+**EOO frame generation.** When `m_eooRequested` is set, `feedTxAudio()` waits until
+both the voice accumulator and the LPCNet feature accumulator are empty, then calls
+`rade_tx_eoo()` to produce the EOO modem frame (which embeds the pre-encoded
+callsign bits). The 8 kHz real output is upsampled to 24 kHz stereo float32 via
+`processMonoToStereo()`. A `kEooSilenceTailMs` (60 ms) zero-sample block is
+appended to push the EOO pilot through the upsampler's FIR memory and the radio DAX
+pipeline so the far-end demodulator sees the complete pilot sequence. The EOO frame
+and silence block are emitted as two consecutive `txModemReady()` signals before
+`eooFinished()` fires.
 
 ### RX decoded speech
 
@@ -636,6 +696,7 @@ Radio-provided taps:
 | RADE TX branch | `AudioEngine::onTxAudioReady()` | Int16 stereo | float32 stereo | 24 kHz | 2 | Applies PC mic gain, canonical meter, emits `txRawPcmReady()` |
 | RADE TX modem | `RADEEngine::feedTxAudio()` | float32 stereo | float32 stereo modem waveform | 24 kHz -> 16 kHz -> 8 kHz -> 24 kHz | 2 -> 1 -> 2 | Averages L/R for LPCNet/RADE |
 | RADE TX packetization | `AudioEngine::sendModemTxAudio()` | float32 stereo | VITA PCC `0x03E3` float32 stereo | 24 kHz | 2 | 128 stereo frames per packet |
+| RADE EOO frame | `RADEEngine::feedTxAudio()` on pipeline drain | 8 kHz mono modem + 60 ms silence | float32 stereo 24 kHz via `txModemReady()` | 8 kHz -> 24 kHz | 1 -> 2 | LDPC-encoded callsign in EOO bits; silence tail flushes FIR; emits `eooFinished()` |
 | RADE RX decode | `RADEEngine::feedRxAudio()` | float32 stereo | float32 stereo speech | 24 kHz -> 8 kHz -> 16 kHz -> 24 kHz | 2 -> 1 -> 2 | Averages L/R, emits decoded speech |
 | DAX/TCI TX entry | `AudioEngine::feedDaxTxAudio()` | float32 PCM, normally stereo | route-dependent VITA | 24 kHz | normally 2 | Bypasses client voice DSP |
 | DAX low-latency TX | `AudioEngine::feedDaxTxAudio()` | float32 stereo | VITA PCC `0x03E3` float32 stereo | 24 kHz | 2 | 128 stereo frames per packet |

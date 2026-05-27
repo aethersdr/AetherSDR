@@ -780,6 +780,16 @@ void TransmitModel::setPttPreflight(PttPreflight preflight)
     m_pttPreflight = std::move(preflight);
 }
 
+void TransmitModel::setPttOffHook(PttOffHook hook)
+{
+    m_pttOffHook = std::move(hook);
+}
+
+void TransmitModel::clearPttOffHook()
+{
+    m_pttOffHook = nullptr;
+}
+
 bool TransmitModel::isPhoneModeForQuindar() const
 {
     if (!m_txModeGetter) return false;
@@ -876,6 +886,10 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
         || tone->phase() == ClientQuindarTone::Phase::Idle
         || m_quindarOutroInFlight) {
         cancelPendingQuindarOff();
+        if (m_pttOffHook) {
+            m_pttOffHook();
+            return;
+        }
         setMox(false);
         return;
     }

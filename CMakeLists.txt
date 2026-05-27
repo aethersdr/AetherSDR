@@ -148,6 +148,7 @@ endif()
 # Bundled RADE (BSD-2) — FreeDV Radio Autoencoder digital voice codec
 # Opus (with FARGAN/LPCNet) is built from a vendored local snapshot via ExternalProject
 set(RADE_DIR ${CMAKE_SOURCE_DIR}/third_party/radae)
+option(RADE_WAV_TAP "Write diagnostic WAV files at RADE TX tap points (Taps A/B/D/E/F) for offline demod analysis" OFF)
 if(ENABLE_RADE AND EXISTS "${RADE_DIR}/src/rade_api.h")
     # macOS universal binary: build Opus for both architectures
     if(APPLE AND CMAKE_OSX_ARCHITECTURES MATCHES "x86_64.*arm64|arm64.*x86_64")
@@ -186,6 +187,25 @@ if(ENABLE_RADE AND EXISTS "${RADE_DIR}/src/rade_api.h")
     )
     set(RADE_FOUND TRUE)
     message(STATUS "RADE enabled (bundled vendored Opus snapshot)")
+
+    # Standalone offline diagnostic tool: demodulate a WAV file and decode the EOO callsign.
+    # Guarded by source-file existence so builds against vendored RADE snapshots that
+    # predate rade_demod_wav.c don't hard-fail. Independent of RADE_WAV_TAP.
+    if(EXISTS "${RADE_DIR}/src/rade_demod_wav.c")
+        add_executable(rade_demod_wav
+            ${RADE_SOURCES}
+            ${RADE_DIR}/src/rade_demod_wav.c
+        )
+        set_source_files_properties(${RADE_DIR}/src/rade_demod_wav.c PROPERTIES
+            COMPILE_FLAGS "${RADE_WARN_FLAG} -DIS_BUILDING_RADE_API=1 -DRADE_PYTHON_FREE=1"
+            INCLUDE_DIRECTORIES "${RADE_DIR}/src"
+        )
+        target_include_directories(rade_demod_wav PRIVATE ${RADE_DIR}/src)
+        target_link_libraries(rade_demod_wav PRIVATE opus
+            $<$<NOT:$<PLATFORM_ID:Windows>>:m>)
+        add_dependencies(rade_demod_wav build_opus)
+    endif()
+
 else()
     set(RADE_FOUND FALSE)
     set(RADE_SOURCES "")
@@ -1262,6 +1282,12 @@ endif()
 
 if(RADE_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_RADE HAVE_OPUS IS_BUILDING_RADE_API=1)
+    if(RADE_WAV_TAP)
+        set(RADE_TAP_DIR "${CMAKE_BINARY_DIR}/rade_taps"
+            CACHE PATH "Output directory for RADE WAV tap files")
+        target_compile_definitions(AetherSDR PRIVATE RADE_WAV_TAP
+            RADE_TAP_DIR="${RADE_TAP_DIR}")
+    endif()
     target_include_directories(AetherSDR PRIVATE ${RADE_DIR}/src)
     if(WIN32)
         target_link_libraries(AetherSDR PRIVATE opus)

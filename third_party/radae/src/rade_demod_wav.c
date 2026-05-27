@@ -46,6 +46,7 @@
 
 #include "rade_api.h"
 #include "rade_dsp.h"
+#include "rade_text.h"
 #include "fargan.h"
 #include "lpcnet.h"
 
@@ -228,6 +229,13 @@ static float *resample_linear(const float *in, long n_in,
     return out;
 }
 
+/* ---- EOO callsign callback ---- */
+
+static void on_callsign_rx(rade_text_t rt, const char *txt, int len, void *state) {
+    (void)rt; (void)state;
+    fprintf(stderr, "EOO callsign: %.*s\n", len, txt);
+}
+
 /* ---- Usage ---- */
 
 static void usage(void) {
@@ -347,6 +355,12 @@ int main(int argc, char *argv[]) {
     int n_features_out = rade_n_features_in_out(r);
     int n_eoo_bits     = rade_n_eoo_bits(r);
 
+    rade_text_t text_obj = rade_text_create();
+    if (text_obj)
+        rade_text_set_rx_callback(text_obj, on_callsign_rx, NULL);
+    else
+        fprintf(stderr, "rade_demod: rade_text_create failed — callsign decode disabled\n");
+
     RADE_COMP *rx_buf     = malloc((size_t)nin_max        * sizeof(RADE_COMP));
     float     *feat_buf   = malloc((size_t)n_features_out * sizeof(float));
     float     *eoo_buf    = malloc((size_t)n_eoo_bits      * sizeof(float));
@@ -404,6 +418,8 @@ int main(int argc, char *argv[]) {
 
         if (has_eoo && verbose >= 1)
             fprintf(stderr, "End-of-over at modem frame %d\n", mf_count);
+        if (has_eoo && text_obj)
+            rade_text_rx(text_obj, eoo_buf, n_eoo_bits / 2);
 
         if (n_out > 0) {
             vld_count++;
@@ -472,6 +488,7 @@ int main(int argc, char *argv[]) {
     free(rx_buf);
     free(feat_buf);
     free(eoo_buf);
+    if (text_obj) rade_text_destroy(text_obj);
     rade_close(r);
     rade_finalize();
     return 0;

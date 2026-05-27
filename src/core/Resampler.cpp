@@ -4,13 +4,14 @@
 
 namespace AetherSDR {
 
-Resampler::Resampler(double srcRate, double dstRate, int maxBlockSamples)
+Resampler::Resampler(double srcRate, double dstRate, int maxBlockSamples, double reqTransBand)
     : m_srcRate(srcRate)
     , m_dstRate(dstRate)
     , m_maxBlockSamples(maxBlockSamples)
-    , m_resampler(std::make_unique<r8b::CDSPResampler24>(srcRate, dstRate, maxBlockSamples))
+    , m_resampler(std::make_unique<r8b::CDSPResampler24>(srcRate, dstRate, maxBlockSamples, reqTransBand))
 {
     m_inBuf.reserve(maxBlockSamples);
+    prewarm();
 }
 
 Resampler::~Resampler() = default;
@@ -139,6 +140,25 @@ QByteArray Resampler::processStereoToStereo(const float* stereoIn, int numStereo
         dst[2 * i + 1] = s;
     }
     return result;
+}
+
+void Resampler::prewarm()
+{
+    if (std::abs(m_srcRate - m_dstRate) < 0.001) return;
+
+    // Called from the constructor for every Resampler instance (RX, TX, BNR, RADE, etc.).
+    // r8brain with DoConsumeLatency=true silently discards the first Latency input samples
+    // before emitting any output. Feeding zeros here consumes that startup latency so the
+    // first real audio sample produces output immediately, removing the transient that would
+    // otherwise appear at the start of every audio session.
+    double* outPtr = nullptr;
+    int lenRequired = m_resampler->getInLenBeforeOutPos(0);
+    while (lenRequired > 0) {
+        int len = std::min(lenRequired, m_maxBlockSamples);
+        std::vector<double> zeros(len, 0.0);
+        m_resampler->process(zeros.data(), len, outPtr);
+        lenRequired -= len;
+    }
 }
 
 } // namespace AetherSDR

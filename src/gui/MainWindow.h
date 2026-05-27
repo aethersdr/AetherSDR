@@ -809,7 +809,10 @@ private:
     quint32 m_radeDaxStreamId{0};
     QMetaObject::Connection m_radeDaxStreamConn;
     QMetaObject::Connection m_freedvMoxConn;
+    QMetaObject::Connection m_radeMoxFallbackConn;
     QString m_lastRadeRxCallsign;
+    bool m_radeEooPending{false};
+    bool m_radeTxActive{false};
     void activateRADE(int sliceId);
     void deactivateRADE();
     void onRadeSliceModeChanged(const QString& mode);

@@ -180,6 +180,13 @@ public:
     using PttPreflight = std::function<QString(PttSource)>;
     void setPttPreflight(PttPreflight preflight);
 
+    // Pre-unkey hook: when set, requestPttOff() calls hook() instead of
+    // setMox(false) directly. Hook MUST eventually release PTT via setTransmit(false).
+    // Designed for RADE EOO intercept.
+    using PttOffHook = std::function<void()>;
+    void setPttOffHook(PttOffHook hook);
+    void clearPttOffHook();
+
     void atuStart();
     void atuBypass();
     void setAtuMemories(bool on);
@@ -269,6 +276,7 @@ private:
     PttPreflight             m_pttPreflight;
     QTimer*                  m_pendingMoxOffTimer{nullptr};
     bool                     m_quindarOutroInFlight{false};
+    PttOffHook               m_pttOffHook;
 
     // APD state
     bool m_apdEnabled{false};

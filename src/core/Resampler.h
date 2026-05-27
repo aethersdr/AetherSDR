@@ -20,7 +20,8 @@ namespace AetherSDR {
 class Resampler {
 public:
     // maxBlockSamples: max mono samples per process() call
-    Resampler(double srcRate, double dstRate, int maxBlockSamples = 4096);
+    // reqTransBand: transition band in percent of Nyquist (default 2.0 = ~950 taps; 45.0 = ~42 taps)
+    Resampler(double srcRate, double dstRate, int maxBlockSamples = 4096, double reqTransBand = 2.0);
     ~Resampler();
 
     // Resample mono float32 PCM. Returns resampled mono float32.
@@ -39,6 +40,8 @@ public:
     double dstRate() const { return m_dstRate; }
 
 private:
+    void prewarm();
+
     double m_srcRate;
     double m_dstRate;
     int    m_maxBlockSamples;

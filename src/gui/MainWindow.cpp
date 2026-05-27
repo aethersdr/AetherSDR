@@ -2610,19 +2610,23 @@ MainWindow::MainWindow(QWidget* parent)
         // Keep TX audio source strictly aligned with the local MOX edge for all
         // modes (SSB + DAX). Waiting for interlock introduces audible lag.
         if (m_audio) {
+#ifdef HAVE_RADE
+            // In RADE mode, defer setTransmitting(false) to the interlock
+            // txAudioGateChanged fallback so the PTT gate stays open until
+            // the EOO frame clears the AudioEngine queue.
+            bool radeDefer = !tx && m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive();
+            qCDebug(lcRade) << "MainWindow: moxChanged(" << tx << ")"
+                            << "radeActive=" << (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive())
+                            << "deferringSetTransmitting=" << radeDefer;
+            if (!radeDefer)
+                m_audio->setTransmitting(tx);
+#else
             m_audio->setTransmitting(tx);
+#endif
         }
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         if (m_daxBridge)
             m_daxBridge->setTransmitting(tx);
-#endif
-
-#ifdef HAVE_RADE
-        if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()) {
-            if (!tx) {
-                m_radeEngine->resetTx();
-            }
-        }
 #endif
 #ifdef HAVE_SERIALPORT
         QMetaObject::invokeMethod(m_serialPort, [this, tx] { m_serialPort->setTransmitting(tx); });
@@ -2636,7 +2640,19 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](bool tx) {
         if (!tx) {
             if (m_audio) {
+#ifdef HAVE_RADE
+                // In RADE mode the EOO frame is still in the AudioEngine queue
+                // when this fires (RadioModel emits it synchronously with moxChanged).
+                // Suppress now; eooFinished posts setTransmitting(false) to the
+                // AudioEngine queue after the EOO packets.
+                if (m_radeSliceId >= 0 && m_radeEngine && m_radeEngine->isActive()) {
+                    qCDebug(lcRade) << "MainWindow: txAudioGateChanged(false) suppressed — RADE EOO pending";
+                } else {
+                    m_audio->setTransmitting(false);
+                }
+#else
                 m_audio->setTransmitting(false);
+#endif
             }
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
             if (m_daxBridge)
@@ -15403,6 +15419,27 @@ void MainWindow::activateRADE(int sliceId)
     }
     m_radioModel.setDigitalVoiceTxSlice(sliceId);
 
+    // Encode the operator callsign into the EOO frame so the far end can decode it.
+    // Resolution order mirrors startFreeDvReporting: radio-stored callsign if
+    // "Use radio" is set and non-empty, otherwise the user's saved FreeDV callsign.
+    {
+        auto& cs = AppSettings::instance();
+        QString callsign;
+        if (cs.value("FreeDvUseRadioCallsign", "True").toString() == "True"
+                && !m_radioModel.callsign().isEmpty()) {
+            callsign = m_radioModel.callsign();
+        } else {
+            callsign = cs.value("FreeDvMyCallsign", "").toString().trimmed().toUpper();
+        }
+        if (!callsign.isEmpty()) {
+            QMetaObject::invokeMethod(m_radeEngine, [this, callsign]() {
+                m_radeEngine->setTxCallsign(callsign);
+            }, Qt::QueuedConnection);
+        } else {
+            qCWarning(lcRade) << "MainWindow: RADE TX EOO callsign not set — configure callsign in SpotHub FreeDV tab";
+        }
+    }
+
     // RADE sends VITA-49 modem audio directly (like TCI), so it needs its own
     // dax_tx stream regardless of platform.  On Windows the ExternalDaxRouteOnly
     // path used by updateDaxTxMode() is intentionally blocked by policy (SmartSDR
@@ -15419,6 +15456,77 @@ void MainWindow::activateRADE(int sliceId)
             m_radeEngine, &RADEEngine::feedTxAudio, Qt::QueuedConnection);
     connect(m_radeEngine, &RADEEngine::txModemReady,
             m_audio, &AudioEngine::sendModemTxAudio, Qt::QueuedConnection);
+
+    // Phase 3: PTT Orchestration — three-layer intercept to hold TX open until
+    // the EOO frame has fully played out on the radio before set_mox=0 is sent.
+    //
+    // Layer 1 — PttOffHook: catches MOX button (TxApplet) and TciServer callers
+    // that go through TransmitModel::requestPttOff(). Fires BEFORE setMox(false),
+    // so the radio stays in TX while EOO is generated and sent.
+    m_radioModel.transmitModel().setPttOffHook([this]() {
+        if (m_radeEooPending) {
+            qCDebug(lcRade) << "MainWindow: PttOffHook — EOO already pending, ignoring duplicate";
+            return;
+        }
+        m_radeEooPending = true;
+        qCDebug(lcRade) << "MainWindow: PttOffHook — intercepted requestPttOff, deferring for RADE EOO";
+        QMetaObject::invokeMethod(m_radeEngine, [this]() {
+            m_radeEngine->setEooRequested(true);
+        }, Qt::QueuedConnection);
+    });
+
+    // Layer 2 — eooFinished: once EOO audio is queued in AudioEngine, close the
+    // audio gate (after EOO packets) then wait for the full EOO playout before
+    // dropping the carrier. EOO=144ms + silence=60ms + margin=50ms = 254ms.
+    connect(m_radeEngine, &RADEEngine::eooFinished, this, [this]() {
+        if (!m_radeEooPending) {
+            qCDebug(lcRade) << "MainWindow: eooFinished — no pending PTT release (EOO triggered without an intercepted unkey; no carrier to release)";
+            return;
+        }
+        m_radeEooPending = false;
+        m_radeTxActive = false;
+
+        // Post setTransmitting(false) AFTER the queued txModemReady(eoo/silence)
+        // signals so the audio gate closes only after EOO is in the UDP send buffer.
+        if (m_audio)
+            QMetaObject::invokeMethod(m_audio, [this]() {
+                m_audio->setTransmitting(false);
+            }, Qt::QueuedConnection);
+
+        constexpr int kEooPlaybackMs = RADEEngine::kEooFrameMs
+                                     + RADEEngine::kEooSilenceTailMs
+                                     + RADEEngine::kEooTransportMarginMs;
+        qCDebug(lcRade) << "MainWindow: RADE eooFinished — deferring xmit 0 by"
+                        << kEooPlaybackMs << "ms for EOO playback";
+        QTimer::singleShot(kEooPlaybackMs, this, [this]() {
+            qCDebug(lcRade) << "MainWindow: RADE EOO playback timer expired — releasing radio PTT";
+            m_radioModel.setTransmit(false);
+        });
+    });
+
+    // Layer 3 — moxChanged fallback: catches interlock and hardware PTT paths
+    // (radio-initiated unkey) that bypass both layers above.
+    // tx=true: new over starting — clear pending flag and reset engine EOO state.
+    // tx=false + !pending + isTransmitting: unintercepted unkey — request EOO as
+    //   best-effort (radio may already be in RX, but at least the app won't hang).
+    m_radeMoxFallbackConn = connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            this, [this](bool tx) {
+        if (!m_radeEngine || !m_radeEngine->isActive()) return;
+        if (tx) {
+            m_radeEooPending = false;
+            m_radeTxActive = true;
+            QMetaObject::invokeMethod(m_radeEngine, [this]() {
+                m_radeEngine->resetTx();
+            }, Qt::QueuedConnection);
+            qCDebug(lcRade) << "MainWindow: MOX asserted — RADE TX state reset for new over";
+        } else if (!m_radeEooPending && m_radeTxActive) {
+            qCDebug(lcRade) << "MainWindow: moxChanged(false) fallback — unintercepted PTT release, requesting EOO";
+            m_radeEooPending = true;
+            QMetaObject::invokeMethod(m_radeEngine, [this]() {
+                m_radeEngine->setEooRequested(true);
+            }, Qt::QueuedConnection);
+        }
+    });
 
     // RX path: DAX RX audio -> RADEEngine (worker) -> decoded speech -> speaker (main)
     // Filter by the RADE slice's DAX channel so other slices' DAX audio is ignored.
@@ -15441,8 +15549,8 @@ void MainWindow::activateRADE(int sliceId)
             quint32 existing = m_radioModel.panStream()->daxStreamIdForChannel(daxCh);
             if (existing) {
                 // TCI or another path already registered a stream — RADE rides it.
-                qDebug() << "MainWindow: RADE reusing existing dax_rx ch" << daxCh
-                         << "stream" << Qt::hex << existing;
+                qCDebug(lcRade) << "MainWindow: RADE reusing existing dax_rx ch" << daxCh
+                                << "stream" << Qt::hex << existing;
             } else {
                 m_radeDaxStreamConn = connect(
                     &m_radioModel, &RadioModel::statusReceived,
@@ -15455,8 +15563,8 @@ void MainWindow::activateRADE(int sliceId)
                             m_radioModel.panStream()->registerDaxStream(streamId, ch);
                             m_radeDaxStreamId = streamId;
                             disconnect(m_radeDaxStreamConn);
-                            qDebug() << "MainWindow: RADE registered dax_rx ch" << ch
-                                     << "stream" << Qt::hex << streamId;
+                            qCDebug(lcRade) << "MainWindow: RADE registered dax_rx ch" << ch
+                                            << "stream" << Qt::hex << streamId;
                         }
                     });
                 m_radioModel.sendCommand(
@@ -15527,13 +15635,27 @@ void MainWindow::deactivateRADE()
                        this, &MainWindow::onRadeSliceModeChanged);
             s->setAudioMute(m_radePrevMute);
         }
-        // Clear RADE status label before resetting sliceId
+        // Clear RADE status label and disconnect VFO signal connections before resetting sliceId.
+        // Do this here (with m_radeSliceId still valid) rather than in the m_radeEngine block
+        // below where the slice ID has already been cleared.
         if (auto* sw = spectrumForSlice(m_radioModel.slice(m_radeSliceId))) {
-            if (auto* vfo = sw->vfoWidget(m_radeSliceId))
+            if (auto* vfo = sw->vfoWidget(m_radeSliceId)) {
                 vfo->setRadeActive(false);
+                if (m_radeEngine) {
+                    disconnect(m_radeEngine, &RADEEngine::syncChanged,         vfo, nullptr);
+                    disconnect(m_radeEngine, &RADEEngine::snrChanged,           vfo, nullptr);
+                    disconnect(m_radeEngine, &RADEEngine::freqOffsetChanged,    vfo, nullptr);
+                    disconnect(m_radeEngine, &RADEEngine::eooCallsignReceived,  vfo, nullptr);
+                }
+            }
         }
         m_radeSliceId = -1;
     }
+
+    m_radioModel.transmitModel().clearPttOffHook();
+    disconnect(m_radeMoxFallbackConn);
+    m_radeEooPending = false;
+    m_radeTxActive = false;
 
     m_audio->setRadeMode(false);
     m_radioModel.setDigitalVoiceTxSlice(-1);
@@ -15555,6 +15677,8 @@ void MainWindow::deactivateRADE()
                    m_radeEngine, nullptr);
         disconnect(m_radeEngine, &RADEEngine::rxSpeechReady,
                    m_audio, nullptr);
+        disconnect(m_radeEngine, &RADEEngine::eooFinished,
+                   this, nullptr);
         disconnect(m_radeEngine, &RADEEngine::eooCallsignReceived,
                    this, nullptr);
         if (m_radeDaxStreamId) {
@@ -16120,7 +16244,7 @@ void MainWindow::registerMidiParams()
 
     reg("tx.mox", "MOX", "TX", P::Toggle, 0, 1,
         [this](float v) { m_radioModel.setTransmit(v > 0.5f); },
-        [this]() -> float { return m_radioModel.transmitModel().isTransmitting() ? 1 : 0; });
+        [this]() -> float { return m_radioModel.transmitModel().isMox() ? 1 : 0; });
 
     reg("tx.tune", "TUNE", "TX", P::Toggle, 0, 1,
         [this](float v) {
