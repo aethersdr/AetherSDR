@@ -13,8 +13,9 @@ manifest, visual assets, signing, and Store upload wrapper around it.
 
 The script creates `msix-root/`, writes `AppxManifest.xml`, generates package
 icons from `docs/assets/logo-circle.png`, adds App Installer UX metadata, runs
-`makeappx.exe`, optionally signs the MSIX with `signtool.exe`, and optionally
-creates a `.msixupload` archive for Partner Center.
+`makeappx.exe`, optionally omits the DFNR model archive for Store readiness,
+optionally signs the MSIX with `signtool.exe`, and optionally creates a
+`.msixupload` archive for Partner Center.
 
 Development package:
 
@@ -28,7 +29,7 @@ Store identity package:
 $env:AETHERSDR_MSIX_IDENTITY_NAME = "PartnerCenter.Assigned.Name"
 $env:AETHERSDR_MSIX_PUBLISHER = "CN=Partner-Center-Assigned-Publisher"
 $env:AETHERSDR_MSIX_PUBLISHER_DISPLAY_NAME = "AetherSDR"
-powershell -NoProfile -ExecutionPolicy Bypass -Command ". 'C:\Users\patj\Documents\AetherSDR\scripts\enter-msvc.ps1' -Arch x64; & '.\packaging\windows\create-msix.ps1' -DeployDir deploy -OutputDir . -CreateUpload"
+powershell -NoProfile -ExecutionPolicy Bypass -Command ". 'C:\Users\patj\Documents\AetherSDR\scripts\enter-msvc.ps1' -Arch x64; & '.\packaging\windows\create-msix.ps1' -DeployDir deploy -OutputDir . -CreateUpload -ExcludeDfnrModel"
 ```
 
 ## Manifest Values
@@ -86,11 +87,12 @@ signals, but some findings need follow-up before final submission:
 
 - `Blocked executables`: AetherSDR shells out to PowerShell for Windows support
   bundle ZIP creation. Replace that path with in-process ZIP creation.
-- `Archive files usage`: DFNR currently ships `DeepFilterNet3_onnx.tar.gz`.
-  The archive contains `enc.onnx`, `erb_dec.onnx`, `df_dec.onnx`, and
-  `config.ini`, but the current DeepFilter C API expects the tar.gz path. Check
-  whether `df_create(nullptr, ...)` can use the embedded default model before
-  deciding whether to exclude the archive from the Store package.
+- `Archive files usage`: Store MSIX builds pass `-ExcludeDfnrModel` so the
+  package does not include `DeepFilterNet3_onnx.tar.gz`. The archive contains
+  `enc.onnx`, `erb_dec.onnx`, `df_dec.onnx`, and `config.ini`, but the current
+  DeepFilter C API expects the tar.gz path. Check whether `df_create(nullptr,
+  ...)` can use the embedded default model before restoring DFNR in Store
+  packages.
 - `DPIAwarenessValidation`: add PerMonitorV2 DPI awareness to the desktop app
   manifest or initialize DPI awareness explicitly before final Store testing.
 - Qt and vendor DLLs may still report process-launch imports or short blocked
