@@ -1901,6 +1901,16 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::showMqttSettingsDialog);
     m_appletPanel->mqttApplet()->restoreConnectionState();
 
+    // CW decode → MQTT topic "aethersdr/cw/decode".
+    // Publishes {"text":"K","freq":14.025,"rx":true} per decoded character.
+    // RX decoder uses rx:true; TX sidetone decoder uses rx:false.
+    // Any MQTT subscriber (e.g. a contest logger) receives the stream
+    // without additional AetherSDR interfaces.
+    connect(&m_cwDecoder,   &CwDecoder::textDecoded, this,
+            [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, true);  });
+    connect(&m_cwDecoderTx, &CwDecoder::textDecoded, this,
+            [this](const QString& t, float cost) { publishCwDecodeMqtt(t, cost, false); });
+
     // MQTT → panadapter overlay display
     connect(m_appletPanel->mqttApplet(), &MqttApplet::displayValueChanged,
             this, [this](const QString& key, const QString& value) {
@@ -5405,6 +5415,24 @@ void MainWindow::showMqttSettingsDialog()
             m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
         }
     });
+}
+
+void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
+{
+    if (!m_mqttClient) return;
+    // No CW panel active → nothing is displayed → don't publish.
+    if (!m_cwDecoderApplet || cost >= m_cwDecoderApplet->cwCostThreshold()) return;
+    // Mirror panel normalization: \n → space; drop whitespace-only TX chunks.
+    QString clean = text;
+    clean.replace(QLatin1Char('\n'), QLatin1Char(' '));
+    if (!rx && clean.trimmed().isEmpty()) return;
+    QJsonObject obj;
+    obj[QStringLiteral("text")] = clean;
+    obj[QStringLiteral("rx")]   = rx;
+    if (auto* s = activeSlice(); s && s->frequency() > 0.0)
+        obj[QStringLiteral("freq")] = s->frequency();
+    m_mqttClient->publish(QStringLiteral("aethersdr/cw/decode"),
+                          QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 #endif
 
