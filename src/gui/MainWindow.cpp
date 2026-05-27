@@ -1876,6 +1876,16 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::showMqttSettingsDialog);
     m_appletPanel->mqttApplet()->restoreConnectionState();
 
+    // CW decode → MQTT topic "aethersdr/cw/decode".
+    // Publishes {"text":"K","freq":14.025,"rx":true} per decoded character.
+    // RX decoder uses rx:true; TX sidetone decoder uses rx:false.
+    // Any MQTT subscriber (e.g. a contest logger) receives the stream
+    // without additional AetherSDR interfaces.
+    connect(&m_cwDecoder,   &CwDecoder::textDecoded, this,
+            [this](const QString& t, float) { publishCwDecodeMqtt(t, true);  });
+    connect(&m_cwDecoderTx, &CwDecoder::textDecoded, this,
+            [this](const QString& t, float) { publishCwDecodeMqtt(t, false); });
+
     // MQTT → panadapter overlay display
     connect(m_appletPanel->mqttApplet(), &MqttApplet::displayValueChanged,
             this, [this](const QString& key, const QString& value) {
@@ -5338,6 +5348,18 @@ void MainWindow::showMqttSettingsDialog()
             m_mqttClient->setSubscriptions(mqttSubscriptionTopics(mqttApplet->topicConfig()));
         }
     });
+}
+
+void MainWindow::publishCwDecodeMqtt(const QString& text, bool rx)
+{
+    if (!m_mqttClient || !m_mqttClient->isConnected()) return;
+    QJsonObject obj;
+    obj[QStringLiteral("text")] = text;
+    obj[QStringLiteral("rx")]   = rx;
+    if (auto* s = activeSlice(); s && s->frequency() > 0.0)
+        obj[QStringLiteral("freq")] = s->frequency();
+    m_mqttClient->publish(QStringLiteral("aethersdr/cw/decode"),
+                          QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 #endif
 
