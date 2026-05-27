@@ -191,7 +191,8 @@ if(ENABLE_RADE AND EXISTS "${RADE_DIR}/src/rade_api.h")
     # Standalone offline diagnostic tool: demodulate a WAV file and decode the EOO callsign.
     # Guarded by source-file existence so builds against vendored RADE snapshots that
     # predate rade_demod_wav.c don't hard-fail. Independent of RADE_WAV_TAP.
-    if(EXISTS "${RADE_DIR}/src/rade_demod_wav.c")
+    # Excluded on WIN32: rade_demod_wav.c uses POSIX getopt.h, unavailable in MSVC's SDK.
+    if(EXISTS "${RADE_DIR}/src/rade_demod_wav.c" AND NOT WIN32)
         add_executable(rade_demod_wav
             ${RADE_SOURCES}
             ${RADE_DIR}/src/rade_demod_wav.c
