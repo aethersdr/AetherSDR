@@ -2796,38 +2796,40 @@ void NetworkDiagnosticsDialog::refresh()
 
     // ── Adaptive throttle badge and Details subsection ───────────────────
     {
-        const NetworkDiagnosticsSample& s = sample;
-        const bool throttleActive = s.adaptiveFpsCap > 0;
+        const int  liveFpsCap   = sample.adaptiveFpsCap;
+        const bool throttleActive = liveFpsCap > 0;
+        // Read pendingThrottleLift() live from the model — more accurate than a
+        // sample-derived flag for a state that changes between 1-second polls.
+        const bool pendingLift  = throttleActive && m_model->pendingThrottleLift();
 
         if (m_throttleBadge) {
             m_throttleBadge->setVisible(throttleActive);
             if (throttleActive) {
-                const QString suffix = s.adaptivePendingLift ? " (restoring)" : "";
                 m_throttleBadge->setText(
-                    QString("Adaptive throttle: %1 fps cap%2").arg(s.adaptiveFpsCap).arg(suffix));
+                    QString("Adaptive throttle: %1 fps cap%2")
+                        .arg(liveFpsCap)
+                        .arg(pendingLift ? QStringLiteral(" (restoring)") : QString{}));
             }
         }
 
-        if (m_throttleSection) {
-            m_throttleSection->setVisible(throttleActive || (m_history && m_history->throttleSessionCount() > 0));
-        }
-        if (throttleActive || (m_history && m_history->throttleSessionCount() > 0)) {
+        const bool everThrottled = m_history && m_history->throttleSessionCount() > 0;
+        if (m_throttleSection)
+            m_throttleSection->setVisible(throttleActive || everThrottled);
+
+        if (throttleActive || everThrottled) {
             if (m_throttleStateLabel) {
                 if (throttleActive) {
-                    m_throttleStateLabel->setText(
-                        QString("%1 fps cap").arg(s.adaptiveFpsCap));
+                    m_throttleStateLabel->setText(QString("%1 fps cap").arg(liveFpsCap));
                     m_throttleStateLabel->setStyleSheet("QLabel { color: #cc9900; font-weight: 600; }");
                 } else {
                     m_throttleStateLabel->setText("Inactive");
                     m_throttleStateLabel->setStyleSheet("QLabel { color: #b9c4d7; font-weight: 600; }");
                 }
             }
-            if (m_throttleDwellLabel) {
-                m_throttleDwellLabel->setText(s.adaptivePendingLift ? "Yes — stabilising" : (throttleActive ? "No" : "--"));
-            }
-            if (m_throttleSessionLabel && m_history) {
+            if (m_throttleDwellLabel)
+                m_throttleDwellLabel->setText(pendingLift ? "Yes — stabilising" : (throttleActive ? "No" : "--"));
+            if (m_throttleSessionLabel && m_history)
                 m_throttleSessionLabel->setText(QString::number(m_history->throttleSessionCount()));
-            }
         }
     }
 

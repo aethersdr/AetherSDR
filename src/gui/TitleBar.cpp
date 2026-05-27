@@ -1027,6 +1027,11 @@ void TitleBar::setDiscovering(bool active)
     }
 }
 
+QString TitleBar::currentBeatColor() const
+{
+    return m_throttleFlashColor.isEmpty() ? QStringLiteral("#20c060") : m_throttleFlashColor;
+}
+
 void TitleBar::onHeartbeat()
 {
     m_discovering = false;
@@ -1034,25 +1039,24 @@ void TitleBar::onHeartbeat()
     m_heartbeatAlarmTimer->stop();
     m_alarmRed = false;
     m_heartbeat->setToolTip("Radio discovery heartbeat");
-    const QString flashColor = m_throttleFlashColor.isEmpty() ? "#20c060" : m_throttleFlashColor;
     m_heartbeat->setStyleSheet(
-        QString("QLabel { background: %1; border-radius: 5px; }").arg(flashColor));
+        QStringLiteral("QLabel { background: %1; border-radius: 5px; }").arg(currentBeatColor()));
     if (m_blinkEnabled) {
         m_heartbeatOffTimer->start();  // flash → gray after 100ms
     }
     // When blink is off: stays static — no timer, no animation
 }
 
-void TitleBar::setThrottleFlashColor(const QString& hexColor)
+void TitleBar::setThrottleFlashColor(const QString& color)
 {
-    m_throttleFlashColor = hexColor;
-    // If blink is disabled and the indicator is currently static green,
-    // update it immediately so the color change is visible without waiting
-    // for the next heartbeat.  Alarm states are never overridden.
-    if (!m_blinkEnabled && m_missedBeats < 3 && !m_discovering) {
-        const QString color = hexColor.isEmpty() ? "#20c060" : hexColor;
+    if (m_throttleFlashColor == color) return;
+    m_throttleFlashColor = color;
+    // Alarm timer owns the indicator — never fight it.
+    if (m_missedBeats >= 3 || m_heartbeatAlarmTimer->isActive()) return;
+    // Blink-disabled freeze path: repaint immediately to the new static color.
+    if (!m_blinkEnabled && !m_heartbeatOffTimer->isActive()) {
         m_heartbeat->setStyleSheet(
-            QString("QLabel { background: %1; border-radius: 5px; }").arg(color));
+            QStringLiteral("QLabel { background: %1; border-radius: 5px; }").arg(currentBeatColor()));
     }
 }
 
@@ -1103,9 +1107,8 @@ void TitleBar::setBlinkEnabled(bool enabled)
     } else if (m_heartbeatOffTimer->isActive()) {
         // Was mid flash — freeze to solid connected color
         m_heartbeatOffTimer->stop();
-        const QString color = m_throttleFlashColor.isEmpty() ? "#20c060" : m_throttleFlashColor;
         m_heartbeat->setStyleSheet(
-            QString("QLabel { background: %1; border-radius: 5px; }").arg(color));
+            QStringLiteral("QLabel { background: %1; border-radius: 5px; }").arg(currentBeatColor()));
     }
 }
 

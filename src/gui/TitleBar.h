@@ -135,6 +135,7 @@ protected:
 
 private:
     void updateMaximizeIcon();
+    QString currentBeatColor() const;  // #20c060 or throttle color
 };
 
 } // namespace AetherSDR
