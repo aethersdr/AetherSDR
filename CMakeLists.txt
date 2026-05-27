@@ -511,6 +511,7 @@ set(CORE_SOURCES
     src/core/PgxlConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/DvkWavTransfer.cpp
+    src/core/ZipArchive.cpp
     src/core/ProfileTransfer.cpp
     src/core/QsoRecorder.cpp
     src/core/FirmwareStager.cpp
@@ -1591,6 +1592,19 @@ add_executable(profile_transfer_test
 target_include_directories(profile_transfer_test PRIVATE src)
 target_link_libraries(profile_transfer_test PRIVATE Qt6::Core)
 add_test(NAME profile_transfer_test COMMAND profile_transfer_test)
+
+add_executable(zip_archive_test
+    tests/zip_archive_test.cpp
+    src/core/ZipArchive.cpp
+)
+target_include_directories(zip_archive_test PRIVATE src)
+target_link_libraries(zip_archive_test PRIVATE Qt6::Core)
+if (USE_SYSTEM_ZLIB)
+    target_link_libraries(zip_archive_test PRIVATE PkgConfig::zlib)
+else()
+    target_link_libraries(zip_archive_test PRIVATE zlibstatic)
+endif()
+add_test(NAME zip_archive_test COMMAND zip_archive_test)
 
 # Pins the filter-before-merge invariant on the license-class-aware overload
 # of BandPlanManager::contiguousRegionsForBand (PR #3050, closing #2649). (#3060)
