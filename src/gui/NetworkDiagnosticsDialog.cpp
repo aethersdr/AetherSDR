@@ -2607,6 +2607,13 @@ void NetworkDiagnosticsHistory::pruneSamples(qint64 nowMs)
                            return ev.timestampMs < eventCutoff;
                        }),
         m_throttleEvents.end());
+    // Drop any leading close-events left orphaned by the pruning above.
+    // This happens when a throttle session started before the cutoff (open
+    // pruned) but ended after it (close survives).  The span builder skips
+    // unmatched close events, but removing them keeps the vector clean and
+    // the intent explicit.
+    while (!m_throttleEvents.isEmpty() && !m_throttleEvents.first().active)
+        m_throttleEvents.removeFirst();
 }
 
 static void updateAudioStreamTable(QTableWidget* table,
