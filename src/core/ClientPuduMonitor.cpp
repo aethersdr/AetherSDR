@@ -179,8 +179,17 @@ bool ClientPuduMonitor::preparePlaybackPcm(int sinkRateHz)
 
 void ClientPuduMonitor::startPlayback()
 {
+    // Emit on every failure path so the RX mute installed at record-start
+    // (or a prior manual-playback attempt) is always lifted.  The m_playing
+    // guard below is the one exception — if we are already playing the mute
+    // is legitimately held and must not be dropped.
+    auto bail = [this]() {
+        emit muteRxRequested(false);
+        emit playbackStopped();
+    };
+
     if (m_playing) return;
-    if (m_recordedBytes <= 0) return;
+    if (m_recordedBytes <= 0) { bail(); return; }
 
     // ── Pick an output device + format ─────────────────────────────
     // int16 stereo at the sink's native rate.  Try 24 kHz first (zero-
@@ -196,7 +205,7 @@ void ClientPuduMonitor::startPlayback()
         failure.attemptedFormats = QStringLiteral("system default output");
         failure.failureReason = QStringLiteral("no audio output device");
         AudioSummaryLogger::logOpenFailure(failure);
-        return;
+        bail(); return;
     }
 
     QAudioFormat fmt;
@@ -226,11 +235,11 @@ void ClientPuduMonitor::startPlayback()
             failure.failureReason = QStringLiteral("output device supports neither 24000Hz nor 48000Hz Int16 stereo");
             failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
             AudioSummaryLogger::logOpenFailure(failure);
-            return;
+            bail(); return;
         }
     }
 
-    if (!preparePlaybackPcm(sinkRate)) return;
+    if (!preparePlaybackPcm(sinkRate)) { bail(); return; }
 
     // ── QBuffer → QAudioSink (pull mode) ───────────────────────────
     // Sink pulls from QBuffer at its own cadence.  No timer, no
@@ -240,7 +249,7 @@ void ClientPuduMonitor::startPlayback()
     // sink transitions to IdleState and we stop cleanly.
     m_playBuffer.close();
     m_playBuffer.setBuffer(&m_playPcm);
-    if (!m_playBuffer.open(QIODevice::ReadOnly)) return;
+    if (!m_playBuffer.open(QIODevice::ReadOnly)) { bail(); return; }
 
     m_playSink = new QAudioSink(dev, fmt, this);
     // Ask for a generous 300 ms internal ring buffer before start().
@@ -268,7 +277,7 @@ void ClientPuduMonitor::startPlayback()
         AudioSummaryLogger::logOpenFailure(failure);
         delete m_playSink;
         m_playSink = nullptr;
-        return;
+        bail(); return;
     }
     AudioSummaryLogger::AuxiliarySinkSummary summary;
     summary.sinkName = QStringLiteral("Aetherial monitor playback");
