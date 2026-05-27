@@ -52,22 +52,23 @@ jobs:
               - '.github/workflows/**'
               # MainWindow.cpp / .h carry dozens of `#ifdef Q_OS_WIN`,
               # `Q_OS_MAC`, and `HAVE_PIPEWIRE` branches; a change that
-              # looks Linux-only can break Windows in non-obvious ways.
-              # Post-mortems: #2633 → #2662 (unconditional m_daxBridge
-              # reference inside macOS-only guard) and #2670 (Windows
-              # behaviour change wasn't exercised by CI). Most recently
-              # the v26.5.3 ClientPhaseRotator.cpp M_PI MSVC break also
-              # slipped past check-windows because the file's path
-              # wasn't on the filter — same class of issue. Force the
-              # Windows CI build whenever this file changes. (#2671)
+              # looks Linux-only can break Windows or macOS in non-obvious
+              # ways.  Post-mortems: #2633 → #2662 (unconditional
+              # m_daxBridge reference inside macOS-only guard) and #2670
+              # (Windows behaviour change wasn't exercised by CI).  Most
+              # recently the v26.5.3 ClientPhaseRotator.cpp M_PI MSVC
+              # break also slipped past check-windows because the file's
+              # path wasn't on the filter — same class of issue.  Force
+              # the cross-platform CI build whenever this file changes.
+              # (#2671)
               - 'src/gui/MainWindow.cpp'
               - 'src/gui/MainWindow.h'
               # AudioEngine.cpp / .h are equally dense with platform-guarded
-              # code (WASAPI, CoreAudio, ALSA/PipeWire paths). A Linux-passing
-              # change inside a Q_OS_WIN block will skip check-windows without
-              # this entry. Post-mortem: #2929 (WASAPI mono-mic recovery)
-              # landed on main unverified because AudioEngine wasn't in the
-              # filter. (#3052)
+              # code (WASAPI, CoreAudio, ALSA/PipeWire paths).  A Linux-passing
+              # change inside a Q_OS_WIN or Q_OS_MAC block will skip the
+              # cross-platform builds without this entry.  Post-mortem:
+              # #2929 (WASAPI mono-mic recovery) landed on main unverified
+              # because AudioEngine wasn't in the filter.  (#3052)
               - 'src/core/AudioEngine.cpp'
               - 'src/core/AudioEngine.h'
 
@@ -184,3 +185,48 @@ jobs:
       - name: sccache stats
         if: always()
         run: sccache --show-stats
+
+  # macOS build check — same scope and trigger as check-windows.  Catches
+  # Q_OS_MAC / CoreAudio / Cocoa-bridge breakage that Linux clang misses,
+  # which is otherwise only discovered at release tag time by macos-dmg.yml.
+  # Build-only (no code signing, no DMG, no notarization — those stay in
+  # macos-dmg.yml on tag push).  Apple Silicon runner only; Intel coverage
+  # remains release-time-only.
+  check-macos:
+    needs: [check-paths]
+    if: needs.check-paths.outputs.build-changed == 'true'
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - name: Install dependencies via Homebrew
+        # Mirrors macos-dmg.yml's apple-silicon path.  Homebrew Qt targets
+        # the current OS, which is fine for the arm64 CI check; deployment-
+        # target pinning is a release-time concern handled in macos-dmg.yml.
+        run: |
+          brew install ninja qt@6 qtkeychain fftw portaudio hidapi \
+            autoconf automake libtool
+
+      - name: Setup DeepFilterNet3 (DFNR)
+        run: bash scripts/setup/setup-deepfilter.sh
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639  # v1
+        with:
+          key: ccache-macos-ci
+          max-size: 500M
+
+      - name: Configure
+        run: |
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix)" \
+            -DMQTT_TLS=OFF
+
+      - name: Build Opus (RADE dependency)
+        run: cmake --build build --target build_opus -j$(sysctl -n hw.ncpu)
+
+      - name: Build
+        run: cmake --build build -j$(sysctl -n hw.ncpu)
