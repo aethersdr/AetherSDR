@@ -4183,6 +4183,62 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         vbox->addWidget(group);
     }
+
+    // ── HID Encoder — per-encoder push-button action mapping (#1510) ─────────
+    {
+        auto* group = new QGroupBox("StreamDeck+ Encoder Push Actions");
+        group->setStyleSheet(kGroupStyle);
+        auto* grid = new QGridLayout(group);
+        grid->setSpacing(6);
+
+        auto* note = new QLabel(
+            "Action when each encoder dial is pressed. "
+            "Defaults: Enc 1 = Cycle Tuning Step, Enc 2 = Toggle RIT, Enc 3 = Toggle XIT.");
+        note->setWordWrap(true);
+        note->setStyleSheet(kLabelStyle);
+        grid->addWidget(note, 0, 0, 1, 3);
+
+        static const struct { const char* id; const char* label; } kPushActions[] = {
+            {"StepCycle",  "Cycle Tuning Step"},
+            {"ToggleRit",  "Toggle RIT on/off"},
+            {"ToggleXit",  "Toggle XIT on/off"},
+            {"ToggleMox",  "Toggle TX (MOX)"},
+            {"ToggleMute", "Toggle Mute"},
+            {"ToggleLock", "Lock Slice"},
+            {"None",       "None"},
+        };
+
+        static const char* kPushDefaults[4] = {
+            "StepCycle", "ToggleRit", "ToggleXit", "None"
+        };
+
+        for (int i = 0; i < 4; ++i) {
+            grid->addWidget(new QLabel(QString("Encoder %1 push:").arg(i + 1)), i + 1, 0);
+
+            auto* combo = new QComboBox;
+            combo->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QComboBox"));
+            for (const auto& act : kPushActions)
+                combo->addItem(QString::fromLatin1(act.label), QString::fromLatin1(act.id));
+
+            const QString key = QString("HidEncoderPushAction%1").arg(i);
+            const QString saved = settings.value(key, QString::fromLatin1(kPushDefaults[i])).toString();
+            const int idx = combo->findData(saved);
+            combo->setCurrentIndex(idx >= 0 ? idx : 0);
+
+            connect(combo, &QComboBox::currentIndexChanged, this, [combo, key, this](int) {
+                auto& s = AppSettings::instance();
+                s.setValue(key, combo->currentData().toString());
+                s.save();
+                emit serialSettingsChanged();
+            });
+
+            m_hidEncoderPushActionCombos[i] = combo;
+            grid->addWidget(combo, i + 1, 1, 1, 2);
+            grid->setColumnStretch(1, 1);
+        }
+
+        vbox->addWidget(group);
+    }
 #endif
 
     vbox->addStretch();

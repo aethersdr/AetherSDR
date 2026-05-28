@@ -107,6 +107,7 @@ private:
     QCheckBox* m_flexControlInvertCheck{nullptr};
 #ifdef HAVE_HIDAPI
     std::array<QComboBox*, 4> m_hidEncoderActionCombos{};
+    std::array<QComboBox*, 4> m_hidEncoderPushActionCombos{};
 #endif
 
     // Radio tab fields

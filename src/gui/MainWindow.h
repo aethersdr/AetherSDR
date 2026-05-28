@@ -543,6 +543,7 @@ private:
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
     static QString hidEncoderDefaultAction(int encoderIndex);
+    static QString hidEncoderDefaultPushAction(int encoderIndex);
 #endif
 #ifdef HAVE_MIDI
     MidiControlManager*  m_midiControl{nullptr};

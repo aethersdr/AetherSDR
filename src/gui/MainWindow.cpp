@@ -3927,19 +3927,34 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_hidEncoder, &HidEncoderManager::buttonPressed,
             this, [this](int button, int action) {
-        // Reuse same action dispatch as FlexControl
-        QString key = QString("HidEncoderBtn%1Action%2").arg(button).arg(action);
-        QString actionName = AppSettings::instance().value(key, "None").toString();
-        if (actionName == "ToggleMox")
+        // Encoder press buttons 9-12 map to encoder indices 0-3; others keep button
+        // number as-is. Only fire on press (action==0); release is ignored here.
+        if (action != 0) return;
+        const int encoderIndex = (button >= 9 && button <= 12) ? button - 9 : -1;
+        const QString key = (encoderIndex >= 0)
+            ? QString("HidEncoderPushAction%1").arg(encoderIndex)
+            : QString("HidEncoderBtn%1Action").arg(button);
+        const QString dflt = (encoderIndex >= 0)
+            ? MainWindow::hidEncoderDefaultPushAction(encoderIndex)
+            : QStringLiteral("None");
+        const QString actionName = AppSettings::instance().value(key, dflt).toString();
+
+        if (actionName == "StepCycle") {
+            if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepUp();
+        } else if (actionName == "ToggleRit") {
+            if (auto* s = activeSlice()) s->setRit(!s->ritOn(), s->ritFreq());
+        } else if (actionName == "ToggleXit") {
+            if (auto* s = activeSlice()) s->setXit(!s->xitOn(), s->xitFreq());
+        } else if (actionName == "ToggleMox") {
             m_radioModel.setTransmit(!m_radioModel.transmitModel().isTransmitting());
-        else if (actionName == "ToggleTune") {
+        } else if (actionName == "ToggleTune") {
             if (m_radioModel.transmitModel().isTuning())
                 m_radioModel.transmitModel().stopTune();
             else
                 m_radioModel.transmitModel().startTune();
-        } else if (actionName == "ToggleMute")
+        } else if (actionName == "ToggleMute") {
             m_audio->setMuted(!m_audio->isMuted());
-        else if (actionName == "ToggleLock") {
+        } else if (actionName == "ToggleLock") {
             if (auto* s = activeSlice()) s->setLocked(!s->isLocked());
         }
     });
@@ -6449,6 +6464,18 @@ QString MainWindow::hidEncoderDefaultAction(int encoderIndex)
     case 2:  return QStringLiteral("WheelXit");
     case 3:  return QStringLiteral("WheelVolume");
     default: return QStringLiteral("WheelFrequency");
+    }
+}
+
+// static
+QString MainWindow::hidEncoderDefaultPushAction(int encoderIndex)
+{
+    switch (encoderIndex) {
+    case 0:  return QStringLiteral("StepCycle");  // tuning encoder push → cycle step size
+    case 1:  return QStringLiteral("ToggleRit");
+    case 2:  return QStringLiteral("ToggleXit");
+    case 3:  return QStringLiteral("None");
+    default: return QStringLiteral("None");
     }
 }
 
