@@ -43,6 +43,8 @@ QStringList mqttUserSubscriptionTopics(const QVector<MqttTopicDef>& topics);
 
 QStringList internalMqttSubscriptionTopics();
 QStringList mqttSubscriptionTopics(const QStringList& userTopics);
+
+QStringList internalMqttPublishTopics();
 QStringList mqttSubscriptionTopics(const QVector<MqttTopicDef>& userTopics);
 
 QVector<MqttButtonDef> mqttButtonsFromJson(const QString& json);

@@ -196,6 +196,18 @@ void MqttSettingsDialog::buildUi()
     buttonControls->addWidget(removeButton);
     buttonControls->addStretch();
     buttonsLayout->addLayout(buttonControls);
+
+    auto* pubInternalGroup = new QGroupBox(tr("Internal AetherSDR Topics"));
+    auto* pubInternalLayout = new QVBoxLayout(pubInternalGroup);
+    auto* pubInternalText = new QLabel(
+        tr("Published automatically whenever MQTT is connected; these topics are not user-configurable:\n"
+           "aethersdr/cw/decode\n"
+           "  Payload: {\"text\":\"K\",\"freq\":14.025,\"rx\":true}\n"
+           "  rx: true = received CW,  false = transmitted (sidetone)"));
+    pubInternalText->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    pubInternalLayout->addWidget(pubInternalText);
+    buttonsLayout->addWidget(pubInternalGroup);
+
     tabs->addTab(buttonsTab, tr("Publish Buttons"));
 
     connect(m_addButtonRowBtn, &QPushButton::clicked, this, [this] { addButtonRow(); });
