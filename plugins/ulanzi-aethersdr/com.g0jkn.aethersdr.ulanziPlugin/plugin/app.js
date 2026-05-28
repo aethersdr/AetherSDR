@@ -77,7 +77,19 @@ function tciConnect(url) {
   console.log(`[tci] connecting to ${tciUrl}`);
   tci = new WebSocket(tciUrl);
 
-  tci.on('open',    () => { tciReady = true;  console.log('[tci] connected'); });
+  tci.on('open',    () => {
+    tciReady = true;
+    console.log('[tci] connected');
+    // Seed the local gain mirrors from AE's actual current values. A bare verb
+    // is a GET; AE replies `volume:<v>;`/`drive:<v>;`/`mic_level:<v>;` which
+    // parseTci folds into radio.{volume,rfPower,micLevel}. Without this the
+    // mirror sits at the hard-coded defaults (50/100/50) until the first init
+    // burst arrives — and AE's init burst doesn't always carry all three — so
+    // the first ±5 press would jump from the default instead of the real value.
+    tciSend('volume;');
+    tciSend('drive;');
+    tciSend('mic_level;');
+  });
   tci.on('close',   () => { tciReady = false; console.log('[tci] closed — retry in 5s'); scheduleReconnect(); });
   tci.on('error',   (err) => console.log(`[tci] error: ${err.message}`));
   tci.on('message', (data) => parseTci(data.toString()));
@@ -191,8 +203,8 @@ function cmdVfoStepCoarse(direction) { return cmdSetFreq(radio.frequency + direc
 // optimistic update for it as well keeps the three actions consistent and
 // is harmless — the subsequent parser echo just confirms the same value.
 //
-// `mic_level` is best-effort — not in the published TCI spec; AE may
-// silently ignore.
+// `mic_level` is an AE extension (not in the published TCI spec) but is
+// honoured — verified live 2026-05-28 to drive TX mic gain on AetherSDR.
 const clamp01_100 = (v) => Math.max(0, Math.min(100, v));
 
 function cmdAfGain(direction) {

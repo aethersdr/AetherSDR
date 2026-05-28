@@ -1,5 +1,5 @@
 {
-  "Version": "0.1.4",
+  "Version": "0.1.5",
   "Author": "Nigel Fenton (G0JKN)",
   "Name": "AetherSDR Controller",
   "Description": "Drive AetherSDR over its TCI WebSocket interface from a Ulanzi keypad / dial — VFO tuning, MOX, band/mode/slice control.",
@@ -275,7 +275,7 @@
       "Controllers": [
         "Keypad"
       ],
-      "Tooltip": "⚠ NON-FUNCTIONAL on current AetherSDR — AE doesn't expose mic gain over TCI (verified live 2026-05-27, mic_level: command silently ignored). Action kept in manifest for the day upstream adds support.",
+      "Tooltip": "Increase transmit mic gain by 5 (TCI 'mic_level' verb, 0–100 range).",
       "UUID": "com.g0jkn.aethersdr.controller.micGainUp",
       "SupportedInMultiActions": false,
       "States": [
@@ -291,7 +291,7 @@
       "Controllers": [
         "Keypad"
       ],
-      "Tooltip": "⚠ NON-FUNCTIONAL on current AetherSDR — AE doesn't expose mic gain over TCI (verified live 2026-05-27, mic_level: command silently ignored). Action kept in manifest for the day upstream adds support.",
+      "Tooltip": "Decrease transmit mic gain by 5 (TCI 'mic_level' verb, 0–100 range).",
       "UUID": "com.g0jkn.aethersdr.controller.micGainDown",
       "SupportedInMultiActions": false,
       "States": [
