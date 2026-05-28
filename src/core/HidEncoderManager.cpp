@@ -183,7 +183,18 @@ void HidEncoderManager::setKeyImage(int key, const QByteArray& jpegData)
         pkt[7] = static_cast<uint8_t>((pageNumber >> 8) & 0xFF);
         std::memcpy(pkt + HEADER_SIZE, jpegData.constData() + offset, chunkLen);
 
-        hid_write(m_device, pkt, PACKET_SIZE);
+        // Bail on write failure so we don't spin through the remaining packets
+        // writing into a dead handle.  The next poll() will catch the bad
+        // handle via hid_read() < 0 and trigger close() + hotplug reopen,
+        // which correlates the user-visible "deck went blank" with logs. (#3248)
+        const int written = hid_write(m_device, pkt, PACKET_SIZE);
+        if (written < 0) {
+            qCWarning(lcDevices) << "HidEncoderManager::setKeyImage: hid_write failed"
+                                 << "key=" << key
+                                 << "page=" << pageNumber
+                                 << "— device disconnected? Will retry on hotplug.";
+            return;
+        }
 
         offset     += chunkLen;
         pageNumber++;
@@ -229,7 +240,14 @@ void HidEncoderManager::setTouchscreenImage(const QByteArray& jpegData,
         pkt[15] = 0x00;
         std::memcpy(pkt + HEADER_SIZE, jpegData.constData() + offset, chunkLen);
 
-        hid_write(m_device, pkt, PACKET_SIZE);
+        // Same bail-on-failure pattern as setKeyImage above. (#3248)
+        const int written = hid_write(m_device, pkt, PACKET_SIZE);
+        if (written < 0) {
+            qCWarning(lcDevices) << "HidEncoderManager::setTouchscreenImage: hid_write failed"
+                                 << "page=" << pageNumber
+                                 << "— device disconnected? Will retry on hotplug.";
+            return;
+        }
 
         offset     += chunkLen;
         pageNumber++;

@@ -223,19 +223,21 @@ HidEvent StreamDeckPlusParser::parse(const uint8_t* buf, size_t len)
                     return {.type = HidEvent::Rotate, .steps = delta, .encoderIndex = i};
             }
         } else if (subtype == 0x00) {
-            // Encoder push — return first changed encoder button
+            // Encoder push — return first changed encoder button.
+            // We commit only the bit we're reporting (not all of newState) so
+            // that if two buttons change in the same HID report, the next
+            // poll() iteration's `changed` still flags the unreported bit and
+            // emits it.  See #3248 follow-up from PR #3236 review.
             uint8_t newState = 0;
             for (int i = 0; i < 4; ++i) {
                 if (buf[5 + i]) newState |= (1u << i);
             }
             uint8_t changed = newState ^ m_prevEncBtns;
-            if (changed) {
-                m_prevEncBtns = newState;
-                for (int i = 0; i < 4; ++i) {
-                    if (changed & (1u << i)) {
-                        const int act = (newState & (1u << i)) ? 0 : 1;
-                        return {.type = HidEvent::Button, .button = 9 + i, .action = act};
-                    }
+            for (int i = 0; i < 4; ++i) {
+                if (changed & (1u << i)) {
+                    m_prevEncBtns ^= (1u << i);  // consume this bit only
+                    const int act = (newState & (1u << i)) ? 0 : 1;
+                    return {.type = HidEvent::Button, .button = 9 + i, .action = act};
                 }
             }
         }
@@ -243,20 +245,20 @@ HidEvent StreamDeckPlusParser::parse(const uint8_t* buf, size_t len)
     }
 
     if (type == 0x00) {
-        // LCD key — return first changed key
+        // LCD key — return first changed key.  Same one-bit-at-a-time
+        // commit pattern as encoder push above so simultaneous presses
+        // are not silently dropped. (#3248)
         if (len < 12) return {};
         uint8_t newState = 0;
         for (int i = 0; i < 8; ++i) {
             if (buf[4 + i]) newState |= (1u << i);
         }
         uint8_t changed = newState ^ m_prevKeys;
-        if (changed) {
-            m_prevKeys = newState;
-            for (int i = 0; i < 8; ++i) {
-                if (changed & (1u << i)) {
-                    const int act = (newState & (1u << i)) ? 0 : 1;
-                    return {.type = HidEvent::Button, .button = i + 1, .action = act};
-                }
+        for (int i = 0; i < 8; ++i) {
+            if (changed & (1u << i)) {
+                m_prevKeys ^= (1u << i);  // consume this bit only
+                const int act = (newState & (1u << i)) ? 0 : 1;
+                return {.type = HidEvent::Button, .button = i + 1, .action = act};
             }
         }
         return {};

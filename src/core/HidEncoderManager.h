@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QTimer>
 #include <QByteArray>
+#include <atomic>
 #include <memory>
 #include <hidapi/hidapi.h>
 #include "HidDeviceParser.h"
@@ -26,12 +27,21 @@ public:
 
     bool open(uint16_t vid, uint16_t pid);
     void close();
-    bool isOpen() const { return m_device != nullptr; }
+    // These getters are called from the main thread (e.g. refreshStreamDeckLabels,
+    // status snapshot) while the worker thread on m_extCtrlThread mutates the
+    // backing members in open()/close()/hotplugCheck().  Underlying state is
+    // std::atomic so the cross-thread reads are well-defined; relaxed ordering
+    // is sufficient because callers treat the result as a hint and the real
+    // gate is re-checked inside the queued slot. (#3248)
+    bool isOpen() const { return m_device.load(std::memory_order_relaxed) != nullptr; }
     QString deviceName() const { return m_deviceName; }
-    uint16_t vendorId() const { return m_openVid; }
-    uint16_t productId() const { return m_openPid; }
+    uint16_t vendorId() const { return m_openVid.load(std::memory_order_relaxed); }
+    uint16_t productId() const { return m_openPid.load(std::memory_order_relaxed); }
     int encoderCount() const { return m_parser ? m_parser->encoderCount() : 1; }
-    bool isStreamDeckPlus() const { return m_openVid == 0x0FD9 && m_openPid == 0x0084; }
+    bool isStreamDeckPlus() const {
+        return m_openVid.load(std::memory_order_relaxed) == 0x0FD9
+            && m_openPid.load(std::memory_order_relaxed) == 0x0084;
+    }
 
     void setInvertDirection(bool invert) { m_invertDirection = invert; }
 
@@ -58,11 +68,17 @@ private slots:
     void hotplugCheck();
 
 private:
-    hid_device* m_device{nullptr};
+    // m_device + m_openVid + m_openPid are read from the main thread
+    // (isOpen / isStreamDeckPlus / vendorId / productId) and written from
+    // m_extCtrlThread (open / close / hotplugCheck).  std::atomic makes
+    // those cross-thread reads well-defined.  m_deviceName is also
+    // touched cross-thread but it's a const-after-open string used only
+    // in diagnostics so a brief stale read is benign. (#3248)
+    std::atomic<hid_device*> m_device{nullptr};
     std::unique_ptr<HidDeviceParser> m_parser;
     QString m_deviceName;
-    uint16_t m_openVid{0};
-    uint16_t m_openPid{0};
+    std::atomic<uint16_t> m_openVid{0};
+    std::atomic<uint16_t> m_openPid{0};
     bool m_invertDirection{false};
 
     QTimer* m_pollTimer{nullptr};
