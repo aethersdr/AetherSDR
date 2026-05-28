@@ -117,9 +117,15 @@ function parseTci(msg) {
       case 'rit_enable':   if (p.length >= 2) radio.ritOn        = p[1] === 'true';      break;
       // Gain / level trackers — keep local mirror in sync so ±5 steps are
       // calculated against the radio's actual current value, not a stale guess.
-      case 'volume':       if (p.length >= 1) radio.volume       = parseInt(p[0]);       break;
-      case 'drive':        if (p.length >= 1) radio.rfPower      = parseInt(p[0]);       break;
-      case 'mic_level':    if (p.length >= 1) radio.micLevel     = parseInt(p[0]);       break;
+      // TCI spec format: `verb:<trx>,<value>;` — p[0] is the receiver index
+      // (always 0 for the active slice), p[1] is the actual value.  Reading
+      // p[0] would always give "0" → ±5 steps would snap to 5 / 0 forever.
+      // (The Elgato AetherSDR plugin has the same bug; it's masked there
+      // because RF Power cycles through a preset array rather than relative
+      // steps.)
+      case 'volume':       if (p.length >= 2) radio.volume       = parseInt(p[1]);       break;
+      case 'drive':        if (p.length >= 2) radio.rfPower      = parseInt(p[1]);       break;
+      case 'mic_level':    if (p.length >= 2) radio.micLevel     = parseInt(p[1]);       break;
     }
   }
 }
@@ -163,13 +169,15 @@ function cmdVfoStep(direction)       { return cmdSetFreq(radio.frequency + direc
 function cmdVfoStepCoarse(direction) { return cmdSetFreq(radio.frequency + direction * TX_STEP_HZ * COARSE_MULT); }
 
 // Gain ±5 helpers — clamp to 0–100 so we don't blow past the radio's range.
-// `mic_level` is best-effort — AetherSDR's TCI handler may silently ignore it
-// since it's not in the published spec; we send anyway and trust the log if
-// the value never changes.
+// Format `verb:<trx>,<value>;` matches the TCI spec (ExpertSDR2 1.9) and
+// what AetherSDR emits, so parser + sender stay symmetric.  `mic_level` is
+// best-effort — AetherSDR's TCI handler may silently ignore it since it's
+// not in the published spec; we send anyway and trust the log if the value
+// never changes.
 const clamp01_100 = (v) => Math.max(0, Math.min(100, v));
-function cmdAfGain(direction)   { return `volume:${clamp01_100(radio.volume   + direction * GAIN_STEP)};`; }
-function cmdRfGain(direction)   { return `drive:${clamp01_100(radio.rfPower  + direction * GAIN_STEP)};`; }
-function cmdMicGain(direction)  { return `mic_level:${clamp01_100(radio.micLevel + direction * GAIN_STEP)};`; }
+function cmdAfGain(direction)   { return `volume:0,${clamp01_100(radio.volume   + direction * GAIN_STEP)};`; }
+function cmdRfGain(direction)   { return `drive:0,${clamp01_100(radio.rfPower  + direction * GAIN_STEP)};`; }
+function cmdMicGain(direction)  { return `mic_level:0,${clamp01_100(radio.micLevel + direction * GAIN_STEP)};`; }
 
 // ─── Studio API ──────────────────────────────────────────────────────────
 
