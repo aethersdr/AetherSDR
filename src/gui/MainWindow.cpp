@@ -3930,24 +3930,40 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_hidEncoder, &HidEncoderManager::buttonPressed,
             this, [this](int button, int action) {
-        // Encoder press buttons 9-12 map to encoder indices 0-3; others keep button
-        // number as-is. Only fire on press (action==0); release is ignored here.
+        // Only fire on press; release is suppressed.
         if (action != 0) return;
-        const int encoderIndex = (button >= 9 && button <= 12) ? button - 9 : -1;
-        const QString key = (encoderIndex >= 0)
-            ? QString("HidEncoderPushAction%1").arg(encoderIndex)
-            : QString("HidEncoderBtn%1Action").arg(button);
-        const QString dflt = (encoderIndex >= 0)
-            ? MainWindow::hidEncoderDefaultPushAction(encoderIndex)
-            : QStringLiteral("None");
-        const QString actionName = AppSettings::instance().value(key, dflt).toString();
 
-        if (actionName == "StepCycle") {
+        QString actionName;
+        if (button >= 1 && button <= 8) {
+            // LCD keys — settings key HidKeyAction{0-7}
+            actionName = AppSettings::instance()
+                .value(QString("HidKeyAction%1").arg(button - 1), QStringLiteral("None"))
+                .toString();
+        } else if (button >= 9 && button <= 12) {
+            // Encoder press buttons — settings key HidEncoderPushAction{0-3}
+            const int enc = button - 9;
+            actionName = AppSettings::instance()
+                .value(QString("HidEncoderPushAction%1").arg(enc),
+                       MainWindow::hidEncoderDefaultPushAction(enc))
+                .toString();
+        } else {
+            return;
+        }
+
+        if (actionName == "None" || actionName.isEmpty()) return;
+
+        if (actionName == "StepCycle" || actionName == "StepUp") {
             if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepUp();
+        } else if (actionName == "StepDown") {
+            if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepDown();
         } else if (actionName == "ToggleRit") {
             if (auto* s = activeSlice()) s->setRit(!s->ritOn(), s->ritFreq());
         } else if (actionName == "ToggleXit") {
             if (auto* s = activeSlice()) s->setXit(!s->xitOn(), s->xitFreq());
+        } else if (actionName == "ClearRit") {
+            if (auto* s = activeSlice()) s->setRit(s->ritOn(), 0);
+        } else if (actionName == "ClearXit") {
+            if (auto* s = activeSlice()) s->setXit(s->xitOn(), 0);
         } else if (actionName == "ToggleMox") {
             m_radioModel.setTransmit(!m_radioModel.transmitModel().isTransmitting());
         } else if (actionName == "ToggleTune") {
@@ -3959,6 +3975,81 @@ MainWindow::MainWindow(QWidget* parent)
             m_audio->setMuted(!m_audio->isMuted());
         } else if (actionName == "ToggleLock") {
             if (auto* s = activeSlice()) s->setLocked(!s->isLocked());
+        } else if (actionName == "ToggleApf") {
+            if (auto* s = activeSlice()) s->setApf(!s->apfOn());
+        } else if (actionName == "ToggleAgc") {
+            if (auto* s = activeSlice()) {
+                static const char* modes[] = {"off","slow","med","fast"};
+                const QString cur = s->agcMode().toLower();
+                int idx = 0;
+                for (int i = 0; i < 4; ++i) if (cur == modes[i]) { idx = i; break; }
+                s->setAgcMode(modes[(idx + 1) % 4]);
+            }
+        } else if (actionName == "BandZoom") {
+            auto* s = activeSlice();
+            if (s) {
+                const QString panId = !s->panId().isEmpty() ? s->panId()
+                    : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+                if (!panId.isEmpty()) {
+                    m_flexVirtualBandZoomOn = !m_flexVirtualBandZoomOn;
+                    m_radioModel.sendCommand(QString("display pan set %1 band_zoom=%2")
+                        .arg(panId).arg(m_flexVirtualBandZoomOn ? 1 : 0));
+                }
+            }
+        } else if (actionName == "SegmentZoom") {
+            auto* s = activeSlice();
+            if (s) {
+                const QString panId = !s->panId().isEmpty() ? s->panId()
+                    : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+                if (!panId.isEmpty()) {
+                    m_flexVirtualSegmentZoomOn = !m_flexVirtualSegmentZoomOn;
+                    m_radioModel.sendCommand(QString("display pan set %1 segment_zoom=%2")
+                        .arg(panId).arg(m_flexVirtualSegmentZoomOn ? 1 : 0));
+                }
+            }
+        } else if (actionName == "NextSlice") {
+            const auto& slices = m_radioModel.slices();
+            if (slices.size() > 1) {
+                int idx = 0;
+                for (int i = 0; i < slices.size(); ++i)
+                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+                setActiveSlice(slices[(idx + 1) % slices.size()]->sliceId());
+            }
+        } else if (actionName == "PrevSlice") {
+            const auto& slices = m_radioModel.slices();
+            if (slices.size() > 1) {
+                int idx = 0;
+                for (int i = 0; i < slices.size(); ++i)
+                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+                setActiveSlice(slices[(idx - 1 + slices.size()) % slices.size()]->sliceId());
+            }
+        } else if (actionName == "VolumeUp") {
+            const int next = std::clamp(
+                AppSettings::instance().value("MasterVolume","100").toInt() + 5, 0, 100);
+            if (m_titleBar) m_titleBar->setMasterVolume(next);
+            applyMasterVolume(next);
+        } else if (actionName == "VolumeDown") {
+            const int next = std::clamp(
+                AppSettings::instance().value("MasterVolume","100").toInt() - 5, 0, 100);
+            if (m_titleBar) m_titleBar->setMasterVolume(next);
+            applyMasterVolume(next);
+        } else if (actionName == "SplitActiveSlice") {
+            if (!m_splitActive) {
+                auto* s = activeSlice();
+                if (s && m_radioModel.slices().size() < m_radioModel.maxSlices()) {
+                    QString panId = s->panId().isEmpty()
+                        ? (m_panStack ? m_panStack->activePanId() : m_radioModel.panId())
+                        : s->panId();
+                    const bool isCw = s->mode() == "CW" || s->mode() == "CWL";
+                    m_splitActive   = true;
+                    m_splitRxSliceId = s->sliceId();
+                    m_radioModel.sendCommand(
+                        QString("slice create pan=%1 freq=%2")
+                        .arg(panId).arg(s->frequency() + (isCw ? 0.001 : 0.005), 0, 'f', 6));
+                }
+            } else {
+                disableSplit();
+            }
         }
     });
 
@@ -6552,6 +6643,30 @@ static QByteArray renderTouchscreenJpeg(
     return bytes;
 }
 
+// Render a 120x120 JPEG label for a single StreamDeck+ LCD key.
+static QByteArray renderKeyImageJpeg(const QString& label, const QColor& bg)
+{
+    QImage img(120, 120, QImage::Format_RGB32);
+    img.fill(bg);
+
+    if (!label.isEmpty()) {
+        QPainter p(&img);
+        p.setRenderHint(QPainter::TextAntialiasing);
+        QFont f;
+        f.setPixelSize(label.length() > 6 ? 22 : 28);
+        f.setBold(true);
+        p.setFont(f);
+        p.setPen(Qt::white);
+        p.drawText(QRect(4, 4, 112, 112), Qt::AlignCenter | Qt::TextWordWrap, label);
+    }
+
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    img.save(&buf, "JPEG", 90);
+    return bytes;
+}
+
 void MainWindow::refreshStreamDeckLabels()
 {
     if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isStreamDeckPlus())
@@ -6608,15 +6723,53 @@ void MainWindow::refreshStreamDeckLabels()
 
     QByteArray tsImg = renderTouchscreenJpeg(turnLabels, pushLabels, stateTexts, activeFlags);
 
-    // Blank the 8 LCD keys — one black 120x120 JPEG reused for all
-    QImage blank(120, 120, QImage::Format_RGB32);
-    blank.fill(Qt::black);
-    QByteArray blankJpeg;
-    { QBuffer b(&blankJpeg); b.open(QIODevice::WriteOnly); blank.save(&b, "JPEG", 80); }
-    QVector<QByteArray> blankKeys(8, blankJpeg);
+    // Build labeled 120x120 images for the 8 LCD keys
+    static const QHash<QString, QColor> kKeyBgColors{
+        {QStringLiteral("ToggleMox"),        QColor(70, 20, 20)},
+        {QStringLiteral("ToggleTune"),       QColor(70, 20, 20)},
+        {QStringLiteral("ToggleRit"),        QColor(20, 55, 20)},
+        {QStringLiteral("ToggleXit"),        QColor(20, 55, 20)},
+        {QStringLiteral("ClearRit"),         QColor(20, 40, 20)},
+        {QStringLiteral("ClearXit"),         QColor(20, 40, 20)},
+        {QStringLiteral("VolumeUp"),         QColor(40, 20, 60)},
+        {QStringLiteral("VolumeDown"),       QColor(40, 20, 60)},
+        {QStringLiteral("SplitActiveSlice"), QColor(60, 40, 10)},
+    };
+    static const QHash<QString, QString> kKeyShortLabels{
+        {QStringLiteral("None"),             {}},
+        {QStringLiteral("ToggleMox"),        QStringLiteral("MOX")},
+        {QStringLiteral("ToggleTune"),       QStringLiteral("TUNE")},
+        {QStringLiteral("ToggleRit"),        QStringLiteral("RIT")},
+        {QStringLiteral("ToggleXit"),        QStringLiteral("XIT")},
+        {QStringLiteral("ClearRit"),         QStringLiteral("CLR\nRIT")},
+        {QStringLiteral("ClearXit"),         QStringLiteral("CLR\nXIT")},
+        {QStringLiteral("StepUp"),           QStringLiteral("STEP\nUP")},
+        {QStringLiteral("StepDown"),         QStringLiteral("STEP\nDN")},
+        {QStringLiteral("ToggleMute"),       QStringLiteral("MUTE")},
+        {QStringLiteral("ToggleLock"),       QStringLiteral("LOCK")},
+        {QStringLiteral("ToggleApf"),        QStringLiteral("APF")},
+        {QStringLiteral("ToggleAgc"),        QStringLiteral("AGC")},
+        {QStringLiteral("BandZoom"),         QStringLiteral("BAND\nZOOM")},
+        {QStringLiteral("SegmentZoom"),      QStringLiteral("SEG\nZOOM")},
+        {QStringLiteral("NextSlice"),        QStringLiteral("NEXT\nSLICE")},
+        {QStringLiteral("PrevSlice"),        QStringLiteral("PREV\nSLICE")},
+        {QStringLiteral("VolumeUp"),         QStringLiteral("VOL +")},
+        {QStringLiteral("VolumeDown"),       QStringLiteral("VOL -")},
+        {QStringLiteral("SplitActiveSlice"), QStringLiteral("SPLIT")},
+    };
+    const QColor kDefaultKeyBg(20, 28, 45);
+
+    QVector<QByteArray> keyImages(8);
+    for (int i = 0; i < 8; ++i) {
+        const QString actionId = settings.value(QString("HidKeyAction%1").arg(i),
+                                                QStringLiteral("None")).toString();
+        const QString lbl = kKeyShortLabels.value(actionId, actionId.left(8).toUpper());
+        const QColor  bg  = kKeyBgColors.value(actionId, kDefaultKeyBg);
+        keyImages[i] = renderKeyImageJpeg(lbl, bg);
+    }
 
     QMetaObject::invokeMethod(m_hidEncoder,
-        [enc=m_hidEncoder, ts=tsImg, keys=blankKeys]() {
+        [enc=m_hidEncoder, ts=tsImg, keys=keyImages]() {
             enc->setTouchscreenImage(ts);
             enc->setKeyImages(keys);
         }, Qt::QueuedConnection);

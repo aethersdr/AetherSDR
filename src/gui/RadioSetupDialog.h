@@ -108,6 +108,7 @@ private:
 #ifdef HAVE_HIDAPI
     std::array<QComboBox*, 4> m_hidEncoderActionCombos{};
     std::array<QComboBox*, 4> m_hidEncoderPushActionCombos{};
+    std::array<QComboBox*, 8> m_hidKeyActionCombos{};
 #endif
 
     // Radio tab fields
