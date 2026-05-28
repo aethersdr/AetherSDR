@@ -78,19 +78,23 @@ private:
 };
 
 // Elgato StreamDeck+ (VID 0x0FD9, PID 0x0084)
-// 64-byte reports; hidapi prepends the 1-byte report ID on Windows/Linux
-// (hid_read returns 65), strips it on macOS (hid_read returns 64).
-// Layout (after stripping report ID where present):
-//   [0] event type: 0x00=key state, 0x02=encoder rotation, 0x03=encoder press
-//   [1] unused (typically 0x01)
-//   Key state   [2..9]:  8 button states (0=up, 1=down)
-//   Enc rotate  [2..5]:  4 signed int8 deltas per encoder (positive=CW)
-//   Enc press   [2..5]:  4 encoder button states (0=up, 1=down)
+// 14-byte reports (device HID descriptor advertises 512 but only first 14
+// bytes carry event data; matching python-elgato-streamdeck library behaviour).
+// hidapi always includes the 1-byte report ID (0x01) as buf[0] on all platforms.
+// Layout (all indices into raw buf[]):
+//   [0] report ID = 0x01 (always present — strip it)
+//   [1] event type: 0x00=key state, 0x02=touchscreen, 0x03=dial (encoder)
+//   [2..3] reserved/padding
+//   Dial event ([1]==0x03):
+//     [4] sub-type: 0x01=turn, 0x00=push
+//     [5..8] 4 encoder values (signed int8 delta for turn, bool for push)
+//   Key event ([1]==0x00):
+//     [4..11] 8 LCD key states (0=up, 1=down)
 // Button numbering: LCD keys 1-8, encoder press buttons 9-12.
 class StreamDeckPlusParser : public HidDeviceParser {
 public:
     HidEvent parse(const uint8_t* buf, size_t len) override;
-    size_t reportSize() const override { return 65; }
+    size_t reportSize() const override { return 14; }
     int encoderCount() const override { return 4; }
 private:
     uint8_t m_prevKeys{0};         // bitmask of previous LCD key states (bits 0-7)

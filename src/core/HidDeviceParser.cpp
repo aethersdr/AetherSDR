@@ -194,54 +194,48 @@ HidEvent ShuttleProV2Parser::parse(const uint8_t* buf, size_t len)
 }
 
 // ── Elgato StreamDeck+ ─────────────────────────────────────────────────────
-// 64-byte reports. hidapi prepends the 1-byte report ID on Windows/Linux so
-// hid_read(buf, 65) returns 65; on macOS it strips the ID and returns 64.
-// Use len to discriminate — same pattern as IcomRC28Parser.
-// Data layout (0-indexed, after stripping report ID where present):
-//   [0] event type: 0x00=key state, 0x02=encoder rotation, 0x03=encoder press
-//   [1] unused (typically 0x01)
-// Key state report  [2..9]: 8 key states (0=up, 1=down)
-// Encoder rotation  [2..5]: 4 signed int8 deltas (positive=CW)
-// Encoder press     [2..5]: 4 encoder button states (0=up, 1=down)
-//
-// Button numbering convention: LCD keys 1-8, encoder press buttons 9-12.
-// This keeps encoder press events distinct from LCD key events in the
-// existing HidEncoderManager button dispatch.
+// 14-byte reports. hidapi always includes the report ID as buf[0] = 0x01.
+// Protocol verified against python-elgato-streamdeck v0.9.8 source:
+//   buf[0]  = 0x01 (report ID — strip it)
+//   buf[1]  = event type: 0x00=key, 0x02=touchscreen, 0x03=dial
+//   buf[2..3] = reserved
+//   Dial event (buf[1]==0x03):
+//     buf[4] = sub-type: 0x01=turn, 0x00=push
+//     buf[5..8] = 4 encoder values (signed int8 delta for turn, bool for push)
+//   Key event (buf[1]==0x00):
+//     buf[4..11] = 8 LCD key states (0=up, 1=down)
+// Button numbering: LCD keys 1-8, encoder press buttons 9-12.
 
 HidEvent StreamDeckPlusParser::parse(const uint8_t* buf, size_t len)
 {
-    if (len < 7) return {};
+    if (len < 9) return {};
 
-    // Windows/Linux: hidapi includes the report ID → hid_read returns 65 bytes.
-    // macOS: hidapi strips the report ID → hid_read returns 64 bytes.
-    const uint8_t* data = (len >= 65) ? buf + 1 : buf;
-
-    const uint8_t type = data[0];
-
-    if (type == 0x02) {
-        // Encoder rotation — return first non-zero delta
-        for (int i = 0; i < 4; ++i) {
-            int delta = static_cast<int>(static_cast<int8_t>(data[2 + i]));
-            if (delta != 0)
-                return {.type = HidEvent::Rotate, .steps = delta, .encoderIndex = i};
-        }
-        return {};
-    }
+    // buf[0] = report ID (0x01) — always present in hidraw reads on all platforms
+    const uint8_t type    = buf[1];
+    const uint8_t subtype = buf[4];
 
     if (type == 0x03) {
-        // Encoder button press/release — return first changed encoder
-        uint8_t newState = 0;
-        for (int i = 0; i < 4; ++i) {
-            if (data[2 + i])
-                newState |= (1u << i);
-        }
-        uint8_t changed = newState ^ m_prevEncBtns;
-        if (changed) {
-            m_prevEncBtns = newState;
+        if (subtype == 0x01) {
+            // Encoder turn — return first non-zero delta
             for (int i = 0; i < 4; ++i) {
-                if (changed & (1u << i)) {
-                    const int act = (newState & (1u << i)) ? 0 : 1;  // 0=press, 1=release
-                    return {.type = HidEvent::Button, .button = 9 + i, .action = act};
+                int delta = static_cast<int>(static_cast<int8_t>(buf[5 + i]));
+                if (delta != 0)
+                    return {.type = HidEvent::Rotate, .steps = delta, .encoderIndex = i};
+            }
+        } else if (subtype == 0x00) {
+            // Encoder push — return first changed encoder button
+            uint8_t newState = 0;
+            for (int i = 0; i < 4; ++i) {
+                if (buf[5 + i]) newState |= (1u << i);
+            }
+            uint8_t changed = newState ^ m_prevEncBtns;
+            if (changed) {
+                m_prevEncBtns = newState;
+                for (int i = 0; i < 4; ++i) {
+                    if (changed & (1u << i)) {
+                        const int act = (newState & (1u << i)) ? 0 : 1;
+                        return {.type = HidEvent::Button, .button = 9 + i, .action = act};
+                    }
                 }
             }
         }
@@ -249,12 +243,11 @@ HidEvent StreamDeckPlusParser::parse(const uint8_t* buf, size_t len)
     }
 
     if (type == 0x00) {
-        // LCD key press/release — return first changed key
-        if (len < 11) return {};
+        // LCD key — return first changed key
+        if (len < 12) return {};
         uint8_t newState = 0;
         for (int i = 0; i < 8; ++i) {
-            if (data[2 + i])
-                newState |= (1u << i);
+            if (buf[4 + i]) newState |= (1u << i);
         }
         uint8_t changed = newState ^ m_prevKeys;
         if (changed) {
