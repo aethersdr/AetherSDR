@@ -202,10 +202,7 @@ void MqttSettingsDialog::buildUi()
     auto* pubInternalLayout = new QVBoxLayout(pubInternalGroup);
     auto* pubInternalText = new QLabel(
         tr("Published automatically whenever MQTT is connected; these topics are not user-configurable:\n"
-           "%1\n"
-           "  Payload: {\"text\":\"K\",\"freq\":14.025,\"rx\":true}\n"
-           "  rx: true = received CW,  false = transmitted (sidetone)")
-            .arg(QLatin1String(kCwDecodeTopic)));
+           "%1").arg(QLatin1String(kCwDecodeTopic)));
     pubInternalText->setTextInteractionFlags(Qt::TextSelectableByMouse);
     pubInternalLayout->addWidget(pubInternalText);
     buttonsLayout->addWidget(pubInternalGroup);
