@@ -48,6 +48,7 @@ private:
     QString cmdTune(const QStringList& args, bool isSet);
     QString cmdDrive(const QStringList& args, bool isSet);
     QString cmdTuneDrive(const QStringList& args, bool isSet);
+    QString cmdMicLevel(const QStringList& args, bool isSet);
     QString cmdTxGain(const QStringList& args, bool isSet);
     QString cmdRitEnable(const QStringList& args, bool isSet);
     QString cmdXitEnable(const QStringList& args, bool isSet);

@@ -205,6 +205,7 @@ QString TciProtocol::generateInitBurst()
         // Without it, WSJT-X/JTDX crash parsing args.at(1) on a 1-element list.
         burst += QStringLiteral("drive:%1,%2;").arg(txTrx).arg(tx.rfPower());
         burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrx).arg(tx.tunePower());
+        burst += QStringLiteral("mic_level:%1;").arg(tx.micLevel());
         burst += QStringLiteral("trx:%1,%2;").arg(txTrx).arg(isTx ? "true" : "false");
     }
 
@@ -305,6 +306,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "tune")             return cmdTune(args, isSet);
     if (name == "drive")            return cmdDrive(args, isSet);
     if (name == "tune_drive")       return cmdTuneDrive(args, isSet);
+    if (name == "mic_level")        return cmdMicLevel(args, isSet);
     if (name == "rit_enable")       return cmdRitEnable(args, isSet);
     if (name == "xit_enable")       return cmdXitEnable(args, isSet);
     if (name == "rit_offset")       return cmdRitOffset(args, isSet);
@@ -531,6 +533,35 @@ QString TciProtocol::cmdTuneDrive(const QStringList& args, bool /*isSet*/)
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("tune_drive:%1;").arg(pwr);
+    return {};
+}
+
+// ── MIC_LEVEL: get/set mic input gain ─────────────────────────────────────
+
+// mic_level bridges TransmitModel::setMicLevel() (the existing radio-side
+// setter wired into FlexLib via commandReady) to TCI clients.  Single arg
+// 0-100 (percent), global — mic is whole-radio, not per-trx — matching the
+// drive/tune_drive convention.  Accepts the legacy TRX-prefixed form
+// `mic_level:0,N;` for forward compatibility with strict-spec clients (the
+// trx index is ignored since mic is global).
+//
+// Added 2026-05-27 to unblock the aethersdr-ulanzi-plugin Mic Gain ▲▼ keys,
+// which already send the verb but currently land on a missing dispatcher
+// entry → silently ignored.
+QString TciProtocol::cmdMicLevel(const QStringList& args, bool /*isSet*/)
+{
+    if (args.isEmpty()) {
+        int lvl = m_model ? m_model->transmitModel().micLevel() : 0;
+        return QStringLiteral("mic_level:%1;").arg(lvl);
+    }
+    bool ok;
+    int lvl = args[args.size() == 1 ? 0 : 1].toInt(&ok);
+    if (!ok) return {};
+    QMetaObject::invokeMethod(m_model, [model = m_model, lvl]() {
+        model->transmitModel().setMicLevel(lvl);
+    }, Qt::QueuedConnection);
+
+    m_pendingNotification = QStringLiteral("mic_level:%1;").arg(lvl);
     return {};
 }
 
