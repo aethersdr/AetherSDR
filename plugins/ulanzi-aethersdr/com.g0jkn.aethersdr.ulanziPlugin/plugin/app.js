@@ -117,15 +117,21 @@ function parseTci(msg) {
       case 'rit_enable':   if (p.length >= 2) radio.ritOn        = p[1] === 'true';      break;
       // Gain / level trackers — keep local mirror in sync so ±5 steps are
       // calculated against the radio's actual current value, not a stale guess.
-      // TCI spec format: `verb:<trx>,<value>;` — p[0] is the receiver index
-      // (always 0 for the active slice), p[1] is the actual value.  Reading
-      // p[0] would always give "0" → ±5 steps would snap to 5 / 0 forever.
-      // (The Elgato AetherSDR plugin has the same bug; it's masked there
-      // because RF Power cycles through a preset array rather than relative
-      // steps.)
-      case 'volume':       if (p.length >= 2) radio.volume       = parseInt(p[1]);       break;
-      case 'drive':        if (p.length >= 2) radio.rfPower      = parseInt(p[1]);       break;
-      case 'mic_level':    if (p.length >= 2) radio.micLevel     = parseInt(p[1]);       break;
+      //
+      // AetherSDR has **asymmetric** emit formats for these verbs:
+      //   - Init burst (TCI connect)  : `verb:<trx>,<value>;`  — two params
+      //   - Steady-state value change : `verb:<value>;`        — single param
+      //
+      // Verified live 2026-05-27 via TCI Monitor: pressing AF Gain ▲ sends
+      // `volume:0,55;` and AE responds with `volume:55;` (no trx prefix).
+      // So our parser must accept BOTH lengths — read p[1] when trx-prefixed,
+      // otherwise p[0].  Earlier versions only handled the two-param case
+      // and dropped every steady-state update, freezing the local mirror at
+      // the init-burst snapshot → ±5 steps bounced ±5 around that frozen
+      // value forever (e.g. 45 ↔ 55 around an init volume of 50).
+      case 'volume':       radio.volume   = parseInt(p.length >= 2 ? p[1] : p[0]); break;
+      case 'drive':        radio.rfPower  = parseInt(p.length >= 2 ? p[1] : p[0]); break;
+      case 'mic_level':    radio.micLevel = parseInt(p.length >= 2 ? p[1] : p[0]); break;
     }
   }
 }
