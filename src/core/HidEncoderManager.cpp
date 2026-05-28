@@ -4,6 +4,7 @@
 #include "core/LogManager.h"
 
 #include <QDebug>
+#include <cstring>
 
 namespace AetherSDR {
 
@@ -143,6 +144,42 @@ void HidEncoderManager::hotplugCheck()
     if (m_openVid && m_openPid) {
         if (open(m_openVid, m_openPid))
             m_hotplugTimer->stop();
+    }
+}
+
+void HidEncoderManager::setKeyImage(int key, const QByteArray& jpegData)
+{
+    if (!m_device || !isStreamDeckPlus()) return;
+
+    // StreamDeck+ LCD image write: 1024-byte feature reports (report ID 0x02),
+    // command 0x07 (set key image). Protocol verified against python-elgato-streamdeck.
+    constexpr int PACKET_SIZE  = 1024;
+    constexpr int HEADER_SIZE  = 8;
+    constexpr int PAYLOAD_SIZE = PACKET_SIZE - HEADER_SIZE;
+
+    const int totalBytes = jpegData.size();
+    int offset     = 0;
+    int pageNumber = 0;
+
+    while (offset < totalBytes) {
+        uint8_t pkt[PACKET_SIZE] = {};
+        const int chunkLen = std::min(PAYLOAD_SIZE, totalBytes - offset);
+        const bool isLast  = (offset + chunkLen >= totalBytes);
+
+        pkt[0] = 0x02;   // report ID
+        pkt[1] = 0x07;   // command: set key image
+        pkt[2] = static_cast<uint8_t>(key);
+        pkt[3] = isLast ? 1 : 0;
+        pkt[4] = static_cast<uint8_t>(chunkLen & 0xFF);
+        pkt[5] = static_cast<uint8_t>((chunkLen >> 8) & 0xFF);
+        pkt[6] = static_cast<uint8_t>(pageNumber & 0xFF);
+        pkt[7] = static_cast<uint8_t>((pageNumber >> 8) & 0xFF);
+        std::memcpy(pkt + HEADER_SIZE, jpegData.constData() + offset, chunkLen);
+
+        hid_send_feature_report(m_device, pkt, PACKET_SIZE);
+
+        offset     += chunkLen;
+        pageNumber++;
     }
 }
 

@@ -3,6 +3,7 @@
 
 #include <QObject>
 #include <QTimer>
+#include <QByteArray>
 #include <memory>
 #include <hidapi/hidapi.h>
 #include "HidDeviceParser.h"
@@ -30,11 +31,15 @@ public:
     uint16_t vendorId() const { return m_openVid; }
     uint16_t productId() const { return m_openPid; }
     int encoderCount() const { return m_parser ? m_parser->encoderCount() : 1; }
+    bool isStreamDeckPlus() const { return m_openVid == 0x0FD9 && m_openPid == 0x0084; }
 
     void setInvertDirection(bool invert) { m_invertDirection = invert; }
 
 public slots:
     void loadSettings();
+    // Write a 120x120 JPEG image to StreamDeck+ LCD key (0-based key index 0-7).
+    // No-op if device is not a StreamDeck+. Called via QueuedConnection from main thread.
+    void setKeyImage(int key, const QByteArray& jpegData);
 
 signals:
     void tuneSteps(int encoderIndex, int steps);

@@ -139,6 +139,9 @@
 #include <QHelpEvent>
 #include <QWindow>
 #include <QPixmap>
+#include <QImage>
+#include <QBuffer>
+#include <QFont>
 #include <QWidgetAction>
 #include <QPainter>
 #include <QVBoxLayout>
@@ -3960,8 +3963,9 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     connect(m_hidEncoder, &HidEncoderManager::connectionChanged,
-            this, [](bool connected, const QString& name) {
+            this, [this](bool connected, const QString& name) {
         qDebug() << "HID encoder:" << (connected ? "connected" : "disconnected") << name;
+        if (connected) refreshStreamDeckLabels();
     });
 
     // StreamDeck native integration removed — use TCI StreamController plugin instead.
@@ -6478,6 +6482,123 @@ QString MainWindow::hidEncoderDefaultPushAction(int encoderIndex)
     default: return QStringLiteral("None");
     }
 }
+
+#ifdef HAVE_HIDAPI
+// Render a 120x120 JPEG image with two centered text lines for a StreamDeck+ key.
+// bg/fg: background and foreground colors. Image is flipped 180° per StreamDeck+ spec.
+static QByteArray renderKeyImageJpeg(const QString& label, const QString& sub,
+                                      const QColor& bg, const QColor& fg)
+{
+    QImage img(120, 120, QImage::Format_RGB32);
+    img.fill(bg);
+
+    QPainter p(&img);
+    p.setRenderHint(QPainter::TextAntialiasing);
+
+    if (!label.isEmpty()) {
+        QFont f;
+        f.setPixelSize(32);
+        f.setBold(true);
+        p.setFont(f);
+        p.setPen(fg);
+        p.drawText(QRect(4, 10, 112, 60), Qt::AlignCenter | Qt::AlignVCenter, label);
+    }
+
+    if (!sub.isEmpty()) {
+        QFont f;
+        f.setPixelSize(18);
+        p.setFont(f);
+        p.setPen(QColor(190, 190, 190));
+        p.drawText(QRect(4, 72, 112, 38), Qt::AlignCenter | Qt::AlignVCenter, sub);
+    }
+
+    p.end();
+
+    // StreamDeck+ expects images flipped both axes (KEY_FLIP = (True, True))
+    img = img.mirrored(true, true);
+
+    QByteArray bytes;
+    QBuffer buf(&bytes);
+    buf.open(QIODevice::WriteOnly);
+    img.save(&buf, "JPEG", 90);
+    return bytes;
+}
+
+void MainWindow::refreshStreamDeckLabels()
+{
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isStreamDeckPlus())
+        return;
+
+    static const QHash<QString, QString> kShortLabels{
+        {QStringLiteral("WheelFrequency"),      QStringLiteral("TUNE")},
+        {QStringLiteral("WheelRit"),            QStringLiteral("RIT")},
+        {QStringLiteral("WheelXit"),            QStringLiteral("XIT")},
+        {QStringLiteral("WheelVolume"),         QStringLiteral("VOL")},
+        {QStringLiteral("WheelHeadphoneVolume"),QStringLiteral("H.VOL")},
+        {QStringLiteral("WheelAgcT"),           QStringLiteral("AGC-T")},
+        {QStringLiteral("WheelApf"),            QStringLiteral("APF")},
+        {QStringLiteral("WheelCwSpeed"),        QStringLiteral("CW SPD")},
+        {QStringLiteral("WheelPower"),          QStringLiteral("RF PWR")},
+        {QStringLiteral("StepCycle"),           QStringLiteral("STEP")},
+        {QStringLiteral("ToggleRit"),           QStringLiteral("RIT")},
+        {QStringLiteral("ToggleXit"),           QStringLiteral("XIT")},
+        {QStringLiteral("ToggleMox"),           QStringLiteral("MOX")},
+        {QStringLiteral("ToggleMute"),          QStringLiteral("MUTE")},
+        {QStringLiteral("ToggleLock"),          QStringLiteral("LOCK")},
+        {QStringLiteral("None"),                {}},
+    };
+
+    static const char* kTurnDflt[4] = {"WheelFrequency","WheelRit","WheelXit","WheelVolume"};
+    static const char* kPushDflt[4] = {"StepCycle","ToggleRit","ToggleXit","None"};
+
+    auto& settings = AppSettings::instance();
+    auto* slice    = activeSlice();
+    const bool ritOn = slice && slice->ritOn();
+    const bool xitOn = slice && slice->xitOn();
+
+    for (int i = 0; i < 4; ++i) {
+        // Turn label — keys 0-3 (top row)
+        const QString turnId  = settings.value(QString("HidEncoderAction%1").arg(i),
+                                               QString::fromLatin1(kTurnDflt[i])).toString();
+        const QString turnLbl = kShortLabels.value(turnId, turnId.left(6).toUpper());
+        QByteArray turnImg = renderKeyImageJpeg(turnLbl, QString("ENC %1").arg(i + 1),
+                                                QColor(20, 30, 55), Qt::white);
+        QMetaObject::invokeMethod(m_hidEncoder, [enc=m_hidEncoder, k=i, d=turnImg](){
+            enc->setKeyImage(k, d);
+        }, Qt::QueuedConnection);
+
+        // Push label — keys 4-7 (bottom row)
+        const QString pushId  = settings.value(QString("HidEncoderPushAction%1").arg(i),
+                                               QString::fromLatin1(kPushDflt[i])).toString();
+        const QString pushLbl = kShortLabels.value(pushId, pushId.left(6).toUpper());
+
+        bool active = false;
+        QString stateTxt;
+        if (pushId == QLatin1String("ToggleRit")) {
+            active   = ritOn;
+            stateTxt = ritOn ? QStringLiteral("ON") : QStringLiteral("OFF");
+        } else if (pushId == QLatin1String("ToggleXit")) {
+            active   = xitOn;
+            stateTxt = xitOn ? QStringLiteral("ON") : QStringLiteral("OFF");
+        } else if (pushId == QLatin1String("StepCycle")) {
+            stateTxt = QStringLiteral("PUSH");
+        } else if (!pushId.isEmpty() && pushId != QLatin1String("None")) {
+            stateTxt = QStringLiteral("PUSH");
+        }
+
+        QColor bg;
+        if (active)                                  bg = QColor(10, 80, 10);
+        else if (pushId == QLatin1String("StepCycle")) bg = QColor(20, 30, 55);
+        else if (pushId == QLatin1String("None"))      bg = QColor(15, 15, 15);
+        else                                           bg = QColor(55, 20, 20);
+
+        QByteArray pushImg = renderKeyImageJpeg(pushLbl, stateTxt, bg, Qt::white);
+        QMetaObject::invokeMethod(m_hidEncoder, [enc=m_hidEncoder, k=4+i, d=pushImg](){
+            enc->setKeyImage(k, d);
+        }, Qt::QueuedConnection);
+    }
+}
+#endif
 
 void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 {
@@ -11262,6 +11383,15 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 
     // Update MEM button target-slice badge on every overlay (#1781)
     refreshMemoryBrowsePanel();
+
+#ifdef HAVE_HIDAPI
+    // Rewire StreamDeck+ RIT/XIT state triggers when the active slice changes
+    disconnect(m_sdRitConn);
+    disconnect(m_sdXitConn);
+    m_sdRitConn = connect(s, &SliceModel::ritChanged, this, [this](bool, int){ refreshStreamDeckLabels(); });
+    m_sdXitConn = connect(s, &SliceModel::xitChanged, this, [this](bool, int){ refreshStreamDeckLabels(); });
+    if (sliceId != prevId) refreshStreamDeckLabels();
+#endif
 
     qDebug() << "MainWindow: active slice set to" << sliceId;
 }
