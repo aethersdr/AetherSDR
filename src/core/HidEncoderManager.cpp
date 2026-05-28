@@ -147,6 +147,12 @@ void HidEncoderManager::hotplugCheck()
     }
 }
 
+void HidEncoderManager::setKeyImages(const QVector<QByteArray>& jpegImages)
+{
+    for (int i = 0; i < jpegImages.size(); ++i)
+        setKeyImage(i, jpegImages[i]);
+}
+
 void HidEncoderManager::setKeyImage(int key, const QByteArray& jpegData)
 {
     if (!m_device || !isStreamDeckPlus()) return;
@@ -176,7 +182,7 @@ void HidEncoderManager::setKeyImage(int key, const QByteArray& jpegData)
         pkt[7] = static_cast<uint8_t>((pageNumber >> 8) & 0xFF);
         std::memcpy(pkt + HEADER_SIZE, jpegData.constData() + offset, chunkLen);
 
-        hid_send_feature_report(m_device, pkt, PACKET_SIZE);
+        hid_write(m_device, pkt, PACKET_SIZE);
 
         offset     += chunkLen;
         pageNumber++;

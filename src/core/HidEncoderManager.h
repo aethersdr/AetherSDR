@@ -37,8 +37,10 @@ public:
 
 public slots:
     void loadSettings();
-    // Write a 120x120 JPEG image to StreamDeck+ LCD key (0-based key index 0-7).
-    // No-op if device is not a StreamDeck+. Called via QueuedConnection from main thread.
+    // Write 120x120 JPEG images to StreamDeck+ LCD keys. Pass all 8 images at once
+    // so one queued call updates the whole display without flooding the event queue.
+    // No-op if device is not a StreamDeck+.
+    void setKeyImages(const QVector<QByteArray>& jpegImages);
     void setKeyImage(int key, const QByteArray& jpegData);
 
 signals:

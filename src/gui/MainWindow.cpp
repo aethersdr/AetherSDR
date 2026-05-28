@@ -6556,18 +6556,19 @@ void MainWindow::refreshStreamDeckLabels()
     const bool ritOn = slice && slice->ritOn();
     const bool xitOn = slice && slice->xitOn();
 
+    // Build all 8 images on the main thread, then dispatch a single queued call
+    // to write them all on the ext-ctrl thread — avoids flooding the event queue.
+    QVector<QByteArray> images(8);
+
     for (int i = 0; i < 4; ++i) {
-        // Turn label — keys 0-3 (top row)
+        // Turn label — key i (top row, 0-3)
         const QString turnId  = settings.value(QString("HidEncoderAction%1").arg(i),
                                                QString::fromLatin1(kTurnDflt[i])).toString();
         const QString turnLbl = kShortLabels.value(turnId, turnId.left(6).toUpper());
-        QByteArray turnImg = renderKeyImageJpeg(turnLbl, QString("ENC %1").arg(i + 1),
-                                                QColor(20, 30, 55), Qt::white);
-        QMetaObject::invokeMethod(m_hidEncoder, [enc=m_hidEncoder, k=i, d=turnImg](){
-            enc->setKeyImage(k, d);
-        }, Qt::QueuedConnection);
+        images[i] = renderKeyImageJpeg(turnLbl, QString("ENC %1").arg(i + 1),
+                                       QColor(20, 30, 55), Qt::white);
 
-        // Push label — keys 4-7 (bottom row)
+        // Push label — key 4+i (bottom row, 4-7)
         const QString pushId  = settings.value(QString("HidEncoderPushAction%1").arg(i),
                                                QString::fromLatin1(kPushDflt[i])).toString();
         const QString pushLbl = kShortLabels.value(pushId, pushId.left(6).toUpper());
@@ -6587,16 +6588,17 @@ void MainWindow::refreshStreamDeckLabels()
         }
 
         QColor bg;
-        if (active)                                  bg = QColor(10, 80, 10);
+        if (active)                                    bg = QColor(10, 80, 10);
         else if (pushId == QLatin1String("StepCycle")) bg = QColor(20, 30, 55);
         else if (pushId == QLatin1String("None"))      bg = QColor(15, 15, 15);
         else                                           bg = QColor(55, 20, 20);
 
-        QByteArray pushImg = renderKeyImageJpeg(pushLbl, stateTxt, bg, Qt::white);
-        QMetaObject::invokeMethod(m_hidEncoder, [enc=m_hidEncoder, k=4+i, d=pushImg](){
-            enc->setKeyImage(k, d);
-        }, Qt::QueuedConnection);
+        images[4 + i] = renderKeyImageJpeg(pushLbl, stateTxt, bg, Qt::white);
     }
+
+    QMetaObject::invokeMethod(m_hidEncoder, [enc=m_hidEncoder, imgs=images](){
+        enc->setKeyImages(imgs);
+    }, Qt::QueuedConnection);
 }
 #endif
 
