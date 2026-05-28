@@ -517,7 +517,10 @@ void TransmitModel::setMicSelection(const QString& input)
 void TransmitModel::setMicLevel(int level)
 {
     level = qBound(0, level, 100);
-    m_micLevel = level;
+    if (m_micLevel != level) {
+        m_micLevel = level;
+        emit micStateChanged();  // PhoneCwApplet's mic slider binds to this
+    }
     emit commandReady(QString("transmit set miclevel=%1").arg(level));
 }
 
