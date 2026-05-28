@@ -542,8 +542,7 @@ private:
     bool                 m_flexVirtualSegmentZoomOn{false};
 #ifdef HAVE_HIDAPI
     HidEncoderManager*   m_hidEncoder{nullptr};
-    QTimer               m_hidCoalesceTimer;
-    int                  m_hidPendingSteps{0};
+    static QString hidEncoderDefaultAction(int encoderIndex);
 #endif
 #ifdef HAVE_MIDI
     MidiControlManager*  m_midiControl{nullptr};

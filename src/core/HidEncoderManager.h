@@ -29,6 +29,7 @@ public:
     QString deviceName() const { return m_deviceName; }
     uint16_t vendorId() const { return m_openVid; }
     uint16_t productId() const { return m_openPid; }
+    int encoderCount() const { return m_parser ? m_parser->encoderCount() : 1; }
 
     void setInvertDirection(bool invert) { m_invertDirection = invert; }
 
@@ -36,7 +37,7 @@ public slots:
     void loadSettings();
 
 signals:
-    void tuneSteps(int steps);
+    void tuneSteps(int encoderIndex, int steps);
     void buttonPressed(int button, int action);
     void connectionChanged(bool connected, const QString& deviceName);
 

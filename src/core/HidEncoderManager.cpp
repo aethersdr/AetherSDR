@@ -123,7 +123,7 @@ void HidEncoderManager::poll()
         auto event = m_parser->parse(m_buf, static_cast<size_t>(res));
         switch (event.type) {
         case HidEvent::Rotate:
-            emit tuneSteps(m_invertDirection ? -event.steps : event.steps);
+            emit tuneSteps(event.encoderIndex, m_invertDirection ? -event.steps : event.steps);
             break;
         case HidEvent::Button:
             emit buttonPressed(event.button, event.action);

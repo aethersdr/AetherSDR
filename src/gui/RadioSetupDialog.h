@@ -4,6 +4,7 @@
 
 #include <QHash>
 #include <QVector>
+#include <array>
 #include <functional>
 
 class QTabWidget;
@@ -104,6 +105,9 @@ private:
     QPushButton* m_flexControlDetectButton{nullptr};
     QPushButton* m_flexControlCloseButton{nullptr};
     QCheckBox* m_flexControlInvertCheck{nullptr};
+#ifdef HAVE_HIDAPI
+    std::array<QComboBox*, 4> m_hidEncoderActionCombos{};
+#endif
 
     // Radio tab fields
     QLabel* m_serialLabel{nullptr};

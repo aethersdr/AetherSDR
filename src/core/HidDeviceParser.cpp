@@ -17,6 +17,8 @@ static const HidDeviceId kSupportedDevices[] = {
     // protocol; validated against PR #2870's report-layout fix
     // (end-to-end test 2026-05-20).
     {0x2341, 0x0266, "AetherPad RC-28 emulator (Arduino Giga R1)"},
+    // Elgato StreamDeck+ — 8 LCD buttons + 4 encoder dials (#1510)
+    {0x0FD9, 0x0084, "Elgato StreamDeck+"},
 };
 
 const HidDeviceId* HidDeviceParser::supportedDevices() { return kSupportedDevices; }
@@ -31,6 +33,7 @@ std::unique_ptr<HidDeviceParser> HidDeviceParser::create(uint16_t vid, uint16_t 
     // AetherPad emulator alias — same parser as the real RC-28 (see
     // comment in kSupportedDevices above).
     if (vid == 0x2341 && pid == 0x0266) return std::make_unique<IcomRC28Parser>();
+    if (vid == 0x0FD9 && pid == 0x0084) return std::make_unique<StreamDeckPlusParser>();
     return nullptr;
 }
 
@@ -185,6 +188,85 @@ HidEvent ShuttleProV2Parser::parse(const uint8_t* buf, size_t len)
         if (delta < -128) delta += 256;
         m_prevJog = jog;
         return {HidEvent::Rotate, delta, 0, 0};
+    }
+
+    return {};
+}
+
+// ── Elgato StreamDeck+ ─────────────────────────────────────────────────────
+// 64-byte reports. hidapi prepends the 1-byte report ID on Windows/Linux so
+// hid_read(buf, 65) returns 65; on macOS it strips the ID and returns 64.
+// Use len to discriminate — same pattern as IcomRC28Parser.
+// Data layout (0-indexed, after stripping report ID where present):
+//   [0] event type: 0x00=key state, 0x02=encoder rotation, 0x03=encoder press
+//   [1] unused (typically 0x01)
+// Key state report  [2..9]: 8 key states (0=up, 1=down)
+// Encoder rotation  [2..5]: 4 signed int8 deltas (positive=CW)
+// Encoder press     [2..5]: 4 encoder button states (0=up, 1=down)
+//
+// Button numbering convention: LCD keys 1-8, encoder press buttons 9-12.
+// This keeps encoder press events distinct from LCD key events in the
+// existing HidEncoderManager button dispatch.
+
+HidEvent StreamDeckPlusParser::parse(const uint8_t* buf, size_t len)
+{
+    if (len < 7) return {};
+
+    // Windows/Linux: hidapi includes the report ID → hid_read returns 65 bytes.
+    // macOS: hidapi strips the report ID → hid_read returns 64 bytes.
+    const uint8_t* data = (len >= 65) ? buf + 1 : buf;
+
+    const uint8_t type = data[0];
+
+    if (type == 0x02) {
+        // Encoder rotation — return first non-zero delta
+        for (int i = 0; i < 4; ++i) {
+            int delta = static_cast<int>(static_cast<int8_t>(data[2 + i]));
+            if (delta != 0)
+                return {.type = HidEvent::Rotate, .steps = delta, .encoderIndex = i};
+        }
+        return {};
+    }
+
+    if (type == 0x03) {
+        // Encoder button press/release — return first changed encoder
+        uint8_t newState = 0;
+        for (int i = 0; i < 4; ++i) {
+            if (data[2 + i])
+                newState |= (1u << i);
+        }
+        uint8_t changed = newState ^ m_prevEncBtns;
+        if (changed) {
+            m_prevEncBtns = newState;
+            for (int i = 0; i < 4; ++i) {
+                if (changed & (1u << i)) {
+                    const int act = (newState & (1u << i)) ? 0 : 1;  // 0=press, 1=release
+                    return {.type = HidEvent::Button, .button = 9 + i, .action = act};
+                }
+            }
+        }
+        return {};
+    }
+
+    if (type == 0x00) {
+        // LCD key press/release — return first changed key
+        if (len < 11) return {};
+        uint8_t newState = 0;
+        for (int i = 0; i < 8; ++i) {
+            if (data[2 + i])
+                newState |= (1u << i);
+        }
+        uint8_t changed = newState ^ m_prevKeys;
+        if (changed) {
+            m_prevKeys = newState;
+            for (int i = 0; i < 8; ++i) {
+                if (changed & (1u << i)) {
+                    const int act = (newState & (1u << i)) ? 0 : 1;
+                    return {.type = HidEvent::Button, .button = i + 1, .action = act};
+                }
+            }
+        }
+        return {};
     }
 
     return {};

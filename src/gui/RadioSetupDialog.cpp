@@ -4124,6 +4124,67 @@ QWidget* RadioSetupDialog::buildSerialTab()
         vbox->addWidget(group);
     }
 
+    // ── HID Encoder — per-encoder action mapping (#1510) ──────────────────────
+#ifdef HAVE_HIDAPI
+    {
+        auto* group = new QGroupBox("HID Encoder / StreamDeck+ Encoders");
+        group->setStyleSheet(kGroupStyle);
+        auto* grid = new QGridLayout(group);
+        grid->setSpacing(6);
+
+        auto* note = new QLabel(
+            "Assign an action to each encoder dial. "
+            "Single-encoder devices (RC-28, PowerMate, ShuttleXpress) use Encoder 1 only.");
+        note->setWordWrap(true);
+        note->setStyleSheet(kLabelStyle);
+        grid->addWidget(note, 0, 0, 1, 3);
+
+        static const struct { const char* id; const char* label; } kEncoderActions[] = {
+            {"WheelFrequency",      "Tune Slice"},
+            {"WheelRit",            "RIT (Receive Incremental Tuning)"},
+            {"WheelXit",            "XIT (Transmit Incremental Tuning)"},
+            {"WheelVolume",         "Master Volume"},
+            {"WheelHeadphoneVolume","Headphone Volume"},
+            {"WheelAgcT",           "AGC Threshold"},
+            {"WheelApf",            "APF Level"},
+            {"WheelCwSpeed",        "CW Speed"},
+            {"WheelPower",          "RF Power"},
+            {"None",                "None"},
+        };
+
+        static const char* kEncoderDefaults[4] = {
+            "WheelFrequency", "WheelRit", "WheelXit", "WheelVolume"
+        };
+
+        for (int i = 0; i < 4; ++i) {
+            grid->addWidget(new QLabel(QString("Encoder %1:").arg(i + 1)), i + 1, 0);
+
+            auto* combo = new QComboBox;
+            combo->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QComboBox"));
+            for (const auto& act : kEncoderActions)
+                combo->addItem(QString::fromLatin1(act.label), QString::fromLatin1(act.id));
+
+            const QString key = QString("HidEncoderAction%1").arg(i);
+            const QString saved = settings.value(key, QString::fromLatin1(kEncoderDefaults[i])).toString();
+            const int idx = combo->findData(saved);
+            combo->setCurrentIndex(idx >= 0 ? idx : 0);
+
+            connect(combo, &QComboBox::currentIndexChanged, this, [combo, key, this](int) {
+                auto& s = AppSettings::instance();
+                s.setValue(key, combo->currentData().toString());
+                s.save();
+                emit serialSettingsChanged();
+            });
+
+            m_hidEncoderActionCombos[i] = combo;
+            grid->addWidget(combo, i + 1, 1, 1, 2);
+            grid->setColumnStretch(1, 1);
+        }
+
+        vbox->addWidget(group);
+    }
+#endif
+
     vbox->addStretch();
     return page;
 }

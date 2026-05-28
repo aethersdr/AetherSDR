@@ -3914,29 +3914,15 @@ MainWindow::MainWindow(QWidget* parent)
     m_hidEncoder = new HidEncoderManager;
     m_hidEncoder->moveToThread(m_extCtrlThread);
 
-    // HID encoder coalesce timer — same 20ms pattern as FlexControl
-    m_hidCoalesceTimer.setSingleShot(true);
-    m_hidCoalesceTimer.setInterval(20);
-    connect(&m_hidCoalesceTimer, &QTimer::timeout, this, [this]() {
-        if (m_hidPendingSteps == 0) return;
-        auto* s = activeSlice();
-        if (!s) { m_hidPendingSteps = 0; return; }
-        if (s->isLocked()) {
-            s->notifyTuneBlockedByLock();
-            m_hidPendingSteps = 0;
-            return;
-        }
-        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
-        double newMhz = s->frequency() + m_hidPendingSteps * stepHz / 1e6;
-        m_hidPendingSteps = 0;
-        applyTuneRequest(s, newMhz, TuneIntent::IncrementalTune, "hid-encoder");
-    });
-
+    // Per-encoder action dispatch — routes each dial to its configured action.
+    // applyFlexControlWheelAction handles coalescing internally for frequency.
     connect(m_hidEncoder, &HidEncoderManager::tuneSteps,
-            this, [this](int steps) {
-        m_hidPendingSteps += steps;
-        if (!m_hidCoalesceTimer.isActive())
-            m_hidCoalesceTimer.start();
+            this, [this](int encoderIndex, int steps) {
+        const QString actionId = AppSettings::instance()
+            .value(QString("HidEncoderAction%1").arg(encoderIndex),
+                   MainWindow::hidEncoderDefaultAction(encoderIndex))
+            .toString();
+        applyFlexControlWheelAction(actionId, steps);
     });
 
     connect(m_hidEncoder, &HidEncoderManager::buttonPressed,
@@ -6452,6 +6438,18 @@ void MainWindow::handleFlexControlButton(int button, int action)
 void MainWindow::handleVirtualFlexControlWheel(const QString& actionId, int steps)
 {
     applyFlexControlWheelAction(actionId, steps);
+}
+
+// static
+QString MainWindow::hidEncoderDefaultAction(int encoderIndex)
+{
+    switch (encoderIndex) {
+    case 0:  return QStringLiteral("WheelFrequency");
+    case 1:  return QStringLiteral("WheelRit");
+    case 2:  return QStringLiteral("WheelXit");
+    case 3:  return QStringLiteral("WheelVolume");
+    default: return QStringLiteral("WheelFrequency");
+    }
 }
 
 void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
@@ -10458,9 +10456,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
 #ifdef HAVE_SERIALPORT
         activeTuning = activeTuning || m_flexCoalesceTimer.isActive();
 #endif
-#ifdef HAVE_HIDAPI
-        activeTuning = activeTuning || m_hidCoalesceTimer.isActive();
-#endif
+        // HID encoder frequency tuning routes through applyFlexControlWheelAction,
+        // so m_flexCoalesceTimer above already covers it.
         const bool memoryRevealPending = (m_pendingMemoryRevealSliceId == s->sliceId());
         if (activeTuning && s->sliceId() == m_activeSliceId && !memoryRevealPending)
             return;
