@@ -951,6 +951,7 @@ private:
     QVector<SpotHitRect> m_spotClickRects;
     QString m_hoveredSpotKey;          // callsign@freqKHz, empty when no spot hovered
     bool    m_tooltipRefreshPending{false}; // guards against duplicate queued refreshes
+    QRect   m_lastTooltipRect;              // suppresses showText() when hr.rect unchanged
 
     QVector<SpotCluster> m_spotClusters;
     bool m_showSpots{true};

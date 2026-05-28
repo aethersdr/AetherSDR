@@ -4498,6 +4498,7 @@ void SpectrumWidget::leaveEvent(QEvent* event)
 {
     QWidget::leaveEvent(event);
     m_hoveredSpotKey.clear();
+    m_lastTooltipRect = {};
     updateTrackedCursorState(QPoint(-1, -1), false);
 }
 
@@ -7091,10 +7092,14 @@ void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
                     + QString::number(qRound(hr.freqMhz * 1000.0));
                 if (key != m_hoveredSpotKey) continue;
                 if (!hr.rect.contains(mapFromGlobal(cursorPos))) continue;
-                if (hr.markerIndex >= 0 && hr.markerIndex < m_spotMarkers.size())
-                    QToolTip::showText(cursorPos + QPoint(0, 20),
-                                       spotMarkerTooltip(m_spotMarkers[hr.markerIndex]),
-                                       this, hr.rect);
+                if (hr.markerIndex >= 0 && hr.markerIndex < m_spotMarkers.size()) {
+                    if (hr.rect != m_lastTooltipRect) {
+                        m_lastTooltipRect = hr.rect;
+                        QToolTip::showText(cursorPos + QPoint(0, 20),
+                                           spotMarkerTooltip(m_spotMarkers[hr.markerIndex]),
+                                           this, hr.rect);
+                    }
+                }
                 break;
             }
         }, Qt::QueuedConnection);
