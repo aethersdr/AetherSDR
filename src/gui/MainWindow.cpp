@@ -6514,9 +6514,6 @@ static QByteArray renderKeyImageJpeg(const QString& label, const QString& sub,
 
     p.end();
 
-    // StreamDeck+ expects images flipped both axes (KEY_FLIP = (True, True))
-    img = img.mirrored(true, true);
-
     QByteArray bytes;
     QBuffer buf(&bytes);
     buf.open(QIODevice::WriteOnly);
