@@ -3437,7 +3437,7 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
                 this, [this, normalizedPanId]() {
             const int cap = currentAdaptiveFpsCap();
             if (cap > 0) sendAdaptiveCapToPan(normalizedPanId, cap);
-        }, Qt::UniqueConnection);
+        });
     }
 
     connect(pan, &PanadapterModel::waterfallIdChanged,
