@@ -2,6 +2,7 @@
 
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "core/MqttSettings.h"
 #include "core/ThemeManager.h"
 
 #include <QCheckBox>
@@ -201,9 +202,10 @@ void MqttSettingsDialog::buildUi()
     auto* pubInternalLayout = new QVBoxLayout(pubInternalGroup);
     auto* pubInternalText = new QLabel(
         tr("Published automatically whenever MQTT is connected; these topics are not user-configurable:\n"
-           "aethersdr/cw/decode\n"
+           "%1\n"
            "  Payload: {\"text\":\"K\",\"freq\":14.025,\"rx\":true}\n"
-           "  rx: true = received CW,  false = transmitted (sidetone)"));
+           "  rx: true = received CW,  false = transmitted (sidetone)")
+            .arg(QLatin1String(kCwDecodeTopic)));
     pubInternalText->setTextInteractionFlags(Qt::TextSelectableByMouse);
     pubInternalLayout->addWidget(pubInternalText);
     buttonsLayout->addWidget(pubInternalGroup);

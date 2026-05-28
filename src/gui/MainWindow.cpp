@@ -5646,7 +5646,7 @@ void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
     obj[QStringLiteral("rx")]   = rx;
     if (auto* s = activeSlice(); s && s->frequency() > 0.0)
         obj[QStringLiteral("freq")] = s->frequency();
-    m_mqttClient->publish(QStringLiteral("aethersdr/cw/decode"),
+    m_mqttClient->publish(QString(kCwDecodeTopic),
                           QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
 #endif

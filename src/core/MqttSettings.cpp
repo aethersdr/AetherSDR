@@ -291,7 +291,7 @@ QStringList internalMqttSubscriptionTopics()
 
 QStringList internalMqttPublishTopics()
 {
-    return { QStringLiteral("aethersdr/cw/decode") };
+    return { QString(kCwDecodeTopic) };
 }
 
 QStringList mqttSubscriptionTopics(const QStringList& userTopics)
