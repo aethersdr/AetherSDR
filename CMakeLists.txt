@@ -1060,7 +1060,11 @@ elseif(WIN32)
         target_sources(AetherSDR PRIVATE "${WIN_RC}")
     endif()
     if(MSVC)
+        # /MANIFESTINPUT requires /MANIFEST:EMBED per MSVC docs.  Newer MSVC
+        # toolsets (VS 18.x / 14.50+) enforce this strictly with LNK1220;
+        # older ones were lenient.  Be explicit.
         target_link_options(AetherSDR PRIVATE
+            "/MANIFEST:EMBED"
             "/MANIFESTINPUT:${CMAKE_SOURCE_DIR}/packaging/windows/AetherSDR.exe.manifest")
     endif()
 endif()
