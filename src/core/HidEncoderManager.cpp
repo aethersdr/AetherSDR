@@ -4,6 +4,7 @@
 #include "core/LogManager.h"
 
 #include <QDebug>
+#include <algorithm>
 #include <cstring>
 
 namespace AetherSDR {
