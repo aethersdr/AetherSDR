@@ -4124,8 +4124,78 @@ QWidget* RadioSetupDialog::buildSerialTab()
         vbox->addWidget(group);
     }
 
-    // ── HID Encoder — per-encoder action mapping (#1510) ──────────────────────
+    // ── HID / StreamDeck+ LCD button action mapping (#1510) ──────────────────
 #ifdef HAVE_HIDAPI
+    {
+        auto* group = new QGroupBox("StreamDeck+ LCD Button Actions");
+        group->setStyleSheet(kGroupStyle);
+        auto* grid = new QGridLayout(group);
+        grid->setSpacing(6);
+
+        auto* note = new QLabel(
+            "Assign an action to each of the 8 LCD buttons. "
+            "The button label updates on the device to match.");
+        note->setWordWrap(true);
+        note->setStyleSheet(kLabelStyle);
+        grid->addWidget(note, 0, 0, 1, 4);
+
+        static const struct { const char* id; const char* label; } kKeyActions[] = {
+            {"None",             "None"},
+            {"ToggleMox",        "Toggle TX (MOX)"},
+            {"ToggleTune",       "Toggle Tune"},
+            {"ToggleRit",        "Toggle RIT on/off"},
+            {"ToggleXit",        "Toggle XIT on/off"},
+            {"ClearRit",         "Clear RIT offset"},
+            {"ClearXit",         "Clear XIT offset"},
+            {"StepUp",           "Step Size Up"},
+            {"StepDown",         "Step Size Down"},
+            {"ToggleMute",       "Toggle Mute"},
+            {"ToggleLock",       "Toggle Slice Lock"},
+            {"ToggleApf",        "Toggle APF"},
+            {"ToggleAgc",        "Cycle AGC Mode"},
+            {"BandZoom",         "Toggle Band Zoom"},
+            {"SegmentZoom",      "Toggle Segment Zoom"},
+            {"NextSlice",        "Next Slice"},
+            {"PrevSlice",        "Previous Slice"},
+            {"VolumeUp",         "Volume Up (+5)"},
+            {"VolumeDown",       "Volume Down (-5)"},
+            {"SplitActiveSlice", "Toggle Split"},
+        };
+
+        // 8 keys laid out as 2 columns of 4
+        for (int i = 0; i < 8; ++i) {
+            const int row = (i % 4) + 1;
+            const int col = (i / 4) * 2;
+
+            grid->addWidget(new QLabel(QString("Key %1:").arg(i + 1)), row, col);
+
+            auto* combo = new QComboBox;
+            combo->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QComboBox"));
+            for (const auto& act : kKeyActions)
+                combo->addItem(QString::fromLatin1(act.label), QString::fromLatin1(act.id));
+
+            const QString key    = QString("HidKeyAction%1").arg(i);
+            const QString saved  = settings.value(key, QStringLiteral("None")).toString();
+            const int     selIdx = combo->findData(saved);
+            combo->setCurrentIndex(selIdx >= 0 ? selIdx : 0);
+
+            connect(combo, &QComboBox::currentIndexChanged, this, [combo, key, this](int) {
+                auto& s = AppSettings::instance();
+                s.setValue(key, combo->currentData().toString());
+                s.save();
+                emit serialSettingsChanged();
+            });
+
+            m_hidKeyActionCombos[i] = combo;
+            grid->addWidget(combo, row, col + 1);
+        }
+        grid->setColumnStretch(1, 1);
+        grid->setColumnStretch(3, 1);
+
+        vbox->addWidget(group);
+    }
+
+    // ── HID Encoder — per-encoder action mapping (#1510) ─────────────────────
     {
         auto* group = new QGroupBox("HID Encoder / StreamDeck+ Encoders");
         group->setStyleSheet(kGroupStyle);
@@ -4236,76 +4306,6 @@ QWidget* RadioSetupDialog::buildSerialTab()
             grid->addWidget(combo, i + 1, 1, 1, 2);
             grid->setColumnStretch(1, 1);
         }
-
-        vbox->addWidget(group);
-    }
-
-    // ── HID / StreamDeck+ LCD button action mapping (#1510) ──────────────────
-    {
-        auto* group = new QGroupBox("StreamDeck+ LCD Button Actions");
-        group->setStyleSheet(kGroupStyle);
-        auto* grid = new QGridLayout(group);
-        grid->setSpacing(6);
-
-        auto* note = new QLabel(
-            "Assign an action to each of the 8 LCD buttons. "
-            "The button label updates on the device to match.");
-        note->setWordWrap(true);
-        note->setStyleSheet(kLabelStyle);
-        grid->addWidget(note, 0, 0, 1, 4);
-
-        static const struct { const char* id; const char* label; } kKeyActions[] = {
-            {"None",             "None"},
-            {"ToggleMox",        "Toggle TX (MOX)"},
-            {"ToggleTune",       "Toggle Tune"},
-            {"ToggleRit",        "Toggle RIT on/off"},
-            {"ToggleXit",        "Toggle XIT on/off"},
-            {"ClearRit",         "Clear RIT offset"},
-            {"ClearXit",         "Clear XIT offset"},
-            {"StepUp",           "Step Size Up"},
-            {"StepDown",         "Step Size Down"},
-            {"ToggleMute",       "Toggle Mute"},
-            {"ToggleLock",       "Toggle Slice Lock"},
-            {"ToggleApf",        "Toggle APF"},
-            {"ToggleAgc",        "Cycle AGC Mode"},
-            {"BandZoom",         "Toggle Band Zoom"},
-            {"SegmentZoom",      "Toggle Segment Zoom"},
-            {"NextSlice",        "Next Slice"},
-            {"PrevSlice",        "Previous Slice"},
-            {"VolumeUp",         "Volume Up (+5)"},
-            {"VolumeDown",       "Volume Down (-5)"},
-            {"SplitActiveSlice", "Toggle Split"},
-        };
-
-        // 8 keys laid out as 2 columns of 4
-        for (int i = 0; i < 8; ++i) {
-            const int row = (i % 4) + 1;
-            const int col = (i / 4) * 2;
-
-            grid->addWidget(new QLabel(QString("Key %1:").arg(i + 1)), row, col);
-
-            auto* combo = new QComboBox;
-            combo->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QComboBox"));
-            for (const auto& act : kKeyActions)
-                combo->addItem(QString::fromLatin1(act.label), QString::fromLatin1(act.id));
-
-            const QString key    = QString("HidKeyAction%1").arg(i);
-            const QString saved  = settings.value(key, QStringLiteral("None")).toString();
-            const int     selIdx = combo->findData(saved);
-            combo->setCurrentIndex(selIdx >= 0 ? selIdx : 0);
-
-            connect(combo, &QComboBox::currentIndexChanged, this, [combo, key, this](int) {
-                auto& s = AppSettings::instance();
-                s.setValue(key, combo->currentData().toString());
-                s.save();
-                emit serialSettingsChanged();
-            });
-
-            m_hidKeyActionCombos[i] = combo;
-            grid->addWidget(combo, row, col + 1);
-        }
-        grid->setColumnStretch(1, 1);
-        grid->setColumnStretch(3, 1);
 
         vbox->addWidget(group);
     }
