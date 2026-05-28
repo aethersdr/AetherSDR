@@ -189,6 +189,52 @@ void HidEncoderManager::setKeyImage(int key, const QByteArray& jpegData)
     }
 }
 
+void HidEncoderManager::setTouchscreenImage(const QByteArray& jpegData,
+                                             int x_pos, int y_pos,
+                                             int width, int height)
+{
+    if (!m_device || !isStreamDeckPlus()) return;
+
+    // Touchscreen write: 1024-byte packets, 16-byte header, command 0x0c.
+    // Protocol verified against python-elgato-streamdeck StreamDeckPlus.set_touchscreen_image().
+    constexpr int PACKET_SIZE  = 1024;
+    constexpr int HEADER_SIZE  = 16;
+    constexpr int PAYLOAD_SIZE = PACKET_SIZE - HEADER_SIZE;
+
+    const int totalBytes = jpegData.size();
+    int offset     = 0;
+    int pageNumber = 0;
+
+    while (offset < totalBytes) {
+        uint8_t pkt[PACKET_SIZE] = {};
+        const int chunkLen = std::min(PAYLOAD_SIZE, totalBytes - offset);
+        const bool isLast  = (offset + chunkLen >= totalBytes);
+
+        pkt[0]  = 0x02;
+        pkt[1]  = 0x0c;
+        pkt[2]  = static_cast<uint8_t>(x_pos & 0xff);
+        pkt[3]  = static_cast<uint8_t>((x_pos >> 8) & 0xff);
+        pkt[4]  = static_cast<uint8_t>(y_pos & 0xff);
+        pkt[5]  = static_cast<uint8_t>((y_pos >> 8) & 0xff);
+        pkt[6]  = static_cast<uint8_t>(width & 0xff);
+        pkt[7]  = static_cast<uint8_t>((width >> 8) & 0xff);
+        pkt[8]  = static_cast<uint8_t>(height & 0xff);
+        pkt[9]  = static_cast<uint8_t>((height >> 8) & 0xff);
+        pkt[10] = isLast ? 1 : 0;
+        pkt[11] = static_cast<uint8_t>(pageNumber & 0xff);
+        pkt[12] = static_cast<uint8_t>((pageNumber >> 8) & 0xff);
+        pkt[13] = static_cast<uint8_t>(chunkLen & 0xff);
+        pkt[14] = static_cast<uint8_t>((chunkLen >> 8) & 0xff);
+        pkt[15] = 0x00;
+        std::memcpy(pkt + HEADER_SIZE, jpegData.constData() + offset, chunkLen);
+
+        hid_write(m_device, pkt, PACKET_SIZE);
+
+        offset     += chunkLen;
+        pageNumber++;
+    }
+}
+
 void HidEncoderManager::loadSettings()
 {
     auto& s = AppSettings::instance();

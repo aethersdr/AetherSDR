@@ -42,6 +42,11 @@ public slots:
     // No-op if device is not a StreamDeck+.
     void setKeyImages(const QVector<QByteArray>& jpegImages);
     void setKeyImage(int key, const QByteArray& jpegData);
+    // Write an 800x100 JPEG to the touchscreen strip above the dials.
+    // x_pos/y_pos/width/height let you update a sub-region; defaults write the full strip.
+    void setTouchscreenImage(const QByteArray& jpegData,
+                             int x_pos = 0, int y_pos = 0,
+                             int width = 800, int height = 100);
 
 signals:
     void tuneSteps(int encoderIndex, int steps);

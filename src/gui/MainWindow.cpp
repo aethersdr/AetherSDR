@@ -6484,32 +6484,63 @@ QString MainWindow::hidEncoderDefaultPushAction(int encoderIndex)
 }
 
 #ifdef HAVE_HIDAPI
-// Render a 120x120 JPEG image with two centered text lines for a StreamDeck+ key.
-// bg/fg: background and foreground colors. Image is flipped 180° per StreamDeck+ spec.
-static QByteArray renderKeyImageJpeg(const QString& label, const QString& sub,
-                                      const QColor& bg, const QColor& fg)
+// Render the full 800x100 touchscreen strip for the StreamDeck+.
+// Four equal 200x100 sections, one per encoder. Each section shows the turn
+// action on the top half and the push action + state on the bottom half.
+static QByteArray renderTouchscreenJpeg(
+    const std::array<QString,4>& turnLabels,
+    const std::array<QString,4>& pushLabels,
+    const std::array<QString,4>& stateTexts,
+    const std::array<bool,4>&    active)
 {
-    QImage img(120, 120, QImage::Format_RGB32);
-    img.fill(bg);
+    constexpr int W = 800, H = 100, COLS = 4, COL_W = W / COLS;
+
+    QImage img(W, H, QImage::Format_RGB32);
+    img.fill(QColor(15, 15, 20));
 
     QPainter p(&img);
     p.setRenderHint(QPainter::TextAntialiasing);
 
-    if (!label.isEmpty()) {
-        QFont f;
-        f.setPixelSize(32);
-        f.setBold(true);
-        p.setFont(f);
-        p.setPen(fg);
-        p.drawText(QRect(4, 10, 112, 60), Qt::AlignCenter | Qt::AlignVCenter, label);
-    }
+    for (int i = 0; i < COLS; ++i) {
+        const int x = i * COL_W;
 
-    if (!sub.isEmpty()) {
-        QFont f;
-        f.setPixelSize(18);
-        p.setFont(f);
-        p.setPen(QColor(190, 190, 190));
-        p.drawText(QRect(4, 72, 112, 38), Qt::AlignCenter | Qt::AlignVCenter, sub);
+        // Top half: turn action — dark blue tint
+        p.fillRect(x, 0, COL_W - 1, 49, QColor(18, 28, 52));
+
+        // Bottom half: push action — color indicates state
+        QColor pushBg;
+        if (active[i])                                       pushBg = QColor(10, 70, 10);
+        else if (pushLabels[i].isEmpty())                    pushBg = QColor(12, 12, 16);
+        else                                                 pushBg = QColor(45, 18, 18);
+        p.fillRect(x, 51, COL_W - 1, H - 51, pushBg);
+
+        // Divider line (1px, slightly lighter)
+        p.fillRect(x + COL_W - 1, 0, 1, H, QColor(40, 40, 50));
+        // Horizontal divider between top/bottom halves
+        p.fillRect(x, 49, COL_W - 1, 2, QColor(35, 35, 45));
+
+        // Turn label
+        if (!turnLabels[i].isEmpty()) {
+            QFont f;
+            f.setPixelSize(20);
+            f.setBold(true);
+            p.setFont(f);
+            p.setPen(Qt::white);
+            p.drawText(QRect(x + 2, 0, COL_W - 4, 49), Qt::AlignCenter, turnLabels[i]);
+        }
+
+        // Push label + state
+        if (!pushLabels[i].isEmpty()) {
+            QFont f;
+            f.setPixelSize(16);
+            f.setBold(active[i]);
+            p.setFont(f);
+            const QString line = stateTexts[i].isEmpty()
+                ? pushLabels[i]
+                : pushLabels[i] + QLatin1String("  ") + stateTexts[i];
+            p.setPen(active[i] ? QColor(120, 255, 120) : QColor(200, 200, 200));
+            p.drawText(QRect(x + 2, 51, COL_W - 4, H - 51), Qt::AlignCenter, line);
+        }
     }
 
     p.end();
@@ -6517,7 +6548,7 @@ static QByteArray renderKeyImageJpeg(const QString& label, const QString& sub,
     QByteArray bytes;
     QBuffer buf(&bytes);
     buf.open(QIODevice::WriteOnly);
-    img.save(&buf, "JPEG", 90);
+    img.save(&buf, "JPEG", 92);
     return bytes;
 }
 
@@ -6553,49 +6584,42 @@ void MainWindow::refreshStreamDeckLabels()
     const bool ritOn = slice && slice->ritOn();
     const bool xitOn = slice && slice->xitOn();
 
-    // Build all 8 images on the main thread, then dispatch a single queued call
-    // to write them all on the ext-ctrl thread — avoids flooding the event queue.
-    QVector<QByteArray> images(8);
+    std::array<QString,4> turnLabels, pushLabels, stateTexts;
+    std::array<bool,4> activeFlags{};
 
     for (int i = 0; i < 4; ++i) {
-        // Turn label — key i (top row, 0-3)
-        const QString turnId  = settings.value(QString("HidEncoderAction%1").arg(i),
-                                               QString::fromLatin1(kTurnDflt[i])).toString();
-        const QString turnLbl = kShortLabels.value(turnId, turnId.left(6).toUpper());
-        images[i] = renderKeyImageJpeg(turnLbl, QString("ENC %1").arg(i + 1),
-                                       QColor(20, 30, 55), Qt::white);
+        const QString turnId = settings.value(QString("HidEncoderAction%1").arg(i),
+                                              QString::fromLatin1(kTurnDflt[i])).toString();
+        turnLabels[i] = kShortLabels.value(turnId, turnId.left(6).toUpper());
 
-        // Push label — key 4+i (bottom row, 4-7)
-        const QString pushId  = settings.value(QString("HidEncoderPushAction%1").arg(i),
-                                               QString::fromLatin1(kPushDflt[i])).toString();
-        const QString pushLbl = kShortLabels.value(pushId, pushId.left(6).toUpper());
+        const QString pushId = settings.value(QString("HidEncoderPushAction%1").arg(i),
+                                              QString::fromLatin1(kPushDflt[i])).toString();
+        pushLabels[i] = kShortLabels.value(pushId, pushId.left(6).toUpper());
 
-        bool active = false;
-        QString stateTxt;
         if (pushId == QLatin1String("ToggleRit")) {
-            active   = ritOn;
-            stateTxt = ritOn ? QStringLiteral("ON") : QStringLiteral("OFF");
+            activeFlags[i] = ritOn;
+            stateTexts[i]  = ritOn ? QStringLiteral("ON") : QStringLiteral("OFF");
         } else if (pushId == QLatin1String("ToggleXit")) {
-            active   = xitOn;
-            stateTxt = xitOn ? QStringLiteral("ON") : QStringLiteral("OFF");
-        } else if (pushId == QLatin1String("StepCycle")) {
-            stateTxt = QStringLiteral("PUSH");
-        } else if (!pushId.isEmpty() && pushId != QLatin1String("None")) {
-            stateTxt = QStringLiteral("PUSH");
+            activeFlags[i] = xitOn;
+            stateTexts[i]  = xitOn ? QStringLiteral("ON") : QStringLiteral("OFF");
         }
-
-        QColor bg;
-        if (active)                                    bg = QColor(10, 80, 10);
-        else if (pushId == QLatin1String("StepCycle")) bg = QColor(20, 30, 55);
-        else if (pushId == QLatin1String("None"))      bg = QColor(15, 15, 15);
-        else                                           bg = QColor(55, 20, 20);
-
-        images[4 + i] = renderKeyImageJpeg(pushLbl, stateTxt, bg, Qt::white);
+        // StepCycle and others: no state text, not "active"
     }
 
-    QMetaObject::invokeMethod(m_hidEncoder, [enc=m_hidEncoder, imgs=images](){
-        enc->setKeyImages(imgs);
-    }, Qt::QueuedConnection);
+    QByteArray tsImg = renderTouchscreenJpeg(turnLabels, pushLabels, stateTexts, activeFlags);
+
+    // Blank the 8 LCD keys — one black 120x120 JPEG reused for all
+    QImage blank(120, 120, QImage::Format_RGB32);
+    blank.fill(Qt::black);
+    QByteArray blankJpeg;
+    { QBuffer b(&blankJpeg); b.open(QIODevice::WriteOnly); blank.save(&b, "JPEG", 80); }
+    QVector<QByteArray> blankKeys(8, blankJpeg);
+
+    QMetaObject::invokeMethod(m_hidEncoder,
+        [enc=m_hidEncoder, ts=tsImg, keys=blankKeys]() {
+            enc->setTouchscreenImage(ts);
+            enc->setKeyImages(keys);
+        }, Qt::QueuedConnection);
 }
 #endif
 
