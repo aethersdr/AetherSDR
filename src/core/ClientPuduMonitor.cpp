@@ -225,21 +225,54 @@ void ClientPuduMonitor::startPlayback()
         fallbackReasons << QStringLiteral("24000Hz Int16 stereo unsupported -> 48000Hz");
         attemptedFormats << QStringLiteral("48000Hz 2ch Int16");
         if (!dev.isFormatSupported(fmt)) {
-            // Neither 24 kHz nor 48 kHz int16 — extremely rare.  Give up
-            // quietly; playback was best-effort anyway.
-            AudioSummaryLogger::OpenFailureSummary failure;
-            failure.path = QStringLiteral("Aetherial monitor playback");
-            failure.backend = QStringLiteral("QAudioSink");
-            failure.deviceDescription = dev.description();
-            failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
-            failure.failureReason = QStringLiteral("output device supports neither 24000Hz nor 48000Hz Int16 stereo");
-            failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
-            AudioSummaryLogger::logOpenFailure(failure);
-            bail(); return;
+            // Int16 @ 24 kHz and 48 kHz both rejected.  On Windows this is
+            // typically WASAPI shared mode running a Float32 mix pipeline -
+            // the hardware is capable of Int16 but the OS-level mixer refuses
+            // the format.  Try the device's preferred format before giving up,
+            // following the QuindarLocalSink / AudioEngine precedent.
+            QAudioFormat preferred = dev.preferredFormat();
+            preferred.setChannelCount(kChannels);
+            if (preferred.isValid() && dev.isFormatSupported(preferred)) {
+                fmt = preferred;
+                sinkRate = fmt.sampleRate();
+                fallbackReasons << QStringLiteral("48000Hz Int16 unsupported -> preferredFormat (%1Hz %2)")
+                                       .arg(sinkRate)
+                                       .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat()));
+                attemptedFormats << QStringLiteral("%1Hz %2ch %3")
+                                        .arg(sinkRate)
+                                        .arg(fmt.channelCount())
+                                        .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat()));
+            } else {
+                AudioSummaryLogger::OpenFailureSummary failure;
+                failure.path = QStringLiteral("Aetherial monitor playback");
+                failure.backend = QStringLiteral("QAudioSink");
+                failure.deviceDescription = dev.description();
+                failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
+                failure.failureReason = QStringLiteral("output device supports neither Int16 stereo nor its own preferredFormat");
+                failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+                AudioSummaryLogger::logOpenFailure(failure);
+                bail(); return;
+            }
         }
     }
 
     if (!preparePlaybackPcm(sinkRate)) { bail(); return; }
+
+    // If the sink negotiated a non-Int16 format (e.g. Float32 via WASAPI
+    // shared mode), convert the Int16 payload from preparePlaybackPcm()
+    // to the required sample format.  Only Float32 is handled here since
+    // that is the only format preferredFormat() returns in practice on
+    // WASAPI and CoreAudio devices that reject Int16.
+    if (fmt.sampleFormat() == QAudioFormat::Float) {
+        const int frames = m_playPcm.size() / kBytesPerFrame;
+        QByteArray floatPcm(frames * kChannels * static_cast<int>(sizeof(float)), '\0');
+        const auto* src = reinterpret_cast<const int16_t*>(m_playPcm.constData());
+        auto*       dst = reinterpret_cast<float*>(floatPcm.data());
+        for (int i = 0; i < frames * kChannels; ++i) {
+            dst[i] = src[i] / 32768.0f;
+        }
+        m_playPcm = std::move(floatPcm);
+    }
 
     // ── QBuffer → QAudioSink (pull mode) ───────────────────────────
     // Sink pulls from QBuffer at its own cadence.  No timer, no
