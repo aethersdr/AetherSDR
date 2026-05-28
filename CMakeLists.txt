@@ -1209,16 +1209,31 @@ else()
         endif()
     endif()
 endif()
+# Ulanzi Dial backend — one per platform.  All three implementations
+# expose the same Qt signal contract (see UlanziDialBackend.h); the
+# mapper dialog and MainWindow dispatcher are unchanged across
+# platforms.  See #3232 for the design.
+target_sources(AetherSDR PRIVATE
+    src/core/UlanziDialBackend.h
+    src/gui/UlanziDialMapperDialog.cpp
+    src/gui/UlanziDialMapperDialog.h)
 if(UNIX AND NOT APPLE)
-    # Linux evdev encoder (BT-HID dials — Ulanzi Dial first; see #3232).
-    # No external dep; uses kernel headers + Qt only.  EVIOCGRAB claims
-    # the device exclusively so its keystrokes don't leak to the focused
-    # window.  Win/Mac use platform-native HID APIs in follow-up PRs.
     target_sources(AetherSDR PRIVATE
         src/core/EvdevEncoderManager.cpp
-        src/core/EvdevEncoderManager.h
-        src/gui/UlanziDialMapperDialog.cpp
-        src/gui/UlanziDialMapperDialog.h)
+        src/core/EvdevEncoderManager.h)
+endif()
+if(WIN32)
+    target_sources(AetherSDR PRIVATE
+        src/core/UlanziDialWindowsManager.cpp
+        src/core/UlanziDialWindowsManager.h)
+endif()
+if(APPLE)
+    target_sources(AetherSDR PRIVATE
+        src/core/UlanziDialMacOSManager.cpp
+        src/core/UlanziDialMacOSManager.h)
+    target_link_libraries(AetherSDR PRIVATE
+        "-framework IOKit"
+        "-framework CoreFoundation")
 endif()
 
 if(HIDAPI_FOUND)

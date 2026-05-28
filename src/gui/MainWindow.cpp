@@ -111,11 +111,9 @@
 #ifdef HAVE_MIDI
 #include "core/MidiSettings.h"
 #include "MidiMappingDialog.h"
-#ifdef Q_OS_LINUX
-#include "core/EvdevEncoderManager.h"
+#endif
+#include "core/UlanziDialBackend.h"
 #include "UlanziDialMapperDialog.h"
-#endif
-#endif
 #include "AetherDspDialog.h"
 #include "AetherDspWidget.h"
 #include "WaveformsDialog.h"
@@ -3970,38 +3968,46 @@ MainWindow::MainWindow(QWidget* parent)
     // StreamDeck native integration removed — use TCI StreamController plugin instead.
 #endif
 
-#ifdef Q_OS_LINUX
-    // Linux evdev encoder — currently recognizes the Ulanzi Dial.  Uses
-    // EVIOCGRAB so the dial's keystrokes don't leak to the focused window.
-    // Win/macOS parallel implementations land separately (#3232).
-    m_evdevEncoder = new EvdevEncoderManager;
-    m_evdevEncoder->moveToThread(m_extCtrlThread);
+    // Ulanzi Dial backend.  One concrete implementation per platform —
+    // EvdevEncoderManager on Linux (EVIOCGRAB-exclusive),
+    // UlanziDialWindowsManager on Windows (hidapi polling),
+    // UlanziDialMacOSManager on macOS (IOKit with seize-device).
+    // All three expose the same Qt signal contract via the
+    // UlanziDialBackend alias.  See #3232 for design notes.
+    m_dialBackend = new UlanziDialBackend;
+#ifndef Q_OS_MAC
+    // macOS keeps the backend on the main thread: IOHIDManager schedules
+    // its callbacks on a CFRunLoop, and only the main thread has one
+    // integrated with Qt's event loop on macOS.  Linux + Windows
+    // backends run cleanly on the dedicated ExtControllers thread.
+    m_dialBackend->moveToThread(m_extCtrlThread);
+#endif
 
-    m_evdevCoalesceTimer.setSingleShot(true);
-    m_evdevCoalesceTimer.setInterval(20);
-    connect(&m_evdevCoalesceTimer, &QTimer::timeout, this, [this]() {
-        if (m_evdevPendingSteps == 0) return;
+    m_dialCoalesceTimer.setSingleShot(true);
+    m_dialCoalesceTimer.setInterval(20);
+    connect(&m_dialCoalesceTimer, &QTimer::timeout, this, [this]() {
+        if (m_dialPendingSteps == 0) return;
         auto* s = activeSlice();
-        if (!s) { m_evdevPendingSteps = 0; return; }
+        if (!s) { m_dialPendingSteps = 0; return; }
         if (s->isLocked()) {
             s->notifyTuneBlockedByLock();
-            m_evdevPendingSteps = 0;
+            m_dialPendingSteps = 0;
             return;
         }
         int stepHz = spectrum() ? spectrum()->stepSize() : 100;
-        double newMhz = s->frequency() + m_evdevPendingSteps * stepHz / 1e6;
-        m_evdevPendingSteps = 0;
-        applyTuneRequest(s, newMhz, TuneIntent::IncrementalTune, "evdev-encoder");
+        double newMhz = s->frequency() + m_dialPendingSteps * stepHz / 1e6;
+        m_dialPendingSteps = 0;
+        applyTuneRequest(s, newMhz, TuneIntent::IncrementalTune, "ulanzi-dial");
     });
 
-    connect(m_evdevEncoder, &EvdevEncoderManager::tuneSteps,
+    connect(m_dialBackend, &UlanziDialBackend::tuneSteps,
             this, [this](int steps) {
-        m_evdevPendingSteps += steps;
-        if (!m_evdevCoalesceTimer.isActive())
-            m_evdevCoalesceTimer.start();
+        m_dialPendingSteps += steps;
+        if (!m_dialCoalesceTimer.isActive())
+            m_dialCoalesceTimer.start();
     });
 
-    connect(m_evdevEncoder, &EvdevEncoderManager::buttonEvent,
+    connect(m_dialBackend, &UlanziDialBackend::buttonEvent,
             this, [this](const QString& signature, int action) {
         if (action != 1) return;   // only fire on press, not release
         // Look up which pill this hardware signature is bound to (the
@@ -4050,15 +4056,14 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    connect(m_evdevEncoder, &EvdevEncoderManager::connectionChanged,
+    connect(m_dialBackend, &UlanziDialBackend::connectionChanged,
             this, [](bool connected, const QString& name) {
         qDebug() << "Ulanzi Dial:" << (connected ? "connected" : "disconnected") << name;
     });
 
     // Kick off scanning on the external-controller thread.
-    QMetaObject::invokeMethod(m_evdevEncoder, &EvdevEncoderManager::start,
+    QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
                               Qt::QueuedConnection);
-#endif
 
     // Start the external controller thread — objects are already moved
     m_extCtrlThread->start();
@@ -5145,12 +5150,10 @@ MainWindow::~MainWindow()
                                       Qt::BlockingQueuedConnection);
         }
 #endif
-#ifdef Q_OS_LINUX
-        if (m_evdevEncoder) {
-            QMetaObject::invokeMethod(m_evdevEncoder, &EvdevEncoderManager::stop,
+        if (m_dialBackend) {
+            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
                                       Qt::BlockingQueuedConnection);
         }
-#endif
 #ifdef HAVE_SERIALPORT
         if (m_serialPort) {
             m_serialPort->deleteLater();
@@ -7725,7 +7728,6 @@ void MainWindow::buildMenuBar()
 #endif
 #ifdef HAVE_HIDAPI
 #endif
-#ifdef Q_OS_LINUX
     auto* ulanziAction = settingsMenu->addAction("Ulanzi Dial Mapping...");
     connect(ulanziAction, &QAction::triggered, this, [this] {
 #ifdef HAVE_MIDI
@@ -7733,10 +7735,9 @@ void MainWindow::buildMenuBar()
 #else
         MidiControlManager* midi = nullptr;
 #endif
-        showOrRaisePersistent(m_ulanziMapperDialog, m_evdevEncoder,
+        showOrRaisePersistent(m_ulanziMapperDialog, m_dialBackend,
                               &m_shortcutManager, midi);
     });
-#endif
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {
         const bool wasFresh = !m_spotHubDialog;

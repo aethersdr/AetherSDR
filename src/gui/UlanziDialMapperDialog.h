@@ -1,8 +1,8 @@
 #pragma once
 #include <QtGlobal>
-#ifdef Q_OS_LINUX
 
 #include "PersistentDialog.h"
+#include "core/UlanziDialBackend.h"
 
 #include <QList>
 #include <QPoint>
@@ -16,7 +16,6 @@ class QResizeEvent;
 
 namespace AetherSDR {
 
-class EvdevEncoderManager;
 class MidiControlManager;
 class ShortcutManager;
 class UlanziDialCanvas;
@@ -40,7 +39,7 @@ class UlanziDialMapperDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
-    explicit UlanziDialMapperDialog(EvdevEncoderManager* manager,
+    explicit UlanziDialMapperDialog(UlanziDialBackend* manager,
                                     ShortcutManager*     shortcuts,
                                     MidiControlManager*  midi,
                                     QWidget*             parent = nullptr);
@@ -103,7 +102,7 @@ private:
     QRect dialBodyRect() const;
     QPoint anchorScreenPos(const QPoint& norm) const;
 
-    EvdevEncoderManager* m_manager{nullptr};
+    UlanziDialBackend* m_manager{nullptr};
     ShortcutManager*     m_shortcuts{nullptr};
     MidiControlManager*  m_midi{nullptr};
     UlanziDialCanvas*    m_canvas{nullptr};
@@ -117,4 +116,3 @@ private:
 
 } // namespace AetherSDR
 
-#endif // Q_OS_LINUX

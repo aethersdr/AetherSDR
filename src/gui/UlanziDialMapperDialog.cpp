@@ -1,9 +1,7 @@
 #include <QtGlobal>
-#ifdef Q_OS_LINUX
 
 #include "UlanziDialMapperDialog.h"
 #include "core/AppSettings.h"
-#include "core/EvdevEncoderManager.h"
 #include "core/ShortcutManager.h"
 #ifdef HAVE_MIDI
 #include "core/MidiControlManager.h"
@@ -147,7 +145,7 @@ QString pillComboStyle()
 
 } // namespace
 
-UlanziDialMapperDialog::UlanziDialMapperDialog(EvdevEncoderManager* manager,
+UlanziDialMapperDialog::UlanziDialMapperDialog(UlanziDialBackend* manager,
                                                ShortcutManager*     shortcuts,
                                                MidiControlManager*  midi,
                                                QWidget*             parent)
@@ -205,11 +203,11 @@ UlanziDialMapperDialog::UlanziDialMapperDialog(EvdevEncoderManager* manager,
     loadActions();
 
     if (m_manager) {
-        connect(m_manager, &EvdevEncoderManager::tuneSteps,
+        connect(m_manager, &UlanziDialBackend::tuneSteps,
                 this, &UlanziDialMapperDialog::onTuneSteps);
-        connect(m_manager, &EvdevEncoderManager::buttonEvent,
+        connect(m_manager, &UlanziDialBackend::buttonEvent,
                 this, &UlanziDialMapperDialog::onButtonEvent);
-        connect(m_manager, &EvdevEncoderManager::connectionChanged,
+        connect(m_manager, &UlanziDialBackend::connectionChanged,
                 this, &UlanziDialMapperDialog::onConnectionChanged);
         onConnectionChanged(m_manager->isConnected(), m_manager->deviceName());
     } else {
@@ -534,4 +532,3 @@ void UlanziDialMapperDialog::onConnectionChanged(bool connected, const QString& 
 
 } // namespace AetherSDR
 
-#endif // Q_OS_LINUX

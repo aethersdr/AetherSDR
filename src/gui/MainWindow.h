@@ -92,9 +92,13 @@ class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
 class FlexControlDialog;
 class MidiMappingDialog;
+class UlanziDialMapperDialog;
 #ifdef Q_OS_LINUX
 class EvdevEncoderManager;
-class UlanziDialMapperDialog;
+#elif defined(Q_OS_WIN)
+class UlanziDialWindowsManager;
+#elif defined(Q_OS_MAC)
+class UlanziDialMacOSManager;
 #endif
 class CwxPanel;
 class DvkPanel;
@@ -550,10 +554,14 @@ private:
     int                  m_hidPendingSteps{0};
 #endif
 #ifdef Q_OS_LINUX
-    EvdevEncoderManager* m_evdevEncoder{nullptr};
-    QTimer               m_evdevCoalesceTimer;
-    int                  m_evdevPendingSteps{0};
+    EvdevEncoderManager*       m_dialBackend{nullptr};
+#elif defined(Q_OS_WIN)
+    UlanziDialWindowsManager*  m_dialBackend{nullptr};
+#elif defined(Q_OS_MAC)
+    UlanziDialMacOSManager*    m_dialBackend{nullptr};
 #endif
+    QTimer                     m_dialCoalesceTimer;
+    int                        m_dialPendingSteps{0};
 #ifdef HAVE_MIDI
     MidiControlManager*  m_midiControl{nullptr};
     QTimer               m_midiTuneIdleTimer;
@@ -606,9 +614,7 @@ private:
 #ifdef HAVE_MIDI
     QPointer<MidiMappingDialog> m_midiDialog;
 #endif
-#ifdef Q_OS_LINUX
     QPointer<UlanziDialMapperDialog> m_ulanziMapperDialog;
-#endif
 
     // Tracks every PersistentDialog created via showOrRaisePersistent() so
     // setFramelessWindow() can propagate the frameless toggle without an
