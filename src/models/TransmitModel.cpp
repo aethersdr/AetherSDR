@@ -563,6 +563,7 @@ void TransmitModel::setMonGainSb(int gain)
 {
     gain = qBound(0, gain, 100);
     m_monGainSb = gain;
+    emit micStateChanged();
     emit commandReady(QString("transmit set mon_gain_sb=%1").arg(gain));
 }
 
