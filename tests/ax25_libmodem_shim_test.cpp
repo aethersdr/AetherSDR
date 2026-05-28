@@ -58,6 +58,13 @@ lm::packet fixedAprsTestPacket()
                       "!3644.00N\\11947.00W-KI6BCJ HF APRS test via Direwolf 300 baud");
 }
 
+lm::packet fixedVhf1200AprsTestPacket()
+{
+    return lm::packet("KK7GWY-9", "APDW18",
+                      {"WIDE1-1", "WIDE2-1"},
+                      "!4742.00N/12217.00W>2m APRS via AetherModem 1200 baud");
+}
+
 QByteArray sinePcm(int sampleRate, double frequencyHz, double amplitude)
 {
     QByteArray pcm;
@@ -238,7 +245,7 @@ void printReplayDiagnostics(const char* label,
 {
     std::printf(
         "%s: frames=%lld rms=%.1f dBFS peak=%.1f dBFS clip=%.2f%% "
-        "tone1600=%.1f dBFS tone1800=%.1f dBFS dTone=%.1f dB "
+        "tone%.0f=%.1f dBFS tone%.0f=%.1f dBFS dTone=%.1f dB "
         "gate=%s gateRms=%.1f dBFS gateFloor=%.1f dBFS gateResets=%llu "
         "lanes=%d symbols=%d conf=%.2f ones=%.1f%% starts=%llu hdlc=%llu ax25=%llu ok=%llu reject=%llu "
         "short=%llu badFcs=%llu malformed=%llu last=%s bytes=%d bits=%d fcs=%s/%s\n",
@@ -247,7 +254,9 @@ void printReplayDiagnostics(const char* label,
         diagnostics.rmsDbfs,
         diagnostics.peakDbfs,
         diagnostics.clippedPercent,
+        diagnostics.markToneHz,
         diagnostics.markToneDbfs,
+        diagnostics.spaceToneHz,
         diagnostics.spaceToneDbfs,
         diagnostics.markMinusSpaceDb,
         diagnostics.receiveGateOpen ? "open" : "idle",
@@ -287,40 +296,49 @@ int replayCapture(const QString& path)
                 audio.samples.size(),
                 audio.sampleRate);
 
-    for (Ax25TonePolarity polarity : {Ax25TonePolarity::Normal, Ax25TonePolarity::Inverted}) {
-        AetherAx25LibmodemShim shim;
-        shim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300, polarity));
-        QVector<Ax25DecodedFrame> frames;
-        QVector<double> frameTimesSeconds;
-        constexpr int chunkSamples = 1024;
-        for (size_t offset = 0; offset < audio.samples.size(); offset += chunkSamples) {
-            const int count = static_cast<int>(
-                std::min<size_t>(chunkSamples, audio.samples.size() - offset));
-            const auto chunkFrames = shim.processMonoFloat(audio.samples.data() + offset,
-                                                           count,
-                                                           audio.sampleRate);
-            frames += chunkFrames;
-            for (qsizetype i = 0; i < chunkFrames.size(); ++i) {
-                frameTimesSeconds.append(
-                    static_cast<double>(offset + static_cast<size_t>(count))
-                    / static_cast<double>(audio.sampleRate));
+    // Sweep every profile and polarity so a single capture (e.g. a real 2m
+    // APRS recording) is scored against HF 300 and VHF 1200 in one pass.
+    for (Ax25ModemProfile profile : {Ax25ModemProfile::Hf300, Ax25ModemProfile::Vhf1200}) {
+        for (Ax25TonePolarity polarity : {Ax25TonePolarity::Normal, Ax25TonePolarity::Inverted}) {
+            AetherAx25LibmodemShim shim;
+            shim.configure(ax25DemodConfigForProfile(profile, polarity));
+            QVector<Ax25DecodedFrame> frames;
+            QVector<double> frameTimesSeconds;
+            constexpr int chunkSamples = 1024;
+            for (size_t offset = 0; offset < audio.samples.size(); offset += chunkSamples) {
+                const int count = static_cast<int>(
+                    std::min<size_t>(chunkSamples, audio.samples.size() - offset));
+                const auto chunkFrames = shim.processMonoFloat(audio.samples.data() + offset,
+                                                               count,
+                                                               audio.sampleRate);
+                frames += chunkFrames;
+                for (qsizetype i = 0; i < chunkFrames.size(); ++i) {
+                    frameTimesSeconds.append(
+                        static_cast<double>(offset + static_cast<size_t>(count))
+                        / static_cast<double>(audio.sampleRate));
+                }
             }
-        }
-        const auto diagnostics = shim.diagnosticsSnapshot();
-        printReplayDiagnostics(polarity == Ax25TonePolarity::Normal ? "Normal" : "Reverse",
-                               diagnostics,
-                               frames.size());
-        for (qsizetype i = 0; i < frames.size(); ++i) {
-            const auto& frame = frames.at(i);
-            std::printf("  %.1fs phase=%d %s > %s%s  %s\n",
-                        frameTimesSeconds.value(i, 0.0),
-                        frame.decodePhaseOffsetSamples,
-                        qPrintable(frame.source),
-                        qPrintable(frame.destination),
-                        qPrintable(frame.path.isEmpty()
-                            ? QString()
-                            : QStringLiteral(",") + frame.path.join(QStringLiteral(","))),
-                        qPrintable(frame.payloadText.isEmpty() ? frame.payloadHex : frame.payloadText));
+            const auto diagnostics = shim.diagnosticsSnapshot();
+            const QString label = QStringLiteral("%1 %2")
+                .arg(ax25ModemProfileName(profile),
+                     polarity == Ax25TonePolarity::Normal
+                         ? QStringLiteral("Normal")
+                         : QStringLiteral("Reverse"));
+            printReplayDiagnostics(qPrintable(label),
+                                   diagnostics,
+                                   frames.size());
+            for (qsizetype i = 0; i < frames.size(); ++i) {
+                const auto& frame = frames.at(i);
+                std::printf("  %.1fs phase=%d %s > %s%s  %s\n",
+                            frameTimesSeconds.value(i, 0.0),
+                            frame.decodePhaseOffsetSamples,
+                            qPrintable(frame.source),
+                            qPrintable(frame.destination),
+                            qPrintable(frame.path.isEmpty()
+                                ? QString()
+                                : QStringLiteral(",") + frame.path.join(QStringLiteral(","))),
+                            qPrintable(frame.payloadText.isEmpty() ? frame.payloadHex : frame.payloadText));
+            }
         }
     }
 
@@ -347,7 +365,10 @@ void testVhf1200ProfileConfig()
     report("VHF sample rate", cfg.sampleRate == 24000);
     report("VHF baud", cfg.baud == 1200);
     report("VHF tones", cfg.markHz == 1200.0 && cfg.spaceHz == 2200.0);
-    report("VHF profile keeps one decode lane", shim.diagnosticsSnapshot().decodeLanes == 1);
+    // Aggressive multi-lane decode bank: 10 free-running phase lanes + 4 tracked
+    // phases x 2 PLL bandwidths = 18 (see kVhf1200* in the shim).
+    report("VHF profile runs the 18-lane decode bank",
+           shim.diagnosticsSnapshot().decodeLanes == 18);
     report("VHF description names profile", shim.demodDescription().contains(QStringLiteral("1200 baud VHF")));
 }
 
@@ -402,6 +423,73 @@ void testSyntheticHf300AfskLoopbackDecodes()
     report("synthetic loopback UI frame", frame.isUiFrame && frame.control == 0x03 && frame.pid == 0xf0);
     report("synthetic loopback payload",
            frame.payloadText == QStringLiteral("!3644.00N\\11947.00W-KI6BCJ HF APRS test via Direwolf 300 baud"));
+}
+
+void testSyntheticVhf1200AfskLoopbackDecodes()
+{
+    const auto cfg = ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200);
+
+    AetherAx25LibmodemShim shim;
+    shim.configure(cfg);
+
+    const auto frameBytes = lm::ax25::encode_frame(fixedVhf1200AprsTestPacket());
+    const auto bits = lm::ax25::encode_bitstream(frameBytes, 0, 80, 8);
+    const auto audio = afskPcmFromBits(bits, cfg);
+    const auto frames = shim.processMonoFloat(audio.data(),
+                                              static_cast<int>(audio.size()),
+                                              cfg.sampleRate);
+    const auto diagnostics = shim.diagnosticsSnapshot();
+
+    report("synthetic 1200 baud AFSK loopback emits one frame", frames.size() == 1);
+    report("synthetic 1200 baud AFSK loopback runs the decode bank", diagnostics.decodeLanes > 1);
+    report("synthetic 1200 baud AFSK loopback produced symbols", diagnostics.demodSymbols > 0);
+    report("synthetic 1200 baud AFSK loopback has no clipping", diagnostics.clippedPercent == 0.0);
+    if (frames.isEmpty())
+        return;
+
+    const auto& frame = frames.first();
+    report("synthetic 1200 loopback source", frame.source == QStringLiteral("KK7GWY-9"));
+    report("synthetic 1200 loopback destination", frame.destination == QStringLiteral("APDW18"));
+    report("synthetic 1200 loopback path",
+           frame.path == QStringList({QStringLiteral("WIDE1-1"), QStringLiteral("WIDE2-1")}));
+    report("synthetic 1200 loopback UI frame", frame.isUiFrame && frame.control == 0x03 && frame.pid == 0xf0);
+    report("synthetic 1200 loopback payload",
+           frame.payloadText == QStringLiteral("!4742.00N/12217.00W>2m APRS via AetherModem 1200 baud"));
+}
+
+void testChunkedVhf1200ReplayDecodes()
+{
+    const auto cfg = ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200);
+    const auto frameBytes = lm::ax25::encode_frame(fixedVhf1200AprsTestPacket());
+    const auto bits = lm::ax25::encode_bitstream(frameBytes, 0, 80, 8);
+    const auto packetAudio = afskPcmFromBits(bits, cfg);
+
+    // Near-silent lead-in so the receive gate has a floor to open against, then
+    // the burst, fed in 1024-sample chunks exactly like the live RX audio tap.
+    std::vector<float> audio(static_cast<size_t>(cfg.sampleRate), 0.002f);
+    audio.insert(audio.end(), packetAudio.begin(), packetAudio.end());
+
+    AetherAx25LibmodemShim shim;
+    shim.configure(cfg);
+
+    QVector<Ax25DecodedFrame> frames;
+    constexpr int chunkSamples = 1024;
+    for (size_t offset = 0; offset < audio.size(); offset += chunkSamples) {
+        const int count = static_cast<int>(
+            std::min<size_t>(chunkSamples, audio.size() - offset));
+        frames += shim.processMonoFloat(audio.data() + offset, count, cfg.sampleRate);
+    }
+
+    const auto diagnostics = shim.diagnosticsSnapshot();
+    report("chunked 1200 replay receive gate opened", diagnostics.receiveGateResets > 0);
+    report("chunked 1200 replay emits one frame", frames.size() == 1);
+    if (frames.isEmpty())
+        return;
+    report("chunked 1200 replay source", frames.first().source == QStringLiteral("KK7GWY-9"));
+    report("chunked 1200 replay path",
+           frames.first().path == QStringList({QStringLiteral("WIDE1-1"), QStringLiteral("WIDE2-1")}));
+    report("chunked 1200 replay payload",
+           frames.first().payloadText == QStringLiteral("!4742.00N/12217.00W>2m APRS via AetherModem 1200 baud"));
 }
 
 void testTransmitRawPayloadBuildsLoopbackAudio()
@@ -654,6 +742,8 @@ int main(int argc, char** argv)
     testVhf1200ProfileConfig();
     testKnownGoodBitstreamDecodes();
     testSyntheticHf300AfskLoopbackDecodes();
+    testSyntheticVhf1200AfskLoopbackDecodes();
+    testChunkedVhf1200ReplayDecodes();
     testTransmitRawPayloadBuildsLoopbackAudio();
     testTransmitMonitorSyntaxBuildsLoopbackAudio();
     testMalformedTransmitMonitorSyntaxIsRejected();

@@ -1,6 +1,8 @@
 # AetherModem AX.25 Notes
 
-This file captures the current 300 baud HF AX.25 modem bring-up notes for the AetherSDR AetherModem window.
+This file captures the AX.25 modem bring-up notes for the AetherSDR AetherModem
+window. It covers the original 300 baud HF profile and the 1200 baud VHF (Bell
+202 / 2m APRS) profile added afterward.
 
 The working test packet has been:
 
@@ -74,6 +76,55 @@ The current build logs:
 - per-frame decode phase offset
 
 The packet activity graph uses AX.25-like candidate deltas rather than raw HDLC candidate deltas, because raw HDLC counts are lane-summed and noisy.
+
+## VHF 1200 baud (Bell 202 / 2m APRS)
+
+The `Vhf1200` profile decodes standard 2m FM APRS (e.g. 144.390 MHz in North
+America), including via a transverter where the radio sits on an HF IF in FM.
+Select it with the **1200 baud VHF** profile button in the AetherModem window.
+
+```text
+sample rate:       24000 Hz
+baud:              1200
+mark:              1200 Hz
+space:             2200 Hz
+samples/symbol:    20
+polarity:          Normal for upright FM-demodulated AFSK
+lanes:             18 (10 free-running phase + 4 tracked phases x 2 PLL alphas)
+```
+
+Unlike HF, 1200 baud uses a **hybrid decode bank** (tuned by `kVhf1200*` in
+`src/core/tnc/AetherAx25LibmodemShim.cpp`) that favors aggressive capture:
+
+- **Free-running phase lanes** (PLL alpha 0, spread across the 20-sample symbol)
+  decode clean / short / strong bursts the instant they arrive — at least one
+  lane samples the eye center, the same proven mechanism as the HF bank. This is
+  what makes the synthetic and chunked 1200 loopback tests decode; a single
+  Gardner-only lane (the original stub) never locked reliably.
+- **Gardner-tracked lanes** (PLL alpha 0.010 and 0.025) chase the symbol clock
+  for TX/RX drift and fading on longer or weaker bursts.
+
+Duplicate suppression collapses the same frame seen by several lanes into one
+emission, so the 18-lane bank still reports each packet once.
+
+Polarity is **Normal** for upright FM-demodulated AFSK; use Reverse only as a
+tone-sense check if a mode/sideband change kills all decodes. TX remains 300
+baud HF only for now — the 1200 profile is receive-only.
+
+### Iterating on 1200 baud
+
+- Enable the **AetherModem** (`aether.ax25`) log category. On every profile
+  switch the modem logs a one-line config summary
+  (`modem configured: 1200 baud VHF ... lanes=18`), and each decode logs
+  `decoded AX.25 frame baud=1200 conf=... SRC=... payload=...`.
+- Click the packet-activity graph to toggle the per-second diagnostics summary
+  (tones, gate, symbols, confidence, HDLC/AX.25 candidates, FCS reject classes)
+  — identical instrumentation to the HF path, now tagged with `baud=`.
+- Replay a saved capture against every profile/polarity in one pass:
+  `ax25_libmodem_shim_test --replay-capture <mono-float32.wav>`. Use the
+  window's **Capture 3m** button to record a real 2m session first.
+- If marginal bursts are missed, raise `kVhf1200FreeRunPhaseCount` for denser
+  fixed-phase coverage, or adjust `kVhf1200PllAlphas` for the tracked lanes.
 
 ## Radio and Level Learnings
 

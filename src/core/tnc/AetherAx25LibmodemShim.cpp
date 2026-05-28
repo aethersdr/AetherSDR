@@ -48,6 +48,26 @@ constexpr std::array<int, 21> kHf300DecodePhaseOffsets = {
     43, 47, 51, 55, 59, 63, 67, 71, 75, 79
 };
 
+// 1200 baud VHF (Bell 202 / APRS): an aggressive bank of independent correlator
+// demodulators, combining two complementary strategies so the widest range of
+// bursts is captured. Duplicate suppression collapses the same frame seen by
+// several lanes into one emission, like a multi-decoder TNC (e.g. Dire Wolf).
+//
+//   * Free-running lanes (PLL alpha 0) spread evenly across the symbol period.
+//     With no timing loop they sample at a fixed phase, so on a clean burst at
+//     least one lane lands on the eye center and decodes immediately — the same
+//     proven mechanism as the HF bank. Best for short / strong / clean packets.
+//   * Gardner-tracked lanes (PLL alpha > 0) actively chase the symbol clock, so
+//     they tolerate TX/RX clock drift and fading over longer or weaker bursts
+//     where a fixed-phase lane would slip off the eye. A tight and a loose loop
+//     bandwidth bracket clean-vs-fast-acquisition trade-offs.
+//
+// Total lanes = kVhf1200FreeRunPhaseCount
+//             + kVhf1200TrackedPhaseCount * kVhf1200PllAlphas.size().
+constexpr int kVhf1200FreeRunPhaseCount = 10;
+constexpr int kVhf1200TrackedPhaseCount = 4;
+constexpr std::array<double, 2> kVhf1200PllAlphas = { 0.010, 0.025 };
+
 QString fcsToString(const std::array<uint8_t, 2>& fcs)
 {
     return QStringLiteral("%1%2")
@@ -339,9 +359,7 @@ struct AetherAx25LibmodemShim::Impl {
             ? config.markHz
             : config.spaceHz;
 
-        const double pllAlpha = config.profile == Ax25ModemProfile::Hf300 ? 0.0 : 0.015;
-
-        auto addLane = [&](int phaseOffsetSamples) {
+        auto addLane = [&](int phaseOffsetSamples, double pllAlpha) {
             auto& lane = lanes.emplace_back();
             lane.phaseOffsetSamples = phaseOffsetSamples;
             lane.samplesUntilStart = phaseOffsetSamples;
@@ -362,12 +380,46 @@ struct AetherAx25LibmodemShim::Impl {
         };
 
         if (config.profile == Ax25ModemProfile::Hf300) {
+            // HF: free-running lanes (pll_alpha 0), recovery by phase diversity.
             for (int phaseOffset : kHf300DecodePhaseOffsets)
-                addLane(phaseOffset);
+                addLane(phaseOffset, 0.0);
         } else {
-            addLane(0);
+            // VHF 1200: hybrid bank. Phase offsets are derived from the symbol
+            // period so the spread stays correct if the sample rate ever changes.
+            const int samplesPerSymbol = config.baud > 0
+                ? config.sampleRate / config.baud
+                : 0;
+            if (samplesPerSymbol <= 0) {
+                addLane(0, 0.0);
+            } else {
+                // Free-running phase-diversity lanes — decode clean/short bursts.
+                for (int phase = 0; phase < kVhf1200FreeRunPhaseCount; ++phase) {
+                    const int phaseOffset = (samplesPerSymbol * phase) / kVhf1200FreeRunPhaseCount;
+                    addLane(phaseOffset, 0.0);
+                }
+                // Gardner-tracked lanes — follow clock drift on long/weak bursts.
+                for (int phase = 0; phase < kVhf1200TrackedPhaseCount; ++phase) {
+                    const int phaseOffset = (samplesPerSymbol * phase) / kVhf1200TrackedPhaseCount;
+                    for (double laneAlpha : kVhf1200PllAlphas)
+                        addLane(phaseOffset, laneAlpha);
+                }
+            }
         }
         resetDecoderState(true, true);
+
+        qCInfo(lcAx25).noquote()
+            << QStringLiteral("modem configured: %1 sampleRate=%2Hz baud=%3 samplesPerSymbol=%4 "
+                              "mark=%5Hz space=%6Hz polarity=%7 lanes=%8")
+                   .arg(ax25ModemProfileName(config.profile))
+                   .arg(config.sampleRate)
+                   .arg(config.baud)
+                   .arg(config.baud > 0 ? config.sampleRate / config.baud : 0)
+                   .arg(mark, 0, 'f', 0)
+                   .arg(space, 0, 'f', 0)
+                   .arg(config.polarity == Ax25TonePolarity::Inverted
+                        ? QStringLiteral("Reverse")
+                        : QStringLiteral("Normal"))
+                   .arg(lanes.size());
     }
 
     void resetDecoderState(bool clearCounters, bool clearDiagnostics)
@@ -1026,8 +1078,10 @@ void AetherAx25LibmodemShim::feedAudio(const QByteArray& monoFloat32Pcm, int sam
     const auto* samples = reinterpret_cast<const float*>(monoFloat32Pcm.constData());
     const QVector<Ax25DecodedFrame> frames = processMonoFloat(samples, sampleCount, sampleRate);
     for (const auto& frame : frames) {
-        qCDebug(lcAx25).noquote()
-            << QStringLiteral("decoded AX.25 frame SRC=%1 DST=%2 VIA=%3 UI=%4 pid=%5 phase=%6 payload=%7")
+        qCInfo(lcAx25).noquote()
+            << QStringLiteral("decoded AX.25 frame baud=%1 conf=%2 SRC=%3 DST=%4 VIA=%5 UI=%6 pid=%7 phase=%8 payload=%9")
+                .arg(m_impl->config.baud)
+                .arg(frame.confidenceOrQuality, 0, 'f', 2)
                 .arg(frame.source,
                      frame.destination,
                      frame.path.join(QStringLiteral(",")),
@@ -1040,7 +1094,8 @@ void AetherAx25LibmodemShim::feedAudio(const QByteArray& monoFloat32Pcm, int sam
     if (auto diagnostics = m_impl->takeDiagnosticsIfReady(sampleRate)) {
         if (m_impl->diagnosticsLoggingEnabled) {
             qCDebug(lcAx25).nospace()
-                << "sr=" << diagnostics->sampleRate
+                << "baud=" << m_impl->config.baud
+                << " sr=" << diagnostics->sampleRate
                 << " rms=" << QString::number(diagnostics->rmsDbfs, 'f', 1) << "dBFS"
                 << " peak=" << QString::number(diagnostics->peakDbfs, 'f', 1) << "dBFS"
                 << " clip=" << QString::number(diagnostics->clippedPercent, 'f', 2) << "%"
