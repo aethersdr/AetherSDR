@@ -207,6 +207,14 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrx).arg(tx.tunePower());
         burst += QStringLiteral("mic_level:%1;").arg(tx.micLevel());
         burst += QStringLiteral("trx:%1,%2;").arg(txTrx).arg(isTx ? "true" : "false");
+
+        // Master AF volume — whole-radio (no trx prefix), same saved value
+        // cmdVolume's GET returns. Without it the init burst seeds drive/
+        // mic_level but not AF, so a client's local mirror starts at a default
+        // guess and the first AF-gain step jumps to that guess instead of the
+        // radio's real level (Ulanzi/Elgato/StreamController gain steppers).
+        burst += QStringLiteral("volume:%1;")
+                     .arg(AppSettings::instance().value("MasterVolume", "100").toInt());
     }
 
     // ── Phase 3: Audio / IQ stream configuration ──────────────────────
