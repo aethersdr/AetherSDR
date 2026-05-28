@@ -1,5 +1,5 @@
 {
-  "Version": "0.1.2",
+  "Version": "0.1.3",
   "Author": "Nigel Fenton (G0JKN)",
   "Name": "AetherSDR Controller",
   "Description": "Drive AetherSDR over its TCI WebSocket interface from a Ulanzi keypad / dial — VFO tuning, MOX, band/mode/slice control.",

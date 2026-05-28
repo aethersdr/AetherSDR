@@ -175,15 +175,41 @@ function cmdVfoStep(direction)       { return cmdSetFreq(radio.frequency + direc
 function cmdVfoStepCoarse(direction) { return cmdSetFreq(radio.frequency + direction * TX_STEP_HZ * COARSE_MULT); }
 
 // Gain ±5 helpers — clamp to 0–100 so we don't blow past the radio's range.
-// Format `verb:<trx>,<value>;` matches the TCI spec (ExpertSDR2 1.9) and
-// what AetherSDR emits, so parser + sender stay symmetric.  `mic_level` is
-// best-effort — AetherSDR's TCI handler may silently ignore it since it's
-// not in the published spec; we send anyway and trust the log if the value
-// never changes.
+// Format `verb:<trx>,<value>;` matches the TCI spec and AE accepts it.
+//
+// Optimistic local-mirror update: AetherSDR only emits `drive:` over TCI
+// at init-burst time — value changes after that are silent.  Verified via
+// TCI Monitor 2026-05-27 (Documents/tci-monitor-20260527-210149.log lines
+// 49-61: ▲▲▲▲▲▼▼▼▼▲▲▲▲ all sent `drive:0,10` or `drive:0,0`, zero `◀ drive`
+// echoes from AE).  If we waited for an echo to update radio.rfPower, ±5
+// steps would always compute against the stale init-burst snapshot —
+// bouncing between init±5 forever.  So we update the mirror BEFORE sending,
+// optimistically assuming AE accepts.  If AE rejects (clamp, lock, etc.),
+// the parser still catches any later echo and corrects us.
+//
+// AF volume is echoed (so parser tracking works there too), but doing the
+// optimistic update for it as well keeps the three actions consistent and
+// is harmless — the subsequent parser echo just confirms the same value.
+//
+// `mic_level` is best-effort — not in the published TCI spec; AE may
+// silently ignore.
 const clamp01_100 = (v) => Math.max(0, Math.min(100, v));
-function cmdAfGain(direction)   { return `volume:0,${clamp01_100(radio.volume   + direction * GAIN_STEP)};`; }
-function cmdRfGain(direction)   { return `drive:0,${clamp01_100(radio.rfPower  + direction * GAIN_STEP)};`; }
-function cmdMicGain(direction)  { return `mic_level:0,${clamp01_100(radio.micLevel + direction * GAIN_STEP)};`; }
+
+function cmdAfGain(direction) {
+  const v = clamp01_100(radio.volume + direction * GAIN_STEP);
+  radio.volume = v;
+  return `volume:0,${v};`;
+}
+function cmdRfGain(direction) {
+  const v = clamp01_100(radio.rfPower + direction * GAIN_STEP);
+  radio.rfPower = v;
+  return `drive:0,${v};`;
+}
+function cmdMicGain(direction) {
+  const v = clamp01_100(radio.micLevel + direction * GAIN_STEP);
+  radio.micLevel = v;
+  return `mic_level:0,${v};`;
+}
 
 // ─── Studio API ──────────────────────────────────────────────────────────
 
