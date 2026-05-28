@@ -1,5 +1,5 @@
 #include <QtGlobal>
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
 
 #include "UlanziDialWindowsManager.h"
 #include "core/LogManager.h"
@@ -299,4 +299,4 @@ void UlanziDialWindowsManager::emitKeyTransition(int linuxKey, int value)
 
 } // namespace AetherSDR
 
-#endif // Q_OS_WIN
+#endif // Q_OS_WIN && HAVE_HIDAPI

@@ -117,6 +117,14 @@ jobs:
         shell: pwsh
         run: .\scripts\setup\setup-deepfilter.ps1
 
+      - name: Setup hidapi (HID encoder support)
+        # Needed for the Ulanzi Dial Windows backend (#3239) and the
+        # existing USB HID encoders (#3171).  Without this, HAVE_HIDAPI
+        # is undefined and the dial code falls back to a stub — CI
+        # would miss real compile errors in that path.
+        shell: pwsh
+        run: .\scripts\setup\setup-hidapi.ps1
+
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696  # v0.0.10
 

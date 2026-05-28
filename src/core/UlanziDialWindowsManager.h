@@ -1,6 +1,6 @@
 #pragma once
 #include <QtGlobal>
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
 
 #include <QObject>
 #include <QString>
@@ -81,4 +81,4 @@ private:
 
 } // namespace AetherSDR
 
-#endif // Q_OS_WIN
+#endif // Q_OS_WIN && HAVE_HIDAPI
