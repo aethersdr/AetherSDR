@@ -5578,6 +5578,9 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         if (m_flexControlDialog)
             m_flexControlDialog->refreshButtonActions();
         syncFlexControlIndicatorForSettings();
+#ifdef HAVE_HIDAPI
+        refreshStreamDeckLabels();
+#endif
     });
     dlg->setFlexControlConnectionStatus(
         m_flexControlConnected,
