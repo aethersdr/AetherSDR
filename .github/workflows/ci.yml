@@ -35,45 +35,20 @@ jobs:
       - name: Build
         run: cmake --build build -j$(nproc)
 
-  # Detect if build system or third-party deps changed
-  check-paths:
-    runs-on: ubuntu-latest
-    outputs:
-      build-changed: ${{ steps.filter.outputs.build }}
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
-      - uses: dorny/paths-filter@fbd0ab8f3e69293af611ebaee6363fc25e6d187d  # v4
-        id: filter
-        with:
-          filters: |
-            build:
-              - 'CMakeLists.txt'
-              - 'third_party/**'
-              - '.github/workflows/**'
-              # MainWindow.cpp / .h carry dozens of `#ifdef Q_OS_WIN`,
-              # `Q_OS_MAC`, and `HAVE_PIPEWIRE` branches; a change that
-              # looks Linux-only can break Windows or macOS in non-obvious
-              # ways.  Post-mortems: #2633 → #2662 (unconditional
-              # m_daxBridge reference inside macOS-only guard) and #2670
-              # (Windows behaviour change wasn't exercised by CI).  Most
-              # recently the v26.5.3 ClientPhaseRotator.cpp M_PI MSVC
-              # break also slipped past check-windows because the file's
-              # path wasn't on the filter — same class of issue.  Force
-              # the cross-platform CI build whenever this file changes.
-              # (#2671)
-              - 'src/gui/MainWindow.cpp'
-              - 'src/gui/MainWindow.h'
-              # AudioEngine.cpp / .h are equally dense with platform-guarded
-              # code (WASAPI, CoreAudio, ALSA/PipeWire paths).  A Linux-passing
-              # change inside a Q_OS_WIN or Q_OS_MAC block will skip the
-              # cross-platform builds without this entry.  Post-mortem:
-              # #2929 (WASAPI mono-mic recovery) landed on main unverified
-              # because AudioEngine wasn't in the filter.  (#3052)
-              - 'src/core/AudioEngine.cpp'
-              - 'src/core/AudioEngine.h'
-
-  # Cross-platform build check — runs only when CMakeLists.txt, third_party/,
-  # or workflows are modified, to catch MSVC issues before release. (#796 lesson)
+  # Cross-platform build check — runs on every PR (no path gating).
+  #
+  # History: previously gated by a `check-paths` job on a hand-maintained
+  # allow-list of files known to carry `#ifdef Q_OS_WIN` / `Q_OS_MAC`
+  # branches (CMakeLists, third_party/, workflows, MainWindow,
+  # AudioEngine).  The allow-list was a chronic leaker — every time a
+  # new platform-guarded path got added to a different file, the gap
+  # surfaced as a release-time regression: #796 (origin), #2671
+  # (MainWindow added after a miss), #3052 (AudioEngine added after a
+  # miss), #3210 (re-added after relapse), the v26.5.3
+  # ClientPhaseRotator.cpp M_PI MSVC break, and the CwSidetonePortAudioSink
+  # WASAPI fix in #3241 (Windows-only logic never compiled by CI).  An
+  # always-on rule trades ~15-20 min of runner time per PR for a category
+  # of regression we kept paying for.
   #
   # Caching strategy:
   #   * Qt install        — handled by jurplel/install-qt-action's cache: true
@@ -81,12 +56,6 @@ jobs:
   #   * MSVC object files — sccache via GitHub Actions cache backend
   # Net effect: cold cache ~5 min, warm cache ~2-3 min (was ~14 min).
   check-windows:
-    # Only depend on check-paths so the conditional resolves; run in
-    # parallel with the Linux build instead of after it.  Linux passes
-    # the vast majority of PRs, so the wall-clock saving (~3 min) is
-    # worth the rare wasted Windows runner time when Linux fails first.
-    needs: [check-paths]
-    if: needs.check-paths.outputs.build-changed == 'true'
     runs-on: windows-latest
     env:
       SCCACHE_GHA_ENABLED: 'true'
@@ -195,15 +164,13 @@ jobs:
         if: always()
         run: sccache --show-stats
 
-  # macOS build check — same scope and trigger as check-windows.  Catches
-  # Q_OS_MAC / CoreAudio / Cocoa-bridge breakage that Linux clang misses,
-  # which is otherwise only discovered at release tag time by macos-dmg.yml.
-  # Build-only (no code signing, no DMG, no notarization — those stay in
-  # macos-dmg.yml on tag push).  Apple Silicon runner only; Intel coverage
-  # remains release-time-only.
+  # macOS build check — runs on every PR (no path gating), same rationale
+  # as check-windows above.  Catches Q_OS_MAC / CoreAudio / Cocoa-bridge
+  # breakage that Linux clang misses, which is otherwise only discovered
+  # at release tag time by macos-dmg.yml.  Build-only (no code signing,
+  # no DMG, no notarization — those stay in macos-dmg.yml on tag push).
+  # Apple Silicon runner only; Intel coverage remains release-time-only.
   check-macos:
-    needs: [check-paths]
-    if: needs.check-paths.outputs.build-changed == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
