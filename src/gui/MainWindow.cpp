@@ -111,6 +111,10 @@
 #ifdef HAVE_MIDI
 #include "core/MidiSettings.h"
 #include "MidiMappingDialog.h"
+#ifdef Q_OS_LINUX
+#include "core/EvdevEncoderManager.h"
+#include "UlanziDialMapperDialog.h"
+#endif
 #endif
 #include "AetherDspDialog.h"
 #include "AetherDspWidget.h"
@@ -3966,6 +3970,96 @@ MainWindow::MainWindow(QWidget* parent)
     // StreamDeck native integration removed — use TCI StreamController plugin instead.
 #endif
 
+#ifdef Q_OS_LINUX
+    // Linux evdev encoder — currently recognizes the Ulanzi Dial.  Uses
+    // EVIOCGRAB so the dial's keystrokes don't leak to the focused window.
+    // Win/macOS parallel implementations land separately (#3232).
+    m_evdevEncoder = new EvdevEncoderManager;
+    m_evdevEncoder->moveToThread(m_extCtrlThread);
+
+    m_evdevCoalesceTimer.setSingleShot(true);
+    m_evdevCoalesceTimer.setInterval(20);
+    connect(&m_evdevCoalesceTimer, &QTimer::timeout, this, [this]() {
+        if (m_evdevPendingSteps == 0) return;
+        auto* s = activeSlice();
+        if (!s) { m_evdevPendingSteps = 0; return; }
+        if (s->isLocked()) {
+            s->notifyTuneBlockedByLock();
+            m_evdevPendingSteps = 0;
+            return;
+        }
+        int stepHz = spectrum() ? spectrum()->stepSize() : 100;
+        double newMhz = s->frequency() + m_evdevPendingSteps * stepHz / 1e6;
+        m_evdevPendingSteps = 0;
+        applyTuneRequest(s, newMhz, TuneIntent::IncrementalTune, "evdev-encoder");
+    });
+
+    connect(m_evdevEncoder, &EvdevEncoderManager::tuneSteps,
+            this, [this](int steps) {
+        m_evdevPendingSteps += steps;
+        if (!m_evdevCoalesceTimer.isActive())
+            m_evdevCoalesceTimer.start();
+    });
+
+    connect(m_evdevEncoder, &EvdevEncoderManager::buttonEvent,
+            this, [this](const QString& signature, int action) {
+        if (action != 1) return;   // only fire on press, not release
+        // Look up which pill this hardware signature is bound to (the
+        // signature ↔ pill mapping is immutable, in kPillSpecs).  Then
+        // look up the user-chosen action for that pill in AppSettings.
+        const QString pillId = UlanziDialMapperDialog::pillForSignature(signature);
+        if (pillId.isEmpty()) {
+            qDebug() << "Ulanzi Dial: unmapped signature" << signature;
+            return;
+        }
+        // Read the user-bound action; fall back to the built-in default
+        // for this pill so first-launch bindings work without the user
+        // having opened the mapper dialog at all.
+        const QString actionId = AppSettings::instance().value(
+            UlanziDialMapperDialog::actionSettingsKey(pillId),
+            UlanziDialMapperDialog::defaultActionForPill(pillId)).toString();
+        // Action IDs are prefix-tagged to disambiguate registries:
+        //   "None"         — intentionally unassigned
+        //   "shortcut:ID"  — invoke ShortcutManager handler
+        //   "midi:ID"      — invoke MidiControlManager setter (Toggle
+        //                    flips current value; Trigger sends rangeMax)
+        if (actionId == "None") return;
+        if (actionId.startsWith("shortcut:")) {
+            const QString id = actionId.mid(QStringLiteral("shortcut:").size());
+            auto* a = m_shortcutManager.action(id);
+            if (a && a->handler) a->handler();
+            else qDebug() << "Ulanzi Dial: unknown shortcut" << id;
+        }
+#ifdef HAVE_MIDI
+        else if (actionId.startsWith("midi:")) {
+            const QString id = actionId.mid(QStringLiteral("midi:").size());
+            const auto* p = m_midiControl ? m_midiControl->findParam(id) : nullptr;
+            if (!p || !p->setter) {
+                qDebug() << "Ulanzi Dial: unknown MIDI param" << id;
+            } else if (p->type == MidiParamType::Toggle) {
+                const float mid = (p->rangeMin + p->rangeMax) / 2.0f;
+                const float cur = p->getter ? p->getter() : p->rangeMin;
+                p->setter(cur > mid ? p->rangeMin : p->rangeMax);
+            } else if (p->type == MidiParamType::Trigger) {
+                p->setter(p->rangeMax);
+            }
+        }
+#endif
+        else {
+            qDebug() << "Ulanzi Dial:" << pillId << "→ unknown action" << actionId;
+        }
+    });
+
+    connect(m_evdevEncoder, &EvdevEncoderManager::connectionChanged,
+            this, [](bool connected, const QString& name) {
+        qDebug() << "Ulanzi Dial:" << (connected ? "connected" : "disconnected") << name;
+    });
+
+    // Kick off scanning on the external-controller thread.
+    QMetaObject::invokeMethod(m_evdevEncoder, &EvdevEncoderManager::start,
+                              Qt::QueuedConnection);
+#endif
+
     // Start the external controller thread — objects are already moved
     m_extCtrlThread->start();
 
@@ -5048,6 +5142,12 @@ MainWindow::~MainWindow()
 #ifdef HAVE_HIDAPI
         if (m_hidEncoder) {
             QMetaObject::invokeMethod(m_hidEncoder, &HidEncoderManager::close,
+                                      Qt::BlockingQueuedConnection);
+        }
+#endif
+#ifdef Q_OS_LINUX
+        if (m_evdevEncoder) {
+            QMetaObject::invokeMethod(m_evdevEncoder, &EvdevEncoderManager::stop,
                                       Qt::BlockingQueuedConnection);
         }
 #endif
@@ -7624,6 +7724,18 @@ void MainWindow::buildMenuBar()
     });
 #endif
 #ifdef HAVE_HIDAPI
+#endif
+#ifdef Q_OS_LINUX
+    auto* ulanziAction = settingsMenu->addAction("Ulanzi Dial Mapping...");
+    connect(ulanziAction, &QAction::triggered, this, [this] {
+#ifdef HAVE_MIDI
+        MidiControlManager* midi = m_midiControl;
+#else
+        MidiControlManager* midi = nullptr;
+#endif
+        showOrRaisePersistent(m_ulanziMapperDialog, m_evdevEncoder,
+                              &m_shortcutManager, midi);
+    });
 #endif
     auto* spotsAction = settingsMenu->addAction("SpotHub...");
     connect(spotsAction, &QAction::triggered, this, [this] {

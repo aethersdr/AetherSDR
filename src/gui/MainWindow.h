@@ -92,6 +92,10 @@ class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
 class FlexControlDialog;
 class MidiMappingDialog;
+#ifdef Q_OS_LINUX
+class EvdevEncoderManager;
+class UlanziDialMapperDialog;
+#endif
 class CwxPanel;
 class DvkPanel;
 #ifdef HAVE_RADE
@@ -545,6 +549,11 @@ private:
     QTimer               m_hidCoalesceTimer;
     int                  m_hidPendingSteps{0};
 #endif
+#ifdef Q_OS_LINUX
+    EvdevEncoderManager* m_evdevEncoder{nullptr};
+    QTimer               m_evdevCoalesceTimer;
+    int                  m_evdevPendingSteps{0};
+#endif
 #ifdef HAVE_MIDI
     MidiControlManager*  m_midiControl{nullptr};
     QTimer               m_midiTuneIdleTimer;
@@ -596,6 +605,9 @@ private:
     QPointer<ProfileImportExportDialog> m_profileImportExportDialog;
 #ifdef HAVE_MIDI
     QPointer<MidiMappingDialog> m_midiDialog;
+#endif
+#ifdef Q_OS_LINUX
+    QPointer<UlanziDialMapperDialog> m_ulanziMapperDialog;
 #endif
 
     // Tracks every PersistentDialog created via showOrRaisePersistent() so

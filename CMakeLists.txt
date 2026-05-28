@@ -1209,6 +1209,18 @@ else()
         endif()
     endif()
 endif()
+if(UNIX AND NOT APPLE)
+    # Linux evdev encoder (BT-HID dials — Ulanzi Dial first; see #3232).
+    # No external dep; uses kernel headers + Qt only.  EVIOCGRAB claims
+    # the device exclusively so its keystrokes don't leak to the focused
+    # window.  Win/Mac use platform-native HID APIs in follow-up PRs.
+    target_sources(AetherSDR PRIVATE
+        src/core/EvdevEncoderManager.cpp
+        src/core/EvdevEncoderManager.h
+        src/gui/UlanziDialMapperDialog.cpp
+        src/gui/UlanziDialMapperDialog.h)
+endif()
+
 if(HIDAPI_FOUND)
     message(STATUS "hidapi found — USB HID encoder support enabled")
     target_compile_definitions(AetherSDR PRIVATE HAVE_HIDAPI)
