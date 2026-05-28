@@ -5246,10 +5246,6 @@ MainWindow::~MainWindow()
                                       Qt::BlockingQueuedConnection);
         }
 #endif
-        if (m_dialBackend) {
-            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::stop,
-                                      Qt::BlockingQueuedConnection);
-        }
 #ifdef HAVE_SERIALPORT
         if (m_serialPort) {
             m_serialPort->deleteLater();
@@ -5263,13 +5259,23 @@ MainWindow::~MainWindow()
             m_midiControl->deleteLater();
         }
 #endif
-#ifdef HAVE_HIDAPI
-        if (m_hidEncoder) {
-            m_hidEncoder->deleteLater();
-        }
-#endif
         m_extCtrlThread->quit();
         m_extCtrlThread->wait(3000);
+        // Delete ExtControllers objects synchronously after the thread stops.
+        // deleteLater() races with quit() and can leave destructors unrun.
+        // On macOS, UlanziDialMacOSManager::stop() calls
+        // IOHIDManagerUnscheduleFromRunLoop(...GetMain()) which must run on the
+        // main thread — calling it via BlockingQueuedConnection deadlocks because
+        // the main thread is blocked waiting for the cross-thread call to return.
+        // Safe to call directly here: the ExtControllers thread has stopped so
+        // there is no race on m_dialBackend's state.
+        if (m_dialBackend) m_dialBackend->stop();
+        delete m_dialBackend;
+        m_dialBackend = nullptr;
+#ifdef HAVE_HIDAPI
+        delete m_hidEncoder;
+        m_hidEncoder = nullptr;
+#endif
     } else {
 #ifdef HAVE_SERIALPORT
         delete m_serialPort;

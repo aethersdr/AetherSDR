@@ -94,6 +94,7 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
 void HidEncoderManager::close()
 {
     m_pollTimer->stop();
+    m_hotplugTimer->stop();
     if (m_device) {
         hid_close(m_device);
         m_device = nullptr;
