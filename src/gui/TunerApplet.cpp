@@ -10,7 +10,6 @@
 #include <QSignalBlocker>
 #include <QTimer>
 #include "core/ThemeManager.h"
-
 namespace AetherSDR {
 
 
@@ -23,6 +22,17 @@ TunerApplet::TunerApplet(QWidget* parent)
     theme::setContainer(this, QStringLiteral("applet/tuner"));
     hide();   // hidden by default until toggled on
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+
+    // Label clear timer: once power drops below threshold, wait 800 ms before
+    // blanking the PWR/SWR text so inter-packet noise doesn't cause blinking.
+    m_labelClearTimer = new QTimer(this);
+    m_labelClearTimer->setSingleShot(true);
+    m_labelClearTimer->setInterval(800);
+    connect(m_labelClearTimer, &QTimer::timeout, this, [this]() {
+        m_labelShowing = false;
+        m_pwrLabel->setText("PWR");
+        m_swrLabel->setText("SWR");
+    });
 
     // Post-tune capture timer: after tuning=0 arrives, keep capturing SWR
     // for 400ms so the final settled value from the TGXL has time to arrive.
@@ -77,18 +87,40 @@ void TunerApplet::buildUI()
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
 
+    static const char* kRowLabelStyle =
+        "QLabel { color: #c8d8e8; font-size: 10px; font-weight: bold; }";
+
     // Forward Power gauge — default barefoot (0–200 W); switches to
     // 0–2000 W if a PGXL amplifier is detected via setAmplifierMode().
-    m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "Fwd Pwr", "W",
+    // External row label carries the live value; internal gauge label is empty.
+    m_pwrLabel = new QLabel("PWR", this);
+    m_pwrLabel->setFixedWidth(72);
+    m_pwrLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_pwrLabel->setStyleSheet(kRowLabelStyle);
+    m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "", "",
         {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
         this, 80.0f);
-    vbox->addWidget(m_fwdGauge);
+    // Slow release: bar rises quickly on RF bursts but decays over ~800 ms
+    static_cast<HGauge*>(m_fwdGauge)->setBallistics({0.030f, 0.800f});
+    auto* pwrRow = new QHBoxLayout;
+    pwrRow->setSpacing(4);
+    pwrRow->addWidget(m_pwrLabel);
+    pwrRow->addWidget(m_fwdGauge, 1);
+    vbox->addLayout(pwrRow);
 
     // SWR gauge
-    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "SWR", "",
+    m_swrLabel = new QLabel("SWR", this);
+    m_swrLabel->setFixedWidth(72);
+    m_swrLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_swrLabel->setStyleSheet(kRowLabelStyle);
+    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "", "",
         {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
         this, 2.0f);
-    vbox->addWidget(m_swrGauge);
+    auto* swrRow = new QHBoxLayout;
+    swrRow->setSpacing(4);
+    swrRow->addWidget(m_swrLabel);
+    swrRow->addWidget(m_swrGauge, 1);
+    vbox->addLayout(swrRow);
 
     // Bottom section: relay bars (75% left) + buttons (25% right)
     auto* bottomRow = new QHBoxLayout;
@@ -315,6 +347,7 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
     m_swr = swr;
     static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
     static_cast<HGauge*>(m_swrGauge)->setValue(swr);
+    updateValueLabels();
 
     // During the post-tune capture window, record the last non-idle SWR.
     // The TGXL reports the settled SWR shortly after tuning=0 arrives;
@@ -322,6 +355,19 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
     if (m_postTuneCapture && swr > 1.01f) {
         m_tuneSwr = swr;
         m_tuneBtn->setText(QString("SWR %1").arg(swr, 0, 'f', 2));
+    }
+}
+
+void TunerApplet::updateValueLabels()
+{
+    if (m_fwdPower >= 5.0f) {
+        m_labelClearTimer->stop();
+        m_labelShowing = true;
+        m_pwrLabel->setText(QStringLiteral("PWR  %1").arg(static_cast<int>(m_fwdPower)));
+        m_swrLabel->setText(QStringLiteral("SWR  %1:1").arg(m_swr, 0, 'f', 1));
+    } else if (m_labelShowing && !m_labelClearTimer->isActive()) {
+        // Power dropped — start hold window before blanking
+        m_labelClearTimer->start();
     }
 }
 

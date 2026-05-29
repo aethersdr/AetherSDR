@@ -114,10 +114,15 @@ void PgxlConnection::processLine(const QString& line)
         QString rest = line.mid(pipe + 1);
         int firstEq = rest.indexOf('=');
         if (firstEq < 0) return;
+        // PGXL S-push format varies by firmware:
+        //   "S0|TRANSMIT_A id=39 vac=241 ..."  — prefix word before first key
+        //   "S0|id=39 vac=241 ..."              — KV pairs start immediately
+        // When there is no space before the first '=' the body is all KV pairs;
+        // fall through to parse it directly instead of returning early.
         int lastSpaceBeforeEq = rest.lastIndexOf(' ', firstEq);
-        if (lastSpaceBeforeEq < 0) return;
-
-        QString kvString = rest.mid(lastSpaceBeforeEq + 1);
+        QString kvString = (lastSpaceBeforeEq >= 0)
+                               ? rest.mid(lastSpaceBeforeEq + 1)
+                               : rest;
         QMap<QString, QString> kvs;
         const auto parts = kvString.split(' ', Qt::SkipEmptyParts);
         for (const auto& part : parts) {
