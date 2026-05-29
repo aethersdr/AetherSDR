@@ -3665,6 +3665,58 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
     auto& settings = AppSettings::instance();
 
+    // ── USB control surfaces (Ulanzi Dial, StreamDeck+) (#3257) ──────────
+    // These are opt-in because the first call into each backend triggers the
+    // macOS Input Monitoring permission prompt (kIOHIDOptionsTypeSeizeDevice
+    // in the IOKit-direct backend, hid_open() in HIDAPI). Defaulting them off
+    // means the prompt only ever fires for users who actually own and want to
+    // use the hardware.
+    {
+        auto* group = new QGroupBox("USB Control Surfaces");
+        group->setStyleSheet(kGroupStyle);
+        auto* gvbox = new QVBoxLayout(group);
+        gvbox->setSpacing(6);
+
+        auto* note = new QLabel(
+            "Enable only if you connect a Ulanzi Dial or Elgato Stream Deck+. "
+            "On macOS, enabling will trigger an Input Monitoring permission "
+            "prompt the first time AetherSDR scans for the device.");
+        note->setWordWrap(true);
+        note->setStyleSheet(kLabelStyle);
+        gvbox->addWidget(note);
+
+        auto* ulanziEnable = new QCheckBox("Enable Ulanzi Dial");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            ulanziEnable, "QCheckBox { color: {{color.text.primary}}; }");
+        ulanziEnable->setChecked(
+            settings.value("UlanziDialEnabled", "False").toString() == "True");
+        connect(ulanziEnable, &QCheckBox::toggled, this, [this](bool on) {
+            auto& s = AppSettings::instance();
+            s.setValue("UlanziDialEnabled", on ? "True" : "False");
+            s.save();
+            emit serialSettingsChanged();
+        });
+        gvbox->addWidget(ulanziEnable);
+
+#ifdef HAVE_HIDAPI
+        auto* hidEnable = new QCheckBox(
+            "Enable HID encoders / StreamDeck+ (RC-28, PowerMate, ShuttleXpress, …)");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            hidEnable, "QCheckBox { color: {{color.text.primary}}; }");
+        hidEnable->setChecked(
+            settings.value("HidEncoderEnabled", "False").toString() == "True");
+        connect(hidEnable, &QCheckBox::toggled, this, [this](bool on) {
+            auto& s = AppSettings::instance();
+            s.setValue("HidEncoderEnabled", on ? "True" : "False");
+            s.save();
+            emit serialSettingsChanged();
+        });
+        gvbox->addWidget(hidEnable);
+#endif
+
+        vbox->addWidget(group);
+    }
+
     // ── Port Configuration ───────────────────────────────────────────────
     {
         auto* group = new QGroupBox("Port Configuration");

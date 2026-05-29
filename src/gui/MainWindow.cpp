@@ -4157,9 +4157,16 @@ MainWindow::MainWindow(QWidget* parent)
         qDebug() << "Ulanzi Dial:" << (connected ? "connected" : "disconnected") << name;
     });
 
-    // Kick off scanning on the external-controller thread.
-    QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
-                              Qt::QueuedConnection);
+    // Kick off scanning on the external-controller thread — only if the
+    // user has opted in. On macOS, the backend's IOHIDManagerOpen(...,
+    // kIOHIDOptionsTypeSeizeDevice) trips the OS Input Monitoring TCC
+    // prompt the moment it is called, regardless of whether a Ulanzi Dial
+    // is actually present. Defaulting this off so the vast majority of
+    // users — who do not own the peripheral — never see the prompt (#3257).
+    if (AppSettings::instance().value("UlanziDialEnabled", "False").toString() == "True") {
+        QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
+                                  Qt::QueuedConnection);
+    }
 
     // Start the external controller thread — objects are already moved
     m_extCtrlThread->start();
@@ -4192,9 +4199,18 @@ MainWindow::MainWindow(QWidget* parent)
 #endif
 
 #ifdef HAVE_HIDAPI
-    QMetaObject::invokeMethod(m_hidEncoder, [this] {
-        m_hidEncoder->loadSettings();
-    });
+    // Same TCC concern as the Ulanzi gate above (#3257). HidEncoderManager::
+    // loadSettings() iterates the supported VID/PID list calling hid_open()
+    // for autodetect; HIDAPI's macOS backend opens with
+    // kIOHIDOptionsTypeSeizeDevice internally, so on every launch this
+    // would prompt for Input Monitoring even on machines without any
+    // supported encoder hardware. Default off; user enables in
+    // Preferences → Serial when they connect a StreamDeck+ / RC-28 / etc.
+    if (AppSettings::instance().value("HidEncoderEnabled", "False").toString() == "True") {
+        QMetaObject::invokeMethod(m_hidEncoder, [this] {
+            m_hidEncoder->loadSettings();
+        });
+    }
 #endif
 
     // ── P/CW applet: mic meters + ALC meter + model ────────────────────────
@@ -5656,8 +5672,12 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
     if (!dlg) return;
     connect(dlg, &RadioSetupDialog::txBandSettingsRequested,
             m_txBandAction, &QAction::trigger);
-#ifdef HAVE_SERIALPORT
+    // serialSettingsChanged is the "external-device settings changed" signal in
+    // practice — the dialog emits it for serial-port, FlexControl, Ulanzi-dial,
+    // and HID-encoder edits. The Ulanzi/HID branches below run regardless of
+    // HAVE_SERIALPORT because those backends exist on all platforms (#3257).
     connect(dlg, &RadioSetupDialog::serialSettingsChanged, this, [this]() {
+#ifdef HAVE_SERIALPORT
         QMetaObject::invokeMethod(m_serialPort, [this] { m_serialPort->loadSettings(); });
         auto& fcs = AppSettings::instance();
         const bool fcOpen = fcs.value("FlexControlOpen", "False").toString() == "True";
@@ -5681,10 +5701,29 @@ void MainWindow::wireRadioSetupDialogSignals(RadioSetupDialog* dlg, const QStrin
         if (m_flexControlDialog)
             m_flexControlDialog->refreshButtonActions();
         syncFlexControlIndicatorForSettings();
+#endif
+        // External-device enable evaluation. start()/loadSettings() are
+        // idempotent (each guards against re-open), so re-firing them when
+        // unrelated settings change is harmless. Toggling the user-facing
+        // checkbox from off → on is the moment the OS TCC prompt fires —
+        // with user context — instead of every launch (#3257).
+        auto& s = AppSettings::instance();
+        if (m_dialBackend &&
+            s.value("UlanziDialEnabled", "False").toString() == "True") {
+            QMetaObject::invokeMethod(m_dialBackend, &UlanziDialBackend::start,
+                                      Qt::QueuedConnection);
+        }
 #ifdef HAVE_HIDAPI
+        if (m_hidEncoder &&
+            s.value("HidEncoderEnabled", "False").toString() == "True") {
+            QMetaObject::invokeMethod(m_hidEncoder, [this] {
+                m_hidEncoder->loadSettings();
+            });
+        }
         refreshStreamDeckLabels();
 #endif
     });
+#ifdef HAVE_SERIALPORT
     dlg->setFlexControlConnectionStatus(
         m_flexControlConnected,
         m_flexControlConnected && m_flexControl ? m_flexControl->portName() : QString());

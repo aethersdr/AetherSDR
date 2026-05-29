@@ -26,6 +26,8 @@
 	<string>AetherSDR needs microphone access for voice transmission (SSB, AM, FM, RADE digital voice).</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>AetherSDR needs local network access to discover and communicate with FlexRadio devices via UDP broadcast on port 4992.</string>
+	<key>NSInputMonitoringUsageDescription</key>
+	<string>AetherSDR reads knob and button events from supported USB control surfaces (Ulanzi Dial, Elgato Stream Deck+). This permission is only requested after you enable a controller in Preferences → Serial; it is not required for normal radio operation.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 </dict>
