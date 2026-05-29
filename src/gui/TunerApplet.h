@@ -56,7 +56,8 @@ private:
     // Row labels that show live numeric values ("PWR 987", "SWR 1.2:1")
     QLabel*  m_pwrLabel{nullptr};
     QLabel*  m_swrLabel{nullptr};
-    QTimer*  m_labelTimer{nullptr};
+    QTimer*  m_labelClearTimer{nullptr};  // holds label visible after power drops
+    bool     m_labelShowing{false};
 
     // Relay bars
     QWidget* m_c1Bar{nullptr};
