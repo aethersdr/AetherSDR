@@ -2707,7 +2707,7 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         auto* rfEdit     = addField(1, 0, "RF Freq (MHz):", QString::number(x.rfFreq, 'f', 3));
         auto* ifEdit     = addField(1, 1, "IF Freq (MHz):", QString::number(x.ifFreq, 'f', 3));
         auto* loEdit     = addField(2, 0, "LO Freq (MHz):", QString::number(x.rfFreq - x.ifFreq, 'f', 3), false);
-        auto* errEdit    = addField(2, 1, "LO Error (Hz):", QString::number(x.loError, 'f', 0));
+        auto* errEdit    = addField(2, 1, "LO Error (MHz):", QString::number(x.loError, 'f', 6));
         auto* rxGainEdit = addField(3, 0, "RX Gain (dB):", QString::number(x.rxGain, 'f', 1));
 
         // RX Only toggle
