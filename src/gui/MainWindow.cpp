@@ -4199,6 +4199,21 @@ MainWindow::MainWindow(QWidget* parent)
 #endif
 
 #ifdef HAVE_HIDAPI
+    // One-time migration: existing users had HidEncoderAutoDetect=True
+    // with the old always-on loadSettings() pattern, and a working
+    // RC-28 / PowerMate / Shuttle / StreamDeck+.  Honour that prior
+    // intent on first launch after this upgrade so their controller
+    // doesn't silently stop working until they discover the new
+    // checkbox.  Only flips the new key once; subsequent toggles in
+    // Radio Setup → Serial own it from then on.
+    {
+        auto& s = AppSettings::instance();
+        if (!s.contains("HidEncoderEnabled")) {
+            const bool hadAutodetect =
+                s.value("HidEncoderAutoDetect", "False").toString() == "True";
+            s.setValue("HidEncoderEnabled", hadAutodetect ? "True" : "False");
+        }
+    }
     // Same TCC concern as the Ulanzi gate above (#3257). HidEncoderManager::
     // loadSettings() iterates the supported VID/PID list calling hid_open()
     // for autodetect; HIDAPI's macOS backend opens with
