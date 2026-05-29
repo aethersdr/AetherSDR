@@ -92,6 +92,44 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
         AetherSDR::ThemeManager::instance().applyStyleSheet(hint, "QLabel { color: {{color.background.3}}; font-size: 10px; }");
         row->addWidget(hint, 1);
 
+        // Reference curve overlay — paints one of several target curves
+        // on the EQ canvas as a thin amber line.  Includes the AT&T 1959
+        // Bell Labs presence-peak target plus digitised responses of
+        // famous SSB microphones.  Persisted globally.
+        auto* refLbl = new QLabel("Ref:");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(refLbl,
+            "QLabel { color: {{color.text.primary}}; font-size: 11px; font-weight: bold; }");
+        row->addWidget(refLbl);
+
+        auto* refCombo = new QComboBox;
+        for (const QString& id : ClientEqCurveWidget::referenceCurveIds())
+            refCombo->addItem(id, id);
+        refCombo->setFixedHeight(24);
+        refCombo->setToolTip(
+            "Overlay a reference target curve on the EQ canvas (amber).\n"
+            "• AT&T 1959 — Bell Labs intelligibility target, +5 dB @ 2.5 kHz\n"
+            "• Heil DX — aggressive presence boost for SSB contests\n"
+            "• Astatic D-104 — classic lollipop mic, sharp peak @ 3 kHz\n"
+            "• Shure 444 — broadcast-style desk mic, gentler boost\n"
+            "• Heil HC-5 — modern dynamic SSB element\n"
+            "Used as a visual target while you adjust EQ bands.");
+        AetherSDR::applyComboStyle(refCombo);
+
+        const QString savedRef = AppSettings::instance()
+            .value("ClientEqReferenceCurve", "Off").toString();
+        const int savedRefIdx = refCombo->findData(savedRef);
+        refCombo->setCurrentIndex(savedRefIdx >= 0 ? savedRefIdx : 0);
+        // Cached for later apply — m_canvas is nullptr at this point.
+        m_savedReferenceCurvePreset = (savedRef == "Off") ? QString() : savedRef;
+        connect(refCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, refCombo](int idx) {
+            const QString id = refCombo->itemData(idx).toString();
+            if (m_canvas) m_canvas->setReferenceCurvePreset(id);
+            AppSettings::instance().setValue("ClientEqReferenceCurve", id);
+            AppSettings::instance().save();
+        });
+        row->addWidget(refCombo);
+
         // Smoothing — fractional-octave display smoothing for the FFT
         // analyzer trace.  Doesn't affect EQ math, just the visual.
         // Persisted globally (single user preference, shared between RX
@@ -251,6 +289,7 @@ ClientEqEditor::ClientEqEditor(AudioEngine* engine, QWidget* parent)
     // The combo box already shows the right value from the toolbar build,
     // but the canvas needed to be constructed before this push could land.
     m_canvas->setSmoothingOctaveFraction(m_savedSmoothingFraction);
+    m_canvas->setReferenceCurvePreset(m_savedReferenceCurvePreset);
     eqColumn->addWidget(m_canvas, 1);
     // Forward cutoff-line drag events as a path-tagged signal so MainWindow
     // can dispatch to TransmitModel (TX) or the active SliceModel (RX).

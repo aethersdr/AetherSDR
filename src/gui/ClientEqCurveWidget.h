@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QString>
+#include <QStringList>
 #include <QWidget>
 #include <vector>
 
@@ -86,6 +88,19 @@ public:
     // hidden.
     void setFilterCutoffs(int lowHz, int highHz);
 
+    // Overlay one of several reference curves on the EQ canvas as a
+    // thin amber line.  Use kReferenceCurveIds[] below for the canonical
+    // names; empty string or "Off" hides the overlay.  Curves include
+    // the AT&T 1959 intelligibility target plus digitized responses of
+    // famous SSB microphones (Astatic D-104, Shure 444, Heil HC-5)
+    // and a Bob-Heil-style aggressive DX preset.
+    void setReferenceCurvePreset(const QString& id);
+    QString referenceCurvePreset() const { return m_referencePreset; }
+
+    // Stable IDs for AppSettings persistence and combo-box wiring.  The
+    // first entry is always "Off".
+    static const QStringList& referenceCurveIds();
+
 signals:
     void selectedBandChanged(int idx);
     // Fired whenever band params mutate on the audio side from user
@@ -123,6 +138,7 @@ protected:
     int                m_smoothingFraction{96};  // 96 = effectively off
     int                m_filterLowCutHz{0};      // 0 = don't draw
     int                m_filterHighCutHz{0};     // 0 = don't draw
+    QString            m_referencePreset;  // empty = off
 
 private:
     void applySmoothing();

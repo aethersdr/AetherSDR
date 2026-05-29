@@ -142,6 +142,107 @@ void ClientEqCurveWidget::setFilterCutoffs(int lowHz, int highHz)
     update();
 }
 
+namespace {
+// Reference target curves — point-to-point in log-freq × linear-dB space
+// (the standard rendering for target curves).  Each entry is a magnitude
+// trace digitised from its source; the user picks one as a visual target
+// to shape their parametric EQ toward.
+struct RefPoint { float hz; float db; };
+
+// AT&T 1959 "optimum transmission frequency response for speech" — the
+// canonical Bell Labs presence-peak target.  Peak +5 dB at 2.5 kHz,
+// rolls off below 300 Hz and above 3.4 kHz.
+constexpr RefPoint kAttRef1959[] = {
+    {   50.0f, -20.0f }, {  100.0f, -12.0f }, {  200.0f,  -6.0f },
+    {  300.0f,  -2.0f }, {  500.0f,   0.0f }, { 1000.0f,   0.0f },
+    { 1500.0f,   1.0f }, { 2000.0f,   3.0f }, { 2500.0f,   5.0f },
+    { 3000.0f,   4.0f }, { 3400.0f,   0.0f }, { 4000.0f,  -6.0f },
+    { 5000.0f, -12.0f },
+};
+
+// Heil "DX / contest" target — Bob Heil's published recommendation for
+// maximum talk power in pile-ups.  Sharper +6 dB peak at 2.7 kHz, more
+// aggressive low-cut than AT&T 1959.
+constexpr RefPoint kHeilDx[] = {
+    {   50.0f, -25.0f }, {  100.0f, -18.0f }, {  200.0f, -10.0f },
+    {  300.0f,  -4.0f }, {  500.0f,  -1.0f }, { 1000.0f,   0.0f },
+    { 1500.0f,   2.0f }, { 2000.0f,   4.0f }, { 2500.0f,   6.0f },
+    { 2700.0f,   6.0f }, { 3000.0f,   5.0f }, { 3400.0f,  -2.0f },
+    { 4000.0f, -10.0f }, { 5000.0f, -18.0f },
+};
+
+// Astatic D-104 "lollipop" crystal mic — classic AM/SSB rig microphone,
+// extremely peaky presence response around 3 kHz, deep low-end rolloff.
+// Digitised from the manufacturer / Heil "legendary mic" comparison chart.
+constexpr RefPoint kAstaticD104[] = {
+    {   50.0f, -32.0f }, {  100.0f, -22.0f }, {  200.0f, -14.0f },
+    {  300.0f,  -8.0f }, {  500.0f,  -4.0f }, { 1000.0f,   0.0f },
+    { 1500.0f,   2.0f }, { 2000.0f,   5.0f }, { 2500.0f,   8.0f },
+    { 3000.0f,  10.0f }, { 3500.0f,   7.0f }, { 4000.0f,   2.0f },
+    { 5000.0f, -10.0f }, { 7000.0f, -22.0f },
+};
+
+// Shure 444 — classic broadcast-style desk mic, broader response with
+// gentler presence boost.  Smoothest of the legendary mics.
+constexpr RefPoint kShure444[] = {
+    {   50.0f, -15.0f }, {  100.0f, -10.0f }, {  200.0f,  -4.0f },
+    {  300.0f,  -1.0f }, {  500.0f,   0.0f }, { 1000.0f,   1.0f },
+    { 1500.0f,   2.0f }, { 2000.0f,   3.0f }, { 2500.0f,   4.0f },
+    { 3000.0f,   4.0f }, { 3500.0f,   3.0f }, { 4000.0f,   1.0f },
+    { 5000.0f,  -3.0f }, { 7000.0f, -10.0f },
+};
+
+// Heil HC-5 — modern dynamic SSB mic, target shape Heil designs his
+// element around.  Mid-presence boost peaks ~3 kHz at +5 dB.
+constexpr RefPoint kHeilHC5[] = {
+    {   50.0f, -28.0f }, {  100.0f, -18.0f }, {  200.0f,  -8.0f },
+    {  300.0f,  -3.0f }, {  500.0f,   0.0f }, { 1000.0f,   0.0f },
+    { 1500.0f,   2.0f }, { 2000.0f,   4.0f }, { 2500.0f,   6.0f },
+    { 3000.0f,   5.0f }, { 3500.0f,   1.0f }, { 4000.0f,  -5.0f },
+    { 5000.0f, -15.0f },
+};
+
+struct RefPreset {
+    const char* id;       // stable ID for AppSettings
+    const RefPoint* pts;  // point array
+    int count;            // number of points
+};
+constexpr RefPreset kPresets[] = {
+    { "AT&T 1959",    kAttRef1959,  sizeof(kAttRef1959)  / sizeof(RefPoint) },
+    { "Heil DX",      kHeilDx,      sizeof(kHeilDx)      / sizeof(RefPoint) },
+    { "Astatic D-104",kAstaticD104, sizeof(kAstaticD104) / sizeof(RefPoint) },
+    { "Shure 444",    kShure444,    sizeof(kShure444)    / sizeof(RefPoint) },
+    { "Heil HC-5",    kHeilHC5,     sizeof(kHeilHC5)     / sizeof(RefPoint) },
+};
+
+const RefPreset* findPreset(const QString& id)
+{
+    for (const auto& p : kPresets)
+        if (id == QLatin1String(p.id)) return &p;
+    return nullptr;
+}
+} // namespace
+
+const QStringList& ClientEqCurveWidget::referenceCurveIds()
+{
+    static const QStringList ids = []{
+        QStringList out;
+        out << QStringLiteral("Off");
+        for (const auto& p : kPresets)
+            out << QString::fromLatin1(p.id);
+        return out;
+    }();
+    return ids;
+}
+
+void ClientEqCurveWidget::setReferenceCurvePreset(const QString& id)
+{
+    const QString normalised = (id == QLatin1String("Off")) ? QString() : id;
+    if (m_referencePreset == normalised) return;
+    m_referencePreset = normalised;
+    update();
+}
+
 std::vector<float> ClientEqCurveWidget::applyFractionalOctaveSmoothing(
     const std::vector<float>& binsDb, double sampleRate, int octaveFraction)
 {
@@ -390,6 +491,27 @@ void ClientEqCurveWidget::paintEvent(QPaintEvent* /*ev*/)
             p.setBrush(Qt::NoBrush);
             p.drawPath(peakPath);
         }
+    }
+
+    // Reference curve overlay — selected preset.  Drawn after the
+    // analyzer but before the EQ band curves so the user's adjustments
+    // sit on top of the target they're shaping toward.  Amber,
+    // semi-transparent.
+    if (const RefPreset* preset = findPreset(m_referencePreset)) {
+        QPainterPath refPath;
+        for (int i = 0; i < preset->count; ++i) {
+            const float x = freqToX(preset->pts[i].hz);
+            const float y = dbToY(preset->pts[i].db);
+            if (i == 0) refPath.moveTo(x, y);
+            else        refPath.lineTo(x, y);
+        }
+        QPen refPen(QColor(220, 180, 60, 220));
+        refPen.setWidth(2);
+        refPen.setJoinStyle(Qt::RoundJoin);
+        refPen.setCapStyle(Qt::RoundCap);
+        p.setPen(refPen);
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(refPath);
     }
 
     if (!m_eq || m_eq->activeBandCount() == 0) {

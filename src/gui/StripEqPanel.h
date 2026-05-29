@@ -96,6 +96,7 @@ private:
     int                        m_rxFilterLowCutHz{0};
     int                        m_rxFilterHighCutHz{0};
     int                        m_savedSmoothingFraction{96};
+    QString                    m_savedReferenceCurvePreset;
     // The frameless title bar carries the active path label (e.g.
     // "Aetherial Parametric EQ — TX").  Held as a void* + cast at use
     // site to keep the inline EditorFramelessTitleBar class out of the
