@@ -1,5 +1,5 @@
 {
-  "Version": "0.1.5",
+  "Version": "0.1.6",
   "Author": "Nigel Fenton (G0JKN)",
   "Name": "AetherSDR Controller",
   "Description": "Drive AetherSDR over its TCI WebSocket interface from a Ulanzi keypad / dial — VFO tuning, MOX, band/mode/slice control.",
@@ -297,6 +297,86 @@
       "States": [
         {
           "Image": "assets/icons/mic-gain-down.png"
+        }
+      ]
+    },
+    {
+      "Name": "AF Gain (dial)",
+      "Icon": "assets/icons/af-gain.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to adjust AF (audio/volume) gain 0–100 (TCI 'volume'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.afGain",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/af-gain.png"
+        }
+      ]
+    },
+    {
+      "Name": "RF Power (dial)",
+      "Icon": "assets/icons/rf-gain.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to adjust RF drive / TX power 0–100 (TCI 'drive'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.rfGain",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/rf-gain.png"
+        }
+      ]
+    },
+    {
+      "Name": "Mic Gain (dial)",
+      "Icon": "assets/icons/mic-gain.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to adjust transmit mic gain 0–100 (TCI 'mic_level'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.micGain",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mic-gain.png"
+        }
+      ]
+    },
+    {
+      "Name": "Filter Width (dial)",
+      "Icon": "assets/icons/filter-width.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to widen/narrow the RX filter passband symmetrically (TCI 'rx_filter_band'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.filterWidth",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/filter-width.png"
+        }
+      ]
+    },
+    {
+      "Name": "Squelch Level (dial)",
+      "Icon": "assets/icons/squelch.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to adjust squelch threshold (TCI 'sql_level'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.squelch",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/squelch.png"
         }
       ]
     }

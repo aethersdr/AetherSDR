@@ -40,6 +40,9 @@ const radio = {
   rfPower: 100,
   tunePower: 25,
   micLevel: 50,            // best-effort tracker — TCI 'mic_level' verb is non-standard
+  sqlLevel: 0,             // squelch threshold (TCI 'sql_level', 0–100)
+  filterLow: 100,          // RX filter low edge (Hz) — SSB-ish default until first echo
+  filterHigh: 2800,        // RX filter high edge (Hz)
   nbOn: false, nrOn: false, anfOn: false, apfOn: false,
   sqlOn: false, split: false, locked: false,
   ritOn: false, xitOn: false,
@@ -89,6 +92,10 @@ function tciConnect(url) {
     tciSend('volume;');
     tciSend('drive;');
     tciSend('mic_level;');
+    // Same rationale for the new dial controls — seed from AE's real values so
+    // the first detent steps from the live filter/squelch state, not a guess.
+    tciSend('rx_filter_band:0;');
+    tciSend('sql_level:0;');
   });
   tci.on('close',   () => { tciReady = false; console.log('[tci] closed — retry in 5s'); scheduleReconnect(); });
   tci.on('error',   (err) => console.log(`[tci] error: ${err.message}`));
@@ -144,6 +151,12 @@ function parseTci(msg) {
       case 'volume':       radio.volume   = parseInt(p.length >= 2 ? p[1] : p[0]); break;
       case 'drive':        radio.rfPower  = parseInt(p.length >= 2 ? p[1] : p[0]); break;
       case 'mic_level':    radio.micLevel = parseInt(p.length >= 2 ? p[1] : p[0]); break;
+      // Dial controls. AE emits `rx_filter_band:<trx>,<low>,<high>;` and
+      // `sql_level:<trx>,<level>;` — both trx-prefixed, so read past p[0].
+      case 'rx_filter_band':
+        if (p.length >= 3) { radio.filterLow = parseInt(p[1]); radio.filterHigh = parseInt(p[2]); }
+        break;
+      case 'sql_level':    radio.sqlLevel = parseInt(p.length >= 2 ? p[1] : p[0]); break;
     }
   }
 }
@@ -207,20 +220,52 @@ function cmdVfoStepCoarse(direction) { return cmdSetFreq(radio.frequency + direc
 // honoured — verified live 2026-05-28 to drive TX mic gain on AetherSDR.
 const clamp01_100 = (v) => Math.max(0, Math.min(100, v));
 
-function cmdAfGain(direction) {
-  const v = clamp01_100(radio.volume + direction * GAIN_STEP);
+// `step` defaults to the keypad's ±5; the dial handlers pass their own
+// per-detent step (see DIAL below).
+function cmdAfGain(direction, step = GAIN_STEP) {
+  const v = clamp01_100(radio.volume + direction * step);
   radio.volume = v;
   return `volume:0,${v};`;
 }
-function cmdRfGain(direction) {
-  const v = clamp01_100(radio.rfPower + direction * GAIN_STEP);
+function cmdRfGain(direction, step = GAIN_STEP) {
+  const v = clamp01_100(radio.rfPower + direction * step);
   radio.rfPower = v;
   return `drive:0,${v};`;
 }
-function cmdMicGain(direction) {
-  const v = clamp01_100(radio.micLevel + direction * GAIN_STEP);
+function cmdMicGain(direction, step = GAIN_STEP) {
+  const v = clamp01_100(radio.micLevel + direction * step);
   radio.micLevel = v;
   return `mic_level:0,${v};`;
+}
+
+// ── Dial-only controls ─────────────────────────────────────────────────────
+// Per-detent steps for the rotary (Encoder) actions. Fine = single detent,
+// coarse = press-and-rotate. Gains/squelch are 0–100; filter width is in Hz.
+const DIAL = {
+  gainFine: 2,  gainCoarse: 10,
+  sqlFine:  2,  sqlCoarse:  10,
+  bwFine:   50, bwCoarse:   250,   // total passband-width change per detent (Hz)
+};
+const FILTER_MIN_WIDTH = 50;
+const FILTER_MAX_WIDTH = 8000;
+
+function cmdSqlLevel(direction, step) {
+  const v = clamp01_100(radio.sqlLevel + direction * step);
+  radio.sqlLevel = v;
+  return `sql_level:0,${v};`;
+}
+
+// Widen/narrow the passband symmetrically about its current centre. Keeps the
+// voice/CW pitch centred while the operator opens or closes the filter.
+function cmdFilterWidth(direction, step) {
+  const center = (radio.filterLow + radio.filterHigh) / 2;
+  let width = (radio.filterHigh - radio.filterLow) + direction * step;
+  width = Math.max(FILTER_MIN_WIDTH, Math.min(FILTER_MAX_WIDTH, width));
+  const lo = Math.round(center - width / 2);
+  const hi = Math.round(center + width / 2);
+  radio.filterLow = lo;
+  radio.filterHigh = hi;
+  return `rx_filter_band:0,${lo},${hi};`;
 }
 
 // ─── Studio API ──────────────────────────────────────────────────────────
@@ -290,13 +335,50 @@ $UD.onKeyDown((jsn) => {
   }
 });
 
-// Encoder (D100H dial) — VFO action handles all 5 dial events.
-$UD.onDialRotateRight(()     => tciSend(cmdVfoStep(+1)));
-$UD.onDialRotateLeft(()      => tciSend(cmdVfoStep(-1)));
-$UD.onDialRotateHoldRight(() => tciSend(cmdVfoStepCoarse(+1)));
-$UD.onDialRotateHoldLeft(()  => tciSend(cmdVfoStepCoarse(-1)));
-$UD.onDialDown(()            => tciSend(cmdMoxToggle()));
-$UD.onDialUp(()              => {});
+// Encoder (dial) dispatch — action-aware.
+//
+// Studio stamps every event (including dial events) with jsn.context
+// (uuid___key___actionid) and onAdd caches the action-class UUID for that
+// context.  So we route each dial by *which Encoder action* it's bound to,
+// exactly like onKeyDown routes keys.  A dial whose context isn't cached
+// (legacy single-dial layout, or an event that beats onAdd) falls back to
+// VFO tuning for rotate — harmless — but to NO-OP for press, so an
+// unrecognised dial can never key the radio.
+function dialActionId(jsn) {
+  const cache = ACTION_CACHES[jsn.context];
+  return cache ? cache.actionId : null;
+}
+
+function onDialTurn(jsn, dir, coarse) {
+  switch (dialActionId(jsn)) {
+    case `${PLUGIN_UUID}.afGain`:
+      tciSend(cmdAfGain(dir, coarse ? DIAL.gainCoarse : DIAL.gainFine)); break;
+    case `${PLUGIN_UUID}.rfGain`:
+      tciSend(cmdRfGain(dir, coarse ? DIAL.gainCoarse : DIAL.gainFine)); break;
+    case `${PLUGIN_UUID}.micGain`:
+      tciSend(cmdMicGain(dir, coarse ? DIAL.gainCoarse : DIAL.gainFine)); break;
+    case `${PLUGIN_UUID}.squelch`:
+      tciSend(cmdSqlLevel(dir, coarse ? DIAL.sqlCoarse : DIAL.sqlFine)); break;
+    case `${PLUGIN_UUID}.filterWidth`:
+      tciSend(cmdFilterWidth(dir, coarse ? DIAL.bwCoarse : DIAL.bwFine)); break;
+    case `${PLUGIN_UUID}.vfo`:
+    default:  // VFO action, or legacy/unbound dial → tune (harmless)
+      tciSend(coarse ? cmdVfoStepCoarse(dir) : cmdVfoStep(dir));
+  }
+}
+
+$UD.onDialRotateRight(jsn     => onDialTurn(jsn, +1, false));
+$UD.onDialRotateLeft(jsn      => onDialTurn(jsn, -1, false));
+$UD.onDialRotateHoldRight(jsn => onDialTurn(jsn, +1, true));
+$UD.onDialRotateHoldLeft(jsn  => onDialTurn(jsn, -1, true));
+
+// Dial press — ONLY the VFO dial toggles MOX.  Every other dial (and any
+// unrecognised/uncached context) is a deliberate no-op so a level-knob press
+// can never accidentally key the transmitter.
+$UD.onDialDown(jsn => {
+  if (dialActionId(jsn) === `${PLUGIN_UUID}.vfo`) tciSend(cmdMoxToggle());
+});
+$UD.onDialUp(() => {});
 
 // ─── Crash hooks ─────────────────────────────────────────────────────────
 process.on('unhandledRejection', (err) => console.error('[unhandled]', err));
