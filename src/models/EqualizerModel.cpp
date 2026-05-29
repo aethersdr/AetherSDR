@@ -67,28 +67,28 @@ void EqualizerModel::applyEqStatus(const QMap<QString, QString>& kvs, bool isTx)
 void EqualizerModel::setTxEnabled(bool on)
 {
     m_txEnabled = on;
-    emit commandReady(QString("eq txsc mode=%1").arg(on ? "1" : "0"));
+    emit commandReady(QString("eq TXsc mode=%1").arg(on ? "True" : "False"));
     emit txStateChanged();
 }
 
 void EqualizerModel::setRxEnabled(bool on)
 {
     m_rxEnabled = on;
-    emit commandReady(QString("eq rxsc mode=%1").arg(on ? "1" : "0"));
+    emit commandReady(QString("eq RXsc mode=%1").arg(on ? "True" : "False"));
     emit rxStateChanged();
 }
 
 void EqualizerModel::setTxBand(Band b, int dB)
 {
     m_txBands[b] = dB;
-    emit commandReady(QString("eq txsc %1Hz=%2").arg(kBandKeys[b]).arg(dB));
+    emit commandReady(QString("eq TXsc %1Hz=%2").arg(kBandKeys[b]).arg(dB));
     emit txStateChanged();
 }
 
 void EqualizerModel::setRxBand(Band b, int dB)
 {
     m_rxBands[b] = dB;
-    emit commandReady(QString("eq rxsc %1Hz=%2").arg(kBandKeys[b]).arg(dB));
+    emit commandReady(QString("eq RXsc %1Hz=%2").arg(kBandKeys[b]).arg(dB));
     emit rxStateChanged();
 }
 
