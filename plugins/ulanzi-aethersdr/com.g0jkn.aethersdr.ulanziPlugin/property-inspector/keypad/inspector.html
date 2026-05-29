@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>AetherSDR Keypad action settings</title>
+  <link rel="stylesheet" href="../../libs/common-html/css/uspi.css">
+  <script src="../../libs/common-html/js/constants.js"></script>
+  <script src="../../libs/common-html/js/eventEmitter.js"></script>
+  <script src="../../libs/common-html/js/timers.js"></script>
+  <script src="../../libs/common-html/js/utils.js"></script>
+  <script src="../../libs/common-html/js/ulanziApi.js"></script>
+</head>
+<body>
+  <div class="uspi-wrapper">
+    <form id="property-inspector">
+      <div class="uspi-item">
+        <div class="uspi-item-label" data-localize>AetherSDR TCI URL</div>
+        <input type="text" class="uspi-item-value" name="tci_url" value="ws://127.0.0.1:40001"
+               placeholder="ws://127.0.0.1:40001" />
+      </div>
+      <div class="uspi-item">
+        <div class="uspi-item-label" data-localize>Note</div>
+        <div class="uspi-item-value" style="opacity:0.7;font-size:12px">
+          The plugin maintains a single shared TCI connection.
+          Changing the URL here reconnects all AetherSDR actions.
+        </div>
+      </div>
+    </form>
+
+  <script>
+    // Resolve action UUID from the inspector's URL — set during onAdd.
+    let actionUuid = null;
+
+    $UD.onConnected((jsn) => { actionUuid = jsn.actionInfo && jsn.actionInfo.action; });
+
+    $UD.onAdd((message) => {
+      Utils.setFormValue(message.param || {}, '#property-inspector');
+    });
+
+    document.getElementById('property-inspector').addEventListener('change', () => {
+      const params = Utils.getFormValue('#property-inspector');
+      $UD.sendParamFromPlugin(params);
+    });
+  </script>
+  </div>
+</body>
+</html>

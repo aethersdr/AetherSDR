@@ -1,0 +1,381 @@
+{
+  "Version": "0.1.7",
+  "Author": "Nigel Fenton (G0JKN)",
+  "Name": "AetherSDR Controller",
+  "Description": "Drive AetherSDR over its TCI WebSocket interface from a Ulanzi keypad / dial — VFO tuning, MOX, band/mode/slice control.",
+  "Icon": "assets/icons/pluginIcon.png",
+  "Category": "AetherSDR",
+  "CategoryIcon": "assets/icons/category.png",
+  "CodePath": "plugin/app.js",
+  "Type": "JavaScript",
+  "PrivateAPI": false,
+  "SupportedInMultiActions": false,
+  "UUID": "com.g0jkn.aethersdr.controller",
+  "Actions": [
+    {
+      "Name": "VFO Tune",
+      "Icon": "assets/icons/vfo.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Tune the active slice with the dial. Rotate = step, press+rotate = coarse step, press = mode/swap.",
+      "UUID": "com.g0jkn.aethersdr.controller.vfo",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/vfo.png"
+        }
+      ]
+    },
+    {
+      "Name": "MOX Toggle",
+      "Icon": "assets/icons/mox.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Toggle MOX (Manual transmit) on the active slice.",
+      "UUID": "com.g0jkn.aethersdr.controller.mox",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mox.png"
+        }
+      ]
+    },
+    {
+      "Name": "TUNE / ATU",
+      "Icon": "assets/icons/tune.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Start a tune cycle (radio internal ATU).",
+      "UUID": "com.g0jkn.aethersdr.controller.tune",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/tune.png"
+        }
+      ]
+    },
+    {
+      "Name": "Mode Cycle",
+      "Icon": "assets/icons/mode.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Cycle through modulation modes (USB → LSB → CW → DIGU → DIGL → AM → FM).",
+      "UUID": "com.g0jkn.aethersdr.controller.modeCycle",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mode.png"
+        }
+      ]
+    },
+    {
+      "Name": "Band Up",
+      "Icon": "assets/icons/band-up.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Jump to the next higher amateur band (160m → 80m → 40m → … → 6m → 2m).",
+      "UUID": "com.g0jkn.aethersdr.controller.bandUp",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/band-up.png"
+        }
+      ]
+    },
+    {
+      "Name": "Band Down",
+      "Icon": "assets/icons/band-down.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Jump to the next lower amateur band.",
+      "UUID": "com.g0jkn.aethersdr.controller.bandDown",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/band-down.png"
+        }
+      ]
+    },
+    {
+      "Name": "RIT Toggle",
+      "Icon": "assets/icons/rit.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Toggle Receiver Incremental Tuning (RIT) on the active slice.",
+      "UUID": "com.g0jkn.aethersdr.controller.ritToggle",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/rit.png"
+        }
+      ]
+    },
+    {
+      "Name": "Mode USB",
+      "Icon": "assets/icons/mode-usb.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Set modulation to USB on the active slice.",
+      "UUID": "com.g0jkn.aethersdr.controller.modeUsb",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mode-usb.png"
+        }
+      ]
+    },
+    {
+      "Name": "Mode LSB",
+      "Icon": "assets/icons/mode-lsb.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Set modulation to LSB on the active slice.",
+      "UUID": "com.g0jkn.aethersdr.controller.modeLsb",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mode-lsb.png"
+        }
+      ]
+    },
+    {
+      "Name": "Mode CW",
+      "Icon": "assets/icons/mode-cw.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Set modulation to CW on the active slice.",
+      "UUID": "com.g0jkn.aethersdr.controller.modeCw",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mode-cw.png"
+        }
+      ]
+    },
+    {
+      "Name": "Mode DIGU",
+      "Icon": "assets/icons/mode-digu.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Set modulation to DIGU on the active slice (FT8/FT4/PSK upper-side digital).",
+      "UUID": "com.g0jkn.aethersdr.controller.modeDigu",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mode-digu.png"
+        }
+      ]
+    },
+    {
+      "Name": "AF Gain Up",
+      "Icon": "assets/icons/af-gain-up.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Increase AF (audio/volume) gain by 5 (TCI 'volume' verb, 0–100 range).",
+      "UUID": "com.g0jkn.aethersdr.controller.afGainUp",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/af-gain-up.png"
+        }
+      ]
+    },
+    {
+      "Name": "AF Gain Down",
+      "Icon": "assets/icons/af-gain-down.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Decrease AF (audio/volume) gain by 5 (TCI 'volume' verb, 0–100 range).",
+      "UUID": "com.g0jkn.aethersdr.controller.afGainDown",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/af-gain-down.png"
+        }
+      ]
+    },
+    {
+      "Name": "RF Gain Up",
+      "Icon": "assets/icons/rf-gain-up.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Increase RF drive level by 5 (TCI 'drive' verb, 0–100 range — controls TX power output).",
+      "UUID": "com.g0jkn.aethersdr.controller.rfGainUp",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/rf-gain-up.png"
+        }
+      ]
+    },
+    {
+      "Name": "RF Gain Down",
+      "Icon": "assets/icons/rf-gain-down.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Decrease RF drive level by 5 (TCI 'drive' verb, 0–100 range — controls TX power output).",
+      "UUID": "com.g0jkn.aethersdr.controller.rfGainDown",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/rf-gain-down.png"
+        }
+      ]
+    },
+    {
+      "Name": "Mic Gain Up",
+      "Icon": "assets/icons/mic-gain-up.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Increase transmit mic gain by 5 (TCI 'mic_level' verb, 0–100 range).",
+      "UUID": "com.g0jkn.aethersdr.controller.micGainUp",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mic-gain-up.png"
+        }
+      ]
+    },
+    {
+      "Name": "Mic Gain Down",
+      "Icon": "assets/icons/mic-gain-down.png",
+      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "Tooltip": "Decrease transmit mic gain by 5 (TCI 'mic_level' verb, 0–100 range).",
+      "UUID": "com.g0jkn.aethersdr.controller.micGainDown",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mic-gain-down.png"
+        }
+      ]
+    },
+    {
+      "Name": "AF Gain (dial)",
+      "Icon": "assets/icons/af-gain.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to adjust AF (audio/volume) gain 0–100 (TCI 'volume'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.afGain",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/af-gain.png"
+        }
+      ]
+    },
+    {
+      "Name": "RF Power (dial)",
+      "Icon": "assets/icons/rf-gain.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to adjust RF drive / TX power 0–100 (TCI 'drive'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.rfGain",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/rf-gain.png"
+        }
+      ]
+    },
+    {
+      "Name": "Mic Gain (dial)",
+      "Icon": "assets/icons/mic-gain.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to adjust transmit mic gain 0–100 (TCI 'mic_level'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.micGain",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/mic-gain.png"
+        }
+      ]
+    },
+    {
+      "Name": "Filter Width (dial)",
+      "Icon": "assets/icons/filter-width.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to widen/narrow the RX filter passband symmetrically (TCI 'rx_filter_band'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.filterWidth",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/filter-width.png"
+        }
+      ]
+    },
+    {
+      "Name": "Squelch Level (dial)",
+      "Icon": "assets/icons/squelch.png",
+      "PropertyInspectorPath": "property-inspector/vfo/inspector.html",
+      "Controllers": [
+        "Encoder"
+      ],
+      "Tooltip": "Rotate to adjust squelch threshold (TCI 'sql_level'). Hold+rotate = coarse.",
+      "UUID": "com.g0jkn.aethersdr.controller.squelch",
+      "SupportedInMultiActions": false,
+      "States": [
+        {
+          "Image": "assets/icons/squelch.png"
+        }
+      ]
+    }
+  ],
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    },
+    {
+      "Platform": "mac",
+      "MinimumVersion": "10.11"
+    }
+  ],
+  "Software": {
+    "MinVersion": "2.1.4"
+  }
+}
