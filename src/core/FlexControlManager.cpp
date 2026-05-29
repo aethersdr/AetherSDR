@@ -134,8 +134,14 @@ void FlexControlManager::processCommand(const QByteArray& cmd)
         emit buttonPressed(4, actionId);
 
     } else if (cmd.startsWith('F')) {
-        // Init/reset — log and ignore
-        qCDebug(lcDevices) << "FlexControlManager: device reset" << cmd;
+        // Init/reset (e.g. F0304;) — device just cleared its hardware state,
+        // including the Aux LEDs. Re-issue our cached LED state so the
+        // hardware matches the application's active wheel-mode button. This
+        // covers race-windows where our open()'s writeLedState() arrives at
+        // the device before its own power-on reset completes (#2908).
+        qCDebug(lcDevices) << "FlexControlManager: device reset" << cmd
+                           << "— restoring LED state";
+        writeLedState();
     }
 }
 
