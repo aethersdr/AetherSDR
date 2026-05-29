@@ -229,21 +229,14 @@ void test_gain_formula_extreme_v()
     // Constants match SpectralNR internals:
     constexpr double gf1p5    = 0.8862269254527580; // sqrt(pi)/2 = Gamma(3/2)
     constexpr double GammaMax = 1e4;
-    constexpr double Alpha    = 0.98;
-    constexpr double XiMin    = 1e-4;
     constexpr double EpsFloor = 1e-300;
 
     // Test at v values straddling and far above the old overflow threshold.
     const std::vector<double> v_values = {1419.0, 1420.0, 1421.0, 2000.0, 5000.0, 10000.0};
 
     for (double v : v_values) {
-        // Reconstruct plausible gamma / epsHat that would produce this v.
-        // Use gamma = GammaMax (worst case: maximum a-posteriori SNR).
+        // Use gamma = GammaMax — the worst case (maximum a-posteriori SNR cap).
         double gamma = GammaMax;
-        // ehr = v / gamma; epsHat = ehr / (1 - ehr), floored at XiMin.
-        double ehr   = v / gamma;
-        ehr = std::min(ehr, 1.0 - 1e-9); // ehr < 1 by construction
-        (void)ehr;
 
         // Compute the gain formula directly using the local bessI0e/bessI1e.
         double gain = gf1p5 * std::sqrt(v) / std::max(gamma, EpsFloor)
