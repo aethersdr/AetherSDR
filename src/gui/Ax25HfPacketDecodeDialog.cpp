@@ -1106,6 +1106,10 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
             appendSystemLine(QStringLiteral("Sending AX.25 AFSK audio: %1 chunks at %2 ms.")
                 .arg(m_txChunkCount)
                 .arg(kTxChunkMs));
+            m_txPaceClock.restart();
+            m_txPaceLastChunkMs = -1;
+            m_txPaceMaxGapMs = 0;
+            m_txPaceLateChunks = 0;
             paceTransmitAudio();
             if (m_txActive && m_txPaceTimer)
                 m_txPaceTimer->start();
@@ -1117,6 +1121,19 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
 {
     if (!m_txActive || !m_audio)
         return;
+
+    // Measure scheduling gap between pacer ticks. The pacer wants to fire every
+    // kTxChunkMs; a much larger gap means the GUI thread stalled (heartbeat,
+    // 1 Hz diagnostics, RX decode, render) and the radio TX FIFO likely
+    // underran — the suspected cause of periodic AFSK corruption.
+    const qint64 nowMs = m_txPaceClock.isValid() ? m_txPaceClock.elapsed() : 0;
+    if (m_txPaceLastChunkMs >= 0) {
+        const qint64 gapMs = nowMs - m_txPaceLastChunkMs;
+        m_txPaceMaxGapMs = std::max(m_txPaceMaxGapMs, gapMs);
+        if (gapMs > 2 * kTxChunkMs)
+            ++m_txPaceLateChunks;
+    }
+    m_txPaceLastChunkMs = nowMs;
 
     const qsizetype bytesPerChunk = static_cast<qsizetype>(m_pendingTx.sampleRate)
         * kTxChunkMs / 1000
@@ -1130,6 +1147,32 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
     if (m_txOffsetBytes >= m_txPcm.size()) {
         if (m_txPaceTimer)
             m_txPaceTimer->stop();
+
+        // Pacing health summary. stretch ~1.0 with maxGap ~kTxChunkMs and
+        // lateChunks=0 means the pacer kept real time; stretch >> 1.0 or a large
+        // maxGap / lateChunks confirms GUI-thread starvation feeding the radio.
+        const double audioMs = m_pendingTx.durationSeconds * 1000.0;
+        const qint64 wallMs = m_txPaceClock.isValid() ? m_txPaceClock.elapsed() : 0;
+        const double stretch = audioMs > 0.0 ? static_cast<double>(wallMs) / audioMs : 0.0;
+        qCInfo(lcAx25).noquote()
+            << QStringLiteral("AX.25 TX pacing summary: baud=%1 chunks=%2 audioMs=%3 wallMs=%4 "
+                              "stretch=%5x maxChunkGapMs=%6 lateChunks=%7 nominalChunkMs=%8")
+                .arg(m_shim->config().baud)
+                .arg(m_txChunkIndex)
+                .arg(audioMs, 0, 'f', 0)
+                .arg(wallMs)
+                .arg(stretch, 0, 'f', 2)
+                .arg(m_txPaceMaxGapMs)
+                .arg(m_txPaceLateChunks)
+                .arg(kTxChunkMs);
+        appendSystemLine(QStringLiteral(
+            "TX pacing: %1 chunks, audio %2 ms vs wall %3 ms (%4x), max gap %5 ms, late %6.")
+            .arg(m_txChunkIndex)
+            .arg(audioMs, 0, 'f', 0)
+            .arg(wallMs)
+            .arg(stretch, 0, 'f', 2)
+            .arg(m_txPaceMaxGapMs)
+            .arg(m_txPaceLateChunks));
         appendSystemLine(QStringLiteral("AX.25 TX audio queued; waiting %1 ms before unkey.")
             .arg(kTxTailMs));
         QTimer::singleShot(kTxTailMs, this, [this] {

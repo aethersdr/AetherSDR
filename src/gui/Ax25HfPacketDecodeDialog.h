@@ -3,6 +3,7 @@
 #include "PersistentDialog.h"
 #include "core/tnc/AetherAx25LibmodemShim.h"
 
+#include <QElapsedTimer>
 #include <QMetaObject>
 #include <QPointer>
 
@@ -102,6 +103,11 @@ private:
     qsizetype m_txOffsetBytes{0};
     int m_txChunkIndex{0};
     int m_txChunkCount{0};
+    // TX pacing health: detects GUI-thread stalls starving the 20 ms pacer.
+    QElapsedTimer m_txPaceClock;
+    qint64 m_txPaceLastChunkMs{-1};
+    qint64 m_txPaceMaxGapMs{0};
+    int m_txPaceLateChunks{0};
     bool m_txActive{false};
     bool m_txPendingStream{false};
     bool m_txRestoreAudioDaxMode{false};
