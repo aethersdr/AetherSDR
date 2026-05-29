@@ -1,6 +1,6 @@
 # AetherSDR Ulanzi Studio Plugin
 
-Controls FlexRadio via AetherSDR's TCI WebSocket server from any Ulanzi-Studio-compatible macro keypad / dial. 18 actions covering TX (MOX / TUNE / RIT), VFO tuning, modes, bands, slices, and AF/RF/mic gain.
+Controls FlexRadio via AetherSDR's TCI WebSocket server from any Ulanzi-Studio-compatible macro keypad / dial. Covers TX (MOX / TUNE / RIT), VFO tuning, modes, bands, and gain — as both keypad buttons and rotary (Encoder) knobs (AF / RF / Mic / Filter width / Squelch).
 
 Works with **[Ulanzi Studio](https://www.ulanzi.com/)** on macOS and Windows. Smoke-tested on the **Ulanzi D100H / KEHWIN Dial_Lite** (6 keys + 1 dial, BLE HOGP); the wider D200H (14 keys) and D200X (14 keys + 3 knobs) profile work is in progress.
 
@@ -35,16 +35,15 @@ pwsh scripts/Generate-Icons.ps1
 
 Outputs 196×196 PNGs into `com.g0jkn.aethersdr.ulanziPlugin/assets/icons/` and `…/assets/launchers/` — matching Ulanzi Studio's marketplace icon convention so text + glyphs render crisp on the device LCD. Pure PowerShell + System.Drawing; no npm / Node deps. Currently Windows-only — cross-platform port (ImageMagick / SkiaSharp) is future work.
 
-## 18 Available Actions
+## Available Actions
 
-**Encoder (dial):** VFO Tune (rotate = step, press+rotate = coarse step, press = configurable)
+**Encoder (dial / knob):** VFO Tune, plus rotary AF Gain, RF Power, Mic Gain, Filter Width, Squelch Level (rotate to adjust; press+rotate = coarse). VFO dial press toggles MOX; level-knob press is a deliberate no-op so a knob can't key TX.
 **TX:** MOX Toggle, TUNE / ATU, RIT Toggle
 **Modes:** Mode Cycle, plus direct USB / LSB / CW / DIGU
 **Bands:** Band Up, Band Down
-**Slice:** Slice Cycle (A → … → H → A)
-**Gain:** AF Up/Down, RF Up/Down, Mic Up/Down (±5 per press)
+**Gain (keypad):** AF Up/Down, RF Up/Down, Mic Up/Down (±5 per press)
 
-Per-action property inspector lets you override the AetherSDR TCI URL, step sizes, and dial-press behaviour.
+Each action's property inspector lets you set the AetherSDR TCI URL.
 
 ## Companion shack-app launcher tiles
 
@@ -56,7 +55,7 @@ Independent releases, marketplace submission, and operator-side documentation li
 
 ## License
 
-Apache-2.0 — matches the Ulanzi SDK (vendored in `libs/`) and the rest of the AetherSDR project.
+GPL-3.0-or-later — matching the parent AetherSDR project (this plugin lives in-tree under `plugins/`). The vendored Ulanzi SDK in `libs/common-node/` and `libs/common-html/` keeps its own license (see the `LICENSE` files there).
 
 ## Author
 

@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>AetherSDR VFO Tune (dial) settings</title>
+  <title>AetherSDR dial settings</title>
   <link rel="stylesheet" href="../../libs/common-html/css/uspi.css">
   <script src="../../libs/common-html/js/constants.js"></script>
   <script src="../../libs/common-html/js/eventEmitter.js"></script>
@@ -18,34 +18,11 @@
         <input type="text" class="uspi-item-value" name="tci_url" value="ws://127.0.0.1:40001"
                placeholder="ws://127.0.0.1:40001" />
       </div>
-
       <div class="uspi-item">
-        <div class="uspi-item-label" data-localize>Step size (Hz)</div>
-        <select class="uspi-item-value" name="step_hz">
-          <option value="1">1 Hz</option>
-          <option value="10" selected>10 Hz</option>
-          <option value="100">100 Hz</option>
-          <option value="1000">1 kHz</option>
-        </select>
-      </div>
-
-      <div class="uspi-item">
-        <div class="uspi-item-label" data-localize>Coarse step multiplier (press + rotate)</div>
-        <select class="uspi-item-value" name="coarse_mult">
-          <option value="10" selected>×10</option>
-          <option value="100">×100</option>
-          <option value="1000">×1000 (band-step style)</option>
-        </select>
-      </div>
-
-      <div class="uspi-item">
-        <div class="uspi-item-label" data-localize>Dial press action</div>
-        <select class="uspi-item-value" name="press_action">
-          <option value="mox" selected>MOX toggle</option>
-          <option value="vfo_swap">VFO A/B swap</option>
-          <option value="mode_cycle">Cycle mode</option>
-          <option value="none">(do nothing)</option>
-        </select>
+        <div class="uspi-item-label" data-localize>Note</div>
+        <div class="uspi-item-value" style="opacity:0.7;font-size:12px">
+          One shared TCI connection serves all AetherSDR actions; changing the URL reconnects them.
+        </div>
       </div>
     </form>
 

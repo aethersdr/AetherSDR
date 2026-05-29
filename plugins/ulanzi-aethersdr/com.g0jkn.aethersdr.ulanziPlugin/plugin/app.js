@@ -32,7 +32,6 @@ let reconnectTimer = 0;
 const radio = {
   frequency: 14225000,
   mode: 'USB',
-  sliceIndex: 0,           // 0..7 (A..H) — incremented locally for "slice cycle"
   transmitting: false,
   tuning: false,
   muted: false,
@@ -189,13 +188,6 @@ function cmdBandDown() {
   return cmdSetFreq(BANDS[BAND_ORDER[i]]);
 }
 
-function cmdSliceCycle() {
-  // TCI does not expose a clean "next slice" — local-increment for now.
-  // TODO: confirm correct slice-focus command against AetherSDR's TCI spec.
-  radio.sliceIndex = (radio.sliceIndex + 1) % 8;
-  return `if:${radio.sliceIndex};`;
-}
-
 function cmdVfoStep(direction)       { return cmdSetFreq(radio.frequency + direction * TX_STEP_HZ); }
 function cmdVfoStepCoarse(direction) { return cmdSetFreq(radio.frequency + direction * TX_STEP_HZ * COARSE_MULT); }
 
@@ -316,7 +308,6 @@ $UD.onKeyDown((jsn) => {
     case `${PLUGIN_UUID}.modeCycle`:   tciSend(cmdModeNext());    break;
     case `${PLUGIN_UUID}.bandUp`:      tciSend(cmdBandUp());      break;
     case `${PLUGIN_UUID}.bandDown`:    tciSend(cmdBandDown());    break;
-    case `${PLUGIN_UUID}.sliceCycle`:  tciSend(cmdSliceCycle());  break;
     case `${PLUGIN_UUID}.ritToggle`:   tciSend(cmdRitToggle());   break;
     // Direct-mode actions — for D200H pages that prefer explicit keys over cycling.
     case `${PLUGIN_UUID}.modeUsb`:     tciSend(cmdSetMode('USB'));  break;

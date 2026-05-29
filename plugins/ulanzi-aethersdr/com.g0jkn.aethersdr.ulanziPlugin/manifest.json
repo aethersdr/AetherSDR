@@ -1,5 +1,5 @@
 {
-  "Version": "0.1.6",
+  "Version": "0.1.7",
   "Author": "Nigel Fenton (G0JKN)",
   "Name": "AetherSDR Controller",
   "Description": "Drive AetherSDR over its TCI WebSocket interface from a Ulanzi keypad / dial — VFO tuning, MOX, band/mode/slice control.",
@@ -105,22 +105,6 @@
       "States": [
         {
           "Image": "assets/icons/band-down.png"
-        }
-      ]
-    },
-    {
-      "Name": "Slice Cycle",
-      "Icon": "assets/icons/slice.png",
-      "PropertyInspectorPath": "property-inspector/keypad/inspector.html",
-      "Controllers": [
-        "Keypad"
-      ],
-      "Tooltip": "Cycle active slice (A → B → C → … → H → A).",
-      "UUID": "com.g0jkn.aethersdr.controller.sliceCycle",
-      "SupportedInMultiActions": false,
-      "States": [
-        {
-          "Image": "assets/icons/slice.png"
         }
       ]
     },
