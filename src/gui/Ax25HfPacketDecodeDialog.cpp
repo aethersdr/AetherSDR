@@ -48,6 +48,14 @@ constexpr int kTxDaxSettleMs = 150;
 constexpr int kTxLeadMs = 200;
 constexpr int kTxTailMs = 250;
 constexpr int kTxChunkMs = 20;
+// TX jitter buffer: how far ahead of real time we keep the radio's TX FIFO.
+// The pacer runs on the GUI thread, which jitters under RX-decode / diagnostics
+// / render load (measured stalls of 40-55 ms). Front-loading this much audio
+// and then catch-up pacing keeps the FIFO from underrunning during those
+// stalls. Must comfortably exceed the worst pacer gap, and stay within the
+// radio's DAX TX buffer depth. Raise if clipping persists; lower if the FIFO
+// overflows.
+constexpr int kTxLeadBufferMs = 120;
 
 constexpr const char* kAetherModemStyle = R"(
 QWidget {
@@ -1135,11 +1143,9 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
     }
     m_txPaceLastChunkMs = nowMs;
 
-    const qsizetype bytesPerChunk = static_cast<qsizetype>(m_pendingTx.sampleRate)
-        * kTxChunkMs / 1000
-        * 2
-        * static_cast<qsizetype>(sizeof(float));
-    if (bytesPerChunk <= 0) {
+    const qsizetype frameBytes = 2 * static_cast<qsizetype>(sizeof(float)); // stereo float32
+    const qsizetype bytesPerMs = static_cast<qsizetype>(m_pendingTx.sampleRate) * frameBytes / 1000;
+    if (bytesPerMs <= 0) {
         finishTransmit(true, QStringLiteral("invalid TX pacing chunk size"));
         return;
     }
@@ -1148,9 +1154,11 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
         if (m_txPaceTimer)
             m_txPaceTimer->stop();
 
-        // Pacing health summary. stretch ~1.0 with maxGap ~kTxChunkMs and
-        // lateChunks=0 means the pacer kept real time; stretch >> 1.0 or a large
-        // maxGap / lateChunks confirms GUI-thread starvation feeding the radio.
+        // Pacing health summary. With catch-up pacing, stretch <= ~1.0 means we
+        // kept up with real time and the radio FIFO stayed fed; stretch >> 1.0
+        // means even catch-up could not keep up (FIFO would underrun). maxGap /
+        // lateChunks still report raw GUI-thread jitter, but gaps smaller than
+        // kTxLeadBufferMs are absorbed by the lead cushion and are harmless.
         const double audioMs = m_pendingTx.durationSeconds * 1000.0;
         const qint64 wallMs = m_txPaceClock.isValid() ? m_txPaceClock.elapsed() : 0;
         const double stretch = audioMs > 0.0 ? static_cast<double>(wallMs) / audioMs : 0.0;
@@ -1181,7 +1189,19 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
         return;
     }
 
-    const qsizetype sendBytes = std::min<qsizetype>(bytesPerChunk, m_txPcm.size() - m_txOffsetBytes);
+    // Catch-up pacing: keep the radio's TX FIFO filled to (real time elapsed +
+    // kTxLeadBufferMs). When a tick lands late this ships a larger chunk to
+    // refill the cushion; when we are already ahead it ships nothing and waits
+    // for real time to advance. This holds the average rate at real time (no
+    // chronic lag) while absorbing GUI-thread stalls up to the lead buffer.
+    const qsizetype targetBytes = bytesPerMs * (nowMs + kTxLeadBufferMs);
+    if (targetBytes <= m_txOffsetBytes)
+        return; // FIFO is far enough ahead; wait for the next tick.
+    qsizetype sendBytes = std::min<qsizetype>(targetBytes - m_txOffsetBytes,
+                                              m_txPcm.size() - m_txOffsetBytes);
+    sendBytes -= sendBytes % frameBytes; // keep stereo-frame aligned
+    if (sendBytes <= 0)
+        return;
     const QByteArray chunk = m_txPcm.mid(m_txOffsetBytes, sendBytes);
     m_txOffsetBytes += sendBytes;
     ++m_txChunkIndex;
