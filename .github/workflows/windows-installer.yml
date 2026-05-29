@@ -186,6 +186,13 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda  # v3
         with:
+          # The .msixupload is the Partner Center upload artifact (manual
+          # Store submission for now — see docs/WINDOWS-STORE-MSIX.md). The
+          # MSIX step is continue-on-error, so this glob may match nothing on
+          # a build where MSIX failed; softprops skips unmatched globs by
+          # default rather than failing the release.
           files: |
             AetherSDR-*.zip
             AetherSDR-*-setup.exe
+            AetherSDR-*.msix
+            AetherSDR-*.msixupload

@@ -120,6 +120,83 @@ the checked-in defaults when set:
 If the identity variables are unset, CI now uses the checked-in Partner Center
 identity defaults from `store-identity.ps1`.
 
+## Automated Store Submission (weekly release cycle) — PLANNED
+
+> Status: **not yet wired.** Today the workflow only builds the `.msixupload`
+> and attaches it to the GitHub release / workflow artifacts; a maintainer
+> downloads it and uploads to Partner Center by hand. The automated path below
+> is the design we intend to add once the Entra/Partner Center credentials are
+> set up.
+
+The plan is for the `Windows Installer` workflow to upload each tagged build to
+Partner Center as a **draft** submission via the Microsoft Store Developer CLI
+(`msstore`), deliberately stopping at the draft — a maintainer reviews the
+pending submission in Partner Center and clicks **Submit to Store** to start
+certification. CI would never publish to the live channel on its own.
+
+Planned flow on a `v*` tag push:
+
+1. Build `AetherSDR.exe`, `windeployqt`, MSIX packaging (existing steps).
+2. `microsoft/microsoft-store-apppublisher` installs the `msstore` CLI.
+3. `msstore reconfigure` authenticates with the Entra/Partner Center secrets.
+4. `msstore publish -i <pkg>.msixupload -id <ProductId> --noCommit` stages the
+   draft. `--noCommit` is the safety gate that keeps it out of certification.
+
+The step would be skipped unless the `AETHERSDR_STORE_PRODUCT_ID` **repository
+variable** is set, so PRs, branch `workflow_dispatch` runs, and forks never
+touch Partner Center.
+
+### One-time setup (maintainer, outside the repo)
+
+The `msstore` GitHub Actions path is currently supported for **free products
+only**, which AetherSDR is. The app must already be published and live in the
+Store — done via the manual `.msixupload`.
+
+0. **Individual accounts: create a free Entra tenant first.** An individual
+   (personal-MSA) Partner Center account has no Entra/Azure AD tenant by
+   default, but the submission API needs one. Partner Center → gear →
+   Account settings → **Tenants** → **Create Microsoft Entra ID**. It's free,
+   needs no paid Azure subscription, and the account owner already has the
+   **Manager** role required to do it. Company accounts can skip this.
+
+1. **Microsoft Entra (Azure AD) app registration**
+   - Register an app in Entra ID (`entra.microsoft.com` → App registrations)
+     in the tenant from step 0.
+   - In Partner Center → Account settings → User management → *Microsoft Entra
+     applications*, add that app and assign it the **Manager** role.
+   - Create a client secret under Certificates & secrets (copy the value once).
+
+2. **Collect four values:**
+   - **Tenant ID** — Entra → Overview.
+   - **Client ID** — the App registration's Application ID.
+   - **Client Secret** — the secret value created above.
+   - **Seller ID** — Partner Center → Account settings → Identifiers
+     (a.k.a. Publisher/Seller ID).
+   - **Store product ID** — the 12-char ID for the AetherSDR Store listing
+     (`msstore apps list` after a local `msstore reconfigure`, or from the
+     Partner Center product URL).
+
+3. **GitHub repo configuration** (Settings → Secrets and variables → Actions):
+   - Secrets: `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`,
+     `AZURE_AD_APPLICATION_SECRET`, `SELLER_ID`.
+   - Variable: `AETHERSDR_STORE_PRODUCT_ID` (the Store product ID). Leaving this
+     unset disables the upload step.
+
+### Version discipline
+
+Each Store submission must carry a higher `Identity.Version` than the live one.
+The MSIX version is derived from `project(AetherSDR VERSION ...)` in
+`CMakeLists.txt` and normalized to four parts. Within a single month, weekly
+releases must bump the CalVer **patch** (and the 4th hotfix component if
+needed), or Partner Center will reject the package as not newer.
+
+### Promoting to fully automatic later
+
+To move from draft to auto-publish, drop `--noCommit` (each tag goes straight to
+certification), or publish to a **flight/insider ring** first with
+`-f <flightId>` and promote manually. Keep the draft gate until the weekly
+cadence has proven stable.
+
 ## Local Sideload Signing
 
 Windows requires MSIX packages to be signed with a certificate that is trusted
