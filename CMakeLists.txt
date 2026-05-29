@@ -1881,6 +1881,15 @@ add_executable(cw_sidetone_test
 target_include_directories(cw_sidetone_test PRIVATE src)
 target_link_libraries(cw_sidetone_test PRIVATE Qt6::Core)
 
+add_executable(cwx_local_keyer_drift_test
+    tests/cwx_local_keyer_drift_test.cpp
+    src/core/CwxLocalKeyer.cpp
+    src/core/CwxLocalKeyer.h
+)
+target_include_directories(cwx_local_keyer_drift_test PRIVATE src)
+target_link_libraries(cwx_local_keyer_drift_test PRIVATE Qt6::Core)
+add_test(NAME cwx_local_keyer_drift_test COMMAND cwx_local_keyer_drift_test)
+
 add_executable(ax25_frame_formatter_test
     tests/ax25_frame_formatter_test.cpp
     src/core/tnc/Ax25FrameFormatter.cpp

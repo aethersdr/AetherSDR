@@ -39,6 +39,14 @@ public:
 signals:
     void keyStateChanged(bool down);
 
+protected:
+    // Test seams for deterministic drift-correction coverage.
+    void onTick();
+    virtual qint64 elapsedMs() const;
+    virtual void armTimer(int waitMs);
+    qint64 nextEdgeMsForTest() const { return m_nextEdgeMs; }
+    bool elapsedValidForTest() const { return m_elapsed.isValid(); }
+
 private:
     enum class Element : char { Dit, Dah, ElementGap, CharGap, WordGap };
 
@@ -46,7 +54,8 @@ private:
 
     void encode(const QString& text, int wpm);
     void scheduleNext();
-    void onTick();
+    void resetElapsed();
+    void startElapsed();
 
     QTimer        m_timer;
     QQueue<Pending> m_queue;

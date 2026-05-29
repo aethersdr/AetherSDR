@@ -55,8 +55,7 @@ void CwxLocalKeyer::stop()
     m_queue.clear();
     m_elements.clear();
     m_running = false;
-    m_elapsed.invalidate();
-    m_nextEdgeMs = 0;
+    resetElapsed();
     if (m_currentlyDown) {
         m_currentlyDown = false;
         emit keyStateChanged(false);
@@ -104,8 +103,7 @@ void CwxLocalKeyer::scheduleNext()
     if (m_elements.isEmpty()) {
         if (m_queue.isEmpty()) {
             m_running = false;
-            m_elapsed.invalidate();
-            m_nextEdgeMs = 0;
+            resetElapsed();
             if (m_currentlyDown) {
                 m_currentlyDown = false;
                 emit keyStateChanged(false);
@@ -151,17 +149,38 @@ void CwxLocalKeyer::scheduleNext()
     // and the slip accumulates — audible as stuttering and structurally
     // wrong letter/word spacing on long contest macros (#2980).
     if (!m_elapsed.isValid()) {
-        m_elapsed.start();
-        m_nextEdgeMs = 0;
+        startElapsed();
     }
     m_nextEdgeMs += durationMs;
-    const qint64 wait = qMax<qint64>(1, m_nextEdgeMs - m_elapsed.elapsed());
-    m_timer.start(static_cast<int>(wait));
+    const qint64 wait = qMax<qint64>(1, m_nextEdgeMs - elapsedMs());
+    armTimer(static_cast<int>(wait));
 }
 
 void CwxLocalKeyer::onTick()
 {
     scheduleNext();
+}
+
+qint64 CwxLocalKeyer::elapsedMs() const
+{
+    return m_elapsed.isValid() ? m_elapsed.elapsed() : 0;
+}
+
+void CwxLocalKeyer::armTimer(int waitMs)
+{
+    m_timer.start(waitMs);
+}
+
+void CwxLocalKeyer::resetElapsed()
+{
+    m_elapsed.invalidate();
+    m_nextEdgeMs = 0;
+}
+
+void CwxLocalKeyer::startElapsed()
+{
+    m_elapsed.start();
+    m_nextEdgeMs = 0;
 }
 
 } // namespace AetherSDR
