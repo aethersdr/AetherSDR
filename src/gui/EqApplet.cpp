@@ -83,8 +83,18 @@ static const QString kBlueActive =
 // foreground (fill) token rather than the canonical handle token
 // because the EQ slider's visual idiom puts the accent colour on the
 // handle itself (there's no sub-page fill rule here).
+//
+// sub-page / add-page are pinned to the groove background to neutralise
+// the global app-wide QSlider::sub-page:vertical fill (Theme.h), which
+// otherwise cascades in and paints the accent colour.  On a vertical
+// slider Qt paints sub-page from the handle *upward*, so with the EQ
+// handle centred at 0 dB that leaked fill reads upside-down (blue from
+// centre up).  Both halves stay groove-coloured so only the handle
+// carries the accent, matching this applet's intended idiom.
 static constexpr const char* kVSliderStyle =
     "QSlider::groove:vertical { width: 4px; background: {{color.slider.background}}; border-radius: 2px; }"
+    "QSlider::sub-page:vertical { background: {{color.slider.background}}; border: none; border-radius: 2px; }"
+    "QSlider::add-page:vertical { background: {{color.slider.background}}; border: none; border-radius: 2px; }"
     "QSlider::handle:vertical { height: 10px; width: 16px; margin: 0 -6px;"
     "background: {{color.slider.foreground}}; border-radius: 5px; }";
 
