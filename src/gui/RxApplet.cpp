@@ -2144,6 +2144,7 @@ void RxApplet::connectSlice(SliceModel* s)
 void RxApplet::disconnectSlice(SliceModel* s)
 {
     s->disconnect(this);
+    m_savedSquelchOn = false;
 }
 
 // ─── Private helpers ──────────────────────────────────────────────────────────
@@ -2381,13 +2382,15 @@ void RxApplet::updateModeSettings(const QString& mode)
     // Manual mode = threshold input; Auto mode = dB margin input.
     m_sqlSlider->setEnabled(!sqlDisabled && m_sqlMode != SqlMode::Off);
     if (sqlDisabled && m_slice) {
-        if (m_slice->squelchOn() || m_sqlMode == SqlMode::Auto) {
+        // Only digital/RTTY modes get a client-side squelch-off override (#2504).
+        // CW/CWL squelch is radio-managed — no client push, so no "save" either,
+        // or the unpaired flag would fabricate a restore on the next mode change
+        // (and most visibly across profile-load slice teardown — #3263).
+        if ((m_slice->squelchOn() || m_sqlMode == SqlMode::Auto)
+            && (mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY")) {
             m_savedSquelchOn = true;
-            if (mode == "DIGU" || mode == "DIGL" || mode == "NT" || mode == "RTTY") {
-                // Only send squelch off for digital/RTTY modes; CW is radio-managed
-                m_slice->setSquelch(false, m_slice->squelchLevel());
-                setSqlMode(SqlMode::Off, /*propagateToRadio=*/false);
-            }
+            m_slice->setSquelch(false, m_slice->squelchLevel());
+            setSqlMode(SqlMode::Off, /*propagateToRadio=*/false);
         }
     } else if (!sqlDisabled && m_slice && m_savedSquelchOn) {
         m_savedSquelchOn = false;

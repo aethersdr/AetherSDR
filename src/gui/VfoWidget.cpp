@@ -2683,13 +2683,15 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_sqlBtn->setEnabled(!sqlDisabled);
         m_sqlSlider->setEnabled(!sqlDisabled);
         if (sqlDisabled && m_slice) {
-            if (m_slice->squelchOn()) {
+            // Only digital/RTTY modes get a client-side squelch-off override
+            // (#2504). CW/CWL squelch is radio-managed — no client push, so no
+            // "save" either, or the unpaired flag would fabricate a restore on
+            // the next mode change (#3263).
+            if (m_slice->squelchOn() && (isDig || isRtty)) {
                 m_savedSquelchOn = true;
-                if (isDig || isRtty) {
-                    m_slice->setSquelch(false, m_slice->squelchLevel());
-                    QSignalBlocker sb(m_sqlBtn);
-                    m_sqlBtn->setChecked(false);
-                }
+                m_slice->setSquelch(false, m_slice->squelchLevel());
+                QSignalBlocker sb(m_sqlBtn);
+                m_sqlBtn->setChecked(false);
             }
         } else if (!sqlDisabled && m_slice && m_savedSquelchOn) {
             m_savedSquelchOn = false;
