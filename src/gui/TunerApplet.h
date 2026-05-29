@@ -44,6 +44,7 @@ private:
     void syncFromModel();
     void cycleOperateState();
     void updateAntennaButtons(int antA);
+    void updateValueLabels();
 
     TunerModel* m_model{nullptr};
     MeterModel* m_meter{nullptr};
@@ -51,6 +52,11 @@ private:
     // Gauges (custom-painted inner widgets)
     QWidget* m_fwdGauge{nullptr};
     QWidget* m_swrGauge{nullptr};
+
+    // Row labels that show live numeric values ("PWR 987", "SWR 1.2:1")
+    QLabel*  m_pwrLabel{nullptr};
+    QLabel*  m_swrLabel{nullptr};
+    QTimer*  m_labelTimer{nullptr};
 
     // Relay bars
     QWidget* m_c1Bar{nullptr};

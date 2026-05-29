@@ -10,6 +10,7 @@
 #include <QSignalBlocker>
 #include <QTimer>
 #include "core/ThemeManager.h"
+#include "MeterSmoother.h"
 
 namespace AetherSDR {
 
@@ -77,18 +78,46 @@ void TunerApplet::buildUI()
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
 
+    static const char* kRowLabelStyle =
+        "QLabel { color: #c8d8e8; font-size: 10px; font-weight: bold; }";
+
     // Forward Power gauge — default barefoot (0–200 W); switches to
     // 0–2000 W if a PGXL amplifier is detected via setAmplifierMode().
-    m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "Fwd Pwr", "W",
+    // External row label carries the live value; internal gauge label is empty.
+    m_pwrLabel = new QLabel("PWR", this);
+    m_pwrLabel->setFixedWidth(72);
+    m_pwrLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_pwrLabel->setStyleSheet(kRowLabelStyle);
+    m_fwdGauge = new HGauge(0.0f, 200.0f, 125.0f, "", "",
         {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
         this, 80.0f);
-    vbox->addWidget(m_fwdGauge);
+    // Slow release: bar rises quickly on RF bursts but decays over ~800 ms
+    static_cast<HGauge*>(m_fwdGauge)->setBallistics({0.030f, 0.800f});
+    auto* pwrRow = new QHBoxLayout;
+    pwrRow->setSpacing(4);
+    pwrRow->addWidget(m_pwrLabel);
+    pwrRow->addWidget(m_fwdGauge, 1);
+    vbox->addLayout(pwrRow);
 
     // SWR gauge
-    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "SWR", "",
+    m_swrLabel = new QLabel("SWR", this);
+    m_swrLabel->setFixedWidth(72);
+    m_swrLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    m_swrLabel->setStyleSheet(kRowLabelStyle);
+    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "", "",
         {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
         this, 2.0f);
-    vbox->addWidget(m_swrGauge);
+    auto* swrRow = new QHBoxLayout;
+    swrRow->setSpacing(4);
+    swrRow->addWidget(m_swrLabel);
+    swrRow->addWidget(m_swrGauge, 1);
+    vbox->addLayout(swrRow);
+
+    // 10 Hz label update timer — decouples digit flicker from gauge frame rate
+    m_labelTimer = new QTimer(this);
+    m_labelTimer->setInterval(kMeterReadoutUpdateMs);
+    connect(m_labelTimer, &QTimer::timeout, this, &TunerApplet::updateValueLabels);
+    m_labelTimer->start();
 
     // Bottom section: relay bars (75% left) + buttons (25% right)
     auto* bottomRow = new QHBoxLayout;
@@ -322,6 +351,20 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
     if (m_postTuneCapture && swr > 1.01f) {
         m_tuneSwr = swr;
         m_tuneBtn->setText(QString("SWR %1").arg(swr, 0, 'f', 2));
+    }
+}
+
+void TunerApplet::updateValueLabels()
+{
+    // Only show the numeric value when meaningful power is present.
+    // PWR and SWR are indeterminate at idle (< 5 W) so suppress to avoid
+    // cluttering the label with noise-floor readings.
+    if (m_fwdPower >= 5.0f) {
+        m_pwrLabel->setText(QStringLiteral("PWR  %1").arg(static_cast<int>(m_fwdPower)));
+        m_swrLabel->setText(QStringLiteral("SWR  %1:1").arg(m_swr, 0, 'f', 1));
+    } else {
+        m_pwrLabel->setText("PWR");
+        m_swrLabel->setText("SWR");
     }
 }
 

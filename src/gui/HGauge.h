@@ -108,6 +108,10 @@ public:
     // in the natural direction.
     void setFillFromRight(bool on) { m_fillFromRight = on; update(); }
 
+    void setBallistics(const MeterSmoother::Ballistics& b) {
+        m_smooth.setBallistics(b);
+    }
+
     void setRange(float min, float max, float redStart,
                   const QVector<Tick>& ticks, float yellowStart = std::numeric_limits<float>::quiet_NaN()) {
         m_min = min; m_max = max; m_redStart = redStart;
