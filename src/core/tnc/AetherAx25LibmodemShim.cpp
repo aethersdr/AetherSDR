@@ -212,6 +212,137 @@ void measureStereoFloatPcm(const QByteArray& pcm, double& rmsDbfs, double& peakD
     peakDbfs = toDbfs(peak);
 }
 
+int txPreambleFlagsForProfile(Ax25ModemProfile profile)
+{
+    return profile == Ax25ModemProfile::Vhf1200 ? kVhf1200TxPreambleFlags : kTxPreambleFlags;
+}
+
+// Fill the rate / tone / preamble fields of a TX result from the active config
+// and validate the sample-rate/baud combination. Returns false (with error set)
+// if the combination cannot be rendered.
+bool initTxResult(const Ax25DemodConfig& cfg, Ax25TransmitResult& result)
+{
+    result.sampleRate = cfg.sampleRate;
+    result.baud = cfg.baud;
+    result.polarity = cfg.polarity;
+    result.markHz = cfg.markHz;
+    result.spaceHz = cfg.spaceHz;
+    result.preambleFlags = txPreambleFlagsForProfile(cfg.profile);
+    result.postambleFlags = kTxPostambleFlags;
+    result.vitaPacketFrames = kTxVitaPacketFrames;
+
+    if (cfg.sampleRate <= 0 || cfg.baud <= 0 || cfg.sampleRate % cfg.baud != 0) {
+        result.error = QStringLiteral("unsupported TX sample-rate/baud combination: %1 Hz / %2 baud")
+            .arg(cfg.sampleRate)
+            .arg(cfg.baud);
+        return false;
+    }
+    return true;
+}
+
+// Modulate an encoded AX.25 bitstream into padded stereo float32 AFSK and fill
+// the audio fields of the result. Shared by the text and KISS transmit paths.
+void renderBitsToResult(const std::vector<uint8_t>& bits,
+                        const Ax25DemodConfig& cfg,
+                        Ax25TransmitResult& result)
+{
+    result.bitCount = static_cast<int>(bits.size());
+    const int samplesPerSymbol = cfg.sampleRate / cfg.baud;
+    const int payloadFrames = static_cast<int>(bits.size()) * samplesPerSymbol;
+    const int paddedFrames = ((payloadFrames + kTxVitaPacketFrames - 1) / kTxVitaPacketFrames)
+        * kTxVitaPacketFrames;
+    result.audioFrames = paddedFrames;
+    result.durationSeconds = static_cast<double>(paddedFrames) / static_cast<double>(cfg.sampleRate);
+    result.stereoFloat32Pcm.resize(paddedFrames * 2 * static_cast<int>(sizeof(float)));
+
+    const double mark = cfg.polarity == Ax25TonePolarity::Inverted ? cfg.spaceHz : cfg.markHz;
+    const double space = cfg.polarity == Ax25TonePolarity::Inverted ? cfg.markHz : cfg.spaceHz;
+    double phase = 0.0;
+    int frameIndex = 0;
+    auto* dst = reinterpret_cast<float*>(result.stereoFloat32Pcm.data());
+    for (uint8_t bit : bits) {
+        const double frequency = bit ? mark : space;
+        const double phaseStep = 2.0 * kPi * frequency / static_cast<double>(cfg.sampleRate);
+        for (int i = 0; i < samplesPerSymbol; ++i) {
+            const float sample = static_cast<float>(kTxAfskAmplitude * std::sin(phase));
+            dst[frameIndex * 2] = sample;
+            dst[frameIndex * 2 + 1] = sample;
+            ++frameIndex;
+            phase += phaseStep;
+            if (phase >= 2.0 * kPi)
+                phase -= 2.0 * kPi;
+        }
+    }
+    while (frameIndex < paddedFrames) {
+        dst[frameIndex * 2] = 0.0f;
+        dst[frameIndex * 2 + 1] = 0.0f;
+        ++frameIndex;
+    }
+    measureStereoFloatPcm(result.stereoFloat32Pcm, result.rmsDbfs, result.peakDbfs);
+}
+
+void logTxSummary(const Ax25TransmitResult& result, const QString& via)
+{
+    qCInfo(lcAx25).noquote()
+        << QStringLiteral("AX.25 TX packetized via=%1 SRC=%2 DST=%3 PATH=%4 payloadBytes=%5 "
+                          "frameBytes=%6 bits=%7 samples=%8 duration=%9s levelRms=%10dBFS "
+                          "levelPeak=%11dBFS baud=%12 mark=%13 space=%14 polarity=%15 "
+                          "preamble=%16 postamble=%17")
+            .arg(via,
+                 result.frame.source,
+                 result.frame.destination,
+                 result.frame.path.join(QStringLiteral(",")))
+            .arg(result.frame.payload.size())
+            .arg(result.frameBytes)
+            .arg(result.bitCount)
+            .arg(result.audioFrames)
+            .arg(result.durationSeconds, 0, 'f', 2)
+            .arg(result.rmsDbfs, 0, 'f', 1)
+            .arg(result.peakDbfs, 0, 'f', 1)
+            .arg(result.baud)
+            .arg(result.markHz, 0, 'f', 0)
+            .arg(result.spaceHz, 0, 'f', 0)
+            .arg(result.polarity == Ax25TonePolarity::Normal
+                 ? QStringLiteral("Normal")
+                 : QStringLiteral("Reverse"))
+            .arg(result.preambleFlags)
+            .arg(result.postambleFlags);
+}
+
+// Best-effort decode of raw AX.25 frame bytes (no FCS) into display fields for
+// the TX terminal/log. Returns a frame with payloadHex set if it cannot parse.
+Ax25TransmitFrame transmitFrameFromBytes(const QByteArray& ax25NoFcs)
+{
+    Ax25TransmitFrame out;
+    lm::address from;
+    lm::address to;
+    std::array<lm::address, 8> path = {};
+    std::array<uint8_t, 256> data = {};
+    uint8_t control = 0;
+    uint8_t pid = 0;
+    const auto* begin = reinterpret_cast<const uint8_t*>(ax25NoFcs.constData());
+    const auto* end = begin + ax25NoFcs.size();
+
+    auto [pathOut, dataOut, parsed] = lm::ax25::try_decode_frame_no_fcs(
+        begin, end, from, to, path.begin(), data.begin(), data.size(), control, pid);
+    if (!parsed) {
+        out.payloadHex = QString::fromLatin1(ax25NoFcs.toHex(' ')).toUpper();
+        return out;
+    }
+
+    out.source = addressToString(from);
+    out.destination = addressToString(to);
+    for (auto it = path.begin(); it != pathOut; ++it)
+        out.path.append(addressToString(*it));
+    out.control = control;
+    out.pid = pid;
+    const auto dataLength = static_cast<qsizetype>(std::distance(data.begin(), dataOut));
+    out.payload = QByteArray(reinterpret_cast<const char*>(data.data()), dataLength);
+    out.payloadText = Ax25FrameFormatter::payloadText(out.payload);
+    out.payloadHex = Ax25FrameFormatter::payloadHex(out.payload);
+    return out;
+}
+
 } // namespace
 
 Ax25DemodConfig ax25DemodConfigForProfile(Ax25ModemProfile profile, Ax25TonePolarity polarity)
@@ -713,7 +844,16 @@ struct AetherAx25LibmodemShim::Impl {
         frame.control[0] = control;
         frame.pid = pid;
         frame.crc = actualFcs;
-        return toDecodedFrame(frame, lane.lastQuality, lane.phaseOffsetSamples);
+        Ax25DecodedFrame decodedFrame =
+            toDecodedFrame(frame, lane.lastQuality, lane.phaseOffsetSamples);
+        // Capture the exact on-air frame bytes minus the trailing 2-byte FCS so
+        // the KISS TNC can forward the decode to host apps verbatim.
+        if (candidateFrameBytesSize >= 2) {
+            decodedFrame.ax25FrameNoFcs = QByteArray(
+                reinterpret_cast<const char*>(lane.candidateFrameBytes.data()),
+                static_cast<qsizetype>(candidateFrameBytesSize - 2));
+        }
+        return decodedFrame;
     }
 
     bool shouldEmitFrame(const Ax25DecodedFrame& frame)
@@ -958,24 +1098,8 @@ Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudio(
 {
     Ax25TransmitResult result;
     const auto cfg = m_impl->config;
-    result.sampleRate = cfg.sampleRate;
-    result.baud = cfg.baud;
-    result.polarity = cfg.polarity;
-    result.markHz = cfg.markHz;
-    result.spaceHz = cfg.spaceHz;
-    const int preambleFlags = cfg.profile == Ax25ModemProfile::Vhf1200
-        ? kVhf1200TxPreambleFlags
-        : kTxPreambleFlags;
-    result.preambleFlags = preambleFlags;
-    result.postambleFlags = kTxPostambleFlags;
-    result.vitaPacketFrames = kTxVitaPacketFrames;
-
-    if (cfg.sampleRate <= 0 || cfg.baud <= 0 || cfg.sampleRate % cfg.baud != 0) {
-        result.error = QStringLiteral("unsupported TX sample-rate/baud combination: %1 Hz / %2 baud")
-            .arg(cfg.sampleRate)
-            .arg(cfg.baud);
+    if (!initTxResult(cfg, result))
         return result;
-    }
 
     QString error;
     const std::optional<lm::packet> maybePacket =
@@ -995,71 +1119,44 @@ Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudio(
 
     const std::vector<uint8_t> frameBytes = lm::ax25::encode_frame(packet);
     const std::vector<uint8_t> bits = lm::ax25::encode_bitstream(
-        frameBytes,
-        0,
-        preambleFlags,
-        kTxPostambleFlags);
+        frameBytes, 0, result.preambleFlags, kTxPostambleFlags);
     result.frameBytes = static_cast<int>(frameBytes.size());
-    result.bitCount = static_cast<int>(bits.size());
-
-    const int samplesPerSymbol = cfg.sampleRate / cfg.baud;
-    const int payloadFrames = static_cast<int>(bits.size()) * samplesPerSymbol;
-    const int paddedFrames = ((payloadFrames + kTxVitaPacketFrames - 1) / kTxVitaPacketFrames)
-        * kTxVitaPacketFrames;
-    result.audioFrames = paddedFrames;
-    result.durationSeconds = static_cast<double>(paddedFrames) / static_cast<double>(cfg.sampleRate);
-    result.stereoFloat32Pcm.resize(paddedFrames * 2 * static_cast<int>(sizeof(float)));
-
-    const double mark = cfg.polarity == Ax25TonePolarity::Inverted
-        ? cfg.spaceHz
-        : cfg.markHz;
-    const double space = cfg.polarity == Ax25TonePolarity::Inverted
-        ? cfg.markHz
-        : cfg.spaceHz;
-    double phase = 0.0;
-    int frameIndex = 0;
-    auto* dst = reinterpret_cast<float*>(result.stereoFloat32Pcm.data());
-    for (uint8_t bit : bits) {
-        const double frequency = bit ? mark : space;
-        const double phaseStep = 2.0 * kPi * frequency / static_cast<double>(cfg.sampleRate);
-        for (int i = 0; i < samplesPerSymbol; ++i) {
-            const float sample = static_cast<float>(kTxAfskAmplitude * std::sin(phase));
-            dst[frameIndex * 2] = sample;
-            dst[frameIndex * 2 + 1] = sample;
-            ++frameIndex;
-            phase += phaseStep;
-            if (phase >= 2.0 * kPi)
-                phase -= 2.0 * kPi;
-        }
-    }
-    while (frameIndex < paddedFrames) {
-        dst[frameIndex * 2] = 0.0f;
-        dst[frameIndex * 2 + 1] = 0.0f;
-        ++frameIndex;
-    }
-    measureStereoFloatPcm(result.stereoFloat32Pcm, result.rmsDbfs, result.peakDbfs);
+    renderBitsToResult(bits, cfg, result);
     result.ok = true;
+    logTxSummary(result, QStringLiteral("text"));
+    return result;
+}
 
-    qCInfo(lcAx25).noquote()
-        << QStringLiteral("AX.25 TX packetized SRC=%1 DST=%2 VIA=%3 payloadBytes=%4 frameBytes=%5 bits=%6 samples=%7 duration=%8s levelRms=%9dBFS levelPeak=%10dBFS baud=%11 mark=%12 space=%13 polarity=%14 preamble=%15 postamble=%16")
-            .arg(result.frame.source,
-                 result.frame.destination,
-                 result.frame.path.join(QStringLiteral(",")))
-            .arg(result.frame.payload.size())
-            .arg(result.frameBytes)
-            .arg(result.bitCount)
-            .arg(result.audioFrames)
-            .arg(result.durationSeconds, 0, 'f', 2)
-            .arg(result.rmsDbfs, 0, 'f', 1)
-            .arg(result.peakDbfs, 0, 'f', 1)
-            .arg(result.baud)
-            .arg(result.markHz, 0, 'f', 0)
-            .arg(result.spaceHz, 0, 'f', 0)
-            .arg(result.polarity == Ax25TonePolarity::Normal
-                 ? QStringLiteral("Normal")
-                 : QStringLiteral("Reverse"))
-            .arg(result.preambleFlags)
-            .arg(result.postambleFlags);
+Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudioFromFrame(
+    const QByteArray& ax25NoFcs) const
+{
+    Ax25TransmitResult result;
+    const auto cfg = m_impl->config;
+    if (!initTxResult(cfg, result))
+        return result;
+
+    // Minimum AX.25 UI frame: dest(7) + src(7) + control(1) = 15 bytes.
+    if (ax25NoFcs.size() < 15) {
+        result.error = QStringLiteral("KISS frame too short: %1 bytes (need >= 15)")
+            .arg(ax25NoFcs.size());
+        return result;
+    }
+
+    // The host sends the frame without an FCS; the TNC computes and appends it.
+    std::vector<uint8_t> frameBytes(
+        reinterpret_cast<const uint8_t*>(ax25NoFcs.constData()),
+        reinterpret_cast<const uint8_t*>(ax25NoFcs.constData()) + ax25NoFcs.size());
+    const std::array<uint8_t, 2> crc = lm::ax25::compute_crc(frameBytes.begin(), frameBytes.end());
+    frameBytes.push_back(crc[0]);
+    frameBytes.push_back(crc[1]);
+
+    const std::vector<uint8_t> bits = lm::ax25::encode_bitstream(
+        frameBytes, 0, result.preambleFlags, kTxPostambleFlags);
+    result.frameBytes = static_cast<int>(frameBytes.size());
+    result.frame = transmitFrameFromBytes(ax25NoFcs);
+    renderBitsToResult(bits, cfg, result);
+    result.ok = true;
+    logTxSummary(result, QStringLiteral("kiss"));
     return result;
 }
 

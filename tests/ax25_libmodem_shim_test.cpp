@@ -1,4 +1,5 @@
 #include "core/tnc/AetherAx25LibmodemShim.h"
+#include "core/tnc/KissFraming.h"
 
 #include "bitstream.h"
 
@@ -594,6 +595,88 @@ void testTransmitVhf1200LoopbackDecodes()
            frames.first().payloadText == QStringLiteral("!4742.00N/12217.00W>2m APRS TX"));
 }
 
+void testKissFramingRoundTrip()
+{
+    namespace k = AetherSDR::kiss;
+
+    // Payload deliberately contains FEND (0xC0) and FESC (0xDB) so escaping runs.
+    QByteArray ax25;
+    ax25.append(static_cast<char>(0xC0));
+    ax25.append(static_cast<char>(0x01));
+    ax25.append(static_cast<char>(0xDB));
+    ax25.append("HELLO");
+
+    const QByteArray framed = k::encodeDataFrame(ax25);
+    report("KISS frame is delimited by FEND",
+           !framed.isEmpty()
+           && static_cast<quint8>(framed.front()) == k::kFend
+           && static_cast<quint8>(framed.back()) == k::kFend);
+    report("KISS framing escaped the special bytes", framed.size() > ax25.size() + 3);
+
+    k::Decoder decoder;
+    const QVector<QByteArray> frames = decoder.feed(framed);
+    report("KISS decoder yields exactly one frame", frames.size() == 1);
+    if (!frames.isEmpty()) {
+        quint8 port = 9;
+        quint8 command = 9;
+        QByteArray payload;
+        k::splitTypeByte(frames.first(), port, command, payload);
+        report("KISS decoded a data command on port 0", port == 0 && command == k::kCmdData);
+        report("KISS payload round-trips through escape/unescape", payload == ax25);
+    }
+
+    // Feeding one byte at a time must reassemble identically (TCP can split).
+    k::Decoder dripDecoder;
+    QVector<QByteArray> dripFrames;
+    for (int i = 0; i < framed.size(); ++i)
+        dripFrames += dripDecoder.feed(framed.mid(i, 1));
+    bool dripOk = dripFrames.size() == 1;
+    if (dripOk) {
+        quint8 p = 0;
+        quint8 c = 0;
+        QByteArray pl;
+        k::splitTypeByte(dripFrames.first(), p, c, pl);
+        dripOk = (pl == ax25);
+    }
+    report("KISS decoder reassembles across byte-split feeds", dripOk);
+}
+
+void testKissTxFromFrameLoopbackDecodes()
+{
+    AetherAx25LibmodemShim txShim;
+    txShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200));
+
+    // A KISS data frame carries a raw AX.25 frame with no FCS: encode a packet
+    // and drop the trailing 2-byte FCS to simulate what a host app would send.
+    const std::vector<uint8_t> frameWithFcs = lm::ax25::encode_frame(fixedVhf1200AprsTestPacket());
+    const QByteArray ax25NoFcs(reinterpret_cast<const char*>(frameWithFcs.data()),
+                               static_cast<qsizetype>(frameWithFcs.size() - 2));
+
+    const Ax25TransmitResult tx = txShim.buildTransmitAudioFromFrame(ax25NoFcs);
+    report("KISS TX-from-frame packetizes", tx.ok);
+    if (!tx.ok)
+        return;
+    report("KISS TX-from-frame is 1200 baud", tx.baud == 1200);
+    report("KISS TX-from-frame appended FCS", tx.frameBytes == ax25NoFcs.size() + 2);
+
+    const std::vector<float> mono = monoFromStereoFloat32(tx.stereoFloat32Pcm);
+    AetherAx25LibmodemShim rxShim;
+    rxShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200));
+    const auto frames = rxShim.processMonoFloat(mono.data(),
+                                                static_cast<int>(mono.size()),
+                                                tx.sampleRate);
+    report("KISS TX-from-frame loopback decodes one frame", frames.size() == 1);
+    if (frames.isEmpty())
+        return;
+    report("KISS TX loopback source", frames.first().source == QStringLiteral("KK7GWY-9"));
+    report("KISS TX loopback payload",
+           frames.first().payloadText
+               == QStringLiteral("!4742.00N/12217.00W>2m APRS via AetherModem 1200 baud"));
+    // RX raw-frame capture must round-trip back to exactly what we keyed.
+    report("KISS RX raw frame bytes match the keyed frame",
+           frames.first().ax25FrameNoFcs == ax25NoFcs);
+}
+
 void testMalformedTransmitMonitorSyntaxIsRejected()
 {
     AetherAx25LibmodemShim txShim;
@@ -789,6 +872,8 @@ int main(int argc, char** argv)
     testTransmitRawPayloadBuildsLoopbackAudio();
     testTransmitMonitorSyntaxBuildsLoopbackAudio();
     testTransmitVhf1200LoopbackDecodes();
+    testKissFramingRoundTrip();
+    testKissTxFromFrameLoopbackDecodes();
     testMalformedTransmitMonitorSyntaxIsRejected();
     testChunkedSyntheticReplayUsesReceiveGate();
     testReplayWavLoaderFeedsShim();

@@ -6,10 +6,12 @@
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
 #include "core/tnc/Ax25FrameFormatter.h"
+#include "core/tnc/KissTncServer.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
+#include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
@@ -25,7 +27,10 @@
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollBar>
+#include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QSpinBox>
+#include <QStackedWidget>
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QTimer>
@@ -41,8 +46,11 @@ namespace AetherSDR {
 namespace {
 
 constexpr auto kPacketDecoderProfileSetting = "Ax25PacketDecoderProfile";
-constexpr auto kPacketDecoderPolaritySetting = "Ax25PacketDecoderPolarity";
 constexpr auto kPacketDecoderDebugSetting = "Ax25PacketDecoderDiagnosticsDebug";
+constexpr auto kTncEnabledSetting = "AetherModemKissTncEnabled";
+constexpr auto kTncStartOnStartupSetting = "AetherModemKissTncStartOnStartup";
+constexpr auto kTncPortSetting = "AetherModemKissTncPort";
+constexpr int kTncDefaultPort = 8001;
 constexpr int kAudioCaptureSeconds = 180;
 constexpr int kTxDaxSettleMs = 150;
 constexpr int kTxLeadMs = 200;
@@ -239,22 +247,6 @@ Ax25ModemProfile profileFromSettingsValue(const QString& value)
     return Ax25ModemProfile::Hf300;
 }
 
-QString polaritySettingsValue(Ax25TonePolarity polarity)
-{
-    return polarity == Ax25TonePolarity::Inverted
-        ? QStringLiteral("Reverse")
-        : QStringLiteral("Normal");
-}
-
-Ax25TonePolarity polarityFromSettingsValue(const QString& value)
-{
-    if (value.compare(QStringLiteral("Reverse"), Qt::CaseInsensitive) == 0
-        || value.compare(QStringLiteral("Inverted"), Qt::CaseInsensitive) == 0) {
-        return Ax25TonePolarity::Inverted;
-    }
-    return Ax25TonePolarity::Normal;
-}
-
 QLabel* sectionLabel(const QString& text, QWidget* parent)
 {
     auto* label = new QLabel(text, parent);
@@ -389,12 +381,12 @@ public:
         : QWidget(parent)
         , m_levels(68)
     {
-        setMinimumHeight(38);
+        setMinimumHeight(56);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setCursor(Qt::PointingHandCursor);
         updateToolTip();
         for (int i = 0; i < m_levels.size(); ++i)
-            m_levels[i] = 4 + ((i * 7) % 6);
+            m_levels[i] = 6 + ((i * 7) % 8);
     }
 
     void setDebugEnabled(bool enabled)
@@ -411,12 +403,15 @@ public:
         m_clickHandler = std::move(handler);
     }
 
+    // Bar levels are pixel heights against the (taller) usable height; values
+    // are scaled so even one or two packets/sec produce a clearly visible spike
+    // rather than sitting on the floor.
     void recordFrame()
     {
         m_cursor = (m_cursor + 9) % m_levels.size();
-        m_levels[m_cursor] = 30;
+        m_levels[m_cursor] = 46;
         if (m_cursor + 3 < m_levels.size())
-            m_levels[m_cursor + 3] = 18;
+            m_levels[m_cursor + 3] = 28;
         update();
     }
 
@@ -426,11 +421,11 @@ public:
             return;
 
         m_cursor = (m_cursor + 1) % m_levels.size();
-        int level = receiveGateOpen ? 9 : 3;
+        int level = receiveGateOpen ? 16 : 6;
         if (hdlcCandidates > 0)
-            level = std::max(level, 9 + std::min(14, hdlcCandidates * 3));
+            level = std::max(level, 16 + std::min(28, hdlcCandidates * 5));
         if (acceptedFrames > 0)
-            level = 30;
+            level = 46;
         m_levels[m_cursor] = level;
         update();
     }
@@ -438,7 +433,7 @@ public:
     void reset()
     {
         for (int i = 0; i < m_levels.size(); ++i)
-            m_levels[i] = 3 + ((i * 5) % 5);
+            m_levels[i] = 6 + ((i * 5) % 7);
         m_cursor = 0;
         update();
     }
@@ -504,7 +499,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
                                                    RadioModel* radio,
                                                    SliceModel* initialSlice,
                                                    QWidget* parent)
-    : PersistentDialog(QStringLiteral("AetherModem - Packet Decoder (Experimental)"),
+    : PersistentDialog(QStringLiteral("AetherModem"),
                        QStringLiteral("Ax25HfPacketDecodeDialogGeometry"),
                        parent)
     , m_audio(audio)
@@ -514,6 +509,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     setMinimumSize(1080, 680);
 
     m_shim = new AetherAx25LibmodemShim(this);
+    m_kissServer = new KissTncServer(this);
     m_heartbeatTimer = new QTimer(this);
     m_heartbeatTimer->setInterval(1000);
     m_txPaceTimer = new QTimer(this);
@@ -523,35 +519,35 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(10);
 
-    // Em-dash is — (U+2014).  Don't use the byte-escape \xE2\x80\x94 form
-    // here — inside QStringLiteral the literal expands to a UTF-16 (u"...")
-    // string where each \xXX is a single char16_t code unit, not a byte of a
-    // multi-byte UTF-8 sequence.  Three separate code units (0x00E2, 0x0080,
-    // 0x0094) render as "â" + two control glyphs, which is what shipped.
-    auto* experimentalBanner = new QLabel(
-        QStringLiteral("<b>Experimental — AX.25 modem bring-up.</b> "
-                       "300 baud HF and 1200 baud VHF (Bell 202 / 2m APRS) "
-                       "AX.25 receive and transmit are active."),
-        bodyWidget());
-    experimentalBanner->setObjectName(QStringLiteral("ExperimentalBanner"));
-    experimentalBanner->setWordWrap(true);
-    experimentalBanner->setTextFormat(Qt::RichText);
-    root->addWidget(experimentalBanner);
-
     auto* tabsFrame = panel(QStringLiteral("TabsFrame"), bodyWidget());
     auto* tabs = new QHBoxLayout(tabsFrame);
     tabs->setContentsMargins(0, 0, 0, 0);
     tabs->setSpacing(0);
-    tabs->addWidget(tabButton(QStringLiteral("AX.25"), true, tabsFrame), 1);
-    auto* terminalTab = tabButton(QStringLiteral("Terminal"), false, tabsFrame);
-    terminalTab->setVisible(false);
-    tabs->addWidget(terminalTab, 1);
-    auto* mailboxTab = tabButton(QStringLiteral("Mailbox"), false, tabsFrame);
-    mailboxTab->setVisible(false);
-    tabs->addWidget(mailboxTab, 1);
+    m_ax25Tab = tabButton(QStringLiteral("AX.25"), true, tabsFrame);
+    m_kissTab = tabButton(QStringLiteral("KISS TNC"), false, tabsFrame);
+    m_ax25Tab->setEnabled(true);
+    m_kissTab->setEnabled(true);
+    auto* tabGroup = new QButtonGroup(this);
+    tabGroup->setExclusive(true);
+    tabGroup->addButton(m_ax25Tab, 0);
+    tabGroup->addButton(m_kissTab, 1);
+    tabs->addWidget(m_ax25Tab, 1);
+    tabs->addWidget(m_kissTab, 1);
     root->addWidget(tabsFrame);
 
-    auto* controlsFrame = panel(QStringLiteral("ControlsFrame"), bodyWidget());
+    m_tabStack = new QStackedWidget(bodyWidget());
+    root->addWidget(m_tabStack);
+    connect(tabGroup, &QButtonGroup::idClicked, m_tabStack, &QStackedWidget::setCurrentIndex);
+
+    // AX.25 page: modem config + transmit. The log and status row below the
+    // stack are shared by both tabs.
+    auto* ax25Page = new QWidget(m_tabStack);
+    auto* ax25PageLayout = new QVBoxLayout(ax25Page);
+    ax25PageLayout->setContentsMargins(0, 0, 0, 0);
+    ax25PageLayout->setSpacing(10);
+    m_tabStack->addWidget(ax25Page);
+
+    auto* controlsFrame = panel(QStringLiteral("ControlsFrame"), ax25Page);
     auto* controls = new QHBoxLayout(controlsFrame);
     controls->setContentsMargins(16, 14, 16, 14);
     controls->setSpacing(20);
@@ -579,22 +575,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_enableDecode = new QCheckBox(QStringLiteral("Enable Modem"), modemCell);
     modemLayout->addWidget(m_enableDecode);
     controls->addWidget(modemCell, 1);
-
-    auto* polarityCell = panel(QStringLiteral("ControlCell"), controlsFrame);
-    auto* polarityLayout = new QVBoxLayout(polarityCell);
-    polarityLayout->setContentsMargins(0, 0, 20, 0);
-    polarityLayout->setSpacing(12);
-    polarityLayout->addWidget(sectionLabel(QStringLiteral("TONE POLARITY"), polarityCell));
-    auto* polarityButtons = new QHBoxLayout;
-    polarityButtons->setSpacing(34);
-    m_polarityNormal = new QRadioButton(QStringLiteral("Normal"), polarityCell);
-    m_polarityReverse = new QRadioButton(QStringLiteral("Reverse"), polarityCell);
-    m_polarityNormal->setChecked(true);
-    polarityButtons->addWidget(m_polarityNormal);
-    polarityButtons->addWidget(m_polarityReverse);
-    polarityButtons->addStretch(1);
-    polarityLayout->addLayout(polarityButtons);
-    controls->addWidget(polarityCell, 2);
+    controls->addStretch(2);
 
     m_captureButton = new QPushButton(QStringLiteral("Capture 3m"), controlsFrame);
     m_captureButton->setMinimumHeight(42);
@@ -603,9 +584,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_clearButton = new QPushButton(QStringLiteral("Clear Log"), controlsFrame);
     m_clearButton->setMinimumHeight(42);
     controls->addWidget(m_clearButton);
-    root->addWidget(controlsFrame);
+    ax25PageLayout->addWidget(controlsFrame);
 
-    auto* txFrame = panel(QStringLiteral("ControlsFrame"), bodyWidget());
+    auto* txFrame = panel(QStringLiteral("ControlsFrame"), ax25Page);
     auto* txLayout = new QHBoxLayout(txFrame);
     txLayout->setContentsMargins(16, 12, 16, 12);
     txLayout->setSpacing(12);
@@ -617,7 +598,11 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_txButton = new QPushButton(QStringLiteral("Transmit"), txFrame);
     m_txButton->setMinimumHeight(42);
     txLayout->addWidget(m_txButton);
-    root->addWidget(txFrame);
+    ax25PageLayout->addWidget(txFrame);
+    ax25PageLayout->addStretch(1);
+
+    // KISS TNC page (built lazily into the same stack).
+    m_tabStack->addWidget(buildKissTncPage());
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
     auto* logLayout = new QVBoxLayout(logFrame);
@@ -669,10 +654,12 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
                                      &m_gainStageValue,
                                      bodyWidget()), 1);
 
+    // PACKET ACTIVITY: label stacked above the graphic so it lines up with the
+    // MODEM STATUS and GAIN STAGE panel labels to its left.
     auto* activityFrame = panel(QStringLiteral("StatusFrame"), bodyWidget());
-    auto* activityLayout = new QHBoxLayout(activityFrame);
+    auto* activityLayout = new QVBoxLayout(activityFrame);
     activityLayout->setContentsMargins(16, 12, 16, 12);
-    activityLayout->setSpacing(18);
+    activityLayout->setSpacing(10);
     m_packetActivityTitle = sectionLabel(QStringLiteral("PACKET ACTIVITY"), activityFrame);
     activityLayout->addWidget(m_packetActivityTitle);
     m_packetActivity = new PacketActivityWidget(activityFrame);
@@ -685,13 +672,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     const Ax25ModemProfile savedProfile = profileFromSettingsValue(
         AppSettings::instance().value(kPacketDecoderProfileSetting, QStringLiteral("Hf300")).toString());
-    const Ax25TonePolarity savedPolarity = polarityFromSettingsValue(
-        AppSettings::instance().value(kPacketDecoderPolaritySetting, QStringLiteral("Normal")).toString());
     const bool savedDebug = AppSettings::instance().value(kPacketDecoderDebugSetting, false).toBool();
     m_hf300Profile->setChecked(savedProfile == Ax25ModemProfile::Hf300);
     m_vhf1200Profile->setChecked(savedProfile == Ax25ModemProfile::Vhf1200);
-    m_polarityNormal->setChecked(savedPolarity == Ax25TonePolarity::Normal);
-    m_polarityReverse->setChecked(savedPolarity == Ax25TonePolarity::Inverted);
     setDiagnosticsDebugEnabled(savedDebug, false);
     setModemProfile(savedProfile, false);
 
@@ -729,18 +712,17 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             this, &Ax25HfPacketDecodeDialog::startTransmitFromUi);
     connect(m_txPaceTimer, &QTimer::timeout,
             this, &Ax25HfPacketDecodeDialog::paceTransmitAudio);
-    connect(m_polarityNormal, &QRadioButton::toggled, this, [this](bool checked) {
-        if (!checked)
-            return;
-        setTonePolarity(Ax25TonePolarity::Normal, true);
-    });
-    connect(m_polarityReverse, &QRadioButton::toggled, this, [this](bool checked) {
-        if (!checked)
-            return;
-        setTonePolarity(Ax25TonePolarity::Inverted, true);
-    });
     connect(m_shim, &AetherAx25LibmodemShim::frameDecoded,
             this, &Ax25HfPacketDecodeDialog::appendFrame);
+    // RX -> KISS clients: forward every decoded frame to connected hosts.
+    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded, this,
+            [this](const Ax25DecodedFrame& frame) {
+        if (m_kissServer && m_kissServer->isListening() && !frame.ax25FrameNoFcs.isEmpty()) {
+            m_kissServer->broadcastAx25Frame(frame.ax25FrameNoFcs);
+            ++m_kissRxCount;
+            refreshTncStatus();
+        }
+    });
     connect(m_shim, &AetherAx25LibmodemShim::diagnosticsUpdated,
             this, &Ax25HfPacketDecodeDialog::updateDiagnostics);
     connect(m_shim, &AetherAx25LibmodemShim::statusChanged,
@@ -769,12 +751,42 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
                 Qt::QueuedConnection);
     }
 
+    // KISS TNC server wiring.
+    connect(m_kissServer, &KissTncServer::ax25FrameFromClient,
+            this, &Ax25HfPacketDecodeDialog::handleKissFrameFromClient);
+    connect(m_kissServer, &KissTncServer::activity,
+            this, &Ax25HfPacketDecodeDialog::appendSystemLine);
+    connect(m_kissServer, &KissTncServer::listeningChanged,
+            this, [this](bool) { refreshTncStatus(); });
+    connect(m_kissServer, &KissTncServer::clientCountChanged,
+            this, [this](int) { refreshTncStatus(); });
+    connect(m_tncEnable, &QCheckBox::toggled, this, [this](bool on) {
+        setTncEnabled(on, true);
+    });
+    connect(m_tncStartOnStartup, &QCheckBox::toggled, this, [](bool on) {
+        AppSettings::instance().setValue(kTncStartOnStartupSetting,
+                                         on ? QStringLiteral("True") : QStringLiteral("False"));
+        AppSettings::instance().save();
+    });
+    connect(m_tncPort, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
+        AppSettings::instance().setValue(kTncPortSetting, QString::number(value));
+        AppSettings::instance().save();
+        if (m_tncEnable && m_tncEnable->isChecked()) {
+            appendSystemLine(QStringLiteral("KISS TNC port changed to %1; restarting listener.")
+                .arg(value));
+            setTncEnabled(false, false);
+            setTncEnabled(true, false);
+        }
+    });
+
     appendSystemLine(QStringLiteral("AetherModem initialized."));
     appendSystemLine(QStringLiteral("Enable Modem to start the RX audio tap."));
     appendSystemLine(QStringLiteral("TX accepts raw payload text or full SRC>DST,path:payload syntax."));
     setAttachedSlice(initialSlice);
     refreshStatus();
     refreshTransmitControls();
+    applyTncStartOnStartup();
+    refreshTncStatus();
 }
 
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
@@ -783,6 +795,8 @@ Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
         finishTransmit(true, QStringLiteral("AetherModem window closing"));
     if (m_captureActive)
         finishAudioCapture(false);
+    if (m_kissServer)
+        m_kissServer->stop();
     if (m_audio)
         m_audio->setTncRxTapEnabled(false);
 }
@@ -826,17 +840,10 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
     refreshStatus();
 }
 
-Ax25TonePolarity Ax25HfPacketDecodeDialog::selectedTonePolarity() const
-{
-    return m_polarityReverse && m_polarityReverse->isChecked()
-        ? Ax25TonePolarity::Inverted
-        : Ax25TonePolarity::Normal;
-}
-
 void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool persist)
 {
-    const auto polarity = selectedTonePolarity();
-    m_shim->configure(ax25DemodConfigForProfile(profile, polarity));
+    // Tone polarity is always Normal for the supported HF DIGU / VHF FM paths.
+    m_shim->configure(ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal));
     m_lastDiagnostics = {};
     m_lastDiagnosticsUtc = {};
 
@@ -847,27 +854,6 @@ void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool pe
 
     if (m_log)
         appendSystemLine(QStringLiteral("Configured %1.").arg(m_shim->demodDescription()));
-    refreshStatus();
-}
-
-void Ax25HfPacketDecodeDialog::setTonePolarity(Ax25TonePolarity polarity, bool persist)
-{
-    auto cfg = m_shim->config();
-    if (cfg.polarity == polarity && persist)
-        return;
-
-    cfg.polarity = polarity;
-    m_shim->configure(cfg);
-    m_lastDiagnostics = {};
-    m_lastDiagnosticsUtc = {};
-
-    if (persist) {
-        AppSettings::instance().setValue(kPacketDecoderPolaritySetting, polaritySettingsValue(polarity));
-        AppSettings::instance().save();
-    }
-
-    appendSystemLine(QStringLiteral("Tone polarity changed to %1. Configured %2.")
-        .arg(polaritySettingsValue(polarity), m_shim->demodDescription()));
     refreshStatus();
 }
 
@@ -1009,7 +995,12 @@ void Ax25HfPacketDecodeDialog::startTransmitFromUi()
         qCWarning(lcAx25).noquote() << "AX.25 TX packetization failed:" << tx.error;
         return;
     }
+    beginTransmission(tx, false);
+}
 
+void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, bool fromKiss)
+{
+    m_txFromKiss = fromKiss;
     m_pendingTx = tx;
     m_txPcm = tx.stereoFloat32Pcm;
     m_txOffsetBytes = 0;
@@ -1023,9 +1014,10 @@ void Ax25HfPacketDecodeDialog::startTransmitFromUi()
         : 0;
 
     appendSystemLine(QStringLiteral(
-        "TX packetized: %1 > %2%3, %4 payload bytes, %5 frame bytes, %6 bits, %7 s, RMS %8 dBFS, peak %9 dBFS.")
-        .arg(tx.frame.source,
-             tx.frame.destination,
+        "TX packetized (%1): %2 > %3%4, %5 payload bytes, %6 frame bytes, %7 bits, %8 s, RMS %9 dBFS, peak %10 dBFS.")
+        .arg(fromKiss ? QStringLiteral("KISS") : QStringLiteral("text"),
+             tx.frame.source.isEmpty() ? QStringLiteral("?") : tx.frame.source,
+             tx.frame.destination.isEmpty() ? QStringLiteral("?") : tx.frame.destination,
              tx.frame.path.isEmpty()
                  ? QString()
                  : QStringLiteral(" via %1").arg(tx.frame.path.join(QStringLiteral(","))))
@@ -1268,7 +1260,21 @@ void Ax25HfPacketDecodeDialog::finishTransmit(bool aborted, const QString& reaso
     m_txChunkCount = 0;
     m_txRestoreAudioDaxMode = false;
     m_txRestoreTransmitDax = false;
+    m_txFromKiss = false;
     refreshTransmitControls();
+
+    // Drain any queued KISS transmits. On a clean finish, kick the next one on a
+    // deferred (queued) call so we never re-enter the TX path within finish; on
+    // an abort, drop the backlog so a broken radio can't spin the queue.
+    if (aborted) {
+        if (!m_kissTxQueue.isEmpty()) {
+            appendSystemLine(QStringLiteral("Dropping %1 queued KISS TX frame(s) after abort.")
+                .arg(m_kissTxQueue.size()));
+            m_kissTxQueue.clear();
+        }
+    } else if (!m_kissTxQueue.isEmpty()) {
+        QTimer::singleShot(0, this, [this] { maybeStartNextKissTx(); });
+    }
 }
 
 void Ax25HfPacketDecodeDialog::appendFrame(const Ax25DecodedFrame& frame)
@@ -1633,6 +1639,168 @@ QString Ax25HfPacketDecodeDialog::formatTerminalLine(const Ax25DecodedFrame& fra
         .arg(time.toHtmlEscaped(),
              route.toHtmlEscaped(),
              payload.toHtmlEscaped());
+}
+
+QWidget* Ax25HfPacketDecodeDialog::buildKissTncPage()
+{
+    auto* page = new QWidget(m_tabStack);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+
+    auto* controlsFrame = panel(QStringLiteral("ControlsFrame"), page);
+    auto* controls = new QHBoxLayout(controlsFrame);
+    controls->setContentsMargins(16, 14, 16, 14);
+    controls->setSpacing(20);
+
+    auto* serverCell = panel(QStringLiteral("ControlCell"), controlsFrame);
+    auto* serverLayout = new QVBoxLayout(serverCell);
+    serverLayout->setContentsMargins(0, 0, 20, 0);
+    serverLayout->setSpacing(12);
+    serverLayout->addWidget(sectionLabel(QStringLiteral("KISS TNC SERVER"), serverCell));
+    m_tncEnable = new QCheckBox(QStringLiteral("Enable TNC"), serverCell);
+    serverLayout->addWidget(m_tncEnable);
+    m_tncStartOnStartup = new QCheckBox(QStringLiteral("Start TNC on Startup"), serverCell);
+    serverLayout->addWidget(m_tncStartOnStartup);
+    controls->addWidget(serverCell, 2);
+
+    auto* portCell = panel(QStringLiteral("ControlCell"), controlsFrame);
+    auto* portLayout = new QVBoxLayout(portCell);
+    portLayout->setContentsMargins(0, 0, 20, 0);
+    portLayout->setSpacing(12);
+    portLayout->addWidget(sectionLabel(QStringLiteral("TCP PORT"), portCell));
+    m_tncPort = new QSpinBox(portCell);
+    m_tncPort->setRange(1, 65535);
+    m_tncPort->setValue(kTncDefaultPort);
+    m_tncPort->setMaximumWidth(140);
+    portLayout->addWidget(m_tncPort);
+    controls->addWidget(portCell, 1);
+    controls->addStretch(2);
+    layout->addWidget(controlsFrame);
+
+    auto* statusFrame = statusPanel(QStringLiteral("TNC STATUS"),
+                                    &m_tncStatusDot, &m_tncStatusValue, page);
+    layout->addWidget(statusFrame);
+
+    auto* help = new QLabel(
+        QStringLiteral("Point a KISS-over-TCP client (Xastir, YAAC, APRSdroid, UISS, Dire Wolf "
+                       "clients, terminal/packet programs, …) at this host and TCP port. Decoded "
+                       "frames are pushed to every connected client; frames a client sends are "
+                       "keyed onto the air using the baud profile selected on the AX.25 tab. "
+                       "The modem must be enabled with a slice attached for the TNC to carry "
+                       "traffic — enabling the TNC turns the modem on for you."),
+        page);
+    help->setObjectName(QStringLiteral("StatusValue"));
+    help->setWordWrap(true);
+    layout->addWidget(help);
+    layout->addStretch(1);
+
+    // Seed control values from settings (before signals are wired in the ctor).
+    m_tncPort->setValue(AppSettings::instance()
+        .value(kTncPortSetting, QString::number(kTncDefaultPort)).toInt());
+    m_tncStartOnStartup->setChecked(AppSettings::instance()
+        .value(kTncStartOnStartupSetting, QStringLiteral("False")).toString()
+            == QStringLiteral("True"));
+
+    return page;
+}
+
+void Ax25HfPacketDecodeDialog::setTncEnabled(bool enabled, bool persist)
+{
+    if (persist) {
+        AppSettings::instance().setValue(kTncEnabledSetting,
+            enabled ? QStringLiteral("True") : QStringLiteral("False"));
+        AppSettings::instance().save();
+    }
+
+    if (enabled) {
+        // The TNC needs the modem RX tap running to forward decodes to clients.
+        if (m_enableDecode && !m_enableDecode->isChecked()) {
+            appendSystemLine(QStringLiteral("Enabling the modem for the KISS TNC."));
+            m_enableDecode->setChecked(true);
+        }
+        const quint16 port = static_cast<quint16>(m_tncPort ? m_tncPort->value() : kTncDefaultPort);
+        if (!m_kissServer->start(port) && m_tncEnable) {
+            QSignalBlocker blocker(m_tncEnable);
+            m_tncEnable->setChecked(false);
+        }
+    } else {
+        m_kissServer->stop();
+    }
+    refreshTncStatus();
+}
+
+void Ax25HfPacketDecodeDialog::applyTncStartOnStartup()
+{
+    const bool startOnStartup = AppSettings::instance()
+        .value(kTncStartOnStartupSetting, QStringLiteral("False")).toString()
+            == QStringLiteral("True");
+    if (startOnStartup && m_tncEnable) {
+        appendSystemLine(QStringLiteral("KISS TNC: start-on-startup enabled; starting listener."));
+        m_tncEnable->setChecked(true); // fires setTncEnabled() via the toggled connection
+    }
+}
+
+void Ax25HfPacketDecodeDialog::handleKissFrameFromClient(const QByteArray& ax25NoFcs)
+{
+    if (ax25NoFcs.isEmpty())
+        return;
+    if (!m_audio || !m_radio) {
+        appendSystemLine(QStringLiteral("KISS TX dropped: audio engine or radio not ready."));
+        return;
+    }
+    m_kissTxQueue.enqueue(ax25NoFcs);
+    ++m_kissTxCount;
+    refreshTncStatus();
+    maybeStartNextKissTx();
+}
+
+void Ax25HfPacketDecodeDialog::maybeStartNextKissTx()
+{
+    if (m_kissTxQueue.isEmpty())
+        return;
+    if (m_txActive || m_txPendingStream)
+        return; // finishTransmit() re-drains when the current TX completes
+    if (!m_audio || !m_radio) {
+        m_kissTxQueue.clear();
+        return;
+    }
+    if (m_radio->isRadioTransmitting() || m_radio->transmitModel().isTransmitting()) {
+        QTimer::singleShot(250, this, [this] { maybeStartNextKissTx(); }); // radio busy; retry
+        return;
+    }
+
+    const QByteArray frame = m_kissTxQueue.dequeue();
+    Ax25TransmitResult tx = m_shim->buildTransmitAudioFromFrame(frame);
+    if (!tx.ok) {
+        appendSystemLine(QStringLiteral("KISS TX packetization failed: %1.").arg(tx.error));
+        qCWarning(lcAx25).noquote() << "KISS TX packetization failed:" << tx.error;
+        QTimer::singleShot(0, this, [this] { maybeStartNextKissTx(); }); // skip to next frame
+        return;
+    }
+    beginTransmission(tx, true);
+}
+
+void Ax25HfPacketDecodeDialog::refreshTncStatus()
+{
+    if (!m_tncStatusValue)
+        return;
+    const bool listening = m_kissServer && m_kissServer->isListening();
+    if (listening) {
+        m_tncStatusValue->setText(QStringLiteral("Listening on %1  |  %2 client(s)  |  RX %3  TX %4")
+            .arg(m_kissServer->port())
+            .arg(m_kissServer->clientCount())
+            .arg(m_kissRxCount)
+            .arg(m_kissTxCount));
+    } else {
+        m_tncStatusValue->setText(QStringLiteral("Stopped"));
+    }
+    if (m_tncStatusDot) {
+        m_tncStatusDot->setFixedSize(12, 12);
+        m_tncStatusDot->setStyleSheet(listening
+            ? QStringLiteral("background:#5fce66;border-radius:6px;")
+            : QStringLiteral("background:#8190a3;border-radius:6px;"));
+    }
 }
 
 } // namespace AetherSDR
