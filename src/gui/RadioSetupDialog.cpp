@@ -4,6 +4,7 @@
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
 #include "models/RadioModel.h"
+#include "models/XvtrPolicy.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 #include <QApplication>
@@ -38,6 +39,7 @@
 #include <QSpinBox>
 #include <QDialogButtonBox>
 #include <QCheckBox>
+#include <QDoubleValidator>
 #include <QTimer>
 #include <QDesktopServices>
 #include <QUrl>
@@ -2745,6 +2747,38 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         });
         grid->addWidget(removeBtn, 4, 3);
 
+        auto maxPowerRange = [this, ifEdit] {
+            return XvtrPolicy::maxPowerRangeFor(ifEdit->text().toDouble(), m_model->model());
+        };
+        auto* maxPwrValidator = new QDoubleValidator(maxPwrEdit);
+        maxPwrValidator->setDecimals(2);
+        maxPwrValidator->setNotation(QDoubleValidator::StandardNotation);
+        auto updateMaxPowerValidator = [maxPwrValidator, maxPowerRange] {
+            const XvtrPolicy::MaxPowerRange range = maxPowerRange();
+            maxPwrValidator->setRange(range.minimumDbm, range.maximumDbm, 2);
+        };
+        updateMaxPowerValidator();
+        maxPwrEdit->setValidator(maxPwrValidator);
+        auto submitMaxPower = [this, maxPwrEdit, ifEdit, idx](bool sendWhenUnchanged) {
+            bool ok = false;
+            const double requested = maxPwrEdit->text().toDouble(&ok);
+            if (!ok) {
+                return;
+            }
+
+            const double clamped = XvtrPolicy::clampMaxPowerDbm(
+                requested, ifEdit->text().toDouble(), m_model->model());
+            maxPwrEdit->setText(QString::number(clamped, 'f', 2));
+            if (!sendWhenUnchanged && qFuzzyCompare(requested + 1.0, clamped + 1.0)) {
+                return;
+            }
+
+            m_model->sendCommand(
+                QString("xvtr set %1 max_power=%2")
+                    .arg(idx)
+                    .arg(QString::number(clamped, 'f', 2)));
+        };
+
         // Wire editable fields
         connect(nameEdit, &QLineEdit::editingFinished, this, [this, nameEdit, idx] {
             m_model->sendCommand(
@@ -2760,10 +2794,13 @@ QWidget* RadioSetupDialog::buildXvtrTab()
                 QString("xvtr set %1 rf_freq=%2").arg(idx).arg(rfEdit->text()));
             updateLo();
         });
-        connect(ifEdit, &QLineEdit::editingFinished, this, [this, ifEdit, idx, updateLo] {
+        connect(ifEdit, &QLineEdit::editingFinished, this,
+                [this, ifEdit, idx, updateLo, updateMaxPowerValidator, submitMaxPower] {
             m_model->sendCommand(
                 QString("xvtr set %1 if_freq=%2").arg(idx).arg(ifEdit->text()));
             updateLo();
+            updateMaxPowerValidator();
+            submitMaxPower(false);
         });
         connect(errEdit, &QLineEdit::editingFinished, this, [this, errEdit, idx] {
             m_model->sendCommand(
@@ -2773,9 +2810,8 @@ QWidget* RadioSetupDialog::buildXvtrTab()
             m_model->sendCommand(
                 QString("xvtr set %1 rx_gain=%2").arg(idx).arg(rxGainEdit->text()));
         });
-        connect(maxPwrEdit, &QLineEdit::editingFinished, this, [this, maxPwrEdit, idx] {
-            m_model->sendCommand(
-                QString("xvtr set %1 max_power=%2").arg(idx).arg(maxPwrEdit->text()));
+        connect(maxPwrEdit, &QLineEdit::editingFinished, this, [submitMaxPower] {
+            submitMaxPower(true);
         });
 
         return pg;
