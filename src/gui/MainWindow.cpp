@@ -3322,6 +3322,16 @@ MainWindow::MainWindow(QWidget* parent)
         settings.save();
         if (m_flexControlDialog)
             m_flexControlDialog->setStepSize(step);
+        // Invalidate persistent encoder accumulators so the next tick rebases
+        // and re-snaps to the new step grid. Without this, an in-flight target
+        // computed against the previous step size carries an off-grid residual
+        // (e.g. step 20 Hz → 500 Hz leaves a 60 Hz tail; #3260).
+        m_flexTargetMhz = -1.0;
+        m_flexCoalesceTimer.stop();
+#ifdef HAVE_MIDI
+        m_midiTuneTargetMhz = -1.0;
+        m_midiTuneIdleTimer.stop();
+#endif
     });
     int savedStep = AppSettings::instance().value("TuningStepSize", "100").toInt();
     for (auto* a : m_panStack->allApplets()) a->spectrumWidget()->setStepSize(savedStep);
@@ -6961,8 +6971,18 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
                               : (s->stepHz() > 0 ? s->stepHz() : 100);
         if (m_flexTargetMhz < 0.0 ||
             (!m_flexCoalesceTimer.isActive() &&
-             std::abs(m_flexTargetMhz - s->frequency()) > 0.001))
-            m_flexTargetMhz = s->frequency();
+             std::abs(m_flexTargetMhz - s->frequency()) > 0.001)) {
+            // Snap the base to the active step grid so encoder ticks land on
+            // clean multiples even when the slice frequency is off-grid
+            // (e.g. after a step-size change or a typed entry). Mirrors the
+            // MIDI tune-knob path at the top of this file (#3260).
+            const long long curHz =
+                static_cast<long long>(std::round(s->frequency() * 1e6));
+            const long long snapped = stepHz > 0
+                ? ((curHz + stepHz / 2) / stepHz) * stepHz
+                : curHz;
+            m_flexTargetMhz = snapped / 1e6;
+        }
         m_flexTargetMhz += steps * stepHz / 1e6;
         if (sw) sw->setVfoFrequency(m_flexTargetMhz);
         if (!m_flexCoalesceTimer.isActive())
@@ -11504,6 +11524,21 @@ void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
             m_updatingFromModel = false;
         }
         return;
+    }
+
+    // Absolute-target intents (typed VFO entry, spectrum click, spot recall,
+    // bandstack recall) must invalidate any in-flight encoder accumulator.
+    // The #1524 1 kHz jitter-suppression tolerance otherwise keeps a stale
+    // m_flexTargetMhz when the typed frequency lands inside that window,
+    // producing the +60 Hz residual reported in #3260.
+    if (intent == TuneIntent::CommandedTargetCenter
+        || intent == TuneIntent::AbsoluteJump) {
+        m_flexTargetMhz = -1.0;
+        m_flexCoalesceTimer.stop();
+#ifdef HAVE_MIDI
+        m_midiTuneTargetMhz = -1.0;
+        m_midiTuneIdleTimer.stop();
+#endif
     }
 
     if (slice->sliceId() == m_activeSliceId && sw)
