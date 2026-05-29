@@ -3565,14 +3565,29 @@ MainWindow::MainWindow(QWidget* parent)
             m_pgxlConn.disconnect();
         }
     });
-    // PGXL status → AmpApplet (direct telemetry: vac, id, temp, state, etc.)
+    // PGXL status → AmpApplet (direct telemetry: vac, vdd, id, temp, tempb, state, etc.)
     connect(&m_pgxlConn, &PgxlConnection::statusUpdated, this, [this](const QMap<QString, QString>& kvs) {
         qCDebug(lcTuner) << "PGXL status:" << kvs;
         auto* amp = m_appletPanel->ampApplet();
-        if (kvs.contains("temp"))
-            amp->setTemp(kvs["temp"].toFloat());
+        if (kvs.contains("temp")) {
+            // Some PGXL firmware encodes both PA module temps as "A/B" in a
+            // single field (e.g. "30.5/26.5"); others use separate tempb key.
+            const QString tv = kvs["temp"];
+            const int slash = tv.indexOf('/');
+            if (slash >= 0) {
+                amp->setTemp(tv.left(slash).toFloat());
+                amp->setTempB(tv.mid(slash + 1).toFloat());
+            } else {
+                amp->setTemp(tv.toFloat());
+            }
+        }
+        // Separate tempb field (firmware variant)
+        if (kvs.contains("tempb"))
+            amp->setTempB(kvs["tempb"].toFloat());
         if (kvs.contains("id"))
             amp->setDrainCurrent(kvs["id"].toFloat());
+        if (kvs.contains("vdd"))
+            amp->setDrainVoltage(kvs["vdd"].toFloat());
         if (kvs.contains("vac"))
             amp->setMainsVoltage(kvs["vac"].toInt());
         if (kvs.contains("state"))
@@ -3606,7 +3621,7 @@ MainWindow::MainWindow(QWidget* parent)
         qDebug() << "PGXL direct connection established, version:" << m_pgxlConn.version();
     });
     // Radio amplifier status → AmpApplet telemetry (fallback path).
-    // The radio proxies PGXL telemetry fields (id, vac, meffa, temp, state) in its
+    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, temp, tempb, state) in its
     // amplifier status messages, so the applet keeps updating even when the direct
     // PGXL TCP connection isn't established.  When direct TCP IS connected, that
     // path is faster and higher-precision (the radio rebroadcast may round/lag),
@@ -3616,10 +3631,22 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](const QMap<QString, QString>& kvs) {
         if (m_pgxlConn.isConnected()) return;
         auto* amp = m_appletPanel->ampApplet();
-        if (kvs.contains("temp"))
-            amp->setTemp(kvs["temp"].toFloat());
+        if (kvs.contains("temp")) {
+            const QString tv = kvs["temp"];
+            const int slash = tv.indexOf('/');
+            if (slash >= 0) {
+                amp->setTemp(tv.left(slash).toFloat());
+                amp->setTempB(tv.mid(slash + 1).toFloat());
+            } else {
+                amp->setTemp(tv.toFloat());
+            }
+        }
+        if (kvs.contains("tempb"))
+            amp->setTempB(kvs["tempb"].toFloat());
         if (kvs.contains("id"))
             amp->setDrainCurrent(kvs["id"].toFloat());
+        if (kvs.contains("vdd"))
+            amp->setDrainVoltage(kvs["vdd"].toFloat());
         if (kvs.contains("vac"))
             amp->setMainsVoltage(kvs["vac"].toInt());
         if (kvs.contains("state"))

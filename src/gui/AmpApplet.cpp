@@ -4,10 +4,25 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QSignalBlocker>
 #include "core/ThemeManager.h"
+#include "MeterSmoother.h"
 
 namespace AetherSDR {
+
+namespace {
+
+// Left-side label that shows the field name + live value ("PWR 1148").
+// Fixed width so all three gauge rows line up.
+QLabel* makeValueLabel(QWidget* parent)
+{
+    auto* lbl = new QLabel(parent);
+    lbl->setFixedWidth(72);
+    lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; font-weight: bold; }");
+    return lbl;
+}
+
+} // namespace
 
 AmpApplet::AmpApplet(QWidget* parent)
     : QWidget(parent)
@@ -17,126 +32,196 @@ AmpApplet::AmpApplet(QWidget* parent)
     vbox->setContentsMargins(4, 2, 4, 2);
     vbox->setSpacing(2);
 
-    // Fwd Power gauge: 0-2000W
-    m_fwdGauge = new HGauge(0.0f, 2000.0f, 1500.0f, "Fwd Pwr", "",
-        {{0, "0"}, {500, "500"}, {1000, "1000"}, {1500, "1.5k"}, {2000, "2k"}},
+    // ── PWR row ──────────────────────────────────────────────────────────────
+    m_pwrLabel = makeValueLabel(this);
+    m_pwrLabel->setText("PWR");
+    m_fwdGauge = new HGauge(0.0f, 2000.0f, 1500.0f, "", "",
+        {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1.5K"}, {2000, "2K"}},
         this, 1000.0f);
-    vbox->addWidget(m_fwdGauge);
+    // Slow release: bar rises quickly on RF bursts but decays over ~800 ms
+    // so brief transmissions remain visible — matches S-meter peak-hold feel.
+    m_fwdGauge->setBallistics({0.030f, 0.800f});
+    auto* pwrRow = new QHBoxLayout;
+    pwrRow->setSpacing(4);
+    pwrRow->addWidget(m_pwrLabel);
+    pwrRow->addWidget(m_fwdGauge, 1);
+    vbox->addLayout(pwrRow);
 
-    // SWR gauge: 1-3
-    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "SWR", "",
+    // ── SWR row ──────────────────────────────────────────────────────────────
+    m_swrLabel = makeValueLabel(this);
+    m_swrLabel->setText("SWR");
+    m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "", "",
         {{1.0f, "1"}, {1.5f, "1.5"}, {2.0f, "2"}, {2.5f, "2.5"}, {3.0f, "3"}},
         this, 2.0f);
-    vbox->addWidget(m_swrGauge);
+    auto* swrRow = new QHBoxLayout;
+    swrRow->setSpacing(4);
+    swrRow->addWidget(m_swrLabel);
+    swrRow->addWidget(m_swrGauge, 1);
+    vbox->addLayout(swrRow);
 
-    // Temp gauge: 30-100°C
-    m_tempGauge = new HGauge(0.0f, 100.0f, 80.0f, "Temp", "°C",
-        {{0, "0"}, {30, "30"}, {55, "55"}, {80, "80"}, {100, "100"}},
-        this, 55.0f);
-    vbox->addWidget(m_tempGauge);
+    // ── Id row ───────────────────────────────────────────────────────────────
+    m_idLabel = makeValueLabel(this);
+    m_idLabel->setText("Id");
+    m_idGauge = new HGauge(0.0f, 70.0f, 60.0f, "", "",
+        {{0, "0"}, {10, "10"}, {20, "20"}, {30, "30"}, {40, "40"}, {50, "50"}, {60, "60"}, {70, "70"}},
+        this, 50.0f);
+    auto* idRow = new QHBoxLayout;
+    idRow->setSpacing(4);
+    idRow->addWidget(m_idLabel);
+    idRow->addWidget(m_idGauge, 1);
+    vbox->addLayout(idRow);
 
-    vbox->addSpacing(8);
-    // PGXL direct telemetry — stacked labels + OPERATE button
-    static const char* kLabelStyle =
-        "QLabel { color: #c8d8e8; font-size: 10px; }";
+    vbox->addSpacing(4);
 
-    auto* telRow = new QHBoxLayout;
-    telRow->setSpacing(4);
+    // ── Bottom row: [temp / Vdd / Vac stacked] [OPERATE button] ─────────────
+    //   Temp, drain voltage, and mains voltage sit in the empty space to the
+    //   left of the OPERATE/STANDBY button.
+    static const char* kTelStyle = "QLabel { color: #c8d8e8; font-size: 10px; }";
 
-    auto* telStack = new QVBoxLayout;
-    telStack->setSpacing(0);
-    telStack->setContentsMargins(0, 0, 0, 0);
+    m_tempLabel = new QLabel("— C", this);
+    m_tempLabel->setStyleSheet(kTelStyle);
 
-    m_powerLabel = new QLabel;
-    m_powerLabel->setStyleSheet(kLabelStyle);
-    m_powerLabel->hide();
-    telStack->addWidget(m_powerLabel);
+    m_vddLabel = new QLabel("Vdd  — V", this);
+    m_vddLabel->setStyleSheet(kTelStyle);
 
-    m_meffLabel = new QLabel;
-    m_meffLabel->setStyleSheet(kLabelStyle);
-    m_meffLabel->hide();
-    telStack->addWidget(m_meffLabel);
+    m_vacLabel = new QLabel("Vac  — V", this);
+    m_vacLabel->setStyleSheet(kTelStyle);
 
-    telRow->addLayout(telStack);
+    auto* infoStack = new QVBoxLayout;
+    infoStack->setSpacing(0);
+    infoStack->setContentsMargins(0, 0, 0, 0);
+    infoStack->addWidget(m_tempLabel);
+    infoStack->addWidget(m_vddLabel);
+    infoStack->addWidget(m_vacLabel);
 
-    telRow->addSpacing(30);
-
+    auto* btnRow = new QHBoxLayout;
+    btnRow->setSpacing(6);
+    btnRow->addLayout(infoStack);
+    btnRow->addStretch();
     m_operateBtn = new QPushButton("OPERATE");
-    m_operateBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Expanding);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+    m_operateBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn,
+        "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
         "QPushButton:hover { background: {{color.background.1}}; }");
     m_operateBtn->hide();
     connect(m_operateBtn, &QPushButton::clicked, this, [this]() {
-        // Toggle: if currently operating → standby, else → operate
         bool isOp = (m_operateBtn->text() == "OPERATE");
         emit operateToggled(!isOp);
     });
-    telRow->addWidget(m_operateBtn, 1);
+    btnRow->addWidget(m_operateBtn);
+    vbox->addLayout(btnRow);
 
-    vbox->addLayout(telRow);
+    // Label text throttle — update PWR/SWR/Id text at 10 Hz so the digits
+    // don't flicker on every incoming meter packet.  Gauge fill still
+    // animates at full rate via HGauge's own timer.
+    m_labelTimer.setInterval(kMeterReadoutUpdateMs);
+    connect(&m_labelTimer, &QTimer::timeout, this, &AmpApplet::updateValueLabels);
+    m_labelTimer.start();
 }
 
 void AmpApplet::setFwdPower(float watts)
 {
+    m_fwdWatts = watts;
     m_fwdGauge->setValue(watts);
+    // Label text is updated by the 100 ms timer (updateValueLabels).
 }
 
 void AmpApplet::setSwr(float swr)
 {
+    m_swrVal = swr;
     m_swrGauge->setValue(swr);
+    // Label text is updated by the 100 ms timer (updateValueLabels).
 }
 
 void AmpApplet::setTemp(float degC)
 {
-    m_tempGauge->setValue(degC);
+    m_tempA = degC;
+    updateTempLabel();
+}
+
+void AmpApplet::setTempB(float degC)
+{
+    m_tempB = degC;
+    m_hasTempB = true;
+    updateTempLabel();
+}
+
+void AmpApplet::updateTempLabel()
+{
+    if (m_hasTempB)
+        m_tempLabel->setText(
+            QStringLiteral("%1/%2 C")
+                .arg(m_tempA, 0, 'f', 1)
+                .arg(m_tempB, 0, 'f', 1));
+    else
+        m_tempLabel->setText(
+            QStringLiteral("%1 C").arg(m_tempA, 0, 'f', 1));
 }
 
 void AmpApplet::setDrainCurrent(float amps)
 {
     m_drainAmps = amps;
-    updatePowerLabel();
+    m_idGauge->setValue(amps);
+    // Label text is updated by the 100 ms timer (updateValueLabels).
+}
+
+void AmpApplet::updateValueLabels()
+{
+    // PWR: only show value when there is meaningful power
+    if (m_fwdWatts >= 5.0f)
+        m_pwrLabel->setText(QStringLiteral("PWR  %1").arg(static_cast<int>(m_fwdWatts)));
+    else
+        m_pwrLabel->setText("PWR");
+
+    // SWR: only show value when power is present (SWR is unmeasurable at idle)
+    if (m_fwdWatts >= 5.0f)
+        m_swrLabel->setText(QStringLiteral("SWR  %1:1").arg(m_swrVal, 0, 'f', 1));
+    else
+        m_swrLabel->setText("SWR");
+
+    // Id: only show value when current is flowing
+    if (m_drainAmps >= 0.5f)
+        m_idLabel->setText(QStringLiteral("Id    %1").arg(static_cast<int>(m_drainAmps)));
+    else
+        m_idLabel->setText("Id");
+}
+
+void AmpApplet::setDrainVoltage(float volts)
+{
+    m_vddLabel->setText(QStringLiteral("Vdd  %1 V").arg(volts, 0, 'f', 1));
 }
 
 void AmpApplet::setMainsVoltage(int volts)
 {
     m_mainsVolts = volts;
-    updatePowerLabel();
-}
-
-void AmpApplet::updatePowerLabel()
-{
-    m_powerLabel->setText(
-        QStringLiteral("Volts: %1V\u00A0\u00A0Amps: %2A")
-            .arg(m_mainsVolts)
-            .arg(m_drainAmps, 0, 'f', 1));
-    m_powerLabel->show();
+    m_vacLabel->setText(QStringLiteral("Vac  %1 V").arg(volts));
 }
 
 void AmpApplet::setState(const QString& state)
 {
-    // Match TGXL OPERATE button style: green when operating, default when standby
-    // PGXL states: IDLE (ready), TRANSMIT_A/TRANSMIT_B (keyed), OPERATE, STANDBY, POWERUP, FAULT
+    // PGXL states: IDLE/OPERATE/TRANSMIT_* = operating (green), else standby (grey)
     bool operating = (state == "IDLE" || state == "OPERATE"
                       || state.startsWith("TRANSMIT"));
     if (operating) {
         m_operateBtn->setText("OPERATE");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn,
+            "QPushButton { background: #006030; border: 1px solid #008040; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
             "QPushButton:hover { background: #007040; }");
     } else {
         m_operateBtn->setText("STANDBY");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn,
+            "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
             "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
             "QPushButton:hover { background: {{color.background.1}}; }");
     }
     m_operateBtn->show();
 }
 
-void AmpApplet::setMeff(const QString& meff)
+void AmpApplet::setMeff(const QString& /*meff*/)
 {
-    m_meffLabel->setText(QStringLiteral("MEffA:\u00A0\u00A0\u00A0%1").arg(meff));
-    m_meffLabel->show();
+    // MEffA not displayed in the main applet view (matches SSDR layout).
 }
 
 } // namespace AetherSDR
