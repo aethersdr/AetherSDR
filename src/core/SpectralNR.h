@@ -237,9 +237,11 @@ private:
     // Artifact elimination post-processing
     void applyAeFilter();
 
-    // Modified Bessel functions of the first kind
-    static double bessI0(double x);
-    static double bessI1(double x);
+    // Exponentially-scaled modified Bessel functions of the first kind.
+    // bessI0e(x) = exp(-|x|) * I0(x),  bessI1e(x) = exp(-|x|) * I1(x).
+    // The large-x branch is 1/sqrt(|x|) * poly — no exp() computed, no overflow.
+    static double bessI0e(double x);
+    static double bessI1e(double x);
 };
 
 } // namespace AetherSDR

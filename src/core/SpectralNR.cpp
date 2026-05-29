@@ -699,8 +699,7 @@ void SpectralNR::computeGainGamma()
         double v = ehr * gamma;
 
         double gain = gf1p5 * std::sqrt(v) / std::max(gamma, EpsFloor)
-                    * std::exp(-0.5 * v)
-                    * ((1.0 + v) * bessI0(0.5 * v) + v * bessI1(0.5 * v));
+                    * ((1.0 + v) * bessI0e(0.5 * v) + v * bessI1e(0.5 * v));
 
         // Speech presence probability weighting
         {
@@ -932,39 +931,47 @@ void SpectralNR::applyAeFilter()
 }
 
 // ─── Modified Bessel Functions ────────────────────────────────────────────────
-// Polynomial approximations of I0(x) and I1(x) from Abramowitz & Stegun,
+// Exponentially-scaled polynomial approximations from Abramowitz & Stegun,
 // "Handbook of Mathematical Functions" (1964), formulas 9.8.1 and 9.8.2.
 // A&S is a U.S. government work and in the public domain.
+//
+// bessI0e(x) = exp(-|x|) * I0(x),  bessI1e(x) = exp(-|x|) * I1(x).
+//
+// Scaling eliminates the exp(|x|) overflow present in the unscaled large-x
+// branch.  The large-x formula simplifies to 1/sqrt(|x|) * poly — no
+// exponential is computed, so no overflow occurs at any finite x (#1507).
 
-double SpectralNR::bessI0(double x)
+double SpectralNR::bessI0e(double x)
 {
     double ax = std::abs(x);
     if (ax < 3.75) {
         double t = x / 3.75;
         t *= t;
-        return 1.0 + t * (3.5156229 + t * (3.0899424 + t * (1.2067492
-             + t * (0.2659732 + t * (0.0360768 + t * 0.0045813)))));
+        return std::exp(-ax) * (1.0 + t * (3.5156229 + t * (3.0899424 + t * (1.2067492
+             + t * (0.2659732 + t * (0.0360768 + t * 0.0045813))))));
     }
+    // Large-x: exp(-ax) * exp(ax)/sqrt(ax) * poly = 1/sqrt(ax) * poly
     double t = 3.75 / ax;
-    return (std::exp(ax) / std::sqrt(ax))
+    return (1.0 / std::sqrt(ax))
          * (0.39894228 + t * (0.01328592 + t * (0.00225319
           + t * (-0.00157565 + t * (0.00916281 + t * (-0.02057706
           + t * (0.02635537 + t * (-0.01647633 + t * 0.00392377))))))));
 }
 
-double SpectralNR::bessI1(double x)
+double SpectralNR::bessI1e(double x)
 {
     double ax = std::abs(x);
     if (ax < 3.75) {
         double t = x / 3.75;
         t *= t;
-        double val = ax * (0.5 + t * (0.87890594 + t * (0.51498869
+        double val = std::exp(-ax) * ax * (0.5 + t * (0.87890594 + t * (0.51498869
                    + t * (0.15084934 + t * (0.02658733 + t * (0.00301532
                    + t * 0.00032411))))));
         return x < 0.0 ? -val : val;
     }
+    // Large-x: exp(-ax) * exp(ax)/sqrt(ax) * poly = 1/sqrt(ax) * poly
     double t = 3.75 / ax;
-    double val = (std::exp(ax) / std::sqrt(ax))
+    double val = (1.0 / std::sqrt(ax))
                * (0.39894228 + t * (-0.03988024 + t * (-0.00362018
                 + t * (0.00163801 + t * (-0.01031555 + t * (0.02282967
                 + t * (-0.02895312 + t * (0.01787654 - t * 0.00420059))))))));

@@ -1715,6 +1715,14 @@ add_executable(biquad_test
 target_include_directories(biquad_test PRIVATE src)
 add_test(NAME biquad_test COMMAND biquad_test)
 
+add_executable(spectral_nr_test
+    tests/spectral_nr_test.cpp
+    src/core/SpectralNR.cpp
+)
+target_include_directories(spectral_nr_test PRIVATE src)
+target_link_libraries(spectral_nr_test PRIVATE Qt6::Core)
+add_test(NAME spectral_nr_test COMMAND spectral_nr_test)
+
 add_executable(client_gate_test
     tests/client_gate_test.cpp
     src/core/ClientGate.cpp
