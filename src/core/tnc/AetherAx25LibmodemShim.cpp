@@ -35,7 +35,14 @@ constexpr double kReceiveGateMinimumDbfs = -32.0;
 constexpr double kReceiveGateFloorAlpha = 0.04;
 constexpr double kReceiveGateCloseSeconds = 3.0;
 constexpr int kDuplicateSuppressSeconds = 2;
-constexpr int kTxPreambleFlags = 80;
+// TX preamble (TXDELAY) is the run of leading HDLC flags that lets the far
+// receiver's PLL/AGC settle before frame data. It is profile-specific: HF 300
+// keeps its long preamble, while VHF 1200 uses a shorter one because at 1200
+// baud each flag is 4x quicker (80 flags = 533 ms vs a far more typical ~0.43 s
+// here), trimming dead air and slot time without starving the receiver. Tune
+// kVhf1200TxPreambleFlags if a transverter's T/R switching needs more lead-in.
+constexpr int kTxPreambleFlags = 80;        // HF 300: ~2.13 s of flags
+constexpr int kVhf1200TxPreambleFlags = 64; // VHF 1200: ~0.43 s of flags
 constexpr int kTxPostambleFlags = 8;
 constexpr int kTxVitaPacketFrames = 128;
 constexpr double kTxAfskAmplitude = 0.35;
@@ -956,7 +963,10 @@ Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudio(
     result.polarity = cfg.polarity;
     result.markHz = cfg.markHz;
     result.spaceHz = cfg.spaceHz;
-    result.preambleFlags = kTxPreambleFlags;
+    const int preambleFlags = cfg.profile == Ax25ModemProfile::Vhf1200
+        ? kVhf1200TxPreambleFlags
+        : kTxPreambleFlags;
+    result.preambleFlags = preambleFlags;
     result.postambleFlags = kTxPostambleFlags;
     result.vitaPacketFrames = kTxVitaPacketFrames;
 
@@ -987,7 +997,7 @@ Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudio(
     const std::vector<uint8_t> bits = lm::ax25::encode_bitstream(
         frameBytes,
         0,
-        kTxPreambleFlags,
+        preambleFlags,
         kTxPostambleFlags);
     result.frameBytes = static_cast<int>(frameBytes.size());
     result.bitCount = static_cast<int>(bits.size());
@@ -1031,7 +1041,7 @@ Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudio(
     result.ok = true;
 
     qCInfo(lcAx25).noquote()
-        << QStringLiteral("AX.25 TX packetized SRC=%1 DST=%2 VIA=%3 payloadBytes=%4 frameBytes=%5 bits=%6 samples=%7 duration=%8s levelRms=%9dBFS levelPeak=%10dBFS baud=%11 mark=%12 space=%13 polarity=%14")
+        << QStringLiteral("AX.25 TX packetized SRC=%1 DST=%2 VIA=%3 payloadBytes=%4 frameBytes=%5 bits=%6 samples=%7 duration=%8s levelRms=%9dBFS levelPeak=%10dBFS baud=%11 mark=%12 space=%13 polarity=%14 preamble=%15 postamble=%16")
             .arg(result.frame.source,
                  result.frame.destination,
                  result.frame.path.join(QStringLiteral(",")))
@@ -1047,7 +1057,9 @@ Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudio(
             .arg(result.spaceHz, 0, 'f', 0)
             .arg(result.polarity == Ax25TonePolarity::Normal
                  ? QStringLiteral("Normal")
-                 : QStringLiteral("Reverse"));
+                 : QStringLiteral("Reverse"))
+            .arg(result.preambleFlags)
+            .arg(result.postambleFlags);
     return result;
 }
 

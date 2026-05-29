@@ -522,8 +522,8 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     // 0x0094) render as "â" + two control glyphs, which is what shipped.
     auto* experimentalBanner = new QLabel(
         QStringLiteral("<b>Experimental — AX.25 modem bring-up.</b> "
-                       "300 baud HF RX/TX is active; 1200 baud VHF remains "
-                       "receive-focused while timing work continues."),
+                       "300 baud HF and 1200 baud VHF (Bell 202 / 2m APRS) "
+                       "AX.25 receive and transmit are active."),
         bodyWidget());
     experimentalBanner->setObjectName(QStringLiteral("ExperimentalBanner"));
     experimentalBanner->setWordWrap(true);
@@ -985,10 +985,6 @@ void Ax25HfPacketDecodeDialog::startTransmitFromUi()
     }
     if (!m_txText)
         return;
-    if (!m_hf300Profile || !m_hf300Profile->isChecked()) {
-        appendSystemLine(QStringLiteral("TX is enabled for the 300 baud HF profile in this pass."));
-        return;
-    }
     if (!m_audio || !m_radio) {
         appendSystemLine(QStringLiteral("TX unavailable: audio engine or radio model is not ready."));
         return;
@@ -1362,9 +1358,8 @@ void Ax25HfPacketDecodeDialog::refreshTransmitControls()
     if (!m_txButton)
         return;
 
-    const bool hfTx = m_hf300Profile && m_hf300Profile->isChecked();
     const bool hasText = m_txText && !m_txText->text().trimmed().isEmpty();
-    const bool ready = hfTx && hasText && !m_txActive && !m_txPendingStream;
+    const bool ready = hasText && !m_txActive && !m_txPendingStream;
     m_txButton->setEnabled(ready);
     if (m_txActive) {
         m_txButton->setText(QStringLiteral("Transmitting..."));
@@ -1376,10 +1371,9 @@ void Ax25HfPacketDecodeDialog::refreshTransmitControls()
 
     if (m_txText) {
         m_txText->setEnabled(!m_txActive && !m_txPendingStream);
-        m_txText->setToolTip(hfTx
-            ? QStringLiteral("Transmit a 300 baud HF AX.25 UI frame. Raw text uses %1>APRS; full SRC>DST,path:payload syntax is also accepted.")
-                .arg(defaultTransmitSource())
-            : QStringLiteral("TX is enabled for 300 baud HF in this pass."));
+        m_txText->setToolTip(
+            QStringLiteral("Transmit a %1 AX.25 UI frame. Raw text uses %2>APRS; full SRC>DST,path:payload syntax is also accepted.")
+                .arg(ax25ModemProfileName(m_shim->config().profile), defaultTransmitSource()));
     }
 }
 

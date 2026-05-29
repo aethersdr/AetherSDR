@@ -108,8 +108,10 @@ Duplicate suppression collapses the same frame seen by several lanes into one
 emission, so the 18-lane bank still reports each packet once.
 
 Polarity is **Normal** for upright FM-demodulated AFSK; use Reverse only as a
-tone-sense check if a mode/sideband change kills all decodes. TX remains 300
-baud HF only for now — the 1200 profile is receive-only.
+tone-sense check if a mode/sideband change kills all decodes. Both receive and
+transmit are available on the 1200 profile (see the Experimental TX Path
+section) — the AetherModem text field keys an AX.25 UI frame at whichever baud
+profile is selected.
 
 ### Iterating on 1200 baud
 
@@ -145,9 +147,13 @@ For current testing, keep receive audio in this rough range:
 
 ## Experimental TX Path
 
-The first TX pass is intentionally narrow:
+AX.25 UI-frame transmit works on **both** the 300 baud HF and 1200 baud VHF
+profiles. The transmit field keys whichever profile is currently selected, so
+the same text field that sends an HF packet on 14 MHz sends a 2m APRS packet
+(via a transverter) when 1200 baud VHF is active.
 
-- 300 baud HF AX.25 UI frames only.
+- AX.25 UI frames at the selected baud profile (HF 300 → 1600/1800 Hz;
+  VHF 1200 → 1200/2200 Hz Bell 202).
 - The transmit field accepts raw payload text or full `SRC>DST,path:payload`
   monitor syntax.
 - Raw text defaults to `<radio callsign> > APRS` with no digipeater path.
@@ -156,11 +162,16 @@ The first TX pass is intentionally narrow:
 - The window sets DAX TX routing, keys PTT with a short settle/lead time,
   feeds the generated audio in 20 ms chunks, then unkeys and restores the
   previous DAX state.
+- **TXDELAY (preamble) is profile-aware.** HF 300 keeps its long preamble
+  (`kTxPreambleFlags`, ~2.1 s); VHF 1200 uses a shorter one
+  (`kVhf1200TxPreambleFlags` = 64 flags, ~0.43 s) since each flag is 4x quicker
+  at 1200 baud. Raise the VHF value if a transverter's T/R switching clips the
+  start of the burst.
 
 TX diagnostics in the `aether.ax25` category include packet source/destination,
 path, payload bytes, AX.25 frame bytes, bit count, waveform duration, RMS/peak,
-DAX TX stream id, PTT lead/tail timing, and paced chunk progress when debug is
-enabled.
+baud, mark/space, polarity, preamble/postamble flag counts, DAX TX stream id,
+PTT lead/tail timing, and paced chunk progress when debug is enabled.
 
 ## Open Work
 

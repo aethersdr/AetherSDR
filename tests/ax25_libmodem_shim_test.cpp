@@ -552,6 +552,48 @@ void testTransmitMonitorSyntaxBuildsLoopbackAudio()
     report("TX monitor loopback payload", frames.first().payloadText == QStringLiteral("!3644.00N\\11947.00W-Test TX"));
 }
 
+void testTransmitVhf1200LoopbackDecodes()
+{
+    AetherAx25LibmodemShim txShim;
+    txShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200));
+
+    const Ax25TransmitResult tx = txShim.buildTransmitAudio(
+        QStringLiteral("KK7GWY-9>APDW18,WIDE1-1:!4742.00N/12217.00W>2m APRS TX"),
+        QStringLiteral("KK7GWY"));
+    report("VHF 1200 TX packetizes", tx.ok);
+    if (!tx.ok)
+        return;
+    report("VHF 1200 TX reports 1200 baud", tx.baud == 1200);
+    report("VHF 1200 TX uses Bell 202 tones", tx.markHz == 1200.0 && tx.spaceHz == 2200.0);
+    report("VHF 1200 TX stereo PCM generated", !tx.stereoFloat32Pcm.isEmpty() && tx.audioFrames > 0);
+    report("VHF 1200 TX padded to VITA packet frames", (tx.audioFrames % tx.vitaPacketFrames) == 0);
+    report("VHF 1200 TX waveform has sane level", tx.peakDbfs < -6.0 && tx.peakDbfs > -12.0);
+
+    // TXDELAY optimization: VHF 1200 emits a shorter preamble than HF 300.
+    AetherAx25LibmodemShim hfShim;
+    hfShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Hf300));
+    const Ax25TransmitResult hfTx = hfShim.buildTransmitAudio(
+        QStringLiteral("hello"), QStringLiteral("KK7GWY"));
+    report("VHF 1200 TX uses a shorter preamble than HF 300",
+           hfTx.ok && tx.preambleFlags > 0 && tx.preambleFlags < hfTx.preambleFlags);
+
+    const std::vector<float> mono = monoFromStereoFloat32(tx.stereoFloat32Pcm);
+    AetherAx25LibmodemShim rxShim;
+    rxShim.configure(ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200));
+    const auto frames = rxShim.processMonoFloat(mono.data(),
+                                                static_cast<int>(mono.size()),
+                                                tx.sampleRate);
+    report("VHF 1200 TX loopback decodes", frames.size() == 1);
+    if (frames.isEmpty())
+        return;
+    report("VHF 1200 TX loopback source", frames.first().source == QStringLiteral("KK7GWY-9"));
+    report("VHF 1200 TX loopback destination", frames.first().destination == QStringLiteral("APDW18"));
+    report("VHF 1200 TX loopback path",
+           frames.first().path == QStringList({QStringLiteral("WIDE1-1")}));
+    report("VHF 1200 TX loopback payload",
+           frames.first().payloadText == QStringLiteral("!4742.00N/12217.00W>2m APRS TX"));
+}
+
 void testMalformedTransmitMonitorSyntaxIsRejected()
 {
     AetherAx25LibmodemShim txShim;
@@ -746,6 +788,7 @@ int main(int argc, char** argv)
     testChunkedVhf1200ReplayDecodes();
     testTransmitRawPayloadBuildsLoopbackAudio();
     testTransmitMonitorSyntaxBuildsLoopbackAudio();
+    testTransmitVhf1200LoopbackDecodes();
     testMalformedTransmitMonitorSyntaxIsRejected();
     testChunkedSyntheticReplayUsesReceiveGate();
     testReplayWavLoaderFeedsShim();
