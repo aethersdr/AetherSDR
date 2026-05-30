@@ -1,0 +1,63 @@
+name: "CLA Assistant"
+
+# CLA Assistant Lite — a GitHub Action that requires pull-request authors
+# to acknowledge the AetherSDR Contributor License Agreement (CLA.md)
+# before their PR can be merged. Acceptance is recorded by the
+# contributor posting a specific comment on their PR; the action
+# stores their signature in a separate signatures file on a dedicated
+# branch, so consent is auditable and persistent.
+#
+# Choice of implementation: contributor-assertion-action is a maintained
+# fork that keeps the original cla-assistant flow without requiring an
+# external SaaS app to be installed on the repository (no permissions
+# beyond the GITHUB_TOKEN this workflow already has). See:
+#   https://github.com/contributor-assistant/github-action
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+# Required permissions are the minimum needed for the action to
+# (a) read PR metadata, (b) post a comment requesting signature,
+# (c) commit the signature record to the signatures branch.
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  CLAAssistant:
+    runs-on: ubuntu-latest
+    steps:
+      - name: "CLA Assistant"
+        if: (github.event.comment.body == 'recheck' || github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: 'signatures/cla-signatures.json'
+          path-to-document: 'https://github.com/aethersdr/AetherSDR/blob/main/CLA.md'
+          branch: 'cla-signatures'
+          allowlist: dependabot[bot],aethersdr-agent[bot],github-actions[bot]
+          remote-organization-name: aethersdr
+          remote-repository-name: cla-signatures
+          create-file-commit-message: 'chore(cla): create signature file for CLA Assistant'
+          signed-commit-message: 'chore(cla): $contributorName has signed the CLA on PR #$pullRequestNo'
+          custom-notsigned-prcomment: |
+            Thank you for your pull request — and welcome to AetherSDR.
+
+            Before this PR can be merged, our [Contributor License Agreement (CLA)](https://github.com/aethersdr/AetherSDR/blob/main/CLA.md) must be accepted by all contributors who have authored commits on this PR.
+
+            **To sign the CLA**, please post the following comment on this PR:
+
+            > I have read the CLA Document and I hereby sign the CLA
+
+            After signing, the CLA bot will record your acceptance on a separate signatures branch and unblock this PR. If anything in the CLA is unclear, please ask in the PR thread or open a discussion under "Project Governance" — we're happy to clarify before you sign.
+
+            *AetherSDR moved from GPL v3 to AGPL v3 in 2026. The CLA is part of that transition; it gives the project maintainer the ability to relicense the project under any OSI-approved open-source license in the future without contacting every past contributor individually. See the [LICENSE](https://github.com/aethersdr/AetherSDR/blob/main/LICENSE) file for context.*
+          custom-pr-sign-comment: 'I have read the CLA Document and I hereby sign the CLA'
+          custom-allsigned-prcomment: 'All contributors have signed the CLA — this PR is now eligible for review and merge.'
+          lock-pullrequest-aftermerge: false
