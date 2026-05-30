@@ -484,6 +484,8 @@ endif()
 
 # Sources
 set(CORE_SOURCES
+    # AGPL v3 — combined-work anchor for GPL v3 §13 (see LICENSE).
+    src/core/ProjectLicenseNotice.cpp
     src/core/AppSettings.cpp
     src/core/SettingsHelpers.cpp
     src/core/ThemeManager.cpp

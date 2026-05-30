@@ -245,6 +245,15 @@ See [docs/VERIFYING-RELEASES.md](docs/VERIFYING-RELEASES.md) for full instructio
 
 ## License
 
-AetherSDR is free and open-source software licensed under the [GNU General Public License v3](LICENSE).
+AetherSDR is free and open-source software licensed under the **GNU Affero General Public License version 3** ([AGPL v3](LICENSE-AGPL-v3.txt), or at your option any later version). Some files retain their original [GPL v3](LICENSE-GPL-v3.txt) license; the combined work is governed by AGPL v3 under GPL v3 section 13. See [LICENSE](LICENSE) for the full notice.
 
-*AetherSDR is an independent project and is not affiliated with or endorsed by FlexRadio Systems.*
+**What this means in practice:**
+- Personal, non-commercial, community, and private use are unaffected — you can build, modify, fork, and use AetherSDR however you like for your own station.
+- If you modify AetherSDR and **distribute** the modified version, you must publish the modified source (this comes from GPL v3 — unchanged from before).
+- If you modify AetherSDR and provide users access to the modified program **over a network** (for example, by hosting AetherSDR as a remote SDR service, paid or free), you must publish the modified source to those network users (this comes from AGPL v3 section 13 — new in this license).
+
+The shift from GPL v3 to AGPL v3 closes a gap in which AetherSDR could be hosted as a paid remote-SDR-as-a-service offering without sharing modifications, undermining the commercial-use protections that FlexRadio Systems requires under their own SmartSDR EULA (revised January 19, 2026). The change aligns AetherSDR's licensing posture with FlexRadio's stated commercial position. See [LICENSE](LICENSE) for the full reasoning.
+
+Contributing to AetherSDR requires acceptance of the [Contributor License Agreement (CLA)](CLA.md). The CLA grants the project maintainer the right to relicense the project under any OSI-approved open-source license in the future, eliminating the need to contact every past contributor individually for future license changes.
+
+*AetherSDR is an independent project and is not affiliated with or endorsed by FlexRadio Systems. SmartSDR, FlexRadio, FLEX-6000, FLEX-8000, Aurora, SmartLink, and multiFLEX are trademarks of FlexRadio Systems.*

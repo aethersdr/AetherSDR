@@ -6,6 +6,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 > **Versioning:** Starting with **v26.5.1**, AetherSDR moves to **CalVer**
 > (`YY.M.patch`). Earlier tags used semver through v0.9.8.
 
+## [Unreleased]
+
+### License — moved to AGPL v3 (from GPL v3)
+
+AetherSDR's license has changed from **GPL v3** to **AGPL v3** to close
+a gap in which AetherSDR could be hosted as a paid remote-SDR-as-a-service
+offering without sharing modifications, undermining the commercial-use
+protections that FlexRadio Systems requires under their own SmartSDR EULA
+(revised January 19, 2026).
+
+The mechanism uses GPL v3 section 13 — existing GPL v3 contributions
+retain their original license; new contributions are AGPL v3 (via the
+Contributor License Agreement, `CLA.md`); the combined work is governed
+by AGPL v3's network-use clause. Personal, non-commercial, community, and
+private use are unaffected.
+
+A small new module (`src/core/ProjectLicenseNotice.cpp/.h`) anchors the
+AGPL v3 portion of the combined work and provides the license summary
+shown in the About dialog and startup log.
+
+A **Contributor License Agreement** (`CLA.md`) is now required for new
+PRs, enforced by the **CLA Assistant Lite** GitHub Action. The CLA grants
+the project maintainer the right to relicense the project under any
+OSI-approved open-source license in the future, eliminating the need to
+contact every past contributor individually.
+
+For full reasoning and history, see `LICENSE`, `LICENSE-AGPL-v3.txt`,
+`LICENSE-GPL-v3.txt`, and `CLA.md`.
+
 ## [v26.5.3] — 2026-05-24
 
 ### Aetherial Audio TX completion + security hardening + 100-commit reliability sweep
