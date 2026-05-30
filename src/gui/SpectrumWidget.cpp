@@ -5121,10 +5121,19 @@ void SpectrumWidget::initOverlayPipeline()
     m_ovPipeline->setShaderResourceBindings(m_ovSrb);
     m_ovPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
 
-    // Enable alpha blending for overlay compositing
+    // Enable alpha blending for overlay compositing.
+    // The overlay textures (m_overlayStatic / m_overlayBg) are painted into
+    // QImage::Format_RGBA8888_Premultiplied and the overlay.frag shader emits
+    // the texel as-is, so the source is PREMULTIPLIED. Premultiplied
+    // compositing wants srcColor = One (the RGB already carries × alpha);
+    // using SrcAlpha here double-multiplies the texel by alpha (color × α²),
+    // which crushed the passband fill (α=35/255 → 1.9% instead of 13.7%) below
+    // the visible floor while the brighter edge lines (α=130/255) survived.
+    // See issue #3294. NOTE: keep SrcAlpha on the FFT fill/line pipelines —
+    // those source from non-premultiplied baked vertex colors.
     QRhiGraphicsPipeline::TargetBlend blend;
     blend.enable = true;
-    blend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+    blend.srcColor = QRhiGraphicsPipeline::One;   // premultiplied source
     blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
     blend.srcAlpha = QRhiGraphicsPipeline::One;
     blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
