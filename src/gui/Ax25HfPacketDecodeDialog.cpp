@@ -7,6 +7,7 @@
 #include "core/ThemeManager.h"
 #include "core/tnc/Ax25FrameFormatter.h"
 #include "core/tnc/KissTncServer.h"
+#include "core/pms/PmsMailbox.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -51,6 +52,15 @@ constexpr auto kTncEnabledSetting = "AetherModemKissTncEnabled";
 constexpr auto kTncStartOnStartupSetting = "AetherModemKissTncStartOnStartup";
 constexpr auto kTncPortSetting = "AetherModemKissTncPort";
 constexpr int kTncDefaultPort = 8001;
+
+// Personal Mailbox System (PMS) settings keys (persisted in AppSettings).
+constexpr auto kPmsEnabledSetting = "AetherModemPmsEnabled";
+constexpr auto kPmsSsidSetting = "AetherModemPmsSsid";
+constexpr auto kPmsWelcomeSetting = "AetherModemPmsWelcome";
+constexpr auto kPmsBeaconEnabledSetting = "AetherModemPmsBeaconEnabled";
+constexpr auto kPmsBeaconTextSetting = "AetherModemPmsBeaconText";
+constexpr int kPmsDefaultSsid = 1;
+
 constexpr int kAudioCaptureSeconds = 180;
 constexpr int kTxDaxSettleMs = 150;
 constexpr int kTxLeadMs = 200;
@@ -510,6 +520,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     m_shim = new AetherAx25LibmodemShim(this);
     m_kissServer = new KissTncServer(this);
+    m_pms = new PmsMailbox(this);
     m_heartbeatTimer = new QTimer(this);
     m_heartbeatTimer->setInterval(1000);
     m_txPaceTimer = new QTimer(this);
@@ -525,14 +536,18 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     tabs->setSpacing(0);
     m_ax25Tab = tabButton(QStringLiteral("AX.25"), true, tabsFrame);
     m_kissTab = tabButton(QStringLiteral("KISS TNC"), false, tabsFrame);
+    m_mailboxTab = tabButton(QStringLiteral("Mailbox"), false, tabsFrame);
     m_ax25Tab->setEnabled(true);
     m_kissTab->setEnabled(true);
+    m_mailboxTab->setEnabled(true);
     auto* tabGroup = new QButtonGroup(this);
     tabGroup->setExclusive(true);
     tabGroup->addButton(m_ax25Tab, 0);
     tabGroup->addButton(m_kissTab, 1);
+    tabGroup->addButton(m_mailboxTab, 2);
     tabs->addWidget(m_ax25Tab, 1);
     tabs->addWidget(m_kissTab, 1);
+    tabs->addWidget(m_mailboxTab, 1);
     root->addWidget(tabsFrame);
 
     m_tabStack = new QStackedWidget(bodyWidget());
@@ -603,6 +618,8 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     // KISS TNC page (built lazily into the same stack).
     m_tabStack->addWidget(buildKissTncPage());
+    // Mailbox (PMS) page.
+    m_tabStack->addWidget(buildMailboxPage());
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
     auto* logLayout = new QVBoxLayout(logFrame);
@@ -723,6 +740,13 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             refreshTncStatus();
         }
     });
+    // RX -> Mailbox: feed every decoded frame to the PMS (heard list always;
+    // connected-mode handling only for frames addressed to our PMS callsign).
+    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded, this,
+            [this](const Ax25DecodedFrame& frame) {
+        if (m_pms && !frame.ax25FrameNoFcs.isEmpty())
+            m_pms->onAirFrame(frame.ax25FrameNoFcs);
+    });
     connect(m_shim, &AetherAx25LibmodemShim::diagnosticsUpdated,
             this, &Ax25HfPacketDecodeDialog::updateDiagnostics);
     connect(m_shim, &AetherAx25LibmodemShim::statusChanged,
@@ -779,6 +803,32 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         }
     });
 
+    // Mailbox (PMS) wiring.
+    connect(m_pms, &PmsMailbox::transmitFrame, this, [this](const QByteArray& raw) {
+        if (raw.isEmpty() || !m_audio || !m_radio)
+            return;
+        m_kissTxQueue.enqueue(raw); // shares the one-at-a-time keying/pacing path
+        maybeStartNextKissTx();
+    });
+    connect(m_pms, &PmsMailbox::activity, this, &Ax25HfPacketDecodeDialog::appendSystemLine);
+    connect(m_pms, &PmsMailbox::stateChanged, this, [this] { refreshPmsStatus(); });
+    connect(m_pmsEnable, &QCheckBox::toggled, this, [this](bool on) {
+        setPmsEnabled(on, true);
+    });
+    connect(m_pmsSsid, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        applyPmsConfigFromUi(true);
+        refreshPmsStatus();
+    });
+    connect(m_pmsWelcome, &QLineEdit::editingFinished, this, [this] {
+        applyPmsConfigFromUi(true);
+    });
+    connect(m_pmsBeaconText, &QLineEdit::editingFinished, this, [this] {
+        applyPmsConfigFromUi(true);
+    });
+    connect(m_pmsBeaconEnable, &QCheckBox::toggled, this, [this](bool) {
+        applyPmsConfigFromUi(true);
+    });
+
     appendSystemLine(QStringLiteral("AetherModem initialized."));
     appendSystemLine(QStringLiteral("Enable Modem to start the RX audio tap."));
     appendSystemLine(QStringLiteral("TX accepts raw payload text or full SRC>DST,path:payload syntax."));
@@ -787,6 +837,18 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     refreshTransmitControls();
     applyTncStartOnStartup();
     refreshTncStatus();
+
+    // Restore mailbox (PMS) state and version SID.
+#ifdef AETHERSDR_VERSION
+    m_pms->setVersionString(QString::fromLatin1(AETHERSDR_VERSION));
+#endif
+    applyPmsConfigFromUi(false);
+    const bool pmsOn = AppSettings::instance()
+        .value(kPmsEnabledSetting, QStringLiteral("False")).toString()
+            == QStringLiteral("True");
+    if (pmsOn && m_pmsEnable)
+        m_pmsEnable->setChecked(true); // fires setPmsEnabled() via the toggled connection
+    refreshPmsStatus();
 }
 
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
@@ -1800,6 +1862,228 @@ void Ax25HfPacketDecodeDialog::refreshTncStatus()
         m_tncStatusDot->setStyleSheet(listening
             ? QStringLiteral("background:#5fce66;border-radius:6px;")
             : QStringLiteral("background:#8190a3;border-radius:6px;"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Personal Mailbox System (PMS) tab
+// ---------------------------------------------------------------------------
+
+QWidget* Ax25HfPacketDecodeDialog::buildMailboxPage()
+{
+    auto* page = new QWidget(m_tabStack);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+
+    auto* controlsFrame = panel(QStringLiteral("ControlsFrame"), page);
+    auto* controls = new QHBoxLayout(controlsFrame);
+    controls->setContentsMargins(16, 14, 16, 14);
+    controls->setSpacing(20);
+
+    auto* mboxCell = panel(QStringLiteral("ControlCell"), controlsFrame);
+    auto* mboxLayout = new QVBoxLayout(mboxCell);
+    mboxLayout->setContentsMargins(0, 0, 20, 0);
+    mboxLayout->setSpacing(12);
+    mboxLayout->addWidget(sectionLabel(QStringLiteral("MAILBOX (PMS)"), mboxCell));
+    m_pmsEnable = new QCheckBox(QStringLiteral("Enable Mailbox (PMS)"), mboxCell);
+    mboxLayout->addWidget(m_pmsEnable);
+    m_pmsBeaconEnable = new QCheckBox(QStringLiteral("Send hourly beacon"), mboxCell);
+    mboxLayout->addWidget(m_pmsBeaconEnable);
+    controls->addWidget(mboxCell, 2);
+
+    auto* ssidCell = panel(QStringLiteral("ControlCell"), controlsFrame);
+    auto* ssidLayout = new QVBoxLayout(ssidCell);
+    ssidLayout->setContentsMargins(0, 0, 20, 0);
+    ssidLayout->setSpacing(12);
+    ssidLayout->addWidget(sectionLabel(QStringLiteral("ANSWER SSID"), ssidCell));
+    m_pmsSsid = new QSpinBox(ssidCell);
+    m_pmsSsid->setRange(0, 15);
+    m_pmsSsid->setValue(kPmsDefaultSsid);
+    m_pmsSsid->setMaximumWidth(120);
+    ssidLayout->addWidget(m_pmsSsid);
+    controls->addWidget(ssidCell, 1);
+    controls->addStretch(1);
+    layout->addWidget(controlsFrame);
+
+    auto* welcomeFrame = panel(QStringLiteral("ControlsFrame"), page);
+    auto* welcomeLayout = new QVBoxLayout(welcomeFrame);
+    welcomeLayout->setContentsMargins(16, 12, 16, 12);
+    welcomeLayout->setSpacing(8);
+    welcomeLayout->addWidget(sectionLabel(QStringLiteral("WELCOME / PTEXT"), welcomeFrame));
+    m_pmsWelcome = new QLineEdit(welcomeFrame);
+    m_pmsWelcome->setPlaceholderText(
+        QStringLiteral("Shown to callers after they connect (optional)."));
+    welcomeLayout->addWidget(m_pmsWelcome);
+    welcomeLayout->addWidget(sectionLabel(QStringLiteral("BEACON TEXT"), welcomeFrame));
+    m_pmsBeaconText = new QLineEdit(welcomeFrame);
+    m_pmsBeaconText->setPlaceholderText(
+        QStringLiteral("Hourly AX.25 beacon announcing the mailbox is online."));
+    welcomeLayout->addWidget(m_pmsBeaconText);
+    layout->addWidget(welcomeFrame);
+
+    auto* statusFrame = statusPanel(QStringLiteral("MAILBOX STATUS"),
+                                    &m_pmsStatusDot, &m_pmsStatusValue, page);
+    layout->addWidget(statusFrame);
+
+    auto* callersFrame = panel(QStringLiteral("StatusFrame"), page);
+    auto* callersLayout = new QVBoxLayout(callersFrame);
+    callersLayout->setContentsMargins(16, 12, 16, 12);
+    callersLayout->setSpacing(8);
+    callersLayout->addWidget(sectionLabel(QStringLiteral("LAST CALLERS"), callersFrame));
+    m_pmsCallersValue = new QLabel(callersFrame);
+    m_pmsCallersValue->setObjectName(QStringLiteral("StatusValue"));
+    m_pmsCallersValue->setWordWrap(true);
+    callersLayout->addWidget(m_pmsCallersValue);
+    callersLayout->addWidget(sectionLabel(QStringLiteral("STATISTICS"), callersFrame));
+    m_pmsStatsValue = new QLabel(callersFrame);
+    m_pmsStatsValue->setObjectName(QStringLiteral("StatusValue"));
+    m_pmsStatsValue->setWordWrap(true);
+    callersLayout->addWidget(m_pmsStatsValue);
+    layout->addWidget(callersFrame);
+
+    auto* help = new QLabel(
+        QStringLiteral("A single remote caller can connect to <callsign>-<SSID> over "
+                       "1200-baud AX.25 and read, list, and send messages, list who has "
+                       "been heard, then disconnect. The station callsign comes from the "
+                       "radio; set the SSID the mailbox answers on. Enabling the mailbox "
+                       "turns the modem on. Settings persist across restarts."),
+        page);
+    help->setObjectName(QStringLiteral("StatusValue"));
+    help->setWordWrap(true);
+    layout->addWidget(help);
+    layout->addStretch(1);
+
+    // Seed control values from settings (before signals are wired in the ctor).
+    m_pmsSsid->setValue(AppSettings::instance()
+        .value(kPmsSsidSetting, QString::number(kPmsDefaultSsid)).toInt());
+    m_pmsWelcome->setText(AppSettings::instance()
+        .value(kPmsWelcomeSetting, QString()).toString());
+    m_pmsBeaconText->setText(AppSettings::instance()
+        .value(kPmsBeaconTextSetting,
+               QStringLiteral("AetherMailbox online - connect for messages")).toString());
+    m_pmsBeaconEnable->setChecked(AppSettings::instance()
+        .value(kPmsBeaconEnabledSetting, QStringLiteral("False")).toString()
+            == QStringLiteral("True"));
+
+    return page;
+}
+
+void Ax25HfPacketDecodeDialog::applyPmsConfigFromUi(bool persist)
+{
+    if (!m_pms)
+        return;
+    const QString call = m_radio ? m_radio->callsign().trimmed().toUpper() : QString();
+    if (!call.isEmpty())
+        m_pms->setLocalCallsign(call);
+    if (m_pmsSsid)
+        m_pms->setSsid(m_pmsSsid->value());
+    if (m_pmsWelcome)
+        m_pms->setWelcomeText(m_pmsWelcome->text());
+    if (m_pmsBeaconText)
+        m_pms->setBeaconText(m_pmsBeaconText->text());
+    if (m_pmsBeaconEnable)
+        m_pms->setBeaconEnabled(m_pmsBeaconEnable->isChecked());
+
+    if (persist) {
+        auto& s = AppSettings::instance();
+        if (m_pmsSsid)
+            s.setValue(kPmsSsidSetting, QString::number(m_pmsSsid->value()));
+        if (m_pmsWelcome)
+            s.setValue(kPmsWelcomeSetting, m_pmsWelcome->text());
+        if (m_pmsBeaconText)
+            s.setValue(kPmsBeaconTextSetting, m_pmsBeaconText->text());
+        if (m_pmsBeaconEnable)
+            s.setValue(kPmsBeaconEnabledSetting,
+                       m_pmsBeaconEnable->isChecked() ? QStringLiteral("True")
+                                                      : QStringLiteral("False"));
+        s.save();
+    }
+}
+
+void Ax25HfPacketDecodeDialog::setPmsEnabled(bool enabled, bool persist)
+{
+    if (persist) {
+        AppSettings::instance().setValue(kPmsEnabledSetting,
+            enabled ? QStringLiteral("True") : QStringLiteral("False"));
+        AppSettings::instance().save();
+    }
+
+    if (enabled) {
+        // The mailbox needs the modem RX tap running to receive callers.
+        if (m_enableDecode && !m_enableDecode->isChecked()) {
+            appendSystemLine(QStringLiteral("Enabling the modem for the mailbox (PMS)."));
+            m_enableDecode->setChecked(true);
+        }
+        const QString call = m_radio ? m_radio->callsign().trimmed().toUpper() : QString();
+        if (call.isEmpty()) {
+            appendSystemLine(QStringLiteral(
+                "Mailbox: set a station callsign on the radio before enabling the PMS."));
+            if (m_pmsEnable) {
+                QSignalBlocker blocker(m_pmsEnable);
+                m_pmsEnable->setChecked(false);
+            }
+            refreshPmsStatus();
+            return;
+        }
+        applyPmsConfigFromUi(false);
+        m_pms->setEnabled(true);
+        appendSystemLine(QStringLiteral("Mailbox (PMS) listening as %1.")
+            .arg(m_pms->localAddress().toString()));
+    } else {
+        m_pms->setEnabled(false);
+        appendSystemLine(QStringLiteral("Mailbox (PMS) disabled."));
+    }
+    refreshPmsStatus();
+}
+
+void Ax25HfPacketDecodeDialog::refreshPmsStatus()
+{
+    if (!m_pmsStatusValue || !m_pms)
+        return;
+
+    const bool enabled = m_pms->isEnabled();
+    QString status;
+    if (!enabled) {
+        status = QStringLiteral("Disabled");
+    } else if (m_pms->isCallerConnected()) {
+        status = QStringLiteral("Connected: %1").arg(m_pms->connectedCaller());
+    } else {
+        status = QStringLiteral("Listening as %1").arg(m_pms->localAddress().toString());
+    }
+    m_pmsStatusValue->setText(status);
+    if (m_pmsStatusDot) {
+        m_pmsStatusDot->setFixedSize(12, 12);
+        m_pmsStatusDot->setStyleSheet(enabled
+            ? QStringLiteral("background:#5fce66;border-radius:6px;")
+            : QStringLiteral("background:#8190a3;border-radius:6px;"));
+    }
+
+    if (m_pmsCallersValue) {
+        const QStringList callers = m_pms->lastCallers(5);
+        m_pmsCallersValue->setText(callers.isEmpty()
+            ? QStringLiteral("(no callers yet)")
+            : callers.join(QStringLiteral("\n")));
+    }
+
+    if (m_pmsStatsValue) {
+        const qint64 freeBytes = m_pms->freeDiskBytes();
+        auto humanBytes = [](qint64 bytes) -> QString {
+            const char* units[] = {"B", "KB", "MB", "GB", "TB"};
+            double value = static_cast<double>(bytes);
+            int unit = 0;
+            while (value >= 1024.0 && unit < 4) {
+                value /= 1024.0;
+                ++unit;
+            }
+            return QStringLiteral("%1 %2").arg(value, 0, 'f', 1).arg(QLatin1String(units[unit]));
+        };
+        m_pmsStatsValue->setText(QStringLiteral(
+            "%1 message(s)  |  %2 caller(s) logged  |  %3 station(s) heard  |  %4 free")
+            .arg(m_pms->messageCount())
+            .arg(m_pms->callerCount())
+            .arg(m_pms->heardSummary(100000).size())
+            .arg(humanBytes(freeBytes)));
     }
 }
 

@@ -575,8 +575,11 @@ set(CORE_SOURCES
     src/core/MemoryRecallPolicy.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/Ax25.cpp
+    src/core/tnc/Ax25Connection.cpp
     src/core/tnc/KissFraming.cpp
     src/core/tnc/KissTncServer.cpp
+    src/core/pms/PmsMailbox.cpp
 )
 
 if(APPLE)
@@ -1916,6 +1919,17 @@ add_executable(ax25_libmodem_shim_test
 target_include_directories(ax25_libmodem_shim_test PRIVATE src)
 target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core)
 add_test(NAME ax25_libmodem_shim_test COMMAND ax25_libmodem_shim_test)
+
+add_executable(pms_mailbox_test
+    tests/pms_mailbox_test.cpp
+    src/core/tnc/Ax25.cpp
+    src/core/tnc/Ax25Connection.cpp
+    src/core/pms/PmsMailbox.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(pms_mailbox_test PRIVATE src)
+target_link_libraries(pms_mailbox_test PRIVATE Qt6::Core)
+add_test(NAME pms_mailbox_test COMMAND pms_mailbox_test)
 
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
