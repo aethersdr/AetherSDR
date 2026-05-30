@@ -205,6 +205,29 @@ void PmsMailbox::onAirFrame(const QByteArray& rawNoFcs)
     if (!isUs)
         recordHeard(*frame);
 
+    // Diagnostic: every decoded frame, with the address-match decision spelled
+    // out. This is the key instrument for connect troubleshooting — it tells us
+    // whether a SABM was decoded at all and whether its dest matched the listen
+    // or alias address (decode problem vs address mismatch vs not-for-us).
+    if (m_enabled) {
+        const bool destMatch = (m_listen.isValid() && frame->dest == m_listen)
+            || (m_alias.isValid() && frame->dest == m_alias);
+        QString which = QStringLiteral("none");
+        if (m_listen.isValid() && frame->dest == m_listen)
+            which = QStringLiteral("listen");
+        else if (m_alias.isValid() && frame->dest == m_alias)
+            which = QStringLiteral("alias");
+        emit activity(QStringLiteral(
+            "PMS RX %1 %2>%3 — dest match=%4 (%5); listen=%6 alias=%7")
+            .arg(ax25::frameTypeName(frame->type),
+                 frame->src.toString(),
+                 frame->dest.toString(),
+                 destMatch ? QStringLiteral("yes") : QStringLiteral("no"),
+                 which,
+                 m_listen.isValid() ? m_listen.toString() : QStringLiteral("(unset)"),
+                 m_alias.isValid() ? m_alias.toString() : QStringLiteral("(none)")));
+    }
+
     // Let the data link decide if the frame is addressed to us; it matches both
     // the primary listen address and the optional vanity alias.
     if (m_enabled)

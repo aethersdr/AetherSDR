@@ -2357,7 +2357,11 @@ LIBMODEM_INLINE std::tuple<OutputIt1, OutputIt2, bool> try_decode_frame(RandomIt
 {
     size_t frame_size = std::distance(frame_it_first, frame_it_last);
 
-    if (frame_size < 18)
+    // Minimum valid AX.25 frame WITH FCS = 15 (14 address + 1 control) + 2 FCS
+    // = 17 bytes. A no-PID U-frame (SABM/DISC/UA/DM — the connected-mode control
+    // frames) sits at exactly 17; the old < 18 silently dropped every one, so a
+    // station could never be reached in connected mode. Must be < 17, not < 18.
+    if (frame_size < 17)
     {
         return { path, data, false };
     }
