@@ -752,10 +752,13 @@ struct AetherAx25LibmodemShim::Impl {
         lastRejectFrameBits = static_cast<int>(lane.bitstreamState.frame_size_bits);
         lastRejectFrameBytes = static_cast<int>(frameBytesSize);
         lastRejectPreviewHex = framePreviewHex(lane.candidateFrameBytes, frameBytesSize);
-        lastRejectActualFcs = frameBytesSize >= 18 ? fcsToString(actualFcs) : QString();
-        lastRejectExpectedFcs = frameBytesSize >= 18 ? fcsToString(expectedFcs) : QString();
+        lastRejectActualFcs = frameBytesSize >= 17 ? fcsToString(actualFcs) : QString();
+        lastRejectExpectedFcs = frameBytesSize >= 17 ? fcsToString(expectedFcs) : QString();
 
-        if (frameBytesSize < 18) {
+        // Minimum valid AX.25 frame is 17 bytes (14 address + 1 control + 2 FCS);
+        // a no-PID U-frame (SABM/DISC/UA/DM) sits exactly at 17. Anything shorter
+        // is a noise-triggered flag pair.
+        if (frameBytesSize < 17) {
             ++totalRejectTooShort;
             lastRejectReason = QStringLiteral("too-short");
             return false;

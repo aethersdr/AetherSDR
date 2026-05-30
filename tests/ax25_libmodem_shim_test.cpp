@@ -1,4 +1,5 @@
 #include "core/tnc/AetherAx25LibmodemShim.h"
+#include "core/tnc/Ax25.h"
 #include "core/tnc/KissFraming.h"
 
 #include "bitstream.h"
@@ -458,6 +459,62 @@ void testSyntheticVhf1200AfskLoopbackDecodes()
            frame.payloadText == QStringLiteral("!4742.00N/12217.00W>2m APRS via AetherModem 1200 baud"));
 }
 
+// A connect request (SABM) is the SHORTEST possible AX.25 frame: dest(7) +
+// src(7) + control(1) = 15 bytes, no PID/info, = 17 bytes with FCS. That is the
+// worst case for the decoder's minimum-length gate, and it is exactly what a TNC
+// sends to open a PMS session.
+//
+// Regression guard: the bitstream decoder previously rejected frames < 18 bytes,
+// which silently dropped every no-PID U-frame (SABM/DISC/UA/DM) at exactly 17 —
+// so a PMS/BBS could never be reached in connected mode even with perfect audio.
+// The gate is now < 17. This test fails if that off-by-one ever returns.
+void testSabmConnectFrameLoopbackDecodes()
+{
+    using AetherSDR::ax25::Address;
+    using AetherSDR::ax25::Frame;
+    using AetherSDR::ax25::FrameType;
+
+    const auto cfg = ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200);
+    AetherAx25LibmodemShim shim;
+    shim.configure(cfg);
+
+    const Address dest{QStringLiteral("KI6BCJ"), 10, false, false};
+    const Address src{QStringLiteral("KI6BCJ"), 7, false, false};
+    const Frame sabm = Frame::makeU(dest, src, FrameType::SABM,
+                                    /*pollFinal=*/true, /*command=*/true);
+    const QByteArray sabmNoFcs = sabm.encode();
+    report("SABM encodes to the minimum 15-byte frame", sabmNoFcs.size() == 15);
+
+    const auto tx = shim.buildTransmitAudioFromFrame(sabmNoFcs);
+    report("SABM TX builds audio", tx.ok && !tx.stereoFloat32Pcm.isEmpty());
+    if (!tx.ok)
+        return;
+
+    // One-shot feed, same as the other synthetic loopback tests — the SABM now
+    // decodes directly once the < 17 length gate is correct.
+    const auto monoTx = monoFromStereoFloat32(tx.stereoFloat32Pcm);
+    const auto frames = shim.processMonoFloat(monoTx.data(),
+                                              static_cast<int>(monoTx.size()),
+                                              cfg.sampleRate);
+    report("SABM loopback emits one frame", frames.size() == 1);
+    if (frames.isEmpty())
+        return;
+    const auto& frame = frames.first();
+    report("SABM loopback FCS accepted", frame.fcsOk);
+    report("SABM loopback is not a UI frame", !frame.isUiFrame);
+    // Control 0x2F (SABM) with the poll bit (0x10) set = 0x3F.
+    report("SABM loopback control byte is SABM+P", frame.control == 0x3F);
+    report("SABM loopback destination", frame.destination == QStringLiteral("KI6BCJ-10"));
+    report("SABM loopback source", frame.source == QStringLiteral("KI6BCJ-7"));
+
+    // And confirm our own decoder parses the recovered on-air bytes back to a
+    // SABM, i.e. the full path a caller's connect takes into the PMS data link.
+    const auto parsed = Frame::decode(frame.ax25FrameNoFcs);
+    report("SABM loopback re-parses as a Frame", parsed.has_value());
+    if (parsed)
+        report("SABM loopback parses as FrameType::SABM", parsed->type == FrameType::SABM);
+}
+
 void testChunkedVhf1200ReplayDecodes()
 {
     const auto cfg = ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200);
@@ -868,6 +925,7 @@ int main(int argc, char** argv)
     testKnownGoodBitstreamDecodes();
     testSyntheticHf300AfskLoopbackDecodes();
     testSyntheticVhf1200AfskLoopbackDecodes();
+    testSabmConnectFrameLoopbackDecodes();
     testChunkedVhf1200ReplayDecodes();
     testTransmitRawPayloadBuildsLoopbackAudio();
     testTransmitMonitorSyntaxBuildsLoopbackAudio();
