@@ -15978,9 +15978,9 @@ void MainWindow::activateRADE(int sliceId)
     const int     prevFilterHigh = s->filterHigh();
     s->setMode(mode);
     if (mode == "DIGL")
-        s->setFilterWidth(-3500, 0);
+        s->setFilterWidth(-2250, -750);
     else
-        s->setFilterWidth(0, 3500);
+        s->setFilterWidth(750, 2250);
 
     // Remember which slice and its previous mute state
     m_radeSliceId = sliceId;
