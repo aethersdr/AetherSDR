@@ -173,6 +173,35 @@ path, payload bytes, AX.25 frame bytes, bit count, waveform duration, RMS/peak,
 baud, mark/space, polarity, preamble/postamble flag counts, DAX TX stream id,
 PTT lead/tail timing, and paced chunk progress when debug is enabled.
 
+## KISS TNC (TCP)
+
+The **KISS TNC** tab next to AX.25 turns AetherModem into a KISS-over-TCP TNC so
+any host packet/APRS application drives the modem:
+
+- **Enable TNC** starts/stops a `QTcpServer` (cross-platform) on the configured
+  **TCP port** (default **8001**, all interfaces). **Start TNC on Startup**
+  persists the choice; when set, the app constructs the AetherModem window
+  hidden at launch so the server runs headless and survives the window closing.
+- Multiple clients are supported. Each gets an independent, resync-safe KISS
+  decoder. Dead/stuck clients are reaped via TCP keepalive, a slow-consumer
+  write-backlog cap, and an idle sweep; a client cap bounds resource use.
+- **RX → clients:** every decoded frame is forwarded to all clients as a KISS
+  data frame. The exact on-air bytes (address..info, no FCS) are captured at
+  decode (`Ax25DecodedFrame::ax25FrameNoFcs`) so hosts get a byte-faithful copy.
+- **clients → TX:** a client's KISS data frame is queued and keyed onto the air
+  with the baud profile selected on the AX.25 tab. The modem computes/->appends
+  the FCS (`buildTransmitAudioFromFrame`). Queued frames serialize through the
+  one-at-a-time TX path; the queue drains as each transmit completes.
+- Enabling the TNC also enables the modem (RX tap) for you; a slice must be
+  attached and the radio ready for traffic to flow.
+
+KISS framing lives in `src/core/tnc/KissFraming.{h,cpp}` (pure, unit-tested);
+the server is `src/core/tnc/KissTncServer.{h,cpp}`. All lifecycle and per-frame
+activity logs on the `aether.ax25` (AetherModem) category prefixed `KISS`, so a
+problem can be triaged as client-side (connect/parse/backlog) vs RF-side
+(decode/level/gate). The TNC STATUS panel shows listening port, client count,
+and RX/TX frame counters.
+
 ## Open Work
 
 The remaining missed packets are mostly AX.25-looking candidates that fail FCS. That means the decoder is often finding packet structure but still has symbol/bit errors before CRC.
@@ -187,4 +216,5 @@ Next work should focus on:
 - validating over-the-air AetherModem TX level, timing, and FCS decode with a
   second receiver
 
-Out of scope remains KISS, APRS-IS, maps, digipeating, and connected-mode AX.25.
+Out of scope remains APRS-IS, maps, digipeating, and connected-mode AX.25.
+(KISS-over-TCP is now implemented — see the KISS TNC section above.)

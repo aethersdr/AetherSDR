@@ -356,6 +356,7 @@ private:
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
     void showAx25HfPacketDecodeDialog();
+    void startKissTncOnStartupIfConfigured();
     void showFlexControlDialog();
     void handleFlexControlTuneSteps(int steps);
     void handleFlexControlButton(int button, int action);
