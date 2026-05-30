@@ -176,26 +176,18 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_lockSpeedBtn->setStyleSheet(m_lockPitchBtn->styleSheet());
     cwBar->addWidget(m_lockSpeedBtn);
 
-    // Pitch range — double-handle slider, 100–2000 Hz, default 300–1200 Hz
-    auto* pitchLabel = new QLabel("Pitch:");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(pitchLabel, "QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }");
-    cwBar->addWidget(pitchLabel);
-
-    m_pitchRangeSlider = new RangeSlider(300, 1200, 500, 700, {}, this);
-    m_pitchRangeSlider->setFixedWidth(160);
+    // Pitch range — double-handle slider, label embedded in widget
+    m_pitchRangeSlider = new RangeSlider(300, 1200, 500, 700, "Pitch", {}, this);
+    m_pitchRangeSlider->setFixedWidth(195);
     m_pitchRangeSlider->setToolTip("Decoder pitch search range (Hz)");
     cwBar->addWidget(m_pitchRangeSlider);
     connect(m_pitchRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {
         emit pitchRangeChanged(lo, hi);
     });
 
-    // WPM range — double-handle slider, 5–120 WPM, default 5–60 WPM
-    auto* wpmLabel = new QLabel("WPM:");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(wpmLabel, "QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }");
-    cwBar->addWidget(wpmLabel);
-
-    m_speedRangeSlider = new RangeSlider(5, 120, 5, 60, {}, this);
-    m_speedRangeSlider->setFixedWidth(160);
+    // WPM range — double-handle slider, label embedded in widget
+    m_speedRangeSlider = new RangeSlider(5, 120, 5, 60, "WPM", {}, this);
+    m_speedRangeSlider->setFixedWidth(195);
     m_speedRangeSlider->setToolTip("Decoder speed search range (WPM)");
     cwBar->addWidget(m_speedRangeSlider);
     connect(m_speedRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {

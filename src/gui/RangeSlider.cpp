@@ -5,12 +5,15 @@
 #include <algorithm>
 
 RangeSlider::RangeSlider(int min, int max, int low, int high,
-                         const QString& unit, QWidget* parent)
+                         const QString& label, const QString& unit,
+                         QWidget* parent)
     : QWidget(parent)
     , m_min(min), m_max(max)
     , m_low(std::clamp(low,  min, max))
     , m_high(std::clamp(high, min, max))
+    , m_label(label)
     , m_unit(unit)
+    , m_leftLabelW(label.isEmpty() ? kRightLabelW : 55)
 {
     setMouseTracking(false);
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
@@ -48,7 +51,7 @@ void RangeSlider::setRange(int min, int max)
 QRect RangeSlider::grooveRect() const
 {
     int gy = (height() - kGrooveH) / 2;
-    return QRect(kLabelW, gy, width() - 2 * kLabelW, kGrooveH);
+    return QRect(m_leftLabelW, gy, width() - m_leftLabelW - kRightLabelW, kGrooveH);
 }
 
 int RangeSlider::valueToX(int val) const
@@ -104,17 +107,37 @@ void RangeSlider::paintEvent(QPaintEvent*)
     drawHandle(m_low);
     drawHandle(m_high);
 
-    // Value labels
+    // Labels
     QFont f = font();
     f.setPixelSize(9);
     p.setFont(f);
-    p.setPen(QColor(0xaa, 0xaa, 0xaa));
 
-    const QString loStr = QString::number(m_low)  + m_unit;
+    // Left: dim label prefix, bright value
+    const QString loVal = QString::number(m_low) + m_unit;
+    if (!m_label.isEmpty()) {
+        // Draw the prefix in a dimmer color, value in normal color
+        const QString prefix = m_label + " ";
+        QFontMetrics fm(f);
+        const int prefixW = fm.horizontalAdvance(prefix);
+        const int totalW  = prefixW + fm.horizontalAdvance(loVal);
+        const int startX  = m_leftLabelW - 2 - totalW;
+
+        p.setPen(QColor(0x66, 0x66, 0x66));
+        p.drawText(startX, 0, prefixW, height(),
+                   Qt::AlignLeft | Qt::AlignVCenter, prefix);
+        p.setPen(QColor(0xaa, 0xaa, 0xaa));
+        p.drawText(startX + prefixW, 0, fm.horizontalAdvance(loVal) + 2, height(),
+                   Qt::AlignLeft | Qt::AlignVCenter, loVal);
+    } else {
+        p.setPen(QColor(0xaa, 0xaa, 0xaa));
+        p.drawText(QRect(0, 0, m_leftLabelW - 2, height()),
+                   Qt::AlignRight | Qt::AlignVCenter, loVal);
+    }
+
+    // Right: value only
     const QString hiStr = QString::number(m_high) + m_unit;
-    p.drawText(QRect(0, 0, kLabelW - 2, height()),
-               Qt::AlignRight | Qt::AlignVCenter, loStr);
-    p.drawText(QRect(width() - kLabelW + 2, 0, kLabelW - 2, height()),
+    p.setPen(QColor(0xaa, 0xaa, 0xaa));
+    p.drawText(QRect(width() - kRightLabelW + 2, 0, kRightLabelW - 2, height()),
                Qt::AlignLeft | Qt::AlignVCenter, hiStr);
 }
 
@@ -129,14 +152,12 @@ void RangeSlider::mousePressEvent(QMouseEvent* e)
     const bool nearHigh = std::abs(px - valueToX(m_high)) <= kHandleW;
 
     if (nearLow && nearHigh) {
-        // Both at same spot: pick the one in the direction of drag
         m_dragging = (px <= valueToX(m_low)) ? Handle::Low : Handle::High;
     } else if (nearLow) {
         m_dragging = Handle::Low;
     } else if (nearHigh) {
         m_dragging = Handle::High;
     } else {
-        // Click on groove: move nearest handle
         int v = xToValue(px);
         m_dragging = (std::abs(v - m_low) <= std::abs(v - m_high))
                      ? Handle::Low : Handle::High;
