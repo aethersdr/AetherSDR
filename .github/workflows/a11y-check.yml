@@ -1,0 +1,38 @@
+name: Accessibility Check
+
+on:
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  a11y-check:
+    name: Qt Accessibility Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Get changed src/gui/ files
+        id: changed
+        run: |
+          git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | grep -E '^src/gui/.*\.(cpp|h)$' \
+            > /tmp/changed_gui_files.txt || true
+          echo "Changed src/gui files:"
+          cat /tmp/changed_gui_files.txt || echo "(none)"
+
+      - name: Run accessibility check
+        run: |
+          FILES=$(cat /tmp/changed_gui_files.txt | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            echo "No src/gui/ files changed -- skipping."
+            exit 0
+          fi
+          python tools/check_a11y.py $FILES

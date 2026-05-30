@@ -389,3 +389,81 @@ Filter all status and VITA-49 packets by `client_handle` — three layers:
 
 Early status messages arrive WITHOUT `client_handle`. Create SliceModels for
 all initially, remove other clients' when handle arrives.
+
+---
+
+## Accessibility Enforcement — `src/gui/` Rules
+
+Whenever you touch any file under `src/gui/`, apply the following checks to
+every widget you create or modify. These fixes are **invisible to sighted
+users** — no visual changes, no layout changes, no new UI elements.
+
+### Required on every QWidget subclass constructor
+
+1. **Accessible name** — every interactive or informational widget must have:
+   ```cpp
+   widget->setAccessibleName(tr("Human readable name"));
+   ```
+   Use a concise noun phrase (e.g. `"Frequency display"`, `"RF Gain"`).
+
+2. **Accessible description** — add context for screen reader users:
+   ```cpp
+   widget->setAccessibleDescription(tr("What this control does or displays"));
+   ```
+
+3. **Tab focus** — every interactive widget (buttons, sliders, spin boxes,
+   custom controls that respond to mouse/keyboard) must have:
+   ```cpp
+   widget->setFocusPolicy(Qt::TabFocus);
+   ```
+   If the widget already uses `Qt::StrongFocus` or `Qt::WheelFocus`, leave it.
+   Decorative-only widgets: leave `Qt::NoFocus`.
+
+### Live value updates
+
+Any method that changes a displayed value — `setLevel(`, `setValue(`,
+`updateFreqLabel(`, `setText(` on a label that shows live data — must fire a
+`QAccessibleValueChangeEvent` **after** the state change:
+```cpp
+QAccessibleValueChangeEvent ev(this, newValue);
+QAccessible::updateAccessibility(&ev);
+```
+For text-only updates where there is no numeric value, use:
+```cpp
+QAccessibleEvent ev(this, QAccessible::NameChanged);
+QAccessible::updateAccessibility(&ev);
+```
+
+### Custom-painted widgets (`paintEvent` override)
+
+If a class overrides `paintEvent` and draws its own content (spectrum,
+waterfall, meter, scope), Qt cannot introspect the rendered output. You must
+either:
+- Provide a `QAccessibleInterface` subclass (named `FooAccessible`) that
+  returns meaningful `text(QAccessible::Name)` and `text(QAccessible::Value)`
+  strings, and register it via `QAccessible::installFactory`; **or**
+- Annotate the PR with `// TODO(a11y): QAccessibleInterface needed` and open
+  a follow-up issue tagged `GUI`.
+
+Do **not** use `setAttribute(Qt::WA_AcceptTouchEvents, false)` to hide a
+widget from the accessibility tree — that affects touch input, not AT
+exposure. The correct way to exclude a purely decorative widget from the
+a11y tree is to return `QAccessible::NoRole` from the
+`QAccessibleInterface::role()` override, or leave `Qt::NoFocus` set and
+omit `setAccessibleName` so AT tools skip it naturally.
+
+### Interactive `QLabel` anti-pattern
+
+Any `QLabel` that has a `mousePressEvent` override or appears inside an
+`eventFilter` handling click events is acting as a button without accessible
+semantics. Replace it with `QPushButton` (styled flat if needed), or at
+minimum add a keyboard activation path (`setFocusPolicy(Qt::TabFocus)` plus
+a `keyPressEvent` handler for `Qt::Key_Return`/`Qt::Key_Space`) and return
+`QAccessible::Button` from a `QAccessibleInterface::role()` override.
+
+### CI enforcement
+
+`tools/check_a11y.py` runs on every PR via `.github/workflows/a11y-check.yml`
+and emits inline GitHub annotations for the patterns above. It exits 0
+(warning-only) and never blocks a build — findings are informational so
+sighted contributors are not gated on accessibility compliance.
