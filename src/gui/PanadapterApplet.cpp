@@ -181,7 +181,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     AetherSDR::ThemeManager::instance().applyStyleSheet(pitchLabel, "QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }");
     cwBar->addWidget(pitchLabel);
 
-    m_pitchRangeSlider = new RangeSlider(100, 2000, 300, 1200, {}, this);
+    m_pitchRangeSlider = new RangeSlider(300, 1200, 500, 700, {}, this);
     m_pitchRangeSlider->setFixedWidth(160);
     m_pitchRangeSlider->setToolTip("Decoder pitch search range (Hz)");
     cwBar->addWidget(m_pitchRangeSlider);
