@@ -202,6 +202,58 @@ problem can be triaged as client-side (connect/parse/backlog) vs RF-side
 (decode/level/gate). The TNC STATUS panel shows listening port, client count,
 and RX/TX frame counters.
 
+## Personal Mailbox System (PMS)
+
+The **Mailbox** tab turns AetherModem into a compact, Kantronics-KPC-3-style
+Personal Mailbox System (PBBS). A single remote caller can connect over
+**1200-baud AX.25 connected mode** and read, list, and send messages, see who
+has been heard, then disconnect.
+
+**Connected-mode data link.** Unlike the KISS/UI paths (connectionless), the PMS
+needs AX.25 v2.0 connected mode (LAPB, mod-8). Two reusable, RF-agnostic,
+unit-tested layers provide it:
+
+- `src/core/tnc/Ax25.{h,cpp}` — frame primitives: callsign/SSID `Address`
+  encode/decode and `Frame` parse/build for I, RR/RNR/REJ, SABM, DISC, DM, UA,
+  FRMR, and UI frames (address..info, no FCS — the same convention as
+  `buildTransmitAudioFromFrame`).
+- `src/core/tnc/Ax25Connection.{h,cpp}` — a single-connection state machine:
+  accepts an inbound SABM (→ UA), tracks V(S)/V(R)/V(A), acknowledges with RR,
+  segments outbound data into I-frames (≤ paclen), and retransmits unacked
+  I-frames on the T1 timeout up to N2 tries before declaring link failure.
+  Defaults (T1 6 s, N2 8, paclen 128, window 4) are sized for 1200-baud FM with
+  PTT overhead, so a lossy link recovers via REJ/T1 rather than dropping.
+
+**The mailbox service** is `src/core/pms/PmsMailbox.{h,cpp}` (one file pair). It
+owns the `Ax25Connection`, greets a caller by callsign with the AetherMailbox SID
+and version, runs a line-oriented command interpreter, and persists state as JSON
+under `~/.config/AetherSDR/pms/` (`messages.json`, `callers.json`,
+`heard.json`). Decoded frames are fed in via `onAirFrame()`; everything it emits
+on `transmitFrame()` is keyed through the existing one-at-a-time TX queue. The
+**heard list** is updated for *all* received frames (not just mailbox traffic) so
+callers can discover other PMS/BBS stations nearby, and an optional **hourly UI
+beacon** announces the mailbox is online and how to connect.
+
+**Commands** (Kantronics subset; first letter or full word):
+`H(elp)`, `B(ye)`, `I(nfo)`, `J(heard)`, `L(ist)`, `LM` (list mine),
+`R(ead) n`, `K(ill) n`, `S(end)`/`SP call`, `SB cat`, `U(sers)`. A message is
+entered after `SUBJECT:` and terminated with `/EX` or Ctrl-Z on its own line.
+Use `ALL` as the recipient for a public message.
+
+The **Mailbox** config tab exposes Enable PMS, the **listen callsign** the
+mailbox answers on (full `CALL-SSID`, e.g. `KI6BCJ-10`), an optional **vanity
+alias** it also answers on (e.g. `AETBBS` — AX.25 limits a callsign to 6
+characters plus an optional `-SSID`), a welcome/PTEXT line, the
+hourly-beacon toggle and text, plus a stats row with **Statistics** on the left
+and the **last callers** on the right. When a caller dials the alias, the whole
+session (UA, greeting, every reply) uses the alias address. All settings persist
+in `AppSettings` (`AetherModemPms*` keys) across restarts; enabling the PMS turns
+the modem on. The bottom of the window is a slim status bar showing modem state,
+gain, and a compact packet-activity strip.
+
+These layers are intentionally split so the planned APRS/AX.25 **digipeater** can
+reuse `Ax25`/`Ax25Connection` and the heard list directly.
+
 ## Open Work
 
 The remaining missed packets are mostly AX.25-looking candidates that fail FCS. That means the decoder is often finding packet structure but still has symbol/bit errors before CRC.
@@ -216,5 +268,13 @@ Next work should focus on:
 - validating over-the-air AetherModem TX level, timing, and FCS decode with a
   second receiver
 
-Out of scope remains APRS-IS, maps, digipeating, and connected-mode AX.25.
-(KISS-over-TCP is now implemented — see the KISS TNC section above.)
+Out of scope remains APRS-IS and maps. (KISS-over-TCP, connected-mode AX.25, and
+a Personal Mailbox System are now implemented — see the sections above. A future
+APRS/AX.25 digipeater can reuse the new `Ax25`/`Ax25Connection` primitives.)
+
+PMS follow-ups worth tracking:
+
+- On-air validation of connected-mode RX/TX at 1200 baud with a second TNC
+  (the protocol layer is unit-tested; RF round-trip needs a real radio).
+- Multi-connect (the current PMS answers one caller at a time, by design).
+- A local operator terminal tab to use/test the mailbox without a radio.

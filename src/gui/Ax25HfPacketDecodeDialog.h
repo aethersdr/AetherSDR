@@ -25,6 +25,7 @@ namespace AetherSDR {
 class AudioEngine;
 class KissTncServer;
 class PacketActivityWidget;
+class PmsMailbox;
 class RadioModel;
 class SliceModel;
 
@@ -51,6 +52,12 @@ private:
     void beginTransmitWhenReady();
     void paceTransmitAudio();
     void finishTransmit(bool aborted, const QString& reason);
+
+    // Personal Mailbox System (PMS) tab + service wiring.
+    QWidget* buildMailboxPage();
+    void setPmsEnabled(bool enabled, bool persist);
+    void applyPmsConfigFromUi(bool persist);
+    void refreshPmsStatus();
 
     // KISS TNC tab + TCP server wiring.
     QWidget* buildKissTncPage();
@@ -140,6 +147,20 @@ private:
     QQueue<QByteArray> m_kissTxQueue;
     quint64 m_kissTxCount{0};
     quint64 m_kissRxCount{0};
+
+    // Personal Mailbox System (PMS) service and its controls.
+    PmsMailbox* m_pms{nullptr};
+    QAbstractButton* m_mailboxTab{nullptr};
+    QCheckBox* m_pmsEnable{nullptr};
+    QLineEdit* m_pmsListenCall{nullptr};
+    QLineEdit* m_pmsAliasCall{nullptr};
+    QLineEdit* m_pmsWelcome{nullptr};
+    QCheckBox* m_pmsBeaconEnable{nullptr};
+    QLineEdit* m_pmsBeaconText{nullptr};
+    QLabel* m_pmsStatusDot{nullptr};
+    QLabel* m_pmsStatusValue{nullptr};
+    QLabel* m_pmsCallersValue{nullptr};
+    QLabel* m_pmsStatsValue{nullptr};
 };
 
 } // namespace AetherSDR
