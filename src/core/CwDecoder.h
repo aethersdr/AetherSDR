@@ -39,6 +39,7 @@ public:
     void lockPitch(bool lock);
     void lockSpeed(bool lock);
     void setPitchRange(int minHz, int maxHz);
+    void setSpeedRange(int minWpm, int maxWpm);
 
     // Force pitch + speed to specific values and lock both — used by the
     // TX-side decoder (#2417) where the operator's keying parameters are
@@ -59,6 +60,7 @@ signals:
 
 private:
     void decodeLoop();
+    void applyDecodeParameters();
 
     QThread*      m_workerThread{nullptr};
     std::unique_ptr<GGMorse> m_ggmorse;
@@ -75,6 +77,8 @@ private:
     std::atomic<bool> m_speedLocked{false};
     std::atomic<float> m_pitchRangeMin{500.0f};
     std::atomic<float> m_pitchRangeMax{700.0f};
+    std::atomic<float> m_speedRangeMin{-1.0f};   // -1 = full range
+    std::atomic<float> m_speedRangeMax{-1.0f};
 };
 
 } // namespace AetherSDR

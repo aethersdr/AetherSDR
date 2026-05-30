@@ -191,10 +191,12 @@ const GGMorse::Parameters & GGMorse::getDefaultParameters() {
 
 const GGMorse::ParametersDecode & GGMorse::getDefaultParametersDecode() {
     static ggmorse_ParametersDecode result {
-        -1.0f,
-        -1.0f,
-        200.0f,
-        1200.0f,
+        -1.0f,    // frequency_hz — auto
+        -1.0f,    // speed_wpm    — auto
+        200.0f,   // frequencyRangeMin_hz
+        1200.0f,  // frequencyRangeMax_hz
+        -1.0f,    // speedRangeMin_wpm — use full range
+        -1.0f,    // speedRangeMax_wpm — use full range
         true,
         true,
     };
@@ -750,12 +752,15 @@ void GGMorse::decode_float() {
     int bestLevelIdx = 0;
     int bestSpeedIdx = 0;
 
-    int s0 = 0;
-    int s1 = 50;
-    int ds = 10;
+    // Speed range from caller (s-index = wpm - 5). Default 5..115 WPM.
+    const float sRangeMin = m_impl->parametersDecode.speedRangeMin_wpm;
+    const float sRangeMax = m_impl->parametersDecode.speedRangeMax_wpm;
+    int s0 = (sRangeMin > 0.0f) ? std::max(0, (int)std::round(sRangeMin - 5.0f)) : 0;
+    int s1 = (sRangeMax > 0.0f) ? std::min(110, (int)std::round(sRangeMax - 5.0f)) : 110;
+    int ds = 2;   // step of 2 WPM — was 10; finer grid catches any contest speed
     int nModes = 2;
 
-    if (speed_wpm > 0.0f && speed_wpm < 100.0f) {
+    if (speed_wpm > 0.0f && speed_wpm < 200.0f) {
         s0 = s1 = std::round(speed_wpm - 5.0f);
         nModes = 1;
     }
