@@ -18,6 +18,13 @@ Ax25Connection::Ax25Connection(QObject* parent)
 
 Ax25Connection::~Ax25Connection() = default;
 
+void Ax25Connection::setLocalAddress(const Address& local)
+{
+    m_primary = local;
+    if (m_state == State::Disconnected)
+        m_local = local; // idle: match/answer on the primary until a caller dials
+}
+
 int Ax25Connection::outstanding() const
 {
     return (m_vs - m_va + 8) % 8;
@@ -86,6 +93,7 @@ void Ax25Connection::enterDisconnected(bool byPeer)
     m_retryCount = 0;
     m_peerBusy = false;
     m_remote = Address{};
+    m_local = m_primary; // back to answering on either address when idle
     emit activity(QStringLiteral("Disconnected from %1 (%2)")
         .arg(peer.toString(), byPeer ? QStringLiteral("by peer") : QStringLiteral("local")));
     emit disconnected(peer, byPeer);
@@ -93,9 +101,20 @@ void Ax25Connection::enterDisconnected(bool byPeer)
 
 void Ax25Connection::onFrameReceived(const Frame& frame)
 {
-    // Only react to frames addressed to us.
-    if (frame.dest != m_local)
+    // Only react to frames addressed to us. While idle we answer on either the
+    // primary or the (optional) vanity alias; latch onto whichever the caller
+    // dialed so every response in the session uses that address. While in a
+    // session, only the dialed address matches.
+    if (m_state == State::Disconnected) {
+        if (frame.dest == m_primary)
+            m_local = m_primary;
+        else if (m_alias.isValid() && frame.dest == m_alias)
+            m_local = m_alias;
+        else
+            return;
+    } else if (frame.dest != m_local) {
         return;
+    }
 
     emit activity(QStringLiteral("RX %1 %2>%3%4")
         .arg(ax25::frameTypeName(frame.type),

@@ -152,7 +152,8 @@ private:
     PmsMailbox* m_pms{nullptr};
     QAbstractButton* m_mailboxTab{nullptr};
     QCheckBox* m_pmsEnable{nullptr};
-    QSpinBox* m_pmsSsid{nullptr};
+    QLineEdit* m_pmsListenCall{nullptr};
+    QLineEdit* m_pmsAliasCall{nullptr};
     QLineEdit* m_pmsWelcome{nullptr};
     QCheckBox* m_pmsBeaconEnable{nullptr};
     QLineEdit* m_pmsBeaconText{nullptr};
