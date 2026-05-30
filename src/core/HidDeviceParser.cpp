@@ -38,33 +38,27 @@ std::unique_ptr<HidDeviceParser> HidDeviceParser::create(uint16_t vid, uint16_t 
 }
 
 // ── Icom RC-28 ──────────────────────────────────────────────────────────────
-// 32-byte reports. hidapi prepends the 1-byte report ID on Windows/Linux so
-// hid_read(buf, 33) returns 33; on macOS it strips the ID and returns 32.
-// We request 33 bytes (reportSize) and use len to tell the two apart — no
-// value-based heuristic that could collide with data bytes.
-// Data layout (0-indexed, after stripping report ID where present):
-//   [0] seq counter: 0x01 = first report of knob step, 0x02 = second
-//   [1] unused (0x00)
-//   [2] direction: 0x01 = CW (+1), 0x02 = CCW (-1), 0x00 = no rotation
-//   [3] unused (0x00)
-//   [4] button state enum: 0x07 = idle, 0x05 = F1, 0x03 = F2, 0x06 = TX bar
-// Each knob detent fires two reports (seq 0x01 then 0x02); we emit only on
-// seq 0x01 to produce exactly one tuning step per detent.
+// 32-byte reports, no report ID prefix on any platform (hidraw returns 32 bytes).
+// Verified layout (cross-referenced against FlexRC-28 open-source driver):
+//   [0] = 0x01 constant — guard byte, discard report if != 0x01
+//   [1] = detent counter (increments each click; device sends burst of identical
+//         reports per detent — deduplicate on this field)
+//   [2] = 0x00 (unused)
+//   [3] = direction: 0x01 = CW, 0x02 = CCW
+//   [4] = 0x00 (unused)
+//   [5] = button state bitmask (active-low): 0x07 = all idle,
+//         bit0=TX/PTT, bit1=F1, bit2=F2
 
 HidEvent IcomRC28Parser::parse(const uint8_t* buf, size_t len)
 {
-    if (len < 5) return {};
+    if (len < 6) return {};
+    if (buf[0] != 0x01) return {};
 
-    // Windows/Linux: hidapi includes the report ID → hid_read returns 33 bytes.
-    // macOS: hidapi strips the report ID → hid_read returns 32 bytes.
-    const uint8_t* data = (len >= 33) ? buf + 1 : buf;
+    const uint8_t counter = buf[1];
+    const uint8_t dir     = buf[3];
+    const uint8_t btns    = buf[5];
 
-    const uint8_t seq  = data[0];
-    const uint8_t dir  = data[2];
-    const uint8_t btns = data[4];
-
-    // Button events use absolute state, not bitmask.
-    // RC-28 has 3 buttons: F1 (1), F2 (2), TX bar (3).
+    // Button events (active-low bitmask → same enum values as before).
     if (btns != m_prevButtonState) {
         const uint8_t prev = m_prevButtonState;
         m_prevButtonState  = btns;
@@ -80,9 +74,9 @@ HidEvent IcomRC28Parser::parse(const uint8_t* buf, size_t len)
         }
     }
 
-    // Rotation: only emit on first report of each pair (seq == 0x01) to
-    // produce exactly one step per detent (the device sends two reports per click).
-    if (seq == 0x01 && dir != 0x00) {
+    // Rotation: deduplicate on counter to emit exactly one step per detent.
+    if ((dir == 0x01 || dir == 0x02) && counter != m_prevCounter) {
+        m_prevCounter = counter;
         return {HidEvent::Rotate, (dir == 0x01) ? 1 : -1, 0, 0};
     }
 

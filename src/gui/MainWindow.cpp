@@ -3322,6 +3322,16 @@ MainWindow::MainWindow(QWidget* parent)
         settings.save();
         if (m_flexControlDialog)
             m_flexControlDialog->setStepSize(step);
+        {
+            QString stepStr;
+            if (step >= 1000000)
+                stepStr = QString("%1 MHz").arg(step / 1000000.0, 0, 'f', step % 1000000 ? 1 : 0);
+            else if (step >= 1000)
+                stepStr = QString("%1 kHz").arg(step / 1000.0, 0, 'f', step % 1000 ? 1 : 0);
+            else
+                stepStr = QString("%1 Hz").arg(step);
+            statusBar()->showMessage(QString("Step: %1").arg(stepStr), 2000);
+        }
         // Invalidate persistent encoder accumulators so the next tick rebases
         // and re-snaps to the new step grid. Without this, an in-flight target
         // computed against the previous step size carries an off-grid residual
@@ -3942,14 +3952,18 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_hidEncoder, &HidEncoderManager::buttonPressed,
             this, [this](int button, int action) {
-        // Only fire on press; release is suppressed.
-        if (action != 0) return;
-
         QString actionName;
         if (button >= 1 && button <= 8) {
-            // LCD keys — settings key HidKeyAction{0-7}
+            // RC-28 buttons 1-3 (F1, F2, TX bar) get sensible defaults when
+            // the user hasn't explicitly configured them.
+            QString dflt = QStringLiteral("None");
+            if (m_hidEncoder->isRC28Compatible()) {
+                if      (button == 1) dflt = QStringLiteral("StepUp");
+                else if (button == 2) dflt = QStringLiteral("StepDown");
+                else if (button == 3) dflt = QStringLiteral("PTT");
+            }
             actionName = AppSettings::instance()
-                .value(QString("HidKeyAction%1").arg(button - 1), QStringLiteral("None"))
+                .value(QString("HidKeyAction%1").arg(button - 1), dflt)
                 .toString();
         } else if (button >= 9 && button <= 12) {
             // Encoder press buttons — settings key HidEncoderPushAction{0-3}
@@ -3963,6 +3977,17 @@ MainWindow::MainWindow(QWidget* parent)
         }
 
         if (actionName == "None" || actionName.isEmpty()) return;
+
+        // PTT: TX bar held down = transmit on, released = transmit off.
+        // This is the only action that needs both press (action==0) and release (action==1).
+        if (actionName == QStringLiteral("PTT")) {
+            if (m_radioModel.isConnected())
+                m_radioModel.setTransmit(action == 0);
+            return;
+        }
+
+        // All other actions fire only on press.
+        if (action != 0) return;
 
         if (actionName == "StepCycle" || actionName == "StepUp") {
             if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepUp();
@@ -4068,7 +4093,32 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_hidEncoder, &HidEncoderManager::connectionChanged,
             this, [this](bool connected, const QString& name) {
         qDebug() << "HID encoder:" << (connected ? "connected" : "disconnected") << name;
-        if (connected) refreshStreamDeckLabels();
+        if (connected) {
+            refreshStreamDeckLabels();
+            // Sync RC-28 LEDs to current radio state on connect (handles hot-plug).
+            // LINK stays on while connected; TX mirrors current MOX state.
+            if (m_hidEncoder->isRC28Compatible()) {
+                const uint8_t ledByte = m_radioModel.transmitModel().isMox()
+                    ? HidEncoderManager::RC28_LEDS_TX_LINK
+                    : HidEncoderManager::RC28_LEDS_LINK;
+                QMetaObject::invokeMethod(m_hidEncoder, [this, ledByte] {
+                    m_hidEncoder->setRC28Leds(ledByte);
+                });
+            }
+        }
+    });
+
+    // RC-28 TX LED: mirror MOX state to the device's red TRANSMIT LED.
+    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            this, [this](bool mox) {
+        if (m_hidEncoder && m_hidEncoder->isRC28Compatible()) {
+            const uint8_t ledByte = mox
+                ? HidEncoderManager::RC28_LEDS_TX_LINK
+                : HidEncoderManager::RC28_LEDS_LINK;
+            QMetaObject::invokeMethod(m_hidEncoder, [this, ledByte] {
+                m_hidEncoder->setRC28Leds(ledByte);
+            });
+        }
     });
 
     // StreamDeck native integration removed — use TCI StreamController plugin instead.
@@ -4220,7 +4270,7 @@ MainWindow::MainWindow(QWidget* parent)
         auto& s = AppSettings::instance();
         if (!s.contains("HidEncoderEnabled")) {
             const bool hadAutodetect =
-                s.value("HidEncoderAutoDetect", "False").toString() == "True";
+                s.value("HidEncoderAutoDetect", "True").toString() == "True";
             s.setValue("HidEncoderEnabled", hadAutodetect ? "True" : "False");
         }
     }
@@ -6726,6 +6776,7 @@ void MainWindow::handleVirtualFlexControlWheel(const QString& actionId, int step
     applyFlexControlWheelAction(actionId, steps);
 }
 
+#ifdef HAVE_HIDAPI
 // static
 QString MainWindow::hidEncoderDefaultAction(int encoderIndex)
 {
@@ -6749,6 +6800,7 @@ QString MainWindow::hidEncoderDefaultPushAction(int encoderIndex)
     default: return QStringLiteral("None");
     }
 }
+#endif
 
 #ifdef HAVE_HIDAPI
 // Render the full 800x100 touchscreen strip for the StreamDeck+.

@@ -42,11 +42,28 @@ public:
         return m_openVid.load(std::memory_order_relaxed) == 0x0FD9
             && m_openPid.load(std::memory_order_relaxed) == 0x0084;
     }
+    // True for the real Icom RC-28 and the AetherPad emulator — both run the
+    // same wire protocol including the LED output report.
+    bool isRC28Compatible() const {
+        const uint16_t vid = m_openVid.load(std::memory_order_relaxed);
+        const uint16_t pid = m_openPid.load(std::memory_order_relaxed);
+        return (vid == 0x0C26 && pid == 0x001E)   // Icom RC-28
+            || (vid == 0x2341 && pid == 0x0266);   // AetherPad emulator
+    }
 
     void setInvertDirection(bool invert) { m_invertDirection = invert; }
 
+    // Active-low LED byte constants for setRC28Leds().
+    static constexpr uint8_t RC28_LEDS_OFF      = 0x0F;  // all LEDs off
+    static constexpr uint8_t RC28_LEDS_LINK     = 0x07;  // LINK on, rest off
+    static constexpr uint8_t RC28_LEDS_TX_LINK  = 0x06;  // TX + LINK on
+
 public slots:
     void loadSettings();
+    // Set the LED state on an RC-28-compatible device. ledByte is active-low:
+    //   bit0=TX/PTT, bit1=F1, bit2=F2, bit3=LINK. Clear bit = LED on.
+    // No-op if the connected device is not RC-28-compatible.
+    void setRC28Leds(uint8_t ledByte);
     // Write 120x120 JPEG images to StreamDeck+ LCD keys. Pass all 8 images at once
     // so one queued call updates the whole display without flooding the event queue.
     // No-op if device is not a StreamDeck+.
