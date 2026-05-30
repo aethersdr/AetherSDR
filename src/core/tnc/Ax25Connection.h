@@ -56,6 +56,15 @@ public:
     void setPaclen(int bytes) { m_paclen = qBound(16, bytes, 256); }
     void setMaxRetries(int n2) { m_n2 = qBound(1, n2, 20); }
     void setRetryTimeoutMs(int t1) { m_t1Ms = qBound(1000, t1, 60000); }
+    // Window k: max unacknowledged I-frames in flight (mod-8 caps it at 7).
+    // Default 1 (MAXFRAME=1). On a HALF-DUPLEX radio link each I-frame is its own
+    // PTT keyup; sending several back-to-back keeps us transmitting (and deaf)
+    // long enough that the peer's acknowledgement lands while we cannot hear it,
+    // which stalls into a T1 retransmit loop. k=1 sends one frame, then listens
+    // for its ack before the next — the pattern that works reliably here. A
+    // future single-keyup multi-frame TX path (or a full-duplex transport) can
+    // safely raise this.
+    void setWindow(int k) { m_window = qBound(1, k, 7); }
 
     // Feed every decoded frame here. Frames not addressed to our local address
     // (dest mismatch) are ignored, so the caller can pass all RX traffic.
@@ -112,7 +121,7 @@ private:
     int m_vr{0}; // V(R) next expected receive sequence
     int m_va{0}; // V(A) last acknowledged send sequence
 
-    static constexpr int kWindow = 4; // k: max outstanding I-frames (mod-8 safe)
+    int m_window{1}; // k: max outstanding I-frames; see setWindow() (half-duplex)
     int m_paclen{128};
     int m_n2{8};
     int m_t1Ms{6000};
