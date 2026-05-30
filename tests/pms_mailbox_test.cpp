@@ -128,6 +128,60 @@ static void testConnection()
     CHECK(disconnected, "disconnected after DISC");
 }
 
+// Regression: on a half-duplex radio link the send window must be 1 — only one
+// unacknowledged I-frame in flight at a time. A multi-frame reply must drain
+// one-frame-per-ack, NOT blast several back-to-back. (Observed live 2026-05-30:
+// a 3-frame LIST reply went out as 3 back-to-back PTT keyups; the peer's ack
+// arrived while we were still transmitting, so we never heard it and stalled
+// into a T1 retransmit loop until link failure. A single-frame INFO reply with a
+// clean listen window after it worked fine.)
+static void testHalfDuplexWindowOneDrainsMultiFrame()
+{
+    Ax25Connection conn;
+    const Address local{QStringLiteral("N0PMS"), 1, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+    conn.setLocalAddress(local);
+    conn.setPaclen(128);
+
+    QVector<QByteArray> tx;
+    QObject::connect(&conn, &Ax25Connection::sendFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+
+    conn.onFrameReceived(Frame::makeU(local, peer, FrameType::SABM, true, true));
+    tx.clear(); // drop the UA; we only care about I-frames below
+
+    auto iFrameNs = [&]() {
+        QVector<int> ns; // N(S) of every I-frame emitted so far
+        for (const QByteArray& f : tx) {
+            auto d = Frame::decode(f);
+            if (d && d->type == FrameType::I)
+                ns.append(d->ns);
+        }
+        return ns;
+    };
+
+    // A reply that needs three I-frames (128 + 128 + 44 bytes at paclen 128).
+    conn.sendData(QByteArray(300, 'X'));
+    CHECK(iFrameNs().size() == 1, "window=1: only one I-frame in flight initially");
+    CHECK(iFrameNs().value(0) == 0, "first I-frame is N(S)=0");
+
+    // Peer acks the first (standalone RR N(R)=1) -> the next frame may go.
+    conn.onFrameReceived(Frame::makeS(local, peer, FrameType::RR, 1, false, false));
+    CHECK(iFrameNs().size() == 2, "second I-frame goes only after the first is acked");
+    CHECK(iFrameNs().value(1) == 1, "second I-frame is N(S)=1");
+
+    conn.onFrameReceived(Frame::makeS(local, peer, FrameType::RR, 2, false, false));
+    CHECK(iFrameNs().size() == 3, "third I-frame goes only after the second is acked");
+    CHECK(iFrameNs().value(2) == 2, "third I-frame is N(S)=2");
+
+    // Final ack drains the window with no retransmit storm.
+    conn.onFrameReceived(Frame::makeS(local, peer, FrameType::RR, 3, false, false));
+    const QVector<int> all = iFrameNs();
+    CHECK(all.size() == 3, "exactly three I-frames sent, none retransmitted");
+    CHECK(all.count(0) == 1 && all.count(1) == 1 && all.count(2) == 1,
+          "each I-frame transmitted exactly once (no duplicate/retransmit storm)");
+}
+
 namespace {
 // Drives the mailbox from the perspective of a remote caller's TNC.
 struct Peer {
@@ -137,6 +191,7 @@ struct Peer {
     QVector<QByteArray>* allTx{nullptr};
     int consumed{0}; // index into allTx already turned into text
     int peerNs{0};
+    int pmsRx{0};    // count of in-sequence I-frames received from the mailbox
 
     int pmsVs() const
     {
@@ -149,16 +204,31 @@ struct Peer {
         return n % 8;
     }
 
-    // New text the mailbox has sent since the last call.
+    // New text the mailbox has sent since the last call. Acknowledges each
+    // mailbox I-frame with an RR and loops, so a multi-frame reply fully drains
+    // under the half-duplex window=1 (one frame per ack) exactly as a real TNC
+    // would — without this, only the first I-frame of each reply would ever be
+    // emitted.
     QString drainText()
     {
         QByteArray t;
-        for (int i = consumed; i < allTx->size(); ++i) {
-            auto d = Frame::decode(allTx->at(i));
-            if (d && d->type == FrameType::I && d->dest == peer)
-                t += d->info;
+        for (;;) {
+            int newFrames = 0;
+            for (; consumed < allTx->size(); ++consumed) {
+                auto d = Frame::decode(allTx->at(consumed));
+                if (d && d->type == FrameType::I && d->dest == peer) {
+                    t += d->info;
+                    ++pmsRx;
+                    ++newFrames;
+                }
+            }
+            if (newFrames == 0)
+                break;
+            // Ack everything received so far; this opens the mailbox's send
+            // window so it emits the next I-frame (collected on the next pass).
+            pms->onAirFrame(
+                Frame::makeS(local, peer, FrameType::RR, pmsRx % 8, false, false).encode());
         }
-        consumed = allTx->size();
         return QString::fromLatin1(t);
     }
 
@@ -300,6 +370,7 @@ int main(int argc, char** argv)
     testAddress();
     testFrameRoundTrip();
     testConnection();
+    testHalfDuplexWindowOneDrainsMultiFrame();
     testMailbox();
     testAliasDial();
 

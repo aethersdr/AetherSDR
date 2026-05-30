@@ -256,7 +256,7 @@ void Ax25Connection::pumpOutbound()
 {
     if (m_state != State::Connected || m_peerBusy)
         return;
-    while (!m_sendBuffer.isEmpty() && outstanding() < kWindow) {
+    while (!m_sendBuffer.isEmpty() && outstanding() < m_window) {
         const QByteArray segment = m_sendBuffer.left(m_paclen);
         m_sendBuffer.remove(0, segment.size());
         const int ns = m_vs;
