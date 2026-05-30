@@ -1,4 +1,5 @@
 #include "SMeterWidget.h"
+#include "MeterSmoother.h"  // shared lean-mode repaint gate (#3283)
 
 #include <QPainter>
 #include <QPainterPath>
@@ -203,11 +204,16 @@ void SMeterWidget::animateNeedle()
         && m_peakHoldTimer.elapsed() > m_peakHoldTimeMs
         && m_peakHoldDbm > m_levelDbm + 0.01f;
 
-    if (needleAtTarget && !peakHoldAnimating) {
+    const bool settled = needleAtTarget && !peakHoldAnimating;
+    if (settled) {
         m_needleAnimation.stop();
     }
 
-    update();
+    // Gate the needle repaint in lean mode so it stops dirtying the shared
+    // backing store ~120×/sec (#3283); always paint the settled frame.
+    if (settled || MeterSmoother::shouldRepaint()) {
+        update();
+    }
 }
 
 void SMeterWidget::updatePeakHoldValue()

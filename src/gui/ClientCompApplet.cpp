@@ -34,9 +34,11 @@ public:
         m_animTimer.setTimerType(Qt::PreciseTimer);
         m_animTimer.setInterval(kMeterSmootherIntervalMs);
         connect(&m_animTimer, &QTimer::timeout, this, [this]() {
-            if (!m_smooth.tick(m_animElapsed.restart()))
+            const bool settled = !m_smooth.tick(m_animElapsed.restart());
+            if (settled)
                 m_animTimer.stop();
-            update();
+            if (settled || MeterSmoother::shouldRepaint())
+                update();
         });
     }
 

@@ -1992,6 +1992,32 @@ void VfoWidget::showTab(int index)
 
 // ── Collapsed flag toggle ─────────────────────────────────────────────────────
 
+void VfoWidget::setOpaqueMode(bool on)
+{
+    if (m_opaqueMode == on)
+        return;
+    m_opaqueMode = on;
+
+    // The panel's paintEvent already fills an opaque dark rounded rect; the
+    // translucent attribute + "background: transparent" stylesheet only existed
+    // to let the rounded corners show through. In lean mode we trade rounded
+    // corners for an opaque, independently-cacheable layer.
+    //
+    // The #VfoWidgetRoot stylesheet is what actually governs Qt's opacity
+    // decision here — with "background: transparent" the compositor re-blends
+    // the whole panel (and its buttons) over the window on every sync. Swapping
+    // to an opaque background lets it cache + Source-blit instead, which is the
+    // dominant idle/drag pool cost (#3283). Clearing WA_TranslucentBackground
+    // alone is not enough while the stylesheet stays transparent.
+    setAttribute(Qt::WA_TranslucentBackground, !on);
+    setStyleSheet(on
+        ? QStringLiteral("QWidget#VfoWidgetRoot { background: #0a0a14; border: none; }")
+        : kBgStyle);
+    update();
+    if (QWidget* p = parentWidget())
+        p->update();
+}
+
 void VfoWidget::setCollapsed(bool collapsed)
 {
     if (m_collapsed == collapsed) return;

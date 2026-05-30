@@ -155,6 +155,10 @@ protected:
 #endif
 
 private slots:
+    // Global lean render mode (#3283): opaque pan + VFO, 60 Hz repaint cap,
+    // WAVE scope off. Applied across all panes/VFOs, persisted, reversible.
+    void applyLeanMode(bool on);
+
     // Radio/connection events
     void onConnectionStateChanged(bool connected);
     void adjustCatPortCounts(bool connected);  // called from onConnectionStateChanged
@@ -673,6 +677,7 @@ private:
     // Active slice tracking for multi-slice support
     int m_activeSliceId{-1};
     bool m_splitActive{false};
+    bool m_leanMode{false};  // global lean render mode state (#3283)
     int  m_splitRxSliceId{-1};
     int  m_splitTxSliceId{-1};
     int  m_pendingMemoryRevealSliceId{-1};

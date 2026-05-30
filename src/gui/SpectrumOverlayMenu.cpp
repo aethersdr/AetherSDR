@@ -234,6 +234,7 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
         {"Memory",    5, nullptr},   // 6 — toggleMemoryPanel
         // MEM+ moved into MemoryBrowsePanel (bottom button — doesn't scroll).
         {"DAX",       3, nullptr},   // 6 — toggleDaxPanel
+        {"Lean",      6, nullptr},   // 7 — global lean render mode (checkable)
     };
 
     for (const auto& def : defs) {
@@ -248,6 +249,13 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
             connect(btn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggleDisplayPanel);
         else if (def.specialIdx == 5)
             connect(btn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggleMemoryPanel);
+        else if (def.specialIdx == 6) {
+            // Lean: checkable toggle, drives the global low-overhead render mode.
+            btn->setCheckable(true);
+            m_leanBtn = btn;
+            connect(btn, &QPushButton::toggled, this,
+                    [this](bool on) { emit leanModeToggled(on); });
+        }
         else if (def.text == "+RX")
             connect(btn, &QPushButton::clicked, this, [this]() { emit addRxClicked(m_panId); });
         else if (def.sig)
@@ -264,6 +272,11 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
         m_menuBtns[kBtnDisplay]->setToolTip("Open panadapter and waterfall display settings.");
         m_menuBtns[kBtnMemoryBrowse]->setToolTip("Browse saved memories for quick recall.");
         m_menuBtns[kBtnDax]->setToolTip("Open DAX audio routing channel selector.");
+    }
+    if (m_leanBtn) {
+        m_leanBtn->setToolTip("Lean mode: opaque panadapter + VFO, capped repaint, "
+                              "WAVE scope off. Reduces CPU/GPU load. Persists across "
+                              "restarts.");
     }
 
     buildBandPanel();
@@ -612,6 +625,14 @@ void SpectrumOverlayMenu::setPanId(const QString& id)
     m_panId = id;
     wirePanadapterRxAntenna();
     refreshAntennaCombo();
+}
+
+void SpectrumOverlayMenu::setLeanChecked(bool on)
+{
+    if (!m_leanBtn || m_leanBtn->isChecked() == on)
+        return;
+    QSignalBlocker block(m_leanBtn);  // reflect state without re-emitting
+    m_leanBtn->setChecked(on);
 }
 
 void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
