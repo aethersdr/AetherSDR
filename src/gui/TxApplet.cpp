@@ -47,9 +47,9 @@ static void setIndicatorActive(QLabel* lbl, bool active, const QColor& color = Q
 
 // ── Compact slider row: "Label:  [slider] value" ────────────────────────────
 
-static QString wattsText(int value)
+static QString percentText(int value)
 {
-    return QStringLiteral("%1 W").arg(value);
+    return QStringLiteral("%1%").arg(value);
 }
 
 // ── TxApplet ────────────────────────────────────────────────────────────────
@@ -139,10 +139,10 @@ void TxApplet::buildUI()
 
         m_rfPowerSlider = new GuardedSlider(Qt::Horizontal);
         m_rfPowerSlider->setRange(0, 100);
-        m_rfPowerSlider->setDragValueFormatter(wattsText);
+        m_rfPowerSlider->setDragValueFormatter(percentText);
         applyPrimarySliderStyle(m_rfPowerSlider);
         m_rfPowerSlider->setAccessibleName("RF power");
-        m_rfPowerSlider->setAccessibleDescription("Transmit RF power level, 0 to 100 watts");
+        m_rfPowerSlider->setAccessibleDescription("Transmit RF power level, 0 to 100 percent of maximum");
         row->addWidget(m_rfPowerSlider, 1);
 
         m_rfPowerLabel = new QLabel("100");
@@ -164,10 +164,10 @@ void TxApplet::buildUI()
 
         m_tunePowerSlider = new GuardedSlider(Qt::Horizontal);
         m_tunePowerSlider->setRange(0, 100);
-        m_tunePowerSlider->setDragValueFormatter(wattsText);
+        m_tunePowerSlider->setDragValueFormatter(percentText);
         applyPrimarySliderStyle(m_tunePowerSlider);
         m_tunePowerSlider->setAccessibleName("Tune power");
-        m_tunePowerSlider->setAccessibleDescription("Tune carrier power level, 0 to 100 watts");
+        m_tunePowerSlider->setAccessibleDescription("Tune carrier power level, 0 to 100 percent of maximum");
         row->addWidget(m_tunePowerSlider, 1);
 
         m_tunePowerLabel = new QLabel("10");

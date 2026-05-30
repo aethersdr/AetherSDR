@@ -89,8 +89,8 @@ static constexpr const char* kVSliderStyle =
     "background: {{color.slider.foreground}}; border-radius: 5px; }";
 
 // Drag-popup formatter for EQ band sliders.  Matches the file-scope
-// free-function shape used by the other applets (wattsText, percentText,
-// panText) so the EQ sliders read consistently with neighbouring code.
+// free-function shape used by the other applets (percentText, panText)
+// so the EQ sliders read consistently with neighbouring code.
 static QString dbWithSignText(int v)
 {
     return QStringLiteral("%1%2 dB")
