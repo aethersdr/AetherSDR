@@ -38,8 +38,14 @@ public:
     explicit Ax25Connection(QObject* parent = nullptr);
     ~Ax25Connection() override;
 
-    // Our own address (the PMS callsign-SSID we answer to).
-    void setLocalAddress(const ax25::Address& local) { m_local = local; }
+    // Our own address (the primary callsign-SSID we answer to). When idle this
+    // also resets the active session address.
+    void setLocalAddress(const ax25::Address& local);
+    // An optional secondary "vanity" address we also answer to (e.g. AETHBBS).
+    // Pass an invalid Address to clear it.
+    void setAliasAddress(const ax25::Address& alias) { m_alias = alias; }
+    // The address currently in use for this session — the one the caller dialed
+    // (primary or alias). Equals the primary when idle.
     ax25::Address localAddress() const { return m_local; }
     ax25::Address remoteAddress() const { return m_remote; }
 
@@ -96,7 +102,9 @@ private:
     void onT1Timeout();
     int outstanding() const;         // unacked I-frames in flight
 
-    ax25::Address m_local;
+    ax25::Address m_primary; // configured primary listen address
+    ax25::Address m_alias;   // optional configured vanity/alias address
+    ax25::Address m_local;   // active session address (the one the caller dialed)
     ax25::Address m_remote;
     State m_state{State::Disconnected};
 

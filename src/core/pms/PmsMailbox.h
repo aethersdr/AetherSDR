@@ -59,10 +59,16 @@ public:
     // ---- Configuration (the GUI persists these via AppSettings) -------------
     void setEnabled(bool on);
     bool isEnabled() const { return m_enabled; }
-    void setLocalCallsign(const QString& baseCall); // station callsign (no SSID)
-    QString localCallsign() const { return m_baseCall; }
-    void setSsid(int ssid);
-    int ssid() const { return m_ssid; }
+    // Full listen callsign-SSID the mailbox answers on, e.g. "KI6BCJ-10".
+    // Invalid/empty text leaves the mailbox without a primary address.
+    void setListenCallsign(const QString& callWithSsid);
+    QString listenCallsign() const { return m_listen.isValid() ? m_listen.toString() : QString(); }
+    // Optional vanity/alias callsign-SSID also answered, e.g. "AETHBBS".
+    // Empty text clears it.
+    void setAliasCallsign(const QString& callWithSsid);
+    QString aliasCallsign() const { return m_alias.isValid() ? m_alias.toString() : QString(); }
+    bool hasValidAddress() const { return m_listen.isValid(); }
+    // The configured primary address (or, mid-session, the one the caller dialed).
     ax25::Address localAddress() const;
     void setVersionString(const QString& version) { m_version = version; }
 
@@ -154,8 +160,8 @@ private:
     QTimer* m_beaconTimer{nullptr};
 
     bool m_enabled{false};
-    QString m_baseCall{QStringLiteral("NOCALL")};
-    int m_ssid{1};
+    ax25::Address m_listen; // primary listen address (invalid until configured)
+    ax25::Address m_alias;  // optional vanity/alias address (invalid = none)
     QString m_version{QStringLiteral("0.0")};
     QString m_welcome;
     bool m_beaconEnabled{false};

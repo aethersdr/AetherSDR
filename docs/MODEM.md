@@ -240,11 +240,16 @@ beacon** announces the mailbox is online and how to connect.
 entered after `SUBJECT:` and terminated with `/EX` or Ctrl-Z on its own line.
 Use `ALL` as the recipient for a public message.
 
-The **Mailbox** config tab exposes Enable PMS, the answer SSID (the station
-callsign comes from the radio), a welcome/PTEXT line, the hourly-beacon toggle
-and text, the last five callers, and live stats (message count, callers logged,
-stations heard, free disk). All settings persist in `AppSettings`
-(`AetherModemPms*` keys) across restarts; enabling the PMS turns the modem on.
+The **Mailbox** config tab exposes Enable PMS, the **listen callsign** the
+mailbox answers on (full `CALL-SSID`, e.g. `KI6BCJ-10`), an optional **vanity
+alias** it also answers on (e.g. `AETBBS` — AX.25 limits a callsign to 6
+characters plus an optional `-SSID`), a welcome/PTEXT line, the
+hourly-beacon toggle and text, plus a stats row with **Statistics** on the left
+and the **last callers** on the right. When a caller dials the alias, the whole
+session (UA, greeting, every reply) uses the alias address. All settings persist
+in `AppSettings` (`AetherModemPms*` keys) across restarts; enabling the PMS turns
+the modem on. The bottom of the window is a slim status bar showing modem state,
+gain, and a compact packet-activity strip.
 
 These layers are intentionally split so the planned APRS/AX.25 **digipeater** can
 reuse `Ax25`/`Ax25Connection` and the heard list directly.

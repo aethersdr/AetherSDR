@@ -61,10 +61,11 @@ PmsMailbox::~PmsMailbox()
 
 Address PmsMailbox::localAddress() const
 {
-    Address a;
-    a.call = m_baseCall.trimmed().toUpper();
-    a.ssid = m_ssid;
-    return a;
+    // Mid-session, surface the address the caller actually dialed; otherwise the
+    // configured primary listen address.
+    if (m_connected)
+        return m_link->localAddress();
+    return m_listen;
 }
 
 void PmsMailbox::setEnabled(bool on)
@@ -75,10 +76,14 @@ void PmsMailbox::setEnabled(bool on)
     if (on) {
         if (!m_loaded)
             loadAll();
-        m_link->setLocalAddress(localAddress());
+        m_link->setLocalAddress(m_listen);
+        m_link->setAliasAddress(m_alias);
         if (m_beaconEnabled)
             setBeaconIntervalMinutes(m_beaconIntervalMin); // (re)starts the timer
-        emit activity(QStringLiteral("PMS enabled as %1.").arg(localAddress().toString()));
+        emit activity(QStringLiteral("PMS enabled as %1%2.")
+            .arg(m_listen.toString(),
+                 m_alias.isValid() ? QStringLiteral(" (alias %1)").arg(m_alias.toString())
+                                   : QString()));
     } else {
         m_link->reset();
         m_beaconTimer->stop();
@@ -88,23 +93,27 @@ void PmsMailbox::setEnabled(bool on)
     emit stateChanged();
 }
 
-void PmsMailbox::setLocalCallsign(const QString& baseCall)
+void PmsMailbox::setListenCallsign(const QString& callWithSsid)
 {
-    const QString c = baseCall.trimmed().toUpper();
-    if (c.isEmpty() || c == m_baseCall)
+    const auto parsed = ax25::Address::parse(callWithSsid);
+    const ax25::Address addr = parsed.value_or(ax25::Address{});
+    if (addr == m_listen && addr.isValid() == m_listen.isValid())
         return;
-    m_baseCall = c;
-    m_link->setLocalAddress(localAddress());
+    m_listen = addr;
+    m_link->setLocalAddress(m_listen);
     emit stateChanged();
 }
 
-void PmsMailbox::setSsid(int ssid)
+void PmsMailbox::setAliasCallsign(const QString& callWithSsid)
 {
-    ssid = qBound(0, ssid, 15);
-    if (ssid == m_ssid)
+    const QString trimmed = callWithSsid.trimmed();
+    const ax25::Address addr = trimmed.isEmpty()
+        ? ax25::Address{}
+        : ax25::Address::parse(trimmed).value_or(ax25::Address{});
+    if (addr == m_alias && addr.isValid() == m_alias.isValid())
         return;
-    m_ssid = ssid;
-    m_link->setLocalAddress(localAddress());
+    m_alias = addr;
+    m_link->setAliasAddress(m_alias);
     emit stateChanged();
 }
 
@@ -190,11 +199,15 @@ void PmsMailbox::onAirFrame(const QByteArray& rawNoFcs)
     if (!frame)
         return;
 
-    // Don't log our own transmissions in the heard list.
-    if (frame->src != localAddress())
+    // Don't log our own transmissions (primary or alias) in the heard list.
+    const bool isUs = (m_listen.isValid() && frame->src == m_listen)
+        || (m_alias.isValid() && frame->src == m_alias);
+    if (!isUs)
         recordHeard(*frame);
 
-    if (m_enabled && frame->dest == localAddress())
+    // Let the data link decide if the frame is addressed to us; it matches both
+    // the primary listen address and the optional vanity alias.
+    if (m_enabled)
         m_link->onFrameReceived(*frame);
 }
 

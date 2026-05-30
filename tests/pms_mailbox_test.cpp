@@ -42,6 +42,10 @@ static void testAddress()
 
     CHECK(!Address::parse(QStringLiteral("")).has_value(), "empty rejected");
     CHECK(!Address::parse(QStringLiteral("TOOLONGCALL")).has_value(), "overlong rejected");
+    // AX.25 limits the base callsign to 6 characters, so a 7-char vanity such as
+    // "AETHBBS" is not a legal address — callers must use <= 6 (e.g. "AETBBS").
+    CHECK(!Address::parse(QStringLiteral("AETHBBS")).has_value(), "7-char alias rejected");
+    CHECK(Address::parse(QStringLiteral("AETBBS")).has_value(), "6-char alias accepted");
 }
 
 static void testFrameRoundTrip()
@@ -175,8 +179,8 @@ static void testMailbox()
     QObject::connect(&pms, &PmsMailbox::transmitFrame,
                      [&](const QByteArray& f) { tx.append(f); });
 
-    pms.setLocalCallsign(QStringLiteral("N0PMS"));
-    pms.setSsid(1);
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setAliasCallsign(QStringLiteral("AETBBS")); // AX.25 callsigns are <= 6 chars
     pms.setEnabled(true);
 
     const Address local{QStringLiteral("N0PMS"), 1, false, false};
@@ -237,6 +241,48 @@ static void testMailbox()
     CHECK(sawDisc, "mailbox sends DISC on BYE");
 }
 
+// A caller dialing the vanity alias should connect, and every reply (incl. the
+// UA and greeting) must come from the alias address, not the primary.
+static void testAliasDial()
+{
+    PmsMailbox pms;
+    pms.setVersionString(QStringLiteral("test"));
+    QVector<QByteArray> tx;
+    QObject::connect(&pms, &PmsMailbox::transmitFrame,
+                     [&](const QByteArray& f) { tx.append(f); });
+
+    pms.setListenCallsign(QStringLiteral("N0PMS-1"));
+    pms.setAliasCallsign(QStringLiteral("AETBBS")); // AX.25 callsigns are <= 6 chars
+    pms.setEnabled(true);
+
+    const Address alias{QStringLiteral("AETBBS"), 0, false, false};
+    const Address peer{QStringLiteral("K7ABC"), 0, false, false};
+
+    pms.onAirFrame(Frame::makeU(alias, peer, FrameType::SABM, true, true).encode());
+
+    bool sawAliasUA = false;
+    bool greetingFromAlias = false;
+    for (const QByteArray& f : tx) {
+        auto d = Frame::decode(f);
+        if (!d || d->dest != peer)
+            continue;
+        if (d->type == FrameType::UA && d->src == alias)
+            sawAliasUA = true;
+        if (d->type == FrameType::I && d->src == alias)
+            greetingFromAlias = true;
+    }
+    CHECK(sawAliasUA, "alias dial: UA answered from the alias address");
+    CHECK(greetingFromAlias, "alias dial: greeting sent from the alias address");
+    CHECK(pms.connectedCaller() == QLatin1String("K7ABC"), "alias dial: caller connected");
+
+    // A frame to the primary while idle would also be accepted, but a frame to a
+    // third, unrelated callsign must be ignored.
+    const Address other{QStringLiteral("N9ZZZ"), 5, false, false};
+    const int txBefore = tx.size();
+    pms.onAirFrame(Frame::makeU(other, peer, FrameType::SABM, true, true).encode());
+    CHECK(tx.size() == txBefore, "frames to an unrelated callsign are ignored");
+}
+
 int main(int argc, char** argv)
 {
     // Isolate AppSettings / PMS storage from the real user config so the test is
@@ -255,6 +301,7 @@ int main(int argc, char** argv)
     testFrameRoundTrip();
     testConnection();
     testMailbox();
+    testAliasDial();
 
     if (g_failures == 0) {
         std::printf("All PMS mailbox tests passed.\n");
