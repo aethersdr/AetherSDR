@@ -2194,8 +2194,12 @@ void RxApplet::applyFilterPreset(int widthHz)
             lo = -widthHz; hi = -95;
         }
     } else if (mode == "LSB") {
-        lo = -widthHz;
-        hi = -95;
+        // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
+        // filter); the high cut is derived as lo + width so the effective
+        // passband equals the labeled width. Mirror of USB below the
+        // carrier: edge nearest the carrier is -100 Hz. (#3292)
+        hi = -100;
+        lo = -100 - widthHz;
     } else if (mode == "RTTY") {
         // RTTY: RF_frequency = mark. Filter is relative to mark.
         // Space is at -rttyShift. Passband should encompass both tones.
@@ -2215,8 +2219,17 @@ void RxApplet::applyFilterPreset(int widthHz)
         hi =  (widthHz / 2);
     } else if (mode == "FDVL") {
         lo = -widthHz; hi = -95;
+    } else if (mode == "USB") {
+        // SSB low cut is a fixed 100 Hz (matches SmartSDR for every SSB
+        // filter); the high cut is derived as lo + width so the effective
+        // passband equals the labeled width. Previously this sent lo=95,
+        // hi=width, which yielded an effective width of (label-95) — e.g.
+        // the 2.9k preset produced ~2805 Hz — and left the active-preset
+        // matcher comparing against off-by-95 widths. (#3292)
+        lo = 100;
+        hi = 100 + widthHz;
     } else {
-        // USB, FDVU, FDV, etc. — low cut at 95 Hz to reject carrier/hum
+        // FDVU, FDV, etc. — low cut at 95 Hz to reject carrier/hum
         lo = 95;
         hi = widthHz;
     }
