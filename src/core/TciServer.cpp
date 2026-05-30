@@ -163,6 +163,40 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                               << "for channel" << ch << "(#1331)";
             }
         });
+
+        // Re-trigger DAX setup when the radio (re)connects or a slice
+        // is added AFTER a TCI client has already requested audio.  Without
+        // this, a client that races the radio connect — WSJT-X started
+        // before AetherSDR finishes its handshake, or before any slice
+        // exists — sets `audioEnabled=true` but ensureDaxForTci()
+        // silently no-ops on `!isConnected()` / empty slices, and never
+        // gets a second chance.  Result: CAT and TX audio look fine
+        // (text channel is alive) but no DAX RX stream is ever created,
+        // so the radio sends no audio frames and WSJT-X RX stays silent.
+        // (#3270)
+        connect(m_model, &RadioModel::connectionStateChanged,
+                this, [this](bool connected) {
+            if (!connected) return;
+            for (const auto& cs : m_clients) {
+                if (cs.audioEnabled) {
+                    qCInfo(lcCat) << "TCI: radio reconnected — re-arming DAX"
+                                  << "for pending audio client (#3270)";
+                    ensureDaxForTci();
+                    return;
+                }
+            }
+        });
+        connect(m_model, &RadioModel::sliceAdded,
+                this, [this](SliceModel*) {
+            for (const auto& cs : m_clients) {
+                if (cs.audioEnabled) {
+                    qCInfo(lcCat) << "TCI: slice added — re-arming DAX"
+                                  << "for active audio client (#3270)";
+                    ensureDaxForTci();
+                    return;
+                }
+            }
+        });
     }
 
     // Periodic status broadcast (200ms — S-meter, TX sensors, TX state)
