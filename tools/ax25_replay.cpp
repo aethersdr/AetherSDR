@@ -124,30 +124,39 @@ int main(int argc, char** argv)
     std::printf("\n##### Decoder: %s #####\n", shim.demodDescription().toLocal8Bit().constData());
 
     int decoded = 0;
-    QObject::connect(&shim, &AetherAx25LibmodemShim::frameDecoded,
-                     [&](const Ax25DecodedFrame& f) {
+    auto reportFrame = [&](const Ax25DecodedFrame& f) {
         ++decoded;
+        const quint8 m = f.control & ~quint8(0x10); // strip P/F
         const char* kind = f.isUiFrame ? "UI"
-            : (f.control == 0x2f || f.control == 0x3f) ? "SABM"
-            : (f.control == 0x6f || f.control == 0x73) ? "UA"
-            : "CTRL";
-        std::printf("  FRAME #%d %s  %s > %s%s  ctrl=0x%02X pid=0x%02X  len=%d\n",
+            : (m == 0x2F) ? "SABM"
+            : (m == 0x43) ? "DISC"
+            : (m == 0x0F) ? "DM"
+            : (m == 0x63) ? "UA"
+            : (m == 0x87) ? "FRMR"
+            : ((f.control & 0x01) == 0) ? "I"
+            : "S";
+        std::printf("  FRAME #%d %-4s %s > %s%s  ctrl=0x%02X pid=0x%02X fcsOk=%d len=%d\n",
                     decoded, kind,
                     f.source.toLocal8Bit().constData(),
                     f.destination.toLocal8Bit().constData(),
                     f.path.isEmpty() ? "" : (" via " + f.path.join(',')).toLocal8Bit().constData(),
-                    f.control, f.pid, int(f.payload.size()));
+                    f.control, f.pid, f.fcsOk ? 1 : 0, int(f.payload.size()));
         if (!f.payloadText.isEmpty())
             std::printf("        text: %s\n", f.payloadText.toLocal8Bit().constData());
         if (!f.ax25FrameNoFcs.isEmpty())
             std::printf("        bytes(noFcs): %s\n", hex(f.ax25FrameNoFcs).toLocal8Bit().constData());
-    });
+    };
 
-    // Feed in realistic chunks so windowed diagnostics behave like the live tap.
-    const int chunk = sampleRate / 10; // ~100 ms
+    // Count the RETURN value of processMonoFloat (the authoritative decoded-frame
+    // path). NOTE: the frameDecoded *signal* is only emitted by feedAudio(), not
+    // processMonoFloat() — counting the signal here would always report 0 even
+    // when frames decode. (That bug originally masked the real SABM decodes.)
+    const int chunk = sampleRate / 10; // ~100 ms, like the live tap
     for (size_t off = 0; off < samples.size(); off += chunk) {
         const int n = int(std::min<size_t>(chunk, samples.size() - off));
-        shim.processMonoFloat(samples.data() + off, n, sampleRate);
+        const auto frames = shim.processMonoFloat(samples.data() + off, n, sampleRate);
+        for (const auto& f : frames)
+            reportFrame(f);
     }
 
     const Ax25DecoderDiagnostics d = shim.diagnosticsSnapshot();
