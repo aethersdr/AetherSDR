@@ -4270,7 +4270,7 @@ MainWindow::MainWindow(QWidget* parent)
         auto& s = AppSettings::instance();
         if (!s.contains("HidEncoderEnabled")) {
             const bool hadAutodetect =
-                s.value("HidEncoderAutoDetect", "True").toString() == "True";
+                s.value("HidEncoderAutoDetect", "False").toString() == "True";
             s.setValue("HidEncoderEnabled", hadAutodetect ? "True" : "False");
         }
     }
@@ -6776,7 +6776,6 @@ void MainWindow::handleVirtualFlexControlWheel(const QString& actionId, int step
     applyFlexControlWheelAction(actionId, steps);
 }
 
-#ifdef HAVE_HIDAPI
 // static
 QString MainWindow::hidEncoderDefaultAction(int encoderIndex)
 {
@@ -6800,7 +6799,6 @@ QString MainWindow::hidEncoderDefaultPushAction(int encoderIndex)
     default: return QStringLiteral("None");
     }
 }
-#endif
 
 #ifdef HAVE_HIDAPI
 // Render the full 800x100 touchscreen strip for the StreamDeck+.

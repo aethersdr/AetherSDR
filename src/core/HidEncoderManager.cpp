@@ -149,17 +149,6 @@ void HidEncoderManager::hotplugCheck()
     if (m_openVid && m_openPid) {
         if (open(m_openVid, m_openPid))
             m_hotplugTimer->stop();
-        return;
-    }
-    // No device was ever opened (initial startup without device connected):
-    // scan all supported devices so a late-connect RC-28/PowerMate/etc. is found.
-    const auto* devices = HidDeviceParser::supportedDevices();
-    int count = HidDeviceParser::supportedDeviceCount();
-    for (int i = 0; i < count; ++i) {
-        if (open(devices[i].vid, devices[i].pid)) {
-            m_hotplugTimer->stop();
-            return;
-        }
     }
 }
 
@@ -272,7 +261,10 @@ void HidEncoderManager::setTouchscreenImage(const QByteArray& jpegData,
 void HidEncoderManager::setRC28Leds(uint8_t ledByte)
 {
     if (!m_device || !isRC28Compatible()) return;
-    // Output report: report ID 0x00, command 0x01, LED byte, rest zeros.
+    // Output report: [0x00=reportID, 0x01=cmd, ledByte, zeros...], 33 bytes total.
+    // Format verified against FlexRC-28 Node.js driver (_sendLED) and
+    // wfview src/usbcontroller.cpp (RC28 featureLEDControl path).
+    // Active-low: bit0=TX, bit1=F1, bit2=F2, bit3=LINK; 0x0F = all off.
     uint8_t report[33] = {};
     report[0] = 0x00;
     report[1] = 0x01;
