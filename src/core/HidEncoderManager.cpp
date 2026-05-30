@@ -146,6 +146,17 @@ void HidEncoderManager::hotplugCheck()
     if (m_openVid && m_openPid) {
         if (open(m_openVid, m_openPid))
             m_hotplugTimer->stop();
+        return;
+    }
+    // No VID/PID recorded: device was never opened (started without encoder
+    // attached). Scan all supported devices so a late-connect is picked up.
+    const auto* devices = HidDeviceParser::supportedDevices();
+    int count = HidDeviceParser::supportedDeviceCount();
+    for (int i = 0; i < count; ++i) {
+        if (open(devices[i].vid, devices[i].pid)) {
+            m_hotplugTimer->stop();
+            return;
+        }
     }
 }
 
