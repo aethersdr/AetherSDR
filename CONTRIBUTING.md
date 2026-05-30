@@ -57,12 +57,20 @@ that matches our conventions.
    Persistence). Your PR's commit message will cite the principle it
    honors (e.g. `Principle V.` for nested-JSON persistence or
    `Principle X.` for verified-base patch generation).
-3. **One issue per PR.** Keep changes focused and reviewable.
-4. **Follow the coding conventions** below.
-5. **Test your changes** against a real FlexRadio if possible.
-6. **Sign your commits** (required by branch protection — SSH or GPG;
+3. **Accept the [Contributor License Agreement](CLA.md).** AetherSDR
+   moved from GPL v3 to AGPL v3 in 2026. The CLA grants the project
+   maintainer the right to relicense the project under any OSI-approved
+   open-source license in the future without contacting every past
+   contributor individually. The CLA Assistant Lite bot will comment
+   on your first PR with the signing instructions; reply with the
+   single-line acknowledgement and the bot records your signature.
+   You sign once per GitHub account — not once per PR.
+4. **One issue per PR.** Keep changes focused and reviewable.
+5. **Follow the coding conventions** below.
+6. **Test your changes** against a real FlexRadio if possible.
+7. **Sign your commits** (required by branch protection — SSH or GPG;
    see [Commit Signing](#commit-signing) below).
-7. **Open a pull request** against `main` with a clear description.
+8. **Open a pull request** against `main` with a clear description.
 
 ---
 

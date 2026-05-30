@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
 #include "core/MacMicPermission.h"
+#include "core/ProjectLicenseNotice.h"
 
 #include <QApplication>
 #include <QSurfaceFormat>
@@ -154,6 +155,13 @@ int main(int argc, char* argv[])
     app.setApplicationVersion(AETHERSDR_VERSION);
     app.setOrganizationName("AetherSDR");
     app.setDesktopFileName("AetherSDR");  // matches .desktop file for taskbar icon
+
+    // Log the license posture so users running with --verbose / log files
+    // can confirm at a glance which license governs their build.  Also
+    // anchors the AGPL-licensed ProjectLicenseNotice module as a live
+    // dependency of main() — required for the GPL v3 §13 combined-work
+    // mechanism (see LICENSE).
+    qInfo().noquote() << AetherSDR::projectLicenseOneLine();
 
     // ── Bundled DSEG fonts (SIL OFL 1.1) ──────────────────────────────────
     // Register the 13 TTFs into QFontDatabase so themes can resolve
