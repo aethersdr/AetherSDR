@@ -1,0 +1,86 @@
+name: Accessibility Check
+
+on:
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  pull-requests: write   # needed to label and comment; read-only on fork PRs (steps gracefully skip)
+
+jobs:
+  a11y-check:
+    name: Qt Accessibility Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Get changed src/gui/ files
+        run: |
+          git diff --name-only origin/${{ github.base_ref }}...HEAD \
+            | grep -E '^src/gui/.*\.(cpp|h)$' \
+            > /tmp/changed_gui_files.txt || true
+          echo "Changed src/gui files:"
+          cat /tmp/changed_gui_files.txt || echo "(none)"
+
+      - name: Run accessibility check
+        id: a11y
+        run: |
+          FILES=$(cat /tmp/changed_gui_files.txt | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            echo "No src/gui/ files changed -- skipping."
+            echo "findings=0" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          python tools/check_a11y.py $FILES | tee /tmp/a11y_output.txt
+          COUNT=$(grep -c "^::warning" /tmp/a11y_output.txt || echo "0")
+          echo "findings=$COUNT" >> $GITHUB_OUTPUT
+
+      # Label the PR so AetherClaude picks it up for automated remediation.
+      # continue-on-error: true because fork PRs have a read-only GITHUB_TOKEN
+      # and the label step would otherwise fail -- findings are still annotated
+      # inline on the diff regardless.
+      - name: Label PR for AetherClaude auto-remediation
+        if: steps.a11y.outputs.findings != '0'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --add-label "aetherclaude-eligible" \
+            --repo ${{ github.repository }}
+
+      - name: Comment with accessibility summary
+        if: steps.a11y.outputs.findings != '0'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SUMMARY=$(grep -E "(Files scanned|Files with findings|Total findings)" \
+            /tmp/a11y_output.txt | sed 's/^/> /' || echo "")
+          cat > /tmp/a11y_comment.md << COMMENTEOF
+          ## Accessibility check findings
+
+          This PR touches \`src/gui/\` files with **${{ steps.a11y.outputs.findings }}** accessibility issue(s).
+          Full details appear as inline annotations on the diff above.
+
+          ${SUMMARY}
+
+          This PR has been labeled \`aetherclaude-eligible\` — AetherClaude will generate
+          remediation patches (mechanical fixes: missing \`setAccessibleName\` calls,
+          \`QAccessibleValueChangeEvent\` in value-change methods, focus policy on
+          interactive widgets). Structural fixes (keyboard navigation, \`QAccessibleInterface\`
+          subclasses) are flagged for human review in #3288.
+
+          *Findings are warnings only — the build is not blocked.*
+          COMMENTEOF
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body-file /tmp/a11y_comment.md
