@@ -186,10 +186,9 @@ private:
     static constexpr int kBtnDisplay = 4;
     static constexpr int kBtnMemoryBrowse = 5;
     static constexpr int kBtnDax = 6;
-    static constexpr int kBtnLean = 7;
 
     QPushButton* m_toggleBtn{nullptr};
-    QPushButton* m_leanBtn{nullptr};
+    QPushButton* m_leanBtn{nullptr};  // Lean toggle (lives in the Display panel)
     QVector<QPushButton*> m_menuBtns;
     bool m_expanded{true};
 

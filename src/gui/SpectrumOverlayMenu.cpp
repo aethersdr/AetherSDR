@@ -234,7 +234,6 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
         {"Memory",    5, nullptr},   // 6 — toggleMemoryPanel
         // MEM+ moved into MemoryBrowsePanel (bottom button — doesn't scroll).
         {"DAX",       3, nullptr},   // 6 — toggleDaxPanel
-        {"Lean",      6, nullptr},   // 7 — global lean render mode (checkable)
     };
 
     for (const auto& def : defs) {
@@ -249,13 +248,6 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
             connect(btn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggleDisplayPanel);
         else if (def.specialIdx == 5)
             connect(btn, &QPushButton::clicked, this, &SpectrumOverlayMenu::toggleMemoryPanel);
-        else if (def.specialIdx == 6) {
-            // Lean: checkable toggle, drives the global low-overhead render mode.
-            btn->setCheckable(true);
-            m_leanBtn = btn;
-            connect(btn, &QPushButton::toggled, this,
-                    [this](bool on) { emit leanModeToggled(on); });
-        }
         else if (def.text == "+RX")
             connect(btn, &QPushButton::clicked, this, [this]() { emit addRxClicked(m_panId); });
         else if (def.sig)
@@ -272,11 +264,6 @@ SpectrumOverlayMenu::SpectrumOverlayMenu(QWidget* parent)
         m_menuBtns[kBtnDisplay]->setToolTip("Open panadapter and waterfall display settings.");
         m_menuBtns[kBtnMemoryBrowse]->setToolTip("Browse saved memories for quick recall.");
         m_menuBtns[kBtnDax]->setToolTip("Open DAX audio routing channel selector.");
-    }
-    if (m_leanBtn) {
-        m_leanBtn->setToolTip("Lean mode: opaque panadapter + VFO, capped repaint, "
-                              "WAVE scope off. Reduces CPU/GPU load. Persists across "
-                              "restarts.");
     }
 
     buildBandPanel();
@@ -1357,6 +1344,23 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             emit backgroundImageCleared();
         });
         grid->addWidget(clearBtn, row, 3);
+        ++row;
+    }
+
+    // ── Lean render mode toggle (#3283) ─────────────────────────────────
+    // Global low-overhead render mode: opaque panadapter + VFO, capped
+    // repaint, WAVE scope off, throttled meters. Lives under Display, just
+    // below the background chooser. Drives the app-wide toggle.
+    {
+        m_leanBtn = new QPushButton("Lean Mode");
+        m_leanBtn->setCheckable(true);
+        m_leanBtn->setStyleSheet(btnStyle);
+        m_leanBtn->setToolTip("Lean mode: opaque panadapter + VFO, capped "
+                              "repaint, WAVE scope off, throttled meters. "
+                              "Reduces CPU/GPU load. Persists across restarts.");
+        connect(m_leanBtn, &QPushButton::toggled, this,
+                [this](bool on) { emit leanModeToggled(on); });
+        grid->addWidget(m_leanBtn, row, 0, 1, 4);
         ++row;
     }
 
