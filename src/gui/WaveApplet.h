@@ -25,6 +25,10 @@ public slots:
     void appendScopeSamples(const QByteArray& monoFloat32Pcm, int sampleRate, bool tx);
     void setTransmitting(bool tx);
 
+    // Lean mode: fully disable the scope — hide the applet and drop incoming
+    // sample batches so the 24 Hz software repaint stops entirely (#3283).
+    void setActive(bool on);
+
 private:
     void buildSettingsDrawer();
     void setSettingsExpanded(bool expanded);
@@ -32,6 +36,7 @@ private:
     void updateRefreshLabel();
     void updateWindowLabel();
 
+    bool m_active{true};  // false in lean mode — applet hidden + feed dropped
     WaveformWidget* m_waveform{nullptr};
     QFrame* m_settingsDrawer{nullptr};
     GuardedComboBox* m_viewCombo{nullptr};

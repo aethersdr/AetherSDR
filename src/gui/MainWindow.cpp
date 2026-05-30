@@ -29,6 +29,7 @@
 #endif
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
+#include "MeterSmoother.h"  // global lean-mode meter repaint throttle (#3283)
 #include "AppletPanel.h"
 #include "containers/ContainerManager.h"
 #include "RxApplet.h"
@@ -1473,6 +1474,14 @@ MainWindow::MainWindow(QWidget* parent)
     // Audio worker thread (#502) — AudioEngine runs on its own thread so
     // audio processing never competes with paintEvent for main thread CPU.
     m_audioThread = new QThread(this);
+    // Lean render mode (#3283): read persisted state early so panadapters
+    // created during startup seed their Lean button/widget correctly, then
+    // apply once after construction to cover VFOs + the WAVE applet.
+    m_leanMode = AppSettings::instance().value("LeanMode", "False").toString() == "True";
+    if (m_leanMode) {
+        QTimer::singleShot(0, this, [this]() { applyLeanMode(true); });
+    }
+
     m_audioThread->setObjectName("AudioEngine");
     m_audio = new AudioEngine;  // no parent — will be moved to thread
     m_audio->setRxBoost(
@@ -10020,6 +10029,40 @@ void MainWindow::applyDarkTheme()
 
 // ─── Radio/model event handlers ───────────────────────────────────────────────
 
+void MainWindow::applyLeanMode(bool on)
+{
+    m_leanMode = on;
+
+    // Panadapters: opaque single layer (no wallpaper / fill) + 60 Hz cap.
+    // Also keep every pan's Lean button in sync (the toggle is global).
+    for (auto* sw : findChildren<SpectrumWidget*>()) {
+        sw->setLeanMode(on);
+        if (auto* menu = sw->overlayMenu())
+            menu->setLeanChecked(on);
+    }
+
+    // VFO panels: opaque, cacheable layer (kills the translucent re-composite).
+    for (auto* vfo : findChildren<VfoWidget*>())
+        vfo->setOpaqueMode(on);
+
+    // WAVE scope: hidden + feed dropped.
+    if (m_appletPanel) {
+        if (auto* wave = m_appletPanel->waveApplet())
+            wave->setActive(!on);
+    }
+
+    // Meters: throttle their animation repaint so they stop dirtying the shared
+    // backing store every frame (which forces a full-window texture re-upload to
+    // recomposite with the GPU panadapter — the dominant pooled cost on large/5K
+    // windows; see #3283). Native-layering the panel was tried and did not
+    // isolate them under Qt 6.11/macOS, so we cap the repaint rate instead.
+    MeterSmoother::setLeanThrottle(on);
+
+    auto& s = AppSettings::instance();
+    s.setValue("LeanMode", on ? "True" : "False");
+    s.save();
+}
+
 void MainWindow::onConnectionStateChanged(bool connected)
 {
     if (m_shuttingDown) {
@@ -12607,6 +12650,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     }
 
     // ── Per-pan display controls (client-side) ───────────────────────────
+    // Global lean render mode — every pan's Lean button drives the same
+    // app-wide toggle; seed this new pan's button + widget with current state.
+    connect(menu, &SpectrumOverlayMenu::leanModeToggled,
+            this, &MainWindow::applyLeanMode);
+    menu->setLeanChecked(m_leanMode);
+    sw->setLeanMode(m_leanMode);
     connect(menu, &SpectrumOverlayMenu::fftFillAlphaChanged,
             sw, &SpectrumWidget::setFftFillAlpha);
     connect(menu, &SpectrumOverlayMenu::fftFillColorChanged,

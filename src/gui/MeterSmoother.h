@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QtGlobal>
+#include <QElapsedTimer>
 #include <cmath>
 
 namespace AetherSDR {
@@ -99,7 +100,45 @@ public:
     void setBallistics(const Ballistics& b) { m_b = b; }
     const Ballistics& ballistics() const { return m_b; }
 
+    // ── Lean-mode shared repaint gate (#3283) ──────────────────────────────
+    // Every meter animates its MeterSmoother at ~120 Hz; each tick repaints,
+    // and on a window that also hosts the GPU panadapter every repaint forces a
+    // full-window backing-store→texture re-upload (the dominant pooled cost on
+    // large/5K displays). Lean mode keeps the smoother integrating at the full
+    // rate (so ballistics stay smooth) but gates the *repaint* to ~kLeanRepaintHz
+    // via a single shared clock, so all meters batch into one frame instead of
+    // dirtying the backing store independently 120×/sec.
+    //
+    // Usage at the meter's timer callback:
+    //     const bool settled = !m_smooth.tick(elapsed);
+    //     if (settled) m_timer.stop();
+    //     if (settled || MeterSmoother::shouldRepaint()) update();
+    // (Always paint the settled frame so the final value is never dropped.)
+    static void setLeanThrottle(bool on) { s_leanThrottle = on; }
+    static bool leanThrottle() { return s_leanThrottle; }
+    static bool shouldRepaint()
+    {
+        if (!s_leanThrottle) {
+            return true;
+        }
+        constexpr qint64 kGateMs = 1000 / kLeanRepaintHz;
+        static QElapsedTimer gate;
+        static qint64 lastMs = -1;
+        if (!gate.isValid()) {
+            gate.start();
+        }
+        const qint64 now = gate.elapsed();
+        if (lastMs < 0 || now - lastMs >= kGateMs) {
+            lastMs = now;
+            return true;
+        }
+        return false;
+    }
+
 private:
+    static constexpr int kLeanRepaintHz = 12;  // gated meter repaint rate in lean
+    static inline bool s_leanThrottle = false;
+
     Ballistics m_b;
     float      m_display{0.0f};
     float      m_target{0.0f};

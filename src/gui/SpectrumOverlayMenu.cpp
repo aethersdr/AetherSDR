@@ -614,6 +614,14 @@ void SpectrumOverlayMenu::setPanId(const QString& id)
     refreshAntennaCombo();
 }
 
+void SpectrumOverlayMenu::setLeanChecked(bool on)
+{
+    if (!m_leanBtn || m_leanBtn->isChecked() == on)
+        return;
+    QSignalBlocker block(m_leanBtn);  // reflect state without re-emitting
+    m_leanBtn->setChecked(on);
+}
+
 void SpectrumOverlayMenu::setRadioModel(RadioModel* model)
 {
     if (m_radioModel)
@@ -1336,6 +1344,23 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             emit backgroundImageCleared();
         });
         grid->addWidget(clearBtn, row, 3);
+        ++row;
+    }
+
+    // ── Lean render mode toggle (#3283) ─────────────────────────────────
+    // Global low-overhead render mode: opaque panadapter + VFO, capped
+    // repaint, WAVE scope off, throttled meters. Lives under Display, just
+    // below the background chooser. Drives the app-wide toggle.
+    {
+        m_leanBtn = new QPushButton("Lean Mode");
+        m_leanBtn->setCheckable(true);
+        m_leanBtn->setStyleSheet(btnStyle);
+        m_leanBtn->setToolTip("Lean mode: opaque panadapter + VFO, capped "
+                              "repaint, WAVE scope off, throttled meters. "
+                              "Reduces CPU/GPU load. Persists across restarts.");
+        connect(m_leanBtn, &QPushButton::toggled, this,
+                [this](bool on) { emit leanModeToggled(on); });
+        grid->addWidget(m_leanBtn, row, 0, 1, 4);
         ++row;
     }
 

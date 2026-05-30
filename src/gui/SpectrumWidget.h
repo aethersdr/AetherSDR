@@ -172,6 +172,12 @@ public:
     // Set the current demod mode (for zoom centering behavior).
     void setMode(const QString& mode) { m_mode = mode; }
 
+    // Lean render mode (#3283): skip the wallpaper layer (render an opaque
+    // single layer), drop the translucent FFT fill, and cap spectrum/waterfall
+    // repaints to ~60 Hz. Reversible — no persisted state is destroyed.
+    void setLeanMode(bool on);
+    bool leanMode() const { return m_leanMode; }
+
 
     // Access the floating overlay menu (for wiring signals).
     SpectrumOverlayMenu* overlayMenu() const { return m_overlayMenu; }
@@ -801,6 +807,15 @@ private:
     FilterEdge m_draggingFilter{FilterEdge::None};
     int m_filterDragStartX{0};      // pixel X at grab time (#764)
     int m_filterDragStartHz{0};     // filter edge Hz at grab time (#764)
+    // Lean render mode state (#3283).
+    bool m_leanMode{false};
+    QElapsedTimer m_leanRepaintClock;       // repaint cap in lean mode
+    // Each panadapter present forces a full-window backing-store→GPU texture
+    // re-upload (the dominant pooled cost on large/5K windows — #3283), so the
+    // present rate ~= the flush rate. 33 ms (~30 Hz) roughly halves that upload
+    // load vs 60 Hz while staying visually smooth for a low-overhead mode.
+    static constexpr int kLeanFrameMs = 33;
+    void leanCappedUpdate();                // update(), throttled when lean
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)

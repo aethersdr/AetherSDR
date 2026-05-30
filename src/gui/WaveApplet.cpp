@@ -386,8 +386,18 @@ void WaveApplet::appendScopeSamples(const QByteArray& monoFloat32Pcm,
                                     int sampleRate,
                                     bool tx)
 {
+    if (!m_active)
+        return;  // lean mode: drop the feed so the scope never repaints
     if (m_waveform)
         m_waveform->appendScopeSamples(monoFloat32Pcm, sampleRate, tx);
+}
+
+void WaveApplet::setActive(bool on)
+{
+    if (m_active == on)
+        return;
+    m_active = on;
+    setVisible(on);
 }
 
 void WaveApplet::setTransmitting(bool tx)

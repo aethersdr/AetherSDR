@@ -83,6 +83,11 @@ public:
     bool isCollapsed() const { return m_collapsed; }
     void setCollapsed(bool collapsed);
 
+    // Lean render mode: drop WA_TranslucentBackground so the panel composites
+    // as an opaque, cacheable layer instead of being alpha-blended over the
+    // whole window every frame (the dominant idle CPU cost — see #3283).
+    void setOpaqueMode(bool on);
+
     // Which side of the slice marker the flag panel is currently rendered on.
     // Tracked by updatePosition() via m_lastOnLeft.  Used by panFollowVfo()
     // to extend the pan-follow trigger to the flag's outer edge — single-side
@@ -171,6 +176,7 @@ private:
     float          m_signalMeterFraction{0.0f};
     float          m_targetSignalMeterFraction{0.0f};
     bool           m_collapsed{false};
+    bool           m_opaqueMode{false};  // lean mode: opaque (non-translucent) panel
     bool           m_collapseToggled{false};  // guard: absorb release after toggle
     int            m_scrollAccum{0};    // trackpad pixel scroll accumulator
     int            m_angleAccum{0};     // mouse wheel angle accumulator
