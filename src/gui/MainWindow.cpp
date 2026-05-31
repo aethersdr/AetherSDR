@@ -6104,6 +6104,48 @@ bool MainWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr
 }
 #endif
 
+void MainWindow::restoreWindowGeometry()
+{
+    // Minimal mode owns its own (already post-show) geometry restore via
+    // MinimalModeGeometry — don't clobber it with the full-window blob. (#2483)
+    if (isMinimalMode()) {
+        return;
+    }
+
+    auto& s = AppSettings::instance();
+    const QString geomB64 = s.value("MainWindowGeometry").toString();
+    if (geomB64.isEmpty()) {
+        return;
+    }
+
+    // Re-apply now that the window is mapped.  The constructor-time
+    // restoreGeometry() runs before show(), and Qt6 does not reliably
+    // re-bind a not-yet-mapped window to its saved screen — so the WM
+    // places the window on the active screen, which the floating pop-out
+    // panels (shown during buildUI) have just stolen.  Re-applying here
+    // overrides that placement and honors the saved monitor. (#3319)
+    restoreGeometry(QByteArray::fromBase64(geomB64.toLatin1()));
+
+    // Clamp to a still-connected screen — the saved geometry may reference
+    // a monitor that's no longer attached.  Mirrors the floating-container
+    // guard in FloatingContainerWindow::restoreAndEnsureVisible().
+    const QPoint tl = frameGeometry().topLeft();
+    bool onScreen = false;
+    for (QScreen* screen : QGuiApplication::screens()) {
+        if (screen->availableGeometry().contains(tl)) {
+            onScreen = true;
+            break;
+        }
+    }
+    if (!onScreen) {
+        if (QScreen* screen = QGuiApplication::primaryScreen()) {
+            const QRect g = screen->availableGeometry();
+            move(g.center().x() - width() / 2,
+                 g.center().y() - height() / 2);
+        }
+    }
+}
+
 void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);

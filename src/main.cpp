@@ -370,6 +370,11 @@ int main(int argc, char* argv[])
     {
         AetherSDR::MainWindow window;
         window.show();
+        // Re-apply the saved geometry once the window is mapped so the saved
+        // screen is honored on multi-monitor setups.  Constructor-time
+        // restoreGeometry() runs pre-show and Qt6 drops the screen binding,
+        // letting the window follow the just-shown pop-out panels. (#3319)
+        QTimer::singleShot(0, &window, &AetherSDR::MainWindow::restoreWindowGeometry);
         exitCode = app.exec();
     }
 
