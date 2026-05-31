@@ -3584,8 +3584,8 @@ MainWindow::MainWindow(QWidget* parent)
         // Separate tempb field (firmware variant)
         if (kvs.contains("tempb"))
             amp->setTempB(kvs["tempb"].toFloat());
-        if (kvs.contains("id"))
-            amp->setDrainCurrent(kvs["id"].toFloat());
+        // TODO: drain current field name unknown — id= is the device/port ID.
+        // Requires pcap of PGXL TCP protocol to determine the correct key.
         if (kvs.contains("vdd"))
             amp->setDrainVoltage(kvs["vdd"].toFloat());
         if (kvs.contains("vac"))
@@ -3643,8 +3643,8 @@ MainWindow::MainWindow(QWidget* parent)
         }
         if (kvs.contains("tempb"))
             amp->setTempB(kvs["tempb"].toFloat());
-        if (kvs.contains("id"))
-            amp->setDrainCurrent(kvs["id"].toFloat());
+        // TODO: drain current field name unknown — id= is the device/port ID.
+        // Requires pcap of PGXL TCP protocol to determine the correct key.
         if (kvs.contains("vdd"))
             amp->setDrainVoltage(kvs["vdd"].toFloat());
         if (kvs.contains("vac"))
