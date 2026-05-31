@@ -52,6 +52,9 @@ private:
 
     // 100 ms timer — updates label text independently of gauge fill rate
     QTimer   m_labelTimer;
+    // Peak hold: white tick on fwd gauge, cleared 2.5 s after last new peak
+    QTimer*  m_peakTimer{nullptr};
+    float    m_peakFwd{0.0f};
 
     // Cached telemetry values — gauges update every call, labels update at 10 Hz
     float    m_fwdWatts{0.0f};

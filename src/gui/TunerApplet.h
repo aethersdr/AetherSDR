@@ -78,6 +78,10 @@ private:
     float m_fwdPower{0.0f};
     float m_swr{1.0f};
 
+    // Peak hold for fwd gauge
+    QTimer* m_peakTimer{nullptr};
+    float   m_peakFwd{0.0f};
+
     // Relay values (updated from model)
     int m_relayC1{0};
     int m_relayL{0};

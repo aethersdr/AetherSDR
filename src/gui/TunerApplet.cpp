@@ -34,6 +34,15 @@ TunerApplet::TunerApplet(QWidget* parent)
         m_swrLabel->setText("SWR");
     });
 
+    // Peak hold: clear the white tick 2.5 s after the last new peak.
+    m_peakTimer = new QTimer(this);
+    m_peakTimer->setSingleShot(true);
+    m_peakTimer->setInterval(2500);
+    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
+        m_peakFwd = 0.0f;
+        static_cast<HGauge*>(m_fwdGauge)->clearPeak();
+    });
+
     // Post-tune capture timer: after tuning=0 arrives, keep capturing SWR
     // for 400ms so the final settled value from the TGXL has time to arrive.
     m_postTuneTimer = new QTimer(this);
@@ -350,6 +359,11 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
     m_swr = swr;
     static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
     static_cast<HGauge*>(m_swrGauge)->setValue(swr);
+    if (fwdPower > m_peakFwd) {
+        m_peakFwd = fwdPower;
+        static_cast<HGauge*>(m_fwdGauge)->setPeakValue(fwdPower);
+        m_peakTimer->start();
+    }
     updateValueLabels();
 
     // During the post-tune capture window, record the last non-idle SWR.

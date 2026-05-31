@@ -87,6 +87,12 @@ public:
         update();
     }
 
+    void clearPeak() {
+        if (!m_peakEnabled) return;
+        m_peakEnabled = false;
+        update();
+    }
+
     void setReversed(bool rev) {
         if (m_reversed == rev) return;
         m_reversed = rev;

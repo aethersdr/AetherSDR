@@ -122,12 +122,26 @@ AmpApplet::AmpApplet(QWidget* parent)
     m_labelTimer.setInterval(kMeterReadoutUpdateMs);
     connect(&m_labelTimer, &QTimer::timeout, this, &AmpApplet::updateValueLabels);
     m_labelTimer.start();
+
+    // Peak hold: clear the white tick 2.5 s after the last new peak.
+    m_peakTimer = new QTimer(this);
+    m_peakTimer->setSingleShot(true);
+    m_peakTimer->setInterval(2500);
+    connect(m_peakTimer, &QTimer::timeout, this, [this]() {
+        m_peakFwd = 0.0f;
+        m_fwdGauge->clearPeak();
+    });
 }
 
 void AmpApplet::setFwdPower(float watts)
 {
     m_fwdWatts = watts;
     m_fwdGauge->setValue(watts);
+    if (watts > m_peakFwd) {
+        m_peakFwd = watts;
+        m_fwdGauge->setPeakValue(watts);
+        m_peakTimer->start();  // restart hold window on each new peak
+    }
     // Label text is updated by the 100 ms timer (updateValueLabels).
 }
 
