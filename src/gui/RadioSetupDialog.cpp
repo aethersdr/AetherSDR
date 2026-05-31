@@ -4682,9 +4682,13 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
         "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
     bool autoReconnect = (AppSettings::instance().value("Peripherals_AutoReconnect", "false").toString() == "true");
     reconnectCheck->setChecked(autoReconnect);
-    connect(reconnectCheck, &QCheckBox::toggled, this, [](bool on) {
+    connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
         AppSettings::instance().setValue("Peripherals_AutoReconnect", on ? "true" : "false");
         AppSettings::instance().save();
+        // Propagate immediately to live connection objects
+        if (m_tgxl) m_tgxl->setAutoReconnect(on);
+        if (m_pgxl) m_pgxl->setAutoReconnect(on);
+        if (m_ag)   m_ag->setAutoReconnect(on);
     });
     vbox->addWidget(reconnectCheck);
 

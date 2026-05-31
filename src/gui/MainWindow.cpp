@@ -3557,6 +3557,14 @@ MainWindow::MainWindow(QWidget* parent)
             m_tgxlConn.disconnect();
         }
     });
+    // Apply auto-reconnect setting at startup so it's active before any connection is made
+    {
+        bool ar = (AppSettings::instance().value("Peripherals_AutoReconnect", "false").toString() == "true");
+        m_tgxlConn.setAutoReconnect(ar);
+        m_pgxlConn.setAutoReconnect(ar);
+        m_antennaGenius.setAutoReconnect(ar);
+    }
+
     // Wire TgxlConnection to TunerModel
     m_radioModel.tunerModel().setDirectConnection(&m_tgxlConn);
     // Also attempt connection when TGXL IP arrives (may come after presence)
