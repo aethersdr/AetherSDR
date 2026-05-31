@@ -1834,6 +1834,14 @@ target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
 add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 
+# #3212 — slice recreate policy (reuse restored pan vs create new; slice freq)
+add_executable(slice_recreate_policy_test
+    tests/slice_recreate_policy_test.cpp
+)
+target_include_directories(slice_recreate_policy_test PRIVATE src)
+target_link_libraries(slice_recreate_policy_test PRIVATE Qt6::Core)
+add_test(NAME slice_recreate_policy_test COMMAND slice_recreate_policy_test)
+
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
     src/core/ShortcutManager.cpp
