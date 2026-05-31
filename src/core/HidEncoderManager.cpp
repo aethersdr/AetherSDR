@@ -96,6 +96,9 @@ void HidEncoderManager::close()
     m_pollTimer->stop();
     m_hotplugTimer->stop();
     if (m_device) {
+        // Extinguish RC-28 LEDs on clean close. hid_write may return EIO if
+        // the device was surprise-disconnected; that is safe to ignore here.
+        setRC28Leds(RC28_LEDS_OFF);
         hid_close(m_device);
         m_device = nullptr;
     }
@@ -146,6 +149,17 @@ void HidEncoderManager::hotplugCheck()
     if (m_openVid && m_openPid) {
         if (open(m_openVid, m_openPid))
             m_hotplugTimer->stop();
+        return;
+    }
+    // No device was ever opened (initial startup without device connected):
+    // scan all supported devices so a late-connect RC-28/PowerMate/etc. is found.
+    const auto* devices = HidDeviceParser::supportedDevices();
+    int count = HidDeviceParser::supportedDeviceCount();
+    for (int i = 0; i < count; ++i) {
+        if (open(devices[i].vid, devices[i].pid)) {
+            m_hotplugTimer->stop();
+            return;
+        }
     }
 }
 
@@ -253,6 +267,17 @@ void HidEncoderManager::setTouchscreenImage(const QByteArray& jpegData,
         offset     += chunkLen;
         pageNumber++;
     }
+}
+
+void HidEncoderManager::setRC28Leds(uint8_t ledByte)
+{
+    if (!m_device || !isRC28Compatible()) return;
+    // Output report: report ID 0x00, command 0x01, LED byte, rest zeros.
+    uint8_t report[33] = {};
+    report[0] = 0x00;
+    report[1] = 0x01;
+    report[2] = ledByte;
+    hid_write(m_device, report, sizeof(report));
 }
 
 void HidEncoderManager::loadSettings()
