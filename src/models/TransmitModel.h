@@ -269,6 +269,7 @@ private:
     bool isPhoneModeForQuindar() const;
     bool runPttPreflight(PttSource source, bool resyncMoxOnBlock = true);
     void cancelPendingQuindarOff();
+    void dispatchMoxOff();
 
     // PTT coordinator state (#2262)
     class ClientQuindarTone* m_quindarTone{nullptr};

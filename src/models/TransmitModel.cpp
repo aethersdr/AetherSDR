@@ -839,6 +839,15 @@ void TransmitModel::cancelPendingQuindarOff()
     m_quindarOutroInFlight = false;
 }
 
+void TransmitModel::dispatchMoxOff()
+{
+    if (m_pttOffHook) {
+        m_pttOffHook();
+        return;
+    }
+    setMox(false);
+}
+
 void TransmitModel::requestPttOn(PttSource source)
 {
     if (!runPttPreflight(source))
@@ -890,11 +899,7 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
         || tone->phase() == ClientQuindarTone::Phase::Idle
         || m_quindarOutroInFlight) {
         cancelPendingQuindarOff();
-        if (m_pttOffHook) {
-            m_pttOffHook();
-            return;
-        }
-        setMox(false);
+        dispatchMoxOff();
         return;
     }
 
@@ -917,7 +922,7 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
         m_pendingMoxOffTimer = nullptr;
         m_quindarOutroInFlight = false;
         emit quindarActiveChanged(false);
-        setMox(false);
+        dispatchMoxOff();
     });
     m_pendingMoxOffTimer->start();
 }
