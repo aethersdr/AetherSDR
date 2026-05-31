@@ -203,8 +203,8 @@ private:
     QLabel* m_dbmLabel{nullptr};
     QString m_directEntrySource{"vfo-direct-entry"};
 
-    // Sub-menu tabs (QLabels with click via event filter)
-    QVector<QLabel*> m_tabBtns;
+    // Sub-menu tabs
+    QVector<QPushButton*> m_tabBtns;
     QStackedWidget* m_tabStack{nullptr};
     QWidget*        m_tabBar{nullptr};
     int m_activeTab{-1};
