@@ -7,6 +7,7 @@
 #include "models/XvtrPolicy.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "core/PeripheralSettings.h"
 #include <QApplication>
 #include <QSysInfo>
 #include "core/AudioEngine.h"
@@ -4680,11 +4681,10 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     auto* reconnectCheck = new QCheckBox("Auto-reconnect to peripherals on connection drop");
     AetherSDR::ThemeManager::instance().applyStyleSheet(reconnectCheck,
         "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
-    bool autoReconnect = (AppSettings::instance().value("Peripherals_AutoReconnect", "false").toString() == "true");
+    const bool autoReconnect = PeripheralSettings::autoReconnect();
     reconnectCheck->setChecked(autoReconnect);
     connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
-        AppSettings::instance().setValue("Peripherals_AutoReconnect", on ? "true" : "false");
-        AppSettings::instance().save();
+        PeripheralSettings::setAutoReconnect(on);
         // Propagate immediately to live connection objects
         if (m_tgxl) m_tgxl->setAutoReconnect(on);
         if (m_pgxl) m_pgxl->setAutoReconnect(on);

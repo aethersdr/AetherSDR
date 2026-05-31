@@ -18,6 +18,7 @@
 #include "core/CommandParser.h"
 #include "core/LogManager.h"
 #include "core/PerfTelemetry.h"
+#include "core/PeripheralSettings.h"
 #include "core/VoiceSignalDetector.h"
 #include "core/MemoryRecallPolicy.h"
 #include "core/StreamStatus.h"
@@ -3559,7 +3560,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
     // Apply auto-reconnect setting at startup so it's active before any connection is made
     {
-        bool ar = (AppSettings::instance().value("Peripherals_AutoReconnect", "false").toString() == "true");
+        const bool ar = PeripheralSettings::autoReconnect();
         m_tgxlConn.setAutoReconnect(ar);
         m_pgxlConn.setAutoReconnect(ar);
         m_antennaGenius.setAutoReconnect(ar);
@@ -10315,7 +10316,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
             }
 #endif
             // Propagate auto-reconnect setting to all peripheral connections
-            bool autoReconnect = (cs.value("Peripherals_AutoReconnect", "false").toString() == "true");
+            const bool autoReconnect = PeripheralSettings::autoReconnect();
             m_tgxlConn.setAutoReconnect(autoReconnect);
             m_pgxlConn.setAutoReconnect(autoReconnect);
             m_antennaGenius.setAutoReconnect(autoReconnect);
