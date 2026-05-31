@@ -13512,9 +13512,19 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         if (m_radioModel.slice(sliceId))
             m_radioModel.cwAutoTuneOnce(sliceId);
     });
-    connect(w, &VfoWidget::zeroBeatRequested, this, [this]() {
-        SliceModel* slice = activeSlice();
+    connect(w, &VfoWidget::zeroBeatRequested, this, [this, sliceId]() {
+        // #2516: act on the slice that owns the clicked VfoWidget, NOT the
+        // active slice — otherwise pressing Zero Beat on slice A while slice
+        // B is active would tune B.
+        SliceModel* slice = m_radioModel.slice(sliceId);
         if (!slice) return;
+        // The shared CW decoder is fed by the active slice's audio and its
+        // estimatedPitch() re-routes per active slice (see routeCwDecoderOutput()).
+        // The detected pitch is therefore only meaningful for the active slice,
+        // so refuse to apply it to a non-active slice rather than tuning on a
+        // pitch that belongs to a different slice's audio.
+        SliceModel* active = activeSlice();
+        if (!active || active->sliceId() != sliceId) return;
         float detected = m_cwDecoder.estimatedPitch();
         if (detected <= 0.0f) return;
         int configured = m_radioModel.transmitModel().cwPitch();
