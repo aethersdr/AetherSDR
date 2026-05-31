@@ -87,12 +87,16 @@ AmpApplet::AmpApplet(QWidget* parent)
     m_vacLabel = new QLabel("Vac  — V", this);
     m_vacLabel->setStyleSheet(kTelStyle);
 
+    m_sourceLabel = new QLabel("● RADIO", this);
+    m_sourceLabel->setStyleSheet("QLabel { color: #888888; font-size: 9px; }");
+
     auto* infoStack = new QVBoxLayout;
     infoStack->setSpacing(0);
     infoStack->setContentsMargins(0, 0, 0, 0);
     infoStack->addWidget(m_tempLabel);
     infoStack->addWidget(m_vddLabel);
     infoStack->addWidget(m_vacLabel);
+    infoStack->addWidget(m_sourceLabel);
 
     auto* btnRow = new QHBoxLayout;
     btnRow->setSpacing(6);
@@ -217,6 +221,17 @@ void AmpApplet::setState(const QString& state)
             "QPushButton:hover { background: {{color.background.1}}; }");
     }
     m_operateBtn->show();
+}
+
+void AmpApplet::setDirectConnected(bool direct)
+{
+    if (direct) {
+        m_sourceLabel->setText("● DIRECT");
+        m_sourceLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 9px; }");
+    } else {
+        m_sourceLabel->setText("● RADIO");
+        m_sourceLabel->setStyleSheet("QLabel { color: #888888; font-size: 9px; }");
+    }
 }
 
 void AmpApplet::setMeff(const QString& /*meff*/)

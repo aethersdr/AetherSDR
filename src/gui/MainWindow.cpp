@@ -3619,6 +3619,10 @@ MainWindow::MainWindow(QWidget* parent)
     });
     connect(&m_pgxlConn, &PgxlConnection::connected, this, [this]() {
         qDebug() << "PGXL direct connection established, version:" << m_pgxlConn.version();
+        m_appletPanel->ampApplet()->setDirectConnected(true);
+    });
+    connect(&m_pgxlConn, &PgxlConnection::disconnected, this, [this]() {
+        m_appletPanel->ampApplet()->setDirectConnected(false);
     });
     // Radio amplifier status → AmpApplet telemetry (fallback path).
     // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, temp, tempb, state) in its

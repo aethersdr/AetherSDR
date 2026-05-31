@@ -24,6 +24,7 @@ public:
     void setMainsVoltage(int volts);
     void setState(const QString& state);
     void setMeff(const QString& meff);
+    void setDirectConnected(bool direct);
 
 signals:
     void operateToggled(bool on);
@@ -45,6 +46,7 @@ private:
     QLabel*  m_tempLabel{nullptr};  // "34.7/28.4 C"  (beside PWR row)
     QLabel*  m_vddLabel{nullptr};   // "Vdd  50.0 V"  (beside SWR row)
     QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
+    QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
 
     QPushButton* m_operateBtn{nullptr};
 
