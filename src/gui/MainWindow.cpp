@@ -12573,11 +12573,29 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
         swGuard->setSpotMarkers(markers);
     };
-    connect(spots, &SpotModel::spotAdded,   this, rebuildSpots);
-    connect(spots, &SpotModel::spotUpdated, this, rebuildSpots);
-    connect(spots, &SpotModel::spotRemoved, this, rebuildSpots);
-    connect(spots, &SpotModel::spotsCleared,this, rebuildSpots);
-    connect(spots, &SpotModel::spotsRefreshed, this, rebuildSpots);
+    // Coalesce spot-model change bursts into a single rebuild per repaint
+    // cadence (#2481). Each rebuildSpots() iterates every spot, runs a DXCC
+    // colour lookup per spot, and diffs the whole marker vector. Firing it
+    // once per incoming spot — and once per panadapter — turns two
+    // simultaneous high-rate cluster feeds (e.g. two LogHX3 Spot Machines via
+    // SpotCollector) into an O(spots x spots/sec x pans) main-thread storm
+    // that stutters the waterfall. A short single-shot timer collapses a burst
+    // of N spot signals into one rebuild. Parented to sw so it dies with the
+    // pan; QPointer in rebuildSpots already guards against a dangling widget.
+    auto* spotRebuildTimer = new QTimer(sw);
+    spotRebuildTimer->setSingleShot(true);
+    spotRebuildTimer->setInterval(50);  // ~20 Hz, below the FFT repaint cadence
+    connect(spotRebuildTimer, &QTimer::timeout, sw, rebuildSpots);
+    QPointer<QTimer> rebuildTimerGuard(spotRebuildTimer);
+    auto scheduleRebuildSpots = [rebuildTimerGuard]() {
+        if (rebuildTimerGuard && !rebuildTimerGuard->isActive())
+            rebuildTimerGuard->start();
+    };
+    connect(spots, &SpotModel::spotAdded,   this, scheduleRebuildSpots);
+    connect(spots, &SpotModel::spotUpdated, this, scheduleRebuildSpots);
+    connect(spots, &SpotModel::spotRemoved, this, scheduleRebuildSpots);
+    connect(spots, &SpotModel::spotsCleared,this, scheduleRebuildSpots);
+    connect(spots, &SpotModel::spotsRefreshed, this, scheduleRebuildSpots);
     {
         auto& s = AppSettings::instance();
         sw->setShowSpots(s.value("IsSpotsEnabled", "True").toString() == "True");
