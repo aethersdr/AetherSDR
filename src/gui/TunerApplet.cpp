@@ -358,7 +358,17 @@ void TunerApplet::updateMeters(float fwdPower, float swr)
     m_fwdPower = fwdPower;
     m_swr = swr;
     static_cast<HGauge*>(m_fwdGauge)->setValue(fwdPower);
-    static_cast<HGauge*>(m_swrGauge)->setValue(swr);
+    // TGXL sends swr=0.0000 (return loss = 0 dB) at idle — no incident signal
+    // to measure against. The model converts that to rho=1.0 → ratio=99.9, which
+    // pegs the gauge. Snap to 1.0 (empty) whenever forward power is below the
+    // noise floor; m_swr retains the raw value for post-tune capture logic.
+    // Threshold matches the label threshold (5 W) — 1 W was too low and let
+    // idle noise readings light up the SWR bar.
+    if (fwdPower >= 5.0f) {
+        static_cast<HGauge*>(m_swrGauge)->setValue(swr);
+    } else {
+        static_cast<HGauge*>(m_swrGauge)->setValueImmediate(1.0f);
+    }
     if (fwdPower > m_peakFwd) {
         m_peakFwd = fwdPower;
         static_cast<HGauge*>(m_fwdGauge)->setPeakValue(fwdPower);

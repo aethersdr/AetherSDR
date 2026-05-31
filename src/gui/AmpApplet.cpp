@@ -135,8 +135,14 @@ AmpApplet::AmpApplet(QWidget* parent)
 
 void AmpApplet::setFwdPower(float watts)
 {
+    const bool wasPowered = (m_fwdWatts >= 5.0f);
     m_fwdWatts = watts;
     m_fwdGauge->setValue(watts);
+    const bool isPowered = (watts >= 5.0f);
+    if (!isPowered && wasPowered)
+        m_swrGauge->setValue(1.0f);   // clear bar — SWR is unmeasurable at idle
+    else if (isPowered && !wasPowered)
+        m_swrGauge->setValue(m_swrVal); // power resumed — restore cached value
     if (watts > m_peakFwd) {
         m_peakFwd = watts;
         m_fwdGauge->setPeakValue(watts);
@@ -148,7 +154,10 @@ void AmpApplet::setFwdPower(float watts)
 void AmpApplet::setSwr(float swr)
 {
     m_swrVal = swr;
-    m_swrGauge->setValue(swr);
+    // Only drive the gauge when there is forward power — SWR is not meaningful
+    // at idle and the radio/PGXL may report stale or noise values.
+    if (m_fwdWatts >= 5.0f)
+        m_swrGauge->setValue(swr);
     // Label text is updated by the 100 ms timer (updateValueLabels).
 }
 
@@ -208,7 +217,12 @@ void AmpApplet::updateValueLabels()
 void AmpApplet::setDrainVoltage(float volts)
 {
     if (!m_directConnected) return;
-    m_vddLabel->setText(QStringLiteral("Vdd  %1 V").arg(volts, 0, 'f', 1));
+    // PGXL reports vdd=0.0 when the drain supply is off (standby). Show a dash
+    // rather than "0.0 V" so it's clear the supply is off, not that we're reading zero.
+    if (volts < 1.0f)
+        m_vddLabel->setText("Vdd  — V");
+    else
+        m_vddLabel->setText(QStringLiteral("Vdd  %1 V").arg(volts, 0, 'f', 1));
 }
 
 void AmpApplet::setMainsVoltage(int volts)
