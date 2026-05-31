@@ -779,7 +779,7 @@ void GGMorse::decode_float() {
         int l1 = (mode == 0) ? 90 : lOld + 10;
         int dl = (mode == 0) ? 20 : 2;
 
-        for (int s = s0; s <= s1 && s < 55; s += ds) {
+        for (int s = s0; s <= s1; s += ds) {
             float lendot_samples = kBaseSampleRate*(1e-3*lendot_ms(5 + s))/nDownsample;
 
             for (int l = l0; l <= l1; l += dl) {
