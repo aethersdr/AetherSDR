@@ -60,6 +60,10 @@ private:
 
     void cleanup(bool removeFile);
 
+    // Single idempotent funnel: emits finished() once and tears down.
+    // Re-entrant calls (e.g. a second socket signal during teardown) are no-ops.
+    void finish(bool success, const QString& message, bool removeFile);
+
     enum Direction { None, Download, Upload };
 
     RadioModel*  m_model{nullptr};
@@ -75,6 +79,8 @@ private:
     Direction    m_direction{None};
     bool         m_transferring{false};
     bool         m_cancelled{false};
+    bool         m_finished{false};   // guards against re-entrant finish/cleanup
+    bool         m_cleaningUp{false}; // guards against re-entrant cleanup()
 
     static constexpr qint64 MAX_FILE_SIZE = 5'000'000;  // 5MB per FlexLib
     static constexpr int CONNECT_TIMEOUT_MS = 10'000;
