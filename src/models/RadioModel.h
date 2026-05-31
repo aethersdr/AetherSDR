@@ -564,6 +564,12 @@ private:
                                  const QString& freqMhz,
                                  const QString& mode,
                                  const QString& antenna);
+    // Reconnect recovery (#3212): the radio's GUIClientID session restore can
+    // bring back our panadapter without a slice, so "slice list" returns empty.
+    // Reuse the already-claimed pan instead of allocating a second one; only
+    // fall back to createDefaultSlice() (which issues "display panafall create")
+    // when no owned pan exists yet.
+    void ensureDefaultSlicePreferringRestoredPan();
 
     RadioConnection*  m_connection{nullptr};
     QThread*          m_connThread{nullptr};
