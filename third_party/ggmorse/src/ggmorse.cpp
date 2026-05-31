@@ -227,7 +227,7 @@ GGMorse::GGMorse(const Parameters & parameters)
         parameters.samplesPerFrame,
     })) {
 
-    m_impl->intervalsAll.resize(100);
+    m_impl->intervalsAll.resize(120);  // must be > max s-index (s = wpm-5, max 115 WPM → s=110)
     for (auto & intervals : m_impl->intervalsAll) {
         intervals.resize(100);
         for (auto & x : intervals) {
@@ -756,7 +756,7 @@ void GGMorse::decode_float() {
     const float sRangeMin = m_impl->parametersDecode.speedRangeMin_wpm;
     const float sRangeMax = m_impl->parametersDecode.speedRangeMax_wpm;
     int s0 = (sRangeMin > 0.0f) ? std::max(0, (int)std::round(sRangeMin - 5.0f)) : 0;
-    int s1 = (sRangeMax > 0.0f) ? std::min(110, (int)std::round(sRangeMax - 5.0f)) : 110;
+    int s1 = (sRangeMax > 0.0f) ? std::min(110, (int)std::round(sRangeMax - 5.0f)) : 50;
     int ds = 2;   // step of 2 WPM — was 10; finer grid catches any contest speed
     int nModes = 2;
 
