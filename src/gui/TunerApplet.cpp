@@ -60,18 +60,21 @@ void TunerApplet::setPowerScale(int maxWatts, bool hasAmplifier)
 {
     auto* gauge = static_cast<HGauge*>(m_fwdGauge);
     if (hasAmplifier) {
-        // PGXL: 0–2000 W, red > 1500 W
+        // PGXL: 0–2000 W, yellow > 1000 W, red > 1500 W
         gauge->setRange(0.0f, 2000.0f, 1500.0f,
-            {{0, "0"}, {500, "500"}, {1500, "1.5k"}, {2000, "2k"}});
+            {{0, "0"}, {500, "500"}, {1000, "1K"}, {1500, "1.5K"}, {2000, "2K"}},
+            1000.0f);
     } else if (maxWatts > 100) {
-        // Aurora (500 W): 0–600 W, red > 500 W
+        // Aurora (500 W): 0–600 W, yellow > 400 W, red > 500 W
         gauge->setRange(0.0f, 600.0f, 500.0f,
             {{0, "0"}, {100, "100"}, {200, "200"}, {300, "300"},
-             {400, "400"}, {500, "500"}, {600, "600"}});
+             {400, "400"}, {500, "500"}, {600, "600"}},
+            400.0f);
     } else {
-        // Barefoot radio: 0–200 W, red > 125 W
+        // Barefoot radio: 0–200 W, yellow > 80 W, red > 125 W
         gauge->setRange(0.0f, 200.0f, 125.0f,
-            {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}});
+            {{0, "0"}, {50, "50"}, {100, "100"}, {150, "150"}, {200, "200"}},
+            80.0f);
     }
 }
 
@@ -88,7 +91,7 @@ void TunerApplet::buildUI()
     vbox->setSpacing(2);
 
     static const char* kRowLabelStyle =
-        "QLabel { color: #c8d8e8; font-size: 10px; font-weight: bold; }";
+        "QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }";
 
     // Forward Power gauge — default barefoot (0–200 W); switches to
     // 0–2000 W if a PGXL amplifier is detected via setAmplifierMode().

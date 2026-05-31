@@ -18,7 +18,7 @@ QLabel* makeValueLabel(QWidget* parent)
     auto* lbl = new QLabel(parent);
     lbl->setFixedWidth(72);
     lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; font-weight: bold; }");
+    lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
     return lbl;
 }
 
