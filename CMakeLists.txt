@@ -1243,7 +1243,9 @@ if(HIDAPI_FOUND)
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
-        src/core/HidDeviceParser.h)
+        src/core/HidDeviceParser.h
+        src/gui/RC28MappingDialog.cpp
+        src/gui/RC28MappingDialog.h)
     set(HIDAPI_NORMALIZED_INCLUDE_DIRS ${HIDAPI_INCLUDE_DIRS})
     foreach(hidapi_dir IN LISTS HIDAPI_INCLUDE_DIRS)
         if(EXISTS "${hidapi_dir}/hidapi.h")

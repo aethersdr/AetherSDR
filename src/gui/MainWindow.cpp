@@ -113,6 +113,9 @@
 #include "core/MidiSettings.h"
 #include "MidiMappingDialog.h"
 #endif
+#ifdef HAVE_HIDAPI
+#include "RC28MappingDialog.h"
+#endif
 #include "core/UlanziDialBackend.h"
 #include "UlanziDialMapperDialog.h"
 #include "AetherDspDialog.h"
@@ -3991,10 +3994,45 @@ MainWindow::MainWindow(QWidget* parent)
     m_hidEncoder = new HidEncoderManager;
     m_hidEncoder->moveToThread(m_extCtrlThread);
 
+    // Hold-detection timers for RC-28 F1/F2 — single-shot 600 ms, one per key so
+    // both can be held at once without clobbering each other's state. (#3323)
+    for (int i = 0; i < 2; ++i) {
+        const int btn = i + 1;
+        m_rc28HoldTimer[i] = new QTimer(this);
+        m_rc28HoldTimer[i]->setSingleShot(true);
+        m_rc28HoldTimer[i]->setInterval(600);
+        connect(m_rc28HoldTimer[i], &QTimer::timeout, this, [this, btn] {
+            m_rc28HoldConsumed[btn - 1] = true;
+            const QString holdField = (btn == 1) ? QStringLiteral("f1Hold")
+                                                 : QStringLiteral("f2Hold");
+            // Default F1 hold to TuneFast for good out-of-box experience; F2 hold to None.
+            const QString dflt = (btn == 1) ? QStringLiteral("TuneFast")
+                                            : QStringLiteral("None");
+            const QString actionName = HidEncoderManager::rc28MappingField(holdField, dflt);
+            if (actionName.isEmpty() || actionName == "None") return;
+            // Hold actions are latched toggles: each hold press flips the state and
+            // it stays that way until the next hold press.
+            dispatchHidAction(actionName, QString("F%1 hold").arg(btn));
+        });
+    }
+
     // Per-encoder action dispatch — routes each dial to its configured action.
     // applyFlexControlWheelAction handles coalescing internally for frequency.
     connect(m_hidEncoder, &HidEncoderManager::tuneSteps,
             this, [this](int encoderIndex, int steps) {
+        // Fast/Fine direct-tune mode (frequency only) — respect the slice lock
+        // here since this path bypasses applyFlexControlWheelAction's own guard.
+        // Fast mode: 100 Hz per tick. Fine mode: 1 Hz per tick.
+        if (encoderIndex == 0 && (m_hidFastTune || m_hidFineTune)) {
+            if (auto* s = activeSlice()) {
+                if (s->isLocked()) { s->notifyTuneBlockedByLock(); return; }
+                const double stepMhz = m_hidFastTune ? 0.0001 : 0.000001;
+                applyTuneRequest(s, s->frequency() + steps * stepMhz,
+                                 TuneIntent::IncrementalTune,
+                                 m_hidFastTune ? "rc28-fast" : "rc28-fine");
+            }
+            return;
+        }
         const QString actionId = AppSettings::instance()
             .value(QString("HidEncoderAction%1").arg(encoderIndex),
                    MainWindow::hidEncoderDefaultAction(encoderIndex))
@@ -4004,18 +4042,51 @@ MainWindow::MainWindow(QWidget* parent)
 
     connect(m_hidEncoder, &HidEncoderManager::buttonPressed,
             this, [this](int button, int action) {
-        QString actionName;
-        if (button >= 1 && button <= 8) {
-            // RC-28 buttons 1-3 (F1, F2, TX bar) get sensible defaults when
-            // the user hasn't explicitly configured them.
-            QString dflt = QStringLiteral("None");
-            if (m_hidEncoder->isRC28Compatible()) {
-                if      (button == 1) dflt = QStringLiteral("StepUp");
-                else if (button == 2) dflt = QStringLiteral("StepDown");
-                else if (button == 3) dflt = QStringLiteral("PTT");
+
+        // ── RC-28 F1 / F2: deferred press + hold detection (#3323) ──────────
+        // Per-key state (index 0=F1, 1=F2) so the two keys are independent.
+        // On press (action==0): start that key's 600 ms hold timer; do NOT fire
+        // the short-press action yet.  On the timer firing: run the hold action
+        // and set the key's consumed flag.  On release (action==1): if the timer
+        // didn't fire, run the short-press action; otherwise clear the flag.
+        if (m_hidEncoder->isRC28Compatible() && (button == 1 || button == 2)) {
+            const int i = button - 1;
+            if (action == 0) {
+                m_rc28HoldConsumed[i] = false;
+                m_rc28HoldTimer[i]->start();
+            } else {  // action == 1 (release)
+                m_rc28HoldTimer[i]->stop();
+                if (!m_rc28HoldConsumed[i]) {
+                    // Short press — fire on release
+                    const QString dflt = (button == 1) ? QStringLiteral("StepCycle")
+                                                       : QStringLiteral("None");
+                    const QString pressField = (button == 1) ? QStringLiteral("f1Press")
+                                                             : QStringLiteral("f2Press");
+                    const QString actionName =
+                        HidEncoderManager::rc28MappingField(pressField, dflt);
+                    if (!actionName.isEmpty() && actionName != "None")
+                        dispatchHidAction(actionName,
+                                          QString("F%1 press").arg(button));
+                }
+                m_rc28HoldConsumed[i] = false;
+                // Update the LEDs once the button is up. We never write LEDs
+                // while a button is held (that broke the F1 LED); this is the
+                // single post-release write, matching FlexRC-28's model. The
+                // small delay lets the release report settle first.
+                QTimer::singleShot(80, this, [this]{ updateRC28Leds(); });
             }
+            return;
+        }
+
+        QString actionName;
+        if (m_hidEncoder->isRC28Compatible() && button == 3) {
+            // RC-28 TX bar is hardwired to PTT (mode configured in the RC-28
+            // dialog); it is not remappable via the generic HID-key settings.
+            actionName = QStringLiteral("PTT");
+        } else if (button >= 1 && button <= 8) {
+            // Generic HID keys (StreamDeck+ LCD buttons 1–8).
             actionName = AppSettings::instance()
-                .value(QString("HidKeyAction%1").arg(button - 1), dflt)
+                .value(QString("HidKeyAction%1").arg(button - 1), QStringLiteral("None"))
                 .toString();
         } else if (button >= 9 && button <= 12) {
             // Encoder press buttons — settings key HidEncoderPushAction{0-3}
@@ -4030,148 +4101,74 @@ MainWindow::MainWindow(QWidget* parent)
 
         if (actionName == "None" || actionName.isEmpty()) return;
 
-        // PTT: TX bar held down = transmit on, released = transmit off.
-        // This is the only action that needs both press (action==0) and release (action==1).
+        // PTT: behaviour depends on the RC28Mapping pttMode field.
         if (actionName == QStringLiteral("PTT")) {
-            if (m_radioModel.isConnected())
+            if (!m_radioModel.isConnected()) return;
+            const bool latched =
+                HidEncoderManager::rc28MappingField("pttMode", "Momentary") == "Latched";
+            if (latched) {
+                // Toggle on press only; ignore release.
+                if (action == 0) {
+                    m_rc28PttLatched = !m_rc28PttLatched;
+                    m_radioModel.setTransmit(m_rc28PttLatched);
+                    if (m_rc28MappingDialog)
+                        m_rc28MappingDialog->appendButtonEvent(
+                            "TX bar press",
+                            m_rc28PttLatched ? "TX ON (Latched)" : "TX OFF (Unlatched)");
+                }
+            } else {
+                // Momentary: hold = TX on, release = TX off.
                 m_radioModel.setTransmit(action == 0);
+                if (m_rc28MappingDialog)
+                    m_rc28MappingDialog->appendButtonEvent(
+                        "TX bar",
+                        action == 0 ? "TX ON (Momentary)" : "TX OFF (Momentary)");
+            }
             return;
         }
 
         // All other actions fire only on press.
         if (action != 0) return;
 
-        if (actionName == "StepCycle" || actionName == "StepUp") {
-            if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepUp();
-        } else if (actionName == "StepDown") {
-            if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepDown();
-        } else if (actionName == "ToggleRit") {
-            if (auto* s = activeSlice()) s->setRit(!s->ritOn(), s->ritFreq());
-        } else if (actionName == "ToggleXit") {
-            if (auto* s = activeSlice()) s->setXit(!s->xitOn(), s->xitFreq());
-        } else if (actionName == "ClearRit") {
-            if (auto* s = activeSlice()) s->setRit(s->ritOn(), 0);
-        } else if (actionName == "ClearXit") {
-            if (auto* s = activeSlice()) s->setXit(s->xitOn(), 0);
-        } else if (actionName == "ToggleMox") {
-            m_radioModel.setTransmit(!m_radioModel.transmitModel().isTransmitting());
-        } else if (actionName == "ToggleTune") {
-            if (m_radioModel.transmitModel().isTuning())
-                m_radioModel.transmitModel().stopTune();
-            else
-                m_radioModel.transmitModel().startTune();
-        } else if (actionName == "ToggleMute") {
-            m_audio->setMuted(!m_audio->isMuted());
-        } else if (actionName == "ToggleLock") {
-            if (auto* s = activeSlice()) s->setLocked(!s->isLocked());
-        } else if (actionName == "ToggleApf") {
-            if (auto* s = activeSlice()) s->setApf(!s->apfOn());
-        } else if (actionName == "ToggleAgc") {
-            if (auto* s = activeSlice()) {
-                static const char* modes[] = {"off","slow","med","fast"};
-                const QString cur = s->agcMode().toLower();
-                int idx = 0;
-                for (int i = 0; i < 4; ++i) if (cur == modes[i]) { idx = i; break; }
-                s->setAgcMode(modes[(idx + 1) % 4]);
-            }
-        } else if (actionName == "BandZoom") {
-            auto* s = activeSlice();
-            if (s) {
-                const QString panId = !s->panId().isEmpty() ? s->panId()
-                    : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
-                if (!panId.isEmpty()) {
-                    m_flexVirtualBandZoomOn = !m_flexVirtualBandZoomOn;
-                    m_radioModel.sendCommand(QString("display pan set %1 band_zoom=%2")
-                        .arg(panId).arg(m_flexVirtualBandZoomOn ? 1 : 0));
-                }
-            }
-        } else if (actionName == "SegmentZoom") {
-            auto* s = activeSlice();
-            if (s) {
-                const QString panId = !s->panId().isEmpty() ? s->panId()
-                    : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
-                if (!panId.isEmpty()) {
-                    m_flexVirtualSegmentZoomOn = !m_flexVirtualSegmentZoomOn;
-                    m_radioModel.sendCommand(QString("display pan set %1 segment_zoom=%2")
-                        .arg(panId).arg(m_flexVirtualSegmentZoomOn ? 1 : 0));
-                }
-            }
-        } else if (actionName == "NextSlice") {
-            const auto& slices = m_radioModel.slices();
-            if (slices.size() > 1) {
-                int idx = 0;
-                for (int i = 0; i < slices.size(); ++i)
-                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
-                setActiveSlice(slices[(idx + 1) % slices.size()]->sliceId());
-            }
-        } else if (actionName == "PrevSlice") {
-            const auto& slices = m_radioModel.slices();
-            if (slices.size() > 1) {
-                int idx = 0;
-                for (int i = 0; i < slices.size(); ++i)
-                    if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
-                setActiveSlice(slices[(idx - 1 + slices.size()) % slices.size()]->sliceId());
-            }
-        } else if (actionName == "VolumeUp") {
-            const int next = std::clamp(
-                AppSettings::instance().value("MasterVolume","100").toInt() + 5, 0, 100);
-            if (m_titleBar) m_titleBar->setMasterVolume(next);
-            applyMasterVolume(next);
-        } else if (actionName == "VolumeDown") {
-            const int next = std::clamp(
-                AppSettings::instance().value("MasterVolume","100").toInt() - 5, 0, 100);
-            if (m_titleBar) m_titleBar->setMasterVolume(next);
-            applyMasterVolume(next);
-        } else if (actionName == "SplitActiveSlice") {
-            if (!m_splitActive) {
-                auto* s = activeSlice();
-                if (s && m_radioModel.slices().size() < m_radioModel.maxSlices()) {
-                    QString panId = s->panId().isEmpty()
-                        ? (m_panStack ? m_panStack->activePanId() : m_radioModel.panId())
-                        : s->panId();
-                    const bool isCw = s->mode() == "CW" || s->mode() == "CWL";
-                    m_splitActive   = true;
-                    m_splitRxSliceId = s->sliceId();
-                    m_radioModel.sendCommand(
-                        QString("slice create pan=%1 freq=%2")
-                        .arg(panId).arg(s->frequency() + (isCw ? 0.001 : 0.005), 0, 'f', 6));
-                }
-            } else {
-                disableSplit();
-            }
-        }
+        // All remaining actions share the same dispatch path used by
+        // hold-detection and short-press-on-release.  (#3323)
+        dispatchHidAction(actionName, QString("key %1 press").arg(button));
     });
 
     connect(m_hidEncoder, &HidEncoderManager::connectionChanged,
             this, [this](bool connected, const QString& name) {
-        qDebug() << "HID encoder:" << (connected ? "connected" : "disconnected") << name;
+        qCDebug(lcDevices) << "HID encoder:" << (connected ? "connected" : "disconnected") << name;
         if (connected) {
             refreshStreamDeckLabels();
-            // Sync RC-28 LEDs to current radio state on connect (handles hot-plug).
-            // LINK stays on while connected; TX mirrors current MOX state.
-            if (m_hidEncoder->isRC28Compatible()) {
-                const uint8_t ledByte = m_radioModel.transmitModel().isMox()
-                    ? HidEncoderManager::RC28_LEDS_TX_LINK
-                    : HidEncoderManager::RC28_LEDS_LINK;
-                QMetaObject::invokeMethod(m_hidEncoder, [this, ledByte] {
-                    m_hidEncoder->setRC28Leds(ledByte);
-                });
+            updateRC28Leds();
+        } else if (m_hidEncoder->isRC28Compatible()) {
+            // RC-28 gone: stop any in-flight hold timers so they can't fire an
+            // action for an absent encoder, and clear RC-28 stateful flags so a
+            // reconnect starts from a clean state. (m_openVid/Pid survive close(),
+            // so isRC28Compatible() still identifies the departed device here.)
+            for (int i = 0; i < 2; ++i) {
+                m_rc28HoldTimer[i]->stop();
+                m_rc28HoldConsumed[i] = false;
+            }
+            m_hidFastTune = false;
+            m_hidFineTune = false;
+            if (m_rc28PttLatched) {
+                // Safety: never leave the radio keyed if a latched-TX RC-28 is
+                // unplugged. Drop TX and clear the latch.
+                m_rc28PttLatched = false;
+                m_radioModel.setTransmit(false);
             }
         }
     });
 
     // RC-28 TX LED: mirror MOX state to the device's red TRANSMIT LED.
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            this, [this](bool mox) {
-        if (m_hidEncoder && m_hidEncoder->isRC28Compatible()) {
-            const uint8_t ledByte = mox
-                ? HidEncoderManager::RC28_LEDS_TX_LINK
-                : HidEncoderManager::RC28_LEDS_LINK;
-            QMetaObject::invokeMethod(m_hidEncoder, [this, ledByte] {
-                m_hidEncoder->setRC28Leds(ledByte);
-            });
-        }
-    });
+            this, [this](bool) { updateRC28Leds(); });
+
+    // RC-28 F-key LED for a Mute hold action — mute is global (not slice-scoped),
+    // so refresh whenever it changes from any source (RC-28, GUI, MIDI…).
+    connect(m_audio, &AudioEngine::mutedChanged,
+            this, [this](bool) { updateRC28Leds(); });
 
     // StreamDeck native integration removed — use TCI StreamController plugin instead.
 #endif
@@ -6723,7 +6720,7 @@ void MainWindow::handleFlexControlButton(int button, int action)
         else
             m_radioModel.transmitModel().startTune();
     } else if (actionName == "ToggleMute") {
-        m_audio->setMuted(!m_audio->isMuted());
+        if (m_audio) m_audio->setMuted(!m_audio->isMuted());
     } else if (actionName == "ToggleLock") {
         if (auto* s = activeSlice()) s->setLocked(!s->isLocked());
     } else if (actionName == "ClearRit") {
@@ -6850,6 +6847,232 @@ QString MainWindow::hidEncoderDefaultPushAction(int encoderIndex)
     case 2:  return QStringLiteral("ToggleXit");
     case 3:  return QStringLiteral("None");
     default: return QStringLiteral("None");
+    }
+}
+
+// True when the hold action assigned to an RC-28 F-key is currently engaged, so
+// that key's LED should be lit. Lets any toggleable hold action (mute, RIT, XIT,
+// slice lock, fast/fine tune) drive its own button's LED — not just the tune
+// modes. Returns false for non-stateful actions, which simply leave the LED off.
+bool MainWindow::rc28HoldActionActive(const QString& action) const
+{
+    if (action == "TuneFast")   return m_hidFastTune;
+    if (action == "FineTune")   return m_hidFineTune;
+    if (action == "ToggleMute") return m_audio && m_audio->isMuted();
+    if (auto* s = activeSlice()) {
+        if (action == "ToggleRit")  return s->ritOn();
+        if (action == "ToggleXit")  return s->xitOn();
+        if (action == "ToggleLock") return s->isLocked();
+    }
+    return false;
+}
+
+// Compute the current RC-28 LED byte from radio + RC-28 action state and send
+// it to the device on its ExtControllers thread. (#3323)
+// Active-low: bit0=TX, bit1=F1, bit2=F2, bit3=LINK. 0=LED on, 1=LED off.
+void MainWindow::updateRC28Leds()
+{
+    if (!m_hidEncoder || !m_hidEncoder->isRC28Compatible()) return;
+    uint8_t b = HidEncoderManager::RC28_LEDS_OFF;  // 0x0F — start all off
+    b &= ~0x08u;  // LINK always on while connected
+    if (m_radioModel.transmitModel().isMox()) b &= ~0x01u;  // TX
+    // Each F-key's LED reflects the on/off state of the hold action assigned to
+    // that key: F1 → bit1, F2 → bit2. (FlexRC-28 maps functions to LEDs the same
+    // way and drives bit2 freely, confirming there is no per-button lock.)
+    const QString f1Hold = HidEncoderManager::rc28MappingField("f1Hold", "TuneFast");
+    const QString f2Hold = HidEncoderManager::rc28MappingField("f2Hold", "None");
+    if (rc28HoldActionActive(f1Hold)) b &= ~0x02u;  // F1 LED
+    if (rc28HoldActionActive(f2Hold)) b &= ~0x04u;  // F2 LED
+    const uint8_t ledByte = b;
+    QMetaObject::invokeMethod(m_hidEncoder, [this, ledByte] {
+        m_hidEncoder->setRC28Leds(ledByte);
+    });
+}
+
+// Dispatch a resolved HID action name and optionally log it to the mapping
+// dialog if it is open. Called for both F1/F2 hold (from the timer) and
+// short-press (on release). (#3323)
+void MainWindow::dispatchHidAction(const QString& actionName,
+                                   const QString& gestureLabel)
+{
+    if (m_rc28MappingDialog)
+        m_rc28MappingDialog->appendButtonEvent(gestureLabel, actionName);
+
+    if (actionName == "StepCycle" || actionName == "StepUp") {
+        if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepUp();
+    } else if (actionName == "StepDown") {
+        if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepDown();
+    } else if (actionName == "ToggleRit") {
+        if (auto* s = activeSlice()) s->setRit(!s->ritOn(), s->ritFreq());
+    } else if (actionName == "ToggleXit") {
+        if (auto* s = activeSlice()) s->setXit(!s->xitOn(), s->xitFreq());
+    } else if (actionName == "ClearRit") {
+        if (auto* s = activeSlice()) s->setRit(s->ritOn(), 0);
+    } else if (actionName == "ClearXit") {
+        if (auto* s = activeSlice()) s->setXit(s->xitOn(), 0);
+    } else if (actionName == "ToggleMox") {
+        m_radioModel.setTransmit(!m_radioModel.transmitModel().isTransmitting());
+    } else if (actionName == "ToggleTune") {
+        if (m_radioModel.transmitModel().isTuning())
+            m_radioModel.transmitModel().stopTune();
+        else
+            m_radioModel.transmitModel().startTune();
+    } else if (actionName == "ToggleMute") {
+        if (m_audio) m_audio->setMuted(!m_audio->isMuted());
+    } else if (actionName == "ToggleLock") {
+        if (auto* s = activeSlice()) s->setLocked(!s->isLocked());
+    } else if (actionName == "ToggleApf") {
+        if (auto* s = activeSlice()) s->setApf(!s->apfOn());
+    } else if (actionName == "ToggleAgc") {
+        if (auto* s = activeSlice()) {
+            static const char* modes[] = {"off","slow","med","fast"};
+            const QString cur = s->agcMode().toLower();
+            int idx = 0;
+            for (int i = 0; i < 4; ++i) if (cur == modes[i]) { idx = i; break; }
+            s->setAgcMode(modes[(idx + 1) % 4]);
+        }
+    } else if (actionName == "BandZoom") {
+        auto* s = activeSlice();
+        if (s) {
+            const QString panId = !s->panId().isEmpty() ? s->panId()
+                : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+            if (!panId.isEmpty()) {
+                m_flexVirtualBandZoomOn = !m_flexVirtualBandZoomOn;
+                m_radioModel.sendCommand(QString("display pan set %1 band_zoom=%2")
+                    .arg(panId).arg(m_flexVirtualBandZoomOn ? 1 : 0));
+            }
+        }
+    } else if (actionName == "SegmentZoom") {
+        auto* s = activeSlice();
+        if (s) {
+            const QString panId = !s->panId().isEmpty() ? s->panId()
+                : (m_panStack ? m_panStack->activePanId() : m_radioModel.panId());
+            if (!panId.isEmpty()) {
+                m_flexVirtualSegmentZoomOn = !m_flexVirtualSegmentZoomOn;
+                m_radioModel.sendCommand(QString("display pan set %1 segment_zoom=%2")
+                    .arg(panId).arg(m_flexVirtualSegmentZoomOn ? 1 : 0));
+            }
+        }
+    } else if (actionName == "NextSlice") {
+        const auto& slices = m_radioModel.slices();
+        if (slices.size() > 1) {
+            int idx = 0;
+            for (int i = 0; i < slices.size(); ++i)
+                if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+            setActiveSlice(slices[(idx + 1) % slices.size()]->sliceId());
+        }
+    } else if (actionName == "PrevSlice") {
+        const auto& slices = m_radioModel.slices();
+        if (slices.size() > 1) {
+            int idx = 0;
+            for (int i = 0; i < slices.size(); ++i)
+                if (slices[i]->sliceId() == m_activeSliceId) { idx = i; break; }
+            setActiveSlice(slices[(idx - 1 + slices.size()) % slices.size()]->sliceId());
+        }
+    } else if (actionName == "VolumeUp") {
+        const int next = std::clamp(
+            AppSettings::instance().value("MasterVolume","100").toInt() + 5, 0, 100);
+        if (m_titleBar) m_titleBar->setMasterVolume(next);
+        applyMasterVolume(next);
+    } else if (actionName == "VolumeDown") {
+        const int next = std::clamp(
+            AppSettings::instance().value("MasterVolume","100").toInt() - 5, 0, 100);
+        if (m_titleBar) m_titleBar->setMasterVolume(next);
+        applyMasterVolume(next);
+    } else if (actionName == "SplitActiveSlice") {
+        if (!m_splitActive) {
+            auto* s = activeSlice();
+            if (s && m_radioModel.slices().size() < m_radioModel.maxSlices()) {
+                QString panId = s->panId().isEmpty()
+                    ? (m_panStack ? m_panStack->activePanId() : m_radioModel.panId())
+                    : s->panId();
+                const bool isCw = s->mode() == "CW" || s->mode() == "CWL";
+                m_splitActive    = true;
+                m_splitRxSliceId = s->sliceId();
+                m_radioModel.sendCommand(
+                    QString("slice create pan=%1 freq=%2")
+                    .arg(panId).arg(s->frequency() + (isCw ? 0.001 : 0.005), 0, 'f', 6));
+            }
+        } else {
+            disableSplit();
+        }
+    // ── RC-28 extended actions (#3323) ─────────────────────────────────────
+    } else if (actionName == "TuneFast") {
+        m_hidFastTune = !m_hidFastTune;
+        if (m_hidFastTune) m_hidFineTune = false;
+        // Do NOT write the LED here: this runs from the 600 ms hold timer while
+        // the button is still physically held, and writing the LED mid-hold is
+        // what broke the F1 LED. The post-release timer in the button handler
+        // updates it once the button is up — same as FlexRC-28.
+    } else if (actionName == "FineTune") {
+        m_hidFineTune = !m_hidFineTune;
+        if (m_hidFineTune) m_hidFastTune = false;
+        // LED handled by the post-release timer, same as TuneFast above.
+    } else if (actionName == "ModeCycle") {
+        if (auto* s = activeSlice()) {
+            static const char* kModes[] = {"LSB", "USB", "CW", "AM"};
+            constexpr int kModeCount = static_cast<int>(std::size(kModes));
+            const QString cur = s->mode().toUpper();
+            int idx = -1;
+            for (int i = 0; i < kModeCount; ++i)
+                if (cur == kModes[i]) { idx = i; break; }
+            // Unknown/extended mode (CWL, FM, DIGU…) → idx stays -1 so the cycle
+            // starts cleanly at the first entry (LSB) rather than skipping it.
+            s->setMode(kModes[(idx + 1) % kModeCount]);
+        }
+    } else if (actionName == "BandCycle") {
+        if (auto* s = activeSlice()) {
+            struct BandEntry { double freqMhz; const char* mode; };
+            static const BandEntry kBands[] = {
+                {1.900,  "LSB"}, {3.750,  "LSB"}, {5.3715, "USB"},
+                {7.150,  "LSB"}, {10.120, "USB"}, {14.225, "USB"},
+                {18.128, "USB"}, {21.285, "USB"}, {24.940, "USB"},
+                {28.500, "USB"}, {50.150, "USB"},
+            };
+            static constexpr int kBandCount = static_cast<int>(std::size(kBands));
+            const double cur = s->frequency();
+            int idx = 0;
+            double closest = std::numeric_limits<double>::max();
+            for (int i = 0; i < kBandCount; ++i) {
+                const double d = std::abs(cur - kBands[i].freqMhz);
+                if (d < closest) { closest = d; idx = i; }
+            }
+            const auto& next = kBands[(idx + 1) % kBandCount];
+            s->setMode(next.mode);
+            applyTuneRequest(s, next.freqMhz, TuneIntent::CommandedTargetCenter, "rc28");
+        }
+    } else if (actionName == "SnapKHz") {
+        if (auto* s = activeSlice()) {
+            const double snapped = std::round(s->frequency() * 1000.0) / 1000.0;
+            // 1e-9 MHz (1 mHz) tolerance: skip a redundant tune when already on
+            // grid without being fooled by floating-point rounding noise.
+            if (std::abs(snapped - s->frequency()) > 1e-9)
+                applyTuneRequest(s, snapped, TuneIntent::CommandedTargetCenter, "rc28");
+        }
+    } else if (actionName == "Snap100kHz") {
+        if (auto* s = activeSlice()) {
+            const double snapped = std::round(s->frequency() * 10.0) / 10.0;
+            if (std::abs(snapped - s->frequency()) > 1e-9)
+                applyTuneRequest(s, snapped, TuneIntent::CommandedTargetCenter, "rc28");
+        }
+    } else if (actionName == "Snap500kHz") {
+        if (auto* s = activeSlice()) {
+            const double snapped = std::round(s->frequency() * 2.0) / 2.0;
+            if (std::abs(snapped - s->frequency()) > 1e-9)
+                applyTuneRequest(s, snapped, TuneIntent::CommandedTargetCenter, "rc28");
+        }
+    } else if (actionName == "Snap100Hz") {
+        if (auto* s = activeSlice()) {
+            const double snapped = std::round(s->frequency() * 10000.0) / 10000.0;
+            if (std::abs(snapped - s->frequency()) > 1e-9)
+                applyTuneRequest(s, snapped, TuneIntent::CommandedTargetCenter, "rc28");
+        }
+    } else if (actionName == "Snap500Hz") {
+        if (auto* s = activeSlice()) {
+            const double snapped = std::round(s->frequency() * 2000.0) / 2000.0;
+            if (std::abs(snapped - s->frequency()) > 1e-9)
+                applyTuneRequest(s, snapped, TuneIntent::CommandedTargetCenter, "rc28");
+        }
     }
 }
 #endif
@@ -8236,6 +8459,10 @@ void MainWindow::buildMenuBar()
     });
 #endif
 #ifdef HAVE_HIDAPI
+    auto* rc28Action = settingsMenu->addAction("Icom RC-28 Remote Encoder...");
+    connect(rc28Action, &QAction::triggered, this, [this] {
+        showOrRaisePersistent(m_rc28MappingDialog, m_hidEncoder);
+    });
 #endif
     auto* ulanziAction = settingsMenu->addAction("Ulanzi Dial Mapping...");
     connect(ulanziAction, &QAction::triggered, this, [this] {
@@ -11780,6 +12007,13 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     // the new slice may have a different mode / filter shape.
     if (sliceId != prevId)
         pushRxFilterCutoffsToEq();
+
+#ifdef HAVE_HIDAPI
+    // RC-28 F-key LEDs for slice-scoped hold actions (RIT/XIT/Lock) reflect the
+    // active slice's state — refresh them when the active slice changes.
+    if (sliceId != prevId)
+        updateRC28Leds();
+#endif
     if (sliceId != prevId && m_ax25HfPacketDecodeDialog)
         m_ax25HfPacketDecodeDialog->setAttachedSlice(s);
 
@@ -11888,6 +12122,16 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     m_sdRitConn = connect(s, &SliceModel::ritChanged, this, [this](bool, int){ refreshStreamDeckLabels(); });
     m_sdXitConn = connect(s, &SliceModel::xitChanged, this, [this](bool, int){ refreshStreamDeckLabels(); });
     if (sliceId != prevId) refreshStreamDeckLabels();
+
+    // Rewire RC-28 F-key LED refresh to the active slice's RIT/XIT/Lock state so
+    // an F-key whose hold action is one of those tracks changes made by ANY
+    // control, not just the RC-28 itself.
+    disconnect(m_rc28RitConn);
+    disconnect(m_rc28XitConn);
+    disconnect(m_rc28LockConn);
+    m_rc28RitConn  = connect(s, &SliceModel::ritChanged,    this, [this](bool, int){ updateRC28Leds(); });
+    m_rc28XitConn  = connect(s, &SliceModel::xitChanged,    this, [this](bool, int){ updateRC28Leds(); });
+    m_rc28LockConn = connect(s, &SliceModel::lockedChanged, this, [this](bool){ updateRC28Leds(); });
 #endif
 
     qDebug() << "MainWindow: active slice set to" << sliceId;

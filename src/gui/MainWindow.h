@@ -92,6 +92,9 @@ class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
 class FlexControlDialog;
 class MidiMappingDialog;
+#ifdef HAVE_HIDAPI
+class RC28MappingDialog;
+#endif
 class UlanziDialMapperDialog;
 #ifdef Q_OS_LINUX
 class EvdevEncoderManager;
@@ -553,8 +556,23 @@ private:
     static QString hidEncoderDefaultAction(int encoderIndex);
     static QString hidEncoderDefaultPushAction(int encoderIndex);
     void refreshStreamDeckLabels();
+    void updateRC28Leds();
+    bool rc28HoldActionActive(const QString& action) const;
+    void dispatchHidAction(const QString& actionName, const QString& gestureLabel);
     QMetaObject::Connection m_sdRitConn;
     QMetaObject::Connection m_sdXitConn;
+    // RC-28 F-key LED refresh, rewired to the active slice on each slice change
+    QMetaObject::Connection m_rc28RitConn;
+    QMetaObject::Connection m_rc28XitConn;
+    QMetaObject::Connection m_rc28LockConn;
+    // Hold-detection state for RC-28 F1/F2 — one slot per key so the two can be
+    // held independently without clobbering each other. Index 0 = F1, 1 = F2. (#3323)
+    QTimer* m_rc28HoldTimer[2]{nullptr, nullptr};
+    bool    m_rc28HoldConsumed[2]{false, false};
+    // RC-28 stateful action flags
+    bool    m_rc28PttLatched{false};
+    bool    m_hidFastTune{false};
+    bool    m_hidFineTune{false};
 #endif
 #ifdef Q_OS_LINUX
     EvdevEncoderManager*       m_dialBackend{nullptr};
@@ -616,6 +634,9 @@ private:
     QPointer<ProfileImportExportDialog> m_profileImportExportDialog;
 #ifdef HAVE_MIDI
     QPointer<MidiMappingDialog> m_midiDialog;
+#endif
+#ifdef HAVE_HIDAPI
+    QPointer<RC28MappingDialog> m_rc28MappingDialog;
 #endif
     QPointer<UlanziDialMapperDialog> m_ulanziMapperDialog;
 
