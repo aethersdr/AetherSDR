@@ -14,6 +14,8 @@ PgxlConnection::PgxlConnection(QObject* parent)
     m_pollTimer.setInterval(200);  // 5 Hz for responsive metering
     connect(&m_pollTimer, &QTimer::timeout, this, &PgxlConnection::pollStatus);
 
+    // Retries every 5s indefinitely until the device returns or the user disconnects.
+    // This is intentional for a LAN peripheral that may be power-cycling.
     m_reconnectTimer.setSingleShot(true);
     m_reconnectTimer.setInterval(5000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
@@ -72,6 +74,13 @@ void PgxlConnection::onError(QAbstractSocket::SocketError error)
 {
     qCWarning(lcTuner) << "PgxlConnection: socket error" << error
                         << m_socket.errorString();
+    // A failed reconnect attempt arrives here (not via onDisconnected) because
+    // the socket never reached ConnectedState. Re-arm so we keep retrying until
+    // the device returns or the user disconnects. isActive() prevents double-arm
+    // when a live drop emits both errorOccurred and disconnected.
+    if (!m_deliberateDisconnect && m_autoReconnect && !m_connected
+            && !m_lastHost.isEmpty() && !m_reconnectTimer.isActive())
+        m_reconnectTimer.start();
 }
 
 void PgxlConnection::onReadyRead()
