@@ -51,6 +51,8 @@ public:
     QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
     QPushButton* lockSpeedButton()  const { return m_lockSpeedBtn; }
     float        cwCostThreshold()  const { return m_cwCostThreshold; }
+    int speedRangeLow()   const;
+    int speedRangeHigh()  const;
 
     QSize sizeHint() const override { return {800, 316}; }
 

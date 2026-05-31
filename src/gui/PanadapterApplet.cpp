@@ -308,6 +308,16 @@ void PanadapterApplet::setCwPanelVisible(bool visible)
     m_cwPanel->setVisible(visible);
 }
 
+int PanadapterApplet::speedRangeLow()  const
+{
+    return m_speedRangeSlider ? m_speedRangeSlider->low() : 15;
+}
+
+int PanadapterApplet::speedRangeHigh() const
+{
+    return m_speedRangeSlider ? m_speedRangeSlider->high() : 40;
+}
+
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
     // Filter by sensitivity threshold — drop low-confidence decodes

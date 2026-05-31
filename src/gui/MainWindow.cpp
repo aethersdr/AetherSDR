@@ -12080,6 +12080,8 @@ void MainWindow::routeCwDecoderOutput()
                 &m_cwDecoder, &CwDecoder::setPitchRange);
         connect(m_cwDecoderApplet, &PanadapterApplet::speedRangeChanged,
                 &m_cwDecoder, &CwDecoder::setSpeedRange);
+        m_cwDecoder.setSpeedRange(m_cwDecoderApplet->speedRangeLow(),
+                                  m_cwDecoderApplet->speedRangeHigh());
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
                 &m_cwDecoder, &CwDecoder::stop);
         connect(m_cwDecoderApplet, &PanadapterApplet::cwPanelCloseRequested,
