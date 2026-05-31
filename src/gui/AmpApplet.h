@@ -47,6 +47,7 @@ private:
     QLabel*  m_vddLabel{nullptr};   // "Vdd  50.0 V"  (beside SWR row)
     QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
     QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
+    bool     m_directConnected{false};
 
     QPushButton* m_operateBtn{nullptr};
 

@@ -207,11 +207,13 @@ void AmpApplet::updateValueLabels()
 
 void AmpApplet::setDrainVoltage(float volts)
 {
+    if (!m_directConnected) return;
     m_vddLabel->setText(QStringLiteral("Vdd  %1 V").arg(volts, 0, 'f', 1));
 }
 
 void AmpApplet::setMainsVoltage(int volts)
 {
+    if (!m_directConnected) return;
     m_mainsVolts = volts;
     m_vacLabel->setText(QStringLiteral("Vac  %1 V").arg(volts));
 }
@@ -239,12 +241,20 @@ void AmpApplet::setState(const QString& state)
 
 void AmpApplet::setDirectConnected(bool direct)
 {
+    m_directConnected = direct;
     if (direct) {
         m_sourceLabel->setText("● DIRECT");
         m_sourceLabel->setStyleSheet("QLabel { color: #00b4d8; font-size: 9px; }");
+        m_vddLabel->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; }");
+        m_vacLabel->setStyleSheet("QLabel { color: #c8d8e8; font-size: 10px; }");
     } else {
         m_sourceLabel->setText("● RADIO");
         m_sourceLabel->setStyleSheet("QLabel { color: #888888; font-size: 9px; }");
+        // Vdd and Vac are not proxied by the radio — gray out and clear stale values.
+        m_vddLabel->setText("Vdd  — V");
+        m_vddLabel->setStyleSheet("QLabel { color: #505050; font-size: 10px; }");
+        m_vacLabel->setText("Vac  — V");
+        m_vacLabel->setStyleSheet("QLabel { color: #505050; font-size: 10px; }");
     }
 }
 
