@@ -186,7 +186,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     });
 
     // WPM range — double-handle slider, label embedded in widget
-    m_speedRangeSlider = new RangeSlider(5, 120, 5, 60, "WPM", {}, this);
+    m_speedRangeSlider = new RangeSlider(5, 60, 15, 40, "WPM", {}, this);
     m_speedRangeSlider->setFixedWidth(195);
     m_speedRangeSlider->setToolTip("Decoder speed search range (WPM)");
     cwBar->addWidget(m_speedRangeSlider);
