@@ -5069,6 +5069,46 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         vbox->addWidget(clickGrp);
     }
 
+    // ── Mouse wheel group (#3302) ───────────────────────────────────────────
+    // Trackball / inverted-scroll users (and parity with Thetis / KE9NS) get
+    // a single checkbox that reverses the wheel direction for frequency
+    // tuning.  Reading is per-event in the wheel handlers, so this takes
+    // effect immediately with no signal plumbing.  The Ctrl+wheel bandwidth
+    // zoom on the panadapter is intentionally not reversed.
+    {
+        auto* wheelGrp = new QGroupBox("Mouse wheel");
+        wheelGrp->setStyleSheet(kGroupStyle);
+        auto* wheelLayout = new QVBoxLayout(wheelGrp);
+        wheelLayout->setSpacing(8);
+
+        auto* reverseChk = new QCheckBox("Reverse mouse-wheel tuning direction");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(reverseChk,
+            "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }");
+        {
+            auto& s = AppSettings::instance();
+            reverseChk->setChecked(s.value("ReverseMouseWheel", false).toBool());
+        }
+        wheelLayout->addWidget(reverseChk);
+
+        auto* wheelDesc = new QLabel(
+            "When enabled, scrolling the wheel up tunes the frequency down "
+            "(and vice versa). Useful for trackballs and any pointer where "
+            "the natural scroll direction feels inverted. Affects the VFO "
+            "frequency display and the panadapter / waterfall; the "
+            "Ctrl+wheel bandwidth zoom is not reversed.");
+        wheelDesc->setStyleSheet("QLabel { color: #7090a0; font-size: 11px; }");
+        wheelDesc->setWordWrap(true);
+        wheelLayout->addWidget(wheelDesc);
+
+        connect(reverseChk, &QCheckBox::toggled, this, [](bool on) {
+            auto& s = AppSettings::instance();
+            s.setValue("ReverseMouseWheel", on);
+            s.save();
+        });
+
+        vbox->addWidget(wheelGrp);
+    }
+
     return page;
 }
 

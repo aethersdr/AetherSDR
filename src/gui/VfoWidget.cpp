@@ -11,6 +11,7 @@
 #include "models/TransmitModel.h"
 #include "Theme.h"
 #include "core/AppSettings.h"
+#include "InteractionSettings.h"
 
 #include <QDateTime>
 #include <QPainter>
@@ -351,6 +352,7 @@ void VfoWidget::wheelEvent(QWheelEvent* ev)
     }
 
     if (steps != 0) {
+        if (reverseMouseWheel()) steps = -steps;  // #3302
         double newMhz = m_slice->frequency() + steps * stepHz / 1e6;
         emit stepTuneRequested(newMhz);
     }

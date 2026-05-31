@@ -142,7 +142,7 @@ On the main spectrum display:
 - **Single-click to tune** is available if you turn on `View > Single-Click to Tune`.
 - **Drag the frequency scale bar** to change the displayed bandwidth.
 - **Drag the divider between the spectrum and waterfall** to change how much height each one uses.
-- **Scroll vertically** over the spectrum or waterfall to tune the active slice by the current step size.
+- **Scroll vertically** over the spectrum or waterfall to tune the active slice by the current step size. If your pointer's natural scroll direction feels inverted (common on trackballs), enable **Radio Setup → UI Enhancements → Reverse mouse-wheel tuning direction**.
 - **Drag the dBm scale on the right edge** to pan the reference level up or down.
 - **Ctrl-drag the dBm scale** (⌘-drag on macOS) to zoom the visible dB span; the bottom of the scale stays anchored.
 - **Click the ▲ / ▼ arrows at the top of the dBm scale** to step the reference level by 10 dB.
@@ -172,7 +172,7 @@ The on-screen VFO controls are also part of the control system.
 
 On the VFO display:
 
-- **Scroll over the frequency display** to tune by the current step size.
+- **Scroll over the frequency display** to tune by the current step size. The **Reverse mouse-wheel tuning direction** option in Radio Setup → UI Enhancements flips this direction for trackballs and other pointers with inverted-feeling scroll.
 - **Double-click the frequency display** to open direct frequency entry.
 - Press `G` to open direct frequency entry from the keyboard.
 - **Right-click the frequency display** to add a spot at the current slice frequency.

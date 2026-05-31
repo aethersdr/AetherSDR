@@ -39,6 +39,7 @@
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
+#include "InteractionSettings.h"
 #include "models/BandPlanManager.h"
 #include "models/BandDefs.h"
 #include <QDateTime>
@@ -4791,6 +4792,10 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
         ev->accept();
         return;
     }
+
+    // Reverse-wheel option (#3302) — applied AFTER the Ctrl+wheel zoom branch
+    // above so zoom direction stays natural; only frequency tuning is flipped.
+    if (reverseMouseWheel()) steps = -steps;
 
     const auto* ao = activeOverlay();
     const double vfoMhz = ao ? ao->freqMhz : m_centerMhz;
