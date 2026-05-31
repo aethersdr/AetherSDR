@@ -35,6 +35,9 @@ protected:
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;
     void mouseReleaseEvent(QMouseEvent*) override;
+    void keyPressEvent(QKeyEvent*) override;
+    void focusInEvent(QFocusEvent*) override;
+    void focusOutEvent(QFocusEvent*) override;
 
 private:
     int m_min, m_max, m_low, m_high;
@@ -47,7 +50,9 @@ private:
     static constexpr int kHandleH     = 14;
     int m_leftLabelW{30};                    // wider when m_label is set
 
-    enum class Handle { None, Low, High } m_dragging{Handle::None};
+    enum class Handle { None, Low, High };
+    Handle m_dragging{Handle::None};
+    Handle m_focused {Handle::None};  // handle that responds to keyboard
 
     QRect grooveRect()        const;
     QRect handleRect(int val) const;

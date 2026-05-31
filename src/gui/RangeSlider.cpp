@@ -1,5 +1,6 @@
 #include "RangeSlider.h"
 
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <algorithm>
@@ -17,6 +18,8 @@ RangeSlider::RangeSlider(int min, int max, int low, int high,
 {
     setMouseTracking(false);
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    setFocusPolicy(Qt::StrongFocus);
+    setAccessibleName(label.isEmpty() ? tr("Range slider") : label);
 }
 
 void RangeSlider::setLow(int v)
@@ -97,15 +100,20 @@ void RangeSlider::paintEvent(QPaintEvent*)
     p.setBrush(QColor(0x19, 0x76, 0xd2));   // Material blue 700
     p.drawRect(fill);
 
-    // Handles
-    auto drawHandle = [&](int val) {
-        QRect h = handleRect(val);
+    // Handles — focused handle gets a white focus ring
+    auto drawHandle = [&](int val, Handle h) {
+        QRect hr = handleRect(val);
         p.setBrush(QColor(0xcc, 0xcc, 0xcc));
         p.setPen(QPen(QColor(0x19, 0x76, 0xd2), 1));
-        p.drawRoundedRect(h, 2, 2);
+        p.drawRoundedRect(hr, 2, 2);
+        if (hasFocus() && m_focused == h) {
+            p.setBrush(Qt::NoBrush);
+            p.setPen(QPen(QColor(0xff, 0xff, 0xff), 1, Qt::DotLine));
+            p.drawRoundedRect(hr.adjusted(-2, -2, 2, 2), 3, 3);
+        }
     };
-    drawHandle(m_low);
-    drawHandle(m_high);
+    drawHandle(m_low,  Handle::Low);
+    drawHandle(m_high, Handle::High);
 
     // Labels
     QFont f = font();
@@ -162,7 +170,61 @@ void RangeSlider::mousePressEvent(QMouseEvent* e)
         m_dragging = (std::abs(v - m_low) <= std::abs(v - m_high))
                      ? Handle::Low : Handle::High;
     }
+    m_focused = m_dragging;  // clicked handle becomes keyboard target
+    setFocus();
     mouseMoveEvent(e);
+}
+
+void RangeSlider::keyPressEvent(QKeyEvent* e)
+{
+    // On first key press with no focused handle, default to Low
+    if (m_focused == Handle::None)
+        m_focused = Handle::Low;
+
+    switch (e->key()) {
+    case Qt::Key_Tab:
+        m_focused = (m_focused == Handle::Low) ? Handle::High : Handle::Low;
+        update();
+        e->accept();
+        return;
+    case Qt::Key_Backtab:
+        m_focused = (m_focused == Handle::High) ? Handle::Low : Handle::High;
+        update();
+        e->accept();
+        return;
+    case Qt::Key_Left:
+    case Qt::Key_Down:
+        if (m_focused == Handle::Low)
+            setLow(m_low - 1);
+        else
+            setHigh(m_high - 1);
+        e->accept();
+        return;
+    case Qt::Key_Right:
+    case Qt::Key_Up:
+        if (m_focused == Handle::Low)
+            setLow(m_low + 1);
+        else
+            setHigh(m_high + 1);
+        e->accept();
+        return;
+    default:
+        QWidget::keyPressEvent(e);
+    }
+}
+
+void RangeSlider::focusInEvent(QFocusEvent* e)
+{
+    if (m_focused == Handle::None)
+        m_focused = Handle::Low;
+    update();
+    QWidget::focusInEvent(e);
+}
+
+void RangeSlider::focusOutEvent(QFocusEvent* e)
+{
+    update();
+    QWidget::focusOutEvent(e);
 }
 
 void RangeSlider::mouseMoveEvent(QMouseEvent* e)
