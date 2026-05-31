@@ -10306,6 +10306,12 @@ void MainWindow::onConnectionStateChanged(bool connected)
                     QMetaObject::invokeMethod(m_freedvClient, [this] { m_freedvClient->startConnection(); });
             }
 #endif
+            // Propagate auto-reconnect setting to all peripheral connections
+            bool autoReconnect = (cs.value("Peripherals_AutoReconnect", "false").toString() == "true");
+            m_tgxlConn.setAutoReconnect(autoReconnect);
+            m_pgxlConn.setAutoReconnect(autoReconnect);
+            m_antennaGenius.setAutoReconnect(autoReconnect);
+
             // Auto-connect peripherals with manual IPs (#914)
             QString tgxlIp = cs.value("TGXL_ManualIp", "").toString();
             if (!tgxlIp.isEmpty() && !m_tgxlConn.isConnected()) {

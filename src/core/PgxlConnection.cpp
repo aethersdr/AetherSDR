@@ -13,11 +13,28 @@ PgxlConnection::PgxlConnection(QObject* parent)
 
     m_pollTimer.setInterval(200);  // 5 Hz for responsive metering
     connect(&m_pollTimer, &QTimer::timeout, this, &PgxlConnection::pollStatus);
+
+    m_reconnectTimer.setSingleShot(true);
+    m_reconnectTimer.setInterval(5000);
+    connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
+        if (!m_connected && !m_lastHost.isEmpty())
+            connectToPgxl(m_lastHost, m_lastPort);
+    });
 }
 
 void PgxlConnection::connectToPgxl(const QString& host, quint16 port)
 {
-    if (m_connected) disconnect();
+    m_lastHost = host;
+    m_lastPort = port;
+    m_deliberateDisconnect = false;
+    m_reconnectTimer.stop();
+    if (m_connected) {
+        m_deliberateDisconnect = true;
+        m_pollTimer.stop();
+        m_connected = false;
+        m_socket.abort();  // synchronous — onDisconnected will not fire
+        m_deliberateDisconnect = false;
+    }
     m_seq = 0;
     m_gotVersion = false;
     m_version.clear();
@@ -28,6 +45,8 @@ void PgxlConnection::connectToPgxl(const QString& host, quint16 port)
 
 void PgxlConnection::disconnect()
 {
+    m_deliberateDisconnect = true;
+    m_reconnectTimer.stop();
     m_pollTimer.stop();
     m_connected = false;
     m_socket.disconnectFromHost();
@@ -44,6 +63,9 @@ void PgxlConnection::onDisconnected()
     m_pollTimer.stop();
     m_connected = false;
     emit disconnected();
+    if (!m_deliberateDisconnect && m_autoReconnect && !m_lastHost.isEmpty())
+        m_reconnectTimer.start();
+    m_deliberateDisconnect = false;
 }
 
 void PgxlConnection::onError(QAbstractSocket::SocketError error)

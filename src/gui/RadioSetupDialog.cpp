@@ -4676,6 +4676,18 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
     vbox->addWidget(group);
 
+    // Auto-reconnect checkbox
+    auto* reconnectCheck = new QCheckBox("Auto-reconnect to peripherals on connection drop");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(reconnectCheck,
+        "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
+    bool autoReconnect = (AppSettings::instance().value("Peripherals_AutoReconnect", "false").toString() == "true");
+    reconnectCheck->setChecked(autoReconnect);
+    connect(reconnectCheck, &QCheckBox::toggled, this, [](bool on) {
+        AppSettings::instance().setValue("Peripherals_AutoReconnect", on ? "true" : "false");
+        AppSettings::instance().save();
+    });
+    vbox->addWidget(reconnectCheck);
+
     // Info note
     auto* note = new QLabel(
         "Configure manual IP addresses for peripherals that cannot be discovered via UDP broadcast.\n"

@@ -13,10 +13,21 @@ TgxlConnection::TgxlConnection(QObject* parent)
 
     m_pollTimer.setInterval(1000);
     connect(&m_pollTimer, &QTimer::timeout, this, &TgxlConnection::pollStatus);
+
+    m_reconnectTimer.setSingleShot(true);
+    m_reconnectTimer.setInterval(5000);
+    connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
+        if (!m_connected && !m_lastHost.isEmpty())
+            connectToTgxl(m_lastHost, m_lastPort);
+    });
 }
 
 void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
 {
+    m_lastHost = host;
+    m_lastPort = port;
+    m_deliberateDisconnect = false;
+    m_reconnectTimer.stop();
     // Abort any pending or active connection before starting a new one (#1039)
     m_pollTimer.stop();
     m_connected = false;
@@ -31,6 +42,8 @@ void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
 
 void TgxlConnection::disconnect()
 {
+    m_deliberateDisconnect = true;
+    m_reconnectTimer.stop();
     m_pollTimer.stop();
     m_connected = false;
     m_socket.disconnectFromHost();
@@ -48,6 +61,9 @@ void TgxlConnection::onDisconnected()
     m_pollTimer.stop();
     m_connected = false;
     emit disconnected();
+    if (!m_deliberateDisconnect && m_autoReconnect && !m_lastHost.isEmpty())
+        m_reconnectTimer.start();
+    m_deliberateDisconnect = false;
 }
 
 void TgxlConnection::onError(QAbstractSocket::SocketError error)

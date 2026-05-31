@@ -90,6 +90,8 @@ public:
     void connectToAddress(const QHostAddress& ip, quint16 port);
     void disconnectFromDevice();
 
+    void setAutoReconnect(bool on) { m_autoReconnect = on; }
+
     // Getters
     bool isConnected()   const { return m_connected; }
     bool isConnecting()  const { return m_tcpSocket != nullptr && !m_connected; }
@@ -215,6 +217,11 @@ private:
 
     // Keep-alive
     QTimer* m_keepAlive{nullptr};
+
+    // Auto-reconnect
+    bool    m_autoReconnect{false};
+    bool    m_deliberateDisconnect{false};
+    QTimer* m_reconnectTimer{nullptr};
 
     // Track init commands
     int m_seqAntennaList{0};
