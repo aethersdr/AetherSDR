@@ -32,8 +32,9 @@ AntennaGeniusModel::AntennaGeniusModel(QObject* parent)
     m_reconnectTimer->setSingleShot(true);
     m_reconnectTimer->setInterval(5000);
     connect(m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (!m_connected && m_device.port > 0 && !m_device.ip.isNull())
+        if (!m_connected && m_device.port > 0 && !m_device.ip.isNull()) {
             connectToDevice(m_device);
+        }
     });
 }
 
@@ -225,7 +226,9 @@ quint16 AntennaGeniusModel::peerPort() const
 void AntennaGeniusModel::disconnectFromDevice()
 {
     m_deliberateDisconnect = true;
-    if (m_reconnectTimer) m_reconnectTimer->stop();
+    if (m_reconnectTimer) {
+        m_reconnectTimer->stop();
+    }
     if (m_keepAlive) {
         m_keepAlive->stop();
         delete m_keepAlive;
@@ -295,8 +298,9 @@ void AntennaGeniusModel::onTcpError()
     // when a live drop emits both errorOccurred and disconnected.
     if (!m_deliberateDisconnect && m_autoReconnect && !m_connected
             && m_device.port > 0 && !m_device.ip.isNull()
-            && m_reconnectTimer && !m_reconnectTimer->isActive())
+            && m_reconnectTimer && !m_reconnectTimer->isActive()) {
         m_reconnectTimer->start();
+    }
 }
 
 void AntennaGeniusModel::onTcpReadyRead()

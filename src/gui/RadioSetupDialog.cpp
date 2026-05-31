@@ -4686,9 +4686,15 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
         PeripheralSettings::setAutoReconnect(on);
         // Propagate immediately to live connection objects
-        if (m_tgxl) m_tgxl->setAutoReconnect(on);
-        if (m_pgxl) m_pgxl->setAutoReconnect(on);
-        if (m_ag)   m_ag->setAutoReconnect(on);
+        if (m_tgxl) {
+            m_tgxl->setAutoReconnect(on);
+        }
+        if (m_pgxl) {
+            m_pgxl->setAutoReconnect(on);
+        }
+        if (m_ag) {
+            m_ag->setAutoReconnect(on);
+        }
     });
     vbox->addWidget(reconnectCheck);
 

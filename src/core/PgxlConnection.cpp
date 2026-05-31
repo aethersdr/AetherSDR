@@ -19,8 +19,9 @@ PgxlConnection::PgxlConnection(QObject* parent)
     m_reconnectTimer.setSingleShot(true);
     m_reconnectTimer.setInterval(5000);
     connect(&m_reconnectTimer, &QTimer::timeout, this, [this]() {
-        if (!m_connected && !m_lastHost.isEmpty())
+        if (!m_connected && !m_lastHost.isEmpty()) {
             connectToPgxl(m_lastHost, m_lastPort);
+        }
     });
 }
 
@@ -65,8 +66,9 @@ void PgxlConnection::onDisconnected()
     m_pollTimer.stop();
     m_connected = false;
     emit disconnected();
-    if (!m_deliberateDisconnect && m_autoReconnect && !m_lastHost.isEmpty())
+    if (!m_deliberateDisconnect && m_autoReconnect && !m_lastHost.isEmpty()) {
         m_reconnectTimer.start();
+    }
     m_deliberateDisconnect = false;
 }
 
@@ -79,8 +81,9 @@ void PgxlConnection::onError(QAbstractSocket::SocketError error)
     // the device returns or the user disconnects. isActive() prevents double-arm
     // when a live drop emits both errorOccurred and disconnected.
     if (!m_deliberateDisconnect && m_autoReconnect && !m_connected
-            && !m_lastHost.isEmpty() && !m_reconnectTimer.isActive())
+            && !m_lastHost.isEmpty() && !m_reconnectTimer.isActive()) {
         m_reconnectTimer.start();
+    }
 }
 
 void PgxlConnection::onReadyRead()
