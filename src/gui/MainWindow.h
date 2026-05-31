@@ -61,6 +61,7 @@
 
 class QAbstractSlider;
 class QMediaDevices;
+class QShowEvent;
 
 #include "gui/ClientEqApplet.h"   // ClientEqApplet::Path enum used in
                                    // onEqCutoffsDragRequested signature.
@@ -142,6 +143,7 @@ public:
     ~MainWindow() override;
 
 protected:
+    void showEvent(QShowEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -276,6 +278,7 @@ private:
     void registerShortcutActions();
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
+    void reapplyStartupGeometryAfterShow();
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
@@ -817,6 +820,8 @@ private:
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)
     bool m_enteringMinimalMode{false};     // suppress changeEvent during enter (macOS deferred WindowStateChange, #2365)
+    bool m_startupGeometryReapplied{false};
+    QByteArray m_startupGeometryForFirstShow;
     QAction* m_minimalModeAction{nullptr};
     bool m_panadapterConnectionAnimationVisible{false};
     bool m_waitingForFirstPanadapterFrame{false};

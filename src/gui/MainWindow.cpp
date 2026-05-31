@@ -129,6 +129,7 @@
 #include <functional>
 #include <QApplication>
 #include <QAudioDevice>
+#include <QGuiApplication>
 #include <QProcess>
 #include <QScreen>
 #include <QTimer>
@@ -5208,11 +5209,16 @@ MainWindow::MainWindow(QWidget* parent)
     // Restore saved geometry from XML settings
     auto& s = AppSettings::instance();
     const QString geomB64 = s.value("MainWindowGeometry").toString();
-    if (!geomB64.isEmpty())
-        restoreGeometry(QByteArray::fromBase64(geomB64.toLatin1()));
+    if (!geomB64.isEmpty()) {
+        m_startupGeometryForFirstShow = QByteArray::fromBase64(geomB64.toLatin1());
+        if (!m_startupGeometryForFirstShow.isEmpty()) {
+            restoreGeometry(m_startupGeometryForFirstShow);
+        }
+    }
     const QString stateB64 = s.value("MainWindowState").toString();
-    if (!stateB64.isEmpty())
+    if (!stateB64.isEmpty()) {
         restoreState(QByteArray::fromBase64(stateB64.toLatin1()));
+    }
 
     // Restore minimal mode AFTER full-window geometry has been applied.
     // Doing this earlier in the constructor caused toggleMinimalMode(true)
@@ -5221,8 +5227,11 @@ MainWindow::MainWindow(QWidget* parent)
     // placed on the correct screen — visible on Windows with
     // FramelessWindowHint as a position drift each launch (DWM doesn't
     // cache the position the way it does with native chrome). (#2483)
-    if (s.value("MinimalModeEnabled", "False").toString() == "True")
+    if (s.value("MinimalModeEnabled", "False").toString() == "True") {
         toggleMinimalMode(true);
+        m_startupGeometryForFirstShow = QByteArray::fromBase64(
+            s.value("MinimalModeGeometry", "").toByteArray());
+    }
 
     // Restore the Aetherial Audio Channel Strip if it was open on last
     // exit (#2301).  toggleAetherialStrip() lazy-creates and shows.
@@ -5972,6 +5981,49 @@ void MainWindow::paintEvent(QPaintEvent* event)
     p.setCompositionMode(QPainter::CompositionMode_Source);
     p.fillRect(rect(), bg.isValid() ? bg : QColor("#0f0f1a"));
     QMainWindow::paintEvent(event);
+}
+
+void MainWindow::showEvent(QShowEvent* event)
+{
+    QMainWindow::showEvent(event);
+
+    if (m_startupGeometryReapplied || m_startupGeometryForFirstShow.isEmpty()) {
+        return;
+    }
+
+    m_startupGeometryReapplied = true;
+    QTimer::singleShot(0, this, &MainWindow::reapplyStartupGeometryAfterShow);
+}
+
+void MainWindow::reapplyStartupGeometryAfterShow()
+{
+    if (m_startupGeometryForFirstShow.isEmpty()) {
+        return;
+    }
+
+    // Pop-out applet containers are restored and shown during construction.
+    // Re-apply the main-window geometry after this window is mapped so Qt
+    // honors the saved monitor instead of the last pop-out's screen. (#3319)
+    restoreGeometry(m_startupGeometryForFirstShow);
+
+    bool onScreen = false;
+    const QPoint topLeft = frameGeometry().topLeft();
+    for (QScreen* screen : QGuiApplication::screens()) {
+        if (screen && screen->availableGeometry().contains(topLeft)) {
+            onScreen = true;
+            break;
+        }
+    }
+    if (onScreen) {
+        return;
+    }
+
+    // Clamp to a connected screen if the saved monitor was removed.
+    if (QScreen* screen = QGuiApplication::primaryScreen()) {
+        const QRect available = screen->availableGeometry();
+        move(available.center().x() - width() / 2,
+             available.center().y() - height() / 2);
+    }
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event)
