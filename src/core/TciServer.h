@@ -55,6 +55,13 @@ public:
     quint16 port() const;
     int clientCount() const { return m_clients.size(); }
 
+    // True if TCI currently owns or borrows a DAX RX stream on this channel
+    // (created or reused for an active audio client). Other DAX consumers —
+    // notably the DAX virtual-audio bridge — must consult this before removing
+    // a stream on the shared PanadapterStream map, so they don't silence a
+    // channel WSJT-X is decoding on (the mirror image of #3270). (#2895)
+    bool ownsDaxChannel(int channel) const { return m_tciDaxStreamIds.contains(channel); }
+
     // Snapshot of all currently connected clients (endpoint + subscriptions).
     // Cheap to call; intended for the Radio Setup → TCI tab on demand and
     // whenever clientsChanged() fires.

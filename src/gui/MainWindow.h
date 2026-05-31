@@ -855,6 +855,12 @@ private:
     QString m_savedMicSelection;  // restore on stopDax
     bool startDax();
     void stopDax();
+    // #2895: react to per-slice DAX channel (re)assignment while the bridge is
+    // up so the radio registers a DAX client for slices 1-3, not just slice 0.
+    void wireDaxSlice(SliceModel* slice);
+    void onDaxChannelChanged(SliceModel* slice, int newCh);
+    QList<QMetaObject::Connection> m_daxSliceConns;
+    QHash<int, int> m_daxSliceLastCh;  // sliceId -> last-known DAX channel
 #endif
 };
 

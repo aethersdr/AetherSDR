@@ -16593,13 +16593,39 @@ bool MainWindow::startDax()
     // FlexLib creates streams on demand, not all 4 unconditionally.
     // Creating unused streams causes the radio to round-robin audio
     // across all of them, starving the active channels.
+    m_daxSliceLastCh.clear();
     for (auto* s : m_radioModel.slices()) {
         int ch = s->daxChannel();
+        m_daxSliceLastCh[s->sliceId()] = ch;
         if (ch >= 1 && ch <= 4) {
             m_radioModel.sendCommand(
                 QString("stream create type=dax_rx dax_channel=%1").arg(ch));
         }
     }
+
+    // #2895: the one-shot loop above only covers slices that ALREADY have a
+    // DAX channel at bridge startup (typically just slice 0 / DAX 1). When the
+    // user later assigns DAX 2-4 to another slice via the UI, SliceModel only
+    // sends `slice set <id> dax=<ch>` — it never sends `stream create
+    // type=dax_rx`, so the radio never registers a DAX client (dax_clients
+    // stays 0) and sends silence. React to per-slice channel changes here and
+    // create/remove the DAX RX stream on demand, mirroring the TCI path
+    // (TciServer::ensureDaxForTci, #1331/#1439) and FlexLib
+    // RequestDAXRXAudioStream(channel).
+    for (auto* s : m_radioModel.slices()) {
+        wireDaxSlice(s);
+    }
+    m_daxSliceConns.append(connect(&m_radioModel, &RadioModel::sliceAdded,
+                                   this, [this](SliceModel* s) {
+        if (!m_daxBridge || !s) return;
+        m_daxSliceLastCh[s->sliceId()] = s->daxChannel();
+        wireDaxSlice(s);
+        // A slice can arrive already carrying a DAX channel (radio profile
+        // restore); make sure its stream exists too.
+        if (s->daxChannel() >= 1 && s->daxChannel() <= 4) {
+            onDaxChannelChanged(s, s->daxChannel());
+        }
+    }));
 
     // Wire DAX RX: PanadapterStream routes registered DAX streams here
     connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
@@ -16707,6 +16733,14 @@ void MainWindow::stopDax()
     m_audio->setDaxTxMode(false);
     m_audio->clearTxAccumulators();
 
+    // #2895: drop the per-slice daxChannelChanged / sliceAdded reactions wired
+    // in startDax() so they don't fire against a torn-down bridge.
+    for (const auto& c : m_daxSliceConns) {
+        disconnect(c);
+    }
+    m_daxSliceConns.clear();
+    m_daxSliceLastCh.clear();
+
     disconnect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
                m_daxBridge, nullptr);
     disconnect(m_daxBridge, &DaxBridge::txAudioReady,
@@ -16727,6 +16761,88 @@ void MainWindow::stopDax()
     delete m_daxBridge;
     m_daxBridge = nullptr;
     qInfo() << "MainWindow: stopping DAX audio bridge";
+}
+
+// #2895: connect one slice's daxChannelChanged so a DAX channel (re)assigned
+// after the bridge is already up still gets a radio-side DAX RX stream.
+void MainWindow::wireDaxSlice(SliceModel* slice)
+{
+    if (!slice) return;
+    m_daxSliceConns.append(connect(slice, &SliceModel::daxChannelChanged,
+                                   this, [this, slice](int newCh) {
+        if (!m_daxBridge) return;  // bridge torn down — ignore late signals
+        onDaxChannelChanged(slice, newCh);
+    }));
+}
+
+// Handle a slice's DAX channel transitioning. daxChannelChanged only fires on
+// an actual value change (SliceModel guards equality), and arrives from both
+// the local UI setter and the radio status echo — both are safe here because
+// the stream create is made idempotent by the daxStreamIdForChannel() guard.
+void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
+{
+    if (!slice || !m_daxBridge) return;
+    auto* ps = m_radioModel.panStream();
+    if (!ps) return;
+
+    const int sliceId = slice->sliceId();
+    const int oldCh = m_daxSliceLastCh.value(sliceId, 0);
+    if (oldCh == newCh) return;
+    m_daxSliceLastCh[sliceId] = newCh;
+
+    // 0 -> 1..4 (or 1..4 -> different 1..4): ensure the new channel has a
+    // radio-registered DAX RX stream. The stream status echo will register the
+    // stream id in PanadapterStream via the dax_rx handler wired in startDax().
+    if (newCh >= 1 && newCh <= 4) {
+        if (ps->daxStreamIdForChannel(newCh) == 0) {
+            m_radioModel.sendCommand(
+                QString("stream create type=dax_rx dax_channel=%1").arg(newCh));
+            qCInfo(lcDax) << "MainWindow: creating DAX RX stream for channel"
+                          << newCh << "(slice" << sliceId << ", #2895)";
+        }
+        // Re-assert slice -> DAX mapping so the radio registers our stream as a
+        // client. Without this dax_clients stays 0 and the radio sends silence
+        // (the #1439 workaround, mirrored from TciServer::ensureDaxForTci).
+        m_radioModel.sendCommand(
+            QString("slice set %1 dax=%2").arg(sliceId).arg(newCh));
+    }
+
+    // <old>:1..4 -> now released or moved: remove the old channel's stream if
+    // no other slice still references it.
+    if (oldCh >= 1 && oldCh <= 4) {
+        bool stillUsed = false;
+        for (auto* s : m_radioModel.slices()) {
+            if (s && s != slice && s->daxChannel() == oldCh) {
+                stillUsed = true;
+                break;
+            }
+        }
+        if (!stillUsed) {
+            const quint32 id = ps->daxStreamIdForChannel(oldCh);
+            // Ownership guard: the PanadapterStream DAX map is shared across
+            // every DAX consumer — the bridge, TCI (which borrows
+            // bridge-created streams, #1331/#1439), and RADE. Removing a stream
+            // another consumer is still using would silence WSJT-X or RADE
+            // audio — the mirror image of #3270. Only tear down a stream that
+            // no other consumer needs. (#2895)
+            const bool tciUsing = m_tciServer && m_tciServer->ownsDaxChannel(oldCh);
+            const bool radeUsing = (id != 0 && id == m_radeDaxStreamId);
+            if (id != 0 && !tciUsing && !radeUsing) {
+                m_radioModel.sendCommand(
+                    QString("stream remove 0x%1").arg(id, 0, 16));
+                ps->unregisterDaxStream(id);
+                qCInfo(lcDax) << "MainWindow: removed DAX RX stream"
+                              << "0x" + QString::number(id, 16)
+                              << "for channel" << oldCh << "(#2895)";
+            } else if (id != 0) {
+                qCInfo(lcDax) << "MainWindow: keeping DAX RX stream"
+                              << "0x" + QString::number(id, 16)
+                              << "for channel" << oldCh
+                              << "— still used by" << (tciUsing ? "TCI" : "RADE")
+                              << "(#2895)";
+            }
+        }
+    }
 }
 #endif
 
