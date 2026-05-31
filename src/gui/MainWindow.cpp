@@ -16618,7 +16618,9 @@ bool MainWindow::startDax()
     m_daxSliceConns.append(connect(&m_radioModel, &RadioModel::sliceAdded,
                                    this, [this](SliceModel* s) {
         if (!m_daxBridge || !s) return;
-        m_daxSliceLastCh[s->sliceId()] = s->daxChannel();
+        // Let onDaxChannelChanged() see a 0 -> channel transition for slices
+        // restored with DAX already assigned.
+        m_daxSliceLastCh[s->sliceId()] = 0;
         wireDaxSlice(s);
         // A slice can arrive already carrying a DAX channel (radio profile
         // restore); make sure its stream exists too.
@@ -16826,7 +16828,11 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
             // audio — the mirror image of #3270. Only tear down a stream that
             // no other consumer needs. (#2895)
             const bool tciUsing = m_tciServer && m_tciServer->ownsDaxChannel(oldCh);
+#ifdef HAVE_RADE
             const bool radeUsing = (id != 0 && id == m_radeDaxStreamId);
+#else
+            const bool radeUsing = false;
+#endif
             if (id != 0 && !tciUsing && !radeUsing) {
                 m_radioModel.sendCommand(
                     QString("stream remove 0x%1").arg(id, 0, 16));
