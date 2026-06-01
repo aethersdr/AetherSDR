@@ -98,6 +98,22 @@ static const QString kEditStyle =
 static constexpr int kInfoLeftLabelWidth = 112;
 static constexpr int kInfoRightLabelWidth = 160;
 
+// Wrap a tab page in a vertical QScrollArea so tabs whose stacked groups exceed
+// the dialog's visible height (Themes, Audio, Filters, Peripherals on small or
+// high-DPI displays) get a vertical scrollbar instead of forcing the dialog
+// past the screen edge (#3345). setWidgetResizable(true) keeps horizontal
+// expansion intact and hides the scrollbar when content already fits — users
+// on wide screens see no visual change.
+static QWidget* wrapTabInScrollArea(QWidget* content)
+{
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+    scroll->setWidget(content);
+    return scroll;
+}
+
 static QString displayOrDash(const QString& value)
 {
     const QString trimmed = value.trimmed();
@@ -443,7 +459,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // selected.  This avoids hardware-probing calls (QSerialPortInfo,
     // QMediaDevices) during construction, which crash on some Wayland/Qt 6.11
     // configurations (#1776).
-    tabs->addTab(buildRadioTab(), "Radio");
+    tabs->addTab(wrapTabInScrollArea(buildRadioTab()), "Radio");
 
     auto addDeferred = [&](const QString& name, std::function<QWidget*()> builder) {
         int idx = tabs->addTab(new QWidget, name);
@@ -4721,7 +4737,10 @@ void RadioSetupDialog::buildDeferredTab(int index)
     QWidget* content = it.value()();        // run the real builder
     auto* lay = new QVBoxLayout(placeholder);
     lay->setContentsMargins(0, 0, 0, 0);
-    lay->addWidget(content);
+    // Wrap in a scroll area so tall tabs (Themes, Audio, Filters,
+    // Peripherals on small / high-DPI displays) become scrollable instead
+    // of forcing the dialog past the screen edge (#3345).
+    lay->addWidget(wrapTabInScrollArea(content));
     m_deferredBuilders.erase(it);           // build only once
 }
 
