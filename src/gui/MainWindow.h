@@ -98,10 +98,12 @@ class RC28MappingDialog;
 class UlanziDialMapperDialog;
 #ifdef Q_OS_LINUX
 class EvdevEncoderManager;
-#elif defined(Q_OS_WIN)
+#elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
 class UlanziDialWindowsManager;
 #elif defined(Q_OS_MAC)
 class UlanziDialMacOSManager;
+#else
+class UlanziDialBackend;
 #endif
 class CwxPanel;
 class DvkPanel;
@@ -576,10 +578,12 @@ private:
 #endif
 #ifdef Q_OS_LINUX
     EvdevEncoderManager*       m_dialBackend{nullptr};
-#elif defined(Q_OS_WIN)
+#elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
     UlanziDialWindowsManager*  m_dialBackend{nullptr};
 #elif defined(Q_OS_MAC)
     UlanziDialMacOSManager*    m_dialBackend{nullptr};
+#else
+    UlanziDialBackend*         m_dialBackend{nullptr};
 #endif
     QTimer                     m_dialCoalesceTimer;
     int                        m_dialPendingSteps{0};
