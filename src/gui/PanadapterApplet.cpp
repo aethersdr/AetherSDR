@@ -703,9 +703,12 @@ void PanadapterApplet::appendRttyText(const QString& text, float confidence)
     else if (confidence > 0.60f) color = "#ff9020";
     else                         color = "#ff4040";
 
+    QString escaped = text.toHtmlEscaped();
+    escaped.replace(' ', "&nbsp;");
+
     m_rttyText->moveCursor(QTextCursor::End);
     m_rttyText->insertHtml(QString("<span style=\"color:%1\">%2</span>")
-        .arg(color, text.toHtmlEscaped()));
+        .arg(color, escaped));
     m_rttyText->moveCursor(QTextCursor::End);
 }
 
