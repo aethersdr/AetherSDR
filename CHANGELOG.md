@@ -8,44 +8,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [v26.6.1] — 2026-06-01
 
-### End-to-end theming system + StreamDeck+/Ulanzi Dial HID + Windows hardening + 140-commit reliability sweep
+### HID input devices + Windows hardening + new protocol surfaces + 143-commit reliability sweep
 
-143 commits across 14 contributors landed in this cycle. The headline
-work is the **end-to-end theming system** (Phases 1–6 of #3076 plus
-the Theme Editor dialog) — every paint call across the GUI now flows
-through a 51-token design system with runtime live re-theming, a new
-**Default Light** theme shipping alongside the existing dark, the
-`.aethertheme` import/export format with drag-and-drop, embedded DSEG
-seven- and fourteen-segment fonts, and ~1000 hex literals across 59
-files migrated to canonical tokens. **HID input device support** lands
-two new device classes — the **Elgato StreamDeck+** (encoders + LCD
-buttons + touchscreen labels) and the **Ulanzi Dial** (cross-platform
-on Linux evdev / Windows / macOS) — both opt-in so the macOS Input
-Monitoring prompt never surfaces unless the operator wants it.
-**Windows hardening** sweeps PerMonitorV2 DPI awareness, discrete-GPU
-preference on hybrid laptops, MSIX packaging groundwork with embedded
-DFNR weights, Windows Snap restoration for the frameless title bar,
-and WASAPI sidetone routing. New protocol surfaces include the
-**SmartCAT TCP server** (TS-2000 + FlexCAT dialects), a **unified RADE
-TX pipeline** with EOO frame transmission and callsign encoding,
-**1200-baud VHF AX.25** RX + TX via the in-process modem, and
-**SSDR-parity PWR/SWR metering** on the PGXL/TGXL amplifier applets.
+143 commits across 14 contributors landed in this cycle. **HID input
+device support** is the most user-visible new work, landing three new
+device classes: the **Elgato StreamDeck+** (encoders + LCD buttons +
+touchscreen labels), the **Ulanzi Dial** (cross-platform on Linux
+evdev / Windows / macOS), and **native Icom RC-28** encoder support —
+all opt-in so the macOS Input Monitoring prompt never surfaces unless
+the operator explicitly enables one. **Windows hardening** sweeps
+PerMonitorV2 DPI awareness, discrete-GPU preference on hybrid laptops,
+MSIX packaging groundwork with embedded DFNR weights, Windows Snap
+restoration for the frameless title bar, and WASAPI sidetone routing.
+New protocol surfaces include the **SmartCAT TCP server** (TS-2000 +
+FlexCAT dialects), a **unified RADE TX pipeline** with EOO frame
+transmission and callsign encoding, **1200-baud VHF AX.25** RX + TX
+via the in-process modem, and **SSDR-parity PWR/SWR metering** on the
+PGXL/TGXL amplifier applets. A long-tail reliability sweep clears a
+**7-year-old NR2 Gamma crackling bug** in the SpectralNR path (#1507),
+fixes the **multi-monitor main-window restore** under Minimal Mode
+(#2483), and resolves the **multi-pan TCI spot freeze** (#2481).
 
-Big thanks to **@jensenpat** (22 commits — TCI/CAT, theme
-infrastructure, multi-monitor restore), **@aethersdr-agent** (the
-AetherClaude orchestrator, 28 commits — landing across spectrum,
-theming, audio, spot and applet paths), **@NF0T** (10 commits — Windows
-packaging + DPI + DFNR embedding + RADE TX pipeline), **@nigelfenton**
-(8 commits — TCI fixes), **@M7HNF-Ian** (7 commits — XVTR, slice
-spawning, NR2 Gamma fix), **@chibondking** (6 commits — bandplan
-corrections, panadapter context slice spawning), **@K5PTB** (5 commits —
-MQTT publish topics, CMake Debian multiarch fix), **@dawkagaming** (4
-community PRs — system-library opt-in flags, lowercase binary name,
-Linux icon size, `.desktop` description), **@rfoust** (4 commits), and
-first-time contributors **@w5jwp** (Icom RC-28 encoder support),
-**@motoham88** (StreamDeck+ support), **@mvanhorn** (theme migration
-tool cleanup), and **@VU3ESV** (macOS `phys_footprint` memory
-reporting).
+This release also lands the **groundwork for a runtime theming
+system** — `ThemeManager` foundation, a 51-token design taxonomy, a
+Theme Editor dialog, and a Default Light theme alongside the existing
+dark. The theming work is **early beta**, opt-in via Settings → Theme
+Editor; the Default Dark theme remains the shipped default. Token
+names, the `.aethertheme` file format, and the editor UX are all
+expected to change before stabilising. See the dedicated section below
+for the phase-by-phase detail.
+
+Big thanks to **@jensenpat** (22 commits — TCI/CAT, multi-monitor
+restore, network diagnostics), **@aethersdr-agent** (the AetherClaude
+orchestrator, 28 commits — landing across spectrum, audio, spot and
+applet paths), **@NF0T** (10 commits — Windows packaging + DPI + DFNR
+embedding + RADE TX pipeline), **@nigelfenton** (8 commits — TCI
+fixes), **@M7HNF-Ian** (7 commits — XVTR, slice spawning, NR2 Gamma
+fix), **@chibondking** (6 commits — bandplan corrections, panadapter
+context slice spawning), **@K5PTB** (5 commits — MQTT publish topics,
+CMake Debian multiarch fix), **@dawkagaming** (4 community PRs —
+system-library opt-in flags, lowercase binary name, Linux icon size,
+`.desktop` description), **@rfoust** (4 commits), and first-time
+contributors **@w5jwp** (Icom RC-28 encoder support), **@motoham88**
+(StreamDeck+ support), **@mvanhorn** (theme migration tool cleanup),
+and **@VU3ESV** (macOS `phys_footprint` memory reporting).
 
 ### Headline features
 
