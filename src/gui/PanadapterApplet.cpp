@@ -686,11 +686,17 @@ bool PanadapterApplet::rttyReverse() const
 
 void PanadapterApplet::appendRttyText(const QString& text, float confidence)
 {
-    // Color by confidence: higher ratio = better signal separation
-    //   > 0.85 green  (strong lock)
-    //   > 0.70 yellow (medium)
-    //   > 0.60 orange (weak)
-    //   else   red    (marginal)
+    // CR is a no-op in a wrapped text view; LF becomes a line break.
+    // Standard RTTY sends CR+LF pairs — discarding CR and converting LF
+    // to <br> produces exactly one new line per pair.
+    if (text == "\r") return;
+    if (text == "\n") {
+        m_rttyText->moveCursor(QTextCursor::End);
+        m_rttyText->insertHtml(QStringLiteral("<br>"));
+        m_rttyText->moveCursor(QTextCursor::End);
+        return;
+    }
+
     QString color;
     if      (confidence > 0.85f) color = "#00ff88";
     else if (confidence > 0.70f) color = "#e0e040";
