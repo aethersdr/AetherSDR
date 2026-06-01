@@ -9439,6 +9439,7 @@ void MainWindow::buildUI()
                 if (auto* applet = m_panStack->panadapter(panId))
                     applet->setCwPanelVisible(isCw && anyOn);
                 refreshCwDecodeState();
+                refreshRttyDecodeState();
                 break;
             }
         }
@@ -10848,12 +10849,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 }
             }
 
-            // Deferred CW decoder restart after profile load (#305).
-            // Mode status arrives asynchronously — by the time setActiveSlice
-            // runs, the slice may still have its default mode (not CW).
-            // Re-check after status has settled.  refreshCwDecodeState()
-            // centralises the panel/run/TX-tap gating (#2417).
             refreshCwDecodeState();
+            refreshRttyDecodeState();
         });
     }
 
@@ -11110,6 +11107,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // MOX state share one decision tree (#2417).
         if (s->sliceId() == m_activeSliceId) {
             refreshCwDecodeState();
+            refreshRttyDecodeState();
 
             // Update CWX/DVK indicator availability for new mode
             updateKeyerAvailability(mode);
