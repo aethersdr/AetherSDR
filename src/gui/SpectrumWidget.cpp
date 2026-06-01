@@ -727,6 +727,7 @@ void SpectrumWidget::loadSettings()
     } else {
         m_bandPlanFontSize = s.value("BandPlanFontSize", "6").toInt();
     }
+    m_bandPlanShowSpots = s.value("BandPlanShowSpots", "True").toString() == "True";
     m_fftHeatMap     = s.value(settingsKey("DisplayFftHeatMap"), "True").toString() == "True";
     m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
@@ -6650,18 +6651,20 @@ void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
         }
     }
 
-    // Draw single-frequency spot markers (white circles)
-    const auto& spots = m_bandPlanMgr ? m_bandPlanMgr->spots()
-                                       : QVector<BandPlanManager::Spot>{};
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(Qt::NoPen);
-    p.setBrush(Qt::white);
-    for (const auto& spot : spots) {
-        if (spot.freqMhz < startMhz || spot.freqMhz > endMhz) continue;
-        const int sx = mhzToX(spot.freqMhz);
-        p.drawEllipse(QPoint(sx, bandY + bandH / 2), 4, 4);
+    // Draw single-frequency spot markers (white circles) — issue #3339
+    if (m_bandPlanShowSpots) {
+        const auto& spots = m_bandPlanMgr ? m_bandPlanMgr->spots()
+                                           : QVector<BandPlanManager::Spot>{};
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(Qt::NoPen);
+        p.setBrush(Qt::white);
+        for (const auto& spot : spots) {
+            if (spot.freqMhz < startMhz || spot.freqMhz > endMhz) continue;
+            const int sx = mhzToX(spot.freqMhz);
+            p.drawEllipse(QPoint(sx, bandY + bandH / 2), 4, 4);
+        }
+        p.setRenderHint(QPainter::Antialiasing, false);
     }
-    p.setRenderHint(QPainter::Antialiasing, false);
 }
 
 // ─── TNF markers ────────────────────────────────────────────────────────────

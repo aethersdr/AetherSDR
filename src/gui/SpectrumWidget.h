@@ -242,6 +242,8 @@ public:
     int   wfBlankerMode()      const { return m_wfBlankerMode; }
     void setShowBandPlan(bool on) { m_bandPlanFontSize = on ? 6 : 0; update(); }
     void setBandPlanFontSize(int pt) { m_bandPlanFontSize = pt; update(); }
+    void setBandPlanShowSpots(bool on) { m_bandPlanShowSpots = on; update(); }
+    bool bandPlanShowSpots() const { return m_bandPlanShowSpots; }
     void setBandPlanManager(class BandPlanManager* mgr);
     void setSingleClickTune(bool on) { m_singleClickTune = on; }
     void setShowCursorFreq(bool on) { m_showCursorFreq = on; update(); }
@@ -888,6 +890,7 @@ private:
     int   m_wfBlankerRingCount{0};
     QVector<QRgb> m_wfLastGoodRow;
     int  m_bandPlanFontSize{6};  // 0 = off
+    bool m_bandPlanShowSpots{true};
     BandPlanManager* m_bandPlanMgr{nullptr};
     bool m_singleClickTune{false};
     QPoint m_clickPressPos;        // for single-click-to-tune drag threshold

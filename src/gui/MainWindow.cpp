@@ -8677,6 +8677,20 @@ void MainWindow::buildMenuBar()
         });
     }
 
+    // Spot-marker toggle (#3339) — declutter the strip on dense band plans
+    bandPlanMenu->addSeparator();
+    const bool bpShowSpots =
+        AppSettings::instance().value("BandPlanShowSpots", "True").toString() == "True";
+    auto* spotsAct = bandPlanMenu->addAction("Show Spots");
+    spotsAct->setCheckable(true);
+    spotsAct->setChecked(bpShowSpots);
+    connect(spotsAct, &QAction::toggled, this, [this](bool on) {
+        for (auto* a : m_panStack->allApplets())
+            a->spectrumWidget()->setBandPlanShowSpots(on);
+        AppSettings::instance().setValue("BandPlanShowSpots", on ? "True" : "False");
+        AppSettings::instance().save();
+    });
+
     // Band plan region selector (#425)
     bandPlanMenu->addSeparator();
     auto* planGroup = new QActionGroup(bandPlanMenu);
