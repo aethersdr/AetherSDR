@@ -361,13 +361,13 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_rttyMarkCombo->addItem("850",   850);
     m_rttyMarkCombo->addItem("500",   500);
     {
-        const int saved = AppSettings::instance().value("RttyDecoder/MarkHz", "0").toInt();
+        const int saved = AppSettings::instance().value("RttyDecoderMarkHz", "0").toInt();
         const int idx   = m_rttyMarkCombo->findData(saved);
         m_rttyMarkCombo->setCurrentIndex(idx >= 0 ? idx : 0);
     }
     connect(m_rttyMarkCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         const int hz = m_rttyMarkCombo->currentData().toInt();
-        AppSettings::instance().setValue("RttyDecoder/MarkHz", QString::number(hz));
+        AppSettings::instance().setValue("RttyDecoderMarkHz", QString::number(hz));
         AppSettings::instance().save();
         emit rttyMarkHzChanged(hz);
     });
@@ -387,13 +387,13 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     for (int hz : {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850})
         m_rttyShiftCombo->addItem(QString::number(hz), hz);
     {
-        const int saved = AppSettings::instance().value("RttyDecoder/ShiftHz", "170").toInt();
+        const int saved = AppSettings::instance().value("RttyDecoderShiftHz", "170").toInt();
         const int idx   = m_rttyShiftCombo->findData(saved);
         m_rttyShiftCombo->setCurrentIndex(idx >= 0 ? idx : m_rttyShiftCombo->findData(170));
     }
     connect(m_rttyShiftCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         const int hz = m_rttyShiftCombo->currentData().toInt();
-        AppSettings::instance().setValue("RttyDecoder/ShiftHz", QString::number(hz));
+        AppSettings::instance().setValue("RttyDecoderShiftHz", QString::number(hz));
         AppSettings::instance().save();
         emit rttyShiftHzChanged(hz);
     });
@@ -417,7 +417,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     for (auto& b : baudRates)
         m_rttyBaudCombo->addItem(b.label, static_cast<double>(b.val));
     {
-        const double saved = AppSettings::instance().value("RttyDecoder/Baud", "45.45").toDouble();
+        const double saved = AppSettings::instance().value("RttyDecoderBaud", "45.45").toDouble();
         int bestIdx = 0;
         double bestDiff = 1e9;
         for (int i = 0; i < m_rttyBaudCombo->count(); ++i) {
@@ -428,7 +428,7 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     }
     connect(m_rttyBaudCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
         const float baud = static_cast<float>(m_rttyBaudCombo->currentData().toDouble());
-        AppSettings::instance().setValue("RttyDecoder/Baud", QString::number(static_cast<double>(baud)));
+        AppSettings::instance().setValue("RttyDecoderBaud", QString::number(static_cast<double>(baud)));
         AppSettings::instance().save();
         emit rttyBaudChanged(baud);
     });
@@ -445,11 +445,11 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
         "QPushButton:checked { color: {{color.accent}}; border-color: {{color.accent}}; }"
         "QPushButton:hover   { color: {{color.text.primary}}; }");
     {
-        const bool saved = AppSettings::instance().value("RttyDecoder/Reverse", "false").toString() == "true";
+        const bool saved = AppSettings::instance().value("RttyDecoderReverse", "false").toString() == "true";
         m_rttyRevBtn->setChecked(saved);
     }
     connect(m_rttyRevBtn, &QPushButton::toggled, this, [this](bool rev) {
-        AppSettings::instance().setValue("RttyDecoder/Reverse", rev ? "true" : "false");
+        AppSettings::instance().setValue("RttyDecoderReverse", rev ? "true" : "false");
         AppSettings::instance().save();
         emit rttyReverseChanged(rev);
     });
