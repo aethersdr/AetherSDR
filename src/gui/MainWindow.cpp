@@ -11149,9 +11149,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         pushSliceOverlay(s);
         if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
     });
-    connect(s, &SliceModel::diglOffsetChanged, this, [this, s](int) {
-        if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
-    });
+
     connect(s, &SliceModel::ritChanged, this, [this, s](bool, int) { pushSliceOverlay(s); });
     connect(s, &SliceModel::xitChanged, this, [this, s](bool, int) {
         pushSliceOverlay(s);
@@ -12065,7 +12063,11 @@ void MainWindow::routeRttyDecoderOutput()
 void MainWindow::refreshRttyDecodeState()
 {
     auto* s = activeSlice();
-    const bool isRtty = s && (s->mode() == "RTTY" || s->mode() == "DIGL");
+    // Only auto-activate for explicit RTTY mode.  DIGL is a general LSB-data
+    // mode used for PSK31, FT8, SSTV, etc. — showing a Baudot decoder on
+    // those signals would be confusing.  Users who do FSK on DIGL can open
+    // the panel manually via the slice context menu (future work).
+    const bool isRtty = s && s->mode() == "RTTY";
 
     if (m_rttyDecoderApplet)
         m_rttyDecoderApplet->setRttyPanelVisible(isRtty);
@@ -12080,9 +12082,8 @@ void MainWindow::refreshRttyDecodeState()
     if (!m_rttyDecoderApplet) return;
 
     const int markHz = m_rttyDecoderApplet->rttyMarkHz();
-    // markHz == 0 means "Auto": follow the radio's rttyMark / diglOffset
-    const int effectiveMark = (markHz > 0) ? markHz
-        : (s->mode() == "RTTY" ? s->rttyMark() : s->diglOffset());
+    // markHz == 0 means "Auto": follow the radio's rttyMark setting
+    const int effectiveMark = (markHz > 0) ? markHz : s->rttyMark();
     m_rttyDecoder.setMarkFreqHz(effectiveMark);
     m_rttyDecoder.setShiftHz(m_rttyDecoderApplet->rttyShiftHz());
     m_rttyDecoder.setBaudRate(m_rttyDecoderApplet->rttyBaud());

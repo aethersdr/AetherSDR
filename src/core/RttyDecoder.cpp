@@ -57,16 +57,29 @@ void RttyDecoder::stop()
     if (!m_running) return;
     m_running = false;
     if (m_workerThread) {
-        m_workerThread->wait(2000);
+        if (!m_workerThread->wait(2000))
+            qCWarning(lcDsp) << "RttyDecoder: worker did not stop within 2 s — abandoning";
         m_workerThread = nullptr;
     }
     qCDebug(lcDsp) << "RttyDecoder: stopped";
 }
 
-void RttyDecoder::setMarkFreqHz(int hz)  { m_markFreqHz = hz;   m_paramsChanged = true; }
-void RttyDecoder::setShiftHz(int hz)     { m_shiftHz    = hz;   m_paramsChanged = true; }
-void RttyDecoder::setBaudRate(float baud){ m_baudRate   = baud;  m_paramsChanged = true; }
-void RttyDecoder::setReversePolarity(bool r){ m_reverse = r;    m_paramsChanged = true; }
+void RttyDecoder::setMarkFreqHz(int hz) {
+    if (m_markFreqHz.load() == hz) return;
+    m_markFreqHz = hz; m_paramsChanged = true;
+}
+void RttyDecoder::setShiftHz(int hz) {
+    if (m_shiftHz.load() == hz) return;
+    m_shiftHz = hz; m_paramsChanged = true;
+}
+void RttyDecoder::setBaudRate(float baud) {
+    if (m_baudRate.load() == baud) return;
+    m_baudRate = baud; m_paramsChanged = true;
+}
+void RttyDecoder::setReversePolarity(bool r) {
+    if (m_reverse.load() == r) return;
+    m_reverse = r; m_paramsChanged = true;
+}
 
 void RttyDecoder::feedAudio(const QByteArray& pcm24kStereoFloat)
 {
