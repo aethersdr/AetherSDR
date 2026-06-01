@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### End-to-end theming system + StreamDeck+/Ulanzi Dial HID + Windows hardening + 140-commit reliability sweep
 
-143 commits across 16 contributors landed in this cycle. The headline
+143 commits across 14 contributors landed in this cycle. The headline
 work is the **end-to-end theming system** (Phases 1–6 of #3076 plus
 the Theme Editor dialog) — every paint call across the GUI now flows
 through a 51-token design system with runtime live re-theming, a new
@@ -31,19 +31,21 @@ TX pipeline** with EOO frame transmission and callsign encoding,
 **1200-baud VHF AX.25** RX + TX via the in-process modem, and
 **SSDR-parity PWR/SWR metering** on the PGXL/TGXL amplifier applets.
 
-Big thanks to **@jensenpat** (22 commits — TCI/CAT, theme infrastructure,
-multi-monitor restore), **@aethersdr-agent** (the AetherClaude
-orchestrator, 28 commits — landing across spectrum, theming, audio,
-spot and applet paths), **@NF0T** (Ryan B, 10 commits — Windows
+Big thanks to **@jensenpat** (22 commits — TCI/CAT, theme
+infrastructure, multi-monitor restore), **@aethersdr-agent** (the
+AetherClaude orchestrator, 28 commits — landing across spectrum,
+theming, audio, spot and applet paths), **@NF0T** (10 commits — Windows
 packaging + DPI + DFNR embedding + RADE TX pipeline), **@nigelfenton**
-(Nigel Fenton G0JKN, 8 commits — TCI fixes), **@M7HNF-Ian** (Ian, 7
-commits — XVTR, slice spawning, NR2 Gamma fix), **@chibondking** (CJ
-Johnson, 6 commits — bandplan corrections, panadapter context slice
-spawning), **@rfoust** (Robbie Foust, 4 commits), **Dawid Kulas** (4
+(8 commits — TCI fixes), **@M7HNF-Ian** (7 commits — XVTR, slice
+spawning, NR2 Gamma fix), **@chibondking** (6 commits — bandplan
+corrections, panadapter context slice spawning), **@K5PTB** (5 commits —
+MQTT publish topics, CMake Debian multiarch fix), **@dawkagaming** (4
 community PRs — system-library opt-in flags, lowercase binary name,
-Linux icon size, `.desktop` description), **@Ozy311** (Paul, 3 commits),
-**@K5PTB** (2 commits), **@W5JWP** (2 community PRs), plus first-time
-contributors **@MattVanHorn**, **VU3ESV/LB9KJ**, and **motoham88**.
+Linux icon size, `.desktop` description), **@rfoust** (4 commits), and
+first-time contributors **@w5jwp** (Icom RC-28 encoder support),
+**@motoham88** (StreamDeck+ support), **@mvanhorn** (theme migration
+tool cleanup), and **@VU3ESV** (macOS `phys_footprint` memory
+reporting).
 
 ### Headline features
 
@@ -484,16 +486,16 @@ UX polish round on the Theme Editor dialog.
   hosts.
 - **liquid-dsp WIN32 link-flag guard (#3220)** — `-lc/-lm` only on
   POSIX.
-- **System-library opt-in flags (#3135 — Dawid Kulas)** —
+- **System-library opt-in flags (#3135 — @dawkagaming)** —
   `USE_SYSTEM_ZLIB`, `USE_SYSTEM_MSPACK`, `USE_SYSTEM_LIBMOSQUITTO`,
   `USE_SYSTEM_RTMIDI`. Off by default so existing build hosts continue
   to use vendored snapshots; distro packagers turn them on to match
   dynamic-linking policy.
-- **Lowercase binary name option (#3138 — Dawid Kulas)** — convenience
+- **Lowercase binary name option (#3138 — @dawkagaming)** — convenience
   for distro packagers.
-- **Linux 256×256 icon (#3143 — Dawid Kulas)** — correct icon size for
+- **Linux 256×256 icon (#3143 — @dawkagaming)** — correct icon size for
   the Linux `.desktop` location.
-- **Improved `.desktop` description (#3074 — Dawid Kulas)** — Linux
+- **Improved `.desktop` description (#3074 — @dawkagaming)** — Linux
   desktop integration polish.
 - **Windows MSIX packaging groundwork (#3178)** + **embed DFNR model
   for Store (#3225)** + **exclude DFNR model archive from MSIX
