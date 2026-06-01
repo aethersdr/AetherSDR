@@ -175,10 +175,13 @@ void RttyDecoder::decodeLoop()
     while (m_running) {
         if (m_paramsChanged.exchange(false)) {
             recalcFilterCoeffs();
-            baud         = m_baudRate.load();
-            envAlpha     = calcEnvAlpha(baud);
+            baud          = m_baudRate.load();
+            envAlpha      = calcEnvAlpha(baud);
             samplesPerBit = kSampleRate / baud;
-            // Reset decoder state on parameter change
+            // Reset bit-level state but preserve figsMode: the LTRS/FIGS
+            // shift is session state set by received codes, not a filter
+            // parameter, so a baud/mark change mid-stream shouldn't flip
+            // the character set back to LTRS unexpectedly.
             inChar   = false;
             bitCount = 0;
             shiftReg = 0;

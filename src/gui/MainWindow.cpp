@@ -11139,9 +11139,19 @@ void MainWindow::onSliceAdded(SliceModel* s)
 #endif
     });
 
-    // Update RTTY mark/space lines on spectrum when mark/shift changes
-    connect(s, &SliceModel::rttyMarkChanged, this, [this, s](int) { pushSliceOverlay(s); });
-    connect(s, &SliceModel::rttyShiftChanged, this, [this, s](int) { pushSliceOverlay(s); });
+    // Update RTTY mark/space lines on spectrum when mark/shift changes;
+    // also push new params to the decoder when Auto mark is selected.
+    connect(s, &SliceModel::rttyMarkChanged, this, [this, s](int) {
+        pushSliceOverlay(s);
+        if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
+    });
+    connect(s, &SliceModel::rttyShiftChanged, this, [this, s](int) {
+        pushSliceOverlay(s);
+        if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
+    });
+    connect(s, &SliceModel::diglOffsetChanged, this, [this, s](int) {
+        if (s->sliceId() == m_activeSliceId) refreshRttyDecodeState();
+    });
     connect(s, &SliceModel::ritChanged, this, [this, s](bool, int) { pushSliceOverlay(s); });
     connect(s, &SliceModel::xitChanged, this, [this, s](bool, int) {
         pushSliceOverlay(s);
@@ -12065,17 +12075,18 @@ void MainWindow::refreshRttyDecodeState()
         return;
     }
 
-    // Apply parameters from the panel (or defaults if no applet yet)
-    if (m_rttyDecoderApplet) {
-        const int markHz = m_rttyDecoderApplet->rttyMarkHz();
-        // markHz == 0 means "Auto": follow the radio's rttyMark / diglOffset
-        const int effectiveMark = (markHz > 0) ? markHz
-            : (s->mode() == "RTTY" ? s->rttyMark() : s->diglOffset());
-        m_rttyDecoder.setMarkFreqHz(effectiveMark);
-        m_rttyDecoder.setShiftHz(m_rttyDecoderApplet->rttyShiftHz());
-        m_rttyDecoder.setBaudRate(m_rttyDecoderApplet->rttyBaud());
-        m_rttyDecoder.setReversePolarity(m_rttyDecoderApplet->rttyReverse());
-    }
+    // Can't push params or start without the applet — the panel combos
+    // hold the user's choices and we have no fallback source for them.
+    if (!m_rttyDecoderApplet) return;
+
+    const int markHz = m_rttyDecoderApplet->rttyMarkHz();
+    // markHz == 0 means "Auto": follow the radio's rttyMark / diglOffset
+    const int effectiveMark = (markHz > 0) ? markHz
+        : (s->mode() == "RTTY" ? s->rttyMark() : s->diglOffset());
+    m_rttyDecoder.setMarkFreqHz(effectiveMark);
+    m_rttyDecoder.setShiftHz(m_rttyDecoderApplet->rttyShiftHz());
+    m_rttyDecoder.setBaudRate(m_rttyDecoderApplet->rttyBaud());
+    m_rttyDecoder.setReversePolarity(m_rttyDecoderApplet->rttyReverse());
 
     if (!m_rttyDecoder.isRunning()) m_rttyDecoder.start();
 }
