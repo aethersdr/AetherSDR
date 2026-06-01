@@ -457,10 +457,10 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     // Stats
     m_rttyStatsLabel = new QLabel;
+    m_rttyStatsLabel->setTextFormat(Qt::RichText);
+    m_rttyStatsLabel->setFixedWidth(248);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyStatsLabel,
-        "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
-    m_rttyStatsLabel->setFixedWidth(
-        m_rttyStatsLabel->fontMetrics().horizontalAdvance("M:100% S:100% SNR:99dB  LOCKED"));
+        "QLabel { background: transparent; }");
     rttyBar->addWidget(m_rttyStatsLabel);
 
     rttyBar->addStretch();
@@ -714,13 +714,47 @@ void PanadapterApplet::appendRttyText(const QString& text, float confidence)
 
 void PanadapterApplet::setRttyStats(float markLevel, float spaceLevel, float snrDb, bool locked)
 {
-    const QString status = locked ? "LOCKED" : "UNLOCK";
+    const int markSegs  = qBound(0, qRound(markLevel  * 10.0f), 10);
+    const int spaceSegs = qBound(0, qRound(spaceLevel * 10.0f), 10);
+
+    // Mark bar: 10 segments, filled segments hug the center (right side of bar)
+    QString markBar;
+    for (int i = 0; i < 10; ++i) {
+        const bool filled = (i >= 10 - markSegs);
+        markBar += filled
+            ? QStringLiteral("<span style='color:#00cc55'>&#x2588;</span>")
+            : QStringLiteral("<span style='color:#1a3020'>&#x2588;</span>");
+    }
+
+    // Space bar: 10 segments, filled segments hug the center (left side of bar)
+    QString spaceBar;
+    for (int i = 0; i < 10; ++i) {
+        const bool filled = (i < spaceSegs);
+        spaceBar += filled
+            ? QStringLiteral("<span style='color:#3399ff'>&#x2588;</span>")
+            : QStringLiteral("<span style='color:#1a2035'>&#x2588;</span>");
+    }
+
+    const QString snrColor    = locked ? QStringLiteral("#00ff88") : QStringLiteral("#ff8c00");
+    const QString lockedColor = locked ? QStringLiteral("#00ff88") : QStringLiteral("#ff8c00");
+    const QString lockedText  = locked ? QStringLiteral("LOCKED") : QStringLiteral("UNLOCK");
+
     m_rttyStatsLabel->setText(
-        QString("M:%1% S:%2% SNR:%3dB  %4")
-            .arg(qRound(markLevel  * 100))
-            .arg(qRound(spaceLevel * 100))
-            .arg(snrDb, 0, 'f', 0)
-            .arg(status));
+        QStringLiteral("<span style='font-family:monospace;font-size:10px;'>")
+        + markBar
+        + QStringLiteral("<span style='color:#ffffff;font-size:11px;'>&#x25CF;</span>")
+        + spaceBar
+        + QStringLiteral("</span>&nbsp;&nbsp;"
+                          "<span style='font-size:10px;font-weight:bold;color:")
+        + snrColor
+        + QStringLiteral("'>")
+        + QString::number(static_cast<int>(snrDb))
+        + QStringLiteral("dB&nbsp;</span>"
+                          "<span style='font-size:10px;font-weight:bold;color:")
+        + lockedColor
+        + QStringLiteral("'>")
+        + lockedText
+        + QStringLiteral("</span>"));
 }
 
 void PanadapterApplet::clearRttyText()
