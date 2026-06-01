@@ -551,6 +551,7 @@ set(CORE_SOURCES
     src/core/RNNoiseFilter.cpp
     src/core/SpecbleachFilter.cpp
     src/core/CwDecoder.cpp
+    src/core/RttyDecoder.cpp
     src/core/VoiceSignalDetector.cpp
     src/core/SpectrogramBuffer.cpp
     src/core/SignalClassifier.cpp

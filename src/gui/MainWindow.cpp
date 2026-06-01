@@ -3237,6 +3237,13 @@ MainWindow::MainWindow(QWidget* parent)
     connect(&m_radioModel.transmitModel(), &TransmitModel::phoneStateChanged,
             this, [this]() { refreshCwDecodeState(); });
 
+    // ── RTTY decoder: feed audio ────────────────────────────────────────
+    connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
+            &m_rttyDecoder, [this](const QByteArray& pcm) {
+                if (m_rttyDecoder.isRunning())
+                    m_rttyDecoder.feedAudio(pcm);
+            });
+
     // ── AF gain from applet panel → radio per-slice audio_level ─────────
     connect(m_appletPanel->rxApplet(), &RxApplet::afGainChanged, this, [this](int v) {
         if (auto* s = activeSlice()) s->setAudioGain(v);
@@ -11740,13 +11747,10 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     // Update filter limits for the active slice's mode
     updateFilterLimitsForMode(s->mode());
 
-    // Route CW decoder output to the pan owning this slice (#864)
     routeCwDecoderOutput();
-
-    // Show/hide CW decode panel for the active slice's current mode —
-    // delegates through the shared decision tree so the RX/TX toggle
-    // pair and MOX state stay coherent (#2417).
     refreshCwDecodeState();
+    routeRttyDecoderOutput();
+    refreshRttyDecodeState();
 
     // Update CWX/DVK indicator availability for this slice's mode
     updateKeyerAvailability(s->mode());
@@ -11935,8 +11939,8 @@ void MainWindow::setActivePanApplet(PanadapterApplet* applet)
     if (applet == m_panApplet) return;
     m_panApplet = applet;
 
-    // Re-route CW decoder output: the active slice may now belong to this pan
     routeCwDecoderOutput();
+    routeRttyDecoderOutput();
 }
 
 // Route CW decoder text/stats output to the pan that owns the active slice,
@@ -12004,6 +12008,80 @@ void MainWindow::routeCwDecoderOutput()
 // AudioEngine TX-side sidetone tap (#2417).  Single chokepoint so the
 // independent RX/TX toggles, MOX edges, and slice-mode changes all
 // converge on the same decision tree.
+void MainWindow::routeRttyDecoderOutput()
+{
+    PanadapterApplet* target = nullptr;
+    if (auto* s = activeSlice(); s && m_panStack && !s->panId().isEmpty())
+        target = m_panStack->panadapter(s->panId());
+    if (!target) target = m_panApplet;
+
+    if (target == m_rttyDecoderApplet) return;
+
+    if (m_rttyDecoderApplet) {
+        disconnect(&m_rttyDecoder, &RttyDecoder::textDecoded,
+                   m_rttyDecoderApplet, &PanadapterApplet::appendRttyText);
+        disconnect(&m_rttyDecoder, &RttyDecoder::statsUpdated,
+                   m_rttyDecoderApplet, &PanadapterApplet::setRttyStats);
+        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyMarkHzChanged,
+                   &m_rttyDecoder, &RttyDecoder::setMarkFreqHz);
+        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyShiftHzChanged,
+                   &m_rttyDecoder, &RttyDecoder::setShiftHz);
+        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyBaudChanged,
+                   &m_rttyDecoder, &RttyDecoder::setBaudRate);
+        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
+                   &m_rttyDecoder, &RttyDecoder::setReversePolarity);
+        disconnect(m_rttyDecoderApplet, &PanadapterApplet::rttyPanelCloseRequested,
+                   &m_rttyDecoder, &RttyDecoder::stop);
+    }
+
+    m_rttyDecoderApplet = target;
+
+    if (m_rttyDecoderApplet) {
+        connect(&m_rttyDecoder, &RttyDecoder::textDecoded,
+                m_rttyDecoderApplet, &PanadapterApplet::appendRttyText);
+        connect(&m_rttyDecoder, &RttyDecoder::statsUpdated,
+                m_rttyDecoderApplet, &PanadapterApplet::setRttyStats);
+        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyMarkHzChanged,
+                &m_rttyDecoder, &RttyDecoder::setMarkFreqHz);
+        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyShiftHzChanged,
+                &m_rttyDecoder, &RttyDecoder::setShiftHz);
+        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyBaudChanged,
+                &m_rttyDecoder, &RttyDecoder::setBaudRate);
+        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyReverseChanged,
+                &m_rttyDecoder, &RttyDecoder::setReversePolarity);
+        connect(m_rttyDecoderApplet, &PanadapterApplet::rttyPanelCloseRequested,
+                &m_rttyDecoder, &RttyDecoder::stop);
+    }
+}
+
+void MainWindow::refreshRttyDecodeState()
+{
+    auto* s = activeSlice();
+    const bool isRtty = s && (s->mode() == "RTTY" || s->mode() == "DIGL");
+
+    if (m_rttyDecoderApplet)
+        m_rttyDecoderApplet->setRttyPanelVisible(isRtty);
+
+    if (!isRtty) {
+        if (m_rttyDecoder.isRunning()) m_rttyDecoder.stop();
+        return;
+    }
+
+    // Apply parameters from the panel (or defaults if no applet yet)
+    if (m_rttyDecoderApplet) {
+        const int markHz = m_rttyDecoderApplet->rttyMarkHz();
+        // markHz == 0 means "Auto": follow the radio's rttyMark / diglOffset
+        const int effectiveMark = (markHz > 0) ? markHz
+            : (s->mode() == "RTTY" ? s->rttyMark() : s->diglOffset());
+        m_rttyDecoder.setMarkFreqHz(effectiveMark);
+        m_rttyDecoder.setShiftHz(m_rttyDecoderApplet->rttyShiftHz());
+        m_rttyDecoder.setBaudRate(m_rttyDecoderApplet->rttyBaud());
+        m_rttyDecoder.setReversePolarity(m_rttyDecoderApplet->rttyReverse());
+    }
+
+    if (!m_rttyDecoder.isRunning()) m_rttyDecoder.start();
+}
+
 void MainWindow::refreshCwDecodeState()
 {
     const bool rxOn = CwDecodeSettings::rxEnabled();

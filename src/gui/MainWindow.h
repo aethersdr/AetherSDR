@@ -14,6 +14,7 @@
 #include "core/SmartLinkClient.h"
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
+#include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
 #include "core/ClientPuduMonitor.h"
 #include "core/DxClusterClient.h"
@@ -261,11 +262,10 @@ private:
     void onMuteAllSlicesToggle();
     void showPanadapterInterlockNotification(const QString& message);
     void setActivePanApplet(PanadapterApplet* applet);
-    void routeCwDecoderOutput();  // wire CW decoder to the pan owning the active slice
-    // Recompute the CW decoder's run state, panel visibility, and the
-    // AudioEngine TX tap based on current AppSettings + MOX + slice mode.
-    // Called on MOX change, RX/TX toggle change, and dialog close (#2417).
+    void routeCwDecoderOutput();
     void refreshCwDecodeState();
+    void routeRttyDecoderOutput();
+    void refreshRttyDecodeState();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
     void wireVfoWidget(VfoWidget* w, SliceModel* s);
     // Push the active RX slice's filter passband (converted from
@@ -453,11 +453,8 @@ private:
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
-    // Dedicated TX-side decoder (#2417).  Fed from AudioEngine's
-    // sidetone mirror; emits decoded text routed to the panel via
-    // PanadapterApplet::appendCwTextTx so the operator can tell TX
-    // self-decode apart from RX in the shared text view.
     CwDecoder         m_cwDecoderTx;
+    RttyDecoder       m_rttyDecoder;
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
 #ifdef HAVE_MQTT
@@ -592,7 +589,8 @@ private:
     QSplitter*        m_splitter{nullptr};
     PanadapterStack*  m_panStack{nullptr};
     QPointer<PanadapterApplet> m_panApplet;  // backward compat alias to active applet
-    QPointer<PanadapterApplet> m_cwDecoderApplet;  // applet receiving CW decoder output
+    QPointer<PanadapterApplet> m_cwDecoderApplet;
+    QPointer<PanadapterApplet> m_rttyDecoderApplet;
 
     // GUI — right applet panel
     AppletPanel*     m_appletPanel{nullptr};
