@@ -930,6 +930,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     m_lastInfo = info;
     m_intentionalDisconnect = false;
     m_forcedDisconnectInProgress = false;
+    // Note: m_rebootInProgress is NOT cleared here — connectToRadio() runs
+    // again from the reconnect timer during a reboot, and we want to keep
+    // suppressing toasts until onConnected() actually fires.
     m_announcedClientConnections.clear();
     m_reconnectTimer.stop();
     m_name    = info.name;
@@ -963,6 +966,9 @@ void RadioModel::connectViaWan(WanConnection* wan, const QString& publicIp, quin
     m_wanUdpPort = udpPort;
     m_intentionalDisconnect = false;
     m_forcedDisconnectInProgress = false;
+    // Note: m_rebootInProgress is NOT cleared here — connectToRadio() runs
+    // again from the reconnect timer during a reboot, and we want to keep
+    // suppressing toasts until onConnected() actually fires.
     m_announcedClientConnections.clear();
     m_reconnectTimer.stop();
 
@@ -1152,6 +1158,7 @@ void RadioModel::announceClientConnection(quint32 handle,
 void RadioModel::disconnectFromRadio()
 {
     m_intentionalDisconnect = true;
+    m_rebootInProgress = false;
     m_reconnectTimer.stop();
     m_pingTimer.stop();
     if (m_wanConn) {
@@ -1208,6 +1215,19 @@ void RadioModel::forceDisconnect()
     } else {
         QMetaObject::invokeMethod(m_connection, &RadioConnection::disconnectFromRadio);
     }
+}
+
+void RadioModel::rebootRadio()
+{
+    if (!m_connection || !m_connection->isConnected()) {
+        return;
+    }
+    m_rebootInProgress = true;
+    sendCommand(QStringLiteral("radio reboot"));
+    // Give the TCP write a brief moment to flush before tearing down the
+    // socket, then drop into the unexpected-disconnect path so the existing
+    // 3-second reconnect timer brings us back when the radio is up again.
+    QTimer::singleShot(250, this, &RadioModel::forceDisconnect);
 }
 
 void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
@@ -1765,6 +1785,7 @@ void RadioModel::onConnected()
 {
     qCDebug(lcProtocol) << "RadioModel: connected";
     m_reconnectTimer.stop();
+    m_rebootInProgress = false;
     armClientConnectionNoticeSuppression();
     setActivePanResized(false);
 
@@ -2517,7 +2538,9 @@ void RadioModel::onDisconnected()
 void RadioModel::onConnectionError(const QString& msg)
 {
     qCWarning(lcProtocol) << "RadioModel: connection error:" << msg;
-    emit connectionError(msg);
+    if (!m_rebootInProgress) {
+        emit connectionError(msg);
+    }
     // A refused connect may never emit disconnected, but the radio can recover
     // after expiring a stale session. Keep retrying the same discovered radio.
     if (!m_wanConn && !m_intentionalDisconnect && !m_lastInfo.address.isNull()

@@ -583,6 +583,30 @@ QWidget* RadioSetupDialog::buildRadioTab()
                                       kInfoRightLabelWidth),
                         3, 1);
 
+        auto* rebootBtn = new QPushButton(QStringLiteral("Reboot Radio"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(rebootBtn,
+            "QPushButton { background: #3a1a1a; color: #ffb080; border: 1px solid #6e3030;"
+            " border-radius: 3px; font-size: 11px; font-weight: bold; padding: 3px 10px; }"
+            "QPushButton:hover { background: #4a2020; }"
+            "QPushButton:disabled { background: {{color.background.1}}; color: {{color.meter.bar.fill}}; border-color: {{color.background.2}}; }");
+        connect(rebootBtn, &QPushButton::clicked, this, [this] {
+            const auto ret = QMessageBox::warning(
+                this,
+                QStringLiteral("Reboot Radio"),
+                QStringLiteral("Reboot the connected radio now?\n\n"
+                               "AetherSDR will disconnect and automatically reconnect "
+                               "once the radio finishes booting."),
+                QMessageBox::Ok | QMessageBox::Cancel,
+                QMessageBox::Cancel);
+            if (ret == QMessageBox::Ok) {
+                m_model->rebootRadio();
+                close();
+            }
+        });
+        grid->addWidget(makeInfoField(QStringLiteral("Reboot:"), rebootBtn,
+                                      kInfoLeftLabelWidth),
+                        3, 0);
+
         connect(m_model, &RadioModel::infoChanged, this, [this] {
             if (m_serialLabel) {
                 m_serialLabel->setText(radioSerialNumber(m_model));

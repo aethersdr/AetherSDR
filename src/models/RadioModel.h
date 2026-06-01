@@ -308,6 +308,10 @@ public:
     void cancelMultiFlexConflict();
     void disconnectFromRadio();
     void forceDisconnect();  // Close TCP but allow auto-reconnect
+    // Send `radio reboot` (FlexLib Radio.cs:2575), surface a notification to
+    // the operator, then trigger forceDisconnect so the standard reconnect
+    // timer brings the link back when the radio finishes booting.
+    void rebootRadio();
     bool isWan() const { return m_wanConn != nullptr; }
 
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forward the user's
@@ -821,6 +825,10 @@ private:
     RadioInfo m_lastInfo;               // stored for auto-reconnect
     bool      m_intentionalDisconnect{false};
     bool      m_forcedDisconnectInProgress{false};
+    // Suppress connection-error toasts between rebootRadio() and the next
+    // successful reconnect — multiple `Connection refused` retries fire
+    // while the radio is still booting and would otherwise spam the UI.
+    bool      m_rebootInProgress{false};
     QTimer    m_reconnectTimer;
 
     // ── Network quality monitor ──
