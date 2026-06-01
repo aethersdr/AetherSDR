@@ -290,12 +290,18 @@ jobs:
             --app-drop-link 450 120 \
             --icon "AetherSDR DAX Drivers.pkg" 450 290 \
             "AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg" \
-            "dmg-stage/"
+            "dmg-stage/" \
+          || true
 
-          # Fail loudly if create-dmg did not produce the DMG. Previously the
-          # invocation ended with `|| true`, which swallowed errors and let the
-          # next step ("Sign DMG") fail confusingly on a missing file. See the
-          # v26.6.1 release-build chain for the exact symptom.
+          # The `|| true` above absorbs create-dmg's well-documented cosmetic
+          # non-zero exits from the AppleScript window-arrangement step on
+          # macOS runners — the DMG is still produced successfully in those
+          # cases (upstream: https://github.com/create-dmg/create-dmg).
+          # The `test -f` below is the authoritative check: any real failure
+          # (missing asset, write permission, disk-image error) results in
+          # no DMG on disk, and we surface that immediately instead of
+          # letting Sign DMG fail confusingly one step later. See the v26.6.1
+          # release-build chain for the exact symptom this guard catches.
           DMG="AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg"
           if [ ! -f "$DMG" ]; then
             echo "::error::create-dmg did not produce $DMG"
