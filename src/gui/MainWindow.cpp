@@ -3309,10 +3309,36 @@ MainWindow::MainWindow(QWidget* parent)
     });
 #endif
 
-    // ── Tuning step size → AppSettings + radio command ─────────────────────
-    // Per-pan SpectrumWidget::setStepSize connections are made in wirePanadapter()
-    // so all pans (including new ones added at runtime) stay in sync.
+    // ── Tuning step size ───────────────────────────────────────────────────
+    // Two connections, split by source.  stepSizeChanged fires for ANY step
+    // change, including radio-driven syncs (syncStepFromSlice) after a memory
+    // recall or band crossing — so only source-agnostic bookkeeping that must
+    // track the radio's current step belongs here.  Per-pan
+    // SpectrumWidget::setStepSize connections are made in wirePanadapter() so
+    // all pans (including new ones added at runtime) stay in sync.
     connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChanged,
+            this, [this](int step) {
+        if (m_flexControlDialog)
+            m_flexControlDialog->setStepSize(step);
+        // Invalidate persistent encoder accumulators so the next tick rebases
+        // and re-snaps to the new step grid. Without this, an in-flight target
+        // computed against the previous step size carries an off-grid residual
+        // (e.g. step 20 Hz → 500 Hz leaves a 60 Hz tail; #3260).  This must run
+        // for radio-driven step changes too, so it stays on stepSizeChanged.
+        m_flexTargetMhz = -1.0;
+        m_flexCoalesceTimer.stop();
+#ifdef HAVE_MIDI
+        m_midiTuneTargetMhz = -1.0;
+        m_midiTuneIdleTimer.stop();
+#endif
+    });
+    // Deliberate operator step changes only (STEP buttons/scroll, cycle
+    // shortcuts, encoder push).  These push to the radio, persist, and show a
+    // brief toast.  Routing them through stepSizeChangedByUser keeps them off
+    // radio-driven syncs — otherwise every memory-spot recall or band crossing
+    // echoes a redundant `slice set step=` and spams a "Step: …" toast
+    // (the radio is already authoritative for the slice's step).
+    connect(m_appletPanel->rxApplet(), &RxApplet::stepSizeChangedByUser,
             this, [this](int step) {
         // Send step to radio for the active slice
         if (auto* s = m_radioModel.slice(m_activeSliceId))
@@ -3321,28 +3347,14 @@ MainWindow::MainWindow(QWidget* parent)
         auto& settings = AppSettings::instance();
         settings.setValue("TuningStepSize", QString::number(step));
         settings.save();
-        if (m_flexControlDialog)
-            m_flexControlDialog->setStepSize(step);
-        {
-            QString stepStr;
-            if (step >= 1000000)
-                stepStr = QString("%1 MHz").arg(step / 1000000.0, 0, 'f', step % 1000000 ? 1 : 0);
-            else if (step >= 1000)
-                stepStr = QString("%1 kHz").arg(step / 1000.0, 0, 'f', step % 1000 ? 1 : 0);
-            else
-                stepStr = QString("%1 Hz").arg(step);
-            statusBar()->showMessage(QString("Step: %1").arg(stepStr), 2000);
-        }
-        // Invalidate persistent encoder accumulators so the next tick rebases
-        // and re-snaps to the new step grid. Without this, an in-flight target
-        // computed against the previous step size carries an off-grid residual
-        // (e.g. step 20 Hz → 500 Hz leaves a 60 Hz tail; #3260).
-        m_flexTargetMhz = -1.0;
-        m_flexCoalesceTimer.stop();
-#ifdef HAVE_MIDI
-        m_midiTuneTargetMhz = -1.0;
-        m_midiTuneIdleTimer.stop();
-#endif
+        QString stepStr;
+        if (step >= 1000000)
+            stepStr = QString("%1 MHz").arg(step / 1000000.0, 0, 'f', step % 1000000 ? 1 : 0);
+        else if (step >= 1000)
+            stepStr = QString("%1 kHz").arg(step / 1000.0, 0, 'f', step % 1000 ? 1 : 0);
+        else
+            stepStr = QString("%1 Hz").arg(step);
+        statusBar()->showMessage(QString("Step: %1").arg(stepStr), 2000);
     });
     int savedStep = AppSettings::instance().value("TuningStepSize", "100").toInt();
     for (auto* a : m_panStack->allApplets()) a->spectrumWidget()->setStepSize(savedStep);

@@ -608,6 +608,7 @@ void RxApplet::buildUI()
                 m_stepIdx--;
                 m_stepLabel->setText(formatStepLabel(m_stepSizes[m_stepIdx]));
                 emit stepSizeChanged(m_stepSizes[m_stepIdx]);
+                emit stepSizeChangedByUser(m_stepSizes[m_stepIdx]);
             }
         };
         auto stepUp = [this] {
@@ -615,6 +616,7 @@ void RxApplet::buildUI()
                 m_stepIdx++;
                 m_stepLabel->setText(formatStepLabel(m_stepSizes[m_stepIdx]));
                 emit stepSizeChanged(m_stepSizes[m_stepIdx]);
+                emit stepSizeChangedByUser(m_stepSizes[m_stepIdx]);
             }
         };
         connect(m_stepDown, &QPushButton::clicked, this, stepDown);
@@ -2544,6 +2546,7 @@ void RxApplet::cycleStepUp()
     m_stepIdx = (m_stepIdx + 1) % m_stepSizes.size();
     m_stepLabel->setText(formatStepLabel(m_stepSizes[m_stepIdx]));
     emit stepSizeChanged(m_stepSizes[m_stepIdx]);
+    emit stepSizeChangedByUser(m_stepSizes[m_stepIdx]);
 }
 
 void RxApplet::cycleStepDown()
@@ -2552,6 +2555,7 @@ void RxApplet::cycleStepDown()
         m_stepIdx--;
         m_stepLabel->setText(formatStepLabel(m_stepSizes[m_stepIdx]));
         emit stepSizeChanged(m_stepSizes[m_stepIdx]);
+        emit stepSizeChangedByUser(m_stepSizes[m_stepIdx]);
     }
 }
 
