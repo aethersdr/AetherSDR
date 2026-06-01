@@ -761,7 +761,7 @@ void GGMorse::decode_float() {
     int nModes = 2;
 
     if (speed_wpm > 0.0f && speed_wpm < 200.0f) {
-        s0 = s1 = std::round(speed_wpm - 5.0f);
+        s0 = s1 = std::min(110, (int)std::round(speed_wpm - 5.0f));
         nModes = 1;
     }
 
@@ -769,8 +769,8 @@ void GGMorse::decode_float() {
 
     for (int mode = 0; mode < nModes; ++mode) {
         if (mode == 1) {
-            s0 = std::min(std::max(0.0f, std::round(m_impl->statistics.estimatedSpeed_wpm - 5.0f - 2.0f)), 50.0f);
-            s1 = std::min(std::max(0.0f, std::round(m_impl->statistics.estimatedSpeed_wpm - 5.0f + 2.0f)), 50.0f);
+            s0 = std::min(std::max(0.0f, std::round(m_impl->statistics.estimatedSpeed_wpm - 5.0f - 2.0f)), 110.0f);
+            s1 = std::min(std::max(0.0f, std::round(m_impl->statistics.estimatedSpeed_wpm - 5.0f + 2.0f)), 110.0f);
             ds = 1;
         }
 

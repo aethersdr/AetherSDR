@@ -53,6 +53,8 @@ public:
     float        cwCostThreshold()  const { return m_cwCostThreshold; }
     int speedRangeLow()   const;
     int speedRangeHigh()  const;
+    int pitchRangeLow()   const;
+    int pitchRangeHigh()  const;
 
     QSize sizeHint() const override { return {800, 316}; }
 

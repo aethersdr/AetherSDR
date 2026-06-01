@@ -318,6 +318,16 @@ int PanadapterApplet::speedRangeHigh() const
     return m_speedRangeSlider ? m_speedRangeSlider->high() : 40;
 }
 
+int PanadapterApplet::pitchRangeLow()  const
+{
+    return m_pitchRangeSlider ? m_pitchRangeSlider->low() : 500;
+}
+
+int PanadapterApplet::pitchRangeHigh() const
+{
+    return m_pitchRangeSlider ? m_pitchRangeSlider->high() : 700;
+}
+
 void PanadapterApplet::appendCwText(const QString& text, float cost)
 {
     // Filter by sensitivity threshold — drop low-confidence decodes
