@@ -82,6 +82,7 @@ class ProfileManagerDialog;
 class ProfileImportExportDialog;
 class RadioSetupDialog;
 class NetworkDiagnosticsDialog;
+class AgcCalibrationDialog;
 class MemoryDialog;
 class PropDashboardDialog;
 class TxBandDialog;
@@ -355,6 +356,7 @@ private:
     void showPanadapterSliceCapacityMessage();
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
+    void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
     void showFlexControlDialog();
     void handleFlexControlTuneSteps(int steps);
@@ -601,6 +603,7 @@ private:
     QPointer<DxClusterDialog> m_spotHubDialog;
     QPointer<RadioSetupDialog> m_radioSetupDialog;
     QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
+    QPointer<AgcCalibrationDialog> m_agcCalibrationDialog;
     QPointer<PropDashboardDialog> m_propDashboardDialog;
     QPointer<TxBandDialog> m_txBandDialog;
     QPointer<MemoryDialog> m_memoryDialog;

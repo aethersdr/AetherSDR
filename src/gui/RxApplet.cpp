@@ -939,13 +939,34 @@ void RxApplet::buildUI()
         applyPrimarySliderStyle(m_agcTSlider);
         agcRow->addWidget(m_agcTSlider, 1);
 
+        // Right-click entry point for the AGC-T noise calibration panel.
+        // (Discoverability mitigation for the right-click-only decision: the
+        // tooltip advertises it; see docs/agc-t-calibration-design.md.)
+        m_agcTSlider->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(m_agcTSlider, &QWidget::customContextMenuRequested, this,
+                [this](const QPoint& pos) {
+            if (!m_slice) {
+                return;
+            }
+            QMenu menu(m_agcTSlider);
+            menu.addAction(QStringLiteral("Calibrate AGC-T against noise floor…"),
+                           this, [this] {
+                if (m_slice) {
+                    emit calibrateAgcTRequested(m_slice->sliceId());
+                }
+            });
+            menu.exec(m_agcTSlider->mapToGlobal(pos));
+        });
+
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
             if (m_slice) {
                 if (m_slice->agcMode() == "off") {
-                    m_agcTSlider->setToolTip(QString("AGC Off Level: %1").arg(v));
+                    m_agcTSlider->setToolTip(
+                        QString("AGC Off Level: %1\nRight-click to calibrate against the noise floor").arg(v));
                     m_slice->setAgcOffLevel(v);
                 } else {
-                    m_agcTSlider->setToolTip(QString("AGC Threshold: %1").arg(v));
+                    m_agcTSlider->setToolTip(
+                        QString("AGC Threshold: %1\nRight-click to calibrate against the noise floor").arg(v));
                     m_slice->setAgcThreshold(v);
                 }
             }

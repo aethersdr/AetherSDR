@@ -94,6 +94,9 @@ public:
 signals:
     // Emitted when the user clicks a slice tab button.
     void sliceActivationRequested(int sliceId);
+    // Emitted when the user requests the AGC-T noise calibration panel
+    // (right-click on the AGC-T slider). Carries the active slice id.
+    void calibrateAgcTRequested(int sliceId);
     // Emitted when the user adjusts the AF gain slider (0–100).
     void afGainChanged(int value);
     // Emitted when the user changes the tuning step size (Hz).

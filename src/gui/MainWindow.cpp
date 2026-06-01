@@ -73,6 +73,7 @@
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
 #include "RadioSetupDialog.h"
+#include "AgcCalibrationDialog.h"
 #include "AudioDeviceChangeDialog.h"
 #include "NetworkDiagnosticsDialog.h"
 #include "PropDashboardDialog.h"
@@ -126,6 +127,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <functional>
 #include <QApplication>
@@ -3254,6 +3256,8 @@ MainWindow::MainWindow(QWidget* parent)
     // ── Slice tab toggle: click A/B/C/D → switch active slice (#1278) ──
     connect(m_appletPanel->rxApplet(), &RxApplet::sliceActivationRequested,
             this, &MainWindow::setActiveSlice);
+    connect(m_appletPanel->rxApplet(), &RxApplet::calibrateAgcTRequested,
+            this, &MainWindow::showAgcCalibrationDialog);
     // Sync slice tab capacity after radio info/status reports actual capacity.
     connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
         if (m_radioModel.model().isEmpty()) {
@@ -6504,6 +6508,23 @@ void MainWindow::showNetworkDiagnosticsDialog()
     showOrRaisePersistent(m_networkDiagnosticsDialog,
                           &m_radioModel, m_audio, m_networkDiagnosticsHistory);
 #endif
+}
+
+void MainWindow::showAgcCalibrationDialog(int sliceId)
+{
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice) {
+        return;
+    }
+    // Provide the measured RF noise floor for the slice's pan (quiet-spot guard).
+    AgcCalibrationDialog::NoiseFloorFn floorFn = [this](SliceModel* s) -> float {
+        SpectrumWidget* sw = s ? spectrumForSlice(s) : nullptr;
+        return sw ? sw->noiseFloorDbm() : std::numeric_limits<float>::quiet_NaN();
+    };
+    showOrRaisePersistent(m_agcCalibrationDialog, &m_radioModel, m_audio, floorFn);
+    if (m_agcCalibrationDialog) {
+        m_agcCalibrationDialog->setSlice(slice);
+    }
 }
 
 void MainWindow::showAx25HfPacketDecodeDialog()
