@@ -55,7 +55,7 @@ Independent releases, marketplace submission, and operator-side documentation li
 
 ## License
 
-GPL-3.0-or-later — matching the parent AetherSDR project (this plugin lives in-tree under `plugins/`). The vendored Ulanzi SDK in `libs/common-node/` and `libs/common-html/` keeps its own license (see the `LICENSE` files there).
+GPL-3.0-or-later — matching the parent AetherSDR project (this plugin lives in-tree under `plugins/`). The vendored Ulanzi SDK in `libs/common-node/` and `libs/common-html/` keeps its own license (see the `LICENSE.txt` files there).
 
 ## Author
 
