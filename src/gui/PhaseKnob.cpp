@@ -1,11 +1,29 @@
 #include "PhaseKnob.h"
 
+#include <QAccessible>
+#include <QAccessibleWidget>
 #include <QMouseEvent>
 #include <QPainter>
 #include <algorithm>
 #include <cmath>
 
 namespace AetherSDR {
+
+// PhaseKnob is a visual display only — the named ESC phase/gain sliders
+// (VfoWidget.cpp:957/982) are the accessible interface.  Returning NoRole
+// causes AT tools to skip this widget in navigation.
+class PhaseKnobAccessible : public QAccessibleWidget {
+public:
+    explicit PhaseKnobAccessible(QWidget* w) : QAccessibleWidget(w) {}
+    QAccessible::Role role() const override { return QAccessible::NoRole; }
+};
+
+static QAccessibleInterface* phaseKnobFactory(const QString& key, QObject* obj)
+{
+    if (key == QLatin1String("AetherSDR::PhaseKnob"))
+        return new PhaseKnobAccessible(qobject_cast<QWidget*>(obj));
+    return nullptr;
+}
 
 namespace {
 
@@ -25,6 +43,12 @@ PhaseKnob::PhaseKnob(QWidget* parent)
 {
     setFixedSize(120, 120);
     setCursor(Qt::CrossCursor);
+
+    static bool s_factoryInstalled = false;
+    if (!s_factoryInstalled) {
+        s_factoryInstalled = true;
+        QAccessible::installFactory(phaseKnobFactory);
+    }
 }
 
 void PhaseKnob::setPhase(float radians)

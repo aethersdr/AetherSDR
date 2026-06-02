@@ -22,6 +22,7 @@
 #include <QLabel>
 #include <QSlider>
 #include <QGraphicsOpacityEffect>
+#include <QAccessible>
 #include <QLineEdit>
 #include <QComboBox>
 #include <QStackedWidget>
@@ -208,14 +209,16 @@ static const QString kFlatBtn =
     "font-size: 13px; font-weight: bold; padding: 0 6px; margin: 0; }";
 
 static const QString kTabLblNormal =
-    "QLabel { background: transparent; border: none; "
+    "QPushButton { background: transparent; border: none; "
     "border-bottom: 2px solid transparent; "
-    "color: #6888a0; font-size: 13px; font-weight: bold; padding: 3px 0; }";
+    "color: #6888a0; font-size: 13px; font-weight: bold; padding: 3px 0; }"
+    "QPushButton:focus { outline: none; border-bottom: 2px solid #6888a0; }";
 
 static const QString kTabLblActive =
-    "QLabel { background: transparent; border: none; "
+    "QPushButton { background: transparent; border: none; "
     "border-bottom: 2px solid #00b4d8; "
-    "color: #00b4d8; font-size: 13px; font-weight: bold; padding: 3px 0; }";
+    "color: #00b4d8; font-size: 13px; font-weight: bold; padding: 3px 0; }"
+    "QPushButton:focus { outline: none; }";
 
 static const QString kDisabledBtn =
     "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
@@ -269,6 +272,15 @@ VfoWidget::VfoWidget(QWidget* parent)
     m_signalMeterAnimation.setTimerType(Qt::PreciseTimer);
     m_signalMeterAnimation.setInterval(kSignalMeterAnimationIntervalMs);
     connect(&m_signalMeterAnimation, &QTimer::timeout, this, &VfoWidget::animateSignalMeter);
+
+    m_accessibleFrequencyTimer.setSingleShot(true);
+    connect(&m_accessibleFrequencyTimer, &QTimer::timeout, this, [this]() {
+        if (!QAccessible::isActive()) return;
+        if (m_pendingAccessibleFrequencyText == m_lastAccessibleFrequencyText) return;
+        m_lastAccessibleFrequencyText = m_pendingAccessibleFrequencyText;
+        QAccessibleValueChangeEvent event(m_freqLabel, m_pendingAccessibleFrequencyText);
+        QAccessible::updateAccessibility(&event);
+    });
 
     buildUI();
 
@@ -773,14 +785,23 @@ void VfoWidget::buildUI()
             sep->setAlignment(Qt::AlignCenter);
             tabLayout->addWidget(sep);
         }
-        auto* lbl = new QLabel(tabLabels[i]);
-        lbl->setStyleSheet(kTabLblNormal);
-        lbl->setFixedHeight(24);
-        lbl->setAlignment(Qt::AlignCenter);
-        lbl->setCursor(Qt::PointingHandCursor);
-        lbl->installEventFilter(this);
-        tabLayout->addWidget(lbl, 1);
-        m_tabBtns.append(lbl);
+        auto* btn = new QPushButton(tabLabels[i]);
+        btn->setFlat(true);
+        btn->setCheckable(true);
+        btn->setStyleSheet(kTabLblNormal);
+        btn->setFixedHeight(24);
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setFocusPolicy(Qt::TabFocus);
+        connect(btn, &QPushButton::clicked, this, [this, i]() { showTab(i); });
+        if (i == 0) {
+            // Right-click on speaker tab toggles mute directly
+            btn->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(btn, &QPushButton::customContextMenuRequested, this, [this](const QPoint&) {
+                if (m_slice) m_slice->setAudioMute(!m_slice->audioMute());
+            });
+        }
+        tabLayout->addWidget(btn, 1);
+        m_tabBtns.append(btn);
     }
     root->addWidget(m_tabBar);
 
@@ -790,7 +811,17 @@ void VfoWidget::buildUI()
     buildTabContent();
     root->addWidget(m_tabStack);
 
-    // Accessible names for VoiceOver / screen reader support (#870)
+    // Accessible names for VoiceOver / screen reader support (#870, #3288)
+    const QStringList tabA11yNames = {
+        tr("Audio settings"),
+        tr("DSP settings"),
+        tr("Mode settings"),
+        tr("X/RIT settings"),
+        tr("DAX settings"),
+    };
+    for (int i = 0; i < m_tabBtns.size(); ++i)
+        m_tabBtns[i]->setAccessibleName(tabA11yNames[i]);
+
     m_rxAntBtn->setAccessibleName("RX antenna");
     m_txAntBtn->setAccessibleName("TX antenna");
     m_filterWidthLbl->setAccessibleName("Filter width");
@@ -1978,12 +2009,16 @@ void VfoWidget::showTab(int index)
         // Toggle off — collapse content
         m_tabStack->hide();
         m_tabBtns[m_activeTab]->setStyleSheet(kTabLblNormal);
+        m_tabBtns[m_activeTab]->setChecked(false);
         m_activeTab = -1;
     } else {
-        if (m_activeTab >= 0)
+        if (m_activeTab >= 0) {
             m_tabBtns[m_activeTab]->setStyleSheet(kTabLblNormal);
+            m_tabBtns[m_activeTab]->setChecked(false);
+        }
         m_activeTab = index;
         m_tabBtns[index]->setStyleSheet(kTabLblActive);
+        m_tabBtns[index]->setChecked(true);
         m_tabStack->setCurrentIndex(index);
         m_tabStack->show();
     }
@@ -2084,8 +2119,9 @@ void VfoWidget::setCollapsed(bool collapsed)
         if (m_tabStack) {
             m_tabStack->hide();
             m_activeTab = -1;
-            for (QLabel* lbl : m_tabBtns) {
-                lbl->setStyleSheet(kTabLblNormal);
+            for (QPushButton* btn : m_tabBtns) {
+                btn->setStyleSheet(kTabLblNormal);
+                btn->setChecked(false);
             }
         }
         // Restore external buttons to pre-collapse state and reposition them
@@ -3263,6 +3299,14 @@ void VfoWidget::updateFreqLabel()
     if (!m_slice) return;
     if (m_slice->isLockedFeedbackActive()) {
         m_freqLabel->setText(QStringLiteral("LOCKED"));
+        // Announce immediately — lock state is user-triggered and infrequent.
+        // Suppress repeats while the 500 ms lock-feedback gate is active.
+        if (QAccessible::isActive() &&
+            m_lastAccessibleFrequencyText != QStringLiteral("LOCKED")) {
+            m_lastAccessibleFrequencyText = QStringLiteral("LOCKED");
+            QAccessibleValueChangeEvent lockedEvt(m_freqLabel, QStringLiteral("LOCKED"));
+            QAccessible::updateAccessibility(&lockedEvt);
+        }
         if (m_collapsed && m_collapsedFreqLabel) {
             m_collapsedFreqLabel->setText(QStringLiteral("LOCKED"));
             m_collapsedFreqLabel->adjustSize();
@@ -3279,12 +3323,20 @@ void VfoWidget::updateFreqLabel()
         .arg(khzPart, 3, 10, QChar('0'))
         .arg(hzPart, 3, 10, QChar('0'));
     m_freqLabel->setText(freqText);
+    scheduleFrequencyAnnouncement(freqText);
 
     // Keep collapsed frequency label in sync
     if (m_collapsed && m_collapsedFreqLabel) {
         m_collapsedFreqLabel->setText(freqText);
         m_collapsedFreqLabel->adjustSize();
     }
+}
+
+void VfoWidget::scheduleFrequencyAnnouncement(const QString& text)
+{
+    if (!QAccessible::isActive()) return;
+    m_pendingAccessibleFrequencyText = text;
+    m_accessibleFrequencyTimer.start(300);  // restart on each tune step; fires once settled
 }
 
 void VfoWidget::updateFilterLabel()
@@ -4101,24 +4153,6 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
         }
     }
 
-    if (event->type() == QEvent::MouseButtonPress) {
-        auto* lbl = qobject_cast<QLabel*>(obj);
-        if (lbl) {
-            int idx = m_tabBtns.indexOf(lbl);
-            if (idx >= 0) {
-                auto* me = static_cast<QMouseEvent*>(event);
-                // Right-click on speaker tab (idx 0) toggles mute directly
-                if (idx == 0 && me->button() == Qt::RightButton && m_slice) {
-                    m_slice->setAudioMute(!m_slice->audioMute());
-                    return true;
-                }
-                if (me->button() == Qt::LeftButton) {
-                    showTab(idx);
-                    return true;
-                }
-            }
-        }
-    }
     return QWidget::eventFilter(obj, event);
 }
 

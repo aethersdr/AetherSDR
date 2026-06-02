@@ -1,5 +1,6 @@
 #include "SMeterWidget.h"
 
+#include <QAccessible>
 #include <QPainter>
 #include <QPainterPath>
 #include <QSet>
@@ -15,6 +16,7 @@ SMeterWidget::SMeterWidget(QWidget* parent)
 {
     setMinimumSize(minimumSizeHint());
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    setFocusPolicy(Qt::TabFocus);
 
     m_needleFraction = dbmToFraction(m_levelDbm);
     m_targetNeedleFraction = m_needleFraction;
@@ -73,6 +75,23 @@ void SMeterWidget::setLevel(float dbm)
 
     if (!m_transmitting) {
         update();
+        if (hasFocus() && QAccessible::isActive()) {
+            // Announce the same value that paintEvent displays — in Peak mode
+            // the needle and text readout track m_peakDbm, not the raw level.
+            const float displayDbm = (m_rxMode == RxMode::SMeterPeak) ? m_peakDbm : m_levelDbm;
+            QString sText;
+            if (displayDbm <= S0_DBM)
+                sText = QStringLiteral("S0");
+            else if (displayDbm <= S9_DBM)
+                sText = QStringLiteral("S%1").arg(qBound(0, qRound((displayDbm - S0_DBM) / DB_PER_S), 9));
+            else
+                sText = QStringLiteral("S9+%1").arg(qRound(displayDbm - S9_DBM));
+            const QString accessText = sText + QStringLiteral(", ")
+                + QString::number(static_cast<int>(displayDbm))
+                + QStringLiteral(" dBm");
+            QAccessibleValueChangeEvent event(this, accessText);
+            QAccessible::updateAccessibility(&event);
+        }
     }
 }
 

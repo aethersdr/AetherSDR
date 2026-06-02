@@ -5,6 +5,7 @@
 #include "core/ThemeManager.h"
 
 #include <QElapsedTimer>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QTimer>
@@ -33,6 +34,7 @@ public:
         setFixedHeight(16);
         setMinimumWidth(60);
         setCursor(Qt::PointingHandCursor);
+        setFocusPolicy(Qt::TabFocus);
 
         m_animTimer.setTimerType(Qt::PreciseTimer);
         m_animTimer.setInterval(kMeterSmootherIntervalMs);
@@ -160,6 +162,23 @@ protected:
         p.setBrush(accent);
         p.setPen(Qt::NoPen);
         p.drawPolygon(tri);
+    }
+
+    void keyPressEvent(QKeyEvent* e) override {
+        float delta = 0.0f;
+        if (e->key() == Qt::Key_Right || e->key() == Qt::Key_Up)   delta = +0.05f;
+        if (e->key() == Qt::Key_Left  || e->key() == Qt::Key_Down) delta = -0.05f;
+        if (delta != 0.0f) {
+            float g = std::clamp(m_gain + delta, 0.0f, 1.0f);
+            if (g != m_gain) {
+                m_gain = g;
+                emit gainChanged(m_gain);
+                update();
+            }
+            e->accept();
+            return;
+        }
+        QWidget::keyPressEvent(e);
     }
 
     void mousePressEvent(QMouseEvent* e) override {

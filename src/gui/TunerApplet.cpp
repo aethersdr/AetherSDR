@@ -114,6 +114,7 @@ void TunerApplet::buildUI()
         this, 80.0f);
     // Slow release: bar rises quickly on RF bursts but decays over ~800 ms
     static_cast<HGauge*>(m_fwdGauge)->setBallistics({0.030f, 0.800f});
+    m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setSpacing(4);
     pwrRow->addWidget(m_pwrLabel);
@@ -128,6 +129,7 @@ void TunerApplet::buildUI()
     m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "", "",
         {{1.0f, "1"}, {1.5f, "1.5"}, {2.5f, "2.5"}, {3.0f, "3"}},
         this, 2.0f);
+    m_swrGauge->setAccessibleName(tr("SWR"));
     auto* swrRow = new QHBoxLayout;
     swrRow->setSpacing(4);
     swrRow->addWidget(m_swrLabel);
@@ -142,8 +144,11 @@ void TunerApplet::buildUI()
     auto* relayCol = new QVBoxLayout;
     relayCol->setSpacing(2);
     m_c1Bar = new RelayBar("C1");
+    m_c1Bar->setAccessibleName(tr("Tuner capacitor C1"));
     m_lBar  = new RelayBar("L");
+    m_lBar->setAccessibleName(tr("Tuner inductor L"));
     m_c2Bar = new RelayBar("C2");
+    m_c2Bar->setAccessibleName(tr("Tuner capacitor C2"));
     relayCol->addWidget(m_c1Bar);
     relayCol->addWidget(m_lBar);
     relayCol->addWidget(m_c2Bar);

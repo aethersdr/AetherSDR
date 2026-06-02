@@ -41,6 +41,7 @@ AmpApplet::AmpApplet(QWidget* parent)
     // Slow release: bar rises quickly on RF bursts but decays over ~800 ms
     // so brief transmissions remain visible — matches S-meter peak-hold feel.
     m_fwdGauge->setBallistics({0.030f, 0.800f});
+    m_fwdGauge->setAccessibleName(tr("Forward power"));
     auto* pwrRow = new QHBoxLayout;
     pwrRow->setSpacing(4);
     pwrRow->addWidget(m_pwrLabel);
@@ -53,6 +54,7 @@ AmpApplet::AmpApplet(QWidget* parent)
     m_swrGauge = new HGauge(1.0f, 3.0f, 2.5f, "", "",
         {{1.0f, "1"}, {1.5f, "1.5"}, {2.0f, "2"}, {2.5f, "2.5"}, {3.0f, "3"}},
         this, 2.0f);
+    m_swrGauge->setAccessibleName(tr("SWR"));
     auto* swrRow = new QHBoxLayout;
     swrRow->setSpacing(4);
     swrRow->addWidget(m_swrLabel);
@@ -65,6 +67,7 @@ AmpApplet::AmpApplet(QWidget* parent)
     m_idGauge = new HGauge(0.0f, 70.0f, 60.0f, "", "",
         {{0, "0"}, {10, "10"}, {20, "20"}, {30, "30"}, {40, "40"}, {50, "50"}, {60, "60"}, {70, "70"}},
         this, 50.0f);
+    m_idGauge->setAccessibleName(tr("Drain current"));
     auto* idRow = new QHBoxLayout;
     idRow->setSpacing(4);
     idRow->addWidget(m_idLabel);

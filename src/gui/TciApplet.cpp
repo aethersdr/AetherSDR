@@ -91,6 +91,7 @@ void TciApplet::buildUI()
         row->addWidget(m_rxStatus[i]);
 
         m_rxMeter[i] = new MeterSlider;
+        m_rxMeter[i]->setAccessibleName(tr("TCI RX %1 gain").arg(i + 1));
         {
             auto key = QStringLiteral("TciRxGain%1").arg(i + 1);
             float saved = settings.value(key, "0.5").toString().toFloat();
@@ -124,6 +125,7 @@ void TciApplet::buildUI()
         row->addWidget(m_txStatus);
 
         m_txMeter = new MeterSlider;
+        m_txMeter->setAccessibleName(tr("TCI TX gain"));
         {
             // TciServer owns TciTxGain persistence (with DaxTxGain migration
             // on first read).  Mirror that stored value here for the slider

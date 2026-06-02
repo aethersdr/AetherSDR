@@ -428,6 +428,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAutoFillBackground(false);
+    setAccessibleName(tr("Panadapter spectrum display"));
 #ifdef AETHER_GPU_SPECTRUM
     // Explicitly request Metal on macOS.
 #  ifdef Q_OS_MAC
