@@ -11393,12 +11393,20 @@ void MainWindow::onSliceRemoved(int id)
 
     // If the split TX slice was closed, disable split
     if (m_splitActive && id == m_splitTxSliceId) {
+        // TX slice removed out-of-band (2nd client / front panel / rigctld),
+        // not via the in-app SPLIT toggle. Reclaim TX onto the former RX slice
+        // explicitly (mirror disableSplit). activeSlice() is wrong here:
+        // onSliceAdded() auto-focuses the new TX slice, so the active slice is
+        // the one just removed (already gone from the model -> nullptr, TX is
+        // never reclaimed) or, if a third slice was focused, the WRONG slice,
+        // which would be keyed via the radio command "slice set N tx=1".
+        const int rxId = m_splitRxSliceId;   // capture before reset
         m_splitActive = false;
         m_splitRxSliceId = -1;
         m_splitTxSliceId = -1;
         if (auto* sw = spectrum()) sw->setSplitPair(-1, -1);
-        if (auto* s = activeSlice())
-            s->setTxSlice(true);
+        if (auto* rx = m_radioModel.slice(rxId))
+            rx->setTxSlice(true);
         updateSplitState();
     }
 
