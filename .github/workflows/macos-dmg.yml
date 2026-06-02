@@ -11,13 +11,32 @@ permissions:
 jobs:
   build-dmg:
     strategy:
+      # Isolate the two arch legs: a failure on one must not cancel the other.
+      # Before this, the default fail-fast cancelled the healthy apple-silicon
+      # build the moment the (unproven) Intel leg failed — see the v26.6.1
+      # release run where Intel's cancellation took apple-silicon down with it.
+      fail-fast: false
       matrix:
         include:
           - runner: macos-15
             label: apple-silicon
+            # apple-silicon is the proven, release-blocking artifact.
+            experimental: false
           - runner: macos-15-intel
             label: intel
+            # Intel is not yet release-ready: the deps-qt-6.8.3-macos-intel
+            # asset is missing (404 → 27-min from-source Qt), and that
+            # from-source build omits qttools, so macdeployqt is absent and
+            # "Bundle Qt frameworks" cannot succeed. Until that is fixed
+            # (add qttools to the module subset + populate the deps asset via
+            # the "Build macOS Qt (Intel deps)" workflow), keep this leg
+            # non-blocking so it cannot hold the release hostage. It still
+            # runs and attaches its DMG automatically once the toolchain works.
+            experimental: true
     runs-on: ${{ matrix.runner }}
+    # Non-blocking Intel: a failure on the experimental leg does not fail the
+    # workflow, so the apple-silicon DMG still ships and the release goes green.
+    continue-on-error: ${{ matrix.experimental }}
 
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
