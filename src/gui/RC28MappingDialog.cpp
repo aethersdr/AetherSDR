@@ -21,7 +21,8 @@ namespace AetherSDR {
 
 // ── Action tables ────────────────────────────────────────────────────────────
 // Keep in sync with the if/else chain in MainWindow::dispatchHidAction.
-// kHoldActions is momentary: ON when button is held, OFF on release.
+// kHoldActions: actions that latch on/off per hold press (TuneFast, FineTune,
+// ToggleRit, etc.) or fire once at the 600 ms threshold (ModeCycle).
 struct ActionEntry { const char* id; const char* label; };
 
 static const ActionEntry kActions[] = {
@@ -39,7 +40,9 @@ static const ActionEntry kActions[] = {
     {"SnapKHz",     "Snap to Nearest 1 kHz"},
     {"Snap100kHz",  "Snap to Nearest 100 kHz"},
     {"Snap500kHz",  "Snap to Nearest 500 kHz"},
-    {"StepCycle",   "Step"},
+    {"StepUp",      "Step Up"},
+    {"StepDown",    "Step Down"},
+    {"StepCycle",   "Step (legacy)"},
     {"VolumeDown",  "Volume Down (-5)"},
     {"VolumeUp",    "Volume Up (+5)"},
 };
@@ -48,6 +51,7 @@ static const ActionEntry kHoldActions[] = {
     {"None",        "No Action"},
     {"FineTune",    "Fine Tuning"},
     {"TuneFast",    "Fast Tuning"},
+    {"ModeCycle",   "Mode"},
     {"ToggleMute",  "Mute"},
     {"ToggleRit",   "RIT"},
     {"ToggleLock",  "Slice Lock"},
@@ -84,7 +88,7 @@ static constexpr const char* kComboStyle =
 
 RC28MappingDialog::RC28MappingDialog(HidEncoderManager* encoder,
                                      QWidget* parent)
-    : PersistentDialog("RC-28 Button Mapping", "RC28MappingDialogGeometry", parent)
+    : PersistentDialog("Icom RC-28 Button Mapping", "RC28MappingDialogGeometry", parent)
     , m_encoder(encoder)
 {
     setMinimumWidth(420);
@@ -213,10 +217,10 @@ void RC28MappingDialog::buildAssignSection()
     for (QComboBox* c : {m_f1PressCombo, m_f1HoldCombo, m_f2PressCombo, m_f2HoldCombo})
         c->setStyleSheet(kComboStyle);
 
-    populateActionCombo(m_f1PressCombo, "f1Press", "StepCycle");
+    populateActionCombo(m_f1PressCombo, "f1Press", "StepUp");
     populateActionCombo(m_f1HoldCombo,  "f1Hold",  "TuneFast", true);
-    populateActionCombo(m_f2PressCombo, "f2Press", "None");
-    populateActionCombo(m_f2HoldCombo,  "f2Hold",  "None",     true);
+    populateActionCombo(m_f2PressCombo, "f2Press", "StepDown");
+    populateActionCombo(m_f2HoldCombo,  "f2Hold",  "ModeCycle", true);
 
     auto makeLabel = [](const char* text) {
         auto* l = new QLabel(text);
@@ -312,8 +316,10 @@ void RC28MappingDialog::populateActionCombo(QComboBox* combo,
     combo->setCurrentIndex(idx >= 0 ? idx : 0);
 
     connect(combo, &QComboBox::currentIndexChanged, this,
-            [combo, field](int) {
-        HidEncoderManager::setRc28MappingField(field, combo->currentData().toString());
+            [this, combo, field](int) {
+        const QString val = combo->currentData().toString();
+        HidEncoderManager::setRc28MappingField(field, val);
+        emit mappingFieldChanged(field, val);
     });
 }
 
@@ -322,6 +328,19 @@ void RC28MappingDialog::refreshDeviceInfo()
     if (!m_encoder) return;
 
     const bool connected = m_encoder->isOpen();
+
+    if (!connected && m_encoder->isBlockedByMultiple()) {
+        // Guard against the narrow race where the ext-ctrl thread has already
+        // cleared m_blockedDeviceName but hasn't yet stored the false flag —
+        // an empty name would produce garbled dialog text. Fall through to the
+        // "not connected" state; the queued connectionChanged signal corrects it.
+        const QString blocked = m_encoder->blockedDeviceName();
+        if (!blocked.isEmpty()) {
+            onMultipleDevicesDetected(blocked);
+            return;
+        }
+    }
+
     m_statusDot->setStyleSheet(
         connected ? "color:#00c070; font-size:14px;"
                   : "color:#4060a0; font-size:14px;");

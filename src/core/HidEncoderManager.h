@@ -34,6 +34,8 @@ public:
     // is sufficient because callers treat the result as a hint and the real
     // gate is re-checked inside the queued slot. (#3248)
     bool isOpen() const { return m_device.load(std::memory_order_relaxed) != nullptr; }
+    bool isBlockedByMultiple() const { return m_multipleDetected.load(std::memory_order_acquire); }
+    QString blockedDeviceName()  const { return m_blockedDeviceName; }
     QString deviceName()     const { return m_deviceName; }
     QString devicePath()     const { return m_devicePath; }
     QString serialNumber()   const { return m_serialNumber; }
@@ -67,10 +69,9 @@ public:
     static QString rc28MappingField(const QString& field, const QString& dflt);
     static void setRc28MappingField(const QString& field, const QString& value);
 
-    // Active-low LED byte constants for setRC28Leds().
-    static constexpr uint8_t RC28_LEDS_OFF      = 0x0F;  // all LEDs off
-    static constexpr uint8_t RC28_LEDS_LINK     = 0x07;  // LINK on, rest off
-    static constexpr uint8_t RC28_LEDS_TX_LINK  = 0x06;  // TX + LINK on
+    // Active-low LED byte constant for setRC28Leds(). updateRC28Leds() in
+    // MainWindow builds the full byte bitwise; RC28_LEDS_OFF is the reset value.
+    static constexpr uint8_t RC28_LEDS_OFF = 0x0F;  // all LEDs off
 
 public slots:
     void loadSettings();
@@ -116,8 +117,13 @@ private:
     QString m_serialNumber;
     uint16_t m_releaseNumber{0};
     // Latches true while open() is blocking on >1 RC-28 so the warning + signal
-    // fire once per transition, not on every hotplug retry. (#3323)
-    bool m_multipleDetected{false};
+    // fire once per transition, not on every hotplug retry. Atomic so the main
+    // thread can poll isBlockedByMultiple() without a data race. The companion
+    // m_blockedDeviceName QString is written before this flag is set (release
+    // store) and read after it is tested (acquire load), establishing the
+    // happens-before needed to read the QString safely. (#3323)
+    std::atomic<bool> m_multipleDetected{false};
+    QString m_blockedDeviceName;
     std::atomic<uint16_t> m_openVid{0};
     std::atomic<uint16_t> m_openPid{0};
     bool m_invertDirection{false};

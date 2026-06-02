@@ -4005,9 +4005,8 @@ MainWindow::MainWindow(QWidget* parent)
             m_rc28HoldConsumed[btn - 1] = true;
             const QString holdField = (btn == 1) ? QStringLiteral("f1Hold")
                                                  : QStringLiteral("f2Hold");
-            // Default F1 hold to TuneFast for good out-of-box experience; F2 hold to None.
             const QString dflt = (btn == 1) ? QStringLiteral("TuneFast")
-                                            : QStringLiteral("None");
+                                            : QStringLiteral("ModeCycle");
             const QString actionName = HidEncoderManager::rc28MappingField(holdField, dflt);
             if (actionName.isEmpty() || actionName == "None") return;
             // Hold actions are latched toggles: each hold press flips the state and
@@ -4058,8 +4057,8 @@ MainWindow::MainWindow(QWidget* parent)
                 m_rc28HoldTimer[i]->stop();
                 if (!m_rc28HoldConsumed[i]) {
                     // Short press — fire on release
-                    const QString dflt = (button == 1) ? QStringLiteral("StepCycle")
-                                                       : QStringLiteral("None");
+                    const QString dflt = (button == 1) ? QStringLiteral("StepUp")
+                                                       : QStringLiteral("StepDown");
                     const QString pressField = (button == 1) ? QStringLiteral("f1Press")
                                                              : QStringLiteral("f2Press");
                     const QString actionName =
@@ -4101,17 +4100,20 @@ MainWindow::MainWindow(QWidget* parent)
 
         if (actionName == "None" || actionName.isEmpty()) return;
 
-        // PTT: behaviour depends on the RC28Mapping pttMode field.
+        // PTT: behaviour depends on the RC28Mapping pttMode field, but only
+        // when the source is the RC-28 TX bar.  Generic HID keys bound to
+        // "PTT" (e.g. StreamDeck+) always use momentary so they are not
+        // affected by the RC-28 latched-PTT setting.
         if (actionName == QStringLiteral("PTT")) {
             if (!m_radioModel.isConnected()) return;
-            const bool latched =
-                HidEncoderManager::rc28MappingField("pttMode", "Momentary") == "Latched";
+            const bool latched = m_hidEncoder->isRC28Compatible()
+                && HidEncoderManager::rc28MappingField("pttMode", "Momentary") == "Latched";
             if (latched) {
                 // Toggle on press only; ignore release.
                 if (action == 0) {
                     m_rc28PttLatched = !m_rc28PttLatched;
                     m_radioModel.setTransmit(m_rc28PttLatched);
-                    if (m_rc28MappingDialog)
+                    if (m_rc28MappingDialog && m_hidEncoder->isRC28Compatible())
                         m_rc28MappingDialog->appendButtonEvent(
                             "TX bar press",
                             m_rc28PttLatched ? "TX ON (Latched)" : "TX OFF (Unlatched)");
@@ -4119,7 +4121,7 @@ MainWindow::MainWindow(QWidget* parent)
             } else {
                 // Momentary: hold = TX on, release = TX off.
                 m_radioModel.setTransmit(action == 0);
-                if (m_rc28MappingDialog)
+                if (m_rc28MappingDialog && m_hidEncoder->isRC28Compatible())
                     m_rc28MappingDialog->appendButtonEvent(
                         "TX bar",
                         action == 0 ? "TX ON (Momentary)" : "TX OFF (Momentary)");
@@ -4330,6 +4332,22 @@ MainWindow::MainWindow(QWidget* parent)
     // would prompt for Input Monitoring even on machines without any
     // supported encoder hardware. Default off; user enables in
     // Preferences → Serial when they connect a StreamDeck+ / RC-28 / etc.
+    // One-time migration: before RC28Mapping was introduced, F1/F2 actions
+    // were stored under the generic HidKeyAction0/1 keys. Run unconditionally
+    // so users who had HID disabled at the time of this upgrade still get their
+    // old actions migrated when they later enable HID via Preferences. The
+    // inner guard (!s.contains("RC28Mapping")) makes it a true one-shot. (#3323)
+    {
+        auto& s = AppSettings::instance();
+        if (!s.contains("RC28Mapping")) {
+            const QString k0 = s.value("HidKeyAction0", "StepUp").toString();
+            const QString k1 = s.value("HidKeyAction1", "StepDown").toString();
+            if (k0 != "StepUp" && !k0.isEmpty() && k0 != "None")
+                HidEncoderManager::setRc28MappingField("f1Press", k0);
+            if (k1 != "StepDown" && !k1.isEmpty() && k1 != "None")
+                HidEncoderManager::setRc28MappingField("f2Press", k1);
+        }
+    }
     if (AppSettings::instance().value("HidEncoderEnabled", "False").toString() == "True") {
         QMetaObject::invokeMethod(m_hidEncoder, [this] {
             m_hidEncoder->loadSettings();
@@ -6872,15 +6890,15 @@ bool MainWindow::rc28HoldActionActive(const QString& action) const
 // Active-low: bit0=TX, bit1=F1, bit2=F2, bit3=LINK. 0=LED on, 1=LED off.
 void MainWindow::updateRC28Leds()
 {
-    if (!m_hidEncoder || !m_hidEncoder->isRC28Compatible()) return;
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isRC28Compatible()) return;
     uint8_t b = HidEncoderManager::RC28_LEDS_OFF;  // 0x0F — start all off
     b &= ~0x08u;  // LINK always on while connected
-    if (m_radioModel.transmitModel().isMox()) b &= ~0x01u;  // TX
+    if (m_radioModel.transmitModel().isTransmitting()) b &= ~0x01u;  // TX
     // Each F-key's LED reflects the on/off state of the hold action assigned to
     // that key: F1 → bit1, F2 → bit2. (FlexRC-28 maps functions to LEDs the same
     // way and drives bit2 freely, confirming there is no per-button lock.)
     const QString f1Hold = HidEncoderManager::rc28MappingField("f1Hold", "TuneFast");
-    const QString f2Hold = HidEncoderManager::rc28MappingField("f2Hold", "None");
+    const QString f2Hold = HidEncoderManager::rc28MappingField("f2Hold", "ModeCycle");
     if (rc28HoldActionActive(f1Hold)) b &= ~0x02u;  // F1 LED
     if (rc28HoldActionActive(f2Hold)) b &= ~0x04u;  // F2 LED
     const uint8_t ledByte = b;
@@ -6895,7 +6913,7 @@ void MainWindow::updateRC28Leds()
 void MainWindow::dispatchHidAction(const QString& actionName,
                                    const QString& gestureLabel)
 {
-    if (m_rc28MappingDialog)
+    if (m_rc28MappingDialog && m_hidEncoder->isRC28Compatible())
         m_rc28MappingDialog->appendButtonEvent(gestureLabel, actionName);
 
     if (actionName == "StepCycle" || actionName == "StepUp") {
@@ -8461,7 +8479,17 @@ void MainWindow::buildMenuBar()
 #ifdef HAVE_HIDAPI
     auto* rc28Action = settingsMenu->addAction("Icom RC-28 Remote Encoder...");
     connect(rc28Action, &QAction::triggered, this, [this] {
+        const bool fresh = !m_rc28MappingDialog;
         showOrRaisePersistent(m_rc28MappingDialog, m_hidEncoder);
+        if (fresh && m_rc28MappingDialog)
+            connect(m_rc28MappingDialog, &RC28MappingDialog::mappingFieldChanged,
+                    this, [this](const QString& field, const QString&) {
+                if (field == "f1Hold" || field == "f2Hold") {
+                    m_hidFastTune = false;
+                    m_hidFineTune = false;
+                    updateRC28Leds();
+                }
+            });
     });
 #endif
     auto* ulanziAction = settingsMenu->addAction("Ulanzi Dial Mapping...");
@@ -10669,6 +10697,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_txIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 21px; }");
         m_txIndicator->setText("TX");
         m_connPanel->setStatusText("Not connected");
+#ifdef HAVE_HIDAPI
+        // Safety: if latched PTT was active when the radio dropped, the radio is
+        // now TX-off regardless.  Reset the latch flag so it stays in sync with
+        // the radio's actual state on reconnect. (#3323)
+        if (m_rc28PttLatched) {
+            m_rc28PttLatched = false;
+        }
+#endif
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         stopDax();
 #endif

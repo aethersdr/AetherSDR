@@ -29,6 +29,9 @@ public:
     void appendButtonEvent(const QString& slotLabel,
                            const QString& actionName);
 
+signals:
+    void mappingFieldChanged(const QString& field, const QString& value);
+
 private slots:
     void onConnectionChanged(bool connected, const QString& deviceName);
     void onMultipleDevicesDetected(const QString& deviceName);

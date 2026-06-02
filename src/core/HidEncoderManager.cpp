@@ -115,15 +115,19 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
             }
             // open() is retried every hotplug tick while two devices remain, so
             // warn + emit only on the transition into the blocked state.
-            if (!m_multipleDetected) {
-                m_multipleDetected = true;
+            if (!m_multipleDetected.load(std::memory_order_acquire)) {
+                // Write the name before the release store so the main thread
+                // sees a valid QString when it reads m_multipleDetected as true.
+                m_blockedDeviceName = name;
+                m_multipleDetected.store(true, std::memory_order_release);
                 qCWarning(lcDevices) << "HidEncoderManager: multiple" << name
                                      << "devices detected — blocking until only one is present";
                 emit multipleDevicesDetected(name);
             }
             return false;
         }
-        m_multipleDetected = false;
+        m_blockedDeviceName.clear();
+        m_multipleDetected.store(false, std::memory_order_release);
     }
 
     m_device = hid_open(vid, pid, nullptr);
@@ -379,16 +383,22 @@ void HidEncoderManager::loadSettings()
     auto& s = AppSettings::instance();
     m_invertDirection = s.value("HidEncoderInvertDir", "False").toString() == "True";
 
-    if (s.value("HidEncoderAutoDetect", "True").toString() == "True") {
-        const auto* devices = HidDeviceParser::supportedDevices();
-        int count = HidDeviceParser::supportedDeviceCount();
-        for (int i = 0; i < count; ++i) {
-            if (open(devices[i].vid, devices[i].pid))
-                return;
-        }
-        // No device found — start hotplug timer to watch for connect
-        m_hotplugTimer->start();
+    // Callers (MainWindow startup + Preferences OK) gate on HidEncoderEnabled, so
+    // loadSettings() always scans for a device when called.  The isOpen() guard
+    // makes repeated calls from Preferences idempotent: invert-dir is refreshed
+    // above, but we skip the scan+open cycle if the device is already connected.
+    // Replacing the old HidEncoderAutoDetect check prevents users who had that
+    // flag set to "False" from getting stuck in a "can't re-enable" state. (#3323)
+    if (isOpen()) return;
+
+    const auto* devices = HidDeviceParser::supportedDevices();
+    int count = HidDeviceParser::supportedDeviceCount();
+    for (int i = 0; i < count; ++i) {
+        if (open(devices[i].vid, devices[i].pid))
+            return;
     }
+    // No device found — start hotplug timer to watch for connect
+    m_hotplugTimer->start();
 }
 
 } // namespace AetherSDR
