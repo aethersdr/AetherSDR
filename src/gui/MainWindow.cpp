@@ -642,7 +642,8 @@ static QString buildNetworkTooltip(const RadioModel& model)
         << QString("Packet loss (%1s): %2")
                .arg(model.packetLossWindowSeconds())
                .arg(formatNetworkSeqErrors(model.packetLossWindowDrops(),
-                                           model.packetLossWindowPackets()))
+                                           model.packetLossWindowPackets()
+                                               + model.packetLossWindowDrops()))
         << QString("Network jitter: %1").arg(formatNetworkMs(model.audioPacketJitterMs()))
         << QString("Audio gap: %1 (max %2)")
                .arg(formatNetworkMs(model.audioPacketGapMs()),

@@ -599,13 +599,18 @@ void PanadapterStream::processDatagram(const QByteArray& data)
             const int expected = (stats.lastSeq + 1) & 0x0F;
             if (vitaSeq != expected) {
                 sequenceError = true;
+                // 4-bit modular distance: the number of packets skipped before
+                // the one we just received (1..15). errorCount / m_catStats[].errors
+                // keep counting gap EVENTS (the cumulative "sequence gaps" tally and
+                // per-category diagnostics); missedCount accumulates the true number
+                // of lost PACKETS, which feeds the windowed network-quality metric so
+                // a single bursty gap is no longer undercounted up to 15x. (#2825, #2731)
+                const int missed = (vitaSeq - stats.lastSeq - 1) & 0x0F;
                 stats.errorCount++;
+                stats.missedCount += missed;
                 m_catStats[cat].errors++;
-                if (cat == CatAudio) {
-                    // 4-bit modular distance, minus the one packet we just got. (#2731)
-                    audioMissedThisPacket =
-                        ((vitaSeq - stats.lastSeq - 1) & 0x0F);
-                }
+                if (cat == CatAudio)
+                    audioMissedThisPacket = missed;
             }
         }
         stats.lastSeq = vitaSeq;
@@ -1198,6 +1203,15 @@ int PanadapterStream::packetErrorCount() const
     int total = 0;
     for (auto it = m_streamStats.constBegin(); it != m_streamStats.constEnd(); ++it)
         total += it->errorCount;
+    return total;
+}
+
+int PanadapterStream::packetMissedCount() const
+{
+    QMutexLocker lock(&m_statsMutex);
+    int total = 0;
+    for (auto it = m_streamStats.constBegin(); it != m_streamStats.constEnd(); ++it)
+        total += it->missedCount;
     return total;
 }
 

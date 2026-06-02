@@ -2610,7 +2610,7 @@ void RadioModel::stopNetworkMonitor()
 
 void RadioModel::evaluateNetworkQuality()
 {
-    const int currentErrors = m_panStream->packetErrorCount();
+    const int currentErrors = m_panStream->packetMissedCount();
     const int currentPackets = m_panStream->packetTotalCount();
     recordNetworkHealthSample(currentErrors, currentPackets);
     const int ping = m_lastPingRtt;
@@ -2646,7 +2646,7 @@ void RadioModel::evaluateNetworkQuality()
 
 void RadioModel::resetNetworkHealthSamples()
 {
-    m_lastErrorCount = m_panStream ? m_panStream->packetErrorCount() : 0;
+    m_lastErrorCount = m_panStream ? m_panStream->packetMissedCount() : 0;
     m_lastPacketCount = m_panStream ? m_panStream->packetTotalCount() : 0;
     for (int i = 0; i < NETWORK_LOSS_WINDOW_SAMPLES; ++i) {
         m_lossSamplePackets[i] = 0;
@@ -2857,7 +2857,11 @@ double RadioModel::packetLossPercent() const
 {
     if (m_packetLossWindowPackets <= 0)
         return 0.0;
-    return (m_packetLossWindowErrors * 100.0) / m_packetLossWindowPackets;
+    // Loss over EXPECTED packets (received + missed) so the figure stays in
+    // [0,100] even under heavy bursts where missed can exceed received in a
+    // window. m_packetLossWindowErrors now accumulates missed packets. (#2825)
+    return (m_packetLossWindowErrors * 100.0)
+           / (m_packetLossWindowPackets + m_packetLossWindowErrors);
 }
 
 int RadioModel::audioPacketGapMs() const

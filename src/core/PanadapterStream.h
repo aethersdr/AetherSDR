@@ -194,6 +194,7 @@ private:
     struct StreamStats {
         int  lastSeq{-1};
         int  errorCount{0};
+        int  missedCount{0};
         int  totalCount{0};
     };
 
@@ -267,6 +268,7 @@ private:
 public:
     // Packet error/total counts across all owned streams (for network quality monitor).
     int packetErrorCount() const;
+    int packetMissedCount() const;
     int packetTotalCount() const;
     qint64 totalRxBytes() const { return m_totalRxBytes.load(); }
     qint64 totalTxBytes() const { return m_totalTxBytes.load(); }

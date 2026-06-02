@@ -2760,7 +2760,7 @@ void NetworkDiagnosticsDialog::refresh()
             QString("Last %1s: %2 / %3 dropped (%4%)   Total: %5 / %6 dropped (%7%)")
                 .arg(m_model->packetLossWindowSeconds())
                 .arg(windowDrops)
-                .arg(windowPackets)
+                .arg(windowPackets + windowDrops)
                 .arg(windowPct, 0, 'f', 2)
                 .arg(dropped).arg(total).arg(pct, 0, 'f', 2));
     } else {
