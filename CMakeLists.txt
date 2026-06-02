@@ -17,6 +17,7 @@ option(USE_SYSTEM_ZLIB         "Use system zlib"         OFF)
 option(USE_SYSTEM_MSPACK       "Use system libmspack"    OFF)
 option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
 option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
+option(USE_SYSTEM_LIBLIQUID       "Use system liquid-dsp"   OFF)
 
 # Build features options
 
@@ -879,7 +880,7 @@ endif()
 # build verifies clean on Linux + macOS even though no module currently
 # consumes liquid symbols. Standard linker dead-code elimination
 # (--gc-sections on ELF) drops the unused static lib from the final binary.
-if(NOT MSVC)
+if(NOT MSVC AND NOT USE_SYSTEM_LIBLIQUID)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
     set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
@@ -908,6 +909,13 @@ if(NOT MSVC)
         target_compile_options(liquid-static PRIVATE -w)
     endif()
 endif()  # NOT MSVC
+
+if (USE_SYSTEM_LIBLIQUID)
+    find_package(PkgConfig REQUIRED)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(libliquid REQUIRED IMPORTED_TARGET libliquid)
+    endif()
+endif()
 
 set(DFNR_RESOURCES "")
 if(ENABLE_DFNR AND AETHER_EMBED_DFNR_MODEL)
@@ -1084,11 +1092,16 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::Network
     Qt6::Multimedia
     aether_libmodem_core
-    # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
-    # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
+
+if (USE_SYSTEM_LIBLIQUID)
+    target_link_libraries(AetherSDR PRIVATE PkgConfig::libliquid)
+else()
+    # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
+    # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
+    target_link_libraries(AetherSDR PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>)
+endif()
 
 if(Qt6SerialPort_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SERIALPORT)
