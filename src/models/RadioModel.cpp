@@ -496,8 +496,16 @@ RadioModel::RadioModel(QObject* parent)
         m_cwxActive = false;
         m_transmitModel.setMox(false);
     });
-    connect(&m_dvkModel, &DvkModel::commandReady, this, [this](const QString& cmd){
-        sendCmd(cmd);
+    // DVK commands are reply-aware (#3377): capture the verb + slot id so
+    // the response code routes back to DvkModel, which forwards non-zero
+    // responses to DvkPanel as commandFailed.  Before #3377 these were
+    // fire-and-forget — the REC button toggled "checked" while the radio
+    // had refused rec_start, leaving the user with no feedback.
+    connect(&m_dvkModel, &DvkModel::replyCommandReady, this,
+            [this](const QString& cmd, const QString& verb, int id){
+        sendCmd(cmd, [this, verb, id](int respVal, const QString& body){
+            m_dvkModel.handleCommandResponse(verb, id, static_cast<uint>(respVal), body);
+        });
     });
     connect(&m_flexWaveformModel, &FlexWaveformModel::commandReady, this, [this](const QString& cmd){
         sendCmd(cmd);
