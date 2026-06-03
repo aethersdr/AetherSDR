@@ -16072,7 +16072,7 @@ void MainWindow::registerMidiParams()
 
     reg("global.txButton", "TX Button", "Global", P::Toggle, 0, 1,
         [this](float v) { m_radioModel.setTransmit(v > 0.5f); },
-        [this]() -> float { return m_radioModel.transmitModel().isMox() ? 1 : 0; });
+        [this]() -> float { return m_radioModel.transmitModel().isTransmitting() ? 1 : 0; });
 
     reg("global.tnfEnable", "TNF Global", "Global", P::Toggle, 0, 1,
         [this](float v) { m_radioModel.sendCommand(QString("radio set tnf_enabled=%1").arg(v > 0.5f ? 1 : 0)); });

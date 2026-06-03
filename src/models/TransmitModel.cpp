@@ -514,6 +514,7 @@ void TransmitModel::setMicLevel(int level)
 {
     level = qBound(0, level, 100);
     m_micLevel = level;
+    emit micStateChanged();
     emit commandReady(QString("transmit set miclevel=%1").arg(level));
 }
 
