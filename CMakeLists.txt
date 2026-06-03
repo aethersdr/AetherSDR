@@ -522,7 +522,6 @@ set(CORE_SOURCES
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/RigctlProtocol.cpp
-    src/core/RigctlPty.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
