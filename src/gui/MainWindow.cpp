@@ -199,6 +199,7 @@
 #include "core/SpotModeResolver.h"
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
+#include "RadeApplet.h"
 #endif
 #if defined(Q_OS_MAC)
 #include "core/VirtualAudioBridge.h"
@@ -17372,6 +17373,19 @@ void MainWindow::activateRADE(int sliceId)
         }
     }
 
+    if (auto* applet = m_appletPanel->radeApplet()) {
+        applet->setRadeActive(true);
+        applet->setRadeSynced(false);
+        connect(m_radeEngine, &RADEEngine::syncChanged,
+                applet, &RadeApplet::setRadeSynced);
+        connect(m_radeEngine, &RADEEngine::snrChanged,
+                applet, &RadeApplet::setRadeSnr);
+        connect(m_radeEngine, &RADEEngine::freqOffsetChanged,
+                applet, &RadeApplet::setRadeFreqOffset);
+        connect(m_radeEngine, &RADEEngine::eooCallsignReceived,
+                applet, &RadeApplet::setRadeCallsign, Qt::QueuedConnection);
+    }
+
     // Store far-end callsign received in EOO frame for display / future use.
     connect(m_radeEngine, &RADEEngine::eooCallsignReceived,
             this, [this](const QString& callsign) {
@@ -17424,6 +17438,17 @@ void MainWindow::deactivateRADE()
     m_radioModel.setDigitalVoiceTxSlice(-1);
     m_audio->clearTxAccumulators();  // flush stale RADE modem data
     m_appletPanel->phoneCwApplet()->setRadeActive(false);
+
+    if (auto* applet = m_appletPanel->radeApplet()) {
+        applet->setRadeActive(false);
+        if (m_radeEngine) {
+            disconnect(m_radeEngine, &RADEEngine::syncChanged,        applet, nullptr);
+            disconnect(m_radeEngine, &RADEEngine::snrChanged,         applet, nullptr);
+            disconnect(m_radeEngine, &RADEEngine::freqOffsetChanged,  applet, nullptr);
+            disconnect(m_radeEngine, &RADEEngine::eooCallsignReceived, applet, nullptr);
+        }
+    }
+
     // For hardware mics, reset to full gain — the radio controls hardware levels.
     // PC mic keeps its PcMicGain so SSB sessions are unaffected.
     if (m_radioModel.transmitModel().micSelection() != "PC") {
@@ -17512,6 +17537,13 @@ void MainWindow::activateFdvDisplay(int sliceId)
         }
     }
 
+#ifdef HAVE_RADE
+    if (auto* applet = m_appletPanel->radeApplet()) {
+        applet->setRadeActive(true, QStringLiteral("FreeDV"));
+        applet->setRadeSynced(false);
+    }
+#endif
+
     m_fdvSnrMeterIndex = m_radioModel.meterModel()
                              .findMeter("EXT_WVF", "FreeDV_SNR");
 
@@ -17537,6 +17569,11 @@ void MainWindow::deactivateFdvDisplay()
                 vfo->setRadeActive(false);
         }
     }
+
+#ifdef HAVE_RADE
+    if (auto* applet = m_appletPanel->radeApplet())
+        applet->setRadeActive(false);
+#endif
 
     disconnect(&m_radioModel.meterModel(), &MeterModel::meterUpdated,
                this, &MainWindow::onFdvMeterUpdated);
@@ -17565,9 +17602,18 @@ void MainWindow::onFdvMeterUpdated(int index, float value)
     if (synced != m_fdvSynced) {
         m_fdvSynced = synced;
         vfo->setRadeSynced(synced);
+#ifdef HAVE_RADE
+        if (auto* applet = m_appletPanel->radeApplet())
+            applet->setRadeSynced(synced);
+#endif
     }
-    if (synced)
+    if (synced) {
         vfo->setRadeSnr(value);
+#ifdef HAVE_RADE
+        if (auto* applet = m_appletPanel->radeApplet())
+            applet->setRadeSnr(value);
+#endif
+    }
 }
 
 void MainWindow::onFdvMetersChanged()

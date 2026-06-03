@@ -53,6 +53,9 @@ class MeterApplet;
 class HealthApplet;
 class MqttApplet;
 class FavoritesPickerDialog;
+#ifdef HAVE_RADE
+class RadeApplet;
+#endif
 
 // AppletPanel — right-side panel with a row of toggle buttons at the top,
 // an S-Meter gauge below them, and a scrollable stack of applets.
@@ -119,6 +122,9 @@ public:
     ShackSwitchApplet*   ssApplet()  { return m_ssApplet; }
     MeterApplet*  meterApplet()  { return m_meterApplet; }
     HealthApplet* healthApplet() { return m_healthApplet; }
+#ifdef HAVE_RADE
+    RadeApplet*   radeApplet()   { return m_radeApplet; }
+#endif
 #ifdef HAVE_MQTT
     MqttApplet*   mqttApplet()   { return m_mqttApplet; }
 #endif
@@ -278,6 +284,9 @@ private:
     ShackSwitchApplet*   m_ssApplet{nullptr};
     MeterApplet* m_meterApplet{nullptr};
     HealthApplet* m_healthApplet{nullptr};
+#ifdef HAVE_RADE
+    RadeApplet*  m_radeApplet{nullptr};
+#endif
 #ifdef HAVE_MQTT
     MqttApplet*  m_mqttApplet{nullptr};
 #endif

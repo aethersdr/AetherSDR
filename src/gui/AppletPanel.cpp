@@ -30,6 +30,9 @@
 #include "ShackSwitchApplet.h"
 #include "MeterApplet.h"
 #include "HealthApplet.h"
+#ifdef HAVE_RADE
+#include "RadeApplet.h"
+#endif
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
 #endif
@@ -851,6 +854,11 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_meterApplet = new MeterApplet;
     m_appletOrder.append(makeEntry("MTR", "Meters", m_meterApplet, false, m_drawer, m_drawerLayout));
+
+#ifdef HAVE_RADE
+    m_radeApplet = new RadeApplet;
+    m_appletOrder.append(makeEntry("RADE", "RADE Status", m_radeApplet, false, m_drawer, m_drawerLayout));
+#endif
 
     m_healthApplet = new HealthApplet;
     m_appletOrder.append(makeEntry("HLTH", "Antenna Health", m_healthApplet, false, m_drawer, m_drawerLayout));
