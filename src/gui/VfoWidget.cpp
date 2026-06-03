@@ -995,6 +995,13 @@ void VfoWidget::buildTabContent()
         m_escPhaseLbl->setFixedWidth(28);
         m_escPhaseLbl->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         escTopRow->addWidget(m_escPhaseLbl);
+        m_escPlus180Btn = new QPushButton("+180");
+        m_escPlus180Btn->setAccessibleName("Add 180 degrees to ESC phase");
+        m_escPlus180Btn->setToolTip("Shift ESC phase by 180\u00B0 to check the out-of-phase null. Click again to return.");
+        m_escPlus180Btn->setFixedHeight(20);
+        m_escPlus180Btn->setFixedWidth(40);
+        m_escPlus180Btn->setStyleSheet(kDspToggle);
+        escTopRow->addWidget(m_escPlus180Btn);
         escVbox->addLayout(escTopRow);
 
         // Gain vertical slider + polar plot row
@@ -1132,6 +1139,14 @@ void VfoWidget::buildTabContent()
             m_phaseKnob->setPhase(rad);
             if (!m_updatingFromModel && m_slice)
                 m_slice->setEscPhaseShift(rad);
+        });
+        // +180 momentary: integer-domain mod keeps two-press round-trip exact.
+        connect(m_escPlus180Btn, &QPushButton::clicked, this, [this]() {
+            if (m_updatingFromModel || !m_slice) return;
+            constexpr int kStepsPer180 = 36;   // 180° / 5°
+            constexpr int kStepsPerFull = 72;  // 360° / 5°
+            const int v = (m_escPhaseSlider->value() + kStepsPer180) % kStepsPerFull;
+            m_escPhaseSlider->setValue(v);
         });
         connect(m_escGainSlider, &QSlider::valueChanged, this, [this](int v) {
             float gain = v / 100.0f;

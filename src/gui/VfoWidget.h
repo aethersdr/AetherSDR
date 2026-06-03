@@ -226,6 +226,7 @@ private:
     QPushButton* m_escBtn{nullptr};
     PhaseKnob*   m_phaseKnob{nullptr};
     QSlider*     m_escPhaseSlider{nullptr};
+    QPushButton* m_escPlus180Btn{nullptr};
     QSlider*     m_escGainSlider{nullptr};
     QLabel*      m_escPhaseLbl{nullptr};
     QLabel*      m_escGainLbl{nullptr};
