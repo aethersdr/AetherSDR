@@ -307,16 +307,39 @@ void FreeDvClient::onFreqChange(const QJsonObject& data)
     if (info.gridSquare.isEmpty())
         info.gridSquare = data["grid_square"].toString();
 
-    if (freqMhz <= 0.0 || info.callsign.isEmpty()) return;
+    // No spot emitted here — freq_change fires on connect and on every
+    // VFO retune, including from stations that are only scanning.  Spots
+    // are created in onTxReport() when a station explicitly signals that
+    // it has begun transmitting.
+    if (freqMhz <= 0.0) return;
 
-    // Emit a spot for every station with a known frequency — this is
-    // the primary spot source.  rx_report only fires when one station
-    // actually decodes another, which is rare.  freq_change fires on
-    // connect (bulk_update) and whenever a station retunes.
+    QString logLine = QString("%1  %2  %3 MHz  freq_change")
+        .arg(QDateTime::currentDateTimeUtc().time().toString("HH:mm"),
+             info.callsign, QString::number(freqMhz, 'f', 4));
+    if (m_logFile.isOpen()) {
+        m_logFile.write((logLine + "\n").toUtf8());
+        m_logFile.flush();
+    }
+    emit rawLineReceived(logLine);
+}
+
+void FreeDvClient::onTxReport(const QJsonObject& data)
+{
+    QString sid = data["sid"].toString();
+    if (!m_stations.contains(sid)) return;
+    auto& info = m_stations[sid];
+
+    QString mode = data["mode"].toString();
+    if (!mode.isEmpty())
+        info.mode = mode;
+
+    if (!data["transmitting"].toBool()) return;
+    if (info.freqMhz <= 0.0 || info.callsign.isEmpty()) return;
+
     DxSpot spot;
     spot.dxCall      = info.callsign;
     spot.spotterCall = info.callsign;  // self-reported
-    spot.freqMhz     = freqMhz;
+    spot.freqMhz     = info.freqMhz;
     spot.source      = "FreeDV";
     spot.comment     = info.mode.isEmpty() ? "FreeDV" : info.mode;
     if (!info.gridSquare.isEmpty())
@@ -329,25 +352,15 @@ void FreeDvClient::onFreqChange(const QJsonObject& data)
         freedvColor = "#FF" + freedvColor.mid(1);
     spot.color = freedvColor;
 
-    QString logLine = QString("%1  %2  %3 MHz  %4")
+    QString logLine = QString("%1  %2  %3 MHz  TX %4")
         .arg(spot.utcTime.toString("HH:mm"), info.callsign,
-             QString::number(freqMhz, 'f', 4), spot.comment);
+             QString::number(info.freqMhz, 'f', 4), info.mode);
     if (m_logFile.isOpen()) {
         m_logFile.write((logLine + "\n").toUtf8());
         m_logFile.flush();
     }
     emit rawLineReceived(logLine);
     emit spotReceived(spot);
-}
-
-void FreeDvClient::onTxReport(const QJsonObject& data)
-{
-    QString sid = data["sid"].toString();
-    if (!m_stations.contains(sid)) return;
-    auto& info = m_stations[sid];
-    QString mode = data["mode"].toString();
-    if (!mode.isEmpty())
-        info.mode = mode;
 }
 
 void FreeDvClient::onRemoveConnection(const QJsonObject& data)
