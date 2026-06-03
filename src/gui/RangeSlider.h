@@ -31,6 +31,7 @@ signals:
     void rangeChanged(int low, int high);
 
 protected:
+    bool event(QEvent*) override;
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
     void mouseMoveEvent(QMouseEvent*) override;

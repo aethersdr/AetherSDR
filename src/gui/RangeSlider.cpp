@@ -1,5 +1,7 @@
 #include "RangeSlider.h"
 
+#include <QAccessible>
+#include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -28,6 +30,8 @@ void RangeSlider::setLow(int v)
     if (v == m_low) return;
     m_low = v;
     update();
+    QAccessibleValueChangeEvent ev(this, tr("Low %1%2").arg(m_low).arg(m_unit));
+    QAccessible::updateAccessibility(&ev);
     emit rangeChanged(m_low, m_high);
 }
 
@@ -37,6 +41,8 @@ void RangeSlider::setHigh(int v)
     if (v == m_high) return;
     m_high = v;
     update();
+    QAccessibleValueChangeEvent ev(this, tr("High %1%2").arg(m_high).arg(m_unit));
+    QAccessible::updateAccessibility(&ev);
     emit rangeChanged(m_low, m_high);
 }
 
@@ -175,6 +181,33 @@ void RangeSlider::mousePressEvent(QMouseEvent* e)
     mouseMoveEvent(e);
 }
 
+// Intercept Tab/Backtab before Qt's focus framework consumes them.
+// Toggle the focused handle when there is a sibling handle to move to;
+// otherwise let the event propagate so focus can leave the widget normally.
+bool RangeSlider::event(QEvent* e)
+{
+    if (e->type() == QEvent::KeyPress) {
+        auto* ke = static_cast<QKeyEvent*>(e);
+        if (ke->key() == Qt::Key_Tab && m_focused == Handle::Low) {
+            m_focused = Handle::High;
+            update();
+            QAccessibleValueChangeEvent ev(
+                this, tr("High handle focused, %1%2").arg(m_high).arg(m_unit));
+            QAccessible::updateAccessibility(&ev);
+            return true;
+        }
+        if (ke->key() == Qt::Key_Backtab && m_focused == Handle::High) {
+            m_focused = Handle::Low;
+            update();
+            QAccessibleValueChangeEvent ev(
+                this, tr("Low handle focused, %1%2").arg(m_low).arg(m_unit));
+            QAccessible::updateAccessibility(&ev);
+            return true;
+        }
+    }
+    return QWidget::event(e);
+}
+
 void RangeSlider::keyPressEvent(QKeyEvent* e)
 {
     // On first key press with no focused handle, default to Low
@@ -182,16 +215,6 @@ void RangeSlider::keyPressEvent(QKeyEvent* e)
         m_focused = Handle::Low;
 
     switch (e->key()) {
-    case Qt::Key_Tab:
-        m_focused = (m_focused == Handle::Low) ? Handle::High : Handle::Low;
-        update();
-        e->accept();
-        return;
-    case Qt::Key_Backtab:
-        m_focused = (m_focused == Handle::High) ? Handle::Low : Handle::High;
-        update();
-        e->accept();
-        return;
     case Qt::Key_Left:
     case Qt::Key_Down:
         if (m_focused == Handle::Low)
