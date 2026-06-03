@@ -880,7 +880,7 @@ endif()
 # build verifies clean on Linux + macOS even though no module currently
 # consumes liquid symbols. Standard linker dead-code elimination
 # (--gc-sections on ELF) drops the unused static lib from the final binary.
-if(NOT MSVC AND NOT USE_SYSTEM_liquid-dsp)
+if(NOT MSVC AND NOT USE_SYSTEM_LIQUID_DSP)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
     set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
