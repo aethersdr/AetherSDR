@@ -196,7 +196,19 @@ void ClientPuduMonitor::startPlayback()
     // resample fast path — typical on Linux); fall back to 48 kHz
     // (typical on macOS and Windows) with a one-shot r8brain upsample
     // of the whole captured buffer up-front.
+    //
+    // Prefer the device the user picked in Radio Settings > Audio
+    // (m_outputDevice, seeded by MainWindow from AudioEngine).  Only
+    // accept it if it is still present in the live audioOutputs() list
+    // — a hotplug/unplug between selection and now would otherwise
+    // strand us on a stale handle.  Mirrors AudioEngine::startSidetoneStream().
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    if (!m_outputDevice.isNull()) {
+        const auto outputs = QMediaDevices::audioOutputs();
+        for (const auto& d : outputs) {
+            if (d.id() == m_outputDevice.id()) { dev = d; break; }
+        }
+    }
     if (dev.isNull()) {
         AudioSummaryLogger::OpenFailureSummary failure;
         failure.path = QStringLiteral("Aetherial monitor playback");
@@ -225,7 +237,18 @@ void ClientPuduMonitor::startPlayback()
         fallbackReasons << QStringLiteral("24000Hz Int16 stereo unsupported -> 48000Hz");
         attemptedFormats << QStringLiteral("48000Hz 2ch Int16");
         if (!dev.isFormatSupported(fmt)) {
-            // Int16 @ 24 kHz and 48 kHz both rejected.  On Windows this is
+            // Try 44.1 kHz Int16 before giving up on Int16 — some Windows
+            // output devices (HFP/SCO routes, certain USB DACs) reject 48 kHz
+            // outright but accept 44.1 kHz.  Mirrors CwSidetoneQAudioSink's
+            // 48/44.1/24 ladder so the monitor doesn't fall straight through
+            // to preferredFormat on devices that would have taken 44.1.
+            fmt.setSampleRate(44100);
+            sinkRate = 44100;
+            fallbackReasons << QStringLiteral("48000Hz Int16 unsupported -> 44100Hz");
+            attemptedFormats << QStringLiteral("44100Hz 2ch Int16");
+        }
+        if (!dev.isFormatSupported(fmt)) {
+            // Int16 @ 24 / 48 / 44.1 kHz all rejected.  On Windows this is
             // typically WASAPI shared mode running a Float32 mix pipeline -
             // the hardware is capable of Int16 but the OS-level mixer refuses
             // the format.  Try the device's preferred format before giving up,
@@ -235,7 +258,7 @@ void ClientPuduMonitor::startPlayback()
             if (preferred.isValid() && dev.isFormatSupported(preferred)) {
                 fmt = preferred;
                 sinkRate = fmt.sampleRate();
-                fallbackReasons << QStringLiteral("48000Hz Int16 unsupported -> preferredFormat (%1Hz %2)")
+                fallbackReasons << QStringLiteral("44100Hz Int16 unsupported -> preferredFormat (%1Hz %2)")
                                        .arg(sinkRate)
                                        .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat()));
                 attemptedFormats << QStringLiteral("%1Hz %2ch %3")

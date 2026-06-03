@@ -365,7 +365,19 @@ void QsoRecorder::startPlayback()
 {
     if (m_playing || m_lastRecordingPath.isEmpty()) return;
 
+    // Prefer the device the user picked in Radio Settings > Audio
+    // (m_outputDevice, seeded by MainWindow from AudioEngine).  Only
+    // accept it if it is still present in the live audioOutputs() list
+    // — a hotplug/unplug between selection and now would otherwise
+    // strand us on a stale handle.  Mirrors ClientPuduMonitor and
+    // AudioEngine::startSidetoneStream() (#3361).
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    if (!m_outputDevice.isNull()) {
+        const auto outputs = QMediaDevices::audioOutputs();
+        for (const auto& d : outputs) {
+            if (d.id() == m_outputDevice.id()) { dev = d; break; }
+        }
+    }
     if (dev.isNull()) return;
 
     QAudioFormat fmt;

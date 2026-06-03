@@ -1513,6 +1513,18 @@ MainWindow::MainWindow(QWidget* parent)
     // strip.
     m_finalMonitor = new ClientPuduMonitor(this);
     m_audio->setTxFinalMonitor(m_finalMonitor);
+    // Route monitor playback through the user-selected output device
+    // rather than the system default — without this, the post-DSP TX
+    // capture plays out of whichever device Windows currently considers
+    // the default, which is rarely the device the user picked in Radio
+    // Settings > Audio.  Seed once and re-seed whenever the user changes
+    // their output selection (#3361).
+    m_finalMonitor->setOutputDevice(m_audio->outputDevice());
+    m_qsoRecorder->setOutputDevice(m_audio->outputDevice());
+    connect(m_audio, &AudioEngine::outputDeviceChanged, this, [this]() {
+        m_finalMonitor->setOutputDevice(m_audio->outputDevice());
+        m_qsoRecorder->setOutputDevice(m_audio->outputDevice());
+    }, Qt::QueuedConnection);
 
     // Wire the Quindar tone coordinator (#2262).  TransmitModel needs
     // the DSP module (to drive intro/outro phases) and a TX-mode
