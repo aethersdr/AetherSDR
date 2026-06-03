@@ -60,6 +60,12 @@ FramelessWindowTitleBar::FramelessWindowTitleBar(const QString& title, QWidget* 
     minButton->setCursor(Qt::ArrowCursor);
     minButton->setStyleSheet(kButtonStyle);
     minButton->setToolTip("Minimize");
+    // Title-bar buttons must never become the dialog's default button, or
+    // pressing Return in a text field would trigger them (on macOS this minimized
+    // the window). Keep them out of the Return/Tab focus chain entirely.
+    minButton->setAutoDefault(false);
+    minButton->setDefault(false);
+    minButton->setFocusPolicy(Qt::NoFocus);
     connect(minButton, &QPushButton::clicked, this, [this] {
         if (auto* w = window())
             w->showMinimized();
@@ -71,6 +77,9 @@ FramelessWindowTitleBar::FramelessWindowTitleBar(const QString& title, QWidget* 
     maxButton->setCursor(Qt::ArrowCursor);
     maxButton->setStyleSheet(kButtonStyle);
     maxButton->setToolTip("Maximize");
+    maxButton->setAutoDefault(false);
+    maxButton->setDefault(false);
+    maxButton->setFocusPolicy(Qt::NoFocus);
     connect(maxButton, &QPushButton::clicked, this, [this] {
         if (auto* w = window()) {
             if (w->isMaximized()) {
@@ -87,6 +96,9 @@ FramelessWindowTitleBar::FramelessWindowTitleBar(const QString& title, QWidget* 
     closeButton->setCursor(Qt::ArrowCursor);
     closeButton->setStyleSheet(kCloseButtonStyle);
     closeButton->setToolTip("Close");
+    closeButton->setAutoDefault(false);
+    closeButton->setDefault(false);
+    closeButton->setFocusPolicy(Qt::NoFocus);
     connect(closeButton, &QPushButton::clicked, this, [this] {
         if (auto* w = window())
             w->close();

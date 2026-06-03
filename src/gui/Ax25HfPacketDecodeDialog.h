@@ -9,9 +9,11 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QQueue>
+#include <QStringList>
 
 class QAbstractButton;
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -24,11 +26,13 @@ class QTimer;
 namespace AetherSDR {
 
 class AudioEngine;
+class HeardList;
 class KissTncServer;
 class PacketActivityWidget;
 class PmsMailbox;
 class RadioModel;
 class SliceModel;
+class TncTerminal;
 
 // Persistence for the AetherModem KISS TNC. Per Constitution Principle V,
 // new feature configuration lives as a nested JSON blob under one root key
@@ -84,6 +88,10 @@ public:
 
     void setAttachedSlice(SliceModel* slice);
 
+protected:
+    // Command history (Up/Down) on the terminal input line.
+    bool eventFilter(QObject* watched, QEvent* event) override;
+
 private:
     void setModemProfile(Ax25ModemProfile profile, bool persist);
     void setDecodeEnabled(bool enabled);
@@ -101,6 +109,16 @@ private:
     void setPmsEnabled(bool enabled, bool persist);
     void applyPmsConfigFromUi(bool persist);
     void refreshPmsStatus();
+
+    // TNC Terminal tab: connected-mode AX.25 client (call out to a packet BBS).
+    QWidget* buildTerminalPage();
+    void submitTerminalInput();
+    void refreshTerminalStatus();
+    void applyTerminalConfigFromUi(bool persist);
+    void refreshTerminalHeardCombo();
+    // Hide the shared log panel and grow the tab stack on the Terminal tab so the
+    // transcript gets the full viewport; restore the chrome on the other tabs.
+    void updateTabChrome(int index);
 
     // KISS TNC tab + TCP server wiring.
     QWidget* buildKissTncPage();
@@ -135,6 +153,8 @@ private:
     QLineEdit* m_txText{nullptr};
     QPushButton* m_txButton{nullptr};
     QTextEdit* m_log{nullptr};
+    QWidget* m_logFrame{nullptr};
+    QWidget* m_actionRowFrame{nullptr};
     QLabel* m_modemStatusDot{nullptr};
     QLabel* m_modemStatusValue{nullptr};
     QLabel* m_gainStageDot{nullptr};
@@ -195,6 +215,35 @@ private:
     int m_kissTxBusyRetries{0};
     quint64 m_kissTxCount{0};
     quint64 m_kissRxCount{0};
+
+    // Shared station-heard log (feeds the terminal MHEARD + quick-connect).
+    HeardList* m_heard{nullptr};
+
+    // TNC Terminal service (connected-mode AX.25 client) and its controls.
+    TncTerminal* m_terminal{nullptr};
+    QAbstractButton* m_terminalTab{nullptr};
+    QLineEdit* m_terminalMyCall{nullptr};
+    QLineEdit* m_terminalTarget{nullptr};
+    QComboBox* m_terminalHeardCombo{nullptr};
+    QPushButton* m_terminalConnectButton{nullptr};
+    QPushButton* m_terminalCmdButton{nullptr};
+    QPushButton* m_terminalMheardButton{nullptr};
+    QSpinBox* m_terminalRetrySecs{nullptr};
+    QSpinBox* m_terminalMaxTries{nullptr};
+    QSpinBox* m_terminalPaclen{nullptr};
+    QSpinBox* m_terminalTxTail{nullptr};
+    // PTT tail (ms) after TX audio, before unkey. Operator-tunable to shrink the
+    // half-duplex turnaround so we hear the peer's next frame sooner.
+    int m_txTailMs{150};
+    QCheckBox* m_terminalLogEnable{nullptr};
+    QTextEdit* m_terminalView{nullptr};
+    QLineEdit* m_terminalInput{nullptr};
+    QPushButton* m_terminalSendButton{nullptr};
+    QLabel* m_terminalStatusDot{nullptr};
+    QLabel* m_terminalStatusValue{nullptr};
+    QStringList m_terminalHistory;
+    int m_terminalHistoryIndex{0};
+    QString m_lastDialedCall; // persisted across restarts (last BBS connected)
 
     // Personal Mailbox System (PMS) service and its controls.
     PmsMailbox* m_pms{nullptr};

@@ -5,13 +5,17 @@
 #include "core/DaxTxPolicy.h"
 #include "core/LogManager.h"
 #include "core/ThemeManager.h"
+#include "core/tnc/Ax25.h"
 #include "core/tnc/Ax25FrameFormatter.h"
+#include "core/tnc/HeardList.h"
 #include "core/tnc/KissTncServer.h"
+#include "core/tnc/TncTerminal.h"
 #include "core/pms/PmsMailbox.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
+#include <QAction>
 #include <QButtonGroup>
 #include <QCheckBox>
 #include <QComboBox>
@@ -19,10 +23,13 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QFont>
 #include <QFrame>
 #include <QHBoxLayout>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPushButton>
@@ -34,6 +41,7 @@
 #include <QStackedWidget>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QTextCursor>
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QTimer>
@@ -76,10 +84,26 @@ constexpr auto kPmsWelcomeSetting = "AetherModemPmsWelcome";
 constexpr auto kPmsBeaconEnabledSetting = "AetherModemPmsBeaconEnabled";
 constexpr auto kPmsBeaconTextSetting = "AetherModemPmsBeaconText";
 
+// TNC Terminal settings keys (persisted in AppSettings).
+constexpr auto kTerminalMyCallSetting = "AetherModemTerminalMyCall";
+constexpr auto kTerminalLastCallSetting = "AetherModemTerminalLastCall";
+constexpr auto kTerminalTxTailSetting = "AetherModemTerminalTxTailMs";
+constexpr auto kTerminalRetrySecsSetting = "AetherModemTerminalRetrySecs";
+constexpr auto kTerminalMaxTriesSetting = "AetherModemTerminalMaxTries";
+constexpr auto kTerminalPaclenSetting = "AetherModemTerminalPaclen";
+constexpr auto kTerminalLogSetting = "AetherModemTerminalLogEnabled";
+constexpr int kTerminalDefaultRetrySecs = 6;
+constexpr int kTerminalDefaultMaxTries = 8;
+constexpr int kTerminalDefaultPaclen = 128;
+
 constexpr int kAudioCaptureSeconds = 180;
 constexpr int kTxDaxSettleMs = 150;
 constexpr int kTxLeadMs = 200;
-constexpr int kTxTailMs = 250;
+// Default TX tail: how long PTT stays up after the audio is queued, to flush the
+// DAX/radio buffer before unkey. On a half-duplex link this is also dead air the
+// peer can't talk over, so it's operator-tunable (Terminal tab, "TX Tail"); the
+// runtime value lives in m_txTailMs. Too short clips the end of our frame.
+constexpr int kTxTailDefaultMs = 150;
 constexpr int kTxChunkMs = 20;
 // TX jitter buffer: how far ahead of real time we keep the radio's TX FIFO.
 // The pacer runs on the GUI thread, which jitters under RX-decode / diagnostics
@@ -601,7 +625,17 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     m_shim = new AetherAx25LibmodemShim(this);
     m_kissServer = new KissTncServer(this);
+    m_heard = new HeardList(this);
+    m_terminal = new TncTerminal(this);
     m_pms = new PmsMailbox(this);
+
+    // The TNC store lives next to the app settings (heard log + session logs).
+    const QString tncDir =
+        QFileInfo(AppSettings::instance().filePath()).absolutePath()
+        + QStringLiteral("/tnc");
+    m_heard->setPersistencePath(tncDir + QStringLiteral("/heard.json"));
+    m_terminal->setHeardList(m_heard);
+    m_terminal->setLogDirectory(tncDir + QStringLiteral("/logs"));
     m_heartbeatTimer = new QTimer(this);
     m_heartbeatTimer->setInterval(1000);
     m_txPaceTimer = new QTimer(this);
@@ -617,23 +651,29 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     tabs->setSpacing(0);
     m_ax25Tab = tabButton(QStringLiteral("AX.25"), true, tabsFrame);
     m_kissTab = tabButton(QStringLiteral("KISS TNC"), false, tabsFrame);
+    m_terminalTab = tabButton(QStringLiteral("Terminal"), false, tabsFrame);
     m_mailboxTab = tabButton(QStringLiteral("Mailbox"), false, tabsFrame);
     m_ax25Tab->setEnabled(true);
     m_kissTab->setEnabled(true);
+    m_terminalTab->setEnabled(true);
     m_mailboxTab->setEnabled(true);
     auto* tabGroup = new QButtonGroup(this);
     tabGroup->setExclusive(true);
     tabGroup->addButton(m_ax25Tab, 0);
     tabGroup->addButton(m_kissTab, 1);
-    tabGroup->addButton(m_mailboxTab, 2);
+    tabGroup->addButton(m_terminalTab, 2);
+    tabGroup->addButton(m_mailboxTab, 3);
     tabs->addWidget(m_ax25Tab, 1);
     tabs->addWidget(m_kissTab, 1);
+    tabs->addWidget(m_terminalTab, 1);
     tabs->addWidget(m_mailboxTab, 1);
     root->addWidget(tabsFrame);
 
     m_tabStack = new QStackedWidget(bodyWidget());
     root->addWidget(m_tabStack);
     connect(tabGroup, &QButtonGroup::idClicked, m_tabStack, &QStackedWidget::setCurrentIndex);
+    connect(m_tabStack, &QStackedWidget::currentChanged,
+            this, &Ax25HfPacketDecodeDialog::updateTabChrome);
 
     // AX.25 page: modem config + transmit. The log and status row below the
     // stack are shared by both tabs.
@@ -699,10 +739,13 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     // KISS TNC page (built lazily into the same stack).
     m_tabStack->addWidget(buildKissTncPage());
+    // TNC Terminal page (connected-mode AX.25 client).
+    m_tabStack->addWidget(buildTerminalPage());
     // Mailbox (PMS) page.
     m_tabStack->addWidget(buildMailboxPage());
 
     auto* logFrame = panel(QStringLiteral("LogFrame"), bodyWidget());
+    m_logFrame = logFrame;
     auto* logLayout = new QVBoxLayout(logFrame);
     logLayout->setContentsMargins(12, 10, 12, 10);
     logLayout->setSpacing(0);
@@ -716,6 +759,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     root->addWidget(logFrame, 1);
 
     auto* actionRowFrame = new QWidget(bodyWidget());
+    m_actionRowFrame = actionRowFrame;
     auto* actionRow = new QHBoxLayout(actionRowFrame);
     actionRow->setContentsMargins(0, 0, 0, 0);
     actionRow->setSpacing(8);
@@ -847,8 +891,17 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     // connected-mode handling only for frames addressed to our PMS callsign).
     connect(m_shim, &AetherAx25LibmodemShim::frameDecoded, this,
             [this](const Ax25DecodedFrame& frame) {
-        if (m_pms && !frame.ax25FrameNoFcs.isEmpty())
+        if (frame.ax25FrameNoFcs.isEmpty())
+            return;
+        // Record into the shared heard log once (drives MHEARD + quick-connect).
+        if (m_heard) {
+            if (auto decoded = ax25::Frame::decode(frame.ax25FrameNoFcs))
+                m_heard->record(*decoded);
+        }
+        if (m_pms)
             m_pms->onAirFrame(frame.ax25FrameNoFcs);
+        if (m_terminal)
+            m_terminal->onAirFrame(frame.ax25FrameNoFcs);
     });
     connect(m_shim, &AetherAx25LibmodemShim::diagnosticsUpdated,
             this, &Ax25HfPacketDecodeDialog::updateDiagnostics);
@@ -933,6 +986,40 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         applyPmsConfigFromUi(true);
     });
 
+    // TNC Terminal wiring.
+    connect(m_terminal, &TncTerminal::transmitFrame, this, [this](const QByteArray& raw) {
+        if (raw.isEmpty() || !m_audio || !m_radio)
+            return;
+        m_kissTxQueue.enqueue(raw); // shares the one-at-a-time keying/pacing path
+        maybeStartNextKissTx();
+    });
+    connect(m_terminal, &TncTerminal::output, this, [this](const QString& text) {
+        if (!m_terminalView)
+            return;
+        m_terminalView->moveCursor(QTextCursor::End);
+        m_terminalView->insertPlainText(text);
+        m_terminalView->moveCursor(QTextCursor::End);
+        if (auto* bar = m_terminalView->verticalScrollBar())
+            bar->setValue(bar->maximum());
+    });
+    // Terminal protocol activity stays out of the shared decode log box (and out
+    // of the transcript unless verbose), but it is always written to the support
+    // log file so connect/RR/REJ/retransmit traces are available for debugging.
+    connect(m_terminal, &TncTerminal::activity, this, [](const QString& line) {
+        qCDebug(lcAx25).noquote() << line;
+    });
+    connect(m_terminal, &TncTerminal::stateChanged, this, [this] { refreshTerminalStatus(); });
+    connect(m_heard, &HeardList::changed, this, [this] { refreshTerminalHeardCombo(); });
+    // Any outbound connect needs the modem RX tap running, or the BBS's frames
+    // are never heard. Turn it on automatically before the link is dialed.
+    connect(m_terminal, &TncTerminal::connectRequested, this, [this](const QString& peer) {
+        if (m_enableDecode && !m_enableDecode->isChecked()) {
+            appendSystemLine(
+                QStringLiteral("Enabling the modem for the terminal connection to %1.").arg(peer));
+            m_enableDecode->setChecked(true);
+        }
+    });
+
     appendSystemLine(QStringLiteral("AetherModem initialized."));
     appendSystemLine(QStringLiteral("Enable Modem to start the RX audio tap."));
     appendSystemLine(QStringLiteral("TX accepts raw payload text or full SRC>DST,path:payload syntax."));
@@ -953,6 +1040,29 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     if (pmsOn && m_pmsEnable)
         m_pmsEnable->setChecked(true); // fires setPmsEnabled() via the toggled connection
     refreshPmsStatus();
+
+    // Restore TNC Terminal state.
+    applyTerminalConfigFromUi(false);
+    const bool termLogOn = AppSettings::instance()
+        .value(kTerminalLogSetting, QStringLiteral("False")).toString()
+            == QStringLiteral("True");
+    if (termLogOn && m_terminalLogEnable)
+        m_terminalLogEnable->setChecked(true); // fires the toggled handler
+    refreshTerminalStatus();
+    refreshTerminalHeardCombo();
+
+    // No control button may be the dialog's default button — otherwise pressing
+    // Return in a text field would trigger it (Connect, Transmit, ...). Combined
+    // with the title-bar fix, this guarantees Enter never does anything unwanted
+    // in any AetherModem field; each field's own returnPressed still works.
+    for (QPushButton* button : bodyWidget()->findChildren<QPushButton*>()) {
+        button->setAutoDefault(false);
+        button->setDefault(false);
+    }
+
+    // Apply the per-tab chrome (hide the shared log on the Terminal tab) now that
+    // the layout is fully built.
+    updateTabChrome(m_tabStack->currentIndex());
 }
 
 Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog()
@@ -1246,7 +1356,7 @@ void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
             .arg(m_txChunkCount)
             .arg(kTxDaxSettleMs)
             .arg(kTxLeadMs)
-            .arg(kTxTailMs);
+            .arg(m_txTailMs);
 
     refreshTransmitControls();
     QTimer::singleShot(kTxDaxSettleMs, this, [this] {
@@ -1340,8 +1450,8 @@ void Ax25HfPacketDecodeDialog::paceTransmitAudio()
             .arg(m_txPaceMaxGapMs)
             .arg(m_txPaceLateChunks));
         appendSystemLine(QStringLiteral("AX.25 TX audio queued; waiting %1 ms before unkey.")
-            .arg(kTxTailMs));
-        QTimer::singleShot(kTxTailMs, this, [this] {
+            .arg(m_txTailMs));
+        QTimer::singleShot(m_txTailMs, this, [this] {
             finishTransmit(false, QStringLiteral("AX.25 TX complete"));
         });
         return;
@@ -1620,6 +1730,8 @@ void Ax25HfPacketDecodeDialog::setDiagnosticsDebugEnabled(bool enabled, bool per
     m_diagnosticsDebugEnabled = enabled;
     if (m_shim)
         m_shim->setDiagnosticsLoggingEnabled(enabled);
+    if (m_terminal)
+        m_terminal->setVerbose(enabled); // echo protocol detail inline in the terminal
     if (m_packetActivity)
         m_packetActivity->setDebugEnabled(enabled);
     if (m_packetActivityTitle) {
@@ -2009,6 +2121,371 @@ void Ax25HfPacketDecodeDialog::refreshTncStatus()
 }
 
 // ---------------------------------------------------------------------------
+// TNC Terminal tab (connected-mode AX.25 client)
+// ---------------------------------------------------------------------------
+
+QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
+{
+    auto* page = new QWidget(m_tabStack);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(10);
+
+    // --- Connect controls -----------------------------------------------------
+    auto* controlsFrame = panel(QStringLiteral("ControlsFrame"), page);
+    auto* controls = new QHBoxLayout(controlsFrame);
+    controls->setContentsMargins(16, 14, 16, 14);
+    controls->setSpacing(20);
+
+    auto* callCell = panel(QStringLiteral("ControlCell"), controlsFrame);
+    auto* callLayout = new QVBoxLayout(callCell);
+    callLayout->setContentsMargins(0, 0, 20, 0);
+    callLayout->setSpacing(12);
+    callLayout->addWidget(sectionLabel(QStringLiteral("MY CALLSIGN"), callCell));
+    m_terminalMyCall = new QLineEdit(callCell);
+    m_terminalMyCall->setPlaceholderText(QStringLiteral("e.g. N0CALL-7"));
+    m_terminalMyCall->setToolTip(QStringLiteral(
+        "Your station callsign-SSID. Outbound connects originate from this address."));
+    m_terminalMyCall->setMaximumWidth(200);
+    callLayout->addWidget(m_terminalMyCall);
+    controls->addWidget(callCell);
+
+    auto* targetCell = panel(QStringLiteral("ControlCell"), controlsFrame);
+    auto* targetLayout = new QVBoxLayout(targetCell);
+    targetLayout->setContentsMargins(0, 0, 20, 0);
+    targetLayout->setSpacing(12);
+    targetLayout->addWidget(sectionLabel(QStringLiteral("CONNECT TO"), targetCell));
+    auto* targetRow = new QHBoxLayout;
+    targetRow->setSpacing(10);
+    m_terminalTarget = new QLineEdit(targetCell);
+    m_terminalTarget->setPlaceholderText(QStringLiteral("e.g. KX9X-1"));
+    m_terminalTarget->setMaximumWidth(180);
+    targetRow->addWidget(m_terminalTarget);
+    m_terminalConnectButton = new QPushButton(QStringLiteral("Connect"), targetCell);
+    m_terminalConnectButton->setMinimumHeight(36);
+    targetRow->addWidget(m_terminalConnectButton);
+    m_terminalCmdButton = new QPushButton(QStringLiteral("Cmd Mode"), targetCell);
+    m_terminalCmdButton->setMinimumHeight(36);
+    m_terminalCmdButton->setToolTip(QStringLiteral(
+        "Return to the command prompt without disconnecting (the escape action)."));
+    targetRow->addWidget(m_terminalCmdButton);
+    targetLayout->addLayout(targetRow);
+
+    // Quick-connect: a dropdown of recently-heard stations fills the target box.
+    auto* heardRow = new QHBoxLayout;
+    heardRow->setSpacing(10);
+    m_terminalHeardCombo = new QComboBox(targetCell);
+    m_terminalHeardCombo->setMinimumWidth(220);
+    m_terminalHeardCombo->setToolTip(QStringLiteral(
+        "Stations heard on frequency. Pick one to fill the target callsign."));
+    heardRow->addWidget(m_terminalHeardCombo);
+    m_terminalMheardButton = new QPushButton(QStringLiteral("MHeard"), targetCell);
+    m_terminalMheardButton->setMinimumHeight(36);
+    m_terminalMheardButton->setToolTip(QStringLiteral(
+        "Print the full heard list (callsign, last heard, last beacon) to the terminal."));
+    heardRow->addWidget(m_terminalMheardButton);
+    heardRow->addStretch(1);
+    targetLayout->addLayout(heardRow);
+    controls->addWidget(targetCell, 1);
+
+    // Link parameters (forwarded to the data link) + session logging.
+    auto* paramCell = panel(QStringLiteral("ControlCell"), controlsFrame);
+    auto* paramLayout = new QVBoxLayout(paramCell);
+    paramLayout->setContentsMargins(0, 0, 0, 0);
+    paramLayout->setSpacing(12);
+    paramLayout->addWidget(sectionLabel(QStringLiteral("LINK PARAMETERS"), paramCell));
+    auto* paramRow = new QHBoxLayout;
+    paramRow->setSpacing(14);
+    auto addSpin = [&](const QString& label, int lo, int hi, int def, const QString& tip) {
+        auto* col = new QVBoxLayout;
+        col->setSpacing(4);
+        auto* cap = new QLabel(label, paramCell);
+        cap->setObjectName(QStringLiteral("StatusValue"));
+        col->addWidget(cap);
+        auto* spin = new QSpinBox(paramCell);
+        spin->setRange(lo, hi);
+        spin->setValue(def);
+        spin->setToolTip(tip);
+        col->addWidget(spin);
+        paramRow->addLayout(col);
+        return spin;
+    };
+    m_terminalRetrySecs = addSpin(QStringLiteral("Retry s"), 1, 60, kTerminalDefaultRetrySecs,
+        QStringLiteral("T1 retransmit timeout in seconds."));
+    m_terminalMaxTries = addSpin(QStringLiteral("Tries"), 1, 20, kTerminalDefaultMaxTries,
+        QStringLiteral("N2 — retransmit attempts before the link is declared dead."));
+    m_terminalPaclen = addSpin(QStringLiteral("Paclen"), 16, 256, kTerminalDefaultPaclen,
+        QStringLiteral("Max bytes per I-frame."));
+    m_terminalTxTail = addSpin(QStringLiteral("TX Tail ms"), 0, 500, kTxTailDefaultMs,
+        QStringLiteral("PTT tail (ms) held after the TX audio before unkey. Lower = we hear "
+                       "the peer's next frame sooner on a half-duplex link; too low clips the "
+                       "end of our transmission so the peer can't decode it."));
+    paramLayout->addLayout(paramRow);
+    m_terminalLogEnable = new QCheckBox(QStringLiteral("Log session to file"), paramCell);
+    m_terminalLogEnable->setToolTip(QStringLiteral(
+        "Tee the transcript to a timestamped file under the TNC store."));
+    paramLayout->addWidget(m_terminalLogEnable);
+    controls->addWidget(paramCell);
+    controls->addStretch(1);
+    layout->addWidget(controlsFrame);
+
+    // --- Status ---------------------------------------------------------------
+    layout->addWidget(statusPanel(QStringLiteral("TERMINAL"),
+                                  &m_terminalStatusDot, &m_terminalStatusValue, page));
+
+    // --- Transcript -----------------------------------------------------------
+    QFont mono(QStringLiteral("Menlo"));
+    mono.setStyleHint(QFont::Monospace);
+    mono.setPointSize(12);
+
+    auto* viewFrame = panel(QStringLiteral("LogFrame"), page);
+    auto* viewLayout = new QVBoxLayout(viewFrame);
+    viewLayout->setContentsMargins(12, 10, 12, 10);
+    viewLayout->setSpacing(0);
+    m_terminalView = new QTextEdit(viewFrame);
+    m_terminalView->setReadOnly(true);
+    m_terminalView->document()->setMaximumBlockCount(5000);
+    m_terminalView->setLineWrapMode(QTextEdit::WidgetWidth);
+    m_terminalView->setFont(mono);
+    m_terminalView->setPlaceholderText(QStringLiteral(
+        "Set MY CALLSIGN, enter a target call, and press Connect.  Type HELP for commands."));
+    // Right-click menu: Clear the screen, and Command Mode (same as the '~' key).
+    m_terminalView->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_terminalView, &QTextEdit::customContextMenuRequested, this,
+            [this](const QPoint& pos) {
+        QMenu* menu = m_terminalView->createStandardContextMenu();
+        menu->addSeparator();
+        QAction* clear = menu->addAction(QStringLiteral("Clear"));
+        connect(clear, &QAction::triggered, this, [this] {
+            m_terminalView->clear();
+            if (m_terminal)
+                m_terminal->noteScreenCleared();
+        });
+        QAction* cmd = menu->addAction(QStringLiteral("Command Mode"));
+        cmd->setEnabled(m_terminal && m_terminal->mode() == TncTerminal::Mode::Converse);
+        connect(cmd, &QAction::triggered, this, [this] {
+            if (m_terminal)
+                m_terminal->enterCommandMode();
+            m_terminalInput->setFocus();
+        });
+        menu->exec(m_terminalView->viewport()->mapToGlobal(pos));
+        menu->deleteLater();
+    });
+    viewLayout->addWidget(m_terminalView);
+    layout->addWidget(viewFrame, 1);
+
+    // --- Input ----------------------------------------------------------------
+    auto* inputFrame = panel(QStringLiteral("ControlsFrame"), page);
+    auto* inputRow = new QHBoxLayout(inputFrame);
+    inputRow->setContentsMargins(16, 12, 16, 12);
+    inputRow->setSpacing(12);
+    inputRow->addWidget(sectionLabel(QStringLiteral("INPUT"), inputFrame));
+    m_terminalInput = new QLineEdit(inputFrame);
+    m_terminalInput->setFont(mono);
+    m_terminalInput->setPlaceholderText(QStringLiteral(
+        "Command mode — type CONNECT <call>, HELP, ..."));
+    m_terminalInput->installEventFilter(this); // Up/Down command history
+    inputRow->addWidget(m_terminalInput, 1);
+    m_terminalSendButton = new QPushButton(QStringLiteral("Send"), inputFrame);
+    m_terminalSendButton->setMinimumHeight(36);
+    inputRow->addWidget(m_terminalSendButton);
+    layout->addWidget(inputFrame);
+
+    // --- Wiring ---------------------------------------------------------------
+    connect(m_terminalInput, &QLineEdit::returnPressed,
+            this, &Ax25HfPacketDecodeDialog::submitTerminalInput);
+    connect(m_terminalSendButton, &QPushButton::clicked,
+            this, &Ax25HfPacketDecodeDialog::submitTerminalInput);
+    connect(m_terminalConnectButton, &QPushButton::clicked, this, [this] {
+        const QString target = m_terminalTarget->text().trimmed();
+        if (target.isEmpty()) {
+            m_terminalInput->setFocus();
+            return;
+        }
+        m_terminal->submitLine(QStringLiteral("CONNECT %1").arg(target));
+        m_terminalInput->setFocus();
+    });
+    connect(m_terminalCmdButton, &QPushButton::clicked, this, [this] {
+        m_terminal->enterCommandMode();
+        m_terminalInput->setFocus();
+    });
+    connect(m_terminalMyCall, &QLineEdit::editingFinished, this, [this] {
+        applyTerminalConfigFromUi(true);
+    });
+    connect(m_terminalMheardButton, &QPushButton::clicked, this, [this] {
+        m_terminal->printMheard();
+        m_terminalInput->setFocus();
+    });
+    connect(m_terminalHeardCombo, qOverload<int>(&QComboBox::activated), this, [this](int) {
+        const QString call = m_terminalHeardCombo->currentData().toString();
+        if (!call.isEmpty())
+            m_terminalTarget->setText(call);
+    });
+    for (QSpinBox* spin : {m_terminalRetrySecs, m_terminalMaxTries, m_terminalPaclen,
+                           m_terminalTxTail}) {
+        connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+            applyTerminalConfigFromUi(true);
+        });
+    }
+    connect(m_terminalLogEnable, &QCheckBox::toggled, this, [this](bool on) {
+        m_terminal->setLogging(on);
+        AppSettings::instance().setValue(kTerminalLogSetting,
+            on ? QStringLiteral("True") : QStringLiteral("False"));
+        AppSettings::instance().save();
+        // Logging may fail to start (e.g. unwritable dir); reflect reality.
+        const QSignalBlocker block(m_terminalLogEnable);
+        m_terminalLogEnable->setChecked(m_terminal->isLogging());
+    });
+
+    // Restore persisted config.
+    m_terminalMyCall->setText(
+        AppSettings::instance().value(kTerminalMyCallSetting, QString()).toString());
+    m_lastDialedCall =
+        AppSettings::instance().value(kTerminalLastCallSetting, QString()).toString();
+    m_terminalTarget->setText(m_lastDialedCall); // last BBS, persisted across restarts
+    m_terminalRetrySecs->setValue(AppSettings::instance()
+        .value(kTerminalRetrySecsSetting, kTerminalDefaultRetrySecs).toInt());
+    m_terminalMaxTries->setValue(AppSettings::instance()
+        .value(kTerminalMaxTriesSetting, kTerminalDefaultMaxTries).toInt());
+    m_terminalPaclen->setValue(AppSettings::instance()
+        .value(kTerminalPaclenSetting, kTerminalDefaultPaclen).toInt());
+    m_terminalTxTail->setValue(AppSettings::instance()
+        .value(kTerminalTxTailSetting, kTxTailDefaultMs).toInt());
+
+    refreshTerminalHeardCombo();
+    return page;
+}
+
+void Ax25HfPacketDecodeDialog::submitTerminalInput()
+{
+    if (!m_terminalInput || !m_terminal)
+        return;
+    const QString line = m_terminalInput->text();
+    m_terminalInput->clear();
+    if (!line.trimmed().isEmpty()
+        && (m_terminalHistory.isEmpty() || m_terminalHistory.last() != line)) {
+        m_terminalHistory.append(line);
+        if (m_terminalHistory.size() > 100)
+            m_terminalHistory.removeFirst();
+    }
+    m_terminalHistoryIndex = m_terminalHistory.size();
+    m_terminal->submitLine(line);
+}
+
+void Ax25HfPacketDecodeDialog::applyTerminalConfigFromUi(bool persist)
+{
+    if (!m_terminal || !m_terminalMyCall)
+        return;
+    const QString call = m_terminalMyCall->text().trimmed();
+    m_terminal->setMyCall(call);
+    if (m_terminalRetrySecs)
+        m_terminal->setRetryTimeoutMs(m_terminalRetrySecs->value() * 1000);
+    if (m_terminalMaxTries)
+        m_terminal->setMaxRetries(m_terminalMaxTries->value());
+    if (m_terminalPaclen)
+        m_terminal->setPaclen(m_terminalPaclen->value());
+    if (m_terminalTxTail)
+        m_txTailMs = m_terminalTxTail->value(); // applies to the next transmission
+    if (persist) {
+        AppSettings::instance().setValue(kTerminalMyCallSetting, call);
+        if (m_terminalRetrySecs)
+            AppSettings::instance().setValue(kTerminalRetrySecsSetting,
+                QString::number(m_terminalRetrySecs->value()));
+        if (m_terminalMaxTries)
+            AppSettings::instance().setValue(kTerminalMaxTriesSetting,
+                QString::number(m_terminalMaxTries->value()));
+        if (m_terminalPaclen)
+            AppSettings::instance().setValue(kTerminalPaclenSetting,
+                QString::number(m_terminalPaclen->value()));
+        if (m_terminalTxTail)
+            AppSettings::instance().setValue(kTerminalTxTailSetting,
+                QString::number(m_terminalTxTail->value()));
+        AppSettings::instance().save();
+    }
+    refreshTerminalStatus();
+}
+
+void Ax25HfPacketDecodeDialog::refreshTerminalHeardCombo()
+{
+    if (!m_terminalHeardCombo || !m_heard)
+        return;
+    const QString keep = m_terminalHeardCombo->currentData().toString();
+    const QSignalBlocker block(m_terminalHeardCombo);
+    m_terminalHeardCombo->clear();
+    m_terminalHeardCombo->addItem(QStringLiteral("— heard stations —"), QString());
+    int restore = 0;
+    const auto stations = m_heard->stations(50);
+    for (const auto& s : stations) {
+        const QString call = s.station.toString();
+        QString label = QStringLiteral("%1   %2")
+            .arg(call, s.utc.toString(QStringLiteral("MM/dd HH:mm")));
+        m_terminalHeardCombo->addItem(label, call);
+        if (call == keep)
+            restore = m_terminalHeardCombo->count() - 1;
+    }
+    m_terminalHeardCombo->setCurrentIndex(restore);
+}
+
+void Ax25HfPacketDecodeDialog::refreshTerminalStatus()
+{
+    if (!m_terminalStatusValue || !m_terminal)
+        return;
+    const bool connected = m_terminal->isConnected();
+    const bool connecting = m_terminal->isConnecting();
+    const bool converse = connected && m_terminal->mode() == TncTerminal::Mode::Converse;
+
+    m_terminalStatusValue->setText(QStringLiteral("%1   |   %2")
+        .arg(m_terminal->statusSummary(), m_terminal->linkStats()));
+    if (m_terminalStatusDot) {
+        m_terminalStatusDot->setFixedSize(12, 12);
+        const QString color = connected ? QStringLiteral("#5fce66")
+            : (connecting ? QStringLiteral("#e0b341") : QStringLiteral("#8190a3"));
+        m_terminalStatusDot->setStyleSheet(
+            QStringLiteral("background:%1;border-radius:6px;").arg(color));
+    }
+    if (m_terminalConnectButton)
+        m_terminalConnectButton->setEnabled(!connected && !connecting);
+    if (m_terminalCmdButton)
+        m_terminalCmdButton->setEnabled(converse);
+    if (m_terminalInput) {
+        m_terminalInput->setPlaceholderText(converse
+            ? QStringLiteral("Connected — type a line to send (or '%1' alone to return to commands)")
+                  .arg(m_terminal->escapeChar())
+            : QStringLiteral("Command mode — type CONNECT <call>, HELP, ..."));
+    }
+
+    // Persist the last BBS we dialed so it pre-fills the target after a restart.
+    if (connected || connecting) {
+        const QString peer = m_terminal->peerCall();
+        if (!peer.isEmpty() && peer != m_lastDialedCall) {
+            m_lastDialedCall = peer;
+            if (m_terminalTarget)
+                m_terminalTarget->setText(peer);
+            AppSettings::instance().setValue(kTerminalLastCallSetting, peer);
+            AppSettings::instance().save();
+        }
+    }
+}
+
+void Ax25HfPacketDecodeDialog::updateTabChrome(int index)
+{
+    // The Terminal tab (stack index 2) wants the whole window: hide the shared
+    // decode-log panel and the placeholder action row, and give the tab stack the
+    // vertical stretch so the transcript fills the viewport. Other tabs keep the
+    // log panel below their controls.
+    const bool terminal = (index == 2);
+    if (m_logFrame)
+        m_logFrame->setVisible(!terminal);
+    if (m_actionRowFrame)
+        m_actionRowFrame->setVisible(!terminal);
+    if (auto* root = qobject_cast<QVBoxLayout*>(bodyWidget()->layout())) {
+        root->setStretchFactor(m_tabStack, terminal ? 1 : 0);
+        if (m_logFrame)
+            root->setStretchFactor(m_logFrame, terminal ? 0 : 1);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Personal Mailbox System (PMS) tab
 // ---------------------------------------------------------------------------
 
@@ -2245,6 +2722,30 @@ void Ax25HfPacketDecodeDialog::refreshPmsStatus()
             .arg(m_pms->heardSummary(100000).size())
             .arg(humanBytes(freeBytes)));
     }
+}
+
+bool Ax25HfPacketDecodeDialog::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_terminalInput && event->type() == QEvent::KeyPress) {
+        auto* key = static_cast<QKeyEvent*>(event);
+        if (key->key() == Qt::Key_Up) {
+            if (m_terminalHistoryIndex > 0) {
+                --m_terminalHistoryIndex;
+                m_terminalInput->setText(m_terminalHistory.value(m_terminalHistoryIndex));
+            }
+            return true;
+        }
+        if (key->key() == Qt::Key_Down) {
+            if (m_terminalHistoryIndex < m_terminalHistory.size()) {
+                ++m_terminalHistoryIndex;
+                m_terminalInput->setText(m_terminalHistoryIndex < m_terminalHistory.size()
+                    ? m_terminalHistory.value(m_terminalHistoryIndex)
+                    : QString());
+            }
+            return true;
+        }
+    }
+    return PersistentDialog::eventFilter(watched, event);
 }
 
 } // namespace AetherSDR
