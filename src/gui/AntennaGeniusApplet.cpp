@@ -312,9 +312,19 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
         m_connectBtn->setText("Connect");
         m_statusLabel->setText("Disconnected");
         m_statusLabel->setStyleSheet("color: #606878; font-size: 10px;");
-        // Clear antenna buttons.
-        m_portABtns.clear();
-        m_portBBtns.clear();
+        // Remove antenna button widgets from the grid and clear the lists so the
+        // display and the model are consistent while disconnected.
+        auto clearGrid = [](QWidget* gridWidget, QList<QPushButton*>& btns) {
+            auto* gl = static_cast<QGridLayout*>(gridWidget->layout());
+            while (gl->count() > 0) {
+                auto* item = gl->takeAt(0);
+                delete item->widget();
+                delete item;
+            }
+            btns.clear();
+        };
+        clearGrid(m_portABtnGrid, m_portABtns);
+        clearGrid(m_portBBtnGrid, m_portBBtns);
     });
 
     connect(m_model, &AntennaGeniusModel::connectionError, this,
@@ -349,6 +359,9 @@ void AntennaGeniusApplet::rebuildAntennaButtons()
     if (!m_model) return;
 
     auto antennas = m_model->antennas();
+    // Don't wipe the existing buttons if the model hasn't loaded the list yet —
+    // that would leave the grid blank until the response arrives.
+    if (antennas.isEmpty()) return;
 
     // Helper: build a grid of antenna buttons for a given port.
     auto buildGrid = [&](QWidget* gridWidget, QList<QPushButton*>& btns, int portId) {

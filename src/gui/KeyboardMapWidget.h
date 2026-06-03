@@ -29,6 +29,9 @@ protected:
     void mousePressEvent(QMouseEvent* ev) override;
     void mouseMoveEvent(QMouseEvent* ev) override;
     void leaveEvent(QEvent* ev) override;
+    void keyPressEvent(QKeyEvent* ev) override;
+    void focusInEvent(QFocusEvent* ev) override;
+    void focusOutEvent(QFocusEvent* ev) override;
 
 private:
     struct KeyCap {
@@ -43,11 +46,15 @@ private:
     void buildLayout();
     QRectF keyRect(const KeyCap& k) const;
     int hitTest(const QPoint& pos) const;
+    int findKeyVertical(int idx, bool up) const;
+    void selectFocusKey();
+    void announceKey(int idx);
 
     ShortcutManager* m_mgr;
     QVector<KeyCap> m_keys;
     int m_selectedIdx{-1};
     int m_hoverIdx{-1};
+    int m_focusIdx{0};       // keyboard-navigated key (independent of mouse selection)
     float m_keyUnit{0};     // pixel size of one key unit (computed in paintEvent)
     float m_originX{0};
     float m_originY{0};

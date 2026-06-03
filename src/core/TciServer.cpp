@@ -163,6 +163,62 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                               << "for channel" << ch << "(#1331)";
             }
         });
+
+        // Re-trigger DAX setup when the radio (re)connects or a slice
+        // is added AFTER a TCI client has already requested audio.  Without
+        // this, a client that races the radio connect — WSJT-X started
+        // before AetherSDR finishes its handshake, or before any slice
+        // exists — sets `audioEnabled=true` but ensureDaxForTci()
+        // silently no-ops on `!isConnected()` / empty slices, and never
+        // gets a second chance.  Result: CAT and TX audio look fine
+        // (text channel is alive) but no DAX RX stream is ever created,
+        // so the radio sends no audio frames and WSJT-X RX stays silent.
+        // (#3270)
+        connect(m_model, &RadioModel::connectionStateChanged,
+                this, [this](bool connected) {
+            if (!connected) {
+                // Radio dropped: our DAX RX streams are dead server-side, but
+                // an unexpected disconnect sends no `stream … removed` status,
+                // so m_tciDaxStreamIds keeps stale IDs. Without clearing them,
+                // ensureDaxForTci() on reconnect hits its `contains(ch)` guard
+                // and skips `stream create`, leaving WSJT-X RX silent — the
+                // very symptom #3270 targets. Unregister the streams we own
+                // (skip borrowed — the DAX bridge owns those and tears them
+                // down itself) and reset so the reconnect re-arm starts clean.
+                // (#3270)
+                if (m_model->panStream()) {
+                    for (auto it = m_tciDaxStreamIds.cbegin();
+                         it != m_tciDaxStreamIds.cend(); ++it) {
+                        if (it.value() != 0
+                                && !m_tciDaxBorrowedChannels.contains(it.key())) {
+                            m_model->panStream()->unregisterDaxStream(it.value());
+                        }
+                    }
+                }
+                m_tciDaxStreamIds.clear();
+                m_tciDaxBorrowedChannels.clear();
+                return;
+            }
+            for (const auto& cs : m_clients) {
+                if (cs.audioEnabled) {
+                    qCInfo(lcCat) << "TCI: radio reconnected — re-arming DAX"
+                                  << "for pending audio client (#3270)";
+                    ensureDaxForTci();
+                    return;
+                }
+            }
+        });
+        connect(m_model, &RadioModel::sliceAdded,
+                this, [this](SliceModel*) {
+            for (const auto& cs : m_clients) {
+                if (cs.audioEnabled) {
+                    qCInfo(lcCat) << "TCI: slice added — re-arming DAX"
+                                  << "for active audio client (#3270)";
+                    ensureDaxForTci();
+                    return;
+                }
+            }
+        });
     }
 
     // Periodic status broadcast (200ms — S-meter, TX sensors, TX state)

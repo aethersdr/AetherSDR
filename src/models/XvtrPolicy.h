@@ -39,6 +39,11 @@ struct WaterfallTileMatch {
     double  toleranceMhz{0.0};
 };
 
+struct MaxPowerRange {
+    double minimumDbm{-10.0};
+    double maximumDbm{15.0};
+};
+
 BandStackKeyResult resolveBandStackKey(const QString& bandName,
                                        const QVector<Transverter>& xvtrs,
                                        ModelCapabilities caps = {});
@@ -57,5 +62,8 @@ WaterfallTileRange mapWaterfallTileRange(double lowMhz, double highMhz,
                                          double panCenterMhz,
                                          const QVector<Transverter>& xvtrs,
                                          bool hasXvtrSliceAntenna);
+
+MaxPowerRange maxPowerRangeFor(double ifFreqMhz, const QString& radioModel);
+double clampMaxPowerDbm(double maxPowerDbm, double ifFreqMhz, const QString& radioModel);
 
 } // namespace AetherSDR::XvtrPolicy

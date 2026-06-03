@@ -457,7 +457,7 @@ void DvkPanel::setWavTransfer(DvkWavTransfer* transfer)
             m_statusLabel, &QLabel::setText);
     connect(m_wavTransfer, &DvkWavTransfer::finished,
             this, [this](bool success, const QString& msg) {
-        m_statusLabel->setText(success ? msg : QString("Export failed: %1").arg(msg));
+        m_statusLabel->setText(success ? msg : QString("Transfer failed: %1").arg(msg));
     });
 }
 

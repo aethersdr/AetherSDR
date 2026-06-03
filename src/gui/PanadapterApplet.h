@@ -7,6 +7,7 @@ class QLabel;
 class QPushButton;
 class QSlider;
 class QTextEdit;
+class RangeSlider;
 
 namespace AetherSDR {
 
@@ -40,9 +41,13 @@ public:
     void appendCwTextTx(const QString& text, float cost = 0.0f);
     void setCwStats(float pitchHz, float speedWpm);
     void clearCwText();
-    QPushButton* lockPitchButton() const { return m_lockPitchBtn; }
-    QPushButton* lockSpeedButton() const { return m_lockSpeedBtn; }
-    float        cwCostThreshold() const { return m_cwCostThreshold; }
+    QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
+    QPushButton* lockSpeedButton()  const { return m_lockSpeedBtn; }
+    float        cwCostThreshold()  const { return m_cwCostThreshold; }
+    int speedRangeLow()   const;
+    int speedRangeHigh()  const;
+    int pitchRangeLow()   const;
+    int pitchRangeHigh()  const;
 
     // RTTY decode panel
     void  setRttyPanelVisible(bool visible);
@@ -65,6 +70,7 @@ signals:
 
     // CW
     void pitchRangeChanged(int minHz, int maxHz);
+    void speedRangeChanged(int minWpm, int maxWpm);
     void cwPanelCloseRequested();
 
     // RTTY
@@ -94,10 +100,8 @@ private:
     QSlider*      m_cwSensSlider{nullptr};
     QPushButton*  m_lockPitchBtn{nullptr};
     QPushButton*  m_lockSpeedBtn{nullptr};
-    QSlider*      m_pitchMinSlider{nullptr};
-    QSlider*      m_pitchMaxSlider{nullptr};
-    QLabel*       m_pitchMinValLabel{nullptr};
-    QLabel*       m_pitchMaxValLabel{nullptr};
+    RangeSlider*  m_pitchRangeSlider{nullptr};
+    RangeSlider*  m_speedRangeSlider{nullptr};
     float         m_cwCostThreshold{0.70f};
 
     enum class CwTextSource { None, Rx, Tx };

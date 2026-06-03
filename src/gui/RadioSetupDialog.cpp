@@ -4,8 +4,10 @@
 #include "ComboStyle.h"
 #include "SliceColorManager.h"
 #include "models/RadioModel.h"
+#include "models/XvtrPolicy.h"
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "core/PeripheralSettings.h"
 #include <QApplication>
 #include <QSysInfo>
 #include "core/AudioEngine.h"
@@ -38,6 +40,7 @@
 #include <QSpinBox>
 #include <QDialogButtonBox>
 #include <QCheckBox>
+#include <QDoubleValidator>
 #include <QTimer>
 #include <QDesktopServices>
 #include <QUrl>
@@ -94,6 +97,22 @@ static const QString kEditStyle =
 
 static constexpr int kInfoLeftLabelWidth = 112;
 static constexpr int kInfoRightLabelWidth = 160;
+
+// Wrap a tab page in a vertical QScrollArea so tabs whose stacked groups exceed
+// the dialog's visible height (Themes, Audio, Filters, Peripherals on small or
+// high-DPI displays) get a vertical scrollbar instead of forcing the dialog
+// past the screen edge (#3345). setWidgetResizable(true) keeps horizontal
+// expansion intact and hides the scrollbar when content already fits — users
+// on wide screens see no visual change.
+static QWidget* wrapTabInScrollArea(QWidget* content)
+{
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+    scroll->setWidget(content);
+    return scroll;
+}
 
 static QString displayOrDash(const QString& value)
 {
@@ -440,7 +459,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // selected.  This avoids hardware-probing calls (QSerialPortInfo,
     // QMediaDevices) during construction, which crash on some Wayland/Qt 6.11
     // configurations (#1776).
-    tabs->addTab(buildRadioTab(), "Radio");
+    tabs->addTab(wrapTabInScrollArea(buildRadioTab()), "Radio");
 
     auto addDeferred = [&](const QString& name, std::function<QWidget*()> builder) {
         int idx = tabs->addTab(new QWidget, name);
@@ -2707,7 +2726,7 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         auto* rfEdit     = addField(1, 0, "RF Freq (MHz):", QString::number(x.rfFreq, 'f', 3));
         auto* ifEdit     = addField(1, 1, "IF Freq (MHz):", QString::number(x.ifFreq, 'f', 3));
         auto* loEdit     = addField(2, 0, "LO Freq (MHz):", QString::number(x.rfFreq - x.ifFreq, 'f', 3), false);
-        auto* errEdit    = addField(2, 1, "LO Error (Hz):", QString::number(x.loError, 'f', 0));
+        auto* errEdit    = addField(2, 1, "LO Error (MHz):", QString::number(x.loError, 'f', 6));
         auto* rxGainEdit = addField(3, 0, "RX Gain (dB):", QString::number(x.rxGain, 'f', 1));
 
         // RX Only toggle
@@ -2745,6 +2764,38 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         });
         grid->addWidget(removeBtn, 4, 3);
 
+        auto maxPowerRange = [this, ifEdit] {
+            return XvtrPolicy::maxPowerRangeFor(ifEdit->text().toDouble(), m_model->model());
+        };
+        auto* maxPwrValidator = new QDoubleValidator(maxPwrEdit);
+        maxPwrValidator->setDecimals(2);
+        maxPwrValidator->setNotation(QDoubleValidator::StandardNotation);
+        auto updateMaxPowerValidator = [maxPwrValidator, maxPowerRange] {
+            const XvtrPolicy::MaxPowerRange range = maxPowerRange();
+            maxPwrValidator->setRange(range.minimumDbm, range.maximumDbm, 2);
+        };
+        updateMaxPowerValidator();
+        maxPwrEdit->setValidator(maxPwrValidator);
+        auto submitMaxPower = [this, maxPwrEdit, ifEdit, idx](bool sendWhenUnchanged) {
+            bool ok = false;
+            const double requested = maxPwrEdit->text().toDouble(&ok);
+            if (!ok) {
+                return;
+            }
+
+            const double clamped = XvtrPolicy::clampMaxPowerDbm(
+                requested, ifEdit->text().toDouble(), m_model->model());
+            maxPwrEdit->setText(QString::number(clamped, 'f', 2));
+            if (!sendWhenUnchanged && qFuzzyCompare(requested + 1.0, clamped + 1.0)) {
+                return;
+            }
+
+            m_model->sendCommand(
+                QString("xvtr set %1 max_power=%2")
+                    .arg(idx)
+                    .arg(QString::number(clamped, 'f', 2)));
+        };
+
         // Wire editable fields
         connect(nameEdit, &QLineEdit::editingFinished, this, [this, nameEdit, idx] {
             m_model->sendCommand(
@@ -2760,10 +2811,13 @@ QWidget* RadioSetupDialog::buildXvtrTab()
                 QString("xvtr set %1 rf_freq=%2").arg(idx).arg(rfEdit->text()));
             updateLo();
         });
-        connect(ifEdit, &QLineEdit::editingFinished, this, [this, ifEdit, idx, updateLo] {
+        connect(ifEdit, &QLineEdit::editingFinished, this,
+                [this, ifEdit, idx, updateLo, updateMaxPowerValidator, submitMaxPower] {
             m_model->sendCommand(
                 QString("xvtr set %1 if_freq=%2").arg(idx).arg(ifEdit->text()));
             updateLo();
+            updateMaxPowerValidator();
+            submitMaxPower(false);
         });
         connect(errEdit, &QLineEdit::editingFinished, this, [this, errEdit, idx] {
             m_model->sendCommand(
@@ -2773,9 +2827,8 @@ QWidget* RadioSetupDialog::buildXvtrTab()
             m_model->sendCommand(
                 QString("xvtr set %1 rx_gain=%2").arg(idx).arg(rxGainEdit->text()));
         });
-        connect(maxPwrEdit, &QLineEdit::editingFinished, this, [this, maxPwrEdit, idx] {
-            m_model->sendCommand(
-                QString("xvtr set %1 max_power=%2").arg(idx).arg(maxPwrEdit->text()));
+        connect(maxPwrEdit, &QLineEdit::editingFinished, this, [submitMaxPower] {
+            submitMaxPower(true);
         });
 
         return pg;
@@ -4640,6 +4693,27 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
 
     vbox->addWidget(group);
 
+    // Auto-reconnect checkbox
+    auto* reconnectCheck = new QCheckBox("Auto-reconnect to peripherals on connection drop");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(reconnectCheck,
+        "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
+    const bool autoReconnect = PeripheralSettings::autoReconnect();
+    reconnectCheck->setChecked(autoReconnect);
+    connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
+        PeripheralSettings::setAutoReconnect(on);
+        // Propagate immediately to live connection objects
+        if (m_tgxl) {
+            m_tgxl->setAutoReconnect(on);
+        }
+        if (m_pgxl) {
+            m_pgxl->setAutoReconnect(on);
+        }
+        if (m_ag) {
+            m_ag->setAutoReconnect(on);
+        }
+    });
+    vbox->addWidget(reconnectCheck);
+
     // Info note
     auto* note = new QLabel(
         "Configure manual IP addresses for peripherals that cannot be discovered via UDP broadcast.\n"
@@ -4663,7 +4737,10 @@ void RadioSetupDialog::buildDeferredTab(int index)
     QWidget* content = it.value()();        // run the real builder
     auto* lay = new QVBoxLayout(placeholder);
     lay->setContentsMargins(0, 0, 0, 0);
-    lay->addWidget(content);
+    // Wrap in a scroll area so tall tabs (Themes, Audio, Filters,
+    // Peripherals on small / high-DPI displays) become scrollable instead
+    // of forcing the dialog past the screen edge (#3345).
+    lay->addWidget(wrapTabInScrollArea(content));
     m_deferredBuilders.erase(it);           // build only once
 }
 

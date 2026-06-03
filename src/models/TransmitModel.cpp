@@ -798,12 +798,14 @@ bool TransmitModel::isPhoneModeForQuindar() const
 {
     if (!m_txModeGetter) return false;
     const QString m = m_txModeGetter();
-    // Phone modes accepted for Quindar: SSB families, AM, FM, FreeDV.
-    // Digital (DIGU/DIGL/RTTY/CW/FT8) intentionally excluded — the
-    // tone would corrupt the digital waveform.
+    // Phone modes accepted for Quindar: SSB families, AM, FM.
+    // Digital modes intentionally excluded — the tone would corrupt the
+    // digital waveform. FreeDV (FDV/FDVU/FDVL) is excluded for the same
+    // reason: it now uses RADAE (the same neural encoder as RADE mode),
+    // so a Quindar sine produces codec-artifact noise on air rather than
+    // a recognisable signalling tone.
     return m == "USB" || m == "LSB"
-        || m == "AM"  || m == "FM"  || m == "NFM"
-        || m == "FDV" || m == "FDVU" || m == "FDVL";
+        || m == "AM"  || m == "FM"  || m == "NFM";
 }
 
 bool TransmitModel::runPttPreflight(PttSource source, bool resyncMoxOnBlock)
@@ -837,6 +839,15 @@ void TransmitModel::cancelPendingQuindarOff()
         m_pendingMoxOffTimer = nullptr;
     }
     m_quindarOutroInFlight = false;
+}
+
+void TransmitModel::dispatchMoxOff()
+{
+    if (m_pttOffHook) {
+        m_pttOffHook();
+        return;
+    }
+    setMox(false);
 }
 
 void TransmitModel::requestPttOn(PttSource source)
@@ -890,11 +901,7 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
         || tone->phase() == ClientQuindarTone::Phase::Idle
         || m_quindarOutroInFlight) {
         cancelPendingQuindarOff();
-        if (m_pttOffHook) {
-            m_pttOffHook();
-            return;
-        }
-        setMox(false);
+        dispatchMoxOff();
         return;
     }
 
@@ -917,7 +924,7 @@ void TransmitModel::requestPttOff(PttSource /*source*/)
         m_pendingMoxOffTimer = nullptr;
         m_quindarOutroInFlight = false;
         emit quindarActiveChanged(false);
-        setMox(false);
+        dispatchMoxOff();
     });
     m_pendingMoxOffTimer->start();
 }

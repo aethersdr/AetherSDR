@@ -1,0 +1,9 @@
+# Ulanzi plugin build artifacts — don't pollute upstream's tree
+com.g0jkn.aethersdr.ulanziPlugin/node_modules/
+
+# Packaged distributable (built by Ulanzi tooling — committed via release asset, not tree)
+*.ulanziDeckPlugin
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db

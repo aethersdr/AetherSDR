@@ -6,6 +6,547 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 > **Versioning:** Starting with **v26.5.1**, AetherSDR moves to **CalVer**
 > (`YY.M.patch`). Earlier tags used semver through v0.9.8.
 
+## [v26.6.1.1] — 2026-06-02
+
+### Hotfix: macOS DMG release build + two GUI fixes
+
+Three fixes on top of v26.6.1, no other changes:
+
+- **fix(ci): unblock macOS DMG build broken by missing background image
+  (#3349)** — the `create-dmg` invocation referenced
+  `docs/assets/logo-invert.png`, which had been removed; the trailing
+  `|| true` masked the failure and Sign DMG then failed on a DMG that was
+  never produced. Drops the missing `--background`, adds an explicit
+  `test -f` guard.
+- **fix(gui): only toast "Step: …" on deliberate step changes, not radio
+  syncs (#3337)** — the tuning-step toast no longer fires on radio-driven
+  status syncs, only on deliberate user step changes.
+- **fix(radio-setup): wrap tab pages in QScrollArea so tall tabs stay
+  reachable (#3347)** — tall Radio Setup tabs are scrollable instead of
+  clipping controls off-screen.
+
+## [v26.6.1] — 2026-06-01
+
+### HID input devices + Windows hardening + new protocol surfaces + 143-commit reliability sweep
+
+143 commits across 14 contributors landed in this cycle. **HID input
+device support** is the most user-visible new work, landing three new
+device classes: the **Elgato StreamDeck+** (encoders + LCD buttons +
+touchscreen labels), the **Ulanzi Dial** (cross-platform on Linux
+evdev / Windows / macOS), and **native Icom RC-28** encoder support —
+all opt-in so the macOS Input Monitoring prompt never surfaces unless
+the operator explicitly enables one. **Windows hardening** sweeps
+PerMonitorV2 DPI awareness, discrete-GPU preference on hybrid laptops,
+MSIX packaging groundwork with embedded DFNR weights, Windows Snap
+restoration for the frameless title bar, and WASAPI sidetone routing.
+New protocol surfaces include the **SmartCAT TCP server** (TS-2000 +
+FlexCAT dialects), a **unified RADE TX pipeline** with EOO frame
+transmission and callsign encoding, **1200-baud VHF AX.25** RX + TX
+via the in-process modem, and **SSDR-parity PWR/SWR metering** on the
+PGXL/TGXL amplifier applets. A long-tail reliability sweep clears a
+**7-year-old NR2 Gamma crackling bug** in the SpectralNR path (#1507),
+fixes the **multi-monitor main-window restore** under Minimal Mode
+(#2483), and resolves the **multi-pan TCI spot freeze** (#2481).
+
+This release also lands the **groundwork for a runtime theming
+system** — `ThemeManager` foundation, a 51-token design taxonomy, a
+Theme Editor dialog, and a Default Light theme alongside the existing
+dark. The theming work is **early beta**, opt-in via Settings → Theme
+Editor; the Default Dark theme remains the shipped default. Token
+names, the `.aethertheme` file format, and the editor UX are all
+expected to change before stabilising. See the dedicated section below
+for the phase-by-phase detail.
+
+Big thanks to **@jensenpat** (22 commits — TCI/CAT, multi-monitor
+restore, network diagnostics), **@aethersdr-agent** (the AetherClaude
+orchestrator, 28 commits — landing across spectrum, audio, spot and
+applet paths), **@NF0T** (10 commits — Windows packaging + DPI + DFNR
+embedding + RADE TX pipeline), **@nigelfenton** (8 commits — TCI
+fixes), **@M7HNF-Ian** (7 commits — XVTR, slice spawning, NR2 Gamma
+fix), **@chibondking** (6 commits — bandplan corrections, panadapter
+context slice spawning), **@K5PTB** (5 commits — MQTT publish topics,
+CMake Debian multiarch fix), **@dawkagaming** (4 community PRs —
+system-library opt-in flags, lowercase binary name, Linux icon size,
+`.desktop` description), **@rfoust** (4 commits), and first-time
+contributors **@w5jwp** (Icom RC-28 encoder support), **@motoham88**
+(StreamDeck+ support), **@mvanhorn** (theme migration tool cleanup),
+and **@VU3ESV** (macOS `phys_footprint` memory reporting).
+
+### Headline features
+
+**End-to-end theming system (#3076, Phases 1–6)**
+
+Six-phase migration from scattered hex-literal paint calls to a
+canonical token-based theming system:
+
+- **Phase 1 — `ThemeManager` foundation** (#3077).
+- **Phase 2 — 51-token design taxonomy** (#3080), gradient token support
+  (#3084), widget→tokens reverse map with live re-theme (#3085),
+  ComboStyle pilot migration to `applyStyleSheet` + tokens (#3087),
+  app-wide stylesheet migration with `applyAppTheme()` (#3090), and the
+  mass migration across 59 files / ~1000 hex literals (#3102). Audit
+  tool `tools/audit_colours.py` shipped to drive the inventory (#3078).
+- **Phase 3 — paint-code migration** in tranches: `MeterSlider`
+  (#3106), the migration tool itself + `SpectrumWidget` (#3113),
+  file-scope `const QColor` in comp/gate/curve widgets (#3116), and
+  the spectrum + chain + waveform paint-code closeout (#3117).
+- **Phase 4 — Default Light theme** ships alongside the existing dark
+  default (#3129).
+- **Phase 5 — Theme Editor dialog**: live colour editing + Save As
+  (#3130), inspector mode + 505-site reverse-map sweep (#3144), alpha
+  pipeline + `themeRegions` + glass-mode backdrop (#3148), gradient
+  editor + meter-bar gradient + flat↔gradient conversion (#3158), font
+  + sizing pickers + per-token reset + theme rename/delete (#3160).
+- **Phase 6 — `.aethertheme` import/export with drag-and-drop** (#3164).
+- **DSEG Modern fonts embedded** (SIL OFL 1.1) for the 7-segment and
+  14-segment displays (#3163).
+
+Plus the inline Theme Editor with auto-persist + built-in theme
+protection (#3176), per-applet/per-tribe scoping for toggle-button
+namespaces (#3198), per-applet overrides for sliders + knobs (#3188),
+waterfall colormap runtime theming for all five presets (#3122), slice
+indicator runtime theming (#3121), and the Theme Editor UX polish round
+(#3199). Cleanup PRs along the way tokenized leftover slider call sites
+(#3204), swapped `kGreenToggle` for `color.background.success` (#3195),
+and rescued misattributed migration-tool comments (#3125).
+
+**Elgato StreamDeck+ support (#3236, follow-up #3250)**
+
+First-class StreamDeck+ integration — encoders, LCD buttons, and the
+touchscreen with labels. Three robustness gaps surfaced in initial
+review were addressed in the follow-up.
+
+**Ulanzi Dial cross-platform support (#3238, #3239)**
+
+Linux evdev backend with a visual configurator (#3238), then Windows
+and macOS backends with a cross-platform mapper (#3239). Both
+StreamDeck+ and the Ulanzi Dial are gated behind opt-in toggles in
+Settings so the macOS Input Monitoring prompt only appears when the
+operator explicitly enables either device (#3257).
+
+**Icom RC-28 USB encoder support (#3293, #3171)**
+
+Initial Icom RC-28 native support (#3293); also recognises a
+community-built `aether-pad` RC-28 emulator via Arduino VID/PID alias
+(#3171).
+
+**SmartCAT TCP server (#3131)**
+
+New TCP CAT server supporting both the Kenwood TS-2000 and FlexCAT
+dialects. Joins the existing TCI, Hamlib NET rigctl, and per-slice
+rigctld surfaces for CAT interop without external bridges.
+
+**Unified RADE TX pipeline (#3221)**
+
+RADE TX path consolidated, with EOO frame transmission and callsign
+encoding embedded in the protocol — eliminates the previous
+codec-specific tail handling and brings callsign metadata onto the
+wire alongside the audio frames.
+
+**HLTH antenna health applet (#3153)**
+
+New applet for antenna health monitoring, built on the customizable
+button-bar refactor (#3150).
+
+**Customizable button bar (#3150)**
+
+Favourites + push-down drawer pattern for the main button bar — operators
+can pin frequently-used controls and let the rest live in the drawer.
+
+**SSDR-parity PWR/SWR metering on PGXL/TGXL applets (#3277)**
+
+The PGXL and TGXL amplifier applets gain SmartSDR-aligned PWR/SWR
+meter rendering.
+
+**Adaptive throttle UX (#3175, #3203)**
+
+Network-congestion-adaptive panadapter throttle gets an explicit
+toggle in the Connect panel for all modes (was previously WAN-only),
+plus visibility through the status-bar heartbeat colour and the
+Network Diagnostics dialog graphs.
+
+**Bell 202 AX.25 1200-baud VHF (#3253, #3256)**
+
+Receive (#3253) then transmit (#3256) profiles for 1200-baud VHF AX.25
+packet radio via the in-process modem.
+
+**MQTT publishes CW decoded text + publish-button topics surface (#3216, #3251)**
+
+CW decoder output now publishes to `aethersdr/cw/decode` (#3216);
+internal publish topics are visible in the Publish Buttons settings
+tab (#3251).
+
+**Reference target curve on Aetherial Parametric EQ (#3259)**
+
+Visual reference overlay for matching a target frequency response.
+
+**AetherControl double-click to latch (#3103)**
+
+Replaces the click+ESC asymmetry with a single double-click gesture
+for the latch/unlatch action.
+
+**TCI clicked_on_spot event for Log4OM (#3145)**
+
+TCI spot-click notification surface added for Log4OM interoperability.
+
+**LAN peripheral auto-reconnect**
+
+Networked peripherals auto-reconnect when the LAN comes back, mirroring
+the existing radio-side reconnect logic (Principle V.).
+
+**ESC click-to-adjust polar display (#3134)**
+
+Polar display for phase and gain now adjusts directly on click.
+
+### Long-tail bugs landing in this cycle
+
+**NR2 Gamma crackling — 7-year-old SpectralNR bug (#1507 → #3275)**
+
+Replaces unscaled Bessel `I0`/`I1` calls in the SpectralNR path with
+the exponentially-scaled variants, eliminating the long-reported
+crackling on NR2 Gamma mode. Originally reported in 2019.
+
+**Multi-monitor main window restore in Minimal Mode (#2483 → #3174)**
+
+Window geometry restores to the saved screen even when AetherSDR
+launches in Minimal Mode (Principle XIV.).
+
+**Spectrum tooltip strobing + child tooltips (#2355 → #3209, #3233)**
+
+Spot tooltips no longer strobe on overlay rebuilds; `SpectrumWidget`
+no longer kills child-widget tooltips.
+
+**Spectrum trace below background image (#3124)**
+
+Z-order regression on the GPU path — FFT trace was being painted below
+the background image. Restored to above.
+
+**Waterfall rate slider behaviour (#3104) + paced fallback restore (#3182)**
+
+Slider behaviour fixed; paced RX waterfall fallback path restored.
+
+**Multi-pan TCI spot freeze (#2481 → #3310)**
+
+Spot-marker rebuilds coalesced so multi-pan TCI sessions no longer
+freeze when a burst of spots arrives.
+
+**FlexControl Aux LED restoration (#2908 → #3269)**
+
+Aux LED state restored when the device sends an F-reset (Principle VIII.).
+
+**FlexControl encoder accumulator (#3260 → #3267)**
+
+Encoder accumulator now snaps to the step grid and resets on absolute
+tune (Principle XI.).
+
+**Tuner BYPASS → STANDBY transition (#3140 → #3147)**
+
+Clear bypass cleanly on the transition (Principle III.).
+
+**S-Meter pulsing during PGXL OPERATE (#2927 → #3172)**
+
+Analog S-Meter no longer pulses when the PGXL amplifier is in OPERATE
+mode (Principle II.).
+
+**S-Meter MIC vs MICPEAK in Level TX (#3187 → #3191)**
+
+Level TX mode now reads the MIC meter, not MICPEAK.
+
+**FCC §97.301(d) 15m Extra phone edge (#3136 → #3137)**
+
+Bandplan edge corrected to 21.200 MHz (Principle IV.).
+
+**License-class filter invariant (#3060 → #3089)**
+
+`contiguousRegionsForBand` walker pins the filter-before-merge
+invariant when license classes are active (Principle IV.).
+
+**ISED license_classes added to RAC Canada plan (#3061 → #3088)**
+
+Canadian band-plan data now carries the ISED license-class structure
+matching the US ARRL plan format (Principle IV.).
+
+**Squelch save pairing + slice detach reset (#3263 → #3268)**
+
+Squelch state pairs with action and resets cleanly on slice detach
+(Principle I.).
+
+**FlexLib-canonical EQ command case (#3185 → #3265)**
+
+TX/RX EQ commands emitted in the case FlexLib expects (Principle I.).
+
+**Spot smart filter exempts memory bookmarks (#2894 → #3190)**
+
+Memory bookmarks no longer caught by the spot smart filter; stale
+S-history cache cleared.
+
+**EQ slider inverted-fill paint (#3280)**
+
+Inverted blue fill on EQ band sliders corrected.
+
+**RF/Tune power slider unit labelling (#3284 → #3285)**
+
+Sliders relabelled as percent (not watts) — matches what the radio
+actually accepts (Principle I.).
+
+**FreeDV mode filter polarity (#3092 → #3101)**
+
+FDV modes excluded from the SSB filter polarity flip — wasn't applicable
+to FreeDV's symmetric passband (Principle I.).
+
+**Quindar interactions (#3317, #3320)**
+
+Quindar outro timer routed through `dispatchMoxOff()` (#3317); FreeDV
+modes excluded from the Quindar tone allowlist (#3320).
+
+**RADE filter passband alignment (#3301)**
+
+Filter passband aligned with the FreeDV waveform convention rather than
+the legacy AetherSDR-internal definition.
+
+**DVK WAV transfer crash on teardown (#2501 → #3309)**
+
+WAV transfer teardown made idempotent — fixes a crash on rapid
+disconnect/reconnect cycles.
+
+**Slice spawn on empty-pan click (#3086 → #3123)**
+
+Clicking on an empty panadapter now spawns a new slice instead of
+hijacking the active slice (Principle I.).
+
+**Panadapter context slice creation (#3095)**
+
+Right-click menu surface for explicit panadapter-context slice spawn.
+
+**TCI master AF volume seeding (#3245)**
+
+Connect init burst seeds master AF volume so clients see the correct
+value on first connect.
+
+**TCI DAX RX re-arm (#3270 → #3282)**
+
+DAX RX re-arms when the radio or slice arrives after `audio_start`
+(Principle I.).
+
+**TCI mic_level handler (#3234)**
+
+Bridges existing `setMicLevel` to the TCI surface.
+
+**TCI spot-click notification polish (#3152 → #3170)** — Principle I.
+
+**WASAPI Float32 fallback (#3231)**
+
+`preferredFormat()` fallback for output devices that don't accept the
+default Float32 format (Principle VIII.).
+
+**RX mute lift on all startPlayback bail paths (#3230)**
+
+Closes a code path where a `startPlayback` bail-out left RX muted.
+
+**WASAPI CW sidetone host API (#3193 → #3241)**
+
+CW sidetone forced to WASAPI on Windows for low-latency keying.
+
+**NR2 FFTW wisdom cancellation (#3100)**
+
+Status logging cleaned up; wisdom cancellation no longer aborts the NR
+chain mid-flight.
+
+**NetworkDiag adaptive-throttle slot cleanup (#3235)**
+
+Removed `Qt::UniqueConnection` from adaptive-throttle lambda slots —
+unique connections don't work with capturing lambdas and were silently
+duplicating connections.
+
+**Adaptive-throttle cap gating (#3201)**
+
+`ensureOwnedPanadapter` cap path now guarded by `AdaptiveThrottleEnabled`
+check.
+
+**XVTR LO Error units (#3272) + Max Power clamp (#3273)**
+
+Display fix; pre-send clamp.
+
+**RPRT terminator on bare-mode rigctl getters (#3120 → #3127)**
+
+All bare-mode rigctl getters now terminate with `RPRT` for parser
+compatibility (Principle I.).
+
+**WSJT-X startup CAT lock-mode timeout (#3115)**
+
+Fixed the lock-mode handshake timeout that was breaking WSJT-X startup.
+
+**SSB filter presets aligned to 100 Hz low cut + label-width passband (#3292 → #3295)** — Principle I.
+
+**Transmit micStateChanged emission (#2180 → #3240)**
+
+`setMonGainSb` now emits `micStateChanged()` so monitor-gain edits
+surface to the wider transmit-state graph.
+
+**Spectrum tooltip strobe suppression (#3233)** — Principle VIII.
+
+**aethercontrol click+ESC vs double-click (#3103)** — see headline features.
+
+**Discrete GPU preference on Windows hybrid laptops (#3299)** —
+Principle XI.
+
+**Channel Strip TX/RX BYPASS suppresses RN2 + RN2 in presets (#3054 → #3066)** — Principle VI.
+
+**aether-pad Arduino emulator recognised (#3171)** — see Icom RC-28
+section above.
+
+**HID hotplugCheck full scan + HAVE_HIDAPI guard (#3298)**
+
+Hotplug scan now does a full pass instead of stopping at the first
+matching device; `HAVE_HIDAPI` guard fixes for the no-HID build path.
+
+**StreamDeck+ macOS shutdown deadlock (#3255)**
+
+Stop() and HID cleanup ordering corrected — UlanziDialMacOS stop()
+now releases its mutex before the runloop teardown.
+
+**HaliKey Serial DCD as third input pin (#3126)**
+
+Adds DCD alongside CTS/DSR as a configurable serial input.
+
+**macOS bitmap cursor crash avoidance (#3099)**
+
+Workaround for a Qt + macOS interaction at certain cursor sizes.
+
+**macOS Ctrl+M minimal-mode shortcut on Windows (#3098)**
+
+Was Mac-only by accident; now binds on Windows too.
+
+**Show Qt menu separators on Windows (#3094)**
+
+Restored separator rendering after a Windows-specific style regression.
+
+**Windows Snap restoration for the custom title bar (#3069)**
+
+`WS_THICKFRAME` + hit-testing dance restored so the frameless title
+bar can use Windows Snap.
+
+**Local CWX sidetone keyer drift correction (#3202, #3271)**
+
+Drift correction implemented (#3202); regression test added (#3271).
+
+**CWX macro fire log + ESC abort strikeout (#3146 → #3149)**
+
+Macro fires logged in history; strikeout rendering on ESC-aborted
+fires.
+
+**Slice troubleshooter diagnostics (#3132)**
+
+Extra signals for the slice-triage flow.
+
+**About dialog: active pan renderer (#3097)**
+
+Surfaces whether the GPU or QPainter spectrum path is active.
+
+**About dialog memory accounting on macOS (#3197 → #3207)**
+
+Status-bar memory line uses the macOS `phys_footprint` rather than the
+VM-size proxy.
+
+**TGXL/PGXL socket release on shutdown (#3079 → #3083)** — Principle I.
+
+**Slice indicator + waterfall colormap runtime theming (#3121, #3122)**
+
+See theming section.
+
+**POTA API polling default → 60s (#3168 → #3169)** — Principle XIII.
+
+**Background image renders BELOW spectrum trace (#3124)** — see
+spectrum section.
+
+**Theme Editor filter persistence + reset semantics + factory-loader v2 (#3199)**
+
+UX polish round on the Theme Editor dialog.
+
+### Refactor & internals
+
+- **Primary-slider style consolidation (#3118)** — 8 divergent inline
+  styles consolidated into one `Theme.h` helper.
+- **`connectSliderSetting` helper (#3032 → #3108)** — slider →
+  `AppSettings` binding extracted; `WaveApplet` and `PanadapterApplet`
+  migrated.
+- **License-class filter-before-merge invariant (#3060 → #3089)** —
+  band-plan walker invariant pinned.
+- **ContainerWidget drag-MIME documentation (#3056 → #3096)** —
+  TXDSP-style alias documented at the drag MIME-set call site
+  (Principle III.).
+
+### Diagnostics & support bundles
+
+- **macOS `phys_footprint` in status-bar memory (#3197 → #3207)** — uses
+  the macOS-native memory accounting rather than the VM-size proxy.
+- **About dialog active pan renderer (#3097)** — surfaces GPU vs
+  QPainter spectrum path.
+- **Slice troubleshooter diagnostics (#3132)** — extra signals for the
+  triage flow.
+- **Network Diagnostics adaptive-throttle visibility (#3203)** —
+  heartbeat colour + dialog graphs.
+
+### Build, CI, and packaging
+
+- **`check-macos` build gate for hot platform-guarded files (#3223)** —
+  mirrors the `check-windows` pattern; covers AudioEngine/MainWindow.
+- **AudioEngine added to `check-windows` filter (#3052 → #3210)** —
+  catches WASAPI-related regressions before they hit main.
+- **Always-on `check-windows` + `check-macos` on every PR (#3244)** —
+  retires the path-filter allow-list. Cost: ~15–20 min runner time per
+  PR; benefit: closes a recurring regression class. See PR body for
+  the receipts.
+- **Sanitizer step pinned to bash (#3155)** — `pipefail` + `PIPESTATUS`
+  bashisms work; the previous Dash default was silently swallowing
+  ctest exit codes and reporting clean runs.
+- **CMake `/MANIFESTINPUT` + `/MANIFEST:EMBED` pairing (#3237)** —
+  manifest embedding on MSVC.
+- **`SOURCE_DATE_EPOCH` for reproducible builds (#3165)** — distro
+  packagers can pin build timestamps.
+- **Debian multiarch tuple for Qt6GuiPrivate probe (#3159)** — fixes
+  the build on Debian-derived distros where Qt private headers live
+  under the multiarch tuple path.
+- **liquid-dsp AltiVec SIMD gate (#3072)** — only probe on PowerPC
+  hosts.
+- **liquid-dsp WIN32 link-flag guard (#3220)** — `-lc/-lm` only on
+  POSIX.
+- **System-library opt-in flags (#3135 — @dawkagaming)** —
+  `USE_SYSTEM_ZLIB`, `USE_SYSTEM_MSPACK`, `USE_SYSTEM_LIBMOSQUITTO`,
+  `USE_SYSTEM_RTMIDI`. Off by default so existing build hosts continue
+  to use vendored snapshots; distro packagers turn them on to match
+  dynamic-linking policy.
+- **Lowercase binary name option (#3138 — @dawkagaming)** — convenience
+  for distro packagers.
+- **Linux 256×256 icon (#3143 — @dawkagaming)** — correct icon size for
+  the Linux `.desktop` location.
+- **Improved `.desktop` description (#3074 — @dawkagaming)** — Linux
+  desktop integration polish.
+- **Windows MSIX packaging groundwork (#3178)** + **embed DFNR model
+  for Store (#3225)** + **exclude DFNR model archive from MSIX
+  package (#3205)** — preparation for Microsoft Store distribution.
+- **Native stored ZIPs for support bundles and profile backups (#3206)**
+- **Theme-manager test fixture realignment (#3161 → #3166)** — fixture
+  realigned with default-dark v1.3 token table; nullptr-deref guarded
+  (Principle VIII.).
+- **PerMonitorV2 DPI awareness on Windows (#3208)**
+- **macOS bitmap cursor crash workaround (#3099)**
+
+### Documentation
+
+- **`docs/assets/`** — AetherSDR light + dark theme screenshots added,
+  unused `logo-invert.png` removed (#824d58e6, #4670d1d6).
+- **CODEOWNERS Tier 3 expansion (#3177)** — @chibondking added to the
+  reviewer roster.
+- **`ContainerWidget` drag-MIME cross-reference (#3096)** — code
+  comment cross-referencing the TXDSP-style alias fallback (Principle
+  III.).
+- **CHANGELOG attribution corrections for v26.5.3 (#3067)** —
+  @nigelfenton (Nigel G0JKN) and @G6PWY-Chris contributor handles fixed
+  retroactively after they reported the misattributions directly.
+
+---
+
 ## [v26.5.3] — 2026-05-24
 
 ### Aetherial Audio TX completion + security hardening + 100-commit reliability sweep

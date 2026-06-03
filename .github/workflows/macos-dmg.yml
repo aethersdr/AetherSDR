@@ -271,10 +271,17 @@ jobs:
           cp "AetherSDR DAX Drivers.pkg" dmg-stage/
 
           # Layout: app (left) + Applications link (right), PKG below Applications
+          # NOTE: --background omitted intentionally. docs/assets/logo-invert.png
+          # was removed in commit 4670d1d6 ("docs(assets): remove unused
+          # logo-invert.png") because it was unused outside this workflow, and
+          # the workflow reference was missed during that cleanup. create-dmg
+          # falls back to a plain white window background, which is functional
+          # but visually plain. Follow-up to add a DMG-specific background
+          # image (correct 600x400 aspect ratio, smaller than the 1.8 MB
+          # theme screenshots) tracked separately.
           create-dmg \
             --volname "AetherSDR" \
             --volicon "build/AetherSDR.icns" \
-            --background "docs/assets/logo-invert.png" \
             --window-pos 200 120 \
             --window-size 600 400 \
             --icon-size 100 \
@@ -285,6 +292,21 @@ jobs:
             "AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg" \
             "dmg-stage/" \
           || true
+
+          # The `|| true` above absorbs create-dmg's well-documented cosmetic
+          # non-zero exits from the AppleScript window-arrangement step on
+          # macOS runners — the DMG is still produced successfully in those
+          # cases (upstream: https://github.com/create-dmg/create-dmg).
+          # The `test -f` below is the authoritative check: any real failure
+          # (missing asset, write permission, disk-image error) results in
+          # no DMG on disk, and we surface that immediately instead of
+          # letting Sign DMG fail confusingly one step later. See the v26.6.1
+          # release-build chain for the exact symptom this guard catches.
+          DMG="AetherSDR-${{ github.ref_name }}-macOS-${{ matrix.label }}.dmg"
+          if [ ! -f "$DMG" ]; then
+            echo "::error::create-dmg did not produce $DMG"
+            exit 1
+          fi
 
       - name: Sign DMG
         env:

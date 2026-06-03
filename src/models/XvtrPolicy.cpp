@@ -9,6 +9,12 @@ namespace AetherSDR::XvtrPolicy {
 
 namespace {
 
+constexpr double kMaxPowerFloorDbm = -10.0;
+constexpr double kHighIfThresholdMhz = 80.0;
+constexpr double kHighIfMaxPowerDbm = 8.0;
+constexpr double kLowIfLegacyMaxPowerDbm = 10.0;
+constexpr double kLowIfDefaultMaxPowerDbm = 15.0;
+
 bool isNativeBandKey(const QString& key, ModelCapabilities caps)
 {
     static const QSet<QString> kAlwaysNativeBandKeys = {
@@ -46,6 +52,15 @@ double tileBandwidth(double lowMhz, double highMhz)
 double tileCenter(double lowMhz, double highMhz)
 {
     return (lowMhz + highMhz) / 2.0;
+}
+
+bool usesLegacyLowIfMaxPower(const QString& radioModel)
+{
+    const QString model = radioModel.trimmed().toUpper();
+    return model == QLatin1String("FLEX-6400") ||
+           model == QLatin1String("FLEX-6400M") ||
+           model == QLatin1String("FLEX-6600") ||
+           model == QLatin1String("FLEX-6600M");
 }
 
 } // namespace
@@ -140,6 +155,25 @@ WaterfallTileRange mapWaterfallTileRange(double lowMhz, double highMhz,
 
     const double offset = panCenterMhz - tileCenter(lowMhz, highMhz);
     return {lowMhz + offset, highMhz + offset, true};
+}
+
+MaxPowerRange maxPowerRangeFor(double ifFreqMhz, const QString& radioModel)
+{
+    if (ifFreqMhz >= kHighIfThresholdMhz) {
+        return {kMaxPowerFloorDbm, kHighIfMaxPowerDbm};
+    }
+
+    if (usesLegacyLowIfMaxPower(radioModel)) {
+        return {kMaxPowerFloorDbm, kLowIfLegacyMaxPowerDbm};
+    }
+
+    return {kMaxPowerFloorDbm, kLowIfDefaultMaxPowerDbm};
+}
+
+double clampMaxPowerDbm(double maxPowerDbm, double ifFreqMhz, const QString& radioModel)
+{
+    const MaxPowerRange range = maxPowerRangeFor(ifFreqMhz, radioModel);
+    return std::clamp(maxPowerDbm, range.minimumDbm, range.maximumDbm);
 }
 
 } // namespace AetherSDR::XvtrPolicy

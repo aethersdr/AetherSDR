@@ -76,6 +76,29 @@ void expectRange(const char* label, const XvtrPolicy::WaterfallTileRange& range,
            detailFor(range));
 }
 
+void expectMaxPowerRange(const char* label, double ifMhz, const QString& radioModel,
+                         double expectedMin, double expectedMax)
+{
+    const XvtrPolicy::MaxPowerRange range =
+        XvtrPolicy::maxPowerRangeFor(ifMhz, radioModel);
+    report(label,
+           near(range.minimumDbm, expectedMin) && near(range.maximumDbm, expectedMax),
+           QStringLiteral("min=%1 max=%2")
+               .arg(range.minimumDbm)
+               .arg(range.maximumDbm)
+               .toStdString());
+}
+
+void expectClampedMaxPower(const char* label, double requestedDbm, double ifMhz,
+                           const QString& radioModel, double expectedDbm)
+{
+    const double clamped =
+        XvtrPolicy::clampMaxPowerDbm(requestedDbm, ifMhz, radioModel);
+    report(label,
+           near(clamped, expectedDbm),
+           QStringLiteral("clamped=%1").arg(clamped).toStdString());
+}
+
 void testBandStackKeysUseFlexIndex()
 {
     const QVector<XvtrPolicy::Transverter> xvtrs = {
@@ -233,6 +256,27 @@ void testXvtrWaterfallGuardrails()
                 inRange, 144.125, 144.625, false);
 }
 
+void testMaxPowerClampMirrorsFlexLib()
+{
+    expectMaxPowerRange("6400 low IF caps max power at +10 dBm",
+                        28.0, QStringLiteral("FLEX-6400"), -10.0, 10.0);
+    expectMaxPowerRange("6600M low IF caps max power at +10 dBm",
+                        28.0, QStringLiteral("FLEX-6600M"), -10.0, 10.0);
+    expectMaxPowerRange("8600 low IF caps max power at +15 dBm",
+                        28.0, QStringLiteral("FLEX-8600"), -10.0, 15.0);
+    expectMaxPowerRange("high IF caps max power at +8 dBm",
+                        80.0, QStringLiteral("FLEX-8600"), -10.0, 8.0);
+
+    expectClampedMaxPower("max power clamps legacy low IF ceiling",
+                          100.0, 28.0, QStringLiteral("FLEX-6400"), 10.0);
+    expectClampedMaxPower("max power clamps default low IF ceiling",
+                          100.0, 28.0, QStringLiteral("FLEX-8600"), 15.0);
+    expectClampedMaxPower("max power clamps high IF ceiling",
+                          100.0, 80.0, QStringLiteral("FLEX-8600"), 8.0);
+    expectClampedMaxPower("max power clamps shared floor",
+                          -99.0, 28.0, QStringLiteral("FLEX-8600"), -10.0);
+}
+
 } // namespace
 
 int main()
@@ -243,6 +287,7 @@ int main()
     testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan();
     testXvtrWaterfallMapsIfToRfBands();
     testXvtrWaterfallGuardrails();
+    testMaxPowerClampMirrorsFlexLib();
 
     return g_failed == 0 ? 0 : 1;
 }

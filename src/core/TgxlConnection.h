@@ -33,6 +33,8 @@ public:
     void connectToTgxl(const QString& host, quint16 port = 9010);
     void disconnect();
 
+    void setAutoReconnect(bool on) { m_autoReconnect = on; }
+
     // Manual relay adjustment: relay 0=C1, 1=L, 2=C2; direction +1 or -1
     void adjustRelay(int relay, int direction);
 
@@ -64,11 +66,16 @@ private:
 
     QTcpSocket m_socket;
     QTimer     m_pollTimer;       // 1/sec status poll
+    QTimer     m_reconnectTimer;
     QByteArray m_readBuf;
     quint32    m_seq{0};
     bool       m_connected{false};
     bool       m_gotVersion{false};
+    bool       m_autoReconnect{false};
+    bool       m_deliberateDisconnect{false};
     QString    m_version;
+    QString    m_lastHost;
+    quint16    m_lastPort{9010};
 };
 
 } // namespace AetherSDR

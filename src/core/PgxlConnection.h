@@ -26,6 +26,8 @@ public:
     void connectToPgxl(const QString& host, quint16 port = 9008);
     void disconnect();
 
+    void setAutoReconnect(bool on) { m_autoReconnect = on; }
+
     quint32 sendCommand(const QString& cmd);
 
 signals:
@@ -45,11 +47,16 @@ private:
 
     QTcpSocket m_socket;
     QTimer     m_pollTimer;
+    QTimer     m_reconnectTimer;
     QByteArray m_readBuf;
     quint32    m_seq{0};
     bool       m_connected{false};
     bool       m_gotVersion{false};
+    bool       m_autoReconnect{false};
+    bool       m_deliberateDisconnect{false};
     QString    m_version;
+    QString    m_lastHost;
+    quint16    m_lastPort{9008};
 };
 
 } // namespace AetherSDR

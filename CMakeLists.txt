@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(AetherSDR VERSION 26.5.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.6.1.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +17,7 @@ option(USE_SYSTEM_ZLIB         "Use system zlib"         OFF)
 option(USE_SYSTEM_MSPACK       "Use system libmspack"    OFF)
 option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
 option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
+option(USE_SYSTEM_LIQUID_DSP   "Use system liquid-dsp"   OFF)
 
 # Build features options
 
@@ -663,6 +664,7 @@ set(GUI_SOURCES
     src/gui/ProfileImportExportDialog.cpp
     src/gui/TxBandDialog.cpp
     src/gui/PanadapterApplet.cpp
+    src/gui/RangeSlider.cpp
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
     src/gui/AppletPanel.cpp
@@ -880,7 +882,7 @@ endif()
 # build verifies clean on Linux + macOS even though no module currently
 # consumes liquid symbols. Standard linker dead-code elimination
 # (--gc-sections on ELF) drops the unused static lib from the final binary.
-if(NOT MSVC)
+if(NOT MSVC AND NOT USE_SYSTEM_LIQUID_DSP)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
     set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
@@ -909,6 +911,13 @@ if(NOT MSVC)
         target_compile_options(liquid-static PRIVATE -w)
     endif()
 endif()  # NOT MSVC
+
+if (USE_SYSTEM_LIQUID_DSP)
+    find_package(PkgConfig REQUIRED)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(liquid-dsp REQUIRED IMPORTED_TARGET liquid-dsp)
+    endif()
+endif()
 
 set(DFNR_RESOURCES "")
 if(ENABLE_DFNR AND AETHER_EMBED_DFNR_MODEL)
@@ -1085,11 +1094,16 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::Network
     Qt6::Multimedia
     aether_libmodem_core
-    # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
-    # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
+
+if (USE_SYSTEM_LIQUID_DSP)
+    target_link_libraries(AetherSDR PRIVATE PkgConfig::liquid-dsp)
+else()
+    # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
+    # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
+    target_link_libraries(AetherSDR PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>)
+endif()
 
 if(Qt6SerialPort_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SERIALPORT)
@@ -1244,7 +1258,9 @@ if(HIDAPI_FOUND)
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
-        src/core/HidDeviceParser.h)
+        src/core/HidDeviceParser.h
+        src/gui/RC28MappingDialog.cpp
+        src/gui/RC28MappingDialog.h)
     set(HIDAPI_NORMALIZED_INCLUDE_DIRS ${HIDAPI_INCLUDE_DIRS})
     foreach(hidapi_dir IN LISTS HIDAPI_INCLUDE_DIRS)
         if(EXISTS "${hidapi_dir}/hidapi.h")
@@ -1716,6 +1732,14 @@ add_executable(biquad_test
 target_include_directories(biquad_test PRIVATE src)
 add_test(NAME biquad_test COMMAND biquad_test)
 
+add_executable(spectral_nr_test
+    tests/spectral_nr_test.cpp
+    src/core/SpectralNR.cpp
+)
+target_include_directories(spectral_nr_test PRIVATE src)
+target_link_libraries(spectral_nr_test PRIVATE Qt6::Core)
+add_test(NAME spectral_nr_test COMMAND spectral_nr_test)
+
 add_executable(client_gate_test
     tests/client_gate_test.cpp
     src/core/ClientGate.cpp
@@ -2031,8 +2055,9 @@ target_compile_definitions(midi_settings_test PRIVATE HAVE_MIDI)
 if (USE_SYSTEM_RTMIDI)
     target_link_libraries(midi_settings_test PRIVATE PkgConfig::rtmidi)
 else()
-    target_include_directories(midi_settings_test PRIVATE src third_party/rtmidi)
+    target_include_directories(midi_settings_test PRIVATE third_party/rtmidi)
 endif()
+target_include_directories(midi_settings_test PRIVATE src)
 target_link_libraries(midi_settings_test PRIVATE Qt6::Core)
 add_test(NAME midi_settings_test COMMAND midi_settings_test)
 

@@ -58,6 +58,14 @@ static int aetherTolerantX11ErrorHandler(AetherX11Display*, AetherX11ErrorEvent*
 }
 #endif  // __linux__
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+// Request discrete GPU on hybrid laptops (NVIDIA Optimus / AMD PowerXpress).
+// Intel iGPU D3D11 driver corrupts its stack during QRhiWidget reparenting (#1921).
+extern "C" __declspec(dllexport) DWORD NvOptimusEnablement             = 1;
+extern "C" __declspec(dllexport) int   AmdPowerXpressRequestHighPerformance = 1;
+#endif // Q_OS_WIN
+
 static void messageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
 {
     AetherSDR::LogManager::instance().enqueueMessage(type, ctx, msg);

@@ -34,7 +34,12 @@ public:
     // is sufficient because callers treat the result as a hint and the real
     // gate is re-checked inside the queued slot. (#3248)
     bool isOpen() const { return m_device.load(std::memory_order_relaxed) != nullptr; }
-    QString deviceName() const { return m_deviceName; }
+    bool isBlockedByMultiple() const { return m_multipleDetected.load(std::memory_order_acquire); }
+    QString blockedDeviceName()  const { return m_blockedDeviceName; }
+    QString deviceName()     const { return m_deviceName; }
+    QString devicePath()     const { return m_devicePath; }
+    QString serialNumber()   const { return m_serialNumber; }
+    uint16_t releaseNumber() const { return m_releaseNumber; }
     uint16_t vendorId() const { return m_openVid.load(std::memory_order_relaxed); }
     uint16_t productId() const { return m_openPid.load(std::memory_order_relaxed); }
     int encoderCount() const { return m_parser ? m_parser->encoderCount() : 1; }
@@ -42,11 +47,38 @@ public:
         return m_openVid.load(std::memory_order_relaxed) == 0x0FD9
             && m_openPid.load(std::memory_order_relaxed) == 0x0084;
     }
+    // Single source of truth for the RC-28-compatible VID/PID set, shared by the
+    // instance check below and open()'s multi-device guard. The emulator runs
+    // the same wire protocol as the real RC-28, including the LED output report.
+    static bool isRC28CompatibleId(uint16_t vid, uint16_t pid) {
+        return (vid == 0x0C26 && pid == 0x001E)   // Icom RC-28
+            || (vid == 0x2341 && pid == 0x0266);   // AetherPad emulator
+    }
+    bool isRC28Compatible() const {
+        return isRC28CompatibleId(m_openVid.load(std::memory_order_relaxed),
+                                  m_openPid.load(std::memory_order_relaxed));
+    }
 
     void setInvertDirection(bool invert) { m_invertDirection = invert; }
 
+    // RC-28 button mapping persists as a single nested-JSON blob under the
+    // "RC28Mapping" AppSettings key (Principle V): one root key per feature,
+    // not a stack of flat keys. Fields: f1Press, f1Hold, f2Press, f2Hold,
+    // pttMode. These helpers are the single read/write path shared by the
+    // mapping dialog and the MainWindow dispatch/LED code. (#3323)
+    static QString rc28MappingField(const QString& field, const QString& dflt);
+    static void setRc28MappingField(const QString& field, const QString& value);
+
+    // Active-low LED byte constant for setRC28Leds(). updateRC28Leds() in
+    // MainWindow builds the full byte bitwise; RC28_LEDS_OFF is the reset value.
+    static constexpr uint8_t RC28_LEDS_OFF = 0x0F;  // all LEDs off
+
 public slots:
     void loadSettings();
+    // Set the LED state on an RC-28-compatible device. ledByte is active-low:
+    //   bit0=TX/PTT, bit1=F1, bit2=F2, bit3=LINK. Clear bit = LED on.
+    // No-op if the connected device is not RC-28-compatible.
+    void setRC28Leds(uint8_t ledByte);
     // Write 120x120 JPEG images to StreamDeck+ LCD keys. Pass all 8 images at once
     // so one queued call updates the whole display without flooding the event queue.
     // No-op if device is not a StreamDeck+.
@@ -62,6 +94,9 @@ signals:
     void tuneSteps(int encoderIndex, int steps);
     void buttonPressed(int button, int action);
     void connectionChanged(bool connected, const QString& deviceName);
+    // Emitted when open() finds more than one device with the same VID/PID.
+    // The device is not opened; hotplug will retry until only one remains.
+    void multipleDevicesDetected(const QString& deviceName);
 
 private slots:
     void poll();
@@ -71,12 +106,24 @@ private:
     // m_device + m_openVid + m_openPid are read from the main thread
     // (isOpen / isStreamDeckPlus / vendorId / productId) and written from
     // m_extCtrlThread (open / close / hotplugCheck).  std::atomic makes
-    // those cross-thread reads well-defined.  m_deviceName is also
-    // touched cross-thread but it's a const-after-open string used only
-    // in diagnostics so a brief stale read is benign. (#3248)
+    // those cross-thread reads well-defined.  m_deviceName / m_devicePath /
+    // m_serialNumber / m_releaseNumber are also touched cross-thread but are
+    // const-after-open and only used for diagnostics — brief stale reads are
+    // benign, matching the existing m_deviceName convention. (#3248, #3323)
     std::atomic<hid_device*> m_device{nullptr};
     std::unique_ptr<HidDeviceParser> m_parser;
     QString m_deviceName;
+    QString m_devicePath;
+    QString m_serialNumber;
+    uint16_t m_releaseNumber{0};
+    // Latches true while open() is blocking on >1 RC-28 so the warning + signal
+    // fire once per transition, not on every hotplug retry. Atomic so the main
+    // thread can poll isBlockedByMultiple() without a data race. The companion
+    // m_blockedDeviceName QString is written before this flag is set (release
+    // store) and read after it is tested (acquire load), establishing the
+    // happens-before needed to read the QString safely. (#3323)
+    std::atomic<bool> m_multipleDetected{false};
+    QString m_blockedDeviceName;
     std::atomic<uint16_t> m_openVid{0};
     std::atomic<uint16_t> m_openPid{0};
     bool m_invertDirection{false};

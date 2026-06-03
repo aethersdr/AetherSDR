@@ -4,12 +4,37 @@
 #include "core/LogManager.h"
 
 #include <QDebug>
+#include <QJsonObject>
+#include <QJsonDocument>
 #include <algorithm>
 #include <cstring>
 
 namespace AetherSDR {
 
 // HID logging now uses lcDevices from LogManager (shared with serial, FlexControl, MIDI)
+
+// RC-28 mapping is stored as one nested-JSON blob under "RC28Mapping"
+// (Principle V / Principle XIV). Reads default-fill missing fields; writes
+// regenerate the full object and persist atomically (single setValue+save).
+QString HidEncoderManager::rc28MappingField(const QString& field, const QString& dflt)
+{
+    const QByteArray raw =
+        AppSettings::instance().value("RC28Mapping", "{}").toString().toUtf8();
+    const QJsonObject obj = QJsonDocument::fromJson(raw).object();
+    const QJsonValue v = obj.value(field);
+    return v.isString() ? v.toString() : dflt;
+}
+
+void HidEncoderManager::setRc28MappingField(const QString& field, const QString& value)
+{
+    auto& s = AppSettings::instance();
+    QJsonObject obj =
+        QJsonDocument::fromJson(s.value("RC28Mapping", "{}").toString().toUtf8()).object();
+    obj.insert(field, value);
+    s.setValue("RC28Mapping",
+               QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    s.save();
+}
 
 HidEncoderManager::HidEncoderManager(QObject* parent)
     : QObject(parent)
@@ -51,6 +76,60 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
 {
     if (m_device) close();
 
+    // Block if more than one RC-28-compatible device is connected — interleaved
+    // events from two encoders would produce unpredictable tuning behaviour.
+    // macOS reports each HID usage collection as a separate enumeration entry, so
+    // counting raw entries would over-count a single device. We group by a stable
+    // physical-device key: the USB serial number when present, otherwise the
+    // hidapi path. The RC-28 exposes no serial, but all usage-collection entries
+    // of one physical interface share the same path, while two separate devices
+    // get distinct paths — so the path fallback distinguishes them correctly.
+    if (isRC28CompatibleId(vid, pid)) {
+        bool multiplePhysical = false;
+        QString firstKey;
+        bool firstSeen = false;
+        if (auto* info = hid_enumerate(vid, pid)) {
+            for (auto* cur = info; cur; cur = cur->next) {
+                const QString key = (cur->serial_number && cur->serial_number[0] != L'\0')
+                    ? QStringLiteral("sn:") + QString::fromWCharArray(cur->serial_number)
+                    : QStringLiteral("path:") + QString::fromLatin1(cur->path ? cur->path : "");
+                if (!firstSeen) {
+                    firstKey  = key;
+                    firstSeen = true;
+                } else if (key != firstKey) {
+                    multiplePhysical = true;
+                    break;
+                }
+            }
+            hid_free_enumeration(info);
+        }
+        if (multiplePhysical) {
+            const auto* devices = HidDeviceParser::supportedDevices();
+            int count = HidDeviceParser::supportedDeviceCount();
+            QString name;
+            for (int i = 0; i < count; ++i) {
+                if (devices[i].vid == vid && devices[i].pid == pid) {
+                    name = devices[i].name;
+                    break;
+                }
+            }
+            // open() is retried every hotplug tick while two devices remain, so
+            // warn + emit only on the transition into the blocked state.
+            if (!m_multipleDetected.load(std::memory_order_acquire)) {
+                // Write the name before the release store so the main thread
+                // sees a valid QString when it reads m_multipleDetected as true.
+                m_blockedDeviceName = name;
+                m_multipleDetected.store(true, std::memory_order_release);
+                qCWarning(lcDevices) << "HidEncoderManager: multiple" << name
+                                     << "devices detected — blocking until only one is present";
+                emit multipleDevicesDetected(name);
+            }
+            return false;
+        }
+        m_blockedDeviceName.clear();
+        m_multipleDetected.store(false, std::memory_order_release);
+    }
+
     m_device = hid_open(vid, pid, nullptr);
     if (!m_device) {
         qCDebug(lcDevices) << "HidEncoderManager: failed to open"
@@ -60,10 +139,23 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
 
     hid_set_nonblocking(m_device, 1);
 
+    // Capture device info via enumerate — works on all hidapi versions unlike
+    // hid_get_device_info() which requires >= 0.13.0.  (#3323)
+    if (auto* info = hid_enumerate(vid, pid)) {
+        m_devicePath   = QString::fromLatin1(info->path ? info->path : "");
+        m_serialNumber = info->serial_number
+            ? QString::fromWCharArray(info->serial_number) : QString{};
+        m_releaseNumber = info->release_number;
+        hid_free_enumeration(info);
+    }
+
     m_parser = HidDeviceParser::create(vid, pid);
     if (!m_parser) {
         qCWarning(lcDevices) << "HidEncoderManager: no parser for"
                          << QString("0x%1:0x%2").arg(vid, 4, 16, QChar('0')).arg(pid, 4, 16, QChar('0'));
+        m_devicePath.clear();
+        m_serialNumber.clear();
+        m_releaseNumber = 0;
         hid_close(m_device);
         m_device = nullptr;
         return false;
@@ -96,6 +188,9 @@ void HidEncoderManager::close()
     m_pollTimer->stop();
     m_hotplugTimer->stop();
     if (m_device) {
+        // Extinguish RC-28 LEDs on clean close. hid_write may return EIO if
+        // the device was surprise-disconnected; that is safe to ignore here.
+        setRC28Leds(RC28_LEDS_OFF);
         hid_close(m_device);
         m_device = nullptr;
     }
@@ -103,6 +198,9 @@ void HidEncoderManager::close()
     if (!m_deviceName.isEmpty()) {
         qCDebug(lcDevices) << "HidEncoderManager: closed" << m_deviceName;
         m_deviceName.clear();
+        m_devicePath.clear();
+        m_serialNumber.clear();
+        m_releaseNumber = 0;
         emit connectionChanged(false, {});
     }
 }
@@ -146,6 +244,17 @@ void HidEncoderManager::hotplugCheck()
     if (m_openVid && m_openPid) {
         if (open(m_openVid, m_openPid))
             m_hotplugTimer->stop();
+        return;
+    }
+    // No VID/PID recorded: device was never opened (started without encoder
+    // attached). Scan all supported devices so a late-connect is picked up.
+    const auto* devices = HidDeviceParser::supportedDevices();
+    int count = HidDeviceParser::supportedDeviceCount();
+    for (int i = 0; i < count; ++i) {
+        if (open(devices[i].vid, devices[i].pid)) {
+            m_hotplugTimer->stop();
+            return;
+        }
     }
 }
 
@@ -255,21 +364,41 @@ void HidEncoderManager::setTouchscreenImage(const QByteArray& jpegData,
     }
 }
 
+void HidEncoderManager::setRC28Leds(uint8_t ledByte)
+{
+    if (!m_device || !isRC28Compatible()) return;
+    // Output report: [0x00=reportID, 0x01=cmd, ledByte, zeros...], 33 bytes total.
+    // Format verified against FlexRC-28 Node.js driver (_sendLED) and
+    // wfview src/usbcontroller.cpp (RC28 featureLEDControl path).
+    // Active-low: bit0=TX, bit1=F1, bit2=F2, bit3=LINK; 0x0F = all off.
+    uint8_t report[33] = {};
+    report[0] = 0x00;
+    report[1] = 0x01;
+    report[2] = ledByte;
+    hid_write(m_device, report, sizeof(report));
+}
+
 void HidEncoderManager::loadSettings()
 {
     auto& s = AppSettings::instance();
     m_invertDirection = s.value("HidEncoderInvertDir", "False").toString() == "True";
 
-    if (s.value("HidEncoderAutoDetect", "True").toString() == "True") {
-        const auto* devices = HidDeviceParser::supportedDevices();
-        int count = HidDeviceParser::supportedDeviceCount();
-        for (int i = 0; i < count; ++i) {
-            if (open(devices[i].vid, devices[i].pid))
-                return;
-        }
-        // No device found — start hotplug timer to watch for connect
-        m_hotplugTimer->start();
+    // Callers (MainWindow startup + Preferences OK) gate on HidEncoderEnabled, so
+    // loadSettings() always scans for a device when called.  The isOpen() guard
+    // makes repeated calls from Preferences idempotent: invert-dir is refreshed
+    // above, but we skip the scan+open cycle if the device is already connected.
+    // Replacing the old HidEncoderAutoDetect check prevents users who had that
+    // flag set to "False" from getting stuck in a "can't re-enable" state. (#3323)
+    if (isOpen()) return;
+
+    const auto* devices = HidDeviceParser::supportedDevices();
+    int count = HidDeviceParser::supportedDeviceCount();
+    for (int i = 0; i < count; ++i) {
+        if (open(devices[i].vid, devices[i].pid))
+            return;
     }
+    // No device found — start hotplug timer to watch for connect
+    m_hotplugTimer->start();
 }
 
 } // namespace AetherSDR

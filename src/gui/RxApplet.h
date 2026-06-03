@@ -96,8 +96,16 @@ signals:
     void sliceActivationRequested(int sliceId);
     // Emitted when the user adjusts the AF gain slider (0–100).
     void afGainChanged(int value);
-    // Emitted when the user changes the tuning step size (Hz).
+    // Emitted whenever the tuning step size changes (Hz), from ANY source —
+    // including radio-driven syncs via syncStepFromSlice() (memory recall,
+    // band crossing). Connect source-agnostic UI sync here (e.g. SpectrumWidget
+    // scroll-to-tune step), but NOT command echoes or user-facing toasts.
     void stepSizeChanged(int hz);
+    // Emitted only when the operator deliberately changes the step (STEP
+    // buttons/scroll, cycle shortcuts, encoder push). Use this for actions
+    // that should not fire on radio-driven syncs: pushing to the radio,
+    // persisting, and the "Step: …" status-bar toast.
+    void stepSizeChangedByUser(int hz);
     // Emitted when Auto SQL tracking is toggled.
     void sqlAutoChanged(bool on);
     // Emitted on every SQL mode transition (Off / Manual / Auto), so any
