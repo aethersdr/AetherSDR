@@ -2,6 +2,7 @@
 #include "LogManager.h"
 
 #include <QEventLoop>
+#include <QNetworkProxy>
 
 #ifdef Q_OS_LINUX
 #include <netinet/in.h>
@@ -72,6 +73,13 @@ RadioConnection::~RadioConnection()
 void RadioConnection::init()
 {
     m_socket = new QTcpSocket(this);
+    // LAN radio uses a proprietary CAT/VITA stream on port 4992; an OS or
+    // application HTTP/SOCKS proxy can never tunnel it sensibly.  SmartSDR
+    // dodges this because .NET's TcpClient ignores WinHTTP proxy settings,
+    // while Qt's QTcpSocket honours QNetworkProxy::applicationProxy() by
+    // default.  Force NoProxy so a system proxy doesn't block the connect.
+    // (WAN/SmartLink paths intentionally keep default proxy handling.) (#3389)
+    m_socket->setProxy(QNetworkProxy::NoProxy);
     m_heartbeat = new QTimer(this);
 
     connect(m_socket, &QTcpSocket::connected,
