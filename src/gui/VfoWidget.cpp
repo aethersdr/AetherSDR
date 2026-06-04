@@ -1126,7 +1126,9 @@ void VfoWidget::buildTabContent()
                 m_slice->setDiversity(on);
             // ESC panel only on diversity parent, not child
             m_escPanel->setVisible(on && m_slice && !m_slice->isDiversityChild());
-            resize(sizeHint());
+            // setVisible() only posts a LayoutRequest; adjustSize() activates the
+            // layout first so the panel collapses immediately (#3383)
+            adjustSize();
         });
         connect(m_escBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_slice)
@@ -2194,7 +2196,7 @@ void VfoWidget::setDiversityAllowed(bool allowed)
     // ESC panel only visible when DIV is active on a dual-SCU radio
     if (m_escPanel && !allowed) {
         m_escPanel->setVisible(false);
-        resize(sizeHint());
+        adjustSize();  // flush pending layout before sizing (#3383)
     }
 }
 
@@ -2810,7 +2812,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         QSignalBlocker sb(m_divBtn);
         m_divBtn->setChecked(on);
         m_escPanel->setVisible(on && !m_slice->isDiversityChild());
-        resize(sizeHint());
+        adjustSize();  // flush pending layout before sizing (#3383)
     });
     // ESC sync — phase is in radians, display as degrees
     {
