@@ -5229,8 +5229,19 @@ MainWindow::MainWindow(QWidget* parent)
     // cache the position the way it does with native chrome). (#2483)
     if (s.value("MinimalModeEnabled", "False").toString() == "True") {
         toggleMinimalMode(true);
-        m_startupGeometryForFirstShow = QByteArray::fromBase64(
-            s.value("MinimalModeGeometry", "").toByteArray());
+        // Only swap to the minimal-mode blob when it actually exists.
+        // MinimalModeGeometry is written by toggleMinimalMode(false) and by
+        // closeEvent — never on first enable — so users upgrading from a build
+        // that predated the #2483 save path can have MinimalModeEnabled=True
+        // with no MinimalModeGeometry.  Overwriting unconditionally would wipe
+        // the valid MainWindowGeometry blob with empty bytes and skip the
+        // post-show screen restore entirely for exactly the multi-monitor
+        // minimal-mode operators this fix targets. (#3319)
+        const QByteArray minimalBlob = QByteArray::fromBase64(
+            s.value("MinimalModeGeometry", "").toString().toLatin1());
+        if (!minimalBlob.isEmpty()) {
+            m_startupGeometryForFirstShow = minimalBlob;
+        }
     }
 
     // Restore the Aetherial Audio Channel Strip if it was open on last
@@ -5992,6 +6003,13 @@ void MainWindow::showEvent(QShowEvent* event)
     }
 
     m_startupGeometryReapplied = true;
+    // Defer to a singleShot(0) so the re-apply runs after the constructor has
+    // fully returned.  This matters for the minimal-mode path: even though
+    // toggleMinimalMode(true) can emit a showEvent mid-construction (via
+    // showNormal()), the timer fires only once control unwinds back to the
+    // event loop — by which point m_startupGeometryForFirstShow has been
+    // finalized (swapped to the MinimalModeGeometry blob when present), so the
+    // correct blob is the one that gets re-applied. (#3319)
     QTimer::singleShot(0, this, &MainWindow::reapplyStartupGeometryAfterShow);
 }
 
@@ -6006,10 +6024,15 @@ void MainWindow::reapplyStartupGeometryAfterShow()
     // honors the saved monitor instead of the last pop-out's screen. (#3319)
     restoreGeometry(m_startupGeometryForFirstShow);
 
+    // Test the frame's center against each screen's full geometry rather than
+    // the top-left against availableGeometry().  A top-left landing in a
+    // taskbar/panel exclusion strip (or in a gap between two displays whose
+    // union covers the center) would otherwise be misreported as off-screen;
+    // the center on full geometry matches "is this window on a real display".
     bool onScreen = false;
-    const QPoint topLeft = frameGeometry().topLeft();
+    const QPoint center = frameGeometry().center();
     for (QScreen* screen : QGuiApplication::screens()) {
-        if (screen && screen->availableGeometry().contains(topLeft)) {
+        if (screen && screen->geometry().contains(center)) {
             onScreen = true;
             break;
         }
