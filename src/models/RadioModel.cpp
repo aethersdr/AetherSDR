@@ -1875,6 +1875,22 @@ void RadioModel::peekForMultiFlexConflictThen(std::function<void()> continuation
     // 400 ms is enough for the radio's status burst to arrive on a LAN path.
     sendCmd("sub radio all", [this](int, const QString&) {
         sendCmd("sub client all", [this](int, const QString&) {
+            // Fast path: when multiFLEX is enabled the radio explicitly allows
+            // multiple GUI clients, so the conflict check below
+            // (!m_multiFlexEnabled && hasOthers) can never fire — there is
+            // nothing to wait for. mf_enable arrives in the radio status burst
+            // triggered by "sub radio all" above, so m_multiFlexEnabled is set
+            // by the time this callback runs. Skipping the 400 ms window here
+            // shaves it off the connect handshake. When mf is disabled (or its
+            // status hasn't arrived yet) we fall through to the original wait.
+            if (m_multiFlexEnabled) {
+                if (m_multiFlexContinuation) {
+                    auto cont = std::move(m_multiFlexContinuation);
+                    m_multiFlexContinuation = nullptr;
+                    cont();
+                }
+                return;
+            }
             QTimer::singleShot(400, this, [this] {
                 const quint32 ours2 = clientHandle();
                 bool hasOthers = false;
@@ -2008,21 +2024,23 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         sendCmd("keepalive enable");
         startNetworkMonitor();
 
-    // Full command sequence — each step waits for its R response before sending the next.
-    // sub slice all → sub pan all → sub tx all → sub atu all → sub amplifier all
-    //   → sub meter all → sub audio all → ...
-    sendCmd("sub slice all", [this](int, const QString&) {
-      sendCmd("sub pan all", [this](int, const QString&) {
-      sendCmd("sub tx all", [this](int, const QString&) {
-        sendCmd("sub atu all", [this](int, const QString&) {
-        sendCmd("sub amplifier all", [this](int, const QString&) {
-          sendCmd("sub meter all", [this](int, const QString&) {
-            sendCmd("sub audio all", [this](int, const QString&) {
-            sendCmd("sub gps all", [this](int, const QString&) {
-            sendCmd("sub apd all", [this](int, const QString&) {
-            armClientConnectionNoticeSuppression();
-            sendCmd("sub client all", [this](int, const QString&) {
-            sendCmd("sub xvtr all", [this](int, const QString&) {
+    // Subscriptions are independent topics and the radio processes TCP commands
+    // in send order, so fire them back-to-back without round-tripping on each R
+    // response — exactly as the second sub batch (sub tnf/dax/codec/…) below
+    // already does. The previous one-RTT-per-sub chain serialized ~11 round
+    // trips (~0.7 s on a LAN) into the connect handshake for no protocol reason.
+    sendCmd("sub slice all");
+    sendCmd("sub pan all");
+    sendCmd("sub tx all");
+    sendCmd("sub atu all");
+    sendCmd("sub amplifier all");
+    sendCmd("sub meter all");
+    sendCmd("sub audio all");
+    sendCmd("sub gps all");
+    sendCmd("sub apd all");
+    armClientConnectionNoticeSuppression();
+    sendCmd("sub client all");
+    sendCmd("sub xvtr all");
             // Memory status arrives via normal status handler — no subscription needed.
             // "sub memory all" returns 500000A3 (invalid subscription object).
         // Request available mic inputs (comma-separated response: "MIC,BAL,LINE,ACC")
@@ -2294,17 +2312,6 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             sendCmd("sub spot all");
             sendCmd("sub waveform all");
             sendCmd("sub license all");
-            }); // sub xvtr all
-            }); // sub client all
-            }); // sub apd all
-            }); // sub gps all
-            }); // sub audio all
-          }); // sub meter all
-        }); // sub amplifier all
-        }); // sub atu all
-      }); // sub tx all
-      }); // sub pan all
-    }); // sub slice all
     }); // client gui
 }
 
