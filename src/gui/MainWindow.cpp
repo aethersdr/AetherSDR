@@ -123,6 +123,7 @@
 #include "WaveformsDialog.h"
 #include "ClientRxDspApplet.h"
 #include "DspParamPopup.h"
+#include "GuardedSlider.h"
 #include "FramelessResizer.h"
 #include "FramelessWindowTitleBar.h"
 
@@ -7772,12 +7773,27 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             auto* slider = qobject_cast<QAbstractSlider*>(QApplication::focusWidget());
             if (slider && m_sliderShortcutLease.data() == slider && s_sliderShortcutLeaseActive) {
                 int k = ke->key();
+                // Enter hands keyboard control straight back to the panadapter's
+                // global shortcuts, instead of waiting for the lease to time out.
+                if (k == Qt::Key_Return || k == Qt::Key_Enter) {
+                    releaseSliderShortcutLease(true);
+                    return true;
+                }
+                // After a keyboard nudge, flash the same value badge the mouse
+                // drag shows so keyboard and mouse give identical feedback.
+                // GuardedSlider has no Q_OBJECT macro, so reach it via
+                // dynamic_cast rather than qobject_cast.
+                auto flashBadge = [slider]() {
+                    if (auto* gs = dynamic_cast<GuardedSlider*>(slider))
+                        gs->flashDragValue();
+                };
                 if (k == Qt::Key_Left || k == Qt::Key_Right
                     || k == Qt::Key_Up || k == Qt::Key_Down) {
                     bool increase = (k == Qt::Key_Right || k == Qt::Key_Up);
                     int step = (ke->modifiers() & Qt::ControlModifier)
                                    ? slider->pageStep() : slider->singleStep();
                     slider->setValue(slider->value() + (increase ? step : -step));
+                    flashBadge();
                     renewSliderShortcutLease();
                     return true;
                 }
@@ -7785,6 +7801,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
                     const int step = slider->pageStep();
                     slider->setValue(slider->value()
                                      + (k == Qt::Key_PageUp ? step : -step));
+                    flashBadge();
                     renewSliderShortcutLease();
                     return true;
                 }
@@ -7792,6 +7809,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
                     slider->setValue(k == Qt::Key_Home
                                          ? slider->minimum()
                                          : slider->maximum());
+                    flashBadge();
                     renewSliderShortcutLease();
                     return true;
                 }

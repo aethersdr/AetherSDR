@@ -175,6 +175,20 @@ protected:
                 emit gainChanged(m_gain);
                 update();
             }
+            // Mirror the mouse-drag readout: show the value badge and let it
+            // linger with the same timeout, even when stepping by keyboard.
+            showDragValuePopup(dragValueAnchor(mapToGlobal(rect().center())));
+            if (m_dragValuePopup)
+                m_dragValuePopup->linger();
+            e->accept();
+            return;
+        }
+        // Enter hands keyboard control back to the panadapter's global
+        // shortcuts immediately, rather than waiting for focus to drift away.
+        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+            if (m_dragValuePopup)
+                m_dragValuePopup->hideNow();
+            clearFocus();
             e->accept();
             return;
         }
