@@ -389,7 +389,16 @@ void QsoRecorder::startPlayback()
     if (!dev.isFormatSupported(fmt)) {
         fmt.setSampleRate(48000);
         sinkRate = 48000;
-        if (!dev.isFormatSupported(fmt)) return;
+        if (!dev.isFormatSupported(fmt)) {
+            // Try 44.1 kHz Int16 before giving up on Int16 — some Windows
+            // output devices (HFP/SCO routes, certain USB DACs) reject 48 kHz
+            // outright but accept 44.1 kHz.  Mirrors ClientPuduMonitor's
+            // 24/48/44.1 ladder so QSO recording playback doesn't bail on
+            // devices where monitor playback succeeds (#3385).
+            fmt.setSampleRate(44100);
+            sinkRate = 44100;
+            if (!dev.isFormatSupported(fmt)) return;
+        }
     }
 
     if (!preparePlaybackPcm(sinkRate)) return;
