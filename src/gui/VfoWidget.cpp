@@ -486,9 +486,9 @@ void VfoWidget::buildUI()
     m_splitBadge->setFixedHeight(20);  // match TX badge height
     m_splitBadge->setStyleSheet(
         "QPushButton { background: transparent; border: none; "
-        "color: rgba(255,255,255,40); font-size: 11px; font-weight: bold; "
+        "color: rgba(255,255,255,120); font-size: 11px; font-weight: bold; "
         "padding: 0px 3px; }"
-        "QPushButton:hover { color: rgba(255,255,255,80); }");
+        "QPushButton:hover { color: rgba(255,255,255,180); }");
     m_splitBadge->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     connect(m_splitBadge, &QPushButton::clicked, this, [this]() {
         if (m_splitBadge->text() == "SWAP")
@@ -3068,9 +3068,9 @@ void VfoWidget::updateSplitBadge(bool isTxSlice, bool isRxSplit)
         m_splitBadge->show();
         m_splitBadge->setStyleSheet(
             "QPushButton { background: transparent; border: none; "
-            "color: rgba(255,255,255,40); font-size: 11px; font-weight: bold; "
+            "color: rgba(255,255,255,120); font-size: 11px; font-weight: bold; "
             "padding: 0px 3px; }"
-            "QPushButton:hover { color: rgba(255,255,255,80); }");
+            "QPushButton:hover { color: rgba(255,255,255,180); }");
     }
 }
 
