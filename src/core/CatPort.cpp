@@ -5,6 +5,8 @@
 #include "SmartCatSession.h"
 #include "models/RadioModel.h"
 
+#include <utility>
+
 #include <QDir>
 #include <QFileInfo>
 #include <QStandardPaths>
@@ -87,18 +89,24 @@ void CatPort::stop()
 {
     stopPty();
 
+    // Swap out the client list before iterating: abort() emits disconnected
+    // synchronously, and onRigctlDisconnected calls removeAt() on m_rigctlClients,
+    // which would invalidate the range-for with 2+ clients. Disconnecting signals
+    // first prevents that re-entrant mutation and the double-free it causes.
+    // Also fixes the original UAF: Qt parents sockets to m_tcpServer, so
+    // delete m_tcpServer frees them — abort() after that is a use-after-free.
+    auto clients = std::exchange(m_rigctlClients, {});
+    for (auto& c : clients) {
+        QObject::disconnect(c.socket, nullptr, this, nullptr);
+        c.socket->abort();
+        delete c.protocol;
+    }
+
     if (m_tcpServer) {
         m_tcpServer->close();
         delete m_tcpServer;
         m_tcpServer = nullptr;
     }
-
-    // Close all rigctld clients
-    for (auto& c : m_rigctlClients) {
-        c.socket->abort();
-        delete c.protocol;
-    }
-    m_rigctlClients.clear();
 
     // Close all SmartCAT sessions (sessions own their sockets)
     for (auto* s : m_catSessions)
