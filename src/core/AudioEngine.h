@@ -128,7 +128,7 @@ public:
     int  txInputSampleRate() const { return m_txInputRate; }
     int  txInputChannelCount() const { return m_txInputChannels; }
     bool txInputResamplingTo24k() const { return m_txNeedsResample; }
-    bool rxOutputResamplingActive() const { return m_resampleTo48k; }
+    bool rxOutputResamplingActive() const { return m_rxOutputRate != DEFAULT_SAMPLE_RATE; }
     QJsonArray audioEndpointDiagnostics() const;
 
     // Client-side PC mic gain (0-100 → 0.0-1.0, applied before Opus encoding)
@@ -670,10 +670,12 @@ private:
     std::atomic<int>   m_rxPan{50};       // 0=left, 50=centre, 100=right (#1460)
     std::atomic<int>   m_rxBufferCapMs{200}; // RX buffer cap in ms (#1505)
     std::atomic<bool>  m_muted{false};
-    bool  m_resampleTo48k{false};      // RX: upsample 24kHz → 48kHz output
-    std::unique_ptr<Resampler> m_rxResampler;       // 24k→48k for L channel (lazy init)
-    std::unique_ptr<Resampler> m_rxResamplerR;      // 24k→48k for R channel — kept in sync with m_rxResampler
-    std::unique_ptr<Resampler> m_radeRxResampler;   // separate 24k→48k for RADE decoded speech
+    // RX sink device rate (negotiated via AudioFormatNegotiator). Audio is
+    // resampled from the 24k canonical rate up to this when they differ (#3306).
+    int   m_rxOutputRate{DEFAULT_SAMPLE_RATE};
+    std::unique_ptr<Resampler> m_rxResampler;       // 24k→device rate, L channel (lazy init)
+    std::unique_ptr<Resampler> m_rxResamplerR;      // 24k→device rate, R channel — kept in sync with m_rxResampler
+    std::unique_ptr<Resampler> m_radeRxResampler;   // separate 24k→device rate for RADE decoded speech
     std::unique_ptr<CwSidetoneGenerator> m_cwSidetone;  // local CW sidetone, mixed into RX drain
     // Atomic gate for the TX-side CW decode tap (#2417).  Flipped from
     // MainWindow on MOX / CwDecodeTxEnabled changes; checked on the

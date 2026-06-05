@@ -496,6 +496,8 @@ set(CORE_SOURCES
     src/core/TgxlConnection.cpp
     src/core/CommandParser.cpp
     src/core/AudioSummaryLogger.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/AudioDeviceNegotiator.cpp
     src/core/AudioEngine.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp

@@ -1,6 +1,6 @@
 # Consolidated audio sink factory
 
-> Status: **in progress** — foundation landed (pure negotiator + golden tests).
+> Status: **in progress** — foundation + live wrapper + RX-speaker migration landed.
 > Tracking issue: [#3306](https://github.com/aethersdr/AetherSDR/issues/3306).
 > Companion doc: [`audio-pipeline.md`](audio-pipeline.md).
 
@@ -141,13 +141,19 @@ rate ones; the others are enforced in the router/wrapper.
 
 1. **Foundation** ✅ — `AudioFormatNegotiator` + golden matrix
    (`audio_format_negotiation_test`). Pure addition, zero behaviour change.
-2. **Live wrapper** — `AudioDeviceNegotiator`, with a unit smoke test against the
-   default device. Still no sink uses it yet.
-3. **RX speaker** onto the wrapper — behaviour identical for normal devices; the
-   *only* visible change is that a 44.1k-only output now works instead of
-   failing (the #3306 regression the foundation guards). Soak on Win/Mac/Linux.
+2. **Live wrapper** ✅ — `AudioDeviceNegotiator` + smoke test against the real
+   default devices (`audio_device_negotiator_test`).
+3. **RX speaker** ✅ — `AudioEngine::startRxStream()` now walks the factory's
+   Float ladder with real `start()` attempts instead of two forked per-OS
+   `#ifdef` blocks. The `m_resampleTo48k` bool was generalized to an
+   `m_rxOutputRate` int so a 44.1k device resamples 24k→44.1k correctly instead
+   of failing. Behaviour is identical for normal devices (Win/Mac→48k,
+   Linux→24k native); the visible changes are (a) a 44.1k-Float-only output now
+   works, and (b) the Quindar local monitor now opens on Windows too (the old
+   Windows branch `return`ed before `startQuindarLocalSink()`). Soak on
+   Win/Mac/Linux.
 4. **PC mic (TX)** onto the wrapper — preserves macOS preferred-first / BT-HFP /
-   Windows probe-at-open.
+   Windows probe-at-open. *Next.*
 5. **`AudioOutputRouter`** + migrate the three uncoupled sinks (CW sidetone,
    Pudu monitor, QSO playback) and Quindar onto it — closes the uncoupling
    class so a future sink can't re-open it.

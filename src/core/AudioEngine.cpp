@@ -1,6 +1,7 @@
 #include "AudioEngine.h"
 #include "AppSettings.h"
 #include "AudioSummaryLogger.h"
+#include "AudioDeviceNegotiator.h"
 #include "ClientEq.h"
 #include "ClientComp.h"
 #include "ClientGate.h"
@@ -689,7 +690,7 @@ AudioEngine::AudioEngine(QObject* parent)
 
         // Cap buffer to bound latency. Default 200ms, user-adjustable for
         // high-jitter connections (VPN, SmartLink) where drops cause choppy audio.
-        const int sampleRate = m_resampleTo48k ? 48000 : DEFAULT_SAMPLE_RATE;
+        const int sampleRate = m_rxOutputRate;
         const int bufMs = m_rxBufferCapMs.load();
         const qsizetype maxBufBytes = sampleRate * 2 * static_cast<qsizetype>(sizeof(float)) * bufMs / 1000;
         if (m_rxBuffer.size() > maxBufBytes) {
@@ -864,7 +865,7 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     rx["sample_rate_hz"] = rxRunning ? QJsonValue(m_rxBufferSampleRate.load()) : QJsonValue();
     rx["channel_count"] = rxRunning ? QJsonValue(2) : QJsonValue();
     rx["sample_format"] = rxRunning ? QStringLiteral("Float") : QString();
-    rx["resampling_active"] = rxRunning ? QJsonValue(m_resampleTo48k) : QJsonValue();
+    rx["resampling_active"] = rxRunning ? QJsonValue(m_rxOutputRate != DEFAULT_SAMPLE_RATE) : QJsonValue();
     rx["buffer_bytes"] = static_cast<double>(m_rxBufferBytes.load());
     rx["buffer_peak_bytes"] = static_cast<double>(m_rxBufferPeakBytes.load());
     rx["underrun_count"] = static_cast<double>(m_rxBufferUnderrunCount.load());
@@ -958,7 +959,6 @@ bool AudioEngine::startRxStream()
     m_lastProcessedUSecs = 0;
     m_lastAudioFeedTime.start();  // initialize liveness watchdog (#1411)
 
-    QAudioFormat fmt = makeFormat();
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
     bool rxFallbackOccurred = false;
     QStringList rxFallbackReasons;
@@ -1032,172 +1032,70 @@ bool AudioEngine::startRxStream()
     }
 #endif
 
-    // Prefer 48kHz on Windows — WASAPI shared mode accepts 24kHz but its
-    // internal resampler introduces artifacts at non-standard rates that
-    // become audible when radio-side NR (RNN/NRL/NRS) removes the noise
-    // floor. Use r8brain for clean 24k→48k conversion instead, matching
-    // the macOS TX-side fix for the same class of issue. (#2120)
-#ifdef Q_OS_WIN
-    fmt.setSampleRate(48000);
-    noteRxAttempt(fmt);
-    m_resampleTo48k = true;
-    m_audioSink = new QAudioSink(dev, fmt, this);
-    m_audioSink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
-    m_audioDevice = m_audioSink->start();
-    if (!m_audioDevice) {
-        const QString firstError = audioErrorName(m_audioSink->error());
-        qCWarning(lcAudio) << "AudioEngine: 48kHz sink failed to open, trying 24kHz";
-        noteRxFallback(QStringLiteral("48kHz sink failed -> 24kHz"));
-        delete m_audioSink;
-        fmt.setSampleRate(DEFAULT_SAMPLE_RATE);
-        noteRxAttempt(fmt);
-        m_resampleTo48k = false;
-        m_audioSink = new QAudioSink(dev, fmt, this);
-        m_audioSink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
-        m_audioDevice = m_audioSink->start();
-        if (!m_audioDevice) {
-            const QString secondError = audioErrorName(m_audioSink->error());
-            qCWarning(lcAudio) << "AudioEngine: 24kHz sink also failed";
-            logAudioOpenFailure(QStringLiteral("RX sink"),
-                                QStringLiteral("QAudioSink"),
-                                dev,
-                                rxFormatAttempts,
-                                QStringLiteral("QAudioSink::start failed at 48000Hz (%1) and 24000Hz (%2)")
-                                    .arg(firstError, secondError),
-                                rxFallbackReasons);
-            delete m_audioSink;
-            m_audioSink = nullptr;
-            return false;
+    // Negotiate the output format via the consolidated factory (#3306). RX audio
+    // is written as Float PCM, so we walk only the Float rungs of the ladder —
+    // but the ladder supplies, in ONE place with no per-OS #ifdef: the preferred
+    // rate (Windows/macOS 48k to dodge the WASAPI 24k resampler artifacts #2120
+    // and keep macOS A2DP devices off the HFP/telephony route; Linux native 24k),
+    // the universal 44.1 kHz fallback (#3385), and the device preferredFormat
+    // catch-all. Each rung is tried with a real start(), so reliable backends and
+    // WASAPI's probe-at-open are handled identically.
+    const QList<QAudioFormat> rxLadder = AudioDeviceNegotiator::formatLadder(
+        dev, AudioFormatNegotiator::Direction::Output,
+        AudioFormatNegotiator::ResamplerPolicy::PreservePan);
+
+    m_audioSink = nullptr;
+    m_audioDevice = nullptr;
+    QString lastRxError;
+    bool triedFloatRung = false;
+    for (const QAudioFormat& candidate : rxLadder) {
+        if (candidate.sampleFormat() != QAudioFormat::Float)
+            continue;   // RX drain writes Float PCM; Int16 rungs are for other sinks
+        noteRxAttempt(candidate);
+        auto* sink = new QAudioSink(dev, candidate, this);
+        sink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
+        QIODevice* io = sink->start();   // push-mode
+        if (io) {
+            m_audioSink = sink;
+            m_audioDevice = io;
+            m_rxOutputRate = candidate.sampleRate();
+            if (triedFloatRung) {
+                noteRxFallback(QStringLiteral("preferred RX format unavailable -> %1 Hz")
+                                   .arg(candidate.sampleRate()));
+            }
+            break;
         }
+        lastRxError = audioErrorName(sink->error());
+        delete sink;
+        triedFloatRung = true;
     }
-    // Guard against WASAPI silently stopping the sink after idle/sleep.
-    // Detect the silent stop and restart cleanly, mirroring the TX-side
-    // fix for CoreAudio (#1149). (#1303)
-    // Note: IdleState restart logic removed — it caused a restart loop on
-    // Windows that prevented audio playback (#1405). The zombie sink
-    // watchdog already handles stale WASAPI sessions after idle/sleep.
-    connect(m_audioSink, &QAudioSink::stateChanged, this,
-            [this](QAudio::State state) {
-        if (state != QAudio::StoppedState) {
-            return;
-        }
-        m_audioDevice = nullptr;
-        if (!m_audioSink) {
-            return;   // intentional stop (stopRxStream nulls this)
-        }
-        const QAudio::Error error = m_audioSink->error();
-        if (error != QAudio::NoError) {
-            qCWarning(lcAudio) << "AudioEngine: QAudioSink stopped with error, not auto-restarting RX"
-                               << error;
-            return;
-        }
-        QMetaObject::invokeMethod(this, [this]() {
-            if (!m_audioSink) return;
-            qCWarning(lcAudio) << "AudioEngine: QAudioSink stopped unexpectedly, restarting RX (#1303)";
-            stopRxStream();
-            startRxStream();
-        }, Qt::QueuedConnection);
-    });
-    qCWarning(lcAudio) << "AudioEngine: RX stream started at" << fmt.sampleRate() << "Hz"
-                       << "device:" << dev.description();
-    AudioSummaryLogger::RxSinkSummary windowsRxSummary;
-    windowsRxSummary.deviceDescription = dev.description();
-    windowsRxSummary.sampleRate = fmt.sampleRate();
-    windowsRxSummary.channelCount = fmt.channelCount();
-    windowsRxSummary.sampleFormat = fmt.sampleFormat();
-    windowsRxSummary.resamplingActive = m_resampleTo48k;
-    windowsRxSummary.fallbackOccurred = rxFallbackOccurred;
-    windowsRxSummary.fallbackReason = rxFallbackReasons.join(QStringLiteral("; "));
-    AudioSummaryLogger::logRxSink(windowsRxSummary);
-    m_rxBufferSampleRate.store(fmt.sampleRate());
-    startSidetoneStream();
-    emit rxStarted();
-    return true;
-#else
-    auto configureOutputFormat = [this, &dev, &noteRxFallback, &noteRxAttempt](QAudioFormat& candidateFmt) {
-        candidateFmt = makeFormat();
-#ifdef Q_OS_MAC
-        // CoreAudio can route Bluetooth headsets onto the HFP/telephony
-        // transport when opened directly at 24 kHz. Prefer 48 kHz on macOS
-        // so A2DP-capable devices stay on the normal output profile.
-        candidateFmt.setSampleRate(48000);
-        noteRxAttempt(candidateFmt);
-        if (dev.isFormatSupported(candidateFmt)) {
-            m_resampleTo48k = true;
-            return true;
-        }
 
-        qCWarning(lcAudio) << "AudioEngine: output device does not support 48kHz stereo float, trying 24kHz";
-        candidateFmt.setSampleRate(DEFAULT_SAMPLE_RATE);
-        noteRxAttempt(candidateFmt);
-        if (dev.isFormatSupported(candidateFmt)) {
-            noteRxFallback(QStringLiteral("48kHz stereo float unsupported -> 24kHz"));
-            m_resampleTo48k = false;
-            return true;
-        }
-
-        qCWarning(lcAudio) << "AudioEngine: output device does not support 24kHz stereo float either";
-        return false;
-#else
-        noteRxAttempt(candidateFmt);
-        if (dev.isFormatSupported(candidateFmt)) {
-            m_resampleTo48k = false;
-            return true;
-        }
-
-        qCWarning(lcAudio) << "AudioEngine: output device does not support 24kHz stereo Int16, trying 48kHz";
-        candidateFmt.setSampleRate(48000);
-        noteRxAttempt(candidateFmt);
-        if (dev.isFormatSupported(candidateFmt)) {
-            noteRxFallback(QStringLiteral("24kHz stereo float unsupported -> 48kHz"));
-            m_resampleTo48k = true;
-            return true;
-        }
-
-        qCWarning(lcAudio) << "AudioEngine: output device does not support 48kHz stereo Int16 either";
-        return false;
-#endif
-    };
-
-    if (!configureOutputFormat(fmt)) {
-        qCWarning(lcAudio) << "No audio device detected";
+    if (!m_audioDevice) {
+        qCWarning(lcAudio) << "AudioEngine: failed to open RX audio sink on any negotiated format";
         logAudioOpenFailure(QStringLiteral("RX sink"),
                             QStringLiteral("QAudioSink"),
                             dev,
                             rxFormatAttempts,
-                            QStringLiteral("output device supports no usable RX format"),
+                            QStringLiteral("QAudioSink::start failed on all negotiated formats (%1)")
+                                .arg(lastRxError),
                             rxFallbackReasons);
-        return false;
-    }
-#endif
-
-    m_audioSink   = new QAudioSink(dev, fmt, this);
-    m_audioSink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
-    m_audioDevice = m_audioSink->start();   // push-mode
-
-    if (!m_audioDevice) {
-        const QString error = audioErrorName(m_audioSink->error());
-        qCWarning(lcAudio) << "AudioEngine: failed to open audio sink";
-        if (rxFormatAttempts.isEmpty()) {
-            noteRxAttempt(fmt);
-        }
-        logAudioOpenFailure(QStringLiteral("RX sink"),
-                            QStringLiteral("QAudioSink"),
-                            dev,
-                            rxFormatAttempts,
-                            QStringLiteral("QAudioSink::start returned null (%1)").arg(error),
-                            rxFallbackReasons);
-        delete m_audioSink;
         m_audioSink = nullptr;
         return false;
     }
 
-    // Guard against the audio backend silently stopping the sink after idle/sleep.
-    // Detect the silent stop and restart cleanly, mirroring the TX-side
-    // fix for CoreAudio (#1149). (#1303)
-    // Note: IdleState restart logic removed — it caused a restart loop on
-    // Windows that prevented audio playback (#1405). The zombie sink
-    // watchdog already handles stale WASAPI sessions after idle/sleep.
+    // Rebuild cached resamplers if the device rate changed since they were built
+    // (e.g. a device swap 48k -> 44.1k), so they target the new device rate.
+    if (m_rxResampler && static_cast<int>(m_rxResampler->dstRate()) != m_rxOutputRate) {
+        m_rxResampler.reset();
+        m_rxResamplerR.reset();
+    }
+    if (m_radeRxResampler && static_cast<int>(m_radeRxResampler->dstRate()) != m_rxOutputRate) {
+        m_radeRxResampler.reset();
+    }
+
+    // Guard against the audio backend silently stopping the sink after idle/sleep
+    // (#1149 / #1303). IdleState restart removed — it looped on Windows (#1405);
+    // the zombie-sink watchdog handles stale WASAPI sessions after idle/sleep.
     connect(m_audioSink, &QAudioSink::stateChanged, this,
             [this](QAudio::State state) {
         if (state != QAudio::StoppedState) {
@@ -1220,20 +1118,22 @@ bool AudioEngine::startRxStream()
             startRxStream();
         }, Qt::QueuedConnection);
     });
-    qCDebug(lcAudio) << "AudioEngine: RX stream started";
-    m_rxBufferSampleRate.store(fmt.sampleRate());
+    qCWarning(lcAudio) << "AudioEngine: RX stream started at" << m_rxOutputRate << "Hz"
+                       << "device:" << dev.description();
+    m_rxBufferSampleRate.store(m_rxOutputRate);
     AudioSummaryLogger::RxSinkSummary summary;
     summary.deviceDescription = dev.description();
-    summary.sampleRate = fmt.sampleRate();
-    summary.channelCount = fmt.channelCount();
-    summary.sampleFormat = fmt.sampleFormat();
-    summary.resamplingActive = m_resampleTo48k;
+    summary.sampleRate = m_rxOutputRate;
+    summary.channelCount = 2;
+    summary.sampleFormat = QAudioFormat::Float;
+    summary.resamplingActive = (m_rxOutputRate != DEFAULT_SAMPLE_RATE);
     summary.fallbackOccurred = rxFallbackOccurred;
     summary.fallbackReason = rxFallbackReasons.join(QStringLiteral("; "));
     AudioSummaryLogger::logRxSink(summary);
-    // Open the dedicated sidetone sink alongside the RX sink.  Cheap when
-    // sidetone is disabled — the timer fires but writes silence to a tiny
-    // primed buffer; no audible output, no extra CPU on the operator side.
+    // Open the dedicated sidetone + Quindar local sinks alongside RX. Cheap when
+    // disabled (timers write silence to a tiny primed buffer). NOTE: the old
+    // Windows branch returned before startQuindarLocalSink(), so the Quindar
+    // local monitor never opened on Windows — unifying the path fixes that.
     startSidetoneStream();
     startQuindarLocalSink();
     emit rxStarted();
@@ -1458,10 +1358,13 @@ static void applyRxPanInPlace(float* stereo, int nFrames, int pan)
 // processStereoToStereo() collapses L+R to mono — do NOT use it here.
 QByteArray AudioEngine::resampleStereo(const QByteArray& pcm)
 {
+    // Two independent L/R instances preserve VITA-49 per-channel pan (PreservePan
+    // strategy — never collapse to mono here, #2403/#2459). Target the negotiated
+    // device rate so 44.1k / 48k devices both work (#3306).
     if (!m_rxResampler)
-        m_rxResampler = std::make_unique<Resampler>(24000, 48000);
+        m_rxResampler = std::make_unique<Resampler>(24000, m_rxOutputRate);
     if (!m_rxResamplerR)
-        m_rxResamplerR = std::make_unique<Resampler>(24000, 48000);
+        m_rxResamplerR = std::make_unique<Resampler>(24000, m_rxOutputRate);
 
     const int frames = pcm.size() / (2 * static_cast<int>(sizeof(float)));
     if (frames <= 0) return {};
@@ -1582,8 +1485,8 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
             puduSource = &m_clientPuduRxScratch;
         }
 
-        const int scopeSampleRate = m_resampleTo48k ? 48000 : DEFAULT_SAMPLE_RATE;
-        const QByteArray& resampled = m_resampleTo48k ? resampleStereo(*puduSource) : *puduSource;
+        const int scopeSampleRate = m_rxOutputRate;
+        const QByteArray& resampled = (m_rxOutputRate != DEFAULT_SAMPLE_RATE) ? resampleStereo(*puduSource) : *puduSource;
         const QByteArray* output = &resampled;
         QByteArray boosted;
         if (m_rxBoost.load()) {
@@ -3960,8 +3863,8 @@ void AudioEngine::processBnr(const QByteArray& stereoPcm)
         m_bnrOutBuf.remove(0, wantBytes);
 
         if (m_audioDevice && m_audioDevice->isOpen()) {
-            const int scopeSampleRate = m_resampleTo48k ? 48000 : DEFAULT_SAMPLE_RATE;
-            const QByteArray& resampled = m_resampleTo48k ? resampleStereo(chunk) : chunk;
+            const int scopeSampleRate = m_rxOutputRate;
+            const QByteArray& resampled = (m_rxOutputRate != DEFAULT_SAMPLE_RATE) ? resampleStereo(chunk) : chunk;
             const QByteArray* output = &resampled;
             QByteArray trimmed;
             const float trimDb = m_rxOutputTrimDb.load();
@@ -5211,9 +5114,9 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
     // m_radeRxBuffer with m_rxBuffer sample-wise so both are heard simultaneously
     // without doubling the fill rate. A dedicated resampler preserves the filter
     // state independently from the m_rxResampler used by feedAudioData().
-    if (m_resampleTo48k) {
+    if (m_rxOutputRate != DEFAULT_SAMPLE_RATE) {
         if (!m_radeRxResampler)
-            m_radeRxResampler = std::make_unique<Resampler>(24000, 48000);
+            m_radeRxResampler = std::make_unique<Resampler>(24000, m_rxOutputRate);
         const auto* src = reinterpret_cast<const float*>(pcm.constData());
         m_radeRxBuffer.append(
             m_radeRxResampler->processStereoToStereo(
