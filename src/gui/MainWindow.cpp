@@ -10059,7 +10059,7 @@ void MainWindow::buildUI()
     };
 
     // Hidden connection state label (used by connect/disconnect logic)
-    m_connStatusLabel = new QLabel("");
+    m_connStatusLabel = new QLabel("", this);
     m_connStatusLabel->hide();
 
     // ── Left section ─────────────────────────────────────────────────────
