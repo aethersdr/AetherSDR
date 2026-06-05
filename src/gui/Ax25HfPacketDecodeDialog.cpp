@@ -47,10 +47,13 @@ namespace {
 
 constexpr auto kPacketDecoderProfileSetting = "Ax25PacketDecoderProfile";
 constexpr auto kPacketDecoderDebugSetting = "Ax25PacketDecoderDiagnosticsDebug";
-constexpr auto kTncEnabledSetting = "AetherModemKissTncEnabled";
-constexpr auto kTncStartOnStartupSetting = "AetherModemKissTncStartOnStartup";
-constexpr auto kTncPortSetting = "AetherModemKissTncPort";
-constexpr int kTncDefaultPort = 8001;
+// TNC setting keys + defaults now live in the header (TncSettings namespace)
+// so MainWindow can read the same constants the dialog writes. Aliased here
+// for unchanged call-site readability.
+constexpr auto kTncEnabledSetting        = TncSettings::kEnabled;
+constexpr auto kTncStartOnStartupSetting = TncSettings::kStartOnStartup;
+constexpr auto kTncPortSetting           = TncSettings::kPort;
+constexpr int  kTncDefaultPort           = TncSettings::kDefaultPort;
 constexpr int kAudioCaptureSeconds = 180;
 constexpr int kTxDaxSettleMs = 150;
 constexpr int kTxLeadMs = 200;
@@ -1670,7 +1673,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildKissTncPage()
     portLayout->setSpacing(12);
     portLayout->addWidget(sectionLabel(QStringLiteral("TCP PORT"), portCell));
     m_tncPort = new QSpinBox(portCell);
-    m_tncPort->setRange(1, 65535);
+    m_tncPort->setRange(TncSettings::kMinPort, TncSettings::kMaxPort);
     m_tncPort->setValue(kTncDefaultPort);
     m_tncPort->setMaximumWidth(140);
     portLayout->addWidget(m_tncPort);

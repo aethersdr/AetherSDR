@@ -6434,8 +6434,10 @@ void MainWindow::startKissTncOnStartupIfConfigured()
 {
     if (m_ax25HfPacketDecodeDialog)
         return; // already constructed (e.g. user opened the window)
+    // Same key the dialog reads in its own constructor — promoted to the
+    // dialog header so both sides can't drift if the key is ever renamed.
     if (AppSettings::instance()
-            .value("AetherModemKissTncStartOnStartup", "False").toString()
+            .value(TncSettings::kStartOnStartup, "False").toString()
                 != QStringLiteral("True"))
         return;
 

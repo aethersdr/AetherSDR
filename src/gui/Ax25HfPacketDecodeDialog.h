@@ -28,6 +28,22 @@ class PacketActivityWidget;
 class RadioModel;
 class SliceModel;
 
+// AppSettings keys used by the AetherModem KISS TNC. Promoted to the header
+// so MainWindow::startKissTncOnStartupIfConfigured (which constructs the
+// dialog hidden + persistent at launch) reads from the same source of truth
+// the dialog writes to — a rename here can't silently desync the two sides.
+namespace TncSettings {
+constexpr auto kEnabled        = "AetherModemKissTncEnabled";
+constexpr auto kStartOnStartup = "AetherModemKissTncStartOnStartup";
+constexpr auto kPort           = "AetherModemKissTncPort";
+constexpr int  kDefaultPort    = 8001;
+// Lowest TCP port the spinbox lets the operator pick. Ports below 1024 need
+// root on macOS / Linux; the bind would fail silently into m_lastError and
+// the listener would stay off. No reason to expose that foot-gun.
+constexpr int  kMinPort        = 1024;
+constexpr int  kMaxPort        = 65535;
+}
+
 class Ax25HfPacketDecodeDialog : public PersistentDialog {
     Q_OBJECT
 
