@@ -38,12 +38,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          # Signatures stored on a dedicated branch of THIS repository
+          # (not a remote signatures repo).  Storing in-repo keeps the
+          # action working with the workflow's built-in GITHUB_TOKEN —
+          # a remote storage repo would require a separately-issued
+          # PERSONAL_ACCESS_TOKEN with cross-repo write access.
           path-to-signatures: 'signatures/cla-signatures.json'
           path-to-document: 'https://github.com/aethersdr/AetherSDR/blob/main/CLA.md'
           branch: 'cla-signatures'
           allowlist: dependabot[bot],aethersdr-agent[bot],github-actions[bot]
-          remote-organization-name: aethersdr
-          remote-repository-name: cla-signatures
           create-file-commit-message: 'chore(cla): create signature file for CLA Assistant'
           signed-commit-message: 'chore(cla): $contributorName has signed the CLA on PR #$pullRequestNo'
           custom-notsigned-prcomment: |
