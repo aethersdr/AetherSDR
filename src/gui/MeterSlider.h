@@ -34,7 +34,10 @@ public:
         setFixedHeight(16);
         setMinimumWidth(60);
         setCursor(Qt::PointingHandCursor);
-        setFocusPolicy(Qt::TabFocus);
+        // StrongFocus (was TabFocus) so a mouse click leaves keyboard focus on
+        // the fader — matching GuardedSlider — which lets keyboard stepping and
+        // the value badge work after a mouse interaction. (#3303 follow-up)
+        setFocusPolicy(Qt::StrongFocus);
 
         m_animTimer.setTimerType(Qt::PreciseTimer);
         m_animTimer.setInterval(kMeterSmootherIntervalMs);
@@ -52,6 +55,7 @@ public:
 
     float gain() const { return m_gain; }
     float level() const { return m_smooth.value(); }
+    bool isDragging() const { return m_dragging; }
 
     void setDragValueFormatter(DragValueFormatter formatter) {
         m_dragValueFormatter = std::move(formatter);
@@ -197,6 +201,10 @@ protected:
 
     void mousePressEvent(QMouseEvent* e) override {
         if (e->button() == Qt::LeftButton) {
+            // Take keyboard focus explicitly: the left-button path doesn't call
+            // the base handler, so rely on this rather than the focus policy's
+            // implicit click-to-focus to start the mouse→keyboard handoff.
+            setFocus(Qt::MouseFocusReason);
             m_dragging = true;
             updateGainFromMouse(e->pos().x());
             showDragValuePopup(e->globalPosition().toPoint());

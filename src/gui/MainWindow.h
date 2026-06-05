@@ -391,7 +391,11 @@ private:
     void updateBandStackIndicator();
     SliceModel* preferredMemorySlice(const QString& preferredPanId) const;
     bool activateMemorySpot(int memoryIndex, const QString& preferredPanId = {});
-    void beginSliderShortcutLease(QAbstractSlider* slider);
+    // The lease holder is usually a QAbstractSlider, but MeterSlider (the
+    // TCI/DAX combined meter+gain fader) is a plain QWidget that handles its
+    // own keys, so the lease is typed as QWidget* and frees the arrow keys
+    // for whichever control is focused.
+    void beginSliderShortcutLease(QWidget* slider);
     void renewSliderShortcutLease();
     void releaseSliderShortcutLease(bool clearFocus);
 
@@ -784,7 +788,7 @@ private:
     bool m_cwStraightKeyActive{false};
     bool m_cwLeftPaddleActive{false};
     bool m_cwRightPaddleActive{false};
-    QPointer<QAbstractSlider> m_sliderShortcutLease;
+    QPointer<QWidget> m_sliderShortcutLease;
     QTimer m_sliderShortcutLeaseTimer;
     struct SwrSweepSample {
         double freqMhz{0.0};
