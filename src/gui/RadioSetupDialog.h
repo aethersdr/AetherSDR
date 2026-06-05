@@ -15,6 +15,7 @@ class QProgressBar;
 class QPushButton;
 class QComboBox;
 class QCheckBox;
+class QSpinBox;
 class QVBoxLayout;
 class QTableWidget;
 
@@ -109,6 +110,13 @@ private:
     std::array<QComboBox*, 4> m_hidEncoderActionCombos{};
     std::array<QComboBox*, 4> m_hidEncoderPushActionCombos{};
     std::array<QComboBox*, 8> m_hidKeyActionCombos{};
+    std::array<QComboBox*, 3> m_tmate2EncoderActionCombos{};
+    std::array<QComboBox*, 3> m_tmate2EncoderPushActionCombos{};
+    std::array<QComboBox*, 6> m_tmate2KeyActionCombos{};
+    // TMate 2 backlight spinboxes (RX RGB, TX RGB) and timing controls.
+    std::array<QSpinBox*, 6>  m_tmate2BacklightSpins{};
+    QSpinBox* m_tmate2OverlayDurationSpin{nullptr};
+    QSpinBox* m_tmate2UserInteractionTimeoutSpin{nullptr};
 #endif
 
     // Radio tab fields

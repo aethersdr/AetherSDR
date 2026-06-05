@@ -103,5 +103,33 @@ private:
     uint8_t m_prevEncBtns{0};      // bitmask of previous encoder button states (bits 0-3)
 };
 
+// ELAD/WoodBoxRadio TMate 2 (VID 0x1721, PID 0x0614)
+// 64-byte HID reports (full USB interrupt report size).
+// Input layout (bytes 0-8 mapped; 9-63 not yet fully decoded):
+//   [0]    report ID = 0x01
+//   [1..2] encoder 1, little-endian uint16 (absolute wrapping counter)
+//   [3..4] encoder 2, little-endian uint16
+//   [5..6] encoder 3 (volume), little-endian uint16
+//   [7..8] key bitmask, little-endian uint16, active-low (bit clear = pressed):
+//          bit0=F1, bit1=F2, bit2=F3, bit3=F4, bit4=F5, bit5=F6,
+//          bit6=enc1/main-encoder push, bit7=enc2 push, bit8=enc3 push.
+//          Idle state: 0x01FF (all bits set).
+// Encoder delta uses 16-bit wrap correction (same as ShuttleXpress jog).
+// encoderIndex: 0=enc1/main-tuning (bytes 1-2), 1=enc2/TX-power (bytes 3-4), 2=enc3/volume (bytes 5-6).
+// Buttons: 1-6=F1-F6, 9=main-encoder push (enc1), 10=encoder2 push (enc2), 11=encoder3 push (enc3).
+// Encoder push buttons use the 9+ range to route through HidEncoderPushAction{0-2} in MainWindow.
+// Note: bit6=$0040=main-encoder push, bit7=$0080=enc2 push, bit8=$0100=enc3 push (hardware naming quirk).
+// Protocol reverse-engineered via USBPcap; documented in OpenTMate2Lib.
+class TMate2Parser : public HidDeviceParser {
+public:
+    HidEvent parse(const uint8_t* buf, size_t len) override;
+    size_t reportSize() const override { return 64; }
+    int encoderCount() const override { return 3; }
+private:
+    uint16_t m_enc[3]{};
+    uint16_t m_keys{0x01FFu};   // idle: all bits set
+    bool m_firstReport{true};
+};
+
 } // namespace AetherSDR
 #endif

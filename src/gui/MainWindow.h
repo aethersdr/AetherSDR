@@ -575,6 +575,34 @@ private:
     bool    m_rc28PttLatched{false};
     bool    m_hidFastTune{false};
     bool    m_hidFineTune{false};
+    enum class TMate2Overlay { None, Volume, Power, Speed, Wpm, Rit };
+    TMate2Overlay m_tmate2Overlay{TMate2Overlay::None};
+    int     m_tmate2OverlayValue{0};
+    qint64  m_tmate2OverlayUntilMs{0};
+    qint64  m_tmate2LastUserInteractionMs{0};
+    bool    m_tmate2DisplayBlanked{false};
+    QTimer  m_tmate2OverlayTimer;
+    QTimer  m_tmate2IdleTimer;
+    // Last S-meter reading (dBm) and TX power (watts) from the active slice;
+    // cached so updateTMate2Display/Indicators() can re-send without signal args.
+    float   m_tmate2SmeterDbm{-140.0f};
+    float   m_tmate2TxWatts{0.0f};
+    bool tmate2OverlayActive() const;
+    QString tmate2OverlayName() const;
+    int tmate2IdleTimeoutMs() const;
+    void restartTMate2IdleTimer();
+    void noteTMate2Interaction();
+    void blankTMate2Display();
+    void triggerTMate2Overlay(TMate2Overlay overlay, int value);
+    void updateTMate2Display();
+    void updateTMate2Status();
+    void updateTMate2Indicators();
+    // Per-slice connections rewired in setActiveSlice() so TMate 2 indicators
+    // track mode, RIT, XIT, and lock changes on the active slice.
+    QMetaObject::Connection m_tmate2LockConn;
+    QMetaObject::Connection m_tmate2ModeConn;
+    QMetaObject::Connection m_tmate2RitConn;
+    QMetaObject::Connection m_tmate2XitConn;
 #endif
 #ifdef Q_OS_LINUX
     EvdevEncoderManager*       m_dialBackend{nullptr};

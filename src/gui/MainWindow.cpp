@@ -263,6 +263,43 @@ constexpr int kSwrSweepMaxPoints = 260;
 constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
 constexpr const char* kSuppressAudioDeviceNotificationsKey =
     "SuppressAudioDeviceNotifications";
+constexpr int kTMate2DefaultOverlayDurationMs = 1500;
+constexpr int kTMate2DefaultUserInteractionTimeoutMs = 2000;
+
+#ifdef HAVE_HIDAPI
+QString tmate2EncoderDefaultAction(int encoderIndex)
+{
+    switch (encoderIndex) {
+    case 0:  return QStringLiteral("WheelFrequency");
+    case 1:  return QStringLiteral("WheelRit");
+    case 2:  return QStringLiteral("WheelXit");
+    default: return QStringLiteral("WheelFrequency");
+    }
+}
+
+QString tmate2KeyDefaultAction(int keyIndex)
+{
+    switch (keyIndex) {
+    case 0:  return QStringLiteral("ToggleMox");
+    case 1:  return QStringLiteral("ToggleAgc");
+    case 2:  return QStringLiteral("BandZoom");
+    case 3:  return QStringLiteral("ToggleApf");
+    case 4:  return QStringLiteral("ToggleMute");
+    case 5:  return QStringLiteral("ToggleRit");
+    default: return QStringLiteral("None");
+    }
+}
+
+QString tmate2PushDefaultAction(int encoderIndex)
+{
+    switch (encoderIndex) {
+    case 0:  return QStringLiteral("StepCycle");
+    case 1:  return QStringLiteral("ToggleRit");
+    case 2:  return QStringLiteral("ToggleXit");
+    default: return QStringLiteral("None");
+    }
+}
+#endif
 
 bool isTransientAudioDeviceId(const QByteArray& id)
 {
@@ -3548,8 +3585,14 @@ MainWindow::MainWindow(QWidget* parent)
     // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
     connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
             this, [this](int sliceIndex, float dbm) {
-        if (sliceIndex == m_activeSliceId)
+        if (sliceIndex == m_activeSliceId) {
             m_appletPanel->sMeterWidget()->setLevel(dbm);
+#ifdef HAVE_HIDAPI
+            m_tmate2SmeterDbm = dbm;
+            updateTMate2Display();
+            updateTMate2Indicators();
+#endif
+        }
     });
     // Symmetric with the amp-side guard at line ~3654 and the PGXL TCP path
     // at line ~3525: in OPERATE the amp owns the analog S-Meter, so drop the
@@ -3560,6 +3603,11 @@ MainWindow::MainWindow(QWidget* parent)
         if (m_radioModel.hasAmplifier() && m_radioModel.ampOperate())
             return;
         m_appletPanel->sMeterWidget()->setTxMeters(fwd, swr);
+#ifdef HAVE_HIDAPI
+        m_tmate2TxWatts = fwd;
+        if (m_radioModel.transmitModel().isTransmitting())
+            updateTMate2Display();
+#endif
     });
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
             m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);
@@ -3902,6 +3950,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::handleFlexControlButton);
     connect(m_flexControl, &FlexControlManager::buttonPressed,
             this, [this](int button, int action) {
+        if (m_hidEncoder->isTMate2())
+            noteTMate2Interaction();
         if (m_flexControlDialog)
             m_flexControlDialog->reflectButtonPress(button, action);
     });
@@ -4013,6 +4063,18 @@ MainWindow::MainWindow(QWidget* parent)
 #ifdef HAVE_HIDAPI
     m_hidEncoder = new HidEncoderManager;
     m_hidEncoder->moveToThread(m_extCtrlThread);
+    m_tmate2OverlayTimer.setSingleShot(true);
+    connect(&m_tmate2OverlayTimer, &QTimer::timeout, this, [this] {
+        m_tmate2Overlay = TMate2Overlay::None;
+        m_tmate2OverlayUntilMs = 0;
+        updateTMate2Display();
+        updateTMate2Indicators();
+        restartTMate2IdleTimer();
+    });
+    m_tmate2IdleTimer.setSingleShot(true);
+    connect(&m_tmate2IdleTimer, &QTimer::timeout, this, [this] {
+        blankTMate2Display();
+    });
 
     // Hold-detection timers for RC-28 F1/F2 — single-shot 600 ms, one per key so
     // both can be held at once without clobbering each other's state. (#3323)
@@ -4039,6 +4101,8 @@ MainWindow::MainWindow(QWidget* parent)
     // applyFlexControlWheelAction handles coalescing internally for frequency.
     connect(m_hidEncoder, &HidEncoderManager::tuneSteps,
             this, [this](int encoderIndex, int steps) {
+        if (m_hidEncoder->isTMate2())
+            noteTMate2Interaction();
         // Fast/Fine direct-tune mode (frequency only) — respect the slice lock
         // here since this path bypasses applyFlexControlWheelAction's own guard.
         // Fast mode: 100 Hz per tick. Fine mode: 1 Hz per tick.
@@ -4052,9 +4116,12 @@ MainWindow::MainWindow(QWidget* parent)
             }
             return;
         }
+        const bool isTMate2 = m_hidEncoder->isTMate2();
         const QString actionId = AppSettings::instance()
-            .value(QString("HidEncoderAction%1").arg(encoderIndex),
-                   MainWindow::hidEncoderDefaultAction(encoderIndex))
+            .value(QString(isTMate2 ? "TMate2EncoderAction%1" : "HidEncoderAction%1")
+                       .arg(encoderIndex),
+                   isTMate2 ? tmate2EncoderDefaultAction(encoderIndex)
+                             : MainWindow::hidEncoderDefaultAction(encoderIndex))
             .toString();
         applyFlexControlWheelAction(actionId, steps);
     });
@@ -4102,6 +4169,17 @@ MainWindow::MainWindow(QWidget* parent)
             // RC-28 TX bar is hardwired to PTT (mode configured in the RC-28
             // dialog); it is not remappable via the generic HID-key settings.
             actionName = QStringLiteral("PTT");
+        } else if (m_hidEncoder->isTMate2() && button >= 1 && button <= 6) {
+            actionName = AppSettings::instance()
+                .value(QString("TMate2KeyAction%1").arg(button - 1),
+                       tmate2KeyDefaultAction(button - 1))
+                .toString();
+        } else if (m_hidEncoder->isTMate2() && button >= 9 && button <= 11) {
+            const int enc = button - 9;
+            actionName = AppSettings::instance()
+                .value(QString("TMate2PushAction%1").arg(enc),
+                       tmate2PushDefaultAction(enc))
+                .toString();
         } else if (button >= 1 && button <= 8) {
             // Generic HID keys (StreamDeck+ LCD buttons 1–8).
             actionName = AppSettings::instance()
@@ -4161,8 +4239,12 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this](bool connected, const QString& name) {
         qCDebug(lcDevices) << "HID encoder:" << (connected ? "connected" : "disconnected") << name;
         if (connected) {
+            if (m_hidEncoder->isTMate2())
+                noteTMate2Interaction();
             refreshStreamDeckLabels();
             updateRC28Leds();
+            updateTMate2Display();
+            updateTMate2Indicators();
         } else if (m_hidEncoder->isRC28Compatible()) {
             // RC-28 gone: stop any in-flight hold timers so they can't fire an
             // action for an absent encoder, and clear RC-28 stateful flags so a
@@ -4180,12 +4262,20 @@ MainWindow::MainWindow(QWidget* parent)
                 m_rc28PttLatched = false;
                 m_radioModel.setTransmit(false);
             }
+        } else {
+            m_tmate2IdleTimer.stop();
+            m_tmate2DisplayBlanked = false;
         }
     });
 
     // RC-28 TX LED: mirror MOX state to the device's red TRANSMIT LED.
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
-            this, [this](bool) { updateRC28Leds(); });
+            this, [this](bool tx) {
+        updateRC28Leds();
+        updateTMate2Display();
+        updateTMate2Indicators();
+        if (!tx) m_tmate2TxWatts = 0.0f;  // reset cached watts when leaving TX
+    });
 
     // RC-28 F-key LED for a Mute hold action — mute is global (not slice-scoped),
     // so refresh whenever it changes from any source (RC-28, GUI, MIDI…).
@@ -7001,6 +7091,203 @@ void MainWindow::updateRC28Leds()
     });
 }
 
+bool MainWindow::tmate2OverlayActive() const
+{
+    return m_tmate2Overlay != TMate2Overlay::None
+        && QDateTime::currentMSecsSinceEpoch() <= m_tmate2OverlayUntilMs;
+}
+
+QString MainWindow::tmate2OverlayName() const
+{
+    switch (m_tmate2Overlay) {
+    case TMate2Overlay::Volume: return QStringLiteral("volume");
+    case TMate2Overlay::Power:  return QStringLiteral("power");
+    case TMate2Overlay::Speed:  return QStringLiteral("speed");
+    case TMate2Overlay::Wpm:    return QStringLiteral("wpm");
+    case TMate2Overlay::Rit:    return QStringLiteral("rit");
+    case TMate2Overlay::None:   break;
+    }
+    return QString();
+}
+
+int MainWindow::tmate2IdleTimeoutMs() const
+{
+    auto& settings = AppSettings::instance();
+    const QVariant raw = settings.value("TMate2UserInteractionTimeoutMs");
+    if (!raw.isValid())
+        return 0;
+    const int timeoutMs = raw.toInt();
+    if (timeoutMs <= 0)
+        return 0;
+    return std::clamp(timeoutMs, 100, 60000);
+}
+
+void MainWindow::restartTMate2IdleTimer()
+{
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
+    const int idleMs = tmate2IdleTimeoutMs();
+    if (idleMs <= 0) {
+        m_tmate2IdleTimer.stop();
+        return;
+    }
+    m_tmate2IdleTimer.start(idleMs);
+}
+
+void MainWindow::noteTMate2Interaction()
+{
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
+    m_tmate2LastUserInteractionMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_tmate2DisplayBlanked) {
+        m_tmate2DisplayBlanked = false;
+        updateTMate2Display();
+        updateTMate2Indicators();
+    }
+    restartTMate2IdleTimer();
+}
+
+void MainWindow::blankTMate2Display()
+{
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
+    if (tmate2OverlayActive()) {
+        restartTMate2IdleTimer();
+        return;
+    }
+    const int idleMs = tmate2IdleTimeoutMs();
+    if (idleMs <= 0)
+        return;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_tmate2LastUserInteractionMs > 0 &&
+        now - m_tmate2LastUserInteractionMs < idleMs) {
+        m_tmate2IdleTimer.start(static_cast<int>(idleMs - (now - m_tmate2LastUserInteractionMs)));
+        return;
+    }
+    m_tmate2DisplayBlanked = true;
+    QMetaObject::invokeMethod(m_hidEncoder, [this] {
+        m_hidEncoder->setTMate2Display(0, 0);
+        m_hidEncoder->clearTMate2Indicators();
+    });
+}
+
+void MainWindow::triggerTMate2Overlay(TMate2Overlay overlay, int value)
+{
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
+    auto& settings = AppSettings::instance();
+    const int durationMs = std::clamp(
+        settings.value("TMate2OverlayDurationMs",
+                       QString::number(kTMate2DefaultOverlayDurationMs)).toInt(),
+        100, 10000);
+    m_tmate2Overlay = overlay;
+    m_tmate2OverlayValue = value;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    m_tmate2LastUserInteractionMs = now;
+    m_tmate2DisplayBlanked = false;
+    m_tmate2OverlayUntilMs = now + durationMs;
+    m_tmate2OverlayTimer.start(durationMs);
+    updateTMate2Display();
+    updateTMate2Indicators();
+    restartTMate2IdleTimer();
+}
+
+// Push the current frequency and S-meter/power reading to the TMate 2 LCD.
+// Called whenever the active-slice frequency, S-meter level, or device
+// connection state changes.  Frequency comes from activeSlice(); S-meter uses
+// the last value cached in m_tmate2SmeterDbm.
+//
+// small_val mapping:
+//   RX: linear dBm offset from S9, clamped 0-999.
+//       S9 (-73 dBm) → 90; each dB above S9 adds 1 (S9+10 dB → 100);
+//       each dB below S9 subtracts 1 (S8 → 84, S5 → 66, S1 → 42).
+//   TX: forward power in watts from the last txMetersChanged sample.
+void MainWindow::updateTMate2Display()
+{
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
+    if (m_tmate2DisplayBlanked) return;
+
+    if (tmate2OverlayActive()) {
+        const int32_t mainVal = m_tmate2OverlayValue;
+        QMetaObject::invokeMethod(m_hidEncoder, [this, mainVal] {
+            m_hidEncoder->setTMate2Display(static_cast<uint32_t>(std::abs(mainVal)), 0);
+        });
+        return;
+    }
+    if (m_tmate2Overlay != TMate2Overlay::None) {
+        m_tmate2Overlay = TMate2Overlay::None;
+        m_tmate2OverlayUntilMs = 0;
+    }
+
+    // Frequency: active slice in Hz, 0 if no slice.
+    uint32_t freqHz = 0;
+    if (auto* s = activeSlice())
+        freqHz = static_cast<uint32_t>(std::round(s->frequency() * 1e6));
+
+    // S-meter small display: show the actual signal strength in dBm so the
+    // number matches the AetherSDR UI reading.  The DBM and "-" indicator
+    // segments (lit in setTMate2Indicators during RX) label it, so e.g.
+    // -95 dBm reads as "-95".  The S-unit itself is conveyed by the 15-bar
+    // bargraph, so the numeric and the bargraph are complementary, not
+    // redundant.
+    const int dbm       = static_cast<int>(std::round(m_tmate2SmeterDbm));
+    const uint32_t sVal = static_cast<uint32_t>(std::clamp(std::abs(dbm), 0, 999));
+
+    const uint32_t smallVal = m_radioModel.transmitModel().isTransmitting()
+        ? static_cast<uint32_t>(m_tmate2TxWatts + 0.5f)
+        : sVal;
+
+    QMetaObject::invokeMethod(m_hidEncoder, [this, freqHz, smallVal] {
+        m_hidEncoder->setTMate2Display(freqHz, smallVal);
+    });
+}
+
+// Push the LED status byte to the TMate 2.
+//   bit0 = radio connected; bit1 = VFO locked (active slice).
+void MainWindow::updateTMate2Status()
+{
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
+    uint8_t led = 0;
+    if (m_radioModel.isConnected())                              led |= 0x01u;
+    if (auto* s = activeSlice(); s && s->isLocked())            led |= 0x02u;
+    QMetaObject::invokeMethod(m_hidEncoder, [this, led] {
+        m_hidEncoder->setTMate2Status(led);
+    });
+}
+
+// Push all indicator segments (RX/TX, mode, S-meter bargraph, RIT/XIT) to
+// the TMate 2.  Called whenever any of these state items changes.
+void MainWindow::updateTMate2Indicators()
+{
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
+    if (m_tmate2DisplayBlanked) return;
+    auto* s = activeSlice();
+    const bool tx     = m_radioModel.transmitModel().isTransmitting();
+    const QString mode = s ? s->mode() : QStringLiteral("USB");
+    const bool rit    = s && s->ritOn();
+    const bool xit    = s && s->xitOn();
+    const float dbm   = m_tmate2SmeterDbm;
+    auto& settings = AppSettings::instance();
+    const uint8_t r = static_cast<uint8_t>(settings.value(
+        tx ? "TMate2TxBacklightR" : "TMate2BacklightR",
+        tx ? "255" : "0").toInt());
+    const uint8_t g = static_cast<uint8_t>(settings.value(
+        tx ? "TMate2TxBacklightG" : "TMate2BacklightG",
+        tx ? "30" : "50").toInt());
+    const uint8_t b = static_cast<uint8_t>(settings.value(
+        tx ? "TMate2TxBacklightB" : "TMate2BacklightB",
+        tx ? "0" : "255").toInt());
+    if (tmate2OverlayActive()) {
+        const QString overlay = tmate2OverlayName();
+        const int overlayValue = m_tmate2OverlayValue;
+        QMetaObject::invokeMethod(m_hidEncoder, [this, r, g, b, overlay, overlayValue, mode] {
+            m_hidEncoder->setTMate2Backlight(r, g, b);
+            m_hidEncoder->setTMate2OverlayIndicators(overlay, overlayValue, mode);
+        });
+        return;
+    }
+    QMetaObject::invokeMethod(m_hidEncoder, [this, tx, mode, dbm, rit, xit, r, g, b] {
+        m_hidEncoder->setTMate2Backlight(r, g, b);
+        m_hidEncoder->setTMate2Indicators(tx, mode, dbm, rit, xit);
+    });
+}
+
 // Dispatch a resolved HID action name and optionally log it to the mapping
 // dialog if it is open. Called for both F1/F2 hold (from the timer) and
 // short-press (on release). (#3323)
@@ -7012,14 +7299,28 @@ void MainWindow::dispatchHidAction(const QString& actionName,
 
     if (actionName == "StepCycle" || actionName == "StepUp") {
         if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepUp();
+        if (auto* s = activeSlice()) {
+            if (auto* sw = spectrumForSlice(s))
+                triggerTMate2Overlay(TMate2Overlay::Speed, sw->stepSize());
+        }
     } else if (actionName == "StepDown") {
         if (auto* rx = m_appletPanel->rxApplet()) rx->cycleStepDown();
+        if (auto* s = activeSlice()) {
+            if (auto* sw = spectrumForSlice(s))
+                triggerTMate2Overlay(TMate2Overlay::Speed, sw->stepSize());
+        }
     } else if (actionName == "ToggleRit") {
-        if (auto* s = activeSlice()) s->setRit(!s->ritOn(), s->ritFreq());
+        if (auto* s = activeSlice()) {
+            s->setRit(!s->ritOn(), s->ritFreq());
+            triggerTMate2Overlay(TMate2Overlay::Rit, s->ritOn() ? s->ritFreq() : 0);
+        }
     } else if (actionName == "ToggleXit") {
         if (auto* s = activeSlice()) s->setXit(!s->xitOn(), s->xitFreq());
     } else if (actionName == "ClearRit") {
-        if (auto* s = activeSlice()) s->setRit(s->ritOn(), 0);
+        if (auto* s = activeSlice()) {
+            s->setRit(s->ritOn(), 0);
+            triggerTMate2Overlay(TMate2Overlay::Rit, 0);
+        }
     } else if (actionName == "ClearXit") {
         if (auto* s = activeSlice()) s->setXit(s->xitOn(), 0);
     } else if (actionName == "ToggleMox") {
@@ -7430,6 +7731,7 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         if (auto* s = activeSlice()) {
             const int hz = std::clamp(s->ritFreq() + steps * 10, -9999, 9999);
             s->setRit(true, hz);
+            triggerTMate2Overlay(TMate2Overlay::Rit, hz);
         }
     } else if (actionId == "WheelXit") {
         if (auto* s = activeSlice()) {
@@ -7446,11 +7748,13 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         if (m_titleBar)
             m_titleBar->setMasterVolume(next);
         applyMasterVolume(next);
+        triggerTMate2Overlay(TMate2Overlay::Volume, next);
     } else if (actionId == "WheelHeadphoneVolume") {
         const int next = std::clamp(m_radioModel.headphoneGain() + steps * 2, 0, 100);
         if (m_titleBar)
             m_titleBar->setHeadphoneVolume(next);
         m_radioModel.setHeadphoneGain(next);
+        triggerTMate2Overlay(TMate2Overlay::Volume, next);
     } else if (actionId == "WheelAgcT") {
         if (auto* s = activeSlice())
             s->setAgcThreshold(std::clamp(s->agcThreshold() + steps, 0, 100));
@@ -7471,10 +7775,14 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         setActiveSlice(slices[next]->sliceId());
     } else if (actionId == "WheelPower") {
         auto& tx = m_radioModel.transmitModel();
-        tx.setRfPower(std::clamp(tx.rfPower() + steps, 0, 100));
+        const int next = std::clamp(tx.rfPower() + steps, 0, 100);
+        tx.setRfPower(next);
+        triggerTMate2Overlay(TMate2Overlay::Power, next);
     } else if (actionId == "WheelCwSpeed") {
         auto& tx = m_radioModel.transmitModel();
-        tx.setCwSpeed(std::clamp(tx.cwSpeed() + steps, 5, 100));
+        const int next = std::clamp(tx.cwSpeed() + steps, 5, 100);
+        tx.setCwSpeed(next);
+        triggerTMate2Overlay(TMate2Overlay::Wpm, next);
     }
 }
 
@@ -10743,6 +11051,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
                 m_agManualConnectTimer->start(7000);
             }
         }
+#ifdef HAVE_HIDAPI
+        updateTMate2Status();
+#endif
     } else {
         // Radio disconnected: trim CAT ports back to 1 so apps on channel A
         // stay connected through brief reconnects, higher channels stop cleanly.
@@ -10813,6 +11124,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         if (m_rc28PttLatched) {
             m_rc28PttLatched = false;
         }
+        updateTMate2Status();
 #endif
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
         stopDax();
@@ -11500,6 +11812,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // Feed frequency to Antenna Genius for band→antenna recall
         if (s->sliceId() == m_activeSliceId)
             m_antennaGenius.setRadioFrequency(mhz);
+
+#ifdef HAVE_HIDAPI
+        if (s->sliceId() == m_activeSliceId)
+            updateTMate2Display();
+#endif
     });
 
     // Feed current frequency immediately (AG may connect later and reprocess).
@@ -12287,6 +12604,26 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     m_rc28RitConn  = connect(s, &SliceModel::ritChanged,    this, [this](bool, int){ updateRC28Leds(); });
     m_rc28XitConn  = connect(s, &SliceModel::xitChanged,    this, [this](bool, int){ updateRC28Leds(); });
     m_rc28LockConn = connect(s, &SliceModel::lockedChanged, this, [this](bool){ updateRC28Leds(); });
+
+    // Rewire TMate 2 status LED to the active slice's Lock state, and push an
+    // immediate display update so the LCD shows the new slice's frequency.
+    disconnect(m_tmate2LockConn);
+    disconnect(m_tmate2ModeConn);
+    disconnect(m_tmate2RitConn);
+    disconnect(m_tmate2XitConn);
+    m_tmate2LockConn = connect(s, &SliceModel::lockedChanged, this,
+                                [this](bool){ updateTMate2Status(); });
+    m_tmate2ModeConn = connect(s, &SliceModel::modeChanged,   this,
+                                [this](const QString&){ updateTMate2Indicators(); });
+    m_tmate2RitConn  = connect(s, &SliceModel::ritChanged,    this,
+                                [this](bool, int){ updateTMate2Indicators(); });
+    m_tmate2XitConn  = connect(s, &SliceModel::xitChanged,    this,
+                                [this](bool, int){ updateTMate2Indicators(); });
+    if (sliceId != prevId) {
+        updateTMate2Display();
+        updateTMate2Status();
+        updateTMate2Indicators();
+    }
 #endif
 
     qDebug() << "MainWindow: active slice set to" << sliceId;

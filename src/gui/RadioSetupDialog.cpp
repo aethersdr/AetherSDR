@@ -4404,6 +4404,279 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         vbox->addWidget(group);
     }
+
+    // --- TMate 2 device actions, encoders, and backlight ---------------------
+    {
+        auto* group = new QGroupBox("TMate 2 Key Actions");
+        group->setStyleSheet(kGroupStyle);
+        auto* grid = new QGridLayout(group);
+        grid->setSpacing(6);
+
+        auto* note = new QLabel("Assign actions to the six TMate 2 function keys.");
+        note->setWordWrap(true);
+        note->setStyleSheet(kLabelStyle);
+        grid->addWidget(note, 0, 0, 1, 4);
+
+        static const struct { const char* id; const char* label; } kTMate2KeyActions[] = {
+            {"None",             "None"},
+            {"ToggleMox",        "Toggle TX (MOX)"},
+            {"ToggleTune",       "Toggle Tune"},
+            {"ToggleRit",        "Toggle RIT on/off"},
+            {"ToggleXit",        "Toggle XIT on/off"},
+            {"ClearRit",         "Clear RIT offset"},
+            {"ClearXit",         "Clear XIT offset"},
+            {"StepUp",           "Step Size Up"},
+            {"StepDown",         "Step Size Down"},
+            {"ToggleMute",       "Toggle Mute"},
+            {"ToggleLock",       "Toggle Slice Lock"},
+            {"ToggleApf",        "Toggle APF"},
+            {"ToggleAgc",        "Cycle AGC Mode"},
+            {"BandZoom",         "Toggle Band Zoom"},
+            {"SegmentZoom",      "Toggle Segment Zoom"},
+            {"NextSlice",        "Next Slice"},
+            {"PrevSlice",        "Previous Slice"},
+            {"VolumeUp",         "Volume Up (+5)"},
+            {"VolumeDown",       "Volume Down (-5)"},
+            {"SplitActiveSlice", "Toggle Split"},
+        };
+
+        static const char* kTMate2KeyDefaults[6] = {
+            "ToggleMox", "ToggleAgc", "BandZoom", "ToggleApf", "ToggleMute", "ToggleRit"
+        };
+
+        for (int i = 0; i < 6; ++i) {
+            const int row = (i % 3) + 1;
+            const int col = (i / 3) * 2;
+            grid->addWidget(new QLabel(QString("F%1:").arg(i + 1)), row, col);
+
+            auto* combo = new QComboBox;
+            combo->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QComboBox"));
+            for (const auto& act : kTMate2KeyActions)
+                combo->addItem(QString::fromLatin1(act.label), QString::fromLatin1(act.id));
+
+            const QString key = QString("TMate2KeyAction%1").arg(i);
+            const QString saved = settings.value(
+                key, QString::fromLatin1(kTMate2KeyDefaults[i])).toString();
+            const int idx = combo->findData(saved);
+            combo->setCurrentIndex(idx >= 0 ? idx : 0);
+
+            connect(combo, &QComboBox::currentIndexChanged, this, [combo, key, this](int) {
+                auto& s = AppSettings::instance();
+                s.setValue(key, combo->currentData().toString());
+                s.save();
+                emit serialSettingsChanged();
+            });
+
+            m_tmate2KeyActionCombos[i] = combo;
+            grid->addWidget(combo, row, col + 1);
+        }
+        grid->setColumnStretch(1, 1);
+        grid->setColumnStretch(3, 1);
+
+        vbox->addWidget(group);
+    }
+
+    {
+        auto* group = new QGroupBox("TMate 2 Encoder Actions");
+        group->setStyleSheet(kGroupStyle);
+        auto* grid = new QGridLayout(group);
+        grid->setSpacing(6);
+
+        auto* note = new QLabel("Assign actions to the three TMate 2 encoder dials.");
+        note->setWordWrap(true);
+        note->setStyleSheet(kLabelStyle);
+        grid->addWidget(note, 0, 0, 1, 3);
+
+        static const struct { const char* id; const char* label; } kTMate2EncoderActions[] = {
+            {"WheelFrequency",      "Tune Slice"},
+            {"WheelRit",            "RIT (Receive Incremental Tuning)"},
+            {"WheelXit",            "XIT (Transmit Incremental Tuning)"},
+            {"WheelVolume",         "Master Volume"},
+            {"WheelHeadphoneVolume","Headphone Volume"},
+            {"WheelAgcT",           "AGC Threshold"},
+            {"WheelApf",            "APF Level"},
+            {"WheelCwSpeed",        "CW Speed"},
+            {"WheelPower",          "RF Power"},
+            {"None",                "None"},
+        };
+
+        static const char* kTMate2EncoderDefaults[3] = {
+            "WheelFrequency", "WheelRit", "WheelXit"
+        };
+
+        for (int i = 0; i < 3; ++i) {
+            grid->addWidget(new QLabel(QString("Encoder %1:").arg(i + 1)), i + 1, 0);
+
+            auto* combo = new QComboBox;
+            combo->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QComboBox"));
+            for (const auto& act : kTMate2EncoderActions)
+                combo->addItem(QString::fromLatin1(act.label), QString::fromLatin1(act.id));
+
+            const QString key = QString("TMate2EncoderAction%1").arg(i);
+            const QString saved = settings.value(
+                key, QString::fromLatin1(kTMate2EncoderDefaults[i])).toString();
+            const int idx = combo->findData(saved);
+            combo->setCurrentIndex(idx >= 0 ? idx : 0);
+
+            connect(combo, &QComboBox::currentIndexChanged, this, [combo, key, this](int) {
+                auto& s = AppSettings::instance();
+                s.setValue(key, combo->currentData().toString());
+                s.save();
+                emit serialSettingsChanged();
+            });
+
+            m_tmate2EncoderActionCombos[i] = combo;
+            grid->addWidget(combo, i + 1, 1, 1, 2);
+            grid->setColumnStretch(1, 1);
+        }
+
+        vbox->addWidget(group);
+    }
+
+    {
+        auto* group = new QGroupBox("TMate 2 Encoder Push Actions");
+        group->setStyleSheet(kGroupStyle);
+        auto* grid = new QGridLayout(group);
+        grid->setSpacing(6);
+
+        auto* note = new QLabel("Action when each TMate 2 encoder is pressed.");
+        note->setWordWrap(true);
+        note->setStyleSheet(kLabelStyle);
+        grid->addWidget(note, 0, 0, 1, 3);
+
+        static const struct { const char* id; const char* label; } kTMate2PushActions[] = {
+            {"StepCycle",  "Cycle Tuning Step"},
+            {"ToggleRit",  "Toggle RIT on/off"},
+            {"ToggleXit",  "Toggle XIT on/off"},
+            {"ToggleMox",  "Toggle TX (MOX)"},
+            {"ToggleMute", "Toggle Mute"},
+            {"ToggleLock", "Lock Slice"},
+            {"None",       "None"},
+        };
+
+        static const char* kTMate2PushDefaults[3] = {
+            "StepCycle", "ToggleRit", "ToggleXit"
+        };
+
+        for (int i = 0; i < 3; ++i) {
+            grid->addWidget(new QLabel(QString("Encoder %1 push:").arg(i + 1)), i + 1, 0);
+
+            auto* combo = new QComboBox;
+            combo->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QComboBox"));
+            for (const auto& act : kTMate2PushActions)
+                combo->addItem(QString::fromLatin1(act.label), QString::fromLatin1(act.id));
+
+            const QString key = QString("TMate2PushAction%1").arg(i);
+            const QString saved = settings.value(
+                key, QString::fromLatin1(kTMate2PushDefaults[i])).toString();
+            const int idx = combo->findData(saved);
+            combo->setCurrentIndex(idx >= 0 ? idx : 0);
+
+            connect(combo, &QComboBox::currentIndexChanged, this, [combo, key, this](int) {
+                auto& s = AppSettings::instance();
+                s.setValue(key, combo->currentData().toString());
+                s.save();
+                emit serialSettingsChanged();
+            });
+
+            m_tmate2EncoderPushActionCombos[i] = combo;
+            grid->addWidget(combo, i + 1, 1, 1, 2);
+            grid->setColumnStretch(1, 1);
+        }
+
+        vbox->addWidget(group);
+    }
+
+    {
+        auto* group = new QGroupBox("TMate 2 Display");
+        group->setStyleSheet(kGroupStyle);
+        auto* grid = new QGridLayout(group);
+        grid->setSpacing(6);
+
+        auto* note = new QLabel(
+            "Backlight colours and temporary display feedback. "
+            "Overlay duration controls how long changed values are shown on the TMate 2 LCD.");
+        note->setWordWrap(true);
+        note->setStyleSheet(kLabelStyle);
+        grid->addWidget(note, 0, 0, 1, 7);
+
+        static const struct {
+            const char* rowLabel;
+            const char* rKey; const char* gKey; const char* bKey;
+            const char* rDflt; const char* gDflt; const char* bDflt;
+            int spinOffset;
+        } kRows[2] = {
+            {"RX backlight:", "TMate2BacklightR",   "TMate2BacklightG",   "TMate2BacklightB",
+                              "0",                  "50",                 "255", 0},
+            {"TX backlight:", "TMate2TxBacklightR", "TMate2TxBacklightG", "TMate2TxBacklightB",
+                              "255",                "30",                 "0",   3},
+        };
+
+        static const char* kLabels[3] = {"R:", "G:", "B:"};
+        for (int row = 0; row < 2; ++row) {
+            auto* rowLbl = new QLabel(QString::fromLatin1(kRows[row].rowLabel));
+            rowLbl->setStyleSheet(kLabelStyle);
+            grid->addWidget(rowLbl, row + 1, 0);
+            const char* keys[3] = {kRows[row].rKey, kRows[row].gKey, kRows[row].bKey};
+            const char* dflts[3] = {kRows[row].rDflt, kRows[row].gDflt, kRows[row].bDflt};
+            for (int ch = 0; ch < 3; ++ch) {
+                auto* lbl = new QLabel(QString::fromLatin1(kLabels[ch]));
+                lbl->setStyleSheet(kLabelStyle);
+                grid->addWidget(lbl, row + 1, 1 + ch * 2);
+
+                auto* spin = new QSpinBox;
+                spin->setRange(0, 255);
+                spin->setValue(settings.value(keys[ch], dflts[ch]).toInt());
+                spin->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QSpinBox"));
+                grid->addWidget(spin, row + 1, 2 + ch * 2);
+                m_tmate2BacklightSpins[kRows[row].spinOffset + ch] = spin;
+
+                const QString key = QString::fromLatin1(keys[ch]);
+                connect(spin, QOverload<int>::of(&QSpinBox::valueChanged),
+                        this, [this, key](int val) {
+                    auto& s = AppSettings::instance();
+                    s.setValue(key, QString::number(val));
+                    s.save();
+                    emit serialSettingsChanged();
+                });
+            }
+        }
+
+        auto addTimingSpin = [&](int row, const QString& label, const QString& key,
+                                 int dflt, int min, int max, int step) -> QSpinBox* {
+            auto* lbl = new QLabel(label);
+            lbl->setStyleSheet(kLabelStyle);
+            grid->addWidget(lbl, row, 0, 1, 2);
+
+            auto* spin = new QSpinBox;
+            spin->setRange(min, max);
+            spin->setSingleStep(step);
+            spin->setSuffix(" ms");
+            spin->setValue(settings.value(key, QString::number(dflt)).toInt());
+            spin->setStyleSheet(QString(kEditStyle).replace("QLineEdit", "QSpinBox"));
+            grid->addWidget(spin, row, 2, 1, 2);
+
+            connect(spin, QOverload<int>::of(&QSpinBox::valueChanged),
+                    this, [this, key](int val) {
+                auto& s = AppSettings::instance();
+                s.setValue(key, QString::number(val));
+                s.save();
+                emit serialSettingsChanged();
+            });
+            return spin;
+        };
+
+        m_tmate2OverlayDurationSpin = addTimingSpin(
+            3, "Overlay duration:", "TMate2OverlayDurationMs", 1500, 100, 10000, 100);
+        m_tmate2UserInteractionTimeoutSpin = addTimingSpin(
+            4, "User interaction timeout:", "TMate2UserInteractionTimeoutMs", 2000, 0, 60000, 100);
+
+        for (int col = 2; col <= 6; col += 2)
+            grid->setColumnStretch(col, 1);
+
+        vbox->addWidget(group);
+    }
+
 #endif
 
     vbox->addStretch();

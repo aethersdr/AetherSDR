@@ -19,6 +19,9 @@ static const HidDeviceId kSupportedDevices[] = {
     {0x2341, 0x0266, "AetherPad RC-28 emulator (Arduino Giga R1)"},
     // Elgato StreamDeck+ — 8 LCD buttons + 4 encoder dials (#1510)
     {0x0FD9, 0x0084, "Elgato StreamDeck+"},
+    // ELAD/WoodBoxRadio TMate 2 — 3 encoders, 9 keys, RGB LCD backlight.
+    // Protocol reverse-engineered via USBPcap; documented in OpenTMate2Lib.
+    {0x1721, 0x0614, "ELAD/WoodBoxRadio TMate 2"},
 };
 
 const HidDeviceId* HidDeviceParser::supportedDevices() { return kSupportedDevices; }
@@ -34,6 +37,7 @@ std::unique_ptr<HidDeviceParser> HidDeviceParser::create(uint16_t vid, uint16_t 
     // comment in kSupportedDevices above).
     if (vid == 0x2341 && pid == 0x0266) return std::make_unique<IcomRC28Parser>();
     if (vid == 0x0FD9 && pid == 0x0084) return std::make_unique<StreamDeckPlusParser>();
+    if (vid == 0x1721 && pid == 0x0614) return std::make_unique<TMate2Parser>();
     return nullptr;
 }
 
@@ -256,6 +260,65 @@ HidEvent StreamDeckPlusParser::parse(const uint8_t* buf, size_t len)
             }
         }
         return {};
+    }
+
+    return {};
+}
+
+// ── ELAD/WoodBoxRadio TMate 2 ──────────────────────────────────────────────
+// 64-byte reports. Keys are active-low (bit clear = pressed, bit set = idle).
+// Encoder counters are absolute uint16 with natural 16-bit wrap.
+// Delta wrap-correction: same algorithm as ShuttleXpress jog (±65536 adjust).
+
+HidEvent TMate2Parser::parse(const uint8_t* buf, size_t len)
+{
+    if (len < 9) return {};
+
+    const uint16_t enc[3] = {
+        static_cast<uint16_t>(buf[1] | (static_cast<uint16_t>(buf[2]) << 8)),
+        static_cast<uint16_t>(buf[3] | (static_cast<uint16_t>(buf[4]) << 8)),
+        static_cast<uint16_t>(buf[5] | (static_cast<uint16_t>(buf[6]) << 8)),
+    };
+    const uint16_t keys = static_cast<uint16_t>(buf[7] | (static_cast<uint16_t>(buf[8]) << 8));
+
+    if (m_firstReport) {
+        m_firstReport = false;
+        m_enc[0] = enc[0];
+        m_enc[1] = enc[1];
+        m_enc[2] = enc[2];
+        m_keys   = keys;
+        return {};
+    }
+
+    // Encoders — report first non-zero wrap-corrected delta.
+    for (int i = 0; i < 3; ++i) {
+        int diff = static_cast<int>(enc[i]) - static_cast<int>(m_enc[i]);
+        if (diff > 32767)  diff -= 65536;
+        if (diff < -32768) diff += 65536;
+        if (diff != 0) {
+            m_enc[i] = enc[i];
+            if (i == 0) diff = -diff;
+            return {.type = HidEvent::Rotate, .steps = diff, .encoderIndex = i};
+        }
+    }
+
+    // Keys (active-low) — one bit at a time so simultaneous presses are not lost.
+    // F1-F6 (bits 0-5) → buttons 1-6.
+    // Encoder pushes (bits 6-8) → buttons 9-11 so MainWindow routes them through
+    // HidEncoderPushAction{0-2}: bit6=main-encoder(enc1)→9, bit7=enc2→10, bit8=enc3→11.
+    // Buttons 7-8 are intentionally unused (no hardware key on those numbers).
+    static constexpr int kButtonMap[9] = {1, 2, 3, 4, 5, 6, 9, 10, 11};
+    if (keys != m_keys) {
+        const uint16_t changed = keys ^ m_keys;
+        for (int b = 0; b < 9; ++b) {
+            const uint16_t mask = static_cast<uint16_t>(1u << b);
+            if (changed & mask) {
+                m_keys ^= mask;
+                // bit set = idle/released (action 1); bit clear = pressed (action 0)
+                const int action = (keys & mask) ? 1 : 0;
+                return {.type = HidEvent::Button, .button = kButtonMap[b], .action = action};
+            }
+        }
     }
 
     return {};

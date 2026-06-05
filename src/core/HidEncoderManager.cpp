@@ -9,6 +9,170 @@
 #include <algorithm>
 #include <cstring>
 
+// ── TMate 2 display helpers ────────────────────────────────────────────────
+//
+// Digit encoding for the TMate 2 LCD.  Tables and byte layout are derived
+// from OpenTMate2Lib (D:\Code\OpenTMate2Lib), which reverse-engineered the
+// protocol from TMATE2_DLL.dll via USBPcap captures (2026-06-05).
+//
+// Main 9-digit display (freq in Hz):
+//   Each digit d (1=units, 9=100 MHz) occupies two LCDVector bytes:
+//     high = 22 - 2*d   bits: A=0x01 B=0x02 C=0x04
+//     low  = 21 - 2*d   bits: F=0x01 G=0x02 E=0x04 D=0x08
+//
+// Small 3-digit display (S-meter / TX power):
+//   Each digit d (1=units, 3=hundreds) occupies two LCDVector bytes:
+//     high = 21 + 2*d   bits: A=0x80 B=0x40 C=0x20 D=0x10
+//     low  = 22 + 2*d   bits: E=0x20 F=0x80 G=0x40
+//   (bit ordering is reversed vs. main display — hardware quirk)
+
+namespace {
+
+static const uint8_t kMainHigh[10] = {
+    0x07, 0x06, 0x03, 0x07, 0x06, 0x05, 0x05, 0x07, 0x07, 0x07
+};
+static const uint8_t kMainLow[10] = {
+    0x0D, 0x00, 0x0E, 0x0A, 0x03, 0x0B, 0x0F, 0x00, 0x0F, 0x0B
+};
+static const uint8_t kSmallHigh[10] = {
+    0xF0, 0x60, 0xD0, 0xF0, 0x60, 0xB0, 0xB0, 0xE0, 0xF0, 0xF0
+};
+static const uint8_t kSmallLow[10] = {
+    0xA0, 0x00, 0x60, 0x40, 0xC0, 0xC0, 0xE0, 0x00, 0xE0, 0xC0
+};
+
+// Indicator segment lookup: {byte_index, bitmask}.
+// Derived from USB captures (session_20260605_051711/segments_*.csv).
+// Byte range 0-31 only; indicator bits never overlap with digit A-G bits.
+struct SegEntry { uint8_t byte; uint8_t mask; };
+static constexpr SegEntry kSeg_RX        = {  0, 0x04 };
+static constexpr SegEntry kSeg_TX        = {  0, 0x08 };
+static constexpr SegEntry kSeg_S         = {  0, 0x10 };
+static constexpr SegEntry kSeg_VOL       = {  1, 0x80 };
+static constexpr SegEntry kSeg_SMETER_LINE = { 2, 0x01 };
+static constexpr SegEntry kSeg_SMETER_DB_MINUS = {28, 0x10 };
+static constexpr SegEntry kSeg_DIG_PLUS  = { 21, 0x04 };
+static constexpr SegEntry kSeg_DIG_MINUS = { 21, 0x08 };
+static constexpr SegEntry kSeg_DSB       = { 21, 0x10 };
+static constexpr SegEntry kSeg_FM        = { 21, 0x20 };
+static constexpr SegEntry kSeg_USB       = { 21, 0x40 };
+static constexpr SegEntry kSeg_SAM       = { 21, 0x80 };
+static constexpr SegEntry kSeg_DIG       = { 22, 0x02 };
+static constexpr SegEntry kSeg_DBM       = { 22, 0x10 };
+static constexpr SegEntry kSeg_CW        = { 22, 0x20 };
+static constexpr SegEntry kSeg_LSB       = { 22, 0x40 };
+static constexpr SegEntry kSeg_AM        = { 22, 0x80 };
+static constexpr SegEntry kSeg_DOT1      = {  9, 0x10 };  // after digit 3 (kHz/Hz)
+static constexpr SegEntry kSeg_DOT2      = { 15, 0x10 };  // after digit 6 (MHz/kHz)
+static constexpr SegEntry kSeg_HZ        = { 23, 0x01 };
+static constexpr SegEntry kSeg_W         = { 20, 0x20 };
+static constexpr SegEntry kSeg_RIT       = { 13, 0x10 };
+static constexpr SegEntry kSeg_XIT       = { 14, 0x10 };
+// 15-segment S-meter bargraph (BAR1=weakest, BAR15=strongest)
+static constexpr SegEntry kSMeterBars[15] = {
+    { 1, 0x08 }, { 1, 0x04 }, { 1, 0x02 }, // BAR1-3
+    { 31, 0x80 }, { 31, 0x40 }, { 31, 0x20 }, { 31, 0x10 }, // BAR4-7
+    { 30, 0x10 }, { 30, 0x20 }, { 30, 0x40 }, { 30, 0x80 }, // BAR8-11
+    { 29, 0x80 }, { 29, 0x40 }, { 29, 0x20 }, { 29, 0x10 }, // BAR12-15
+};
+
+// Set or clear one segment bit in the LCDVector.
+static void tmate2Seg(uint8_t* v, SegEntry s, bool on)
+{
+    if (on) v[s.byte] |= s.mask;
+    else    v[s.byte] &= static_cast<uint8_t>(~s.mask);
+}
+
+// Convert dBm to S-meter bargraph bar count (0-15).
+//   S1(-121 dBm)=1, S9(-73 dBm)=9; above S9: +10 dB per bar up to S9+60 dB(=15).
+static int smeterBars(float dbm)
+{
+    if (dbm < -121.0f) return 0;
+    if (dbm <= -73.0f) return static_cast<int>((dbm + 121.0f) / 6.0f) + 1;
+    return std::min(15, 9 + static_cast<int>((dbm + 73.0f) / 10.0f));
+}
+
+static void applyModeSegs(uint8_t* lcd, const QString& mode)
+{
+    tmate2Seg(lcd, kSeg_USB, false);
+    tmate2Seg(lcd, kSeg_LSB, false);
+    tmate2Seg(lcd, kSeg_AM,  false);
+    tmate2Seg(lcd, kSeg_SAM, false);
+    tmate2Seg(lcd, kSeg_DSB, false);
+    tmate2Seg(lcd, kSeg_FM,  false);
+    tmate2Seg(lcd, kSeg_CW,  false);
+    tmate2Seg(lcd, kSeg_DIG, false);
+    tmate2Seg(lcd, kSeg_DIG_PLUS, false);
+    tmate2Seg(lcd, kSeg_DIG_MINUS, false);
+
+    if      (mode == "USB")               tmate2Seg(lcd, kSeg_USB, true);
+    else if (mode == "LSB")               tmate2Seg(lcd, kSeg_LSB, true);
+    else if (mode == "AM")                tmate2Seg(lcd, kSeg_AM,  true);
+    else if (mode == "SAM")               tmate2Seg(lcd, kSeg_SAM, true);
+    else if (mode == "DSB")               tmate2Seg(lcd, kSeg_DSB, true);
+    else if (mode == "FM"  || mode == "DFM")  tmate2Seg(lcd, kSeg_FM,  true);
+    else if (mode == "CW"  || mode == "CWL" || mode == "CWU") tmate2Seg(lcd, kSeg_CW, true);
+    else if (mode == "DIGU") {
+        tmate2Seg(lcd, kSeg_DIG, true);
+        tmate2Seg(lcd, kSeg_DIG_PLUS, true);
+    } else if (mode == "DIGL") {
+        tmate2Seg(lcd, kSeg_DIG, true);
+        tmate2Seg(lcd, kSeg_DIG_MINUS, true);
+    } else if (mode == "RTTY" || mode.startsWith("DIG")) {
+        tmate2Seg(lcd, kSeg_DIG, true);
+    }
+}
+
+// LCDVector byte offsets (matches OpenTMate2Lib and Delphi LCD_SEGMENT_DEF)
+static constexpr int kTM2_LED      = 32;
+static constexpr int kTM2_BL_R     = 33;
+static constexpr int kTM2_BL_G     = 34;
+static constexpr int kTM2_BL_B     = 35;
+static constexpr int kTM2_CONTRAST = 36;
+static constexpr int kTM2_REFRESH  = 37;
+static constexpr int kTM2_SPEED1   = 38;
+static constexpr int kTM2_SPEED2   = 39;
+static constexpr int kTM2_SPEED3   = 40;
+static constexpr int kTM2_THR12    = 41;
+static constexpr int kTM2_THR23    = 42;
+static constexpr int kTM2_EVAL     = 43;
+
+// Write frequency (Hz) to bytes 3..20 of the LCDVector.
+// Only the seven A-G segment bits per digit are touched; indicator bits that
+// share those bytes (underlines, DRV, NR2, …) are preserved.
+static void tmate2WriteMainDisplay(uint8_t* v, uint32_t hz)
+{
+    if (hz > 999999999u) hz = 999999999u;
+    for (int d = 1; d <= 9; ++d) {
+        uint8_t hi = static_cast<uint8_t>(22 - 2 * d);
+        uint8_t lo = static_cast<uint8_t>(21 - 2 * d);
+        v[hi] &= 0xF8u;
+        v[lo] &= 0xF0u;
+        if (hz == 0u && d > 1) continue;
+        v[hi] |= kMainHigh[hz % 10u];
+        v[lo] |= kMainLow [hz % 10u];
+        hz /= 10u;
+    }
+}
+
+// Write a value (mod 1000) to bytes 23..28 of the LCDVector.
+static void tmate2WriteSmallDisplay(uint8_t* v, uint32_t val)
+{
+    val %= 1000u;
+    for (int d = 1; d <= 3; ++d) {
+        uint8_t hi = static_cast<uint8_t>(21 + 2 * d);
+        uint8_t lo = static_cast<uint8_t>(22 + 2 * d);
+        v[hi] &= 0x0Fu;
+        v[lo] &= 0x1Fu;
+        if (val == 0u && d > 1) continue;
+        v[hi] |= kSmallHigh[val % 10u];
+        v[lo] |= kSmallLow [val % 10u];
+        val /= 10u;
+    }
+}
+
+} // namespace
+
 namespace AetherSDR {
 
 // HID logging now uses lcDevices from LogManager (shared with serial, FlexControl, MIDI)
@@ -177,6 +341,34 @@ bool HidEncoderManager::open(uint16_t vid, uint16_t pid)
 
     m_pollTimer->start();
 
+    // Initialise TMate 2 LCDVector state and push a blank display.
+    // Timing defaults from OpenTMate2Lib protocol docs (captures 2026-06-05).
+    // Backlight is restored from AppSettings (saved by Preferences dialog).
+    if (isTMate2()) {
+        std::memset(m_lcdVector, 0, sizeof(m_lcdVector));
+        // Matches the original Delphi app / TMate2Probe captures. 0x28 here
+        // overdrives the LCD on some units and can make the display unreadable.
+        m_lcdVector[kTM2_CONTRAST] = 0x00;
+        m_lcdVector[kTM2_REFRESH]  = 0x28;
+        m_lcdVector[kTM2_SPEED1]   = 0x01;
+        m_lcdVector[kTM2_SPEED2]   = 0x05;
+        m_lcdVector[kTM2_SPEED3]   = 0x0A;
+        m_lcdVector[kTM2_THR12]    = 0x0F;
+        m_lcdVector[kTM2_THR23]    = 0x19;
+        m_lcdVector[kTM2_EVAL]     = 0x0A;
+        const auto& s = AppSettings::instance();
+        m_lcdVector[kTM2_BL_R] = static_cast<uint8_t>(s.value("TMate2BacklightR", "0").toInt());
+        m_lcdVector[kTM2_BL_G] = static_cast<uint8_t>(s.value("TMate2BacklightG", "50").toInt());
+        m_lcdVector[kTM2_BL_B] = static_cast<uint8_t>(s.value("TMate2BacklightB", "255").toInt());
+        // Always-on static indicators for a frequency display
+        tmate2Seg(m_lcdVector, kSeg_SMETER_LINE, true);
+        tmate2Seg(m_lcdVector, kSeg_DOT1, true);
+        tmate2Seg(m_lcdVector, kSeg_DOT2, true);
+        tmate2Seg(m_lcdVector, kSeg_HZ,   true);
+        tmate2Seg(m_lcdVector, kSeg_VOL,  true);
+        sendTMate2();
+    }
+
     qCDebug(lcDevices) << "HidEncoderManager: opened" << m_deviceName
                     << QString("0x%1:0x%2").arg(vid, 4, 16, QChar('0')).arg(pid, 4, 16, QChar('0'));
     emit connectionChanged(true, m_deviceName);
@@ -188,9 +380,10 @@ void HidEncoderManager::close()
     m_pollTimer->stop();
     m_hotplugTimer->stop();
     if (m_device) {
-        // Extinguish RC-28 LEDs on clean close. hid_write may return EIO if
-        // the device was surprise-disconnected; that is safe to ignore here.
+        // Extinguish RC-28 LEDs / TMate 2 backlight on clean close.
+        // hid_write may return EIO on surprise-disconnect; safe to ignore.
         setRC28Leds(RC28_LEDS_OFF);
+        setTMate2Backlight(0, 0, 0);
         hid_close(m_device);
         m_device = nullptr;
     }
@@ -362,6 +555,148 @@ void HidEncoderManager::setTouchscreenImage(const QByteArray& jpegData,
         offset     += chunkLen;
         pageNumber++;
     }
+}
+
+void HidEncoderManager::sendTMate2()
+{
+    // Build the 64-byte output report from the persistent LCDVector state.
+    // Bytes 0-43 = LCDVector (segments, status, backlight, timing).
+    // Bytes 44-63 = zero padding required by the protocol.
+    uint8_t report[64] = {};
+    std::memcpy(report, m_lcdVector, sizeof(m_lcdVector));
+
+    // hidapi write buffers include a leading report ID byte.  The TMate 2 OUT
+    // payload captured on USB is the 64-byte LCDVector report itself, so prepend
+    // report ID 0 to avoid shifting the vector left by one byte on Windows.
+    uint8_t hidReport[65] = {};
+    std::memcpy(hidReport + 1, report, sizeof(report));
+    const int written = hid_write(m_device, hidReport, sizeof(hidReport));
+    if (written < 0) {
+        qCWarning(lcDevices) << "HidEncoderManager::sendTMate2: hid_write failed";
+    }
+}
+
+void HidEncoderManager::setTMate2Backlight(uint8_t r, uint8_t g, uint8_t b)
+{
+    if (!m_device || !isTMate2()) return;
+    m_lcdVector[kTM2_BL_R] = r;
+    m_lcdVector[kTM2_BL_G] = g;
+    m_lcdVector[kTM2_BL_B] = b;
+    sendTMate2();
+}
+
+void HidEncoderManager::setTMate2Status(uint8_t led_byte)
+{
+    if (!m_device || !isTMate2()) return;
+    m_lcdVector[kTM2_LED] = led_byte;
+    sendTMate2();
+}
+
+void HidEncoderManager::setTMate2Display(uint32_t freq_hz, uint32_t small_val)
+{
+    if (!m_device || !isTMate2()) return;
+    tmate2WriteMainDisplay(m_lcdVector, freq_hz);
+    tmate2WriteSmallDisplay(m_lcdVector, small_val);
+    sendTMate2();
+}
+
+void HidEncoderManager::setTMate2Indicators(bool tx, const QString& mode,
+                                             float smeter_dbm, bool rit, bool xit)
+{
+    if (!m_device || !isTMate2()) return;
+
+    // RX / TX
+    tmate2Seg(m_lcdVector, kSeg_RX, !tx);
+    tmate2Seg(m_lcdVector, kSeg_TX,  tx);
+    tmate2Seg(m_lcdVector, kSeg_W,   tx);
+    tmate2Seg(m_lcdVector, kSeg_DBM, !tx);
+    tmate2Seg(m_lcdVector, kSeg_S,   !tx);
+    tmate2Seg(m_lcdVector, kSeg_VOL, true);
+    tmate2Seg(m_lcdVector, kSeg_SMETER_LINE, true);
+    tmate2Seg(m_lcdVector, kSeg_SMETER_DB_MINUS, !tx && smeter_dbm < 0.0f);
+
+    // Static frequency-display decorations (decimal dots + Hz unit). These are
+    // always on in the normal view; re-assert them here — not only in open() —
+    // so they survive after an overlay or idle-blank cleared them.
+    tmate2Seg(m_lcdVector, kSeg_DOT1, true);
+    tmate2Seg(m_lcdVector, kSeg_DOT2, true);
+    tmate2Seg(m_lcdVector, kSeg_HZ,   true);
+
+    // Mode — clear all mode bits first, then set the matching one
+    applyModeSegs(m_lcdVector, mode);
+
+    // S-meter bargraph — set bars 1..N on, rest off
+    const int bars = smeterBars(smeter_dbm);
+    for (int i = 0; i < 15; ++i)
+        tmate2Seg(m_lcdVector, kSMeterBars[i], i < bars);
+
+    // RIT / XIT
+    tmate2Seg(m_lcdVector, kSeg_RIT, rit);
+    tmate2Seg(m_lcdVector, kSeg_XIT, xit);
+
+    sendTMate2();
+}
+
+void HidEncoderManager::setTMate2OverlayIndicators(const QString& overlayType,
+                                                    int overlayValue,
+                                                    const QString& mode)
+{
+    if (!m_device || !isTMate2()) return;
+
+    const bool isVolume = overlayType == QLatin1String("volume");
+    const bool isPower  = overlayType == QLatin1String("power");
+    const bool isSpeed  = overlayType == QLatin1String("speed");
+    const bool isWpm    = overlayType == QLatin1String("wpm");
+    const bool isRit    = overlayType == QLatin1String("rit");
+
+    tmate2Seg(m_lcdVector, kSeg_SMETER_LINE, false);
+    tmate2Seg(m_lcdVector, kSeg_DOT1, false);
+    tmate2Seg(m_lcdVector, kSeg_DOT2, false);
+    tmate2Seg(m_lcdVector, kSeg_VOL, isVolume);
+    tmate2Seg(m_lcdVector, kSeg_W, isPower);
+    tmate2Seg(m_lcdVector, kSeg_HZ, isSpeed || isRit);
+    tmate2Seg(m_lcdVector, kSeg_RIT, isRit);
+    tmate2Seg(m_lcdVector, kSeg_SMETER_DB_MINUS, isRit && overlayValue < 0);
+    tmate2Seg(m_lcdVector, kSeg_DBM, false);
+    tmate2Seg(m_lcdVector, kSeg_S, false);
+    tmate2Seg(m_lcdVector, kSeg_RX, false);
+    tmate2Seg(m_lcdVector, kSeg_TX, false);
+    tmate2Seg(m_lcdVector, kSeg_XIT, false);
+
+    // Keep the current mode visible; for WPM force CW as an additional cue.
+    applyModeSegs(m_lcdVector, isWpm ? QStringLiteral("CW") : mode);
+
+    const int bars = (isVolume || isPower)
+        ? std::clamp((std::clamp(overlayValue, 0, 100) * 15 + 99) / 100, 0, 15)
+        : 0;
+    for (int i = 0; i < 15; ++i)
+        tmate2Seg(m_lcdVector, kSMeterBars[i], i < bars);
+
+    sendTMate2();
+}
+
+void HidEncoderManager::clearTMate2Indicators()
+{
+    if (!m_device || !isTMate2()) return;
+
+    tmate2Seg(m_lcdVector, kSeg_RX, false);
+    tmate2Seg(m_lcdVector, kSeg_TX, false);
+    tmate2Seg(m_lcdVector, kSeg_S, false);
+    tmate2Seg(m_lcdVector, kSeg_VOL, false);
+    tmate2Seg(m_lcdVector, kSeg_SMETER_LINE, false);
+    tmate2Seg(m_lcdVector, kSeg_SMETER_DB_MINUS, false);
+    tmate2Seg(m_lcdVector, kSeg_DOT1, false);
+    tmate2Seg(m_lcdVector, kSeg_DOT2, false);
+    tmate2Seg(m_lcdVector, kSeg_HZ, false);
+    tmate2Seg(m_lcdVector, kSeg_W, false);
+    tmate2Seg(m_lcdVector, kSeg_RIT, false);
+    tmate2Seg(m_lcdVector, kSeg_XIT, false);
+    tmate2Seg(m_lcdVector, kSeg_DBM, false);
+    applyModeSegs(m_lcdVector, QString());
+    for (const auto& bar : kSMeterBars)
+        tmate2Seg(m_lcdVector, bar, false);
+
+    sendTMate2();
 }
 
 void HidEncoderManager::setRC28Leds(uint8_t ledByte)

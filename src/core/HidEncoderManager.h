@@ -47,6 +47,10 @@ public:
         return m_openVid.load(std::memory_order_relaxed) == 0x0FD9
             && m_openPid.load(std::memory_order_relaxed) == 0x0084;
     }
+    bool isTMate2() const {
+        return m_openVid.load(std::memory_order_relaxed) == 0x1721
+            && m_openPid.load(std::memory_order_relaxed) == 0x0614;
+    }
     // Single source of truth for the RC-28-compatible VID/PID set, shared by the
     // instance check below and open()'s multi-device guard. The emulator runs
     // the same wire protocol as the real RC-28, including the LED output report.
@@ -84,6 +88,34 @@ public slots:
     // No-op if device is not a StreamDeck+.
     void setKeyImages(const QVector<QByteArray>& jpegImages);
     void setKeyImage(int key, const QByteArray& jpegData);
+    // Set the RGB backlight on a TMate 2. No-op if device is not a TMate 2.
+    void setTMate2Backlight(uint8_t r, uint8_t g, uint8_t b);
+    // Set the LED status byte on a TMate 2 (byte 32 of the LCDVector).
+    //   bit0 = USB/radio connected, bit1 = VFO locked.
+    // No-op if device is not a TMate 2.
+    void setTMate2Status(uint8_t led_byte);
+    // Write frequency and S-meter/power value to the TMate 2 LCD.
+    //   freq_hz   : displayed right-aligned across the 9-digit main display.
+    //   small_val : displayed on the 3-digit S-meter/power display (mod 1000).
+    // Sends a full LCDVector update (backlight, contrast, timing are preserved).
+    // No-op if device is not a TMate 2.
+    void setTMate2Display(uint32_t freq_hz, uint32_t small_val);
+    // Update the TMate 2 segment indicators (RX/TX, mode, S-meter bargraph,
+    // RIT/XIT, decimal dots).  Call whenever any of these state items changes.
+    //   tx        : true = transmitting, false = receiving
+    //   mode      : demodulation mode string ("USB","LSB","AM","FM","CW","DIGL","DIGU",…)
+    //   smeter_dbm: S-meter reading in dBm; drives the 15-segment bargraph
+    //   rit/xit   : RIT / XIT active flags
+    // No-op if device is not a TMate 2.
+    void setTMate2Indicators(bool tx, const QString& mode, float smeter_dbm,
+                              bool rit, bool xit);
+    // Temporarily switch indicator segments to a TMate 2 overlay view.
+    // overlayType: "volume", "power", "speed", "wpm", or "rit".
+    void setTMate2OverlayIndicators(const QString& overlayType,
+                                     int overlayValue,
+                                     const QString& mode);
+    // Clear all non-digit TMate 2 indicator segments. Used by the idle blanker.
+    void clearTMate2Indicators();
     // Write an 800x100 JPEG to the touchscreen strip above the dials.
     // x_pos/y_pos/width/height let you update a sub-region; defaults write the full strip.
     void setTouchscreenImage(const QByteArray& jpegData,
@@ -127,6 +159,17 @@ private:
     std::atomic<uint16_t> m_openVid{0};
     std::atomic<uint16_t> m_openPid{0};
     bool m_invertDirection{false};
+
+    // Persistent LCDVector state for TMate 2 (44 bytes).  All output functions
+    // modify this buffer then send the full 64-byte report so that backlight,
+    // contrast, and timing fields are never accidentally reset to zero.
+    // Initialised to zeros; timing defaults are applied in open() when a
+    // TMate 2 is detected.  Protocol documented in OpenTMate2Lib.
+    uint8_t m_lcdVector[44]{};
+
+    // Send the current m_lcdVector to the device.  Pads to 64 bytes with zeros.
+    // Must only be called while m_device is open and isTMate2() is true.
+    void sendTMate2();
 
     QTimer* m_pollTimer{nullptr};
     QTimer* m_hotplugTimer{nullptr};
