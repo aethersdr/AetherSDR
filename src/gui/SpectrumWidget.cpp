@@ -662,9 +662,7 @@ void SpectrumWidget::prepareForShutdown()
     hide();
 
 #ifdef AETHER_GPU_SPECTRUM
-#ifndef Q_OS_LINUX
     releaseResources();
-#endif
 #ifdef Q_OS_MAC
     // Drop the native child window while its parent backing store is still
     // alive, so any remaining platform resources are gone before QWidgetWindow
