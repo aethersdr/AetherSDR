@@ -889,7 +889,7 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     // Restore drawer open/closed state (default closed).  Signals blocked
     // to skip the AppSettings::save() roundtrip during init.
     const bool drawerOpen =
-        AppSettings::instance().value("ButtonBar/DrawerOpen", "False").toString() == "True";
+        AppSettings::instance().value("ButtonBarDrawerOpen", "False").toString() == "True";
     {
         QSignalBlocker b(m_drawerToggleBtn);
         m_drawerToggleBtn->setChecked(drawerOpen);
@@ -1367,9 +1367,9 @@ void AppletPanel::loadButtonLayout()
     m_buttonOrder.clear();
     m_hiddenButtons.clear();
 
-    // New canonical key: ButtonBar/Layout = {"order":[...], "hidden":[...]}.
+    // New canonical key: ButtonBarLayout = {"order":[...], "hidden":[...]}.
     const QString rawLayout =
-        AppSettings::instance().value("ButtonBar/Layout").toString();
+        AppSettings::instance().value("ButtonBarLayout").toString();
     if (!rawLayout.isEmpty()) {
         QJsonParseError err{};
         const QJsonDocument doc = QJsonDocument::fromJson(rawLayout.toUtf8(), &err);
@@ -1383,12 +1383,12 @@ void AppletPanel::loadButtonLayout()
         }
     }
 
-    // Migration: legacy ButtonBar/Favorites (5-item array of canonical
-    // favourite IDs) → ButtonBar/Layout.  We adopt the saved favourites
+    // Migration: legacy ButtonBarFavorites (5-item array of canonical
+    // favourite IDs) → ButtonBarLayout.  We adopt the saved favourites
     // as the head of the order list; applyBarLayout()'s sanitize pass
     // fills in the rest from defaultButtonOrder() and persists.
     const QString rawFavs =
-        AppSettings::instance().value("ButtonBar/Favorites").toString();
+        AppSettings::instance().value("ButtonBarFavorites").toString();
     if (!rawFavs.isEmpty()) {
         QJsonParseError err{};
         const QJsonDocument doc = QJsonDocument::fromJson(rawFavs.toUtf8(), &err);
@@ -1396,7 +1396,7 @@ void AppletPanel::loadButtonLayout()
             for (const auto& v : doc.array())
                 if (v.isString()) m_buttonOrder.append(v.toString());
         }
-        AppSettings::instance().remove("ButtonBar/Favorites");
+        AppSettings::instance().remove("ButtonBarFavorites");
         return;
     }
 
@@ -1417,7 +1417,7 @@ void AppletPanel::saveButtonLayout()
     obj["hidden"] = hiddenArr;
     const QString json = QString::fromUtf8(
         QJsonDocument(obj).toJson(QJsonDocument::Compact));
-    AppSettings::instance().setValue("ButtonBar/Layout", json);
+    AppSettings::instance().setValue("ButtonBarLayout", json);
     AppSettings::instance().save();
 }
 
@@ -1590,7 +1590,7 @@ void AppletPanel::setDrawerOpen(bool open)
         ? QString::fromUtf8("\xe2\x96\xb2")
         : QString::fromUtf8("\xe2\x96\xbc"));
     AppSettings::instance().setValue(
-        "ButtonBar/DrawerOpen", open ? "True" : "False");
+        "ButtonBarDrawerOpen", open ? "True" : "False");
     AppSettings::instance().save();
 }
 
