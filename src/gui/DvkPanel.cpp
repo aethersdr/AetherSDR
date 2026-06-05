@@ -207,11 +207,14 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     // this the REC button latched "checked" on a rejected rec_start. (#3377)
     connect(m_model, &DvkModel::commandFailed, this,
             [this](const QString& verb, int id, uint /*code*/, const QString& message) {
+        // Re-drive the buttons from the current (unchanged) status so the
+        // failed momentary press is visually released.  This must run *first*:
+        // onStatusChanged() rewrites m_statusLabel ("Status: Idle"), so set the
+        // failure text afterwards or it gets clobbered before the event loop
+        // returns and the user never sees the rejection. (#3377)
+        onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
         m_statusLabel->setText(QString("Status: %1 (slot %2) failed — %3")
                                    .arg(verb).arg(id).arg(message));
-        // Re-drive the buttons from the current (unchanged) status so the
-        // failed momentary press is visually released.
-        onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
     });
 
     // F1-F12 hotkeys (only play if slot has a recording).  Registered as
