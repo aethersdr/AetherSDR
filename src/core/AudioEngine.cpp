@@ -290,27 +290,10 @@ std::optional<int> macBluetoothNativeInputRate(const QAudioDevice& qtDevice)
 
     return std::nullopt;
 }
-
-QList<int> macTxInputRateCandidates(const QAudioDevice& qtDevice)
-{
-    QList<int> rates;
-    if (const auto nativeRate = macBluetoothNativeInputRate(qtDevice)) {
-        rates << *nativeRate;
-    }
-    // Try the device's preferred (native) rate FIRST. CoreAudio reports
-    // isFormatSupported(48000)==true for many capture devices that actually
-    // run at a lower native rate (e.g. USB webcam mics at 16 kHz). Opening
-    // QAudioSource at 48 kHz then "succeeds" (state=Active, no error) but the
-    // device delivers zero samples — processedUSecs stays 0 and TX is silent.
-    // Honouring the device's preferred rate avoids that dead-stream trap and
-    // lets the existing resampler convert to 24 kHz radio-native.
-    const int preferredRate = qtDevice.preferredFormat().sampleRate();
-    if (preferredRate > 0 && !rates.contains(preferredRate)) {
-        rates << preferredRate;
-    }
-    rates << 48000 << 44100 << AudioEngine::DEFAULT_SAMPLE_RATE;
-    return rates;
-}
+// (macTxInputRateCandidates removed — TX mic rate negotiation now goes through
+//  the consolidated AudioFormatNegotiator ladder; #2930's preferred-rate-first
+//  and #2615's Bluetooth-HFP native rate are encoded there, fed by
+//  macBluetoothNativeInputRate above. #3306)
 #endif
 }
 
@@ -4124,33 +4107,23 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
         << dev.minimumSampleRate() << "-" << dev.maximumSampleRate() << "Hz"
         << dev.minimumChannelCount() << "-" << dev.maximumChannelCount() << "ch";
 
-    // Negotiate the best sample rate for TX mic input.
-    // macOS: prefer 48kHz for general devices, but open Bluetooth headset
-    // inputs at their HAL-native low rate when CoreAudio reports no high-rate
-    // capture mode. That avoids a hidden native->48k conversion before the
-    // app's normal radio-native conversion.
-    // Linux: prefer 24kHz (radio native, no resampling). Windows uses 48kHz
-    // WASAPI shared mode and relies on the app's normal 48k->24k resampler.
+    // Negotiate the TX mic input format via the consolidated factory (#3306).
+    // The mic is captured as Int16; the factory supplies the per-OS rate ladder
+    // in ONE place (macOS preferred/HAL-native-rate-first to dodge the silent
+    // 48k-open trap #2930 and the Bluetooth-HFP native rate #2615; Linux native
+    // 24k). We walk it preferring stereo across all rates then mono, preserving
+    // the existing channel fallback.
     bool formatFound = false;
-#ifdef Q_OS_MAC
-    const QList<int> rates = macTxInputRateCandidates(dev);
-    const int preferredTxRate = rates.isEmpty() ? 48000 : rates.first();
-#elif defined(Q_OS_WIN)
-    constexpr int preferredTxRate = 48000;
-#else
-    constexpr int rates[] = {24000, 48000, 44100};
-    constexpr int preferredTxRate = 24000;
-#endif
 #ifdef Q_OS_WIN
-    // Windows WASAPI shared mode handles rate conversion transparently,
-    // but Qt's isFormatSupported() returns false for many valid devices
-    // (Voicemeeter, FlexRadio DAX, etc.). Default to 48kHz and let WASAPI
-    // handle the rate. For channel count, clamp to the device's reported
-    // maximumChannelCount() so mono-only USB PnP mics open as mono on the
-    // first attempt — opening them as stereo silently returns a non-null
-    // QIODevice that delivers zero bytes (#2929). Stereo-capable virtual
-    // devices (Voicemeeter / DAX) still open at stereo because they report
-    // maximumChannelCount() >= 2.
+    // Windows WASAPI shared mode handles rate conversion transparently, but Qt's
+    // isFormatSupported() returns false for many valid devices (Voicemeeter,
+    // FlexRadio DAX). Default to 48kHz and let WASAPI handle the rate. Clamp the
+    // channel count to the device's maximumChannelCount() so mono-only USB PnP
+    // mics open as mono on the first attempt — opening them stereo silently
+    // returns a non-null QIODevice that delivers zero bytes (#2929). This path
+    // already matches the factory's Windows policy (force 48k + probe-at-open);
+    // migrating its mono-clamp onto the wrapper is a separate, soakable step.
+    constexpr int preferredTxRate = 48000;
     fmt.setSampleRate(48000);
     const int maxCh = dev.maximumChannelCount();
     const int initialCh = (isWatchdogRetry || (maxCh > 0 && maxCh < 2)) ? 1 : 2;
@@ -4158,10 +4131,28 @@ bool AudioEngine::startTxStream(const QHostAddress& radioAddress, quint16 radioP
     noteTxAttempt(fmt);
     formatFound = true;
 #else
+    bool txBluetoothHfp = false;
+    int  txPreferredOverride = 0;
+#ifdef Q_OS_MAC
+    // CoreAudio-HAL detection the factory can't derive from QAudioDevice: if this
+    // is a Bluetooth-HFP capture route, put its native low rate first (#2615).
+    if (const auto nativeRate = macBluetoothNativeInputRate(dev)) {
+        txBluetoothHfp = true;
+        txPreferredOverride = *nativeRate;
+    }
+#endif
+    const QList<QAudioFormat> txLadder = AudioDeviceNegotiator::formatLadder(
+        dev, AudioFormatNegotiator::Direction::Input,
+        AudioFormatNegotiator::ResamplerPolicy::PreservePan,
+        AudioFormatNegotiator::hostTargetOs(), DEFAULT_SAMPLE_RATE,
+        txBluetoothHfp, txPreferredOverride);
+    const int preferredTxRate = txLadder.isEmpty() ? 48000 : txLadder.first().sampleRate();
     for (int channels : {2, 1}) {
-        for (int rate : rates) {
+        for (const QAudioFormat& cand : txLadder) {
+            if (cand.sampleFormat() != QAudioFormat::Int16)
+                continue;   // mic is captured as Int16
             fmt.setChannelCount(channels);
-            fmt.setSampleRate(rate);
+            fmt.setSampleRate(cand.sampleRate());
             noteTxAttempt(fmt);
             if (dev.isFormatSupported(fmt)) {
                 formatFound = true;

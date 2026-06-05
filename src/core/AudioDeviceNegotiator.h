@@ -23,11 +23,15 @@ namespace AudioDeviceNegotiator {
 // Probe a real device into the pure policy's injected capability snapshot.
 // `bluetoothHfp` is supplied by the caller (the CoreAudio-HAL detection that
 // already lives in AudioEngine), since it can't be derived from QAudioDevice.
+// `preferredRateOverride` (>0) replaces the device's reported preferred rate —
+// used on macOS to put a Bluetooth-HFP mic's HAL-native rate first (#2615),
+// which QAudioDevice::preferredFormat() does not expose.
 AudioFormatNegotiator::DeviceCaps probe(
     const QAudioDevice& dev,
     AudioFormatNegotiator::Direction dir,
     AudioFormatNegotiator::TargetOs os = AudioFormatNegotiator::hostTargetOs(),
-    bool bluetoothHfp = false);
+    bool bluetoothHfp = false,
+    int preferredRateOverride = 0);
 
 struct Result {
     bool                                 ok = false;
@@ -56,7 +60,8 @@ QList<QAudioFormat> formatLadder(
     AudioFormatNegotiator::ResamplerPolicy policy,
     AudioFormatNegotiator::TargetOs os = AudioFormatNegotiator::hostTargetOs(),
     int internalRate = AudioFormatNegotiator::kInternalRate,
-    bool bluetoothHfp = false);
+    bool bluetoothHfp = false,
+    int preferredRateOverride = 0);
 
 QAudioFormat::SampleFormat       toQt(AudioFormatNegotiator::SampleFmt f);
 AudioFormatNegotiator::SampleFmt fromQt(QAudioFormat::SampleFormat f);

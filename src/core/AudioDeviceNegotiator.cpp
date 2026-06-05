@@ -29,7 +29,8 @@ QAudioFormat makeFormat(int rate, AFN::SampleFmt fmt, int channels)
     return f;
 }
 
-AFN::DeviceCaps probe(const QAudioDevice& dev, AFN::Direction dir, AFN::TargetOs os, bool bluetoothHfp)
+AFN::DeviceCaps probe(const QAudioDevice& dev, AFN::Direction dir, AFN::TargetOs os,
+                      bool bluetoothHfp, int preferredRateOverride)
 {
     AFN::DeviceCaps caps;
 
@@ -37,13 +38,15 @@ AFN::DeviceCaps probe(const QAudioDevice& dev, AFN::Direction dir, AFN::TargetOs
         // Nothing to probe — treat as unknown so reliable backends fail cleanly
         // and probe-at-open backends still take their preferred rung.
         caps.isFormatSupportedReliable = (os != AFN::TargetOs::Windows);
+        if (preferredRateOverride > 0) caps.preferredRate = preferredRateOverride;
+        caps.isBluetoothHfp = bluetoothHfp;
         return caps;
     }
 
     const QAudioFormat pref = dev.preferredFormat();
     const int channels = pref.channelCount() >= 1 ? pref.channelCount() : 2;
     caps.channels = channels;
-    caps.preferredRate = pref.sampleRate();
+    caps.preferredRate = preferredRateOverride > 0 ? preferredRateOverride : pref.sampleRate();
     caps.preferredFormat = fromQt(pref.sampleFormat());
     caps.isBluetoothHfp = bluetoothHfp;
 
@@ -105,9 +108,9 @@ Result negotiate(const QAudioDevice& dev, AFN::Direction dir, AFN::ResamplerPoli
 
 QList<QAudioFormat> formatLadder(const QAudioDevice& dev, AFN::Direction dir,
                                  AFN::ResamplerPolicy policy, AFN::TargetOs os,
-                                 int internalRate, bool bluetoothHfp)
+                                 int internalRate, bool bluetoothHfp, int preferredRateOverride)
 {
-    const AFN::DeviceCaps caps = probe(dev, dir, os, bluetoothHfp);
+    const AFN::DeviceCaps caps = probe(dev, dir, os, bluetoothHfp, preferredRateOverride);
     const QList<AFN::FormatCandidate> ladder =
         AFN::buildLadder(os, dir, caps, policy, internalRate);
 

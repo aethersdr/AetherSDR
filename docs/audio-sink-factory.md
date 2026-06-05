@@ -152,8 +152,16 @@ rate ones; the others are enforced in the router/wrapper.
    works, and (b) the Quindar local monitor now opens on Windows too (the old
    Windows branch `return`ed before `startQuindarLocalSink()`). Soak on
    Win/Mac/Linux.
-4. **PC mic (TX)** onto the wrapper — preserves macOS preferred-first / BT-HFP /
-   Windows probe-at-open. *Next.*
+4. **PC mic (TX)** ✅ (macOS + Linux) — `AudioEngine::startTxStream()` now drives
+   the mic rate/format selection from the factory's Int16 Input ladder, walking
+   stereo-then-mono. macOS BT-HFP native rate (#2615) is fed in via the existing
+   `macBluetoothNativeInputRate()` HAL detection (new `preferredRateOverride`
+   on the wrapper), and preferred-rate-first (#2930) is the ladder's macOS rule.
+   `macTxInputRateCandidates()` is removed (its logic now lives in the factory).
+   The **Windows** mic path is deliberately left as-is for now: it already
+   matches the factory's Windows policy (force 48k + probe-at-open) and carries
+   the mono-only USB-mic channel clamp (#2929) that needs its own soak — that's
+   the remaining mic increment.
 5. **`AudioOutputRouter`** + migrate the three uncoupled sinks (CW sidetone,
    Pudu monitor, QSO playback) and Quindar onto it — closes the uncoupling
    class so a future sink can't re-open it.
