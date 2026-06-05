@@ -1712,6 +1712,18 @@ target_include_directories(audio_format_negotiation_test PRIVATE src)
 target_link_libraries(audio_format_negotiation_test PRIVATE Qt6::Core)
 add_test(NAME audio_format_negotiation_test COMMAND audio_format_negotiation_test)
 
+# Smoke test for the live Qt-Multimedia wrapper (AudioDeviceNegotiator): probes
+# the real default devices and round-trips to an openable QAudioFormat. Tolerant
+# of headless runners with no audio hardware.
+add_executable(audio_device_negotiator_test
+    tests/audio_device_negotiator_test.cpp
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+)
+target_include_directories(audio_device_negotiator_test PRIVATE src)
+target_link_libraries(audio_device_negotiator_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME audio_device_negotiator_test COMMAND audio_device_negotiator_test)
+
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
 )
