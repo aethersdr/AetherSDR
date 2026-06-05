@@ -1693,6 +1693,17 @@ target_include_directories(tx_mic_channel_normalizer_test PRIVATE
 target_link_libraries(tx_mic_channel_normalizer_test PRIVATE Qt6::Core)
 add_test(NAME tx_mic_channel_normalizer_test COMMAND tx_mic_channel_normalizer_test)
 
+# Pure, headless, hardware-free golden matrix for the consolidated audio
+# format/rate negotiation policy (#3306). TargetOs is data, so this one binary
+# exercises the Windows/macOS/Linux ladders regardless of the CI host.
+add_executable(audio_format_negotiation_test
+    tests/audio_format_negotiation_test.cpp
+    src/core/AudioFormatNegotiator.cpp
+)
+target_include_directories(audio_format_negotiation_test PRIVATE src)
+target_link_libraries(audio_format_negotiation_test PRIVATE Qt6::Core)
+add_test(NAME audio_format_negotiation_test COMMAND audio_format_negotiation_test)
+
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
 )
