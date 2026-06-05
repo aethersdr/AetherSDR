@@ -4422,8 +4422,8 @@ MainWindow::MainWindow(QWidget* parent)
     // Client-side PC mic metering — radio CODEC meters only see hardware mics.
     // Apply VU-style ballistics: fast attack, slow decay (~20 dB/sec).
     {
-        auto* heldLevel = new float(-150.0f);  // persists across calls
-        auto* heldPeak  = new float(-150.0f);
+        auto heldLevel = std::make_shared<float>(-150.0f);
+        auto heldPeak  = std::make_shared<float>(-150.0f);
         connect(m_audio, &AudioEngine::pcMicLevelChanged,
                 this, [this, heldLevel, heldPeak](float peakDb, float avgDb) {
             if (m_radioModel.transmitModel().micSelection() != "PC" && !m_audio->isRadeMode()) return;
@@ -10155,7 +10155,6 @@ void MainWindow::buildUI()
     addSep();
 
     // Radio model (top) + version (bottom) stacked
-    m_radioInfoLabel = new QLabel("");
     auto* radioStack = new QWidget;
     auto* radioVbox = new QVBoxLayout(radioStack);
     radioVbox->setContentsMargins(0, 0, 0, 0);
