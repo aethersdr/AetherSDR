@@ -43,7 +43,7 @@ QList<int> primaryRateOrder(TargetOs os, Direction dir, int internalRate)
         case TargetOs::Linux:   return {internalRate, 48000, 44100};
         }
     }
-    return {internalRate};
+    Q_UNREACHABLE(); // every TargetOs value is covered in both branches above
 }
 
 // Format attempt order per direction. Output is Float-first (RX/sidetone/Quindar
