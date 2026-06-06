@@ -673,7 +673,7 @@ AudioEngine::AudioEngine(QObject* parent)
 
         // Cap buffer to bound latency. Default 200ms, user-adjustable for
         // high-jitter connections (VPN, SmartLink) where drops cause choppy audio.
-        const int sampleRate = m_rxOutputRate;
+        const int sampleRate = m_rxOutputRate.load();
         const int bufMs = m_rxBufferCapMs.load();
         const qsizetype maxBufBytes = sampleRate * 2 * static_cast<qsizetype>(sizeof(float)) * bufMs / 1000;
         if (m_rxBuffer.size() > maxBufBytes) {
@@ -848,7 +848,7 @@ QJsonArray AudioEngine::audioEndpointDiagnostics() const
     rx["sample_rate_hz"] = rxRunning ? QJsonValue(m_rxBufferSampleRate.load()) : QJsonValue();
     rx["channel_count"] = rxRunning ? QJsonValue(2) : QJsonValue();
     rx["sample_format"] = rxRunning ? QStringLiteral("Float") : QString();
-    rx["resampling_active"] = rxRunning ? QJsonValue(m_rxOutputRate != DEFAULT_SAMPLE_RATE) : QJsonValue();
+    rx["resampling_active"] = rxRunning ? QJsonValue(m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE) : QJsonValue();
     rx["buffer_bytes"] = static_cast<double>(m_rxBufferBytes.load());
     rx["buffer_peak_bytes"] = static_cast<double>(m_rxBufferPeakBytes.load());
     rx["underrun_count"] = static_cast<double>(m_rxBufferUnderrunCount.load());
@@ -1041,7 +1041,7 @@ bool AudioEngine::startRxStream()
         if (io) {
             m_audioSink = sink;
             m_audioDevice = io;
-            m_rxOutputRate = candidate.sampleRate();
+            m_rxOutputRate.store(candidate.sampleRate());
             if (triedFloatRung) {
                 noteRxFallback(QStringLiteral("preferred RX format unavailable -> %1 Hz")
                                    .arg(candidate.sampleRate()));
@@ -1068,11 +1068,11 @@ bool AudioEngine::startRxStream()
 
     // Rebuild cached resamplers if the device rate changed since they were built
     // (e.g. a device swap 48k -> 44.1k), so they target the new device rate.
-    if (m_rxResampler && static_cast<int>(m_rxResampler->dstRate()) != m_rxOutputRate) {
+    if (m_rxResampler && static_cast<int>(m_rxResampler->dstRate()) != m_rxOutputRate.load()) {
         m_rxResampler.reset();
         m_rxResamplerR.reset();
     }
-    if (m_radeRxResampler && static_cast<int>(m_radeRxResampler->dstRate()) != m_rxOutputRate) {
+    if (m_radeRxResampler && static_cast<int>(m_radeRxResampler->dstRate()) != m_rxOutputRate.load()) {
         m_radeRxResampler.reset();
     }
 
@@ -1101,15 +1101,15 @@ bool AudioEngine::startRxStream()
             startRxStream();
         }, Qt::QueuedConnection);
     });
-    qCWarning(lcAudio) << "AudioEngine: RX stream started at" << m_rxOutputRate << "Hz"
+    qCWarning(lcAudio) << "AudioEngine: RX stream started at" << m_rxOutputRate.load() << "Hz"
                        << "device:" << dev.description();
-    m_rxBufferSampleRate.store(m_rxOutputRate);
+    m_rxBufferSampleRate.store(m_rxOutputRate.load());
     AudioSummaryLogger::RxSinkSummary summary;
     summary.deviceDescription = dev.description();
-    summary.sampleRate = m_rxOutputRate;
+    summary.sampleRate = m_rxOutputRate.load();
     summary.channelCount = 2;
     summary.sampleFormat = QAudioFormat::Float;
-    summary.resamplingActive = (m_rxOutputRate != DEFAULT_SAMPLE_RATE);
+    summary.resamplingActive = (m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE);
     summary.fallbackOccurred = rxFallbackOccurred;
     summary.fallbackReason = rxFallbackReasons.join(QStringLiteral("; "));
     AudioSummaryLogger::logRxSink(summary);
@@ -1345,9 +1345,9 @@ QByteArray AudioEngine::resampleStereo(const QByteArray& pcm)
     // strategy — never collapse to mono here, #2403/#2459). Target the negotiated
     // device rate so 44.1k / 48k devices both work (#3306).
     if (!m_rxResampler)
-        m_rxResampler = std::make_unique<Resampler>(24000, m_rxOutputRate);
+        m_rxResampler = std::make_unique<Resampler>(24000, m_rxOutputRate.load());
     if (!m_rxResamplerR)
-        m_rxResamplerR = std::make_unique<Resampler>(24000, m_rxOutputRate);
+        m_rxResamplerR = std::make_unique<Resampler>(24000, m_rxOutputRate.load());
 
     const int frames = pcm.size() / (2 * static_cast<int>(sizeof(float)));
     if (frames <= 0) return {};
@@ -1468,8 +1468,8 @@ void AudioEngine::feedAudioData(const QByteArray& pcm)
             puduSource = &m_clientPuduRxScratch;
         }
 
-        const int scopeSampleRate = m_rxOutputRate;
-        const QByteArray& resampled = (m_rxOutputRate != DEFAULT_SAMPLE_RATE) ? resampleStereo(*puduSource) : *puduSource;
+        const int scopeSampleRate = m_rxOutputRate.load();
+        const QByteArray& resampled = (m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE) ? resampleStereo(*puduSource) : *puduSource;
         const QByteArray* output = &resampled;
         QByteArray boosted;
         if (m_rxBoost.load()) {
@@ -3846,8 +3846,8 @@ void AudioEngine::processBnr(const QByteArray& stereoPcm)
         m_bnrOutBuf.remove(0, wantBytes);
 
         if (m_audioDevice && m_audioDevice->isOpen()) {
-            const int scopeSampleRate = m_rxOutputRate;
-            const QByteArray& resampled = (m_rxOutputRate != DEFAULT_SAMPLE_RATE) ? resampleStereo(chunk) : chunk;
+            const int scopeSampleRate = m_rxOutputRate.load();
+            const QByteArray& resampled = (m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE) ? resampleStereo(chunk) : chunk;
             const QByteArray* output = &resampled;
             QByteArray trimmed;
             const float trimDb = m_rxOutputTrimDb.load();
@@ -5105,9 +5105,9 @@ void AudioEngine::feedDecodedSpeech(const QByteArray& pcm)
     // m_radeRxBuffer with m_rxBuffer sample-wise so both are heard simultaneously
     // without doubling the fill rate. A dedicated resampler preserves the filter
     // state independently from the m_rxResampler used by feedAudioData().
-    if (m_rxOutputRate != DEFAULT_SAMPLE_RATE) {
+    if (m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE) {
         if (!m_radeRxResampler)
-            m_radeRxResampler = std::make_unique<Resampler>(24000, m_rxOutputRate);
+            m_radeRxResampler = std::make_unique<Resampler>(24000, m_rxOutputRate.load());
         const auto* src = reinterpret_cast<const float*>(pcm.constData());
         m_radeRxBuffer.append(
             m_radeRxResampler->processStereoToStereo(

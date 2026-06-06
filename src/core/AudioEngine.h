@@ -128,7 +128,7 @@ public:
     int  txInputSampleRate() const { return m_txInputRate; }
     int  txInputChannelCount() const { return m_txInputChannels; }
     bool txInputResamplingTo24k() const { return m_txNeedsResample; }
-    bool rxOutputResamplingActive() const { return m_rxOutputRate != DEFAULT_SAMPLE_RATE; }
+    bool rxOutputResamplingActive() const { return m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE; }
     QJsonArray audioEndpointDiagnostics() const;
 
     // Client-side PC mic gain (0-100 → 0.0-1.0, applied before Opus encoding)
@@ -672,7 +672,10 @@ private:
     std::atomic<bool>  m_muted{false};
     // RX sink device rate (negotiated via AudioFormatNegotiator). Audio is
     // resampled from the 24k canonical rate up to this when they differ (#3306).
-    int   m_rxOutputRate{DEFAULT_SAMPLE_RATE};
+    // Atomic: written from startRxStream() (GUI thread) and read from the RX
+    // drain timer lambda plus several status/scope read paths — matches the
+    // surrounding std::atomic<int> neighbours (m_rxPan, m_rxBufferCapMs).
+    std::atomic<int> m_rxOutputRate{DEFAULT_SAMPLE_RATE};
     std::unique_ptr<Resampler> m_rxResampler;       // 24k→device rate, L channel (lazy init)
     std::unique_ptr<Resampler> m_rxResamplerR;      // 24k→device rate, R channel — kept in sync with m_rxResampler
     std::unique_ptr<Resampler> m_radeRxResampler;   // separate 24k→device rate for RADE decoded speech
