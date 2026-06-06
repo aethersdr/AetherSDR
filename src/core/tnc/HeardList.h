@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QString>
 #include <QStringList>
+#include <QTimer>
 #include <QVector>
 
 namespace AetherSDR {
@@ -58,10 +59,16 @@ signals:
 private:
     void load();
     void save() const;
+    // Schedule a deferred save() if a persistence path is set. Coalesces
+    // bursts of record() — a busy APRS channel can decode hundreds of frames
+    // per minute, and a synchronous JSON rewrite per frame churns the disk
+    // for no observer-visible benefit.
+    void scheduleSave();
 
     QVector<Station> m_stations;
     QString m_path;
     int m_max{200};
+    QTimer m_saveCoalesce;  // single-shot, ~2 s; restarts on each scheduleSave()
 };
 
 } // namespace AetherSDR

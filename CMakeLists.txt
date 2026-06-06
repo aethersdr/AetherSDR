@@ -2002,6 +2002,11 @@ add_executable(tnc_terminal_test
     src/core/tnc/Ax25Connection.cpp
     src/core/tnc/HeardList.cpp
     src/core/tnc/TncTerminal.cpp
+    # HeardList now emits qCWarning(lcAx25) on persistence failure; pull in
+    # LogManager + its deps so the category symbol resolves.
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
 )
 target_include_directories(tnc_terminal_test PRIVATE src)
 target_link_libraries(tnc_terminal_test PRIVATE Qt6::Core)

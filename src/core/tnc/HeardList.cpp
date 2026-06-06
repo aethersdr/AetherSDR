@@ -1,11 +1,14 @@
 #include "core/tnc/HeardList.h"
 
+#include "core/LogManager.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QLoggingCategory>
 
 #include <algorithm>
 
@@ -32,9 +35,22 @@ QString beaconText(const QByteArray& info)
 HeardList::HeardList(QObject* parent)
     : QObject(parent)
 {
+    m_saveCoalesce.setSingleShot(true);
+    m_saveCoalesce.setInterval(2000);  // 2 s — long enough to fold a beacon
+                                       // burst, short enough that a SIGKILL
+                                       // before flush loses at most ~one cycle
+    connect(&m_saveCoalesce, &QTimer::timeout, this, [this] { save(); });
 }
 
-HeardList::~HeardList() = default;
+HeardList::~HeardList()
+{
+    // If a save was queued but the timer hasn't fired yet, flush now so we
+    // don't lose the most recent records on a clean shutdown.
+    if (m_saveCoalesce.isActive()) {
+        m_saveCoalesce.stop();
+        save();
+    }
+}
 
 void HeardList::setPersistencePath(const QString& path)
 {
@@ -69,7 +85,7 @@ void HeardList::record(const Frame& frame)
                 s.lastBeacon = beaconText(frame.info);
                 s.beaconUtc = now;
             }
-            save();
+            scheduleSave();
             emit changed();
             return;
         }
@@ -91,8 +107,15 @@ void HeardList::record(const Frame& frame)
                   [](const Station& a, const Station& b) { return a.utc > b.utc; });
         m_stations.resize(m_max);
     }
-    save();
+    scheduleSave();
     emit changed();
+}
+
+void HeardList::scheduleSave()
+{
+    if (m_path.isEmpty())
+        return;
+    m_saveCoalesce.start();  // restart timer; bursts collapse into one save
 }
 
 QVector<HeardList::Station> HeardList::stations(int max) const
@@ -170,8 +193,12 @@ void HeardList::save() const
     QJsonObject root;
     root.insert(QStringLiteral("heard"), arr);
     QFile f(m_path);
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        f.write(QJsonDocument(root).toJson());
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        qCWarning(lcAx25).noquote()
+            << "HeardList: could not write" << m_path << "—" << f.errorString();
+        return;
+    }
+    f.write(QJsonDocument(root).toJson());
 }
 
 } // namespace AetherSDR

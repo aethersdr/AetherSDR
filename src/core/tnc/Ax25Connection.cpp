@@ -200,6 +200,18 @@ void Ax25Connection::onFrameReceived(const Frame& frame)
     // peer's link state (and its prompt), so on a marginal half-duplex path this
     // is the difference between a working session and a connect that goes live
     // but never passes data. (UA and DM are handled explicitly in the switch.)
+    //
+    // Invariant — the fall-through into the switch below is load-bearing:
+    //   * enterConnected() resets V(R)=V(S)=V(A)=0, so a peer's first
+    //     post-connect I-frame at N(S)=0 lines up with the freshly-reset V(R)
+    //     and the normal I-handler accepts it. With MAXFRAME=1 (today's only
+    //     config) this is always the case.
+    //   * The normal RR/RNR/REJ handlers call ackUpTo(frame.nr); with V(A)=
+    //     V(S)=0 every legal N(R) is in-range and the ack walks zero slots.
+    // If enterConnected()'s reset block is ever changed to leave V(R) non-zero
+    // (e.g. a future MAXFRAME>1 path that pre-allocates send slots), this
+    // adoption must re-sync V(R) to frame.ns before the fall-through — or the
+    // first I-frame will be silently dropped as out-of-sequence.
     if (m_state == State::Connecting && frame.src == m_remote
         && (frame.type == FrameType::I || frame.type == FrameType::RR
             || frame.type == FrameType::RNR || frame.type == FrameType::REJ)) {

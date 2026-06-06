@@ -32,12 +32,28 @@ Dependency removals:
   declarations continue to compile without libcorrect. AetherSDR Phase 1 does
   not call them.
 
+Local patches against upstream:
+
+Any local fix we apply on top of the upstream import must be listed here so
+the next refresh doesn't silently revert it. **Re-apply every entry below
+after step 2 of the refresh notes.**
+
+- **`bitstream.h` `try_decode_frame()` — `frame_size < 18` → `< 17`**
+  ([PR #3381](https://github.com/aethersdr/AetherSDR/pull/3381)).
+  Minimum valid AX.25 frame WITH FCS is 15 bytes (14 address + 1 control)
+  plus 2 bytes of FCS = 17. A no-PID U-frame (SABM/DISC/UA/DM — every
+  connected-mode handshake frame) sits at exactly 17 bytes; the old `< 18`
+  gate dropped every one, so connected mode could never complete. This is
+  also worth pushing upstream — it's a single-byte off-by-one that bites
+  any caller doing connected mode, not just AetherSDR.
+
 Refresh notes:
 
 1. Clone upstream libmodem.
 2. Copy only the files above.
 3. Re-apply the AX.25-only trim to remove libcorrect-backed FX.25/IL2P code.
-4. Build `aether_libmodem_core` and run the AX.25 shim tests.
+4. Re-apply each entry in "Local patches against upstream" above.
+5. Build `aether_libmodem_core` and run the AX.25 shim tests.
 
 Manual RX/TX test notes:
 
