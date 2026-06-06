@@ -35,8 +35,9 @@ Dependency removals:
 Local patches against upstream:
 
 Any local fix we apply on top of the upstream import must be listed here so
-the next refresh doesn't silently revert it. **Re-apply every entry below
-after step 2 of the refresh notes.**
+the next refresh doesn't silently revert it. The numbered refresh-notes
+checklist below has a dedicated step for re-applying every entry — keep
+the list authoritative, not the prose.
 
 - **`bitstream.h` `try_decode_frame()` — `frame_size < 18` → `< 17`**
   ([PR #3381](https://github.com/aethersdr/AetherSDR/pull/3381)).

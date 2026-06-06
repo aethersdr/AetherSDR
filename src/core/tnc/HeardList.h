@@ -34,8 +34,10 @@ public:
     explicit HeardList(QObject* parent = nullptr);
     ~HeardList() override;
 
-    // Point at a JSON file to load now and persist to on every change. Pass an
-    // empty path for an in-memory-only list (the default).
+    // Point at a JSON file to load now and persist to on change (writes are
+    // coalesced through a single-shot QTimer so a beacon burst collapses into
+    // one rewrite — see scheduleSave()). Pass an empty path for an
+    // in-memory-only list (the default).
     void setPersistencePath(const QString& path);
     void setMaxStations(int n) { m_max = qBound(10, n, 5000); }
 
