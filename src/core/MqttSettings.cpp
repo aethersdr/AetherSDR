@@ -281,17 +281,84 @@ QStringList mqttUserSubscriptionTopics(const QVector<MqttTopicDef>& topics)
     return names;
 }
 
+// ── Internal topic definitions ────────────────────────────────────────────────
+// Single source of truth for internal subscribe and publish topics.  Adding
+// an entry here automatically populates the settings dialog checkbox list.
+
+const QVector<InternalMqttTopicDef>& internalMqttSubscribeTopicDefs()
+{
+    static const QVector<InternalMqttTopicDef> defs = {
+        { mqttAntennaAliasTopicPrefix() + QLatin1Char('+'),
+          QStringLiteral("Antenna name (per-port)"),  false },
+        { mqttAntennaAliasBulkTopic(),
+          QStringLiteral("Antenna names (bulk)"),     false },
+        { QString(kCwTransmitTopic),
+          QStringLiteral("CW keyer input"),           true  },
+        { QString(kAx25TxTopic),
+          QStringLiteral("AX.25 transmit"),           true  },
+    };
+    return defs;
+}
+
+const QVector<InternalMqttTopicDef>& internalMqttPublishTopicDefs()
+{
+    static const QVector<InternalMqttTopicDef> defs = {
+        { QString(kCwDecodeTopic),    QStringLiteral("CW decoded text"),             true },
+        { QString(kRadioStateTopic),  QStringLiteral("Radio VFO / mode / TX state"), true },
+        { QString(kAx25RxTopic),      QStringLiteral("AX.25 received frames"),       true },
+    };
+    return defs;
+}
+
+// ── Per-topic enable / disable (AppSettings, keyed by sanitized topic name) ──
+
+static QString topicEnabledKey(const QString& topic)
+{
+    QString key = topic;
+    key.replace(QLatin1Char('/'), QLatin1Char('_'));
+    key.replace(QLatin1Char('+'), QLatin1Char('x'));
+    return QStringLiteral("mqtt_internal_") + key;
+}
+
+bool isMqttTopicEnabled(const QString& topic)
+{
+    for (const auto& def : internalMqttSubscribeTopicDefs()) {
+        if (def.topic == topic)
+            return !def.gateable || AppSettings::instance()
+                .value(topicEnabledKey(topic), false).toBool();
+    }
+    for (const auto& def : internalMqttPublishTopicDefs()) {
+        if (def.topic == topic)
+            return !def.gateable || AppSettings::instance()
+                .value(topicEnabledKey(topic), false).toBool();
+    }
+    return false;
+}
+
+void setMqttTopicEnabled(const QString& topic, bool enabled)
+{
+    AppSettings::instance().setValue(topicEnabledKey(topic), enabled);
+    AppSettings::instance().save();
+}
+
 QStringList internalMqttSubscriptionTopics()
 {
-    return {
-        mqttAntennaAliasTopicPrefix() + QStringLiteral("+"),
-        mqttAntennaAliasBulkTopic(),
-    };
+    QStringList topics;
+    for (const auto& def : internalMqttSubscribeTopicDefs()) {
+        if (isMqttTopicEnabled(def.topic))
+            topics.append(def.topic);
+    }
+    return topics;
 }
 
 QStringList internalMqttPublishTopics()
 {
-    return { QString(kCwDecodeTopic) };
+    QStringList topics;
+    for (const auto& def : internalMqttPublishTopicDefs()) {
+        if (isMqttTopicEnabled(def.topic))
+            topics.append(def.topic);
+    }
+    return topics;
 }
 
 QStringList mqttSubscriptionTopics(const QStringList& userTopics)

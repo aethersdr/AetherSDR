@@ -141,7 +141,19 @@ void MqttApplet::setMqttClient(MqttClient* client)
     connect(client, &MqttClient::connectionError, this, [this](const QString& err) {
         updateStatus(err, false);
     });
-    connect(client, &MqttClient::messageReceived, this, &MqttApplet::onMessageReceived);
+    connect(client, &MqttClient::messageReceived,  this, &MqttApplet::onMessageReceived);
+    connect(client, &MqttClient::messagePublished, this, [this](const QString& topic, const QByteArray& payload) {
+        QString shortTopic = topic.section('/', -1);
+        if (shortTopic.isEmpty()) shortTopic = topic;
+        m_messageLog->append(QStringLiteral("TX %1: %2").arg(shortTopic, QString::fromUtf8(payload).left(80)));
+        QTextDocument* doc = m_messageLog->document();
+        while (doc->blockCount() > 50) {
+            QTextCursor cursor(doc->begin());
+            cursor.select(QTextCursor::BlockUnderCursor);
+            cursor.removeSelectedText();
+            cursor.deleteChar();
+        }
+    });
 }
 
 void MqttApplet::refreshSettings()

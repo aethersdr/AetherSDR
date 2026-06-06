@@ -233,9 +233,11 @@ void MqttClient::publish(const QString& topic, const QByteArray& payload)
 {
 #ifdef HAVE_MQTT
     if (!m_connected || !m_mosq) return;
+    qCDebug(lcMqtt) << "MqttClient: publish" << topic << payload;
     mosquitto_publish(m_mosq, nullptr,
         topic.toUtf8().constData(),
         payload.size(), payload.constData(), 0, false);
+    emit messagePublished(topic, payload);
 #else
     Q_UNUSED(topic); Q_UNUSED(payload);
 #endif
@@ -294,6 +296,7 @@ void MqttClient::onMessage(struct mosquitto*, void* obj,
     QString topic = QString::fromUtf8(msg->topic);
     QByteArray payload(static_cast<const char*>(msg->payload), msg->payloadlen);
     QMetaObject::invokeMethod(self, [self, topic, payload] {
+        qCDebug(lcMqtt) << "MqttClient: received" << topic << payload;
         emit self->messageReceived(topic, payload);
     });
 }

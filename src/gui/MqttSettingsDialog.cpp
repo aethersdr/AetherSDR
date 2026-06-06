@@ -166,11 +166,18 @@ void MqttSettingsDialog::buildUi()
 
     auto* internalGroup = new QGroupBox(tr("Internal AetherSDR Topics"));
     auto* internalLayout = new QVBoxLayout(internalGroup);
-    auto* internalText = new QLabel(
-        tr("Subscribed automatically whenever MQTT connects; these topics are not removable:\n%1")
-            .arg(internalMqttSubscriptionTopics().join(QStringLiteral("\n"))));
-    internalText->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    internalLayout->addWidget(internalText);
+    for (const auto& def : internalMqttSubscribeTopicDefs()) {
+        auto* cb = new QCheckBox(
+            QStringLiteral("%1  —  %2").arg(def.topic, def.description));
+        cb->setToolTip(def.topic);
+        if (!def.gateable) {
+            cb->setChecked(true);
+            cb->setEnabled(false);
+            cb->setStyleSheet(QStringLiteral("QCheckBox:disabled { color: #556; }"));
+        }
+        m_internalSubBoxes.append(cb);
+        internalLayout->addWidget(cb);
+    }
     topicsLayout->addWidget(internalGroup);
     tabs->addTab(topicsTab, tr("Subscriptions"));
 
@@ -200,11 +207,18 @@ void MqttSettingsDialog::buildUi()
 
     auto* pubInternalGroup = new QGroupBox(tr("Internal AetherSDR Topics"));
     auto* pubInternalLayout = new QVBoxLayout(pubInternalGroup);
-    auto* pubInternalText = new QLabel(
-        tr("Published automatically whenever MQTT is connected; these topics are not user-configurable:\n"
-           "%1").arg(internalMqttPublishTopics().join(QStringLiteral("\n"))));
-    pubInternalText->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    pubInternalLayout->addWidget(pubInternalText);
+    for (const auto& def : internalMqttPublishTopicDefs()) {
+        auto* cb = new QCheckBox(
+            QStringLiteral("%1  —  %2").arg(def.topic, def.description));
+        cb->setToolTip(def.topic);
+        if (!def.gateable) {
+            cb->setChecked(true);
+            cb->setEnabled(false);
+            cb->setStyleSheet(QStringLiteral("QCheckBox:disabled { color: #556; }"));
+        }
+        m_internalPubBoxes.append(cb);
+        pubInternalLayout->addWidget(cb);
+    }
     buttonsLayout->addWidget(pubInternalGroup);
 
     tabs->addTab(buttonsTab, tr("Publish Buttons"));
@@ -235,6 +249,18 @@ void MqttSettingsDialog::loadSettings()
     m_tlsCheck->setChecked(config.useTls);
     m_caFileEdit->setText(config.caFile);
 
+    const auto& subDefs = internalMqttSubscribeTopicDefs();
+    for (int i = 0; i < m_internalSubBoxes.size(); ++i) {
+        if (i < subDefs.size() && subDefs[i].gateable)
+            m_internalSubBoxes[i]->setChecked(isMqttTopicEnabled(subDefs[i].topic));
+    }
+
+    const auto& pubDefs = internalMqttPublishTopicDefs();
+    for (int i = 0; i < m_internalPubBoxes.size(); ++i) {
+        if (i < pubDefs.size() && pubDefs[i].gateable)
+            m_internalPubBoxes[i]->setChecked(isMqttTopicEnabled(pubDefs[i].topic));
+    }
+
     m_topicsTable->setRowCount(0);
     for (const MqttTopicDef& def : loadMqttTopicConfig()) {
         addTopicRow(def);
@@ -257,6 +283,19 @@ void MqttSettingsDialog::saveSettings()
         m_caFileEdit->text().trimmed(),
     };
     saveMqttConnectionConfig(config);
+
+    const auto& subDefs = internalMqttSubscribeTopicDefs();
+    for (int i = 0; i < m_internalSubBoxes.size(); ++i) {
+        if (i < subDefs.size() && subDefs[i].gateable)
+            setMqttTopicEnabled(subDefs[i].topic, m_internalSubBoxes[i]->isChecked());
+    }
+
+    const auto& pubDefs = internalMqttPublishTopicDefs();
+    for (int i = 0; i < m_internalPubBoxes.size(); ++i) {
+        if (i < pubDefs.size() && pubDefs[i].gateable)
+            setMqttTopicEnabled(pubDefs[i].topic, m_internalPubBoxes[i]->isChecked());
+    }
+
     saveMqttTopicConfig(topicRows());
     saveMqttButtonConfig(buttonRows());
     savePasswordToKeychain(m_passEdit->text());

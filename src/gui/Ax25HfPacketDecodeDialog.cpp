@@ -14,6 +14,13 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#ifdef HAVE_MQTT
+#include "core/MqttClient.h"
+#include "core/MqttSettings.h"
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#endif
 
 #include <QAction>
 #include <QButtonGroup>
@@ -1259,12 +1266,17 @@ void Ax25HfPacketDecodeDialog::finishAudioCapture(bool save)
 
 void Ax25HfPacketDecodeDialog::startTransmitFromUi()
 {
+    if (!m_txText)
+        return;
+    startTransmit(m_txText->text());
+}
+
+void Ax25HfPacketDecodeDialog::startTransmit(const QString& text)
+{
     if (m_txActive || m_txPendingStream) {
         appendSystemLine(QStringLiteral("TX already in progress."));
         return;
     }
-    if (!m_txText)
-        return;
     if (!m_audio || !m_radio) {
         appendSystemLine(QStringLiteral("TX unavailable: audio engine or radio model is not ready."));
         return;
@@ -1274,11 +1286,6 @@ void Ax25HfPacketDecodeDialog::startTransmitFromUi()
         return;
     }
 
-    startTransmit(m_txText->text());
-}
-
-void Ax25HfPacketDecodeDialog::startTransmit(const QString& text)
-{
     Ax25TransmitResult tx = ax25BuildTransmitAudio(m_shimConfig, text, defaultTransmitSource());
     if (!tx.ok) {
         appendSystemLine(QStringLiteral("TX packetization failed: %1.").arg(tx.error));
@@ -1330,6 +1337,50 @@ void Ax25HfPacketDecodeDialog::beginTransmission(const Ax25TransmitResult& tx, b
 
     beginTransmitWhenReady();
 }
+
+#ifdef HAVE_MQTT
+void Ax25HfPacketDecodeDialog::setMqttClient(MqttClient* mqtt)
+{
+    if (m_mqtt == mqtt)
+        return;
+    if (m_mqtt)
+        disconnect(m_mqtt, &MqttClient::messageReceived,
+                   this, &Ax25HfPacketDecodeDialog::handleMqttMessage);
+    m_mqtt = mqtt;
+    if (m_mqtt)
+        connect(m_mqtt, &MqttClient::messageReceived,
+                this, &Ax25HfPacketDecodeDialog::handleMqttMessage);
+}
+
+void Ax25HfPacketDecodeDialog::publishFrameMqtt(const Ax25DecodedFrame& frame)
+{
+    if (!m_mqtt)
+        return;
+    QString display = frame.source + QStringLiteral(">") + frame.destination;
+    if (!frame.path.isEmpty())
+        display += QStringLiteral(",") + frame.path.join(QStringLiteral(","));
+    display += QStringLiteral(":")
+        + (frame.payloadText.isEmpty() ? frame.payloadHex : frame.payloadText);
+    QJsonObject obj;
+    obj[QStringLiteral("timestamp")] = frame.timestampUtc.toString(Qt::ISODateWithMs);
+    obj[QStringLiteral("source")]    = frame.source;
+    obj[QStringLiteral("dest")]      = frame.destination;
+    if (!frame.path.isEmpty())
+        obj[QStringLiteral("path")] = QJsonArray::fromStringList(frame.path);
+    obj[QStringLiteral("payload")]   = frame.payloadText.isEmpty() ? frame.payloadHex : frame.payloadText;
+    obj[QStringLiteral("display")]   = display;
+    obj[QStringLiteral("confidence")] = frame.confidenceOrQuality;
+    m_mqtt->publish(QString::fromLatin1(kAx25RxTopic),
+                    QJsonDocument(obj).toJson(QJsonDocument::Compact));
+}
+
+void Ax25HfPacketDecodeDialog::handleMqttMessage(const QString& topic, const QByteArray& payload)
+{
+    if (topic != QString::fromLatin1(kAx25TxTopic))
+        return;
+    startTransmit(QString::fromUtf8(payload).trimmed());
+}
+#endif
 
 void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
 {
@@ -1577,6 +1628,9 @@ void Ax25HfPacketDecodeDialog::appendFrame(const Ax25DecodedFrame& frame)
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
     if (m_packetActivity)
         m_packetActivity->recordFrame();
+#ifdef HAVE_MQTT
+    publishFrameMqtt(frame);
+#endif
     refreshStatus();
 }
 

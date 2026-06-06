@@ -29,6 +29,9 @@ namespace AetherSDR {
 class AudioEngine;
 class HeardList;
 class KissTncServer;
+#ifdef HAVE_MQTT
+class MqttClient;
+#endif
 class PacketActivityWidget;
 class PmsMailbox;
 class RadioModel;
@@ -88,12 +91,16 @@ public:
     ~Ax25HfPacketDecodeDialog() override;
 
     void setAttachedSlice(SliceModel* slice);
+#ifdef HAVE_MQTT
+    void setMqttClient(MqttClient* mqtt);
+#endif
 
 protected:
     // Command history (Up/Down) on the terminal input line.
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    Ax25TonePolarity selectedTonePolarity() const;
     void setModemProfile(Ax25ModemProfile profile, bool persist);
     void setDecodeEnabled(bool enabled);
     void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
@@ -142,6 +149,10 @@ private:
     QString formatTerminalLine(const Ax25DecodedFrame& frame) const;
     QString defaultTransmitSource() const;
     QString transmitSliceSummary() const;
+#ifdef HAVE_MQTT
+    void publishFrameMqtt(const Ax25DecodedFrame& frame);
+    void handleMqttMessage(const QString& topic, const QByteArray& payload);
+#endif
 
     AudioEngine* m_audio{nullptr};
     RadioModel* m_radio{nullptr};
@@ -151,6 +162,9 @@ private:
     QStackedWidget* m_tabStack{nullptr};
     QAbstractButton* m_ax25Tab{nullptr};
     QAbstractButton* m_kissTab{nullptr};
+#ifdef HAVE_MQTT
+    QPointer<MqttClient> m_mqtt;
+#endif
     QRadioButton* m_hf300Profile{nullptr};
     QRadioButton* m_vhf1200Profile{nullptr};
     QCheckBox* m_enableDecode{nullptr};
