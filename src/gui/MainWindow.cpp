@@ -10579,8 +10579,13 @@ void MainWindow::onConnectionStateChanged(bool connected)
     // Pause/resume the discovery re-bind loop in step with the connection
     // lifecycle.  Without this the 5-second close()+bind() churn ran for the
     // whole session on routed/VPN ("Connect by IP") sessions, where UDP
-    // broadcasts never reach the client by design (#3420).
-    m_discovery.setConnected(connected);
+    // broadcasts never reach the client by design (#3420).  Routed and
+    // SmartLink/WAN sessions cannot receive local broadcasts at all, so flag
+    // them as "remote" to fully quiesce discovery rather than just pausing the
+    // re-bind churn.
+    const bool remoteConnection =
+        m_radioModel.isWan() || m_radioModel.lastRadioInfo().isRouted;
+    m_discovery.setConnected(connected, remoteConnection);
 
     if (connected) {
         m_suppressStartupPanLayoutRearrange = false;

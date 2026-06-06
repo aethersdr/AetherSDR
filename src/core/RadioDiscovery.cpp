@@ -96,29 +96,37 @@ void RadioDiscovery::stopListening()
     m_socket.close();
 }
 
-void RadioDiscovery::setConnected(bool connected)
+void RadioDiscovery::setConnected(bool connected, bool remote)
 {
     if (m_connected == connected)
         return;
     m_connected = connected;
 
     if (connected) {
-        // Active radio session: stop the 5-second re-bind churn.  The socket
-        // stays bound so passive discovery (Multi-Flex / other-GUI-client
-        // updates) still works on local networks.  On routed/VPN the
-        // broadcasts wouldn't reach us anyway, so this just halts the
-        // unbounded close()+bind() loop the issue described (#3420).
+        // Active radio session: always stop the 5-second re-bind churn.
         m_rebindTimer.stop();
-        qCDebug(lcDiscovery) << "RadioDiscovery: radio connected — pausing re-bind loop";
-    } else {
-        // Disconnected: reset the retry budget and, if we never actually
-        // received a broadcast this session and the socket is still bound,
-        // resume the re-bind loop with a fresh count.
-        m_rebindAttempts = 0;
-        if (!m_receivedAny && m_socket.state() == QAbstractSocket::BoundState) {
-            m_rebindTimer.start();
-            qCDebug(lcDiscovery) << "RadioDiscovery: radio disconnected — resuming re-bind loop";
+        if (remote) {
+            // Routed/VPN/SmartLink: local UDP broadcasts cannot reach us by
+            // design, so keeping the socket bound buys nothing.  Fully quiesce
+            // — stop the stale sweep and release the socket — so discovery is
+            // completely idle for the rest of the session (#3420).
+            m_staleTimer.stop();
+            m_socket.close();
+            qCDebug(lcDiscovery) << "RadioDiscovery: remote radio connected — discovery fully paused";
+        } else {
+            // Local session: keep the socket bound and the stale sweep running
+            // so Multi-Flex / other-GUI-client broadcasts still refresh the
+            // radio list passively; only the re-bind churn stops.
+            qCDebug(lcDiscovery) << "RadioDiscovery: local radio connected — pausing re-bind loop";
         }
+    } else {
+        // Disconnected: resume normal discovery so the next connect (possibly a
+        // different local radio) can be found.  startListening() re-binds the
+        // socket if we released it, restarts the stale sweep, and re-arms the
+        // re-bind loop with a fresh retry budget when no broadcast has arrived.
+        m_rebindAttempts = 0;
+        qCDebug(lcDiscovery) << "RadioDiscovery: radio disconnected — resuming discovery";
+        startListening();
     }
 }
 
