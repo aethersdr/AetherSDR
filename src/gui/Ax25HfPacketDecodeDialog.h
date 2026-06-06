@@ -5,6 +5,7 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QPointer>
 #include <QQueue>
@@ -28,21 +29,47 @@ class PacketActivityWidget;
 class RadioModel;
 class SliceModel;
 
-// AppSettings keys used by the AetherModem KISS TNC. Promoted to the header
-// so MainWindow::startKissTncOnStartupIfConfigured (which constructs the
-// dialog hidden + persistent at launch) reads from the same source of truth
-// the dialog writes to — a rename here can't silently desync the two sides.
-namespace TncSettings {
-constexpr auto kEnabled        = "AetherModemKissTncEnabled";
-constexpr auto kStartOnStartup = "AetherModemKissTncStartOnStartup";
-constexpr auto kPort           = "AetherModemKissTncPort";
-constexpr int  kDefaultPort    = 8001;
-// Lowest TCP port the spinbox lets the operator pick. Ports below 1024 need
-// root on macOS / Linux; the bind would fail silently into m_lastError and
-// the listener would stay off. No reason to expose that foot-gun.
-constexpr int  kMinPort        = 1024;
-constexpr int  kMaxPort        = 65535;
-}
+// Persistence for the AetherModem KISS TNC. Per Constitution Principle V,
+// new feature configuration lives as a nested JSON blob under one root key
+// rather than a stack of flat AppSettings entries. Mirrors the
+// CwDecodeSettings pattern.
+//
+// One-shot migration from the legacy flat keys is in migrateLegacy(); call
+// once at startup before any reader runs.
+class TncSettings {
+public:
+    // Defaults — kept as constants for the spinbox/UI to bound against.
+    static constexpr int kDefaultPort = 8001;  // Dire Wolf convention
+    // Lowest TCP port the spinbox lets the operator pick. Ports below 1024
+    // need root on macOS / Linux; the bind would fail silently into
+    // m_lastError and the listener would stay off. No reason to expose that
+    // foot-gun.
+    static constexpr int kMinPort = 1024;
+    static constexpr int kMaxPort = 65535;
+
+    static bool enabled()         { return readObj().value("enabled").toString("False") == "True"; }
+    static bool startOnStartup()  { return readObj().value("startOnStartup").toString("False") == "True"; }
+    static int  port()
+    {
+        const int p = readObj().value("port").toString(QString::number(kDefaultPort)).toInt();
+        if (p < kMinPort || p > kMaxPort) return kDefaultPort;
+        return p;
+    }
+
+    static void setEnabled(bool on);
+    static void setStartOnStartup(bool on);
+    static void setPort(int p);
+
+    // One-shot migration from the three legacy flat keys
+    // (AetherModemKissTncEnabled / AetherModemKissTncStartOnStartup /
+    // AetherModemKissTncPort) into the nested blob. Safe to call repeatedly;
+    // returns immediately if the nested blob already exists.
+    static void migrateLegacy();
+
+private:
+    static QJsonObject readObj();
+    static void write(const QJsonObject& o);
+};
 
 class Ax25HfPacketDecodeDialog : public PersistentDialog {
     Q_OBJECT
@@ -154,6 +181,11 @@ private:
     QLabel* m_tncStatusDot{nullptr};
     QLabel* m_tncStatusValue{nullptr};
     QQueue<QByteArray> m_kissTxQueue;
+    // Number of 250 ms radio-busy retries currently elapsed on the head-of-
+    // queue frame. Capped (kMaxKissTxBusyRetries) so a stuck-transmitting
+    // radio can't spin maybeStartNextKissTx() forever and starve later
+    // frames behind it. Reset on each new dequeue.
+    int m_kissTxBusyRetries{0};
     quint64 m_kissTxCount{0};
     quint64 m_kissRxCount{0};
 };

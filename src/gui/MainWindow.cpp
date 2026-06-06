@@ -6425,20 +6425,37 @@ void MainWindow::showNetworkDiagnosticsDialog()
 void MainWindow::showAx25HfPacketDecodeDialog()
 {
     SliceModel* slice = activeSlice();
-    showOrRaisePersistent(m_ax25HfPacketDecodeDialog, m_audio, &m_radioModel, slice);
-    if (m_ax25HfPacketDecodeDialog)
-        m_ax25HfPacketDecodeDialog->setAttachedSlice(slice);
+
+    // Construct on first open if it didn't already come up via
+    // startKissTncOnStartupIfConfigured(). Intentionally NOT using
+    // showOrRaisePersistent() here because that template sets
+    // WA_DeleteOnClose: closing the window would destroy the dialog and
+    // along with it the KISS TCP server, dropping every connected client
+    // without warning. The TNC server lifecycle is decoupled from the
+    // window's open/close cycle — the dialog stays alive as long as
+    // MainWindow does and is just hidden on close.
+    if (!m_ax25HfPacketDecodeDialog) {
+        auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, slice, this);
+        dlg->setFramelessMode(
+            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+        m_ax25HfPacketDecodeDialog = dlg;
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+    }
+    m_ax25HfPacketDecodeDialog->setAttachedSlice(slice);
+    m_ax25HfPacketDecodeDialog->show();
+    m_ax25HfPacketDecodeDialog->raise();
+    m_ax25HfPacketDecodeDialog->activateWindow();
 }
 
 void MainWindow::startKissTncOnStartupIfConfigured()
 {
     if (m_ax25HfPacketDecodeDialog)
         return; // already constructed (e.g. user opened the window)
-    // Same key the dialog reads in its own constructor — promoted to the
-    // dialog header so both sides can't drift if the key is ever renamed.
-    if (AppSettings::instance()
-            .value(TncSettings::kStartOnStartup, "False").toString()
-                != QStringLiteral("True"))
+    // One-shot migration from legacy flat keys (AetherModemKissTnc*) into
+    // the nested-JSON blob (Constitution Principle V). Safe to call on
+    // every startup — no-op once the blob exists.
+    TncSettings::migrateLegacy();
+    if (!TncSettings::startOnStartup())
         return;
 
     // Construct the AetherModem window hidden and persistent (no WA_DeleteOnClose)

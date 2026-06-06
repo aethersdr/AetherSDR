@@ -31,6 +31,8 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QTimer>
@@ -47,13 +49,21 @@ namespace {
 
 constexpr auto kPacketDecoderProfileSetting = "Ax25PacketDecoderProfile";
 constexpr auto kPacketDecoderDebugSetting = "Ax25PacketDecoderDiagnosticsDebug";
-// TNC setting keys + defaults now live in the header (TncSettings namespace)
-// so MainWindow can read the same constants the dialog writes. Aliased here
-// for unchanged call-site readability.
-constexpr auto kTncEnabledSetting        = TncSettings::kEnabled;
-constexpr auto kTncStartOnStartupSetting = TncSettings::kStartOnStartup;
-constexpr auto kTncPortSetting           = TncSettings::kPort;
-constexpr int  kTncDefaultPort           = TncSettings::kDefaultPort;
+// TNC settings live as nested JSON under "AetherModemKissTnc" — see
+// TncSettings class in the header. Legacy flat-key migration in
+// TncSettings::migrateLegacy() is run from MainWindow at startup.
+constexpr auto kTncSettingsKey   = "AetherModemKissTnc";
+
+// Symmetry with KissTncServer's kMaxWriteBacklogBytes on the RX path: cap
+// the TX queue so a misbehaving KISS client pushing frames faster than RF
+// can drain them can't grow it without bound. Drop-oldest on overflow
+// (oldest is the most-stale; better to lose old data than block new).
+constexpr int kMaxKissTxQueueDepth   = 64;
+// Maximum 250 ms radio-busy retries per head-of-queue frame before we
+// abandon it and try the next one. 60 × 250 ms = 15 s — long enough to
+// ride out an ATU tune or a long voice transmission, short enough that a
+// stuck-PTT radio doesn't permanently jam the queue.
+constexpr int kMaxKissTxBusyRetries  = 60;
 constexpr int kAudioCaptureSeconds = 180;
 constexpr int kTxDaxSettleMs = 150;
 constexpr int kTxLeadMs = 200;
@@ -377,6 +387,72 @@ bool writeMonoFloatWav(const QString& path, const QByteArray& pcm, int sampleRat
 }
 
 } // namespace
+
+// ─────────────────────────────────────────────────────────────────────────
+// TncSettings — nested-JSON persistence (Constitution Principle V).
+// ─────────────────────────────────────────────────────────────────────────
+
+QJsonObject TncSettings::readObj()
+{
+    const QString json =
+        AppSettings::instance().value(kTncSettingsKey, QString{}).toString();
+    if (json.isEmpty()) return {};
+    return QJsonDocument::fromJson(json.toUtf8()).object();
+}
+
+void TncSettings::write(const QJsonObject& o)
+{
+    auto& s = AppSettings::instance();
+    s.setValue(kTncSettingsKey,
+               QString::fromUtf8(
+                   QJsonDocument(o).toJson(QJsonDocument::Compact)));
+    s.save();
+}
+
+void TncSettings::setEnabled(bool on)
+{
+    QJsonObject o = readObj();
+    o["enabled"] = on ? QStringLiteral("True") : QStringLiteral("False");
+    write(o);
+}
+
+void TncSettings::setStartOnStartup(bool on)
+{
+    QJsonObject o = readObj();
+    o["startOnStartup"] = on ? QStringLiteral("True") : QStringLiteral("False");
+    write(o);
+}
+
+void TncSettings::setPort(int p)
+{
+    if (p < kMinPort || p > kMaxPort) p = kDefaultPort;
+    QJsonObject o = readObj();
+    o["port"] = QString::number(p);
+    write(o);
+}
+
+void TncSettings::migrateLegacy()
+{
+    auto& s = AppSettings::instance();
+    if (s.contains(kTncSettingsKey)) return;  // already migrated
+
+    // Read the three legacy flat keys with the same defaults the old code used.
+    const QString enabledStr        = s.value("AetherModemKissTncEnabled",        "False").toString();
+    const QString startOnStartupStr = s.value("AetherModemKissTncStartOnStartup", "False").toString();
+    const int     portInt           = s.value("AetherModemKissTncPort",
+                                              QString::number(kDefaultPort)).toString().toInt();
+
+    QJsonObject o;
+    o["enabled"]        = enabledStr;
+    o["startOnStartup"] = startOnStartupStr;
+    o["port"]           = QString::number(
+        (portInt >= kMinPort && portInt <= kMaxPort) ? portInt : kDefaultPort);
+    write(o);
+
+    // The legacy flat keys are left in place — AppSettings is XML and
+    // a future cleanup PR can drop them once we know no other reader
+    // still touches them. The nested blob is now authoritative.
+}
 
 class PacketActivityWidget final : public QWidget {
 public:
@@ -767,13 +843,10 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
         setTncEnabled(on, true);
     });
     connect(m_tncStartOnStartup, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(kTncStartOnStartupSetting,
-                                         on ? QStringLiteral("True") : QStringLiteral("False"));
-        AppSettings::instance().save();
+        TncSettings::setStartOnStartup(on);
     });
     connect(m_tncPort, qOverload<int>(&QSpinBox::valueChanged), this, [this](int value) {
-        AppSettings::instance().setValue(kTncPortSetting, QString::number(value));
-        AppSettings::instance().save();
+        TncSettings::setPort(value);
         if (m_tncEnable && m_tncEnable->isChecked()) {
             appendSystemLine(QStringLiteral("KISS TNC port changed to %1; restarting listener.")
                 .arg(value));
@@ -1674,7 +1747,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildKissTncPage()
     portLayout->addWidget(sectionLabel(QStringLiteral("TCP PORT"), portCell));
     m_tncPort = new QSpinBox(portCell);
     m_tncPort->setRange(TncSettings::kMinPort, TncSettings::kMaxPort);
-    m_tncPort->setValue(kTncDefaultPort);
+    m_tncPort->setValue(TncSettings::kDefaultPort);
     m_tncPort->setMaximumWidth(140);
     portLayout->addWidget(m_tncPort);
     controls->addWidget(portCell, 1);
@@ -1699,11 +1772,8 @@ QWidget* Ax25HfPacketDecodeDialog::buildKissTncPage()
     layout->addStretch(1);
 
     // Seed control values from settings (before signals are wired in the ctor).
-    m_tncPort->setValue(AppSettings::instance()
-        .value(kTncPortSetting, QString::number(kTncDefaultPort)).toInt());
-    m_tncStartOnStartup->setChecked(AppSettings::instance()
-        .value(kTncStartOnStartupSetting, QStringLiteral("False")).toString()
-            == QStringLiteral("True"));
+    m_tncPort->setValue(TncSettings::port());
+    m_tncStartOnStartup->setChecked(TncSettings::startOnStartup());
 
     return page;
 }
@@ -1711,9 +1781,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildKissTncPage()
 void Ax25HfPacketDecodeDialog::setTncEnabled(bool enabled, bool persist)
 {
     if (persist) {
-        AppSettings::instance().setValue(kTncEnabledSetting,
-            enabled ? QStringLiteral("True") : QStringLiteral("False"));
-        AppSettings::instance().save();
+        TncSettings::setEnabled(enabled);
     }
 
     if (enabled) {
@@ -1722,7 +1790,8 @@ void Ax25HfPacketDecodeDialog::setTncEnabled(bool enabled, bool persist)
             appendSystemLine(QStringLiteral("Enabling the modem for the KISS TNC."));
             m_enableDecode->setChecked(true);
         }
-        const quint16 port = static_cast<quint16>(m_tncPort ? m_tncPort->value() : kTncDefaultPort);
+        const quint16 port = static_cast<quint16>(
+            m_tncPort ? m_tncPort->value() : TncSettings::kDefaultPort);
         if (!m_kissServer->start(port) && m_tncEnable) {
             QSignalBlocker blocker(m_tncEnable);
             m_tncEnable->setChecked(false);
@@ -1735,10 +1804,7 @@ void Ax25HfPacketDecodeDialog::setTncEnabled(bool enabled, bool persist)
 
 void Ax25HfPacketDecodeDialog::applyTncStartOnStartup()
 {
-    const bool startOnStartup = AppSettings::instance()
-        .value(kTncStartOnStartupSetting, QStringLiteral("False")).toString()
-            == QStringLiteral("True");
-    if (startOnStartup && m_tncEnable) {
+    if (TncSettings::startOnStartup() && m_tncEnable) {
         appendSystemLine(QStringLiteral("KISS TNC: start-on-startup enabled; starting listener."));
         m_tncEnable->setChecked(true); // fires setTncEnabled() via the toggled connection
     }
@@ -1750,7 +1816,24 @@ void Ax25HfPacketDecodeDialog::handleKissFrameFromClient(const QByteArray& ax25N
         return;
     if (!m_audio || !m_radio) {
         appendSystemLine(QStringLiteral("KISS TX dropped: audio engine or radio not ready."));
+        qCWarning(lcAx25).noquote()
+            << "KISS TX dropped: audio engine or radio not ready (queue size:"
+            << m_kissTxQueue.size() << ").";
         return;
+    }
+    // Cap the queue to prevent a misbehaving KISS client (or a stalled
+    // PTT-deny on the radio) from growing it without bound. Drop the
+    // oldest pending frame — newer data is more useful than stale
+    // backlog. Symmetric with KissTncServer::kMaxWriteBacklogBytes on
+    // the RX path.
+    while (m_kissTxQueue.size() >= kMaxKissTxQueueDepth) {
+        m_kissTxQueue.dequeue();
+        appendSystemLine(QStringLiteral(
+            "KISS TX queue full (%1 frames); dropping oldest pending frame.")
+            .arg(kMaxKissTxQueueDepth));
+        qCWarning(lcAx25).noquote()
+            << "KISS TX queue full; dropping oldest pending frame. cap="
+            << kMaxKissTxQueueDepth;
     }
     m_kissTxQueue.enqueue(ax25NoFcs);
     ++m_kissTxCount;
@@ -1765,15 +1848,44 @@ void Ax25HfPacketDecodeDialog::maybeStartNextKissTx()
     if (m_txActive || m_txPendingStream)
         return; // finishTransmit() re-drains when the current TX completes
     if (!m_audio || !m_radio) {
+        const int dropped = m_kissTxQueue.size();
         m_kissTxQueue.clear();
+        m_kissTxBusyRetries = 0;
+        if (dropped > 0) {
+            appendSystemLine(QStringLiteral(
+                "KISS TX backlog (%1 frames) dropped: audio engine or radio went away.")
+                .arg(dropped));
+            qCWarning(lcAx25).noquote()
+                << "KISS TX backlog dropped — audio/radio not ready. frames="
+                << dropped;
+        }
         return;
     }
     if (m_radio->isRadioTransmitting() || m_radio->transmitModel().isTransmitting()) {
+        ++m_kissTxBusyRetries;
+        if (m_kissTxBusyRetries > kMaxKissTxBusyRetries) {
+            // Give up on the head-of-queue frame and move on. A stuck PTT
+            // shouldn't permanently jam every subsequent frame behind it.
+            m_kissTxQueue.dequeue();
+            const int retries = m_kissTxBusyRetries;
+            m_kissTxBusyRetries = 0;
+            appendSystemLine(QStringLiteral(
+                "KISS TX abandoned head frame: radio stayed transmitting for "
+                "%1 retries (~%2 s); trying next.")
+                .arg(retries).arg(retries / 4));
+            qCWarning(lcAx25).noquote()
+                << "KISS TX abandoned head-of-queue frame after radio-busy "
+                   "retries. retries=" << retries
+                << "cap=" << kMaxKissTxBusyRetries;
+            QTimer::singleShot(0, this, [this] { maybeStartNextKissTx(); });
+            return;
+        }
         QTimer::singleShot(250, this, [this] { maybeStartNextKissTx(); }); // radio busy; retry
         return;
     }
 
     const QByteArray frame = m_kissTxQueue.dequeue();
+    m_kissTxBusyRetries = 0;
     Ax25TransmitResult tx = m_shim->buildTransmitAudioFromFrame(frame);
     if (!tx.ok) {
         appendSystemLine(QStringLiteral("KISS TX packetization failed: %1.").arg(tx.error));
