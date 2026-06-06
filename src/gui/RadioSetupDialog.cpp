@@ -601,7 +601,12 @@ QWidget* RadioSetupDialog::buildRadioTab()
             "QPushButton { background: #3a1a1a; color: #ffb080; border: 1px solid #6e3030;"
             " border-radius: 3px; font-size: 11px; font-weight: bold; padding: 3px 10px; }"
             "QPushButton:hover { background: #4a2020; }"
-            "QPushButton:disabled { background: {{color.background.1}}; color: {{color.meter.bar.fill}}; border-color: {{color.background.2}}; }");
+            // Disabled (radio disconnected/reconnecting): keep the button clearly
+            // visible as a greyed-out control. The previous tokens
+            // (background.1 / meter.bar.fill / background.2) were all dim blue-greys
+            // that blended into the dialog, making the button look absent rather
+            // than disabled (#3334 follow-up).
+            "QPushButton:disabled { background: #2a1818; color: #8a6055; border-color: #4a2828; }");
         // Only enable when actually connected; subscribe so disconnect/reconnect
         // disables/re-enables the button without the user having to reopen the
         // dialog. rebootRadio() also early-returns on disconnected, but the
