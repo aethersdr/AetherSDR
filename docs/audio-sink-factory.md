@@ -146,7 +146,7 @@ rate ones; the others are enforced in the router/wrapper.
 3. **RX speaker** ✅ — `AudioEngine::startRxStream()` now walks the factory's
    Float ladder with real `start()` attempts instead of two forked per-OS
    `#ifdef` blocks. The `m_resampleTo48k` bool was generalized to an
-   `m_rxOutputRate` int so a 44.1k device resamples 24k→44.1k correctly instead
+   `m_rxOutputRate` `std::atomic<int>` so a 44.1k device resamples 24k→44.1k correctly instead
    of failing. Behaviour is identical for normal devices (Win/Mac→48k,
    Linux→24k native); the visible changes are (a) a 44.1k-Float-only output now
    works, and (b) the Quindar local monitor now opens on Windows too (the old
