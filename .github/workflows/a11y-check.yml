@@ -73,7 +73,7 @@ jobs:
 
           ${SUMMARY}
 
-          See [\`docs/a11y.md\`](../blob/main/docs/a11y.md) for the canonical
+          See [\`docs/a11y.md\`](docs/a11y.md) for the canonical
           Qt patterns (\`setAccessibleName\`, \`QAccessibleValueChangeEvent\`,
           \`QAccessibleInterface\` subclasses, etc.). Structural remediation
           (keyboard navigation, custom \`QAccessibleInterface\` subclasses)
