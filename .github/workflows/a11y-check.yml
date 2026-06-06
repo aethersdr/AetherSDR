@@ -5,7 +5,7 @@ on:
     branches: ["**"]
 
 permissions:
-  pull-requests: write   # needed to label and comment; read-only on fork PRs (steps gracefully skip)
+  pull-requests: write   # needed to post the summary comment; read-only on fork PRs (step gracefully skips)
 
 jobs:
   a11y-check:
@@ -43,20 +43,20 @@ jobs:
           COUNT=$(grep -c "^::warning" /tmp/a11y_output.txt || echo "0")
           echo "findings=$COUNT" >> $GITHUB_OUTPUT
 
-      # Label the PR so AetherClaude picks it up for automated remediation.
+      # Post a summary comment so the finding count is visible at the PR top
+      # level (the per-line annotations appear on the diff itself).
       # continue-on-error: true because fork PRs have a read-only GITHUB_TOKEN
-      # and the label step would otherwise fail -- findings are still annotated
-      # inline on the diff regardless.
-      - name: Label PR for AetherClaude auto-remediation
-        if: steps.a11y.outputs.findings != '0'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh pr edit ${{ github.event.pull_request.number }} \
-            --add-label "aetherclaude-eligible" \
-            --repo ${{ github.repository }}
-
+      # and the comment step would otherwise fail -- the inline annotations
+      # appear on the diff regardless.
+      #
+      # NOTE: this workflow intentionally does NOT auto-apply the
+      # aetherclaude-eligible label. Per AGENTS.md and CONSTITUTION.md
+      # (Principle X), that label is the issue-level claim mechanism that
+      # gates AetherClaude implementation work — applying it to PRs would
+      # repurpose the label off-spec and trigger AetherClaude to write
+      # remediation patches on community contributors' open PRs without
+      # their consent. Accessibility remediation should be picked up via a
+      # follow-up issue (e.g. #3288), not by side-effect of opening a PR.
       - name: Comment with accessibility summary
         if: steps.a11y.outputs.findings != '0'
         continue-on-error: true
@@ -73,11 +73,11 @@ jobs:
 
           ${SUMMARY}
 
-          This PR has been labeled \`aetherclaude-eligible\` — AetherClaude will generate
-          remediation patches (mechanical fixes: missing \`setAccessibleName\` calls,
-          \`QAccessibleValueChangeEvent\` in value-change methods, focus policy on
-          interactive widgets). Structural fixes (keyboard navigation, \`QAccessibleInterface\`
-          subclasses) are flagged for human review in #3288.
+          See [\`docs/a11y.md\`](../blob/main/docs/a11y.md) for the canonical
+          Qt patterns (\`setAccessibleName\`, \`QAccessibleValueChangeEvent\`,
+          \`QAccessibleInterface\` subclasses, etc.). Structural remediation
+          (keyboard navigation, custom \`QAccessibleInterface\` subclasses)
+          is tracked in #3288.
 
           *Findings are warnings only — the build is not blocked.*
           COMMENTEOF
