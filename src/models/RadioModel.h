@@ -523,7 +523,7 @@ private:
     void scheduleRxAudioStreamEnsure(const QString& reason);
     void logRemoteAudioRxSummary(const QString& reason) const;
 
-    void configurePan();
+    void configurePan(const QString& panId);
     void configureWaterfall();
     void registerAsGuiClient(const QString& clientId);
     void disconnectPendingClientsThen(std::function<void()> continuation);
@@ -574,6 +574,8 @@ private:
     // fall back to createDefaultSlice() (which issues "display panafall create")
     // when no owned pan exists yet.
     void ensureDefaultSlicePreferringRestoredPan();
+    void stageSessionModelsForReconnect();
+    void pruneStaleSessionModels(quint64 generation);
 
     RadioConnection*  m_connection{nullptr};
     QThread*          m_connThread{nullptr};
@@ -679,6 +681,7 @@ private:
     mutable QMap<QString, QString> m_antennaAliases;
 
     QMap<QString, PanadapterModel*> m_panadapters;  // panId → model
+    QMap<QString, PanadapterModel*> m_stalePanadapters;  // previous session, kept alive for UI reuse
     QString m_activePanId;       // currently active panadapter
     // Deferred "display pan" status pending ownership confirmation. Paired
     // with QDateTime::currentSecsSinceEpoch() at insert so a sweep on insert
@@ -781,6 +784,8 @@ private:
 
 private:
     QList<SliceModel*> m_slices;
+    QMap<int, SliceModel*> m_staleSlices;  // previous session, kept alive for UI reuse
+    quint64 m_sessionModelGeneration{0};
     QMap<int, MemoryEntry> m_memories;
     QStringList m_globalProfiles;
     QString     m_activeGlobalProfile;

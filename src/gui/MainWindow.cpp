@@ -11832,6 +11832,10 @@ void MainWindow::finishPanadapterConnectionAnimation()
     if (!m_waitingForFirstPanadapterFrame || !m_panadapterConnectionAnimationVisible)
         return;
 
+    if (!m_radioModel.isConnected()) {
+        return;
+    }
+
     setPanadapterConnectionAnimation(false);
 }
 

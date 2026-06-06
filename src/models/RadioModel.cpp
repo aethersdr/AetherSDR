@@ -1810,6 +1810,7 @@ void RadioModel::onConnected()
     qCDebug(lcProtocol) << "RadioModel: connected";
     m_reconnectTimer.stop();
     m_rebootInProgress = false;
+    stageSessionModelsForReconnect();
     armClientConnectionNoticeSuppression();
     setActivePanResized(false);
 
@@ -1842,6 +1843,73 @@ void RadioModel::onConnected()
             });
         }
     });
+}
+
+void RadioModel::stageSessionModelsForReconnect()
+{
+    ++m_sessionModelGeneration;
+
+    for (SliceModel* slice : m_slices) {
+        if (slice) {
+            m_staleSlices.insert(slice->sliceId(), slice);
+        }
+    }
+    m_slices.clear();
+
+    for (auto it = m_panadapters.cbegin(); it != m_panadapters.cend(); ++it) {
+        if (it.value()) {
+            it.value()->setResized(false);
+            it.value()->setWaterfallConfigured(false);
+            m_stalePanadapters.insert(it.key(), it.value());
+        }
+    }
+    m_panadapters.clear();
+
+    m_ownedSliceIds.clear();
+    m_foreignSliceOwners.clear();
+    m_pendingPanStatuses.clear();
+    m_activePanId.clear();
+
+    if (!m_staleSlices.isEmpty() || !m_stalePanadapters.isEmpty()) {
+        qCDebug(lcProtocol) << "RadioModel: staged previous session models for reconnect"
+                            << "slices=" << m_staleSlices.size()
+                            << "pans=" << m_stalePanadapters.size()
+                            << "generation=" << m_sessionModelGeneration;
+    }
+}
+
+void RadioModel::pruneStaleSessionModels(quint64 generation)
+{
+    if (generation != m_sessionModelGeneration || !isConnected()) {
+        return;
+    }
+
+    if (m_staleSlices.isEmpty() && m_stalePanadapters.isEmpty()) {
+        return;
+    }
+
+    const QMap<int, SliceModel*> staleSlices = m_staleSlices;
+    m_staleSlices.clear();
+    for (auto it = staleSlices.cbegin(); it != staleSlices.cend(); ++it) {
+        if (!it.value()) {
+            continue;
+        }
+        qCDebug(lcProtocol) << "RadioModel: pruning stale slice after reconnect" << it.key();
+        emit sliceRemoved(it.key());
+        emit slotOccupancyChanged(it.key());
+        it.value()->deleteLater();
+    }
+
+    const QMap<QString, PanadapterModel*> stalePans = m_stalePanadapters;
+    m_stalePanadapters.clear();
+    for (auto it = stalePans.cbegin(); it != stalePans.cend(); ++it) {
+        if (!it.value()) {
+            continue;
+        }
+        qCDebug(lcProtocol) << "RadioModel: pruning stale panadapter after reconnect" << it.key();
+        emit panadapterRemoved(it.key());
+        it.value()->deleteLater();
+    }
 }
 
 void RadioModel::disconnectPendingClientsThen(std::function<void()> continuation)
@@ -2248,6 +2316,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
                 sendCmd("slice list",
                     [this](int code3, const QString& body) {
+                        const quint64 restoreGeneration = m_sessionModelGeneration;
+                        QTimer::singleShot(2000, this, [this, restoreGeneration]() {
+                            pruneStaleSessionModels(restoreGeneration);
+                        });
+
                         if (code3 != 0) {
                             qCWarning(lcProtocol) << "RadioModel: slice list failed, code" << Qt::hex << code3;
                             return;
@@ -2528,12 +2601,8 @@ void RadioModel::onDisconnected()
     QMetaObject::invokeMethod(m_panStream, &PanadapterStream::stop,
                               Qt::BlockingQueuedConnection);
     m_panStream->clearRegisteredStreams();
-    // Clean up panadapter models
-    qDeleteAll(m_panadapters);
-    m_panadapters.clear();
     m_pendingPanStatuses.clear();
-    m_activePanId.clear();
-    m_ownedSliceIds.clear();
+
     m_tnfModel.clear();
     m_flexWaveformModel.clear();
     if (!m_memories.isEmpty()) {
@@ -2543,7 +2612,6 @@ void RadioModel::onDisconnected()
     m_clientStations.clear();
     m_clientInfoMap.clear();
     m_announcedClientConnections.clear();
-    m_foreignSliceOwners.clear();  // #2606: drop Multi-Flex slot markers on full reset
     m_startupClientConnections.clear();
     m_clientConnectionNoticeTimer.invalidate();
     emit otherClientsChanged(0, {});
@@ -3460,7 +3528,16 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
     if (auto* existing = m_panadapters.value(normalizedPanId, nullptr))
         return existing;
 
-    auto* pan = new PanadapterModel(normalizedPanId, this);
+    bool reclaimed = false;
+    PanadapterModel* pan = nullptr;
+    if (auto it = m_stalePanadapters.find(normalizedPanId);
+        it != m_stalePanadapters.end() && it.value()) {
+        pan = it.value();
+        m_stalePanadapters.erase(it);
+        reclaimed = true;
+    } else {
+        pan = new PanadapterModel(normalizedPanId, this);
+    }
     pan->setClientHandle(QString::number(clientHandle(), 16));
     m_panadapters[normalizedPanId] = pan;
     if (m_activePanId.isEmpty())
@@ -3477,19 +3554,23 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
     const int activeCap = currentAdaptiveFpsCap();
     if (activeCap > 0) {
         qCDebug(lcProtocol) << "RadioModel: applying active throttle cap" << activeCap
-                            << "to newly-claimed pan" << normalizedPanId;
+                            << "to pan" << normalizedPanId;
         sendAdaptiveCapToPan(normalizedPanId, activeCap);
         // waterfallId may not be assigned yet (arrives in a subsequent status
         // message) — re-apply the cap once it lands.
-        connect(pan, &PanadapterModel::waterfallIdChanged,
-                this, [this, normalizedPanId]() {
-            const int cap = currentAdaptiveFpsCap();
-            if (cap > 0) sendAdaptiveCapToPan(normalizedPanId, cap);
-        });
+        if (!reclaimed) {
+            connect(pan, &PanadapterModel::waterfallIdChanged,
+                    this, [this, normalizedPanId]() {
+                const int cap = currentAdaptiveFpsCap();
+                if (cap > 0) sendAdaptiveCapToPan(normalizedPanId, cap);
+            });
+        }
     }
 
-    connect(pan, &PanadapterModel::waterfallIdChanged,
-            this, &RadioModel::updateStreamFilters);
+    if (!reclaimed) {
+        connect(pan, &PanadapterModel::waterfallIdChanged,
+                this, &RadioModel::updateStreamFilters);
+    }
     updateStreamFilters();
 
     sendCmd(QString("display pan rfgain_info %1").arg(normalizedPanId),
@@ -3504,8 +3585,11 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
             pan->setRfGainInfo(low, high, step);
     });
 
-    qCDebug(lcProtocol) << "RadioModel: claimed panadapter" << normalizedPanId;
-    emit panadapterAdded(pan);
+    qCDebug(lcProtocol) << "RadioModel:" << (reclaimed ? "reclaimed" : "claimed")
+                        << "panadapter" << normalizedPanId;
+    if (!reclaimed) {
+        emit panadapterAdded(pan);
+    }
 
     const auto pending = m_pendingPanStatuses.take(normalizedPanId);
     if (!pending.second.isEmpty()) {
@@ -3998,6 +4082,9 @@ void RadioModel::onStatusReceived(const QString& object,
             if (kvs.contains("removed") || object.endsWith("removed")) {
                 m_pendingPanStatuses.remove(panId);
                 auto* pan = m_panadapters.take(panId);
+                if (!pan) {
+                    pan = m_stalePanadapters.take(panId);
+                }
                 if (pan) {
                     m_panStream->unregisterPanStream(pan->panStreamId());
                     m_panStream->unregisterWfStream(pan->wfStreamId());
@@ -4020,7 +4107,8 @@ void RadioModel::onStatusReceived(const QString& object,
                     pan->setPreamp(pre);
             }
 
-            const bool knownPan = m_panadapters.contains(panId);
+            const bool knownPan = m_panadapters.contains(panId)
+                || m_stalePanadapters.contains(panId);
             const auto ownershipAction = RadioStatusOwnership::classifyOwnedStatus(
                 knownPan, kvs, false, clientHandle());
             if (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Defer) {
@@ -4044,10 +4132,34 @@ void RadioModel::onStatusReceived(const QString& object,
             }
             if (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Ignore) {
                 m_pendingPanStatuses.remove(panId);
+                PanadapterModel* rejectedPan = nullptr;
+                if (auto it = m_stalePanadapters.find(panId);
+                    it != m_stalePanadapters.end()) {
+                    rejectedPan = it.value();
+                    m_stalePanadapters.erase(it);
+                } else if (kvs.contains(QStringLiteral("client_handle"))) {
+                    rejectedPan = m_panadapters.take(panId);
+                }
+                if (rejectedPan) {
+                    m_panStream->unregisterPanStream(rejectedPan->panStreamId());
+                    m_panStream->unregisterWfStream(rejectedPan->wfStreamId());
+                    qCDebug(lcProtocol) << "RadioModel: panadapter" << panId
+                                        << "belongs to another client; removing local stale model";
+                    emit panadapterRemoved(panId);
+                    rejectedPan->deleteLater();
+                    if (m_activePanId == panId) {
+                        m_activePanId = m_panadapters.isEmpty() ? QString()
+                                                                : m_panadapters.firstKey();
+                    }
+                }
                 return;  // not our panadapter, ignore
             }
-            if (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Claim)
+            if (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Claim
+                || (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Apply
+                    && !m_panadapters.contains(panId)
+                    && m_stalePanadapters.contains(panId))) {
                 ensureOwnedPanadapter(panId);
+            }
             handlePanadapterStatus(panId, kvs);
         }
         return;
@@ -4704,9 +4816,14 @@ void RadioModel::handleSliceStatus(int id,
             m_foreignSliceOwners.insert(id, owner);
             // If we already have a SliceModel for this ID, remove it.  We
             // keep the foreign-owner record so UI can dim the slot.
-            if (SliceModel* existing = slice(id)) {
-                const bool wasTxSlice = existing->isTxSlice();
+            SliceModel* existing = slice(id);
+            if (existing) {
                 m_slices.removeOne(existing);
+            } else {
+                existing = m_staleSlices.take(id);
+            }
+            if (existing) {
+                const bool wasTxSlice = existing->isTxSlice();
                 emit sliceRemoved(id);
                 existing->deleteLater();
                 if (wasTxSlice)
@@ -4732,6 +4849,10 @@ void RadioModel::handleSliceStatus(int id,
             if (wasTxSlice)
                 m_meterModel.setActiveTxSlice(activeTxSliceNum());
             emit slotOccupancyChanged(id);
+        } else if (SliceModel* stale = m_staleSlices.take(id)) {
+            emit sliceRemoved(id);
+            stale->deleteLater();
+            emit slotOccupancyChanged(id);
         } else if (m_foreignSliceOwners.remove(id) > 0) {
             // Foreign client released their slot — clear the dim marker.
             emit slotOccupancyChanged(id);
@@ -4752,19 +4873,31 @@ void RadioModel::handleSliceStatus(int id,
         if (!kvs.contains("in_use") || kvs["in_use"] != "1")
             return;
 
-        s = new SliceModel(id, this);
+        bool reclaimed = false;
+        if (auto it = m_staleSlices.find(id);
+            it != m_staleSlices.end() && it.value()) {
+            s = it.value();
+            m_staleSlices.erase(it);
+            reclaimed = true;
+            qCDebug(lcProtocol) << "RadioModel: reclaimed slice" << id
+                                << "from previous session";
+        } else {
+            s = new SliceModel(id, this);
+            // Forward slice commands to the radio
+            connect(s, &SliceModel::commandReady, this, [this](const QString& cmd){
+                sendCmd(cmd);
+            });
+            connect(s, &SliceModel::txSliceChanged, this, [this](bool) {
+                m_meterModel.setActiveTxSlice(activeTxSliceNum());
+            });
+        }
         s->setRttyMarkDefault(m_rttyMarkDefault);
-        // Forward slice commands to the radio
-        connect(s, &SliceModel::commandReady, this, [this](const QString& cmd){
-            sendCmd(cmd);
-        });
-        connect(s, &SliceModel::txSliceChanged, this, [this](bool) {
-            m_meterModel.setActiveTxSlice(activeTxSliceNum());
-        });
         m_slices.append(s);
         s->applyStatus(kvs);  // populate frequency/mode before notifying UI
         m_meterModel.setActiveTxSlice(activeTxSliceNum());
-        emit sliceAdded(s);
+        if (!reclaimed) {
+            emit sliceAdded(s);
+        }
         emit slotOccupancyChanged(id);  // empty/foreign → ours
         return;                // applyStatus already called below; skip second call
     }
@@ -4927,7 +5060,7 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
     // Configure the panadapter once we know its ID.
     if (pan && !pan->isResized() && isConnected()) {
         pan->setResized(true);
-        configurePan();
+        configurePan(pan->panId());
     }
 }
 
@@ -4942,16 +5075,17 @@ void RadioModel::updateStreamFilters()
     }
 }
 
-void RadioModel::configurePan()
+void RadioModel::configurePan(const QString& panId)
 {
-    if (m_activePanId.isEmpty()) return;
+    const QString targetPanId = normalizePanadapterId(panId);
+    if (targetPanId.isEmpty()) return;
 
     // Request MainWindow to push actual widget dimensions for this pan.
     // Do NOT hardcode xpixels/ypixels here — MainWindow knows the real sizes.
-    emit panDimensionsNeeded(m_activePanId);
+    emit panDimensionsNeeded(targetPanId);
 
     sendCmd(
-        QString("display pan set %1 min_dbm=-130 max_dbm=-40").arg(m_activePanId),
+        QString("display pan set %1 min_dbm=-130 max_dbm=-40").arg(targetPanId),
         [](int code, const QString&) {
             if (code != 0)
                 qCWarning(lcProtocol) << "RadioModel: display pan set dbm failed, code" << Qt::hex << code;
