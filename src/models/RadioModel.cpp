@@ -2024,25 +2024,32 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
         sendCmd("keepalive enable");
         startNetworkMonitor();
 
-    // Subscriptions are independent topics and the radio processes TCP commands
-    // in send order, so fire them back-to-back without round-tripping on each R
-    // response — exactly as the second sub batch (sub tnf/dax/codec/…) below
-    // already does. The previous one-RTT-per-sub chain serialized ~11 round
-    // trips (~0.7 s on a LAN) into the connect handshake for no protocol reason.
-    sendCmd("sub slice all");
-    sendCmd("sub pan all");
-    sendCmd("sub tx all");
-    sendCmd("sub atu all");
-    sendCmd("sub amplifier all");
-    sendCmd("sub meter all");
-    sendCmd("sub audio all");
-    sendCmd("sub gps all");
-    sendCmd("sub apd all");
-    armClientConnectionNoticeSuppression();
-    sendCmd("sub client all");
-    sendCmd("sub xvtr all");
-            // Memory status arrives via normal status handler — no subscription needed.
-            // "sub memory all" returns 500000A3 (invalid subscription object).
+        // Subscriptions are independent topics and the radio processes TCP commands
+        // in send order, so fire them back-to-back without round-tripping on each R
+        // response — exactly as the second sub batch (sub tnf/dax/codec/…) below
+        // already does. The previous one-RTT-per-sub chain serialized ~11 round
+        // trips (~0.7 s on a LAN) into the connect handshake for no protocol reason.
+        sendCmd("sub slice all");
+        sendCmd("sub pan all");
+        sendCmd("sub tx all");
+        sendCmd("sub atu all");
+        sendCmd("sub amplifier all");
+        sendCmd("sub meter all");
+        sendCmd("sub audio all");
+        sendCmd("sub gps all");
+        sendCmd("sub apd all");
+        // Suppression must be armed BEFORE "sub client all" because that
+        // subscription is what triggers the radio to send the client-status
+        // burst we want to suppress notices for. The earlier subs in this
+        // batch don't generate client-connection notices, so positioning here
+        // is safe; the old nested-callback layout made this self-documenting
+        // (suppression was armed in the sub apd response callback), the flat
+        // layout doesn't — hence the comment.
+        armClientConnectionNoticeSuppression();
+        sendCmd("sub client all");
+        sendCmd("sub xvtr all");
+        // Memory status arrives via normal status handler — no subscription needed.
+        // "sub memory all" returns 500000A3 (invalid subscription object).
         // Request available mic inputs (comma-separated response: "MIC,BAL,LINE,ACC")
         sendCmd("mic list", [this](int code, const QString& body) {
             if (code == 0) {
@@ -2470,6 +2477,11 @@ void RadioModel::onDisconnected()
     m_ampHandle.clear();
     m_ampOperate = false;
     m_fullDuplex = false;
+    // Reset to false so the next connect's skip-peek fast path requires the
+    // radio's mf_enable status to actually arrive before treating multiFLEX
+    // as enabled. Default-true would silently bypass the conflict check if
+    // the status burst hadn't been processed yet (#3391 review).
+    m_multiFlexEnabled = false;
     m_maxSlices = 4;
     m_model.clear();
     m_version.clear();
