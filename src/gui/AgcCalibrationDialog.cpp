@@ -8,6 +8,7 @@
 #include <QDoubleSpinBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QMessageBox>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
@@ -294,6 +295,19 @@ int AgcCalibrationDialog::liveValue() const
                : m_slice->agcThreshold();
 }
 
+bool AgcCalibrationDialog::nrSuppressesCalibration() const
+{
+    if (m_audio && (m_audio->nr2Enabled() || m_audio->rn2Enabled()
+                  || m_audio->nr4Enabled() || m_audio->dfnrEnabled()
+                  || m_audio->mnrEnabled() || m_audio->bnrEnabled())) {
+        return true;
+    }
+    if (m_slice && m_slice->nrOn()) {
+        return true;
+    }
+    return false;
+}
+
 void AgcCalibrationDialog::updateModeUi()
 {
     const bool off = m_slice && m_slice->agcMode() == QStringLiteral("off");
@@ -301,6 +315,20 @@ void AgcCalibrationDialog::updateModeUi()
         off ? AgcTCalibrator::Strategy::TargetLevel : AgcTCalibrator::Strategy::Knee;
     m_curve->setStrategy(s);
     m_targetRow->setVisible(off);
+
+    // If NR is active (client or radio), the levelChanged tap reads post-NR
+    // audio and the AGC knee is masked. Warn in the hint label; the auto-sweep
+    // start path also refuses to begin until NR is off.
+    if (nrSuppressesCalibration() && m_hintLabel) {
+        m_hintLabel->setText(QStringLiteral(
+            "⚠ Disable Noise Reduction (NR/NR2/RN2/NR4/DFNR/MNR/BNR) for accurate "
+            "calibration — NR crushes the noise floor the knee detector is "
+            "looking for."));
+    } else if (m_hintLabel) {
+        m_hintLabel->setText(QStringLiteral(
+            "Tune to a clear spot, then Auto Sweep — or move the AGC-T "
+            "slider and watch where the noise bends."));
+    }
 
     if (!m_slice) {
         m_modeLabel->setText(QStringLiteral("No active slice."));
@@ -339,6 +367,21 @@ void AgcCalibrationDialog::onStartStop()
 {
     if (m_engine.isRunning()) {
         m_engine.stop(); // restores original value
+        return;
+    }
+    // Refuse to start while any NR stage is suppressing the calibration tap.
+    // The user can disable NR and try again. Mirrors the quiet-spot guard
+    // pattern in the engine and matches the in-hint warning text.
+    if (nrSuppressesCalibration()) {
+        QMessageBox::warning(
+            this,
+            QStringLiteral("Disable NR for AGC-T calibration"),
+            QStringLiteral(
+                "Noise Reduction is active and is crushing the audio noise "
+                "floor that the AGC knee detector measures. Turn off any of "
+                "NR / NR2 / RN2 / NR4 / DFNR / MNR / BNR, then try Auto Sweep "
+                "again."),
+            QMessageBox::Ok);
         return;
     }
     m_curve->clear();

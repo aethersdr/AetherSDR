@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
 #include <QVector>
 
@@ -46,7 +47,7 @@ public:
     explicit AgcTCalibrator(QObject* parent = nullptr);
 
     void setSlice(SliceModel* slice);
-    SliceModel* slice() const { return m_slice; }
+    SliceModel* slice() const { return m_slice.data(); }
 
     // Comfortable audio-noise target for the AGC-off solve, in dB (negative).
     void  setTargetLevelDb(float db) { m_targetDb = db; }
@@ -96,7 +97,9 @@ private:
     float currentRmsDb() const;
     void  evaluateQuietSpot();
 
-    SliceModel* m_slice{nullptr};
+    // QPointer so slice removal / disconnect mid-calibration doesn't dangle.
+    // All call sites null-check before use.
+    QPointer<SliceModel> m_slice;
 
     bool   m_running{false};
     bool   m_auto{false};

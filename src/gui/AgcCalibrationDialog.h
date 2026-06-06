@@ -3,6 +3,7 @@
 #include "gui/PersistentDialog.h"
 #include "core/AgcTCalibrator.h"
 
+#include <QPointer>
 #include <QVector>
 #include <QWidget>
 
@@ -84,11 +85,19 @@ private:
     void disconnectSlice(SliceModel* slice);
     void updateModeUi();
     int  liveValue() const;
+    // Any noise reduction stage that mutates the audio before levelChanged is
+    // emitted: client-side NR2/RN2/NR4/DFNR/MNR/BNR via AudioEngine, plus the
+    // radio-side NR (slice nr flag). The calibration tap is AudioEngine's
+    // post-NR levelChanged, so any of these masks the knee we are trying to
+    // find. See aethersdr-agent review on PR #3350.
+    bool nrSuppressesCalibration() const;
 
     RadioModel*  m_radio{nullptr};
     AudioEngine* m_audio{nullptr};
     NoiseFloorFn m_noiseFloorFn;
-    SliceModel*  m_slice{nullptr};
+    // QPointer so slice removal mid-calibration doesn't dangle through the
+    // polling timer or noise-floor lookup callback.
+    QPointer<SliceModel> m_slice;
 
     AgcTCalibrator m_engine;
     QTimer*        m_floorTimer{nullptr};
