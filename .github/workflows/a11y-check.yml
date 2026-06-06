@@ -40,7 +40,7 @@ jobs:
             exit 0
           fi
           python tools/check_a11y.py $FILES | tee /tmp/a11y_output.txt
-          COUNT=$(grep -c "^::warning" /tmp/a11y_output.txt || echo "0")
+          COUNT=$(grep -c "^::warning" /tmp/a11y_output.txt || true)
           echo "findings=$COUNT" >> $GITHUB_OUTPUT
 
       # Post a summary comment so the finding count is visible at the PR top
