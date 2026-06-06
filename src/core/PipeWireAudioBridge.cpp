@@ -253,7 +253,12 @@ bool PipeWireAudioBridge::loadPipeSource(int index)
         "load-module", "module-pipe-source",
         QStringLiteral("file=%1").arg(pipePath),
         QStringLiteral("source_name=%1").arg(sourceName),
-        QStringLiteral("source_properties=device.description=\"%1\" node.latency=256/48000").arg(sourceDesc),
+        // Single-quoted: the pipewire-pulse pulse-module argument parser splits
+        // the property value on unescaped whitespace, so unquoted the space in
+        // "AetherSDR DAX N" truncates device.description to "AetherSDR" and
+        // orphans node.latency. node.description is derived from
+        // device.description, so this also labels the node in qpwgraph / JACK.
+        QStringLiteral("source_properties='device.description=\"%1\" node.latency=256/48000'").arg(sourceDesc),
         QStringLiteral("format=float32le"),
         QStringLiteral("rate=%1").arg(PIPE_RATE),
         QStringLiteral("channels=%1").arg(PIPE_CHANNELS),
@@ -305,7 +310,9 @@ bool PipeWireAudioBridge::loadPipeSink()
         "load-module", "module-pipe-sink",
         QStringLiteral("file=%1").arg(pipePath),
         QStringLiteral("sink_name=%1").arg(sinkName),
-        QStringLiteral("sink_properties=device.description=\"%1\"").arg(sinkDesc),
+        // Single-quoted — see loadPipeSource(): unquoted, the space in
+        // "AetherSDR TX" truncates device.description to "AetherSDR".
+        QStringLiteral("sink_properties='device.description=\"%1\"'").arg(sinkDesc),
         QStringLiteral("format=s16le"),
         QStringLiteral("rate=%1").arg(TX_RATE),
         QStringLiteral("channels=%1").arg(TX_CHANNELS),
