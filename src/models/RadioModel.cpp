@@ -27,6 +27,7 @@ namespace AetherSDR {
 namespace {
 
 constexpr int kMinUsablePanYpixels = 100;
+constexpr int kSessionRestorePruneDelayMs = 5000;
 constexpr int kWaterfallLineDurationMinMs = 1;
 constexpr int kWaterfallLineDurationMaxMs = 100;
 
@@ -2317,7 +2318,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                 sendCmd("slice list",
                     [this](int code3, const QString& body) {
                         const quint64 restoreGeneration = m_sessionModelGeneration;
-                        QTimer::singleShot(2000, this, [this, restoreGeneration]() {
+                        QTimer::singleShot(kSessionRestorePruneDelayMs, this, [this, restoreGeneration]() {
                             pruneStaleSessionModels(restoreGeneration);
                         });
 
@@ -4137,8 +4138,6 @@ void RadioModel::onStatusReceived(const QString& object,
                     it != m_stalePanadapters.end()) {
                     rejectedPan = it.value();
                     m_stalePanadapters.erase(it);
-                } else if (kvs.contains(QStringLiteral("client_handle"))) {
-                    rejectedPan = m_panadapters.take(panId);
                 }
                 if (rejectedPan) {
                     m_panStream->unregisterPanStream(rejectedPan->panStreamId());
@@ -4151,6 +4150,10 @@ void RadioModel::onStatusReceived(const QString& object,
                         m_activePanId = m_panadapters.isEmpty() ? QString()
                                                                 : m_panadapters.firstKey();
                     }
+                } else if (m_panadapters.contains(panId)
+                           && kvs.contains(QStringLiteral("client_handle"))) {
+                    qCDebug(lcProtocol) << "RadioModel: ignoring foreign owner status for claimed panadapter"
+                                        << panId << "owner=" << kvs.value(QStringLiteral("client_handle"));
                 }
                 return;  // not our panadapter, ignore
             }
@@ -4207,10 +4210,11 @@ void RadioModel::onStatusReceived(const QString& object,
                 ownerPan->setWaterfallId(wfId);
             updateStreamFilters();
             qCDebug(lcProtocol) << "RadioModel: claimed waterfall" << wfId;
-        }
-        if (!activeWfConfigured() && !activeWfId().isEmpty() && isConnected()) {
-            setActiveWfConfigured(true);
-            configureWaterfall();
+            if (ownerPan && !ownerPan->isWaterfallConfigured()
+                && !ownerPan->waterfallId().isEmpty() && isConnected()) {
+                ownerPan->setWaterfallConfigured(true);
+                configureWaterfall(ownerPan->waterfallId());
+            }
         }
         return;
     }
@@ -5092,22 +5096,23 @@ void RadioModel::configurePan(const QString& panId)
         });
 }
 
-void RadioModel::configureWaterfall()
+void RadioModel::configureWaterfall(const QString& waterfallId)
 {
-    if (activeWfId().isEmpty()) return;
+    const QString targetWaterfallId = RadioStatusOwnership::normalizedFlexId(waterfallId);
+    if (targetWaterfallId.isEmpty()) return;
 
     // Disable automatic black-level and set a fixed threshold.
     // FlexLib uses "display panafall set" addressed to the waterfall stream ID.
     const QString cmd = QString("display panafall set %1 auto_black=0 black_level=15 color_gain=50")
-                            .arg(activeWfId());
-    sendCmd(cmd, [this](int code, const QString&) {
+                            .arg(targetWaterfallId);
+    sendCmd(cmd, [this, targetWaterfallId](int code, const QString&) {
         if (code != 0) {
             qCDebug(lcProtocol) << "RadioModel: display panafall set waterfall failed, code"
                      << Qt::hex << code << "— trying display waterfall set";
             // Fallback for firmware that doesn't support panafall addressing
             sendCmd(
                 QString("display waterfall set %1 auto_black=0 black_level=15 color_gain=50")
-                    .arg(activeWfId()),
+                    .arg(targetWaterfallId),
                 [](int code2, const QString&) {
                     if (code2 != 0)
                         qCWarning(lcProtocol) << "RadioModel: display waterfall set also failed, code"

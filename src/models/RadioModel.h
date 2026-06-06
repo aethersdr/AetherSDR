@@ -524,7 +524,7 @@ private:
     void logRemoteAudioRxSummary(const QString& reason) const;
 
     void configurePan(const QString& panId);
-    void configureWaterfall();
+    void configureWaterfall(const QString& waterfallId);
     void registerAsGuiClient(const QString& clientId);
     void disconnectPendingClientsThen(std::function<void()> continuation);
     // LAN-only: subscribe to radio+client topics early, wait 400 ms for
