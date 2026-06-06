@@ -1219,15 +1219,30 @@ void RadioModel::forceDisconnect()
 
 void RadioModel::rebootRadio()
 {
-    if (!m_connection || !m_connection->isConnected()) {
+    // Gate on isConnected() (which already covers WAN/SmartLink sessions), not
+    // the LAN socket alone — sendCommand() already routes through m_wanConn
+    // for WAN, so a SmartLink user clicking Reboot should send the command
+    // and tear the link down the same way as a LAN user.
+    if (!isConnected()) {
         return;
     }
     m_rebootInProgress = true;
     sendCommand(QStringLiteral("radio reboot"));
     // Give the TCP write a brief moment to flush before tearing down the
     // socket, then drop into the unexpected-disconnect path so the existing
-    // 3-second reconnect timer brings us back when the radio is up again.
+    // reconnect timer brings us back when the radio is up again.
     QTimer::singleShot(250, this, &RadioModel::forceDisconnect);
+    // Fail-open safety: if the reboot wedges the radio's network stack, the
+    // reconnect timer keeps firing "connection refused" forever and the user
+    // sees no toasts at all because m_rebootInProgress is gating them. Time
+    // the suppression out after 60s so a stuck radio surfaces real errors
+    // instead of silently retrying forever. 60s comfortably covers a healthy
+    // 6000/8600 boot.
+    QTimer::singleShot(60'000, this, [this] {
+        if (m_rebootInProgress) {
+            m_rebootInProgress = false;
+        }
+    });
 }
 
 void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
