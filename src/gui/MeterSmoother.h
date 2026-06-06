@@ -100,36 +100,42 @@ public:
     void setBallistics(const Ballistics& b) { m_b = b; }
     const Ballistics& ballistics() const { return m_b; }
 
-    // ── Lean-mode shared repaint gate (#3283) ──────────────────────────────
+    // ── Lean-mode per-widget repaint gate (#3283) ──────────────────────────
     // Every meter animates its MeterSmoother at ~120 Hz; each tick repaints,
     // and on a window that also hosts the GPU panadapter every repaint forces a
     // full-window backing-store→texture re-upload (the dominant pooled cost on
     // large/5K displays). Lean mode keeps the smoother integrating at the full
     // rate (so ballistics stay smooth) but gates the *repaint* to ~kLeanRepaintHz
-    // via a single shared clock, so all meters batch into one frame instead of
-    // dirtying the backing store independently 120×/sec.
+    // per widget.
+    //
+    // The gate is per-instance (each MeterSmoother carries its own clock),
+    // because every active meter owns its own MeterSmoother. A previous
+    // shared-static version of this gate underdelivered on its own claim: with
+    // N meters racing into the gate, the first to tick each ~83 ms window got
+    // through and the other N−1 were starved that window, so each individual
+    // meter only saw the green light at roughly (kLeanRepaintHz / N) Hz —
+    // visibly stuttery on GR bars and S-meter needles. Per-instance gates let
+    // every meter independently hit the target rate.
     //
     // Usage at the meter's timer callback:
     //     const bool settled = !m_smooth.tick(elapsed);
     //     if (settled) m_timer.stop();
-    //     if (settled || MeterSmoother::shouldRepaint()) update();
+    //     if (settled || m_smooth.shouldRepaint()) update();
     // (Always paint the settled frame so the final value is never dropped.)
     static void setLeanThrottle(bool on) { s_leanThrottle = on; }
     static bool leanThrottle() { return s_leanThrottle; }
-    static bool shouldRepaint()
+    bool shouldRepaint()
     {
         if (!s_leanThrottle) {
             return true;
         }
         constexpr qint64 kGateMs = 1000 / kLeanRepaintHz;
-        static QElapsedTimer gate;
-        static qint64 lastMs = -1;
-        if (!gate.isValid()) {
-            gate.start();
+        if (!m_gate.isValid()) {
+            m_gate.start();
         }
-        const qint64 now = gate.elapsed();
-        if (lastMs < 0 || now - lastMs >= kGateMs) {
-            lastMs = now;
+        const qint64 now = m_gate.elapsed();
+        if (m_lastMs < 0 || now - m_lastMs >= kGateMs) {
+            m_lastMs = now;
             return true;
         }
         return false;
@@ -139,9 +145,11 @@ private:
     static constexpr int kLeanRepaintHz = 12;  // gated meter repaint rate in lean
     static inline bool s_leanThrottle = false;
 
-    Ballistics m_b;
-    float      m_display{0.0f};
-    float      m_target{0.0f};
+    Ballistics     m_b;
+    float          m_display{0.0f};
+    float          m_target{0.0f};
+    QElapsedTimer  m_gate;
+    qint64         m_lastMs{-1};
 };
 
 // Recommended driving-timer interval for a MeterSmoother.  8 ms ≈

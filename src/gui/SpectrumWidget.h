@@ -173,8 +173,12 @@ public:
     void setMode(const QString& mode) { m_mode = mode; }
 
     // Lean render mode (#3283): skip the wallpaper layer (render an opaque
-    // single layer), drop the translucent FFT fill, and cap spectrum/waterfall
-    // repaints to ~60 Hz. Reversible — no persisted state is destroyed.
+    // single layer), drop the translucent FFT fill, and cap the spectrum and
+    // waterfall data-driven repaints to ~30 Hz (kLeanFrameMs = 33). The cap is
+    // applied via leanCappedUpdate() only on the two high-frequency entry
+    // points (updateSpectrum, updateWaterfallRow); interactive paths (cursor
+    // moves, marker drags, etc.) keep their immediate update() calls so input
+    // feels snappy. Reversible — no persisted state is destroyed.
     void setLeanMode(bool on);
     bool leanMode() const { return m_leanMode; }
 

@@ -211,7 +211,7 @@ void SMeterWidget::animateNeedle()
 
     // Gate the needle repaint in lean mode so it stops dirtying the shared
     // backing store ~120×/sec (#3283); always paint the settled frame.
-    if (settled || MeterSmoother::shouldRepaint()) {
+    if (settled || m_smooth.shouldRepaint()) {
         update();
     }
 }

@@ -25,9 +25,15 @@ public slots:
     void appendScopeSamples(const QByteArray& monoFloat32Pcm, int sampleRate, bool tx);
     void setTransmitting(bool tx);
 
-    // Lean mode: fully disable the scope — hide the applet and drop incoming
-    // sample batches so the 24 Hz software repaint stops entirely (#3283).
+    // Lean mode: fully disable the scope — hide the applet and short-circuit
+    // the appendScopeSamples handler so the m_waveform sample buffer +
+    // 24 Hz software repaint stop entirely. The upstream
+    // AudioEngine::{tx,rx}PostChainScopeReady signal still fires per audio
+    // callback (Qt queues the event onto the GUI thread either way), so the
+    // "drop sample feed" framing means the appended-and-repainted work is
+    // skipped, not the signal emission itself. (#3283)
     void setActive(bool on);
+    bool isActive() const { return m_active; }
 
 private:
     void buildSettingsDrawer();

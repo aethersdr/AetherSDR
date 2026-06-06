@@ -4618,7 +4618,7 @@ void SpectrumWidget::leanCappedUpdate()
     if (m_leanMode) {
         if (m_leanRepaintClock.isValid()
             && m_leanRepaintClock.elapsed() < kLeanFrameMs) {
-            return;  // drop frames above ~60 Hz
+            return;  // drop frames above ~30 Hz (kLeanFrameMs = 33)
         }
         m_leanRepaintClock.restart();
     }

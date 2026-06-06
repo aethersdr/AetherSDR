@@ -37,7 +37,7 @@ public:
             const bool settled = !m_smooth.tick(m_animElapsed.restart());
             if (settled)
                 m_animTimer.stop();
-            if (settled || MeterSmoother::shouldRepaint())
+            if (settled || m_smooth.shouldRepaint())
                 update();
         });
     }

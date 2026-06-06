@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "CwDecodeSettings.h"
+#include "DisplaySettings.h"
 #ifdef HAVE_MQTT
 #include "MqttApplet.h"
 #include "MqttSettingsDialog.h"
@@ -1477,7 +1478,10 @@ MainWindow::MainWindow(QWidget* parent)
     // Lean render mode (#3283): read persisted state early so panadapters
     // created during startup seed their Lean button/widget correctly, then
     // apply once after construction to cover VFOs + the WAVE applet.
-    m_leanMode = AppSettings::instance().value("LeanMode", "False").toString() == "True";
+    // Persistence is the nested "Display" blob (Principle V); the legacy
+    // flat "LeanMode" key is migrated into it on first read.
+    DisplaySettings::migrateLegacy();
+    m_leanMode = DisplaySettings::leanMode();
     if (m_leanMode) {
         QTimer::singleShot(0, this, [this]() { applyLeanMode(true); });
     }
@@ -10033,7 +10037,7 @@ void MainWindow::applyLeanMode(bool on)
 {
     m_leanMode = on;
 
-    // Panadapters: opaque single layer (no wallpaper / fill) + 60 Hz cap.
+    // Panadapters: opaque single layer (no wallpaper / fill) + ~30 Hz cap.
     // Also keep every pan's Lean button in sync (the toggle is global).
     for (auto* sw : findChildren<SpectrumWidget*>()) {
         sw->setLeanMode(on);
@@ -10045,10 +10049,18 @@ void MainWindow::applyLeanMode(bool on)
     for (auto* vfo : findChildren<VfoWidget*>())
         vfo->setOpaqueMode(on);
 
-    // WAVE scope: hidden + feed dropped.
+    // WAVE scope: hidden + feed dropped. Round-trip respects the user's
+    // pre-Lean choice (if they had the scope hidden before enabling Lean,
+    // disabling Lean must not silently re-show it).
     if (m_appletPanel) {
-        if (auto* wave = m_appletPanel->waveApplet())
-            wave->setActive(!on);
+        if (auto* wave = m_appletPanel->waveApplet()) {
+            if (on) {
+                m_preLeanWaveActive = wave->isActive();
+                wave->setActive(false);
+            } else {
+                wave->setActive(m_preLeanWaveActive);
+            }
+        }
     }
 
     // Meters: throttle their animation repaint so they stop dirtying the shared
@@ -10058,9 +10070,7 @@ void MainWindow::applyLeanMode(bool on)
     // isolate them under Qt 6.11/macOS, so we cap the repaint rate instead.
     MeterSmoother::setLeanThrottle(on);
 
-    auto& s = AppSettings::instance();
-    s.setValue("LeanMode", on ? "True" : "False");
-    s.save();
+    DisplaySettings::setLeanMode(on);
 }
 
 void MainWindow::onConnectionStateChanged(bool connected)
