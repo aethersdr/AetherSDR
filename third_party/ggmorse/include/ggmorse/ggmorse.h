@@ -46,6 +46,8 @@ extern "C" {
         float speed_wpm;
         float frequencyRangeMin_hz;
         float frequencyRangeMax_hz;
+        float speedRangeMin_wpm;    // coarse search lower bound (-1 = use default 5 WPM)
+        float speedRangeMax_wpm;    // coarse search upper bound (-1 = use default 55 WPM)
 
         bool applyFilterHighPass;
         bool applyFilterLowPass;

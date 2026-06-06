@@ -5,6 +5,7 @@
 #include "core/ThemeManager.h"
 
 #include <QElapsedTimer>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QTimer>
@@ -33,6 +34,10 @@ public:
         setFixedHeight(16);
         setMinimumWidth(60);
         setCursor(Qt::PointingHandCursor);
+        // StrongFocus (was TabFocus) so a mouse click leaves keyboard focus on
+        // the fader — matching GuardedSlider — which lets keyboard stepping and
+        // the value badge work after a mouse interaction. (#3303 follow-up)
+        setFocusPolicy(Qt::StrongFocus);
 
         m_animTimer.setTimerType(Qt::PreciseTimer);
         m_animTimer.setInterval(kMeterSmootherIntervalMs);
@@ -50,6 +55,7 @@ public:
 
     float gain() const { return m_gain; }
     float level() const { return m_smooth.value(); }
+    bool isDragging() const { return m_dragging; }
 
     void setDragValueFormatter(DragValueFormatter formatter) {
         m_dragValueFormatter = std::move(formatter);
@@ -162,8 +168,43 @@ protected:
         p.drawPolygon(tri);
     }
 
+    void keyPressEvent(QKeyEvent* e) override {
+        float delta = 0.0f;
+        if (e->key() == Qt::Key_Right || e->key() == Qt::Key_Up)   delta = +0.05f;
+        if (e->key() == Qt::Key_Left  || e->key() == Qt::Key_Down) delta = -0.05f;
+        if (delta != 0.0f) {
+            float g = std::clamp(m_gain + delta, 0.0f, 1.0f);
+            if (g != m_gain) {
+                m_gain = g;
+                emit gainChanged(m_gain);
+                update();
+            }
+            // Mirror the mouse-drag readout: show the value badge and let it
+            // linger with the same timeout, even when stepping by keyboard.
+            showDragValuePopup(dragValueAnchor(mapToGlobal(rect().center())));
+            if (m_dragValuePopup)
+                m_dragValuePopup->linger();
+            e->accept();
+            return;
+        }
+        // Enter hands keyboard control back to the panadapter's global
+        // shortcuts immediately, rather than waiting for focus to drift away.
+        if (e->key() == Qt::Key_Return || e->key() == Qt::Key_Enter) {
+            if (m_dragValuePopup)
+                m_dragValuePopup->hideNow();
+            clearFocus();
+            e->accept();
+            return;
+        }
+        QWidget::keyPressEvent(e);
+    }
+
     void mousePressEvent(QMouseEvent* e) override {
         if (e->button() == Qt::LeftButton) {
+            // Take keyboard focus explicitly: the left-button path doesn't call
+            // the base handler, so rely on this rather than the focus policy's
+            // implicit click-to-focus to start the mouse→keyboard handoff.
+            setFocus(Qt::MouseFocusReason);
             m_dragging = true;
             updateGainFromMouse(e->pos().x());
             showDragValuePopup(e->globalPosition().toPoint());

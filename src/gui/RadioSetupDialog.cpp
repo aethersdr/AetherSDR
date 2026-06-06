@@ -98,6 +98,22 @@ static const QString kEditStyle =
 static constexpr int kInfoLeftLabelWidth = 112;
 static constexpr int kInfoRightLabelWidth = 160;
 
+// Wrap a tab page in a vertical QScrollArea so tabs whose stacked groups exceed
+// the dialog's visible height (Themes, Audio, Filters, Peripherals on small or
+// high-DPI displays) get a vertical scrollbar instead of forcing the dialog
+// past the screen edge (#3345). setWidgetResizable(true) keeps horizontal
+// expansion intact and hides the scrollbar when content already fits — users
+// on wide screens see no visual change.
+static QWidget* wrapTabInScrollArea(QWidget* content)
+{
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+    scroll->setWidget(content);
+    return scroll;
+}
+
 static QString displayOrDash(const QString& value)
 {
     const QString trimmed = value.trimmed();
@@ -443,7 +459,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     // selected.  This avoids hardware-probing calls (QSerialPortInfo,
     // QMediaDevices) during construction, which crash on some Wayland/Qt 6.11
     // configurations (#1776).
-    tabs->addTab(buildRadioTab(), "Radio");
+    tabs->addTab(wrapTabInScrollArea(buildRadioTab()), "Radio");
 
     auto addDeferred = [&](const QString& name, std::function<QWidget*()> builder) {
         int idx = tabs->addTab(new QWidget, name);
@@ -513,13 +529,10 @@ QWidget* RadioSetupDialog::buildRadioTab()
         "border: 1px solid #20a040; }";
 
     auto makeToggle = [](bool checked) {
-        auto* btn = new QPushButton(checked ? "Enabled" : "Disabled");
+        auto* btn = new QPushButton("Enabled");
         btn->setCheckable(true);
         btn->setChecked(checked);
         btn->setStyleSheet(kToggleStyle);
-        QObject::connect(btn, &QPushButton::toggled, btn, [btn](bool on) {
-            btn->setText(on ? "Enabled" : "Disabled");
-        });
         return btn;
     };
 
@@ -1033,7 +1046,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
         grid->setSpacing(6);
 
         grid->addWidget(new QLabel("Enforce Private IP Connections:"), 0, 0);
-        auto* enforceBtn = new QPushButton(m_model->enforcePrivateIp() ? "Enabled" : "Disabled");
+        auto* enforceBtn = new QPushButton("Enabled");
         enforceBtn->setCheckable(true);
         enforceBtn->setChecked(m_model->enforcePrivateIp());
         AetherSDR::ThemeManager::instance().applyStyleSheet(enforceBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
@@ -1041,8 +1054,7 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             "padding: 3px 10px; }"
             "QPushButton:checked { background: #1a5030; color: {{color.accent.success}}; "
             "border: 1px solid #20a040; }");
-        connect(enforceBtn, &QPushButton::toggled, this, [this, enforceBtn](bool on) {
-            enforceBtn->setText(on ? "Enabled" : "Disabled");
+        connect(enforceBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->sendCommand(
                 QString("radio set enforce_private_ip_connections=%1").arg(on ? 1 : 0));
         });
@@ -1393,7 +1405,7 @@ QWidget* RadioSetupDialog::buildTxTab()
         auto* swLbl = new QLabel("Show TX in Waterfall:");
         swLbl->setStyleSheet(kLabelStyle);
         grid->addWidget(swLbl, 1, 0);
-        auto* swBtn = new QPushButton(tx.showTxInWaterfall() ? "Enabled" : "Disabled");
+        auto* swBtn = new QPushButton("Enabled");
         swBtn->setCheckable(true);
         swBtn->setChecked(tx.showTxInWaterfall());
         AetherSDR::ThemeManager::instance().applyStyleSheet(swBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
@@ -1401,8 +1413,7 @@ QWidget* RadioSetupDialog::buildTxTab()
             "padding: 3px 10px; }"
             "QPushButton:checked { background: #1a5030; color: {{color.accent.success}}; "
             "border: 1px solid #20a040; }");
-        connect(swBtn, &QPushButton::toggled, this, [this, swBtn](bool on) {
-            swBtn->setText(on ? "Enabled" : "Disabled");
+        connect(swBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->sendCommand(
                 QString("transmit set show_tx_in_waterfall=%1").arg(on ? 1 : 0));
         });
@@ -1527,9 +1538,8 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         connect(boostBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->transmitModel().setMicBoost(on);
         });
-        auto* metBtn = mkTogBtn(tx.metInRx() ? "Enabled" : "Disabled", tx.metInRx());
-        connect(metBtn, &QPushButton::toggled, this, [this, metBtn](bool on) {
-            metBtn->setText(on ? "Enabled" : "Disabled");
+        auto* metBtn = mkTogBtn("Enabled", tx.metInRx());
+        connect(metBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->sendCommand(QString("transmit set met_in_rx=%1").arg(on ? 1 : 0));
         });
 
@@ -1552,8 +1562,7 @@ QWidget* RadioSetupDialog::buildPhoneCwTab()
         iamLbl->setStyleSheet(kLabelStyle);
         grid->addWidget(iamLbl, 0, 0);
         auto* iamBtn = mkTogBtn("Enabled", tx.cwIambic());
-        connect(iamBtn, &QPushButton::toggled, this, [this, iamBtn](bool on) {
-            iamBtn->setText(on ? "Enabled" : "Disabled");
+        connect(iamBtn, &QPushButton::toggled, this, [this](bool on) {
             m_model->sendCommand(QString("cw iambic %1").arg(on ? 1 : 0));
         });
         grid->addWidget(iamBtn, 0, 1);
@@ -1943,12 +1952,11 @@ QWidget* RadioSetupDialog::buildRxTab()
             auto* lbl = new QLabel(label);
             lbl->setStyleSheet(kLabelStyle);
             grid->addWidget(lbl, row, 0);
-            auto* btn = new QPushButton(checked ? "Enabled" : "Disabled");
+            auto* btn = new QPushButton("Enabled");
             btn->setCheckable(true);
             btn->setChecked(checked);
             btn->setStyleSheet(kTogStyle);
-            connect(btn, &QPushButton::toggled, this, [this, btn, cmd](bool on) {
-                btn->setText(on ? "Enabled" : "Disabled");
+            connect(btn, &QPushButton::toggled, this, [this, cmd](bool on) {
                 m_model->sendCommand(
                     QString("%1=%2").arg(cmd).arg(on ? 1 : 0));
             });
@@ -2269,7 +2277,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         boostLabel->setStyleSheet(kLabelStyle);
         boostLabel->setFixedWidth(90);
         bool boostOn = AppSettings::instance().value("AudioBoost", "False").toString() == "True";
-        auto* boostBtn = new QPushButton(boostOn ? "Enabled" : "Disabled");
+        auto* boostBtn = new QPushButton("Enabled");
         boostBtn->setCheckable(true);
         boostBtn->setChecked(boostOn);
         boostBtn->setToolTip("Apply 50% software gain boost to PC audio output.\n"
@@ -2279,8 +2287,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
             "padding: 3px 10px; }"
             "QPushButton:checked { background: #1a5030; color: {{color.accent.success}}; "
             "border: 1px solid #20a040; }");
-        connect(boostBtn, &QPushButton::toggled, this, [this, boostBtn](bool on) {
-            boostBtn->setText(on ? "Enabled" : "Disabled");
+        connect(boostBtn, &QPushButton::toggled, this, [this](bool on) {
             auto& s = AppSettings::instance();
             s.setValue("AudioBoost", on ? "True" : "False");
             s.save();
@@ -2755,7 +2762,7 @@ QWidget* RadioSetupDialog::buildXvtrTab()
         auto* rxOnlyLbl = new QLabel("RX Only:");
         rxOnlyLbl->setStyleSheet(kLabelStyle);
         grid->addWidget(rxOnlyLbl, 3, 2);
-        auto* rxOnlyBtn = new QPushButton(x.rxOnly ? "Enabled" : "Disabled");
+        auto* rxOnlyBtn = new QPushButton("Enabled");
         rxOnlyBtn->setCheckable(true);
         rxOnlyBtn->setChecked(x.rxOnly);
         AetherSDR::ThemeManager::instance().applyStyleSheet(rxOnlyBtn, "QPushButton { background: {{color.background.1}}; border: 1px solid {{color.background.2}}; "
@@ -2763,8 +2770,7 @@ QWidget* RadioSetupDialog::buildXvtrTab()
             "padding: 3px 10px; }"
             "QPushButton:checked { background: #1a5030; color: {{color.accent.success}}; "
             "border: 1px solid #20a040; }");
-        connect(rxOnlyBtn, &QPushButton::toggled, this, [this, rxOnlyBtn, idx](bool on) {
-            rxOnlyBtn->setText(on ? "Enabled" : "Disabled");
+        connect(rxOnlyBtn, &QPushButton::toggled, this, [this, idx](bool on) {
             m_model->sendCommand(
                 QString("xvtr set %1 rx_only=%2").arg(idx).arg(on ? 1 : 0));
         });
@@ -4759,7 +4765,10 @@ void RadioSetupDialog::buildDeferredTab(int index)
     QWidget* content = it.value()();        // run the real builder
     auto* lay = new QVBoxLayout(placeholder);
     lay->setContentsMargins(0, 0, 0, 0);
-    lay->addWidget(content);
+    // Wrap in a scroll area so tall tabs (Themes, Audio, Filters,
+    // Peripherals on small / high-DPI displays) become scrollable instead
+    // of forcing the dialog past the screen edge (#3345).
+    lay->addWidget(wrapTabInScrollArea(content));
     m_deferredBuilders.erase(it);           // build only once
 }
 
@@ -5105,6 +5114,46 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
         });
 
         vbox->addWidget(clickGrp);
+    }
+
+    // ── Mouse wheel group (#3302) ───────────────────────────────────────────
+    // Trackball / inverted-scroll users (and parity with Thetis / KE9NS) get
+    // a single checkbox that reverses the wheel direction for frequency
+    // tuning.  Reading is per-event in the wheel handlers, so this takes
+    // effect immediately with no signal plumbing.  The Ctrl+wheel bandwidth
+    // zoom on the panadapter is intentionally not reversed.
+    {
+        auto* wheelGrp = new QGroupBox("Mouse wheel");
+        wheelGrp->setStyleSheet(kGroupStyle);
+        auto* wheelLayout = new QVBoxLayout(wheelGrp);
+        wheelLayout->setSpacing(8);
+
+        auto* reverseChk = new QCheckBox("Reverse mouse-wheel tuning direction");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(reverseChk,
+            "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }");
+        {
+            auto& s = AppSettings::instance();
+            reverseChk->setChecked(s.value("ReverseMouseWheel", false).toBool());
+        }
+        wheelLayout->addWidget(reverseChk);
+
+        auto* wheelDesc = new QLabel(
+            "When enabled, scrolling the wheel up tunes the frequency down "
+            "(and vice versa). Useful for trackballs and any pointer where "
+            "the natural scroll direction feels inverted. Affects the VFO "
+            "frequency display and the panadapter / waterfall; the "
+            "Ctrl+wheel bandwidth zoom is not reversed.");
+        wheelDesc->setStyleSheet("QLabel { color: #7090a0; font-size: 11px; }");
+        wheelDesc->setWordWrap(true);
+        wheelLayout->addWidget(wheelDesc);
+
+        connect(reverseChk, &QCheckBox::toggled, this, [](bool on) {
+            auto& s = AppSettings::instance();
+            s.setValue("ReverseMouseWheel", on);
+            s.save();
+        });
+
+        vbox->addWidget(wheelGrp);
     }
 
     return page;

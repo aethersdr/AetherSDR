@@ -2,6 +2,9 @@
 
 #include "MeterSmoother.h"
 
+#include <QAccessible>
+#include <QAccessibleWidget>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QWidget>
 #include <QWheelEvent>
@@ -263,13 +266,18 @@ public:
     {
         setFixedHeight(18);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        setToolTip("Scroll to adjust relay position");
+        setFocusPolicy(Qt::TabFocus);
+        setToolTip(tr("Scroll or use Up/Down keys to adjust relay position"));
     }
 
     void setValue(int v) {
         if (m_value == v) return;
         m_value = v;
         update();
+        if (hasFocus()) {
+            QAccessibleValueChangeEvent event(this, QVariant(v));
+            QAccessible::updateAccessibility(&event);
+        }
     }
 
     void setScrollEnabled(bool on) {
@@ -281,6 +289,19 @@ signals:
     void relayAdjusted(int direction);  // +1 scroll up, -1 scroll down
 
 protected:
+    void keyPressEvent(QKeyEvent* e) override {
+        if (!m_scrollEnabled) { QWidget::keyPressEvent(e); return; }
+        if (e->key() == Qt::Key_Up || e->key() == Qt::Key_Plus || e->key() == Qt::Key_Right) {
+            emit relayAdjusted(+1);
+            e->accept();
+        } else if (e->key() == Qt::Key_Down || e->key() == Qt::Key_Minus || e->key() == Qt::Key_Left) {
+            emit relayAdjusted(-1);
+            e->accept();
+        } else {
+            QWidget::keyPressEvent(e);
+        }
+    }
+
     void wheelEvent(QWheelEvent* e) override {
         if (!m_scrollEnabled) {
             QWidget::wheelEvent(e);

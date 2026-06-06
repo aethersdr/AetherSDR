@@ -203,6 +203,20 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     connect(m_model, &DvkModel::statusChanged, this, &DvkPanel::onStatusChanged);
     connect(m_model, &DvkModel::recordingChanged, this, &DvkPanel::onRecordingChanged);
 
+    // Surface radio rejections instead of silently toggling buttons.  Without
+    // this the REC button latched "checked" on a rejected rec_start. (#3377)
+    connect(m_model, &DvkModel::commandFailed, this,
+            [this](const QString& verb, int id, uint /*code*/, const QString& message) {
+        // Re-drive the buttons from the current (unchanged) status so the
+        // failed momentary press is visually released.  This must run *first*:
+        // onStatusChanged() rewrites m_statusLabel ("Status: Idle"), so set the
+        // failure text afterwards or it gets clobbered before the event loop
+        // returns and the user never sees the rejection. (#3377)
+        onStatusChanged(static_cast<int>(m_model->status()), m_model->activeId());
+        m_statusLabel->setText(QString("Status: %1 (slot %2) failed — %3")
+                                   .arg(verb).arg(id).arg(message));
+    });
+
     // F1-F12 hotkeys (only play if slot has a recording).  Registered as
     // Qt::ApplicationShortcut on window() and created disabled — MainWindow
     // flips enable state based on the active slice's mode (mutually

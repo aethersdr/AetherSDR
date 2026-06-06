@@ -191,10 +191,12 @@ const GGMorse::Parameters & GGMorse::getDefaultParameters() {
 
 const GGMorse::ParametersDecode & GGMorse::getDefaultParametersDecode() {
     static ggmorse_ParametersDecode result {
-        -1.0f,
-        -1.0f,
-        200.0f,
-        1200.0f,
+        -1.0f,    // frequency_hz — auto
+        -1.0f,    // speed_wpm    — auto
+        200.0f,   // frequencyRangeMin_hz
+        1200.0f,  // frequencyRangeMax_hz
+        -1.0f,    // speedRangeMin_wpm — use full range
+        -1.0f,    // speedRangeMax_wpm — use full range
         true,
         true,
     };
@@ -225,7 +227,7 @@ GGMorse::GGMorse(const Parameters & parameters)
         parameters.samplesPerFrame,
     })) {
 
-    m_impl->intervalsAll.resize(100);
+    m_impl->intervalsAll.resize(120);  // must be > max s-index (s = wpm-5, max 115 WPM → s=110)
     for (auto & intervals : m_impl->intervalsAll) {
         intervals.resize(100);
         for (auto & x : intervals) {
@@ -750,13 +752,16 @@ void GGMorse::decode_float() {
     int bestLevelIdx = 0;
     int bestSpeedIdx = 0;
 
-    int s0 = 0;
-    int s1 = 50;
-    int ds = 10;
+    // Speed range from caller (s-index = wpm - 5). Default 5..115 WPM.
+    const float sRangeMin = m_impl->parametersDecode.speedRangeMin_wpm;
+    const float sRangeMax = m_impl->parametersDecode.speedRangeMax_wpm;
+    int s0 = (sRangeMin > 0.0f) ? std::max(0, (int)std::round(sRangeMin - 5.0f)) : 0;
+    int s1 = (sRangeMax > 0.0f) ? std::min(110, (int)std::round(sRangeMax - 5.0f)) : 50;
+    int ds = 2;   // step of 2 WPM — was 10; finer grid catches any contest speed
     int nModes = 2;
 
-    if (speed_wpm > 0.0f && speed_wpm < 100.0f) {
-        s0 = s1 = std::round(speed_wpm - 5.0f);
+    if (speed_wpm > 0.0f && speed_wpm < 200.0f) {
+        s0 = s1 = std::min(110, (int)std::round(speed_wpm - 5.0f));
         nModes = 1;
     }
 
@@ -764,8 +769,8 @@ void GGMorse::decode_float() {
 
     for (int mode = 0; mode < nModes; ++mode) {
         if (mode == 1) {
-            s0 = std::min(std::max(0.0f, std::round(m_impl->statistics.estimatedSpeed_wpm - 5.0f - 2.0f)), 50.0f);
-            s1 = std::min(std::max(0.0f, std::round(m_impl->statistics.estimatedSpeed_wpm - 5.0f + 2.0f)), 50.0f);
+            s0 = std::min(std::max(0.0f, std::round(m_impl->statistics.estimatedSpeed_wpm - 5.0f - 2.0f)), 110.0f);
+            s1 = std::min(std::max(0.0f, std::round(m_impl->statistics.estimatedSpeed_wpm - 5.0f + 2.0f)), 110.0f);
             ds = 1;
         }
 
@@ -774,7 +779,7 @@ void GGMorse::decode_float() {
         int l1 = (mode == 0) ? 90 : lOld + 10;
         int dl = (mode == 0) ? 20 : 2;
 
-        for (int s = s0; s <= s1 && s < 55; s += ds) {
+        for (int s = s0; s <= s1; s += ds) {
             float lendot_samples = kBaseSampleRate*(1e-3*lendot_ms(5 + s))/nDownsample;
 
             for (int l = l0; l <= l1; l += dl) {

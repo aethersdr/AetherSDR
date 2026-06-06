@@ -33,4 +33,17 @@ inline int clickDiscriminationIntervalMs()
     return v;
 }
 
+// Whether mouse-wheel tuning should be reversed (clockwise = down).  Matches
+// the comparable option in Thetis / KE9NS — useful for trackballs where the
+// natural wheel direction feels inverted (#3302).  Read per-event at the
+// wheel handler so toggling via Radio Setup → UI Enhancements takes effect
+// immediately without an app restart.  Only the frequency-tuning paths in
+// VfoWidget::wheelEvent and SpectrumWidget::wheelEvent consult this; the
+// Ctrl+wheel bandwidth zoom is intentionally not reversed.
+inline bool reverseMouseWheel()
+{
+    auto& s = AppSettings::instance();
+    return s.value("ReverseMouseWheel", false).toBool();
+}
+
 } // namespace AetherSDR

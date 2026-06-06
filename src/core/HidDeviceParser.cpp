@@ -4,7 +4,7 @@
 namespace AetherSDR {
 
 static const HidDeviceId kSupportedDevices[] = {
-    {0x0C26, 0x001E, "Icom RC-28"},
+    {0x0C26, 0x001E, "Icom RC-28 Remote Encoder"},
     {0x077D, 0x0410, "Griffin PowerMate"},
     {0x0B33, 0x0020, "Contour ShuttleXpress"},
     {0x0B33, 0x0030, "Contour ShuttlePro v2"},

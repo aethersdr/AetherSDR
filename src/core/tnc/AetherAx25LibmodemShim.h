@@ -126,6 +126,10 @@ public:
     Ax25TransmitResult buildTransmitAudio(const QString& text,
                                           const QString& defaultSource,
                                           const QString& defaultDestination = QStringLiteral("APRS")) const;
+    // Build TX audio from a raw AX.25 frame (address..info, no FCS), e.g. the
+    // payload of a KISS data frame from a host application. The FCS is computed
+    // and appended here before HDLC framing and AFSK modulation.
+    Ax25TransmitResult buildTransmitAudioFromFrame(const QByteArray& ax25NoFcs) const;
 
     Ax25DecoderDiagnostics diagnosticsSnapshot() const;
     QString demodDescription() const;

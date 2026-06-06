@@ -365,7 +365,19 @@ void QsoRecorder::startPlayback()
 {
     if (m_playing || m_lastRecordingPath.isEmpty()) return;
 
+    // Prefer the device the user picked in Radio Settings > Audio
+    // (m_outputDevice, seeded by MainWindow from AudioEngine).  Only
+    // accept it if it is still present in the live audioOutputs() list
+    // — a hotplug/unplug between selection and now would otherwise
+    // strand us on a stale handle.  Mirrors ClientPuduMonitor and
+    // AudioEngine::startSidetoneStream() (#3361).
     QAudioDevice dev = QMediaDevices::defaultAudioOutput();
+    if (!m_outputDevice.isNull()) {
+        const auto outputs = QMediaDevices::audioOutputs();
+        for (const auto& d : outputs) {
+            if (d.id() == m_outputDevice.id()) { dev = d; break; }
+        }
+    }
     if (dev.isNull()) return;
 
     QAudioFormat fmt;
@@ -377,7 +389,16 @@ void QsoRecorder::startPlayback()
     if (!dev.isFormatSupported(fmt)) {
         fmt.setSampleRate(48000);
         sinkRate = 48000;
-        if (!dev.isFormatSupported(fmt)) return;
+        if (!dev.isFormatSupported(fmt)) {
+            // Try 44.1 kHz Int16 before giving up on Int16 — some Windows
+            // output devices (HFP/SCO routes, certain USB DACs) reject 48 kHz
+            // outright but accept 44.1 kHz.  Mirrors ClientPuduMonitor's
+            // 24/48/44.1 ladder so QSO recording playback doesn't bail on
+            // devices where monitor playback succeeds (#3385).
+            fmt.setSampleRate(44100);
+            sinkRate = 44100;
+            if (!dev.isFormatSupported(fmt)) return;
+        }
     }
 
     if (!preparePlaybackPcm(sinkRate)) return;

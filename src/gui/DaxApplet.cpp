@@ -96,6 +96,7 @@ void DaxApplet::buildUI()
         row->addWidget(m_daxRxStatus[i]);
 
         m_daxRxMeter[i] = new MeterSlider;
+        m_daxRxMeter[i]->setAccessibleName(tr("DAX RX %1 gain").arg(i + 1));
         {
             auto key = QStringLiteral("DaxRxGain%1").arg(i + 1);
             float saved = settings.value(key, "0.5").toString().toFloat();
@@ -128,6 +129,7 @@ void DaxApplet::buildUI()
     txRow->addWidget(m_daxTxStatus);
 
     m_daxTxMeter = new MeterSlider;
+    m_daxTxMeter->setAccessibleName(tr("DAX TX gain"));
     {
         float saved = settings.value("DaxTxGain", "0.5").toString().toFloat();
         m_daxTxMeter->setGain(std::clamp(saved, 0.0f, 1.0f));

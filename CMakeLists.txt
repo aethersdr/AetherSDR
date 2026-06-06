@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(AetherSDR VERSION 26.5.3 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.6.1.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -17,6 +17,7 @@ option(USE_SYSTEM_ZLIB         "Use system zlib"         OFF)
 option(USE_SYSTEM_MSPACK       "Use system libmspack"    OFF)
 option(USE_SYSTEM_LIBMOSQUITTO "Use system libmosquitto" OFF)
 option(USE_SYSTEM_RTMIDI       "Use system RtMidi"       OFF)
+option(USE_SYSTEM_LIQUID_DSP   "Use system liquid-dsp"   OFF)
 
 # Build features options
 
@@ -485,6 +486,7 @@ endif()
 # Sources
 set(CORE_SOURCES
     src/core/AppSettings.cpp
+    src/core/AgcTCalibrator.cpp
     src/core/SettingsHelpers.cpp
     src/core/ThemeManager.cpp
     src/core/BandStackSettings.cpp
@@ -521,7 +523,6 @@ set(CORE_SOURCES
     src/core/PacketLossConcealment.cpp
     src/core/PerfTelemetry.cpp
     src/core/RigctlProtocol.cpp
-    src/core/RigctlPty.cpp
     src/core/SmartCatProtocol.cpp
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
@@ -551,6 +552,7 @@ set(CORE_SOURCES
     src/core/RNNoiseFilter.cpp
     src/core/SpecbleachFilter.cpp
     src/core/CwDecoder.cpp
+    src/core/RttyDecoder.cpp
     src/core/VoiceSignalDetector.cpp
     src/core/SpectrogramBuffer.cpp
     src/core/SignalClassifier.cpp
@@ -575,6 +577,8 @@ set(CORE_SOURCES
     src/core/MemoryRecallPolicy.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/KissFraming.cpp
+    src/core/tnc/KissTncServer.cpp
 )
 
 if(APPLE)
@@ -621,6 +625,7 @@ set(MODEL_SOURCES
 
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
+    src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
     src/gui/ConnectionPanel.cpp
     src/gui/ClientDisconnectDialog.cpp
@@ -662,6 +667,7 @@ set(GUI_SOURCES
     src/gui/ProfileImportExportDialog.cpp
     src/gui/TxBandDialog.cpp
     src/gui/PanadapterApplet.cpp
+    src/gui/RangeSlider.cpp
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
     src/gui/AppletPanel.cpp
@@ -879,7 +885,7 @@ endif()
 # build verifies clean on Linux + macOS even though no module currently
 # consumes liquid symbols. Standard linker dead-code elimination
 # (--gc-sections on ELF) drops the unused static lib from the final binary.
-if(NOT MSVC)
+if(NOT MSVC AND NOT USE_SYSTEM_LIQUID_DSP)
     set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
     set(BUILD_AUTOTESTS OFF CACHE BOOL "" FORCE)
     set(BUILD_BENCHMARKS OFF CACHE BOOL "" FORCE)
@@ -908,6 +914,13 @@ if(NOT MSVC)
         target_compile_options(liquid-static PRIVATE -w)
     endif()
 endif()  # NOT MSVC
+
+if (USE_SYSTEM_LIQUID_DSP)
+    find_package(PkgConfig REQUIRED)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(liquid-dsp REQUIRED IMPORTED_TARGET liquid-dsp)
+    endif()
+endif()
 
 set(DFNR_RESOURCES "")
 if(ENABLE_DFNR AND AETHER_EMBED_DFNR_MODEL)
@@ -1084,11 +1097,16 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::Network
     Qt6::Multimedia
     aether_libmodem_core
-    # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
-    # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
-    $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
+
+if (USE_SYSTEM_LIQUID_DSP)
+    target_link_libraries(AetherSDR PRIVATE PkgConfig::liquid-dsp)
+else()
+    # bundled third_party/liquid-dsp (#3043) — non-MSVC only; see CMakeLists
+    # block above for the liquid-dsp/MSVC C99 _Complex incompatibility.
+    target_link_libraries(AetherSDR PRIVATE $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:liquid-static>)
+endif()
 
 if(Qt6SerialPort_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SERIALPORT)
@@ -1243,7 +1261,9 @@ if(HIDAPI_FOUND)
         src/core/HidEncoderManager.cpp
         src/core/HidEncoderManager.h
         src/core/HidDeviceParser.cpp
-        src/core/HidDeviceParser.h)
+        src/core/HidDeviceParser.h
+        src/gui/RC28MappingDialog.cpp
+        src/gui/RC28MappingDialog.h)
     set(HIDAPI_NORMALIZED_INCLUDE_DIRS ${HIDAPI_INCLUDE_DIRS})
     foreach(hidapi_dir IN LISTS HIDAPI_INCLUDE_DIRS)
         if(EXISTS "${hidapi_dir}/hidapi.h")
@@ -1834,6 +1854,14 @@ target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
 add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 
+# #3212 — slice recreate policy (reuse restored pan vs create new; slice freq)
+add_executable(slice_recreate_policy_test
+    tests/slice_recreate_policy_test.cpp
+)
+target_include_directories(slice_recreate_policy_test PRIVATE src)
+target_link_libraries(slice_recreate_policy_test PRIVATE Qt6::Core)
+add_test(NAME slice_recreate_policy_test COMMAND slice_recreate_policy_test)
+
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
     src/core/ShortcutManager.cpp
@@ -1910,6 +1938,7 @@ add_executable(ax25_libmodem_shim_test
     tests/ax25_libmodem_shim_test.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
+    src/core/tnc/KissFraming.cpp
     # LogManager.cpp provides lcAx25 (the shim's qCDebug category, #2763);
     # LogManager.cpp depends on AsyncLogWriter via the m_writer member, so
     # AppSettings + AsyncLogWriter come along to satisfy the constructor /
@@ -2038,8 +2067,9 @@ target_compile_definitions(midi_settings_test PRIVATE HAVE_MIDI)
 if (USE_SYSTEM_RTMIDI)
     target_link_libraries(midi_settings_test PRIVATE PkgConfig::rtmidi)
 else()
-    target_include_directories(midi_settings_test PRIVATE src third_party/rtmidi)
+    target_include_directories(midi_settings_test PRIVATE third_party/rtmidi)
 endif()
+target_include_directories(midi_settings_test PRIVATE src)
 target_link_libraries(midi_settings_test PRIVATE Qt6::Core)
 add_test(NAME midi_settings_test COMMAND midi_settings_test)
 

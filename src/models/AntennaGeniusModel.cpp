@@ -155,12 +155,18 @@ void AntennaGeniusModel::onDiscoveryDatagram()
         if (m_connected &&
             (m_device.serial.endsWith("-manual") || m_device.serial.startsWith("manual-")) &&
             !m_device.ip.isNull() && m_device.ip == info.ip) {
+            // Only emit antennasChanged once — when the placeholder serial is
+            // first replaced by the real one. Emitting on every beacon caused
+            // rebuildAntennaButtons to run every ~1s, blanking the display during
+            // the brief window before the antenna list response arrived.
+            bool serialChanged = (m_device.serial != info.serial);
             m_device.serial       = info.serial;
             m_device.name         = info.name;
             m_device.webPort      = info.webPort;
             m_device.radioPorts   = info.radioPorts;
             m_device.antennaPorts = info.antennaPorts;
-            emit antennasChanged();
+            if (serialChanged)
+                emit antennasChanged();
         }
     }
 }

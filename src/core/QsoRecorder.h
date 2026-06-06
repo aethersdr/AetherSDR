@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAudio>
+#include <QAudioDevice>
 #include <QBuffer>
 #include <QByteArray>
 #include <QDateTime>
@@ -50,6 +51,14 @@ public:
 
     void setCallsign(const QString& call);
     QString callsign() const { return m_callsign; }
+
+    // Audio output device the playback sink opens.  When null, falls back
+    // to QMediaDevices::defaultAudioOutput().  MainWindow seeds this from
+    // AudioEngine::outputDevice() at construction and refreshes it on
+    // AudioEngine::outputDeviceChanged so QSO playback follows the user's
+    // selection in Radio Settings > Audio rather than going to the system
+    // default (#3361).
+    void setOutputDevice(const QAudioDevice& dev) { m_outputDevice = dev; }
 
     // Filename component toggles
     void setIncludeDate(bool on) { m_includeDate = on; }
@@ -133,6 +142,7 @@ private:
     QAudioSink*  m_playSink{nullptr};
     QBuffer      m_playBuffer;
     QByteArray   m_playPcm;
+    QAudioDevice m_outputDevice;
 
     // Thread safety for audio feed paths
     std::mutex  m_writeMutex;

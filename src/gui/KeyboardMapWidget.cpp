@@ -1,6 +1,9 @@
 #include "KeyboardMapWidget.h"
 #include "core/ShortcutManager.h"
 
+#include <QAccessible>
+#include <QFocusEvent>
+#include <QKeyEvent>
 #include <QPainter>
 #include <QMouseEvent>
 #include "core/ThemeManager.h"
@@ -34,6 +37,8 @@ KeyboardMapWidget::KeyboardMapWidget(ShortcutManager* mgr, QWidget* parent)
     : QWidget(parent), m_mgr(mgr)
 {
     setMouseTracking(true);
+    setFocusPolicy(Qt::TabFocus);
+    setAccessibleName(tr("Keyboard shortcut map"));
     buildLayout();
     connect(mgr, &ShortcutManager::bindingsChanged, this, [this]() { update(); });
 }
@@ -270,6 +275,11 @@ void KeyboardMapWidget::paintEvent(QPaintEvent*)
             fill = fill.lighter(150);
         }
 
+        // Keyboard focus ring (shown when widget has focus)
+        if (i == m_focusIdx && hasFocus()) {
+            border = QColor(0xff, 0xff, 0x00);  // yellow focus ring
+        }
+
         // Draw key background
         p.setPen(QPen(border, 1));
         p.setBrush(fill);
@@ -312,8 +322,10 @@ void KeyboardMapWidget::mousePressEvent(QMouseEvent* ev)
     int idx = hitTest(ev->pos());
     if (idx >= 0) {
         m_selectedIdx = idx;
+        m_focusIdx = idx;
         update();
         emit keySelected(m_keys[idx].qtKey);
+        announceKey(idx);
     }
     ev->accept();
 }
@@ -335,6 +347,122 @@ void KeyboardMapWidget::leaveEvent(QEvent*)
         m_hoverIdx = -1;
         update();
     }
+}
+
+// ─── Keyboard navigation ────────────────────────────────────────────────────
+
+void KeyboardMapWidget::keyPressEvent(QKeyEvent* ev)
+{
+    if (m_keys.isEmpty()) { QWidget::keyPressEvent(ev); return; }
+
+    int next = m_focusIdx;
+    switch (ev->key()) {
+    case Qt::Key_Left:
+        next = qMax(0, m_focusIdx - 1);
+        break;
+    case Qt::Key_Right:
+        next = qMin(m_keys.size() - 1, m_focusIdx + 1);
+        break;
+    case Qt::Key_Up:
+        next = findKeyVertical(m_focusIdx, true);
+        break;
+    case Qt::Key_Down:
+        next = findKeyVertical(m_focusIdx, false);
+        break;
+    case Qt::Key_Home:
+        next = 0;
+        break;
+    case Qt::Key_End:
+        next = m_keys.size() - 1;
+        break;
+    case Qt::Key_Return:
+    case Qt::Key_Enter:
+    case Qt::Key_Space:
+        selectFocusKey();
+        ev->accept();
+        return;
+    default:
+        QWidget::keyPressEvent(ev);
+        return;
+    }
+
+    if (next != m_focusIdx) {
+        m_focusIdx = next;
+        update();
+        announceKey(m_focusIdx);
+    }
+    ev->accept();
+}
+
+void KeyboardMapWidget::focusInEvent(QFocusEvent* ev)
+{
+    QWidget::focusInEvent(ev);
+    update();
+    announceKey(m_focusIdx);
+}
+
+void KeyboardMapWidget::focusOutEvent(QFocusEvent* ev)
+{
+    QWidget::focusOutEvent(ev);
+    update();
+}
+
+int KeyboardMapWidget::findKeyVertical(int idx, bool up) const
+{
+    if (idx < 0 || idx >= m_keys.size()) return qMax(0, idx);
+    const KeyCap& cur = m_keys[idx];
+
+    // Collect unique row y-values
+    QVector<float> rowYs;
+    for (const auto& k : m_keys) {
+        bool found = false;
+        for (float y : rowYs) { if (qAbs(y - k.y) < 0.1f) { found = true; break; } }
+        if (!found) rowYs.append(k.y);
+    }
+    std::sort(rowYs.begin(), rowYs.end());
+
+    int curRow = -1;
+    for (int i = 0; i < rowYs.size(); ++i) {
+        if (qAbs(rowYs[i] - cur.y) < 0.1f) { curRow = i; break; }
+    }
+    int targetRow = up ? curRow - 1 : curRow + 1;
+    if (targetRow < 0 || targetRow >= rowYs.size()) return idx;
+
+    float targetY = rowYs[targetRow];
+    float curCX = cur.x + cur.w / 2.0f;
+    int bestIdx = idx;
+    float bestDist = std::numeric_limits<float>::max();
+    for (int i = 0; i < m_keys.size(); ++i) {
+        if (qAbs(m_keys[i].y - targetY) < 0.1f) {
+            float cx = m_keys[i].x + m_keys[i].w / 2.0f;
+            float dist = qAbs(cx - curCX);
+            if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+        }
+    }
+    return bestIdx;
+}
+
+void KeyboardMapWidget::selectFocusKey()
+{
+    if (m_focusIdx < 0 || m_focusIdx >= m_keys.size()) return;
+    m_selectedIdx = m_focusIdx;
+    update();
+    emit keySelected(m_keys[m_focusIdx].qtKey);
+    announceKey(m_focusIdx);
+}
+
+void KeyboardMapWidget::announceKey(int idx)
+{
+    if (idx < 0 || idx >= m_keys.size()) return;
+    const KeyCap& k = m_keys[idx];
+    QKeySequence seq(k.qtKey);
+    const auto* act = m_mgr->actionForKey(seq);
+    QString desc = act
+        ? tr("%1: %2").arg(k.label, act->displayName)
+        : tr("%1: unbound").arg(k.label);
+    setAccessibleDescription(desc);
+    QAccessibleValueChangeEvent event(this, desc);
+    QAccessible::updateAccessibility(&event);
 }
 
 } // namespace AetherSDR

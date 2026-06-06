@@ -39,6 +39,7 @@
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
+#include "InteractionSettings.h"
 #include "models/BandPlanManager.h"
 #include "models/BandDefs.h"
 #include <QDateTime>
@@ -428,6 +429,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAutoFillBackground(false);
+    setAccessibleName(tr("Panadapter spectrum display"));
 #ifdef AETHER_GPU_SPECTRUM
     // Explicitly request Metal on macOS.
 #  ifdef Q_OS_MAC
@@ -660,9 +662,7 @@ void SpectrumWidget::prepareForShutdown()
     hide();
 
 #ifdef AETHER_GPU_SPECTRUM
-#ifndef Q_OS_LINUX
     releaseResources();
-#endif
 #ifdef Q_OS_MAC
     // Drop the native child window while its parent backing store is still
     // alive, so any remaining platform resources are gone before QWidgetWindow
@@ -727,6 +727,7 @@ void SpectrumWidget::loadSettings()
     } else {
         m_bandPlanFontSize = s.value("BandPlanFontSize", "6").toInt();
     }
+    m_bandPlanShowSpots = s.value("BandPlanShowSpots", "True").toString() == "True";
     m_fftHeatMap     = s.value(settingsKey("DisplayFftHeatMap"), "True").toString() == "True";
     m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
@@ -4792,6 +4793,10 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
         return;
     }
 
+    // Reverse-wheel option (#3302) — applied AFTER the Ctrl+wheel zoom branch
+    // above so zoom direction stays natural; only frequency tuning is flipped.
+    if (reverseMouseWheel()) steps = -steps;
+
     const auto* ao = activeOverlay();
     const double vfoMhz = ao ? ao->freqMhz : m_centerMhz;
     // Snap the base frequency to the step grid first, then add the delta.
@@ -5121,10 +5126,19 @@ void SpectrumWidget::initOverlayPipeline()
     m_ovPipeline->setShaderResourceBindings(m_ovSrb);
     m_ovPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
 
-    // Enable alpha blending for overlay compositing
+    // Enable alpha blending for overlay compositing.
+    // The overlay textures (m_overlayStatic / m_overlayBg) are painted into
+    // QImage::Format_RGBA8888_Premultiplied and the overlay.frag shader emits
+    // the texel as-is, so the source is PREMULTIPLIED. Premultiplied
+    // compositing wants srcColor = One (the RGB already carries × alpha);
+    // using SrcAlpha here double-multiplies the texel by alpha (color × α²),
+    // which crushed the passband fill (α=35/255 → 1.9% instead of 13.7%) below
+    // the visible floor while the brighter edge lines (α=130/255) survived.
+    // See issue #3294. NOTE: keep SrcAlpha on the FFT fill/line pipelines —
+    // those source from non-premultiplied baked vertex colors.
     QRhiGraphicsPipeline::TargetBlend blend;
     blend.enable = true;
-    blend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+    blend.srcColor = QRhiGraphicsPipeline::One;   // premultiplied source
     blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
     blend.srcAlpha = QRhiGraphicsPipeline::One;
     blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
@@ -6650,18 +6664,20 @@ void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
         }
     }
 
-    // Draw single-frequency spot markers (white circles)
-    const auto& spots = m_bandPlanMgr ? m_bandPlanMgr->spots()
-                                       : QVector<BandPlanManager::Spot>{};
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(Qt::NoPen);
-    p.setBrush(Qt::white);
-    for (const auto& spot : spots) {
-        if (spot.freqMhz < startMhz || spot.freqMhz > endMhz) continue;
-        const int sx = mhzToX(spot.freqMhz);
-        p.drawEllipse(QPoint(sx, bandY + bandH / 2), 4, 4);
+    // Draw single-frequency spot markers (white circles) — issue #3339
+    if (m_bandPlanShowSpots) {
+        const auto& spots = m_bandPlanMgr ? m_bandPlanMgr->spots()
+                                           : QVector<BandPlanManager::Spot>{};
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(Qt::NoPen);
+        p.setBrush(Qt::white);
+        for (const auto& spot : spots) {
+            if (spot.freqMhz < startMhz || spot.freqMhz > endMhz) continue;
+            const int sx = mhzToX(spot.freqMhz);
+            p.drawEllipse(QPoint(sx, bandY + bandH / 2), 4, 4);
+        }
+        p.setRenderHint(QPainter::Antialiasing, false);
     }
-    p.setRenderHint(QPainter::Antialiasing, false);
 }
 
 // ─── TNF markers ────────────────────────────────────────────────────────────

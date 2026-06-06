@@ -3,24 +3,73 @@
 #include "PersistentDialog.h"
 #include "core/tnc/AetherAx25LibmodemShim.h"
 
+#include <QByteArray>
 #include <QElapsedTimer>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QPointer>
+#include <QQueue>
 
+class QAbstractButton;
 class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPushButton;
 class QRadioButton;
+class QSpinBox;
+class QStackedWidget;
 class QTextEdit;
 class QTimer;
 
 namespace AetherSDR {
 
 class AudioEngine;
+class KissTncServer;
 class PacketActivityWidget;
 class RadioModel;
 class SliceModel;
+
+// Persistence for the AetherModem KISS TNC. Per Constitution Principle V,
+// new feature configuration lives as a nested JSON blob under one root key
+// rather than a stack of flat AppSettings entries. Mirrors the
+// CwDecodeSettings pattern.
+//
+// One-shot migration from the legacy flat keys is in migrateLegacy(); call
+// once at startup before any reader runs.
+class TncSettings {
+public:
+    // Defaults — kept as constants for the spinbox/UI to bound against.
+    static constexpr int kDefaultPort = 8001;  // Dire Wolf convention
+    // Lowest TCP port the spinbox lets the operator pick. Ports below 1024
+    // need root on macOS / Linux; the bind would fail silently into
+    // m_lastError and the listener would stay off. No reason to expose that
+    // foot-gun.
+    static constexpr int kMinPort = 1024;
+    static constexpr int kMaxPort = 65535;
+
+    static bool enabled()         { return readObj().value("enabled").toString("False") == "True"; }
+    static bool startOnStartup()  { return readObj().value("startOnStartup").toString("False") == "True"; }
+    static int  port()
+    {
+        const int p = readObj().value("port").toString(QString::number(kDefaultPort)).toInt();
+        if (p < kMinPort || p > kMaxPort) return kDefaultPort;
+        return p;
+    }
+
+    static void setEnabled(bool on);
+    static void setStartOnStartup(bool on);
+    static void setPort(int p);
+
+    // One-shot migration from the three legacy flat keys
+    // (AetherModemKissTncEnabled / AetherModemKissTncStartOnStartup /
+    // AetherModemKissTncPort) into the nested blob. Safe to call repeatedly;
+    // returns immediately if the nested blob already exists.
+    static void migrateLegacy();
+
+private:
+    static QJsonObject readObj();
+    static void write(const QJsonObject& o);
+};
 
 class Ax25HfPacketDecodeDialog : public PersistentDialog {
     Q_OBJECT
@@ -35,17 +84,24 @@ public:
     void setAttachedSlice(SliceModel* slice);
 
 private:
-    Ax25TonePolarity selectedTonePolarity() const;
     void setModemProfile(Ax25ModemProfile profile, bool persist);
-    void setTonePolarity(Ax25TonePolarity polarity, bool persist);
     void setDecodeEnabled(bool enabled);
     void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
     void startAudioCapture();
     void finishAudioCapture(bool save);
     void startTransmitFromUi();
+    void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss);
     void beginTransmitWhenReady();
     void paceTransmitAudio();
     void finishTransmit(bool aborted, const QString& reason);
+
+    // KISS TNC tab + TCP server wiring.
+    QWidget* buildKissTncPage();
+    void setTncEnabled(bool enabled, bool persist);
+    void applyTncStartOnStartup();
+    void handleKissFrameFromClient(const QByteArray& ax25NoFcs);
+    void maybeStartNextKissTx();
+    void refreshTncStatus();
     void appendFrame(const Ax25DecodedFrame& frame);
     void updateDiagnostics(const Ax25DecoderDiagnostics& diagnostics);
     void updateHeartbeat();
@@ -63,11 +119,12 @@ private:
     AudioEngine* m_audio{nullptr};
     RadioModel* m_radio{nullptr};
     AetherAx25LibmodemShim* m_shim{nullptr};
+    QStackedWidget* m_tabStack{nullptr};
+    QAbstractButton* m_ax25Tab{nullptr};
+    QAbstractButton* m_kissTab{nullptr};
     QRadioButton* m_hf300Profile{nullptr};
     QRadioButton* m_vhf1200Profile{nullptr};
     QCheckBox* m_enableDecode{nullptr};
-    QRadioButton* m_polarityNormal{nullptr};
-    QRadioButton* m_polarityReverse{nullptr};
     QLineEdit* m_txText{nullptr};
     QPushButton* m_txButton{nullptr};
     QTextEdit* m_log{nullptr};
@@ -114,6 +171,23 @@ private:
     bool m_txRestoreTransmitDax{false};
     bool m_txPreviousAudioDaxMode{false};
     bool m_txPreviousTransmitDax{false};
+    bool m_txFromKiss{false};
+
+    // KISS TNC server (TCP) and its controls.
+    KissTncServer* m_kissServer{nullptr};
+    QCheckBox* m_tncEnable{nullptr};
+    QCheckBox* m_tncStartOnStartup{nullptr};
+    QSpinBox* m_tncPort{nullptr};
+    QLabel* m_tncStatusDot{nullptr};
+    QLabel* m_tncStatusValue{nullptr};
+    QQueue<QByteArray> m_kissTxQueue;
+    // Number of 250 ms radio-busy retries currently elapsed on the head-of-
+    // queue frame. Capped (kMaxKissTxBusyRetries) so a stuck-transmitting
+    // radio can't spin maybeStartNextKissTx() forever and starve later
+    // frames behind it. Reset on each new dequeue.
+    int m_kissTxBusyRetries{0};
+    quint64 m_kissTxCount{0};
+    quint64 m_kissRxCount{0};
 };
 
 } // namespace AetherSDR

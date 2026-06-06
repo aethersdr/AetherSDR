@@ -14,6 +14,7 @@
 #include "core/SmartLinkClient.h"
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
+#include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
 #include "core/ClientPuduMonitor.h"
 #include "core/DxClusterClient.h"
@@ -61,6 +62,7 @@
 
 class QAbstractSlider;
 class QMediaDevices;
+class QShowEvent;
 
 #include "gui/ClientEqApplet.h"   // ClientEqApplet::Path enum used in
                                    // onEqCutoffsDragRequested signature.
@@ -82,6 +84,7 @@ class ProfileManagerDialog;
 class ProfileImportExportDialog;
 class RadioSetupDialog;
 class NetworkDiagnosticsDialog;
+class AgcCalibrationDialog;
 class MemoryDialog;
 class PropDashboardDialog;
 class TxBandDialog;
@@ -92,13 +95,18 @@ class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
 class FlexControlDialog;
 class MidiMappingDialog;
+#ifdef HAVE_HIDAPI
+class RC28MappingDialog;
+#endif
 class UlanziDialMapperDialog;
 #ifdef Q_OS_LINUX
 class EvdevEncoderManager;
-#elif defined(Q_OS_WIN)
+#elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
 class UlanziDialWindowsManager;
 #elif defined(Q_OS_MAC)
 class UlanziDialMacOSManager;
+#else
+class UlanziDialBackend;
 #endif
 class CwxPanel;
 class DvkPanel;
@@ -142,6 +150,7 @@ public:
     ~MainWindow() override;
 
 protected:
+    void showEvent(QShowEvent* event) override;
     void closeEvent(QCloseEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
@@ -261,11 +270,10 @@ private:
     void onMuteAllSlicesToggle();
     void showPanadapterInterlockNotification(const QString& message);
     void setActivePanApplet(PanadapterApplet* applet);
-    void routeCwDecoderOutput();  // wire CW decoder to the pan owning the active slice
-    // Recompute the CW decoder's run state, panel visibility, and the
-    // AudioEngine TX tap based on current AppSettings + MOX + slice mode.
-    // Called on MOX change, RX/TX toggle change, and dialog close (#2417).
+    void routeCwDecoderOutput();
     void refreshCwDecodeState();
+    void routeRttyDecoderOutput();
+    void refreshRttyDecodeState();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
     void wireVfoWidget(VfoWidget* w, SliceModel* s);
     // Push the active RX slice's filter passband (converted from
@@ -276,6 +284,7 @@ private:
     void registerShortcutActions();
     void applyUiScale(int pct);
     void stepUiScale(int direction);  // +1 = zoom in, -1 = zoom out
+    void reapplyStartupGeometryAfterShow();
     void toggleMinimalMode(bool on);
     // Toggle the Aetherial Audio Channel Strip — unified TX DSP window.
     // Stubbed in step 1 of #2301; step 4 lazy-creates the strip window
@@ -355,7 +364,9 @@ private:
     void showPanadapterSliceCapacityMessage();
     void updatePaTempLabel();
     void showNetworkDiagnosticsDialog();
+    void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
+    void startKissTncOnStartupIfConfigured();
     void showFlexControlDialog();
     void handleFlexControlTuneSteps(int steps);
     void handleFlexControlButton(int button, int action);
@@ -386,7 +397,11 @@ private:
     void updateBandStackIndicator();
     SliceModel* preferredMemorySlice(const QString& preferredPanId) const;
     bool activateMemorySpot(int memoryIndex, const QString& preferredPanId = {});
-    void beginSliderShortcutLease(QAbstractSlider* slider);
+    // The lease holder is usually a QAbstractSlider, but MeterSlider (the
+    // TCI/DAX combined meter+gain fader) is a plain QWidget that handles its
+    // own keys, so the lease is typed as QWidget* and frees the arrow keys
+    // for whichever control is focused.
+    void beginSliderShortcutLease(QWidget* slider);
     void renewSliderShortcutLease();
     void releaseSliderShortcutLease(bool clearFocus);
 
@@ -453,11 +468,8 @@ private:
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
-    // Dedicated TX-side decoder (#2417).  Fed from AudioEngine's
-    // sidetone mirror; emits decoded text routed to the panel via
-    // PanadapterApplet::appendCwTextTx so the operator can tell TX
-    // self-decode apart from RX in the shared text view.
     CwDecoder         m_cwDecoderTx;
+    RttyDecoder       m_rttyDecoder;
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
 #ifdef HAVE_MQTT
@@ -553,15 +565,32 @@ private:
     static QString hidEncoderDefaultAction(int encoderIndex);
     static QString hidEncoderDefaultPushAction(int encoderIndex);
     void refreshStreamDeckLabels();
+    void updateRC28Leds();
+    bool rc28HoldActionActive(const QString& action) const;
+    void dispatchHidAction(const QString& actionName, const QString& gestureLabel);
     QMetaObject::Connection m_sdRitConn;
     QMetaObject::Connection m_sdXitConn;
+    // RC-28 F-key LED refresh, rewired to the active slice on each slice change
+    QMetaObject::Connection m_rc28RitConn;
+    QMetaObject::Connection m_rc28XitConn;
+    QMetaObject::Connection m_rc28LockConn;
+    // Hold-detection state for RC-28 F1/F2 — one slot per key so the two can be
+    // held independently without clobbering each other. Index 0 = F1, 1 = F2. (#3323)
+    QTimer* m_rc28HoldTimer[2]{nullptr, nullptr};
+    bool    m_rc28HoldConsumed[2]{false, false};
+    // RC-28 stateful action flags
+    bool    m_rc28PttLatched{false};
+    bool    m_hidFastTune{false};
+    bool    m_hidFineTune{false};
 #endif
 #ifdef Q_OS_LINUX
     EvdevEncoderManager*       m_dialBackend{nullptr};
-#elif defined(Q_OS_WIN)
+#elif defined(Q_OS_WIN) && defined(HAVE_HIDAPI)
     UlanziDialWindowsManager*  m_dialBackend{nullptr};
 #elif defined(Q_OS_MAC)
     UlanziDialMacOSManager*    m_dialBackend{nullptr};
+#else
+    UlanziDialBackend*         m_dialBackend{nullptr};
 #endif
     QTimer                     m_dialCoalesceTimer;
     int                        m_dialPendingSteps{0};
@@ -592,7 +621,8 @@ private:
     QSplitter*        m_splitter{nullptr};
     PanadapterStack*  m_panStack{nullptr};
     QPointer<PanadapterApplet> m_panApplet;  // backward compat alias to active applet
-    QPointer<PanadapterApplet> m_cwDecoderApplet;  // applet receiving CW decoder output
+    QPointer<PanadapterApplet> m_cwDecoderApplet;
+    QPointer<PanadapterApplet> m_rttyDecoderApplet;
 
     // GUI — right applet panel
     AppletPanel*     m_appletPanel{nullptr};
@@ -601,6 +631,7 @@ private:
     QPointer<DxClusterDialog> m_spotHubDialog;
     QPointer<RadioSetupDialog> m_radioSetupDialog;
     QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
+    QPointer<AgcCalibrationDialog> m_agcCalibrationDialog;
     QPointer<PropDashboardDialog> m_propDashboardDialog;
     QPointer<TxBandDialog> m_txBandDialog;
     QPointer<MemoryDialog> m_memoryDialog;
@@ -616,6 +647,9 @@ private:
     QPointer<ProfileImportExportDialog> m_profileImportExportDialog;
 #ifdef HAVE_MIDI
     QPointer<MidiMappingDialog> m_midiDialog;
+#endif
+#ifdef HAVE_HIDAPI
+    QPointer<RC28MappingDialog> m_rc28MappingDialog;
 #endif
     QPointer<UlanziDialMapperDialog> m_ulanziMapperDialog;
 
@@ -761,7 +795,7 @@ private:
     bool m_cwStraightKeyActive{false};
     bool m_cwLeftPaddleActive{false};
     bool m_cwRightPaddleActive{false};
-    QPointer<QAbstractSlider> m_sliderShortcutLease;
+    QPointer<QWidget> m_sliderShortcutLease;
     QTimer m_sliderShortcutLeaseTimer;
     struct SwrSweepSample {
         double freqMhz{0.0};
@@ -817,6 +851,8 @@ private:
     bool m_minimalMode{false};             // true when spectrum is hidden (#208)
     bool m_exitingMinimalMode{false};      // re-entry guard for changeEvent → toggleMinimalMode(false)
     bool m_enteringMinimalMode{false};     // suppress changeEvent during enter (macOS deferred WindowStateChange, #2365)
+    bool m_startupGeometryReapplied{false};
+    QByteArray m_startupGeometryForFirstShow;
     QAction* m_minimalModeAction{nullptr};
     bool m_panadapterConnectionAnimationVisible{false};
     bool m_waitingForFirstPanadapterFrame{false};
@@ -855,6 +891,12 @@ private:
     QString m_savedMicSelection;  // restore on stopDax
     bool startDax();
     void stopDax();
+    // #2895: react to per-slice DAX channel (re)assignment while the bridge is
+    // up so the radio registers a DAX client for slices 1-3, not just slice 0.
+    void wireDaxSlice(SliceModel* slice);
+    void onDaxChannelChanged(SliceModel* slice, int newCh);
+    QList<QMetaObject::Connection> m_daxSliceConns;
+    QHash<int, int> m_daxSliceLastCh;  // sliceId -> last-known DAX channel
 #endif
 };
 

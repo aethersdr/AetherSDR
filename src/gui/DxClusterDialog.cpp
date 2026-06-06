@@ -2153,14 +2153,13 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
     // ── Override Colors + color picker ──────────────────────────────────
     grid->addWidget(new QLabel("Override Colors:"), row, 0);
     auto* colorRow = new QHBoxLayout;
-    auto* overrideToggle = new QPushButton(overrideColors ? "Enabled" : "Disabled");
+    auto* overrideToggle = new QPushButton("Enabled");
     overrideToggle->setCheckable(true);
     overrideToggle->setChecked(overrideColors);
     overrideToggle->setFixedWidth(80);
     overrideToggle->setStyleSheet(
         kSpotHubToggle);
-    connect(overrideToggle, &QPushButton::toggled, this, [overrideToggle, save](bool on) {
-        overrideToggle->setText(on ? "Enabled" : "Disabled");
+    connect(overrideToggle, &QPushButton::toggled, this, [save](bool on) {
         save("IsSpotsOverrideColorsEnabled", on ? "True" : "False");
     });
     colorRow->addWidget(overrideToggle);
@@ -2237,15 +2236,14 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
 
     // ── Spot Lines ──────────────────────────────────────────────────────
     grid->addWidget(new QLabel("Spot Lines:"), row, 0);
-    auto* spotLinesBtn = new QPushButton(spotLines ? "Enabled" : "Disabled");
+    auto* spotLinesBtn = new QPushButton("Enabled");
     spotLinesBtn->setCheckable(true);
     spotLinesBtn->setChecked(spotLines);
     spotLinesBtn->setFixedWidth(80);
     spotLinesBtn->setToolTip("Show vertical lines from the spectrum up to each spot label.\nDisable during contests to reduce clutter.");
     spotLinesBtn->setStyleSheet(
         kSpotHubToggle);
-    connect(spotLinesBtn, &QPushButton::toggled, this, [spotLinesBtn, save](bool on) {
-        spotLinesBtn->setText(on ? "Enabled" : "Disabled");
+    connect(spotLinesBtn, &QPushButton::toggled, this, [save](bool on) {
         save("IsSpotsLinesEnabled", on ? "True" : "False");
     });
     grid->addWidget(spotLinesBtn, row++, 1, Qt::AlignLeft);
@@ -2282,14 +2280,13 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         int drow = 0;
 
         bool dxccEnabled = m_dxccProvider ? m_dxccProvider->isEnabled() : false;
-        auto* dxccToggle = new QPushButton(dxccEnabled ? "Enabled" : "Disabled");
+        auto* dxccToggle = new QPushButton("Enabled");
         dxccToggle->setCheckable(true);
         dxccToggle->setChecked(dxccEnabled);
         dxccToggle->setFixedWidth(80);
         dxccToggle->setStyleSheet(
             kSpotHubToggle);
-        connect(dxccToggle, &QPushButton::toggled, this, [this, dxccToggle, save](bool on) {
-            dxccToggle->setText(on ? "Enabled" : "Disabled");
+        connect(dxccToggle, &QPushButton::toggled, this, [this, save](bool on) {
             save("IsDxccColoringEnabled", on ? "True" : "False");
             if (m_dxccProvider) m_dxccProvider->setEnabled(on);
         });
@@ -2493,7 +2490,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         // the carrier).
         const bool snapEnabled = AppSettings::instance()
             .value("SHistorySnapToStep", "False").toString() == "True";
-        auto* snapToggle = new QPushButton(snapEnabled ? "Enabled" : "Disabled");
+        auto* snapToggle = new QPushButton("Enabled");
         snapToggle->setCheckable(true);
         snapToggle->setChecked(snapEnabled);
         snapToggle->setFixedWidth(80);
@@ -2502,8 +2499,7 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
             "Round SHistory click-to-tune to the nearest multiple of the\n"
             "active slice's step size.  Hides the small carrier offset that\n"
             "comes from detecting voice on the panadapter.");
-        connect(snapToggle, &QPushButton::toggled, this, [snapToggle, save](bool on) {
-            snapToggle->setText(on ? "Enabled" : "Disabled");
+        connect(snapToggle, &QPushButton::toggled, this, [save](bool on) {
             save("SHistorySnapToStep", on ? "True" : "False");
         });
         shGrid->addWidget(new QLabel("Snap to Step:"), shr, 0);

@@ -53,6 +53,19 @@ public:
             m_dragValuePopup->hideNow();
     }
 
+    // Flash the value badge in response to a keyboard step, then let it
+    // linger and fade with the same timeout as a mouse release.  Keyboard
+    // nudges for these sliders are routed through MainWindow's shortcut
+    // lease (so global operating shortcuts can resume), so the lease handler
+    // calls this to mirror the mouse-drag readout. (#3303 follow-up)
+    void flashDragValue() {
+        if (!m_dragValuePopupEnabled)
+            return;
+        showDragValuePopup(mapToGlobal(rect().center()));
+        if (m_dragValuePopup)
+            m_dragValuePopup->linger();
+    }
+
     void mousePressEvent(QMouseEvent* ev) override {
         if (ControlsLock::isLocked()) {
             ev->ignore();

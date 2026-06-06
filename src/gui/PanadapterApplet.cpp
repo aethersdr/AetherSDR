@@ -1,6 +1,7 @@
 #include "PanadapterApplet.h"
 #include "FramelessMoveHelper.h"
 #include "GuardedSlider.h"
+#include "RangeSlider.h"
 #include "SliceLabel.h"
 #include "SpectrumWidget.h"
 #include "Theme.h"
@@ -9,6 +10,7 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QComboBox>
 #include <QSlider>
 #include <QEvent>
 #include <QLabel>
@@ -175,70 +177,23 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
     m_lockSpeedBtn->setStyleSheet(m_lockPitchBtn->styleSheet());
     cwBar->addWidget(m_lockSpeedBtn);
 
-    // Pitch range sliders — constrain decoder frequency search.  Compact
-    // 50px-wide sliders for the CW bar; sizes kept site-local (deliberate
-    // narrow handle), colours routed through the color.slider.* namespace
-    // so the per-applet override path can retint them and live theme
-    // switching works without a per-site reapplication.
-    const QString rangeSliderStyle = QStringLiteral(
-        "QSlider::groove:horizontal { background: {{color.slider.background}}; height: 4px; border-radius: 2px; }"
-        "QSlider::handle:horizontal { background: {{color.slider.handle}}; width: 8px; margin: -3px 0; border-radius: 4px; }");
-
-    auto* minLabel = new QLabel("Lo:");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(minLabel, "QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }");
-    cwBar->addWidget(minLabel);
-
-    m_pitchMinSlider = new GuardedSlider(Qt::Horizontal);
-    m_pitchMinSlider->setRange(300, 1200);
-    m_pitchMinSlider->setValue(500);
-    m_pitchMinSlider->setFixedWidth(50);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_pitchMinSlider, rangeSliderStyle);
-    m_pitchMinSlider->setToolTip("Decoder pitch search minimum (Hz)");
-    cwBar->addWidget(m_pitchMinSlider);
-    m_pitchMinValLabel = new QLabel(QString::number(m_pitchMinSlider->value()));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_pitchMinValLabel, "QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }");
-    m_pitchMinValLabel->setFixedWidth(24);
-    cwBar->addWidget(m_pitchMinValLabel);
-
-    auto* maxLabel = new QLabel("Hi:");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(maxLabel, "QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }");
-    cwBar->addWidget(maxLabel);
-
-    m_pitchMaxSlider = new GuardedSlider(Qt::Horizontal);
-    m_pitchMaxSlider->setRange(300, 1200);
-    m_pitchMaxSlider->setValue(700);
-    m_pitchMaxSlider->setFixedWidth(50);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_pitchMaxSlider, rangeSliderStyle);
-    m_pitchMaxSlider->setToolTip("Decoder pitch search maximum (Hz)");
-    cwBar->addWidget(m_pitchMaxSlider);
-    m_pitchMaxValLabel = new QLabel(QString::number(m_pitchMaxSlider->value()));
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_pitchMaxValLabel, "QLabel { color: {{color.text.label}}; font-size: 8px; background: transparent; }");
-    m_pitchMaxValLabel->setFixedWidth(24);
-    cwBar->addWidget(m_pitchMaxValLabel);
-
-    // Update tooltips and emit range change — clamp so min ≤ max
-    connect(m_pitchMinSlider, &QSlider::valueChanged, this, [this](int v) {
-        if (v > m_pitchMaxSlider->value()) {
-            QSignalBlocker b(m_pitchMinSlider);
-            m_pitchMinSlider->setValue(m_pitchMaxSlider->value());
-            v = m_pitchMaxSlider->value();
-        }
-        m_pitchMinSlider->setToolTip(QString("%1 Hz").arg(v));
-        m_pitchMinValLabel->setText(QString::number(v));
-        emit pitchRangeChanged(v, m_pitchMaxSlider->value());
+    // Pitch range — double-handle slider, label embedded in widget
+    m_pitchRangeSlider = new RangeSlider(300, 1200, 500, 700, "Pitch", {}, this);
+    m_pitchRangeSlider->setFixedWidth(195);
+    m_pitchRangeSlider->setToolTip("Decoder pitch search range (Hz)");
+    cwBar->addWidget(m_pitchRangeSlider);
+    connect(m_pitchRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {
+        emit pitchRangeChanged(lo, hi);
     });
-    connect(m_pitchMaxSlider, &QSlider::valueChanged, this, [this](int v) {
-        if (v < m_pitchMinSlider->value()) {
-            QSignalBlocker b(m_pitchMaxSlider);
-            m_pitchMaxSlider->setValue(m_pitchMinSlider->value());
-            v = m_pitchMinSlider->value();
-        }
-        m_pitchMaxSlider->setToolTip(QString("%1 Hz").arg(v));
-        m_pitchMaxValLabel->setText(QString::number(v));
-        emit pitchRangeChanged(m_pitchMinSlider->value(), v);
+
+    // WPM range — double-handle slider, label embedded in widget
+    m_speedRangeSlider = new RangeSlider(5, 60, 15, 40, "WPM", {}, this);
+    m_speedRangeSlider->setFixedWidth(195);
+    m_speedRangeSlider->setToolTip("Decoder speed search range (WPM)");
+    cwBar->addWidget(m_speedRangeSlider);
+    connect(m_speedRangeSlider, &RangeSlider::rangeChanged, this, [this](int lo, int hi) {
+        emit speedRangeChanged(lo, hi);
     });
-    m_pitchMinSlider->setToolTip(QString("%1 Hz").arg(m_pitchMinSlider->value()));
-    m_pitchMaxSlider->setToolTip(QString("%1 Hz").arg(m_pitchMaxSlider->value()));
 
     cwBar->addStretch();
 
@@ -311,6 +266,217 @@ PanadapterApplet::PanadapterApplet(QWidget* parent)
 
     m_cwPanel->hide();
     layout->addWidget(m_cwPanel);
+
+    // ── RTTY decode panel (hidden by default, shown in RTTY/DIGL mode) ───
+    m_rttyPanel = new QWidget(this);
+    m_rttyPanel->setCursor(Qt::ArrowCursor);
+    m_rttyPanel->setFixedHeight(90);
+    m_rttyPanel->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyPanel,
+        "QWidget { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }");
+
+    auto* rttyLayout = new QVBoxLayout(m_rttyPanel);
+    rttyLayout->setContentsMargins(4, 2, 4, 2);
+    rttyLayout->setSpacing(1);
+
+    // ── Controls bar ─────────────────────────────────────────────────────
+    auto* rttyBar = new QHBoxLayout;
+    rttyBar->setSpacing(4);
+
+    auto* rttyTitle = new QLabel("RTTY");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rttyTitle,
+        "QLabel { color: {{color.accent}}; font-size: 10px; font-weight: bold; background: transparent; }");
+    rttyBar->addWidget(rttyTitle);
+
+    const QString comboStyle =
+        "QComboBox { background: #1a2a3a; color: #c8d8e8; border: 1px solid #304050;"
+        " border-radius: 2px; font-size: 9px; padding: 0 2px; }"
+        "QComboBox::drop-down { width: 10px; }"
+        "QComboBox QAbstractItemView { background: #1a2a3a; color: #c8d8e8; selection-background-color: #304050; }";
+
+    // Mark frequency
+    auto* markLabel = new QLabel("Mark:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(markLabel,
+        "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
+    rttyBar->addWidget(markLabel);
+
+    m_rttyMarkCombo = new QComboBox;
+    m_rttyMarkCombo->setStyleSheet(comboStyle);
+    m_rttyMarkCombo->setFixedWidth(68);
+    m_rttyMarkCombo->setToolTip("Mark (idle) tone audio frequency");
+    // fldigi standard mark frequencies
+    m_rttyMarkCombo->addItem("Auto",  0);
+    m_rttyMarkCombo->addItem("2125",  2125);
+    m_rttyMarkCombo->addItem("2210",  2210);
+    m_rttyMarkCombo->addItem("1700",  1700);
+    m_rttyMarkCombo->addItem("1275",  1275);
+    m_rttyMarkCombo->addItem("1000",  1000);
+    m_rttyMarkCombo->addItem("915",   915);
+    m_rttyMarkCombo->addItem("850",   850);
+    m_rttyMarkCombo->addItem("500",   500);
+    {
+        const int saved = AppSettings::instance().value("RttyDecoderMarkHz", "0").toInt();
+        const int idx   = m_rttyMarkCombo->findData(saved);
+        m_rttyMarkCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+    }
+    connect(m_rttyMarkCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        const int hz = m_rttyMarkCombo->currentData().toInt();
+        AppSettings::instance().setValue("RttyDecoderMarkHz", QString::number(hz));
+        AppSettings::instance().save();
+        emit rttyMarkHzChanged(hz);
+    });
+    rttyBar->addWidget(m_rttyMarkCombo);
+
+    // Shift
+    auto* shiftLabel = new QLabel("Shift:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(shiftLabel,
+        "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
+    rttyBar->addWidget(shiftLabel);
+
+    m_rttyShiftCombo = new QComboBox;
+    m_rttyShiftCombo->setStyleSheet(comboStyle);
+    m_rttyShiftCombo->setFixedWidth(52);
+    m_rttyShiftCombo->setToolTip("Mark-to-space frequency shift");
+    // fldigi standard shifts
+    for (int hz : {45, 50, 75, 100, 170, 182, 200, 240, 425, 450, 500, 850})
+        m_rttyShiftCombo->addItem(QString::number(hz), hz);
+    {
+        const int saved = AppSettings::instance().value("RttyDecoderShiftHz", "170").toInt();
+        const int idx   = m_rttyShiftCombo->findData(saved);
+        m_rttyShiftCombo->setCurrentIndex(idx >= 0 ? idx : m_rttyShiftCombo->findData(170));
+    }
+    connect(m_rttyShiftCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        const int hz = m_rttyShiftCombo->currentData().toInt();
+        AppSettings::instance().setValue("RttyDecoderShiftHz", QString::number(hz));
+        AppSettings::instance().save();
+        emit rttyShiftHzChanged(hz);
+    });
+    rttyBar->addWidget(m_rttyShiftCombo);
+
+    // Baud rate
+    auto* baudLabel = new QLabel("Baud:");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(baudLabel,
+        "QLabel { color: {{color.text.label}}; font-size: 9px; background: transparent; }");
+    rttyBar->addWidget(baudLabel);
+
+    m_rttyBaudCombo = new QComboBox;
+    m_rttyBaudCombo->setStyleSheet(comboStyle);
+    m_rttyBaudCombo->setFixedWidth(52);
+    m_rttyBaudCombo->setToolTip("Symbol rate (baud)");
+    // fldigi standard baud rates (stored as float * 100 to avoid float key issues)
+    struct { const char* label; float val; } baudRates[] = {
+        {"45.45", 45.45f}, {"50", 50.0f}, {"75", 75.0f}, {"100", 100.0f},
+        {"110", 110.0f}, {"150", 150.0f}, {"300", 300.0f}
+    };
+    for (auto& b : baudRates)
+        m_rttyBaudCombo->addItem(b.label, static_cast<double>(b.val));
+    {
+        const double saved = AppSettings::instance().value("RttyDecoderBaud", "45.45").toDouble();
+        int bestIdx = 0;
+        double bestDiff = 1e9;
+        for (int i = 0; i < m_rttyBaudCombo->count(); ++i) {
+            double diff = std::abs(m_rttyBaudCombo->itemData(i).toDouble() - saved);
+            if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+        }
+        m_rttyBaudCombo->setCurrentIndex(bestIdx);
+    }
+    connect(m_rttyBaudCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int) {
+        const float baud = static_cast<float>(m_rttyBaudCombo->currentData().toDouble());
+        AppSettings::instance().setValue("RttyDecoderBaud", QString::number(static_cast<double>(baud)));
+        AppSettings::instance().save();
+        emit rttyBaudChanged(baud);
+    });
+    rttyBar->addWidget(m_rttyBaudCombo);
+
+    // Rev toggle
+    m_rttyRevBtn = new QPushButton("REV");
+    m_rttyRevBtn->setCheckable(true);
+    m_rttyRevBtn->setFixedSize(32, 16);
+    m_rttyRevBtn->setToolTip("Reverse polarity: space above mark (LSB / inverted signal)");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyRevBtn,
+        "QPushButton { background: {{color.background.1}}; color: {{color.text.label}};"
+        " border: 1px solid {{color.background.1}}; border-radius: 2px; font-size: 8px; padding: 0; }"
+        "QPushButton:checked { color: {{color.accent}}; border-color: {{color.accent}}; }"
+        "QPushButton:hover   { color: {{color.text.primary}}; }");
+    {
+        const bool saved = AppSettings::instance().value("RttyDecoderReverse", "false").toString() == "true";
+        m_rttyRevBtn->setChecked(saved);
+    }
+    connect(m_rttyRevBtn, &QPushButton::toggled, this, [this](bool rev) {
+        AppSettings::instance().setValue("RttyDecoderReverse", rev ? "true" : "false");
+        AppSettings::instance().save();
+        emit rttyReverseChanged(rev);
+    });
+    rttyBar->addWidget(m_rttyRevBtn);
+
+    // Stats
+    m_rttyStatsLabel = new QLabel;
+    m_rttyStatsLabel->setTextFormat(Qt::RichText);
+    m_rttyStatsLabel->setFixedWidth(248);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyStatsLabel,
+        "QLabel { background: transparent; }");
+    rttyBar->addWidget(m_rttyStatsLabel);
+
+    rttyBar->addStretch();
+
+    const QString rttBtnStyle =
+        "QPushButton { background: #1a2a3a; color: #8090a0; border: 1px solid #203040;"
+        " border-radius: 2px; font-size: 9px; font-weight: bold; padding: 1px 6px; }"
+        "QPushButton:hover { color: #c8d8e8; background: #2a3a4a; }";
+
+    auto* rttyCopyAllBtn = new QPushButton("CPY ALL");
+    rttyCopyAllBtn->setToolTip("Copy all decoded text to clipboard");
+    rttyCopyAllBtn->setStyleSheet(rttBtnStyle);
+    connect(rttyCopyAllBtn, &QPushButton::clicked, this, [this] {
+        QGuiApplication::clipboard()->setText(m_rttyText->toPlainText());
+    });
+    rttyBar->addWidget(rttyCopyAllBtn);
+
+    auto* clrBtn = new QPushButton("CLR");
+    clrBtn->setStyleSheet(rttBtnStyle);
+    connect(clrBtn, &QPushButton::clicked, this, &PanadapterApplet::clearRttyText);
+    rttyBar->addWidget(clrBtn);
+
+    auto* rttyCloseBtn = new QPushButton("✕");
+    rttyCloseBtn->setToolTip("Close RTTY decoder");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(rttyCloseBtn,
+        "QPushButton { background: {{color.background.1}}; color: {{color.text.secondary}};"
+        " border: 1px solid {{color.background.1}}; border-radius: 2px; font-size: 9px;"
+        " font-weight: bold; padding: 1px 6px; }"
+        "QPushButton:hover { color: #ff6060; background: {{color.background.1}}; }");
+    connect(rttyCloseBtn, &QPushButton::clicked, this, [this] {
+        m_rttyPanel->hide();
+        emit rttyPanelCloseRequested();
+    });
+    rttyBar->addWidget(rttyCloseBtn);
+
+    rttyLayout->addLayout(rttyBar);
+
+    // ── Text area ─────────────────────────────────────────────────────────
+    m_rttyText = new QTextEdit;
+    m_rttyText->setReadOnly(true);
+    m_rttyText->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_rttyText,
+        "QTextEdit { background: {{color.background.0}}; color: {{color.accent.success}}; border: none;"
+        " font-family: monospace; font-size: 13px; font-weight: bold; }"
+        "QScrollBar:vertical { width: 6px; background: {{color.background.0}}; }"
+        "QScrollBar::handle:vertical { background: {{color.background.2}}; border-radius: 3px; }"
+        "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }");
+    m_rttyText->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_rttyText->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_rttyText->setWordWrapMode(QTextOption::WrapAnywhere);
+    m_rttyText->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_rttyText, &QWidget::customContextMenuRequested, this, [this](const QPoint& pos) {
+        QMenu* menu = m_rttyText->createStandardContextMenu();
+        menu->addSeparator();
+        menu->addAction(tr("Clear"), this, &PanadapterApplet::clearRttyText);
+        menu->exec(m_rttyText->mapToGlobal(pos));
+        delete menu;
+    });
+    rttyLayout->addWidget(m_rttyText);
+
+    m_rttyPanel->hide();
+    layout->addWidget(m_rttyPanel);
 }
 
 void PanadapterApplet::setMultiPanMode(bool multi)
@@ -352,6 +518,26 @@ QString PanadapterApplet::sliceTitle() const
 void PanadapterApplet::setCwPanelVisible(bool visible)
 {
     m_cwPanel->setVisible(visible);
+}
+
+int PanadapterApplet::speedRangeLow()  const
+{
+    return m_speedRangeSlider ? m_speedRangeSlider->low() : 15;
+}
+
+int PanadapterApplet::speedRangeHigh() const
+{
+    return m_speedRangeSlider ? m_speedRangeSlider->high() : 40;
+}
+
+int PanadapterApplet::pitchRangeLow()  const
+{
+    return m_pitchRangeSlider ? m_pitchRangeSlider->low() : 500;
+}
+
+int PanadapterApplet::pitchRangeHigh() const
+{
+    return m_pitchRangeSlider ? m_pitchRangeSlider->high() : 700;
 }
 
 void PanadapterApplet::appendCwText(const QString& text, float cost)
@@ -443,6 +629,93 @@ bool PanadapterApplet::eventFilter(QObject* obj, QEvent* ev)
     if (ev->type() == QEvent::MouseButtonPress)
         emit activated(m_panId);
     return QWidget::eventFilter(obj, ev);
+}
+
+// ── RTTY panel ───────────────────────────────────────────────────────────────
+
+void PanadapterApplet::setRttyPanelVisible(bool visible)
+{
+    m_rttyPanel->setVisible(visible);
+}
+
+int PanadapterApplet::rttyMarkHz() const
+{
+    return m_rttyMarkCombo->currentData().toInt();
+}
+
+int PanadapterApplet::rttyShiftHz() const
+{
+    return m_rttyShiftCombo->currentData().toInt();
+}
+
+float PanadapterApplet::rttyBaud() const
+{
+    return static_cast<float>(m_rttyBaudCombo->currentData().toDouble());
+}
+
+bool PanadapterApplet::rttyReverse() const
+{
+    return m_rttyRevBtn->isChecked();
+}
+
+void PanadapterApplet::appendRttyText(const QString& text, float confidence)
+{
+    // CR is a no-op in a wrapped text view; LF becomes a line break.
+    // Standard RTTY sends CR+LF pairs — discarding CR and converting LF
+    // to <br> produces exactly one new line per pair.
+    if (text == "\r") return;
+    if (text == "\n") {
+        m_rttyText->moveCursor(QTextCursor::End);
+        m_rttyText->insertHtml(QStringLiteral("<br>"));
+        m_rttyText->moveCursor(QTextCursor::End);
+        return;
+    }
+
+    QString color;
+    if      (confidence > 0.85f) color = "#00ff88";
+    else if (confidence > 0.70f) color = "#e0e040";
+    else if (confidence > 0.60f) color = "#ff9020";
+    else                         color = "#ff4040";
+
+    QString escaped = text.toHtmlEscaped();
+    escaped.replace(' ', "&nbsp;");
+
+    m_rttyText->moveCursor(QTextCursor::End);
+    m_rttyText->insertHtml(QString("<span style=\"color:%1\">%2</span>")
+        .arg(color, escaped));
+    m_rttyText->moveCursor(QTextCursor::End);
+}
+
+void PanadapterApplet::setRttyStats(float markLevel, float spaceLevel, float snrDb, bool locked)
+{
+    const int markSegs = qBound(0, qRound(markLevel * 15.0f), 15);
+
+    // Mark bar: 15 segments, fills left to right
+    QString markBar;
+    for (int i = 0; i < 15; ++i) {
+        markBar += (i < markSegs)
+            ? QStringLiteral("<span style='color:#00cc55'>&#x2588;</span>")
+            : QStringLiteral("<span style='color:#1a3020'>&#x2588;</span>");
+    }
+
+    const QString snrColor   = locked ? QStringLiteral("#00ff88") : QStringLiteral("#ff8c00");
+    const QString lockedText = locked ? QStringLiteral("LOCKED") : QStringLiteral("UNLOCK");
+
+    m_rttyStatsLabel->setText(
+        QStringLiteral("<span style='font-family:monospace;font-size:10px;'>")
+        + markBar
+        + QStringLiteral("</span>&nbsp;&nbsp;"
+                          "<span style='font-size:10px;font-weight:bold;color:")
+        + snrColor + QStringLiteral("'>")
+        + QString::number(static_cast<int>(snrDb))
+        + QStringLiteral("dB&nbsp;")
+        + lockedText
+        + QStringLiteral("</span>"));
+}
+
+void PanadapterApplet::clearRttyText()
+{
+    m_rttyText->clear();
 }
 
 } // namespace AetherSDR

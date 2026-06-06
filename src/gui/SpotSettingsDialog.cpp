@@ -59,7 +59,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
 
     // ── Spots: Enabled/Disabled ─────────────────────────────────────────
     grid->addWidget(new QLabel("Spots:"), row, 0);
-    m_spotsToggle = new QPushButton(m_spotsEnabled ? "Enabled" : "Disabled");
+    m_spotsToggle = new QPushButton("Enabled");
     m_spotsToggle->setCheckable(true);
     m_spotsToggle->setChecked(m_spotsEnabled);
     m_spotsToggle->setFixedWidth(80);
@@ -68,14 +68,13 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
         "QPushButton:!checked { background: #603020; }");
     connect(m_spotsToggle, &QPushButton::toggled, this, [this, save](bool on) {
         m_spotsEnabled = on;
-        m_spotsToggle->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsEnabled", on ? "True" : "False");
     });
     grid->addWidget(m_spotsToggle, row++, 1, Qt::AlignLeft);
 
     // ── Memories: Enabled/Disabled ──────────────────────────────────────
     grid->addWidget(new QLabel("Memories:"), row, 0);
-    m_memoriesToggle = new QPushButton(m_memoriesEnabled ? "Enabled" : "Disabled");
+    m_memoriesToggle = new QPushButton("Enabled");
     m_memoriesToggle->setCheckable(true);
     m_memoriesToggle->setChecked(m_memoriesEnabled);
     m_memoriesToggle->setFixedWidth(80);
@@ -86,7 +85,6 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
         "QPushButton:!checked { background: #603020; }");
     connect(m_memoriesToggle, &QPushButton::toggled, this, [this, save](bool on) {
         m_memoriesEnabled = on;
-        m_memoriesToggle->setText(on ? "Enabled" : "Disabled");
         save("IsMemorySpotsEnabled", on ? "True" : "False");
     });
     grid->addWidget(m_memoriesToggle, row++, 1, Qt::AlignLeft);
@@ -183,7 +181,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
     // ── Override Colors + color picker ──────────────────────────────────
     grid->addWidget(new QLabel("Override Colors:"), row, 0);
     auto* colorRow = new QHBoxLayout;
-    m_overrideColorsToggle = new QPushButton(m_overrideColors ? "Enabled" : "Disabled");
+    m_overrideColorsToggle = new QPushButton("Enabled");
     m_overrideColorsToggle->setCheckable(true);
     m_overrideColorsToggle->setChecked(m_overrideColors);
     m_overrideColorsToggle->setFixedWidth(80);
@@ -192,7 +190,6 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
         "QPushButton:!checked { background: #603020; }");
     connect(m_overrideColorsToggle, &QPushButton::toggled, this, [this, save](bool on) {
         m_overrideColors = on;
-        m_overrideColorsToggle->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsOverrideColorsEnabled", on ? "True" : "False");
     });
     colorRow->addWidget(m_overrideColorsToggle);
@@ -274,7 +271,7 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
 
     // ── Spot Lines ──────────────────────────────────────────────────────
     grid->addWidget(new QLabel("Spot Lines:"), row, 0);
-    m_spotLinesToggle = new QPushButton(m_spotShowLines ? "Enabled" : "Disabled");
+    m_spotLinesToggle = new QPushButton("Enabled");
     m_spotLinesToggle->setCheckable(true);
     m_spotLinesToggle->setChecked(m_spotShowLines);
     m_spotLinesToggle->setFixedWidth(80);
@@ -284,7 +281,6 @@ SpotSettingsDialog::SpotSettingsDialog(RadioModel* model, QWidget* parent)
         "QPushButton:!checked { background: #603020; }");
     connect(m_spotLinesToggle, &QPushButton::toggled, this, [this, save](bool on) {
         m_spotShowLines = on;
-        m_spotLinesToggle->setText(on ? "Enabled" : "Disabled");
         save("IsSpotsLinesEnabled", on ? "True" : "False");
     });
     grid->addWidget(m_spotLinesToggle, row++, 1, Qt::AlignLeft);

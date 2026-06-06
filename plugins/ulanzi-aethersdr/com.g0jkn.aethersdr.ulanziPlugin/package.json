@@ -1,0 +1,15 @@
+{
+  "name": "aethersdr-ulanzi-plugin",
+  "version": "0.1.0",
+  "description": "Ulanzi Studio plugin that drives AetherSDR via its TCI WebSocket interface.",
+  "type": "module",
+  "main": "plugin/app.js",
+  "scripts": {
+    "start": "node plugin/app.js"
+  },
+  "author": "Nigel Fenton (G0JKN)",
+  "license": "GPL-3.0-or-later",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

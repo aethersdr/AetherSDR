@@ -1,4 +1,5 @@
 #include "DvkWavTransfer.h"
+#include "../models/DvkModel.h"
 #include "../models/RadioModel.h"
 #include "../core/RadioConnection.h"
 
@@ -64,7 +65,9 @@ void DvkWavTransfer::onDownloadPortReceived(int code, const QString& body)
     if (m_cancelled) return;
 
     if (code != 0) {
-        finish(false, QString("Radio rejected download (error 0x%1)").arg(code, 0, 16), false);
+        finish(false, QString("Radio rejected download — %1")
+                   .arg(DvkModel::dvkErrorString(static_cast<uint>(code))),
+               false);
         return;
     }
 
@@ -215,7 +218,9 @@ void DvkWavTransfer::onUploadPortReceived(int code, const QString& body)
     if (m_cancelled) return;
 
     if (code != 0) {
-        finish(false, QString("Radio rejected upload (error 0x%1)").arg(code, 0, 16), false);
+        finish(false, QString("Radio rejected upload — %1")
+                   .arg(DvkModel::dvkErrorString(static_cast<uint>(code))),
+               false);
         return;
     }
 

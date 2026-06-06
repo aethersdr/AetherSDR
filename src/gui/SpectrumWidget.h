@@ -242,6 +242,8 @@ public:
     int   wfBlankerMode()      const { return m_wfBlankerMode; }
     void setShowBandPlan(bool on) { m_bandPlanFontSize = on ? 6 : 0; update(); }
     void setBandPlanFontSize(int pt) { m_bandPlanFontSize = pt; update(); }
+    void setBandPlanShowSpots(bool on) { m_bandPlanShowSpots = on; update(); }
+    bool bandPlanShowSpots() const { return m_bandPlanShowSpots; }
     void setBandPlanManager(class BandPlanManager* mgr);
     void setSingleClickTune(bool on) { m_singleClickTune = on; }
     void setShowCursorFreq(bool on) { m_showCursorFreq = on; update(); }
@@ -426,16 +428,16 @@ public:
     void setSHistorySnapToStep(bool on) { m_sHistorySnapToStep = on; }
     bool sHistorySnapToStep() const     { return m_sHistorySnapToStep; }
     void setSHistoryMarkers(const QVector<SpotMarker>& markers);
-    void setSpotFontSize(int px) { m_spotFontSize = px; update(); }
-    void setSpotMaxLevels(int n) { m_spotMaxLevels = n; update(); }
-    void setSpotStartPct(int pct) { m_spotStartPct = pct; update(); }
-    void setSpotOverrideColors(bool on) { m_spotOverrideColors = on; update(); }
-    void setSpotOverrideBg(bool on) { m_spotOverrideBg = on; update(); }
-    void setSpotShowLines(bool on) { m_spotShowLines = on; update(); }
+    void setSpotFontSize(int px) { m_spotFontSize = px; markOverlayDirty(); }
+    void setSpotMaxLevels(int n) { m_spotMaxLevels = n; markOverlayDirty(); }
+    void setSpotStartPct(int pct) { m_spotStartPct = pct; markOverlayDirty(); }
+    void setSpotOverrideColors(bool on) { m_spotOverrideColors = on; markOverlayDirty(); }
+    void setSpotOverrideBg(bool on) { m_spotOverrideBg = on; markOverlayDirty(); }
+    void setSpotShowLines(bool on) { m_spotShowLines = on; markOverlayDirty(); }
     bool spotShowLines() const { return m_spotShowLines; }
-    void setSpotColor(const QColor& c) { m_spotColor = c; update(); }
-    void setSpotBgColor(const QColor& c) { m_spotBgColor = c; update(); }
-    void setSpotBgOpacity(int pct) { m_spotBgOpacity = pct; update(); }
+    void setSpotColor(const QColor& c) { m_spotColor = c; markOverlayDirty(); }
+    void setSpotBgColor(const QColor& c) { m_spotBgColor = c; markOverlayDirty(); }
+    void setSpotBgOpacity(int pct) { m_spotBgOpacity = pct; markOverlayDirty(); }
     void setTransmitting(bool tx);
     void setShowTxInWaterfall(bool on) { m_showTxInWaterfall = on; }
     void setHasTxSlice(bool has) { m_hasTxSlice = has; }
@@ -888,6 +890,7 @@ private:
     int   m_wfBlankerRingCount{0};
     QVector<QRgb> m_wfLastGoodRow;
     int  m_bandPlanFontSize{6};  // 0 = off
+    bool m_bandPlanShowSpots{true};
     BandPlanManager* m_bandPlanMgr{nullptr};
     bool m_singleClickTune{false};
     QPoint m_clickPressPos;        // for single-click-to-tune drag threshold
