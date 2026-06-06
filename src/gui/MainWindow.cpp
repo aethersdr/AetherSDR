@@ -83,6 +83,9 @@
 #include "MemoryDialog.h"
 #include "SwrSweepLicenseDialog.h"
 #include "DxClusterDialog.h"
+#ifdef HAVE_WEBSOCKETS
+#include "FreeDvReporterDialog.h"
+#endif
 #include "Ax25HfPacketDecodeDialog.h"
 #include "FlexControlDialog.h"
 #include "CwxPanel.h"
@@ -9610,6 +9613,13 @@ void MainWindow::buildMenuBar()
         m_appletPanel->resetOrder();
     });
 
+#ifdef HAVE_WEBSOCKETS
+    {
+        auto* fdvReporterAct = viewMenu->addAction(tr("FreeDV Reporter..."));
+        connect(fdvReporterAct, &QAction::triggered, this, &MainWindow::showFreeDvReporter);
+    }
+#endif
+
     viewMenu->addSeparator();
     m_minimalModeAction = viewMenu->addAction("Minimal Mode\tCtrl+M");
     m_minimalModeAction->setCheckable(true);
@@ -12680,6 +12690,10 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
 #endif
     if (sliceId != prevId && m_ax25HfPacketDecodeDialog)
         m_ax25HfPacketDecodeDialog->setAttachedSlice(s);
+#ifdef HAVE_WEBSOCKETS
+    if (sliceId != prevId && m_freedvReporterDialog)
+        m_freedvReporterDialog->setActiveSlice(s);
+#endif
 
     // Active slice changed → restart dwell window for the new active slice
     if (sliceId != prevId && m_bsAutoSaveTimer) {
@@ -17724,6 +17738,49 @@ void MainWindow::stopFreeDvReporting(int sliceId)
 #endif
 }
 
+#endif  // HAVE_RADE
+
+#ifdef HAVE_WEBSOCKETS
+void MainWindow::showFreeDvReporter()
+{
+    if (!m_freedvReporterDialog) {
+        m_freedvReporterDialog = new FreeDvReporterDialog(this);
+        connect(m_freedvClient, &FreeDvClient::stationsCleared,
+                m_freedvReporterDialog, &FreeDvReporterDialog::onStationsCleared,
+                Qt::QueuedConnection);
+        connect(m_freedvClient, &FreeDvClient::stationUpdated,
+                m_freedvReporterDialog, &FreeDvReporterDialog::onStationUpdated,
+                Qt::QueuedConnection);
+        connect(m_freedvClient, &FreeDvClient::stationRemoved,
+                m_freedvReporterDialog, &FreeDvReporterDialog::onStationRemoved,
+                Qt::QueuedConnection);
+        if (auto* s = activeSlice())
+            m_freedvReporterDialog->setActiveSlice(s);
+        // Seed with current state — bulk_update fires at connect time, before the
+        // dialog exists. Without this, the table fills slowly from live events only.
+        for (const auto& [sid, info] : m_freedvClient->stations().asKeyValueRange())
+            m_freedvReporterDialog->onStationUpdated(sid, info);
+    }
+    // Resolve GPS-aware grid every open — same logic as startFreeDvReporting()
+    // so km/Hdg columns work when GPS grid is active and never written to AppSettings.
+    {
+        auto& cs = AppSettings::instance();
+        QString grid;
+        if (cs.value("FreeDvUseGpsGrid", "True").toString() == "True"
+                && m_radioModel.hasGpsHardware()
+                && !m_radioModel.gpsGrid().isEmpty()) {
+            grid = m_radioModel.gpsGrid();
+        } else {
+            grid = cs.value("FreeDvMyGrid", "").toString().trimmed().toUpper();
+        }
+        if (grid.isEmpty())
+            grid = m_freedvClient->myGrid();
+        m_freedvReporterDialog->setMyGrid(grid);
+    }
+    m_freedvReporterDialog->show();
+    m_freedvReporterDialog->raise();
+    m_freedvReporterDialog->activateWindow();
+}
 #endif
 
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)

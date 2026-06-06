@@ -22,6 +22,8 @@ void FreeDvClient::initialize()
 {
     if (m_ws) return;
 
+    qRegisterMetaType<AetherSDR::FreeDvClient::StationInfo>();
+
     m_ws = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
     m_pingTimer = new QTimer(this);
     m_reconnectTimer = new QTimer(this);
@@ -96,6 +98,7 @@ void FreeDvClient::stopConnection()
         m_ws->close();
 
     m_connected.store(false);
+    emit stationsCleared();
     m_stations.clear();
     emit stopped();
 }
@@ -112,6 +115,7 @@ void FreeDvClient::onWsDisconnected()
 {
     m_connected.store(false);
     m_pingTimer->stop();
+    emit stationsCleared();
     m_stations.clear();
 
     if (m_intentionalDisconnect) {
@@ -273,7 +277,8 @@ void FreeDvClient::handleEvent(const QString& eventName, const QJsonObject& data
     else if (eventName == "rx_report")         onRxReport(data);
     else if (eventName == "tx_report")         onTxReport(data);
     else if (eventName == "remove_connection") onRemoveConnection(data);
-    // Silently ignore: connection_successful, message_update, chat_*, etc.
+    else if (eventName == "message_update")    onMessageUpdate(data);
+    // Silently ignore: connection_successful, chat_*, etc.
 }
 
 void FreeDvClient::onNewConnection(const QJsonObject& data)
@@ -283,7 +288,11 @@ void FreeDvClient::onNewConnection(const QJsonObject& data)
     info.callsign   = data["callsign"].toString();
     info.gridSquare  = data["grid_square"].toString();
     info.rxOnly      = data["rx_only"].toBool();
-    m_stations[sid] = info;
+    info.version     = data["version"].toString();
+    info.status      = info.rxOnly ? QStringLiteral("RX Only") : QStringLiteral("RX");
+    info.lastUpdate  = QDateTime::currentDateTimeUtc();
+    m_stations[sid]  = info;
+    emit stationUpdated(sid, m_stations[sid]);
 }
 
 void FreeDvClient::onFreqChange(const QJsonObject& data)
@@ -307,6 +316,13 @@ void FreeDvClient::onFreqChange(const QJsonObject& data)
     if (info.gridSquare.isEmpty())
         info.gridSquare = data["grid_square"].toString();
 
+    // Only reset status to RX if the station is not actively transmitting.
+    // freq_change during TX (e.g. VFO retune) must not clear the TX state;
+    // only tx_report{transmitting=false} owns that transition.
+    if (!info.rxOnly && info.status != QStringLiteral("TX"))
+        info.status = QStringLiteral("RX");
+    info.lastUpdate = QDateTime::currentDateTimeUtc();
+    emit stationUpdated(sid, info);
     // No spot emitted here — freq_change fires on connect and on every
     // VFO retune, including from stations that are only scanning.  Spots
     // are created in onTxReport() when a station explicitly signals that
@@ -329,11 +345,37 @@ void FreeDvClient::onTxReport(const QJsonObject& data)
     if (!m_stations.contains(sid)) return;
     auto& info = m_stations[sid];
 
-    QString mode = data["mode"].toString();
+    // Mode is the primary payload of tx_report — update unconditionally.
+    const QString mode = data["mode"].toString();
     if (!mode.isEmpty())
         info.mode = mode;
 
-    if (!data["transmitting"].toBool()) return;
+    // tx_report carries transmitting=true (on-air now) or transmitting=false
+    // (mode metadata for a currently-RX station, or TX ended).
+    const bool transmitting = data["transmitting"].toBool();
+
+    // ── Reporter path — no spot-emission gates ────────────────────────────
+    // Emit stationUpdated unconditionally so the reporter window sees mode
+    // changes, TX start, and TX end regardless of whether a spot can be
+    // formed. Guard status mutation for RX-only stations, but still emit.
+    if (info.status != QStringLiteral("RX Only")) {
+        if (transmitting) {
+            info.status     = QStringLiteral("TX");
+            info.lastTxTime = QDateTime::currentDateTimeUtc();
+            info.lastUpdate = QDateTime::currentDateTimeUtc();
+        } else if (info.status == QStringLiteral("TX")) {
+            // Stop-TX: revert to RX. Applies to both live events and bulk_update
+            // snapshot entries — the server includes the full chronological
+            // tx_report sequence in bulk_update, so transmitting=false here means
+            // the station has genuinely stopped TX.
+            info.status     = QStringLiteral("RX");
+            info.lastUpdate = QDateTime::currentDateTimeUtc();
+        }
+    }
+    emit stationUpdated(sid, info);
+
+    // ── Spot path — live TX start with known freq and callsign only ───────
+    if (!transmitting || m_inBulkUpdate) return;
     if (info.freqMhz <= 0.0 || info.callsign.isEmpty()) return;
 
     DxSpot spot;
@@ -366,36 +408,59 @@ void FreeDvClient::onTxReport(const QJsonObject& data)
 void FreeDvClient::onRemoveConnection(const QJsonObject& data)
 {
     QString sid = data["sid"].toString();
+    emit stationRemoved(sid);
     m_stations.remove(sid);
+}
+
+void FreeDvClient::onMessageUpdate(const QJsonObject& data)
+{
+    QString sid = data["sid"].toString();
+    if (!m_stations.contains(sid)) return;
+    auto& info    = m_stations[sid];
+    info.message  = data["message"].toString();
+    info.lastUpdate = QDateTime::currentDateTimeUtc();
+    emit stationUpdated(sid, info);
 }
 
 void FreeDvClient::onBulkUpdate(const QJsonArray& pairs)
 {
+    m_inBulkUpdate = true;
     for (const auto& item : pairs) {
         QJsonArray pair = item.toArray();
         if (pair.size() < 2) continue;
         handleEvent(pair[0].toString(), pair[1].toObject());
     }
+    m_inBulkUpdate = false;
 }
 
 void FreeDvClient::onRxReport(const QJsonObject& data)
 {
-    QString sid = data["sid"].toString();
-
-    // Look up the receiving station's frequency from our state map
-    double freqMhz = 0.0;
-    if (m_stations.contains(sid))
-        freqMhz = m_stations[sid].freqMhz;
-    if (freqMhz <= 0.0)
-        return;  // cannot spot without a frequency
-
+    QString sid          = data["sid"].toString();
     QString receiverCall = data["receiver_callsign"].toString();
     QString txCall       = data["callsign"].toString();
     QString mode         = data["mode"].toString();
     double  snr          = data["snr"].toDouble();
     QString grid         = data["receiver_grid_square"].toString();
 
+    // ── Reporter path — no spot-emission gates ────────────────────────────
+    // Assign rxCallsign unconditionally: "" pre-EOO (clears stale callsign),
+    // populated string at EOO. The model uses the "" → non-empty transition
+    // to detect EOO and clear the RX highlight immediately.
+    if (m_stations.contains(sid)) {
+        auto& rxInfo      = m_stations[sid];
+        rxInfo.snr        = static_cast<float>(snr);
+        rxInfo.rxCallsign = txCall;
+        rxInfo.lastUpdate = QDateTime::currentDateTimeUtc();
+        emit stationUpdated(sid, rxInfo);
+    }
+
+    // ── Spot path — requires TX callsign and known receiver frequency ─────
     if (txCall.isEmpty()) return;
+
+    double freqMhz = 0.0;
+    if (m_stations.contains(sid))
+        freqMhz = m_stations[sid].freqMhz;
+    if (freqMhz <= 0.0) return;
 
     DxSpot spot;
     spot.dxCall      = txCall;

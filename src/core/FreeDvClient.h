@@ -7,6 +7,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QHash>
+#include <QDateTime>
+#include <QMetaType>
 #include <atomic>
 #include "DxClusterClient.h"  // for DxSpot
 
@@ -24,12 +26,31 @@ class FreeDvClient : public QObject {
     Q_OBJECT
 
 public:
+    // Per-station state tracked by Socket.IO session ID.
+    // Public so FreeDvReporterModel and the dialog can use it directly.
+    struct StationInfo {
+        QString  callsign;
+        QString  gridSquare;
+        double   freqMhz{0.0};
+        QString  mode;
+        bool     rxOnly{false};
+        QString  version;
+        QString  message;
+        QString  status;           // "RX", "TX", or ""
+        QDateTime lastTxTime;
+        QString  rxCallsign;
+        float    snr{-99.0f};
+        QDateTime lastUpdate;
+    };
+
     explicit FreeDvClient(QObject* parent = nullptr);
     ~FreeDvClient() override;
 
     void startConnection();
     void stopConnection();
     bool isConnected() const { return m_connected.load(); }
+    QString myGrid() const { return m_myGrid; }
+    QHash<QString, StationInfo> stations() const { return m_stations; }
 
     QString logFilePath() const;
 
@@ -39,6 +60,9 @@ signals:
     void connectionError(const QString& error);
     void spotReceived(const DxSpot& spot);
     void rawLineReceived(const QString& line);
+    void stationsCleared();
+    void stationUpdated(const QString& sid, const AetherSDR::FreeDvClient::StationInfo& info);
+    void stationRemoved(const QString& sid);
 
 public slots:
     // Defer QWebSocket + timer construction to the worker thread (#1929) —
@@ -71,17 +95,9 @@ private slots:
     void onWsError(QAbstractSocket::SocketError err);
     void onReconnectTimer();
     void onSnrTimer();
+    void onMessageUpdate(const QJsonObject& data);
 
 private:
-    // Per-station state tracked by Socket.IO session ID
-    struct StationInfo {
-        QString callsign;
-        QString gridSquare;
-        double  freqMhz{0.0};
-        QString mode;
-        bool    rxOnly{false};
-    };
-
     void handleEngineIO(const QString& raw);
     void handleSocketIO(const QString& payload);
     void handleEvent(const QString& eventName, const QJsonObject& data);
@@ -117,6 +133,7 @@ private:
 
     std::atomic<bool> m_connected{false};
     bool    m_intentionalDisconnect{false};
+    bool    m_inBulkUpdate{false};
     int     m_reconnectAttempts{0};
     int     m_pingIntervalMs{25000};
 
@@ -127,3 +144,5 @@ private:
 };
 
 } // namespace AetherSDR
+
+Q_DECLARE_METATYPE(AetherSDR::FreeDvClient::StationInfo)

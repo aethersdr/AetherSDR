@@ -1123,7 +1123,11 @@ endif()
 
 if(Qt6WebSockets_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_WEBSOCKETS)
-    target_sources(AetherSDR PRIVATE src/core/FreeDvClient.cpp)
+    target_sources(AetherSDR PRIVATE
+        src/core/FreeDvClient.cpp
+        src/gui/FreeDvReporterDialog.cpp
+        src/gui/FreeDvReporterModel.cpp
+    )
     target_link_libraries(AetherSDR PRIVATE Qt6::WebSockets)
 endif()
 

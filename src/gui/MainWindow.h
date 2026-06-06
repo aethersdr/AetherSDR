@@ -27,6 +27,7 @@
 #include "core/PropForecastClient.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/FreeDvClient.h"
+#include "gui/FreeDvReporterDialog.h"
 #endif
 #include <QThread>
 #ifdef HAVE_SERIALPORT
@@ -354,6 +355,9 @@ private:
 
     void showMemoryDialog();
     void showQuickAddMemoryDialog(const QString& preferredPanId = {});
+#ifdef HAVE_WEBSOCKETS
+    void showFreeDvReporter();
+#endif
     void updateKeyerAvailability(const QString& mode);
     void showNr2ParamPopup(const QPoint& globalPos);
     void showNr4ParamPopup(const QPoint& globalPos);
@@ -464,7 +468,8 @@ private:
     // One-time settings migration from the old dual-server key schema.
     void migrateCatSettings();
 #ifdef HAVE_WEBSOCKETS
-    TciServer*        m_tciServer{nullptr};
+    TciServer*             m_tciServer{nullptr};
+    FreeDvReporterDialog*  m_freedvReporterDialog{nullptr};
 #endif
     SmartLinkClient   m_smartLink;
     WanConnection     m_wanConnection;
