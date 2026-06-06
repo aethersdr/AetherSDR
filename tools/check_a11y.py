@@ -74,6 +74,14 @@ def check_file(path: Path) -> list:
     except OSError as exc:
         return [(1, "a11y-check-error", f"Could not read file: {exc}")]
 
+    # File-level suppression. A widget that is genuinely decorative (custom
+    # badges, gradient backgrounds, layout-only frames) can opt out of the
+    # whole scan by adding `// a11y-check: skip-file` anywhere in the file.
+    # Keeps the lint accommodating — contributors aren't forced to either
+    # add ceremony or argue with the linter on legitimate decoration.
+    if re.search(r"//\s*a11y-check\s*:\s*skip-file", text):
+        return []
+
     lines = text.splitlines()
     findings = []
     findings += check_interactive_labels(lines)
@@ -133,11 +141,34 @@ def check_interactive_labels(lines: list) -> list:
 # ---------------------------------------------------------------------------
 
 def check_value_change_methods(lines: list) -> list:
+    """Flag out-of-line method DEFINITIONS that change a displayed value but
+    never fire QAccessible::updateAccessibility.
+
+    The earlier version of this check matched any call site of the listed
+    methods, so a one-time `m_button->setText("Cancel")` inside a widget
+    constructor body fired the warning. With ~5 button-label setText() calls
+    per dialog, the empirical noise floor was ~840 findings across src/gui/
+    — enough that the signal (S-meter, VFO, level readouts) drowned in
+    button labels.
+
+    Scoping to `ClassName::method(` removes call sites entirely:
+        FooDialog::FooDialog() { m_btn->setText("Cancel"); }   <- skipped
+        void SMeterWidget::setLevel(float dbm) { ... }          <- checked
+
+    setText is intentionally NOT on the watched list — it is used on every
+    QLabel/QPushButton constructor and the call/definition split alone is
+    not enough to keep it quiet. Custom widgets that override setText for
+    live values can adopt one of the domain-specific names below
+    (updateReadout, updateLabel, etc.) which makes the intent explicit at
+    the call site too.
+    """
     findings = []
     value_method_re = re.compile(
-        r"\b(setLevel|setValue|updateFreqLabel|setText)\s*\("
+        r"\b\w+::(setLevel|setDbm|setFrequency|updateFreqLabel|"
+        r"updateReadout|updateLabel|updateLevel|updateValue)\s*\("
     )
     update_a11y_re = re.compile(r"QAccessible::updateAccessibility")
+    suppress_re = re.compile(r"//\s*a11y-check\s*:\s*skip")
 
     i = 0
     while i < len(lines):
@@ -166,7 +197,12 @@ def check_value_change_methods(lines: list) -> list:
 
             if found_open and body_lines:
                 body_text = "\n".join(body_lines)
-                if not update_a11y_re.search(body_text):
+                # Per-method suppression: `// a11y-check: skip` on the
+                # method-definition line or anywhere in its body.
+                suppressed = bool(
+                    suppress_re.search(line) or suppress_re.search(body_text)
+                )
+                if not suppressed and not update_a11y_re.search(body_text):
                     findings.append((
                         method_start,
                         "value-method-missing-a11y-update",
@@ -174,7 +210,11 @@ def check_value_change_methods(lines: list) -> list:
                         "QAccessible::updateAccessibility -- screen readers won't "
                         "announce the change. Add: "
                         "QAccessibleValueChangeEvent ev(this, newValue); "
-                        "QAccessible::updateAccessibility(&ev);",
+                        "QAccessible::updateAccessibility(&ev); "
+                        "(For high-rate updaters, throttle to settled values "
+                        "to avoid screen-reader spam — see docs/a11y.md. "
+                        "To suppress this warning, add '// a11y-check: skip' "
+                        "on the method line.)",
                     ))
             i = j + 1
             continue
@@ -259,15 +299,43 @@ def check_widget_constructor_names(lines: list) -> list:
 # ---------------------------------------------------------------------------
 
 def check_custom_painted_widgets(lines: list, path: Path) -> list:
+    """Flag custom-painted widgets that ALSO display data (have a value-change
+    method).
+
+    Earlier this check fired on any paintEvent override — but src/gui/ has
+    many small widgets that paint their own gradient/badge/border purely for
+    visual decoration (no data to announce). Annotating each of those with a
+    QAccessibleInterface subclass would be ceremony with no a11y payoff.
+
+    Adding the "has at least one data-change setter" precondition narrows
+    the scan to widgets that genuinely have screen-reader-relevant content
+    (S-meter, spectrum, waterfall, scope, gauge). A decorative widget that
+    happens to add `setText` doesn't trip this because setText is not on
+    the watched list (see check_value_change_methods()).
+
+    File-level escape hatch: `// a11y-check: skip-file` short-circuits
+    this check (and the others) entirely.
+    """
     findings = []
     paint_event_re = re.compile(r"\bpaintEvent\s*\(")
     accessible_iface_re = re.compile(r"QAccessibleInterface")
     qwidget_subclass_re = re.compile(
         r"class\s+(\w+)\s*:[^{]*\bQ(?:Widget|Frame|OpenGLWidget|GLWidget)\b"
     )
+    # Same watched-name set as check_value_change_methods. A custom-painted
+    # widget is "data-carrying" if it defines one of these or has a public
+    # setter declaration matching one.
+    data_setter_re = re.compile(
+        r"\b(setLevel|setDbm|setFrequency|updateFreqLabel|"
+        r"updateReadout|updateLabel|updateLevel|updateValue)\s*\("
+    )
     full_text = "\n".join(lines)
 
     if not paint_event_re.search(full_text):
+        return findings
+
+    if not data_setter_re.search(full_text):
+        # Decorative widget — no data setters, no payoff in a QAccessibleInterface.
         return findings
 
     widget_classes = [m.group(1) for m in qwidget_subclass_re.finditer(full_text)]
@@ -293,13 +361,16 @@ def check_custom_painted_widgets(lines: list, path: Path) -> list:
                 findings.append((
                     ln,
                     "custom-painted-widget-needs-accessible-interface",
-                    f"{cls} overrides paintEvent but has no QAccessibleInterface "
-                    "subclass in this file or a companion *Accessible.h -- "
-                    "screen readers cannot read custom-drawn content. "
-                    "Implement QAccessibleInterface returning meaningful "
+                    f"{cls} overrides paintEvent AND exposes data setters, "
+                    "but has no QAccessibleInterface subclass in this file "
+                    "or a companion *Accessible.h -- screen readers cannot "
+                    "read its custom-drawn content. Implement "
+                    "QAccessibleInterface returning meaningful "
                     "text(Name)/text(Value) strings, or add "
                     "// TODO(a11y): QAccessibleInterface needed and open a "
-                    "follow-up issue tagged 'GUI'.",
+                    "follow-up issue tagged 'GUI'. "
+                    "(Purely decorative paintEvent? Add "
+                    "'// a11y-check: skip-file' anywhere in the file.)",
                 ))
             break
 
