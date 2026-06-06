@@ -89,6 +89,10 @@ void TunerModel::setOperate(bool on)
     const QString cmd = "tgxl set handle=" + m_handle + " mode=" + (on ? "1" : "0");
     qCDebug(lcTuner) << "TunerModel:" << cmd;
     emit commandReady(cmd);
+    // Optimistic update: reflect the commanded state immediately so the button
+    // label stays in sync even before the radio echoes back the new state.
+    // applyStatus() self-corrects if the radio rejects or overrides our value.
+    if (m_operate != on) { m_operate = on; emit stateChanged(); }
 }
 
 void TunerModel::setBypass(bool on)
@@ -100,6 +104,8 @@ void TunerModel::setBypass(bool on)
     const QString cmd = "tgxl set handle=" + m_handle + " bypass=" + (on ? "1" : "0");
     qCDebug(lcTuner) << "TunerModel:" << cmd;
     emit commandReady(cmd);
+    // Optimistic update: same rationale as setOperate above.
+    if (m_bypass != on) { m_bypass = on; emit stateChanged(); }
 }
 
 void TunerModel::autoTune()
