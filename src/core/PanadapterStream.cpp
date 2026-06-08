@@ -5,6 +5,7 @@
 #include "OpusCodec.h"
 #include "PerfTelemetry.h"
 #include "RadioConnection.h"
+#include "VitaTileFrequency.h"
 
 #include <QNetworkDatagram>
 #include <QHostAddress>
@@ -841,15 +842,14 @@ void PanadapterStream::decodeWaterfallTile(const uchar* raw, int totalBytes, boo
 
     if (tileWidth == 0 || tileHeight == 0) return;
 
-    // FrameLowFreq and BinBandwidth may be VitaFrequency (Hz × 2^20) or plain Hz.
-    // Try VitaFrequency first; if the result is unreasonable, try plain Hz.
-    double lowFreqMhz  = static_cast<double>(frameLowRaw) / (1048576.0 * 1e6);
-    double binBwMhz    = static_cast<double>(binBwRaw) / (1048576.0 * 1e6);
-    if (lowFreqMhz < 0.001 || lowFreqMhz > 1000.0) {
-        // Fallback: treat as plain Hz
-        lowFreqMhz = static_cast<double>(frameLowRaw) / 1e6;
-        binBwMhz   = static_cast<double>(binBwRaw) / 1e6;
-    }
+    // FrameLowFreq and BinBandwidth arrive as either VitaFrequency (Hz × 2^20)
+    // or plain Hz; disambiguate on the raw integer magnitude so there is no
+    // upper frequency ceiling. The previous "divide then reject results above
+    // 1000 MHz" heuristic blacked out the waterfall for every transverter above
+    // 1 GHz (#3449, #1843, #1928, #2835). See VitaTileFrequency.h.
+    const auto tileFreq = AetherSDR::Vita::decodeTileFrequencyMhz(frameLowRaw, binBwRaw);
+    const double lowFreqMhz = tileFreq.lowMhz;
+    const double binBwMhz   = tileFreq.binBwMhz;
     const double highFreqMhz = lowFreqMhz + binBwMhz * tileWidth;
 
     const int payloadOffset = VITA49_HEADER_BYTES + TILE_SUBHEADER_BYTES;

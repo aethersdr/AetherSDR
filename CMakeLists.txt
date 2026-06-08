@@ -1872,6 +1872,14 @@ add_executable(xvtr_policy_test
 target_include_directories(xvtr_policy_test PRIVATE src)
 target_link_libraries(xvtr_policy_test PRIVATE Qt6::Core)
 
+# #3449 — VITA-49 waterfall tile frequency decode (no 1 GHz ceiling)
+add_executable(vita_tile_frequency_test
+    tests/vita_tile_frequency_test.cpp
+)
+target_include_directories(vita_tile_frequency_test PRIVATE src)
+target_link_libraries(vita_tile_frequency_test PRIVATE Qt6::Core)
+add_test(NAME vita_tile_frequency_test COMMAND vita_tile_frequency_test)
+
 add_executable(frequency_entry_parser_test
     tests/frequency_entry_parser_test.cpp
     src/gui/FrequencyEntryParser.cpp
