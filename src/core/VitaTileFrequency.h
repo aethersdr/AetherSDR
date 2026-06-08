@@ -2,8 +2,6 @@
 
 #include <QtGlobal>
 
-#include <cmath>
-
 // VITA-49 waterfall-tile frequency decoding.
 //
 // A tile sub-header carries FrameLowFreq and BinBandwidth as 64-bit integers.
@@ -45,8 +43,7 @@ inline TileFrequency decodeTileFrequencyMhz(qint64 frameLowRaw, qint64 binBwRaw)
 {
     // The encoding is decided from FrameLowFreq (the large, reliable value) and
     // applied to BinBandwidth too, since both fields share one encoding.
-    const bool isVitaFrequency =
-        std::llabs(static_cast<long long>(frameLowRaw)) >= kVitaFrequencyRawThreshold;
+    const bool isVitaFrequency = qAbs(frameLowRaw) >= kVitaFrequencyRawThreshold;
     const double scale = isVitaFrequency ? kVitaFrequencyToMhz : 1e6;
 
     TileFrequency out;
