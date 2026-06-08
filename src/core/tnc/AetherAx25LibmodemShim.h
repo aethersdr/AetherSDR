@@ -104,6 +104,13 @@ Ax25DemodConfig ax25DemodConfigForProfile(
     Ax25ModemProfile profile,
     Ax25TonePolarity polarity = Ax25TonePolarity::Normal);
 QString ax25ModemProfileName(Ax25ModemProfile profile);
+QString ax25DemodDescription(const Ax25DemodConfig& cfg);
+Ax25TransmitResult ax25BuildTransmitAudio(const Ax25DemodConfig& cfg,
+                                          const QString& text,
+                                          const QString& defaultSource,
+                                          const QString& defaultDestination = QStringLiteral("APRS"));
+Ax25TransmitResult ax25BuildTransmitAudioFromFrame(const Ax25DemodConfig& cfg,
+                                                   const QByteArray& ax25NoFcs);
 
 class AetherAx25LibmodemShim : public QObject {
     Q_OBJECT

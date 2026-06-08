@@ -10,6 +10,7 @@
 #include <QPointer>
 #include <QQueue>
 #include <QStringList>
+#include <QThread>
 
 class QAbstractButton;
 class QCheckBox;
@@ -99,6 +100,7 @@ private:
     void startAudioCapture();
     void finishAudioCapture(bool save);
     void startTransmitFromUi();
+    void startTransmit(const QString& text);
     void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss);
     void beginTransmitWhenReady();
     void paceTransmitAudio();
@@ -144,6 +146,8 @@ private:
     AudioEngine* m_audio{nullptr};
     RadioModel* m_radio{nullptr};
     AetherAx25LibmodemShim* m_shim{nullptr};
+    QThread m_shimThread;
+    Ax25DemodConfig m_shimConfig;
     QStackedWidget* m_tabStack{nullptr};
     QAbstractButton* m_ax25Tab{nullptr};
     QAbstractButton* m_kissTab{nullptr};

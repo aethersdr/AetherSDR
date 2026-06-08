@@ -1094,13 +1094,26 @@ QVector<Ax25DecodedFrame> AetherAx25LibmodemShim::processRecoveredBitsForTest(
     return frames;
 }
 
-Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudio(
+QString ax25DemodDescription(const Ax25DemodConfig& cfg)
+{
+    return QStringLiteral("%1: %2 Hz, %3 bps, mark %4 Hz, space %5 Hz, %6")
+        .arg(ax25ModemProfileName(cfg.profile))
+        .arg(cfg.sampleRate)
+        .arg(cfg.baud)
+        .arg(cfg.markHz, 0, 'f', 0)
+        .arg(cfg.spaceHz, 0, 'f', 0)
+        .arg(cfg.polarity == Ax25TonePolarity::Normal
+             ? QStringLiteral("Normal")
+             : QStringLiteral("Inverted"));
+}
+
+Ax25TransmitResult ax25BuildTransmitAudio(
+    const Ax25DemodConfig& cfg,
     const QString& text,
     const QString& defaultSource,
-    const QString& defaultDestination) const
+    const QString& defaultDestination)
 {
     Ax25TransmitResult result;
-    const auto cfg = m_impl->config;
     if (!initTxResult(cfg, result))
         return result;
 
@@ -1130,22 +1143,28 @@ Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudio(
     return result;
 }
 
-Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudioFromFrame(
-    const QByteArray& ax25NoFcs) const
+Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudio(
+    const QString& text,
+    const QString& defaultSource,
+    const QString& defaultDestination) const
+{
+    return ax25BuildTransmitAudio(m_impl->config, text, defaultSource, defaultDestination);
+}
+
+Ax25TransmitResult ax25BuildTransmitAudioFromFrame(
+    const Ax25DemodConfig& cfg,
+    const QByteArray& ax25NoFcs)
 {
     Ax25TransmitResult result;
-    const auto cfg = m_impl->config;
     if (!initTxResult(cfg, result))
         return result;
 
-    // Minimum AX.25 UI frame: dest(7) + src(7) + control(1) = 15 bytes.
     if (ax25NoFcs.size() < 15) {
         result.error = QStringLiteral("KISS frame too short: %1 bytes (need >= 15)")
             .arg(ax25NoFcs.size());
         return result;
     }
 
-    // The host sends the frame without an FCS; the TNC computes and appends it.
     std::vector<uint8_t> frameBytes(
         reinterpret_cast<const uint8_t*>(ax25NoFcs.constData()),
         reinterpret_cast<const uint8_t*>(ax25NoFcs.constData()) + ax25NoFcs.size());
@@ -1163,6 +1182,12 @@ Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudioFromFrame(
     return result;
 }
 
+Ax25TransmitResult AetherAx25LibmodemShim::buildTransmitAudioFromFrame(
+    const QByteArray& ax25NoFcs) const
+{
+    return ax25BuildTransmitAudioFromFrame(m_impl->config, ax25NoFcs);
+}
+
 Ax25DecoderDiagnostics AetherAx25LibmodemShim::diagnosticsSnapshot() const
 {
     return m_impl->makeDiagnostics(m_impl->config.sampleRate);
@@ -1171,17 +1196,10 @@ Ax25DecoderDiagnostics AetherAx25LibmodemShim::diagnosticsSnapshot() const
 QString AetherAx25LibmodemShim::demodDescription() const
 {
     const auto cfg = m_impl->config;
-    return QStringLiteral("%1: %2 Hz, %3 bps, mark %4 Hz, space %5 Hz, %6, %7 lane%8")
-        .arg(ax25ModemProfileName(cfg.profile))
-        .arg(cfg.sampleRate)
-        .arg(cfg.baud)
-        .arg(cfg.markHz, 0, 'f', 0)
-        .arg(cfg.spaceHz, 0, 'f', 0)
-        .arg(cfg.polarity == Ax25TonePolarity::Normal
-             ? QStringLiteral("Normal")
-             : QStringLiteral("Inverted"))
-        .arg(m_impl->lanes.size())
-        .arg(m_impl->lanes.size() == 1 ? QString() : QStringLiteral("s"));
+    return ax25DemodDescription(cfg)
+        + QStringLiteral(", %1 lane%2")
+            .arg(m_impl->lanes.size())
+            .arg(m_impl->lanes.size() == 1 ? QString() : QStringLiteral("s"));
 }
 
 void AetherAx25LibmodemShim::feedAudio(const QByteArray& monoFloat32Pcm, int sampleRate)
