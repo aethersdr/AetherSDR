@@ -88,6 +88,7 @@ class NetworkDiagnosticsDialog;
 class AgcCalibrationDialog;
 class MemoryDialog;
 class PropDashboardDialog;
+class UpdateChecker;
 class TxBandDialog;
 class AetherDspDialog;
 class MqttSettingsDialog;
@@ -905,6 +906,7 @@ private:
     bool m_waitingForFirstPanadapterFrame{false};
     QString m_panadapterConnectionAnimationLabel;
     ShortcutManager m_shortcutManager;
+    UpdateChecker* m_updateChecker{nullptr};
 
 #ifdef HAVE_RADE
     RADEEngine* m_radeEngine{nullptr};

@@ -549,6 +549,7 @@ set(CORE_SOURCES
     src/core/ProfileTransfer.cpp
     src/core/QsoRecorder.cpp
     src/core/FirmwareStager.cpp
+    src/core/UpdateChecker.cpp
     src/core/OleCompoundFile.cpp
     src/core/CabExtractor.cpp
     src/core/RNNoiseFilter.cpp
