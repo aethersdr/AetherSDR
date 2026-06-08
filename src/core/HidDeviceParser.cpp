@@ -43,12 +43,12 @@ std::unique_ptr<HidDeviceParser> HidDeviceParser::create(uint16_t vid, uint16_t 
 
 // ── Icom RC-28 ──────────────────────────────────────────────────────────────
 // 32-byte reports, no report ID prefix on any platform (hidraw returns 32 bytes).
-// Verified layout (cross-referenced against FlexRC-28 open-source driver):
+// Verified layout (cross-referenced against FlexRC-28 driver and wfview source):
 //   [0] = 0x01 constant — guard byte, discard report if != 0x01
-//   [1] = detent counter (increments each click; device sends burst of identical
-//         reports per detent — deduplicate on this field)
+//   [1] = rotation speed (encoder pulse count since last report; higher = faster turn)
+//         NOT a monotonic counter — stays at 1 during slow continuous rotation
 //   [2] = 0x00 (unused)
-//   [3] = direction: 0x01 = CW, 0x02 = CCW
+//   [3] = direction: 0x01 = CW, 0x02 = CCW; stays set while rotating, 0x00 when idle
 //   [4] = 0x00 (unused)
 //   [5] = button state bitmask (active-low): 0x07 = all idle,
 //         bit0=TX/PTT, bit1=F1, bit2=F2
@@ -58,9 +58,9 @@ HidEvent IcomRC28Parser::parse(const uint8_t* buf, size_t len)
     if (len < 6) return {};
     if (buf[0] != 0x01) return {};
 
-    const uint8_t counter = buf[1];
-    const uint8_t dir     = buf[3];
-    const uint8_t btns    = buf[5];
+    const uint8_t speed = buf[1];
+    const uint8_t dir   = buf[3];
+    const uint8_t btns  = buf[5];
 
     // Button events (active-low bitmask → same enum values as before).
     if (btns != m_prevButtonState) {
@@ -78,10 +78,12 @@ HidEvent IcomRC28Parser::parse(const uint8_t* buf, size_t len)
         }
     }
 
-    // Rotation: deduplicate on counter to emit exactly one step per detent.
-    if ((dir == 0x01 || dir == 0x02) && counter != m_prevCounter) {
-        m_prevCounter = counter;
-        return {HidEvent::Rotate, (dir == 0x01) ? 1 : -1, 0, 0};
+    // Rotation: one event per report, magnitude proportional to speed (buf[1]).
+    // Guard: skip when any button is held (btns != 0x07) so accidental knob
+    // movement during button presses doesn't retune — matches wfview behaviour.
+    if (btns == 0x07 && speed > 0 && (dir == 0x01 || dir == 0x02)) {
+        const int sign = (dir == 0x01) ? 1 : -1;
+        return {HidEvent::Rotate, sign * static_cast<int>(speed), 0, 0};
     }
 
     return {};

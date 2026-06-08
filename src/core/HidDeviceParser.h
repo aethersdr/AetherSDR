@@ -36,16 +36,16 @@ public:
 
 // Icom RC-28 (VID 0x0C26, PID 0x001E)
 // 32-byte reports, no report ID prefix (hidraw returns exactly 32 bytes).
-// Actual layout (verified from hardware): [0]=0x01 constant, [1]=detent counter,
-// [2]=0x00, [3]=direction (0x01=CW, 0x02=CCW), [4]=0x00, [5]=button state enum.
-// The device sends multiple identical reports per detent; deduplicate on counter.
+// Actual layout (verified from hardware, FlexRC-28 driver, and wfview):
+//   [0]=0x01 constant, [1]=rotation speed (pulse count, NOT a monotonic counter),
+//   [2]=0x00, [3]=direction (0x01=CW, 0x02=CCW, stays set while rotating),
+//   [4]=0x00, [5]=button state (active-low bitmask, 0x07=all idle).
 class IcomRC28Parser : public HidDeviceParser {
 public:
     HidEvent parse(const uint8_t* buf, size_t len) override;
     size_t reportSize() const override { return 32; }
 private:
     uint8_t m_prevButtonState{0x07};  // 0x07 = all released (idle)
-    uint8_t m_prevCounter{0xff};
 };
 
 // Griffin PowerMate (VID 0x077D, PID 0x0410)
