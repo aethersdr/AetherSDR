@@ -42,7 +42,7 @@ bool  AetherAFSKDemod::s_cosTableReady = false;
 void AetherAFSKDemod::buildCosTable() noexcept
 {
     for (int j = 0; j < 256; ++j)
-        s_cosTable[j] = std::cosf(static_cast<float>(j) * 2.0f * float(M_PI) / 256.0f);
+        s_cosTable[j] = std::cos(static_cast<float>(j) * 2.0f * float(M_PI) / 256.0f);
     s_cosTableReady = true;
 }
 
@@ -84,16 +84,16 @@ float AetherAFSKDemod::agcStep(float in, float fast, float slow,
 // RRC kernel: sinc × raised-cosine window (from Dire Wolf dsp.c).
 static float rrcKernel(float t, float a) noexcept
 {
-    float sinc = (std::fabsf(t) < 0.001f)
+    float sinc = (std::fabs(t) < 0.001f)
                ? 1.0f
-               : std::sinf(float(M_PI) * t) / (float(M_PI) * t);
+               : std::sin(float(M_PI) * t) / (float(M_PI) * t);
 
     float at = a * t;
     float win;
-    if (std::fabsf(std::fabsf(at) - 0.5f) < 0.001f)
+    if (std::fabs(std::fabs(at) - 0.5f) < 0.001f)
         win = float(M_PI) / 4.0f;
     else
-        win = std::cosf(float(M_PI) * at) / (1.0f - (2.0f * at) * (2.0f * at));
+        win = std::cos(float(M_PI) * at) / (1.0f - (2.0f * at) * (2.0f * at));
 
     return sinc * win;
 }
@@ -117,10 +117,10 @@ void AetherAFSKDemod::buildPrefilter(double fMark, double fSpace,
 
     for (int j = 0; j < taps; ++j) {
         float d = j - center;
-        preCoeffs_[j] = (std::fabsf(d) < 1e-6f)
+        preCoeffs_[j] = (std::fabs(d) < 1e-6f)
             ? 2.0f * (f2 - f1)
-            : std::sinf(2.0f * float(M_PI) * f2 * d) / (float(M_PI) * d)
-            - std::sinf(2.0f * float(M_PI) * f1 * d) / (float(M_PI) * d);
+            : std::sin(2.0f * float(M_PI) * f2 * d) / (float(M_PI) * d)
+            - std::sin(2.0f * float(M_PI) * f1 * d) / (float(M_PI) * d);
         // Truncated (rectangular) window — matches Dire Wolf profile A.
     }
 
@@ -128,7 +128,7 @@ void AetherAFSKDemod::buildPrefilter(double fMark, double fSpace,
     float w = 2.0f * float(M_PI) * 0.5f * (f1 + f2);
     float G = 0.0f;
     for (int j = 0; j < taps; ++j)
-        G += 2.0f * preCoeffs_[j] * std::cosf((j - center) * w);
+        G += 2.0f * preCoeffs_[j] * std::cos((j - center) * w);
     if (G != 0.0f)
         for (auto& c : preCoeffs_) c /= G;
 
@@ -199,7 +199,7 @@ void AetherAFSKDemod::nudgePll(float demodOut, float amplitude) noexcept
     // Overflow from positive to negative → sample point.
     if (pll_ < 0 && prevPll_ >= 0) {
         float conf = (amplitude > 1e-7f)
-                   ? std::min(std::fabsf(demodOut) / amplitude, 1.0f)
+                   ? std::min(std::fabs(demodOut) / amplitude, 1.0f)
                    : 0.0f;
         readyBit_  = (demodOut > 0.0f) ? 1u : 0u;
         readyConf_ = conf;
@@ -253,8 +253,8 @@ bool AetherAFSKDemod::try_demodulate(double sample, demod_result& result) noexce
     float sI = convolve(sIBuf_.data(), lpCoeffs_.data(), lpTaps_);
     float sQ = convolve(sQBuf_.data(), lpCoeffs_.data(), lpTaps_);
 
-    float mAmp = std::hypotf(mI, mQ);
-    float sAmp = std::hypotf(sI, sQ);
+    float mAmp = std::hypot(mI, mQ);
+    float sAmp = std::hypot(sI, sQ);
 
     // 4. AGC — always run to track peak/valley for amplitude reporting.
     float mNorm = agcStep(mAmp, kAgcFastAttack, kAgcSlowDecay, mPeak_, mValley_);
