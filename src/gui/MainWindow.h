@@ -734,10 +734,14 @@ private:
     QLabel* m_networkLabel{nullptr};
     QTimer m_networkTooltipRefreshTimer;
     QTimer m_perfHeartbeatTimer;
-    QLabel* m_tgxlSeparator{nullptr};
-    QLabel* m_tgxlIndicator{nullptr};
-    QLabel* m_pgxlSeparator{nullptr};
-    QLabel* m_pgxlIndicator{nullptr};
+    QLabel*  m_tgxlSeparator{nullptr};
+    QWidget* m_tgxlContainer{nullptr};
+    QLabel*  m_tgxlIndicator{nullptr};   // top row: "TUN"
+    QLabel*  m_tgxlStateLabel{nullptr};  // bottom row: OPERATE / BYPASS / STANDBY
+    QLabel*  m_pgxlSeparator{nullptr};
+    QWidget* m_pgxlContainer{nullptr};
+    QLabel*  m_pgxlIndicator{nullptr};   // top row: "AMP"
+    QLabel*  m_pgxlStateLabel{nullptr};  // bottom row: OPERATE / STANDBY
     QLabel* m_txIndicator{nullptr};
     QLabel* m_gpsDateLabel{nullptr};
     QLabel* m_gpsTimeLabel{nullptr};

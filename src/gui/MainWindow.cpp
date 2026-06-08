@@ -3672,7 +3672,7 @@ MainWindow::MainWindow(QWidget* parent)
             m_appletPanel, &AppletPanel::setTunerVisible);
     connect(&m_radioModel.tunerModel(), &TunerModel::presenceChanged,
             this, [this](bool present) {
-        m_tgxlIndicator->setVisible(present);
+        m_tgxlContainer->setVisible(present);
         m_tgxlSeparator->setVisible(present);
         // Auto-connect/disconnect direct TGXL connection for manual relay control (#469)
         if (present) {
@@ -3836,30 +3836,32 @@ MainWindow::MainWindow(QWidget* parent)
 
     // TGXL indicator: two-line rich text — label on top, state smaller below.
     // Green = OPERATE, amber = BYPASS, grey = STANDBY (matches SmartSDR)
-    auto setIndicatorHtml = [](QLabel* lbl, const QString& name,
+    auto setIndicatorHtml = [](QLabel* nameLbl, QLabel* stateLbl,
                                const QString& state, const QString& color) {
-        lbl->setText(QString("<span style='color:%1; font-size:18px; font-weight:bold;'>%2</span><br>"
-                             "<span style='color:%1; font-size:11px;'>%3</span>")
-                     .arg(color, name, state));
+        nameLbl->setStyleSheet(
+            QString("QLabel { color: %1; font-size:18px; font-weight:bold; }").arg(color));
+        stateLbl->setStyleSheet(
+            QString("QLabel { color: %1; font-size:11px; }").arg(color));
+        stateLbl->setText(state);
     };
 
     auto updateTgxlStyle = [this, setIndicatorHtml]() {
         auto& t = m_radioModel.tunerModel();
         if (t.isOperate() && !t.isBypass())
-            setIndicatorHtml(m_tgxlIndicator, "TUN", "OPERATE", "#00e060");
+            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "OPERATE", "#00e060");
         else if (t.isOperate() && t.isBypass())
-            setIndicatorHtml(m_tgxlIndicator, "TUN", "BYPASS", "#e0a000");
+            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "BYPASS", "#e0a000");
         else
-            setIndicatorHtml(m_tgxlIndicator, "TUN", "STANDBY", "#404858");
+            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "STANDBY", "#404858");
     };
     connect(&m_radioModel.tunerModel(), &TunerModel::stateChanged, this, updateTgxlStyle);
 
     // PGXL indicator: OPERATE (green) or STANDBY (grey) — no bypass for PGXL
     auto updatePgxlStyle = [this, setIndicatorHtml]() {
         if (m_radioModel.ampOperate())
-            setIndicatorHtml(m_pgxlIndicator, "AMP", "OPERATE", "#00e060");
+            setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "OPERATE", "#00e060");
         else
-            setIndicatorHtml(m_pgxlIndicator, "AMP", "STANDBY", "#404858");
+            setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "STANDBY", "#404858");
     };
     connect(&m_radioModel, &RadioModel::ampStateChanged, this, [this, updatePgxlStyle]() {
         updatePgxlStyle();
@@ -3871,7 +3873,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
 
     connect(&m_radioModel, &RadioModel::amplifierChanged, this, [this, updatePgxlStyle](bool present) {
-        m_pgxlIndicator->setVisible(present);
+        m_pgxlContainer->setVisible(present);
         m_pgxlSeparator->setVisible(present);
         m_appletPanel->setAmpVisible(present);
         if (present) {
@@ -8452,7 +8454,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         updateBandStackIndicator();
         return true;
     }
-    if (obj == m_tgxlIndicator && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_tgxlContainer && event->type() == QEvent::MouseButtonPress) {
         auto& t = m_radioModel.tunerModel();
         // Cycle: OPERATE → BYPASS → STANDBY → OPERATE
         if (t.isOperate() && !t.isBypass())
@@ -8465,7 +8467,7 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
         }
         return true;
     }
-    if (obj == m_pgxlIndicator && event->type() == QEvent::MouseButtonPress) {
+    if (obj == m_pgxlContainer && event->type() == QEvent::MouseButtonPress) {
         // Simple toggle: OPERATE ↔ STANDBY (PGXL has no BYPASS)
         m_radioModel.setAmpOperate(!m_radioModel.ampOperate());
         return true;
@@ -10560,6 +10562,7 @@ void MainWindow::buildUI()
     auto* radioVbox = new QVBoxLayout(radioStack);
     radioVbox->setContentsMargins(0, 0, 0, 0);
     radioVbox->setSpacing(0);
+    radioVbox->setAlignment(Qt::AlignVCenter);
     m_radioInfoLabel = new QLabel("");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_radioInfoLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_radioInfoLabel->setAlignment(Qt::AlignCenter);
@@ -10596,6 +10599,7 @@ void MainWindow::buildUI()
     auto* gpsVbox = new QVBoxLayout(gpsStack);
     gpsVbox->setContentsMargins(0, 0, 0, 0);
     gpsVbox->setSpacing(0);
+    gpsVbox->setAlignment(Qt::AlignVCenter);
     m_gpsLabel = new QLabel("");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsLabel->setAlignment(Qt::AlignCenter);
@@ -10615,6 +10619,7 @@ void MainWindow::buildUI()
         auto* cpuVbox = new QVBoxLayout(cpuStack);
         cpuVbox->setContentsMargins(0, 0, 0, 0);
         cpuVbox->setSpacing(0);
+        cpuVbox->setAlignment(Qt::AlignVCenter);
         m_cpuLabel = new QLabel("CPU: \u2014");
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_cpuLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
         m_cpuLabel->setAlignment(Qt::AlignCenter);
@@ -10733,6 +10738,7 @@ void MainWindow::buildUI()
     auto* paVbox = new QVBoxLayout(paStack);
     paVbox->setContentsMargins(0, 0, 0, 0);
     paVbox->setSpacing(0);
+    paVbox->setAlignment(Qt::AlignVCenter);
     m_paTempLabel = new QLabel("");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_paTempLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_paTempLabel->setAlignment(Qt::AlignCenter);
@@ -10755,6 +10761,7 @@ void MainWindow::buildUI()
     auto* netVbox = new QVBoxLayout(netStack);
     netVbox->setContentsMargins(0, 0, 0, 0);
     netVbox->setSpacing(0);
+    netVbox->setAlignment(Qt::AlignVCenter);
     auto* netTitle = new QLabel("Network:");
     AetherSDR::ThemeManager::instance().applyStyleSheet(netTitle, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     netTitle->setAlignment(Qt::AlignCenter);
@@ -10782,26 +10789,75 @@ void MainWindow::buildUI()
     m_tgxlSeparator = addSep();
     m_tgxlSeparator->setVisible(false);
 
-    m_tgxlIndicator = new QLabel;
-    m_tgxlIndicator->setTextFormat(Qt::RichText);
-    m_tgxlIndicator->setAlignment(Qt::AlignCenter);
-    m_tgxlIndicator->setCursor(Qt::PointingHandCursor);
-    m_tgxlIndicator->setToolTip("Tuner Genius XL — click to cycle OPERATE/BYPASS/STANDBY");
-    m_tgxlIndicator->installEventFilter(this);
-    m_tgxlIndicator->setVisible(false);
-    hbox->addWidget(m_tgxlIndicator);
+    // TUN container — two-label stack matching the CPU/PA/Network pattern.
+    // Minimum width is sized to the longest possible state string ("STANDBY")
+    // so the top label never shifts when the bottom label cycles through states.
+    m_tgxlContainer = new QWidget;
+    m_tgxlContainer->setCursor(Qt::PointingHandCursor);
+    m_tgxlContainer->setToolTip("Tuner Genius XL\nClick to cycle OPERATE / BYPASS / STANDBY");
+    m_tgxlContainer->setAccessibleName("Tuner Genius XL status");
+    m_tgxlContainer->setAccessibleDescription("Click to cycle between OPERATE, BYPASS, and STANDBY");
+    m_tgxlContainer->installEventFilter(this);
+    m_tgxlContainer->setVisible(false);
+    {
+        auto* vbox = new QVBoxLayout(m_tgxlContainer);
+        vbox->setContentsMargins(0, 0, 0, 4);
+        vbox->setSpacing(0);
+        vbox->setAlignment(Qt::AlignVCenter);
+        m_tgxlIndicator = new QLabel("TUN");
+        m_tgxlIndicator->setStyleSheet("QLabel { font-size:18px; font-weight:bold; }");
+        m_tgxlIndicator->setAlignment(Qt::AlignCenter);
+        m_tgxlStateLabel = new QLabel("STANDBY");
+        m_tgxlStateLabel->setStyleSheet("QLabel { font-size:11px; }");
+        m_tgxlStateLabel->setAlignment(Qt::AlignCenter);
+        // Fix minimum width to the widest state so "TUN" never shifts.
+        // Use an explicit QFont at the correct pixel size — the stylesheet hasn't
+        // been processed yet so label->font() would return the wrong metrics.
+        {
+            QFont f = m_tgxlStateLabel->font();
+            f.setPixelSize(11);
+            const int minW = QFontMetrics(f).horizontalAdvance("STANDBY") + 16;
+            m_tgxlStateLabel->setMinimumWidth(minW);
+            m_tgxlContainer->setMinimumWidth(minW);
+        }
+        vbox->addWidget(m_tgxlIndicator);
+        vbox->addWidget(m_tgxlStateLabel);
+    }
+    hbox->addWidget(m_tgxlContainer);
 
     m_pgxlSeparator = addSep();
     m_pgxlSeparator->setVisible(false);
 
-    m_pgxlIndicator = new QLabel;
-    m_pgxlIndicator->setTextFormat(Qt::RichText);
-    m_pgxlIndicator->setAlignment(Qt::AlignCenter);
-    m_pgxlIndicator->setCursor(Qt::PointingHandCursor);
-    m_pgxlIndicator->setToolTip("Power Genius XL — click to toggle OPERATE/STANDBY");
-    m_pgxlIndicator->installEventFilter(this);
-    m_pgxlIndicator->setVisible(false);
-    hbox->addWidget(m_pgxlIndicator);
+    // AMP container — same pattern; PGXL has no BYPASS so widest state is "STANDBY".
+    m_pgxlContainer = new QWidget;
+    m_pgxlContainer->setCursor(Qt::PointingHandCursor);
+    m_pgxlContainer->setToolTip("Power Genius XL\nClick to cycle OPERATE / STANDBY");
+    m_pgxlContainer->setAccessibleName("Power Genius XL status");
+    m_pgxlContainer->setAccessibleDescription("Click to cycle between OPERATE and STANDBY");
+    m_pgxlContainer->installEventFilter(this);
+    m_pgxlContainer->setVisible(false);
+    {
+        auto* vbox = new QVBoxLayout(m_pgxlContainer);
+        vbox->setContentsMargins(0, 0, 0, 4);
+        vbox->setSpacing(0);
+        vbox->setAlignment(Qt::AlignVCenter);
+        m_pgxlIndicator = new QLabel("AMP");
+        m_pgxlIndicator->setStyleSheet("QLabel { font-size:18px; font-weight:bold; }");
+        m_pgxlIndicator->setAlignment(Qt::AlignCenter);
+        m_pgxlStateLabel = new QLabel("STANDBY");
+        m_pgxlStateLabel->setStyleSheet("QLabel { font-size:11px; }");
+        m_pgxlStateLabel->setAlignment(Qt::AlignCenter);
+        {
+            QFont f = m_pgxlStateLabel->font();
+            f.setPixelSize(11);
+            const int minW = QFontMetrics(f).horizontalAdvance("STANDBY") + 16;
+            m_pgxlStateLabel->setMinimumWidth(minW);
+            m_pgxlContainer->setMinimumWidth(minW);
+        }
+        vbox->addWidget(m_pgxlIndicator);
+        vbox->addWidget(m_pgxlStateLabel);
+    }
+    hbox->addWidget(m_pgxlContainer);
 
     addSep();
 
@@ -10825,6 +10881,7 @@ void MainWindow::buildUI()
     auto* timeVbox = new QVBoxLayout(timeStack);
     timeVbox->setContentsMargins(0, 0, 0, 0);
     timeVbox->setSpacing(0);
+    timeVbox->setAlignment(Qt::AlignVCenter);
     m_gpsDateLabel = new QLabel("");
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsDateLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     m_gpsDateLabel->setAlignment(Qt::AlignCenter);
@@ -11335,11 +11392,11 @@ void MainWindow::onConnectionStateChanged(bool connected)
         }
         refreshMemoryBrowsePanel();
         updateBandStackIndicator();
-        m_tgxlIndicator->setVisible(false);
+        m_tgxlContainer->setVisible(false);
         m_tgxlSeparator->setVisible(false);
         m_tgxlConn.disconnect();
         m_pgxlConn.disconnect();
-        m_pgxlIndicator->setVisible(false);
+        m_pgxlContainer->setVisible(false);
         m_pgxlSeparator->setVisible(false);
         m_txIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 21px; }");
         m_txIndicator->setText("TX");
