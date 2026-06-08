@@ -10693,10 +10693,13 @@ void MainWindow::buildUI()
                 memBytes = info.phys_footprint;
             }
 #else
+            // /proc files report size 0 via stat(), so QFile::atEnd() returns true
+            // immediately (pos >= size → 0 >= 0). Drive the loop off readLine()
+            // returning empty instead.
             QFile statusFile("/proc/self/status");
             if (statusFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                while (!statusFile.atEnd()) {
-                    const QByteArray line = statusFile.readLine();
+                QByteArray line;
+                while (!(line = statusFile.readLine()).isEmpty()) {
                     if (line.startsWith("VmRSS:")) {
                         memBytes = line.mid(6).trimmed().split(' ').first().toULongLong() * 1024ULL;
                         break;
