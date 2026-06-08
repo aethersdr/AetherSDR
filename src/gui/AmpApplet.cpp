@@ -105,16 +105,42 @@ AmpApplet::AmpApplet(QWidget* parent)
     btnRow->setSpacing(6);
     btnRow->addLayout(infoStack);
     btnRow->addStretch();
-    m_operateBtn = new QPushButton("OPERATE");
-    m_operateBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn,
+
+    static const char* kBtnStyle =
         "QPushButton { background: {{color.background.2}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
-        "QPushButton:hover { background: {{color.background.1}}; }");
+        "QPushButton:hover { background: {{color.background.1}}; }";
+
+    // Fan speed cycle button — single letter: S (STANDARD), C (CONTEST), B (BROADCAST).
+    // Hidden until a direct PGXL connection delivers the first fanmode status.
+    m_fanBtn = new QPushButton(m_fanMode.left(1));
+    m_fanBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    m_fanBtn->setFocusPolicy(Qt::TabFocus);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_fanBtn, kBtnStyle);
+    m_fanBtn->setToolTip("Fan Speed\nClick to cycle STANDARD / CONTEST / BROADCAST");
+    m_fanBtn->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
+    m_fanBtn->setAccessibleDescription("Cycles through STANDARD, CONTEST, and BROADCAST");
+    m_fanBtn->hide();
+    connect(m_fanBtn, &QPushButton::clicked, this, [this]() {
+        static const QStringList kModes = {"STANDARD", "CONTEST", "BROADCAST"};
+        int idx = kModes.indexOf(m_fanMode);
+        if (idx < 0) {
+            qWarning() << "AmpApplet: unknown fanmode" << m_fanMode << "— resetting to STANDARD";
+            idx = 0;
+        }
+        m_fanMode = kModes[(idx + 1) % kModes.size()];
+        m_fanBtn->setText(m_fanMode.left(1));
+        m_fanBtn->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
+        emit fanModeChanged(m_fanMode);
+    });
+    btnRow->addWidget(m_fanBtn);
+
+    m_operateBtn = new QPushButton("OPERATE");
+    m_operateBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_operateBtn, kBtnStyle);
     m_operateBtn->hide();
     connect(m_operateBtn, &QPushButton::clicked, this, [this]() {
-        bool isOp = (m_operateBtn->text() == "OPERATE");
-        emit operateToggled(!isOp);
+        emit operateToggled(m_operateBtn->text() != "OPERATE");
     });
     btnRow->addWidget(m_operateBtn);
     vbox->addLayout(btnRow);
@@ -235,6 +261,14 @@ void AmpApplet::setMainsVoltage(int volts)
     m_vacLabel->setText(QStringLiteral("Vac  %1 V").arg(volts));
 }
 
+void AmpApplet::setFanMode(const QString& mode)
+{
+    m_fanMode = mode.toUpper();
+    m_fanBtn->setText(m_fanMode.left(1));
+    m_fanBtn->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
+    m_fanBtn->show();
+}
+
 void AmpApplet::setState(const QString& state)
 {
     // PGXL states: IDLE/OPERATE/TRANSMIT_* = operating (green), else standby (grey)
@@ -272,6 +306,8 @@ void AmpApplet::setDirectConnected(bool direct)
         m_vddLabel->setStyleSheet("QLabel { color: #505050; font-size: 10px; }");
         m_vacLabel->setText("Vac  — V");
         m_vacLabel->setStyleSheet("QLabel { color: #505050; font-size: 10px; }");
+        // Fan mode is only available via direct PGXL protocol — hide until reconnected.
+        m_fanBtn->hide();
     }
 }
 

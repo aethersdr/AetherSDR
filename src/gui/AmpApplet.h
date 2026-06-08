@@ -23,11 +23,13 @@ public:
     void setDrainVoltage(float volts);
     void setMainsVoltage(int volts);
     void setState(const QString& state);
+    void setFanMode(const QString& mode);  // STANDARD, CONTEST, BROADCAST
     void setMeff(const QString& meff);
     void setDirectConnected(bool direct);
 
 signals:
     void operateToggled(bool on);
+    void fanModeChanged(const QString& mode);  // uppercase, ready for sendCommand
 
 private:
     void updateTempLabel();
@@ -49,7 +51,9 @@ private:
     QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
     bool     m_directConnected{false};
 
+    QPushButton* m_fanBtn{nullptr};
     QPushButton* m_operateBtn{nullptr};
+    QString      m_fanMode{"STANDARD"};
 
     // 100 ms timer — updates label text independently of gauge fill rate
     QTimer   m_labelTimer;

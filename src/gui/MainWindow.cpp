@@ -3737,6 +3737,8 @@ MainWindow::MainWindow(QWidget* parent)
             amp->setMainsVoltage(kvs["vac"].toInt());
         if (kvs.contains("state"))
             amp->setState(kvs["state"]);
+        if (kvs.contains("fanmode"))
+            amp->setFanMode(kvs["fanmode"]);
         if (kvs.contains("meffa"))
             amp->setMeff(kvs["meffa"]);
         // Convert PGXL dBm to watts and feed S-Meter alongside radio meters.
@@ -3802,6 +3804,10 @@ MainWindow::MainWindow(QWidget* parent)
             amp->setState(kvs["state"]);
         if (kvs.contains("meffa"))
             amp->setMeff(kvs["meffa"]);
+    });
+    // Fan mode cycle button → direct PGXL command (fan control is not in the radio API)
+    connect(m_appletPanel->ampApplet(), &AmpApplet::fanModeChanged, this, [this](const QString& mode) {
+        m_pgxlConn.sendCommand(QString("setup fanmode=%1").arg(mode));
     });
     // OPERATE button → PGXL standby/operate command via radio amplifier API
     connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
