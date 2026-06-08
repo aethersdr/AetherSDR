@@ -6,6 +6,8 @@
 #include "bitstream.h"
 #include "demodulator.h"
 
+#include "core/tnc/HdlcCodec.h"
+
 #include <QDateTime>
 
 #include <algorithm>
@@ -88,6 +90,13 @@ QString framePreviewHex(const std::array<uint8_t, N>& bytes, size_t byteCount)
 {
     const qsizetype previewBytes = static_cast<qsizetype>(std::min<size_t>(byteCount, 24));
     QByteArray preview(reinterpret_cast<const char*>(bytes.data()), previewBytes);
+    return QString::fromLatin1(preview.toHex(' ')).toUpper();
+}
+
+QString framePreviewHex(const uint8_t* bytes, size_t byteCount)
+{
+    const qsizetype previewBytes = static_cast<qsizetype>(std::min<size_t>(byteCount, 24));
+    QByteArray preview(reinterpret_cast<const char*>(bytes), previewBytes);
     return QString::fromLatin1(preview.toHex(' ')).toUpper();
 }
 
@@ -385,9 +394,7 @@ struct AetherAx25LibmodemShim::Impl {
         int phaseOffsetSamples{0};
         int samplesUntilStart{0};
         std::unique_ptr<lm::sinc_corr_afsk_demodulator> demod;
-        lm::ax25::bitstream_state bitstreamState;
-        std::vector<uint8_t> bitstreamBuffer;
-        std::array<uint8_t, 1000> candidateFrameBytes{};
+        HdlcCodec hdlcCodec;
         double lastQuality{0.0};
     };
     struct RecentFrame {
@@ -513,8 +520,6 @@ struct AetherAx25LibmodemShim::Impl {
                 0.008,
                 0.005,
                 pllAlpha);
-            lane.bitstreamBuffer.reserve(8192);
-            lane.bitstreamBuffer.resize(8192);
         };
 
         if (config.profile == Ax25ModemProfile::Hf300) {
@@ -603,10 +608,7 @@ struct AetherAx25LibmodemShim::Impl {
 
     void resetLaneBitstream(DecodeLane& lane)
     {
-        lane.bitstreamState.reset();
-        lane.bitstreamState.max_frame_bits = 4096;
-        lane.bitstreamBuffer.clear();
-        lane.bitstreamBuffer.resize(8192);
+        lane.hdlcCodec.reset();
     }
 
     void resetBitstreamStates()
@@ -696,7 +698,7 @@ struct AetherAx25LibmodemShim::Impl {
         }
     }
 
-    bool candidateHasAx25Structure(const DecodeLane& lane,
+    bool candidateHasAx25Structure(const uint8_t* frameBytes,
                                    size_t frameBytesSize,
                                    uint8_t& control,
                                    uint8_t& pid,
@@ -714,8 +716,8 @@ struct AetherAx25LibmodemShim::Impl {
         pid = 0;
 
         auto [pathOut, dataOut, parsed] = lm::ax25::try_decode_frame_no_fcs(
-            lane.candidateFrameBytes.data(),
-            lane.candidateFrameBytes.data() + frameBytesSize - 2,
+            frameBytes,
+            frameBytes + frameBytesSize - 2,
             from,
             to,
             path.begin(),
@@ -749,9 +751,9 @@ struct AetherAx25LibmodemShim::Impl {
                       const std::array<uint8_t, 2>& expectedFcs)
     {
         ++totalDecodeRejected;
-        lastRejectFrameBits = static_cast<int>(lane.bitstreamState.frame_size_bits);
+        lastRejectFrameBits = lane.hdlcCodec.frameSizeBits();
         lastRejectFrameBytes = static_cast<int>(frameBytesSize);
-        lastRejectPreviewHex = framePreviewHex(lane.candidateFrameBytes, frameBytesSize);
+        lastRejectPreviewHex = framePreviewHex(lane.hdlcCodec.frameData(), frameBytesSize);
         lastRejectActualFcs = frameBytesSize >= 17 ? fcsToString(actualFcs) : QString();
         lastRejectExpectedFcs = frameBytesSize >= 17 ? fcsToString(expectedFcs) : QString();
 
@@ -768,7 +770,7 @@ struct AetherAx25LibmodemShim::Impl {
         uint8_t pid = 0;
         size_t pathCount = 0;
         size_t dataLength = 0;
-        const bool ax25Like = candidateHasAx25Structure(lane, frameBytesSize, control, pid, pathCount, dataLength);
+        const bool ax25Like = candidateHasAx25Structure(lane.hdlcCodec.frameData(), frameBytesSize, control, pid, pathCount, dataLength);
 
         if (actualFcs != expectedFcs) {
             if (ax25Like) {
@@ -795,47 +797,61 @@ struct AetherAx25LibmodemShim::Impl {
     std::optional<Ax25DecodedFrame> processBit(DecodeLane& lane, uint8_t bit, double quality)
     {
         lane.lastQuality = 0.95 * lane.lastQuality + 0.05 * quality;
-        const bool wasComplete = lane.bitstreamState.complete;
-        const bool wasInFrame = lane.bitstreamState.in_frame;
+        const bool wasInFrame = lane.hdlcCodec.inFrame();
+
+        if (!lane.hdlcCodec.processBit(bit)) {
+            if (lane.hdlcCodec.inFrame() && !wasInFrame)
+                ++totalHdlcFrameStarts;
+            return std::nullopt;
+        }
+
+        // Frame closed — hdlcCodec.complete() is true.
+        ++totalHdlcFrameCandidates;
+
+        const size_t frameSize    = lane.hdlcCodec.frameSize();
+        const uint8_t* frameBytes = lane.hdlcCodec.frameData();
+        const auto actualFcs      = lane.hdlcCodec.actualFcs();
+        const auto expectedFcs    = lane.hdlcCodec.expectedFcs();
+
+        if (!lane.hdlcCodec.fcsValid()) {
+            if (recordReject(lane, frameSize, actualFcs, expectedFcs))
+                ++totalPlausibleAx25Candidates;
+            return std::nullopt;
+        }
+
         lm::address from;
         lm::address to;
         std::array<lm::address, 8> path = {};
         std::array<uint8_t, 256> data = {};
         uint8_t control = 0;
         uint8_t pid = 0;
-        std::array<uint8_t, 2> actualFcs = {};
-        std::array<uint8_t, 2> expectedFcs = {};
 
-        auto [candidateFrameBytesSize, pathOut, dataOut, decoded] = lm::ax25::try_decode_bitstream(
-            bit ? 1 : 0,
-            lane.bitstreamState,
-            lane.bitstreamBuffer.begin(),
-            lane.bitstreamBuffer.end(),
-            lane.candidateFrameBytes,
+        auto [pathOut, dataOut, parsed] = lm::ax25::try_decode_frame_no_fcs(
+            frameBytes,
+            frameBytes + frameSize - 2,
             from,
             to,
             path.begin(),
             data.begin(),
             data.size(),
             control,
-            pid,
-            actualFcs,
-            expectedFcs);
+            pid);
 
-        if (lane.bitstreamState.in_frame && !wasInFrame)
-            ++totalHdlcFrameStarts;
+        const std::array<uint8_t, 2> acceptedFcs = { 0, 0 };
+        const bool ax25Valid = parsed && lm::ax25::validate_frame(
+            from, to,
+            path.begin(), pathOut,
+            data.begin(), dataOut,
+            control, pid,
+            acceptedFcs, acceptedFcs);
 
-        if (lane.bitstreamState.complete && !wasComplete) {
-            ++totalHdlcFrameCandidates;
-            if (decoded) {
+        if (!ax25Valid) {
+            if (recordReject(lane, frameSize, actualFcs, expectedFcs))
                 ++totalPlausibleAx25Candidates;
-            } else {
-                if (recordReject(lane, candidateFrameBytesSize, actualFcs, expectedFcs))
-                    ++totalPlausibleAx25Candidates;
-            }
-        }
-        if (!decoded)
             return std::nullopt;
+        }
+
+        ++totalPlausibleAx25Candidates;
 
         lm::ax25::frame frame;
         frame.from = from;
@@ -847,14 +863,12 @@ struct AetherAx25LibmodemShim::Impl {
         frame.control[0] = control;
         frame.pid = pid;
         frame.crc = actualFcs;
-        Ax25DecodedFrame decodedFrame =
-            toDecodedFrame(frame, lane.lastQuality, lane.phaseOffsetSamples);
-        // Capture the exact on-air frame bytes minus the trailing 2-byte FCS so
-        // the KISS TNC can forward the decode to host apps verbatim.
-        if (candidateFrameBytesSize >= 2) {
+        Ax25DecodedFrame decodedFrame = toDecodedFrame(frame, lane.lastQuality, lane.phaseOffsetSamples);
+        // Capture on-air frame bytes minus 2-byte FCS for KISS TNC forwarding.
+        if (frameSize >= 2) {
             decodedFrame.ax25FrameNoFcs = QByteArray(
-                reinterpret_cast<const char*>(lane.candidateFrameBytes.data()),
-                static_cast<qsizetype>(candidateFrameBytesSize - 2));
+                reinterpret_cast<const char*>(frameBytes),
+                static_cast<qsizetype>(frameSize - 2));
         }
         return decodedFrame;
     }
@@ -954,16 +968,16 @@ struct AetherAx25LibmodemShim::Impl {
         diagnostics.lastFrameBits = 0;
         diagnostics.preambleFlags = 0;
         for (const auto& lane : lanes) {
-            diagnostics.searching = diagnostics.searching && lane.bitstreamState.searching;
-            diagnostics.inPreamble = diagnostics.inPreamble || lane.bitstreamState.in_preamble;
-            diagnostics.inFrame = diagnostics.inFrame || lane.bitstreamState.in_frame;
-            diagnostics.aborted = diagnostics.aborted || lane.bitstreamState.aborted;
+            diagnostics.searching = diagnostics.searching && lane.hdlcCodec.searching();
+            diagnostics.inPreamble = diagnostics.inPreamble || lane.hdlcCodec.inPreamble();
+            diagnostics.inFrame = diagnostics.inFrame || lane.hdlcCodec.inFrame();
+            diagnostics.aborted = diagnostics.aborted || lane.hdlcCodec.aborted();
             diagnostics.currentFrameBits = std::max(diagnostics.currentFrameBits,
-                                                    static_cast<int>(lane.bitstreamState.bitstream_size));
+                                                    lane.hdlcCodec.bitstreamSize());
             diagnostics.lastFrameBits = std::max(diagnostics.lastFrameBits,
-                                                 static_cast<int>(lane.bitstreamState.frame_size_bits));
+                                                 lane.hdlcCodec.frameSizeBits());
             diagnostics.preambleFlags = std::max(diagnostics.preambleFlags,
-                                                 static_cast<int>(lane.bitstreamState.preamble_count));
+                                                 lane.hdlcCodec.preambleCount());
         }
         diagnostics.hdlcFrameStarts = totalHdlcFrameStarts;
         diagnostics.hdlcFrameCandidates = totalHdlcFrameCandidates;

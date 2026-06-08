@@ -578,6 +578,7 @@ set(CORE_SOURCES
     src/core/MemoryCsvCompat.cpp
     src/core/MemoryRecallPolicy.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
+    src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/Ax25Connection.cpp
@@ -1980,6 +1981,7 @@ add_test(NAME ax25_frame_formatter_test COMMAND ax25_frame_formatter_test)
 add_executable(ax25_libmodem_shim_test
     tests/ax25_libmodem_shim_test.cpp
     src/core/tnc/AetherAx25LibmodemShim.cpp
+    src/core/tnc/HdlcCodec.cpp
     src/core/tnc/Ax25FrameFormatter.cpp
     src/core/tnc/Ax25.cpp
     src/core/tnc/KissFraming.cpp
@@ -1994,6 +1996,14 @@ add_executable(ax25_libmodem_shim_test
 target_include_directories(ax25_libmodem_shim_test PRIVATE src)
 target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_core)
 add_test(NAME ax25_libmodem_shim_test COMMAND ax25_libmodem_shim_test)
+
+add_executable(hdlc_codec_test
+    tests/hdlc_codec_test.cpp
+    src/core/tnc/HdlcCodec.cpp
+)
+target_include_directories(hdlc_codec_test PRIVATE src)
+target_link_libraries(hdlc_codec_test PRIVATE aether_libmodem_core)
+add_test(NAME hdlc_codec_test COMMAND hdlc_codec_test)
 
 # Offline AX.25 decode diagnostic: replays a captured WAV through the decoder.
 # Not a ctest (needs an input file); built on demand for troubleshooting.
