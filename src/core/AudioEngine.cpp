@@ -4947,8 +4947,29 @@ void AudioEngine::setTransmitting(bool tx)
 void AudioEngine::setRadioTransmitting(bool tx)
 {
     const bool previous = m_radioTransmitting.exchange(tx);
-    if (previous != tx)
-        emit radioTransmittingChanged(tx);
+    if (previous == tx)
+        return;
+
+    // TX→RX edge: NR2 is bypassed entirely during TX (see the RX DSP chain
+    // ~line 1512: raw PCM goes straight to writeAudio so the filter doesn't
+    // adapt its internal state to TX silence, #367/#1505). But that leaves NR2
+    // holding pre-TX state when RX resumes: a stale overlap-add ring (read out
+    // as a faint whistle, #3340) and a maxed-out startup-ramp counter, so
+    // suppression slams to full-wet on a stale noise estimate that then takes
+    // ~3-4s to reconverge — the audio "gap" users hear with NR2 engaged
+    // (#1863). reset() flushes the OA ring, re-seeds the noise floor high
+    // (gentle suppression), and re-arms the ~1s dry→wet ramp so audio returns
+    // immediately on the dry signal and NR2 fades back in cleanly.
+    //
+    // Scoped to NR2 for now: it's the reported filter and this keeps testing
+    // localized. RN2/NR4/DFNR/MNR share the same bypass + stale-state path and
+    // can get the same flush as a follow-up once this is validated in the field.
+    if (previous && !tx) {
+        std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+        if (m_nr2Enabled && m_nr2) m_nr2->reset();
+    }
+
+    emit radioTransmittingChanged(tx);
 }
 
 void AudioEngine::setDaxTxUseRadioRoute(bool on)
