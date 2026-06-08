@@ -126,7 +126,7 @@ AmpApplet::AmpApplet(QWidget* parent)
         int idx = kModes.indexOf(m_fanMode);
         if (idx < 0) {
             qWarning() << "AmpApplet: unknown fanmode" << m_fanMode << "— resetting to STANDARD";
-            idx = 0;
+            idx = -1; // (-1 + 1) % 3 == 0 == STANDARD
         }
         m_fanMode = kModes[(idx + 1) % kModes.size()];
         m_fanBtn->setText(m_fanMode.left(1));
