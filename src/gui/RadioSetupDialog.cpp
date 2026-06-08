@@ -2915,6 +2915,7 @@ QWidget* RadioSetupDialog::buildXvtrTab()
     xvtrTabs->addTab(addPage, "+");
 
     vbox->addWidget(xvtrTabs);
+    vbox->addStretch(1);
     return page;
 }
 
