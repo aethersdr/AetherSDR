@@ -104,6 +104,7 @@ Ax25DemodConfig ax25DemodConfigForProfile(
     Ax25ModemProfile profile,
     Ax25TonePolarity polarity = Ax25TonePolarity::Normal);
 QString ax25ModemProfileName(Ax25ModemProfile profile);
+int ax25DemodLaneCount(const Ax25DemodConfig& cfg);
 QString ax25DemodDescription(const Ax25DemodConfig& cfg);
 Ax25TransmitResult ax25BuildTransmitAudio(const Ax25DemodConfig& cfg,
                                           const QString& text,

@@ -1108,9 +1108,18 @@ QVector<Ax25DecodedFrame> AetherAx25LibmodemShim::processRecoveredBitsForTest(
     return frames;
 }
 
+int ax25DemodLaneCount(const Ax25DemodConfig& cfg)
+{
+    if (cfg.profile == Ax25ModemProfile::Hf300)
+        return static_cast<int>(kHf300DecodePhaseOffsets.size());
+    return kVhf1200FreeRunPhaseCount
+         + kVhf1200TrackedPhaseCount * static_cast<int>(kVhf1200PllAlphas.size());
+}
+
 QString ax25DemodDescription(const Ax25DemodConfig& cfg)
 {
-    return QStringLiteral("%1: %2 Hz, %3 bps, mark %4 Hz, space %5 Hz, %6")
+    const int lanes = ax25DemodLaneCount(cfg);
+    return QStringLiteral("%1: %2 Hz, %3 bps, mark %4 Hz, space %5 Hz, %6, %7 lane%8")
         .arg(ax25ModemProfileName(cfg.profile))
         .arg(cfg.sampleRate)
         .arg(cfg.baud)
@@ -1118,7 +1127,9 @@ QString ax25DemodDescription(const Ax25DemodConfig& cfg)
         .arg(cfg.spaceHz, 0, 'f', 0)
         .arg(cfg.polarity == Ax25TonePolarity::Normal
              ? QStringLiteral("Normal")
-             : QStringLiteral("Inverted"));
+             : QStringLiteral("Inverted"))
+        .arg(lanes)
+        .arg(lanes == 1 ? QString() : QStringLiteral("s"));
 }
 
 Ax25TransmitResult ax25BuildTransmitAudio(
@@ -1173,12 +1184,14 @@ Ax25TransmitResult ax25BuildTransmitAudioFromFrame(
     if (!initTxResult(cfg, result))
         return result;
 
+    // Minimum valid AX.25 frame without FCS: 14 address bytes + 1 control byte = 15.
     if (ax25NoFcs.size() < 15) {
         result.error = QStringLiteral("KISS frame too short: %1 bytes (need >= 15)")
             .arg(ax25NoFcs.size());
         return result;
     }
 
+    // KISS host omits FCS; the TNC appends it before encoding.
     std::vector<uint8_t> frameBytes(
         reinterpret_cast<const uint8_t*>(ax25NoFcs.constData()),
         reinterpret_cast<const uint8_t*>(ax25NoFcs.constData()) + ax25NoFcs.size());
@@ -1209,11 +1222,7 @@ Ax25DecoderDiagnostics AetherAx25LibmodemShim::diagnosticsSnapshot() const
 
 QString AetherAx25LibmodemShim::demodDescription() const
 {
-    const auto cfg = m_impl->config;
-    return ax25DemodDescription(cfg)
-        + QStringLiteral(", %1 lane%2")
-            .arg(m_impl->lanes.size())
-            .arg(m_impl->lanes.size() == 1 ? QString() : QStringLiteral("s"));
+    return ax25DemodDescription(m_impl->config);
 }
 
 void AetherAx25LibmodemShim::feedAudio(const QByteArray& monoFloat32Pcm, int sampleRate)
