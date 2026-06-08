@@ -367,11 +367,33 @@ void testVhf1200ProfileConfig()
     report("VHF sample rate", cfg.sampleRate == 24000);
     report("VHF baud", cfg.baud == 1200);
     report("VHF tones", cfg.markHz == 1200.0 && cfg.spaceHz == 2200.0);
-    // Aggressive multi-lane decode bank: 10 free-running phase lanes + 4 tracked
-    // phases x 2 PLL bandwidths = 18 (see kVhf1200* in the shim).
-    report("VHF profile runs the 18-lane decode bank",
-           shim.diagnosticsSnapshot().decodeLanes == 18);
+    // Default VHF mode is A+ (9 space-gain slicers, matching Direwolf).
+    report("VHF profile runs the A+ decode bank",
+           shim.diagnosticsSnapshot().decodeLanes == 9);
     report("VHF description names profile", shim.demodDescription().contains(QStringLiteral("1200 baud VHF")));
+}
+
+void testVhf1200ModeLaneCounts()
+{
+    // Lane counts for each VhfMode.  9 A-slicers (kVhf1200SpaceGains) and
+    // 9 B-slicers (kVhf1200BSliceOffsets); combinations are additive.
+    struct Case { const char* name; VhfMode mode; int expectedLanes; };
+    const Case cases[] = {
+        { "Off has 0 lanes",   VhfMode::Off,   0  },
+        { "A has 1 lane",      VhfMode::A,     1  },
+        { "B has 1 lane",      VhfMode::B,     1  },
+        { "AB has 2 lanes",    VhfMode::AB,    2  },
+        { "A+ has 9 lanes",    VhfMode::APlus, 9  },
+        { "B+ has 9 lanes",    VhfMode::BPlus, 9  },
+        { "AB+ has 18 lanes",  VhfMode::ABPlus, 18 },
+    };
+    for (const auto& c : cases) {
+        AetherAx25LibmodemShim shim;
+        Ax25DemodConfig cfg = ax25DemodConfigForProfile(Ax25ModemProfile::Vhf1200);
+        cfg.vhfMode = c.mode;
+        shim.configure(cfg);
+        report(c.name, shim.diagnosticsSnapshot().decodeLanes == c.expectedLanes);
+    }
 }
 
 void testKnownGoodBitstreamDecodes()
@@ -922,6 +944,7 @@ int main(int argc, char** argv)
 
     testConstructsWithHf300Config();
     testVhf1200ProfileConfig();
+    testVhf1200ModeLaneCounts();
     testKnownGoodBitstreamDecodes();
     testSyntheticHf300AfskLoopbackDecodes();
     testSyntheticVhf1200AfskLoopbackDecodes();

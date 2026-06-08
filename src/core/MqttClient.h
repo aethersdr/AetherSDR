@@ -41,6 +41,7 @@ signals:
     void disconnected();
     void connectionError(const QString& error);
     void messageReceived(const QString& topic, const QByteArray& payload);
+    void messagePublished(const QString& topic, const QByteArray& payload);
 
 private:
 #ifdef HAVE_MQTT

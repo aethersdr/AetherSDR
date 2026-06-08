@@ -194,3 +194,15 @@ Windows will need to land MSVC support first.
   Copyright (c) 2007-2016 Joseph Gaeddert
   License: MIT
   Source:  https://github.com/jgaeddert/liquid-dsp
+
+
+15. Dire Wolf — AFSK Demodulator (algorithmic derivation)
+----------------------------------------------------------
+Bundled at third_party/direwolf_afsk/ as an algorithmic derivation of the
+Dire Wolf "profile A" AFSK demodulator. Rewritten in C++20 for AetherSDR.
+Referenced source files: src/demod_afsk.c, src/dsp.c from Dire Wolf 1.7.
+Used unconditionally for the VHF 1200 baud AX.25 receive path.
+
+  Copyright (C) 2011-2020 John Langner WB2OSZ
+  License: GPL-2.0-or-later (compatible into AetherSDR's GPL-3.0-or-later)
+  Source:  https://github.com/wb2osz/direwolf

@@ -366,6 +366,7 @@ private:
 #ifdef HAVE_MQTT
     void showMqttSettingsDialog();
     void publishCwDecodeMqtt(const QString& text, float cost, bool rx);
+    void publishRadioStateMqtt();
 #endif
     void applyPanLayout(const QString& layoutId);
     void createPansSequentially(const QString& layoutId, int total,
@@ -478,6 +479,10 @@ private:
     PgxlConnection    m_pgxlConn;        // direct TCP 9008 to PGXL for telemetry
     BandPlanManager*  m_bandPlanMgr{nullptr};
     CwDecoder         m_cwDecoder;
+    float             m_cwLastPitchHz{0.0f};
+    float             m_cwLastSpeedWpm{0.0f};
+    QMetaObject::Connection m_radioStateFreqConn;
+    QMetaObject::Connection m_radioStateModeConn;
     CwDecoder         m_cwDecoderTx;
     RttyDecoder       m_rttyDecoder;
     DxClusterClient*   m_dxCluster{nullptr};

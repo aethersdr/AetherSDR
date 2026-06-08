@@ -45,7 +45,10 @@ private:
     QLineEdit* m_caFileEdit{nullptr};
     QTableWidget* m_topicsTable{nullptr};
     QTableWidget* m_buttonsTable{nullptr};
-    QPushButton* m_addButtonRowBtn{nullptr};
+    QPushButton*  m_addButtonRowBtn{nullptr};
+
+    QVector<QCheckBox*> m_internalSubBoxes;
+    QVector<QCheckBox*> m_internalPubBoxes;
 };
 
 } // namespace AetherSDR
