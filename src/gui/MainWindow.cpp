@@ -5503,6 +5503,16 @@ MainWindow::~MainWindow()
     delete m_networkDiagnosticsHistory;
     m_networkDiagnosticsHistory = nullptr;
 
+    // Ax25HfPacketDecodeDialog::~Ax25HfPacketDecodeDialog calls
+    // m_audio->setTncRxTapEnabled(false) via a raw AudioEngine pointer.
+    // AudioEngine is freed below before Qt's deleteChildren() runs — same
+    // UAF pattern as m_networkDiagnosticsDialog above. Tear it down now
+    // while AudioEngine is still alive.
+    if (m_ax25HfPacketDecodeDialog) {
+        delete m_ax25HfPacketDecodeDialog.data();
+        m_ax25HfPacketDecodeDialog = nullptr;
+    }
+
     // Stop audio processing on the worker thread before destruction (#502).
     // Use BlockingQueuedConnection to ensure completion before we proceed.
     if (m_audio && m_audioThread && m_audioThread->isRunning()) {
