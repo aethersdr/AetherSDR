@@ -9,10 +9,12 @@
 #include <QStyleFactory>
 #include <QDir>
 #include <QDebug>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFontDatabase>
 #include <QDateTime>
 #include <QStandardPaths>
+#include <QTimer>
 
 #ifdef _WIN32
 #include <io.h>
@@ -162,6 +164,31 @@ int main(int argc, char* argv[])
     app.setApplicationVersion(AETHERSDR_VERSION);
     app.setOrganizationName("AetherSDR");
     app.setDesktopFileName("AetherSDR");  // matches .desktop file for taskbar icon
+
+    // ── Main-thread stall watchdog (diagnostic, log-only) ─────────────────
+    // 250 ms heartbeat on the GUI event loop. If a tick arrives late by more
+    // than the threshold, the main thread was blocked — e.g. the ~2 s
+    // band-change+ATU stall that delays the TCI `vfo:` echo past WSJT-X's
+    // 2000 ms timeout ("TCI failed set rxfreq" → disconnect → dead RX).
+    // The warning fires immediately after the loop unblocks, so the stall's
+    // start ≈ (log timestamp − reported gap), and whatever logs right after
+    // it is what the loop was waiting to do. qWarning → visible at default
+    // log levels.
+    {
+        static QElapsedTimer s_lastBeat;
+        s_lastBeat.start();
+        auto* heartbeat = new QTimer(&app);
+        QObject::connect(heartbeat, &QTimer::timeout, &app, []() {
+            const qint64 gapMs = s_lastBeat.restart();
+            if (gapMs > 600) {
+                qWarning().nospace()
+                    << "MainThreadWatchdog: event loop stalled ~" << gapMs
+                    << " ms (heartbeat is 250 ms; stall began ~" << gapMs
+                    << " ms before this line)";
+            }
+        });
+        heartbeat->start(250);
+    }
 
     // ── Bundled DSEG fonts (SIL OFL 1.1) ──────────────────────────────────
     // Register the 13 TTFs into QFontDatabase so themes can resolve
