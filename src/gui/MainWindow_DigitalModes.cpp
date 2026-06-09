@@ -1087,11 +1087,30 @@ void MainWindow::stopDax()
     disconnect(m_daxBridge, &DaxBridge::txAudioReady,
                this, nullptr);
 
-    // Remove DAX RX streams from radio and unregister from PanadapterStream
-    const auto daxIds = m_radioModel.panStream()->daxStreamIds();
-    for (quint32 id : daxIds) {
+    // Remove DAX RX streams from the radio — but only channels no other
+    // consumer still needs. TCI borrows bridge-created streams (#1331/#1439)
+    // and RADE may hold one; unconditionally removing every registered stream
+    // here silenced WSJT-X / RADE the instant the DAX bridge (or mute) was
+    // toggled off — the #3363 / #2886 failure. Mirror the ownership guard in
+    // onDaxChannelChanged(); full refcounting is tracked in #3305.
+    auto* ps = m_radioModel.panStream();
+    for (int ch = 1; ch <= 4; ++ch) {
+        const quint32 id = ps->daxStreamIdForChannel(ch);
+        if (id == 0) continue;
+        const bool tciUsing = tciServer() && tciServer()->ownsDaxChannel(ch);
+#ifdef HAVE_RADE
+        const bool radeUsing = (id == m_radeDaxStreamId);
+#else
+        const bool radeUsing = false;
+#endif
+        if (tciUsing || radeUsing) {
+            qCInfo(lcDax) << "MainWindow: keeping DAX RX stream"
+                          << "0x" + QString::number(id, 16) << "for channel" << ch
+                          << "— still used by" << (tciUsing ? "TCI" : "RADE") << "(#3363)";
+            continue;
+        }
         m_radioModel.sendCommand(QString("stream remove 0x%1").arg(id, 0, 16));
-        m_radioModel.panStream()->unregisterDaxStream(id);
+        ps->unregisterDaxStream(id);
     }
 
     // Restore original mic selection

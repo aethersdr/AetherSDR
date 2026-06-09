@@ -132,8 +132,19 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 for (auto it = m_tciDaxStreamIds.begin(); it != m_tciDaxStreamIds.end(); ++it) {
                     if (it.value() == streamId) {
                         qCInfo(lcCat) << "TCI: radio removed DAX RX stream" << Qt::hex << streamId
-                                      << "for channel" << it.key();
-                        it.value() = 0;
+                                      << "for channel" << it.key()
+                                      << "— clearing cache entry so re-arm recreates it (#3476)";
+                        // Erase (not zero) the entry. Leaving a key behind keeps
+                        // ensureDaxForTci()'s `contains(ch)` guard true, so after a
+                        // profile load / slice teardown — which destroys the radio's
+                        // dax_rx stream without a TCI disconnect — the sliceAdded
+                        // re-arm skips `stream create` and TCI RX stays silent until
+                        // a full reconnect. That is the #3476/#3364 "switched profile,
+                        // never came back" failure. Pending creates (value 0) are
+                        // never matched here (streamId != 0), so an in-flight request
+                        // is safe.
+                        m_tciDaxBorrowedChannels.remove(it.key());
+                        m_tciDaxStreamIds.erase(it);
                         break;
                     }
                 }
