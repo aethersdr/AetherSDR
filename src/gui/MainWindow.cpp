@@ -4481,9 +4481,20 @@ MainWindow::MainWindow(QWidget* parent)
     {
         auto& s = AppSettings::instance();
         if (!s.contains("HidEncoderEnabled")) {
+            // Old code treated absence of HidEncoderAutoDetect as True (implicit default).
+            // Match that: if the key was never written, the user had HID on.
             const bool hadAutodetect =
-                s.value("HidEncoderAutoDetect", "False").toString() == "True";
+                s.value("HidEncoderAutoDetect", "True").toString() == "True";
             s.setValue("HidEncoderEnabled", hadAutodetect ? "True" : "False");
+        } else if (!s.contains("HidEncoderEnabledMigrationV2")) {
+            // V2 fix: the first migration wrote "False" for users who never set
+            // HidEncoderAutoDetect (old implicit default was True, not False).
+            // Correct those installs: if AutoDetect is absent they had it on.
+            if (s.value("HidEncoderEnabled") == "False" &&
+                    !s.contains("HidEncoderAutoDetect")) {
+                s.setValue("HidEncoderEnabled", "True");
+            }
+            s.setValue("HidEncoderEnabledMigrationV2", "True");
         }
     }
     // Same TCC concern as the Ulanzi gate above (#3257). HidEncoderManager::
