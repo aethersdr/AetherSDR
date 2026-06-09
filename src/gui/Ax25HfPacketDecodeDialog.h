@@ -100,7 +100,6 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
-    Ax25TonePolarity selectedTonePolarity() const;
     void setModemProfile(Ax25ModemProfile profile, bool persist);
     void setDecodeEnabled(bool enabled);
     void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);

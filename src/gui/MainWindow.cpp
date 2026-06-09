@@ -4367,6 +4367,13 @@ MainWindow::MainWindow(QWidget* parent)
     m_dialBackend->moveToThread(m_extCtrlThread);
 #endif
 
+#ifdef HAVE_MQTT
+    m_radioStateCoalesceTimer.setSingleShot(true);
+    m_radioStateCoalesceTimer.setInterval(150);
+    connect(&m_radioStateCoalesceTimer, &QTimer::timeout,
+            this, &MainWindow::publishRadioStateMqtt);
+#endif
+
     m_dialCoalesceTimer.setSingleShot(true);
     m_dialCoalesceTimer.setInterval(20);
     connect(&m_dialCoalesceTimer, &QTimer::timeout, this, [this]() {
@@ -6020,8 +6027,14 @@ void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
     obj[QStringLiteral("rx")]   = rx;
     if (auto* s = activeSlice(); s && s->frequency() > 0.0)
         obj[QStringLiteral("freq")] = s->frequency();
-    if (m_cwLastPitchHz  > 0.0f) obj[QStringLiteral("pitch_hz")]  = m_cwLastPitchHz;
-    if (m_cwLastSpeedWpm > 0.0f) obj[QStringLiteral("speed_wpm")] = m_cwLastSpeedWpm;
+    if (rx) {
+        if (m_cwLastPitchHz  > 0.0f) obj[QStringLiteral("pitch_hz")]  = m_cwLastPitchHz;
+        if (m_cwLastSpeedWpm > 0.0f) obj[QStringLiteral("speed_wpm")] = m_cwLastSpeedWpm;
+    } else {
+        const auto& tm = m_radioModel.transmitModel();
+        if (tm.cwPitch() > 0) obj[QStringLiteral("pitch_hz")]  = tm.cwPitch();
+        if (tm.cwSpeed() > 0) obj[QStringLiteral("speed_wpm")] = tm.cwSpeed();
+    }
     m_mqttClient->publish(QString::fromLatin1(kCwDecodeTopic),
                           QJsonDocument(obj).toJson(QJsonDocument::Compact));
 }
@@ -12907,9 +12920,9 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     disconnect(m_radioStateModeConn);
 #ifdef HAVE_MQTT
     m_radioStateFreqConn = connect(s, &SliceModel::frequencyChanged,
-                                   this, [this](double) { publishRadioStateMqtt(); });
+                                   this, [this](double) { m_radioStateCoalesceTimer.start(); });
     m_radioStateModeConn = connect(s, &SliceModel::modeChanged,
-                                   this, [this](const QString&) { publishRadioStateMqtt(); });
+                                   this, [this](const QString&) { m_radioStateCoalesceTimer.start(); });
     publishRadioStateMqtt();
 #endif
 

@@ -1378,6 +1378,8 @@ void Ax25HfPacketDecodeDialog::handleMqttMessage(const QString& topic, const QBy
 {
     if (topic != QString::fromLatin1(kAx25TxTopic))
         return;
+    if (!isMqttTopicEnabled(QString::fromLatin1(kAx25TxTopic)))
+        return;
     startTransmit(QString::fromUtf8(payload).trimmed());
 }
 #endif

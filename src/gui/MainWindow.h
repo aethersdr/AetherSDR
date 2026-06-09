@@ -483,6 +483,7 @@ private:
     float             m_cwLastSpeedWpm{0.0f};
     QMetaObject::Connection m_radioStateFreqConn;
     QMetaObject::Connection m_radioStateModeConn;
+    QTimer                  m_radioStateCoalesceTimer;
     CwDecoder         m_cwDecoderTx;
     RttyDecoder       m_rttyDecoder;
     DxClusterClient*   m_dxCluster{nullptr};

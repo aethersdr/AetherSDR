@@ -46,6 +46,9 @@ QStringList mqttSubscriptionTopics(const QStringList& userTopics);
 
 inline constexpr QLatin1String kCwDecodeTopic   {"aethersdr/cw/decode"};
 inline constexpr QLatin1String kCwTransmitTopic {"aethersdr/cw/transmit"};
+// Note: relay scripts that forward cw/decode into cw/transmit should filter
+// on the topic namespace ("aethersdr/...") to avoid re-publishing AetherSDR's
+// own output back to it and creating a feedback loop.
 inline constexpr QLatin1String kRadioStateTopic {"aethersdr/radio/state"};
 inline constexpr QLatin1String kAx25RxTopic     {"aethersdr/ax25/rx"};
 inline constexpr QLatin1String kAx25TxTopic     {"aethersdr/ax25/tx"};

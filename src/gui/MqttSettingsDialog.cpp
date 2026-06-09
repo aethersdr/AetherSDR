@@ -298,6 +298,7 @@ void MqttSettingsDialog::saveSettings()
 
     saveMqttTopicConfig(topicRows());
     saveMqttButtonConfig(buttonRows());
+    AppSettings::instance().save();
     savePasswordToKeychain(m_passEdit->text());
     emit settingsSaved(m_passEdit->text());
 }

@@ -338,7 +338,6 @@ bool isMqttTopicEnabled(const QString& topic)
 void setMqttTopicEnabled(const QString& topic, bool enabled)
 {
     AppSettings::instance().setValue(topicEnabledKey(topic), enabled);
-    AppSettings::instance().save();
 }
 
 QStringList internalMqttSubscriptionTopics()
