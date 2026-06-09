@@ -481,6 +481,12 @@ private:
     CwDecoder         m_cwDecoder;
     float             m_cwLastPitchHz{0.0f};
     float             m_cwLastSpeedWpm{0.0f};
+    CwDecoder         m_cwDecoderTx;
+    RttyDecoder       m_rttyDecoder;
+    DxClusterClient*   m_dxCluster{nullptr};
+    DxClusterClient*   m_rbnClient{nullptr};
+#ifdef HAVE_MQTT
+    MqttClient*        m_mqttClient{nullptr};
     QMetaObject::Connection m_radioStateFreqConn;
     QMetaObject::Connection m_radioStateModeConn;
     QTimer                  m_radioStateCoalesceTimer;
@@ -488,15 +494,11 @@ private:
     QMetaObject::Connection m_cwxSpeedRestoreConn;
     int               m_cwxSavedWpm{0};
     int               m_cwxSavedHz{0};
+    int               m_cwxSentWpm{0};
+    int               m_cwxSentHz{0};
     bool              m_cwxTransmitting{false};
     bool              m_cwxPublishedTxTrue{false};
     QTimer            m_cwxTxEndTimer;
-    CwDecoder         m_cwDecoderTx;
-    RttyDecoder       m_rttyDecoder;
-    DxClusterClient*   m_dxCluster{nullptr};
-    DxClusterClient*   m_rbnClient{nullptr};
-#ifdef HAVE_MQTT
-    MqttClient*        m_mqttClient{nullptr};
 #endif
     WsjtxClient*       m_wsjtxClient{nullptr};
     SpotCollectorClient* m_spotCollectorClient{nullptr};

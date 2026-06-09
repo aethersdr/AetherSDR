@@ -316,7 +316,7 @@ static QString topicEnabledKey(const QString& topic)
 {
     QString key = topic;
     key.replace(QLatin1Char('/'), QLatin1Char('_'));
-    key.replace(QLatin1Char('+'), QLatin1Char('x'));
+    key.replace(QLatin1Char('+'), QStringLiteral("%2B"));
     return QStringLiteral("mqtt_internal_") + key;
 }
 

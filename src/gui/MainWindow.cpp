@@ -2014,10 +2014,14 @@ MainWindow::MainWindow(QWidget* parent)
     // Fires 1 s after the last tx:false with no intervening tx:true = transmission done.
     m_cwxTxEndTimer.setSingleShot(true);
     connect(&m_cwxTxEndTimer, &QTimer::timeout, this, [this]() {
-        if (m_cwxSavedWpm > 0) m_radioModel.cwxModel().setSpeed(m_cwxSavedWpm);
-        if (m_cwxSavedHz  > 0) m_radioModel.transmitModel().setCwPitch(m_cwxSavedHz);
+        if (m_cwxSavedWpm > 0 && m_radioModel.cwxModel().speed() == m_cwxSentWpm)
+            m_radioModel.cwxModel().setSpeed(m_cwxSavedWpm);
+        if (m_cwxSavedHz  > 0 && m_radioModel.transmitModel().cwPitch() == m_cwxSentHz)
+            m_radioModel.transmitModel().setCwPitch(m_cwxSavedHz);
         m_cwxSavedWpm = 0;
         m_cwxSavedHz  = 0;
+        m_cwxSentWpm  = 0;
+        m_cwxSentHz   = 0;
         m_cwxTransmitting = false;
         m_cwxPublishedTxTrue = false;
         publishRadioStateMqtt();
@@ -2043,6 +2047,8 @@ MainWindow::MainWindow(QWidget* parent)
         m_cwxSavedHz  = changeHz  ? tx.cwPitch() : 0;
         if (changeWpm) m_radioModel.cwxModel().setSpeed(wpm);
         if (changeHz)  tx.setCwPitch(hz);
+        m_cwxSentWpm  = changeWpm ? wpm : 0;
+        m_cwxSentHz   = changeHz  ? hz  : 0;
         m_cwxTxEndTimer.stop();
         m_cwxPublishedTxTrue = false;
         m_cwxTransmitting = true;
@@ -2053,10 +2059,14 @@ MainWindow::MainWindow(QWidget* parent)
             this, [this]() {
                 // Fast path if queueEmpty fires (sync_cwx=1 or firmware sends queue=0).
                 // Identical work to m_cwxTxEndTimer.timeout — whichever fires first wins.
-                if (m_cwxSavedWpm > 0) m_radioModel.cwxModel().setSpeed(m_cwxSavedWpm);
-                if (m_cwxSavedHz  > 0) m_radioModel.transmitModel().setCwPitch(m_cwxSavedHz);
+                if (m_cwxSavedWpm > 0 && m_radioModel.cwxModel().speed() == m_cwxSentWpm)
+                    m_radioModel.cwxModel().setSpeed(m_cwxSavedWpm);
+                if (m_cwxSavedHz  > 0 && m_radioModel.transmitModel().cwPitch() == m_cwxSentHz)
+                    m_radioModel.transmitModel().setCwPitch(m_cwxSavedHz);
                 m_cwxSavedWpm = 0;
                 m_cwxSavedHz  = 0;
+                m_cwxSentWpm  = 0;
+                m_cwxSentHz   = 0;
                 m_cwxTxEndTimer.stop();
                 m_cwxTransmitting = false;
                 m_cwxPublishedTxTrue = false;
@@ -12961,9 +12971,11 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     }
 #endif
 
+#ifdef HAVE_MQTT
     // Rewire radio state MQTT publish to the new active slice's freq/mode signals.
     disconnect(m_radioStateFreqConn);
     disconnect(m_radioStateModeConn);
+#endif
 #ifdef HAVE_MQTT
     m_radioStateFreqConn = connect(s, &SliceModel::frequencyChanged,
                                    this, [this](double) { m_radioStateCoalesceTimer.start(); });
@@ -13146,7 +13158,9 @@ void MainWindow::routeCwDecoderOutput()
     if (target == m_cwDecoderApplet) return;
 
     // Disconnect from old applet
+#ifdef HAVE_MQTT
     disconnect(m_cwStatsConn);
+#endif
     if (m_cwDecoderApplet) {
         disconnect(&m_cwDecoder, &CwDecoder::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwText);
@@ -13182,11 +13196,13 @@ void MainWindow::routeCwDecoderOutput()
                 m_cwDecoderApplet, &PanadapterApplet::appendCwTextTx);
         connect(&m_cwDecoder, &CwDecoder::statsUpdated,
                 m_cwDecoderApplet, &PanadapterApplet::setCwStats);
+#ifdef HAVE_MQTT
         m_cwStatsConn = connect(&m_cwDecoder, &CwDecoder::statsUpdated,
                 this, [this](float pitchHz, float speedWpm) {
             m_cwLastPitchHz   = pitchHz;
             m_cwLastSpeedWpm  = speedWpm;
         });
+#endif
         connect(m_cwDecoderApplet->lockPitchButton(), &QPushButton::toggled,
                 &m_cwDecoder, &CwDecoder::lockPitch);
         connect(m_cwDecoderApplet->lockSpeedButton(), &QPushButton::toggled,

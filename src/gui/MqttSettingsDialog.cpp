@@ -170,6 +170,7 @@ void MqttSettingsDialog::buildUi()
         auto* cb = new QCheckBox(
             QStringLiteral("%1  —  %2").arg(def.topic, def.description));
         cb->setToolTip(def.topic);
+        cb->setProperty("topic", def.topic);
         if (!def.gateable) {
             cb->setChecked(true);
             cb->setEnabled(false);
@@ -211,6 +212,7 @@ void MqttSettingsDialog::buildUi()
         auto* cb = new QCheckBox(
             QStringLiteral("%1  —  %2").arg(def.topic, def.description));
         cb->setToolTip(def.topic);
+        cb->setProperty("topic", def.topic);
         if (!def.gateable) {
             cb->setChecked(true);
             cb->setEnabled(false);
@@ -249,16 +251,18 @@ void MqttSettingsDialog::loadSettings()
     m_tlsCheck->setChecked(config.useTls);
     m_caFileEdit->setText(config.caFile);
 
-    const auto& subDefs = internalMqttSubscribeTopicDefs();
-    for (int i = 0; i < m_internalSubBoxes.size(); ++i) {
-        if (i < subDefs.size() && subDefs[i].gateable)
-            m_internalSubBoxes[i]->setChecked(isMqttTopicEnabled(subDefs[i].topic));
+    for (auto* cb : m_internalSubBoxes) {
+        if (!cb->isEnabled()) continue;
+        const QString topic = cb->property("topic").toString();
+        if (!topic.isEmpty())
+            cb->setChecked(isMqttTopicEnabled(topic));
     }
 
-    const auto& pubDefs = internalMqttPublishTopicDefs();
-    for (int i = 0; i < m_internalPubBoxes.size(); ++i) {
-        if (i < pubDefs.size() && pubDefs[i].gateable)
-            m_internalPubBoxes[i]->setChecked(isMqttTopicEnabled(pubDefs[i].topic));
+    for (auto* cb : m_internalPubBoxes) {
+        if (!cb->isEnabled()) continue;
+        const QString topic = cb->property("topic").toString();
+        if (!topic.isEmpty())
+            cb->setChecked(isMqttTopicEnabled(topic));
     }
 
     m_topicsTable->setRowCount(0);
@@ -284,16 +288,18 @@ void MqttSettingsDialog::saveSettings()
     };
     saveMqttConnectionConfig(config);
 
-    const auto& subDefs = internalMqttSubscribeTopicDefs();
-    for (int i = 0; i < m_internalSubBoxes.size(); ++i) {
-        if (i < subDefs.size() && subDefs[i].gateable)
-            setMqttTopicEnabled(subDefs[i].topic, m_internalSubBoxes[i]->isChecked());
+    for (auto* cb : m_internalSubBoxes) {
+        if (!cb->isEnabled()) continue;
+        const QString topic = cb->property("topic").toString();
+        if (!topic.isEmpty())
+            setMqttTopicEnabled(topic, cb->isChecked());
     }
 
-    const auto& pubDefs = internalMqttPublishTopicDefs();
-    for (int i = 0; i < m_internalPubBoxes.size(); ++i) {
-        if (i < pubDefs.size() && pubDefs[i].gateable)
-            setMqttTopicEnabled(pubDefs[i].topic, m_internalPubBoxes[i]->isChecked());
+    for (auto* cb : m_internalPubBoxes) {
+        if (!cb->isEnabled()) continue;
+        const QString topic = cb->property("topic").toString();
+        if (!topic.isEmpty())
+            setMqttTopicEnabled(topic, cb->isChecked());
     }
 
     saveMqttTopicConfig(topicRows());
