@@ -2010,6 +2010,18 @@ MainWindow::MainWindow(QWidget* parent)
     // Slice freq/mode changes are wired per-slice in setActiveSliceInternal().
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool) { publishRadioStateMqtt(); });
+    // Debounce timer for end-of-CWX detection (queueEmpty unreliable with sync_cwx=0).
+    // Fires 1 s after the last tx:false with no intervening tx:true = transmission done.
+    m_cwxTxEndTimer.setSingleShot(true);
+    connect(&m_cwxTxEndTimer, &QTimer::timeout, this, [this]() {
+        if (m_cwxSavedWpm > 0) m_radioModel.cwxModel().setSpeed(m_cwxSavedWpm);
+        if (m_cwxSavedHz  > 0) m_radioModel.transmitModel().setCwPitch(m_cwxSavedHz);
+        m_cwxSavedWpm = 0;
+        m_cwxSavedHz  = 0;
+        m_cwxTransmitting = false;
+        m_cwxPublishedTxTrue = false;
+        publishRadioStateMqtt();
+    });
 
     // aethersdr/cw/transmit → CWX keyer.
     // Payload: {"text":"de k5ptb","speed_wpm":28,"pitch_hz":600}
@@ -2024,10 +2036,34 @@ MainWindow::MainWindow(QWidget* parent)
         if (text.isEmpty()) return;
         auto& tx = m_radioModel.transmitModel();
         const int wpm = obj.value(QStringLiteral("speed_wpm")).toInt(0);
-        if (wpm >= 5 && wpm <= 100) tx.setCwSpeed(wpm);
-        const int hz = obj.value(QStringLiteral("pitch_hz")).toInt(0);
-        if (hz >= 100 && hz <= 6000) tx.setCwPitch(hz);
+        const int hz  = obj.value(QStringLiteral("pitch_hz")).toInt(0);
+        const bool changeWpm = (wpm >= 5 && wpm <= 100);
+        const bool changeHz  = (hz >= 100 && hz <= 6000);
+        m_cwxSavedWpm = changeWpm ? m_radioModel.cwxModel().speed() : 0;
+        m_cwxSavedHz  = changeHz  ? tx.cwPitch() : 0;
+        if (changeWpm) m_radioModel.cwxModel().setSpeed(wpm);
+        if (changeHz)  tx.setCwPitch(hz);
+        m_cwxTxEndTimer.stop();
+        m_cwxPublishedTxTrue = false;
+        m_cwxTransmitting = true;
         m_radioModel.cwxModel().send(text);
+        disconnect(m_cwxSpeedRestoreConn);
+        m_cwxSpeedRestoreConn = connect(
+            &m_radioModel.cwxModel(), &CwxModel::queueEmpty,
+            this, [this]() {
+                // Fast path if queueEmpty fires (sync_cwx=1 or firmware sends queue=0).
+                // Identical work to m_cwxTxEndTimer.timeout — whichever fires first wins.
+                if (m_cwxSavedWpm > 0) m_radioModel.cwxModel().setSpeed(m_cwxSavedWpm);
+                if (m_cwxSavedHz  > 0) m_radioModel.transmitModel().setCwPitch(m_cwxSavedHz);
+                m_cwxSavedWpm = 0;
+                m_cwxSavedHz  = 0;
+                m_cwxTxEndTimer.stop();
+                m_cwxTransmitting = false;
+                m_cwxPublishedTxTrue = false;
+                if (!m_radioModel.isRadioTransmitting())
+                    publishRadioStateMqtt();
+                disconnect(m_cwxSpeedRestoreConn);
+            });
     });
 
     // MQTT → panadapter overlay display
@@ -6014,10 +6050,8 @@ void MainWindow::publishCwDecodeMqtt(const QString& text, float cost, bool rx)
     if (!m_mqttClient) return;
     if (!isMqttTopicEnabled(QString::fromLatin1(kCwDecodeTopic))) return;
     // No CW panel active → nothing is displayed → don't publish.
-    if (!m_cwDecoderApplet || cost >= m_cwDecoderApplet->cwCostThreshold()) {
-        qCDebug(lcMqtt) << "MQTT CW decode suppressed: no applet or cost threshold";
+    if (!m_cwDecoderApplet || cost >= m_cwDecoderApplet->cwCostThreshold())
         return;
-    }
     // Mirror panel normalization: \n → space; drop whitespace-only TX chunks.
     QString clean = text;
     clean.replace(QLatin1Char('\n'), QLatin1Char(' '));
@@ -6043,6 +6077,15 @@ void MainWindow::publishRadioStateMqtt()
 {
     if (!m_mqttClient) return;
     if (!isMqttTopicEnabled(QString::fromLatin1(kRadioStateTopic))) return;
+    if (m_cwxTransmitting) {
+        if (!m_radioModel.isRadioTransmitting()) {
+            m_cwxTxEndTimer.start(1000);  // might be done; confirm after 1 s silence
+            return;
+        }
+        m_cwxTxEndTimer.stop();           // element started — not done yet
+        if (m_cwxPublishedTxTrue) return;
+        m_cwxPublishedTxTrue = true;
+    }
     auto* s = activeSlice();
     if (!s) return;
     QJsonObject obj;
@@ -6892,6 +6935,9 @@ void MainWindow::startKissTncOnStartupIfConfigured()
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     m_ax25HfPacketDecodeDialog = dlg;
     m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+#ifdef HAVE_MQTT
+    m_ax25HfPacketDecodeDialog->setMqttClient(m_mqttClient);
+#endif
 }
 
 void MainWindow::showFlexControlDialog()
@@ -13100,6 +13146,7 @@ void MainWindow::routeCwDecoderOutput()
     if (target == m_cwDecoderApplet) return;
 
     // Disconnect from old applet
+    disconnect(m_cwStatsConn);
     if (m_cwDecoderApplet) {
         disconnect(&m_cwDecoder, &CwDecoder::textDecoded,
                    m_cwDecoderApplet, &PanadapterApplet::appendCwText);
@@ -13135,7 +13182,7 @@ void MainWindow::routeCwDecoderOutput()
                 m_cwDecoderApplet, &PanadapterApplet::appendCwTextTx);
         connect(&m_cwDecoder, &CwDecoder::statsUpdated,
                 m_cwDecoderApplet, &PanadapterApplet::setCwStats);
-        connect(&m_cwDecoder, &CwDecoder::statsUpdated,
+        m_cwStatsConn = connect(&m_cwDecoder, &CwDecoder::statsUpdated,
                 this, [this](float pitchHz, float speedWpm) {
             m_cwLastPitchHz   = pitchHz;
             m_cwLastSpeedWpm  = speedWpm;

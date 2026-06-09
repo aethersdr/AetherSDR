@@ -303,7 +303,7 @@ const QVector<InternalMqttTopicDef>& internalMqttSubscribeTopicDefs()
 const QVector<InternalMqttTopicDef>& internalMqttPublishTopicDefs()
 {
     static const QVector<InternalMqttTopicDef> defs = {
-        { QString(kCwDecodeTopic),    QStringLiteral("CW decoded text"),             true },
+        { QString(kCwDecodeTopic),    QStringLiteral("CW decoded text"),             true, true },
         { QString(kRadioStateTopic),  QStringLiteral("Radio VFO / mode / TX state"), true },
         { QString(kAx25RxTopic),      QStringLiteral("AX.25 received frames"),       true },
     };
@@ -325,12 +325,12 @@ bool isMqttTopicEnabled(const QString& topic)
     for (const auto& def : internalMqttSubscribeTopicDefs()) {
         if (def.topic == topic)
             return !def.gateable || AppSettings::instance()
-                .value(topicEnabledKey(topic), false).toBool();
+                .value(topicEnabledKey(topic), def.defaultEnabled).toBool();
     }
     for (const auto& def : internalMqttPublishTopicDefs()) {
         if (def.topic == topic)
             return !def.gateable || AppSettings::instance()
-                .value(topicEnabledKey(topic), false).toBool();
+                .value(topicEnabledKey(topic), def.defaultEnabled).toBool();
     }
     return false;
 }

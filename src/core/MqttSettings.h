@@ -59,7 +59,8 @@ inline constexpr QLatin1String kAx25TxTopic     {"aethersdr/ax25/tx"};
 struct InternalMqttTopicDef {
     QString topic;
     QString description;
-    bool    gateable{true};  // false = always on, not user-disableable
+    bool    gateable{true};        // false = always on, not user-disableable
+    bool    defaultEnabled{false}; // true = on by default (for topics always-on before per-topic gating was added)
 };
 
 const QVector<InternalMqttTopicDef>& internalMqttSubscribeTopicDefs();

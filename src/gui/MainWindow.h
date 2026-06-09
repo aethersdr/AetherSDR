@@ -484,6 +484,13 @@ private:
     QMetaObject::Connection m_radioStateFreqConn;
     QMetaObject::Connection m_radioStateModeConn;
     QTimer                  m_radioStateCoalesceTimer;
+    QMetaObject::Connection m_cwStatsConn;
+    QMetaObject::Connection m_cwxSpeedRestoreConn;
+    int               m_cwxSavedWpm{0};
+    int               m_cwxSavedHz{0};
+    bool              m_cwxTransmitting{false};
+    bool              m_cwxPublishedTxTrue{false};
+    QTimer            m_cwxTxEndTimer;
     CwDecoder         m_cwDecoderTx;
     RttyDecoder       m_rttyDecoder;
     DxClusterClient*   m_dxCluster{nullptr};

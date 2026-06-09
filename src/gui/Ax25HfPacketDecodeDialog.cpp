@@ -1356,6 +1356,8 @@ void Ax25HfPacketDecodeDialog::publishFrameMqtt(const Ax25DecodedFrame& frame)
 {
     if (!m_mqtt)
         return;
+    if (!isMqttTopicEnabled(QString::fromLatin1(kAx25RxTopic)))
+        return;
     QString display = frame.source + QStringLiteral(">") + frame.destination;
     if (!frame.path.isEmpty())
         display += QStringLiteral(",") + frame.path.join(QStringLiteral(","));
@@ -1379,6 +1381,8 @@ void Ax25HfPacketDecodeDialog::handleMqttMessage(const QString& topic, const QBy
     if (topic != QString::fromLatin1(kAx25TxTopic))
         return;
     if (!isMqttTopicEnabled(QString::fromLatin1(kAx25TxTopic)))
+        return;
+    if (!isVisible())
         return;
     startTransmit(QString::fromUtf8(payload).trimmed());
 }
