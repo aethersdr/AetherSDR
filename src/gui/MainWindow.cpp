@@ -1672,7 +1672,7 @@ MainWindow::MainWindow(QWidget* parent)
         closeBtn->setAutoDefault(false);
         // Force minimum width via layout spacer — setMinimumWidth() is ignored by QMessageBox
         if (auto* grid = qobject_cast<QGridLayout*>(box.layout()))
-            grid->addItem(new QSpacerItem(480, 0, QSizePolicy::Minimum, QSizePolicy::Expanding),
+            grid->addItem(new QSpacerItem(480, 0, QSizePolicy::Minimum, QSizePolicy::Fixed),
                           grid->rowCount(), 0, 1, grid->columnCount());
         box.exec();
         if (box.clickedButton() == viewBtn)

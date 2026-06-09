@@ -1,4 +1,5 @@
 #include "WhatsNewDialog.h"
+#include "core/UpdateChecker.h"
 #include "core/VersionNumber.h"
 #include "core/AppSettings.h"
 
@@ -299,7 +300,7 @@ void WhatsNewDialog::buildUI(const QString& lastSeenVersion,
         upgradeBtn->setCursor(Qt::PointingHandCursor);
         upgradeBtn->setStyleSheet(secondaryButtonStyle());
         connect(upgradeBtn, &QPushButton::clicked, this, [this] {
-            QDesktopServices::openUrl(QUrl("https://github.com/aethersdr/AetherSDR/releases/latest"));
+            QDesktopServices::openUrl(QUrl(AetherSDR::UpdateChecker::kReleasesPageUrl));
             close();
         });
         footerLayout->addWidget(upgradeBtn, 0, Qt::AlignCenter);
