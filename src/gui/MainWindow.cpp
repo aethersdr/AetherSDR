@@ -10936,7 +10936,6 @@ void MainWindow::buildUI()
     hbox->addWidget(timeStack);
 
     statusBar()->addWidget(container, 1);
-
     updateBandStackIndicator();
 
     // S History Markers expiry — sweeps stale detections once per second
