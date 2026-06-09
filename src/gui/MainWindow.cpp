@@ -10931,6 +10931,10 @@ void MainWindow::buildUI()
         QMessageBox::information(this, "Check for Updates",
             QString("AetherSDR is up to date (v%1).").arg(ver));
     });
+    connect(m_updateChecker, &UpdateChecker::checkFailed, this, [this]() {
+        QMessageBox::warning(this, "Check for Updates",
+            "Could not reach GitHub. Check your connection and try again.");
+    });
 
     updateBandStackIndicator();
 
