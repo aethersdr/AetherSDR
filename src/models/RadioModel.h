@@ -387,6 +387,12 @@ signals:
     // Emitted when the radio reports the panadapter's dBm display range.
     void panadapterLevelChanged(float minDbm, float maxDbm);
     void panadapterAdded(PanadapterModel* pan);
+    // Emitted when a previous-session pan model is reclaimed on reconnect
+    // instead of created fresh. The applet/widget wiring from the original
+    // panadapterAdded survives (model and widget both outlive the disconnect),
+    // but connections MainWindow tears down at disconnect (per-pan FPS and
+    // waterfall line-duration reconcilers) must be re-established from this.
+    void panadapterReclaimed(PanadapterModel* pan);
     void panadapterRemoved(const QString& panId);
     // Emitted when createPanadapter() is blocked because the radio's pan limit is reached.
     void panadapterLimitReached(int limit, const QString& model);
@@ -786,6 +792,10 @@ private:
     QList<SliceModel*> m_slices;
     QMap<int, SliceModel*> m_staleSlices;  // previous session, kept alive for UI reuse
     quint64 m_sessionModelGeneration{0};
+    // chassis_serial of the radio the staged session models came from.
+    // Reclaim-by-ID is only valid against the same radio — slice indexes and
+    // stream IDs collide near-certainly across different radios.
+    QString m_staleSessionSerial;
     QMap<int, MemoryEntry> m_memories;
     QStringList m_globalProfiles;
     QString     m_activeGlobalProfile;

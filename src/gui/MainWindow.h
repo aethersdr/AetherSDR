@@ -271,6 +271,7 @@ private:
     void updateSplitState();
     void disableSplit();
     void wirePanadapter(PanadapterApplet* applet);
+    void wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan);
     void schedulePanFpsReconcile(const QString& panId, int reportedFps);
     void scheduleWaterfallLineDurationReconcile(const QString& panId, int reportedMs);
     void reassertUnmutedSliceAudioForPan(const QString& panId);

@@ -1877,6 +1877,21 @@ void RadioModel::stageSessionModelsForReconnect()
                             << "pans=" << m_stalePanadapters.size()
                             << "generation=" << m_sessionModelGeneration;
     }
+
+    // Cross-radio guard: staged models are only reclaimable against the radio
+    // they came from — slice indexes (0..n) and stream IDs (0x40000000…)
+    // collide near-certainly across radios, and a reclaimed SliceModel would
+    // drain its queued commands at the wrong radio. On LAN the discovery
+    // serial is known here; on WAN it isn't, so registerAsGuiClient() repeats
+    // this check when the "info" reply delivers chassis_serial.
+    const QString targetSerial = m_wanConn ? QString() : m_lastInfo.serial;
+    if (!m_staleSessionSerial.isEmpty() && !targetSerial.isEmpty()
+        && targetSerial != m_staleSessionSerial) {
+        qCDebug(lcProtocol) << "RadioModel: connect target serial" << targetSerial
+                            << "differs from staged session serial" << m_staleSessionSerial
+                            << "— dropping previous-session models";
+        pruneStaleSessionModels(m_sessionModelGeneration);
+    }
 }
 
 void RadioModel::pruneStaleSessionModels(quint64 generation)
@@ -2310,6 +2325,20 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                         }
                         qCDebug(lcProtocol) << "RadioModel: info — callsign:" << m_callsign
                                  << "region:" << m_region << "options:" << m_radioOptions;
+
+                        // Cross-radio guard, WAN leg: discovery serial isn't
+                        // available at stage time over SmartLink, so drop any
+                        // still-staged previous-session models as soon as the
+                        // radio identifies itself as a different chassis.
+                        if (!m_staleSessionSerial.isEmpty() && !m_chassisSerial.isEmpty()
+                            && m_chassisSerial != m_staleSessionSerial) {
+                            qCDebug(lcProtocol) << "RadioModel: chassis serial" << m_chassisSerial
+                                                << "differs from staged session serial"
+                                                << m_staleSessionSerial
+                                                << "— dropping previous-session models";
+                            pruneStaleSessionModels(m_sessionModelGeneration);
+                        }
+
                         emit infoChanged();
                         if (reloadAntennaAliases())
                             emit antennaAliasesChanged();
@@ -2586,6 +2615,12 @@ void RadioModel::onDisconnected()
     m_maxSlices = 4;
     m_model.clear();
     m_version.clear();
+    // Remember which radio the surviving pan/slice models belong to so the
+    // next connect can refuse to reclaim them against a different radio.
+    // Keep the previous value if this disconnect never learned a serial
+    // (e.g. handshake failed before the info reply).
+    if (!m_chassisSerial.isEmpty())
+        m_staleSessionSerial = m_chassisSerial;
     m_chassisSerial.clear();
     m_callsign.clear();
     m_region.clear();
@@ -3588,7 +3623,9 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
 
     qCDebug(lcProtocol) << "RadioModel:" << (reclaimed ? "reclaimed" : "claimed")
                         << "panadapter" << normalizedPanId;
-    if (!reclaimed) {
+    if (reclaimed) {
+        emit panadapterReclaimed(pan);
+    } else {
         emit panadapterAdded(pan);
     }
 
@@ -4108,8 +4145,14 @@ void RadioModel::onStatusReceived(const QString& object,
                     pan->setPreamp(pre);
             }
 
-            const bool knownPan = m_panadapters.contains(panId)
-                || m_stalePanadapters.contains(panId);
+            // Staged (previous-session) pans are deliberately NOT treated as
+            // known here: a handle-less status for a stale ID must Defer into
+            // m_pendingPanStatuses rather than Apply, so reclaim only ever
+            // happens on a confirmed client_handle match (Claim below). After
+            // a radio reboot the same stream ID can be assigned to another
+            // client (SmartSDR), and an incremental status without
+            // client_handle must not capture it.
+            const bool knownPan = m_panadapters.contains(panId);
             const auto ownershipAction = RadioStatusOwnership::classifyOwnedStatus(
                 knownPan, kvs, false, clientHandle());
             if (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Defer) {
@@ -4152,17 +4195,17 @@ void RadioModel::onStatusReceived(const QString& object,
                     }
                 } else if (m_panadapters.contains(panId)
                            && kvs.contains(QStringLiteral("client_handle"))) {
-                    qCDebug(lcProtocol) << "RadioModel: ignoring foreign owner status for claimed panadapter"
-                                        << panId << "owner=" << kvs.value(QStringLiteral("client_handle"));
+                    // A pan we hold reporting a different owner means an
+                    // earlier claim was wrong — keep the pan (don't rip the
+                    // user's display down on a transient fragment) but make
+                    // the misclaim visible.
+                    qCWarning(lcProtocol) << "RadioModel: ignoring foreign owner status for claimed panadapter"
+                                          << panId << "owner=" << kvs.value(QStringLiteral("client_handle"));
                 }
                 return;  // not our panadapter, ignore
             }
-            if (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Claim
-                || (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Apply
-                    && !m_panadapters.contains(panId)
-                    && m_stalePanadapters.contains(panId))) {
+            if (ownershipAction == RadioStatusOwnership::OwnedStatusAction::Claim)
                 ensureOwnedPanadapter(panId);
-            }
             handlePanadapterStatus(panId, kvs);
         }
         return;
@@ -4901,6 +4944,13 @@ void RadioModel::handleSliceStatus(int id,
         m_meterModel.setActiveTxSlice(activeTxSliceNum());
         if (!reclaimed) {
             emit sliceAdded(s);
+        } else if (s->isTxSlice()) {
+            // Re-claim TX after a radio reboot (#145 semantics): the radio
+            // recreates the slice with tx=1 but tx_client_handle pointing at
+            // our dead pre-reboot handle (or 0). Fresh slices get this from
+            // MainWindow::onSliceAdded; reclaimed slices skip sliceAdded, so
+            // re-assert it here.
+            sendCmd(QString("slice set %1 tx=1").arg(id));
         }
         emit slotOccupancyChanged(id);  // empty/foreign → ours
         return;                // applyStatus already called below; skip second call

@@ -3257,6 +3257,22 @@ MainWindow::MainWindow(QWidget* parent)
             m_layoutRestoreTimer->start();
         }
     });
+    // A reclaimed (previous-session) pan keeps its applet and all the
+    // model→widget wiring from its original panadapterAdded, so the full add
+    // path must not run again (it would duplicate connections). But the
+    // disconnect path tears down the per-pan FPS / waterfall-line-duration
+    // reconcilers, so those need re-wiring here.
+    connect(&m_radioModel, &RadioModel::panadapterReclaimed,
+            this, [this](PanadapterModel* pan) {
+        if (m_shuttingDown || !m_panStack || !pan) {
+            return;
+        }
+        auto* applet = m_panStack->panadapter(pan->panId());
+        if (!applet) {
+            return;
+        }
+        wirePanReconcilers(applet, pan);
+    });
     // Re-push xpixels/ypixels when the radio requests it (profile change, reconnect, etc.)
     connect(&m_radioModel, &RadioModel::panDimensionsNeeded,
             this, [this](const QString& panId) {
@@ -13647,6 +13663,48 @@ void MainWindow::scheduleWaterfallLineDurationReconcile(const QString& panId, in
     state.timer->start();
 }
 
+// Per-pan FPS / waterfall-line-duration reconcilers. Wired from
+// wirePanadapter() for fresh pans and from the panadapterReclaimed handler
+// for previous-session pans reclaimed on reconnect — the disconnect path
+// explicitly tears these connections down, and reclaimed pans never re-emit
+// panadapterAdded, so they need this re-wire to keep reconciling.
+void MainWindow::wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan)
+{
+    auto* sw = applet->spectrumWidget();
+    if (!sw || !pan)
+        return;
+
+    auto oldFpsConnection = m_panFpsReconcileConnections.take(applet->panId());
+    if (oldFpsConnection)
+        QObject::disconnect(oldFpsConnection);
+
+    auto& fpsState = m_panFpsReconcile[applet->panId()];
+    fpsState.spectrum = sw;
+    m_panFpsReconcileConnections.insert(
+        applet->panId(),
+        connect(pan, &PanadapterModel::fpsReported,
+                this, [this, panId = applet->panId()](int fps) {
+            schedulePanFpsReconcile(panId, fps);
+        }));
+    schedulePanFpsReconcile(applet->panId(), pan->fps());
+
+    auto oldWfLineDurationConnection =
+        m_wfLineDurationReconcileConnections.take(applet->panId());
+    if (oldWfLineDurationConnection)
+        QObject::disconnect(oldWfLineDurationConnection);
+
+    auto& wfLineDurationState = m_wfLineDurationReconcile[applet->panId()];
+    wfLineDurationState.spectrum = sw;
+    m_wfLineDurationReconcileConnections.insert(
+        applet->panId(),
+        connect(pan, &PanadapterModel::waterfallLineDurationReported,
+                this, [this, panId = applet->panId()](int ms) {
+            scheduleWaterfallLineDurationReconcile(panId, ms);
+        }));
+    scheduleWaterfallLineDurationReconcile(applet->panId(),
+                                           pan->waterfallLineDuration());
+}
+
 void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
@@ -13782,35 +13840,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // correct radio-reported range via the pendingDbm guard. (#3034)
         sw->setDbmRange(pan->minDbm(), pan->maxDbm());
 
-        auto oldFpsConnection = m_panFpsReconcileConnections.take(applet->panId());
-        if (oldFpsConnection)
-            QObject::disconnect(oldFpsConnection);
-
-        auto& fpsState = m_panFpsReconcile[applet->panId()];
-        fpsState.spectrum = sw;
-        m_panFpsReconcileConnections.insert(
-            applet->panId(),
-            connect(pan, &PanadapterModel::fpsReported,
-                    this, [this, panId = applet->panId()](int fps) {
-                schedulePanFpsReconcile(panId, fps);
-            }));
-        schedulePanFpsReconcile(applet->panId(), pan->fps());
-
-        auto oldWfLineDurationConnection =
-            m_wfLineDurationReconcileConnections.take(applet->panId());
-        if (oldWfLineDurationConnection)
-            QObject::disconnect(oldWfLineDurationConnection);
-
-        auto& wfLineDurationState = m_wfLineDurationReconcile[applet->panId()];
-        wfLineDurationState.spectrum = sw;
-        m_wfLineDurationReconcileConnections.insert(
-            applet->panId(),
-            connect(pan, &PanadapterModel::waterfallLineDurationReported,
-                    this, [this, panId = applet->panId()](int ms) {
-                scheduleWaterfallLineDurationReconcile(panId, ms);
-            }));
-        scheduleWaterfallLineDurationReconcile(applet->panId(),
-                                               pan->waterfallLineDuration());
+        wirePanReconcilers(applet, pan);
     }
     syncTxWaterfallSliceToSpectrums();
 
