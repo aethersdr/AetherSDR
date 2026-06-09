@@ -2043,12 +2043,12 @@ MainWindow::MainWindow(QWidget* parent)
         const int hz  = obj.value(QStringLiteral("pitch_hz")).toInt(0);
         const bool changeWpm = (wpm >= 5 && wpm <= 100);
         const bool changeHz  = (hz >= 100 && hz <= 6000);
-        m_cwxSavedWpm = changeWpm ? m_radioModel.cwxModel().speed() : 0;
-        m_cwxSavedHz  = changeHz  ? tx.cwPitch() : 0;
-        if (changeWpm) m_radioModel.cwxModel().setSpeed(wpm);
-        if (changeHz)  tx.setCwPitch(hz);
-        m_cwxSentWpm  = changeWpm ? wpm : 0;
-        m_cwxSentHz   = changeHz  ? hz  : 0;
+        if (!m_cwxTransmitting) {
+            m_cwxSavedWpm = changeWpm ? m_radioModel.cwxModel().speed() : 0;
+            m_cwxSavedHz  = changeHz  ? tx.cwPitch() : 0;
+        }
+        if (changeWpm) { m_radioModel.cwxModel().setSpeed(wpm); m_cwxSentWpm = wpm; }
+        if (changeHz)  { tx.setCwPitch(hz);                   m_cwxSentHz  = hz;  }
         m_cwxTxEndTimer.stop();
         m_cwxPublishedTxTrue = false;
         m_cwxTransmitting = true;
@@ -12975,8 +12975,6 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     // Rewire radio state MQTT publish to the new active slice's freq/mode signals.
     disconnect(m_radioStateFreqConn);
     disconnect(m_radioStateModeConn);
-#endif
-#ifdef HAVE_MQTT
     m_radioStateFreqConn = connect(s, &SliceModel::frequencyChanged,
                                    this, [this](double) { m_radioStateCoalesceTimer.start(); });
     m_radioStateModeConn = connect(s, &SliceModel::modeChanged,

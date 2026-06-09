@@ -234,9 +234,13 @@ void MqttClient::publish(const QString& topic, const QByteArray& payload)
 #ifdef HAVE_MQTT
     if (!m_connected || !m_mosq) return;
     qCDebug(lcMqtt) << "MqttClient: publish" << topic << payload;
-    mosquitto_publish(m_mosq, nullptr,
+    const int rc = mosquitto_publish(m_mosq, nullptr,
         topic.toUtf8().constData(),
         payload.size(), payload.constData(), 0, false);
+    if (rc != MOSQ_ERR_SUCCESS) {
+        qCWarning(lcMqtt) << "MqttClient: publish failed" << topic << rc;
+        return;
+    }
     emit messagePublished(topic, payload);
 #else
     Q_UNUSED(topic); Q_UNUSED(payload);
