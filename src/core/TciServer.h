@@ -147,6 +147,9 @@ private slots:
 
 private:
     void sendInitBurst(QWebSocket* client);
+    // Diagnostic: log + send a text reply to one client (per-command echoes
+    // bypass the central dispatch log, so route them here for visibility).
+    void replyText(QWebSocket* ws, const QString& msg);
     void broadcastSpotClicked(const QString& callsign, long long frequencyHz,
                               int trx, int channel);
     SliceModel* sliceForPanId(const QString& panId) const;
