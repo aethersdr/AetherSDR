@@ -36,6 +36,12 @@ namespace {
 // matches the rigctld cap.
 constexpr qint64 kMaxWsMessageBytes = 64 * 1024;
 constexpr int    kMaxClients        = 8;
+// Grace period before tearing down DAX RX after the last audio client drops.
+// A TCP drop is frequently transient (WSJT-X throws on a CAT timeout — e.g. a
+// vfo: echo delayed by an ATU tune — then reconnects within ~2s). Deferring the
+// teardown lets the stream survive the blip so audio resumes with no recreate;
+// a reconnecting client cancels it. (#3363/#3476 + Tune/ATU)
+constexpr int    kDaxReleaseGraceMs = 5000;
 }
 
 // ── TCI binary audio frame header (per ExpertSDR3 TCI spec v2.0) ────────
@@ -237,6 +243,22 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     m_meterTimer->setInterval(200);
     connect(m_meterTimer, &QTimer::timeout, this, &TciServer::broadcastStatus);
 
+    // Debounced DAX RX teardown — see scheduleDaxRelease(). Single-shot; a
+    // reconnecting audio client cancels it before it fires.
+    m_daxReleaseTimer = new QTimer(this);
+    m_daxReleaseTimer->setSingleShot(true);
+    connect(m_daxReleaseTimer, &QTimer::timeout, this, [this]() {
+        bool anyAudio = false;
+        for (const auto& cs : m_clients)
+            if (cs.audioEnabled) { anyAudio = true; break; }
+        if (anyAudio) {
+            qCWarning(lcCat) << "TCI: DAX release grace expired but an audio client is active — keeping DAX RX";
+            return;
+        }
+        qCWarning(lcCat) << "TCI: DAX release grace expired, no audio client returned — releasing DAX RX now";
+        releaseDaxForTci();
+    });
+
     // TX_CHRONO timer — sends timing frames to TCI client during TX.
     // WSJT-X only sends TX audio in response to these frames.
     //
@@ -301,6 +323,7 @@ bool TciServer::start(quint16 port)
 void TciServer::stop()
 {
     m_meterTimer->stop();
+    if (m_daxReleaseTimer) m_daxReleaseTimer->stop();  // immediate teardown below
     stopTxChrono();
 
     if (!m_server) return;
@@ -472,7 +495,7 @@ void TciServer::onClientDisconnected()
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) { anyAudio = true; break; }
             }
-            if (!anyAudio) releaseDaxForTci();
+            if (!anyAudio) scheduleDaxRelease();  // debounce: survive transient WSJT-X reconnects
             break;
         }
     }
@@ -558,6 +581,7 @@ void TciServer::onTextMessage(const QString& msg)
             }
             client.audioEnabled = true;
             client.audioReceiver = requestedReceiver;
+            cancelDaxRelease();  // a (re)connecting audio client cancels a pending teardown
             ensureDaxForTci();
             replyText(ws,cmd.trimmed() + ";");
             qCDebug(lcCat) << "TCI: audio started"
@@ -582,7 +606,7 @@ void TciServer::onTextMessage(const QString& msg)
             for (const auto& cs : m_clients) {
                 if (cs.audioEnabled) { anyAudio = true; break; }
             }
-            if (!anyAudio) releaseDaxForTci();
+            if (!anyAudio) scheduleDaxRelease();  // debounce: audio_stop is often followed by a quick audio_start
             replyText(ws,cmd.trimmed() + ";");
             qCWarning(lcCat) << "TCI: audio_stop from client"
                              << ws->peerAddress().toString()
@@ -1968,6 +1992,31 @@ void TciServer::ensureDaxForTci()
             qCInfo(lcCat) << "TCI: re-asserting dax=" << ch
                           << "on slice" << s->sliceId();
         }
+    }
+}
+
+void TciServer::scheduleDaxRelease()
+{
+    // Debounce the DAX RX teardown. A TCP client drop is frequently transient:
+    // WSJT-X throws a rig-control error (e.g. a vfo: echo delayed past its 2s
+    // timeout by an ATU tune, or a profile-load band change) and reconnects
+    // within ~2s. Tearing DAX RX down immediately turns that blip into
+    // permanent silence (#3363 / #3476 / Tune-ATU). Defer it; a reconnecting
+    // client that re-arms audio cancels the timer (cancelDaxRelease()), so the
+    // stream survives and audio resumes with no recreate. If the radio actually
+    // destroyed the streams meanwhile (profile slice recreate), the reactive
+    // "stream removed" handler keeps m_tciDaxStreamIds truthful regardless.
+    if (!m_daxReleaseTimer) { releaseDaxForTci(); return; }
+    qCWarning(lcCat) << "TCI: last audio client gone — deferring DAX RX release"
+                     << kDaxReleaseGraceMs << "ms (cancelled if a client reconnects)";
+    m_daxReleaseTimer->start(kDaxReleaseGraceMs);
+}
+
+void TciServer::cancelDaxRelease()
+{
+    if (m_daxReleaseTimer && m_daxReleaseTimer->isActive()) {
+        m_daxReleaseTimer->stop();
+        qCWarning(lcCat) << "TCI: audio client (re)armed — cancelled pending DAX RX release; stream kept alive";
     }
 }
 
