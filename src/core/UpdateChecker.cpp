@@ -27,6 +27,7 @@ void UpdateChecker::checkNow()
     req.setRawHeader("X-GitHub-Api-Version", "2022-11-28");
     req.setRawHeader("User-Agent",
         QByteArrayLiteral("AetherSDR/") + QCoreApplication::applicationVersion().toUtf8());
+    req.setTransferTimeout(15000);
 
     auto* reply = m_nam.get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply]() {
