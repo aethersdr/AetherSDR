@@ -145,15 +145,20 @@ void MqttApplet::setMqttClient(MqttClient* client)
     connect(client, &MqttClient::messagePublished, this, [this](const QString& topic, const QByteArray& payload) {
         QString shortTopic = topic.section('/', -1);
         if (shortTopic.isEmpty()) shortTopic = topic;
-        m_messageLog->append(QStringLiteral("TX %1: %2").arg(shortTopic, QString::fromUtf8(payload).left(80)));
-        QTextDocument* doc = m_messageLog->document();
-        while (doc->blockCount() > 50) {
-            QTextCursor cursor(doc->begin());
-            cursor.select(QTextCursor::BlockUnderCursor);
-            cursor.removeSelectedText();
-            cursor.deleteChar();
-        }
+        appendMessageLog(QStringLiteral("TX %1: %2").arg(shortTopic, QString::fromUtf8(payload).left(80)));
     });
+}
+
+void MqttApplet::appendMessageLog(const QString& line)
+{
+    m_messageLog->append(line);
+    QTextDocument* doc = m_messageLog->document();
+    while (doc->blockCount() > 50) {
+        QTextCursor cursor(doc->begin());
+        cursor.select(QTextCursor::BlockUnderCursor);
+        cursor.removeSelectedText();
+        cursor.deleteChar();
+    }
 }
 
 void MqttApplet::refreshSettings()
@@ -204,16 +209,7 @@ void MqttApplet::onMessageReceived(const QString& topic, const QByteArray& paylo
     if (shortTopic.isEmpty()) { shortTopic = topic; }
     const QString value = QString::fromUtf8(payload).left(80);
 
-    const QString line = QString("%1: %2").arg(shortTopic, value);
-    m_messageLog->append(line);
-
-    QTextDocument* doc = m_messageLog->document();
-    while (doc->blockCount() > 50) {
-        QTextCursor cursor(doc->begin());
-        cursor.select(QTextCursor::BlockUnderCursor);
-        cursor.removeSelectedText();
-        cursor.deleteChar();
-    }
+    appendMessageLog(QStringLiteral("%1: %2").arg(shortTopic, value));
 
     for (const auto& update : parseMqttAntennaAliasMessage(topic, payload)) {
         emit antennaAliasRequested(update.token, update.alias);

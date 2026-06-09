@@ -2008,6 +2008,10 @@ MainWindow::MainWindow(QWidget* parent)
 
     // aethersdr/radio/state — publish on PTT transitions.
     // Slice freq/mode changes are wired per-slice in setActiveSliceInternal().
+    m_radioStateCoalesceTimer.setSingleShot(true);
+    m_radioStateCoalesceTimer.setInterval(150);
+    connect(&m_radioStateCoalesceTimer, &QTimer::timeout,
+            this, &MainWindow::publishRadioStateMqtt);
     connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
             this, [this](bool) { publishRadioStateMqtt(); });
     // Debounce timer for end-of-CWX detection (queueEmpty unreliable with sync_cwx=0).
@@ -4413,12 +4417,6 @@ MainWindow::MainWindow(QWidget* parent)
     m_dialBackend->moveToThread(m_extCtrlThread);
 #endif
 
-#ifdef HAVE_MQTT
-    m_radioStateCoalesceTimer.setSingleShot(true);
-    m_radioStateCoalesceTimer.setInterval(150);
-    connect(&m_radioStateCoalesceTimer, &QTimer::timeout,
-            this, &MainWindow::publishRadioStateMqtt);
-#endif
 
     m_dialCoalesceTimer.setSingleShot(true);
     m_dialCoalesceTimer.setInterval(20);

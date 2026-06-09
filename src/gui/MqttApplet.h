@@ -41,6 +41,7 @@ signals:
 private:
     void buildUI();
     void updateStatus(const QString& text, bool ok);
+    void appendMessageLog(const QString& line);
     void onMessageReceived(const QString& topic, const QByteArray& payload);
     void rebuildButtons();
     void requestConnectFromSettings();
