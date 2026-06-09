@@ -38,10 +38,14 @@ constexpr qint64 kMaxWsMessageBytes = 64 * 1024;
 constexpr int    kMaxClients        = 8;
 // Grace period before tearing down DAX RX after the last audio client drops.
 // A TCP drop is frequently transient (WSJT-X throws on a CAT timeout — e.g. a
-// vfo: echo delayed by an ATU tune — then reconnects within ~2s). Deferring the
-// teardown lets the stream survive the blip so audio resumes with no recreate;
-// a reconnecting client cancels it. (#3363/#3476 + Tune/ATU)
-constexpr int    kDaxReleaseGraceMs = 5000;
+// vfo: echo delayed by an ATU tune — then reconnects). Deferring the teardown
+// lets the stream survive the blip so audio resumes with no recreate; a
+// reconnecting client cancels it. (#3363/#3476 + Tune/ATU)
+// Measured drop→audio_start gaps in the field repros: 2.1s / 3.3s / 3.5s —
+// and WSJT-X is slowest to reconnect mid-FT8-decode, exactly when these
+// throws happen. 10s gives ~3x margin; the cost of lingering after a genuine
+// quit is just an unconsumed stream + dax flag for a few extra seconds.
+constexpr int    kDaxReleaseGraceMs = 10000;
 }
 
 // ── TCI binary audio frame header (per ExpertSDR3 TCI spec v2.0) ────────
@@ -214,6 +218,13 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 }
                 m_tciDaxStreamIds.clear();
                 m_tciDaxBorrowedChannels.clear();
+                // Also drop the slice-assignment bookkeeping: slices are being
+                // destroyed with the connection, and a releaseDaxForTci() that
+                // runs later (e.g. the debounced grace timer firing after a
+                // quick radio reconnect) must not setDaxChannel(0) on the
+                // RECREATED slices — that would strip a profile-restored DAX
+                // assignment from a slice we no longer manage.
+                m_tciDaxSlices.clear();
                 return;
             }
             for (const auto& cs : m_clients) {
