@@ -82,9 +82,17 @@ QString TciProtocol::generateInitBurst()
     QString burst;
 
     // ── Phase 1: Initialization commands (spec section 4.1) ───────────
-    // Sent in spec order, terminated by READY.  Strict clients (notably
-    // RF2K-S amps) treat anything before READY that isn't one of the 9
-    // listed init commands as malformed and refuse to engage.
+    // Sent in spec order.  READY is NOT sent here: real ExpertSDR3
+    // transmits its complete initial state (including the audio/IQ
+    // stream parameters) and only then sends READY, and clients written
+    // against it (SDC / CW Skimmer, reported by UT4LW) latch their
+    // cached settings when READY arrives — an early READY makes them
+    // initialize from defaults (notably a wrong iq_samplerate).  The
+    // earlier early-READY rationale from #2597 ("strict clients reject
+    // non-init commands before READY") does not match the reference
+    // parser it cited: eesdr-tci aborts only on *unrecognized* command
+    // names, anywhere in the stream, and imposes no pre-READY grammar;
+    // the RF2K-S engagement fix was split_enable, not READY placement.
     burst += QStringLiteral("vfo_limits:1000,75000000;");
     burst += QStringLiteral("if_limits:-48000,48000;");
 
@@ -123,12 +131,13 @@ QString TciProtocol::generateInitBurst()
     burst += QStringLiteral("receive_only:false;");
     burst += QStringLiteral("modulations_list:usb,lsb,cw,cwr,am,sam,fm,nfm,digu,digl,rtty;");
     burst += QStringLiteral("protocol:ExpertSDR3,1.5;");
-    burst += QStringLiteral("ready;");
 
     // ── Phase 2: Current state notifications ──────────────────────────
-    // After READY these are plain event notifications, indistinguishable
-    // from the events fired by a live tuning operation.  All current TCI
-    // clients (WSJT-X, JTDX, aether_pad) should process them identically.
+    // Identical in syntax to the events fired by a live tuning
+    // operation; clients cache them whether they arrive before or after
+    // READY (verified in WSJT-X TCITransceiver.cpp, which parses every
+    // command on arrival and uses READY only to advance its own init
+    // state machine).
     if (m_model) {
         for (auto* s : slices) {
             int trx = tciTrxForSlice(m_model, s);
@@ -218,16 +227,23 @@ QString TciProtocol::generateInitBurst()
     }
 
     // ── Phase 3: Audio / IQ stream configuration ──────────────────────
-    // After READY and after current state — these are clients-of-audio
-    // concerns (WSJT-X), and irrelevant to control-only clients like
-    // amplifiers.  Sending them post-READY keeps strict amp clients
-    // happy without breaking WSJT-X's TX audio FIFO setup.
+    // Last of the settings: clients-of-audio concerns (WSJT-X, CW
+    // Skimmer / SDC), irrelevant to control-only clients like
+    // amplifiers — which simply cache or ignore them pre-READY.
     burst += QStringLiteral("audio_samplerate:48000;");
     burst += QStringLiteral("audio_stream_sample_type:float32;");
     burst += QStringLiteral("audio_stream_channels:2;");
     burst += QStringLiteral("audio_stream_samples:2048;");
     burst += QStringLiteral("tx_stream_audio_buffering:50;");
     burst += QStringLiteral("iq_samplerate:48000;");
+
+    // READY terminates the settings dump — it must follow EVERY setting
+    // (in particular iq_samplerate), because SDC / CW Skimmer reads its
+    // cached settings the moment READY arrives.  Matches real
+    // ExpertSDR3 behavior and the spec's READY definition ("sent after
+    // the initialization commands").  Reported by Yuri UT4LW.
+    burst += QStringLiteral("ready;");
+
     // audio_start primes WSJT-X's TCI audio state machine so it sends
     // audio_start:0 back to request RX audio streaming.
     burst += QStringLiteral("audio_start;");
