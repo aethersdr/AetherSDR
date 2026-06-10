@@ -66,6 +66,18 @@ bool isPassiveLocalSpotId(int spotIndex);
 QString memorySpotLabel(const MemoryEntry& memory);
 QString memorySpotComment(const MemoryEntry& memory);
 
+// ─── CW momentary action registry IDs ────────────────────────────────────────
+//
+// Shared between the keyboard-shortcut registry (MainWindow.cpp), the MIDI
+// param registry, and the HID action dispatch (MainWindow_Controllers.cpp).
+
+inline constexpr const char* kCwStraightKeyActionId = "cwkey";
+inline constexpr const char* kCwLeftPaddleActionId = "cwdit";
+inline constexpr const char* kCwRightPaddleActionId = "cwdah";
+inline constexpr const char* kCwStraightKeyActionName = "Trigger straight key";
+inline constexpr const char* kCwLeftPaddleActionName = "Trigger CW Left Paddle";
+inline constexpr const char* kCwRightPaddleActionName = "Trigger CW Right Paddle";
+
 // ─── Misc UI ─────────────────────────────────────────────────────────────────
 
 QPixmap buildBandStackIndicatorPixmap(bool active);
