@@ -224,6 +224,7 @@ private:
     void buildUI();
     void buildMenuBar();
     void applyDarkTheme();
+    void updateStatusBarMinimumWidth();
 
     // Audio thread helpers — invoke AudioEngine methods on the worker thread (#502)
     void audioStartRx();
@@ -792,6 +793,7 @@ private:
     QLabel* m_txIndicator{nullptr};
     QLabel* m_gpsDateLabel{nullptr};
     QLabel* m_gpsTimeLabel{nullptr};
+    QWidget* m_statusBarContainer{nullptr};
 
     // Active slice tracking for multi-slice support
     int m_activeSliceId{-1};

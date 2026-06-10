@@ -258,6 +258,35 @@ constexpr int kPanadapterSliceCapacityStatusMs = 4000;
 constexpr const char* kSuppressAudioDeviceNotificationsKey =
     "SuppressAudioDeviceNotifications";
 constexpr int kTMate2DefaultUserInteractionTimeoutMs = 2000;
+constexpr const char* kStatusBarCompactLabelObjectName = "statusBarCompactLabel";
+
+QString statusBarCompactLabelStyle(const QString& color)
+{
+    return QStringLiteral(
+        "QLabel#statusBarCompactLabel { color: %1; font-size: 12px; background: transparent; }")
+        .arg(color);
+}
+
+void applyStatusBarCompactLabelStyle(QLabel* label, const QString& color)
+{
+    if (!label) {
+        return;
+    }
+
+    label->setObjectName(kStatusBarCompactLabelObjectName);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(label, statusBarCompactLabelStyle(color));
+}
+
+void setStatusBarStationText(QLabel* label, const QString& text)
+{
+    if (!label) {
+        return;
+    }
+
+    label->setText(text);
+    label->ensurePolished();
+    label->setMinimumWidth(label->sizeHint().width() + 2);
+}
 
 #ifdef HAVE_HIDAPI
 // tmate2*DefaultAction helpers moved to MainWindow_Controllers.cpp (#3351 Phase 2a).
@@ -1637,8 +1666,10 @@ MainWindow::MainWindow(QWidget* parent)
 
         // Update station label (nickname arrives via status after connect)
         const QString nick = m_radioModel.nickname();
-        if (!nick.isEmpty())
-            m_stationLabel->setText(nick);
+        if (!nick.isEmpty()) {
+            setStatusBarStationText(m_stationLabel, nick);
+            updateStatusBarMinimumWidth();
+        }
     });
 
     auto normalizeOscillatorValue = [](QString value) {
@@ -2627,6 +2658,25 @@ void MainWindow::resizeEvent(QResizeEvent* event)
         m_sizeGrip->move(width() - s - 1, height() - s - 1);
         m_sizeGrip->raise();
     }
+}
+
+void MainWindow::updateStatusBarMinimumWidth()
+{
+    if (m_minimalMode || !m_statusBarContainer || statusBar()->isHidden()) {
+        return;
+    }
+
+    if (QLayout* layout = m_statusBarContainer->layout()) {
+        layout->activate();
+    }
+    m_statusBarContainer->updateGeometry();
+    statusBar()->updateGeometry();
+
+    const int sizeGripAllowance =
+        (m_sizeGrip && m_sizeGrip->isVisible()) ? m_sizeGrip->width() + 4 : 4;
+    const int statusMinWidth =
+        m_statusBarContainer->minimumSizeHint().width() + sizeGripAllowance;
+    setMinimumSize(qMax(1024, statusMinWidth), qMax(400, minimumHeight()));
 }
 
 #if defined(Q_OS_WIN)
@@ -3984,7 +4034,7 @@ void MainWindow::buildUI()
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
     AetherSDR::ThemeManager::instance().applyStyleSheet(statusBar(), "QStatusBar { background: {{color.background.0}}; border-top: 1px solid {{color.background.1}}; }"
         "QStatusBar::item { border: none; }"
-        "QLabel { font-size: 21px; background: transparent; }");
+        "QLabel { background: transparent; }");
 
     const QString valStyle  = "QLabel { color: #8aa8c0; font-size: 21px; }";
     const QString sepStyle  = "QLabel { color: #304050; font-size: 21px; }";
@@ -3996,8 +4046,8 @@ void MainWindow::buildUI()
 
     // Use a container with HBoxLayout for 3-section layout:
     // [left items] → stretch → [STATION centered] → stretch → [right items]
-    auto* container = new QWidget(this);
-    auto* hbox = new QHBoxLayout(container);
+    m_statusBarContainer = new QWidget(this);
+    auto* hbox = new QHBoxLayout(m_statusBarContainer);
     hbox->setContentsMargins(6, 0, 6, 0);
     hbox->setSpacing(6);
 
@@ -4111,10 +4161,10 @@ void MainWindow::buildUI()
     radioVbox->setSpacing(0);
     radioVbox->setAlignment(Qt::AlignVCenter);
     m_radioInfoLabel = new QLabel("");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_radioInfoLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(m_radioInfoLabel, QStringLiteral("{{color.text.secondary}}"));
     m_radioInfoLabel->setAlignment(Qt::AlignCenter);
     m_radioVersionLabel = new QLabel("");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_radioVersionLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(m_radioVersionLabel, QStringLiteral("{{color.text.secondary}}"));
     m_radioVersionLabel->setAlignment(Qt::AlignCenter);
     radioVbox->addWidget(m_radioInfoLabel);
     radioVbox->addWidget(m_radioVersionLabel);
@@ -4127,6 +4177,8 @@ void MainWindow::buildUI()
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_stationNickLabel, "QLabel { color: {{color.text.primary}}; font-size: 21px; background: {{color.background.0}}; "
         "border: 1px solid rgba(255,255,255,128); padding: 2px 12px; }");
     m_stationNickLabel->setAlignment(Qt::AlignCenter);
+    m_stationNickLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+    setStatusBarStationText(m_stationNickLabel, m_stationNickLabel->text());
     m_stationNickLabel->setCursor(Qt::PointingHandCursor);
     m_stationNickLabel->setToolTip("Double-click to connect/disconnect");
     m_stationNickLabel->installEventFilter(this);
@@ -4148,10 +4200,10 @@ void MainWindow::buildUI()
     gpsVbox->setSpacing(0);
     gpsVbox->setAlignment(Qt::AlignVCenter);
     m_gpsLabel = new QLabel("");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(m_gpsLabel, QStringLiteral("{{color.text.secondary}}"));
     m_gpsLabel->setAlignment(Qt::AlignCenter);
     m_gpsStatusLabel = new QLabel("");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsStatusLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(m_gpsStatusLabel, QStringLiteral("{{color.text.secondary}}"));
     m_gpsStatusLabel->setAlignment(Qt::AlignCenter);
     gpsVbox->addWidget(m_gpsLabel);
     gpsVbox->addWidget(m_gpsStatusLabel);
@@ -4168,11 +4220,11 @@ void MainWindow::buildUI()
         cpuVbox->setSpacing(0);
         cpuVbox->setAlignment(Qt::AlignVCenter);
         m_cpuLabel = new QLabel("CPU: \u2014");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_cpuLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+        applyStatusBarCompactLabelStyle(m_cpuLabel, QStringLiteral("{{color.text.secondary}}"));
         m_cpuLabel->setAlignment(Qt::AlignCenter);
         m_cpuLabel->setToolTip("AetherSDR process CPU usage");
         m_memLabel = new QLabel("Mem: \u2014");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_memLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
+        applyStatusBarCompactLabelStyle(m_memLabel, QStringLiteral("{{color.text.label}}"));
         m_memLabel->setAlignment(Qt::AlignCenter);
 #if defined(Q_OS_WIN)
         m_memLabel->setToolTip("AetherSDR process working set (matches Task Manager)");
@@ -4234,7 +4286,7 @@ void MainWindow::buildUI()
                 if (cpuPct >= 80.0) color = "#e05050";
                 else if (cpuPct >= 50.0) color = "#f0c040";
                 m_cpuLabel->setText(QString("CPU: %1%").arg(cpuPct, 0, 'f', 1));
-                m_cpuLabel->setStyleSheet(QString("QLabel { color: %1; font-size: 12px; }").arg(color));
+                applyStatusBarCompactLabelStyle(m_cpuLabel, color);
             }
 
             // Memory: report the "what the OS sees right now" footprint, not the
@@ -4287,13 +4339,13 @@ void MainWindow::buildUI()
     paVbox->setSpacing(0);
     paVbox->setAlignment(Qt::AlignVCenter);
     m_paTempLabel = new QLabel("");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_paTempLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(m_paTempLabel, QStringLiteral("{{color.text.secondary}}"));
     m_paTempLabel->setAlignment(Qt::AlignCenter);
     m_paTempLabel->setCursor(Qt::PointingHandCursor);
     m_paTempLabel->installEventFilter(this);
     updatePaTempLabel();
     m_supplyVoltLabel = new QLabel("");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_supplyVoltLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(m_supplyVoltLabel, QStringLiteral("{{color.text.label}}"));
     m_supplyVoltLabel->setAlignment(Qt::AlignCenter);
     paVbox->addWidget(m_paTempLabel);
     paVbox->addWidget(m_supplyVoltLabel);
@@ -4310,11 +4362,11 @@ void MainWindow::buildUI()
     netVbox->setSpacing(0);
     netVbox->setAlignment(Qt::AlignVCenter);
     auto* netTitle = new QLabel("Network:");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(netTitle, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(netTitle, QStringLiteral("{{color.text.secondary}}"));
     netTitle->setAlignment(Qt::AlignCenter);
     netVbox->addWidget(netTitle);
     m_networkLabel = new QLabel("");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_networkLabel, "QLabel { color: {{color.text.label}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(m_networkLabel, QStringLiteral("{{color.text.label}}"));
     m_networkLabel->setTextFormat(Qt::RichText);
     m_networkLabel->setAlignment(Qt::AlignCenter);
     m_networkLabel->setToolTip(buildNetworkTooltip(m_radioModel));
@@ -4430,18 +4482,19 @@ void MainWindow::buildUI()
     timeVbox->setSpacing(0);
     timeVbox->setAlignment(Qt::AlignVCenter);
     m_gpsDateLabel = new QLabel("");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsDateLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(m_gpsDateLabel, QStringLiteral("{{color.text.secondary}}"));
     m_gpsDateLabel->setAlignment(Qt::AlignCenter);
     m_gpsDateLabel->setMinimumWidth(kTelemetryStackMinWidth);
     m_gpsTimeLabel = new QLabel("");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_gpsTimeLabel, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    applyStatusBarCompactLabelStyle(m_gpsTimeLabel, QStringLiteral("{{color.text.secondary}}"));
     m_gpsTimeLabel->setAlignment(Qt::AlignCenter);
     m_gpsTimeLabel->setMinimumWidth(kTelemetryStackMinWidth);
     timeVbox->addWidget(m_gpsDateLabel);
     timeVbox->addWidget(m_gpsTimeLabel);
     hbox->addWidget(timeStack);
 
-    statusBar()->addWidget(container, 1);
+    statusBar()->addWidget(m_statusBarContainer, 1);
+    updateStatusBarMinimumWidth();
     updateBandStackIndicator();
 
     // S History Markers expiry — sweeps stale detections once per second
@@ -4639,7 +4692,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_layoutRestoreUntilMs = kPanLayoutRestoreWaitingForFirstPan;
         m_radioInfoLabel->setText(m_radioModel.model());
         m_radioVersionLabel->setText(m_radioModel.version());
-        m_stationLabel->setText(m_radioModel.nickname());
+        setStatusBarStationText(m_stationLabel, m_radioModel.nickname());
+        updateStatusBarMinimumWidth();
         m_connStatusLabel->setText("Connected");
         m_connPanel->setStatusText("Connected");
 
@@ -4924,7 +4978,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_connStatusLabel->setText("Disconnected");
         m_radioInfoLabel->setText("");
         m_radioVersionLabel->setText("");
-        m_stationLabel->setText("N0CALL");
+        setStatusBarStationText(m_stationLabel, QStringLiteral("N0CALL"));
+        updateStatusBarMinimumWidth();
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_tnfIndicator, "QLabel { color: {{color.background.2}}; font-weight: bold; font-size: 24px; }");
         m_tnfIndicator->setToolTip(buildTnfTooltip(m_radioModel.tnfModel()));
         if (auto* bandStackPanel = m_panStack ? m_panStack->bandStackPanel() : nullptr) {
@@ -4945,6 +5000,7 @@ void MainWindow::onConnectionStateChanged(bool connected)
         m_pgxlConn.disconnect();
         m_pgxlContainer->setVisible(false);
         m_pgxlSeparator->setVisible(false);
+        updateStatusBarMinimumWidth();
         m_txIndicator->setStyleSheet("QLabel { color: rgba(255,255,255,128); font-weight: bold; font-size: 21px; }");
         m_txIndicator->setText("TX");
         m_connPanel->setStatusText("Not connected");
@@ -7060,6 +7116,7 @@ void MainWindow::toggleMinimalMode(bool on)
         // Restore title bar and status bar
         m_titleBar->setMinimalMode(false);
         statusBar()->show();
+        updateStatusBarMinimumWidth();
 
         // Restore full geometry
         QByteArray geom = QByteArray::fromBase64(
