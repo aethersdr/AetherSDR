@@ -634,6 +634,7 @@ set(MODEL_SOURCES
 
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
+    src/gui/MainWindowHelpers.cpp
     src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
     src/gui/ConnectionPanel.cpp
