@@ -263,6 +263,22 @@ static QString formatFlagFrequency(double freqMhz)
         .arg(hzPart, 3, 10, QChar('0'));
 }
 
+static QString formatFreqScaleLabel(double freqMhz, int decimals)
+{
+    QString label = QString::number(freqMhz, 'f', decimals);
+    const qsizetype dot = label.indexOf(QLatin1Char('.'));
+    if (dot < 0) {
+        return label;
+    }
+
+    const qsizetype minDecimals = std::min(decimals, 3);
+    const qsizetype minLength = dot + 1 + minDecimals;
+    while (label.size() > minLength && label.endsWith(QLatin1Char('0'))) {
+        label.chop(1);
+    }
+    return label;
+}
+
 // ─── Waterfall color scheme gradient cache ────────────────────────────────────
 //
 // The five preset schemes (Default, Grayscale, Blue-Green, Fire, Plasma) used
@@ -7824,7 +7840,6 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
     int decimals;
     if      (stepMhz < 0.0001) decimals = 6;
     else if (stepMhz < 0.001)  decimals = 5;
-    else if (stepMhz < 0.01)   decimals = 4;
     else if (stepMhz < 1.0)    decimals = 3;
     else                        decimals = 2;
 
@@ -7848,7 +7863,7 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
         // Label only every Nth line to prevent overlap
         if (stepIdx % labelEvery != 0) continue;
 
-        const QString label = QString::number(freq, 'f', decimals);
+        const QString label = formatFreqScaleLabel(freq, decimals);
         const int tw = fm.horizontalAdvance(label);
         const int lx = qBound(0, x - tw / 2, width() - tw);
 
