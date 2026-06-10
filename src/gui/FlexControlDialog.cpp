@@ -257,6 +257,7 @@ const FlexActionDef kFlexActions[] = {
     {"WheelRit", "RIT (Receive Incremental Tuning)"},
     {"WheelXit", "XIT (Transmit Incremental Tuning)"},
     {"WheelVolume", "Master Volume"},
+    {"WheelSliceAudio", "Slice Audio Volume"},
     {"WheelHeadphoneVolume", "Headphone Volume"},
     {"WheelAgcT", "AGCT (Automatic Gain Control Threshold)"},
     {"WheelApf", "APF (Audio Peaking Filter)"},
@@ -452,6 +453,7 @@ bool isWheelActionId(const QString& actionId)
         // so saved bindings made before consolidation still register as
         // wheel actions in this predicate.
         || actionId == QLatin1String("WheelMasterAf")
+        || actionId == QLatin1String("WheelSliceAudio")
         || actionId == QLatin1String("WheelPower")
         || actionId == QLatin1String("WheelRit")
         || actionId == QLatin1String("WheelXit")

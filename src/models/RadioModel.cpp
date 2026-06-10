@@ -4811,8 +4811,13 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
 void RadioModel::setLineoutGain(int v)
 {
     v = std::clamp(v, 0, 100);
+    if (m_lineoutGain == v) {
+        return;
+    }
+    m_lineoutGain = v;
     qCDebug(lcAudio) << "setLineoutGain:" << v;
     sendCmd(QString("mixer lineout gain %1").arg(v));
+    emit audioOutputChanged();
 }
 
 void RadioModel::setLineoutMute(bool m)
@@ -4824,8 +4829,13 @@ void RadioModel::setLineoutMute(bool m)
 void RadioModel::setHeadphoneGain(int v)
 {
     v = std::clamp(v, 0, 100);
+    if (m_headphoneGain == v) {
+        return;
+    }
+    m_headphoneGain = v;
     qCDebug(lcAudio) << "setHeadphoneGain:" << v;
     sendCmd(QString("mixer headphone gain %1").arg(v));
+    emit audioOutputChanged();
 }
 
 void RadioModel::setHeadphoneMute(bool m)

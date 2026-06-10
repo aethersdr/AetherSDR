@@ -67,6 +67,8 @@ bool flexWheelModeForAction(const QString& actionName, FlexWheelMode& mode)
         // Back-compat for saved FlexControl bindings made before #2986
         // consolidation.  Routes to the same Volume mode (master volume).
         mode = FlexWheelMode::Volume;
+    } else if (actionName == QLatin1String("WheelSliceAudio")) {
+        mode = FlexWheelMode::SliceAudio;
     } else if (actionName == QLatin1String("WheelHeadphoneVolume")) {
         mode = FlexWheelMode::HeadphoneVolume;
     } else if (actionName == QLatin1String("WheelAgcT")) {
@@ -249,6 +251,9 @@ void MainWindow::handleFlexControlTuneSteps(int steps)
         break;
     case FlexWheelMode::Xit:
         applyFlexControlWheelAction(QStringLiteral("WheelXit"), steps);
+        break;
+    case FlexWheelMode::SliceAudio:
+        applyFlexControlWheelAction(QStringLiteral("WheelSliceAudio"), steps);
         break;
     case FlexWheelMode::HeadphoneVolume:
         applyFlexControlWheelAction(QStringLiteral("WheelHeadphoneVolume"), steps);
@@ -966,6 +971,7 @@ void MainWindow::refreshStreamDeckLabels()
         {QStringLiteral("WheelRit"),            QStringLiteral("RIT")},
         {QStringLiteral("WheelXit"),            QStringLiteral("XIT")},
         {QStringLiteral("WheelVolume"),         QStringLiteral("VOL")},
+        {QStringLiteral("WheelSliceAudio"),     QStringLiteral("S.VOL")},
         {QStringLiteral("WheelHeadphoneVolume"),QStringLiteral("H.VOL")},
         {QStringLiteral("WheelAgcT"),           QStringLiteral("AGC-T")},
         {QStringLiteral("WheelApf"),            QStringLiteral("APF")},
@@ -1126,6 +1132,14 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 #ifdef HAVE_HIDAPI
         triggerTMate2Overlay(TMate2Overlay::Volume, next);
 #endif
+    } else if (actionId == "WheelSliceAudio") {
+        if (auto* s = activeSlice()) {
+            const float next = std::clamp(s->audioGain() + steps * 2.0f, 0.0f, 100.0f);
+            s->setAudioGain(next);
+#ifdef HAVE_HIDAPI
+            triggerTMate2Overlay(TMate2Overlay::Volume, static_cast<int>(next));
+#endif
+        }
     } else if (actionId == "WheelHeadphoneVolume") {
         const int next = std::clamp(m_radioModel.headphoneGain() + steps * 2, 0, 100);
         if (m_titleBar)
@@ -1213,6 +1227,8 @@ QJsonObject MainWindow::buildControlDevicesSnapshot() const
         case FlexWheelMode::Power:     return QStringLiteral("Power");
         case FlexWheelMode::Rit:       return QStringLiteral("Rit");
         case FlexWheelMode::Xit:       return QStringLiteral("Xit");
+        case FlexWheelMode::SliceAudio:
+            return QStringLiteral("SliceAudio");
         case FlexWheelMode::HeadphoneVolume:
             return QStringLiteral("HeadphoneVolume");
         case FlexWheelMode::AgcT:      return QStringLiteral("AgcT");
