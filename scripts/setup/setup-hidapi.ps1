@@ -58,9 +58,16 @@ Copy-Item "$($srcDir.FullName)\hidapi\hidapi.h" "$OutDir\include\hidapi\"
 Write-Host "Building hidapi from source with MSVC..." -ForegroundColor Cyan
 
 $buildDir = "$($srcDir.FullName)\build"
+# CMAKE_POLICY_VERSION_MINIMUM: hidapi 0.14.0's CMakeLists declares a
+# cmake_minimum_required below 3.5, which CMake 4.x (on GitHub's
+# windows-latest runner image since 2026-06-10) refuses outright. The
+# override tells CMake to configure with 3.5 policy semantics — the build
+# itself is unaffected. Drop this once hidapi is bumped to a release with
+# a modern minimum.
 cmake -B $buildDir -S $srcDir.FullName -G "Ninja" `
     -DCMAKE_BUILD_TYPE=Release `
-    -DBUILD_SHARED_LIBS=ON
+    -DBUILD_SHARED_LIBS=ON `
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
 
 cmake --build $buildDir --config Release -j $env:NUMBER_OF_PROCESSORS
 
