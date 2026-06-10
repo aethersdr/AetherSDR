@@ -64,10 +64,15 @@ $buildDir = "$($srcDir.FullName)\build"
 # override tells CMake to configure with 3.5 policy semantics — the build
 # itself is unaffected. Drop this once hidapi is bumped to a release with
 # a modern minimum.
+#
+# The flag MUST be quoted: PowerShell's native-argument tokenizer splits
+# an unquoted -Dkey=3.5 at the dot, so CMake receives "3" and rejects it
+# ("Invalid CMAKE_POLICY_VERSION_MINIMUM value"). The other -D flags only
+# survive unquoted because their values contain no dot.
 cmake -B $buildDir -S $srcDir.FullName -G "Ninja" `
     -DCMAKE_BUILD_TYPE=Release `
     -DBUILD_SHARED_LIBS=ON `
-    -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+    "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
 
 cmake --build $buildDir --config Release -j $env:NUMBER_OF_PROCESSORS
 
