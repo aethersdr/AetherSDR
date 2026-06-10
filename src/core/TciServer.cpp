@@ -326,7 +326,10 @@ void TciServer::broadcastMasterVolume(int pct)
 {
     if (pct < 0)   pct = 0;
     if (pct > 100) pct = 100;
-    broadcast(QStringLiteral("volume:%1;").arg(pct));
+    // Wire scale is dB (-60..0) per the TCI spec; pct is the internal
+    // 0-100 amplitude from the title bar slider / applyMasterVolume.
+    broadcast(QStringLiteral("volume:%1;")
+                  .arg(TciProtocol::volumeDbFromPercent(pct)));
 }
 
 void TciServer::setTxGain(float gain)

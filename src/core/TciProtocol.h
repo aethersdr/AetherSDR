@@ -34,6 +34,13 @@ public:
     // Per TCI v2.0 spec, `volume:N;` is the global master volume command.
     int pendingMasterVolume() const { return m_pendingMasterVolume; }
 
+    // TCI VOLUME wire scale is dB (-60..0, -60 = silence) per spec;
+    // AetherSDR's internal master volume is 0-100 percent amplitude.
+    // Conversions used by cmdVolume, the init burst, and TciServer's
+    // master-volume broadcast.
+    static int volumeDbFromPercent(int pct);
+    static int volumePercentFromDb(double db);
+
     // After handleCommand(), if the command was a `tx_gain:N;` SET, this
     // returns the requested TCI TX gain (0-100); -1 means no change. TciServer
     // reads it and applies it via setTxGain() — TciProtocol can't reach

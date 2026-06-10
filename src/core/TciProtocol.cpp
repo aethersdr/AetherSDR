@@ -10,6 +10,7 @@
 
 #include <QList>
 #include <QMetaObject>
+#include <algorithm>
 #include <cmath>
 
 namespace AetherSDR {
@@ -209,12 +210,15 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("trx:%1,%2;").arg(txTrx).arg(isTx ? "true" : "false");
 
         // Master AF volume — whole-radio (no trx prefix), same saved value
-        // cmdVolume's GET returns. Without it the init burst seeds drive/
-        // mic_level but not AF, so a client's local mirror starts at a default
-        // guess and the first AF-gain step jumps to that guess instead of the
-        // radio's real level (Ulanzi/Elgato/StreamController gain steppers).
+        // cmdVolume's GET returns, reported in dB per the TCI spec
+        // (-60..0; ExpertSDR3 wire scale). Without it the init burst seeds
+        // drive/mic_level but not AF, so a client's local mirror starts at
+        // a default guess and the first AF-gain step jumps to that guess
+        // instead of the radio's real level (Ulanzi/Elgato/StreamController
+        // gain steppers).
         burst += QStringLiteral("volume:%1;")
-                     .arg(AppSettings::instance().value("MasterVolume", "100").toInt());
+                     .arg(volumeDbFromPercent(
+                         AppSettings::instance().value("MasterVolume", "100").toInt()));
     }
 
     // ── Phase 3: Audio / IQ stream configuration ──────────────────────
@@ -857,7 +861,19 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
 // volume goes through the separate `rx_volume` command (cmdRxVolume).
 //
 // Spec form:  GET = `volume;`  (no args)
-//             SET = `volume:N;` (1 arg, 0-100)
+//             SET = `volume:N;` (1 arg, dB, -60..0; -60 = silence)
+//
+// Wire scale is dB per TCI Protocol v2.0 ("The range of values is from
+// -60 to 0 dB, at a value of -60 dB there is no sound") — real
+// ExpertSDR3 sends e.g. `VOLUME:-12;`.  Internally AetherSDR's master
+// volume is a 0-100 percent amplitude (title bar slider /
+// applyMasterVolume), so the dB<->percent conversion happens here at
+// the wire and everything inboard stays percent.
+//
+// Legacy compat: values >= 1 cannot be dB (the spec range is
+// non-positive), so they are accepted as the old AetherSDR percent
+// scale — existing percent senders keep working.  `volume:0` is 0 dB =
+// full volume per spec (mute belongs to the `mute:` command).
 //
 // We also accept the legacy TRX-prefixed form `volume:trx,N;` for
 // backward compatibility — the trx is ignored since master volume is
@@ -870,23 +886,46 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
 // level in m_pendingMasterVolume; TciServer reads it after handleCommand
 // and forwards the request to MainWindow via signal, mirroring the path
 // taken by the title bar's masterVolumeChanged signal.
+
+int TciProtocol::volumeDbFromPercent(int pct)
+{
+    if (pct <= 0) return -60;
+    if (pct > 100) pct = 100;
+    const int db = static_cast<int>(std::lround(20.0 * std::log10(pct / 100.0)));
+    return std::clamp(db, -60, 0);
+}
+
+int TciProtocol::volumePercentFromDb(double db)
+{
+    if (db <= -60.0) return 0;
+    if (db > 0.0) db = 0.0;
+    const int pct = static_cast<int>(std::lround(100.0 * std::pow(10.0, db / 20.0)));
+    // Integer percent can't resolve below -40 dB; floor at 1 so only
+    // -60 dB (the spec's explicit silence point) maps to mute.
+    return std::clamp(pct, 1, 100);
+}
+
 QString TciProtocol::cmdVolume(const QStringList& args, bool /*isSet*/)
 {
     if (args.isEmpty()) {
         // GET — current master volume from saved settings (the same value
-        // the title bar slider reads on startup).
+        // the title bar slider reads on startup), reported in dB.
         int pct = AppSettings::instance()
                       .value("MasterVolume", "100").toInt();
-        return QStringLiteral("volume:%1;").arg(pct);
+        return QStringLiteral("volume:%1;").arg(volumeDbFromPercent(pct));
     }
 
     // SET — accept either spec form (1 arg) or legacy trx-prefixed (2+ args).
-    int vol = args[args.size() == 1 ? 0 : 1].toInt();
-    if (vol < 0)   vol = 0;
-    if (vol > 100) vol = 100;
-    m_pendingMasterVolume = vol;
+    const double val = args[args.size() == 1 ? 0 : 1].toDouble();
+    const int pct = (val >= 1.0)
+        ? std::min(static_cast<int>(std::lround(val)), 100)  // legacy percent
+        : volumePercentFromDb(val);                          // spec dB
+    m_pendingMasterVolume = pct;
 
-    m_pendingNotification = QStringLiteral("volume:%1;").arg(vol);
+    // Echo in dB (round-tripped through the percent store so the echo
+    // matches what a subsequent GET would return).
+    m_pendingNotification =
+        QStringLiteral("volume:%1;").arg(volumeDbFromPercent(pct));
     return {};
 }
 
