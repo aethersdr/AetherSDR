@@ -1383,6 +1383,24 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         ++row;
     }
 
+    // ── Freq scale text size dropdown (#3501) ───────────────────────────
+    {
+        auto* lbl = new QLabel("Scale text:");
+        lbl->setStyleSheet(labelStyle);
+        grid->addWidget(lbl, row, 0);
+        m_freqScaleFontCmb = new QComboBox;
+        m_freqScaleFontCmb->setFixedHeight(18);
+        applyComboStyle(m_freqScaleFontCmb);
+        for (int pt : {8, 9, 10, 11, 12, 14})
+            m_freqScaleFontCmb->addItem(QString("%1 pt").arg(pt), pt);
+        grid->addWidget(m_freqScaleFontCmb, row, 1, 1, 3);
+        connect(m_freqScaleFontCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this](int idx) {
+            emit freqScaleFontPtChanged(m_freqScaleFontCmb->itemData(idx).toInt());
+        });
+        ++row;
+    }
+
     // ── Scheme dropdown ───────────────────────────────────────────────────
     {
         auto* lbl = new QLabel("Scheme:");
@@ -1424,6 +1442,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_rateSlider->setToolTip("Waterfall rate. 1% = slowest; 100% = fastest.");
     if (m_wfBlankerThreshSlider) m_wfBlankerThreshSlider->setToolTip("Waterfall noise blanking threshold. Higher values blank more aggressively.");
     if (m_freqGridSpacingCmb) m_freqGridSpacingCmb->setToolTip("Frequency grid line spacing. Auto adapts to the current span.");
+    if (m_freqScaleFontCmb) m_freqScaleFontCmb->setToolTip("Text size of the frequency scale labels. The scale strip grows to fit larger sizes.");
     if (m_colorSchemeCmb) m_colorSchemeCmb->setToolTip("Selects the waterfall color palette.");
     if (m_bgOpacitySlider) m_bgOpacitySlider->setToolTip("Opacity of the background image overlay.");
     if (m_floorEnableBtn) m_floorEnableBtn->setToolTip("Shows a noise floor reference line on the spectrum display.");
@@ -1525,13 +1544,19 @@ void SpectrumOverlayMenu::syncWfLineDuration(int rate)
 void SpectrumOverlayMenu::syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                                     int bgOpacity,
                                                     int freqGridSpacingKhz,
-                                                    const QColor& bgFillColor)
+                                                    const QColor& bgFillColor,
+                                                    int freqScaleFontPt)
 {
     if (m_freqGridSpacingCmb) {
         QSignalBlocker b(m_freqGridSpacingCmb);
         int idx = m_freqGridSpacingCmb->findData(freqGridSpacingKhz);
         if (idx >= 0) m_freqGridSpacingCmb->setCurrentIndex(idx);
         else          m_freqGridSpacingCmb->setCurrentIndex(0);  // Auto
+    }
+    if (m_freqScaleFontCmb) {
+        QSignalBlocker b(m_freqScaleFontCmb);
+        int idx = m_freqScaleFontCmb->findData(freqScaleFontPt);
+        m_freqScaleFontCmb->setCurrentIndex(idx >= 0 ? idx : 0);  // 8 pt default
     }
     if (m_wfBlankerBtn) {
         QSignalBlocker b(m_wfBlankerBtn);

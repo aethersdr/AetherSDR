@@ -14083,6 +14083,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setShowGrid);
     connect(menu, &SpectrumOverlayMenu::freqGridSpacingChanged,
             sw, &SpectrumWidget::setFreqGridSpacing);
+    connect(menu, &SpectrumOverlayMenu::freqScaleFontPtChanged,
+            sw, &SpectrumWidget::setFreqScaleFontPt);
     connect(menu, &SpectrumOverlayMenu::fftLineWidthChanged,
             sw, &SpectrumWidget::setFftLineWidth);
     connect(menu, &SpectrumOverlayMenu::noiseFloorPositionChanged,
@@ -14260,7 +14262,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // waiting for the next syncExtraDisplaySettings round.
         menu->syncExtraDisplaySettings(sw->wfBlankerEnabled(),
             sw->wfBlankerThreshold(), sw->backgroundOpacity(),
-            sw->freqGridSpacing(), c);
+            sw->freqGridSpacing(), c, sw->freqScaleFontPt());
     });
     connect(menu, &SpectrumOverlayMenu::displaySettingsReset,
             this, [this, applet, sw, menu] {
@@ -14287,6 +14289,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setNoiseFloorEnable(false);
         sw->setNoiseFloorPosition(75);
         sw->setFreqGridSpacing(0);  // Auto (#1390)
+        sw->setFreqScaleFontPt(8);  // default scale text size (#3501)
 
         // Radio commands for radio-authoritative display settings.
         // fps and line_duration are suppressed while adaptive throttle is active

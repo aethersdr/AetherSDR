@@ -54,7 +54,8 @@ public:
     void syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                   int bgOpacity,
                                   int freqGridSpacingKhz = 0,
-                                  const QColor& bgFillColor = QColor());
+                                  const QColor& bgFillColor = QColor(),
+                                  int freqScaleFontPt = 8);
 
     // Set the panadapter ID this overlay belongs to (for +RX routing).
     void setPanId(const QString& id);
@@ -113,6 +114,7 @@ signals:
     void fftHeatMapChanged(bool on);
     void showGridChanged(bool on);
     void freqGridSpacingChanged(int khz);
+    void freqScaleFontPtChanged(int pt);
     void fftLineWidthChanged(float width);
     void wfColorGainChanged(int gain);
     void wfBlackLevelChanged(int level);
@@ -268,6 +270,7 @@ private:
     QPushButton* m_floorEnableBtn{nullptr};
 
     QComboBox*   m_freqGridSpacingCmb{nullptr};
+    QComboBox*   m_freqScaleFontCmb{nullptr};
     QSlider*     m_bgOpacitySlider{nullptr};
     QLabel*      m_bgOpacityLabel{nullptr};
     QPushButton* m_bgFillColorBtn{nullptr};  // colour swatch below the bg image

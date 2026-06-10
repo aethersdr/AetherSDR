@@ -284,12 +284,14 @@ public:
     void setFftHeatMap(bool on);
     void setShowGrid(bool on);
     void setFreqGridSpacing(int khz);
+    void setFreqScaleFontPt(int pt);
     void setFftLineWidth(float w);
     float fftFillAlpha() const         { return m_fftFillAlpha; }
     QColor fftFillColor() const        { return m_fftFillColor; }
     bool fftHeatMap() const            { return m_fftHeatMap; }
     bool showGrid() const              { return m_showGrid; }
     int  freqGridSpacing() const       { return m_freqGridSpacingKhz; }
+    int  freqScaleFontPt() const       { return m_freqScaleFontPt; }
     float fftLineWidth() const         { return m_fftLineWidth; }
     int   fftAverage() const           { return m_fftAverage; }
     int   fftFps() const               { return m_fftFps; }
@@ -743,6 +745,7 @@ private:
     bool m_fftHeatMap{true};        // true = intensity heat map, false = solid color
     bool m_showGrid{true};          // false = hide grid lines
     int  m_freqGridSpacingKhz{0};   // 0=Auto, or 1/2/5/10/25/50/100 kHz (#1390)
+    int  m_freqScaleFontPt{8};      // freq-scale label size, 8..14 pt (#3501)
     float m_fftLineWidth{2.0f};     // spectrum trace width in pixels
 
     // ── Waterfall display controls (radio-side via "display panafall set") ─
@@ -793,8 +796,11 @@ private:
     static constexpr float SMOOTH_ALPHA    = 0.35f;
     // Fraction of the panadapter area (above freq scale) used for spectrum
     float m_spectrumFrac{0.40f};
-    // Height of the frequency scale bar
+    // Height of the frequency scale bar at the default 8 pt label size.
+    // Use freqScaleH() in layout code — it grows with the user's label
+    // font so larger text never clips (#3501).
     static constexpr int   FREQ_SCALE_H    = 20;
+    int freqScaleH() const;
     // Height of the draggable divider between FFT and freq scale
     static constexpr int   DIVIDER_H       = 4;
     // Divider drag state

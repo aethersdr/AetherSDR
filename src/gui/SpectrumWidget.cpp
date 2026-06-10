@@ -747,6 +747,8 @@ void SpectrumWidget::loadSettings()
     m_fftHeatMap     = s.value(settingsKey("DisplayFftHeatMap"), "True").toString() == "True";
     m_showGrid       = s.value(settingsKey("DisplayShowGrid"), "True").toString() == "True";
     m_freqGridSpacingKhz = s.value(settingsKey("DisplayFreqGridSpacing"), "0").toInt();
+    m_freqScaleFontPt = std::clamp(
+        s.value(settingsKey("DisplayFreqScaleFontPt"), "8").toInt(), 8, 14);
     m_fftLineWidth   = s.value(settingsKey("DisplayFftLineWidth"), "2.0").toFloat();
     m_noiseFloorEnable   = s.value(settingsKey("DisplayNoiseFloorEnable"), "False").toString() == "True";
     m_noiseFloorPosition = std::clamp(
@@ -785,7 +787,8 @@ void SpectrumWidget::loadSettings()
             m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
             m_fftLineWidth);
         m_overlayMenu->syncExtraDisplaySettings(m_wfBlankerEnabled,
-            m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz, m_bgFillColor);
+            m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz, m_bgFillColor,
+            m_freqScaleFontPt);
     }
     // Refresh the noise-floor target so the slider position takes effect
     // even when the overlay menu is built but not yet shown.
@@ -940,6 +943,14 @@ void SpectrumWidget::setFreqGridSpacing(int khz) {
     s.save();
     markOverlayDirty();
 }
+void SpectrumWidget::setFreqScaleFontPt(int pt) {
+    m_freqScaleFontPt = std::clamp(pt, 8, 14);
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("DisplayFreqScaleFontPt"), QString::number(m_freqScaleFontPt));
+    s.save();
+    markOverlayDirty();
+    update();
+}
 void SpectrumWidget::setShowFpsMeters(bool on) {
     applyFpsMeterVisibility(on);
     auto& s = AppSettings::instance();
@@ -1045,7 +1056,7 @@ void SpectrumWidget::updateFpsMeterLabels() {
 
 int SpectrumWidget::spectrumPixelHeight() const
 {
-    const int chromeH = FREQ_SCALE_H + DIVIDER_H;
+    const int chromeH = freqScaleH() + DIVIDER_H;
     const int contentH = std::max(0, height() - chromeH);
     return std::max(1, static_cast<int>(contentH * m_spectrumFrac));
 }
@@ -1065,7 +1076,7 @@ void SpectrumWidget::positionFpsMeterLabels() {
         return;
     }
 
-    const int chromeH = FREQ_SCALE_H + DIVIDER_H;
+    const int chromeH = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
     if (contentH <= 0) {
         hideMeters();
@@ -1073,7 +1084,7 @@ void SpectrumWidget::positionFpsMeterLabels() {
     }
 
     const int specH = spectrumPixelHeight();
-    const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+    const int wfY = specH + DIVIDER_H + freqScaleH();
     const QRect specRect(0, 0, width(), specH);
     const QRect wfRect(0, wfY, width(), height() - wfY);
 
@@ -2054,7 +2065,7 @@ QRect SpectrumWidget::waterfallLiveButtonRect(const QRect& wfRect) const
     const int buttonW = 32;
     const int buttonH = 16;
     const int buttonX = strip.right() - buttonW - 2;
-    const int buttonY = wfRect.top() - FREQ_SCALE_H + 2;
+    const int buttonY = wfRect.top() - freqScaleH() + 2;
     return QRect(buttonX, buttonY, buttonW, buttonH);
 }
 
@@ -3370,7 +3381,7 @@ void SpectrumWidget::updateTrackedCursorState(const QPoint& localPos, bool insid
         m_tuneGuideTimer->stop();
         QToolTip::hideText();
     } else {
-        const int chromeH = FREQ_SCALE_H + DIVIDER_H;
+        const int chromeH = freqScaleH() + DIVIDER_H;
         const int contentH = height() - chromeH;
         const int specH = static_cast<int>(contentH * m_spectrumFrac);
         const bool inSpectrum = localPos.y() >= 0
@@ -3447,7 +3458,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
     (void)dragStatePublisher;
 
-    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
     const int y = static_cast<int>(ev->position().y());
@@ -3515,8 +3526,8 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 
     // Click on the freq scale bar → start bandwidth drag
     const int scaleY = specH + DIVIDER_H;
-    if (y >= scaleY && y < scaleY + FREQ_SCALE_H) {
-        const QRect wfRect(0, scaleY + FREQ_SCALE_H, width(), height() - (scaleY + FREQ_SCALE_H));
+    if (y >= scaleY && y < scaleY + freqScaleH()) {
+        const QRect wfRect(0, scaleY + freqScaleH(), width(), height() - (scaleY + freqScaleH()));
         if (waterfallLiveButtonRect(wfRect).contains(ev->position().toPoint())) {
             setWaterfallLive(true);
             ev->accept();
@@ -3534,7 +3545,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     }
 
     // Left-click in waterfall area -> start pan drag (tune on double-click only)
-    const int wfY = scaleY + FREQ_SCALE_H;
+    const int wfY = scaleY + freqScaleH();
     if (y >= wfY) {
         const QRect wfRect(0, wfY, width(), height() - wfY);
         const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
@@ -3984,7 +3995,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         return;
     }
 
-    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
     const int y = static_cast<int>(ev->position().y());
@@ -4074,7 +4085,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     }
 
     if (m_draggingTimeScaleRate) {
-        const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+        const int wfY = specH + DIVIDER_H + freqScaleH();
         const QRect wfRect(0, wfY, width(), height() - wfY);
         const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
         const int dragHeight = std::max(1, timeScaleRect.height());
@@ -4099,7 +4110,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     }
 
     if (m_draggingTimeScale) {
-        const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+        const int wfY = specH + DIVIDER_H + freqScaleH();
         const QRect wfRect(0, wfY, width(), height() - wfY);
         const QRect timeScaleRect = waterfallTimeScaleRect(wfRect);
         const int dragHeight = std::max(1, timeScaleRect.height());
@@ -4195,7 +4206,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     }
 
     // Update cursor based on hover position
-    const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+    const int wfY = specH + DIVIDER_H + freqScaleH();
 
     if (y >= specH && y < specH + DIVIDER_H) {
         setSpectrumCursor(Qt::SplitVCursor);
@@ -4336,7 +4347,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     }
 
     // Band plan spot tooltip on hover
-    const int specH2 = static_cast<int>((height() - FREQ_SCALE_H - DIVIDER_H) * m_spectrumFrac);
+    const int specH2 = static_cast<int>((height() - freqScaleH() - DIVIDER_H) * m_spectrumFrac);
     const int bandBarTop = specH2 - 8;
     if (m_hoveredTnfId >= 0) {
         QToolTip::hideText();
@@ -4570,10 +4581,10 @@ void SpectrumWidget::showAddSpotDialog(double freqMhz)
 
 void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
 {
-    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
-    const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+    const int wfY = specH + DIVIDER_H + freqScaleH();
     const int y = static_cast<int>(ev->position().y());
     const int mx = static_cast<int>(ev->position().x());
     const int rightStripW = (y >= wfY) ? waterfallStripWidth() : DBM_STRIP_W;
@@ -4743,10 +4754,10 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
     PerfInputScope perfScope("wheel");
 
     // Skip scroll on the divider + freq scale bar.
-    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH2 = height() - chromeH;
     const int specH2 = static_cast<int>(contentH2 * m_spectrumFrac);
-    const int wfY = specH2 + DIVIDER_H + FREQ_SCALE_H;
+    const int wfY = specH2 + DIVIDER_H + freqScaleH();
     const int chromeTop = specH2;
     const int chromeBot = specH2 + chromeH;
     if (ev->position().y() >= chromeTop && ev->position().y() < chromeBot) {
@@ -4856,7 +4867,7 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
     // into a QSplitter can reset native window properties.
     setMouseTracking(true);
 
-    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int wfHeight = static_cast<int>(contentH * (1.0f - m_spectrumFrac));
     if (wfHeight > 0 && width() > 0) {
@@ -5347,14 +5358,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     QRhi* r = rhi();
     const int w = width();
     const int h = height();
-    if (w <= 0 || h <= FREQ_SCALE_H + DIVIDER_H + 2) return;
+    if (w <= 0 || h <= freqScaleH() + DIVIDER_H + 2) return;
     const bool perfEnabled = PerfTelemetry::instance().enabled();
     const qint64 perfStartNs = perfEnabled ? PerfTelemetry::nowNs() : 0;
 
-    const int chromeH = FREQ_SCALE_H + DIVIDER_H;
+    const int chromeH = freqScaleH() + DIVIDER_H;
     const int contentH = h - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
-    const int wfY = specH + DIVIDER_H + FREQ_SCALE_H;
+    const int wfY = specH + DIVIDER_H + freqScaleH();
     const int wfH = h - wfY;
     const QRect specRect(0, 0, w, specH);
     const QRect wfRect(0, wfY, w, wfH);
@@ -5525,7 +5536,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // Divider bar
             p.fillRect(0, specH, w, DIVIDER_H, AetherSDR::ThemeManager::instance().color("color.background.2"));
 
-            drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, FREQ_SCALE_H));
+            drawFreqScale(p, QRect(0, specH + DIVIDER_H, w, freqScaleH()));
             drawTnfMarkers(p, specRect);
             if (m_showSpots || m_showSHistory)
                 drawSpotMarkers(p, specRect);
@@ -6091,7 +6102,7 @@ void SpectrumWidget::releaseResources()
 
 void SpectrumWidget::paintEvent(QPaintEvent* ev)
 {
-    if (width() <= 0 || height() <= FREQ_SCALE_H + DIVIDER_H + 2) return;
+    if (width() <= 0 || height() <= freqScaleH() + DIVIDER_H + 2) return;
 
 #ifdef AETHER_GPU_SPECTRUM
     // GPU mode: render() handles everything via QRhi. Skip the full
@@ -6110,18 +6121,18 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, false);
 
-    const int chromeH  = FREQ_SCALE_H + DIVIDER_H;
+    const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH    = static_cast<int>(contentH * m_spectrumFrac);
     const int wfH      = contentH - specH;
 
     const int divY     = specH;
     const int scaleY   = specH + DIVIDER_H;
-    const int wfY      = scaleY + FREQ_SCALE_H;
+    const int wfY      = scaleY + freqScaleH();
 
     const QRect specRect (0, 0,       width(), specH);
     const QRect divRect  (0, divY,    width(), DIVIDER_H);
-    const QRect scaleRect(0, scaleY,  width(), FREQ_SCALE_H);
+    const QRect scaleRect(0, scaleY,  width(), freqScaleH());
     const QRect wfRect   (0, wfY,     width(), wfH);
 
     {
@@ -7820,6 +7831,15 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
 
 // ─── Frequency scale bar ──────────────────────────────────────────────────────
 
+int SpectrumWidget::freqScaleH() const
+{
+    if (m_freqScaleFontPt <= 8)
+        return FREQ_SCALE_H;
+    QFont f = font();
+    f.setPointSize(m_freqScaleFontPt);
+    return std::max(FREQ_SCALE_H, QFontMetrics(f).height() + 6);
+}
+
 void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 {
     p.fillRect(r, AetherSDR::ThemeManager::instance().color("color.background.0"));
@@ -7832,7 +7852,7 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
     const double firstLine = std::ceil(startMhz / stepMhz) * stepMhz;
 
     QFont f = p.font();
-    f.setPointSize(8);
+    f.setPointSize(m_freqScaleFontPt);
     p.setFont(f);
     const QFontMetrics fm(f);
 
@@ -7865,7 +7885,12 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 
         const QString label = formatFreqScaleLabel(freq, decimals);
         const int tw = fm.horizontalAdvance(label);
-        const int lx = qBound(0, x - tw / 2, width() - tw);
+        // Keep labels clear of the right-edge dBm / waterfall-time scale
+        // column — at larger label sizes (#3501) a label clamped to the
+        // widget edge collides with those figures.
+        const int labelMaxRight = width() - DBM_STRIP_W - 2;
+        if (x > labelMaxRight) continue;
+        const int lx = qBound(0, x - tw / 2, labelMaxRight - tw);
 
         p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
         p.drawText(lx, r.bottom() - 2, label);
