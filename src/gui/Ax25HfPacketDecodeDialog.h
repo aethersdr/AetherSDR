@@ -100,13 +100,13 @@ protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
+    void startTransmit(const QString& text);
     void setModemProfile(Ax25ModemProfile profile, bool persist);
     void setDecodeEnabled(bool enabled);
     void handleRxAudio(const QByteArray& monoFloat32Pcm, int sampleRate);
     void startAudioCapture();
     void finishAudioCapture(bool save);
     void startTransmitFromUi();
-    void startTransmit(const QString& text);
     void beginTransmission(const Ax25TransmitResult& tx, bool fromKiss);
     void beginTransmitWhenReady();
     void paceTransmitAudio();

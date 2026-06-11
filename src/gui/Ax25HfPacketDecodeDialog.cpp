@@ -63,8 +63,8 @@ namespace AetherSDR {
 
 namespace {
 
-constexpr auto kPacketDecoderProfileSetting = "Ax25PacketDecoderProfile";
-constexpr auto kPacketDecoderDebugSetting = "Ax25PacketDecoderDiagnosticsDebug";
+constexpr auto kPacketDecoderProfileSetting  = "Ax25PacketDecoderProfile";
+constexpr auto kPacketDecoderDebugSetting    = "Ax25PacketDecoderDiagnosticsDebug";
 // TNC settings live as nested JSON under "AetherModemKissTnc" — see
 // TncSettings class in the header. Legacy flat-key migration in
 // TncSettings::migrateLegacy() is run from MainWindow at startup.
@@ -721,7 +721,6 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_enableDecode = new QCheckBox(QStringLiteral("Enable Modem"), modemCell);
     modemLayout->addWidget(m_enableDecode);
     controls->addWidget(modemCell, 1);
-    controls->addStretch(2);
 
     m_captureButton = new QPushButton(QStringLiteral("Capture 3m"), controlsFrame);
     m_captureButton->setMinimumHeight(42);
@@ -888,6 +887,10 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
             this, &Ax25HfPacketDecodeDialog::paceTransmitAudio);
     connect(m_shim, &AetherAx25LibmodemShim::frameDecoded,
             this, &Ax25HfPacketDecodeDialog::appendFrame);
+#ifdef HAVE_MQTT
+    connect(m_shim, &AetherAx25LibmodemShim::frameDecoded,
+            this, &Ax25HfPacketDecodeDialog::publishFrameMqtt);
+#endif
     // RX -> KISS clients: forward every decoded frame to connected hosts.
     connect(m_shim, &AetherAx25LibmodemShim::frameDecoded, this,
             [this](const Ax25DecodedFrame& frame) {
@@ -1130,9 +1133,9 @@ void Ax25HfPacketDecodeDialog::setAttachedSlice(SliceModel* slice)
 
 void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool persist)
 {
-    // Tone polarity is always Normal for the supported HF DIGU / VHF FM paths.
-    m_shimConfig = ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal);
-    QMetaObject::invokeMethod(m_shim, [shim = m_shim, cfg = m_shimConfig]() {
+    auto cfg = ax25DemodConfigForProfile(profile, Ax25TonePolarity::Normal);
+    m_shimConfig = cfg;
+    QMetaObject::invokeMethod(m_shim, [shim = m_shim, cfg]() {
         shim->configure(cfg);
     }, Qt::QueuedConnection);
     m_lastDiagnostics = {};
@@ -1151,7 +1154,9 @@ void Ax25HfPacketDecodeDialog::setModemProfile(Ax25ModemProfile profile, bool pe
 void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
 {
     if (enabled) {
-        QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_shim, [shim = m_shim]() {
+            shim->reset();
+        }, Qt::QueuedConnection);
         m_lastDiagnostics = {};
         m_enabledUtc = QDateTime::currentDateTimeUtc();
         m_lastDiagnosticsUtc = {};
@@ -1168,7 +1173,9 @@ void Ax25HfPacketDecodeDialog::setDecodeEnabled(bool enabled)
             finishAudioCapture(false);
         if (m_audio)
             m_audio->setTncRxTapEnabled(false);
-        QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
+        QMetaObject::invokeMethod(m_shim, [shim = m_shim]() {
+            shim->reset();
+        }, Qt::QueuedConnection);
         m_lastDiagnostics = {};
         m_lastDiagnosticsUtc = {};
         m_lastActivityHdlc = 0;
@@ -1223,7 +1230,9 @@ void Ax25HfPacketDecodeDialog::startAudioCapture()
     m_captureSampleRate = 0;
     m_captureTargetBytes = 0;
     m_captureActive = true;
-    QMetaObject::invokeMethod(m_shim, &AetherAx25LibmodemShim::reset, Qt::QueuedConnection);
+    QMetaObject::invokeMethod(m_shim, [shim = m_shim]() {
+        shim->reset();
+    }, Qt::QueuedConnection);
     m_lastDiagnostics = {};
     m_lastDiagnosticsUtc = {};
     m_lastActivityHdlc = 0;
@@ -1385,6 +1394,7 @@ void Ax25HfPacketDecodeDialog::handleMqttMessage(const QString& topic, const QBy
     startTransmit(QString::fromUtf8(payload).trimmed());
 }
 #endif
+
 
 void Ax25HfPacketDecodeDialog::beginTransmitWhenReady()
 {
@@ -1632,9 +1642,6 @@ void Ax25HfPacketDecodeDialog::appendFrame(const Ax25DecodedFrame& frame)
     m_log->verticalScrollBar()->setValue(m_log->verticalScrollBar()->maximum());
     if (m_packetActivity)
         m_packetActivity->recordFrame();
-#ifdef HAVE_MQTT
-    publishFrameMqtt(frame);
-#endif
     refreshStatus();
 }
 

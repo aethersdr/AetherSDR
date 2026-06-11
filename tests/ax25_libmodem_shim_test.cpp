@@ -367,10 +367,9 @@ void testVhf1200ProfileConfig()
     report("VHF sample rate", cfg.sampleRate == 24000);
     report("VHF baud", cfg.baud == 1200);
     report("VHF tones", cfg.markHz == 1200.0 && cfg.spaceHz == 2200.0);
-    // Aggressive multi-lane decode bank: 10 free-running phase lanes + 4 tracked
-    // phases x 2 PLL bandwidths = 18 (see kVhf1200* in the shim).
-    report("VHF profile runs the 18-lane decode bank",
-           shim.diagnosticsSnapshot().decodeLanes == 18);
+    // Default VhfMode::APlus = 9 slicers (Direwolf A+ profile).
+    report("VHF profile default APlus: 9 lanes",
+           shim.diagnosticsSnapshot().decodeLanes == 9);
     report("VHF description names profile", shim.demodDescription().contains(QStringLiteral("1200 baud VHF")));
 }
 
