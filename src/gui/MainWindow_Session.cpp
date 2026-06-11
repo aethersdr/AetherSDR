@@ -1470,6 +1470,21 @@ void MainWindow::wireDaxIq()
             stopDax();
         }
     });
+
+    // DAX-IQ needs the DAX enable->createStream wiring that startDax() establishes
+    // lazily on PipeWire/macOS. If a channel is enabled before DAX audio is started
+    // that wiring does not exist yet and the request is silently dropped (the meter
+    // never moves). Auto-start DAX so DAX-IQ works standalone; the connection
+    // startDax() wires does not observe this same signal, so create the triggering
+    // channel's stream directly here. Once the bridge is up this guard is inert
+    // and startDax()'s own connection handles subsequent enables (no double-create).
+    connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqEnableRequested, this,
+            [this](int ch) {
+        if (!m_daxBridge) {
+            startDax();
+            m_radioModel.daxIqModel().createStream(ch);
+        }
+    });
 #endif
 
 }
