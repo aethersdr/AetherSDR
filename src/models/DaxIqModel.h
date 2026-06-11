@@ -92,6 +92,7 @@ signals:
 
 private:
     int m_pipeFds[DaxIqModel::NUM_CHANNELS]{-1, -1, -1, -1};
+    quint32 m_pipeModuleIdx[DaxIqModel::NUM_CHANNELS]{};  // pactl module idx per pipe (0=none)
     int m_sampleCount[DaxIqModel::NUM_CHANNELS]{};
     double m_sumSq[DaxIqModel::NUM_CHANNELS]{};
 };
