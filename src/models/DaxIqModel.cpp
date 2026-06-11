@@ -340,12 +340,17 @@ void DaxIqWorker::processIqPacket(int channel, const QByteArray& rawPayload, int
     const int numFloats = rawPayload.size() / 4;
     const int numSamples = numFloats / 2;  // I/Q pairs
 
-    // Byte-swap float32 big-endian → native (little-endian)
+    // dax_iq payloads are LITTLE-endian float32 (the radio reports
+    // payload_endian=little for this stream type — unlike pan/wf/meter/audio
+    // which are big-endian network order). Reading them big-endian byte-reverses
+    // the floats into denormals ≈ 0, which flat-lines the RMS meter AND writes
+    // garbage to the format=float32le pipe. Read little-endian (a correct no-op
+    // on an LE host) so both the meter and the pipe carry real IQ.
     QByteArray swapped(rawPayload.size(), Qt::Uninitialized);
     const quint32* src = reinterpret_cast<const quint32*>(rawPayload.constData());
     quint32* dst = reinterpret_cast<quint32*>(swapped.data());
     for (int i = 0; i < numFloats; ++i)
-        dst[i] = qFromBigEndian(src[i]);
+        dst[i] = qFromLittleEndian(src[i]);
 
     // Compute RMS magnitude for metering (every ~100ms worth of samples)
     const float* floats = reinterpret_cast<const float*>(swapped.constData());
