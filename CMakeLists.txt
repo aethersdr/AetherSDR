@@ -669,6 +669,7 @@ set(GUI_SOURCES
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
     src/gui/AprsMessagesDialog.cpp
+    src/gui/AprsSymbolIcons.cpp
     src/gui/FlexControlDialog.cpp
     src/gui/PropDashboardDialog.cpp
     src/gui/MemoryCommands.cpp

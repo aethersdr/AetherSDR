@@ -11,6 +11,7 @@
 #include "core/aprs/AprsSettings.h"
 #include "core/aprs/AprsStationList.h"
 #include "gui/AprsMessagesDialog.h"
+#include "gui/AprsSymbolIcons.h"
 #include "core/tnc/Ax25.h"
 #include "core/tnc/Ax25FrameFormatter.h"
 #include "core/tnc/HeardList.h"
@@ -237,11 +238,12 @@ QPushButton:disabled {
     background: #0b1522;
 }
 QPushButton#TabButton {
-    border-radius: 6px;
+    border-radius: 5px;
     border: 1px solid transparent;
     background: transparent;
-    min-height: 40px;
-    font-size: 16px;
+    min-height: 20px;
+    padding: 4px 12px;
+    font-size: 13px;
 }
 QPushButton#TabButton:checked {
     color: #d4deea;
@@ -305,11 +307,15 @@ QLabel#ExperimentalBanner {
 QTableWidget {
     color: #c2ccdb;
     background: #050b13;
+    alternate-background-color: #081220;
     border: none;
     gridline-color: #14202f;
     font-family: "SF Mono", "Menlo", "Consolas", monospace;
     font-size: 13px;
     selection-background-color: #1b3650;
+}
+QTableWidget::item {
+    padding: 2px 10px;
 }
 QHeaderView::section {
     color: #8d99ad;
@@ -874,13 +880,13 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
 
     auto* controlsFrame = panel(QStringLiteral("ControlsFrame"), ax25Page);
     auto* controls = new QHBoxLayout(controlsFrame);
-    controls->setContentsMargins(16, 14, 16, 14);
+    controls->setContentsMargins(16, 10, 16, 10);
     controls->setSpacing(20);
 
     auto* baudCell = panel(QStringLiteral("ControlCell"), controlsFrame);
     auto* baudLayout = new QVBoxLayout(baudCell);
     baudLayout->setContentsMargins(0, 0, 20, 0);
-    baudLayout->setSpacing(12);
+    baudLayout->setSpacing(8);
     baudLayout->addWidget(sectionLabel(QStringLiteral("BAUD RATE"), baudCell));
     auto* baudButtons = new QHBoxLayout;
     baudButtons->setSpacing(34);
@@ -895,7 +901,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     auto* modemCell = panel(QStringLiteral("ControlCell"), controlsFrame);
     auto* modemLayout = new QVBoxLayout(modemCell);
     modemLayout->setContentsMargins(0, 0, 20, 0);
-    modemLayout->setSpacing(12);
+    modemLayout->setSpacing(8);
     modemLayout->addWidget(sectionLabel(QStringLiteral("MODEM"), modemCell));
     auto* modemChecks = new QHBoxLayout;
     modemChecks->setSpacing(20);
@@ -2041,8 +2047,13 @@ void Ax25HfPacketDecodeDialog::setDiagnosticsDebugEnabled(bool enabled, bool per
             ? QStringLiteral("PACKET ACTIVITY DEBUG")
             : QStringLiteral("PACKET ACTIVITY"));
     }
-    // The raw decode log + raw AX.25 TX row on the APRS tab follow the debug
-    // flag; refresh the chrome so they appear/disappear immediately.
+    // The raw decode log, raw AX.25 TX row, and the capture/clear-log
+    // buttons on the APRS tab are all diagnostics chrome — they follow the
+    // debug flag. Refresh so they appear/disappear immediately.
+    if (m_captureButton)
+        m_captureButton->setVisible(enabled);
+    if (m_clearButton)
+        m_clearButton->setVisible(enabled);
     if (m_tabStack)
         updateTabChrome(m_tabStack->currentIndex());
 
@@ -2817,6 +2828,21 @@ QString aprsAgeText(const QDateTime& utc)
     return QStringLiteral("%1d").arg(secs / 86400);
 }
 
+// Station-table column order. TIME is the operator's wall clock (local),
+// AGE keeps ticking so staleness is visible without doing date math.
+enum AprsColumn {
+    kColTime = 0,
+    kColCall,
+    kColSymbol,
+    kColAge,
+    kColPackets,
+    kColGrid,
+    kColDist,
+    kColCrsSpd,
+    kColText,
+    kColCount,
+};
+
 // The on-air-common symbols offered for our own beacon; data() carries the
 // two-character table+code pair.
 struct AprsSymbolChoice { const char* pair; const char* name; };
@@ -2860,8 +2886,10 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
 
     config->addWidget(sectionLabel(QStringLiteral("SYMBOL"), configFrame), 0, 1);
     m_aprsSymbol = new QComboBox(configFrame);
+    m_aprsSymbol->setIconSize(QSize(16, 16));
     for (const AprsSymbolChoice& choice : kAprsSymbolChoices) {
-        m_aprsSymbol->addItem(QString::fromLatin1(choice.name),
+        m_aprsSymbol->addItem(aprsicons::symbolIcon(choice.pair[0], choice.pair[1]),
+                              QString::fromLatin1(choice.name),
                               QString::fromLatin1(choice.pair));
     }
     const int symbolIndex = m_aprsSymbol->findData(AprsSettings::symbol());
@@ -2948,20 +2976,24 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
     tableLayout->setContentsMargins(8, 6, 8, 6);
     tableLayout->setSpacing(0);
     m_aprsTable = new QTableWidget(tableFrame);
-    m_aprsTable->setColumnCount(8);
+    m_aprsTable->setColumnCount(kColCount);
     m_aprsTable->setHorizontalHeaderLabels({
-        QStringLiteral("STATION"), QStringLiteral("SYMBOL"),
-        QStringLiteral("LAST"), QStringLiteral("PKTS"),
-        QStringLiteral("GRID"), QStringLiteral("DIST"),
-        QStringLiteral("CRS/SPD"), QStringLiteral("STATUS / COMMENT"),
+        QStringLiteral("TIME"), QStringLiteral("STATION"),
+        QStringLiteral("SYMBOL"), QStringLiteral("AGE"),
+        QStringLiteral("PKTS"), QStringLiteral("GRID"),
+        QStringLiteral("DIST"), QStringLiteral("CRS/SPD"),
+        QStringLiteral("STATUS / COMMENT"),
     });
     m_aprsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_aprsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_aprsTable->setSelectionMode(QAbstractItemView::SingleSelection);
     m_aprsTable->verticalHeader()->setVisible(false);
+    m_aprsTable->verticalHeader()->setDefaultSectionSize(24);
+    m_aprsTable->setAlternatingRowColors(true);
+    m_aprsTable->setIconSize(QSize(16, 16));
     m_aprsTable->setShowGrid(false);
     m_aprsTable->setWordWrap(false);
-    m_aprsTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::Stretch);
+    m_aprsTable->horizontalHeader()->setSectionResizeMode(kColText, QHeaderView::Stretch);
     m_aprsTable->setMinimumHeight(160);
     m_aprsTable->setContextMenuPolicy(Qt::CustomContextMenu);
     tableLayout->addWidget(m_aprsTable);
@@ -2998,7 +3030,7 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
             this, &Ax25HfPacketDecodeDialog::handleAprsStationMenu);
     connect(m_aprsTable, &QTableWidget::cellDoubleClicked,
             this, [this](int row, int) {
-        if (auto* item = m_aprsTable->item(row, 0)) {
+        if (auto* item = m_aprsTable->item(row, kColCall)) {
             m_aprsMsgTo->setText(item->data(Qt::UserRole).toString());
             m_aprsMsgText->setFocus();
         }
@@ -3097,7 +3129,7 @@ void Ax25HfPacketDecodeDialog::refreshAprsStationTable()
         return;
 
     QString selectedCall;
-    if (const auto* current = m_aprsTable->item(m_aprsTable->currentRow(), 0))
+    if (const auto* current = m_aprsTable->item(m_aprsTable->currentRow(), kColCall))
         selectedCall = current->data(Qt::UserRole).toString();
 
     double myLat = 0.0, myLon = 0.0;
@@ -3115,15 +3147,19 @@ void Ax25HfPacketDecodeDialog::refreshAprsStationTable()
             m_aprsTable->setItem(i, col, item);
             return item;
         };
-        set(0, s.call)->setData(Qt::UserRole, s.call);
-        set(1, s.hasPosition
+        set(kColTime,
+            s.lastHeard.toLocalTime().toString(QStringLiteral("MM/dd HH:mm:ss")));
+        set(kColCall, s.call)->setData(Qt::UserRole, s.call);
+        auto* symItem = set(kColSymbol, s.hasPosition
             ? aprs::symbolDescription(s.symbolTable, s.symbolCode)
             : aprs::packetTypeName(s.lastType));
-        set(2, aprsAgeText(s.lastHeard))
+        if (s.hasPosition)
+            symItem->setIcon(aprsicons::symbolIcon(s.symbolTable, s.symbolCode));
+        set(kColAge, aprsAgeText(s.lastHeard))
             ->setData(Qt::UserRole, s.lastHeard.toMSecsSinceEpoch());
-        set(3, QString::number(s.packets));
-        set(4, s.hasPosition ? aprs::gridSquare(s.latitude, s.longitude)
-                             : QString());
+        set(kColPackets, QString::number(s.packets));
+        set(kColGrid, s.hasPosition ? aprs::gridSquare(s.latitude, s.longitude)
+                                    : QString());
         QString dist;
         if (s.hasPosition && haveMyPos) {
             dist = QStringLiteral("%1 mi %2°")
@@ -3132,7 +3168,7 @@ void Ax25HfPacketDecodeDialog::refreshAprsStationTable()
                 .arg(qRound(aprs::bearingDeg(myLat, myLon,
                                              s.latitude, s.longitude)));
         }
-        set(5, dist);
+        set(kColDist, dist);
         QString crsSpd;
         if (s.speedKnots >= 0.0) {
             crsSpd = QStringLiteral("%1 mph")
@@ -3140,16 +3176,20 @@ void Ax25HfPacketDecodeDialog::refreshAprsStationTable()
             if (s.courseDeg >= 0.0)
                 crsSpd += QStringLiteral(" %1°").arg(qRound(s.courseDeg));
         }
-        set(6, crsSpd);
+        set(kColCrsSpd, crsSpd);
         QString text = !s.comment.isEmpty() ? s.comment : s.status;
         if (!s.comment.isEmpty() && !s.status.isEmpty())
             text = s.comment + QStringLiteral("  |  ") + s.status;
-        set(7, text);
+        set(kColText, text);
         if (s.call == selectedCall)
             selectRow = i;
     }
     m_aprsTable->resizeColumnsToContents();
-    m_aprsTable->horizontalHeader()->setSectionResizeMode(7, QHeaderView::Stretch);
+    // resizeColumnsToContents() packs columns shoulder-to-shoulder; pad each
+    // one so the table breathes. The last column stretches regardless.
+    for (int col = 0; col < kColText; ++col)
+        m_aprsTable->setColumnWidth(col, m_aprsTable->columnWidth(col) + 18);
+    m_aprsTable->horizontalHeader()->setSectionResizeMode(kColText, QHeaderView::Stretch);
     if (selectRow >= 0)
         m_aprsTable->selectRow(selectRow);
     m_aprsTable->setUpdatesEnabled(true);
@@ -3160,7 +3200,7 @@ void Ax25HfPacketDecodeDialog::refreshAprsStationAges()
     if (!m_aprsTable)
         return;
     for (int row = 0; row < m_aprsTable->rowCount(); ++row) {
-        if (auto* item = m_aprsTable->item(row, 2)) {
+        if (auto* item = m_aprsTable->item(row, kColAge)) {
             const QDateTime lastHeard = QDateTime::fromMSecsSinceEpoch(
                 item->data(Qt::UserRole).toLongLong(), QTimeZone::UTC);
             item->setText(aprsAgeText(lastHeard));
@@ -3173,7 +3213,7 @@ void Ax25HfPacketDecodeDialog::handleAprsStationMenu(const QPoint& pos)
     auto* hit = m_aprsTable->itemAt(pos);
     if (!hit)
         return;
-    const auto* callItem = m_aprsTable->item(hit->row(), 0);
+    const auto* callItem = m_aprsTable->item(hit->row(), kColCall);
     if (!callItem)
         return;
     const QString call = callItem->data(Qt::UserRole).toString();
