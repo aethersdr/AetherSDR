@@ -84,6 +84,25 @@ inline constexpr const char* kCwStraightKeyActionName = "Trigger straight key";
 inline constexpr const char* kCwLeftPaddleActionName = "Trigger CW Left Paddle";
 inline constexpr const char* kCwRightPaddleActionName = "Trigger CW Right Paddle";
 
+// ─── AetherSweep SWR-sweep tuning constants ─────────────────────────────────
+//
+// Shared between the constructor's poll-timer setup (MainWindow.cpp) and the
+// sweep state machine (MainWindow_SwrSweep.cpp).
+
+inline constexpr double kSwrSweepStepMhz = 0.020;
+inline constexpr double kSwrSweepEdgeGuardMhz = 0.005;
+inline constexpr double kSwrSweepPanPaddingMhz = 0.020;
+inline constexpr int kSwrSweepPollMs = 50;
+inline constexpr int kSwrSweepInitialSettleMs = 350;
+inline constexpr int kSwrSweepStepSettleMs = 160;
+inline constexpr int kSwrSweepMaxSettleMs = 900;
+inline constexpr int kSwrSweepTgxlBypassTimeoutMs = 3500;
+inline constexpr int kSwrSweepTgxlRelaySettleMs = 250;
+inline constexpr int kSwrSweepTuneStopWaitMs = 350;
+inline constexpr int kSwrSweepTuneStopTimeoutMs = 1800;
+inline constexpr int kSwrSweepTgxlRestoreTimeoutMs = 3500;
+inline constexpr int kSwrSweepMaxPoints = 260;
+
 // ─── Pan layout ──────────────────────────────────────────────────────────────
 
 // Pan count for a saved layout id (e.g. "2x2" → 4); 1 for unknown ids.
