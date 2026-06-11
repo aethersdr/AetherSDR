@@ -213,9 +213,27 @@ void DaxIqApplet::setDaxIqLevel(int channel, float rms)
     if (channel < 1 || channel > kChannels) {
         return;
     }
-    // Scale RMS to 0-100 for QProgressBar (IQ values are typically 0.0-0.5 range)
-    int level = static_cast<int>(std::clamp(rms * 200.0f, 0.0f, 100.0f));
-    m_iqMeter[channel - 1]->setValue(level);
+    const int i = channel - 1;
+
+    // DAX-IQ samples are the radio's raw baseband amplitude (int16 full-scale,
+    // ~32768), NOT normalized [-1,1] like DAX audio. The old `rms * 200` assumed
+    // normalized IQ and pegged the bar on real data (verified live on a FLEX-6700:
+    // 48 kHz IQ noise-floor RMS ~16 -> -66 dBFS, a strong AM carrier ~43 -> -58
+    // dBFS; rms * 200 saturates above 0.5). A wideband IQ RMS is noise-dominated,
+    // so this is really a level/overload meter: map RMS to dBFS vs int16 full-
+    // scale over a [-70, -10] dBFS window, so normal signals sit low and the bar
+    // only fills as the stream approaches digital overload.
+    constexpr float kFullScale = 32768.0f;  // int16 IQ full-scale
+    constexpr float kFloorDb   = -70.0f;    // 0% of bar
+    constexpr float kCeilDb    = -10.0f;    // 100% of bar (overload headroom)
+    const float dbfs = (rms > 1e-4f) ? 20.0f * std::log10(rms / kFullScale) : kFloorDb;
+
+    // Attack-fast / decay-slow ballistics (mirrors DaxApplet RX-meter feel).
+    const float a = (dbfs > m_iqMeterDb[i]) ? 0.5f : 0.15f;
+    m_iqMeterDb[i] = a * dbfs + (1.0f - a) * m_iqMeterDb[i];
+
+    const float frac = (m_iqMeterDb[i] - kFloorDb) / (kCeilDb - kFloorDb);
+    m_iqMeter[i]->setValue(static_cast<int>(std::clamp(frac * 100.0f, 0.0f, 100.0f)));
 }
 
 } // namespace AetherSDR
