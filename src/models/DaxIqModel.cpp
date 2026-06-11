@@ -82,10 +82,12 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
     }
 
     // New stream — assign by channel
+    bool isNew = false;
     if (idx < 0 && ch >= 1 && ch <= NUM_CHANNELS) {
         idx = channelIndex(ch);
         m_streams[idx].streamId = streamId;
         m_streams[idx].exists = true;
+        isNew = true;
         qCDebug(lcProtocol) << "DaxIqModel: new IQ stream ch" << ch
                             << "id" << Qt::hex << streamId;
     }
@@ -94,11 +96,20 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
 
     auto& s = m_streams[idx];
 
-    if (kvs.contains("daxiq_rate")) {
-        int newRate = kvs["daxiq_rate"].toInt();
-        if (newRate != s.sampleRate) {
+    // Create the IQ pipe when the stream first appears (isNew), not only on a
+    // rate CHANGE. The default daxiq_rate=48000 equals IqStream::sampleRate{48000},
+    // so a fresh enable at the default rate produced no rate delta and the pipe
+    // was never built (no module-pipe-source, no /tmp/aethersdr-iq-N.pipe, no
+    // node for WS2 to name). Guard merged: fire on existence OR rate change, and
+    // keep it OUTSIDE the daxiq_rate-present check so a status message that
+    // establishes the stream without carrying daxiq_rate still triggers it.
+    // destroyPipe is idempotent (m_pipeFds[idx]>=0 guard), so destroy-then-create
+    // is safe even with no prior pipe.
+    {
+        int newRate = kvs.contains("daxiq_rate") ? kvs["daxiq_rate"].toInt()
+                                                  : s.sampleRate;
+        if (isNew || newRate != s.sampleRate) {
             s.sampleRate = newRate;
-            // Recreate pipe at new sample rate
             QMetaObject::invokeMethod(m_worker, [this, ch = s.channel, newRate] {
                 m_worker->destroyPipe(ch);
                 m_worker->createPipe(ch, newRate);
