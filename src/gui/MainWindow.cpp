@@ -277,7 +277,6 @@ constexpr int kSwrSweepMaxPoints = 260;
 constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
 constexpr const char* kSuppressAudioDeviceNotificationsKey =
     "SuppressAudioDeviceNotifications";
-constexpr int kTMate2DefaultOverlayDurationMs = 1500;
 constexpr int kTMate2DefaultUserInteractionTimeoutMs = 2000;
 
 #ifdef HAVE_HIDAPI
