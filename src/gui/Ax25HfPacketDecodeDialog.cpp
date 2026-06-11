@@ -59,6 +59,7 @@
 #include <QStackedWidget>
 #include <QStyle>
 #include <QTableWidget>
+#include <QTimeZone>
 #include <QUrl>
 #include <QJsonDocument>
 #include <QJsonObject>
