@@ -45,6 +45,9 @@
 #include <QTextEdit>
 #include <QTimer>
 
+#include <algorithm>
+#include <iterator>
+
 namespace AetherSDR {
 
 namespace {

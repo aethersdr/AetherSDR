@@ -1,7 +1,6 @@
 #include "MainWindow.h"
 
 #include "MainWindowHelpers.h"
-#include "MainWindowShortcutState.h"
 
 #include "CwDecodeSettings.h"
 #include "DisplaySettings.h"
