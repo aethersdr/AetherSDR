@@ -3,8 +3,45 @@
 
 #include <QNetworkDatagram>
 #include <QDateTime>
+#include <QStringList>
 
 namespace AetherSDR {
+
+namespace {
+
+QString cleanDiscoveryValue(QString value, bool decodeDelSpaces = false)
+{
+    if (decodeDelSpaces) {
+        value.replace(QChar(0x7f), QLatin1Char(' '));
+    }
+
+    QString cleaned;
+    cleaned.reserve(value.size());
+    for (const QChar ch : value) {
+        const char16_t code = ch.unicode();
+        if (code < 0x20 || code == 0x7f) {
+            continue;
+        }
+        cleaned.append(ch);
+    }
+    return cleaned.trimmed();
+}
+
+QStringList splitDiscoveryListValue(QString value, bool decodeDelSpaces = false)
+{
+    value = cleanDiscoveryValue(value, decodeDelSpaces);
+
+    QStringList values;
+    for (const QString& item : value.split(',', Qt::SkipEmptyParts)) {
+        const QString trimmed = item.trimmed();
+        if (!trimmed.isEmpty()) {
+            values << trimmed;
+        }
+    }
+    return values;
+}
+
+} // namespace
 
 RadioDiscovery::RadioDiscovery(QObject* parent)
     : QObject(parent)
@@ -146,43 +183,52 @@ RadioInfo RadioDiscovery::parseDiscoveryPacket(const QByteArray& data) const
 
     for (const QString& token : text.split(' ', Qt::SkipEmptyParts)) {
         const int eq = token.indexOf('=');
-        if (eq < 0) continue;
-
-        const QString key   = token.left(eq).toLower();
-        const QString value = token.mid(eq + 1);
-
-        if      (key == "name")    info.name    = value;
-        else if (key == "model")   info.model   = value;
-        else if (key == "serial")  info.serial  = value;
-        else if (key == "version") info.version = value;
-        else if (key == "ip")      info.address = QHostAddress(value);
-        else if (key == "port")    info.port    = value.toUShort();
-        else if (key == "status")  info.status  = value;
-        else if (key == "nickname") info.nickname = value;
-        else if (key == "callsign") info.callsign = value;
-        else if (key == "inuse")       info.inUse           = (value == "1");
-        else if (key == "mf_enable")   info.multiFlexEnabled = (value != "0");
-        else if (key == "max_licensed_version") info.maxLicensedVersion = value.toInt();
-        else if (key == "is_system_model") info.isSystemModel = (value == "1");
-        else if (key == "turf_region")     info.turfRegion    = value;
-        else if (key == "gui_client_stations") {
-            QString cleaned = value;
-            cleaned.replace('\x7f', ' ');
-            info.guiClientStations = cleaned.split(',', Qt::SkipEmptyParts);
+        if (eq < 0) {
+            continue;
         }
-        else if (key == "gui_client_handles")
-            info.guiClientHandles = value.split(',', Qt::SkipEmptyParts);
-        else if (key == "gui_client_programs") {
-            QString cleaned = value;
-            cleaned.replace('\x7f', ' ');
-            info.guiClientPrograms = cleaned.split(',', Qt::SkipEmptyParts);
-        }
-        else if (key == "gui_client_ips")
-            info.guiClientIps = value.split(',', Qt::SkipEmptyParts);
-        else if (key == "gui_client_hosts") {
-            QString cleaned = value;
-            cleaned.replace('\x7f', ' ');
-            info.guiClientHosts = cleaned.split(',', Qt::SkipEmptyParts);
+
+        const QString key      = cleanDiscoveryValue(token.left(eq)).toLower();
+        const QString rawValue = token.mid(eq + 1);
+        const QString value    = cleanDiscoveryValue(rawValue);
+
+        if (key == "name") {
+            info.name = value;
+        } else if (key == "model") {
+            info.model = value;
+        } else if (key == "serial") {
+            info.serial = value;
+        } else if (key == "version") {
+            info.version = value;
+        } else if (key == "ip") {
+            info.address = QHostAddress(value);
+        } else if (key == "port") {
+            info.port = value.toUShort();
+        } else if (key == "status") {
+            info.status = value;
+        } else if (key == "nickname") {
+            info.nickname = value;
+        } else if (key == "callsign") {
+            info.callsign = value;
+        } else if (key == "inuse") {
+            info.inUse = (value == "1");
+        } else if (key == "mf_enable") {
+            info.multiFlexEnabled = (value != "0");
+        } else if (key == "max_licensed_version") {
+            info.maxLicensedVersion = value.toInt();
+        } else if (key == "is_system_model") {
+            info.isSystemModel = (value == "1");
+        } else if (key == "turf_region") {
+            info.turfRegion = value;
+        } else if (key == "gui_client_stations") {
+            info.guiClientStations = splitDiscoveryListValue(rawValue, true);
+        } else if (key == "gui_client_handles") {
+            info.guiClientHandles = splitDiscoveryListValue(rawValue);
+        } else if (key == "gui_client_programs") {
+            info.guiClientPrograms = splitDiscoveryListValue(rawValue, true);
+        } else if (key == "gui_client_ips") {
+            info.guiClientIps = splitDiscoveryListValue(rawValue);
+        } else if (key == "gui_client_hosts") {
+            info.guiClientHosts = splitDiscoveryListValue(rawValue, true);
         }
     }
     return info;

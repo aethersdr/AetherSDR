@@ -136,6 +136,9 @@ private slots:
     void onBindRetry();
 
 private:
+#ifdef AETHERSDR_TESTING
+    friend class RadioDiscoveryParserTest;
+#endif
     RadioInfo parseDiscoveryPacket(const QByteArray& data) const;
     void upsertRadio(const RadioInfo& info);
 
