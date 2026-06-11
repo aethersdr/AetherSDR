@@ -1396,21 +1396,18 @@ void MainWindow::wireCatPorts()
 
 void MainWindow::wireDaxIq()
 {
-    // ── DAX IQ wiring on platforms without an audio bridge ──────────────
+    // ── DAX IQ wiring (all platforms, established once at construction) ──
     //
-    // Same class of bug as #1820 (RADE RX on Windows): startDax() is
-    // compiled out on platforms without an audio bridge (Windows, Linux
-    // without PipeWire), so the DAX IQ stream-status registration handler
-    // that lives inside it never runs.  As a result PanadapterStream sees
-    // the inbound VITA-49 IQ packets but never knows what channel to
-    // route them to — iqDataReady never fires, the GUI applet meter
-    // shows nothing, and TCI clients get no IQ frames.
-    //
-    // Mirror just the IQ-side wiring here (the audio-bridge wiring
-    // genuinely needs the bridge so we leave that gated).  On Mac /
-    // PipeWire builds startDax() does the same wiring lazily when DAX
-    // audio is toggled, so we skip this block to avoid double-connection.
-#if !defined(Q_OS_MAC) && !defined(HAVE_PIPEWIRE)
+    // The DAX-IQ data path is independent of the DAX *audio* bridge: it needs
+    // only PanadapterStream (VITA-49 IQ routing) and the applet, both of which
+    // exist at construction on every platform. Wiring it here — instead of
+    // lazily inside startDax() on Mac/PipeWire — means a DAX-IQ channel works
+    // without first enabling DAX audio, and the enable/disable/rate connections
+    // survive a DAX-audio stop (they were never tied to the bridge's lifetime,
+    // so stopDax() can't tear them down and leave a half-wired path that
+    // double-creates streams). This is the single source of IQ-side wiring;
+    // startDax() wires only the audio-bridge connections. (Same stream-status
+    // registration need as #1820 / RADE RX on Windows.)
     if (m_appletPanel && m_appletPanel->daxIqApplet() && m_radioModel.panStream()) {
         connect(&m_radioModel, &RadioModel::statusReceived,
                 this, [this](const QString& obj, const QMap<QString,QString>& kvs) {
@@ -1457,7 +1454,6 @@ void MainWindow::wireDaxIq()
         connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqRateChanged,
                 &m_radioModel.daxIqModel(), &DaxIqModel::setSampleRate);
     }
-#endif
 
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
     // DAX enable button in DaxApplet → start/stop DAX bridge
@@ -1468,21 +1464,6 @@ void MainWindow::wireDaxIq()
                 m_appletPanel->daxApplet()->setDaxEnabled(false);
         } else {
             stopDax();
-        }
-    });
-
-    // DAX-IQ needs the DAX enable->createStream wiring that startDax() establishes
-    // lazily on PipeWire/macOS. If a channel is enabled before DAX audio is started
-    // that wiring does not exist yet and the request is silently dropped (the meter
-    // never moves). Auto-start DAX so DAX-IQ works standalone; the connection
-    // startDax() wires does not observe this same signal, so create the triggering
-    // channel's stream directly here. Once the bridge is up this guard is inert
-    // and startDax()'s own connection handles subsequent enables (no double-create).
-    connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqEnableRequested, this,
-            [this](int ch) {
-        if (!m_daxBridge) {
-            startDax();
-            m_radioModel.daxIqModel().createStream(ch);
         }
     });
 #endif

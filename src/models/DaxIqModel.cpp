@@ -197,17 +197,30 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
         emit commandReady(QStringLiteral("stream set 0x%1 daxiq_rate=%2")
             .arg(s.streamId, 0, 16).arg(m_desiredRate[idx]));
     }
+    // The stream is "rate-settling" until its actual sampleRate reaches the
+    // user's desired rate; the applet holds its rate combo at the user's
+    // selection until then. Track the rate GAP itself — not reapplyPending/isNew
+    // — so an interleaved non-rate status (e.g. a pan bind arriving between the
+    // create-status at 48k and the rate echo) can't prematurely clear the flag
+    // and flicker the combo to 48k. Self-clears on the status that actually
+    // carries the rate (s.sampleRate is updated by the pipe-rebuild block above
+    // before this point). If the radio never echoes the rate, it stays set and
+    // the combo simply keeps showing the user's selection — cosmetic, and the
+    // On/Off button + meter are already correct via their own gates.
+    s.rateSettling = (m_desiredRate[idx] != s.sampleRate);
 
     if (kvs.contains("pan"))
         s.panId = kvs["pan"];
     if (kvs.contains("active"))
         s.active = kvs["active"] == "1";
 
-    // Suppress the UI sync for the transient 48k-default state when a non-default
-    // rate is about to be re-applied: the follow-up status carries the real rate
-    // and emits streamChanged then, so the combo never visibly flips to 48k.
-    if (!reapplyPending)
-        emit streamChanged(s.channel);
+    // Emit unconditionally so the On/Off button and meter gating sync the moment
+    // the stream exists — even during the transient 48k state. Suppressing it
+    // (as before) left a channel stuck "Off" with the meter pinned at 0 whenever
+    // the radio rejected or never echoed the daxiq_rate re-apply, despite IQ
+    // flowing. The applet suppresses only the *combo* sync while rateSettling, so
+    // the user's rate selection still never visibly flips to 48k.
+    emit streamChanged(s.channel);
 }
 
 void DaxIqModel::handleStreamRemoved(quint32 streamId)

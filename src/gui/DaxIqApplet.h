@@ -40,6 +40,7 @@ private:
     QComboBox*    m_iqRateCombo[kChannels]{};
     QProgressBar* m_iqMeter[kChannels]{};
     float         m_iqMeterDb[kChannels]{-70.0f, -70.0f, -70.0f, -70.0f};  // smoothed dBFS per ch
+    bool          m_restorePending{false};  // collapse overlapping restoreEnabledChannels() timers
 };
 
 } // namespace AetherSDR

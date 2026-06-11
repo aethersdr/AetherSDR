@@ -31,6 +31,10 @@ public:
         QString panId;
         bool    active{false};
         bool    exists{false};
+        bool    rateSettling{false}; // true while a non-default daxiq_rate re-apply
+                                     // is in flight: the stream reports the radio's
+                                     // 48k default transiently, so the applet holds
+                                     // its rate combo until the real rate arrives.
     };
 
     explicit DaxIqModel(QObject* parent = nullptr);

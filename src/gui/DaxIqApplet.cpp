@@ -202,11 +202,15 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
             m_iqMeter[idx]->setValue(0);
         }
 
-        // Sync rate combo from radio state ONLY while the stream exists. On
-        // disable the model resets the stream's sampleRate to its 48k default;
-        // copying that into the combo would clobber the rate the user selected.
-        // The combo holds user intent and is re-applied on the next enable.
-        if (exists) {
+        // Sync rate combo from radio state ONLY while the stream exists and is
+        // not mid-rate-settling. On disable the model resets the stream's
+        // sampleRate to its 48k default; copying that into the combo would
+        // clobber the rate the user selected. During a non-default-rate enable
+        // the stream reports 48k transiently (rateSettling) before the real rate
+        // arrives; syncing then would flip the combo to 48k and back. In both
+        // cases the combo holds user intent and is re-applied on the next enable.
+        // (The On/Off button above still syncs every emit, settling or not.)
+        if (exists && !m_model->daxIqModel().stream(ch).rateSettling) {
             int rate = m_model->daxIqModel().stream(ch).sampleRate;
             QSignalBlocker sb(m_iqRateCombo[idx]);
             for (int i = 0; i < m_iqRateCombo[idx]->count(); ++i) {
@@ -224,8 +228,16 @@ void DaxIqApplet::restoreEnabledChannels()
     // Re-create the persisted-enabled IQ streams a short moment after connect,
     // once session/stream setup has settled. Idempotent (skips channels whose
     // stream already exists) so calling it from both the connect handler and the
-    // already-connected path in setRadioModel cannot double-create.
+    // already-connected path in setRadioModel cannot double-create. The `exists`
+    // guard lags the radio round-trip, though, so two timers scheduled within the
+    // same settle window would both pass it and double-create; collapse overlapping
+    // calls with a pending flag, cleared when the timer fires.
+    if (m_restorePending) {
+        return;
+    }
+    m_restorePending = true;
     QTimer::singleShot(1500, this, [this]() {
+        m_restorePending = false;
         if (!m_model || !m_model->isConnected()) {
             return;
         }

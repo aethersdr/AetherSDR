@@ -972,63 +972,13 @@ bool MainWindow::startDax()
     connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
             m_daxBridge, &DaxBridge::feedDaxAudio);
 
-    // ── DAX IQ stream status + VITA routing ─────────────────────────────
-    connect(&m_radioModel, &RadioModel::statusReceived,
-            this, [this](const QString& obj, const QMap<QString,QString>& kvs) {
-        if (!obj.startsWith("stream ")) return;
-        const QStringList parts = obj.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-        if (parts.size() < 2) return;
-        bool ok = false;
-        quint32 streamId = parts[1].toUInt(&ok, 0);
-        if (!ok) return;
-        const bool removed = parts.contains(QStringLiteral("removed")) || kvs.contains(QStringLiteral("removed"));
-        if (removed) {
-            m_radioModel.panStream()->unregisterIqStream(streamId);
-            m_radioModel.daxIqModel().handleStreamRemoved(streamId);
-            qCDebug(lcDax) << "MainWindow: unregistered removed DAX IQ stream"
-                           << "0x" + QString::number(streamId, 16);
-            return;
-        }
-        QString type = kvs.value("type");
-        if (type == "dax_iq") {
-            if (!streamStatusBelongsToUs(kvs, m_radioModel.ourClientHandle())) {
-                qCDebug(lcDax) << "MainWindow: ignoring DAX IQ stream for another client"
-                                << "stream=0x" + QString::number(streamId, 16)
-                                << "owner=" << kvs.value("client_handle");
-                return;
-            }
-            qCDebug(lcDax) << "MainWindow: DAX IQ stream status" << obj
-                           << "keys=" << kvs.keys()
-                           << "ch=" << kvs.value("daxiq_channel")
-                           << "ip=" << kvs.value("ip");
-            m_radioModel.daxIqModel().applyStreamStatus(streamId, kvs);
-            int ch = kvs.value("daxiq_channel").toInt();
-            if (streamId && ch >= 1 && ch <= 4)
-                m_radioModel.panStream()->registerIqStream(streamId, ch);
-        }
-    });
-
-    // Route IQ VITA-49 packets to DaxIqModel worker thread
-    connect(m_radioModel.panStream(), &PanadapterStream::iqDataReady,
-            &m_radioModel.daxIqModel(), &DaxIqModel::feedRawIqPacket);
-
-    // Wire DAX IQ level meters to DAX IQ applet
-    connect(&m_radioModel.daxIqModel(), &DaxIqModel::iqLevelReady,
-            m_appletPanel->daxIqApplet(), &DaxIqApplet::setDaxIqLevel);
-
-    // Wire DAX IQ enable/disable/rate from DAX IQ applet to DaxIqModel
-    connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqEnableRequested,
-            &m_radioModel.daxIqModel(), &DaxIqModel::createStream);
-    connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqDisableRequested,
-            &m_radioModel.daxIqModel(), &DaxIqModel::removeStream);
-    connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqRateChanged,
-            &m_radioModel.daxIqModel(), &DaxIqModel::setSampleRate);
-
-    // On PipeWire/macOS the IQ enable->createStream wiring above is established
-    // lazily here (when DAX audio starts), not at construction, so the applet's
-    // connect-time restore runs before these connections exist and is dropped.
-    // Restore persisted-enabled IQ channels now that the wiring is in place.
-    m_appletPanel->daxIqApplet()->restoreEnabledChannels();
+    // DAX-IQ stream-status routing, the VITA-49 IQ feed, level meter, and the
+    // enable/disable/rate connections are wired ONCE at construction (see the
+    // "DAX IQ wiring (all platforms)" block in the constructor) — they are
+    // independent of the audio bridge and must outlive a DAX-audio stop, so
+    // they are deliberately NOT wired here. Persisted-enabled IQ channels are
+    // restored by the applet itself on connect (restoreEnabledChannels), which
+    // now runs after the construction-time wiring on every platform.
 
     // Wire DAX level meters
     connect(m_daxBridge, &DaxBridge::daxRxLevel,
