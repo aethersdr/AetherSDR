@@ -62,6 +62,7 @@ signals:
 
 private:
     IqStream m_streams[NUM_CHANNELS];  // index 0-3 for channels 1-4
+    int      m_desiredRate[NUM_CHANNELS]{48000, 48000, 48000, 48000};  // user-selected rate, applied after (re)create
     int m_capacity{0};
     int m_available{0};
 

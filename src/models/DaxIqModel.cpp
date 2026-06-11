@@ -130,6 +130,7 @@ void DaxIqModel::setSampleRate(int channel, int rate)
 {
     int idx = channelIndex(channel);
     if (idx < 0 || idx >= NUM_CHANNELS) return;
+    m_desiredRate[idx] = rate;   // remember even if the stream isn't up yet
     if (!m_streams[idx].exists || m_streams[idx].streamId == 0) return;
     emit commandReady(QString("stream set 0x%1 daxiq_rate=%2")
         .arg(m_streams[idx].streamId, 0, 16).arg(rate));
@@ -186,12 +187,27 @@ void DaxIqModel::applyStreamStatus(quint32 streamId, const QMap<QString, QString
             });
         }
     }
+
+    // If the user selected a non-default rate before enabling, the radio creates
+    // the stream at its 48k default; re-apply the desired rate now that it exists
+    // (proven path: "stream set ... daxiq_rate="). The rate-change status it
+    // produces flows back through the guard above and rebuilds the pipe at rate.
+    const bool reapplyPending = (isNew && m_desiredRate[idx] != s.sampleRate);
+    if (reapplyPending) {
+        emit commandReady(QStringLiteral("stream set 0x%1 daxiq_rate=%2")
+            .arg(s.streamId, 0, 16).arg(m_desiredRate[idx]));
+    }
+
     if (kvs.contains("pan"))
         s.panId = kvs["pan"];
     if (kvs.contains("active"))
         s.active = kvs["active"] == "1";
 
-    emit streamChanged(s.channel);
+    // Suppress the UI sync for the transient 48k-default state when a non-default
+    // rate is about to be re-applied: the follow-up status carries the real rate
+    // and emits streamChanged then, so the combo never visibly flips to 48k.
+    if (!reapplyPending)
+        emit streamChanged(s.channel);
 }
 
 void DaxIqModel::handleStreamRemoved(quint32 streamId)

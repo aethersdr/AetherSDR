@@ -116,6 +116,10 @@ void DaxIqApplet::buildUI()
                 m_iqMeter[i]->setValue(0);
                 ss.setValue(QStringLiteral("DaxIqEnabled%1").arg(i + 1), "False");
             } else {
+                // Sync the model's desired rate to the combo before enabling, so a
+                // rate chosen while off (or restored from settings) is applied to the
+                // freshly-created stream instead of lost to the radio's 48k default.
+                emit iqRateChanged(i + 1, m_iqRateCombo[i]->currentData().toInt());
                 emit iqEnableRequested(i + 1);
                 m_iqEnable[i]->setText("On");
                 m_iqEnable[i]->setStyleSheet(kIqBtnOn);
@@ -196,13 +200,18 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
             m_iqMeter[idx]->setValue(0);
         }
 
-        // Sync rate combo from radio state
-        int rate = m_model->daxIqModel().stream(ch).sampleRate;
-        QSignalBlocker sb(m_iqRateCombo[idx]);
-        for (int i = 0; i < m_iqRateCombo[idx]->count(); ++i) {
-            if (m_iqRateCombo[idx]->itemData(i).toInt() == rate) {
-                m_iqRateCombo[idx]->setCurrentIndex(i);
-                break;
+        // Sync rate combo from radio state ONLY while the stream exists. On
+        // disable the model resets the stream's sampleRate to its 48k default;
+        // copying that into the combo would clobber the rate the user selected.
+        // The combo holds user intent and is re-applied on the next enable.
+        if (exists) {
+            int rate = m_model->daxIqModel().stream(ch).sampleRate;
+            QSignalBlocker sb(m_iqRateCombo[idx]);
+            for (int i = 0; i < m_iqRateCombo[idx]->count(); ++i) {
+                if (m_iqRateCombo[idx]->itemData(i).toInt() == rate) {
+                    m_iqRateCombo[idx]->setCurrentIndex(i);
+                    break;
+                }
             }
         }
     });
