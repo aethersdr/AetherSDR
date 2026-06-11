@@ -173,7 +173,15 @@ bool CwSidetonePortAudioSink::start(const QAudioDevice& device,
         // is AetherSDR's only PortAudio user, so naming the process-global JACK
         // client here is unambiguous.
         static const char kJackClientName[] = "AetherSDR CW Sidetone";
-        PaJack_SetClientName(kJackClientName);
+        // PaJack_SetClientName returns PaError; surface a failure like the
+        // Pa_Initialize path below. Non-fatal — the node keeps its default
+        // name — so log and continue rather than abort.
+        const PaError nameErr = PaJack_SetClientName(kJackClientName);
+        if (nameErr != paNoError) {
+            qCWarning(lcAudio) << "CwSidetonePortAudioSink: PaJack_SetClientName failed —"
+                               << Pa_GetErrorText(nameErr)
+                               << "(node keeps its default name)";
+        }
 #endif
         const PaError err = Pa_Initialize();
         if (err != paNoError) {
