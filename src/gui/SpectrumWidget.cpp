@@ -4,6 +4,7 @@
 #include "SliceColors.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include <QVariant>
 #include <QVariantAnimation>
 
 #ifdef AETHER_GPU_SPECTRUM
@@ -76,6 +77,112 @@ static constexpr int kDbmReleaseHoldFrames = 10;
 static constexpr int kDbmReleaseErrorSampleCount = 256;
 static constexpr float kDbmReleasePreviewChangeThresholdDb = 0.05f;
 static constexpr float kDbmReleaseRebaseMinImprovementDb = 0.75f;
+static constexpr int kFilterEdgeGrabPx = 8;
+static constexpr int kFilterPassbandMinBodyPx = 6;
+static constexpr const char* kSliceCursorOverrideActiveProperty =
+    "_aetherSliceCursorOverrideActive";
+static constexpr const char* kSliceCursorOverrideHadCursorProperty =
+    "_aetherSliceCursorOverrideHadCursor";
+static constexpr const char* kSliceCursorOverrideShapeProperty =
+    "_aetherSliceCursorOverrideShape";
+
+static Qt::CursorShape normalizedSpectrumCursorShape(Qt::CursorShape shape)
+{
+#ifdef Q_OS_MAC
+    switch (shape) {
+    case Qt::SplitVCursor:
+        return Qt::SizeVerCursor;
+    case Qt::SizeAllCursor:
+        return Qt::OpenHandCursor;
+    default:
+        break;
+    }
+#endif
+    return shape;
+}
+
+static void setCursorOverride(QWidget* widget, Qt::CursorShape shape)
+{
+    if (!widget) {
+        return;
+    }
+    if (!widget->property(kSliceCursorOverrideActiveProperty).toBool()) {
+        widget->setProperty(kSliceCursorOverrideHadCursorProperty,
+                            widget->testAttribute(Qt::WA_SetCursor));
+        widget->setProperty(kSliceCursorOverrideShapeProperty,
+                            static_cast<int>(widget->cursor().shape()));
+        widget->setProperty(kSliceCursorOverrideActiveProperty, true);
+    }
+    widget->setCursor(normalizedSpectrumCursorShape(shape));
+}
+
+static void clearCursorOverride(QWidget* widget)
+{
+    if (!widget
+        || !widget->property(kSliceCursorOverrideActiveProperty).toBool()) {
+        return;
+    }
+
+    const bool hadCursor =
+        widget->property(kSliceCursorOverrideHadCursorProperty).toBool();
+    const Qt::CursorShape previousShape = static_cast<Qt::CursorShape>(
+        widget->property(kSliceCursorOverrideShapeProperty).toInt());
+    widget->setProperty(kSliceCursorOverrideActiveProperty, false);
+    widget->setProperty(kSliceCursorOverrideHadCursorProperty, QVariant());
+    widget->setProperty(kSliceCursorOverrideShapeProperty, QVariant());
+    if (hadCursor) {
+        widget->setCursor(previousShape);
+    } else {
+        widget->unsetCursor();
+    }
+}
+
+static int filterInteriorGrabPx(int loX, int hiX, int grabPx)
+{
+    const int widthPx = std::abs(hiX - loX);
+    if (widthPx <= kFilterPassbandMinBodyPx) {
+        return 0;
+    }
+    return std::min(grabPx, (widthPx - kFilterPassbandMinBodyPx - 1) / 2);
+}
+
+static int filterEdgeHitAtPixel(int mx, int loX, int hiX, int grabPx)
+{
+    const int left = std::min(loX, hiX);
+    const int right = std::max(loX, hiX);
+    const bool insidePassband = mx >= left && mx <= right;
+    if (insidePassband && right - left <= kFilterPassbandMinBodyPx) {
+        return 0;
+    }
+
+    const int insideGrabPx = filterInteriorGrabPx(loX, hiX, grabPx);
+    const bool lowIsLeft = loX <= hiX;
+    const bool lowHit = lowIsLeft
+        ? (mx >= loX - grabPx && mx <= loX + insideGrabPx)
+        : (mx >= loX - insideGrabPx && mx <= loX + grabPx);
+    const bool highHit = lowIsLeft
+        ? (mx >= hiX - insideGrabPx && mx <= hiX + grabPx)
+        : (mx >= hiX - grabPx && mx <= hiX + insideGrabPx);
+
+    if (lowHit && highHit) {
+        return (std::abs(mx - loX) <= std::abs(mx - hiX)) ? -1 : 1;
+    }
+    if (lowHit) {
+        return -1;
+    }
+    if (highHit) {
+        return 1;
+    }
+    return 0;
+}
+
+static bool filterPassbandBodyHitAtPixel(int mx, int loX, int hiX, int grabPx)
+{
+    const int left = std::min(loX, hiX);
+    const int right = std::max(loX, hiX);
+    return mx >= left && mx <= right
+        && filterEdgeHitAtPixel(mx, loX, hiX, grabPx) == 0;
+}
 
 static constexpr int lineDurationToRatePercent(int lineDurationMs)
 {
@@ -801,6 +908,7 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
         return m_vfoWidgets[sliceId];
 
     auto* w = new VfoWidget(this);
+    installVfoCursorEventFilter(w);
     m_vfoWidgets[sliceId] = w;
     w->show();
     w->raise();
@@ -808,6 +916,53 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible())
         m_interlockNotificationLabel->raise();
     return w;
+}
+
+void SpectrumWidget::installVfoCursorEventFilter(VfoWidget* widget)
+{
+    if (!widget) {
+        return;
+    }
+
+    widget->setMouseTracking(true);
+    widget->installEventFilter(this);
+    const QList<QWidget*> children = widget->findChildren<QWidget*>();
+    for (QWidget* child : children) {
+        child->setMouseTracking(true);
+        child->installEventFilter(this);
+    }
+}
+
+void SpectrumWidget::setVfoCursorOverride(Qt::CursorShape shape)
+{
+    for (QMap<int, VfoWidget*>::const_iterator it = m_vfoWidgets.cbegin();
+         it != m_vfoWidgets.cend(); ++it) {
+        VfoWidget* widget = it.value();
+        if (!widget) {
+            continue;
+        }
+        setCursorOverride(widget, shape);
+        const QList<QWidget*> children = widget->findChildren<QWidget*>();
+        for (QWidget* child : children) {
+            setCursorOverride(child, shape);
+        }
+    }
+}
+
+void SpectrumWidget::clearVfoCursorOverride()
+{
+    for (QMap<int, VfoWidget*>::const_iterator it = m_vfoWidgets.cbegin();
+         it != m_vfoWidgets.cend(); ++it) {
+        VfoWidget* widget = it.value();
+        if (!widget) {
+            continue;
+        }
+        clearCursorOverride(widget);
+        const QList<QWidget*> children = widget->findChildren<QWidget*>();
+        for (QWidget* child : children) {
+            clearCursorOverride(child);
+        }
+    }
 }
 
 void SpectrumWidget::removeVfoWidget(int sliceId)
@@ -3420,26 +3575,106 @@ void SpectrumWidget::setSpectrumCursor(Qt::CursorShape shape)
     // standard Qt cursor changes can pass through QImage::toCGImage() in the
     // Cocoa platform plugin; issue #2458 crashed in that path while dispatching
     // enter/leave events.
-#ifdef Q_OS_MAC
-    // Qt 6.11's Cocoa plugin can synthesize some standard cursors from bitmap
-    // resources before handing them to CoreGraphics. Avoid the bitmap-backed
-    // shapes used in the panadapter hot paths; issue #2910 reports the same
-    // QImage::toCGImage() crash after the redundant-install guard shipped.
-    switch (shape) {
-    case Qt::SplitVCursor:
-        shape = Qt::SizeVerCursor;
-        break;
-    case Qt::SizeAllCursor:
-        shape = Qt::OpenHandCursor;
-        break;
-    default:
-        break;
-    }
-#endif
+    shape = normalizedSpectrumCursorShape(shape);
     if (cursor().shape() == shape) {
         return;
     }
     setCursor(shape);
+}
+
+bool SpectrumWidget::sliceCursorShapeAt(const QPoint& localPos,
+                                        Qt::CursorShape& shape) const
+{
+    const int chromeH = freqScaleH() + DIVIDER_H;
+    const int contentH = height() - chromeH;
+    const int specH = static_cast<int>(contentH * m_spectrumFrac);
+    const int mx = localPos.x();
+    const int y = localPos.y();
+    if (y < 0 || y >= specH || mx < 0 || mx >= width() - DBM_STRIP_W) {
+        return false;
+    }
+
+    for (const auto& so : m_sliceOverlays) {
+        if (so.isActive) {
+            continue;
+        }
+        const int sliceX = mhzToX(so.freqMhz);
+        const int loX = mhzToX(so.freqMhz + so.filterLowHz / 1.0e6);
+        const int hiX = mhzToX(so.freqMhz + so.filterHighHz / 1.0e6);
+        if (filterEdgeHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx) != 0) {
+            shape = Qt::SizeHorCursor;
+            return true;
+        }
+
+        if ((mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25)
+            || std::abs(mx - sliceX) <= 8) {
+            shape = Qt::PointingHandCursor;
+            return true;
+        }
+
+        const int left = std::min(loX, hiX);
+        const int right = std::max(loX, hiX);
+        if (mx >= left && mx <= right) {
+            shape = Qt::OpenHandCursor;
+            return true;
+        }
+    }
+
+    if (const auto* ao = activeOverlay()) {
+        const int loX = mhzToX(ao->freqMhz + ao->filterLowHz / 1.0e6);
+        const int hiX = mhzToX(ao->freqMhz + ao->filterHighHz / 1.0e6);
+        if (filterEdgeHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx) != 0) {
+            shape = Qt::SizeHorCursor;
+            return true;
+        }
+        if (filterPassbandBodyHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx)) {
+            shape = Qt::OpenHandCursor;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool SpectrumWidget::spectrumDefaultsToCrosshairAt(const QPoint& localPos) const
+{
+    const int chromeH = freqScaleH() + DIVIDER_H;
+    const int contentH = height() - chromeH;
+    const int specH = static_cast<int>(contentH * m_spectrumFrac);
+    const int mx = localPos.x();
+    const int y = localPos.y();
+    if (y < 0 || y >= specH || mx < 0 || mx >= width() - DBM_STRIP_W) {
+        return false;
+    }
+
+    for (const QRect& rect : m_offScreenRects) {
+        if (!rect.isNull() && rect.contains(localPos)) {
+            return false;
+        }
+    }
+
+    if (tnfAtPixel(mx, m_hoveredTnfId) >= 0) {
+        return false;
+    }
+
+    if (m_showSpots) {
+        for (const auto& hitRect : m_spotClickRects) {
+            if (hitRect.rect.contains(localPos)) {
+                return false;
+            }
+        }
+        for (const auto& cluster : m_spotClusters) {
+            if (cluster.rect.contains(localPos)) {
+                return false;
+            }
+        }
+    }
+
+    if (!m_propClickRect.isNull() && m_propClickRect.contains(localPos)) {
+        return false;
+    }
+
+    return true;
 }
 
 // ─── Mouse ────────────────────────────────────────────────────────────────────
@@ -3893,6 +4128,17 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             const int hiX = mhzToX(so.freqMhz + so.filterHighHz / 1.0e6);
             const int left = std::min(loX, hiX);
             const int right = std::max(loX, hiX);
+            const int edgeHit = filterEdgeHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx);
+            if (edgeHit != 0) {
+                const int edgeHz = edgeHit < 0 ? so.filterLowHz : so.filterHighHz;
+                emit sliceClicked(so.sliceId);
+                m_draggingFilter = edgeHit < 0 ? FilterEdge::Low : FilterEdge::High;
+                m_filterDragStartX = mx;
+                m_filterDragStartHz = edgeHz;
+                setSpectrumCursor(Qt::SizeHorCursor);
+                ev->accept();
+                return;
+            }
             // Slice badge area in top 25px
             if (mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25) {
                 emit sliceClicked(so.sliceId);
@@ -3912,7 +4158,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 m_draggingVfo = true;
                 m_vfoDragOffsetHz = static_cast<int>(
                     std::round((xToMhz(mx) - so.freqMhz) * 1.0e6));
-                setSpectrumCursor(Qt::SizeHorCursor);
+                setSpectrumCursor(Qt::ClosedHandCursor);
                 ev->accept();
                 return;
             }
@@ -3928,18 +4174,10 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         const int mx = static_cast<int>(ev->position().x());
         const int loX = mhzToX(ao->freqMhz + ao->filterLowHz / 1.0e6);
         const int hiX = mhzToX(ao->freqMhz + ao->filterHighHz / 1.0e6);
-        constexpr int GRAB = 8;
 
-        const bool loHit = std::abs(mx - loX) <= GRAB;
-        const bool hiHit = std::abs(mx - hiX) <= GRAB;
-        if (loHit || hiHit) {
-            // When both edges are within grab range, pick the closer one (#764)
-            if (loHit && hiHit)
-                m_draggingFilter = (std::abs(mx - loX) <= std::abs(mx - hiX))
-                    ? FilterEdge::Low : FilterEdge::High;
-            else
-                m_draggingFilter = loHit ? FilterEdge::Low : FilterEdge::High;
-
+        const int edgeHit = filterEdgeHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx);
+        if (edgeHit != 0) {
+            m_draggingFilter = edgeHit < 0 ? FilterEdge::Low : FilterEdge::High;
             // Store anchor offset so the edge doesn't snap to cursor (#764)
             const int edgeHz = (m_draggingFilter == FilterEdge::Low) ? ao->filterLowHz : ao->filterHighHz;
             m_filterDragStartX = mx;
@@ -3951,12 +4189,10 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         }
 
         // Click inside the filter passband → start VFO drag (#404)
-        const int left = std::min(loX, hiX);
-        const int right = std::max(loX, hiX);
-        if (mx > left + GRAB && mx < right - GRAB) {
+        if (filterPassbandBodyHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx)) {
             m_draggingVfo = true;
             m_vfoDragOffsetHz = static_cast<int>(std::round((xToMhz(mx) - ao->freqMhz) * 1.0e6));
-            setSpectrumCursor(Qt::SizeHorCursor);
+            setSpectrumCursor(Qt::ClosedHandCursor);
             ev->accept();
             return;
         }
@@ -3986,20 +4222,30 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
     const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
     (void)dragStatePublisher;
 
-    // Let child widgets (overlay menu buttons) own the pointer while hovered so
-    // their tooltips are not killed by SpectrumWidget's QToolTip::hideText() calls.
-    // Guard is skipped during active drags — those always start in the spectrum
-    // area, not over child widgets. (#2355)
-    if (!anyDragActive() && childAt(ev->position().toPoint())) {
-        ev->ignore();
-        return;
-    }
-
     const int chromeH  = freqScaleH() + DIVIDER_H;
     const int contentH = height() - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
     const int y = static_cast<int>(ev->position().y());
     const int mx = static_cast<int>(ev->position().x());
+    const QPoint mousePos = ev->position().toPoint();
+    Qt::CursorShape sliceCursorShape = Qt::ArrowCursor;
+    const bool overSliceCursorTarget = sliceCursorShapeAt(mousePos, sliceCursorShape);
+    if (!anyDragActive()) {
+        if (overSliceCursorTarget) {
+            setVfoCursorOverride(sliceCursorShape);
+        } else {
+            clearVfoCursorOverride();
+        }
+    }
+
+    // Let child widgets (overlay menu buttons) own the pointer while hovered so
+    // their tooltips are not killed by SpectrumWidget's QToolTip::hideText() calls.
+    // Slice passband/edge zones are still owned by the spectrum because their
+    // cursor advertises the drag action before click. (#2355)
+    if (!anyDragActive() && childAt(mousePos) && !overSliceCursorTarget) {
+        ev->ignore();
+        return;
+    }
 
     // TNF drag
     if (m_draggingTnfId >= 0) {
@@ -4279,27 +4525,11 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                         foundCursor = true;
                     }
                 }
-                if (const auto* ao = activeOverlay()) {
-                    const int loX = mhzToX(ao->freqMhz + ao->filterLowHz / 1.0e6);
-                    const int hiX = mhzToX(ao->freqMhz + ao->filterHighHz / 1.0e6);
-                    constexpr int GRAB = 5;
-                    if (!foundCursor
-                        && (std::abs(mx - loX) <= GRAB || std::abs(mx - hiX) <= GRAB)) {
-                        setSpectrumCursor(Qt::SizeHorCursor);
-                        foundCursor = true;
-                    }
-                }
                 if (!foundCursor) {
-                    // Check inactive slice markers + badges
-                    for (const auto& so : m_sliceOverlays) {
-                        if (so.isActive) continue;
-                        int sliceX = mhzToX(so.freqMhz);
-                        if ((mx >= sliceX - 8 && mx <= sliceX + 35 && y <= 25)
-                            || std::abs(mx - sliceX) <= 8) {
-                            setSpectrumCursor(Qt::PointingHandCursor);
-                            foundCursor = true;
-                            break;
-                        }
+                    Qt::CursorShape cursorShape = Qt::ArrowCursor;
+                    if (sliceCursorShapeAt(pos, cursorShape)) {
+                        setSpectrumCursor(cursorShape);
+                        foundCursor = true;
                     }
                 }
                 if (!foundCursor && m_showSpots) {
@@ -4377,6 +4607,7 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     PerfInputScope perfScope("mouseRelease");
     const auto dragStatePublisher = makeScopeExit([this] { publishPerfDragState(); });
     (void)dragStatePublisher;
+    clearVfoCursorOverride();
 
     if (m_draggingTnfId >= 0) {
         m_draggingTnfId = -1;
@@ -4627,6 +4858,7 @@ void SpectrumWidget::mouseDoubleClickEvent(QMouseEvent* ev)
 void SpectrumWidget::leaveEvent(QEvent* event)
 {
     QWidget::leaveEvent(event);
+    clearVfoCursorOverride();
     m_hoveredSpotKey.clear();
     m_lastTooltipRect = {};
     updateTrackedCursorState(QPoint(-1, -1), false);
@@ -4721,6 +4953,52 @@ bool SpectrumWidget::event(QEvent* ev)
         }
     }
     return SPECTRUM_BASE_CLASS::event(ev);
+}
+
+bool SpectrumWidget::eventFilter(QObject* watched, QEvent* event)
+{
+    QWidget* widget = qobject_cast<QWidget*>(watched);
+    if (!widget || anyDragActive()) {
+        return SPECTRUM_BASE_CLASS::eventFilter(watched, event);
+    }
+
+    bool vfoDescendant = false;
+    for (QWidget* current = widget; current && current != this;
+         current = current->parentWidget()) {
+        if (qobject_cast<VfoWidget*>(current)) {
+            vfoDescendant = true;
+            break;
+        }
+    }
+
+    if (!vfoDescendant) {
+        return SPECTRUM_BASE_CLASS::eventFilter(watched, event);
+    }
+
+    QPoint localPos;
+    bool hasPosition = false;
+    if (event->type() == QEvent::MouseMove) {
+        auto* mouseEvent = static_cast<QMouseEvent*>(event);
+        localPos = mapFromGlobal(mouseEvent->globalPosition().toPoint());
+        hasPosition = true;
+    } else if (event->type() == QEvent::Enter) {
+        auto* enterEvent = static_cast<QEnterEvent*>(event);
+        localPos = mapFromGlobal(enterEvent->globalPosition().toPoint());
+        hasPosition = true;
+    }
+
+    if (hasPosition) {
+        Qt::CursorShape cursorShape = Qt::ArrowCursor;
+        if (sliceCursorShapeAt(localPos, cursorShape)) {
+            setSpectrumCursor(cursorShape);
+            setVfoCursorOverride(cursorShape);
+        } else {
+            clearVfoCursorOverride();
+            setSpectrumCursor(Qt::CrossCursor);
+        }
+    }
+
+    return SPECTRUM_BASE_CLASS::eventFilter(watched, event);
 }
 
 // ─── Starstruck easter egg ────────────────────────────────────────────────────
@@ -5349,6 +5627,16 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         QPoint localPos = mapFromGlobal(QCursor::pos());
         if (rect().contains(localPos)) {
             updateTrackedCursorState(localPos, true);
+            if (!anyDragActive()) {
+                Qt::CursorShape cursorShape = Qt::ArrowCursor;
+                if (sliceCursorShapeAt(localPos, cursorShape)) {
+                    setSpectrumCursor(cursorShape);
+                    setVfoCursorOverride(cursorShape);
+                } else if (spectrumDefaultsToCrosshairAt(localPos)) {
+                    clearVfoCursorOverride();
+                    setSpectrumCursor(Qt::CrossCursor);
+                }
+            }
         } else if (m_cursorPos.x() >= 0 || m_hoveredTnfId >= 0 || m_tuneGuideVisible) {
             // Mouse left the widget without a leaveEvent
             updateTrackedCursorState(QPoint(-1, -1), false);

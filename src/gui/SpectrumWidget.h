@@ -526,6 +526,7 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
     bool event(QEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void leaveEvent(QEvent* event) override;
 
 public:
@@ -552,6 +553,11 @@ private:
     QColor tnfFillColor(const TnfMarker& tnf) const;
     QColor tnfLineColor(const TnfMarker& tnf) const;
     int  tnfAtPixel(int x, int preferredId = -1) const;
+    bool sliceCursorShapeAt(const QPoint& localPos, Qt::CursorShape& shape) const;
+    bool spectrumDefaultsToCrosshairAt(const QPoint& localPos) const;
+    void installVfoCursorEventFilter(VfoWidget* widget);
+    void setVfoCursorOverride(Qt::CursorShape shape);
+    void clearVfoCursorOverride();
     void setSpectrumCursor(Qt::CursorShape shape);
     void updateTrackedCursorState(const QPoint& localPos, bool insideWidget);
     void updateTnfHoverPopup();
@@ -1100,4 +1106,3 @@ private:
 };
 
 } // namespace AetherSDR
-
