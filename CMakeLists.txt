@@ -591,6 +591,11 @@ set(CORE_SOURCES
     src/core/tnc/KissTncServer.cpp
     src/core/tnc/TncTerminal.cpp
     src/core/pms/PmsMailbox.cpp
+    src/core/aprs/AprsPacket.cpp
+    src/core/aprs/AprsStationList.cpp
+    src/core/aprs/AprsMessenger.cpp
+    src/core/aprs/AprsBeacon.cpp
+    src/core/aprs/AprsSettings.cpp
 )
 
 if(APPLE)
@@ -663,6 +668,7 @@ set(GUI_SOURCES
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/Ax25HfPacketDecodeDialog.cpp
+    src/gui/AprsMessagesDialog.cpp
     src/gui/FlexControlDialog.cpp
     src/gui/PropDashboardDialog.cpp
     src/gui/MemoryCommands.cpp
@@ -2084,6 +2090,33 @@ add_executable(pms_mailbox_test
 target_include_directories(pms_mailbox_test PRIVATE src)
 target_link_libraries(pms_mailbox_test PRIVATE Qt6::Core)
 add_test(NAME pms_mailbox_test COMMAND pms_mailbox_test)
+
+# APRS info-field codec (pure parsing/encoding, no DSP).
+add_executable(aprs_packet_test
+    tests/aprs_packet_test.cpp
+    src/core/aprs/AprsPacket.cpp
+    src/core/tnc/Ax25.cpp
+)
+target_include_directories(aprs_packet_test PRIVATE src)
+target_link_libraries(aprs_packet_test PRIVATE Qt6::Core)
+add_test(NAME aprs_packet_test COMMAND aprs_packet_test)
+
+# APRS messaging engine + station roster. LogManager.cpp provides lcAx25
+# (the qCWarning category used by the persistence paths); it drags in
+# AsyncLogWriter + AppSettings, same as ax25_libmodem_shim_test.
+add_executable(aprs_messenger_test
+    tests/aprs_messenger_test.cpp
+    src/core/aprs/AprsPacket.cpp
+    src/core/aprs/AprsMessenger.cpp
+    src/core/aprs/AprsStationList.cpp
+    src/core/tnc/Ax25.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(aprs_messenger_test PRIVATE src)
+target_link_libraries(aprs_messenger_test PRIVATE Qt6::Core)
+add_test(NAME aprs_messenger_test COMMAND aprs_messenger_test)
 
 add_executable(tnc_terminal_test
     tests/tnc_terminal_test.cpp

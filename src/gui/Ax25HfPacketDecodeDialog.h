@@ -21,11 +21,17 @@ class QPushButton;
 class QRadioButton;
 class QSpinBox;
 class QStackedWidget;
+class QTableWidget;
 class QTextEdit;
 class QTimer;
+class QVBoxLayout;
 
 namespace AetherSDR {
 
+class AprsBeacon;
+class AprsMessagesDialog;
+class AprsMessenger;
+class AprsStationList;
 class AudioEngine;
 class HeardList;
 class KissTncServer;
@@ -112,6 +118,19 @@ private:
     void paceTransmitAudio();
     void finishTransmit(bool aborted, const QString& reason);
 
+    // APRS client (APRS tab): station table, timed beacon, messaging.
+    void buildAprsUi(QWidget* page, QVBoxLayout* pageLayout);
+    void applyAprsConfigFromUi(bool persist);
+    void refreshAprsStationTable();
+    void refreshAprsStationAges();
+    void refreshAprsPositionLabel();
+    void handleAprsStationMenu(const QPoint& pos);
+    void showAprsStationInfo(const QString& call);
+    void openAprsMessagesDialog();
+    void sendAprsMessageFromUi();
+    void updateAprsEnvelopeButton();
+    void handleGpsUpdate();
+
     // Personal Mailbox System (PMS) tab + service wiring.
     QWidget* buildMailboxPage();
     void setPmsEnabled(bool enabled, bool persist);
@@ -171,7 +190,6 @@ private:
     QPushButton* m_txButton{nullptr};
     QTextEdit* m_log{nullptr};
     QWidget* m_logFrame{nullptr};
-    QWidget* m_actionRowFrame{nullptr};
     QLabel* m_modemStatusDot{nullptr};
     QLabel* m_modemStatusValue{nullptr};
     QLabel* m_gainStageDot{nullptr};
@@ -235,6 +253,27 @@ private:
 
     // Shared station-heard log (feeds the terminal MHEARD + quick-connect).
     HeardList* m_heard{nullptr};
+
+    // APRS client services (APRS tab) and its controls.
+    AprsStationList* m_aprsStations{nullptr};
+    AprsMessenger* m_aprsMessenger{nullptr};
+    AprsBeacon* m_aprsBeacon{nullptr};
+    QPointer<AprsMessagesDialog> m_aprsMessagesDialog;
+    QTableWidget* m_aprsTable{nullptr};
+    QLineEdit* m_aprsMyCall{nullptr};
+    QComboBox* m_aprsSymbol{nullptr};
+    QLineEdit* m_aprsPath{nullptr};
+    QCheckBox* m_aprsBeaconEnable{nullptr};
+    QSpinBox* m_aprsBeaconInterval{nullptr};
+    QLineEdit* m_aprsBeaconText{nullptr};
+    QPushButton* m_aprsBeaconNow{nullptr};
+    QLabel* m_aprsPositionValue{nullptr};
+    QLineEdit* m_aprsManualLat{nullptr};
+    QLineEdit* m_aprsManualLon{nullptr};
+    QLineEdit* m_aprsMsgTo{nullptr};
+    QLineEdit* m_aprsMsgText{nullptr};
+    QPushButton* m_aprsMsgSend{nullptr};
+    QPushButton* m_aprsEnvelope{nullptr};
 
     // TNC Terminal service (connected-mode AX.25 client) and its controls.
     TncTerminal* m_terminal{nullptr};
