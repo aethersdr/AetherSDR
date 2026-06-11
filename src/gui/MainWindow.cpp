@@ -2676,7 +2676,11 @@ void MainWindow::updateStatusBarMinimumWidth()
         (m_sizeGrip && m_sizeGrip->isVisible()) ? m_sizeGrip->width() + 4 : 4;
     const int statusMinWidth =
         m_statusBarContainer->minimumSizeHint().width() + sizeGripAllowance;
-    setMinimumSize(qMax(1024, statusMinWidth), qMax(400, minimumHeight()));
+    const int screenWidthCap =
+        screen() ? screen()->availableGeometry().width() : statusMinWidth;
+    const int boundedMinWidth =
+        qBound(1024, statusMinWidth, qMax(1024, screenWidthCap));
+    setMinimumSize(boundedMinWidth, qMax(400, minimumHeight()));
 }
 
 #if defined(Q_OS_WIN)
