@@ -38,18 +38,22 @@
 #include <QDoubleValidator>
 #include <QFile>
 #include <QFileInfo>
+#include <QElapsedTimer>
 #include <QFont>
 #include <QFrame>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QHideEvent>
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QList>
 #include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QResizeEvent>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QScrollBar>
@@ -539,16 +543,24 @@ void TncSettings::migrateLegacy()
 
 class PacketActivityWidget final : public QWidget {
 public:
+    // An EKG-style sweep trace, in the spirit of a hospital heart monitor:
+    // a cursor sweeps continuously across the strip and every decoded frame
+    // draws a sharp QRS-like spike in green. HDLC candidates that failed the
+    // FCS draw smaller amber bumps, and an open receive gate (signal above
+    // squelch) lifts and slightly agitates the baseline. The trail fades with
+    // age, so the strip reads as "the last few seconds of the channel" — at
+    // typical APRS rates of 1-3 packets/s each packet is an individually
+    // countable heartbeat, where the old per-second bar graph mushed them
+    // into near-identical columns.
     explicit PacketActivityWidget(QWidget* parent = nullptr)
         : QWidget(parent)
-        , m_levels(68)
     {
-        setMinimumHeight(56);
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         setCursor(Qt::PointingHandCursor);
         updateToolTip();
-        for (int i = 0; i < m_levels.size(); ++i)
-            m_levels[i] = 6 + ((i * 7) % 8);
+        m_sweep.setInterval(kFrameMs);
+        connect(&m_sweep, &QTimer::timeout, this, [this] { advanceSweep(); });
+        resizeBuffers(220);
     }
 
     void setDebugEnabled(bool enabled)
@@ -565,37 +577,38 @@ public:
         m_clickHandler = std::move(handler);
     }
 
-    // Bar levels are pixel heights against the (taller) usable height; values
-    // are scaled so even one or two packets/sec produce a clearly visible spike
-    // rather than sitting on the floor.
+    // One accepted (FCS-good) frame: queue a QRS complex for the pen to draw
+    // as the cursor sweeps over the next ~quarter second.
     void recordFrame()
     {
-        m_cursor = (m_cursor + 9) % m_levels.size();
-        m_levels[m_cursor] = 46;
-        if (m_cursor + 3 < m_levels.size())
-            m_levels[m_cursor + 3] = 28;
-        update();
+        // P bump, Q dip, tall R, S undershoot, T recovery.
+        static constexpr float kQrs[] = {
+            0.10f, 0.16f, 0.10f, -0.10f, 0.55f, 1.00f, 0.45f,
+            -0.30f, -0.12f, 0.08f, 0.20f, 0.16f, 0.06f,
+        };
+        enqueue(kQrs, int(sizeof(kQrs) / sizeof(kQrs[0])), SampleKind::Decode);
+        wake();
     }
 
+    // Once-per-second channel health from the decoder diagnostics.
     void tick(int hdlcCandidates, int acceptedFrames, bool receiveGateOpen)
     {
-        if (m_levels.isEmpty())
-            return;
-
-        m_cursor = (m_cursor + 1) % m_levels.size();
-        int level = receiveGateOpen ? 16 : 6;
-        if (hdlcCandidates > 0)
-            level = std::max(level, 16 + std::min(28, hdlcCandidates * 5));
-        if (acceptedFrames > 0)
-            level = 46;
-        m_levels[m_cursor] = level;
-        update();
+        m_gateOpen = receiveGateOpen;
+        m_lastTick.restart();
+        // Accepted frames already spiked via recordFrame(); what's left here
+        // is candidates that never passed the FCS — the "almost" bumps.
+        static constexpr float kBump[] = { 0.12f, 0.30f, 0.45f, 0.30f, 0.12f };
+        const int failed = qMin(3, qMax(0, hdlcCandidates - acceptedFrames));
+        for (int i = 0; i < failed; ++i)
+            enqueue(kBump, int(sizeof(kBump) / sizeof(kBump[0])), SampleKind::Candidate);
+        wake();
     }
 
     void reset()
     {
-        for (int i = 0; i < m_levels.size(); ++i)
-            m_levels[i] = 6 + ((i * 5) % 7);
+        m_pending.clear();
+        std::fill(m_values.begin(), m_values.end(), 0.0f);
+        std::fill(m_kinds.begin(), m_kinds.end(), quint8(SampleKind::Idle));
         m_cursor = 0;
         update();
     }
@@ -611,48 +624,164 @@ protected:
         QWidget::mousePressEvent(event);
     }
 
+    void resizeEvent(QResizeEvent* event) override
+    {
+        QWidget::resizeEvent(event);
+        resizeBuffers(width());
+    }
+
+    void hideEvent(QHideEvent* event) override
+    {
+        m_sweep.stop();
+        QWidget::hideEvent(event);
+    }
+
     void paintEvent(QPaintEvent*) override
     {
         QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, false);
-        painter.fillRect(rect(), QColor(0, 0, 0, 0));
+        const QRectF frame = QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5);
 
-        const int count = m_levels.size();
-        if (count <= 0)
+        // Scope bed: near-black panel with a faint phosphor baseline.
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(QColor(0x23, 0x32, 0x46), 1));
+        painter.setBrush(QColor(0x03, 0x08, 0x0e));
+        painter.drawRoundedRect(frame, 4, 4);
+
+        const int n = m_values.size();
+        if (n < 8)
             return;
+        const float base = height() - 6.0f;
+        const float usable = height() - 10.0f;
+        auto yFor = [&](float v) {
+            return qBound(2.0f, base - v * usable, float(height() - 2));
+        };
 
-        const int gap = 3;
-        const int barWidth = qMax(2, (width() - gap * (count - 1)) / count);
-        const int usableHeight = qMax(1, height() - 8);
-        const int base = height() - 4;
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(m_debugEnabled ? QColor(210, 164, 72) : QColor(95, 206, 102));
-
-        for (int i = 0; i < count; ++i) {
-            const int level = qBound(2, m_levels[i], usableHeight);
-            const int x = i * (barWidth + gap);
-            painter.drawRect(QRect(x, base - level, barWidth, level));
-            if (m_levels[i] > 5)
-                --m_levels[i];
+        painter.setClipRect(frame);
+        // The trace, oldest-to-newest behind the cursor, alpha fading with
+        // age like phosphor afterglow. A short blank gap rides ahead of the
+        // cursor, as on a real monitor.
+        constexpr int kGapPx = 12;
+        for (int age = n - kGapPx; age >= 1; --age) {
+            const int i1 = (m_cursor - age + 1 + n) % n;
+            const int i0 = (i1 - 1 + n) % n;
+            const float fade = 1.0f - float(age) / float(n);
+            const int alpha = int(40 + 215 * fade * fade);
+            QColor color;
+            switch (SampleKind(m_kinds[i1])) {
+            case SampleKind::Decode:    color = QColor(0x80, 0xed, 0x91); break;
+            case SampleKind::Candidate: color = QColor(0xd2, 0xa4, 0x48); break;
+            case SampleKind::Idle:
+            default:
+                color = m_gateOpen ? QColor(0x4d, 0x86, 0xa8)
+                                   : QColor(0x35, 0x4a, 0x63);
+                break;
+            }
+            color.setAlpha(alpha);
+            painter.setPen(QPen(color, SampleKind(m_kinds[i1]) == SampleKind::Idle
+                                    ? 1.0 : 1.6));
+            painter.drawLine(QPointF(i0, yFor(m_values[i0])),
+                             QPointF(i1, yFor(m_values[i1])));
         }
+
+        // Cursor head: a bright dot with a soft glow.
+        const QPointF head(m_cursor, yFor(m_values[m_cursor]));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(0x80, 0xed, 0x91, 70));
+        painter.drawEllipse(head, 4.0, 4.0);
+        painter.setBrush(QColor(0xd6, 0xff, 0xdd));
+        painter.drawEllipse(head, 1.6, 1.6);
+        painter.setClipping(false);
 
         if (m_debugEnabled) {
             painter.setBrush(Qt::NoBrush);
             painter.setPen(QPen(QColor(210, 164, 72), 1));
-            painter.drawRect(rect().adjusted(0, 0, -1, -1));
+            painter.drawRoundedRect(frame, 4, 4);
         }
     }
 
 private:
+    enum class SampleKind : quint8 { Idle = 0, Candidate = 1, Decode = 2 };
+
+    static constexpr int kFrameMs = 33;     // ~30 fps sweep animation
+    static constexpr int kPxPerFrame = 2;   // ~60 px/s; a 220 px strip ≈ 3.6 s
+
+    void resizeBuffers(int w)
+    {
+        const int n = qBound(60, w, 2000);
+        if (n == m_values.size())
+            return;
+        m_values = QVector<float>(n, 0.0f);
+        m_kinds = QVector<quint8>(n, quint8(SampleKind::Idle));
+        m_cursor = qMin(m_cursor, n - 1);
+    }
+
+    void enqueue(const float* shape, int count, SampleKind kind)
+    {
+        // Bound the backlog so a burst can't lag the pen seconds behind
+        // real time; newest data wins, matching the TX queue philosophy.
+        if (m_pending.size() > 96)
+            m_pending.clear();
+        for (int i = 0; i < count; ++i)
+            m_pending.append({ shape[i], quint8(kind) });
+    }
+
+    void wake()
+    {
+        if (!m_sweep.isActive() && isVisible())
+            m_sweep.start();
+    }
+
+    void advanceSweep()
+    {
+        const int n = m_values.size();
+        if (n <= 0)
+            return;
+        for (int step = 0; step < kPxPerFrame; ++step) {
+            m_cursor = (m_cursor + 1) % n;
+            if (!m_pending.isEmpty()) {
+                const PendingSample s = m_pending.takeFirst();
+                m_values[m_cursor] = s.value;
+                m_kinds[m_cursor] = s.kind;
+            } else {
+                // Idle pen: flat when squelched, a restless 1-2 px shimmer
+                // while the receive gate is open ("there is RF here").
+                const float wiggle = m_gateOpen
+                    ? 0.05f + 0.04f * float((m_cursor * 7) % 3)
+                    : 0.0f;
+                m_values[m_cursor] = wiggle;
+                m_kinds[m_cursor] = quint8(SampleKind::Idle);
+            }
+        }
+        // Freeze the trace (and stop repainting) once the modem stops
+        // delivering diagnostics and the backlog has drained.
+        if (m_pending.isEmpty() && m_lastTick.isValid()
+            && m_lastTick.elapsed() > 3000)
+            m_sweep.stop();
+        update();
+    }
+
     void updateToolTip()
     {
         setToolTip(m_debugEnabled
-            ? QStringLiteral("Packet diagnostics debug is on. Click to turn it off.")
-            : QStringLiteral("Packet diagnostics debug is off. Click to turn it on."));
+            ? QStringLiteral("Packet activity debug is on: raw decode log, AX.25 TX "
+                             "row and diagnostics are shown. Click to turn it off.")
+            : QStringLiteral("Each green heartbeat is a decoded packet; amber bumps "
+                             "are frames that failed the FCS. Click to show the raw "
+                             "decode log, AX.25 TX row and diagnostics."));
     }
 
-    QVector<int> m_levels;
+    struct PendingSample {
+        float value;
+        quint8 kind;
+    };
+
+    QVector<float> m_values;
+    QVector<quint8> m_kinds;
+    QList<PendingSample> m_pending;
+    QTimer m_sweep;
+    QElapsedTimer m_lastTick;
     int m_cursor{0};
+    bool m_gateOpen{false};
     bool m_debugEnabled{false};
     std::function<void()> m_clickHandler;
 };
@@ -768,9 +897,18 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     modemLayout->setContentsMargins(0, 0, 20, 0);
     modemLayout->setSpacing(12);
     modemLayout->addWidget(sectionLabel(QStringLiteral("MODEM"), modemCell));
+    auto* modemChecks = new QHBoxLayout;
+    modemChecks->setSpacing(20);
     m_enableDecode = new QCheckBox(QStringLiteral("Enable Modem"), modemCell);
-    modemLayout->addWidget(m_enableDecode);
-    controls->addWidget(modemCell, 1);
+    modemChecks->addWidget(m_enableDecode);
+    m_modemAutostart = new QCheckBox(QStringLiteral("Autostart at launch"), modemCell);
+    m_modemAutostart->setToolTip(QStringLiteral(
+        "Enable the modem automatically when AetherSDR starts."));
+    m_modemAutostart->setChecked(AprsSettings::modemAutostart());
+    modemChecks->addWidget(m_modemAutostart);
+    modemChecks->addStretch(1);
+    modemLayout->addLayout(modemChecks);
+    controls->addWidget(modemCell, 2);
     controls->addStretch(2);
 
     m_captureButton = new QPushButton(QStringLiteral("Capture 3m"), controlsFrame);
@@ -783,6 +921,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     ax25PageLayout->addWidget(controlsFrame);
 
     auto* txFrame = panel(QStringLiteral("ControlsFrame"), ax25Page);
+    m_txFrame = txFrame;
     auto* txLayout = new QHBoxLayout(txFrame);
     txLayout->setContentsMargins(16, 12, 16, 12);
     txLayout->setSpacing(12);
@@ -861,7 +1000,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_packetActivity = new PacketActivityWidget(statusBar);
     m_packetActivity->setMinimumHeight(18);
     m_packetActivity->setMaximumHeight(20);
-    m_packetActivity->setMinimumWidth(180);
+    // The EKG sweep is the main at-a-glance channel indicator now that the
+    // raw log hides behind the debug toggle — give it a wide strip.
+    m_packetActivity->setMinimumWidth(300);
     m_packetActivity->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     m_packetActivity->setClickHandler([this] {
         setDiagnosticsDebugEnabled(!m_diagnosticsDebugEnabled, true);
@@ -888,6 +1029,9 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     });
     connect(m_enableDecode, &QCheckBox::toggled,
             this, &Ax25HfPacketDecodeDialog::setDecodeEnabled);
+    connect(m_modemAutostart, &QCheckBox::toggled, this, [](bool on) {
+        AprsSettings::setModemAutostart(on);
+    });
     connect(m_clearButton, &QPushButton::clicked, this, [this] {
         m_log->clear();
         m_frameCount = 0;
@@ -1135,6 +1279,12 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     handleGpsUpdate();
     refreshAprsStationTable();
     updateAprsEnvelopeButton();
+
+    // Modem autostart: fires the toggled handler, which starts the RX tap.
+    // MainWindow constructs this dialog (hidden) at app launch when the
+    // setting is on, same as the KISS TNC start-on-startup path.
+    if (AprsSettings::modemAutostart() && m_enableDecode)
+        m_enableDecode->setChecked(true);
 
     // No control button may be the dialog's default button — otherwise pressing
     // Return in a text field would trigger it (Connect, Transmit, ...). Combined
@@ -1891,6 +2041,10 @@ void Ax25HfPacketDecodeDialog::setDiagnosticsDebugEnabled(bool enabled, bool per
             ? QStringLiteral("PACKET ACTIVITY DEBUG")
             : QStringLiteral("PACKET ACTIVITY"));
     }
+    // The raw decode log + raw AX.25 TX row on the APRS tab follow the debug
+    // flag; refresh the chrome so they appear/disappear immediately.
+    if (m_tabStack)
+        updateTabChrome(m_tabStack->currentIndex());
 
     if (persist) {
         AppSettings::instance().setValue(kPacketDecoderDebugSetting, enabled);
@@ -2623,17 +2777,22 @@ void Ax25HfPacketDecodeDialog::updateTabChrome(int index)
 {
     // The Terminal tab (stack index 2) wants the whole window: hide the shared
     // decode-log panel and give the tab stack the vertical stretch so the
-    // transcript fills the viewport. The APRS tab (index 0) keeps the raw log
-    // but the station table gets the lion's share of the height. Other tabs
+    // transcript fills the viewport. On the APRS tab (index 0) the raw decode
+    // log and the raw AX.25 TX row are debug chrome — shown only while Packet
+    // Activity Debug is on (click the activity trace to toggle), so the
+    // station table gets the full viewport in normal operation. Other tabs
     // keep the log panel below their controls.
     const bool terminal = (index == 2);
     const bool aprs = (index == 0);
+    const bool logVisible = !terminal && (!aprs || m_diagnosticsDebugEnabled);
     if (m_logFrame)
-        m_logFrame->setVisible(!terminal);
+        m_logFrame->setVisible(logVisible);
+    if (m_txFrame)
+        m_txFrame->setVisible(m_diagnosticsDebugEnabled);
     if (auto* root = qobject_cast<QVBoxLayout*>(bodyWidget()->layout())) {
-        root->setStretchFactor(m_tabStack, terminal ? 1 : (aprs ? 3 : 0));
+        root->setStretchFactor(m_tabStack, !logVisible ? 1 : (aprs ? 3 : 0));
         if (m_logFrame)
-            root->setStretchFactor(m_logFrame, terminal ? 0 : 1);
+            root->setStretchFactor(m_logFrame, logVisible ? 1 : 0);
     }
 }
 

@@ -34,6 +34,7 @@
 #include "core/PipeWireAudioBridge.h"
 #endif
 #include "core/AppSettings.h"
+#include "core/aprs/AprsSettings.h"
 #include "core/LogManager.h"
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
@@ -84,12 +85,16 @@ void MainWindow::startKissTncOnStartupIfConfigured()
     // the nested-JSON blob (Constitution Principle V). Safe to call on
     // every startup — no-op once the blob exists.
     TncSettings::migrateLegacy();
-    if (!TncSettings::startOnStartup())
+    // Two launch-time services live in the AetherModem dialog: the KISS TCP
+    // server and the APRS modem autostart. Either one warrants constructing
+    // the dialog now.
+    if (!TncSettings::startOnStartup() && !AprsSettings::modemAutostart())
         return;
 
     // Construct the AetherModem window hidden and persistent (no WA_DeleteOnClose)
-    // so the KISS TCP server runs from launch and survives the window being
-    // closed. The dialog's constructor auto-starts the TNC per the same setting.
+    // so the KISS TCP server / APRS modem runs from launch and survives the
+    // window being closed. The dialog's constructor auto-starts the TNC and
+    // the modem per their respective settings.
     auto* dlg = new Ax25HfPacketDecodeDialog(m_audio, &m_radioModel, activeSlice(), this);
     dlg->setFramelessMode(
         AppSettings::instance().value("FramelessWindow", "True").toString() == "True");

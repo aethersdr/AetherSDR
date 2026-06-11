@@ -186,8 +186,10 @@ private:
     QRadioButton* m_hf300Profile{nullptr};
     QRadioButton* m_vhf1200Profile{nullptr};
     QCheckBox* m_enableDecode{nullptr};
+    QCheckBox* m_modemAutostart{nullptr};
     QLineEdit* m_txText{nullptr};
     QPushButton* m_txButton{nullptr};
+    QWidget* m_txFrame{nullptr};
     QTextEdit* m_log{nullptr};
     QWidget* m_logFrame{nullptr};
     QLabel* m_modemStatusDot{nullptr};

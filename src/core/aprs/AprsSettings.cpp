@@ -41,6 +41,12 @@ QString AprsSettings::myCall()
     return readObj().value(QStringLiteral("myCall")).toString();
 }
 
+bool AprsSettings::modemAutostart()
+{
+    return readObj().value(QStringLiteral("modemAutostart"))
+               .toString(QStringLiteral("False")) == QLatin1String("True");
+}
+
 bool AprsSettings::beaconEnabled()
 {
     return readObj().value(QStringLiteral("beaconEnabled"))
@@ -85,6 +91,12 @@ QString AprsSettings::manualLon()
 void AprsSettings::setMyCall(const QString& call)
 {
     setString("myCall", call.trimmed().toUpper());
+}
+
+void AprsSettings::setModemAutostart(bool on)
+{
+    setString("modemAutostart",
+              on ? QStringLiteral("True") : QStringLiteral("False"));
 }
 
 void AprsSettings::setBeaconEnabled(bool on)
