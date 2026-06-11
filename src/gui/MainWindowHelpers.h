@@ -18,7 +18,12 @@
 #include <QList>
 #include <QPixmap>
 #include <QString>
+#include <QMap>
 #include <QStringList>
+#include <QVector>
+
+#include "models/RadioModel.h"
+#include "models/XvtrPolicy.h"
 
 #include "ClientDisconnectDialog.h"  // QList<ClientDisconnectDialog::Client> returns
 
@@ -27,6 +32,7 @@ class QKeyEvent;
 namespace AetherSDR {
 
 class RadioModel;
+class SpectrumWidget;
 class TnfModel;
 struct MemoryEntry;
 struct RadioInfo;
@@ -82,6 +88,27 @@ inline constexpr const char* kCwRightPaddleActionName = "Trigger CW Right Paddle
 
 // Pan count for a saved layout id (e.g. "2x2" → 4); 1 for unknown ids.
 int panCountForLayoutId(const QString& layoutId);
+
+// ─── XVTR policy summaries (diagnostics) ────────────────────────────────────
+//
+// Shared by the slice-tuning logs in MainWindow.cpp and the per-pan wiring
+// in MainWindow_Wiring.cpp.
+
+QVector<XvtrPolicy::Transverter> xvtrPolicyBandsFrom(
+    const QMap<int, RadioModel::XvtrInfo>& xvtrs);
+QString xvtrListSummary(const QVector<XvtrPolicy::Transverter>& xvtrs);
+QString xvtrForBandSummary(const QString& bandName,
+                           const QVector<XvtrPolicy::Transverter>& xvtrs);
+
+// ─── Pan pixel dimensions ────────────────────────────────────────────────────
+//
+// Effective pan stream dimensions for a SpectrumWidget, with safe defaults
+// while the widget has no real geometry yet. Shared by the connect-time
+// sizing in MainWindow.cpp and the per-pan wiring in MainWindow_Wiring.cpp.
+
+int panXpixelsFor(const SpectrumWidget* spectrum);
+int panYpixelsFor(const SpectrumWidget* spectrum);
+bool panPixelDimensionsReady(const SpectrumWidget* spectrum);
 
 // ─── Misc UI ─────────────────────────────────────────────────────────────────
 

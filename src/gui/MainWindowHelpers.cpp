@@ -1,11 +1,13 @@
 #include "MainWindowHelpers.h"
 
+#include "SpectrumWidget.h"
 #include "core/PanadapterStream.h"
 #include "core/RadioDiscovery.h"
 #include "core/SmartLinkClient.h"
 #include "models/BandSettings.h"
 #include "models/MemoryEntry.h"
 #include "models/RadioModel.h"
+#include "models/XvtrPolicy.h"
 #include "models/TnfModel.h"
 
 #include <QFileInfo>
@@ -259,6 +261,89 @@ int panCountForLayoutId(const QString& layoutId)
         {"2x2", 4}, {"4v", 4}, {"3h2", 5}, {"2x3", 6}, {"4h3", 7}, {"2x4", 8}
     };
     return kPanCounts.value(layoutId, 1);
+}
+
+// ─── XVTR policy summaries (diagnostics) ────────────────────────────────────
+
+QVector<XvtrPolicy::Transverter> xvtrPolicyBandsFrom(
+    const QMap<int, RadioModel::XvtrInfo>& xvtrs)
+{
+    QVector<XvtrPolicy::Transverter> bands;
+    bands.reserve(xvtrs.size());
+    for (auto it = xvtrs.cbegin(); it != xvtrs.cend(); ++it) {
+        const auto& x = it.value();
+        bands.append({x.index, x.order, x.name, x.rfFreq, x.ifFreq, x.isValid});
+    }
+    return bands;
+}
+
+QString xvtrSummary(const XvtrPolicy::Transverter& xvtr)
+{
+    return QStringLiteral("%1[idx=%2 order=%3 valid=%4 rf=%5 if=%6 offset=%7]")
+        .arg(xvtr.name.isEmpty() ? QStringLiteral("(unnamed)") : xvtr.name)
+        .arg(xvtr.index)
+        .arg(xvtr.order)
+        .arg(xvtr.isValid ? QStringLiteral("true") : QStringLiteral("false"))
+        .arg(xvtr.rfFreqMhz, 0, 'f', 6)
+        .arg(xvtr.ifFreqMhz, 0, 'f', 6)
+        .arg(xvtr.rfFreqMhz - xvtr.ifFreqMhz, 0, 'f', 6);
+}
+
+QString xvtrListSummary(const QVector<XvtrPolicy::Transverter>& xvtrs)
+{
+    QStringList entries;
+    entries.reserve(xvtrs.size());
+    for (const auto& xvtr : xvtrs)
+        entries << xvtrSummary(xvtr);
+    return entries.isEmpty() ? QStringLiteral("(none)") : entries.join(QStringLiteral("; "));
+}
+
+QString xvtrForBandSummary(const QString& bandName,
+                           const QVector<XvtrPolicy::Transverter>& xvtrs)
+{
+    for (const auto& xvtr : xvtrs) {
+        if (xvtr.name == bandName)
+            return xvtrSummary(xvtr);
+    }
+    return QStringLiteral("(none)");
+}
+
+// ─── Pan pixel dimensions ────────────────────────────────────────────────────
+
+namespace {
+constexpr int kDefaultPanXpixels = 1024;
+constexpr int kDefaultPanYpixels = 700;
+constexpr int kMinPanXpixels = 100;
+constexpr int kMinPanYpixels = 20;
+constexpr int kMinRadioPanYpixels = 100;
+} // namespace
+
+int panXpixelsFor(const SpectrumWidget* spectrum)
+{
+    if (!spectrum || spectrum->width() < kMinPanXpixels) {
+        return kDefaultPanXpixels;
+    }
+    return spectrum->width();
+}
+
+int panYpixelsFor(const SpectrumWidget* spectrum)
+{
+    if (!spectrum) {
+        return kDefaultPanYpixels;
+    }
+
+    const int ypix = spectrum->spectrumPixelHeight();
+    if (ypix < kMinPanYpixels) {
+        return kDefaultPanYpixels;
+    }
+    return std::max(ypix, kMinRadioPanYpixels);
+}
+
+bool panPixelDimensionsReady(const SpectrumWidget* spectrum)
+{
+    return spectrum
+        && spectrum->width() >= kMinPanXpixels
+        && spectrum->spectrumPixelHeight() >= kMinPanYpixels;
 }
 
 // ─── Misc UI ─────────────────────────────────────────────────────────────────
