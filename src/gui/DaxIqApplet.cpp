@@ -196,7 +196,15 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
         bool exists = m_model->daxIqModel().stream(ch).exists;
         m_iqEnable[idx]->setText(exists ? "On" : "Off");
         m_iqEnable[idx]->setStyleSheet(exists ? kIqBtnOn : kIqBtnOff);
-        if (!exists) {
+        // Zero the meter whenever the channel is not actively bound to a pan: it
+        // may be Off (exists==false) OR enabled-but-unbound (pan==0x0, e.g. the
+        // pan's daxiq_channel was moved to another IQ channel). No IQ data flows
+        // in either case, so the bar must drop to 0 instead of freezing.
+        const QString pan = exists ? m_model->daxIqModel().stream(ch).panId : QString();
+        const bool bound = exists && !pan.isEmpty()
+                           && pan != QStringLiteral("0x0") && pan != QStringLiteral("0");
+        if (!bound) {
+            m_iqMeterDb[idx] = -70.0f;
             m_iqMeter[idx]->setValue(0);
         }
 
@@ -223,6 +231,23 @@ void DaxIqApplet::setDaxIqLevel(int channel, float rms)
         return;
     }
     const int i = channel - 1;
+
+    // Ignore stale level updates when the channel is off OR unbound from a pan
+    // (pan==0x0): no IQ data flows, and a levelReady queued just before the
+    // disable/unbind would otherwise freeze the bar at its last value (random,
+    // timing-dependent). Force the bar to 0 and reset ballistics in that case.
+    if (!m_model) {
+        m_iqMeterDb[i] = -70.0f; m_iqMeter[i]->setValue(0); return;
+    }
+    const auto& st = m_model->daxIqModel().stream(channel);
+    const bool live = m_iqEnable[i]->text() == QStringLiteral("On")
+                      && st.exists && !st.panId.isEmpty()
+                      && st.panId != QStringLiteral("0x0") && st.panId != QStringLiteral("0");
+    if (!live) {
+        m_iqMeterDb[i] = -70.0f;
+        m_iqMeter[i]->setValue(0);
+        return;
+    }
 
     // DAX-IQ samples are the radio's raw baseband amplitude (int16 full-scale,
     // ~32768), NOT normalized [-1,1] like DAX audio. The old `rms * 200` assumed
