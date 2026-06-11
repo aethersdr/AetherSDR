@@ -78,6 +78,11 @@ inline constexpr const char* kCwStraightKeyActionName = "Trigger straight key";
 inline constexpr const char* kCwLeftPaddleActionName = "Trigger CW Left Paddle";
 inline constexpr const char* kCwRightPaddleActionName = "Trigger CW Right Paddle";
 
+// ─── Pan layout ──────────────────────────────────────────────────────────────
+
+// Pan count for a saved layout id (e.g. "2x2" → 4); 1 for unknown ids.
+int panCountForLayoutId(const QString& layoutId);
+
 // ─── Misc UI ─────────────────────────────────────────────────────────────────
 
 QPixmap buildBandStackIndicatorPixmap(bool active);

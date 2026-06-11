@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QLocale>
+#include <QMap>
 #include <QPainter>
 
 #include <algorithm>
@@ -247,6 +248,17 @@ QString memorySpotComment(const MemoryEntry& memory)
                     .arg(memory.rxFilterHigh);
     }
     return parts.join(" | ");
+}
+
+// ─── Pan layout ──────────────────────────────────────────────────────────────
+
+int panCountForLayoutId(const QString& layoutId)
+{
+    static const QMap<QString, int> kPanCounts = {
+        {"1", 1}, {"2v", 2}, {"2h", 2}, {"2h1", 3}, {"12h", 3}, {"3v", 3},
+        {"2x2", 4}, {"4v", 4}, {"3h2", 5}, {"2x3", 6}, {"4h3", 7}, {"2x4", 8}
+    };
+    return kPanCounts.value(layoutId, 1);
 }
 
 // ─── Misc UI ─────────────────────────────────────────────────────────────────
