@@ -19,12 +19,6 @@
 #include <mutex>
 #include <vector>
 
-// MSVC uses __restrict; GCC/Clang use __restrict__
-#ifdef _MSC_VER
-#  ifndef __restrict__
-#    define __restrict__ __restrict
-#  endif
-#endif
 
 namespace AetherDemod {
 

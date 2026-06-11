@@ -2053,6 +2053,14 @@ target_link_libraries(ax25_libmodem_shim_test PRIVATE Qt6::Core aether_libmodem_
     aether_afskdemod)
 add_test(NAME ax25_libmodem_shim_test COMMAND ax25_libmodem_shim_test)
 
+add_executable(hdlc_codec_test
+    tests/hdlc_codec_test.cpp
+    src/core/tnc/HdlcCodec.cpp
+)
+target_include_directories(hdlc_codec_test PRIVATE src)
+target_link_libraries(hdlc_codec_test PRIVATE aether_libmodem_core)
+add_test(NAME hdlc_codec_test COMMAND hdlc_codec_test)
+
 # Offline AX.25 decode diagnostic: replays a captured WAV through the decoder.
 # Not a ctest (needs an input file); built on demand for troubleshooting.
 add_executable(ax25_replay EXCLUDE_FROM_ALL
@@ -2107,14 +2115,6 @@ add_executable(tnc_terminal_test
 target_include_directories(tnc_terminal_test PRIVATE src)
 target_link_libraries(tnc_terminal_test PRIVATE Qt6::Core)
 add_test(NAME tnc_terminal_test COMMAND tnc_terminal_test)
-
-add_executable(hdlc_codec_test
-    tests/hdlc_codec_test.cpp
-    src/core/tnc/HdlcCodec.cpp
-)
-target_include_directories(hdlc_codec_test PRIVATE src)
-target_link_libraries(hdlc_codec_test PRIVATE aether_libmodem_core)
-add_test(NAME hdlc_codec_test COMMAND hdlc_codec_test)
 
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp

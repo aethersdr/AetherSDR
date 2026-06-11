@@ -780,8 +780,8 @@ struct AetherAx25LibmodemShim::Impl {
         lastRejectFrameBits = lane.hdlcCodec.frameSizeBits();
         lastRejectFrameBytes = static_cast<int>(frameBytesSize);
         lastRejectPreviewHex = framePreviewHex(lane.hdlcCodec.frameData(), frameBytesSize);
-        lastRejectActualFcs = frameBytesSize >= 18 ? fcsToString(actualFcs) : QString();
-        lastRejectExpectedFcs = frameBytesSize >= 18 ? fcsToString(expectedFcs) : QString();
+        lastRejectActualFcs = frameBytesSize >= 17 ? fcsToString(actualFcs) : QString();
+        lastRejectExpectedFcs = frameBytesSize >= 17 ? fcsToString(expectedFcs) : QString();
 
         // Minimum valid AX.25 frame is 17 bytes (14 address + 1 control + 2 FCS);
         // a no-PID U-frame (SABM/DISC/UA/DM) sits exactly at 17. Anything shorter
@@ -828,7 +828,10 @@ struct AetherAx25LibmodemShim::Impl {
         const bool frameComplete = lane.hdlcCodec.processBit(bit ? 1 : 0);
 
         if (lane.hdlcCodec.inFrame() && !wasInFrame) {
-            if (currentDecodeSampleIndex > lastHdlcFrameStartSampleIndex + 10) {
+            // One symbol = 20 samples at 24 kHz/1200 baud; window suppresses
+            // cross-lane duplicates.  Counter is approximate: DPLLs on
+            // different lanes may land frame-start detection slightly apart.
+            if (currentDecodeSampleIndex > lastHdlcFrameStartSampleIndex + 20) {
                 lastHdlcFrameStartSampleIndex = currentDecodeSampleIndex;
                 ++totalHdlcFrameStarts;
             }
@@ -1086,6 +1089,7 @@ QVector<Ax25DecodedFrame> AetherAx25LibmodemShim::processMonoFloat(const float* 
                                                                    int sampleRate)
 {
     QVector<Ax25DecodedFrame> frames;
+    // lanes.empty() when VhfMode::Off — diagnostics stay frozen intentionally.
     if (!samples || sampleCount <= 0 || m_impl->lanes.empty())
         return frames;
 

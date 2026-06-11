@@ -21,7 +21,7 @@ namespace AetherDemod {
 // ── Profile-A tuning constants (from Dire Wolf demod_afsk.c / dsp.c) ─────────
 
 static constexpr float kPrefilterBaud    = 0.155f;  // BPF skirt each side, fraction of baud
-static constexpr float kPrefilterLenSym  = 383.f * 1200.f / 44100.f; // ~8.3 symbol-times
+static constexpr float kPrefilterLenSym  = 383.f * 1200.f / 44100.f; // ~10.4 symbol-times
 static constexpr float kRrcRolloff       = 0.20f;
 static constexpr float kRrcWidthSym      = 2.80f;
 static constexpr float kAgcFastAttack    = 0.70f;
