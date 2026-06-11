@@ -169,23 +169,17 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
         if (!connected) {
             return;
         }
-        QTimer::singleShot(1500, this, [this]() {
-            if (!m_model || !m_model->isConnected()) {
-                return;
-            }
-            auto& ss = AppSettings::instance();
-            for (int i = 0; i < kChannels; ++i) {
-                if (!m_iqEnable[i]) {
-                    continue;
-                }
-                if (ss.value(QStringLiteral("DaxIqEnabled%1").arg(i + 1), "False").toString() == "True") {
-                    emit iqEnableRequested(i + 1);
-                    m_iqEnable[i]->setText("On");
-                    m_iqEnable[i]->setStyleSheet(kIqBtnOn);
-                }
-            }
-        });
+        restoreEnabledChannels();
     });
+
+    // The radio can already be connected by the time this applet wires up the
+    // handler above: the connection completes asynchronously during the long
+    // startup constructor, often before setRadioModel() runs, so the initial
+    // connectionStateChanged(true) is emitted and missed -> persisted channels
+    // never restore. Cover that ordering explicitly.
+    if (model->isConnected()) {
+        restoreEnabledChannels();
+    }
 
     // Wire DAX IQ stream state changes → sync On/Off buttons
     connect(&model->daxIqModel(), &DaxIqModel::streamChanged, this, [this](int ch) {
@@ -221,6 +215,39 @@ void DaxIqApplet::setRadioModel(RadioModel* model)
                     break;
                 }
             }
+        }
+    });
+}
+
+void DaxIqApplet::restoreEnabledChannels()
+{
+    // Re-create the persisted-enabled IQ streams a short moment after connect,
+    // once session/stream setup has settled. Idempotent (skips channels whose
+    // stream already exists) so calling it from both the connect handler and the
+    // already-connected path in setRadioModel cannot double-create.
+    QTimer::singleShot(1500, this, [this]() {
+        if (!m_model || !m_model->isConnected()) {
+            return;
+        }
+        auto& ss = AppSettings::instance();
+        for (int i = 0; i < kChannels; ++i) {
+            if (!m_iqEnable[i]) {
+                continue;
+            }
+            if (ss.value(QStringLiteral("DaxIqEnabled%1").arg(i + 1), "False").toString() != "True") {
+                continue;
+            }
+            if (m_model->daxIqModel().stream(i + 1).exists) {
+                continue;  // already restored
+            }
+            // Restore the saved rate too: sync the model's desired rate to the
+            // combo (restored from DaxIqRate%1 in buildUI) so the stream comes up
+            // at the persisted rate instead of the radio's 48k default.
+            emit iqRateChanged(i + 1, m_iqRateCombo[i]->currentData().toInt());
+            emit iqEnableRequested(i + 1);
+            // The On button is driven by the streamChanged sync once the stream
+            // actually exists; don't pre-set it here so a restore that runs before
+            // the createStream wiring is in place can't show a dead "On".
         }
     });
 }

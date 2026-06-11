@@ -1024,6 +1024,12 @@ bool MainWindow::startDax()
     connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqRateChanged,
             &m_radioModel.daxIqModel(), &DaxIqModel::setSampleRate);
 
+    // On PipeWire/macOS the IQ enable->createStream wiring above is established
+    // lazily here (when DAX audio starts), not at construction, so the applet's
+    // connect-time restore runs before these connections exist and is dropped.
+    // Restore persisted-enabled IQ channels now that the wiring is in place.
+    m_appletPanel->daxIqApplet()->restoreEnabledChannels();
+
     // Wire DAX level meters
     connect(m_daxBridge, &DaxBridge::daxRxLevel,
             m_appletPanel->daxApplet(), &DaxApplet::setDaxRxLevel);

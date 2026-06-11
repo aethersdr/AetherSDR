@@ -24,6 +24,7 @@ public:
     void setRadioModel(RadioModel* model);
 
     void setDaxIqLevel(int channel, float rms);
+    void restoreEnabledChannels();
 
 signals:
     void iqEnableRequested(int channel);
