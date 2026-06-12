@@ -38,7 +38,11 @@ public:
         bool hasAltitude{false};
         double altitudeFeet{0.0};
 
-        QString comment;         // last position comment
+        // Weather station data: comment holds the readable weatherSummary().
+        bool isWeather{false};
+        int wxCondition{0};      // aprsicons weather condition (cloud/rain/wind)
+
+        QString comment;         // last position comment / weather summary
         QString status;          // last '>' status text
         QString via;             // last digipeater path, comma-joined
         QString lastInfo;        // raw info field of the last packet

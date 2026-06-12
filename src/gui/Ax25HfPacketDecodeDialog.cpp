@@ -2843,6 +2843,75 @@ enum AprsColumn {
     kColCount,
 };
 
+// Item data roles for the station table. Qt::UserRole carries the payload
+// the rest of the dialog reads (callsign / lastHeard msecs); the rest are
+// internal to sorting, age-fading, and icon refresh.
+constexpr int kAprsSortRole = Qt::UserRole + 1; // numeric sort key (double)
+constexpr int kAprsFadeRole = Qt::UserRole + 2; // last applied fade step
+constexpr int kAprsSymRole = Qt::UserRole + 3;  // "S:<table><code>" or "W:<n>"
+
+// QTableWidgetItem sorts by display text; give numeric columns (time, age,
+// packets, distance, speed) a real sort key instead.
+class AprsSortItem final : public QTableWidgetItem {
+public:
+    using QTableWidgetItem::QTableWidgetItem;
+    bool operator<(const QTableWidgetItem& other) const override
+    {
+        const QVariant a = data(kAprsSortRole);
+        const QVariant b = other.data(kAprsSortRole);
+        if (a.isValid() && b.isValid())
+            return a.toDouble() < b.toDouble();
+        return QTableWidgetItem::operator<(other);
+    }
+};
+
+// Age-fade: rows at full brightness for 5 minutes, then a linear fade down
+// to 50% at 30 minutes, where they stay. Active stations pop; the roster's
+// overnight tail recedes without disappearing.
+constexpr qint64 kAprsFadeStartSecs = 5 * 60;
+constexpr qint64 kAprsFadeEndSecs = 30 * 60;
+
+void applyAprsRowFade(QTableWidget* table, int row)
+{
+    auto* ageItem = table->item(row, kColAge);
+    if (!ageItem)
+        return;
+    const qint64 secs =
+        (QDateTime::currentMSecsSinceEpoch()
+         - ageItem->data(Qt::UserRole).toLongLong()) / 1000;
+    qreal opacity = 1.0;
+    if (secs >= kAprsFadeEndSecs) {
+        opacity = 0.5;
+    } else if (secs > kAprsFadeStartSecs) {
+        opacity = 1.0 - 0.5 * qreal(secs - kAprsFadeStartSecs)
+                            / qreal(kAprsFadeEndSecs - kAprsFadeStartSecs);
+    }
+    // Quantize to 5% steps so the per-second tick only repaints rows whose
+    // fade bucket actually changed.
+    const int step = qRound(opacity * 20.0);
+    if (ageItem->data(kAprsFadeRole).toInt() == step)
+        return;
+    ageItem->setData(kAprsFadeRole, step);
+
+    QColor text(0xc2, 0xcc, 0xdb);
+    text.setAlphaF(step / 20.0);
+    for (int col = 0; col < kColCount; ++col) {
+        if (auto* item = table->item(row, col))
+            item->setForeground(text);
+    }
+    if (auto* sym = table->item(row, kColSymbol)) {
+        const QString spec = sym->data(kAprsSymRole).toString();
+        QColor stroke(0xae, 0xb9, 0xcc);
+        stroke.setAlphaF(step / 20.0);
+        if (spec.startsWith(QLatin1String("W:"))) {
+            sym->setIcon(aprsicons::weatherIcon(spec.mid(2).toInt(), stroke));
+        } else if (spec.startsWith(QLatin1String("S:")) && spec.size() == 4) {
+            sym->setIcon(aprsicons::symbolIcon(spec.at(2).toLatin1(),
+                                               spec.at(3).toLatin1(), stroke));
+        }
+    }
+}
+
 // The on-air-common symbols offered for our own beacon; data() carries the
 // two-character table+code pair.
 struct AprsSymbolChoice { const char* pair; const char* name; };
@@ -2995,6 +3064,11 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
     m_aprsTable->setWordWrap(false);
     m_aprsTable->horizontalHeader()->setSectionResizeMode(kColText, QHeaderView::Stretch);
     m_aprsTable->setMinimumHeight(160);
+    // Sortable headers; default order is most-recently-heard first. The
+    // rebuild re-applies whatever column/order the operator last clicked.
+    m_aprsTable->setSortingEnabled(true);
+    m_aprsTable->horizontalHeader()->setSortIndicator(kColTime, Qt::DescendingOrder);
+    m_aprsTable->horizontalHeader()->setSortIndicatorShown(true);
     m_aprsTable->setContextMenuPolicy(Qt::CustomContextMenu);
     tableLayout->addWidget(m_aprsTable);
     pageLayout->addWidget(tableFrame, 1);
@@ -3138,60 +3212,95 @@ void Ax25HfPacketDecodeDialog::refreshAprsStationTable()
 
     const QVector<AprsStationList::Station> stations = m_aprsStations->stations();
     m_aprsTable->setUpdatesEnabled(false);
+    // Populating with sorting live makes rows re-sort mid-insert; pause it
+    // and re-apply the operator's chosen column/order at the end.
+    const int sortColumn = m_aprsTable->horizontalHeader()->sortIndicatorSection();
+    const Qt::SortOrder sortOrder = m_aprsTable->horizontalHeader()->sortIndicatorOrder();
+    m_aprsTable->setSortingEnabled(false);
     m_aprsTable->setRowCount(stations.size());
-    int selectRow = -1;
     for (int i = 0; i < stations.size(); ++i) {
         const AprsStationList::Station& s = stations.at(i);
         auto set = [&](int col, const QString& text) {
-            auto* item = new QTableWidgetItem(text);
+            auto* item = new AprsSortItem(text);
             m_aprsTable->setItem(i, col, item);
             return item;
         };
-        set(kColTime,
+        const double heardMs = double(s.lastHeard.toMSecsSinceEpoch());
+        auto* timeItem = set(kColTime,
             s.lastHeard.toLocalTime().toString(QStringLiteral("MM/dd HH:mm:ss")));
+        timeItem->setData(kAprsSortRole, heardMs);
         set(kColCall, s.call)->setData(Qt::UserRole, s.call);
-        auto* symItem = set(kColSymbol, s.hasPosition
-            ? aprs::symbolDescription(s.symbolTable, s.symbolCode)
-            : aprs::packetTypeName(s.lastType));
-        if (s.hasPosition)
+
+        QTableWidgetItem* symItem = nullptr;
+        if (s.isWeather) {
+            static const char* kWxNames[] = {
+                "Weather", "Weather (rain)", "Weather (windy)" };
+            const int cond = qBound(0, s.wxCondition, 2);
+            symItem = set(kColSymbol, QString::fromLatin1(kWxNames[cond]));
+            symItem->setIcon(aprsicons::weatherIcon(cond));
+            symItem->setData(kAprsSymRole, QStringLiteral("W:%1").arg(cond));
+        } else if (s.hasPosition) {
+            symItem = set(kColSymbol,
+                          aprs::symbolDescription(s.symbolTable, s.symbolCode));
             symItem->setIcon(aprsicons::symbolIcon(s.symbolTable, s.symbolCode));
-        set(kColAge, aprsAgeText(s.lastHeard))
-            ->setData(Qt::UserRole, s.lastHeard.toMSecsSinceEpoch());
-        set(kColPackets, QString::number(s.packets));
+            symItem->setData(kAprsSymRole,
+                             QStringLiteral("S:%1%2")
+                                 .arg(QLatin1Char(s.symbolTable))
+                                 .arg(QLatin1Char(s.symbolCode)));
+        } else {
+            set(kColSymbol, aprs::packetTypeName(s.lastType));
+        }
+
+        auto* ageItem = set(kColAge, aprsAgeText(s.lastHeard));
+        ageItem->setData(Qt::UserRole, s.lastHeard.toMSecsSinceEpoch());
+        ageItem->setData(kAprsSortRole, -heardMs); // ascending age = newest first
+        set(kColPackets, QString::number(s.packets))
+            ->setData(kAprsSortRole, double(s.packets));
         set(kColGrid, s.hasPosition ? aprs::gridSquare(s.latitude, s.longitude)
                                     : QString());
         QString dist;
+        double distKey = 1e12; // unknown distances sort to the bottom
         if (s.hasPosition && haveMyPos) {
+            const double miles =
+                aprs::distanceMiles(myLat, myLon, s.latitude, s.longitude);
             dist = QStringLiteral("%1 mi %2°")
-                .arg(aprs::distanceMiles(myLat, myLon, s.latitude, s.longitude),
-                     0, 'f', 1)
+                .arg(miles, 0, 'f', 1)
                 .arg(qRound(aprs::bearingDeg(myLat, myLon,
                                              s.latitude, s.longitude)));
+            distKey = miles;
         }
-        set(kColDist, dist);
+        set(kColDist, dist)->setData(kAprsSortRole, distKey);
         QString crsSpd;
+        double speedKey = -1.0;
         if (s.speedKnots >= 0.0) {
-            crsSpd = QStringLiteral("%1 mph")
-                .arg(qRound(s.speedKnots * 1.15078));
+            const double mph = s.speedKnots * 1.15078;
+            crsSpd = QStringLiteral("%1 mph").arg(qRound(mph));
             if (s.courseDeg >= 0.0)
                 crsSpd += QStringLiteral(" %1°").arg(qRound(s.courseDeg));
+            speedKey = mph;
         }
-        set(kColCrsSpd, crsSpd);
+        set(kColCrsSpd, crsSpd)->setData(kAprsSortRole, speedKey);
         QString text = !s.comment.isEmpty() ? s.comment : s.status;
         if (!s.comment.isEmpty() && !s.status.isEmpty())
             text = s.comment + QStringLiteral("  |  ") + s.status;
         set(kColText, text);
-        if (s.call == selectedCall)
-            selectRow = i;
     }
+    m_aprsTable->setSortingEnabled(true);
+    m_aprsTable->sortItems(sortColumn, sortOrder);
     m_aprsTable->resizeColumnsToContents();
     // resizeColumnsToContents() packs columns shoulder-to-shoulder; pad each
     // one so the table breathes. The last column stretches regardless.
     for (int col = 0; col < kColText; ++col)
         m_aprsTable->setColumnWidth(col, m_aprsTable->columnWidth(col) + 18);
     m_aprsTable->horizontalHeader()->setSectionResizeMode(kColText, QHeaderView::Stretch);
-    if (selectRow >= 0)
-        m_aprsTable->selectRow(selectRow);
+    for (int row = 0; row < m_aprsTable->rowCount(); ++row) {
+        applyAprsRowFade(m_aprsTable, row);
+        if (!selectedCall.isEmpty()) {
+            const auto* callItem = m_aprsTable->item(row, kColCall);
+            if (callItem && callItem->data(Qt::UserRole).toString() == selectedCall)
+                m_aprsTable->selectRow(row);
+        }
+    }
     m_aprsTable->setUpdatesEnabled(true);
 }
 
@@ -3205,32 +3314,50 @@ void Ax25HfPacketDecodeDialog::refreshAprsStationAges()
                 item->data(Qt::UserRole).toLongLong(), QTimeZone::UTC);
             item->setText(aprsAgeText(lastHeard));
         }
+        applyAprsRowFade(m_aprsTable, row);
     }
 }
 
 void Ax25HfPacketDecodeDialog::handleAprsStationMenu(const QPoint& pos)
 {
-    auto* hit = m_aprsTable->itemAt(pos);
-    if (!hit)
-        return;
-    const auto* callItem = m_aprsTable->item(hit->row(), kColCall);
-    if (!callItem)
-        return;
-    const QString call = callItem->data(Qt::UserRole).toString();
-
     QMenu menu(m_aprsTable);
-    menu.addAction(QStringLiteral("Send Message to %1...").arg(call),
-                   this, [this, call] {
-        m_aprsMsgTo->setText(call);
-        m_aprsMsgText->setFocus();
+
+    // Station-specific actions only when the click landed on a row; the
+    // roster-wide actions below are available from anywhere in the table.
+    QString call;
+    if (auto* hit = m_aprsTable->itemAt(pos)) {
+        if (const auto* callItem = m_aprsTable->item(hit->row(), kColCall))
+            call = callItem->data(Qt::UserRole).toString();
+    }
+    if (!call.isEmpty()) {
+        menu.addAction(QStringLiteral("Send Message to %1...").arg(call),
+                       this, [this, call] {
+            m_aprsMsgTo->setText(call);
+            m_aprsMsgText->setFocus();
+        });
+        menu.addAction(QStringLiteral("Station Info..."), this, [this, call] {
+            showAprsStationInfo(call);
+        });
+        menu.addAction(QStringLiteral("View on aprs.fi"), this, [call] {
+            QDesktopServices::openUrl(
+                QUrl(QStringLiteral("https://aprs.fi/info/a/%1").arg(call)));
+        });
+        menu.addSeparator();
+    }
+    QAction* clearAll =
+        menu.addAction(QStringLiteral("Clear All Stations..."), this, [this] {
+        const int count = m_aprsStations->size();
+        const auto answer = QMessageBox::question(
+            this, QStringLiteral("Clear APRS Stations"),
+            QStringLiteral("Remove all %1 heard station%2? "
+                           "This also clears the saved roster on disk.")
+                .arg(count)
+                .arg(count == 1 ? QString() : QStringLiteral("s")));
+        if (answer == QMessageBox::Yes)
+            m_aprsStations->clear();
     });
-    menu.addAction(QStringLiteral("Station Info..."), this, [this, call] {
-        showAprsStationInfo(call);
-    });
-    menu.addAction(QStringLiteral("View on aprs.fi"), this, [call] {
-        QDesktopServices::openUrl(
-            QUrl(QStringLiteral("https://aprs.fi/info/a/%1").arg(call)));
-    });
+    clearAll->setEnabled(m_aprsStations && m_aprsStations->size() > 0);
+
     menu.exec(m_aprsTable->viewport()->mapToGlobal(pos));
 }
 

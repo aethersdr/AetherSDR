@@ -295,6 +295,13 @@ void drawPhone(QPainter& p)
     p.drawRect(QRectF(5.2, 7.4, 5.6, 6.4)); // base
 }
 
+void drawWindyCloud(QPainter& p)
+{
+    drawCloud(p);
+    p.drawLine(QPointF(3.4, 12.8), QPointF(9.4, 12.8));
+    p.drawLine(QPointF(6, 14.6), QPointF(12.6, 14.6));
+}
+
 // Fallback: rounded badge with the raw symbol character.
 void drawBadge(QPainter& p, char code, const QColor& color)
 {
@@ -310,10 +317,20 @@ void drawBadge(QPainter& p, char code, const QColor& color)
 
 } // namespace
 
+namespace {
+
+QHash<quint64, QIcon>& iconCache()
+{
+    static QHash<quint64, QIcon> cache;
+    return cache;
+}
+
+} // namespace
+
 QIcon symbolIcon(char symbolTable, char symbolCode, const QColor& color)
 {
     Q_UNUSED(symbolTable); // alternate-table codes share the primary drawing
-    static QHash<quint64, QIcon> cache;
+    QHash<quint64, QIcon>& cache = iconCache();
     const quint64 key = (quint64(quint8(symbolCode)) << 32) | color.rgba();
     if (const auto it = cache.constFind(key); it != cache.constEnd())
         return it.value();
@@ -357,6 +374,35 @@ QIcon symbolIcon(char symbolTable, char symbolCode, const QColor& color)
         case '=':  drawTrain(p); break;
         case '$':  drawPhone(p); break;
         default:   drawBadge(p, symbolCode, color); break;
+        }
+    }
+    const QIcon icon(pm);
+    cache.insert(key, icon);
+    return icon;
+}
+
+QIcon weatherIcon(int condition, const QColor& color)
+{
+    condition = qBound(0, condition, 2);
+    QHash<quint64, QIcon>& cache = iconCache();
+    // Conditions cache under control-character pseudo-codes 0x01-0x03, which
+    // can never collide with printable APRS symbol codes.
+    const quint64 key = (quint64(quint8(condition + 1)) << 32) | color.rgba();
+    if (const auto it = cache.constFind(key); it != cache.constEnd())
+        return it.value();
+
+    QPixmap pm(int(kLogicalSize * kDpr), int(kLogicalSize * kDpr));
+    pm.setDevicePixelRatio(kDpr);
+    pm.fill(Qt::transparent);
+    {
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        p.setPen(QPen(color, 1.4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.setBrush(Qt::NoBrush);
+        switch (condition) {
+        case 1:  drawWxStation(p); break;  // cloud with rain
+        case 2:  drawWindyCloud(p); break; // cloud with wind streaks
+        default: drawCloud(p); break;
         }
     }
     const QIcon icon(pm);

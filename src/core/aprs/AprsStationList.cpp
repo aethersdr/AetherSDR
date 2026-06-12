@@ -89,10 +89,23 @@ bool AprsStationList::record(const aprs::Packet& packet)
     }
     // Free text merges instead of overwriting: a status report shouldn't
     // blank the comment a position packet carried a minute earlier.
-    if (packet.type == aprs::PacketType::Status)
+    if (packet.type == aprs::PacketType::Status) {
         hit->status = packet.comment;
-    else if (!packet.comment.isEmpty() && packet.type == aprs::PacketType::Position)
+    } else if (packet.type == aprs::PacketType::Weather) {
+        hit->isWeather = true;
+        if (!packet.comment.isEmpty())
+            hit->comment = packet.comment; // pre-formatted weatherSummary()
+        // Condition drives the wireframe icon: rain beats wind beats cloud.
+        if (packet.weather.rainHourIn > 0.0 || packet.weather.rain24hIn > 0.0)
+            hit->wxCondition = 1;
+        else if (packet.weather.gustMph >= 20.0 || packet.weather.windMph >= 15.0)
+            hit->wxCondition = 2;
+        else
+            hit->wxCondition = 0;
+    } else if (!packet.comment.isEmpty()
+               && packet.type == aprs::PacketType::Position) {
         hit->comment = packet.comment;
+    }
 
     if (m_stations.size() > m_max) {
         std::sort(m_stations.begin(), m_stations.end(),
@@ -170,6 +183,8 @@ void AprsStationList::load()
         s.speedKnots = o.value(QStringLiteral("speedKnots")).toDouble(-1.0);
         s.hasAltitude = o.value(QStringLiteral("hasAltitude")).toBool();
         s.altitudeFeet = o.value(QStringLiteral("altitudeFeet")).toDouble();
+        s.isWeather = o.value(QStringLiteral("isWeather")).toBool();
+        s.wxCondition = o.value(QStringLiteral("wxCondition")).toInt();
         s.comment = o.value(QStringLiteral("comment")).toString();
         s.status = o.value(QStringLiteral("status")).toString();
         s.via = o.value(QStringLiteral("via")).toString();
@@ -200,6 +215,8 @@ void AprsStationList::save() const
         o.insert(QStringLiteral("speedKnots"), s.speedKnots);
         o.insert(QStringLiteral("hasAltitude"), s.hasAltitude);
         o.insert(QStringLiteral("altitudeFeet"), s.altitudeFeet);
+        o.insert(QStringLiteral("isWeather"), s.isWeather);
+        o.insert(QStringLiteral("wxCondition"), s.wxCondition);
         o.insert(QStringLiteral("comment"), s.comment);
         o.insert(QStringLiteral("status"), s.status);
         o.insert(QStringLiteral("via"), s.via);

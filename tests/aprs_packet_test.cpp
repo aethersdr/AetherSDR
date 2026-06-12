@@ -170,6 +170,62 @@ static void testMessages()
           "unnumbered message");
 }
 
+static void testWeather()
+{
+    // Positionless report (APRS 1.0.1 ch. 12 worked example):
+    // wind 220° at 4 mph gusting 5, 77°F, 50% humidity, 990.0 mbar.
+    const auto wx = aprs::parseFrame(makeUiFrame(
+        QStringLiteral("KD0XYZ"), QStringLiteral("APRS"),
+        QByteArray("_10090556c220s004g005t077r000p000P000h50b09900wRSW")));
+    CHECK(wx.has_value() && wx->type == aprs::PacketType::Weather,
+          "positionless weather parses");
+    if (wx) {
+        CHECK(wx->weather.valid, "weather data valid");
+        CHECK(wx->weather.windDirDeg == 220, "wind direction");
+        CHECK(near(wx->weather.windMph, 4.0, 0.1), "wind speed mph");
+        CHECK(near(wx->weather.gustMph, 5.0, 0.1), "gust");
+        CHECK(near(wx->weather.temperatureF, 77.0, 0.1), "temperature");
+        CHECK(wx->weather.humidityPct == 50, "humidity");
+        CHECK(near(wx->weather.pressureMbar, 990.0, 0.1), "pressure");
+        CHECK(near(wx->weather.rainHourIn, 0.0, 0.001), "rain hour zero");
+        CHECK(wx->comment.contains(QStringLiteral("77°F")),
+              "summary lands in the comment");
+        CHECK(wx->comment.contains(QStringLiteral("Wind 220° 4 mph (gust 5)")),
+              "summary wind text");
+    }
+
+    // Position report with the WX symbol '_': wind rides the CSE/SPD
+    // extension (knots), the token stream follows in the comment.
+    const auto pwx = aprs::parseFrame(makeUiFrame(
+        QStringLiteral("KD0XYZ"), QStringLiteral("APRS"),
+        QByteArray("!4903.50N/07201.75W_220/004g005t077h50b09900")));
+    CHECK(pwx.has_value() && pwx->type == aprs::PacketType::Weather,
+          "position weather parses");
+    if (pwx) {
+        CHECK(pwx->hasPosition, "position weather has position");
+        CHECK(pwx->weather.valid, "position weather data valid");
+        CHECK(pwx->weather.windDirDeg == 220, "position weather wind dir");
+        CHECK(near(pwx->weather.windMph, 4.0 * 1.15078, 0.1),
+              "extension wind knots converted to mph");
+        CHECK(pwx->speedKnots < 0 && pwx->courseDeg < 0,
+              "wind not reported as station movement");
+        CHECK(near(pwx->weather.temperatureF, 77.0, 0.1),
+              "position weather temperature");
+    }
+
+    // "h00" means 100% humidity; missing sensors ("...") are skipped.
+    const auto edge = aprs::parseFrame(makeUiFrame(
+        QStringLiteral("KD0XYZ"), QStringLiteral("APRS"),
+        QByteArray("_10090556c...s...g...t-04r...p...P...h00b.....")));
+    CHECK(edge.has_value() && edge->weather.valid, "sparse weather parses");
+    if (edge) {
+        CHECK(edge->weather.windDirDeg < 0, "missing wind dir stays unknown");
+        CHECK(near(edge->weather.temperatureF, -4.0, 0.1), "negative temperature");
+        CHECK(edge->weather.humidityPct == 100, "h00 is 100 percent");
+        CHECK(edge->weather.pressureMbar < 0, "missing pressure stays unknown");
+    }
+}
+
 static void testEncoders()
 {
     const QString pos = aprs::encodeUncompressedPosition(
@@ -220,6 +276,7 @@ int main(int argc, char** argv)
     testMicE();
     testStatus();
     testMessages();
+    testWeather();
     testEncoders();
     testGeoHelpers();
     if (g_failures) {

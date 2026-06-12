@@ -13,4 +13,10 @@ namespace AetherSDR::aprsicons {
 QIcon symbolIcon(char symbolTable, char symbolCode,
                  const QColor& color = QColor(0xae, 0xb9, 0xcc));
 
+// Current-conditions icon for weather stations, same wireframe style:
+// 0 = cloud, 1 = cloud with rain, 2 = cloud with wind streaks. Values match
+// AprsStationList::Station::wxCondition.
+QIcon weatherIcon(int condition,
+                  const QColor& color = QColor(0xae, 0xb9, 0xcc));
+
 } // namespace AetherSDR::aprsicons

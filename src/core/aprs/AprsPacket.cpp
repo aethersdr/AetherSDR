@@ -314,6 +314,82 @@ bool parseMicE(const ax25::Frame& frame, const QString& info, Packet& pkt)
     return true;
 }
 
+// --- Weather (ch. 12) ------------------------------------------------------
+
+// Consume the concatenated token stream "g012t077r000p000P000h50b09900..."
+// from the head of `text`. Each token is a tag letter plus a fixed-width
+// field; dots or spaces in the field mean "sensor not present". Stops at the
+// first unrecognized tag (the remainder is the station's free text).
+void parseWeatherTokens(QString& text, WeatherReport& wx)
+{
+    static const QRegularExpression fieldChars(QStringLiteral("^[-0-9. ]+$"));
+    while (!text.isEmpty()) {
+        int len = 0;
+        const char tag = text.at(0).toLatin1();
+        switch (tag) {
+        case 'g': case 't': case 'r': case 'p': case 'P': case 's':
+            len = 3; break;       // s = snow (consumed, not surfaced)
+        case 'h':
+            len = 2; break;
+        case 'b':
+            len = 5; break;
+        case 'L': case 'l':
+            len = 3; break;       // luminosity (consumed, not surfaced)
+        default:
+            len = 0; break;
+        }
+        if (len == 0 || text.size() < 1 + len)
+            return;
+        const QString field = text.mid(1, len);
+        if (!fieldChars.match(field).hasMatch())
+            return;
+        text.remove(0, 1 + len);
+        bool ok = false;
+        const double v = field.trimmed().toDouble(&ok);
+        if (!ok)
+            continue; // "..." — sensor not present
+        switch (tag) {
+        case 'g': wx.gustMph = v; wx.valid = true; break;
+        case 't': wx.temperatureF = v; wx.valid = true; break;
+        case 'r': wx.rainHourIn = v / 100.0; wx.valid = true; break;
+        case 'p': wx.rain24hIn = v / 100.0; wx.valid = true; break;
+        case 'P': wx.rainMidnightIn = v / 100.0; wx.valid = true; break;
+        case 'h':
+            wx.humidityPct = (int(v) == 0) ? 100 : int(v); // h00 = 100%
+            wx.valid = true;
+            break;
+        case 'b': wx.pressureMbar = v / 10.0; wx.valid = true; break;
+        default: break;
+        }
+    }
+}
+
+// Fold the wx data riding in a *position* weather report (symbol '_'): wind
+// comes from the CSE/SPD extension (knots), the rest from the comment's
+// token stream. The comment is replaced with the readable summary.
+void extractPositionWeather(Packet& pkt)
+{
+    if (pkt.courseDeg >= 0.0)
+        pkt.weather.windDirDeg = qRound(pkt.courseDeg);
+    if (pkt.speedKnots >= 0.0)
+        pkt.weather.windMph = pkt.speedKnots * 1.15078;
+    pkt.weather.valid =
+        (pkt.weather.windDirDeg >= 0) || (pkt.weather.windMph >= 0);
+    QString rest = pkt.comment;
+    parseWeatherTokens(rest, pkt.weather);
+    if (!pkt.weather.valid)
+        return;
+    // Wind in the extension was wind, not movement — don't show a weather
+    // station "driving" at 5 mph in the station table.
+    pkt.courseDeg = -1.0;
+    pkt.speedKnots = -1.0;
+    QString comment = weatherSummary(pkt.weather);
+    rest = rest.trimmed();
+    if (!rest.isEmpty())
+        comment += QStringLiteral("   ") + rest;
+    pkt.comment = comment;
+}
+
 // --- Messages: ":ADDRESSEE:text{NN" (ch. 14) ------------------------------
 
 bool parseMessage(const QString& body, Packet& pkt)
@@ -370,8 +446,10 @@ std::optional<Packet> parseFrame(const ax25::Frame& frame)
         pkt.type = PacketType::Position;
         pkt.messagingCapable = (dti == '=');
         parsePositionBody(info.mid(1), pkt);
-        if (pkt.hasPosition && pkt.symbolCode == '_')
+        if (pkt.hasPosition && pkt.symbolCode == '_') {
             pkt.type = PacketType::Weather;
+            extractPositionWeather(pkt);
+        }
         break;
     case '/':
     case '@': {
@@ -380,8 +458,10 @@ std::optional<Packet> parseFrame(const ax25::Frame& frame)
         QString body = info.mid(1);
         body.remove(0, timestampLength(body));
         parsePositionBody(body, pkt);
-        if (pkt.hasPosition && pkt.symbolCode == '_')
+        if (pkt.hasPosition && pkt.symbolCode == '_') {
             pkt.type = PacketType::Weather;
+            extractPositionWeather(pkt);
+        }
         break;
     }
     case 0x1c: // Mic-E (current, rev 0)
@@ -431,10 +511,45 @@ std::optional<Packet> parseFrame(const ax25::Frame& frame)
         parsePositionBody(body.mid(sep + 1), pkt);
         break;
     }
-    case '_':
+    case '_': {
+        // Positionless weather: "_MMDDHHMM" timestamp, "cDDDsSSS" wind
+        // (degrees + mph), then the shared token stream.
         pkt.type = PacketType::Weather;
-        pkt.comment = info.mid(1).trimmed();
+        QString body = info.mid(1);
+        int digits = 0;
+        while (digits < 8 && digits < body.size() && body.at(digits).isDigit())
+            ++digits;
+        if (digits == 8)
+            body.remove(0, 8);
+        if (body.size() >= 8 && body.at(0) == QLatin1Char('c')
+            && body.at(4) == QLatin1Char('s')) {
+            bool dirOk = false, spdOk = false;
+            const int dir = body.mid(1, 3).toInt(&dirOk);
+            const double spd = body.mid(5, 3).trimmed().toDouble(&spdOk);
+            if (dirOk && dir >= 0 && dir <= 360) {
+                pkt.weather.windDirDeg = (dir == 360) ? 0 : dir;
+                pkt.weather.valid = true;
+            }
+            if (spdOk) {
+                pkt.weather.windMph = spd;
+                pkt.weather.valid = true;
+            }
+            body.remove(0, 8);
+        }
+        parseWeatherTokens(body, pkt.weather);
+        if (pkt.weather.valid) {
+            QString comment = weatherSummary(pkt.weather);
+            body = body.trimmed();
+            // Whatever trails the tokens is the station-type/software code
+            // ("wRSW") — not worth a column's width.
+            if (body.size() > 4)
+                comment += QStringLiteral("   ") + body;
+            pkt.comment = comment;
+        } else {
+            pkt.comment = info.mid(1).trimmed();
+        }
         break;
+    }
     case 'T':
         pkt.type = PacketType::Telemetry;
         pkt.comment = info.mid(1).trimmed();
@@ -579,6 +694,34 @@ QString symbolDescription(char symbolTable, char symbolCode)
     }
     return QStringLiteral("Symbol '%1%2'")
         .arg(QLatin1Char(symbolTable)).arg(QLatin1Char(symbolCode));
+}
+
+QString weatherSummary(const WeatherReport& wx)
+{
+    QStringList parts;
+    if (wx.temperatureF > -999.0)
+        parts << QStringLiteral("%1°F").arg(qRound(wx.temperatureF));
+    if (wx.windDirDeg >= 0 || wx.windMph >= 0.0) {
+        QString wind = QStringLiteral("Wind");
+        if (wx.windDirDeg >= 0)
+            wind += QStringLiteral(" %1°").arg(wx.windDirDeg);
+        if (wx.windMph >= 0.0)
+            wind += QStringLiteral(" %1 mph").arg(qRound(wx.windMph));
+        if (wx.gustMph > 0.0)
+            wind += QStringLiteral(" (gust %1)").arg(qRound(wx.gustMph));
+        parts << wind;
+    }
+    if (wx.humidityPct >= 0)
+        parts << QStringLiteral("Hum %1%").arg(wx.humidityPct);
+    if (wx.pressureMbar > 0.0) {
+        parts << QStringLiteral("%1 inHg")
+            .arg(wx.pressureMbar * 0.029530, 0, 'f', 2);
+    }
+    if (wx.rainHourIn > 0.0)
+        parts << QStringLiteral("Rain %1\"/hr").arg(wx.rainHourIn, 0, 'f', 2);
+    else if (wx.rain24hIn > 0.0)
+        parts << QStringLiteral("Rain %1\"/24h").arg(wx.rain24hIn, 0, 'f', 2);
+    return parts.join(QStringLiteral("   "));
 }
 
 QString packetTypeName(PacketType type)

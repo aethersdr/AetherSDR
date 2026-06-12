@@ -33,6 +33,26 @@ enum class PacketType {
     Other,
 };
 
+// Decoded weather data (APRS 1.0.1 ch. 12), from a positionless '_' report
+// or a position report carrying the WX symbol. Sentinel defaults mean "not
+// reported" — stations send whatever sensors they have.
+struct WeatherReport {
+    bool valid{false};
+    int windDirDeg{-1};            // < 0 unknown
+    double windMph{-1.0};          // < 0 unknown
+    double gustMph{-1.0};          // < 0 unknown
+    double temperatureF{-1000.0};  // < -999 unknown
+    int humidityPct{-1};           // < 0 unknown ("h00" means 100%)
+    double pressureMbar{-1.0};     // < 0 unknown
+    double rainHourIn{-1.0};       // < 0 unknown (inches)
+    double rain24hIn{-1.0};
+    double rainMidnightIn{-1.0};
+};
+
+// "77°F   Wind 220° 5 mph (gust 12)   Hum 50%   29.23 inHg   Rain 0.12\"/hr"
+// — triple-spaced groups so it reads cleanly in the station table.
+QString weatherSummary(const WeatherReport& wx);
+
 struct Packet {
     QString source;      // "N0CALL-9"
     QString destination; // raw AX.25 destination field (tocall / Mic-E lat)
@@ -61,6 +81,10 @@ struct Packet {
 
     // Object / item name (type Object / Item).
     QString objectName;
+
+    // Weather data (type Weather). When valid, `comment` already holds the
+    // human-readable weatherSummary() text.
+    WeatherReport weather;
 
     QString infoText;    // the whole raw info field, for logging/raw view
 };
