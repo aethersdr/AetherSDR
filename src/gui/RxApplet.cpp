@@ -43,6 +43,7 @@
 #include <cmath>
 #include <limits>
 #include "core/ThemeManager.h"
+#include "FreqLineEdit.h"
 
 // Slider that resets to a default value on double-click.
 // Extends GuardedSlider for controls-lock support (#745).
@@ -527,13 +528,14 @@ void RxApplet::buildUI()
         m_freqLabel->installEventFilter(this);
         m_freqStack->addWidget(m_freqLabel);
 
-        m_freqEdit = new QLineEdit;
+        auto* freqEdit = new FreqLineEdit;
+        m_freqEdit = freqEdit;
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqEdit, "QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.accent}};"
             " border-radius: 3px; color: #00e5ff; font-size: 20px;"
             " font-family: \"{{font.family.freq}}\";"
             " font-weight: bold; padding: 0 4px; }");
         m_freqEdit->setAlignment(Qt::AlignRight);
-        m_freqEdit->setPlaceholderText("MHz");
+        freqEdit->setHintText("MHz");
         m_freqEdit->installEventFilter(this);
         m_freqStack->addWidget(m_freqEdit);
         m_freqStack->setCurrentIndex(0);

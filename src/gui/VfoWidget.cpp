@@ -46,6 +46,7 @@
 #include <QMouseEvent>
 #include <cmath>
 #include "core/ThemeManager.h"
+#include "FreqLineEdit.h"
 
 // QSlider that always accepts wheel events, preventing propagation to parent
 // (e.g. SpectrumWidget frequency scroll) at min/max boundaries. (#547 BUG-002)
@@ -623,7 +624,8 @@ void VfoWidget::buildUI()
     m_freqLabel->installEventFilter(this);
     m_freqStack->addWidget(m_freqLabel);
 
-    m_freqEdit = new QLineEdit;
+    auto* freqEdit = new FreqLineEdit;
+    m_freqEdit = freqEdit;
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqEdit, "QLineEdit { background: {{color.background.0}}; border: 1px solid {{color.accent}};"
         " border-radius: 3px; color: #00e5ff; font-size: 22px;"
         " font-family: \"{{font.family.freq}}\";"
@@ -635,7 +637,7 @@ void VfoWidget::buildUI()
     labelFont.setBold(true);
     const int stackW = QFontMetrics(labelFont).horizontalAdvance("0000.000.000") + 8;
     m_freqStack->setFixedWidth(stackW);
-    m_freqEdit->setPlaceholderText("MHz (e.g. 14.225)");
+    freqEdit->setHintText("MHz (e.g. 14.225)");
     m_freqEdit->installEventFilter(this);
     m_freqStack->addWidget(m_freqEdit);
     m_freqStack->setCurrentIndex(0);  // show label by default
