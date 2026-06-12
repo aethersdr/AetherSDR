@@ -39,6 +39,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QCoreApplication>
 #include <QMessageBox>
 #include <QTimer>
 
