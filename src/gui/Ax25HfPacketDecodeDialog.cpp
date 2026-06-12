@@ -3310,8 +3310,10 @@ void Ax25HfPacketDecodeDialog::refreshAprsStationAges()
         return;
     for (int row = 0; row < m_aprsTable->rowCount(); ++row) {
         if (auto* item = m_aprsTable->item(row, kColAge)) {
+            // QTimeZone::utc() rather than the Qt 6.5+ QTimeZone::UTC constant —
+            // the Linux CI image builds against an older Qt 6.
             const QDateTime lastHeard = QDateTime::fromMSecsSinceEpoch(
-                item->data(Qt::UserRole).toLongLong(), QTimeZone::UTC);
+                item->data(Qt::UserRole).toLongLong(), QTimeZone::utc());
             item->setText(aprsAgeText(lastHeard));
         }
         applyAprsRowFade(m_aprsTable, row);
