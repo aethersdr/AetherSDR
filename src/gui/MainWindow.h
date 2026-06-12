@@ -32,13 +32,13 @@
 #include <QThread>
 #ifdef HAVE_SERIALPORT
 #include "core/SerialPortController.h"
+#include "core/FlexControlManager.h"
+#endif
 #include "models/RadioSession.h"
 
 #include <memory>
 #include <vector>
 
-#include "core/FlexControlManager.h"
-#endif
 #ifdef HAVE_MIDI
 #include "core/MidiControlManager.h"
 #endif
