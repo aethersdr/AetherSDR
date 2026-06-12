@@ -27,6 +27,13 @@
 #include "PanadapterStack.h"
 #include "RadioSetupDialog.h"
 #include "RxApplet.h"
+#include "AmpApplet.h"
+#include "HealthApplet.h"
+#include "MeterApplet.h"
+#include "SMeterWidget.h"
+#include "TunerApplet.h"
+#include "TxApplet.h"
+#include "core/PeripheralSettings.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "VfoWidget.h"
@@ -2145,5 +2152,327 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
 // wireActiveVfoSignals removed — NR2/RN2/RADE are now wired permanently
 // in wireVfoWidget() so connections survive focus switches (#227).
 
+
+// ─── One-shot meter wiring (#3351 Phase 2a) ─────────────────────────────────
+//
+// Extracted verbatim from the constructor: MeterModel → S-Meter / Tuner /
+// MTR / HLTH / TX applet routing. Runs once at construction; kept in this
+// TU with the rest of the model→UI wiring.
+
+void MainWindow::wireMeters()
+{
+    // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
+    connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
+            this, [this](int sliceIndex, float dbm) {
+        if (sliceIndex == m_activeSliceId) {
+            m_appletPanel->sMeterWidget()->setLevel(dbm);
+#ifdef HAVE_HIDAPI
+            m_tmate2SmeterDbm = dbm;
+            updateTMate2Display();
+            updateTMate2Indicators();
+#endif
+        }
+    });
+    // Symmetric with the amp-side guard at line ~3654 and the PGXL TCP path
+    // at line ~3525: in OPERATE the amp owns the analog S-Meter, so drop the
+    // exciter sample here to stop the alternating-writer pulse where exciter
+    // (~100 W) and amp (~1500 W) values race into the same widget. (#2927)
+    connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
+            this, [this](float fwd, float swr) {
+        if (m_radioModel.hasAmplifier() && m_radioModel.ampOperate())
+            return;
+        m_appletPanel->sMeterWidget()->setTxMeters(fwd, swr);
+#ifdef HAVE_HIDAPI
+        m_tmate2TxWatts = fwd;
+        if (m_radioModel.transmitModel().isTransmitting())
+            updateTMate2Display();
+#endif
+    });
+    connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
+            m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            m_appletPanel->sMeterWidget(), &SMeterWidget::setTransmitting);
+
+    // ── Tuner: MeterModel TX meters → TunerApplet gauges ────────────────
+    // Use TGXL-specific meters when available (disambiguated from PGXL by handle)
+    connect(&m_radioModel.meterModel(), &MeterModel::tgxlMetersChanged,
+            m_appletPanel->tunerApplet(), &TunerApplet::updateMeters);
+    // Note: txMetersChanged NOT connected to TunerApplet — exciter power
+    // would overwrite TGXL readings. TGXL meters come from TunerModel
+    // via the direct TCP connection (port 9010). (#625)
+    m_appletPanel->tunerApplet()->setTunerModel(&m_radioModel.tunerModel());
+    m_appletPanel->tunerApplet()->setMeterModel(&m_radioModel.meterModel());
+
+    // Show/hide TUNE button + applet based on TGXL presence
+    connect(&m_radioModel.tunerModel(), &TunerModel::presenceChanged,
+            m_appletPanel, &AppletPanel::setTunerVisible);
+    connect(&m_radioModel.tunerModel(), &TunerModel::presenceChanged,
+            this, [this](bool present) {
+        m_tgxlContainer->setVisible(present);
+        m_tgxlSeparator->setVisible(present);
+        // Auto-connect/disconnect direct TGXL connection for manual relay control (#469)
+        if (present) {
+            QString ip = m_radioModel.tunerModel().tgxlIp();
+            if (!ip.isEmpty() && !m_tgxlConn.isConnected()) {
+                m_tgxlConn.connectToTgxl(ip);
+            }
+        } else {
+            m_tgxlConn.disconnect();
+        }
+    });
+    // Apply auto-reconnect setting at startup so it's active before any connection is made
+    {
+        const bool ar = PeripheralSettings::autoReconnect();
+        m_tgxlConn.setAutoReconnect(ar);
+        m_pgxlConn.setAutoReconnect(ar);
+        m_antennaGenius.setAutoReconnect(ar);
+    }
+
+    // Wire TgxlConnection to TunerModel
+    m_radioModel.tunerModel().setDirectConnection(&m_tgxlConn);
+    // Also attempt connection when TGXL IP arrives (may come after presence)
+    connect(&m_radioModel.tunerModel(), &TunerModel::stateChanged, this, [this]() {
+        auto* tuner = &m_radioModel.tunerModel();
+        if (tuner->isPresent() && !tuner->tgxlIp().isEmpty() && !m_tgxlConn.isConnected()) {
+            m_tgxlConn.connectToTgxl(tuner->tgxlIp());
+        }
+    });
+
+    // Auto-connect to PGXL when detected
+    connect(&m_radioModel, &RadioModel::amplifierChanged, this, [this](bool present) {
+        if (present && !m_radioModel.ampIp().isEmpty() && !m_pgxlConn.isConnected()) {
+            m_pgxlConn.connectToPgxl(m_radioModel.ampIp());
+        } else if (!present) {
+            m_pgxlConn.disconnect();
+        }
+    });
+    // PGXL status → AmpApplet (direct telemetry: vac, vdd, id, temp, tempb, state, etc.)
+    connect(&m_pgxlConn, &PgxlConnection::statusUpdated, this, [this](const QMap<QString, QString>& kvs) {
+        qCDebug(lcTuner) << "PGXL status:" << kvs;
+        auto* amp = m_appletPanel->ampApplet();
+        if (kvs.contains("temp")) {
+            // Some PGXL firmware encodes both PA module temps as "A/B" in a
+            // single field (e.g. "30.5/26.5"); others use separate tempb key.
+            const QString tv = kvs["temp"];
+            const int slash = tv.indexOf('/');
+            if (slash >= 0) {
+                amp->setTemp(tv.left(slash).toFloat());
+                amp->setTempB(tv.mid(slash + 1).toFloat());
+            } else {
+                amp->setTemp(tv.toFloat());
+            }
+        }
+        // Separate tempb field (firmware variant)
+        if (kvs.contains("tempb"))
+            amp->setTempB(kvs["tempb"].toFloat());
+        if (kvs.contains("id"))
+            amp->setDrainCurrent(kvs["id"].toFloat());
+        if (kvs.contains("vdd"))
+            amp->setDrainVoltage(kvs["vdd"].toFloat());
+        if (kvs.contains("vac"))
+            amp->setMainsVoltage(kvs["vac"].toInt());
+        if (kvs.contains("state"))
+            amp->setState(kvs["state"]);
+        if (kvs.contains("fanmode"))
+            amp->setFanMode(kvs["fanmode"]);
+        if (kvs.contains("meffa"))
+            amp->setMeff(kvs["meffa"]);
+        // Convert PGXL dBm to watts and feed S-Meter alongside radio meters.
+        // Use peakfwd (actual peak power) not fwd (floor/minimum).
+        // Skip when amp is STANDBY — peakfwd reads ~0 dBm in standby and would
+        // stomp on the exciter feed that should drive the barefoot scale.
+        if (kvs.contains("peakfwd") && m_radioModel.hasAmplifier()
+                && m_radioModel.ampOperate()) {
+            float dbm = kvs["peakfwd"].toFloat();
+            float watts = std::pow(10.0f, (dbm - 30.0f) / 10.0f);
+            qCDebug(lcTuner) << "PGXL→SMeter: peakfwd=" << dbm << "dBm =" << watts << "W";
+            float swr = 1.0f;
+            if (kvs.contains("swr")) {
+                float rl = std::abs(kvs["swr"].toFloat());
+                float rho = std::pow(10.0f, -rl / 20.0f);
+                swr = (rho < 0.999f) ? (1.0f + rho) / (1.0f - rho) : 99.0f;
+            }
+            // Ensure S-Meter is in TX mode when PGXL reports transmitting
+            if (kvs.value("state").startsWith("TRANSMIT"))
+                m_appletPanel->sMeterWidget()->setTransmitting(true);
+            else if (kvs.contains("state") && !kvs.value("state").startsWith("TRANSMIT"))
+                m_appletPanel->sMeterWidget()->setTransmitting(false);
+            m_appletPanel->sMeterWidget()->setTxMeters(watts, swr);
+        }
+    });
+    connect(&m_pgxlConn, &PgxlConnection::connected, this, [this]() {
+        qDebug() << "PGXL direct connection established, version:" << m_pgxlConn.version();
+        m_appletPanel->ampApplet()->setDirectConnected(true);
+    });
+    connect(&m_pgxlConn, &PgxlConnection::disconnected, this, [this]() {
+        m_appletPanel->ampApplet()->setDirectConnected(false);
+    });
+    // Radio amplifier status → AmpApplet telemetry (fallback path).
+    // The radio proxies PGXL telemetry fields (id, vac, vdd, meffa, temp, tempb, state) in its
+    // amplifier status messages, so the applet keeps updating even when the direct
+    // PGXL TCP connection isn't established.  When direct TCP IS connected, that
+    // path is faster and higher-precision (the radio rebroadcast may round/lag),
+    // so we skip the radio fallback to avoid display jitter from two paths
+    // alternately writing slightly-different values.
+    connect(&m_radioModel, &RadioModel::ampTelemetryUpdated,
+            this, [this](const QMap<QString, QString>& kvs) {
+        if (m_pgxlConn.isConnected()) return;
+        auto* amp = m_appletPanel->ampApplet();
+        if (kvs.contains("temp")) {
+            const QString tv = kvs["temp"];
+            const int slash = tv.indexOf('/');
+            if (slash >= 0) {
+                amp->setTemp(tv.left(slash).toFloat());
+                amp->setTempB(tv.mid(slash + 1).toFloat());
+            } else {
+                amp->setTemp(tv.toFloat());
+            }
+        }
+        if (kvs.contains("tempb"))
+            amp->setTempB(kvs["tempb"].toFloat());
+        if (kvs.contains("id"))
+            amp->setDrainCurrent(kvs["id"].toFloat());
+        if (kvs.contains("vdd"))
+            amp->setDrainVoltage(kvs["vdd"].toFloat());
+        if (kvs.contains("vac"))
+            amp->setMainsVoltage(kvs["vac"].toInt());
+        if (kvs.contains("state"))
+            amp->setState(kvs["state"]);
+        if (kvs.contains("meffa"))
+            amp->setMeff(kvs["meffa"]);
+    });
+    // Fan mode cycle button → direct PGXL command (fan control is not in the radio API)
+    connect(m_appletPanel->ampApplet(), &AmpApplet::fanModeChanged, this, [this](const QString& mode) {
+        m_pgxlConn.sendCommand(QString("setup fanmode=%1").arg(mode));
+    });
+    // OPERATE button → PGXL standby/operate command via radio amplifier API
+    connect(m_appletPanel->ampApplet(), &AmpApplet::operateToggled, this, [this](bool on) {
+        if (!m_radioModel.ampHandle().isEmpty())
+            m_radioModel.sendCommand(
+                QString("amplifier set %1 operate=%2").arg(m_radioModel.ampHandle()).arg(on ? 1 : 0));
+    });
+
+    // Switch Fwd Power gauge scale based on radio max power and amplifier presence.
+    // All three power gauges (TxApplet, TunerApplet, SMeterWidget) update together.
+    // When the PGXL is in STANDBY we fall back to the barefoot scale — only the
+    // radio's forward power is reaching the meter, so the 2kW arc would make
+    // every reading look tiny and useless.
+    auto updatePowerScale = [this]() {
+        int maxW = m_radioModel.transmitModel().maxPowerLevel();
+        // Aurora (AU-) radios have an integrated 600W PA (Overlord) but
+        // max_power_level only reports the exciter limit (100W). Use model
+        // name to detect the true PA capability. (#484)
+        const QString& model = m_radioModel.model();
+        if (model.startsWith("AU-") && maxW <= 100) {
+            maxW = 500;
+        }
+        const bool ampActive = m_radioModel.hasAmplifier()
+                            && m_radioModel.ampOperate();
+        m_appletPanel->txApplet()->setPowerScale(maxW, ampActive);
+        m_appletPanel->tunerApplet()->setPowerScale(maxW, ampActive);
+        m_appletPanel->sMeterWidget()->setPowerScale(maxW, ampActive);
+        m_appletPanel->healthApplet()->setPowerScale(maxW, ampActive);
+    };
+    connect(&m_radioModel, &RadioModel::amplifierChanged, this, updatePowerScale);
+    connect(&m_radioModel, &RadioModel::ampStateChanged, this, updatePowerScale);
+
+    // TGXL indicator: two-line rich text — label on top, state smaller below.
+    // Green = OPERATE, amber = BYPASS, grey = STANDBY (matches SmartSDR)
+    auto setIndicatorHtml = [](QLabel* nameLbl, QLabel* stateLbl,
+                               const QString& state, const QString& color) {
+        nameLbl->setStyleSheet(
+            QString("QLabel { color: %1; font-size:18px; font-weight:bold; }").arg(color));
+        stateLbl->setStyleSheet(
+            QString("QLabel { color: %1; font-size:11px; }").arg(color));
+        stateLbl->setText(state);
+    };
+
+    auto updateTgxlStyle = [this, setIndicatorHtml]() {
+        auto& t = m_radioModel.tunerModel();
+        if (t.isOperate() && !t.isBypass())
+            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "OPERATE", "#00e060");
+        else if (t.isOperate() && t.isBypass())
+            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "BYPASS", "#e0a000");
+        else
+            setIndicatorHtml(m_tgxlIndicator, m_tgxlStateLabel, "STANDBY", "#404858");
+    };
+    connect(&m_radioModel.tunerModel(), &TunerModel::stateChanged, this, updateTgxlStyle);
+
+    // PGXL indicator: OPERATE (green) or STANDBY (grey) — no bypass for PGXL
+    auto updatePgxlStyle = [this, setIndicatorHtml]() {
+        if (m_radioModel.ampOperate())
+            setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "OPERATE", "#00e060");
+        else
+            setIndicatorHtml(m_pgxlIndicator, m_pgxlStateLabel, "STANDBY", "#404858");
+    };
+    connect(&m_radioModel, &RadioModel::ampStateChanged, this, [this, updatePgxlStyle]() {
+        updatePgxlStyle();
+        // Sync the AmpApplet button — the direct PGXL TCP path may not deliver
+        // a state update fast enough, leaving the button stuck on the old state.
+        // RadioModel is authoritative; use it to keep the button consistent.
+        m_appletPanel->ampApplet()->setState(
+            m_radioModel.ampOperate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
+    });
+
+    connect(&m_radioModel, &RadioModel::amplifierChanged, this, [this, updatePgxlStyle](bool present) {
+        m_pgxlContainer->setVisible(present);
+        m_pgxlSeparator->setVisible(present);
+        m_appletPanel->setAmpVisible(present);
+        if (present) {
+            updatePgxlStyle();
+            m_appletPanel->ampApplet()->setState(
+                m_radioModel.ampOperate() ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
+        }
+    });
+    connect(&m_radioModel.meterModel(), &MeterModel::ampMetersChanged,
+            this, [this](float fwdPwr, float swr, float temp) {
+        m_appletPanel->ampApplet()->setFwdPower(fwdPwr);
+        m_appletPanel->ampApplet()->setSwr(swr);
+        m_appletPanel->ampApplet()->setTemp(temp);
+        // S-Meter TX power follows the scale: amp output when PGXL is OPERATE,
+        // exciter output when it's STANDBY (txMetersChanged already handles that
+        // path, so we just stop overriding it here).
+        if (m_radioModel.hasAmplifier() && m_radioModel.ampOperate()) {
+            m_appletPanel->sMeterWidget()->setTxMeters(fwdPwr, swr);
+            static int ampDbg = 0;
+            if (++ampDbg % 50 == 1)
+                qCDebug(lcTuner) << "AMP→SMeter: fwd=" << fwdPwr << "W swr=" << swr;
+        }
+    });
+    connect(&m_radioModel.transmitModel(), &TransmitModel::maxPowerLevelChanged,
+            this, updatePowerScale);
+
+    // ── Meter applet: all meters consolidated ──────────────────────────────
+    m_appletPanel->meterApplet()->setMeterModel(&m_radioModel.meterModel());
+
+    // ── HLTH applet: same meter model — derives antenna-health state from
+    //    SWR / power trends across radio / tuner / amp sources.
+    m_appletPanel->healthApplet()->setMeterModel(&m_radioModel.meterModel());
+
+    // ── TX applet: meters + model ───────────────────────────────────────────
+    connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
+            m_appletPanel->txApplet(), &TxApplet::updateMeters);
+    // PEP peak-hold tick on the FWDPWR gauge: feed the raw pre-smoothed
+    // sample and reset the hold on un-key. (#2561)
+    connect(&m_radioModel.meterModel(), &MeterModel::txPeakChanged,
+            m_appletPanel->txApplet(), &TxApplet::updatePeakPower);
+    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            m_appletPanel->txApplet(), &TxApplet::setTransmitting);
+    m_appletPanel->txApplet()->setTransmitModel(&m_radioModel.transmitModel());
+    m_appletPanel->txApplet()->setTunerModel(&m_radioModel.tunerModel());
+    // ATU right-click → pre-tune dialog needs RadioModel for slice access
+    // and BandPlanManager for region-correct band edges. (#2624)
+    m_appletPanel->txApplet()->setRadioModel(&m_radioModel);
+    m_appletPanel->txApplet()->setBandPlanManager(m_bandPlanMgr);
+    m_appletPanel->rxApplet()->setRadioModel(&m_radioModel);
+    m_appletPanel->rxApplet()->setTransmitModel(&m_radioModel.transmitModel());
+
+    // Hide APD row on radios that don't support it
+    connect(&m_radioModel.transmitModel(), &TransmitModel::apdStateChanged, this, [this]() {
+        m_appletPanel->txApplet()->setApdVisible(
+            m_radioModel.transmitModel().apdConfigurable());
+    });
+
+}
 
 } // namespace AetherSDR

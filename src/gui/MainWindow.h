@@ -271,6 +271,10 @@ private:
     void syncTxWaterfallSliceToSpectrums();
     void updateSplitState();
     void disableSplit();
+    // Constructor wiring blocks extracted per #3351 Phase 2 — each runs once
+    // from the constructor, in original order, defined in its subject TU.
+    void wireMeters();              // MainWindow_Wiring.cpp
+    void wireExternalControllers(); // MainWindow_Controllers.cpp
     void wirePanadapter(PanadapterApplet* applet);
     void wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan);
     void schedulePanFpsReconcile(const QString& panId, int reportedFps);
