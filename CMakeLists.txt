@@ -610,6 +610,7 @@ endif()
 
 set(MODEL_SOURCES
     src/models/RadioModel.cpp
+    src/models/RadioSession.cpp
     src/models/ModelCapabilities.cpp
     src/models/AntennaAliasStore.cpp
     src/models/SliceModel.cpp

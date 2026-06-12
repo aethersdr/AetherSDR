@@ -32,6 +32,11 @@
 #include <QThread>
 #ifdef HAVE_SERIALPORT
 #include "core/SerialPortController.h"
+#include "models/RadioSession.h"
+
+#include <memory>
+#include <vector>
+
 #include "core/FlexControlManager.h"
 #endif
 #ifdef HAVE_MIDI
@@ -458,7 +463,16 @@ private:
 
     // Core objects
     RadioDiscovery    m_discovery;
-    RadioModel        m_radioModel;
+    // Radio sessions (#3445 Camp B / #3351). Each session owns the full
+    // per-radio aggregate; today there is exactly one. The vector sits at
+    // the old `RadioModel m_radioModel` member position so destruction
+    // order relative to the surrounding members is unchanged.
+    std::vector<std::unique_ptr<RadioSession>> m_sessions;
+    RadioSession*     m_session{nullptr};  // active session (m_sessions.front())
+    // Alias into the active session's model. Keeps the ~900 m_radioModel
+    // call sites across the MainWindow TUs source-compatible; new code
+    // should prefer m_session->radioModel().
+    RadioModel&       m_radioModel;
     DxccColorProvider m_dxccProvider;
     AudioEngine*      m_audio{nullptr};
     QThread*          m_audioThread{nullptr};

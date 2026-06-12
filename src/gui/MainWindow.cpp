@@ -817,8 +817,22 @@ void MainWindow::showForcedDisconnectDialog(bool wasWan,
     dialog->activateWindow();
 }
 
+namespace {
+// One session at startup (#3445 Camp B: the multi-radio seam is this vector).
+std::vector<std::unique_ptr<RadioSession>> makeInitialSessions()
+{
+    std::vector<std::unique_ptr<RadioSession>> sessions;
+    sessions.push_back(std::make_unique<RadioSession>());
+    sessions.front()->setSessionId(0);
+    return sessions;
+}
+} // namespace
+
 MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
+    , m_sessions(makeInitialSessions())
+    , m_session(m_sessions.front().get())
+    , m_radioModel(m_session->radioModel())
 {
     // Status bar is the only top-level shell besides the spectrum / applet
     // rail / titlebar that the operator can directly retheme.  Declare its
