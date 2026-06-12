@@ -623,7 +623,7 @@ private:
     bool    m_rc28PttLatched{false};
     bool    m_hidFastTune{false};
     bool    m_hidFineTune{false};
-    enum class TMate2Overlay { None, Volume, Power, Speed, Wpm, Rit };
+    enum class TMate2Overlay { None, Volume, Power, Speed, Wpm, Rit, Xit, Shift, Agc, Apf };
     TMate2Overlay m_tmate2Overlay{TMate2Overlay::None};
     int     m_tmate2OverlayValue{0};
     qint64  m_tmate2OverlayUntilMs{0};

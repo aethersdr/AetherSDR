@@ -536,6 +536,10 @@ QString MainWindow::tmate2OverlayName() const
     case TMate2Overlay::Speed:  return QStringLiteral("speed");
     case TMate2Overlay::Wpm:    return QStringLiteral("wpm");
     case TMate2Overlay::Rit:    return QStringLiteral("rit");
+    case TMate2Overlay::Xit:    return QStringLiteral("xit");
+    case TMate2Overlay::Shift:  return QStringLiteral("shift");
+    case TMate2Overlay::Agc:    return QStringLiteral("agc");
+    case TMate2Overlay::Apf:    return QStringLiteral("apf");
     case TMate2Overlay::None:   break;
     }
     return QString();
@@ -636,8 +640,46 @@ void MainWindow::updateTMate2Display()
 
     if (tmate2OverlayActive()) {
         const int32_t mainVal = m_tmate2OverlayValue;
-        QMetaObject::invokeMethod(m_hidEncoder, [this, mainVal] {
-            m_hidEncoder->setTMate2Display(static_cast<uint32_t>(std::abs(mainVal)), 0);
+        QString overlayText;
+        auto fixed3 = [](int value) {
+            return QStringLiteral("%1").arg(std::clamp(value, 0, 999), 3, 10,
+                                            QLatin1Char('0'));
+        };
+        switch (m_tmate2Overlay) {
+        case TMate2Overlay::Volume:
+            overlayText = QStringLiteral("VOL %1").arg(fixed3(mainVal));
+            break;
+        case TMate2Overlay::Power:
+            overlayText = QStringLiteral("PWR %1").arg(fixed3(mainVal));
+            break;
+        case TMate2Overlay::Agc:
+            overlayText = QStringLiteral("AGC %1").arg(fixed3(mainVal));
+            break;
+        case TMate2Overlay::Apf:
+            overlayText = QStringLiteral("APF %1").arg(fixed3(mainVal));
+            break;
+        case TMate2Overlay::Wpm:
+            overlayText = QStringLiteral("WPM %1").arg(fixed3(mainVal));
+            break;
+        case TMate2Overlay::Rit:
+            overlayText = QStringLiteral("RIT %1")
+                .arg(mainVal, 5, 10, QLatin1Char(' '));
+            break;
+        case TMate2Overlay::Xit:
+            overlayText = QStringLiteral("XIT %1")
+                .arg(mainVal, 5, 10, QLatin1Char(' '));
+            break;
+        case TMate2Overlay::Shift:
+        case TMate2Overlay::Speed:
+            overlayText = QStringLiteral("STEP %1")
+                .arg(mainVal, 4, 10, QLatin1Char(' '));
+            break;
+        case TMate2Overlay::None:
+            overlayText.clear();
+            break;
+        }
+        QMetaObject::invokeMethod(m_hidEncoder, [this, overlayText] {
+            m_hidEncoder->setTMate2OverlayDisplay(overlayText);
         });
         return;
     }
@@ -1184,6 +1226,9 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         if (auto* s = activeSlice()) {
             const int hz = std::clamp(s->xitFreq() + steps * 10, -9999, 9999);
             s->setXit(true, hz);
+#ifdef HAVE_HIDAPI
+            triggerTMate2Overlay(TMate2Overlay::Xit, hz);
+#endif
         }
     } else if (actionId == "WheelVolume" || actionId == "WheelMasterAf") {
         // Route to master volume to match SmartSDR behavior (#2921).
@@ -1215,11 +1260,21 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
         triggerTMate2Overlay(TMate2Overlay::Volume, next);
 #endif
     } else if (actionId == "WheelAgcT") {
-        if (auto* s = activeSlice())
-            s->setAgcThreshold(std::clamp(s->agcThreshold() + steps, 0, 100));
+        if (auto* s = activeSlice()) {
+            const int next = std::clamp(s->agcThreshold() + steps, 0, 100);
+            s->setAgcThreshold(next);
+#ifdef HAVE_HIDAPI
+            triggerTMate2Overlay(TMate2Overlay::Agc, next);
+#endif
+        }
     } else if (actionId == "WheelApf") {
-        if (auto* s = activeSlice())
-            s->setApfLevel(std::clamp(s->apfLevel() + steps, 0, 100));
+        if (auto* s = activeSlice()) {
+            const int next = std::clamp(s->apfLevel() + steps, 0, 100);
+            s->setApfLevel(next);
+#ifdef HAVE_HIDAPI
+            triggerTMate2Overlay(TMate2Overlay::Apf, next);
+#endif
+        }
     } else if (actionId == "NextSlice" || actionId == "PrevSlice") {
         const auto& slices = m_radioModel.slices();
         if (slices.size() <= 1) return;

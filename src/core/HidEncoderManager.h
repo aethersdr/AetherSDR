@@ -103,6 +103,9 @@ public slots:
     // Text variant for the 3-digit S-meter/power display. Accepts up to three
     // 7-segment glyphs, used for amplified power such as "1k5" + W segment.
     void setTMate2DisplayText(uint32_t freq_hz, const QString& small_text);
+    // Text variant for transient overlays. Accepts up to nine 7-segment glyphs
+    // on the main display and blanks the small display.
+    void setTMate2OverlayDisplay(const QString& main_text);
     // Update the TMate 2 segment indicators (RX/TX, mode, S-meter bargraph,
     // RIT/XIT, decimal dots).  Call whenever any of these state items changes.
     //   tx        : true = transmitting, false = receiving
