@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 // ── TMate 2 display helpers ────────────────────────────────────────────────
@@ -171,6 +172,14 @@ static int smeterBars(float dbm)
     if (dbm < -121.0f) return 0;
     if (dbm <= -73.0f) return static_cast<int>((dbm + 121.0f) / 6.0f) + 1;
     return std::min(15, 9 + static_cast<int>((dbm + 73.0f) / 10.0f));
+}
+
+static int powerBars(float watts, float fullScaleWatts)
+{
+    if (!std::isfinite(watts) || !std::isfinite(fullScaleWatts) || fullScaleWatts <= 0.0f)
+        return 0;
+    const float clampedWatts = std::clamp(watts, 0.0f, fullScaleWatts);
+    return std::clamp(static_cast<int>(std::lround((clampedWatts / fullScaleWatts) * 15.0f)), 0, 15);
 }
 
 static void setSmeterScaleSegs(uint8_t* lcd, bool on)
@@ -793,7 +802,9 @@ void HidEncoderManager::setTMate2OverlayDisplay(const QString& main_text)
 void HidEncoderManager::setTMate2Indicators(bool tx, const QString& mode,
                                              float smeter_dbm, bool rit, bool xit,
                                              const QString& encoder1Action,
-                                             const QString& encoder2Action)
+                                             const QString& encoder2Action,
+                                             float txPowerWatts,
+                                             float txPowerFullScaleWatts)
 {
     if (!m_device || !isTMate2()) return;
 
@@ -819,7 +830,9 @@ void HidEncoderManager::setTMate2Indicators(bool tx, const QString& mode,
     applyModeSegs(m_lcdVector, mode);
 
     // S-meter bargraph — set bars 1..N on, rest off
-    const int bars = smeterBars(smeter_dbm);
+    const int bars = tx
+        ? powerBars(txPowerWatts, txPowerFullScaleWatts)
+        : smeterBars(smeter_dbm);
     for (int i = 0; i < 15; ++i)
         tmate2Seg(m_lcdVector, kSMeterBars[i], i < bars);
 

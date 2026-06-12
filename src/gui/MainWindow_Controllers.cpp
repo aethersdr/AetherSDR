@@ -767,6 +767,9 @@ void MainWindow::updateTMate2Indicators()
     const bool rit    = s && s->ritOn();
     const bool xit    = s && s->xitOn();
     const float dbm   = m_tmate2SmeterDbm;
+    const float txPowerWatts = m_tmate2TxWatts;
+    const float txPowerFullScaleWatts =
+        (m_radioModel.hasAmplifier() && m_radioModel.ampOperate()) ? 2000.0f : 100.0f;
     auto& settings = AppSettings::instance();
     // TMate 2 settings list the main tuning encoder first, then the two
     // auxiliary encoders. The LCD labels those auxiliaries in the opposite
@@ -794,10 +797,12 @@ void MainWindow::updateTMate2Indicators()
         return;
     }
     QMetaObject::invokeMethod(m_hidEncoder,
-        [this, tx, mode, dbm, rit, xit, r, g, b, lcdE1Action, lcdE2Action] {
+        [this, tx, mode, dbm, rit, xit, r, g, b, lcdE1Action, lcdE2Action,
+         txPowerWatts, txPowerFullScaleWatts] {
         m_hidEncoder->setTMate2Backlight(r, g, b);
         m_hidEncoder->setTMate2Indicators(tx, mode, dbm, rit, xit,
-                                          lcdE1Action, lcdE2Action);
+                                          lcdE1Action, lcdE2Action,
+                                          txPowerWatts, txPowerFullScaleWatts);
     });
 }
 

@@ -110,13 +110,16 @@ public slots:
     // RIT/XIT, decimal dots).  Call whenever any of these state items changes.
     //   tx        : true = transmitting, false = receiving
     //   mode      : demodulation mode string ("USB","LSB","AM","FM","CW","DIGL","DIGU",…)
-    //   smeter_dbm: S-meter reading in dBm; drives the 15-segment bargraph
+    //   smeter_dbm: S-meter reading in dBm; drives the 15-segment bargraph in RX
+    //   txPowerWatts/txPowerFullScaleWatts: bargraph scale in TX
     //   rit/xit   : RIT / XIT active flags
     // No-op if device is not a TMate 2.
     void setTMate2Indicators(bool tx, const QString& mode, float smeter_dbm,
                               bool rit, bool xit,
                               const QString& encoder1Action = QString(),
-                              const QString& encoder2Action = QString());
+                              const QString& encoder2Action = QString(),
+                              float txPowerWatts = 0.0f,
+                              float txPowerFullScaleWatts = 100.0f);
     // Temporarily switch indicator segments to a TMate 2 overlay view.
     // overlayType: "volume", "power", "speed", "wpm", or "rit".
     void setTMate2OverlayIndicators(const QString& overlayType,
