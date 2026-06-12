@@ -52,6 +52,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <memory>
 #include <cmath>
 
 namespace AetherSDR {

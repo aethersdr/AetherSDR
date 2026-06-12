@@ -281,6 +281,7 @@ private:
     void wirePanLifecycle();
     void wireCatPorts();            // MainWindow_Session.cpp
     void wireDaxIq();               // MainWindow_Session.cpp
+    void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
     void wireExternalControllers(); // MainWindow_Controllers.cpp
     void wirePanadapter(PanadapterApplet* applet);

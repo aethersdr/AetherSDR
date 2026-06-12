@@ -1414,8 +1414,55 @@ MainWindow::MainWindow(QWidget* parent)
         s.save();
     });
 
-    // DSP applet wiring (PooDoo tiles, P/CW, PHNE, EQ, client DSP applets,
-    // TX chain, PUDU monitor, RX chain edit) → wireDspApplets()
+    // PooDoo RX chain status tiles → wirePooDooTiles()
+    // (MainWindow_DspApplets.cpp, #3351 Phase 2d).
+    wirePooDooTiles();
+
+    connect(m_titleBar, &TitleBar::headphoneMuteChanged, this, [this](bool muted) {
+        m_radioModel.sendCommand(QString("mixer headphone mute %1").arg(muted ? 1 : 0));
+    });
+    connect(&m_radioModel, &RadioModel::audioOutputChanged, this, [this]() {
+        m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
+    });
+
+    // Multi-Flex: show when another client is transmitting
+    connect(&m_radioModel, &RadioModel::txOwnerChanged,
+            m_titleBar, &TitleBar::setOtherClientTx);
+
+    // Multi-Flex: title bar indicator when other clients are connected
+    connect(&m_radioModel, &RadioModel::otherClientsChanged,
+            m_titleBar, &TitleBar::setMultiFlexStatus);
+    connect(&m_radioModel, &RadioModel::clientConnected,
+            this, [this](quint32 handle,
+                         const QString& source,
+                         const QString& station,
+                         const QString& program) {
+        statusBar()->showMessage(
+            clientConnectionStatusMessage(handle, source, station, program),
+            3000);
+    });
+
+    // Apply saved master volume
+    int savedMasterVol = AppSettings::instance().value("MasterVolume", "100").toInt();
+    m_audio->setRxVolume(savedMasterVol / 100.0f);
+
+    // Restore saved mute state (#1571)
+    bool savedMute = AppSettings::instance().value("PcAudioMuted", "False").toString() == "True";
+    if (savedMute) {
+        m_audio->setMuted(true);
+        m_titleBar->setLineoutMuted(true);
+    }
+
+
+    // Meter wiring (S-Meter / Tuner / MTR / HLTH / TX applets) →
+    // wireMeters() (MainWindow_Wiring.cpp, #3351 Phase 2a).
+    wireMeters();
+    // External-controller wiring → wireExternalControllers()
+    // (MainWindow_Controllers.cpp, #3351 Phase 2a).
+    wireExternalControllers();
+
+    // Client-DSP applet wiring (P/CW, PHNE, EQ, client DSP family, TX chain,
+    // PUDU monitor, RX chain edit) → wireDspApplets()
     // (MainWindow_DspApplets.cpp, #3351 Phase 2d).
     wireDspApplets();
 

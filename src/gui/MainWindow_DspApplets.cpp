@@ -1,7 +1,9 @@
 // MainWindow_DspApplets.cpp — client-DSP applet wiring for MainWindow.
 //
 // Part of the #3351 monolith decomposition (Phase 2d). Holds
-// wireDspApplets(), extracted verbatim from the constructor:
+// wirePooDooTiles() and wireDspApplets(), extracted verbatim from the
+// constructor (two methods because constructor chrome wiring sits
+// between them in initialization order — see the call sequence there):
 //
 //   • PooDoo RX chain status tiles
 //   • P/CW applet (mic/ALC/compression meters), PHNE, EQ
@@ -18,7 +20,6 @@
 #include "AetherDspWidget.h"
 #include "AppletPanel.h"
 #include "AetherialAudioStrip.h"
-#include "CatControlApplet.h"
 #include "ClientCompApplet.h"
 #include "ClientCompEditor.h"
 #include "ClientDeEssApplet.h"
@@ -32,12 +33,9 @@
 #include "ClientRxDspApplet.h"
 #include "ClientTubeApplet.h"
 #include "ClientTubeEditor.h"
-#include "DaxApplet.h"
-#include "DaxIqApplet.h"
 #include "EqApplet.h"
 #include "PhoneApplet.h"
 #include "PhoneCwApplet.h"
-#include "TciApplet.h"
 #include "TitleBar.h"
 #include "ClientChainApplet.h"
 #include "MainWindowHelpers.h"
@@ -49,11 +47,13 @@
 
 #include <QTimer>
 
+#include <memory>
+
 #include <algorithm>
 
 namespace AetherSDR {
 
-void MainWindow::wireDspApplets()
+void MainWindow::wirePooDooTiles()
 {
     // ── PooDoo RX chain status tiles (Phase 0 chassis) ─────────────────────
     // RADIO tile = PC Audio enabled (standard SSB / remote_audio_rx stream).
@@ -138,48 +138,10 @@ void MainWindow::wireDspApplets()
         if (m_aetherialStrip)
             m_aetherialStrip->setRxOutputUnmuted(!m_audio->isMuted());
     }
-    connect(m_titleBar, &TitleBar::headphoneMuteChanged, this, [this](bool muted) {
-        m_radioModel.sendCommand(QString("mixer headphone mute %1").arg(muted ? 1 : 0));
-    });
-    connect(&m_radioModel, &RadioModel::audioOutputChanged, this, [this]() {
-        m_titleBar->setHeadphoneVolume(m_radioModel.headphoneGain());
-    });
+}
 
-    // Multi-Flex: show when another client is transmitting
-    connect(&m_radioModel, &RadioModel::txOwnerChanged,
-            m_titleBar, &TitleBar::setOtherClientTx);
-
-    // Multi-Flex: title bar indicator when other clients are connected
-    connect(&m_radioModel, &RadioModel::otherClientsChanged,
-            m_titleBar, &TitleBar::setMultiFlexStatus);
-    connect(&m_radioModel, &RadioModel::clientConnected,
-            this, [this](quint32 handle,
-                         const QString& source,
-                         const QString& station,
-                         const QString& program) {
-        statusBar()->showMessage(
-            clientConnectionStatusMessage(handle, source, station, program),
-            3000);
-    });
-
-    // Apply saved master volume
-    int savedMasterVol = AppSettings::instance().value("MasterVolume", "100").toInt();
-    m_audio->setRxVolume(savedMasterVol / 100.0f);
-
-    // Restore saved mute state (#1571)
-    bool savedMute = AppSettings::instance().value("PcAudioMuted", "False").toString() == "True";
-    if (savedMute) {
-        m_audio->setMuted(true);
-        m_titleBar->setLineoutMuted(true);
-    }
-
-    // Meter wiring (S-Meter / Tuner / MTR / HLTH / TX applets) →
-    // wireMeters() (MainWindow_Wiring.cpp, #3351 Phase 2a).
-    wireMeters();
-    // External-controller wiring → wireExternalControllers()
-    // (MainWindow_Controllers.cpp, #3351 Phase 2a).
-    wireExternalControllers();
-
+void MainWindow::wireDspApplets()
+{
     // ── P/CW applet: mic meters + ALC meter + model ────────────────────────
     // Suppress radio CODEC meters when mic_selection=PC (they just show noise).
     // Client-side metering handles PC mic display below.
