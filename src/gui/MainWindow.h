@@ -275,6 +275,10 @@ private:
     // from the constructor, in original order, defined in its subject TU.
     void wireMeters();              // MainWindow_Wiring.cpp
     void wireSpotSubsystem();       // MainWindow_Spots.cpp
+    // RadioSession precursors (#3351 Phase 2c / #3445) — MainWindow_Session.cpp
+    void wireDiscovery();
+    void wireRadioModel();
+    void wirePanLifecycle();
     void wireExternalControllers(); // MainWindow_Controllers.cpp
     void wirePanadapter(PanadapterApplet* applet);
     void wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan);

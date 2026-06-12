@@ -103,6 +103,14 @@ inline constexpr int kSwrSweepTuneStopTimeoutMs = 1800;
 inline constexpr int kSwrSweepTgxlRestoreTimeoutMs = 3500;
 inline constexpr int kSwrSweepMaxPoints = 260;
 
+// ─── Pan-layout restore window ───────────────────────────────────────────────
+//
+// Shared between the connect-time restore logic (MainWindow.cpp) and the
+// multi-pan lifecycle wiring (MainWindow_Session.cpp).
+
+inline constexpr qint64 kPanLayoutRestoreWaitingForFirstPan = -1;
+inline constexpr int kPanLayoutRestoreWindowMs = 30000;
+
 // ─── Pan layout ──────────────────────────────────────────────────────────────
 
 // Pan count for a saved layout id (e.g. "2x2" → 4); 1 for unknown ids.
