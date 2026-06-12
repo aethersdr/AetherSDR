@@ -639,6 +639,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_Menus.cpp
     src/gui/MainWindow_Shortcuts.cpp
     src/gui/MainWindow_DigitalModes.cpp
+    src/gui/MainWindow_Spots.cpp
     src/gui/MainWindow_SwrSweep.cpp
     src/gui/MainWindow_Wiring.cpp
     src/gui/AgcCalibrationDialog.cpp
