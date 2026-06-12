@@ -100,6 +100,9 @@ public slots:
     // Sends a full LCDVector update (backlight, contrast, timing are preserved).
     // No-op if device is not a TMate 2.
     void setTMate2Display(uint32_t freq_hz, uint32_t small_val);
+    // Text variant for the 3-digit S-meter/power display. Accepts up to three
+    // 7-segment glyphs, used for amplified power such as "1k5" + W segment.
+    void setTMate2DisplayText(uint32_t freq_hz, const QString& small_text);
     // Update the TMate 2 segment indicators (RX/TX, mode, S-meter bargraph,
     // RIT/XIT, decimal dots).  Call whenever any of these state items changes.
     //   tx        : true = transmitting, false = receiving
@@ -108,7 +111,9 @@ public slots:
     //   rit/xit   : RIT / XIT active flags
     // No-op if device is not a TMate 2.
     void setTMate2Indicators(bool tx, const QString& mode, float smeter_dbm,
-                              bool rit, bool xit);
+                              bool rit, bool xit,
+                              const QString& encoder1Action = QString(),
+                              const QString& encoder2Action = QString());
     // Temporarily switch indicator segments to a TMate 2 overlay view.
     // overlayType: "volume", "power", "speed", "wpm", or "rit".
     void setTMate2OverlayIndicators(const QString& overlayType,

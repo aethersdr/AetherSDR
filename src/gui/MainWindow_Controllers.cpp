@@ -51,6 +51,16 @@ namespace {
 
 constexpr int kTMate2DefaultOverlayDurationMs = 1500;
 
+QString formatTMate2PowerSmallText(float watts)
+{
+    const int roundedWatts = std::clamp(static_cast<int>(std::lround(watts)), 0, 9999);
+    if (roundedWatts <= 999)
+        return QString::number(roundedWatts);
+
+    const int tenthsKw = std::clamp(static_cast<int>(std::lround(watts / 100.0f)), 10, 99);
+    return QStringLiteral("%1k%2").arg(tenthsKw / 10).arg(tenthsKw % 10);
+}
+
 QString tmate2EncoderDefaultAction(int encoderIndex)
 {
     switch (encoderIndex) {
@@ -650,12 +660,16 @@ void MainWindow::updateTMate2Display()
     const int dbm       = static_cast<int>(std::round(m_tmate2SmeterDbm));
     const uint32_t sVal = static_cast<uint32_t>(std::clamp(std::abs(dbm), 0, 999));
 
-    const uint32_t smallVal = m_radioModel.transmitModel().isTransmitting()
-        ? static_cast<uint32_t>(m_tmate2TxWatts + 0.5f)
-        : sVal;
+    if (m_radioModel.transmitModel().isTransmitting()) {
+        const QString powerText = formatTMate2PowerSmallText(m_tmate2TxWatts);
+        QMetaObject::invokeMethod(m_hidEncoder, [this, freqHz, powerText] {
+            m_hidEncoder->setTMate2DisplayText(freqHz, powerText);
+        });
+        return;
+    }
 
-    QMetaObject::invokeMethod(m_hidEncoder, [this, freqHz, smallVal] {
-        m_hidEncoder->setTMate2Display(freqHz, smallVal);
+    QMetaObject::invokeMethod(m_hidEncoder, [this, freqHz, sVal] {
+        m_hidEncoder->setTMate2Display(freqHz, sVal);
     });
 }
 
@@ -685,6 +699,13 @@ void MainWindow::updateTMate2Indicators()
     const bool xit    = s && s->xitOn();
     const float dbm   = m_tmate2SmeterDbm;
     auto& settings = AppSettings::instance();
+    // TMate 2 settings list the main tuning encoder first, then the two
+    // auxiliary encoders. The LCD labels those auxiliaries in the opposite
+    // physical order: settings Encoder 3 is printed E1, Encoder 2 is printed E2.
+    const QString lcdE1Action = settings.value(
+        QStringLiteral("TMate2EncoderAction2"), QStringLiteral("WheelXit")).toString();
+    const QString lcdE2Action = settings.value(
+        QStringLiteral("TMate2EncoderAction1"), QStringLiteral("WheelRit")).toString();
     const uint8_t r = static_cast<uint8_t>(settings.value(
         tx ? "TMate2TxBacklightR" : "TMate2BacklightR",
         tx ? "255" : "0").toInt());
@@ -703,9 +724,11 @@ void MainWindow::updateTMate2Indicators()
         });
         return;
     }
-    QMetaObject::invokeMethod(m_hidEncoder, [this, tx, mode, dbm, rit, xit, r, g, b] {
+    QMetaObject::invokeMethod(m_hidEncoder,
+        [this, tx, mode, dbm, rit, xit, r, g, b, lcdE1Action, lcdE2Action] {
         m_hidEncoder->setTMate2Backlight(r, g, b);
-        m_hidEncoder->setTMate2Indicators(tx, mode, dbm, rit, xit);
+        m_hidEncoder->setTMate2Indicators(tx, mode, dbm, rit, xit,
+                                          lcdE1Action, lcdE2Action);
     });
 }
 

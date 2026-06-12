@@ -2185,8 +2185,10 @@ void MainWindow::wireMeters()
         m_appletPanel->sMeterWidget()->setTxMeters(fwd, swr);
 #ifdef HAVE_HIDAPI
         m_tmate2TxWatts = fwd;
-        if (m_radioModel.transmitModel().isTransmitting())
+        if (m_radioModel.transmitModel().isTransmitting()) {
             updateTMate2Display();
+            updateTMate2Indicators();
+        }
 #endif
     });
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
@@ -2299,6 +2301,13 @@ void MainWindow::wireMeters()
             else if (kvs.contains("state") && !kvs.value("state").startsWith("TRANSMIT"))
                 m_appletPanel->sMeterWidget()->setTransmitting(false);
             m_appletPanel->sMeterWidget()->setTxMeters(watts, swr);
+#ifdef HAVE_HIDAPI
+            m_tmate2TxWatts = watts;
+            if (m_radioModel.transmitModel().isTransmitting()) {
+                updateTMate2Display();
+                updateTMate2Indicators();
+            }
+#endif
         }
     });
     connect(&m_pgxlConn, &PgxlConnection::connected, this, [this]() {
@@ -2435,6 +2444,13 @@ void MainWindow::wireMeters()
         // path, so we just stop overriding it here).
         if (m_radioModel.hasAmplifier() && m_radioModel.ampOperate()) {
             m_appletPanel->sMeterWidget()->setTxMeters(fwdPwr, swr);
+#ifdef HAVE_HIDAPI
+            m_tmate2TxWatts = fwdPwr;
+            if (m_radioModel.transmitModel().isTransmitting()) {
+                updateTMate2Display();
+                updateTMate2Indicators();
+            }
+#endif
             static int ampDbg = 0;
             if (++ampDbg % 50 == 1)
                 qCDebug(lcTuner) << "AMP→SMeter: fwd=" << fwdPwr << "W swr=" << swr;
