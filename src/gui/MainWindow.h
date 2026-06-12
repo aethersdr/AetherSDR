@@ -279,6 +279,9 @@ private:
     void wireDiscovery();
     void wireRadioModel();
     void wirePanLifecycle();
+    void wireCatPorts();            // MainWindow_Session.cpp
+    void wireDaxIq();               // MainWindow_Session.cpp
+    void wireDspApplets();          // MainWindow_DspApplets.cpp
     void wireExternalControllers(); // MainWindow_Controllers.cpp
     void wirePanadapter(PanadapterApplet* applet);
     void wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan);

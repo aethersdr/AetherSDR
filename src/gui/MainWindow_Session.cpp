@@ -42,7 +42,11 @@
 #endif
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
+#include "CatControlApplet.h"
 #include "ClientChainApplet.h"
+#include "DaxApplet.h"
+#include "DaxIqApplet.h"
+#include "TciApplet.h"
 #include "PanadapterStack.h"
 #include "SMeterWidget.h"
 #include "core/ThemeManager.h"
@@ -1279,6 +1283,191 @@ void MainWindow::wirePanLifecycle()
             m_panStack->rearrangeLayout(defaultPanLayoutForCount(remaining));
         }
     });
+
+}
+
+void MainWindow::wireCatPorts()
+{
+    // ── Unified CAT ports (kCatPorts slots, configured from settings) ───────────
+    // Migrate old dual-server settings to the new per-port schema on first run.
+    migrateCatSettings();
+    for (int i = 0; i < kCatPorts; ++i) {
+        m_catPorts[i] = new CatPort(&m_radioModel, this);
+        // Per-user symlink path (GHSA-qxhr-cwrc-pvrm — matches RigctlPty fix).
+        m_catPorts[i]->setSymlinkPath(CatPort::defaultSymlinkPath(i));
+        // Load persisted dialect and VFO config; port and enabled are read
+        // in applyCatPortCount() just before starting.
+        const QString prefix = QString("CatPort_%1_").arg(i);
+        auto& s = AppSettings::instance();
+        QString d = s.value(prefix + "Dialect", "Rigctld").toString();
+        CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
+                        : (d == "TS2000")  ? CatDialect::TS2000
+                        : CatDialect::Rigctld;
+        m_catPorts[i]->setDialect(dial);
+        m_catPorts[i]->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+        m_catPorts[i]->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
+    }
+
+    // Wire the applet to the port objects
+    m_appletPanel->catControlApplet()->setPorts(m_catPorts, kCatPorts);
+    m_appletPanel->catControlApplet()->setMaxSlices(catPortTargetCount());
+
+    // Wire master enable toggle from the docked applet
+    connect(m_appletPanel->catControlApplet(), &CatControlApplet::enableChanged,
+            this, [this](bool) { applyCatPortCount(); });
+
+    // Per-port config changes in the floating table → re-apply port states
+    connect(m_appletPanel->catControlApplet(), &CatControlApplet::configChanged,
+            this, [this]() { applyCatPortCount(); });
+
+    // Auto-start based on saved master enable
+    applyCatPortCount();
+    m_appletPanel->daxApplet()->setRadioModel(&m_radioModel);
+    m_appletPanel->daxIqApplet()->setRadioModel(&m_radioModel);
+#ifdef HAVE_WEBSOCKETS
+    m_tciServer = new TciServer(&m_radioModel, this);
+    m_tciServer->setAudioEngine(m_audio);
+    m_appletPanel->tciApplet()->setRadioModel(&m_radioModel);
+    m_appletPanel->tciApplet()->setTciServer(m_tciServer);
+
+    // TCI applet sliders → TciServer gain setters
+    connect(m_appletPanel->tciApplet(), &TciApplet::tciRxGainChanged,
+            m_tciServer, &TciServer::setRxChannelGain);
+    connect(m_appletPanel->tciApplet(), &TciApplet::tciTxGainChanged,
+            m_tciServer, &TciServer::setTxGain);
+    connect(m_appletPanel->tciApplet(), &TciApplet::tciTxOverflowModeChanged,
+            m_tciServer, &TciServer::setOverflowMode);
+
+    // TciServer level signals → TCI applet meters
+    connect(m_tciServer, &TciServer::rxLevel,
+            m_appletPanel->tciApplet(), &TciApplet::setTciRxLevel);
+    connect(m_tciServer, &TciServer::txLevel,
+            m_appletPanel->tciApplet(), &TciApplet::setTciTxLevel);
+
+    // TCI `volume:N;` master-volume SET → mirror on the title bar slider
+    // and route through the same applyMasterVolume() slot the slider uses
+    // (audio path + persistence + broadcast back to other TCI clients).
+    // See issue #1764 — no master-volume TCI hook existed before.
+    connect(m_tciServer, &TciServer::masterVolumeRequested,
+            this, [this](int pct) {
+        if (m_titleBar) m_titleBar->setMasterVolume(pct);
+        applyMasterVolume(pct);
+    });
+
+    // Wire slice state changes -> TCI broadcasts. TCI receivers are contiguous
+    // indexes within our owned slice list; Flex slice ids can be non-zero when
+    // another client owns lower-numbered slices.
+    auto wireTciSlice = [this](SliceModel* s) {
+        if (!m_tciServer || !s)
+            return;
+        const int trx = m_radioModel.slices().indexOf(s);
+        m_tciServer->wireSlice(trx >= 0 ? trx : s->sliceId(), s);
+    };
+    connect(&m_radioModel, &RadioModel::sliceAdded, this, [wireTciSlice](SliceModel* s) {
+        wireTciSlice(s);
+    });
+    // Wire existing slices (radio may already be connected with slices)
+    for (auto* s : m_radioModel.slices())
+        wireTciSlice(s);
+    m_tciServer->wireSpotModel();
+
+    // Wire RX audio from PanadapterStream → TCI server for audio streaming.
+    // TCI audio feeds exclusively from DAX (not audioDataReady) so that
+    // audio_mute doesn't kill TCI audio (#1331).
+    if (m_radioModel.panStream()) {
+        connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
+                m_tciServer, &TciServer::onDaxAudioReady);
+        connect(m_radioModel.panStream(), &PanadapterStream::iqDataReady,
+                m_tciServer, &TciServer::onIqDataReady);
+        connect(m_radioModel.panStream(), &PanadapterStream::waterfallRowReady,
+                m_tciServer, &TciServer::onWaterfallRowReady);
+    }
+
+    // TCI client count changes no longer auto-create/remove the audio stream.
+    // Control-only TCI clients (StreamDeck) don't need audio, and auto-creating
+    // the stream overrode the user's explicit PC Audio toggle. Users who need
+    // TCI audio (WSJT-X) should enable PC Audio manually. (#1071)
+#endif
+
+}
+
+void MainWindow::wireDaxIq()
+{
+    // ── DAX IQ wiring on platforms without an audio bridge ──────────────
+    //
+    // Same class of bug as #1820 (RADE RX on Windows): startDax() is
+    // compiled out on platforms without an audio bridge (Windows, Linux
+    // without PipeWire), so the DAX IQ stream-status registration handler
+    // that lives inside it never runs.  As a result PanadapterStream sees
+    // the inbound VITA-49 IQ packets but never knows what channel to
+    // route them to — iqDataReady never fires, the GUI applet meter
+    // shows nothing, and TCI clients get no IQ frames.
+    //
+    // Mirror just the IQ-side wiring here (the audio-bridge wiring
+    // genuinely needs the bridge so we leave that gated).  On Mac /
+    // PipeWire builds startDax() does the same wiring lazily when DAX
+    // audio is toggled, so we skip this block to avoid double-connection.
+#if !defined(Q_OS_MAC) && !defined(HAVE_PIPEWIRE)
+    if (m_appletPanel && m_appletPanel->daxIqApplet() && m_radioModel.panStream()) {
+        connect(&m_radioModel, &RadioModel::statusReceived,
+                this, [this](const QString& obj, const QMap<QString,QString>& kvs) {
+            if (!obj.startsWith("stream ")) return;
+            const QStringList parts = obj.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+            if (parts.size() < 2) return;
+            bool ok = false;
+            quint32 streamId = parts[1].toUInt(&ok, 0);
+            if (!ok) return;
+            const bool removed = parts.contains(QStringLiteral("removed"))
+                              || kvs.contains(QStringLiteral("removed"));
+            if (removed) {
+                m_radioModel.panStream()->unregisterIqStream(streamId);
+                m_radioModel.daxIqModel().handleStreamRemoved(streamId);
+                qCDebug(lcDax) << "MainWindow: unregistered removed DAX IQ stream"
+                               << "0x" + QString::number(streamId, 16);
+                return;
+            }
+            if (kvs.value("type") != "dax_iq") return;
+            if (!streamStatusBelongsToUs(kvs, m_radioModel.ourClientHandle())) {
+                qCDebug(lcDax) << "MainWindow: ignoring DAX IQ stream for another client"
+                                << "stream=0x" + QString::number(streamId, 16)
+                                << "owner=" << kvs.value("client_handle");
+                return;
+            }
+            qCDebug(lcDax) << "MainWindow: DAX IQ stream status" << obj
+                           << "keys=" << kvs.keys()
+                           << "ch=" << kvs.value("daxiq_channel")
+                           << "ip=" << kvs.value("ip");
+            m_radioModel.daxIqModel().applyStreamStatus(streamId, kvs);
+            int ch = kvs.value("daxiq_channel").toInt();
+            if (streamId && ch >= 1 && ch <= 4)
+                m_radioModel.panStream()->registerIqStream(streamId, ch);
+        });
+
+        connect(m_radioModel.panStream(), &PanadapterStream::iqDataReady,
+                &m_radioModel.daxIqModel(), &DaxIqModel::feedRawIqPacket);
+        connect(&m_radioModel.daxIqModel(), &DaxIqModel::iqLevelReady,
+                m_appletPanel->daxIqApplet(), &DaxIqApplet::setDaxIqLevel);
+        connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqEnableRequested,
+                &m_radioModel.daxIqModel(), &DaxIqModel::createStream);
+        connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqDisableRequested,
+                &m_radioModel.daxIqModel(), &DaxIqModel::removeStream);
+        connect(m_appletPanel->daxIqApplet(), &DaxIqApplet::iqRateChanged,
+                &m_radioModel.daxIqModel(), &DaxIqModel::setSampleRate);
+    }
+#endif
+
+#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+    // DAX enable button in DaxApplet → start/stop DAX bridge
+    connect(m_appletPanel->daxApplet(), &DaxApplet::daxToggled,
+            this, [this](bool on) {
+        if (on) {
+            if (!startDax() && m_appletPanel && m_appletPanel->daxApplet())
+                m_appletPanel->daxApplet()->setDaxEnabled(false);
+        } else {
+            stopDax();
+        }
+    });
+#endif
 
 }
 
