@@ -59,14 +59,17 @@ static MainGlyph tmate2MainGlyph(QChar ch)
     case 'G': case 'g': return { 0x05, 0x0D };
     case 'H': case 'h': return { 0x06, 0x07 };
     case 'I': case 'i': return { 0x00, 0x04 };
+    case 'K': case 'k': return { 0x00, 0x0F };
     case 'L': case 'l': return { 0x00, 0x0D };
+    case 'M': case 'm': return { 0x04, 0x06 };
+    case 'N': case 'n': return { 0x04, 0x06 };
     case 'O': case 'o': return { 0x07, 0x0D };
     case 'P': case 'p': return { 0x03, 0x07 };
     case 'R': case 'r': return { 0x00, 0x06 };
     case 'S': case 's': return { 0x05, 0x0B };
     case 'T': case 't': return { 0x00, 0x0F };
     case 'U': case 'u': return { 0x06, 0x0D };
-    case 'V': case 'v': return { 0x04, 0x0D };
+    case 'V': case 'v': return { 0x06, 0x0D };
     case 'W': case 'w': return { 0x06, 0x0D };
     case 'X': case 'x': return { 0x06, 0x07 };
     case 'Y': case 'y': return { 0x06, 0x0B };

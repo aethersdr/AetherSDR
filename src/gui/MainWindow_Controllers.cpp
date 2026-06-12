@@ -540,6 +540,7 @@ QString MainWindow::tmate2OverlayName() const
     case TMate2Overlay::Shift:  return QStringLiteral("shift");
     case TMate2Overlay::Agc:    return QStringLiteral("agc");
     case TMate2Overlay::Apf:    return QStringLiteral("apf");
+    case TMate2Overlay::Text:   return QStringLiteral("text");
     case TMate2Overlay::None:   break;
     }
     return QString();
@@ -613,6 +614,28 @@ void MainWindow::triggerTMate2Overlay(TMate2Overlay overlay, int value)
         100, 10000);
     m_tmate2Overlay = overlay;
     m_tmate2OverlayValue = value;
+    m_tmate2OverlayText.clear();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    m_tmate2LastUserInteractionMs = now;
+    m_tmate2DisplayBlanked = false;
+    m_tmate2OverlayUntilMs = now + durationMs;
+    m_tmate2OverlayTimer.start(durationMs);
+    updateTMate2Display();
+    updateTMate2Indicators();
+    restartTMate2IdleTimer();
+}
+
+void MainWindow::triggerTMate2TextOverlay(const QString& text)
+{
+    if (!m_hidEncoder || !m_hidEncoder->isOpen() || !m_hidEncoder->isTMate2()) return;
+    auto& settings = AppSettings::instance();
+    const int durationMs = std::clamp(
+        settings.value("TMate2OverlayDurationMs",
+                       QString::number(kTMate2DefaultOverlayDurationMs)).toInt(),
+        100, 10000);
+    m_tmate2Overlay = TMate2Overlay::Text;
+    m_tmate2OverlayValue = 0;
+    m_tmate2OverlayText = text;
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     m_tmate2LastUserInteractionMs = now;
     m_tmate2DisplayBlanked = false;
@@ -646,6 +669,9 @@ void MainWindow::updateTMate2Display()
                                             QLatin1Char('0'));
         };
         switch (m_tmate2Overlay) {
+        case TMate2Overlay::Text:
+            overlayText = m_tmate2OverlayText;
+            break;
         case TMate2Overlay::Volume:
             overlayText = QStringLiteral("VOL %1").arg(fixed3(mainVal));
             break;
@@ -686,6 +712,7 @@ void MainWindow::updateTMate2Display()
     if (m_tmate2Overlay != TMate2Overlay::None) {
         m_tmate2Overlay = TMate2Overlay::None;
         m_tmate2OverlayUntilMs = 0;
+        m_tmate2OverlayText.clear();
     }
 
     // Frequency: active slice in Hz, 0 if no slice.
@@ -810,25 +837,58 @@ void MainWindow::dispatchHidAction(const QString& actionName,
     } else if (actionName == "ClearXit") {
         if (auto* s = activeSlice()) s->setXit(s->xitOn(), 0);
     } else if (actionName == "ToggleMox") {
-        m_radioModel.setTransmit(!m_radioModel.transmitModel().isTransmitting());
+        const bool next = !m_radioModel.transmitModel().isTransmitting();
+        m_radioModel.setTransmit(next);
     } else if (actionName == "ToggleTune") {
-        if (m_radioModel.transmitModel().isTuning())
+        const bool next = !m_radioModel.transmitModel().isTuning();
+        if (!next)
             m_radioModel.transmitModel().stopTune();
         else
             m_radioModel.transmitModel().startTune();
+#ifdef HAVE_HIDAPI
+        triggerTMate2TextOverlay(next ? QStringLiteral("TUNE ON")
+                                      : QStringLiteral("TUNE OFF"));
+#endif
     } else if (actionName == "ToggleMute") {
-        if (m_audio) m_audio->setMuted(!m_audio->isMuted());
+        if (m_audio) {
+            const bool next = !m_audio->isMuted();
+            m_audio->setMuted(next);
+#ifdef HAVE_HIDAPI
+            triggerTMate2TextOverlay(next ? QStringLiteral("MUTE ON")
+                                          : QStringLiteral("MUTE OFF"));
+#endif
+        }
     } else if (actionName == "ToggleLock") {
-        if (auto* s = activeSlice()) s->setLocked(!s->isLocked());
+        if (auto* s = activeSlice()) {
+            const bool next = !s->isLocked();
+            s->setLocked(next);
+#ifdef HAVE_HIDAPI
+            updateTMate2Status();
+            triggerTMate2TextOverlay(next ? QStringLiteral("LOCK ON")
+                                          : QStringLiteral("LOCK OFF"));
+#endif
+        }
     } else if (actionName == "ToggleApf") {
-        if (auto* s = activeSlice()) s->setApf(!s->apfOn());
+        if (auto* s = activeSlice()) {
+            const bool next = !s->apfOn();
+            s->setApf(next);
+#ifdef HAVE_HIDAPI
+            triggerTMate2TextOverlay(next ? QStringLiteral("APF ON")
+                                          : QStringLiteral("APF OFF"));
+#endif
+        }
     } else if (actionName == "ToggleAgc") {
         if (auto* s = activeSlice()) {
             static const char* modes[] = {"off","slow","med","fast"};
             const QString cur = s->agcMode().toLower();
             int idx = 0;
             for (int i = 0; i < 4; ++i) if (cur == modes[i]) { idx = i; break; }
-            s->setAgcMode(modes[(idx + 1) % 4]);
+            const int nextIdx = (idx + 1) % 4;
+            s->setAgcMode(modes[nextIdx]);
+#ifdef HAVE_HIDAPI
+            static const char* labels[] = {"AGC OFF", "AGC SLO", "AGC MED", "AGC FST"};
+            triggerTMate2TextOverlay(QString::fromLatin1(labels[nextIdx]));
+#endif
         }
     } else if (actionName == "BandZoom") {
         auto* s = activeSlice();

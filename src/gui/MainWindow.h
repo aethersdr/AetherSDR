@@ -623,9 +623,10 @@ private:
     bool    m_rc28PttLatched{false};
     bool    m_hidFastTune{false};
     bool    m_hidFineTune{false};
-    enum class TMate2Overlay { None, Volume, Power, Speed, Wpm, Rit, Xit, Shift, Agc, Apf };
+    enum class TMate2Overlay { None, Volume, Power, Speed, Wpm, Rit, Xit, Shift, Agc, Apf, Text };
     TMate2Overlay m_tmate2Overlay{TMate2Overlay::None};
     int     m_tmate2OverlayValue{0};
+    QString m_tmate2OverlayText;
     qint64  m_tmate2OverlayUntilMs{0};
     qint64  m_tmate2LastUserInteractionMs{0};
     bool    m_tmate2DisplayBlanked{false};
@@ -642,6 +643,7 @@ private:
     void noteTMate2Interaction();
     void blankTMate2Display();
     void triggerTMate2Overlay(TMate2Overlay overlay, int value);
+    void triggerTMate2TextOverlay(const QString& text);
     void updateTMate2Display();
     void updateTMate2Status();
     void updateTMate2Indicators();
