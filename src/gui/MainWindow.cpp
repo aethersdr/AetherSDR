@@ -1154,6 +1154,13 @@ MainWindow::MainWindow(QWidget* parent)
     // (MainWindow_Session.cpp, #3351 Phase 2c).
     wireDiscovery();
 
+    // Spot subsystem wiring (DX cluster / spot clients worker thread /
+    // HF propagation / dedup+batch forwarding) → wireSpotSubsystem()
+    // (MainWindow_Spots.cpp, #3351 Phase 2b). Hoisted back to the
+    // constructor so wiring order stays readable here and the spot
+    // subsystem doesn't ride along when RadioSession is extracted.
+    wireSpotSubsystem();
+
     // Radio-model + TX-audio-stream wiring → wireRadioModel()
     // (MainWindow_Session.cpp, #3351 Phase 2c).
     wireRadioModel();

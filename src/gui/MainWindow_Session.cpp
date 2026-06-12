@@ -367,11 +367,6 @@ void MainWindow::wireDiscovery()
             setPanadapterConnectionAnimation(false);
     });
 
-    // Spot subsystem wiring (DX cluster / spot clients worker thread /
-    // HF propagation / dedup+batch forwarding) → wireSpotSubsystem()
-    // (MainWindow_Spots.cpp, #3351 Phase 2b).
-    wireSpotSubsystem();
-
 }
 
 void MainWindow::wireRadioModel()
