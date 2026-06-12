@@ -29,10 +29,17 @@
 #include "models/SliceModel.h"
 #include "models/SpotModel.h"
 
+#include <QDateTime>
+#ifdef HAVE_MQTT
+#include <QJsonDocument>
+#include <QJsonObject>
+#endif
 #include <QThread>
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
+#include <memory>
 
 namespace AetherSDR {
 
