@@ -88,6 +88,82 @@ double bearingDeg(double lat1, double lon1, double lat2, double lon2)
     return std::fmod(qRadiansToDegrees(std::atan2(y, x)) + 360.0, 360.0);
 }
 
+// SNR color: decoded spots are never "bad", so this is a strong/medium/weak
+// ramp (green → orange → gray), all readable on a light tooltip background.
+QString snrColor(int snr)
+{
+    if (snr >= -5)  return QStringLiteral("#1b5e20");  // strong
+    if (snr >= -15) return QStringLiteral("#bf6000");  // medium
+    return QStringLiteral("#616161");                  // weak but decoded
+}
+
+// Compact, human-readable age of a report.
+QString relativeAge(qint64 reportEpoch)
+{
+    const qint64 age = QDateTime::currentSecsSinceEpoch() - reportEpoch;
+    if (age < 60)    return PskReporterMapDialog::tr("just now");
+    if (age < 3600)  return PskReporterMapDialog::tr("%1m ago").arg(age / 60);
+    if (age < 86400) return PskReporterMapDialog::tr("%1h ago").arg(age / 3600);
+    return PskReporterMapDialog::tr("%1d ago").arg(age / 86400);
+}
+
+// Minimal-footprint hover/click card. Short stacked lines keep the box
+// narrow so neighbouring spots stay visible; SNR is the headline figure.
+//   <b>W1ABC</b>  FN42hn
+//   20m · 14.074 MHz · FT8
+//   −12 dB · 5,432 km @ 048°
+//   14:23:01Z · 2m ago
+QString buildSpotCard(const PskReporterSpot& spot, bool hasHome,
+                      double homeLat, double homeLon, double spotLat,
+                      double spotLon)
+{
+    const QString freq =
+        QString::number(spot.frequencyHz / 1e6, 'f', 3);
+    QString html = QStringLiteral("<div style='white-space:nowrap;'>");
+
+    // Line 1 — identity.
+    html += QStringLiteral("<b>%1</b>&nbsp;&nbsp;"
+                           "<span style='color:gray;'>%2</span>")
+                .arg(spot.receiverCallsign.toHtmlEscaped(),
+                     spot.receiverLocator.toHtmlEscaped());
+
+    // Line 2 — RF.
+    html += QStringLiteral("<br>%1 · %2 MHz · %3")
+                .arg(bandName(spot.frequencyHz), freq,
+                     spot.mode.toHtmlEscaped());
+
+    // Line 3 — signal + geometry.
+    QString line3;
+    if (spot.snr > -999) {
+        line3 = QStringLiteral("<b style='color:%1;'>%2 dB</b>")
+                    .arg(snrColor(spot.snr))
+                    .arg(spot.snr);
+    }
+    if (hasHome) {
+        const double km =
+            MaidenheadLocator::distanceKm(homeLat, homeLon, spotLat, spotLon);
+        const double brg = bearingDeg(homeLat, homeLon, spotLat, spotLon);
+        const QString geo =
+            PskReporterMapDialog::tr("%L1 km @ %2°")
+                .arg(qRound(km))
+                .arg(qRound(brg), 3, 10, QLatin1Char('0'));
+        line3 += line3.isEmpty() ? geo : (QStringLiteral(" · ") + geo);
+    }
+    if (!line3.isEmpty()) {
+        html += QStringLiteral("<br>") + line3;
+    }
+
+    // Line 4 — time (absolute UTC is always correct; age is glanceable).
+    html += QStringLiteral("<br><span style='color:gray;'>%1 · %2</span>")
+                .arg(QDateTime::fromSecsSinceEpoch(spot.flowStartSeconds)
+                         .toUTC()
+                         .toString(QStringLiteral("hh:mm:ss'Z'")),
+                     relativeAge(spot.flowStartSeconds));
+
+    html += QStringLiteral("</div>");
+    return html;
+}
+
 } // namespace
 
 PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
@@ -279,39 +355,12 @@ void PskReporterMapDialog::rebuildMarkers()
         m.lon = lon;
         m.label = spot.receiverCallsign;
         m.color = modeColor(spot.mode);
-        m.tooltip =
-            tr("%1 (%2)\n%3 %4 MHz\n%5%6")
-                .arg(spot.receiverCallsign, spot.receiverLocator,
-                     bandName(spot.frequencyHz),
-                     QString::number(spot.frequencyHz / 1e6, 'f', 3),
-                     spot.mode,
-                     spot.snr > -999
-                         ? tr("  SNR %1 dB").arg(spot.snr)
-                         : QString());
-        if (m_mapView->hasHomePosition()) {
-            const double km = MaidenheadLocator::distanceKm(
-                m_mapView->homeLat(), m_mapView->homeLon(), lat, lon);
-            const double brg = bearingDeg(
-                m_mapView->homeLat(), m_mapView->homeLon(), lat, lon);
-            m.clickInfo = tr("<b>%1</b> (%2)<br>%3 %4 MHz %5%6<br>"
-                             "%7 km @ %8°<br>%9")
-                .arg(spot.receiverCallsign.toHtmlEscaped(),
-                     spot.receiverLocator,
-                     bandName(spot.frequencyHz),
-                     QString::number(spot.frequencyHz / 1e6, 'f', 3),
-                     spot.mode,
-                     spot.snr > -999 ? tr(", SNR %1 dB").arg(spot.snr)
-                                     : QString(),
-                     QString::number(km, 'f', 0),
-                     QString::number(brg, 'f', 0),
-                     QDateTime::fromSecsSinceEpoch(spot.flowStartSeconds)
-                         .toLocalTime()
-                         .toString(QStringLiteral("hh:mm:ss")));
-        } else {
-            m.clickInfo = m.tooltip.toHtmlEscaped()
-                              .replace(QStringLiteral("\n"),
-                                       QStringLiteral("<br>"));
-        }
+        // Same compact card for hover and click.
+        const QString card = buildSpotCard(
+            spot, m_mapView->hasHomePosition(),
+            m_mapView->homeLat(), m_mapView->homeLon(), lat, lon);
+        m.tooltip = card;
+        m.clickInfo = card;
         markers.append(m);
     }
     m_mapView->setMarkers(markers);
