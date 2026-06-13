@@ -45,6 +45,7 @@
 #ifdef HAVE_RADE
 #include "core/RADEEngine.h"
 #endif
+#include "models/ProfileLoadCommand.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -90,11 +91,6 @@ bool dbmRangeLooksPlausible(float minDbm, float maxDbm)
         && maxDbm <= kMaxAllowedDbm
         && rangeDb >= kMinRangeDb
         && rangeDb <= kMaxRangeDb;
-}
-
-bool profileLoadMayRebuildRadioTopology(const QString& profileType)
-{
-    return profileType.compare(QStringLiteral("global"), Qt::CaseInsensitive) == 0;
 }
 
 // Pan-follow tuning internals — moved with their only callers from
