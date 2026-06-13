@@ -743,6 +743,11 @@ void MainWindow::buildMenuBar()
         m_appletPanel->resetOrder();
     });
 
+    auto* pskMapAction = viewMenu->addAction("PSK Reporter Map...");
+    pskMapAction->setMenuRole(QAction::NoRole);
+    connect(pskMapAction, &QAction::triggered,
+            this, &MainWindow::showPskReporterMapDialog);
+
 #ifdef HAVE_WEBSOCKETS
     {
         auto* fdvReporterAct = viewMenu->addAction(tr("FreeDV Reporter..."));
@@ -792,11 +797,6 @@ void MainWindow::buildMenuBar()
             }
         }
     });
-
-    auto* pskMapAction = viewMenu->addAction("PSK Reporter Map...");
-    pskMapAction->setMenuRole(QAction::NoRole);
-    connect(pskMapAction, &QAction::triggered,
-            this, &MainWindow::showPskReporterMapDialog);
 
     auto* packetDecoderAction = viewMenu->addAction("AetherModem...");
     packetDecoderAction->setMenuRole(QAction::NoRole);

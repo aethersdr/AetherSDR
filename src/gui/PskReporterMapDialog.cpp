@@ -17,22 +17,41 @@ namespace {
 
 constexpr const char* kIntervalKey = "PskReporterUpdateIntervalMs";
 
-// Marker color per amateur band, loosely matching common band-map palettes.
-QColor bandColor(qint64 freqHz)
+// Normalize a PSK Reporter / ADIF mode string to one of the selector's
+// mode groups.
+QString modeGroup(const QString& mode)
 {
-    const double mhz = freqHz / 1e6;
-    if (mhz < 2.0)   return QColor(0x8b, 0x45, 0x13);   // 160m brown
-    if (mhz < 4.5)   return QColor(0xe0, 0x3c, 0x3c);   // 80m red
-    if (mhz < 6.0)   return QColor(0xc7, 0x5e, 0xff);   // 60m violet
-    if (mhz < 8.0)   return QColor(0xff, 0x8c, 0x00);   // 40m orange
-    if (mhz < 11.0)  return QColor(0xb8, 0xb8, 0x00);   // 30m olive
-    if (mhz < 16.0)  return QColor(0x2e, 0xb8, 0x2e);   // 20m green
-    if (mhz < 19.5)  return QColor(0x00, 0xb8, 0xb8);   // 17m teal
-    if (mhz < 22.5)  return QColor(0x2e, 0x7c, 0xff);   // 15m blue
-    if (mhz < 26.0)  return QColor(0x9b, 0x59, 0xb6);   // 12m purple
-    if (mhz < 40.0)  return QColor(0xe9, 0x1e, 0x8c);   // 10m magenta
-    if (mhz < 60.0)  return QColor(0x60, 0x60, 0x60);   // 6m gray
-    return QColor(0x20, 0x20, 0x20);                    // VHF+
+    const QString m = mode.toUpper();
+    if (m.startsWith(QLatin1String("FT8")))  return QStringLiteral("FT8");
+    if (m.startsWith(QLatin1String("FT4")))  return QStringLiteral("FT4");
+    if (m.startsWith(QLatin1String("WSPR")) || m == QLatin1String("FST4W"))
+        return QStringLiteral("WSPR");
+    if (m.startsWith(QLatin1String("JS8")))  return QStringLiteral("JS8");
+    if (m == QLatin1String("CW"))            return QStringLiteral("CW");
+    if (m.startsWith(QLatin1String("PSK")) || m.startsWith(QLatin1String("BPSK"))
+        || m.startsWith(QLatin1String("QPSK")))
+        return QStringLiteral("PSK");
+    if (m.startsWith(QLatin1String("RTTY"))) return QStringLiteral("RTTY");
+    if (m == QLatin1String("SSB") || m == QLatin1String("USB")
+        || m == QLatin1String("LSB"))
+        return QStringLiteral("SSB");
+    return QStringLiteral("Other");
+}
+
+// Marker color per mode group — saturated hues chosen to stand out on the
+// pastel OSM basemap (markers also carry a dark outline + white label halo).
+QColor modeColor(const QString& mode)
+{
+    const QString g = modeGroup(mode);
+    if (g == QLatin1String("FT8"))  return QColor(0xe5, 0x39, 0x35);  // red
+    if (g == QLatin1String("FT4"))  return QColor(0xfb, 0x8c, 0x00);  // orange
+    if (g == QLatin1String("WSPR")) return QColor(0x8e, 0x24, 0xaa);  // purple
+    if (g == QLatin1String("JS8"))  return QColor(0x00, 0x89, 0x7b);  // teal
+    if (g == QLatin1String("CW"))   return QColor(0x1e, 0x88, 0xe5);  // blue
+    if (g == QLatin1String("PSK"))  return QColor(0xd8, 0x1b, 0x60);  // pink
+    if (g == QLatin1String("RTTY")) return QColor(0x6d, 0x4c, 0x41);  // brown
+    if (g == QLatin1String("SSB"))  return QColor(0x43, 0xa0, 0x47);  // green
+    return QColor(0x37, 0x47, 0x4f);                                  // slate
 }
 
 QString bandName(qint64 freqHz)
@@ -68,6 +87,26 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     root->setSpacing(6);
 
     auto* topBar = new QHBoxLayout();
+
+    topBar->addWidget(new QLabel(tr("Band:"), bodyWidget()));
+    m_bandCombo = new QComboBox(bodyWidget());
+    m_bandCombo->addItem(tr("All"));
+    for (const char* b : { "160m", "80m", "60m", "40m", "30m", "20m",
+                           "17m", "15m", "12m", "10m", "6m", "VHF+" }) {
+        m_bandCombo->addItem(QString::fromLatin1(b));
+    }
+    topBar->addWidget(m_bandCombo);
+
+    topBar->addWidget(new QLabel(tr("Mode:"), bodyWidget()));
+    m_modeCombo = new QComboBox(bodyWidget());
+    m_modeCombo->addItem(tr("All"));
+    for (const char* m : { "FT8", "FT4", "WSPR", "JS8", "CW", "PSK",
+                           "RTTY", "SSB", "Other" }) {
+        m_modeCombo->addItem(QString::fromLatin1(m));
+    }
+    topBar->addWidget(m_modeCombo);
+
+    topBar->addSpacing(12);
     topBar->addWidget(new QLabel(tr("Update every:"), bodyWidget()));
 
     m_intervalCombo = new QComboBox(bodyWidget());
@@ -92,13 +131,18 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
 
     const int savedInterval =
         AppSettings::instance()
-            .value(kIntervalKey, QString::number(5 * 60 * 1000))
+            .value(kIntervalKey,
+                   QString::number(PskReporterClient::kLiveMqtt))
             .toInt();
     const int idx = m_intervalCombo->findData(savedInterval);
-    m_intervalCombo->setCurrentIndex(idx >= 0 ? idx : 1);
+    m_intervalCombo->setCurrentIndex(idx >= 0 ? idx : 0);
 
     connect(m_intervalCombo, &QComboBox::currentIndexChanged,
             this, &PskReporterMapDialog::onIntervalChanged);
+    connect(m_bandCombo, &QComboBox::currentIndexChanged,
+            this, [this] { rebuildMarkers(); });
+    connect(m_modeCombo, &QComboBox::currentIndexChanged,
+            this, [this] { rebuildMarkers(); });
     connect(m_client, &PskReporterClient::spotsUpdated,
             this, &PskReporterMapDialog::rebuildMarkers);
     connect(m_client, &PskReporterClient::statusChanged,
@@ -150,7 +194,19 @@ void PskReporterMapDialog::rebuildMarkers()
 {
     QVector<MapView::Marker> markers;
     markers.reserve(m_client->spots().size());
+    const QString bandFilter = m_bandCombo->currentIndex() > 0
+                                   ? m_bandCombo->currentText()
+                                   : QString();
+    const QString modeFilter = m_modeCombo->currentIndex() > 0
+                                   ? m_modeCombo->currentText()
+                                   : QString();
     for (const PskReporterSpot& spot : m_client->spots()) {
+        if (!bandFilter.isEmpty() && bandName(spot.frequencyHz) != bandFilter) {
+            continue;
+        }
+        if (!modeFilter.isEmpty() && modeGroup(spot.mode) != modeFilter) {
+            continue;
+        }
         double lat = 0.0;
         double lon = 0.0;
         if (!MaidenheadLocator::toLatLon(spot.receiverLocator, lat, lon)) {
@@ -160,7 +216,7 @@ void PskReporterMapDialog::rebuildMarkers()
         m.lat = lat;
         m.lon = lon;
         m.label = spot.receiverCallsign;
-        m.color = bandColor(spot.frequencyHz);
+        m.color = modeColor(spot.mode);
         m.tooltip =
             tr("%1 (%2)\n%3 %4 MHz\n%5%6")
                 .arg(spot.receiverCallsign, spot.receiverLocator,

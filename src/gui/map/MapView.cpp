@@ -6,6 +6,7 @@
 #include <QGeoView/QGVLayerOSM.h>
 #include <QGeoView/QGVMap.h>
 #include <QGeoView/QGVMapQGView.h>
+#include <QGeoView/QGVWidgetScale.h>
 #include <QGeoView/QGVWidgetText.h>
 
 #include <QCoreApplication>
@@ -15,6 +16,8 @@
 #include <QNetworkDiskCache>
 #include <QShowEvent>
 #include <QStandardPaths>
+#include <QToolButton>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
@@ -74,6 +77,42 @@ MapView::MapView(QWidget* parent)
     auto* attribution = new QGVWidgetText();
     attribution->setText(QStringLiteral("© OpenStreetMap contributors"));
     m_map->addWidget(attribution);
+
+    m_map->addWidget(new QGVWidgetScale());
+
+    m_zoomInBtn = makeOverlayButton(QStringLiteral("+"), tr("Zoom in"));
+    connect(m_zoomInBtn, &QToolButton::clicked, this, &MapView::zoomIn);
+    m_zoomOutBtn = makeOverlayButton(QStringLiteral("−"), tr("Zoom out"));
+    connect(m_zoomOutBtn, &QToolButton::clicked, this, &MapView::zoomOut);
+    m_homeBtn = makeOverlayButton(QStringLiteral("⌂"), tr("Reset to my location (Home)"));
+    connect(m_homeBtn, &QToolButton::clicked, this, &MapView::resetToHome);
+
+    // Sonar pulse on the station marker, every 3 s. The animation timer
+    // only runs for the ~1 s ring sweep; idle cost is one tick per period.
+    m_pulseAnim = new QVariantAnimation(this);
+    m_pulseAnim->setStartValue(0.0);
+    m_pulseAnim->setEndValue(1.0);
+    m_pulseAnim->setDuration(1000);
+    connect(m_pulseAnim, &QVariantAnimation::valueChanged, this,
+            [this](const QVariant& v) {
+                if (m_homeMarker != nullptr) {
+                    m_homeMarker->setPulsePhase(v.toDouble());
+                }
+            });
+    connect(m_pulseAnim, &QVariantAnimation::finished, this, [this] {
+        if (m_homeMarker != nullptr) {
+            m_homeMarker->setPulsePhase(-1.0);
+        }
+    });
+    m_pulseTimer = new QTimer(this);
+    m_pulseTimer->setInterval(3000);
+    connect(m_pulseTimer, &QTimer::timeout, this, [this] {
+        if (m_homeMarker != nullptr && isVisible()
+            && m_pulseAnim->state() != QVariantAnimation::Running) {
+            m_pulseAnim->start();
+        }
+    });
+    m_pulseTimer->start();
 
     setFocusPolicy(Qt::StrongFocus);
     // Keys must reach our keyPressEvent even when the inner QGraphicsView
@@ -195,6 +234,46 @@ void MapView::keyPressEvent(QKeyEvent* event)
         return;
     }
     event->accept();
+}
+
+QToolButton* MapView::makeOverlayButton(const QString& text, const QString& tip)
+{
+    auto* btn = new QToolButton(this);
+    btn->setText(text);
+    btn->setToolTip(tip);
+    btn->setFixedSize(30, 30);
+    btn->setCursor(Qt::ArrowCursor);
+    btn->setFocusPolicy(Qt::NoFocus);  // keep arrow/+/- keys on the map
+    btn->setStyleSheet(QStringLiteral(
+        "QToolButton {"
+        "  background-color: rgba(40, 40, 40, 200);"
+        "  color: white; border: 1px solid rgba(255,255,255,60);"
+        "  border-radius: 4px; font-size: 16px; font-weight: bold; }"
+        "QToolButton:hover { background-color: rgba(70, 70, 70, 220); }"
+        "QToolButton:pressed { background-color: rgba(20, 20, 20, 220); }"));
+    btn->raise();
+    return btn;
+}
+
+void MapView::layoutOverlayButtons()
+{
+    constexpr int kMargin = 8;
+    constexpr int kGap = 6;
+    int y = kMargin;
+    for (QToolButton* btn : { m_zoomInBtn, m_zoomOutBtn, m_homeBtn }) {
+        if (btn == nullptr) {
+            continue;
+        }
+        btn->move(width() - btn->width() - kMargin, y);
+        btn->raise();
+        y += btn->height() + kGap;
+    }
+}
+
+void MapView::resizeEvent(QResizeEvent* event)
+{
+    QWidget::resizeEvent(event);
+    layoutOverlayButtons();
 }
 
 void MapView::showEvent(QShowEvent* event)

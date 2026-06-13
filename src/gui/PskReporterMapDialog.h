@@ -37,6 +37,8 @@ private:
     PskReporterClient* m_client{nullptr};
     MapView*           m_mapView{nullptr};
     QComboBox*         m_intervalCombo{nullptr};
+    QComboBox*         m_bandCombo{nullptr};
+    QComboBox*         m_modeCombo{nullptr};
     QLabel*            m_statusLabel{nullptr};
     bool               m_started{false};
 };

@@ -11,7 +11,11 @@
 #include <QUrlQuery>
 #include <QXmlStreamReader>
 
+#include <QLoggingCategory>
+
 #include <algorithm>
+
+Q_LOGGING_CATEGORY(lcPskReporter, "aether.pskreporter")
 
 namespace AetherSDR {
 
@@ -19,6 +23,23 @@ PskReporterClient::PskReporterClient(QObject* parent)
     : QObject(parent)
 {
     connect(&m_timer, &QTimer::timeout, this, &PskReporterClient::poll);
+
+    // Five-minute MQTT health summary — enough to spot a dead or flapping
+    // feed in the logs without per-spot noise.
+    m_mqttHealthTimer.setInterval(5 * 60 * 1000);
+    connect(&m_mqttHealthTimer, &QTimer::timeout, this, [this] {
+#ifdef HAVE_MQTT
+        const qint64 lastAge = m_mqttLastMsgEpoch > 0
+            ? QDateTime::currentSecsSinceEpoch() - m_mqttLastMsgEpoch
+            : -1;
+        qCInfo(lcPskReporter)
+            << "MQTT health:" << m_mqttMsgWindow << "spots in last 5m,"
+            << m_mqttMsgTotal << "total,"
+            << "connected=" << (m_mqtt != nullptr && m_mqtt->isConnected())
+            << "lastSpotAgeSec=" << lastAge;
+        m_mqttMsgWindow = 0;
+#endif
+    });
 }
 
 void PskReporterClient::setCallsign(const QString& callsign)
@@ -166,10 +187,17 @@ void PskReporterClient::startMqtt()
         connect(m_mqtt, &MqttClient::messageReceived,
                 this, &PskReporterClient::handleMqttMessage);
         connect(m_mqtt, &MqttClient::connected, this, [this] {
+            qCInfo(lcPskReporter) << "MQTT connected to" << kMqttHost
+                                  << "topic filter callsign" << m_callsign;
             emit statusChanged(tr("Live (MQTT) — connected"));
+        });
+        connect(m_mqtt, &MqttClient::disconnected, this, [this] {
+            qCWarning(lcPskReporter) << "MQTT disconnected from" << kMqttHost;
+            emit statusChanged(tr("Live (MQTT) — reconnecting…"));
         });
         connect(m_mqtt, &MqttClient::connectionError, this,
                 [this](const QString& err) {
+                    qCWarning(lcPskReporter) << "MQTT error:" << err;
                     emit statusChanged(tr("MQTT error: %1").arg(err));
                 });
     }
@@ -179,6 +207,8 @@ void PskReporterClient::startMqtt()
         { QStringLiteral("pskr/filter/v2/+/+/%1/#").arg(m_callsign) });
     m_mqtt->connectToBroker(QString::fromLatin1(kMqttHost), kMqttTlsPort,
                             {}, {}, /*useTls=*/true);
+    m_mqttMsgWindow = 0;
+    m_mqttHealthTimer.start();
     emit statusChanged(tr("Live (MQTT) — connecting…"));
 #else
     emit statusChanged(tr("MQTT support not built in"));
@@ -187,6 +217,7 @@ void PskReporterClient::startMqtt()
 
 void PskReporterClient::stopMqtt()
 {
+    m_mqttHealthTimer.stop();
 #ifdef HAVE_MQTT
     if (m_mqtt != nullptr) {
         m_mqtt->disconnect();
@@ -217,6 +248,9 @@ void PskReporterClient::handleMqttMessage(const QString& topic,
     if (spot.receiverCallsign.isEmpty()) {
         return;
     }
+    ++m_mqttMsgTotal;
+    ++m_mqttMsgWindow;
+    m_mqttLastMsgEpoch = QDateTime::currentSecsSinceEpoch();
     appendSpot(spot);
     pruneOldSpots();
     emit spotsUpdated();

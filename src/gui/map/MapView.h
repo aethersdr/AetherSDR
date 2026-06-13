@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QTimer>
 #include <QColor>
 #include <QVector>
 
@@ -8,6 +9,8 @@
 
 class QGVMap;
 class QGVLayer;
+class QToolButton;
+class QVariantAnimation;
 
 namespace AetherSDR {
 
@@ -58,6 +61,7 @@ public slots:
 protected:
     void keyPressEvent(QKeyEvent* event) override;
     void showEvent(QShowEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
 
 private:
     // Install the process-wide tile network manager (disk cache + UA) on
@@ -65,6 +69,8 @@ private:
     static void ensureTileNetworkManager();
 
     void pan(double dxFraction, double dyFraction);
+    QToolButton* makeOverlayButton(const QString& text, const QString& tip);
+    void layoutOverlayButtons();
 
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
@@ -76,6 +82,17 @@ private:
     QString m_homeLabel;
     bool   m_hasHome{false};
     bool   m_firstShow{true};
+
+    // Zoom / recenter overlay buttons (upper-right).
+    QToolButton* m_zoomInBtn{nullptr};
+    QToolButton* m_zoomOutBtn{nullptr};
+    QToolButton* m_homeBtn{nullptr};
+
+    // Sonar pulse on the home marker: a short ring animation fired every
+    // few seconds. The animation only runs for its ~1s duration, so the
+    // idle cost is one timer tick every 3 s.
+    QTimer* m_pulseTimer{nullptr};
+    QVariantAnimation* m_pulseAnim{nullptr};
 };
 
 } // namespace AetherSDR

@@ -13,6 +13,7 @@ namespace {
 constexpr double kDotRadius = 5.0;       // px
 constexpr double kHomeRadius = 7.0;      // px
 constexpr double kLabelOffset = 3.0;     // px gap between dot and label
+constexpr double kPulseMaxRadius = 26.0; // px, sonar ring sweep extent
 
 QFont markerFont()
 {
@@ -38,6 +39,15 @@ void MapMarkerItem::setMarker(const MapView::Marker& marker)
     }
     resetBoundary();
     refresh();
+}
+
+void MapMarkerItem::setPulsePhase(double phase)
+{
+    if (qFuzzyCompare(m_pulsePhase, phase)) {
+        return;
+    }
+    m_pulsePhase = phase;
+    repaint();
 }
 
 void MapMarkerItem::onProjection(QGVMap* geoMap)
@@ -70,6 +80,10 @@ QPainterPath MapMarkerItem::projShape() const
     const double r = m_marker.isHome ? kHomeRadius : kDotRadius;
     QPainterPath path;
     path.addEllipse(m_projPos, r, r);
+    if (m_marker.isHome) {
+        // Boundary must cover the full sonar ring sweep.
+        path.addEllipse(m_projPos, kPulseMaxRadius, kPulseMaxRadius);
+    }
     const QRectF lbl = labelRect();
     if (!lbl.isNull()) {
         path.addRect(lbl);
@@ -81,6 +95,18 @@ void MapMarkerItem::projPaint(QPainter* painter)
 {
     painter->setRenderHint(QPainter::Antialiasing);
     const double r = m_marker.isHome ? kHomeRadius : kDotRadius;
+
+    if (m_marker.isHome && m_pulsePhase >= 0.0) {
+        // Sonar pulse: expanding, fading ring.
+        const double radius = kHomeRadius
+            + (kPulseMaxRadius - kHomeRadius - 1.0) * m_pulsePhase;
+        const int alpha = static_cast<int>(180.0 * (1.0 - m_pulsePhase));
+        QColor ring = m_marker.color;
+        ring.setAlpha(alpha);
+        painter->setPen(QPen(ring, 2.0));
+        painter->setBrush(Qt::NoBrush);
+        painter->drawEllipse(m_projPos, radius, radius);
+    }
 
     if (m_marker.isHome) {
         // Station marker: ringed dot for visual distinction.

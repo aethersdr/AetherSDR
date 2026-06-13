@@ -71,6 +71,7 @@ private:
 
     QNetworkAccessManager m_nam;
     QTimer m_timer;
+    QTimer m_mqttHealthTimer;
     QString m_callsign;
     QVector<PskReporterSpot> m_spots;
     qint64 m_lastSeqNo{-1};
@@ -78,6 +79,11 @@ private:
     bool   m_running{false};
     bool   m_fetchInFlight{false};
     MqttClient* m_mqtt{nullptr};
+
+    // MQTT feed health counters, summarized to the log periodically.
+    quint64 m_mqttMsgTotal{0};
+    quint64 m_mqttMsgWindow{0};
+    qint64  m_mqttLastMsgEpoch{0};
 
     static constexpr const char* kQueryUrl =
         "https://retrieve.pskreporter.info/query";
