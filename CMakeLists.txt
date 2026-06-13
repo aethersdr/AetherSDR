@@ -1939,6 +1939,13 @@ target_link_libraries(radio_status_ownership_test PRIVATE Qt6::Core)
 enable_testing()
 add_test(NAME radio_status_ownership_test COMMAND radio_status_ownership_test)
 
+add_executable(profile_load_command_test
+    tests/profile_load_command_test.cpp
+)
+target_include_directories(profile_load_command_test PRIVATE src)
+target_link_libraries(profile_load_command_test PRIVATE Qt6::Core)
+add_test(NAME profile_load_command_test COMMAND profile_load_command_test)
+
 # #3212 — slice recreate policy (reuse restored pan vs create new; slice freq)
 add_executable(slice_recreate_policy_test
     tests/slice_recreate_policy_test.cpp

@@ -8,6 +8,7 @@
 #include "core/PerfTelemetry.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
+#include "ProfileLoadCommand.h"
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
 #include <QCoreApplication>
@@ -82,34 +83,7 @@ bool statusFlagSet(const QMap<QString, QString>& kvs, const QString& key)
         || value.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
 }
 
-struct ProfileLoadRequest {
-    bool valid{false};
-    QString type;
-    QString name;
-};
-
 constexpr qint64 kProfileLoadStateWriteHoldMs = 10000;
-
-bool profileLoadMayRebuildRadioTopology(const QString& profileType)
-{
-    return profileType == QStringLiteral("global");
-}
-
-ProfileLoadRequest parseProfileLoadCommand(const QString& command)
-{
-    static const QRegularExpression re(
-        R"profileLoad(^\s*profile\s+(global|tx|mic)\s+load\s+"([^"]*)"\s*$)profileLoad",
-        QRegularExpression::CaseInsensitiveOption);
-    const QRegularExpressionMatch match = re.match(command);
-    if (!match.hasMatch()) {
-        return {};
-    }
-    return {
-        true,
-        match.captured(1).toLower(),
-        match.captured(2),
-    };
-}
 
 bool isProfileOwnedRadioStateWrite(const QString& command)
 {
@@ -3589,7 +3563,7 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         perf.recordPanCenterCommand();
     }
 
-    const ProfileLoadRequest profileLoad = parseProfileLoadCommand(command);
+    const ProfileLoadCommand profileLoad = parseProfileLoadCommand(command);
     if (profileLoad.valid) {
         const bool topologyProfile = profileLoadMayRebuildRadioTopology(profileLoad.type);
         if (topologyProfile) {
