@@ -240,6 +240,29 @@ void DaxIqModel::handleStreamRemoved(quint32 streamId)
     }
 }
 
+void DaxIqModel::handleDisconnect()
+{
+    // The radio won't send a per-stream "removed" status on a hard disconnect,
+    // so tear every IQ stream down here (mirroring handleStreamRemoved): reset
+    // the struct but keep the 1-based channel index, and destroy the pipe on the
+    // worker thread. m_desiredRate is intentionally preserved — it's the user's
+    // rate selection, re-applied by the applet's restore-on-reconnect. Leaving
+    // exists stale here is what made restoreEnabledChannels() skip persisted
+    // channels after a reconnect (shown "On" with no stream). (#3522)
+    for (int i = 0; i < NUM_CHANNELS; ++i) {
+        if (!m_streams[i].exists && m_streams[i].streamId == 0)
+            continue;  // already clear
+        int ch = m_streams[i].channel;
+        m_streams[i] = IqStream{};
+        m_streams[i].channel = ch;
+        QMetaObject::invokeMethod(m_worker, [this, ch] {
+            m_worker->destroyPipe(ch);
+        });
+        emit streamChanged(ch);
+        qCDebug(lcProtocol) << "DaxIqModel: reset IQ stream ch" << ch << "on disconnect";
+    }
+}
+
 void DaxIqModel::feedRawIqPacket(int channel, const QByteArray& rawPayload, int sampleRate)
 {
     QMetaObject::invokeMethod(m_worker,

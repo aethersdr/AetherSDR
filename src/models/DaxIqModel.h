@@ -56,6 +56,13 @@ public:
     void applyStreamStatus(quint32 streamId, const QMap<QString, QString>& kvs);
     void handleStreamRemoved(quint32 streamId);
 
+    // Radio disconnected: reset all IQ stream state and destroy pipes. A hard
+    // disconnect never delivers a per-stream "removed" status, so without this
+    // the stale exists/streamId survive into the next session and the applet's
+    // restore-on-reconnect skips re-creating the persisted channels — leaving
+    // them shown "On" with no stream on the radio. (#3522)
+    void handleDisconnect();
+
     // Feed raw IQ packet from PanadapterStream (main thread → worker thread)
     void feedRawIqPacket(int channel, const QByteArray& rawPayload, int sampleRate);
 

@@ -2637,6 +2637,11 @@ void RadioModel::onDisconnected()
     QMetaObject::invokeMethod(m_panStream, &PanadapterStream::stop,
                               Qt::BlockingQueuedConnection);
     m_panStream->clearRegisteredStreams();
+    // The radio sends no per-stream "removed" on a hard disconnect, so reset
+    // the DAX-IQ stream state + destroy pipes here too (panStream IQ
+    // registrations are cleared just above); otherwise stale `exists` makes
+    // restoreEnabledChannels() skip persisted channels on reconnect. (#3522)
+    m_daxIqModel.handleDisconnect();
     m_pendingPanStatuses.clear();
 
     m_tnfModel.clear();
