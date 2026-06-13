@@ -1415,7 +1415,7 @@ MainWindow::MainWindow(QWidget* parent)
     });
     // Master volume — title bar slider routes through applyMasterVolume()
     // so the TCI `volume:N;` command (#1764) can hit the same code path
-    // when m_tciServer is created later in this constructor.
+    // when tciServer() is created later in this constructor.
     connect(m_titleBar, &TitleBar::masterVolumeChanged,
             this, &MainWindow::applyMasterVolume);
     connect(m_titleBar, &TitleBar::headphoneVolumeChanged,
@@ -1948,8 +1948,7 @@ MainWindow::~MainWindow()
     // back-reference first so no dangling pointer remains in the widget tree.
     if (m_appletPanel && m_appletPanel->tciApplet())
         m_appletPanel->tciApplet()->setTciServer(nullptr);
-    delete m_tciServer;
-    m_tciServer = nullptr;
+    m_session->shutdownTciServer();
 #endif
 
     // Stop external controller thread (#502)
@@ -3069,7 +3068,7 @@ void MainWindow::showNetworkDiagnosticsDialog()
 #ifdef HAVE_WEBSOCKETS
     showOrRaisePersistent(m_networkDiagnosticsDialog,
                           &m_radioModel, m_audio, m_networkDiagnosticsHistory,
-                          m_tciServer);
+                          tciServer());
 #else
     showOrRaisePersistent(m_networkDiagnosticsDialog,
                           &m_radioModel, m_audio, m_networkDiagnosticsHistory);
@@ -4489,25 +4488,25 @@ void MainWindow::applyCatPortCount()
     const int  target   = catPortTargetCount();
 
     for (int i = 0; i < kCatPorts; ++i) {
-        if (!m_catPorts[i]) continue;
+        if (!catPort(i)) continue;
 
         const QString prefix = QString("CatPort_%1_").arg(i);
         const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
         const int  portNum     = s.value(prefix + "Port", "").toInt();
         const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024) && (i < target);
 
-        if (shouldRun && !m_catPorts[i]->isRunning()) {
+        if (shouldRun && !catPort(i)->isRunning()) {
             // Re-apply config in case dialect/VFO was changed while stopped
             QString d = s.value(prefix + "Dialect", "Rigctld").toString();
             CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
                             : (d == "TS2000")  ? CatDialect::TS2000
                             : CatDialect::Rigctld;
-            m_catPorts[i]->setDialect(dial);
-            m_catPorts[i]->setVfoA(s.value(prefix + "VfoA", "0").toInt());
-            m_catPorts[i]->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
-            m_catPorts[i]->start(static_cast<quint16>(portNum));
-        } else if (!shouldRun && m_catPorts[i]->isRunning()) {
-            m_catPorts[i]->stop();
+            catPort(i)->setDialect(dial);
+            catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+            catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
+            catPort(i)->start(static_cast<quint16>(portNum));
+        } else if (!shouldRun && catPort(i)->isRunning()) {
+            catPort(i)->stop();
         }
     }
 
@@ -4732,17 +4731,17 @@ void MainWindow::onConnectionStateChanged(bool connected)
 #ifdef HAVE_WEBSOCKETS
         // Auto-start TCI WebSocket server if enabled
         if (AppSettings::instance().value("AutoStartTCI", "False").toString() == "True") {
-            if (m_tciServer && !m_tciServer->isRunning()) {
+            if (tciServer() && !tciServer()->isRunning()) {
                 int tciPort = AppSettings::instance().value("TciPort", "50001").toInt();
-                m_tciServer->start(static_cast<quint16>(tciPort));
+                tciServer()->start(static_cast<quint16>(tciPort));
                 qDebug() << "AutoStart: TCI on port" << tciPort
-                         << " running=" << m_tciServer->isRunning();
+                         << " running=" << tciServer()->isRunning();
             }
             // Only light up the Enable button if the server actually bound —
             // otherwise the UI shows a green "Enable" while the port is in use.
             if (m_appletPanel && m_appletPanel->tciApplet())
                 m_appletPanel->tciApplet()->setTciEnabled(
-                    m_tciServer && m_tciServer->isRunning());
+                    tciServer() && tciServer()->isRunning());
         }
 #endif
         // Populate XVTR bands after radio status settles, and refresh
@@ -5416,7 +5415,7 @@ void MainWindow::applyMasterVolume(int pct)
     s.setValue("MasterVolume", QString::number(pct));
     s.save();
 #ifdef HAVE_WEBSOCKETS
-    if (m_tciServer) m_tciServer->broadcastMasterVolume(pct);
+    if (tciServer()) tciServer()->broadcastMasterVolume(pct);
 #endif
 }
 

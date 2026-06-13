@@ -571,7 +571,7 @@ void MainWindow::deactivateRADE()
             // silently kill TCI audio. Leave TCI responsible for cleanup in
             // that case. TODO: replace with proper ref-counting in PanadapterStream
             // so any creator/borrower can safely release independently (#stream-lifecycle).
-            bool tciActive = m_tciServer && m_tciServer->clientCount() > 0;
+            bool tciActive = tciServer() && tciServer()->clientCount() > 0;
             bool daxBridgeActive = false;
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
             daxBridgeActive = (m_daxBridge != nullptr);
@@ -1166,7 +1166,7 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
             // another consumer is still using would silence WSJT-X or RADE
             // audio — the mirror image of #3270. Only tear down a stream that
             // no other consumer needs. (#2895)
-            const bool tciUsing = m_tciServer && m_tciServer->ownsDaxChannel(oldCh);
+            const bool tciUsing = tciServer() && tciServer()->ownsDaxChannel(oldCh);
 #ifdef HAVE_RADE
             const bool radeUsing = (id != 0 && id == m_radeDaxStreamId);
 #else

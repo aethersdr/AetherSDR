@@ -1470,8 +1470,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // Do not "normalise" these — collapsing the guards regresses Log4OM
         // behavior under lock or SWR sweep.
         if (tciSpot) {
-            if (m_tciServer && s && !s->isLocked() && !m_swrSweep.running)
-                m_tciServer->notifySpotClicked(spotIndex, s);
+            if (tciServer() && s && !s->isLocked() && !m_swrSweep.running)
+                tciServer()->notifySpotClicked(spotIndex, s);
         } else if (!isPassiveLocalSpotId(spotIndex)) {
             m_radioModel.sendCommand(
                 QString("spot trigger %1 pan=%2").arg(spotIndex).arg(applet->panId()));

@@ -1292,9 +1292,11 @@ void MainWindow::wireCatPorts()
     // Migrate old dual-server settings to the new per-port schema on first run.
     migrateCatSettings();
     for (int i = 0; i < kCatPorts; ++i) {
-        m_catPorts[i] = new CatPort(&m_radioModel, this);
+        // Owned by the session — no QObject parent (parent-based deletion
+        // would run after member destruction and recreate #2385).
+        m_session->setCatPort(i, new CatPort(&m_radioModel, nullptr));
         // Per-user symlink path (GHSA-qxhr-cwrc-pvrm — matches RigctlPty fix).
-        m_catPorts[i]->setSymlinkPath(CatPort::defaultSymlinkPath(i));
+        catPort(i)->setSymlinkPath(CatPort::defaultSymlinkPath(i));
         // Load persisted dialect and VFO config; port and enabled are read
         // in applyCatPortCount() just before starting.
         const QString prefix = QString("CatPort_%1_").arg(i);
@@ -1303,13 +1305,13 @@ void MainWindow::wireCatPorts()
         CatDialect dial = (d == "FlexCAT") ? CatDialect::FlexCAT
                         : (d == "TS2000")  ? CatDialect::TS2000
                         : CatDialect::Rigctld;
-        m_catPorts[i]->setDialect(dial);
-        m_catPorts[i]->setVfoA(s.value(prefix + "VfoA", "0").toInt());
-        m_catPorts[i]->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
+        catPort(i)->setDialect(dial);
+        catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
+        catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
     }
 
     // Wire the applet to the port objects
-    m_appletPanel->catControlApplet()->setPorts(m_catPorts, kCatPorts);
+    m_appletPanel->catControlApplet()->setPorts(m_session->catPortsArray(), kCatPorts);
     m_appletPanel->catControlApplet()->setMaxSlices(catPortTargetCount());
 
     // Wire master enable toggle from the docked applet
@@ -1325,30 +1327,31 @@ void MainWindow::wireCatPorts()
     m_appletPanel->daxApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->daxIqApplet()->setRadioModel(&m_radioModel);
 #ifdef HAVE_WEBSOCKETS
-    m_tciServer = new TciServer(&m_radioModel, this);
-    m_tciServer->setAudioEngine(m_audio);
+    // Owned by the session — no QObject parent (see RadioSession docs, #2385).
+    m_session->setTciServer(new TciServer(&m_radioModel, nullptr));
+    tciServer()->setAudioEngine(m_audio);
     m_appletPanel->tciApplet()->setRadioModel(&m_radioModel);
-    m_appletPanel->tciApplet()->setTciServer(m_tciServer);
+    m_appletPanel->tciApplet()->setTciServer(tciServer());
 
     // TCI applet sliders → TciServer gain setters
     connect(m_appletPanel->tciApplet(), &TciApplet::tciRxGainChanged,
-            m_tciServer, &TciServer::setRxChannelGain);
+            tciServer(), &TciServer::setRxChannelGain);
     connect(m_appletPanel->tciApplet(), &TciApplet::tciTxGainChanged,
-            m_tciServer, &TciServer::setTxGain);
+            tciServer(), &TciServer::setTxGain);
     connect(m_appletPanel->tciApplet(), &TciApplet::tciTxOverflowModeChanged,
-            m_tciServer, &TciServer::setOverflowMode);
+            tciServer(), &TciServer::setOverflowMode);
 
     // TciServer level signals → TCI applet meters
-    connect(m_tciServer, &TciServer::rxLevel,
+    connect(tciServer(), &TciServer::rxLevel,
             m_appletPanel->tciApplet(), &TciApplet::setTciRxLevel);
-    connect(m_tciServer, &TciServer::txLevel,
+    connect(tciServer(), &TciServer::txLevel,
             m_appletPanel->tciApplet(), &TciApplet::setTciTxLevel);
 
     // TCI `volume:N;` master-volume SET → mirror on the title bar slider
     // and route through the same applyMasterVolume() slot the slider uses
     // (audio path + persistence + broadcast back to other TCI clients).
     // See issue #1764 — no master-volume TCI hook existed before.
-    connect(m_tciServer, &TciServer::masterVolumeRequested,
+    connect(tciServer(), &TciServer::masterVolumeRequested,
             this, [this](int pct) {
         if (m_titleBar) m_titleBar->setMasterVolume(pct);
         applyMasterVolume(pct);
@@ -1358,10 +1361,10 @@ void MainWindow::wireCatPorts()
     // indexes within our owned slice list; Flex slice ids can be non-zero when
     // another client owns lower-numbered slices.
     auto wireTciSlice = [this](SliceModel* s) {
-        if (!m_tciServer || !s)
+        if (!tciServer() || !s)
             return;
         const int trx = m_radioModel.slices().indexOf(s);
-        m_tciServer->wireSlice(trx >= 0 ? trx : s->sliceId(), s);
+        tciServer()->wireSlice(trx >= 0 ? trx : s->sliceId(), s);
     };
     connect(&m_radioModel, &RadioModel::sliceAdded, this, [wireTciSlice](SliceModel* s) {
         wireTciSlice(s);
@@ -1369,18 +1372,18 @@ void MainWindow::wireCatPorts()
     // Wire existing slices (radio may already be connected with slices)
     for (auto* s : m_radioModel.slices())
         wireTciSlice(s);
-    m_tciServer->wireSpotModel();
+    tciServer()->wireSpotModel();
 
     // Wire RX audio from PanadapterStream → TCI server for audio streaming.
     // TCI audio feeds exclusively from DAX (not audioDataReady) so that
     // audio_mute doesn't kill TCI audio (#1331).
     if (m_radioModel.panStream()) {
         connect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
-                m_tciServer, &TciServer::onDaxAudioReady);
+                tciServer(), &TciServer::onDaxAudioReady);
         connect(m_radioModel.panStream(), &PanadapterStream::iqDataReady,
-                m_tciServer, &TciServer::onIqDataReady);
+                tciServer(), &TciServer::onIqDataReady);
         connect(m_radioModel.panStream(), &PanadapterStream::waterfallRowReady,
-                m_tciServer, &TciServer::onWaterfallRowReady);
+                tciServer(), &TciServer::onWaterfallRowReady);
     }
 
     // TCI client count changes no longer auto-create/remove the audio stream.

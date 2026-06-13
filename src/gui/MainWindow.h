@@ -488,8 +488,9 @@ private:
     ClientPuduMonitor* m_finalMonitor{nullptr};
     BandSettings      m_bandSettings;
     // CAT ports: up to 8 unified ports (rigctld / TS-2000 / FlexCAT), one per slice.
-    static constexpr int kCatPorts = 8;
-    CatPort* m_catPorts[kCatPorts]{};
+    // CAT ports are owned by the active RadioSession (#3351 session v2).
+    static constexpr int kCatPorts = RadioSession::kCatPorts;
+    CatPort* catPort(int i) const { return m_session->catPort(i); }
 
     // Returns how many CAT ports should be visible in the UI given radio state.
     // 1 when no radio; maxSlicesForModel() when connected.
@@ -499,7 +500,8 @@ private:
     // One-time settings migration from the old dual-server key schema.
     void migrateCatSettings();
 #ifdef HAVE_WEBSOCKETS
-    TciServer*             m_tciServer{nullptr};
+    // TciServer is owned by the active RadioSession (#3351 session v2).
+    TciServer* tciServer() const { return m_session->tciServer(); }
     FreeDvReporterDialog*  m_freedvReporterDialog{nullptr};
 #endif
     SmartLinkClient   m_smartLink;

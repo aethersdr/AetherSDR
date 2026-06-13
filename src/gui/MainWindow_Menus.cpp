@@ -464,12 +464,12 @@ void MainWindow::buildMenuBar()
         s.setValue("AutoStartTCI", on ? "True" : "False");
         s.save();
 #ifdef HAVE_WEBSOCKETS
-        if (m_tciServer) {
-            if (on && !m_tciServer->isRunning()) {
+        if (tciServer()) {
+            if (on && !tciServer()->isRunning()) {
                 int port = s.value("TciPort", "50001").toInt();
-                m_tciServer->start(static_cast<quint16>(port));
-            } else if (!on && m_tciServer->isRunning()) {
-                m_tciServer->stop();
+                tciServer()->start(static_cast<quint16>(port));
+            } else if (!on && tciServer()->isRunning()) {
+                tciServer()->stop();
             }
             if (m_appletPanel && m_appletPanel->tciApplet())
                 m_appletPanel->tciApplet()->setTciEnabled(on);
