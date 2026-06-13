@@ -89,16 +89,36 @@ void MqttClient::connectToBroker(const QString& host, quint16 port,
 
 #ifdef HAVE_MQTT_TLS
     if (useTls) {
-        // caFile: path to CA certificate bundle, or nullptr to use the system default.
-        const char* ca = caFile.isEmpty() ? nullptr : caFile.toUtf8().constData();
-        int tlsRc = mosquitto_tls_set(m_mosq, ca, nullptr, nullptr, nullptr, nullptr);
-        if (tlsRc != MOSQ_ERR_SUCCESS) {
-            qCWarning(lcMqtt) << "MqttClient: TLS setup failed:" << mosquitto_strerror(tlsRc);
-            emit connectionError(QString("TLS setup failed: %1").arg(mosquitto_strerror(tlsRc)));
-            return;
+        if (caFile.isEmpty()) {
+            // No explicit CA bundle: trust the OS certificate store.
+            // mosquitto_tls_set() rejects an all-NULL call with
+            // MOSQ_ERR_INVAL (it requires cafile or capath), so the system
+            // CA path must instead be enabled via MOSQ_OPT_TLS_USE_OS_CERTS,
+            // which both passes validation and triggers
+            // SSL_CTX_set_default_verify_paths().
+            int osRc = mosquitto_int_option(m_mosq,
+                                            MOSQ_OPT_TLS_USE_OS_CERTS, 1);
+            if (osRc != MOSQ_ERR_SUCCESS) {
+                qCWarning(lcMqtt) << "MqttClient: enabling OS certs failed:"
+                                  << mosquitto_strerror(osRc);
+                emit connectionError(
+                    QString("TLS setup failed: %1").arg(mosquitto_strerror(osRc)));
+                return;
+            }
+            qCDebug(lcMqtt) << "MqttClient: TLS enabled (OS certificate store)";
+        } else {
+            int tlsRc = mosquitto_tls_set(m_mosq,
+                                          caFile.toUtf8().constData(),
+                                          nullptr, nullptr, nullptr, nullptr);
+            if (tlsRc != MOSQ_ERR_SUCCESS) {
+                qCWarning(lcMqtt) << "MqttClient: TLS setup failed:"
+                                  << mosquitto_strerror(tlsRc);
+                emit connectionError(
+                    QString("TLS setup failed: %1").arg(mosquitto_strerror(tlsRc)));
+                return;
+            }
+            qCDebug(lcMqtt) << "MqttClient: TLS enabled" << caFile;
         }
-        qCDebug(lcMqtt) << "MqttClient: TLS enabled"
-                        << (caFile.isEmpty() ? "(system CA bundle)" : caFile);
     }
 #endif
 

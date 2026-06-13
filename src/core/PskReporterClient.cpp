@@ -99,15 +99,15 @@ void PskReporterClient::poll()
     query.addQueryItem(QStringLiteral("noactive"), QStringLiteral("1"));
     query.addQueryItem(QStringLiteral("appcontact"),
                        QStringLiteral("ki6bcj@aethersdr.com"));
-    if (m_lastSeqNo >= 0) {
+    const bool initial = m_lastSeqNo < 0;
+    if (!initial) {
+        // Incremental: only records newer than the last sequence number.
         query.addQueryItem(QStringLiteral("lastseqno"),
                            QString::number(m_lastSeqNo));
-    } else {
-        // First fetch: backfill up to the selected window (max 24h allowed;
-        // an hour covers every offered interval).
-        query.addQueryItem(QStringLiteral("flowStartSeconds"),
-                           QStringLiteral("-3600"));
     }
+    // On the first fetch we deliberately omit flowStartSeconds so PSK
+    // Reporter returns its default window (the last 100 reception records,
+    // up to 6 hours) — a friendly initial population when the window opens.
 
     QUrl url{ QString::fromLatin1(kQueryUrl) };
     url.setQuery(query);
@@ -117,17 +117,27 @@ void PskReporterClient::poll()
                       .arg(QCoreApplication::applicationVersion()));
     req.setRawHeader("Accept-Encoding", "gzip");
 
+    qCInfo(lcPskReporter) << "HTTP query"
+                          << (initial ? "(initial)" : "(incremental)")
+                          << "senderCallsign" << m_callsign
+                          << "url" << url.toString(QUrl::RemoveQuery);
     emit statusChanged(tr("Updating…"));
     auto* reply = m_nam.get(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply] {
         m_fetchInFlight = false;
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
+            qCWarning(lcPskReporter)
+                << "HTTP error:" << reply->errorString()
+                << "status"
+                << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
             emit statusChanged(tr("PSK Reporter error: %1")
                                    .arg(reply->errorString()));
             return;
         }
-        handleQueryReply(reply->readAll());
+        const QByteArray body = reply->readAll();
+        qCInfo(lcPskReporter) << "HTTP reply" << body.size() << "bytes";
+        handleQueryReply(body);
     });
 }
 
@@ -171,6 +181,11 @@ void PskReporterClient::handleQueryReply(const QByteArray& xml)
         }
     }
     pruneOldSpots();
+    qCInfo(lcPskReporter) << "HTTP parsed" << added << "reception reports,"
+                          << m_spots.size() << "total, lastSeqNo" << m_lastSeqNo;
+    if (reader.hasError()) {
+        qCWarning(lcPskReporter) << "XML parse error:" << reader.errorString();
+    }
     emit statusChanged(tr("Updated %1 (%2 new, %3 total)")
                            .arg(QDateTime::currentDateTime()
                                     .toString(QStringLiteral("hh:mm")))
