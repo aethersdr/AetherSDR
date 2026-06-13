@@ -87,6 +87,20 @@ changes.
 - **Radio-authoritative**: Never persist or override settings the radio manages
   (frequency, mode, filter, step size, AGC, antennas, TX power).
 
+### Working in MainWindow
+
+`MainWindow` was a ~19,500-line monolith; **#3351 decomposed it** into one class
+spread across `MainWindow.cpp` + a family of `MainWindow_*.cpp` sibling TUs
+(controllers, menus, shortcuts, wiring, digital modes, SWR sweep, spots). It's
+still one class — the siblings hold `MainWindow::` method bodies.
+
+**Don't add new feature code to `MainWindow.cpp`.** Put a feature's
+lifecycle/handlers in the matching sibling TU, signal wiring in
+`MainWindow_Wiring.cpp`, and reserve `MainWindow.{h,cpp}` for genuinely
+cross-cutting code. The full TU map and a "where does my change go?" table are in
+[`docs/architecture/mainwindow-decomposition.md`](docs/architecture/mainwindow-decomposition.md)
+— read it before touching anything named `MainWindow*`.
+
 ### Thread Architecture
 
 | Thread | Components |
@@ -244,6 +258,14 @@ threading and central-state architecture, protocol bedrock, build
 configuration, and project policy. Per
 [CLAUDE.md](CLAUDE.md#autonomous-agent-boundaries), changes here need
 maintainer eyes regardless of who wrote them.
+
+Note the boundary inside `src/gui/`: only the core **`MainWindow.{h,cpp}`** is
+maintainer-only. The **`MainWindow_*.cpp` sibling TUs** from the #3351
+decomposition (`MainWindow_DigitalModes.cpp`, `MainWindow_Wiring.cpp`,
+`MainWindow_Controllers.cpp`, etc.) are **deliberately at the Default reviewer
+tier** — widening review/approval of extracted feature code to more of the team
+was a primary goal of the decomposition, so feature work that lands in a sibling
+TU does not bottleneck on a maintainer.
 
 The mechanical tier exists so the @AetherClaude bot can land low-risk
 changes (test additions, documentation tweaks, dependency bumps,

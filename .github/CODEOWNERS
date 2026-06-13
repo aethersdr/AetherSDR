@@ -98,3 +98,16 @@ docs/RELEASE-SIGNING-KEY.pub.asc  @aethersdr/maintainers
 
 # Bot / agent instruction (source of truth for AI tool behaviour)
 .claude/commands/            @aethersdr/maintainers
+
+# Central GUI architecture — the core MainWindow only.
+# MainWindow is the signal-routing hub + central-state owner; changes to it are
+# direction-impacting (CONTRIBUTING.md "Maintainer-only" tier). These two exact
+# patterns gate ONLY the core files.
+#
+# IMPORTANT: the #3351 decomposition's MainWindow_*.cpp sibling TUs are
+# INTENTIONALLY left on the Tier 3 reviewer default (the `*` line) — broadening
+# review of extracted feature code to the whole reviewer team was a primary goal
+# of the split. Do NOT add a `src/gui/MainWindow*` glob here; it would re-gate
+# the siblings and undo that. See docs/architecture/mainwindow-decomposition.md.
+src/gui/MainWindow.cpp       @aethersdr/maintainers
+src/gui/MainWindow.h         @aethersdr/maintainers

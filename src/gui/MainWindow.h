@@ -1,5 +1,13 @@
 #pragma once
 
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️  MainWindow is DECOMPOSED (#3351). Add member fields/declarations here ONLY
+//     when genuinely cross-cutting — a feature's method bodies live in the
+//     matching MainWindow_*.cpp sibling TU (still MainWindow:: members, declared
+//     here only because C++ requires it). Don't grow this class for feature work.
+//     Map + decision guide: docs/architecture/mainwindow-decomposition.md
+// ─────────────────────────────────────────────────────────────────────────────
+
 #include "models/RadioModel.h"
 #include "models/BandSettings.h"
 #include "models/AntennaGeniusModel.h"

@@ -1,3 +1,13 @@
+// ─────────────────────────────────────────────────────────────────────────────
+// ⚠️  MainWindow is DECOMPOSED (#3351). This file is NOT the default home for new
+//     feature code. Feature lifecycle/handlers belong in the matching
+//     MainWindow_*.cpp sibling TU; per-object signal wiring belongs in
+//     MainWindow_Wiring.cpp. Add here only for genuinely cross-cutting state
+//     (central members, the constructor's wireXxx() calls, a guard inside a
+//     function that itself can't move). When in doubt, see the map + decision
+//     guide: docs/architecture/mainwindow-decomposition.md
+// ─────────────────────────────────────────────────────────────────────────────
+
 #include "MainWindow.h"
 
 #include "MainWindowHelpers.h"

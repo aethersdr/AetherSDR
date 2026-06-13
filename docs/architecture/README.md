@@ -22,6 +22,9 @@ context that would otherwise live in tribal knowledge.
   lessons learned from the multi-panadapter rollout.
 - [`recenter-policy.md`](recenter-policy.md) — when AetherSDR re-centers
   the panadapter view on a slice change.
+- [`mainwindow-decomposition.md`](mainwindow-decomposition.md) — the
+  `MainWindow_*.cpp` TU map and a decision guide for where new
+  `MainWindow` code belongs (read before touching anything `MainWindow*`).
 
 Code-level reviewers should also skim the corresponding header files
 in `src/core/` and `src/models/`.
