@@ -88,6 +88,7 @@ private:
     QToolButton* makeOverlayButton(const QString& text, const QString& tip);
     void layoutOverlayButtons();
     void rebuildPaths();
+    void clampMinZoomToViewport();
 
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};

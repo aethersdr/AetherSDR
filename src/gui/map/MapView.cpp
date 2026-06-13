@@ -7,6 +7,7 @@
 #include <QGeoView/QGVLayerOSM.h>
 #include <QGeoView/QGVMap.h>
 #include <QGeoView/QGVMapQGView.h>
+#include <QGeoView/QGVProjection.h>
 #include <QGeoView/QGVWidgetScale.h>
 #include <QGeoView/QGVWidgetText.h>
 
@@ -359,15 +360,40 @@ void MapView::layoutOverlayButtons()
     }
 }
 
+void MapView::clampMinZoomToViewport()
+{
+    // QGeoView renders a single (non-repeating) world, so zooming out past
+    // the point where the world fills the viewport exposes blank tiles on
+    // the sides. Pin the minimum scale so the world always covers the view
+    // in both axes. Recomputed on every resize.
+    auto* view = m_map->geoView();
+    const QGVProjection* proj = m_map->getProjection();
+    if (view == nullptr || proj == nullptr) {
+        return;
+    }
+    const QRectF world = proj->boundaryProjRect();
+    if (world.width() <= 0.0 || world.height() <= 0.0) {
+        return;
+    }
+    const double minScale = qMax(static_cast<double>(width()) / world.width(),
+                                 static_cast<double>(height()) / world.height());
+    view->setScaleLimits(minScale, view->getMaxScale());
+    if (m_map->getCamera().scale() < minScale) {
+        m_map->cameraTo(QGVCameraActions(m_map).scaleTo(minScale));
+    }
+}
+
 void MapView::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
+    clampMinZoomToViewport();
     layoutOverlayButtons();
 }
 
 void MapView::showEvent(QShowEvent* event)
 {
     QWidget::showEvent(event);
+    clampMinZoomToViewport();
     if (m_firstShow) {
         m_firstShow = false;
         resetToHome();

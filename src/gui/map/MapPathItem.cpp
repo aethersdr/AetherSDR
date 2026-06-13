@@ -85,7 +85,7 @@ void MapPathItem::projPaint(QPainter* painter)
 {
     QColor c = m_color;
     c.setAlpha(120);
-    QPen pen(c, 1.5);
+    QPen pen(c, 2.5);
     pen.setCosmetic(true);  // constant pixel width at every zoom
     painter->setRenderHint(QPainter::Antialiasing);
     painter->setPen(pen);

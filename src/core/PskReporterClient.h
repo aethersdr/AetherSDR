@@ -41,6 +41,7 @@ public:
     static constexpr int kLiveMqtt  = -1;              // sentinel interval
 
     explicit PskReporterClient(QObject* parent = nullptr);
+    ~PskReporterClient() override;
 
     void setCallsign(const QString& callsign);
     QString callsign() const { return m_callsign; }
@@ -69,15 +70,24 @@ private:
     void startMqtt();
     void stopMqtt();
 
+    // Disk persistence: spots survive a client restart within the tombstone
+    // window (kSpotTtlSeconds) so the map repopulates immediately on reopen
+    // over the course of a day, rather than waiting for fresh reports.
+    QString cacheFilePath() const;
+    void loadCache();
+    void saveCache();
+
     QNetworkAccessManager m_nam;
     QTimer m_timer;
     QTimer m_mqttHealthTimer;
+    QTimer m_saveTimer;
     QString m_callsign;
     QVector<PskReporterSpot> m_spots;
     qint64 m_lastSeqNo{-1};
     int    m_intervalMs{kMinPollMs};
     bool   m_running{false};
     bool   m_fetchInFlight{false};
+    bool   m_cacheDirty{false};
     MqttClient* m_mqtt{nullptr};
 
     // MQTT feed health counters, summarized to the log periodically.
@@ -90,6 +100,10 @@ private:
     static constexpr const char* kMqttHost = "mqtt.pskreporter.info";
     static constexpr quint16 kMqttTlsPort = 1884;
     static constexpr int kMaxSpots = 2000;
+    // Spots older than this are tombstoned (dropped from memory and cache).
+    static constexpr qint64 kSpotTtlSeconds = 24 * 60 * 60;
+    // Throttle disk writes while spots stream in from the live feed.
+    static constexpr int kSaveIntervalMs = 60 * 1000;
 };
 
 } // namespace AetherSDR
