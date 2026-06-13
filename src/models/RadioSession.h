@@ -35,10 +35,23 @@ namespace AetherSDR {
 // requirement (DAX stream-remove commands must reach the radio while
 // audio is already stopped) and now routes through shutdownTciServer().
 //
-// Planned v3+ scope (see #3445):
-//   • the wireDiscovery/wireRadioModel/wirePanLifecycle bodies from
-//     MainWindow_Session.cpp move here as session methods
-//   • per-session settings facade (Principle V nested JSON)
+// Planned v3+ scope (see #3445) — corrected after the v2 landing:
+//   • The wireDiscovery/wireRadioModel/wirePanLifecycle bodies do NOT
+//     belong here. They are ~100 connect() calls with ~76 references to
+//     MainWindow's widgets (applet panel, title bar, pan stack, spectrum
+//     widgets, status bar) — model→UI glue that is application-layer by
+//     nature. Moving it onto a models/ class would invert the dependency
+//     (RadioSession would have to #include the GUI). It stays in
+//     MainWindow_Session.cpp (or a future GUI-layer per-session
+//     controller), not on this aggregate.
+//   • A per-session *settings* facade is premature: there is no per-radio
+//     AppSettings namespace to wrap today. Per-radio state is either
+//     global (StationName, LastConnectedRadioSerial), radio-side (slice/
+//     pan/mode → SSDR profiles, see #3384), or already correctly
+//     namespaced — BandStackSettings::sanitizeSerial() keys on
+//     "Radio_<serial>" and is the working template multi-radio should
+//     follow when it needs per-radio persistence. Build that facade when
+//     a second session creates a real consumer, not before.
 //
 // MainWindow currently binds `RadioModel& m_radioModel` to
 // session->radioModel() so the ~900 existing call sites across the
