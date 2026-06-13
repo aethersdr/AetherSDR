@@ -87,5 +87,15 @@ int main(int argc, char** argv)
                  && blockedMessages == QStringList({"blocked"}),
                  "two-tone preflight blocks setup and tune commands");
 
+    commands.clear();
+    tx.loadProfile(QStringLiteral("Contest"));
+    ok &= expect(commands == QStringList({"profile tx load \"Contest\""}),
+                 "TX profile load uses profile tx load");
+
+    commands.clear();
+    tx.loadMicProfile(QStringLiteral("Studio Mic"));
+    ok &= expect(commands == QStringList({"profile mic load \"Studio Mic\""}),
+                 "Mic profile load uses profile mic load");
+
     return ok ? 0 : 1;
 }

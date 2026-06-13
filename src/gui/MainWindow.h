@@ -58,6 +58,7 @@
 #include <QLabel>
 #include <QList>
 #include <QMenu>
+#include <QSet>
 #include <QStatusBar>
 #include <QSizeGrip>
 #include <QHash>
@@ -755,6 +756,8 @@ private:
 
     // Audio stream re-creation flag (after profile load)
     bool             m_needAudioStream{false};
+    qint64           m_profileLoadRadioStateWriteHoldUntilMs{0};
+    QSet<QString>    m_pendingProfileLoadPanDimensions;
 
     // Pending WAN radio (between requestConnect and connectReady)
     WanRadioInfo     m_pendingWanRadio;
@@ -827,6 +830,16 @@ private:
     QDialog* m_reconnectDlg{nullptr}; // shown on unexpected disconnect, dismissed on reconnect
     QPointer<class ThemeEditorDialog> m_themeEditorDialog; // Phase 5 — lazy, modeless
     void cancelTransmitFromIndicator();
+    void beginProfileLoadRadioStateWriteHold(const QString& profileType, const QString& profileName);
+    bool profileLoadRadioStateWritesHeld() const;
+    void holdNoiseFloorAutoAdjustForProfileLoad(qint64 untilMs);
+    void reacquireNoiseFloorLocksAfterProfileLoad();
+    void scheduleProfileLoadRecovery(const QString& profileType, const QString& profileName);
+    void runProfileLoadRecoveryPass(const QString& profileType, const QString& profileName,
+                                    bool rearmDaxIq, bool resetDaxRxStreams);
+    void requestPanDimensionsForRadio(const QString& panId, SpectrumWidget* sw);
+    void sendPanDimensionsToRadio(const QString& panId, SpectrumWidget* sw);
+    void flushPendingProfileLoadPanDimensions();
     class ClientEqEditor* m_clientEqEditor{nullptr}; // lazy — created on first Edit… click
     // Lazy-construct the floating EQ editor on first access, with all
     // bypass-toggled wiring set up once.  Used from every site that

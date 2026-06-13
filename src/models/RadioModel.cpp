@@ -82,6 +82,65 @@ bool statusFlagSet(const QMap<QString, QString>& kvs, const QString& key)
         || value.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
 }
 
+struct ProfileLoadRequest {
+    bool valid{false};
+    QString type;
+    QString name;
+};
+
+constexpr qint64 kProfileLoadStateWriteHoldMs = 10000;
+
+bool profileLoadMayRebuildRadioTopology(const QString& profileType)
+{
+    return profileType == QStringLiteral("global");
+}
+
+ProfileLoadRequest parseProfileLoadCommand(const QString& command)
+{
+    static const QRegularExpression re(
+        R"profileLoad(^\s*profile\s+(global|tx|mic)\s+load\s+"([^"]*)"\s*$)profileLoad",
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch match = re.match(command);
+    if (!match.hasMatch()) {
+        return {};
+    }
+    return {
+        true,
+        match.captured(1).toLower(),
+        match.captured(2),
+    };
+}
+
+bool isProfileOwnedRadioStateWrite(const QString& command)
+{
+    const QString trimmed = command.trimmed();
+    const QStringList tokens = trimmed.simplified().split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (tokens.size() >= 5
+        && tokens[0] == QStringLiteral("display")
+        && tokens[1] == QStringLiteral("pan")
+        && tokens[2] == QStringLiteral("set")) {
+        bool hasPixelDimension = false;
+        for (int i = 4; i < tokens.size(); ++i) {
+            const QString key = tokens[i].section(QLatin1Char('='), 0, 0);
+            if (key != QStringLiteral("xpixels") && key != QStringLiteral("ypixels")) {
+                return true;
+            }
+            hasPixelDimension = true;
+        }
+        // xpixels/ypixels are allowed past this low-level guard because
+        // MainWindow queues them during a profile load and flushes them after
+        // the radio accepts the profile. Do not bypass
+        // MainWindow::requestPanDimensionsForRadio(); early dimension writes
+        // can cause the radio to save a partial GUIClient slice layout.
+        return !hasPixelDimension;
+    }
+
+    return trimmed.startsWith(QStringLiteral("slice set "))
+        || trimmed.startsWith(QStringLiteral("display pan set "))
+        || trimmed.startsWith(QStringLiteral("display panafall set "))
+        || trimmed.startsWith(QStringLiteral("display waterfall set "));
+}
+
 void appendUniqueAntennaToken(QStringList& tokens, const QString& token)
 {
     if (!token.isEmpty() && !tokens.contains(token))
@@ -2433,8 +2492,8 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                             });
                     });
             });
-            // Request global profile list
-            sendCmd("profile global info");
+            // Request profile lists/current selections using FlexLib's info command.
+            refreshProfiles();
             sendCmd("sub tnf all");
             sendCmd("sub memories all");
             // Additional subscriptions (matches SmartSDR connection sequence)
@@ -2947,6 +3006,7 @@ int RadioModel::adaptiveWfMsForCap(int fpsCap) const
 void RadioModel::sendAdaptiveCapToPan(const QString& panId, int fpsCap)
 {
     if (panId.isEmpty() || fpsCap <= 0) return;
+    if (profileLoadRadioStateWritesHeld()) return;
     auto* pan = m_panadapters.value(panId, nullptr);
     if (!pan) return;
     sendCommand(QString("display pan set %1 fps=%2").arg(panId).arg(fpsCap));
@@ -3272,12 +3332,8 @@ void RadioModel::requestFileDownloadPort(const QString& downloadKind, ResponseCa
 void RadioModel::refreshProfiles()
 {
     sendCmd(QStringLiteral("profile global info"));
-    sendCmd(QStringLiteral("profile global list"));
-    sendCmd(QStringLiteral("profile global current"));
-    sendCmd(QStringLiteral("profile tx list"));
-    sendCmd(QStringLiteral("profile tx current"));
-    sendCmd(QStringLiteral("profile mic list"));
-    sendCmd(QStringLiteral("profile mic current"));
+    sendCmd(QStringLiteral("profile tx info"));
+    sendCmd(QStringLiteral("profile mic info"));
 }
 
 bool RadioModel::isProfileTransferBlocked() const
@@ -3533,6 +3589,64 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
         perf.recordPanCenterCommand();
     }
 
+    const ProfileLoadRequest profileLoad = parseProfileLoadCommand(command);
+    if (profileLoad.valid) {
+        const bool topologyProfile = profileLoadMayRebuildRadioTopology(profileLoad.type);
+        if (topologyProfile) {
+            m_profileLoadRadioStateWriteHoldUntilMs =
+                std::max(m_profileLoadRadioStateWriteHoldUntilMs,
+                         QDateTime::currentMSecsSinceEpoch() + kProfileLoadStateWriteHoldMs);
+        }
+        emit profileLoadStarted(profileLoad.type, profileLoad.name);
+
+        ResponseCallback originalCallback = std::move(cb);
+        cb = [this, profileLoad, topologyProfile, originalCallback = std::move(originalCallback)]
+             (int code, const QString& body) mutable {
+            if (originalCallback) {
+                originalCallback(code, body);
+            }
+
+            if (code != 0) {
+                qCWarning(lcProtocol).noquote()
+                    << "RadioModel: profile load rejected"
+                    << QStringLiteral("type=%1").arg(profileLoad.type)
+                    << QStringLiteral("name=%1").arg(profileLoad.name)
+                    << QStringLiteral("code=%1").arg(hexCode(code))
+                    << QStringLiteral("body=%1").arg(body);
+                return;
+            }
+
+            qCInfo(lcProtocol).noquote()
+                << "RadioModel: profile load accepted"
+                << QStringLiteral("type=%1").arg(profileLoad.type)
+                << QStringLiteral("name=%1").arg(profileLoad.name);
+            if (topologyProfile) {
+                m_profileLoadRadioStateWriteHoldUntilMs =
+                    std::max(m_profileLoadRadioStateWriteHoldUntilMs,
+                             QDateTime::currentMSecsSinceEpoch() + kProfileLoadStateWriteHoldMs);
+                scheduleRxAudioStreamEnsure(QStringLiteral("profile-load:%1").arg(profileLoad.type));
+            }
+            QTimer::singleShot(750, this, [this]() {
+                if (isConnected()) {
+                    refreshProfiles();
+                }
+            });
+            emit profileLoadCompleted(profileLoad.type, profileLoad.name);
+        };
+    }
+
+    if (!profileLoad.valid
+        && profileLoadRadioStateWritesHeld()
+        && isProfileOwnedRadioStateWrite(command)) {
+        qCDebug(lcProtocol).noquote()
+            << "RadioModel: suppressing profile-load radio-state write"
+            << command;
+        if (cb) {
+            cb(0x50000061, QStringLiteral("suppressed during profile load"));
+        }
+        return 0;
+    }
+
     if (m_wanConn)
         return m_wanConn->sendCommand(command, std::move(cb));
 
@@ -3640,6 +3754,14 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
 }
 
 quint32 RadioModel::ourClientHandle() const { return clientHandle(); }
+
+bool RadioModel::sliceMayBelongToUs(int sliceId) const
+{
+    if (m_foreignSliceOwners.contains(sliceId)) {
+        return false;
+    }
+    return m_ownedSliceIds.isEmpty() || m_ownedSliceIds.contains(sliceId);
+}
 
 void RadioModel::emitOtherClientsChanged()
 {
@@ -4954,12 +5076,12 @@ void RadioModel::handleSliceStatus(int id,
         m_meterModel.setActiveTxSlice(activeTxSliceNum());
         if (!reclaimed) {
             emit sliceAdded(s);
-        } else if (s->isTxSlice()) {
+        } else if (s->isTxSlice()
+                   && QDateTime::currentMSecsSinceEpoch() >= m_profileLoadRadioStateWriteHoldUntilMs) {
             // Re-claim TX after a radio reboot (#145 semantics): the radio
-            // recreates the slice with tx=1 but tx_client_handle pointing at
-            // our dead pre-reboot handle (or 0). Fresh slices get this from
-            // MainWindow::onSliceAdded; reclaimed slices skip sliceAdded, so
-            // re-assert it here.
+            // recreates a stale slice model with tx=1 but tx_client_handle
+            // pointing at our dead pre-reboot handle (or 0). Fresh startup
+            // slices are left radio-owned so GUIClient restore can settle.
             sendCmd(QString("slice set %1 tx=1").arg(id));
         }
         emit slotOccupancyChanged(id);  // empty/foreign → ours
@@ -5148,12 +5270,10 @@ void RadioModel::configurePan(const QString& panId)
     // Do NOT hardcode xpixels/ypixels here — MainWindow knows the real sizes.
     emit panDimensionsNeeded(targetPanId);
 
-    sendCmd(
-        QString("display pan set %1 min_dbm=-130 max_dbm=-40").arg(targetPanId),
-        [](int code, const QString&) {
-            if (code != 0)
-                qCWarning(lcProtocol) << "RadioModel: display pan set dbm failed, code" << Qt::hex << code;
-        });
+    // Do not push a default min_dbm/max_dbm here. configurePan() also runs for
+    // radio-restored pans on startup/profile recall, and the radio owns saved
+    // pan dBm ranges. New user-created pans can still be initialized by the
+    // createPanadapter() response path.
 }
 
 void RadioModel::configureWaterfall(const QString& waterfallId)
@@ -5184,6 +5304,11 @@ void RadioModel::configureWaterfall(const QString& waterfallId)
             qCDebug(lcProtocol) << "RadioModel: waterfall configured (auto_black=0 black_level=15 color_gain=50)";
         }
     });
+}
+
+bool RadioModel::profileLoadRadioStateWritesHeld() const
+{
+    return QDateTime::currentMSecsSinceEpoch() < m_profileLoadRadioStateWriteHoldUntilMs;
 }
 
 void RadioModel::ensureDefaultSlicePreferringRestoredPan()

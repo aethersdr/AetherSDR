@@ -2236,6 +2236,7 @@ target_link_libraries(transmit_model_test PRIVATE Qt6::Core)
 if(UNIX)
     target_link_libraries(transmit_model_test PRIVATE pthread)
 endif()
+add_test(NAME transmit_model_test COMMAND transmit_model_test)
 
 # Container system Phase 1 tests — needs QApplication + Widgets.
 add_executable(container_widget_test

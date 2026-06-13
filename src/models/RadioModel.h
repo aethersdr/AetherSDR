@@ -250,6 +250,7 @@ public:
     const QMap<quint32, QString>& clientStations() const { return m_clientStations; }
     quint32 txClientHandle() const { return m_txClientHandle; }
     quint32 ourClientHandle() const;
+    bool sliceMayBelongToUs(int sliceId) const;
 
     struct ClientInfo {
         QString station;
@@ -457,6 +458,13 @@ signals:
     void globalProfilesChanged();
     void profileDatabaseImportingChanged(bool importing);
     void profileDatabaseExportingChanged(bool exporting);
+    // Emitted when a profile load command is sent, before the radio tears down
+    // and rebuilds profile-owned slices/pans.
+    void profileLoadStarted(const QString& profileType, const QString& profileName);
+    // Emitted after the radio accepts a profile load command. Profile recall can
+    // tear down per-session streams; GUI/session code should re-arm client-owned
+    // state from this signal instead of guessing from later status churn.
+    void profileLoadCompleted(const QString& profileType, const QString& profileName);
 
     // Emitted when the radio reports a change to the global Auto-Save
     // profile setting (radio status field "auto_save").  UI consumers
@@ -531,6 +539,7 @@ private:
 
     void configurePan(const QString& panId);
     void configureWaterfall(const QString& waterfallId);
+    bool profileLoadRadioStateWritesHeld() const;
     void registerAsGuiClient(const QString& clientId);
     void disconnectPendingClientsThen(std::function<void()> continuation);
     // LAN-only: subscribe to radio+client topics early, wait 400 ms for
@@ -833,6 +842,7 @@ private:
     bool               m_fullDuplex{false};
     int                m_rttyMarkDefault{2125};
     quint32            m_txClientHandle{0};  // handle of the client that owns TX
+    qint64             m_profileLoadRadioStateWriteHoldUntilMs{0};
     QMap<quint32, ClientInfo> m_clientInfoMap; // handle → full client info
     std::function<void()> m_multiFlexContinuation; // saved continuation during conflict pause
     QMap<quint32, QString> m_clientStations;   // handle → station name (legacy, kept in sync)

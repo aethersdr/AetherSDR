@@ -2031,6 +2031,41 @@ void TciServer::cancelDaxRelease()
     }
 }
 
+void TciServer::rearmDaxForProfileLoad()
+{
+    if (!m_model || !m_model->isConnected()) {
+        return;
+    }
+
+    bool hasAudioClient = false;
+    for (const auto& cs : m_clients) {
+        if (cs.audioEnabled) {
+            hasAudioClient = true;
+            break;
+        }
+    }
+    if (!hasAudioClient) {
+        return;
+    }
+
+    if (m_model->panStream()) {
+        for (auto it = m_tciDaxStreamIds.cbegin(); it != m_tciDaxStreamIds.cend(); ++it) {
+            if (it.value() != 0 && !m_tciDaxBorrowedChannels.contains(it.key())) {
+                m_model->sendCommand(QString("stream remove 0x%1")
+                    .arg(it.value(), 8, 16, QChar('0')));
+                m_model->panStream()->unregisterDaxStream(it.value());
+            }
+        }
+    }
+
+    m_tciDaxStreamIds.clear();
+    m_tciDaxBorrowedChannels.clear();
+    m_tciDaxSlices.clear();
+
+    qCInfo(lcCat) << "TCI: profile load completed - re-arming DAX for active audio client";
+    ensureDaxForTci();
+}
+
 void TciServer::releaseDaxForTci()
 {
     if (!m_model) return;

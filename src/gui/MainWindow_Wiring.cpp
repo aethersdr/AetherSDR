@@ -48,7 +48,9 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QDateTime>
 #include <QFileDialog>
+#include <QSet>
 #include <QTimer>
 
 #include <algorithm>
@@ -70,6 +72,29 @@ bool memoryRevealTargetMatches(double actualMhz, double targetMhz)
 {
     return targetMhz <= 0.0
         || std::abs(actualMhz - targetMhz) <= kMemoryRevealTargetToleranceMhz;
+}
+
+bool dbmRangeLooksPlausible(float minDbm, float maxDbm)
+{
+    constexpr float kMinAllowedDbm = -180.0f;
+    constexpr float kMaxAllowedDbm = 80.0f;
+    constexpr float kMinRangeDb = 10.0f;
+    constexpr float kMaxRangeDb = 180.0f;
+
+    if (!std::isfinite(minDbm) || !std::isfinite(maxDbm)) {
+        return false;
+    }
+
+    const float rangeDb = maxDbm - minDbm;
+    return minDbm >= kMinAllowedDbm
+        && maxDbm <= kMaxAllowedDbm
+        && rangeDb >= kMinRangeDb
+        && rangeDb <= kMaxRangeDb;
+}
+
+bool profileLoadMayRebuildRadioTopology(const QString& profileType)
+{
+    return profileType.compare(QStringLiteral("global"), Qt::CaseInsensitive) == 0;
 }
 
 // Pan-follow tuning internals — moved with their only callers from
@@ -212,15 +237,20 @@ void MainWindow::onSliceAdded(SliceModel* s)
     }
 
     // Restore per-slice DAX channel from last session (#1221).
-    // Deferred so the radio's initial slice status has arrived first.
+    // Deferred so the radio's initial slice status has arrived first. Skip this
+    // during profile recall: setDaxChannel() updates local slice state before
+    // sending the radio command, and profile-created slices must keep the
+    // radio/profile DAX assignment.
     {
         const int sliceIdx = m_radioModel.slices().indexOf(s);
         if (sliceIdx >= 0) {
             const QString key = QString("DaxChannel_Slice%1").arg(QChar('A' + sliceIdx));
             int savedDax = AppSettings::instance().value(key, "0").toInt();
             if (savedDax > 0) {
-                QTimer::singleShot(300, this, [s, savedDax]() {
-                    if (s) { s->setDaxChannel(savedDax); }
+                QTimer::singleShot(300, this, [this, s, savedDax]() {
+                    if (s && !profileLoadRadioStateWritesHeld()) {
+                        s->setDaxChannel(savedDax);
+                    }
                 });
             }
         }
@@ -229,6 +259,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // Re-claim TX assignment after profile load or slice recreation (#145).
     // The radio sets tx=1 on the slice but tx_client_handle may be 0x00000000
     // if the slice was destroyed and recreated (e.g. by profile global load).
+    // During profile recall, RadioModel's profile-load hold suppresses this
+    // slice write so it cannot fight the radio's restored profile state.
     if (s->isTxSlice())
         m_radioModel.sendCommand(QString("slice set %1 tx=1").arg(s->sliceId()));
 
@@ -263,10 +295,13 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // the user re-arms it from the DAX2 window.  Let the user manage that
         // state via DAX2 — matches SmartSDR Console behavior. (#2315)
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
-        m_radioModel.transmitModel().setDax(isDigital);
         m_audio->setDaxTxMode(isDigital);
-        if (isDigital)
-            m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
+        if (!profileLoadRadioStateWritesHeld()) {
+            m_radioModel.transmitModel().setDax(isDigital);
+            if (isDigital) {
+                m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
+            }
+        }
 #else
         Q_UNUSED(isDigital);
 #endif
@@ -597,6 +632,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     connect(s, &SliceModel::frequencyChanged, this, [this, s]() {
         if (s->sliceId() != m_activeSliceId) return;
         if (!m_bsAutoSaveTimer) return;
+        if (profileLoadRadioStateWritesHeld()) return;
         const int dwellSec = BandStackSettings::instance().autoSaveDwellSeconds();
         if (dwellSec <= 0) return;
         m_bsAutoSaveTimer->start(dwellSec * 1000);
@@ -743,11 +779,352 @@ void MainWindow::onSliceRemoved(int id)
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
 }
 
+void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,
+                                                     const QString& profileName)
+{
+    if (!profileLoadMayRebuildRadioTopology(profileType)) {
+        qCDebug(lcProtocol).noquote()
+            << "MainWindow: profile load does not require topology write hold"
+            << QStringLiteral("type=%1").arg(profileType)
+            << QStringLiteral("name=%1").arg(profileName);
+        return;
+    }
+
+    constexpr qint64 kProfileLoadStateWriteHoldMs = 10000;
+    const qint64 untilMs = QDateTime::currentMSecsSinceEpoch() + kProfileLoadStateWriteHoldMs;
+    m_profileLoadRadioStateWriteHoldUntilMs =
+        std::max(m_profileLoadRadioStateWriteHoldUntilMs, untilMs);
+    m_suppressStartupPanLayoutRearrange = false;
+    m_layoutRestoreUntilMs = kPanLayoutRestoreWaitingForFirstPan;
+    if (m_layoutRestoreTimer) {
+        m_layoutRestoreTimer->stop();
+    }
+    if (m_bsAutoSaveTimer) {
+        m_bsAutoSaveTimer->stop();
+    }
+    holdNoiseFloorAutoAdjustForProfileLoad(untilMs);
+
+    qCInfo(lcProtocol).noquote()
+        << "MainWindow: holding profile-owned radio state writes"
+        << QStringLiteral("type=%1").arg(profileType)
+        << QStringLiteral("name=%1").arg(profileName);
+}
+
+bool MainWindow::profileLoadRadioStateWritesHeld() const
+{
+    return QDateTime::currentMSecsSinceEpoch() < m_profileLoadRadioStateWriteHoldUntilMs;
+}
+
+void MainWindow::holdNoiseFloorAutoAdjustForProfileLoad(qint64 untilMs)
+{
+    // Do not let auto noise-floor reposition the client-side dBm scale while a
+    // profile is rebuilding pans. The radio owns profile dBm ranges; auto floor
+    // can reacquire only after those ranges and deferred xpixels/ypixels settle.
+    if (!m_panStack) {
+        return;
+    }
+
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (!applet || !applet->spectrumWidget()) {
+            continue;
+        }
+        applet->spectrumWidget()->suspendNoiseFloorAutoAdjustUntil(untilMs);
+    }
+}
+
+void MainWindow::reacquireNoiseFloorLocksAfterProfileLoad()
+{
+    if (m_shuttingDown || !m_radioModel.isConnected() || !m_panStack) {
+        return;
+    }
+
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (!applet || !applet->spectrumWidget()) {
+            continue;
+        }
+
+        SpectrumWidget* sw = applet->spectrumWidget();
+        if (auto* pan = m_radioModel.panadapter(applet->panId())) {
+            if (pan->panStreamId()) {
+                m_radioModel.panStream()->setDbmRange(
+                    pan->panStreamId(), pan->minDbm(), pan->maxDbm());
+            }
+            sw->setDbmRange(pan->minDbm(), pan->maxDbm());
+        }
+        sw->reacquireNoiseFloorLock();
+    }
+}
+
+void MainWindow::sendPanDimensionsToRadio(const QString& panId, SpectrumWidget* sw)
+{
+    // Raw sender for radio FFT dimensions. Normal lifecycle/resize paths must
+    // call requestPanDimensionsForRadio() instead so profile loads can defer
+    // these writes; sending xpixels/ypixels while the radio is rebuilding a
+    // profile can make the radio autosave a partial GUIClient slice layout.
+    if (panId.isEmpty() || !sw || !panPixelDimensionsReady(sw)) {
+        return;
+    }
+
+    auto* pan = m_radioModel.panadapter(panId);
+    if (!pan) {
+        return;
+    }
+
+    const int xpix = panXpixelsFor(sw);
+    const int ypix = panYpixelsFor(sw);
+    m_radioModel.sendCommand(
+        QString("display pan set %1 xpixels=%2 ypixels=%3")
+            .arg(panId).arg(xpix).arg(ypix));
+
+    if (pan->panStreamId()) {
+        m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
+        sw->prepareForFftScaleChange();
+    }
+}
+
+void MainWindow::requestPanDimensionsForRadio(const QString& panId, SpectrumWidget* sw)
+{
+    if (panId.isEmpty() || !sw || !panPixelDimensionsReady(sw)) {
+        return;
+    }
+
+    // Pixel dimensions are client-owned display metadata, but sending them
+    // while the radio is tearing down/rebuilding a profile can dirty the
+    // GUIClient restore snapshot with an intermediate topology. That was the
+    // root cause of profile-loaded sessions later restarting with missing
+    // slices. Keep all pan size pushes on this path so they are deferred and
+    // coalesced until the profile load has been accepted and settled.
+    if (profileLoadRadioStateWritesHeld()) {
+        m_pendingProfileLoadPanDimensions.insert(panId);
+        qCDebug(lcProtocol).noquote()
+            << "MainWindow: deferring pan dimensions during profile load"
+            << QStringLiteral("pan=%1").arg(panId);
+        return;
+    }
+
+    sendPanDimensionsToRadio(panId, sw);
+}
+
+void MainWindow::flushPendingProfileLoadPanDimensions()
+{
+    if (m_shuttingDown || !m_radioModel.isConnected()
+            || m_pendingProfileLoadPanDimensions.isEmpty() || !m_panStack) {
+        return;
+    }
+
+    const QSet<QString> pending = m_pendingProfileLoadPanDimensions;
+    m_pendingProfileLoadPanDimensions.clear();
+
+    int sent = 0;
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (!applet || !pending.contains(applet->panId())) {
+            continue;
+        }
+
+        sendPanDimensionsToRadio(applet->panId(), applet->spectrumWidget());
+        ++sent;
+    }
+
+    if (sent > 0) {
+        qCDebug(lcProtocol).noquote()
+            << "MainWindow: flushed deferred profile-load pan dimensions"
+            << QStringLiteral("count=%1").arg(sent);
+    }
+}
+
+void MainWindow::scheduleProfileLoadRecovery(const QString& profileType,
+                                             const QString& profileName)
+{
+    if (!profileLoadMayRebuildRadioTopology(profileType)) {
+        qCInfo(lcProtocol).noquote()
+            << "MainWindow: scheduling lightweight profile-load recovery"
+            << QStringLiteral("type=%1").arg(profileType)
+            << QStringLiteral("name=%1").arg(profileName);
+        QTimer::singleShot(350, this, [this, profileType, profileName]() {
+            runProfileLoadRecoveryPass(profileType, profileName, false, false);
+        });
+        return;
+    }
+
+    constexpr qint64 kProfileLoadStateWriteHoldMs = 10000;
+    const qint64 untilMs = QDateTime::currentMSecsSinceEpoch() + kProfileLoadStateWriteHoldMs;
+    m_profileLoadRadioStateWriteHoldUntilMs =
+        std::max(m_profileLoadRadioStateWriteHoldUntilMs, untilMs);
+    holdNoiseFloorAutoAdjustForProfileLoad(m_profileLoadRadioStateWriteHoldUntilMs);
+
+    qCInfo(lcProtocol).noquote()
+        << "MainWindow: scheduling profile-load recovery"
+        << QStringLiteral("type=%1").arg(profileType)
+        << QStringLiteral("name=%1").arg(profileName);
+
+    QTimer::singleShot(350, this, [this, profileType, profileName]() {
+        runProfileLoadRecoveryPass(profileType, profileName, false, true);
+    });
+    QTimer::singleShot(1200, this, [this, profileType, profileName]() {
+        runProfileLoadRecoveryPass(profileType, profileName, true, false);
+    });
+    QTimer::singleShot(2500, this, [this, profileType, profileName]() {
+        runProfileLoadRecoveryPass(profileType, profileName, false, false);
+    });
+    QTimer::singleShot(1500, this, [this]() {
+        flushPendingProfileLoadPanDimensions();
+    });
+    QTimer::singleShot(3500, this, [this]() {
+        flushPendingProfileLoadPanDimensions();
+    });
+    QTimer::singleShot(11000, this, [this]() {
+        flushPendingProfileLoadPanDimensions();
+    });
+    QTimer::singleShot(11250, this, [this]() {
+        reacquireNoiseFloorLocksAfterProfileLoad();
+#ifdef HAVE_WEBSOCKETS
+        if (tciServer()) {
+            tciServer()->rearmDaxForProfileLoad();
+        }
+#endif
+    });
+}
+
+void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
+                                            const QString& profileName,
+                                            bool rearmDaxIq,
+                                            bool resetDaxRxStreams)
+{
+    Q_UNUSED(profileType);
+    Q_UNUSED(profileName);
+
+    if (m_shuttingDown || !m_radioModel.isConnected()) {
+        return;
+    }
+
+    // Keep this pass to client-owned sessions. A profile load can rewrite
+    // radio-owned pan/slice topology; pushing display pan state here can dirty
+    // the radio's GUIClient restore snapshot while it is settling.
+
+    SliceModel* referenceSlice = m_radioModel.slice(m_activeSliceId);
+    if (!referenceSlice && !m_radioModel.slices().isEmpty()) {
+        referenceSlice = m_radioModel.slices().first();
+    }
+    if (referenceSlice && referenceSlice->frequency() > 0.0) {
+        const QString bandName = BandSettings::bandForFrequency(referenceSlice->frequency());
+        if (!bandName.isEmpty()) {
+            m_bandSettings.setCurrentBand(bandName);
+        }
+        if (referenceSlice->sliceId() == m_activeSliceId) {
+            m_antennaGenius.setRadioFrequency(referenceSlice->frequency());
+        }
+    }
+
+    if (AppSettings::instance().value("PcAudioEnabled", "True").toString() == "True") {
+        audioStartRx();
+    }
+
+#ifdef HAVE_WEBSOCKETS
+    if (resetDaxRxStreams && tciServer() && !profileLoadRadioStateWritesHeld()) {
+        tciServer()->rearmDaxForProfileLoad();
+    }
+#endif
+
+#if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
+    if (m_daxBridge) {
+        auto* panStream = m_radioModel.panStream();
+        QSet<int> requestedChannels;
+        bool txSliceIsDigital = false;
+
+        for (auto* slice : m_radioModel.slices()) {
+            if (!slice) {
+                continue;
+            }
+            if (!m_radioModel.sliceMayBelongToUs(slice->sliceId())) {
+                continue;
+            }
+
+            if (slice->isTxSlice()) {
+                const QString mode = slice->mode();
+                txSliceIsDigital = (mode == "DIGU" || mode == "DIGL" || mode == "RTTY"
+                                  || mode == "DFM"  || mode == "NFM"  || mode == "NT");
+            }
+
+            const int channel = slice->daxChannel();
+            m_daxSliceLastCh[slice->sliceId()] = channel;
+            if (channel < 1 || channel > 4) {
+                continue;
+            }
+
+#ifdef HAVE_WEBSOCKETS
+            const bool tciUsingChannel = tciServer() && tciServer()->ownsDaxChannel(channel);
+#else
+            const bool tciUsingChannel = false;
+#endif
+#ifdef HAVE_RADE
+            const bool radeUsingChannel =
+                (m_radeDaxStreamId != 0 && panStream
+                 && m_radeDaxStreamId == panStream->daxStreamIdForChannel(channel));
+#else
+            const bool radeUsingChannel = false;
+#endif
+            quint32 existingStream = panStream ? panStream->daxStreamIdForChannel(channel) : 0;
+            if (!tciUsingChannel && panStream && resetDaxRxStreams) {
+                if (existingStream != 0 && !radeUsingChannel) {
+                    m_radioModel.sendCommand(
+                        QString("stream remove 0x%1").arg(existingStream, 0, 16));
+                    panStream->unregisterDaxStream(existingStream);
+                    existingStream = 0;
+                }
+            }
+
+            if (!tciUsingChannel && !radeUsingChannel && existingStream == 0
+                    && !requestedChannels.contains(channel)) {
+                m_radioModel.sendCommand(
+                    QString("stream create type=dax_rx dax_channel=%1").arg(channel));
+                requestedChannels.insert(channel);
+            }
+        }
+
+        m_audio->setDaxTxMode(txSliceIsDigital);
+        if (txSliceIsDigital && m_radioModel.transmitModel().daxOn()) {
+            m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
+        }
+    }
+#endif
+
+    if (rearmDaxIq) {
+        auto& settings = AppSettings::instance();
+        for (int channel = 1; channel <= 4; ++channel) {
+            if (settings.value(QStringLiteral("DaxIqEnabled%1").arg(channel), "False").toString() != "True") {
+                continue;
+            }
+            const DaxIqModel::IqStream stream = m_radioModel.daxIqModel().stream(channel);
+            if (stream.exists && stream.streamId != 0) {
+                if (m_radioModel.panStream()) {
+                    m_radioModel.panStream()->unregisterIqStream(stream.streamId);
+                }
+                m_radioModel.daxIqModel().removeStream(channel);
+                m_radioModel.daxIqModel().handleStreamRemoved(stream.streamId);
+            }
+            m_radioModel.daxIqModel().createStream(channel);
+            const int rate = settings.value(QStringLiteral("DaxIqRate%1").arg(channel), "48000").toInt();
+            QTimer::singleShot(600, this, [this, channel, rate]() {
+                if (m_radioModel.isConnected()) {
+                    m_radioModel.daxIqModel().setSampleRate(channel, rate);
+                }
+            });
+        }
+    }
+}
+
 
 void MainWindow::wirePanadapter(PanadapterApplet* applet)
 {
     auto* sw = applet->spectrumWidget();
     auto* menu = sw->overlayMenu();
+    if (profileLoadRadioStateWritesHeld()) {
+        // Profile recall briefly rebuilds pan topology and pixel dimensions.
+        // Keep auto noise-floor from sliding the client-side dBm scale during
+        // that window; the radio's profile-owned min_dbm/max_dbm status must
+        // seed the display first, then auto floor can reacquire afterward.
+        sw->suspendNoiseFloorAutoAdjustUntil(m_profileLoadRadioStateWriteHoldUntilMs);
+    }
 
     struct PendingDbmRange {
         bool active{false};
@@ -768,6 +1145,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     };
     auto sendDbmRangeCommand = [this, applet](float minDbm, float maxDbm) {
+        if (!dbmRangeLooksPlausible(minDbm, maxDbm)) {
+            qCWarning(lcProtocol).noquote()
+                << "MainWindow: rejecting implausible dBm range"
+                << QStringLiteral("pan=%1").arg(applet->panId())
+                << QStringLiteral("min=%1").arg(minDbm, 0, 'f', 2)
+                << QStringLiteral("max=%1").arg(maxDbm, 0, 'f', 2);
+            return;
+        }
+
         m_radioModel.sendCommand(
             QString("display pan set %1 min_dbm=%2 max_dbm=%3")
                 .arg(applet->panId())
@@ -903,15 +1289,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             if (!panPixelDimensionsReady(sw)) {
                 return;
             }
-            const int xpix = panXpixelsFor(sw);
-            const int ypix = panYpixelsFor(sw);
-            m_radioModel.sendCommand(
-                QString("display pan set %1 xpixels=%2 ypixels=%3")
-                    .arg(pan->panId()).arg(xpix).arg(ypix));
-            if (pan->panStreamId()) {
-                m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
-                sw->prepareForFftScaleChange();
-            }
+            requestPanDimensionsForRadio(pan->panId(), sw);
         });
     }
 
@@ -971,7 +1349,32 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
 
     connect(sw, &SpectrumWidget::dbmRangeChangeRequested,
-            this, [pendingDbm, setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
+            this, [this, applet, sw, pendingDbm, setStreamDbmRange, sendDbmRangeCommand]
+                  (float minDbm, float maxDbm) {
+        const bool profileLoadHeld = profileLoadRadioStateWritesHeld();
+        const bool autoFloorChange = sw->pendingAutoNoiseFloorDbmRange();
+        if (profileLoadHeld && autoFloorChange) {
+            if (auto* pan = m_radioModel.panadapter(applet->panId())) {
+                if (pan->panStreamId()) {
+                    setStreamDbmRange(pan->minDbm(), pan->maxDbm());
+                }
+                sw->setDbmRange(pan->minDbm(), pan->maxDbm());
+            }
+            sw->reacquireNoiseFloorLock();
+            return;
+        }
+
+        const bool localOnly = profileLoadHeld || autoFloorChange;
+        if (localOnly) {
+            // Local-only dBm changes must not update PanadapterStream. The
+            // stream decodes radio FFT pixel values using the radio's actual
+            // min_dbm/max_dbm; changing that decoder without sending the same
+            // range to the radio creates a feedback loop where the estimated
+            // noise floor and display scale chase each other indefinitely.
+            sw->setDbmRange(minDbm, maxDbm);
+            return;
+        }
+
         pendingDbm->active = true;
         pendingDbm->minDbm = minDbm;
         pendingDbm->maxDbm = maxDbm;

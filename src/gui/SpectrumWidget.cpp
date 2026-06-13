@@ -1053,6 +1053,23 @@ void SpectrumWidget::reacquireNoiseFloorLock() {
     m_measuredNoiseFloorDbm = -1000.0f;
 }
 
+void SpectrumWidget::suspendNoiseFloorAutoAdjustUntil(qint64 untilMs)
+{
+    if (untilMs <= 0) {
+        return;
+    }
+
+    m_noiseFloorAutoAdjustHoldUntilMs =
+        std::max(m_noiseFloorAutoAdjustHoldUntilMs, untilMs);
+    if (m_pendingDbmRangeEchoFromAutoFloor) {
+        m_pendingDbmRangeEcho = false;
+        m_pendingDbmRangeEchoFromAutoFloor = false;
+        m_pendingDbmRangeEchoStartMs = 0;
+    }
+    m_noiseFloorCandidateValid = false;
+    m_noiseFloorCandidateFrames = 0;
+}
+
 void SpectrumWidget::prepareForFftScaleChange()
 {
     m_resetFftSmoothingOnNextFrame = true;
@@ -1434,6 +1451,14 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
         m_pendingDbmRangeEchoFromAutoFloor = false;
         m_pendingDbmRangeEchoStartMs = 0;
     }
+    if (noiseFloorAutoAdjustHeld(nowMs)) {
+        if (m_pendingDbmRangeEchoFromAutoFloor) {
+            m_pendingDbmRangeEcho = false;
+            m_pendingDbmRangeEchoFromAutoFloor = false;
+            m_pendingDbmRangeEchoStartMs = 0;
+        }
+        return;
+    }
     if (m_pendingDbmRangeEcho) {
         if (m_pendingDbmRangeEchoFromAutoFloor
             && m_noiseFloorBaselineValid
@@ -1537,6 +1562,10 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
 
 void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
 {
+    if (noiseFloorAutoAdjustHeld(nowMs)) {
+        return;
+    }
+
     // Pan: keep span fixed, slide refLevel so the smoothed baseline
     // sits at the user-chosen fraction.  (The earlier zoom-based
     // approach changed span every time the floor moved, which made
@@ -1547,6 +1576,19 @@ void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
     if (std::abs(clampedRef - m_refLevel) < 0.45f) return;
 
     moveRefLevelToward(clampedRef, nowMs);
+}
+
+bool SpectrumWidget::noiseFloorAutoAdjustHeld(qint64 nowMs)
+{
+    if (m_noiseFloorAutoAdjustHoldUntilMs > nowMs) {
+        return true;
+    }
+    if (m_noiseFloorAutoAdjustHoldUntilMs > 0) {
+        m_noiseFloorAutoAdjustHoldUntilMs = 0;
+        resetNoiseFloorBaseline();
+        return true;
+    }
+    return false;
 }
 
 void SpectrumWidget::moveRefLevelToward(float targetRef, qint64 nowMs)
@@ -1586,6 +1628,7 @@ void SpectrumWidget::moveRefLevelToward(float targetRef, qint64 nowMs)
 void SpectrumWidget::sendNoiseFloorRangeCommand(qint64 nowMs, bool force)
 {
     if (!m_noiseFloorEnable || m_dynamicRange <= 0.0f) return;
+    if (noiseFloorAutoAdjustHeld(nowMs)) return;
 
     constexpr qint64 kCommandIntervalMs = 150;
     constexpr float kCommandThresholdDb = 0.75f;

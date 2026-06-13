@@ -165,7 +165,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         if (type == "global")
             m_model->loadGlobalProfile(name);
         else if (type == "transmit")
-            m_model->sendCommand(QString("profile transmit load \"%1\"").arg(name));
+            m_model->sendCommand(QString("profile tx load \"%1\"").arg(name));
         else if (type == "mic")
             m_model->sendCommand(QString("profile mic load \"%1\"").arg(name));
     });
@@ -178,7 +178,7 @@ QWidget* ProfileManagerDialog::buildProfileTab(const QString& type,
         if (type == "global")
             m_model->loadGlobalProfile(name);
         else if (type == "transmit")
-            m_model->sendCommand(QString("profile transmit load \"%1\"").arg(name));
+            m_model->sendCommand(QString("profile tx load \"%1\"").arg(name));
         else if (type == "mic")
             m_model->sendCommand(QString("profile mic load \"%1\"").arg(name));
     });

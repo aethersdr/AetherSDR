@@ -468,6 +468,10 @@ void MainWindow::wireRadioModel()
     });
     connect(&m_radioModel, &RadioModel::radioMessageReceived,
             this, &MainWindow::onRadioMessage);
+    connect(&m_radioModel, &RadioModel::profileLoadStarted,
+            this, &MainWindow::beginProfileLoadRadioStateWriteHold);
+    connect(&m_radioModel, &RadioModel::profileLoadCompleted,
+            this, &MainWindow::scheduleProfileLoadRecovery);
     connect(&m_radioModel.spotModel(), &SpotModel::spotsCleared,
             this, &MainWindow::rebuildMemorySpotFeed);
 
@@ -1069,17 +1073,7 @@ void MainWindow::wirePanLifecycle()
         // FFT data is essentially empty/unusable. Use widget width and the
         // actual FFT pane height for 1:1 bin-to-pixel mapping.
         auto* sw = applet->spectrumWidget();
-        const int xpix = panXpixelsFor(sw);
-        const int ypix = panYpixelsFor(sw);
-        m_radioModel.sendCommand(
-            QString("display pan set %1 xpixels=%2 ypixels=%3")
-                .arg(pan->panId()).arg(xpix).arg(ypix));
-
-        // Tell PanadapterStream the ypixels for FFT bin→dBm conversion
-        if (pan->panStreamId()) {
-            m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
-            sw->prepareForFftScaleChange();
-        }
+        requestPanDimensionsForRadio(pan->panId(), sw);
 
         qDebug() << "MainWindow: added panadapter applet for" << pan->panId();
 
@@ -1131,15 +1125,7 @@ void MainWindow::wirePanLifecycle()
                             auto* sw = applet->spectrumWidget();
                             auto* pan = m_radioModel.panadapter(applet->panId());
                             if (!sw || !pan) continue;
-                            const int xpix = panXpixelsFor(sw);
-                            const int ypix = panYpixelsFor(sw);
-                            m_radioModel.sendCommand(
-                                QString("display pan set %1 xpixels=%2 ypixels=%3")
-                                    .arg(pan->panId()).arg(xpix).arg(ypix));
-                            if (pan->panStreamId()) {
-                                m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
-                                sw->prepareForFftScaleChange();
-                            }
+                            requestPanDimensionsForRadio(pan->panId(), sw);
                         }
                     });
                 }
@@ -1184,15 +1170,7 @@ void MainWindow::wirePanLifecycle()
         auto* sw = applet->spectrumWidget();
         auto* pan = m_radioModel.panadapter(panId);
         if (!sw || !pan) return;
-        const int xpix = panXpixelsFor(sw);
-        const int ypix = panYpixelsFor(sw);
-        m_radioModel.sendCommand(
-            QString("display pan set %1 xpixels=%2 ypixels=%3")
-                .arg(panId).arg(xpix).arg(ypix));
-        if (pan->panStreamId()) {
-            m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
-            sw->prepareForFftScaleChange();
-        }
+        requestPanDimensionsForRadio(panId, sw);
     });
 
 #ifdef Q_OS_MAC
@@ -1210,15 +1188,7 @@ void MainWindow::wirePanLifecycle()
                 if (!panPixelDimensionsReady(sw)) {
                     continue;
                 }
-                const int xpix = panXpixelsFor(sw);
-                const int ypix = panYpixelsFor(sw);
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 xpixels=%2 ypixels=%3")
-                        .arg(pan->panId()).arg(xpix).arg(ypix));
-                if (pan->panStreamId()) {
-                    m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
-                    sw->prepareForFftScaleChange();
-                }
+                requestPanDimensionsForRadio(pan->panId(), sw);
             }
         });
     };
@@ -1277,7 +1247,9 @@ void MainWindow::wirePanLifecycle()
 
         // Rearrange remaining pans to a sensible layout. Do not persist this
         // fallback: a temporary resource-shortage session must not overwrite
-        // the user's saved multi-pan layout.
+        // the user's saved multi-pan layout. This is local splitter cleanup,
+        // not a radio-state write, so it must still run during profile loads
+        // to avoid leaving empty nested splitter cells behind.
         int remaining = m_panStack->count();
         if (remaining > 1) {
             m_panStack->rearrangeLayout(defaultPanLayoutForCount(remaining));

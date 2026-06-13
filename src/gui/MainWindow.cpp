@@ -1651,6 +1651,11 @@ MainWindow::MainWindow(QWidget* parent)
             // Throttle lifted — push each pan's user-configured fps back to the radio.
             // The reconcile timers are suppressed while throttle is active, so they
             // won't have done this automatically.
+            if (profileLoadRadioStateWritesHeld()) {
+                qCDebug(lcProtocol)
+                    << "MainWindow: adaptive throttle restore suppressed during profile load";
+                return;
+            }
             if (!m_panStack) return;
             for (auto* applet : m_panStack->allApplets()) {
                 if (!applet) continue;
@@ -3896,6 +3901,7 @@ void MainWindow::buildUI()
     connect(m_bsAutoSaveTimer, &QTimer::timeout, this, [this]() {
         const int dwellSec = BandStackSettings::instance().autoSaveDwellSeconds();
         if (dwellSec <= 0) return;
+        if (profileLoadRadioStateWritesHeld()) return;
         if (m_radioModel.serial().isEmpty()) return;
         if (m_radioModel.transmitModel().isTransmitting()) return;
         if (QDateTime::currentMSecsSinceEpoch() < m_bsConnectGraceUntilMs) return;
@@ -5796,7 +5802,9 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     // Send "slice set N active=1" only when switching to a different slice
     // (matches SmartSDR pcap — sent on VFO flag click, not on every tune).
     // Guard: don't send if triggered by the radio's own activeChanged echo
-    // (m_updatingFromModel is set in the activeChanged handler).
+    // (m_updatingFromModel is set in the activeChanged handler). During profile
+    // recall, RadioModel's profile-load hold suppresses this radio write so we
+    // do not dirty the radio's restoring GUIClient session.
     if (sliceId != prevId && !m_updatingFromModel)
         s->setActive(true);
 
@@ -5821,7 +5829,7 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     // Active slice changed → restart dwell window for the new active slice
     if (sliceId != prevId && m_bsAutoSaveTimer) {
         const int dwellSec = BandStackSettings::instance().autoSaveDwellSeconds();
-        if (dwellSec > 0)
+        if (dwellSec > 0 && !profileLoadRadioStateWritesHeld())
             m_bsAutoSaveTimer->start(dwellSec * 1000);
         else
             m_bsAutoSaveTimer->stop();
@@ -6279,6 +6287,12 @@ void MainWindow::schedulePanFpsReconcile(const QString& panId, int reportedFps)
             << " reported=" << reportedFps << " (adaptive throttle active)";
         return;
     }
+    if (profileLoadRadioStateWritesHeld()) {
+        qCDebug(lcProtocol).noquote().nospace()
+            << "MainWindow: fps reconcile suppressed for profile load pan=" << panId
+            << " reported=" << reportedFps;
+        return;
+    }
 
     auto* pan = m_radioModel.panadapter(panId);
     if (!pan)
@@ -6324,6 +6338,11 @@ void MainWindow::schedulePanFpsReconcile(const QString& panId, int reportedFps)
             }
             if (!pan || !sw)
                 return;
+            if (profileLoadRadioStateWritesHeld()) {
+                qCDebug(lcProtocol).noquote().nospace()
+                    << "MainWindow: fps timer suppressed for profile load pan=" << panId;
+                return;
+            }
 
             const int reported = pan->fps();
             const int desired = sw->fftFps();
@@ -6360,6 +6379,12 @@ void MainWindow::scheduleWaterfallLineDurationReconcile(const QString& panId, in
         qCDebug(lcProtocol).noquote().nospace()
             << "MainWindow: wf line_duration reconcile suppressed for pan=" << panId
             << " reported=" << reportedMs << "ms (adaptive throttle active)";
+        return;
+    }
+    if (profileLoadRadioStateWritesHeld()) {
+        qCDebug(lcProtocol).noquote().nospace()
+            << "MainWindow: wf line_duration reconcile suppressed for profile load pan=" << panId
+            << " reported=" << reportedMs << "ms";
         return;
     }
 
@@ -6407,6 +6432,11 @@ void MainWindow::scheduleWaterfallLineDurationReconcile(const QString& panId, in
             }
             if (!pan || !sw)
                 return;
+            if (profileLoadRadioStateWritesHeld()) {
+                qCDebug(lcProtocol).noquote().nospace()
+                    << "MainWindow: wf line_duration timer suppressed for profile load pan=" << panId;
+                return;
+            }
 
             const QString wfId = pan->waterfallId();
             const int reported = pan->waterfallLineDuration();

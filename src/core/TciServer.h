@@ -104,6 +104,7 @@ public:
     void wireSlice(int trx, SliceModel* slice);
     void wireSpotModel();
     void notifySpotClicked(int spotIndex, SliceModel* slice = nullptr);
+    void rearmDaxForProfileLoad();
 
 public slots:
     // RX audio from main audio pipeline (float32 stereo, 24 kHz)

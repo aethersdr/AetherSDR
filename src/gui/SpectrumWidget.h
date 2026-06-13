@@ -116,6 +116,7 @@ public:
     void setNoiseFloorPosition(int pos);
     void setNoiseFloorEnable(bool on);
     void prepareForFftScaleChange();
+    void suspendNoiseFloorAutoAdjustUntil(qint64 untilMs);
     void reacquireNoiseFloorLock();
 
     // Two-pass trimmed-mean noise floor from live FFT bins (dBm), EMA-smoothed.
@@ -153,6 +154,9 @@ public:
     float refLevel()      const { return m_refLevel; }
     float dynamicRange()  const { return m_dynamicRange; }
     bool isDraggingDbmScale() const { return m_draggingDbm || m_draggingDbmRange; }
+    bool pendingAutoNoiseFloorDbmRange() const {
+        return m_pendingDbmRangeEcho && m_pendingDbmRangeEchoFromAutoFloor;
+    }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
 
@@ -616,6 +620,7 @@ private:
     // semantic was jarring — span changes shifted signal visual heights
     // every time the floor drifted).
     void applyNoiseFloorAutoAdjust(qint64 nowMs);
+    bool noiseFloorAutoAdjustHeld(qint64 nowMs);
     void moveRefLevelToward(float targetRef, qint64 nowMs);
     void sendNoiseFloorRangeCommand(qint64 nowMs, bool force);
     void clearDbmReleaseRebase();
@@ -706,6 +711,7 @@ private:
     qint64 m_noiseFloorLastMotionMs{0};
     qint64 m_noiseFloorLastCommandMs{0};
     qint64 m_noiseFloorScaleSettlingUntilMs{0};
+    qint64 m_noiseFloorAutoAdjustHoldUntilMs{0};
     float  m_noiseFloorLastCommandRef{-1000.0f};
     bool   m_noiseFloorCandidateValid{false};
     float  m_noiseFloorCandidateDbm{-1000.0f};
