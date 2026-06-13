@@ -9,6 +9,8 @@
 //   • DAX: startDax / stopDax / per-slice channel wiring
 //   • AX.25 / AetherModem: decode dialog + KISS TNC startup
 //   • RTTY: decoder output routing
+//   • WFM software FM demod: activateWFM / deactivateWFM with NCO-Doppler
+//     tracking + reflectWfmButtons UI state sync (DAX IQ input, #3407)
 //
 // Pure code motion from MainWindow.cpp — same class, no header changes.
 
@@ -18,12 +20,14 @@
 #include "Ax25HfPacketDecodeDialog.h"
 #include "DaxApplet.h"
 #include "PhoneCwApplet.h"
+#include "RxApplet.h"
 #include "VfoWidget.h"
 #include "DaxIqApplet.h"
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
 #include "SpectrumWidget.h"
+#include "WfmDeviceDialog.h"
 #ifdef HAVE_RADE
 #include "RadeApplet.h"
 #include "core/RADEEngine.h"
@@ -35,6 +39,8 @@
 #endif
 #include "core/AppSettings.h"
 #include "core/LogManager.h"
+#include "core/WfmDemodulator.h"
+#include "core/WfmSettings.h"
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -1211,5 +1217,146 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
 #endif
 
 // registerMidiParams() lives in MainWindow_Controllers.cpp (#3351 Phase 1a).
+
+// ─── WFM software demodulator ────────────────────────────────────────────────
+// Relocated here from MainWindow.cpp (#3407 follow-up). Per-slice software FM
+// demod activated by the RxApplet/VfoWidget WFM toggles (those connects stay in
+// MainWindow.cpp beside the RADE ones). Same activate/deactivate-overlay shape
+// as activateRADE/deactivateRADE above.
+
+void MainWindow::activateWFM(int sliceId)
+{
+    if (m_wfmSliceId == sliceId) return;
+    deactivateWFM();
+
+    m_wfmCooldown = true;
+    QTimer::singleShot(1000, this, [this]{ m_wfmCooldown = false; });
+
+    auto* s = m_radioModel.slice(sliceId);
+    if (!s) return;
+
+    auto resolveAudioDevice = [this]() -> QString {
+        QString deviceId = WfmSettings::audioDeviceId().trimmed();
+        if (!deviceId.isEmpty())
+            return deviceId;
+        WfmDeviceDialog dlg(this);
+        if (dlg.exec() != QDialog::Accepted || dlg.selectedDeviceId().isEmpty())
+            return {};   // user cancelled
+        deviceId = dlg.selectedDeviceId();
+        if (dlg.rememberChoice())
+            WfmSettings::setAudioDeviceId(deviceId);
+        return deviceId;
+    };
+
+    const QString audioDeviceId = resolveAudioDevice();
+    if (audioDeviceId.isEmpty()) {
+        m_wfmSliceId = -1;
+        reflectWfmButtons(false, sliceId);   // un-stick the button that triggered us
+        return;
+    }
+
+    m_wfmPrevFilterLo = s->filterLow();
+    m_wfmPrevFilterHi = s->filterHigh();
+    s->setFilterWidth(-WfmDemodulator::FILTER_HZ, WfmDemodulator::FILTER_HZ);
+    m_wfmSliceId = sliceId;
+
+    // Centre the pan (and with it the DAX IQ stream) on the slice — once.
+    // applyPanStatus updates the local model immediately so offsets computed
+    // before the radio echoes the new centre are already correct.
+    auto centerPanAtSlice = [this, s]() {
+        const QString panId = s->panId();
+        if (panId.isEmpty()) return;
+        const double freq = s->frequency();
+        auto* pan = m_radioModel.panadapter(panId);
+        if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
+        const QString freqStr = QString::number(freq, 'f', 6);
+        if (pan) pan->applyPanStatus({{"center", freqStr}});
+        m_radioModel.sendCommand(
+            QString("display pan set %1 center=%2").arg(panId, freqStr));
+    };
+    centerPanAtSlice();
+
+    m_wfmDemod = new WfmDemodulator(this);
+    connect(m_wfmDemod, &WfmDemodulator::commandReady,
+            &m_radioModel, &RadioModel::sendCommand);
+    m_wfmDemod->setVolume(static_cast<int>(s->audioGain()));
+    connect(s, &SliceModel::audioGainChanged,
+            m_wfmDemod, [demod = m_wfmDemod](float g) { demod->setVolume(static_cast<int>(g)); });
+    m_wfmDemod->start(&m_radioModel.daxIqModel(), audioDeviceId, s->panId());
+    if (!m_wfmDemod->isActive()) {
+        WfmSettings::clearAudioDeviceId();
+        delete m_wfmDemod;
+        m_wfmDemod = nullptr;
+        m_wfmSliceId = -1;
+        reflectWfmButtons(false, sliceId);   // un-stick the button that triggered us
+        return;
+    }
+
+    // Demod is live — reflect the real state onto both UI surfaces so the
+    // surface that did NOT initiate (and any mode combo) tracks it too.
+    reflectWfmButtons(true, sliceId);
+
+    // SkyRoof policy: Doppler rides the demodulator's NCO while the pan (and
+    // the DAX IQ centre) stays put — each retune is phase-continuous, so the
+    // modem never unlocks and the pan is never yanked. Recentre only when the
+    // slice would leave the usable IQ window (rare: at 70 cm the Doppler
+    // swing is ±10 kHz vs a ±14.8 kHz window at 48 k).
+    m_wfmFreqConn = connect(s, &SliceModel::frequencyChanged,
+                            this, [this, s, centerPanAtSlice](double sliceFreqMhz) {
+        if (!m_wfmDemod) return;
+        auto* pan = m_radioModel.panadapter(s->panId());
+        if (!pan) return;
+        const float offsetHz = static_cast<float>(
+            (sliceFreqMhz - pan->centerMhz()) * 1e6);
+        if (qAbs(offsetHz) <= m_wfmDemod->maxFreqOffsetHz()) {
+            m_wfmDemod->setFreqOffsetHz(offsetHz);
+        } else {
+            centerPanAtSlice();
+            m_wfmDemod->setFreqOffsetHz(0.0f);
+        }
+    });
+}
+
+// Always cleans up — the cooldown debounce lives in the wfmActivated
+// handlers, NOT here, so activateWFM's switch-slice path can never leak a
+// running demodulator (two demods writing to the same VAC device).
+void MainWindow::deactivateWFM()
+{
+    if (m_wfmSliceId < 0) return;
+
+    const int deactivatedSliceId = m_wfmSliceId;
+
+    disconnect(m_wfmFreqConn);
+
+    if (m_wfmDemod) {
+        delete m_wfmDemod;
+        m_wfmDemod = nullptr;
+    }
+
+    if (auto* s = m_radioModel.slice(m_wfmSliceId)) {
+        if (m_wfmPrevFilterLo != 0 || m_wfmPrevFilterHi != 0)
+            s->setFilterWidth(m_wfmPrevFilterLo, m_wfmPrevFilterHi);
+    }
+
+    m_wfmSliceId = -1;
+    m_wfmPrevFilterLo = 0;
+    m_wfmPrevFilterHi = 0;
+
+    reflectWfmButtons(false, deactivatedSliceId);
+}
+
+// Mirror the real demod state onto both per-slice WFM toggles. Each surface
+// self-gates on its own slice, so passing the affected sliceId is enough; the
+// setWfmActive() setters block their button's signal, so this never loops back
+// through the wfmActivated handlers.
+void MainWindow::reflectWfmButtons(bool on, int sliceId)
+{
+    if (auto* rx = m_appletPanel ? m_appletPanel->rxApplet() : nullptr)
+        rx->setWfmActive(on, sliceId);
+    if (auto* sw = spectrumForSlice(m_radioModel.slice(sliceId))) {
+        if (auto* vfo = sw->vfoWidget(sliceId))
+            vfo->setWfmActive(on, sliceId);
+    }
+}
 
 } // namespace AetherSDR
