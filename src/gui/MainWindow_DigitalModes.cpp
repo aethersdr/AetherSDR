@@ -18,6 +18,7 @@
 
 #include "AppletPanel.h"
 #include "Ax25HfPacketDecodeDialog.h"
+#include "PskReporterMapDialog.h"
 #include "DaxApplet.h"
 #include "PhoneCwApplet.h"
 #include "RxApplet.h"
@@ -1318,6 +1319,20 @@ void MainWindow::reflectWfmButtons(bool on, int sliceId)
         if (auto* vfo = sw->vfoWidget(sliceId))
             vfo->setWfmActive(on, sliceId);
     }
+}
+
+void MainWindow::showPskReporterMapDialog()
+{
+    if (!m_pskReporterMapDialog) {
+        auto* dlg = new PskReporterMapDialog(&m_radioModel, this);
+        dlg->setFramelessMode(
+            AppSettings::instance().value("FramelessWindow", "True").toString() == "True");
+        m_pskReporterMapDialog = dlg;
+        m_persistentDialogs.append(QPointer<PersistentDialog>(dlg));
+    }
+    m_pskReporterMapDialog->show();
+    m_pskReporterMapDialog->raise();
+    m_pskReporterMapDialog->activateWindow();
 }
 
 } // namespace AetherSDR

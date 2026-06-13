@@ -793,6 +793,11 @@ void MainWindow::buildMenuBar()
         }
     });
 
+    auto* pskMapAction = viewMenu->addAction("PSK Reporter Map...");
+    pskMapAction->setMenuRole(QAction::NoRole);
+    connect(pskMapAction, &QAction::triggered,
+            this, &MainWindow::showPskReporterMapDialog);
+
     auto* packetDecoderAction = viewMenu->addAction("AetherModem...");
     packetDecoderAction->setMenuRole(QAction::NoRole);
     connect(packetDecoderAction, &QAction::triggered,

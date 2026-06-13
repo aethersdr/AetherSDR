@@ -552,6 +552,7 @@ set(CORE_SOURCES
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
     src/core/PropForecastClient.cpp
+    src/core/PskReporterClient.cpp
     src/core/MqttAntennaAlias.cpp
     src/core/MqttSettings.cpp
     src/core/SpotCommandPolicy.cpp
@@ -658,6 +659,11 @@ set(MODEL_SOURCES
     src/models/AntennaGeniusModel.cpp
 )
 
+# Vendored QGeoView (LGPL-3.0) — slippy-map widget for the common
+# mapping engine (PSK Reporter map, future APRS map). Patched per
+# third_party/QGeoView/AETHERSDR-PATCHES.md.
+add_subdirectory(third_party/QGeoView/lib EXCLUDE_FROM_ALL)
+
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/MainWindowHelpers.cpp
@@ -670,6 +676,9 @@ set(GUI_SOURCES
     src/gui/MainWindow_Spots.cpp
     src/gui/MainWindow_SwrSweep.cpp
     src/gui/MainWindow_Wiring.cpp
+    src/gui/map/MapView.cpp
+    src/gui/map/MapMarkerItem.cpp
+    src/gui/PskReporterMapDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
     src/gui/WfmDeviceDialog.cpp
@@ -1162,6 +1171,7 @@ target_link_libraries(AetherSDR PRIVATE
     Qt6::Multimedia
     aether_libmodem_core
     aether_afskdemod
+    qgeoview
     ${CMAKE_DL_LIBS}   # dlopen/dlsym for tolerant X11 error handler (#1839)
 )
 

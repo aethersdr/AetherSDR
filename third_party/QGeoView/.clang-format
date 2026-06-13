@@ -1,0 +1,14 @@
+---
+BasedOnStyle: Mozilla
+ColumnLimit: 120
+AlignAfterOpenBracket: true
+AccessModifierOffset: -4
+AllowShortFunctionsOnASingleLine: None
+AlwaysBreakAfterDefinitionReturnType: None
+AlwaysBreakAfterReturnType: None
+BinPackParameters : false
+ConstructorInitializerIndentWidth: 4
+ContinuationIndentWidth: 8
+IndentWidth: 4
+AllowShortBlocksOnASingleLine: true
+...

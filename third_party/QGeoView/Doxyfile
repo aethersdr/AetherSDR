@@ -1,0 +1,27 @@
+PROJECT_NAME           = "QGeoView"
+PROJECT_NUMBER         = 1.0
+PROJECT_BRIEF          = "QGeoView documentation"
+
+ALWAYS_DETAILED_SEC    = YES
+INLINE_INHERITED_MEMB  = YES
+
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+
+ALIASES                =    \
+    "read=\par Read:\n"     \
+    "write=\par Write:\n"   \
+    "notify=\par Notify:\n"
+
+MACRO_EXPANSION        = YES
+
+INPUT                  = lib
+
+FILE_PATTERNS          = *.h
+RECURSIVE              = YES
+
+OUTPUT_DIRECTORY       = build/documents
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+HAVE_DOT               = NO

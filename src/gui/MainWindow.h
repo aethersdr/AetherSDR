@@ -108,6 +108,7 @@ class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
 class Ax25HfPacketDecodeDialog;
+class PskReporterMapDialog;
 class FlexControlDialog;
 class MidiMappingDialog;
 #ifdef HAVE_HIDAPI
@@ -407,6 +408,7 @@ private:
     void showNetworkDiagnosticsDialog();
     void showAgcCalibrationDialog(int sliceId);
     void showAx25HfPacketDecodeDialog();
+    void showPskReporterMapDialog();
     void startKissTncOnStartupIfConfigured();
     void showFlexControlDialog();
     void handleFlexControlTuneSteps(int steps);
@@ -733,6 +735,7 @@ private:
     QPointer<TxBandDialog> m_txBandDialog;
     QPointer<MemoryDialog> m_memoryDialog;
     QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
+    QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
     QPointer<WhatsNewDialog> m_whatsNewDialog;
     QPointer<AetherDspDialog> m_dspDialog;

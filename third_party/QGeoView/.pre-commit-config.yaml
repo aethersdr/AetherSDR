@@ -1,0 +1,28 @@
+repos:
+  - repo: local
+    hooks:
+      - id: legacy-headers
+        name: Update legacy headers
+        entry: scripts/add_header.py
+        args: [--apply,.,scripts/legacy_head.txt]
+        language: script
+        always_run: true
+        pass_filenames: false
+        stages: [pre-commit]
+
+  - repo: https://github.com/pocc/pre-commit-hooks
+    rev: v1.1.1
+    hooks:
+      - id: clang-format
+        args: [-i]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v3.4.0
+    hooks:
+    - id: trailing-whitespace
+      args: [--markdown-linebreak-ext=md]
+    - id: end-of-file-fixer
+    - id: mixed-line-ending
+      args: [--fix=lf]
+    - id: check-added-large-files
+      args: [--maxkb=100]
