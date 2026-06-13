@@ -8000,6 +8000,13 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         if (so.freqMhz < startMhz || so.freqMhz > endMhz) return;
 
         const QColor col = sliceColorForOverlay(so);
+        // Bandwidth affordances (passband fill + filter edges) always use the
+        // full-brightness active colour so they remain visible on non-active
+        // slices (#3484). The VFO centre line, triangle, and RIT/XIT lines
+        // keep using `col` (dimmed when inactive) to preserve the active-slice
+        // focus cue.
+        const int colourIdx = SliceLabel::displayColorIndex(so.sliceId, so.perClientLetter);
+        const QColor bandCol = SliceColorManager::instance().activeColor(colourIdx);
         const int freqLineBottom = m_extendedFrequencyLine ? wfRect.bottom() : specRect.bottom();
         const double fLoMhz = so.freqMhz + so.filterLowHz / 1.0e6;
         const double fHiMhz = so.freqMhz + so.filterHighHz / 1.0e6;
@@ -8014,11 +8021,11 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         // record of received signals; painting a UI affordance over it
         // makes the passband look like a signal in the history (#1270).
         p.fillRect(QRect(fX1, specRect.top(), fW, specRect.height()),
-                   QColor(col.red(), col.green(), col.blue(), 35));
+                   QColor(bandCol.red(), bandCol.green(), bandCol.blue(), 35));
 
         // Filter edge lines — user-hidden via per-slice VFO flag toggle (#1526)
         if (!so.filterEdgesHidden) {
-            p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 130), 1));
+            p.setPen(QPen(QColor(bandCol.red(), bandCol.green(), bandCol.blue(), 130), 1));
             p.drawLine(fX1, specRect.top(), fX1, specRect.bottom());
             p.drawLine(fX2, specRect.top(), fX2, specRect.bottom());
         }
