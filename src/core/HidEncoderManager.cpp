@@ -55,6 +55,7 @@ static MainGlyph tmate2MainGlyph(QChar ch)
     switch (ch.toLatin1()) {
     case 'A': case 'a': return { 0x07, 0x07 };
     case 'C': case 'c': return { 0x01, 0x0D };
+    case 'D': case 'd': return { 0x06, 0x0E };  // lowercase-d: B+C + D+E+G
     case 'E': case 'e': return { 0x01, 0x0F };
     case 'F': case 'f': return { 0x01, 0x07 };
     case 'G': case 'g': return { 0x05, 0x0D };
@@ -856,7 +857,6 @@ void HidEncoderManager::setTMate2OverlayIndicators(const QString& overlayType,
     const bool isVolume = overlayType == QLatin1String("volume");
     const bool isPower  = overlayType == QLatin1String("power");
     const bool isSpeed  = overlayType == QLatin1String("speed");
-    const bool isWpm    = overlayType == QLatin1String("wpm");
     const bool isRit    = overlayType == QLatin1String("rit");
     const bool isXit    = overlayType == QLatin1String("xit");
     const bool isShift  = overlayType == QLatin1String("shift");

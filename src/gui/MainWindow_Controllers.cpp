@@ -53,6 +53,9 @@ constexpr int kTMate2DefaultOverlayDurationMs = 1500;
 
 QString formatTMate2PowerSmallText(float watts)
 {
+    // std::lround(NaN) is unspecified; clamp to 0 first, mirroring powerBars().
+    if (!std::isfinite(watts))
+        watts = 0.0f;
     const int roundedWatts = std::clamp(static_cast<int>(std::lround(watts)), 0, 9999);
     if (roundedWatts <= 999)
         return QString::number(roundedWatts);
@@ -695,9 +698,17 @@ void MainWindow::updateTMate2Display()
             overlayText = QStringLiteral("XIT %1")
                 .arg(mainVal, 5, 10, QLatin1Char(' '));
             break;
-        case TMate2Overlay::Shift:
         case TMate2Overlay::Speed:
-            overlayText = QStringLiteral("STEP %1")
+            // Tuning step in Hz. Max preset step is 10 kHz, so use the short
+            // "STP" label: "STP 10000" is exactly 9 chars and fits the main
+            // display ("STEP 10000" would be 10 and truncate to "STEP 1000").
+            overlayText = QStringLiteral("STP %1")
+                .arg(mainVal, 5, 10, QLatin1Char(' '));
+            break;
+        case TMate2Overlay::Shift:
+            // Groundwork: not yet triggered (no dispatcher raises Shift). Own
+            // label so it never inherits the STEP readout if it is wired later.
+            overlayText = QStringLiteral("SHFT %1")
                 .arg(mainVal, 4, 10, QLatin1Char(' '));
             break;
         case TMate2Overlay::None:
