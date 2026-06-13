@@ -89,10 +89,14 @@ private:
     void layoutOverlayButtons();
     void rebuildPaths();
     void clampMinZoomToViewport();
+    // Instant hover tooltip driven by mouse-move (QGeoView's built-in
+    // tooltip waits for the OS hover delay, which is too slow here).
+    void showHoverTooltip(const QPointF& projPos);
 
     QGVMap*  m_map{nullptr};
     QGVLayer* m_markerLayer{nullptr};
     MapMarkerItem* m_homeMarker{nullptr};
+    MapMarkerItem* m_hoverMarker{nullptr};
     QVector<MapMarkerItem*> m_markers;
     QVector<Marker> m_markerData;
     QVector<MapPathItem*> m_paths;

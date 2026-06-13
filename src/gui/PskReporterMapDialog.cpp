@@ -168,7 +168,7 @@ QString buildSpotCard(const PskReporterSpot& spot, bool hasHome,
 
 PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
                                            QWidget* parent)
-    : PersistentDialog(tr("PSK Reporter Map"),
+    : PersistentDialog(tr("PSK Reporter"),
                        QStringLiteral("PskReporterMapGeometry"), parent)
     , m_radioModel(radioModel)
     , m_client(new PskReporterClient(this))

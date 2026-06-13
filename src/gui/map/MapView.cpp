@@ -12,6 +12,7 @@
 #include <QGeoView/QGVWidgetText.h>
 
 #include <QCoreApplication>
+#include <QCursor>
 #include <QDir>
 #include <QKeyEvent>
 #include <QLabel>
@@ -20,6 +21,7 @@
 #include <QShowEvent>
 #include <QStandardPaths>
 #include <QToolButton>
+#include <QToolTip>
 #include <QVariantAnimation>
 #include <QVBoxLayout>
 
@@ -137,6 +139,33 @@ MapView::MapView(QWidget* parent)
                                     .scaleBy(kZoomStep),
                                 true);
             });
+
+    // Instant hover tooltip. QGeoView's built-in tooltip fires on the OS
+    // QEvent::ToolTip (a multi-second wake-up delay), so drive it ourselves
+    // from mouse-move and disable the delayed one to avoid a double-show.
+    m_map->setMouseAction(QGV::MouseAction::Tooltip, false);
+    connect(m_map, &QGVMap::mapMouseMove, this, &MapView::showHoverTooltip);
+}
+
+void MapView::showHoverTooltip(const QPointF& projPos)
+{
+    MapMarkerItem* hit = nullptr;
+    for (QGVDrawItem* item : m_map->search(projPos)) {
+        auto* marker = dynamic_cast<MapMarkerItem*>(item);
+        if (marker != nullptr && !marker->marker().tooltip.isEmpty()) {
+            hit = marker;
+            break;
+        }
+    }
+    if (hit == m_hoverMarker) {
+        return;  // no change — avoid re-show churn
+    }
+    m_hoverMarker = hit;
+    if (hit != nullptr) {
+        QToolTip::showText(QCursor::pos(), hit->marker().tooltip, this);
+    } else {
+        QToolTip::hideText();
+    }
 }
 
 void MapView::setHomePosition(double lat, double lon, const QString& label,

@@ -743,7 +743,7 @@ void MainWindow::buildMenuBar()
         m_appletPanel->resetOrder();
     });
 
-    auto* pskMapAction = viewMenu->addAction("PSK Reporter Map...");
+    auto* pskMapAction = viewMenu->addAction("PSK Reporter...");
     pskMapAction->setMenuRole(QAction::NoRole);
     connect(pskMapAction, &QAction::triggered,
             this, &MainWindow::showPskReporterMapDialog);
