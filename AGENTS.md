@@ -281,8 +281,14 @@ declared in `MainWindow.h`. The split is about *which file* a body lives in.
 | A menu item / action | `MainWindow_Menus.cpp` |
 | A keyboard shortcut | `MainWindow_Shortcuts.cpp` |
 | A stateless helper with no `MainWindow` dependency | `MainWindowHelpers.{h,cpp}` |
-| A whole new subsystem with no TU home | a **new** `MainWindow_<Subsystem>.cpp` sibling |
+| A whole new subsystem with no TU home | a **new** `MainWindow_<Subsystem>.cpp` sibling — only if it's a cohesive subsystem ~500+ lines; smaller waits in the closest sibling |
 | A member field, or a guard inside a function that can't move | stays in `MainWindow.{h,cpp}` (keep minimal) |
+
+A new TU is not free — every sibling re-parses the ~1,000-line `MainWindow.h`,
+and any header edit rebuilds all of them. Split only to a cohesive, reviewable
+granularity, then **stop**: if tempted to subdivide one subsystem into several
+thin TUs, extract a real class instead (the #3557 direction) — that's the only
+move that actually decouples.
 
 Sibling TUs must **carry their includes explicitly** — the Linux CI floor is
 Qt 6.4.2; don't rely on transitive includes (this broke #3532). When you move

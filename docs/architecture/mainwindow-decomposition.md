@@ -42,6 +42,59 @@ Read this before adding code to anything named `MainWindow*`. The one rule:
 | A member field/declaration a sibling method needs | `MainWindow.h` (unavoidable — C++ requires members on the class), kept minimal |
 | A small guard/condition inside a function that itself lives in `MainWindow.cpp` and can't move | Stays inline in `MainWindow.cpp` (e.g. the WFM guard inside `setPanFollow()`) |
 
+## When a new TU is warranted
+
+Splitting `MainWindow` across TUs is a **readability + parallel-compile** move —
+it is **not** decoupling. Every sibling `#include`s the ~1,000-line
+`MainWindow.h` (which transitively pulls ~50 heavy headers, with no precompiled
+header), so:
+
+- Each new TU adds a **full re-parse** of that header stack to the build.
+- Any edit to `MainWindow.h` (e.g. adding a member for a feature) **rebuilds
+  every sibling TU** — there are 8 today.
+- Siblings share all private state through the header, so they are separate
+  *files*, not separate *modules*. No boundary is enforced.
+
+So a new TU has real, recurring cost. Create one only when it earns its keep:
+
+1. **Default to an existing sibling.** If the work belongs to a subsystem
+   already housed (a new demod → `DigitalModes`, a menu → `Menus`, wiring → `Wiring`),
+   it goes there. Do not spawn a TU for work that has a home.
+2. **A new TU is a distinct, cohesive subsystem with no existing home** — a
+   feature-family with its own lifecycle/state, for which you could write a
+   one-line charter that fits *none* of the existing siblings. Not a stray
+   method or two.
+3. **Size is a signal, not a trigger.** The existing siblings run ~500–2,500
+   lines, each one subsystem. A new area that is only ~50 lines can wait in the
+   closest sibling (or `MainWindow.cpp` if genuinely cross-cutting) until it
+   grows. Do **not** pre-create near-empty TUs — that is pure cost for no
+   readability gain.
+4. **Split an existing sibling when it accretes a *second* unrelated
+   subsystem.** The driver is cohesion, not a hard line count: a sibling that
+   has grown to cover more than one subsystem is the split candidate (e.g. if
+   `DigitalModes` later also swallowed all CW/keyer logic, that splits out).
+
+### The ceiling — split to cohesion, then extract a class, don't slice finer
+
+There is a floor *and* a ceiling. Once a TU is a single cohesive subsystem at a
+reviewable size, **stop splitting.** If you are tempted to subdivide *below*
+that — carving one subsystem into several thin TUs — that is the signal to
+**extract a real class instead**, not to add more `MainWindow_*.cpp` files.
+
+Slicing thinner adds build cost and arbitrary seams while the actual coupling
+(the god-class with shared private state) is untouched — it can masquerade as
+decoupling work and substitute for it. A real class (e.g. a `WfmController` that
+owns its own state and *removes* members from `MainWindow.h`) is the only move
+that shrinks the shared header, cuts the rebuild fan-out, and creates a boundary
+the compiler enforces. That is the **#3557** direction; prefer it over a
+finer-grained TU split.
+
+**Naming/shape for a justified new TU:** `MainWindow_<Subsystem>.cpp`; methods
+stay `MainWindow::` members declared in `MainWindow.h`; open the file with the
+standard header-comment charter (what it holds + the issue ref), matching the
+existing siblings. When torn between a new TU and `MainWindow.cpp`, pick the new
+TU — the whole point is to stop `MainWindow.cpp` from re-accreting.
+
 ## Conventions when moving or adding a sibling-TU method
 
 - **It's the same class.** Define `void MainWindow::foo()` in the sibling TU;
