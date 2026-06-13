@@ -9,7 +9,7 @@ tool. Each tool has its own well-known file at a different path
 project-wide lives in **this** file.
 
 If you are an AI assistant: read this file end-to-end before writing
-code or recommending merges. The file is ~330 lines; that's the cost
+code or recommending merges. The file is ~440 lines; that's the cost
 of doing the job right on this codebase.
 
 ## Project Goal
