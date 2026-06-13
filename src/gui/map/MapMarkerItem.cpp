@@ -27,7 +27,8 @@ QFont markerFont()
 MapMarkerItem::MapMarkerItem(const MapView::Marker& marker)
     : m_marker(marker)
 {
-    setFlags(QGV::ItemFlag::IgnoreScale | QGV::ItemFlag::IgnoreAzimuth);
+    setFlags(QGV::ItemFlag::IgnoreScale | QGV::ItemFlag::IgnoreAzimuth
+             | QGV::ItemFlag::Clickable);
     setSelectable(false);
 }
 

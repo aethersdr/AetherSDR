@@ -2,6 +2,9 @@
 
 #include "PersistentDialog.h"
 
+#include <QTimer>
+
+class QCheckBox;
 class QComboBox;
 class QLabel;
 
@@ -40,6 +43,9 @@ private:
     QComboBox*         m_bandCombo{nullptr};
     QComboBox*         m_modeCombo{nullptr};
     QLabel*            m_statusLabel{nullptr};
+    QLabel*            m_dxLabel{nullptr};
+    QCheckBox*         m_pathsCheck{nullptr};
+    QTimer*            m_emptyStateTimer{nullptr};
     bool               m_started{false};
 };
 

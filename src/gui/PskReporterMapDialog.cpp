@@ -6,7 +6,12 @@
 #include "map/MapView.h"
 #include "models/RadioModel.h"
 
+#include <QCheckBox>
 #include <QComboBox>
+#include <QCursor>
+#include <QDateTime>
+#include <QToolTip>
+#include <QtMath>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QVBoxLayout>
@@ -71,6 +76,18 @@ QString bandName(qint64 freqHz)
     return QStringLiteral("VHF+");
 }
 
+// Initial great-circle bearing from point 1 to point 2, degrees 0-360.
+double bearingDeg(double lat1, double lon1, double lat2, double lon2)
+{
+    const double p1 = qDegreesToRadians(lat1);
+    const double p2 = qDegreesToRadians(lat2);
+    const double dl = qDegreesToRadians(lon2 - lon1);
+    const double y = std::sin(dl) * std::cos(p2);
+    const double x = std::cos(p1) * std::sin(p2)
+                   - std::sin(p1) * std::cos(p2) * std::cos(dl);
+    return std::fmod(qRadiansToDegrees(std::atan2(y, x)) + 360.0, 360.0);
+}
+
 } // namespace
 
 PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
@@ -120,14 +137,58 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     m_intervalCombo->addItem(tr("1 hour"), 60 * 60 * 1000);
     topBar->addWidget(m_intervalCombo);
 
+    m_pathsCheck = new QCheckBox(tr("Paths"), bodyWidget());
+    m_pathsCheck->setToolTip(tr("Draw great-circle paths from your station to each receiver"));
+    m_pathsCheck->setChecked(
+        AppSettings::instance().value("PskReporterShowPaths", "True").toString() == "True");
+    topBar->addWidget(m_pathsCheck);
+
     topBar->addStretch(1);
+    m_dxLabel = new QLabel(bodyWidget());
+    topBar->addWidget(m_dxLabel);
+    topBar->addSpacing(10);
     m_statusLabel = new QLabel(bodyWidget());
     m_statusLabel->setStyleSheet(QStringLiteral("color: palette(mid);"));
     topBar->addWidget(m_statusLabel);
     root->addLayout(topBar);
 
     m_mapView = new MapView(bodyWidget());
+    m_mapView->setPathsVisible(m_pathsCheck->isChecked());
+    {
+        QVector<QPair<QString, QColor>> legend;
+        for (const char* m : { "FT8", "FT4", "WSPR", "JS8", "CW", "PSK",
+                               "RTTY", "SSB", "Other" }) {
+            legend.append({ QString::fromLatin1(m),
+                            modeColor(QString::fromLatin1(m)) });
+        }
+        m_mapView->setLegend(legend);
+    }
     root->addWidget(m_mapView, 1);
+
+    connect(m_pathsCheck, &QCheckBox::toggled, this, [this](bool on) {
+        AppSettings::instance().setValue("PskReporterShowPaths",
+                                         on ? "True" : "False");
+        m_mapView->setPathsVisible(on);
+    });
+    connect(m_mapView, &MapView::markerClicked, this,
+            [](const MapView::Marker& marker) {
+                if (!marker.clickInfo.isEmpty()) {
+                    QToolTip::showText(QCursor::pos(), marker.clickInfo);
+                }
+            });
+
+    // Empty-state guidance: if nothing has been heard a couple of minutes
+    // after starting, explain what to expect instead of a blank map.
+    m_emptyStateTimer = new QTimer(this);
+    m_emptyStateTimer->setSingleShot(true);
+    m_emptyStateTimer->setInterval(2 * 60 * 1000);
+    connect(m_emptyStateTimer, &QTimer::timeout, this, [this] {
+        if (m_client->spots().isEmpty()) {
+            m_statusLabel->setText(
+                tr("No reports yet — transmit (e.g. FT8) and reports "
+                   "typically appear within 1–2 minutes."));
+        }
+    });
 
     const int savedInterval =
         AppSettings::instance()
@@ -188,6 +249,7 @@ void PskReporterMapDialog::restartClient()
     m_client->setCallsign(m_radioModel != nullptr ? m_radioModel->callsign()
                                                   : QString());
     m_client->start(m_intervalCombo->currentData().toInt());
+    m_emptyStateTimer->start();
 }
 
 void PskReporterMapDialog::rebuildMarkers()
@@ -226,9 +288,58 @@ void PskReporterMapDialog::rebuildMarkers()
                      spot.snr > -999
                          ? tr("  SNR %1 dB").arg(spot.snr)
                          : QString());
+        if (m_mapView->hasHomePosition()) {
+            const double km = MaidenheadLocator::distanceKm(
+                m_mapView->homeLat(), m_mapView->homeLon(), lat, lon);
+            const double brg = bearingDeg(
+                m_mapView->homeLat(), m_mapView->homeLon(), lat, lon);
+            m.clickInfo = tr("<b>%1</b> (%2)<br>%3 %4 MHz %5%6<br>"
+                             "%7 km @ %8°<br>%9")
+                .arg(spot.receiverCallsign.toHtmlEscaped(),
+                     spot.receiverLocator,
+                     bandName(spot.frequencyHz),
+                     QString::number(spot.frequencyHz / 1e6, 'f', 3),
+                     spot.mode,
+                     spot.snr > -999 ? tr(", SNR %1 dB").arg(spot.snr)
+                                     : QString(),
+                     QString::number(km, 'f', 0),
+                     QString::number(brg, 'f', 0),
+                     QDateTime::fromSecsSinceEpoch(spot.flowStartSeconds)
+                         .toLocalTime()
+                         .toString(QStringLiteral("hh:mm:ss")));
+        } else {
+            m.clickInfo = m.tooltip.toHtmlEscaped()
+                              .replace(QStringLiteral("\n"),
+                                       QStringLiteral("<br>"));
+        }
         markers.append(m);
     }
     m_mapView->setMarkers(markers);
+
+    // Status enrichment: spot count and farthest receiver.
+    QString dx;
+    if (m_mapView->hasHomePosition()) {
+        double bestKm = -1.0;
+        QString bestCall;
+        for (const MapView::Marker& m : markers) {
+            const double km = MaidenheadLocator::distanceKm(
+                m_mapView->homeLat(), m_mapView->homeLon(), m.lat, m.lon);
+            if (km > bestKm) {
+                bestKm = km;
+                bestCall = m.label;
+            }
+        }
+        if (bestKm >= 0.0) {
+            dx = tr("%n spot(s)", nullptr, markers.size())
+                 + tr(" • farthest: %1 %L2 km")
+                       .arg(bestCall)
+                       .arg(qRound(bestKm));
+        }
+    }
+    if (dx.isEmpty() && !markers.isEmpty()) {
+        dx = tr("%n spot(s)", nullptr, markers.size());
+    }
+    m_dxLabel->setText(dx);
 }
 
 void PskReporterMapDialog::showEvent(QShowEvent* event)

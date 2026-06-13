@@ -1,5 +1,6 @@
 #include "MapView.h"
 #include "MapMarkerItem.h"
+#include "MapPathItem.h"
 
 #include <QGeoView/QGVCamera.h>
 #include <QGeoView/QGVLayer.h>
@@ -12,6 +13,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QKeyEvent>
+#include <QLabel>
 #include <QNetworkAccessManager>
 #include <QNetworkDiskCache>
 #include <QShowEvent>
@@ -118,6 +120,22 @@ MapView::MapView(QWidget* parent)
     // Keys must reach our keyPressEvent even when the inner QGraphicsView
     // has focus — it would otherwise consume the arrows for scrolling.
     m_map->geoView()->setFocusProxy(this);
+
+    connect(m_map, &QGVMap::itemClicked, this,
+            [this](QGVItem* item, QPointF) {
+                auto* marker = dynamic_cast<MapMarkerItem*>(item);
+                if (marker != nullptr) {
+                    emit markerClicked(marker->marker());
+                }
+            });
+    // Double-click anywhere: zoom in anchored on the clicked point.
+    connect(m_map, &QGVMap::mapMouseDoubleClicked, this,
+            [this](QPointF projPos) {
+                m_map->cameraTo(QGVCameraActions(m_map)
+                                    .moveTo(projPos)
+                                    .scaleBy(kZoomStep),
+                                true);
+            });
 }
 
 void MapView::setHomePosition(double lat, double lon, const QString& label,
@@ -147,6 +165,8 @@ void MapView::setHomePosition(double lat, double lon, const QString& label,
         }
     }
 
+    rebuildPaths();
+
     if (firstFix && !m_firstShow) {
         resetToHome();
     }
@@ -155,12 +175,71 @@ void MapView::setHomePosition(double lat, double lon, const QString& label,
 void MapView::setMarkers(const QVector<Marker>& markers)
 {
     clearMarkers();
+    m_markerData = markers;
     m_markers.reserve(markers.size());
     for (const Marker& m : markers) {
         auto* item = new MapMarkerItem(m);
         m_markers.append(item);
         m_markerLayer->addItem(item);
     }
+    rebuildPaths();
+}
+
+void MapView::setPathsVisible(bool visible)
+{
+    if (m_pathsVisible == visible) {
+        return;
+    }
+    m_pathsVisible = visible;
+    rebuildPaths();
+}
+
+void MapView::rebuildPaths()
+{
+    for (MapPathItem* path : std::as_const(m_paths)) {
+        m_markerLayer->removeItem(path);
+        delete path;
+    }
+    m_paths.clear();
+    if (!m_pathsVisible || !m_hasHome) {
+        return;
+    }
+    m_paths.reserve(m_markerData.size());
+    for (const Marker& m : std::as_const(m_markerData)) {
+        auto* path = new MapPathItem(m_homeLat, m_homeLon,
+                                     m.lat, m.lon, m.color);
+        m_paths.append(path);
+        m_markerLayer->addItem(path);
+    }
+}
+
+void MapView::setLegend(const QVector<QPair<QString, QColor>>& entries)
+{
+    if (entries.isEmpty()) {
+        delete m_legend;
+        m_legend = nullptr;
+        return;
+    }
+    if (m_legend == nullptr) {
+        m_legend = new QLabel(this);
+        m_legend->setStyleSheet(QStringLiteral(
+            "QLabel { background-color: rgba(40, 40, 40, 190);"
+            " color: white; border-radius: 4px; padding: 4px 6px;"
+            " font-size: 10px; }"));
+        m_legend->setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+    QString html;
+    for (const auto& e : entries) {
+        if (!html.isEmpty()) {
+            html += QStringLiteral("&nbsp;&nbsp;");
+        }
+        html += QStringLiteral("<span style=\"color:%1;\">&#9679;</span> %2")
+                    .arg(e.second.name(), e.first.toHtmlEscaped());
+    }
+    m_legend->setText(html);
+    m_legend->adjustSize();
+    m_legend->show();
+    layoutOverlayButtons();
 }
 
 void MapView::clearMarkers()
@@ -170,6 +249,12 @@ void MapView::clearMarkers()
         delete item;
     }
     m_markers.clear();
+    m_markerData.clear();
+    for (MapPathItem* path : std::as_const(m_paths)) {
+        m_markerLayer->removeItem(path);
+        delete path;
+    }
+    m_paths.clear();
 }
 
 void MapView::resetToHome()
@@ -267,6 +352,10 @@ void MapView::layoutOverlayButtons()
         btn->move(width() - btn->width() - kMargin, y);
         btn->raise();
         y += btn->height() + kGap;
+    }
+    if (m_legend != nullptr) {
+        m_legend->move(kMargin, height() - m_legend->height() - kMargin);
+        m_legend->raise();
     }
 }
 

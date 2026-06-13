@@ -678,6 +678,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_Wiring.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerItem.cpp
+    src/gui/map/MapPathItem.cpp
     src/gui/PskReporterMapDialog.cpp
     src/gui/AgcCalibrationDialog.cpp
     src/gui/AudioDeviceChangeDialog.cpp
