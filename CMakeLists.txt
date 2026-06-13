@@ -281,9 +281,12 @@ if(AETHER_GPU_SPECTRUM)
         # Qt6GuiPrivate provides QRhi headers needed for GPU rendering.
         find_package(Qt6GuiPrivate QUIET)
 
-        # Detect Debian paths early (support any multiarch tuple, e.g. aarch64-linux-gnu)
+        # Some Qt distributions ship the private QtGui headers on disk but omit the
+        # Qt6GuiPrivate CMake package (so no Qt6::GuiPrivate target): Debian multi-arch,
+        # and Windows/macOS installs deployed via aqtinstall. Locate the private
+        # include root directly and wire it up manually (see DEBIAN_GPU_FIX_REQUIRED).
         if(NOT Qt6GuiPrivate_FOUND)
-            message(STATUS "Qt6GuiPrivate not found, checking Debian multi-arch paths...")
+            message(STATUS "Qt6GuiPrivate CMake package not found, searching for private headers directly...")
             set(DEB_HOST_MULTIARCH "")
             find_program(DPKG_ARCH dpkg-architecture)
             if(DPKG_ARCH)
@@ -291,14 +294,28 @@ if(AETHER_GPU_SPECTRUM)
                     OUTPUT_VARIABLE DEB_HOST_MULTIARCH OUTPUT_STRIP_TRAILING_WHITESPACE
                     ERROR_QUIET)
             endif()
+            # Derive the Qt include root from the Gui target — covers Windows/macOS SDK
+            # layouts (<prefix>/include) where dpkg multi-arch paths don't apply.
+            set(_qt_gui_inc_root "")
+            if(TARGET Qt6::Gui)
+                get_target_property(_qt_gui_incs Qt6::Gui INTERFACE_INCLUDE_DIRECTORIES)
+                foreach(_inc IN LISTS _qt_gui_incs)
+                    if(EXISTS "${_inc}/QtGui/${Qt6_VERSION}/QtGui/private/qhighdpiscaling_p.h")
+                        set(_qt_gui_inc_root "${_inc}")
+                        break()
+                    endif()
+                endforeach()
+            endif()
             find_path(DEBIAN_PRIVATE_INC
                 NAMES "QtGui/${Qt6_VERSION}/QtGui/private/qhighdpiscaling_p.h"
-                PATHS "/usr/include/${DEB_HOST_MULTIARCH}/qt6" "/usr/include/qt6"
+                PATHS
+                    "${_qt_gui_inc_root}"
+                    "/usr/include/${DEB_HOST_MULTIARCH}/qt6" "/usr/include/qt6"
                 NO_DEFAULT_PATH
             )
             if(DEBIAN_PRIVATE_INC)
                 set(Qt6GuiPrivate_FOUND TRUE)
-                set(DEBIAN_GPU_FIX_REQUIRED TRUE) # Mark for Step 2
+                set(DEBIAN_GPU_FIX_REQUIRED TRUE) # Mark for Step 2 (manual include dirs)
             endif()
         endif()
 
@@ -1157,9 +1174,11 @@ endif()
 if(AETHER_GPU_SPECTRUM)
     target_compile_definitions(AetherSDR PRIVATE AETHER_GPU_SPECTRUM)
 
-    # Apply the Debian include paths now that AetherSDR exists
+    # Apply the manual private-include paths now that AetherSDR exists. Covers
+    # Debian multi-arch and Windows/macOS aqt installs that lack the Qt6::GuiPrivate
+    # target (headers present on disk — located during detection above).
     if(DEBIAN_GPU_FIX_REQUIRED)
-        message(STATUS "Applying Debian GPU include paths to AetherSDR")
+        message(STATUS "Applying private QtGui include paths to AetherSDR (${DEBIAN_PRIVATE_INC})")
         target_include_directories(AetherSDR PRIVATE
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}"
             "${DEBIAN_PRIVATE_INC}/QtGui/${Qt6_VERSION}/QtGui"
@@ -1168,6 +1187,23 @@ if(AETHER_GPU_SPECTRUM)
 
     if(TARGET Qt6::GuiPrivate)
         target_link_libraries(AetherSDR PRIVATE Qt6::GuiPrivate)
+    elseif(NOT DEBIAN_GPU_FIX_REQUIRED)
+        # No GuiPrivate target and no manual path (e.g. some macOS layouts) —
+        # locate the rhi/ headers within the Qt6::Gui include dirs.
+        get_target_property(_qt_gui_inc Qt6::Gui INTERFACE_INCLUDE_DIRECTORIES)
+        foreach(_dir IN LISTS _qt_gui_inc)
+            if(EXISTS "${_dir}/rhi/qrhi.h")
+                break() # already on the include path via Qt6::Gui
+            endif()
+            file(GLOB _priv_dirs "${_dir}/${Qt6_VERSION}/QtGui")
+            foreach(_pd IN LISTS _priv_dirs)
+                if(EXISTS "${_pd}/rhi/qrhi.h")
+                    target_include_directories(AetherSDR PRIVATE "${_pd}")
+                    message(STATUS "QRhi headers found at ${_pd}/rhi/")
+                    break()
+                endif()
+            endforeach()
+        endforeach()
     endif()
 
     qt_add_shaders(AetherSDR "aether_shaders"
@@ -1543,41 +1579,6 @@ if(ENABLE_MQTT)
     if(NOT WIN32)
         target_link_libraries(AetherSDR PRIVATE pthread)
     endif()
-endif()
-
-if(AETHER_GPU_SPECTRUM)
-    target_compile_definitions(AetherSDR PRIVATE AETHER_GPU_SPECTRUM)
-    if(TARGET Qt6::GuiPrivate)
-        target_link_libraries(AetherSDR PRIVATE Qt6::GuiPrivate)
-    else()
-        # Qt6::GuiPrivate not available (macOS/skipped) — find rhi/ headers manually
-        get_target_property(_qt_gui_inc Qt6::Gui INTERFACE_INCLUDE_DIRECTORIES)
-        foreach(_dir IN LISTS _qt_gui_inc)
-            if(EXISTS "${_dir}/rhi/qrhi.h")
-                # Already in the include path via Qt6::Gui
-                break()
-            endif()
-            # Check versioned private header directory (e.g. QtGui/6.7.3/QtGui/rhi/)
-            file(GLOB _priv_dirs "${_dir}/${Qt6_VERSION}/QtGui")
-            foreach(_pd IN LISTS _priv_dirs)
-                if(EXISTS "${_pd}/rhi/qrhi.h")
-                    target_include_directories(AetherSDR PRIVATE "${_pd}/..")
-                    message(STATUS "QRhi headers found at ${_pd}/rhi/")
-                    break()
-                endif()
-            endforeach()
-        endforeach()
-    endif()
-    qt_add_shaders(AetherSDR "aether_shaders"
-        PREFIX "/shaders"
-        FILES
-            resources/shaders/texturedquad.vert
-            resources/shaders/texturedquad.frag
-            resources/shaders/overlay.vert
-            resources/shaders/overlay.frag
-            resources/shaders/spectrum.vert
-            resources/shaders/spectrum.frag
-    )
 endif()
 
 if(HAVE_PIPEWIRE)
