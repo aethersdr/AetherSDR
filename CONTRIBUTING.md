@@ -90,9 +90,10 @@ changes.
 ### Working in MainWindow
 
 `MainWindow` was a ~19,500-line monolith; **#3351 decomposed it** into one class
-spread across `MainWindow.cpp` + a family of `MainWindow_*.cpp` sibling TUs
-(controllers, menus, shortcuts, wiring, digital modes, SWR sweep, spots). It's
-still one class — the siblings hold `MainWindow::` method bodies.
+spread across `MainWindow.cpp` + a family of nine `MainWindow_*.cpp` sibling TUs
+(controllers, menus, shortcuts, wiring, digital modes, SWR sweep, spots,
+session, DSP applets). It's still one class — the siblings hold `MainWindow::`
+method bodies.
 
 **Don't add new feature code to `MainWindow.cpp`.** Put a feature's
 lifecycle/handlers in the matching sibling TU, signal wiring in

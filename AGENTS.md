@@ -276,7 +276,7 @@ declared in `MainWindow.h`. The split is about *which file* a body lives in.
 
 | Your change | Goes in |
 |---|---|
-| Feature lifecycle/handler fitting an existing subsystem | that subsystem's TU — demods (RADE/FreeDV/DAX/RTTY/WFM) → `MainWindow_DigitalModes.cpp`; physical controllers → `MainWindow_Controllers.cpp`; SWR sweep → `MainWindow_SwrSweep.cpp`; spot clients → `MainWindow_Spots.cpp` |
+| Feature lifecycle/handler fitting an existing subsystem | that subsystem's TU — demods (RADE/FreeDV/DAX/RTTY/WFM) → `MainWindow_DigitalModes.cpp`; physical controllers → `MainWindow_Controllers.cpp`; SWR sweep → `MainWindow_SwrSweep.cpp`; spot clients → `MainWindow_Spots.cpp`; discovery/connection/pan-lifecycle → `MainWindow_Session.cpp`; client-DSP applets → `MainWindow_DspApplets.cpp` |
 | Wiring a newly-created radio object (slice/pan/VFO/DSP) to the UI | `MainWindow_Wiring.cpp` |
 | A menu item / action | `MainWindow_Menus.cpp` |
 | A keyboard shortcut | `MainWindow_Shortcuts.cpp` |

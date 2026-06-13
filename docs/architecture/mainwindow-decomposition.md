@@ -26,6 +26,8 @@ Read this before adding code to anything named `MainWindow*`. The one rule:
 | `MainWindow_DigitalModes.cpp` | 1e | Demod / mode subsystems and their activate/deactivate lifecycles: RADE, FreeDV, DAX, AX.25 / KISS TNC, RTTY, **WFM**. |
 | `MainWindow_SwrSweep.cpp` | 1e | The AetherSweep SWR-sweep engine (lock → step → state machine → pan overlay). |
 | `MainWindow_Spots.cpp` | 2b | `wireSpotSubsystem()` — DX Cluster / RBN / WSJT-X / SpotCollector / POTA clients and their UI plumbing. |
+| `MainWindow_Session.cpp` | 2c | `wireDiscovery()` / `wireRadioModel()` / `wirePanLifecycle()` — LAN + SmartLink discovery, heartbeat/disconnect detection, connection-state routing, and pan-stream lifecycle: the wiring that constitutes "a connected radio". Seed of the future `RadioSession` aggregate (#3445). |
+| `MainWindow_DspApplets.cpp` | 2d | `wirePooDooTiles()` + `wireDspApplets()` — PooDoo RX status tiles and the client-DSP applet family (Compressor / Gate / De-esser / Tube / Reverb / AetherDSP / PUDU TX+RX) plus TX signal-chain wiring. |
 | `MainWindowHelpers.{h,cpp}` | 0 | Stateless formatters / value transforms with **no** `MainWindow` dependency (tooltip builders, spot-ID math, client-list parsing, small pixmap painters). |
 | `MainWindowShortcutState.h` | 1b | Internal shared shortcut state — **not** a public API; only `MainWindow*.cpp` TUs include it. |
 
@@ -34,7 +36,9 @@ Read this before adding code to anything named `MainWindow*`. The one rule:
 | Your change | Goes in |
 |---|---|
 | A new feature's activate/deactivate or event handler that fits an existing subsystem above | That subsystem's TU (e.g. a new demod → `MainWindow_DigitalModes.cpp`, next to RADE/WFM) |
-| Connecting a newly-created radio object (slice / pan / VFO / DSP widget) to the UI | `MainWindow_Wiring.cpp` |
+| Wiring a newly-created slice / pan / VFO / DSP *widget* to the UI | `MainWindow_Wiring.cpp` |
+| Discovery / connection-state / pan-stream-lifecycle wiring | `MainWindow_Session.cpp` (not `_Wiring`) |
+| Client-DSP applet or PooDoo-tile wiring | `MainWindow_DspApplets.cpp` (not `_Wiring`) |
 | A new menu item or action | `MainWindow_Menus.cpp` |
 | A new keyboard shortcut | `MainWindow_Shortcuts.cpp` |
 | A stateless formatter/helper with no `MainWindow` dependency | `MainWindowHelpers.{h,cpp}` |
@@ -51,7 +55,8 @@ header), so:
 
 - Each new TU adds a **full re-parse** of that header stack to the build.
 - Any edit to `MainWindow.h` (e.g. adding a member for a feature) **rebuilds
-  every sibling TU** — there are 8 today.
+  every sibling TU** — there are 9 today (10 files include the header, counting
+  `MainWindow.cpp` itself).
 - Siblings share all private state through the header, so they are separate
   *files*, not separate *modules*. No boundary is enforced.
 
