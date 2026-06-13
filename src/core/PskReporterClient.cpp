@@ -77,7 +77,7 @@ void PskReporterClient::poll()
     query.addQueryItem(QStringLiteral("rronly"), QStringLiteral("1"));
     query.addQueryItem(QStringLiteral("noactive"), QStringLiteral("1"));
     query.addQueryItem(QStringLiteral("appcontact"),
-                       QStringLiteral("aethersdr@jensencloud.net"));
+                       QStringLiteral("ki6bcj@aethersdr.com"));
     if (m_lastSeqNo >= 0) {
         query.addQueryItem(QStringLiteral("lastseqno"),
                            QString::number(m_lastSeqNo));
