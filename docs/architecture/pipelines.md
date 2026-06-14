@@ -10,7 +10,7 @@ high-level routing overview; it intentionally omits many audio-stage details.
 
 ### Data Pipelines
 
-Multi-thread architecture — up to 11 threads depending on features enabled:
+Multi-thread architecture — up to 12 threads depending on features enabled:
 - **Main thread**: GUI rendering (paintEvent), RadioModel + all sub-models, user input
 - **Connection thread**: RadioConnection (TCP 4992 I/O, kernel TCP_INFO RTT)
 - **Audio thread**: AudioEngine (RX/TX audio; NR2/RN2/NR4/DFNR/BNR/MNR DSP, QAudioSink/Source)
@@ -19,6 +19,7 @@ Multi-thread architecture — up to 11 threads depending on features enabled:
 - **Spot thread**: DxCluster, RBN, WSJT-X, POTA, FreeDV spot clients
 - **CwDecoder thread**: ggmorse decode loop (QThread::create, on-demand)
 - **DAX IQ thread**: DaxIqModel worker (byte-swap + pipe I/O)
+- **AX.25 TNC thread**: AetherAx25LibmodemShim worker (HDLC/AX.25 + AFSK decode, on-demand when the AetherModem/packet tab is active)
 - **RADE thread**: RADEEngine neural encoder/decoder (on-demand, HAVE_RADE)
 - **BNR thread**: NvidiaBnrFilter gRPC async I/O (std::thread, HAVE_BNR)
 - **DXCC parse thread**: DxccColorProvider ADIF log parser (one-shot at startup)
@@ -178,6 +179,7 @@ SPOT PIPELINES:                             ◄── SPOT WORKER THREAD
 | **Spot** | DxCluster, RBN, WSJT-X, POTA, FreeDV clients | ~0% | moveToThread | Batched 1/sec forwarding |
 | **CwDecoder** | ggmorse decode loop | ~0% | QThread::create | On-demand start/stop per CW mode |
 | **DAX IQ** | DaxIqModel worker | ~0% | moveToThread | Byte-swap + pipe I/O |
+| **AX.25 TNC** | AetherAx25LibmodemShim worker | ~0% | moveToThread | HDLC/AX.25 + AFSK decode; on-demand when the packet tab is active |
 | **DXCC** | DxccColorProvider ADIF parser | ~0% | moveToThread | One-shot at startup |
 | **RADE** | RADEEngine neural encoder/decoder | ~0% | moveToThread | On-demand, HAVE_RADE |
 | **BNR** | NvidiaBnrFilter gRPC async I/O | ~0% | std::thread | GPU container, HAVE_BNR |

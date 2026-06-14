@@ -90,22 +90,23 @@ mark:              1200 Hz
 space:             2200 Hz
 samples/symbol:    20
 polarity:          Normal for upright FM-demodulated AFSK
-lanes:             18 (10 free-running phase + 4 tracked phases x 2 PLL alphas)
+demodulator:       Direwolf-derived Profile A+ (9 amplitude slicers)
 ```
 
-Unlike HF, 1200 baud uses a **hybrid decode bank** (tuned by `kVhf1200*` in
-`src/core/tnc/AetherAx25LibmodemShim.cpp`) that favors aggressive capture:
+Unlike the HF 300-baud path (which uses libmodem's timing-phase bank described
+above), VHF 1200 baud uses a **Direwolf-derived AFSK demodulator** —
+`AetherAFSKDemod` in `third_party/direwolf_afsk/`, a C++20 rewrite of Dire
+Wolf's profile-A `demod_afsk.c` (GPL-2.0-or-later). It runs the **A+**
+configuration: a single IQ-mix → RRC-lowpass → envelope/AGC front end feeding
+**9 amplitude slicers** (`kVhf1200SpaceGains` in
+`src/core/tnc/AetherAx25LibmodemShim.cpp` — the exact Dire Wolf A+ space-gain
+series), each with its own DPLL chasing the symbol clock. This replaced the
+older libmodem free-running / Gardner-tracked lane bank on the VHF path (the HF
+300 path is unchanged). On a 1,875-packet overnight live run it out-copied both
+Dire Wolf and Graywolf (#3527).
 
-- **Free-running phase lanes** (PLL alpha 0, spread across the 20-sample symbol)
-  decode clean / short / strong bursts the instant they arrive — at least one
-  lane samples the eye center, the same proven mechanism as the HF bank. This is
-  what makes the synthetic and chunked 1200 loopback tests decode; a single
-  Gardner-only lane (the original stub) never locked reliably.
-- **Gardner-tracked lanes** (PLL alpha 0.010 and 0.025) chase the symbol clock
-  for TX/RX drift and fading on longer or weaker bursts.
-
-Duplicate suppression collapses the same frame seen by several lanes into one
-emission, so the 18-lane bank still reports each packet once.
+Duplicate suppression collapses the same frame seen by several slicers into one
+emission, so the 9-slicer bank still reports each packet once.
 
 Polarity is **Normal** for upright FM-demodulated AFSK; use Reverse only as a
 tone-sense check if a mode/sideband change kills all decodes. Both receive and
@@ -117,7 +118,7 @@ profile is selected.
 
 - Enable the **AetherModem** (`aether.ax25`) log category. On every profile
   switch the modem logs a one-line config summary
-  (`modem configured: 1200 baud VHF ... lanes=18`), and each decode logs
+  (`modem configured: 1200 baud VHF ... lanes=9`), and each decode logs
   `decoded AX.25 frame baud=1200 conf=... SRC=... payload=...`.
 - Click the packet-activity graph to toggle the per-second diagnostics summary
   (tones, gate, symbols, confidence, HDLC/AX.25 candidates, FCS reject classes)
@@ -125,8 +126,9 @@ profile is selected.
 - Replay a saved capture against every profile/polarity in one pass:
   `ax25_libmodem_shim_test --replay-capture <mono-float32.wav>`. Use the
   window's **Capture 3m** button to record a real 2m session first.
-- If marginal bursts are missed, raise `kVhf1200FreeRunPhaseCount` for denser
-  fixed-phase coverage, or adjust `kVhf1200PllAlphas` for the tracked lanes.
+- The Profile A+ slicer set is the fixed Dire Wolf `kVhf1200SpaceGains` series;
+  the vendored demodulator and its parameters are documented in
+  `third_party/direwolf_afsk/` (`AETHERSDR-PATCHES.md` + the source headers).
 
 ## Radio and Level Learnings
 
@@ -268,9 +270,12 @@ Next work should focus on:
 - validating over-the-air AetherModem TX level, timing, and FCS decode with a
   second receiver
 
-Out of scope remains APRS-IS and maps. (KISS-over-TCP, connected-mode AX.25, and
-a Personal Mailbox System are now implemented — see the sections above. A future
-APRS/AX.25 digipeater can reuse the new `Ax25`/`Ax25Connection` primitives.)
+KISS-over-TCP, connected-mode AX.25, a Personal Mailbox System, and an **APRS
+client** (live station map, GPS beacon, two-way messaging on the AetherModem
+tab) are now implemented — see the sections above and the PSK Reporter map's
+shared Qt mapping engine, which the APRS map reuses. Out of scope remains
+**APRS-IS** (internet gateway) and a future **APRS/AX.25 digipeater**, which can
+reuse the `Ax25`/`Ax25Connection` primitives.
 
 PMS follow-ups worth tracking:
 

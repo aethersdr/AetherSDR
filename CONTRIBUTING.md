@@ -69,7 +69,7 @@ that matches our conventions.
 ## Project Architecture
 
 The full architecture is documented in [CLAUDE.md](CLAUDE.md) including
-the complete file tree, data pipelines, thread architecture (11 threads),
+the complete file tree, data pipelines, thread architecture (12 threads),
 protocol specification, and implementation patterns. Read it before making
 changes.
 

@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.5.2.1
+## Current cycle: post-v26.6.3
 
 ### In flight
 
@@ -25,8 +25,6 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### Queued (next cycle)
 
-- **AetherModem Phase 1** — 1200 baud VHF AX.25 packet TX (data-mode
-  transmit pipeline using the existing DAX TX path).
 - **L1–L4 audit follow-ups** — four low-severity items from the
   2026-05-09 security pass, tracked as
   [#2954](https://github.com/aethersdr/AetherSDR/issues/2954)–[#2957](https://github.com/aethersdr/AetherSDR/issues/2957).
@@ -40,6 +38,17 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **WFM software demodulator** — DAX IQ → NCO Doppler / resample / atan2 →
+  virtual audio cable, for satellite data work.
+- **AetherModem Phase 1 + APRS** — VHF 1200-baud AX.25 RX/TX with a
+  Direwolf-derived AFSK demodulator, plus an APRS client (station map, GPS
+  beacon, two-way messaging).
+- **PSK Reporter reception map** on a new reusable Qt mapping engine
+  (QGeoView); the APRS tab is the next planned consumer.
+- **DAX-IQ fully operational** — end-to-end IQ delivery, dBFS meter, rate
+  switching with persistence.
+- **MainWindow decomposition (#3351)** — the ~19.5k-line monolith split into
+  sibling TUs, with a new `RadioSession` aggregate.
 - Constitution v1.1.0 — 14 numbered principles, multi-agent
   contribution model, signed-commit enforcement.
 - Six security fixes shipped against the 2026-05 audit

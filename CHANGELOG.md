@@ -8,15 +8,84 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.6.3] — 2026-06-14
+
+### Satellite WFM + APRS/PSK-Reporter mapping + packet AFSK + MainWindow decomposition
+
+58 commits since v26.6.2. Headlined by a WFM software demodulator for
+satellite data, an APRS client and a PSK Reporter reception map built on a new
+reusable Qt mapping engine, a Direwolf-derived VHF packet demodulator, and the
+internal #3351 decomposition of the MainWindow monolith.
+
+### New features
+
 - **WFM software demodulator** for satellite data work (G3RUH 9600 bd):
-  DAX IQ → SkyRoof-parity DSP chain (phase-continuous NCO Doppler
-  correction, exact 48 kHz resampling, flat atan2 discriminator) → virtual
-  audio cable for HS-SoundModem. Per-slice WFM toggle on FM modes.
-- **Behaviour change (CAT):** rigctl/TCI `set_freq` retunes that stay
-  within the panadapter span no longer recenter the pan (`autopan=0`);
-  cross-band tunes still recenter, preserving the #536 behaviour for the
-  case it was written for. Satellite trackers issuing Doppler steps every
-  few seconds previously yanked the pan on every step.
+  DAX IQ → SkyRoof-parity DSP chain (phase-continuous NCO Doppler correction,
+  exact 48 kHz resampling, flat atan2 discriminator) → virtual audio cable for
+  HS-SoundModem. Per-slice WFM toggle on FM modes. (#3407, #3522, #3562)
+- **APRS client** — the AetherModem AX.25 tab becomes a lightweight APRS
+  client: live station table with wireframe symbol icons and weather decode, a
+  timed GPS position beacon (grid-locator fallback), and two-way messaging with
+  retries, auto-ack, and digipeat de-duplication — all on the shared one-at-a-
+  time TX keying queue. (#3530)
+- **PSK Reporter reception map** (View ▸ PSK Reporter) showing who is hearing
+  your callsign on an OpenStreetMap basemap — mode-coloured markers, great-circle
+  paths, live MQTT feed plus HTTP polling, persistent spot cache. Built on a new
+  **reusable Qt mapping engine** (vendored QGeoView, LGPL-3.0) intended for reuse
+  by the APRS tab. (#3565)
+- **Direwolf-derived AFSK demodulator** for VHF 1200-baud AX.25, replacing
+  libmodem's AFSK on the VHF path (HF 300-baud unchanged). A 1,875-packet
+  overnight comparator beat both Direwolf and Graywolf on copy rate. (#3527)
+- **DAX-IQ fully usable** — end-to-end IQ sample delivery, a dBFS level meter,
+  24/48/96/192 kHz rate switching with persistence, and startup state restore.
+  (#2529, #3521, #3522)
+
+### Packet radio
+
+- `HdlcCodec`: pure-C++ HDLC framer replacing libmodem's `bitstream_state`. (#3475)
+- AX.25 shim isolated on a dedicated `QThread`. (#3473)
+- MQTT: per-topic control, CW keyer, radio state, AX.25, debug logging. (#3460)
+
+### Fixes & hardening
+
+- **Behaviour change (CAT):** rigctl/TCI `set_freq` retunes that stay within the
+  panadapter span no longer recenter the pan (`autopan=0`); cross-band tunes
+  still recenter, preserving the #536 behaviour. Satellite trackers issuing
+  Doppler steps every few seconds previously yanked the pan on every step.
+- Profile-load recovery hardening for Multi-Flex — suppress/defer profile-owned
+  slice/pan/waterfall writes during global profile restore. (#3563)
+- DEXP controls now use the `compander`/`compander_level` protocol keys SmartSDR
+  actually uses (were silently rejected). (#3568)
+- Multi-Flex ping-watchdog grace during a second client's join, so AetherSDR no
+  longer false-disconnects mid-join. (#3570)
+- TCI: dB on the wire for the VOLUME command; `ready;` sent after the full
+  settings dump, not mid-burst. (#3498, #3502)
+- ARRL US bandplan license-class accuracy. (#3518)
+- Narrow-passband drag hit-testing. (#3523)
+- GPU spectrum builds without `Qt6GuiPrivate` (Windows/macOS aqtinstall). (#3561)
+- Keep inactive-slice bandwidth visible via a neutral colour rather than
+  near-invisible dimming. (#3484/#2389)
+- Per-row waterfall-history frequency frames (no per-pan reproject). (#3578)
+- TMate2 enhanced display — TX bargraph, text overlays, encoder labels. (#3542)
+- RC-28 velocity-proportional tuning. (#3467)
+
+### Internal — MainWindow decomposition (#3351)
+
+- `MainWindow.cpp` reduced from ~19,500 to ~8,100 lines, split across sibling
+  translation units (`MainWindow_Controllers/Menus/Shortcuts/Wiring/DigitalModes/
+  SwrSweep/Spots/Session/DspApplets.cpp`, `MainWindowHelpers`,
+  `MainWindowShortcutState.h`) — pure code motion, no behaviour change. Mapped in
+  `docs/architecture/mainwindow-decomposition.md`.
+- New **`RadioSession`** aggregate owns `RadioModel` + `TciServer` + `CatPorts`
+  per radio, making teardown order structural (fixes the #2385 crash-on-quit
+  class). (#3544, #3545)
+
+### Packaging / CI
+
+- Microsoft Store: a `v*` release tag now auto-stages a **draft** submission via
+  the `msstore` CLI — safe-by-construction (SHA-pinned action, secrets via env,
+  tag + opt-in + fork gates, `--noCommit`), dormant until credentials are set.
+  (#3567)
 
 ## [v26.6.2] — 2026-06-07
 

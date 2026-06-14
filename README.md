@@ -10,7 +10,7 @@
 
 AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.6.2** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.6.3** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
 > **Cross-platform downloads available:** Linux AppImage, macOS universal DMG, Windows installer and portable ZIP.
 > Linux is the primary supported platform. macOS and Windows builds are provided as a courtesy.
@@ -35,7 +35,9 @@ AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. 
 - **CW operator suite** — real-time Morse decoder with auto pitch/speed detection, keyboard + MIDI-mapped straight key and iambic paddles with full break-in / QSK respect, optional Apollo-era Quindar tones on PTT
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, and FreeDV Reporter spots with density badges, auto-mode switch, and auto-reconnect
 - **DAX virtual audio** — 4 RX + 1 TX channels for WSJT-X, fldigi, VARA, JS8Call (Linux PipeWire native / PulseAudio, macOS CoreAudio; Windows via TCI / external bridges)
-- **DAX IQ streaming** — raw I/Q to SDR apps at 24/48/96/192 kHz
+- **DAX IQ streaming** — raw I/Q to SDR apps at 24/48/96/192 kHz, with a dBFS level meter and a per-slice **WFM software demodulator** (NCO Doppler tracking → virtual audio cable) for satellite data work
+- **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS terminal, personal mailbox, and an **APRS client** (live station map, GPS beacon, two-way messaging); VHF 1200-baud uses a Direwolf-derived AFSK demodulator
+- **PSK Reporter reception map** — see who is hearing you on an OpenStreetMap basemap (mode-coloured spots, great-circle paths) via a reusable Qt mapping engine
 - **SmartLink remote operation** — Auth0 login, TLS command channel, WAN UDP streaming with credential persistence
 - **TCI server** — full TCI v2.0 protocol over WebSocket: CAT + audio + IQ + CW + spots in one connection
 - **CAT control** — 4-channel rigctld TCP + virtual serial ports, CW macros for contest loggers

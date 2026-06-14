@@ -160,7 +160,7 @@ cmake --build build -j$(nproc)
 
 Full dependency list is in `README.md` — don't duplicate it here.
 
-Current version: **26.5.2.1** (set in both `CMakeLists.txt` and `README.md`).
+Current version: **26.6.3** (set in both `CMakeLists.txt` and `README.md`).
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
@@ -198,6 +198,8 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 
 **Key classes:**
 - `RadioModel` — central state, owns connection + all sub-models
+- `RadioSession` — per-radio aggregate that owns `RadioModel` + `TciServer` +
+  `CatPorts`, giving teardown a structural order (#3351 / #3445)
 - `AudioEngine` — RX/TX audio, NR2/RN2/NR4/BNR/DFNR DSP pipeline
 - `SpectrumWidget` — GPU-accelerated FFT spectrum + waterfall (QRhiWidget)
 - `MainWindow` — wires everything together, signal routing hub. **Decomposed
@@ -206,7 +208,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
   [Adding code to MainWindow](#adding-code-to-mainwindow)
 - `PanadapterStream` — VITA-49 UDP parsing, routes FFT/waterfall/audio/meters
 
-**Threading:** up to 11 threads — see `docs/architecture/pipelines.md` for the
+**Threading:** up to 12 threads — see `docs/architecture/pipelines.md` for the
 full thread diagram, data flow, cross-thread signal map, and GPU rendering notes.
 
 **Design principle:** RadioModel owns all sub-models on the main thread.
