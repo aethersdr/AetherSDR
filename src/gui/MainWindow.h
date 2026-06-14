@@ -259,6 +259,11 @@ private:
                                                        const char* source);
     void applyTuneRequest(SliceModel* slice, double mhz,
                           TuneIntent intent, const char* source);
+    // Lock / SWR-sweep guards shared by every tune source.  Returns true if the
+    // tune must be blocked (and, for a locked active slice, restores the VFO
+    // readout).  Lets the edge-pan tune path — which bypasses applyTuneRequest
+    // to avoid pan-follow — still honour the same lock/sweep affordances.
+    bool tuneBlockedByGuards(SliceModel* slice);
     void applyPanRangeRequest(const QString& panId, double centerMhz,
                               double bandwidthMhz, const char* source);
     // leftFlagEdgeOffsetMhz / rightFlagEdgeOffsetMhz extend the trigger

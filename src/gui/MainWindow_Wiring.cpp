@@ -1843,6 +1843,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         if (!target) {
             return;
         }
+        // Honour the same lock / SWR-sweep guards as applyTuneRequest: bypassing
+        // it (to avoid pan-follow) must not also drop the lock affordance or
+        // retune mid-sweep. A blocked tune pans nothing either, matching the
+        // pre-existing locked-slice drag behaviour.
+        if (tuneBlockedByGuards(target)) {
+            return;
+        }
         if (auto* pan = m_radioModel.panadapter(target->panId())) {
             centerMhz = std::max(centerMhz, pan->bandwidthMhz() / 2.0);
             // In-window drag moves pass the unchanged center purely to tune
@@ -1855,6 +1862,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
         queueActiveSliceForSpectrumTarget(target->sliceId());
         target->setFrequency(sliceFreqMhz);
+        mirrorDiversityChildFrequency(target, sliceFreqMhz);  // keep diversity child in step
     });
 
     // ── Spot trigger — notify the radio/TCI clients when a spot label is clicked (#341)

@@ -5651,25 +5651,35 @@ MainWindow::BandStackPreselectResult MainWindow::preselectBandStackForTune(
     return BandStackPreselectResult::Selected;
 }
 
+bool MainWindow::tuneBlockedByGuards(SliceModel* slice)
+{
+    if (!slice)
+        return true;
+    if (m_swrSweep.running)
+        return true;
+    if (slice->isLocked()) {
+        slice->notifyTuneBlockedByLock();
+        auto* sw = spectrumForSlice(slice);
+        if (slice->sliceId() == m_activeSliceId && sw) {
+            m_updatingFromModel = true;
+            sw->setVfoFrequency(slice->frequency());
+            m_updatingFromModel = false;
+        }
+        return true;
+    }
+    return false;
+}
+
 void MainWindow::applyTuneRequest(SliceModel* slice, double mhz,
                                   TuneIntent intent, const char* source)
 {
     if (!slice)
         return;
-    if (m_swrSweep.running)
+    if (tuneBlockedByGuards(slice))
         return;
 
     const double oldFreqMhz = slice->frequency();
     auto* sw = spectrumForSlice(slice);
-    if (slice->isLocked()) {
-        slice->notifyTuneBlockedByLock();
-        if (slice->sliceId() == m_activeSliceId && sw) {
-            m_updatingFromModel = true;
-            sw->setVfoFrequency(oldFreqMhz);
-            m_updatingFromModel = false;
-        }
-        return;
-    }
 
     // Absolute-target intents (typed VFO entry, spectrum click, spot recall,
     // bandstack recall) must invalidate any in-flight encoder accumulator.
