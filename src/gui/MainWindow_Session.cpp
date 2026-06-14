@@ -926,8 +926,9 @@ void MainWindow::wirePanLifecycle()
             if (pan->wfStreamId() == streamId) {
                 if (auto* sw = m_panStack->spectrum(pan->panId())) {
                     if (sw->wfAutoBlack()) {
-                        const int level = std::clamp(static_cast<int>(autoBlack), 0, 125);
-                        sw->setWfBlackLevel(level);
+                        // Feed the radio's per-tile auto-black level straight to
+                        // the renderer (radio-authoritative low/black point).
+                        sw->setRadioAutoBlackLevel(autoBlack);
                     }
                 }
                 return;

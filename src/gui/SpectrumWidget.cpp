@@ -1756,6 +1756,12 @@ void SpectrumWidget::setWfAutoBlackOffset(int level) {
     }
     update();
 }
+void SpectrumWidget::setRadioAutoBlackLevel(quint32 rawLevel) {
+    const float v = static_cast<float>(rawLevel);
+    if (v == m_radioAutoBlackRaw) return;
+    m_radioAutoBlackRaw = v;
+    update();
+}
 void SpectrumWidget::setWfLineDuration(int ms) {
     const int clamped = std::clamp(ms, kWaterfallLineDurationMinMs, kWaterfallLineDurationMaxMs);
     if (m_wfLineDuration == clamped) {
@@ -5316,29 +5322,51 @@ QRgb SpectrumWidget::dbmToRgb(float dbm) const
     return interpolateGradient(t, stops, n);
 }
 
+// Cubic colour-gain curve mapping the radio's black point (low) to a white
+// point (high):
+//   num  = (100 − colorGain)/100 · cbrt(65535 − low)
+//   high = low + num³        (floored at low + 100)
+// colorGain 0 → full range (dim); 100 → narrow range (max contrast).
+static float wfHighThresholdRaw(float lowRaw, int colorGain)
+{
+    const float low = qBound(0.0f, lowRaw, 65535.0f);
+    const double num = (100.0 - colorGain) / 100.0 * std::cbrt(65535.0 - low);
+    double high = low + num * num * num;
+    if (high < low + 100.0) {
+        high = low + 100.0;
+    }
+    return static_cast<float>(high);
+}
+
 // Map native waterfall tile intensity to RGB.
 // Intensity is int16(raw)/128.0f — observed range ~96-120 on HF.
 // m_wfBlackLevel and m_wfColorGain control the mapping independently from FFT.
 QRgb SpectrumWidget::intensityToRgb(float intensity) const
 {
-    // Map black_level (0-100) to an intensity threshold.
-    // When auto-black is on, anchor to the measured noise floor and let the
-    // user bias it via the auto-black offset slider:
-    //   offset 50 → no bias (threshold sits at the noise floor)
-    //   offset  0 → +25 intensity above the noise floor (darker waterfall)
-    //   offset 100 → -25 intensity below the noise floor (lighter waterfall)
-    float blackThresh;
-    if (m_wfAutoBlack) {
+    // Two auto-black paths (intensity arrives as raw_uint16 / 128):
+    //  • Radio-authoritative: the radio's per-tile black level is the low/black
+    //    point; the white point follows the cubic colour-gain curve
+    //    (wfHighThresholdRaw). Reproduces the radio's evenly-levelled floor.
+    //  • Fallback (no radio auto-black yet, or auto-black off): the prior
+    //    client-side noise-floor estimate / manual black level.
+    // The auto-black offset slider biases the black point: 50 = no bias,
+    // <50 darker, >50 lighter.
+    float blackThresh;   // low point  (intensity domain)
+    float rangeWidth;    // high − low (intensity domain)
+    if (m_wfAutoBlack && m_radioAutoBlackRaw > 0.0f) {
+        const float lowRaw =
+            m_radioAutoBlackRaw + (50 - m_wfAutoBlackOffset) * 0.5f * 128.0f;
+        const float highRaw = wfHighThresholdRaw(lowRaw, m_wfColorGain);
+        blackThresh = lowRaw / 128.0f;
+        rangeWidth  = std::max(1.0f, (highRaw - lowRaw) / 128.0f);
+    } else if (m_wfAutoBlack) {
         blackThresh = m_autoBlackThresh + (50 - m_wfAutoBlackOffset) * 0.5f;
+        rangeWidth  = std::max(1.0f, 120.0f - m_wfColorGain * 0.91f);
     } else {
         // Manual: slider 0 → thresh 160 (well above noise), slider 100 → thresh 60.
         blackThresh = 160.0f - m_wfBlackLevel * 1.0f;
+        rangeWidth  = std::max(1.0f, 120.0f - m_wfColorGain * 0.91f);
     }
-
-    // Map color_gain (0-100) to the visible range width.
-    // Higher gain = narrower range = more color contrast.
-    // gain=0 → 120 dB range (very dim), gain=100 → 29 dB range (max contrast)
-    const float rangeWidth = std::max(1.0f, 120.0f - m_wfColorGain * 0.91f);
 
     const float t = qBound(0.0f, (intensity - blackThresh) / rangeWidth, 1.0f);
 

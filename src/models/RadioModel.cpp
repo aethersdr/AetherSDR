@@ -1808,12 +1808,14 @@ void RadioModel::setWaterfallBlackLevel(int level)
 
 void RadioModel::setWaterfallAutoBlack(bool on)
 {
-    Q_UNUSED(on);
-    // Auto-black is handled client-side. Always keep radio's auto_black off
-    // because its algorithm targets SmartSDR's rendering, not ours.
+    // Radio-authoritative auto-black: when on, let the radio compute the
+    // auto-black level and embed it in each waterfall tile (the client uses it
+    // as the black/low point). When off, the client falls back to its
+    // manual/estimated threshold.
     if (activeWfId().isEmpty()) return;
     sendCmd(
-        QString("display panafall set %1 auto_black=0").arg(activeWfId()));
+        QString("display panafall set %1 auto_black=%2")
+            .arg(activeWfId()).arg(on ? 1 : 0));
 }
 
 void RadioModel::setWaterfallLineDuration(int ms)
@@ -5301,9 +5303,12 @@ void RadioModel::configureWaterfall(const QString& waterfallId)
     const QString targetWaterfallId = RadioStatusOwnership::normalizedFlexId(waterfallId);
     if (targetWaterfallId.isEmpty()) return;
 
-    // Disable automatic black-level and set a fixed threshold.
+    // Enable radio auto-black so the radio computes the per-tile black level
+    // (radio-authoritative); the client reads it from each tile. black_level is
+    // the manual fallback (ignored while auto_black=1); color_gain is applied
+    // client-side via wfHighThresholdRaw.
     // FlexLib uses "display panafall set" addressed to the waterfall stream ID.
-    const QString cmd = QString("display panafall set %1 auto_black=0 black_level=15 color_gain=50")
+    const QString cmd = QString("display panafall set %1 auto_black=1 black_level=15 color_gain=50")
                             .arg(targetWaterfallId);
     sendCmd(cmd, [this, targetWaterfallId](int code, const QString&) {
         if (code != 0) {
@@ -5311,7 +5316,7 @@ void RadioModel::configureWaterfall(const QString& waterfallId)
                      << Qt::hex << code << "— trying display waterfall set";
             // Fallback for firmware that doesn't support panafall addressing
             sendCmd(
-                QString("display waterfall set %1 auto_black=0 black_level=15 color_gain=50")
+                QString("display waterfall set %1 auto_black=1 black_level=15 color_gain=50")
                     .arg(targetWaterfallId),
                 [](int code2, const QString&) {
                     if (code2 != 0)
@@ -5321,7 +5326,7 @@ void RadioModel::configureWaterfall(const QString& waterfallId)
                         qCDebug(lcProtocol) << "RadioModel: waterfall configured via display waterfall set";
                 });
         } else {
-            qCDebug(lcProtocol) << "RadioModel: waterfall configured (auto_black=0 black_level=15 color_gain=50)";
+            qCDebug(lcProtocol) << "RadioModel: waterfall configured (auto_black=1 black_level=15 color_gain=50)";
         }
     });
 }

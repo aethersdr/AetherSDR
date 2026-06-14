@@ -310,6 +310,10 @@ public:
     // Only consulted while m_wfAutoBlack is on; lets users bias the noise-
     // floor target without leaving auto-black.
     void setWfAutoBlackOffset(int level);
+    // Radio-computed auto-black level from the latest waterfall tile (raw uint16
+    // domain, radio-authoritative). 0 = not yet received → the client falls back
+    // to its own noise-floor estimate.
+    void setRadioAutoBlackLevel(quint32 rawLevel);
     void setWfLineDuration(int ms);
     void setWfColorScheme(int scheme);
     void resetWfTimeScale();
@@ -772,6 +776,9 @@ private:
     int   m_wfAutoBlackOffset{50};
     WfColorScheme m_wfColorScheme{WfColorScheme::Default};
     float m_autoBlackThresh{145.0f}; // client-side auto-black: tracked noise floor
+    // Radio's per-tile auto-black level (raw uint16). Preferred over the client
+    // estimate when non-zero; matches FlexLib's auto-level pipeline.
+    float m_radioAutoBlackRaw{0.0f};
     int   m_wfLineDuration{100};     // ms per waterfall row
 
     // Waterfall colour range for FFT-derived fallback (dBm).
