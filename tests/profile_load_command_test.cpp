@@ -56,6 +56,10 @@ int main()
 
     check(!parseProfileLoadCommand(QStringLiteral("profile global save \"SO2R\"")).valid,
           "non-load profile command is ignored");
+    check(kProfileLoadDeferredPanFlushDelayMs > kProfileLoadStateWriteHoldMs,
+          "deferred pan flush runs after profile-load write hold");
+    check(kProfileLoadPostHoldRecoveryDelayMs > kProfileLoadDeferredPanFlushDelayMs,
+          "post-hold recovery runs after deferred pan flush");
 
     return failures == 0 ? 0 : 1;
 }

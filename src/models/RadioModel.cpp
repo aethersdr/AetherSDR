@@ -83,8 +83,6 @@ bool statusFlagSet(const QMap<QString, QString>& kvs, const QString& key)
         || value.compare(QStringLiteral("true"), Qt::CaseInsensitive) == 0;
 }
 
-constexpr qint64 kProfileLoadStateWriteHoldMs = 10000;
-
 bool isProfileOwnedRadioStateWrite(const QString& command)
 {
     const QString trimmed = command.trimmed();
@@ -3653,7 +3651,8 @@ quint32 RadioModel::sendCmd(const QString& command, ResponseCallback cb)
             << "RadioModel: suppressing profile-load radio-state write"
             << command;
         if (cb) {
-            cb(0x50000061, QStringLiteral("suppressed during profile load"));
+            cb(kProfileLoadSuppressedCommandCode,
+               QStringLiteral("suppressed during profile load"));
         }
         return 0;
     }

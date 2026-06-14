@@ -776,7 +776,6 @@ void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,
         return;
     }
 
-    constexpr qint64 kProfileLoadStateWriteHoldMs = 10000;
     const qint64 untilMs = QDateTime::currentMSecsSinceEpoch() + kProfileLoadStateWriteHoldMs;
     m_profileLoadRadioStateWriteHoldUntilMs =
         std::max(m_profileLoadRadioStateWriteHoldUntilMs, untilMs);
@@ -932,7 +931,6 @@ void MainWindow::scheduleProfileLoadRecovery(const QString& profileType,
         return;
     }
 
-    constexpr qint64 kProfileLoadStateWriteHoldMs = 10000;
     const qint64 untilMs = QDateTime::currentMSecsSinceEpoch() + kProfileLoadStateWriteHoldMs;
     m_profileLoadRadioStateWriteHoldUntilMs =
         std::max(m_profileLoadRadioStateWriteHoldUntilMs, untilMs);
@@ -958,10 +956,10 @@ void MainWindow::scheduleProfileLoadRecovery(const QString& profileType,
     QTimer::singleShot(3500, this, [this]() {
         flushPendingProfileLoadPanDimensions();
     });
-    QTimer::singleShot(11000, this, [this]() {
+    QTimer::singleShot(kProfileLoadDeferredPanFlushDelayMs, this, [this]() {
         flushPendingProfileLoadPanDimensions();
     });
-    QTimer::singleShot(11250, this, [this]() {
+    QTimer::singleShot(kProfileLoadPostHoldRecoveryDelayMs, this, [this]() {
         reacquireNoiseFloorLocksAfterProfileLoad();
 #ifdef HAVE_WEBSOCKETS
         if (tciServer()) {

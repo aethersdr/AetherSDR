@@ -2,6 +2,7 @@
 
 #include <QRegularExpression>
 #include <QString>
+#include <QtGlobal>
 
 namespace AetherSDR {
 
@@ -10,6 +11,16 @@ struct ProfileLoadCommand {
     QString type;
     QString name;
 };
+
+inline constexpr qint64 kProfileLoadStateWriteHoldMs = 10000;
+inline constexpr int kProfileLoadDeferredPanFlushDelayMs =
+    static_cast<int>(kProfileLoadStateWriteHoldMs + 1000);
+inline constexpr int kProfileLoadPostHoldRecoveryDelayMs =
+    static_cast<int>(kProfileLoadStateWriteHoldMs + 1250);
+
+// Internal sentinel for commands AetherSDR suppresses before sending to the
+// radio during profile recall. This is not a SmartSDR protocol response code.
+inline constexpr int kProfileLoadSuppressedCommandCode = 0x50000061;
 
 inline bool profileLoadMayRebuildRadioTopology(const QString& profileType)
 {
