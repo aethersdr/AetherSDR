@@ -9,12 +9,14 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QTableView>
 #include <QHeaderView>
 #include <QCheckBox>
 #include <QRadioButton>
 #include <QPushButton>
 #include <QButtonGroup>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <cmath>
@@ -34,11 +36,11 @@ public:
         setSortRole(Qt::UserRole);
     }
 
-    void setBandFilter(double low, double high)
+    // bands: empty vector = "All"; non-empty = OR of all ranges
+    void setBandFilters(const QVector<QPair<double,double>>& bands)
     {
-        m_mode = Band;
-        m_low  = low;
-        m_high = high;
+        m_mode  = Band;
+        m_bands = bands;
         invalidateFilter();
     }
 
@@ -46,14 +48,6 @@ public:
     {
         m_mode   = Freq;
         m_freqHz = hz;
-        invalidateFilter();
-    }
-
-    void clearFilter()
-    {
-        m_mode = Band;
-        m_low  = 0.0;
-        m_high = 0.0;
         invalidateFilter();
     }
 
@@ -65,8 +59,10 @@ protected:
         const double mhz = sourceModel()->data(mhzIdx, Qt::UserRole).toDouble();
 
         if (m_mode == Band) {
-            if (m_low <= 0.0 && m_high <= 0.0) return true;  // "All"
-            return mhz >= m_low && mhz <= m_high;
+            if (m_bands.isEmpty()) return true;   // "All"
+            for (const auto& [lo, hi] : m_bands)
+                if (mhz >= lo && mhz <= hi) return true;
+            return false;
         } else {
             // Freq mode: match exact Hz (llround comparison)
             const long long stationHz = llround(mhz * 1e6);
@@ -89,10 +85,9 @@ protected:
     }
 
 private:
-    FilterMode m_mode{Band};
-    double     m_low{0.0};
-    double     m_high{0.0};
-    double     m_freqHz{0.0};
+    FilterMode                    m_mode{Band};
+    QVector<QPair<double,double>> m_bands;   // empty = "All"
+    double                        m_freqHz{0.0};
 };
 
 // ── Band table ─────────────────────────────────────────────────────────────
@@ -100,16 +95,17 @@ private:
 namespace {
 struct Band { const char* label; double low; double high; };
 constexpr Band kBands[FreeDvReporterDialog::BandCount] = {
-    {"160m",  1.8,   2.0  },
-    {"80m",   3.5,   4.0  },
-    {"40m",   7.0,   7.3  },
-    {"30m",  10.1,  10.2  },
-    {"20m",  14.0,  14.35 },
-    {"17m",  18.0,  18.2  },
-    {"15m",  21.0,  21.45 },
-    {"12m",  24.8,  25.0  },
-    {"10m",  28.0,  29.8  },
-    {"All",   0.0,   0.0  },  // always last — index BandCount-1
+    {"160m",   1.8,    2.0   },
+    {"80m",    3.5,    4.0   },
+    {"40m",    7.0,    7.3   },
+    {"30m",   10.1,   10.2   },
+    {"20m",   14.0,   14.35  },
+    {"17m",   18.0,   18.2   },
+    {"15m",   21.0,   21.45  },
+    {"12m",   24.8,   25.0   },
+    {"10m",   28.0,   29.8   },
+    {"6m+",   50.0, 1300.0   },  // 6m through 23cm; mirrors FreeDV-GUI "Other"
+    {"All",    0.0,    0.0   },  // always last — index BandCount-1 = 10
 };
 } // namespace
 
@@ -118,10 +114,11 @@ constexpr Band kBands[FreeDvReporterDialog::BandCount] = {
 FreeDvReporterDialog::FreeDvReporterDialog(QWidget* parent)
     : PersistentDialog("FreeDV Reporter", "FreeDvReporterGeometry", parent)
 {
-    setMinimumSize(700, 350);
+    setMinimumSize(780, 350);
     theme::setContainer(this, QStringLiteral("reporter"));
     buildBody();
     restoreSettings();
+    m_initializing = false;
 }
 
 void FreeDvReporterDialog::buildBody()
@@ -185,6 +182,7 @@ void FreeDvReporterDialog::buildBody()
 
     m_bandRadio = new QRadioButton("Band");
     m_bandRadio->setChecked(true);
+    m_bandRadio->setToolTip("Ctrl+click band buttons to select multiple bands");
     ThemeManager::instance().applyStyleSheet(m_bandRadio,
         "QRadioButton { color: {{color.text.primary}}; }");
     bottom->addWidget(m_bandRadio);
@@ -195,7 +193,7 @@ void FreeDvReporterDialog::buildBody()
     bottom->addWidget(m_freqRadio);
 
     m_bandGroup = new QButtonGroup(this);
-    m_bandGroup->setExclusive(true);
+    m_bandGroup->setExclusive(false);
 
     // Band buttons share a single registered template string; ThemeManager
     // re-resolves on theme change for each registered widget.
@@ -224,12 +222,32 @@ void FreeDvReporterDialog::buildBody()
         bottom->addWidget(btn);
         const int idx = i;
         connect(btn, &QPushButton::clicked, this, [this, idx] {
-            applyBandFilter(idx);
+            const bool isAllBtn = (idx == BandCount - 1);
+            const bool ctrl =
+                QGuiApplication::keyboardModifiers().testFlag(Qt::ControlModifier)
+#ifdef Q_OS_MACOS
+                || QGuiApplication::keyboardModifiers().testFlag(Qt::MetaModifier)
+#endif
+                ;
+
+            if (isAllBtn || !ctrl) {
+                // Plain click on any button, or Ctrl+click on "All": single-select
+                m_activeBandIndices.clear();
+                if (!isAllBtn)
+                    m_activeBandIndices.insert(idx);
+            } else {
+                // Ctrl+click on a named band: toggle in/out of active set
+                if (m_activeBandIndices.contains(idx))
+                    m_activeBandIndices.remove(idx);
+                else
+                    m_activeBandIndices.insert(idx);
+                // Empty set falls through to "All" mode in applyBandFilter()
+            }
+            applyBandFilter();
         });
     }
-    // Check "All" by default (last button, index BandCount-1 = 9 → All)
+    // Default: "All" mode — empty set; last button checked
     m_bandBtns.last()->setChecked(true);
-    m_activeBandIndex = BandCount - 1;  // "All" is the last entry
 
     bottom->addStretch();
 
@@ -253,8 +271,8 @@ void FreeDvReporterDialog::buildBody()
     connect(m_bandRadio,  &QRadioButton::toggled, this, &FreeDvReporterDialog::onBandModeToggled);
     connect(m_freqRadio,  &QRadioButton::toggled, this, &FreeDvReporterDialog::onFreqModeToggled);
 
-    // Apply the default "All" filter
-    applyBandFilter(BandCount - 1);
+    // Apply the default "All" filter (empty set = All)
+    applyBandFilter();
 }
 
 // ── Public interface ───────────────────────────────────────────────────────
@@ -302,33 +320,51 @@ void FreeDvReporterDialog::onSliceFrequencyChanged(double mhz)
 {
     if (!m_trackCheck->isChecked()) return;
 
-    if (m_bandRadio->isChecked()) {
-        // Find which band this frequency falls in
-        for (int i = 0; i < BandCount - 1; ++i) {  // -1 to exclude "All"
-            if (mhz >= kBands[i].low && mhz <= kBands[i].high) {
-                m_bandBtns[i]->setChecked(true);
-                applyBandFilter(i);
-                return;
-            }
+    // Always update band button highlight regardless of filter mode.
+    // In Band mode this also drives the proxy filter; in Freq mode it is
+    // visual-only (the proxy filters by exact Hz via applyFreqFilter below).
+    m_activeBandIndices.clear();
+    for (int i = 0; i < BandCount - 1; ++i) {   // -1 excludes "All"
+        if (mhz >= kBands[i].low && mhz <= kBands[i].high) {
+            m_activeBandIndices.insert(i);
+            break;
         }
-        // Frequency not in any known band — show All
-        m_bandBtns[BandCount - 1]->setChecked(true);
-        applyBandFilter(BandCount - 1);
+    }
+    // No band matched → set stays empty → "All" buttons highlight
+
+    if (m_bandRadio->isChecked()) {
+        applyBandFilter();          // applies band filter + syncs buttons + saves
     } else {
+        syncButtonStates();         // visual only; proxy updated below
         applyFreqFilter(mhz * 1e6);
     }
 }
 
-void FreeDvReporterDialog::applyBandFilter(int bandIndex)
+void FreeDvReporterDialog::applyBandFilter()
 {
-    m_activeBandIndex = bandIndex;
     auto* p = static_cast<FreeDvReporterProxy*>(m_proxy);
-    if (bandIndex < 0 || bandIndex >= BandCount) {
-        p->clearFilter();
-        return;
+    if (m_activeBandIndices.isEmpty()) {
+        p->setBandFilters({});   // "All"
+    } else {
+        QVector<QPair<double,double>> ranges;
+        ranges.reserve(m_activeBandIndices.size());
+        for (int idx : std::as_const(m_activeBandIndices)) {
+            if (idx >= 0 && idx < BandCount - 1)
+                ranges.append({kBands[idx].low, kBands[idx].high});
+        }
+        p->setBandFilters(ranges);
     }
-    p->setBandFilter(kBands[bandIndex].low, kBands[bandIndex].high);
+    syncButtonStates();
     persistSettings();
+}
+
+void FreeDvReporterDialog::syncButtonStates()
+{
+    const bool allMode = m_activeBandIndices.isEmpty();
+    for (int i = 0; i < BandCount; ++i) {
+        const bool isAllBtn = (i == BandCount - 1);
+        m_bandBtns[i]->setChecked(isAllBtn ? allMode : m_activeBandIndices.contains(i));
+    }
 }
 
 void FreeDvReporterDialog::applyFreqFilter(double hz)
@@ -347,10 +383,11 @@ void FreeDvReporterDialog::onTrackToggled(bool checked)
 void FreeDvReporterDialog::onBandModeToggled(bool checked)
 {
     if (!checked) return;
-    applyBandFilter(m_activeBandIndex);
+    applyBandFilter();
     if (m_trackCheck->isChecked() && m_slice)
         onSliceFrequencyChanged(m_slice->frequency());
-    persistSettings();
+    // applyBandFilter() (called above, and inside onSliceFrequencyChanged)
+    // already persists — no redundant save needed here
 }
 
 void FreeDvReporterDialog::onFreqModeToggled(bool checked)
@@ -365,10 +402,18 @@ void FreeDvReporterDialog::onFreqModeToggled(bool checked)
 
 void FreeDvReporterDialog::persistSettings() const
 {
+    if (m_initializing) return;
+
     QJsonObject obj;
-    obj["track"]     = m_trackCheck->isChecked();
-    obj["bandMode"]  = m_bandRadio->isChecked();
-    obj["bandIndex"] = m_activeBandIndex;
+    obj["track"]       = m_trackCheck->isChecked();
+    obj["bandMode"]    = m_bandRadio->isChecked();
+    obj["bandVersion"] = 1;
+
+    QJsonArray indices;
+    for (int idx : std::as_const(m_activeBandIndices))
+        indices.append(idx);
+    obj["bandIndices"] = indices;
+
     AppSettings::instance().setValue(
         "FreeDvReporter",
         QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
@@ -385,20 +430,31 @@ void FreeDvReporterDialog::restoreSettings()
 
     const bool track    = obj.value("track").toBool(false);
     const bool bandMode = obj.value("bandMode").toBool(true);
-    const int  bandIdx  = obj.value("bandIndex").toInt(BandCount - 1);
+
+    m_activeBandIndices.clear();
+
+    if (obj.contains("bandVersion")) {
+        // New format (v1+): array of selected band indices
+        const QJsonArray arr = obj.value("bandIndices").toArray();
+        for (const auto& v : arr) {
+            const int idx = v.toInt(-1);
+            if (idx >= 0 && idx < BandCount - 1)   // ignore "All" pseudo-index if stored
+                m_activeBandIndices.insert(idx);
+        }
+    } else {
+        // Old format (10-band, single scalar bandIndex).
+        // Indices 0–8 (160m–10m) map 1:1 to the new layout.
+        // Old index 9 was "All" → empty set → "All" mode.
+        const int oldIdx = obj.value("bandIndex").toInt(BandCount - 1);
+        if (oldIdx >= 0 && oldIdx <= 8)
+            m_activeBandIndices.insert(oldIdx);
+    }
 
     m_trackCheck->setChecked(track);
+    if (bandMode) m_bandRadio->setChecked(true);
+    else          m_freqRadio->setChecked(true);
 
-    if (bandMode) {
-        m_bandRadio->setChecked(true);
-    } else {
-        m_freqRadio->setChecked(true);
-    }
-
-    if (bandIdx >= 0 && bandIdx < BandCount) {
-        m_bandBtns[bandIdx]->setChecked(true);
-        applyBandFilter(bandIdx);
-    }
+    applyBandFilter();   // applies filter + syncs button checked states
 }
 
 } // namespace AetherSDR

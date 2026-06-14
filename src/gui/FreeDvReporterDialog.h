@@ -7,6 +7,7 @@
 #include "core/FreeDvClient.h"
 
 #include <QPointer>
+#include <QSet>
 #include <QSortFilterProxyModel>
 
 class QTableView;
@@ -36,7 +37,7 @@ public slots:
 
 private slots:
     void onSliceFrequencyChanged(double mhz);
-    void applyBandFilter(int bandIndex);
+    void applyBandFilter();
     void applyFreqFilter(double mhz);
     void onTrackToggled(bool checked);
     void onBandModeToggled(bool checked);
@@ -44,13 +45,15 @@ private slots:
 
 private:
     void buildBody();
+    void syncButtonStates();
     void persistSettings() const;
     void restoreSettings();
 
 public:
-    // Total number of band filter buttons (9 named bands + "All").
-    // The "All" button is at index BandCount-1.
-    static constexpr int BandCount = 10;
+    // Total number of band filter buttons (10 named bands + "All").
+    // Named bands: 160m–10m (indices 0–8) + "6m+" (index 9).
+    // The "All" button is always at index BandCount-1 = 10.
+    static constexpr int BandCount = 11;
 
 private:
 
@@ -67,8 +70,9 @@ private:
     QPointer<SliceModel> m_slice;
     QMetaObject::Connection m_sliceFreqConn;
 
-    int    m_activeBandIndex{BandCount - 1};  // default to "All"
-    double m_activeFreqHz{0.0};
+    QSet<int> m_activeBandIndices;  // empty = "All" mode
+    double    m_activeFreqHz{0.0};
+    bool      m_initializing{true}; // gates persistSettings() until after restoreSettings()
 };
 
 } // namespace AetherSDR
