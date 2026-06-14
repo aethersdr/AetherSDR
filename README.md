@@ -29,7 +29,7 @@ AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. 
 - **Six client-side noise-reduction engines** — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), DFNR (DeepFilterNet3), BNR (NVIDIA GPU AI), and MNR (macOS)
 - **DAX virtual audio + IQ** — 4 RX + 1 TX channels and raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, plus a per-slice **WFM demodulator** for satellite data
 - **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, and an **APRS client** (station map, GPS beacon, messaging) with a Direwolf-derived VHF demodulator
-- **PSK Reporter reception map** — see who's hearing you on an OpenStreetMap basemap, mode-coloured with great-circle paths
+- **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, and interpolated bandwidth at SWR ≤ 1.5 / 2.0
 - **SpotHub** — DX Cluster, RBN, WSJT-X, POTA, and FreeDV Reporter spots with auto-mode switch
 - **CW operator suite** — real-time Morse decoder, MIDI/keyboard straight-key & iambic paddles with full QSK, optional Quindar tones
 - **FreeDV RADE** — AI digital-voice codec with a client-side neural encoder/decoder
