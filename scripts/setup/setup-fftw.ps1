@@ -7,7 +7,10 @@
     extracts them, and generates MSVC import libraries (.lib) using lib.exe.
     The result is placed in third_party/fftw3/ ready for CMake.
 
-    Requires Visual Studio 2022 (for lib.exe).
+    Requires the MSVC toolchain (lib.exe). On CI, the environment is already
+    configured by ilammy/msvc-dev-cmd, so lib.exe is on PATH. Otherwise the
+    MSVC environment is imported from vcvars64.bat, located via vswhere
+    (version/edition-agnostic — works with VS 2022, 2026, and newer).
 
 .EXAMPLE
     .\setup-fftw.ps1
@@ -18,13 +21,29 @@ $ErrorActionPreference = "Stop"
 $FftwUrl   = "https://fftw.org/pub/fftw/fftw-3.3.5-dll64.zip"
 $OutDir    = "third_party\fftw3"
 $ZipFile   = "third_party\fftw3-dll64.zip"
-$VsVars    = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
-# Also try Enterprise (GitHub CI) and BuildTools (winget)
-if (-not (Test-Path $VsVars)) {
-    $VsVars = "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+# Locate vcvars64.bat in a version/edition-agnostic way. vswhere lives at a
+# stable path and finds any installed VS (2022, 2026, …); fall back to known
+# hardcoded locations for environments without it.  Only used when lib.exe is
+# not already on PATH (see below) — on CI msvc-dev-cmd has already set it up.
+$VsVars  = $null
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+if (Test-Path $vswhere) {
+    $vsInstall = & $vswhere -latest -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath 2>$null | Select-Object -First 1
+    if ($vsInstall) {
+        $candidate = Join-Path $vsInstall "VC\Auxiliary\Build\vcvars64.bat"
+        if (Test-Path $candidate) { $VsVars = $candidate }
+    }
 }
-if (-not (Test-Path $VsVars)) {
-    $VsVars = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+if (-not $VsVars) {
+    foreach ($p in @(
+        "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat",
+        "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat",
+        "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+    )) {
+        if (Test-Path $p) { $VsVars = $p; break }
+    }
 }
 
 # ── Check if already set up ──────────────────────────────────────────────
@@ -60,19 +79,22 @@ Copy-Item "$tempDir\libfftw3-3.def" "$OutDir\lib\"
 Copy-Item "$tempDir\libfftw3f-3.dll" "$OutDir\bin\" -ErrorAction SilentlyContinue
 Copy-Item "$tempDir\libfftw3f-3.def" "$OutDir\lib\" -ErrorAction SilentlyContinue
 
-# ── Import MSVC environment and generate .lib ────────────────────────────
+# ── Ensure the MSVC environment, then generate .lib ──────────────────────
 Write-Host "Generating MSVC import library..." -ForegroundColor Cyan
 
-if (-not (Test-Path $VsVars)) {
-    Write-Error "Visual Studio 2022 not found at: $VsVars"
-    exit 1
-}
-
-# Import MSVC env
-$envVars = & cmd.exe /c "`"$VsVars`" >nul 2>&1 && set" 2>&1
-foreach ($line in $envVars) {
-    if ($line -match "^([^=]+)=(.*)$") {
-        [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+# If lib.exe is already on PATH (CI: ilammy/msvc-dev-cmd ran earlier), use it
+# directly. Otherwise import the MSVC env from the vcvars64.bat located above.
+if (-not (Get-Command lib.exe -ErrorAction SilentlyContinue)) {
+    if (-not $VsVars) {
+        Write-Error "MSVC toolchain not found: lib.exe is not on PATH and no Visual Studio installation was located (checked vswhere and known VS2022 paths). Install the VC++ build tools or run from a Developer prompt."
+        exit 1
+    }
+    Write-Host "Importing MSVC environment from $VsVars" -ForegroundColor Cyan
+    $envVars = & cmd.exe /c "`"$VsVars`" >nul 2>&1 && set" 2>&1
+    foreach ($line in $envVars) {
+        if ($line -match "^([^=]+)=(.*)$") {
+            [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2], "Process")
+        }
     }
 }
 
