@@ -19,6 +19,12 @@ AprsBeacon::AprsBeacon(QObject* parent)
 
 void AprsBeacon::setEnabled(bool on)
 {
+    // No-op when unchanged: applyAprsConfigFromUi() calls this on every dialog
+    // interaction (editingFinished / symbol change / message send / Beacon Now),
+    // and an unconditional timer restart would let an operator defer a timed
+    // beacon indefinitely by fiddling with the UI.
+    if (m_enabled == on)
+        return;
     m_enabled = on;
     // Timer only — no immediate transmission. Enabling the beacon (or the
     // app restoring a persisted enable on startup) must not key the radio by
@@ -32,7 +38,10 @@ void AprsBeacon::setEnabled(bool on)
 
 void AprsBeacon::setIntervalMinutes(int minutes)
 {
-    m_intervalMin = qBound(1, minutes, 24 * 60);
+    const int clamped = qBound(1, minutes, 24 * 60);
+    if (clamped == m_intervalMin)
+        return;  // unchanged — don't restart the timer (would defer the beacon)
+    m_intervalMin = clamped;
     if (m_enabled)
         m_timer.start(m_intervalMin * 60 * 1000);
 }

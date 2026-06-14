@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -92,17 +93,24 @@ void AprsMessenger::onPacket(const aprs::Packet& packet)
     if (!packet.messageNo.isEmpty())
         transmitText(aprs::encodeAck(packet.source, packet.messageNo));
 
-    // Duplicate detection: same station re-sending the same message number
-    // (or, for unnumbered messages, the same text within a few minutes).
+    // Duplicate detection: same station re-sending the same message within a
+    // few minutes. APRS clients reuse small message numbers freely (often
+    // cycling {1–{99, some restarting per session), so a numbered match must be
+    // bounded by both text AND time — an unbounded msgNo match would silently
+    // drop a genuinely-new message that happens to reuse a number we stored
+    // long ago (while still auto-acking it, so neither side notices). 30 min
+    // comfortably covers ack-loss retries.
     for (const Message& m : m_messages) {
         if (m.outgoing
             || m.counterpart.compare(packet.source, Qt::CaseInsensitive) != 0)
             continue;
+        const qint64 ageSecs = m.utc.secsTo(QDateTime::currentDateTimeUtc());
         if (!packet.messageNo.isEmpty()) {
-            if (m.msgNo == packet.messageNo)
+            if (m.msgNo == packet.messageNo
+                && m.text == packet.messageText
+                && ageSecs < 1800)
                 return;
-        } else if (m.text == packet.messageText
-                   && m.utc.secsTo(QDateTime::currentDateTimeUtc()) < 300) {
+        } else if (m.text == packet.messageText && ageSecs < 300) {
             return;
         }
     }
@@ -299,7 +307,9 @@ void AprsMessenger::save() const
     QJsonObject root;
     root.insert(QStringLiteral("messages"), arr);
     root.insert(QStringLiteral("nextMsgNo"), m_nextMsgNo);
-    QFile f(m_persistPath);
+    // Atomic write (Constitution Principle XIV) — a crash mid-write must not
+    // truncate or corrupt the message history.
+    QSaveFile f(m_persistPath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         qCWarning(lcAx25).noquote()
             << "AprsMessenger: could not write" << m_persistPath
@@ -307,6 +317,10 @@ void AprsMessenger::save() const
         return;
     }
     f.write(QJsonDocument(root).toJson());
+    if (!f.commit())
+        qCWarning(lcAx25).noquote()
+            << "AprsMessenger: could not commit" << m_persistPath
+            << "—" << f.errorString();
 }
 
 } // namespace AetherSDR

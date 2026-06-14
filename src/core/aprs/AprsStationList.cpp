@@ -5,6 +5,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QSaveFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -225,13 +226,19 @@ void AprsStationList::save() const
     }
     QJsonObject root;
     root.insert(QStringLiteral("stations"), arr);
-    QFile f(m_path);
+    // QSaveFile writes to a temp file and atomically renames on commit() so an
+    // unclean shutdown mid-write can't truncate or corrupt the roster
+    // (Constitution Principle XIV — Persist Atomically).
+    QSaveFile f(m_path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         qCWarning(lcAx25).noquote()
             << "AprsStationList: could not write" << m_path << "—" << f.errorString();
         return;
     }
     f.write(QJsonDocument(root).toJson());
+    if (!f.commit())
+        qCWarning(lcAx25).noquote()
+            << "AprsStationList: could not commit" << m_path << "—" << f.errorString();
 }
 
 } // namespace AetherSDR

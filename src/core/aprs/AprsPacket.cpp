@@ -577,10 +577,16 @@ QString encodeUncompressedPosition(double lat, double lon,
     const char lonHemi = lon < 0 ? 'W' : 'E';
     lat = qAbs(lat);
     lon = qAbs(lon);
-    const int latDeg = int(lat);
-    const int lonDeg = int(lon);
-    const double latMin = (lat - latDeg) * 60.0;
-    const double lonMin = (lon - lonDeg) * 60.0;
+    int latDeg = int(lat);
+    int lonDeg = int(lon);
+    // Round minutes to the 2 decimals we print, then carry a 60.00 overflow
+    // into the degrees. Without this, e.g. 38.999999° formats latMin=59.99994
+    // as "60.00" → "3860.00N", which every APRS parser (including ours)
+    // rejects as min >= 60. A GPS-fed beacon hits this near minute boundaries.
+    double latMin = qRound((lat - latDeg) * 60.0 * 100.0) / 100.0;
+    double lonMin = qRound((lon - lonDeg) * 60.0 * 100.0) / 100.0;
+    if (latMin >= 60.0) { latMin -= 60.0; latDeg += 1; }
+    if (lonMin >= 60.0) { lonMin -= 60.0; lonDeg += 1; }
     QString out;
     out += QLatin1Char(messagingCapable ? '=' : '!');
     out += QString::asprintf("%02d%05.2f%c", latDeg, latMin, latHemi);
