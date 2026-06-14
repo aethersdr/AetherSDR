@@ -2,7 +2,6 @@
 #include "GuardedSlider.h"
 #include "models/TransmitModel.h"
 #include "Theme.h"
-#include "core/AppSettings.h"
 
 #include <QPushButton>
 #include <QLabel>
@@ -213,9 +212,6 @@ void PhoneApplet::buildUI()
     }
 
     // ── DEXP row: toggle + level slider ────────────────────────────────
-    // NOTE: DEXP (downward expander / noise gate) commands return error
-    // 0x5000002D on firmware v1.4.0.0. UI is present but non-functional
-    // until the correct protocol command is identified. See GitHub issue.
     {
         auto* rowW = new QWidget;
         rowW->setFixedHeight(24);
@@ -232,9 +228,6 @@ void PhoneApplet::buildUI()
         connect(m_dexpBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_model) {
                 m_model->setDexp(on);
-                auto& s = AppSettings::instance();
-                s.setValue("DexpEnabled", on ? "True" : "False");
-                s.save();
             }
         });
         row->addWidget(m_dexpBtn);
@@ -249,9 +242,6 @@ void PhoneApplet::buildUI()
         connect(m_dexpSlider, &QSlider::valueChanged, this, [this](int v) {
             if (!m_updatingFromModel && m_model) {
                 m_model->setDexpLevel(v);
-                auto& s = AppSettings::instance();
-                s.setValue("DexpLevel", QString::number(v));
-                s.save();
             }
             m_dexpLabel->setText(QString::number(v));
         });

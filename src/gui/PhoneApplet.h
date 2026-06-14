@@ -19,7 +19,7 @@ class TransmitModel;
 //  - AM Carrier level slider
 //  - VOX toggle + level slider
 //  - VOX delay slider
-//  - DEXP toggle + level slider (non-functional on fw v1.4.0.0)
+//  - DEXP toggle + level slider
 //  - TX filter: Low Cut / High Cut step buttons
 class PhoneApplet : public QWidget {
     Q_OBJECT
@@ -48,7 +48,7 @@ private:
     QSlider* m_voxDelaySlider{nullptr};
     QLabel*  m_voxDelayLabel{nullptr};
 
-    // DEXP (non-functional on fw v1.4.0.0 — see GitHub issue)
+    // DEXP (radio compander control)
     QPushButton* m_dexpBtn{nullptr};
     GuardedSlider* m_dexpSlider{nullptr};
     QLabel*      m_dexpLabel{nullptr};

@@ -2931,9 +2931,6 @@ void MainWindow::closeEvent(QCloseEvent* event)
     s.setValue("ClientDfnrEnabled", m_audio->dfnrEnabled() ? "True" : "False");
     s.setValue("ClientMnrEnabled", m_audio->mnrEnabled() ? "True" : "False");
     // BNR not persisted — requires manual enable each session
-    // DEXP saved on-change in PhoneApplet — do NOT overwrite here, because
-    // the radio may have reset DEXP to off (model reflects radio state, not
-    // the user's preference).
 
     s.save();
 

@@ -701,7 +701,7 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() {
             if (!m_radioModel.isConnected()) return;
             auto& tx = m_radioModel.transmitModel();
-            tx.setSpeechProcessorEnable(!tx.companderOn());
+            tx.setSpeechProcessorEnable(!tx.speechProcessorEnable());
         });
     m_shortcutManager.registerAction("dax_toggle", "DAX TX Toggle", "TX",
         QKeySequence(), [this]() {

@@ -196,16 +196,6 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setMnrEnabled(true); });
             // BNR not auto-restored — requires manual enable each session
 
-            // Restore DEXP (downward expander) — radio does not persist across sessions
-            bool dexpSaved = settings.value("DexpEnabled", "False").toString() == "True";
-            int dexpLevel = settings.value("DexpLevel", "0").toInt();
-            if (dexpSaved) {
-                m_radioModel.transmitModel().setDexp(true);
-                if (dexpLevel > 0) {
-                    m_radioModel.transmitModel().setDexpLevel(dexpLevel);
-                }
-            }
-
             refreshCwDecodeState();
             refreshRttyDecodeState();
         });

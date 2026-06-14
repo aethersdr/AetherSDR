@@ -1762,7 +1762,7 @@ void MainWindow::registerMidiParams()
 
     reg("phone.procEnable", "Speech Processor", "Phone/CW", P::Toggle, 0, 1,
         [this](float v) { m_radioModel.transmitModel().setSpeechProcessorEnable(v > 0.5f); },
-        [this]() -> float { return m_radioModel.transmitModel().companderOn() ? 1 : 0; });
+        [this]() -> float { return m_radioModel.transmitModel().speechProcessorEnable() ? 1 : 0; });
 
     reg("phone.daxEnable", "DAX", "Phone/CW", P::Toggle, 0, 1,
         [this](float v) { m_radioModel.transmitModel().setDax(v > 0.5f); },
