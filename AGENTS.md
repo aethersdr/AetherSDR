@@ -34,6 +34,13 @@ When helping with AetherSDR:
 - **Use `AppSettings`, never `QSettings`** — see "Settings Persistence" below
 - **Read `CONTRIBUTING.md`** for full contributor guidelines, coding conventions,
   and the AI-to-AI debugging protocol (open a GitHub issue for cross-agent coordination)
+- **Sign every commit you author.** `main` enforces `required_signatures`, so a
+  PR with unsigned commits cannot merge without an admin override. If the
+  contributor has not set up commit signing yet, walk them through
+  `docs/COMMIT-SIGNING.md` **before** you commit — the top of that file is a
+  step-by-step AI-assistant algorithm covering Windows / macOS / Linux / WSL /
+  Raspberry Pi. Default to SSH signing; GPG is the fallback for existing GPG
+  workflows. Verify with `git log --show-signature -1` after the first commit.
 - **Read the AetherSDR Constitution before writing or reviewing code.**
   Canonical source: `.specify/memory/constitution.md`. Byte-identical
   mirror at `CONSTITUTION.md` in repo root for discoverability. 14
