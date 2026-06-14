@@ -891,11 +891,14 @@ private:
     NetState      m_netState{NetState::Off};
     int           m_pingMissCount{0};          // consecutive unanswered pings
     bool          m_pingDisconnectTriggered{false};
+    qint64        m_lastMultiFlexClientConnectMs{0};
+    qint64        m_multiFlexPingGraceUntilMs{0};
     // Normal: disconnect after 5 unanswered pings (~5 s).
     // Poor: allow 15 (~15 s) — adaptive throttle has already cut UDP load, so
     // brief TCP stalls are more likely to be transient congestion than a dead link.
     static constexpr int PING_MISS_DISCONNECT      = 5;
     static constexpr int PING_MISS_DISCONNECT_POOR = 15;
+    static constexpr qint64 MULTIFLEX_CLIENT_CONNECT_PING_GRACE_MS = 5000;
     // Minimum time at a throttled state before the throttle is allowed to lift.
     // Prevents Good<->VeryGood oscillation: reducing fps lowers UDP load which
     // improves the score, which would immediately lift the throttle and restart

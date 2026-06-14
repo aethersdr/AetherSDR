@@ -2708,6 +2708,8 @@ void RadioModel::startNetworkMonitor()
     m_maxPingRtt = 0;
     m_pingMissCount = 0;
     m_pingDisconnectTriggered = false;
+    m_lastMultiFlexClientConnectMs = 0;
+    m_multiFlexPingGraceUntilMs = 0;
     m_pendingThrottleLift = false;
     // Safety: ensure MainWindow's m_adaptiveThrottleActive is cleared even if
     // the connectionStateChanged(false) path was somehow skipped.  Pans are not
@@ -2738,8 +2740,38 @@ void RadioModel::startNetworkMonitor()
                                       ? PING_MISS_DISCONNECT_POOR
                                       : PING_MISS_DISCONNECT;
         if (m_pingMissCount >= missThreshold) {
-            if (m_pingDisconnectTriggered)
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (now < m_multiFlexPingGraceUntilMs) {
+                qCDebug(lcProtocol) << "RadioModel: deferring ping disconnect during Multi-Flex client-connect grace"
+                                    << "misses:" << m_pingMissCount
+                                    << "remaining_ms:" << (m_multiFlexPingGraceUntilMs - now);
+                sendCmd("ping");
                 return;
+            }
+
+            // A new Multi-Flex GUI can briefly starve TCP ping replies while
+            // the radio replays status and stream ownership. If that burst
+            // overlaps the missed-ping window, grant one short grace period
+            // before treating the TCP control path as dead.
+            const qint64 recentClientConnectWindowMs =
+                static_cast<qint64>(missThreshold + 1) * m_pingTimer.interval();
+            const bool recentMultiFlexClientConnect =
+                m_lastMultiFlexClientConnectMs > 0
+                && now >= m_lastMultiFlexClientConnectMs
+                && now - m_lastMultiFlexClientConnectMs <= recentClientConnectWindowMs;
+            if (recentMultiFlexClientConnect) {
+                m_multiFlexPingGraceUntilMs = now + MULTIFLEX_CLIENT_CONNECT_PING_GRACE_MS;
+                qCDebug(lcProtocol) << "RadioModel: deferring ping disconnect after recent Multi-Flex client connect"
+                                    << "misses:" << m_pingMissCount
+                                    << "since_client_connect_ms:" << (now - m_lastMultiFlexClientConnectMs)
+                                    << "grace_ms:" << MULTIFLEX_CLIENT_CONNECT_PING_GRACE_MS;
+                sendCmd("ping");
+                return;
+            }
+
+            if (m_pingDisconnectTriggered) {
+                return;
+            }
 
             m_pingDisconnectTriggered = true;
             m_pingTimer.stop();
@@ -3918,6 +3950,15 @@ void RadioModel::onStatusReceived(const QString& object,
                 client.source = source;
                 client.localPtt = ptt;
                 m_clientInfoMap[handle] = client;
+                if (handle != clientHandle()) {
+                    m_lastMultiFlexClientConnectMs = QDateTime::currentMSecsSinceEpoch();
+                    qCDebug(lcProtocol).noquote()
+                        << "RadioModel: noted Multi-Flex client connect for ping grace"
+                        << QStringLiteral("handle=%1").arg(hexId(handle))
+                        << QStringLiteral("program=%1").arg(program)
+                        << QStringLiteral("station=%1").arg(station)
+                        << QStringLiteral("source=%1").arg(source.isEmpty() ? QStringLiteral("direct") : source);
+                }
                 emitOtherClientsChanged();
                 if (!shouldSuppressClientConnectionNotice(handle))
                     announceClientConnection(handle, source, station, program);
