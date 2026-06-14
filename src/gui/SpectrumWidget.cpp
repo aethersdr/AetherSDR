@@ -642,6 +642,32 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     });
     createFpsMeterLabels();
 
+    // Continuous edge auto-pan while dragging a slice (user-reported).  While the
+    // cursor sits in the edge zone this timer drives a real pan velocity (see
+    // edgePanVelocityStep) so the band keeps scrolling without further
+    // mouse-move events.  Velocity knobs are env-tunable so the feel can be
+    // swept without rebuilding; AETHER_NO_DRAG_EDGEPAN=1 disables the whole
+    // thing (restores the legacy reveal-only behaviour for A/B testing).
+    m_vfoDragEdgePanDisabled = qEnvironmentVariableIntValue("AETHER_NO_DRAG_EDGEPAN") != 0;
+    if (int v = qEnvironmentVariableIntValue("AETHER_DRAG_EDGEPAN_VMAX"); v > 0) {
+        m_edgePanVmaxPctBw = v;
+    }
+    if (int v = qEnvironmentVariableIntValue("AETHER_DRAG_EDGEPAN_RAMP"); v > 0) {
+        m_edgePanRampMs = v;
+    }
+    if (int v = qEnvironmentVariableIntValue("AETHER_DRAG_EDGEPAN_INTERVAL"); v > 0) {
+        m_edgePanIntervalMs = v;
+    }
+    m_vfoDragEdgePanTimer = new QTimer(this);
+    m_vfoDragEdgePanTimer->setInterval(m_edgePanIntervalMs);
+    connect(m_vfoDragEdgePanTimer, &QTimer::timeout, this, [this]() {
+        if (m_draggingVfo) {
+            edgePanVelocityStep();
+        } else {
+            m_vfoDragEdgePanTimer->stop();
+        }
+    });
+
     // Load display settings (panIndex 0 by default — loadSettings() can be
     // called again after setPanIndex() for multi-pan)
     loadSettings();
@@ -4251,6 +4277,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             if (mx >= left && mx <= right) {
                 emit sliceClicked(so.sliceId);
                 m_draggingVfo = true;
+                m_vfoDragLastX = mx;
                 m_vfoDragOffsetHz = static_cast<int>(
                     std::round((xToMhz(mx) - so.freqMhz) * 1.0e6));
                 setSpectrumCursor(Qt::ClosedHandCursor);
@@ -4286,6 +4313,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         // Click inside the filter passband → start VFO drag (#404)
         if (filterPassbandBodyHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx)) {
             m_draggingVfo = true;
+            m_vfoDragLastX = mx;
             m_vfoDragOffsetHz = static_cast<int>(std::round((xToMhz(mx) - ao->freqMhz) * 1.0e6));
             setSpectrumCursor(Qt::ClosedHandCursor);
             ev->accept();
@@ -4302,6 +4330,115 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
 }
 
 static QString spotMarkerTooltip(const SpectrumWidget::SpotMarker& sm);
+
+// Compute the slice target frequency under cursor X (offset-anchored, snapped)
+// Tune the slice for the live, in-window drag path (cursor not at the edge).
+// Deliberately routed through edgePanTuneRequested with the center UNCHANGED so
+// the whole drag bypasses pan-follow/reveal: reveal is a position controller
+// whose flag-extended trigger (#2761) fires asymmetrically a little inside the
+// edge — inside our velocity zone on the flag side — and fights the edge-pan,
+// producing a one-sided "rubber band" stutter.  With reveal out of the drag
+// path, in-window moves only tune; the velocity zone owns all panning.  The
+// MainWindow handler skips the redundant pan command when the center is
+// unchanged.  (user-reported)
+void SpectrumWidget::driveVfoDragTune(int mx, const char* phase)
+{
+    const double mhz = snapToStep(xToMhz(mx) - m_vfoDragOffsetHz / 1.0e6, m_stepHz);
+    qCDebug(lcPerf).nospace()
+        << "SliceDrag phase=" << phase
+        << " mx=" << mx << " w=" << width()
+        << " center=" << m_centerMhz << " bw=" << m_bandwidthMhz
+        << " tuneMhz=" << mhz;
+    emit edgePanTuneRequested(m_centerMhz, mhz);
+}
+
+// Start the edge-pan velocity timer while the cursor sits in the edge zone
+// (within kVfoDragEdgeZoneFrac of either border), stop it otherwise.  Returns
+// whether the cursor is currently in the edge zone, so the caller can skip the
+// normal in-window tune and let the timer own panning.  Restarts the hold ramp
+// each time the zone is (re-)entered.  (user-reported)
+bool SpectrumWidget::updateVfoDragEdgePan(int mx)
+{
+    const int zonePx = std::max(1, static_cast<int>(width() * kVfoDragEdgeZoneFrac));
+    const bool inEdgeZone = !m_vfoDragEdgePanDisabled
+        && ((mx <= zonePx) || (mx >= width() - zonePx));
+    if (!m_vfoDragEdgePanTimer) {
+        return inEdgeZone;
+    }
+    if (inEdgeZone) {
+        if (!m_vfoDragEdgePanTimer->isActive()) {
+            m_vfoDragEdgeHoldTicks = 0;     // fresh ramp on (re-)entry
+            m_vfoDragEdgePanTimer->start();
+        }
+    } else if (m_vfoDragEdgePanTimer->isActive()) {
+        m_vfoDragEdgePanTimer->stop();
+    }
+    return inEdgeZone;
+}
+
+// One edge-pan velocity tick: pan the view at a speed that scales with how deep
+// the cursor is in the edge zone (depth) and ramps up the longer it is held,
+// keeping the dragged slice parked just inside the leading edge.  Unlike the
+// reveal-follow
+// (a position controller whose nudge is bounded by the cursor's bounded
+// overshoot — the old "rubber band" creep), this is a velocity controller, so
+// the band sweeps continuously and reaches across the whole range.  Pans the
+// waterfall/overlay locally for an immediate response, then hands the
+// pan+tune to MainWindow via edgePanTuneRequested (no reveal).  (user-reported)
+void SpectrumWidget::edgePanVelocityStep()
+{
+    const int w = width();
+    const int zonePx = std::max(1, static_cast<int>(w * kVfoDragEdgeZoneFrac));
+    int borderDist;
+    double dir;
+    if (m_vfoDragLastX <= zonePx) {
+        borderDist = m_vfoDragLastX;
+        dir = -1.0;                          // pan toward lower frequencies
+    } else if (m_vfoDragLastX >= w - zonePx) {
+        borderDist = w - m_vfoDragLastX;
+        dir = 1.0;                           // pan toward higher frequencies
+    } else {
+        m_vfoDragEdgePanTimer->stop();         // cursor left the zone
+        return;
+    }
+
+    const double depth = std::clamp(
+        static_cast<double>(zonePx - borderDist) / static_cast<double>(zonePx), 0.0, 1.0);
+    ++m_vfoDragEdgeHoldTicks;
+    const double rampFactor = std::min(1.0,
+        static_cast<double>(m_vfoDragEdgeHoldTicks * m_edgePanIntervalMs)
+            / static_cast<double>(std::max(1, m_edgePanRampMs)));
+    const double vmaxBwPerSec = m_edgePanVmaxPctBw / 100.0;
+    const double deltaMhz = depth * rampFactor * vmaxBwPerSec * m_bandwidthMhz
+                          * (m_edgePanIntervalMs / 1000.0);
+    if (deltaMhz <= 0.0) {
+        return;
+    }
+
+    const double newCenter = std::max(m_centerMhz + dir * deltaMhz, m_bandwidthMhz / 2.0);
+    if (qFuzzyCompare(newCenter, m_centerMhz)) {
+        return;
+    }
+
+    reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
+    m_centerMhz = newCenter;
+    markOverlayDirty();
+
+    // Park the slice a comfortable margin inside the leading edge rather than
+    // exactly under the cursor: the cursor is jammed against the window border,
+    // so following it literally pushes the slice (and its flag) off-screen.
+    // Clamping the reference X to the zone boundary keeps the slice visibly
+    // parked at the edge while the band scrolls under it, and stays continuous
+    // with the in-window path at the boundary.  (user-reported)
+    const int sliceX = std::clamp(m_vfoDragLastX, zonePx, w - zonePx);
+    const double sliceFreq = snapToStep(xToMhz(sliceX) - m_vfoDragOffsetHz / 1.0e6, m_stepHz);
+    qCDebug(lcPerf).nospace()
+        << "SliceDrag phase=edgepan dir=" << dir
+        << " depth=" << depth << " ramp=" << rampFactor
+        << " dMhz=" << deltaMhz << " center=" << m_centerMhz
+        << " sliceX=" << sliceX << " sliceMhz=" << sliceFreq;
+    emit edgePanTuneRequested(newCenter, sliceFreq);
+}
 
 void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 {
@@ -4522,8 +4659,13 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 
     if (m_draggingVfo) {
         const int mx = static_cast<int>(ev->position().x());
-        const double mhz = snapToStep(xToMhz(mx) - m_vfoDragOffsetHz / 1.0e6, m_stepHz);
-        emit incrementalTuneRequested(mhz);
+        m_vfoDragLastX = mx;
+        // In the edge zone the velocity timer owns panning (keeps the slice
+        // pinned under the cursor); only tune directly when in-window so a
+        // normal drag still tunes live.
+        if (!updateVfoDragEdgePan(mx)) {
+            driveVfoDragTune(mx, "move");
+        }
         ev->accept();
         return;
     }
@@ -4772,6 +4914,9 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     }
     if (m_draggingVfo) {
         m_draggingVfo = false;
+        if (m_vfoDragEdgePanTimer)
+            m_vfoDragEdgePanTimer->stop();
+        m_vfoDragEdgeHoldTicks = 0;
         setSpectrumCursor(Qt::CrossCursor);
         ev->accept();
         return;

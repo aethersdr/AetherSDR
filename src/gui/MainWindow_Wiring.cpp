@@ -1831,6 +1831,32 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         // conjure a slice; click is the explicit "create here" affordance.
     });
 
+    // ── Edge auto-pan step during slice drag (user-reported) ─────────────────
+    // Pan the view AND tune the slice in one shot, deliberately bypassing the
+    // pan-follow/reveal path: the SpectrumWidget already computed the explicit
+    // center, so re-running reveal here would fight the velocity controller.
+    // The slice tune uses setFrequency (autopan=0), so the radio doesn't
+    // recenter either.
+    connect(sw, &SpectrumWidget::edgePanTuneRequested,
+            this, [this, resolveSpectrumTuneTarget](double centerMhz, double sliceFreqMhz) {
+        auto* target = resolveSpectrumTuneTarget();
+        if (!target) {
+            return;
+        }
+        if (auto* pan = m_radioModel.panadapter(target->panId())) {
+            centerMhz = std::max(centerMhz, pan->bandwidthMhz() / 2.0);
+            // In-window drag moves pass the unchanged center purely to tune
+            // without reveal — only emit the pan command when it actually moves.
+            if (!qFuzzyCompare(centerMhz, pan->centerMhz())) {
+                m_radioModel.sendCommand(
+                    QString("display pan set %1 center=%2")
+                        .arg(pan->panId()).arg(centerMhz, 0, 'f', 6));
+            }
+        }
+        queueActiveSliceForSpectrumTarget(target->sliceId());
+        target->setFrequency(sliceFreqMhz);
+    });
+
     // ── Spot trigger — notify the radio/TCI clients when a spot label is clicked (#341)
     connect(sw, &SpectrumWidget::spotTriggered, this, [this, applet](int spotIndex) {
         const auto& spots = m_radioModel.spotModel().spots();

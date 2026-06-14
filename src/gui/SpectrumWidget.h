@@ -474,6 +474,11 @@ signals:
     // Emitted when the user makes an incremental tuning gesture such as
     // wheel tuning or VFO drag.
     void incrementalTuneRequested(double mhz);
+    // Edge auto-pan step: pan the view to newCenterMhz AND tune the slice to
+    // sliceFreqMhz in one shot, WITHOUT triggering pan-follow/reveal (which is
+    // already accounted for by the explicit center).  Keeps the dragged slice
+    // pinned under the cursor while the band scrolls.  (user-reported)
+    void edgePanTuneRequested(double newCenterMhz, double sliceFreqMhz);
     void spotTriggered(int spotIndex);
     // Emitted when the user changes both center and bandwidth as one explicit
     // pan/zoom operation and the radio should apply them coherently. Splitting
@@ -853,6 +858,33 @@ private:
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)
+    // Continuous edge auto-pan during VFO drag (user-reported).  The edge-follow
+    // pan (revealFrequencyIfNeeded) is a *position* controller — it nudges the
+    // slice a little past the trigger margin — not a *velocity* controller, so
+    // holding the cursor at the border produced a tiny, self-limiting creep
+    // (~0.1×span/s, the "rubber band" feel): the overshoot can't grow because
+    // the cursor can't move past the physical border.  Instead, while the
+    // cursor sits in the edge zone a timer drives a real pan *velocity* that
+    // scales with edge depth and ramps up with hold time, panning the view and
+    // keeping the slice pinned under the cursor via edgePanTuneRequested (a
+    // pan-without-reveal path, so it doesn't fight the follow logic).
+    QTimer* m_vfoDragEdgePanTimer{nullptr};
+    int  m_vfoDragLastX{0};                 // last cursor X during VFO drag (px)
+    int  m_vfoDragEdgeHoldTicks{0};         // ticks held in edge zone (ramp)
+    bool m_vfoDragEdgePanDisabled{false};   // AETHER_NO_DRAG_EDGEPAN=1 escape hatch
+    // Velocity knobs, env-tunable so the feel can be swept WITHOUT rebuilding:
+    //   AETHER_DRAG_EDGEPAN_VMAX     — top speed, % of span width per second
+    //   AETHER_DRAG_EDGEPAN_RAMP     — ms held to ramp from 0 → top speed
+    //   AETHER_DRAG_EDGEPAN_INTERVAL — timer interval ms (~30 Hz default)
+    int  m_edgePanVmaxPctBw{120};
+    int  m_edgePanRampMs{600};
+    int  m_edgePanIntervalMs{33};
+    // Edge zone width as a fraction of widget width (matches the incremental
+    // pan-follow trigger margin kIncrementalTriggerEdgeMarginFrac=0.05).
+    static constexpr double kVfoDragEdgeZoneFrac = 0.05;
+    void driveVfoDragTune(int mx, const char* phase);  // normal in-window tune
+    bool updateVfoDragEdgePan(int mx);                 // → true if in edge zone
+    void edgePanVelocityStep();                        // timer tick: velocity pan
     // dBm scale strip drag state
     static constexpr int DBM_STRIP_W = 36;  // width of the dBm scale strip
     static constexpr int DBM_ARROW_H = 14;  // height of each arrow button
