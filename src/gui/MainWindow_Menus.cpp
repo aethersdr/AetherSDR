@@ -68,7 +68,7 @@ void MainWindow::buildMenuBar()
     auto* waveformsAct = fileMenu->addAction("Waveforms...");
     waveformsAct->setMenuRole(QAction::NoRole);
     connect(waveformsAct, &QAction::triggered, this, [this] {
-        showOrRaisePersistent(m_waveformsDialog, &m_radioModel.flexWaveformModel());
+        showOrRaisePersistent(m_waveformsDialog, &m_radioModel);
     });
 
     fileMenu->addSeparator();

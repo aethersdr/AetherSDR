@@ -38,6 +38,7 @@ Q_DECLARE_LOGGING_CATEGORY(lcPerf)
 Q_DECLARE_LOGGING_CATEGORY(lcCw)
 Q_DECLARE_LOGGING_CATEGORY(lcSHistory)
 Q_DECLARE_LOGGING_CATEGORY(lcAx25)
+Q_DECLARE_LOGGING_CATEGORY(lcWaveform)
 
 // Central registry for toggling per-module diagnostic logging at runtime.
 // The Support dialog (Help → Support) uses this to let users enable/disable

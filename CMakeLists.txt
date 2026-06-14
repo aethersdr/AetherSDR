@@ -562,6 +562,7 @@ set(CORE_SOURCES
     src/core/MqttClient.cpp
     src/core/PgxlConnection.cpp
     src/core/FirmwareUploader.cpp
+    src/core/WaveformInstaller.cpp
     src/core/DvkWavTransfer.cpp
     src/core/ZipArchive.cpp
     src/core/ProfileTransfer.cpp

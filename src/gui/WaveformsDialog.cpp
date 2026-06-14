@@ -1,20 +1,24 @@
 #include "WaveformsDialog.h"
 #include "core/ThemeManager.h"
+#include "core/WaveformInstaller.h"
 #include "models/FlexWaveformModel.h"
+#include "models/RadioModel.h"
 
+#include <QFileDialog>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMessageBox>
+#include <QProgressDialog>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QVBoxLayout>
 
 namespace AetherSDR {
 
-WaveformsDialog::WaveformsDialog(FlexWaveformModel* model, QWidget* parent)
+WaveformsDialog::WaveformsDialog(RadioModel* model, QWidget* parent)
     : PersistentDialog(tr("Waveforms"), QStringLiteral("WaveformsDialogGeometry"), parent)
-    , m_model(model)
+    , m_radioModel(model)
 {
     theme::setContainer(this, QStringLiteral("dialog/waveforms"));
     setMinimumSize(440, 200);
@@ -34,6 +38,13 @@ WaveformsDialog::WaveformsDialog(FlexWaveformModel* model, QWidget* parent)
     statusRow->addWidget(m_statusLabel);
     statusRow->addStretch();
 
+    m_installBtn = new QPushButton(tr("Install…"));
+    m_installBtn->setAccessibleName(tr("Install Docker Waveform"));
+    m_installBtn->setFixedWidth(80);
+    m_installBtn->setEnabled(false);  // enabled once WFP is powered and ready
+    connect(m_installBtn, &QPushButton::clicked, this, &WaveformsDialog::onInstallClicked);
+    statusRow->addWidget(m_installBtn);
+
     root->addWidget(statusFrame);
 
     // ── Waveform list (scrollable) ────────────────────────────────────────────
@@ -50,26 +61,98 @@ WaveformsDialog::WaveformsDialog(FlexWaveformModel* model, QWidget* parent)
     scroll->setWidget(m_listContainer);
     root->addWidget(scroll, 1);
 
-    // ── Wire model signals ────────────────────────────────────────────────────
-    connect(m_model, &FlexWaveformModel::wfpStatusChanged,
+    // ── Wire model + theme signals ────────────────────────────────────────────
+    FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
+    connect(&wfModel, &FlexWaveformModel::wfpStatusChanged,
             this, &WaveformsDialog::refreshStatus);
-    connect(m_model, &FlexWaveformModel::waveformsChanged,
+    connect(&wfModel, &FlexWaveformModel::wfpStatusChanged,
+            this, &WaveformsDialog::updateInstallButtonState);
+    connect(&wfModel, &FlexWaveformModel::waveformsChanged,
+            this, &WaveformsDialog::refreshWaveformList);
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, &WaveformsDialog::refreshStatus);
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
             this, &WaveformsDialog::refreshWaveformList);
 
     refreshStatus();
+    updateInstallButtonState();
     refreshWaveformList();
+}
+
+void WaveformsDialog::updateInstallButtonState()
+{
+    const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
+    const bool wfpUp = wfModel.wfpPowered() && wfModel.wfpReady();
+    const bool busy  = m_installer && m_installer->isInstalling();
+    m_installBtn->setEnabled(wfpUp && !busy);
+}
+
+void WaveformsDialog::onInstallClicked()
+{
+    const QString path = QFileDialog::getOpenFileName(
+        this,
+        tr("Select Waveform Image"),
+        {},
+        tr("Waveform Images (*.tar.gz *.tgz);;All Files (*)"));
+
+    if (path.isEmpty())
+        return;
+
+    if (!m_installer)
+        m_installer = new WaveformInstaller(m_radioModel, this);
+
+    if (m_installer->isInstalling())
+        return;
+
+    m_installBtn->setEnabled(false);
+
+    auto* progress = new QProgressDialog(
+        tr("Installing waveform…"), tr("Cancel"), 0, 100, this);
+    progress->setWindowModality(Qt::WindowModal);
+    progress->setMinimumDuration(0);
+    progress->setValue(0);
+    ThemeManager::instance().applyStyleSheet(progress,
+        QStringLiteral("QProgressBar { text-align: center; "
+                       "background: {{color.background.0}}; "
+                       "color: {{color.text.primary}}; }"));
+
+    connect(m_installer, &WaveformInstaller::progressChanged,
+            progress, [progress](int pct, const QString& msg) {
+                progress->setValue(pct);
+                progress->setLabelText(msg);
+            });
+
+    connect(progress, &QProgressDialog::canceled,
+            m_installer, &WaveformInstaller::cancel);
+
+    connect(m_installer, &WaveformInstaller::finished,
+            this, [this, progress](bool ok, const QString& msg) {
+                progress->close();
+                progress->deleteLater();
+                updateInstallButtonState();
+                if (ok)
+                    QMessageBox::information(this, tr("Install Complete"), msg);
+                else
+                    QMessageBox::warning(this, tr("Install Failed"), msg);
+            }, Qt::SingleShotConnection);
+
+    m_installer->install(path);
 }
 
 void WaveformsDialog::refreshStatus()
 {
-    const QString powerColor = m_model->wfpPowered() ? QStringLiteral("#00ff88")
-                                                      : QStringLiteral("#505050");
-    const QString readyColor = m_model->wfpReady()   ? QStringLiteral("#00ff88")
-                                                      : QStringLiteral("#505050");
-    const QString powerText  = m_model->wfpPowered() ? tr("ON")  : tr("OFF");
-    const QString readyText  = m_model->wfpReady()   ? tr("READY") : tr("NOT READY");
+    const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
+    auto& tm = ThemeManager::instance();
 
-    QString ip = m_model->wfpIpAddress();
+    const QString onColor  = tm.color(this, QStringLiteral("color.accent")).name();
+    const QString offColor = tm.color(this, QStringLiteral("color.text.secondary")).name();
+
+    const QString powerColor = wfModel.wfpPowered() ? onColor : offColor;
+    const QString readyColor = wfModel.wfpReady()   ? onColor : offColor;
+    const QString powerText  = wfModel.wfpPowered() ? tr("ON")    : tr("OFF");
+    const QString readyText  = wfModel.wfpReady()   ? tr("READY") : tr("NOT READY");
+
+    QString ip = wfModel.wfpIpAddress();
     if (ip.isEmpty())
         ip = QStringLiteral("--");
 
@@ -93,19 +176,21 @@ void WaveformsDialog::refreshWaveformList()
         delete item;
     }
 
-    const QList<FlexWaveformEntry>& waveforms = m_model->waveforms();
+    const FlexWaveformModel& wfModel = m_radioModel->flexWaveformModel();
+    const QList<FlexWaveformEntry>& waveforms = wfModel.waveforms();
 
     if (waveforms.isEmpty()) {
         auto* placeholder = new QLabel(tr("No waveforms installed"));
         placeholder->setAlignment(Qt::AlignCenter);
-        placeholder->setStyleSheet(QStringLiteral("color: #8090a0;"));
+        ThemeManager::instance().applyStyleSheet(placeholder,
+            QStringLiteral("QLabel { color: {{color.text.secondary}}; }"));
         m_listLayout->insertWidget(0, placeholder);
         return;
     }
 
     for (const FlexWaveformEntry& entry : waveforms) {
-        const QString name    = entry.name;
-        const bool isContainer = entry.isContainer;
+        const QString name        = entry.name;
+        const bool    isContainer = entry.isContainer;
 
         auto* row = new QFrame;
         row->setFrameShape(QFrame::StyledPanel);
@@ -120,17 +205,17 @@ void WaveformsDialog::refreshWaveformList()
         rowLayout->addWidget(nameLabel, 1);
 
         // Type badge
-        const QString badgeText  = isContainer ? tr("Container") : tr("Waveform");
-        auto* typeLabel = new QLabel(
-            QStringLiteral("<font color='#8090a0'>[%1]</font>").arg(badgeText));
-        typeLabel->setTextFormat(Qt::RichText);
+        const QString badgeText = isContainer ? tr("Container") : tr("Waveform");
+        auto* typeLabel = new QLabel(QStringLiteral("[%1]").arg(badgeText));
+        ThemeManager::instance().applyStyleSheet(typeLabel,
+            QStringLiteral("QLabel { color: {{color.text.secondary}}; }"));
         rowLayout->addWidget(typeLabel);
 
         // Restart button
         auto* restartBtn = new QPushButton(tr("Restart"));
         restartBtn->setFixedWidth(70);
         connect(restartBtn, &QPushButton::clicked, this, [this, name]() {
-            m_model->requestRestart(name);
+            m_radioModel->flexWaveformModel().requestRestart(name);
         });
         rowLayout->addWidget(restartBtn);
 
@@ -145,9 +230,9 @@ void WaveformsDialog::refreshWaveformList()
             if (QMessageBox::question(this, tr("Confirm"), question) != QMessageBox::Yes)
                 return;
             if (isContainer)
-                m_model->requestRemoveContainer(name);
+                m_radioModel->flexWaveformModel().requestRemoveContainer(name);
             else
-                m_model->requestUninstall(name);
+                m_radioModel->flexWaveformModel().requestUninstall(name);
         });
         rowLayout->addWidget(removeBtn);
 

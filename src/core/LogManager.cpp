@@ -38,6 +38,7 @@ Q_LOGGING_CATEGORY(lcPerf,       "aether.perf",        QtWarningMsg)
 Q_LOGGING_CATEGORY(lcCw,         "aether.cw",          QtWarningMsg)
 Q_LOGGING_CATEGORY(lcSHistory,  "aether.shistory",    QtWarningMsg)
 Q_LOGGING_CATEGORY(lcAx25,       "aether.ax25",        QtWarningMsg)
+Q_LOGGING_CATEGORY(lcWaveform,   "aether.waveform",    QtWarningMsg)
 
 LogManager::LogManager()
 {
@@ -68,6 +69,7 @@ LogManager::LogManager()
         {"aether.cw",         "CW / netCW",    "CW keying, MIDI paddle, iambic, and netCW timing"},
         {"aether.shistory",   "S History",     "Past-Signals voice detection: noise floor, region width, band-plan filter"},
         {"aether.ax25",       "AetherModem", "AX.25 modem lifecycle, RX/TX audio, demod, framing, and packet diagnostics"},
+        {"aether.waveform",   "Waveform",    "Docker waveform image install upload"},
     };
 
     // QLoggingCategory objects are defined above via Q_LOGGING_CATEGORY macros.
