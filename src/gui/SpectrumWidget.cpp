@@ -5354,8 +5354,12 @@ QRgb SpectrumWidget::intensityToRgb(float intensity) const
     float blackThresh;   // low point  (intensity domain)
     float rangeWidth;    // high − low (intensity domain)
     if (m_wfAutoBlack && m_radioAutoBlackRaw > 0.0f) {
-        const float lowRaw =
-            m_radioAutoBlackRaw + (50 - m_wfAutoBlackOffset) * 0.5f * 128.0f;
+        // Clamp once so the black point, white point, and range all derive from
+        // the same low value — the offset can push lowRaw out of [0, 65535].
+        const float lowRaw = qBound(
+            0.0f,
+            m_radioAutoBlackRaw + (50 - m_wfAutoBlackOffset) * 0.5f * 128.0f,
+            65535.0f);
         const float highRaw = wfHighThresholdRaw(lowRaw, m_wfColorGain);
         blackThresh = lowRaw / 128.0f;
         rangeWidth  = std::max(1.0f, (highRaw - lowRaw) / 128.0f);
