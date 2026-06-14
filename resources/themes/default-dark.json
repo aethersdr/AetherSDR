@@ -134,6 +134,19 @@
                 { "at": 0.75, "color": "#f07800" },
                 { "at": 1.00, "color": "#ffff50" }
               ]
+            },
+            "purple": {
+              "type": "linear-gradient",
+              "angle": 180,
+              "stops": [
+                { "at": 0.00, "color": "#000000" },
+                { "at": 0.15, "color": "#0000ff" },
+                { "at": 0.30, "color": "#00ff00" },
+                { "at": 0.45, "color": "#ffff00" },
+                { "at": 0.60, "color": "#ff0000" },
+                { "at": 0.75, "color": "#800080" },
+                { "at": 1.00, "color": "#ffffff" }
+              ]
             }
           },
           "slice": {

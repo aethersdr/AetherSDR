@@ -44,6 +44,7 @@ enum class WfColorScheme : int {
     BlueGreen,     // black → blue → teal → green → white
     Fire,          // black → red → orange → yellow → white
     Plasma,        // black → purple → magenta → orange → yellow
+    Purple,        // SmartSDR "Add Purple": black→blue→green→yellow→red→purple→white
     Count          // sentinel — number of schemes
 };
 

@@ -420,6 +420,7 @@ const char* wfSchemeToken(WfColorScheme s)
     case WfColorScheme::BlueGreen: return "color.waterfall.colormap.blueGreen";
     case WfColorScheme::Fire:      return "color.waterfall.colormap.fire";
     case WfColorScheme::Plasma:    return "color.waterfall.colormap.plasma";
+    case WfColorScheme::Purple:    return "color.waterfall.colormap.purple";
     default:                       return "color.waterfall.colormap.default";
     }
 }
@@ -470,6 +471,7 @@ const char* wfSchemeName(WfColorScheme scheme)
     case WfColorScheme::BlueGreen: return "Blue-Green";
     case WfColorScheme::Fire:      return "Fire";
     case WfColorScheme::Plasma:    return "Plasma";
+    case WfColorScheme::Purple:    return "Purple";
     default:                       return "Default";
     }
 }
