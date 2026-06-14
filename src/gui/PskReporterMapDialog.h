@@ -11,6 +11,7 @@ class QLabel;
 namespace AetherSDR {
 
 class MapView;
+class PropForecastClient;
 class PskReporterClient;
 class RadioModel;
 
@@ -23,7 +24,10 @@ class PskReporterMapDialog : public PersistentDialog {
     Q_OBJECT
 
 public:
+    // propForecast may be null; the band-conditions row is simply hidden
+    // when no propagation client is available.
     explicit PskReporterMapDialog(RadioModel* radioModel,
+                                  PropForecastClient* propForecast = nullptr,
                                   QWidget* parent = nullptr);
 
 protected:
@@ -35,18 +39,22 @@ private:
     void updateHomeFromRadio();
     void onIntervalChanged(int index);
     void restartClient();
+    void updateBandConditions();
 
-    RadioModel*        m_radioModel{nullptr};
-    PskReporterClient* m_client{nullptr};
-    MapView*           m_mapView{nullptr};
-    QComboBox*         m_intervalCombo{nullptr};
-    QComboBox*         m_bandCombo{nullptr};
-    QComboBox*         m_modeCombo{nullptr};
-    QLabel*            m_statusLabel{nullptr};
-    QLabel*            m_dxLabel{nullptr};
-    QCheckBox*         m_pathsCheck{nullptr};
-    QTimer*            m_emptyStateTimer{nullptr};
-    bool               m_started{false};
+    RadioModel*         m_radioModel{nullptr};
+    PskReporterClient*  m_client{nullptr};
+    PropForecastClient* m_propForecast{nullptr};
+    MapView*            m_mapView{nullptr};
+    QComboBox*          m_intervalCombo{nullptr};
+    QComboBox*          m_bandCombo{nullptr};
+    QComboBox*          m_modeCombo{nullptr};
+    QLabel*             m_statusLabel{nullptr};
+    QLabel*             m_dxLabel{nullptr};
+    QCheckBox*          m_pathsCheck{nullptr};
+    QTimer*             m_emptyStateTimer{nullptr};
+    QLabel*             m_bandCondTitle{nullptr};
+    QLabel*             m_bandCondPills[4]{};
+    bool                m_started{false};
 };
 
 } // namespace AetherSDR

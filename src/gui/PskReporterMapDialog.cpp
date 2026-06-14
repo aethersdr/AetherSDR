@@ -2,6 +2,7 @@
 
 #include "core/AppSettings.h"
 #include "core/MaidenheadLocator.h"
+#include "core/PropForecastClient.h"
 #include "core/PskReporterClient.h"
 #include "map/MapView.h"
 #include "models/RadioModel.h"
@@ -100,6 +101,19 @@ QString bandName(qint64 freqHz)
     return QStringLiteral("VHF+");
 }
 
+// HF band-condition pill color, matching PropDashboardDialog's palette.
+QString bandConditionColor(const QString& condition)
+{
+    if (condition == QLatin1String("Good")) return QStringLiteral("#66d19e");
+    if (condition == QLatin1String("Fair")) return QStringLiteral("#f2c14e");
+    if (condition == QLatin1String("Poor")) return QStringLiteral("#ff8c6b");
+    return QStringLiteral("#7f93a5");
+}
+
+// Short labels for the four N0NBH band groups (matching PropForecastDetail
+// index order: 0=80m-40m, 1=30m-20m, 2=17m-15m, 3=12m-10m).
+const char* const kBandGroupLabels[4] = { "80-40m", "30-20m", "17-15m", "12-10m" };
+
 // Initial great-circle bearing from point 1 to point 2, degrees 0-360.
 double bearingDeg(double lat1, double lon1, double lat2, double lon2)
 {
@@ -191,11 +205,13 @@ QString buildSpotCard(const PskReporterSpot& spot, bool hasHome,
 } // namespace
 
 PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
+                                           PropForecastClient* propForecast,
                                            QWidget* parent)
     : PersistentDialog(tr("PSK Reporter"),
                        QStringLiteral("PskReporterMapGeometry"), parent)
     , m_radioModel(radioModel)
     , m_client(new PskReporterClient(this))
+    , m_propForecast(propForecast)
 {
     setMinimumSize(720, 480);
 
@@ -274,6 +290,29 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
                     QToolTip::showText(QCursor::pos(), marker.clickInfo);
                 }
             });
+
+    // Bottom row: forecasted HF band conditions, reusing the existing
+    // propagation-forecast feed (N0NBH/hamqsl band day/night ratings).
+    if (m_propForecast != nullptr) {
+        auto* bandBar = new QHBoxLayout();
+        bandBar->setSpacing(6);
+        m_bandCondTitle = new QLabel(tr("HF bands:"), bodyWidget());
+        m_bandCondTitle->setStyleSheet(QStringLiteral("color: palette(mid);"));
+        bandBar->addWidget(m_bandCondTitle);
+        for (int i = 0; i < 4; ++i) {
+            auto* pill = new QLabel(QString::fromLatin1(kBandGroupLabels[i]),
+                                    bodyWidget());
+            pill->setAlignment(Qt::AlignCenter);
+            m_bandCondPills[i] = pill;
+            bandBar->addWidget(pill);
+        }
+        bandBar->addStretch(1);
+        root->addLayout(bandBar);
+
+        connect(m_propForecast, &PropForecastClient::detailUpdated, this,
+                [this] { updateBandConditions(); });
+        updateBandConditions();  // paint from cache if already fetched
+    }
 
     // Empty-state guidance: if nothing has been heard a couple of minutes
     // after starting, explain what to expect instead of a blank map.
@@ -409,10 +448,43 @@ void PskReporterMapDialog::rebuildMarkers()
     m_dxLabel->setText(dx);
 }
 
+void PskReporterMapDialog::updateBandConditions()
+{
+    if (m_propForecast == nullptr || m_bandCondPills[0] == nullptr) {
+        return;
+    }
+    const PropForecastDetail det = m_propForecast->lastDetail();
+    // Pick the day vs night rating set by the operator's local time.
+    const int hour = QDateTime::currentDateTime().time().hour();
+    const bool daytime = hour >= 6 && hour < 18;
+    m_bandCondTitle->setText(daytime ? tr("HF bands (day):")
+                                     : tr("HF bands (night):"));
+    for (int i = 0; i < 4; ++i) {
+        const QString cond = daytime ? det.bandDay[i] : det.bandNight[i];
+        QLabel* pill = m_bandCondPills[i];
+        const QString shown = cond.isEmpty() ? QStringLiteral("–") : cond;
+        pill->setToolTip(tr("%1: %2")
+                             .arg(QString::fromLatin1(kBandGroupLabels[i]),
+                                  cond.isEmpty() ? tr("no data") : cond));
+        pill->setText(QStringLiteral("%1 %2")
+                          .arg(QString::fromLatin1(kBandGroupLabels[i]), shown));
+        pill->setStyleSheet(
+            QStringLiteral("background-color: %1; color: #1a1a1a;"
+                           " border-radius: 4px; padding: 1px 6px;")
+                .arg(bandConditionColor(cond)));
+    }
+}
+
 void PskReporterMapDialog::showEvent(QShowEvent* event)
 {
     PersistentDialog::showEvent(event);
     updateHomeFromRadio();
+    if (m_propForecast != nullptr) {
+        // Refresh the detailed forecast (band conditions) on open; the
+        // client guards against overlapping in-flight requests.
+        m_propForecast->fetchDetail();
+        updateBandConditions();
+    }
     if (!m_started) {
         m_started = true;
         restartClient();
