@@ -785,6 +785,15 @@ private:
     int    m_wfHistoryWriteRow{0};
     int    m_wfHistoryRowCount{0};
     int    m_wfHistoryOffsetRows{0};
+    // Per-row frequency frame: each history row records the center/bandwidth it
+    // was captured at (parallel to m_wfHistoryTimestamps). The full history image
+    // (up to ~24k rows, ~0.5 GB at ultrawide widths) is therefore never globally
+    // reprojected on a pan — instead rebuildWaterfallViewport remaps only the
+    // ~700 visible rows from their own frame to the current one on time-
+    // scrollback. The live view never reads the history, so panning touches only
+    // the cheap visible waterfall.
+    QVector<double> m_wfHistoryRowCenterMhz;
+    QVector<double> m_wfHistoryRowBwMhz;
     bool   m_wfLive{true};
     bool   m_draggingTimeScale{false};
     bool   m_draggingTimeScaleRate{false};

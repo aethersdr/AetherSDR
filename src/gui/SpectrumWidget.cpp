@@ -2144,6 +2144,8 @@ void SpectrumWidget::ensureWaterfallHistory()
         newHistory = QImage(desiredSize, QImage::Format_RGB32);
         newHistory.fill(Qt::black);
         m_wfHistoryTimestamps = QVector<qint64>(desiredSize.height(), 0);
+        m_wfHistoryRowCenterMhz = QVector<double>(desiredSize.height(), 0.0);
+        m_wfHistoryRowBwMhz = QVector<double>(desiredSize.height(), 0.0);
         m_wfHistoryWriteRow = 0;
         m_wfHistoryRowCount = 0;
         m_wfHistoryOffsetRows = 0;
@@ -2185,6 +2187,12 @@ void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
     if (m_wfHistoryWriteRow >= 0 && m_wfHistoryWriteRow < m_wfHistoryTimestamps.size()) {
         m_wfHistoryTimestamps[m_wfHistoryWriteRow] = timestampMs;
     }
+    // Stamp the frequency frame this row was captured in, so the viewport can
+    // remap it later regardless of how the center/bandwidth has since panned.
+    if (m_wfHistoryWriteRow >= 0 && m_wfHistoryWriteRow < m_wfHistoryRowCenterMhz.size()) {
+        m_wfHistoryRowCenterMhz[m_wfHistoryWriteRow] = m_centerMhz;
+        m_wfHistoryRowBwMhz[m_wfHistoryWriteRow] = m_bandwidthMhz;
+    }
     if (m_wfHistoryRowCount < h) {
         ++m_wfHistoryRowCount;
     }
@@ -2194,6 +2202,31 @@ void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
     updateWaterfallMsPerRowFromHistory();
     if (!m_wfLive) {
         m_wfHistoryOffsetRows = std::min(m_wfHistoryOffsetRows + 1, maxWaterfallHistoryOffsetRows());
+    }
+}
+
+// Copy one history scanline into the viewport, remapping its columns from the
+// frame it was captured in (rowCenter/rowBw) to the current frame (curCenter/
+// curBw). When the frames match (no pan/zoom since capture) this is a plain
+// copy; otherwise it is a nearest-neighbour horizontal resample — newly-exposed
+// columns are black. Mirrors reprojectWaterfallImage but per row, so only the
+// ~700 visible rows are touched (on time-scrollback), never the full history.
+static void remapHistoryRowInto(QRgb* dst, const QRgb* src, int w,
+                                double rowCenterMhz, double rowBwMhz,
+                                double curCenterMhz, double curBwMhz)
+{
+    if (rowBwMhz <= 0.0 || curBwMhz <= 0.0
+        || (rowCenterMhz == curCenterMhz && rowBwMhz == curBwMhz)) {
+        std::memcpy(dst, src, w * static_cast<int>(sizeof(QRgb)));
+        return;
+    }
+    const double rowStartMhz = rowCenterMhz - rowBwMhz / 2.0;
+    const double curStartMhz = curCenterMhz - curBwMhz / 2.0;
+    for (int x = 0; x < w; ++x) {
+        const double freqMhz = curStartMhz + (static_cast<double>(x) + 0.5) / w * curBwMhz;
+        const double srcX = (freqMhz - rowStartMhz) / rowBwMhz * w;
+        dst[x] = (srcX < 0.0 || srcX >= w) ? qRgb(0, 0, 0)
+                                           : src[static_cast<int>(srcX)];
     }
 }
 
@@ -2212,7 +2245,8 @@ void SpectrumWidget::rebuildWaterfallViewport()
         return;
     }
 
-    const int rowWidthBytes = m_waterfall.width() * static_cast<int>(sizeof(QRgb));
+    const int w = m_waterfall.width();
+    const bool haveFrames = m_wfHistoryRowCenterMhz.size() == m_waterfallHistory.height();
     for (int y = 0; y < m_waterfall.height(); ++y) {
         const int rowIndex = historyRowIndexForAge(m_wfHistoryOffsetRows + y);
         if (rowIndex < 0) {
@@ -2221,7 +2255,9 @@ void SpectrumWidget::rebuildWaterfallViewport()
         const QRgb* src = reinterpret_cast<const QRgb*>(
             m_waterfallHistory.constScanLine(rowIndex));
         auto* dst = reinterpret_cast<QRgb*>(m_waterfall.scanLine(y));
-        std::memcpy(dst, src, rowWidthBytes);
+        const double rowCenter = haveFrames ? m_wfHistoryRowCenterMhz[rowIndex] : m_centerMhz;
+        const double rowBw = haveFrames ? m_wfHistoryRowBwMhz[rowIndex] : m_bandwidthMhz;
+        remapHistoryRowInto(dst, src, w, rowCenter, rowBw, m_centerMhz, m_bandwidthMhz);
     }
 
 #ifdef AETHER_GPU_SPECTRUM
@@ -2280,6 +2316,8 @@ void SpectrumWidget::clearDisplay()
         m_waterfallHistory.fill(Qt::black);
     }
     std::fill(m_wfHistoryTimestamps.begin(), m_wfHistoryTimestamps.end(), 0);
+    std::fill(m_wfHistoryRowCenterMhz.begin(), m_wfHistoryRowCenterMhz.end(), 0.0);
+    std::fill(m_wfHistoryRowBwMhz.begin(), m_wfHistoryRowBwMhz.end(), 0.0);
     m_wfWriteRow = 0;
     m_wfHistoryWriteRow = 0;
     m_wfHistoryRowCount = 0;
@@ -2517,6 +2555,51 @@ void SpectrumWidget::resetGpuResources()
     }
 }
 
+// Horizontally reproject a waterfall image from one frequency frame
+// (oldCenter/oldBw) to another (newCenter/newBw). Overlapping spectrum is
+// remapped to its new pixel columns; newly-exposed columns become black.
+// Shared by the live waterfall (per pan step) and the deferred history flush.
+static void reprojectWaterfallImage(QImage& image,
+                                    double oldCenterMhz, double oldBandwidthMhz,
+                                    double newCenterMhz, double newBandwidthMhz)
+{
+    if (image.isNull() || oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
+        return;
+    }
+
+    const int imageWidth = image.width();
+    const int imageHeight = image.height();
+    if (imageWidth <= 0 || imageHeight <= 0) {
+        return;
+    }
+
+    const double oldStartMhz = oldCenterMhz - oldBandwidthMhz / 2.0;
+    const double newStartMhz = newCenterMhz - newBandwidthMhz / 2.0;
+    const double overlapStartMhz = std::max(oldStartMhz, newCenterMhz - newBandwidthMhz / 2.0);
+    const double overlapEndMhz = std::min(oldCenterMhz + oldBandwidthMhz / 2.0,
+                                          newCenterMhz + newBandwidthMhz / 2.0);
+
+    QImage reprojected(imageWidth, imageHeight, QImage::Format_RGB32);
+    reprojected.fill(Qt::black);
+
+    if (overlapEndMhz > overlapStartMhz) {
+        const double srcLeft = (overlapStartMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
+        const double srcRight = (overlapEndMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
+        const double dstLeft = (overlapStartMhz - newStartMhz) / newBandwidthMhz * imageWidth;
+        const double dstRight = (overlapEndMhz - newStartMhz) / newBandwidthMhz * imageWidth;
+
+        if (srcRight > srcLeft && dstRight > dstLeft) {
+            QPainter painter(&reprojected);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+            painter.drawImage(QRectF(dstLeft, 0.0, dstRight - dstLeft, imageHeight),
+                              image,
+                              QRectF(srcLeft, 0.0, srcRight - srcLeft, imageHeight));
+        }
+    }
+
+    image = std::move(reprojected);
+}
+
 void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidthMhz,
                                         double newCenterMhz, double newBandwidthMhz)
 {
@@ -2524,51 +2607,18 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
         return;
     }
 
-    const double oldStartMhz = oldCenterMhz - oldBandwidthMhz / 2.0;
-    const double oldEndMhz = oldCenterMhz + oldBandwidthMhz / 2.0;
-    const double newStartMhz = newCenterMhz - newBandwidthMhz / 2.0;
-    const double newEndMhz = newCenterMhz + newBandwidthMhz / 2.0;
-    const double overlapStartMhz = std::max(oldStartMhz, newStartMhz);
-    const double overlapEndMhz = std::min(oldEndMhz, newEndMhz);
-
-    auto reprojectImage = [&](QImage& image) {
-        if (image.isNull()) {
-            return;
-        }
-
-        const int imageWidth = image.width();
-        const int imageHeight = image.height();
-        if (imageWidth <= 0 || imageHeight <= 0) {
-            return;
-        }
-
-        QImage reprojected(imageWidth, imageHeight, QImage::Format_RGB32);
-        reprojected.fill(Qt::black);
-
-        if (overlapEndMhz > overlapStartMhz) {
-            const double srcLeft = (overlapStartMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
-            const double srcRight = (overlapEndMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
-            const double dstLeft = (overlapStartMhz - newStartMhz) / newBandwidthMhz * imageWidth;
-            const double dstRight = (overlapEndMhz - newStartMhz) / newBandwidthMhz * imageWidth;
-
-            if (srcRight > srcLeft && dstRight > dstLeft) {
-                QPainter painter(&reprojected);
-                painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-                painter.drawImage(QRectF(dstLeft, 0.0, dstRight - dstLeft, imageHeight),
-                                  image,
-                                  QRectF(srcLeft, 0.0, srcRight - srcLeft, imageHeight));
-            }
-        }
-
-        image = std::move(reprojected);
-    };
-
-    reprojectImage(m_waterfall);
-    reprojectImage(m_waterfallHistory);
+    // Visible waterfall: reproject immediately — it is on screen and is only a
+    // few hundred rows (~3 ms at ultrawide).
+    reprojectWaterfallImage(m_waterfall, oldCenterMhz, oldBandwidthMhz,
+                            newCenterMhz, newBandwidthMhz);
     m_prevTileScanline.clear();
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
+
+    // History image is intentionally NOT reprojected here: each row carries its
+    // own capture frame (m_wfHistoryRowCenterMhz/BwMhz) and is remapped lazily —
+    // only the visible rows, only on time-scrollback — in rebuildWaterfallViewport.
 }
 
 bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthMhz,
