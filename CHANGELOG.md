@@ -68,6 +68,8 @@ internal #3351 decomposition of the MainWindow monolith.
 - Per-row waterfall-history frequency frames (no per-pan reproject). (#3578)
 - TMate2 enhanced display — TX bargraph, text overlays, encoder labels. (#3542)
 - RC-28 velocity-proportional tuning. (#3467)
+- SmartSDR-parity **"Purple"** waterfall colour scheme — additive and opt-in,
+  joining the existing presets. (#3583)
 
 ### Internal — MainWindow decomposition (#3351)
 
