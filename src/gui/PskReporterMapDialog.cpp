@@ -10,6 +10,9 @@
 #include <QComboBox>
 #include <QCursor>
 #include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
 #include <QToolTip>
 #include <QtMath>
 #include <QHBoxLayout>
@@ -20,7 +23,28 @@ namespace AetherSDR {
 
 namespace {
 
-constexpr const char* kIntervalKey = "PskReporterUpdateIntervalMs";
+// PSK Reporter map settings live in one nested-JSON AppSettings blob under a
+// single root key (Constitution Principle V) rather than separate flat keys.
+constexpr const char* kSettingsKey = "PskReporter";
+
+QJsonObject pskSettings()
+{
+    const QString json =
+        AppSettings::instance().value(kSettingsKey, QString{}).toString();
+    if (json.isEmpty())
+        return {};
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    return doc.isObject() ? doc.object() : QJsonObject{};
+}
+
+void writePskSetting(const QString& field, const QJsonValue& value)
+{
+    QJsonObject obj = pskSettings();
+    obj.insert(field, value);
+    AppSettings::instance().setValue(
+        kSettingsKey,
+        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+}
 
 // Normalize a PSK Reporter / ADIF mode string to one of the selector's
 // mode groups.
@@ -215,8 +239,7 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
 
     m_pathsCheck = new QCheckBox(tr("Paths"), bodyWidget());
     m_pathsCheck->setToolTip(tr("Draw great-circle paths from your station to each receiver"));
-    m_pathsCheck->setChecked(
-        AppSettings::instance().value("PskReporterShowPaths", "True").toString() == "True");
+    m_pathsCheck->setChecked(pskSettings().value("showPaths").toBool(true));
     topBar->addWidget(m_pathsCheck);
 
     topBar->addStretch(1);
@@ -242,8 +265,7 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     root->addWidget(m_mapView, 1);
 
     connect(m_pathsCheck, &QCheckBox::toggled, this, [this](bool on) {
-        AppSettings::instance().setValue("PskReporterShowPaths",
-                                         on ? "True" : "False");
+        writePskSetting("showPaths", on);
         m_mapView->setPathsVisible(on);
     });
     connect(m_mapView, &MapView::markerClicked, this,
@@ -267,10 +289,7 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     });
 
     const int savedInterval =
-        AppSettings::instance()
-            .value(kIntervalKey,
-                   QString::number(PskReporterClient::kLiveMqtt))
-            .toInt();
+        pskSettings().value("updateIntervalMs").toInt(PskReporterClient::kLiveMqtt);
     const int idx = m_intervalCombo->findData(savedInterval);
     m_intervalCombo->setCurrentIndex(idx >= 0 ? idx : 0);
 
@@ -315,8 +334,7 @@ void PskReporterMapDialog::updateHomeFromRadio()
 void PskReporterMapDialog::onIntervalChanged(int index)
 {
     const int intervalMs = m_intervalCombo->itemData(index).toInt();
-    AppSettings::instance().setValue(kIntervalKey,
-                                     QString::number(intervalMs));
+    writePskSetting("updateIntervalMs", intervalMs);
     restartClient();
 }
 

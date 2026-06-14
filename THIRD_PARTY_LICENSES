@@ -206,3 +206,18 @@ Used unconditionally for the VHF 1200 baud AX.25 receive path.
   Copyright (C) 2011-2020 John Langner WB2OSZ
   License: GPL-2.0-or-later (compatible into AetherSDR's GPL-3.0-or-later)
   Source:  https://github.com/wb2osz/direwolf
+
+
+16. QGeoView — Qt Map Widget (OSM/TMS slippy-map engine)
+--------------------------------------------------------
+Bundled at third_party/QGeoView/ (upstream tag 1.1.0) and compiled as a
+separately-linked static library. Provides the QGraphicsView-based OpenStreetMap
+tile/scene engine behind the reusable MapView widget (PSK Reporter reception map;
+future AetherModem APRS map). Demo/sample/CI trees dropped; AetherSDR
+modifications — static-lib build, app-identifying tile User-Agent, restored TLS
+peer verification (upstream shipped a VerifyNone bypass), and HTTPS OSM tile
+URLs — are documented in third_party/QGeoView/AETHERSDR-PATCHES.md.
+
+  Copyright (C) 2018-2025 Andrey Yaroshenko
+  License: LGPL-3.0-or-later
+  Source:  https://github.com/AmonRaNet/QGeoView
