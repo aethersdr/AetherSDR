@@ -8000,13 +8000,18 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         if (so.freqMhz < startMhz || so.freqMhz > endMhz) return;
 
         const QColor col = sliceColorForOverlay(so);
-        // Bandwidth affordances (passband fill + filter edges) always use the
-        // full-brightness active colour so they remain visible on non-active
-        // slices (#3484). The VFO centre line, triangle, and RIT/XIT lines
-        // keep using `col` (dimmed when inactive) to preserve the active-slice
-        // focus cue.
+        // Bandwidth affordances (passband fill + filter edges) render at full
+        // brightness so they stay visible on non-active slices (#3484) — but an
+        // inactive slice uses the neutral secondary colour instead of the
+        // slice's own colour, so it is COLOUR (not brightness) that signals
+        // inactive. That keeps the panadapter from making an inactive slice look
+        // TX-selectable (the #2389 confusion concern) while fixing the
+        // near-invisible passband. The VFO centre line, triangle, and RIT/XIT
+        // lines keep `col` (dimmed when inactive) to preserve the focus cue.
         const int colourIdx = SliceLabel::displayColorIndex(so.sliceId, so.perClientLetter);
-        const QColor bandCol = SliceColorManager::instance().activeColor(colourIdx);
+        const QColor bandCol = so.isActive
+            ? SliceColorManager::instance().activeColor(colourIdx)
+            : AetherSDR::ThemeManager::instance().color("color.text.secondary");
         const int freqLineBottom = m_extendedFrequencyLine ? wfRect.bottom() : specRect.bottom();
         const double fLoMhz = so.freqMhz + so.filterLowHz / 1.0e6;
         const double fHiMhz = so.freqMhz + so.filterHighHz / 1.0e6;
