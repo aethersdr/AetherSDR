@@ -120,37 +120,48 @@ the checked-in defaults when set:
 If the identity variables are unset, CI now uses the checked-in Partner Center
 identity defaults from `store-identity.ps1`.
 
-## Automated Store Submission (weekly release cycle) — PLANNED
+## Automated Store Submission (weekly release cycle) — WIRED
 
-> Status: **not yet wired.** Today the workflow only builds the `.msixupload`
-> and attaches it to the GitHub release / workflow artifacts; a maintainer
-> downloads it and uploads to Partner Center by hand. The automated path below
-> is the design we intend to add once the Entra/Partner Center credentials are
-> set up.
+> Status: **wired, dormant until credentials are set.** The `Windows Installer`
+> workflow now stages a **draft** Store submission on every `v*` tag push, but
+> the step is a no-op until the maintainer completes the one-time Entra /
+> Partner Center setup below and sets the `AETHERSDR_STORE_PRODUCT_ID`
+> repository variable. Until then the workflow behaves exactly as before
+> (builds the `.msixupload`, attaches it to the release).
 
-The plan is for the `Windows Installer` workflow to upload each tagged build to
-Partner Center as a **draft** submission via the Microsoft Store Developer CLI
-(`msstore`), deliberately stopping at the draft — a maintainer reviews the
-pending submission in Partner Center and clicks **Submit to Store** to start
-certification. CI would never publish to the live channel on its own.
+On a `v*` tag push the workflow:
 
-Planned flow on a `v*` tag push:
+1. Builds `AetherSDR.exe`, runs `windeployqt`, packages the MSIX, and creates
+   the `.msixupload` (existing steps).
+2. `microsoft/microsoft-store-apppublisher@v1.1` puts the `msstore` CLI on PATH.
+3. `msstore reconfigure` authenticates from the four GitHub secrets.
+4. `packaging/windows/publish-store.ps1` finds the `.msixupload` and runs
+   `msstore publish <pkg>.msixupload -id <ProductId> --noCommit` — staging a
+   **draft**. `--noCommit` is the safety gate that keeps it out of
+   certification. A maintainer reviews the pending submission in Partner Center
+   and clicks **Submit to Store** to start certification. **CI never publishes
+   to the live channel on its own.**
 
-1. Build `AetherSDR.exe`, `windeployqt`, MSIX packaging (existing steps).
-2. `microsoft/microsoft-store-apppublisher` installs the `msstore` CLI.
-3. `msstore reconfigure` authenticates with the Entra/Partner Center secrets.
-4. `msstore publish -i <pkg>.msixupload -id <ProductId> --noCommit` stages the
-   draft. `--noCommit` is the safety gate that keeps it out of certification.
+Guard rails (all three must pass before Partner Center is touched):
 
-The step would be skipped unless the `AETHERSDR_STORE_PRODUCT_ID` **repository
-variable** is set, so PRs, branch `workflow_dispatch` runs, and forks never
-touch Partner Center.
+- The step runs only on a `refs/tags/` ref — never on PRs or branch
+  `workflow_dispatch` runs.
+- The step is skipped unless the `AETHERSDR_STORE_PRODUCT_ID` **repository
+  variable** is set — so the feature is dormant until you opt in.
+- Forks cannot read the repo secrets, so the `reconfigure` step is a no-op
+  there even on a tag.
+
+If the MSIX packaging step (which is `continue-on-error`) produced no
+`.msixupload`, `publish-store.ps1` warns and exits 0 rather than turning an
+otherwise-successful release red.
 
 ### One-time setup (maintainer, outside the repo)
 
 The `msstore` GitHub Actions path is currently supported for **free products
 only**, which AetherSDR is. The app must already be published and live in the
-Store — done via the manual `.msixupload`.
+Store — done via the manual `.msixupload`. **TL;DR:** create an Entra app
+registration, give it the **Manager** role in Partner Center, then store four
+secrets + one variable in GitHub.
 
 0. **Individual accounts: create a free Entra tenant first.** An individual
    (personal-MSA) Partner Center account has no Entra/Azure AD tenant by
@@ -159,28 +170,41 @@ Store — done via the manual `.msixupload`.
    needs no paid Azure subscription, and the account owner already has the
    **Manager** role required to do it. Company accounts can skip this.
 
-1. **Microsoft Entra (Azure AD) app registration**
-   - Register an app in Entra ID (`entra.microsoft.com` → App registrations)
-     in the tenant from step 0.
+1. **Microsoft Entra (Azure AD) app registration** — this is the "service
+   account" the CI uses to authenticate.
+   - Register an app in Entra ID (`entra.microsoft.com` → **App registrations**
+     → New registration) in the tenant from step 0. Single-tenant is fine; no
+     redirect URI is needed for the client-credentials flow.
    - In Partner Center → Account settings → User management → *Microsoft Entra
-     applications*, add that app and assign it the **Manager** role.
-   - Create a client secret under Certificates & secrets (copy the value once).
+     applications*, add that app and assign it the **Manager** role. (This is
+     the step that actually authorizes the app to submit; the Entra
+     registration alone is not enough.)
+   - In the app registration → **Certificates & secrets** → New client secret,
+     create a secret and copy the **value** immediately (it is shown once).
 
-2. **Collect four values:**
-   - **Tenant ID** — Entra → Overview.
-   - **Client ID** — the App registration's Application ID.
-   - **Client Secret** — the secret value created above.
-   - **Seller ID** — Partner Center → Account settings → Identifiers
-     (a.k.a. Publisher/Seller ID).
-   - **Store product ID** — the 12-char ID for the AetherSDR Store listing
-     (`msstore apps list` after a local `msstore reconfigure`, or from the
-     Partner Center product URL).
+2. **Collect the four credential values + the product Id:**
+
+   | What | Where to find it | Goes into GitHub as |
+   |---|---|---|
+   | **Tenant ID** | Entra admin center → Overview → Tenant ID | secret `AZURE_AD_TENANT_ID` |
+   | **Client ID** | The app registration's *Application (client) ID* | secret `AZURE_AD_APPLICATION_CLIENT_ID` |
+   | **Client Secret** | The secret *value* from step 1 | secret `AZURE_AD_APPLICATION_SECRET` |
+   | **Seller ID** | Partner Center → Account settings → Identifiers (a.k.a. Publisher/Seller ID) | secret `SELLER_ID` |
+   | **Store product ID** | 12-char ID from the Partner Center product URL, or `msstore apps list` after a local `msstore reconfigure` | **variable** `AETHERSDR_STORE_PRODUCT_ID` |
 
 3. **GitHub repo configuration** (Settings → Secrets and variables → Actions):
-   - Secrets: `AZURE_AD_TENANT_ID`, `AZURE_AD_APPLICATION_CLIENT_ID`,
-     `AZURE_AD_APPLICATION_SECRET`, `SELLER_ID`.
-   - Variable: `AETHERSDR_STORE_PRODUCT_ID` (the Store product ID). Leaving this
-     unset disables the upload step.
+   - Secrets (the four credentials above): `AZURE_AD_TENANT_ID`,
+     `AZURE_AD_APPLICATION_CLIENT_ID`, `AZURE_AD_APPLICATION_SECRET`,
+     `SELLER_ID`.
+   - Variable: `AETHERSDR_STORE_PRODUCT_ID` (the Store product ID). **Leaving
+     this unset keeps the whole Store-submission step disabled** — set it last,
+     once the four secrets are in place, to switch the automation on.
+
+4. **First run.** Cut a release (or re-tag) so a `v*` tag pushes. Watch the
+   *Stage Microsoft Store submission (draft)* step in the **Windows Installer**
+   workflow, then confirm a new **draft** submission appears in Partner Center.
+   Click **Submit to Store** there to start certification for the first
+   automated build; later you can promote to fully automatic (see below).
 
 ### Version discipline
 

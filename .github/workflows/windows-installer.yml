@@ -199,3 +199,40 @@ jobs:
             AetherSDR-*.zip
             AetherSDR-*-setup.exe
             AetherSDR-*.msixupload
+
+      # ----------------------------------------------------------------------
+      # Automated Microsoft Store submission (weekly release cycle).
+      #
+      # Runs ONLY on a v* tag push, and ONLY when the AETHERSDR_STORE_PRODUCT_ID
+      # repository VARIABLE is set. PRs, branch workflow_dispatch runs, and forks
+      # never touch Partner Center because (a) the tag-ref guard, (b) the
+      # product-Id guard, and (c) forks have no access to the repo secrets.
+      #
+      # The submission is staged as a DRAFT (publish-store.ps1 passes
+      # --noCommit): the package uploads to Partner Center but certification is
+      # NOT started. A maintainer reviews the pending submission and clicks
+      # "Submit to Store". CI never publishes to the live channel on its own.
+      #
+      # Free-product only (AetherSDR qualifies). The app must already be live in
+      # the Store. One-time Entra/Partner Center setup is in
+      # docs/WINDOWS-STORE-MSIX.md.
+      # ----------------------------------------------------------------------
+      - name: Setup Microsoft Store Developer CLI
+        if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
+        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2  # v1.1
+
+      - name: Stage Microsoft Store submission (draft)
+        if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          AETHERSDR_STORE_PRODUCT_ID: ${{ vars.AETHERSDR_STORE_PRODUCT_ID }}
+        run: |
+          msstore reconfigure `
+            --tenantId $env:AZURE_AD_TENANT_ID `
+            --sellerId $env:SELLER_ID `
+            --clientId $env:AZURE_AD_APPLICATION_CLIENT_ID `
+            --clientSecret $env:AZURE_AD_APPLICATION_SECRET
+          powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\publish-store.ps1 -ProductId $env:AETHERSDR_STORE_PRODUCT_ID
