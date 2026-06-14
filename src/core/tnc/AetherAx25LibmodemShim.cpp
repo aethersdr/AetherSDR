@@ -97,7 +97,6 @@ constexpr std::array<int, 21> kHf300DecodePhaseOffsets = {
 // 1200 baud VHF (Bell 202 / APRS): one DPLL lane per slicer for each enabled
 // algorithm. Duplicate suppression collapses the same frame seen by multiple
 // lanes into one emission, like Direwolf's multi_modem.c.
-constexpr double kVhf1200PllAlpha = 0.010;
 
 // Profile A+ space-gain multipliers — exact Direwolf A+ values (MAX_SUBCHANS=9).
 // Geometric series: MIN_G=0.5, MAX_G=4.0, 9 steps.
@@ -550,13 +549,17 @@ struct AetherAx25LibmodemShim::Impl {
             ? config.markHz
             : config.spaceHz;
 
-        auto addLaneA = [&](int phaseOffsetSamples, double pllAlpha, float spaceGain = 0.0f) {
+        auto addLaneA = [&](int phaseOffsetSamples, float spaceGain = 0.0f) {
             auto& lane = lanes.emplace_back();
             lane.phaseOffsetSamples = phaseOffsetSamples;
             lane.samplesUntilStart  = phaseOffsetSamples;
+            // The pll_alpha positional arg (0.010) is accepted for API
+            // compatibility but ignored by AetherAFSKDemod, which uses
+            // Direwolf's internal DPLL inertia constants — so there is no
+            // tunable VHF pll_alpha (unlike the HF libmodem lane below).
             lane.demod = std::make_unique<DirewolfAfskDemod>(
                 mark, space, config.baud, config.sampleRate,
-                0.75, 6.0, 0.75, 3.0, 0.008, 0.005, pllAlpha, spaceGain);
+                0.75, 6.0, 0.75, 3.0, 0.008, 0.005, 0.010, spaceGain);
         };
 
         auto addLaneHf = [&](int phaseOffsetSamples, double pllAlpha) {
@@ -577,8 +580,7 @@ struct AetherAx25LibmodemShim::Impl {
             const auto layout = vhfModeLayout(config.vhfMode);
             if (layout.wantA)
                 for (int s = 0; s < layout.aSlicers; ++s)
-                    addLaneA(0, kVhf1200PllAlpha,
-                             layout.aSlicers > 1 ? kVhf1200SpaceGains[s] : 0.0f);
+                    addLaneA(0, layout.aSlicers > 1 ? kVhf1200SpaceGains[s] : 0.0f);
         }
         resetDecoderState(true, true);
 

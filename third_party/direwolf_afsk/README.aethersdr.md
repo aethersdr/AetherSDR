@@ -16,7 +16,9 @@ derived from `dsp.c`. All code was rewritten in idiomatic C++20.
 
 ## Files
 
-- `AetherAFSKDemod.h` — class definition + `sinc_corr_afsk_demodulator` alias
+- `AetherAFSKDemod.h` — class definition (adapted into the demod pipeline via
+  the `AfskDemodWrapper<>` template in `AetherAx25LibmodemShim`; no
+  `sinc_corr_afsk_demodulator` alias is provided)
 - `AetherAFSKDemod.cpp` — full implementation
 
 ## Usage
