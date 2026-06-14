@@ -133,6 +133,11 @@ signals:
     void tciMessage(const QString& direction, const QString& text);
     void rxLevel(int channel, float rms);  // 1-based channel, RMS of TCI-gained RX audio
     void txLevel(float rms);                // RMS of post-gain TCI TX audio
+    // An external TCI client commanded an out-of-span (band-change) tune.
+    // MainWindow routes it through applyTuneRequest so the radio's per-band
+    // band-stack (antenna/mode/filter) is restored, matching GUI tunes
+    // (#3543). Args: radio slice id, target frequency (MHz).
+    void commandedTuneRequested(int sliceId, double mhz);
     // Emitted when a TCI client sends `volume:N;` (master volume SET).
     // MainWindow handles it by calling the same path as the title bar
     // master volume slider — m_audio->setRxVolume() (or lineout when PC

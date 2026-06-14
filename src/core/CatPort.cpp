@@ -155,6 +155,11 @@ void CatPort::onNewConnection()
         c.socket   = socket;
         c.protocol = new RigctlProtocol(m_model);
         c.protocol->setSliceIndex(m_vfoA);
+        // Route out-of-span (band-change) CAT tunes through MainWindow's
+        // band-stack preselect, same as GUI tunes (#3543).
+        c.protocol->setCommandedTuneHandler([this](int sliceId, double mhz) {
+            emit commandedTuneRequested(sliceId, mhz);
+        });
         m_rigctlClients.append(c);
 
         connect(socket, &QTcpSocket::readyRead,
@@ -285,6 +290,9 @@ void CatPort::startPty()
     if (m_dialect == CatDialect::Rigctld) {
         m_ptyRigctlProtocol = new RigctlProtocol(m_model);
         m_ptyRigctlProtocol->setSliceIndex(m_vfoA);
+        m_ptyRigctlProtocol->setCommandedTuneHandler([this](int sliceId, double mhz) {
+            emit commandedTuneRequested(sliceId, mhz);  // band-stack preselect (#3543)
+        });
     } else {
         bool flex = (m_dialect == CatDialect::FlexCAT);
         m_ptyCatProtocol = new SmartCatProtocol(m_model, m_vfoA, m_vfoB, flex);

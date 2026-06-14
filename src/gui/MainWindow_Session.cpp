@@ -1280,6 +1280,14 @@ void MainWindow::wireCatPorts()
         catPort(i)->setDialect(dial);
         catPort(i)->setVfoA(s.value(prefix + "VfoA", "0").toInt());
         catPort(i)->setVfoB(s.value(prefix + "VfoB", "-1").toInt());
+        // External CAT band changes take the same band-stack preselect path as
+        // GUI tunes so the radio restores per-band antenna/mode/filter (#3543).
+        connect(catPort(i), &CatPort::commandedTuneRequested, this,
+                [this](int sliceId, double mhz) {
+            if (auto* slice = m_radioModel.slice(sliceId)) {
+                applyTuneRequest(slice, mhz, TuneIntent::CommandedTargetCenter, "rigctl");
+            }
+        });
     }
 
     // Wire the applet to the port objects
@@ -1327,6 +1335,15 @@ void MainWindow::wireCatPorts()
             this, [this](int pct) {
         if (m_titleBar) m_titleBar->setMasterVolume(pct);
         applyMasterVolume(pct);
+    });
+
+    // External TCI band changes take the same band-stack preselect path as GUI
+    // tunes so the radio restores per-band antenna/mode/filter (#3543).
+    connect(tciServer(), &TciServer::commandedTuneRequested, this,
+            [this](int sliceId, double mhz) {
+        if (auto* slice = m_radioModel.slice(sliceId)) {
+            applyTuneRequest(slice, mhz, TuneIntent::CommandedTargetCenter, "tci");
+        }
     });
 
     // Wire slice state changes -> TCI broadcasts. TCI receivers are contiguous

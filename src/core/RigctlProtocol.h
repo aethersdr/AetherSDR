@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QMap>
+#include <functional>
 
 namespace AetherSDR {
 
@@ -27,6 +28,15 @@ public:
     // Extended response mode (prepend '+' to enable).
     void setExtendedMode(bool on) { m_extended = on; }
     bool extendedMode() const     { return m_extended; }
+
+    // Handler invoked for an out-of-span (band-change) commanded tune. The
+    // owning CatPort sets this to emit commandedTuneRequested(sliceId, mhz),
+    // routing the tune through MainWindow's band-stack-preselect funnel so an
+    // external CAT band change restores the radio's per-band antenna/mode/
+    // filter state, matching GUI tunes (#3543). Args: radio slice id, MHz.
+    void setCommandedTuneHandler(std::function<void(int, double)> fn) {
+        m_onCommandedTune = std::move(fn);
+    }
 
 private:
     QString handleLineImpl(const QString& line);
@@ -93,6 +103,9 @@ private:
     RadioModel* m_model;
     int  m_sliceIndex{0};
     bool m_extended{false};
+    // Set by the owning CatPort to route out-of-span commanded tunes through
+    // MainWindow's band-stack-preselect funnel (#3543). Empty until wired.
+    std::function<void(int, double)> m_onCommandedTune;
     // Set when a bare `b` / `\send_morse` arrives without inline text.
     // The next line is consumed verbatim as the morse text. Hamlib spec
     // allows this two-line form and Not1MM contest CW relies on it.

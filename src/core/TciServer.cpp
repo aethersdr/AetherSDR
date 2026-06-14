@@ -439,6 +439,11 @@ void TciServer::onNewConnection()
         ws->setMaxAllowedIncomingFrameSize(kMaxWsMessageBytes);
 
         auto* protocol = new TciProtocol(m_model);
+        // Route out-of-span (band-change) TCI tunes through MainWindow's
+        // band-stack preselect, same as GUI tunes (#3543).
+        protocol->setCommandedTuneHandler([this](int sliceId, double mhz) {
+            emit commandedTuneRequested(sliceId, mhz);
+        });
 
         ClientState cs;
         cs.socket = ws;

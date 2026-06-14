@@ -2,6 +2,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include <QString>
+#include <functional>
 
 namespace AetherSDR {
 
@@ -46,6 +47,15 @@ public:
     // reads it and applies it via setTxGain() — TciProtocol can't reach
     // TciServer directly (same pattern as pendingMasterVolume).
     int pendingTxGain() const { return m_pendingTxGain; }
+
+    // Handler invoked for an out-of-span (band-change) commanded tune. The
+    // owning TciServer sets this to emit commandedTuneRequested(sliceId, mhz),
+    // routing the tune through MainWindow's band-stack-preselect funnel so an
+    // external TCI band change restores the radio's per-band antenna/mode/
+    // filter state, matching GUI tunes (#3543). Args: radio slice id, MHz.
+    void setCommandedTuneHandler(std::function<void(int, double)> fn) {
+        m_onCommandedTune = std::move(fn);
+    }
 
 private:
     // Command handlers — return response string or empty
@@ -131,6 +141,9 @@ private:
     QString     m_pendingNotification;
     int         m_pendingMasterVolume{-1};   // -1 = no change requested
     int         m_pendingTxGain{-1};         // -1 = no change requested
+    // Set by the owning TciServer to route out-of-span commanded tunes through
+    // MainWindow's band-stack-preselect funnel (#3543). Empty until wired.
+    std::function<void(int, double)> m_onCommandedTune;
     bool        m_started{false};  // client sent START
 };
 

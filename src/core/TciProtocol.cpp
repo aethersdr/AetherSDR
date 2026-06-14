@@ -411,14 +411,27 @@ QString TciProtocol::cmdVfo(const QStringList& args, bool isSet)
     // (Doppler steps from satellite trackers) use autopan=0 so the pan
     // stays put.
     RadioModel* model = m_model;
-    QMetaObject::invokeMethod(s, [s, model, mhz]() {
+    // Copy the handler by value so the queued lambda never captures `this`:
+    // this protocol is per-connection and may be destroyed before the lambda
+    // runs (the UAF class fixed in #2995). The copy holds the session-lived
+    // TciServer, not the protocol.
+    auto onTune = m_onCommandedTune;
+    QMetaObject::invokeMethod(s, [s, model, mhz, onTune]() {
         bool inSpan = false;
         if (auto* pan = model ? model->panadapter(s->panId()) : nullptr) {
             const double halfBw = pan->bandwidthMhz() / 2.0;
             inSpan = halfBw > 0.0 && qAbs(mhz - pan->centerMhz()) <= halfBw;
         }
-        if (inSpan) s->setFrequency(mhz);
-        else        s->tuneAndRecenter(mhz);
+        if (inSpan) {
+            s->setFrequency(mhz);
+        } else if (onTune) {
+            // Out-of-span (band change): route through MainWindow's tune funnel
+            // so the radio's per-band band-stack is preselected before the tune,
+            // matching GUI tunes instead of a raw recenter (#3543).
+            onTune(s->sliceId(), mhz);
+        } else {
+            s->tuneAndRecenter(mhz);
+        }
     }, Qt::QueuedConnection);
 
     m_pendingNotification = QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);

@@ -613,7 +613,12 @@ QString RigctlProtocol::cmdSetFreq(const QString& arg)
 
     double mhz = hz / 1e6;
     RadioModel* model = m_model;
-    QMetaObject::invokeMethod(slice, [slice, model, mhz]() {
+    // Copy the handler by value so the queued lambda never captures `this`:
+    // this protocol is per-connection and may be destroyed before the lambda
+    // runs (the UAF class fixed in #2995). The copy holds the session-lived
+    // CatPort, not the protocol.
+    auto onTune = m_onCommandedTune;
+    QMetaObject::invokeMethod(slice, [slice, model, mhz, onTune]() {
         // Recenter only when the target falls outside the pan's current
         // span — the cross-band case (e.g. WSJT-X band changes, #536).
         // In-span retunes use autopan=0: external Doppler software
@@ -625,8 +630,16 @@ QString RigctlProtocol::cmdSetFreq(const QString& arg)
             const double halfBw = pan->bandwidthMhz() / 2.0;
             inSpan = halfBw > 0.0 && qAbs(mhz - pan->centerMhz()) <= halfBw;
         }
-        if (inSpan) slice->setFrequency(mhz);
-        else        slice->tuneAndRecenter(mhz);
+        if (inSpan) {
+            slice->setFrequency(mhz);
+        } else if (onTune) {
+            // Out-of-span (band change): route through MainWindow's tune
+            // funnel so the radio's per-band band-stack is preselected before
+            // the tune, matching GUI tunes instead of a raw recenter (#3543).
+            onTune(slice->sliceId(), mhz);
+        } else {
+            slice->tuneAndRecenter(mhz);
+        }
     }, Qt::QueuedConnection);
     return rprt(0);
 }
