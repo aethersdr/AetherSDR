@@ -785,6 +785,20 @@ private:
     int    m_wfHistoryWriteRow{0};
     int    m_wfHistoryRowCount{0};
     int    m_wfHistoryOffsetRows{0};
+    // Deferred/coalesced history reprojection: the full history image (up to
+    // ~24k rows, ~0.5 GB at ultrawide widths) is only consumed by
+    // rebuildWaterfallViewport (time-scrollback), never by the live view.
+    // Reprojecting it on every pan step costs ~100 ms and is the dominant cause
+    // of choppy frequency scrolling. Defer + coalesce: remember the transform
+    // and apply it once after scrolling settles, or on demand before a viewport
+    // rebuild. History appends pause while a reprojection is pending so frames
+    // are never mixed.
+    bool    m_wfHistoryReprojectPending{false};
+    double  m_wfHistorySrcCenterMhz{0.0};  // frame the history image is stored in
+    double  m_wfHistorySrcBwMhz{0.0};
+    double  m_wfHistoryDstCenterMhz{0.0};  // latest target frame to reproject to
+    double  m_wfHistoryDstBwMhz{0.0};
+    QTimer* m_wfHistoryReprojectTimer{nullptr};
     bool   m_wfLive{true};
     bool   m_draggingTimeScale{false};
     bool   m_draggingTimeScaleRate{false};
@@ -792,6 +806,12 @@ private:
     int    m_timeScaleDragStartOffsetRows{0};
     int    m_timeScaleDragStartRatePercent{1};
     static constexpr qint64 kWaterfallHistoryMs = 20LL * 60LL * 1000LL;
+    // Debounce window for the coalesced history reprojection: applied once this
+    // long after the last pan step, i.e. when frequency scrolling settles. Must
+    // comfortably exceed the inter-notch gap of a continuous wheel gesture
+    // (~50-300 ms) so the ~100 ms reprojection never fires mid-scroll; it then
+    // runs exactly once per gesture, on a static display where it is invisible.
+    static constexpr int kWaterfallHistoryReprojectDebounceMs = 400;
 
     // True while native waterfall tile data (PCC 0x8004) is arriving on the
     // expected cadence.  RX uses paced FFT-derived rows only as a stale-native
@@ -1109,6 +1129,10 @@ private:
                             double newCenterMhz, double newBandwidthMhz);
     bool reprojectSpectrum(double oldCenterMhz, double oldBandwidthMhz,
                            double newCenterMhz, double newBandwidthMhz);
+    // Deferred history reprojection helpers (see m_wfHistoryReprojectPending).
+    void scheduleHistoryReproject(double oldCenterMhz, double oldBandwidthMhz,
+                                  double newCenterMhz, double newBandwidthMhz);
+    void flushHistoryReproject();
 };
 
 } // namespace AetherSDR

@@ -2148,6 +2148,7 @@ void SpectrumWidget::ensureWaterfallHistory()
         m_wfHistoryRowCount = 0;
         m_wfHistoryOffsetRows = 0;
         m_wfLive = true;
+        m_wfHistoryReprojectPending = false;  // fresh image — no stale frame to fix up
     }
     m_waterfallHistory = newHistory;
 }
@@ -2172,6 +2173,15 @@ void SpectrumWidget::appendVisibleRow(const QRgb* rowData)
 
 void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
 {
+    // While a history reprojection is deferred (active frequency scrolling), the
+    // history image is in a stale frequency frame. Skip appends until it is
+    // resynced (flushHistoryReproject) so old and new rows are never mixed into
+    // different frames. The few rows dropped during the ~150 ms debounce are
+    // imperceptible in the time-scrollback view and the live view is unaffected.
+    if (m_wfHistoryReprojectPending) {
+        return;
+    }
+
     ensureWaterfallHistory();
     if (m_waterfallHistory.isNull() || rowData == nullptr) {
         return;
@@ -2199,6 +2209,10 @@ void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
 
 void SpectrumWidget::rebuildWaterfallViewport()
 {
+    // The viewport is built by a direct row copy that assumes the history image
+    // is in the current frequency frame, so apply any deferred reprojection now.
+    flushHistoryReproject();
+
     if (m_waterfall.isNull()) {
         return;
     }
@@ -2285,6 +2299,10 @@ void SpectrumWidget::clearDisplay()
     m_wfHistoryRowCount = 0;
     m_wfHistoryOffsetRows = 0;
     m_wfLive = true;
+    m_wfHistoryReprojectPending = false;  // history cleared — drop any deferred reproject
+    if (m_wfHistoryReprojectTimer) {
+        m_wfHistoryReprojectTimer->stop();
+    }
     m_hasNativeWaterfall = false;
     m_lastNativeTileMs = 0;
     m_waterfallFallbackActive = false;
@@ -2517,6 +2535,51 @@ void SpectrumWidget::resetGpuResources()
     }
 }
 
+// Horizontally reproject a waterfall image from one frequency frame
+// (oldCenter/oldBw) to another (newCenter/newBw). Overlapping spectrum is
+// remapped to its new pixel columns; newly-exposed columns become black.
+// Shared by the live waterfall (per pan step) and the deferred history flush.
+static void reprojectWaterfallImage(QImage& image,
+                                    double oldCenterMhz, double oldBandwidthMhz,
+                                    double newCenterMhz, double newBandwidthMhz)
+{
+    if (image.isNull() || oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
+        return;
+    }
+
+    const int imageWidth = image.width();
+    const int imageHeight = image.height();
+    if (imageWidth <= 0 || imageHeight <= 0) {
+        return;
+    }
+
+    const double oldStartMhz = oldCenterMhz - oldBandwidthMhz / 2.0;
+    const double newStartMhz = newCenterMhz - newBandwidthMhz / 2.0;
+    const double overlapStartMhz = std::max(oldStartMhz, newCenterMhz - newBandwidthMhz / 2.0);
+    const double overlapEndMhz = std::min(oldCenterMhz + oldBandwidthMhz / 2.0,
+                                          newCenterMhz + newBandwidthMhz / 2.0);
+
+    QImage reprojected(imageWidth, imageHeight, QImage::Format_RGB32);
+    reprojected.fill(Qt::black);
+
+    if (overlapEndMhz > overlapStartMhz) {
+        const double srcLeft = (overlapStartMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
+        const double srcRight = (overlapEndMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
+        const double dstLeft = (overlapStartMhz - newStartMhz) / newBandwidthMhz * imageWidth;
+        const double dstRight = (overlapEndMhz - newStartMhz) / newBandwidthMhz * imageWidth;
+
+        if (srcRight > srcLeft && dstRight > dstLeft) {
+            QPainter painter(&reprojected);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+            painter.drawImage(QRectF(dstLeft, 0.0, dstRight - dstLeft, imageHeight),
+                              image,
+                              QRectF(srcLeft, 0.0, srcRight - srcLeft, imageHeight));
+        }
+    }
+
+    image = std::move(reprojected);
+}
+
 void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidthMhz,
                                         double newCenterMhz, double newBandwidthMhz)
 {
@@ -2524,51 +2587,60 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
         return;
     }
 
-    const double oldStartMhz = oldCenterMhz - oldBandwidthMhz / 2.0;
-    const double oldEndMhz = oldCenterMhz + oldBandwidthMhz / 2.0;
-    const double newStartMhz = newCenterMhz - newBandwidthMhz / 2.0;
-    const double newEndMhz = newCenterMhz + newBandwidthMhz / 2.0;
-    const double overlapStartMhz = std::max(oldStartMhz, newStartMhz);
-    const double overlapEndMhz = std::min(oldEndMhz, newEndMhz);
-
-    auto reprojectImage = [&](QImage& image) {
-        if (image.isNull()) {
-            return;
-        }
-
-        const int imageWidth = image.width();
-        const int imageHeight = image.height();
-        if (imageWidth <= 0 || imageHeight <= 0) {
-            return;
-        }
-
-        QImage reprojected(imageWidth, imageHeight, QImage::Format_RGB32);
-        reprojected.fill(Qt::black);
-
-        if (overlapEndMhz > overlapStartMhz) {
-            const double srcLeft = (overlapStartMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
-            const double srcRight = (overlapEndMhz - oldStartMhz) / oldBandwidthMhz * imageWidth;
-            const double dstLeft = (overlapStartMhz - newStartMhz) / newBandwidthMhz * imageWidth;
-            const double dstRight = (overlapEndMhz - newStartMhz) / newBandwidthMhz * imageWidth;
-
-            if (srcRight > srcLeft && dstRight > dstLeft) {
-                QPainter painter(&reprojected);
-                painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-                painter.drawImage(QRectF(dstLeft, 0.0, dstRight - dstLeft, imageHeight),
-                                  image,
-                                  QRectF(srcLeft, 0.0, srcRight - srcLeft, imageHeight));
-            }
-        }
-
-        image = std::move(reprojected);
-    };
-
-    reprojectImage(m_waterfall);
-    reprojectImage(m_waterfallHistory);
+    // Visible waterfall: reproject immediately — it is on screen and is only a
+    // few hundred rows (~3 ms at ultrawide).
+    reprojectWaterfallImage(m_waterfall, oldCenterMhz, oldBandwidthMhz,
+                            newCenterMhz, newBandwidthMhz);
     m_prevTileScanline.clear();
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
+
+    // History (up to ~24k rows): defer + coalesce — see scheduleHistoryReproject.
+    scheduleHistoryReproject(oldCenterMhz, oldBandwidthMhz,
+                             newCenterMhz, newBandwidthMhz);
+}
+
+void SpectrumWidget::scheduleHistoryReproject(double oldCenterMhz, double oldBandwidthMhz,
+                                              double newCenterMhz, double newBandwidthMhz)
+{
+    if (m_waterfallHistory.isNull()) {
+        return;
+    }
+
+    if (!m_wfHistoryReprojectPending) {
+        // First deferral since the last flush: the history image is currently
+        // stored in the pre-pan ('old') frame.
+        m_wfHistoryReprojectPending = true;
+        m_wfHistorySrcCenterMhz = oldCenterMhz;
+        m_wfHistorySrcBwMhz = oldBandwidthMhz;
+    }
+    // Always track the most recent target — the live waterfall is now in it.
+    m_wfHistoryDstCenterMhz = newCenterMhz;
+    m_wfHistoryDstBwMhz = newBandwidthMhz;
+
+    if (!m_wfHistoryReprojectTimer) {
+        m_wfHistoryReprojectTimer = new QTimer(this);
+        m_wfHistoryReprojectTimer->setSingleShot(true);
+        connect(m_wfHistoryReprojectTimer, &QTimer::timeout, this,
+                [this]() { flushHistoryReproject(); });
+    }
+    // Restart the debounce: the reprojection runs once scrolling settles.
+    m_wfHistoryReprojectTimer->start(kWaterfallHistoryReprojectDebounceMs);
+}
+
+void SpectrumWidget::flushHistoryReproject()
+{
+    if (!m_wfHistoryReprojectPending) {
+        return;
+    }
+    if (m_wfHistoryReprojectTimer) {
+        m_wfHistoryReprojectTimer->stop();
+    }
+    m_wfHistoryReprojectPending = false;  // clear first: appendHistoryRow re-enables
+    reprojectWaterfallImage(m_waterfallHistory,
+                            m_wfHistorySrcCenterMhz, m_wfHistorySrcBwMhz,
+                            m_wfHistoryDstCenterMhz, m_wfHistoryDstBwMhz);
 }
 
 bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthMhz,
