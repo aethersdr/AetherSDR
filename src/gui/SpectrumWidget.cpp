@@ -893,7 +893,9 @@ void SpectrumWidget::loadSettings()
     // Match the enable-time fresh-frame seed used by setNoiseFloorEnable so a
     // restored Floor=on locks onto the current floor without smoothing from a
     // stale value.
-    m_noiseFloorFreshFrameCount = m_noiseFloorEnable ? 5 : 0;
+    if (m_noiseFloorEnable) {
+        armNoiseFloorFastLock(5, 1);
+    }
     applyFpsMeterVisibility(
         s.value("DisplayFpsMeters", "False").toString() == "True");
     m_wfColorScheme  = static_cast<WfColorScheme>(
@@ -1061,7 +1063,9 @@ void SpectrumWidget::setNoiseFloorEnable(bool on) {
     resetNoiseFloorBaseline();
     // Five fresh frames after enable so we lock onto the current
     // floor without smoothing from a stale value.
-    m_noiseFloorFreshFrameCount = on ? 5 : 0;
+    if (on) {
+        armNoiseFloorFastLock(5, 1);
+    }
     if (on) {
         refreshNoiseFloorTarget();
     }
@@ -1079,7 +1083,7 @@ void SpectrumWidget::reacquireNoiseFloorLock() {
     // slice command, so keep cold-acquiring long enough to catch the new floor.
     // 30 frames ≈ 1 s of cold-acquire at the default 30 Hz FFT update rate —
     // long enough for the antenna change to settle through the radio.
-    m_noiseFloorFreshFrameCount = 30;
+    armNoiseFloorFastLock(30, 1);
     m_measuredNoiseFloorDbm = -1000.0f;
 }
 
@@ -1100,6 +1104,17 @@ void SpectrumWidget::suspendNoiseFloorAutoAdjustUntil(qint64 untilMs)
     m_noiseFloorCandidateFrames = 0;
 }
 
+void SpectrumWidget::resumeNoiseFloorAutoAdjust()
+{
+    m_noiseFloorAutoAdjustHoldUntilMs = 0;
+    if (!m_noiseFloorEnable) {
+        return;
+    }
+
+    resetNoiseFloorBaseline();
+    armNoiseFloorFastLock(8, 1);
+}
+
 void SpectrumWidget::prepareForFftScaleChange()
 {
     m_resetFftSmoothingOnNextFrame = true;
@@ -1109,6 +1124,7 @@ void SpectrumWidget::prepareForFftScaleChange()
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     m_noiseFloorScaleSettlingUntilMs =
         std::max(m_noiseFloorScaleSettlingUntilMs, nowMs + kScaleSettleMs);
+    armNoiseFloorFastLock(8, 1);
     m_noiseFloorCandidateValid = false;
     m_noiseFloorCandidateFrames = 0;
 }
@@ -1399,6 +1415,7 @@ void SpectrumWidget::resetNoiseFloorBaseline()
     m_noiseFloorCandidateStartMs = 0;
     m_noiseFloorCandidateFrames = 0;
     m_noiseFloorFreshFrameCount = m_noiseFloorEnable ? 5 : 0;
+    m_noiseFloorFastLockFrames = 0;
     m_pendingDbmRangeEcho = false;
     m_pendingDbmRangeEchoFromAutoFloor = false;
     m_pendingDbmRangeEchoStartMs = 0;
@@ -1469,9 +1486,9 @@ bool SpectrumWidget::captureNoiseFloorTargetFromCurrentScale(bool notify, bool p
     return true;
 }
 
-void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool forceBaseline)
+bool SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool forceBaseline)
 {
-    if (!m_noiseFloorEnable || m_transmitting || bins.isEmpty()) return;
+    if (!m_noiseFloorEnable || m_transmitting || bins.isEmpty()) return false;
 
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     if (m_pendingDbmRangeEcho
@@ -1487,7 +1504,7 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
             m_pendingDbmRangeEchoFromAutoFloor = false;
             m_pendingDbmRangeEchoStartMs = 0;
         }
-        return;
+        return false;
     }
     if (m_pendingDbmRangeEcho) {
         if (m_pendingDbmRangeEchoFromAutoFloor
@@ -1496,10 +1513,13 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
             && !isDraggingDbmScale()) {
             applyNoiseFloorAutoAdjust(nowMs);
         }
-        return;
+        return false;
     }
 
-    if (m_noiseFloorScaleSettlingUntilMs > nowMs) return;
+    const bool fastLockFrame = forceBaseline && m_noiseFloorFastLockFrames > 0;
+    if (m_noiseFloorScaleSettlingUntilMs > nowMs && !fastLockFrame) {
+        return false;
+    }
     if (m_noiseFloorScaleSettlingUntilMs > 0) {
         m_noiseFloorScaleSettlingUntilMs = 0;
         m_noiseFloorCandidateValid = false;
@@ -1507,7 +1527,7 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
     }
 
     const float frameFloor = estimateNoiseFloorDbm(bins);
-    if (frameFloor <= -500.0f || m_dynamicRange <= 0.0f) return;
+    if (frameFloor <= -500.0f || m_dynamicRange <= 0.0f) return false;
 
     if (!m_noiseFloorBaselineValid || m_noiseFloorLastSampleMs <= 0 || forceBaseline) {
         // Cold-acquire: force the baseline to this frame's reading.
@@ -1535,7 +1555,7 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
                 m_noiseFloorCandidateStartMs = nowMs;
                 m_noiseFloorCandidateFrames = 1;
                 m_noiseFloorLastSampleMs = nowMs;
-                return;
+                return false;
             }
             m_noiseFloorCandidateDbm =
                 0.65f * m_noiseFloorCandidateDbm + 0.35f * frameFloor;
@@ -1552,7 +1572,7 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
                    && candidateAgeMs < requiredAgeMs);
             if (keepWaiting) {
                 m_noiseFloorLastSampleMs = nowMs;
-                return;
+                return false;
             }
         } else {
             m_noiseFloorCandidateValid = false;
@@ -1582,12 +1602,13 @@ void SpectrumWidget::updateNoiseFloorBaseline(const QVector<float>& bins, bool f
 
     if (!m_noiseFloorTargetValid) {
         refreshNoiseFloorTarget();
-        if (!m_noiseFloorTargetValid) return;
+        if (!m_noiseFloorTargetValid) return true;
     }
 
-    if (isDraggingDbmScale() || m_pendingDbmRangeEcho) return;
+    if (isDraggingDbmScale() || m_pendingDbmRangeEcho) return true;
 
     applyNoiseFloorAutoAdjust(nowMs);
+    return true;
 }
 
 void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
@@ -1603,7 +1624,21 @@ void SpectrumWidget::applyNoiseFloorAutoAdjust(qint64 nowMs)
     const float desiredRef = m_noiseFloorBaselineDbm
         + m_noiseFloorTargetFrac * m_dynamicRange;
     const float clampedRef = std::max(desiredRef, kMinDisplayDbm + m_dynamicRange);
-    if (std::abs(clampedRef - m_refLevel) < 0.45f) return;
+    if (std::abs(clampedRef - m_refLevel) < 0.45f) {
+        if (m_noiseFloorFastLockFrames > 0) {
+            --m_noiseFloorFastLockFrames;
+        }
+        return;
+    }
+
+    if (m_noiseFloorFastLockFrames > 0) {
+        --m_noiseFloorFastLockFrames;
+        m_noiseFloorLastMotionMs = nowMs;
+        m_refLevel = clampedRef;
+        markOverlayDirty();
+        sendNoiseFloorRangeCommand(nowMs, true);
+        return;
+    }
 
     moveRefLevelToward(clampedRef, nowMs);
 }
@@ -1616,9 +1651,20 @@ bool SpectrumWidget::noiseFloorAutoAdjustHeld(qint64 nowMs)
     if (m_noiseFloorAutoAdjustHoldUntilMs > 0) {
         m_noiseFloorAutoAdjustHoldUntilMs = 0;
         resetNoiseFloorBaseline();
+        armNoiseFloorFastLock(8, 1);
         return true;
     }
     return false;
+}
+
+void SpectrumWidget::armNoiseFloorFastLock(int freshFrames, int snapFrames)
+{
+    if (!m_noiseFloorEnable) {
+        return;
+    }
+
+    m_noiseFloorFreshFrameCount = std::max(m_noiseFloorFreshFrameCount, freshFrames);
+    m_noiseFloorFastLockFrames = std::max(m_noiseFloorFastLockFrames, snapFrames);
 }
 
 void SpectrumWidget::moveRefLevelToward(float targetRef, qint64 nowMs)
@@ -2924,7 +2970,13 @@ void SpectrumWidget::applyDbmRangeImmediate(float minDbm, float maxDbm)
     m_dynamicRange = dyn;
     m_resetFftSmoothingOnNextFrame = true;
     resetNoiseFloorBaseline();
-    markOverlayDirty();
+    if (m_noiseFloorEnable) {
+        // Do not repaint the radio-owned range as an intermediate state when
+        // client-side auto floor is about to place the trace on the next frame.
+        armNoiseFloorFastLock(5, 1);
+    } else {
+        markOverlayDirty();
+    }
 }
 
 // ─── Slice color table (shared via SliceColors.h) ────────────────────────────
@@ -3384,9 +3436,10 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     // rfoust's PR #2643 work and consolidated into this existing path.
     const bool useFreshLockFrame =
         m_noiseFloorFreshFrameCount > 0 && !spectrumBins->isEmpty();
-    updateNoiseFloorBaseline(useFreshLockFrame ? *spectrumBins : m_smoothed,
-                             useFreshLockFrame);
-    if (useFreshLockFrame) --m_noiseFloorFreshFrameCount;
+    const bool noiseFloorFrameConsumed =
+        updateNoiseFloorBaseline(useFreshLockFrame ? *spectrumBins : m_smoothed,
+                                 useFreshLockFrame);
+    if (useFreshLockFrame && noiseFloorFrameConsumed) --m_noiseFloorFreshFrameCount;
 
     // ── Auto-squelch: own two-pass trimmed-mean noise floor ───────────────
     // Independent copy of the floor measurement — not borrowed from the

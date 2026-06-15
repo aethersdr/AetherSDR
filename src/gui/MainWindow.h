@@ -774,6 +774,8 @@ private:
     bool             m_needAudioStream{false};
     qint64           m_profileLoadRadioStateWriteHoldUntilMs{0};
     QSet<QString>    m_pendingProfileLoadPanDimensions;
+    QHash<QString, int> m_profileLoadPendingFftYpixels;
+    QHash<QString, qint64> m_profileLoadPanDimensionsSettlingUntilMs;
 
     // Pending WAN radio (between requestConnect and connectReady)
     WanRadioInfo     m_pendingWanRadio;
@@ -848,13 +850,23 @@ private:
     void cancelTransmitFromIndicator();
     void beginProfileLoadRadioStateWriteHold(const QString& profileType, const QString& profileName);
     bool profileLoadRadioStateWritesHeld() const;
+    bool profileLoadPanDisplaySettling(const QString& panId) const;
     void holdNoiseFloorAutoAdjustForProfileLoad(qint64 untilMs);
     void reacquireNoiseFloorLocksAfterProfileLoad();
+    void releaseProfileLoadPanDisplayHold(const QString& panId, SpectrumWidget* sw);
+    void markProfileLoadPanDimensionsReady(const QString& panId, int yPixels);
+    bool profileLoadPanDimensionsMatchExpected(const QString& panId,
+                                               SpectrumWidget* sw) const;
+    void retryProfileLoadPanDimensions(const QString& panId, SpectrumWidget* sw);
     void scheduleProfileLoadRecovery(const QString& profileType, const QString& profileName);
     void runProfileLoadRecoveryPass(const QString& profileType, const QString& profileName,
                                     bool rearmDaxIq, bool resetDaxRxStreams);
-    void requestPanDimensionsForRadio(const QString& panId, SpectrumWidget* sw);
-    void sendPanDimensionsToRadio(const QString& panId, SpectrumWidget* sw);
+    void requestPanDimensionsForRadio(const QString& panId,
+                                      SpectrumWidget* sw,
+                                      bool updateLocalDecoderImmediately = false);
+    void sendPanDimensionsToRadio(const QString& panId,
+                                  SpectrumWidget* sw,
+                                  bool updateLocalDecoderImmediately);
     void flushPendingProfileLoadPanDimensions();
     class ClientEqEditor* m_clientEqEditor{nullptr}; // lazy — created on first Edit… click
     // Lazy-construct the floating EQ editor on first access, with all

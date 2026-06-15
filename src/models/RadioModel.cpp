@@ -27,7 +27,8 @@ namespace AetherSDR {
 
 namespace {
 
-constexpr int kMinUsablePanYpixels = 100;
+constexpr int kMinFftDecodeYpixels = 2;
+constexpr int kDefaultPanDimensionThreshold = 100;
 constexpr int kSessionRestorePruneDelayMs = 5000;
 constexpr int kWaterfallLineDurationMinMs = 1;
 constexpr int kWaterfallLineDurationMaxMs = 100;
@@ -5240,6 +5241,7 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
 {
     // Delegate to the specific PanadapterModel, not just the active one
     auto* pan = m_panadapters.value(panId, nullptr);
+    const bool panMatchedById = pan != nullptr;
     if (!pan) pan = activePanadapter();  // fallback
     const float previousMinDbm = pan ? pan->minDbm() : 0.0f;
     const float previousMaxDbm = pan ? pan->maxDbm() : 0.0f;
@@ -5267,18 +5269,28 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
     // Y positions (0..ypixels-1), so PanadapterStream needs this for dBm conversion.
     // Also detect when the radio resets to default dimensions (e.g. after profile
     // load) and re-request correct dimensions from MainWindow.
-    if (kvs.contains("y_pixels") && pan) {
-        int yPix = kvs["y_pixels"].toInt();
-        if (yPix > kMinUsablePanYpixels) {
+    if (kvs.contains("y_pixels") && pan && panMatchedById) {
+        const int yPix = kvs["y_pixels"].toInt();
+        if (yPix >= kMinFftDecodeYpixels) {
+            // Profile recall can temporarily reset the radio to small default
+            // dimensions. The FFT decoder still needs that exact value because
+            // samples are encoded as radio pixel Y positions; only the dimension
+            // re-push decision below treats small values as unusable long-term.
+            const bool scaleChanged = pan->setFftYPixels(yPix);
             m_panStream->setYPixels(pan->panStreamId(), yPix);
+            if (scaleChanged) {
+                emit panadapterFftScaleChanged(pan->panId(), yPix);
+            }
         }
     }
-    if ((kvs.contains("x_pixels") || kvs.contains("y_pixels")) && pan) {
-        int xPix = kvs.value("x_pixels", "0").toInt();
-        int yPix = kvs.value("y_pixels", "0").toInt();
+    if ((kvs.contains("x_pixels") || kvs.contains("y_pixels")) && pan && panMatchedById) {
+        const int xPix = kvs.value("x_pixels", "0").toInt();
+        const int yPix = kvs.value("y_pixels", "0").toInt();
         // Radio reset to defaults (profile load, reconnect) — re-push real dimensions
-        if ((xPix > 0 && xPix <= 100) || (yPix > 0 && yPix <= 100))
+        if ((xPix > 0 && xPix <= kDefaultPanDimensionThreshold)
+            || (yPix > 0 && yPix <= kDefaultPanDimensionThreshold)) {
             emit panDimensionsNeeded(pan->panId());
+        }
     }
     if (kvs.contains("ant_list")) {
         const QStringList ants = kvs["ant_list"].split(',', Qt::SkipEmptyParts);

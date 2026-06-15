@@ -45,6 +45,14 @@ public:
     bool loopB() const { return m_loopB; }
     int fps() const { return m_fps; }
     int waterfallLineDuration() const { return m_waterfallLineDuration; }
+    int fftYPixels() const { return m_fftYPixels; }
+    bool setFftYPixels(int yPixels) {
+        if (m_fftYPixels == yPixels) {
+            return false;
+        }
+        m_fftYPixels = yPixels;
+        return true;
+    }
     QString preamp() const { return m_preamp; }
     void setPreamp(const QString& pre) {
         // Preamp is internal state only — no UI listeners. Do not emit
@@ -105,6 +113,7 @@ private:
     int         m_wnbLevel{50};
     int         m_fps{-1};
     int         m_waterfallLineDuration{-1};
+    int         m_fftYPixels{-1};
     QString     m_preamp;
     int         m_daxiqChannel{0};
     bool        m_resized{false};

@@ -391,6 +391,8 @@ signals:
     void panadapterInfoChanged(double centerMhz, double bandwidthMhz);
     // Emitted when the radio reports the panadapter's dBm display range.
     void panadapterLevelChanged(float minDbm, float maxDbm);
+    // Emitted when the radio reports FFT pixel height for a panadapter.
+    void panadapterFftScaleChanged(const QString& panId, int yPixels);
     void panadapterAdded(PanadapterModel* pan);
     // Emitted when a previous-session pan model is reclaimed on reconnect
     // instead of created fresh. The applet/widget wiring from the original

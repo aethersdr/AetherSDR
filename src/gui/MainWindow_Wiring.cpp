@@ -68,6 +68,8 @@ constexpr double kRevealComfortEdgeMarginFrac = 0.18;
 constexpr double kSpectrumClickEdgeMarginFrac = 0.05;
 
 constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
+constexpr int kPanDimensionDecoderFallbackMs = 650;
+constexpr qint64 kProfileLoadDimensionSettleMs = kPanDimensionDecoderFallbackMs + 100;
 
 bool memoryRevealTargetMatches(double actualMhz, double targetMhz)
 {
@@ -787,7 +789,18 @@ void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,
     if (m_bsAutoSaveTimer) {
         m_bsAutoSaveTimer->stop();
     }
+    m_pendingProfileLoadPanDimensions.clear();
+    m_profileLoadPendingFftYpixels.clear();
+    m_profileLoadPanDimensionsSettlingUntilMs.clear();
     holdNoiseFloorAutoAdjustForProfileLoad(untilMs);
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (applet && applet->spectrumWidget()) {
+                applet->spectrumWidget()->clearDisplay();
+            }
+        }
+    }
+    setPanadapterConnectionAnimation(true, "Loading profile...");
 
     qCInfo(lcProtocol).noquote()
         << "MainWindow: holding profile-owned radio state writes"
@@ -798,6 +811,13 @@ void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,
 bool MainWindow::profileLoadRadioStateWritesHeld() const
 {
     return QDateTime::currentMSecsSinceEpoch() < m_profileLoadRadioStateWriteHoldUntilMs;
+}
+
+bool MainWindow::profileLoadPanDisplaySettling(const QString& panId) const
+{
+    return m_pendingProfileLoadPanDimensions.contains(panId)
+        || m_profileLoadPendingFftYpixels.contains(panId)
+        || m_profileLoadPanDimensionsSettlingUntilMs.contains(panId);
 }
 
 void MainWindow::holdNoiseFloorAutoAdjustForProfileLoad(qint64 untilMs)
@@ -834,13 +854,82 @@ void MainWindow::reacquireNoiseFloorLocksAfterProfileLoad()
                 m_radioModel.panStream()->setDbmRange(
                     pan->panStreamId(), pan->minDbm(), pan->maxDbm());
             }
-            sw->setDbmRange(pan->minDbm(), pan->maxDbm());
+            if (!sw->noiseFloorAutoAdjustEnabled()) {
+                sw->setDbmRange(pan->minDbm(), pan->maxDbm());
+            }
         }
-        sw->reacquireNoiseFloorLock();
+        if (sw->noiseFloorAutoAdjustEnabled()) {
+            sw->resumeNoiseFloorAutoAdjust();
+        } else {
+            sw->reacquireNoiseFloorLock();
+        }
     }
 }
 
-void MainWindow::sendPanDimensionsToRadio(const QString& panId, SpectrumWidget* sw)
+void MainWindow::releaseProfileLoadPanDisplayHold(const QString& panId, SpectrumWidget* sw)
+{
+    if (panId.isEmpty()) {
+        return;
+    }
+
+    m_pendingProfileLoadPanDimensions.remove(panId);
+    m_profileLoadPendingFftYpixels.remove(panId);
+    m_profileLoadPanDimensionsSettlingUntilMs.remove(panId);
+    if (sw) {
+        sw->resumeNoiseFloorAutoAdjust();
+    }
+}
+
+void MainWindow::markProfileLoadPanDimensionsReady(const QString& panId, int yPixels)
+{
+    auto expectedIt = m_profileLoadPendingFftYpixels.find(panId);
+    if (expectedIt == m_profileLoadPendingFftYpixels.end()
+        || expectedIt.value() != yPixels) {
+        return;
+    }
+
+    releaseProfileLoadPanDisplayHold(
+        panId,
+        m_panStack ? m_panStack->spectrum(panId) : nullptr);
+}
+
+bool MainWindow::profileLoadPanDimensionsMatchExpected(const QString& panId,
+                                                       SpectrumWidget* sw) const
+{
+    auto expectedIt = m_profileLoadPendingFftYpixels.find(panId);
+    if (expectedIt == m_profileLoadPendingFftYpixels.end()) {
+        return true;
+    }
+
+    return sw
+        && panPixelDimensionsReady(sw)
+        && panYpixelsFor(sw) == expectedIt.value();
+}
+
+void MainWindow::retryProfileLoadPanDimensions(const QString& panId, SpectrumWidget* sw)
+{
+    if (panId.isEmpty() || !sw) {
+        return;
+    }
+
+    m_profileLoadPendingFftYpixels.remove(panId);
+    m_profileLoadPanDimensionsSettlingUntilMs.remove(panId);
+
+    if (!panPixelDimensionsReady(sw)) {
+        m_pendingProfileLoadPanDimensions.insert(panId);
+        return;
+    }
+
+    m_profileLoadPendingFftYpixels.insert(panId, panYpixelsFor(sw));
+    m_profileLoadPanDimensionsSettlingUntilMs.insert(
+        panId,
+        QDateTime::currentMSecsSinceEpoch() + kProfileLoadDimensionSettleMs);
+    sendPanDimensionsToRadio(panId, sw, false);
+}
+
+void MainWindow::sendPanDimensionsToRadio(const QString& panId,
+                                          SpectrumWidget* sw,
+                                          bool updateLocalDecoderImmediately)
 {
     // Raw sender for radio FFT dimensions. Normal lifecycle/resize paths must
     // call requestPanDimensionsForRadio() instead so profile loads can defer
@@ -861,13 +950,48 @@ void MainWindow::sendPanDimensionsToRadio(const QString& panId, SpectrumWidget* 
         QString("display pan set %1 xpixels=%2 ypixels=%3")
             .arg(panId).arg(xpix).arg(ypix));
 
-    if (pan->panStreamId()) {
-        m_radioModel.panStream()->setYPixels(pan->panStreamId(), ypix);
-        sw->prepareForFftScaleChange();
+    if (profileLoadRadioStateWritesHeld()) {
+        m_profileLoadPendingFftYpixels.insert(panId, ypix);
+        m_profileLoadPanDimensionsSettlingUntilMs.insert(
+            panId,
+            QDateTime::currentMSecsSinceEpoch() + kProfileLoadDimensionSettleMs);
+    }
+
+    const quint32 streamId = pan->panStreamId();
+    if (streamId) {
+        QPointer<SpectrumWidget> swGuard(sw);
+        auto updateLocalDecoder = [this, panId, swGuard, streamId, ypix]() {
+            if (m_shuttingDown || !swGuard) {
+                return;
+            }
+            auto* currentPan = m_radioModel.panadapter(panId);
+            if (!currentPan || currentPan->panStreamId() != streamId) {
+                return;
+            }
+            if (!panPixelDimensionsReady(swGuard.data())
+                || panYpixelsFor(swGuard.data()) != ypix) {
+                return;
+            }
+            m_radioModel.panStream()->setYPixels(streamId, ypix);
+            swGuard->prepareForFftScaleChange();
+        };
+
+        if (updateLocalDecoderImmediately) {
+            updateLocalDecoder();
+        } else {
+            // Radio status echo is the normal sync point. The delayed fallback
+            // preserves resize recovery if the echo is missed, without decoding
+            // queued old-height FFT frames with the new height.
+            QTimer::singleShot(kPanDimensionDecoderFallbackMs,
+                               this,
+                               updateLocalDecoder);
+        }
     }
 }
 
-void MainWindow::requestPanDimensionsForRadio(const QString& panId, SpectrumWidget* sw)
+void MainWindow::requestPanDimensionsForRadio(const QString& panId,
+                                              SpectrumWidget* sw,
+                                              bool updateLocalDecoderImmediately)
 {
     if (panId.isEmpty() || !sw || !panPixelDimensionsReady(sw)) {
         return;
@@ -887,7 +1011,7 @@ void MainWindow::requestPanDimensionsForRadio(const QString& panId, SpectrumWidg
         return;
     }
 
-    sendPanDimensionsToRadio(panId, sw);
+    sendPanDimensionsToRadio(panId, sw, updateLocalDecoderImmediately);
 }
 
 void MainWindow::flushPendingProfileLoadPanDimensions()
@@ -906,7 +1030,7 @@ void MainWindow::flushPendingProfileLoadPanDimensions()
             continue;
         }
 
-        sendPanDimensionsToRadio(applet->panId(), applet->spectrumWidget());
+        sendPanDimensionsToRadio(applet->panId(), applet->spectrumWidget(), false);
         ++sent;
     }
 
@@ -960,6 +1084,8 @@ void MainWindow::scheduleProfileLoadRecovery(const QString& profileType,
         flushPendingProfileLoadPanDimensions();
     });
     QTimer::singleShot(kProfileLoadPostHoldRecoveryDelayMs, this, [this]() {
+        m_profileLoadPendingFftYpixels.clear();
+        m_profileLoadPanDimensionsSettlingUntilMs.clear();
         reacquireNoiseFloorLocksAfterProfileLoad();
 #ifdef HAVE_WEBSOCKETS
         if (tciServer()) {
@@ -1337,7 +1463,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                   (float minDbm, float maxDbm) {
         const bool profileLoadHeld = profileLoadRadioStateWritesHeld();
         const bool autoFloorChange = sw->pendingAutoNoiseFloorDbmRange();
-        if (profileLoadHeld && autoFloorChange) {
+        if (profileLoadPanDisplaySettling(applet->panId()) && autoFloorChange) {
             if (auto* pan = m_radioModel.panadapter(applet->panId())) {
                 if (pan->panStreamId()) {
                     setStreamDbmRange(pan->minDbm(), pan->maxDbm());

@@ -58,6 +58,7 @@
 #include "models/SliceModel.h"
 
 #include <QMessageBox>
+#include <QDateTime>
 #include <QThread>
 #include <QTimer>
 
@@ -82,6 +83,19 @@ QString defaultPanLayoutForCount(int panCount)
     return kDefaultLayouts.value(panCount, QStringLiteral("1"));
 }
 constexpr qint64 kXvtrWaterfallDecisionLogIntervalMs = 20000;
+constexpr int kProfileLoadMinRenderableFrameBins = 128;
+
+bool profileLoadFrameLooksRenderable(const SpectrumWidget* spectrum, int binCount)
+{
+    if (binCount <= 0 || !panPixelDimensionsReady(spectrum)) {
+        return false;
+    }
+
+    // This is only a coarse sanity floor for profile-load release. Vertical
+    // FFT scale agreement is enforced separately via radio-reported y_pixels;
+    // horizontal bin counts can be reprojected by SpectrumWidget.
+    return binCount >= kProfileLoadMinRenderableFrameBins;
+}
 
 void logXvtrWaterfallDecision(quint32 streamId,
                               const QString& panId,
@@ -835,8 +849,49 @@ void MainWindow::wirePanLifecycle()
 {
     // ── Panadapter stream → spectrum widget ───────────────────────────────
     // Route FFT/waterfall data to the correct SpectrumWidget by stream ID
+    auto profileLoadFrameReady = [this](const QString& panId,
+                                        SpectrumWidget* sw,
+                                        int binCount) {
+        if (!profileLoadRadioStateWritesHeld()
+            && !profileLoadPanDisplaySettling(panId)) {
+            return true;
+        }
+
+        if (m_pendingProfileLoadPanDimensions.contains(panId)) {
+            if (!profileLoadRadioStateWritesHeld()) {
+                flushPendingProfileLoadPanDimensions();
+            }
+            return false;
+        }
+
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (auto expectedIt = m_profileLoadPendingFftYpixels.find(panId);
+            expectedIt != m_profileLoadPendingFftYpixels.end()) {
+            auto deadlineIt = m_profileLoadPanDimensionsSettlingUntilMs.find(panId);
+            if (deadlineIt == m_profileLoadPanDimensionsSettlingUntilMs.end()
+                || nowMs < deadlineIt.value()) {
+                return false;
+            }
+            if (!profileLoadPanDimensionsMatchExpected(panId, sw)) {
+                retryProfileLoadPanDimensions(panId, sw);
+                return false;
+            }
+            releaseProfileLoadPanDisplayHold(panId, sw);
+        } else if (auto it = m_profileLoadPanDimensionsSettlingUntilMs.find(panId);
+            it != m_profileLoadPanDimensionsSettlingUntilMs.end()) {
+            if (nowMs < it.value()) {
+                return false;
+            }
+            releaseProfileLoadPanDisplayHold(panId, sw);
+        }
+
+        return profileLoadFrameLooksRenderable(sw, binCount);
+    };
+
     connect(m_radioModel.panStream(), &PanadapterStream::spectrumReady,
-            this, [this](quint32 streamId, const QVector<float>& bins, qint64 emittedNs) {
+            this, [this, profileLoadFrameReady](quint32 streamId,
+                                                const QVector<float>& bins,
+                                                qint64 emittedNs) {
         if (m_shuttingDown || !m_panStack) {
             return;
         }
@@ -848,16 +903,27 @@ void MainWindow::wirePanLifecycle()
         for (auto* pan : m_radioModel.panadapters()) {
             if (pan->panStreamId() == streamId) {
                 if (auto* sw = m_panStack->spectrum(pan->panId())) {
+                    if (!profileLoadFrameReady(pan->panId(), sw, bins.size())) {
+                        return;
+                    }
                     sw->updateSpectrum(bins);
                     finishPanadapterConnectionAnimation();
                 }
                 return;
             }
         }
-        // Fallback: active spectrum (covers "default" pan before radio connects)
-        if (auto* sw = spectrum()) {
-            sw->updateSpectrum(bins);
-            finishPanadapterConnectionAnimation();
+        // Fallback: active spectrum only before any radio-owned pan has been
+        // claimed. During profile loads/removals, queued frames from streams
+        // that were just removed can arrive after their model is gone; drawing
+        // them into the current active pane produces a brief bogus trace.
+        if (m_radioModel.panadapters().isEmpty() && !profileLoadRadioStateWritesHeld()) {
+            if (auto* sw = spectrum()) {
+                sw->updateSpectrum(bins);
+                finishPanadapterConnectionAnimation();
+            }
+        } else {
+            qCDebug(lcProtocol) << "MainWindow: dropped unmatched FFT stream"
+                                << QStringLiteral("0x%1").arg(streamId, 0, 16);
         }
     });
     // ── S History Markers — tap into FFT frames for voice signal detection ──
@@ -865,8 +931,12 @@ void MainWindow::wirePanLifecycle()
             this, &MainWindow::onSpectrumReadyForSHistory);
 
     connect(m_radioModel.panStream(), &PanadapterStream::waterfallRowReady,
-            this, [this](quint32 streamId, const QVector<float>& bins,
-                         double low, double high, quint32 tc, qint64 emittedNs) {
+            this, [this, profileLoadFrameReady](quint32 streamId,
+                                                const QVector<float>& bins,
+                                                double low,
+                                                double high,
+                                                quint32 tc,
+                                                qint64 emittedNs) {
         if (m_shuttingDown || !m_panStack) {
             return;
         }
@@ -906,15 +976,23 @@ void MainWindow::wirePanLifecycle()
                     high = mapped.highMhz;
                 }
                 if (auto* sw = m_panStack->spectrum(pan->panId())) {
+                    if (!profileLoadFrameReady(pan->panId(), sw, bins.size())) {
+                        return;
+                    }
                     sw->updateWaterfallRow(bins, low, high, tc);
                     finishPanadapterConnectionAnimation();
                 }
                 return;
             }
         }
-        if (auto* sw = spectrum()) {
-            sw->updateWaterfallRow(bins, low, high, tc);
-            finishPanadapterConnectionAnimation();
+        if (m_radioModel.panadapters().isEmpty() && !profileLoadRadioStateWritesHeld()) {
+            if (auto* sw = spectrum()) {
+                sw->updateWaterfallRow(bins, low, high, tc);
+                finishPanadapterConnectionAnimation();
+            }
+        } else {
+            qCDebug(lcProtocol) << "MainWindow: dropped unmatched waterfall stream"
+                                << QStringLiteral("0x%1").arg(streamId, 0, 16);
         }
     });
     connect(m_radioModel.panStream(), &PanadapterStream::waterfallAutoBlackLevel,
@@ -1076,7 +1154,7 @@ void MainWindow::wirePanLifecycle()
         // FFT data is essentially empty/unusable. Use widget width and the
         // actual FFT pane height for 1:1 bin-to-pixel mapping.
         auto* sw = applet->spectrumWidget();
-        requestPanDimensionsForRadio(pan->panId(), sw);
+        requestPanDimensionsForRadio(pan->panId(), sw, true);
 
         qDebug() << "MainWindow: added panadapter applet for" << pan->panId();
 
@@ -1104,19 +1182,6 @@ void MainWindow::wirePanLifecycle()
                         .value("FloatingPanIds", "").toString();
                     m_panStack->rearrangeLayout(layoutId);
                     AppSettings::instance().setValue("FloatingPanIds", floatingPanIds);
-
-                    // Optimistically set local yPixels immediately so FFT frames
-                    // arriving before the radio echoes back use correct scaling (#1511).
-                    for (auto* a : m_panStack->allApplets()) {
-                        auto* s = a->spectrumWidget();
-                        auto* p = m_radioModel.panadapter(a->panId());
-                        if (!s || !p || !p->panStreamId()) continue;
-                        if (panPixelDimensionsReady(s)) {
-                            m_radioModel.panStream()->setYPixels(
-                                p->panStreamId(), panYpixelsFor(s));
-                            s->prepareForFftScaleChange();
-                        }
-                    }
 
                     // Defensive re-push xpixels for all pans after layout settles.
                     // Covers race where radio hadn't finished pan init when first push arrived.
@@ -1174,6 +1239,16 @@ void MainWindow::wirePanLifecycle()
         auto* pan = m_radioModel.panadapter(panId);
         if (!sw || !pan) return;
         requestPanDimensionsForRadio(panId, sw);
+    });
+    connect(&m_radioModel, &RadioModel::panadapterFftScaleChanged,
+            this, [this](const QString& panId, int yPixels) {
+        if (m_shuttingDown || !m_panStack) {
+            return;
+        }
+        markProfileLoadPanDimensionsReady(panId, yPixels);
+        if (auto* sw = m_panStack->spectrum(panId)) {
+            sw->prepareForFftScaleChange();
+        }
     });
 
 #ifdef Q_OS_MAC

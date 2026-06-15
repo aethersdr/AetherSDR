@@ -118,6 +118,7 @@ public:
     void setNoiseFloorEnable(bool on);
     void prepareForFftScaleChange();
     void suspendNoiseFloorAutoAdjustUntil(qint64 untilMs);
+    void resumeNoiseFloorAutoAdjust();
     void reacquireNoiseFloorLock();
 
     // Two-pass trimmed-mean noise floor from live FFT bins (dBm), EMA-smoothed.
@@ -158,6 +159,7 @@ public:
     bool pendingAutoNoiseFloorDbmRange() const {
         return m_pendingDbmRangeEcho && m_pendingDbmRangeEchoFromAutoFloor;
     }
+    bool noiseFloorAutoAdjustEnabled() const { return m_noiseFloorEnable; }
     double centerMhz()    const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
 
@@ -628,7 +630,7 @@ private:
     // adjust path.  Per-frame, asymmetric smoothing (drops follow
     // quickly, rises slowly), with a candidate-state transient filter
     // so brief upward spikes (lightning crashes) don't pull the lock.
-    void updateNoiseFloorBaseline(const QVector<float>& bins, bool forceBaseline);
+    bool updateNoiseFloorBaseline(const QVector<float>& bins, bool forceBaseline);
     // Adjust m_refLevel toward the target so the smoothed noise floor
     // sits at m_noiseFloorPosition.  Pans the dB range (keeps span
     // fixed) rather than zooming it (existing zoom-when-floor-moves
@@ -636,6 +638,7 @@ private:
     // every time the floor drifted).
     void applyNoiseFloorAutoAdjust(qint64 nowMs);
     bool noiseFloorAutoAdjustHeld(qint64 nowMs);
+    void armNoiseFloorFastLock(int freshFrames, int snapFrames);
     void moveRefLevelToward(float targetRef, qint64 nowMs);
     void sendNoiseFloorRangeCommand(qint64 nowMs, bool force);
     void clearDbmReleaseRebase();
@@ -733,6 +736,7 @@ private:
     qint64 m_noiseFloorCandidateStartMs{0};
     int    m_noiseFloorCandidateFrames{0};
     int    m_noiseFloorFreshFrameCount{0};
+    int    m_noiseFloorFastLockFrames{0};
 
     // Percentile EWMA used for the amber floor overlay line and auto-squelch.
     // Tracked separately from m_measuredNoiseFloorDbm (two-pass trimmed mean)
