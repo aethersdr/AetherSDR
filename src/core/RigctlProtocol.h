@@ -36,9 +36,9 @@ private:
     QString processCommand(const QString& cmd);
 
     // Individual command handlers
-    QString cmdGetFreq();
-    QString cmdSetFreq(const QString& arg);
-    QString cmdGetMode();
+    QString cmdGetFreq(const QString& vfo = {});
+    QString cmdSetFreq(const QString& args);
+    QString cmdGetMode(const QString& vfo = {});
     QString cmdSetMode(const QString& args);
     QString cmdGetVfo();
     QString cmdSetVfo(const QString& arg);
@@ -64,6 +64,8 @@ private:
     QString cmdSetAnt(const QString& arg);
     QString cmdGetTs();
     QString cmdSetTs(const QString& arg);
+    QString cmdGetCtcssTone();
+    QString cmdSetCtcssTone(const QString& arg);
     QString cmdGetDcd();
     QString cmdGetTrn();
     QString cmdSetTrn(const QString& arg);
@@ -78,11 +80,29 @@ private:
 
     // Helpers
     SliceModel* currentSlice() const;
-    SliceModel* findTxSlice();         // non-const: calls tryPromoteTxSlice()
+    SliceModel* sliceForVfo(const QString& vfo) const;
+    // Single front door for VFO-prefixed commands. If parts[0] is a VFO name
+    // (chk_vfo=1 mode prefixes VFO-sensitive commands with one), removes it and
+    // resolves the slice it addresses; otherwise returns this port's bound slice.
+    // Returns nullptr for a VFO that names no slice (VFOB with no split, VFOMEM)
+    // — callers map nullptr to RPRT -8. Never silently redirects to the wrong slice.
+    SliceModel* takeVfoPrefix(QStringList& parts) const;
+    // Resolve the TX slice. With promote=true (default) it also runs the
+    // deferred split-promotion state machine (tryPromoteTxSlice) — that is the
+    // behaviour the split commands rely on. Read-only resolvers (sliceForVfo,
+    // serving get_freq/get_mode VFOB) pass promote=false so a query never
+    // mutates radio state as a side effect.
+    SliceModel* findTxSlice(bool promote = true);
     // If a split-enable arrived when only one slice existed, this promotes the
     // newly-created second slice to TX as soon as it appears in the model,
     // then applies any stashed split freq/mode from the burst that preceded it.
     void tryPromoteTxSlice();
+    // Ensure a distinct TX slice exists, enabling split on demand: promote an
+    // existing non-RX slice, or create one (deferred promotion). No-op if a TX
+    // slice already exists. Used by set_split_vfo's enable path and by
+    // set_freq/set_mode VFOB — targetable_vfo lets clients address the TX VFO
+    // directly without a preceding set_split_vfo (e.g. WSJT-X Rig split).
+    void ensureSplitTxSlice();
     QString rprt(int code) const;
 
     // Mode conversion tables
