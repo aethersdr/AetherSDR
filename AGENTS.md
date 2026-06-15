@@ -44,10 +44,11 @@ When helping with AetherSDR:
 - **Read the AetherSDR Constitution before writing or reviewing code.**
   Canonical source: `.specify/memory/constitution.md`. Byte-identical
   mirror at `CONSTITUTION.md` in repo root for discoverability. 14
-  principles total: 7 AetherSDR-domain conventions (FlexLib authority,
-  MeterSmoother, UI labels, BandPlanManager, nested-JSON config, CHAIN
-  widget, auto-generated Contributors) + 7 defensive engineering
-  principles adopted from Cisco's
+  principles total (constitution v2.0.0): 7 AetherSDR-domain governance
+  principles (FlexLib authority, radio-authoritative live state,
+  radio-persistable settings, clean-room contributions, per-feature
+  config ownership, transmit-on-intent, boundary input validation) + 7
+  defensive engineering principles adopted from Cisco's
   [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
   (Evidence Over Assertion, Surface Only What Survives, Claims Are
   Atomic And Mortal, Fixes Are Demonstrated, Sandbox By Infrastructure,
@@ -367,9 +368,10 @@ Run once at app or feature startup, not on every access.
 
 ### Radio-Authoritative Settings Policy
 
-**The radio is always authoritative for any setting it stores.** AetherSDR
-must never save, recall, or override radio-side settings from client-side
-persistence. Only save client-side settings for things the radio does NOT save.
+**The radio is always authoritative for any setting it stores** (Constitution
+Principles II & III). AetherSDR must never save, recall, or override radio-side
+settings from client-side persistence. Only save client-side settings for things
+the radio does NOT save.
 
 **Radio-authoritative (do NOT persist):** frequency, mode, filter, step size,
 AGC, squelch, DSP flags, antennas, TX power, panadapter *count* and per-pan
@@ -405,6 +407,37 @@ Every meter / level-bar / GR readout in the GUI must drive its display
 value through `MeterSmoother` (`src/gui/MeterSmoother.h`). Don't write
 new envelope-follower code or copy smoothing logic from other widgets
 — `MeterSmoother`'s header has the API and a usage example.
+
+### User-facing names match the on-screen UI labels
+
+In prose (issue comments, README, What's-New strings, error toasts, support
+requests) call a control by the label the user sees, not the C++ class name —
+e.g. the **DIGI applet** (class `CatApplet`), and the Help → Support logging
+toggles **Discovery / Commands / Status** (not backend names like
+`radio.connection`). The on-screen label wins for prose, so users can find the
+control you're naming.
+
+### Region-aware band data — read from BandPlanManager, not BandDefs.h
+
+Anything needing band edges, segment sizes, or per-band metadata reads the
+active plan via `BandPlanManager` (`AppSettings["BandPlanName"]` + the JSON in
+`resources/bandplans/`). `src/models/BandDefs.h::kBands[]` is ARRL/US-only and
+not region-aware — don't source new features from it; AetherSDR's users span
+IARU regions 1/2/3.
+
+### TX DSP stages integrate with the CHAIN widget
+
+The TX DSP chain is stage-per-applet and the visual **CHAIN** widget is the
+primary entry point. New TX DSP stages must be ordered, toggleable, and
+inspectable through the CHAIN widget rather than adding a parallel UI entry —
+it's the user's mental model for the TX signal path.
+
+### The About-dialog Contributors list is auto-generated
+
+The Contributors list in the About dialog is built at runtime from the GitHub
+API; manual edits are overwritten on the next build. If someone is missing, fix
+the GitHub-side attribution (commit authorship / `Co-Authored-By` trailer),
+don't patch the dialog string.
 
 ---
 

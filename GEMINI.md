@@ -26,8 +26,8 @@ the must-knows that fit in Gemini's chat context efficiently.
    under one root key per feature (Principle V). Example pattern:
    `AppSettings["MyFeature"] = {"enabled": true, "mode": "auto"}`.
 
-5. **All meter UI uses `MeterSmoother`** (Principle II) — never
-   roll your own envelope follower.
+5. **All meter UI uses `MeterSmoother`** — never roll your own
+   envelope follower. (AGENTS.md → Key Implementation Patterns.)
 
 6. **Assign yourself to an issue or PR before posting a review,
    comment, or merge action** (`gh issue edit NNNN --add-assignee @me`

@@ -1,14 +1,14 @@
 <!--
 SYNC IMPACT REPORT — maintained by /speckit.constitution
 ═══════════════════════════════════════════════════════
-Version change   : 1.0.1 → 1.1.0  [MINOR: 7 new principles adopted from Foundry constitution + Operator Outranks promoted]
-Principles       : +VIII Evidence Over Assertion, +IX Surface Only What Survives, +X Claims Are Atomic And Mortal, +XI Fixes Are Demonstrated, +XII Sandbox By Infrastructure Not By Prompt, +XIII The Operator Outranks Every Agent (promoted from Governance), +XIV Persist Atomically
-Sections changed : Core Principles (VIII-XIV added); Governance > Precedence (Foundry X citation removed — now Principle XIII)
-Templates needing update : aetherclaude/skills/implement-fix.md (still principle-agnostic, no change required; citations remain "Principle <N>." format)
-Downstream re-check      : CONSTITUTION.md (root mirror) ⟳  CLAUDE.md pointer ⟳ (principle count 7 → 14)  CONTRIBUTING.md pointer ⟳ (principle count 7 → 14)
-Follow-up TODOs  : pre-commit check to enforce .specify/memory/constitution.md ≡ CONSTITUTION.md byte-equality
-Last sync        : 2026-05-17
-Rationale        : AetherSDR's contribution surface is multi-agent in practice — at least 6 distinct AI tools touch the codebase (AetherClaude bot, Claude Code, OpenAI Codex, GPT 5.5 Pro, GitHub Copilot, contributor-side IDE agents).  The original 7 principles are AetherSDR-domain-specific architectural conventions; the 7 new principles codify defensive engineering for the multi-agent contribution model.  Foundry origin is cited per principle.
+Version change   : 1.1.0 → 2.0.0  [MAJOR: 5 AetherSDR-domain implementation conventions removed (relocated to AGENTS.md); 5 new governance principles added in their place. Net 14 principles, no gaps.]
+Principles       : Removed (now AGENTS.md pointers): the conventions formerly at II (MeterSmoother), III (User-Facing UI Labels), IV (BandPlanManager), VI (CHAIN Widget), VII (Auto-Generated Contributors). Added: +II The Radio Is Authoritative On Live State, +III Radio-Persistable Settings Live On The Radio, +IV Every Contribution Is Clean-Room, +VI AetherSDR Never Transmits Without Operator Intent, +VII Untrusted Input Is Validated At The Boundary. Retained: I FlexLib Authority and VIII–XIV (Foundry defensive set) unchanged; V kept its numeral but was rewritten/retitled — now "Each Feature Owns Its Configuration As A Single Object" (reframed from a nested-JSON convention to a config-ownership governance invariant; the nested-JSON substance is unchanged, so "Principle V." citations stay valid).
+Sections changed : Core Principles — old II/III/IV/VI/VII removed, new II/III/IV/VI/VII added; V rewritten/retitled (convention → governance invariant); I and VIII–XIV unchanged; Foundry-adopted note unchanged.
+Citation note    : Prior "Principle <N>." references to I, V, and VIII–XIV remain valid (V's numeral and nested-JSON substance are unchanged). References to II/III/IV/VI/VII now denote the NEW principles, not the relocated conventions — a deliberate refill of the numerals; a clean renumber is deferred to a later revision.
+Downstream re-check      : .specify/memory/constitution.md (byte mirror) ⟳  AGENTS.md (count still 14; domain-principle list changes; relocated conventions added as pointers) ⟳  CONTRIBUTING.md (count still 14; domain list changes) ⟳  README.md / GEMINI.md / .github/copilot-instructions.md / .github/PULL_REQUEST_TEMPLATE.md (count + stale "Principle II/IV" example citations) ⟳
+Follow-up TODOs  : a future revision may renumber to retire the refilled-numeral ambiguity; pre-commit check to enforce .specify/memory/constitution.md ≡ CONSTITUTION.md byte-equality
+Last sync        : 2026-06-14
+Rationale        : The conventions formerly at II/III/IV/VI/VII were AetherSDR-domain implementation guidance ("use this class, read from that manager") rather than governance principles encoding a cross-cutting failure mode; they move to AGENTS.md as pointers. The five new principles ARE governance invariants: radio-as-source-of-truth (live state and saved settings), clean-room provenance, transmit-only-on-intent, and boundary validation of untrusted input — each encoding a failure this project must never ship. Principle V was also rewritten — from "use nested JSON" guidance into the invariant beneath it (each feature owns its configuration as one self-contained, defaultable, atomically-writable object), the integrity pair to Principle XIV. I and VIII–XIV keep their numerals and meaning, and V keeps its numeral and nested-JSON substance, so their prior citations stay valid.
 ═══════════════════════════════════════════════════════
 This block is regenerated on every constitution change; do not hand-edit below the rule.
 -->
@@ -17,7 +17,7 @@ This block is regenerated on every constitution change; do not hand-edit below t
 
 | Field | Value |
 |---|---|
-| **Version** | 1.1.0 |
+| **Version** | 2.0.0 |
 | **Status** | `STABLE` |
 | **Applies to** | All AetherSDR contributions: source code, documentation, automation, release artifacts |
 
@@ -60,99 +60,155 @@ radio. The failure mode is "I sent the command, the radio ignored it,
 nothing logged the mismatch." FlexLib doesn't have that ambiguity
 because it is the implementation the radio side was built against.*
 
-### II. The Canonical MeterSmoother Owns All Meter Ballistics
+### II. The Radio Is Authoritative On Live State
 
-Every meter UI in AetherSDR uses `src/gui/MeterSmoother.h` (30 ms
-attack / 180 ms release at 120 Hz / 8 ms interval). Targets are
-normalized to `[0, 1]` via a `dbToRatio` helper before being passed
-to `setTarget()`. Asymmetric `kAlphaUp`/`kAlphaDown` blenders,
-`std::pow`/`exp` envelope followers, or copy-pasted smoothing from
-other meter widgets are prohibited unless the source widget is
-verified to itself be using `MeterSmoother`.
+The radio holds the live state; the client mirrors it. Whenever the
+client's model and the radio's reported state disagree about what is
+live — a frequency, a mode, a filter width, a slice or panadapter
+property — the radio wins and the client reconciles to it.
+Reconciliation flows one way only: radio status updates the client
+model; the client never writes its remembered value back over the
+radio's.
 
-*Why this is inviolable: meter ballistics are an interface-wide design
-property. When one meter follows different ballistics than its
-neighbors the whole panel reads as miscalibrated, and chasing the
-inconsistency back to its source takes far longer than always using
-the canonical class. If a meter genuinely needs different ballistics
-(e.g., a slower GR-bar release), use `MeterSmoother::Ballistics` to
-opt into different constants; never roll your own envelope follower.*
+A user action is a *request* to the radio. Where a command has no
+status echo the client may update optimistically, but the radio's
+subsequent status is the truth and supersedes the optimistic value if
+they differ. The command path runs client → radio; the truth path
+runs radio → client; the two must never form a feedback loop.
 
-### III. User-Facing Names Match The Visible UI Labels
+*Why this is inviolable: when the client lets its own model override
+what the radio reports, the two form a feedback loop and the operator
+sees values fight or flicker. The sharper failure is Multi-Flex — a
+second client that trusts its own optimistic guess over the radio's
+status drifts out of agreement with the radio and every other client,
+and nothing logs the divergence. Principle I fixes the protocol source
+of truth (FlexLib); this principle fixes the live-state source of
+truth (the radio): radio status is read as truth, client commands are
+only requests.*
 
-The toggle button at the top of `AppletPanel` says **DIGI**, so every
-user-facing reference — issue comments, wiki pages, README, the
-What's-New strings, error toasts — calls it **DIGI applet**. The
-internal class name `CatApplet` is *not* user-facing. Same convention
-applies anywhere the on-screen label and the C++ identifier disagree:
-the on-screen label wins for prose.
+### III. Radio-Persistable Settings Live On The Radio
 
-Similarly: the Help → Support → diagnostic logging toggles are
-**Discovery**, **Commands**, and **Status** — never `radio.connection`
-or any other backend category name. When asking a user to enable
-logging, use the names they actually see in the UI.
+If the radio can persist and recall a setting, that setting is saved
+to and recalled from the radio — never duplicated in client-side
+config. This holds for the whole of the radio's stored state, today's
+and whatever the firmware adds later; the deciding test is simply
+*whether the radio can save and restore the value*, not whether it
+appears on any list. The client persists only state the radio does not
+store at all — things like window geometry, layout, client-side-only
+DSP, and UI/display preferences.
 
-*Why this is inviolable: asking a user to "Enable DAX in the CAT
-applet" or "toggle radio.connection logging" sends them looking for a
-button that does not exist by that name. Support-channel friction
-compounds.*
+*Why this is inviolable: when both the client and the radio persist
+the same setting, they fight on reconnect. The radio's GUIClientID
+session restore is always more current than the client's remembered
+copy, so a client that recalls its own value clobbers the radio's live
+state and the operator watches their rig jump to stale settings for no
+reason they can see. Storing every radio-persistable setting only on
+the radio removes the second source of truth that can drift. This is
+the persistence corollary to Principle II: II says the radio wins on
+live state; III says the radio owns the saved state that becomes live
+state on the next connect.*
 
-### IV. Region-Aware Data Comes From BandPlanManager, Not BandDefs.h
+### IV. Every Contribution Is Clean-Room
 
-Anything that needs band edges, segment sizes, or per-band metadata
-reads from the active band plan loaded by `BandPlanManager` (driven
-by `AppSettings["BandPlanName"]` and the JSON files in
-`resources/bandplans/`). `src/models/BandDefs.h::kBands[]` is
-ARRL/US-allocations only and is not region-aware; it must not be the
-source for new features. The dialog should display the active plan
-read-only ("Using band plan: IARU Region 1 — change in View > Band
-Plan").
+Every contribution is clean-room from start to finish. Its code, and
+the protocol knowledge behind it, must come from clean sources: public
+documentation, open-source references, behavior observed on the wire,
+and the contributor's own design and implementation. Code that is
+decompiled, disassembled, or otherwise reverse-engineered from a
+proprietary binary — or transcribed, translated, or paraphrased from
+such output — must never enter the codebase, however correct or
+convenient it is.
 
-*Why this is inviolable: AetherSDR's user base spans IARU regions
-1/2/3. A feature that hardcodes ARRL band edges is wrong for everyone
-outside Region 2 and silently transmits outside the band plan in
-specific cases.*
+The clean inputs are explicit. Reading FlexLib's published open-source
+code (Principle I), capturing and studying the protocol as it actually
+behaves on the wire, and reading official or public documentation are
+all clean-room.
 
-### V. New Configuration Uses Nested JSON Per Feature, Not Flat AppSettings
+The standard holds end to end: a contribution that began clean but
+pulled in decompiler output at any point is contaminated, and
+contamination is not a local defect — it travels to everything written
+by reading it.
 
-`AppSettings` has ~460 call sites in a flat key namespace; that
-flatness is on the refactor roadmap. New features must store their
-configuration as a single nested JSON blob under one root key (e.g.
-`AppSettings["AtuPreTune"] = {region, mode, …}`), not as a stack of
-new flat keys. Existing flat keys can stay until they are migrated.
+*Why this is inviolable: decompiled code carries its original
+copyright and license, so merging it silently relicenses someone
+else's proprietary work as GPLv3 — which we have no right to do.
+Worse, the contamination spreads to everything written from it, so the
+only remedy is to rip all of it out and rebuild clean; one tainted PR
+can put the licensing of the whole tree, and every fork, in question.
+Trivial to refuse at the door, ruinous to undo after.*
 
-*Why this is inviolable: every new flat key adds friction to the
-roadmapped refactor and produces an `AppSettings` namespace that is
-harder to reason about, harder to migrate, and harder to default
-correctly across versions. Nested JSON gives each feature its own
-isolated scope.*
+### V. Each Feature Owns Its Configuration As A Single Object
 
-### VI. The TX DSP Chain Has A Visual CHAIN Widget As Primary Entry
+Every feature's configuration is one self-contained object, owned by
+that feature and stored under a single root key as a nested value
+(e.g. `AppSettings["AtuPreTune"] = {region, mode, …}`) — never
+scattered as loose flat keys across the shared `AppSettings`
+namespace. The object is the unit of ownership: one place to default
+when it is absent, one place to migrate across versions, one value to
+write atomically.
 
-The TX DSP chain is stage-per-applet, and the visual CHAIN widget is
-the primary entry point for understanding and configuring it. New TX
-DSP stages must integrate with the CHAIN widget (be ordered, be
-toggleable, be inspectable through it) rather than introducing
-parallel UI entry points.
+Because it is whole, the feature's config can be defaulted, versioned,
+and persisted as a unit — the self-contained blob Principle XIV
+(atomic persistence) requires. New configuration always takes this
+shape; the legacy flat keys are grandfathered until migrated, and
+nothing new is added to them.
 
-*Why this is inviolable: the CHAIN widget is the user's mental model
-for the TX signal path. A new stage that bypasses the widget is a
-stage the user cannot reorder, cannot disable, and cannot see in
-context — which fragments the model and produces support calls about
-"missing" controls that are actually present elsewhere.*
+*Why this is inviolable: configuration scattered as independent keys
+has no owner and no boundary. Defaults drift as keys accrete piecemeal,
+keys orphan when a feature changes shape, and no migration or atomic
+write can treat the feature's settings as the coherent unit they
+actually are — a crash mid-write or a half-finished migration leaves
+the namespace in a state no feature put it in and no reader expects. A
+single owned object has one place to default, one to migrate, and one
+value to write atomically, so its persistence is correct by
+construction; a flat namespace of hundreds of keys is one nobody can
+fully reason about, and every change to it carries unpredictable blast
+radius.*
 
-### VII. The About Dialog Contributors List Is Auto-Generated
+### VI. AetherSDR Never Transmits Without Operator Intent
 
-The Contributors list in the About dialog is built at runtime from
-the GitHub API. Manual edits to it are reverted on the next build.
-If a contributor is missing, fix the GitHub-side attribution (commit
-authorship, co-authored-by trailer) — do not patch the dialog string.
+The operator is the licensed control operator and is responsible for
+every emission. The radio enforces its own out-of-band limits;
+AetherSDR's duty is narrower and absolute — it never causes a
+transmission the operator did not deliberately initiate.
 
-*Why this is inviolable: manual edits drift, get reverted by the
-auto-generation, and create a maintenance burden where every release
-must re-curate a list that the build system will overwrite anyway.
-Fixing the underlying attribution data is durable; patching the
-dialog is not.*
+AetherSDR never keys the transmitter on its own: not on a timer, not
+as a side effect of a status update or model change, not to recover or
+resync a state, not as an automatic retry. Every emission traces to a
+deliberate operator action — PTT, a tune request, a keyer or beacon
+the operator explicitly started. Any code path that can transmit fails
+closed: if the operator's intent to transmit is not unambiguous, it
+does not key.
+
+*Why this is inviolable: a transmission the operator never asked for
+puts a signal on the air under their callsign and their legal
+responsibility, and it cannot be recalled once it leaves the antenna.
+A client that can key the radio as a side effect — a stray retry, a
+state-recovery path, a misfired timer — makes a software defect
+transmit on the operator's license. Transmit is the one action where,
+if intent is in any doubt, the only safe choice is not to.*
+
+### VII. Untrusted Input Is Validated At The Boundary
+
+AetherSDR consumes many external byte streams — the radio's VITA-49
+status and IQ, TCI, MQTT, KISS, rigctl, SmartLink/WAN, HTTP map and
+spot feeds, and contributor-supplied files. None of it is trusted to
+be well-formed. Every parser bounds-checks lengths, caps allocations,
+validates ranges, and fails closed on malformed input; it must not
+crash, hang, over-allocate, or act on bad data.
+
+Validation happens at the boundary — where the bytes enter, once,
+before the data reaches the rest of the app — so the interior can
+treat parsed values as sound. A malformed or hostile message is an
+expected input, not an exceptional one, especially on paths reachable
+beyond localhost (SmartLink/WAN, a shared MQTT broker, an exposed KISS
+or rigctl port).
+
+*Why this is inviolable: the radio is on the LAN and several of these
+protocols are reachable over the WAN or a shared broker, so a single
+oversized field, truncated frame, or out-of-range index that a parser
+trusts becomes a crash, a hang, or a memory-safety bug an attacker can
+drive.*
 
 ---
 

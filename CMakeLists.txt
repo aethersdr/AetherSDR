@@ -2218,7 +2218,7 @@ add_executable(perf_telemetry_test
     tests/perf_telemetry_test.cpp
     src/core/PerfTelemetry.cpp
     # LogManager.cpp owns the lcPerf Q_LOGGING_CATEGORY definition (per
-    # Principle III consolidation, #2770); LogManager has AsyncLogWriter
+    # the Q_LOGGING_CATEGORY consolidation in #2770); LogManager has AsyncLogWriter
     # as a member which transitively needs AppSettings, so all three .cpp
     # files come along to satisfy the ctor/dtor chain at link time.
     src/core/LogManager.cpp

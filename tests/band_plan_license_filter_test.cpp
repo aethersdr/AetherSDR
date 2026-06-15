@@ -6,8 +6,8 @@
 // disallowed frequency.  A future refactor (STL-algorithm consolidation,
 // parallelisation) could silently break this; these tests pin it. (#3060)
 //
-// Constitution: Principle IV (region-aware data comes from
-// BandPlanManager, not BandDefs.h).
+// Convention: region-aware data comes from BandPlanManager, not
+// BandDefs.h (AGENTS.md → Key Implementation Patterns).
 
 #include "models/BandPlanManager.h"
 

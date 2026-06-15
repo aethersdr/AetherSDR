@@ -21,7 +21,7 @@ an issue, lead with "Fixes #N" or "Closes #N". -->
 
 <!-- Cite the principle by Roman numeral when relevant.  E.g.
 "Principle V — new feature uses nested-JSON persistence."
-"Principle II — MeterSmoother used for the new meter widget."
+"Principle IV — code is clean-room, not derived from decompiled sources."
 See CONSTITUTION.md for the full list. -->
 
 ## Test plan
@@ -36,6 +36,8 @@ See CONSTITUTION.md for the full list. -->
 - [ ] Commits are signed (`docs/COMMIT-SIGNING.md`)
 - [ ] No new flat-key `AppSettings` calls — use nested-JSON-under-one-key
       (Principle V)
-- [ ] All meter UI uses `MeterSmoother` (Principle II)
+- [ ] Code is clean-room — not decompiled, disassembled, or
+      reverse-engineered from a proprietary binary (Principle IV)
+- [ ] All meter UI uses `MeterSmoother` (AGENTS.md convention)
 - [ ] Documentation updated if user-visible behavior changed
 - [ ] Security-sensitive changes reference a GHSA if applicable

@@ -47,10 +47,12 @@ that matches our conventions.
 2. **Read the [AetherSDR Constitution](CONSTITUTION.md).** (Canonical
    source: [`.specify/memory/constitution.md`](.specify/memory/constitution.md);
    the root [`CONSTITUTION.md`](CONSTITUTION.md) is a byte-identical
-   mirror.) **14 principles total**: 7 AetherSDR-specific (FlexLib
-   authority, MeterSmoother, UI labels, BandPlanManager, nested-JSON
-   config, CHAIN widget, auto-generated Contributors) + 7 defensive
-   engineering principles adopted from Cisco's
+   mirror.) **14 principles total** (constitution v2.0.0): 7
+   AetherSDR-specific (FlexLib authority, radio-authoritative live
+   state, radio-persistable settings, clean-room contributions,
+   per-feature config ownership, transmit-on-intent, boundary input
+   validation) + 7 defensive engineering principles adopted from
+   Cisco's
    [Foundry Constitution](https://github.com/CiscoDevNet/foundry-security-spec/blob/main/constitution.md)
    (Evidence Over Assertion, Surface Only What Survives, Atomic Claims,
    Demonstrated Fixes, Infra Sandbox, Operator Outranks Agents, Atomic

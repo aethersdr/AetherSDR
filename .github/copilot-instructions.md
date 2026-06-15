@@ -28,7 +28,7 @@ priority must-knows that fit in Copilot's chat context window.
    stores `{"enabled": true, "mode": "auto"}` under `AppSettings["MyFeature"]`,
    not `MyFeatureEnabled` + `MyFeatureMode` as flat keys.
 
-5. **All meter UI uses `MeterSmoother`** (Principle II). Do not
+5. **All meter UI uses `MeterSmoother`** (AGENTS.md convention). Do not
    suggest envelope followers, `std::pow`/`exp` smoothing, or
    asymmetric `kAlpha` blenders for new meter widgets.
 
