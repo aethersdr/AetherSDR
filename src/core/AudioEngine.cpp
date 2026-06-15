@@ -1381,6 +1381,22 @@ QByteArray AudioEngine::resampleStereo(const QByteArray& pcm)
 
 void AudioEngine::feedAudioData(const QByteArray& pcm)
 {
+    // RX source gate: when WebSDR is selected, drop the Flex feed so the
+    // speaker isn't double-fed. Flex stays the default/master.
+    if (m_rxSourceWebSdr.load(std::memory_order_relaxed)) return;
+    feedAudioDataImpl(pcm);
+}
+
+void AudioEngine::feedWebSdrAudio(const QByteArray& pcm)
+{
+    // Passive WebSDR module: only reaches the speaker while it is the selected
+    // RX source. Never forwarded to the radio (no TX path).
+    if (!m_rxSourceWebSdr.load(std::memory_order_relaxed)) return;
+    feedAudioDataImpl(pcm);
+}
+
+void AudioEngine::feedAudioDataImpl(const QByteArray& pcm)
+{
     if (!m_audioSink) return;  // PC audio disabled
     m_lastAudioFeedTime.start();  // reset liveness watchdog (#1411)
 

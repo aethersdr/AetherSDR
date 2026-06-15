@@ -1215,6 +1215,13 @@ MainWindow::MainWindow(QWidget* parent)
     // subsystem doesn't ride along when RadioSession is extracted.
     wireSpotSubsystem();
 
+#ifdef HAVE_WEBSOCKETS
+    // WebSDR receive module (optional, passive bolt-on) → wireWebSdrModule()
+    // (MainWindow_WebSdr.cpp). Runs after buildMenuBar() so the View-menu
+    // toggle can be attached. Flex stays master; this only borrows the speaker.
+    wireWebSdrModule();
+#endif
+
     // Radio-model + TX-audio-stream wiring → wireRadioModel()
     // (MainWindow_Session.cpp, #3351 Phase 2c).
     wireRadioModel();

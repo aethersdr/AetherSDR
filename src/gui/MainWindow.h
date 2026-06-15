@@ -87,6 +87,8 @@ class QShowEvent;
 namespace AetherSDR {
 
 class ConnectionPanel;
+class WebSdrSource;
+class WebSdrPanel;
 class TitleBar;
 class SpectrumWidget;
 class PanadapterApplet;
@@ -292,6 +294,9 @@ private:
     // from the constructor, in original order, defined in its subject TU.
     void wireMeters();              // MainWindow_Wiring.cpp
     void wireSpotSubsystem();       // MainWindow_Spots.cpp
+#ifdef HAVE_WEBSOCKETS
+    void wireWebSdrModule();        // MainWindow_WebSdr.cpp
+#endif
     // RadioSession precursors (#3351 Phase 2c / #3445) — MainWindow_Session.cpp
     void wireDiscovery();
     void wireRadioModel();
@@ -551,6 +556,10 @@ private:
     PropForecastClient*  m_propForecast{nullptr};
 #ifdef HAVE_WEBSOCKETS
     FreeDvClient*      m_freedvClient{nullptr};
+    WebSdrSource*      m_webSdrSource{nullptr};
+    QThread*           m_webSdrThread{nullptr};
+    WebSdrPanel*       m_webSdrPanel{nullptr};
+    int                m_webSdrFollowSliceId{-1};
 #endif
     QThread*           m_spotThread{nullptr};
 
@@ -763,6 +772,7 @@ private:
 
     // Menus
     QMenu*           m_profilesMenu{nullptr};
+    QMenu*           m_viewMenu{nullptr};   // stored so add-ins reach it after it moves into the TitleBar
     QAction*         m_txBandAction{nullptr};
 
     // Audio stream re-creation flag (after profile load)

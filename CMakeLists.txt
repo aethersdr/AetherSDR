@@ -1195,6 +1195,13 @@ if(Qt6WebSockets_FOUND)
         src/core/FreeDvClient.cpp
         src/gui/FreeDvReporterDialog.cpp
         src/gui/FreeDvReporterModel.cpp
+        # WebSDR receive module (passive bolt-on, listen-only)
+        src/core/WebSdrAudioDecoder.cpp
+        src/core/WebSdrWaterfallDecoder.cpp
+        src/core/WebSdrSource.cpp
+        src/gui/WebSdrPanel.cpp
+        src/gui/WebSdrWaterfallView.cpp
+        src/gui/MainWindow_WebSdr.cpp
     )
     target_link_libraries(AetherSDR PRIVATE Qt6::WebSockets)
 endif()

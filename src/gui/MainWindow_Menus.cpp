@@ -571,6 +571,7 @@ void MainWindow::buildMenuBar()
     });
 
     auto* viewMenu = menuBar()->addMenu("&View");
+    m_viewMenu = viewMenu;   // keep a handle: the bar later moves into the TitleBar
 
     // Applet-panel show/hide and pop-out are now driven entirely from the
     // title-bar dock icons (#1713 Phase 6).  Ctrl+Shift+S retained here as

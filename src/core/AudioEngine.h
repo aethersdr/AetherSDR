@@ -479,8 +479,19 @@ public:
     }
 
 public slots:
-    // Receives stripped PCM from PanadapterStream::audioDataReady().
+    // Receives stripped PCM from PanadapterStream::audioDataReady() (Flex RX).
+    // When the RX source is switched to WebSDR, Flex frames are dropped here.
     void feedAudioData(const QByteArray& pcm);
+
+    // WebSDR receive module (passive bolt-on). 24 kHz stereo float32, same
+    // shape as feedAudioData(). Dropped unless the RX source is WebSDR.
+    void feedWebSdrAudio(const QByteArray& pcm);
+
+    // RX audio source gate. Default false = Flex (master). true routes the
+    // WebSDR module's audio to the speaker and mutes the Flex feed. WebSDR is
+    // never sent to the radio (no TX path).
+    Q_INVOKABLE void setRxSourceWebSdr(bool on) { m_rxSourceWebSdr.store(on); }
+    bool rxSourceIsWebSdr() const { return m_rxSourceWebSdr.load(); }
 
 signals:
     void rxStarted();
@@ -533,6 +544,10 @@ private slots:
     void onTxAudioReady();
 
 private:
+    // Shared RX delivery body for both feedAudioData() (Flex) and
+    // feedWebSdrAudio() (WebSDR module). The public slots gate on m_rxSourceWebSdr.
+    void feedAudioDataImpl(const QByteArray& pcm);
+
     QAudioFormat makeFormat() const;
     float computeRMS(const QByteArray& pcm) const;
     QByteArray applyBoost(const QByteArray& pcm, float gain) const;
@@ -670,6 +685,7 @@ private:
     std::atomic<int>   m_rxPan{50};       // 0=left, 50=centre, 100=right (#1460)
     std::atomic<int>   m_rxBufferCapMs{200}; // RX buffer cap in ms (#1505)
     std::atomic<bool>  m_muted{false};
+    std::atomic<bool>  m_rxSourceWebSdr{false}; // RX audio source gate (false = Flex)
     // RX sink device rate (negotiated via AudioFormatNegotiator). Audio is
     // resampled from the 24k canonical rate up to this when they differ (#3306).
     // Atomic: written from startRxStream() (GUI thread) and read from the RX
