@@ -35,6 +35,17 @@ const char* kComboStyle =
 const char* kSep =
     "QFrame { color: #1e2e3e; }";
 
+// Per-port enable checkbox. The default indicator is nearly invisible against
+// the dark background, so users miss that each CAT port has its own enable
+// toggle. High-contrast border + filled accent when checked so on/off reads
+// at a glance.
+const char* kCheckStyle =
+    "QCheckBox::indicator { width: 15px; height: 15px; border-radius: 3px;"
+    " border: 1px solid #8090a0; background: #0a0a18; }"
+    "QCheckBox::indicator:hover { border-color: #81abd9; }"
+    "QCheckBox::indicator:checked { border: 1px solid #8cc8ff; background: #2f71b6; }"
+    "QCheckBox::indicator:disabled { border-color: #1e2e3e; background: #10161d; }";
+
 // Minimum valid port number for CAT (exclude system ports)
 constexpr int kMinPort = 1024;
 constexpr int kMaxPort = 65535;
@@ -114,17 +125,18 @@ void CatPopoutWindow::buildTable()
     auto* headerRow = new QHBoxLayout;
     headerRow->setSpacing(0);
 
-    auto addHeader = [&](const QString& text, int fixedW) {
+    auto addHeader = [&](const QString& text, int fixedW,
+                         Qt::Alignment align = Qt::AlignLeft | Qt::AlignVCenter) {
         auto* lbl = new QLabel(text);
         lbl->setStyleSheet(kHeaderStyle);
         lbl->setFixedWidth(fixedW);
-        lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+        lbl->setAlignment(align);
         headerRow->addWidget(lbl);
     };
 
-    addHeader("En",      24);
+    addHeader("Enabled", 54, Qt::AlignHCenter | Qt::AlignVCenter);
     addHeader("Port",    52);
-    addHeader("Dialect", 88);
+    addHeader("Dialect", 102);
     addHeader("VFO A",   56);
     addHeader("VFO B",   56);
 #ifndef Q_OS_WIN
@@ -151,6 +163,10 @@ void CatPopoutWindow::buildTable()
     m_grid = new QGridLayout(rowContainer);
     m_grid->setContentsMargins(0, 0, 0, 0);
     m_grid->setSpacing(3);
+    // Match the "Enabled" header column (54px header, less the 2px header/grid
+    // offset used by the other columns) so the centered checkbox lines up under
+    // the header and downstream columns stay aligned.
+    m_grid->setColumnMinimumWidth(0, 52);
 
     scroll->setWidget(rowContainer);
     root->addWidget(scroll);
@@ -183,7 +199,8 @@ void CatPopoutWindow::rebuildRows()
 
         // Enable checkbox
         row.enableCheck = new QCheckBox;
-        row.enableCheck->setFixedWidth(22);
+        row.enableCheck->setStyleSheet(kCheckStyle);
+        row.enableCheck->setToolTip("Enable this CAT port");
         {
             bool en = settings.value(prefix + "Enabled", "False").toString() == "True";
             QSignalBlocker b(row.enableCheck);
@@ -206,7 +223,7 @@ void CatPopoutWindow::rebuildRows()
         // Dialect combo
         row.dialectCombo = new QComboBox;
         row.dialectCombo->setStyleSheet(kComboStyle);
-        row.dialectCombo->setFixedWidth(86);
+        row.dialectCombo->setFixedWidth(100);
         row.dialectCombo->addItem("Rigctld",  static_cast<int>(CatDialect::Rigctld));
         row.dialectCombo->addItem("TS-2000",  static_cast<int>(CatDialect::TS2000));
         row.dialectCombo->addItem("FlexCAT",  static_cast<int>(CatDialect::FlexCAT));
@@ -279,7 +296,7 @@ void CatPopoutWindow::rebuildRows()
 
         // Add to grid
         int col = 0;
-        m_grid->addWidget(row.enableCheck,  i, col++);
+        m_grid->addWidget(row.enableCheck,  i, col++, Qt::AlignHCenter);
         m_grid->addWidget(row.portEdit,     i, col++);
         m_grid->addWidget(row.dialectCombo, i, col++);
         m_grid->addWidget(row.vfoACombo,    i, col++);

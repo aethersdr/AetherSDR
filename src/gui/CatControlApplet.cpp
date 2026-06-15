@@ -64,6 +64,17 @@ const char* kComboStyle =
 const char* kSepStyle =
     "QFrame { color: {{color.border.subtle}}; }";
 
+// Per-port enable checkbox. The default indicator is nearly invisible against
+// the dark applet background, so users miss that each CAT port has its own
+// enable toggle (#cat-port-enable). Give it a high-contrast border and a filled
+// accent when checked so the on/off state reads at a glance.
+const char* kEnableCheck =
+    "QCheckBox::indicator { width: 15px; height: 15px; border-radius: 3px;"
+    " border: 1px solid {{color.text.secondary}}; background: {{color.background.0}}; }"
+    "QCheckBox::indicator:hover { border-color: {{color.accent}}; }"
+    "QCheckBox::indicator:checked { border: 1px solid {{color.accent}}; background: {{color.accent}}; }"
+    "QCheckBox::indicator:disabled { border-color: {{color.border.subtle}}; background: {{color.background.1}}; }";
+
 constexpr int kMinPort = 1024;
 constexpr int kMaxPort = 65535;
 
@@ -292,9 +303,9 @@ void CatControlApplet::buildTableRows()
         m_grid->addWidget(lbl, 0, col);
     };
     int hcol = 0;
-    addHdr("En",       22, hcol++);
+    addHdr("Enabled",  54, hcol++, Qt::AlignHCenter | Qt::AlignVCenter);
     addHdr("Port",     50, hcol++, Qt::AlignHCenter | Qt::AlignVCenter);
-    addHdr("Dialect",  68, hcol++);
+    addHdr("Dialect",  84, hcol++);
     addHdr("VFO A",    42, hcol++, Qt::AlignHCenter | Qt::AlignVCenter);
     addHdr("VFO B",    42, hcol++, Qt::AlignHCenter | Qt::AlignVCenter);
 #ifndef Q_OS_WIN
@@ -310,7 +321,8 @@ void CatControlApplet::buildTableRows()
 
         // Enable checkbox
         row.enableCheck = new QCheckBox;
-        row.enableCheck->setFixedWidth(22);
+        ThemeManager::instance().applyStyleSheet(row.enableCheck, kEnableCheck);
+        row.enableCheck->setToolTip("Enable this CAT port");
         {
             bool en = settings.value(prefix + "Enabled", "False").toString() == "True";
             QSignalBlocker b(row.enableCheck);
@@ -333,7 +345,7 @@ void CatControlApplet::buildTableRows()
         // Dialect combo
         row.dialectCombo = new QComboBox;
         ThemeManager::instance().applyStyleSheet(row.dialectCombo, kComboStyle);
-        row.dialectCombo->setFixedWidth(68);
+        row.dialectCombo->setFixedWidth(84);
         row.dialectCombo->addItem("Rigctld",  static_cast<int>(CatDialect::Rigctld));
         row.dialectCombo->addItem("TS-2000",  static_cast<int>(CatDialect::TS2000));
         row.dialectCombo->addItem("Flex",     static_cast<int>(CatDialect::FlexCAT));
@@ -424,7 +436,7 @@ void CatControlApplet::buildTableRows()
 
         // Grid layout — data rows start at 1 (row 0 is the header)
         int col = 0;
-        m_grid->addWidget(row.enableCheck,  i+1, col++);
+        m_grid->addWidget(row.enableCheck,  i+1, col++, Qt::AlignHCenter);
         m_grid->addWidget(row.portEdit,     i+1, col++);
         m_grid->addWidget(row.dialectCombo, i+1, col++);
         m_grid->addWidget(row.vfoACombo,    i+1, col++);
