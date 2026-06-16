@@ -1,4 +1,5 @@
 #include "QuindarLocalSink.h"
+#include "AudioDeviceNegotiator.h"
 #include "AudioSummaryLogger.h"
 #include "ClientQuindarTone.h"
 #include "LogManager.h"
@@ -49,24 +50,44 @@ bool QuindarLocalSink::start(const QAudioDevice& device,
         return false;
     }
 
-    QAudioFormat fmt;
-    fmt.setSampleRate(48000);
-    fmt.setChannelCount(2);
-    fmt.setSampleFormat(QAudioFormat::Float);
+    // Negotiate the output format via the shared factory (#3306). The Quindar
+    // tone is generated in Float, so walk only the Float rungs of the ladder —
+    // which now gives this sink, in one place, the per-OS preferred rate plus
+    // the 44.1 kHz and device-preferredFormat fallbacks it previously lacked (it
+    // failed outright on a 44.1k-only output, with only 48k + preferred tried).
     QStringList attemptedFormats;
-    attemptedFormats << QStringLiteral("48000Hz 2ch Float");
-    if (!dev.isFormatSupported(fmt)) {
-        fallbackOccurred = true;
-        fallbackReasons << QStringLiteral("48000Hz Float stereo unsupported -> preferred output format");
-        fmt = dev.preferredFormat();
-        if (fmt.sampleFormat() != QAudioFormat::Float) {
-            fmt.setSampleFormat(QAudioFormat::Float);
+    QAudioFormat fmt;
+    bool haveFormat = false;
+    const QList<QAudioFormat> ladder = AudioDeviceNegotiator::formatLadder(
+        dev, AudioFormatNegotiator::Direction::Output,
+        AudioFormatNegotiator::ResamplerPolicy::RegenerateAtRate);
+    for (const QAudioFormat& cand : ladder) {
+        if (cand.sampleFormat() != QAudioFormat::Float)
+            continue;   // the tone is generated in Float
+        attemptedFormats << QStringLiteral("%1Hz %2ch Float")
+            .arg(cand.sampleRate()).arg(cand.channelCount());
+        if (dev.isFormatSupported(cand)) {
+            fmt = cand;
+            haveFormat = true;
+            if (cand.sampleRate() != 48000) {
+                fallbackOccurred = true;
+                fallbackReasons << QStringLiteral("negotiated %1Hz Float").arg(cand.sampleRate());
+            }
+            break;
         }
-        fmt.setChannelCount(2);
-        attemptedFormats << QStringLiteral("%1Hz %2ch %3")
-            .arg(fmt.sampleRate())
-            .arg(fmt.channelCount())
-            .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat()));
+    }
+    if (!haveFormat) {
+        qCWarning(lcAudio) << "QuindarLocalSink: device supports no Float stereo rate"
+                           << dev.description();
+        AudioSummaryLogger::OpenFailureSummary failure;
+        failure.path = QStringLiteral("Quindar local sink");
+        failure.backend = QStringLiteral("QAudioSink");
+        failure.deviceDescription = dev.description();
+        failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
+        failure.failureReason = QStringLiteral("no Float stereo rung supported in the negotiation ladder");
+        failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+        AudioSummaryLogger::logOpenFailure(failure);
+        return false;
     }
     m_actualRate = fmt.sampleRate();
 
