@@ -495,6 +495,12 @@ signals:
     void bnrConnectionChanged(bool connected);
     void dfnrEnabledChanged(bool on);
     void txRawPcmReady(const QByteArray& pcm);  // raw 24kHz stereo int16 PCM for RADEEngine
+    // Post-final-limiter TX monitor PCM (24 kHz stereo int16) — the exact stream
+    // packetised to the radio. Fires for all phone/SSB TX (unlike txRawPcmReady,
+    // which is RADE-only), so it is the source for Client-Side TX recording:
+    // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
+    // receivers connect via Qt::AutoConnection (queued across threads).
+    void txFinalMonitorPcmReady(const QByteArray& int16Stereo);
     void txPacketReady(const QByteArray& vitaPacket);  // VITA-49 TX packet for PanadapterStream
     // Sidetone-tapped audio for the TX-side CW decoder (#2417).  Emitted
     // from the audio thread; receivers should connect via Qt::AutoConnection

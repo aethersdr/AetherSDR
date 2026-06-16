@@ -9,6 +9,7 @@
 #include <QObject>
 #include <QString>
 #include <QTimer>
+#include <atomic>
 #include <mutex>
 
 class QAudioSink;
@@ -21,10 +22,17 @@ class TransmitModel;
 // Records QSO audio (both RX and TX sides) to WAV files.
 //
 // Usage:
-//   - Connect feedRxAudio() to AudioEngine::feedAudioData() (or post-DSP tap)
-//   - Connect feedTxAudio() to AudioEngine::txRawPcmReady()
+//   - Connect feedRxAudio() (float32 RX) to PanadapterStream::audioDataReady
+//   - Connect feedTxAudio() (int16 post-limiter TX monitor) to
+//     AudioEngine::txFinalMonitorPcmReady — the source that carries SSB/phone TX
+//     (txRawPcmReady is RADE-only and would leave SSB recordings silent, #3556)
 //   - Connect onMoxChanged() to TransmitModel::moxChanged()
 //   - Set the active slice for frequency/mode metadata via setSlice()
+//
+// While transmitting, the radio mutes the RX stream, so feedRxAudio() would
+// otherwise write full-length silence. Writes are MOX-gated: RX is written only
+// while receiving, the TX monitor only while transmitting, producing a single
+// time-interleaved RX/TX file that matches Radio-Side recording (#3556).
 //
 // Recording triggers:
 //   - Auto: starts when MOX goes true (first TX), stops after idle timeout
@@ -114,6 +122,7 @@ private:
 
     // Recording state
     bool        m_recording{false};
+    std::atomic<bool> m_transmitting{false};  // MOX state; gates RX vs TX writes (#3556)
     QFile*      m_file{nullptr};
     QDateTime   m_startTime;
     quint32     m_dataBytes{0};    // PCM data bytes written (for WAV header patching)

@@ -125,25 +125,35 @@ static QByteArray float32ToInt16(const QByteArray& pcm)
 void QsoRecorder::feedRxAudio(const QByteArray& pcm)
 {
     std::lock_guard<std::mutex> lock(m_writeMutex);
-    if (!m_recording || !m_file) return;
+    // While transmitting the radio mutes RX (this stream would be silence), and
+    // the TX monitor is recorded instead — skip RX so the two don't double-write
+    // and the file stays a clean time-interleaved RX/TX stream (#3556).
+    if (!m_recording || !m_file || m_transmitting.load(std::memory_order_acquire)) return;
     QByteArray converted = float32ToInt16(pcm);
     m_file->write(converted);
     m_dataBytes += static_cast<quint32>(converted.size());
 }
 
-void QsoRecorder::feedTxAudio(const QByteArray& pcm)
+void QsoRecorder::feedTxAudio(const QByteArray& int16Stereo)
 {
     std::lock_guard<std::mutex> lock(m_writeMutex);
-    if (!m_recording || !m_file) return;
-    QByteArray converted = float32ToInt16(pcm);
-    m_file->write(converted);
-    m_dataBytes += static_cast<quint32>(converted.size());
+    // Only capture the TX monitor while actually transmitting (the tap can fire
+    // whenever mic capture runs), so RX and TX never both write.
+    if (!m_recording || !m_file || !m_transmitting.load(std::memory_order_acquire)) return;
+    // The post-limiter TX monitor is already 24 kHz stereo int16 — the WAV's
+    // native format — so write it directly, no float32 conversion (#3556).
+    m_file->write(int16Stereo);
+    m_dataBytes += static_cast<quint32>(int16Stereo.size());
 }
 
 // ── TX state tracking ───────────────────────────────────────────────────────
 
 void QsoRecorder::onMoxChanged(bool mox)
 {
+    // Gate RX vs TX writes (#3556). Set before any early-return so the feed
+    // slots see the correct state immediately on the TX/RX edge.
+    m_transmitting.store(mox, std::memory_order_release);
+
     // Only auto-record when in client-side recording mode
     bool clientSide = AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
     if (mox) {

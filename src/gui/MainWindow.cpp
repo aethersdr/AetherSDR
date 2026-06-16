@@ -1235,11 +1235,16 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
             m_audio, &AudioEngine::feedAudioData);
 
-    // ── QSO recorder: tap RX audio, trigger on MOX (#1297) ────────────
-    // Only RX audio is recorded — TX audio (txRawPcmReady) is int16 and
-    // would need separate handling to avoid format mismatch.
+    // ── QSO recorder: tap RX audio + TX monitor, trigger on MOX (#1297) ────
+    // RX (float32) comes from the panadapter stream; TX (int16 post-limiter
+    // monitor) from AudioEngine::txFinalMonitorPcmReady — the source that
+    // carries SSB/phone TX. Without the TX tap, Client-Side recordings were
+    // full-length silence during transmit (#3556). The recorder MOX-gates the
+    // two so the file is a single time-interleaved RX/TX stream.
     connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
             m_qsoRecorder, &QsoRecorder::feedRxAudio);
+    connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
+            m_qsoRecorder, &QsoRecorder::feedTxAudio);
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
 

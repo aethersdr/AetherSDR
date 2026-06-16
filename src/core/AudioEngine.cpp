@@ -4646,6 +4646,11 @@ void AudioEngine::onTxAudioReady()
     if (auto* mon = m_txFinalMonitor.load(std::memory_order_acquire)) {
         mon->feedTxPostDsp(data);
     }
+    // Expose the same post-limiter int16 stream as a signal so the QSO recorder
+    // can capture TX for Client-Side recording (#3556). Emitted unconditionally
+    // (independent of whether the PUDU monitor is attached); the recorder slot
+    // fast-returns when not recording / not transmitting, so this is cheap.
+    emit txFinalMonitorPcmReady(data);
 
     // ── TX post-final-limiter scope tap ─────────────────────────
     // Sampled here, AFTER everything the strip can do to the audio
