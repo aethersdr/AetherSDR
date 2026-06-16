@@ -164,7 +164,15 @@ QString SmartCatProtocol::processCommandImpl(const QString& cmd)
             return {};  // set handled by session
         }
         if (name == "ZZSW") return cmdZZSW(arg);
-        if (name == "ZZTX") return cmdTX(arg);
+        if (name == "ZZTX") {
+            // Bare "ZZTX;" (no parameter) is a READ of the transmit state, not a
+            // command to key. External apps poll TX status this way; treating the
+            // read as a set keyed the radio on every poll (uncommanded transmit).
+            // Only ZZTX0/1/2 reach cmdTX() to change state.
+            if (arg.isEmpty() || arg == "?")
+                return QString("ZZTX%1;").arg(m_model->isRadioTransmitting() ? "1" : "0");
+            return cmdTX(arg);
+        }
         if (name == "ZZRX") return cmdRX();
         if (name == "ZZSM") return cmdZZSM(arg);
         // ── Tier-2 ZZ commands ──────────────────────────────────────────────

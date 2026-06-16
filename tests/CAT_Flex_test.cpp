@@ -647,7 +647,23 @@ void section10ptt(CatClient& c, Runner& r)
     r.check(QStringLiteral("10.0 ZZIF confirms TX=0 before keying"),
             fields.tx == QChar('0'), repr(QString(fields.tx)));
 
-    c.send(QStringLiteral("ZZTX"));
+    // 10.0r REGRESSION: a bare "ZZTX;" (no parameter) is a READ of the TX state,
+    // NOT a key command. Apps poll TX status this way; if the read keys the radio,
+    // every poll causes uncommanded transmit. It must return "ZZTX0" and NOT key.
+    resp = c.query(QStringLiteral("ZZTX"));
+    r.check(QStringLiteral("10.0r bare ZZTX; is a read → 'ZZTX0' (not a key)"),
+            resp == QLatin1String("ZZTX0"), repr(resp));
+    QThread::msleep(500);
+    {
+        QString chk = c.query(QStringLiteral("ZZIF"));
+        IfFields cf = parseIfBody(chk.startsWith(QLatin1String("ZZIF")) ? chk.mid(4) : QString());
+        r.check(QStringLiteral("10.0r2 bare ZZTX; did NOT key radio; ZZIF TX='0'"),
+                cf.tx == QChar('0'), repr(QString(cf.tx)));
+        if (cf.tx != QChar('0')) { c.send(QStringLiteral("ZZRX")); c.send(QStringLiteral("RX")); }
+    }
+
+    // Key with the explicit set form ZZTX1 (parameterised), then verify.
+    c.send(QStringLiteral("ZZTX1"));
     QThread::msleep(1000);
 
     resp = c.query(QStringLiteral("ZZIF"));
@@ -655,8 +671,10 @@ void section10ptt(CatClient& c, Runner& r)
     const bool txOn = (fields.tx == QChar('1'));
 
     if (!txOn) {
-        r.skip(QStringLiteral("10.1 ZZTX; keys radio; ZZIF TX='1'"),
+        r.skip(QStringLiteral("10.1 ZZTX1; keys radio; ZZIF TX='1'"),
                QStringLiteral("TX blocked — check interlock/inhibit line"));
+        r.skip(QStringLiteral("10.1r read while keyed → 'ZZTX1'"),
+               QStringLiteral("TX blocked"));
         r.skip(QStringLiteral("10.2 ZZRX; unkeys radio; ZZIF TX='0'"),
                QStringLiteral("TX blocked"));
         r.skip(QStringLiteral("10.3 base TX;/RX; also work; IF TX='0'"),
@@ -666,8 +684,14 @@ void section10ptt(CatClient& c, Runner& r)
         return;
     }
 
-    r.check(QStringLiteral("10.1 ZZTX; keys radio; ZZIF body TX field = '1'"),
+    r.check(QStringLiteral("10.1 ZZTX1; keys radio; ZZIF body TX field = '1'"),
             txOn, repr(QString(fields.tx)));
+
+    // 10.1r: while keyed, the bare read must report the keyed state ('ZZTX1')
+    // and must not toggle it.
+    resp = c.query(QStringLiteral("ZZTX"));
+    r.check(QStringLiteral("10.1r bare ZZTX; read reflects keyed state → 'ZZTX1'"),
+            resp == QLatin1String("ZZTX1"), repr(resp));
 
     c.send(QStringLiteral("ZZRX"));
     QThread::msleep(250);
@@ -710,7 +734,8 @@ void section10ptt(CatClient& c, Runner& r)
 void section10skip(Runner& r)
 {
     r.section(QStringLiteral("Section 10 — PTT  (skipped — pass --ptt to enable)"));
-    for (const char* name : { "10.0 baseline", "10.1 ZZTX; keys",
+    for (const char* name : { "10.0 baseline", "10.0r bare ZZTX read (no key)",
+                               "10.1 ZZTX1 keys", "10.1r read while keyed",
                                "10.2 ZZRX; unkeys", "10.3 base TX/RX" }) {
         r.skip(QString::fromLatin1(name), QStringLiteral("--ptt not set"));
     }
