@@ -11,6 +11,8 @@
 #include <QComboBox>
 #include <QCursor>
 #include <QDateTime>
+#include <QSet>
+#include <QStringList>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
@@ -258,13 +260,11 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     m_pathsCheck->setChecked(pskSettings().value("showPaths").toBool(true));
     topBar->addWidget(m_pathsCheck);
 
+    // Persistent reception stats, pinned to the top-right corner.
     topBar->addStretch(1);
     m_dxLabel = new QLabel(bodyWidget());
+    m_dxLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     topBar->addWidget(m_dxLabel);
-    topBar->addSpacing(10);
-    m_statusLabel = new QLabel(bodyWidget());
-    m_statusLabel->setStyleSheet(QStringLiteral("color: palette(mid);"));
-    topBar->addWidget(m_statusLabel);
     root->addLayout(topBar);
 
     m_mapView = new MapView(bodyWidget());
@@ -291,26 +291,33 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
                 }
             });
 
-    // Bottom row: forecasted HF band conditions, reusing the existing
-    // propagation-forecast feed (N0NBH/hamqsl band day/night ratings).
+    // Bottom row: forecasted HF band conditions justified to the bottom-left
+    // (reusing the propagation-forecast N0NBH/hamqsl day/night ratings), with
+    // the transient update-status text pushed to the bottom-right corner.
+    auto* bottomBar = new QHBoxLayout();
+    bottomBar->setSpacing(6);
     if (m_propForecast != nullptr) {
-        auto* bandBar = new QHBoxLayout();
-        bandBar->setSpacing(6);
         m_bandCondTitle = new QLabel(tr("HF bands:"), bodyWidget());
         m_bandCondTitle->setStyleSheet(QStringLiteral("color: palette(mid);"));
-        bandBar->addWidget(m_bandCondTitle);
+        bottomBar->addWidget(m_bandCondTitle);
         for (int i = 0; i < 4; ++i) {
             auto* pill = new QLabel(QString::fromLatin1(kBandGroupLabels[i]),
                                     bodyWidget());
             pill->setAlignment(Qt::AlignCenter);
             m_bandCondPills[i] = pill;
-            bandBar->addWidget(pill);
+            bottomBar->addWidget(pill);
         }
-        bandBar->addStretch(1);
-        root->addLayout(bandBar);
-
         connect(m_propForecast, &PropForecastClient::detailUpdated, this,
                 [this] { updateBandConditions(); });
+    }
+    bottomBar->addStretch(1);
+    m_statusLabel = new QLabel(bodyWidget());
+    m_statusLabel->setStyleSheet(QStringLiteral("color: palette(mid);"));
+    m_statusLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    bottomBar->addWidget(m_statusLabel);
+    root->addLayout(bottomBar);
+
+    if (m_propForecast != nullptr) {
         updateBandConditions();  // paint from cache if already fetched
     }
 
@@ -395,6 +402,14 @@ void PskReporterMapDialog::rebuildMarkers()
     const QString modeFilter = m_modeCombo->currentIndex() > 0
                                    ? m_modeCombo->currentText()
                                    : QString();
+    const bool hasHome = m_mapView->hasHomePosition();
+
+    QSet<QString> bandsHeard;
+    double bestKm = -1.0;
+    QString farthestCall;
+    int bestSnr = -1000;
+    QString bestSnrCall;
+
     for (const PskReporterSpot& spot : m_client->spots()) {
         if (!bandFilter.isEmpty() && bandName(spot.frequencyHz) != bandFilter) {
             continue;
@@ -414,38 +429,44 @@ void PskReporterMapDialog::rebuildMarkers()
         m.color = modeColor(spot.mode);
         // Same compact card for hover and click.
         const QString card = buildSpotCard(
-            spot, m_mapView->hasHomePosition(),
-            m_mapView->homeLat(), m_mapView->homeLon(), lat, lon);
+            spot, hasHome, m_mapView->homeLat(), m_mapView->homeLon(),
+            lat, lon);
         m.tooltip = card;
         m.clickInfo = card;
         markers.append(m);
+
+        bandsHeard.insert(bandName(spot.frequencyHz));
+        if (spot.snr > -999 && spot.snr > bestSnr) {
+            bestSnr = spot.snr;
+            bestSnrCall = spot.receiverCallsign;
+        }
+        if (hasHome) {
+            const double km = MaidenheadLocator::distanceKm(
+                m_mapView->homeLat(), m_mapView->homeLon(), lat, lon);
+            if (km > bestKm) {
+                bestKm = km;
+                farthestCall = spot.receiverCallsign;
+            }
+        }
     }
     m_mapView->setMarkers(markers);
 
-    // Status enrichment: spot count and farthest receiver.
-    QString dx;
-    if (m_mapView->hasHomePosition()) {
-        double bestKm = -1.0;
-        QString bestCall;
-        for (const MapView::Marker& m : markers) {
-            const double km = MaidenheadLocator::distanceKm(
-                m_mapView->homeLat(), m_mapView->homeLon(), m.lat, m.lon);
-            if (km > bestKm) {
-                bestKm = km;
-                bestCall = m.label;
-            }
-        }
+    // Reception stats (top-right): count · bands · farthest · best SNR.
+    QStringList parts;
+    if (!markers.isEmpty()) {
+        parts << tr("%n spot(s)", nullptr, markers.size());
+        parts << tr("%n band(s)", nullptr, bandsHeard.size());
         if (bestKm >= 0.0) {
-            dx = tr("%n spot(s)", nullptr, markers.size())
-                 + tr(" • farthest: %1 %L2 km")
-                       .arg(bestCall)
-                       .arg(qRound(bestKm));
+            parts << tr("farthest %1 %L2 km").arg(farthestCall).arg(qRound(bestKm));
+        }
+        if (bestSnr > -1000) {
+            parts << tr("best %1 %2 dB")
+                         .arg(bestSnrCall)
+                         .arg(bestSnr > 0 ? QStringLiteral("+%1").arg(bestSnr)
+                                          : QString::number(bestSnr));
         }
     }
-    if (dx.isEmpty() && !markers.isEmpty()) {
-        dx = tr("%n spot(s)", nullptr, markers.size());
-    }
-    m_dxLabel->setText(dx);
+    m_dxLabel->setText(parts.join(QStringLiteral("  •  ")));
 }
 
 void PskReporterMapDialog::updateBandConditions()
