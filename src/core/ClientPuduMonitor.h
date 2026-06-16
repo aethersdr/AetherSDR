@@ -49,11 +49,11 @@ public:
     int  recordedMs()   const noexcept;
 
     // Audio output device the playback sink opens.  When null, falls back to
-    // QMediaDevices::defaultAudioOutput().  MainWindow seeds this from
-    // AudioEngine::outputDevice() at construction and refreshes it on
+    // QMediaDevices::defaultAudioOutput().  MainWindow's AudioOutputRouter seeds
+    // this from AudioEngine::outputDevice() at registration and refreshes it on
     // AudioEngine::outputDeviceChanged so monitor playback follows the
     // user's selection in Radio Settings > Audio rather than going to the
-    // system default (#3361).
+    // system default (#3361 / #3306).
     void setOutputDevice(const QAudioDevice& dev) { m_outputDevice = dev; }
 
     // Audio thread — appends int16 stereo 24 kHz PCM into the buffer

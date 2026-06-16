@@ -25,6 +25,7 @@
 #include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
 #include "core/ClientPuduMonitor.h"
+#include "core/AudioOutputRouter.h"
 #include "core/DxClusterClient.h"
 #ifdef HAVE_MQTT
 #include "core/MqttClient.h"
@@ -499,6 +500,7 @@ private:
     NetworkDiagnosticsHistory* m_networkDiagnosticsHistory{nullptr};
     QsoRecorder*      m_qsoRecorder{nullptr};
     ClientPuduMonitor* m_finalMonitor{nullptr};
+    AudioOutputRouter* m_outputRouter{nullptr};   // registry for output-following sinks (#3306)
     BandSettings      m_bandSettings;
     // CAT ports: up to 8 unified ports (rigctld / TS-2000 / FlexCAT), one per slice.
     // CAT ports are owned by the active RadioSession (#3351 session v2).

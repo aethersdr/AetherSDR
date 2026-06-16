@@ -515,6 +515,7 @@ set(CORE_SOURCES
     src/core/AudioSummaryLogger.cpp
     src/core/AudioFormatNegotiator.cpp
     src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioOutputRouter.cpp
     src/core/AudioEngine.cpp
     src/core/TxMicChannelNormalizer.cpp
     src/core/ChannelStripPresets.cpp
@@ -1807,6 +1808,17 @@ add_executable(audio_device_negotiator_test
 target_include_directories(audio_device_negotiator_test PRIVATE src)
 target_link_libraries(audio_device_negotiator_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_device_negotiator_test COMMAND audio_device_negotiator_test)
+
+# Unit test for the AudioOutputRouter sink registry (#3306) — seeding, fan-out,
+# and the QPointer guard. Hardware-independent. AudioOutputRouter is a QObject,
+# so this relies on the project-global AUTOMOC.
+add_executable(audio_output_router_test
+    tests/audio_output_router_test.cpp
+    src/core/AudioOutputRouter.cpp
+)
+target_include_directories(audio_output_router_test PRIVATE src)
+target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
 
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp

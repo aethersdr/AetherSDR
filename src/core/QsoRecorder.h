@@ -53,11 +53,11 @@ public:
     QString callsign() const { return m_callsign; }
 
     // Audio output device the playback sink opens.  When null, falls back
-    // to QMediaDevices::defaultAudioOutput().  MainWindow seeds this from
-    // AudioEngine::outputDevice() at construction and refreshes it on
-    // AudioEngine::outputDeviceChanged so QSO playback follows the user's
+    // to QMediaDevices::defaultAudioOutput().  MainWindow's AudioOutputRouter
+    // seeds this from AudioEngine::outputDevice() at registration and refreshes
+    // it on AudioEngine::outputDeviceChanged so QSO playback follows the user's
     // selection in Radio Settings > Audio rather than going to the system
-    // default (#3361).
+    // default (#3361 / #3306).
     void setOutputDevice(const QAudioDevice& dev) { m_outputDevice = dev; }
 
     // Filename component toggles

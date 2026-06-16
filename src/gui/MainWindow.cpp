@@ -1008,18 +1008,24 @@ MainWindow::MainWindow(QWidget* parent)
     // strip.
     m_finalMonitor = new ClientPuduMonitor(this);
     m_audio->setTxFinalMonitor(m_finalMonitor);
-    // Route monitor playback through the user-selected output device
-    // rather than the system default — without this, the post-DSP TX
-    // capture plays out of whichever device Windows currently considers
-    // the default, which is rarely the device the user picked in Radio
-    // Settings > Audio.  Seed once and re-seed whenever the user changes
-    // their output selection (#3361).
-    m_finalMonitor->setOutputDevice(m_audio->outputDevice());
-    m_qsoRecorder->setOutputDevice(m_audio->outputDevice());
+    // Route external playback sinks (post-DSP monitor, QSO playback) through the
+    // user-selected output device rather than the system default — without this
+    // they play out of whatever the OS currently considers the default, which is
+    // rarely the device the user picked in Radio Settings > Audio (#3361).
+    // The AudioOutputRouter is the single registry for output-following sinks:
+    // each is seeded immediately and re-seeded on every device change, so a
+    // future sink follows correctly just by registering here — no new connect to
+    // forget (the "uncoupling" hardening, #3306). The forwarder is a
+    // QueuedConnection so followers are touched on the GUI thread, matching the
+    // previous hand-wired behaviour (outputDeviceChanged is emitted on the audio
+    // worker thread).
+    m_outputRouter = new AudioOutputRouter(this);
     connect(m_audio, &AudioEngine::outputDeviceChanged, this, [this]() {
-        m_finalMonitor->setOutputDevice(m_audio->outputDevice());
-        m_qsoRecorder->setOutputDevice(m_audio->outputDevice());
+        m_outputRouter->setCurrentDevice(m_audio->outputDevice());
     }, Qt::QueuedConnection);
+    m_outputRouter->setCurrentDevice(m_audio->outputDevice());
+    m_outputRouter->addFollower(m_finalMonitor);
+    m_outputRouter->addFollower(m_qsoRecorder);
 
     // Wire the Quindar tone coordinator (#2262).  TransmitModel needs
     // the DSP module (to drive intro/outro phases) and a TX-mode

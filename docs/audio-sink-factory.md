@@ -97,21 +97,44 @@ detection — `isBluetoothHfp`). Returns either a resolved `QAudioFormat` +
 for try-at-open backends (Windows), so the caller walks it against
 `QAudioSink::start()` exactly as today.
 
-### Layer 3 — `AudioOutputRouter` (device ownership) — next
+### Layer 3 — `AudioOutputRouter` (device-following registry) ✅ landed
 
-`AudioEngine` already owns the persisted device IDs (`AudioOutputDeviceId` /
-`AudioInputDeviceId`) and is the only thing that calls `setOutputDevice()` /
-`setInputDevice()`. Today it emits `outputDeviceChanged()` / `inputDeviceChanged()`
-but **only `MainWindow::updatePcAudioTooltip()` listens** — the aux sinks do not,
-which is the uncoupling. The router turns this into one ownership point:
+`AudioEngine` owns the persisted device IDs (`AudioOutputDeviceId` /
+`AudioInputDeviceId`) and is the only thing that calls `setOutputDevice()`. Its
+internal sinks (RX speaker, CW sidetone, Quindar) follow the selection by being
+restarted inside `setOutputDevice()`/`startRxStream()`. The **external** playback
+sinks that own their own `QAudioSink` — `ClientPuduMonitor`, `QsoRecorder` —
+followed correctly too, but via a **hand-wired** `connect`-to-`outputDeviceChanged`
+lambda in `MainWindow` (seed + re-seed, #3361/#3378). All device-change paths
+(user selection, device removal, OS-default change) already flow through
+`setOutputDevice()` → `outputDeviceChanged`, so behaviour was correct; the risk
+was purely **structural**: every new external sink had to remember to join that
+lambda or it would uncouple.
 
-- **single source of truth** for the resolved selected output/input device
-  (and "follow the system default" when none is pinned);
-- sinks **register** themselves; on a user device change *or* an OS-default
-  change ([#2899] showed both must be handled) the router restarts the
-  registered following sinks — no sink calls `QMediaDevices::defaultAudioOutput()`
-  on its own ever again;
-- one place to enforce the safety invariants below.
+`AudioOutputRouter` (`src/core/AudioOutputRouter.{h,cpp}`) makes following a
+**registry** instead of hand-wiring:
+
+- `addFollower(sink)` registers any object exposing `setOutputDevice(QAudioDevice)`
+  (or a `std::function` callback); it is seeded immediately and re-seeded on every
+  change. A future sink follows correctly just by registering — no new `connect`
+  to forget.
+- One `QueuedConnection` forwards `AudioEngine::outputDeviceChanged` to the
+  router's `setCurrentDevice()`, which fans out to all followers on the GUI
+  thread (matching the previous behaviour). `QPointer` guards a follower
+  destroyed before the router.
+- Depends only on Qt Core/Multimedia, so the registry/fan-out is unit-tested
+  headless (`tests/audio_output_router_test.cpp`, 9/9) without a live
+  `AudioEngine`.
+
+Behaviour is identical to the hand-wired version; this is the *hardening* that
+keeps the uncoupling class from silently reappearing.
+
+**Intentionally not routed** (so a future reader doesn't "fix" them by
+registering): the AudioEngine-internal sinks above, and the WFM demodulator's
+`WaveOutWriter` — WFM plays to its *own* device chosen separately in
+`WfmDeviceDialog` (#3407), not the main output, so following the main selection
+would be a regression. The router targets exactly the sinks whose contract is
+"play to the user's main selected output": `ClientPuduMonitor` and `QsoRecorder`.
 
 ## Invariants the factory must preserve (regression guards)
 
@@ -162,13 +185,20 @@ rate ones; the others are enforced in the router/wrapper.
    matches the factory's Windows policy (force 48k + probe-at-open) and carries
    the mono-only USB-mic channel clamp (#2929) that needs its own soak — that's
    the remaining mic increment.
-5. **`AudioOutputRouter`** + migrate the three uncoupled sinks (CW sidetone,
-   Pudu monitor, QSO playback) and Quindar onto it — closes the uncoupling
-   class so a future sink can't re-open it.
-6. **TCI TX** — drive the resampler from the client-negotiated rate instead of
+5. **`AudioOutputRouter`** ✅ — the external output-following sinks (Pudu
+   monitor, QSO playback) are registered with the router instead of a hand-wired
+   `MainWindow` lambda, so a future sink can't re-open the uncoupling class.
+   Behaviour-identical; unit-tested headless. (CW sidetone + Quindar are
+   AudioEngine-internal and already follow via the RX restart.)
+6. **Aux output sinks → wrapper** — CW sidetone, Pudu monitor, Quindar, QSO
+   playback drop their own per-sink format ladders and negotiate via
+   `AudioDeviceNegotiator` (gaining the 44.1k rung + Float32 catch-all). *Next.*
+7. **TCI TX** — drive the resampler from the client-negotiated rate instead of
    the hardcoded `Resampler(48000, 24000)` (`TciServer.cpp`).
-7. **PipeWire DAX** — replace the hand-rolled linear interpolator with the shared
+8. **PipeWire DAX** — replace the hand-rolled linear interpolator with the shared
    `Resampler`, keeping the 48 kHz node pinning.
+9. **Windows mic** — migrate the last mic path (mono-clamp #2929) onto the
+   factory.
 
 ### Out of scope (radio/client-authoritative — pass the target in, don't choose)
 
