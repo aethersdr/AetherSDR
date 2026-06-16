@@ -183,8 +183,15 @@ QString SmartCatProtocol::processCommandImpl(const QString& cmd)
         if (name == "ZZDE") return cmdZZDE(arg);
         if (name == "ZZFI") return cmdZZFI(arg);
         if (name == "ZZFJ") return cmdZZFJ(arg);
-        if (name == "ZZFR") return cmdZZFR();
-        if (name == "ZZFT") { m_splitEnabled = !m_splitEnabled; return {}; }
+        if (name == "ZZFR") return cmdZZFR(arg);
+        if (name == "ZZFT") {
+            // Bare "ZZFT;" is a READ of split state, not a toggle. Polling it
+            // previously flipped split on every call (same defect class as ZZTX).
+            if (arg.isEmpty() || arg == "?")
+                return QString("ZZFT%1;").arg(m_splitEnabled ? "1" : "0");
+            m_splitEnabled = (arg == "1");
+            return {};
+        }
         if (name == "ZZGT") return cmdZZGT(arg);
         if (name == "ZZLE") return cmdZZLE(arg);
         if (name == "ZZLB") return cmdZZLB(arg);
@@ -1069,11 +1076,23 @@ QString SmartCatProtocol::cmdSH(const QString& arg)
     return {};
 }
 
-// ── ZZFR — toggle active VFO (swaps m_vfoA ↔ m_vfoB) ───────────────────────
+// ── ZZFR — RX VFO select (0 = VFO A, 1 = VFO B) ─────────────────────────────
+//
+// FR selects the receive VFO. A bare "ZZFR;" is a READ and must not mutate
+// state — polling it previously swapped VFO A↔B on every call (same defect
+// class as ZZTX). Selecting the non-active VFO swaps the A/B slice mapping;
+// re-selecting the active VFO is a no-op (idempotent).
 
-QString SmartCatProtocol::cmdZZFR()
+QString SmartCatProtocol::cmdZZFR(const QString& arg)
 {
-    std::swap(m_vfoA, m_vfoB);
+    if (arg.isEmpty() || arg == "?")
+        return QString("ZZFR%1;").arg(m_rxVfoB ? "1" : "0");
+    if (arg != "0" && arg != "1") return "?;";
+    const bool wantB = (arg == "1");
+    if (wantB != m_rxVfoB) {
+        std::swap(m_vfoA, m_vfoB);
+        m_rxVfoB = wantB;
+    }
     return {};
 }
 

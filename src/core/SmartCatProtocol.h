@@ -149,7 +149,7 @@ private:
     // ── Misc ─────────────────────────────────────────────────────────────────
     QString cmdZZBI(const QString& arg);
     QString cmdZZDE(const QString& arg);
-    QString cmdZZFR();
+    QString cmdZZFR(const QString& arg);
 
     QString processCommandImpl(const QString& cmd);
 
@@ -165,6 +165,7 @@ private:
     bool        m_flexExtensions{true};
     bool        m_aiEnabled{false};
     bool        m_splitEnabled{false};
+    bool        m_rxVfoB{false};   // false = VFO A is the RX VFO (FR/ZZFR selector)
     bool        m_pttAssertedByMe{false};
 };
 
