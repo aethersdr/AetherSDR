@@ -14,6 +14,7 @@ class MapView;
 class PropForecastClient;
 class PskReporterClient;
 class RadioModel;
+class Sparkline;
 
 // PSK Reporter reception map (View menu). Shows who is hearing our
 // callsign, centered on the radio's GPS fix (falling back to the reported
@@ -40,6 +41,10 @@ private:
     void onIntervalChanged(int index);
     void restartClient();
     void updateBandConditions();
+    // Receivers that heard us within the trailing window ending at nowSec.
+    int recentSpotCount(qint64 nowSec, int windowSec) const;
+    void sampleActivity();
+    void seedActivityHistory();
 
     RadioModel*         m_radioModel{nullptr};
     PskReporterClient*  m_client{nullptr};
@@ -54,6 +59,8 @@ private:
     QTimer*             m_emptyStateTimer{nullptr};
     QLabel*             m_bandCondTitle{nullptr};
     QLabel*             m_bandCondPills[4]{};
+    Sparkline*          m_activitySpark{nullptr};
+    QTimer*             m_activityTimer{nullptr};
     bool                m_started{false};
 };
 

@@ -5,6 +5,7 @@
 #include "core/PropForecastClient.h"
 #include "core/PskReporterClient.h"
 #include "map/MapView.h"
+#include "map/Sparkline.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -115,6 +116,12 @@ QString bandConditionColor(const QString& condition)
 // Short labels for the four N0NBH band groups (matching PropForecastDetail
 // index order: 0=80m-40m, 1=30m-20m, 2=17m-15m, 3=12m-10m).
 const char* const kBandGroupLabels[4] = { "80-40m", "30-20m", "17-15m", "12-10m" };
+
+// Activity sparkline: one sample per minute over the past hour, each the
+// number of receivers that heard us in the trailing 15 minutes.
+constexpr int kActivityWindowSec = 15 * 60;
+constexpr int kActivitySampleMs  = 60 * 1000;
+constexpr int kActivitySamples   = 60;
 
 // Initial great-circle bearing from point 1 to point 2, degrees 0-360.
 double bearingDeg(double lat1, double lon1, double lat2, double lon2)
@@ -315,7 +322,21 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     m_statusLabel->setStyleSheet(QStringLiteral("color: palette(mid);"));
     m_statusLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     bottomBar->addWidget(m_statusLabel);
+    // Recent-activity sparkline, pinned to the bottom-right corner — rising
+    // line = more receivers hearing us = a band opening.
+    m_activitySpark = new Sparkline(bodyWidget());
+    m_activitySpark->setCapacity(kActivitySamples);
+    m_activitySpark->setToolTip(
+        tr("Receivers hearing you (trailing 15 min), per minute over the past hour"));
+    bottomBar->addSpacing(8);
+    bottomBar->addWidget(m_activitySpark);
     root->addLayout(bottomBar);
+
+    // Per-minute activity sampler for the sparkline.
+    m_activityTimer = new QTimer(this);
+    m_activityTimer->setInterval(kActivitySampleMs);
+    connect(m_activityTimer, &QTimer::timeout,
+            this, &PskReporterMapDialog::sampleActivity);
 
     if (m_propForecast != nullptr) {
         updateBandConditions();  // paint from cache if already fetched
@@ -390,6 +411,40 @@ void PskReporterMapDialog::restartClient()
                                                   : QString());
     m_client->start(m_intervalCombo->currentData().toInt());
     m_emptyStateTimer->start();
+    seedActivityHistory();   // backfill the sparkline from cached spots
+    m_activityTimer->start();
+}
+
+int PskReporterMapDialog::recentSpotCount(qint64 nowSec, int windowSec) const
+{
+    int n = 0;
+    for (const PskReporterSpot& s : m_client->spots()) {
+        if (s.flowStartSeconds <= nowSec
+            && s.flowStartSeconds >= nowSec - windowSec) {
+            ++n;
+        }
+    }
+    return n;
+}
+
+void PskReporterMapDialog::seedActivityHistory()
+{
+    const qint64 now = QDateTime::currentSecsSinceEpoch();
+    QVector<double> hist;
+    hist.reserve(kActivitySamples);
+    // Oldest bucket first; each bucket is the trailing-window count at that
+    // minute, reconstructed from the cached spot timestamps.
+    for (int m = kActivitySamples - 1; m >= 0; --m) {
+        const qint64 t = now - static_cast<qint64>(m) * 60;
+        hist.append(recentSpotCount(t, kActivityWindowSec));
+    }
+    m_activitySpark->setSamples(hist);
+}
+
+void PskReporterMapDialog::sampleActivity()
+{
+    m_activitySpark->addSample(
+        recentSpotCount(QDateTime::currentSecsSinceEpoch(), kActivityWindowSec));
 }
 
 void PskReporterMapDialog::rebuildMarkers()
@@ -516,6 +571,7 @@ void PskReporterMapDialog::closeEvent(QCloseEvent* event)
 {
     // Stop hitting the network while the window is closed.
     m_client->stop();
+    m_activityTimer->stop();
     m_started = false;
     PersistentDialog::closeEvent(event);
 }
