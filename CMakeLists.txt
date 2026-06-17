@@ -112,6 +112,12 @@ if(UNIX AND NOT APPLE)
         message(STATUS "Qt6::DBus not found — sleep inhibition disabled on Linux")
     endif()
 endif()
+# On Windows, qtkeychain is built from source by scripts/setup/setup-qtkeychain.ps1
+# and staged to third_party/qtkeychain. Prepend it so find_package resolves there
+# before falling back to any system install.
+if(WIN32)
+    list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/third_party/qtkeychain")
+endif()
 find_package(Qt6Keychain QUIET)
 if(Qt6Keychain_FOUND)
     message(STATUS "Qt6Keychain found — SmartLink credential persistence enabled")

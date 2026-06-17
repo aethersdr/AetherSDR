@@ -82,6 +82,17 @@ jobs:
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: .\scripts\setup\setup-deepfilter.ps1
 
+      - name: Cache qtkeychain
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        id: cache-qtkeychain
+        with:
+          path: third_party/qtkeychain
+          key: qtkeychain-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-qtkeychain.ps1') }}
+
+      - name: Setup qtkeychain (SmartLink credential persistence)
+        if: steps.cache-qtkeychain.outputs.cache-hit != 'true'
+        run: .\scripts\setup\setup-qtkeychain.ps1
+
       - name: Configure
         run: |
           cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DMQTT_TLS=OFF -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
@@ -99,6 +110,12 @@ jobs:
         run: |
           mkdir deploy
           copy build\AetherSDR.exe deploy\
+          # windeployqt treats any Qt6* DLL as an official Qt module and looks for
+          # it in the Qt bin directory to scan its transitive dependencies. Copy
+          # qt6keychain.dll there before invoking windeployqt so it can resolve it.
+          if (Test-Path "third_party\qtkeychain\bin\qt6keychain.dll") {
+            copy third_party\qtkeychain\bin\qt6keychain.dll "$env:QT_ROOT_DIR\bin\"
+          }
           windeployqt deploy\AetherSDR.exe --release --no-translations --no-system-d3d-compiler
           if (Test-Path "third_party\fftw3\bin\libfftw3-3.dll") {
             copy third_party\fftw3\bin\libfftw3-3.dll deploy\
@@ -119,6 +136,9 @@ jobs:
           # NOTE: MQTT TLS is disabled (-DMQTT_TLS=OFF) so no OpenSSL DLLs
           # are needed. This avoids the "libssl-3-x64.dll not found" crash
           # on systems without OpenSSL installed (#1341, #1362).
+          if (Test-Path "third_party\qtkeychain\bin\qt6keychain.dll") {
+            copy third_party\qtkeychain\bin\qt6keychain.dll deploy\
+          }
           if ($false) {
           }
 
