@@ -479,12 +479,19 @@ void PskReporterMapDialog::rebuildMarkers()
                                    ? m_modeCombo->currentText()
                                    : QString();
     const bool hasHome = m_mapView->hasHomePosition();
+    // The client retains the deepest window it has fetched; filter the
+    // *display* to the currently selected lookback.
+    const qint64 cutoff = QDateTime::currentSecsSinceEpoch()
+                          - m_client->lookbackSeconds();
 
     QSet<QString> bandsHeard;
     double bestKm = -1.0;
     QString farthestCall;
 
     for (const PskReporterSpot& spot : m_client->spots()) {
+        if (spot.flowStartSeconds < cutoff) {
+            continue;
+        }
         if (!bandFilter.isEmpty() && bandName(spot.frequencyHz) != bandFilter) {
             continue;
         }

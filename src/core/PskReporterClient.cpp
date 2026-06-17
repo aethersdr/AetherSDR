@@ -88,12 +88,16 @@ void PskReporterClient::setLookbackSeconds(int seconds)
         return;
     }
     m_lookbackSec = clamped;
-    pruneOldSpots();
-    if (m_running) {
-        // Force a fresh deep backfill at the new depth.
-        m_lastSeqNo = -1;
+    // Only hit the network when the new window is DEEPER than anything we've
+    // already fetched this session. Narrowing — or revisiting a window we've
+    // covered — is just a display change (the dialog filters spots() by the
+    // current lookback), so it costs nothing and won't trip PSK Reporter's
+    // rate limiter.
+    if (m_running && clamped > m_fetchedLookbackSec) {
+        m_lastSeqNo = -1;  // force a deep backfill at the new depth
         poll();
     }
+    pruneOldSpots();
     emit spotsUpdated();
 }
 
@@ -129,6 +133,7 @@ void PskReporterClient::start(int intervalMs)
     // window instead of waiting for new live spots. (Without this, a reopen
     // kept the prior session's lastSeqNo and only fetched newer records.)
     m_lastSeqNo = -1;
+    m_fetchedLookbackSec = 0;  // the open's first query establishes the depth
 
     // Repopulate from the on-disk cache so the map isn't blank while the
     // first fetch / live feed warms up.
@@ -170,6 +175,7 @@ void PskReporterClient::poll()
     query.addQueryItem(QStringLiteral("appcontact"),
                        QStringLiteral("ki6bcj@aethersdr.com"));
     const bool initial = m_lastSeqNo < 0;
+    const int fetchDepth = m_lookbackSec;  // depth this query backfills
     if (!initial) {
         // Incremental: only records newer than the last sequence number.
         query.addQueryItem(QStringLiteral("lastseqno"),
@@ -177,7 +183,7 @@ void PskReporterClient::poll()
     } else {
         // Initial fetch: backfill the full selected lookback window.
         query.addQueryItem(QStringLiteral("flowStartSeconds"),
-                           QString::number(-m_lookbackSec));
+                           QString::number(-fetchDepth));
     }
 
     QUrl url{ QString::fromLatin1(kQueryUrl) };
@@ -197,7 +203,7 @@ void PskReporterClient::poll()
                           << "url" << url.toString(QUrl::RemoveQuery);
     emit statusChanged(tr("Updating…"));
     auto* reply = m_nam.get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply] {
+    connect(reply, &QNetworkReply::finished, this, [this, reply, initial, fetchDepth] {
         m_fetchInFlight = false;
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
@@ -211,6 +217,11 @@ void PskReporterClient::poll()
             emit statusChanged(tr("PSK Reporter error: %1")
                                    .arg(reply->errorString()));
             return;
+        }
+        if (initial) {
+            // We now hold history back to this depth; record it so narrowing
+            // and re-widening within it won't re-query.
+            m_fetchedLookbackSec = qMax(m_fetchedLookbackSec, fetchDepth);
         }
         m_lastHttpOk = true;
         m_sawError = false;
@@ -398,8 +409,13 @@ void PskReporterClient::appendSpot(const PskReporterSpot& spot)
 
 void PskReporterClient::pruneOldSpots()
 {
+    // Retain spots back to the deepest window we've fetched (not just the
+    // current lookback), so narrowing then widening shows the data again
+    // without another network query. The dialog filters the *display* to the
+    // current lookback.
+    const int retainSec = qMax(m_lookbackSec, m_fetchedLookbackSec);
     const qint64 cutoff =
-        QDateTime::currentSecsSinceEpoch() - m_lookbackSec;
+        QDateTime::currentSecsSinceEpoch() - retainSec;
     const int before = m_spots.size();
     m_spots.erase(std::remove_if(m_spots.begin(), m_spots.end(),
                                  [cutoff](const PskReporterSpot& s) {

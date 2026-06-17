@@ -102,6 +102,7 @@ private:
     qint64 m_lastSeqNo{-1};
     int    m_intervalMs{kMinPollMs};
     int    m_lookbackSec{kDefaultLookbackSec};
+    int    m_fetchedLookbackSec{0};  // deepest window backfilled this session
     bool   m_running{false};
     bool   m_fetchInFlight{false};
     bool   m_cacheDirty{false};
