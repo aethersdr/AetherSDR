@@ -186,7 +186,10 @@ void PskReporterClient::poll()
     req.setHeader(QNetworkRequest::UserAgentHeader,
                   QStringLiteral("AetherSDR/%1")
                       .arg(QCoreApplication::applicationVersion()));
-    req.setRawHeader("Accept-Encoding", "gzip");
+    // Do NOT set Accept-Encoding manually: Qt auto-negotiates gzip/deflate
+    // and transparently decompresses the reply, but only if we leave the
+    // header alone. Setting it ourselves disables that, leaving raw gzip
+    // bytes that fail XML parsing ("incorrectly encoded content").
 
     qCInfo(lcPskReporter) << "HTTP query"
                           << (initial ? "(initial)" : "(incremental)")
