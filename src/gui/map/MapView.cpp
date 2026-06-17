@@ -151,15 +151,33 @@ MapView::MapView(QWidget* parent)
     QWidget* vp = m_map->geoView()->viewport();
     vp->setMouseTracking(true);
     vp->installEventFilter(this);
+
+    // Persistent hover card: a frameless child label we show/hide ourselves,
+    // so it stays up until the mouse leaves the marker (no QToolTip fade).
+    m_hoverCard = new QLabel(this);
+    m_hoverCard->setObjectName(QStringLiteral("pskHoverCard"));
+    m_hoverCard->setTextFormat(Qt::RichText);
+    m_hoverCard->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_hoverCard->setStyleSheet(QStringLiteral(
+        "QLabel#pskHoverCard {"
+        "  background-color: rgba(28, 28, 30, 235);"
+        "  color: #f0f0f0;"
+        "  border: 1px solid rgba(255,255,255,40);"
+        "  border-radius: 5px; padding: 5px 8px; }"));
+    m_hoverCard->hide();
 }
 
 bool MapView::eventFilter(QObject* watched, QEvent* event)
 {
-    if (watched == m_map->geoView()->viewport()
-        && event->type() == QEvent::MouseMove) {
-        auto* me = static_cast<QMouseEvent*>(event);
-        // Viewport pixels → scene/projection coordinates for the hit test.
-        showHoverTooltip(m_map->geoView()->mapToScene(me->pos()));
+    if (watched == m_map->geoView()->viewport()) {
+        if (event->type() == QEvent::MouseMove) {
+            auto* me = static_cast<QMouseEvent*>(event);
+            // Viewport pixels → scene/projection coordinates for the hit test.
+            showHoverTooltip(m_map->geoView()->mapToScene(me->pos()));
+        } else if (event->type() == QEvent::Leave) {
+            m_hoverMarker = nullptr;
+            m_hoverCard->hide();
+        }
     }
     return QWidget::eventFilter(watched, event);
 }
@@ -174,15 +192,25 @@ void MapView::showHoverTooltip(const QPointF& projPos)
             break;
         }
     }
-    if (hit == m_hoverMarker) {
-        return;  // no change — avoid re-show churn
+    if (hit == nullptr) {
+        m_hoverMarker = nullptr;
+        m_hoverCard->hide();
+        return;
     }
-    m_hoverMarker = hit;
-    if (hit != nullptr) {
-        QToolTip::showText(QCursor::pos(), hit->marker().tooltip, this);
-    } else {
-        QToolTip::hideText();
+    if (hit != m_hoverMarker) {
+        m_hoverMarker = hit;
+        m_hoverCard->setText(hit->marker().tooltip);
+        m_hoverCard->adjustSize();
     }
+    // Position near the cursor, clamped to stay fully inside the widget.
+    const QPoint cursor = mapFromGlobal(QCursor::pos());
+    int x = cursor.x() + 14;
+    int y = cursor.y() + 14;
+    x = qBound(0, x, width() - m_hoverCard->width());
+    y = qBound(0, y, height() - m_hoverCard->height());
+    m_hoverCard->move(x, y);
+    m_hoverCard->raise();
+    m_hoverCard->show();
 }
 
 void MapView::setHomePosition(double lat, double lon, const QString& label,

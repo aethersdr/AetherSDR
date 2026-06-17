@@ -124,6 +124,12 @@ void PskReporterClient::start(int intervalMs)
                        : std::max(intervalMs, kMinPollMs);
     m_running = true;
 
+    // Always do a fresh deep HTTP backfill on (re)start — including in Live
+    // mode — so opening the window immediately repopulates the lookback
+    // window instead of waiting for new live spots. (Without this, a reopen
+    // kept the prior session's lastSeqNo and only fetched newer records.)
+    m_lastSeqNo = -1;
+
     // Repopulate from the on-disk cache so the map isn't blank while the
     // first fetch / live feed warms up.
     if (m_spots.isEmpty()) {

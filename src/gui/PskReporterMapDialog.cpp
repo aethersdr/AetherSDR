@@ -128,14 +128,9 @@ double bearingDeg(double lat1, double lon1, double lat2, double lon2)
     return std::fmod(qRadiansToDegrees(std::atan2(y, x)) + 360.0, 360.0);
 }
 
-// SNR color: decoded spots are never "bad", so this is a strong/medium/weak
-// ramp (green → orange → gray), all readable on a light tooltip background.
-QString snrColor(int snr)
-{
-    if (snr >= -5)  return QStringLiteral("#1b5e20");  // strong
-    if (snr >= -15) return QStringLiteral("#bf6000");  // medium
-    return QStringLiteral("#616161");                  // weak but decoded
-}
+// Muted text color and the SNR highlight, tuned for the dark hover card.
+constexpr const char* kCardMuted = "#b8b8b8";
+constexpr const char* kSnrColor  = "#ff8c00";  // dark orange — easy to spot
 
 // Compact, human-readable age of a report.
 QString relativeAge(qint64 reportEpoch)
@@ -163,8 +158,9 @@ QString buildSpotCard(const PskReporterSpot& spot, bool hasHome,
 
     // Line 1 — identity.
     html += QStringLiteral("<b>%1</b>&nbsp;&nbsp;"
-                           "<span style='color:gray;'>%2</span>")
+                           "<span style='color:%2;'>%3</span>")
                 .arg(spot.receiverCallsign.toHtmlEscaped(),
+                     QString::fromLatin1(kCardMuted),
                      spot.receiverLocator.toHtmlEscaped());
 
     // Line 2 — RF.
@@ -172,11 +168,11 @@ QString buildSpotCard(const PskReporterSpot& spot, bool hasHome,
                 .arg(bandName(spot.frequencyHz), freq,
                      spot.mode.toHtmlEscaped());
 
-    // Line 3 — signal + geometry.
+    // Line 3 — signal + geometry. SNR is always dark orange for visibility.
     QString line3;
     if (spot.snr > -999) {
         line3 = QStringLiteral("<b style='color:%1;'>%2 dB</b>")
-                    .arg(snrColor(spot.snr))
+                    .arg(QString::fromLatin1(kSnrColor))
                     .arg(spot.snr);
     }
     if (hasHome) {
@@ -194,8 +190,9 @@ QString buildSpotCard(const PskReporterSpot& spot, bool hasHome,
     }
 
     // Line 4 — time (absolute UTC is always correct; age is glanceable).
-    html += QStringLiteral("<br><span style='color:gray;'>%1 · %2</span>")
-                .arg(QDateTime::fromSecsSinceEpoch(spot.flowStartSeconds)
+    html += QStringLiteral("<br><span style='color:%1;'>%2 · %3</span>")
+                .arg(QString::fromLatin1(kCardMuted),
+                     QDateTime::fromSecsSinceEpoch(spot.flowStartSeconds)
                          .toUTC()
                          .toString(QStringLiteral("hh:mm:ss'Z'")),
                      relativeAge(spot.flowStartSeconds));
@@ -454,9 +451,10 @@ void PskReporterMapDialog::updateConnectionIndicator()
         color = hasData ? QStringLiteral("#2ecc71")                 // green
                         : QStringLiteral("#f4c20d");                // yellow
     }
+    // Transport word in the normal label color (white in dark themes);
+    // only the bullet carries the status color.
     m_connLabel->setText(
-        QStringLiteral("<span style='color:palette(mid);'>%1</span> "
-                       "<span style='color:%2;'>&#9679;</span>")
+        QStringLiteral("%1 <span style='color:%2;'>&#9679;</span>")
             .arg(m_client->transport(), color));
 }
 

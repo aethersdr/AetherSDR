@@ -101,6 +101,7 @@ private:
     QGVLayer* m_markerLayer{nullptr};
     MapMarkerItem* m_homeMarker{nullptr};
     MapMarkerItem* m_hoverMarker{nullptr};
+    QLabel* m_hoverCard{nullptr};
     QVector<MapMarkerItem*> m_markers;
     QVector<Marker> m_markerData;
     QVector<MapPathItem*> m_paths;
