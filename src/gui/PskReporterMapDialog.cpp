@@ -362,6 +362,15 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     m_lookbackCombo->setCurrentIndex(lbIdx >= 0 ? lbIdx : 2);  // default 1h
     m_client->setLookbackSeconds(m_lookbackCombo->currentData().toInt());
 
+    // Debounce rapid Lookback changes into a single deep HTTP query, so
+    // spinning through options doesn't hammer PSK Reporter (which 503s).
+    m_lookbackDebounce = new QTimer(this);
+    m_lookbackDebounce->setSingleShot(true);
+    m_lookbackDebounce->setInterval(750);
+    connect(m_lookbackDebounce, &QTimer::timeout, this, [this] {
+        m_client->setLookbackSeconds(m_lookbackCombo->currentData().toInt());
+    });
+
     connect(m_intervalCombo, &QComboBox::currentIndexChanged,
             this, &PskReporterMapDialog::onIntervalChanged);
     connect(m_lookbackCombo, &QComboBox::currentIndexChanged,
@@ -421,9 +430,10 @@ void PskReporterMapDialog::onIntervalChanged(int index)
 
 void PskReporterMapDialog::onLookbackChanged(int index)
 {
-    const int seconds = m_lookbackCombo->itemData(index).toInt();
-    writePskSetting("lookbackSec", seconds);
-    m_client->setLookbackSeconds(seconds);
+    // Persist immediately; defer the (networked) client update so rapid
+    // toggling coalesces into one query.
+    writePskSetting("lookbackSec", m_lookbackCombo->itemData(index).toInt());
+    m_lookbackDebounce->start();
 }
 
 void PskReporterMapDialog::restartClient()

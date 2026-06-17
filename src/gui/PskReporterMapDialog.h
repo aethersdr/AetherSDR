@@ -56,6 +56,7 @@ private:
     QLabel*             m_connLabel{nullptr};
     QCheckBox*          m_pathsCheck{nullptr};
     QTimer*             m_emptyStateTimer{nullptr};
+    QTimer*             m_lookbackDebounce{nullptr};
     QLabel*             m_bandCondPills[4]{};
     bool                m_started{false};
 };
