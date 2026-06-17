@@ -69,6 +69,8 @@ private:
     void pruneOldSpots();
     void startMqtt();
     void stopMqtt();
+    // Begin (or keep) HTTP polling as a fallback while MQTT is unavailable.
+    void startFallbackPolling();
 
     // Disk persistence: spots survive a client restart within the tombstone
     // window (kSpotTtlSeconds) so the map repopulates immediately on reopen
@@ -98,8 +100,15 @@ private:
     static constexpr const char* kQueryUrl =
         "https://retrieve.pskreporter.info/query";
     static constexpr const char* kMqttHost = "mqtt.pskreporter.info";
-    static constexpr quint16 kMqttTlsPort = 1884;
+    // Plain MQTT (1883), not TLS (1884): the feed is public, read-only spot
+    // data with no credentials, so TLS adds nothing here — and relying on
+    // OpenSSL's default cert store made TLS verification fail on shipped
+    // macOS/Windows builds (no broker connection → no live spots). Plain
+    // MQTT behaves identically on every platform with no CA handling.
+    static constexpr quint16 kMqttPort = 1883;
     static constexpr int kMaxSpots = 2000;
+    // HTTP fallback poll cadence when MQTT can't connect (port blocked etc.).
+    static constexpr int kFallbackPollMs = 5 * 60 * 1000;
     // Spots older than this are tombstoned (dropped from memory and cache).
     static constexpr qint64 kSpotTtlSeconds = 24 * 60 * 60;
     // Throttle disk writes while spots stream in from the live feed.

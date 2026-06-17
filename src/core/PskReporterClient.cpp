@@ -237,30 +237,50 @@ void PskReporterClient::startMqtt()
         connect(m_mqtt, &MqttClient::connected, this, [this] {
             qCInfo(lcPskReporter) << "MQTT connected to" << kMqttHost
                                   << "topic filter callsign" << m_callsign;
+            // Live feed is up — stop the HTTP fallback poller.
+            m_timer.stop();
             emit statusChanged(tr("Live (MQTT) — connected"));
         });
         connect(m_mqtt, &MqttClient::disconnected, this, [this] {
             qCWarning(lcPskReporter) << "MQTT disconnected from" << kMqttHost;
-            emit statusChanged(tr("Live (MQTT) — reconnecting…"));
+            startFallbackPolling();
+            emit statusChanged(tr("Live — reconnecting (polling meanwhile)…"));
         });
         connect(m_mqtt, &MqttClient::connectionError, this,
                 [this](const QString& err) {
-                    qCWarning(lcPskReporter) << "MQTT error:" << err;
-                    emit statusChanged(tr("MQTT error: %1").arg(err));
+                    qCWarning(lcPskReporter) << "MQTT error:" << err
+                                             << "— falling back to HTTP polling";
+                    startFallbackPolling();
+                    emit statusChanged(tr("Live unavailable — polling every 5 min"));
                 });
     }
     // Live feed has no backfill; seed the window with one HTTP query.
     poll();
     m_mqtt->setSubscriptions(
         { QStringLiteral("pskr/filter/v2/+/+/%1/#").arg(m_callsign) });
-    m_mqtt->connectToBroker(QString::fromLatin1(kMqttHost), kMqttTlsPort,
-                            {}, {}, /*useTls=*/true);
+    m_mqtt->connectToBroker(QString::fromLatin1(kMqttHost), kMqttPort,
+                            {}, {}, /*useTls=*/false);
     m_mqttMsgWindow = 0;
     m_mqttHealthTimer.start();
+    // Safety net: poll over HTTP until MQTT confirms it's connected (and if
+    // it never does — e.g. the network blocks MQTT — keep polling). The
+    // connected() handler stops this timer.
+    startFallbackPolling();
     emit statusChanged(tr("Live (MQTT) — connecting…"));
 #else
     emit statusChanged(tr("MQTT support not built in"));
 #endif
+}
+
+void PskReporterClient::startFallbackPolling()
+{
+    // Only meaningful in Live mode; the explicit poll tiers manage m_timer
+    // themselves. Don't double-start.
+    if (m_intervalMs != kLiveMqtt || m_timer.isActive()) {
+        return;
+    }
+    m_timer.start(kFallbackPollMs);
+    poll();
 }
 
 void PskReporterClient::stopMqtt()

@@ -374,6 +374,16 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     if (m_radioModel != nullptr) {
         connect(m_radioModel, &RadioModel::gpsStatusChanged,
                 this, [this] { updateHomeFromRadio(); });
+        // Pick up a late-arriving or edited callsign without a reopen.
+        // restartClient() (not setCallsign alone) so a callsign that was
+        // empty when the window opened actually starts the client.
+        connect(m_radioModel, &RadioModel::callsignChanged, this,
+                [this] {
+                    if (m_started) {
+                        restartClient();
+                    }
+                    updateHomeFromRadio();
+                });
     }
 }
 

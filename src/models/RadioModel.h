@@ -438,6 +438,10 @@ signals:
                           const QString& grid, const QString& altitude,
                           const QString& lat, const QString& lon,
                           const QString& utcTime);
+    // Emitted when the station callsign becomes known or changes (from the
+    // radio "info"/status feed). Lets features like the PSK Reporter map pick
+    // up a late-arriving or edited callsign without a reconnect.
+    void callsignChanged(const QString& callsign);
     // Emitted when the radio reports 10 MHz reference oscillator state.
     void oscillatorChanged();
     // Emitted when network quality assessment changes.

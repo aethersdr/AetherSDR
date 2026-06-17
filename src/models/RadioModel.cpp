@@ -2341,7 +2341,12 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
                             const QString key = kv.left(eq).trimmed();
                             const QString val = kv.mid(eq + 1).trimmed()
                                 .remove('\\').remove('"');
-                            if (key == "callsign")        m_callsign = val;
+                            if (key == "callsign") {
+                                if (val != m_callsign) {
+                                    m_callsign = val;
+                                    emit callsignChanged(m_callsign);
+                                }
+                            }
                             else if (key == "name")        m_nickname = val;
                             else if (key == "region")      m_region = val;
                             else if (key == "options")     m_radioOptions = val;
@@ -4862,7 +4867,13 @@ void RadioModel::handleRadioStatus(const QMap<QString, QString>& kvs)
         }
         changed = true;
     }
-    if (kvs.contains("callsign")) { m_callsign = kvs["callsign"]; changed = true; }
+    if (kvs.contains("callsign")) {
+        if (kvs["callsign"] != m_callsign) {
+            m_callsign = kvs["callsign"];
+            emit callsignChanged(m_callsign);
+        }
+        changed = true;
+    }
     if (kvs.contains("nickname")) { m_nickname = kvs["nickname"]; changed = true; }
     if (kvs.contains("region"))   { m_region = kvs["region"]; changed = true; }
     if (kvs.contains("radio_options")) { m_radioOptions = kvs["radio_options"]; changed = true; }
