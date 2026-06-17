@@ -14,7 +14,9 @@
 #include <QCoreApplication>
 #include <QCursor>
 #include <QDir>
+#include <QEvent>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QLabel>
 #include <QNetworkAccessManager>
 #include <QNetworkDiskCache>
@@ -141,10 +143,25 @@ MapView::MapView(QWidget* parent)
             });
 
     // Instant hover tooltip. QGeoView's built-in tooltip fires on the OS
-    // QEvent::ToolTip (a multi-second wake-up delay), so drive it ourselves
-    // from mouse-move and disable the delayed one to avoid a double-show.
+    // QEvent::ToolTip (a multi-second wake-up delay), and its mapMouseMove
+    // signal doesn't fire for plain hovering (the inner QGraphicsView
+    // viewport consumes move events without forwarding). So disable the
+    // delayed tooltip and watch the viewport's mouse-move directly.
     m_map->setMouseAction(QGV::MouseAction::Tooltip, false);
-    connect(m_map, &QGVMap::mapMouseMove, this, &MapView::showHoverTooltip);
+    QWidget* vp = m_map->geoView()->viewport();
+    vp->setMouseTracking(true);
+    vp->installEventFilter(this);
+}
+
+bool MapView::eventFilter(QObject* watched, QEvent* event)
+{
+    if (watched == m_map->geoView()->viewport()
+        && event->type() == QEvent::MouseMove) {
+        auto* me = static_cast<QMouseEvent*>(event);
+        // Viewport pixels → scene/projection coordinates for the hit test.
+        showHoverTooltip(m_map->geoView()->mapToScene(me->pos()));
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 void MapView::showHoverTooltip(const QPointF& projPos)

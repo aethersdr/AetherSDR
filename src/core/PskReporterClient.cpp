@@ -81,6 +81,37 @@ void PskReporterClient::setCallsign(const QString& callsign)
     }
 }
 
+void PskReporterClient::setLookbackSeconds(int seconds)
+{
+    const int clamped = std::clamp(seconds, 60, kMaxLookbackSec);
+    if (clamped == m_lookbackSec) {
+        return;
+    }
+    m_lookbackSec = clamped;
+    pruneOldSpots();
+    if (m_running) {
+        // Force a fresh deep backfill at the new depth.
+        m_lastSeqNo = -1;
+        poll();
+    }
+    emit spotsUpdated();
+}
+
+bool PskReporterClient::isMqttConnected() const
+{
+#ifdef HAVE_MQTT
+    return m_mqtt != nullptr && m_mqtt->isConnected();
+#else
+    return false;
+#endif
+}
+
+QString PskReporterClient::transport() const
+{
+    return (isLive() && isMqttConnected()) ? QStringLiteral("MQTT")
+                                           : QStringLiteral("HTTP");
+}
+
 void PskReporterClient::start(int intervalMs)
 {
     stop();
@@ -137,10 +168,11 @@ void PskReporterClient::poll()
         // Incremental: only records newer than the last sequence number.
         query.addQueryItem(QStringLiteral("lastseqno"),
                            QString::number(m_lastSeqNo));
+    } else {
+        // Initial fetch: backfill the full selected lookback window.
+        query.addQueryItem(QStringLiteral("flowStartSeconds"),
+                           QString::number(-m_lookbackSec));
     }
-    // On the first fetch we deliberately omit flowStartSeconds so PSK
-    // Reporter returns its default window (the last 100 reception records,
-    // up to 6 hours) — a friendly initial population when the window opens.
 
     QUrl url{ QString::fromLatin1(kQueryUrl) };
     url.setQuery(query);
@@ -164,10 +196,16 @@ void PskReporterClient::poll()
                 << "HTTP error:" << reply->errorString()
                 << "status"
                 << reply->attribute(QNetworkRequest::HttpStatusCodeAttribute);
+            m_lastHttpOk = false;
+            m_sawError = true;
+            emit connectionStateChanged();
             emit statusChanged(tr("PSK Reporter error: %1")
                                    .arg(reply->errorString()));
             return;
         }
+        m_lastHttpOk = true;
+        m_sawError = false;
+        emit connectionStateChanged();
         const QByteArray body = reply->readAll();
         qCInfo(lcPskReporter) << "HTTP reply" << body.size() << "bytes";
         handleQueryReply(body);
@@ -239,18 +277,23 @@ void PskReporterClient::startMqtt()
                                   << "topic filter callsign" << m_callsign;
             // Live feed is up — stop the HTTP fallback poller.
             m_timer.stop();
+            m_sawError = false;
+            emit connectionStateChanged();
             emit statusChanged(tr("Live (MQTT) — connected"));
         });
         connect(m_mqtt, &MqttClient::disconnected, this, [this] {
             qCWarning(lcPskReporter) << "MQTT disconnected from" << kMqttHost;
             startFallbackPolling();
+            emit connectionStateChanged();
             emit statusChanged(tr("Live — reconnecting (polling meanwhile)…"));
         });
         connect(m_mqtt, &MqttClient::connectionError, this,
                 [this](const QString& err) {
                     qCWarning(lcPskReporter) << "MQTT error:" << err
                                              << "— falling back to HTTP polling";
+                    m_sawError = true;
                     startFallbackPolling();
+                    emit connectionStateChanged();
                     emit statusChanged(tr("Live unavailable — polling every 5 min"));
                 });
     }
@@ -347,7 +390,7 @@ void PskReporterClient::appendSpot(const PskReporterSpot& spot)
 void PskReporterClient::pruneOldSpots()
 {
     const qint64 cutoff =
-        QDateTime::currentSecsSinceEpoch() - kSpotTtlSeconds;
+        QDateTime::currentSecsSinceEpoch() - m_lookbackSec;
     const int before = m_spots.size();
     m_spots.erase(std::remove_if(m_spots.begin(), m_spots.end(),
                                  [cutoff](const PskReporterSpot& s) {
@@ -385,7 +428,7 @@ void PskReporterClient::loadCache()
         return;
     }
     const qint64 cutoff =
-        QDateTime::currentSecsSinceEpoch() - kSpotTtlSeconds;
+        QDateTime::currentSecsSinceEpoch() - m_lookbackSec;
     const QJsonArray arr = root.value(QLatin1String("spots")).toArray();
     int loaded = 0;
     for (const QJsonValue& v : arr) {

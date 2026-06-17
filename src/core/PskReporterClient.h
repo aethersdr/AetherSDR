@@ -46,18 +46,32 @@ public:
     void setCallsign(const QString& callsign);
     QString callsign() const { return m_callsign; }
 
+    // Lookback window (seconds): how far back spots are backfilled and
+    // retained/displayed. Clamped to the PSK Reporter 24h API ceiling.
+    void setLookbackSeconds(int seconds);
+    int lookbackSeconds() const { return m_lookbackSec; }
+
     // intervalMs: kLiveMqtt for the MQTT live feed, otherwise a polling
     // period (clamped to kMinPollMs).
     void start(int intervalMs);
     void stop();
     bool isRunning() const { return m_running; }
 
-    // Spots retained in the rolling window (last 24h, capped).
+    // Spots retained in the rolling lookback window, capped.
     const QVector<PskReporterSpot>& spots() const { return m_spots; }
+
+    // Connection state for the UI indicator.
+    bool isLive() const { return m_running && m_intervalMs == kLiveMqtt; }
+    bool isMqttConnected() const;
+    bool lastHttpOk() const { return m_lastHttpOk; }
+    bool sawError() const { return m_sawError; }
+    // "MQTT" when the live broker is connected, else "HTTP".
+    QString transport() const;
 
 signals:
     void spotsUpdated();                 // m_spots changed
     void statusChanged(const QString& status);
+    void connectionStateChanged();       // transport/health changed
 
 private slots:
     void poll();
@@ -87,9 +101,12 @@ private:
     QVector<PskReporterSpot> m_spots;
     qint64 m_lastSeqNo{-1};
     int    m_intervalMs{kMinPollMs};
+    int    m_lookbackSec{kDefaultLookbackSec};
     bool   m_running{false};
     bool   m_fetchInFlight{false};
     bool   m_cacheDirty{false};
+    bool   m_lastHttpOk{false};
+    bool   m_sawError{false};
     MqttClient* m_mqtt{nullptr};
 
     // MQTT feed health counters, summarized to the log periodically.
@@ -109,8 +126,10 @@ private:
     static constexpr int kMaxSpots = 2000;
     // HTTP fallback poll cadence when MQTT can't connect (port blocked etc.).
     static constexpr int kFallbackPollMs = 5 * 60 * 1000;
-    // Spots older than this are tombstoned (dropped from memory and cache).
-    static constexpr qint64 kSpotTtlSeconds = 24 * 60 * 60;
+    // PSK Reporter's retrieval API caps flowStartSeconds at 24h; the lookback
+    // window can't exceed that. Default to 1 hour.
+    static constexpr int kMaxLookbackSec = 24 * 60 * 60;
+    static constexpr int kDefaultLookbackSec = 60 * 60;
     // Throttle disk writes while spots stream in from the live feed.
     static constexpr int kSaveIntervalMs = 60 * 1000;
 };

@@ -78,6 +78,10 @@ protected:
     void keyPressEvent(QKeyEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    // Watches the inner QGraphicsView viewport for mouse-move so the hover
+    // card can appear instantly (QGeoView's own tooltip path is delayed and
+    // its mapMouseMove signal doesn't fire reliably for plain hovering).
+    bool eventFilter(QObject* watched, QEvent* event) override;
 
 private:
     // Install the process-wide tile network manager (disk cache + UA) on

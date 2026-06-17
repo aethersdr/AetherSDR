@@ -5,7 +5,6 @@
 #include "core/PropForecastClient.h"
 #include "core/PskReporterClient.h"
 #include "map/MapView.h"
-#include "map/Sparkline.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
@@ -116,12 +115,6 @@ QString bandConditionColor(const QString& condition)
 // Short labels for the four N0NBH band groups (matching PropForecastDetail
 // index order: 0=80m-40m, 1=30m-20m, 2=17m-15m, 3=12m-10m).
 const char* const kBandGroupLabels[4] = { "80-40m", "30-20m", "17-15m", "12-10m" };
-
-// Activity sparkline: one sample per minute over the past hour, each the
-// number of receivers that heard us in the trailing 15 minutes.
-constexpr int kActivityWindowSec = 15 * 60;
-constexpr int kActivitySampleMs  = 60 * 1000;
-constexpr int kActivitySamples   = 60;
 
 // Initial great-circle bearing from point 1 to point 2, degrees 0-360.
 double bearingDeg(double lat1, double lon1, double lat2, double lon2)
@@ -248,6 +241,16 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     }
     topBar->addWidget(m_modeCombo);
 
+    topBar->addWidget(new QLabel(tr("Lookback:"), bodyWidget()));
+    m_lookbackCombo = new QComboBox(bodyWidget());
+    m_lookbackCombo->addItem(tr("15 min"), 15 * 60);
+    m_lookbackCombo->addItem(tr("30 min"), 30 * 60);
+    m_lookbackCombo->addItem(tr("1 hour"), 60 * 60);
+    m_lookbackCombo->addItem(tr("2 hours"), 2 * 60 * 60);
+    m_lookbackCombo->addItem(tr("4 hours"), 4 * 60 * 60);
+    m_lookbackCombo->addItem(tr("8 hours"), 8 * 60 * 60);
+    topBar->addWidget(m_lookbackCombo);
+
     topBar->addSpacing(12);
     topBar->addWidget(new QLabel(tr("Update every:"), bodyWidget()));
 
@@ -303,10 +306,10 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     // the transient update-status text pushed to the bottom-right corner.
     auto* bottomBar = new QHBoxLayout();
     bottomBar->setSpacing(6);
+    // Band-condition pills snap to the bottom-left corner — no leading title
+    // label (it was near-invisible in dark themes and pushed the pills off
+    // the corner); day/night context lives in each pill's tooltip.
     if (m_propForecast != nullptr) {
-        m_bandCondTitle = new QLabel(tr("HF bands:"), bodyWidget());
-        m_bandCondTitle->setStyleSheet(QStringLiteral("color: palette(mid);"));
-        bottomBar->addWidget(m_bandCondTitle);
         for (int i = 0; i < 4; ++i) {
             auto* pill = new QLabel(QString::fromLatin1(kBandGroupLabels[i]),
                                     bodyWidget());
@@ -322,21 +325,18 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     m_statusLabel->setStyleSheet(QStringLiteral("color: palette(mid);"));
     m_statusLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     bottomBar->addWidget(m_statusLabel);
-    // Recent-activity sparkline, pinned to the bottom-right corner — rising
-    // line = more receivers hearing us = a band opening.
-    m_activitySpark = new Sparkline(bodyWidget());
-    m_activitySpark->setCapacity(kActivitySamples);
-    m_activitySpark->setToolTip(
-        tr("Receivers hearing you (trailing 15 min), per minute over the past hour"));
-    bottomBar->addSpacing(8);
-    bottomBar->addWidget(m_activitySpark);
+    // Connection indicator pinned to the bottom-right corner: "MQTT"/"HTTP"
+    // plus a status bullet (green=connected w/ data, yellow=no data,
+    // red=no good connection).
+    m_connLabel = new QLabel(bodyWidget());
+    m_connLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    bottomBar->addSpacing(10);
+    bottomBar->addWidget(m_connLabel);
     root->addLayout(bottomBar);
 
-    // Per-minute activity sampler for the sparkline.
-    m_activityTimer = new QTimer(this);
-    m_activityTimer->setInterval(kActivitySampleMs);
-    connect(m_activityTimer, &QTimer::timeout,
-            this, &PskReporterMapDialog::sampleActivity);
+    connect(m_client, &PskReporterClient::connectionStateChanged,
+            this, &PskReporterMapDialog::updateConnectionIndicator);
+    updateConnectionIndicator();
 
     if (m_propForecast != nullptr) {
         updateBandConditions();  // paint from cache if already fetched
@@ -360,8 +360,15 @@ PskReporterMapDialog::PskReporterMapDialog(RadioModel* radioModel,
     const int idx = m_intervalCombo->findData(savedInterval);
     m_intervalCombo->setCurrentIndex(idx >= 0 ? idx : 0);
 
+    const int savedLookback = pskSettings().value("lookbackSec").toInt(60 * 60);
+    const int lbIdx = m_lookbackCombo->findData(savedLookback);
+    m_lookbackCombo->setCurrentIndex(lbIdx >= 0 ? lbIdx : 2);  // default 1h
+    m_client->setLookbackSeconds(m_lookbackCombo->currentData().toInt());
+
     connect(m_intervalCombo, &QComboBox::currentIndexChanged,
             this, &PskReporterMapDialog::onIntervalChanged);
+    connect(m_lookbackCombo, &QComboBox::currentIndexChanged,
+            this, &PskReporterMapDialog::onLookbackChanged);
     connect(m_bandCombo, &QComboBox::currentIndexChanged,
             this, [this] { rebuildMarkers(); });
     connect(m_modeCombo, &QComboBox::currentIndexChanged,
@@ -415,46 +422,42 @@ void PskReporterMapDialog::onIntervalChanged(int index)
     restartClient();
 }
 
+void PskReporterMapDialog::onLookbackChanged(int index)
+{
+    const int seconds = m_lookbackCombo->itemData(index).toInt();
+    writePskSetting("lookbackSec", seconds);
+    m_client->setLookbackSeconds(seconds);
+}
+
 void PskReporterMapDialog::restartClient()
 {
     m_client->setCallsign(m_radioModel != nullptr ? m_radioModel->callsign()
                                                   : QString());
+    m_client->setLookbackSeconds(m_lookbackCombo->currentData().toInt());
     m_client->start(m_intervalCombo->currentData().toInt());
     m_emptyStateTimer->start();
-    seedActivityHistory();   // backfill the sparkline from cached spots
-    m_activityTimer->start();
 }
 
-int PskReporterMapDialog::recentSpotCount(qint64 nowSec, int windowSec) const
+void PskReporterMapDialog::updateConnectionIndicator()
 {
-    int n = 0;
-    for (const PskReporterSpot& s : m_client->spots()) {
-        if (s.flowStartSeconds <= nowSec
-            && s.flowStartSeconds >= nowSec - windowSec) {
-            ++n;
-        }
+    // Three-state bullet next to the transport label (MQTT/HTTP):
+    //   green  = connected and showing data
+    //   yellow = connected but no spots yet
+    //   red    = no good connection
+    const bool up = m_client->isMqttConnected() || m_client->lastHttpOk();
+    const bool hasData = !m_client->spots().isEmpty();
+    QString color;
+    if (!up) {
+        color = m_client->sawError() ? QStringLiteral("#e74c3c")    // red
+                                     : QStringLiteral("#f4c20d");   // connecting
+    } else {
+        color = hasData ? QStringLiteral("#2ecc71")                 // green
+                        : QStringLiteral("#f4c20d");                // yellow
     }
-    return n;
-}
-
-void PskReporterMapDialog::seedActivityHistory()
-{
-    const qint64 now = QDateTime::currentSecsSinceEpoch();
-    QVector<double> hist;
-    hist.reserve(kActivitySamples);
-    // Oldest bucket first; each bucket is the trailing-window count at that
-    // minute, reconstructed from the cached spot timestamps.
-    for (int m = kActivitySamples - 1; m >= 0; --m) {
-        const qint64 t = now - static_cast<qint64>(m) * 60;
-        hist.append(recentSpotCount(t, kActivityWindowSec));
-    }
-    m_activitySpark->setSamples(hist);
-}
-
-void PskReporterMapDialog::sampleActivity()
-{
-    m_activitySpark->addSample(
-        recentSpotCount(QDateTime::currentSecsSinceEpoch(), kActivityWindowSec));
+    m_connLabel->setText(
+        QStringLiteral("<span style='color:palette(mid);'>%1</span> "
+                       "<span style='color:%2;'>&#9679;</span>")
+            .arg(m_client->transport(), color));
 }
 
 void PskReporterMapDialog::rebuildMarkers()
@@ -472,8 +475,6 @@ void PskReporterMapDialog::rebuildMarkers()
     QSet<QString> bandsHeard;
     double bestKm = -1.0;
     QString farthestCall;
-    int bestSnr = -1000;
-    QString bestSnrCall;
 
     for (const PskReporterSpot& spot : m_client->spots()) {
         if (!bandFilter.isEmpty() && bandName(spot.frequencyHz) != bandFilter) {
@@ -501,10 +502,6 @@ void PskReporterMapDialog::rebuildMarkers()
         markers.append(m);
 
         bandsHeard.insert(bandName(spot.frequencyHz));
-        if (spot.snr > -999 && spot.snr > bestSnr) {
-            bestSnr = spot.snr;
-            bestSnrCall = spot.receiverCallsign;
-        }
         if (hasHome) {
             const double km = MaidenheadLocator::distanceKm(
                 m_mapView->homeLat(), m_mapView->homeLon(), lat, lon);
@@ -516,7 +513,7 @@ void PskReporterMapDialog::rebuildMarkers()
     }
     m_mapView->setMarkers(markers);
 
-    // Reception stats (top-right): count · bands · farthest · best SNR.
+    // Reception stats (top-right): count · bands · farthest.
     QStringList parts;
     if (!markers.isEmpty()) {
         parts << tr("%n spot(s)", nullptr, markers.size());
@@ -524,14 +521,11 @@ void PskReporterMapDialog::rebuildMarkers()
         if (bestKm >= 0.0) {
             parts << tr("farthest %1 %L2 km").arg(farthestCall).arg(qRound(bestKm));
         }
-        if (bestSnr > -1000) {
-            parts << tr("best %1 %2 dB")
-                         .arg(bestSnrCall)
-                         .arg(bestSnr > 0 ? QStringLiteral("+%1").arg(bestSnr)
-                                          : QString::number(bestSnr));
-        }
     }
     m_dxLabel->setText(parts.join(QStringLiteral("  •  ")));
+
+    // Data presence affects the connection bullet color.
+    updateConnectionIndicator();
 }
 
 void PskReporterMapDialog::updateBandConditions()
@@ -543,14 +537,13 @@ void PskReporterMapDialog::updateBandConditions()
     // Pick the day vs night rating set by the operator's local time.
     const int hour = QDateTime::currentDateTime().time().hour();
     const bool daytime = hour >= 6 && hour < 18;
-    m_bandCondTitle->setText(daytime ? tr("HF bands (day):")
-                                     : tr("HF bands (night):"));
+    const QString tod = daytime ? tr("day") : tr("night");
     for (int i = 0; i < 4; ++i) {
         const QString cond = daytime ? det.bandDay[i] : det.bandNight[i];
         QLabel* pill = m_bandCondPills[i];
         const QString shown = cond.isEmpty() ? QStringLiteral("–") : cond;
-        pill->setToolTip(tr("%1: %2")
-                             .arg(QString::fromLatin1(kBandGroupLabels[i]),
+        pill->setToolTip(tr("%1 (%2): %3")
+                             .arg(QString::fromLatin1(kBandGroupLabels[i]), tod,
                                   cond.isEmpty() ? tr("no data") : cond));
         pill->setText(QStringLiteral("%1 %2")
                           .arg(QString::fromLatin1(kBandGroupLabels[i]), shown));
@@ -581,7 +574,6 @@ void PskReporterMapDialog::closeEvent(QCloseEvent* event)
 {
     // Stop hitting the network while the window is closed.
     m_client->stop();
-    m_activityTimer->stop();
     m_started = false;
     PersistentDialog::closeEvent(event);
 }
