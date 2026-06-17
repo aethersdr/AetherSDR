@@ -650,15 +650,24 @@ void MainWindow::wireRadioModel()
         // radio's keyer because both run at the configured WPM.  Drift
         // tolerance is high — we're not transmitting, just providing the
         // operator with audible feedback of what they sent.
-        m_cwxLocalKeyer = new CwxLocalKeyer(this);
-        connect(&m_radioModel.cwxModel(), &CwxModel::transmissionRequested,
-                m_cwxLocalKeyer, &CwxLocalKeyer::start);
-        connect(&m_radioModel.cwxModel(), &CwxModel::transmissionCancelled,
-                m_cwxLocalKeyer, &CwxLocalKeyer::stop);
-        connect(m_cwxLocalKeyer, &CwxLocalKeyer::keyStateChanged,
-                this, [this](bool down) {
+        // The keyer runs its element schedule on its own worker thread, timed
+        // against steady_clock rather than a QTimer, so panadapter paint /
+        // VITA-49 burst pressure on the GUI event loop can't gap CW elements
+        // (#3623) — same reason the iambic keyer below avoids QTimer.
+        m_cwxLocalKeyer = std::make_unique<CwxLocalKeyer>();
+        m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
+            // Lock-free atomic gate; safe to call directly from the keyer
+            // thread, matching the iambic keyer's gate path below.
             if (m_audio && m_audio->cwSidetone())
                 m_audio->cwSidetone()->setKeyDown(down);
+        });
+        connect(&m_radioModel.cwxModel(), &CwxModel::transmissionRequested,
+                this, [this](const QString& text, int wpm) {
+            if (m_cwxLocalKeyer) m_cwxLocalKeyer->start(text, wpm);
+        });
+        connect(&m_radioModel.cwxModel(), &CwxModel::transmissionCancelled,
+                this, [this]() {
+            if (m_cwxLocalKeyer) m_cwxLocalKeyer->stop();
         });
 
         // Local iambic keyer — when the radio's iambic mode is on, this

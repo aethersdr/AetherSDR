@@ -1948,6 +1948,11 @@ MainWindow::~MainWindow()
     qApp->removeEventFilter(this);
     preparePanadapterUiForShutdown();
 
+    // Stop the CWX sidetone keyer (its own worker thread) before AudioEngine is
+    // torn down below — its onKeyDownChange callback touches m_audio->cwSidetone()
+    // (#3623). reset() joins the worker, so no key edge can fire afterward.
+    m_cwxLocalKeyer.reset();
+
 #ifdef HAVE_RADE
     if (m_radeSliceId >= 0)
         deactivateRADE();

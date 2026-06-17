@@ -908,7 +908,7 @@ private:
     QTimer* m_bsExpiryTimer{nullptr};    // band-stack bookmark auto-expiry, started on connect only (#1471)
     QTimer* m_bsAutoSaveTimer{nullptr};  // band-stack dwell auto-save (single-shot per dwell window)
     QTimer* m_agManualConnectTimer{nullptr}; // deferred AG manual connect — cancelled on disconnect
-    class CwxLocalKeyer* m_cwxLocalKeyer{nullptr};  // local Morse keyer for CWX sidetone
+    std::unique_ptr<class CwxLocalKeyer> m_cwxLocalKeyer;  // local Morse keyer for CWX sidetone (own worker thread)
     std::unique_ptr<class IambicKeyer> m_iambicKeyer;  // local iambic state machine for paddle sidetone
     std::atomic<quint64> m_lastCwPaddleTraceId{0};
     std::atomic<quint64> m_lastCwPaddleSourceMs{0};

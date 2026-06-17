@@ -60,6 +60,10 @@ void expectStates(const std::string& name,
 
 class TestKeyer final : public CwxLocalKeyer {
 public:
+    // Drive the schedule synchronously — no real worker thread — so the
+    // drift-correction math stays deterministic under onTick()/setElapsed().
+    TestKeyer() : CwxLocalKeyer(/*spawnWorker=*/false) {}
+
     void setElapsed(qint64 elapsedMs) { m_elapsedMs = elapsedMs; }
     void tick() { onTick(); }
 
@@ -90,10 +94,9 @@ struct Fixture {
 
     Fixture()
     {
-        QObject::connect(&keyer, &CwxLocalKeyer::keyStateChanged,
-                         [this](bool down) {
-                             states.push_back(down ? 1 : 0);
-                         });
+        keyer.setOnKeyDownChange([this](bool down) {
+            states.push_back(down ? 1 : 0);
+        });
     }
 };
 

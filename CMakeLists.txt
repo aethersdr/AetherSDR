@@ -2052,6 +2052,9 @@ add_executable(cwx_local_keyer_drift_test
 )
 target_include_directories(cwx_local_keyer_drift_test PRIVATE src)
 target_link_libraries(cwx_local_keyer_drift_test PRIVATE Qt6::Core)
+if(UNIX)
+    target_link_libraries(cwx_local_keyer_drift_test PRIVATE pthread)
+endif()
 add_test(NAME cwx_local_keyer_drift_test COMMAND cwx_local_keyer_drift_test)
 
 add_executable(ax25_frame_formatter_test
