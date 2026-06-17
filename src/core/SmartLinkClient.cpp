@@ -27,6 +27,17 @@ static constexpr int kMaxReadBuffer = 16 * 1024 * 1024;
 SmartLinkClient::SmartLinkClient(QObject* parent)
     : QObject(parent)
 {
+    // Report credential-persistence availability up front so a build that
+    // shipped without QtKeychain is diagnosable from the SmartLink support
+    // log instead of failing silently (#3639). The disabled case is a
+    // warning because it is the user-visible "password not remembered" path.
+#ifdef HAVE_KEYCHAIN
+    qCInfo(lcSmartLink) << "SmartLink credential persistence: enabled via QtKeychain";
+#else
+    qCWarning(lcSmartLink)
+        << "SmartLink credential persistence: disabled; Qt6Keychain not available at build time";
+#endif
+
     // SmartLink server TLS socket
     connect(&m_socket, &QSslSocket::connected,    this, &SmartLinkClient::onSslConnected);
     connect(&m_socket, &QSslSocket::disconnected, this, &SmartLinkClient::onSslDisconnected);

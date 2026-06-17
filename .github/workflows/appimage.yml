@@ -63,6 +63,13 @@ jobs:
       - name: Setup DeepFilterNet3 (DFNR)
         run: bash scripts/setup/setup-deepfilter.sh
 
+      - name: Setup qtkeychain (SmartLink credential persistence)
+        # Builds qtkeychain from source against the active Qt and stages it in
+        # third_party/qtkeychain so find_package(Qt6Keychain) succeeds. Without
+        # this the AppImage shipped without credential persistence (#3639). The
+        # pure Qt-D-Bus backend talks to KDE Wallet / GNOME Keyring at runtime.
+        run: bash scripts/setup/setup-qtkeychain.sh
+
       - name: Configure
         run: |
           CMAKE_EXTRA=""
@@ -73,6 +80,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DREQUIRE_SERIALPORT=ON \
+            -DREQUIRE_KEYCHAIN=ON \
             -DMQTT_TLS=OFF \
             $CMAKE_EXTRA
 
@@ -129,6 +137,10 @@ jobs:
           else
             export QMAKE=$(which qmake6 2>/dev/null || which qmake)
           fi
+          # Let linuxdeploy resolve + bundle libqt6keychain.so (NEEDED by the
+          # binary, staged outside the standard search path). Qt6 DBus, which
+          # the keychain backend needs at runtime, is pulled in transitively.
+          export LD_LIBRARY_PATH="${{ github.workspace }}/third_party/qtkeychain/lib:${LD_LIBRARY_PATH:-}"
           ./linuxdeploy-${{ matrix.arch }}.AppImage \
             --appdir AppDir \
             --plugin qt \

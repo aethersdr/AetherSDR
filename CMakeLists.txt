@@ -22,6 +22,7 @@ option(USE_SYSTEM_LIQUID_DSP   "Use system liquid-dsp"   OFF)
 # Build features options
 
 option(REQUIRE_SERIALPORT "Fail if Qt6 SerialPort is not found (use for release builds)" OFF)
+option(REQUIRE_KEYCHAIN "Fail if Qt6Keychain is not found (use for release builds)" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
 option(ENABLE_BNR "Enable NVIDIA NIM BNR noise removal (requires grpc++)" OFF)
@@ -112,13 +113,22 @@ if(UNIX AND NOT APPLE)
         message(STATUS "Qt6::DBus not found — sleep inhibition disabled on Linux")
     endif()
 endif()
-# On Windows, qtkeychain is built from source by scripts/setup/setup-qtkeychain.ps1
-# and staged to third_party/qtkeychain. Prepend it so find_package resolves there
-# before falling back to any system install.
-if(WIN32)
+# qtkeychain may be staged into third_party/ by scripts/setup/setup-qtkeychain.*
+# (Windows + Linux AppImage release builds build it from source there). Prepend
+# so find_package resolves it before any system install. This EXISTS-guarded
+# prepend supersedes the earlier WIN32-only one (#3634): Windows stages into the
+# same dir, so the general form covers both platforms.
+if(EXISTS "${CMAKE_SOURCE_DIR}/third_party/qtkeychain")
     list(PREPEND CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/third_party/qtkeychain")
 endif()
-find_package(Qt6Keychain QUIET)
+# REQUIRE_KEYCHAIN makes a missing Qt6Keychain a hard build failure rather than
+# a silent compile-out of SmartLink credential persistence — release/packaged
+# builds set it so an artifact can never ship without working persistence (#3639).
+if(REQUIRE_KEYCHAIN)
+    find_package(Qt6Keychain REQUIRED)
+else()
+    find_package(Qt6Keychain QUIET)
+endif()
 if(Qt6Keychain_FOUND)
     message(STATUS "Qt6Keychain found — SmartLink credential persistence enabled")
 else()

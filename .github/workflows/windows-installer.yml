@@ -95,7 +95,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DMQTT_TLS=OFF -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DCMAKE_TOOLCHAIN_FILE="$env:CMAKE_TOOLCHAIN_FILE" -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET"
 
       - name: Build Opus (RADE dependency)
         # ExternalProject dependency ordering via BUILD_BYPRODUCTS is correct,
