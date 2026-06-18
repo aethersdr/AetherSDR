@@ -60,6 +60,11 @@ public:
     // instant local silence.  The worker stays alive for the next send.
     void stop();
 
+    // Not thread-safe: reads worker-owned schedule state without a lock, so it
+    // is for the synchronous drift test / diagnostics only and must not be
+    // called from another thread while the worker is running (it would race
+    // scheduleNext()). Route through m_mu if ever promoted to a live
+    // cross-thread query. (#3623 review)
     bool isIdle() const { return m_elements.isEmpty() && !m_running; }
 
 protected:
