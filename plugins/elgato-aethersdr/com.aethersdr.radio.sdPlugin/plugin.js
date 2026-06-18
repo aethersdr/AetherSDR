@@ -63,7 +63,7 @@ function parseTci(msg) {
             case "vfo":          if (p.length >= 3) radio.frequency = parseInt(p[2]); break;
             case "modulation":   if (p.length >= 2) radio.mode = p[1]; break;
             case "trx":          if (p.length >= 2) radio.transmitting = p[1] === "true"; break;
-            case "tune":         if (p.length >= 1) radio.tuning = p[0] === "true"; break;
+            case "tune":         if (p.length >= 2) radio.tuning = p[1] === "true"; break;
             case "mute":         if (p.length >= 2) radio.muted = p[1] === "true"; break;
             case "volume":       if (p.length >= 1) radio.volume = parseInt(p[0]); break;
             case "drive":        if (p.length >= 1) radio.rfPower = parseInt(p[0]); break;
