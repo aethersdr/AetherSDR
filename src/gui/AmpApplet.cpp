@@ -9,8 +9,16 @@
 
 namespace AetherSDR {
 
-namespace {
 
+namespace {
+QString fanModeLabel(const QString& mode)
+{
+    if (mode == "STANDARD") return "Fan: Std";
+    if (mode == "CONTEST") return "Fan: Contest";
+    if (mode == "BROADCAST") return "Fan: Bcast";
+
+    return "Fan";
+}
 // Left-side label that shows the field name + live value ("PWR 1148").
 // Fixed width so all three gauge rows line up.
 QLabel* makeValueLabel(QWidget* parent)
@@ -113,7 +121,7 @@ AmpApplet::AmpApplet(QWidget* parent)
 
     // Fan speed cycle button — single letter: S (STANDARD), C (CONTEST), B (BROADCAST).
     // Hidden until a direct PGXL connection delivers the first fanmode status.
-    m_fanBtn = new QPushButton(m_fanMode.left(1));
+    m_fanBtn = new QPushButton(fanModeLabel(m_fanMode));
     m_fanBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_fanBtn->setFocusPolicy(Qt::TabFocus);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_fanBtn, kBtnStyle);
@@ -129,7 +137,7 @@ AmpApplet::AmpApplet(QWidget* parent)
             idx = -1; // (-1 + 1) % 3 == 0 == STANDARD
         }
         m_fanMode = kModes[(idx + 1) % kModes.size()];
-        m_fanBtn->setText(m_fanMode.left(1));
+        m_fanBtn->setText(fanModeLabel(m_fanMode));
         m_fanBtn->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
         emit fanModeChanged(m_fanMode);
     });
@@ -264,7 +272,7 @@ void AmpApplet::setMainsVoltage(int volts)
 void AmpApplet::setFanMode(const QString& mode)
 {
     m_fanMode = mode.toUpper();
-    m_fanBtn->setText(m_fanMode.left(1));
+    m_fanBtn->setText(fanModeLabel(m_fanMode));
     m_fanBtn->setAccessibleName(QString("Fan speed: %1").arg(m_fanMode));
     m_fanBtn->show();
 }
