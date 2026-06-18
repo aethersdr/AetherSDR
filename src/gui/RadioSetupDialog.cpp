@@ -601,12 +601,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
             "QPushButton { background: #3a1a1a; color: #ffb080; border: 1px solid #6e3030;"
             " border-radius: 3px; font-size: 11px; font-weight: bold; padding: 3px 10px; }"
             "QPushButton:hover { background: #4a2020; }"
-            // Disabled (radio disconnected/reconnecting): keep the button clearly
-            // visible as a greyed-out control. The previous tokens
-            // (background.1 / meter.bar.fill / background.2) were all dim blue-greys
-            // that blended into the dialog, making the button look absent rather
-            // than disabled (#3334 follow-up).
-            "QPushButton:disabled { background: #2a1818; color: #8a6055; border-color: #4a2828; }");
+            "QPushButton:disabled { background: {{color.button.danger.background.disabled}}; color: {{color.button.danger.foreground.disabled}}; border-color: {{color.button.danger.border.disabled}}; }");
         // Only enable when actually connected; subscribe so disconnect/reconnect
         // disables/re-enables the button without the user having to reopen the
         // dialog. rebootRadio() also early-returns on disconnected, but the
@@ -843,7 +838,7 @@ QWidget* RadioSetupDialog::buildRadioTab()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_fwUploadBtn, "QPushButton { background: #1a3a1a; color: #80e080; border: 1px solid #2e6e2e;"
             " border-radius: 3px; padding: 4px 8px; }"
             "QPushButton:hover { background: #2a4a2a; }"
-            "QPushButton:disabled { background: #1a1a2a; color: {{color.meter.bar.fill}}; border-color: {{color.background.1}}; }");
+            "QPushButton:disabled { background: {{color.button.background.disabled}}; color: {{color.button.foreground.disabled}}; border-color: {{color.button.border.disabled}}; }");
         btnRow->addWidget(m_fwUploadBtn);
         vlay->addLayout(btnRow);
 
@@ -4059,16 +4054,16 @@ QWidget* RadioSetupDialog::buildSerialTab()
             "QPushButton { background: #00b4d8; color: #0f0f1a; font-weight: bold; "
             "border: 1px solid #008ba8; padding: 3px; border-radius: 3px; }"
             "QPushButton:hover { background: #00c8f0; }"
-            "QPushButton:disabled { background: #203040; color: #506070; border-color: #304050; }";
+            "QPushButton:disabled { background: {{color.button.background.disabled}}; color: {{color.button.foreground.disabled}}; border-color: {{color.button.border.disabled}}; }";
 
         auto* openBtn = new QPushButton("Open");
         // Min-width rather than fixed-width: macOS native button metrics need
         // more horizontal room than the 80 px Windows/Fusion baseline.
         openBtn->setMinimumWidth(80);
-        openBtn->setStyleSheet(btnStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(openBtn, btnStyle);
         auto* closeBtn = new QPushButton("Close");
         closeBtn->setMinimumWidth(80);
-        closeBtn->setStyleSheet(btnStyle);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(closeBtn, btnStyle);
 
         auto* statusLabel = new QLabel;
         statusLabel->setStyleSheet("QLabel { font-size: 11px; }");

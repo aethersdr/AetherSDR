@@ -2,6 +2,7 @@
 
 #include "FreeDvReporterModel.h"
 #include "core/MaidenheadLocator.h"
+#include "core/ThemeManager.h"
 
 #include <QBrush>
 #include <QDateTime>
@@ -9,16 +10,7 @@
 
 namespace AetherSDR {
 
-// ── Highlight colour palette ─────────────────────────────────────────────────
-// Matches freedv-gui reference (freedv_reporter.cpp / ReportingConfiguration.cpp).
-// TX orange / RX teal / Msg purple — all with black foreground for contrast.
 namespace {
-
-// Row highlight colors — match freedv-gui reference palette.
-const QColor kTxBg {0xfc, 0x45, 0x00};   // orange  (#fc4500)
-const QColor kRxBg {0x37, 0x9b, 0xaf};   // teal    (#379baf)
-const QColor kMsgBg{0xe5, 0x8b, 0xe5};   // purple  (#e58be5)
-const QColor kHlFg {0x00, 0x00, 0x00};   // black foreground on all highlights
 
 // Timeouts (seconds)
 constexpr int kRxSec  = 5;  // RX highlight expires 5s after last rx_report
@@ -36,6 +28,14 @@ FreeDvReporterModel::FreeDvReporterModel(QObject* parent)
     connect(m_highlightTimer, &QTimer::timeout,
             this, &FreeDvReporterModel::onHighlightTick);
     m_highlightTimer->start();
+
+    connect(&ThemeManager::instance(), &ThemeManager::themeChanged,
+            this, [this] {
+                if (!m_rows.isEmpty())
+                    emit dataChanged(index(0, 0),
+                                     index(m_rows.size() - 1, Col::Count - 1),
+                                     {Qt::BackgroundRole, Qt::ForegroundRole});
+            });
 }
 
 // ── QAbstractTableModel overrides ────────────────────────────────────────────
@@ -106,16 +106,19 @@ QVariant FreeDvReporterModel::data(const QModelIndex& index, int role) const
 
     if (role == Qt::BackgroundRole) {
         if (info.status == u"TX")
-            return QBrush(kTxBg);
+            return QBrush(ThemeManager::instance().color(QStringLiteral("color.highlight.tx")));
         if (isHighlightActive(row)) {
-            return QBrush(row.highlightType == HighlightType::RX ? kRxBg : kMsgBg);
+            const QString token = row.highlightType == HighlightType::RX
+                                  ? QStringLiteral("color.highlight.rx")
+                                  : QStringLiteral("color.highlight.message");
+            return QBrush(ThemeManager::instance().color(token));
         }
         return {};
     }
 
     if (role == Qt::ForegroundRole) {
         if (info.status == u"TX" || isHighlightActive(row))
-            return QBrush(kHlFg);
+            return QBrush(ThemeManager::instance().color(QStringLiteral("color.highlight.fg")));
         return {};
     }
 

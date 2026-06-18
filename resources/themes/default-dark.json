@@ -202,6 +202,20 @@
             "warning.background.checked": "#5a3a0a",
             "warning.foreground.checked": "{color.amber.500}",
             "warning.border.checked":     "{color.amber.500}"
+          },
+          "highlight": {
+            "tx":      "#fc4500",
+            "rx":      "#379baf",
+            "message": "#e58be5",
+            "fg":      "#000000"
+          },
+          "button": {
+            "background.disabled":        "#203040",
+            "foreground.disabled":        "{color.gray.500}",
+            "border.disabled":            "{color.gray.700}",
+            "danger.background.disabled": "#2a1818",
+            "danger.foreground.disabled": "#8a6055",
+            "danger.border.disabled":     "#4a2828"
           }
         },
         "font": {
