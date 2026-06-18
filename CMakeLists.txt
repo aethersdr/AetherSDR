@@ -2331,6 +2331,21 @@ target_link_libraries(container_widget_test PRIVATE
 )
 set_target_properties(container_widget_test PROPERTIES AUTOMOC ON)
 
+add_executable(amp_applet_test
+    tests/amp_applet_test.cpp
+    src/gui/AmpApplet.cpp
+    src/core/AppSettings.cpp
+    src/core/ThemeManager.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(amp_applet_test PRIVATE src)
+target_link_libraries(amp_applet_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(amp_applet_test PROPERTIES AUTOMOC ON)
+add_test(NAME amp_applet_test COMMAND amp_applet_test)
+
 add_executable(container_manager_test
     tests/container_manager_test.cpp
     src/gui/FramelessResizer.cpp

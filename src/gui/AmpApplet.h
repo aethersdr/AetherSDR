@@ -45,7 +45,7 @@ private:
     QLabel*  m_idLabel{nullptr};    // "Id   39"
 
     // Right-side info column (one per gauge row)
-    QLabel*  m_tempLabel{nullptr};  // "34.7/28.4 C"  (beside PWR row)
+    QPushButton* m_tempBtn{nullptr}; // "34.7/28.4 C"  (click to toggle C/F)
     QLabel*  m_vddLabel{nullptr};   // "Vdd  50.0 V"  (beside SWR row)
     QLabel*  m_vacLabel{nullptr};   // "Vac   240 V"  (beside Id  row)
     QLabel*  m_sourceLabel{nullptr}; // "● DIRECT" or "● RADIO"
@@ -67,7 +67,9 @@ private:
     float    m_drainAmps{0.0f};
     float    m_tempA{0.0f};
     float    m_tempB{0.0f};
+    bool     m_hasTempA{false};
     bool     m_hasTempB{false};
+    bool     m_tempFahrenheit{false};
     int      m_mainsVolts{0};
 
     void updateValueLabels();

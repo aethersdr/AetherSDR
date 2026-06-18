@@ -1,9 +1,13 @@
 #include "AmpApplet.h"
 #include "HGauge.h"
+#include "core/AppSettings.h"
 
+#include <QAccessible>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include "core/ThemeManager.h"
 #include "MeterSmoother.h"
 
@@ -20,6 +24,57 @@ QLabel* makeValueLabel(QWidget* parent)
     lbl->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     lbl->setStyleSheet("QLabel { color: #c8d8e8; font-size: 11px; font-weight: bold; }");
     return lbl;
+}
+
+constexpr const char* kAmpAppletSettingsKey = "AmpApplet";
+constexpr const char* kTempFahrenheitField = "tempFahrenheit";
+
+QJsonObject readAmpAppletSettings()
+{
+    const QString json = AppSettings::instance()
+        .value(kAmpAppletSettingsKey, QString{}).toString();
+    if (json.isEmpty()) {
+        return {};
+    }
+
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    return doc.isObject() ? doc.object() : QJsonObject{};
+}
+
+void writeAmpAppletSettings(const QJsonObject& obj)
+{
+    auto& settings = AppSettings::instance();
+    settings.setValue(kAmpAppletSettingsKey,
+        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    settings.save();
+}
+
+bool readTempFahrenheit()
+{
+    return readAmpAppletSettings()
+        .value(kTempFahrenheitField)
+        .toString(QStringLiteral("False")) == QStringLiteral("True");
+}
+
+void writeTempFahrenheit(bool enabled)
+{
+    QJsonObject obj = readAmpAppletSettings();
+    obj[kTempFahrenheitField] =
+        enabled ? QStringLiteral("True") : QStringLiteral("False");
+    writeAmpAppletSettings(obj);
+}
+
+float displayTemp(float degC, bool fahrenheit)
+{
+    if (!fahrenheit) {
+        return degC;
+    }
+    return degC * 9.0f / 5.0f + 32.0f;
+}
+
+QString formatTemp(float degC, bool fahrenheit)
+{
+    return QStringLiteral("%1").arg(displayTemp(degC, fahrenheit), 0, 'f', 1);
 }
 
 } // namespace
@@ -81,8 +136,27 @@ AmpApplet::AmpApplet(QWidget* parent)
     //   left of the OPERATE/STANDBY button.
     static const char* kTelStyle = "QLabel { color: #c8d8e8; font-size: 10px; }";
 
-    m_tempLabel = new QLabel("— C", this);
-    m_tempLabel->setStyleSheet(kTelStyle);
+    m_tempFahrenheit = readTempFahrenheit();
+
+    m_tempBtn = new QPushButton(this);
+    m_tempBtn->setObjectName(QStringLiteral("ampTempUnitButton"));
+    m_tempBtn->setFlat(true);
+    m_tempBtn->setFocusPolicy(Qt::TabFocus);
+    m_tempBtn->setCursor(Qt::PointingHandCursor);
+    m_tempBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
+    m_tempBtn->setMinimumWidth(76);
+    m_tempBtn->setAccessibleDescription("Toggles amplifier temperature between Celsius and Fahrenheit");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_tempBtn,
+        "QPushButton { background: transparent; border: 1px solid transparent; "
+        "color: #c8d8e8; font-size: 10px; text-align: left; padding: 0 2px; }"
+        "QPushButton:hover { border-color: #203040; color: #ffffff; }"
+        "QPushButton:focus { border-color: #00b4d8; }");
+    connect(m_tempBtn, &QPushButton::clicked, this, [this]() {
+        m_tempFahrenheit = !m_tempFahrenheit;
+        writeTempFahrenheit(m_tempFahrenheit);
+        updateTempLabel();
+    });
+    updateTempLabel();
 
     m_vddLabel = new QLabel("Vdd  — V", this);
     m_vddLabel->setStyleSheet(kTelStyle);
@@ -96,7 +170,7 @@ AmpApplet::AmpApplet(QWidget* parent)
     auto* infoStack = new QVBoxLayout;
     infoStack->setSpacing(0);
     infoStack->setContentsMargins(0, 0, 0, 0);
-    infoStack->addWidget(m_tempLabel);
+    infoStack->addWidget(m_tempBtn);
     infoStack->addWidget(m_vddLabel);
     infoStack->addWidget(m_vacLabel);
     infoStack->addWidget(m_sourceLabel);
@@ -193,6 +267,7 @@ void AmpApplet::setSwr(float swr)
 void AmpApplet::setTemp(float degC)
 {
     m_tempA = degC;
+    m_hasTempA = true;
     updateTempLabel();
 }
 
@@ -205,14 +280,38 @@ void AmpApplet::setTempB(float degC)
 
 void AmpApplet::updateTempLabel()
 {
-    if (m_hasTempB)
-        m_tempLabel->setText(
-            QStringLiteral("%1/%2 C")
-                .arg(m_tempA, 0, 'f', 1)
-                .arg(m_tempB, 0, 'f', 1));
-    else
-        m_tempLabel->setText(
-            QStringLiteral("%1 C").arg(m_tempA, 0, 'f', 1));
+    if (!m_tempBtn) {
+        return;
+    }
+
+    const QString tempA = m_hasTempA
+        ? formatTemp(m_tempA, m_tempFahrenheit)
+        : QStringLiteral("\u2014");
+    const QString unit = m_tempFahrenheit
+        ? QStringLiteral("F")
+        : QStringLiteral("C");
+
+    if (m_hasTempB) {
+        m_tempBtn->setText(
+            QStringLiteral("%1/%2 %3")
+                .arg(tempA)
+                .arg(formatTemp(m_tempB, m_tempFahrenheit))
+                .arg(unit));
+    } else {
+        m_tempBtn->setText(QStringLiteral("%1 %2").arg(tempA).arg(unit));
+    }
+
+    const QString nextUnit = m_tempFahrenheit
+        ? tr("Celsius")
+        : tr("Fahrenheit");
+    m_tempBtn->setToolTip(
+        tr("Amplifier temperature\nClick to show degrees %1").arg(nextUnit));
+    m_tempBtn->setAccessibleName(
+        tr("Amplifier temperature %1").arg(m_tempBtn->text()));
+    if (QAccessible::isActive()) {
+        QAccessibleEvent event(m_tempBtn, QAccessible::NameChanged);
+        QAccessible::updateAccessibility(&event);
+    }
 }
 
 void AmpApplet::setDrainCurrent(float amps)
