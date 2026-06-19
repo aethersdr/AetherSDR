@@ -1,4 +1,5 @@
 #include "CwSidetoneQAudioSink.h"
+#include "AudioDeviceNegotiator.h"
 #include "CwSidetoneGenerator.h"
 #include "LogManager.h"
 
@@ -39,32 +40,35 @@ bool CwSidetoneQAudioSink::start(const QAudioDevice& device,
     }
     m_deviceDescription = dev.description();
 
-    const int kCandidateRates[] = { desiredRateHz > 0 ? desiredRateHz : 48000,
-                                    48000, 44100, 24000 };
+    // Negotiate the output format via the shared factory (#3306, Phase 6c). The
+    // sidetone generator retunes to the negotiated rate (RegenerateAtRate) and
+    // the tick handles both Float and Int16, so we walk the default Float-first
+    // ladder — Int16 is the VB-Audio / Int16-only-WASAPI fallback (#2629) — and
+    // take the first rung the device supports. The factory supplies the per-OS
+    // preferred rate plus the 44.1k and preferredFormat fallbacks in one place.
     QAudioFormat fmt;
-    fmt.setChannelCount(2);
-
-    // Probe Float first (the historical path), then Int16. VB-Audio Virtual
-    // Cable and other Int16-only WASAPI endpoints fail the Float probe but
-    // succeed at Int16; without the fallback the sidetone sink silently
-    // refuses to open against SmartSDR-parity output devices (issue #2629).
     int chosenRate = 0;
     QAudioFormat::SampleFormat chosenFmt = QAudioFormat::Unknown;
-    for (auto sf : { QAudioFormat::Float, QAudioFormat::Int16 }) {
-        fmt.setSampleFormat(sf);
-        for (int rate : kCandidateRates) {
-            fmt.setSampleRate(rate);
-            if (dev.isFormatSupported(fmt)) { chosenRate = rate; chosenFmt = sf; break; }
+    const QList<QAudioFormat> ladder = AudioDeviceNegotiator::formatLadder(
+        dev, AudioFormatNegotiator::Direction::Output,
+        AudioFormatNegotiator::ResamplerPolicy::RegenerateAtRate);
+    for (const QAudioFormat& cand : ladder) {
+        QAudioFormat c = cand;
+        c.setChannelCount(2);
+        if (c.sampleFormat() != QAudioFormat::Float && c.sampleFormat() != QAudioFormat::Int16)
+            continue;   // the sidetone tick only knows Float / Int16
+        if (dev.isFormatSupported(c)) {
+            fmt = c;
+            chosenRate = c.sampleRate();
+            chosenFmt = c.sampleFormat();
+            break;
         }
-        if (chosenRate) break;
     }
     if (chosenRate == 0) {
         qCWarning(lcAudio) << "CwSidetoneQAudioSink: no supported float/int16-stereo rate on device"
                            << dev.description();
         return false;
     }
-    fmt.setSampleFormat(chosenFmt);
-    fmt.setSampleRate(chosenRate);
     m_actualRate   = chosenRate;
     m_sampleFormat = chosenFmt;
     if (chosenRate != (desiredRateHz > 0 ? desiredRateHz : 48000)
