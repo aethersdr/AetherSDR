@@ -468,6 +468,15 @@ void SliceModel::setFmDeviation(int hz)
 void SliceModel::setAudioGain(float gain)
 {
     gain = qBound(0.0f, gain, 100.0f);
+    if (m_externalReceiveAudioReplacement) {
+        if (m_externalReceiveAudioGain == gain) {
+            return;
+        }
+        m_externalReceiveAudioGain = gain;
+        emit audioGainChanged(m_externalReceiveAudioGain);
+        return;
+    }
+
     if (m_audioGain == gain) return;
     m_audioGain = gain;
     emit commandReady(QString("slice set %1 audio_level=%2")
@@ -483,10 +492,54 @@ void SliceModel::setRfGain(float gain)
 
 void SliceModel::setAudioMute(bool mute)
 {
+    const bool previousVisibleMute = audioMute();
+    if (m_externalReceiveAudioReplacement) {
+        if (m_externalReceiveAudioMute == mute) {
+            return;
+        }
+        m_externalReceiveAudioMute = mute;
+        if (audioMute() != previousVisibleMute) {
+            emit audioMuteChanged(audioMute());
+        }
+        return;
+    }
+
     if (m_audioMute == mute) return;
     m_audioMute = mute;
     sendCommand(QString("slice set %1 audio_mute=%2").arg(m_id).arg(mute ? 1 : 0));
-    emit audioMuteChanged(mute);
+    if (audioMute() != previousVisibleMute) {
+        emit audioMuteChanged(audioMute());
+    }
+}
+
+void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
+                                                        bool restoreMute)
+{
+    const bool previousVisibleMute = audioMute();
+    const float previousVisibleGain = audioGain();
+    if (active) {
+        m_externalReceiveAudioGain = m_audioGain;
+        m_externalReceiveAudioMute = false;
+        m_externalReceiveAudioReplacement = true;
+        if (!m_audioMute) {
+            m_audioMute = true;
+            sendCommand(QString("slice set %1 audio_mute=1").arg(m_id));
+        }
+    } else {
+        m_externalReceiveAudioReplacement = false;
+        if (m_audioMute != restoreMute) {
+            m_audioMute = restoreMute;
+            sendCommand(QString("slice set %1 audio_mute=%2")
+                            .arg(m_id)
+                            .arg(restoreMute ? 1 : 0));
+        }
+    }
+    if (audioMute() != previousVisibleMute) {
+        emit audioMuteChanged(audioMute());
+    }
+    if (audioGain() != previousVisibleGain) {
+        emit audioGainChanged(audioGain());
+    }
 }
 
 void SliceModel::setDiversity(bool on)
@@ -646,7 +699,13 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
     }
     if (kvs.contains("audio_level")) {
         float g = kvs["audio_level"].toFloat();
-        if (m_audioGain != g) { m_audioGain = g; emit audioGainChanged(g); }
+        if (m_audioGain != g) {
+            const float previousVisibleGain = audioGain();
+            m_audioGain = g;
+            if (audioGain() != previousVisibleGain) {
+                emit audioGainChanged(audioGain());
+            }
+        }
     }
     if (kvs.contains("audio_pan")) {
         m_audioPan = kvs["audio_pan"].toInt();
@@ -655,16 +714,30 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
     if (kvs.contains("audio_mute")) {
         bool mute = kvs["audio_mute"] == "1";
         if (mute != m_audioMute) {
+            const bool previousVisibleMute = audioMute();
             m_audioMute = mute;
-            emit audioMuteChanged(mute);
+            if (m_externalReceiveAudioReplacement && !m_audioMute) {
+                m_audioMute = true;
+                sendCommand(QString("slice set %1 audio_mute=1").arg(m_id));
+            }
+            if (audioMute() != previousVisibleMute) {
+                emit audioMuteChanged(audioMute());
+            }
         }
     } else if (kvs.value("in_use") == "1" && m_audioMute) {
         // Full status w/o audio_mute key → radio reset to default (0)
         // on (re)connect. Resync so UI doesn't show a stale 🔇 while
         // audio is actually playing. Radio does not persist audio_mute
         // (see MainWindow.cpp migration note ~line 1264).
-        m_audioMute = false;
-        emit audioMuteChanged(false);
+        if (m_externalReceiveAudioReplacement) {
+            sendCommand(QString("slice set %1 audio_mute=1").arg(m_id));
+        } else {
+            const bool previousVisibleMute = audioMute();
+            m_audioMute = false;
+            if (audioMute() != previousVisibleMute) {
+                emit audioMuteChanged(audioMute());
+            }
+        }
     }
     // Parse child/parent flags before emitting diversityChanged so handlers
     // can check isDiversityChild() to gate ESC panel visibility.

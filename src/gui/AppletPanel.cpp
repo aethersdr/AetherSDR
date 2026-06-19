@@ -30,6 +30,7 @@
 #include "ShackSwitchApplet.h"
 #include "MeterApplet.h"
 #include "HealthApplet.h"
+#include "KiwiSdrApplet.h"
 #ifdef HAVE_RADE
 #include "RadeApplet.h"
 #endif
@@ -71,7 +72,7 @@
 namespace AetherSDR {
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "HLTH", "AG", "SS"
+    "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "KSDR", "HLTH", "AG", "SS"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -854,6 +855,10 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
 
     m_meterApplet = new MeterApplet;
     m_appletOrder.append(makeEntry("MTR", "Meters", m_meterApplet, false, m_drawer, m_drawerLayout));
+
+    m_kiwiSdrApplet = new KiwiSdrApplet;
+    m_appletOrder.append(makeEntry("KSDR", "KiwiSDR", m_kiwiSdrApplet, false,
+                                   m_drawer, m_drawerLayout));
 
 #ifdef HAVE_RADE
     m_radeApplet = new RadeApplet;

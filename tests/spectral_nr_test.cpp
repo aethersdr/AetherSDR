@@ -7,6 +7,7 @@
 
 #include "core/SpectralNR.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <numbers>
@@ -217,6 +218,59 @@ void test_gain_finiteness()
     report("gain_finiteness: no NaN/Inf in 1000 hops of 1 kHz full-scale sine", nanCount == 0, detail);
 }
 
+std::vector<float> buildSyntheticAudio(int samples)
+{
+    constexpr int sampleRate = 24000;
+    std::vector<float> audio(samples);
+    for (int i = 0; i < samples; ++i) {
+        const double t = static_cast<double>(i) / sampleRate;
+        audio[i] = static_cast<float>(
+            0.30 * std::sin(2.0 * std::numbers::pi * 720.0 * t)
+          + 0.18 * std::sin(2.0 * std::numbers::pi * 1740.0 * t)
+          + 0.04 * std::sin(2.0 * std::numbers::pi * 43.0 * t));
+    }
+    return audio;
+}
+
+std::vector<float> processWithBlockSize(const std::vector<float>& input,
+                                        int blockSamples)
+{
+    SpectralNR nr;
+    nr.setGainMethod(2);
+
+    std::vector<float> output(input.size());
+    int offset = 0;
+    while (offset < static_cast<int>(input.size())) {
+        const int count = std::min(blockSamples,
+                                   static_cast<int>(input.size()) - offset);
+        nr.process(input.data() + offset, output.data() + offset, count);
+        offset += count;
+    }
+    return output;
+}
+
+void test_block_size_invariance()
+{
+    // KiwiSDR audio arrives in packet-sized bursts, while native Flex RX audio
+    // typically reaches NR2 at the 128-sample hop cadence. NR2 must produce the
+    // same stream either way; otherwise burst-sized calls can wrap the OLA ring
+    // and sound like rapid periodic audio gaps.
+    const std::vector<float> input = buildSyntheticAudio(24000);
+    const std::vector<float> hopOutput = processWithBlockSize(input, 128);
+    const std::vector<float> packetOutput = processWithBlockSize(input, 1024);
+
+    double maxAbsDiff = 0.0;
+    for (std::size_t i = 0; i < hopOutput.size(); ++i) {
+        maxAbsDiff = std::max(maxAbsDiff,
+                              static_cast<double>(std::abs(hopOutput[i] - packetOutput[i])));
+    }
+
+    char detail[96];
+    std::snprintf(detail, sizeof(detail), " (max abs diff: %.3e)", maxAbsDiff);
+    report("block_size_invariance: 1024-sample packets match 128-sample hops",
+           maxAbsDiff < 1e-7, detail);
+}
+
 void test_gain_formula_extreme_v()
 {
     // Directly verify the Ephraim-Malah gain formula at v values that caused
@@ -277,6 +331,9 @@ int main()
 
     std::printf("\n-- Gain finiteness (1000 hops, full-scale 1 kHz sine) --\n");
     test_gain_finiteness();
+
+    std::printf("\n-- Block-size invariance (Kiwi packet cadence regression) --\n");
+    test_block_size_invariance();
 
     std::printf("\n-- Gain formula at extreme v (NaN-clamp regression) --\n");
     test_gain_formula_extreme_v();

@@ -80,6 +80,8 @@
 #include "core/CwSidetoneGenerator.h"
 #include "core/CwxLocalKeyer.h"
 #include "core/IambicKeyer.h"
+#include "core/KiwiSdrClient.h"
+#include "core/KiwiSdrManager.h"
 #include "CatControlApplet.h"
 #include "DaxApplet.h"
 #include "TciApplet.h"
@@ -1088,6 +1090,9 @@ MainWindow::MainWindow(QWidget* parent)
     m_bandPlanMgr = new BandPlanManager(this);
     m_bandPlanMgr->loadPlans();
 
+    m_kiwiSdrManager = new KiwiSdrManager(this);
+    m_kiwiSdrManager->setOperatorCallsign(m_radioModel.callsign());
+
     // UpdateChecker — must be created before buildMenuBar() which references it
     m_updateChecker = new UpdateChecker(this);
     connect(m_updateChecker, &UpdateChecker::updateAvailable, this, [this](const QString& ver) {
@@ -1240,6 +1245,10 @@ MainWindow::MainWindow(QWidget* parent)
     // audioDataReady(); we feed that directly to the QAudioSink.
     connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
             m_audio, &AudioEngine::feedAudioData);
+
+    // KiwiSDR is a receive-only alternate source for the active slice.
+    // Wiring is local-only: no Flex radio commands are sent from this path.
+    wireKiwiSdr();
 
     // ── QSO recorder: tap RX audio + TX monitor, trigger on MOX (#1297) ────
     // RX (float32) comes from the panadapter stream; TX (int16 post-limiter
@@ -1958,6 +1967,29 @@ MainWindow::~MainWindow()
 {
     qApp->removeEventFilter(this);
     preparePanadapterUiForShutdown();
+
+    // KiwiSDR clients are QObject children, but their disconnect path emits
+    // state changes that are wired back into MainWindow and AudioEngine. Tear
+    // them down while MainWindow members are still alive instead of waiting for
+    // QWidget child cleanup after member destruction.
+    if (m_kiwiSdrClient) {
+        QObject::disconnect(m_kiwiSdrClient, nullptr, this, nullptr);
+        if (m_audio) {
+            QObject::disconnect(m_kiwiSdrClient, nullptr, m_audio, nullptr);
+        }
+        m_kiwiSdrClient->disconnectFromEndpoint();
+        delete m_kiwiSdrClient;
+        m_kiwiSdrClient = nullptr;
+    }
+    if (m_kiwiSdrManager) {
+        QObject::disconnect(m_kiwiSdrManager, nullptr, this, nullptr);
+        if (m_audio) {
+            QObject::disconnect(m_kiwiSdrManager, nullptr, m_audio, nullptr);
+        }
+        m_kiwiSdrManager->disconnectAll();
+        delete m_kiwiSdrManager;
+        m_kiwiSdrManager = nullptr;
+    }
 
     // Stop the CWX sidetone keyer (its own worker thread) before AudioEngine is
     // torn down below — its onKeyDownChange callback touches m_audio->cwSidetone()
@@ -5888,6 +5920,9 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     }
     m_appletPanel->setSlice(s);
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), sliceId);
+    refreshKiwiSdrSlices();
+    syncKiwiSdrTrackingToActiveSlice();
+    refreshKiwiSdrWaterfallAvailability();
     // Sync squelch line to newly active slice (handles slice switch without waiting
     // for squelchChanged signal)
     if (auto* sw2 = spectrumForSlice(s))
@@ -6127,6 +6162,9 @@ void MainWindow::reassertUnmutedSliceAudioForPan(const QString& panId)
 void MainWindow::onMuteAllSlicesToggle()
 {
     const auto slices = m_radioModel.slices();
+    const auto kiwiOwnsSliceMute = [this](const SliceModel* s) {
+        return s && s->sliceId() == m_kiwiSdrAudioSliceId;
+    };
 
     // Determine intent: mute all if any owned slice is currently unmuted,
     // otherwise unmute all.  RadioModel::slices() returns only owned slices
@@ -6136,6 +6174,7 @@ void MainWindow::onMuteAllSlicesToggle()
 #ifdef HAVE_RADE
         if (s && s->sliceId() == m_radeSliceId) continue;  // RADE owns its mute
 #endif
+        if (kiwiOwnsSliceMute(s)) continue;  // Kiwi Audio owns its replaced slice
         if (s && !s->audioMute()) { anyUnmuted = true; break; }
     }
 
@@ -6148,6 +6187,7 @@ void MainWindow::onMuteAllSlicesToggle()
         //   corrupt m_radePrevMute's restore value on deactivateRADE().
         if (s && s->sliceId() == m_radeSliceId) continue;
 #endif
+        if (kiwiOwnsSliceMute(s)) continue;
         if (s) s->setAudioMute(anyUnmuted);
     }
 }

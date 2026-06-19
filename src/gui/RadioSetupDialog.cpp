@@ -6,9 +6,11 @@
 #include "models/RadioModel.h"
 #include "models/XvtrPolicy.h"
 #include "core/AppSettings.h"
+#include "core/KiwiSdrManager.h"
 #include "core/LogManager.h"
 #include "core/PeripheralSettings.h"
 #include <QApplication>
+#include <QAbstractItemView>
 #include <QSysInfo>
 #include "core/AudioEngine.h"
 #ifdef HAVE_SERIALPORT
@@ -29,6 +31,7 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QFrame>
 #include <QHeaderView>
 #include <QTableWidget>
 #include <QTableWidgetItem>
@@ -56,6 +59,7 @@
 #include <QProcess>
 #include <QListWidget>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QPlainTextEdit>
 #include <QSplitter>
 #include <QScrollArea>
@@ -94,6 +98,23 @@ static const QString kValueStyle =
 static const QString kEditStyle =
     "QLineEdit { background: #1a2a3a; border: 1px solid #304050; "
     "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 2px 4px; }";
+
+static const QString kKiwiRowStyle =
+    "QFrame#kiwiAntennaRow { background: #101622; border: 1px solid #203040; "
+    "border-radius: 3px; }";
+
+static const QString kKiwiActionButtonStyle =
+    "QPushButton { background: #183548; border: 1px solid #28506a; "
+    "border-radius: 4px; color: #d6e7f5; font-size: 12px; "
+    "font-weight: bold; padding: 4px 10px; }"
+    "QPushButton:hover { background: #20465e; }"
+    "QPushButton:pressed { background: #132c3d; }";
+
+static const QString kKiwiIconButtonStyle =
+    "QPushButton { background: #183548; border: 1px solid #28506a; "
+    "border-radius: 4px; padding: 3px; }"
+    "QPushButton:hover { background: #20465e; }"
+    "QPushButton:pressed { background: #132c3d; }";
 
 static constexpr int kInfoLeftLabelWidth = 112;
 static constexpr int kInfoRightLabelWidth = 160;
@@ -435,11 +456,14 @@ static void refreshOscillatorSourceCombo(QComboBox* combo, const RadioModel* mod
 
 RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
                                    TgxlConnection* tgxl, PgxlConnection* pgxl,
-                                   AntennaGeniusModel* ag, QWidget* parent)
+                                   AntennaGeniusModel* ag,
+                                   KiwiSdrManager* kiwiSdrManager,
+                                   QWidget* parent)
     : PersistentDialog(QStringLiteral("Radio Setup"),
                        QStringLiteral("RadioSetupDialogGeometry"), parent),
       m_model(model), m_audio(audio),
-      m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag)
+      m_tgxl(tgxl), m_pgxl(pgxl), m_ag(ag),
+      m_kiwiSdrManager(kiwiSdrManager)
 {
     theme::setContainer(this, QStringLiteral("dialog/radioSetup"));
     setMinimumSize(820, 620);
@@ -2953,6 +2977,35 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
     groupLayout->addWidget(scroll);
     vbox->addWidget(group, 1);
 
+    QVBoxLayout* kiwiRowsLayout = nullptr;
+
+    if (m_kiwiSdrManager) {
+        auto* kiwiGroup = new QGroupBox("KiwiSDR RX Antennas");
+        kiwiGroup->setStyleSheet(kGroupStyle);
+        auto* kiwiLayout = new QVBoxLayout(kiwiGroup);
+        kiwiLayout->setSpacing(6);
+
+        auto* kiwiScroll = new QScrollArea;
+        kiwiScroll->setWidgetResizable(true);
+        kiwiScroll->setFrameShape(QFrame::NoFrame);
+        kiwiScroll->setMinimumHeight(190);
+        kiwiScroll->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::MinimumExpanding);
+        kiwiScroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+        kiwiScroll->setAccessibleName("KiwiSDR RX antennas");
+        kiwiScroll->setAccessibleDescription(
+            "Configured KiwiSDR receive-only antenna endpoints.");
+
+        auto* kiwiRowsWidget = new QWidget;
+        kiwiRowsWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+        kiwiRowsLayout = new QVBoxLayout(kiwiRowsWidget);
+        kiwiRowsLayout->setContentsMargins(8, 4, 8, 4);
+        kiwiRowsLayout->setSpacing(6);
+        kiwiRowsLayout->setAlignment(Qt::AlignTop);
+        kiwiScroll->setWidget(kiwiRowsWidget);
+        kiwiLayout->addWidget(kiwiScroll);
+        vbox->addWidget(kiwiGroup, 0);
+    }
+
     // Antenna display names are intentionally local to AetherSDR. FlexLib exposes
     // canonical RX/TX antenna lists and rxant/txant setters, but no verified
     // writable display-name API; radio commands must keep using ANT1/XVTR/etc.
@@ -3053,7 +3106,262 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             [scheduleRefresh](const QStringList&) { scheduleRefresh(); });
     connect(m_model, &RadioModel::antennaAliasesChanged, this, scheduleRefresh);
 
+    auto refreshKiwi = std::make_shared<std::function<void()>>();
+    if (m_kiwiSdrManager && kiwiRowsLayout) {
+        auto stateText = [this](const QString& id) {
+            const KiwiSdrClient::State state = m_kiwiSdrManager->state(id);
+            QString base;
+            switch (state) {
+            case KiwiSdrClient::State::Disconnected:
+                base = QStringLiteral("Disconnected");
+                break;
+            case KiwiSdrClient::State::Connecting:
+                base = QStringLiteral("Connecting");
+                break;
+            case KiwiSdrClient::State::Connected:
+                base = QStringLiteral("Connected");
+                break;
+            case KiwiSdrClient::State::Error:
+                base = QStringLiteral("Error");
+                break;
+            }
+            const QString detail = m_kiwiSdrManager->stateDetail(id).trimmed();
+            if (!detail.isEmpty()
+                && state != KiwiSdrClient::State::Connected
+                && state != KiwiSdrClient::State::Connecting) {
+                return QStringLiteral("%1\n%2").arg(base, detail);
+            }
+            return base.isEmpty() ? QStringLiteral("Disconnected") : base;
+        };
+
+        auto styleKiwiEdit = [](QLineEdit* edit) {
+            edit->setStyleSheet(kEditStyle);
+            edit->setMinimumHeight(24);
+        };
+
+        auto styleKiwiButton = [](QPushButton* button) {
+            button->setStyleSheet(kKiwiActionButtonStyle);
+            button->setMinimumWidth(96);
+            button->setAutoDefault(false);
+        };
+
+        auto styleKiwiIconButton = [](QPushButton* button) {
+            button->setStyleSheet(kKiwiIconButtonStyle);
+            button->setFixedSize(30, 26);
+            button->setAutoDefault(false);
+        };
+
+        *refreshKiwi = [this, kiwiRowsLayout, stateText, styleKiwiEdit,
+                        styleKiwiButton, styleKiwiIconButton] {
+            while (QLayoutItem* item = kiwiRowsLayout->takeAt(0)) {
+                if (QWidget* widget = item->widget()) {
+                    widget->deleteLater();
+                }
+                delete item;
+            }
+
+            const QVector<KiwiSdrAntennaProfile> profiles =
+                m_kiwiSdrManager->profiles();
+            for (int row = 0; row < profiles.size(); ++row) {
+                const KiwiSdrAntennaProfile profile = profiles[row];
+
+                auto* rowFrame = new QFrame;
+                rowFrame->setObjectName("kiwiAntennaRow");
+                rowFrame->setStyleSheet(kKiwiRowStyle);
+                auto* rowLayout = new QGridLayout(rowFrame);
+                rowLayout->setContentsMargins(6, 5, 6, 5);
+                rowLayout->setHorizontalSpacing(6);
+                rowLayout->setVerticalSpacing(3);
+                rowLayout->setColumnStretch(0, 1);
+
+                auto* nameEdit = new QLineEdit(profile.name);
+                nameEdit->setMaxLength(16);
+                nameEdit->setPlaceholderText("Custom Name");
+                nameEdit->setAccessibleName("KiwiSDR antenna name");
+                nameEdit->setAccessibleDescription(
+                    "Required display name for this KiwiSDR receive antenna.");
+                styleKiwiEdit(nameEdit);
+                rowLayout->addWidget(nameEdit, 0, 0);
+
+                auto* status = new QLabel(stateText(profile.id));
+                status->setAccessibleName("KiwiSDR antenna status");
+                status->setStyleSheet(
+                    "QLabel { color: #c8d8e8; font-size: 12px; padding-left: 6px; }");
+                status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                status->setWordWrap(true);
+                status->setToolTip(status->text());
+                rowLayout->addWidget(status, 0, 1, 1, 3);
+
+                auto* endpointEdit = new QLineEdit(profile.endpoint);
+                endpointEdit->setAccessibleName("KiwiSDR server");
+                endpointEdit->setAccessibleDescription(
+                    "Hostname or hostname:port for this KiwiSDR endpoint.");
+                styleKiwiEdit(endpointEdit);
+                rowLayout->addWidget(endpointEdit, 1, 0);
+
+                auto* autoCheck = new QCheckBox;
+                autoCheck->setText("Auto");
+                autoCheck->setChecked(profile.autoConnect);
+                autoCheck->setAccessibleName("Auto connect KiwiSDR antenna");
+                autoCheck->setStyleSheet(
+                    "QCheckBox { color: #c8d8e8; font-size: 12px; spacing: 4px; }");
+                rowLayout->addWidget(autoCheck, 1, 1, Qt::AlignCenter);
+
+                const bool connected =
+                    m_kiwiSdrManager->state(profile.id)
+                    == KiwiSdrClient::State::Connected;
+                auto* connectButton =
+                    new QPushButton(connected ? "Disconnect" : "Connect");
+                connectButton->setAccessibleName(
+                    connected ? "Disconnect KiwiSDR antenna"
+                              : "Connect KiwiSDR antenna");
+                styleKiwiButton(connectButton);
+                rowLayout->addWidget(connectButton, 1, 2);
+
+                auto* removeButton = new QPushButton;
+                removeButton->setIcon(style()->standardIcon(QStyle::SP_TrashIcon));
+                removeButton->setToolTip("Remove");
+                removeButton->setAccessibleName("Remove KiwiSDR antenna");
+                styleKiwiIconButton(removeButton);
+                rowLayout->addWidget(removeButton, 1, 3);
+                kiwiRowsLayout->addWidget(rowFrame);
+
+                auto updateProfile = [this, profile, nameEdit, endpointEdit,
+                                      autoCheck] {
+                    const QString name = nameEdit->text().trimmed();
+                    const QString endpoint =
+                        KiwiSdrClient::normalizeEndpoint(endpointEdit->text());
+                    if (name.isEmpty()) {
+                        QSignalBlocker blocker(nameEdit);
+                        nameEdit->setText(profile.name);
+                        return;
+                    }
+                    if (endpoint.isEmpty()) {
+                        QSignalBlocker blocker(endpointEdit);
+                        endpointEdit->setText(profile.endpoint);
+                        return;
+                    }
+                    if (endpointEdit->text() != endpoint) {
+                        QSignalBlocker blocker(endpointEdit);
+                        endpointEdit->setText(endpoint);
+                    }
+                    KiwiSdrAntennaProfile updated = profile;
+                    updated.name = name;
+                    updated.endpoint = endpoint;
+                    updated.autoConnect = autoCheck->isChecked();
+                    m_kiwiSdrManager->updateProfile(updated);
+                };
+                connect(nameEdit, &QLineEdit::editingFinished,
+                        this, updateProfile);
+                connect(nameEdit, &QLineEdit::returnPressed,
+                        this, updateProfile);
+                connect(endpointEdit, &QLineEdit::editingFinished,
+                        this, updateProfile);
+                connect(endpointEdit, &QLineEdit::returnPressed,
+                        this, updateProfile);
+                connect(autoCheck, &QCheckBox::toggled,
+                        this, [updateProfile](bool) { updateProfile(); });
+                connect(connectButton, &QPushButton::clicked,
+                        this, [this, profile, connected] {
+                    if (connected) {
+                        m_kiwiSdrManager->disconnectProfile(profile.id);
+                    } else {
+                        m_kiwiSdrManager->connectProfile(profile.id);
+                    }
+                });
+                connect(removeButton, &QPushButton::clicked,
+                        this, [this, profile] {
+                    m_kiwiSdrManager->removeProfile(profile.id);
+                });
+            }
+
+            auto* rowFrame = new QFrame;
+            rowFrame->setObjectName("kiwiAntennaRow");
+            rowFrame->setStyleSheet(kKiwiRowStyle);
+            auto* rowLayout = new QGridLayout(rowFrame);
+            rowLayout->setContentsMargins(6, 5, 6, 5);
+            rowLayout->setHorizontalSpacing(6);
+            rowLayout->setVerticalSpacing(3);
+            rowLayout->setColumnStretch(0, 1);
+
+            auto* nameEdit = new QLineEdit;
+            nameEdit->setMaxLength(16);
+            nameEdit->setPlaceholderText("Custom Name");
+            nameEdit->setAccessibleName("New KiwiSDR antenna name");
+            nameEdit->setAccessibleDescription(
+                "Required display name for the new KiwiSDR receive antenna.");
+            styleKiwiEdit(nameEdit);
+            rowLayout->addWidget(nameEdit, 0, 0);
+
+            auto* endpointEdit = new QLineEdit;
+            endpointEdit->setPlaceholderText("host:8073");
+            endpointEdit->setAccessibleName("New KiwiSDR server");
+            endpointEdit->setAccessibleDescription(
+                "Hostname or hostname:port for the new KiwiSDR receive antenna.");
+            styleKiwiEdit(endpointEdit);
+            rowLayout->addWidget(endpointEdit, 1, 0);
+
+            auto* autoCheck = new QCheckBox;
+            autoCheck->setText("Auto");
+            autoCheck->setAccessibleName("Auto connect new KiwiSDR antenna");
+            autoCheck->setStyleSheet(
+                "QCheckBox { color: #c8d8e8; font-size: 12px; spacing: 4px; }");
+            rowLayout->addWidget(autoCheck, 1, 1, Qt::AlignCenter);
+            kiwiRowsLayout->addWidget(rowFrame);
+
+            auto committed = std::make_shared<bool>(false);
+            auto commitNewRow = [this, nameEdit, endpointEdit, autoCheck,
+                                 committed] {
+                if (*committed) {
+                    return;
+                }
+                const QString name = nameEdit->text().trimmed();
+                const QString endpoint =
+                    KiwiSdrClient::normalizeEndpoint(endpointEdit->text());
+                if (name.isEmpty() || endpoint.isEmpty()) {
+                    return;
+                }
+                *committed = true;
+                const QString id = m_kiwiSdrManager->addProfile(name, endpoint);
+                if (autoCheck->isChecked()) {
+                    KiwiSdrAntennaProfile profile = m_kiwiSdrManager->profile(id);
+                    profile.autoConnect = true;
+                    m_kiwiSdrManager->updateProfile(profile);
+                }
+            };
+            connect(nameEdit, &QLineEdit::editingFinished,
+                    this, commitNewRow);
+            connect(nameEdit, &QLineEdit::returnPressed,
+                    this, commitNewRow);
+            connect(endpointEdit, &QLineEdit::editingFinished,
+                    this, commitNewRow);
+            connect(endpointEdit, &QLineEdit::returnPressed,
+                    this, commitNewRow);
+            connect(autoCheck, &QCheckBox::toggled,
+                    this, [commitNewRow](bool) { commitNewRow(); });
+
+            kiwiRowsLayout->addStretch(1);
+        };
+
+        connect(m_kiwiSdrManager, &KiwiSdrManager::profilesChanged,
+                this, [refreshKiwi] {
+            if (*refreshKiwi) {
+                (*refreshKiwi)();
+            }
+        });
+        connect(m_kiwiSdrManager, &KiwiSdrManager::profileStateChanged,
+                this, [refreshKiwi](const QString&, KiwiSdrClient::State,
+                                    const QString&) {
+            if (*refreshKiwi) {
+                (*refreshKiwi)();
+            }
+        });
+    }
+
     (*refresh)();
+    if (refreshKiwi && *refreshKiwi) {
+        (*refreshKiwi)();
+    }
     return page;
 }
 

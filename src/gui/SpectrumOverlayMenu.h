@@ -19,6 +19,7 @@ class QLabel;
 namespace AetherSDR {
 
 class MemoryBrowsePanel;
+class KiwiSdrManager;
 class SliceModel;
 
 // Floating overlay menu anchored to the top-left of the SpectrumWidget.
@@ -36,6 +37,7 @@ public:
 
     // Set the antenna list (from RadioModel::antListChanged).
     void setAntennaList(const QStringList& ants);
+    void setKiwiSdrManager(KiwiSdrManager* manager);
     void setRadioModel(RadioModel* model);
 
     // Sync Display sub-panel controls with saved settings.  The Black slider
@@ -51,6 +53,7 @@ public:
                              float lineWidth = 2.0f,
                              bool autoBlackRadioSide = false);
     void syncWfLineDuration(int rate);
+    void syncKiwiWaterfallSettings(int cellDb, int floorDb, int rate);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
     void syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
                                   int bgOpacity,
@@ -126,6 +129,9 @@ signals:
     // Auto-black source: false = client-side estimate (default), true = radio.
     void wfAutoBlackSourceChanged(bool radioSide);
     void wfLineDurationChanged(int ms);
+    void kiwiWaterfallCellChanged(int cellDb);
+    void kiwiWaterfallFloorChanged(int floorDb);
+    void kiwiWaterfallRateChanged(int rate);
     void wfColorSchemeChanged(int scheme);
     void noiseFloorPositionChanged(int pos);
     void noiseFloorEnableChanged(bool on);
@@ -146,6 +152,8 @@ signals:
     void rfGainChanged(int gain);
     void swrSweepStartRequested(int sliceId, int sweepPowerWatts);
     void swrSweepClearRequested();
+    void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
+    void flexRxAntennaSelected(int sliceId);
     // NB Waterfall Blanker (#277)
     void wfBlankerEnabledChanged(bool on);
     void wfBlankerThresholdChanged(float threshold);
@@ -162,6 +170,7 @@ private:
     QPointer<PanadapterModel> m_panadapter;
     QMetaObject::Connection m_panRxAntennaConnection;
     QMetaObject::Connection m_panLoopConnection;
+    void setKiwiWaterfallControlMode(bool kiwiMode);
     void toggle();
     void updateLayout();
     void toggleBandPanel();
@@ -182,6 +191,7 @@ private:
     void refreshAntennaCombo();
     void setRxAntennaComboToken(const QString& token);
     QString currentRxAntennaToken() const;
+    QString antennaComboLabel(const QString& token, const QStringList& options) const;
     void updateLoopButtonVisibility();
 
     static constexpr int kBtnAddRx = 0;
@@ -268,6 +278,7 @@ private:
     QComboBox*   m_colorSchemeCmb{nullptr};
     QSlider*     m_rateSlider{nullptr};
     QLabel*      m_rateLabel{nullptr};
+    bool         m_kiwiWaterfallControlMode{false};
     // NB Waterfall Blanker (#277)
     QPushButton* m_wfBlankerBtn{nullptr};
     QSlider*     m_wfBlankerThreshSlider{nullptr};
@@ -284,6 +295,7 @@ private:
 
     QStringList  m_antList;
     RadioModel*  m_radioModel{nullptr};
+    QPointer<KiwiSdrManager> m_kiwiSdrManager;
     QPointer<SliceModel> m_slice;
     bool         m_updatingFromModel{false};
     int          m_lastEmittedRfGain{INT_MIN};  // dedupe rfgain emits across drag snap ticks (#1498)

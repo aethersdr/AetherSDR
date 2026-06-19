@@ -34,6 +34,8 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
+#include "core/KiwiSdrClient.h"
+#include "core/KiwiSdrManager.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "VfoWidget.h"
@@ -93,6 +95,27 @@ bool dbmRangeLooksPlausible(float minDbm, float maxDbm)
         && maxDbm <= kMaxAllowedDbm
         && rangeDb >= kMinRangeDb
         && rangeDb <= kMaxRangeDb;
+}
+
+const SliceModel* kiwiSliceForPan(const RadioModel& radioModel,
+                                  const QString& panId,
+                                  int activeSliceId)
+{
+    if (panId.isEmpty()) {
+        return nullptr;
+    }
+
+    for (SliceModel* slice : radioModel.slices()) {
+        if (!slice || slice->panId() != panId
+            || !radioModel.sliceMayBelongToUs(slice->sliceId())) {
+            continue;
+        }
+
+        if (slice->sliceId() == activeSliceId) {
+            return slice;
+        }
+    }
+    return nullptr;
 }
 
 // Pan-follow tuning internals — moved with their only callers from
@@ -561,6 +584,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
         pushSliceOverlay(s);
         if (s->isTxSlice())
             syncTxWaterfallSliceToSpectrums();
+        updateKiwiSdrVirtualTrackingForSlice(s);
+        refreshKiwiSdrWaterfallAvailability();
+        syncKiwiSdrPanadapterUiStates();
     });
 
     // Create a VfoWidget for this slice on the correct panadapter
@@ -603,9 +629,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // Feed S-meter per-slice — only this VFO's slice level
     const int sid = s->sliceId();
     connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
-            vfo, [vfo, sid](int sliceIndex, float dbm) {
-        if (sliceIndex == sid)
+            vfo, [this, vfo, sid](int sliceIndex, float dbm) {
+        if (sliceIndex == sid
+            && (!m_kiwiSdrManager
+                || m_kiwiSdrManager->assignedProfileForSlice(sid).isEmpty())) {
             vfo->setSignalLevel(dbm);
+        }
     });
     // Feed ESC meter per-slice — signal strength after ESC processing
     connect(&m_radioModel.meterModel(), &MeterModel::escLevelChanged,
@@ -675,6 +704,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Refresh slice tab buttons (#1278)
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+    refreshKiwiSdrSlices();
+    refreshKiwiSdrWaterfallAvailability();
 }
 
 void MainWindow::onSliceRemoved(int id)
@@ -682,6 +713,11 @@ void MainWindow::onSliceRemoved(int id)
     if (m_applyingLayout) return;
 
     qDebug() << "MainWindow: slice removed" << id;
+
+    m_kiwiSdrVirtualPreviousMute.remove(id);
+    if (m_kiwiSdrManager) {
+        m_kiwiSdrManager->clearSliceAssignment(id);
+    }
 
 #ifdef HAVE_RADE
     // If the RADE slice was closed, deactivate RADE
@@ -765,6 +801,8 @@ void MainWindow::onSliceRemoved(int id)
 
     // Refresh slice tab buttons (#1278)
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+    refreshKiwiSdrSlices();
+    refreshKiwiSdrWaterfallAvailability();
 }
 
 void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,
@@ -1281,6 +1319,51 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     menu->disconnect(this);
     applet->disconnect(this);
 
+    auto updateKiwiWaterfallView = [this, applet, sw](double centerMhz,
+                                                      double bandwidthMhz) {
+        if (m_kiwiSdrManager && applet && sw) {
+            for (SliceModel* slice : m_radioModel.slices()) {
+                if (!slice || slice->panId() != applet->panId()
+                    || !m_radioModel.sliceMayBelongToUs(slice->sliceId())) {
+                    continue;
+                }
+                const QString profileId =
+                    m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId());
+                if (profileId.isEmpty()) {
+                    continue;
+                }
+                m_kiwiSdrManager->updateWaterfallView(
+                    slice->sliceId(), applet->panId(), centerMhz,
+                    bandwidthMhz, sw->wfLineDuration());
+                if (m_kiwiSdrManager->isConnected(profileId)) {
+                    sw->setKiwiSdrWaterfallAvailable(true);
+                    sw->setKiwiSdrWaterfallActive(true);
+                    syncKiwiSdrAppletWaterfallState();
+                }
+            }
+        }
+        if (!m_kiwiSdrClient || !m_kiwiSdrClient->isConnected()
+            || !applet || !sw
+            || !kiwiSliceForPan(m_radioModel, applet->panId(), m_activeSliceId)) {
+            return;
+        }
+        m_kiwiSdrClient->setWaterfallLineDurationMs(sw->wfLineDuration());
+        m_kiwiSdrClient->setWaterfallView(
+            applet->panId(), centerMhz, bandwidthMhz);
+    };
+
+    connect(sw, &SpectrumWidget::frequencyRangeChanged,
+            this, updateKiwiWaterfallView);
+    connect(sw, &SpectrumWidget::frequencyRangeChangeRequested,
+            this, updateKiwiWaterfallView);
+    connect(sw, &SpectrumWidget::centerChangeRequested,
+            this, [updateKiwiWaterfallView, sw](double centerMhz) {
+                if (!sw) {
+                    return;
+                }
+                updateKiwiWaterfallView(centerMhz, sw->bandwidthMhz());
+            });
+
     // Wire band plan manager to this spectrum widget
     sw->setBandPlanManager(m_bandPlanMgr);
 
@@ -1292,6 +1375,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     menu->setPanId(applet->panId());
     menu->setMemories(m_radioModel.memories());
     menu->setRadioModel(&m_radioModel);
+    menu->setKiwiSdrManager(m_kiwiSdrManager);
     menu->setRadioCapabilities(m_radioModel.capabilities());
 
     // Antenna list → this overlay menu (per-pan, mirrors VfoWidget pattern) (#1260)
@@ -1461,6 +1545,13 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(sw, &SpectrumWidget::dbmRangeChangeRequested,
             this, [this, applet, sw, pendingDbm, setStreamDbmRange, sendDbmRangeCommand]
                   (float minDbm, float maxDbm) {
+        if (sw->kiwiSdrWaterfallActive()) {
+            sw->setDbmRange(minDbm, maxDbm);
+            sw->prepareForFftScaleChange();
+            sw->reacquireNoiseFloorLock();
+            return;
+        }
+
         const bool profileLoadHeld = profileLoadRadioStateWritesHeld();
         const bool autoFloorChange = sw->pendingAutoNoiseFloorDbmRange();
         if (profileLoadPanDisplaySettling(applet->panId()) && autoFloorChange) {
@@ -1493,7 +1584,14 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sendDbmRangeCommand(minDbm, maxDbm);
     });
     connect(sw, &SpectrumWidget::dbmRangeDragFinished,
-            this, [pendingDbm, setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
+            this, [sw, pendingDbm, setStreamDbmRange, sendDbmRangeCommand](float minDbm, float maxDbm) {
+        if (sw->kiwiSdrWaterfallActive()) {
+            sw->setDbmRange(minDbm, maxDbm);
+            sw->prepareForFftScaleChange();
+            sw->reacquireNoiseFloorLock();
+            return;
+        }
+
         pendingDbm->active = true;
         pendingDbm->minDbm = minDbm;
         pendingDbm->maxDbm = maxDbm;
@@ -1739,6 +1837,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setWfColorScheme);
     connect(menu, &SpectrumOverlayMenu::wfColorGainChanged,
             this, [this, applet, sw](int v) {
+        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+            return;
+        }
         sw->setWfColorGain(v);
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan && !pan->waterfallId().isEmpty())
@@ -1747,6 +1848,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::wfBlackLevelChanged,
             this, [this, applet, sw](int v) {
+        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+            return;
+        }
         sw->setWfBlackLevel(v);
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan && !pan->waterfallId().isEmpty())
@@ -1754,14 +1858,20 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 QString("display panafall set %1 black_level=%2").arg(pan->waterfallId()).arg(v));
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackChanged,
-            this, [this, sw](bool on) {
+            this, [this, applet, sw](bool on) {
+        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+            return;
+        }
         sw->setWfAutoBlack(on);
         // Keep the radio's auto_black flag in sync at runtime; it only reaches
         // 1 when auto-black is on AND the radio-side source is selected.
         m_radioModel.setWaterfallAutoBlack(on);
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackOffsetChanged,
-            this, [sw](int offset) {
+            this, [this, applet, sw](int offset) {
+        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+            return;
+        }
         sw->setWfAutoBlackOffset(offset);
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackSourceChanged,
@@ -1773,7 +1883,31 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     const auto applyWaterfallLineDuration = [this, applet, sw](int ms) {
         const int clampedMs = std::clamp(ms, 1, 100);
+        const QString profileId = kiwiSdrProfileForPan(applet->panId());
+        if (!profileId.isEmpty()) {
+            const KiwiSdrAntennaProfile profile =
+                m_kiwiSdrManager ? m_kiwiSdrManager->profile(profileId)
+                                 : KiwiSdrAntennaProfile{};
+            if (m_kiwiSdrManager && profile.waterfallRate == 0) {
+                for (SliceModel* slice : m_radioModel.slices()) {
+                    if (!slice || slice->panId() != applet->panId()
+                        || m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId())
+                            != profileId) {
+                        continue;
+                    }
+                    m_kiwiSdrManager->updateWaterfallView(
+                        slice->sliceId(), applet->panId(), sw->centerMhz(),
+                        sw->bandwidthMhz(), clampedMs);
+                    break;
+                }
+            }
+            return;
+        }
         sw->setWfLineDuration(clampedMs);
+        if (m_kiwiSdrClient && m_kiwiSdrClient->isConnected()
+            && kiwiSliceForPan(m_radioModel, applet->panId(), m_activeSliceId)) {
+            m_kiwiSdrClient->setWaterfallLineDurationMs(clampedMs);
+        }
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan && !pan->waterfallId().isEmpty())
             m_radioModel.sendCommand(
@@ -1783,6 +1917,58 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, applyWaterfallLineDuration);
     connect(sw, &SpectrumWidget::waterfallLineDurationChangeRequested,
             this, applyWaterfallLineDuration);
+    connect(menu, &SpectrumOverlayMenu::kiwiWaterfallCellChanged,
+            this, [this, applet, sw](int cellDb) {
+        if (!m_kiwiSdrManager) {
+            return;
+        }
+        const QString profileId = kiwiSdrProfileForPan(applet->panId());
+        if (profileId.isEmpty()) {
+            return;
+        }
+        const KiwiSdrAntennaProfile profile =
+            m_kiwiSdrManager->profile(profileId);
+        m_kiwiSdrManager->setProfileWaterfallSettings(
+            profileId, cellDb, profile.waterfallFloorDb,
+            profile.waterfallRate);
+        sw->setKiwiSdrWaterfallAdjustments(cellDb,
+                                           profile.waterfallFloorDb);
+        syncKiwiSdrPanadapterUiState(applet->panId());
+    });
+    connect(menu, &SpectrumOverlayMenu::kiwiWaterfallFloorChanged,
+            this, [this, applet, sw](int floorDb) {
+        if (!m_kiwiSdrManager) {
+            return;
+        }
+        const QString profileId = kiwiSdrProfileForPan(applet->panId());
+        if (profileId.isEmpty()) {
+            return;
+        }
+        const KiwiSdrAntennaProfile profile =
+            m_kiwiSdrManager->profile(profileId);
+        m_kiwiSdrManager->setProfileWaterfallSettings(
+            profileId, profile.waterfallCellDb, floorDb,
+            profile.waterfallRate);
+        sw->setKiwiSdrWaterfallAdjustments(profile.waterfallCellDb,
+                                           floorDb);
+        syncKiwiSdrPanadapterUiState(applet->panId());
+    });
+    connect(menu, &SpectrumOverlayMenu::kiwiWaterfallRateChanged,
+            this, [this, applet](int rate) {
+        if (!m_kiwiSdrManager) {
+            return;
+        }
+        const QString profileId = kiwiSdrProfileForPan(applet->panId());
+        if (profileId.isEmpty()) {
+            return;
+        }
+        const KiwiSdrAntennaProfile profile =
+            m_kiwiSdrManager->profile(profileId);
+        m_kiwiSdrManager->setProfileWaterfallSettings(
+            profileId, profile.waterfallCellDb, profile.waterfallFloorDb,
+            rate);
+        syncKiwiSdrPanadapterUiState(applet->panId());
+    });
     // NB Waterfall Blanker (#277)
     connect(menu, &SpectrumOverlayMenu::wfBlankerEnabledChanged,
             sw, &SpectrumWidget::setWfBlankerEnabled);
@@ -2154,6 +2340,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](const QString& panId) {
         showQuickAddMemoryDialog(panId);
     });
+    connect(menu, &SpectrumOverlayMenu::kiwiRxAntennaSelected,
+            this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
+    connect(menu, &SpectrumOverlayMenu::flexRxAntennaSelected,
+            this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
 
     // ── Slice marker clicks ──────────────────────────────────────────────
     connect(sw, &SpectrumWidget::sliceClicked,
@@ -2264,7 +2454,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         const bool wasFresh = !m_radioSetupDialog;
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius);
+                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                              m_kiwiSdrManager);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
         if (m_radioSetupDialog)
@@ -2317,6 +2508,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // Client-side DSP toggles (NR2 / RN2 / NR4 / MNR / BNR / DFNR) now
     // live exclusively in the AetherDSP applet; the spectrum overlay menu
     // no longer surfaces them.
+    refreshKiwiSdrWaterfallAvailability();
 }
 
 MainWindow::TuneCenteringResult MainWindow::revealFrequencyIfNeeded(
@@ -2505,10 +2697,33 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     // algorithm enable/disable, and the manual cache stay in one place.
     if (m_appletPanel && m_appletPanel->rxApplet())
         w->setRxApplet(m_appletPanel->rxApplet());
+    w->setKiwiSdrManager(m_kiwiSdrManager);
 
     // Note: w->setSlice(s) is called at the end of this method (line ~1895)
 
     // Per-slice signals — these are specific to the slice this widget represents
+    connect(w, &VfoWidget::kiwiRxAntennaSelected,
+            this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
+    connect(w, &VfoWidget::flexRxAntennaSelected,
+            this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
+    connect(s, &SliceModel::frequencyChanged, this, [this, s](double) {
+        updateKiwiSdrVirtualTrackingForSlice(s);
+    });
+    connect(s, &SliceModel::modeChanged, this, [this, s](const QString&) {
+        updateKiwiSdrVirtualTrackingForSlice(s);
+    });
+    connect(s, &SliceModel::filterChanged, this, [this, s](int, int) {
+        updateKiwiSdrVirtualTrackingForSlice(s);
+    });
+    connect(s, &SliceModel::panIdChanged, this, [this, s](const QString&) {
+        updateKiwiSdrVirtualTrackingForSlice(s);
+    });
+    connect(s, &SliceModel::audioGainChanged, this, [this, s](float) {
+        updateKiwiSdrVirtualAudioControlsForSlice(s);
+    });
+    connect(s, &SliceModel::audioMuteChanged, this, [this, s](bool) {
+        updateKiwiSdrVirtualAudioControlsForSlice(s);
+    });
     connect(w, &VfoWidget::closeSliceRequested, this, [this, sliceId]() {
         if (m_radioModel.slices().size() <= 1) return;
         m_radioModel.sendCommand(QString("slice remove %1").arg(sliceId));
@@ -2730,7 +2945,10 @@ void MainWindow::wireMeters()
     // ── S-Meter: MeterModel → SMeterWidget (active slice only) ─────────────
     connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
             this, [this](int sliceIndex, float dbm) {
-        if (sliceIndex == m_activeSliceId) {
+        if (sliceIndex == m_activeSliceId
+            && (!m_kiwiSdrManager
+                || m_kiwiSdrManager
+                       ->assignedProfileForSlice(sliceIndex).isEmpty())) {
             m_appletPanel->sMeterWidget()->setLevel(dbm);
 #ifdef HAVE_HIDAPI
             m_tmate2SmeterDbm = dbm;
@@ -3049,7 +3267,12 @@ void MainWindow::wireMeters()
     m_appletPanel->txApplet()->setRadioModel(&m_radioModel);
     m_appletPanel->txApplet()->setBandPlanManager(m_bandPlanMgr);
     m_appletPanel->rxApplet()->setRadioModel(&m_radioModel);
+    m_appletPanel->rxApplet()->setKiwiSdrManager(m_kiwiSdrManager);
     m_appletPanel->rxApplet()->setTransmitModel(&m_radioModel.transmitModel());
+    connect(m_appletPanel->rxApplet(), &RxApplet::kiwiRxAntennaSelected,
+            this, &MainWindow::setKiwiSdrVirtualAntennaForSlice);
+    connect(m_appletPanel->rxApplet(), &RxApplet::flexRxAntennaSelected,
+            this, &MainWindow::clearKiwiSdrVirtualAntennaForSlice);
 
     // Hide APD row on radios that don't support it
     connect(&m_radioModel.transmitModel(), &TransmitModel::apdStateChanged, this, [this]() {

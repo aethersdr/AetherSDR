@@ -421,6 +421,25 @@ SpectralNR::WisdomResult SpectralNR::generateWisdom(const std::string& directory
 
 void SpectralNR::process(const float* input, float* output, int numSamples)
 {
+    if (numSamples <= 0) {
+        return;
+    }
+
+    // The overlap-add rings are sized for streaming at the native hop cadence.
+    // Larger packet-sized calls can wrap the output ring before the call reads
+    // its output, aliasing future synthesis data into the returned samples.
+    // Split internally so callers with bursty packet sizes still get the same
+    // result as the normal 128-sample Flex RX cadence.
+    if (numSamples > m_hopSize) {
+        int offset = 0;
+        while (offset < numSamples) {
+            const int chunk = std::min(m_hopSize, numSamples - offset);
+            process(input + offset, output + offset, chunk);
+            offset += chunk;
+        }
+        return;
+    }
+
     const int accSize = static_cast<int>(m_inAccum.size());
     const int outSize = static_cast<int>(m_outAccum.size());
 

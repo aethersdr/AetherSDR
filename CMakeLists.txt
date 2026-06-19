@@ -553,6 +553,9 @@ set(CORE_SOURCES
     src/core/SmartCatSession.cpp
     src/core/CatPort.cpp
     src/core/SmartLinkClient.cpp
+    src/core/KiwiSdrProtocol.cpp
+    src/core/KiwiSdrClient.cpp
+    src/core/KiwiSdrManager.cpp
     src/core/WanConnection.cpp
     src/core/DxClusterClient.cpp
     src/core/WsjtxClient.cpp
@@ -685,6 +688,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_Spots.cpp
     src/gui/MainWindow_SwrSweep.cpp
     src/gui/MainWindow_Wiring.cpp
+    src/gui/MainWindow_KiwiSdr.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerItem.cpp
     src/gui/map/MapPathItem.cpp
@@ -739,6 +743,7 @@ set(GUI_SOURCES
     src/gui/PanadapterStack.cpp
     src/gui/PanLayoutDialog.cpp
     src/gui/AppletPanel.cpp
+    src/gui/KiwiSdrApplet.cpp
     src/gui/FavoritesPickerDialog.cpp
     src/gui/RxApplet.cpp
     src/gui/FilterPassbandWidget.cpp
@@ -1874,6 +1879,14 @@ add_executable(spectral_nr_test
 target_include_directories(spectral_nr_test PRIVATE src)
 target_link_libraries(spectral_nr_test PRIVATE Qt6::Core)
 add_test(NAME spectral_nr_test COMMAND spectral_nr_test)
+
+add_executable(kiwi_sdr_protocol_test
+    tests/kiwi_sdr_protocol_test.cpp
+    src/core/KiwiSdrProtocol.cpp
+)
+target_include_directories(kiwi_sdr_protocol_test PRIVATE src)
+target_link_libraries(kiwi_sdr_protocol_test PRIVATE Qt6::Core)
+add_test(NAME kiwi_sdr_protocol_test COMMAND kiwi_sdr_protocol_test)
 
 add_executable(client_gate_test
     tests/client_gate_test.cpp

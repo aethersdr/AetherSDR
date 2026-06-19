@@ -94,7 +94,8 @@ void MainWindow::buildMenuBar()
         const bool wasFresh = !m_radioSetupDialog;
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius);
+                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                              m_kiwiSdrManager);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
     });
@@ -130,7 +131,8 @@ void MainWindow::buildMenuBar()
         const bool wasFresh = !m_radioSetupDialog;
         showOrRaisePersistent(m_radioSetupDialog,
                               &m_radioModel, m_audio,
-                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius);
+                              &m_tgxlConn, &m_pgxlConn, &m_antennaGenius,
+                              m_kiwiSdrManager);
         if (wasFresh && m_radioSetupDialog)
             wireRadioSetupDialogSignals(m_radioSetupDialog, prevComp);
         if (m_radioSetupDialog)

@@ -10,6 +10,8 @@
 #include <QTimer>
 #include <QElapsedTimer>
 
+#include "core/KiwiSdrProtocol.h"
+
 class QPushButton;
 class ScrollableLabel;
 class QLabel;
@@ -27,6 +29,7 @@ class TransmitModel;
 class RadioModel;
 class PhaseKnob;
 class RxApplet;
+class KiwiSdrManager;
 
 // Floating VFO info panel attached to the VFO marker on the spectrum display.
 // Shows slice info (antennas, frequency, signal level, filter width, TX/SPLIT)
@@ -43,12 +46,15 @@ public:
     void setAntennaList(const QStringList& ants);
     void setTransmitModel(TransmitModel* txModel);
     void setRadioModel(RadioModel* radioModel);
+    void setKiwiSdrManager(KiwiSdrManager* manager);
     // Wire the SQL button + slider as a mirror of the RxApplet's 3-way
     // SQL UI (Off / Manual / Auto, manual-level cache, Auto margin).
     // Without this call, the SQL row still functions but in the old
     // 2-state on/off mode against the slice's squelchLevel only.
     void setRxApplet(RxApplet* rx);
     void setSignalLevel(float dbm);
+    void setReceiveMeterReading(
+        const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
 
     // Split mode: call whenever TX assignment or active slice changes.
     //   isTxSlice  — this VFO's slice has tx=1
@@ -132,6 +138,8 @@ Q_SIGNALS:
     void zeroBeatRequested();                   // client-side CW zero-beat
     void addSpotRequested(double freqMhz);
     void sliceActivationRequested(int sliceId);
+    void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
+    void flexRxAntennaSelected(int sliceId);
     // Emitted when the wheel tunes by step so MainWindow can apply the shared
     // tuning/reveal policy.
     void stepTuneRequested(double mhz);
@@ -151,6 +159,7 @@ protected:
 private:
     void updateSignalMeterTarget();
     void animateSignalMeter();
+    bool usesUnavailableSignalMeter() const;
     static float signalDbmToMeterFraction(float dbm);
 
     void buildUI();
@@ -175,10 +184,13 @@ private:
     SliceModel*    m_slice{nullptr};
     TransmitModel* m_txModel{nullptr};
     RadioModel*    m_radioModel{nullptr};
+    KiwiSdrManager* m_kiwiSdrManager{nullptr};
     QStringList    m_antList;
     bool           m_updatingFromModel{false};
     bool           m_lastOnLeft{true};
     float          m_signalDbm{-130.0f};
+    KiwiSdrProtocol::MeterReading m_receiveMeterReading;
+    bool           m_receiveMeterReadingActive{false};
     QTimer         m_signalMeterAnimation;
     QElapsedTimer  m_signalMeterElapsed;
     float          m_signalMeterFraction{0.0f};

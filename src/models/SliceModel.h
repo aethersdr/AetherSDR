@@ -43,7 +43,10 @@ public:
     bool    isActive()   const { return m_active; }
     bool    isTxSlice()  const { return m_txSlice; }
     float   rfGain()     const { return m_rfGain; }
-    float   audioGain()  const { return m_audioGain; }
+    float   audioGain()  const { return m_externalReceiveAudioReplacement
+                                      ? m_externalReceiveAudioGain
+                                      : m_audioGain; }
+    float   flexAudioGain() const { return m_audioGain; }
     int     audioPan()   const { return m_audioPan; }
 
     // Getters — RX DSP state
@@ -74,7 +77,10 @@ public:
     QString agcMode()      const { return m_agcMode; }
     int     agcThreshold() const { return m_agcThreshold; }
     int     agcOffLevel()  const { return m_agcOffLevel; }
-    bool    audioMute()   const { return m_audioMute; }
+    bool    audioMute()   const { return m_externalReceiveAudioReplacement
+                                      ? m_externalReceiveAudioMute
+                                      : m_audioMute; }
+    bool    flexAudioMute() const { return m_audioMute; }
     bool    squelchOn()   const { return m_squelchOn; }
     int     squelchLevel()const { return m_squelchLevel; }
     bool    ritOn()       const { return m_ritOn; }
@@ -112,6 +118,8 @@ public:
     void setRfGain(float gain);
     void setAudioPan(int pan);
     void setAudioMute(bool mute);
+    void setExternalReceiveAudioReplacementMute(bool active,
+                                                bool restoreMute = false);
     void setDiversity(bool on);
     bool diversity() const { return m_diversity; }
     bool isDiversityChild() const { return m_diversityChild; }
@@ -285,6 +293,9 @@ private:
     bool    m_locked{false};
     bool    m_qsk{false};
     bool    m_audioMute{false};
+    bool    m_externalReceiveAudioReplacement{false};
+    bool    m_externalReceiveAudioMute{false};
+    float   m_externalReceiveAudioGain{70.0f};
     bool    m_diversity{false};
     bool    m_diversityChild{false};
     bool    m_diversityParent{false};

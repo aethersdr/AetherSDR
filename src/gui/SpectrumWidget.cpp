@@ -15,6 +15,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
+#include <QScopeGuard>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QNativeGestureEvent>
@@ -40,6 +41,7 @@
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
+#include "core/KiwiSdrProtocol.h"
 #include "InteractionSettings.h"
 #include "models/BandPlanManager.h"
 #include "models/BandDefs.h"
@@ -70,6 +72,8 @@ static constexpr int kWaterfallLineDurationMaxMs = 100;
 static constexpr int kWaterfallHistoryCapacityMsPerRow = 50;
 static constexpr int kWaterfallRatePercentMin = 1;
 static constexpr int kWaterfallRatePercentMax = 100;
+static constexpr float kKiwiSdrWaterfallMinDbm = -130.0f;
+static constexpr float kKiwiSdrWaterfallMaxDbm = 0.0f;
 static constexpr int kNativeWaterfallFallbackMinTimeoutMs = 2000;
 static constexpr int kNativeWaterfallFallbackMaxTimeoutMs = 20000;
 static constexpr int kNativeWaterfallRateChangeGraceMaxMs = 14000;
@@ -681,6 +685,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         " border-radius: 2px; color: #90a0b0; font-size: 11px; font-weight: bold;"
         " padding: 0; margin: 0; min-width: 0; }"
         "QPushButton:hover { background: rgba(30,50,70,200); color: #c8d8e8; }"
+        "QPushButton:checked { background: rgba(0,180,216,210); color: #000; }"
         "QPushButton:pressed { background: #00b4d8; color: #000; }";
 
     auto makeBtn = [&](const QString& text) {
@@ -722,7 +727,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         }
         newCenter = std::max(newCenter, newBw / 2.0);
 
-        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
+        handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
+                                            newCenter, newBw);
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
             m_bins.clear();
             m_smoothed.clear();
@@ -1038,8 +1044,8 @@ void SpectrumWidget::setNoiseFloorPosition(int pos) {
     m_pendingDbmRangeEchoStartMs = 0;
     refreshNoiseFloorTarget();
     if (m_noiseFloorEnable) {
-        if (!m_noiseFloorBaselineValid && (!m_smoothed.isEmpty() || !m_bins.isEmpty())) {
-            const QVector<float>& baselineBins = !m_smoothed.isEmpty() ? m_smoothed : m_bins;
+        const QVector<float>& baselineBins = noiseFloorAutoLevelBins();
+        if (!m_noiseFloorBaselineValid && !baselineBins.isEmpty()) {
             const float baselineDbm = estimateNoiseFloorDbm(baselineBins);
             if (baselineDbm > -500.0f) {
                 m_noiseFloorBaselineDbm = baselineDbm;
@@ -1085,6 +1091,28 @@ void SpectrumWidget::reacquireNoiseFloorLock() {
     // long enough for the antenna change to settle through the radio.
     armNoiseFloorFastLock(30, 1);
     m_measuredNoiseFloorDbm = -1000.0f;
+}
+
+void SpectrumWidget::reacquireNoiseFloorLockFromVisibleSource()
+{
+    reacquireNoiseFloorLock();
+    if (!m_noiseFloorEnable) {
+        return;
+    }
+
+    const QVector<float>& bins = noiseFloorAutoLevelBins();
+    if (bins.isEmpty()) {
+        return;
+    }
+
+    const float frameFloor = estimateNoiseFloorDbm(bins);
+    if (frameFloor > -500.0f) {
+        m_measuredNoiseFloorDbm = frameFloor;
+    }
+    updateNoiseFloorBaseline(bins, true);
+    if (m_noiseFloorFreshFrameCount > 0) {
+        --m_noiseFloorFreshFrameCount;
+    }
 }
 
 void SpectrumWidget::suspendNoiseFloorAutoAdjustUntil(qint64 untilMs)
@@ -1199,8 +1227,10 @@ void SpectrumWidget::applyFpsMeterVisibility(bool on) {
 void SpectrumWidget::resetFpsMeterWindow() {
     m_panadapterFrameCount = 0;
     m_waterfallFrameCount = 0;
+    m_kiwiSdrWaterfallFrameCount = 0;
     m_panadapterFps = 0.0;
     m_waterfallFps = 0.0;
+    m_kiwiSdrWaterfallFps = 0.0;
     m_fpsMeterWindow.restart();
 }
 void SpectrumWidget::updateFpsMeterValues() {
@@ -1217,8 +1247,10 @@ void SpectrumWidget::updateFpsMeterValues() {
     const double scale = 1000.0 / static_cast<double>(elapsedMs);
     m_panadapterFps = m_panadapterFrameCount * scale;
     m_waterfallFps = m_waterfallFrameCount * scale;
+    m_kiwiSdrWaterfallFps = m_kiwiSdrWaterfallFrameCount * scale;
     m_panadapterFrameCount = 0;
     m_waterfallFrameCount = 0;
+    m_kiwiSdrWaterfallFrameCount = 0;
     m_fpsMeterWindow.restart();
     updateFpsMeterLabels();
 }
@@ -1229,6 +1261,10 @@ void SpectrumWidget::recordPanadapterFrame() {
 void SpectrumWidget::recordWaterfallFrame(int rows) {
     if (m_showFpsMeters && rows > 0)
         m_waterfallFrameCount += rows;
+}
+void SpectrumWidget::recordKiwiSdrWaterfallFrame(int rows) {
+    if (m_showFpsMeters && rows > 0)
+        m_kiwiSdrWaterfallFrameCount += rows;
 }
 
 void SpectrumWidget::createFpsMeterLabels() {
@@ -1265,8 +1301,14 @@ void SpectrumWidget::updateFpsMeterLabels() {
         return;
     }
 
-    m_panFpsMeterLabel->setText(QStringLiteral("PAN %1 FPS").arg(m_panadapterFps, 0, 'f', 1));
-    m_wfFpsMeterLabel->setText(QStringLiteral("WF %1 FPS").arg(m_waterfallFps, 0, 'f', 1));
+    const double visibleWaterfallFps = m_kiwiSdrWaterfallActive
+        ? m_kiwiSdrWaterfallFps
+        : m_waterfallFps;
+    const double visiblePanadapterFps = m_kiwiSdrWaterfallActive
+        ? m_kiwiSdrWaterfallFps
+        : m_panadapterFps;
+    m_panFpsMeterLabel->setText(QStringLiteral("PAN %1 FPS").arg(visiblePanadapterFps, 0, 'f', 1));
+    m_wfFpsMeterLabel->setText(QStringLiteral("WF %1 FPS").arg(visibleWaterfallFps, 0, 'f', 1));
     m_panFpsMeterLabel->adjustSize();
     m_wfFpsMeterLabel->adjustSize();
     positionFpsMeterLabels();
@@ -1449,8 +1491,8 @@ bool SpectrumWidget::captureNoiseFloorTargetFromCurrentScale(bool notify, bool p
     }
 
     float baselineDbm = -1000.0f;
-    if (!m_smoothed.isEmpty() || !m_bins.isEmpty()) {
-        const QVector<float>& baselineBins = !m_smoothed.isEmpty() ? m_smoothed : m_bins;
+    const QVector<float>& baselineBins = noiseFloorAutoLevelBins();
+    if (!baselineBins.isEmpty()) {
         baselineDbm = estimateNoiseFloorDbm(baselineBins);
     }
     if (baselineDbm <= -500.0f && m_noiseFloorBaselineValid) {
@@ -2197,7 +2239,7 @@ void SpectrumWidget::updateNativeWaterfallFallbackState(qint64 nowMs)
 
 bool SpectrumWidget::pushRxWaterfallFallbackIfDue(const QVector<float>& bins, qint64 nowMs)
 {
-    if (!m_waterfallFallbackActive || m_waterfall.isNull() || bins.isEmpty()) {
+    if (!m_waterfallFallbackActive || bins.isEmpty()) {
         return false;
     }
     if (m_nextFallbackWaterfallRowMs <= 0) {
@@ -2207,6 +2249,13 @@ bool SpectrumWidget::pushRxWaterfallFallbackIfDue(const QVector<float>& bins, qi
         return false;
     }
 
+    const bool visibleStream = beginWaterfallStreamWrite(false);
+    auto restoreStream = qScopeGuard([&] {
+        endWaterfallStreamWrite(false, visibleStream);
+    });
+    if (m_waterfall.isNull()) {
+        return false;
+    }
     pushWaterfallRow(bins, m_waterfall.width());
     m_nextFallbackWaterfallRowMs = nowMs + waterfallFallbackIntervalMs();
     return true;
@@ -2269,7 +2318,9 @@ void SpectrumWidget::appendVisibleRow(const QRgb* rowData)
         PerfTelemetry::instance().recordWaterfallVisibleRows();
 }
 
-void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
+void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs,
+                                      double frameCenterMhz,
+                                      double frameBandwidthMhz)
 {
     ensureWaterfallHistory();
     if (m_waterfallHistory.isNull() || rowData == nullptr) {
@@ -2286,9 +2337,15 @@ void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
     }
     // Stamp the frequency frame this row was captured in, so the viewport can
     // remap it later regardless of how the center/bandwidth has since panned.
+    const double stampCenterMhz = (frameCenterMhz > 0.0 && frameBandwidthMhz > 0.0)
+        ? frameCenterMhz
+        : m_centerMhz;
+    const double stampBandwidthMhz = frameBandwidthMhz > 0.0
+        ? frameBandwidthMhz
+        : m_bandwidthMhz;
     if (m_wfHistoryWriteRow >= 0 && m_wfHistoryWriteRow < m_wfHistoryRowCenterMhz.size()) {
-        m_wfHistoryRowCenterMhz[m_wfHistoryWriteRow] = m_centerMhz;
-        m_wfHistoryRowBwMhz[m_wfHistoryWriteRow] = m_bandwidthMhz;
+        m_wfHistoryRowCenterMhz[m_wfHistoryWriteRow] = stampCenterMhz;
+        m_wfHistoryRowBwMhz[m_wfHistoryWriteRow] = stampBandwidthMhz;
     }
     if (m_wfHistoryRowCount < h) {
         ++m_wfHistoryRowCount;
@@ -2305,12 +2362,103 @@ void SpectrumWidget::appendHistoryRow(const QRgb* rowData, qint64 timestampMs)
 // Copy one history scanline into the viewport, remapping its columns from the
 // frame it was captured in (rowCenter/rowBw) to the current frame (curCenter/
 // curBw). When the frames match (no pan/zoom since capture) this is a plain
-// copy; otherwise it is a nearest-neighbour horizontal resample — newly-exposed
-// columns are black. Mirrors reprojectWaterfallImage but per row, so only the
-// ~700 visible rows are touched (on time-scrollback), never the full history.
+// copy; otherwise it is a horizontal resample and newly-exposed columns are
+// black. Kiwi rows can be narrower than the current viewport after a zoom-out,
+// so its path preserves the brightest source pixel covered by each destination
+// column instead of point-sampling carriers out of existence.
+static int waterfallPixelScore(QRgb pixel)
+{
+    const int maxChannel = std::max(qRed(pixel), std::max(qGreen(pixel), qBlue(pixel)));
+    return maxChannel * 1024 + qRed(pixel) + qGreen(pixel) + qBlue(pixel);
+}
+
+static QRgb peakPreservedWaterfallSample(const QRgb* src, int w,
+                                         double srcLeft, double srcRight,
+                                         double srcCenter)
+{
+    if (srcRight <= 0.0 || srcLeft >= static_cast<double>(w)) {
+        return qRgb(0, 0, 0);
+    }
+
+    const double clampedLeft = std::clamp(srcLeft, 0.0, static_cast<double>(w));
+    const double clampedRight = std::clamp(srcRight, 0.0, static_cast<double>(w));
+    if (clampedRight - clampedLeft <= 1.0) {
+        return (srcCenter < 0.0 || srcCenter >= static_cast<double>(w))
+            ? qRgb(0, 0, 0)
+            : src[static_cast<int>(srcCenter)];
+    }
+
+    const int first = std::clamp(static_cast<int>(std::floor(clampedLeft)), 0, w - 1);
+    const int last = std::clamp(static_cast<int>(std::ceil(clampedRight)) - 1, 0, w - 1);
+    QRgb best = src[first];
+    int bestScore = waterfallPixelScore(best);
+    for (int i = first + 1; i <= last; ++i) {
+        const int score = waterfallPixelScore(src[i]);
+        if (score > bestScore) {
+            best = src[i];
+            bestScore = score;
+        }
+    }
+    return best;
+}
+
+static float interpolatedBinSample(const QVector<float>& bins,
+                                   double srcCenter,
+                                   float fallback)
+{
+    const int n = bins.size();
+    if (n <= 0) {
+        return fallback;
+    }
+    if (n == 1) {
+        return std::isfinite(bins[0]) ? bins[0] : fallback;
+    }
+
+    const double clamped = std::clamp(srcCenter, 0.0, static_cast<double>(n - 1));
+    const int left = std::clamp(static_cast<int>(std::floor(clamped)), 0, n - 1);
+    const int right = std::min(left + 1, n - 1);
+    const float leftValue = std::isfinite(bins[left]) ? bins[left] : fallback;
+    const float rightValue = std::isfinite(bins[right]) ? bins[right] : leftValue;
+    const float frac = static_cast<float>(clamped - static_cast<double>(left));
+    return leftValue + frac * (rightValue - leftValue);
+}
+
+static float peakPreservedBinSample(const QVector<float>& bins,
+                                    double srcLeft, double srcRight,
+                                    double srcCenter, float fallback)
+{
+    const int n = bins.size();
+    if (n <= 0 || srcRight <= 0.0 || srcLeft >= static_cast<double>(n)) {
+        return fallback;
+    }
+
+    const double clampedLeft = std::clamp(srcLeft, 0.0, static_cast<double>(n));
+    const double clampedRight = std::clamp(srcRight, 0.0, static_cast<double>(n));
+    if (clampedRight - clampedLeft <= 1.0) {
+        return interpolatedBinSample(bins, srcCenter, fallback);
+    }
+
+    const int first = std::clamp(static_cast<int>(std::floor(clampedLeft)), 0, n - 1);
+    const int last = std::clamp(static_cast<int>(std::ceil(clampedRight)) - 1, 0, n - 1);
+    float best = fallback;
+    bool haveBest = false;
+    for (int i = first; i <= last; ++i) {
+        const float value = bins[i];
+        if (!std::isfinite(value)) {
+            continue;
+        }
+        if (!haveBest || value > best) {
+            best = value;
+            haveBest = true;
+        }
+    }
+    return haveBest ? best : fallback;
+}
+
 static void remapHistoryRowInto(QRgb* dst, const QRgb* src, int w,
                                 double rowCenterMhz, double rowBwMhz,
-                                double curCenterMhz, double curBwMhz)
+                                double curCenterMhz, double curBwMhz,
+                                bool preservePeaks)
 {
     if (rowBwMhz <= 0.0 || curBwMhz <= 0.0
         || (rowCenterMhz == curCenterMhz && rowBwMhz == curBwMhz)) {
@@ -2318,16 +2466,38 @@ static void remapHistoryRowInto(QRgb* dst, const QRgb* src, int w,
         return;
     }
     const double rowStartMhz = rowCenterMhz - rowBwMhz / 2.0;
+    const double rowEndMhz = rowStartMhz + rowBwMhz;
     const double curStartMhz = curCenterMhz - curBwMhz / 2.0;
     for (int x = 0; x < w; ++x) {
         const double freqMhz = curStartMhz + (static_cast<double>(x) + 0.5) / w * curBwMhz;
         const double srcX = (freqMhz - rowStartMhz) / rowBwMhz * w;
-        dst[x] = (srcX < 0.0 || srcX >= w) ? qRgb(0, 0, 0)
-                                           : src[static_cast<int>(srcX)];
+        if (!preservePeaks) {
+            dst[x] = (srcX < 0.0 || srcX >= w) ? qRgb(0, 0, 0)
+                                               : src[static_cast<int>(srcX)];
+            continue;
+        }
+
+        const double freqLeftMhz = curStartMhz
+            + static_cast<double>(x) / w * curBwMhz;
+        const double freqRightMhz = curStartMhz
+            + static_cast<double>(x + 1) / w * curBwMhz;
+        if (freqRightMhz <= rowStartMhz || freqLeftMhz >= rowEndMhz) {
+            dst[x] = qRgb(0, 0, 0);
+            continue;
+        }
+        const double srcLeft = (freqLeftMhz - rowStartMhz) / rowBwMhz * w;
+        const double srcRight = (freqRightMhz - rowStartMhz) / rowBwMhz * w;
+        dst[x] = peakPreservedWaterfallSample(src, w, srcLeft, srcRight, srcX);
     }
 }
 
 void SpectrumWidget::rebuildWaterfallViewport()
+{
+    rebuildWaterfallViewportForFrame(m_centerMhz, m_bandwidthMhz);
+}
+
+void SpectrumWidget::rebuildWaterfallViewportForFrame(double centerMhz,
+                                                      double bandwidthMhz)
 {
     if (m_waterfall.isNull()) {
         return;
@@ -2354,7 +2524,8 @@ void SpectrumWidget::rebuildWaterfallViewport()
         auto* dst = reinterpret_cast<QRgb*>(m_waterfall.scanLine(y));
         const double rowCenter = haveFrames ? m_wfHistoryRowCenterMhz[rowIndex] : m_centerMhz;
         const double rowBw = haveFrames ? m_wfHistoryRowBwMhz[rowIndex] : m_bandwidthMhz;
-        remapHistoryRowInto(dst, src, w, rowCenter, rowBw, m_centerMhz, m_bandwidthMhz);
+        remapHistoryRowInto(dst, src, w, rowCenter, rowBw, centerMhz, bandwidthMhz,
+                            m_kiwiSdrWaterfallActive);
     }
 
 #ifdef AETHER_GPU_SPECTRUM
@@ -2376,6 +2547,35 @@ void SpectrumWidget::setWaterfallLive(bool live)
     m_wfLive = live;
     rebuildWaterfallViewport();
     markOverlayDirty();
+}
+
+void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
+                                                         double oldBandwidthMhz,
+                                                         double newCenterMhz,
+                                                         double newBandwidthMhz)
+{
+    const bool originalKiwiActive = m_kiwiSdrWaterfallActive;
+
+    auto reprojectStream = [this, oldCenterMhz, oldBandwidthMhz,
+                            newCenterMhz, newBandwidthMhz](bool kiwiStream) {
+        const bool visibleStream = beginWaterfallStreamWrite(kiwiStream);
+        auto restoreStream = qScopeGuard([&] {
+            endWaterfallStreamWrite(kiwiStream, visibleStream);
+        });
+        if (kiwiStream) {
+            m_kiwiSdrLastWaterfallBins.clear();
+        }
+        reprojectWaterfall(oldCenterMhz, oldBandwidthMhz,
+                           newCenterMhz, newBandwidthMhz);
+    };
+
+    reprojectStream(false);
+    reprojectStream(true);
+    if (m_kiwiSdrWaterfallActive != originalKiwiActive) {
+        saveCurrentWaterfallStreamState();
+        m_kiwiSdrWaterfallActive = originalKiwiActive;
+        restoreCurrentWaterfallStreamState();
+    }
 }
 
 int SpectrumWidget::waterfallStripWidth() const
@@ -2406,6 +2606,18 @@ void SpectrumWidget::clearDisplay()
 {
     m_bins.clear();
     m_smoothed.clear();
+    clearWaterfallRows();
+    m_hasNativeWaterfall = false;
+    m_lastNativeTileMs = 0;
+    m_waterfallFallbackActive = false;
+    m_nextFallbackWaterfallRowMs = 0;
+    const int graceMs = nativeWaterfallFallbackHoldMs(waterfallFallbackIntervalMs());
+    m_nativeWaterfallFallbackHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + graceMs;
+    markOverlayDirty();
+}
+
+void SpectrumWidget::clearCurrentWaterfallRows()
+{
     if (!m_waterfall.isNull()) {
         m_waterfall.fill(Qt::black);
     }
@@ -2420,13 +2632,216 @@ void SpectrumWidget::clearDisplay()
     m_wfHistoryRowCount = 0;
     m_wfHistoryOffsetRows = 0;
     m_wfLive = true;
-    m_hasNativeWaterfall = false;
-    m_lastNativeTileMs = 0;
-    m_waterfallFallbackActive = false;
-    m_nextFallbackWaterfallRowMs = 0;
-    const int graceMs = nativeWaterfallFallbackHoldMs(waterfallFallbackIntervalMs());
-    m_nativeWaterfallFallbackHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + graceMs;
-    markOverlayDirty();
+    m_wfRowsSinceRateChange = 0;
+    m_prevTileScanline.clear();
+    m_kiwiSdrFftTrace.clear();
+    m_kiwiSdrLastWaterfallBins.clear();
+    m_kiwiSdrLastWaterfallCenterMhz = 0.0;
+    m_kiwiSdrLastWaterfallBandwidthMhz = 0.0;
+    m_kiwiSdrLastWaterfallFrameValid = false;
+    m_kiwiSdrAutoFloorDbm = kKiwiSdrWaterfallMinDbm;
+    m_kiwiSdrAutoCeilDbm = kKiwiSdrWaterfallMaxDbm;
+    m_kiwiSdrAutoRangeValid = false;
+#ifdef AETHER_GPU_SPECTRUM
+    m_wfTexFullUpload = true;
+#endif
+}
+
+void SpectrumWidget::clearWaterfallRows()
+{
+    clearCurrentWaterfallRows();
+    m_nativeWaterfallState = WaterfallStreamState{};
+    m_kiwiWaterfallState = WaterfallStreamState{};
+    m_kiwiProfileWaterfallStates.clear();
+}
+
+SpectrumWidget::WaterfallStreamState& SpectrumWidget::activeKiwiWaterfallState()
+{
+    if (!m_kiwiSdrWaterfallProfileId.isEmpty()) {
+        return m_kiwiProfileWaterfallStates[m_kiwiSdrWaterfallProfileId];
+    }
+    return m_kiwiWaterfallState;
+}
+
+void SpectrumWidget::saveCurrentWaterfallStreamState()
+{
+    WaterfallStreamState& state = m_kiwiSdrWaterfallActive
+        ? activeKiwiWaterfallState()
+        : m_nativeWaterfallState;
+    state.waterfall = m_waterfall;
+    state.wfWriteRow = m_wfWriteRow;
+    state.waterfallHistory = m_waterfallHistory;
+    state.historyTimestamps = m_wfHistoryTimestamps;
+    state.historyWriteRow = m_wfHistoryWriteRow;
+    state.historyRowCount = m_wfHistoryRowCount;
+    state.historyOffsetRows = m_wfHistoryOffsetRows;
+    state.historyRowCenterMhz = m_wfHistoryRowCenterMhz;
+    state.historyRowBwMhz = m_wfHistoryRowBwMhz;
+    state.live = m_wfLive;
+    state.rowsSinceRateChange = m_wfRowsSinceRateChange;
+    state.prevTileScanline = m_prevTileScanline;
+    state.kiwiFftTrace = m_kiwiSdrFftTrace;
+    state.kiwiLastWaterfallBins = m_kiwiSdrLastWaterfallBins;
+    state.kiwiLastWaterfallCenterMhz = m_kiwiSdrLastWaterfallCenterMhz;
+    state.kiwiLastWaterfallBandwidthMhz = m_kiwiSdrLastWaterfallBandwidthMhz;
+    state.kiwiLastWaterfallFrameValid = m_kiwiSdrLastWaterfallFrameValid;
+    state.kiwiAutoFloorDbm = m_kiwiSdrAutoFloorDbm;
+    state.kiwiAutoCeilDbm = m_kiwiSdrAutoCeilDbm;
+    state.kiwiAutoRangeValid = m_kiwiSdrAutoRangeValid;
+    state.valid = true;
+}
+
+void SpectrumWidget::restoreCurrentWaterfallStreamState()
+{
+    WaterfallStreamState& state = m_kiwiSdrWaterfallActive
+        ? activeKiwiWaterfallState()
+        : m_nativeWaterfallState;
+    const QSize currentSize = m_waterfall.size();
+    const QSize currentHistorySize = m_waterfallHistory.size();
+    if (!state.valid
+        || (!currentSize.isEmpty() && !state.waterfall.isNull()
+            && state.waterfall.size() != currentSize)
+        || (!currentHistorySize.isEmpty() && !state.waterfallHistory.isNull()
+            && state.waterfallHistory.size() != currentHistorySize)) {
+        clearCurrentWaterfallRows();
+        return;
+    }
+
+    if (!state.waterfall.isNull()) {
+        m_waterfall = state.waterfall;
+    }
+    m_wfWriteRow = state.wfWriteRow;
+    if (!state.waterfallHistory.isNull()) {
+        m_waterfallHistory = state.waterfallHistory;
+    }
+    m_wfHistoryTimestamps = state.historyTimestamps;
+    m_wfHistoryWriteRow = state.historyWriteRow;
+    m_wfHistoryRowCount = state.historyRowCount;
+    m_wfHistoryOffsetRows = state.historyOffsetRows;
+    m_wfHistoryRowCenterMhz = state.historyRowCenterMhz;
+    m_wfHistoryRowBwMhz = state.historyRowBwMhz;
+    m_wfLive = state.live;
+    m_wfRowsSinceRateChange = state.rowsSinceRateChange;
+    m_prevTileScanline = state.prevTileScanline;
+    m_kiwiSdrFftTrace = state.kiwiFftTrace;
+    m_kiwiSdrLastWaterfallBins = state.kiwiLastWaterfallBins;
+    m_kiwiSdrLastWaterfallCenterMhz = state.kiwiLastWaterfallCenterMhz;
+    m_kiwiSdrLastWaterfallBandwidthMhz = state.kiwiLastWaterfallBandwidthMhz;
+    m_kiwiSdrLastWaterfallFrameValid = state.kiwiLastWaterfallFrameValid;
+    m_kiwiSdrAutoFloorDbm = state.kiwiAutoFloorDbm;
+    m_kiwiSdrAutoCeilDbm = state.kiwiAutoCeilDbm;
+    m_kiwiSdrAutoRangeValid = state.kiwiAutoRangeValid;
+#ifdef AETHER_GPU_SPECTRUM
+    m_wfTexFullUpload = true;
+#endif
+}
+
+bool SpectrumWidget::beginWaterfallStreamWrite(bool kiwiStream)
+{
+    const bool visibleStream = m_kiwiSdrWaterfallActive == kiwiStream;
+    if (visibleStream) {
+        return true;
+    }
+
+    saveCurrentWaterfallStreamState();
+    m_kiwiSdrWaterfallActive = kiwiStream;
+    restoreCurrentWaterfallStreamState();
+    return false;
+}
+
+void SpectrumWidget::endWaterfallStreamWrite(bool kiwiStream,
+                                             bool visibleStream)
+{
+    if (visibleStream) {
+        return;
+    }
+
+    saveCurrentWaterfallStreamState();
+    m_kiwiSdrWaterfallActive = !kiwiStream;
+    restoreCurrentWaterfallStreamState();
+}
+
+QVector<float> SpectrumWidget::smoothKiwiSdrWaterfallBins(const QVector<float>& bins)
+{
+    if (bins.isEmpty()) {
+        m_kiwiSdrLastWaterfallBins.clear();
+        m_kiwiSdrLastWaterfallFrameValid = false;
+        return {};
+    }
+
+    QVector<float> horizontal(bins.size());
+    if (bins.size() == 1) {
+        horizontal[0] = bins[0];
+    } else {
+        horizontal[0] = 0.75f * bins[0] + 0.25f * bins[1];
+        for (int i = 1; i < bins.size() - 1; ++i) {
+            horizontal[i] = 0.25f * bins[i - 1]
+                + 0.50f * bins[i]
+                + 0.25f * bins[i + 1];
+        }
+        horizontal[bins.size() - 1] =
+            0.25f * bins[bins.size() - 2] + 0.75f * bins[bins.size() - 1];
+    }
+
+    if (m_kiwiSdrLastWaterfallBins.size() == horizontal.size()) {
+        for (int i = 0; i < horizontal.size(); ++i) {
+            horizontal[i] = 0.65f * horizontal[i]
+                + 0.35f * m_kiwiSdrLastWaterfallBins[i];
+        }
+    }
+    m_kiwiSdrLastWaterfallBins = horizontal;
+    return horizontal;
+}
+
+void SpectrumWidget::updateKiwiSdrAutoColorRange(const QVector<float>& bins)
+{
+    const KiwiSdrProtocol::WaterfallAperture aperture =
+        KiwiSdrProtocol::autoWaterfallAperture(bins);
+    if (!aperture.valid) {
+        return;
+    }
+
+    static constexpr float kMinSpanDb = 32.0f;
+    static constexpr float kMaxSpanDb = 120.0f;
+    static constexpr float kSmoothing = 0.10f;
+
+    float candidateFloor = qBound(
+        kKiwiSdrWaterfallMinDbm,
+        aperture.minDbm,
+        kKiwiSdrWaterfallMaxDbm - kMinSpanDb);
+    float candidateCeil = qBound(
+        candidateFloor + kMinSpanDb,
+        aperture.maxDbm,
+        kKiwiSdrWaterfallMaxDbm);
+
+    float candidateSpan = candidateCeil - candidateFloor;
+    if (candidateSpan > kMaxSpanDb) {
+        candidateCeil = candidateFloor + kMaxSpanDb;
+        candidateSpan = kMaxSpanDb;
+    }
+    if (candidateCeil > kKiwiSdrWaterfallMaxDbm) {
+        candidateCeil = kKiwiSdrWaterfallMaxDbm;
+    }
+    if (candidateCeil - candidateFloor < kMinSpanDb) {
+        candidateFloor = qMax(kKiwiSdrWaterfallMinDbm,
+                              candidateCeil - kMinSpanDb);
+    }
+
+    if (!m_kiwiSdrAutoRangeValid) {
+        m_kiwiSdrAutoFloorDbm = candidateFloor;
+        m_kiwiSdrAutoCeilDbm = candidateCeil;
+        m_kiwiSdrAutoRangeValid = true;
+        return;
+    }
+
+    m_kiwiSdrAutoFloorDbm += kSmoothing
+        * (candidateFloor - m_kiwiSdrAutoFloorDbm);
+    m_kiwiSdrAutoCeilDbm += kSmoothing
+        * (candidateCeil - m_kiwiSdrAutoCeilDbm);
+    if (m_kiwiSdrAutoCeilDbm - m_kiwiSdrAutoFloorDbm < kMinSpanDb) {
+        m_kiwiSdrAutoFloorDbm = qMax(kKiwiSdrWaterfallMinDbm,
+                                     m_kiwiSdrAutoCeilDbm - kMinSpanDb);
+    }
 }
 
 void SpectrumWidget::setConnectionAnimationVisible(bool on, const QString& label)
@@ -2450,6 +2865,20 @@ void SpectrumWidget::setConnectionAnimationVisible(bool on, const QString& label
         m_connectionAnimationLabel.clear();
         m_connectionAnimationTimer->stop();
     }
+    markOverlayDirty();
+}
+
+void SpectrumWidget::setKiwiSdrConnectionOverlay(bool visible,
+                                                 const QString& detail)
+{
+    const QString trimmedDetail = detail.trimmed();
+    if (m_kiwiSdrConnectionOverlayVisible == visible
+        && m_kiwiSdrConnectionOverlayDetail == trimmedDetail) {
+        return;
+    }
+
+    m_kiwiSdrConnectionOverlayVisible = visible;
+    m_kiwiSdrConnectionOverlayDetail = trimmedDetail;
     markOverlayDirty();
 }
 
@@ -2637,6 +3066,67 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     p.restore();
 }
 
+void SpectrumWidget::drawKiwiSdrConnectionOverlay(QPainter& p,
+                                                  const QRect& contentRect)
+{
+    if (!m_kiwiSdrConnectionOverlayVisible || contentRect.width() < 160
+        || contentRect.height() < 80) {
+        return;
+    }
+
+    const QString title = QStringLiteral("Not connected to KiwiSDR");
+    const QString detail = m_kiwiSdrConnectionOverlayDetail.isEmpty()
+        ? QStringLiteral("Disconnected")
+        : m_kiwiSdrConnectionOverlayDetail;
+
+    QFont titleFont = p.font();
+    titleFont.setPointSize(15);
+    titleFont.setBold(true);
+    QFont detailFont = titleFont;
+    detailFont.setPointSize(10);
+    detailFont.setBold(false);
+
+    const QFontMetrics titleFm(titleFont);
+    const QFontMetrics detailFm(detailFont);
+    const int maxTextWidth =
+        qMax(120, qMin(contentRect.width() - 48, 460));
+    const QRect titleBounds = titleFm.boundingRect(
+        QRect(0, 0, maxTextWidth, 200),
+        Qt::AlignCenter | Qt::TextWordWrap,
+        title);
+    const QRect detailBounds = detailFm.boundingRect(
+        QRect(0, 0, maxTextWidth, 240),
+        Qt::AlignCenter | Qt::TextWordWrap,
+        detail);
+    const int boxW =
+        qBound(180, qMax(titleBounds.width(), detailBounds.width()) + 40,
+               qMax(180, contentRect.width() - 32));
+    const int boxH = titleBounds.height() + detailBounds.height() + 34;
+    const QRect box(contentRect.center().x() - boxW / 2,
+                    contentRect.center().y() - boxH / 2,
+                    boxW, boxH);
+
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 210), 1));
+    p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 220));
+    p.drawRoundedRect(box, 6, 6);
+
+    p.setFont(titleFont);
+    p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
+    QRect textRect = box.adjusted(16, 10, -16, -10);
+    const QRect titleRect(textRect.left(), textRect.top(),
+                          textRect.width(), titleBounds.height() + 4);
+    p.drawText(titleRect, Qt::AlignCenter | Qt::TextWordWrap, title);
+
+    p.setFont(detailFont);
+    p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
+    const QRect detailRect(textRect.left(), titleRect.bottom() + 4,
+                           textRect.width(), detailBounds.height() + 6);
+    p.drawText(detailRect, Qt::AlignCenter | Qt::TextWordWrap, detail);
+    p.restore();
+}
+
 void SpectrumWidget::resetGpuResources()
 {
 #ifdef AETHER_GPU_SPECTRUM
@@ -2704,18 +3194,23 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
         return;
     }
 
-    // Visible waterfall: reproject immediately — it is on screen and is only a
-    // few hundred rows (~3 ms at ultrawide).
-    reprojectWaterfallImage(m_waterfall, oldCenterMhz, oldBandwidthMhz,
-                            newCenterMhz, newBandwidthMhz);
+    // Prefer the per-row history. Rows can be captured across several pan/zoom
+    // frames, especially when switching between native and Kiwi waterfall data;
+    // rebuilding from stamped history preserves each row's own frequency frame.
+    if (!m_waterfallHistory.isNull() && m_wfHistoryRowCount > 0) {
+        rebuildWaterfallViewportForFrame(newCenterMhz, newBandwidthMhz);
+    } else {
+        reprojectWaterfallImage(m_waterfall, oldCenterMhz, oldBandwidthMhz,
+                                newCenterMhz, newBandwidthMhz);
+    }
     m_prevTileScanline.clear();
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
 
     // History image is intentionally NOT reprojected here: each row carries its
-    // own capture frame (m_wfHistoryRowCenterMhz/BwMhz) and is remapped lazily —
-    // only the visible rows, only on time-scrollback — in rebuildWaterfallViewport.
+    // own capture frame (m_wfHistoryRowCenterMhz/BwMhz) and is remapped on
+    // demand into the current visible viewport.
 }
 
 bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthMhz,
@@ -2824,8 +3319,10 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
             m_panCenterAnim->stop();
         }
         if (oldBandwidthMhz > 0.0 && bandwidthMhz > 0.0) {
-            reprojectWaterfall(waterfallFrameCenterMhz, oldBandwidthMhz,
-                               centerMhz, bandwidthMhz);
+            handleWaterfallFrequencyFrameChange(waterfallFrameCenterMhz,
+                                                oldBandwidthMhz,
+                                                centerMhz,
+                                                bandwidthMhz);
         }
         const bool keptSpectrum = reprojectSpectrum(oldCenterMhz, oldBandwidthMhz,
                                                     centerMhz, bandwidthMhz);
@@ -2838,6 +3335,7 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
         m_panCenterTarget = centerMhz;
         resetNoiseFloorBaseline();
         markOverlayDirty();
+        emit frequencyRangeChanged(m_centerMhz, m_bandwidthMhz);
         return;
     }
 
@@ -2868,8 +3366,10 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     // center animation lands. During rapid edge-follow retargets the waterfall
     // image is already in the previous target's coordinate frame, so reproject
     // from m_panCenterTarget rather than the mid-animation visual center.
-    reprojectWaterfall(waterfallSourceCenterMhz, m_bandwidthMhz,
-                       centerMhz, m_bandwidthMhz);
+    handleWaterfallFrequencyFrameChange(waterfallSourceCenterMhz,
+                                        m_bandwidthMhz,
+                                        centerMhz,
+                                        m_bandwidthMhz);
 
     m_panCenterTarget = centerMhz;
 
@@ -2900,6 +3400,7 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     m_panCenterAnim->setEndValue(centerMhz);
     m_panCenterAnim->setDuration(110);
     m_panCenterAnim->start();
+    emit frequencyRangeChanged(centerMhz, m_bandwidthMhz);
 }
 
 void SpectrumWidget::setSpectrumFrac(float f)
@@ -3410,36 +3911,34 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     }
     m_bins = *spectrumBins;
 
-    // ── Live noise floor measurement (two-pass trimmed mean) ─────────────
-    // Same technique as the waterfall auto-black: compute the mean of ALL bins,
-    // then average only the bins at-or-below that mean.  Signal peaks inflate
-    // the first-pass mean and therefore exclude themselves from the second pass,
-    // leaving only the "consistently low, close-in-value" noise bins — exactly
-    // the flat green line a human eye reads as the noise floor on the scope.
-    // This is robust even on a very crowded band (40-50% bins occupied).
-    if (!spectrumBins->isEmpty()) {
-        const float frameFloor = estimateNoiseFloorDbm(*spectrumBins);
-        constexpr float kAlpha = 0.05f;  // ~20-frame window ≈ 0.8 s at 25 fps
-        m_measuredNoiseFloorDbm = (m_measuredNoiseFloorDbm <= -500.0f)
-            ? frameFloor
-            : m_measuredNoiseFloorDbm * (1.0f - kAlpha) + frameFloor * kAlpha;
-    }
+    if (!m_kiwiSdrWaterfallActive) {
+        // ── Live noise floor measurement (two-pass trimmed mean) ─────────
+        // Same technique as the waterfall auto-black: compute the mean of ALL
+        // bins, then average only the bins at-or-below that mean. Signal peaks
+        // inflate the first-pass mean and therefore exclude themselves from the
+        // second pass, leaving only the flat noise baseline a human eye reads
+        // as the noise floor on the scope.
+        if (!spectrumBins->isEmpty()) {
+            const float frameFloor = estimateNoiseFloorDbm(*spectrumBins);
+            constexpr float kAlpha = 0.05f;  // ~20-frame window ≈ 0.8 s at 25 fps
+            m_measuredNoiseFloorDbm = (m_measuredNoiseFloorDbm <= -500.0f)
+                ? frameFloor
+                : m_measuredNoiseFloorDbm * (1.0f - kAlpha)
+                    + frameFloor * kAlpha;
+        }
 
-    // Noise-floor auto-adjust (the existing Display → Floor slider).
-    // Per-frame baseline tracking with asymmetric smoothing (fast on
-    // drops, slow on rises) and a candidate-state transient filter so
-    // brief upward spikes — lightning crashes, key-up edge clicks —
-    // don't pull the lock.  Pans m_refLevel to keep the smoothed floor
-    // at m_noiseFloorPosition; span stays fixed (replaces the earlier
-    // zoom-when-floor-moves behaviour that changed signal visual heights
-    // every time the floor drifted).  Algorithm cherry-picked from
-    // rfoust's PR #2643 work and consolidated into this existing path.
-    const bool useFreshLockFrame =
-        m_noiseFloorFreshFrameCount > 0 && !spectrumBins->isEmpty();
-    const bool noiseFloorFrameConsumed =
-        updateNoiseFloorBaseline(useFreshLockFrame ? *spectrumBins : m_smoothed,
-                                 useFreshLockFrame);
-    if (useFreshLockFrame && noiseFloorFrameConsumed) --m_noiseFloorFreshFrameCount;
+        // Noise-floor auto-adjust (Display → Floor slider) follows the visible
+        // FFT source. Native Flex FFT frames drive it only while Flex is visible;
+        // Kiwi rows update it from the Kiwi-derived FFT trace below.
+        const bool useFreshLockFrame =
+            m_noiseFloorFreshFrameCount > 0 && !spectrumBins->isEmpty();
+        const bool noiseFloorFrameConsumed =
+            updateNoiseFloorBaseline(useFreshLockFrame ? *spectrumBins : m_smoothed,
+                                     useFreshLockFrame);
+        if (useFreshLockFrame && noiseFloorFrameConsumed) {
+            --m_noiseFloorFreshFrameCount;
+        }
+    }
 
     // ── Auto-squelch: own two-pass trimmed-mean noise floor ───────────────
     // Independent copy of the floor measurement — not borrowed from the
@@ -3486,8 +3985,14 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         // the same paced FFT rows and TX filter mask; unrelated pans keep their
         // native waterfall path.
         const bool txAffectsPan = txWaterfallAffectsThisPan();
-        if (txAffectsPan && m_showTxInWaterfall && !m_waterfall.isNull()) {
-            pushWaterfallRow(*spectrumBins, m_waterfall.width());
+        if (txAffectsPan && m_showTxInWaterfall) {
+            const bool visibleStream = beginWaterfallStreamWrite(false);
+            auto restoreStream = qScopeGuard([&] {
+                endWaterfallStreamWrite(false, visibleStream);
+            });
+            if (!m_waterfall.isNull()) {
+                pushWaterfallRow(*spectrumBins, m_waterfall.width());
+            }
         } else if (!txAffectsPan) {
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
             updateNativeWaterfallFallbackState(now);
@@ -3526,6 +4031,10 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     PerfUpdateScope perfScope(PerfUpdateScope::Kind::Waterfall);
     // Native waterfall tiles carry intensity values (int16/128.0f, ~96-120 on HF).
     if (binsIntensity.isEmpty()) return;
+    const bool visibleStream = beginWaterfallStreamWrite(false);
+    auto restoreStream = qScopeGuard([&] {
+        endWaterfallStreamWrite(false, visibleStream);
+    });
 
     // Forward to GPU renderer (#502)
 
@@ -3696,7 +4205,213 @@ void SpectrumWidget::updateWaterfallRow(const QVector<float>& binsIntensity,
     if (PerfTelemetry::instance().enabled())
         PerfTelemetry::instance().recordWaterfallNativeRows(rowsToPush);
 
+    if (visibleStream) {
+        leanCappedUpdate();
+    }
+}
+
+void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
+{
+    if (m_kiwiSdrWaterfallActive == active) {
+        return;
+    }
+
+    saveCurrentWaterfallStreamState();
+    m_kiwiSdrWaterfallActive = active;
+    restoreCurrentWaterfallStreamState();
+    if (!active) {
+        m_pendingDbmRangeEcho = false;
+        m_pendingDbmRangeEchoFromAutoFloor = false;
+        m_pendingDbmRangeEchoStartMs = 0;
+        clearDbmReleaseRebase();
+        m_resetFftSmoothingOnNextFrame = true;
+        resetNoiseFloorBaseline();
+    }
+    reacquireNoiseFloorLockFromVisibleSource();
+    updateFpsMeterLabels();
+#ifdef AETHER_GPU_SPECTRUM
+    m_wfTexFullUpload = true;
+#endif
     leanCappedUpdate();
+}
+
+void SpectrumWidget::setKiwiSdrWaterfallAvailable(bool available)
+{
+    if (m_kiwiSdrWaterfallAvailable == available) {
+        return;
+    }
+
+    m_kiwiSdrWaterfallAvailable = available;
+    if (!available) {
+        setKiwiSdrWaterfallActive(false);
+    }
+}
+
+void SpectrumWidget::setKiwiSdrWaterfallProfile(const QString& profileId)
+{
+    const QString normalized = profileId.trimmed();
+    if (m_kiwiSdrWaterfallProfileId == normalized) {
+        return;
+    }
+
+    if (m_kiwiSdrWaterfallActive) {
+        saveCurrentWaterfallStreamState();
+    }
+    m_kiwiSdrWaterfallProfileId = normalized;
+    if (m_kiwiSdrWaterfallActive) {
+        restoreCurrentWaterfallStreamState();
+        reacquireNoiseFloorLockFromVisibleSource();
+        leanCappedUpdate();
+    }
+}
+
+void SpectrumWidget::clearKiwiSdrWaterfallRows()
+{
+    m_kiwiWaterfallState = WaterfallStreamState{};
+    m_kiwiProfileWaterfallStates.clear();
+    m_kiwiSdrFftTrace.clear();
+    if (m_kiwiSdrWaterfallActive) {
+        clearCurrentWaterfallRows();
+        leanCappedUpdate();
+    }
+}
+
+void SpectrumWidget::clearKiwiSdrWaterfallRowsForProfile(const QString& profileId)
+{
+    const QString normalized = profileId.trimmed();
+    if (normalized.isEmpty()) {
+        return;
+    }
+
+    m_kiwiProfileWaterfallStates.remove(normalized);
+    if (m_kiwiSdrWaterfallActive
+        && m_kiwiSdrWaterfallProfileId == normalized) {
+        clearCurrentWaterfallRows();
+        leanCappedUpdate();
+    }
+}
+
+const QVector<float>& SpectrumWidget::displaySpectrumBins() const
+{
+    return m_kiwiSdrWaterfallActive ? m_kiwiSdrFftTrace : m_smoothed;
+}
+
+const QVector<float>& SpectrumWidget::noiseFloorAutoLevelBins() const
+{
+    if (m_kiwiSdrWaterfallActive) {
+        return m_kiwiSdrFftTrace;
+    }
+    return !m_smoothed.isEmpty() ? m_smoothed : m_bins;
+}
+
+void SpectrumWidget::setKiwiSdrWaterfallAdjustments(int cellDb, int floorDb)
+{
+    const int clampedCell = std::clamp(cellDb, -30, 30);
+    const int clampedFloor = std::clamp(floorDb, -30, 30);
+    if (m_kiwiSdrWaterfallCellDb == clampedCell
+        && m_kiwiSdrWaterfallFloorDb == clampedFloor) {
+        return;
+    }
+
+    m_kiwiSdrWaterfallCellDb = clampedCell;
+    m_kiwiSdrWaterfallFloorDb = clampedFloor;
+    if (m_kiwiSdrWaterfallActive) {
+        leanCappedUpdate();
+    }
+}
+
+void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
+                                               double lowFreqMhz,
+                                               double highFreqMhz,
+                                               quint32 timecode)
+{
+    Q_UNUSED(timecode);
+    if (binsDbm.isEmpty()) {
+        return;
+    }
+
+    const bool visibleStream = beginWaterfallStreamWrite(true);
+    auto restoreStream = qScopeGuard([&] {
+        endWaterfallStreamWrite(true, visibleStream);
+    });
+
+    const int destWidth = m_waterfall.width();
+    if (destWidth <= 0) {
+        return;
+    }
+
+    double rowLowMhz = lowFreqMhz;
+    double rowHighMhz = highFreqMhz;
+    if (rowHighMhz <= rowLowMhz || rowLowMhz <= 0.0 || m_bandwidthMhz <= 0.0) {
+        return;
+    }
+    const double rowCenterMhz = (rowLowMhz + rowHighMhz) * 0.5;
+    const double rowBandwidthMhz = rowHighMhz - rowLowMhz;
+    const double centerToleranceMhz = std::max(1.0e-9, rowBandwidthMhz * 1.0e-6);
+    const double bandwidthToleranceMhz = std::max(1.0e-9, rowBandwidthMhz * 1.0e-6);
+    const bool sameWaterfallFrame = m_kiwiSdrLastWaterfallFrameValid
+        && std::abs(rowCenterMhz - m_kiwiSdrLastWaterfallCenterMhz) <= centerToleranceMhz
+        && std::abs(rowBandwidthMhz - m_kiwiSdrLastWaterfallBandwidthMhz) <= bandwidthToleranceMhz;
+    if (!sameWaterfallFrame) {
+        m_kiwiSdrLastWaterfallBins.clear();
+        m_kiwiSdrLastWaterfallCenterMhz = rowCenterMhz;
+        m_kiwiSdrLastWaterfallBandwidthMhz = rowBandwidthMhz;
+        m_kiwiSdrLastWaterfallFrameValid = true;
+    }
+
+    const QVector<float> smoothedBins = smoothKiwiSdrWaterfallBins(binsDbm);
+    if (m_kiwiSdrWaterfallActive && destWidth > 0) {
+        QVector<float> kiwiTrace(destWidth, kKiwiSdrWaterfallMinDbm);
+        const double rowLow = rowCenterMhz - rowBandwidthMhz * 0.5;
+        const double viewLow = m_centerMhz - m_bandwidthMhz * 0.5;
+        const int srcSize = smoothedBins.size();
+        for (int x = 0; x < destWidth; ++x) {
+            const double freqMhz = viewLow
+                + (static_cast<double>(x) + 0.5)
+                    * m_bandwidthMhz / static_cast<double>(destWidth);
+            const double srcCenter =
+                ((freqMhz - rowLow) / rowBandwidthMhz)
+                    * static_cast<double>(srcSize) - 0.5;
+            if (srcCenter < -0.5
+                || srcCenter > static_cast<double>(srcSize) - 0.5) {
+                continue;
+            }
+            const double srcLeft = std::max(0.0, srcCenter - 0.5);
+            const double srcRight =
+                std::min(static_cast<double>(srcSize), srcCenter + 0.5);
+            kiwiTrace[x] = peakPreservedBinSample(
+                smoothedBins, srcLeft, srcRight, srcCenter,
+                kKiwiSdrWaterfallMinDbm);
+        }
+        if (m_kiwiSdrFftTrace.size() != kiwiTrace.size()) {
+            m_kiwiSdrFftTrace = kiwiTrace;
+        } else {
+            for (int i = 0; i < kiwiTrace.size(); ++i) {
+                m_kiwiSdrFftTrace[i] = SMOOTH_ALPHA * kiwiTrace[i]
+                    + (1.0f - SMOOTH_ALPHA) * m_kiwiSdrFftTrace[i];
+            }
+        }
+        if (!m_kiwiSdrFftTrace.isEmpty()) {
+            const float frameFloor = estimateNoiseFloorDbm(m_kiwiSdrFftTrace);
+            constexpr float kAlpha = 0.05f;
+            m_measuredNoiseFloorDbm = (m_measuredNoiseFloorDbm <= -500.0f)
+                ? frameFloor
+                : m_measuredNoiseFloorDbm * (1.0f - kAlpha)
+                    + frameFloor * kAlpha;
+
+            const bool useFreshLockFrame = m_noiseFloorFreshFrameCount > 0;
+            const bool noiseFloorFrameConsumed =
+                updateNoiseFloorBaseline(m_kiwiSdrFftTrace, useFreshLockFrame);
+            if (useFreshLockFrame && noiseFloorFrameConsumed) {
+                --m_noiseFloorFreshFrameCount;
+            }
+        }
+    }
+    pushKiwiSdrWaterfallRow(smoothedBins, destWidth,
+                            rowCenterMhz, rowBandwidthMhz);
+    if (visibleStream) {
+        leanCappedUpdate();
+    }
 }
 
 // ─── Layout helpers ────────────────────────────────────────────────────────────
@@ -4697,7 +5412,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const double mouseXFrac = static_cast<double>(m_bwDragStartX) / width() - 0.5;
         const double zoomCenter = std::max(m_bwDragAnchorMhz - mouseXFrac * newBw,
                                            newBw / 2.0);
-        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw);
+        handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
+                                            zoomCenter, newBw);
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw)) {
             m_bins.clear();
             m_smoothed.clear();
@@ -4752,7 +5468,8 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const double deltaMhz = -(static_cast<double>(dx) / width()) * m_bandwidthMhz;
         const double newCenter = std::max(m_panDragStartCenter + deltaMhz,
                                           m_bandwidthMhz / 2.0);
-        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
+        handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
+                                            newCenter, m_bandwidthMhz);
         m_centerMhz = newCenter;
         markOverlayDirty();
         emit centerChangeRequested(newCenter);
@@ -5255,7 +5972,8 @@ bool SpectrumWidget::event(QEvent* ev)
             const double anchorMhz = m_centerMhz + mouseXFrac * m_bandwidthMhz;
             const double newCenter = std::max(anchorMhz - mouseXFrac * newBw,
                                               newBw / 2.0);
-            reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
+            handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
+                                                newCenter, newBw);
             if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
                 m_bins.clear();
                 m_smoothed.clear();
@@ -5421,7 +6139,8 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
         const double mouseXFrac = ev->position().x() / width() - 0.5;
         const double anchorMhz  = m_centerMhz + mouseXFrac * m_bandwidthMhz;
         const double newCenter  = std::max(anchorMhz - mouseXFrac * newBw, newBw / 2.0);
-        reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, newBw);
+        handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
+                                            newCenter, newBw);
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
             m_bins.clear();
             m_smoothed.clear();
@@ -5531,6 +6250,30 @@ QRgb SpectrumWidget::dbmToRgb(float dbm) const
     const float effectiveMax = effectiveMin + visRange;
 
     const float t = qBound(0.0f, (dbm - effectiveMin) / (effectiveMax - effectiveMin), 1.0f);
+
+    int n = 0;
+    const auto* stops = wfSchemeStops(m_wfColorScheme, n);
+    return interpolateGradient(t, stops, n);
+}
+
+QRgb SpectrumWidget::kiwiSdrLevelToRgb(float level) const
+{
+    // Kiwi W/F bytes are display/bin intensity values, not calibrated dBm.
+    // They are mapped into a Kiwi-only pseudo-dB display range so the
+    // existing waterfall color machinery can be reused without touching Flex.
+    const float floorDbm = m_kiwiSdrAutoRangeValid
+        ? m_kiwiSdrAutoFloorDbm
+        : kKiwiSdrWaterfallMinDbm;
+    const float ceilDbm = m_kiwiSdrAutoRangeValid
+        ? m_kiwiSdrAutoCeilDbm
+        : kKiwiSdrWaterfallMaxDbm;
+    const float adjustedFloorDbm = floorDbm
+        + static_cast<float>(m_kiwiSdrWaterfallFloorDb);
+    const float adjustedCeilDbm = qMax(
+        adjustedFloorDbm + 1.0f,
+        ceilDbm + static_cast<float>(m_kiwiSdrWaterfallCellDb));
+    const float t = KiwiSdrProtocol::waterfallColorIndex(
+        level, adjustedFloorDbm, adjustedCeilDbm);
 
     int n = 0;
     const auto* stops = wfSchemeStops(m_wfColorScheme, n);
@@ -5663,6 +6406,58 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
     recordWaterfallFrame();
     if (PerfTelemetry::instance().enabled())
         PerfTelemetry::instance().recordWaterfallFallbackRows(1);
+}
+
+void SpectrumWidget::pushKiwiSdrWaterfallRow(const QVector<float>& bins,
+                                             int destWidth,
+                                             double rowCenterMhz,
+                                             double rowBandwidthMhz)
+{
+    if (m_waterfall.isNull() || destWidth <= 0 || bins.isEmpty()) {
+        return;
+    }
+
+    const int h = m_waterfall.height();
+    if (h <= 1) {
+        return;
+    }
+
+    const int srcSize = bins.size();
+    updateKiwiSdrAutoColorRange(bins);
+    if (rowCenterMhz <= 0.0 || rowBandwidthMhz <= 0.0) {
+        rowCenterMhz = m_centerMhz;
+        rowBandwidthMhz = m_bandwidthMhz;
+    }
+
+    QVector<QRgb> scanline(destWidth, qRgb(0, 0, 0));
+    for (int x = 0; x < destWidth; ++x) {
+        const double srcLeft = static_cast<double>(x)
+            * static_cast<double>(srcSize) / static_cast<double>(destWidth);
+        const double srcRight = static_cast<double>(x + 1)
+            * static_cast<double>(srcSize) / static_cast<double>(destWidth);
+        const double srcCenter = (static_cast<double>(x) + 0.5)
+            * static_cast<double>(srcSize) / static_cast<double>(destWidth) - 0.5;
+        const float level = peakPreservedBinSample(
+            bins, srcLeft, srcRight, srcCenter, kKiwiSdrWaterfallMinDbm);
+        scanline[x] = kiwiSdrLevelToRgb(level);
+    }
+
+    appendHistoryRow(scanline.constData(), QDateTime::currentMSecsSinceEpoch(),
+                     rowCenterMhz, rowBandwidthMhz);
+    if (m_wfLive) {
+        QVector<QRgb> visibleLine(destWidth, qRgb(0, 0, 0));
+        remapHistoryRowInto(visibleLine.data(), scanline.constData(), destWidth,
+                            rowCenterMhz, rowBandwidthMhz,
+                            m_centerMhz, m_bandwidthMhz,
+                            true);
+        appendVisibleRow(visibleLine.constData());
+    } else {
+        rebuildWaterfallViewport();
+    }
+    recordKiwiSdrWaterfallFrame();
+    if (PerfTelemetry::instance().enabled()) {
+        PerfTelemetry::instance().recordWaterfallFallbackRows(1);
+    }
 }
 
 #ifdef AETHER_GPU_SPECTRUM
@@ -6340,6 +7135,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             }
 
             drawConnectionAnimation(p, specRect);
+            drawKiwiSdrConnectionOverlay(
+                p, QRect(0, 0, qMax(0, w - DBM_STRIP_W), h));
             drawDbmScale(p, specRect);
             drawTimeScale(p, wfRect);
 
@@ -6364,8 +7161,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         }
 
         // Generate FFT spectrum vertices with baked colors
-        if (!m_smoothed.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
-            const int n = qMin(m_smoothed.size(), kMaxFftBins);
+        const QVector<float>& fftBins = displaySpectrumBins();
+        if (!fftBins.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
+            const int n = qMin(fftBins.size(), kMaxFftBins);
             const float minDbm = m_refLevel - m_dynamicRange;
             const float maxDbm = m_refLevel;
             const float range = maxDbm - minDbm;
@@ -6411,7 +7209,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             QVector<Pt> pts(n);
             for (int i = 0; i < n; ++i) {
                 pts[i].x = 2.0f * i / (n - 1) - 1.0f;
-                float t = qBound(0.0f, (m_smoothed[i] - minDbm) / range, 1.0f);
+                float t = qBound(0.0f, (fftBins[i] - minDbm) / range, 1.0f);
                 pts[i].y = yBot + t * (yTop - yBot);
             }
 
@@ -6425,7 +7223,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             const float hPx = static_cast<float>(qMax(1, specH));
 
             for (int i = 0; i < n; ++i) {
-                float t = qBound(0.0f, (m_smoothed[i] - minDbm) / range, 1.0f);
+                float t = qBound(0.0f, (fftBins[i] - minDbm) / range, 1.0f);
 
                 // Compute perpendicular normal from adjacent points
                 float dx, dy;
@@ -6555,8 +7353,9 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     }
 
     // Draw FFT spectrum — viewport restricted to spectrum rect
-    if (m_fftFillPipeline && m_fftLinePipeline && !m_smoothed.isEmpty()) {
-        const int n = qMin(m_smoothed.size(), kMaxFftBins);
+    const QVector<float>& fftDrawBins = displaySpectrumBins();
+    if (m_fftFillPipeline && m_fftLinePipeline && !fftDrawBins.isEmpty()) {
+        const int n = qMin(fftDrawBins.size(), kMaxFftBins);
         float specVpX = static_cast<float>(specRect.x()) * dpr;
         float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         float specVpW = static_cast<float>(specRect.width()) * dpr;
@@ -6818,6 +7617,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         }
 
         drawConnectionAnimation(p, specRect);
+        drawKiwiSdrConnectionOverlay(
+            p, QRect(0, 0, qMax(0, width() - DBM_STRIP_W), height()));
     }
 
     // Reposition all VFO widgets — deconflict flags so they fly away from each other
@@ -7127,7 +7928,8 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
 
 void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 {
-    if (m_smoothed.isEmpty()) {
+    const QVector<float>& fftBins = displaySpectrumBins();
+    if (fftBins.isEmpty()) {
         p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.dim"));
         p.drawText(r, Qt::AlignCenter, "No panadapter data — waiting for radio stream");
         return;
@@ -7135,7 +7937,7 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 
     const int w = r.width();
     const int h = r.height();
-    const int n = m_smoothed.size();
+    const int n = fftBins.size();
 
     // Heat map: blue(0) → cyan(0.25) → green(0.5) → yellow(0.75) → red(1.0)
     auto heatColor = [](float t) -> QColor {
@@ -7160,7 +7962,7 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
     struct Pt { int x, y; float t; };
     QVector<Pt> pts(n);
     for (int i = 0; i < n; ++i) {
-        const float dbm  = m_smoothed[i];
+        const float dbm  = fftBins[i];
         const float norm = qBound(0.0f, (m_refLevel - dbm) / m_dynamicRange, 1.0f);
         pts[i].x = r.left() + static_cast<int>(static_cast<float>(i) / n * w);
         pts[i].y = r.top()  + qMin(static_cast<int>(norm * h), h - 1);

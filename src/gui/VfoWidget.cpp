@@ -6,6 +6,7 @@
 #include "RxApplet.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include "core/KiwiSdrManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -44,7 +45,9 @@
 #include <QEvent>
 #include <QKeyEvent>
 #include <QMouseEvent>
+#include <algorithm>
 #include <cmath>
+#include <utility>
 #include "core/ThemeManager.h"
 #include "FreqLineEdit.h"
 
@@ -441,16 +444,39 @@ void VfoWidget::buildUI()
         const QStringList options = !m_slice->rxAntennaList().isEmpty()
             ? m_slice->rxAntennaList()
             : m_antList;
-        for (const QString& ant : options) {
-            auto* act = menu.addAction(antennaMenuLabel(ant, options));
+        QStringList menuOptions = options;
+        if (m_kiwiSdrManager) {
+            menuOptions.append(m_kiwiSdrManager->virtualAntennaTokens());
+        }
+        const QString activeKiwiProfile =
+            m_kiwiSdrManager
+                ? m_kiwiSdrManager->assignedProfileForSlice(m_slice->sliceId())
+                : QString();
+        for (const QString& ant : menuOptions) {
+            auto* act = menu.addAction(antennaMenuLabel(ant, menuOptions));
             act->setData(ant);
             act->setCheckable(true);
-            act->setChecked(ant == m_slice->rxAntenna());
+            const QString profileId = m_kiwiSdrManager
+                ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(ant)
+                : QString();
+            act->setChecked(profileId.isEmpty()
+                ? ant == m_slice->rxAntenna() && activeKiwiProfile.isEmpty()
+                : profileId == activeKiwiProfile);
             act->setToolTip(ant);
             act->setStatusTip(ant);
         }
-        if (auto* sel = menu.exec(m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height()))))
-            m_slice->setRxAntenna(sel->data().toString());
+        if (auto* sel = menu.exec(m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())))) {
+            const QString token = sel->data().toString();
+            const QString profileId = m_kiwiSdrManager
+                ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
+                : QString();
+            if (!profileId.isEmpty()) {
+                emit kiwiRxAntennaSelected(m_slice->sliceId(), profileId);
+            } else {
+                emit flexRxAntennaSelected(m_slice->sliceId());
+                m_slice->setRxAntenna(token);
+            }
+        }
     });
     hdr->addWidget(m_rxAntBtn);
 
@@ -2518,21 +2544,19 @@ void VfoWidget::paintEvent(QPaintEvent* event)
     // Background
     p.fillRect(barX, barY, barW, barH, QColor(0x10, 0x18, 0x20));
 
-    // S-meter scale: S0=-127, S9=-73 (6 dB per S-unit), S9+60=-13
-    // S0–S9 occupies left 60%, S9–S9+60 occupies right 40%
     const int s9X = barX + barW * 60 / 100;  // S9 boundary pixel
 
-    // Signal fill — color gradient matching SmartSDR visual convention
+    // Signal fill.
     const int fillW = static_cast<int>(m_signalMeterFraction * barW);
 
     if (fillW > 0) {
         QLinearGradient grad(barX, 0, barX + barW, 0);
-        grad.setColorAt(0.00, QColor(0x00, 0x90, 0x30));  // dark green  — S0
-        grad.setColorAt(0.30, QColor(0x00, 0xc0, 0x40));  // green       — ~S5
-        grad.setColorAt(0.50, QColor(0xd4, 0xc0, 0x00));  // yellow      — ~S7
-        grad.setColorAt(0.70, QColor(0xdd, 0x14, 0x00));  // red         — S9+10
-        grad.setColorAt(0.85, QColor(0xff, 0x00, 0x00));  // bright red  — S9+30
-        grad.setColorAt(1.00, QColor(0xff, 0x00, 0x00));  // bright red  — S9+60
+        grad.setColorAt(0.00, QColor(0x00, 0x90, 0x30));  // dark green
+        grad.setColorAt(0.30, QColor(0x00, 0xc0, 0x40));  // green
+        grad.setColorAt(0.50, QColor(0xd4, 0xc0, 0x00));  // yellow
+        grad.setColorAt(0.70, QColor(0xdd, 0x14, 0x00));  // red
+        grad.setColorAt(0.85, QColor(0xff, 0x00, 0x00));  // bright red
+        grad.setColorAt(1.00, QColor(0xff, 0x00, 0x00));  // bright red
         p.fillRect(barX, barY, fillW, barH, grad);
     }
 
@@ -2540,15 +2564,13 @@ void VfoWidget::paintEvent(QPaintEvent* event)
     const int scaleY = barY + barH + 2;
     const int tickH  = 3;
 
-    // Horizontal line: blue from start to S9, red from S9 to end
+    // Horizontal line: blue from start to S9, red from S9 to end.
     p.setPen(QColor(0x30, 0x80, 0xff));
     p.drawLine(barX, scaleY, s9X, scaleY);
     p.setPen(QColor(0xd0, 0x20, 0x20));
     p.drawLine(s9X, scaleY, barX + barW, scaleY);
 
-    p.setPen(QColor(0x30, 0x80, 0xff));  // blue for S1–S9
-
-    // S-unit ticks: S1, S3, S5, S7, S9 — S1 at left edge, S9 at 60%
+    p.setPen(QColor(0x30, 0x80, 0xff));
     for (int s = 1; s <= 9; s += 2) {
         float sf = static_cast<float>(s - 1) / 8.0f * 0.6f;
         int tx = barX + static_cast<int>(sf * barW);
@@ -2556,17 +2578,9 @@ void VfoWidget::paintEvent(QPaintEvent* event)
         p.drawLine(tx, scaleY, tx, scaleY + h);
     }
 
-    p.setPen(QColor(0xd0, 0x20, 0x20));  // red for +20, +40
-
-    // +20 tick
-    {
-        float sf = 0.6f + (20.0f / 60.0f) * 0.4f;
-        int tx = barX + static_cast<int>(sf * barW);
-        p.drawLine(tx, scaleY, tx, scaleY + tickH);
-    }
-    // +40 tick
-    {
-        float sf = 0.6f + (40.0f / 60.0f) * 0.4f;
+    p.setPen(QColor(0xd0, 0x20, 0x20));
+    for (float sf : {0.6f + (20.0f / 60.0f) * 0.4f,
+                     0.6f + (40.0f / 60.0f) * 0.4f}) {
         int tx = barX + static_cast<int>(sf * barW);
         p.drawLine(tx, scaleY, tx, scaleY + tickH);
     }
@@ -2579,7 +2593,6 @@ void VfoWidget::paintEvent(QPaintEvent* event)
 
     const int lblY = scaleY + tickH + 7;
 
-    // Blue labels: 1, 3, 5, 7, 9 — S1 at left edge, S9 at 60%
     p.setPen(QColor(0x30, 0x80, 0xff));
     for (int s : {1, 3, 5, 7, 9}) {
         float sf = static_cast<float>(s - 1) / 8.0f * 0.6f;
@@ -2587,17 +2600,15 @@ void VfoWidget::paintEvent(QPaintEvent* event)
         p.drawText(tx - 3, lblY, QString::number(s));
     }
 
-    // Red labels: +20, +40
     p.setPen(QColor(0xd0, 0x20, 0x20));
-    {
-        float sf = 0.6f + (20.0f / 60.0f) * 0.4f;
-        int tx = barX + static_cast<int>(sf * barW);
-        p.drawText(tx - 6, lblY, "+20");
-    }
-    {
-        float sf = 0.6f + (40.0f / 60.0f) * 0.4f;
-        int tx = barX + static_cast<int>(sf * barW);
-        p.drawText(tx - 6, lblY, "+40");
+    for (const auto& label : {std::pair<float, QString>{
+                                  0.6f + (20.0f / 60.0f) * 0.4f,
+                                  QStringLiteral("+20")},
+                              std::pair<float, QString>{
+                                  0.6f + (40.0f / 60.0f) * 0.4f,
+                                  QStringLiteral("+40")}}) {
+        int tx = barX + static_cast<int>(label.first * barW);
+        p.drawText(tx - 6, lblY, label.second);
     }
 
 }
@@ -2606,9 +2617,37 @@ void VfoWidget::paintEvent(QPaintEvent* event)
 
 void VfoWidget::setSignalLevel(float dbm)
 {
+    m_receiveMeterReadingActive = false;
     m_signalDbm = dbm;
     m_dbmLabel->setText(QString("%1 dBm").arg(static_cast<int>(dbm)));
+    m_dbmLabel->setAccessibleName("Signal level dBm");
     updateSignalMeterTarget();
+}
+
+void VfoWidget::setReceiveMeterReading(
+    const KiwiSdrProtocol::MeterReading& reading)
+{
+    m_receiveMeterReading = reading;
+    m_receiveMeterReadingActive = true;
+    const bool hasDisplayDbm =
+        (reading.capability == KiwiSdrProtocol::MeterCapability::CalibratedSndMeter
+         || reading.capability == KiwiSdrProtocol::MeterCapability::Experimental)
+        && reading.hasDbm;
+
+    if (hasDisplayDbm) {
+        m_signalDbm = reading.dbm;
+        m_dbmLabel->setText(QString("%1 dBm").arg(static_cast<int>(reading.dbm)));
+        m_dbmLabel->setAccessibleName("Signal level dBm");
+    } else {
+        m_signalDbm = -130.0f;
+        m_dbmLabel->setText(QStringLiteral("Meter ---"));
+        m_dbmLabel->setAccessibleName("Meter unavailable");
+    }
+    updateSignalMeterTarget();
+    if (QAccessible::isActive()) {
+        QAccessibleValueChangeEvent event(this, m_dbmLabel->text());
+        QAccessible::updateAccessibility(&event);
+    }
 }
 
 float VfoWidget::signalDbmToMeterFraction(float dbm)
@@ -2631,7 +2670,11 @@ float VfoWidget::signalDbmToMeterFraction(float dbm)
 
 void VfoWidget::updateSignalMeterTarget()
 {
-    m_targetSignalMeterFraction = signalDbmToMeterFraction(m_signalDbm);
+    if (usesUnavailableSignalMeter()) {
+        m_targetSignalMeterFraction = 0.0f;
+    } else {
+        m_targetSignalMeterFraction = signalDbmToMeterFraction(m_signalDbm);
+    }
 
     if (qAbs(m_targetSignalMeterFraction - m_signalMeterFraction) <= kSignalMeterSnapEpsilon) {
         m_signalMeterFraction = m_targetSignalMeterFraction;
@@ -2646,6 +2689,17 @@ void VfoWidget::updateSignalMeterTarget()
         m_signalMeterElapsed.restart();
         m_signalMeterAnimation.start();
     }
+}
+
+bool VfoWidget::usesUnavailableSignalMeter() const
+{
+    return m_receiveMeterReadingActive
+        && !(m_receiveMeterReading.valid
+            && (m_receiveMeterReading.capability
+                    == KiwiSdrProtocol::MeterCapability::CalibratedSndMeter
+                || m_receiveMeterReading.capability
+                    == KiwiSdrProtocol::MeterCapability::Experimental)
+            && m_receiveMeterReading.hasDbm);
 }
 
 void VfoWidget::animateSignalMeter()
@@ -4121,9 +4175,38 @@ void VfoWidget::setRadioModel(RadioModel* radioModel)
     updateAntennaButtons();
 }
 
+void VfoWidget::setKiwiSdrManager(KiwiSdrManager* manager)
+{
+    if (m_kiwiSdrManager) {
+        disconnect(m_kiwiSdrManager, &KiwiSdrManager::profilesChanged,
+                   this, &VfoWidget::updateAntennaButtons);
+        disconnect(m_kiwiSdrManager, &KiwiSdrManager::sliceAssignmentChanged,
+                   this, nullptr);
+    }
+    m_kiwiSdrManager = manager;
+    if (m_kiwiSdrManager) {
+        connect(m_kiwiSdrManager, &KiwiSdrManager::profilesChanged,
+                this, &VfoWidget::updateAntennaButtons);
+        connect(m_kiwiSdrManager, &KiwiSdrManager::sliceAssignmentChanged,
+                this, [this](int sliceId, const QString&) {
+            if (m_slice && m_slice->sliceId() == sliceId) {
+                updateAntennaButtons();
+            }
+        });
+    }
+    updateAntennaButtons();
+}
+
 QString VfoWidget::antennaMenuLabel(const QString& token,
                                     const QStringList& options) const
 {
+    if (m_kiwiSdrManager) {
+        const QString profileId =
+            m_kiwiSdrManager->profileIdForVirtualAntennaToken(token);
+        if (!profileId.isEmpty()) {
+            return m_kiwiSdrManager->displayName(profileId);
+        }
+    }
     if (!m_radioModel)
         return token;
     return m_radioModel->antennaDisplayName(
@@ -4159,9 +4242,22 @@ void VfoWidget::updateAntennaButton(QPushButton* button, const QString& token, b
     if (!button)
         return;
 
-    const QString shortLabel = m_radioModel
-        ? m_radioModel->antennaShortDisplayName(token, 6)
-        : token;
+    QString effectiveToken = token;
+    if (!tx && m_kiwiSdrManager && m_slice) {
+        const QString profileId =
+            m_kiwiSdrManager->assignedProfileForSlice(m_slice->sliceId());
+        if (!profileId.isEmpty()) {
+            effectiveToken = m_kiwiSdrManager->virtualAntennaToken(profileId);
+        }
+    }
+    const QString profileId = m_kiwiSdrManager
+        ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(effectiveToken)
+        : QString();
+    const QString shortLabel = !profileId.isEmpty()
+        ? m_kiwiSdrManager->displayName(profileId)
+        : (m_radioModel
+            ? m_radioModel->antennaShortDisplayName(effectiveToken, 6)
+            : effectiveToken);
     const QFontMetrics fm(button->font());
     constexpr int kMinWidth = 34;
     constexpr int kMaxWidth = 66;
@@ -4170,12 +4266,17 @@ void VfoWidget::updateAntennaButton(QPushButton* button, const QString& token, b
     button->setText(text);
     button->setFixedWidth(qBound(kMinWidth, fm.horizontalAdvance(text) + kPad, kMaxWidth));
 
-    const QString full = m_radioModel
-        ? m_radioModel->antennaDisplayName(token, !m_radioModel->antennaAlias(token).isEmpty())
-        : token;
-    button->setToolTip(QStringLiteral("%1 antenna port: %2")
-                           .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
-                                full));
+    const QString full = !profileId.isEmpty()
+        ? m_kiwiSdrManager->displayName(profileId)
+        : (m_radioModel
+            ? m_radioModel->antennaDisplayName(
+                  effectiveToken, !m_radioModel->antennaAlias(effectiveToken).isEmpty())
+            : effectiveToken);
+    button->setToolTip(!profileId.isEmpty()
+        ? QStringLiteral("Receive antenna: %1").arg(full)
+        : QStringLiteral("%1 antenna port: %2")
+              .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
+                   full));
 }
 
 void VfoWidget::updateAntennaButtons()

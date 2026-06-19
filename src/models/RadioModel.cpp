@@ -641,8 +641,11 @@ int RadioModel::maxSlicesForModel(const QString& model)
 
 SliceModel* RadioModel::slice(int id) const
 {
-    for (auto* s : m_slices)
-        if (s->sliceId() == id) return s;
+    for (SliceModel* s : m_slices) {
+        if (s && s->sliceId() == id) {
+            return s;
+        }
+    }
     return nullptr;
 }
 

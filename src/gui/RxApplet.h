@@ -23,6 +23,7 @@ namespace AetherSDR {
 
 class SliceModel;
 class RadioModel;
+class KiwiSdrManager;
 
 // RX Applet — controls for a single receive slice.
 //
@@ -78,6 +79,7 @@ public:
     // Connect to transmit model for QSK (break_in) indicator.
     void setTransmitModel(class TransmitModel* txModel);
     void setRadioModel(class RadioModel* radioModel);
+    void setKiwiSdrManager(KiwiSdrManager* manager);
 
     // Set the available antenna list (from ant_list in panadapter status).
     void setAntennaList(const QStringList& ants);
@@ -109,6 +111,8 @@ signals:
     // that should not fire on radio-driven syncs: pushing to the radio,
     // persisting, and the "Step: …" status-bar toast.
     void stepSizeChangedByUser(int hz);
+    void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
+    void flexRxAntennaSelected(int sliceId);
     // Emitted when Auto SQL tracking is toggled.
     void sqlAutoChanged(bool on);
     // Emitted on every SQL mode transition (Off / Manual / Auto), so any
@@ -185,6 +189,7 @@ private:
     SliceModel* m_slice{nullptr};
     TransmitModel* m_txModel{nullptr};
     RadioModel* m_radioModel{nullptr};
+    KiwiSdrManager* m_kiwiSdrManager{nullptr};
     QStringList m_antList{"ANT1", "ANT2"};   // populated from ant_list key
 
     // Step sizes (Hz) — per-mode, swapped on mode change

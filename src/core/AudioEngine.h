@@ -16,6 +16,7 @@
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QPointer>
+#include <QString>
 
 #include "TxMicChannelNormalizer.h"
 #include "SpectralNR.h"
@@ -24,6 +25,7 @@ class QMediaDevices;
 
 #include <functional>
 #include <memory>
+#include <deque>
 #include <vector>
 #include <cstdint>
 
@@ -481,6 +483,16 @@ public:
 public slots:
     // Receives stripped PCM from PanadapterStream::audioDataReady().
     void feedAudioData(const QByteArray& pcm);
+    // Receives decoded KiwiSDR PCM after a clean protocol decoder exists.
+    // Same format as feedAudioData(): 24 kHz stereo float32.
+    void feedKiwiSdrAudioData(const QByteArray& pcm24kStereoFloat);
+    void feedKiwiSdrAudioData(const QString& sourceId,
+                              const QByteArray& pcm24kStereoFloat);
+    void setKiwiSdrAudioEnabled(bool on);
+    void setKiwiSdrAudioSourceEnabled(const QString& sourceId, bool on);
+    void setKiwiSdrAudioSourceGain(const QString& sourceId, float gainPercent);
+    void setKiwiSdrAudioSourceMuted(const QString& sourceId, bool muted);
+    void removeKiwiSdrAudioSource(const QString& sourceId);
 
 signals:
     void rxStarted();
@@ -539,6 +551,33 @@ private slots:
     void onTxAudioReady();
 
 private:
+    enum class RxAudioBuffer {
+        Main,
+        KiwiSdr,
+    };
+
+    enum class RxDspSource {
+        Main,
+        KiwiSdr,
+    };
+
+    struct ExternalRxAudioSourceState {
+        QString id;
+        QByteArray rxBuffer;
+        std::deque<QByteArray> rxPackets;
+        QByteArray outputBuffer;
+        std::vector<float> nr2Mono;
+        std::vector<float> nr2Processed;
+        QByteArray nr2Output;
+        std::unique_ptr<SpectralNR> nr2;
+        std::unique_ptr<Resampler> rxResampler;
+        std::unique_ptr<Resampler> rxResamplerR;
+        float gain{1.0f};
+        bool enabled{false};
+        bool muted{false};
+        bool prebuffering{false};
+    };
+
     QAudioFormat makeFormat() const;
     float computeRMS(const QByteArray& pcm) const;
     QByteArray applyBoost(const QByteArray& pcm, float gain) const;
@@ -550,9 +589,23 @@ private:
     void emitTxPostChainScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate);
     void emitRxPostChainScopeFromFloat32Stereo(const QByteArray& pcm, int sampleRate);
     void emitTncRxTapFromFloat32Stereo(const QByteArray& pcm, int sampleRate);
-    QByteArray resampleStereo(const QByteArray& pcm);
-    void processNr2(const QByteArray& stereoPcm);
+    QByteArray resampleStereo(const QByteArray& pcm,
+                              RxDspSource source = RxDspSource::Main,
+                              ExternalRxAudioSourceState* externalSource = nullptr);
+    void processRxAudioData(const QByteArray& pcm, bool emitTncTap,
+                            RxAudioBuffer targetBuffer = RxAudioBuffer::Main);
+    void processMixedRxAudioData(const QByteArray& pcm,
+                                 RxDspSource source = RxDspSource::Main,
+                                 ExternalRxAudioSourceState* externalSource = nullptr);
+    void processNr2(const QByteArray& stereoPcm,
+                    RxDspSource source = RxDspSource::Main,
+                    ExternalRxAudioSourceState* externalSource = nullptr);
     void updateRxBufferStats();
+    ExternalRxAudioSourceState* externalKiwiSource(const QString& sourceId,
+                                                   bool create);
+    bool anyExternalKiwiAudioEnabled() const;
+    bool anyExternalKiwiBufferQueued() const;
+    qsizetype externalKiwiOutputBufferBytes() const;
     // Apply client-side TX EQ in-place. No-op if disabled. Caller owns data.
     void applyClientEqTxInt16(QByteArray& int16stereo);
     void applyClientEqTxFloat32(QByteArray& float32);
@@ -712,6 +765,7 @@ private:
 
     // Client-side NR2 (spectral)
     std::unique_ptr<SpectralNR> m_nr2;
+    std::unique_ptr<SpectralNR> m_kiwiSdrNr2;
     std::atomic<bool> m_nr2Enabled{false};
     // Client-side NR4 (libspecbleach)
 #ifdef HAVE_SPECBLEACH
@@ -851,6 +905,9 @@ private:
     std::vector<float> m_nr2Mono;
     std::vector<float> m_nr2Processed;
     QByteArray m_nr2Output;
+    std::vector<float> m_kiwiSdrNr2Mono;
+    std::vector<float> m_kiwiSdrNr2Processed;
+    QByteArray m_kiwiSdrNr2Output;
 
     // Zombie sink watchdog: tracks consecutive RX timer ticks where we have
     // data to write but bytesFree() == 0, indicating a stale WASAPI handle.
@@ -884,12 +941,25 @@ private:
 
     // RX audio buffer handling
     QTimer*       m_rxTimer{nullptr};
-    QByteArray    m_rxBuffer;
-    QByteArray    m_radeRxBuffer;  // decoded RADE speech; mixed into drain output, never appended to m_rxBuffer
+    QByteArray    m_rxBuffer;  // normal Flex RX source audio at 24 kHz, pre-DSP
+    std::deque<QByteArray> m_rxPackets;  // whole Flex packets for NR2 packet-mode
+    QByteArray    m_kiwiSdrRxBuffer;  // decoded Kiwi source audio at 24 kHz, pre-DSP
+    std::deque<QByteArray> m_kiwiSdrRxPackets;  // whole Kiwi packets for NR2 packet-mode
+    QByteArray    m_rxOutputBuffer;  // post-DSP speaker audio at output device rate
+    QByteArray    m_kiwiSdrOutputBuffer;  // post-DSP Kiwi speaker audio at output device rate
+    QByteArray    m_radeRxBuffer;  // decoded RADE speech at output device rate
+    std::atomic<bool> m_kiwiSdrAudioEnabled{false};
+    bool          m_kiwiSdrPrebuffering{false};
+    std::vector<std::unique_ptr<ExternalRxAudioSourceState>> m_externalKiwiSources;
     std::atomic<qsizetype> m_rxBufferBytes{0};
     std::atomic<qsizetype> m_rxBufferPeakBytes{0};
     std::atomic<quint64>   m_rxBufferUnderrunCount{0};
     std::atomic<int>       m_rxBufferSampleRate{DEFAULT_SAMPLE_RATE};
+    static constexpr int   kKiwiSdrJitterTargetMs = 360;
+    static constexpr int   kKiwiSdrBufferCapMs = 1000;
+    void resetRxChainStateForSourceSwitch();
+    std::unique_ptr<Resampler> m_kiwiSdrRxResampler;
+    std::unique_ptr<Resampler> m_kiwiSdrRxResamplerR;
 
     // VITA-49 TX constants
     static constexpr int    TX_SAMPLES_PER_PACKET = 128;  // audio frames per packet

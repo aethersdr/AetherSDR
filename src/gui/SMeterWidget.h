@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <QElapsedTimer>
 
+#include "core/KiwiSdrProtocol.h"
 #include "MeterSmoother.h"
 
 namespace AetherSDR {
@@ -38,6 +39,8 @@ public:
 public slots:
     // Update the displayed RX level (S-meter dBm).
     void setLevel(float dbm);
+    void setReceiveMeterReading(
+        const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
 
     // Update TX meter values.
     void setTxMeters(float fwdPower, float swr);
@@ -69,6 +72,8 @@ private:
     void updateNeedleTarget();
     void animateNeedle();
     void updatePeakHoldValue();
+    bool usesUnavailableRxMeter() const;
+    QString unavailableRxMeterLabel() const;
 
     // Map dBm to fraction (0.0 = left, 1.0 = right) for RX S-meter scale
     float dbmToFraction(float dbm) const;
@@ -83,6 +88,8 @@ private:
     float   m_levelDbm{-127.0f};    // current RX reading
     float   m_peakDbm{-127.0f};     // RX peak hold
     QString m_source{"S-Meter Peak"};
+    KiwiSdrProtocol::MeterReading m_receiveMeterReading;
+    bool m_receiveMeterReadingActive{false};
 
     // TX meter values (updated continuously, used when transmitting)
     float   m_txPower{0.0f};

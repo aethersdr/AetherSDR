@@ -95,6 +95,7 @@ public:
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     QString rendererDescription() const;
     void setConnectionAnimationVisible(bool on, const QString& label = {});
+    void setKiwiSdrConnectionOverlay(bool visible, const QString& detail = {});
     void showInterlockNotification(const QString& message, int durationMs = 5000);
 
     // Feed a new FFT frame. bins are scaled dBm values.
@@ -107,6 +108,16 @@ public:
     void updateWaterfallRow(const QVector<float>& binsDbm,
                             double lowFreqMhz, double highFreqMhz,
                             quint32 timecode = 0);
+    void setKiwiSdrWaterfallAvailable(bool available);
+    void setKiwiSdrWaterfallActive(bool active);
+    bool kiwiSdrWaterfallActive() const { return m_kiwiSdrWaterfallActive; }
+    void setKiwiSdrWaterfallProfile(const QString& profileId);
+    void clearKiwiSdrWaterfallRows();
+    void clearKiwiSdrWaterfallRowsForProfile(const QString& profileId);
+    void setKiwiSdrWaterfallAdjustments(int cellDb, int floorDb);
+    void updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
+                                   double lowFreqMhz, double highFreqMhz,
+                                   quint32 timecode = 0);
 
     // Update the dBm range used for the waterfall colour map and spectrum Y axis.
     void setDbmRange(float minDbm, float maxDbm);
@@ -330,6 +341,8 @@ public:
     bool  wfAutoBlackRadioSide() const { return m_wfAutoBlackRadioSide; }
     int   wfLineDuration() const       { return m_wfLineDuration; }
     int   wfColorScheme() const        { return static_cast<int>(m_wfColorScheme); }
+    int   noiseFloorPosition() const   { return m_noiseFloorPosition; }
+    bool  noiseFloorEnabled() const    { return m_noiseFloorEnable; }
 
     // Set slice info for the off-screen VFO indicator (legacy single-slice).
     void setSliceInfo(int sliceId, bool isTxSlice);
@@ -496,6 +509,7 @@ signals:
     // those into separate commands was a known source of waterfall edge loss
     // and zoom drift during bandwidth drag / keyboard zoom.
     void frequencyRangeChangeRequested(double newCenterMhz, double newBandwidthMhz);
+    void frequencyRangeChanged(double centerMhz, double bandwidthMhz);
     // Emitted when the user drags the frequency scale bar to change bandwidth.
     void bandwidthChangeRequested(double newBandwidthMhz);
     // Band/segment zoom: radio handles center/bandwidth (SmartSDR pcap: "band_zoom=1" / "segment_zoom=1")
@@ -591,14 +605,51 @@ private:
     void drawDbmScale(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
     void drawConnectionAnimation(QPainter& p, const QRect& contentRect);
+    void drawKiwiSdrConnectionOverlay(QPainter& p, const QRect& contentRect);
     void positionInterlockNotification();
     int waterfallStripWidth() const;
     QRect waterfallLiveButtonRect(const QRect& wfRect) const;
     QRect waterfallTimeScaleRect(const QRect& wfRect) const;
     void ensureWaterfallHistory();
     void rebuildWaterfallViewport();
+    void rebuildWaterfallViewportForFrame(double centerMhz, double bandwidthMhz);
     void setWaterfallLive(bool live);
-    void appendHistoryRow(const QRgb* rowData, qint64 timestampMs);
+    void handleWaterfallFrequencyFrameChange(double oldCenterMhz,
+                                             double oldBandwidthMhz,
+                                             double newCenterMhz,
+                                             double newBandwidthMhz);
+    struct WaterfallStreamState {
+        QImage waterfall;
+        int wfWriteRow{0};
+        QImage waterfallHistory;
+        QVector<qint64> historyTimestamps;
+        int historyWriteRow{0};
+        int historyRowCount{0};
+        int historyOffsetRows{0};
+        QVector<double> historyRowCenterMhz;
+        QVector<double> historyRowBwMhz;
+        bool live{true};
+        int rowsSinceRateChange{0};
+        QVector<QRgb> prevTileScanline;
+        QVector<float> kiwiFftTrace;
+        QVector<float> kiwiLastWaterfallBins;
+        double kiwiLastWaterfallCenterMhz{0.0};
+        double kiwiLastWaterfallBandwidthMhz{0.0};
+        bool kiwiLastWaterfallFrameValid{false};
+        float kiwiAutoFloorDbm{-130.0f};
+        float kiwiAutoCeilDbm{-50.0f};
+        bool kiwiAutoRangeValid{false};
+        bool valid{false};
+    };
+    void clearCurrentWaterfallRows();
+    void saveCurrentWaterfallStreamState();
+    void restoreCurrentWaterfallStreamState();
+    WaterfallStreamState& activeKiwiWaterfallState();
+    bool beginWaterfallStreamWrite(bool kiwiStream);
+    void endWaterfallStreamWrite(bool kiwiStream, bool visibleStream);
+    void appendHistoryRow(const QRgb* rowData, qint64 timestampMs,
+                          double frameCenterMhz = -1.0,
+                          double frameBandwidthMhz = -1.0);
     void appendVisibleRow(const QRgb* rowData);
     int waterfallHistoryCapacityRows() const;
     int maxWaterfallHistoryOffsetRows() const;
@@ -615,6 +666,7 @@ private:
     void updateFpsMeterValues();
     void recordPanadapterFrame();
     void recordWaterfallFrame(int rows = 1);
+    void recordKiwiSdrWaterfallFrame(int rows = 1);
     bool anyDragActive() const;
     void publishPerfDragState() const;
 
@@ -646,6 +698,7 @@ private:
     // band switch, manual dBm drag) so the next frame re-acquires
     // rather than smooths from a stale value.
     void resetNoiseFloorBaseline();
+    void reacquireNoiseFloorLockFromVisibleSource();
     // Re-capture the target frac. Explicit user changes (slider/right dBm bar)
     // can persist; startup/enable/layout refreshes only rebuild transient state.
     void refreshNoiseFloorTarget(bool captureCurrentScale = false, bool persistCapture = false);
@@ -665,10 +718,18 @@ private:
     void deferTxDbmRange(float minDbm, float maxDbm);
     void applyDbmRangeImmediate(float minDbm, float maxDbm);
     void reprojectBinsToFrozenTxDbmRange(QVector<float>& bins) const;
+    void clearWaterfallRows();
+    QVector<float> smoothKiwiSdrWaterfallBins(const QVector<float>& bins);
+    void updateKiwiSdrAutoColorRange(const QVector<float>& bins);
+    const QVector<float>& displaySpectrumBins() const;
+    const QVector<float>& noiseFloorAutoLevelBins() const;
 
     void pushWaterfallRow(const QVector<float>& bins, int destWidth,
                           double tileLowMhz = -1, double tileHighMhz = -1);
+    void pushKiwiSdrWaterfallRow(const QVector<float>& bins, int destWidth,
+                                 double rowCenterMhz, double rowBandwidthMhz);
     QRgb dbmToRgb(float dbm) const;
+    QRgb kiwiSdrLevelToRgb(float level) const;
     QRgb intensityToRgb(float intensity) const;  // for native waterfall tiles
 
     // Pixel x coordinate for a given frequency in MHz (0 = left edge).
@@ -678,7 +739,25 @@ private:
 
     QVector<float> m_bins;       // raw FFT frame (dBm)
     QVector<float> m_smoothed;   // exponential-smoothed for visual stability
+    QVector<float> m_kiwiSdrFftTrace;  // Kiwi-derived FFT trace, kept separate from Flex FFT
     bool m_shutdownPrepared{false};
+    bool m_kiwiSdrWaterfallAvailable{false};
+    bool m_kiwiSdrWaterfallActive{false};
+    bool m_kiwiSdrConnectionOverlayVisible{false};
+    QString m_kiwiSdrConnectionOverlayDetail;
+    WaterfallStreamState m_nativeWaterfallState;
+    WaterfallStreamState m_kiwiWaterfallState;
+    QHash<QString, WaterfallStreamState> m_kiwiProfileWaterfallStates;
+    QString m_kiwiSdrWaterfallProfileId;
+    QVector<float> m_kiwiSdrLastWaterfallBins;
+    double m_kiwiSdrLastWaterfallCenterMhz{0.0};
+    double m_kiwiSdrLastWaterfallBandwidthMhz{0.0};
+    bool m_kiwiSdrLastWaterfallFrameValid{false};
+    float m_kiwiSdrAutoFloorDbm{-130.0f};
+    float m_kiwiSdrAutoCeilDbm{-50.0f};
+    bool m_kiwiSdrAutoRangeValid{false};
+    int m_kiwiSdrWaterfallCellDb{0};
+    int m_kiwiSdrWaterfallFloorDb{0};
 
     double m_centerMhz{14.225};
     double m_bandwidthMhz{0.200};
@@ -814,9 +893,8 @@ private:
     // was captured at (parallel to m_wfHistoryTimestamps). The full history image
     // (up to ~24k rows, ~0.5 GB at ultrawide widths) is therefore never globally
     // reprojected on a pan — instead rebuildWaterfallViewport remaps only the
-    // ~700 visible rows from their own frame to the current one on time-
-    // scrollback. The live view never reads the history, so panning touches only
-    // the cheap visible waterfall.
+    // ~700 visible rows from their own frame to the requested viewport on live
+    // pan/zoom changes and time-scrollback.
     QVector<double> m_wfHistoryRowCenterMhz;
     QVector<double> m_wfHistoryRowBwMhz;
     bool   m_wfLive{true};
@@ -1039,8 +1117,10 @@ private:
     QElapsedTimer m_fpsMeterWindow;
     int m_panadapterFrameCount{0};
     int m_waterfallFrameCount{0};
+    int m_kiwiSdrWaterfallFrameCount{0};
     double m_panadapterFps{0.0};
     double m_waterfallFps{0.0};
+    double m_kiwiSdrWaterfallFps{0.0};
     QLabel* m_panFpsMeterLabel{nullptr};
     QLabel* m_wfFpsMeterLabel{nullptr};
     qint64 m_lastMouseMoveNs{0};
@@ -1099,7 +1179,7 @@ private:
     QMap<int, VfoWidget*> m_vfoWidgets;
     VfoWidget* m_vfoWidget{nullptr};  // alias to active slice widget (compat)
 
-    // Bottom-left waterfall zoom buttons: S(egment), B(and), −/+ (bandwidth)
+    // Bottom-left waterfall buttons: S(egment), B(and), −/+.
     QPushButton* m_zoomSegBtn{nullptr};
     QPushButton* m_zoomBandBtn{nullptr};
     QPushButton* m_zoomOutBtn{nullptr};

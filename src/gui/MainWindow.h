@@ -89,6 +89,7 @@ namespace AetherSDR {
 
 class ConnectionPanel;
 class TitleBar;
+class KiwiSdrManager;
 class SpectrumWidget;
 class PanadapterApplet;
 class PanadapterStack;
@@ -140,6 +141,7 @@ using DaxBridge = PipeWireAudioBridge;
 #endif
 class VfoWidget;
 class WfmDemodulator;
+class KiwiSdrClient;
 
 // Wheel mode for FlexControl: determines what the encoder knob adjusts.
 //
@@ -307,6 +309,24 @@ private:
     void wirePooDooTiles();         // MainWindow_DspApplets.cpp
     void wireDspApplets();          // MainWindow_DspApplets.cpp
     void wireExternalControllers(); // MainWindow_Controllers.cpp
+    void wireKiwiSdr();             // MainWindow_KiwiSdr.cpp
+    void refreshKiwiSdrAppletReceivers();
+    void refreshKiwiSdrSlices();
+    void refreshKiwiSdrWaterfallAvailability();
+    void syncKiwiSdrTrackingToActiveSlice();
+    void setKiwiSdrWaterfallForActiveSlice(bool active);
+    void syncKiwiSdrAppletWaterfallState();
+    SliceModel* kiwiSdrAudioTargetSlice() const;
+    bool setKiwiSdrAudioRouting(bool active);
+    bool applyKiwiSdrSliceMute();
+    void restoreKiwiSdrSliceMute();
+    void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
+    void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
+    void updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice);
+    void updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice);
+    QString kiwiSdrProfileForPan(const QString& panId) const;
+    void syncKiwiSdrPanadapterUiState(const QString& panId);
+    void syncKiwiSdrPanadapterUiStates();
     void wirePanadapter(PanadapterApplet* applet);
     void wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan);
     void schedulePanFpsReconcile(const QString& panId, int reportedFps);
@@ -733,6 +753,15 @@ private:
 
     // GUI — right applet panel
     AppletPanel*     m_appletPanel{nullptr};
+    KiwiSdrManager*  m_kiwiSdrManager{nullptr};
+    KiwiSdrClient*   m_kiwiSdrClient{nullptr};
+    int              m_kiwiSdrTrackedSliceId{-1};
+    int              m_kiwiSdrAudioSliceId{-1};
+    bool             m_kiwiSdrAudioPreviousMute{false};
+    bool             m_kiwiSdrAudioMuteApplied{false};
+    bool             m_kiwiSdrAudioMuteChanging{false};
+    QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
+    QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
 
     // Modeless dialogs
     QPointer<DxClusterDialog> m_spotHubDialog;

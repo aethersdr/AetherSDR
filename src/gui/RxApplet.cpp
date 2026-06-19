@@ -6,6 +6,7 @@
 #include "InteractionSettings.h"
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
+#include "core/KiwiSdrManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "Theme.h"
@@ -401,18 +402,41 @@ void RxApplet::buildUI()
             const QStringList options = m_slice && !m_slice->rxAntennaList().isEmpty()
                 ? m_slice->rxAntennaList()
                 : m_antList;
-            for (const QString& ant : options) {
-                QAction* act = menu.addAction(antennaMenuLabel(ant, options));
+            QStringList menuOptions = options;
+            if (m_kiwiSdrManager) {
+                menuOptions.append(m_kiwiSdrManager->virtualAntennaTokens());
+            }
+            const QString activeKiwiProfile =
+                (m_kiwiSdrManager && m_slice)
+                    ? m_kiwiSdrManager->assignedProfileForSlice(m_slice->sliceId())
+                    : QString();
+            for (const QString& ant : menuOptions) {
+                QAction* act = menu.addAction(antennaMenuLabel(ant, menuOptions));
                 act->setData(ant);
                 act->setCheckable(true);
-                act->setChecked(ant == cur);
+                const QString profileId = m_kiwiSdrManager
+                    ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(ant)
+                    : QString();
+                act->setChecked(profileId.isEmpty()
+                    ? ant == cur && activeKiwiProfile.isEmpty()
+                    : profileId == activeKiwiProfile);
                 act->setToolTip(ant);
                 act->setStatusTip(ant);
             }
             const QAction* sel = menu.exec(
                 m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())));
-            if (sel && m_slice)
-                m_slice->setRxAntenna(sel->data().toString());
+            if (sel && m_slice) {
+                const QString token = sel->data().toString();
+                const QString profileId = m_kiwiSdrManager
+                    ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
+                    : QString();
+                if (!profileId.isEmpty()) {
+                    emit kiwiRxAntennaSelected(m_slice->sliceId(), profileId);
+                } else {
+                    emit flexRxAntennaSelected(m_slice->sliceId());
+                    m_slice->setRxAntenna(token);
+                }
+            }
         });
         row->addWidget(m_rxAntBtn);
 
@@ -1739,6 +1763,28 @@ void RxApplet::setRadioModel(RadioModel* radioModel)
     updateAntennaButtons();
 }
 
+void RxApplet::setKiwiSdrManager(KiwiSdrManager* manager)
+{
+    if (m_kiwiSdrManager) {
+        disconnect(m_kiwiSdrManager, &KiwiSdrManager::profilesChanged,
+                   this, &RxApplet::updateAntennaButtons);
+        disconnect(m_kiwiSdrManager, &KiwiSdrManager::sliceAssignmentChanged,
+                   this, nullptr);
+    }
+    m_kiwiSdrManager = manager;
+    if (m_kiwiSdrManager) {
+        connect(m_kiwiSdrManager, &KiwiSdrManager::profilesChanged,
+                this, &RxApplet::updateAntennaButtons);
+        connect(m_kiwiSdrManager, &KiwiSdrManager::sliceAssignmentChanged,
+                this, [this](int sliceId, const QString&) {
+            if (m_slice && m_slice->sliceId() == sliceId) {
+                updateAntennaButtons();
+            }
+        });
+    }
+    updateAntennaButtons();
+}
+
 void RxApplet::setTransmitModel(TransmitModel* txModel)
 {
     if (m_txModel) m_txModel->disconnect(this);
@@ -1759,6 +1805,13 @@ void RxApplet::setTransmitModel(TransmitModel* txModel)
 QString RxApplet::antennaMenuLabel(const QString& token,
                                    const QStringList& options) const
 {
+    if (m_kiwiSdrManager) {
+        const QString profileId =
+            m_kiwiSdrManager->profileIdForVirtualAntennaToken(token);
+        if (!profileId.isEmpty()) {
+            return m_kiwiSdrManager->displayName(profileId);
+        }
+    }
     if (!m_radioModel)
         return token;
     return m_radioModel->antennaDisplayName(
@@ -1794,9 +1847,23 @@ void RxApplet::updateAntennaButton(QPushButton* button, const QString& token, bo
     if (!button)
         return;
 
-    const QString shortLabel = m_radioModel
-        ? m_radioModel->antennaShortDisplayName(token, 6)
-        : token;
+    QString effectiveToken = token;
+    if (!tx && m_kiwiSdrManager && m_slice) {
+        const QString profileId =
+            m_kiwiSdrManager->assignedProfileForSlice(m_slice->sliceId());
+        if (!profileId.isEmpty()) {
+            effectiveToken = m_kiwiSdrManager->virtualAntennaToken(profileId);
+        }
+    }
+
+    const QString profileId = m_kiwiSdrManager
+        ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(effectiveToken)
+        : QString();
+    const QString shortLabel = !profileId.isEmpty()
+        ? m_kiwiSdrManager->displayName(profileId)
+        : (m_radioModel
+            ? m_radioModel->antennaShortDisplayName(effectiveToken, 6)
+            : effectiveToken);
     const QFontMetrics fm(button->font());
     constexpr int kMinWidth = 30;
     constexpr int kMaxWidth = 58;
@@ -1805,12 +1872,17 @@ void RxApplet::updateAntennaButton(QPushButton* button, const QString& token, bo
     button->setText(text);
     button->setFixedWidth(qBound(kMinWidth, fm.horizontalAdvance(text) + kPad, kMaxWidth));
 
-    const QString full = m_radioModel
-        ? m_radioModel->antennaDisplayName(token, !m_radioModel->antennaAlias(token).isEmpty())
-        : token;
-    button->setToolTip(QStringLiteral("%1 antenna port: %2")
-                           .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
-                                full));
+    const QString full = !profileId.isEmpty()
+        ? m_kiwiSdrManager->displayName(profileId)
+        : (m_radioModel
+            ? m_radioModel->antennaDisplayName(
+                  effectiveToken, !m_radioModel->antennaAlias(effectiveToken).isEmpty())
+            : effectiveToken);
+    button->setToolTip(!profileId.isEmpty()
+        ? QStringLiteral("Receive antenna: %1").arg(full)
+        : QStringLiteral("%1 antenna port: %2")
+              .arg(tx ? QStringLiteral("Transmit") : QStringLiteral("Receive"),
+                   full));
 }
 
 void RxApplet::updateAntennaButtons()

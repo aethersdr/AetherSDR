@@ -8,6 +8,7 @@
 #include "models/SliceModel.h"
 #include "models/BandDefs.h"
 #include "core/AppSettings.h"
+#include "core/KiwiSdrManager.h"
 
 #include <QPushButton>
 #include <QComboBox>
@@ -44,9 +45,40 @@ static constexpr int WF_RATE_SLIDER_MAX = 100;
 static constexpr int WF_LINE_DURATION_MIN_MS = 1;
 static constexpr int WF_LINE_DURATION_MAX_MS = 100;
 
+SliceModel* antennaTargetSliceForPan(RadioModel* radioModel,
+                                     SliceModel* currentSlice,
+                                     const QString& panId)
+{
+    if (currentSlice && (panId.isEmpty() || currentSlice->panId() == panId)) {
+        return currentSlice;
+    }
+
+    if (radioModel && !panId.isEmpty()) {
+        for (SliceModel* candidate : radioModel->slices()) {
+            if (candidate && candidate->panId() == panId) {
+                return candidate;
+            }
+        }
+    }
+
+    return currentSlice;
+}
+
 static QString rateSliderLabelText(int sliderValue)
 {
     return QString::number(sliderValue);
+}
+
+static QString kiwiWaterfallDbText(int db)
+{
+    return QStringLiteral("%1%2 dB")
+        .arg(db >= 0 ? QStringLiteral("+") : QString())
+        .arg(db);
+}
+
+static QString kiwiWaterfallRateText(int rate)
+{
+    return rate <= 0 ? QStringLiteral("Auto") : QString::number(rate);
 }
 
 static constexpr int lineDurationToRateSliderValue(int lineDuration)
@@ -409,11 +441,26 @@ void SpectrumOverlayMenu::buildAntPanel()
             ant = m_rxAntCmb->itemText(index);
         if (ant.isEmpty())
             return;
+        const QString profileId = m_kiwiSdrManager
+            ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(ant)
+            : QString();
+        SliceModel* targetSlice =
+            antennaTargetSliceForPan(m_radioModel, m_slice, m_panId);
+        if (!profileId.isEmpty()) {
+            if (targetSlice) {
+                emit kiwiRxAntennaSelected(targetSlice->sliceId(), profileId);
+            }
+            updateLoopButtonVisibility();
+            return;
+        }
+        if (targetSlice) {
+            emit flexRxAntennaSelected(targetSlice->sliceId());
+        }
         if (m_radioModel && !m_panId.isEmpty()) {
             m_radioModel->sendCommand(
                 QStringLiteral("display pan set %1 rxant=%2").arg(m_panId, ant));
-        } else if (m_slice) {
-            m_slice->setRxAntenna(ant);
+        } else if (targetSlice) {
+            targetSlice->setRxAntenna(ant);
         }
         updateLoopButtonVisibility();
     });
@@ -605,6 +652,25 @@ void SpectrumOverlayMenu::setAntennaList(const QStringList& ants)
     refreshAntennaCombo();
 }
 
+void SpectrumOverlayMenu::setKiwiSdrManager(KiwiSdrManager* manager)
+{
+    if (m_kiwiSdrManager) {
+        disconnect(m_kiwiSdrManager, nullptr, this, nullptr);
+    }
+    m_kiwiSdrManager = manager;
+    if (m_kiwiSdrManager) {
+        connect(m_kiwiSdrManager, &KiwiSdrManager::profilesChanged,
+                this, &SpectrumOverlayMenu::refreshAntennaCombo);
+        connect(m_kiwiSdrManager, &KiwiSdrManager::sliceAssignmentChanged,
+                this, [this](int sliceId, const QString&) {
+            if (!m_slice || m_slice->sliceId() == sliceId) {
+                refreshAntennaCombo();
+            }
+        });
+    }
+    refreshAntennaCombo();
+}
+
 void SpectrumOverlayMenu::setPanId(const QString& id)
 {
     if (m_panId == id)
@@ -680,10 +746,19 @@ void SpectrumOverlayMenu::wirePanadapterRxAntenna()
 
 QString SpectrumOverlayMenu::currentRxAntennaToken() const
 {
+    SliceModel* targetSlice =
+        antennaTargetSliceForPan(m_radioModel, m_slice, m_panId);
+    if (m_kiwiSdrManager && targetSlice) {
+        const QString profileId =
+            m_kiwiSdrManager->assignedProfileForSlice(targetSlice->sliceId());
+        if (!profileId.isEmpty()) {
+            return m_kiwiSdrManager->virtualAntennaToken(profileId);
+        }
+    }
     if (m_panadapter && !m_panadapter->rxAntenna().isEmpty())
         return m_panadapter->rxAntenna();
-    if (m_slice)
-        return m_slice->rxAntenna();
+    if (targetSlice)
+        return targetSlice->rxAntenna();
     return m_rxAntCmb ? m_rxAntCmb->currentData().toString() : QString();
 }
 
@@ -692,15 +767,18 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
     if (!m_rxAntCmb)
         return;
     const QString cur = currentRxAntennaToken();
+    QStringList options = m_antList;
+    if (m_kiwiSdrManager) {
+        for (const QString& token : m_kiwiSdrManager->virtualAntennaTokens()) {
+            if (!options.contains(token)) {
+                options.append(token);
+            }
+        }
+    }
     QSignalBlocker sb(m_rxAntCmb);
     m_rxAntCmb->clear();
-    for (const QString& ant : m_antList) {
-        const bool disambiguate = m_radioModel
-            && m_radioModel->antennaAliasNeedsDisambiguation(ant, m_antList);
-        const QString label = m_radioModel
-            ? m_radioModel->antennaDisplayName(ant, disambiguate)
-            : ant;
-        m_rxAntCmb->addItem(label, ant);
+    for (const QString& ant : options) {
+        m_rxAntCmb->addItem(antennaComboLabel(ant, options), ant);
     }
     setRxAntennaComboToken(cur);
     updateLoopButtonVisibility();
@@ -720,11 +798,29 @@ void SpectrumOverlayMenu::setRxAntennaComboToken(const QString& token)
     updateLoopButtonVisibility();
 }
 
+QString SpectrumOverlayMenu::antennaComboLabel(const QString& token,
+                                               const QStringList& options) const
+{
+    if (m_kiwiSdrManager) {
+        const QString profileId =
+            m_kiwiSdrManager->profileIdForVirtualAntennaToken(token);
+        if (!profileId.isEmpty()) {
+            return m_kiwiSdrManager->displayName(profileId);
+        }
+    }
+    if (!m_radioModel) {
+        return token;
+    }
+    return m_radioModel->antennaDisplayName(
+        token, m_radioModel->antennaAliasNeedsDisambiguation(token, options));
+}
+
 void SpectrumOverlayMenu::setSlice(SliceModel* slice)
 {
     if (m_slice)
         m_slice->disconnect(this);
     m_slice = slice;
+    refreshAntennaCombo();
     if (!m_slice) return;
 
     connect(m_slice, &SliceModel::rxAntennaChanged, this, [this](const QString& ant) {
@@ -1205,7 +1301,17 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     makeRowWithBtn("Black Level:", 0, 100, 50, m_blackSlider, m_blackLabel,
                    m_autoBlackBtn, "SW");
     connect(m_blackSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_blackLabel->setText(QString::number(v));
+        m_blackLabel->setText(m_kiwiWaterfallControlMode
+            ? kiwiWaterfallDbText(v)
+            : QString::number(v));
+        if (m_kiwiWaterfallControlMode) {
+            if (m_autoBlackBtn && m_autoBlackBtn->isChecked() && v != 0) {
+                QSignalBlocker blocker(m_autoBlackBtn);
+                m_autoBlackBtn->setChecked(false);
+            }
+            emit kiwiWaterfallFloorChanged(v);
+            return;
+        }
         if (m_autoBlackMode != 0) {      // Auto-C / Auto-R → bias the offset
             m_blackAutoOffsetValue = v;
             emit wfAutoBlackOffsetChanged(v);
@@ -1215,9 +1321,25 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         }
     });
     // One click advances the 3-way mode: Off → Auto-C → Auto-R → Off.
-    // applyAutoBlackMode swaps the slider role, updates the label/highlight, and
-    // emits the on/off + client/radio-source signals together.
+    // In Kiwi mode the same button resets the Kiwi waterfall floor to its
+    // automatic baseline instead of changing the Flex auto-black source.
     connect(m_autoBlackBtn, &QPushButton::clicked, this, [this]() {
+        if (m_kiwiWaterfallControlMode) {
+            if (m_blackSlider) {
+                QSignalBlocker blocker(m_blackSlider);
+                m_blackSlider->setValue(0);
+                if (m_blackLabel) {
+                    m_blackLabel->setText(kiwiWaterfallDbText(0));
+                }
+                emit kiwiWaterfallFloorChanged(0);
+            }
+            if (m_autoBlackBtn) {
+                QSignalBlocker blocker(m_autoBlackBtn);
+                m_autoBlackBtn->setChecked(true);
+            }
+            return;
+        }
+
         applyAutoBlackMode((m_autoBlackMode + 1) % 3, /*emitSignals=*/true);
     });
     applyAutoBlackMode(m_autoBlackMode, /*emitSignals=*/false);  // initial label/slider role
@@ -1225,7 +1347,13 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     // Gain
     makeRow("WtrFall Gain:", 0, 100, 50, m_gainSlider, m_gainLabel);
     connect(m_gainSlider, &QSlider::valueChanged, this, [this](int v) {
-        m_gainLabel->setText(QString::number(v));
+        m_gainLabel->setText(m_kiwiWaterfallControlMode
+            ? kiwiWaterfallDbText(v)
+            : QString::number(v));
+        if (m_kiwiWaterfallControlMode) {
+            emit kiwiWaterfallCellChanged(v);
+            return;
+        }
         emit wfColorGainChanged(v);
     });
 
@@ -1252,6 +1380,11 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_rateSlider->setInvertedAppearance(false);
     m_rateSlider->setInvertedControls(false);
     connect(m_rateSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (m_kiwiWaterfallControlMode) {
+            m_rateLabel->setText(kiwiWaterfallRateText(v));
+            emit kiwiWaterfallRateChanged(v);
+            return;
+        }
         const int lineDurationMs = rateSliderValueToLineDuration(v);
         m_rateLabel->setText(rateSliderLabelText(v));
         emit wfLineDurationChanged(lineDurationMs);
@@ -1495,6 +1628,8 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                    b4(m_weightedAvgBtn), b5(m_gainSlider), b6(m_blackSlider),
                    b7(m_autoBlackBtn), b8(m_rateSlider);
 
+    setKiwiWaterfallControlMode(false);
+
     m_avgSlider->setValue(avg);
     m_avgLabel->setText(QString::number(avg));
     m_fpsSlider->setValue(fps);
@@ -1544,6 +1679,71 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
     }
 }
 
+void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
+{
+    if (m_kiwiWaterfallControlMode == kiwiMode) {
+        return;
+    }
+
+    m_kiwiWaterfallControlMode = kiwiMode;
+    if (m_gainSlider) {
+        m_gainSlider->setRange(kiwiMode ? -30 : 0, kiwiMode ? 30 : 100);
+        m_gainSlider->setToolTip(kiwiMode
+            ? "KiwiSDR waterfall cell adjustment, -30 to +30 dB."
+            : "Waterfall color gain.");
+    }
+    if (m_blackSlider) {
+        m_blackSlider->setRange(kiwiMode ? -30 : 0, kiwiMode ? 30 : 100);
+        m_blackSlider->setToolTip(kiwiMode
+            ? "KiwiSDR waterfall floor adjustment, -30 to +30 dB."
+            : (m_autoBlackBtn && m_autoBlackBtn->isChecked()
+                   ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
+                   : "Waterfall black level. Decrease to darken the noise floor."));
+    }
+    if (m_rateSlider) {
+        m_rateSlider->setRange(kiwiMode ? 0 : WF_RATE_SLIDER_MIN,
+                               kiwiMode ? 5 : WF_RATE_SLIDER_MAX);
+        m_rateSlider->setToolTip(kiwiMode
+            ? "KiwiSDR waterfall rate. Auto follows the Flex waterfall rate."
+            : "Waterfall rate.");
+    }
+    if (m_autoBlackBtn) {
+        m_autoBlackBtn->setToolTip(kiwiMode
+            ? "Reset KiwiSDR waterfall floor to automatic baseline."
+            : "Use the measured noise floor for waterfall black level.");
+        if (kiwiMode) {
+            m_autoBlackBtn->setCheckable(true);
+            m_autoBlackBtn->setText("Auto");
+        } else {
+            applyAutoBlackMode(m_autoBlackMode, /*emitSignals=*/false);
+        }
+    }
+}
+
+void SpectrumOverlayMenu::syncKiwiWaterfallSettings(int cellDb, int floorDb,
+                                                    int rate)
+{
+    if (!m_gainSlider || !m_blackSlider || !m_rateSlider) {
+        return;
+    }
+
+    const int clampedCell = std::clamp(cellDb, -30, 30);
+    const int clampedFloor = std::clamp(floorDb, -30, 30);
+    const int clampedRate = std::clamp(rate, 0, 5);
+    QSignalBlocker b1(m_gainSlider), b2(m_blackSlider),
+                   b3(m_rateSlider), b4(m_autoBlackBtn);
+
+    setKiwiWaterfallControlMode(true);
+
+    m_gainSlider->setValue(clampedCell);
+    m_gainLabel->setText(kiwiWaterfallDbText(clampedCell));
+    m_blackSlider->setValue(clampedFloor);
+    m_blackLabel->setText(kiwiWaterfallDbText(clampedFloor));
+    m_autoBlackBtn->setChecked(clampedFloor == 0);
+    m_rateSlider->setValue(clampedRate);
+    m_rateLabel->setText(kiwiWaterfallRateText(clampedRate));
+}
+
 void SpectrumOverlayMenu::syncNoiseFloorPosition(int pos)
 {
     if (!m_floorSlider) return;
@@ -1559,6 +1759,9 @@ void SpectrumOverlayMenu::syncNoiseFloorPosition(int pos)
 void SpectrumOverlayMenu::syncWfLineDuration(int rate)
 {
     if (!m_rateSlider || !m_rateLabel) {
+        return;
+    }
+    if (m_kiwiWaterfallControlMode) {
         return;
     }
 

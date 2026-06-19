@@ -8,6 +8,9 @@
 #include <QtMath>
 #include <QFontMetrics>
 
+#include <algorithm>
+#include <utility>
+
 namespace AetherSDR {
 
 // --- Construction ------------------------------------------------------------
@@ -53,6 +56,7 @@ SMeterWidget::SMeterWidget(QWidget* parent)
 
 void SMeterWidget::setLevel(float dbm)
 {
+    m_receiveMeterReadingActive = false;
     m_levelDbm = dbm;
 
     // Peak hold (existing needle/triangle behavior)
@@ -90,6 +94,53 @@ void SMeterWidget::setLevel(float dbm)
             const QString accessText = sText + QStringLiteral(", ")
                 + QString::number(static_cast<int>(displayDbm))
                 + QStringLiteral(" dBm");
+            QAccessibleValueChangeEvent event(this, accessText);
+            QAccessible::updateAccessibility(&event);
+        }
+    }
+}
+
+void SMeterWidget::setReceiveMeterReading(
+    const KiwiSdrProtocol::MeterReading& reading)
+{
+    m_receiveMeterReading = reading;
+    m_receiveMeterReadingActive = true;
+
+    const bool hasDisplayDbm =
+        (reading.capability == KiwiSdrProtocol::MeterCapability::CalibratedSndMeter
+         || reading.capability == KiwiSdrProtocol::MeterCapability::Experimental)
+        && reading.hasDbm;
+
+    if (hasDisplayDbm) {
+        m_levelDbm = reading.dbm;
+        if (reading.dbm > m_peakDbm) {
+            m_peakDbm = reading.dbm;
+            m_peakDecay.start();
+        }
+        if (m_peakHoldEnabled && reading.dbm > m_peakHoldDbm) {
+            m_peakHoldDbm = reading.dbm;
+            m_peakHoldDecayStartDbm = reading.dbm;
+            m_peakHoldTimer.start();
+            m_peakHoldTimerRunning = true;
+        }
+    } else {
+        m_levelDbm = S0_DBM;
+        m_peakDbm = S0_DBM;
+        m_peakHoldDbm = S0_DBM;
+        m_peakHoldDecayStartDbm = S0_DBM;
+        m_peakHoldTimerRunning = false;
+    }
+
+    updateNeedleTarget();
+    if (!m_transmitting) {
+        update();
+        if (hasFocus() && QAccessible::isActive()) {
+            QString accessText = unavailableRxMeterLabel();
+            if (hasDisplayDbm) {
+                accessText = reading.label;
+                accessText += QStringLiteral(", %1 dBm")
+                    .arg(static_cast<int>(reading.dbm));
+            }
             QAccessibleValueChangeEvent event(this, accessText);
             QAccessible::updateAccessibility(&event);
         }
@@ -168,6 +219,8 @@ void SMeterWidget::updateNeedleTarget()
 
     if (m_transmitting) {
         m_targetNeedleFraction = txValueToFraction(currentTxValue());
+    } else if (usesUnavailableRxMeter()) {
+        m_targetNeedleFraction = 0.0f;
     } else if (m_rxMode == RxMode::SMeterPeak) {
         m_targetNeedleFraction = dbmToFraction(m_peakDbm);
     } else {
@@ -233,6 +286,29 @@ void SMeterWidget::animateNeedle()
     if (settled || m_smooth.shouldRepaint()) {
         update();
     }
+}
+
+bool SMeterWidget::usesUnavailableRxMeter() const
+{
+    return m_receiveMeterReadingActive
+        && !(m_receiveMeterReading.valid
+            && (m_receiveMeterReading.capability
+                    == KiwiSdrProtocol::MeterCapability::CalibratedSndMeter
+                || m_receiveMeterReading.capability
+                    == KiwiSdrProtocol::MeterCapability::Experimental)
+            && m_receiveMeterReading.hasDbm);
+}
+
+QString SMeterWidget::unavailableRxMeterLabel() const
+{
+    if (!m_receiveMeterReadingActive) {
+        return QStringLiteral("Meter unavailable");
+    }
+    if (m_receiveMeterReading.capability
+        == KiwiSdrProtocol::MeterCapability::RawSndMeter) {
+        return QStringLiteral("Raw S-meter");
+    }
+    return QStringLiteral("Meter unavailable");
 }
 
 void SMeterWidget::updatePeakHoldValue()
@@ -334,6 +410,8 @@ void SMeterWidget::paintEvent(QPaintEvent*)
     const float arcStartRad = qDegreesToRadians(ARC_START_DEG);
     const float arcEndRad   = qDegreesToRadians(ARC_END_DEG);
     const float arcSpanRad  = arcEndRad - arcStartRad;
+    const bool unavailableRxScale = usesUnavailableRxMeter();
+    const bool calibratedRxScale = !unavailableRxScale;
 
     // fraction 0.0 -> left end (ARC_END_DEG), fraction 1.0 -> right end (ARC_START_DEG)
     auto fractionToAngle = [&](float frac) -> float {
@@ -341,9 +419,10 @@ void SMeterWidget::paintEvent(QPaintEvent*)
     };
 
     // -- Draw colored outer arc (RX scale) ------------------------------------
-    // White from S0 to S9, red from S9+
     {
         const QRectF outerArc(cx - radius, cy - radius, radius * 2, radius * 2);
+        // RX face always uses the existing Flex-style S scale. Uncalibrated
+        // Kiwi fallback readings do not move the needle or show fake dBm.
         const float s9Deg = qRadiansToDegrees(fractionToAngle(0.6f));
 
         QPen whitePen(QColor(0xc8, 0xd8, 0xe8), 3);
@@ -463,7 +542,7 @@ void SMeterWidget::paintEvent(QPaintEvent*)
 
     const QColor whiteColor(0xc8, 0xd8, 0xe8);
 
-    // -- Outside ticks (RX): S-meter scale -- odd S-units only ----------------
+    // -- Outside ticks (RX) ---------------------------------------------------
     for (int s = 1; s <= 9; s += 2) {
         const float dbm = S0_DBM + s * DB_PER_S;
         drawOutsideTick(dbmToFraction(dbm), QString::number(s), whiteColor, true);
@@ -555,7 +634,7 @@ void SMeterWidget::paintEvent(QPaintEvent*)
     }
 
     // Draw peak marker (small triangle) — only in RX S-Meter Peak mode
-    if (!m_transmitting && m_rxMode == RxMode::SMeterPeak
+    if (!m_transmitting && calibratedRxScale && m_rxMode == RxMode::SMeterPeak
         && m_peakDbm > m_levelDbm + 1.0f) {
         const float frac = dbmToFraction(m_peakDbm);
         const float angle = fractionToAngle(frac);
@@ -582,7 +661,7 @@ void SMeterWidget::paintEvent(QPaintEvent*)
     }
 
     // -- Draw peak hold line (configurable overlay, independent of RX mode) ---
-    if (m_peakHoldEnabled && !m_transmitting
+    if (m_peakHoldEnabled && !m_transmitting && calibratedRxScale
         && m_peakHoldDbm > S0_DBM + 1.0f) {
         float frac = dbmToFraction(m_peakHoldDbm);
         if (m_peakHoldDbm <= m_levelDbm + 0.01f) {
@@ -639,6 +718,24 @@ void SMeterWidget::paintEvent(QPaintEvent*)
         p.drawText(w - vfm.horizontalAdvance(valText) - 6, topY, valText);
     } else {
         // RX mode: show source label (center), S-units (left), dBm (right)
+        if (unavailableRxScale) {
+            const QString sourceLabel = unavailableRxMeterLabel();
+            p.setFont(srcFont);
+            p.setPen(QColor(0x80, 0x90, 0xa0));
+            p.drawText((w - sfm.horizontalAdvance(sourceLabel)) / 2,
+                       topY, sourceLabel);
+
+            p.setFont(valFont);
+            p.setPen(QColor(0x00, 0xb4, 0xd8));
+            p.drawText(6, topY, QStringLiteral("---"));
+
+            const QString rightText = QStringLiteral("---");
+            p.setPen(QColor(0xc8, 0xd8, 0xe8));
+            p.drawText(w - vfm.horizontalAdvance(rightText) - 6,
+                       topY, rightText);
+            return;
+        }
+
         p.setFont(srcFont);
         p.setPen(QColor(0x80, 0x90, 0xa0));
         p.drawText((w - sfm.horizontalAdvance(m_source)) / 2, topY, m_source);

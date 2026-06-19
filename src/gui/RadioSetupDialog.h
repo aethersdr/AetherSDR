@@ -28,6 +28,7 @@ class FirmwareStager;
 class TgxlConnection;
 class PgxlConnection;
 class AntennaGeniusModel;
+class KiwiSdrManager;
 
 // Radio Setup dialog — tabbed configuration window matching SmartSDR's
 // Settings → Radio Setup. Shows radio info, GPS, TX, RX, filters, etc.
@@ -39,6 +40,7 @@ public:
                               TgxlConnection* tgxl = nullptr,
                               PgxlConnection* pgxl = nullptr,
                               AntennaGeniusModel* ag = nullptr,
+                              KiwiSdrManager* kiwiSdrManager = nullptr,
                               QWidget* parent = nullptr);
     void selectTab(const QString& tabName);
     void refreshFlexControlButtonActions();
@@ -99,6 +101,7 @@ private:
     TgxlConnection*    m_tgxl{nullptr};
     PgxlConnection*    m_pgxl{nullptr};
     AntennaGeniusModel* m_ag{nullptr};
+    KiwiSdrManager* m_kiwiSdrManager{nullptr};
     QTabWidget*  m_tabs{nullptr};
     QHash<QString, QComboBox*> m_flexControlActionCombos;
     QHash<QString, QString> m_flexControlActionDefaults;

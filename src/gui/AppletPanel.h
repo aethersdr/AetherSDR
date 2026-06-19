@@ -52,6 +52,7 @@ class ShackSwitchApplet;
 class MeterApplet;
 class HealthApplet;
 class MqttApplet;
+class KiwiSdrApplet;
 class FavoritesPickerDialog;
 #ifdef HAVE_RADE
 class RadeApplet;
@@ -122,6 +123,7 @@ public:
     ShackSwitchApplet*   ssApplet()  { return m_ssApplet; }
     MeterApplet*  meterApplet()  { return m_meterApplet; }
     HealthApplet* healthApplet() { return m_healthApplet; }
+    KiwiSdrApplet* kiwiSdrApplet() { return m_kiwiSdrApplet; }
 #ifdef HAVE_RADE
     RadeApplet*   radeApplet()   { return m_radeApplet; }
 #endif
@@ -284,6 +286,7 @@ private:
     ShackSwitchApplet*   m_ssApplet{nullptr};
     MeterApplet* m_meterApplet{nullptr};
     HealthApplet* m_healthApplet{nullptr};
+    KiwiSdrApplet* m_kiwiSdrApplet{nullptr};
 #ifdef HAVE_RADE
     RadeApplet*  m_radeApplet{nullptr};
 #endif
