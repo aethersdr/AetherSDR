@@ -128,10 +128,16 @@ jobs:
 
       - name: Build AppImage
         env:
-          LDAI_OUTPUT: AetherSDR-${{ github.ref_name }}-${{ matrix.arch }}.AppImage
           QT_SELECT: qt6
           EXTRA_QT_PLUGINS: multimedia
         run: |
+          # Sanitize the ref for the output filename: a workflow_dispatch on a
+          # branch like "ci/appimage-qtkeychain" puts a '/' in github.ref_name,
+          # which breaks mksquashfs ("Could not create destination file"). Tag
+          # pushes (v26.6.x) are already slash-free; this mirrors the
+          # sanitization windows-installer.yml already applies.
+          SAFE_REF="${GITHUB_REF_NAME//[^A-Za-z0-9._-]/_}"
+          export LDAI_OUTPUT="AetherSDR-${SAFE_REF}-${{ matrix.arch }}.AppImage"
           if [ "${{ matrix.use_aqt }}" = "true" ]; then
             export QMAKE=${{ github.workspace }}/Qt/6.8.3/gcc_64/bin/qmake
           else
