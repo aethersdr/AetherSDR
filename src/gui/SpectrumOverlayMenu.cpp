@@ -1203,40 +1203,24 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     //              persists in m_blackAutoOffsetValue and emits
     //              wfAutoBlackOffsetChanged.
     makeRowWithBtn("Black Level:", 0, 100, 50, m_blackSlider, m_blackLabel,
-                   m_autoBlackBtn, "Auto");
-    m_autoBlackBtn->setChecked(true);
+                   m_autoBlackBtn, "SW");
     connect(m_blackSlider, &QSlider::valueChanged, this, [this](int v) {
         m_blackLabel->setText(QString::number(v));
-        if (m_autoBlackBtn && m_autoBlackBtn->isChecked()) {
+        if (m_autoBlackMode != 0) {      // Auto-C / Auto-R → bias the offset
             m_blackAutoOffsetValue = v;
             emit wfAutoBlackOffsetChanged(v);
-        } else {
+        } else {                         // Off → manual black level
             m_blackManualValue = v;
             emit wfBlackLevelChanged(v);
         }
     });
-    connect(m_autoBlackBtn, &QPushButton::toggled, this, [this](bool on) {
-        emit wfAutoBlackChanged(on);
-        // Swap the displayed slider value to whichever role just became
-        // active.  Block signals so the swap doesn't echo back as a user
-        // edit — we just want the UI to reflect the matching stored value.
-        if (m_blackSlider) {
-            QSignalBlocker bs(m_blackSlider);
-            const int v = on ? m_blackAutoOffsetValue : m_blackManualValue;
-            m_blackSlider->setValue(v);
-            if (m_blackLabel)
-                m_blackLabel->setText(QString::number(v));
-        }
-        if (m_blackSlider) {
-            m_blackSlider->setToolTip(on
-                ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
-                : "Waterfall black level. Decrease to darken the noise floor.");
-        }
-        if (!on)
-            emit wfBlackLevelChanged(m_blackManualValue);
-        else
-            emit wfAutoBlackOffsetChanged(m_blackAutoOffsetValue);
+    // One click advances the 3-way mode: Off → Auto-C → Auto-R → Off.
+    // applyAutoBlackMode swaps the slider role, updates the label/highlight, and
+    // emits the on/off + client/radio-source signals together.
+    connect(m_autoBlackBtn, &QPushButton::clicked, this, [this]() {
+        applyAutoBlackMode((m_autoBlackMode + 1) % 3, /*emitSignals=*/true);
     });
+    applyAutoBlackMode(m_autoBlackMode, /*emitSignals=*/false);  // initial label/slider role
 
     // Gain
     makeRow("WtrFall Gain:", 0, 100, 50, m_gainSlider, m_gainLabel);
@@ -1451,6 +1435,50 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     m_displayPanel->adjustSize();
 }
 
+// Apply a 3-way auto-black mode to the single cycle button + shared Black slider.
+//   0 = Off    → manual black level
+//   1 = SW → AetherSDR client-side (software) noise-floor estimate
+//   2 = HW → radio's per-tile (hardware) auto-black level (FlexLib AutoBlackLevel)
+// The button highlights in either Auto mode and shows the mode name; the slider
+// swaps between its manual and auto-offset roles.  When emitSignals is true (a
+// user click) it drives the on/off + client/radio-source signals plus the
+// matching slider-value signal so the renderer and radio both update.
+void SpectrumOverlayMenu::applyAutoBlackMode(int mode, bool emitSignals)
+{
+    m_autoBlackMode = mode;
+    const bool autoOn    = (mode != 0);
+    const bool radioSide = (mode == 2);
+
+    if (m_autoBlackBtn) {
+        QSignalBlocker bb(m_autoBlackBtn);
+        m_autoBlackBtn->setCheckable(true);
+        m_autoBlackBtn->setChecked(autoOn);   // highlight in either Auto mode
+        // SW = client-side (software) estimate, HW = radio's (hardware) level —
+        // short labels that fit the compact button.
+        m_autoBlackBtn->setText(mode == 0 ? "Off" : mode == 1 ? "SW" : "HW");
+        m_autoBlackBtn->setToolTip(
+            "Waterfall auto-black (click to cycle):\n"
+            "Off = manual black level\n"
+            "SW = client-side noise-floor estimate (software)\n"
+            "HW = radio's per-tile auto-black level (hardware)");
+    }
+    if (m_blackSlider) {
+        QSignalBlocker bs(m_blackSlider);
+        const int v = autoOn ? m_blackAutoOffsetValue : m_blackManualValue;
+        m_blackSlider->setValue(v);
+        if (m_blackLabel) m_blackLabel->setText(QString::number(v));
+        m_blackSlider->setToolTip(autoOn
+            ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
+            : "Waterfall black level. Decrease to darken the noise floor.");
+    }
+    if (emitSignals) {
+        emit wfAutoBlackChanged(autoOn);
+        emit wfAutoBlackSourceChanged(radioSide);
+        if (autoOn) emit wfAutoBlackOffsetChanged(m_blackAutoOffsetValue);
+        else        emit wfBlackLevelChanged(m_blackManualValue);
+    }
+}
+
 void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                bool weightedAvg, const QColor& fillColor,
                                                int gain, int black, bool autoBlack,
@@ -1458,7 +1486,8 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                int floorPos, bool floorEnable,
                                                bool heatMap, int colorScheme,
                                                bool showGrid,
-                                               float lineWidth)
+                                               float lineWidth,
+                                               bool autoBlackRadioSide)
 {
     if (!m_avgSlider) return;  // panel not built yet
 
@@ -1481,13 +1510,11 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
     m_gainLabel->setText(QString::number(gain));
     m_blackManualValue     = black;
     m_blackAutoOffsetValue = autoBlackOffset;
-    const int displayBlack = autoBlack ? autoBlackOffset : black;
-    m_blackSlider->setValue(displayBlack);
-    m_blackLabel->setText(QString::number(displayBlack));
-    m_blackSlider->setToolTip(autoBlack
-        ? "Auto-black target offset. 50 = at noise floor; lower = darker, higher = lighter."
-        : "Waterfall black level. Decrease to darken the noise floor.");
-    m_autoBlackBtn->setChecked(autoBlack);
+    // Reflect the persisted 3-way auto-black mode on the cycle button + slider.
+    // (m_blackManualValue / m_blackAutoOffsetValue were just set above; the
+    // helper picks the right one for the mode and updates the label/tooltip.)
+    const int abMode = !autoBlack ? 0 : (autoBlackRadioSide ? 2 : 1);
+    applyAutoBlackMode(abMode, /*emitSignals=*/false);
     syncWfLineDuration(rate);
 
     if (m_floorSlider) {

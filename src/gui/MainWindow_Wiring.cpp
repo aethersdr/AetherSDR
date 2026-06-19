@@ -1632,10 +1632,20 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackChanged,
             this, [this, sw](bool on) {
         sw->setWfAutoBlack(on);
+        // Keep the radio's auto_black flag in sync at runtime; it only reaches
+        // 1 when auto-black is on AND the radio-side source is selected.
+        m_radioModel.setWaterfallAutoBlack(on);
     });
     connect(menu, &SpectrumOverlayMenu::wfAutoBlackOffsetChanged,
             this, [sw](int offset) {
         sw->setWfAutoBlackOffset(offset);
+    });
+    connect(menu, &SpectrumOverlayMenu::wfAutoBlackSourceChanged,
+            this, [this, sw](bool radioSide) {
+        sw->setWfAutoBlackRadioSide(radioSide);
+        // Radio-side → tell the radio to compute its per-tile auto-black level;
+        // client-side → stop it (auto_black=0) and use our own estimate.
+        m_radioModel.setWaterfallAutoBlackSource(radioSide);
     });
     const auto applyWaterfallLineDuration = [this, applet, sw](int ms) {
         const int clampedMs = std::clamp(ms, 1, 100);
@@ -1706,6 +1716,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setWfBlackLevel(15);
         sw->setWfAutoBlack(true);
         sw->setWfAutoBlackOffset(50);
+        sw->setWfAutoBlackRadioSide(false);
         sw->setWfLineDuration(100);
         sw->setWfBlankerEnabled(false);
         sw->setWfBlankerThreshold(1.15f);
@@ -1754,6 +1765,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("DisplayWfColorGain"),         "50");
         s.setValue(sw->settingsKey("DisplayWfBlackLevel"),        "15");
         s.setValue(sw->settingsKey("DisplayWfAutoBlack"),         "True");
+        s.setValue(sw->settingsKey("DisplayWfAutoBlackRadioSide"), "False");
         s.setValue(sw->settingsKey("DisplayWfLineDuration"),      "100");
         s.setValue(sw->settingsKey("WaterfallBlankingEnabled"),   "False");
         s.setValue(sw->settingsKey("WaterfallBlankingThreshold"), "1.15");

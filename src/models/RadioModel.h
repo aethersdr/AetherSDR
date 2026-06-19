@@ -357,6 +357,10 @@ public:
     void setWaterfallColorGain(int gain);
     void setWaterfallBlackLevel(int level);
     void setWaterfallAutoBlack(bool on);
+    // Auto-black source: false = client-side estimate (radio auto_black off),
+    // true = radio's per-tile level (radio auto_black on). The radio only
+    // receives auto_black=1 when auto-black is on AND radio-side is selected.
+    void setWaterfallAutoBlackSource(bool radioSide);
     void setWaterfallLineDuration(int ms);
 
     // Display controls — Noise floor
@@ -539,6 +543,11 @@ private:
 
     void configurePan(const QString& panId);
     void configureWaterfall(const QString& waterfallId);
+    // Sends the radio auto_black flag from the combined auto-black on/off +
+    // client/radio-source state (auto_black=1 only when both select radio-side).
+    void applyWaterfallAutoBlack();
+    bool m_wfAutoBlackOn{true};         // mirrors the client auto-black on/off
+    bool m_wfAutoBlackRadioSide{false}; // false = client-side, true = radio-side
     bool profileLoadRadioStateWritesHeld() const;
     void registerAsGuiClient(const QString& clientId);
     void disconnectPendingClientsThen(std::function<void()> continuation);

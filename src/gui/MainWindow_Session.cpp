@@ -925,9 +925,10 @@ void MainWindow::wirePanLifecycle()
         for (auto* pan : m_radioModel.panadapters()) {
             if (pan->wfStreamId() == streamId) {
                 if (auto* sw = m_panStack->spectrum(pan->panId())) {
-                    if (sw->wfAutoBlack()) {
+                    if (sw->wfAutoBlack() && sw->wfAutoBlackRadioSide()) {
                         // Feed the radio's per-tile auto-black level straight to
-                        // the renderer (radio-authoritative low/black point).
+                        // the renderer only when the user selected radio-side
+                        // auto-black (radio-authoritative low/black point).
                         sw->setRadioAutoBlackLevel(autoBlack);
                     }
                 }
@@ -950,6 +951,7 @@ void MainWindow::wirePanLifecycle()
             m_radioModel.setWaterfallColorGain(sw->wfColorGain());
             m_radioModel.setWaterfallBlackLevel(sw->wfBlackLevel());
             m_radioModel.setWaterfallAutoBlack(sw->wfAutoBlack());
+            m_radioModel.setWaterfallAutoBlackSource(sw->wfAutoBlackRadioSide());
             int rate = sw->wfLineDuration();
             if (!m_adaptiveThrottleActive)
                 m_radioModel.setWaterfallLineDuration(rate);

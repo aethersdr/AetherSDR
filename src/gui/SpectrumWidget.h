@@ -314,6 +314,10 @@ public:
     // domain, radio-authoritative). 0 = not yet received → the client falls back
     // to its own noise-floor estimate.
     void setRadioAutoBlackLevel(quint32 rawLevel);
+    // Auto-black source: false = client-side noise-floor estimate (default,
+    // legacy look); true = the radio's per-tile auto-black level. Only consulted
+    // while m_wfAutoBlack is on.
+    void setWfAutoBlackRadioSide(bool radioSide);
     void setWfLineDuration(int ms);
     void setWfColorScheme(int scheme);
     void resetWfTimeScale();
@@ -321,6 +325,7 @@ public:
     int   wfBlackLevel() const         { return m_wfBlackLevel; }
     bool  wfAutoBlack() const          { return m_wfAutoBlack; }
     int   wfAutoBlackOffset() const    { return m_wfAutoBlackOffset; }
+    bool  wfAutoBlackRadioSide() const { return m_wfAutoBlackRadioSide; }
     int   wfLineDuration() const       { return m_wfLineDuration; }
     int   wfColorScheme() const        { return static_cast<int>(m_wfColorScheme); }
 
@@ -774,6 +779,9 @@ private:
     // pulls it below (lighter).  Stored separately from m_wfBlackLevel so
     // toggling AUTO swaps between the two without losing either value.
     int   m_wfAutoBlackOffset{50};
+    // Auto-black source: false = client-side noise-floor estimate (default,
+    // legacy look); true = the radio's per-tile auto-black level.
+    bool  m_wfAutoBlackRadioSide{false};
     WfColorScheme m_wfColorScheme{WfColorScheme::Default};
     float m_autoBlackThresh{145.0f}; // client-side auto-black: tracked noise floor
     // Radio's per-tile auto-black level (raw uint16). Preferred over the client

@@ -836,6 +836,8 @@ void SpectrumWidget::loadSettings()
     m_wfBlackLevel   = s.value(settingsKey("DisplayWfBlackLevel"), "15").toInt();
     m_wfAutoBlack    = s.value(settingsKey("DisplayWfAutoBlack"), "True").toString() == "True";
     m_wfAutoBlackOffset = s.value(settingsKey("DisplayWfAutoBlackOffset"), "50").toInt();
+    // Auto-black source defaults to client-side (legacy look); radio-side opt-in.
+    m_wfAutoBlackRadioSide = s.value(settingsKey("DisplayWfAutoBlackRadioSide"), "False").toString() == "True";
     m_wfLineDuration = std::clamp(s.value(settingsKey("DisplayWfLineDuration"), "100").toInt(),
                                   kWaterfallLineDurationMinMs,
                                   kWaterfallLineDurationMaxMs);
@@ -894,7 +896,7 @@ void SpectrumWidget::loadSettings()
             m_wfLineDuration,
             m_noiseFloorPosition, m_noiseFloorEnable,
             m_fftHeatMap, static_cast<int>(m_wfColorScheme), m_showGrid,
-            m_fftLineWidth);
+            m_fftLineWidth, m_wfAutoBlackRadioSide);
         m_overlayMenu->syncExtraDisplaySettings(m_wfBlankerEnabled,
             m_wfBlankerThreshold, m_bgOpacity, m_freqGridSpacingKhz, m_bgFillColor,
             m_freqScaleFontPt);
@@ -1760,6 +1762,21 @@ void SpectrumWidget::setRadioAutoBlackLevel(quint32 rawLevel) {
     const float v = static_cast<float>(rawLevel);
     if (v == m_radioAutoBlackRaw) return;
     m_radioAutoBlackRaw = v;
+    update();
+}
+void SpectrumWidget::setWfAutoBlackRadioSide(bool radioSide) {
+    if (radioSide == m_wfAutoBlackRadioSide) {
+        return;
+    }
+    m_wfAutoBlackRadioSide = radioSide;
+    auto& s = AppSettings::instance();
+    s.setValue(settingsKey("DisplayWfAutoBlackRadioSide"), radioSide ? "True" : "False");
+    s.save();
+    // Drop any stale radio level when switching back to client-side so the
+    // client estimate takes over immediately; a fresh tile repopulates it.
+    if (!radioSide) {
+        m_radioAutoBlackRaw = 0.0f;
+    }
     update();
 }
 void SpectrumWidget::setWfLineDuration(int ms) {
@@ -5353,7 +5370,7 @@ QRgb SpectrumWidget::intensityToRgb(float intensity) const
     // <50 darker, >50 lighter.
     float blackThresh;   // low point  (intensity domain)
     float rangeWidth;    // high − low (intensity domain)
-    if (m_wfAutoBlack && m_radioAutoBlackRaw > 0.0f) {
+    if (m_wfAutoBlack && m_wfAutoBlackRadioSide && m_radioAutoBlackRaw > 0.0f) {
         // Clamp once so the black point, white point, and range all derive from
         // the same low value — the offset can push lowRaw out of [0, 65535].
         const float lowRaw = qBound(

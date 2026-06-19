@@ -48,7 +48,8 @@ public:
                              int floorPos = 75, bool floorEnable = false,
                              bool heatMap = true, int colorScheme = 0,
                              bool showGrid = true,
-                             float lineWidth = 2.0f);
+                             float lineWidth = 2.0f,
+                             bool autoBlackRadioSide = false);
     void syncWfLineDuration(int rate);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
     void syncExtraDisplaySettings(bool blankerOn, float blankerThresh,
@@ -122,6 +123,8 @@ signals:
     // Auto-black target offset (0-100, 50 = at noise floor).  Emitted when
     // the Black slider moves while AUTO is engaged.
     void wfAutoBlackOffsetChanged(int offset);
+    // Auto-black source: false = client-side estimate (default), true = radio.
+    void wfAutoBlackSourceChanged(bool radioSide);
     void wfLineDurationChanged(int ms);
     void wfColorSchemeChanged(int scheme);
     void noiseFloorPositionChanged(int pos);
@@ -253,6 +256,10 @@ private:
     QSlider*     m_blackSlider{nullptr};
     QLabel*      m_blackLabel{nullptr};
     QPushButton* m_autoBlackBtn{nullptr};
+    // Auto-black is a 3-way cycle on one button: 0 = Off, 1 = Auto-C (client
+    // noise-floor estimate), 2 = Auto-R (radio per-tile level).
+    int m_autoBlackMode{1};
+    void applyAutoBlackMode(int mode, bool emitSignals);
     // Two values backing the single Black slider; the slider shows whichever
     // matches the current AUTO state.  Toggling AUTO swaps the displayed
     // value, edits route to the matching member + matching signal.
