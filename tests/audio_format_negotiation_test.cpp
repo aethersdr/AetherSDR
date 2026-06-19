@@ -51,11 +51,12 @@ struct Row {
     ResamplerKind resampler;
     int           channels;
     bool          fellBack;
+    FormatPreference pref = FormatPreference::Auto;   // optional caller hint
 };
 
 void runRow(const Row& r)
 {
-    const NegotiatedFormat n = negotiate(r.os, r.dir, r.caps, r.policy);
+    const NegotiatedFormat n = negotiate(r.os, r.dir, r.caps, r.policy, kInternalRate, r.pref);
     const bool ok = n.ok == r.ok
                  && (!r.ok || (n.rate == r.rate && n.fmt == r.fmt
                                && n.resampler == r.resampler && n.channels == r.channels
@@ -142,6 +143,19 @@ int main()
             true, 48000, F, ResamplerKind::None, 2, false});
     runRow({"sidetone 24k-cap / Linux -> 24k, no resampler", Lin, Out, Regen, dev({24000, 48000}),
             true, 24000, F, ResamplerKind::None, 2, false});
+
+    // ── Int16-first output (Pudu/QSO playback are Int16-native, #3306 6b). On a
+    //    normal device they get Int16 — no conversion — at the per-OS rate;
+    //    Win/Mac prefer 48k (dodges the WASAPI 24k artifacts #2120, same as RX),
+    //    Linux stays native 24k. On a Float-only device they fall back to Float
+    //    (then the sink's Int16->Float guard #3231 converts). ───────────────────
+    runRow({"Int16-native / Mac / playback -> 48k Int16", Mac, Out, Pan, dev({24000, 48000}),
+            true, 48000, I, ResamplerKind::PreservePan, 2, false, FormatPreference::Int16First});
+    runRow({"Int16-native / Linux / playback -> native 24k Int16", Lin, Out, Pan, dev({24000, 48000}),
+            true, 24000, I, ResamplerKind::None, 2, false, FormatPreference::Int16First});
+    runRow({"Int16-native / Mac / Float-only dev -> Float fallback (#3231 guard)",
+            Mac, Out, Pan, dev({48000}, {F}),
+            true, 48000, F, ResamplerKind::PreservePan, 2, true, FormatPreference::Int16First});
 
     // ── macOS Bluetooth-HFP mic: native low rate first, NOT forced to 48k
     //    (#2615). preferred-first puts 16k ahead of the 48k ladder. ───────────

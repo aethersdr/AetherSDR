@@ -65,6 +65,16 @@ enum class ResamplerPolicy {
     MonoCollapse,     // TCI DAX TX / RADE -> MonoCollapse when rate != internal
 };
 
+// Optional caller hint to lead the format order with a specific sample format.
+//   Auto         — keep the per-direction default (Float-first output for
+//                  float-native sinks like RX/sidetone; Int16-first input).
+//   Int16First   — for Int16-native sinks (QSO/Pudu playback, recorded int16):
+//                  prefer Int16 on normal devices so no conversion is needed,
+//                  with Float as the fallback for Float-only endpoints.
+//   Float32First — explicit float-first (== Auto for output today; here for
+//                  symmetry/clarity).
+enum class FormatPreference { Auto, Int16First, Float32First };
+
 // Injected capability snapshot — everything the policy would otherwise read
 // live from a QAudioDevice / PortAudio / the HAL. Pure inputs only.
 struct DeviceCaps {
@@ -122,7 +132,8 @@ QList<FormatCandidate> buildLadder(TargetOs os,
                                    Direction dir,
                                    const DeviceCaps& caps,
                                    ResamplerPolicy policy,
-                                   int internalRate = kInternalRate);
+                                   int internalRate = kInternalRate,
+                                   FormatPreference pref = FormatPreference::Auto);
 
 // Resolve the ladder against the device's actual capabilities — the PURE
 // equivalent of walking the ladder and opening the device. When
@@ -134,7 +145,8 @@ NegotiatedFormat negotiate(TargetOs os,
                            Direction dir,
                            const DeviceCaps& caps,
                            ResamplerPolicy policy,
-                           int internalRate = kInternalRate);
+                           int internalRate = kInternalRate,
+                           FormatPreference pref = FormatPreference::Auto);
 
 // The resampler kind for a concrete (deviceRate, policy) pair, independent of
 // the ladder — used by sinks that already know their negotiated rate.

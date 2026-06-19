@@ -90,10 +90,10 @@ AFN::DeviceCaps probe(const QAudioDevice& dev, AFN::Direction dir, AFN::TargetOs
 }
 
 Result negotiate(const QAudioDevice& dev, AFN::Direction dir, AFN::ResamplerPolicy policy,
-                 AFN::TargetOs os, int internalRate, bool bluetoothHfp)
+                 AFN::TargetOs os, int internalRate, bool bluetoothHfp, AFN::FormatPreference pref)
 {
     const AFN::DeviceCaps caps = probe(dev, dir, os, bluetoothHfp);
-    const AFN::NegotiatedFormat n = AFN::negotiate(os, dir, caps, policy, internalRate);
+    const AFN::NegotiatedFormat n = AFN::negotiate(os, dir, caps, policy, internalRate, pref);
 
     Result r;
     r.ok = n.ok;
@@ -108,11 +108,12 @@ Result negotiate(const QAudioDevice& dev, AFN::Direction dir, AFN::ResamplerPoli
 
 QList<QAudioFormat> formatLadder(const QAudioDevice& dev, AFN::Direction dir,
                                  AFN::ResamplerPolicy policy, AFN::TargetOs os,
-                                 int internalRate, bool bluetoothHfp, int preferredRateOverride)
+                                 int internalRate, bool bluetoothHfp, int preferredRateOverride,
+                                 AFN::FormatPreference pref)
 {
     const AFN::DeviceCaps caps = probe(dev, dir, os, bluetoothHfp, preferredRateOverride);
     const QList<AFN::FormatCandidate> ladder =
-        AFN::buildLadder(os, dir, caps, policy, internalRate);
+        AFN::buildLadder(os, dir, caps, policy, internalRate, pref);
 
     QList<QAudioFormat> out;
     out.reserve(ladder.size());

@@ -46,12 +46,18 @@ QList<int> primaryRateOrder(TargetOs os, Direction dir, int internalRate)
     Q_UNREACHABLE(); // every TargetOs value is covered in both branches above
 }
 
-// Format attempt order per direction. Output is Float-first (RX/sidetone/Quindar
-// produce float internally; Int16 is the WASAPI Int16-only fallback — #2669).
-// Input is Int16-first (mic native is Int16; Float is the virtual-driver /
-// Float-only-capture fallback — #1090).
-QList<SampleFmt> formatOrder(Direction dir)
+// Format attempt order. A caller hint (FormatPreference) overrides the default;
+// otherwise output is Float-first (RX/sidetone/Quindar produce float internally;
+// Int16 is the WASAPI Int16-only fallback — #2669) and input is Int16-first (mic
+// native is Int16; Float is the virtual-driver / Float-only fallback — #1090).
+// Int16-native playback sinks (QSO/Pudu) pass Int16First so they avoid a
+// conversion on normal devices while still falling back to Float.
+QList<SampleFmt> formatOrder(Direction dir, FormatPreference pref)
 {
+    if (pref == FormatPreference::Int16First)
+        return {SampleFmt::Int16, SampleFmt::Float32};
+    if (pref == FormatPreference::Float32First)
+        return {SampleFmt::Float32, SampleFmt::Int16};
     return dir == Direction::Output
         ? QList<SampleFmt>{SampleFmt::Float32, SampleFmt::Int16}
         : QList<SampleFmt>{SampleFmt::Int16, SampleFmt::Float32};
@@ -82,10 +88,11 @@ QList<FormatCandidate> buildLadder(TargetOs os,
                                    Direction dir,
                                    const DeviceCaps& caps,
                                    ResamplerPolicy policy,
-                                   int internalRate)
+                                   int internalRate,
+                                   FormatPreference pref)
 {
     QList<FormatCandidate> ladder;
-    const QList<SampleFmt> fmts = formatOrder(dir);
+    const QList<SampleFmt> fmts = formatOrder(dir, pref);
 
     const auto add = [&](int rate, SampleFmt fmt, const QString& reason) {
         if (rate <= 0) return;
@@ -143,9 +150,10 @@ NegotiatedFormat negotiate(TargetOs os,
                            Direction dir,
                            const DeviceCaps& caps,
                            ResamplerPolicy policy,
-                           int internalRate)
+                           int internalRate,
+                           FormatPreference pref)
 {
-    const QList<FormatCandidate> ladder = buildLadder(os, dir, caps, policy, internalRate);
+    const QList<FormatCandidate> ladder = buildLadder(os, dir, caps, policy, internalRate, pref);
 
     const bool reliable = caps.isFormatSupportedReliable;
     const bool nothingProbeable = caps.supportedRates.isEmpty();

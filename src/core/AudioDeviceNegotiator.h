@@ -50,10 +50,13 @@ Result negotiate(
     AudioFormatNegotiator::ResamplerPolicy policy,
     AudioFormatNegotiator::TargetOs os = AudioFormatNegotiator::hostTargetOs(),
     int internalRate = AudioFormatNegotiator::kInternalRate,
-    bool bluetoothHfp = false);
+    bool bluetoothHfp = false,
+    AudioFormatNegotiator::FormatPreference pref = AudioFormatNegotiator::FormatPreference::Auto);
 
 // The full ordered Qt-format ladder, for backends where isFormatSupported()
-// is unreliable and the caller must try-at-open (Windows WASAPI).
+// is unreliable and the caller must try-at-open (Windows WASAPI), or for sinks
+// that walk-and-probe themselves (Quindar/Pudu/QSO). `pref` leads the format
+// order — Int16-native playback sinks pass Int16First.
 QList<QAudioFormat> formatLadder(
     const QAudioDevice& dev,
     AudioFormatNegotiator::Direction dir,
@@ -61,7 +64,8 @@ QList<QAudioFormat> formatLadder(
     AudioFormatNegotiator::TargetOs os = AudioFormatNegotiator::hostTargetOs(),
     int internalRate = AudioFormatNegotiator::kInternalRate,
     bool bluetoothHfp = false,
-    int preferredRateOverride = 0);
+    int preferredRateOverride = 0,
+    AudioFormatNegotiator::FormatPreference pref = AudioFormatNegotiator::FormatPreference::Auto);
 
 QAudioFormat::SampleFormat       toQt(AudioFormatNegotiator::SampleFmt f);
 AudioFormatNegotiator::SampleFmt fromQt(QAudioFormat::SampleFormat f);
