@@ -82,15 +82,25 @@ int main(int argc, char** argv)
     }
 
     {
-        // QPointer guard: a follower destroyed before the router must not crash
-        // or be invoked on the next change.
+        // QPointer guard + pruning (#3660): a follower destroyed before the
+        // router must not crash or be invoked on the next change, AND must be
+        // pruned from the registry on that fan-out — while live followers are
+        // kept and still updated.
         AudioOutputRouter router;
+        FakeSink live;
         auto* heapSink = new FakeSink;
+        router.addFollower(&live);
         router.addFollower(heapSink);
+        report("two followers registered", router.followerCount() == 2);
         report("heap follower seeded", heapSink->calls == 1);
+
         delete heapSink;                 // QPointer in the router goes null
-        router.setCurrentDevice(devA);   // must be a no-op for the dead follower
+        const int liveBefore = live.calls;
+        router.setCurrentDevice(devA);   // dead follower skipped; live updated
         report("destroyed follower skipped (no crash)", true);
+        report("live follower still updated", live.calls == liveBefore + 1);
+        report("dead follower pruned, live kept (#3660)",
+               router.followerCount() == 1);
     }
 
     {

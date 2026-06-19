@@ -60,10 +60,12 @@ public:
     void addFollower(T* sink)
     {
         QPointer<T> guarded(sink);
-        addFollower([guarded](const QAudioDevice& dev) {
-            if (guarded)
-                guarded->setOutputDevice(dev);
-        });
+        registerFollower(
+            [guarded](const QAudioDevice& dev) {
+                if (guarded)
+                    guarded->setOutputDevice(dev);
+            },
+            [guarded]() { return !guarded.isNull(); });
     }
 
     // The device followers are currently bound to (may be null == "system
@@ -78,8 +80,21 @@ public slots:
     void setCurrentDevice(const QAudioDevice& dev);
 
 private:
-    QAudioDevice m_device;
-    std::vector<std::function<void(const QAudioDevice&)>> m_followers;
+    // A registered follower plus an optional liveness predicate. `alive` is set
+    // only by the QPointer-guarded template overload; a raw std::function
+    // follower carries no liveness info (null `alive` == always alive). Dead
+    // followers (guard gone null) are pruned after each fan-out (#3660).
+    struct Follower {
+        std::function<void(const QAudioDevice&)> apply;
+        std::function<bool()>                    alive;
+    };
+
+    // Shared registration path for both addFollower() overloads: seed + store.
+    void registerFollower(std::function<void(const QAudioDevice&)> apply,
+                          std::function<bool()> alive);
+
+    QAudioDevice          m_device;
+    std::vector<Follower> m_followers;
 };
 
 } // namespace AetherSDR
