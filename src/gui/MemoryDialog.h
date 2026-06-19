@@ -37,12 +37,11 @@ private:
     void beginEditingMemoryName(int memoryIndex);
     void focusTableOnCurrentRow();
     void populateTable();
-    void setInlineEditMode(bool enabled);
+    void editCurrentCell();
     void submitCellEdit(int row, int col);
     void onAdd();
     void onImport();
     void onExport();
-    void onEdit();
     void onSelect();
     void onSelectAll();
     void onRemove();
@@ -56,13 +55,11 @@ private:
     QLineEdit* m_searchEdit;
     QComboBox* m_filterCombo;
     QLabel* m_selectionLabel{nullptr};
-    QPushButton* m_editBtn{nullptr};
     QPushButton* m_selectBtn{nullptr};
     QPushButton* m_selectAllBtn{nullptr};
     QPushButton* m_removeBtn{nullptr};
     int m_pendingEditMemoryIndex{-1};
     int m_pendingEditRetries{0};
-    bool m_inlineEditMode{false};
     int m_sortColumn{2};
     Qt::SortOrder m_sortOrder{Qt::AscendingOrder};
 };

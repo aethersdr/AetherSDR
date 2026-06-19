@@ -5,6 +5,7 @@
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
 #include "core/LogManager.h"
+#include "core/MemoryFieldValues.h"
 #include "core/PerfTelemetry.h"
 #include "core/StreamStatus.h"
 #include "core/UdpRegistrationPolicy.h"
@@ -3202,18 +3203,25 @@ void RadioModel::handleMemoryStatus(int index, const QMap<QString, QString>& kvs
     auto& m = m_memories[index];
     m.index = index;
 
+    // Decode the protocol space-encoding (0x7f -> ' ') for free-text fields,
+    // then strip any NUL/control bytes so corrupt values from the radio (or a
+    // previously corrupted memory) never reach the UI, CSV export, or a re-send.
+    auto decodeText = [](const QString& v) {
+        return AetherSDR::MemoryFields::sanitizeText(QString(v).replace('\x7f', ' '));
+    };
+
     for (auto it = kvs.begin(); it != kvs.end(); ++it) {
         const QString& k = it.key();
         const QString& v = it.value();
-        if      (k == "group")           m.group = QString(v).replace('\x7f', ' ');
-        else if (k == "owner")           m.owner = QString(v).replace('\x7f', ' ');
+        if      (k == "group")           m.group = decodeText(v);
+        else if (k == "owner")           m.owner = decodeText(v);
         else if (k == "freq")            m.freq = v.toDouble();
-        else if (k == "name")            m.name = QString(v).replace('\x7f', ' ');
-        else if (k == "mode")            m.mode = v;
+        else if (k == "name")            m.name = decodeText(v);
+        else if (k == "mode")            m.mode = AetherSDR::MemoryFields::sanitizeText(v);
         else if (k == "step")            m.step = v.toInt();
-        else if (k == "repeater")        m.offsetDir = v;
+        else if (k == "repeater")        m.offsetDir = AetherSDR::MemoryFields::sanitizeText(v);
         else if (k == "repeater_offset") m.repeaterOffset = v.toDouble();
-        else if (k == "tone_mode")       m.toneMode = v;
+        else if (k == "tone_mode")       m.toneMode = AetherSDR::MemoryFields::sanitizeText(v);
         else if (k == "tone_value")      m.toneValue = v.toDouble();
         else if (k == "squelch")         m.squelch = (v == "1");
         else if (k == "squelch_level")   m.squelchLevel = v.toInt();

@@ -1,5 +1,6 @@
 #include "MemoryCommands.h"
 
+#include "core/MemoryFieldValues.h"
 #include "models/SliceModel.h"
 
 #include <QPointer>
@@ -8,7 +9,10 @@ namespace AetherSDR {
 
 QString encodeMemoryText(const QString& value)
 {
-    return QString(value).replace(' ', QChar(0x7f));
+    // Strip NUL/control bytes first, then apply the protocol space-encoding so
+    // a hand-entered or imported value can never push a raw control byte (which
+    // breaks the radio and other SmartSDR-compatible software) onto the wire.
+    return MemoryFields::sanitizeText(value).replace(' ', QChar(0x7f));
 }
 
 MemoryEntry captureMemoryFromSlice(const RadioModel& model,
@@ -52,11 +56,11 @@ MemoryUpdateData buildMemoryUpdateData(const MemoryEntry& memory)
     appendField("owner", encodeMemoryText(memory.owner));
     appendField("freq", QString::number(memory.freq, 'f', 6));
     appendField("name", encodeMemoryText(memory.name));
-    appendField("mode", memory.mode);
+    appendField("mode", MemoryFields::modeToWire(memory.mode));
     appendField("step", QString::number(memory.step));
-    appendField("repeater", memory.offsetDir);
+    appendField("repeater", MemoryFields::offsetDirToWire(memory.offsetDir));
     appendField("repeater_offset", QString::number(memory.repeaterOffset, 'f', 6));
-    appendField("tone_mode", memory.toneMode);
+    appendField("tone_mode", MemoryFields::toneModeToWire(memory.toneMode));
     appendField("tone_value", QString::number(memory.toneValue, 'f', 1));
     appendField("squelch", memory.squelch ? "1" : "0");
     appendField("squelch_level", QString::number(memory.squelchLevel));

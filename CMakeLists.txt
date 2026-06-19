@@ -596,6 +596,7 @@ set(CORE_SOURCES
     src/core/DxccColorProvider.cpp
     src/core/SleepInhibitor.cpp
     src/core/MemoryCsvCompat.cpp
+    src/core/MemoryFieldValues.cpp
     src/core/MemoryRecallPolicy.cpp
     src/core/WfmDemodulator.cpp
     src/core/WfmDsp.cpp
@@ -2240,6 +2241,15 @@ add_executable(memory_recall_policy_test
 )
 target_include_directories(memory_recall_policy_test PRIVATE src)
 target_link_libraries(memory_recall_policy_test PRIVATE Qt6::Core)
+add_test(NAME memory_recall_policy_test COMMAND memory_recall_policy_test)
+
+add_executable(memory_field_values_test
+    tests/memory_field_values_test.cpp
+    src/core/MemoryFieldValues.cpp
+)
+target_include_directories(memory_field_values_test PRIVATE src)
+target_link_libraries(memory_field_values_test PRIVATE Qt6::Core)
+add_test(NAME memory_field_values_test COMMAND memory_field_values_test)
 
 add_executable(transmit_model_apd_test
     tests/transmit_model_apd_test.cpp

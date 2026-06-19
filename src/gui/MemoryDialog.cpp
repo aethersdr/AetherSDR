@@ -1,6 +1,7 @@
 #include "MemoryDialog.h"
 #include "MemoryCommands.h"
 #include "core/MemoryCsvCompat.h"
+#include "core/MemoryFieldValues.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -16,6 +17,9 @@
 #include <QHBoxLayout>
 #include <QPushButton>
 #include <QComboBox>
+#include <QStyledItemDelegate>
+#include <QIntValidator>
+#include <QDoubleValidator>
 #include <QLineEdit>
 #include <QLabel>
 #include <QHeaderView>
@@ -54,6 +58,90 @@ public:
     }
 };
 
+// Combo-box editor for constrained memory fields (Mode, Offset Dir, Tone Mode,
+// Tone Value, Step, Group). For strict fields the combo is locked to the known
+// values; editable fields seed common values but still accept typed input
+// (validated by the radio on commit). The list pops open immediately so picking
+// a value is effectively one click once the cell is being edited.
+class MemoryFieldDelegate : public QStyledItemDelegate {
+public:
+    enum class Validator { None, Int, Double };
+
+    MemoryFieldDelegate(std::function<QStringList()> provider,
+                        bool editable,
+                        Validator validator,
+                        QObject* parent)
+        : QStyledItemDelegate(parent),
+          m_provider(std::move(provider)),
+          m_editable(editable),
+          m_validator(validator)
+    {
+    }
+
+    QWidget* createEditor(QWidget* parent,
+                          const QStyleOptionViewItem& /*option*/,
+                          const QModelIndex& /*index*/) const override
+    {
+        auto* combo = new QComboBox(parent);
+        combo->setEditable(m_editable);
+        combo->setInsertPolicy(QComboBox::NoInsert);
+        if (m_provider)
+            combo->addItems(m_provider());
+        if (m_editable && m_validator == Validator::Int) {
+            combo->setValidator(new QIntValidator(combo));
+        } else if (m_editable && m_validator == Validator::Double) {
+            auto* dv = new QDoubleValidator(combo);
+            dv->setNotation(QDoubleValidator::StandardNotation);
+            dv->setLocale(QLocale::c());
+            combo->setValidator(dv);
+        }
+        // Drop the list open right away so it reads as a one-click pick.
+        QTimer::singleShot(0, combo, [combo]() {
+            if (combo)
+                combo->showPopup();
+        });
+        return combo;
+    }
+
+    void setEditorData(QWidget* editor, const QModelIndex& index) const override
+    {
+        auto* combo = qobject_cast<QComboBox*>(editor);
+        if (!combo) {
+            QStyledItemDelegate::setEditorData(editor, index);
+            return;
+        }
+        const QString value = index.data(Qt::EditRole).toString();
+        const int found = combo->findText(value, Qt::MatchFixedString);
+        if (found >= 0)
+            combo->setCurrentIndex(found);
+        else if (m_editable)
+            combo->setEditText(value);
+        else {
+            // Preserve an out-of-list value (e.g. a legacy/corrupt mode) so the
+            // operator can see it rather than having it silently swapped.
+            combo->insertItem(0, value);
+            combo->setCurrentIndex(0);
+        }
+    }
+
+    void setModelData(QWidget* editor,
+                      QAbstractItemModel* model,
+                      const QModelIndex& index) const override
+    {
+        auto* combo = qobject_cast<QComboBox*>(editor);
+        if (!combo) {
+            QStyledItemDelegate::setModelData(editor, model, index);
+            return;
+        }
+        model->setData(index, combo->currentText().trimmed(), Qt::EditRole);
+    }
+
+private:
+    std::function<QStringList()> m_provider;
+    bool m_editable;
+    Validator m_validator;
+};
+
 bool buildMemoryFieldUpdate(int col, const QTableWidgetItem* item,
                             QString& commandSuffix, QMap<QString, QString>& kvs)
 {
@@ -84,26 +172,32 @@ bool buildMemoryFieldUpdate(int col, const QTableWidgetItem* item,
         kvs["name"] = encoded;
         return true;
     }
-    case 4:
-        commandSuffix = "mode=" + value;
-        kvs["mode"] = value;
+    case 4: {
+        const QString mode = MemoryFields::modeToWire(value);
+        commandSuffix = "mode=" + mode;
+        kvs["mode"] = mode;
         return true;
+    }
     case 5:
         commandSuffix = "step=" + value;
         kvs["step"] = value;
         return true;
-    case 6:
-        commandSuffix = "repeater=" + value;
-        kvs["repeater"] = value;
+    case 6: {
+        const QString dir = MemoryFields::offsetDirToWire(value);
+        commandSuffix = "repeater=" + dir;
+        kvs["repeater"] = dir;
         return true;
+    }
     case 7:
         commandSuffix = "repeater_offset=" + value;
         kvs["repeater_offset"] = value;
         return true;
-    case 8:
-        commandSuffix = "tone_mode=" + value;
-        kvs["tone_mode"] = value;
+    case 8: {
+        const QString toneMode = MemoryFields::toneModeToWire(value);
+        commandSuffix = "tone_mode=" + toneMode;
+        kvs["tone_mode"] = toneMode;
         return true;
+    }
     case 9:
         commandSuffix = "tone_value=" + value;
         kvs["tone_value"] = value;
@@ -178,9 +272,9 @@ QList<MemoryCsvRecord> currentExportRecords(const QMap<int, MemoryEntry>& memori
 QString selectionHintText()
 {
 #if defined(Q_OS_MACOS)
-    return "Tip: Double-click tunes. Shift-click selects a range. Command-click adds or removes rows.";
+    return "Tip: Double-click tunes. Click a selected cell (or F2) to edit; Tab moves between fields. Shift-click selects a range; Command-click adds or removes rows.";
 #else
-    return "Tip: Double-click tunes. Shift-click selects a range. Ctrl-click adds or removes rows.";
+    return "Tip: Double-click tunes. Click a selected cell (or F2) to edit; Tab moves between fields. Shift-click selects a range; Ctrl-click adds or removes rows.";
 #endif
 }
 
@@ -216,7 +310,7 @@ QString formatImportIssue(const QString& rowLabel,
 
 static const QStringList COLUMNS = {
     "Group", "Owner", "Frequency", "Name", "Mode", "Step",
-    "FM TX Offset Dir", "Repeater Offset", "Tone Mode", "Tone Value",
+    "Offset Dir", "Repeater Offset", "Tone Mode", "Tone Value",
     "Squelch", "Squelch Level", "RX Filter Low", "RX Filter High",
     "RTTY Mark", "RTTY Shift", "DIGL Offset", "DIGU Offset"
 };
@@ -258,7 +352,13 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     m_table->setHorizontalHeaderLabels(COLUMNS);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    // Cells edit in place: click a selected cell, press F2/Enter on the keyboard
+    // focus, or just start typing. Double-click stays reserved for "tune", so it
+    // is deliberately not an edit trigger.
+    m_table->setEditTriggers(QAbstractItemView::SelectedClicked
+                             | QAbstractItemView::EditKeyPressed
+                             | QAbstractItemView::AnyKeyPressed);
+    m_table->setTabKeyNavigation(true);
     m_table->horizontalHeader()->setStretchLastSection(true);
     m_table->verticalHeader()->setVisible(false);
     m_table->setAlternatingRowColors(true);
@@ -284,6 +384,42 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
         header->setSortIndicator(m_sortColumn, m_sortOrder);
         m_table->sortItems(m_sortColumn, m_sortOrder);
     });
+
+    // One-click dropdowns for the constrained columns. Strict lists for Mode,
+    // Offset Dir and Tone Mode; editable (type-or-pick) lists for Step, Tone
+    // Value and Group, which seed common values but still accept free input.
+    using Validator = MemoryFieldDelegate::Validator;
+    auto staticList = [](const QStringList& values) {
+        return [values]() { return values; };
+    };
+    m_table->setItemDelegateForColumn(0, new MemoryFieldDelegate(
+        [this]() {
+            QStringList groups;
+            for (const auto& m : m_model->memories()) {
+                const QString g = m.group.trimmed();
+                if (!g.isEmpty() && !groups.contains(g))
+                    groups << g;
+            }
+            for (const QString& p : m_model->globalProfiles())
+                if (!p.isEmpty() && !groups.contains(p))
+                    groups << p;
+            for (const QString& p : m_model->transmitModel().profileList())
+                if (!p.isEmpty() && !groups.contains(p))
+                    groups << p;
+            groups.sort(Qt::CaseInsensitive);
+            return groups;
+        }, true, Validator::None, this));
+    m_table->setItemDelegateForColumn(4, new MemoryFieldDelegate(
+        staticList(MemoryFields::modes()), false, Validator::None, this));
+    m_table->setItemDelegateForColumn(5, new MemoryFieldDelegate(
+        staticList(MemoryFields::tuningSteps()), true, Validator::Int, this));
+    m_table->setItemDelegateForColumn(6, new MemoryFieldDelegate(
+        staticList(MemoryFields::offsetDirectionsDisplay()), false, Validator::None, this));
+    m_table->setItemDelegateForColumn(8, new MemoryFieldDelegate(
+        staticList(MemoryFields::toneModesDisplay()), false, Validator::None, this));
+    m_table->setItemDelegateForColumn(9, new MemoryFieldDelegate(
+        staticList(MemoryFields::ctcssTones()), true, Validator::Double, this));
+
     root->addWidget(m_table);
     root->addWidget(new QLabel(selectionHintText()));
 
@@ -293,12 +429,10 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     auto* exportBtn = new QPushButton("Export...");
     auto* addBtn = new QPushButton("Add");
     m_selectionLabel = new QLabel("0 selected");
-    m_editBtn = new QPushButton("Edit");
     m_selectBtn = new QPushButton("Tune");
     m_selectAllBtn = new QPushButton("Select All");
     m_removeBtn = new QPushButton("Remove");
     btnRow->addWidget(addBtn);
-    btnRow->addWidget(m_editBtn);
     btnRow->addWidget(m_selectBtn);
     btnRow->addWidget(m_selectAllBtn);
     btnRow->addWidget(importBtn);
@@ -308,7 +442,7 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     btnRow->addWidget(m_removeBtn);
     root->addLayout(btnRow);
 
-    for (QPushButton* button : {addBtn, m_editBtn, m_selectBtn, m_selectAllBtn, importBtn, exportBtn, m_removeBtn}) {
+    for (QPushButton* button : {addBtn, m_selectBtn, m_selectAllBtn, importBtn, exportBtn, m_removeBtn}) {
         button->setAutoDefault(false);
         button->setDefault(false);
     }
@@ -316,7 +450,6 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
     connect(importBtn, &QPushButton::clicked, this, &MemoryDialog::onImport);
     connect(exportBtn, &QPushButton::clicked, this, &MemoryDialog::onExport);
     connect(addBtn, &QPushButton::clicked, this, &MemoryDialog::onAdd);
-    connect(m_editBtn, &QPushButton::clicked, this, &MemoryDialog::onEdit);
     connect(m_selectBtn, &QPushButton::clicked, this, &MemoryDialog::onSelect);
     connect(m_selectAllBtn, &QPushButton::clicked, this, &MemoryDialog::onSelectAll);
     connect(m_removeBtn, &QPushButton::clicked, this, &MemoryDialog::onRemove);
@@ -335,8 +468,8 @@ MemoryDialog::MemoryDialog(RadioModel* model, QWidget* parent)
         m_searchEdit->selectAll();
     });
     new QShortcut(QKeySequence::New, this, [this]() { onAdd(); });
-    new QShortcut(QKeySequence(Qt::Key_F2), this, [this]() { onEdit(); });
-    new QShortcut(QKeySequence(QStringLiteral("Ctrl+E")), this, [this]() { onEdit(); });
+    new QShortcut(QKeySequence(Qt::Key_F2), this, [this]() { editCurrentCell(); });
+    new QShortcut(QKeySequence(QStringLiteral("Ctrl+E")), this, [this]() { editCurrentCell(); });
     new QShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+A")), this, [this]() { onSelectAll(); });
 
     // Rebuild filter combo when profile lists change
@@ -480,7 +613,6 @@ void MemoryDialog::activateMemoryRow(int row)
     if (m_model->memories().constFind(idx) == m_model->memories().constEnd())
         return;
 
-    setInlineEditMode(false);
     m_table->setCurrentCell(row, 0);
     focusTableOnCurrentRow();
     emit memoryActivated(idx);
@@ -504,7 +636,6 @@ void MemoryDialog::beginEditingMemoryName(int memoryIndex)
                 m_table->model()->index(row, 0),
                 QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
         }
-        setInlineEditMode(true);
         m_table->setCurrentCell(row, 3, QItemSelectionModel::NoUpdate);
         m_table->scrollToItem(nameItem, QAbstractItemView::PositionAtCenter);
         m_table->setFocus(Qt::OtherFocusReason);
@@ -522,17 +653,6 @@ void MemoryDialog::focusTableOnCurrentRow()
     if (m_table->currentRow() < 0 && m_table->rowCount() > 0)
         m_table->setCurrentCell(0, 0, QItemSelectionModel::NoUpdate);
     m_table->setFocus(Qt::OtherFocusReason);
-}
-
-void MemoryDialog::setInlineEditMode(bool enabled)
-{
-    m_inlineEditMode = enabled;
-    if (!m_table)
-        return;
-
-    m_table->setEditTriggers(enabled
-        ? (QAbstractItemView::SelectedClicked | QAbstractItemView::EditKeyPressed)
-        : QAbstractItemView::NoEditTriggers);
 }
 
 void MemoryDialog::populateTable()
@@ -574,10 +694,12 @@ void MemoryDialog::populateTable()
         m_table->setItem(row, col++, new QTableWidgetItem(m.mode));
         m_table->setItem(row, col++, new QTableWidgetItem(
             QString::number(m.step)));
-        m_table->setItem(row, col++, new QTableWidgetItem(m.offsetDir));
+        m_table->setItem(row, col++, new QTableWidgetItem(
+            MemoryFields::offsetDirToDisplay(m.offsetDir)));
         m_table->setItem(row, col++, new QTableWidgetItem(
             QString::number(m.repeaterOffset, 'f', 1)));
-        m_table->setItem(row, col++, new QTableWidgetItem(m.toneMode));
+        m_table->setItem(row, col++, new QTableWidgetItem(
+            MemoryFields::toneModeToDisplay(m.toneMode)));
         m_table->setItem(row, col++, new QTableWidgetItem(
             QString::number(m.toneValue, 'f', 1)));
 
@@ -614,9 +736,35 @@ void MemoryDialog::populateTable()
     }
 
     m_table->resizeColumnsToContents();
-    m_table->setColumnWidth(2, std::max(m_table->columnWidth(2), 105));
-    const int minNameWidth = fontMetrics().horizontalAdvance(QString(20, QChar('M')));
-    m_table->setColumnWidth(3, std::max(m_table->columnWidth(3), minNameWidth));
+    // resizeColumnsToContents is a couple of pixels too tight on macOS — short
+    // values like "CW" elide to a single character — and it leaves the headers
+    // cramped. Pad every column for breathing room (idempotent: the resize above
+    // recomputes from content each time, so padding never accumulates).
+    constexpr int kColumnPadding = 18;
+    for (int c = 0; c < m_table->columnCount(); ++c)
+        m_table->setColumnWidth(c, m_table->columnWidth(c) + kColumnPadding);
+
+    // Measure with the TABLE's font (the theme may scale it larger than the
+    // dialog's) so a dropdown column always fits its widest possible value plus
+    // the cell margins and the combo arrow shown while editing.
+    const QFontMetrics fm = m_table->fontMetrics();
+    auto floorWidth = [this](int col, int minPx) {
+        m_table->setColumnWidth(col, std::max(m_table->columnWidth(col), minPx));
+    };
+    auto floorForValues = [&](int col, const QStringList& values) {
+        int widest = m_table->horizontalHeaderItem(col)
+            ? fm.horizontalAdvance(m_table->horizontalHeaderItem(col)->text()) : 0;
+        for (const QString& v : values)
+            widest = std::max(widest, fm.horizontalAdvance(v));
+        floorWidth(col, widest + 34); // margins + combo arrow + slack
+    };
+    floorWidth(2, 110);                                          // Frequency
+    floorWidth(3, fm.horizontalAdvance(QString(20, QChar('M')))); // Name
+    floorForValues(4, MemoryFields::modes());                    // Mode
+    floorForValues(5, MemoryFields::tuningSteps());              // Step
+    floorForValues(6, MemoryFields::offsetDirectionsDisplay());  // Offset Dir
+    floorForValues(8, MemoryFields::toneModesDisplay());         // Tone Mode
+    floorForValues(9, MemoryFields::ctcssTones());               // Tone Value
     if (isSortableColumn(m_sortColumn)) {
         auto* header = m_table->horizontalHeader();
         header->setSortIndicatorShown(true);
@@ -994,16 +1142,19 @@ void MemoryDialog::onSelect()
     activateMemoryRow(m_table->currentRow());
 }
 
-void MemoryDialog::onEdit()
+void MemoryDialog::editCurrentCell()
 {
-    if (!m_table || selectedMemoryIndices().size() != 1)
+    if (!m_table)
         return;
 
-    auto* indexItem = m_table->item(m_table->currentRow(), 0);
-    if (!indexItem)
-        return;
-
-    beginEditingMemoryName(indexItem->data(Qt::UserRole).toInt());
+    const QModelIndex current = m_table->currentIndex();
+    if (!current.isValid()) {
+        if (m_table->rowCount() <= 0)
+            return;
+        m_table->setCurrentCell(0, 0);
+    }
+    if (auto* item = m_table->currentItem())
+        m_table->editItem(item);
 }
 
 void MemoryDialog::onSelectAll()
@@ -1011,7 +1162,6 @@ void MemoryDialog::onSelectAll()
     if (!m_table || m_table->rowCount() <= 0)
         return;
 
-    setInlineEditMode(false);
     m_table->selectAll();
     if (m_table->currentRow() < 0)
         m_table->setCurrentCell(0, 0, QItemSelectionModel::NoUpdate);
@@ -1025,7 +1175,6 @@ void MemoryDialog::onRemove()
     if (selectedIndices.isEmpty())
         return;
 
-    setInlineEditMode(false);
     QList<int> indices = selectedIndices.values();
     std::sort(indices.begin(), indices.end());
 
@@ -1206,16 +1355,8 @@ void MemoryDialog::updateSelectionActions()
 {
     const int selectedCount = selectedMemoryIndices().size();
     const int visibleCount = m_table ? m_table->rowCount() : 0;
-    if (selectedCount != 1 && m_inlineEditMode)
-        setInlineEditMode(false);
     if (m_selectionLabel) {
         m_selectionLabel->setText(QString("%1 of %2 selected").arg(selectedCount).arg(visibleCount));
-    }
-    if (m_editBtn) {
-        m_editBtn->setEnabled(selectedCount == 1);
-        m_editBtn->setToolTip(selectedCount == 1
-            ? "Edit the highlighted memory fields."
-            : "Edit is available when exactly one memory is highlighted.");
     }
     if (m_selectBtn) {
         m_selectBtn->setEnabled(selectedCount == 1);

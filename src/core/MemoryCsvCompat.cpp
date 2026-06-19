@@ -1,8 +1,13 @@
 #include "MemoryCsvCompat.h"
 
+#include "MemoryFieldValues.h"
+
+#include <QLoggingCategory>
 #include <QRegularExpression>
 
 #include <algorithm>
+
+Q_LOGGING_CATEGORY(lcMemoryCsv, "aether.memory.csv")
 
 namespace AetherSDR {
 
@@ -217,11 +222,11 @@ QStringList recordToFields(const MemoryCsvRecord& record)
     const MemoryEntry& memory = record.memory;
     return {
         "MEMORY",
-        memory.owner,
-        memory.group,
+        MemoryFields::sanitizeText(memory.owner),
+        MemoryFields::sanitizeText(memory.group),
         formatFrequency(memory.freq),
-        memory.name,
-        memory.mode.trimmed().toUpper(),
+        MemoryFields::sanitizeText(memory.name),
+        MemoryFields::sanitizeText(memory.mode).trimmed().toUpper(),
         formatInt(memory.step),
         formatOffsetDirection(memory.offsetDir),
         formatDouble(memory.repeaterOffset, 1),
@@ -273,10 +278,16 @@ bool parseRecord(const QStringList& fields,
     }
 
     MemoryEntry memory;
-    memory.owner = normalizedFields.at(1).trimmed();
-    memory.group = normalizedFields.at(2).trimmed();
-    memory.name = normalizedFields.at(4).trimmed();
-    memory.mode = normalizedFields.at(5).trimmed().toUpper();
+    // Strip NUL/control bytes from every free-text field on the way in so a
+    // corrupt CSV (or one another program wrote) can't seed bad memories.
+    memory.owner = MemoryFields::sanitizeText(normalizedFields.at(1)).trimmed();
+    memory.group = MemoryFields::sanitizeText(normalizedFields.at(2)).trimmed();
+    memory.name = MemoryFields::sanitizeText(normalizedFields.at(4)).trimmed();
+    memory.mode = MemoryFields::sanitizeText(normalizedFields.at(5)).trimmed().toUpper();
+    if (!memory.mode.isEmpty() && !MemoryFields::isKnownMode(memory.mode)) {
+        qCInfo(lcMemoryCsv) << rowLabel << "imported with unrecognized mode"
+                            << memory.mode << "- passing through to radio for validation";
+    }
 
     if (!parseDoubleField(normalizedFields.at(3), memory.freq) || !validateRange(memory.freq, 0.0, 10000.0)) {
         error = QString("%1: invalid frequency '%2'.").arg(rowLabel).arg(normalizedFields.at(3));
