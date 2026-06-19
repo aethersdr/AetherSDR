@@ -1,6 +1,7 @@
 #include "gui/MainWindow.h"
 #include "gui/SliceColorManager.h"
 #include "core/AppSettings.h"
+#include "core/GpuSelector.h"
 #include "core/LogManager.h"
 #include "core/MacMicPermission.h"
 
@@ -83,6 +84,11 @@ int main(int argc, char* argv[])
     if (qEnvironmentVariableIsSet("AETHER_NO_GPU")) {
         qputenv("QT_OPENGL", "software");
     }
+
+    // Render-adapter selection on multi-GPU systems.  Must run before the GL/D3D
+    // context is created (i.e. before QApplication): sets PRIME offload (Linux)
+    // or QT_D3D_ADAPTER_INDEX (Windows) from the persisted Display-menu choice.
+    AetherSDR::GpuSelector::applyAtStartup();
 
     // Prefer native Wayland when running under a Wayland session (#1233).
     // Without this, Qt may fall back to XWayland (xcb platform) where GLX
@@ -352,6 +358,11 @@ int main(int argc, char* argv[])
     auto& logManager = AetherSDR::LogManager::instance();
     if (logManager.startLogging(logPath, stderrIsTty)) {
         qInstallMessageHandler(messageHandler);
+
+        // Record the GPU-selection decision now the log handler exists
+        // (GpuSelector::applyAtStartup() ran before logging was available).
+        qInfo().noquote() << "GpuSelector: render GPU ->"
+                          << AetherSDR::GpuSelector::appliedSummary();
 
         // Symlink aethersdr.log → latest timestamped file (for Support dialog)
         const QString symlink = logDir + "/aethersdr.log";

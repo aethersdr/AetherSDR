@@ -259,6 +259,7 @@ private:
     int          m_blackManualValue{15};
     int          m_blackAutoOffsetValue{50};
     QComboBox*   m_colorSchemeCmb{nullptr};
+    QComboBox*   m_gpuCombo{nullptr};   // render-GPU selector (multi-GPU only)
     QSlider*     m_rateSlider{nullptr};
     QLabel*      m_rateLabel{nullptr};
     // NB Waterfall Blanker (#277)

@@ -503,6 +503,7 @@ endif()
 # Sources
 set(CORE_SOURCES
     src/core/AppSettings.cpp
+    src/core/GpuSelector.cpp
     src/core/AgcTCalibrator.cpp
     src/core/SettingsHelpers.cpp
     src/core/ThemeManager.cpp
@@ -1292,6 +1293,7 @@ if(APPLE)
 elseif(WIN32)
     target_compile_definitions(AetherSDR PRIVATE __WINDOWS_MM__)
     target_link_libraries(AetherSDR PRIVATE winmm)
+    target_link_libraries(AetherSDR PRIVATE dxgi)  # GpuSelector adapter enumeration
 else()
     target_compile_definitions(AetherSDR PRIVATE __LINUX_ALSA__)
     find_package(PkgConfig REQUIRED)
