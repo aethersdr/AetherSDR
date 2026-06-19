@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.aethersdr.aethersdr</id>
+  
+  <name>AetherSDR</name>
+  <summary>A Linux-native client for FlexRadio Systems transceivers</summary>
+  
+  <metadata_license>MIT</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  
+  <description>
+    <p>
+      AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
+    </p>
+  </description>
+  
+  <launchable type="desktop-id">AetherSDR.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/aethersdr/AetherSDR/refs/heads/main/docs/assets/screenshot-current.png</image>
+    </screenshot>
+  </screenshots>
+  
+  <url type="homepage">https://github.com/aethersdr/AetherSDR</url>
+  <url type="bugtracker">https://github.com/aethersdr/AetherSDR/issues</url>
+  <url type="help">https://github.com/aethersdr/AetherSDR/blob/main/SUPPORT.md</url>
+  <url type="vcs-browser">https://github.com/aethersdr/AetherSDR</url>
+  <url type="contribute">https://github.com/aethersdr/AetherSDR#contributing</url>
+</component>
