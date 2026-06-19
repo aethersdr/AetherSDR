@@ -9,7 +9,6 @@
 
 namespace AetherSDR {
 
-
 namespace {
 QString fanModeLabel(const QString& mode)
 {
@@ -119,8 +118,9 @@ AmpApplet::AmpApplet(QWidget* parent)
         "border-radius: 3px; color: {{color.text.primary}}; font-size: 10px; font-weight: bold; }"
         "QPushButton:hover { background: {{color.background.1}}; }";
 
-    // Fan speed cycle button — single letter: S (STANDARD), C (CONTEST), B (BROADCAST).
-    // Hidden until a direct PGXL connection delivers the first fanmode status.
+    // Fan speed cycle button — labelled per mode via fanModeLabel()
+    // ("Fan: Std" / "Fan: Contest" / "Fan: Bcast").  Hidden until a direct
+    // PGXL connection delivers the first fanmode status.
     m_fanBtn = new QPushButton(fanModeLabel(m_fanMode));
     m_fanBtn->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Fixed);
     m_fanBtn->setFocusPolicy(Qt::TabFocus);
