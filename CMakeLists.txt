@@ -2472,4 +2472,9 @@ else()
     install(FILES packaging/linux/io.github.aethersdr.aethersdr.metainfo.xml
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/metainfo
     )
+    # Install the man page uncompressed; distro packaging compresses man pages
+    # per its own policy (Debian/Arch re-gzip, so shipping a .gz would clash).
+    install(FILES packaging/linux/aethersdr.1
+        DESTINATION ${CMAKE_INSTALL_MANDIR}/man1
+    )
 endif()
