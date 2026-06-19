@@ -192,10 +192,11 @@ void GpuSelector::applyAtStartup()
     }
 
 #if defined(Q_OS_LINUX)
-    // Honour an explicit user override of the offload env.
+    // Honour an explicit user override of any GPU-selection env.
     if (qEnvironmentVariableIsSet("__NV_PRIME_RENDER_OFFLOAD")
-            || qEnvironmentVariableIsSet("__GLX_VENDOR_LIBRARY_NAME")) {
-        s_appliedSummary = QStringLiteral("'%1' requested, but __NV_PRIME/__GLX env already set — left as-is")
+            || qEnvironmentVariableIsSet("__GLX_VENDOR_LIBRARY_NAME")
+            || qEnvironmentVariableIsSet("DRI_PRIME")) {
+        s_appliedSummary = QStringLiteral("'%1' requested, but __NV_PRIME/__GLX/DRI_PRIME env already set — left as-is")
                                .arg(chosen->name);
         return;
     }
@@ -216,14 +217,20 @@ void GpuSelector::applyAtStartup()
                 + QStringLiteral(" via PRIME offload (X11/GLX, __GLX_VENDOR_LIBRARY_NAME=nvidia)");
         }
     } else {
-        // Integrated / AMD.  Under Wayland the integrated GPU is already the
-        // default, so nothing to force; under X11 pin the Mesa GLX vendor.
-        if (wayland) {
-            s_appliedSummary = chosen->name + QStringLiteral(" (Wayland default — no override needed)");
-        } else {
-            qputenv("__GLX_VENDOR_LIBRARY_NAME", "mesa");
-            s_appliedSummary = chosen->name + QStringLiteral(" via __GLX_VENDOR_LIBRARY_NAME=mesa (X11/GLX)");
-        }
+        // Non-NVIDIA (AMD / Intel): target the chosen card by PCI address via the
+        // Mesa loader's DRI_PRIME, which works under both X11 and Wayland. This is
+        // what actually offloads rendering onto an AMD discrete GPU (the old
+        // mesa-GLX-vendor hint never moved rendering to a specific card); picking
+        // the integrated GPU pins it explicitly. chosen->id is "pci:0000:01:00.0";
+        // DRI_PRIME wants "pci-0000_01_00_0".
+        QString pciTag = chosen->id.mid(4);   // drop "pci:" → "0000:01:00.0"
+        pciTag.replace(QLatin1Char(':'), QLatin1Char('_'))
+              .replace(QLatin1Char('.'), QLatin1Char('_'));
+        const QByteArray driPrime = QByteArray("pci-") + pciTag.toUtf8();
+        qputenv("DRI_PRIME", driPrime);
+        // NVIDIA-Optimus offload remains the NVIDIA branch above; DRI_PRIME is
+        // Mesa-only and does not drive the proprietary NVIDIA driver.
+        s_appliedSummary = chosen->name + QStringLiteral(" via DRI_PRIME=") + QString::fromUtf8(driPrime);
     }
 #elif defined(Q_OS_WIN)
     if (qEnvironmentVariableIsSet("QT_D3D_ADAPTER_INDEX")) {
