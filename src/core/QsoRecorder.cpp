@@ -1,5 +1,6 @@
 #include "QsoRecorder.h"
 #include "AppSettings.h"
+#include "AudioDeviceNegotiator.h"
 #include "LogManager.h"
 #include "Resampler.h"
 #include "../models/SliceModel.h"
@@ -390,28 +391,50 @@ void QsoRecorder::startPlayback()
     }
     if (dev.isNull()) return;
 
+    // Negotiate the playback format via the shared factory (#3306, Phase 6b).
+    // The recording is Int16, so prefer Int16 (no conversion on a normal device)
+    // and fall back to Float for Float-only WASAPI mixers — the Int16->Float
+    // conversion below handles that (#3231). The factory supplies the per-OS
+    // preferred rate (Win/Mac 48k to dodge the WASAPI 24k resampler artifacts
+    // #2120; Linux native 24k) plus the 44.1k and preferredFormat fallbacks.
+    // Previously QSO playback bailed on a Float-only device; now it works.
+    // Walk with isFormatSupported (trusted), mirroring ClientPuduMonitor.
     QAudioFormat fmt;
-    fmt.setChannelCount(NUM_CHANNELS);
-    fmt.setSampleFormat(QAudioFormat::Int16);
-    fmt.setSampleRate(SAMPLE_RATE);
     int sinkRate = SAMPLE_RATE;
-
-    if (!dev.isFormatSupported(fmt)) {
-        fmt.setSampleRate(48000);
-        sinkRate = 48000;
-        if (!dev.isFormatSupported(fmt)) {
-            // Try 44.1 kHz Int16 before giving up on Int16 — some Windows
-            // output devices (HFP/SCO routes, certain USB DACs) reject 48 kHz
-            // outright but accept 44.1 kHz.  Mirrors ClientPuduMonitor's
-            // 24/48/44.1 ladder so QSO recording playback doesn't bail on
-            // devices where monitor playback succeeds (#3385).
-            fmt.setSampleRate(44100);
-            sinkRate = 44100;
-            if (!dev.isFormatSupported(fmt)) return;
+    bool haveFormat = false;
+    const QList<QAudioFormat> ladder = AudioDeviceNegotiator::formatLadder(
+        dev, AudioFormatNegotiator::Direction::Output,
+        AudioFormatNegotiator::ResamplerPolicy::PreservePan,
+        AudioFormatNegotiator::hostTargetOs(),
+        AudioFormatNegotiator::kInternalRate,
+        /*bluetoothHfp=*/false, /*preferredRateOverride=*/0,
+        AudioFormatNegotiator::FormatPreference::Int16First);
+    for (const QAudioFormat& cand : ladder) {
+        QAudioFormat c = cand;
+        c.setChannelCount(NUM_CHANNELS);
+        if (dev.isFormatSupported(c)) {
+            fmt = c;
+            sinkRate = c.sampleRate();
+            haveFormat = true;
+            break;
         }
     }
+    if (!haveFormat) return;
 
     if (!preparePlaybackPcm(sinkRate)) return;
+
+    // Float-only WASAPI mixers reject Int16 — convert the Int16 playback PCM to
+    // Float32 to match the negotiated sink format (#3231 / Phase 6b), mirroring
+    // ClientPuduMonitor. Only Float32 is handled (the only non-Int16 format
+    // preferredFormat() returns in practice on WASAPI/CoreAudio).
+    if (fmt.sampleFormat() == QAudioFormat::Float) {
+        const int samples = m_playPcm.size() / static_cast<int>(sizeof(int16_t));
+        QByteArray floatPcm(samples * static_cast<int>(sizeof(float)), '\0');
+        const auto* src = reinterpret_cast<const int16_t*>(m_playPcm.constData());
+        auto*       dst = reinterpret_cast<float*>(floatPcm.data());
+        for (int i = 0; i < samples; ++i) dst[i] = src[i] / 32768.0f;
+        m_playPcm = std::move(floatPcm);
+    }
 
     m_playBuffer.close();
     m_playBuffer.setBuffer(&m_playPcm);

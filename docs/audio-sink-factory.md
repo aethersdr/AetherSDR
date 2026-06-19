@@ -190,9 +190,19 @@ rate ones; the others are enforced in the router/wrapper.
    `MainWindow` lambda, so a future sink can't re-open the uncoupling class.
    Behaviour-identical; unit-tested headless. (CW sidetone + Quindar are
    AudioEngine-internal and already follow via the RX restart.)
-6. **Aux output sinks → wrapper** — CW sidetone, Pudu monitor, Quindar, QSO
-   playback drop their own per-sink format ladders and negotiate via
-   `AudioDeviceNegotiator` (gaining the 44.1k rung + Float32 catch-all). *Next.*
+6. **Aux output sinks → wrapper** — drop their own per-sink format ladders and
+   negotiate via `AudioDeviceNegotiator` (gaining the 44.1k rung + Float32
+   catch-all, and the per-OS 48k-prefer that dodges the WASAPI 24k artifacts):
+   - **6a** ✅ — **Quindar** (Float-only walk; it had no fallback and failed on
+     44.1k-only devices).
+   - **6b** ✅ — **Pudu monitor + QSO playback**. These are Int16-native, so a
+     small `FormatPreference::Int16First` negotiator option was added first
+     (they get Int16 on normal devices — no conversion — Float only as the
+     Float-only-WASAPI fallback #3231). QSO playback also *gained* the
+     Int16→Float guard (it previously bailed on Float-only devices).
+   - **6c** ✅ — **CW sidetone (QAudio backend)** walks the Float-first ladder
+     (Int16 fallback for VB-Audio #2629). The PortAudio backend stays separate
+     (Qt-negotiator can't drive it).
 7. **TCI TX** — drive the resampler from the client-negotiated rate instead of
    the hardcoded `Resampler(48000, 24000)` (`TciServer.cpp`).
 8. **PipeWire DAX** — replace the hand-rolled linear interpolator with the shared

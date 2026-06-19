@@ -1,4 +1,5 @@
 #include "ClientPuduMonitor.h"
+#include "AudioDeviceNegotiator.h"
 #include "AudioSummaryLogger.h"
 #include "Resampler.h"
 
@@ -220,63 +221,58 @@ void ClientPuduMonitor::startPlayback()
         bail(); return;
     }
 
+    // Negotiate the playback format via the shared factory (#3306, Phase 6b).
+    // The monitor holds recorded Int16, so prefer Int16 (no conversion on a
+    // normal device) and fall back to Float for Float-only WASAPI mixers — the
+    // Int16->Float conversion below handles that case (#3231). The factory
+    // supplies, in one place, the per-OS preferred rate (Win/Mac 48k to dodge
+    // the WASAPI 24k resampler artifacts #2120 — same policy as the RX sink;
+    // Linux native 24k) plus the 44.1k and preferredFormat fallbacks the old
+    // hand-rolled ladder enumerated by hand. We walk it with isFormatSupported
+    // (trusted here — that is exactly how #3231's Float-only devices are
+    // detected, by Int16 being correctly rejected).
     QAudioFormat fmt;
-    fmt.setChannelCount(kChannels);
-    fmt.setSampleFormat(QAudioFormat::Int16);
-    fmt.setSampleRate(kSampleRate);
     int sinkRate = kSampleRate;
     bool fallbackOccurred = false;
     QStringList fallbackReasons;
     QStringList attemptedFormats;
-    attemptedFormats << QStringLiteral("24000Hz 2ch Int16");
-
-    if (!dev.isFormatSupported(fmt)) {
-        fmt.setSampleRate(48000);
-        sinkRate = 48000;
-        fallbackOccurred = true;
-        fallbackReasons << QStringLiteral("24000Hz Int16 stereo unsupported -> 48000Hz");
-        attemptedFormats << QStringLiteral("48000Hz 2ch Int16");
-        if (!dev.isFormatSupported(fmt)) {
-            // Try 44.1 kHz Int16 before giving up on Int16 — some Windows
-            // output devices (HFP/SCO routes, certain USB DACs) reject 48 kHz
-            // outright but accept 44.1 kHz.  Mirrors CwSidetoneQAudioSink's
-            // 48/44.1/24 ladder so the monitor doesn't fall straight through
-            // to preferredFormat on devices that would have taken 44.1.
-            fmt.setSampleRate(44100);
-            sinkRate = 44100;
-            fallbackReasons << QStringLiteral("48000Hz Int16 unsupported -> 44100Hz");
-            attemptedFormats << QStringLiteral("44100Hz 2ch Int16");
-        }
-        if (!dev.isFormatSupported(fmt)) {
-            // Int16 @ 24 / 48 / 44.1 kHz all rejected.  On Windows this is
-            // typically WASAPI shared mode running a Float32 mix pipeline -
-            // the hardware is capable of Int16 but the OS-level mixer refuses
-            // the format.  Try the device's preferred format before giving up,
-            // following the QuindarLocalSink / AudioEngine precedent.
-            QAudioFormat preferred = dev.preferredFormat();
-            preferred.setChannelCount(kChannels);
-            if (preferred.isValid() && dev.isFormatSupported(preferred)) {
-                fmt = preferred;
-                sinkRate = fmt.sampleRate();
-                fallbackReasons << QStringLiteral("44100Hz Int16 unsupported -> preferredFormat (%1Hz %2)")
-                                       .arg(sinkRate)
-                                       .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat()));
-                attemptedFormats << QStringLiteral("%1Hz %2ch %3")
-                                        .arg(sinkRate)
-                                        .arg(fmt.channelCount())
-                                        .arg(AudioSummaryLogger::sampleFormatName(fmt.sampleFormat()));
-            } else {
-                AudioSummaryLogger::OpenFailureSummary failure;
-                failure.path = QStringLiteral("Aetherial monitor playback");
-                failure.backend = QStringLiteral("QAudioSink");
-                failure.deviceDescription = dev.description();
-                failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
-                failure.failureReason = QStringLiteral("output device supports neither Int16 stereo nor its own preferredFormat");
-                failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
-                AudioSummaryLogger::logOpenFailure(failure);
-                bail(); return;
+    bool haveFormat = false;
+    const QList<QAudioFormat> ladder = AudioDeviceNegotiator::formatLadder(
+        dev, AudioFormatNegotiator::Direction::Output,
+        AudioFormatNegotiator::ResamplerPolicy::PreservePan,
+        AudioFormatNegotiator::hostTargetOs(),
+        AudioFormatNegotiator::kInternalRate,
+        /*bluetoothHfp=*/false, /*preferredRateOverride=*/0,
+        AudioFormatNegotiator::FormatPreference::Int16First);
+    for (const QAudioFormat& cand : ladder) {
+        QAudioFormat c = cand;
+        c.setChannelCount(kChannels);
+        attemptedFormats << QStringLiteral("%1Hz %2ch %3")
+            .arg(c.sampleRate()).arg(c.channelCount())
+            .arg(AudioSummaryLogger::sampleFormatName(c.sampleFormat()));
+        if (dev.isFormatSupported(c)) {
+            fmt = c;
+            sinkRate = c.sampleRate();
+            haveFormat = true;
+            if (c.sampleRate() != kSampleRate || c.sampleFormat() != QAudioFormat::Int16) {
+                fallbackOccurred = true;
+                fallbackReasons << QStringLiteral("negotiated %1Hz %2")
+                    .arg(sinkRate)
+                    .arg(AudioSummaryLogger::sampleFormatName(c.sampleFormat()));
             }
+            break;
         }
+    }
+    if (!haveFormat) {
+        AudioSummaryLogger::OpenFailureSummary failure;
+        failure.path = QStringLiteral("Aetherial monitor playback");
+        failure.backend = QStringLiteral("QAudioSink");
+        failure.deviceDescription = dev.description();
+        failure.attemptedFormats = attemptedFormats.join(QStringLiteral("; "));
+        failure.failureReason = QStringLiteral("device supports no rung in the negotiation ladder");
+        failure.fallbackReason = fallbackReasons.join(QStringLiteral("; "));
+        AudioSummaryLogger::logOpenFailure(failure);
+        bail(); return;
     }
 
     if (!preparePlaybackPcm(sinkRate)) { bail(); return; }
