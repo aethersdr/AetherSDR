@@ -20,14 +20,18 @@ OUT_DIR="third_party/deepfilter"
 MODEL_NAME="DeepFilterNet3_onnx.tar.gz"
 
 # SHA256 of each prebuilt libdeepfilter-<platform>.tar.gz on the dfnr-libs
-# release (#3665). Bump when those assets are rebuilt. (The source-build
-# fallback below is already pinned to DFNR_COMMIT.)
-declare -A DFNR_TARBALL_SHA256=(
-    [linux-x86_64]="92a9a21841947074484429cacc838e413a089b0422666b7ba93672a0c38d8cd8"
-    [linux-aarch64]="fa24a6535e58d63f568f719e3266d728059d9ab4dc884eccca6d9a212e68ef75"
-    [darwin-arm64]="51dc53116c130ee42a3225130b2ab47936b4e076ef8e684a81daaadf5b6b4690"
-    [darwin-x86_64]="46a0921f0df2a03d9dbe65c673573ccffb7588fad4669f22868652e50b9c6b3e"
-)
+# release (#3665), keyed by PLATFORM. A case (not an associative array) keeps
+# this working on macOS's stock bash 3.2. Bump when those assets are rebuilt.
+# (The source-build fallback below is already pinned to DFNR_COMMIT.)
+dfnr_tarball_sha256() {
+    case "$1" in
+        linux-x86_64)  echo "92a9a21841947074484429cacc838e413a089b0422666b7ba93672a0c38d8cd8" ;;
+        linux-aarch64) echo "fa24a6535e58d63f568f719e3266d728059d9ab4dc884eccca6d9a212e68ef75" ;;
+        darwin-arm64)  echo "51dc53116c130ee42a3225130b2ab47936b4e076ef8e684a81daaadf5b6b4690" ;;
+        darwin-x86_64) echo "46a0921f0df2a03d9dbe65c673573ccffb7588fad4669f22868652e50b9c6b3e" ;;
+        *)             echo "" ;;
+    esac
+}
 
 # ── Detect platform ──────────────────────────────────────────────────────
 OS=$(uname -s)
@@ -76,7 +80,7 @@ echo "Trying pre-built binary from $DOWNLOAD_URL ..."
 if curl -fsSL --retry 2 --connect-timeout 10 -o "/tmp/$TARBALL" "$DOWNLOAD_URL" 2>/dev/null; then
     # A successful download with a bad hash means tampering, not a transient
     # failure — hard-fail rather than silently falling back to a source build.
-    verify_sha256 "/tmp/$TARBALL" "${DFNR_TARBALL_SHA256[$PLATFORM]:-}" || exit 1
+    verify_sha256 "/tmp/$TARBALL" "$(dfnr_tarball_sha256 "$PLATFORM")" || exit 1
     mkdir -p "$OUT_DIR"
     tar xzf "/tmp/$TARBALL" -C "$OUT_DIR"
     rm -f "/tmp/$TARBALL"
