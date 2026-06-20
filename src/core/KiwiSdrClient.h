@@ -298,6 +298,9 @@ private:
 #ifdef HAVE_WEBSOCKETS
     QNetworkAccessManager* m_statusNetworkAccessManager{nullptr};
     QNetworkReply* m_statusReply{nullptr};
+    // Status preflight tries http first, then https (proxied/TLS-only Kiwis)
+    // before giving up.  ext_api can't be confirmed unless one succeeds.
+    bool m_statusPreflightSecure{false};
     QWebSocket* m_soundSocket{nullptr};
     QWebSocket* m_waterfallSocket{nullptr};
 #endif

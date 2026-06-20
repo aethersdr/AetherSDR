@@ -249,12 +249,14 @@ QNetworkRequest kiwiWebSocketRequest(const QString& url,
     return request;
 }
 
-QUrl kiwiStatusUrl(const QString& host, quint16 port)
+QUrl kiwiStatusUrl(const QString& host, quint16 port, bool secure)
 {
     QUrl url;
-    url.setScheme(QStringLiteral("http"));
+    // Plain Kiwis serve /status over http on their own port; proxied/TLS-only
+    // Kiwis serve it over https on 443 (mirrors the wss-on-443 socket retry).
+    url.setScheme(secure ? QStringLiteral("https") : QStringLiteral("http"));
     url.setHost(host);
-    url.setPort(port);
+    url.setPort(secure ? 443 : port);
     url.setPath(QStringLiteral("/status"));
     return url;
 }
@@ -386,6 +388,7 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
                        .arg(m_endpoint, callsign));
 
 #ifdef HAVE_WEBSOCKETS
+    m_statusPreflightSecure = false;  // try http first, then https
     startStatusPreflight();
 #else
     setState(State::Error, tr("Qt WebSockets support is required for KiwiSDR."));
@@ -399,7 +402,7 @@ void KiwiSdrClient::startStatusPreflight()
         m_statusNetworkAccessManager = new QNetworkAccessManager(this);
     }
 
-    QNetworkRequest request{kiwiStatusUrl(m_host, m_port)};
+    QNetworkRequest request{kiwiStatusUrl(m_host, m_port, m_statusPreflightSecure)};
     request.setHeader(QNetworkRequest::UserAgentHeader,
                       QStringLiteral("AetherSDR"));
     request.setTransferTimeout(kStatusPreflightTimeoutMs);
@@ -493,6 +496,26 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
             << "url=" << url.toString()
             << "http_status=" << httpStatus
             << "error=" << errorText;
+
+        // The http /status failed.  Many Kiwis are proxied / TLS-only, so retry
+        // once over https before giving up.
+        if (!m_statusPreflightSecure) {
+            m_statusPreflightSecure = true;
+            startStatusPreflight();
+            return;
+        }
+
+        // Both http and https failed: we cannot read ext_api, so we cannot
+        // confirm the operator permits external API clients.  Fail CLOSED —
+        // honoring a possible ext_api=0 takes priority over connecting.  (A
+        // server whose /status is unreachable is almost always down for the
+        // WebSocket path too, so this rarely blocks a working receiver.)
+        setState(
+            State::Error,
+            tr("Couldn't verify this KiwiSDR's access policy (its status page is "
+               "unreachable), so AetherSDR won't connect. Try again later."));
+        cleanupSockets();
+        return;
     }
 
     const QString callsign = kiwiIdentityCallsign();
