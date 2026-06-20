@@ -2569,12 +2569,31 @@ void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
                            newCenterMhz, newBandwidthMhz);
     };
 
-    reprojectStream(false);
-    reprojectStream(true);
-    if (m_kiwiSdrWaterfallActive != originalKiwiActive) {
-        saveCurrentWaterfallStreamState();
-        m_kiwiSdrWaterfallActive = originalKiwiActive;
-        restoreCurrentWaterfallStreamState();
+    // #3668 (KiwiSDR integration) replaced #3578's single per-pan reproject with
+    // an unconditional native + kiwi double reproject. The inactive stream is not
+    // on screen, so reprojecting it on every pan step is wasted work -- and the
+    // stream-state save/restore around it leaves m_waterfall COW-shared, so the
+    // next fill() in rebuildWaterfallViewportForFrame deep-copies the whole
+    // (potentially very large) waterfall image on every pan step. On high-res
+    // displays that cost 60-80 ms of UI-thread stall per pan step -- a visible
+    // regression (measured: wfUpdateP95 0.1 ms -> 68 ms with the second pass).
+    //
+    // Reproject only the active stream. The inactive stream is remapped to the
+    // current frequency frame when it next becomes visible (see
+    // setKiwiSdrWaterfallActive); each history row carries its own capture frame
+    // (#3578), so toggling streams stays seamless. AETHER_WF_KIWI_ALWAYS=1
+    // restores the old unconditional double pass for A/B verification.
+    static const bool kiwiAlways = qEnvironmentVariableIsSet("AETHER_WF_KIWI_ALWAYS");
+    if (kiwiAlways) {
+        reprojectStream(false);
+        reprojectStream(true);
+        if (m_kiwiSdrWaterfallActive != originalKiwiActive) {
+            saveCurrentWaterfallStreamState();
+            m_kiwiSdrWaterfallActive = originalKiwiActive;
+            restoreCurrentWaterfallStreamState();
+        }
+    } else {
+        reprojectStream(m_kiwiSdrWaterfallActive);
     }
 }
 
@@ -4225,6 +4244,13 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
     saveCurrentWaterfallStreamState();
     m_kiwiSdrWaterfallActive = active;
     restoreCurrentWaterfallStreamState();
+    // The newly-active stream is no longer reprojected on every pan step
+    // (handleWaterfallFrequencyFrameChange now touches only the active stream),
+    // so its restored viewport can lag the current frequency frame. Remap it now
+    // that it is visible -- exact, since each history row keeps its own capture
+    // frame (#3578). This is the lazy counterpart to the per-pan reproject the
+    // inactive stream used to receive.
+    rebuildWaterfallViewportForFrame(m_centerMhz, m_bandwidthMhz);
     if (!active) {
         m_pendingDbmRangeEcho = false;
         m_pendingDbmRangeEchoFromAutoFloor = false;
