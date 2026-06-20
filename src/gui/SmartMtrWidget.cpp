@@ -4,6 +4,7 @@
 
 #include <QFont>
 #include <QFontMetricsF>
+#include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
 
@@ -115,21 +116,46 @@ void SmartMtrWidget::drawIndicator(QPainter& p, const SmartMtrGeometry& g) const
 
 void SmartMtrWidget::drawInsetShadow(QPainter& p, const SmartMtrGeometry& g) const
 {
-    // A kShadow-wide rim, equal on all four inner sides of the hole: the rounded
-    // hole minus the same rounded rect deflated by kShadow on every side. The
-    // inner radius shrinks by kShadow too, keeping the corners concentric.
-    const QRectF outer = g.rect(kHoleMargX, kHoleMargY, kHoleW, kHoleH);
-    const QRectF inner = g.rect(kHoleMargX + kShadow, kHoleMargY + kShadow,
-                                kHoleW - 2.0 * kShadow, kHoleH - 2.0 * kShadow);
-    const double ro = g.len(kHoleRadius);
-    const double ri = g.len(kHoleRadius - kShadow);
+    // Soft inner shadow: each edge fades from the rim colour at the hole's edge
+    // to fully transparent kShadow units inward, so the hole reads as a recess
+    // rather than a flat border. Clipped to the rounded hole, so the gradients
+    // follow the corners; the corner overlap deepens slightly, which looks
+    // natural for a recess.
+    const QRectF hole = g.rect(kHoleMargX, kHoleMargY, kHoleW, kHoleH);
+    const double r = g.len(kHoleRadius);
+    const double s = g.len(kShadow);
+    if (s <= 0.0)
+        return;
 
-    QPainterPath path;
-    path.addRoundedRect(outer, ro, ro);
-    path.addRoundedRect(inner, ri, ri);
-    // Odd-even fill leaves only the rim (outer minus inner) painted.
-    path.setFillRule(Qt::OddEvenFill);
-    p.fillPath(path, SmartMtrColors::kShadow);
+    QColor edge = SmartMtrColors::kShadow;
+    QColor fade = edge;
+    fade.setAlpha(0);
+
+    QPainterPath clip;
+    clip.addRoundedRect(hole, r, r);
+
+    p.save();
+    p.setClipPath(clip);
+    p.setPen(Qt::NoPen);
+
+    auto edgeGradient = [&](const QRectF& band, const QPointF& from, const QPointF& to) {
+        QLinearGradient grad(from, to); // from = at the rim, to = s units inward
+        grad.setColorAt(0.0, edge);
+        grad.setColorAt(1.0, fade);
+        p.fillRect(band, grad);
+    };
+
+    // Top / bottom / left / right inner edges.
+    edgeGradient(QRectF(hole.left(), hole.top(), hole.width(), s),
+                 QPointF(hole.left(), hole.top()), QPointF(hole.left(), hole.top() + s));
+    edgeGradient(QRectF(hole.left(), hole.bottom() - s, hole.width(), s),
+                 QPointF(hole.left(), hole.bottom()), QPointF(hole.left(), hole.bottom() - s));
+    edgeGradient(QRectF(hole.left(), hole.top(), s, hole.height()),
+                 QPointF(hole.left(), hole.top()), QPointF(hole.left() + s, hole.top()));
+    edgeGradient(QRectF(hole.right() - s, hole.top(), s, hole.height()),
+                 QPointF(hole.right(), hole.top()), QPointF(hole.right() - s, hole.top()));
+
+    p.restore();
 }
 
 void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
@@ -137,13 +163,6 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
     const MeterConfig& cfg = meterConfig(m_input.kind);
     if (cfg.markers.empty())
         return;
-
-    // Label font: the app UI font, sized from kLabelHeight with a pixel floor so
-    // it stays legible when the control is small.
-    QFont labelFont = font();
-    labelFont.setPixelSize(qMax(8, qRound(g.len(kLabelHeight))));
-    const QFontMetricsF fm(labelFont);
-    p.setFont(labelFont);
 
     const double holeBottom = kHoleMargY + kHoleH;
 
@@ -157,13 +176,28 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
         const QColor& color = markerColor(m.color);
         const double x = kHoleMargX + m.position - w / 2.0; // centered on position
 
+        // Small ticks read as secondary, so draw them a bit transparent.
+        QColor tickColor = color;
+        if (m.size == MarkerSize::Small)
+            tickColor.setAlphaF(tickColor.alphaF() * kMarkerSmallOpacity);
+
         // Symmetric pair, each stuck to a hole edge and growing outward.
         const QRectF above = g.rect(x, kHoleMargY - h, w, h);
-        p.fillRect(above, color);
-        p.fillRect(g.rect(x, holeBottom, w, h), color);
+        p.fillRect(above, tickColor);
+        p.fillRect(g.rect(x, holeBottom, w, h), tickColor);
 
         if (m.label.isEmpty())
             continue;
+
+        // Per-label font: strong = full size + regular weight; normal = slightly
+        // smaller + light weight. App UI font, with a pixel floor for legibility.
+        const bool strong = (m.labelStyle == LabelStyle::Strong);
+        QFont labelFont = font();
+        labelFont.setPixelSize(
+            qMax(8, qRound(g.len(strong ? kLabelHeight : kLabelHeightNormal))));
+        labelFont.setWeight(strong ? QFont::Normal : QFont::Light);
+        p.setFont(labelFont);
+        const QFontMetricsF fm(labelFont);
 
         // Label centered on the marker (plus its per-marker offset), sitting
         // just above the top tick.

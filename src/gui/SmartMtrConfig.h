@@ -27,6 +27,10 @@ enum class MeterKind { Signal, MicLevel };
 enum class MarkerSize { Small, Large };
 enum class MarkerColor { Normal, High };
 
+// Label emphasis: Strong = full size, regular weight; Normal = slightly smaller
+// and lighter weight.
+enum class LabelStyle { Normal, Strong };
+
 // Pushed by the parent each update.
 struct MeterInput {
     MeterKind kind = MeterKind::Signal;
@@ -43,6 +47,7 @@ struct ScaleMarker {
     MarkerSize size = MarkerSize::Small;
     MarkerColor color = MarkerColor::Normal;
     QString label; // empty -> no label
+    LabelStyle labelStyle = LabelStyle::Normal;
     // Horizontal shift of the label from the marker centre, in UNITS (+ right,
     // - left). Lets a multi-digit label straddle the tick as desired (e.g. the
     // tick falling between the digits of "+20").

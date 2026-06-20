@@ -65,6 +65,8 @@ MeterConfig buildSignalConfig()
         if (s % 2 == 1) {
             m.size = MarkerSize::Large;
             m.label = QString::number(s);
+            if (s == 9) // S9 is the only strong S-meter label
+                m.labelStyle = LabelStyle::Strong;
         } else {
             m.size = MarkerSize::Small;
         }
