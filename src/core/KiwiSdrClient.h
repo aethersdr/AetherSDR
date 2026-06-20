@@ -301,6 +301,8 @@ private:
     // Status preflight tries http first, then https (proxied/TLS-only Kiwis)
     // before giving up.  ext_api can't be confirmed unless one succeeds.
     bool m_statusPreflightSecure{false};
+    int m_statusPreflightFirstHttpStatus{0};
+    QString m_statusPreflightFirstError;
     QWebSocket* m_soundSocket{nullptr};
     QWebSocket* m_waterfallSocket{nullptr};
 #endif

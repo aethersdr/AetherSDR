@@ -4,6 +4,7 @@
 #include "LogManager.h"
 #include "Resampler.h"
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QList>
 #include <QStringList>
@@ -45,6 +46,45 @@ constexpr quint64 kMaxSequenceGapPaddingFrames = 8;
 constexpr double kWaterfallStartFixedPointScale = 16777216.0; // 2^24
 constexpr quint32 kWaterfallStartServerSnapTolerance = 16;
 constexpr quint64 kWebSocketSessionIdBase = 1ULL << 62;
+
+QString trKiwiSdrClient(const char* sourceText)
+{
+    return QCoreApplication::translate("KiwiSdrClient", sourceText);
+}
+
+QString statusPreflightFailureMessage(int firstHttpStatus,
+                                      const QString& firstError,
+                                      int finalHttpStatus,
+                                      const QString& finalError)
+{
+    const int usefulStatus =
+        firstHttpStatus > 0 ? firstHttpStatus : finalHttpStatus;
+    const QString usefulError =
+        !firstError.isEmpty() ? firstError : finalError;
+    if (usefulStatus == 401 || usefulStatus == 403) {
+        return trKiwiSdrClient("This KiwiSDR denied access to its status page "
+                               "(HTTP %1), so AetherSDR won't connect. The server "
+                               "or proxy may be blocking this IP address, which can "
+                               "happen after a per-IP time limit is reached, or it "
+                               "may be denying public access for another reason.")
+            .arg(usefulStatus);
+    }
+    if (usefulStatus >= 400) {
+        return trKiwiSdrClient("This KiwiSDR's status page returned HTTP %1, so "
+                               "AetherSDR couldn't verify its access policy and "
+                               "won't connect.")
+            .arg(usefulStatus);
+    }
+    if (!usefulError.isEmpty()) {
+        return trKiwiSdrClient("Couldn't verify this KiwiSDR's access policy "
+                               "(status page error: %1), so AetherSDR won't "
+                               "connect. Try again later.")
+            .arg(usefulError);
+    }
+    return trKiwiSdrClient("Couldn't verify this KiwiSDR's access policy (its "
+                           "status page is unreachable), so AetherSDR won't "
+                           "connect. Try again later.");
+}
 
 quint32 readLittleEndianU32(const char* data)
 {
@@ -389,6 +429,8 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
 
 #ifdef HAVE_WEBSOCKETS
     m_statusPreflightSecure = false;  // try http first, then https
+    m_statusPreflightFirstHttpStatus = 0;
+    m_statusPreflightFirstError.clear();
     startStatusPreflight();
 #else
     setState(State::Error, tr("Qt WebSockets support is required for KiwiSDR."));
@@ -500,6 +542,8 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
         // The http /status failed.  Many Kiwis are proxied / TLS-only, so retry
         // once over https before giving up.
         if (!m_statusPreflightSecure) {
+            m_statusPreflightFirstHttpStatus = httpStatus;
+            m_statusPreflightFirstError = errorText;
             m_statusPreflightSecure = true;
             startStatusPreflight();
             return;
@@ -512,8 +556,10 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
         // WebSocket path too, so this rarely blocks a working receiver.)
         setState(
             State::Error,
-            tr("Couldn't verify this KiwiSDR's access policy (its status page is "
-               "unreachable), so AetherSDR won't connect. Try again later."));
+            statusPreflightFailureMessage(m_statusPreflightFirstHttpStatus,
+                                          m_statusPreflightFirstError,
+                                          httpStatus,
+                                          errorText));
         cleanupSockets();
         return;
     }
@@ -1773,6 +1819,32 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
             m_soundResampler.reset();
         }
     };
+    auto messageValue = [&parts](const QString& requestedKey) {
+        for (const QString& candidate : parts) {
+            const int candidateEq = candidate.indexOf(QLatin1Char('='));
+            if (candidateEq > 0 && candidate.left(candidateEq) == requestedKey) {
+                return candidate.mid(candidateEq + 1);
+            }
+        }
+        return QString();
+    };
+    auto downMessage = [](int downValue, const QString& reason) {
+        if (downValue == 1) {
+            return trKiwiSdrClient("This KiwiSDR is temporarily unavailable "
+                                   "while a software update is in progress. Try "
+                                   "again in a few minutes.");
+        }
+        if (downValue == 2) {
+            return trKiwiSdrClient("This KiwiSDR is temporarily unavailable "
+                                   "while a backup is in progress. Try again "
+                                   "later.");
+        }
+        if (!reason.isEmpty()) {
+            return trKiwiSdrClient("KiwiSDR endpoint is disabled: %1")
+                .arg(reason);
+        }
+        return trKiwiSdrClient("KiwiSDR endpoint is disabled.");
+    };
     for (const QString& part : parts) {
         const int eq = part.indexOf(QLatin1Char('='));
         if (eq <= 0) {
@@ -1803,10 +1875,11 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
         if (key == QStringLiteral("reason_disabled")) {
             const QString reason =
                 QUrl::fromPercentEncoding(valueText.toUtf8()).trimmed();
+            bool downOk = false;
+            const int downValue =
+                messageValue(QStringLiteral("down")).toInt(&downOk);
             setState(State::Error,
-                     reason.isEmpty()
-                         ? tr("KiwiSDR endpoint is disabled.")
-                         : tr("KiwiSDR endpoint is disabled: %1").arg(reason));
+                     downMessage(downOk ? downValue : 0, reason));
             cleanupSockets();
             return;
         }
@@ -1814,7 +1887,11 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
             bool downOk = false;
             const int downValue = valueText.toInt(&downOk);
             if (!downOk || downValue != 0) {
-                setState(State::Error, tr("KiwiSDR endpoint is down."));
+                const QString reason = QUrl::fromPercentEncoding(
+                    messageValue(QStringLiteral("reason_disabled")).toUtf8())
+                                           .trimmed();
+                setState(State::Error,
+                         downMessage(downOk ? downValue : 0, reason));
                 cleanupSockets();
                 return;
             }
@@ -1834,6 +1911,30 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                          ? tr("KiwiSDR endpoint requested redirect.")
                          : tr("KiwiSDR endpoint requested redirect to %1.")
                                .arg(target));
+            cleanupSockets();
+            return;
+        }
+        if (key == QStringLiteral("ip_limit")) {
+            const KiwiSdrProtocol::IpLimitNotice notice =
+                KiwiSdrProtocol::parseIpLimitNotice(valueText);
+            const QString detail = notice.valid
+                ? (notice.address.isEmpty()
+                       ? tr("This KiwiSDR allows only %1 minutes per 24 hours "
+                            "from each IP address. This IP address has reached "
+                            "that limit. Try another receiver or wait for the "
+                            "server's daily limit reset.")
+                             .arg(notice.minutes)
+                       : tr("This KiwiSDR allows only %1 minutes per 24 hours "
+                            "from each IP address. The server reports this IP "
+                            "address (%2) has reached that limit. Try another "
+                            "receiver or wait for the server's daily limit "
+                            "reset.")
+                             .arg(notice.minutes)
+                             .arg(notice.address))
+                : tr("This KiwiSDR rejected the connection because its per-IP "
+                     "usage limit was reached. Try another receiver or wait "
+                     "for the server's daily limit reset.");
+            setState(State::Error, detail);
             cleanupSockets();
             return;
         }
@@ -1858,7 +1959,9 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                 setState(
                     State::Error,
                     tr("KiwiSDR rejected public receive access (badp=%1). "
-                       "%2 This endpoint may require a password or site-specific login.")
+                       "%2 This endpoint may require a password, "
+                       "site-specific login, or a different public access "
+                       "policy.")
                         .arg(badp)
                         .arg(identityDiagnosticText()));
                 cleanupSockets();

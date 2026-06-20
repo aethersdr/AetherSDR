@@ -1,6 +1,7 @@
 #include "KiwiSdrProtocol.h"
 
 #include <QDateTime>
+#include <QUrl>
 
 #include <algorithm>
 #include <cmath>
@@ -133,6 +134,27 @@ float waterfallColorIndex(float dbm, float minDbm, float maxDbm)
     const float span = std::max(1.0f, maxDbm - minDbm);
     const float normalized = std::clamp((dbm - minDbm) / span, 0.0f, 1.0f);
     return std::sqrt(normalized);
+}
+
+IpLimitNotice parseIpLimitNotice(const QString& valueText)
+{
+    const QString decoded =
+        QUrl::fromPercentEncoding(valueText.toUtf8()).trimmed();
+    const int comma = decoded.indexOf(QLatin1Char(','));
+    const QString minutesText =
+        comma >= 0 ? decoded.left(comma).trimmed() : decoded;
+
+    bool minutesOk = false;
+    const int minutes = minutesText.toInt(&minutesOk);
+    if (!minutesOk || minutes <= 0) {
+        return {};
+    }
+
+    IpLimitNotice notice;
+    notice.minutes = minutes;
+    notice.address = comma >= 0 ? decoded.mid(comma + 1).trimmed() : QString();
+    notice.valid = true;
+    return notice;
 }
 
 MeterReading meterUnavailable(MeterSource source, const QString& notes)

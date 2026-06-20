@@ -80,6 +80,27 @@ int main()
         return fail("waterfall byte display-level conversion is wrong");
     }
 
+    const IpLimitNotice encodedIpLimit =
+        parseIpLimitNotice(QStringLiteral("180%2c192.0.2.44"));
+    if (!encodedIpLimit.valid
+        || encodedIpLimit.minutes != 180
+        || encodedIpLimit.address != QStringLiteral("192.0.2.44")) {
+        return fail("encoded ip_limit notice parsing is wrong");
+    }
+
+    const IpLimitNotice minuteOnlyIpLimit =
+        parseIpLimitNotice(QStringLiteral("45"));
+    if (!minuteOnlyIpLimit.valid
+        || minuteOnlyIpLimit.minutes != 45
+        || !minuteOnlyIpLimit.address.isEmpty()) {
+        return fail("minute-only ip_limit notice parsing is wrong");
+    }
+
+    if (parseIpLimitNotice(QStringLiteral("0,192.0.2.1")).valid
+        || parseIpLimitNotice(QStringLiteral("not-a-limit")).valid) {
+        return fail("invalid ip_limit notice should be rejected");
+    }
+
     QVector<float> row(1024, -100.0f);
     for (int i = 1003; i < row.size(); ++i) {
         row[i] = -60.0f;
