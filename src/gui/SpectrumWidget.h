@@ -595,6 +595,11 @@ private:
     void installVfoCursorEventFilter(VfoWidget* widget);
     void setVfoCursorOverride(Qt::CursorShape shape);
     void clearVfoCursorOverride();
+#ifdef AETHER_GPU_SPECTRUM
+    void repositionVfoFlags(const QRect& specRect);  // #3617 — runs before flag render
+    void updateLiveFlag();   // #3617 — pick which flag is live (hover/focus/popup)
+    void setLiveFlag(int sliceId);   // #3617 — show one flag live, snapshot the rest
+#endif
     void setSpectrumCursor(Qt::CursorShape shape);
     void updateTrackedCursorState(const QPoint& localPos, bool insideWidget);
     void updateTnfHoverPopup();
@@ -1180,6 +1185,20 @@ private:
     SpectrumOverlayMenu* m_overlayMenu{nullptr};
     // VFO info widgets (one per slice, attached to VFO markers)
     QMap<int, VfoWidget*> m_vfoWidgets;
+#ifdef AETHER_GPU_SPECTRUM
+    // #3617 GPU-flag state (only with the GPU spectrum path; the software path
+    // keeps the flags as ordinary live widgets).
+    bool m_gpuFlagMode{false};   // flags GPU-composited, panels hidden
+    QTimer* m_flagRefreshTimer{nullptr};   // re-snapshot live flag content
+    // hover-swap: the flag whose panel is currently shown LIVE (interactive)
+    // instead of GPU-composited, because the cursor is over it / it has focus / a
+    // popup is open.  -1 = none (all flags GPU).  The panel hosts interactive
+    // children (freq edit, antenna/mode/filter buttons, tabs) that only work as a
+    // real widget, so we go live on interaction and snapshot back to GPU at rest.
+    int m_liveFlagSliceId{-1};
+    QElapsedTimer m_liveFlagIdleClock;   // debounce hiding when the cursor leaves
+    static constexpr int kLiveFlagHideDelayMs = 200;
+#endif
     VfoWidget* m_vfoWidget{nullptr};  // alias to active slice widget (compat)
 
     // Bottom-left waterfall buttons: S(egment), B(and), −/+.
@@ -1215,6 +1234,28 @@ private:
     QImage m_overlayDynamic;    // FFT spectrum — repainted every frame
     bool m_overlayStaticDirty{true};
     bool m_overlayNeedsUpload{true};
+
+    // #3617 GPU flag sprites: each slice flag is its OWN GPU texture (a "sprite"),
+    // rasterized via QWidget::render into a CPU image on the refresh timer —
+    // OUTSIDE the QRhi render callback (rasterizing widgets inside it re-enters
+    // the renderer and crashes) and only ~12 Hz (no per-move re-raster → no audio
+    // stall).  Each frame the sprite is drawn as a textured quad positioned at the
+    // flag's CURRENT on-screen rect (reusing m_ovPipeline/m_ovSampler), so a
+    // dragged flag follows at frame rate for free — no re-raster on move.
+    struct FlagSprite {
+        QRhiTexture* tex{nullptr};
+        QRhiShaderResourceBindings* srb{nullptr};
+        QImage img;             // CPU raster (filled by grabFlagSprites, off-frame)
+        QSize texSize;          // device-px size the texture was created at
+        bool imgDirty{false};   // img changed → upload to tex next frame
+    };
+    QHash<int, FlagSprite> m_flagSprites;       // keyed by sliceId
+    QVector<int> m_flagDrawOrder;               // sliceIds to draw this frame, back→front
+    QRhiBuffer* m_flagQuadVbo{nullptr};         // dynamic: 4 verts × up to kMaxFlagSprites
+    QRhiSampler* m_flagSampler{nullptr};        // NEAREST — 1:1 crisp sprite text
+    static constexpr int kMaxFlagSprites = 16;  // generous cap (radios have ≤8 slices)
+    void grabFlagSprites();                     // QWidget::render flags → sprite imgs (off-frame)
+    void releaseFlagSprite(FlagSprite& s);      // free one sprite's GPU resources
 
     // Background-image layer — kept separate from m_overlayStatic so it can
     // render BELOW the FFT trace (parity with the software paint path).  Same
