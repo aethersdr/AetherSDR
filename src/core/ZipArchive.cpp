@@ -174,7 +174,35 @@ QMap<QString, QByteArray> readZipEntries(const QByteArray& zip, QString* error)
     return entries;
 }
 
-QByteArray writeStoredZip(const QList<ZipEntryData>& entries)
+namespace {
+
+// Raw DEFLATE (no zlib header), matching the readZipEntries inflate path
+// (inflateInit2(-MAX_WBITS)) so the writer and reader agree on the framing.
+bool rawDeflate(const QByteArray& in, QByteArray& out)
+{
+    z_stream z{};
+    if (deflateInit2(&z, Z_DEFAULT_COMPRESSION, Z_DEFLATED, -MAX_WBITS, 8,
+                     Z_DEFAULT_STRATEGY) != Z_OK) {
+        return false;
+    }
+    out.resize(static_cast<int>(deflateBound(&z, static_cast<uLong>(in.size()))));
+    z.next_in = reinterpret_cast<Bytef*>(const_cast<char*>(in.constData()));
+    z.avail_in = static_cast<uInt>(in.size());
+    z.next_out = reinterpret_cast<Bytef*>(out.data());
+    z.avail_out = static_cast<uInt>(out.size());
+    const int rc = deflate(&z, Z_FINISH);
+    const uLong produced = z.total_out;
+    deflateEnd(&z);
+    if (rc != Z_STREAM_END)
+        return false;
+    out.resize(static_cast<int>(produced));
+    return true;
+}
+
+// Shared ZIP writer. compress=false → stored (method 0); compress=true →
+// raw-deflate (method 8). Headers carry compressed + uncompressed sizes
+// independently; the CRC is always over the uncompressed data.
+QByteArray writeZipImpl(const QList<ZipEntryData>& entries, bool compress)
 {
     if (entries.size() > std::numeric_limits<quint16>::max())
         return {};
@@ -183,41 +211,49 @@ QByteArray writeStoredZip(const QList<ZipEntryData>& entries)
     QByteArray centralDir;
     for (const ZipEntryData& entry : entries) {
         const QByteArray name = entry.name.toUtf8();
-        const QByteArray& data = entry.data;
+        const QByteArray& raw = entry.data;
+
+        QByteArray deflated;
+        if (compress && !rawDeflate(raw, deflated))
+            return {};
+        const QByteArray& payload = compress ? deflated : raw;
+        const quint16 method = compress ? quint16(8) : quint16(0);
+
         if (name.size() > std::numeric_limits<quint16>::max()
-            || data.size() > std::numeric_limits<quint32>::max()
+            || raw.size() > std::numeric_limits<quint32>::max()
+            || payload.size() > std::numeric_limits<quint32>::max()
             || out.size() > std::numeric_limits<quint32>::max()) {
             return {};
         }
 
         const quint32 localOffset = static_cast<quint32>(out.size());
-        const quint32 checksum = crc32(0L, reinterpret_cast<const Bytef*>(data.constData()),
-                                       static_cast<uInt>(data.size()));
+        const quint32 checksum = crc32(0L, reinterpret_cast<const Bytef*>(raw.constData()),
+                                       static_cast<uInt>(raw.size()));
 
         appendLe32(out, 0x04034b50);
         appendLe16(out, 20);
         appendLe16(out, 0);
-        appendLe16(out, 0);
+        appendLe16(out, method);
         appendLe16(out, 0);
         appendLe16(out, 0);
         appendLe32(out, checksum);
-        appendLe32(out, static_cast<quint32>(data.size()));
-        appendLe32(out, static_cast<quint32>(data.size()));
+        appendLe32(out, static_cast<quint32>(payload.size()));
+        appendLe32(out, static_cast<quint32>(raw.size()));
         appendLe16(out, static_cast<quint16>(name.size()));
         appendLe16(out, 0);
         out += name;
-        out += data;
+        out += payload;
 
         appendLe32(centralDir, 0x02014b50);
         appendLe16(centralDir, 20);
         appendLe16(centralDir, 20);
         appendLe16(centralDir, 0);
-        appendLe16(centralDir, 0);
+        appendLe16(centralDir, method);
         appendLe16(centralDir, 0);
         appendLe16(centralDir, 0);
         appendLe32(centralDir, checksum);
-        appendLe32(centralDir, static_cast<quint32>(data.size()));
-        appendLe32(centralDir, static_cast<quint32>(data.size()));
+        appendLe32(centralDir, static_cast<quint32>(payload.size()));
+        appendLe32(centralDir, static_cast<quint32>(raw.size()));
         appendLe16(centralDir, static_cast<quint16>(name.size()));
         appendLe16(centralDir, 0);
         appendLe16(centralDir, 0);
@@ -244,6 +280,18 @@ QByteArray writeStoredZip(const QList<ZipEntryData>& entries)
     appendLe32(out, centralDirOffset);
     appendLe16(out, 0);
     return out;
+}
+
+} // namespace
+
+QByteArray writeStoredZip(const QList<ZipEntryData>& entries)
+{
+    return writeZipImpl(entries, false);
+}
+
+QByteArray writeDeflatedZip(const QList<ZipEntryData>& entries)
+{
+    return writeZipImpl(entries, true);
 }
 
 } // namespace AetherSDR

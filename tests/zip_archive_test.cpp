@@ -57,5 +57,35 @@ int main()
                  && error == QStringLiteral("ZIP entry checksum mismatch."),
                  "stored ZIP reader rejects corrupt entry data");
 
+    // --- Deflated ZIP (#3218): method 8, smaller, and round-trips via the
+    //     existing inflate path (writer/reader cross-check). ---
+    QByteArray bigLog;
+    for (int i = 0; i < 500; ++i)
+        bigLog += "2026-06-21 12:00:00 INF a repetitive, highly compressible log line\n";
+    const QList<AetherSDR::ZipEntryData> dEntries = {
+        {QStringLiteral("aethersdr.log"), bigLog},
+        {QStringLiteral("system-info.json"), QByteArray("{\"os\":\"test\"}\n")},
+        {QStringLiteral("empty.txt"), QByteArray()},
+    };
+
+    const QByteArray dzip = AetherSDR::writeDeflatedZip(dEntries);
+    ok &= expect(dzip.startsWith("PK"), "deflated ZIP has ZIP magic");
+    ok &= expect(readLe16(dzip, 8) == 8, "deflated ZIP local header uses method 8");
+    ok &= expect(dzip.size() < bigLog.size(),
+                 "deflated ZIP is smaller than the raw log it contains");
+
+    QString derror;
+    const QMap<QString, QByteArray> dRoundTrip = AetherSDR::readZipEntries(dzip, &derror);
+    ok &= expect(derror.isEmpty(), "deflated ZIP round-trip has no read error");
+    ok &= expect(dRoundTrip.size() == dEntries.size(),
+                 "deflated ZIP round-trip preserves entry count");
+    ok &= expect(dRoundTrip.value(QStringLiteral("aethersdr.log")) == bigLog,
+                 "deflated ZIP round-trip preserves the (large) log data");
+    ok &= expect(dRoundTrip.value(QStringLiteral("system-info.json")) == QByteArray("{\"os\":\"test\"}\n"),
+                 "deflated ZIP round-trip preserves JSON data");
+    ok &= expect(dRoundTrip.contains(QStringLiteral("empty.txt"))
+                 && dRoundTrip.value(QStringLiteral("empty.txt")).isEmpty(),
+                 "deflated ZIP round-trip preserves empty files");
+
     return ok ? 0 : 1;
 }

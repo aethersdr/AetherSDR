@@ -43,7 +43,8 @@ bool writeSupportBundleZip(const QString& sourceDir, const QString& archivePath)
     if (entries.isEmpty())
         return false;
 
-    const QByteArray zip = writeStoredZip(entries);
+    // Deflate: support bundles are log-dominated and compress ~5-10x (#3218).
+    const QByteArray zip = writeDeflatedZip(entries);
     if (zip.isEmpty())
         return false;
 
