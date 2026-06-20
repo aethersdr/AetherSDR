@@ -165,8 +165,9 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
         if (m.label.isEmpty())
             continue;
 
-        // Label centered on the marker, sitting just above the top tick.
-        const double cx = above.center().x();
+        // Label centered on the marker (plus its per-marker offset), sitting
+        // just above the top tick.
+        const double cx = above.center().x() + g.len(m.labelOffset);
         const double bottom = above.top() - g.len(kLabelGap);
         const double tw = fm.horizontalAdvance(m.label);
         const double th = fm.height();

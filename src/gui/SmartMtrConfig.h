@@ -43,6 +43,10 @@ struct ScaleMarker {
     MarkerSize size = MarkerSize::Small;
     MarkerColor color = MarkerColor::Normal;
     QString label; // empty -> no label
+    // Horizontal shift of the label from the marker centre, in UNITS (+ right,
+    // - left). Lets a multi-digit label straddle the tick as desired (e.g. the
+    // tick falling between the digits of "+20").
+    double labelOffset = 0.0;
 };
 
 // Static per-kind configuration.

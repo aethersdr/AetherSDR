@@ -24,7 +24,7 @@ inline const QColor kBackground{QStringLiteral("#5ec4eaff")}; // recessed hole
 inline const QColor kForeground{QStringLiteral("#ff4444")}; // indicator bar — red
 inline const QColor kIndicator{QStringLiteral("#ffffff")};  // value end-line
 inline const QColor kExtreme{QStringLiteral("#ffffff")};    // reserved (future)
-inline const QColor kShadow{0, 0, 0, 70};                   // inset shadow — TBD
+inline const QColor kShadow{0, 0, 0, 80};                   // inset shadow — TBD
 inline const QColor kMarkerNormal{QStringLiteral("#5ec4ea")}; // scale tick — normal
 inline const QColor kMarkerHigh{QStringLiteral("#ff4444")};   // scale tick — high
 } // namespace SmartMtrColors

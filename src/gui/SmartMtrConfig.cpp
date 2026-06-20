@@ -81,6 +81,9 @@ MeterConfig buildSignalConfig()
         if (db % 20 == 0) {
             m.size = MarkerSize::Large;
             m.label = QStringLiteral("+") + QString::number(db);
+            // Shift the "+NN" label left so the tick falls between the two
+            // digits rather than under the leading "+". Tune in UNITS.
+            m.labelOffset = -4.0;
         } else {
             m.size = MarkerSize::Small;
         }
