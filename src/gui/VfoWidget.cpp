@@ -201,6 +201,18 @@ public:
         const QWidget* w = currentWidget();
         return w ? w->minimumSizeHint() : QStackedWidget::minimumSizeHint();
     }
+    // Forward height-for-width from the current page so a page that keeps an
+    // aspect ratio (e.g. SmartMtrWidget) drives the strip height; pages without
+    // it (the S-meter spacer) are unaffected.
+    bool hasHeightForWidth() const override {
+        const QWidget* w = currentWidget();
+        return w ? w->hasHeightForWidth() : QStackedWidget::hasHeightForWidth();
+    }
+    int heightForWidth(int width) const override {
+        const QWidget* w = currentWidget();
+        return (w && w->hasHeightForWidth()) ? w->heightForWidth(width)
+                                             : QStackedWidget::heightForWidth(width);
+    }
 };
 
 namespace AetherSDR {
