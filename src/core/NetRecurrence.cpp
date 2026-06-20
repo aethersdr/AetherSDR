@@ -80,6 +80,22 @@ qint64 mondayWeekIndex(const QDate& d)
     return monday.toJulianDay() / 7;
 }
 
+// Build a zoned QDateTime for a local wall-clock time, handling a spring-forward
+// gap (where that wall time doesn't exist) portably across Qt versions — Qt 6.7's
+// QDateTime::TransitionResolution isn't available on the 6.4 CI floor. On a gap
+// the plain constructor returns an invalid datetime; nudge forward one hour to
+// land just past the transition. (A net at 20:00 essentially never hits the
+// ~02:00 DST gap, but we must not crash or silently skip if it does.) On a
+// fall-back overlap the constructor picks deterministically, which is fine since
+// the scheduler always recomputes.
+QDateTime zonedDateTime(const QDate& date, const QTime& time, const QTimeZone& tz)
+{
+    QDateTime dt(date, time, tz);
+    if (!dt.isValid())
+        dt = QDateTime(date, time.addSecs(3600), tz);
+    return dt;
+}
+
 bool matchesRule(const QDate& date, const ParsedRule& rule, const QDate& startDate)
 {
     const bool haveAnchor = startDate.isValid();
@@ -213,9 +229,7 @@ QDateTime nextOccurrence(const QString& rrule,
     if (rrule.trimmed().isEmpty()) {
         if (!startDate.isValid())
             return {};
-        QDateTime once(startDate, time, tz);
-        if (!once.isValid())
-            once = QDateTime(startDate, time, tz, QDateTime::TransitionResolution::PreferStandard);
+        const QDateTime once = zonedDateTime(startDate, time, tz);
         if (once.isValid() && once.toUTC() > afterUtc.toUTC())
             return once;
         return {};
@@ -235,14 +249,8 @@ QDateTime nextOccurrence(const QString& rrule,
         if (!matchesRule(candidateDate, rule, startDate))
             continue;
 
-        // Resolve the wall-clock time within DST transitions (the requested
-        // time may not exist on a spring-forward day, or occur twice on
-        // fall-back); pick deterministically so reminders never double-fire.
-        QDateTime candidate(candidateDate, time, tz);
-        if (!candidate.isValid()) {
-            candidate = QDateTime(candidateDate, time, tz,
-                                  QDateTime::TransitionResolution::PreferStandard);
-        }
+        // Resolve the wall-clock time within DST transitions (see zonedDateTime).
+        const QDateTime candidate = zonedDateTime(candidateDate, time, tz);
         if (!candidate.isValid())
             continue;
 
