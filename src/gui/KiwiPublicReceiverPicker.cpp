@@ -6,6 +6,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QStringList>
 #include <QTableWidget>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -118,13 +119,17 @@ void KiwiPublicReceiverPicker::onReady(const QVector<KiwiPublicReceiver>& receiv
     m_refresh->setEnabled(true);
     m_apiReceivers.clear();
     m_hiddenWebOnly = 0;
+    m_hiddenUnknown = 0;
     for (const auto& r : receivers) {
         if (r.offline) continue;
         // Honor the operator: only receivers that allow the external API are
-        // listed. Web-only (ext_api == 0) receivers are excluded entirely.
+        // listed. Web-only (ext_api == 0) are excluded entirely, as are
+        // receivers that don't publish a policy (we can't confirm API is OK).
         if (!r.mayConnectViaApi()) {
             if (r.apiPolicy() == KiwiPublicReceiver::ApiPolicy::Disabled)
                 ++m_hiddenWebOnly;
+            else
+                ++m_hiddenUnknown;
             continue;
         }
         m_apiReceivers.push_back(r);
@@ -160,8 +165,14 @@ void KiwiPublicReceiverPicker::applyFilter()
         m_table->setItem(row, 3, new QTableWidgetItem(r.apiBadge()));
         ++shown;
     }
-    QString status = tr("%1 receivers allow API access (%2 web-only hidden)")
-                         .arg(shown).arg(m_hiddenWebOnly);
+    QString status = tr("%1 receivers allow API access").arg(shown);
+    QStringList hiddenParts;
+    if (m_hiddenWebOnly > 0)
+        hiddenParts << tr("%1 web-only").arg(m_hiddenWebOnly);
+    if (m_hiddenUnknown > 0)
+        hiddenParts << tr("%1 policy-unknown").arg(m_hiddenUnknown);
+    if (!hiddenParts.isEmpty())
+        status += tr(" (%1 hidden)").arg(hiddenParts.join(QStringLiteral(", ")));
     if (m_fromCache)
         status += tr("  ·  cached — use “Refresh list” to update");
     m_status->setText(status);

@@ -9,11 +9,23 @@
 
 namespace AetherSDR {
 
+namespace {
+// Per-request transfer timeout so a stalled server can't leave the picker stuck
+// on "Loading…" forever (the only escape would otherwise be Cancel).
+constexpr int kDirectoryFetchTimeoutMs = 15000;
+} // namespace
+
 QByteArray KiwiPublicDirectory::userAgent()
 {
     // Honest identity — we are AetherSDR, not a browser.  If an operator
-    // chooses to block this, that is their answer and we honor it.
-    return QByteArrayLiteral("AetherSDR/26.6 (+https://github.com/aethersdr/AetherSDR)");
+    // chooses to block this, that is their answer and we honor it.  The version
+    // comes from the build (AETHERSDR_VERSION) so the identity can't go stale.
+#ifdef AETHERSDR_VERSION
+    return QByteArrayLiteral("AetherSDR/" AETHERSDR_VERSION
+                             " (+https://github.com/aethersdr/AetherSDR)");
+#else
+    return QByteArrayLiteral("AetherSDR (+https://github.com/aethersdr/AetherSDR)");
+#endif
 }
 
 QString KiwiPublicReceiver::apiBadge() const
@@ -92,6 +104,7 @@ void KiwiPublicDirectory::fetch()
     // exactly as a browser does before the user clicks "show receivers".
     QNetworkRequest gateReq{QUrl(QString::fromLatin1(kDirectoryUrl))};
     gateReq.setHeader(QNetworkRequest::UserAgentHeader, userAgent());
+    gateReq.setTransferTimeout(kDirectoryFetchTimeoutMs);
     QNetworkReply* gate = m_net->get(gateReq);
 
     connect(gate, &QNetworkReply::finished, this, [this, gate]() {
@@ -124,6 +137,7 @@ void KiwiPublicDirectory::fetch()
         // the network equivalent of the user clicking the button.
         QNetworkRequest unlockReq{QUrl(QString::fromLatin1(kDirectoryUrl))};
         unlockReq.setHeader(QNetworkRequest::UserAgentHeader, userAgent());
+        unlockReq.setTransferTimeout(kDirectoryFetchTimeoutMs);
         unlockReq.setRawHeader("x-kiwi-auth", token);
         QNetworkReply* unlock = m_net->get(unlockReq);
 
@@ -136,6 +150,7 @@ void KiwiPublicDirectory::fetch()
             // Step 3 — fetch the now-unlocked directory listing.
             QNetworkRequest listReq{QUrl(QString::fromLatin1(kDirectoryUrl))};
             listReq.setHeader(QNetworkRequest::UserAgentHeader, userAgent());
+            listReq.setTransferTimeout(kDirectoryFetchTimeoutMs);
             QNetworkReply* list = m_net->get(listReq);
 
             connect(list, &QNetworkReply::finished, this, [this, list]() {

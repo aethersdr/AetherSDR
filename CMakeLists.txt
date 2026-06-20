@@ -1909,6 +1909,7 @@ add_executable(kiwi_public_directory_test
 )
 target_include_directories(kiwi_public_directory_test PRIVATE src)
 target_link_libraries(kiwi_public_directory_test PRIVATE Qt6::Core Qt6::Network)
+target_compile_definitions(kiwi_public_directory_test PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 set_target_properties(kiwi_public_directory_test PROPERTIES AUTOMOC ON)
 add_test(NAME kiwi_public_directory_test COMMAND kiwi_public_directory_test)
 
@@ -1920,6 +1921,7 @@ add_executable(kiwi_directory_poc
 )
 target_include_directories(kiwi_directory_poc PRIVATE src)
 target_link_libraries(kiwi_directory_poc PRIVATE Qt6::Core Qt6::Network)
+target_compile_definitions(kiwi_directory_poc PRIVATE AETHERSDR_VERSION="${PROJECT_VERSION}")
 set_target_properties(kiwi_directory_poc PROPERTIES AUTOMOC ON)
 
 add_executable(client_gate_test

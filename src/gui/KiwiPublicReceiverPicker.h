@@ -35,6 +35,7 @@ private:
     KiwiPublicDirectory* m_dir{nullptr};
     QVector<KiwiPublicReceiver> m_apiReceivers;  // already filtered to ext_api>0
     int m_hiddenWebOnly{0};
+    int m_hiddenUnknown{0};  // dropped because their API policy wasn't published
     bool m_fromCache{false};  // current list came from the session cache
 
     QLineEdit*    m_search{nullptr};
