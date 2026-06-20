@@ -2281,15 +2281,12 @@ QString RxApplet::formatHz(int hz)
     return (hz >= 0 ? "+" : "") + QString::number(hz) + " Hz";
 }
 
-QString RxApplet::formatFilterWidth(int lo, int hi, const QString& mode)
+QString RxApplet::formatFilterWidth(int lo, int hi, const QString& /*mode*/)
 {
-    int w;
-    if (mode == "USB" || mode == "DIGU" || mode == "FDV" || mode == "FDVU" || mode == "NT")
-        w = hi;
-    else if (mode == "LSB" || mode == "DIGL" || mode == "FDVL")
-        w = std::abs(lo);
-    else
-        w = hi - lo;
+    // Bandwidth is the passband span (hi - lo) for every mode. The old
+    // per-mode branches returned the hi cut (USB) or |lo| (LSB), so the
+    // indicator showed the cut frequency instead of the bandwidth (#3659).
+    const int w = hi - lo;
     if (w <= 0) return "?";
     if (w >= 1000) return QString::number(w / 1000.0, 'f', 1) + "K";
     return QString::number(w);
