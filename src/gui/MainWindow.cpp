@@ -1226,6 +1226,12 @@ MainWindow::MainWindow(QWidget* parent)
     // subsystem doesn't ride along when RadioSession is extracted.
     wireSpotSubsystem();
 
+    // Net Reminder Scheduler: load the operator's saved nets, start the
+    // recompute-and-rearm reminder timer, and create the tray/banner notifiers
+    // → initNetScheduler() (MainWindow_Nets.cpp). Operator-scoped, client-side;
+    // works without a radio connected.
+    initNetScheduler();
+
     // Radio-model + TX-audio-stream wiring → wireRadioModel()
     // (MainWindow_Session.cpp, #3351 Phase 2c).
     wireRadioModel();

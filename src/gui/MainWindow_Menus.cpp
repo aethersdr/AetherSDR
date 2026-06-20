@@ -125,6 +125,10 @@ void MainWindow::buildMenuBar()
     connect(memoryAction, &QAction::triggered, this, [this] {
         showMemoryDialog();
     });
+    auto* netSchedulerAction = settingsMenu->addAction("Net Scheduler...");
+    connect(netSchedulerAction, &QAction::triggered, this, [this] {
+        showNetSchedulerDialog();
+    });
     auto* usbCablesAction = settingsMenu->addAction("USB Cables...");
     connect(usbCablesAction, &QAction::triggered, this, [this] {
         const QString prevComp = m_radioModel.audioCompressionParam();

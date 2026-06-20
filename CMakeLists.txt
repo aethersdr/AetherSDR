@@ -703,6 +703,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_Spots.cpp
     src/gui/MainWindow_SwrSweep.cpp
     src/gui/MainWindow_Wiring.cpp
+    src/gui/MainWindow_Nets.cpp
     src/gui/MainWindow_KiwiSdr.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerItem.cpp
@@ -730,6 +731,8 @@ set(GUI_SOURCES
     src/gui/MemoryCommands.cpp
     src/gui/MemoryBrowsePanel.cpp
     src/gui/MemoryDialog.cpp
+    src/gui/NetSchedulerDialog.cpp
+    src/gui/NetReminderBanner.cpp
     src/gui/SpotSettingsDialog.cpp
     src/gui/AetherDspDialog.cpp
     src/gui/AetherDspWidget.cpp

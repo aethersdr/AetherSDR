@@ -79,6 +79,7 @@
 class QAbstractSlider;
 class QMediaDevices;
 class QShowEvent;
+class QSystemTrayIcon;
 
 #include "gui/ClientEqApplet.h"   // ClientEqApplet::Path enum used in
                                    // onEqCutoffsDragRequested signature.
@@ -103,6 +104,11 @@ class RadioSetupDialog;
 class NetworkDiagnosticsDialog;
 class AgcCalibrationDialog;
 class MemoryDialog;
+class NetSchedulerDialog;
+class NetReminderBanner;
+class NetScheduler;
+struct NetEntry;
+struct MemoryEntry;
 class PropDashboardDialog;
 class UpdateChecker;
 class TxBandDialog;
@@ -414,6 +420,15 @@ private:
 
     void showMemoryDialog();
     void showQuickAddMemoryDialog(const QString& preferredPanId = {});
+
+    // Net Reminder Scheduler (MainWindow_Nets.cpp).
+    void initNetScheduler();
+    void showNetSchedulerDialog();
+    void persistNetSchedule(const QList<NetEntry>& nets);
+    void tuneToNet(const NetEntry& entry);
+    void onNetReminderDue(const NetEntry& entry, const QDateTime& occurrenceUtc);
+    MemoryEntry captureCurrentNetPreset() const;
+    QString netScheduleFilePath() const;
 #ifdef HAVE_WEBSOCKETS
     void showFreeDvReporter();
 #endif
@@ -771,6 +786,10 @@ private:
     QPointer<PropDashboardDialog> m_propDashboardDialog;
     QPointer<TxBandDialog> m_txBandDialog;
     QPointer<MemoryDialog> m_memoryDialog;
+    QPointer<NetSchedulerDialog> m_netSchedulerDialog;
+    NetScheduler* m_netScheduler{nullptr};
+    NetReminderBanner* m_netReminderBanner{nullptr};
+    QSystemTrayIcon* m_trayIcon{nullptr};
     QPointer<Ax25HfPacketDecodeDialog> m_ax25HfPacketDecodeDialog;
     QPointer<PskReporterMapDialog> m_pskReporterMapDialog;
     QPointer<FlexControlDialog> m_flexControlDialog;
