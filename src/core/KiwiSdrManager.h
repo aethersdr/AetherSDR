@@ -83,6 +83,9 @@ signals:
     void profileStreamReset(const QString& id);
     void sliceAssignmentChanged(int sliceId, const QString& profileId);
     void audioSourceEnabledChanged(const QString& id, bool enabled);
+    // Emitted when a profile is removed entirely, so the audio engine can free
+    // the per-source DSP state (disabling alone only quiesces it — #3668 review).
+    void audioSourceRemoved(const QString& id);
     void decodedAudioReady(const QString& id, const QByteArray& pcm24kStereoFloat);
     void waterfallRowReady(const QString& id, const QString& panId,
                            const QVector<float>& binsDbm,

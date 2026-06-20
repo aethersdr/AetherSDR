@@ -191,7 +191,7 @@ black-box observations made in this thread.
   endpoint edits could reuse saved waterfall rows from the previous endpoint,
   and NR2 toggles did not clear every Kiwi receive buffer. The implementation
   now treats those as local AetherSDR state-management bugs.
-- Clean upstream AetherSDR `main` checkout at `/Users/rfoust/Documents/source/AetherSDR`.
+- Clean upstream AetherSDR `main` checkout.
 - Project governance files read before implementation:
   `AGENTS.md`, `CONTRIBUTING.md`, `.specify/memory/constitution.md`, and
   `docs/a11y.md`.

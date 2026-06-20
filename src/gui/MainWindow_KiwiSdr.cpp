@@ -465,6 +465,10 @@ void MainWindow::wireKiwiSdr()
                     m_audio, [audio = m_audio](const QString& id, bool enabled) {
                 audio->setKiwiSdrAudioSourceEnabled(id, enabled);
             }, Qt::QueuedConnection);
+            connect(m_kiwiSdrManager, &KiwiSdrManager::audioSourceRemoved,
+                    m_audio, [audio = m_audio](const QString& id) {
+                audio->removeKiwiSdrAudioSource(id);
+            }, Qt::QueuedConnection);
         }
         connect(m_kiwiSdrManager, &KiwiSdrManager::waterfallRowReady,
                 this, [this](const QString& profileId, const QString&,

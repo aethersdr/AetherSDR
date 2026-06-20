@@ -217,6 +217,10 @@ void KiwiSdrManager::removeProfile(const QString& id)
     m_telemetry.remove(id);
     m_profiles.removeAt(idx);
     saveSettings();
+    // The client is already deleted above, so no further audio will be fed for
+    // this id; free its audio-engine source state (disable alone leaves the
+    // per-source entry allocated — #3668 review).
+    emit audioSourceRemoved(id);
     emit profilesChanged();
 }
 
