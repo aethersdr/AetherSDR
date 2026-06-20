@@ -619,6 +619,10 @@ set(CORE_SOURCES
     src/core/MemoryCsvCompat.cpp
     src/core/MemoryFieldValues.cpp
     src/core/MemoryRecallPolicy.cpp
+    src/core/NetRecurrence.cpp
+    src/core/NetSchedulePlanner.cpp
+    src/core/NetScheduleStore.cpp
+    src/core/NetScheduler.cpp
     src/core/WfmDemodulator.cpp
     src/core/WfmDsp.cpp
     src/core/WaveOutWriter.cpp
@@ -2288,6 +2292,31 @@ add_executable(memory_recall_policy_test
 target_include_directories(memory_recall_policy_test PRIVATE src)
 target_link_libraries(memory_recall_policy_test PRIVATE Qt6::Core)
 add_test(NAME memory_recall_policy_test COMMAND memory_recall_policy_test)
+
+add_executable(net_recurrence_test
+    tests/net_recurrence_test.cpp
+    src/core/NetRecurrence.cpp
+)
+target_include_directories(net_recurrence_test PRIVATE src)
+target_link_libraries(net_recurrence_test PRIVATE Qt6::Core)
+add_test(NAME net_recurrence_test COMMAND net_recurrence_test)
+
+add_executable(net_schedule_store_test
+    tests/net_schedule_store_test.cpp
+    src/core/NetScheduleStore.cpp
+)
+target_include_directories(net_schedule_store_test PRIVATE src)
+target_link_libraries(net_schedule_store_test PRIVATE Qt6::Core)
+add_test(NAME net_schedule_store_test COMMAND net_schedule_store_test)
+
+add_executable(net_schedule_planner_test
+    tests/net_schedule_planner_test.cpp
+    src/core/NetSchedulePlanner.cpp
+    src/core/NetRecurrence.cpp
+)
+target_include_directories(net_schedule_planner_test PRIVATE src)
+target_link_libraries(net_schedule_planner_test PRIVATE Qt6::Core)
+add_test(NAME net_schedule_planner_test COMMAND net_schedule_planner_test)
 
 add_executable(memory_field_values_test
     tests/memory_field_values_test.cpp
