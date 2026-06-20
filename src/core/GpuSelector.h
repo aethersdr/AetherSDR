@@ -18,6 +18,15 @@ struct GpuInfo {
     QString id;            // stable, platform-specific id (persisted); "auto" = default
     QString name;          // human-readable label for the menu
     bool    discrete{false};
+    // False when the adapter is present but unsafe to select: the Windows
+    // integrated adapter re-triggers the #1921 QRhiWidget-reparenting crash that
+    // the NvOptimusEnablement export exists to avoid.  The menu disables such
+    // entries and applyAtStartup() refuses them (keeping the system default).
+    bool    selectable{true};
+    // True when this adapter's selection path is not yet hardware-soaked (only
+    // the Linux NVIDIA-offload path is validated on real hardware).  The menu
+    // marks these "(experimental)".
+    bool    experimental{false};
 };
 
 class GpuSelector {

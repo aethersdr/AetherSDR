@@ -2,12 +2,13 @@
 
 #include "AppSettings.h"
 
-#include <QJsonDocument>
-#include <QJsonObject>
-
-#if defined(Q_OS_LINUX)
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QXmlStreamReader>
+
+#if defined(Q_OS_LINUX)
 #include <QFileInfo>
 #include <QSet>
 #elif defined(Q_OS_WIN)
@@ -73,6 +74,10 @@ QVector<GpuInfo> enumeratePlatform()
         g.id = QStringLiteral("pci:") + pci;
         g.name = vendorName + (discrete ? QStringLiteral(" (discrete)") : QStringLiteral(" (integrated)"));
         g.discrete = discrete;
+        // Only the NVIDIA PRIME-offload path is hardware-soaked.  The non-NVIDIA
+        // DRI_PRIME path follows Mesa's documented PCI-tag semantics but hasn't
+        // been validated on an AMD/Intel discrete box — flag it experimental.
+        g.experimental = (vendorName != QLatin1String("NVIDIA"));
         out.push_back(g);
     }
     return out;
@@ -97,6 +102,15 @@ QVector<GpuInfo> enumeratePlatform()
             g.id = QStringLiteral("dxgi:%1").arg(i);
             g.name = QString::fromWCharArray(desc.Description);
             g.discrete = desc.DedicatedVideoMemory > (static_cast<quint64>(256) << 20);
+            // The integrated adapter is the exact config #1921 crashes on: the
+            // Intel iGPU D3D11 driver corrupts its stack during QRhiWidget
+            // reparenting, which is *why* main.cpp force-exports NvOptimusEnablement.
+            // Letting a user point QT_D3D_ADAPTER_INDEX at it would re-arm that
+            // crash, so it is present-but-not-selectable.
+            g.selectable = g.discrete;
+            // QT_D3D_ADAPTER_INDEX selection isn't hardware-soaked yet (needs a
+            // Windows hybrid tester, incl. the NvOptimus interaction).
+            g.experimental = true;
             out.push_back(g);
         }
         adapter->Release();
@@ -130,11 +144,55 @@ bool willUseWayland()
 }
 #endif
 
+// Post-QApplication read: the settings singleton is fully initialised, so the
+// menu uses it directly.
 QString readSavedId()
 {
     const QJsonObject o = QJsonDocument::fromJson(
         AppSettings::instance().value(QStringLiteral("Graphics")).toString().toUtf8()).object();
     return o.value(QStringLiteral("gpu")).toString(QString::fromLatin1(GpuSelector::kAutoId));
+}
+
+// The AppSettings file path, reproduced by hand — applyAtStartup() runs before
+// QApplication, where QStandardPaths is unavailable and AppSettings must not be
+// constructed.  Mirrors main.cpp's UiScale bootstrap and AppSettings's own
+// GenericConfigLocation layout.
+QString settingsFilePath()
+{
+#if defined(Q_OS_MAC)
+    return QDir::homePath() + QStringLiteral("/Library/Preferences/AetherSDR/AetherSDR.settings");
+#elif defined(Q_OS_WIN)
+    return QDir::fromNativeSeparators(qEnvironmentVariable("LOCALAPPDATA"))
+           + QStringLiteral("/AetherSDR/AetherSDR.settings");
+#else
+    return QDir::homePath() + QStringLiteral("/.config/AetherSDR/AetherSDR.settings");
+#endif
+}
+
+// Startup read: parse the persisted "Graphics" → "gpu" id straight from the
+// settings XML.  Constructing AppSettings::instance() this early would run its
+// migrateSettingsPath() before setApplicationName(), computing the wrong
+// AppConfigLocation path and permanently skipping the old→new migration for
+// upgrading users.  Reading the file by hand (like the UiScale bootstrap) avoids
+// touching the singleton at all.
+QString readSavedIdFromFile()
+{
+    const QString fallback = QString::fromLatin1(GpuSelector::kAutoId);
+    QFile f(settingsFilePath());
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return fallback;
+    }
+    QXmlStreamReader xml(&f);
+    while (!xml.atEnd()) {
+        if (xml.readNext() == QXmlStreamReader::StartElement
+                && xml.name() == QLatin1String("Graphics")) {
+            // readElementText() unescapes the XML entities, yielding the raw JSON.
+            const QJsonObject o =
+                QJsonDocument::fromJson(xml.readElementText().toUtf8()).object();
+            return o.value(QStringLiteral("gpu")).toString(fallback);
+        }
+    }
+    return fallback;
 }
 
 } // namespace
@@ -170,13 +228,11 @@ void GpuSelector::saveChoiceId(const QString& id)
 
 void GpuSelector::applyAtStartup()
 {
-    // This runs in main() BEFORE QApplication and before main()'s own
-    // AppSettings::load(), so the settings map is still empty.  Load it here so
-    // the persisted choice is actually read (load() only touches QFile/XML and
-    // is re-run harmlessly during normal startup).
-    AppSettings::instance().load();
-
-    const QString id = savedChoiceId();
+    // Runs in main() BEFORE QApplication.  Read the persisted choice straight
+    // from the settings file — constructing AppSettings::instance() here would
+    // run its path migration before setApplicationName() and break it for
+    // upgrading users (see readSavedIdFromFile()).
+    const QString id = readSavedIdFromFile();
     if (id.isEmpty() || id == QLatin1String(kAutoId)) {
         s_appliedSummary = QStringLiteral("Auto (system default — no override)");
         return;
@@ -188,6 +244,15 @@ void GpuSelector::applyAtStartup()
     }
     if (!chosen) {
         s_appliedSummary = QStringLiteral("saved GPU '%1' not present — using system default").arg(id);
+        return;
+    }
+    if (!chosen->selectable) {
+        // Defence in depth: the menu disables non-selectable adapters, but a
+        // hand-edited settings file could still name one.  Refuse it and keep
+        // the system default (on Windows that means NvOptimusEnablement keeps
+        // driving the discrete GPU, avoiding the #1921 iGPU crash).
+        s_appliedSummary = QStringLiteral("saved GPU '%1' is not selectable (#1921) — using system default")
+                               .arg(chosen->name);
         return;
     }
 

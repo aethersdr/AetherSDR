@@ -12,6 +12,7 @@
 
 #include <QPushButton>
 #include <QComboBox>
+#include <QStandardItemModel>
 #include <QSlider>
 #include <QLabel>
 #include <QGridLayout>
@@ -1431,9 +1432,33 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         applyComboStyle(m_gpuCombo);
         const QString savedId = GpuSelector::savedChoiceId();
         for (const GpuInfo& g : GpuSelector::available()) {
-            m_gpuCombo->addItem(g.name, g.id);
-            if (g.id == savedId) {
-                m_gpuCombo->setCurrentIndex(m_gpuCombo->count() - 1);
+            QString label = g.name;
+            if (!g.selectable) {
+                label += "  — disabled (#1921)";
+            } else if (g.experimental) {
+                label += "  (experimental)";
+            }
+            m_gpuCombo->addItem(label, g.id);
+            const int idx = m_gpuCombo->count() - 1;
+            if (!g.selectable) {
+                // Present-but-unsafe (Windows iGPU → #1921): show it greyed so
+                // users understand why the discrete GPU is forced, but block it.
+                if (auto* model = qobject_cast<QStandardItemModel*>(m_gpuCombo->model())) {
+                    if (QStandardItem* item = model->item(idx)) {
+                        item->setFlags(item->flags() & ~Qt::ItemIsEnabled);
+                    }
+                }
+                m_gpuCombo->setItemData(
+                    idx, "Integrated rendering crashes during panadapter "
+                         "reparenting (#1921); the discrete GPU is used instead.",
+                    Qt::ToolTipRole);
+            } else if (g.experimental) {
+                m_gpuCombo->setItemData(
+                    idx, "This adapter-selection path isn't hardware-verified yet.",
+                    Qt::ToolTipRole);
+            }
+            if (g.id == savedId && g.selectable) {
+                m_gpuCombo->setCurrentIndex(idx);
             }
         }
         m_gpuCombo->setToolTip(
