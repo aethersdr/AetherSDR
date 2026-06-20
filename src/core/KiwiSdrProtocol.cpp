@@ -47,7 +47,8 @@ SoundFrameHeader parseSoundFrameHeader(const QByteArray& frame)
 
     SoundFrameHeader header;
     header.flags = static_cast<uchar>(frame[3]);
-    const bool observedExtendedFrame = frame.size() == 1034;
+    const bool observedExtendedFrame =
+        frame.size() == kObservedExtendedSoundFrameBytes;
     if (observedExtendedFrame && frame.size() >= 8) {
         const auto* data = reinterpret_cast<const uchar*>(frame.constData() + 4);
         const quint32 counter = static_cast<quint32>(data[0])
