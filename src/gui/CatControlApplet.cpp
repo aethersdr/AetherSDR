@@ -465,6 +465,7 @@ void CatControlApplet::buildTableRows()
 
         connect(row.dialectCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, capturedI](int) {
+                    updateRowLocked(capturedI);   // rigctld → force VFO B to "-" + disable
                     applyRowToSettings(capturedI);
                     emit configChanged();
                 });
@@ -504,11 +505,41 @@ void CatControlApplet::updateRowLocked(int row)
     // Lock on UI state only — isRunning() lags behind the checkbox by one applyCatPortCount cycle.
     bool locked   = masterOn && r.enableCheck->isChecked() && hasPort;
 
+    // rigctld is single-VFO per port (RigctlProtocol has no VFO B) — split is
+    // create-on-demand, so a configured VFO B is meaningless there. Force VFO B
+    // to "-" (none) and disable the selector for the Rigctld dialect — but as a
+    // DISPLAY override only: applyRowToSettings() preserves the operator's saved
+    // VfoB for a rigctld port, and on switch-back to a dual-VFO dialect we restore
+    // the selector to it here, so toggling the dialect never clobbers the mapping.
+    const QString prefix = QString("CatPort_%1_").arg(row);
+    const bool isRigctld =
+        r.dialectCombo->currentData().toInt() == static_cast<int>(CatDialect::Rigctld);
+    if (isRigctld) {
+        const int noneIdx = r.vfoBCombo->findData(-1);
+        if (noneIdx >= 0 && r.vfoBCombo->currentIndex() != noneIdx) {
+            QSignalBlocker b(r.vfoBCombo);
+            r.vfoBCombo->setCurrentIndex(noneIdx);
+        }
+    } else {
+        // Leaving rigctld: restore a VFO B that was force-hidden to "-" while the
+        // saved value was preserved. Only acts when the selector shows "-" but a
+        // real VfoB is saved (i.e. exactly the post-rigctld case) — a genuine
+        // operator "-" choice (saved -1) is left alone.
+        const int savedB = AppSettings::instance().value(prefix + "VfoB", "-1").toInt();
+        if (savedB >= 0 && r.vfoBCombo->currentData().toInt() != savedB) {
+            const int idx = r.vfoBCombo->findData(savedB);
+            if (idx >= 0) {
+                QSignalBlocker b(r.vfoBCombo);
+                r.vfoBCombo->setCurrentIndex(idx);
+            }
+        }
+    }
+
     r.enableCheck->setEnabled(hasPort || !r.enableCheck->isChecked());
     r.portEdit->setReadOnly(locked);
     r.dialectCombo->setEnabled(!locked);
     r.vfoACombo->setEnabled(!locked);
-    r.vfoBCombo->setEnabled(!locked);
+    r.vfoBCombo->setEnabled(!locked && !isRigctld);
 }
 
 // ── Persist row settings ─────────────────────────────────────────────────────
@@ -527,7 +558,12 @@ void CatControlApplet::applyRowToSettings(int row)
     QString dialect = (dIdx == 1) ? "TS2000" : (dIdx == 2) ? "FlexCAT" : "Rigctld";
     s.setValue(prefix + "Dialect", dialect);
     s.setValue(prefix + "VfoA", QString::number(r.vfoACombo->currentData().toInt()));
-    s.setValue(prefix + "VfoB", QString::number(r.vfoBCombo->currentData().toInt()));
+    // For rigctld the VFO B selector is force-hidden to "-" (the dialect has no
+    // VFO B); do NOT persist that forced value — it would clobber the VfoB the
+    // operator configured under a dual-VFO dialect. Preserve the saved value so a
+    // dialect round-trip is lossless (updateRowLocked restores the selector).
+    if (dialect != "Rigctld")
+        s.setValue(prefix + "VfoB", QString::number(r.vfoBCombo->currentData().toInt()));
     s.save();
 }
 

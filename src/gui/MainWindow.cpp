@@ -4668,7 +4668,7 @@ void MainWindow::migrateCatSettings()
     s.setValue("CatPort_0_Port",    rigPort);
     s.setValue("CatPort_0_Dialect", "Rigctld");
     s.setValue("CatPort_0_VfoA",    "0");
-    s.setValue("CatPort_0_VfoB",    "1");
+    s.setValue("CatPort_0_VfoB",    "-1");   // rigctld is single-VFO — no VFO B
     s.setValue("CatPort_0_Enabled", rigEnabled ? "True" : "False");
 
     // Port 1: old SmartCAT settings
