@@ -4621,7 +4621,7 @@ void MainWindow::applyCatPortCount()
 {
     auto& s = AppSettings::instance();
     const bool masterOn = s.value("CatEnabled", "False").toString() == "True";
-    const int  target   = catPortTargetCount();
+    const int  target   = catPortTargetCount();  // bounds applet VFO letters, not port count
 
     for (int i = 0; i < kCatPorts; ++i) {
         if (!catPort(i)) continue;
@@ -4629,7 +4629,11 @@ void MainWindow::applyCatPortCount()
         const QString prefix = QString("CatPort_%1_").arg(i);
         const bool portEnabled = s.value(prefix + "Enabled", "False").toString() == "True";
         const int  portNum     = s.value(prefix + "Port", "").toInt();
-        const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024) && (i < target);
+        // A CAT port is a control channel, not a 1:1 mapping to a slice — don't
+        // cap how many configured ports start by the radio's receiver count
+        // (#3693). Receiver capacity bounds the VFO-letter choices per port
+        // (catPortTargetCount() feeds the applet), not whether a port runs.
+        const bool shouldRun   = masterOn && portEnabled && (portNum >= 1024);
 
         if (shouldRun && !catPort(i)->isRunning()) {
             // Re-apply config in case dialect/VFO was changed while stopped
