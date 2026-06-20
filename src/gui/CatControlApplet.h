@@ -53,6 +53,10 @@ private:
     void populateVfoCombo(QComboBox* combo, bool includeNone);
     void applyRowToSettings(int row);
     void updateRowLocked(int row);
+    // On a switch to a dual-VFO dialect, restore the row's VFO B selector to the
+    // operator's saved value (preserved while a single-VFO dialect was active).
+    // Display-only (signals blocked); no-op for single-VFO dialects.
+    void restoreVfoBForDialect(int row);
 
     static constexpr int kMaxPorts = 8;
 

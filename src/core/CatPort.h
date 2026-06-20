@@ -21,6 +21,12 @@ enum class CatDialect {
     FlexCAT    // Kenwood TS-2000 + FlexRadio ZZ extensions
 };
 
+// Whether a dialect has a configurable VFO B. rigctld (Hamlib) is single-VFO per
+// port — RigctlProtocol has no VFO B input; split is create-on-demand. The
+// SmartSDR dialects (TS-2000 / FlexCAT) support a configured VFO B (dual-VFO).
+// Single definition so the config UI — and any future config surface — agrees.
+inline bool dialectSupportsVfoB(CatDialect d) { return d != CatDialect::Rigctld; }
+
 // Unified CAT port: one TCP server + one PTY (non-Windows), any dialect.
 // Replaces the separate RigctlServer / SmartCatServer / RigctlPty hierarchy.
 //

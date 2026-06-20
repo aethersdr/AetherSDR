@@ -84,6 +84,21 @@ QString sliceLetter(int idx)
     return QString(QChar('A' + idx));
 }
 
+// Persist a VFO selection without losing a saved slice the combo can't currently
+// display. The VFO combos are bounded by the radio's slice-receiver count, so a
+// reconnect to a smaller radio can leave a previously-chosen slice unrepresentable;
+// the combo then falls back to its first entry (slice A / "—"). In that case keep
+// the stored value rather than clobbering it — it reappears when the slices return.
+// A genuine, representable selection (including a deliberate "—") is persisted.
+void persistVfo(AppSettings& s, const QString& key, QComboBox* combo, int fallbackData)
+{
+    const int cur   = combo->currentData().toInt();
+    const int saved = s.value(key, QString::number(fallbackData)).toInt();
+    if (cur == fallbackData && saved != fallbackData && combo->findData(saved) < 0)
+        return;   // combo fell back only because `saved` isn't available — preserve it
+    s.setValue(key, QString::number(cur));
+}
+
 } // namespace
 
 // ── Constructor ──────────────────────────────────────────────────────────────
@@ -259,16 +274,24 @@ void CatControlApplet::setMaxSlices(int n)
     m_maxSlices = qMax(1, n);
     for (int row = 0; row < m_rows.size(); ++row) {
         PortRow& r = m_rows[row];
-        int savedA = r.vfoACombo->currentIndex();
-        int savedB = r.vfoBCombo->currentIndex();
+        // Remember the selected slice by DATA (not raw index): with the "—" entry
+        // shifting indices, an index-based restore + qMin clamp could silently
+        // repoint a VFO to a different slice when the count changes. Restore by
+        // data; if the saved slice is no longer available, fall back to the first
+        // entry (slice A / "—") for DISPLAY only — the persisted value is kept
+        // (persistVfo won't overwrite an unrepresentable saved slice).
+        const int savedA = r.vfoACombo->currentData().toInt();
+        const int savedB = r.vfoBCombo->currentData().toInt();
         r.vfoACombo->blockSignals(true);
         r.vfoBCombo->blockSignals(true);
         r.vfoACombo->clear();
         r.vfoBCombo->clear();
         populateVfoCombo(r.vfoACombo, false);
         populateVfoCombo(r.vfoBCombo, true);
-        r.vfoACombo->setCurrentIndex(qMin(savedA, r.vfoACombo->count() - 1));
-        r.vfoBCombo->setCurrentIndex(qMin(savedB, r.vfoBCombo->count() - 1));
+        const int idxA = r.vfoACombo->findData(savedA);
+        const int idxB = r.vfoBCombo->findData(savedB);
+        r.vfoACombo->setCurrentIndex(idxA >= 0 ? idxA : 0);
+        r.vfoBCombo->setCurrentIndex(idxB >= 0 ? idxB : 0);
         r.vfoACombo->blockSignals(false);
         r.vfoBCombo->blockSignals(false);
     }
@@ -278,7 +301,7 @@ void CatControlApplet::setMaxSlices(int n)
 
 void CatControlApplet::populateVfoCombo(QComboBox* combo, bool includeNone)
 {
-    if (includeNone) combo->addItem("—", -1);
+    if (includeNone) combo->addItem("—", CatPort::kVfoNone);
     for (int i = 0; i < m_maxSlices; ++i)
         combo->addItem(sliceLetter(i), i);
 }
@@ -378,7 +401,8 @@ void CatControlApplet::buildTableRows()
         row.vfoBCombo->setFixedWidth(42);
         populateVfoCombo(row.vfoBCombo, true);
         {
-            int vfoB = settings.value(prefix + "VfoB", "-1").toInt();
+            int vfoB = settings.value(prefix + "VfoB",
+                                      QString::number(CatPort::kVfoNone)).toInt();
             int idx = row.vfoBCombo->findData(vfoB);
             QSignalBlocker b(row.vfoBCombo);
             row.vfoBCombo->setCurrentIndex(qMax(0, idx));
@@ -465,7 +489,8 @@ void CatControlApplet::buildTableRows()
 
         connect(row.dialectCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this, capturedI](int) {
-                    updateRowLocked(capturedI);   // rigctld → force VFO B to "-" + disable
+                    restoreVfoBForDialect(capturedI);  // switch to dual-VFO → restore saved VFO B
+                    updateRowLocked(capturedI);        // single-VFO → force "—" + disable selectors
                     applyRowToSettings(capturedI);
                     emit configChanged();
                 });
@@ -505,33 +530,18 @@ void CatControlApplet::updateRowLocked(int row)
     // Lock on UI state only — isRunning() lags behind the checkbox by one applyCatPortCount cycle.
     bool locked   = masterOn && r.enableCheck->isChecked() && hasPort;
 
-    // rigctld is single-VFO per port (RigctlProtocol has no VFO B) — split is
-    // create-on-demand, so a configured VFO B is meaningless there. Force VFO B
-    // to "-" (none) and disable the selector for the Rigctld dialect — but as a
-    // DISPLAY override only: applyRowToSettings() preserves the operator's saved
-    // VfoB for a rigctld port, and on switch-back to a dual-VFO dialect we restore
-    // the selector to it here, so toggling the dialect never clobbers the mapping.
-    const QString prefix = QString("CatPort_%1_").arg(row);
-    const bool isRigctld =
-        r.dialectCombo->currentData().toInt() == static_cast<int>(CatDialect::Rigctld);
-    if (isRigctld) {
-        const int noneIdx = r.vfoBCombo->findData(-1);
+    // A single-VFO dialect (rigctld) has no VFO B — force the selector to "—" and
+    // disable it. DISPLAY override only: the saved VfoB is preserved (applyRowToSettings
+    // skips persisting it for single-VFO dialects) and restored by restoreVfoBForDialect()
+    // when switching back to a dual-VFO dialect. This runs on every lock refresh, so it
+    // is kept idempotent (display state only) — the restore lives in the dialect handler.
+    const auto dialect = static_cast<CatDialect>(r.dialectCombo->currentData().toInt());
+    const bool supportsVfoB = dialectSupportsVfoB(dialect);
+    if (!supportsVfoB) {
+        const int noneIdx = r.vfoBCombo->findData(CatPort::kVfoNone);
         if (noneIdx >= 0 && r.vfoBCombo->currentIndex() != noneIdx) {
             QSignalBlocker b(r.vfoBCombo);
             r.vfoBCombo->setCurrentIndex(noneIdx);
-        }
-    } else {
-        // Leaving rigctld: restore a VFO B that was force-hidden to "-" while the
-        // saved value was preserved. Only acts when the selector shows "-" but a
-        // real VfoB is saved (i.e. exactly the post-rigctld case) — a genuine
-        // operator "-" choice (saved -1) is left alone.
-        const int savedB = AppSettings::instance().value(prefix + "VfoB", "-1").toInt();
-        if (savedB >= 0 && r.vfoBCombo->currentData().toInt() != savedB) {
-            const int idx = r.vfoBCombo->findData(savedB);
-            if (idx >= 0) {
-                QSignalBlocker b(r.vfoBCombo);
-                r.vfoBCombo->setCurrentIndex(idx);
-            }
         }
     }
 
@@ -539,7 +549,28 @@ void CatControlApplet::updateRowLocked(int row)
     r.portEdit->setReadOnly(locked);
     r.dialectCombo->setEnabled(!locked);
     r.vfoACombo->setEnabled(!locked);
-    r.vfoBCombo->setEnabled(!locked && !isRigctld);
+    r.vfoBCombo->setEnabled(!locked && supportsVfoB);
+}
+
+// Restore the row's VFO B selector to the saved value when the (new) dialect
+// supports VFO B. Called from the dialect-change handler: switching back from a
+// single-VFO dialect brings the operator's preserved slice-B choice back into
+// view. Display-only (signals blocked); a no-op for single-VFO dialects, which
+// updateRowLocked() forces to "—".
+void CatControlApplet::restoreVfoBForDialect(int row)
+{
+    if (row >= m_rows.size()) return;
+    PortRow& r = m_rows[row];
+    const auto dialect = static_cast<CatDialect>(r.dialectCombo->currentData().toInt());
+    if (!dialectSupportsVfoB(dialect)) return;
+    const QString prefix = QString("CatPort_%1_").arg(row);
+    const int savedB = AppSettings::instance()
+                           .value(prefix + "VfoB", QString::number(CatPort::kVfoNone)).toInt();
+    const int idx = r.vfoBCombo->findData(savedB);
+    if (idx >= 0 && r.vfoBCombo->currentIndex() != idx) {
+        QSignalBlocker b(r.vfoBCombo);
+        r.vfoBCombo->setCurrentIndex(idx);
+    }
 }
 
 // ── Persist row settings ─────────────────────────────────────────────────────
@@ -554,16 +585,21 @@ void CatControlApplet::applyRowToSettings(int row)
     s.setValue(prefix + "Enabled", r.enableCheck->isChecked() ? "True" : "False");
     s.setValue(prefix + "Port",    r.portEdit->text());
 
-    int dIdx = r.dialectCombo->currentIndex();
-    QString dialect = (dIdx == 1) ? "TS2000" : (dIdx == 2) ? "FlexCAT" : "Rigctld";
-    s.setValue(prefix + "Dialect", dialect);
-    s.setValue(prefix + "VfoA", QString::number(r.vfoACombo->currentData().toInt()));
-    // For rigctld the VFO B selector is force-hidden to "-" (the dialect has no
-    // VFO B); do NOT persist that forced value — it would clobber the VfoB the
-    // operator configured under a dual-VFO dialect. Preserve the saved value so a
-    // dialect round-trip is lossless (updateRowLocked restores the selector).
-    if (dialect != "Rigctld")
-        s.setValue(prefix + "VfoB", QString::number(r.vfoBCombo->currentData().toInt()));
+    const auto dialect = static_cast<CatDialect>(r.dialectCombo->currentData().toInt());
+    const QString dialectKey = (dialect == CatDialect::TS2000)  ? "TS2000"
+                             : (dialect == CatDialect::FlexCAT) ? "FlexCAT"
+                             :                                    "Rigctld";
+    s.setValue(prefix + "Dialect", dialectKey);
+    // VFO A always applies; persistVfo preserves a saved slice the combo can't
+    // currently display (smaller radio) instead of clobbering it.
+    persistVfo(s, prefix + "VfoA", r.vfoACombo, 0);
+    // VFO B only for dual-VFO dialects. For a single-VFO dialect (rigctld) the
+    // selector is forced to "—"; persisting that would clobber the operator's
+    // saved VFO B. Skipping it leaves the stored value intact for a lossless
+    // dialect round-trip (restoreVfoBForDialect restores the selector on the way
+    // back).
+    if (dialectSupportsVfoB(dialect))
+        persistVfo(s, prefix + "VfoB", r.vfoBCombo, CatPort::kVfoNone);
     s.save();
 }
 
