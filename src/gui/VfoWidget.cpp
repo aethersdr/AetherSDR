@@ -861,7 +861,9 @@ void VfoWidget::buildUI()
     meterRow->addWidget(m_dbmLabel, 1);    // 25%
     m_meterStack->addWidget(stdMeterPage);
 
-    m_meterStack->addWidget(new SmartMtrWidget);
+    m_smartMtrWidget = new SmartMtrWidget;
+    m_meterStack->addWidget(m_smartMtrWidget);
+    pushSmartMtrInput(); // seed the at-rest display
 
     root->addWidget(m_meterStack);
 
@@ -2998,6 +3000,46 @@ void VfoWidget::setSignalLevel(float dbm)
     m_dbmLabel->setText(QString("%1 dBm").arg(static_cast<int>(dbm)));
     m_dbmLabel->setAccessibleName("Signal level dBm");
     updateSignalMeterTarget();
+    pushSmartMtrInput();
+}
+
+// SmartMTR feed: choose signal vs mic by TX state and push the input. The
+// canonical ranges match the per-kind configs in SmartMtrConfig.cpp.
+void VfoWidget::pushSmartMtrInput()
+{
+    if (!m_smartMtrWidget)
+        return;
+
+    MeterInput in;
+    const bool showMic = m_transmitting && m_slice && m_slice->isTxSlice();
+    if (showMic) {
+        in.kind = MeterKind::MicLevel;
+        in.value = m_micDbfs;
+        in.min = -40.0; // dBFS
+        in.max = 0.0;
+    } else {
+        in.kind = MeterKind::Signal;
+        in.value = m_signalDbm;
+        in.min = -127.0; // dBm: S0
+        in.max = -13.0;  // dBm: S9+60
+    }
+    in.hasValue = true;
+    m_smartMtrWidget->setMeterInput(in);
+}
+
+void VfoWidget::setMicLevel(float micDbfs)
+{
+    m_micDbfs = micDbfs;
+    if (m_transmitting && m_slice && m_slice->isTxSlice())
+        pushSmartMtrInput();
+}
+
+void VfoWidget::setTransmitting(bool tx)
+{
+    if (m_transmitting == tx)
+        return;
+    m_transmitting = tx;
+    pushSmartMtrInput(); // switch the SmartMTR kind (signal <-> mic)
 }
 
 void VfoWidget::setReceiveMeterReading(
@@ -3020,6 +3062,7 @@ void VfoWidget::setReceiveMeterReading(
         m_dbmLabel->setAccessibleName("Meter unavailable");
     }
     updateSignalMeterTarget();
+    pushSmartMtrInput();
     if (QAccessible::isActive()) {
         QAccessibleValueChangeEvent event(this, m_dbmLabel->text());
         QAccessible::updateAccessibility(&event);

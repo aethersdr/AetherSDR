@@ -724,6 +724,7 @@ set(GUI_SOURCES
     src/gui/SliceLabel.cpp
     src/gui/VfoWidget.cpp
     src/gui/SmartMtrWidget.cpp
+    src/gui/SmartMtrConfig.cpp
     src/gui/MeterViewController.cpp
     src/gui/RadioSetupDialog.cpp
     src/gui/NetworkDiagnosticsDialog.cpp

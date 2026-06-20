@@ -30,6 +30,7 @@ class RadioModel;
 class PhaseKnob;
 class RxApplet;
 class KiwiSdrManager;
+class SmartMtrWidget;
 
 // Floating VFO info panel attached to the VFO marker on the spectrum display.
 // Shows slice info (antennas, frequency, signal level, filter width, TX/SPLIT)
@@ -55,6 +56,11 @@ public:
     void setSignalLevel(float dbm);
     void setReceiveMeterReading(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
+    // SmartMTR feeds: live mic level (dBFS) and global TX (MOX) state. The
+    // SmartMTR view shows mic level on this VFO's TX slice while transmitting,
+    // and received signal otherwise.
+    void setMicLevel(float micDbfs);
+    void setTransmitting(bool tx);
 
     // Split mode: call whenever TX assignment or active slice changes.
     //   isTxSlice  — this VFO's slice has tx=1
@@ -160,6 +166,9 @@ protected:
 private:
     void updateSignalMeterTarget();
     void animateSignalMeter();
+    // Build and push the current MeterInput (signal vs mic by TX state) to the
+    // SmartMTR widget. Cheap; safe to call on every level/state update.
+    void pushSmartMtrInput();
     bool usesUnavailableSignalMeter() const;
     static float signalDbmToMeterFraction(float dbm);
 
@@ -247,6 +256,9 @@ private:
     // page 1 = SmartMTR component.  m_smartMtr mirrors the current page.
     QStackedWidget* m_meterStack{nullptr};
     bool m_smartMtr{false};
+    SmartMtrWidget* m_smartMtrWidget{nullptr};
+    float m_micDbfs{-40.0f}; // latest mic level (dBFS); SmartMTR TX scale
+    bool m_transmitting{false}; // global MOX state
     // Inline selector row revealed by clicking the meter strip (not a popup),
     // shown between the meter and the tab bar.
     QWidget* m_meterMenuRow{nullptr};

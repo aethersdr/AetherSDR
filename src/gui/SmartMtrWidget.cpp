@@ -2,12 +2,34 @@
 
 #include "SmartMtrStyle.h"
 
+#include <QFont>
+#include <QFontMetricsF>
 #include <QPainter>
 #include <QPainterPath>
 
 namespace AetherSDR {
 
 using namespace SmartMtrUnits;
+
+namespace {
+// Tick footprint (height away from the hole, thickness) for a marker size.
+void markerExtent(MarkerSize size, double& height, double& width)
+{
+    if (size == MarkerSize::Large) {
+        height = kMarkerLargeH;
+        width = kMarkerLargeW;
+    } else {
+        height = kMarkerSmallH;
+        width = kMarkerSmallW;
+    }
+}
+
+const QColor& markerColor(MarkerColor color)
+{
+    return color == MarkerColor::High ? SmartMtrColors::kMarkerHigh
+                                      : SmartMtrColors::kMarkerNormal;
+}
+} // namespace
 
 SmartMtrWidget::SmartMtrWidget(QWidget* parent)
     : QWidget(parent)
@@ -29,6 +51,12 @@ SmartMtrWidget::SmartMtrWidget(QWidget* parent)
     setSizePolicy(sp);
 }
 
+void SmartMtrWidget::setMeterInput(const MeterInput& input)
+{
+    m_input = input;
+    update();
+}
+
 void SmartMtrWidget::paintEvent(QPaintEvent*)
 {
     const auto g = SmartMtrGeometry::fit(rect());
@@ -36,12 +64,14 @@ void SmartMtrWidget::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    // Back-to-front: body, recessed hole, indicator fill, then the inset shadow
-    // rim on top so the bar reads as sunken.
+    // Back-to-front: body, recessed hole, indicator fill, the inset shadow rim
+    // on top so the bar reads as sunken, then the scale markers/labels (drawn on
+    // the body above and below the hole).
     drawControl(p, g);
     drawHole(p, g);
     drawIndicator(p, g);
     drawInsetShadow(p, g);
+    drawMarkers(p, g);
 }
 
 void SmartMtrWidget::drawControl(QPainter& p, const SmartMtrGeometry& g) const
@@ -60,22 +90,24 @@ void SmartMtrWidget::drawHole(QPainter& p, const SmartMtrGeometry& g) const
 
 void SmartMtrWidget::drawIndicator(QPainter& p, const SmartMtrGeometry& g) const
 {
-    // Left-to-right bar, full hole height, kIndicatorFraction of the hole width.
+    // Bar from the scale minimum to the mapped value position, full hole height.
     // Clipped to the rounded hole so the bar's corners follow the hole's radius.
     const QRectF hole = g.rect(kHoleMargX, kHoleMargY, kHoleW, kHoleH);
     const double r = g.len(kHoleRadius);
     QPainterPath clip;
     clip.addRoundedRect(hole, r, r);
 
-    const double barW = kIndicatorFraction * kHoleW;
+    const double pos = indicatorPosition(m_input); // hole-local units, in band
 
+    // The bar always starts at hole-local 0, so a min/blank value (pos == 10)
+    // still renders a short 0..10 stub rather than nothing.
     p.save();
     p.setClipPath(clip);
-    p.fillRect(g.rect(kHoleMargX, kHoleMargY, barW, kHoleH),
+    p.fillRect(g.rect(kHoleMargX, kHoleMargY, pos, kHoleH),
                SmartMtrColors::kForeground);
-    // Bright marker line on top of the bar's right end, right-aligned so it sits
-    // inside the bar (its last kIndicatorLine units), never extending past it.
-    p.fillRect(g.rect(kHoleMargX + barW - kIndicatorLine, kHoleMargY,
+    // Bright value line at the bar's right end (the value), drawn just inside the
+    // end so it never extends past the position.
+    p.fillRect(g.rect(kHoleMargX + pos - kIndicatorLine, kHoleMargY,
                       kIndicatorLine, kHoleH),
                SmartMtrColors::kIndicator);
     p.restore();
@@ -98,6 +130,50 @@ void SmartMtrWidget::drawInsetShadow(QPainter& p, const SmartMtrGeometry& g) con
     // Odd-even fill leaves only the rim (outer minus inner) painted.
     path.setFillRule(Qt::OddEvenFill);
     p.fillPath(path, SmartMtrColors::kShadow);
+}
+
+void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
+{
+    const MeterConfig& cfg = meterConfig(m_input.kind);
+    if (cfg.markers.empty())
+        return;
+
+    // Label font: the app UI font, sized from kLabelHeight with a pixel floor so
+    // it stays legible when the control is small.
+    QFont labelFont = font();
+    labelFont.setPixelSize(qMax(8, qRound(g.len(kLabelHeight))));
+    const QFontMetricsF fm(labelFont);
+    p.setFont(labelFont);
+
+    const double holeBottom = kHoleMargY + kHoleH;
+
+    for (const ScaleMarker& m : cfg.markers) {
+        // Only ticks inside the scale band are rendered.
+        if (m.position < kScaleMin || m.position > kScaleMax)
+            continue;
+
+        double h = 0.0, w = 0.0;
+        markerExtent(m.size, h, w);
+        const QColor& color = markerColor(m.color);
+        const double x = kHoleMargX + m.position - w / 2.0; // centered on position
+
+        // Symmetric pair, each stuck to a hole edge and growing outward.
+        const QRectF above = g.rect(x, kHoleMargY - h, w, h);
+        p.fillRect(above, color);
+        p.fillRect(g.rect(x, holeBottom, w, h), color);
+
+        if (m.label.isEmpty())
+            continue;
+
+        // Label centered on the marker, sitting just above the top tick.
+        const double cx = above.center().x();
+        const double bottom = above.top() - g.len(kLabelGap);
+        const double tw = fm.horizontalAdvance(m.label);
+        const double th = fm.height();
+        const QRectF box(cx - tw, bottom - th, tw * 2.0, th);
+        p.setPen(color);
+        p.drawText(box, Qt::AlignHCenter | Qt::AlignBottom, m.label);
+    }
 }
 
 QSize SmartMtrWidget::sizeHint() const

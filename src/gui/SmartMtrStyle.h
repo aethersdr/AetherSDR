@@ -21,10 +21,12 @@ namespace AetherSDR {
 namespace SmartMtrColors {
 inline const QColor kControl{QStringLiteral("#161620ff")};    // control body — TBD
 inline const QColor kBackground{QStringLiteral("#5ec4eaff")}; // recessed hole
-inline const QColor kForeground{QStringLiteral("#fe4343")}; // indicator bar
-inline const QColor kIndicator{QStringLiteral("#ffffff")};  // reserved (future)
+inline const QColor kForeground{QStringLiteral("#ff4444")}; // indicator bar — red
+inline const QColor kIndicator{QStringLiteral("#ffffff")};  // value end-line
 inline const QColor kExtreme{QStringLiteral("#ffffff")};    // reserved (future)
 inline const QColor kShadow{0, 0, 0, 70};                   // inset shadow — TBD
+inline const QColor kMarkerNormal{QStringLiteral("#5ec4ea")}; // scale tick — normal
+inline const QColor kMarkerHigh{QStringLiteral("#ff4444")};   // scale tick — high
 } // namespace SmartMtrColors
 
 // Geometry of the SmartMTR control, in UNITS.
@@ -46,13 +48,26 @@ inline constexpr double kHoleRadius = 4.0;
 // Inset shadow rim width, equal on all four inner sides of the hole.
 inline constexpr double kShadow = 2.0;
 
-// Indicator bar fill, as a fraction of the hole width. Hard-pinned for now;
-// later steps map a measured level onto this.
-inline constexpr double kIndicatorFraction = 0.5; // 50%
+// Indicator scale band, in hole-local units (0..kHoleW). The minimum/null value
+// sits at kScaleMin, the maximum at kScaleMax, leaving a symmetric gap at each
+// end of the hole. Markers outside [kScaleMin, kScaleMax] are not rendered.
+inline constexpr double kScaleMin = 10.0;
+inline constexpr double kScaleMax = 230.0;
 
-// Thickness of the bright marker line sitting on top of the bar's right end
+// Thickness of the bright value line sitting on top of the bar's right end
 // (kIndicator). Right-aligned within the bar, so it never extends past it.
 inline constexpr double kIndicatorLine = 1.0;
+
+// Scale-marker tick sizes (height = length away from the hole, width = thickness
+// straddling the marker position).
+inline constexpr double kMarkerSmallH = 3.0, kMarkerSmallW = 1.0;
+inline constexpr double kMarkerLargeH = 5.0, kMarkerLargeW = 2.0;
+
+// Marker labels (top ticks only): font cell height and gap above the tick.
+// Above-hole budget is kHoleMargY(20) − kMarkerLargeH(5) − kLabelGap(1) = 14
+// units, so up to ~12 fits with a small top margin.
+inline constexpr double kLabelHeight = 12.0;
+inline constexpr double kLabelGap = 1.0;
 } // namespace SmartMtrUnits
 
 } // namespace AetherSDR

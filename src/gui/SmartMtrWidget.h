@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SmartMtrConfig.h"
 #include "SmartMtrGeometry.h"
 
 #include <QWidget>
@@ -25,6 +26,10 @@ class SmartMtrWidget : public QWidget {
 public:
     explicit SmartMtrWidget(QWidget* parent = nullptr);
 
+    // Push what to display. The parent owns the data (kind + value + range);
+    // the widget just renders it. Triggers a repaint.
+    void setMeterInput(const MeterInput& input);
+
     // The control fills the full available parent width and keeps its design
     // aspect ratio (kControlW:kControlH) by deriving its height from that width.
     // The VfoWidget meter area is a size-to-current-page stack, so it adopts
@@ -44,6 +49,9 @@ private:
     void drawHole(QPainter& p, const SmartMtrGeometry& g) const;
     void drawIndicator(QPainter& p, const SmartMtrGeometry& g) const;
     void drawInsetShadow(QPainter& p, const SmartMtrGeometry& g) const;
+    void drawMarkers(QPainter& p, const SmartMtrGeometry& g) const;
+
+    MeterInput m_input; // what to display; default parks at the signal scale min
 };
 
 } // namespace AetherSDR
