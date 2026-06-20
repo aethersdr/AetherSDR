@@ -14,6 +14,7 @@
 #>
 
 $ErrorActionPreference = "Stop"
+. "$PSScriptRoot\_verify_sha256.ps1"
 
 $DfnrCommit = "d375b2d8309e0935d165700c91da9de862a99c31"
 $DfnrRepo   = "https://github.com/Rikorose/DeepFilterNet.git"
@@ -33,12 +34,15 @@ $ReleaseRepo = if ($env:DFNR_RELEASE_REPO) { $env:DFNR_RELEASE_REPO } else { "te
 $ReleaseTag  = "dfnr-libs"
 $Platform    = "windows-x86_64"
 $Tarball     = "libdeepfilter-$Platform.tar.gz"
+# SHA256 of the prebuilt $Platform tarball (#3665). Bump when dfnr-libs is rebuilt.
+$TarballSha256 = "61541e9bb215c163d19baf91d63c24bc013850b3a502fcf7d2956595e012195a"
 $DownloadUrl = "https://github.com/$ReleaseRepo/releases/download/$ReleaseTag/$Tarball"
 
 Write-Host "Trying pre-built binary from $DownloadUrl ..." -ForegroundColor Cyan
 try {
     $TarPath = Join-Path $env:TEMP $Tarball
     Invoke-WebRequest -Uri $DownloadUrl -OutFile $TarPath -UseBasicParsing -ErrorAction Stop
+    Confirm-Sha256 -Path $TarPath -Expected $TarballSha256
     if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Force -Path $OutDir | Out-Null }
     tar xzf $TarPath -C $OutDir
     Remove-Item $TarPath -ErrorAction SilentlyContinue

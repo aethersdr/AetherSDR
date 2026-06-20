@@ -27,6 +27,9 @@ set -euo pipefail
 
 QTKEYCHAIN_VERSION="0.16.0"
 QTKEYCHAIN_REPO="https://github.com/frankosterfeld/qtkeychain.git"
+# Immutable commit the 0.16.0 tag points to (#3665). Pinning the commit, not
+# just the tag, defends against a moved/retagged release. Bump with the version.
+QTKEYCHAIN_COMMIT="aa6da344e1a20b9194e12bace3665caeea6b6304"
 OUT_DIR="third_party/qtkeychain"
 
 # ── Already set up? (lets CI cache third_party/qtkeychain) ───────────────
@@ -62,6 +65,15 @@ SRC_DIR="$(dirname "$OUT_DIR_ABS")/qtkeychain-src"
 rm -rf "$SRC_DIR" "$BUILD_DIR"
 echo "Cloning qtkeychain $QTKEYCHAIN_VERSION..."
 git clone --depth 1 --branch "$QTKEYCHAIN_VERSION" "$QTKEYCHAIN_REPO" "$SRC_DIR"
+
+# Verify the tag resolved to the pinned commit (supply-chain hardening #3665).
+ACTUAL_COMMIT="$(git -C "$SRC_DIR" rev-parse HEAD)"
+if [ "$ACTUAL_COMMIT" != "$QTKEYCHAIN_COMMIT" ]; then
+    echo "ERROR: qtkeychain $QTKEYCHAIN_VERSION resolved to $ACTUAL_COMMIT," >&2
+    echo "       expected $QTKEYCHAIN_COMMIT (tag moved or tampering)." >&2
+    exit 1
+fi
+echo "Verified qtkeychain commit $QTKEYCHAIN_COMMIT"
 
 # ── Build + install ──────────────────────────────────────────────────────
 echo "Building qtkeychain $QTKEYCHAIN_VERSION from source..."

@@ -20,11 +20,15 @@ $ErrorActionPreference = "Stop"
 # the same tarball but has been intermittently unreachable from GitHub-
 # hosted Windows runners.  Try GitHub first, fall back to xiph, retry
 # each with backoff before failing the build.
+. "$PSScriptRoot\_verify_sha256.ps1"
 $OpusVersion = "1.5.2"
 $OpusSrcUrls = @(
     "https://github.com/xiph/opus/releases/download/v${OpusVersion}/opus-${OpusVersion}.tar.gz",
     "https://downloads.xiph.org/releases/opus/opus-${OpusVersion}.tar.gz"
 )
+# SHA256 of the release tarball (#3665) — identical on both mirrors above, so
+# one pin verifies whichever served the file. Bump alongside the version.
+$OpusSha256  = "65c1d2f78b9f2fb20082c38cbe47c951ad5839345876e46941612ee87f9a7ce1"
 $OutDir      = "third_party\opus"
 $TarFile     = "third_party\opus-${OpusVersion}.tar.gz"
 $VsVars      = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
@@ -69,6 +73,7 @@ if (-not (Test-Path $TarFile)) {
         Write-Error "All Opus download attempts failed (tried $($OpusSrcUrls.Count) mirrors x 3 retries)"
         exit 1
     }
+    Confirm-Sha256 -Path $TarFile -Expected $OpusSha256
 }
 
 # ── Extract headers ──────────────────────────────────────────────────────

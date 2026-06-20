@@ -14,9 +14,12 @@
 #>
 
 $ErrorActionPreference = "Stop"
+. "$PSScriptRoot\_verify_sha256.ps1"
 
 $HidapiVersion = "0.14.0"
 $HidapiUrl     = "https://github.com/libusb/hidapi/archive/refs/tags/hidapi-${HidapiVersion}.tar.gz"
+# SHA256 of the GitHub source archive (#3665). Bump alongside the version.
+$HidapiSha256  = "a5714234abe6e1f53647dd8cba7d69f65f71c558b7896ed218864ffcf405bcbd"
 $OutDir        = "third_party\hidapi"
 $TarFile       = "third_party\hidapi-${HidapiVersion}.tar.gz"
 
@@ -37,6 +40,7 @@ New-Item -ItemType Directory -Force -Path "$OutDir\bin" | Out-Null
 if (-not (Test-Path $TarFile)) {
     Write-Host "Downloading hidapi ${HidapiVersion} source..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $HidapiUrl -OutFile $TarFile
+    Confirm-Sha256 -Path $TarFile -Expected $HidapiSha256
 }
 
 # ── Extract ──────────────────────────────────────────────────────────────

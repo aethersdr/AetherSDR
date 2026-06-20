@@ -15,9 +15,12 @@
 #>
 
 $ErrorActionPreference = "Stop"
+. "$PSScriptRoot\_verify_sha256.ps1"
 
 $OrtVersion = "1.18.1"
 $OrtUrl     = "https://github.com/microsoft/onnxruntime/releases/download/v${OrtVersion}/onnxruntime-win-x64-${OrtVersion}.zip"
+# SHA256 of the release zip (#3665). Bump alongside the version.
+$OrtSha256  = "53fb7226fe3cf16001afd1eae79e35f891a20e80bd686185d62ea878e6f9b1a6"
 $OutDir     = "third_party\onnxruntime"
 $ZipFile    = "third_party\onnxruntime-win-x64-${OrtVersion}.zip"
 
@@ -38,6 +41,7 @@ New-Item -ItemType Directory -Force -Path "$OutDir\bin" | Out-Null
 if (-not (Test-Path $ZipFile)) {
     Write-Host "Downloading ONNX Runtime ${OrtVersion} prebuilt package..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $OrtUrl -OutFile $ZipFile
+    Confirm-Sha256 -Path $ZipFile -Expected $OrtSha256
 }
 
 # ── Extract ──────────────────────────────────────────────────────────────

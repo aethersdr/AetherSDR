@@ -16,9 +16,12 @@
 #>
 
 $ErrorActionPreference = "Stop"
+. "$PSScriptRoot\_verify_sha256.ps1"
 
 $QtKeychainVersion = "0.16.0"
 $QtKeychainUrl     = "https://github.com/frankosterfeld/qtkeychain/archive/refs/tags/${QtKeychainVersion}.tar.gz"
+# SHA256 of the GitHub source archive (#3665). Bump alongside the version.
+$QtKeychainSha256  = "3be26ec4ae30eecf0c2ff7572ba83799791b157c76e15a05ef35f23dc25e4054"
 $OutDir            = "$PSScriptRoot\..\..\third_party\qtkeychain"
 $TarFile           = "$PSScriptRoot\..\..\third_party\qtkeychain-${QtKeychainVersion}.tar.gz"
 
@@ -52,6 +55,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 if (-not (Test-Path $TarFile)) {
     Write-Host "Downloading qtkeychain ${QtKeychainVersion} source..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $QtKeychainUrl -OutFile $TarFile
+    Confirm-Sha256 -Path $TarFile -Expected $QtKeychainSha256
 }
 
 # ── Extract ──────────────────────────────────────────────────────────────

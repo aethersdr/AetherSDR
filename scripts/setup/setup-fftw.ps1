@@ -17,8 +17,11 @@
 #>
 
 $ErrorActionPreference = "Stop"
+. "$PSScriptRoot\_verify_sha256.ps1"
 
 $FftwUrl   = "https://fftw.org/pub/fftw/fftw-3.3.5-dll64.zip"
+# SHA256 of the FFTW Windows DLL zip (#3665). Bump if the URL/version changes.
+$FftwSha256 = "cfd88dc0e8d7001115ea79e069a2c695d52c8947f5b4f3b7ac54a192756f439f"
 $OutDir    = "third_party\fftw3"
 $ZipFile   = "third_party\fftw3-dll64.zip"
 # Locate vcvars64.bat in a version/edition-agnostic way. vswhere lives at a
@@ -63,6 +66,7 @@ New-Item -ItemType Directory -Force -Path "$OutDir\bin" | Out-Null
 if (-not (Test-Path $ZipFile)) {
     Write-Host "Downloading FFTW3 prebuilt DLLs..." -ForegroundColor Cyan
     Invoke-WebRequest -Uri $FftwUrl -OutFile $ZipFile
+    Confirm-Sha256 -Path $ZipFile -Expected $FftwSha256
 }
 
 # ── Extract ──────────────────────────────────────────────────────────────
