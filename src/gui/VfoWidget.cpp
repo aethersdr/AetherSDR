@@ -1,5 +1,7 @@
 #include "VfoWidget.h"
 #include "PhaseKnob.h"
+#include "SmartMtrWidget.h"
+#include "MeterViewController.h"
 #include "ComboStyle.h"
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
@@ -244,6 +246,15 @@ static const QString kModeBtn =
 static const QString kLabelStyle =
     "QLabel { background: transparent; border: none; color: #8aa8c0; font-size: 13px; }";
 
+// Meter-view selector buttons.  Unselected look matches the DSP NR/NB/ANF
+// toggles exactly (kDspToggle base + hover); the selected/checked look matches
+// an enabled filter preset exactly (kModeBtn's blue checked rule).
+static const QString kMeterOptBtn =
+    "QPushButton { background: #1a2a3a; border: 1px solid #304050; border-radius: 2px; "
+    "color: #c8d8e8; font-size: 13px; font-weight: bold; padding: 2px 4px; }"
+    "QPushButton:checked { background: #0070c0; color: #ffffff; border: 1px solid #0090e0; }"
+    "QPushButton:hover { border: 1px solid #0090e0; }";
+
 static bool likelyTxAntennaFallbackToken(const QString& token)
 {
     const QString upper = token.toUpper();
@@ -288,6 +299,14 @@ VfoWidget::VfoWidget(QWidget* parent)
     });
 
     buildUI();
+
+    // Meter view (standard S-Meter vs SmartMTR) is a global, live-updating
+    // choice owned by MeterViewController.  Apply the current value, then track
+    // changes so a toggle on any flag updates this one too.  Restores the
+    // persisted choice for flags opened later or after an app restart.
+    applyMeterView(MeterViewController::instance().smartMtr());
+    connect(&MeterViewController::instance(), &MeterViewController::changed,
+            this, &VfoWidget::applyMeterView);
 
     connect(&SliceColorManager::instance(), &SliceColorManager::colorsChanged,
             this, [this]() {
@@ -400,6 +419,14 @@ void VfoWidget::mousePressEvent(QMouseEvent* ev)
     if (ev->button() == Qt::LeftButton && m_sliceBadge && m_sliceBadge->isVisible()
         && m_sliceBadge->geometry().contains(ev->pos())) {
         QTimer::singleShot(0, this, [this] { setCollapsed(true); });
+        return;
+    }
+    // Click on the meter strip → toggle the inline S-Meter / SmartMTR selector.
+    if (ev->button() == Qt::LeftButton && m_meterStack
+        && m_meterStack->geometry().contains(ev->pos())) {
+        if (m_meterMenuRow) {
+            setMeterMenuOpen(!m_meterMenuRow->isVisible());
+        }
         return;
     }
     if (m_slice)
@@ -777,15 +804,40 @@ void VfoWidget::buildUI()
     }
 #endif
 
-    // ── S-meter + dBm row (75/25 split) ────────────────────────────────────
-    // S-meter bar is painted in paintEvent; spacer reserves its space.
-    // dBm label sits to the right.
-    auto* meterRow = new QHBoxLayout;
+    // ── Meter area: stacked S-meter / SmartMTR ─────────────────────────────
+    // Page 0 (standard): S-meter bar painted in paintEvent over a transparent
+    // spacer (75%) + dBm label (25%).  Page 1: the SmartMTR component, full
+    // width.  Which page is shown is driven globally by MeterViewController;
+    // the whole strip is the click target for the meter-view menu (see
+    // mousePressEvent).
+    // TabStack sizes to the *current* page, so the S-meter and SmartMTR pages
+    // can each declare their own height and the flag adapts when toggling
+    // between them (no shared fixed height). (#SmartMTR)
+    m_meterStack = new TabStack(this);
+    m_meterStack->setAttribute(Qt::WA_TranslucentBackground);
+    m_meterStack->setAccessibleName(tr("Signal meter"));
+    m_meterStack->setAccessibleDescription(
+        tr("Click to reveal the S-Meter / SmartMTR selector"));
+    // Clickable control → hand cursor (children are mouse-transparent, so the
+    // cursor falls through to the strip).
+    m_meterStack->setCursor(Qt::PointingHandCursor);
+
+    auto* stdMeterPage = new QWidget;
+    stdMeterPage->setAttribute(Qt::WA_TranslucentBackground);
+    // The whole meter strip is one click target (toggles the selector); make its
+    // contents mouse-transparent so clicks fall through to mousePressEvent.
+    stdMeterPage->setAttribute(Qt::WA_TransparentForMouseEvents);
+    auto* meterRow = new QHBoxLayout(stdMeterPage);
+    meterRow->setContentsMargins(0, 0, 0, 0);
     meterRow->setSpacing(4);
 
+    // Original S-meter row geometry (restored): 22px spacer reserves the strip,
+    // the S-meter bar/scale/labels are painted over it in paintEvent.  Keeping
+    // this exactly as the pre-SmartMTR layout makes the S-meter pixel-identical.
     auto* sMeterSpacer = new QWidget;
     sMeterSpacer->setFixedHeight(22);
     sMeterSpacer->setAttribute(Qt::WA_TranslucentBackground);
+    sMeterSpacer->setAttribute(Qt::WA_TransparentForMouseEvents);
     sMeterSpacer->setStyleSheet("QWidget { background: transparent; }");
     meterRow->addWidget(sMeterSpacer, 3);  // 75%
 
@@ -793,9 +845,70 @@ void VfoWidget::buildUI()
     m_dbmLabel->setStyleSheet("QLabel { background: transparent; border: none; "
                                "color: #6888a0; font-size: 11px; }");
     m_dbmLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_dbmLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     meterRow->addWidget(m_dbmLabel, 1);    // 25%
+    m_meterStack->addWidget(stdMeterPage);
 
-    root->addLayout(meterRow);
+    m_meterStack->addWidget(new SmartMtrWidget);
+
+    root->addWidget(m_meterStack);
+
+    // Underline-room spacer: a thin strip between the meter and the tab bar,
+    // shown ONLY while the meter selector is open.  It gives the curved
+    // underline clean room below the indicator (the S-meter's scale labels
+    // otherwise sit flush against the tabs).  Hidden → the meter area is
+    // pixel-identical to the original; shown → tabs shift down a few px. (#SmartMTR)
+    m_meterUnderlineRoom = new QWidget;
+    m_meterUnderlineRoom->setFixedHeight(8);
+    m_meterUnderlineRoom->setAttribute(Qt::WA_TranslucentBackground);
+    m_meterUnderlineRoom->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_meterUnderlineRoom->hide();
+    root->addWidget(m_meterUnderlineRoom);
+
+    // ── Meter-view selector row (S-Meter / SmartMTR) ───────────────────────
+    // Inline panel revealed by clicking the meter strip — NOT a popup.  Added
+    // to the layout BELOW the tab bar (see further down) so it drops down under
+    // the DSP / Mode / X/RIT / DAX line like the tab menus.  The two buttons
+    // match the DSP NR/NB/ANF toggles; the selected one uses the enabled-filter
+    // (blue) checked style.  The choice routes through MeterViewController so it
+    // applies globally and persists.
+    m_meterMenuRow = new QWidget;
+    m_meterMenuRow->setAttribute(Qt::WA_TranslucentBackground);
+    auto* meterMenuLayout = new QHBoxLayout(m_meterMenuRow);
+    // Small bottom margin so the buttons aren't flush against the flag's edge.
+    meterMenuLayout->setContentsMargins(0, 0, 0, 6);
+    meterMenuLayout->setSpacing(3);
+
+    m_sMeterOptBtn = new QPushButton(tr("S-Meter"));
+    m_sMeterOptBtn->setCheckable(true);
+    m_sMeterOptBtn->setFixedHeight(26);
+    m_sMeterOptBtn->setStyleSheet(kMeterOptBtn);
+    m_sMeterOptBtn->setAccessibleName(tr("Standard S-Meter view"));
+    m_sMeterOptBtn->setCursor(Qt::PointingHandCursor);
+    meterMenuLayout->addWidget(m_sMeterOptBtn, 1);
+
+    m_smartMtrOptBtn = new QPushButton(tr("SmartMTR"));
+    m_smartMtrOptBtn->setCheckable(true);
+    m_smartMtrOptBtn->setFixedHeight(26);
+    m_smartMtrOptBtn->setStyleSheet(kMeterOptBtn);
+    m_smartMtrOptBtn->setAccessibleName(tr("SmartMTR view"));
+    m_smartMtrOptBtn->setCursor(Qt::PointingHandCursor);
+    meterMenuLayout->addWidget(m_smartMtrOptBtn, 1);
+
+    // Per spec: the menu buttons ONLY change which meter is shown — they do
+    // NOT close the menu.  The menu is opened/closed solely by clicking the
+    // meter strip itself (see mousePressEvent).
+    connect(m_sMeterOptBtn, &QPushButton::clicked, this, [this] {
+        MeterViewController::instance().setSmartMtr(false);
+        syncMeterMenuButtons();  // re-assert state if it was already selected
+    });
+    connect(m_smartMtrOptBtn, &QPushButton::clicked, this, [this] {
+        MeterViewController::instance().setSmartMtr(true);
+        syncMeterMenuButtons();
+    });
+
+    m_meterMenuRow->hide();  // hidden until the meter strip is clicked
+    // NOTE: added to the root layout below the tab bar (see after m_tabBar).
 
     // ── Tab bar ────────────────────────────────────────────────────────────
     m_tabBar = new QWidget;
@@ -834,6 +947,10 @@ void VfoWidget::buildUI()
         m_tabBtns.append(btn);
     }
     root->addWidget(m_tabBar);
+
+    // Meter-view selector drops down just below the tab bar, like the tab
+    // menus (built earlier; placed here for the below-tabs layout position).
+    root->addWidget(m_meterMenuRow);
 
     // ── Tab content (stacked) ──────────────────────────────────────────────
     m_tabStack = new TabStack(this);
@@ -2059,6 +2176,52 @@ void VfoWidget::buildTabContent()
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 
+// Close whichever tab panel (DSP/Mode/X-RIT/DAX) is currently open, resetting
+// its button to the inactive style.  No-op if none is open.  Used to keep the
+// meter selector and the tab panels mutually exclusive.
+void VfoWidget::closeActiveTab()
+{
+    if (m_activeTab < 0) {
+        return;
+    }
+    if (m_tabStack) {
+        m_tabStack->hide();
+    }
+    if (m_activeTab < m_tabBtns.size()) {
+        m_tabBtns[m_activeTab]->setStyleSheet(kTabLblNormal);
+        m_tabBtns[m_activeTab]->setChecked(false);
+    }
+    m_activeTab = -1;
+}
+
+// Open or close the S-Meter / SmartMTR selector.  Single source of truth for
+// the selector state: toggles the menu row + its underline-room spacer, keeps
+// mutual-exclusion with the tab panels, refits the flag, and recomposites over
+// the GPU spectrum.
+void VfoWidget::setMeterMenuOpen(bool open)
+{
+    if (!m_meterMenuRow) {
+        return;
+    }
+    m_meterMenuRow->setVisible(open);
+    // The underline-room spacer tracks the menu: shown only while open so the
+    // closed view stays pixel-exact. (#SmartMTR)
+    if (m_meterUnderlineRoom) {
+        m_meterUnderlineRoom->setVisible(open);
+    }
+    if (open) {
+        closeActiveTab();  // mutual exclusion with the DSP/Mode/... tabs
+    }
+    adjustSize();  // S-Meter/SmartMTR + menu-row heights → refit the flag
+    update();      // repaint the meter-strip underline
+    // The flag composites over the GPU spectrum (QRhiWidget); our update()
+    // doesn't refresh the parent's texture, so force a recomposite, same as
+    // setOpaqueMode(). (#SmartMTR)
+    if (QWidget* p = parentWidget()) {
+        p->update();
+    }
+}
+
 void VfoWidget::showTab(int index)
 {
     if (m_activeTab == index) {
@@ -2077,6 +2240,10 @@ void VfoWidget::showTab(int index)
         m_tabBtns[index]->setChecked(true);
         m_tabStack->setCurrentIndex(index);
         m_tabStack->show();
+        // Mutual exclusion: opening a tab closes the meter selector.
+        if (m_meterMenuRow && m_meterMenuRow->isVisible()) {
+            setMeterMenuOpen(false);
+        }
     }
     relayoutToCurrentContent();
 }
@@ -2636,11 +2803,54 @@ void VfoWidget::paintEvent(QPaintEvent* event)
 
     p.setRenderHint(QPainter::Antialiasing, false);
 
-    // Bar rect: drawn in the S-meter row (75% left portion)
-    const int barX = 6;
-    const int barW = (width() - 12) * 3 / 4;  // 75% of widget width
-    const int barY = m_dbmLabel->y() + (m_dbmLabel->height() - 6) / 2;
-    const int barH = 6;
+    // When the meter-view selector is open, underline the meter strip in the
+    // tab-active accent (#00b4d8).  Unlike the straight tab underline, this one
+    // is a flat line whose ends hook gently upward (a shallow concave-up curve)
+    // for a distinct, finished look. (#SmartMTR)
+    if (m_meterStack && m_meterMenuRow && m_meterMenuRow->isVisible()) {
+        const QRect g = m_meterStack->geometry();
+        // Baseline below the content actually shown: the S-meter's scale labels
+        // overflow the 22px strip, so anchor below them; SmartMTR is contained,
+        // so anchor at the widget bottom.  The underline-room spacer guarantees
+        // this clears the tab row regardless of indicator height. (#SmartMTR)
+        const qreal yBase = m_smartMtr
+            ? g.bottom() + 1.0
+            : meterBarRect().y() + 20.0;
+        const qreal rise   = 2.0;              // how far the ends curve up (tiny)
+        const qreal curveW = 5.0;              // horizontal span of each hook
+        const qreal xL = g.x();
+        const qreal xR = g.x() + g.width();
+
+        QPainterPath underline;
+        underline.moveTo(xL, yBase - rise);              // raised left tip
+        underline.quadTo(xL, yBase, xL + curveW, yBase); // hook down to the flat
+        underline.lineTo(xR - curveW, yBase);            // flat middle
+        underline.quadTo(xR, yBase, xR, yBase - rise);   // hook up to raised right tip
+
+        const bool prevAA = p.testRenderHint(QPainter::Antialiasing);
+        p.setRenderHint(QPainter::Antialiasing, true);
+        QPen underPen(QColor(0x00, 0xb4, 0xd8), 2.0);
+        underPen.setCapStyle(Qt::RoundCap);
+        p.setPen(underPen);
+        p.setBrush(Qt::NoBrush);
+        p.drawPath(underline);
+        p.setRenderHint(QPainter::Antialiasing, prevAA);
+    }
+
+    // SmartMTR view: the SmartMtrWidget page covers the meter strip, so skip
+    // the painted S-meter bar entirely.
+    if (m_smartMtr) {
+        return;
+    }
+
+    // Bar rect: drawn in the S-meter row (75% left portion).  Derived from the
+    // dBm label's position mapped into widget coords so it stays correct now
+    // that the label lives inside the stacked meter page.
+    const QRect bar = meterBarRect();
+    const int barX = bar.x();
+    const int barW = bar.width();
+    const int barY = bar.y();
+    const int barH = bar.height();
 
     // Background
     p.fillRect(barX, barY, barW, barH, QColor(0x10, 0x18, 0x20));
@@ -2712,6 +2922,59 @@ void VfoWidget::paintEvent(QPaintEvent* event)
         p.drawText(tx - 6, lblY, label.second);
     }
 
+}
+
+// ── Meter view (S-Meter / SmartMTR) ─────────────────────────────────────────────
+
+// Geometry of the painted S-meter bar, in VfoWidget coordinates.  The bar sits
+// in the left 75% of the meter strip, vertically centred on the dBm label —
+// mapped into widget coords so it tracks the label inside the stacked page.
+QRect VfoWidget::meterBarRect() const
+{
+    const int barX = 6;
+    const int barW = (width() - 12) * 3 / 4;  // 75% of widget width
+    const int barH = 6;
+    // Original anchor (restored): the bar sits at the dBm label's vertical
+    // centre.  The label is now nested in the stacked page, so map its position
+    // into widget coordinates — this reproduces the pre-SmartMTR bar position
+    // exactly. (#SmartMTR)
+    int barY = barH;
+    if (m_dbmLabel) {
+        barY = m_dbmLabel->mapTo(this, QPoint(0, 0)).y()
+             + (m_dbmLabel->height() - barH) / 2;
+    }
+    return QRect(barX, barY, barW, barH);
+}
+
+// Apply the global meter-view choice: switch the stacked page, sync the inline
+// selector buttons, and repaint.
+void VfoWidget::applyMeterView(bool smartMtr)
+{
+    m_smartMtr = smartMtr;
+    if (m_meterStack) {
+        m_meterStack->setCurrentIndex(smartMtr ? 1 : 0);
+    }
+    syncMeterMenuButtons();
+    adjustSize();  // S-Meter and SmartMTR pages may differ in height → resize the flag
+    update();  // repaint the painted S-meter bar (or clear it)
+    // Recomposite over the GPU spectrum so the switched meter is visible while
+    // the menu stays open (QRhiWidget — see mousePressEvent). (#SmartMTR)
+    if (QWidget* p = parentWidget()) {
+        p->update();
+    }
+}
+
+// Reflect the current meter-view choice on the inline selector buttons.  The
+// selected one is checked → enabled-filter (blue) style; the other is the
+// plain DSP-toggle look.
+void VfoWidget::syncMeterMenuButtons()
+{
+    if (m_sMeterOptBtn) {
+        m_sMeterOptBtn->setChecked(!m_smartMtr);
+    }
+    if (m_smartMtrOptBtn) {
+        m_smartMtrOptBtn->setChecked(m_smartMtr);
+    }
 }
 
 // ── Signal level ──────────────────────────────────────────────────────────────

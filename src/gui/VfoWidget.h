@@ -165,8 +165,17 @@ private:
 
     void buildUI();
     void buildTabContent();
+    // Meter view (standard S-Meter vs SmartMTR component).  Driven globally by
+    // MeterViewController; m_meterStack switches pages and meterBarRect() locates
+    // the painted bar.  The inline selector row (m_meterMenuRow) is revealed by
+    // clicking the meter strip; syncMeterMenuButtons() reflects the choice.
+    void applyMeterView(bool smartMtr);
+    void syncMeterMenuButtons();
+    void setMeterMenuOpen(bool open);  // open/close the S-Meter/SmartMTR selector
+    QRect meterBarRect() const;
     void updateTxBadgeStyle(bool isTx);
     void showTab(int index);
+    void closeActiveTab();  // close any open DSP/Mode/... tab panel
     void updateFreqLabel();
     bool cancelDirectEntry();
     void updateFilterLabel();
@@ -234,6 +243,18 @@ private:
     QLineEdit* m_freqEdit{nullptr};
     QStackedWidget* m_freqStack{nullptr};
     QLabel* m_dbmLabel{nullptr};
+    // Meter strip: page 0 = standard S-meter (painted bar + dBm label),
+    // page 1 = SmartMTR component.  m_smartMtr mirrors the current page.
+    QStackedWidget* m_meterStack{nullptr};
+    bool m_smartMtr{false};
+    // Inline selector row revealed by clicking the meter strip (not a popup),
+    // shown between the meter and the tab bar.
+    QWidget* m_meterMenuRow{nullptr};
+    QPushButton* m_sMeterOptBtn{nullptr};
+    QPushButton* m_smartMtrOptBtn{nullptr};
+    // Thin spacer between the meter and the tab bar, shown only while the meter
+    // selector is open, to give the curved underline room below the indicator.
+    QWidget* m_meterUnderlineRoom{nullptr};
     QString m_directEntrySource{"vfo-direct-entry"};
 
     // Sub-menu tabs

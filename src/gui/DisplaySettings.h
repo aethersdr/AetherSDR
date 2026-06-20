@@ -27,6 +27,18 @@ public:
         write(o);
     }
 
+    // VFO meter view: false = standard S-meter, true = SmartMTR component.
+    // Global (not per-slice) — see MeterViewController for the live-broadcast
+    // layer that fans this choice out to every open VFO flag.
+    static bool smartMtr() { return readObj().value("smartMtr").toString("False") == "True"; }
+
+    static void setSmartMtr(bool on)
+    {
+        QJsonObject o = readObj();
+        o["smartMtr"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
     // One-shot migration from the legacy "LeanMode" flat key.  Run at app
     // startup before any caller reads the new blob.  Safe to call repeatedly:
     // returns immediately if the new blob already exists.
