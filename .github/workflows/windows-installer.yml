@@ -239,7 +239,7 @@ jobs:
       # ----------------------------------------------------------------------
       - name: Setup Microsoft Store Developer CLI
         if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
-        uses: microsoft/microsoft-store-apppublisher@15abd1c50fcc164b19cb240fb04ef3c49bf715a2  # v1.1
+        uses: microsoft/microsoft-store-apppublisher@b76227f539d68e6465f79bbbc82ed92f61081aa4  # v1.3
 
       - name: Stage Microsoft Store submission (draft)
         if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
