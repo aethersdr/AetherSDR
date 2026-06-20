@@ -705,15 +705,21 @@ void ThemeManager::readScopeFromJson(const QJsonObject& obj, ThemeScope* into)
         const QJsonObject children = obj.value("scopes").toObject();
         for (auto it = children.constBegin(); it != children.constEnd(); ++it) {
             const QString name = it.key();
-            auto child = std::make_unique<ThemeScope>();
-            child->name = name;
-            child->path = into->path.isEmpty()
-                              ? name
-                              : into->path + QLatin1Char('/') + name;
-            child->parent = into;
-            ThemeScope* raw = child.get();
-            into->children.emplace(name, std::move(child));
-            readScopeFromJson(it.value().toObject(), raw);
+            ThemeScope* childScope = nullptr;
+            auto existing = into->children.find(name);
+            if (existing != into->children.end()) {
+                childScope = existing->second.get();
+            } else {
+                auto child = std::make_unique<ThemeScope>();
+                child->name = name;
+                child->path = into->path.isEmpty()
+                                  ? name
+                                  : into->path + QLatin1Char('/') + name;
+                child->parent = into;
+                childScope = child.get();
+                into->children.emplace(name, std::move(child));
+            }
+            readScopeFromJson(it.value().toObject(), childScope);
         }
     }
 }

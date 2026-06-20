@@ -604,6 +604,72 @@ int main(int argc, char** argv)
         EXPECT_TRUE(tm.isOverriddenAt("deep/middle/leaf", "color.accent"));
     }
 
+    // ── Scope tree: theme JSON merges into pre-seeded applet scopes ──
+    // seedBuiltinDefaults() creates applet/{tx,rx,comp} before every
+    // load.  Saved user overrides under those paths must merge into the
+    // existing nodes rather than being read into discarded duplicates.
+    {
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        const QString themeName = QString("Scope Merge Probe");
+        EXPECT_TRUE(tm.saveCurrentThemeAs(themeName));
+        EXPECT_EQ(tm.activeTheme(), themeName);
+
+        const int rxFreqSize = 41;
+        const int vfoFreqSize = 37;
+        const QColor compColor("#123abc");
+        tm.setSizing("applet/rx", "font.size.freq", rxFreqSize);
+        tm.setSizing("spectrum/vfo", "font.size.freq", vfoFreqSize);
+        tm.setColor("applet/comp", "color.slider.foreground", compColor);
+
+        EXPECT_EQ(tm.sizingAt("applet/rx", "font.size.freq"), rxFreqSize);
+        EXPECT_EQ(tm.sizingAt("spectrum/vfo", "font.size.freq"), vfoFreqSize);
+        EXPECT_EQ(tm.colorAt("applet/comp", "color.slider.foreground").name().toLower(),
+                  compColor.name().toLower());
+
+        EXPECT_TRUE(tm.setActiveTheme("Default Dark"));
+        EXPECT_TRUE(tm.setActiveTheme(themeName));
+
+        EXPECT_EQ(tm.sizingAt("applet/rx", "font.size.freq"), rxFreqSize);
+        EXPECT_EQ(tm.sizingAt("spectrum/vfo", "font.size.freq"), vfoFreqSize);
+        EXPECT_EQ(tm.colorAt("applet/comp", "color.slider.foreground").name().toLower(),
+                  compColor.name().toLower());
+    }
+
+    // ── Scope tree: themes with no applet overrides keep seeded defaults ──
+    // A sparse user theme that does not mention applet/* should still
+    // inherit the built-in per-applet differentiation after load.
+    {
+        const QString sparseDir = tmp.path() + "/_sparse_theme_src";
+        QDir().mkpath(sparseDir);
+        const QString sparsePath = sparseDir + "/sparse-theme.json";
+        QFile sf(sparsePath);
+        EXPECT_TRUE(sf.open(QIODevice::WriteOnly));
+        sf.write(R"({
+            "schemaVersion": 2,
+            "name": "Sparse Scope Probe",
+            "scopes": {
+                "root": {
+                    "tokens": {
+                        "color.accent": "#102030"
+                    }
+                }
+            }
+        })");
+        sf.close();
+
+        QString sparseErr;
+        const QString importedSparse = tm.importThemeFromFile(
+            sparsePath, &sparseErr);
+        EXPECT_EQ(importedSparse, QString("Sparse Scope Probe"));
+        EXPECT_TRUE(sparseErr.isEmpty());
+        EXPECT_EQ(tm.color("color.accent").name().toLower(),
+                  QString("#102030"));
+        EXPECT_EQ(tm.colorAt("applet/rx", "color.slider.foreground").name().toLower(),
+                  QString("#4dd87a"));
+        EXPECT_EQ(tm.colorAt("applet/comp", "color.slider.foreground").name().toLower(),
+                  QString("#ffb84d"));
+    }
+
     // ── Compound font tokens: setFontToken round-trip ──
     // setFontToken stores a ThemeFont; fontTokenAt reads it back via the
     // same scope-walk used by every other accessor.  Pins the per-field
