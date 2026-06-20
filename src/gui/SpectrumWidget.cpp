@@ -3611,6 +3611,7 @@ void SpectrumWidget::setTransmitting(bool tx)
 {
     if (tx && !m_transmitting) {
         m_preTxAutoBlack = m_autoBlackThresh;  // save before TX
+        m_nextFallbackWaterfallRowMs = 0;      // first TX FFT row should render immediately
         beginTxDbmRangeFreeze();
     }
     if (!tx && m_transmitting) {
@@ -3992,12 +3993,19 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         // native waterfall path.
         const bool txAffectsPan = txWaterfallAffectsThisPan();
         if (txAffectsPan && m_showTxInWaterfall) {
-            const bool visibleStream = beginWaterfallStreamWrite(false);
-            auto restoreStream = qScopeGuard([&] {
-                endWaterfallStreamWrite(false, visibleStream);
-            });
-            if (!m_waterfall.isNull()) {
-                pushWaterfallRow(*spectrumBins, m_waterfall.width());
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (m_nextFallbackWaterfallRowMs <= 0) {
+                m_nextFallbackWaterfallRowMs = now;
+            }
+            if (now >= m_nextFallbackWaterfallRowMs) {
+                const bool visibleStream = beginWaterfallStreamWrite(false);
+                auto restoreStream = qScopeGuard([&] {
+                    endWaterfallStreamWrite(false, visibleStream);
+                });
+                if (!m_waterfall.isNull()) {
+                    pushWaterfallRow(*spectrumBins, m_waterfall.width());
+                    m_nextFallbackWaterfallRowMs = now + waterfallFallbackIntervalMs();
+                }
             }
         } else if (!txAffectsPan) {
             const qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -6348,8 +6356,8 @@ QRgb SpectrumWidget::intensityToRgb(float intensity) const
 void SpectrumWidget::pushWaterfallRow(const QVector<float>& bins, int destWidth,
                                       double tileLowMhz, double tileHighMhz)
 {
-    // Callers own cadence: TX can push one row per FFT frame, while RX stale-
-    // native fallback is explicitly paced by pushRxWaterfallFallbackIfDue().
+    // Callers own cadence: TX and RX stale-native fallback pace FFT-derived
+    // rows from the requested waterfall interval before appending here.
     // Time-axis labelling uses m_wfMsPerRow, seeded from the requested rate and
     // corrected from appended-row timestamps, so the scale follows whichever
     // path is currently producing visible rows.
