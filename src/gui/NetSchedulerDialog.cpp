@@ -5,6 +5,8 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDate>
+#include <QDateEdit>
 #include <QDateTime>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
@@ -63,7 +65,9 @@ QString formatNext(const NetEntry& entry)
 
 struct EditorControls {
     QLineEdit* name{nullptr};
-    QComboBox* freqUnit{nullptr};  // Daily/Weekly/Monthly
+    QComboBox* freqUnit{nullptr};  // Once/Daily/Weekly/Monthly
+    QDateEdit* date{nullptr};      // one-time date (Once)
+    QLabel* dateLabel{nullptr};
     QSpinBox* interval{nullptr};
     QLabel* intervalUnit{nullptr};
     QFrame* weekdayRow{nullptr};
@@ -84,14 +88,17 @@ struct EditorControls {
 
 QString buildRrule(const EditorControls& c)
 {
-    const int kind = c.freqUnit->currentIndex();  // 0 daily, 1 weekly, 2 monthly
+    const int kind = c.freqUnit->currentIndex();  // 0 once, 1 daily, 2 weekly, 3 monthly
     const int interval = c.interval->value();
     const QString intervalPart = interval > 1 ? QString(";INTERVAL=%1").arg(interval) : QString();
 
     if (kind == 0)
+        return QString();  // one-time / "Repeat = Never"
+
+    if (kind == 1)
         return QString("FREQ=DAILY%1").arg(intervalPart);
 
-    if (kind == 1) {
+    if (kind == 2) {
         QStringList codes;
         for (int i = 0; i < 7; ++i) {
             if (c.weekdayChips[i]->isChecked())
@@ -119,15 +126,15 @@ void loadRuleIntoControls(EditorControls& c, const QString& rrule)
 
     switch (rule.freq) {
     case NetRecurrence::ParsedRule::Freq::Daily:
-        c.freqUnit->setCurrentIndex(0);
+        c.freqUnit->setCurrentIndex(1);
         break;
     case NetRecurrence::ParsedRule::Freq::Weekly:
-        c.freqUnit->setCurrentIndex(1);
+        c.freqUnit->setCurrentIndex(2);
         for (int i = 0; i < 7; ++i)
             c.weekdayChips[i]->setChecked(rule.weekdays.contains(i + 1));
         break;
     case NetRecurrence::ParsedRule::Freq::Monthly: {
-        c.freqUnit->setCurrentIndex(2);
+        c.freqUnit->setCurrentIndex(3);
         const int ordIdx = (rule.monthlyOrdinal == -1) ? 5 : (rule.monthlyOrdinal - 1);
         c.monthlyOrdinal->setCurrentIndex(qBound(0, ordIdx, 5));
         if (rule.monthlyWeekday >= 1 && rule.monthlyWeekday <= 7)
@@ -135,7 +142,7 @@ void loadRuleIntoControls(EditorControls& c, const QString& rrule)
         break;
     }
     case NetRecurrence::ParsedRule::Freq::Invalid:
-        c.freqUnit->setCurrentIndex(1);
+        c.freqUnit->setCurrentIndex(2);
         break;
     }
 }
@@ -183,11 +190,12 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     // Repeats row.
     auto* repeatRow = new QHBoxLayout();
     c.freqUnit = new QComboBox(&dlg);
-    c.freqUnit->addItems({QStringLiteral("Daily"), QStringLiteral("Weekly"),
-                          QStringLiteral("Monthly")});
-    c.freqUnit->setCurrentIndex(1);
+    c.freqUnit->addItems({QStringLiteral("Once (no repeat)"), QStringLiteral("Daily"),
+                          QStringLiteral("Weekly"), QStringLiteral("Monthly")});
+    c.freqUnit->setCurrentIndex(2);
     repeatRow->addWidget(c.freqUnit);
-    repeatRow->addWidget(new QLabel(QStringLiteral("every"), &dlg));
+    auto* everyLabel = new QLabel(QStringLiteral("every"), &dlg);
+    repeatRow->addWidget(everyLabel);
     c.interval = new QSpinBox(&dlg);
     c.interval->setRange(1, 52);
     c.interval->setValue(1);
@@ -196,6 +204,13 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     repeatRow->addWidget(c.intervalUnit);
     repeatRow->addStretch(1);
     form->addRow(QStringLiteral("Repeats"), repeatRow);
+
+    // One-time date (Once only).
+    c.date = new QDateEdit(QDate::currentDate(), &dlg);
+    c.date->setCalendarPopup(true);
+    c.date->setDisplayFormat(QStringLiteral("ddd MMM d, yyyy"));
+    c.dateLabel = new QLabel(QStringLiteral("On date"), &dlg);
+    form->addRow(c.dateLabel, c.date);
 
     // Weekday chips (weekly only).
     c.weekdayRow = new QFrame(&dlg);
@@ -327,6 +342,8 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
         e.rrule = buildRrule(c);
         e.timeOfDay = c.time->time().toString("HH:mm");
         e.timezone = c.timezone->currentText().trimmed();
+        if (e.rrule.isEmpty())  // one-time: anchor to the chosen date
+            e.startDate = c.date->date().toString("yyyy-MM-dd");
         e.reminderLeadMinutes = leadMinutesFromIndex(c.lead->currentIndex());
         e.notes = c.notes->text();
         e.preset.freq = c.freq->value();
@@ -336,13 +353,19 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
         return e;
     };
 
-    auto refresh = [&c, snapshotEntry]() {
-        const int kind = c.freqUnit->currentIndex();
-        c.intervalUnit->setText(kind == 0   ? QStringLiteral("day(s)")
-                                : kind == 1 ? QStringLiteral("week(s)")
+    auto refresh = [&c, everyLabel, snapshotEntry]() {
+        const int kind = c.freqUnit->currentIndex();  // 0 once,1 daily,2 weekly,3 monthly
+        const bool once = (kind == 0);
+        c.intervalUnit->setText(kind == 1   ? QStringLiteral("day(s)")
+                                : kind == 2 ? QStringLiteral("week(s)")
                                             : QStringLiteral("month(s)"));
-        c.weekdayRow->setVisible(kind == 1);
-        c.monthlyRow->setVisible(kind == 2);
+        everyLabel->setVisible(!once);
+        c.interval->setVisible(!once);
+        c.intervalUnit->setVisible(!once);
+        c.dateLabel->setVisible(once);
+        c.date->setVisible(once);
+        c.weekdayRow->setVisible(kind == 2);
+        c.monthlyRow->setVisible(kind == 3);
         c.nextLabel->setText(QStringLiteral("Next: ") + formatNext(snapshotEntry()));
     };
 
@@ -351,6 +374,7 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
     QObject::connect(c.monthlyOrdinal, &QComboBox::currentIndexChanged, &dlg, [refresh](int) { refresh(); });
     QObject::connect(c.monthlyWeekday, &QComboBox::currentIndexChanged, &dlg, [refresh](int) { refresh(); });
     QObject::connect(c.time, &QTimeEdit::timeChanged, &dlg, [refresh](const QTime&) { refresh(); });
+    QObject::connect(c.date, &QDateEdit::dateChanged, &dlg, [refresh](const QDate&) { refresh(); });
     QObject::connect(c.timezone, &QComboBox::currentTextChanged, &dlg, [refresh](const QString&) { refresh(); });
     QObject::connect(c.lead, &QComboBox::currentIndexChanged, &dlg, [refresh](int) { refresh(); });
     for (int i = 0; i < 7; ++i)
@@ -376,7 +400,23 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
 
     // Seed controls from the entry being edited.
     c.name->setText(entry.name);
-    loadRuleIntoControls(c, entry.rrule);
+    if (entry.rrule.trimmed().isEmpty()) {
+        if (isNew) {
+            // New nets default to Weekly on today's weekday, not Once.
+            c.freqUnit->setCurrentIndex(2);
+            const int todayDow = QDate::currentDate().dayOfWeek();
+            if (todayDow >= 1 && todayDow <= 7)
+                c.weekdayChips[todayDow - 1]->setChecked(true);
+        } else {
+            c.freqUnit->setCurrentIndex(0);  // saved one-time net
+        }
+    } else {
+        loadRuleIntoControls(c, entry.rrule);
+    }
+    {
+        const QDate seedDate = QDate::fromString(entry.startDate, "yyyy-MM-dd");
+        c.date->setDate(seedDate.isValid() ? seedDate : QDate::currentDate());
+    }
     {
         const QTime t = QTime::fromString(entry.timeOfDay, "HH:mm");
         c.time->setTime(t.isValid() ? t : QTime(20, 0));
@@ -415,8 +455,9 @@ bool editNetEntry(QWidget* parent, NetEntry& entry,
         return false;
 
     NetEntry result = snapshotEntry();
-    // Anchor INTERVAL phasing to today if the entry has no start date yet.
-    if (result.startDate.isEmpty())
+    // Anchor a recurring rule's INTERVAL phasing to today if unset; a one-time
+    // net already carries its chosen date in startDate.
+    if (!result.rrule.isEmpty() && result.startDate.isEmpty())
         result.startDate = QDate::currentDate().toString("yyyy-MM-dd");
     if (result.name.trimmed().isEmpty())
         result.name = QStringLiteral("Unnamed Net");

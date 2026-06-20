@@ -144,6 +144,31 @@ int main()
                      "20:00 CDT equals 01:00 UTC — DST offset applied");
     }
 
+    // --- one-time ("Once" / Repeat = Never) -----------------------------
+    {
+        // Empty rule = single event at startDate + timeOfDay.
+        const QDateTime occ = NetRecurrence::nextOccurrence(
+            "", "20:00", "Etc/UTC", QDate(2026, 6, 20), utc(2026, 6, 19, 0, 0));
+        ok &= expect(occ.toUTC() == utc(2026, 6, 20, 20, 0),
+                     "one-time net fires at its start date/time");
+
+        // Already past → no occurrence.
+        const QDateTime gone = NetRecurrence::nextOccurrence(
+            "", "20:00", "Etc/UTC", QDate(2026, 6, 20), utc(2026, 6, 21, 0, 0));
+        ok &= expect(!gone.isValid(), "one-time net does not recur once past");
+
+        // Same-day-later still fires (the same-day testing case).
+        const QDateTime sameDay = NetRecurrence::nextOccurrence(
+            "", "20:00", "Etc/UTC", QDate(2026, 6, 19), utc(2026, 6, 19, 10, 0));
+        ok &= expect(sameDay.toUTC() == utc(2026, 6, 19, 20, 0),
+                     "one-time net later the same day still fires");
+
+        // No date → nothing.
+        ok &= expect(!NetRecurrence::nextOccurrence("", "20:00", "Etc/UTC", QDate(),
+                                                    utc(2026, 6, 19, 0, 0)).isValid(),
+                     "one-time net with no date yields nothing");
+    }
+
     // --- describeRule ---------------------------------------------------
     {
         ok &= expect(NetRecurrence::describeRule("FREQ=WEEKLY;BYDAY=TU") == "Weekly on Tuesday",
@@ -155,6 +180,7 @@ int main()
                          == "Monthly on the first Sunday",
                      "monthly description");
         ok &= expect(NetRecurrence::describeRule("FREQ=DAILY") == "Daily", "daily description");
+        ok &= expect(NetRecurrence::describeRule("") == "Once", "empty rule describes as Once");
     }
 
     return ok ? 0 : 1;

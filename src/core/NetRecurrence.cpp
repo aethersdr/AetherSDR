@@ -200,16 +200,29 @@ QDateTime nextOccurrence(const QString& rrule,
                          const QDate& startDate,
                          const QDateTime& afterUtc)
 {
-    const ParsedRule rule = parseRule(rrule);
-    if (!rule.isValid())
-        return {};
-
     const QTime time = QTime::fromString(timeOfDay.trimmed(), "HH:mm");
     if (!time.isValid())
         return {};
 
     const QTimeZone tz(timezone.trimmed().toUtf8());
     if (!tz.isValid())
+        return {};
+
+    // An empty rule means a one-time ("Repeat = Never") net: a single event at
+    // startDate + timeOfDay. Returns it only while it is still in the future.
+    if (rrule.trimmed().isEmpty()) {
+        if (!startDate.isValid())
+            return {};
+        QDateTime once(startDate, time, tz);
+        if (!once.isValid())
+            once = QDateTime(startDate, time, tz, QDateTime::TransitionResolution::PreferStandard);
+        if (once.isValid() && once.toUTC() > afterUtc.toUTC())
+            return once;
+        return {};
+    }
+
+    const ParsedRule rule = parseRule(rrule);
+    if (!rule.isValid())
         return {};
 
     // Begin the day-by-day scan from the local date of `afterUtc` so we never
@@ -248,6 +261,9 @@ QDateTime nextOccurrence(const NetEntry& entry, const QDateTime& afterUtc)
 
 QString describeRule(const QString& rrule)
 {
+    if (rrule.trimmed().isEmpty())
+        return QStringLiteral("Once");
+
     const ParsedRule rule = parseRule(rrule);
     if (!rule.isValid())
         return {};

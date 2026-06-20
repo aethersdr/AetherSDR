@@ -8,6 +8,7 @@
 // MemoryRecallPolicy command builders as a memory recall.
 
 #include "MainWindow.h"
+#include "MainWindowHelpers.h"
 
 #include "NetReminderBanner.h"
 #include "NetSchedulerDialog.h"
@@ -16,9 +17,11 @@
 #include "core/MemoryRecallPolicy.h"
 #include "core/NetScheduleStore.h"
 #include "core/NetScheduler.h"
+#include "models/BandSettings.h"
 #include "models/NetEntry.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/XvtrPolicy.h"
 
 #include <QByteArray>
 #include <QDateTime>
@@ -30,6 +33,7 @@
 #include <QStatusBar>
 #include <QString>
 #include <QSystemTrayIcon>
+#include <QTimer>
 
 namespace AetherSDR {
 
@@ -111,6 +115,40 @@ void MainWindow::tuneToNet(const NetEntry& entry)
     const int sliceId = slice->sliceId();
     if (!activeSlice() || activeSlice()->sliceId() != sliceId)
         setActiveSlice(sliceId);
+    slice = m_radioModel.slice(sliceId);
+    if (!slice)
+        return;
+
+    const double freqMhz = entry.preset.freq;
+    const QString slicePanId = slice->panId();
+
+    // If the net is on a different band than the slice currently sits on,
+    // preselect that band's stack memory first — a bare `slice tune` will not
+    // move the panadapter across bands, which is why a cross-band net appears
+    // "not to tune". Same preselect path as a memory recall.
+    if (freqMhz > 0.0) {
+        const QString netBand = BandSettings::bandForFrequency(freqMhz);
+        const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
+        if (netBand != currentBand) {
+            const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
+            const auto stackKeyResult =
+                XvtrPolicy::resolveBandStackKey(netBand, xvtrs, m_radioModel.capabilities());
+            if (stackKeyResult.isSupported()) {
+                clearSwrSweepForBandChange(-1, slicePanId, netBand);
+                m_bandSettings.setCurrentBand(netBand);
+                m_radioModel.sendCommand(
+                    QString("display pan set %1 band=%2").arg(slicePanId, stackKeyResult.key));
+                QTimer::singleShot(300, this, [this, slicePanId]() {
+                    reassertUnmutedSliceAudioForPan(slicePanId);
+                });
+            } else {
+                statusBar()->showMessage(
+                    QString("Can't tune %1 — %2 isn't available on this radio.")
+                        .arg(entry.name, netBand),
+                    5000);
+            }
+        }
+    }
 
     // Reuse the memory-recall command builders for the retune + repeater/tone
     // fixup, and set mode/filter/step directly (a net has no radio-side memory
@@ -132,6 +170,15 @@ void MainWindow::tuneToNet(const NetEntry& entry)
     const QString fixup = buildMemoryRecallSliceFixupCommand(sliceId, entry.preset);
     if (!fixup.isEmpty())
         m_radioModel.sendCommand(fixup);
+
+    // After the band change + retune settle, recenter the panadapter on the net
+    // frequency if it ended up off-screen (mirrors the memory-recall reveal).
+    QTimer::singleShot(750, this, [this, sliceId, freqMhz]() {
+        if (auto* s = m_radioModel.slice(sliceId)) {
+            const double revealMhz = freqMhz > 0.0 ? freqMhz : s->frequency();
+            revealFrequencyIfNeeded(s, revealMhz, TuneIntent::CommandedTargetCenter, "net-tune");
+        }
+    });
 
     statusBar()->showMessage(QString("Tuned to %1").arg(entry.name), 3000);
 }
