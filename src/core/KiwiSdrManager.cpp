@@ -19,6 +19,7 @@ constexpr const char* kKiwiSdrRxAntennasSettingsKey = "KiwiSdrRxAntennas";
 constexpr const char* kVirtualAntennaPrefix = "KIWI:";
 constexpr int kRecoverableReconnectDelayMs = 3000;
 constexpr int kKiwiSdrProfileNameMaxChars = 16;
+constexpr int kKiwiSdrWaterfallRateMax = 4;
 
 QString normalizedProfileEndpoint(const QString& endpoint)
 {
@@ -114,6 +115,22 @@ KiwiSdrReceiverTelemetry KiwiSdrManager::telemetry(const QString& id) const
     return m_telemetry.value(id);
 }
 
+bool KiwiSdrManager::waterfallAvailable(const QString& id) const
+{
+    if (KiwiSdrClient* c = client(id)) {
+        return c->waterfallAvailable();
+    }
+    return m_waterfallAvailable.value(id, true);
+}
+
+QString KiwiSdrManager::waterfallDetail(const QString& id) const
+{
+    if (KiwiSdrClient* c = client(id)) {
+        return c->waterfallAvailabilityDetail();
+    }
+    return m_waterfallDetails.value(id);
+}
+
 bool KiwiSdrManager::isConnected(const QString& id) const
 {
     if (KiwiSdrClient* c = client(id)) {
@@ -170,7 +187,8 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
     updated.name = sanitizedName(profile.name, updated.endpoint);
     updated.waterfallCellDb = std::clamp(updated.waterfallCellDb, -30, 30);
     updated.waterfallFloorDb = std::clamp(updated.waterfallFloorDb, -30, 30);
-    updated.waterfallRate = std::clamp(updated.waterfallRate, 0, 5);
+    updated.waterfallRate =
+        std::clamp(updated.waterfallRate, 0, kKiwiSdrWaterfallRateMax);
     const QString oldEndpoint = m_profiles[idx].endpoint;
     m_profiles[idx] = updated;
     saveSettings();
@@ -220,6 +238,8 @@ void KiwiSdrManager::removeProfile(const QString& id)
 
     m_stateDetails.remove(id);
     m_telemetry.remove(id);
+    m_waterfallAvailable.remove(id);
+    m_waterfallDetails.remove(id);
     m_profiles.removeAt(idx);
     saveSettings();
     // The client is already deleted above, so no further audio will be fed for
@@ -428,7 +448,7 @@ void KiwiSdrManager::setProfileWaterfallSettings(const QString& id, int cellDb,
     KiwiSdrAntennaProfile p = m_profiles[idx];
     p.waterfallCellDb = std::clamp(cellDb, -30, 30);
     p.waterfallFloorDb = std::clamp(floorDb, -30, 30);
-    p.waterfallRate = std::clamp(rate, 0, 5);
+    p.waterfallRate = std::clamp(rate, 0, kKiwiSdrWaterfallRateMax);
     updateProfile(p);
 }
 
@@ -454,7 +474,10 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
             << (detail.isEmpty() ? QString() : QStringLiteral("(") + detail + QStringLiteral(")"));
         if (state == KiwiSdrClient::State::Connecting) {
             m_telemetry.insert(id, {});
+            m_waterfallAvailable.insert(id, true);
+            m_waterfallDetails.remove(id);
             emit profileTelemetryChanged(id, m_telemetry.value(id));
+            emit profileWaterfallAvailabilityChanged(id, true, QString());
         }
         if (state == KiwiSdrClient::State::Connected) {
             const int idx = profileIndex(id);
@@ -485,6 +508,16 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
     connect(c, &KiwiSdrClient::telemetryChanged, this, [this, id, c]() {
         m_telemetry.insert(id, c->telemetry());
         emit profileTelemetryChanged(id, m_telemetry.value(id));
+    });
+    connect(c, &KiwiSdrClient::waterfallAvailabilityChanged,
+            this, [this, id](bool available, const QString& detail) {
+        m_waterfallAvailable.insert(id, available);
+        if (detail.isEmpty()) {
+            m_waterfallDetails.remove(id);
+        } else {
+            m_waterfallDetails.insert(id, detail);
+        }
+        emit profileWaterfallAvailabilityChanged(id, available, detail);
     });
     connect(c, &KiwiSdrClient::decodedAudioReady,
             this, [this, id](const QByteArray& pcm) {
@@ -543,7 +576,9 @@ void KiwiSdrManager::loadSettings()
         p.waterfallFloorDb = std::clamp(
             obj.value(QStringLiteral("waterfallFloorDb")).toInt(0), -30, 30);
         p.waterfallRate = std::clamp(
-            obj.value(QStringLiteral("waterfallRate")).toInt(0), 0, 5);
+            obj.value(QStringLiteral("waterfallRate")).toInt(0),
+            0,
+            kKiwiSdrWaterfallRateMax);
         m_profiles.append(p);
     }
 }
@@ -559,7 +594,8 @@ void KiwiSdrManager::saveSettings() const
         obj.insert(QStringLiteral("autoConnect"), p.autoConnect);
         obj.insert(QStringLiteral("waterfallCellDb"), std::clamp(p.waterfallCellDb, -30, 30));
         obj.insert(QStringLiteral("waterfallFloorDb"), std::clamp(p.waterfallFloorDb, -30, 30));
-        obj.insert(QStringLiteral("waterfallRate"), std::clamp(p.waterfallRate, 0, 5));
+        obj.insert(QStringLiteral("waterfallRate"),
+                   std::clamp(p.waterfallRate, 0, kKiwiSdrWaterfallRateMax));
         profiles.append(obj);
     }
 

@@ -71,6 +71,8 @@ static QString rateSliderLabelText(int sliderValue)
     return QString::number(sliderValue);
 }
 
+static constexpr int kKiwiSdrWaterfallRateMax = 4;
+
 static QString kiwiWaterfallDbText(int db)
 {
     return QStringLiteral("%1%2 dB")
@@ -1766,7 +1768,8 @@ void SpectrumOverlayMenu::setKiwiWaterfallControlMode(bool kiwiMode)
     }
     if (m_rateSlider) {
         m_rateSlider->setRange(kiwiMode ? 0 : WF_RATE_SLIDER_MIN,
-                               kiwiMode ? 5 : WF_RATE_SLIDER_MAX);
+                               kiwiMode ? kKiwiSdrWaterfallRateMax
+                                        : WF_RATE_SLIDER_MAX);
         m_rateSlider->setToolTip(kiwiMode
             ? "KiwiSDR waterfall rate. Auto follows the Flex waterfall rate."
             : "Waterfall rate.");
@@ -1793,7 +1796,7 @@ void SpectrumOverlayMenu::syncKiwiWaterfallSettings(int cellDb, int floorDb,
 
     const int clampedCell = std::clamp(cellDb, -30, 30);
     const int clampedFloor = std::clamp(floorDb, -30, 30);
-    const int clampedRate = std::clamp(rate, 0, 5);
+    const int clampedRate = std::clamp(rate, 0, kKiwiSdrWaterfallRateMax);
     QSignalBlocker b1(m_gainSlider), b2(m_blackSlider),
                    b3(m_rateSlider), b4(m_autoBlackBtn);
 

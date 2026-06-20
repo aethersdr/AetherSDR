@@ -40,6 +40,8 @@ public:
     KiwiSdrClient::State state(const QString& id) const;
     QString stateDetail(const QString& id) const;
     KiwiSdrReceiverTelemetry telemetry(const QString& id) const;
+    bool waterfallAvailable(const QString& id) const;
+    QString waterfallDetail(const QString& id) const;
     bool isConnected(const QString& id) const;
 
     QString assignedProfileForSlice(int sliceId) const;
@@ -80,6 +82,9 @@ signals:
     void profileTelemetryChanged(
         const QString& id,
         const AetherSDR::KiwiSdrReceiverTelemetry& telemetry);
+    void profileWaterfallAvailabilityChanged(const QString& id,
+                                             bool available,
+                                             const QString& detail);
     void profileStreamReset(const QString& id);
     void sliceAssignmentChanged(int sliceId, const QString& profileId);
     void audioSourceEnabledChanged(const QString& id, bool enabled);
@@ -112,6 +117,8 @@ private:
     QHash<QString, QTimer*> m_reconnectTimers;
     QHash<QString, QString> m_stateDetails;
     QHash<QString, KiwiSdrReceiverTelemetry> m_telemetry;
+    QHash<QString, bool> m_waterfallAvailable;
+    QHash<QString, QString> m_waterfallDetails;
     QHash<int, QString> m_sliceAssignments;
     QString m_operatorCallsign;
 };

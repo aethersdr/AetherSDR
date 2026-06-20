@@ -2869,15 +2869,19 @@ void SpectrumWidget::setConnectionAnimationVisible(bool on, const QString& label
 }
 
 void SpectrumWidget::setKiwiSdrConnectionOverlay(bool visible,
-                                                 const QString& detail)
+                                                 const QString& detail,
+                                                 const QString& title)
 {
     const QString trimmedDetail = detail.trimmed();
+    const QString trimmedTitle = title.trimmed();
     if (m_kiwiSdrConnectionOverlayVisible == visible
+        && m_kiwiSdrConnectionOverlayTitle == trimmedTitle
         && m_kiwiSdrConnectionOverlayDetail == trimmedDetail) {
         return;
     }
 
     m_kiwiSdrConnectionOverlayVisible = visible;
+    m_kiwiSdrConnectionOverlayTitle = trimmedTitle;
     m_kiwiSdrConnectionOverlayDetail = trimmedDetail;
     markOverlayDirty();
 }
@@ -3074,7 +3078,9 @@ void SpectrumWidget::drawKiwiSdrConnectionOverlay(QPainter& p,
         return;
     }
 
-    const QString title = QStringLiteral("Not connected to KiwiSDR");
+    const QString title = m_kiwiSdrConnectionOverlayTitle.isEmpty()
+        ? QStringLiteral("Not connected to KiwiSDR")
+        : m_kiwiSdrConnectionOverlayTitle;
     const QString detail = m_kiwiSdrConnectionOverlayDetail.isEmpty()
         ? QStringLiteral("Disconnected")
         : m_kiwiSdrConnectionOverlayDetail;

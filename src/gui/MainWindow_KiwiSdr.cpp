@@ -298,16 +298,32 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
     }
 
     const KiwiSdrAntennaProfile profile = m_kiwiSdrManager->profile(profileId);
+    const KiwiSdrClient::State state = m_kiwiSdrManager->state(profileId);
+    const bool kiwiWaterfallChannelAvailable =
+        state == KiwiSdrClient::State::Connected
+            ? m_kiwiSdrManager->waterfallAvailable(profileId)
+            : true;
     spectrum->setKiwiSdrWaterfallAvailable(true);
     spectrum->setKiwiSdrWaterfallProfile(profileId);
     spectrum->setKiwiSdrWaterfallActive(true);
     spectrum->setKiwiSdrWaterfallAdjustments(profile.waterfallCellDb,
                                              profile.waterfallFloorDb);
-    const KiwiSdrClient::State state = m_kiwiSdrManager->state(profileId);
+    const QString overlayDetail =
+        state == KiwiSdrClient::State::Connected
+            && !kiwiWaterfallChannelAvailable
+            ? m_kiwiSdrManager->waterfallDetail(profileId)
+            : kiwiConnectionOverlayDetail(
+                  state, m_kiwiSdrManager->stateDetail(profileId));
+    const QString overlayTitle =
+        state == KiwiSdrClient::State::Connected
+            && !kiwiWaterfallChannelAvailable
+            ? tr("KiwiSDR waterfall unavailable")
+            : QString();
     spectrum->setKiwiSdrConnectionOverlay(
-        state != KiwiSdrClient::State::Connected,
-        kiwiConnectionOverlayDetail(
-            state, m_kiwiSdrManager->stateDetail(profileId)));
+        state != KiwiSdrClient::State::Connected
+            || !kiwiWaterfallChannelAvailable,
+        overlayDetail,
+        overlayTitle);
     if (menu) {
         menu->syncKiwiWaterfallSettings(profile.waterfallCellDb,
                                         profile.waterfallFloorDb,
@@ -610,6 +626,20 @@ void MainWindow::wireKiwiSdr()
                 syncKiwiSdrPanadapterUiState(panId);
             }
         });
+        connect(m_kiwiSdrManager,
+                &KiwiSdrManager::profileWaterfallAvailabilityChanged,
+                this, [this](const QString& profileId, bool, const QString&) {
+            if (!m_kiwiSdrManager) {
+                return;
+            }
+
+            const int sliceId =
+                m_kiwiSdrManager->assignedSliceForProfile(profileId);
+            if (SliceModel* slice = m_radioModel.slice(sliceId)) {
+                syncKiwiSdrPanadapterUiState(slice->panId());
+            }
+            refreshKiwiSdrAppletReceivers();
+        });
         connect(m_kiwiSdrManager, &KiwiSdrManager::profileStreamReset,
                 this, [this](const QString& profileId) {
             if (!m_panStack || profileId.isEmpty()) {
@@ -663,6 +693,10 @@ void MainWindow::refreshKiwiSdrAppletReceivers()
             receiver.name = m_kiwiSdrManager->displayName(profile.id);
             receiver.state = m_kiwiSdrManager->state(profile.id);
             receiver.detail = m_kiwiSdrManager->stateDetail(profile.id);
+            if (receiver.state == KiwiSdrClient::State::Connected
+                && !m_kiwiSdrManager->waterfallAvailable(profile.id)) {
+                receiver.detail = m_kiwiSdrManager->waterfallDetail(profile.id);
+            }
             const int sliceId = m_kiwiSdrManager->assignedSliceForProfile(profile.id);
             receiver.assignedSlice = m_radioModel.slice(sliceId);
             receivers.append(receiver);

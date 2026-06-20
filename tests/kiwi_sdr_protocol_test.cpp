@@ -26,14 +26,26 @@ int main()
 
     const QByteArray soundFrame =
         QByteArray("SND", 3)
-        + QByteArray::fromHex("051234")
-        + QByteArray::fromHex("0001fffe");
+        + QByteArray::fromHex("051234");
     const SoundFrameHeader soundHeader = parseSoundFrameHeader(soundFrame);
     if (!soundHeader.valid
         || soundHeader.sequence != 5
         || soundHeader.flags != 5
         || soundHeader.hasRssi) {
         return fail("SND header sequence parsing should not invent calibrated RSSI");
+    }
+
+    const QByteArray serverSoundFrame =
+        QByteArray("SND", 3)
+        + QByteArray::fromHex("8012340021021c")
+        + QByteArray::fromHex("0001fffe");
+    const SoundFrameHeader serverSoundHeader =
+        parseSoundFrameHeader(serverSoundFrame);
+    if (!serverSoundHeader.valid
+        || serverSoundHeader.sequence != 0x12
+        || serverSoundHeader.flags != 0x80
+        || serverSoundHeader.hasRssi) {
+        return fail("server SND header sequence parsing is wrong");
     }
 
     QByteArray observedSoundFrame("SND", 3);

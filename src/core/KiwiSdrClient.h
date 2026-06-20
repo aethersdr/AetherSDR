@@ -5,6 +5,7 @@
 #include <QByteArray>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include <QtGlobal>
@@ -14,6 +15,8 @@
 
 class QTimer;
 #ifdef HAVE_WEBSOCKETS
+class QNetworkAccessManager;
+class QNetworkReply;
 class QWebSocket;
 #endif
 
@@ -71,6 +74,11 @@ public:
     }
     KiwiSdrReceiverControls receiverControls() const { return m_receiverControls; }
     KiwiSdrReceiverTelemetry telemetry() const { return m_telemetry; }
+    bool waterfallAvailable() const { return m_waterfallAvailable; }
+    QString waterfallAvailabilityDetail() const
+    {
+        return m_waterfallAvailabilityDetail;
+    }
     static QString normalizeEndpoint(const QString& endpoint);
 
 public slots:
@@ -103,11 +111,35 @@ signals:
     void meterReadingReady(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
     void telemetryChanged();
+    void waterfallAvailabilityChanged(bool available, const QString& detail);
     void recoverableDisconnect(const QString& detail);
 
 private:
+    enum class StreamKind {
+        Sound,
+        Waterfall,
+    };
+
+    struct StartupTraceState {
+        bool authSent{false};
+        bool badpNonzeroSeen{false};
+        bool identUserSent{false};
+        bool browserSent{false};
+        bool compressionSent{false};
+        bool arOkSent{false};
+        bool arOkUsedActualAudioRate{false};
+        bool serverDeClientSent{false};
+        bool squelchSent{false};
+        bool genattnSent{false};
+        bool genSent{false};
+        bool agcSent{false};
+        bool modSent{false};
+        bool keepaliveSentOnSound{false};
+    };
+
     static bool parseEndpoint(const QString& endpoint, QString* host, quint16* port);
     static QString stateLabel(State state);
+    static QString streamLabel(StreamKind stream);
     void setState(State state, const QString& detail);
     void cleanupSockets();
     void sendSoundSetupCommands();
@@ -132,23 +164,44 @@ private:
                                    int* zoom) const;
     QByteArray decodeSoundFrame(const QByteArray& frame);
     QVector<float> decodeWaterfallFrame(const QByteArray& frame) const;
-    void handleBinaryMessage(const QByteArray& frame);
+    void handleBinaryMessage(StreamKind stream, const QByteArray& frame);
     void handleSoundFrame(const QByteArray& frame);
     void handleWaterfallFrame(const QByteArray& frame);
-    void handleMessage(const QByteArray& frame);
-    void handleTextMessage(const QString& text);
+    void handleMessage(StreamKind stream, const QByteArray& frame);
+    void handleTextMessage(StreamKind stream, const QString& text);
     bool updateWaterfallFftBins(int binCount);
+    void updateWaterfallAvailability();
     void updateSoundTelemetry(const QByteArray& frame);
     void updateWaterfallTelemetry(const QByteArray& frame);
     void emitTelemetryChanged();
     void sendWaterfallRateToServer();
     void markSoundAudioReady();
+    QString logEndpoint() const;
+    QString setupTimeoutDetail() const;
     void sendKeepalive();
     void sendSoundCommand(const QString& command);
     void sendWaterfallCommand(const QString& command);
+    void resetProtocolTrace();
+    qint64 protocolTraceElapsedMs() const;
+    void traceProtocolEvent(const QString& event);
+    void traceConnectionInfo(const QString& scheme, quint16 socketPort,
+                             const QString& sessionId,
+                             const QString& origin,
+                             const QString& soundUrl,
+                             const QString& waterfallUrl);
+    void traceOutboundCommand(StreamKind stream, const QString& command,
+                              bool sent);
+    void traceInboundText(StreamKind stream, const QString& text);
+    void traceInboundBinary(StreamKind stream, const QByteArray& frame);
+    void traceClose(StreamKind stream, int closeCode, const QString& reason);
+    void updateStartupTraceForOutbound(StreamKind stream,
+                                       const QString& command,
+                                       bool sent);
 
 #ifdef HAVE_WEBSOCKETS
     void handleSocketError(const QString& detail, bool transportEstablished);
+    void startStatusPreflight();
+    void handleStatusPreflightFinished(QNetworkReply* reply);
     void openWebSockets();
     bool retryWithSecureWebSocket(bool transportEstablished);
 #endif
@@ -185,8 +238,30 @@ private:
     bool m_loggedWaterfallFrameShape{false};
     bool m_decodeAudioWhenInactive{true};
     double m_soundSampleRateHz{12000.0};
+    QString m_soundAudioRateText;
     double m_soundResamplerRateHz{0.0};
     bool m_haveSoundAudioRate{false};
+    bool m_haveSoundSampleRate{false};
+    qint64 m_soundDiagWindowStartUtcMs{0};
+    qint64 m_lastSoundFrameUtcMs{0};
+    qint64 m_lastSoundKeepaliveSentUtcMs{0};
+    quint64 m_soundDiagFrames{0};
+    quint64 m_soundDiagBytes{0};
+    quint64 m_soundDiagDecodedSamples{0};
+    qint64 m_waterfallDiagWindowStartUtcMs{0};
+    qint64 m_lastWaterfallFrameUtcMs{0};
+    quint64 m_waterfallDiagFrames{0};
+    quint64 m_waterfallDiagBytes{0};
+    qint64 m_protocolTraceStartUtcMs{0};
+    QStringList m_protocolTraceTail;
+    QString m_lastOutboundCommand;
+    QString m_lastInboundMsg;
+    QString m_lastInboundFrameType;
+    qint64 m_lastOutboundCommandUtcMs{0};
+    qint64 m_lastInboundMsgUtcMs{0};
+    qint64 m_lastInboundFrameUtcMs{0};
+    StartupTraceState m_startupTrace;
+    bool m_protocolSendFailed{false};
     double m_waterfallServerCenterMhz{15.0};
     double m_waterfallServerBandwidthMhz{30.0};
     QString m_waterfallViewPanId;
@@ -206,6 +281,10 @@ private:
     int m_waterfallFloorDb{0};
     int m_waterfallRateOverride{0};
     int m_waterfallLineDurationMs{100};
+    bool m_waterfallAvailable{true};
+    QString m_waterfallAvailabilityDetail;
+    int m_waterfallRxChannel{-1};
+    int m_waterfallChannelCount{-1};
     std::unique_ptr<Resampler> m_soundResampler;
     QByteArray m_lastDecodedSoundPcm;
     QVector<float> m_lastWaterfallBins;
@@ -217,6 +296,8 @@ private:
     QTimer* m_audioReadyTimer{nullptr};
 
 #ifdef HAVE_WEBSOCKETS
+    QNetworkAccessManager* m_statusNetworkAccessManager{nullptr};
+    QNetworkReply* m_statusReply{nullptr};
     QWebSocket* m_soundSocket{nullptr};
     QWebSocket* m_waterfallSocket{nullptr};
 #endif

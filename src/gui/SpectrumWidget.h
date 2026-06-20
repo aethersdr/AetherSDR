@@ -95,7 +95,9 @@ public:
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     QString rendererDescription() const;
     void setConnectionAnimationVisible(bool on, const QString& label = {});
-    void setKiwiSdrConnectionOverlay(bool visible, const QString& detail = {});
+    void setKiwiSdrConnectionOverlay(bool visible,
+                                     const QString& detail = {},
+                                     const QString& title = {});
     void showInterlockNotification(const QString& message, int durationMs = 5000);
 
     // Feed a new FFT frame. bins are scaled dBm values.
@@ -744,6 +746,7 @@ private:
     bool m_kiwiSdrWaterfallAvailable{false};
     bool m_kiwiSdrWaterfallActive{false};
     bool m_kiwiSdrConnectionOverlayVisible{false};
+    QString m_kiwiSdrConnectionOverlayTitle;
     QString m_kiwiSdrConnectionOverlayDetail;
     WaterfallStreamState m_nativeWaterfallState;
     WaterfallStreamState m_kiwiWaterfallState;

@@ -9,6 +9,7 @@ namespace AetherSDR::KiwiSdrProtocol {
 namespace {
 
 constexpr int kObservedExtendedSoundFrameBytes = 1034;
+constexpr int kServerSoundHeaderBytes = 10;
 constexpr int kObservedMeterOffset = 8;
 constexpr float kExperimentalMeterDbmOffset = -127.0f;
 constexpr float kExperimentalMeterDbPerRawUnit = 0.1f;
@@ -47,9 +48,7 @@ SoundFrameHeader parseSoundFrameHeader(const QByteArray& frame)
 
     SoundFrameHeader header;
     header.flags = static_cast<uchar>(frame[3]);
-    const bool observedExtendedFrame =
-        frame.size() == kObservedExtendedSoundFrameBytes;
-    if (observedExtendedFrame && frame.size() >= 8) {
+    if (frame.size() >= kServerSoundHeaderBytes) {
         const auto* data = reinterpret_cast<const uchar*>(frame.constData() + 4);
         const quint32 counter = static_cast<quint32>(data[0])
             | (static_cast<quint32>(data[1]) << 8)
