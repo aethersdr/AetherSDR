@@ -307,7 +307,7 @@ void KiwiSdrClient::openWebSockets()
     connect(m_soundSocket, &QWebSocket::binaryMessageReceived,
             this, &KiwiSdrClient::handleBinaryMessage);
     connect(m_soundSocket, &QWebSocket::disconnected, this, [this]() {
-        qCInfo(lcProtocol).noquote()
+        qCInfo(lcKiwiSdr).noquote()
             << "KiwiSDR SND closed code="
             << (m_soundSocket
                     ? static_cast<int>(m_soundSocket->closeCode())
@@ -348,7 +348,7 @@ void KiwiSdrClient::openWebSockets()
                                                 : tr("KiwiSDR sound socket error."),
                                   m_soundSocketConnected);
             });
-    qCInfo(lcProtocol).noquote() << "KiwiSDR SND URL" << soundUrl;
+    qCInfo(lcKiwiSdr).noquote() << "KiwiSDR SND URL" << soundUrl;
     m_soundSocket->open(QUrl(soundUrl));
 
     m_waterfallSocket = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
@@ -361,7 +361,7 @@ void KiwiSdrClient::openWebSockets()
     connect(m_waterfallSocket, &QWebSocket::binaryMessageReceived,
             this, &KiwiSdrClient::handleBinaryMessage);
     connect(m_waterfallSocket, &QWebSocket::disconnected, this, [this]() {
-        qCInfo(lcProtocol).noquote()
+        qCInfo(lcKiwiSdr).noquote()
             << "KiwiSDR W/F closed code="
             << (m_waterfallSocket
                     ? static_cast<int>(m_waterfallSocket->closeCode())
@@ -393,7 +393,7 @@ void KiwiSdrClient::openWebSockets()
                                                     : tr("KiwiSDR waterfall socket error."),
                                   m_waterfallSocketConnected);
             });
-    qCInfo(lcProtocol).noquote() << "KiwiSDR W/F URL" << waterfallUrl;
+    qCInfo(lcKiwiSdr).noquote() << "KiwiSDR W/F URL" << waterfallUrl;
     m_waterfallSocket->open(QUrl(waterfallUrl));
 }
 #endif
@@ -684,7 +684,7 @@ void KiwiSdrClient::sendTrackedSliceToServer()
     const int lowCutHz = kiwiLowCutHz();
     const int highCutHz = kiwiHighCutHz();
     if (lowCutHz >= highCutHz) {
-        qCWarning(lcProtocol).noquote()
+        qCWarning(lcKiwiSdr).noquote()
             << "KiwiSDR refusing invalid passband mode=" << mode
             << "freq_khz=" << QString::number(freqKhz, 'f', 3)
             << "low_cut=" << lowCutHz
@@ -1084,7 +1084,7 @@ QVector<float> KiwiSdrClient::decodeWaterfallFrame(const QByteArray& frame) cons
         // display. We request wf_comp=0 during setup, and drop encoded rows
         // from endpoints that ignore that request until a clean decoder is
         // available.
-        qCDebug(lcProtocol).noquote()
+        qCDebug(lcKiwiSdr).noquote()
             << "KiwiSDR W/F compressed row ignored len=" << frame.size()
             << "zoom=" << frameZoom
             << "first=" << firstBytesHex(frame);
@@ -1112,12 +1112,12 @@ void KiwiSdrClient::handleBinaryMessage(const QByteArray& frame)
     } else if (frame.startsWith("W/F")) {
         handleWaterfallFrame(frame);
     } else if (frame.startsWith("EXT")) {
-        qCDebug(lcProtocol).noquote()
+        qCDebug(lcKiwiSdr).noquote()
             << "KiwiSDR EXT ignored len=" << frame.size()
             << "first=" << firstBytesHex(frame);
     } else {
         const QString tag = QString::fromLatin1(frame.left(3));
-        qCDebug(lcProtocol).noquote()
+        qCDebug(lcKiwiSdr).noquote()
             << "KiwiSDR unknown binary tag=" << tag
             << "len=" << frame.size()
             << "first=" << firstBytesHex(frame);
@@ -1129,14 +1129,14 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
     m_soundFrameSeen = true;
     if (!m_loggedSoundFrameShape) {
         m_loggedSoundFrameShape = true;
-        qCDebug(lcProtocol).noquote()
+        qCDebug(lcKiwiSdrAudio).noquote()
             << "KiwiSDR SND frame len=" << frame.size()
             << "first=" << firstBytesHex(frame);
     }
     const KiwiSdrProtocol::SoundFrameHeader header =
         KiwiSdrProtocol::parseSoundFrameHeader(frame);
     if (!isSupportedPcmSoundFrame(frame, header)) {
-        qCWarning(lcProtocol).noquote()
+        qCWarning(lcKiwiSdrAudio).noquote()
             << "KiwiSDR SND unsupported frame shape len=" << frame.size()
             << "first=" << firstBytesHex(frame);
         return;
@@ -1173,7 +1173,7 @@ void KiwiSdrClient::handleWaterfallFrame(const QByteArray& frame)
 {
     if (!m_loggedWaterfallFrameShape) {
         m_loggedWaterfallFrameShape = true;
-        qCDebug(lcProtocol).noquote()
+        qCDebug(lcKiwiSdr).noquote()
             << "KiwiSDR W/F frame len=" << frame.size()
             << "first=" << firstBytesHex(frame);
     }
@@ -1280,6 +1280,9 @@ void KiwiSdrClient::handleTextMessage(const QString& text)
             return;
         }
         if (std::abs(value - m_soundSampleRateHz) > 1.0) {
+            qCInfo(lcKiwiSdr).noquote()
+                << "KiwiSDR audio rate negotiated" << value
+                << "Hz (resampler rebuild)";
             m_soundSampleRateHz = value;
             m_soundResamplerRateHz = 0.0;
             m_soundResampler.reset();
@@ -1292,7 +1295,7 @@ void KiwiSdrClient::handleTextMessage(const QString& text)
         }
         const QString key = part.left(eq);
         const QString valueText = part.mid(eq + 1);
-        qCDebug(lcProtocol).noquote()
+        qCDebug(lcKiwiSdr).noquote()
             << "KiwiSDR MSG" << key << "=" << valueText;
         if (key == QStringLiteral("too_busy")) {
             bool busyOk = false;
@@ -1586,7 +1589,7 @@ bool KiwiSdrClient::retryWithSecureWebSocket(bool transportEstablished)
 void KiwiSdrClient::sendSoundCommand(const QString& command)
 {
     if (m_soundSocket && m_soundSocket->state() == QAbstractSocket::ConnectedState) {
-        qCDebug(lcProtocol).noquote()
+        qCDebug(lcKiwiSdr).noquote()
             << "KiwiSDR SND ->" << redactedKiwiCommand(command);
         m_soundSocket->sendTextMessage(command);
     }
@@ -1596,7 +1599,7 @@ void KiwiSdrClient::sendWaterfallCommand(const QString& command)
 {
     if (m_waterfallSocket
         && m_waterfallSocket->state() == QAbstractSocket::ConnectedState) {
-        qCDebug(lcProtocol).noquote()
+        qCDebug(lcKiwiSdr).noquote()
             << "KiwiSDR W/F ->" << redactedKiwiCommand(command);
         m_waterfallSocket->sendTextMessage(command);
     }

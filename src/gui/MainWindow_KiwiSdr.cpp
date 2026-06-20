@@ -11,6 +11,7 @@
 #include "core/AudioEngine.h"
 #include "core/KiwiSdrClient.h"
 #include "core/KiwiSdrManager.h"
+#include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -140,6 +141,13 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
     }
     slice->setExternalReceiveAudioReplacementMute(true);
 
+    // Receive-only: route audio from the Kiwi profile and mute Flex audio for
+    // this slice. No antenna command is sent to the radio (Principle I).
+    qCInfo(lcKiwiSdr).noquote()
+        << "Virtual RX antenna selected for slice" << sliceId
+        << "profile=" << m_kiwiSdrManager->displayName(profileId)
+        << "(Flex audio muted, no radio command sent)";
+
     m_kiwiSdrManager->assignSliceToProfile(
         sliceId, profileId, slice->frequency(), slice->mode(),
         slice->filterLow(), slice->filterHigh(), slice->panId());
@@ -170,6 +178,9 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
 
 void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
 {
+    qCInfo(lcKiwiSdr).noquote()
+        << "Virtual RX antenna cleared for slice" << sliceId
+        << "(Flex audio restored)";
     QString panId;
     if (SliceModel* slice = m_radioModel.slice(sliceId)) {
         panId = slice->panId();

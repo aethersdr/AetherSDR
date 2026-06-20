@@ -1,6 +1,7 @@
 #include "KiwiSdrManager.h"
 
 #include "AppSettings.h"
+#include "LogManager.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -150,6 +151,9 @@ QString KiwiSdrManager::addProfile(const QString& name, const QString& endpoint)
     profile.name = displayName;
     m_profiles.append(profile);
     saveSettings();
+    qCInfo(lcKiwiSdr).noquote()
+        << "Profile added" << profile.name << "endpoint=" << profile.endpoint
+        << "id=" << profile.id;
     emit profilesChanged();
     return profile.id;
 }
@@ -197,6 +201,7 @@ void KiwiSdrManager::removeProfile(const QString& id)
         return;
     }
 
+    qCInfo(lcKiwiSdr).noquote() << "Profile removed" << displayName(id) << "id=" << id;
     cancelReconnect(id);
     disconnectProfile(id);
     if (KiwiSdrClient* c = m_clients.take(id)) {
@@ -251,6 +256,9 @@ void KiwiSdrManager::connectProfile(const QString& id)
     if (!c->hasTrackedSlice()) {
         return;
     }
+    qCInfo(lcKiwiSdr).noquote()
+        << "Connecting" << m_profiles[idx].name
+        << "->" << m_profiles[idx].endpoint;
     c->connectToEndpoint(m_profiles[idx].endpoint);
 }
 
@@ -258,6 +266,7 @@ void KiwiSdrManager::disconnectProfile(const QString& id)
 {
     cancelReconnect(id);
     if (KiwiSdrClient* c = client(id)) {
+        qCInfo(lcKiwiSdr).noquote() << "Disconnecting" << displayName(id);
         c->disconnectFromEndpoint();
     }
     emit audioSourceEnabledChanged(id, false);
@@ -349,6 +358,9 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
     }
 
     m_sliceAssignments.insert(sliceId, profileId);
+    qCInfo(lcKiwiSdr).noquote()
+        << "Slice" << sliceId << "assigned to" << displayName(profileId)
+        << "freq=" << frequencyMhz << "MHz mode=" << mode;
     emit sliceAssignmentChanged(sliceId, profileId);
 
     if (KiwiSdrClient* c = ensureClient(profileId)) {
@@ -367,6 +379,8 @@ void KiwiSdrManager::clearSliceAssignment(int sliceId)
         return;
     }
 
+    qCInfo(lcKiwiSdr).noquote()
+        << "Slice" << sliceId << "cleared from" << displayName(previousProfile);
     emit audioSourceEnabledChanged(previousProfile, false);
     if (KiwiSdrClient* c = client(previousProfile)) {
         c->setAudioActive(false);
@@ -435,6 +449,9 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
     connect(c, &KiwiSdrClient::stateChanged,
             this, [this, id, c](KiwiSdrClient::State state, const QString& detail) {
         m_stateDetails.insert(id, detail);
+        qCInfo(lcKiwiSdr).noquote()
+            << "State" << displayName(id) << "->" << static_cast<int>(state)
+            << (detail.isEmpty() ? QString() : QStringLiteral("(") + detail + QStringLiteral(")"));
         if (state == KiwiSdrClient::State::Connecting) {
             m_telemetry.insert(id, {});
             emit profileTelemetryChanged(id, m_telemetry.value(id));
@@ -584,6 +601,9 @@ void KiwiSdrManager::scheduleReconnect(const QString& id)
     }
 
     if (!timer->isActive()) {
+        qCInfo(lcKiwiSdr).noquote()
+            << "Reconnect scheduled for" << displayName(id)
+            << "in" << kRecoverableReconnectDelayMs << "ms";
         timer->start();
     }
 }

@@ -1949,6 +1949,8 @@ void AudioEngine::setKiwiSdrAudioSourceEnabled(const QString& sourceId, bool on)
 
     std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     source->enabled = on;
+    qCDebug(lcKiwiSdrAudio).noquote()
+        << "Audio source" << (on ? "enabled" : "disabled") << source->id;
     source->rxBuffer.clear();
     source->rxPackets.clear();
     source->outputBuffer.clear();
@@ -2017,6 +2019,7 @@ void AudioEngine::removeKiwiSdrAudioSource(const QString& sourceId)
         });
     if (it != m_externalKiwiSources.end()) {
         m_externalKiwiSources.erase(it, m_externalKiwiSources.end());
+        qCDebug(lcKiwiSdrAudio).noquote() << "Audio source removed" << id;
         updateRxBufferStats();
     }
 }
