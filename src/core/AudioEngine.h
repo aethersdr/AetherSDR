@@ -573,11 +573,15 @@ private:
         std::unique_ptr<SpectralNR> nr2;
         std::unique_ptr<Resampler> rxResampler;
         std::unique_ptr<Resampler> rxResamplerR;
+        std::unique_ptr<Resampler> bnrUp;
+        std::unique_ptr<Resampler> bnrDown;
+        QByteArray bnrOutBuf;
         float gain{1.0f};
         int pan{50};
         bool enabled{false};
         bool muted{false};
         bool prebuffering{false};
+        bool bnrPrimed{false};
     };
 
     QAudioFormat makeFormat() const;
@@ -799,11 +803,17 @@ private:
     std::unique_ptr<NvidiaBnrFilter> m_bnr;
     std::unique_ptr<Resampler> m_bnrUp;    // 24k→48k mono
     std::unique_ptr<Resampler> m_bnrDown;  // 48k→24k mono
+    std::unique_ptr<Resampler> m_kiwiSdrBnrUp;
+    std::unique_ptr<Resampler> m_kiwiSdrBnrDown;
     std::atomic<bool> m_bnrEnabled{false};
     QString m_bnrAddress{"localhost:8001"};
     QByteArray m_bnrOutBuf;  // jitter buffer: denoised 24kHz stereo int16
+    QByteArray m_kiwiSdrBnrOutBuf;
     bool m_bnrPrimed{false}; // true after enough denoised data accumulated
-    void processBnr(const QByteArray& stereoPcm);
+    bool m_kiwiSdrBnrPrimed{false};
+    void processBnr(const QByteArray& stereoPcm,
+                    RxDspSource source,
+                    ExternalRxAudioSourceState* externalSource = nullptr);
 
     // Client-side DFNR (DeepFilterNet3)
 #ifdef HAVE_DFNR
