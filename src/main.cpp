@@ -4,9 +4,11 @@
 #include "core/GpuSelector.h"
 #include "core/LogManager.h"
 #include "core/MacMicPermission.h"
+#include "core/AutomationServer.h"
 
 #include <QApplication>
 #include <QSurfaceFormat>
+#include <memory>
 #include <QStyleFactory>
 #include <QDir>
 #include <QDebug>
@@ -408,6 +410,20 @@ int main(int argc, char* argv[])
     {
         AetherSDR::MainWindow window;
         window.show();
+
+        // Agent-drivable automation bridge (#3646, Phase 0). Off in production;
+        // starts only when AETHER_AUTOMATION is set. AETHER_AUTOMATION_SOCKET
+        // overrides the default QLocalServer name.
+        std::unique_ptr<AetherSDR::AutomationServer> automation;
+        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
+            const QString sockName = qEnvironmentVariableIsSet("AETHER_AUTOMATION_SOCKET")
+                ? qEnvironmentVariable("AETHER_AUTOMATION_SOCKET")
+                : QStringLiteral("aethersdr-automation");
+            automation = std::make_unique<AetherSDR::AutomationServer>();
+            if (!automation->start(sockName))
+                automation.reset();
+        }
+
         exitCode = app.exec();
     }
 
