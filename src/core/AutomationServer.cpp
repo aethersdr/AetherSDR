@@ -158,20 +158,30 @@ bool parseBool(const QString& v)
         || s == QLatin1String("checked");
 }
 
-// TX-safety guard for invoke(). Any control whose objectName, accessibleName,
-// or (for buttons) text looks transmit-related is refused unless the operator
-// sets AETHER_AUTOMATION_ALLOW_TX. A test bridge must never key a live radio by
-// accident — note "tune" deliberately covers the ATU tune button, which emits
-// a carrier. Conservative over-blocking is the safe failure mode here.
+// TX-safety guard for invoke(). A control that looks transmit-related is
+// refused unless the operator sets AETHER_AUTOMATION_ALLOW_TX. A test bridge
+// must never key a live radio by accident — "tune" deliberately covers the ATU
+// tune button, which emits a carrier.
+//
+// The guard is scoped to *buttons* on purpose: only a discrete button action
+// (click/toggle) can actually key the radio — MOX, PTT, TUNE, ATU-tune, and VOX
+// enable are all QAbstractButtons. Setpoint sliders/spinboxes/combos named
+// "Tune power", "RF power", "VOX level", etc. never transmit by being moved, so
+// blocking them was over-reach (#3646 QA finding 3). Requiring a button fixes
+// that without weakening safety, since invoke can't key through a value setter.
 bool isTransmitControl(const QWidget* w)
 {
+    const auto* btn = qobject_cast<const QAbstractButton*>(w);
+    if (!btn)
+        return false;  // sliders / combos / spinboxes can't trigger TX
+
     static const QStringList kDeny = {
         QStringLiteral("mox"), QStringLiteral("ptt"), QStringLiteral("tune"),
         QStringLiteral("transmit"), QStringLiteral("vox"),
     };
-    QStringList hay{w->objectName().toLower(), w->accessibleName().toLower()};
-    if (auto* b = qobject_cast<const QAbstractButton*>(w))
-        hay << b->text().toLower();
+    const QStringList hay{w->objectName().toLower(),
+                          w->accessibleName().toLower(),
+                          btn->text().toLower()};
     for (const QString& h : hay)
         for (const QString& d : kDeny)
             if (h.contains(d))
@@ -239,6 +249,56 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("paTemp"),       r->paTemp()},
         {QStringLiteral("sliceCount"),   r->slices().size()},
         {QStringLiteral("panCount"),     r->panadapters().size()},
+    };
+}
+
+// TX-chain state (TransmitModel) — RF power, mic/processor, VOX/AM/DEXP, CW, ATU
+// and APD. Lets a QA scenario assert that a TX/Phone/CW applet control actually
+// reached the radio model, not just the widget (#3646 QA finding 2). Read-only:
+// keying state (mox/tune/transmitting) is reported but never driven from here.
+QJsonObject transmitSnapshot(const TransmitModel* t)
+{
+    return QJsonObject{
+        // power / keying (read-only)
+        {QStringLiteral("rfPower"),         t->rfPower()},
+        {QStringLiteral("tunePower"),       t->tunePower()},
+        {QStringLiteral("tuning"),          t->isTuning()},
+        {QStringLiteral("mox"),             t->isMox()},
+        {QStringLiteral("transmitting"),    t->isTransmitting()},
+        {QStringLiteral("maxPowerLevel"),   t->maxPowerLevel()},
+        {QStringLiteral("activeProfile"),   t->activeProfile()},
+        // mic / monitor / processor
+        {QStringLiteral("micSelection"),    t->micSelection()},
+        {QStringLiteral("micLevel"),        t->micLevel()},
+        {QStringLiteral("micAcc"),          t->micAcc()},
+        {QStringLiteral("speechProc"),      t->speechProcessorEnable()},
+        {QStringLiteral("speechProcLevel"), t->speechProcessorLevel()},
+        {QStringLiteral("dax"),             t->daxOn()},
+        {QStringLiteral("monitor"),         t->sbMonitor()},
+        {QStringLiteral("monGainSb"),       t->monGainSb()},
+        {QStringLiteral("activeMicProfile"),t->activeMicProfile()},
+        // VOX / AM / DEXP / TX filter
+        {QStringLiteral("voxEnable"),       t->voxEnable()},
+        {QStringLiteral("voxLevel"),        t->voxLevel()},
+        {QStringLiteral("voxDelay"),        t->voxDelay()},
+        {QStringLiteral("amCarrierLevel"),  t->amCarrierLevel()},
+        {QStringLiteral("dexp"),            t->dexpOn()},
+        {QStringLiteral("dexpLevel"),       t->dexpLevel()},
+        {QStringLiteral("txFilterLow"),     t->txFilterLow()},
+        {QStringLiteral("txFilterHigh"),    t->txFilterHigh()},
+        // CW
+        {QStringLiteral("cwSpeed"),         t->cwSpeed()},
+        {QStringLiteral("cwPitch"),         t->cwPitch()},
+        {QStringLiteral("cwBreakIn"),       t->cwBreakIn()},
+        {QStringLiteral("cwDelay"),         t->cwDelay()},
+        {QStringLiteral("cwSidetone"),      t->cwSidetone()},
+        {QStringLiteral("cwIambic"),        t->cwIambic()},
+        {QStringLiteral("monGainCw"),       t->monGainCw()},
+        {QStringLiteral("monPanCw"),        t->monPanCw()},
+        // ATU / APD
+        {QStringLiteral("atuEnabled"),      t->atuEnabled()},
+        {QStringLiteral("atuMemories"),     t->memoriesEnabled()},
+        {QStringLiteral("apdEnabled"),      t->apdEnabled()},
     };
 }
 
@@ -621,6 +681,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
 
     if (model == QLatin1String("radio")) {
         data = radioSnapshot(radio);
+    } else if (model == QLatin1String("transmit")) {
+        data = transmitSnapshot(&radio->transmitModel());
     } else if (model == QLatin1String("slices")) {
         QJsonArray arr;
         for (const SliceModel* s : radio->slices()) arr.append(sliceSnapshot(s));
@@ -655,7 +717,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use radio|slice|slices|pan|pans)"));
+                   + QStringLiteral(" (use radio|transmit|slice|slices|pan|pans)"));
     }
 
     if (!property.isEmpty()) {

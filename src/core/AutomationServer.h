@@ -40,16 +40,18 @@ class RadioModel;
 //   invoke <target> <action> [v]   -> drive a control deterministically:
 //                                     click / toggle / setChecked / setValue /
 //                                     setText / setCurrentText / setCurrentIndex.
-//                                     SAFETY: refuses transmit-related controls
-//                                     (MOX/PTT/Tune/Transmit/VOX) unless the
-//                                     AETHER_AUTOMATION_ALLOW_TX env var is set,
-//                                     so the bridge can never key a live radio
-//                                     by accident.
+//                                     SAFETY: refuses transmit-related *buttons*
+//                                     (MOX/PTT/Tune/ATU-tune/VOX enable) unless
+//                                     AETHER_AUTOMATION_ALLOW_TX is set, so the
+//                                     bridge can never key a live radio by
+//                                     accident. Setpoint sliders/combos (e.g.
+//                                     "Tune power", "RF power") are not blocked —
+//                                     moving a value setter can't key.
 //   get <model> [selector] [prop]  -> live JSON snapshot of a model:
-//                                     radio | slice <id|active|tx> | slices |
-//                                     pan <panId|active> | pans. With a trailing
-//                                     property name, returns just that field.
-//                                     Assert on state without screenshots.
+//                                     radio | transmit | slice <id|active|tx> |
+//                                     slices | pan <panId|active> | pans. With a
+//                                     trailing property name, returns just that
+//                                     field. Assert on state without screenshots.
 //
 // Requests are newline-delimited. Each line is either a bare command
 // ("dumpTree", "grab SpectrumWidget /tmp/pan.png", "invoke masterVolume

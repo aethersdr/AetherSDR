@@ -173,14 +173,16 @@ reports) — a free round-trip confirmation.
 | `setCurrentIndex` | `QComboBox` | integer index |
 
 <a name="tx-safety"></a>
-> **🚨 TX safety.** `invoke` **refuses** any control whose name looks
-> transmit-related — `mox`, `ptt`, `tune` (incl. the ATU tune button, which
-> emits a carrier), `transmit`, `vox` — returning
+> **🚨 TX safety.** `invoke` **refuses any transmit-related _button_** — a
+> control whose name contains `mox`, `ptt`, `tune` (incl. the ATU tune button,
+> which emits a carrier), `transmit`, or `vox` — returning
 > `{"ok":false,"error":"blocked: …"}` and never calling the widget. A test
-> bridge must never key a live transmitter by accident. To deliberately drive
-> TX (e.g. a hardware-in-the-loop test on a dummy load), set
-> `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch. Over-
-> blocking is intentional — the guard matches on substrings.
+> bridge must never key a live transmitter by accident. The guard is scoped to
+> **buttons** because only a discrete button action can key the radio; setpoint
+> **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are *not*
+> blocked — moving a value setter can't transmit. To deliberately drive a keying
+> button (e.g. hardware-in-the-loop on a dummy load), set
+> `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch.
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -199,6 +201,7 @@ connects).
 | `model` | `selector` | returns |
 |---|---|---|
 | `radio` | — | radio snapshot (name, model, version, connected, transmitting, txPower, paTemp, slice/pan counts) |
+| `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/breakin/delay/sidetone/iambic/monitor), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `slices` | — | array of all slice snapshots |
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, txSlice, …) |
 | `pans` | — | array of all panadapter snapshots |
