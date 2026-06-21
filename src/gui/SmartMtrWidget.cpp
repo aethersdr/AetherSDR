@@ -54,17 +54,9 @@ SmartMtrWidget::SmartMtrWidget(QWidget* parent)
     sp.setHeightForWidth(true);
     setSizePolicy(sp);
 
-    // SmartMTR analog ballistics (ported from the SmartMTR macOS app): a fast
-    // attack and a ~15x slower, lazy decay give the d'Arsonval "jumps up, sags
-    // down" envelope-follower feel. tau values come from per-tick fractions
-    // k=0.60/0.06 at 60 Hz: tau = -(1/60)/ln(1-k). The smoother integrates the
-    // normalised scale fraction; a tiny snap epsilon keeps the slow tail lazy
-    // (the source never snaps on decay) without endless sub-pixel repaints.
-    MeterSmoother::Ballistics b;
-    b.attackSeconds = 0.01818f;  // ~18.2 ms — fast rise
-    b.releaseSeconds = 0.26940f; // ~269 ms — slow fall
-    b.snapEpsilon = 0.0005f;
-    m_smooth.setBallistics(b);
+    // Ballistics depend on the meter kind (signal vs mic) — see applyBallistics.
+    // Seed with the default kind's set; setMeterInput re-applies on a kind switch.
+    applyBallistics(m_kind);
 
     m_animTimer.setTimerType(Qt::PreciseTimer);
     m_animTimer.setInterval(kMeterSmootherIntervalMs); // 8 ms ~= 120 Hz
@@ -75,6 +67,33 @@ SmartMtrWidget::SmartMtrWidget(QWidget* parent)
     m_extremesClock.start();
 }
 
+void SmartMtrWidget::applyBallistics(MeterKind kind)
+{
+    MeterSmoother::Ballistics b;
+    if (kind == MeterKind::MicLevel) {
+        // PPM / audio-meter feel: track the live mic level as tightly as the mic
+        // packet rate allows so speech reads as a lively, twitchy bar. Both tau
+        // are well under the ~50-100 ms gap between mic packets, so the bar
+        // effectively lands on each new sample instead of lagging behind a
+        // falling value. The d'Arsonval lazy sag below is right for an S-meter
+        // but feels dead on voice; the PEAK extremes marker handles peak-hold.
+        b.attackSeconds = 0.002f;  // ~2 ms — essentially instant rise
+        b.releaseSeconds = 0.045f; // ~45 ms — fast fall, just enough to not flicker
+    } else {
+        // SmartMTR analog ballistics (ported from the SmartMTR macOS app): a fast
+        // attack and a ~15x slower, lazy decay give the d'Arsonval "jumps up, sags
+        // down" envelope-follower feel. tau values come from per-tick fractions
+        // k=0.60/0.06 at 60 Hz: tau = -(1/60)/ln(1-k).
+        b.attackSeconds = 0.01818f;  // ~18.2 ms — fast rise
+        b.releaseSeconds = 0.26940f; // ~269 ms — slow fall
+    }
+    // The smoother integrates the normalised scale fraction; a tiny snap epsilon
+    // keeps the slow tail lazy (the source never snaps on decay) without endless
+    // sub-pixel repaints.
+    b.snapEpsilon = 0.0005f;
+    m_smooth.setBallistics(b);
+}
+
 void SmartMtrWidget::setMeterInput(const MeterInput& input)
 {
     const bool kindChanged = (input.kind != m_kind);
@@ -82,21 +101,31 @@ void SmartMtrWidget::setMeterInput(const MeterInput& input)
     m_kind = input.kind;
 
     // RX<->TX is a scale discontinuity (signal dBm vs mic dBFS); the extremes
-    // window must not mix domains.
-    if (kindChanged)
+    // window must not mix domains, and the bar ballistics differ per kind.
+    if (kindChanged) {
         m_extremes.reset();
+        applyBallistics(m_kind);
+    }
 
-    // Feed the raw sample into the extremes window (both kinds; mic uses it for
-    // the AVG bar + PEAK marker). Skip on park (no value) or when disabled.
-    if (m_extremesEnabled && input.hasValue)
-        m_extremes.record(input.value, m_extremesClock.elapsed());
+    // Drive the extremes engine. Signal derives its min/max from a local sliding
+    // window of the dBm stream; mic's peak is a separate radio-sourced stat
+    // (MICPEAK over UDP), so it overrides the MAX marker directly rather than
+    // synthesizing one. Skip on park (no value) or when disabled.
+    if (m_extremesEnabled && input.hasValue) {
+        if (input.kind == MeterKind::MicLevel) {
+            if (input.hasPeak)
+                m_extremes.setExternalPeak(input.peak);
+        } else {
+            m_extremes.record(input.value, m_extremesClock.elapsed());
+        }
+    }
 
-    // Bar target. For mic with extremes on, the bar tracks the windowed AVERAGE
-    // (PEAK shown by the marker); otherwise it tracks the instantaneous value.
-    const double posUnits =
-        (m_extremesEnabled && input.hasValue && input.kind == MeterKind::MicLevel)
-            ? mapRawToUnits(m_extremes.avgRaw())
-            : indicatorPosition(input);
+    // Bar target = the instantaneous value. (Mic used to track the windowed
+    // AVERAGE here for a VU-like read, but a 1-5s mean barely twitches on speech
+    // and read as "dead"; the mic now uses a snappy PPM ballistic on the live
+    // level instead — see applyBallistics — with the PEAK marker still holding
+    // the loud peaks.)
+    const double posUnits = indicatorPosition(input);
 
     // Normalise to the scale band so the ballistics are scale-independent.
     const double span = kScaleMax - kScaleMin;
@@ -310,6 +339,13 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
 
     const double holeBottom = kHoleMargY + kHoleH;
 
+    // Every label is anchored at the LARGE tick height so a small labeled tick's
+    // label sits on the same baseline row as the large ones (only the tick stays
+    // shorter). Its opacity still follows the tick, so a small tick's label reads
+    // as secondary too.
+    double largeH = 0.0, largeW = 0.0;
+    markerExtent(MarkerSize::Large, largeH, largeW);
+
     // Labels come in two fixed styles (strong = full size + regular weight,
     // normal = slightly smaller + light); build each font and its metrics once
     // rather than per labeled tick. App UI font, with a pixel floor for legibility.
@@ -354,15 +390,22 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
         const QFontMetricsF& fm = strong ? strongFm : normalFm;
         p.setFont(labelFont);
 
-        // Label centered on the marker (plus its per-marker offset), sitting
-        // just above the top tick.
+        // Label centered on the marker (plus its per-marker offset), sitting just
+        // above the LARGE tick height (shared baseline) regardless of this tick's
+        // own size.
         const double cx = above.center().x() + g.len(m.labelOffset);
-        const double bottom = above.top() - g.len(kLabelGap);
+        const double labelTop = g.rect(x, kHoleMargY - largeH, w, largeH).top();
+        const double bottom = labelTop - g.len(kLabelGap);
         const double tw = fm.horizontalAdvance(m.label);
         const double th = fm.height();
-        const QRectF box(cx - tw, bottom - th, tw * 2.0, th);
-        p.setPen(color);
-        p.drawText(box, Qt::AlignHCenter | Qt::AlignBottom, m.label);
+        // Center every label on the regular-label center line so a strong (larger)
+        // label is vertically centered with the regular ones, rather than sharing
+        // their bottom baseline (which would push its taller glyphs upward).
+        const double centerY = bottom - normalFm.height() / 2.0;
+        const QRectF box(cx - tw, centerY - th / 2.0, tw * 2.0, th);
+        // Label fades with the tick: a small (secondary) tick gets a dimmed label.
+        p.setPen(tickColor);
+        p.drawText(box, Qt::AlignHCenter | Qt::AlignVCenter, m.label);
     }
 }
 
@@ -501,6 +544,11 @@ void SmartMtrWidget::drawExtremes(QPainter& p, const SmartMtrGeometry& g) const
 QVector<SmartMtrWidget::ExtremeMarker> SmartMtrWidget::extremeLabels() const
 {
     QVector<ExtremeMarker> out;
+
+    // Numeric value labels are a signal-meter feature only; other kinds (mic/TX)
+    // show no value text (the peak marker itself still draws).
+    if (m_kind != MeterKind::Signal)
+        return out;
 
     // Two lines for signal (S-unit over dBm); a single top line for mic (no
     // S-unit), so the value isn't left floating on the lower line.

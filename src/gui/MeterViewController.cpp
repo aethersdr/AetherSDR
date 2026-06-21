@@ -51,4 +51,13 @@ void MeterViewController::setShowValues(DisplaySettings::MeterValues v)
     emit extremesChanged();
 }
 
+void MeterViewController::setTxMeter(DisplaySettings::TxMeter v)
+{
+    if (DisplaySettings::txMeter() == v) {
+        return;
+    }
+    DisplaySettings::setTxMeter(v);
+    emit txMeterChanged();
+}
+
 } // namespace AetherSDR

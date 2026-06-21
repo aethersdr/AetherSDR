@@ -49,6 +49,11 @@ public:
     enum class ExtremesSpeed { Slow, Medium, Fast };
     enum class MeterValues { None, Signal, Extremes };
 
+    // What the SmartMTR meter shows while transmitting. None = keep the RX
+    // signal scale (don't switch on TX); MicLevel = swap to the mic-level (dBFS)
+    // scale for the duration of TX. Default None.
+    enum class TxMeter { None, MicLevel };
+
     // Show the peak/trough "extremes" markers on the SmartMTR meter.
     static bool showExtremes()
     {
@@ -91,6 +96,20 @@ public:
         write(o);
     }
 
+    // Which meter to show while transmitting. Default None (stay on RX signal).
+    static TxMeter txMeter()
+    {
+        const QString s = readObj().value("txMeter").toString("None");
+        if (s == QStringLiteral("MicLevel")) return TxMeter::MicLevel;
+        return TxMeter::None;
+    }
+    static void setTxMeter(TxMeter v)
+    {
+        QJsonObject o = readObj();
+        o["txMeter"] = txMeterToken(v);
+        write(o);
+    }
+
     static QString extremesSpeedToken(ExtremesSpeed v)
     {
         switch (v) {
@@ -106,6 +125,14 @@ public:
         case MeterValues::Signal: return QStringLiteral("Signal");
         case MeterValues::Extremes: return QStringLiteral("Extremes");
         case MeterValues::None: break;
+        }
+        return QStringLiteral("None");
+    }
+    static QString txMeterToken(TxMeter v)
+    {
+        switch (v) {
+        case TxMeter::MicLevel: return QStringLiteral("MicLevel");
+        case TxMeter::None: break;
         }
         return QStringLiteral("None");
     }

@@ -45,6 +45,20 @@ public:
         m_minPos = SmartMtrUnits::kScaleMin;
         m_maxPos = SmartMtrUnits::kScaleMin;
         m_hasData = false;
+        m_useExtPeak = false;
+        m_extPeakRaw = 0.0;
+    }
+
+    // External-peak mode: drive the MAX marker from a separately-measured peak
+    // (e.g. the radio's MICPEAK meter over UDP) instead of a sliding-window max.
+    // The trough is unused in this mode (it collapses onto the needle). Each call
+    // refreshes the target; the marker still slews toward it at the constant
+    // velocity. Mutually exclusive with record() — a kind switch resets() first.
+    void setExternalPeak(double rawPeak)
+    {
+        m_useExtPeak = true;
+        m_extPeakRaw = rawPeak;
+        m_hasData = true;
     }
 
     // Record a raw signal sample at a monotonic timestamp (ms). Call from the
@@ -65,33 +79,50 @@ public:
     bool tick(qint64 nowMs, qint64 elapsedMs, double needlePosUnits,
               const std::function<double(double)>& mapToUnits)
     {
-        // 1) Prune expired samples and rescan min/max in a single pass.
-        const qint64 cutoff = nowMs - qint64(m_tuning.windowSeconds * 1000.0);
-        while (!m_window.empty() && m_window.front().t < cutoff) {
-            m_sumRaw -= m_window.front().raw;
-            m_window.pop_front();
-        }
-        if (m_window.empty()) {
-            m_hasData = false;
+        // 1) Establish the raw min/max for this tick. In external-peak mode the
+        //    max comes from the supplied peak and the window is bypassed; the
+        //    trough is unused (it tracks the needle). Otherwise prune expired
+        //    samples and rescan the window min/max in a single pass.
+        if (m_useExtPeak) {
+            m_maxRaw = m_extPeakRaw;
         } else {
-            double mn = m_window.front().raw, mx = mn;
-            for (const Sample& s : m_window) {
-                if (s.raw < mn) mn = s.raw;
-                if (s.raw > mx) mx = s.raw;
+            const qint64 cutoff = nowMs - qint64(m_tuning.windowSeconds * 1000.0);
+            while (!m_window.empty() && m_window.front().t < cutoff) {
+                m_sumRaw -= m_window.front().raw;
+                m_window.pop_front();
             }
-            m_minRaw = mn;
-            m_maxRaw = mx;
+            if (m_window.empty()) {
+                m_hasData = false;
+            } else {
+                double mn = m_window.front().raw, mx = mn;
+                for (const Sample& s : m_window) {
+                    if (s.raw < mn) mn = s.raw;
+                    if (s.raw > mx) mx = s.raw;
+                }
+                m_minRaw = mn;
+                m_maxRaw = mx;
+            }
         }
 
-        // 2) Targets in UNITS. With no data left, glide both to the floor.
+        // 2) Targets in UNITS. With no data left, glide both to the floor. In
+        //    external-peak mode the trough is unused, so it targets the needle so
+        //    it collapses there (mic draws no trough) without standing off.
         const double minTgt =
-            m_hasData ? mapToUnits(m_minRaw) : SmartMtrUnits::kScaleMin;
+            !m_hasData      ? SmartMtrUnits::kScaleMin
+            : m_useExtPeak  ? needlePosUnits
+                            : mapToUnits(m_minRaw);
         const double maxTgt =
             m_hasData ? mapToUnits(m_maxRaw) : SmartMtrUnits::kScaleMin;
 
-        // 3) Constant-velocity slew toward each target.
+        // 3) Constant-velocity slew toward each target. External-peak (mic) mode
+        //    tracks tightly at the fast peak slew — the radio's peak is a live
+        //    stat, not a lazy RX sweep — while the window-derived markers keep
+        //    the deliberately lazy glide.
         bool moving = false;
-        const double step = m_tuning.slewUnitsPerSec * double(elapsedMs) / 1000.0;
+        const double slewRate =
+            m_useExtPeak ? SmartMtrExtremes::kPeakSlewUnitsPerSec
+                         : m_tuning.slewUnitsPerSec;
+        const double step = slewRate * double(elapsedMs) / 1000.0;
         if (step > 0.0) {
             m_minPos = slew(m_minPos, minTgt, step, moving);
             m_maxPos = slew(m_maxPos, maxTgt, step, moving);
@@ -157,6 +188,12 @@ private:
     double m_minPos = SmartMtrUnits::kScaleMin;
     double m_maxPos = SmartMtrUnits::kScaleMin;
     bool m_hasData = false;
+
+    // External-peak mode (mic): the MAX marker is driven by a separately-measured
+    // peak (radio MICPEAK over UDP) instead of the sliding window. Set via
+    // setExternalPeak(); cleared by reset() on a kind switch.
+    bool m_useExtPeak = false;
+    double m_extPeakRaw = 0.0;
 };
 
 } // namespace AetherSDR

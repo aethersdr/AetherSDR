@@ -32,13 +32,21 @@ public:
     {
         return DisplaySettings::showValues();
     }
+    DisplaySettings::TxMeter txMeter() const
+    {
+        return DisplaySettings::txMeter();
+    }
     void setShowExtremes(bool on);
     void setExtremesSpeed(DisplaySettings::ExtremesSpeed v);
     void setShowValues(DisplaySettings::MeterValues v);
+    void setTxMeter(DisplaySettings::TxMeter v);
 
 Q_SIGNALS:
     void changed(bool smartMtr);
     void extremesChanged();
+    // The TX-meter choice changed; flags re-evaluate which input to push (the TX
+    // meter swaps the SmartMTR input, not its options, so it gets its own signal).
+    void txMeterChanged();
 
 private:
     MeterViewController();

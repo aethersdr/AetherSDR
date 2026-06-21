@@ -77,7 +77,7 @@ inline constexpr double kMarkerSmallOpacity = 0.6;
 // Above-hole budget is kHoleMargY(20) − kMarkerLargeH(5) − kLabelGap(1) = 14
 // units, so up to ~12 fits with a small top margin. Strong labels use the full
 // height; normal labels are minimally smaller.
-inline constexpr double kLabelHeight = 12.0;       // strong
+inline constexpr double kLabelHeight = 14.0;       // strong (a bit larger)
 inline constexpr double kLabelHeightNormal = 11.0; // normal (slightly smaller)
 inline constexpr double kLabelGap = 1.0;
 } // namespace SmartMtrUnits
@@ -103,6 +103,13 @@ inline constexpr double kWindowSlowSec = 5.0;
 // over the source app's 108-deg extremes arc, scaled to the bar's 220-UNIT span:
 // a marker crosses the full bar in ~3.7 s, deliberately lazy vs the bar's attack.
 inline constexpr double kSlewUnitsPerSec = 60.0;
+
+// Slew for the external-peak marker (mic MICPEAK over UDP). The radio's peak is
+// a live, separately-measured stat, so its marker tracks tightly — like the bar
+// — rather than the lazy RX sweep above. ~4000 UNIT/s crosses the full 220-UNIT
+// span in ~55 ms, so a typical packet-to-packet jump lands within a frame or two
+// while still smoothing the per-packet step instead of snapping.
+inline constexpr double kPeakSlewUnitsPerSec = 4000.0;
 
 // Repaint cadence (Hz) for a returning marker, used to bypass the bar's lean
 // repaint gate (#3283). In lean mode the bar throttles its repaint to 12 Hz; a

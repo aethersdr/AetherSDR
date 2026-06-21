@@ -38,6 +38,9 @@ double mapSignal(double v, double min, double max)
 }
 
 // ── Mic level (transmit) ────────────────────────────────────────────────────
+// Linear dBFS scale from -40 (bottom) to 0 (full scale / clip, top). -20 lands
+// naturally at the midpoint; the top of the scale (-5 and 0) is drawn in the
+// "high" colour as the clip-warning zone.
 constexpr double kMicMindB = -40.0;
 constexpr double kMicMaxdB = 0.0;
 
@@ -100,13 +103,40 @@ MeterConfig buildMicConfig()
     MeterConfig cfg;
     cfg.valueToPosition = mapMic;
 
-    // -40..0 dB in 10 dB steps, all large + labeled. The 0-dB end is red.
-    for (int db = -40; db <= 0; db += 10) {
+    // Authored by value and placed through the linear map, so ticks line up with
+    // the indicator curve. -40..-10 are blue, -5 and 0 are red as the clip-warning
+    // zone. -5 is a small tick, the rest large; all are labeled. labelOffset
+    // shifts the label horizontally (UNITS): the two-digit labels use -4.0 so the
+    // tick falls between the digits (like the signal +dB labels); -5 uses -2.0 so
+    // the "5" digit (not the leading "-") centers on the tick.
+    struct MicTick {
+        double db;
+        MarkerSize size;
+        MarkerColor color;
+        bool labeled;
+        LabelStyle style;
+        double labelOffset;
+    };
+    static const MicTick ticks[] = {
+        { -40.0, MarkerSize::Large, MarkerColor::Normal, true, LabelStyle::Normal, -4.0 },
+        { -30.0, MarkerSize::Large, MarkerColor::Normal, true, LabelStyle::Normal, -4.0 },
+        { -20.0, MarkerSize::Large, MarkerColor::Normal, true, LabelStyle::Normal, -4.0 },
+        { -10.0, MarkerSize::Large, MarkerColor::Normal, true, LabelStyle::Normal, -4.0 },
+        {  -5.0, MarkerSize::Small, MarkerColor::High,   true, LabelStyle::Normal, -2.0 },
+        {   0.0, MarkerSize::Large, MarkerColor::High,   true, LabelStyle::Normal,  0.0 },
+    };
+    for (const MicTick& t : ticks) {
         ScaleMarker m;
-        m.position = mapMic(db, kMicMindB, kMicMaxdB);
-        m.size = MarkerSize::Large;
-        m.color = (db >= 0) ? MarkerColor::High : MarkerColor::Normal;
-        m.label = QString::number(db);
+        m.position = mapMic(t.db, kMicMindB, kMicMaxdB);
+        m.size = t.size;
+        m.color = t.color;
+        m.labelStyle = t.style;
+        m.labelOffset = t.labelOffset;
+        if (t.labeled) {
+            // Positive dBFS values get a leading "+", like the signal +dB labels.
+            m.label = (t.db > 0.0 ? QStringLiteral("+") : QString())
+                      + QString::number(int(t.db));
+        }
         cfg.markers.push_back(m);
     }
 

@@ -38,6 +38,13 @@ struct MeterInput {
     double value = 0.0;    // meaning is per kind (signal: dBm, mic: dB, ...)
     double min = 0.0;
     double max = 1.0;
+
+    // Externally-measured peak (same units as value), for kinds whose peak is a
+    // separate radio-sourced stat rather than a locally-derived window max. Mic
+    // uses it (the radio's MICPEAK meter drives the peak marker); signal leaves
+    // hasPeak false and the widget falls back to its sliding-window envelope.
+    bool hasPeak = false;
+    double peak = 0.0;
 };
 
 // One static scale tick, authored per kind. position is in hole-local UNITS

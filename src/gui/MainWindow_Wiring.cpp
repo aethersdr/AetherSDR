@@ -647,8 +647,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // Feed SmartMTR TX scale: global mic level (dBFS) + MOX state. The VFO shows
     // mic only on its own TX slice while transmitting.
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            vfo, [vfo](float micLevel, float, float, float) {
-        vfo->setMicLevel(micLevel);
+            vfo, [vfo](float micLevel, float, float micPeak, float) {
+        vfo->setMicLevel(micLevel, micPeak);
     });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             vfo, &VfoWidget::setTransmitting);

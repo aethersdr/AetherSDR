@@ -59,10 +59,11 @@ public:
     void setSignalLevel(float dbm);
     void setReceiveMeterReading(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
-    // SmartMTR feeds: live mic level (dBFS) and global TX (MOX) state. The
-    // SmartMTR view shows mic level on this VFO's TX slice while transmitting,
-    // and received signal otherwise.
-    void setMicLevel(float micDbfs);
+    // SmartMTR feeds: live mic level + separately-measured mic peak (both dBFS)
+    // and global TX (MOX) state. The SmartMTR view shows mic level on this VFO's
+    // TX slice while transmitting (peak marker driven by micPeak), and received
+    // signal otherwise.
+    void setMicLevel(float micDbfs, float micPeakDbfs);
     void setTransmitting(bool tx);
 
     // Split mode: call whenever TX assignment or active slice changes.
@@ -283,6 +284,7 @@ private:
     QElapsedTimer m_labelDirtyClock;
     qint64 m_lastLabelDirtyMs{-1};
     float m_micDbfs{-40.0f}; // latest mic level (dBFS); SmartMTR TX scale
+    float m_micPeakDbfs{-40.0f}; // latest mic peak (dBFS, radio MICPEAK stat)
     bool m_transmitting{false}; // global MOX state
     // Inline selector row revealed by clicking the meter strip (not a popup),
     // shown between the meter and the tab bar.
@@ -295,12 +297,16 @@ private:
     QCheckBox* m_showExtremesChk{nullptr};
     QComboBox* m_extremesSpeedCmb{nullptr};
     QComboBox* m_showValuesCmb{nullptr};
+    // Which meter to show while transmitting: None (stay on RX signal) or Mic
+    // Level. Disabled while the standard S-meter is selected.
+    QComboBox* m_txMeterCmb{nullptr};
     // Opacity effects over each select row (label + combo), dimmed when the
     // row is disabled so the disabled state is obvious (the custom combo
     // stylesheet has no :disabled variant).  Matched to the disabled-checkbox
     // label dimming.
     QGraphicsOpacityEffect* m_extremesSpeedFade{nullptr};
     QGraphicsOpacityEffect* m_showValuesFade{nullptr};
+    QGraphicsOpacityEffect* m_txMeterFade{nullptr};
     // Enable/disable the SmartMTR-only options per the current meter view and
     // the "Show extremes" checkbox state (see implementation for the rules).
     void syncSmartMtrSettingsState();

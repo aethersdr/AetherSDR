@@ -102,6 +102,11 @@ private:
     // lean-mode gate.
     void advance();
 
+    // Apply the bar ballistics for a meter kind: the analog d'Arsonval sag for
+    // signal, a snappy PPM attack/decay for mic. Called at construction and on
+    // every RX<->TX kind switch (the smoother set differs per domain).
+    void applyBallistics(MeterKind kind);
+
     // Map a raw value (dBm/dBFS) to a clamped hole-local UNIT position, using the
     // current kind's mapping. Mirrors indicatorPosition() for arbitrary values.
     double mapRawToUnits(double raw) const;

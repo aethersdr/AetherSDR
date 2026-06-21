@@ -327,6 +327,10 @@ VfoWidget::VfoWidget(QWidget* parent)
     // widget whenever any flag changes them.
     connect(&MeterViewController::instance(), &MeterViewController::extremesChanged,
             this, &VfoWidget::pushSmartMtrOptions);
+    // The TX-meter choice swaps the SmartMTR input (signal <-> mic) rather than
+    // its options, so re-push the input when it changes on any flag.
+    connect(&MeterViewController::instance(), &MeterViewController::txMeterChanged,
+            this, &VfoWidget::pushSmartMtrInput);
     pushSmartMtrOptions(); // apply the persisted options to this new flag
 
     connect(&SliceColorManager::instance(), &SliceColorManager::colorsChanged,
@@ -1029,6 +1033,27 @@ void VfoWidget::buildUI()
     valuesRow->setGraphicsEffect(m_showValuesFade);
     meterMenuOuter->addWidget(valuesRow);
 
+    meterMenuOuter->addWidget(makeSeparator());
+
+    // TX meter — None / Mic Level. While transmitting, None keeps the RX signal
+    // scale and Mic Level swaps to the mic-level (dBFS) scale for the duration
+    // of TX.
+    auto* txMeterRow = new QWidget;
+    txMeterRow->setAttribute(Qt::WA_TranslucentBackground);
+    auto* txMeterLayout = new QHBoxLayout(txMeterRow);
+    txMeterLayout->setContentsMargins(0, 0, 0, 0);
+    txMeterLayout->setSpacing(4);
+    txMeterLayout->addWidget(makeOptLabel(tr("TX meter")));
+    m_txMeterCmb = new QComboBox;
+    m_txMeterCmb->addItem(tr("None"), int(DS::TxMeter::None));
+    m_txMeterCmb->addItem(tr("Mic Level"), int(DS::TxMeter::MicLevel));
+    m_txMeterCmb->setCurrentIndex(m_txMeterCmb->findData(int(DS::txMeter())));
+    AetherSDR::applyComboStyle(m_txMeterCmb);
+    txMeterLayout->addWidget(m_txMeterCmb, 1);
+    m_txMeterFade = new QGraphicsOpacityEffect(txMeterRow);
+    txMeterRow->setGraphicsEffect(m_txMeterFade);
+    meterMenuOuter->addWidget(txMeterRow);
+
     // Persist + re-evaluate enable/disable rules on change.  Toggling "Show
     // extremes" off disables "Extremes speed" and, if "Show values" is set to
     // Extremes, snaps it back to None (handled in syncSmartMtrSettingsState).
@@ -1048,6 +1073,11 @@ void VfoWidget::buildUI()
         MeterViewController::instance().setShowValues(
             static_cast<DisplaySettings::MeterValues>(
                 m_showValuesCmb->currentData().toInt()));
+    });
+    connect(m_txMeterCmb, &QComboBox::currentIndexChanged, this, [this](int) {
+        MeterViewController::instance().setTxMeter(
+            static_cast<DisplaySettings::TxMeter>(
+                m_txMeterCmb->currentData().toInt()));
     });
 
     syncSmartMtrSettingsState();  // initial enable/disable per current state
@@ -3156,12 +3186,18 @@ void VfoWidget::syncSmartMtrSettingsState()
     if (m_showValuesFade) {
         m_showValuesFade->setOpacity(smart ? 1.0 : kDisabledOpacity);
     }
+    if (m_txMeterFade) {
+        m_txMeterFade->setOpacity(smart ? 1.0 : kDisabledOpacity);
+    }
 
     if (m_showExtremesChk) {
         m_showExtremesChk->setEnabled(smart);
     }
     if (m_extremesSpeedCmb) {
         m_extremesSpeedCmb->setEnabled(speedEnabled);
+    }
+    if (m_txMeterCmb) {
+        m_txMeterCmb->setEnabled(smart);
     }
     if (m_showValuesCmb) {
         m_showValuesCmb->setEnabled(smart);
@@ -3213,12 +3249,19 @@ void VfoWidget::pushSmartMtrInput()
         return;
 
     MeterInput in;
-    const bool showMic = m_transmitting && m_slice && m_slice->isTxSlice();
+    // Only swap to the mic-level scale on TX when the operator opted in via the
+    // "TX meter" setting; otherwise the meter stays on the RX signal scale.
+    const bool showMic = m_transmitting && m_slice && m_slice->isTxSlice()
+        && MeterViewController::instance().txMeter()
+            == DisplaySettings::TxMeter::MicLevel;
     if (showMic) {
         in.kind = MeterKind::MicLevel;
         in.value = m_micDbfs;
-        in.min = -40.0; // dBFS
-        in.max = 0.0;
+        in.min = -40.0; // dBFS — scale start
+        in.max = 0.0;   // dBFS — full scale / clip (linear scale)
+        // Peak marker is the radio's separate MICPEAK stat, not a local window max.
+        in.hasPeak = true;
+        in.peak = m_micPeakDbfs;
     } else {
         in.kind = MeterKind::Signal;
         in.value = m_signalDbm;
@@ -3382,9 +3425,10 @@ void VfoWidget::drawSmartMtrLabels(QPainter& p) const
     p.restore();
 }
 
-void VfoWidget::setMicLevel(float micDbfs)
+void VfoWidget::setMicLevel(float micDbfs, float micPeakDbfs)
 {
     m_micDbfs = micDbfs;
+    m_micPeakDbfs = micPeakDbfs;
     if (m_transmitting && m_slice && m_slice->isTxSlice())
         pushSmartMtrInput();
 }
