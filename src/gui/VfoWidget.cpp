@@ -2,6 +2,7 @@
 #include "PhaseKnob.h"
 #include "SmartMtrWidget.h"
 #include "MeterViewController.h"
+#include "DisplaySettings.h"
 #include "ComboStyle.h"
 #include "FrequencyEntryParser.h"
 #include "GuardedSlider.h"
@@ -29,6 +30,9 @@
 #include <QAccessible>
 #include <QLineEdit>
 #include <QComboBox>
+#include <QCheckBox>
+#include <QFrame>
+#include <QListView>
 #include <QStackedWidget>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -888,9 +892,17 @@ void VfoWidget::buildUI()
     // applies globally and persists.
     m_meterMenuRow = new QWidget;
     m_meterMenuRow->setAttribute(Qt::WA_TranslucentBackground);
-    auto* meterMenuLayout = new QHBoxLayout(m_meterMenuRow);
-    // Small bottom margin so the buttons aren't flush against the flag's edge.
-    meterMenuLayout->setContentsMargins(0, 0, 0, 6);
+    // Outer layout stacks the selector buttons over the SmartMTR-only options.
+    auto* meterMenuOuter = new QVBoxLayout(m_meterMenuRow);
+    // Small bottom margin so the contents aren't flush against the flag's edge.
+    meterMenuOuter->setContentsMargins(0, 0, 0, 6);
+    meterMenuOuter->setSpacing(5);
+
+    // Selector buttons live in their own horizontal row.
+    auto* meterBtnRow = new QWidget;
+    meterBtnRow->setAttribute(Qt::WA_TranslucentBackground);
+    auto* meterMenuLayout = new QHBoxLayout(meterBtnRow);
+    meterMenuLayout->setContentsMargins(0, 0, 0, 0);
     meterMenuLayout->setSpacing(3);
 
     m_sMeterOptBtn = new QPushButton(tr("S-Meter"));
@@ -920,6 +932,110 @@ void VfoWidget::buildUI()
         MeterViewController::instance().setSmartMtr(true);
         syncMeterMenuButtons();
     });
+
+    meterMenuOuter->addWidget(meterBtnRow);
+
+    // ── SmartMTR-only options (vertical) ───────────────────────────────────
+    // Shown below the selector buttons; disabled while the standard S-meter is
+    // selected (these tune the SmartMTR view only).  Persisted via
+    // DisplaySettings; the rendering layer consumes them in a follow-up.
+    using DS = DisplaySettings;
+
+    // Thin horizontal separator matching the selector's border colour.
+    auto makeSeparator = []() {
+        auto* line = new QFrame;
+        line->setFrameShape(QFrame::HLine);
+        line->setFrameShadow(QFrame::Plain);
+        line->setFixedHeight(1);
+        line->setStyleSheet(
+            "QFrame { border: none; background: #304050; max-height: 1px; }");
+        line->setAttribute(Qt::WA_TransparentForMouseEvents);
+        return line;
+    };
+    // Label preceding a select control, on the same row as its combo.
+    auto makeOptLabel = [](const QString& text) {
+        auto* lbl = new QLabel(text);
+        lbl->setStyleSheet("QLabel { background: transparent; border: none; "
+                           "color: #c8d8e8; font-size: 12px; }");
+        return lbl;
+    };
+
+    meterMenuOuter->addWidget(makeSeparator());
+
+    // Show extremes — checkbox.
+    m_showExtremesChk = new QCheckBox(tr("Show extremes"));
+    m_showExtremesChk->setChecked(DS::showExtremes());
+    m_showExtremesChk->setCursor(Qt::PointingHandCursor);
+    m_showExtremesChk->setStyleSheet(
+        "QCheckBox { background: transparent; color: #c8d8e8; font-size: 12px; "
+        "spacing: 5px; }"
+        "QCheckBox::indicator { width: 13px; height: 13px; border-radius: 2px; "
+        "border: 1px solid #304050; background: #1a2a3a; }"
+        "QCheckBox::indicator:checked { background: #0070c0; "
+        "border: 1px solid #0090e0; }"
+        "QCheckBox:disabled { color: #5a6a78; }"
+        "QCheckBox::indicator:disabled { border: 1px solid #243240; "
+        "background: #141f2a; }");
+    meterMenuOuter->addWidget(m_showExtremesChk);
+
+    // Extremes speed — Slow / Medium / Fast.
+    auto* speedRow = new QWidget;
+    speedRow->setAttribute(Qt::WA_TranslucentBackground);
+    auto* speedLayout = new QHBoxLayout(speedRow);
+    speedLayout->setContentsMargins(0, 0, 0, 0);
+    speedLayout->setSpacing(4);
+    speedLayout->addWidget(makeOptLabel(tr("Extremes speed")));
+    m_extremesSpeedCmb = new QComboBox;
+    m_extremesSpeedCmb->addItem(tr("Slow"), int(DS::ExtremesSpeed::Slow));
+    m_extremesSpeedCmb->addItem(tr("Medium"), int(DS::ExtremesSpeed::Medium));
+    m_extremesSpeedCmb->addItem(tr("Fast"), int(DS::ExtremesSpeed::Fast));
+    m_extremesSpeedCmb->setCurrentIndex(
+        m_extremesSpeedCmb->findData(int(DS::extremesSpeed())));
+    AetherSDR::applyComboStyle(m_extremesSpeedCmb);
+    speedLayout->addWidget(m_extremesSpeedCmb, 1);
+    m_extremesSpeedFade = new QGraphicsOpacityEffect(speedRow);
+    speedRow->setGraphicsEffect(m_extremesSpeedFade);
+    meterMenuOuter->addWidget(speedRow);
+
+    meterMenuOuter->addWidget(makeSeparator());
+
+    // Show values — None / Signal / Extremes.
+    auto* valuesRow = new QWidget;
+    valuesRow->setAttribute(Qt::WA_TranslucentBackground);
+    auto* valuesLayout = new QHBoxLayout(valuesRow);
+    valuesLayout->setContentsMargins(0, 0, 0, 0);
+    valuesLayout->setSpacing(4);
+    valuesLayout->addWidget(makeOptLabel(tr("Show values")));
+    m_showValuesCmb = new QComboBox;
+    m_showValuesCmb->addItem(tr("None"), int(DS::MeterValues::None));
+    m_showValuesCmb->addItem(tr("Signal"), int(DS::MeterValues::Signal));
+    m_showValuesCmb->addItem(tr("Extremes"), int(DS::MeterValues::Extremes));
+    m_showValuesCmb->setCurrentIndex(
+        m_showValuesCmb->findData(int(DS::showValues())));
+    AetherSDR::applyComboStyle(m_showValuesCmb);
+    valuesLayout->addWidget(m_showValuesCmb, 1);
+    m_showValuesFade = new QGraphicsOpacityEffect(valuesRow);
+    valuesRow->setGraphicsEffect(m_showValuesFade);
+    meterMenuOuter->addWidget(valuesRow);
+
+    // Persist + re-evaluate enable/disable rules on change.  Toggling "Show
+    // extremes" off disables "Extremes speed" and, if "Show values" is set to
+    // Extremes, snaps it back to None (handled in syncSmartMtrSettingsState).
+    connect(m_showExtremesChk, &QCheckBox::toggled, this, [this](bool on) {
+        DisplaySettings::setShowExtremes(on);
+        syncSmartMtrSettingsState();
+    });
+    connect(m_extremesSpeedCmb, &QComboBox::currentIndexChanged, this,
+            [this](int) {
+        DisplaySettings::setExtremesSpeed(static_cast<DisplaySettings::ExtremesSpeed>(
+            m_extremesSpeedCmb->currentData().toInt()));
+    });
+    connect(m_showValuesCmb, &QComboBox::currentIndexChanged, this, [this](int) {
+        DisplaySettings::setShowValues(static_cast<DisplaySettings::MeterValues>(
+            m_showValuesCmb->currentData().toInt()));
+    });
+
+    syncSmartMtrSettingsState();  // initial enable/disable per current state
 
     m_meterMenuRow->hide();  // hidden until the meter strip is clicked
     // NOTE: added to the root layout below the tab bar (see after m_tabBar).
@@ -2969,6 +3085,7 @@ void VfoWidget::applyMeterView(bool smartMtr)
         m_meterStack->setCurrentIndex(smartMtr ? 1 : 0);
     }
     syncMeterMenuButtons();
+    syncSmartMtrSettingsState();  // options are SmartMTR-only → enable/disable
     adjustSize();  // S-Meter and SmartMTR pages may differ in height → resize the flag
     update();  // repaint the painted S-meter bar (or clear it)
     // Recomposite over the GPU spectrum so the switched meter is visible while
@@ -2988,6 +3105,64 @@ void VfoWidget::syncMeterMenuButtons()
     }
     if (m_smartMtrOptBtn) {
         m_smartMtrOptBtn->setChecked(m_smartMtr);
+    }
+}
+
+// Enable/disable the SmartMTR-only options to match the current state:
+//   • everything is disabled unless the SmartMTR view is selected;
+//   • "Extremes speed" is further gated on "Show extremes" being checked;
+//   • with "Show extremes" off, "Show values" can't stay on Extremes — it
+//     snaps back to None.
+void VfoWidget::syncSmartMtrSettingsState()
+{
+    const bool smart = m_smartMtr;  // options apply to SmartMTR only
+    const bool showExt = m_showExtremesChk && m_showExtremesChk->isChecked();
+
+    // Dim disabled select rows (label + combo) to match the disabled-checkbox
+    // label.  #5e6e7c is ~0.45 blend of the normal text over the flag bg, so
+    // 0.45 opacity reproduces that dimming on the whole row.
+    constexpr double kDisabledOpacity = 0.45;
+    const bool speedEnabled = smart && showExt;
+    if (m_extremesSpeedFade) {
+        m_extremesSpeedFade->setOpacity(speedEnabled ? 1.0 : kDisabledOpacity);
+    }
+    if (m_showValuesFade) {
+        m_showValuesFade->setOpacity(smart ? 1.0 : kDisabledOpacity);
+    }
+
+    if (m_showExtremesChk) {
+        m_showExtremesChk->setEnabled(smart);
+    }
+    if (m_extremesSpeedCmb) {
+        m_extremesSpeedCmb->setEnabled(speedEnabled);
+    }
+    if (m_showValuesCmb) {
+        m_showValuesCmb->setEnabled(smart);
+        // The "Extremes" value is meaningless without the extremes markers, so
+        // hide it from the dropdown entirely while "Show extremes" is off (the
+        // combo's view stylesheet forces every item to the primary text colour,
+        // so a merely-disabled item wouldn't read as disabled).  Also clear its
+        // flags as a fallback for styles that ignore row-hiding.
+        const int extremesIdx =
+            m_showValuesCmb->findData(int(DisplaySettings::MeterValues::Extremes));
+        if (extremesIdx >= 0) {
+            if (auto* view = qobject_cast<QListView*>(m_showValuesCmb->view())) {
+                view->setRowHidden(extremesIdx, !showExt);
+            }
+            // Flags role (Qt::UserRole - 1): invalid QVariant = default
+            // (enabled), 0 = no flags (disabled/unselectable).
+            m_showValuesCmb->setItemData(
+                extremesIdx, showExt ? QVariant() : QVariant(0),
+                Qt::UserRole - 1);
+        }
+        // ...and if it was the current choice, snap back to None.
+        if (!showExt && m_showValuesCmb->currentIndex() == extremesIdx) {
+            const int noneIdx =
+                m_showValuesCmb->findData(int(DisplaySettings::MeterValues::None));
+            if (noneIdx >= 0) {
+                m_showValuesCmb->setCurrentIndex(noneIdx);  // persists via signal
+            }
+        }
     }
 }
 

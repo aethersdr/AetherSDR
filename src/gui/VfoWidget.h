@@ -19,6 +19,8 @@ class QLineEdit;
 class QStackedWidget;
 class QSlider;
 class QComboBox;
+class QCheckBox;
+class QGraphicsOpacityEffect;
 class QDoubleSpinBox;
 class QGridLayout;
 
@@ -264,6 +266,21 @@ private:
     QWidget* m_meterMenuRow{nullptr};
     QPushButton* m_sMeterOptBtn{nullptr};
     QPushButton* m_smartMtrOptBtn{nullptr};
+    // SmartMTR-only display options, shown vertically below the selector
+    // buttons. Disabled while the standard S-meter is selected. "Extremes
+    // speed" is further gated on "Show extremes" being checked.
+    QCheckBox* m_showExtremesChk{nullptr};
+    QComboBox* m_extremesSpeedCmb{nullptr};
+    QComboBox* m_showValuesCmb{nullptr};
+    // Opacity effects over each select row (label + combo), dimmed when the
+    // row is disabled so the disabled state is obvious (the custom combo
+    // stylesheet has no :disabled variant).  Matched to the disabled-checkbox
+    // label dimming.
+    QGraphicsOpacityEffect* m_extremesSpeedFade{nullptr};
+    QGraphicsOpacityEffect* m_showValuesFade{nullptr};
+    // Enable/disable the SmartMTR-only options per the current meter view and
+    // the "Show extremes" checkbox state (see implementation for the rules).
+    void syncSmartMtrSettingsState();
     // Thin spacer between the meter and the tab bar, shown only while the meter
     // selector is open, to give the curved underline room below the indicator.
     QWidget* m_meterUnderlineRoom{nullptr};
