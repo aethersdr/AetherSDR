@@ -618,6 +618,10 @@ void TransmitModel::setMicBias(bool on)
 void TransmitModel::setAmCarrierLevel(int level)
 {
     level = qBound(0, level, 100);
+    if (m_amCarrierLevel != level) {
+        m_amCarrierLevel = level;  // optimistic — radio status echo supersedes
+        emit phoneStateChanged();
+    }
     emit commandReady(QString("transmit set am_carrier=%1").arg(level));
 }
 
