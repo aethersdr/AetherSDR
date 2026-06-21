@@ -54,8 +54,15 @@ QString widgetValue(const QWidget* w)
     }
     if (auto* cb = qobject_cast<const QComboBox*>(w))
         return cb->currentText();
-    if (auto* le = qobject_cast<const QLineEdit*>(w))
+    if (auto* le = qobject_cast<const QLineEdit*>(w)) {
+        // Never serialize masked fields (password / PIN / keychain secrets):
+        // dumpTree is written to a temp tree.json, so returning the cleartext
+        // would exfiltrate credentials. Reporting a placeholder keeps the field
+        // assertable (present / non-empty) without leaking the value. (#3646)
+        if (le->echoMode() != QLineEdit::Normal)
+            return le->text().isEmpty() ? QString() : QStringLiteral("<hidden>");
         return le->text();
+    }
     if (auto* sb = qobject_cast<const QSpinBox*>(w))
         return QString::number(sb->value());
     if (auto* ds = qobject_cast<const QDoubleSpinBox*>(w))
