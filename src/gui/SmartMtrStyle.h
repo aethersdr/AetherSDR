@@ -44,7 +44,7 @@ inline constexpr double kHoleMargX = (kControlW - kHoleW) / 2.0; // 10, centered
 inline constexpr double kHoleMargY = 20.0;                       // from top
 
 // Corner radius of the hole (and, concentrically, its inset rim), in units.
-inline constexpr double kHoleRadius = 4.0;
+inline constexpr double kHoleRadius = 2.0;
 
 // Inset shadow depth: how far the soft gradient reaches inward from each inner
 // edge of the hole (equal on all four sides).
