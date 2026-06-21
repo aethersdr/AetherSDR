@@ -988,6 +988,95 @@ void section5(RigctlClient& c, Runner& r, qint64 origFreq)
                 c.ok(lines), lines.join(QStringLiteral(" | ")));
         c.send(QStringLiteral("\\set_split_vfo 0 VFOA"));  // cleanup
     }
+
+    // 5.12  Implicit-enable reclaim (#3703 bug a). Split enabled IMPLICITLY via
+    //        set_freq VFOB (no preceding set_split_vfo 1) must still record the
+    //        enable, so a later set_split_vfo 0 sees the 1→0 edge and reclaims TX
+    //        back to the RX slice. Before the fix m_lastSplitEnable stayed 0 on the
+    //        implicit path, the reclaim was skipped, and get_split_vfo kept
+    //        reporting Split: 1 after disable.  [needs 2 slices]
+    {
+        // Start from a known-off state.
+        c.send(QStringLiteral("\\set_split_vfo 0 VFOA"));
+        QString s;
+        QElapsedTimer t; t.start();
+        do {
+            s = c.field(c.send(QStringLiteral("\\get_split_vfo")), QStringLiteral("Split"));
+            if (s == QLatin1String("0") || t.elapsed() >= 1500) break;
+            QThread::msleep(100);
+        } while (true);
+
+        // Implicit enable: address the TX VFO directly, with NO set_split_vfo first.
+        c.send(QStringLiteral("\\set_freq VFOB %1").arg(origFreq + 4200));
+        QString on;
+        t.restart();
+        do {
+            on = c.field(c.send(QStringLiteral("\\get_split_vfo")), QStringLiteral("Split"));
+            if (on == QLatin1String("1") || t.elapsed() >= 5000) break;
+            QThread::msleep(200);
+        } while (true);
+
+        if (on == QLatin1String("1")) {
+            // Disable; the recorded implicit enable must drive the 1→0 reclaim so
+            // split reads back off.
+            c.send(QStringLiteral("\\set_split_vfo 0 VFOA"));
+            QString off;
+            t.restart();
+            do {
+                off = c.field(c.send(QStringLiteral("\\get_split_vfo")), QStringLiteral("Split"));
+                if (off == QLatin1String("0") || t.elapsed() >= 2000) break;
+                QThread::msleep(200);
+            } while (true);
+            r.check(QStringLiteral("5.12 implicit enable (set_freq VFOB) reclaims TX on set_split_vfo 0  [needs 2 slices]"),
+                    off == QLatin1String("0"),
+                    QStringLiteral("Split after disable=%1 (must be 0)").arg(off));
+        } else {
+            r.skip(QStringLiteral("5.12 implicit-enable reclaim  [needs 2 slices]"),
+                   QStringLiteral("implicit split did not engage — open a second slice"));
+        }
+    }
+
+    // 5.13  maxSlices guard on create-on-demand (#3703 bug b). On a single-slice-
+    //        capacity receiver, set_split_vfo 1 must NOT arm a phantom deferred
+    //        create that can never land (which left tryPromoteTxSlice hung). It
+    //        should fail to engage cleanly: get_split_freq → RPRT -1.
+    //        Conditional: rigctld exposes no slice-count/capacity query, so we
+    //        infer capacity from whether split engages. If it engages (the radio
+    //        has room or a second slice), the guard path isn't reachable in this
+    //        config → SKIP rather than false-fail.
+    {
+        c.send(QStringLiteral("\\set_split_vfo 0 VFOA"));  // known-off
+        QString off;
+        QElapsedTimer t; t.start();
+        do {
+            off = c.field(c.send(QStringLiteral("\\get_split_vfo")), QStringLiteral("Split"));
+            if (off == QLatin1String("0") || t.elapsed() >= 1500) break;
+            QThread::msleep(100);
+        } while (true);
+
+        c.send(QStringLiteral("\\set_split_vfo 1 VFOB"));
+        QString on;
+        t.restart();
+        do {
+            on = c.field(c.send(QStringLiteral("\\get_split_vfo")), QStringLiteral("Split"));
+            if (on == QLatin1String("1") || t.elapsed() >= 5000) break;
+            QThread::msleep(200);
+        } while (true);
+
+        if (on == QLatin1String("1")) {
+            r.skip(QStringLiteral("5.13 maxSlices guard on create-on-demand"),
+                   QStringLiteral("split engaged — radio has slice capacity, guard path not exercised"));
+        } else {
+            // Split could not engage: the guard fired (single-slice-capacity port).
+            // Confirm it failed CLEANLY — get_split_freq returns RPRT -1, with no
+            // phantom TX slice and no hung pending state.
+            QStringList gsf = c.send(QStringLiteral("\\get_split_freq"));
+            r.check(QStringLiteral("5.13 at-capacity set_split_vfo 1 fails cleanly (get_split_freq RPRT -1)"),
+                    !c.ok(gsf),
+                    gsf.join(QStringLiteral(" | ")));
+        }
+        c.send(QStringLiteral("\\set_split_vfo 0 VFOA"));  // cleanup
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
