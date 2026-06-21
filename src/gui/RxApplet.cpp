@@ -1485,9 +1485,8 @@ void RxApplet::setMaxSlices(int maxSlices)
         m_sliceTabRow->setVisible(true);
     }
 
-    // Re-apply the all-muted dim to the freshly-rebuilt buttons so the
-    // visual stays in sync if the rebuild happens while the user is in
-    // the all-muted state.
+    // Re-apply the normal slice-tab palette after rebuild. Mute state belongs
+    // on the speaker control; the slice tabs keep their identity colours.
     refreshAllMutedDim();
 }
 
@@ -1584,9 +1583,14 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
     // string itself doesn't need to change for those.
     auto applyStyleIfChanged = [](QToolButton* btn, int colourIdx,
                                    const QString& stylesheet) {
+        btn->setProperty("normalStyleSheet", stylesheet);
         const QVariant prev = btn->property("colourIdx");
-        if (prev.isValid() && prev.toInt() == colourIdx) return;
+        if (prev.isValid() && prev.toInt() == colourIdx
+            && btn->styleSheet() == stylesheet) {
+            return;
+        }
         btn->setProperty("colourIdx", colourIdx);
+        btn->setProperty("sliceButtonsDimmed", false);
         btn->setStyleSheet(stylesheet);
     };
 
@@ -1695,6 +1699,8 @@ void RxApplet::updateSliceButtons(const QList<SliceModel*>& slices, int activeSl
         btn->style()->unpolish(btn);
         btn->style()->polish(btn);
     }
+
+    refreshAllMutedDim();
 }
 
 void RxApplet::setSlice(SliceModel* slice)
@@ -2876,67 +2882,34 @@ void RxApplet::updateFreqLabel()
 
 void RxApplet::refreshAllMutedDim()
 {
-    if (!m_radioModel) {
-        setSliceButtonsDimmed(false);
-        return;
-    }
-    const auto slices = m_radioModel->slices();
-    // RadioModel::slices() returns only owned slices (foreign clients are
-    // pruned on client_handle).  The dim should reflect whether every one
-    // of the user's own slices is muted — empty list means "no slices to
-    // indicate state for", treat as not-all-muted.
-    if (slices.isEmpty()) {
-        setSliceButtonsDimmed(false);
-        return;
-    }
-    bool anyUnmuted = false;
-    for (const SliceModel* s : slices) {
-        if (s && !s->audioMute()) { anyUnmuted = true; break; }
-    }
-    setSliceButtonsDimmed(!anyUnmuted);
+    // The slice tabs are identity and selection controls. Older RX Controls
+    // code greyed the entire row when all owned slices were muted, but that
+    // masked the active slice and made the buttons read as disabled. Keep the
+    // slice colours stable; mute state is shown by the speaker button.
+    setSliceButtonsDimmed(false);
 }
 
 void RxApplet::setSliceButtonsDimmed(bool dim)
 {
-    // QGraphicsOpacityEffect doesn't always compose cleanly with QSS-
-    // styled widgets on Linux X11 (the effect is silently dropped on some
-    // configurations).  Swap the stylesheet directly instead so the dim
-    // is guaranteed to render.  Each slice button's QSS carries a per-
-    // slice color baked in by setMaxSlices, so cache that original on
-    // first-dim and restore it on un-dim.
+    Q_UNUSED(dim);
     for (QToolButton* btn : m_sliceBtns) {
-        if (!btn) continue;
-        const QVariant cached = btn->property("originalStyleSheet");
-        if (cached.isNull())
-            btn->setProperty("originalStyleSheet", btn->styleSheet());
-        if (dim) {
-            // Uniform dark gray, no per-slice color — visually
-            // distinct from the foreign-slot grey and the empty-slot
-            // look so the operator can tell at a glance: "all my
-            // receivers are muted."
-            btn->setStyleSheet(
-                "QToolButton { background: #15181c; color: #383d44; "
-                "border: 1px solid #2a2e34; border-radius: 3px; "
-                "font-weight: bold; font-size: 10px; padding: 0; }"
-                "QToolButton:checked { background: #25292f; color: #4a5058; "
-                "border: 1px solid #383d44; }");
-        } else {
-            btn->setStyleSheet(cached.toString());
+        if (!btn) {
+            continue;
+        }
+        btn->setProperty("sliceButtonsDimmed", false);
+        const QVariant normal = btn->property("normalStyleSheet");
+        if (normal.isValid()) {
+            btn->setStyleSheet(normal.toString());
         }
     }
-    // Slice badge (shown on single-slice radios) — same uniform dim.
     if (m_sliceBadge) {
         const QVariant cached = m_sliceBadge->property("originalStyleSheet");
-        if (cached.isNull())
+        if (cached.isNull()) {
             m_sliceBadge->setProperty("originalStyleSheet",
                                        m_sliceBadge->styleSheet());
-        if (dim) {
-            m_sliceBadge->setStyleSheet(
-                "QLabel { background: #25292f; color: #4a5058; "
-                "border-radius: 3px; font-weight: bold; font-size: 11px; }");
-        } else {
-            m_sliceBadge->setStyleSheet(cached.toString());
         }
+        m_sliceBadge->setStyleSheet(
+            m_sliceBadge->property("originalStyleSheet").toString());
     }
 }
 

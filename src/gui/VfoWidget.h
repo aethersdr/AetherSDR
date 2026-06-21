@@ -79,6 +79,7 @@ public:
     // overlay menu and the AetherDSP applet only.
     void setAfGain(int pct);
     void setEscLevel(float dbm);
+    void setEscControlsAvailable(bool available);
     void syncFromSlice();
     void setRecordOn(bool on);
     void setPlayOn(bool on);
@@ -260,6 +261,11 @@ private:
     QLabel*      m_escDbmLbl{nullptr};
     QWidget*     m_escMeterBar{nullptr};
     float        m_escLevelDbm{-130.0f};
+    bool         m_diversityAllowed{true};
+    bool         m_escControlsAvailable{true};
+    void syncEscPanelVisibility();
+    void syncTabStackHeightToCurrentPage();
+    void relayoutToCurrentContent();
     QPushButton* m_sqlBtn{nullptr};
     QPointer<RxApplet> m_rxApplet;       // source-of-truth for 3-way SQL state
     QLabel*      m_sqlValueLbl{nullptr}; // captured during buildUI() for syncSqlVisuals

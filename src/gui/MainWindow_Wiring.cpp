@@ -272,8 +272,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // if the slice was destroyed and recreated (e.g. by profile global load).
     // During profile recall, RadioModel's profile-load hold suppresses this
     // slice write so it cannot fight the radio's restored profile state.
-    if (s->isTxSlice())
-        m_radioModel.sendCommand(QString("slice set %1 tx=1").arg(s->sliceId()));
+    if (s->isTxSlice()) {
+        s->setTxSlice(true);
+    }
 
     // Keep the radio-side TX DAX flag aligned when the TX slice or mode changes.
     // SmartSDR DAX2 on Windows owns both the dax_tx stream and the radio's
@@ -587,6 +588,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
         updateKiwiSdrVirtualTrackingForSlice(s);
         refreshKiwiSdrWaterfallAvailability();
         syncKiwiSdrPanadapterUiStates();
+        syncKiwiSdrDiversityEscControls();
     });
 
     // Create a VfoWidget for this slice on the correct panadapter
@@ -706,6 +708,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
     refreshKiwiSdrSlices();
     refreshKiwiSdrWaterfallAvailability();
+    syncKiwiSdrDiversityEscControls();
 }
 
 void MainWindow::onSliceRemoved(int id)
@@ -803,6 +806,7 @@ void MainWindow::onSliceRemoved(int id)
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
     refreshKiwiSdrSlices();
     refreshKiwiSdrWaterfallAvailability();
+    syncKiwiSdrDiversityEscControls();
 }
 
 void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,
@@ -1322,6 +1326,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     auto updateKiwiWaterfallView = [this, applet, sw](double centerMhz,
                                                       double bandwidthMhz) {
         if (m_kiwiSdrManager && applet && sw) {
+            const QString displayProfileId =
+                kiwiSdrProfileForPan(applet->panId());
             for (SliceModel* slice : m_radioModel.slices()) {
                 if (!slice || slice->panId() != applet->panId()
                     || !m_radioModel.sliceMayBelongToUs(slice->sliceId())) {
@@ -1335,8 +1341,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 m_kiwiSdrManager->updateWaterfallView(
                     slice->sliceId(), applet->panId(), centerMhz,
                     bandwidthMhz, sw->wfLineDuration());
-                if (m_kiwiSdrManager->isConnected(profileId)) {
+                if (profileId == displayProfileId
+                    && m_kiwiSdrManager->isConnected(profileId)) {
                     sw->setKiwiSdrWaterfallAvailable(true);
+                    sw->setKiwiSdrWaterfallProfile(profileId);
                     sw->setKiwiSdrWaterfallActive(true);
                     syncKiwiSdrAppletWaterfallState();
                 }
@@ -2723,6 +2731,13 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     connect(s, &SliceModel::audioMuteChanged, this, [this, s](bool) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
+        syncFlexRxPanToAudioEngine();
+    });
+    connect(s, &SliceModel::audioPanChanged, this, [this, s](int) {
+        updateKiwiSdrVirtualAudioControlsForSlice(s);
+    });
+    connect(s, &SliceModel::diversityChanged, this, [this](bool) {
+        syncKiwiSdrDiversityEscControls();
     });
     connect(w, &VfoWidget::closeSliceRequested, this, [this, sliceId]() {
         if (m_radioModel.slices().size() <= 1) return;
@@ -2907,13 +2922,11 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
 
     // Pan re-apply after NR mono-mix (#1460, #1796): keep AudioEngine in sync
-    // with the radio-side pan value from ALL sources (VFO panel, RX applet,
-    // MIDI, radio echo-back on connect).  Connecting SliceModel::audioPanChanged
-    // covers every path that calls setAudioPan(); only the active slice's value
-    // matters because AudioEngine plays one slice at a time.
-    connect(s, &SliceModel::audioPanChanged, this, [this, sliceId](int v) {
-        if (sliceId == m_activeSliceId)
-            m_audio->setRxPan(v);
+    // with the active Flex-backed slice's radio-side pan value. Kiwi-backed
+    // slices update their own external source pan via
+    // updateKiwiSdrVirtualAudioControlsForSlice().
+    connect(s, &SliceModel::audioPanChanged, this, [this](int) {
+        syncFlexRxPanToAudioEngine();
     });
     connect(s, &SliceModel::rxAntennaChanged, this, [this, sliceId](const QString&) {
         if (auto* sl = m_radioModel.slice(sliceId)) {

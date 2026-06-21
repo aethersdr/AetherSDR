@@ -5941,6 +5941,7 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     refreshKiwiSdrSlices();
     syncKiwiSdrTrackingToActiveSlice();
     refreshKiwiSdrWaterfallAvailability();
+    syncFlexRxPanToAudioEngine();
     // Sync squelch line to newly active slice (handles slice switch without waiting
     // for squelchChanged signal)
     if (auto* sw2 = spectrumForSlice(s))
@@ -7279,8 +7280,16 @@ SpectrumWidget* MainWindow::spectrumForSlice(SliceModel* s) const
     return spectrum();  // fallback to active pan
 }
 
-void MainWindow::showPanadapterInterlockNotification(const QString& message)
+void MainWindow::showPanadapterInterlockNotification(const QString& message,
+                                                     const QString& panId)
 {
+    if (!panId.trimmed().isEmpty() && m_panStack) {
+        if (SpectrumWidget* sw = m_panStack->spectrum(panId.trimmed())) {
+            sw->showInterlockNotification(message, 5000);
+            return;
+        }
+    }
+
     SliceModel* target = nullptr;
     for (auto* s : m_radioModel.slices()) {
         if (s && s->isTxSlice()) {

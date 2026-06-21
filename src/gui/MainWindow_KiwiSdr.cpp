@@ -16,6 +16,7 @@
 #include "models/SliceModel.h"
 
 #include <QMetaObject>
+#include <QSet>
 #include <QTimer>
 
 namespace AetherSDR {
@@ -140,6 +141,9 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
         m_kiwiSdrVirtualPreviousMute.insert(sliceId, slice->flexAudioMute());
     }
     slice->setExternalReceiveAudioReplacementMute(true);
+    if (m_appletPanel) {
+        m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+    }
 
     // Receive-only: route audio from the Kiwi profile and mute Flex audio for
     // this slice. No antenna command is sent to the radio (Principle I).
@@ -153,11 +157,15 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
         slice->filterLow(), slice->filterHigh(), slice->panId());
     updateKiwiSdrVirtualTrackingForSlice(slice);
     updateKiwiSdrVirtualAudioControlsForSlice(slice);
+    syncFlexRxPanToAudioEngine();
+    syncKiwiSdrDiversityEscControls();
 
     if (SpectrumWidget* spectrum = spectrumForSlice(slice)) {
-        spectrum->setKiwiSdrWaterfallAvailable(true);
-        spectrum->setKiwiSdrWaterfallProfile(profileId);
-        spectrum->setKiwiSdrWaterfallActive(true);
+        if (kiwiSdrDisplaySliceForPan(slice->panId()) == slice) {
+            spectrum->setKiwiSdrWaterfallAvailable(true);
+            spectrum->setKiwiSdrWaterfallProfile(profileId);
+            spectrum->setKiwiSdrWaterfallActive(true);
+        }
         if (VfoWidget* vfo = spectrum->vfoWidget(slice->sliceId())) {
             vfo->setReceiveMeterReading(
                 KiwiSdrProtocol::meterUnavailable(
@@ -189,6 +197,9 @@ void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
                 ? m_kiwiSdrVirtualPreviousMute.take(sliceId)
                 : slice->flexAudioMute();
         slice->setExternalReceiveAudioReplacementMute(false, restoreMute);
+        if (m_appletPanel) {
+            m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+        }
         if (SpectrumWidget* spectrum = spectrumForSlice(slice)) {
             setKiwiSdrWaterfallActive(m_radioModel, panId, spectrum, false);
             spectrum->setKiwiSdrConnectionOverlay(false);
@@ -199,9 +210,69 @@ void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
     if (m_kiwiSdrManager) {
         m_kiwiSdrManager->clearSliceAssignment(sliceId);
     }
+    syncFlexRxPanToAudioEngine();
+    syncKiwiSdrDiversityEscControls();
     refreshKiwiSdrWaterfallAvailability();
     if (!panId.isEmpty()) {
         syncKiwiSdrPanadapterUiState(panId);
+    }
+}
+
+SliceModel* MainWindow::flexRxPanSourceSlice() const
+{
+    auto isFlexBacked = [this](const SliceModel* slice) {
+        return slice
+            && m_radioModel.sliceMayBelongToUs(slice->sliceId())
+            && (!m_kiwiSdrManager
+                || m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId())
+                       .isEmpty());
+    };
+
+    SliceModel* active = m_radioModel.slice(m_activeSliceId);
+    if (isFlexBacked(active)) {
+        return active;
+    }
+
+    if (active && active->diversity()) {
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (!isFlexBacked(slice) || !slice->diversity()
+                || slice->sliceId() == active->sliceId()) {
+                continue;
+            }
+            if ((active->isDiversityChild() && slice->isDiversityParent())
+                || (active->isDiversityParent() && slice->isDiversityChild())) {
+                return slice;
+            }
+        }
+
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (isFlexBacked(slice) && slice->diversity()
+                && slice->sliceId() != active->sliceId()) {
+                return slice;
+            }
+        }
+    }
+
+    SliceModel* onlyUnmutedFlexSlice = nullptr;
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (!isFlexBacked(slice) || slice->flexAudioMute()) {
+            continue;
+        }
+        if (onlyUnmutedFlexSlice) {
+            return nullptr;
+        }
+        onlyUnmutedFlexSlice = slice;
+    }
+    return onlyUnmutedFlexSlice;
+}
+
+void MainWindow::syncFlexRxPanToAudioEngine()
+{
+    if (!m_audio) {
+        return;
+    }
+    if (SliceModel* slice = flexRxPanSourceSlice()) {
+        m_audio->setRxPan(slice->flexAudioPan());
     }
 }
 
@@ -224,8 +295,10 @@ void MainWindow::updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice)
         m_kiwiSdrManager->updateWaterfallView(
             slice->sliceId(), slice->panId(), spectrum->centerMhz(),
             spectrum->bandwidthMhz(), spectrum->wfLineDuration());
-        if (m_kiwiSdrManager->isConnected(profileId)) {
+        if (profileId == kiwiSdrProfileForPan(slice->panId())
+            && m_kiwiSdrManager->isConnected(profileId)) {
             spectrum->setKiwiSdrWaterfallAvailable(true);
+            spectrum->setKiwiSdrWaterfallProfile(profileId);
             spectrum->setKiwiSdrWaterfallActive(true);
             syncKiwiSdrAppletWaterfallState();
         }
@@ -233,35 +306,196 @@ void MainWindow::updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice)
     }
 }
 
+SliceModel* MainWindow::kiwiSdrDisplaySliceForPan(const QString& panId) const
+{
+    if (!m_kiwiSdrManager || panId.isEmpty()) {
+        return nullptr;
+    }
+
+    // Diversity pans have one visual source, and it follows the parent slice.
+    // If only the child is using Kiwi, keep the pan/FFT/waterfall on the
+    // parent's Flex source while the child contributes audio only.
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (!slice || slice->panId() != panId
+            || !m_radioModel.sliceMayBelongToUs(slice->sliceId())
+            || !slice->isDiversityParent()) {
+            continue;
+        }
+        return m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId())
+                   .isEmpty()
+            ? nullptr
+            : slice;
+    }
+
+    QVector<SliceModel*> candidates;
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (!slice || slice->panId() != panId
+            || !m_radioModel.sliceMayBelongToUs(slice->sliceId())) {
+            continue;
+        }
+        if (!m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId())
+                 .isEmpty()) {
+            candidates.append(slice);
+        }
+    }
+    if (candidates.isEmpty()) {
+        return nullptr;
+    }
+
+    if (SliceModel* active = activeSlice()) {
+        for (SliceModel* slice : candidates) {
+            if (slice == active) {
+                return slice;
+            }
+        }
+    }
+
+    SliceModel* indexedDiversitySlice = nullptr;
+    for (SliceModel* slice : candidates) {
+        if (!slice->diversity()) {
+            return slice;
+        }
+        if (!indexedDiversitySlice
+            || (slice->diversityIndex() >= 0
+                && (indexedDiversitySlice->diversityIndex() < 0
+                    || slice->diversityIndex()
+                           < indexedDiversitySlice->diversityIndex()))) {
+            indexedDiversitySlice = slice;
+        }
+    }
+
+    return indexedDiversitySlice ? indexedDiversitySlice : candidates.first();
+}
+
 QString MainWindow::kiwiSdrProfileForPan(const QString& panId) const
+{
+    SliceModel* displaySlice = kiwiSdrDisplaySliceForPan(panId);
+    if (!displaySlice || !m_kiwiSdrManager) {
+        return QString();
+    }
+    return m_kiwiSdrManager->assignedProfileForSlice(displaySlice->sliceId());
+}
+
+QString MainWindow::kiwiSdrOverlayProfileForPan(const QString& panId) const
 {
     if (!m_kiwiSdrManager || panId.isEmpty()) {
         return QString();
     }
 
-    if (SliceModel* slice = activeSlice()) {
-        if (slice->panId() == panId
-            && m_radioModel.sliceMayBelongToUs(slice->sliceId())) {
-            const QString profileId =
-                m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId());
-            if (!profileId.isEmpty()) {
-                return profileId;
-            }
-        }
-    }
+    const QString displayProfileId = kiwiSdrProfileForPan(panId);
+    QSet<QString> visitedProfiles;
+    QString connectingProfileId;
+    QString disconnectedProfileId;
 
     for (SliceModel* slice : m_radioModel.slices()) {
         if (!slice || slice->panId() != panId
             || !m_radioModel.sliceMayBelongToUs(slice->sliceId())) {
             continue;
         }
+
         const QString profileId =
             m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId());
-        if (!profileId.isEmpty()) {
+        if (profileId.isEmpty() || profileId == displayProfileId
+            || visitedProfiles.contains(profileId)) {
+            continue;
+        }
+        visitedProfiles.insert(profileId);
+
+        switch (m_kiwiSdrManager->state(profileId)) {
+        case KiwiSdrClient::State::Error:
             return profileId;
+        case KiwiSdrClient::State::Connecting:
+            if (connectingProfileId.isEmpty()) {
+                connectingProfileId = profileId;
+            }
+            break;
+        case KiwiSdrClient::State::Disconnected:
+            if (disconnectedProfileId.isEmpty()) {
+                disconnectedProfileId = profileId;
+            }
+            break;
+        case KiwiSdrClient::State::Connected:
+            break;
         }
     }
-    return QString();
+
+    return !connectingProfileId.isEmpty() ? connectingProfileId
+                                          : disconnectedProfileId;
+}
+
+void MainWindow::syncKiwiSdrPanadapterTxInhibit(const QString& panId,
+                                                const QString& profileId)
+{
+    m_radioModel.setPanTransmitInhibited(
+        panId,
+        !profileId.isEmpty(),
+        tr("Transmit is disabled because this panadapter is displaying a KiwiSDR receiver."));
+}
+
+void MainWindow::syncKiwiSdrDiversityEscControls()
+{
+    QSet<int> blockedSlices;
+    if (m_kiwiSdrManager) {
+        for (SliceModel* slice : m_radioModel.slices()) {
+            if (!slice || !slice->diversity()
+                || !m_radioModel.sliceMayBelongToUs(slice->sliceId())) {
+                continue;
+            }
+
+            QVector<SliceModel*> group;
+            bool groupHasKiwi = false;
+            for (SliceModel* other : m_radioModel.slices()) {
+                if (!other || !other->diversity()
+                    || !m_radioModel.sliceMayBelongToUs(other->sliceId())) {
+                    continue;
+                }
+
+                const bool samePan =
+                    !slice->panId().isEmpty()
+                    && slice->panId() == other->panId();
+                const bool parentChildPair =
+                    (slice->isDiversityParent() && other->isDiversityChild())
+                    || (slice->isDiversityChild() && other->isDiversityParent());
+                if (slice == other || samePan || parentChildPair) {
+                    group.append(other);
+                    groupHasKiwi = groupHasKiwi
+                        || !m_kiwiSdrManager
+                                ->assignedProfileForSlice(other->sliceId())
+                                .isEmpty();
+                }
+            }
+
+            if (!groupHasKiwi) {
+                continue;
+            }
+
+            for (SliceModel* member : group) {
+                blockedSlices.insert(member->sliceId());
+            }
+        }
+    }
+
+    // Disable Flex ESC before hiding the controls. Kiwi receive paths are not
+    // phase coherent with Flex RF, so an invisible enabled combiner would be
+    // misleading and could keep stale RF phase/gain state active.
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (slice && blockedSlices.contains(slice->sliceId())
+            && slice->isDiversityParent() && slice->escEnabled()) {
+            slice->setEscEnabled(false);
+        }
+    }
+
+    for (SliceModel* slice : m_radioModel.slices()) {
+        if (!slice) {
+            continue;
+        }
+        if (SpectrumWidget* sw = spectrumForSlice(slice)) {
+            if (VfoWidget* vfo = sw->vfoWidget(slice->sliceId())) {
+                vfo->setEscControlsAvailable(
+                    !blockedSlices.contains(slice->sliceId()));
+            }
+        }
+    }
 }
 
 void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
@@ -270,15 +504,27 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         return;
     }
 
+    const QString profileId = kiwiSdrProfileForPan(panId);
+    syncKiwiSdrPanadapterTxInhibit(panId, profileId);
+
     SpectrumWidget* spectrum = m_panStack->spectrum(panId);
     if (!spectrum) {
         return;
     }
 
-    const QString profileId = kiwiSdrProfileForPan(panId);
     SpectrumOverlayMenu* menu = spectrum->overlayMenu();
     if (profileId.isEmpty()) {
-        spectrum->setKiwiSdrConnectionOverlay(false);
+        const QString overlayProfileId = kiwiSdrOverlayProfileForPan(panId);
+        if (!overlayProfileId.isEmpty()) {
+            spectrum->setKiwiSdrConnectionOverlay(
+                true,
+                kiwiConnectionOverlayDetail(
+                    m_kiwiSdrManager->state(overlayProfileId),
+                    m_kiwiSdrManager->stateDetail(overlayProfileId)),
+                tr("Not connected to KiwiSDR"));
+        } else {
+            spectrum->setKiwiSdrConnectionOverlay(false);
+        }
         setKiwiSdrWaterfallActive(m_radioModel, panId, spectrum, false);
         spectrum->setKiwiSdrWaterfallAvailable(false);
         spectrum->setKiwiSdrWaterfallProfile(QString());
@@ -358,10 +604,13 @@ void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice)
 
     const float gainPercent = slice->audioGain();
     const bool muted = slice->audioMute();
+    const int pan = slice->audioPan();
     QMetaObject::invokeMethod(m_audio,
-                              [audio = m_audio, profileId, gainPercent, muted]() {
+                              [audio = m_audio, profileId, gainPercent, muted, pan]() {
+        audio->setKiwiSdrAudioSourceEnabled(profileId, true);
         audio->setKiwiSdrAudioSourceGain(profileId, gainPercent);
         audio->setKiwiSdrAudioSourceMuted(profileId, muted);
+        audio->setKiwiSdrAudioSourcePan(profileId, pan);
     }, Qt::QueuedConnection);
 }
 
@@ -516,6 +765,10 @@ void MainWindow::wireKiwiSdr()
                 return;
             }
 
+            if (kiwiSdrProfileForPan(slice->panId()) != profileId) {
+                return;
+            }
+
             if (SpectrumWidget* sw = spectrumForSlice(slice)) {
                 sw->setKiwiSdrWaterfallProfile(profileId);
                 sw->updateKiwiSdrWaterfallRow(binsDbm, lowFreqMhz,
@@ -579,6 +832,10 @@ void MainWindow::wireKiwiSdr()
                 ? m_radioModel.slice(sliceId)->panId()
                 : QString();
             refreshKiwiSdrAppletReceivers();
+            syncKiwiSdrDiversityEscControls();
+            if (m_appletPanel) {
+                m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+            }
             if (!profileId.isEmpty()) {
                 syncKiwiSdrPanadapterUiState(panId);
                 return;
@@ -589,6 +846,10 @@ void MainWindow::wireKiwiSdr()
                         ? m_kiwiSdrVirtualPreviousMute.take(sliceId)
                         : slice->flexAudioMute();
                 slice->setExternalReceiveAudioReplacementMute(false, restoreMute);
+                if (m_appletPanel) {
+                    m_appletPanel->updateSliceButtons(
+                        m_radioModel.slices(), m_activeSliceId);
+                }
                 if (SpectrumWidget* spectrum = spectrumForSlice(slice)) {
                     setKiwiSdrWaterfallActive(
                         m_radioModel, slice->panId(), spectrum, false);
@@ -597,6 +858,7 @@ void MainWindow::wireKiwiSdr()
                 }
             }
             refreshKiwiSdrWaterfallAvailability();
+            syncKiwiSdrDiversityEscControls();
             syncKiwiSdrPanadapterUiState(panId);
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::profileStateChanged,
@@ -621,6 +883,7 @@ void MainWindow::wireKiwiSdr()
                 }
             }
             refreshKiwiSdrWaterfallAvailability();
+            syncKiwiSdrDiversityEscControls();
             refreshKiwiSdrAppletReceivers();
             if (!panId.isEmpty()) {
                 syncKiwiSdrPanadapterUiState(panId);
@@ -677,6 +940,7 @@ void MainWindow::wireKiwiSdr()
         QTimer::singleShot(0, m_kiwiSdrManager, &KiwiSdrManager::startAutoConnect);
     }
     syncKiwiSdrPanadapterUiStates();
+    syncKiwiSdrDiversityEscControls();
 }
 
 void MainWindow::refreshKiwiSdrAppletReceivers()

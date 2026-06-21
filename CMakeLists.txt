@@ -2422,6 +2422,14 @@ if(UNIX)
 endif()
 add_test(NAME transmit_model_test COMMAND transmit_model_test)
 
+add_executable(transmit_inhibit_policy_test
+    tests/transmit_inhibit_policy_test.cpp
+    src/core/CommandParser.cpp
+)
+target_include_directories(transmit_inhibit_policy_test PRIVATE src)
+target_link_libraries(transmit_inhibit_policy_test PRIVATE Qt6::Core)
+add_test(NAME transmit_inhibit_policy_test COMMAND transmit_inhibit_policy_test)
+
 # Container system Phase 1 tests — needs QApplication + Widgets.
 add_executable(container_widget_test
     tests/container_widget_test.cpp

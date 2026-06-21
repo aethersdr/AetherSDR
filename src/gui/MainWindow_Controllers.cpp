@@ -1749,7 +1749,7 @@ void MainWindow::registerMidiParams()
         [this]() -> float { return m_radioModel.transmitModel().isTuning() ? 1 : 0; });
 
     reg("tx.atuStart", "ATU Start", "TX", P::Trigger, 0, 1,
-        [this](float) { m_radioModel.sendCommand("atu start"); });
+        [this](float) { m_radioModel.transmitModel().atuStart(); });
 
     // ── Phone/CW ────────────────────────────────────────────────────────
     reg("phone.micLevel", "Mic Level", "Phone/CW", P::Slider, 0, 100,

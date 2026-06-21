@@ -336,7 +336,14 @@ private:
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
     void updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice);
     void updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice);
+    SliceModel* flexRxPanSourceSlice() const;
+    void syncFlexRxPanToAudioEngine();
+    SliceModel* kiwiSdrDisplaySliceForPan(const QString& panId) const;
     QString kiwiSdrProfileForPan(const QString& panId) const;
+    QString kiwiSdrOverlayProfileForPan(const QString& panId) const;
+    void syncKiwiSdrPanadapterTxInhibit(const QString& panId,
+                                        const QString& profileId);
+    void syncKiwiSdrDiversityEscControls();
     void syncKiwiSdrPanadapterUiState(const QString& panId);
     void syncKiwiSdrPanadapterUiStates();
     void wirePanadapter(PanadapterApplet* applet);
@@ -345,7 +352,8 @@ private:
     void scheduleWaterfallLineDurationReconcile(const QString& panId, int reportedMs);
     void reassertUnmutedSliceAudioForPan(const QString& panId);
     void onMuteAllSlicesToggle();
-    void showPanadapterInterlockNotification(const QString& message);
+    void showPanadapterInterlockNotification(const QString& message,
+                                             const QString& panId = QString());
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();
     void refreshCwDecodeState();

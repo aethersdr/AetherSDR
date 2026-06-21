@@ -492,6 +492,7 @@ public slots:
     void setKiwiSdrAudioSourceEnabled(const QString& sourceId, bool on);
     void setKiwiSdrAudioSourceGain(const QString& sourceId, float gainPercent);
     void setKiwiSdrAudioSourceMuted(const QString& sourceId, bool muted);
+    void setKiwiSdrAudioSourcePan(const QString& sourceId, int pan);
     void removeKiwiSdrAudioSource(const QString& sourceId);
 
 signals:
@@ -573,6 +574,7 @@ private:
         std::unique_ptr<Resampler> rxResampler;
         std::unique_ptr<Resampler> rxResamplerR;
         float gain{1.0f};
+        int pan{50};
         bool enabled{false};
         bool muted{false};
         bool prebuffering{false};

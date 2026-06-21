@@ -178,11 +178,9 @@ private:
     static QString formatHz(int hz);
     static QString formatStepLabel(int hz);
 
-    // Recomputes the "all owned slices muted" state from RadioModel and
-    // dims the slice-tab buttons accordingly.  Called on any owned-slice
-    // audioMuteChanged + on slice add/remove + after slice-button rebuild.
-    // The dim is the visual ack the user gets after a double-click on
-    // m_muteBtn that toggles every slice.
+    // Keeps slice-tab styling on the normal slice identity palette. The
+    // speaker button owns mute feedback; slice letters must not grey out and
+    // read as disabled after mute-all or Kiwi receive routing changes.
     void refreshAllMutedDim();
     void setSliceButtonsDimmed(bool dim);
 

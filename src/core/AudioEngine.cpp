@@ -2004,6 +2004,16 @@ void AudioEngine::setKiwiSdrAudioSourceMuted(const QString& sourceId,
     updateRxBufferStats();
 }
 
+void AudioEngine::setKiwiSdrAudioSourcePan(const QString& sourceId, int pan)
+{
+    ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
+    if (!source) {
+        return;
+    }
+
+    source->pan = qBound(0, pan, 100);
+}
+
 void AudioEngine::removeKiwiSdrAudioSource(const QString& sourceId)
 {
     const QString id = sourceId.trimmed();
@@ -2157,6 +2167,10 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
 {
     if (!m_audioSink) return;  // PC audio disabled
 
+    const auto sourcePan = [this, externalSource]() {
+        return externalSource ? externalSource->pan : m_rxPan.load();
+    };
+
     // feedAudioData() handles all remote_audio_rx paths: SSB/CW/digital on any
     // pan, and the zero-filled frames the radio sends for muted slices
     // (audio_mute=1 zeroes the payload; it does NOT suppress packets).
@@ -2277,6 +2291,21 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
         emitRxPostChainScopeFromFloat32Stereo(*output, scopeSampleRate);
         updateRxBufferStats();
     };
+    const auto writeAudioAndLevel = [this, externalSource, sourcePan, &writeAudio](
+                                        const QByteArray& data) {
+        const QByteArray* output = &data;
+        QByteArray panned;
+        if (externalSource && sourcePan() != 50) {
+            panned = data;
+            applyRxPanInPlace(
+                reinterpret_cast<float*>(panned.data()),
+                panned.size() / (2 * static_cast<int>(sizeof(float))),
+                sourcePan());
+            output = &panned;
+        }
+        writeAudio(*output);
+        emit levelChanged(computeRMS(*output));
+    };
 
     // Bypass client-side DSP during TX (#367, #1505). NR2/RN2/BNR adapt
     // their internal state to silence during TX, causing distorted audio
@@ -2286,14 +2315,13 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
     {
         std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
         if (m_radioTransmitting) {
-            writeAudio(pcm);
-            emit levelChanged(computeRMS(pcm));
+            writeAudioAndLevel(pcm);
         } else if (m_rn2Enabled && m_rn2) {
             QByteArray processed = m_rn2->process(pcm);
             // Re-apply pan lost during NR mono-mix (#1460)
             applyRxPanInPlace(reinterpret_cast<float*>(processed.data()),
                               processed.size() / (2 * static_cast<int>(sizeof(float))),
-                              m_rxPan.load());
+                              sourcePan());
             writeAudio(processed);
             emit levelChanged(computeRMS(processed));
         } else if (m_nr2Enabled && m_nr2) {
@@ -2311,7 +2339,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             // Re-apply pan lost during NR mono-mix (#1460)
             applyRxPanInPlace(reinterpret_cast<float*>(processed.data()),
                               processed.size() / (2 * static_cast<int>(sizeof(float))),
-                              m_rxPan.load());
+                              sourcePan());
             writeAudio(processed);
             emit levelChanged(computeRMS(processed));
 #endif
@@ -2321,7 +2349,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             // Re-apply pan lost during NR mono-mix (#1460)
             applyRxPanInPlace(reinterpret_cast<float*>(processed.data()),
                               processed.size() / (2 * static_cast<int>(sizeof(float))),
-                              m_rxPan.load());
+                              sourcePan());
             writeAudio(processed);
             emit levelChanged(computeRMS(processed));
 #endif
@@ -2335,8 +2363,7 @@ void AudioEngine::processMixedRxAudioData(const QByteArray& pcm,
             processBnr(pcm);
             // processBnr writes audio and emits level internally
         } else {
-            writeAudio(pcm);
-            emit levelChanged(computeRMS(pcm));
+            writeAudioAndLevel(pcm);
         }
     }
 }
@@ -4880,7 +4907,8 @@ void AudioEngine::processNr2(const QByteArray& stereoPcm,
         dst[2 * i]     = s;
         dst[2 * i + 1] = s;
     }
-    applyRxPanInPlace(dst, stereoFrames, m_rxPan.load());
+    const int pan = externalSource ? externalSource->pan : m_rxPan.load();
+    applyRxPanInPlace(dst, stereoFrames, pan);
 }
 
 QByteArray AudioEngine::applyBoost(const QByteArray& pcm, float gain) const

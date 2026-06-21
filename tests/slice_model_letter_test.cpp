@@ -94,6 +94,55 @@ int main(int argc, char** argv)
         EXPECT_EQ(spy.count(), 0);
     }
 
+    // ── External receive replacement (KiwiSDR virtual antenna) owns visible
+    // audio pan locally. It must not send audio_pan commands to the Flex radio
+    // while Flex audio is silently muted for the same slice.
+    {
+        SliceModel s(4);
+        QStringList commands;
+        QObject::connect(&s, &SliceModel::commandReady,
+                         [&commands](const QString& cmd) { commands.append(cmd); });
+        s.applyStatus(kv({{"audio_pan", "25"}}));
+        EXPECT_EQ(s.audioPan(), 25);
+        EXPECT_EQ(s.flexAudioPan(), 25);
+
+        QSignalSpy panSpy(&s, &SliceModel::audioPanChanged);
+        s.setExternalReceiveAudioReplacementMute(true);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 4 audio_mute=1"));
+        EXPECT_EQ(s.audioPan(), 25);
+        EXPECT_EQ(s.flexAudioPan(), 25);
+        EXPECT_EQ(panSpy.count(), 0);
+        commands.clear();
+
+        s.setAudioPan(80);
+        EXPECT_EQ(s.audioPan(), 80);
+        EXPECT_EQ(s.flexAudioPan(), 25);
+        EXPECT_EQ(commands.join(QStringLiteral("|")), QString());
+        EXPECT_EQ(panSpy.count(), 1);
+        EXPECT_EQ(panSpy.takeFirst().at(0).toInt(), 80);
+
+        s.applyStatus(kv({{"audio_pan", "10"}}));
+        EXPECT_EQ(s.audioPan(), 80);
+        EXPECT_EQ(s.flexAudioPan(), 10);
+        EXPECT_EQ(panSpy.count(), 0);
+
+        s.setExternalReceiveAudioReplacementMute(false, false);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 4 audio_mute=0"));
+        EXPECT_EQ(s.audioPan(), 10);
+        EXPECT_EQ(s.flexAudioPan(), 10);
+        EXPECT_EQ(panSpy.count(), 1);
+        EXPECT_EQ(panSpy.takeFirst().at(0).toInt(), 10);
+        commands.clear();
+
+        s.setAudioPan(60);
+        EXPECT_EQ(s.audioPan(), 60);
+        EXPECT_EQ(s.flexAudioPan(), 60);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 4 audio_pan=60"));
+    }
+
     if (g_failures == 0) {
         std::printf("slice_model_letter_test: all checks passed\n");
         return 0;

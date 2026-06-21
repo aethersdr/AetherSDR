@@ -868,7 +868,7 @@ void VfoWidget::buildUI()
     m_playBtn->setAccessibleName("Play recorded audio");
     m_dbmLabel->setAccessibleName("Signal level dBm");
 
-    adjustSize();
+    relayoutToCurrentContent();
 }
 
 // ── Tab content ───────────────────────────────────────────────────────────────
@@ -1154,11 +1154,7 @@ void VfoWidget::buildTabContent()
         connect(m_divBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_slice)
                 m_slice->setDiversity(on);
-            // ESC panel only on diversity parent, not child
-            m_escPanel->setVisible(on && m_slice && !m_slice->isDiversityChild());
-            // setVisible() only posts a LayoutRequest; adjustSize() activates the
-            // layout first so the panel collapses immediately (#3383)
-            adjustSize();
+            syncEscPanelVisibility();
         });
         connect(m_escBtn, &QPushButton::toggled, this, [this](bool on) {
             if (!m_updatingFromModel && m_slice)
@@ -2082,7 +2078,7 @@ void VfoWidget::showTab(int index)
         m_tabStack->setCurrentIndex(index);
         m_tabStack->show();
     }
-    adjustSize();
+    relayoutToCurrentContent();
 }
 
 // ── Collapsed flag toggle ─────────────────────────────────────────────────────
@@ -2248,7 +2244,7 @@ void VfoWidget::setCollapsed(bool collapsed)
         syncFromSlice();
     }
 
-    adjustSize();
+    relayoutToCurrentContent();
     update();
 
     // Trigger parent repaint so SpectrumWidget repositions us and the freq label
@@ -2261,11 +2257,116 @@ void VfoWidget::setCollapsed(bool collapsed)
 
 void VfoWidget::setDiversityAllowed(bool allowed)
 {
+    m_diversityAllowed = allowed;
     if (m_divBtn) m_divBtn->setVisible(allowed);
-    // ESC panel only visible when DIV is active on a dual-SCU radio
-    if (m_escPanel && !allowed) {
-        m_escPanel->setVisible(false);
-        adjustSize();  // flush pending layout before sizing (#3383)
+    syncEscPanelVisibility();
+}
+
+void VfoWidget::setEscControlsAvailable(bool available)
+{
+    if (m_escControlsAvailable == available) {
+        return;
+    }
+    m_escControlsAvailable = available;
+    syncEscPanelVisibility();
+}
+
+void VfoWidget::syncEscPanelVisibility()
+{
+    if (!m_escPanel) {
+        return;
+    }
+
+    const bool showEscPanel =
+        m_diversityAllowed
+        && m_escControlsAvailable
+        && m_slice
+        && m_slice->diversity()
+        && !m_slice->isDiversityChild();
+
+    if (showEscPanel) {
+        m_escPanel->setMinimumHeight(0);
+        m_escPanel->setMaximumHeight(QWIDGETSIZE_MAX);
+        m_escPanel->setEnabled(true);
+    } else {
+        // This page is an overlay, not a normal window-managed layout. Force
+        // hidden ESC controls to contribute zero height so the VFO flag shrinks
+        // immediately when Kiwi receive makes ESC unavailable.
+        m_escPanel->setEnabled(false);
+        m_escPanel->setMinimumHeight(0);
+        m_escPanel->setMaximumHeight(0);
+    }
+    m_escPanel->setVisible(showEscPanel);
+    relayoutToCurrentContent();
+}
+
+void VfoWidget::syncTabStackHeightToCurrentPage()
+{
+    if (!m_tabStack) {
+        return;
+    }
+    if (!m_tabStack->isVisible()) {
+        m_tabStack->setMinimumHeight(0);
+        m_tabStack->setMaximumHeight(QWIDGETSIZE_MAX);
+        for (int i = 0; i < m_tabStack->count(); ++i) {
+            if (QWidget* tab = m_tabStack->widget(i)) {
+                tab->setMinimumHeight(0);
+                tab->setMaximumHeight(QWIDGETSIZE_MAX);
+            }
+        }
+        return;
+    }
+
+    QWidget* page = m_tabStack->currentWidget();
+    if (!page) {
+        return;
+    }
+    for (int i = 0; i < m_tabStack->count(); ++i) {
+        if (QWidget* tab = m_tabStack->widget(i)) {
+            tab->setMinimumHeight(0);
+            tab->setMaximumHeight(QWIDGETSIZE_MAX);
+        }
+    }
+    if (page->layout()) {
+        page->layout()->invalidate();
+        page->layout()->activate();
+    }
+
+    const int pageHeight = page->layout()
+        ? qMax(page->layout()->minimumSize().height(), page->layout()->sizeHint().height())
+        : page->sizeHint().height();
+    if (pageHeight > 0) {
+        page->setMinimumHeight(pageHeight);
+        page->setMaximumHeight(pageHeight);
+        page->resize(page->width(), pageHeight);
+        m_tabStack->setMinimumHeight(pageHeight);
+        m_tabStack->setMaximumHeight(pageHeight);
+        m_tabStack->resize(m_tabStack->width(), pageHeight);
+    }
+}
+
+void VfoWidget::relayoutToCurrentContent()
+{
+    syncTabStackHeightToCurrentPage();
+    if (layout()) {
+        layout()->invalidate();
+        layout()->activate();
+    }
+    if (!m_collapsed) {
+        setMinimumHeight(0);
+        setMaximumHeight(QWIDGETSIZE_MAX);
+        const int desiredHeight = sizeHint().height();
+        if (desiredHeight > 0) {
+            setFixedHeight(desiredHeight);
+            setGeometry(x(), y(), width(), desiredHeight);
+        } else {
+            adjustSize();
+        }
+    }
+    updateGeometry();
+    update();
+    if (parentWidget()) {
+        parentWidget()->update();
     }
 }
 
@@ -2877,7 +2978,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_nrfBtn->setVisible(!isFm && m_hasExtendedDsp);
         relayoutDspGrid();
         updateFilterLabel();
-        if (m_tabStack->isVisible()) adjustSize();
+        if (m_tabStack->isVisible()) relayoutToCurrentContent();
     });
     // Filter
     connect(m_slice, &SliceModel::filterChanged, this, [this](int, int) {
@@ -2921,8 +3022,7 @@ void VfoWidget::setSlice(SliceModel* slice)
     connect(m_slice, &SliceModel::diversityChanged, this, [this](bool on) {
         QSignalBlocker sb(m_divBtn);
         m_divBtn->setChecked(on);
-        m_escPanel->setVisible(on && !m_slice->isDiversityChild());
-        adjustSize();  // flush pending layout before sizing (#3383)
+        syncEscPanelVisibility();
     });
     // ESC sync — phase is in radians, display as degrees
     {
@@ -2944,7 +3044,7 @@ void VfoWidget::setSlice(SliceModel* slice)
         m_escPhaseLbl->setText(QString::number(deg) + QChar(0x00B0));
         m_phaseKnob->setPhase(rad);
     }
-    m_escPanel->setVisible(m_slice->diversity() && !m_slice->isDiversityChild());
+    syncEscPanelVisibility();
     connect(m_slice, &SliceModel::escEnabledChanged, this, [this](bool on) {
         m_updatingFromModel = true;
         QSignalBlocker sb(m_escBtn);
@@ -3329,7 +3429,7 @@ void VfoWidget::syncFromSlice()
         m_escPhaseLbl->setText(QString::number(deg) + QChar(0x00B0));
         m_phaseKnob->setPhase(rad);
     }
-    m_escPanel->setVisible(m_slice->diversity() && !m_slice->isDiversityChild());
+    syncEscPanelVisibility();
 
     // DSP
     auto syncDsp = [](QPushButton* btn, bool on) {
@@ -4359,7 +4459,7 @@ void VfoWidget::setRadeActive(bool on, const QString& label)
             m_radeCallsignLabel->hide();
         }
     }
-    resize(sizeHint());
+    relayoutToCurrentContent();
 }
 
 void VfoWidget::setRadeSynced(bool synced)

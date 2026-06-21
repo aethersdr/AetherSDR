@@ -29,6 +29,7 @@
 #include <QString>
 #include <QList>
 #include <QJsonObject>
+#include <QHash>
 #include <QMap>
 #include <QSet>
 #include <functional>
@@ -285,6 +286,11 @@ public:
     QList<SliceModel*> slices() const { return m_slices; }
     SliceModel* slice(int id) const;
     int activeTxSliceNum() const;
+    void setPanTransmitInhibited(const QString& panId,
+                                 bool inhibited,
+                                 const QString& reason = {});
+    bool panTransmitInhibited(const QString& panId) const;
+    QString panTransmitInhibitReason(const QString& panId) const;
 
     // Multi-Flex slot occupancy.  These let UI distinguish three slot
     // states for any global slice index: ours (we have a SliceModel for
@@ -463,7 +469,7 @@ signals:
     // Raw interlock TX state (regardless of ownership — for DAX passthrough).
     void radioTransmittingChanged(bool transmitting);
     // Short operator-facing interlock warnings for the panadapter overlay.
-    void interlockNotificationRequested(const QString& message);
+    void interlockNotificationRequested(const QString& message, const QString& panId);
     // Emitted when global profile list or active profile changes.
     void globalProfilesChanged();
     void profileDatabaseImportingChanged(bool importing);
@@ -754,6 +760,7 @@ private:
         bool    tx3{false};
     };
     QMap<int, TxBandInfo> m_txBandSettings;
+    QHash<QString, QString> m_panTransmitInhibitReasons;
     int  m_tuneInhibitBandId{-1};  // band ID whose TX outputs were inhibited during tune
     bool m_tuneInhibitActive{false};
 
@@ -761,12 +768,20 @@ private:
     void applyTuneInhibit();    // suppress selected TX outputs before tune
     void restoreTuneInhibit();  // re-enable TX outputs after tune
     SliceModel* txSlice() const;
+    QString transmitInhibitMessageForSlice(const SliceModel* slice) const;
+    QString transmitInhibitMessageForTxSlice() const;
+    void enforceTransmitInhibitForPan(const QString& panId);
+    void enforceTransmitInhibitForSlice(SliceModel* slice);
+    bool transmitStartBlockedByInhibit(const QString& key);
+    void sendSliceCommand(SliceModel* slice, const QString& cmd);
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
     QString txFilterFrequencyLimitMessage(int lowHz, int highHz) const;
     QString radioInterlockNotificationMessage(const QMap<QString, QString>& kvs) const;
     void armInterlockNotification(TransmitModel::PttSource source = TransmitModel::PttSource::Mox);
     bool interlockNotificationArmed() const;
-    void emitInterlockNotification(const QString& message, const QString& key);
+    void emitInterlockNotification(const QString& message,
+                                   const QString& key,
+                                   const QString& panId = QString());
 
 public:
     const QMap<int, TxBandInfo>& txBandSettings() const { return m_txBandSettings; }

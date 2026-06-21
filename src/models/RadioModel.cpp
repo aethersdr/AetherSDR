@@ -12,6 +12,7 @@
 #include "ProfileLoadCommand.h"
 #include "RadioStatusOwnership.h"
 #include "SliceRecreatePolicy.h"
+#include "TransmitInhibitPolicy.h"
 #include <QCoreApplication>
 #include <QDebug>
 #include <QJsonArray>
@@ -439,8 +440,12 @@ RadioModel::RadioModel(QObject* parent)
 
     // Forward tuner commands to the radio — route through tune inhibit check
     connect(&m_tunerModel, &TunerModel::commandReady, this, [this](const QString& cmd){
-        if (cmd.startsWith("tgxl autotune"))
+        if (cmd.startsWith("tgxl autotune")) {
+            if (transmitStartBlockedByInhibit(QStringLiteral("tgxl-autotune"))) {
+                return;
+            }
             applyTuneInhibit();
+        }
         sendCmd(cmd);
     });
 
@@ -456,9 +461,11 @@ RadioModel::RadioModel(QObject* parent)
     connect(&m_transmitModel, &TransmitModel::pttBlocked,
             this, [this](const QString& message) {
         m_pendingTransmitPreflightSource = TransmitModel::PttSource::Mox;
+        const QString panId = txSlice() ? txSlice()->panId() : QString();
         emitInterlockNotification(
             message,
-            QStringLiteral("local-ptt:%1").arg(message));
+            QStringLiteral("local-ptt:%1:%2").arg(panId, message),
+            panId);
     });
 
     // Forward transmit model commands to the radio
@@ -487,6 +494,12 @@ RadioModel::RadioModel(QObject* parent)
         if (match.hasMatch()) {
             const bool tx = (match.captured(1) == "1");
             if (tx) {
+                if (transmitStartBlockedByInhibit(QStringLiteral("xmit"))) {
+                    m_pendingTransmitPreflightSource =
+                        TransmitModel::PttSource::Mox;
+                    m_txRequested = false;
+                    return;
+                }
                 armInterlockNotification(m_pendingTransmitPreflightSource);
                 m_pendingTransmitPreflightSource = TransmitModel::PttSource::Mox;
             }
@@ -497,6 +510,9 @@ RadioModel::RadioModel(QObject* parent)
             }
         }
         if (cmd == "transmit tune 1" || cmd == "atu start") {
+            if (transmitStartBlockedByInhibit(QStringLiteral("tune-start"))) {
+                return;
+            }
             armInterlockNotification(m_pendingTransmitPreflightSource);
             m_pendingTransmitPreflightSource = TransmitModel::PttSource::Mox;
             applyTuneInhibit();
@@ -807,15 +823,142 @@ SliceModel* RadioModel::txSlice() const
     return nullptr;
 }
 
+void RadioModel::setPanTransmitInhibited(const QString& panId,
+                                         bool inhibited,
+                                         const QString& reason)
+{
+    const QString trimmedPanId = panId.trimmed();
+    if (trimmedPanId.isEmpty()) {
+        return;
+    }
+
+    if (!inhibited) {
+        m_panTransmitInhibitReasons.remove(trimmedPanId);
+        return;
+    }
+
+    const QString trimmedReason = reason.trimmed().isEmpty()
+        ? QStringLiteral("Transmit is disabled because this panadapter is displaying receive-only data.")
+        : reason.trimmed();
+    if (m_panTransmitInhibitReasons.value(trimmedPanId) == trimmedReason) {
+        return;
+    }
+    m_panTransmitInhibitReasons.insert(trimmedPanId, trimmedReason);
+    enforceTransmitInhibitForPan(trimmedPanId);
+}
+
+bool RadioModel::panTransmitInhibited(const QString& panId) const
+{
+    return m_panTransmitInhibitReasons.contains(panId.trimmed());
+}
+
+QString RadioModel::panTransmitInhibitReason(const QString& panId) const
+{
+    return m_panTransmitInhibitReasons.value(panId.trimmed());
+}
+
+QString RadioModel::transmitInhibitMessageForSlice(const SliceModel* slice) const
+{
+    if (!slice) {
+        return QString();
+    }
+    return panTransmitInhibitReason(slice->panId()).trimmed();
+}
+
+QString RadioModel::transmitInhibitMessageForTxSlice() const
+{
+    return transmitInhibitMessageForSlice(txSlice());
+}
+
+void RadioModel::enforceTransmitInhibitForPan(const QString& panId)
+{
+    if (!panTransmitInhibited(panId)) {
+        return;
+    }
+
+    for (SliceModel* slice : m_slices) {
+        if (slice && slice->panId() == panId
+            && sliceMayBelongToUs(slice->sliceId())) {
+            enforceTransmitInhibitForSlice(slice);
+        }
+    }
+}
+
+void RadioModel::enforceTransmitInhibitForSlice(SliceModel* slice)
+{
+    if (!slice || !slice->isTxSlice()
+        || !sliceMayBelongToUs(slice->sliceId())) {
+        return;
+    }
+
+    const QString message = transmitInhibitMessageForSlice(slice);
+    if (message.isEmpty()) {
+        return;
+    }
+
+    emitInterlockNotification(
+        message,
+        QStringLiteral("pan-tx-inhibit:%1").arg(slice->panId()),
+        slice->panId());
+    sendCmd(QStringLiteral("slice set %1 tx=0").arg(slice->sliceId()));
+}
+
+bool RadioModel::transmitStartBlockedByInhibit(const QString& key)
+{
+    SliceModel* target = txSlice();
+    const QString message = transmitInhibitMessageForSlice(target);
+    if (message.isEmpty()) {
+        return false;
+    }
+
+    const QString panId = target ? target->panId() : QString();
+    emitInterlockNotification(
+        message,
+        QStringLiteral("pan-tx-inhibit:%1:%2").arg(panId, key),
+        panId);
+    m_transmitModel.setTransmitting(false);
+    if (m_txAudioGate) {
+        m_txAudioGate = false;
+        emit txAudioGateChanged(false);
+    }
+    return true;
+}
+
+void RadioModel::sendSliceCommand(SliceModel* slice, const QString& cmd)
+{
+    const TransmitInhibitPolicy::SliceTxCommand txCommand =
+        TransmitInhibitPolicy::parseSliceTxCommand(cmd);
+    if (txCommand.valid && txCommand.txEnabled) {
+        SliceModel* target = slice && slice->sliceId() == txCommand.sliceId
+            ? slice
+            : this->slice(txCommand.sliceId);
+        const QString message = transmitInhibitMessageForSlice(target);
+        if (!message.isEmpty()) {
+            emitInterlockNotification(
+                message,
+                QStringLiteral("pan-tx-inhibit:%1").arg(target->panId()),
+                target->panId());
+            return;
+        }
+    }
+
+    sendCmd(cmd);
+}
+
 QString RadioModel::localPttInterlockMessage(TransmitModel::PttSource source) const
 {
+    auto* s = txSlice();
+    if (const QString message = transmitInhibitMessageForSlice(s);
+        !message.isEmpty()) {
+        return message;
+    }
+
     // CAT/DAX PTT callers acknowledge the request before the asynchronous
     // model path runs, so local preflight must not silently eat their PTT.
     // Let the radio be authoritative and report any resulting interlock.
     if (source == TransmitModel::PttSource::Dax)
         return QString();
 
-    auto* s = txSlice();
     if (!s)
         return QStringLiteral("No transmit slice is assigned.");
 
@@ -950,7 +1093,9 @@ bool RadioModel::interlockNotificationArmed() const
     return QDateTime::currentMSecsSinceEpoch() <= m_interlockNotificationArmedUntilMs;
 }
 
-void RadioModel::emitInterlockNotification(const QString& message, const QString& key)
+void RadioModel::emitInterlockNotification(const QString& message,
+                                           const QString& key,
+                                           const QString& panId)
 {
     const QString trimmed = message.trimmed();
     if (trimmed.isEmpty())
@@ -965,7 +1110,7 @@ void RadioModel::emitInterlockNotification(const QString& message, const QString
 
     m_lastInterlockNotificationKey = effectiveKey;
     m_lastInterlockNotificationMs = now;
-    emit interlockNotificationRequested(trimmed);
+    emit interlockNotificationRequested(trimmed, panId.trimmed());
 }
 
 // ─── Actions ──────────────────────────────────────────────────────────────────
@@ -1296,9 +1441,11 @@ void RadioModel::setTransmit(bool tx, TransmitModel::PttSource source)
     if (tx) {
         const QString message = localPttInterlockMessage(source);
         if (!message.isEmpty()) {
+            const QString panId = txSlice() ? txSlice()->panId() : QString();
             emitInterlockNotification(
                 message,
-                QStringLiteral("local-ptt:%1").arg(message));
+                QStringLiteral("local-ptt:%1:%2").arg(panId, message),
+                panId);
             m_transmitModel.setTransmitting(false);
             return;
         }
@@ -1920,6 +2067,7 @@ void RadioModel::stageSessionModelsForReconnect()
     m_ownedSliceIds.clear();
     m_foreignSliceOwners.clear();
     m_pendingPanStatuses.clear();
+    m_panTransmitInhibitReasons.clear();
     m_activePanId.clear();
 
     if (!m_staleSlices.isEmpty() || !m_stalePanadapters.isEmpty()) {
@@ -2441,7 +2589,7 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
 
                         for (auto* s : m_slices) {
                             for (const QString& cmd : s->drainPendingCommands())
-                                sendCmd(cmd);
+                                sendSliceCommand(s, cmd);
                         }
 
                         // Create remote_audio_rx if PC Audio is enabled. Defer briefly so
@@ -4292,6 +4440,7 @@ void RadioModel::onStatusReceived(const QString& object,
             // with no '=' so the parser puts the whole string in 'object'
             if (kvs.contains("removed") || object.endsWith("removed")) {
                 m_pendingPanStatuses.remove(panId);
+                m_panTransmitInhibitReasons.remove(panId);
                 auto* pan = m_panadapters.take(panId);
                 if (!pan) {
                     pan = m_stalePanadapters.take(panId);
@@ -4356,6 +4505,7 @@ void RadioModel::onStatusReceived(const QString& object,
                     m_stalePanadapters.erase(it);
                 }
                 if (rejectedPan) {
+                    m_panTransmitInhibitReasons.remove(panId);
                     m_panStream->unregisterPanStream(rejectedPan->panStreamId());
                     m_panStream->unregisterWfStream(rejectedPan->wfStreamId());
                     qCDebug(lcProtocol) << "RadioModel: panadapter" << panId
@@ -5120,8 +5270,8 @@ void RadioModel::handleSliceStatus(int id,
         } else {
             s = new SliceModel(id, this);
             // Forward slice commands to the radio
-            connect(s, &SliceModel::commandReady, this, [this](const QString& cmd){
-                sendCmd(cmd);
+            connect(s, &SliceModel::commandReady, this, [this, s](const QString& cmd){
+                sendSliceCommand(s, cmd);
             });
             connect(s, &SliceModel::txSliceChanged, this, [this](bool) {
                 m_meterModel.setActiveTxSlice(activeTxSliceNum());
@@ -5131,9 +5281,11 @@ void RadioModel::handleSliceStatus(int id,
         m_slices.append(s);
         s->applyStatus(kvs);  // populate frequency/mode before notifying UI
         m_meterModel.setActiveTxSlice(activeTxSliceNum());
+        enforceTransmitInhibitForSlice(s);
         if (!reclaimed) {
             emit sliceAdded(s);
         } else if (s->isTxSlice()
+                   && transmitInhibitMessageForSlice(s).isEmpty()
                    && QDateTime::currentMSecsSinceEpoch() >= m_profileLoadRadioStateWriteHoldUntilMs) {
             // Re-claim TX after a radio reboot (#145 semantics): the radio
             // recreates a stale slice model with tx=1 but tx_client_handle
@@ -5147,6 +5299,7 @@ void RadioModel::handleSliceStatus(int id,
 
     s->applyStatus(kvs);
     m_meterModel.setActiveTxSlice(activeTxSliceNum());
+    enforceTransmitInhibitForSlice(s);
 
     // Aurora/AU-520: max_internal_pa_power in slice status reports the true
     // system power capability (e.g. 500W) while transmit status max_power_level
@@ -5161,7 +5314,7 @@ void RadioModel::handleSliceStatus(int id,
     // Send any queued commands (e.g. if GUI changed freq before status arrived)
     if (isConnected()) {
         for (const QString& cmd : s->drainPendingCommands())
-            sendCmd(cmd);
+            sendSliceCommand(s, cmd);
     }
 }
 

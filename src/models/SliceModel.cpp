@@ -517,8 +517,10 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
 {
     const bool previousVisibleMute = audioMute();
     const float previousVisibleGain = audioGain();
+    const int previousVisiblePan = audioPan();
     if (active) {
         m_externalReceiveAudioGain = m_audioGain;
+        m_externalReceiveAudioPan = m_audioPan;
         m_externalReceiveAudioMute = false;
         m_externalReceiveAudioReplacement = true;
         if (!m_audioMute) {
@@ -539,6 +541,9 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
     }
     if (audioGain() != previousVisibleGain) {
         emit audioGainChanged(audioGain());
+    }
+    if (audioPan() != previousVisiblePan) {
+        emit audioPanChanged(audioPan());
     }
 }
 
@@ -583,6 +588,15 @@ void SliceModel::setEscPhaseShift(float deg)
 void SliceModel::setAudioPan(int pan)
 {
     pan = qBound(0, pan, 100);
+    if (m_externalReceiveAudioReplacement) {
+        if (m_externalReceiveAudioPan == pan) {
+            return;
+        }
+        m_externalReceiveAudioPan = pan;
+        emit audioPanChanged(m_externalReceiveAudioPan);
+        return;
+    }
+
     if (m_audioPan == pan) return;
     m_audioPan = pan;
     sendCommand(QString("slice set %1 audio_pan=%2").arg(m_id).arg(pan));
@@ -708,8 +722,11 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
         }
     }
     if (kvs.contains("audio_pan")) {
+        const int previousVisiblePan = audioPan();
         m_audioPan = kvs["audio_pan"].toInt();
-        emit audioPanChanged(m_audioPan);
+        if (audioPan() != previousVisiblePan) {
+            emit audioPanChanged(audioPan());
+        }
     }
     if (kvs.contains("audio_mute")) {
         bool mute = kvs["audio_mute"] == "1";

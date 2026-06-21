@@ -47,7 +47,10 @@ public:
                                       ? m_externalReceiveAudioGain
                                       : m_audioGain; }
     float   flexAudioGain() const { return m_audioGain; }
-    int     audioPan()   const { return m_audioPan; }
+    int     audioPan()   const { return m_externalReceiveAudioReplacement
+                                      ? m_externalReceiveAudioPan
+                                      : m_audioPan; }
+    int     flexAudioPan() const { return m_audioPan; }
 
     // Getters — RX DSP state
     QString rxAntenna()   const { return m_rxAntenna; }
@@ -296,6 +299,7 @@ private:
     bool    m_externalReceiveAudioReplacement{false};
     bool    m_externalReceiveAudioMute{false};
     float   m_externalReceiveAudioGain{70.0f};
+    int     m_externalReceiveAudioPan{50};
     bool    m_diversity{false};
     bool    m_diversityChild{false};
     bool    m_diversityParent{false};
