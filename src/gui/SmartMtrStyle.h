@@ -104,6 +104,14 @@ inline constexpr double kWindowSlowSec = 5.0;
 // a marker crosses the full bar in ~3.7 s, deliberately lazy vs the bar's attack.
 inline constexpr double kSlewUnitsPerSec = 60.0;
 
+// Repaint cadence (Hz) for a returning marker, used to bypass the bar's lean
+// repaint gate (#3283). In lean mode the bar throttles its repaint to 12 Hz; a
+// marker gliding back at kSlewUnitsPerSec sampled to the screen at 12 Hz steps
+// visibly (~2 deg/frame). The original SmartMTR renders its return at a steady
+// 60 Hz, so we match that for the markers while leaving the bar and idle meters
+// lean-gated. Bounds the extra GPU recomposite cost to the return window only.
+inline constexpr int kExtremesRepaintHz = 60;
+
 // Proximity fade: markers fade out when min and max are within a few dB (the
 // spread is then just noise). Linear ramp between these two dB thresholds.
 inline constexpr double kFadeLoDb = 3.0; // <= this spread -> hidden

@@ -120,19 +120,37 @@ void SmartMtrWidget::setMeterInput(const MeterInput& input)
 void SmartMtrWidget::advance()
 {
     const qint64 dt = m_clock.restart();
-    bool moving = m_smooth.tick(dt);
+    const bool barMoving = m_smooth.tick(dt);
+    bool moving = barMoving;
 
+    // A returning marker must repaint at a smooth cadence even when the bar's
+    // lean gate throttles to 12 Hz (the bar is settled during the glide, so its
+    // gate would step the markers). Gate the marker repaint on its own clock at
+    // kExtremesRepaintHz, bypassing the bar's lean gate only while a marker moves.
+    bool extremesRepaintDue = false;
     if (m_extremesEnabled) {
+        const qint64 now = m_extremesClock.elapsed();
         const bool extMoving = m_extremes.tick(
-            m_extremesClock.elapsed(), dt, needlePosUnits(),
+            now, dt, needlePosUnits(),
             [this](double raw) { return mapRawToUnits(raw); });
         moving = moving || extMoving;
+        if (extMoving) {
+            constexpr qint64 kGateMs = 1000 / SmartMtrExtremes::kExtremesRepaintHz;
+            if (m_lastExtremesRepaintMs < 0
+                || now - m_lastExtremesRepaintMs >= kGateMs) {
+                m_lastExtremesRepaintMs = now;
+                extremesRepaintDue = true;
+            }
+        }
     }
 
     const bool settled = !moving;
     if (settled)
         m_animTimer.stop();
-    if (settled || m_smooth.shouldRepaint())
+    // Repaint on: the settled (final) frame; a gated marker step; or the bar
+    // moving (through its lean gate). Gate the bar repaint on barMoving so the
+    // timer staying alive through a marker hold (nothing moving) doesn't repaint.
+    if (settled || extremesRepaintDue || (barMoving && m_smooth.shouldRepaint()))
         update();
 }
 

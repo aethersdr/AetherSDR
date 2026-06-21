@@ -135,6 +135,12 @@ private:
     QElapsedTimer m_extremesClock;
     bool m_extremesEnabled = false;
     MeterValues m_showValues = MeterValues::None;
+
+    // Repaint cadence for a returning marker, independent of the bar's lean
+    // repaint gate (which throttles to 12 Hz and would step the slow glide).
+    // Timestamp (on m_extremesClock) of the last marker-driven repaint; -1 until
+    // the first. See SmartMtrExtremes::kExtremesRepaintHz.
+    qint64 m_lastExtremesRepaintMs = -1;
 };
 
 } // namespace AetherSDR

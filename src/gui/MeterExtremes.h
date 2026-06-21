@@ -104,13 +104,18 @@ public:
         if (m_maxPos < SmartMtrUnits::kScaleMin) m_maxPos = SmartMtrUnits::kScaleMin;
         if (m_minPos > m_maxPos) m_minPos = m_maxPos;
 
-        // Keep animating ONLY while a marker is actually moving. Returning true
-        // whenever the window is non-empty would pin the meter's repaint timer at
-        // full rate forever for any live signal — and every meter repaint over the
-        // GPU panadapter forces a costly recomposite that starves input (drag).
-        // New samples restart the timer via setMeterInput, so expiries are still
-        // picked up promptly; this just lets an idle meter settle.
-        return moving;
+        // Keep animating while a marker is mid-slew OR has not yet collapsed onto
+        // the needle (a peak/trough is still standing off it). The latter keeps
+        // the timer running through the whole hold->return so the window prunes
+        // and the markers slew at the timer rate — matching the original app's
+        // steady loop and avoiding a staircase clocked by the irregular packet
+        // feed. It self-terminates once min ~= max ~= needle (markers collapsed),
+        // so an idle meter still settles rather than pinning the repaint timer at
+        // full rate forever (each meter repaint over the GPU panadapter forces a
+        // costly recomposite that starves input).
+        const bool standingOff = (m_maxPos > needlePosUnits + kConvergeEps)
+                                 || (m_minPos < needlePosUnits - kConvergeEps);
+        return moving || standingOff;
     }
 
     bool hasData() const { return m_hasData; }
