@@ -19,6 +19,9 @@ public:
     explicit SmartCatProtocol(RadioModel* model,
                               int vfoA = 0, int vfoB = -1,
                               bool flexExtensions = true);
+    // On client disconnect, tear down an active split (restore TX to slice A,
+    // clear any XIT-offset fallback) so it isn't left applied on the radio.
+    ~SmartCatProtocol();
 
     QString processCommand(const QString& cmd);
 
@@ -150,6 +153,13 @@ private:
     QString cmdZZBI(const QString& arg);
     QString cmdZZDE(const QString& arg);
     QString cmdZZFR(const QString& arg);
+    // Split mechanism (manager-free): reuse the operator-configured VFO B slice if
+    // present; else NOT_ENABLED ("?;") when a VFO B is configured but absent; else
+    // an XIT-offset fallback on slice A. Dedicated-TX-slice creation on a genuine
+    // single-VFO port is deferred to the slice-management consolidation.
+    QString enableSplit();
+    QString disableSplit();
+    void    teardownSplit();
 
     QString processCommandImpl(const QString& cmd);
 
@@ -165,6 +175,7 @@ private:
     bool        m_flexExtensions{true};
     bool        m_aiEnabled{false};
     bool        m_splitEnabled{false};
+    bool        m_xitSplit{false};  // XIT-offset split fallback active (no VFO B slice)
     bool        m_rxVfoB{false};   // false = VFO A is the RX VFO (FR/ZZFR selector)
     bool        m_pttAssertedByMe{false};
 };

@@ -9,6 +9,10 @@
 
 namespace AetherSDR {
 
+// Max RIT/XIT offset the radio accepts (±Hz). Used by RIT/XIT and the XIT-offset
+// split fallback. Declared here so it's visible to all handlers in this file.
+static constexpr int kRitMaxHz = 9999;
+
 // ── Mode conversion tables ──────────────────────────────────────────────────
 //
 // SmartSDR mode strings verified against FLEX-8600 fw v1.4.0.0.
@@ -102,6 +106,15 @@ SmartCatProtocol::SmartCatProtocol(RadioModel* model, int vfoA, int vfoB,
     , m_flexExtensions(flexExtensions)
 {}
 
+SmartCatProtocol::~SmartCatProtocol()
+{
+    // Client disconnect: tear down an active split so a reused VFO B isn't left as
+    // TX and an XIT-offset fallback isn't left applied on slice A. No slice is
+    // removed (split never created one — reuse/XIT only).
+    if (m_splitEnabled)
+        teardownSplit();
+}
+
 // ── Slice accessors ─────────────────────────────────────────────────────────
 
 SliceModel* SmartCatProtocol::sliceA() const
@@ -189,8 +202,7 @@ QString SmartCatProtocol::processCommandImpl(const QString& cmd)
             // previously flipped split on every call (same defect class as ZZTX).
             if (arg.isEmpty() || arg == "?")
                 return QString("ZZFT%1;").arg(m_splitEnabled ? "1" : "0");
-            m_splitEnabled = (arg == "1");
-            return {};
+            return (arg == "1") ? enableSplit() : disableSplit();
         }
         if (name == "ZZGT") return cmdZZGT(arg);
         if (name == "ZZLE") return cmdZZLE(arg);
@@ -297,14 +309,28 @@ QString SmartCatProtocol::cmdFA(const QString& arg)
 
 QString SmartCatProtocol::cmdFB(const QString& arg)
 {
-    SliceModel* b = sliceB();
-    if (!b) {
+    // XIT-fallback split (no VFO B slice): VFO B is slice A's frequency plus the
+    // XIT offset; setting VFO B sets the XIT offset.
+    if (m_xitSplit) {
         SliceModel* a = sliceA();
         if (!a) return "?;";
         if (arg.isEmpty())
-            return "FB" + freqField(a->frequency()) + ";";
+            return "FB" + freqField(a->frequency() + a->xitFreq() / 1e6) + ";";
+        bool ok;
+        double hz = arg.toDouble(&ok);
+        if (!ok) return "?;";
+        const int offset = qRound(hz - a->frequency() * 1e6);
+        // Reject an out-of-range split rather than silently clamping — clamping
+        // would put TX on a frequency the controller never asked for.
+        if (offset < -kRitMaxHz || offset > kRitMaxHz) return "?;";
+        a->setXit(true, offset);
         return {};
     }
+    SliceModel* b = sliceB();
+    // No VFO B → "?;" (do NOT fall back to VFO A). The old VFO-A fallback reported
+    // VFO A's frequency for FB while ZZME returned "?;"; that contradiction broke
+    // controllers' VFO sync (#3633).
+    if (!b) return "?;";
     if (arg.isEmpty())
         return "FB" + freqField(b->frequency()) + ";";
     bool ok;
@@ -344,7 +370,9 @@ QString SmartCatProtocol::cmdZZMD(const QString& arg)
 
 QString SmartCatProtocol::cmdZZME(const QString& arg)
 {
-    SliceModel* b = sliceB();
+    // XIT-fallback split shares slice A (no second slice), so VFO B's mode IS
+    // slice A's mode (XIT shifts frequency, not mode).
+    SliceModel* b = m_xitSplit ? sliceA() : sliceB();
     if (!b) return "?;";
     if (arg.isEmpty())
         return "ZZME" + modeToZZ(b->mode()) + ";";
@@ -400,23 +428,79 @@ QString SmartCatProtocol::cmdFT(const QString& arg)
 {
     if (arg.isEmpty())
         return QString("FT%1;").arg(m_splitEnabled ? 1 : 0);
-    m_splitEnabled = (arg == "1");
-    return {};
+    return (arg == "1") ? enableSplit() : disableSplit();
 }
 
 QString SmartCatProtocol::cmdZZSW(const QString& arg)
 {
     if (arg.isEmpty())
         return QString("ZZSW%1;").arg(m_splitEnabled ? "1" : "0");
-    m_splitEnabled = (arg == "1");
+    return (arg == "1") ? enableSplit() : disableSplit();
+}
+
+// ── Split mechanism (manager-free: reuse VFO B, else NOT_ENABLED, else XIT) ───
+QString SmartCatProtocol::enableSplit()
+{
+    if (m_splitEnabled) return {};   // idempotent — already split
+    SliceModel* a = sliceA();
+    if (!a) return "?;";
+
+    // (1) Operator-configured VFO B slice present → use it as the TX slice.
+    if (SliceModel* b = sliceB()) {
+        b->setTxSlice(true);
+        m_splitEnabled = true;
+        return {};
+    }
+    // (2) VFO B configured for this port but its slice is absent → NOT_ENABLED.
+    //     Honor the specific VFO B the port asked for (matches SmartSDR-for-Mac).
+    if (m_vfoB >= 0)
+        return "?;";
+    // (3) Genuine single-VFO port → XIT-offset fallback on slice A (TX = RX +
+    //     offset, 0 until set via FB/ZZFB). NOTE: SmartSDR-for-Windows would
+    //     create a dedicated TX slice here; that create-on-demand path is deferred
+    //     to the slice-management consolidation, so we fall back to XIT for now.
+    m_xitSplit = true;
+    a->setXit(true, a->xitFreq());
+    m_splitEnabled = true;
     return {};
+}
+
+QString SmartCatProtocol::disableSplit()
+{
+    if (m_splitEnabled) teardownSplit();
+    return {};
+}
+
+void SmartCatProtocol::teardownSplit()
+{
+    SliceModel* a = sliceA();
+    if (m_xitSplit) {
+        if (a) a->setXit(false, 0);
+        m_xitSplit = false;
+    }
+    // Hand TX back to the RX slice (slice A); it was on the operator's VFO B
+    // (XIT leaves TX on A already, so this is a no-op there). No slice is removed
+    // — split never created one (reuse/XIT only).
+    if (a) a->setTxSlice(true);
+    m_splitEnabled = false;
 }
 
 // ── FR — RX VFO select (accepted, no-op) ─────────────────────────────────────
 
-QString SmartCatProtocol::cmdFR(const QString& /*arg*/)
+// FR — RX VFO select (TS-2000). FR0 = VFO A, FR1 = VFO B. Per SmartSDR-for-Mac:
+// FR1 is accepted only when a real second VFO exists (a configured VFO B with a
+// present slice), else "?;". FA always reports VFO A (no A/B swap); FR; reports
+// the current selector.
+QString SmartCatProtocol::cmdFR(const QString& arg)
 {
-    return {};
+    if (arg.isEmpty() || arg == "?")
+        return QString("FR%1;").arg(m_rxVfoB ? 1 : 0);
+    if (arg == "0") { m_rxVfoB = false; return {}; }
+    if (arg == "1") {
+        if (m_vfoB >= 0 && sliceB()) { m_rxVfoB = true; return {}; }
+        return "?;";   // no real VFO B defined → cannot select it
+    }
+    return "?;";       // FR2 (memory) and other values unsupported
 }
 
 // ── TX / ZZTX — PTT on ───────────────────────────────────────────────────────
@@ -525,8 +609,6 @@ static QString zzToAgcMode(const QString& code)
     if (code == "4") return "fast";
     return "med";
 }
-
-static constexpr int kRitMaxHz = 9999;
 
 // ── AG / ZZAG — VFO A audio gain (0-100, 3-digit) ───────────────────────────
 
@@ -1085,15 +1167,11 @@ QString SmartCatProtocol::cmdSH(const QString& arg)
 
 QString SmartCatProtocol::cmdZZFR(const QString& arg)
 {
-    if (arg.isEmpty() || arg == "?")
-        return QString("ZZFR%1;").arg(m_rxVfoB ? "1" : "0");
-    if (arg != "0" && arg != "1") return "?;";
-    const bool wantB = (arg == "1");
-    if (wantB != m_rxVfoB) {
-        std::swap(m_vfoA, m_vfoB);
-        m_rxVfoB = wantB;
-    }
-    return {};
+    // ZZFR is not part of the SmartSDR CAT command set — it is unsupported.
+    // (RX-VFO selection is done via the Kenwood FR command; see cmdFR.) The old
+    // implementation swapped m_vfoA/m_vfoB, an invented behavior with no SmartSDR
+    // equivalent that corrupted the VFO mapping — removed.
+    return "?;";
 }
 
 // ── SQ — squelch level (P1=main/sub selector, P2=000-255) ────────────────────
