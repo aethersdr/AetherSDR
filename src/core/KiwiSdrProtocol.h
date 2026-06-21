@@ -34,6 +34,12 @@ struct IpLimitNotice {
     bool valid{false};
 };
 
+struct MsgToken {
+    QString key;
+    QString value;
+    bool hasValue{false};
+};
+
 enum class MeterSource {
     Unknown,
     SndMetadata,
@@ -93,6 +99,7 @@ quint64 sequenceGapCount(int previousSequence, int currentSequence);
 float waterfallByteToDisplayLevel(unsigned char value);
 WaterfallAperture autoWaterfallAperture(const QVector<float>& binsDbm);
 float waterfallColorIndex(float dbm, float minDbm, float maxDbm);
+QVector<MsgToken> parseMsgTokens(const QString& message);
 IpLimitNotice parseIpLimitNotice(const QString& valueText);
 MeterReading meterUnavailable(MeterSource source, const QString& notes = {});
 MeterReading extractMeterFromSndVerifiedLayout(const QByteArray& frame,

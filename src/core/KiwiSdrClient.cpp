@@ -1845,11 +1845,9 @@ void KiwiSdrClient::handleMessage(StreamKind stream, const QByteArray& frame)
 void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
 {
     traceInboundText(stream, text);
-    const QString message = text.startsWith(QStringLiteral("MSG"))
-        ? text.mid(3).trimmed()
-        : text.trimmed();
+    const QVector<KiwiSdrProtocol::MsgToken> msgTokens =
+        KiwiSdrProtocol::parseMsgTokens(text);
 
-    const QStringList parts = message.split(QLatin1Char(' '), Qt::SkipEmptyParts);
     auto setSoundSampleRate = [this](double value) {
         if (!std::isfinite(value) || value < 8000.0 || value > 48000.0) {
             return;
@@ -1863,11 +1861,10 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
             m_soundResampler.reset();
         }
     };
-    auto messageValue = [&parts](const QString& requestedKey) {
-        for (const QString& candidate : parts) {
-            const int candidateEq = candidate.indexOf(QLatin1Char('='));
-            if (candidateEq > 0 && candidate.left(candidateEq) == requestedKey) {
-                return candidate.mid(candidateEq + 1);
+    auto messageValue = [&msgTokens](const QString& requestedKey) {
+        for (const KiwiSdrProtocol::MsgToken& candidate : msgTokens) {
+            if (candidate.hasValue && candidate.key == requestedKey) {
+                return candidate.value;
             }
         }
         return QString();
@@ -1889,19 +1886,24 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
         }
         return trKiwiSdrClient("KiwiSDR endpoint is disabled.");
     };
-    for (const QString& part : parts) {
-        const int eq = part.indexOf(QLatin1Char('='));
-        if (eq <= 0) {
-            continue;
+    for (const KiwiSdrProtocol::MsgToken& token : msgTokens) {
+        const QString& key = token.key;
+        const QString& valueText = token.value;
+        if (token.hasValue) {
+            qCDebug(lcKiwiSdr).noquote()
+                << "KiwiSDR MSG"
+                << QStringLiteral("endpoint=%1").arg(logEndpoint())
+                << key << "=" << abbreviatedMsgValue(valueText);
+            traceProtocolEvent(QStringLiteral("PARSED %1 %2=%3")
+                .arg(streamLabel(stream), key, abbreviatedMsgValue(valueText)));
+        } else {
+            qCDebug(lcKiwiSdr).noquote()
+                << "KiwiSDR MSG"
+                << QStringLiteral("endpoint=%1").arg(logEndpoint())
+                << key;
+            traceProtocolEvent(QStringLiteral("PARSED %1 %2")
+                .arg(streamLabel(stream), key));
         }
-        const QString key = part.left(eq);
-        const QString valueText = part.mid(eq + 1);
-        qCDebug(lcKiwiSdr).noquote()
-            << "KiwiSDR MSG"
-            << QStringLiteral("endpoint=%1").arg(logEndpoint())
-            << key << "=" << abbreviatedMsgValue(valueText);
-        traceProtocolEvent(QStringLiteral("PARSED %1 %2=%3")
-            .arg(streamLabel(stream), key, abbreviatedMsgValue(valueText)));
         if (key == QStringLiteral("too_busy")) {
             bool busyOk = false;
             const int busyValue = valueText.toInt(&busyOk);

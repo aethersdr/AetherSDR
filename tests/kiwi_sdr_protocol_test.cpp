@@ -101,6 +101,36 @@ int main()
         return fail("invalid ip_limit notice should be rejected");
     }
 
+    const QVector<MsgToken> msgTokens = parseMsgTokens(
+        QStringLiteral("MSG wb_only password_timeout inactivity_timeout=15 "
+                       "kiwi_kick=1%2coperator%20request badp=5 =ignored"));
+    if (msgTokens.size() != 5) {
+        return fail("MSG token parser should keep flags and key-value tokens");
+    }
+    if (msgTokens[0].key != QStringLiteral("wb_only")
+        || msgTokens[0].hasValue) {
+        return fail("MSG flag-only token parsing is wrong");
+    }
+    if (msgTokens[1].key != QStringLiteral("password_timeout")
+        || msgTokens[1].hasValue) {
+        return fail("MSG second flag-only token parsing is wrong");
+    }
+    if (msgTokens[2].key != QStringLiteral("inactivity_timeout")
+        || msgTokens[2].value != QStringLiteral("15")
+        || !msgTokens[2].hasValue) {
+        return fail("MSG key-value token parsing is wrong");
+    }
+    if (msgTokens[3].key != QStringLiteral("kiwi_kick")
+        || msgTokens[3].value != QStringLiteral("1%2coperator%20request")
+        || !msgTokens[3].hasValue) {
+        return fail("MSG encoded key-value token parsing is wrong");
+    }
+    if (msgTokens[4].key != QStringLiteral("badp")
+        || msgTokens[4].value != QStringLiteral("5")
+        || !msgTokens[4].hasValue) {
+        return fail("MSG badp token parsing is wrong");
+    }
+
     QVector<float> row(1024, -100.0f);
     for (int i = 1003; i < row.size(); ++i) {
         row[i] = -60.0f;

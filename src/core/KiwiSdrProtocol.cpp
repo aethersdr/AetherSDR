@@ -136,6 +136,36 @@ float waterfallColorIndex(float dbm, float minDbm, float maxDbm)
     return std::sqrt(normalized);
 }
 
+QVector<MsgToken> parseMsgTokens(const QString& message)
+{
+    const QString body = message.startsWith(QStringLiteral("MSG"))
+        ? message.mid(3).trimmed()
+        : message.trimmed();
+    const QStringList parts =
+        body.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+
+    QVector<MsgToken> tokens;
+    tokens.reserve(parts.size());
+    for (const QString& part : parts) {
+        const int eq = part.indexOf(QLatin1Char('='));
+        if (eq == 0) {
+            continue;
+        }
+
+        MsgToken token;
+        if (eq > 0) {
+            token.key = part.left(eq);
+            token.value = part.mid(eq + 1);
+            token.hasValue = true;
+        } else {
+            token.key = part;
+            token.hasValue = false;
+        }
+        tokens.append(token);
+    }
+    return tokens;
+}
+
 IpLimitNotice parseIpLimitNotice(const QString& valueText)
 {
     const QString decoded =
