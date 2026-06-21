@@ -116,6 +116,7 @@ Each `<node>`:
   "visible": true,
   "geometry": { "x": 1, "y": 104, "w": 1448, "h": 751 },  // GLOBAL screen coords
   "value": "42",                           // best-effort; see below
+  "keying": true,                          // present only on TX-keying controls (invoke refuses these)
   "children": [ <node>, … ]                // present only if non-empty
 }
 ```
@@ -173,16 +174,27 @@ reports) — a free round-trip confirmation.
 | `setCurrentIndex` | `QComboBox` | integer index |
 
 <a name="tx-safety"></a>
-> **🚨 TX safety.** `invoke` **refuses any transmit-related _button_** — a
-> control whose name contains `mox`, `ptt`, `tune` (incl. the ATU tune button,
-> which emits a carrier), `transmit`, or `vox` — returning
-> `{"ok":false,"error":"blocked: …"}` and never calling the widget. A test
-> bridge must never key a live transmitter by accident. The guard is scoped to
-> **buttons** because only a discrete button action can key the radio; setpoint
-> **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are *not*
-> blocked — moving a value setter can't transmit. To deliberately drive a keying
-> button (e.g. hardware-in-the-loop on a dummy load), set
-> `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch.
+> **🚨 TX safety.** `invoke` **refuses any control that keys the transmitter**,
+> returning `{"ok":false,"error":"blocked: …"}` and never calling the widget. A
+> test bridge must never key a live transmitter by accident.
+>
+> The guard is **marker-driven, not name-driven**. Genuinely-keying controls
+> (MOX/PTT, TUNE, ATU, CWX CW send, AX.25 packet/APRS send) are tagged at their
+> creation site with `markTxKeying()` — the `aetherTxKeying` dynamic property —
+> and the guard refuses anything carrying it. This is authoritative: a control
+> is blocked because it was *declared* keying, not because its label matched a
+> word, so it catches keying buttons like **"Send"** that no keyword would. A
+> marked control shows `"keying": true` in `dumpTree`, so you can see what's
+> off-limits before you try. A button-scoped name heuristic
+> (`mox/ptt/tune/atu/transmit/vox/cwx`) remains as a logged belt-and-suspenders
+> fallback for any keying control that predates the marker. Setpoint
+> **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are never
+> blocked — moving a value setter can't transmit.
+>
+> To deliberately drive a keying control (e.g. hardware-in-the-loop on a dummy
+> load), set `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch.
+> Adding a new keying control? Call `markTxKeying(theButton)` — see
+> `src/core/TxKeyingMarker.h`.
 
 ### `get`
 Read live model state — assert on truth without a screenshot. Requires a radio
@@ -227,6 +239,8 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
    targeted as `SpectrumWidget`).
 3. **`accessibleName`** — e.g. `"Panadapter spectrum display"`,
    `"Master volume"`.
+4. **Button text** — last resort, e.g. `"Send"`, `"Transmit"`. Lowest priority,
+   so a real objectName/accessibleName always wins; first match in tree order.
 
 To find a target: run `dumpTree`, search the JSON for the `accessibleName` or
 `class` you want, and use its `objectName` if it has one. Roughly half of

@@ -3,6 +3,7 @@
 #include "FramelessWindowTitleBar.h"
 #include "FramelessResizer.h"
 #include "core/AppSettings.h"
+#include "core/TxKeyingMarker.h"
 #include "models/BandPlanManager.h"
 #include "models/MeterModel.h"
 #include "models/PanadapterModel.h"
@@ -299,6 +300,7 @@ void AtuPreTuneDialog::buildConfigPage()
     btnRow->addStretch(1);
     m_cancelBtn = new QPushButton("Cancel", m_configPage);
     m_startBtn  = new QPushButton("START", m_configPage);
+    markTxKeying(m_startBtn);   // starts the ATU pre-tune sweep → keys TX (#3646)
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_startBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
         "color: {{color.text.primary}}; padding: 4px 12px; font-weight: bold; }"
         "QPushButton:hover { background: #007038; }"
@@ -336,12 +338,14 @@ void AtuPreTuneDialog::buildSweepPage()
 
     auto* row = new QHBoxLayout;
     m_tuneBtn  = new QPushButton("Tune this frequency", m_sweepPage);
+    markTxKeying(m_tuneBtn);   // tunes the current point → keys TX (#3646)
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_tuneBtn, "QPushButton { background: #006030; border: 1px solid #008040; "
         "color: {{color.text.primary}}; padding: 4px 12px; font-weight: bold; }"
         "QPushButton:hover { background: #007038; }"
         "QPushButton:disabled { background: #1a2a1a; color: #556070; }");
     m_skipBtn  = new QPushButton("Skip", m_sweepPage);
     m_continueAfterFailBtn = new QPushButton("Continue", m_sweepPage);
+    markTxKeying(m_continueAfterFailBtn);   // resumes tuning after a failed point → keys TX (#3646)
     m_continueAfterFailBtn->setVisible(false);
     m_abortBtn = new QPushButton("ABORT", m_sweepPage);
     setAbortButtonAbortMode();

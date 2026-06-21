@@ -40,13 +40,15 @@ class RadioModel;
 //   invoke <target> <action> [v]   -> drive a control deterministically:
 //                                     click / toggle / setChecked / setValue /
 //                                     setText / setCurrentText / setCurrentIndex.
-//                                     SAFETY: refuses transmit-related *buttons*
-//                                     (MOX/PTT/Tune/ATU-tune/VOX enable) unless
+//                                     SAFETY: refuses any control marked as
+//                                     transmit-keying (markTxKeying() / the
+//                                     "aetherTxKeying" property — MOX/PTT, TUNE,
+//                                     ATU, CWX send, packet/APRS send) unless
 //                                     AETHER_AUTOMATION_ALLOW_TX is set, so the
 //                                     bridge can never key a live radio by
-//                                     accident. Setpoint sliders/combos (e.g.
-//                                     "Tune power", "RF power") are not blocked —
-//                                     moving a value setter can't key.
+//                                     accident. A button-scoped name heuristic
+//                                     is a logged fallback; setpoint
+//                                     sliders/combos are never blocked.
 //   get <model> [selector] [prop]  -> live JSON snapshot of a model:
 //                                     radio | transmit | slice <id|active|tx> |
 //                                     slices | pan <panId|active> | pans. With a

@@ -4,6 +4,7 @@
 #include "ComboStyle.h"
 #include "HGauge.h"
 #include "Theme.h"
+#include "core/TxKeyingMarker.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
@@ -216,6 +217,7 @@ void TxApplet::buildUI()
             "border: 1px solid #2a3040; }";
 
         m_tuneBtn = new QPushButton("TUNE");
+        markTxKeying(m_tuneBtn);   // emits a tune carrier — keys TX (#3646)
         m_tuneBtn->setStyleSheet(btnStyle);
         m_tuneBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_tuneBtn->setFixedHeight(22);
@@ -229,6 +231,7 @@ void TxApplet::buildUI()
         row->addWidget(m_tuneBtn);
 
         m_moxBtn = new QPushButton("MOX");
+        markTxKeying(m_moxBtn);    // manual transmit (PTT) — keys TX (#3646)
         m_moxBtn->setStyleSheet(btnStyle);
         m_moxBtn->setCheckable(true);
         m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -238,6 +241,7 @@ void TxApplet::buildUI()
         row->addWidget(m_moxBtn);
 
         m_atuBtn = new QPushButton("ATU");
+        markTxKeying(m_atuBtn);    // starts ATU tune — keys TX (#3646)
         m_atuBtn->setStyleSheet(btnStyle);
         m_atuBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_atuBtn->setFixedHeight(22);

@@ -495,10 +495,11 @@ and drive a `QLocalServer` that speaks newline-delimited JSON:
 - `grab <widget>` → PNG of any widget, including a correct GPU-framebuffer
   readback of the panadapter (`SpectrumWidget`).
 - `invoke <target> <action> [value]` → click/toggle/setValue/setText/… a
-  control. **Refuses transmit-related _buttons_ (MOX/PTT/Tune/ATU-tune/VOX
-  enable) unless `AETHER_AUTOMATION_ALLOW_TX=1`** — the bridge can never key a
-  live radio by accident; setpoint sliders ("Tune power", "RF power") stay
-  drivable.
+  control. **Refuses any control marked transmit-keying (`markTxKeying()` /
+  `aetherTxKeying` property — MOX/PTT, TUNE, ATU, CWX send, packet/APRS send)
+  unless `AETHER_AUTOMATION_ALLOW_TX=1`** — the bridge can never key a live
+  radio by accident; setpoint sliders ("Tune power", "RF power") stay drivable.
+  Marked controls show `"keying": true` in `dumpTree`.
 - `get radio|transmit|slice|slices|pan|pans [selector] [property]` → live JSON
   model snapshot (frequency, mode, filter, NB/NR, center MHz, min/max dBm,
   RF/mic/CW TX-chain, …). Assert on truth without screenshots.

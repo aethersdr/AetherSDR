@@ -1,5 +1,6 @@
 #include "AutomationServer.h"
 #include "LogManager.h"
+#include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 
 #include <QLocalServer>
@@ -98,6 +99,11 @@ QJsonObject describeWidget(const QWidget* w)
     if (!val.isNull())
         o[QStringLiteral("value")] = val;
 
+    // Surface the TX-keying marker so an agent can see which controls invoke()
+    // will refuse before trying them (#3646).
+    if (w->property(kTxKeyingProperty).toBool())
+        o[QStringLiteral("keying")] = true;
+
     QJsonArray kids;
     const QObjectList children = w->children();
     for (const QObject* child : children) {
@@ -123,6 +129,24 @@ QWidget* matchRecursive(QWidget* w, const QString& target)
     for (QObject* child : children) {
         if (auto* cw = qobject_cast<QWidget*>(child)) {
             if (QWidget* m = matchRecursive(cw, target))
+                return m;
+        }
+    }
+    return nullptr;
+}
+
+// Last-resort match by a button's visible text — agents often know a control
+// only by its label ("Send", "Transmit"). Lowest priority so an objectName /
+// accessibleName / class always wins first.
+QWidget* matchByButtonText(QWidget* w, const QString& target)
+{
+    if (auto* b = qobject_cast<QAbstractButton*>(w))
+        if (b->text() == target)
+            return w;
+    const QObjectList children = w->children();
+    for (QObject* child : children) {
+        if (auto* cw = qobject_cast<QWidget*>(child)) {
+            if (QWidget* m = matchByButtonText(cw, target))
                 return m;
         }
     }
@@ -158,34 +182,50 @@ bool parseBool(const QString& v)
         || s == QLatin1String("checked");
 }
 
-// TX-safety guard for invoke(). A control that looks transmit-related is
-// refused unless the operator sets AETHER_AUTOMATION_ALLOW_TX. A test bridge
-// must never key a live radio by accident — "tune" deliberately covers the ATU
-// tune button, which emits a carrier.
+// TX-safety guard for invoke(): refuse to drive a control that keys the
+// transmitter unless the operator sets AETHER_AUTOMATION_ALLOW_TX. A test bridge
+// must never key a live radio by accident.
 //
-// The guard is scoped to *buttons* on purpose: only a discrete button action
-// (click/toggle) can actually key the radio — MOX, PTT, TUNE, ATU-tune, and VOX
-// enable are all QAbstractButtons. Setpoint sliders/spinboxes/combos named
-// "Tune power", "RF power", "VOX level", etc. never transmit by being moved, so
-// blocking them was over-reach (#3646 QA finding 3). Requiring a button fixes
-// that without weakening safety, since invoke can't key through a value setter.
+// Authoritative mechanism — a positive marker. Genuinely-keying controls
+// (MOX/PTT, TUNE, ATU, CWX send, packet send) are tagged at their creation site
+// with markTxKeying() (the "aetherTxKeying" dynamic property). The guard honors
+// that property, so a control is blocked because it was *declared* keying, not
+// because its label happened to contain a magic word. This closed the holes the
+// old substring blocklist missed — notably the CW and packet "Send" buttons,
+// which key TX but match no keyword (#3646 review).
+//
+// Belt-and-suspenders fallback — a button-scoped name heuristic, retained only
+// to catch a keying control that predates or forgot the marker. It is *button*
+// scoped because only a discrete button action can key (setpoint sliders like
+// "Tune power"/"RF power" never transmit by being moved). When the fallback
+// fires we log a warning: that control should get an explicit markTxKeying().
 bool isTransmitControl(const QWidget* w)
 {
+    if (w->property(kTxKeyingProperty).toBool())
+        return true;  // authoritative positive marker
+
     const auto* btn = qobject_cast<const QAbstractButton*>(w);
     if (!btn)
         return false;  // sliders / combos / spinboxes can't trigger TX
 
     static const QStringList kDeny = {
         QStringLiteral("mox"), QStringLiteral("ptt"), QStringLiteral("tune"),
-        QStringLiteral("transmit"), QStringLiteral("vox"),
+        QStringLiteral("transmit"), QStringLiteral("vox"), QStringLiteral("cwx"),
+        QStringLiteral("atu"),
     };
     const QStringList hay{w->objectName().toLower(),
                           w->accessibleName().toLower(),
                           btn->text().toLower()};
-    for (const QString& h : hay)
-        for (const QString& d : kDeny)
-            if (h.contains(d))
+    for (const QString& h : hay) {
+        for (const QString& d : kDeny) {
+            if (h.contains(d)) {
+                qCWarning(lcAutomation).noquote()
+                    << "TX guard fell back to name match on" << btn->text()
+                    << "— add markTxKeying() at its creation site if it keys TX";
                 return true;
+            }
+        }
+    }
     return false;
 }
 
@@ -321,6 +361,11 @@ bool AutomationServer::start(const QString& serverName)
 
     m_serverName = serverName;
     m_server = new QLocalServer(this);
+
+    // Restrict the socket to the owning user (0600 / per-user pipe ACL). The
+    // endpoint can key TX and its path is advertised in a shared-temp discovery
+    // file, so another local user must not be able to connect and drive the GUI.
+    m_server->setSocketOptions(QLocalServer::UserAccessOption);
 
     // Clear any stale socket left by a crashed run so we can rebind.
     QLocalServer::removeServer(serverName);
@@ -591,6 +636,11 @@ QWidget* AutomationServer::resolveWidget(const QString& target)
         if (QWidget* m = matchRecursive(tlw, target))
             return m;
     }
+    // 3. Button visible text, last resort (e.g. "Send", "Transmit").
+    for (QWidget* tlw : tops) {
+        if (QWidget* m = matchByButtonText(tlw, target))
+            return m;
+    }
     return nullptr;
 }
 
@@ -609,7 +659,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             << "BLOCKED transmit-related invoke on" << target
             << "(" << shortClassName(w) << ")";
         return err(QStringLiteral("blocked: '") + target
-                   + QStringLiteral("' looks transmit-related (MOX/PTT/Tune/Transmit/VOX). "
+                   + QStringLiteral("' is a transmit-keying control (TX-safety guard). "
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
     }
 

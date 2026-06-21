@@ -3,6 +3,7 @@
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
 #include "core/DaxTxPolicy.h"
+#include "core/TxKeyingMarker.h"
 #include "core/LogManager.h"
 #include "core/MaidenheadLocator.h"
 #include "core/ThemeManager.h"
@@ -938,6 +939,7 @@ Ax25HfPacketDecodeDialog::Ax25HfPacketDecodeDialog(AudioEngine* audio,
     m_txText->setPlaceholderText(QStringLiteral("hello world  or  N0CALL-1>APRS,WIDE1-1:hello world"));
     txLayout->addWidget(m_txText, 1);
     m_txButton = new QPushButton(QStringLiteral("Transmit"), txFrame);
+    markTxKeying(m_txButton);   // transmits an AX.25 packet → keys TX (#3646)
     m_txButton->setMinimumHeight(42);
     txLayout->addWidget(m_txButton);
 
@@ -2606,6 +2608,7 @@ QWidget* Ax25HfPacketDecodeDialog::buildTerminalPage()
     m_terminalInput->installEventFilter(this); // Up/Down command history
     inputRow->addWidget(m_terminalInput, 1);
     m_terminalSendButton = new QPushButton(QStringLiteral("Send"), inputFrame);
+    markTxKeying(m_terminalSendButton);   // sends a packet → keys TX; "Send" matches no keyword (#3646 review)
     m_terminalSendButton->setMinimumHeight(36);
     inputRow->addWidget(m_terminalSendButton);
     layout->addWidget(inputFrame);
@@ -2988,6 +2991,7 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
     m_aprsBeaconText->setText(AprsSettings::beaconText());
     config->addWidget(m_aprsBeaconText, 1, 5);
     m_aprsBeaconNow = new QPushButton(QStringLiteral("Beacon Now"), configFrame);
+    markTxKeying(m_aprsBeaconNow);   // transmits an APRS beacon → keys TX (#3646)
     config->addWidget(m_aprsBeaconNow, 1, 6);
     config->setColumnStretch(5, 1);
 
@@ -3050,6 +3054,7 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
         QStringLiteral("Message text (sent with ack request, retries until acked)"));
     msgLayout->addWidget(m_aprsMsgText, 1);
     m_aprsMsgSend = new QPushButton(QStringLiteral("Send APRS Msg"), msgFrame);
+    markTxKeying(m_aprsMsgSend);   // transmits an APRS message → keys TX (#3646)
     m_aprsMsgSend->setMinimumHeight(42);
     msgLayout->addWidget(m_aprsMsgSend);
     m_aprsEnvelope = new QPushButton(QStringLiteral("✉"), msgFrame);

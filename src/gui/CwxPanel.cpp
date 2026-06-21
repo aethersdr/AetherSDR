@@ -1,4 +1,5 @@
 #include "CwxPanel.h"
+#include "core/TxKeyingMarker.h"
 #include "models/CwxModel.h"
 
 #include <QVBoxLayout>
@@ -170,6 +171,7 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     barLayout->setSpacing(4);
 
     m_sendBtn = new QPushButton("Send");
+    markTxKeying(m_sendBtn);   // sends CW → keys TX; label "Send" matches no keyword (#3646 review)
     m_sendBtn->setStyleSheet(kBtnStyle);
     barLayout->addWidget(m_sendBtn);
 
