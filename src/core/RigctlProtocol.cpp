@@ -216,6 +216,31 @@ RigctlProtocol::RigctlProtocol(RadioModel* model)
     : m_model(model)
 {}
 
+RigctlProtocol::~RigctlProtocol()
+{
+    // Client dropped without a clean set_split_vfo 0 (e.g. WSJT-X quit): best-effort
+    // remove the TX slice we created on demand so it isn't orphaned. Safe if it's
+    // already gone or never existed.
+    removeCreatedTxSlice();
+}
+
+// Best-effort, crash-safe removal of a TX slice we created on demand for split.
+// Tracks by id (not pointer) and re-resolves at removal time, so a stale/removed
+// slice is simply skipped. Only slices WE created are tracked (m_createdTxSliceId);
+// promoted operator slices are never touched. Uses m_model as the invoke context so
+// a destroyed model cancels the queued call (no use-after-free during shutdown).
+void RigctlProtocol::removeCreatedTxSlice()
+{
+    const int id = m_createdTxSliceId;
+    m_createdTxSliceId = -1;
+    if (id < 0 || !m_model) return;
+    auto* model = m_model;
+    QMetaObject::invokeMethod(model, [model, id]{
+        if (model->slice(id))
+            model->sendCommand(QStringLiteral("slice remove %1").arg(id));
+    }, Qt::QueuedConnection);
+}
+
 // ── Mode conversion tables ──────────────────────────────────────────────────
 // SmartSDR mode names observed on FLEX-8600 fw v1.4.0.0.
 // Hamlib mode names follow rig.h RIG_MODE_* definitions.
@@ -948,6 +973,10 @@ void RigctlProtocol::tryPromoteTxSlice()
         if (s != rxSlice) {
             m_pendingSplitEnable = false;
             m_pendingTxSlice = s;
+            // We only reach here after OUR create-on-demand armed m_pendingSplitEnable,
+            // so this newly-appeared slice is one we made — track it for best-effort
+            // removal on disable/disconnect (don't orphan it).
+            m_createdTxSliceId = s->sliceId();
             if (!s->isTxSlice())
                 QMetaObject::invokeMethod(s, [s]{ s->setTxSlice(true); },
                                           Qt::QueuedConnection);
@@ -1047,6 +1076,9 @@ QString RigctlProtocol::cmdSetSplitVfo(const QString& args)
                 QMetaObject::invokeMethod(rxSlice, [rxSlice]{ rxSlice->setTxSlice(true); },
                                           Qt::QueuedConnection);
             }
+            // Genuine split→non-split transition: also drop the TX slice we created
+            // on demand, so it isn't orphaned (matches the GUI split's teardown).
+            removeCreatedTxSlice();
         }
         return rprt(0);
     }

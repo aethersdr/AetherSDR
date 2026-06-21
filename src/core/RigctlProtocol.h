@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QMap>
+#include <QPointer>
 
 namespace AetherSDR {
 
@@ -14,6 +15,9 @@ class SliceModel;
 class RigctlProtocol {
 public:
     explicit RigctlProtocol(RadioModel* model);
+    // On client disconnect, best-effort remove a TX slice we created on demand for
+    // split (so it isn't orphaned when WSJT-X etc. drops without a clean teardown).
+    ~RigctlProtocol();
 
     // Process one command line (may contain ';' or '|'-separated batch commands).
     // '|' separator enables extended responses joined by '|' (rigctld pipe mode).
@@ -97,6 +101,10 @@ private:
     // newly-created second slice to TX as soon as it appears in the model,
     // then applies any stashed split freq/mode from the burst that preceded it.
     void tryPromoteTxSlice();
+    // Best-effort, crash-safe removal of the on-demand TX slice we created
+    // (m_createdTxSliceId): re-resolves by id at removal time and skips if it's
+    // already gone. No-op when we promoted an existing (operator) slice.
+    void removeCreatedTxSlice();
     // Ensure a distinct TX slice exists, enabling split on demand: promote an
     // existing non-RX slice, or create one (deferred promotion). No-op if a TX
     // slice already exists. Used by set_split_vfo's enable path and by
@@ -121,11 +129,18 @@ private:
     bool m_pendingTxSliceChange{false};  // set when setTxSlice(true) was queued for a non-rx slice
     // Slice we intend to be TX — set synchronously when we queue setTxSlice(true)
     // so findTxSlice() returns the right slice before the event loop fires.
-    SliceModel* m_pendingTxSlice{nullptr};
+    // QPointer (not raw): if the user closes this slice out-of-band, it auto-nulls
+    // so findTxSlice() won't hand back a freed SliceModel and crash on deref
+    // (rigctld runs on the GUI thread, same thread as SliceModel, so this is safe).
+    QPointer<SliceModel> m_pendingTxSlice{nullptr};
     // Stashed split freq/mode from commands that arrived before the new slice
     // existed (single-slice path).  Applied in tryPromoteTxSlice().
     double  m_pendingSplitFreqMHz{0.0};
     QString m_pendingSplitMode;
+    // Id of a TX slice WE created on demand for split (NOT a promoted operator
+    // slice). Removed best-effort on split-disable and on disconnect so it isn't
+    // orphaned. -1 = none. Set in tryPromoteTxSlice (only reached after our create).
+    int     m_createdTxSliceId{-1};
 
     // Tracks the last split state this client reported, so set_split_vfo only
     // reclaims TX on an actual split→non-split *transition* — not on every
