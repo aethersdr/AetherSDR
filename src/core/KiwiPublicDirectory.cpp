@@ -39,6 +39,18 @@ QString KiwiPublicReceiver::apiBadge() const
     return QStringLiteral("API policy unknown");
 }
 
+bool KiwiPublicReceiver::advertisesConnectionLimit() const
+{
+    return sdrHw.contains(QStringLiteral("Limits"), Qt::CaseInsensitive);
+}
+
+QString KiwiPublicReceiver::connectionLimitBadge() const
+{
+    return advertisesConnectionLimit()
+        ? QStringLiteral("Limits")
+        : QString();
+}
+
 QVector<KiwiPublicReceiver> KiwiPublicDirectory::parse(const QByteArray& directoryHtml)
 {
     QVector<KiwiPublicReceiver> out;

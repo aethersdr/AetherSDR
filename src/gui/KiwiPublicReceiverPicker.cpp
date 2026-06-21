@@ -8,6 +8,7 @@
 #include <QPushButton>
 #include <QStringList>
 #include <QTableWidget>
+#include <QTableWidgetItem>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -22,6 +23,15 @@ namespace {
 // without hitting the operators' servers again; "Refresh list" overwrites it.
 QVector<KiwiPublicReceiver> g_sessionCache;
 bool g_haveSessionCache = false;
+
+enum Column {
+    ReceiverColumn,
+    LocationColumn,
+    UsersColumn,
+    ApiColumn,
+    LimitsColumn,
+    ColumnCount,
+};
 
 // "http://host:port" -> "host:port" (what KiwiSdrClient::normalizeEndpoint wants).
 QString endpointFromUrl(const QString& url)
@@ -39,7 +49,7 @@ KiwiPublicReceiverPicker::KiwiPublicReceiverPicker(QWidget* parent)
                        QStringLiteral("KiwiPublicReceiverPickerGeometry"), parent)
     , m_dir(new KiwiPublicDirectory(this))
 {
-    resize(680, 460);
+    resize(760, 460);
 
     auto* outer = new QVBoxLayout(bodyWidget());
 
@@ -53,16 +63,19 @@ KiwiPublicReceiverPicker::KiwiPublicReceiverPicker(QWidget* parent)
     topRow->addWidget(m_refresh);
     outer->addLayout(topRow);
 
-    m_table = new QTableWidget(0, 4, this);
+    m_table = new QTableWidget(0, ColumnCount, this);
     m_table->setHorizontalHeaderLabels(
-        {tr("Receiver"), tr("Location"), tr("Users"), tr("API")});
+        {tr("Receiver"), tr("Location"), tr("Users"), tr("API"), tr("Limits")});
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
     m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->verticalHeader()->setVisible(false);
     m_table->horizontalHeader()->setStretchLastSection(false);
-    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
-    m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(ReceiverColumn, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(LocationColumn, QHeaderView::Stretch);
+    m_table->horizontalHeader()->setSectionResizeMode(UsersColumn, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(ApiColumn, QHeaderView::ResizeToContents);
+    m_table->horizontalHeader()->setSectionResizeMode(LimitsColumn, QHeaderView::ResizeToContents);
     outer->addWidget(m_table, 1);
 
     m_status = new QLabel(tr("Loading public receivers…"));
@@ -158,11 +171,22 @@ void KiwiPublicReceiverPicker::applyFilter()
         nameItem->setData(Qt::UserRole, endpointFromUrl(r.url));
         nameItem->setData(Qt::UserRole + 1,
                           QUrl(r.url).host().left(16));  // short default name
-        m_table->setItem(row, 0, nameItem);
-        m_table->setItem(row, 1, new QTableWidgetItem(r.location));
-        m_table->setItem(row, 2, new QTableWidgetItem(
+        m_table->setItem(row, ReceiverColumn, nameItem);
+        m_table->setItem(row, LocationColumn, new QTableWidgetItem(r.location));
+        m_table->setItem(row, UsersColumn, new QTableWidgetItem(
             QStringLiteral("%1/%2").arg(r.users).arg(r.usersMax)));
-        m_table->setItem(row, 3, new QTableWidgetItem(r.apiBadge()));
+        m_table->setItem(row, ApiColumn, new QTableWidgetItem(r.apiBadge()));
+
+        auto* limitsItem = new QTableWidgetItem(r.connectionLimitBadge());
+        if (r.advertisesConnectionLimit()) {
+            limitsItem->setToolTip(tr("This receiver advertises connection limits, "
+                                      "but the public directory does not publish "
+                                      "the configured duration."));
+        } else {
+            limitsItem->setToolTip(tr("No connection limit is advertised in the "
+                                      "public directory."));
+        }
+        m_table->setItem(row, LimitsColumn, limitsItem);
         ++shown;
     }
     QString status = tr("%1 receivers allow API access").arg(shown);
@@ -183,7 +207,7 @@ void KiwiPublicReceiverPicker::acceptCurrentRow()
 {
     const int row = m_table->currentRow();
     if (row < 0) return;
-    QTableWidgetItem* item = m_table->item(row, 0);
+    QTableWidgetItem* item = m_table->item(row, ReceiverColumn);
     if (!item) return;
     m_selectedEndpoint = item->data(Qt::UserRole).toString();
     m_selectedName = item->data(Qt::UserRole + 1).toString();

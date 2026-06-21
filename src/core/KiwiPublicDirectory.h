@@ -49,6 +49,8 @@ struct KiwiPublicReceiver {
 
     // Short human-readable badge for the receiver picker.
     QString apiBadge() const;
+    bool advertisesConnectionLimit() const;
+    QString connectionLimitBadge() const;
 };
 
 // Fetches and parses the public KiwiSDR receiver directory, exposing each

@@ -26,7 +26,7 @@ const QByteArray kSample = QByteArrayLiteral(
     "  <!-- status=active -->\n"
     "  <!-- offline=no -->\n"
     "  <!-- name=G3SDR, Weston-super-Mare -->\n"
-    "  <!-- sdr_hw=KiwiSDR 1 v1.842 -->\n"
+    "  <!-- sdr_hw=KiwiSDR 1 v1.842 Limits -->\n"
     "  <!-- bands=0-30000000 -->\n"
     "  <!-- users=3 -->\n"
     "  <!-- users_max=4 -->\n"
@@ -36,6 +36,7 @@ const QByteArray kSample = QByteArrayLiteral(
     // ext_api == users_max -> fully open to API
     "<a href='http://open.example.com:8073' target='_blank'> </a>\n"
     "  <!-- name=Open RX -->\n"
+    "  <!-- sdr_hw=KiwiSDR 1 v1.842 -->\n"
     "  <!-- users=1 -->\n"
     "  <!-- users_max=4 -->\n"
     "  <!-- ext_api=4 -->\n"
@@ -65,12 +66,16 @@ int main()
     if (web.users != 3 || web.usersMax != 4) return fail("users/users_max parse");
     if (web.extApi != 0) return fail("ext_api parse");
     if (web.apiPolicy() != ApiPolicy::Disabled) return fail("ext_api=0 must be Disabled");
+    if (!web.advertisesConnectionLimit()) return fail("limits marker parse");
+    if (web.connectionLimitBadge() != QStringLiteral("Limits")) return fail("limits badge");
     // THE honor guarantee: a web-only receiver is never API-connectable.
     if (web.mayConnectViaApi()) return fail("ext_api=0 must NOT allow API connect");
 
     const KiwiPublicReceiver& open = rxs[1];
     if (open.extApi != 4 || open.usersMax != 4) return fail("open parse");
     if (open.apiPolicy() != ApiPolicy::Open) return fail("ext_api==users_max must be Open");
+    if (open.advertisesConnectionLimit()) return fail("no limits marker should be false");
+    if (!open.connectionLimitBadge().isEmpty()) return fail("no limits badge");
     if (!open.mayConnectViaApi()) return fail("open receiver must allow API connect");
 
     const KiwiPublicReceiver& limited = rxs[2];
