@@ -21,13 +21,13 @@ namespace AetherSDR {
 namespace SmartMtrColors {
 inline const QColor kControl{QStringLiteral("#161620")};      // = slice flag bg
 // (VfoWidget base #0a0a14 + its 5% white depth overlay, composited)
-inline const QColor kBackground{QStringLiteral("#5ec4eaff")}; // recessed hole
-inline const QColor kForeground{QStringLiteral("#ff4444")}; // indicator bar — red
+inline const QColor kBackground{QStringLiteral("#5f89a2")}; // recessed hole
+inline const QColor kForeground{QStringLiteral("#ff5463")}; // indicator bar — red
 inline const QColor kIndicator{QStringLiteral("#ffffff")};  // value end-line
 inline const QColor kExtreme{QStringLiteral("#ffffff")};    // reserved (future)
 inline const QColor kShadow{0, 0, 0, 100};                   // inset shadow — TBD
-inline const QColor kMarkerNormal{QStringLiteral("#5ec4ea")}; // scale tick — normal
-inline const QColor kMarkerHigh{QStringLiteral("#ff4444")};   // scale tick — high
+inline const QColor kMarkerNormal{QStringLiteral("#42e3ff")}; // scale tick — normal
+inline const QColor kMarkerHigh{QStringLiteral("#ff5463")};   // scale tick — high
 } // namespace SmartMtrColors
 
 // Geometry of the SmartMTR control, in UNITS.
