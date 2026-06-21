@@ -86,6 +86,50 @@ QString statusPreflightFailureMessage(int firstHttpStatus,
                            "connect. Try again later.");
 }
 
+// Source-attributed badp labels are documented in the KiwiSDR design note.
+QString badpMessage(int badp, const QString& identityDiagnostic)
+{
+    switch (badp) {
+    case 1:
+        return trKiwiSdrClient("KiwiSDR rejected this authentication attempt "
+                               "(badp=1). %1 This endpoint may require a "
+                               "password or site-specific login.")
+            .arg(identityDiagnostic);
+    case 2:
+        return trKiwiSdrClient("This KiwiSDR is still determining whether this "
+                               "client is local (badp=2). Try again in a few "
+                               "moments.");
+    case 3:
+        return trKiwiSdrClient("This KiwiSDR does not allow access from this IP "
+                               "address (badp=3).");
+    case 4:
+        return trKiwiSdrClient("This KiwiSDR does not allow remote admin access "
+                               "because no admin password is set (badp=4).");
+    case 5:
+        return trKiwiSdrClient("KiwiSDR rejected public receive access (badp=5). "
+                               "This can mean the server does not allow another "
+                               "connection from this IP address; some deployed "
+                               "receivers have also returned it for public-access "
+                               "rejection. %1 This endpoint may require a password "
+                               "or site-specific login.")
+            .arg(identityDiagnostic);
+    case 6:
+        return trKiwiSdrClient("This KiwiSDR is temporarily unavailable while "
+                               "its database is updating (badp=6). Try again "
+                               "in about a minute.");
+    case 7:
+        return trKiwiSdrClient("This KiwiSDR already has an admin connection "
+                               "open (badp=7).");
+    default:
+        return trKiwiSdrClient("KiwiSDR rejected public receive access "
+                               "(badp=%1). %2 This endpoint may require a "
+                               "password, site-specific login, or a different "
+                               "public access policy.")
+            .arg(badp)
+            .arg(identityDiagnostic);
+    }
+}
+
 quint32 readLittleEndianU32(const char* data)
 {
     const auto* bytes = reinterpret_cast<const uchar*>(data);
@@ -1897,6 +1941,22 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
             }
             continue;
         }
+        if (key == QStringLiteral("wb_only")) {
+            setState(
+                State::Error,
+                tr("This KiwiSDR is configured for wideband use only and does "
+                   "not accept normal receiver connections."));
+            cleanupSockets();
+            return;
+        }
+        if (key == QStringLiteral("exclusive_use")) {
+            setState(
+                State::Error,
+                tr("This KiwiSDR is locked for exclusive use by another "
+                   "operation. Try again later or choose another receiver."));
+            cleanupSockets();
+            return;
+        }
         if (key == QStringLiteral("camp_disconnect")) {
             setState(State::Error,
                      tr("KiwiSDR camping queue disconnected this client."));
@@ -1938,6 +1998,40 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
             cleanupSockets();
             return;
         }
+        if (key == QStringLiteral("inactivity_timeout")) {
+            bool minutesOk = false;
+            const int minutes = valueText.toInt(&minutesOk);
+            setState(
+                State::Error,
+                minutesOk && minutes > 0
+                    ? tr("This KiwiSDR disconnected the session after %1 "
+                         "minutes without tuning or activity.")
+                          .arg(minutes)
+                    : tr("This KiwiSDR disconnected the session for inactivity."));
+            cleanupSockets();
+            return;
+        }
+        if (key == QStringLiteral("password_timeout")) {
+            setState(
+                State::Error,
+                tr("This KiwiSDR timed out waiting for password authentication."));
+            cleanupSockets();
+            return;
+        }
+        if (key == QStringLiteral("kiwi_kick")) {
+            const QString decoded =
+                QUrl::fromPercentEncoding(valueText.toUtf8()).trimmed();
+            const int comma = decoded.indexOf(QLatin1Char(','));
+            const QString reason =
+                comma >= 0 ? decoded.mid(comma + 1).trimmed() : QString();
+            setState(State::Error,
+                     reason.isEmpty()
+                         ? tr("This KiwiSDR disconnected this client.")
+                         : tr("This KiwiSDR disconnected this client: %1")
+                               .arg(reason));
+            cleanupSockets();
+            return;
+        }
         if (key == QStringLiteral("audio_init")) {
             // audio_init confirms setup progress, not usable decoded audio.
             // Wait for the first accepted SND frame so camping/silent sessions
@@ -1956,14 +2050,8 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                 m_startupTrace.badpNonzeroSeen = true;
             }
             if (badp != 0) {
-                setState(
-                    State::Error,
-                    tr("KiwiSDR rejected public receive access (badp=%1). "
-                       "%2 This endpoint may require a password, "
-                       "site-specific login, or a different public access "
-                       "policy.")
-                        .arg(badp)
-                        .arg(identityDiagnosticText()));
+                setState(State::Error,
+                         badpMessage(badp, identityDiagnosticText()));
                 cleanupSockets();
                 return;
             }

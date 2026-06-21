@@ -392,11 +392,21 @@ with NR2 disabled; they must not be collapsed into the legacy applet Kiwi
 output buffer, because the final mixer only treats that buffer as active when
 the applet-level Kiwi Audio toggle is enabled.
 
-## Sources Not Used
+## Source Provenance
 
-- No KiwiSDR source code, AGPL repositories, served JavaScript, server code,
-  decoder code, protocol handlers, copied snippets, blogs, forums, or
-  implementation-derived assets were used.
+- The original KiwiSDR receive-path implementation used no KiwiSDR source code,
+  AGPL repositories, served JavaScript, server code, decoder code, protocol
+  handlers, copied snippets, blogs, forums, or implementation-derived assets.
+- A later, source-attributed denial-message follow-up intentionally consulted
+  the LGPL-marked KiwiSDR source repository
+  `https://github.com/jks-prv/Beagle_SDR_GPS.git` at commit
+  `efb38e2b25137029cb37a96a94e03366f8d2871e` to label terminal connection
+  denial codes and MSG keys. No KiwiSDR code was copied, translated, or
+  vendored; the AetherSDR handlers and user-facing strings are original.
+  The consulted files were `rx/rx_cmd.h`, `rx/rx_cmd.cpp`,
+  `support/stats.cpp`, `rx/rx_server.cpp`, `rx/rx_sound.cpp`, and
+  `rx/rx_util.cpp`, each carrying GNU Library General Public License
+  version 2-or-later headers in that source snapshot.
 - No WebSDR source code, prior WebSDR worktrees, PR #3612, prior WebSDR
   threads, contaminated temporary files, or rollout summaries were used.
 
@@ -460,11 +470,13 @@ the active audio source. Connected but inactive profiles may continue serving
 waterfall data, but they must not spend CPU decoding/resampling unused audio
 frames because that can starve the active NR2 path.
 
-The KiwiSDR-side behavior is implemented only where it was observed directly.
-The client opens the observed `SND` and `W/F` sockets, sends only receive-side
-setup commands, requests uncompressed audio, converts 12 kHz mono samples to
-24 kHz stereo float PCM, and projects received W/F rows onto the current
-AetherSDR panadapter using the server-reported full W/F center and bandwidth.
+The KiwiSDR-side receive behavior is implemented only where it was observed
+directly, except for the terminal denial-message labels called out in
+[Source-Attributed Denial Messages](#source-attributed-denial-messages). The
+client opens the observed `SND` and `W/F` sockets, sends only receive-side setup
+commands, requests uncompressed audio, converts 12 kHz mono samples to 24 kHz
+stereo float PCM, and projects received W/F rows onto the current AetherSDR
+panadapter using the server-reported full W/F center and bandwidth.
 The existing panadapter waterfall controls are source-aware: while a Kiwi
 profile is selected they update the selected profile's W/F cell, W/F floor, and
 W/F rate settings only; while a normal Flex antenna is selected they retain the
@@ -508,6 +520,35 @@ operator-relevant: Auto Connect is enabled or a slice is still assigned to that
 Kiwi RX antenna. Server-declared terminal conditions such as `badp`, busy,
 disabled, down, redirect, or camp disconnect are not retried by this local
 recovery path.
+
+## Source-Attributed Denial Messages
+
+The source-attributed follow-up uses the LGPL-marked KiwiSDR source snapshot
+identified in [Source Provenance](#source-provenance) only as a protocol
+reference for terminal denial labels:
+
+- `rx/rx_cmd.h` defines `badp` values 0-7 as OK, try-again/authentication
+  rejection, still determining local IP, IP not allowed, no admin password set,
+  no multiple connections, database update in progress, and admin connection
+  already open.
+- `rx/rx_cmd.cpp` and `support/stats.cpp` send `MSG ip_limit=<minutes>,<ip>`
+  when a per-IP 24-hour usage limit is reached. This message shape was also
+  observed on the wire, so AetherSDR keeps the defensive `ip_limit` parser and
+  reports the server's minute value when valid.
+- `support/stats.cpp` sends `MSG inactivity_timeout=<minutes>` when a connected
+  client exceeds the server inactivity timer.
+- `rx/rx_server.cpp` sends `MSG wb_only` for wideband-only servers and
+  `MSG exclusive_use` when a receiver is locked for exclusive use.
+- `rx/rx_sound.cpp` sends `MSG password_timeout` when password authentication
+  times out.
+- `rx/rx_util.cpp` sends encoded `MSG kiwi_kick=<count>,<message>` when the
+  server kicks sound/waterfall/extension clients.
+
+The runtime still treats these as terminal denial/disconnect states only. It
+does not add new setup commands, does not infer extension behavior, and ignores
+unknown MSG keys. `badp=5` is intentionally worded with both the source-derived
+duplicate-IP meaning and the observed public-access/password hint, because
+deployed receivers have returned that value during public-auth rejection.
 
 Because the observed uncompressed `SND` payload is 512 mono samples at 12 kHz,
 arrival cadence averages about 43 ms per frame but can bunch into burst/gap
@@ -728,9 +769,10 @@ The first safe step is protocol-independent scaffolding:
 ## Non-Goals For This Scaffolding Pass
 
 - No transmitted state, PTT, MOX, tune, or Flex radio mutations.
-- No KiwiSDR wire messages or decoder behavior guessed from memory; every
+- No KiwiSDR wire commands or decoder behavior guessed from memory; every
   implemented wire command and frame interpretation above came from the
-  black-box observations in this thread.
+  black-box observations in this thread. The terminal denial-message labels are
+  the source-attributed exception documented above.
 - No reuse of WebSDR code paths or assumptions.
 - No visual-theme or main-layout changes beyond the requested applet and
   per-panadapter toggle.

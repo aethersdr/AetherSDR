@@ -17,6 +17,17 @@ is entirely original. SmartSDR is a trademark of FlexRadio Systems.
   FlexLib:   Copyright (c) 2012-2025 FlexRadio Systems
   Reference: https://www.flexradio.com/
 
+The KiwiSDR receive integration includes source-attributed terminal
+denial-message labels derived from the LGPL-marked KiwiSDR server source. No
+KiwiSDR code is incorporated, vendored, translated, or linked into AetherSDR;
+the referenced source is used only to label server MSG keys and numeric badp
+denial codes in original AetherSDR error handling.
+
+  KiwiSDR source: Copyright (c) 2014-2024 John Seamons and contributors
+  License:        LGPL-2.0-or-later, per consulted file headers
+  Source:         https://github.com/jks-prv/Beagle_SDR_GPS
+  Reference:      commit efb38e2b25137029cb37a96a94e03366f8d2871e
+
 
 1. WDSP — Spectral Noise Reduction (NR2)
 -----------------------------------------
