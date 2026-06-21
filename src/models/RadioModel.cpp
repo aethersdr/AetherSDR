@@ -954,13 +954,16 @@ QString RadioModel::localPttInterlockMessage(TransmitModel::PttSource source) co
     }
 
     // CAT/DAX PTT callers acknowledge the request before the asynchronous
-    // model path runs, so local preflight must not silently eat their PTT.
-    // Let the radio be authoritative and report any resulting interlock.
-    if (source == TransmitModel::PttSource::Dax)
+    // model path runs, so legacy local voice-mode preflight must not silently
+    // eat their PTT. Pan-level receive-only TX inhibits above still apply.
+    // Otherwise let the radio be authoritative and report any interlock.
+    if (source == TransmitModel::PttSource::Dax) {
         return QString();
+    }
 
-    if (!s)
+    if (!s) {
         return QStringLiteral("No transmit slice is assigned.");
+    }
 
     const QString mode = s->mode().toUpper();
     const bool nonVoiceSource = (source == TransmitModel::PttSource::Tune

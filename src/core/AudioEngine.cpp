@@ -1942,12 +1942,12 @@ void AudioEngine::setKiwiSdrAudioEnabled(bool on)
 
 void AudioEngine::setKiwiSdrAudioSourceEnabled(const QString& sourceId, bool on)
 {
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, on);
     if (!source || source->enabled == on) {
         return;
     }
 
-    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     source->enabled = on;
     qCDebug(lcKiwiSdrAudio).noquote()
         << "Audio source" << (on ? "enabled" : "disabled") << source->id;
@@ -1976,6 +1976,7 @@ void AudioEngine::setKiwiSdrAudioSourceEnabled(const QString& sourceId, bool on)
 void AudioEngine::setKiwiSdrAudioSourceGain(const QString& sourceId,
                                             float gainPercent)
 {
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
     if (!source) {
         return;
@@ -1987,12 +1988,12 @@ void AudioEngine::setKiwiSdrAudioSourceGain(const QString& sourceId,
 void AudioEngine::setKiwiSdrAudioSourceMuted(const QString& sourceId,
                                              bool muted)
 {
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
     if (!source || source->muted == muted) {
         return;
     }
 
-    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     source->muted = muted;
     source->rxBuffer.clear();
     source->rxPackets.clear();
@@ -2006,6 +2007,7 @@ void AudioEngine::setKiwiSdrAudioSourceMuted(const QString& sourceId,
 
 void AudioEngine::setKiwiSdrAudioSourcePan(const QString& sourceId, int pan)
 {
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
     ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
     if (!source) {
         return;
