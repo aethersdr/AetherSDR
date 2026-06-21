@@ -244,6 +244,18 @@ QString SmartCatProtocol::processCommandImpl(const QString& cmd)
         }
         if (name == "FT") return cmdFT(arg);
         if (name == "FR") return cmdFR(arg);
+        if (name == "SA") {
+            // Satellite mode (TS-2000). We are never in satellite mode. Hamlib's
+            // TS-2000 backend queries SA; before VFO ops (set_vfo, reached via
+            // set_split_mode), and treats the generic unknown-command "?;" as a
+            // fatal rejection (-9) — which aborts WSJT-X's set_split_freq_mode in
+            // TS-2000 mode. Report satellite OFF so it proceeds. (First empirical
+            // form: P1=0. If Hamlib's parser needs the full fixed-width SA answer,
+            // widen this.)
+            if (arg.isEmpty() || arg == "?")
+                return QStringLiteral("SA0;");
+            return {};   // accept any SA set as a no-op
+        }
         if (name == "LK") return cmdLK(arg);
         if (name == "MG") return cmdMG(arg);
         if (name == "NB") return cmdNB(arg);
