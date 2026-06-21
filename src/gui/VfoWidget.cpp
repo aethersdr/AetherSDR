@@ -892,7 +892,7 @@ void VfoWidget::buildUI()
     // otherwise sit flush against the tabs).  Hidden → the meter area is
     // pixel-identical to the original; shown → tabs shift down a few px. (#SmartMTR)
     m_meterUnderlineRoom = new QWidget;
-    m_meterUnderlineRoom->setFixedHeight(8);
+    m_meterUnderlineRoom->setFixedHeight(3);
     m_meterUnderlineRoom->setAttribute(Qt::WA_TranslucentBackground);
     m_meterUnderlineRoom->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_meterUnderlineRoom->hide();
