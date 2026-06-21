@@ -2999,11 +2999,20 @@ void VfoWidget::paintEvent(QPaintEvent* event)
         // overflow the 22px strip, so anchor below them; SmartMTR is contained,
         // so anchor at the widget bottom.  The underline-room spacer guarantees
         // this clears the tab row regardless of indicator height. (#SmartMTR)
-        const qreal yBase = m_smartMtr
-            ? g.bottom() + 1.0
-            : meterBarRect().y() + 20.0;
         const qreal rise   = 2.0;              // how far the ends curve up (tiny)
         const qreal curveW = 5.0;              // horizontal span of each hook
+        const qreal penW   = 2.0;              // accent stroke width
+        // SmartMTR's meter is an OPAQUE child widget (SmartMtrWidget) that repaints
+        // its whole rect, so any underline pixel at/above g.bottom() — including the
+        // upward-hooked ends, which reach rise+penW/2 above the flat baseline — gets
+        // painted over by the child and reads as "cut". Drop the baseline so even the
+        // raised tips clear g.bottom() by 1px; the underline-room spacer (grown to
+        // match in SmartMTR mode, see applyMeterView) keeps the flat baseline off the
+        // tab row. The standard S-meter page is transparent (its bar is painted by
+        // us), so its underline anchors over the overflowing scale labels as before.
+        const qreal yBase = m_smartMtr
+            ? g.bottom() + rise + penW / 2.0 + 1.0
+            : meterBarRect().y() + 20.0;
         const qreal xL = g.x();
         const qreal xR = g.x() + g.width();
 
@@ -3015,7 +3024,7 @@ void VfoWidget::paintEvent(QPaintEvent* event)
 
         const bool prevAA = p.testRenderHint(QPainter::Antialiasing);
         p.setRenderHint(QPainter::Antialiasing, true);
-        QPen underPen(QColor(0x00, 0xb4, 0xd8), 2.0);
+        QPen underPen(QColor(0x00, 0xb4, 0xd8), penW);
         underPen.setCapStyle(Qt::RoundCap);
         p.setPen(underPen);
         p.setBrush(Qt::NoBrush);
@@ -3139,6 +3148,13 @@ void VfoWidget::applyMeterView(bool smartMtr)
     m_smartMtr = smartMtr;
     if (m_meterStack) {
         m_meterStack->setCurrentIndex(smartMtr ? 1 : 0);
+    }
+    // The curved meter-strip underline (painted in paintEvent) needs more vertical
+    // room in SmartMTR mode: its baseline sits below the opaque meter child so the
+    // hooks aren't clipped, which drops the stroke ~3px lower than the S-meter case.
+    // Size the underline-room spacer to contain it per mode. (#SmartMTR)
+    if (m_meterUnderlineRoom) {
+        m_meterUnderlineRoom->setFixedHeight(smartMtr ? 5 : 3);
     }
     syncMeterMenuButtons();
     syncSmartMtrSettingsState();  // options are SmartMTR-only → enable/disable
