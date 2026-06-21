@@ -3,6 +3,7 @@
 #include <QString>
 #include <QMap>
 #include <QPointer>
+#include <QElapsedTimer>
 
 namespace AetherSDR {
 
@@ -110,7 +111,12 @@ private:
     // slice already exists. Used by set_split_vfo's enable path and by
     // set_freq/set_mode VFOB — targetable_vfo lets clients address the TX VFO
     // directly without a preceding set_split_vfo (e.g. WSJT-X Rig split).
-    void ensureSplitTxSlice();
+    // recordExistingAsEnabled: when split is ALREADY engaged on a distinct slice,
+    // record m_lastSplitEnable=1 only for enable-intent callers (set_split_vfo 1,
+    // set_freq/set_mode VFOB). Passive set_split_freq/set_split_mode pass false so
+    // they don't claim an enable this client never made (would arm a spurious
+    // 1→0 reclaim on the next polled set_split_vfo 0).
+    void ensureSplitTxSlice(bool recordExistingAsEnabled = true);
     QString rprt(int code) const;
 
     // Mode conversion tables
@@ -126,6 +132,8 @@ private:
     // allows this two-line form and Not1MM contest CW relies on it.
     bool m_pendingMorseLine{false};
     bool m_pendingSplitEnable{false};    // set when split enabled but no second slice existed yet
+    QElapsedTimer m_pendingSplitTimer;   // age of the in-flight create; clears stale pending so a
+                                         // NAK'd/lost create can't wedge split "pending" forever
     bool m_pendingTxSliceChange{false};  // set when setTxSlice(true) was queued for a non-rx slice
     // Slice we intend to be TX — set synchronously when we queue setTxSlice(true)
     // so findTxSlice() returns the right slice before the event loop fires.

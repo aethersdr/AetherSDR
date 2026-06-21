@@ -913,7 +913,12 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
     // the CAT thread (same direct-read pattern as cmdGetSplitVfo).
     auto* txSlice = findTxSlice(/*promote=*/false);
     auto* rx      = currentSlice();
-    const bool splitActive = (m_lastSplitEnable == 1) && txSlice && rx && txSlice != rx;
+    // Split is "active" if a distinct TX slice exists OR a create-on-demand is
+    // still in flight (m_pendingTxSlice not resolvable yet). Covering the pending
+    // window stops a key that arrives before the slice lands from seizing TX back
+    // to the RX slice (transmitting on VFOA — the very symptom this gate prevents).
+    const bool splitActive = (m_lastSplitEnable == 1)
+                             && (m_pendingSplitEnable || (txSlice && rx && txSlice != rx));
 
     QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx, splitActive]() {
         // Non-split: ensure this protocol's bound slice is the TX slice so the
@@ -1092,7 +1097,12 @@ QString RigctlProtocol::cmdSetSplitVfo(const QString& args)
 // already exists. Promote an existing non-RX slice, else create a second slice
 // and flag deferred promotion (tryPromoteTxSlice applies it when the radio's
 // status response populates the new SliceModel).
-void RigctlProtocol::ensureSplitTxSlice()
+// Max time a create-on-demand may stay "in flight" before the in-flight guard
+// treats it as failed and lets a retry through. Only needs to outlast a normal
+// slice create (~300-400 ms observed) while still deduping the rapid WSJT-X burst.
+static constexpr qint64 kPendingCreateTimeoutMs = 2000;
+
+void RigctlProtocol::ensureSplitTxSlice(bool recordExistingAsEnabled)
 {
     if (!m_model) return;
     auto* rxSlice = currentSlice();
@@ -1104,9 +1114,21 @@ void RigctlProtocol::ensureSplitTxSlice()
     // that stash intact: the promote-existing path below clears m_pendingSplitEnable
     // WITHOUT applying the stash, so we must not fall into it while a create is
     // pending.
-    if (m_pendingSplitEnable) return;
+    // Time-bounded: if the create never lands (radio NAK; or on Multi-Flex the
+    // local slice count was below maxSlices() but the radio is really full), don't
+    // wedge split "pending" forever — once the window lapses, clear and retry.
+    if (m_pendingSplitEnable) {
+        if (m_pendingSplitTimer.isValid()
+                && m_pendingSplitTimer.elapsed() < kPendingCreateTimeoutMs)
+            return;
+        m_pendingSplitEnable = false;   // stale create — fall through and retry
+    }
     if (auto* tx = findTxSlice(/*promote=*/false); tx && tx != rxSlice) {
-        m_lastSplitEnable = 1;   // split already engaged on an existing slice
+        // Record the enable only for enable-intent callers; a passive
+        // set_split_freq/set_split_mode (recordExistingAsEnabled=false) must not
+        // claim a split this client never enabled (see the header note).
+        if (recordExistingAsEnabled)
+            m_lastSplitEnable = 1;   // split already engaged on an existing slice
         return;                  // a distinct TX slice already exists
     }
     for (auto* s : m_model->slices()) {
@@ -1128,6 +1150,7 @@ void RigctlProtocol::ensureSplitTxSlice()
     if (m_model->slices().size() >= m_model->maxSlices())
         return;   // could not engage split — leave m_lastSplitEnable untouched
     m_pendingSplitEnable = true;
+    m_pendingSplitTimer.start();   // arm the time-bounded in-flight guard above
     m_lastSplitEnable = 1;   // engaged via create-on-demand (slice in flight)
     // Create the TX slice on the RX slice's pan AND seeded at the RX frequency,
     // instead of letting addSlice() pick its default geometry (pan-center + 20% of
@@ -1171,7 +1194,9 @@ QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
     // matching set_freq VFOB. The in-flight guard in ensureSplitTxSlice prevents a
     // duplicate when a create is already pending. Without this, a transient race
     // returns RPRT -1 and aborts the transmit.
-    ensureSplitTxSlice();
+    // recordExistingAsEnabled=false: setting the split freq must not, by itself,
+    // claim that THIS client enabled split (that would arm a spurious reclaim).
+    ensureSplitTxSlice(/*recordExistingAsEnabled=*/false);
     // If the new slice hasn't appeared yet, stash the freq; tryPromoteTxSlice()
     // will apply it as soon as the slice becomes visible.
     if (m_pendingSplitEnable) {
@@ -1209,7 +1234,8 @@ QString RigctlProtocol::cmdSetSplitMode(const QString& args)
     const QString mode = hamlibToSmartSDR(parts[0]);
     // Establish the split TX slice on demand (see cmdSetSplitFreq) so a direct
     // set_split_mode — or one racing slice creation — doesn't hard-fail with -1.
-    ensureSplitTxSlice();
+    // recordExistingAsEnabled=false: see cmdSetSplitFreq.
+    ensureSplitTxSlice(/*recordExistingAsEnabled=*/false);
     // If the new slice hasn't appeared yet, stash the mode for tryPromoteTxSlice().
     if (m_pendingSplitEnable) {
         m_pendingSplitMode = mode;
