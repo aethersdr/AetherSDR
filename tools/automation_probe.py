@@ -83,12 +83,22 @@ class Bridge:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Drive the AetherSDR automation bridge")
+    ap = argparse.ArgumentParser(
+        description="Drive the AetherSDR automation bridge",
+        epilog="examples:\n"
+               "  automation_probe.py demo\n"
+               "  automation_probe.py get radio\n"
+               "  automation_probe.py get slice active frequency\n"
+               "  automation_probe.py invoke 'Master volume' setValue 35\n"
+               "  automation_probe.py grab SpectrumWidget /tmp/pan.png",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="demo",
-                    choices=["demo", "ping", "dumpTree", "grab"],
+                    choices=["demo", "ping", "dumpTree", "grab", "invoke", "get"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
-    ap.add_argument("target", nargs="?", help="widget target for grab")
-    ap.add_argument("path", nargs="?", help="output path for grab")
+    ap.add_argument("rest", nargs="*",
+                    help="verb args: grab <target> [path] | "
+                         "invoke <target> <action> [value] | "
+                         "get <model> [selector] [property]")
     ap.add_argument("--socket", help="override the bridge socket path")
     ap.add_argument("--out", default=".", help="output dir for demo artifacts")
     args = ap.parse_args()
@@ -111,11 +121,30 @@ def main():
             print(json.dumps(bridge.request({"cmd": "dumpTree"}), indent=2))
 
         elif args.command == "grab":
-            if not args.target:
+            if not args.rest:
                 sys.exit("error: grab requires a target widget name")
-            req = {"cmd": "grab", "target": args.target}
-            if args.path:
-                req["path"] = args.path
+            req = {"cmd": "grab", "target": args.rest[0]}
+            if len(args.rest) > 1:
+                req["path"] = args.rest[1]
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "invoke":
+            if len(args.rest) < 2:
+                sys.exit("error: invoke needs <target> <action> [value]")
+            req = {"cmd": "invoke", "target": args.rest[0], "action": args.rest[1]}
+            if len(args.rest) > 2:
+                req["value"] = " ".join(args.rest[2:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "get":
+            if not args.rest:
+                sys.exit("error: get needs <model> [selector] [property] "
+                         "(model = radio|slice|slices|pan|pans)")
+            req = {"cmd": "get", "model": args.rest[0]}
+            if len(args.rest) > 1:
+                req["selector"] = args.rest[1]
+            if len(args.rest) > 2:
+                req["property"] = args.rest[2]
             print(json.dumps(bridge.request(req), indent=2))
 
         else:  # demo: produce the Phase-0 deliverables

@@ -13,15 +13,17 @@ class QJsonObject;
 
 namespace AetherSDR {
 
-// In-app, agent-first automation bridge (issue #3646, Phase 0).
+class RadioModel;
+
+// In-app, agent-first automation bridge (issue #3646, Phases 0-1).
 //
 // Exposes a tiny line/JSON command channel over a QLocalServer so an external
-// agent can introspect and capture the GUI without driving OS accessibility
-// APIs or pixel-hunting through VNC. It is *off* in production and only starts
-// when the AETHER_AUTOMATION environment variable is set, so it adds no attack
-// surface or overhead to normal runs.
+// agent can introspect, drive, and capture the GUI without driving OS
+// accessibility APIs or pixel-hunting through VNC. It is *off* in production
+// and only starts when the AETHER_AUTOMATION environment variable is set, so
+// it adds no attack surface or overhead to normal runs.
 //
-// Phase 0 implements two read-only verbs:
+// Phase 0 verbs (read-only introspection + capture):
 //
 //   dumpTree                       -> ARIA-style JSON snapshot of every
 //                                     top-level QWidget hierarchy (objectName,
@@ -33,15 +35,31 @@ namespace AetherSDR {
 //                                     framebuffer for the QRhi panadapter so
 //                                     the live spectrum is captured correctly.
 //
-// Requests are newline-delimited. Each line is either a bare command
-// ("ping", "dumpTree", "grab SpectrumWidget /tmp/pan.png") or a JSON object
-// ({"cmd":"grab","target":"SpectrumWidget","path":"/tmp/pan.png"}). Each
-// request yields exactly one compact-JSON response line.
+// Phase 1 verbs (drive + assert):
 //
-// Later phases (invoke/get/replay) layer onto this same channel; keeping it
-// separate from TciServer is deliberate — TCI has external protocol-compat
-// constraints (eesdr-tci aborts on unknown commands) and test verbs must never
-// leak into a radio-control protocol.
+//   invoke <target> <action> [v]   -> drive a control deterministically:
+//                                     click / toggle / setChecked / setValue /
+//                                     setText / setCurrentText / setCurrentIndex.
+//                                     SAFETY: refuses transmit-related controls
+//                                     (MOX/PTT/Tune/Transmit/VOX) unless the
+//                                     AETHER_AUTOMATION_ALLOW_TX env var is set,
+//                                     so the bridge can never key a live radio
+//                                     by accident.
+//   get <model> [selector] [prop]  -> live JSON snapshot of a model:
+//                                     radio | slice <id|active|tx> | slices |
+//                                     pan <panId|active> | pans. With a trailing
+//                                     property name, returns just that field.
+//                                     Assert on state without screenshots.
+//
+// Requests are newline-delimited. Each line is either a bare command
+// ("dumpTree", "grab SpectrumWidget /tmp/pan.png", "invoke masterVolume
+// setValue 30", "get slice active") or a JSON object ({"cmd":"invoke",
+// "target":"masterVolume","action":"setValue","value":"30"}). Each request
+// yields exactly one compact-JSON response line.
+//
+// Keeping this separate from TciServer is deliberate — TCI has external
+// protocol-compat constraints (eesdr-tci aborts on unknown commands) and test
+// verbs must never leak into a radio-control protocol.
 class AutomationServer : public QObject {
     Q_OBJECT
 
@@ -61,6 +79,11 @@ public:
     QString serverName() const { return m_serverName; }
     QString fullServerName() const;  // resolved socket path / pipe name
 
+    // Live model handle for the get() verb. Set once at startup from the
+    // MainWindow's active-session RadioModel; may be null (get() then reports
+    // "no radio model" rather than crashing).
+    void setRadioModel(RadioModel* model) { m_radioModel = model; }
+
 private slots:
     void onNewConnection();
     void onReadyRead();
@@ -72,6 +95,10 @@ private:
 
     QJsonObject doDumpTree() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
+    QJsonObject doInvoke(const QString& target, const QString& action,
+                         const QString& value) const;
+    QJsonObject doGet(const QString& model, const QString& selector,
+                      const QString& property) const;
 
     // Resolve a target string to a widget: exact objectName first, then
     // class name (with or without namespace) or accessibleName.
@@ -81,6 +108,7 @@ private:
     QString       m_serverName;
     QString       m_discoveryFile;
     QHash<QLocalSocket*, QByteArray> m_buffers;  // per-client read buffer
+    QPointer<RadioModel> m_radioModel;           // for get(); may be null
 };
 
 } // namespace AetherSDR

@@ -25,7 +25,9 @@ production; it only exists when you ask for it via an env var.
 | Confirm a widget exists / is enabled / has the right accessibleName | **Yes** — `dumpTree`. |
 | Capture what the panadapter/waterfall actually rendered | **Yes** — `grab SpectrumWidget`. |
 | Visually check a dialog or applet layout | **Yes** — `grab <widget>` → view the PNG. |
-| Click a button or move a slider programmatically | **Not yet** — `invoke()`/`get()` land in Phase 1. Today the bridge is read-only (snapshot + capture). |
+| Click a button or move a slider programmatically | **Yes** — `invoke <target> <action> [value]`. |
+| Read live model truth (freq, mode, center, dBm, NB/NR) | **Yes** — `get radio\|slice\|pan …`. Assert on state, no pixels. |
+| Key the radio (MOX/PTT/Tune) | **No** — `invoke` refuses transmit controls by design (see [TX safety](#tx-safety)). |
 
 ---
 
@@ -148,16 +150,73 @@ PNG capture of a single widget.
   framebuffer readback for it, so the capture is the *real* rendered spectrum,
   not a blank.
 
+### `invoke`
+Drive a control deterministically — no pixel-hunting. Resolves `target` exactly
+like `grab`.
+
+```json
+→ {"cmd":"invoke","target":"Master volume","action":"setValue","value":"35"}
+← {"ok":true,"target":"Master volume","class":"QSlider","action":"setValue","newValue":"35"}
+```
+
+`newValue` echoes the control's state *after* the action (same field `dumpTree`
+reports) — a free round-trip confirmation.
+
+| `action` | applies to | `value` |
+|---|---|---|
+| `click` | any `QAbstractButton` | — |
+| `toggle` | any `QAbstractButton` (checkable → toggle, else click) | — |
+| `setChecked` | checkable button | `true`/`false`/`on`/`off`/`1`/`0` |
+| `setValue` | slider / scrollbar / spinbox | integer (or number for double-spin) |
+| `setText` | `QLineEdit` | the text |
+| `setCurrentText` | `QComboBox` | item text |
+| `setCurrentIndex` | `QComboBox` | integer index |
+
+<a name="tx-safety"></a>
+> **🚨 TX safety.** `invoke` **refuses** any control whose name looks
+> transmit-related — `mox`, `ptt`, `tune` (incl. the ATU tune button, which
+> emits a carrier), `transmit`, `vox` — returning
+> `{"ok":false,"error":"blocked: …"}` and never calling the widget. A test
+> bridge must never key a live transmitter by accident. To deliberately drive
+> TX (e.g. a hardware-in-the-loop test on a dummy load), set
+> `AETHER_AUTOMATION_ALLOW_TX=1` in the app's environment at launch. Over-
+> blocking is intentional — the guard matches on substrings.
+
+### `get`
+Read live model state — assert on truth without a screenshot. Requires a radio
+model (present once the app is running; fields are empty until a radio
+connects).
+
+```json
+→ {"cmd":"get","model":"radio"}
+← {"ok":true,"model":"radio","radio":{"connected":true,"model":"FLEX-8400M",
+   "transmitting":false,"txPower":0,"sliceCount":1,"panCount":1, …}}
+
+→ {"cmd":"get","model":"slice","selector":"active","property":"frequency"}
+← {"ok":true,"model":"slice","property":"frequency","value":3.6}
+```
+
+| `model` | `selector` | returns |
+|---|---|---|
+| `radio` | — | radio snapshot (name, model, version, connected, transmitting, txPower, paTemp, slice/pan counts) |
+| `slices` | — | array of all slice snapshots |
+| `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, txSlice, …) |
+| `pans` | — | array of all panadapter snapshots |
+| `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps) |
+
+Add a trailing **property** name to any single-object form to get just that
+field: `get slice active mode` → `{"value":"LSB"}`.
+
 ### Errors
 Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
-`widget not found: Foo`, `grab requires a target widget`, `unknown command: x`.
+`widget not found: Foo`, `blocked: '…' looks transmit-related …`,
+`no slice for selector 'tx'`, `unknown action: x`, `unknown command: x`.
 
 ---
 
 ## Targeting a widget
 
-`grab` (and, in Phase 1, `invoke`/`get`) resolve a `target` string in this
-order — first match wins:
+`grab` and `invoke` resolve a `target` string in this order — first match wins:
 
 1. **Exact `objectName`** — the most stable handle. Prefer this.
 2. **Class name** — full (`AetherSDR::SpectrumWidget`) or short
@@ -191,9 +250,16 @@ assert r["ok"] and r["width"] > 0
 # then view /tmp/pan.png, or perceptual-diff it against a golden (Phase 3)
 ```
 
+**Drive a control and confirm the model followed.**
+```python
+bridge.request({"cmd": "invoke", "target": "sliceModeCombo", "action": "setCurrentText", "value": "USB"})
+assert bridge.request({"cmd": "get", "model": "slice", "selector": "active", "property": "mode"})["value"] == "USB"
+```
+
 **Snapshot → act → assert** (the loop you already use for web work): snapshot
-with `dumpTree`, perform your action (today: via the real radio / UI; Phase 1
-adds `invoke`), then `dumpTree` again and diff the `value`/`enabled` fields.
+with `dumpTree`/`get`, drive the change with `invoke`, then `get` (or another
+`dumpTree`) and assert the `value`/model field changed. Keep transmit out of the
+loop — the guard blocks it, and so should your scenarios.
 
 Prefer **structural** assertions (`dumpTree` values) over screenshots wherever
 possible — they're exact, fast, and identical across OSes. Reserve `grab` +
@@ -208,8 +274,12 @@ lands.
 
 - **Off by default.** No `AETHER_AUTOMATION` → no server, zero overhead, no
   socket. This is intentional; never enable it in a shipped build.
-- **Read-only today.** Phase 0 is `ping` / `dumpTree` / `grab`. No clicking or
-  value-setting yet — that's `invoke()`/`get()` in Phase 1.
+- **`invoke` can't key the radio.** Transmit controls are refused unless
+  `AETHER_AUTOMATION_ALLOW_TX=1` — see [TX safety](#tx-safety). Don't disable the
+  guard just to get a test green.
+- **`get` needs a model.** It reads the active-session `RadioModel`; fields are
+  empty/zero until a radio connects. Run it once connected, or assert on
+  `connected` first.
 - **GPU panadapter capture.** `SpectrumWidget` is a `QRhiWidget` when built with
   `AETHER_GPU_SPECTRUM` (the default). The bridge uses
   `QRhiWidget::grabFramebuffer()` for it — plain `QWidget::grab()` returns an
@@ -230,7 +300,7 @@ lands.
 | Phase | Adds | Status |
 |---|---|---|
 | 0 | `dumpTree` + `grab` over `QLocalServer` behind `AETHER_AUTOMATION` | **done** |
-| 1 | `invoke(name, action, value)` + `get(model, property)`; clear the a11y backlog | planned |
+| 1 | `invoke <target> <action>` (TX-guarded) + `get radio\|slice\|pan` model snapshots | **done** |
 | 2 | Replay/fixture mode (recorded VITA-49 FFT + meters) → deterministic panadapter without hardware | planned |
 | 3 | CI E2E matrix: `QT_QPA_PLATFORM=offscreen` + agent scenarios + per-OS perceptual golden diffs | planned |
 | 4 | Computer-use / VNC kept as the *exploratory* tier (real GPU/WM smoke), not the regression backbone | planned |

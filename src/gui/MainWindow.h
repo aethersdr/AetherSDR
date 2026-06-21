@@ -177,6 +177,12 @@ public:
     explicit MainWindow(QWidget* parent = nullptr);
     ~MainWindow() override;
 
+    // Active-session RadioModel. Bound to the current session's model, so it
+    // tracks Multi-Flex session switches. Used by the automation bridge
+    // (#3646) to read live model state via get(); keep it read-oriented.
+    RadioModel& radioModel() { return m_radioModel; }
+    const RadioModel& radioModel() const { return m_radioModel; }
+
 protected:
     void showEvent(QShowEvent* event) override;
     void closeEvent(QCloseEvent* event) override;

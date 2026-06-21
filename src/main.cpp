@@ -420,6 +420,7 @@ int main(int argc, char* argv[])
                 ? qEnvironmentVariable("AETHER_AUTOMATION_SOCKET")
                 : QStringLiteral("aethersdr-automation");
             automation = std::make_unique<AetherSDR::AutomationServer>();
+            automation->setRadioModel(&window.radioModel());  // for the get() verb
             if (!automation->start(sockName))
                 automation.reset();
         }
