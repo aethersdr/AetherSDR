@@ -9,8 +9,8 @@
 
 namespace AetherSDR {
 
-// Max RIT/XIT offset the radio accepts (±Hz). Used by RIT/XIT and the XIT-offset
-// split fallback. Declared here so it's visible to all handlers in this file.
+// Max RIT/XIT offset the radio accepts (±Hz). Declared here so it's visible to
+// all RIT/XIT handlers in this file.
 static constexpr int kRitMaxHz = 9999;
 
 // ── Mode conversion tables ──────────────────────────────────────────────────
@@ -109,8 +109,7 @@ SmartCatProtocol::SmartCatProtocol(RadioModel* model, int vfoA, int vfoB,
 SmartCatProtocol::~SmartCatProtocol()
 {
     // Client disconnect: tear down an active split so a reused VFO B isn't left as
-    // TX and an XIT-offset fallback isn't left applied on slice A. No slice is
-    // removed (split never created one — reuse/XIT only).
+    // TX. No slice is removed (split never created one — reuse only).
     if (m_splitEnabled)
         teardownSplit();
 }
@@ -309,23 +308,6 @@ QString SmartCatProtocol::cmdFA(const QString& arg)
 
 QString SmartCatProtocol::cmdFB(const QString& arg)
 {
-    // XIT-fallback split (no VFO B slice): VFO B is slice A's frequency plus the
-    // XIT offset; setting VFO B sets the XIT offset.
-    if (m_xitSplit) {
-        SliceModel* a = sliceA();
-        if (!a) return "?;";
-        if (arg.isEmpty())
-            return "FB" + freqField(a->frequency() + a->xitFreq() / 1e6) + ";";
-        bool ok;
-        double hz = arg.toDouble(&ok);
-        if (!ok) return "?;";
-        const int offset = qRound(hz - a->frequency() * 1e6);
-        // Reject an out-of-range split rather than silently clamping — clamping
-        // would put TX on a frequency the controller never asked for.
-        if (offset < -kRitMaxHz || offset > kRitMaxHz) return "?;";
-        a->setXit(true, offset);
-        return {};
-    }
     SliceModel* b = sliceB();
     // No VFO B → "?;" (do NOT fall back to VFO A). The old VFO-A fallback reported
     // VFO A's frequency for FB while ZZME returned "?;"; that contradiction broke
@@ -370,9 +352,7 @@ QString SmartCatProtocol::cmdZZMD(const QString& arg)
 
 QString SmartCatProtocol::cmdZZME(const QString& arg)
 {
-    // XIT-fallback split shares slice A (no second slice), so VFO B's mode IS
-    // slice A's mode (XIT shifts frequency, not mode).
-    SliceModel* b = m_xitSplit ? sliceA() : sliceB();
+    SliceModel* b = sliceB();
     if (!b) return "?;";
     if (arg.isEmpty())
         return "ZZME" + modeToZZ(b->mode()) + ";";
@@ -451,18 +431,12 @@ QString SmartCatProtocol::enableSplit()
         m_splitEnabled = true;
         return {};
     }
-    // (2) VFO B configured for this port but its slice is absent → NOT_ENABLED.
-    //     Honor the specific VFO B the port asked for (matches SmartSDR-for-Mac).
-    if (m_vfoB >= 0)
-        return "?;";
-    // (3) Genuine single-VFO port → XIT-offset fallback on slice A (TX = RX +
-    //     offset, 0 until set via FB/ZZFB). NOTE: SmartSDR-for-Windows would
-    //     create a dedicated TX slice here; that create-on-demand path is deferred
-    //     to the slice-management consolidation, so we fall back to XIT for now.
-    m_xitSplit = true;
-    a->setXit(true, a->xitFreq());
-    m_splitEnabled = true;
-    return {};
+    // (2) No usable VFO B slice → NOT_ENABLED, matching SmartSDR-for-Mac. This
+    //     covers both a VFO B configured-but-absent and a genuine single-VFO port.
+    //     SmartSDR-for-Windows would instead create a dedicated TX slice on a
+    //     single-VFO port; that create-on-demand path is deferred to the
+    //     slice-management consolidation, so split is simply not enabled here.
+    return "?;";
 }
 
 QString SmartCatProtocol::disableSplit()
@@ -473,19 +447,13 @@ QString SmartCatProtocol::disableSplit()
 
 void SmartCatProtocol::teardownSplit()
 {
-    SliceModel* a = sliceA();
-    if (m_xitSplit) {
-        if (a) a->setXit(false, 0);
-        m_xitSplit = false;
-    }
-    // Hand TX back to the RX slice (slice A); it was on the operator's VFO B
-    // (XIT leaves TX on A already, so this is a no-op there). No slice is removed
-    // — split never created one (reuse/XIT only).
-    if (a) a->setTxSlice(true);
+    // Hand TX back to the RX slice (slice A); it was on the operator's VFO B.
+    // No slice is removed — split never created one (reuse only).
+    if (SliceModel* a = sliceA()) a->setTxSlice(true);
     m_splitEnabled = false;
 }
 
-// ── FR — RX VFO select (accepted, no-op) ─────────────────────────────────────
+// ── FR — RX VFO select ───────────────────────────────────────────────────────
 
 // FR — RX VFO select (TS-2000). FR0 = VFO A, FR1 = VFO B. Per SmartSDR-for-Mac:
 // FR1 is accepted only when a real second VFO exists (a configured VFO B with a
