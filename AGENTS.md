@@ -482,3 +482,30 @@ CI enforcement: [`tools/check_a11y.py`](tools/check_a11y.py) runs on every
 PR via [`.github/workflows/a11y-check.yml`](.github/workflows/a11y-check.yml)
 and emits inline diff annotations for the patterns above. Warning-only
 (`exit 0`); never blocks a build.
+
+## Agent Automation Bridge — verify the GUI without pixels
+
+Need to assert on UI state, drive a control, confirm a widget rendered, or
+capture the panadapter while verifying a change? AetherSDR ships an in-process,
+agent-drivable bridge (off in production). Launch with `AETHER_AUTOMATION=1`
+and drive a `QLocalServer` that speaks newline-delimited JSON:
+
+- `dumpTree` → semantic snapshot of the whole widget tree (objectName,
+  accessibleName, enabled, geometry, live `value`) — your "DOM" for controls.
+- `grab <widget>` → PNG of any widget, including a correct GPU-framebuffer
+  readback of the panadapter (`SpectrumWidget`).
+- `invoke <target> <action> [value]` → click/toggle/setValue/setText/… a
+  control. **Refuses transmit-related _buttons_ (MOX/PTT/Tune/ATU-tune/VOX
+  enable) unless `AETHER_AUTOMATION_ALLOW_TX=1`** — the bridge can never key a
+  live radio by accident; setpoint sliders ("Tune power", "RF power") stay
+  drivable.
+- `get radio|transmit|slice|slices|pan|pans [selector] [property]` → live JSON
+  model snapshot (frequency, mode, filter, NB/NR, center MHz, min/max dBm,
+  RF/mic/CW TX-chain, …). Assert on truth without screenshots.
+
+Quick start: `python3 tools/automation_probe.py demo` (no Qt dependency); also
+`get radio`, `invoke 'Master volume' setValue 35`. Full reference — protocol,
+JSON schemas, targeting rules, recipes, gotchas — in
+**[`docs/automation-bridge.md`](docs/automation-bridge.md)**. This is the
+deterministic, cross-OS way to do "snapshot → act → assert" on the native UI
+(issue [#3646](https://github.com/aethersdr/AetherSDR/issues/3646)).
