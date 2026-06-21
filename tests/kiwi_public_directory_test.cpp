@@ -78,6 +78,18 @@ int main()
     if (!open.connectionLimitBadge().isEmpty()) return fail("no limits badge");
     if (!open.mayConnectViaApi()) return fail("open receiver must allow API connect");
 
+    // Token match, not substring: a free-form hardware descriptor that merely
+    // contains the letters "limits" must not false-positive, but the real marker
+    // (its own token, any case) must match.
+    KiwiPublicReceiver substr;
+    substr.sdrHw = QStringLiteral("KiwiSDR v1.900 NoLimitsBeta");
+    if (substr.advertisesConnectionLimit())
+        return fail("substring must not match the Limits token");
+    KiwiPublicReceiver tok;
+    tok.sdrHw = QStringLiteral("KiwiSDR v1.900 limits");
+    if (!tok.advertisesConnectionLimit())
+        return fail("case-insensitive Limits token must match");
+
     const KiwiPublicReceiver& limited = rxs[2];
     if (limited.extApi != 4 || limited.usersMax != 8) return fail("limited parse");
     if (limited.apiPolicy() != ApiPolicy::Limited) return fail("0<ext_api<max must be Limited");
