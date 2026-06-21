@@ -499,10 +499,13 @@ and drive a `QLocalServer` that speaks newline-delimited JSON:
   `aetherTxKeying` property — MOX/PTT, TUNE, ATU, CWX send, packet/APRS send)
   unless `AETHER_AUTOMATION_ALLOW_TX=1`** — the bridge can never key a live
   radio by accident; setpoint sliders ("Tune power", "RF power") stay drivable.
-  Marked controls show `"keying": true` in `dumpTree`.
-- `get radio|transmit|slice|slices|pan|pans [selector] [property]` → live JSON
-  model snapshot (frequency, mode, filter, NB/NR, center MHz, min/max dBm,
-  RF/mic/CW TX-chain, …). Assert on truth without screenshots.
+  Marked controls show `"keying": true` in `dumpTree`. Also **refuses disabled
+  controls** (no silent no-op). Disambiguate duplicate names with a scoped
+  target: `"RxApplet/AF gain"` vs `"PanadapterApplet/AF gain"`.
+- `get radio|transmit|equalizer|slice|slices|pan|pans [selector] [property]` →
+  live JSON model snapshot (frequency, mode, filter, NB/NR, squelch/AGC/APF,
+  center MHz, min/max dBm, RF/mic/CW TX-chain, EQ bands, …). Assert on truth
+  without screenshots. Sliders/spinboxes also report `range` in `dumpTree`.
 
 Quick start: `python3 tools/automation_probe.py demo` (no Qt dependency); also
 `get radio`, `invoke 'Master volume' setValue 35`. Full reference — protocol,

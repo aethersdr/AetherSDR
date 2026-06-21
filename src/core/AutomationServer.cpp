@@ -99,6 +99,19 @@ QJsonObject describeWidget(const QWidget* w)
     if (!val.isNull())
         o[QStringLiteral("value")] = val;
 
+    // Range for numeric controls — lets a driver validate against the real
+    // bounds (scale) and detect wrapping/circular sliders without guessing
+    // extremes (#3646).
+    if (auto* s = qobject_cast<const QAbstractSlider*>(w))
+        o[QStringLiteral("range")] = QJsonObject{{QStringLiteral("min"), s->minimum()},
+                                                 {QStringLiteral("max"), s->maximum()}};
+    else if (auto* sb = qobject_cast<const QSpinBox*>(w))
+        o[QStringLiteral("range")] = QJsonObject{{QStringLiteral("min"), sb->minimum()},
+                                                 {QStringLiteral("max"), sb->maximum()}};
+    else if (auto* ds = qobject_cast<const QDoubleSpinBox*>(w))
+        o[QStringLiteral("range")] = QJsonObject{{QStringLiteral("min"), ds->minimum()},
+                                                 {QStringLiteral("max"), ds->maximum()}};
+
     // Surface the TX-keying marker so an agent can see which controls invoke()
     // will refuse before trying them (#3646).
     if (w->property(kTxKeyingProperty).toBool())
@@ -256,6 +269,11 @@ QJsonObject sliceSnapshot(const SliceModel* s)
         {QStringLiteral("nrLevel"),    s->nrLevel()},
         {QStringLiteral("anf"),        s->anfOn()},
         {QStringLiteral("apf"),        s->apfOn()},
+        {QStringLiteral("apfLevel"),   s->apfLevel()},
+        {QStringLiteral("squelch"),    s->squelchOn()},
+        {QStringLiteral("squelchLevel"), s->squelchLevel()},
+        {QStringLiteral("agcMode"),    s->agcMode()},
+        {QStringLiteral("agcThreshold"), s->agcThreshold()},
     };
 }
 
@@ -339,6 +357,25 @@ QJsonObject transmitSnapshot(const TransmitModel* t)
         {QStringLiteral("atuEnabled"),      t->atuEnabled()},
         {QStringLiteral("atuMemories"),     t->memoriesEnabled()},
         {QStringLiteral("apdEnabled"),      t->apdEnabled()},
+    };
+}
+
+// 8-band graphic EQ (RX + TX). Lets a scenario assert EQ-applet slider changes
+// reached the model (#3646). Bands keyed by their short labels (63 … 8k).
+QJsonObject equalizerSnapshot(const EqualizerModel* e)
+{
+    QJsonObject rx, tx;
+    for (int i = 0; i < EqualizerModel::BandCount; ++i) {
+        const auto band = static_cast<EqualizerModel::Band>(i);
+        const QString key = EqualizerModel::bandLabel(band);
+        rx[key] = e->rxBand(band);
+        tx[key] = e->txBand(band);
+    }
+    return QJsonObject{
+        {QStringLiteral("rxEnabled"), e->rxEnabled()},
+        {QStringLiteral("txEnabled"), e->txEnabled()},
+        {QStringLiteral("rx"), rx},
+        {QStringLiteral("tx"), tx},
     };
 }
 
@@ -624,6 +661,29 @@ QWidget* AutomationServer::resolveWidget(const QString& target)
 {
     const QWidgetList tops = QApplication::topLevelWidgets();
 
+    // 0. Scoped target "<scope>/<name>" disambiguates duplicate accessibleNames
+    //    across applets — e.g. "RxApplet/AF gain" vs "PanadapterApplet/AF gain",
+    //    which both exist and would otherwise both resolve to whichever comes
+    //    first in tree order. <scope> matches an ancestor by objectName, class
+    //    (short or full), or accessibleName; <name> is resolved within that
+    //    subtree. Falls through to flat resolution if it doesn't resolve, so a
+    //    literal '/' in a control name still works.
+    const int slash = target.indexOf(QLatin1Char('/'));
+    if (slash > 0) {
+        const QString scope = target.left(slash);
+        const QString inner = target.mid(slash + 1);
+        for (QWidget* tlw : tops) {
+            QWidget* sc = (tlw->objectName() == scope) ? tlw
+                                                       : tlw->findChild<QWidget*>(scope);
+            if (!sc)
+                sc = matchRecursive(tlw, scope);
+            if (sc) {
+                if (QWidget* m = matchRecursive(sc, inner)) return m;
+                if (QWidget* m = matchByButtonText(sc, inner)) return m;
+            }
+        }
+    }
+
     // 1. Exact objectName (cheap, unambiguous).
     for (QWidget* tlw : tops) {
         if (tlw->objectName() == target)
@@ -650,6 +710,20 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
     QWidget* w = resolveWidget(target);
     if (!w)
         return err(QStringLiteral("widget not found: ") + target);
+
+    // Refuse to drive a disabled control. Qt's setValue()/setChecked() still
+    // mutate a disabled widget, so without this the bridge would report a happy
+    // newValue while the radio never sees the change (the control is greyed out
+    // for a reason — wrong mode, not connected, etc.). Surfacing it as an error
+    // turns a silent no-op into an explicit, assertable signal. (#3646)
+    if (!w->isEnabled()) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("refused: '") + target
+                                + QStringLiteral("' is disabled — the radio won't accept the change")},
+                           {QStringLiteral("disabled"), true},
+                           {QStringLiteral("class"), shortClassName(w)}};
+    }
 
     // TX-safety guard — never key a live radio from the test bridge unless the
     // operator has explicitly opted in. (#3646 Phase 1 safety requirement.)
@@ -733,6 +807,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = radioSnapshot(radio);
     } else if (model == QLatin1String("transmit")) {
         data = transmitSnapshot(&radio->transmitModel());
+    } else if (model == QLatin1String("equalizer") || model == QLatin1String("eq")) {
+        data = equalizerSnapshot(&radio->equalizerModel());
     } else if (model == QLatin1String("slices")) {
         QJsonArray arr;
         for (const SliceModel* s : radio->slices()) arr.append(sliceSnapshot(s));
@@ -767,7 +843,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use radio|transmit|slice|slices|pan|pans)"));
+                   + QStringLiteral(" (use radio|transmit|equalizer|slice|slices|pan|pans)"));
     }
 
     if (!property.isEmpty()) {

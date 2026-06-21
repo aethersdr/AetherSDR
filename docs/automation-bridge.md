@@ -116,10 +116,16 @@ Each `<node>`:
   "visible": true,
   "geometry": { "x": 1, "y": 104, "w": 1448, "h": 751 },  // GLOBAL screen coords
   "value": "42",                           // best-effort; see below
+  "range": { "min": 0, "max": 100 },       // numeric controls only (slider/spinbox)
   "keying": true,                          // present only on TX-keying controls (invoke refuses these)
   "children": [ <node>, … ]                // present only if non-empty
 }
 ```
+
+The `range` lets a driver validate against the real bounds (scale) and detect
+**circular/wrapping** controls without guessing: if `setValue(max)` doesn't stick
+but a mid value does, the control wraps (e.g. a 0–360° phase slider where step 72
+≡ 0°) — classify it as wrapping, not broken.
 
 **The `value` field** is the fast path for state assertions — it's filled in
 for common controls so you can assert without a screenshot:
@@ -162,6 +168,13 @@ like `grab`.
 
 `newValue` echoes the control's state *after* the action (same field `dumpTree`
 reports) — a free round-trip confirmation.
+
+**Disabled controls are refused.** Qt's `setValue()`/`setChecked()` still mutate
+a *disabled* widget, so without a guard the bridge would report a happy
+`newValue` while the radio never sees the change (the control is greyed out for
+a reason — wrong mode, not connected, …). `invoke` on a disabled widget returns
+`{"ok":false,"disabled":true,"error":"refused: '…' is disabled …"}` instead, so
+the no-op is an explicit, assertable signal.
 
 | `action` | applies to | `value` |
 |---|---|---|
@@ -214,8 +227,9 @@ connects).
 |---|---|---|
 | `radio` | — | radio snapshot (name, model, version, connected, transmitting, txPower, paTemp, slice/pan counts) |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/breakin/delay/sidetone/iambic/monitor), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
+| `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
 | `slices` | — | array of all slice snapshots |
-| `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, txSlice, …) |
+| `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, txSlice, …) |
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps) |
 
@@ -233,6 +247,13 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 
 `grab` and `invoke` resolve a `target` string in this order — first match wins:
 
+0. **Scoped `"<scope>/<name>"`** — disambiguates a control whose
+   `accessibleName` appears in more than one applet (e.g. `"AF gain"` and
+   `"Squelch threshold"` exist in **both** `RxApplet` and `PanadapterApplet`).
+   `<scope>` matches an ancestor by objectName, class, or accessibleName;
+   `<name>` is resolved within that subtree. Use `"RxApplet/AF gain"` vs
+   `"PanadapterApplet/AF gain"`. Falls through to flat matching if it doesn't
+   resolve, so a literal `/` in a name still works.
 1. **Exact `objectName`** — the most stable handle. Prefer this.
 2. **Class name** — full (`AetherSDR::SpectrumWidget`) or short
    (`SpectrumWidget`). Handy when a widget has no objectName (the panadapter is
@@ -328,4 +349,9 @@ lands.
   [`.cpp`](../src/core/AutomationServer.cpp)
 - Startup wiring: [`src/main.cpp`](../src/main.cpp) (after `window.show()`)
 - Driver: [`tools/automation_probe.py`](../tools/automation_probe.py)
+- Validation sweep: [`tools/automation_validate.py`](../tools/automation_validate.py)
+  — records → 3-value scale probe (with circular/wrapping classification) →
+  model cross-check → restore, over every value-bearing applet control;
+  scoped-targets duplicates, skips disabled + keying controls, and prints a
+  findings table with timing. The reusable form of the QA sweep.
 - Log category: `lcAutomation` (`aether.automation`) — toggle in Help → Support.
