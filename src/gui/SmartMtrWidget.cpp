@@ -161,18 +161,60 @@ void SmartMtrWidget::paintEvent(QPaintEvent*)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    // Back-to-front: body, recessed hole, indicator fill, the inset shadow rim
-    // on top so the bar reads as sunken, then the scale markers/labels (drawn on
-    // the body above and below the hole).
-    drawControl(p, g);
-    drawHole(p, g);
+    // Back-to-front: body + recessed hole (cached), indicator fill, the inset
+    // shadow rim + scale markers/labels on top (cached) so the bar reads as
+    // sunken. Only the indicator bar and the extremes markers move frame-to-
+    // frame; the rest is static for a given size/kind/DPR, so it's blitted from
+    // two pixmaps and rebuilt only when that key changes (see
+    // rebuildStaticLayers) — keeping the hot repaint cheap over the GPU panadapter.
+    const qreal dpr = devicePixelRatioF();
+    if (!m_cacheValid || m_cacheSize != size() || m_cacheKind != m_input.kind
+        || m_cacheDpr != dpr)
+        rebuildStaticLayers(g);
+
+    p.drawPixmap(0, 0, m_belowBar);
     drawIndicator(p, g);
-    drawInsetShadow(p, g);
-    drawMarkers(p, g);
+    p.drawPixmap(0, 0, m_aboveBar);
     drawExtremes(p, g);
 
     // Let the parent's value-label overlay repaint in lockstep with the markers.
     emit repainted();
+}
+
+void SmartMtrWidget::rebuildStaticLayers(const SmartMtrGeometry& g)
+{
+    const qreal dpr = devicePixelRatioF();
+    const QSize logical = size();
+    if (logical.isEmpty())
+        return; // nothing to fit yet; stay invalid and rebuild once sized
+
+    // Backing stores at device resolution so the cached layers stay crisp on
+    // HiDPI; the geometry stays in logical units (g already maps through rect()).
+    auto make = [&](QPixmap& pm) {
+        pm = QPixmap(logical * dpr);
+        pm.setDevicePixelRatio(dpr);
+        pm.fill(Qt::transparent);
+    };
+    make(m_belowBar);
+    make(m_aboveBar);
+
+    {
+        QPainter bp(&m_belowBar);
+        bp.setRenderHint(QPainter::Antialiasing, true);
+        drawControl(bp, g);
+        drawHole(bp, g);
+    }
+    {
+        QPainter ap(&m_aboveBar);
+        ap.setRenderHint(QPainter::Antialiasing, true);
+        drawInsetShadow(ap, g);
+        drawMarkers(ap, g);
+    }
+
+    m_cacheSize = logical;
+    m_cacheDpr = dpr;
+    m_cacheKind = m_input.kind;
+    m_cacheValid = true;
 }
 
 void SmartMtrWidget::drawControl(QPainter& p, const SmartMtrGeometry& g) const
@@ -268,6 +310,21 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
 
     const double holeBottom = kHoleMargY + kHoleH;
 
+    // Labels come in two fixed styles (strong = full size + regular weight,
+    // normal = slightly smaller + light); build each font and its metrics once
+    // rather than per labeled tick. App UI font, with a pixel floor for legibility.
+    auto makeLabelFont = [&](bool strong) {
+        QFont f = font();
+        f.setPixelSize(
+            qMax(8, qRound(g.len(strong ? kLabelHeight : kLabelHeightNormal))));
+        f.setWeight(strong ? QFont::Normal : QFont::Light);
+        return f;
+    };
+    const QFont strongFont = makeLabelFont(true);
+    const QFont normalFont = makeLabelFont(false);
+    const QFontMetricsF strongFm(strongFont);
+    const QFontMetricsF normalFm(normalFont);
+
     for (const ScaleMarker& m : cfg.markers) {
         // Only ticks inside the scale band are rendered.
         if (m.position < kScaleMin || m.position > kScaleMax)
@@ -291,15 +348,11 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
         if (m.label.isEmpty())
             continue;
 
-        // Per-label font: strong = full size + regular weight; normal = slightly
-        // smaller + light weight. App UI font, with a pixel floor for legibility.
+        // Pick the prebuilt font/metrics for this label's style.
         const bool strong = (m.labelStyle == LabelStyle::Strong);
-        QFont labelFont = font();
-        labelFont.setPixelSize(
-            qMax(8, qRound(g.len(strong ? kLabelHeight : kLabelHeightNormal))));
-        labelFont.setWeight(strong ? QFont::Normal : QFont::Light);
+        const QFont& labelFont = strong ? strongFont : normalFont;
+        const QFontMetricsF& fm = strong ? strongFm : normalFm;
         p.setFont(labelFont);
-        const QFontMetricsF fm(labelFont);
 
         // Label centered on the marker (plus its per-marker offset), sitting
         // just above the top tick.
@@ -389,8 +442,13 @@ QString SmartMtrWidget::extremeSUnit(double raw) const
     // S0 = -127). Above S9, report the overshoot as "+NdB".
     if (m_kind != MeterKind::Signal)
         return QString();
-    if (raw > -73.0)
-        return QStringLiteral("+%1dB").arg(qRound(raw + 73.0));
+    // Above S9, report the overshoot as "+NdB" — but only once it rounds to at
+    // least +1: a value just past -73 dBm rounds to "+0dB", which should read
+    // "s9", not a meaningless zero overshoot. Sub-1 dB overshoots fall through to
+    // the S-unit branch below, which yields s9 near -73.
+    const int over = qRound(raw + 73.0);
+    if (over >= 1)
+        return QStringLiteral("+%1dB").arg(over);
     // floor, not round: report the S-unit actually reached (e.g. -86 dBm is just
     // shy of S7 at -85, so it reads s6, not s7).
     const int s = std::clamp(int(std::floor((raw + 127.0) / 6.0)), 0, 9);

@@ -6,6 +6,7 @@
 #include "SmartMtrGeometry.h"
 
 #include <QElapsedTimer>
+#include <QPixmap>
 #include <QString>
 #include <QTimer>
 #include <QVector>
@@ -88,6 +89,14 @@ private:
     void drawMarkers(QPainter& p, const SmartMtrGeometry& g) const;
     void drawExtremes(QPainter& p, const SmartMtrGeometry& g) const;
 
+    // Render the static layers (everything except the moving bar and the
+    // extremes markers) into m_belowBar / m_aboveBar at the current size, kind
+    // and device-pixel ratio. paintEvent rebuilds these only when one of those
+    // changes, then blits them each frame — so the per-frame paint during
+    // animation skips the gradient fills (inset shadow) and per-tick font work
+    // (markers) entirely.
+    void rebuildStaticLayers(const SmartMtrGeometry& g);
+
     // One animation tick: advance the smoother (and the extremes) by the elapsed
     // wall-clock, stop the timer once both settle, and repaint through the
     // lean-mode gate.
@@ -141,6 +150,18 @@ private:
     // Timestamp (on m_extremesClock) of the last marker-driven repaint; -1 until
     // the first. See SmartMtrExtremes::kExtremesRepaintHz.
     qint64 m_lastExtremesRepaintMs = -1;
+
+    // Cached static layers, split around the moving indicator bar (the inset
+    // shadow must overlay the bar, so it can't share one pixmap with the body
+    // below it): m_belowBar = control body + recessed hole; m_aboveBar = inset
+    // shadow + scale markers/labels. Rebuilt only when the cache key below
+    // changes; blitted every frame. See rebuildStaticLayers().
+    QPixmap m_belowBar;
+    QPixmap m_aboveBar;
+    QSize m_cacheSize;                       // logical widget size of the cache
+    qreal m_cacheDpr = 0.0;                  // device-pixel ratio of the cache
+    MeterKind m_cacheKind = MeterKind::Signal; // kind the markers were built for
+    bool m_cacheValid = false;
 };
 
 } // namespace AetherSDR
