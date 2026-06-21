@@ -1072,32 +1072,30 @@ void section13(CatClient& c, Runner& r)
     c.send(origBi);
     QThread::msleep(200);
 
-    // ── ZZFR: RX VFO select (0=A, 1=B) — bare form is a READ, not a swap ──────
+    // ── ZZFR: unsupported per the SmartSDR CAT spec → "?;" (RX-VFO selection is
+    //    the Kenwood FR command; see the TS-2000 suite). The old swap-based
+    //    selector — which std::swap'd VFO A/B with no SmartSDR equivalent — was
+    //    removed. All forms (read and set) return "?;" and must NOT move any VFO.
     QString faBefore = c.query(QStringLiteral("ZZFA"));
-    QString fbBefore = c.query(QStringLiteral("ZZFB"));
-    // 13.34r REGRESSION: bare "ZZFR;" reads the selector and must NOT swap VFOs.
+    // 13.34r bare "ZZFR;" → "?" (unsupported) and does not swap VFOs.
     QString zzfrRead = c.query(QStringLiteral("ZZFR"));
     QThread::msleep(50);
     QString faUnchanged = c.query(QStringLiteral("ZZFA"));
-    r.check(QStringLiteral("13.34r bare ZZFR; reads selector ('ZZFR0') without swapping"),
-            zzfrRead == QLatin1String("ZZFR0") && faUnchanged.mid(4) == faBefore.mid(4),
+    r.check(QStringLiteral("13.34r ZZFR; → \"?\" (unsupported) and does not swap VFOs"),
+            zzfrRead == QLatin1String("?") && faUnchanged.mid(4) == faBefore.mid(4),
             QStringLiteral("read=%1 ZZFA before=%2 after=%3")
                 .arg(repr(zzfrRead), repr(faBefore.mid(4)), repr(faUnchanged.mid(4))));
-    // 13.34 explicit select: ZZFR1 selects VFO B as RX → new ZZFA matches old ZZFB.
-    c.send(QStringLiteral("ZZFR1"));
+    // 13.34 ZZFR1; / ZZFR0; are also unsupported → "?" and leave VFO A untouched.
+    // (query, not send: these now reply "?;" — must be consumed or the read stream
+    //  desyncs.)
+    QString zzfr1 = c.query(QStringLiteral("ZZFR1"));
     QThread::msleep(50);
     QString faAfter = c.query(QStringLiteral("ZZFA"));
-    QString zzfrAfter = c.query(QStringLiteral("ZZFR"));
-    // If VFO A and B differ, after ZZFR1 the new ZZFA should match old ZZFB.
-    // If they're equal (single-slice session), the swap is a no-op — treat as pass.
-    const bool zzfrOk = (faBefore.mid(4) == fbBefore.mid(4))
-                        ? true
-                        : (faAfter.mid(4) == fbBefore.mid(4));
-    r.check(QStringLiteral("13.34 ZZFR1; selects VFO B — new ZZFA matches old ZZFB; ZZFR; → 'ZZFR1'"),
-            zzfrOk && zzfrAfter == QLatin1String("ZZFR1"),
-            QStringLiteral("before: ZZFA=%1 ZZFB=%2 after ZZFA=%3 sel=%4")
-                .arg(repr(faBefore.mid(4)), repr(fbBefore.mid(4)), repr(faAfter.mid(4)), repr(zzfrAfter)));
-    c.send(QStringLiteral("ZZFR0"));  // select VFO A again (swap back)
+    r.check(QStringLiteral("13.34 ZZFR1; → \"?\" (unsupported) and does not change VFO A"),
+            zzfr1 == QLatin1String("?") && faAfter.mid(4) == faBefore.mid(4),
+            QStringLiteral("ZZFR1=%1 ZZFA before=%2 after=%3")
+                .arg(repr(zzfr1), repr(faBefore.mid(4)), repr(faAfter.mid(4))));
+    c.query(QStringLiteral("ZZFR0"));  // also "?;" — consume the reply
     QThread::msleep(50);
 
     // ── ZZAR: VFO A AGC threshold (0-100, 3-digit) ───────────────────────────

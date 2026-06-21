@@ -340,8 +340,12 @@ void section3(CatClient& c, Runner& r)
     r.section(QStringLiteral("Section 3 — VFO-B Frequency (FB)"));
 
     QString resp = c.query(QStringLiteral("FB"));
-    r.check(QStringLiteral("3.1  FB; returns \"FB\" + 11-digit Hz"),
-            resp.startsWith(QLatin1String("FB")) && isDigits(resp.mid(2), 11),
+    // FB returns the VFO B frequency when a VFO B slice is mapped, else "?" — it
+    // does NOT fall back to VFO A. The old fallback reported VFO A's frequency for
+    // FB while ZZME returned "?;", and that contradiction broke VFO sync (#3633).
+    r.check(QStringLiteral("3.1  FB; → \"FB\"+11-digit Hz (VFO B mapped) or \"?\" (no VFO B)"),
+            (resp.startsWith(QLatin1String("FB")) && isDigits(resp.mid(2), 11))
+                || resp == QLatin1String("?"),
             repr(resp));
 
     QString faResp = c.query(QStringLiteral("FA"));
@@ -550,15 +554,25 @@ void section7(CatClient& c, Runner& r)
 
 void section8(CatClient& c, Runner& r)
 {
-    r.section(QStringLiteral("Section 8 — FR (RX VFO select — accepted, no-op)"));
+    r.section(QStringLiteral("Section 8 — FR (RX VFO select)"));
 
+    // FR0 selects VFO A (always valid → no reply). FR1 selects VFO B, accepted
+    // only when a real VFO B exists (configured + present) else "?;". FA always
+    // reports VFO A (no A/B swap). query() FR1 so a "?;" reply is consumed and the
+    // read stream stays in sync; an accepted FR1 (no reply) just returns empty.
     c.send(QStringLiteral("FR0"));
-    c.send(QStringLiteral("FR1"));
     QThread::msleep(50);
-    QString resp = c.query(QStringLiteral("FA"));
-    r.check(QStringLiteral("8.1  FR0; FR1; produce no response; FA; works normally after"),
-            resp.startsWith(QLatin1String("FA")) && isDigits(resp.mid(2), 11),
-            repr(resp));
+    QString fr1 = c.query(QStringLiteral("FR1"));   // "?" if no real VFO B, else empty
+    QThread::msleep(50);
+    QString sel = c.query(QStringLiteral("FR"));     // selector read (always replies)
+    QString fa  = c.query(QStringLiteral("FA"));     // FA still reports VFO A
+    const bool faOk = fa.startsWith(QLatin1String("FA")) && isDigits(fa.mid(2), 11);
+    const bool frOk = (fr1 == QLatin1String("?") && sel == QLatin1String("FR0"))   // rejected: no VFO B
+                   || (sel == QLatin1String("FR1"));                                // accepted: VFO B present
+    c.send(QStringLiteral("FR0"));   // restore RX = VFO A
+    r.check(QStringLiteral("8.1  FR1 gated on a real VFO B (else \"?\"); FA reports VFO A; no swap"),
+            faOk && frOk,
+            QStringLiteral("FR1=%1 sel=%2 FA=%3").arg(repr(fr1), repr(sel), repr(fa)));
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
