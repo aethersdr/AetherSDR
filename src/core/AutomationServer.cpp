@@ -21,6 +21,8 @@
 #include <QStandardPaths>
 #include <QCoreApplication>
 #include <QRegularExpression>
+#include <QTimer>
+#include <QDateTime>
 
 // Best-effort value extraction for common control types.
 #include <QAbstractButton>
@@ -321,6 +323,23 @@ QJsonObject radioSnapshot(const RadioModel* r)
 // and APD. Lets a QA scenario assert that a TX/Phone/CW applet control actually
 // reached the radio model, not just the widget (#3646 QA finding 2). Read-only:
 // keying state (mox/tune/transmitting) is reported but never driven from here.
+QString atuStatusName(ATUStatus s)
+{
+    switch (s) {
+    case ATUStatus::None:         return QStringLiteral("none");
+    case ATUStatus::NotStarted:   return QStringLiteral("not_started");
+    case ATUStatus::InProgress:   return QStringLiteral("in_progress");
+    case ATUStatus::Bypass:       return QStringLiteral("bypass");
+    case ATUStatus::Successful:   return QStringLiteral("successful");
+    case ATUStatus::OK:           return QStringLiteral("ok");
+    case ATUStatus::FailBypass:   return QStringLiteral("fail_bypass");
+    case ATUStatus::Fail:         return QStringLiteral("fail");
+    case ATUStatus::Aborted:      return QStringLiteral("aborted");
+    case ATUStatus::ManualBypass: return QStringLiteral("manual_bypass");
+    }
+    return QStringLiteral("unknown");
+}
+
 QJsonObject transmitSnapshot(const TransmitModel* t)
 {
     return QJsonObject{
@@ -363,6 +382,7 @@ QJsonObject transmitSnapshot(const TransmitModel* t)
         // ATU / APD
         {QStringLiteral("atuEnabled"),      t->atuEnabled()},
         {QStringLiteral("atuMemories"),     t->memoriesEnabled()},
+        {QStringLiteral("atuStatus"),       atuStatusName(t->atuStatus())},
         {QStringLiteral("apdEnabled"),      t->apdEnabled()},
     };
 }
@@ -383,6 +403,38 @@ QJsonObject equalizerSnapshot(const EqualizerModel* e)
         {QStringLiteral("txEnabled"), e->txEnabled()},
         {QStringLiteral("rx"), rx},
         {QStringLiteral("tx"), tx},
+    };
+}
+
+// Live meter readout. The flat convenience fields are the headline TX meters
+// with their freshness age (ms since last update, -1 if never) so a reader can
+// reject stale values — critical because some meters (notably PACURRENT) are
+// only reported ~1 s into a transmit. `all` carries every defined meter with
+// per-meter index/source_index/age_ms so duplicate-named meters (one live, one
+// floored) are distinguishable. (#3646)
+QJsonObject metersSnapshot(MeterModel* m)
+{
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    auto age = [now](qint64 ts) -> qint64 { return ts > 0 ? now - ts : -1; };
+    return QJsonObject{
+        {QStringLiteral("fwdPower"),        m->fwdPower()},           // Watts (smoothed)
+        {QStringLiteral("fwdPowerInstant"), m->fwdPowerInstant()},    // Watts (peak)
+        {QStringLiteral("fwdPowerAgeMs"),   age(m->fwdPowerUpdatedAtMs())},
+        {QStringLiteral("swr"),             m->swr()},
+        {QStringLiteral("swrAgeMs"),        age(m->swrUpdatedAtMs())},
+        {QStringLiteral("paTemp"),          m->paTemp()},             // °C
+        {QStringLiteral("supplyVolts"),     m->supplyVolts()},        // V
+        {QStringLiteral("swAlc"),           m->swAlc()},              // dBFS post-ALC SSB peak
+        {QStringLiteral("hwAlc"),           m->hwAlc()},              // dBFS external HW-ALC
+        {QStringLiteral("micPeak"),         m->micPeak()},            // dBFS
+        {QStringLiteral("micLevel"),        m->micLevel()},           // dBFS
+        {QStringLiteral("compPeak"),        m->compPeak()},           // dB compression (peak)
+        {QStringLiteral("compLevel"),       m->compLevel()},          // dB compression
+        {QStringLiteral("hasCompression"),  m->hasCompressionMeterValue()},
+        {QStringLiteral("sLevel"),          m->sLevel()},             // dBm
+        {QStringLiteral("txMetersFresh"),   m->hasRecentTxMeters(2000)},
+        {QStringLiteral("txMetersAgeMs"),   age(m->txMetersUpdatedAtMs())},
+        {QStringLiteral("all"),             m->allMeters()},          // every meter + age_ms
     };
 }
 
@@ -442,9 +494,28 @@ bool AutomationServer::start(const QString& serverName)
         m_discoveryFile.clear();
     }
 
+    // TX safety rails (#3646): when the operator has enabled transmit
+    // automation, arm a watchdog that force-unkeys the radio if it stays keyed
+    // past a limit — a backstop independent of whatever script is driving us.
+    m_txAllowed = qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX");
+    if (m_txAllowed) {
+        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_TX_MAX_MS"))
+            m_txMaxKeyMs = qEnvironmentVariableIntValue("AETHER_AUTOMATION_TX_MAX_MS");
+        if (qEnvironmentVariableIsSet("AETHER_AUTOMATION_TX_MAX_POWER"))
+            m_txMaxPower = qEnvironmentVariableIntValue("AETHER_AUTOMATION_TX_MAX_POWER");
+        m_txWatchdog = new QTimer(this);
+        m_txWatchdog->setInterval(500);
+        connect(m_txWatchdog, &QTimer::timeout, this, &AutomationServer::onTxWatchdog);
+        m_txWatchdog->start();
+        qCInfo(lcAutomation).noquote()
+            << "TX automation ENABLED — watchdog max key" << m_txMaxKeyMs << "ms,"
+            << "power ceiling" << (m_txMaxPower < 0 ? QStringLiteral("none")
+                                                    : QString::number(m_txMaxPower));
+    }
+
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
-        << "(verbs: ping, dumpTree, grab)";
+        << "(verbs: ping, dumpTree, grab, invoke, get, txtest, atu)";
     return true;
 }
 
@@ -452,6 +523,15 @@ void AutomationServer::stop()
 {
     if (!m_server)
         return;
+
+    // Safety: never leave the radio keyed when the bridge shuts down.
+    if (m_txAllowed)
+        forceUnkey("automation bridge stopping");
+    if (m_txWatchdog) {
+        m_txWatchdog->stop();
+        m_txWatchdog->deleteLater();
+        m_txWatchdog = nullptr;
+    }
 
     for (auto it = m_buffers.constBegin(); it != m_buffers.constEnd(); ++it)
         it.key()->deleteLater();
@@ -565,6 +645,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line)
             value = rest.join(QLatin1Char(' '));
         } else if (cmd == QLatin1String("get")) {
             model = tok(1); selector = tok(2); property = tok(3);
+        } else if (cmd == QLatin1String("txtest") || cmd == QLatin1String("atu")) {
+            action = tok(1);  // e.g. "txtest twotone", "atu bypass"
         } else {  // grab and friends
             target = tok(1); path = tok(2);
         }
@@ -593,8 +675,18 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line)
     }
     if (cmd == QLatin1String("get")) {
         if (model.isEmpty())
-            return err(QStringLiteral("get requires a model (radio|slice|slices|pan|pans)"));
+            return err(QStringLiteral("get requires a model (radio|transmit|meters|slice|slices|pan|pans)"));
         return doGet(model, selector, property);
+    }
+    if (cmd == QLatin1String("txtest")) {
+        if (action.isEmpty())
+            return err(QStringLiteral("txtest requires an action (twotone|off)"));
+        return doTxTest(action);
+    }
+    if (cmd == QLatin1String("atu")) {
+        if (action.isEmpty())
+            return err(QStringLiteral("atu requires an action (bypass|start)"));
+        return doAtu(action);
     }
 
     return err(QStringLiteral("unknown command: ") + cmd);
@@ -744,6 +836,23 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                                     "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
     }
 
+    // Power-ceiling rail (#3646): clamp RF/Tune power setpoints to the
+    // configured max (AETHER_AUTOMATION_TX_MAX_POWER) so automation can't
+    // command more power than the connected load can take.
+    QString effValue = value;
+    if (m_txMaxPower >= 0 && action == QLatin1String("setValue")) {
+        const QString an = w->accessibleName();
+        if (an == QLatin1String("RF power") || an == QLatin1String("Tune power")) {
+            bool okN = false;
+            const int n = value.toInt(&okN);
+            if (okN && n > m_txMaxPower) {
+                effValue = QString::number(m_txMaxPower);
+                qCWarning(lcAutomation).noquote()
+                    << "power ceiling: clamped" << an << n << "->" << m_txMaxPower;
+            }
+        }
+    }
+
     bool done = false;
     if (action == QLatin1String("click")) {
         if (auto* b = qobject_cast<QAbstractButton*>(w)) { b->click(); done = true; }
@@ -758,7 +867,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         }
     } else if (action == QLatin1String("setValue")) {
         bool okNum = false;
-        const int n = value.toInt(&okNum);
+        const int n = effValue.toInt(&okNum);
         if (auto* s = qobject_cast<QAbstractSlider*>(w)) {
             if (!okNum) return err(QStringLiteral("setValue needs an integer"));
             s->setValue(n); done = true;
@@ -766,7 +875,7 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             if (!okNum) return err(QStringLiteral("setValue needs an integer"));
             sb->setValue(n); done = true;
         } else if (auto* ds = qobject_cast<QDoubleSpinBox*>(w)) {
-            bool okD = false; const double d = value.toDouble(&okD);
+            bool okD = false; const double d = effValue.toDouble(&okD);
             if (!okD) return err(QStringLiteral("setValue needs a number"));
             ds->setValue(d); done = true;
         }
@@ -816,6 +925,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = transmitSnapshot(&radio->transmitModel());
     } else if (model == QLatin1String("equalizer") || model == QLatin1String("eq")) {
         data = equalizerSnapshot(&radio->equalizerModel());
+    } else if (model == QLatin1String("meters")) {
+        data = metersSnapshot(&radio->meterModel());
     } else if (model == QLatin1String("slices")) {
         QJsonArray arr;
         for (const SliceModel* s : radio->slices()) arr.append(sliceSnapshot(s));
@@ -850,7 +961,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use radio|transmit|equalizer|slice|slices|pan|pans)"));
+                   + QStringLiteral(" (use radio|transmit|equalizer|meters|slice|slices|pan|pans)"));
     }
 
     if (!property.isEmpty()) {
@@ -869,6 +980,95 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         {QStringLiteral("model"), model},
         {model, data},   // keyed by model name: "radio" / "slice" / "pan"
     };
+}
+
+// ── TX test-signal control (#3646) ──────────────────────────────────────────
+// `txtest twotone` starts the radio's two-tone test (a modulated signal that
+// exercises ALC / PEP / linearity meters a steady carrier can't). `txtest off`
+// stops it. Keying is gated by AETHER_AUTOMATION_ALLOW_TX, and the TX watchdog
+// still backstops it. NOTE: two-tone does not pass through the mic/speech
+// processor, so it does not exercise the compression meter — that needs a real
+// mic-audio source (DAX TX), which is a separate, larger effort.
+QJsonObject AutomationServer::doTxTest(const QString& action)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    auto& tx = m_radioModel->transmitModel();
+
+    if (action == QLatin1String("off") || action == QLatin1String("stop")) {
+        tx.stopTune();
+        m_txKeyedSinceMs = 0;
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("off")}};
+    }
+    if (action == QLatin1String("twotone")) {
+        if (!m_txAllowed)
+            return err(QStringLiteral("blocked: txtest keys the transmitter — "
+                                      "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        tx.startTwoToneTune();
+        m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog window
+        qCInfo(lcAutomation) << "txtest two-tone started (ALLOW_TX)";
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txtest"), QStringLiteral("twotone")}};
+    }
+    return err(QStringLiteral("unknown txtest action: ") + action + QStringLiteral(" (twotone|off)"));
+}
+
+// ── ATU control (#3646) ─────────────────────────────────────────────────────
+// `atu bypass` takes the tuner out of circuit (no TX), so meter readings see
+// the raw load instead of a recalled antenna match — essential before TX meter
+// measurements. `atu start` runs a tune cycle (keys TX → gated by ALLOW_TX).
+QJsonObject AutomationServer::doAtu(const QString& action)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    auto& tx = m_radioModel->transmitModel();
+
+    if (action == QLatin1String("bypass")) {
+        tx.atuBypass();   // relay switch only — does not transmit
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("atu"), QStringLiteral("bypass")}};
+    }
+    if (action == QLatin1String("start") || action == QLatin1String("tune")) {
+        if (!m_txAllowed)
+            return err(QStringLiteral("blocked: atu start keys the transmitter — "
+                                      "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        tx.atuStart();
+        m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("atu"), QStringLiteral("start")}};
+    }
+    return err(QStringLiteral("unknown atu action: ") + action + QStringLiteral(" (bypass|start)"));
+}
+
+// Emergency all-stop: drop tune, two-tone, and MOX immediately. Used by the
+// watchdog and stop().
+void AutomationServer::forceUnkey(const char* reason)
+{
+    if (!m_radioModel)
+        return;
+    auto& tx = m_radioModel->transmitModel();
+    tx.stopTune();
+    tx.setMox(false);
+    m_txKeyedSinceMs = 0;
+    qCWarning(lcAutomation).noquote() << "TX force-unkey:" << reason;
+}
+
+// TX safety watchdog (#3646). Runs only when AETHER_AUTOMATION_ALLOW_TX is set.
+// Tracks how long the radio has been continuously keyed and force-unkeys past
+// the limit, so a hung or abandoned automation script can never leave a live
+// transmitter on. The limit is AETHER_AUTOMATION_TX_MAX_MS (default 20 s).
+void AutomationServer::onTxWatchdog()
+{
+    if (!m_radioModel)
+        return;
+    const auto& tx = m_radioModel->transmitModel();
+    const bool keyed = tx.isTransmitting() || tx.isTuning() || tx.isMox();
+    if (!keyed) {
+        m_txKeyedSinceMs = 0;
+        return;
+    }
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    if (m_txKeyedSinceMs == 0)
+        m_txKeyedSinceMs = now;
+    else if (now - m_txKeyedSinceMs > m_txMaxKeyMs)
+        forceUnkey("max continuous key time exceeded");
 }
 
 } // namespace AetherSDR

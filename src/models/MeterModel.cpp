@@ -21,7 +21,7 @@ float compressionValueForGauge(float compPeakDb)
     return qBound(0.0f, compPeakDb, 25.0f);
 }
 
-QJsonObject meterToJson(const MeterDef& def, bool hasValue, float value)
+QJsonObject meterToJson(const MeterDef& def, bool hasValue, float value, qint64 ageMs)
 {
     QJsonObject obj;
     obj["index"] = def.index;
@@ -34,6 +34,10 @@ QJsonObject meterToJson(const MeterDef& def, bool hasValue, float value)
     obj["description"] = def.description;
     obj["has_value"] = hasValue;
     obj["value"] = hasValue ? QJsonValue(value) : QJsonValue();
+    // Milliseconds since this meter's value last updated (-1 = never). Lets a
+    // consumer reject stale reads — a value with a large/-1 age is not a live
+    // measurement (e.g. PACURRENT before the radio first reports it). (#3646)
+    obj["age_ms"] = hasValue ? QJsonValue(ageMs) : QJsonValue(-1);
     return obj;
 }
 
@@ -147,6 +151,7 @@ void MeterModel::removeMeter(int index)
 {
     m_defs.remove(index);
     m_values.remove(index);
+    m_valueUpdatedMs.remove(index);
 
     // Remove from per-slice LEVEL map
     for (auto it = m_sLevelIdxBySlice.begin(); it != m_sLevelIdxBySlice.end(); ) {
@@ -222,6 +227,7 @@ void MeterModel::clear()
 {
     m_defs.clear();
     m_values.clear();
+    m_valueUpdatedMs.clear();
     m_sLevelIdxBySlice.clear();
     m_escLevelIdxBySlice.clear();
     m_compPeakIdxByTxSource.clear();
@@ -433,6 +439,7 @@ void MeterModel::updateValues(const QVector<quint16>& ids, const QVector<qint16>
 
         const float v = convertRaw(*it, vals[i]);
         m_values[idx] = v;
+        m_valueUpdatedMs[idx] = packetUpdatedMs;  // per-meter freshness (#3646)
 
         // Check if this meter is a per-slice LEVEL meter
         bool isSliceLevel = false;
@@ -578,10 +585,13 @@ float MeterModel::value(int index) const
 QJsonArray MeterModel::allMeters() const
 {
     QJsonArray meters;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const auto valueIt = m_values.constFind(it.key());
         const bool hasValue = valueIt != m_values.constEnd();
-        meters.append(meterToJson(*it, hasValue, hasValue ? valueIt.value() : 0.0f));
+        const qint64 upd = m_valueUpdatedMs.value(it.key(), 0);
+        const qint64 ageMs = (hasValue && upd > 0) ? (now - upd) : -1;
+        meters.append(meterToJson(*it, hasValue, hasValue ? valueIt.value() : 0.0f, ageMs));
     }
     return meters;
 }
@@ -589,6 +599,7 @@ QJsonArray MeterModel::allMeters() const
 QJsonArray MeterModel::metersForSource(const QString& source, int sourceIndex) const
 {
     QJsonArray meters;
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     for (auto it = m_defs.constBegin(); it != m_defs.constEnd(); ++it) {
         const MeterDef& def = *it;
         if (def.source != source)
@@ -598,7 +609,9 @@ QJsonArray MeterModel::metersForSource(const QString& source, int sourceIndex) c
 
         const auto valueIt = m_values.constFind(it.key());
         const bool hasValue = valueIt != m_values.constEnd();
-        meters.append(meterToJson(def, hasValue, hasValue ? valueIt.value() : 0.0f));
+        const qint64 upd = m_valueUpdatedMs.value(it.key(), 0);
+        const qint64 ageMs = (hasValue && upd > 0) ? (now - upd) : -1;
+        meters.append(meterToJson(def, hasValue, hasValue ? valueIt.value() : 0.0f, ageMs));
     }
     return meters;
 }

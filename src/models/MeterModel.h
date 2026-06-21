@@ -170,6 +170,10 @@ private:
 
     QMap<int, MeterDef> m_defs;        // meter index → definition
     QMap<int, float>    m_values;      // meter index → last converted value
+    QMap<int, qint64>   m_valueUpdatedMs; // meter index → epoch ms of last value
+                                          // update. Lets consumers reject stale
+                                          // reads (e.g. PACURRENT, which the
+                                          // radio sends only ~1 s into TX). (#3646)
 
     // Cached indices for fast lookup of important meters
     QMap<int, int> m_sLevelIdxBySlice;  // sliceIndex → meter index for "SLC"/"LEVEL"

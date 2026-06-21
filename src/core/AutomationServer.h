@@ -10,6 +10,7 @@ class QLocalServer;
 class QLocalSocket;
 class QWidget;
 class QJsonObject;
+class QTimer;
 
 namespace AetherSDR {
 
@@ -93,6 +94,11 @@ private slots:
     void onReadyRead();
     void onDisconnected();
 
+    // TX safety watchdog (#3646): polls TX state and force-unkeys the radio if
+    // it has been keyed continuously past the limit, so a hung/abandoned
+    // automation script can never leave a live transmitter on.
+    void onTxWatchdog();
+
 private:
     // Dispatch a single request line and return the response object.
     QJsonObject handleLine(const QByteArray& line);
@@ -103,6 +109,12 @@ private:
                          const QString& value) const;
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;
+    // TX test-signal control (two-tone) and ATU control. Both gated by
+    // AETHER_AUTOMATION_ALLOW_TX where they key the transmitter.
+    QJsonObject doTxTest(const QString& action);
+    QJsonObject doAtu(const QString& action);
+
+    void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
 
     // Resolve a target string to a widget: exact objectName first, then
     // class name (with or without namespace) or accessibleName.
@@ -113,6 +125,13 @@ private:
     QString       m_discoveryFile;
     QHash<QLocalSocket*, QByteArray> m_buffers;  // per-client read buffer
     QPointer<RadioModel> m_radioModel;           // for get(); may be null
+
+    // TX safety rails (active only when AETHER_AUTOMATION_ALLOW_TX is set).
+    QTimer* m_txWatchdog{nullptr};
+    qint64  m_txKeyedSinceMs{0};   // when continuous key-down started (0 = idle)
+    int     m_txMaxKeyMs{20000};   // max continuous key time before force-unkey
+    int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
+    bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
 };
 
 } // namespace AetherSDR
