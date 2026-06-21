@@ -1,8 +1,11 @@
 #pragma once
 
+#include "MeterSmoother.h"
 #include "SmartMtrConfig.h"
 #include "SmartMtrGeometry.h"
 
+#include <QElapsedTimer>
+#include <QTimer>
 #include <QWidget>
 
 class QPainter;
@@ -51,7 +54,20 @@ private:
     void drawInsetShadow(QPainter& p, const SmartMtrGeometry& g) const;
     void drawMarkers(QPainter& p, const SmartMtrGeometry& g) const;
 
+    // One animation tick: advance the smoother by the elapsed wall-clock, stop
+    // the timer once settled, and repaint through the lean-mode gate.
+    void advance();
+
     MeterInput m_input; // what to display; default parks at the signal scale min
+
+    // Ballistics: the indicator chases the mapped target position with the
+    // SmartMTR analog feel (fast attack, slow lazy decay). The smoother runs on
+    // the normalised scale fraction; drawIndicator denormalises it. Isolated to
+    // this widget — the standard S-meters keep their own ballistics.
+    MeterSmoother m_smooth;
+    QTimer m_animTimer;
+    QElapsedTimer m_clock;
+    MeterKind m_kind = MeterKind::Signal; // last kind, to snap across scale changes
 };
 
 } // namespace AetherSDR

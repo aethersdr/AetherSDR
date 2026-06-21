@@ -50,12 +50,60 @@ SmartMtrWidget::SmartMtrWidget(QWidget* parent)
     QSizePolicy sp(QSizePolicy::Expanding, QSizePolicy::Preferred);
     sp.setHeightForWidth(true);
     setSizePolicy(sp);
+
+    // SmartMTR analog ballistics (ported from the SmartMTR macOS app): a fast
+    // attack and a ~15x slower, lazy decay give the d'Arsonval "jumps up, sags
+    // down" envelope-follower feel. tau values come from per-tick fractions
+    // k=0.60/0.06 at 60 Hz: tau = -(1/60)/ln(1-k). The smoother integrates the
+    // normalised scale fraction; a tiny snap epsilon keeps the slow tail lazy
+    // (the source never snaps on decay) without endless sub-pixel repaints.
+    MeterSmoother::Ballistics b;
+    b.attackSeconds = 0.01818f;  // ~18.2 ms — fast rise
+    b.releaseSeconds = 0.26940f; // ~269 ms — slow fall
+    b.snapEpsilon = 0.0005f;
+    m_smooth.setBallistics(b);
+
+    m_animTimer.setTimerType(Qt::PreciseTimer);
+    m_animTimer.setInterval(kMeterSmootherIntervalMs); // 8 ms ~= 120 Hz
+    connect(&m_animTimer, &QTimer::timeout, this, &SmartMtrWidget::advance);
 }
 
 void SmartMtrWidget::setMeterInput(const MeterInput& input)
 {
     m_input = input;
-    update();
+
+    // Target the smoother at the mapped position, normalised to the scale band
+    // so the ballistics are scale-independent. drawIndicator denormalises.
+    const double span = kScaleMax - kScaleMin;
+    const float targetFrac =
+        span > 0.0 ? float((indicatorPosition(input) - kScaleMin) / span) : 0.0f;
+
+    if (input.kind != m_kind) {
+        // RX<->TX switches the meter to a different scale (signal dBm vs mic
+        // dBFS); snap rather than glide the bar across that discontinuity.
+        m_kind = input.kind;
+        m_smooth.setTarget(targetFrac);
+        m_smooth.snapToTarget();
+        m_animTimer.stop();
+        update();
+        return;
+    }
+
+    m_smooth.setTarget(targetFrac);
+    if (m_smooth.needsAnimation() && !m_animTimer.isActive()) {
+        m_clock.restart();
+        m_animTimer.start();
+    }
+    update(); // paint the first frame promptly; the timer carries the rest
+}
+
+void SmartMtrWidget::advance()
+{
+    const bool settled = !m_smooth.tick(m_clock.restart());
+    if (settled)
+        m_animTimer.stop();
+    if (settled || m_smooth.shouldRepaint())
+        update();
 }
 
 void SmartMtrWidget::paintEvent(QPaintEvent*)
@@ -98,7 +146,9 @@ void SmartMtrWidget::drawIndicator(QPainter& p, const SmartMtrGeometry& g) const
     QPainterPath clip;
     clip.addRoundedRect(hole, r, r);
 
-    const double pos = indicatorPosition(m_input); // hole-local units, in band
+    // Smoothed hole-local position: the ballistics integrate the normalised
+    // scale fraction; map it back into the scale band here.
+    const double pos = kScaleMin + m_smooth.value() * (kScaleMax - kScaleMin);
 
     // The bar always starts at hole-local 0, so a min/blank value (pos == 10)
     // still renders a short 0..10 stub rather than nothing.
