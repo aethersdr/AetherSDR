@@ -4,6 +4,7 @@
 #include <QMap>
 #include <QPointer>
 #include <QElapsedTimer>
+#include <functional>
 
 namespace AetherSDR {
 
@@ -117,6 +118,13 @@ private:
     // they don't claim an enable this client never made (would arm a spurious
     // 1→0 reclaim on the next polled set_split_vfo 0).
     void ensureSplitTxSlice(bool recordExistingAsEnabled = true);
+    // Shared on-demand establish+resolve for set_split_freq / set_split_mode:
+    // ensures a split TX slice (without claiming the enable), then either stashes
+    // (create still in flight → RPRT 0), applies to the resolved TX slice (RPRT 0),
+    // or returns RPRT -1 if none can be resolved. Keeps the create-on-demand
+    // contract in one place so the two setters can't diverge.
+    QString applySplitParam(const std::function<void()>& stashPending,
+                            const std::function<void(SliceModel*)>& applyToTx);
     QString rprt(int code) const;
 
     // Mode conversion tables

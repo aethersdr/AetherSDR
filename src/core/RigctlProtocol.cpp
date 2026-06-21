@@ -1181,6 +1181,27 @@ QString RigctlProtocol::cmdGetSplitFreq()
     return QString("%1\n").arg(hz);
 }
 
+// Establish-on-demand contract shared by set_split_freq / set_split_mode. WSJT-X /
+// Hamlib's set_split_freq_mode can call these directly without a preceding
+// set_split_vfo (or in a window racing slice creation), so we create/promote the
+// TX slice here, matching set_freq VFOB. recordExistingAsEnabled=false: setting a
+// split param must not, by itself, claim THIS client enabled split (that would arm
+// a spurious reclaim). If the create is still pending, stash for tryPromoteTxSlice;
+// else apply to the resolved TX slice; else RPRT -1.
+QString RigctlProtocol::applySplitParam(const std::function<void()>& stashPending,
+                                        const std::function<void(SliceModel*)>& applyToTx)
+{
+    ensureSplitTxSlice(/*recordExistingAsEnabled=*/false);
+    if (m_pendingSplitEnable) {
+        stashPending();
+        return rprt(0);
+    }
+    auto* txSlice = findTxSlice();
+    if (!txSlice) return rprt(-1);
+    applyToTx(txSlice);
+    return rprt(0);
+}
+
 QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
 {
     QStringList parts = args.split(' ', Qt::SkipEmptyParts);
@@ -1188,27 +1209,13 @@ QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
     bool ok = false;
     double hz = parts.isEmpty() ? 0.0 : parts[0].toDouble(&ok);
     if (parts.isEmpty() || !ok) return rprt(-1);
-    // Establish the split TX slice on demand. WSJT-X / Hamlib's set_split_freq_mode
-    // can call set_split_freq directly without a preceding set_split_vfo — or in a
-    // window where the TX slice isn't resolvable yet — so create/promote it here,
-    // matching set_freq VFOB. The in-flight guard in ensureSplitTxSlice prevents a
-    // duplicate when a create is already pending. Without this, a transient race
-    // returns RPRT -1 and aborts the transmit.
-    // recordExistingAsEnabled=false: setting the split freq must not, by itself,
-    // claim that THIS client enabled split (that would arm a spurious reclaim).
-    ensureSplitTxSlice(/*recordExistingAsEnabled=*/false);
-    // If the new slice hasn't appeared yet, stash the freq; tryPromoteTxSlice()
-    // will apply it as soon as the slice becomes visible.
-    if (m_pendingSplitEnable) {
-        m_pendingSplitFreqMHz = hz / 1e6;
-        return rprt(0);
-    }
-    auto* txSlice = findTxSlice();
-    if (!txSlice) return rprt(-1);
     const double mhz = hz / 1e6;
-    QMetaObject::invokeMethod(txSlice, [txSlice, mhz]{ txSlice->setFrequency(mhz); },
-                              Qt::QueuedConnection);
-    return rprt(0);
+    return applySplitParam(
+        [this, mhz]{ m_pendingSplitFreqMHz = mhz; },
+        [mhz](SliceModel* tx) {
+            QMetaObject::invokeMethod(tx, [tx, mhz]{ tx->setFrequency(mhz); },
+                                      Qt::QueuedConnection);
+        });
 }
 
 QString RigctlProtocol::cmdGetSplitMode()
@@ -1232,20 +1239,12 @@ QString RigctlProtocol::cmdSetSplitMode(const QString& args)
     // Canonical reverse table (same as cmdSetMode); the inline subset passed
     // CWR/RTTYR/WFM through unmapped, sending the radio an invalid mode (#7).
     const QString mode = hamlibToSmartSDR(parts[0]);
-    // Establish the split TX slice on demand (see cmdSetSplitFreq) so a direct
-    // set_split_mode — or one racing slice creation — doesn't hard-fail with -1.
-    // recordExistingAsEnabled=false: see cmdSetSplitFreq.
-    ensureSplitTxSlice(/*recordExistingAsEnabled=*/false);
-    // If the new slice hasn't appeared yet, stash the mode for tryPromoteTxSlice().
-    if (m_pendingSplitEnable) {
-        m_pendingSplitMode = mode;
-        return rprt(0);
-    }
-    auto* txSlice = findTxSlice();
-    if (!txSlice) return rprt(-1);
-    QMetaObject::invokeMethod(txSlice, [txSlice, mode]{ txSlice->setMode(mode); },
-                              Qt::QueuedConnection);
-    return rprt(0);
+    return applySplitParam(
+        [this, mode]{ m_pendingSplitMode = mode; },
+        [mode](SliceModel* tx) {
+            QMetaObject::invokeMethod(tx, [tx, mode]{ tx->setMode(mode); },
+                                      Qt::QueuedConnection);
+        });
 }
 
 QString RigctlProtocol::cmdGetLevel(const QString& arg)
