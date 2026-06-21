@@ -522,6 +522,25 @@ void section7(CatClient& c, Runner& r)
 {
     r.section(QStringLiteral("Section 7 — Split (FT)"));
 
+    // The dual-VFO tests below assume a usable VFO B. On a single-VFO port (or a
+    // port whose VFO B slice isn't open) split cannot engage, so FT1 returns "?"
+    // (NOT_ENABLED) instead of a silent ack — which would desync the read stream
+    // if issued with send(). Detect VFO B; when absent, verify NOT_ENABLED with
+    // query() (consuming the "?") and return, keeping the stream in sync.
+    const bool vfoB = c.query(QStringLiteral("FB")).startsWith(QLatin1String("FB"));
+    if (!vfoB) {
+        const QString ft0 = c.query(QStringLiteral("FT"));
+        r.check(QStringLiteral("7.1  FT; → FT0 (split off, single VFO)"),
+                ft0 == QLatin1String("FT0"), repr(ft0));
+        const QString ft1 = c.query(QStringLiteral("FT1"));
+        r.check(QStringLiteral("7.2  FT1; with no VFO B → \"?\" (NOT_ENABLED)"),
+                ft1 == QLatin1String("?"), repr(ft1));
+        const QString ft0b = c.query(QStringLiteral("FT"));
+        r.check(QStringLiteral("7.3  split still off (FT0) after rejected enable"),
+                ft0b == QLatin1String("FT0"), repr(ft0b));
+        return;
+    }
+
     QString resp = c.query(QStringLiteral("FT"));
     r.check(QStringLiteral("7.1  FT; → FT0 (split off initially)"),
             resp == QLatin1String("FT0"), repr(resp));
