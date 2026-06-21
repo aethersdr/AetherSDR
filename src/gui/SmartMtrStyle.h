@@ -25,16 +25,21 @@ inline const QColor kBackground{QStringLiteral("#5ec4eaff")}; // recessed hole
 inline const QColor kForeground{QStringLiteral("#ff4444")}; // indicator bar — red
 inline const QColor kIndicator{QStringLiteral("#ffffff")};  // value end-line
 inline const QColor kExtreme{QStringLiteral("#ffffff")};    // reserved (future)
-inline const QColor kShadow{0, 0, 0, 90};                   // inset shadow — TBD
+inline const QColor kShadow{0, 0, 0, 100};                   // inset shadow — TBD
 inline const QColor kMarkerNormal{QStringLiteral("#5ec4ea")}; // scale tick — normal
 inline const QColor kMarkerHigh{QStringLiteral("#ff4444")};   // scale tick — high
 } // namespace SmartMtrColors
 
 // Geometry of the SmartMTR control, in UNITS.
 namespace SmartMtrUnits {
-// The control's full design area.
+// The control's full design area.  The height hugs the actual content extent —
+// the bottom ticks reach kHoleMargY(20) + kHoleH(10) + kMarkerLargeH(5) = 35
+// units — so the widget reserves no empty band below the meter.  That keeps the
+// gap to the tab row below minimal (matching the S-meter), rather than padding
+// it out with leftover canvas.  Width-driven scale means this only trims the
+// bottom; the bar/hole/ticks render at the same size. (#SmartMTR)
 inline constexpr double kControlW = 250.0;
-inline constexpr double kControlH = 40.0;
+inline constexpr double kControlH = 35.0;
 
 // The recessed "hole" / indicator area: horizontally centered, fixed 20 units
 // from the top.
@@ -66,7 +71,7 @@ inline constexpr double kMarkerSmallH = 4.0, kMarkerSmallW = 1.0;
 inline constexpr double kMarkerLargeH = 5.0, kMarkerLargeW = 2.0;
 // Small ticks are drawn a bit transparent so they read as secondary to the
 // large (labeled) ones.
-inline constexpr double kMarkerSmallOpacity = 0.55;
+inline constexpr double kMarkerSmallOpacity = 0.6;
 
 // Marker labels (top ticks only): font cell height and gap above the tick.
 // Above-hole budget is kHoleMargY(20) − kMarkerLargeH(5) − kLabelGap(1) = 14
