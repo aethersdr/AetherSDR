@@ -999,9 +999,17 @@ QString RigctlProtocol::cmdSetSplitVfo(const QString& args)
     // logger that never toggles split leave the user's TX choice alone.
     const bool wasEnabled = (m_lastSplitEnable == 1);
     const bool firstReport = (m_lastSplitEnable < 0);
-    m_lastSplitEnable = enable ? 1 : 0;
+    // m_lastSplitEnable is set to 0 below on disable, and to 1 inside
+    // ensureSplitTxSlice() ONLY when split actually engages — not blanket-set
+    // here. Two reasons: (1) split can also be enabled implicitly via set_freq/
+    // set_mode VFOB (which calls ensureSplitTxSlice without ever reaching this
+    // function), and that must be recorded so a later set_split_vfo 0 sees the
+    // 1→0 edge and reclaims TX; (2) a set_split_vfo 1 that cannot engage (radio
+    // at its slice limit) must not record "enabled", or the next set_split_vfo 0
+    // would run a spurious reclaim and could steal TX.
 
     if (!enable) {
+        m_lastSplitEnable = 0;
         m_pendingSplitEnable = false;
         m_pendingTxSlice = nullptr;
         m_pendingSplitFreqMHz = 0.0;
@@ -1046,8 +1054,10 @@ void RigctlProtocol::ensureSplitTxSlice()
     if (!m_model) return;
     auto* rxSlice = currentSlice();
     if (!rxSlice) return;
-    if (auto* tx = findTxSlice(/*promote=*/false); tx && tx != rxSlice)
-        return;   // a distinct TX slice already exists
+    if (auto* tx = findTxSlice(/*promote=*/false); tx && tx != rxSlice) {
+        m_lastSplitEnable = 1;   // split already engaged on an existing slice
+        return;                  // a distinct TX slice already exists
+    }
     for (auto* s : m_model->slices()) {
         if (s != rxSlice) {
             m_pendingSplitEnable = false;
@@ -1057,11 +1067,17 @@ void RigctlProtocol::ensureSplitTxSlice()
                 QMetaObject::invokeMethod(s, [s]{ s->setTxSlice(true); },
                                           Qt::QueuedConnection);
             }
+            m_lastSplitEnable = 1;   // engaged by promoting an existing slice
             return;
         }
     }
-    // No second slice — create one and flag for deferred promotion.
+    // No second slice — create one and flag for deferred promotion. Bail if the
+    // radio is at its slice-receiver limit: addSlice() would never land, leaving
+    // split stuck "pending" forever (get_split_freq → -1).
+    if (m_model->slices().size() >= m_model->maxSlices())
+        return;   // could not engage split — leave m_lastSplitEnable untouched
     m_pendingSplitEnable = true;
+    m_lastSplitEnable = 1;   // engaged via create-on-demand (slice in flight)
     auto* model = m_model;
     QMetaObject::invokeMethod(m_model, [model]{ model->addSlice(); },
                               Qt::QueuedConnection);
