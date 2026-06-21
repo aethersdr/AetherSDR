@@ -880,10 +880,21 @@ QString RigctlProtocol::cmdSetPtt(const QString& arg)
     if (parts.isEmpty() || !ok) return rprt(-1);
 
     bool tx = (ptt != 0);
-    QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx]() {
-        // When keying TX, move the TX badge to this protocol's bound slice
-        // so the correct slice is used for transmission.
-        if (tx && model->isConnected()) {
+
+    // During split the TX slice is deliberately a DIFFERENT slice (VFOB); keying
+    // must transmit there, not seize TX back to this channel's bound (RX) slice.
+    // Without this gate the seize below moves TX to VFOA on every key, so the radio
+    // transmits on the RX VFO — the WSJT-X "Rig" split symptom. Resolve split on
+    // the CAT thread (same direct-read pattern as cmdGetSplitVfo).
+    auto* txSlice = findTxSlice(/*promote=*/false);
+    auto* rx      = currentSlice();
+    const bool splitActive = (m_lastSplitEnable == 1) && txSlice && rx && txSlice != rx;
+
+    QMetaObject::invokeMethod(m_model, [model = m_model, sliceId = m_sliceIndex, tx, splitActive]() {
+        // Non-split: ensure this protocol's bound slice is the TX slice so the
+        // correct slice is used for transmission. Split: leave the split TX slice
+        // (VFOB) keyed — do NOT seize TX back to the RX slice.
+        if (tx && !splitActive && model->isConnected()) {
             const auto slices = model->slices();
             SliceModel* slice = nullptr;
             for (auto* s : slices) {
@@ -1054,6 +1065,14 @@ void RigctlProtocol::ensureSplitTxSlice()
     if (!m_model) return;
     auto* rxSlice = currentSlice();
     if (!rxSlice) return;
+    // A create from a prior call is still in flight (WSJT-X "Rig" split fires
+    // set_freq/set_mode VFOB in quick succession, each routing here). Don't create
+    // a second TX slice — tryPromoteTxSlice() will promote the pending one, and
+    // apply the stashed split freq/mode, when it appears. Returning here also keeps
+    // that stash intact: the promote-existing path below clears m_pendingSplitEnable
+    // WITHOUT applying the stash, so we must not fall into it while a create is
+    // pending.
+    if (m_pendingSplitEnable) return;
     if (auto* tx = findTxSlice(/*promote=*/false); tx && tx != rxSlice) {
         m_lastSplitEnable = 1;   // split already engaged on an existing slice
         return;                  // a distinct TX slice already exists
@@ -1078,9 +1097,22 @@ void RigctlProtocol::ensureSplitTxSlice()
         return;   // could not engage split — leave m_lastSplitEnable untouched
     m_pendingSplitEnable = true;
     m_lastSplitEnable = 1;   // engaged via create-on-demand (slice in flight)
+    // Create the TX slice on the RX slice's pan AND seeded at the RX frequency,
+    // instead of letting addSlice() pick its default geometry (pan-center + 20% of
+    // the visible bandwidth). WSJT-X "Rig" split sends set_split_freq AFTER the
+    // slice is created, so the new slice must be born on-frequency (TX ≈ RX for
+    // FT8) — otherwise it lands several kHz off and the later set_split_freq has to
+    // tune it as a post-hoc correction that can race the radio's create-status
+    // echo. set_split_freq then only fine-tunes an already-settled slice.
     auto* model = m_model;
-    QMetaObject::invokeMethod(m_model, [model]{ model->addSlice(); },
-                              Qt::QueuedConnection);
+    const QString panId = rxSlice->panId();
+    const double  rxFreqMhz = rxSlice->frequency();
+    QMetaObject::invokeMethod(m_model, [model, panId, rxFreqMhz]{
+        if (panId.isEmpty())
+            model->addSlice();                        // no pan → default geometry
+        else
+            model->addSliceOnPan(panId, rxFreqMhz);   // seed TX slice at RX freq
+    }, Qt::QueuedConnection);
 }
 
 QString RigctlProtocol::cmdGetSplitFreq()
@@ -1101,6 +1133,13 @@ QString RigctlProtocol::cmdSetSplitFreq(const QString& args)
     bool ok = false;
     double hz = parts.isEmpty() ? 0.0 : parts[0].toDouble(&ok);
     if (parts.isEmpty() || !ok) return rprt(-1);
+    // Establish the split TX slice on demand. WSJT-X / Hamlib's set_split_freq_mode
+    // can call set_split_freq directly without a preceding set_split_vfo — or in a
+    // window where the TX slice isn't resolvable yet — so create/promote it here,
+    // matching set_freq VFOB. The in-flight guard in ensureSplitTxSlice prevents a
+    // duplicate when a create is already pending. Without this, a transient race
+    // returns RPRT -1 and aborts the transmit.
+    ensureSplitTxSlice();
     // If the new slice hasn't appeared yet, stash the freq; tryPromoteTxSlice()
     // will apply it as soon as the slice becomes visible.
     if (m_pendingSplitEnable) {
@@ -1136,6 +1175,9 @@ QString RigctlProtocol::cmdSetSplitMode(const QString& args)
     // Canonical reverse table (same as cmdSetMode); the inline subset passed
     // CWR/RTTYR/WFM through unmapped, sending the radio an invalid mode (#7).
     const QString mode = hamlibToSmartSDR(parts[0]);
+    // Establish the split TX slice on demand (see cmdSetSplitFreq) so a direct
+    // set_split_mode — or one racing slice creation — doesn't hard-fail with -1.
+    ensureSplitTxSlice();
     // If the new slice hasn't appeared yet, stash the mode for tryPromoteTxSlice().
     if (m_pendingSplitEnable) {
         m_pendingSplitMode = mode;
