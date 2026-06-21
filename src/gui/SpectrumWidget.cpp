@@ -947,6 +947,10 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
 
     auto* w = new VfoWidget(this);
     installVfoCursorEventFilter(w);
+    // The flag's SmartMTR value labels are painted in our overlay pass; refresh
+    // the overlay whenever they change or the flag moves.
+    connect(w, &VfoWidget::smartMtrLabelsChanged, this,
+            [this]() { markOverlayDirty(); });
     m_vfoWidgets[sliceId] = w;
     w->show();
     w->raise();
@@ -7017,6 +7021,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 drawSpotMarkers(p, specRect);
             drawSwrSweep(p, specRect);
             drawSliceMarkers(p, specRect, wfRect);
+            drawSmartMtrValueLabels(p);
             drawOffScreenSlices(p, specRect);
 
             drawAutoSqlFloor(p, specRect);
@@ -7648,6 +7653,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
         drawSwrSweep(p, specRect);
         drawSliceMarkers(p, specRect, wfRect);
+        drawSmartMtrValueLabels(p);
         drawOffScreenSlices(p, specRect);
 
         drawAutoSqlFloor(p, specRect);
@@ -9182,6 +9188,17 @@ void SpectrumWidget::showSpotClusterPopup(const SpotCluster& cluster, const QPoi
     menu->popup(globalPos);
     // QMenu self-deletes on close with WA_DeleteOnClose
     menu->setAttribute(Qt::WA_DeleteOnClose);
+}
+
+void SpectrumWidget::drawSmartMtrValueLabels(QPainter& p)
+{
+    // Each flag draws its own SmartMTR value labels (if active) into our overlay
+    // painter, in our (widget) coordinates — so they land on top of the slice
+    // markers drawn just above. Drawn last = guaranteed on top of the slice.
+    for (VfoWidget* w : m_vfoWidgets) {
+        if (w)
+            w->drawSmartMtrLabels(p);
+    }
 }
 
 void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect)

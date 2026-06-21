@@ -577,6 +577,8 @@ private:
     void drawGrid(QPainter& p, const QRect& r);
     void drawSpectrum(QPainter& p, const QRect& r);
     void drawSliceMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
+    // Draw each flag's SmartMTR extremes value labels on top of the slice markers.
+    void drawSmartMtrValueLabels(QPainter& p);
     void drawOffScreenSlices(QPainter& p, const QRect& specRect);
     void drawBandPlan(QPainter& p, const QRect& specRect);
     void drawTnfMarkers(QPainter& p, const QRect& specRect);

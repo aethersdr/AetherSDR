@@ -2,6 +2,7 @@
 
 #include "SmartMtrStyle.h"
 
+#include <QPointF>
 #include <QRect>
 #include <QRectF>
 
@@ -46,6 +47,13 @@ struct SmartMtrGeometry {
 
     // A length in UNITS -> pixels.
     double len(double units) const { return units * pxPerUnit; }
+
+    // A point given in UNITS (x,y) -> pixel QPointF, through the same mapping as
+    // rect(). Used for polygon vertices (e.g. the extreme-marker triangles).
+    QPointF point(double x, double y) const
+    {
+        return QPointF(originX + x * pxPerUnit, originY + y * pxPerUnit);
+    }
 
     // A rectangle given in UNITS (top-left x,y and size w,h) -> pixel QRectF.
     QRectF rect(double x, double y, double w, double h) const

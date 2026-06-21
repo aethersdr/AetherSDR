@@ -1,5 +1,7 @@
 #pragma once
 
+#include "DisplaySettings.h"
+
 #include <QObject>
 
 namespace AetherSDR {
@@ -17,8 +19,26 @@ public:
     bool smartMtr() const { return m_smartMtr; }
     void setSmartMtr(bool on);
 
+    // SmartMTR-only extremes options. Persisted via DisplaySettings (the store);
+    // changing any of them emits extremesChanged() so every open VFO flag can
+    // re-push the options to its SmartMtrWidget — same live-broadcast model as the
+    // meter-view choice above. The meter-menu controls in each flag call these.
+    bool showExtremes() const { return DisplaySettings::showExtremes(); }
+    DisplaySettings::ExtremesSpeed extremesSpeed() const
+    {
+        return DisplaySettings::extremesSpeed();
+    }
+    DisplaySettings::MeterValues showValues() const
+    {
+        return DisplaySettings::showValues();
+    }
+    void setShowExtremes(bool on);
+    void setExtremesSpeed(DisplaySettings::ExtremesSpeed v);
+    void setShowValues(DisplaySettings::MeterValues v);
+
 Q_SIGNALS:
     void changed(bool smartMtr);
+    void extremesChanged();
 
 private:
     MeterViewController();

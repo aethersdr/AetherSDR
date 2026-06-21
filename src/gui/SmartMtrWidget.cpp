@@ -7,6 +7,9 @@
 #include <QLinearGradient>
 #include <QPainter>
 #include <QPainterPath>
+#include <QPolygonF>
+
+#include <algorithm>
 
 namespace AetherSDR {
 
@@ -66,31 +69,48 @@ SmartMtrWidget::SmartMtrWidget(QWidget* parent)
     m_animTimer.setTimerType(Qt::PreciseTimer);
     m_animTimer.setInterval(kMeterSmootherIntervalMs); // 8 ms ~= 120 Hz
     connect(&m_animTimer, &QTimer::timeout, this, &SmartMtrWidget::advance);
+
+    // Free-running monotonic clock for the extremes window (sample timestamps and
+    // slew dt). Kept separate from m_clock, which the smoother restarts each tick.
+    m_extremesClock.start();
 }
 
 void SmartMtrWidget::setMeterInput(const MeterInput& input)
 {
+    const bool kindChanged = (input.kind != m_kind);
     m_input = input;
+    m_kind = input.kind;
 
-    // Target the smoother at the mapped position, normalised to the scale band
-    // so the ballistics are scale-independent. drawIndicator denormalises.
+    // RX<->TX is a scale discontinuity (signal dBm vs mic dBFS); the extremes
+    // window must not mix domains.
+    if (kindChanged)
+        m_extremes.reset();
+
+    // Feed the raw sample into the extremes window (both kinds; mic uses it for
+    // the AVG bar + PEAK marker). Skip on park (no value) or when disabled.
+    if (m_extremesEnabled && input.hasValue)
+        m_extremes.record(input.value, m_extremesClock.elapsed());
+
+    // Bar target. For mic with extremes on, the bar tracks the windowed AVERAGE
+    // (PEAK shown by the marker); otherwise it tracks the instantaneous value.
+    const double posUnits =
+        (m_extremesEnabled && input.hasValue && input.kind == MeterKind::MicLevel)
+            ? mapRawToUnits(m_extremes.avgRaw())
+            : indicatorPosition(input);
+
+    // Normalise to the scale band so the ballistics are scale-independent.
     const double span = kScaleMax - kScaleMin;
     const float targetFrac =
-        span > 0.0 ? float((indicatorPosition(input) - kScaleMin) / span) : 0.0f;
-
-    if (input.kind != m_kind) {
-        // RX<->TX switches the meter to a different scale (signal dBm vs mic
-        // dBFS); snap rather than glide the bar across that discontinuity.
-        m_kind = input.kind;
-        m_smooth.setTarget(targetFrac);
-        m_smooth.snapToTarget();
-        m_animTimer.stop();
-        update();
-        return;
-    }
+        span > 0.0 ? float((posUnits - kScaleMin) / span) : 0.0f;
 
     m_smooth.setTarget(targetFrac);
-    if (m_smooth.needsAnimation() && !m_animTimer.isActive()) {
+    if (kindChanged)
+        m_smooth.snapToTarget(); // snap across the discontinuity, don't glide
+
+    // Keep the timer running while EITHER the bar or the extremes markers still
+    // need to move (a peak can expire and slide a marker after the bar settles).
+    if ((m_smooth.needsAnimation() || (m_extremesEnabled && m_extremes.hasData()))
+        && !m_animTimer.isActive()) {
         m_clock.restart();
         m_animTimer.start();
     }
@@ -99,7 +119,17 @@ void SmartMtrWidget::setMeterInput(const MeterInput& input)
 
 void SmartMtrWidget::advance()
 {
-    const bool settled = !m_smooth.tick(m_clock.restart());
+    const qint64 dt = m_clock.restart();
+    bool moving = m_smooth.tick(dt);
+
+    if (m_extremesEnabled) {
+        const bool extMoving = m_extremes.tick(
+            m_extremesClock.elapsed(), dt, needlePosUnits(),
+            [this](double raw) { return mapRawToUnits(raw); });
+        moving = moving || extMoving;
+    }
+
+    const bool settled = !moving;
     if (settled)
         m_animTimer.stop();
     if (settled || m_smooth.shouldRepaint())
@@ -121,6 +151,10 @@ void SmartMtrWidget::paintEvent(QPaintEvent*)
     drawIndicator(p, g);
     drawInsetShadow(p, g);
     drawMarkers(p, g);
+    drawExtremes(p, g);
+
+    // Let the parent's value-label overlay repaint in lockstep with the markers.
+    emit repainted();
 }
 
 void SmartMtrWidget::drawControl(QPainter& p, const SmartMtrGeometry& g) const
@@ -259,6 +293,169 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
         p.setPen(color);
         p.drawText(box, Qt::AlignHCenter | Qt::AlignBottom, m.label);
     }
+}
+
+void SmartMtrWidget::setExtremesOptions(bool show, ExtremesSpeed speed,
+                                        MeterValues values)
+{
+    m_extremesEnabled = show;
+    m_showValues = values;
+
+    MeterExtremes::Tuning t;
+    switch (speed) {
+    case ExtremesSpeed::Slow:
+        t.windowSeconds = SmartMtrExtremes::kWindowSlowSec;
+        break;
+    case ExtremesSpeed::Fast:
+        t.windowSeconds = SmartMtrExtremes::kWindowFastSec;
+        break;
+    case ExtremesSpeed::Medium:
+        t.windowSeconds = SmartMtrExtremes::kWindowMediumSec;
+        break;
+    }
+    t.slewUnitsPerSec = SmartMtrExtremes::kSlewUnitsPerSec;
+    m_extremes.setTuning(t);
+
+    if (!show)
+        m_extremes.reset();
+    update();
+}
+
+double SmartMtrWidget::mapRawToUnits(double raw) const
+{
+    const double pos = meterConfig(m_kind).valueToPosition(raw, m_input.min, m_input.max);
+    return std::clamp(pos, kScaleMin, kScaleMax);
+}
+
+double SmartMtrWidget::needlePosUnits() const
+{
+    return kScaleMin + double(m_smooth.value()) * (kScaleMax - kScaleMin);
+}
+
+bool SmartMtrWidget::extremesActive() const
+{
+    return m_extremesEnabled && m_extremes.hasData();
+}
+
+double SmartMtrWidget::signalFade() const
+{
+    // Mic (dBFS) has no dBm floor → always full. Signal: fade out near the floor.
+    if (m_kind == MeterKind::MicLevel)
+        return 1.0;
+    const double cur = m_input.hasValue ? m_input.value : SmartMtrExtremes::kSignalFadeLoDbm;
+    return std::clamp(
+        (cur - SmartMtrExtremes::kSignalFadeLoDbm)
+            / (SmartMtrExtremes::kSignalFadeHiDbm - SmartMtrExtremes::kSignalFadeLoDbm),
+        0.0, 1.0);
+}
+
+double SmartMtrWidget::extremesOpacity() const
+{
+    // Mic: the lone PEAK marker has no trough to compare against and the dBFS
+    // scale has no dBm floor, so it shows at full opacity.
+    if (m_kind == MeterKind::MicLevel)
+        return 1.0;
+
+    // Signal: proximity fade (min/max too close) x signal fade (near-floor).
+    const double spread = m_extremes.maxRaw() - m_extremes.minRaw();
+    const double prox = std::clamp(
+        (spread - SmartMtrExtremes::kFadeLoDb)
+            / (SmartMtrExtremes::kFadeHiDb - SmartMtrExtremes::kFadeLoDb),
+        0.0, 1.0);
+    return prox * signalFade();
+}
+
+QString SmartMtrWidget::extremeSUnit(double raw) const
+{
+    // S-units only make sense for the RX signal scale (S9 = -73 dBm, 6 dB each,
+    // S0 = -127). Above S9, report the overshoot as "+NdB".
+    if (m_kind != MeterKind::Signal)
+        return QString();
+    if (raw > -73.0)
+        return QStringLiteral("+%1dB").arg(qRound(raw + 73.0));
+    // floor, not round: report the S-unit actually reached (e.g. -86 dBm is just
+    // shy of S7 at -85, so it reads s6, not s7).
+    const int s = std::clamp(int(std::floor((raw + 127.0) / 6.0)), 0, 9);
+    return QStringLiteral("s%1").arg(s);
+}
+
+QString SmartMtrWidget::extremeDbm(double raw) const
+{
+    const int v = qRound(raw);
+    return m_kind == MeterKind::MicLevel ? QStringLiteral("%1dB").arg(v)
+                                         : QStringLiteral("%1dBm").arg(v);
+}
+
+void SmartMtrWidget::drawExtremes(QPainter& p, const SmartMtrGeometry& g) const
+{
+    if (!extremesActive())
+        return;
+    const double opacity = extremesOpacity();
+    if (opacity < 0.02)
+        return;
+
+    QColor c = SmartMtrColors::kExtreme;
+    c.setAlphaF(c.alphaF() * opacity);
+
+    p.save();
+    p.setPen(Qt::NoPen);
+    p.setBrush(c);
+
+    // Summit (tip) at the top, stuck to the hole's top edge; body hangs down
+    // INSIDE the hole. The tip marks the exact position on the scale.
+    auto drawTri = [&](double posUnits) {
+        const double x = kHoleMargX + posUnits;             // hole-local unit X
+        const double apexY = kHoleMargY;                    // summit on hole top edge
+        const double baseY = kHoleMargY + SmartMtrExtremes::kExtremeTriH; // base inside hole
+        const double halfW = SmartMtrExtremes::kExtremeTriW / 2.0;
+        QPolygonF tri;
+        tri << g.point(x, apexY) << g.point(x - halfW, baseY)
+            << g.point(x + halfW, baseY);
+        p.drawPolygon(tri);
+    };
+
+    // MAX (peak) for both kinds; MIN (trough) for signal only.
+    drawTri(m_extremes.maxPosUnits());
+    if (m_kind == MeterKind::Signal)
+        drawTri(m_extremes.minPosUnits());
+
+    p.restore();
+}
+
+QVector<SmartMtrWidget::ExtremeMarker> SmartMtrWidget::extremeLabels() const
+{
+    QVector<ExtremeMarker> out;
+
+    // Two lines for signal (S-unit over dBm); a single top line for mic (no
+    // S-unit), so the value isn't left floating on the lower line.
+    auto marker = [&](double raw, double pos, double opacity, bool isMax) {
+        const QString s = extremeSUnit(raw);
+        const QString d = extremeDbm(raw);
+        return s.isEmpty() ? ExtremeMarker{ pos, d, QString(), opacity, isMax }
+                           : ExtremeMarker{ pos, s, d, opacity, isMax };
+    };
+
+    if (m_showValues == MeterValues::Signal) {
+        // Current signal value at the live needle position, rendered like the MAX
+        // marker (line + label to its right). Always fully visible when selected —
+        // the fade-out on small min/max spread applies only to the Extremes mode.
+        if (m_input.hasValue)
+            out.push_back(marker(m_input.value, needlePosUnits(), 1.0, true));
+        return out;
+    }
+
+    if (m_showValues == MeterValues::Extremes && extremesActive()) {
+        const double opacity = extremesOpacity();
+        if (opacity < 0.02)
+            return out;
+        // MAX (peak) — both kinds.
+        out.push_back(marker(m_extremes.maxRaw(), m_extremes.maxPosUnits(), opacity, true));
+        // MIN (trough) — signal only.
+        if (m_kind == MeterKind::Signal)
+            out.push_back(
+                marker(m_extremes.minRaw(), m_extremes.minPosUnits(), opacity, false));
+    }
+    return out;
 }
 
 QSize SmartMtrWidget::sizeHint() const

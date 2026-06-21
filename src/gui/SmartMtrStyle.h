@@ -82,4 +82,48 @@ inline constexpr double kLabelHeightNormal = 11.0; // normal (slightly smaller)
 inline constexpr double kLabelGap = 1.0;
 } // namespace SmartMtrUnits
 
+// ============================================================================
+// Extremes (min/max peak-hold markers) tuning
+// ============================================================================
+//
+// The min/max "extremes" markers ride the same scale band as the indicator bar.
+// Unlike the bar (asymmetric exponential ballistics in MeterSmoother), the
+// markers glide at a constant linear slew over a sliding-window envelope of the
+// signal, so they read as a separate UI element. Window length is bound to the
+// user's "Extremes speed" setting; fades and slew are constant.
+//
+// All values are tuning constants — geometry in UNITS, fade thresholds in dB.
+namespace SmartMtrExtremes {
+// Sliding-window length per "Extremes speed" setting (seconds).
+inline constexpr double kWindowFastSec = 1.0;
+inline constexpr double kWindowMediumSec = 3.0;
+inline constexpr double kWindowSlowSec = 5.0;
+
+// Constant-velocity slew of the markers, in scale UNITS per second. ~30 deg/s
+// over the source app's 108-deg extremes arc, scaled to the bar's 220-UNIT span:
+// a marker crosses the full bar in ~3.7 s, deliberately lazy vs the bar's attack.
+inline constexpr double kSlewUnitsPerSec = 60.0;
+
+// Proximity fade: markers fade out when min and max are within a few dB (the
+// spread is then just noise). Linear ramp between these two dB thresholds.
+inline constexpr double kFadeLoDb = 3.0; // <= this spread -> hidden
+inline constexpr double kFadeHiDb = 7.0; // >= this spread -> full opacity
+
+// Signal fade: near-floor signals hide the markers (no point showing extremes of
+// noise). Linear ramp on the current signal dBm.
+inline constexpr double kSignalFadeLoDbm = -127.0; // <= this -> hidden
+inline constexpr double kSignalFadeHiDbm = -115.0; // >= this -> full (~S2)
+
+// Marker triangle: apex-up, base stuck to the hole's top edge. Sized off the
+// hole height so it scales with the bar.
+inline constexpr double kExtremeTriH = SmartMtrUnits::kHoleH * 0.6; // height (60% = 6 UNITS)
+inline constexpr double kExtremeTriW = SmartMtrUnits::kHoleH * 0.4; // base width (40% = 4 UNITS)
+
+// Value-label overlay (drawn below the meter by the parent flag): the short
+// vertical connector line from the hole's bottom edge down toward the label, and
+// the gap from the connector to the label text. In UNITS.
+inline constexpr double kLabelConnectorLen = 4.0;
+inline constexpr double kLabelConnectorGap = 1.0;
+} // namespace SmartMtrExtremes
+
 } // namespace AetherSDR

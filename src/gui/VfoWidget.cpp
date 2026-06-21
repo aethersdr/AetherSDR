@@ -323,6 +323,11 @@ VfoWidget::VfoWidget(QWidget* parent)
     applyMeterView(MeterViewController::instance().smartMtr());
     connect(&MeterViewController::instance(), &MeterViewController::changed,
             this, &VfoWidget::applyMeterView);
+    // Extremes options are also global + live: re-push to this flag's SmartMTR
+    // widget whenever any flag changes them.
+    connect(&MeterViewController::instance(), &MeterViewController::extremesChanged,
+            this, &VfoWidget::pushSmartMtrOptions);
+    pushSmartMtrOptions(); // apply the persisted options to this new flag
 
     connect(&SliceColorManager::instance(), &SliceColorManager::colorsChanged,
             this, [this]() {
@@ -867,6 +872,12 @@ void VfoWidget::buildUI()
 
     m_smartMtrWidget = new SmartMtrWidget;
     m_meterStack->addWidget(m_smartMtrWidget);
+    // The extremes value labels are drawn by SpectrumWidget's overlay pass (so
+    // they sit on top of the slice). Bridge the meter's repaints to a throttled
+    // overlay refresh request.
+    m_labelDirtyClock.start();
+    connect(m_smartMtrWidget, &SmartMtrWidget::repainted, this,
+            &VfoWidget::onSmartMtrRepainted);
     pushSmartMtrInput(); // seed the at-rest display
 
     root->addWidget(m_meterStack);
@@ -1021,18 +1032,22 @@ void VfoWidget::buildUI()
     // Persist + re-evaluate enable/disable rules on change.  Toggling "Show
     // extremes" off disables "Extremes speed" and, if "Show values" is set to
     // Extremes, snaps it back to None (handled in syncSmartMtrSettingsState).
+    // Route through MeterViewController so the change persists AND broadcasts to
+    // every open flag (extremesChanged() → pushSmartMtrOptions on each).
     connect(m_showExtremesChk, &QCheckBox::toggled, this, [this](bool on) {
-        DisplaySettings::setShowExtremes(on);
+        MeterViewController::instance().setShowExtremes(on);
         syncSmartMtrSettingsState();
     });
     connect(m_extremesSpeedCmb, &QComboBox::currentIndexChanged, this,
             [this](int) {
-        DisplaySettings::setExtremesSpeed(static_cast<DisplaySettings::ExtremesSpeed>(
-            m_extremesSpeedCmb->currentData().toInt()));
+        MeterViewController::instance().setExtremesSpeed(
+            static_cast<DisplaySettings::ExtremesSpeed>(
+                m_extremesSpeedCmb->currentData().toInt()));
     });
     connect(m_showValuesCmb, &QComboBox::currentIndexChanged, this, [this](int) {
-        DisplaySettings::setShowValues(static_cast<DisplaySettings::MeterValues>(
-            m_showValuesCmb->currentData().toInt()));
+        MeterViewController::instance().setShowValues(
+            static_cast<DisplaySettings::MeterValues>(
+                m_showValuesCmb->currentData().toInt()));
     });
 
     syncSmartMtrSettingsState();  // initial enable/disable per current state
@@ -2541,6 +2556,10 @@ void VfoWidget::setCollapsed(bool collapsed)
         syncFromSlice();
     }
 
+    // Re-evaluate the extremes labels strip: hidden while collapsed, restored on
+    // expand (it's a parent-child, not auto-managed by the loops above).
+    pushSmartMtrOptions();
+
     relayoutToCurrentContent();
     update();
 
@@ -2823,6 +2842,13 @@ void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
 
     move(newPos);
 
+    // The value labels (drawn by the spectrum's above-flags layer) are anchored to
+    // this flag — repaint them as it pans. Only when labels are actually shown.
+    if (m_smartMtr && !m_collapsed
+        && MeterViewController::instance().showValues()
+            != DisplaySettings::MeterValues::None)
+        emit smartMtrLabelsChanged();
+
     // Position close/lock/record/play buttons stacked vertically on the side opposite the marker
     if (m_closeSliceBtn && m_lockVfoBtn) {
         const int btnSize = 20;
@@ -3086,6 +3112,7 @@ void VfoWidget::applyMeterView(bool smartMtr)
     }
     syncMeterMenuButtons();
     syncSmartMtrSettingsState();  // options are SmartMTR-only → enable/disable
+    pushSmartMtrOptions();  // refresh extremes + label-overlay visibility for the view
     adjustSize();  // S-Meter and SmartMTR pages may differ in height → resize the flag
     update();  // repaint the painted S-meter bar (or clear it)
     // Recomposite over the GPU spectrum so the switched meter is visible while
@@ -3200,6 +3227,159 @@ void VfoWidget::pushSmartMtrInput()
     }
     in.hasValue = true;
     m_smartMtrWidget->setMeterInput(in);
+}
+
+void VfoWidget::pushSmartMtrOptions()
+{
+    if (!m_smartMtrWidget)
+        return;
+    auto& mv = MeterViewController::instance();
+    const bool show = mv.showExtremes();
+
+    SmartMtrWidget::ExtremesSpeed speed = SmartMtrWidget::ExtremesSpeed::Medium;
+    switch (mv.extremesSpeed()) {
+    case DisplaySettings::ExtremesSpeed::Slow:
+        speed = SmartMtrWidget::ExtremesSpeed::Slow;
+        break;
+    case DisplaySettings::ExtremesSpeed::Fast:
+        speed = SmartMtrWidget::ExtremesSpeed::Fast;
+        break;
+    case DisplaySettings::ExtremesSpeed::Medium:
+        break;
+    }
+
+    SmartMtrWidget::MeterValues values = SmartMtrWidget::MeterValues::None;
+    switch (mv.showValues()) {
+    case DisplaySettings::MeterValues::Signal:
+        values = SmartMtrWidget::MeterValues::Signal;
+        break;
+    case DisplaySettings::MeterValues::Extremes:
+        values = SmartMtrWidget::MeterValues::Extremes;
+        break;
+    case DisplaySettings::MeterValues::None:
+        break;
+    }
+
+    m_smartMtrWidget->setExtremesOptions(show, speed, values);
+    emit smartMtrLabelsChanged(); // refresh the spectrum-drawn value labels
+}
+
+void VfoWidget::onSmartMtrRepainted()
+{
+    // The meter repaints up to ~120 Hz while markers move; the spectrum's
+    // static-overlay redraw (which draws the value labels) is comparatively
+    // costly, so throttle the refresh requests to ~20 Hz.
+    const qint64 now = m_labelDirtyClock.elapsed();
+    if (m_lastLabelDirtyMs >= 0 && now - m_lastLabelDirtyMs < 50)
+        return;
+    m_lastLabelDirtyMs = now;
+    emit smartMtrLabelsChanged();
+}
+
+void VfoWidget::drawSmartMtrLabels(QPainter& p) const
+{
+    using namespace SmartMtrUnits;
+    if (!m_smartMtrWidget || !m_smartMtr || m_collapsed
+        || !m_smartMtrWidget->isVisible())
+        return;
+    const auto labels = m_smartMtrWidget->extremeLabels();
+    if (labels.isEmpty())
+        return;
+
+    const auto g = SmartMtrGeometry::fit(m_smartMtrWidget->rect());
+
+    QFont f = font();
+    f.setPixelSize(qMax(8, qRound(g.len(kLabelHeightNormal))));
+    f.setWeight(QFont::Light);
+    const QFontMetricsF fm(f);
+    const double lineH = fm.height();
+
+    const double gap = 2.0;                       // px between line and labels
+    const double stripTop = y() + height() + 2.0; // labels sit just below the flag
+    const double lineBottom = stripTop + 2.0 * lineH;
+    const double lineW = qMax(1.0, g.len(1.0));
+    const double kUnitDim = 0.55; // unit text + connector line dim factor
+
+    p.save();
+    p.setRenderHint(QPainter::Antialiasing, true);
+    p.setFont(f);
+
+    // Draw one stacked text line; the unit (leading "s" / trailing "dB"/"dBm") is
+    // dimmed to emphasise the number. Anchored to the marker line: MAX grows to
+    // the right of x, MIN is right-aligned to the left of x.
+    auto drawLine = [&](const QString& s, double topY, double x, bool isMax,
+                        double opacity) {
+        if (s.isEmpty())
+            return;
+        QString prefix, number = s, suffix;
+        if (s.startsWith(QLatin1Char('s'))) {
+            prefix = QStringLiteral("s");
+            number = s.mid(1);
+        } else if (s.endsWith(QStringLiteral("dBm"))) {
+            suffix = QStringLiteral("dBm");
+            number = s.left(s.size() - 3);
+        } else if (s.endsWith(QStringLiteral("dB"))) {
+            suffix = QStringLiteral("dB");
+            number = s.left(s.size() - 2);
+        }
+        const double wp = fm.horizontalAdvance(prefix);
+        const double wn = fm.horizontalAdvance(number);
+        const double ws = fm.horizontalAdvance(suffix);
+        const double left = isMax ? (x + gap) : (x - gap - (wp + wn + ws));
+
+        auto seg = [&](const QString& t, double sx, double op) {
+            if (t.isEmpty())
+                return;
+            const QRectF r(sx, topY, fm.horizontalAdvance(t) + 1.0, lineH);
+            QColor black(0, 0, 0);
+            black.setAlphaF(op);
+            p.setPen(black);
+            static const int kOff[4][2] = { { -1, 0 }, { 1, 0 }, { 0, -1 }, { 0, 1 } };
+            for (const auto& o : kOff)
+                p.drawText(r.translated(o[0], o[1]), Qt::AlignVCenter | Qt::AlignLeft, t);
+            QColor white = SmartMtrColors::kIndicator;
+            white.setAlphaF(white.alphaF() * op);
+            p.setPen(white);
+            p.drawText(r, Qt::AlignVCenter | Qt::AlignLeft, t);
+        };
+        const double unitOp = opacity * kUnitDim; // dim the unit
+        double cx = left;
+        seg(prefix, cx, unitOp);
+        cx += wp;
+        seg(number, cx, opacity);
+        cx += wn;
+        seg(suffix, cx, unitOp);
+    };
+
+    for (const auto& m : labels) {
+        const double xUnit = kHoleMargX + m.position;
+        const QPoint mk = m_smartMtrWidget->mapTo(
+            parentWidget(), g.point(xUnit, kHoleMargY).toPoint());
+        const double x = mk.x();
+        const double lineTop = stripTop; // just below the flag (drawn under the flags)
+
+        // Vertical marker line, dimmed to the same level as the unit text, with a
+        // dark halo so it reads over a bright background.
+        QColor halo(0, 0, 0);
+        halo.setAlphaF(0.7 * m.opacity * kUnitDim);
+        QPen haloPen(halo);
+        haloPen.setWidthF(lineW + 2.0);
+        haloPen.setCapStyle(Qt::RoundCap);
+        p.setPen(haloPen);
+        p.drawLine(QPointF(x, lineTop), QPointF(x, lineBottom));
+        QColor line = SmartMtrColors::kExtreme;
+        line.setAlphaF(line.alphaF() * m.opacity * kUnitDim);
+        QPen pen(line);
+        pen.setWidthF(lineW);
+        pen.setCapStyle(Qt::RoundCap);
+        p.setPen(pen);
+        p.drawLine(QPointF(x, lineTop), QPointF(x, lineBottom));
+
+        drawLine(m.primary, stripTop, x, m.isMax, m.opacity);
+        drawLine(m.secondary, stripTop + lineH, x, m.isMax, m.opacity);
+    }
+
+    p.restore();
 }
 
 void VfoWidget::setMicLevel(float micDbfs)

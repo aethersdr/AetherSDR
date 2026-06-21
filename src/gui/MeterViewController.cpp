@@ -24,4 +24,31 @@ void MeterViewController::setSmartMtr(bool on)
     emit changed(on);
 }
 
+void MeterViewController::setShowExtremes(bool on)
+{
+    if (DisplaySettings::showExtremes() == on) {
+        return;
+    }
+    DisplaySettings::setShowExtremes(on);
+    emit extremesChanged();
+}
+
+void MeterViewController::setExtremesSpeed(DisplaySettings::ExtremesSpeed v)
+{
+    if (DisplaySettings::extremesSpeed() == v) {
+        return;
+    }
+    DisplaySettings::setExtremesSpeed(v);
+    emit extremesChanged();
+}
+
+void MeterViewController::setShowValues(DisplaySettings::MeterValues v)
+{
+    if (DisplaySettings::showValues() == v) {
+        return;
+    }
+    DisplaySettings::setShowValues(v);
+    emit extremesChanged();
+}
+
 } // namespace AetherSDR

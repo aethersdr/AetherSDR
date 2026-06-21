@@ -23,6 +23,7 @@ class QCheckBox;
 class QGraphicsOpacityEffect;
 class QDoubleSpinBox;
 class QGridLayout;
+class QPainter;
 
 namespace AetherSDR {
 
@@ -81,6 +82,13 @@ public:
 
     // Reposition relative to VFO marker x coordinate.
     void updatePosition(int vfoX, int specTop, FlagDir dir = Auto);
+
+    // Draw this flag's SmartMTR extremes value labels (min/max or current signal,
+    // gated by the meter options) onto the spectrum painter, in the band just
+    // below the flag. Called by SpectrumWidget's overlay pass so the labels land
+    // on top of the slice markers. No-op unless the SmartMTR meter + value labels
+    // are active and the flag is expanded. Coordinates are SpectrumWidget-local.
+    void drawSmartMtrLabels(QPainter& p) const;
 
     // Client-side DSP buttons (NR2 / NR4 / MNR / BNR / DFNR / RN2) were
     // removed from the VFO DSP grid; that family lives in the spectrum
@@ -157,6 +165,10 @@ Q_SIGNALS:
     // (no center line / no top triangle, passband only), 1 = 1 px line,
     // 3 = 3 px line.
     void markerStyleChanged(int markerWidth, bool filterEdgesHidden);
+    // The SmartMTR value labels need a repaint (meter values/options changed).
+    // SpectrumWidget connects this to markOverlayDirty() so the spectrum overlay
+    // (which draws the labels) refreshes. Throttled at the source.
+    void smartMtrLabelsChanged();
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -171,6 +183,12 @@ private:
     // Build and push the current MeterInput (signal vs mic by TX state) to the
     // SmartMTR widget. Cheap; safe to call on every level/state update.
     void pushSmartMtrInput();
+    // Read the global extremes options (MeterViewController) and push them to the
+    // SmartMTR widget; show/hide + reposition the value-label overlay. Called on
+    // construction, on extremesChanged() broadcast, and on meter-view switch.
+    void pushSmartMtrOptions();
+    // Throttled bridge from the meter's repaint to a spectrum-overlay refresh.
+    void onSmartMtrRepainted();
     bool usesUnavailableSignalMeter() const;
     static float signalDbmToMeterFraction(float dbm);
 
@@ -259,6 +277,11 @@ private:
     QStackedWidget* m_meterStack{nullptr};
     bool m_smartMtr{false};
     SmartMtrWidget* m_smartMtrWidget{nullptr};
+    // The SmartMTR extremes value labels are drawn by SpectrumWidget's overlay
+    // pass (so they sit on top of the slice). This clock throttles how often the
+    // meter's repaint asks the spectrum overlay to refresh.
+    QElapsedTimer m_labelDirtyClock;
+    qint64 m_lastLabelDirtyMs{-1};
     float m_micDbfs{-40.0f}; // latest mic level (dBFS); SmartMTR TX scale
     bool m_transmitting{false}; // global MOX state
     // Inline selector row revealed by clicking the meter strip (not a popup),
