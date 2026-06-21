@@ -6988,6 +6988,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // #3606: the grid lives in the background layer so it composites
             // BELOW the FFT trace (GPU/software parity) -- the rectangular grid
             // cells must sit behind the signal peaks, not paint over them.
+            // Reset opacity first: the bg-image branch above leaves bp at
+            // (1 - m_bgOpacity/100), and drawGrid sets its own pen but not
+            // opacity, so the grid must not inherit the image opacity (review @NF0T).
+            bp.setOpacity(1.0);
             drawGrid(bp, specRect);
             m_overlayBgNeedsUpload = true;
         }
