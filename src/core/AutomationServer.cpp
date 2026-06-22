@@ -321,7 +321,7 @@ ResolvedAction matchMenuAction(QMenu* menu, const QString& target)
         if (actionMatchesTarget(action, target)) {
             return {action, menu};
         }
-        if (QMenu* submenu = action->menu()) {
+        if (QMenu* submenu = action->menu(); submenu && submenu->isVisible()) {
             const ResolvedAction match = matchMenuAction(submenu, target);
             if (match.action) {
                 return match;
@@ -930,16 +930,31 @@ void AutomationServer::onNewConnection()
 void AutomationServer::onReadyRead()
 {
     QPointer<QLocalSocket> sock = qobject_cast<QLocalSocket*>(sender());
-    if (!sock || !m_buffers.contains(sock)) {
+    if (!sock) {
         return;
     }
 
-    m_buffers[sock].append(sock->readAll());
+    QLocalSocket* socket = sock.data();
+    QHash<QLocalSocket*, QByteArray>::iterator it = m_buffers.find(socket);
+    if (it == m_buffers.end()) {
+        return;
+    }
+    it.value().append(socket->readAll());
 
-    while (sock && m_buffers.contains(sock)) {
+    while (sock) {
         QByteArray line;
         {
-            QByteArray& buf = m_buffers[sock];
+            socket = sock.data();
+            if (!socket) {
+                return;
+            }
+
+            it = m_buffers.find(socket);
+            if (it == m_buffers.end()) {
+                return;
+            }
+
+            QByteArray& buf = it.value();
             const int nl = buf.indexOf('\n');
             if (nl < 0) {
                 break;
@@ -951,8 +966,9 @@ void AutomationServer::onReadyRead()
             continue;
         }
         const QJsonObject resp = handleLine(line, sock);
-        if (!sock || !m_buffers.contains(sock)
-            || sock->state() == QLocalSocket::UnconnectedState) {
+        socket = sock.data();
+        if (!socket || m_buffers.find(socket) == m_buffers.end()
+            || socket->state() == QLocalSocket::UnconnectedState) {
             qCDebug(lcAutomation)
                 << "dropping automation response because client disconnected during request";
             return;
@@ -960,12 +976,12 @@ void AutomationServer::onReadyRead()
 
         QByteArray payload = QJsonDocument(resp).toJson(QJsonDocument::Compact);
         payload.append('\n');
-        if (sock->write(payload) < 0) {
+        if (socket->write(payload) < 0) {
             qCWarning(lcAutomation) << "failed to write automation response:"
-                                    << sock->errorString();
+                                    << socket->errorString();
             return;
         }
-        sock->flush();
+        socket->flush();
     }
 }
 

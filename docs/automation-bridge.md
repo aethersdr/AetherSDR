@@ -194,7 +194,7 @@ the no-op is an explicit, assertable signal.
 | `setText` | `QLineEdit` | the text |
 | `setCurrentText` | `QComboBox` | item text |
 | `setCurrentIndex` | `QComboBox` | integer index |
-| `trigger` / `click` | visible `QMenu` `QAction` | — |
+| `trigger` / `click` / `toggle` | visible `QMenu` `QAction` | — |
 | `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
 
 <a name="tx-safety"></a>
