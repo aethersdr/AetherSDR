@@ -560,6 +560,14 @@ void TransmitModel::setDax(bool on)
 
 void TransmitModel::setSbMonitor(bool on)
 {
+    // Optimistic update — radio status echo (sb_monitor) supersedes. micStateChanged
+    // is the signal the MON button's model->widget sync (syncPhoneFromModel) binds to,
+    // matching the sibling setMonGainSb; the sync is guarded by m_updatingFromModel so
+    // the optimistic setChecked cannot re-emit the command.
+    if (m_sbMonitor != on) {
+        m_sbMonitor = on;
+        emit micStateChanged();
+    }
     emit commandReady(QString("transmit set mon=%1").arg(on ? 1 : 0));
 }
 
