@@ -1474,6 +1474,15 @@ void section15pty(Runner& r, const QString& ptyPath)
 }
 #endif
 
+// Skipped form when --pty was not passed: don't try the round-trip (it would just
+// time out against a PTY that isn't wired up) — skip cleanly instead.
+void section15skip(Runner& r)
+{
+    r.section(QStringLiteral("Section 15 — PTY round-trip (skipped — pass --pty PATH to enable)"));
+    for (const char* name : { "15.1 PTY ID;", "15.2 PTY ZZFA;", "15.3 PTY PS;" })
+        r.skip(QString::fromLatin1(name), QStringLiteral("--pty not set"));
+}
+
 } // namespace
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -1508,6 +1517,7 @@ int main(int argc, char* argv[])
     const int     timeout = parser.value(QStringLiteral("timeout")).toInt();
     const bool    doPtt   = parser.isSet(QStringLiteral("ptt"));
     const bool    doCw    = parser.isSet(QStringLiteral("cw"));
+    const bool    doPty   = parser.isSet(QStringLiteral("pty"));
 
     std::cout << '\n' << bold(QStringLiteral("AetherSDR FlexCAT (ZZ-extension) Test Suite")).toStdString() << '\n'
               << "Connecting to " << host.toStdString() << ':' << port << " ...\n";
@@ -1552,7 +1562,7 @@ int main(int argc, char* argv[])
     section13(c, r);
     if (doCw) { section14cw(c, r); } else { section14skip(r); }
     section16(c, r);
-    section15pty(r, parser.value(QStringLiteral("pty")));
+    if (doPty) { section15pty(r, parser.value(QStringLiteral("pty"))); } else { section15skip(r); }
 
     // Restore radio state
     c.send(QStringLiteral("ZZAI00"));
