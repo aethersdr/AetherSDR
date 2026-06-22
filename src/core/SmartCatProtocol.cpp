@@ -108,9 +108,9 @@ SmartCatProtocol::SmartCatProtocol(RadioModel* model, int vfoA, int vfoB,
 
 SmartCatProtocol::~SmartCatProtocol()
 {
-    // Client disconnect: tear down an active split so a reused VFO B isn't left as
-    // TX. No slice is removed (split never created one — reuse only).
-    if (m_splitEnabled)
+    // Client disconnect: undo a split ONLY if WE engaged it (moved TX to VFO B).
+    // A split set up by the operator or another client must survive our disconnect.
+    if (m_weEngagedSplit)
         teardownSplit();
 }
 
@@ -196,13 +196,7 @@ QString SmartCatProtocol::processCommandImpl(const QString& cmd)
         if (name == "ZZFI") return cmdZZFI(arg);
         if (name == "ZZFJ") return cmdZZFJ(arg);
         if (name == "ZZFR") return cmdZZFR(arg);
-        if (name == "ZZFT") {
-            // Bare "ZZFT;" is a READ of split state, not a toggle. Polling it
-            // previously flipped split on every call (same defect class as ZZTX).
-            if (arg.isEmpty() || arg == "?")
-                return QString("ZZFT%1;").arg(m_splitEnabled ? "1" : "0");
-            return (arg == "1") ? enableSplit() : disableSplit();
-        }
+        if (name == "ZZFT") return splitCommand(QStringLiteral("ZZFT"), arg);
         if (name == "ZZGT") return cmdZZGT(arg);
         if (name == "ZZLE") return cmdZZLE(arg);
         if (name == "ZZLB") return cmdZZLB(arg);
@@ -397,7 +391,7 @@ QString SmartCatProtocol::cmdIF()
     body += modeToKenwood(a->mode());
     body += '0';
     body += '0';
-    body += m_splitEnabled ? '1' : '0';
+    body += splitActive() ? '1' : '0';
     body += '0';
     body += QStringLiteral("00");
     body += '0';
@@ -416,44 +410,56 @@ QString SmartCatProtocol::cmdZZIF()
 
 // ── FT / ZZSW — split enable ─────────────────────────────────────────────────
 
-QString SmartCatProtocol::cmdFT(const QString& arg)
+QString SmartCatProtocol::cmdFT(const QString& arg)   { return splitCommand(QStringLiteral("FT"), arg); }
+QString SmartCatProtocol::cmdZZSW(const QString& arg) { return splitCommand(QStringLiteral("ZZSW"), arg); }
+
+// Shared read/set for the FT / ZZSW / ZZFT split toggles.
+QString SmartCatProtocol::splitCommand(const QString& prefix, const QString& arg)
 {
-    if (arg.isEmpty())
-        return QString("FT%1;").arg(m_splitEnabled ? 1 : 0);
-    return (arg == "1") ? enableSplit() : disableSplit();
+    if (arg.isEmpty() || arg == "?")
+        return prefix + (splitActive() ? "1" : "0") + ";";
+    if (arg == "1") return enableSplit();
+    if (arg == "0") return disableSplit();
+    return "?;";   // malformed arg → reject; never silently disable split
 }
 
-QString SmartCatProtocol::cmdZZSW(const QString& arg)
+// Reported split state, derived from the model: split is on when a slice other
+// than the RX slice (A) is the TX slice. Avoids a stored flag that could drift
+// when split is changed via the GUI, rigctld, or another CAT client.
+bool SmartCatProtocol::splitActive() const
 {
-    if (arg.isEmpty())
-        return QString("ZZSW%1;").arg(m_splitEnabled ? "1" : "0");
-    return (arg == "1") ? enableSplit() : disableSplit();
+    if (!m_model) return false;
+    SliceModel* a = sliceA();
+    for (auto* s : m_model->slices())
+        if (s != a && s->isTxSlice()) return true;
+    return false;
 }
 
-// ── Split mechanism (manager-free: reuse VFO B, else NOT_ENABLED, else XIT) ───
+// ── Split mechanism (manager-free: reuse the operator's VFO B, else NOT_ENABLED) ─
 QString SmartCatProtocol::enableSplit()
 {
-    if (m_splitEnabled) return {};   // idempotent — already split
     SliceModel* a = sliceA();
     if (!a) return "?;";
-
-    // (1) Operator-configured VFO B slice present → use it as the TX slice.
-    if (SliceModel* b = sliceB()) {
+    SliceModel* b = sliceB();
+    // No usable VFO B slice → NOT_ENABLED, matching SmartSDR-for-Mac (covers both a
+    // VFO B configured-but-absent and a genuine single-VFO port). SmartSDR-for-
+    // Windows would create a dedicated TX slice here; that create-on-demand path is
+    // deferred to the slice-management consolidation.
+    if (!b) return "?;";
+    // Engage split by reusing the operator's VFO B as the TX slice. Only claim
+    // ownership (so teardown-on-disconnect undoes it) if it WASN'T already TX —
+    // i.e. don't adopt an operator's/another client's pre-existing split.
+    if (!b->isTxSlice()) {
         b->setTxSlice(true);
-        m_splitEnabled = true;
-        return {};
+        m_weEngagedSplit = true;
     }
-    // (2) No usable VFO B slice → NOT_ENABLED, matching SmartSDR-for-Mac. This
-    //     covers both a VFO B configured-but-absent and a genuine single-VFO port.
-    //     SmartSDR-for-Windows would instead create a dedicated TX slice on a
-    //     single-VFO port; that create-on-demand path is deferred to the
-    //     slice-management consolidation, so split is simply not enabled here.
-    return "?;";
+    return {};
 }
 
 QString SmartCatProtocol::disableSplit()
 {
-    if (m_splitEnabled) teardownSplit();
+    // Explicit client command (FT0/ZZSW0/ZZFT0): hand TX back to the RX slice.
+    teardownSplit();
     return {};
 }
 
@@ -462,7 +468,8 @@ void SmartCatProtocol::teardownSplit()
     // Hand TX back to the RX slice (slice A); it was on the operator's VFO B.
     // No slice is removed — split never created one (reuse only).
     if (SliceModel* a = sliceA()) a->setTxSlice(true);
-    m_splitEnabled = false;
+    m_weEngagedSplit = false;
+    m_rxVfoB = false;   // clear the RX-VFO selector along with split
 }
 
 // ── FR — RX VFO select ───────────────────────────────────────────────────────
@@ -1357,10 +1364,10 @@ QString SmartCatProtocol::cmdBY(const QString& /*arg*/)
 
 QString SmartCatProtocol::cmdOI()
 {
-    SliceModel* b = sliceB();
-    SliceModel* a = sliceA();
-    // Fall back to slice A if there is no VFO B
-    SliceModel* s = b ? b : a;
+    // OI reports the "other" (VFO B) IF. With no VFO B, return "?;" rather than
+    // falling back to VFO A — consistent with FB/ZZME (#3633); reporting VFO A's
+    // frequency as VFO B's is the exact contradiction that fix removed.
+    SliceModel* s = sliceB();
     if (!s) return "?;";
 
     QString body;
@@ -1374,7 +1381,7 @@ QString SmartCatProtocol::cmdOI()
     body += modeToKenwood(s->mode());
     body += '0';
     body += '0';
-    body += m_splitEnabled ? '1' : '0';
+    body += splitActive() ? '1' : '0';
     body += '0';
     body += QStringLiteral("00");
     body += '0';
