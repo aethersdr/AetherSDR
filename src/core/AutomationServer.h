@@ -116,6 +116,10 @@ private:
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
 
+    // Slice lifecycle (add/remove/select) and VFO tuning — RX/config, no keying.
+    QJsonObject doSlice(const QString& action, const QString& arg);
+    QJsonObject doTune(const QString& value);
+
     // Resolve a target string to a widget: exact objectName first, then
     // class name (with or without namespace) or accessibleName.
     static QWidget* resolveWidget(const QString& target);

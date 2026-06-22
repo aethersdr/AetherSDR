@@ -62,6 +62,9 @@ void DaxApplet::buildUI()
     daxEnRow->addStretch();
     m_daxEnable = new QPushButton("Enable");
     m_daxEnable->setCheckable(true);
+    m_daxEnable->setObjectName(QStringLiteral("daxEnable"));
+    m_daxEnable->setAccessibleName(tr("DAX enable"));
+    m_daxEnable->setAccessibleDescription(tr("Enable or disable DAX digital audio routing"));
     m_daxEnable->setStyleSheet(kGreenToggle);
     m_daxEnable->setFixedSize(60, 22);
     daxEnRow->addWidget(m_daxEnable);

@@ -206,6 +206,9 @@ void TciApplet::buildUI()
     m_tciPort->setStyleSheet(kInsetStyle);
     m_tciPort->setFixedWidth(46);
     m_tciPort->setAlignment(Qt::AlignCenter);
+    m_tciPort->setObjectName(QStringLiteral("tciPort"));
+    m_tciPort->setAccessibleName(tr("TCI port"));
+    m_tciPort->setAccessibleDescription(tr("TCP port the TCI server listens on"));
     enableRow->addWidget(m_tciPort);
 
     m_tciStatus = new QLabel("(stopped)");
@@ -214,6 +217,9 @@ void TciApplet::buildUI()
 
     m_tciEnable = new QPushButton("Enable");
     m_tciEnable->setCheckable(true);
+    m_tciEnable->setObjectName(QStringLiteral("tciEnable"));
+    m_tciEnable->setAccessibleName(tr("TCI server enable"));
+    m_tciEnable->setAccessibleDescription(tr("Start or stop the TCI server"));
     m_tciEnable->setStyleSheet(kGreenToggle);
     m_tciEnable->setFixedSize(60, 22);
     {

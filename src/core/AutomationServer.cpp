@@ -303,6 +303,22 @@ QJsonObject panSnapshot(const PanadapterModel* p)
 
 QJsonObject radioSnapshot(const RadioModel* r)
 {
+    // Multi-Flex slot occupancy across the radio's whole slice capacity: each
+    // slot is ours / foreign (another client, e.g. a Maestro) / empty. This is
+    // why an `slice add` can be refused even when we hold only one slice — the
+    // capacity is radio-wide, shared across clients. (#3646)
+    QJsonArray slotArr;   // not "slots" — that's a Qt macro
+    const int maxSlices = r->maxSlices();
+    for (int id = 0; id < maxSlices; ++id) {
+        QString state = QStringLiteral("empty");
+        if (r->isSlotOurs(id))         state = QStringLiteral("ours");
+        else if (r->isSlotForeign(id)) state = QStringLiteral("foreign");
+        QJsonObject slot{{QStringLiteral("id"), id}, {QStringLiteral("state"), state}};
+        if (state == QLatin1String("foreign"))
+            slot[QStringLiteral("owner")] = r->foreignSliceOwnerStation(id);
+        slotArr.append(slot);
+    }
+
     return QJsonObject{
         {QStringLiteral("name"),         r->name()},
         {QStringLiteral("model"),        r->model()},
@@ -315,6 +331,8 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("txPower"),      r->txPower()},
         {QStringLiteral("paTemp"),       r->paTemp()},
         {QStringLiteral("sliceCount"),   r->slices().size()},
+        {QStringLiteral("maxSlices"),    maxSlices},
+        {QStringLiteral("slots"),        slotArr},
         {QStringLiteral("panCount"),     r->panadapters().size()},
     };
 }
@@ -678,6 +696,10 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line)
             model = tok(1); selector = tok(2); property = tok(3);
         } else if (cmd == QLatin1String("txtest") || cmd == QLatin1String("atu")) {
             action = tok(1);  // e.g. "txtest twotone", "atu bypass"
+        } else if (cmd == QLatin1String("slice")) {
+            action = tok(1); value = tok(2);  // "slice add 14.2", "slice remove 1"
+        } else if (cmd == QLatin1String("tune")) {
+            value = tok(1);   // "tune 3.7"
         } else {  // grab and friends
             target = tok(1); path = tok(2);
         }
@@ -718,6 +740,16 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line)
         if (action.isEmpty())
             return err(QStringLiteral("atu requires an action (bypass|start)"));
         return doAtu(action);
+    }
+    if (cmd == QLatin1String("slice")) {
+        if (action.isEmpty())
+            return err(QStringLiteral("slice requires an action (add|remove|select)"));
+        return doSlice(action, value);
+    }
+    if (cmd == QLatin1String("tune")) {
+        if (value.isEmpty())
+            return err(QStringLiteral("tune requires a frequency in MHz"));
+        return doTune(value);
     }
 
     return err(QStringLiteral("unknown command: ") + cmd);
@@ -1102,4 +1134,92 @@ void AutomationServer::onTxWatchdog()
         forceUnkey("max continuous key time exceeded");
 }
 
+QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    RadioModel* radio = m_radioModel;
+
+    if (action == QLatin1String("add")) {
+        // Pre-check radio-wide slot capacity. Slices are a radio resource shared
+        // across MultiFlex clients, so a create is refused when every slot is
+        // taken — even if WE hold only one. Surface that synchronously instead
+        // of issuing a command the radio will silently reject. (#3646)
+        int freeSlots = 0;
+        QString occupant;
+        for (int id = 0; id < radio->maxSlices(); ++id) {
+            if (!radio->isSlotOurs(id) && !radio->isSlotForeign(id)) freeSlots++;
+            else if (radio->isSlotForeign(id) && occupant.isEmpty())
+                occupant = radio->foreignSliceOwnerStation(id);
+        }
+        if (freeSlots == 0) {
+            QString msg = QStringLiteral("refused: no free slice slot (radio at its ")
+                + QString::number(radio->maxSlices()) + QStringLiteral("-slice limit");
+            if (!occupant.isEmpty())
+                msg += QStringLiteral("; a foreign client '") + occupant + QStringLiteral("' holds a slot");
+            return err(msg + QStringLiteral(")"));
+        }
+
+        bool okF = false;
+        const double freq = arg.toDouble(&okF);
+        if (okF && freq > 0)
+            radio->addSliceOnPan(radio->panId(), freq);   // specific frequency
+        else
+            radio->addSlice();                            // default (TX freq / active pan)
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("add")},
+                           {QStringLiteral("freq"), okF ? QJsonValue(freq) : QJsonValue()},
+                           {QStringLiteral("requested"), true},
+                           {QStringLiteral("sliceCount"), radio->slices().size()}};
+    }
+    if (action == QLatin1String("remove")) {
+        bool okId = false;
+        const int id = arg.toInt(&okId);
+        if (!okId)
+            return err(QStringLiteral("slice remove requires a slice id"));
+        if (radio->slices().size() <= 1)
+            return err(QStringLiteral("refused: cannot remove the last slice"));
+        if (!radio->slice(id))
+            return err(QStringLiteral("no slice with id ") + arg);
+        radio->sendCommand(QStringLiteral("slice remove %1").arg(id));
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("remove")},
+                           {QStringLiteral("id"), id}};
+    }
+    if (action == QLatin1String("select")) {
+        bool okId = false;
+        const int id = arg.toInt(&okId);
+        if (!okId || !radio->slice(id))
+            return err(QStringLiteral("slice select requires a valid slice id"));
+        radio->sendCommand(QStringLiteral("slice set %1 active=1").arg(id));
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("select")},
+                           {QStringLiteral("id"), id}};
+    }
+    return err(QStringLiteral("unknown slice action: ") + action + QStringLiteral(" (add|remove|select)"));
+}
+
+// ── VFO tuning (#3646) ──────────────────────────────────────────────────────
+// Set the active slice's frequency (MHz). The most fundamental control the
+// VfoWidget couldn't expose (it's custom-painted). Honors the slice lock guard.
+QJsonObject AutomationServer::doTune(const QString& value)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    bool okF = false;
+    const double mhz = value.toDouble(&okF);
+    if (!okF || mhz <= 0)
+        return err(QStringLiteral("tune requires a positive frequency in MHz"));
+
+    SliceModel* s = nullptr;
+    for (SliceModel* c : m_radioModel->slices())
+        if (c->isActive()) { s = c; break; }
+    if (!s && !m_radioModel->slices().isEmpty())
+        s = m_radioModel->slices().first();
+    if (!s)
+        return err(QStringLiteral("no slice to tune"));
+    if (s->isLocked())
+        return err(QStringLiteral("refused: slice ") + s->letter() + QStringLiteral(" is VFO-locked"));
+
+    s->setFrequency(mhz);
+    return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("tune"), mhz},
+                       {QStringLiteral("sliceId"), s->sliceId()}, {QStringLiteral("letter"), s->letter()}};
+}
 } // namespace AetherSDR
