@@ -23,19 +23,13 @@ public:
     // changing any of them emits extremesChanged() so every open VFO flag can
     // re-push the options to its SmartMtrWidget — same live-broadcast model as the
     // meter-view choice above. The meter-menu controls in each flag call these.
-    bool showExtremes() const { return DisplaySettings::showExtremes(); }
-    DisplaySettings::ExtremesSpeed extremesSpeed() const
-    {
-        return DisplaySettings::extremesSpeed();
-    }
-    DisplaySettings::MeterValues showValues() const
-    {
-        return DisplaySettings::showValues();
-    }
-    DisplaySettings::TxMeter txMeter() const
-    {
-        return DisplaySettings::txMeter();
-    }
+    // Cached (the setters keep them in sync with DisplaySettings) so these stay
+    // off the per-packet path — txMeter() is read on every meter update — rather
+    // than re-parsing the Display JSON blob from AppSettings on each call.
+    bool showExtremes() const { return m_showExtremes; }
+    DisplaySettings::ExtremesSpeed extremesSpeed() const { return m_extremesSpeed; }
+    DisplaySettings::MeterValues showValues() const { return m_showValues; }
+    DisplaySettings::TxMeter txMeter() const { return m_txMeter; }
     void setShowExtremes(bool on);
     void setExtremesSpeed(DisplaySettings::ExtremesSpeed v);
     void setShowValues(DisplaySettings::MeterValues v);
@@ -51,6 +45,10 @@ Q_SIGNALS:
 private:
     MeterViewController();
     bool m_smartMtr{false};
+    bool m_showExtremes{false};
+    DisplaySettings::ExtremesSpeed m_extremesSpeed{DisplaySettings::ExtremesSpeed::Medium};
+    DisplaySettings::MeterValues m_showValues{DisplaySettings::MeterValues::None};
+    DisplaySettings::TxMeter m_txMeter{DisplaySettings::TxMeter::None};
 };
 
 } // namespace AetherSDR

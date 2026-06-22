@@ -11,6 +11,10 @@ MeterViewController& MeterViewController::instance()
 
 MeterViewController::MeterViewController()
     : m_smartMtr(DisplaySettings::smartMtr())  // restore persisted choice
+    , m_showExtremes(DisplaySettings::showExtremes())
+    , m_extremesSpeed(DisplaySettings::extremesSpeed())
+    , m_showValues(DisplaySettings::showValues())
+    , m_txMeter(DisplaySettings::txMeter())
 {
 }
 
@@ -26,36 +30,40 @@ void MeterViewController::setSmartMtr(bool on)
 
 void MeterViewController::setShowExtremes(bool on)
 {
-    if (DisplaySettings::showExtremes() == on) {
+    if (m_showExtremes == on) {
         return;
     }
+    m_showExtremes = on;
     DisplaySettings::setShowExtremes(on);
     emit extremesChanged();
 }
 
 void MeterViewController::setExtremesSpeed(DisplaySettings::ExtremesSpeed v)
 {
-    if (DisplaySettings::extremesSpeed() == v) {
+    if (m_extremesSpeed == v) {
         return;
     }
+    m_extremesSpeed = v;
     DisplaySettings::setExtremesSpeed(v);
     emit extremesChanged();
 }
 
 void MeterViewController::setShowValues(DisplaySettings::MeterValues v)
 {
-    if (DisplaySettings::showValues() == v) {
+    if (m_showValues == v) {
         return;
     }
+    m_showValues = v;
     DisplaySettings::setShowValues(v);
     emit extremesChanged();
 }
 
 void MeterViewController::setTxMeter(DisplaySettings::TxMeter v)
 {
-    if (DisplaySettings::txMeter() == v) {
+    if (m_txMeter == v) {
         return;
     }
+    m_txMeter = v;
     DisplaySettings::setTxMeter(v);
     emit txMeterChanged();
 }
