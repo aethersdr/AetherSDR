@@ -704,6 +704,10 @@ void TransmitModel::setCwDelay(int ms)
 
 void TransmitModel::setCwSidetone(bool on)
 {
+    if (m_cwSidetone != on) {
+        m_cwSidetone = on;  // optimistic — radio status echo supersedes
+        emit phoneStateChanged();
+    }
     emit commandReady(QString("cw sidetone %1").arg(on ? 1 : 0));
 }
 
