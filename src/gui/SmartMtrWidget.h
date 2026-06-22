@@ -19,9 +19,9 @@ namespace AetherSDR {
 // Alternative meter view shown in the VFO flag in place of the standard
 // S-meter when the operator selects "SmartMTR" from the meter menu.
 //
-// This is the first step of a multi-step build. For now it paints only the
-// static control body, the recessed "hole", and a single indicator bar pinned
-// at SmartMtrUnits::kIndicatorFraction — no signal processing yet.
+// It renders the meter end-to-end: the static control body and recessed "hole"
+// (cached as pixmaps), an indicator bar driven by analog-needle ballistics, and
+// optional peak/trough extremes markers with value labels.
 //
 // Organization: design tokens (colors + UNIT proportions) live in
 // SmartMtrStyle.h; the UNITS->pixel mapping lives in SmartMtrGeometry.h; this

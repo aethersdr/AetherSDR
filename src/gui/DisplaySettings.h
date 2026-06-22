@@ -42,7 +42,7 @@ public:
     // ── SmartMTR-only display options ───────────────────────────────────────
     // These apply only to the SmartMTR meter view (not the standard S-meter).
     // Persisted here, surfaced in the VFO meter-view selector; consumed by the
-    // SmartMTR rendering layer (wiring lands in a follow-up).
+    // SmartMTR rendering layer via VfoWidget::pushSmartMtrOptions().
 
     // Extremes-speed and shown-values choices, as typed enums so consumers get
     // compile-time exhaustiveness rather than stringly-typed comparisons.
