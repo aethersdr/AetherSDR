@@ -53,6 +53,16 @@ to confirm a visual change; parse the JSON to assert on control state.
 
 For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
 
+On macOS, do not host the bridge from a Codex-style sandboxed command. The
+native Cocoa platform can abort during `QApplication` startup if pasteboard or
+HIServices are unavailable, before AetherSDR reaches the automation bridge; with
+`QT_QPA_PLATFORM=offscreen`, the same sandbox can still deny the `QLocalServer`
+socket the bridge needs. Launch outside the command sandbox instead:
+
+```bash
+QT_QPA_PLATFORM=offscreen AETHER_AUTOMATION=1 ./build/AetherSDR.app/Contents/MacOS/AetherSDR &
+```
+
 ---
 
 ## How it works (the contract)
