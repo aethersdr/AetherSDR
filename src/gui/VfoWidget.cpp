@@ -3163,6 +3163,8 @@ void VfoWidget::applyMeterView(bool smartMtr)
     syncMeterMenuButtons();
     syncSmartMtrSettingsState();  // options are SmartMTR-only → enable/disable
     pushSmartMtrOptions();  // refresh extremes + label-overlay visibility for the view
+    pushSmartMtrInput();    // re-seed the meter from the last level on switch-in
+                            // (no-ops while S-meter is selected — see the gate there)
     // Resize via relayoutToCurrentContent() (clears the post-#3706 fixed-height
     // clamp before re-pinning) — a bare adjustSize() can't grow the flag for the
     // taller SmartMTR page. (#SmartMTR)
@@ -3268,7 +3270,11 @@ void VfoWidget::setSignalLevel(float dbm)
 // canonical ranges match the per-kind configs in SmartMtrConfig.cpp.
 void VfoWidget::pushSmartMtrInput()
 {
-    if (!m_smartMtrWidget)
+    // Skip while the S-meter view is shown: feeding the hidden SmartMtrWidget
+    // would run its ballistics + restart the 120 Hz animation timer on every
+    // meter packet, for every flag, for users who never enable SmartMTR — the
+    // page never paints. applyMeterView() re-seeds it on switch-in.
+    if (!m_smartMtrWidget || !m_smartMtr)
         return;
 
     MeterInput in;
