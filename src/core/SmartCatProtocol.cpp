@@ -1148,7 +1148,7 @@ QString SmartCatProtocol::cmdSH(const QString& arg)
 // class as ZZTX). Selecting the non-active VFO swaps the A/B slice mapping;
 // re-selecting the active VFO is a no-op (idempotent).
 
-QString SmartCatProtocol::cmdZZFR(const QString& arg)
+QString SmartCatProtocol::cmdZZFR(const QString& /*arg*/)
 {
     // ZZFR is not part of the SmartSDR CAT command set — it is unsupported.
     // (RX-VFO selection is done via the Kenwood FR command; see cmdFR.) The old
