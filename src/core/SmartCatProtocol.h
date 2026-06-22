@@ -160,10 +160,6 @@ private:
     QString enableSplit();
     QString disableSplit();
     void    teardownSplit();
-    // Reported split state, DERIVED from the model (a non-RX slice is the TX slice)
-    // rather than a stored flag — so it can't drift when split is changed via the
-    // GUI/rigctld/another client.
-    bool    splitActive() const;
     // Shared read/set for the three split toggles (FT / ZZSW / ZZFT): read form
     // (empty or "?") returns "<prefix><0|1>"; "1"/"0" enable/disable; anything else
     // → "?;" (never silently disables on a malformed arg).
@@ -182,9 +178,13 @@ private:
     int         m_vfoB{-1};
     bool        m_flexExtensions{true};
     bool        m_aiEnabled{false};
+    // Reported split state (this client's intent). Set SYNCHRONOUSLY in
+    // enableSplit/teardownSplit because setTxSlice() updates the slice's TX flag
+    // only asynchronously (radio status echo); a model-derived read would be stale
+    // in the window right after enable/disable.
+    bool        m_splitEnabled{false};
     // True only when WE moved TX onto VFO B, so a disconnect undoes only our own
-    // split — never an operator's or another client's. (Reported split state is
-    // derived via splitActive(), not this flag.)
+    // split — never an operator's or another client's.
     bool        m_weEngagedSplit{false};
     bool        m_rxVfoB{false};   // false = VFO A is the RX VFO. FR selector echo only:
                                    // intentionally does NOT swap VFOs (SmartSDR-Mac parity).
