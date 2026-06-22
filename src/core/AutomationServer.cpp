@@ -23,6 +23,9 @@
 #include <QRegularExpression>
 #include <QTimer>
 #include <QDateTime>
+#include <QTime>
+
+#include <limits>
 
 // Best-effort value extraction for common control types.
 #include <QAbstractButton>
@@ -562,9 +565,32 @@ bool AutomationServer::start(const QString& serverName)
                                                     : QString::number(m_txMaxPower));
     }
 
+    // Observability suite (#3646): start the monotonic clock, tap the log
+    // funnel into a ring buffer, and arm the (idle) drain timer used by
+    // `log subscribe`. The tap runs on arbitrary logging threads, so it only
+    // touches the mutex-guarded ring — never a socket.
+    m_monoClock.start();
+    m_logTapId = LogManager::instance().addTap(
+        [this](QtMsgType type, const QString& cat, const QString& msg) {
+            QMutexLocker lk(&m_logMutex);
+            LogEvent e;
+            e.seq    = ++m_logSeq;
+            e.monoUs = m_monoClock.nsecsElapsed() / 1000;
+            e.wall   = QTime::currentTime().toString(QStringLiteral("HH:mm:ss.zzz"));
+            e.type   = static_cast<int>(type);
+            e.cat    = cat;
+            e.msg    = msg;
+            m_logRing.push_back(std::move(e));
+            while (m_logRing.size() > static_cast<size_t>(kLogRingMax))
+                m_logRing.pop_front();
+        });
+    m_logDrain = new QTimer(this);
+    m_logDrain->setInterval(50);
+    connect(m_logDrain, &QTimer::timeout, this, &AutomationServer::onLogDrain);
+
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
-        << "(verbs: ping, dumpTree, grab, invoke, get, txtest, atu)";
+        << "(verbs: ping, dumpTree, grab, invoke, get, txtest, atu, slice, tune, log, mark)";
     return true;
 }
 
@@ -581,6 +607,17 @@ void AutomationServer::stop()
         m_txWatchdog->deleteLater();
         m_txWatchdog = nullptr;
     }
+    // Detach the log tap before teardown so no logging thread can touch us.
+    if (m_logTapId >= 0) {
+        LogManager::instance().removeTap(m_logTapId);
+        m_logTapId = -1;
+    }
+    if (m_logDrain) {
+        m_logDrain->stop();
+        m_logDrain->deleteLater();
+        m_logDrain = nullptr;
+    }
+    m_logSubscribers.clear();
 
     for (auto it = m_buffers.constBegin(); it != m_buffers.constEnd(); ++it)
         it.key()->deleteLater();
@@ -634,7 +671,7 @@ void AutomationServer::onReadyRead()
         buf.remove(0, nl + 1);
         if (line.trimmed().isEmpty())
             continue;
-        const QJsonObject resp = handleLine(line);
+        const QJsonObject resp = handleLine(line, sock);
         sock->write(QJsonDocument(resp).toJson(QJsonDocument::Compact));
         sock->write("\n");
         sock->flush();
@@ -647,11 +684,13 @@ void AutomationServer::onDisconnected()
     if (!sock)
         return;
     m_buffers.remove(sock);
+    if (m_logSubscribers.remove(sock) && m_logSubscribers.isEmpty() && m_logDrain)
+        m_logDrain->stop();
     sock->deleteLater();
     qCDebug(lcAutomation) << "client disconnected;" << m_buffers.size() << "active";
 }
 
-QJsonObject AutomationServer::handleLine(const QByteArray& line)
+QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* sock)
 {
     QString cmd, target, path, action, value, model, selector, property;
 
@@ -700,6 +739,15 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line)
             action = tok(1); value = tok(2);  // "slice add 14.2", "slice remove 1"
         } else if (cmd == QLatin1String("tune")) {
             value = tok(1);   // "tune 3.7"
+        } else if (cmd == QLatin1String("log")) {
+            action = tok(1);  // categories|get|set|reset|tail|subscribe|unsubscribe
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // "aether.protocol on", "200 since=42"
+        } else if (cmd == QLatin1String("mark")) {
+            QStringList rest;
+            for (int i = 1; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // free-form annotation text
         } else {  // grab and friends
             target = tok(1); path = tok(2);
         }
@@ -750,6 +798,13 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line)
         if (value.isEmpty())
             return err(QStringLiteral("tune requires a frequency in MHz"));
         return doTune(value);
+    }
+    if (cmd == QLatin1String("log"))
+        return doLog(action.isEmpty() ? QStringLiteral("categories") : action, value, sock);
+    if (cmd == QLatin1String("mark")) {
+        if (value.isEmpty())
+            return err(QStringLiteral("mark requires annotation text"));
+        return doMark(value);
     }
 
     return err(QStringLiteral("unknown command: ") + cmd);
@@ -1221,5 +1276,190 @@ QJsonObject AutomationServer::doTune(const QString& value)
     s->setFrequency(mhz);
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("tune"), mhz},
                        {QStringLiteral("sliceId"), s->sliceId()}, {QStringLiteral("letter"), s->letter()}};
+}
+
+// ---------------------------------------------------------------------------
+// Observability suite (#3646): log control, event ring, markers.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+const char* msgTypeName(int t)
+{
+    switch (t) {
+    case QtDebugMsg:    return "D";
+    case QtInfoMsg:     return "I";
+    case QtWarningMsg:  return "W";
+    case QtCriticalMsg: return "C";
+    case QtFatalMsg:    return "F";
+    default:            return "?";
+    }
+}
+
+} // namespace
+
+// Serialize one event for the wire. PII is redacted here, on egress, so the
+// in-memory ring stays raw (cheap tap) but nothing sensitive ever leaves.
+QJsonObject AutomationServer::logEventToJson(const LogEvent& e)
+{
+    return QJsonObject{
+        {QStringLiteral("type"),    QStringLiteral("log")},
+        {QStringLiteral("seq"),     static_cast<qint64>(e.seq)},
+        {QStringLiteral("mono_us"), e.monoUs},
+        {QStringLiteral("t"),       e.wall},
+        {QStringLiteral("lvl"),     QString::fromLatin1(msgTypeName(e.type))},
+        {QStringLiteral("cat"),     e.cat},
+        {QStringLiteral("msg"),     redactPii(e.msg)},
+    };
+}
+
+QJsonObject AutomationServer::doLog(const QString& action, const QString& arg,
+                                    QLocalSocket* sock)
+{
+    auto& lm = LogManager::instance();
+
+    if (action == QLatin1String("categories")) {
+        QJsonArray arr;
+        for (const auto& c : lm.categories())
+            arr.append(QJsonObject{{QStringLiteral("id"), c.id},
+                                   {QStringLiteral("label"), c.label},
+                                   {QStringLiteral("enabled"), c.enabled}});
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("categories"), arr}};
+    }
+
+    if (action == QLatin1String("get")) {
+        if (arg.isEmpty())
+            return err(QStringLiteral("log get requires a category id"));
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("id"), arg},
+                           {QStringLiteral("enabled"), lm.isEnabled(arg)}};
+    }
+
+    if (action == QLatin1String("set")) {
+        // "<id> <on|off>" or "<id>=<on|off>"; id "all" toggles every category.
+        const QString id = arg.section(QRegularExpression(QStringLiteral("[ =]")), 0, 0).trimmed();
+        const QString st = arg.section(QRegularExpression(QStringLiteral("[ =]")), 1).trimmed().toLower();
+        if (id.isEmpty() || st.isEmpty())
+            return err(QStringLiteral("log set requires '<category> <on|off>'"));
+        const bool on = (st == QLatin1String("on") || st == QLatin1String("true")
+                         || st == QLatin1String("1") || st == QLatin1String("debug"));
+        if (id == QLatin1String("all")) {
+            lm.setAllEnabled(on);
+            return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("id"), id},
+                               {QStringLiteral("enabled"), on}};
+        }
+        lm.setEnabled(id, on);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("id"), id},
+                           {QStringLiteral("enabled"), lm.isEnabled(id)}};
+    }
+
+    if (action == QLatin1String("reset")) {
+        lm.loadSettings();  // restore the operator's persisted category prefs
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("reset"), true}};
+    }
+
+    if (action == QLatin1String("tail")) {
+        // "[n] [since=<seq>]" — newest n events, optionally only seq > since.
+        int n = 100;
+        quint64 since = 0;
+        for (const QString& tokn : arg.split(QLatin1Char(' '), Qt::SkipEmptyParts)) {
+            if (tokn.startsWith(QLatin1String("since=")))
+                since = tokn.mid(6).toULongLong();
+            else
+                n = tokn.toInt();
+        }
+        if (n <= 0) n = 100;
+        QJsonArray arr;
+        quint64 curSeq;
+        {
+            QMutexLocker lk(&m_logMutex);
+            curSeq = m_logSeq;
+            for (const auto& e : m_logRing)
+                if (e.seq > since)
+                    arr.append(logEventToJson(e));
+        }
+        while (arr.size() > n)              // keep the newest n
+            arr.removeFirst();
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("events"), arr},
+                           {QStringLiteral("seq"), static_cast<qint64>(curSeq)}};
+    }
+
+    if (action == QLatin1String("subscribe")) {
+        if (!sock)
+            return err(QStringLiteral("subscribe requires a connected client"));
+        QMutexLocker lk(&m_logMutex);
+        m_logSubscribers.insert(sock, m_logSeq);  // stream events from now on
+        if (m_logDrain && !m_logDrain->isActive())
+            m_logDrain->start();
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("subscribed"), true},
+                           {QStringLiteral("seq"), static_cast<qint64>(m_logSeq)}};
+    }
+
+    if (action == QLatin1String("unsubscribe")) {
+        const bool was = sock && m_logSubscribers.remove(sock) > 0;
+        if (m_logSubscribers.isEmpty() && m_logDrain)
+            m_logDrain->stop();
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("subscribed"), false},
+                           {QStringLiteral("was"), was}};
+    }
+
+    return err(QStringLiteral("log action must be "
+                              "categories|get|set|reset|tail|subscribe|unsubscribe"));
+}
+
+QJsonObject AutomationServer::doMark(const QString& text)
+{
+    // qCInfo runs the installed handler synchronously on this (main) thread, so
+    // by the time it returns the tap has already assigned the marker its seq —
+    // letting a driver bracket actions with `mark` then `log tail since=<seq>`.
+    qCInfo(lcAutomation).noquote() << "MARK" << text;
+    QMutexLocker lk(&m_logMutex);
+    const qint64 mono = m_logRing.empty() ? 0 : m_logRing.back().monoUs;
+    return QJsonObject{{QStringLiteral("ok"), true},
+                       {QStringLiteral("seq"), static_cast<qint64>(m_logSeq)},
+                       {QStringLiteral("mono_us"), mono},
+                       {QStringLiteral("text"), text}};
+}
+
+void AutomationServer::onLogDrain()
+{
+    if (m_logSubscribers.isEmpty()) {
+        if (m_logDrain) m_logDrain->stop();
+        return;
+    }
+
+    // Copy just the new tail once, under the lock, then write to sockets
+    // outside it so logging threads are never blocked on socket I/O.
+    quint64 minLast = std::numeric_limits<quint64>::max();
+    for (const quint64 v : m_logSubscribers)
+        minLast = std::min(minLast, v);
+
+    std::deque<LogEvent> fresh;
+    quint64 curSeq;
+    {
+        QMutexLocker lk(&m_logMutex);
+        curSeq = m_logSeq;
+        for (const auto& e : m_logRing)
+            if (e.seq > minLast)
+                fresh.push_back(e);
+    }
+    if (fresh.empty())
+        return;
+
+    for (auto it = m_logSubscribers.begin(); it != m_logSubscribers.end(); ++it) {
+        QLocalSocket* s = it.key();
+        const quint64 last = it.value();
+        for (const auto& e : fresh) {
+            if (e.seq <= last)
+                continue;
+            s->write(QJsonDocument(logEventToJson(e)).toJson(QJsonDocument::Compact));
+            s->write("\n");
+        }
+        s->flush();
+        it.value() = curSeq;
+    }
 }
 } // namespace AetherSDR

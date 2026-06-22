@@ -185,8 +185,32 @@ void LogManager::enqueueMessage(QtMsgType type, const QMessageLogContext& ctx, c
         : QStringLiteral("default");
 
     m_writer.enqueue(type, QTime::currentTime(), category, msg);
+
+    // Fan out to diagnostic taps (automation event channel). Held under the
+    // tap mutex; taps are documented as cheap and non-logging, so there is no
+    // re-entrancy. The hash is empty in normal runs, so this is near-free.
+    {
+        QMutexLocker lk(&m_tapMutex);
+        for (const auto& tap : m_taps)
+            tap(type, category, msg);
+    }
+
     if (type == QtFatalMsg)
         m_writer.flush();
+}
+
+int LogManager::addTap(LogTap tap)
+{
+    QMutexLocker lk(&m_tapMutex);
+    const int id = m_nextTapId++;
+    m_taps.insert(id, std::move(tap));
+    return id;
+}
+
+void LogManager::removeTap(int id)
+{
+    QMutexLocker lk(&m_tapMutex);
+    m_taps.remove(id);
 }
 
 void LogManager::flushLog() const

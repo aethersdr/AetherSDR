@@ -4,7 +4,11 @@
 #include <QHash>
 #include <QPointer>
 #include <QByteArray>
+#include <QElapsedTimer>
+#include <QMutex>
 #include <QString>
+
+#include <deque>
 
 class QLocalServer;
 class QLocalSocket;
@@ -98,10 +102,15 @@ private slots:
     // it has been keyed continuously past the limit, so a hung/abandoned
     // automation script can never leave a live transmitter on.
     void onTxWatchdog();
+    // Push queued log events to subscribed clients (log subscribe). Runs on the
+    // main thread so QLocalSocket writes are thread-confined; the tap that fills
+    // the ring runs on arbitrary logging threads.
+    void onLogDrain();
 
 private:
-    // Dispatch a single request line and return the response object.
-    QJsonObject handleLine(const QByteArray& line);
+    // Dispatch a single request line and return the response object. The socket
+    // is needed for stateful per-client verbs (log subscribe/unsubscribe).
+    QJsonObject handleLine(const QByteArray& line, QLocalSocket* sock);
 
     QJsonObject doDumpTree() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
@@ -119,6 +128,12 @@ private:
     // Slice lifecycle (add/remove/select) and VFO tuning — RX/config, no keying.
     QJsonObject doSlice(const QString& action, const QString& arg);
     QJsonObject doTune(const QString& value);
+    // Observability suite (#3646): runtime log-category control, ring-buffer
+    // tail, push subscription, and timeline markers. All diagnostic, no keying.
+    QJsonObject doLog(const QString& action, const QString& arg, QLocalSocket* sock);
+    QJsonObject doMark(const QString& text);
+    struct LogEvent;
+    static QJsonObject logEventToJson(const LogEvent& e);  // redacts on egress
 
     // Resolve a target string to a widget: exact objectName first, then
     // class name (with or without namespace) or accessibleName.
@@ -136,6 +151,24 @@ private:
     int     m_txMaxKeyMs{20000};   // max continuous key time before force-unkey
     int     m_txMaxPower{-1};      // power-ceiling clamp for invoke (-1 = off)
     bool    m_txAllowed{false};    // AETHER_AUTOMATION_ALLOW_TX at start()
+    // Log/event channel (#3646 observability suite). The tap fills m_logRing
+    // from arbitrary logging threads; the main thread reads it for tail/drain.
+    struct LogEvent {
+        quint64 seq{0};
+        qint64  monoUs{0};   // process-monotonic microseconds (jitter-grade)
+        QString wall;        // HH:mm:ss.zzz, to line up with the log file
+        int     type{0};     // QtMsgType
+        QString cat;
+        QString msg;         // raw; PII-redacted only on egress
+    };
+    int            m_logTapId{-1};
+    QElapsedTimer  m_monoClock;            // started in start()
+    mutable QMutex m_logMutex;             // guards m_logRing / m_logSeq
+    std::deque<LogEvent> m_logRing;
+    quint64        m_logSeq{0};
+    QHash<QLocalSocket*, quint64> m_logSubscribers;  // sock -> last seq sent
+    QTimer*        m_logDrain{nullptr};
+    static constexpr int kLogRingMax = 8000;
 };
 
 } // namespace AetherSDR
