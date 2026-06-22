@@ -74,15 +74,20 @@ class Tx:
 
     @staticmethod
     def meter_from_all(m, name):
-        """Return (value, age_ms) for a named meter from the 'all' table, picking
-        the freshest instance (disambiguates duplicate-named meters)."""
+        """Return (value, age_ms, reliable) for a named meter from the 'all'
+        table, picking the freshest instance (disambiguates duplicate-named
+        meters). `reliable` is False if the bridge flagged the meter known-bad
+        for this radio (e.g. PACURRENT clipping on FLEX-8000, #3729)."""
         best = (None, None)
+        reliable = True
         for x in m.get("all", []):
             if x.get("name") == name and x.get("has_value"):
+                if x.get("reliable") is False:
+                    reliable = False
                 age = x.get("age_ms", -1)
                 if age is not None and age >= 0 and (best[1] is None or age < best[1]):
                     best = (x.get("value"), age)
-        return best
+        return best[0], best[1], reliable
 
     def ensure_atu_bypass(self):
         st = self.g("transmit", "atuStatus")
@@ -102,6 +107,7 @@ def sample_window(tx, dur=1.4, settle=0.2):
     PACURRENT/ALC over the window. Returns a dict of aggregates + freshness."""
     fwd, swr, temp, volts, alc = [], [], [], [], []
     pacur = None  # (value, age) freshest
+    pacur_reliable = True
     micp = []
     t0 = time.monotonic()
     while time.monotonic() - t0 < dur:
@@ -113,19 +119,24 @@ def sample_window(tx, dur=1.4, settle=0.2):
                 swr.append(m.get("swr", 0))
             temp.append(m.get("paTemp", 0)); volts.append(m.get("supplyVolts", 0))
             alc.append(m.get("swAlc", -150))
-            pv, pa = Tx.meter_from_all(m, "PACURRENT")
+            pv, pa, prel = Tx.meter_from_all(m, "PACURRENT")
+            if not prel:
+                pacur_reliable = False
             if pv is not None and pa is not None and pa < FRESH_MS:
                 if pacur is None or pv > pacur[0]:
                     pacur = (pv, pa)
             micp.append(m.get("micPeak", -150))
         time.sleep(0.12)
+    # Don't report a number the radio says is unreliable (e.g. clipped PACURRENT)
+    pa_out = ("unreliable" if not pacur_reliable
+              else round(pacur[0], 2) if pacur else "stale")
     return {
         "fwd": round(statistics.median(fwd), 1) if fwd else None,
         "swr": round(statistics.median(swr), 2) if swr else None,
         "paTemp": round(max(temp), 1) if temp else None,
         "volts": round(statistics.median(volts), 2) if volts else None,
         "alc": round(max(alc), 1) if alc else None,
-        "paCurrent": round(pacur[0], 2) if pacur else "stale",
+        "paCurrent": pa_out,
         "n_fwd": len(fwd),
     }
 

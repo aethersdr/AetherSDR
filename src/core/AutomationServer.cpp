@@ -406,16 +406,47 @@ QJsonObject equalizerSnapshot(const EqualizerModel* e)
     };
 }
 
+// Annotate meters known to be unreliable on the connected radio, mirroring the
+// curation the UI already does, so a consumer of the raw `all` table doesn't
+// trust a bad reading. Today this is exactly one entry: PACURRENT on the
+// FLEX-8000 series, where the declared 10 A meter range is below real PA draw so
+// it clips (SMART-11281) — the GUI omits it (see MeterApplet.h), and freshness
+// (age_ms) can't catch a fresh-but-clipped value. Keep this list in sync with
+// the UI; it is intentionally a small explicit table, not a heuristic. (#3729)
+QString unreliableMeterNote(const QString& meterName, const QString& radioModel)
+{
+    if (meterName == QLatin1String("PACURRENT")
+        && radioModel.startsWith(QStringLiteral("FLEX-8"))) {
+        return QStringLiteral("clips at the declared 10A cap on FLEX-8000 series "
+                              "(SMART-11281); omitted from the UI — do not trust");
+    }
+    return QString();
+}
+
 // Live meter readout. The flat convenience fields are the headline TX meters
 // with their freshness age (ms since last update, -1 if never) so a reader can
 // reject stale values — critical because some meters (notably PACURRENT) are
 // only reported ~1 s into a transmit. `all` carries every defined meter with
 // per-meter index/source_index/age_ms so duplicate-named meters (one live, one
-// floored) are distinguishable. (#3646)
-QJsonObject metersSnapshot(MeterModel* m)
+// floored) are distinguishable, plus a `reliable:false`+`note` flag on meters
+// known-bad for the connected radio. (#3646, #3729)
+QJsonObject metersSnapshot(MeterModel* m, const QString& radioModel)
 {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
     auto age = [now](qint64 ts) -> qint64 { return ts > 0 ? now - ts : -1; };
+
+    QJsonArray all = m->allMeters();
+    for (int i = 0; i < all.size(); ++i) {
+        QJsonObject meter = all[i].toObject();
+        const QString note = unreliableMeterNote(meter.value(QStringLiteral("name")).toString(),
+                                                 radioModel);
+        if (!note.isEmpty()) {
+            meter[QStringLiteral("reliable")] = false;
+            meter[QStringLiteral("note")]     = note;
+            all[i] = meter;
+        }
+    }
+
     return QJsonObject{
         {QStringLiteral("fwdPower"),        m->fwdPower()},           // Watts (smoothed)
         {QStringLiteral("fwdPowerInstant"), m->fwdPowerInstant()},    // Watts (peak)
@@ -434,7 +465,7 @@ QJsonObject metersSnapshot(MeterModel* m)
         {QStringLiteral("sLevel"),          m->sLevel()},             // dBm
         {QStringLiteral("txMetersFresh"),   m->hasRecentTxMeters(2000)},
         {QStringLiteral("txMetersAgeMs"),   age(m->txMetersUpdatedAtMs())},
-        {QStringLiteral("all"),             m->allMeters()},          // every meter + age_ms
+        {QStringLiteral("all"),             all},                     // every meter + age_ms + reliability
     };
 }
 
@@ -926,7 +957,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
     } else if (model == QLatin1String("equalizer") || model == QLatin1String("eq")) {
         data = equalizerSnapshot(&radio->equalizerModel());
     } else if (model == QLatin1String("meters")) {
-        data = metersSnapshot(&radio->meterModel());
+        data = metersSnapshot(&radio->meterModel(), radio->model());
     } else if (model == QLatin1String("slices")) {
         QJsonArray arr;
         for (const SliceModel* s : radio->slices()) arr.append(sliceSnapshot(s));
