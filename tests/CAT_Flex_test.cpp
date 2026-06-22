@@ -204,6 +204,14 @@ static QString hz11(qint64 hz)
     return QStringLiteral("%1").arg(hz, 11, 10, QChar('0'));
 }
 
+// Does this port have a usable VFO B? ZZFB returns its frequency when present, or
+// "?" (NOT_ENABLED) on a single-VFO port / when the VFO B slice isn't open. Single
+// definition so the split-section gates can't drift apart.
+static bool hasVfoB(CatClient& c)
+{
+    return c.query(QStringLiteral("ZZFB")).startsWith(QLatin1String("ZZFB"));
+}
+
 static bool isDigits(const QString& s, int n)
 {
     if (s.size() != n) return false;
@@ -600,7 +608,7 @@ void section8(CatClient& c, Runner& r)
     // read stream if issued with send(). Detect VFO B; when absent, verify the
     // NOT_ENABLED behavior with query() (consuming the "?") and return, keeping
     // the stream in sync.
-    const bool vfoB = c.query(QStringLiteral("ZZFB")).startsWith(QLatin1String("ZZFB"));
+    const bool vfoB = hasVfoB(c);
     if (!vfoB) {
         const QString sw0 = c.query(QStringLiteral("ZZSW"));
         r.check(QStringLiteral("8.1  ZZSW; → ZZSW0 (split off, single VFO)"),
@@ -862,7 +870,7 @@ void section12(CatClient& c, Runner& r)
     // 12.7/12.8 cross-check FT<->ZZSW split agreement — needs a usable VFO B. On a
     // single-VFO port split can't engage (FT1 → "?"), so skip to avoid desyncing
     // the stream; the NOT_ENABLED behavior is covered in section 8.
-    if (c.query(QStringLiteral("ZZFB")).startsWith(QLatin1String("ZZFB"))) {
+    if (hasVfoB(c)) {
         c.send(QStringLiteral("FT1"));
         resp = c.query(QStringLiteral("ZZSW"));
         r.check(QStringLiteral("12.7 set split via FT1; → ZZSW; → ZZSW1"),

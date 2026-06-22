@@ -204,6 +204,13 @@ static QString hz11(qint64 hz)
     return QStringLiteral("%1").arg(hz, 11, 10, QChar('0'));
 }
 
+// Does this port have a usable VFO B? FB returns its frequency when present, or "?"
+// (NOT_ENABLED) on a single-VFO port / when the VFO B slice isn't open.
+static bool hasVfoB(CatClient& c)
+{
+    return c.query(QStringLiteral("FB")).startsWith(QLatin1String("FB"));
+}
+
 static bool isDigits(const QString& s, int n)
 {
     if (s.size() != n) return false;
@@ -527,7 +534,7 @@ void section7(CatClient& c, Runner& r)
     // (NOT_ENABLED) instead of a silent ack — which would desync the read stream
     // if issued with send(). Detect VFO B; when absent, verify NOT_ENABLED with
     // query() (consuming the "?") and return, keeping the stream in sync.
-    const bool vfoB = c.query(QStringLiteral("FB")).startsWith(QLatin1String("FB"));
+    const bool vfoB = hasVfoB(c);
     if (!vfoB) {
         const QString ft0 = c.query(QStringLiteral("FT"));
         r.check(QStringLiteral("7.1  FT; → FT0 (split off, single VFO)"),
