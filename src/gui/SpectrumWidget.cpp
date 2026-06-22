@@ -9487,7 +9487,7 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
 
     const QRect liveRect = waterfallLiveButtonRect(wfRect);
     p.setPen(AetherSDR::ThemeManager::instance().color("color.meter.bar.fill"));
-    p.setBrush(m_wfLive ? AetherSDR::ThemeManager::instance().color("color.text.label") : AetherSDR::ThemeManager::instance().color("color.accent.danger"));
+    p.setBrush(m_wfLive ? AetherSDR::ThemeManager::instance().color("color.accent.danger") : AetherSDR::ThemeManager::instance().color("color.text.label"));
     p.drawRoundedRect(liveRect, 3, 3);
 
     QFont liveFont = p.font();
