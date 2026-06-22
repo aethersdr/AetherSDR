@@ -258,9 +258,15 @@ void MainWindow::onSliceAdded(SliceModel* s)
             const QString key = QString("DaxChannel_Slice%1").arg(QChar('A' + sliceIdx));
             int savedDax = AppSettings::instance().value(key, "0").toInt();
             if (savedDax > 0) {
-                QTimer::singleShot(300, this, [this, s, savedDax]() {
-                    if (s && !profileLoadRadioStateWritesHeld()) {
-                        s->setDaxChannel(savedDax);
+                // QPointer guards against a dangling slice: a raw SliceModel*
+                // stays non-null after the slice is destroyed, so the `s &&`
+                // check below is only meaningful if the capture auto-nulls.
+                // Removing the slice within this 300 ms window (rapid
+                // add/remove) would otherwise dereference freed memory. (#3646)
+                QPointer<SliceModel> sp(s);
+                QTimer::singleShot(300, this, [this, sp, savedDax]() {
+                    if (sp && !profileLoadRadioStateWritesHeld()) {
+                        sp->setDaxChannel(savedDax);
                     }
                 });
             }
