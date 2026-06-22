@@ -2387,7 +2387,11 @@ void VfoWidget::setMeterMenuOpen(bool open)
     if (open) {
         closeActiveTab();  // mutual exclusion with the DSP/Mode/... tabs
     }
-    adjustSize();  // S-Meter/SmartMTR + menu-row heights → refit the flag
+    // Refit via relayoutToCurrentContent(), not adjustSize(): the post-#3706
+    // layout pins the flag with setFixedHeight(), so a bare adjustSize() can't
+    // grow it to make room for the menu row. relayoutToCurrentContent() first
+    // clears the min/max clamp, then recomputes and re-pins. (#SmartMTR)
+    relayoutToCurrentContent();
     update();      // repaint the meter-strip underline
     // The flag composites over the GPU spectrum (QRhiWidget); our update()
     // doesn't refresh the parent's texture, so force a recomposite, same as
@@ -3159,7 +3163,10 @@ void VfoWidget::applyMeterView(bool smartMtr)
     syncMeterMenuButtons();
     syncSmartMtrSettingsState();  // options are SmartMTR-only → enable/disable
     pushSmartMtrOptions();  // refresh extremes + label-overlay visibility for the view
-    adjustSize();  // S-Meter and SmartMTR pages may differ in height → resize the flag
+    // Resize via relayoutToCurrentContent() (clears the post-#3706 fixed-height
+    // clamp before re-pinning) — a bare adjustSize() can't grow the flag for the
+    // taller SmartMTR page. (#SmartMTR)
+    relayoutToCurrentContent();
     update();  // repaint the painted S-meter bar (or clear it)
     // Recomposite over the GPU spectrum so the switched meter is visible while
     // the menu stays open (QRhiWidget — see mousePressEvent). (#SmartMTR)
