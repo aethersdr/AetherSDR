@@ -118,6 +118,7 @@ Each `<node>`:
   "value": "42",                           // best-effort; see below
   "range": { "min": 0, "max": 100 },       // numeric controls only (slider/spinbox)
   "keying": true,                          // present only on TX-keying controls (invoke refuses these)
+  "actions": [ <action>, … ],              // QMenu only: popup actions and state
   "children": [ <node>, … ]                // present only if non-empty
 }
 ```
@@ -140,7 +141,15 @@ for common controls so you can assert without a screenshot:
 | `QSpinBox` / `QDoubleSpinBox` | numeric value |
 | `QProgressBar` | numeric value |
 | `QLabel` | its text |
+| `QAction` inside a `QMenu` | label text, or `"checked"` / `"unchecked"` for checkable actions |
 | containers / custom-painted surfaces | omitted |
+
+`QMenu` nodes also expose their `QAction` entries as action objects under
+`actions` and as synthetic `children`, so popup menus can be inspected while
+another request is blocked inside `QMenu::exec()`. Action objects include the
+display `text`, check state, enabled/visible state, global `geometry` when the
+menu is visible, and metadata such as `toolTip`, `statusTip`, and `data` when
+present.
 
 ### `grab`
 PNG capture of a single widget.
@@ -185,6 +194,8 @@ the no-op is an explicit, assertable signal.
 | `setText` | `QLineEdit` | the text |
 | `setCurrentText` | `QComboBox` | item text |
 | `setCurrentIndex` | `QComboBox` | integer index |
+| `trigger` / `click` | visible `QMenu` `QAction` | — |
+| `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
 
 <a name="tx-safety"></a>
 > **🚨 TX safety.** `invoke` **refuses any control that keys the transmitter**,
@@ -262,6 +273,9 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
    `"Master volume"`.
 4. **Button text** — last resort, e.g. `"Send"`, `"Transmit"`. Lowest priority,
    so a real objectName/accessibleName always wins; first match in tree order.
+5. **Visible popup-menu action** — exact `QAction` objectName, visible text,
+   tooltip, status tip, or data value. Use `invoke <label-or-data> trigger` to
+   choose a menu item.
 
 To find a target: run `dumpTree`, search the JSON for the `accessibleName` or
 `class` you want, and use its `objectName` if it has one. Roughly half of

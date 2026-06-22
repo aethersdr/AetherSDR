@@ -3,10 +3,14 @@
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 
+#include <QAction>
 #include <QLocalServer>
 #include <QLocalSocket>
 #include <QApplication>
 #include <QWidget>
+#include <QMenu>
+#include <QMouseEvent>
+#include <QPointer>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -43,6 +47,113 @@
 namespace AetherSDR {
 
 namespace {
+
+struct ResolvedAction {
+    QPointer<QAction> action;
+    QPointer<QMenu> menu;
+};
+
+QString actionDisplayText(const QAction* action)
+{
+    QString text = action->text();
+    const int shortcutStart = text.indexOf(QLatin1Char('\t'));
+    if (shortcutStart >= 0) {
+        text.truncate(shortcutStart);
+    }
+
+    QString stripped;
+    stripped.reserve(text.size());
+    for (int i = 0; i < text.size(); ++i) {
+        if (text.at(i) == QLatin1Char('&')) {
+            if (i + 1 < text.size() && text.at(i + 1) == QLatin1Char('&')) {
+                stripped.append(QLatin1Char('&'));
+                ++i;
+            }
+            continue;
+        }
+        stripped.append(text.at(i));
+    }
+    return stripped.trimmed();
+}
+
+QString actionDataText(const QAction* action)
+{
+    const QVariant data = action->data();
+    if (!data.isValid() || data.isNull()) {
+        return QString();
+    }
+    return data.toString();
+}
+
+QString actionValue(const QAction* action)
+{
+    if (action->isCheckable()) {
+        return action->isChecked() ? QStringLiteral("checked")
+                                   : QStringLiteral("unchecked");
+    }
+    return actionDisplayText(action);
+}
+
+QJsonObject describeAction(const QAction* action, const QMenu* owner)
+{
+    QJsonObject o;
+    o[QStringLiteral("class")] = QStringLiteral("QAction");
+    o[QStringLiteral("role")] = QStringLiteral("action");
+    o[QStringLiteral("enabled")] = action->isEnabled();
+    o[QStringLiteral("visible")] = action->isVisible();
+
+    if (!action->objectName().isEmpty()) {
+        o[QStringLiteral("objectName")] = action->objectName();
+    }
+
+    const QString text = actionDisplayText(action);
+    if (!text.isEmpty()) {
+        o[QStringLiteral("text")] = text;
+        o[QStringLiteral("accessibleName")] = text;
+    }
+
+    const QString val = actionValue(action);
+    if (!val.isNull()) {
+        o[QStringLiteral("value")] = val;
+    }
+
+    if (action->isSeparator()) {
+        o[QStringLiteral("separator")] = true;
+    }
+    if (action->isCheckable()) {
+        o[QStringLiteral("checkable")] = true;
+        o[QStringLiteral("checked")] = action->isChecked();
+    }
+    if (action->menu()) {
+        o[QStringLiteral("hasMenu")] = true;
+    }
+    if (!action->toolTip().isEmpty()) {
+        o[QStringLiteral("toolTip")] = action->toolTip();
+    }
+    if (!action->statusTip().isEmpty()) {
+        o[QStringLiteral("statusTip")] = action->statusTip();
+    }
+
+    const QString data = actionDataText(action);
+    if (!data.isEmpty()) {
+        o[QStringLiteral("data")] = data;
+    }
+
+    if (owner && owner->isVisible()) {
+        const QRect r = owner->actionGeometry(const_cast<QAction*>(action));
+        if (r.isValid() && !r.isEmpty()) {
+            const QPoint gp = owner->mapToGlobal(r.topLeft());
+            QJsonObject geo;
+            geo[QStringLiteral("x")] = gp.x();
+            geo[QStringLiteral("y")] = gp.y();
+            geo[QStringLiteral("w")] = r.width();
+            geo[QStringLiteral("h")] = r.height();
+            o[QStringLiteral("geometry")] = geo;
+        }
+    }
+
+    return o;
+}
 
 // Human-meaningful "value" for a control, so an assertion can read state
 // without a screenshot. Returns a null QString for widgets that have no
@@ -135,6 +246,19 @@ QJsonObject describeWidget(const QWidget* w)
         if (auto* cw = qobject_cast<const QWidget*>(child))
             kids.append(describeWidget(cw));
     }
+
+    if (auto* menu = qobject_cast<const QMenu*>(w)) {
+        QJsonArray actions;
+        for (const QAction* action : menu->actions()) {
+            const QJsonObject actionNode = describeAction(action, menu);
+            actions.append(actionNode);
+            kids.append(actionNode);
+        }
+        if (!actions.isEmpty()) {
+            o[QStringLiteral("actions")] = actions;
+        }
+    }
+
     if (!kids.isEmpty())
         o[QStringLiteral("children")] = kids;
 
@@ -176,6 +300,70 @@ QWidget* matchByButtonText(QWidget* w, const QString& target)
         }
     }
     return nullptr;
+}
+
+bool actionMatchesTarget(const QAction* action, const QString& target)
+{
+    return action->objectName() == target
+        || action->text() == target
+        || actionDisplayText(action) == target
+        || action->toolTip() == target
+        || action->statusTip() == target
+        || actionDataText(action) == target;
+}
+
+ResolvedAction matchMenuAction(QMenu* menu, const QString& target)
+{
+    for (QAction* action : menu->actions()) {
+        if (!action->isVisible()) {
+            continue;
+        }
+        if (actionMatchesTarget(action, target)) {
+            return {action, menu};
+        }
+        if (QMenu* submenu = action->menu()) {
+            const ResolvedAction match = matchMenuAction(submenu, target);
+            if (match.action) {
+                return match;
+            }
+        }
+    }
+    return {};
+}
+
+ResolvedAction matchActionRecursive(QWidget* w, const QString& target)
+{
+    if (auto* menu = qobject_cast<QMenu*>(w)) {
+        if (menu->isVisible()) {
+            const ResolvedAction match = matchMenuAction(menu, target);
+            if (match.action) {
+                return match;
+            }
+        }
+    }
+
+    const QObjectList children = w->children();
+    for (QObject* child : children) {
+        if (auto* cw = qobject_cast<QWidget*>(child)) {
+            const ResolvedAction match = matchActionRecursive(cw, target);
+            if (match.action) {
+                return match;
+            }
+        }
+    }
+    return {};
+}
+
+ResolvedAction resolveVisibleAction(const QString& target)
+{
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    for (QWidget* tlw : tops) {
+        const ResolvedAction match = matchActionRecursive(tlw, target);
+        if (match.action) {
+            return match;
+        }
+    }
+    return {};
 }
 
 // Capture a widget to an image. The QRhi panadapter needs a framebuffer
@@ -252,6 +440,89 @@ bool isTransmitControl(const QWidget* w)
         }
     }
     return false;
+}
+
+bool hasOwnTransmitMarker(const QObject* object)
+{
+    return object && object->property(kTxKeyingProperty).toBool();
+}
+
+bool isTransmitAction(const QAction* action, const QMenu* owner)
+{
+    if (hasOwnTransmitMarker(action) || hasOwnTransmitMarker(owner)) {
+        return true;
+    }
+
+    static const QStringList kDeny = {
+        QStringLiteral("mox"), QStringLiteral("ptt"),
+        QStringLiteral("transmit"), QStringLiteral("cwx"),
+    };
+
+    // QAction labels such as "Tune to <spot>" and tooltips like "Next Tune
+    // press transmits..." describe RX tuning or future behavior, not this
+    // action keying TX. Keep the fallback narrow; real keying actions should
+    // be marked explicitly with kTxKeyingProperty.
+    QStringList hay{
+        action->objectName().toLower(),
+        actionDisplayText(action).toLower(),
+    };
+
+    for (const QString& h : hay) {
+        for (const QString& d : kDeny) {
+            if (h.contains(d)) {
+                qCWarning(lcAutomation).noquote()
+                    << "TX guard fell back to QAction name match on"
+                    << actionDisplayText(action)
+                    << "— add an explicit TX marker at the action/menu creation site if it keys TX";
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool triggerMenuAction(QAction* action, QMenu* menu)
+{
+    if (!action || !menu) {
+        return false;
+    }
+
+    QPointer<QAction> actionGuard = action;
+    QPointer<QMenu> menuGuard = menu;
+    const QRect r = menu->actionGeometry(action);
+    if (menu->isVisible() && r.isValid() && !r.isEmpty()) {
+        const QPoint local = r.center();
+        const QPoint global = menu->mapToGlobal(local);
+        menu->setActiveAction(action);
+
+        QMouseEvent press(QEvent::MouseButtonPress,
+                          QPointF(local),
+                          QPointF(local),
+                          QPointF(global),
+                          Qt::LeftButton,
+                          Qt::LeftButton,
+                          Qt::NoModifier);
+        QCoreApplication::sendEvent(menu, &press);
+        if (!menuGuard || !actionGuard) {
+            return true;
+        }
+
+        QMouseEvent release(QEvent::MouseButtonRelease,
+                            QPointF(local),
+                            QPointF(local),
+                            QPointF(global),
+                            Qt::LeftButton,
+                            Qt::NoButton,
+                            Qt::NoModifier);
+        QCoreApplication::sendEvent(menu, &release);
+        return true;
+    }
+
+    action->trigger();
+    if (menuGuard && menuGuard->isVisible()) {
+        menuGuard->close();
+    }
+    return true;
 }
 
 // ---- Model snapshots for get(). Hand-built from existing getters so we don't
@@ -658,22 +929,42 @@ void AutomationServer::onNewConnection()
 
 void AutomationServer::onReadyRead()
 {
-    auto* sock = qobject_cast<QLocalSocket*>(sender());
-    if (!sock || !m_buffers.contains(sock))
+    QPointer<QLocalSocket> sock = qobject_cast<QLocalSocket*>(sender());
+    if (!sock || !m_buffers.contains(sock)) {
         return;
+    }
 
-    QByteArray& buf = m_buffers[sock];
-    buf.append(sock->readAll());
+    m_buffers[sock].append(sock->readAll());
 
-    int nl;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-        const QByteArray line = buf.left(nl);
-        buf.remove(0, nl + 1);
-        if (line.trimmed().isEmpty())
+    while (sock && m_buffers.contains(sock)) {
+        QByteArray line;
+        {
+            QByteArray& buf = m_buffers[sock];
+            const int nl = buf.indexOf('\n');
+            if (nl < 0) {
+                break;
+            }
+            line = buf.left(nl);
+            buf.remove(0, nl + 1);
+        }
+        if (line.trimmed().isEmpty()) {
             continue;
+        }
         const QJsonObject resp = handleLine(line, sock);
-        sock->write(QJsonDocument(resp).toJson(QJsonDocument::Compact));
-        sock->write("\n");
+        if (!sock || !m_buffers.contains(sock)
+            || sock->state() == QLocalSocket::UnconnectedState) {
+            qCDebug(lcAutomation)
+                << "dropping automation response because client disconnected during request";
+            return;
+        }
+
+        QByteArray payload = QJsonDocument(resp).toJson(QJsonDocument::Compact);
+        payload.append('\n');
+        if (sock->write(payload) < 0) {
+            qCWarning(lcAutomation) << "failed to write automation response:"
+                                    << sock->errorString();
+            return;
+        }
         sock->flush();
     }
 }
@@ -925,8 +1216,76 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
                                        const QString& value) const
 {
     QWidget* w = resolveWidget(target);
-    if (!w)
-        return err(QStringLiteral("widget not found: ") + target);
+    if (!w) {
+        const ResolvedAction resolved = resolveVisibleAction(target);
+        QAction* menuAction = resolved.action;
+        QMenu* menu = resolved.menu;
+        if (!menuAction) {
+            return err(QStringLiteral("widget or visible menu action not found: ") + target);
+        }
+
+        if (menuAction->isSeparator()) {
+            return err(QStringLiteral("action '") + target + QStringLiteral("' is a separator"));
+        }
+        if (!menuAction->isEnabled()) {
+            return err(QStringLiteral("action '") + target + QStringLiteral("' is disabled"));
+        }
+
+        if (isTransmitAction(menuAction, menu)
+            && !qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")) {
+            qCWarning(lcAutomation).noquote()
+                << "BLOCKED transmit-related QAction invoke on" << target;
+            return err(QStringLiteral("blocked: '") + target
+                       + QStringLiteral("' is a transmit-keying action (TX-safety guard). "
+                                        "Set AETHER_AUTOMATION_ALLOW_TX=1 to override."));
+        }
+
+        QPointer<QAction> actionGuard = menuAction;
+        const QString text = actionDisplayText(menuAction);
+        const QString data = actionDataText(menuAction);
+        bool done = false;
+        if (action == QLatin1String("trigger") || action == QLatin1String("click")
+            || action == QLatin1String("toggle")) {
+            done = triggerMenuAction(menuAction, menu);
+        } else if (action == QLatin1String("setChecked")) {
+            if (!menuAction->isCheckable()) {
+                return err(QStringLiteral("action '") + target
+                           + QStringLiteral("' is not checkable"));
+            }
+            menuAction->setChecked(parseBool(value));
+            done = true;
+        } else {
+            return err(QStringLiteral("unknown QAction action: ") + action
+                       + QStringLiteral(" (use trigger|click|toggle|setChecked)"));
+        }
+
+        if (!done) {
+            return err(QStringLiteral("failed to invoke QAction: ") + target);
+        }
+
+        qCInfo(lcAutomation).noquote()
+            << "invoke" << action << "on" << target << "(QAction)";
+
+        QJsonObject r{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("target"), target},
+            {QStringLiteral("class"), QStringLiteral("QAction")},
+            {QStringLiteral("action"), action},
+        };
+        if (!text.isEmpty()) {
+            r[QStringLiteral("text")] = text;
+        }
+        if (!data.isEmpty()) {
+            r[QStringLiteral("data")] = data;
+        }
+        if (actionGuard) {
+            const QString nv = actionValue(actionGuard);
+            if (!nv.isNull()) {
+                r[QStringLiteral("newValue")] = nv;
+            }
+        }
+        return r;
+    }
 
     // Refuse to drive a disabled control. Qt's setValue()/setChecked() still
     // mutate a disabled widget, so without this the bridge would report a happy
