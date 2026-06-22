@@ -555,6 +555,12 @@ void TransmitModel::setSpeechProcessorLevel(int level)
 
 void TransmitModel::setDax(bool on)
 {
+    // Optimistic local update mirroring the sibling mic setters; the radio's
+    // dax= status echo (parsed above, under the micChanged path) supersedes.
+    if (m_daxOn != on) {
+        m_daxOn = on;
+        emit micStateChanged();  // PhoneCwApplet's DAX button binds to this
+    }
     emit commandReady(QString("transmit set dax=%1").arg(on ? 1 : 0));
 }
 
