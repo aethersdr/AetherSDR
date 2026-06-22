@@ -9,11 +9,29 @@
 
 namespace AetherSDR::KiwiSdrProtocol {
 
+inline constexpr int kSquelchOffLevel = 0;
+inline constexpr int kSquelchUiMinLevel = 0;
+inline constexpr int kSquelchUiMaxLevel = 99;
+inline constexpr int kSquelchServerMinMarginDb = -99;
+inline constexpr int kSquelchServerMaxMarginDb = 99;
+inline constexpr double kSquelchDefaultTailSeconds = 0.0;
+inline constexpr int kAgcThresholdMinDb = -160;
+inline constexpr int kAgcThresholdMaxDb = 0;
+inline constexpr int kAgcManualGainMinDb = 0;
+inline constexpr int kAgcManualGainMaxDb = 100;
+inline constexpr int kAgcDecayMinMs = 20;
+inline constexpr int kAgcDecayMaxMs = 5000;
+inline constexpr int kAgcFastDecayMs = 300;
+inline constexpr int kAgcMedDecayMs = 1000;
+inline constexpr int kAgcSlowDecayMs = 3000;
+inline constexpr int kAgcSlopeDb = 6;
+
 struct SoundFrameHeader {
     int sequence{-1};
     quint8 flags{0};
     float rssiDbm{0.0f};
     bool hasRssi{false};
+    bool squelched{false};
     bool valid{false};
 };
 
@@ -87,6 +105,8 @@ struct MeterReading {
     QString sUnits;
     float relativeLevel{0.0f};
     bool hasRelativeLevel{false};
+    bool squelchStateKnown{false};
+    bool squelched{false};
     bool valid{false};
     MeterConfidence confidence{MeterConfidence::None};
     QString label{QStringLiteral("Meter unavailable")};
@@ -101,6 +121,12 @@ WaterfallAperture autoWaterfallAperture(const QVector<float>& binsDbm);
 float waterfallColorIndex(float dbm, float minDbm, float maxDbm);
 QVector<MsgToken> parseMsgTokens(const QString& message);
 IpLimitNotice parseIpLimitNotice(const QString& valueText);
+int squelchSliderLevelToMarginDb(int level);
+QString formatSquelchCommand(bool enabled, int thresholdDb,
+                             double tailSeconds = kSquelchDefaultTailSeconds);
+int agcDecayMsForMode(const QString& mode);
+QString formatAgcCommand(bool enabled, bool hang, int thresholdDb,
+                         int manualGainDb, int decayMs);
 MeterReading meterUnavailable(MeterSource source, const QString& notes = {});
 MeterReading extractMeterFromSndVerifiedLayout(const QByteArray& frame,
                                                const MeterContext& context);

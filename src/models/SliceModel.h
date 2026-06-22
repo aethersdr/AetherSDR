@@ -78,14 +78,38 @@ public:
     int     nrfLevel()    const { return m_nrfLevel; }
     int     anflLevel()   const { return m_anflLevel; }
     QString agcMode()      const { return m_agcMode; }
+    QString flexAgcMode()  const { return m_agcMode; }
+    QString receiveAgcMode() const { return m_externalReceiveAudioReplacement
+                                          ? m_externalReceiveAgcMode
+                                          : m_agcMode; }
     int     agcThreshold() const { return m_agcThreshold; }
+    int     flexAgcThreshold() const { return m_agcThreshold; }
+    int     receiveAgcThreshold() const { return m_externalReceiveAudioReplacement
+                                              ? m_externalReceiveAgcThreshold
+                                              : m_agcThreshold; }
     int     agcOffLevel()  const { return m_agcOffLevel; }
+    int     flexAgcOffLevel() const { return m_agcOffLevel; }
+    int     receiveAgcOffLevel() const { return m_externalReceiveAudioReplacement
+                                             ? m_externalReceiveAgcOffLevel
+                                             : m_agcOffLevel; }
     bool    audioMute()   const { return m_externalReceiveAudioReplacement
                                       ? m_externalReceiveAudioMute
                                       : m_audioMute; }
     bool    flexAudioMute() const { return m_audioMute; }
     bool    squelchOn()   const { return m_squelchOn; }
+    bool    flexSquelchOn() const { return m_squelchOn; }
+    bool    receiveSquelchOn() const { return m_externalReceiveAudioReplacement
+                                           ? m_externalReceiveSquelchOn
+                                           : m_squelchOn; }
+    bool    externalReceiveAutoSquelchOn() const
+    {
+        return m_externalReceiveAutoSquelch;
+    }
     int     squelchLevel()const { return m_squelchLevel; }
+    int     flexSquelchLevel() const { return m_squelchLevel; }
+    int     receiveSquelchLevel() const { return m_externalReceiveAudioReplacement
+                                              ? m_externalReceiveSquelchLevel
+                                              : m_squelchLevel; }
     bool    ritOn()       const { return m_ritOn; }
     int     ritFreq()     const { return m_ritFreq; }
     bool    xitOn()       const { return m_xitOn; }
@@ -123,6 +147,11 @@ public:
     void setAudioMute(bool mute);
     void setExternalReceiveAudioReplacementMute(bool active,
                                                 bool restoreMute = false);
+    void setExternalReceiveAutoSquelch(bool on);
+    bool externalReceiveReplacementActive() const
+    {
+        return m_externalReceiveAudioReplacement;
+    }
     void setDiversity(bool on);
     bool diversity() const { return m_diversity; }
     bool isDiversityChild() const { return m_diversityChild; }
@@ -249,7 +278,12 @@ signals:
     void escGainChanged(float gain);
     void escPhaseShiftChanged(float deg);
     void rfGainChanged(float gain);
+    void externalReceiveAgcModeChanged(const QString& mode);
+    void externalReceiveAgcThresholdChanged(int value);
+    void externalReceiveAgcOffLevelChanged(int value);
+    void externalReceiveAutoSquelchChanged(bool on);
     void squelchChanged(bool on, int level);
+    void externalReceiveSquelchChanged(bool on, int level);
     void stepChanged(int hz, const QVector<int>& stepList);
     void ritChanged(bool on, int hz);
     void xitChanged(bool on, int hz);
@@ -300,6 +334,14 @@ private:
     bool    m_externalReceiveAudioMute{false};
     float   m_externalReceiveAudioGain{70.0f};
     int     m_externalReceiveAudioPan{50};
+    QString m_externalReceiveAgcMode{"med"};
+    int     m_externalReceiveAgcThreshold{-100};
+    int     m_externalReceiveAgcOffLevel{50};
+    bool    m_externalReceiveAutoSquelch{false};
+    bool    m_externalReceiveSquelchOn{false};
+    // KiwiSDR does not report an initial squelch threshold. Start at the
+    // lowest manual UI level so first-enable cannot unexpectedly close audio.
+    int     m_externalReceiveSquelchLevel{0};
     bool    m_diversity{false};
     bool    m_diversityChild{false};
     bool    m_diversityParent{false};

@@ -178,13 +178,14 @@ QString TciProtocol::generateInitBurst()
 
             // SQL
             burst += QStringLiteral("sql_enable:%1,%2;")
-                         .arg(trx).arg(s->squelchOn() ? "true" : "false");
+                         .arg(trx)
+                         .arg(s->receiveSquelchOn() ? "true" : "false");
             burst += QStringLiteral("sql_level:%1,%2;")
-                         .arg(trx).arg(s->squelchLevel());
+                         .arg(trx).arg(s->receiveSquelchLevel());
 
             // AGC
             burst += QStringLiteral("agc_mode:%1,%2;")
-                         .arg(trx).arg(s->agcMode().toLower());
+                         .arg(trx).arg(s->receiveAgcMode().toLower());
 
             // DSP
             burst += QStringLiteral("rx_nb_enable:%1,%2;")
@@ -843,12 +844,13 @@ QString TciProtocol::cmdSqlEnable(const QStringList& args, bool isSet)
 
     if (!isSet) {
         return QStringLiteral("sql_enable:%1,%2;")
-                   .arg(trx).arg(s->squelchOn() ? "true" : "false");
+                   .arg(trx)
+                   .arg(s->receiveSquelchOn() ? "true" : "false");
     }
 
     if (args.size() < 2) return {};
     bool on = (args[1].toLower() == "true");
-    int level = s->squelchLevel();
+    int level = s->receiveSquelchLevel();
     QMetaObject::invokeMethod(s, [s, on, level]() { s->setSquelch(on, level); },
                               Qt::QueuedConnection);
 
@@ -866,12 +868,12 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
 
     if (!isSet) {
         return QStringLiteral("sql_level:%1,%2;")
-                   .arg(trx).arg(s->squelchLevel());
+                   .arg(trx).arg(s->receiveSquelchLevel());
     }
 
     if (args.size() < 2) return {};
     int level = args[1].toInt();
-    bool on = s->squelchOn();
+    bool on = s->receiveSquelchOn();
     QMetaObject::invokeMethod(s, [s, on, level]() { s->setSquelch(on, level); },
                               Qt::QueuedConnection);
 
@@ -993,7 +995,7 @@ QString TciProtocol::cmdAgcMode(const QStringList& args, bool isSet)
 
     if (!isSet) {
         return QStringLiteral("agc_mode:%1,%2;")
-                   .arg(trx).arg(s->agcMode().toLower());
+                   .arg(trx).arg(s->receiveAgcMode().toLower());
     }
 
     if (args.size() < 2) return {};
@@ -1016,7 +1018,7 @@ QString TciProtocol::cmdAgcGain(const QStringList& args, bool isSet)
 
     if (!isSet) {
         return QStringLiteral("agc_gain:%1,%2;")
-                   .arg(trx).arg(s->agcThreshold());
+                   .arg(trx).arg(s->receiveAgcThreshold());
     }
 
     if (args.size() < 2) return {};

@@ -22,6 +22,7 @@
 #include "MainWindowHelpers.h"
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
+#include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
 #include "core/MidiSettings.h"
 #include "core/UlanziDialBackend.h"
@@ -62,6 +63,72 @@ QString formatTMate2PowerSmallText(float watts)
 
     const int tenthsKw = std::clamp(static_cast<int>(std::lround(watts / 100.0f)), 10, 99);
     return QStringLiteral("%1k%2").arg(tenthsKw / 10).arg(tenthsKw % 10);
+}
+
+bool usesExternalReceiveControls(const SliceModel* slice)
+{
+    return slice && slice->externalReceiveReplacementActive();
+}
+
+int agcThresholdMinimumForSlice(const SliceModel* slice)
+{
+    return usesExternalReceiveControls(slice)
+        ? KiwiSdrProtocol::kAgcThresholdMinDb
+        : 0;
+}
+
+int agcThresholdMaximumForSlice(const SliceModel* slice)
+{
+    return usesExternalReceiveControls(slice)
+        ? KiwiSdrProtocol::kAgcThresholdMaxDb
+        : 100;
+}
+
+int controllerValueToAgcThreshold(const SliceModel* slice, float value)
+{
+    const float clamped = std::clamp(value, 0.0f, 100.0f);
+    if (!usesExternalReceiveControls(slice)) {
+        return static_cast<int>(std::lround(clamped));
+    }
+    constexpr float kUiSpan = 100.0f;
+    const float agcSpan =
+        static_cast<float>(KiwiSdrProtocol::kAgcThresholdMaxDb
+                           - KiwiSdrProtocol::kAgcThresholdMinDb);
+    return KiwiSdrProtocol::kAgcThresholdMinDb
+        + static_cast<int>(std::lround(clamped * agcSpan / kUiSpan));
+}
+
+float agcThresholdToControllerValue(const SliceModel* slice)
+{
+    if (!slice) {
+        return 0.0f;
+    }
+    if (!usesExternalReceiveControls(slice)) {
+        return static_cast<float>(slice->agcThreshold());
+    }
+    constexpr float kUiSpan = 100.0f;
+    const float agcSpan =
+        static_cast<float>(KiwiSdrProtocol::kAgcThresholdMaxDb
+                           - KiwiSdrProtocol::kAgcThresholdMinDb);
+    return std::clamp(
+        static_cast<float>(slice->receiveAgcThreshold()
+                           - KiwiSdrProtocol::kAgcThresholdMinDb)
+            * kUiSpan / agcSpan,
+        0.0f, kUiSpan);
+}
+
+int agcThresholdOverlayValue(const SliceModel* slice, int threshold)
+{
+    if (!usesExternalReceiveControls(slice)) {
+        return threshold;
+    }
+    return std::clamp(
+        static_cast<int>(std::lround(
+            static_cast<float>(threshold - KiwiSdrProtocol::kAgcThresholdMinDb)
+                * 100.0f
+                / static_cast<float>(KiwiSdrProtocol::kAgcThresholdMaxDb
+                                     - KiwiSdrProtocol::kAgcThresholdMinDb))),
+        0, 100);
 }
 
 QString tmate2EncoderDefaultAction(int encoderIndex)
@@ -406,7 +473,7 @@ void MainWindow::handleFlexControlButton(int button, int action)
     } else if (actionName == "ToggleAgc") {
         if (auto* s = activeSlice()) {
             static const char* modes[] = {"off", "slow", "med", "fast"};
-            const QString cur = s->agcMode().toLower();
+            const QString cur = s->receiveAgcMode().toLower();
             int idx = 0;
             for (int i = 0; i < 4; ++i) {
                 if (cur == modes[i]) { idx = i; break; }
@@ -896,7 +963,7 @@ void MainWindow::dispatchHidAction(const QString& actionName,
     } else if (actionName == "ToggleAgc") {
         if (auto* s = activeSlice()) {
             static const char* modes[] = {"off","slow","med","fast"};
-            const QString cur = s->agcMode().toLower();
+            const QString cur = s->receiveAgcMode().toLower();
             int idx = 0;
             for (int i = 0; i < 4; ++i) if (cur == modes[i]) { idx = i; break; }
             const int nextIdx = (idx + 1) % 4;
@@ -1337,10 +1404,17 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
 #endif
     } else if (actionId == "WheelAgcT") {
         if (auto* s = activeSlice()) {
-            const int next = std::clamp(s->agcThreshold() + steps, 0, 100);
+            const int current = usesExternalReceiveControls(s)
+                ? s->receiveAgcThreshold()
+                : s->agcThreshold();
+            const int next = std::clamp(
+                current + steps,
+                agcThresholdMinimumForSlice(s),
+                agcThresholdMaximumForSlice(s));
             s->setAgcThreshold(next);
 #ifdef HAVE_HIDAPI
-            triggerTMate2Overlay(TMate2Overlay::Agc, next);
+            triggerTMate2Overlay(
+                TMate2Overlay::Agc, agcThresholdOverlayValue(s, next));
 #endif
         }
     } else if (actionId == "WheelApf") {
@@ -1635,12 +1709,25 @@ void MainWindow::registerMidiParams()
         [this]() -> float { auto* s = activeSlice(); return s ? s->audioGain() : 0; });
 
     reg("rx.squelch", "Squelch Level", "RX", P::Slider, 0, 100,
-        [this](float v) { if (auto* s = activeSlice()) s->setSquelch(s->squelchOn(), static_cast<int>(v)); },
-        [this]() -> float { auto* s = activeSlice(); return s ? s->squelchLevel() : 0; });
+        [this](float v) {
+            if (auto* s = activeSlice()) {
+                s->setSquelch(s->receiveSquelchOn(), static_cast<int>(v));
+            }
+        },
+        [this]() -> float {
+            auto* s = activeSlice();
+            return s ? s->receiveSquelchLevel() : 0;
+        });
 
     reg("rx.agcThreshold", "AGC Threshold", "RX", P::Slider, 0, 100,
-        [this](float v) { if (auto* s = activeSlice()) s->setAgcThreshold(static_cast<int>(v)); },
-        [this]() -> float { auto* s = activeSlice(); return s ? s->agcThreshold() : 0; });
+        [this](float v) {
+            if (auto* s = activeSlice()) {
+                s->setAgcThreshold(controllerValueToAgcThreshold(s, v));
+            }
+        },
+        [this]() -> float {
+            return agcThresholdToControllerValue(activeSlice());
+        });
 
     reg("rx.audioPan", "Audio Pan", "RX", P::Slider, 0, 100,
         [this](float v) { if (auto* s = activeSlice()) s->setAudioPan(static_cast<int>(v)); },
@@ -1659,8 +1746,15 @@ void MainWindow::registerMidiParams()
         [this]() -> float { auto* s = activeSlice(); return s && s->anfOn() ? 1 : 0; });
 
     reg("rx.squelchEnable", "Squelch Enable", "RX", P::Toggle, 0, 1,
-        [this](float v) { if (auto* s = activeSlice()) s->setSquelch(v > 0.5f, s->squelchLevel()); },
-        [this]() -> float { auto* s = activeSlice(); return s && s->squelchOn() ? 1 : 0; });
+        [this](float v) {
+            if (auto* s = activeSlice()) {
+                s->setSquelch(v > 0.5f, s->receiveSquelchLevel());
+            }
+        },
+        [this]() -> float {
+            auto* s = activeSlice();
+            return s && s->receiveSquelchOn() ? 1 : 0;
+        });
 
     reg("rx.mute", "Audio Mute", "RX", P::Toggle, 0, 1,
         [this](float v) { m_audio->setMuted(v > 0.5f); },

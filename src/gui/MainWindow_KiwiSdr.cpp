@@ -3,14 +3,17 @@
 #include "AppletPanel.h"
 #include "KiwiSdrApplet.h"
 #include "PanadapterApplet.h"
+#include "RxApplet.h"
 #include "PanadapterStack.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "SMeterWidget.h"
 #include "VfoWidget.h"
 #include "core/AudioEngine.h"
+#include "core/AppSettings.h"
 #include "core/KiwiSdrClient.h"
 #include "core/KiwiSdrManager.h"
+#include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -18,6 +21,8 @@
 #include <QMetaObject>
 #include <QSet>
 #include <QTimer>
+
+#include <algorithm>
 
 namespace AetherSDR {
 namespace {
@@ -98,6 +103,48 @@ void setKiwiSdrWaterfallActive(RadioModel& radioModel,
     }
 }
 
+int kiwiSdrAgcThresholdDbForSliceValue(int value)
+{
+    return qBound(KiwiSdrProtocol::kAgcThresholdMinDb, value,
+                  KiwiSdrProtocol::kAgcThresholdMaxDb);
+}
+
+int kiwiSdrSquelchThresholdDbForSliceValue(int value)
+{
+    return KiwiSdrProtocol::squelchSliderLevelToMarginDb(value);
+}
+
+bool kiwiSdrModeUsesNbfmSquelch(const QString& mode)
+{
+    const QString normalized = mode.trimmed().toUpper();
+    return normalized == QStringLiteral("FM")
+        || normalized == QStringLiteral("NFM");
+}
+
+KiwiSdrReceiverControls kiwiSdrReceiverControlsForSlice(
+    const SliceModel& slice,
+    int autoSqlMarginDb)
+{
+    const QString mode = slice.receiveAgcMode().trimmed().toLower();
+    KiwiSdrReceiverControls controls;
+    controls.agcEnabled = mode != QStringLiteral("off");
+    controls.agcGainDb = qBound(0, slice.receiveAgcOffLevel(), 100);
+    controls.agcHang = false;
+    controls.agcThresholdDb =
+        kiwiSdrAgcThresholdDbForSliceValue(slice.receiveAgcThreshold());
+    controls.agcDecayMs = KiwiSdrProtocol::agcDecayMsForMode(mode);
+    controls.squelchEnabled = slice.receiveSquelchOn();
+    controls.squelchThresholdDb = autoSqlMarginDb > 0
+        ? qBound(1, autoSqlMarginDb, 20)
+        : kiwiSdrSquelchThresholdDbForSliceValue(slice.receiveSquelchLevel());
+    if (autoSqlMarginDb <= 0 && kiwiSdrModeUsesNbfmSquelch(slice.mode())) {
+        controls.squelchThresholdDb = qBound(
+            1, slice.receiveSquelchLevel(),
+            KiwiSdrProtocol::kSquelchUiMaxLevel);
+    }
+    return controls;
+}
+
 } // namespace
 
 SliceModel* MainWindow::kiwiSdrAudioTargetSlice() const
@@ -137,6 +184,14 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
         return;
     }
 
+    // Selecting a receive source from a VFO/header menu is also selecting the
+    // slice whose receive path is being changed. Keep the side RX applet bound
+    // to that slice so SQL/AGC controls drive the Kiwi replacement source, not
+    // whichever Flex slice happened to be active before the menu action.
+    if (sliceId != m_activeSliceId) {
+        setActiveSliceInternal(sliceId, false);
+    }
+
     if (!m_kiwiSdrVirtualPreviousMute.contains(sliceId)) {
         m_kiwiSdrVirtualPreviousMute.insert(sliceId, slice->flexAudioMute());
     }
@@ -157,6 +212,9 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
         slice->filterLow(), slice->filterHigh(), slice->panId());
     updateKiwiSdrVirtualTrackingForSlice(slice);
     updateKiwiSdrVirtualAudioControlsForSlice(slice);
+    updateKiwiSdrVirtualReceiverControlsForSlice(slice);
+    syncActiveSliceSquelchLineToSpectrums();
+    syncActiveSliceAutoSquelchToSpectrums();
     syncFlexRxPanToAudioEngine();
     syncKiwiSdrDiversityEscControls();
 
@@ -181,6 +239,7 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
                 QStringLiteral("Waiting for KiwiSDR meter data")));
     }
     syncKiwiSdrPanadapterUiState(slice->panId());
+    syncActiveSliceAutoSquelchToSpectrums();
     refreshKiwiSdrWaterfallAvailability();
 }
 
@@ -211,6 +270,8 @@ void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
         m_kiwiSdrManager->clearSliceAssignment(sliceId);
     }
     syncFlexRxPanToAudioEngine();
+    syncActiveSliceSquelchLineToSpectrums();
+    syncActiveSliceAutoSquelchToSpectrums();
     syncKiwiSdrDiversityEscControls();
     refreshKiwiSdrWaterfallAvailability();
     if (!panId.isEmpty()) {
@@ -614,6 +675,31 @@ void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice)
     }, Qt::QueuedConnection);
 }
 
+void MainWindow::updateKiwiSdrVirtualReceiverControlsForSlice(SliceModel* slice)
+{
+    if (!m_kiwiSdrManager || !slice
+        || !slice->externalReceiveReplacementActive()) {
+        return;
+    }
+
+    const QString profileId =
+        m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId());
+    if (profileId.isEmpty()) {
+        return;
+    }
+
+    int autoSqlMarginDb = -1;
+    if (slice->externalReceiveAutoSquelchOn()) {
+        autoSqlMarginDb = std::clamp(
+            AppSettings::instance().value("AutoSqlMarginDb", "10").toInt(),
+            5, 20);
+    }
+
+    m_kiwiSdrManager->setReceiverControlsForSlice(
+        slice->sliceId(),
+        kiwiSdrReceiverControlsForSlice(*slice, autoSqlMarginDb));
+}
+
 bool MainWindow::applyKiwiSdrSliceMute()
 {
     SliceModel* target = kiwiSdrAudioTargetSlice();
@@ -802,6 +888,11 @@ void MainWindow::wireKiwiSdr()
                     return;
                 }
                 if (SpectrumWidget* sw = spectrumForSlice(slice)) {
+                    if (meter.valid && meter.hasDbm) {
+                        sw->setKiwiSdrSquelchMeterDbm(
+                            meter.dbm,
+                            meter.squelchStateKnown && meter.squelched);
+                    }
                     if (VfoWidget* vfo = sw->vfoWidget(sliceId)) {
                         vfo->setReceiveMeterReading(meter);
                     }
@@ -874,6 +965,7 @@ void MainWindow::wireKiwiSdr()
                     panId = slice->panId();
                     updateKiwiSdrVirtualTrackingForSlice(slice);
                     updateKiwiSdrVirtualAudioControlsForSlice(slice);
+                    updateKiwiSdrVirtualReceiverControlsForSlice(slice);
                 }
             } else if (m_kiwiSdrManager) {
                 const int sliceId =

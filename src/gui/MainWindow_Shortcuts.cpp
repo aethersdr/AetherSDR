@@ -31,6 +31,7 @@
 #include "MainWindowShortcutState.h"
 #include "core/AppSettings.h"
 #include "core/CwTrace.h"
+#include "core/KiwiSdrProtocol.h"
 #include "core/LogManager.h"
 #include "models/SliceModel.h"
 
@@ -741,7 +742,10 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("squelch_toggle", "Squelch Toggle", "Audio",
         QKeySequence(), [this]() {
             auto* s = activeSlice();
-            if (s) s->setSquelch(!s->squelchOn(), s->squelchLevel());
+            if (s) {
+                s->setSquelch(!s->receiveSquelchOn(),
+                              s->receiveSquelchLevel());
+            }
         });
 
     // ── Slice ───────────────────────────────────────────────────────────
@@ -933,7 +937,7 @@ void MainWindow::registerShortcutActions()
             auto* s = activeSlice();
             if (!s) return;
             static const char* modes[] = {"off", "slow", "med", "fast"};
-            QString cur = s->agcMode().toLower();
+            QString cur = s->receiveAgcMode().toLower();
             int idx = 0;
             for (int i = 0; i < 4; ++i)
                 if (cur == modes[i]) { idx = i; break; }
@@ -950,12 +954,26 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("agct_up", "AGC-T Up", "AGC",
         QKeySequence(), [this]() {
             auto* s = activeSlice();
-            if (s) s->setAgcThreshold(std::min(100, s->agcThreshold() + 5));
+            if (s) {
+                const bool external = s->externalReceiveReplacementActive();
+                const int current = external ? s->receiveAgcThreshold()
+                                             : s->agcThreshold();
+                s->setAgcThreshold(std::min(
+                    external ? KiwiSdrProtocol::kAgcThresholdMaxDb : 100,
+                    current + 5));
+            }
         }, true);
     m_shortcutManager.registerAction("agct_down", "AGC-T Down", "AGC",
         QKeySequence(), [this]() {
             auto* s = activeSlice();
-            if (s) s->setAgcThreshold(std::max(0, s->agcThreshold() - 5));
+            if (s) {
+                const bool external = s->externalReceiveReplacementActive();
+                const int current = external ? s->receiveAgcThreshold()
+                                             : s->agcThreshold();
+                s->setAgcThreshold(std::max(
+                    external ? KiwiSdrProtocol::kAgcThresholdMinDb : 0,
+                    current - 5));
+            }
         }, true);
 
     // ── CW ──────────────────────────────────────────────────────────────

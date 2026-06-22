@@ -5942,10 +5942,10 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     syncKiwiSdrTrackingToActiveSlice();
     refreshKiwiSdrWaterfallAvailability();
     syncFlexRxPanToAudioEngine();
-    // Sync squelch line to newly active slice (handles slice switch without waiting
-    // for squelchChanged signal)
-    if (auto* sw2 = spectrumForSlice(s))
-        sw2->setSquelchLine(s->squelchOn(), s->squelchLevel());
+    // Sync squelch line to newly active slice (handles slice switch without
+    // waiting for squelchChanged signal).
+    syncActiveSliceSquelchLineToSpectrums();
+    syncActiveSliceAutoSquelchToSpectrums();
     auto* sw = spectrum();
     if (sw) {
         if (revealOffscreen) {
@@ -7693,8 +7693,8 @@ BandSnapshot MainWindow::captureCurrentBandState() const
         snap.rxAntenna     = s->rxAntenna();
         snap.filterLow     = s->filterLow();
         snap.filterHigh    = s->filterHigh();
-        snap.agcMode       = s->agcMode();
-        snap.agcThreshold  = s->agcThreshold();
+        snap.agcMode       = s->receiveAgcMode();
+        snap.agcThreshold  = s->receiveAgcThreshold();
     }
     // Center and bandwidth are radio-authoritative — don't capture.
     if (auto* sw = spectrum()) {

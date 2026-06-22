@@ -149,6 +149,11 @@ void AgcTCalibrator::startAutoSweep()
         qCWarning(lcAgcCal) << "startAutoSweep with no slice";
         return;
     }
+    if (m_slice->externalReceiveReplacementActive()) {
+        qCWarning(lcAgcCal)
+            << "startAutoSweep skipped for external receive replacement";
+        return;
+    }
     if (m_running) {
         return;
     }

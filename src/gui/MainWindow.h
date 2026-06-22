@@ -336,8 +336,13 @@ private:
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
     void updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice);
     void updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice);
+    void updateKiwiSdrVirtualReceiverControlsForSlice(SliceModel* slice);
     SliceModel* flexRxPanSourceSlice() const;
     void syncFlexRxPanToAudioEngine();
+    void syncActiveSliceSquelchLineToSpectrums();
+    bool autoSquelchShouldRunOnSpectrum(const QString& panId,
+                                        const SpectrumWidget* spectrum) const;
+    void syncActiveSliceAutoSquelchToSpectrums();
     SliceModel* kiwiSdrDisplaySliceForPan(const QString& panId) const;
     QString kiwiSdrProfileForPan(const QString& panId) const;
     QString kiwiSdrOverlayProfileForPan(const QString& panId) const;

@@ -1,4 +1,5 @@
 #include "SliceModel.h"
+#include "core/KiwiSdrProtocol.h"
 #include <QDebug>
 
 namespace AetherSDR {
@@ -285,7 +286,18 @@ void SliceModel::setAnflLevel(int v)
 
 void SliceModel::setAgcMode(const QString& mode)
 {
-    if (m_agcMode == mode) return;
+    if (m_externalReceiveAudioReplacement) {
+        if (m_externalReceiveAgcMode == mode) {
+            return;
+        }
+        m_externalReceiveAgcMode = mode;
+        emit externalReceiveAgcModeChanged(m_externalReceiveAgcMode);
+        return;
+    }
+
+    if (m_agcMode == mode) {
+        return;
+    }
     m_agcMode = mode;
     sendCommand(QString("slice set %1 agc_mode=%2").arg(m_id).arg(mode));
     emit agcModeChanged(mode);
@@ -293,8 +305,21 @@ void SliceModel::setAgcMode(const QString& mode)
 
 void SliceModel::setAgcThreshold(int value)
 {
+    if (m_externalReceiveAudioReplacement) {
+        value = qBound(KiwiSdrProtocol::kAgcThresholdMinDb, value,
+                       KiwiSdrProtocol::kAgcThresholdMaxDb);
+        if (m_externalReceiveAgcThreshold == value) {
+            return;
+        }
+        m_externalReceiveAgcThreshold = value;
+        emit externalReceiveAgcThresholdChanged(m_externalReceiveAgcThreshold);
+        return;
+    }
+
     value = qBound(0, value, 100);
-    if (m_agcThreshold == value) return;
+    if (m_agcThreshold == value) {
+        return;
+    }
     m_agcThreshold = value;
     sendCommand(QString("slice set %1 agc_threshold=%2").arg(m_id).arg(value));
     emit agcThresholdChanged(value);
@@ -303,7 +328,18 @@ void SliceModel::setAgcThreshold(int value)
 void SliceModel::setAgcOffLevel(int value)
 {
     value = qBound(0, value, 100);
-    if (m_agcOffLevel == value) return;
+    if (m_externalReceiveAudioReplacement) {
+        if (m_externalReceiveAgcOffLevel == value) {
+            return;
+        }
+        m_externalReceiveAgcOffLevel = value;
+        emit externalReceiveAgcOffLevelChanged(m_externalReceiveAgcOffLevel);
+        return;
+    }
+
+    if (m_agcOffLevel == value) {
+        return;
+    }
     m_agcOffLevel = value;
     sendCommand(QString("slice set %1 agc_off_level=%2").arg(m_id).arg(value));
     emit agcOffLevelChanged(value);
@@ -311,6 +347,19 @@ void SliceModel::setAgcOffLevel(int value)
 
 void SliceModel::setSquelch(bool on, int level)
 {
+    if (m_externalReceiveAudioReplacement) {
+        level = qBound(0, level, 99);
+        const bool onChanged = (m_externalReceiveSquelchOn != on);
+        const bool levelChanged = (m_externalReceiveSquelchLevel != level);
+        if (!onChanged && !levelChanged) {
+            return;
+        }
+        m_externalReceiveSquelchOn = on;
+        m_externalReceiveSquelchLevel = level;
+        emit externalReceiveSquelchChanged(on, level);
+        return;
+    }
+
     level = qBound(0, level, 100);
     const bool onChanged = (m_squelchOn != on);
     const bool levelChanged = (m_squelchLevel != level);
@@ -326,6 +375,15 @@ void SliceModel::setSquelch(bool on, int level)
         sendCommand(QString("slice set %1 squelch_level=%2").arg(m_id).arg(level));
 
     emit squelchChanged(on, level);
+}
+
+void SliceModel::setExternalReceiveAutoSquelch(bool on)
+{
+    if (m_externalReceiveAutoSquelch == on) {
+        return;
+    }
+    m_externalReceiveAutoSquelch = on;
+    emit externalReceiveAutoSquelchChanged(on);
 }
 
 void SliceModel::setRit(bool on, int hz)
@@ -518,6 +576,12 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
     const bool previousVisibleMute = audioMute();
     const float previousVisibleGain = audioGain();
     const int previousVisiblePan = audioPan();
+    const QString previousReceiveAgcMode = receiveAgcMode();
+    const int previousReceiveAgcThreshold = receiveAgcThreshold();
+    const int previousReceiveAgcOffLevel = receiveAgcOffLevel();
+    const bool previousReceiveSquelchOn = receiveSquelchOn();
+    const int previousReceiveSquelchLevel = receiveSquelchLevel();
+    const bool previousExternalAutoSquelch = m_externalReceiveAutoSquelch;
     if (active) {
         m_externalReceiveAudioGain = m_audioGain;
         m_externalReceiveAudioPan = m_audioPan;
@@ -529,6 +593,7 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
         }
     } else {
         m_externalReceiveAudioReplacement = false;
+        m_externalReceiveAutoSquelch = false;
         if (m_audioMute != restoreMute) {
             m_audioMute = restoreMute;
             sendCommand(QString("slice set %1 audio_mute=%2")
@@ -544,6 +609,39 @@ void SliceModel::setExternalReceiveAudioReplacementMute(bool active,
     }
     if (audioPan() != previousVisiblePan) {
         emit audioPanChanged(audioPan());
+    }
+    if (receiveAgcMode() != previousReceiveAgcMode) {
+        if (m_externalReceiveAudioReplacement) {
+            emit externalReceiveAgcModeChanged(receiveAgcMode());
+        } else {
+            emit agcModeChanged(agcMode());
+        }
+    }
+    if (receiveAgcThreshold() != previousReceiveAgcThreshold) {
+        if (m_externalReceiveAudioReplacement) {
+            emit externalReceiveAgcThresholdChanged(receiveAgcThreshold());
+        } else {
+            emit agcThresholdChanged(agcThreshold());
+        }
+    }
+    if (receiveAgcOffLevel() != previousReceiveAgcOffLevel) {
+        if (m_externalReceiveAudioReplacement) {
+            emit externalReceiveAgcOffLevelChanged(receiveAgcOffLevel());
+        } else {
+            emit agcOffLevelChanged(agcOffLevel());
+        }
+    }
+    if (receiveSquelchOn() != previousReceiveSquelchOn
+        || receiveSquelchLevel() != previousReceiveSquelchLevel) {
+        if (m_externalReceiveAudioReplacement) {
+            emit externalReceiveSquelchChanged(receiveSquelchOn(),
+                                               receiveSquelchLevel());
+        } else {
+            emit squelchChanged(squelchOn(), squelchLevel());
+        }
+    }
+    if (m_externalReceiveAutoSquelch != previousExternalAutoSquelch) {
+        emit externalReceiveAutoSquelchChanged(m_externalReceiveAutoSquelch);
     }
 }
 

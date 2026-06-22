@@ -12,8 +12,17 @@ namespace {
 constexpr int kObservedExtendedSoundFrameBytes = 1034;
 constexpr int kServerSoundHeaderBytes = 10;
 constexpr int kObservedMeterOffset = 8;
-constexpr float kExperimentalMeterDbmOffset = -127.0f;
-constexpr float kExperimentalMeterDbPerRawUnit = 0.1f;
+constexpr float kSndMeterDbmOffset = -127.0f;
+constexpr float kSndMeterDbPerRawUnit = 0.1f;
+constexpr quint8 kSoundSquelchFlag = 0x40;
+
+int normalizeEnabledSquelchMarginDb(int thresholdDb)
+{
+    const int clamped = std::clamp(thresholdDb,
+                                   kSquelchServerMinMarginDb,
+                                   kSquelchServerMaxMarginDb);
+    return clamped == kSquelchOffLevel ? 1 : clamped;
+}
 
 float percentile(QVector<float> values, float fraction)
 {
@@ -49,6 +58,7 @@ SoundFrameHeader parseSoundFrameHeader(const QByteArray& frame)
 
     SoundFrameHeader header;
     header.flags = static_cast<uchar>(frame[3]);
+    header.squelched = (header.flags & kSoundSquelchFlag) != 0;
     if (frame.size() >= kServerSoundHeaderBytes) {
         const auto* data = reinterpret_cast<const uchar*>(frame.constData() + 4);
         const quint32 counter = static_cast<quint32>(data[0])
@@ -93,14 +103,10 @@ quint64 sequenceGapCount(int previousSequence, int currentSequence)
 
 float waterfallByteToDisplayLevel(unsigned char value)
 {
-    // Corrected clean-room spec: raw W/F bytes are display/bin intensity
-    // values, not calibrated dBm. Map them into AetherSDR's existing
-    // Kiwi-only pseudo-dB display range without claiming RF calibration.
-    constexpr float kDisplayFloor = -130.0f;
-    constexpr float kDisplayCeiling = 0.0f;
-    constexpr float kDisplaySpan = kDisplayCeiling - kDisplayFloor;
-    return kDisplayFloor
-        + (static_cast<float>(value) / 255.0f) * kDisplaySpan;
+    // Kiwi server W/F direct rows encode negative dB by decrementing the
+    // clamped bin dB and wrapping it into an unsigned byte. So 255 means
+    // 0 dB, 155 means -100 dB, and 55 means -200 dB.
+    return std::clamp(static_cast<float>(value) - 255.0f, -200.0f, 0.0f);
 }
 
 WaterfallAperture autoWaterfallAperture(const QVector<float>& binsDbm)
@@ -187,6 +193,60 @@ IpLimitNotice parseIpLimitNotice(const QString& valueText)
     return notice;
 }
 
+QString formatSquelchCommand(bool enabled, int thresholdDb,
+                             double tailSeconds)
+{
+    const int threshold = enabled
+        ? normalizeEnabledSquelchMarginDb(thresholdDb)
+        : kSquelchOffLevel;
+    const double tail = std::clamp(tailSeconds, 0.0, 2.0);
+    return QStringLiteral("SET squelch=%1 param=%2")
+        .arg(threshold)
+        .arg(tail, 0, 'f', 2);
+}
+
+int squelchSliderLevelToMarginDb(int level)
+{
+    static_assert(kSquelchUiMaxLevel % 2 == 1);
+    const int clamped = std::clamp(level, kSquelchUiMinLevel,
+                                   kSquelchUiMaxLevel);
+    const int margin = (clamped * 2) - kSquelchUiMaxLevel;
+    return std::clamp(margin,
+                      kSquelchServerMinMarginDb,
+                      kSquelchServerMaxMarginDb);
+}
+
+int agcDecayMsForMode(const QString& mode)
+{
+    const QString normalized = mode.trimmed().toLower();
+    if (normalized == QStringLiteral("fast")) {
+        return kAgcFastDecayMs;
+    }
+    if (normalized == QStringLiteral("slow")) {
+        return kAgcSlowDecayMs;
+    }
+    return kAgcMedDecayMs;
+}
+
+QString formatAgcCommand(bool enabled, bool hang, int thresholdDb,
+                         int manualGainDb, int decayMs)
+{
+    const int clampedThreshold = std::clamp(
+        thresholdDb, kAgcThresholdMinDb, kAgcThresholdMaxDb);
+    const int clampedManualGain = std::clamp(
+        manualGainDb, kAgcManualGainMinDb, kAgcManualGainMaxDb);
+    const int clampedDecay = std::clamp(
+        decayMs, kAgcDecayMinMs, kAgcDecayMaxMs);
+    return QStringLiteral(
+        "SET agc=%1 hang=%2 thresh=%3 slope=%4 decay=%5 manGain=%6")
+        .arg(enabled ? 1 : 0)
+        .arg(hang ? 1 : 0)
+        .arg(clampedThreshold)
+        .arg(kAgcSlopeDb)
+        .arg(clampedDecay)
+        .arg(clampedManualGain);
+}
+
 MeterReading meterUnavailable(MeterSource source, const QString& notes)
 {
     MeterReading reading;
@@ -208,24 +268,24 @@ MeterReading extractMeterFromSndVerifiedLayout(const QByteArray& frame,
         && frame.startsWith("SND")) {
         const qint16 rawMeter =
             readSignedBigEndian16(frame, kObservedMeterOffset);
-        const float dbm = kExperimentalMeterDbmOffset
+        const float dbm = kSndMeterDbmOffset
             + (static_cast<float>(rawMeter)
-               * kExperimentalMeterDbPerRawUnit);
+               * kSndMeterDbPerRawUnit);
 
         MeterReading reading;
         reading.timestampUtcMs = QDateTime::currentMSecsSinceEpoch();
         reading.source = MeterSource::SndMetadata;
-        reading.capability = MeterCapability::Experimental;
+        reading.capability = MeterCapability::CalibratedSndMeter;
         reading.rawValue = static_cast<float>(rawMeter);
         reading.hasRawValue = true;
         reading.dbm = dbm;
         reading.hasDbm = true;
         reading.sUnits = convertDbmToSUnits(dbm);
         reading.valid = true;
-        reading.confidence = MeterConfidence::Low;
+        reading.confidence = MeterConfidence::Verified;
         reading.label = QStringLiteral("S-Meter");
         reading.notes = QStringLiteral(
-            "Experimental SND bytes 8-9 big-endian candidate, dbm=raw/10-127");
+            "SND bytes 8-9 big-endian server S-meter, dbm=raw/10-127");
         return reading;
     }
 
@@ -299,7 +359,7 @@ MeterReading computeRelativeWaterfallLevel(const QVector<float>& bins)
     }
 
     const float signal = percentile(finite, 0.95f);
-    constexpr float kDisplayFloor = -130.0f;
+    constexpr float kDisplayFloor = -200.0f;
     constexpr float kDisplayCeiling = 0.0f;
     const float relativeLevel = std::clamp(
         (signal - kDisplayFloor) / (kDisplayCeiling - kDisplayFloor),

@@ -277,10 +277,22 @@ QJsonObject sliceSnapshot(const SliceModel* s)
         {QStringLiteral("anf"),        s->anfOn()},
         {QStringLiteral("apf"),        s->apfOn()},
         {QStringLiteral("apfLevel"),   s->apfLevel()},
+        {QStringLiteral("externalReceiveReplacement"),
+                                     s->externalReceiveReplacementActive()},
         {QStringLiteral("squelch"),    s->squelchOn()},
         {QStringLiteral("squelchLevel"), s->squelchLevel()},
+        {QStringLiteral("receiveSquelch"), s->receiveSquelchOn()},
+        {QStringLiteral("receiveSquelchLevel"), s->receiveSquelchLevel()},
+        {QStringLiteral("flexSquelch"), s->flexSquelchOn()},
+        {QStringLiteral("flexSquelchLevel"), s->flexSquelchLevel()},
         {QStringLiteral("agcMode"),    s->agcMode()},
         {QStringLiteral("agcThreshold"), s->agcThreshold()},
+        {QStringLiteral("receiveAgcMode"), s->receiveAgcMode()},
+        {QStringLiteral("receiveAgcThreshold"), s->receiveAgcThreshold()},
+        {QStringLiteral("receiveAgcOffLevel"), s->receiveAgcOffLevel()},
+        {QStringLiteral("flexAgcMode"), s->flexAgcMode()},
+        {QStringLiteral("flexAgcThreshold"), s->flexAgcThreshold()},
+        {QStringLiteral("flexAgcOffLevel"), s->flexAgcOffLevel()},
     };
 }
 

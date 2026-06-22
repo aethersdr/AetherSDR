@@ -54,18 +54,21 @@ public:
 
     // Cross-widget access for the bidirectional SQL sync with VfoWidget.
     // VfoWidget mirrors mode + value via these methods; RxApplet stays the
-    // source of truth for SqlMode, the manual-level cache, and the
-    // AutoSqlMarginDb persistence.
+    // source of truth for SqlMode, the current surface's manual level, and
+    // the AutoSqlMarginDb persistence.
     SqlMode sqlMode() const { return m_sqlMode; }
-    int     sqlManualLevel() const { return m_sqlManualLevel; }
+    bool    isAttachedToSlice(const SliceModel* slice) const { return m_slice == slice; }
+    int     sqlManualLevel() const;
+    int     sqlManualMaximum() const;
     int     autoSqlMarginDb() const;
     // Externally cycle the mode (Off → Manual → Auto → Off) — same path the
     // RxApplet's own SQL button takes.  Emits sqlModeChanged.
     void    cycleSqlModeExternal();
     // Programmatic slider drag from another UI surface.  Branches by mode
-    // exactly like the in-applet slider does: Manual writes the slice and
-    // persists m_sqlManualLevel; Auto writes AppSettings AutoSqlMarginDb
-    // and emits autoSqlMarginDbChanged.  Off is a no-op.
+    // exactly like the in-applet slider does: Manual writes the current
+    // receive surface; Flex also persists m_sqlManualLevel, while Kiwi keeps
+    // its replacement-source level independent. Auto writes AppSettings
+    // AutoSqlMarginDb and emits autoSqlMarginDbChanged. Off is a no-op.
     void    setSqlSliderValueExternal(int v);
     void syncStepFromSlice(int stepHz, const QVector<int>& stepList);
     void cycleStepUp();
@@ -269,6 +272,7 @@ private:
     QPushButton* m_sqlBtn{nullptr};
     QSlider*     m_sqlSlider{nullptr};
     SqlMode      m_sqlMode{SqlMode::Off};
+    SqlMode      m_flexSqlMode{SqlMode::Off};
     bool         m_savedSquelchOn{false};
     // Last user-chosen Manual squelch level (0–100).  Auto mode overwrites
     // the slice's squelchLevel with algorithm-suggested values every FFT
@@ -279,6 +283,12 @@ private:
     void applySqlModeVisuals();
     void cycleSqlMode();
     void setSqlMode(SqlMode m, bool propagateToRadio);
+    bool usingExternalReceiveSquelch() const;
+    int clampManualSqlLevelForCurrentSurface(int level) const;
+    void setManualSqlLevelForCurrentSurface(int level);
+    int agcThresholdMinimum() const;
+    int agcThresholdMaximum() const;
+    void syncAgcSliderFromSlice();
 
 
     // RIT

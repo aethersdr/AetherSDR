@@ -140,10 +140,15 @@ public:
     // Reflects the current band, antenna and preamp — no hardcoded dBm value.
     float noiseFloorDbm() const { return m_measuredNoiseFloorDbm; }
 
-    // Squelch threshold overlay line.  level is the radio squelch_level (0-100),
-    // mapped to absolute dBm via the radio's fixed scale: dBm = -160 + level.
-    // (Empirically verified on FLEX-8600 fw 4.1.5 — not in FlexLib docs.)
+    // Flex squelch threshold overlay line. level is the radio squelch_level
+    // (0-100), mapped to absolute dBm via the radio's fixed scale:
+    // dBm = -160 + level. (Empirically verified on FLEX-8600 fw 4.1.5.)
     void setSquelchLine(bool visible, int level);
+    // KiwiSDR SQL is a dB margin above Kiwi's median noise-floor estimate.
+    // marginDb is the server margin, not the UI slider value.
+    void setKiwiSdrSquelchLine(bool visible, int marginDb, bool floorRelative);
+    void setKiwiSdrSquelchMeterDbm(float dbm, bool squelched);
+    void clearKiwiSdrSquelchLine();
 
     // When enabled, measures the noise floor on every FFT frame using a
     // two-pass trimmed mean (pass 1: overall mean; pass 2: mean of bins
@@ -583,6 +588,8 @@ private:
     void drawSpotMarkers(QPainter& p, const QRect& specRect);
     void drawSwrSweep(QPainter& p, const QRect& specRect);
     void drawAutoSqlFloor(QPainter& p, const QRect& specRect);
+    void drawSquelchLine(QPainter& p, const QRect& specRect);
+    void updateAutoSquelchFromBins(const QVector<float>& binsDbm);
     QRect leftOccludedRect() const;
     void showSpotClusterPopup(const SpotCluster& cluster, const QPoint& globalPos);
     const TnfMarker* tnfMarkerById(int id) const;
@@ -690,6 +697,9 @@ private:
     // quickly, rises slowly), with a candidate-state transient filter
     // so brief upward spikes (lightning crashes) don't pull the lock.
     bool updateNoiseFloorBaseline(const QVector<float>& bins, bool forceBaseline);
+    float estimateKiwiSdrVisualNoiseFloorDbm(const QVector<float>& bins) const;
+    void updateKiwiSdrSquelchVisualFloor(float floorDbm);
+    void pinKiwiSdrManualSquelchLine();
     // Adjust m_refLevel toward the target so the smoothed noise floor
     // sits at m_noiseFloorPosition.  Pans the dB range (keeps span
     // fixed) rather than zooming it (existing zoom-when-floor-moves
@@ -828,9 +838,22 @@ private:
     // Percentile EWMA used for the amber floor overlay line and auto-squelch.
     // Tracked separately from m_measuredNoiseFloorDbm (two-pass trimmed mean)
     // so the auto-adjust display feature and auto-squelch are independent.
-    // Squelch threshold overlay line
-    bool  m_squelchLineVisible{false};
-    int   m_squelchLevel{0};             // 0-100 radio squelch_level units
+    // Squelch threshold overlay lines. Flex and KiwiSDR keep independent
+    // state because they can be controlled from different receive surfaces.
+    bool  m_flexSquelchLineVisible{false};
+    int   m_flexSquelchLevel{0};
+    bool  m_kiwiSdrSquelchLineVisible{false};
+    int   m_kiwiSdrSquelchLevel{0};
+    bool  m_kiwiSdrSquelchLineFloorRelative{false};
+    float m_kiwiSdrSquelchLiveFloorDbm{-999.0f};
+    float m_kiwiSdrSquelchPinnedFloorDbm{-999.0f};
+    bool  m_kiwiSdrSquelchPinnedFloorValid{false};
+    float m_kiwiSdrSquelchPinnedThresholdDbm{-999.0f};
+    bool  m_kiwiSdrSquelchPinnedThresholdValid{false};
+    float m_kiwiSdrSquelchPinnedDisplayNorm{-1.0f};
+    bool  m_kiwiSdrSquelchPinnedDisplayNormValid{false};
+    bool  m_kiwiSdrSquelchMeterFloorValid{false};
+    QVector<float> m_kiwiSdrSquelchMeterSamples;
     QTimer* m_squelchLineHideTimer{nullptr}; // auto-hides yellow line 3 s after enable/adjust (manual SQL only)
     bool  m_autoSquelchEnabled{false};
     float m_sqlNoiseFloorDbm{-999.0f};  // auto-squelch own two-pass trimmed-mean EWMA

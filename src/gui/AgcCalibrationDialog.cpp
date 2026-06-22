@@ -273,6 +273,8 @@ void AgcCalibrationDialog::setSlice(SliceModel* slice)
 void AgcCalibrationDialog::connectSlice(SliceModel* slice)
 {
     connect(slice, &SliceModel::agcModeChanged, this, &AgcCalibrationDialog::updateModeUi);
+    connect(slice, &SliceModel::externalReceiveAgcModeChanged,
+            this, &AgcCalibrationDialog::updateModeUi);
     connect(slice, &SliceModel::agcThresholdChanged, &m_engine, &AgcTCalibrator::onValueChanged);
     connect(slice, &SliceModel::agcOffLevelChanged, &m_engine, &AgcTCalibrator::onValueChanged);
     connect(slice, &SliceModel::agcThresholdChanged, this, &AgcCalibrationDialog::refreshFromSlice);
@@ -289,6 +291,11 @@ int AgcCalibrationDialog::liveValue() const
 {
     if (!m_slice) {
         return -1;
+    }
+    if (m_slice->externalReceiveReplacementActive()) {
+        return m_slice->receiveAgcMode() == QStringLiteral("off")
+                   ? m_slice->receiveAgcOffLevel()
+                   : m_slice->receiveAgcThreshold();
     }
     return m_slice->agcMode() == QStringLiteral("off")
                ? m_slice->agcOffLevel()
@@ -310,7 +317,12 @@ bool AgcCalibrationDialog::nrSuppressesCalibration() const
 
 void AgcCalibrationDialog::updateModeUi()
 {
-    const bool off = m_slice && m_slice->agcMode() == QStringLiteral("off");
+    const bool externalReceive =
+        m_slice && m_slice->externalReceiveReplacementActive();
+    const QString mode = m_slice
+        ? (externalReceive ? m_slice->receiveAgcMode() : m_slice->agcMode())
+        : QString();
+    const bool off = mode == QStringLiteral("off");
     const AgcTCalibrator::Strategy s =
         off ? AgcTCalibrator::Strategy::TargetLevel : AgcTCalibrator::Strategy::Knee;
     m_curve->setStrategy(s);
@@ -332,6 +344,12 @@ void AgcCalibrationDialog::updateModeUi()
 
     if (!m_slice) {
         m_modeLabel->setText(QStringLiteral("No active slice."));
+        m_startStopBtn->setEnabled(false);
+        return;
+    }
+    if (externalReceive) {
+        m_modeLabel->setText(QStringLiteral(
+            "AGC-T calibration is available for Flex receive only."));
         m_startStopBtn->setEnabled(false);
         return;
     }
@@ -367,6 +385,10 @@ void AgcCalibrationDialog::onStartStop()
 {
     if (m_engine.isRunning()) {
         m_engine.stop(); // restores original value
+        return;
+    }
+    if (m_slice && m_slice->externalReceiveReplacementActive()) {
+        updateModeUi();
         return;
     }
     // Refuse to start while any NR stage is suppressing the calibration tap.

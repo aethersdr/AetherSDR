@@ -36,6 +36,7 @@
 #include "core/PeripheralSettings.h"
 #include "core/KiwiSdrClient.h"
 #include "core/KiwiSdrManager.h"
+#include "core/KiwiSdrProtocol.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "VfoWidget.h"
@@ -72,6 +73,20 @@ constexpr double kSpectrumClickEdgeMarginFrac = 0.05;
 constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
 constexpr int kPanDimensionDecoderFallbackMs = 650;
 constexpr qint64 kProfileLoadDimensionSettleMs = kPanDimensionDecoderFallbackMs + 100;
+
+int currentAutoSqlMarginDb()
+{
+    return std::clamp(
+        AppSettings::instance().value("AutoSqlMarginDb", "10").toInt(), 5, 20);
+}
+
+int kiwiSdrSquelchMarginDbForSliceLevel(const SliceModel* slice, int level)
+{
+    if (slice && slice->externalReceiveAutoSquelchOn()) {
+        return currentAutoSqlMarginDb();
+    }
+    return KiwiSdrProtocol::squelchSliderLevelToMarginDb(level);
+}
 
 bool memoryRevealTargetMatches(double actualMhz, double targetMhz)
 {
@@ -118,6 +133,37 @@ const SliceModel* kiwiSliceForPan(const RadioModel& radioModel,
     return nullptr;
 }
 
+SliceModel* kiwiAssignedSliceForPan(const RadioModel& radioModel,
+                                    const KiwiSdrManager* manager,
+                                    const QString& panId)
+{
+    if (!manager || panId.isEmpty()) {
+        return nullptr;
+    }
+
+    QVector<SliceModel*> candidates;
+    for (SliceModel* slice : radioModel.slices()) {
+        if (!slice || slice->panId() != panId
+            || !radioModel.sliceMayBelongToUs(slice->sliceId())
+            || manager->assignedProfileForSlice(slice->sliceId()).isEmpty()) {
+            continue;
+        }
+        if (slice->isDiversityParent()) {
+            return slice;
+        }
+        candidates.append(slice);
+    }
+    if (candidates.isEmpty()) {
+        return nullptr;
+    }
+    for (SliceModel* slice : candidates) {
+        if (!slice->diversity()) {
+            return slice;
+        }
+    }
+    return candidates.first();
+}
+
 // Pan-follow tuning internals — moved with their only callers from
 // MainWindow.cpp's anonymous namespace (#3351 Phase 1d).
 constexpr int kPanFollowAnimationDurationMs = 110;
@@ -132,6 +178,139 @@ double quantizeIncrementalFollowDelta(double overshootMhz, double stepMhz)
 }
 
 } // namespace
+
+void MainWindow::syncActiveSliceSquelchLineToSpectrums()
+{
+    SliceModel* s = activeSlice();
+    if (!s) {
+        auto clearSpectrum = [](SpectrumWidget* sw) {
+            if (!sw) {
+                return;
+            }
+            sw->clearKiwiSdrSquelchLine();
+            sw->setSquelchLine(false, 0);
+        };
+        if (!m_panStack) {
+            clearSpectrum(spectrum());
+            return;
+        }
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (!applet) {
+                continue;
+            }
+            clearSpectrum(m_panStack->spectrum(applet->panId()));
+        }
+        return;
+    }
+
+    const bool kiwiActive = m_kiwiSdrManager
+        && !m_kiwiSdrManager->assignedProfileForSlice(s->sliceId()).isEmpty();
+    const bool on = kiwiActive ? s->receiveSquelchOn() : s->squelchOn();
+    const int level = kiwiActive ? s->receiveSquelchLevel()
+                                 : s->squelchLevel();
+    const QString kiwiPanId = kiwiActive ? s->panId() : QString();
+    auto applyToSpectrum = [&](const QString& panId, SpectrumWidget* sw) {
+        if (!sw) {
+            return;
+        }
+        if (SliceModel* kiwiSlice =
+                kiwiAssignedSliceForPan(m_radioModel, m_kiwiSdrManager, panId)) {
+            sw->setKiwiSdrSquelchLine(
+                kiwiSlice->receiveSquelchOn(),
+                kiwiSdrSquelchMarginDbForSliceLevel(
+                    kiwiSlice, kiwiSlice->receiveSquelchLevel()),
+                kiwiSlice->externalReceiveAutoSquelchOn());
+            sw->setSquelchLine(false, 0);
+            return;
+        }
+        if (kiwiActive) {
+            if (panId == kiwiPanId) {
+                sw->setKiwiSdrSquelchLine(
+                    on, kiwiSdrSquelchMarginDbForSliceLevel(s, level),
+                    s->externalReceiveAutoSquelchOn());
+            } else {
+                sw->clearKiwiSdrSquelchLine();
+                sw->setSquelchLine(false, 0);
+            }
+            return;
+        }
+        if (!kiwiSdrProfileForPan(panId).isEmpty()
+            || sw->kiwiSdrWaterfallActive()) {
+            sw->clearKiwiSdrSquelchLine();
+            sw->setSquelchLine(false, 0);
+            return;
+        }
+        sw->clearKiwiSdrSquelchLine();
+        sw->setSquelchLine(on, level);
+    };
+
+    if (!m_panStack) {
+        applyToSpectrum(s->panId(), spectrumForSlice(s));
+        return;
+    }
+
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (!applet) {
+            continue;
+        }
+        applyToSpectrum(applet->panId(), m_panStack->spectrum(applet->panId()));
+    }
+}
+
+bool MainWindow::autoSquelchShouldRunOnSpectrum(
+    const QString& panId, const SpectrumWidget* spectrum) const
+{
+    if (const SliceModel* kiwiSlice =
+            kiwiAssignedSliceForPan(m_radioModel, m_kiwiSdrManager, panId)) {
+        return kiwiSlice->externalReceiveAutoSquelchOn();
+    }
+
+    if (!m_appletPanel || !m_appletPanel->rxApplet()
+        || m_appletPanel->rxApplet()->sqlMode() != RxApplet::SqlMode::Auto) {
+        return false;
+    }
+
+    const SliceModel* s = activeSlice();
+    if (!s) {
+        return false;
+    }
+
+    const bool activeKiwi = m_kiwiSdrManager
+        && !m_kiwiSdrManager->assignedProfileForSlice(s->sliceId()).isEmpty();
+
+    if (activeKiwi) {
+        return panId == s->panId();
+    }
+
+    return kiwiSdrProfileForPan(panId).isEmpty()
+        && (!spectrum || !spectrum->kiwiSdrWaterfallActive());
+}
+
+void MainWindow::syncActiveSliceAutoSquelchToSpectrums()
+{
+    auto applyToSpectrum = [this](const QString& panId, SpectrumWidget* sw) {
+        if (!sw) {
+            return;
+        }
+        sw->setAutoSquelchEnable(autoSquelchShouldRunOnSpectrum(panId, sw));
+    };
+
+    if (!m_panStack) {
+        if (SliceModel* s = activeSlice()) {
+            applyToSpectrum(s->panId(), spectrumForSlice(s));
+        } else {
+            applyToSpectrum(QString(), spectrum());
+        }
+        return;
+    }
+
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (!applet) {
+            continue;
+        }
+        applyToSpectrum(applet->panId(), m_panStack->spectrum(applet->panId()));
+    }
+}
 
 void MainWindow::wireAetherDspWidget(AetherDspWidget* w)
 {
@@ -454,15 +633,37 @@ void MainWindow::onSliceAdded(SliceModel* s)
         if (s->isTxSlice())
             syncTxWaterfallSliceToSpectrums();
     });
-    // Squelch threshold line on the spectrum overlay — only update for the
-    // active slice so that inactive slices sharing a pan don't overwrite it.
+    // Squelch threshold line on the spectrum overlay. Flex follows the active
+    // slice only; Kiwi replacement audio owns an independent line on its own
+    // pan even when a Flex slice is active elsewhere.
     connect(s, &SliceModel::squelchChanged, this, [this, s](bool on, int level) {
+        Q_UNUSED(on);
+        Q_UNUSED(level);
         if (s != activeSlice()) return;
-        if (auto* sw = spectrumForSlice(s))
-            sw->setSquelchLine(on, level);
+        syncActiveSliceSquelchLineToSpectrums();
     });
-    if (auto* sw = spectrumForSlice(s))
+    connect(s, &SliceModel::externalReceiveSquelchChanged,
+            this, [this, s](bool on, int level) {
+        const bool kiwiAssigned = m_kiwiSdrManager
+            && !m_kiwiSdrManager->assignedProfileForSlice(s->sliceId()).isEmpty();
+        if (!kiwiAssigned) {
+            return;
+        }
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+        if (SpectrumWidget* sw = spectrumForSlice(s)) {
+            sw->setKiwiSdrSquelchLine(
+                on, kiwiSdrSquelchMarginDbForSliceLevel(s, level),
+                s->externalReceiveAutoSquelchOn());
+        }
+        if (s == activeSlice()) {
+            syncActiveSliceSquelchLineToSpectrums();
+        }
+    });
+    if (s == activeSlice()) {
+        syncActiveSliceSquelchLineToSpectrums();
+    } else if (auto* sw = spectrumForSlice(s)) {
         sw->setSquelchLine(s->squelchOn(), s->squelchLevel());
+    }
 
     connect(s, &SliceModel::txSliceChanged, this, [this, s](bool tx) {
         // Update hasTxSlice on all spectrums for waterfall freeze logic
@@ -1322,6 +1523,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     sw->disconnect(this);
     menu->disconnect(this);
     applet->disconnect(this);
+    if (m_appletPanel && m_appletPanel->rxApplet()) {
+        QObject::disconnect(m_appletPanel->rxApplet(), nullptr, sw, nullptr);
+    }
 
     auto updateKiwiWaterfallView = [this, applet, sw](double centerMhz,
                                                       double bandwidthMhz) {
@@ -1755,17 +1959,69 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     // ── Auto-squelch wiring ───────────────────────────────────────────────
     // RxApplet signals → per-pan spectrum widget
     connect(m_appletPanel->rxApplet(), &RxApplet::sqlAutoChanged,
-            sw, &SpectrumWidget::setAutoSquelchEnable);
+            sw, [this, applet, sw](bool) {
+        const QString panId = applet ? applet->panId() : QString();
+        sw->setAutoSquelchEnable(
+            autoSquelchShouldRunOnSpectrum(panId, sw));
+    });
     connect(m_appletPanel->rxApplet(), &RxApplet::squelchStateChanged,
-            sw, &SpectrumWidget::setSquelchLine);
+            sw, [this, applet, sw](bool on, int level) {
+        SliceModel* s = activeSlice();
+        const bool kiwiActive = s && m_kiwiSdrManager
+            && !m_kiwiSdrManager->assignedProfileForSlice(s->sliceId()).isEmpty();
+        if (kiwiActive) {
+            if (applet && applet->panId() == s->panId()) {
+                sw->setKiwiSdrSquelchLine(
+                    on, kiwiSdrSquelchMarginDbForSliceLevel(s, level),
+                    s->externalReceiveAutoSquelchOn());
+            } else {
+                sw->clearKiwiSdrSquelchLine();
+                sw->setSquelchLine(false, 0);
+            }
+            return;
+        }
+        const QString panId = applet ? applet->panId() : QString();
+        if (!kiwiSdrProfileForPan(panId).isEmpty()
+            || sw->kiwiSdrWaterfallActive()) {
+            sw->clearKiwiSdrSquelchLine();
+            sw->setSquelchLine(false, 0);
+            return;
+        }
+        sw->clearKiwiSdrSquelchLine();
+        sw->setSquelchLine(on, level);
+    });
     // Spectrum widget → radio + back to overlay: apply level and immediately
     // update the squelch line on sw so the yellow line never depends on the
     // RxApplet → squelchStateChanged → setSquelchLine round-trip, which can
     // miss the first emission if wirePanadapter runs before setSlice.
     connect(sw, &SpectrumWidget::autoSquelchLevelSuggested,
-            this, [this, sw](int level) {
-        if (auto* s = activeSlice()) s->setSquelch(true, level);
-        sw->setSquelchLine(true, level);
+            this, [this, applet, sw](int level) {
+        const QString panId = applet ? applet->panId() : QString();
+        if (!autoSquelchShouldRunOnSpectrum(panId, sw)) {
+            return;
+        }
+        if (SliceModel* kiwiSlice =
+                kiwiAssignedSliceForPan(m_radioModel, m_kiwiSdrManager, panId)) {
+            const int margin = currentAutoSqlMarginDb();
+            kiwiSlice->setSquelch(true, margin);
+            sw->setKiwiSdrSquelchLine(true, margin, true);
+            return;
+        }
+        SliceModel* s = activeSlice();
+        if (!s) {
+            return;
+        }
+        const bool kiwiActive = m_kiwiSdrManager
+            && !m_kiwiSdrManager->assignedProfileForSlice(s->sliceId()).isEmpty();
+        if (kiwiActive) {
+            const int margin = currentAutoSqlMarginDb();
+            s->setSquelch(true, margin);
+            sw->setKiwiSdrSquelchLine(
+                true, margin, true);
+        } else {
+            s->setSquelch(true, level);
+            sw->setSquelchLine(true, level);
+        }
     });
     // Auto-squelch margin: now driven by the RX Applet's SQL slider when
     // SQL mode is Auto (instead of a separate slider in the Display
@@ -1778,6 +2034,11 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         auto& s = AppSettings::instance();
         int margin = std::clamp(s.value("AutoSqlMarginDb", "10").toInt(), 5, 20);
         sw->setAutoSqlMarginDb(margin);
+    }
+    {
+        const QString panId = applet ? applet->panId() : QString();
+        sw->setAutoSquelchEnable(
+            autoSquelchShouldRunOnSpectrum(panId, sw));
     }
 
     // Pop out / dock panadapter
@@ -1983,7 +2244,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(menu, &SpectrumOverlayMenu::wfBlankerThresholdChanged,
             sw, &SpectrumWidget::setWfBlankerThreshold);
     connect(menu, &SpectrumOverlayMenu::backgroundImageRequested,
-            this, [this, sw] {
+            this, [sw] {
         QString path = QFileDialog::getOpenFileName(
             sw->window(),
             "Choose Background Image",
@@ -2736,6 +2997,47 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     connect(s, &SliceModel::audioPanChanged, this, [this, s](int) {
         updateKiwiSdrVirtualAudioControlsForSlice(s);
     });
+    connect(s, &SliceModel::agcModeChanged, this, [this, s](const QString&) {
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+    });
+    connect(s, &SliceModel::agcThresholdChanged, this, [this, s](int) {
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+    });
+    connect(s, &SliceModel::agcOffLevelChanged, this, [this, s](int) {
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+    });
+    connect(s, &SliceModel::externalReceiveAgcModeChanged,
+            this, [this, s](const QString&) {
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+    });
+    connect(s, &SliceModel::externalReceiveAgcThresholdChanged,
+            this, [this, s](int) {
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+    });
+    connect(s, &SliceModel::externalReceiveAgcOffLevelChanged,
+            this, [this, s](int) {
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+    });
+    connect(s, &SliceModel::squelchChanged, this, [this, s](bool, int) {
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+    });
+    connect(s, &SliceModel::externalReceiveSquelchChanged,
+            this, [this, s](bool, int) {
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+    });
+    connect(s, &SliceModel::externalReceiveAutoSquelchChanged,
+            this, [this, s](bool) {
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+        syncActiveSliceAutoSquelchToSpectrums();
+        syncActiveSliceSquelchLineToSpectrums();
+    });
+    connect(m_appletPanel->rxApplet(), &RxApplet::autoSqlMarginDbChanged,
+            s, [this, sliceId](int) {
+        if (sliceId == m_activeSliceId) {
+            updateKiwiSdrVirtualReceiverControlsForSlice(
+                m_radioModel.slice(sliceId));
+        }
+    });
     connect(s, &SliceModel::diversityChanged, this, [this](bool) {
         syncKiwiSdrDiversityEscControls();
     });
@@ -2781,7 +3083,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         w->setPlayEnabled(true);
     });
     // Client-side playback
-    connect(w, &VfoWidget::playToggled, this, [this, w, sliceId](bool on) {
+    connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
         bool clientSide = AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
         if (clientSide) {
             if (on)
@@ -2934,6 +3236,21 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
                 sw->reacquireNoiseFloorLock();
             }
         }
+    });
+    connect(w, &VfoWidget::autoSqlMarginDbChanged,
+            this, [this, s](int marginDb) {
+        if (m_panStack) {
+            for (PanadapterApplet* applet : m_panStack->allApplets()) {
+                if (!applet || !applet->spectrumWidget()) {
+                    continue;
+                }
+                applet->spectrumWidget()->setAutoSqlMarginDb(marginDb);
+            }
+        } else if (SpectrumWidget* sw = spectrumForSlice(s)) {
+            sw->setAutoSqlMarginDb(marginDb);
+        }
+        updateKiwiSdrVirtualReceiverControlsForSlice(s);
+        syncActiveSliceSquelchLineToSpectrums();
     });
 
     // Wire slice data into widget

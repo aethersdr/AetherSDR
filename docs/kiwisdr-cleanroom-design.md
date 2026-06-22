@@ -77,7 +77,7 @@ black-box observations made in this thread.
   `SERVER DE CLIENT ... W/F`, `SET compression=0`,
   `SET mod=... low_cut=... high_cut=... freq=...`, AGC as the combined
   `SET agc=... hang=... thresh=... slope=... decay=... manGain=...` command,
-  squelch as `SET squelch=... max=...`, waterfall positioning via
+  squelch initially as `SET squelch=... max=...`, waterfall positioning via
   `SET zoom=... cf=...` with compatibility `start=...`, `SET maxdb=... mindb=...`,
   `SET wf_speed=...`, `SET interp=...`, `SET keepalive`, tagged `MSG`, `SND`,
   `W/F`, and `EXT` binary/text dispatch, variable SND and W/F payload layouts,
@@ -92,6 +92,46 @@ black-box observations made in this thread.
   Attenuation, remote mute, PBT, extension launch, IQ streams, and compressed
   audio are not exposed because they would add Kiwi-only product behavior or
   require undefined wire details.
+- Clean server-side parser check from 2026-06-21: the archived KiwiSDR server
+  `rx/rx_sound_cmd.cpp` file carries a GNU Library GPL v2-or-later notice and
+  was used only to verify the exposed squelch command contract. The accepted
+  command shape is `SET squelch=<signed-dB-offset-or-0-off> param=<float>`;
+  the older `max=` shape is retained by the server only as a compatibility
+  no-op.
+- AetherSDR keeps Flex Manual SQL on the app-wide 0-100 `squelch_level` scale,
+  but Kiwi does not use Flex units. Manual Kiwi SQL follows the server's
+  signed margin scale with a tapered UI map: slider `0` maps to `-99 dB`,
+  slider `49` maps to `-1 dB`, slider `50` maps to `+1 dB`, and slider `99`
+  maps to `+99 dB` relative to the Kiwi median RSSI noise-floor estimate.
+  Because the server reserves `SET squelch=0` for open/off, enabled manual SQL
+  normalizes any exact zero threshold to `+1 dB`; disabling SQL sends
+  `SET squelch=0`. This gives the operator downward adjustment below the
+  measured noise floor without conflating the lowest slider position with
+  squelch-off. The Kiwi SQL line is drawn as a noise-floor-relative `N dB`
+  line using the SND S-meter median, because that is the same value family the
+  server uses for non-NBFM squelch. Manual SQL pins that floor when the user
+  sets the threshold; Auto SQL lets it track. Waterfall-derived floor is only a
+  fallback until SND meter samples arrive. Auto SQL uses the smaller direct
+  `5..20 dB` margin because it is already operating in dB-margin units.
+- Clean server-side AGC check from 2026-06-22: the `SET agc=... thresh=...
+  manGain=... decay=...` parser forwards those values to the BSD-licensed
+  CuteSDR AGC implementation. That implementation documents threshold as an
+  AGC knee in nominal `-160..0 dB`, manual gain as `0..100 dB`, and decay as
+  `20..5000 ms`. AetherSDR therefore stores Kiwi replacement AGC-T directly in
+  dB (`-160..0`) instead of using Flex's `0..100` AGC-T scale.
+- Kiwi's server command takes a raw decay time, not named presets. AetherSDR
+  maps its existing AGC UI names to decay values inside the supported range:
+  Fast `300 ms`, Med `1000 ms`, Slow `3000 ms`; Off sends `agc=0` with the
+  manual-gain field from the AGC-off slider.
+- Kiwi virtual receive starts from Kiwi-safe AGC defaults rather than copying
+  the active Flex slice's AGC-T state: `SET agc=1 hang=0 thresh=-100 slope=6
+  decay=1000 manGain=50`. Operator changes in the RX applet still update the
+  Kiwi receiver controls while the Kiwi replacement source is active.
+- Clean server-side send-path check from 2026-06-21: the LGPL-marked server
+  sends an SND squelch UI flag for non-NBFM squelch state, but intentionally
+  does not replace non-NBFM audio with silence. AetherSDR therefore honors that
+  SND flag locally by gating decoded Kiwi audio before it enters the normal
+  AetherSDR RX audio path.
 - User-provided report from 2026-06-18: after protocol setup changes, some
   endpoints returned "sound connection closed" during connection setup, and
   `QWebSocketPrivate::processHandshake` reported HTTP 200 for the root-query
@@ -133,10 +173,10 @@ black-box observations made in this thread.
 - User-provided protocol correction from 2026-06-18: string values in `SET`
   commands must not contain spaces. The current runtime sends only sanitized
   callsign identity strings and fixed client labels without spaces.
-- User-provided corrected implementation spec from 2026-06-18: W/F byte values
-  are raw display/bin values, not calibrated dBm. The runtime no longer uses
-  `byte - 255`; it maps raw bytes into a Kiwi-only display range and applies
-  local auto-aperture/color shaping without claiming RF calibration.
+- Server-side W/F source check from 2026-06-22: direct uncompressed W/F row
+  bytes are wrapped negative dB values. AetherSDR decodes them as
+  `clamp(byte - 255, -200, 0)` for vertical FFT placement, then applies local
+  auto-aperture/color shaping without claiming Flex-calibrated RF dBm.
 - User-provided screenshots from 2026-06-18 showed the panadapter overlay
   displaying a full URL-encoded `MSG load_cfg=...` record as a connection
   error. The corrected parser treats `MSG` records as key-value fields and only
@@ -173,16 +213,16 @@ black-box observations made in this thread.
   peak-hold guidance, dBm-to-S-unit conversion utility, non-fatal extraction
   failures, and mandatory stubs for real SND meter extraction until the SND
   meter field layout and conversion formula are independently verified.
-- User-authorized experimental SND meter extraction from 2026-06-19, backed by
+- User-authorized SND meter extraction from 2026-06-19, initially backed by
   short receive-only black-box SND probes against `22033.proxy.kiwisdr.com:8073`:
   observed 1034-byte frames with `SND` at bytes 0-2, byte 3 as flags, bytes 4-7
   as a little-endian rolling frame counter, bytes 8-9 as a big-endian signed
   candidate meter field, and big-endian PCM beginning at byte 10. The candidate
   field varied plausibly across 7.2 MHz LSB, 10 MHz AM, and 14.2 MHz USB probes.
-  AetherSDR maps it as `raw / 10 - 127 dBm` only under the `experimental` meter
-  capability until independent live validation confirms it. The user-facing
-  meter surface uses the normal S-meter labels while the internal capability
-  remains experimental.
+  A later clean-room server-side check verified bytes 8-9 as the SND S-meter
+  field encoded as `(dBm + 127) * 10`, so AetherSDR maps it as
+  `raw / 10 - 127 dBm` with verified SND-meter capability for that frame
+  layout. The user-facing meter surface uses the normal S-meter labels.
 - Red-team review in this clean-room worktree found integration risks without
   using any Kiwi/WebSDR implementation source: unassigned profile connects could
   reuse stale slice tracking, exact 1024-bin W/F rows could be misread as older
@@ -217,10 +257,8 @@ black-box observations made in this thread.
   - A single direct `W/F` probe with `SET send_dB=1` produced binary `W/F`
     frames of 1040 bytes, with a 16-byte header and 1024 one-byte waterfall
     bins. With observed `center_freq=15000000` and `bandwidth=30000000`, the
-    row spans 0-30 MHz at zoom 0. At the time, observed bin values appeared
-    plausible when interpreted as `byte - 255`; the later corrected
-    user-provided spec supersedes that interpretation and treats W/F bytes as
-    display/bin intensity values rather than calibrated dBm.
+    row spans 0-30 MHz at zoom 0. The later server-side W/F source check
+    confirmed the observed `byte - 255` interpretation for direct rows.
 - Clean black-box follow-up observations against user-provided endpoints
   `sdr.hfunderground.com:8077`, `w0air.ddns.net:8073`, and
   `22033.proxy.kiwisdr.com:8073`, using only rendered UI screenshots and
@@ -407,6 +445,15 @@ the applet-level Kiwi Audio toggle is enabled.
   `support/stats.cpp`, `rx/rx_server.cpp`, `rx/rx_sound.cpp`, and
   `rx/rx_util.cpp`, each carrying GNU Library General Public License
   version 2-or-later headers in that source snapshot.
+- The 2026-06-21 squelch follow-up used the LGPL-marked server files
+  `rx/rx_sound_cmd.cpp` and `rx/rx_sound.cpp` only to verify the public command
+  contract and SND squelch flag behavior accepted/emitted by the server. No
+  KiwiSDR client code was copied, translated, or used to derive AetherSDR
+  behavior.
+- The 2026-06-22 SQL/AGC-T range follow-up used the same server parser file
+  plus BSD-licensed CuteSDR AGC/squelch headers and implementation comments to
+  verify numeric ranges. No KiwiSDR client code was copied, translated, or used
+  to derive AetherSDR behavior.
 - No WebSDR source code, prior WebSDR worktrees, PR #3612, prior WebSDR
   threads, contaminated temporary files, or rollout summaries were used.
 
@@ -668,30 +715,27 @@ Remaining uncertainties are deliberately conservative:
   points and the previous ramp could impose audible speech-correlated
   artifacts. When the SND or W/F sequence counter skips, AetherSDR applies
   bounded gap concealment by repeating the previous decoded audio frame or
-  previous W/F row. The SND meter/RSSI field and conversion remain unverified.
-- Kiwi S-meter display uses an experimental SND candidate only for the
-  independently observed 1034-byte frame layout described above. The extractor
-  is intentionally labeled `experimental`; it must not be promoted to verified
-  calibrated SND metering until the field and conversion are validated against
-  an independent reference.
+  previous W/F row.
+- Kiwi S-meter display uses the verified SND meter field for the independently
+  observed 1034-byte frame layout described above. Unsupported layouts remain
+  unavailable rather than guessed.
 - Kiwi meter display is capability-aware. The SND metadata extraction path is
-  an explicit experimental extractor and must not silently guess unsupported
-  layouts. Decoded Kiwi audio and W/F rows may still produce internal
+  explicit and must not silently guess unsupported layouts. Decoded Kiwi audio
+  and W/F rows may still produce internal
   `relative_audio` and `relative_waterfall` readings for diagnostics, but those
   uncalibrated readings do not drive the user-facing VFO or applet S-meter. The
-  existing Flex-style meter surfaces show either the experimental SND candidate
-  or an unavailable readout. Flex `SLC/LEVEL` meter updates are ignored for
+  existing Flex-style meter surfaces show either the verified SND meter or an
+  unavailable readout. Flex `SLC/LEVEL` meter updates are ignored for
   slices currently assigned to a Kiwi virtual RX antenna, preventing local
   calibrated Flex dBm from racing the remote Kiwi meter state.
-- Waterfall row bytes are treated as raw display/bin intensity values, not
-  calibrated dBm. They are mapped into a Kiwi-only pseudo-dB display range and
-  color-mapped through a Kiwi-only automatic aperture with square-root contrast
-  stretch across the active waterfall color scheme. This is client-side display
-  normalization only: it does not synthesize waterfall data, does not derive
-  pixels from audio, and does not claim calibrated RF power. Earlier black-box
-  W/F captures showed both extended 16-byte-header direct rows and compact
-  encoded rows. AetherSDR requests direct uncompressed W/F rows and drops
-  compact encoded rows until a clean decoder is available.
+- Direct uncompressed W/F row bytes are decoded as wrapped negative dB values
+  and color-mapped through a Kiwi-only automatic aperture with square-root
+  contrast stretch across the active waterfall color scheme. This is
+  client-side display normalization only: it does not synthesize waterfall data
+  from audio and does not claim Flex-calibrated RF power. Earlier black-box W/F
+  captures showed both extended 16-byte-header direct rows and compact encoded
+  rows. AetherSDR requests direct uncompressed W/F rows and drops compact
+  encoded rows until a clean decoder is available.
 - The applet exposes Waterfall Cell and Waterfall Floor sliders using the
   user-supplied -30 dB to +30 dB range. The corrected protocol draft maps
   portable waterfall aperture control to `SET maxdb=... mindb=...`, so slider

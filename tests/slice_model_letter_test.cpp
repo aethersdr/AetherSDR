@@ -143,6 +143,182 @@ int main(int argc, char** argv)
                   QStringLiteral("slice set 4 audio_pan=60"));
     }
 
+    // ── External receive replacement also owns visible AGC and SQL controls.
+    // These controls should drive the replacement source, not hidden Flex state.
+    {
+        SliceModel s(5);
+        QStringList commands;
+        QObject::connect(&s, &SliceModel::commandReady,
+                         [&commands](const QString& cmd) { commands.append(cmd); });
+        s.applyStatus(kv({{"agc_mode", "slow"},
+                          {"agc_threshold", "40"},
+                          {"agc_off_level", "12"},
+                          {"squelch", "1"},
+                          {"squelch_level", "35"}}));
+        EXPECT_EQ(s.agcMode(), QString("slow"));
+        EXPECT_EQ(s.agcThreshold(), 40);
+        EXPECT_EQ(s.agcOffLevel(), 12);
+        EXPECT_EQ(s.squelchOn(), true);
+        EXPECT_EQ(s.squelchLevel(), 35);
+
+        QSignalSpy agcModeSpy(&s, &SliceModel::agcModeChanged);
+        QSignalSpy agcThresholdSpy(&s, &SliceModel::agcThresholdChanged);
+        QSignalSpy agcOffLevelSpy(&s, &SliceModel::agcOffLevelChanged);
+        QSignalSpy externalAgcModeSpy(
+            &s, &SliceModel::externalReceiveAgcModeChanged);
+        QSignalSpy externalAgcThresholdSpy(
+            &s, &SliceModel::externalReceiveAgcThresholdChanged);
+        QSignalSpy externalAgcOffLevelSpy(
+            &s, &SliceModel::externalReceiveAgcOffLevelChanged);
+        QSignalSpy externalAutoSquelchSpy(
+            &s, &SliceModel::externalReceiveAutoSquelchChanged);
+        QSignalSpy squelchSpy(&s, &SliceModel::squelchChanged);
+        QSignalSpy externalSquelchSpy(
+            &s, &SliceModel::externalReceiveSquelchChanged);
+        s.setExternalReceiveAudioReplacementMute(true);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 5 audio_mute=1"));
+        EXPECT_EQ(s.agcMode(), QString("slow"));
+        EXPECT_EQ(s.receiveAgcMode(), QString("med"));
+        EXPECT_EQ(s.flexAgcMode(), QString("slow"));
+        EXPECT_EQ(s.agcThreshold(), 40);
+        EXPECT_EQ(s.receiveAgcThreshold(), -100);
+        EXPECT_EQ(s.flexAgcThreshold(), 40);
+        EXPECT_EQ(s.agcOffLevel(), 12);
+        EXPECT_EQ(s.receiveAgcOffLevel(), 50);
+        EXPECT_EQ(s.flexAgcOffLevel(), 12);
+        EXPECT_EQ(s.squelchOn(), true);
+        EXPECT_EQ(s.receiveSquelchOn(), false);
+        EXPECT_EQ(s.externalReceiveAutoSquelchOn(), false);
+        EXPECT_EQ(s.flexSquelchOn(), true);
+        EXPECT_EQ(s.squelchLevel(), 35);
+        EXPECT_EQ(s.receiveSquelchLevel(), 0);
+        EXPECT_EQ(s.flexSquelchLevel(), 35);
+        EXPECT_EQ(agcModeSpy.count(), 0);
+        EXPECT_EQ(agcThresholdSpy.count(), 0);
+        EXPECT_EQ(agcOffLevelSpy.count(), 0);
+        EXPECT_EQ(externalAgcModeSpy.count(), 1);
+        EXPECT_EQ(externalAgcModeSpy.takeFirst().at(0).toString(), QString("med"));
+        EXPECT_EQ(externalAgcThresholdSpy.count(), 1);
+        EXPECT_EQ(externalAgcThresholdSpy.takeFirst().at(0).toInt(), -100);
+        EXPECT_EQ(externalAgcOffLevelSpy.count(), 1);
+        EXPECT_EQ(externalAgcOffLevelSpy.takeFirst().at(0).toInt(), 50);
+        EXPECT_EQ(squelchSpy.count(), 0);
+        EXPECT_EQ(externalSquelchSpy.count(), 1);
+        EXPECT_EQ(externalSquelchSpy.takeFirst().at(0).toBool(), false);
+        EXPECT_EQ(externalAutoSquelchSpy.count(), 0);
+        commands.clear();
+
+        s.setExternalReceiveAutoSquelch(true);
+        EXPECT_EQ(s.externalReceiveAutoSquelchOn(), true);
+        EXPECT_EQ(commands.join(QStringLiteral("|")), QString());
+        EXPECT_EQ(externalAutoSquelchSpy.count(), 1);
+        EXPECT_EQ(externalAutoSquelchSpy.takeFirst().at(0).toBool(), true);
+
+        s.setAgcMode(QStringLiteral("off"));
+        s.setAgcThreshold(-40);
+        s.setAgcOffLevel(44);
+        s.setSquelch(false, 66);
+        EXPECT_EQ(s.agcMode(), QString("slow"));
+        EXPECT_EQ(s.receiveAgcMode(), QString("off"));
+        EXPECT_EQ(s.flexAgcMode(), QString("slow"));
+        EXPECT_EQ(s.agcThreshold(), 40);
+        EXPECT_EQ(s.receiveAgcThreshold(), -40);
+        EXPECT_EQ(s.flexAgcThreshold(), 40);
+        EXPECT_EQ(s.agcOffLevel(), 12);
+        EXPECT_EQ(s.receiveAgcOffLevel(), 44);
+        EXPECT_EQ(s.flexAgcOffLevel(), 12);
+        EXPECT_EQ(s.squelchOn(), true);
+        EXPECT_EQ(s.receiveSquelchOn(), false);
+        EXPECT_EQ(s.externalReceiveAutoSquelchOn(), true);
+        EXPECT_EQ(s.flexSquelchOn(), true);
+        EXPECT_EQ(s.squelchLevel(), 35);
+        EXPECT_EQ(s.receiveSquelchLevel(), 66);
+        EXPECT_EQ(s.flexSquelchLevel(), 35);
+        EXPECT_EQ(commands.join(QStringLiteral("|")), QString());
+        EXPECT_EQ(agcModeSpy.count(), 0);
+        EXPECT_EQ(agcThresholdSpy.count(), 0);
+        EXPECT_EQ(agcOffLevelSpy.count(), 0);
+        EXPECT_EQ(externalAgcModeSpy.count(), 1);
+        EXPECT_EQ(externalAgcModeSpy.takeFirst().at(0).toString(), QString("off"));
+        EXPECT_EQ(externalAgcThresholdSpy.count(), 1);
+        EXPECT_EQ(externalAgcThresholdSpy.takeFirst().at(0).toInt(), -40);
+        EXPECT_EQ(externalAgcOffLevelSpy.count(), 1);
+        EXPECT_EQ(externalAgcOffLevelSpy.takeFirst().at(0).toInt(), 44);
+        EXPECT_EQ(squelchSpy.count(), 0);
+        EXPECT_EQ(externalSquelchSpy.count(), 1);
+        EXPECT_EQ(externalSquelchSpy.takeFirst().at(0).toBool(), false);
+        commands.clear();
+
+        s.applyStatus(kv({{"agc_mode", "fast"},
+                          {"agc_threshold", "90"},
+                          {"agc_off_level", "8"},
+                          {"squelch", "1"},
+                          {"squelch_level", "12"}}));
+        EXPECT_EQ(s.agcMode(), QString("fast"));
+        EXPECT_EQ(s.receiveAgcMode(), QString("off"));
+        EXPECT_EQ(s.flexAgcMode(), QString("fast"));
+        EXPECT_EQ(s.agcThreshold(), 90);
+        EXPECT_EQ(s.receiveAgcThreshold(), -40);
+        EXPECT_EQ(s.flexAgcThreshold(), 90);
+        EXPECT_EQ(s.agcOffLevel(), 8);
+        EXPECT_EQ(s.receiveAgcOffLevel(), 44);
+        EXPECT_EQ(s.flexAgcOffLevel(), 8);
+        EXPECT_EQ(s.squelchOn(), true);
+        EXPECT_EQ(s.receiveSquelchOn(), false);
+        EXPECT_EQ(s.externalReceiveAutoSquelchOn(), true);
+        EXPECT_EQ(s.flexSquelchOn(), true);
+        EXPECT_EQ(s.squelchLevel(), 12);
+        EXPECT_EQ(s.receiveSquelchLevel(), 66);
+        EXPECT_EQ(s.flexSquelchLevel(), 12);
+        EXPECT_EQ(agcModeSpy.count(), 1);
+        EXPECT_EQ(agcModeSpy.takeFirst().at(0).toString(), QString("fast"));
+        EXPECT_EQ(agcThresholdSpy.count(), 1);
+        EXPECT_EQ(agcThresholdSpy.takeFirst().at(0).toInt(), 90);
+        EXPECT_EQ(agcOffLevelSpy.count(), 1);
+        EXPECT_EQ(agcOffLevelSpy.takeFirst().at(0).toInt(), 8);
+        EXPECT_EQ(squelchSpy.count(), 1);
+        EXPECT_EQ(squelchSpy.takeFirst().at(0).toBool(), true);
+        EXPECT_EQ(externalAgcModeSpy.count(), 0);
+        EXPECT_EQ(externalAgcThresholdSpy.count(), 0);
+        EXPECT_EQ(externalAgcOffLevelSpy.count(), 0);
+        EXPECT_EQ(externalSquelchSpy.count(), 0);
+
+        s.setExternalReceiveAudioReplacementMute(false, false);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 5 audio_mute=0"));
+        EXPECT_EQ(s.agcMode(), QString("fast"));
+        EXPECT_EQ(s.agcThreshold(), 90);
+        EXPECT_EQ(s.agcOffLevel(), 8);
+        EXPECT_EQ(s.squelchOn(), true);
+        EXPECT_EQ(s.squelchLevel(), 12);
+        EXPECT_EQ(s.externalReceiveAutoSquelchOn(), false);
+        EXPECT_EQ(agcModeSpy.count(), 1);
+        EXPECT_EQ(agcModeSpy.takeFirst().at(0).toString(), QString("fast"));
+        EXPECT_EQ(agcThresholdSpy.count(), 1);
+        EXPECT_EQ(agcThresholdSpy.takeFirst().at(0).toInt(), 90);
+        EXPECT_EQ(agcOffLevelSpy.count(), 1);
+        EXPECT_EQ(agcOffLevelSpy.takeFirst().at(0).toInt(), 8);
+        EXPECT_EQ(squelchSpy.count(), 1);
+        EXPECT_EQ(squelchSpy.takeFirst().at(0).toBool(), true);
+        EXPECT_EQ(squelchSpy.count(), 0);
+        EXPECT_EQ(externalSquelchSpy.count(), 0);
+        EXPECT_EQ(externalAutoSquelchSpy.count(), 1);
+        EXPECT_EQ(externalAutoSquelchSpy.takeFirst().at(0).toBool(), false);
+        commands.clear();
+
+        s.setAgcMode(QStringLiteral("med"));
+        s.setAgcThreshold(20);
+        s.setAgcOffLevel(30);
+        s.setSquelch(false, 22);
+        EXPECT_EQ(commands.join(QStringLiteral("|")),
+                  QStringLiteral("slice set 5 agc_mode=med|"
+                                 "slice set 5 agc_threshold=20|"
+                                 "slice set 5 agc_off_level=30|"
+                                 "slice set 5 squelch=0|"
+                                 "slice set 5 squelch_level=22"));
+    }
+
     if (g_failures == 0) {
         std::printf("slice_model_letter_test: all checks passed\n");
         return 0;

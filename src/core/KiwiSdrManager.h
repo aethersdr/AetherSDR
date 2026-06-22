@@ -72,6 +72,8 @@ public slots:
     void updateWaterfallView(int sliceId, const QString& panId,
                              double centerMhz, double bandwidthMhz,
                              int lineDurationMs);
+    void setReceiverControlsForSlice(
+        int sliceId, const KiwiSdrReceiverControls& controls);
     void setProfileWaterfallSettings(const QString& id, int cellDb,
                                      int floorDb, int rate);
 

@@ -202,11 +202,29 @@ KiwiSdrReceiverControls normalizedControls(
     const KiwiSdrReceiverControls& controls)
 {
     KiwiSdrReceiverControls normalized = controls;
-    normalized.agcGainDb = std::clamp(normalized.agcGainDb, 0, 100);
-    normalized.agcThresholdDb = std::clamp(normalized.agcThresholdDb, -100, -10);
-    normalized.agcDecayMs = std::clamp(normalized.agcDecayMs, 200, 5000);
-    normalized.squelchLevelDbm =
-        std::clamp(normalized.squelchLevelDbm, -160.0, 0.0);
+    normalized.agcGainDb = std::clamp(
+        normalized.agcGainDb,
+        KiwiSdrProtocol::kAgcManualGainMinDb,
+        KiwiSdrProtocol::kAgcManualGainMaxDb);
+    normalized.agcThresholdDb = std::clamp(
+        normalized.agcThresholdDb,
+        KiwiSdrProtocol::kAgcThresholdMinDb,
+        KiwiSdrProtocol::kAgcThresholdMaxDb);
+    normalized.agcDecayMs = std::clamp(
+        normalized.agcDecayMs,
+        KiwiSdrProtocol::kAgcDecayMinMs,
+        KiwiSdrProtocol::kAgcDecayMaxMs);
+    if (normalized.squelchEnabled) {
+        normalized.squelchThresholdDb = std::clamp(
+            normalized.squelchThresholdDb,
+            KiwiSdrProtocol::kSquelchServerMinMarginDb,
+            KiwiSdrProtocol::kSquelchServerMaxMarginDb);
+        if (normalized.squelchThresholdDb == KiwiSdrProtocol::kSquelchOffLevel) {
+            normalized.squelchThresholdDb = 1;
+        }
+    } else {
+        normalized.squelchThresholdDb = KiwiSdrProtocol::kSquelchOffLevel;
+    }
     return normalized;
 }
 
@@ -219,7 +237,7 @@ bool controlsEqual(const KiwiSdrReceiverControls& a,
         && a.agcThresholdDb == b.agcThresholdDb
         && a.agcDecayMs == b.agcDecayMs
         && a.squelchEnabled == b.squelchEnabled
-        && std::abs(a.squelchLevelDbm - b.squelchLevelDbm) < 0.001;
+        && a.squelchThresholdDb == b.squelchThresholdDb;
 }
 
 QString redactedKiwiCommand(const QString& command)
@@ -1037,17 +1055,13 @@ void KiwiSdrClient::sendSoundSampleRateCommands()
     m_soundSampleRateCommandsSent = true;
     sendSoundCommand(QStringLiteral("SERVER DE CLIENT AetherSDR SND"));
     const KiwiSdrReceiverControls c = normalizedControls(m_receiverControls);
-    sendSoundCommand(QStringLiteral("SET squelch=%1 max=%2")
-        .arg(c.squelchEnabled ? 1 : 0)
-        .arg(c.squelchEnabled ? c.squelchLevelDbm : 0.0, 0, 'f', 2));
+    sendSoundCommand(KiwiSdrProtocol::formatSquelchCommand(
+        c.squelchEnabled, c.squelchThresholdDb));
     sendSoundCommand(QStringLiteral("SET genattn=0"));
     sendSoundCommand(QStringLiteral("SET gen=0 mix=-1"));
-    sendSoundCommand(QStringLiteral("SET agc=%1 hang=%2 thresh=%3 slope=6 decay=%4 manGain=%5")
-        .arg(c.agcEnabled ? 1 : 0)
-        .arg(c.agcHang ? 1 : 0)
-        .arg(c.agcThresholdDb)
-        .arg(c.agcDecayMs)
-        .arg(c.agcGainDb));
+    sendSoundCommand(KiwiSdrProtocol::formatAgcCommand(
+        c.agcEnabled, c.agcHang, c.agcThresholdDb,
+        c.agcGainDb, c.agcDecayMs));
     sendTrackedSliceToServer();
     sendKeepalive();
 }
@@ -1110,15 +1124,11 @@ void KiwiSdrClient::sendReceiverControlsToServer()
     }
 #endif
     const KiwiSdrReceiverControls c = normalizedControls(m_receiverControls);
-    sendSoundCommand(QStringLiteral("SET squelch=%1 max=%2")
-        .arg(c.squelchEnabled ? 1 : 0)
-        .arg(c.squelchEnabled ? c.squelchLevelDbm : 0.0, 0, 'f', 2));
-    sendSoundCommand(QStringLiteral("SET agc=%1 hang=%2 thresh=%3 slope=6 decay=%4 manGain=%5")
-        .arg(c.agcEnabled ? 1 : 0)
-        .arg(c.agcHang ? 1 : 0)
-        .arg(c.agcThresholdDb)
-        .arg(c.agcDecayMs)
-        .arg(c.agcGainDb));
+    sendSoundCommand(KiwiSdrProtocol::formatSquelchCommand(
+        c.squelchEnabled, c.squelchThresholdDb));
+    sendSoundCommand(KiwiSdrProtocol::formatAgcCommand(
+        c.agcEnabled, c.agcHang, c.agcThresholdDb,
+        c.agcGainDb, c.agcDecayMs));
 }
 
 void KiwiSdrClient::sendWaterfallViewToServer()
@@ -1600,9 +1610,13 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
                                             header.sequence)
         : 0;
     updateSoundTelemetry(frame);
-    const KiwiSdrProtocol::MeterReading meterReading =
+    KiwiSdrProtocol::MeterReading meterReading =
         KiwiSdrProtocol::extractMeterFromSndVerifiedLayout(
             frame, KiwiSdrProtocol::MeterContext{});
+    if (meterReading.valid) {
+        meterReading.squelchStateKnown = true;
+        meterReading.squelched = header.squelched;
+    }
     markSoundAudioReady();
     ++m_soundDiagFrames;
     m_soundDiagBytes += static_cast<quint64>(frame.size());
@@ -1667,8 +1681,11 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
         return;
     }
 
-    const QByteArray pcm = decodeSoundFrame(frame);
+    QByteArray pcm = decodeSoundFrame(frame);
     if (!pcm.isEmpty()) {
+        if (header.squelched) {
+            pcm.fill(0);
+        }
         if (logSoundFrameShape) {
             qCDebug(lcKiwiSdrAudio).noquote()
                 << "KiwiSDR SND decode"

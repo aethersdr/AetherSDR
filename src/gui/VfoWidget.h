@@ -148,6 +148,7 @@ Q_SIGNALS:
     void sliceActivationRequested(int sliceId);
     void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
     void flexRxAntennaSelected(int sliceId);
+    void autoSqlMarginDbChanged(int dB);
     // Emitted when the wheel tunes by step so MainWindow can apply the shared
     // tuning/reveal policy.
     void stepTuneRequested(double mhz);
@@ -276,12 +277,22 @@ private:
     void syncTabStackHeightToCurrentPage();
     void relayoutToCurrentContent();
     QPushButton* m_sqlBtn{nullptr};
-    QPointer<RxApplet> m_rxApplet;       // source-of-truth for 3-way SQL state
+    QPointer<RxApplet> m_rxApplet;       // mirrored only while this VFO's slice is active
     QLabel*      m_sqlValueLbl{nullptr}; // captured during buildUI() for syncSqlVisuals
     bool         m_savedSquelchOn{false};
     // Apply the current SqlMode from m_rxApplet to the VfoWidget's SQL
     // button label/style and slider range/value.  Called on rxApplet's
     // sqlModeChanged signal and once after setRxApplet().
+    bool mirrorsRxAppletSql() const;
+    enum class LocalSqlMode { Off, Manual, Auto };
+    LocalSqlMode standaloneSqlMode() const;
+    void cycleStandaloneSqlMode();
+    int autoSqlMarginDb() const;
+    void setAutoSqlMarginDb(int dB);
+    int manualSqlMaximum() const;
+    int clampManualSqlLevel(int level) const;
+    int agcThresholdMinimum() const;
+    int agcThresholdMaximum() const;
     void syncSqlVisuals();
 public:
     void setDiversityAllowed(bool allowed);

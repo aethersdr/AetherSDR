@@ -7,6 +7,7 @@
 #include "SliceColorManager.h"
 #include "SliceLabel.h"
 #include "core/KiwiSdrManager.h"
+#include "core/KiwiSdrProtocol.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -1104,26 +1105,39 @@ void VfoWidget::buildTabContent()
         // MainWindow), delegate the 3-way mode cycle to RxApplet so both
         // UIs share Off / Manual / Auto state.  Standalone fallback
         // (no RxApplet — e.g. tests) keeps the original 2-state toggle.
-        // We turn off Qt's built-in checkable behavior in setRxApplet
-        // so the click handler can drive the cycle explicitly.
+        // syncSqlVisuals turns off Qt's built-in checkable behavior while
+        // this VFO mirrors the side RX applet, so this handler can drive the
+        // cycle explicitly.
         connect(m_sqlBtn, &QPushButton::clicked, this, [this]() {
-            if (m_rxApplet) {
+            if (m_rxApplet && m_slice && !m_slice->isActive()) {
+                emit sliceActivationRequested(m_slice->sliceId());
+            }
+            if (mirrorsRxAppletSql()) {
                 m_rxApplet->cycleSqlModeExternal();
+            } else if (m_slice && m_slice->externalReceiveReplacementActive()) {
+                cycleStandaloneSqlMode();
             } else if (!m_updatingFromModel && m_slice) {
                 m_slice->setSquelch(m_sqlBtn->isChecked(),
-                                    m_sqlSlider->value());
+                                    clampManualSqlLevel(m_sqlSlider->value()));
             }
         });
         connect(m_sqlSlider, &QSlider::valueChanged, this, [this](int v) {
             if (m_sqlValueLbl) m_sqlValueLbl->setText(QString::number(v));
             if (m_updatingFromModel) return;
-            if (m_rxApplet) {
+            if (m_rxApplet && m_slice && !m_slice->isActive()) {
+                emit sliceActivationRequested(m_slice->sliceId());
+            }
+            if (mirrorsRxAppletSql()) {
                 // Routes through RxApplet's Manual/Auto branching so the
                 // manual cache, AppSettings persistence, and spectrum-side
                 // margin broadcast all happen exactly once and in one place.
                 m_rxApplet->setSqlSliderValueExternal(v);
+            } else if (m_slice && m_slice->externalReceiveReplacementActive()
+                       && standaloneSqlMode() == LocalSqlMode::Auto) {
+                setAutoSqlMarginDb(v);
             } else if (m_slice) {
-                m_slice->setSquelch(m_sqlBtn->isChecked(), v);
+                m_slice->setSquelch(m_sqlBtn->isChecked(),
+                                    clampManualSqlLevel(v));
             }
         });
         connect(m_agcCmb, &QComboBox::currentTextChanged, this, [this](const QString& text) {
@@ -1138,10 +1152,10 @@ void VfoWidget::buildTabContent()
         });
         connect(m_agcTSlider, &QSlider::valueChanged, this, [this](int v) {
             if (m_agcValueLbl) m_agcValueLbl->setText(QString::number(v));
-            const bool agcOff = m_slice && (m_slice->agcMode() == "off");
+            const bool agcOff = m_slice && (m_slice->receiveAgcMode() == "off");
             m_agcTSlider->setToolTip(agcOff
-                ? QString("AGC Off Level: %1").arg(v)
-                : QString("AGC Threshold: %1").arg(v));
+                ? QString("AGC Off Level: %1 dB").arg(v)
+                : QString("AGC Threshold: %1 dB").arg(v));
             if (!m_updatingFromModel && m_slice) {
                 if (agcOff) m_slice->setAgcOffLevel(v);
                 else m_slice->setAgcThreshold(v);
@@ -2937,6 +2951,13 @@ void VfoWidget::setSlice(SliceModel* slice)
         int idx = m_modeCombo->findText(cur);
         if (idx >= 0) m_modeCombo->setCurrentIndex(idx);
     }
+    connect(m_slice, &SliceModel::activeChanged, this, [this](bool) {
+        syncSqlVisuals();
+    });
+    connect(m_slice, &SliceModel::externalReceiveAutoSquelchChanged,
+            this, [this](bool) {
+        syncSqlVisuals();
+    });
     // Mode
     connect(m_slice, &SliceModel::modeChanged, this, [this](const QString& mode) {
         m_tabBtns[2]->setText(mode);  // update mode tab label
@@ -2979,18 +3000,19 @@ void VfoWidget::setSlice(SliceModel* slice)
             // (#2504). CW/CWL squelch is radio-managed — no client push, so no
             // "save" either, or the unpaired flag would fabricate a restore on
             // the next mode change (#3263).
-            if (m_slice->squelchOn() && (isDig || isRtty)) {
+            if (m_slice->receiveSquelchOn() && (isDig || isRtty)) {
                 m_savedSquelchOn = true;
-                m_slice->setSquelch(false, m_slice->squelchLevel());
+                m_slice->setSquelch(false, m_slice->receiveSquelchLevel());
                 QSignalBlocker sb(m_sqlBtn);
                 m_sqlBtn->setChecked(false);
             }
         } else if (!sqlDisabled && m_slice && m_savedSquelchOn) {
             m_savedSquelchOn = false;
-            m_slice->setSquelch(true, m_slice->squelchLevel());
+            m_slice->setSquelch(true, m_slice->receiveSquelchLevel());
             QSignalBlocker sb(m_sqlBtn);
             m_sqlBtn->setChecked(true);
         }
+        syncSqlVisuals();
         m_apfBtn->setVisible(isCw);
         m_anfBtn->setVisible(isVoice);
         m_anflBtn->setVisible(isVoice);
@@ -3140,9 +3162,9 @@ void VfoWidget::setSlice(SliceModel* slice)
     // suggested level), so skip the value update when m_sqlMode is Auto.
     // The 3-way button visuals are driven separately via syncSqlVisuals
     // on sqlModeChanged — we don't need to touch the button here.
-    connect(m_slice, &SliceModel::squelchChanged, this, [this](bool on, int level) {
+    auto updateSquelchUi = [this](bool on, int level) {
         m_updatingFromModel = true;
-        if (m_rxApplet) {
+        if (mirrorsRxAppletSql()) {
             const bool inAuto =
                 (m_rxApplet->sqlMode() == RxApplet::SqlMode::Auto);
             if (!inAuto)
@@ -3150,32 +3172,69 @@ void VfoWidget::setSlice(SliceModel* slice)
         } else {
             if (m_sqlBtn->isEnabled())
                 m_sqlBtn->setChecked(on);
-            m_sqlSlider->setValue(level);
+            if (!(m_slice && m_slice->externalReceiveReplacementActive()
+                  && standaloneSqlMode() == LocalSqlMode::Auto)) {
+                m_sqlSlider->setValue(level);
+            }
         }
         m_updatingFromModel = false;
+        syncSqlVisuals();
+    };
+    connect(m_slice, &SliceModel::squelchChanged, this, [this, updateSquelchUi](bool on, int level) {
+        if (m_slice && m_slice->externalReceiveReplacementActive()) {
+            return;
+        }
+        updateSquelchUi(on, level);
+    });
+    connect(m_slice, &SliceModel::externalReceiveSquelchChanged,
+            this, [this, updateSquelchUi](bool on, int level) {
+        if (!m_slice || !m_slice->externalReceiveReplacementActive()) {
+            return;
+        }
+        updateSquelchUi(on, level);
     });
     // AGC
-    connect(m_slice, &SliceModel::agcModeChanged, this, [this](const QString& mode) {
+    auto updateAgcModeUi = [this](const QString& mode) {
+        Q_UNUSED(mode);
         m_updatingFromModel = true;
         QSignalBlocker sb(m_agcCmb);
         // Map protocol value to display text
-        if (mode == "off") m_agcCmb->setCurrentText("Off");
-        else if (mode == "slow") m_agcCmb->setCurrentText("Slow");
-        else if (mode == "med") m_agcCmb->setCurrentText("Med");
-        else if (mode == "fast") m_agcCmb->setCurrentText("Fast");
+        const QString receiveMode =
+            m_slice ? m_slice->receiveAgcMode() : QString();
+        if (receiveMode == "off") m_agcCmb->setCurrentText("Off");
+        else if (receiveMode == "slow") m_agcCmb->setCurrentText("Slow");
+        else if (receiveMode == "med") m_agcCmb->setCurrentText("Med");
+        else if (receiveMode == "fast") m_agcCmb->setCurrentText("Fast");
         updateAgcSliderFromSlice();
         m_updatingFromModel = false;
-    });
+    };
+    connect(m_slice, &SliceModel::agcModeChanged, this, updateAgcModeUi);
+    connect(m_slice, &SliceModel::externalReceiveAgcModeChanged,
+            this, updateAgcModeUi);
     connect(m_slice, &SliceModel::agcThresholdChanged, this, [this](int v) {
         Q_UNUSED(v);
         m_updatingFromModel = true;
-        if (m_slice && m_slice->agcMode() != "off") updateAgcSliderFromSlice();
+        if (m_slice && m_slice->receiveAgcMode() != "off") updateAgcSliderFromSlice();
+        m_updatingFromModel = false;
+    });
+    connect(m_slice, &SliceModel::externalReceiveAgcThresholdChanged,
+            this, [this](int v) {
+        Q_UNUSED(v);
+        m_updatingFromModel = true;
+        if (m_slice && m_slice->receiveAgcMode() != "off") updateAgcSliderFromSlice();
         m_updatingFromModel = false;
     });
     connect(m_slice, &SliceModel::agcOffLevelChanged, this, [this](int v) {
         Q_UNUSED(v);
         m_updatingFromModel = true;
-        if (m_slice && m_slice->agcMode() == "off") updateAgcSliderFromSlice();
+        if (m_slice && m_slice->receiveAgcMode() == "off") updateAgcSliderFromSlice();
+        m_updatingFromModel = false;
+    });
+    connect(m_slice, &SliceModel::externalReceiveAgcOffLevelChanged,
+            this, [this](int v) {
+        Q_UNUSED(v);
+        m_updatingFromModel = true;
+        if (m_slice && m_slice->receiveAgcMode() == "off") updateAgcSliderFromSlice();
         m_updatingFromModel = false;
     });
     // RIT/XIT
@@ -3422,14 +3481,10 @@ void VfoWidget::syncFromSlice()
         m_tabBtns[0]->setText(muted ? QString::fromUtf8("\xF0\x9F\x94\x87")
                                     : QString::fromUtf8("\xF0\x9F\x94\x8A"));
     }
-    {
-        QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
-        m_sqlBtn->setChecked(m_slice->squelchOn());
-        m_sqlSlider->setValue(m_slice->squelchLevel());
-    }
+    syncSqlVisuals();
     {
         QSignalBlocker sb(m_agcCmb);
-        const QString& mode = m_slice->agcMode();
+        const QString mode = m_slice->receiveAgcMode();
         if (mode == "off") m_agcCmb->setCurrentText("Off");
         else if (mode == "slow") m_agcCmb->setCurrentText("Slow");
         else if (mode == "med") m_agcCmb->setCurrentText("Med");
@@ -3843,14 +3898,20 @@ void VfoWidget::updateAgcSliderFromSlice()
 {
     if (!m_slice || !m_agcTSlider || !m_agcValueLbl) return;
 
-    const bool agcOff = (m_slice->agcMode() == "off");
-    const int value = agcOff ? m_slice->agcOffLevel() : m_slice->agcThreshold();
+    const bool agcOff = (m_slice->receiveAgcMode() == "off");
+    const int minimum = agcOff ? 0 : agcThresholdMinimum();
+    const int maximum = agcOff ? 100 : agcThresholdMaximum();
+    const int value = std::clamp(
+        agcOff ? m_slice->receiveAgcOffLevel()
+               : m_slice->receiveAgcThreshold(),
+        minimum, maximum);
 
     QSignalBlocker blocker(m_agcTSlider);
+    m_agcTSlider->setRange(minimum, maximum);
     m_agcTSlider->setValue(value);
     m_agcTSlider->setToolTip(agcOff
-        ? QString("AGC Off Level: %1").arg(value)
-        : QString("AGC Threshold: %1").arg(value));
+        ? QString("AGC Off Level: %1 dB").arg(value)
+        : QString("AGC Threshold: %1 dB").arg(value));
     m_agcTSlider->setAccessibleName(agcOff ? "AGC off level" : "AGC threshold");
     m_agcValueLbl->setText(QString::number(value));
 }
@@ -4209,13 +4270,6 @@ void VfoWidget::setRxApplet(RxApplet* rx)
     m_rxApplet = rx;
     if (!rx) return;
 
-    // Take the SQL button out of Qt's built-in checkable behavior — the
-    // 3-way cycle is driven by clicked()'s explicit call to RxApplet.
-    if (m_sqlBtn) {
-        m_sqlBtn->setCheckable(false);
-        m_sqlBtn->setChecked(false);
-    }
-
     // Refresh visuals whenever the RxApplet's mode changes, and once now
     // so the freshly-wired widget shows the current shared state.
     connect(rx, &RxApplet::sqlModeChanged, this, [this](int) {
@@ -4225,6 +4279,7 @@ void VfoWidget::setRxApplet(RxApplet* rx)
     // mirroring it) — reflect them in the slider when we're in Auto mode.
     connect(rx, &RxApplet::autoSqlMarginDbChanged, this, [this](int dB) {
         if (!m_rxApplet || !m_sqlSlider) return;
+        if (!mirrorsRxAppletSql()) return;
         if (m_rxApplet->sqlMode() != RxApplet::SqlMode::Auto) return;
         QSignalBlocker b(m_sqlSlider);
         m_sqlSlider->setValue(dB);
@@ -4233,9 +4288,196 @@ void VfoWidget::setRxApplet(RxApplet* rx)
     syncSqlVisuals();
 }
 
+bool VfoWidget::mirrorsRxAppletSql() const
+{
+    return m_rxApplet && m_slice && m_rxApplet->isAttachedToSlice(m_slice);
+}
+
+VfoWidget::LocalSqlMode VfoWidget::standaloneSqlMode() const
+{
+    if (!m_slice || !m_slice->externalReceiveReplacementActive()) {
+        return (m_slice && m_slice->receiveSquelchOn())
+            ? LocalSqlMode::Manual
+            : LocalSqlMode::Off;
+    }
+    if (m_slice->externalReceiveAutoSquelchOn()) {
+        return LocalSqlMode::Auto;
+    }
+    return m_slice->receiveSquelchOn() ? LocalSqlMode::Manual
+                                       : LocalSqlMode::Off;
+}
+
+void VfoWidget::cycleStandaloneSqlMode()
+{
+    if (!m_slice || !m_slice->externalReceiveReplacementActive()) {
+        return;
+    }
+
+    switch (standaloneSqlMode()) {
+    case LocalSqlMode::Off:
+        m_slice->setExternalReceiveAutoSquelch(false);
+        m_slice->setSquelch(
+            true, clampManualSqlLevel(m_slice->receiveSquelchLevel()));
+        break;
+    case LocalSqlMode::Manual:
+        m_slice->setExternalReceiveAutoSquelch(true);
+        m_slice->setSquelch(true, autoSqlMarginDb());
+        break;
+    case LocalSqlMode::Auto:
+        m_slice->setExternalReceiveAutoSquelch(false);
+        m_slice->setSquelch(false, m_slice->receiveSquelchLevel());
+        break;
+    }
+    syncSqlVisuals();
+}
+
+int VfoWidget::autoSqlMarginDb() const
+{
+    return std::clamp(
+        AppSettings::instance().value("AutoSqlMarginDb", "10").toInt(), 5, 20);
+}
+
+void VfoWidget::setAutoSqlMarginDb(int dB)
+{
+    const int margin = std::clamp(dB, 5, 20);
+    auto& s = AppSettings::instance();
+    s.setValue("AutoSqlMarginDb", QString::number(margin));
+    s.save();
+    emit autoSqlMarginDbChanged(margin);
+    if (m_slice && m_slice->externalReceiveReplacementActive()
+        && m_slice->externalReceiveAutoSquelchOn()) {
+        m_slice->setSquelch(true, margin);
+    }
+}
+
+int VfoWidget::manualSqlMaximum() const
+{
+    return m_slice && m_slice->externalReceiveReplacementActive()
+        ? KiwiSdrProtocol::kSquelchUiMaxLevel
+        : 100;
+}
+
+int VfoWidget::clampManualSqlLevel(int level) const
+{
+    return std::clamp(level, 0, manualSqlMaximum());
+}
+
+int VfoWidget::agcThresholdMinimum() const
+{
+    return m_slice && m_slice->externalReceiveReplacementActive()
+        ? KiwiSdrProtocol::kAgcThresholdMinDb
+        : 0;
+}
+
+int VfoWidget::agcThresholdMaximum() const
+{
+    return m_slice && m_slice->externalReceiveReplacementActive()
+        ? KiwiSdrProtocol::kAgcThresholdMaxDb
+        : 100;
+}
+
 void VfoWidget::syncSqlVisuals()
 {
-    if (!m_rxApplet || !m_sqlBtn || !m_sqlSlider) return;
+    if (!m_sqlBtn || !m_sqlSlider) return;
+    if (!mirrorsRxAppletSql()) {
+        QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
+        if (m_slice && m_slice->externalReceiveReplacementActive()) {
+            if (m_sqlBtn->isCheckable()) {
+                m_sqlBtn->setCheckable(false);
+                m_sqlBtn->setChecked(false);
+            }
+            switch (standaloneSqlMode()) {
+            case LocalSqlMode::Off:
+                m_sqlBtn->setText("SQL");
+                m_sqlBtn->setStyleSheet(QString(kDspToggle) + kDisabledBtn);
+                m_sqlSlider->setEnabled(false);
+                break;
+            case LocalSqlMode::Manual:
+                m_sqlBtn->setText("SQL");
+                m_sqlBtn->setStyleSheet(
+                    "QPushButton { background: #006040; color: #00ff88; "
+                    "border: 1px solid #00a060; border-radius: 3px; "
+                    "font-size: 10px; font-weight: bold; padding: 1px 2px; }"
+                    "QPushButton:hover { background: #007050; }"
+                    + kDisabledBtn);
+                m_sqlSlider->setRange(0, manualSqlMaximum());
+                m_sqlSlider->setValue(clampManualSqlLevel(
+                    m_slice->receiveSquelchLevel()));
+                m_sqlSlider->setEnabled(m_sqlBtn->isEnabled());
+                break;
+            case LocalSqlMode::Auto:
+                m_sqlBtn->setText("AUTO");
+                m_sqlBtn->setStyleSheet(
+                    "QPushButton { background: #604000; color: #ffb800; "
+                    "border: 1px solid #906000; border-radius: 3px; "
+                    "font-size: 10px; font-weight: bold; padding: 1px 2px; }"
+                    "QPushButton:hover { background: #705000; }"
+                    + kDisabledBtn);
+                m_sqlSlider->setRange(5, 20);
+                m_sqlSlider->setValue(autoSqlMarginDb());
+                m_sqlSlider->setEnabled(m_sqlBtn->isEnabled());
+                break;
+            }
+            m_sqlSlider->setToolTip(
+                standaloneSqlMode() == LocalSqlMode::Auto
+                    ? QStringLiteral("Auto SQL margin (5-20 dB). dB above "
+                                     "the measured noise floor where the "
+                                     "squelch gate opens.")
+                    : QStringLiteral("Kiwi SQL threshold (0-99, mapped to a "
+                                     "signed dB offset from the receiver "
+                                     "noise floor). Increase to require a "
+                                     "stronger signal before audio opens."));
+            if (m_sqlValueLbl) {
+                m_sqlValueLbl->setText(QString::number(m_sqlSlider->value()));
+            }
+            m_sqlSlider->style()->unpolish(m_sqlSlider);
+            m_sqlSlider->style()->polish(m_sqlSlider);
+            m_sqlSlider->update();
+            return;
+        }
+
+        if (m_sqlBtn->isCheckable() == false) {
+            m_sqlBtn->setCheckable(true);
+        }
+        const bool on = m_slice && m_slice->receiveSquelchOn();
+        const int level = m_slice ? m_slice->receiveSquelchLevel() : 0;
+        m_sqlBtn->setText("SQL");
+        m_sqlBtn->setChecked(on);
+        m_sqlBtn->setStyleSheet(on
+            ? QStringLiteral("QPushButton { background: #006040; color: #00ff88; "
+                             "border: 1px solid #00a060; border-radius: 3px; "
+                             "font-size: 10px; font-weight: bold; padding: 1px 2px; }"
+                             "QPushButton:hover { background: #007050; }")
+                + kDisabledBtn
+            : QString(kDspToggle) + kDisabledBtn);
+        m_sqlSlider->setRange(0, manualSqlMaximum());
+        m_sqlSlider->setValue(clampManualSqlLevel(level));
+        m_sqlSlider->setEnabled(m_sqlBtn->isEnabled() && on);
+        m_sqlSlider->setToolTip(m_slice && m_slice->externalReceiveReplacementActive()
+            ? QStringLiteral("Kiwi SQL threshold (0-99, mapped to a signed "
+                             "dB offset from the receiver noise floor). "
+                             "Increase to require a stronger signal before "
+                             "audio opens.")
+            : QStringLiteral("Squelch threshold (0-100). Increase to require "
+                             "a stronger signal before audio opens."));
+        if (m_sqlValueLbl) {
+            m_sqlValueLbl->setText(QString::number(m_sqlSlider->value()));
+        }
+        m_sqlSlider->style()->unpolish(m_sqlSlider);
+        m_sqlSlider->style()->polish(m_sqlSlider);
+        m_sqlSlider->update();
+        return;
+    }
+
+    // Take the SQL button out of Qt's built-in checkable behavior while this
+    // VFO mirrors the side RX applet; the clicked() handler drives the
+    // applet's Off/Manual/Auto cycle explicitly. Inactive VFOs remain
+    // checkable and operate directly on their own slice.
+    if (m_sqlBtn->isCheckable()) {
+        m_sqlBtn->setCheckable(false);
+        m_sqlBtn->setChecked(false);
+    }
+
     const auto mode = m_rxApplet->sqlMode();
     // Match RxApplet's three button styles + label so the two surfaces
     // read identically.
@@ -4263,15 +4505,22 @@ void VfoWidget::syncSqlVisuals()
             + kDisabledBtn);
         break;
     }
-    // Slider swaps role between Manual (0–100 squelch_level) and Auto
-    // (5–20 dB margin).  Block signals during the swap so the resize
+    // Slider swaps role between Manual (Flex 0-100, Kiwi 0-99 signed-offset UI)
+    // and Auto (5–20 dB margin).  Block signals during the swap so the resize
     // doesn't fire a phantom valueChanged.
     QSignalBlocker b(m_sqlSlider);
     switch (mode) {
     case RxApplet::SqlMode::Manual: {
-        m_sqlSlider->setRange(0, 100);
+        m_sqlSlider->setRange(0, m_rxApplet->sqlManualMaximum());
         m_sqlSlider->setValue(m_rxApplet->sqlManualLevel());
-        m_sqlSlider->setEnabled(true);
+        m_sqlSlider->setEnabled(m_sqlBtn->isEnabled());
+        m_sqlSlider->setToolTip(m_slice && m_slice->externalReceiveReplacementActive()
+            ? QStringLiteral("Kiwi SQL threshold (0-99, mapped to a signed "
+                             "dB offset from the receiver noise floor). "
+                             "Increase to require a stronger signal before "
+                             "audio opens.")
+            : QStringLiteral("Squelch threshold (0-100). Increase to require "
+                             "a stronger signal before audio opens."));
         if (m_sqlValueLbl)
             m_sqlValueLbl->setText(QString::number(m_sqlSlider->value()));
         break;
@@ -4279,15 +4528,24 @@ void VfoWidget::syncSqlVisuals()
     case RxApplet::SqlMode::Auto: {
         m_sqlSlider->setRange(5, 20);
         m_sqlSlider->setValue(m_rxApplet->autoSqlMarginDb());
-        m_sqlSlider->setEnabled(true);
+        m_sqlSlider->setEnabled(m_sqlBtn->isEnabled());
+        m_sqlSlider->setToolTip(
+            QStringLiteral("Auto SQL margin (5-20 dB). dB above the measured "
+                           "noise floor where the squelch gate opens."));
         if (m_sqlValueLbl)
             m_sqlValueLbl->setText(QString::number(m_sqlSlider->value()));
         break;
     }
     case RxApplet::SqlMode::Off:
         m_sqlSlider->setEnabled(false);
+        m_sqlSlider->setToolTip(
+            QStringLiteral("Squelch threshold. Increase to require a stronger "
+                           "signal before audio opens."));
         break;
     }
+    m_sqlSlider->style()->unpolish(m_sqlSlider);
+    m_sqlSlider->style()->polish(m_sqlSlider);
+    m_sqlSlider->update();
 }
 
 void VfoWidget::setRadioModel(RadioModel* radioModel)

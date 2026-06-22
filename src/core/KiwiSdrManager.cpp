@@ -437,6 +437,19 @@ void KiwiSdrManager::updateWaterfallView(int sliceId, const QString& panId,
     }
 }
 
+void KiwiSdrManager::setReceiverControlsForSlice(
+    int sliceId, const KiwiSdrReceiverControls& controls)
+{
+    const QString profileId = m_sliceAssignments.value(sliceId);
+    if (profileId.isEmpty()) {
+        return;
+    }
+
+    if (KiwiSdrClient* c = ensureClient(profileId)) {
+        c->setReceiverControls(controls);
+    }
+}
+
 void KiwiSdrManager::setProfileWaterfallSettings(const QString& id, int cellDb,
                                                  int floorDb, int rate)
 {

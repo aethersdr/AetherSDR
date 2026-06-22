@@ -73,7 +73,7 @@ static constexpr int kWaterfallLineDurationMaxMs = 100;
 static constexpr int kWaterfallHistoryCapacityMsPerRow = 50;
 static constexpr int kWaterfallRatePercentMin = 1;
 static constexpr int kWaterfallRatePercentMax = 100;
-static constexpr float kKiwiSdrWaterfallMinDbm = -130.0f;
+static constexpr float kKiwiSdrWaterfallMinDbm = -200.0f;
 static constexpr float kKiwiSdrWaterfallMaxDbm = 0.0f;
 static constexpr int kNativeWaterfallFallbackMinTimeoutMs = 2000;
 static constexpr int kNativeWaterfallFallbackMaxTimeoutMs = 20000;
@@ -657,7 +657,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     m_squelchLineHideTimer->setSingleShot(true);
     m_squelchLineHideTimer->setInterval(3000);
     connect(m_squelchLineHideTimer, &QTimer::timeout, this, [this]() {
-        m_squelchLineVisible = false;
+        if (m_kiwiSdrWaterfallActive && m_kiwiSdrSquelchLineVisible) {
+            m_kiwiSdrSquelchLineVisible = false;
+        } else {
+            m_flexSquelchLineVisible = false;
+        }
         markOverlayDirty();
     });
 
@@ -1627,6 +1631,103 @@ float SpectrumWidget::estimateNoiseFloorDbm(const QVector<float>& bins) const
     return (baselineCount > 0) ? baselineSum / static_cast<float>(baselineCount) : mean;
 }
 
+float SpectrumWidget::estimateKiwiSdrVisualNoiseFloorDbm(
+    const QVector<float>& bins) const
+{
+    if (bins.isEmpty()) {
+        return -1000.0f;
+    }
+
+    const int stride = std::max(1, static_cast<int>(bins.size() / 512));
+    QVector<float> finite;
+    finite.reserve((bins.size() + stride - 1) / stride);
+    for (int i = 0; i < bins.size(); i += stride) {
+        const float v = bins[i];
+        if (std::isfinite(v)) {
+            finite.append(v);
+        }
+    }
+    if (finite.isEmpty()) {
+        return -1000.0f;
+    }
+
+    const int middle = finite.size() / 2;
+    std::nth_element(finite.begin(), finite.begin() + middle, finite.end());
+    return finite[middle];
+}
+
+void SpectrumWidget::updateKiwiSdrSquelchVisualFloor(float floorDbm)
+{
+    if (m_kiwiSdrSquelchMeterFloorValid) {
+        return;
+    }
+    if (!std::isfinite(floorDbm)) {
+        return;
+    }
+
+    const float clamped = std::clamp(
+        floorDbm, kKiwiSdrWaterfallMinDbm, kKiwiSdrWaterfallMaxDbm);
+    if (m_kiwiSdrSquelchLiveFloorDbm <= -500.0f) {
+        m_kiwiSdrSquelchLiveFloorDbm = clamped;
+    } else {
+        const float delta = clamped - m_kiwiSdrSquelchLiveFloorDbm;
+        if (std::abs(delta) >= 0.10f) {
+            const float alpha = delta > 0.0f ? 0.06f : 0.18f;
+            m_kiwiSdrSquelchLiveFloorDbm =
+                (1.0f - alpha) * m_kiwiSdrSquelchLiveFloorDbm
+                + alpha * clamped;
+        }
+    }
+
+    if (!m_kiwiSdrSquelchLineVisible) {
+        return;
+    }
+
+    if (m_kiwiSdrSquelchLineFloorRelative) {
+        markOverlayDirty();
+    } else if (!m_kiwiSdrSquelchPinnedThresholdValid
+               || !m_kiwiSdrSquelchPinnedDisplayNormValid) {
+        pinKiwiSdrManualSquelchLine();
+        markOverlayDirty();
+    }
+}
+
+void SpectrumWidget::pinKiwiSdrManualSquelchLine()
+{
+    if (!m_kiwiSdrSquelchLineVisible
+        || m_kiwiSdrSquelchLineFloorRelative
+        || m_kiwiSdrSquelchLevel == KiwiSdrProtocol::kSquelchOffLevel) {
+        return;
+    }
+
+    if (m_kiwiSdrSquelchLiveFloorDbm <= -500.0f) {
+        m_kiwiSdrSquelchPinnedFloorDbm = -999.0f;
+        m_kiwiSdrSquelchPinnedFloorValid = false;
+        m_kiwiSdrSquelchPinnedThresholdDbm = -999.0f;
+        m_kiwiSdrSquelchPinnedThresholdValid = false;
+        m_kiwiSdrSquelchPinnedDisplayNorm = -1.0f;
+        m_kiwiSdrSquelchPinnedDisplayNormValid = false;
+        return;
+    }
+
+    m_kiwiSdrSquelchPinnedFloorDbm = m_kiwiSdrSquelchLiveFloorDbm;
+    m_kiwiSdrSquelchPinnedFloorValid = true;
+    m_kiwiSdrSquelchPinnedThresholdDbm =
+        m_kiwiSdrSquelchPinnedFloorDbm
+        + static_cast<float>(m_kiwiSdrSquelchLevel);
+    m_kiwiSdrSquelchPinnedThresholdValid = true;
+    if (m_dynamicRange > 0.0f) {
+        m_kiwiSdrSquelchPinnedDisplayNorm = std::clamp(
+            (m_refLevel - m_kiwiSdrSquelchPinnedThresholdDbm)
+                / m_dynamicRange,
+            0.0f, 1.0f);
+        m_kiwiSdrSquelchPinnedDisplayNormValid = true;
+    } else {
+        m_kiwiSdrSquelchPinnedDisplayNorm = -1.0f;
+        m_kiwiSdrSquelchPinnedDisplayNormValid = false;
+    }
+}
+
 void SpectrumWidget::clearDbmReleaseRebase()
 {
     m_holdFftUpdatesAfterDbmRelease = 0;
@@ -2112,24 +2213,145 @@ void SpectrumWidget::setWfLineDuration(int ms) {
 
 void SpectrumWidget::setSquelchLine(bool visible, int level)
 {
-    m_squelchLineVisible = visible;
-    m_squelchLevel       = level;
+    m_flexSquelchLineVisible = visible;
+    m_flexSquelchLevel = std::clamp(level, 0, 100);
     markOverlayDirty();
     // Manual SQL: 3 s auto-hide; each slider adjustment restarts the timer.
     // Auto SQL: line stays pinned to the tracked floor level — no timer.
     if (m_squelchLineHideTimer) {
-        if (visible && !m_autoSquelchEnabled) {
+        if (visible && !m_autoSquelchEnabled && !m_kiwiSdrWaterfallActive) {
             m_squelchLineHideTimer->start();
-        } else {
+        } else if (!m_kiwiSdrWaterfallActive) {
             m_squelchLineHideTimer->stop();
         }
     }
 }
 
+void SpectrumWidget::setKiwiSdrSquelchMeterDbm(float dbm, bool squelched)
+{
+    if (!std::isfinite(dbm)) {
+        return;
+    }
+
+    const float clamped = std::clamp(dbm, -127.0f, 3.4f);
+    constexpr int kServerRssiMedianSamples = 65;
+    const bool shouldSample =
+        m_kiwiSdrSquelchMeterSamples.size() < kServerRssiMedianSamples
+        || squelched
+        || !m_kiwiSdrSquelchLineVisible
+        || m_kiwiSdrSquelchLineFloorRelative;
+    if (shouldSample) {
+        m_kiwiSdrSquelchMeterSamples.append(clamped);
+        while (m_kiwiSdrSquelchMeterSamples.size()
+               > kServerRssiMedianSamples) {
+            m_kiwiSdrSquelchMeterSamples.removeFirst();
+        }
+    }
+
+    if (m_kiwiSdrSquelchMeterSamples.isEmpty()) {
+        return;
+    }
+
+    QVector<float> sorted = m_kiwiSdrSquelchMeterSamples;
+    const int middle = sorted.size() / 2;
+    std::nth_element(sorted.begin(), sorted.begin() + middle, sorted.end());
+    const float floorDbm = sorted[middle];
+    m_kiwiSdrSquelchMeterFloorValid = true;
+    if (m_kiwiSdrSquelchLiveFloorDbm <= -500.0f) {
+        m_kiwiSdrSquelchLiveFloorDbm = floorDbm;
+    } else {
+        const float delta = floorDbm - m_kiwiSdrSquelchLiveFloorDbm;
+        if (std::abs(delta) >= 0.10f) {
+            const float alpha = delta > 0.0f ? 0.06f : 0.18f;
+            m_kiwiSdrSquelchLiveFloorDbm =
+                (1.0f - alpha) * m_kiwiSdrSquelchLiveFloorDbm
+                + alpha * floorDbm;
+        }
+    }
+
+    if (!m_kiwiSdrSquelchLineVisible) {
+        return;
+    }
+    if (m_kiwiSdrSquelchLineFloorRelative) {
+        markOverlayDirty();
+    } else if (!m_kiwiSdrSquelchPinnedThresholdValid
+               || !m_kiwiSdrSquelchPinnedDisplayNormValid) {
+        pinKiwiSdrManualSquelchLine();
+        markOverlayDirty();
+    }
+}
+
+void SpectrumWidget::setKiwiSdrSquelchLine(bool visible, int marginDb,
+                                           bool floorRelative)
+{
+    const bool wasVisible = m_kiwiSdrSquelchLineVisible;
+    const int previousLevel = m_kiwiSdrSquelchLevel;
+    const bool wasFloorRelative = m_kiwiSdrSquelchLineFloorRelative;
+    const int clampedLevel = std::clamp(
+        marginDb, KiwiSdrProtocol::kSquelchServerMinMarginDb,
+        KiwiSdrProtocol::kSquelchServerMaxMarginDb);
+    m_kiwiSdrSquelchLevel = clampedLevel;
+    m_kiwiSdrSquelchLineVisible =
+        visible && m_kiwiSdrSquelchLevel != KiwiSdrProtocol::kSquelchOffLevel;
+    m_kiwiSdrSquelchLineFloorRelative = floorRelative;
+    const bool shouldPin =
+        m_kiwiSdrSquelchLineVisible
+        && !floorRelative
+        && (!wasVisible || wasFloorRelative || previousLevel != clampedLevel
+            || !m_kiwiSdrSquelchPinnedThresholdValid);
+    if (shouldPin) {
+        pinKiwiSdrManualSquelchLine();
+    } else if (!m_kiwiSdrSquelchLineVisible) {
+        m_kiwiSdrSquelchPinnedFloorDbm = -999.0f;
+        m_kiwiSdrSquelchPinnedFloorValid = false;
+        m_kiwiSdrSquelchPinnedThresholdDbm = -999.0f;
+        m_kiwiSdrSquelchPinnedThresholdValid = false;
+        m_kiwiSdrSquelchPinnedDisplayNorm = -1.0f;
+        m_kiwiSdrSquelchPinnedDisplayNormValid = false;
+    }
+    m_flexSquelchLineVisible = false;
+    m_flexSquelchLevel = 0;
+    markOverlayDirty();
+    if (m_squelchLineHideTimer) {
+        m_squelchLineHideTimer->stop();
+    }
+}
+
+void SpectrumWidget::clearKiwiSdrSquelchLine()
+{
+    if (!m_kiwiSdrSquelchLineVisible && m_kiwiSdrSquelchLevel == 0
+        && m_sqlNoiseFloorDbm <= -500.0f
+        && m_kiwiSdrSquelchLiveFloorDbm <= -500.0f) {
+        return;
+    }
+    m_kiwiSdrSquelchLineVisible = false;
+    m_kiwiSdrSquelchLevel = 0;
+    m_kiwiSdrSquelchLineFloorRelative = false;
+    m_sqlNoiseFloorDbm = -999.0f;
+    m_kiwiSdrSquelchLiveFloorDbm = -999.0f;
+    m_kiwiSdrSquelchPinnedFloorDbm = -999.0f;
+    m_kiwiSdrSquelchPinnedFloorValid = false;
+    m_kiwiSdrSquelchPinnedThresholdDbm = -999.0f;
+    m_kiwiSdrSquelchPinnedThresholdValid = false;
+    m_kiwiSdrSquelchPinnedDisplayNorm = -1.0f;
+    m_kiwiSdrSquelchPinnedDisplayNormValid = false;
+    m_kiwiSdrSquelchMeterFloorValid = false;
+    m_kiwiSdrSquelchMeterSamples.clear();
+    markOverlayDirty();
+    if (m_squelchLineHideTimer) {
+        m_squelchLineHideTimer->stop();
+    }
+}
+
 void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
 {
-    if (!m_autoSquelchEnabled || m_sqlNoiseFloorDbm <= -500.0f) { return; }
-    const float norm = (m_refLevel - m_sqlNoiseFloorDbm) / m_dynamicRange;
+    const bool useKiwiFloor =
+        m_kiwiSdrWaterfallActive || m_kiwiSdrSquelchLineFloorRelative;
+    const float floorDbm = useKiwiFloor
+        ? m_kiwiSdrSquelchLiveFloorDbm
+        : m_sqlNoiseFloorDbm;
+    if (!m_autoSquelchEnabled || floorDbm <= -500.0f) { return; }
+    const float norm = (m_refLevel - floorDbm) / m_dynamicRange;
     const int y = specRect.top()
         + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
     p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 200), 1, Qt::DashLine));
@@ -2139,15 +2361,76 @@ void SpectrumWidget::drawAutoSqlFloor(QPainter& p, const QRect& specRect)
     f.setBold(true);
     p.setFont(f);
     p.setPen(AetherSDR::theme::withAlpha("color.accent.warning", 200));
-    const QString lbl = QString("Floor %1 dBm").arg(static_cast<int>(m_sqlNoiseFloorDbm));
+    const QString lbl = QString("Floor %1 dBm").arg(static_cast<int>(floorDbm));
     p.drawText(specRect.right() - p.fontMetrics().horizontalAdvance(lbl) - 4, y - 2, lbl);
+}
+
+void SpectrumWidget::drawSquelchLine(QPainter& p, const QRect& specRect)
+{
+    constexpr float kSqlMinDbm = -160.0f;
+    float squelchDbm = 0.0f;
+    float pinnedDisplayNorm = 0.0f;
+    bool usePinnedDisplayNorm = false;
+    QString label;
+    if (m_kiwiSdrSquelchLineVisible) {
+        if (m_kiwiSdrSquelchLevel == KiwiSdrProtocol::kSquelchOffLevel) {
+            return;
+        }
+        if (m_kiwiSdrSquelchLineFloorRelative) {
+            const float floorDbm = m_kiwiSdrSquelchLiveFloorDbm;
+            if (floorDbm <= -500.0f) {
+                return;
+            }
+            squelchDbm = floorDbm + static_cast<float>(m_kiwiSdrSquelchLevel);
+        } else {
+            if (!m_kiwiSdrSquelchPinnedThresholdValid
+                || m_kiwiSdrSquelchPinnedThresholdDbm <= -500.0f) {
+                return;
+            }
+            squelchDbm = m_kiwiSdrSquelchPinnedThresholdDbm;
+            if (m_kiwiSdrSquelchPinnedDisplayNormValid) {
+                pinnedDisplayNorm = m_kiwiSdrSquelchPinnedDisplayNorm;
+                usePinnedDisplayNorm = true;
+            }
+        }
+        label = QStringLiteral("SQL %1%2 dB")
+            .arg(m_kiwiSdrSquelchLevel > 0 ? QStringLiteral("+")
+                                            : QString())
+            .arg(m_kiwiSdrSquelchLevel);
+    } else {
+        if (!m_flexSquelchLineVisible || m_flexSquelchLevel <= 0) {
+            return;
+        }
+        squelchDbm = kSqlMinDbm + static_cast<float>(m_flexSquelchLevel);
+        label = QStringLiteral("SQL %1").arg(m_flexSquelchLevel);
+    }
+
+    const float norm = usePinnedDisplayNorm
+        ? pinnedDisplayNorm
+        : (m_refLevel - squelchDbm) / m_dynamicRange;
+    const int y = specRect.top()
+        + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
+    p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 220), 1));
+    p.drawLine(specRect.left(), y, specRect.right(), y);
+    QFont f = p.font();
+    f.setPointSize(8);
+    f.setBold(true);
+    p.setFont(f);
+    p.setPen(AetherSDR::theme::withAlpha("color.accent.warning", 220));
+    p.drawText(4, y - 2, label);
 }
 
 void SpectrumWidget::setAutoSquelchEnable(bool on)
 {
-    m_autoSquelchEnabled   = on;
-    m_sqlNoiseFloorDbm     = -999.0f;  // cold-start the floor EWMA on each enable
-    m_lastAutoSquelchLevel = -1;
+    if (m_autoSquelchEnabled == on) {
+        return;
+    }
+
+    m_autoSquelchEnabled = on;
+    if (on) {
+        m_sqlNoiseFloorDbm = -999.0f;  // cold-start the floor EWMA on enable
+        m_lastAutoSquelchLevel = -1;
+    }
     if (on && m_squelchLineHideTimer) {
         // Auto pins the line — cancel any pending manual auto-hide.
         m_squelchLineHideTimer->stop();
@@ -2158,6 +2441,62 @@ void SpectrumWidget::setAutoSqlMarginDb(int dBm)
 {
     m_autoSqlMarginDb      = std::clamp(dBm, 5, 20);
     m_lastAutoSquelchLevel = -1;  // force re-emit with new margin
+}
+
+void SpectrumWidget::updateAutoSquelchFromBins(const QVector<float>& binsDbm)
+{
+    if (!m_autoSquelchEnabled || m_transmitting || binsDbm.isEmpty()) {
+        return;
+    }
+
+    if (m_kiwiSdrWaterfallActive || m_kiwiSdrSquelchLineFloorRelative) {
+        // Kiwi non-NBFM squelch is server-relative:
+        // SET squelch=N opens at median RSSI + N dB. Do not apply the Flex
+        // absolute dBm conversion here.
+        const int level = m_autoSqlMarginDb;
+        if (level != m_lastAutoSquelchLevel) {
+            m_lastAutoSquelchLevel = level;
+            emit autoSquelchLevelSuggested(level);
+        }
+        return;
+    }
+
+    float sum1 = 0.0f;
+    int cnt1 = 0;
+    for (int j = 0; j < binsDbm.size(); j += 4) {
+        sum1 += binsDbm[j];
+        ++cnt1;
+    }
+    if (cnt1 <= 0) {
+        return;
+    }
+    const float mean1 = sum1 / static_cast<float>(cnt1);
+
+    float sum2 = 0.0f;
+    int cnt2 = 0;
+    for (int j = 0; j < binsDbm.size(); j += 4) {
+        if (binsDbm[j] <= mean1) {
+            sum2 += binsDbm[j];
+            ++cnt2;
+        }
+    }
+    const float frameFloor =
+        (cnt2 > 0) ? sum2 / static_cast<float>(cnt2) : mean1;
+    m_sqlNoiseFloorDbm =
+        (m_sqlNoiseFloorDbm <= -500.0f)
+            ? frameFloor
+            : 0.1f * frameFloor + 0.9f * m_sqlNoiseFloorDbm;
+
+    constexpr float kSqlMinDbm = -160.0f;
+    const float targetDbm =
+        m_sqlNoiseFloorDbm + static_cast<float>(m_autoSqlMarginDb);
+    const int level = std::clamp(
+        static_cast<int>(targetDbm - kSqlMinDbm + 0.5f), 1, 100);
+    if (level != m_lastAutoSquelchLevel) {
+        m_lastAutoSquelchLevel = level;
+        emit autoSquelchLevelSuggested(level);
+    }
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setWfColorScheme(int scheme) {
@@ -4161,39 +4500,8 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
         }
     }
 
-    // ── Auto-squelch: own two-pass trimmed-mean noise floor ───────────────
-    // Independent copy of the floor measurement — not borrowed from the
-    // display pipeline so it survives any future refactor of the other block.
-    // Two-pass trimmed mean: pass 1 gets the overall mean; pass 2 averages
-    // only bins at-or-below that mean, excluding signal peaks.
-    // EWMA (α=0.1, ~10-frame window at 25 fps) smooths frame-to-frame variation.
-    // kSqlMinDbm: FLEX-8600 maps squelch_level 0-100 → -160 to -60 dBm.
-    // Empirically verified on fw 4.1.5; not explicitly documented in FlexLib.
-    if (m_autoSquelchEnabled && !m_transmitting && !binsDbm.isEmpty()) {
-        // Pass 1 — overall mean
-        float sum1 = 0.0f; int cnt1 = 0;
-        for (int j = 0; j < binsDbm.size(); j += 4) { sum1 += binsDbm[j]; ++cnt1; }
-        const float mean1 = sum1 / cnt1;
-        // Pass 2 — noise-only bins (≤ mean)
-        float sum2 = 0.0f; int cnt2 = 0;
-        for (int j = 0; j < binsDbm.size(); j += 4) {
-            if (binsDbm[j] <= mean1) { sum2 += binsDbm[j]; ++cnt2; }
-        }
-        const float frameFloor = (cnt2 > 0) ? sum2 / cnt2 : mean1;
-        // EWMA with α=0.1
-        m_sqlNoiseFloorDbm = (m_sqlNoiseFloorDbm <= -500.0f)
-            ? frameFloor
-            : 0.1f * frameFloor + 0.9f * m_sqlNoiseFloorDbm;
-
-        constexpr float kSqlMinDbm = -160.0f;
-        const float targetDbm = m_sqlNoiseFloorDbm + static_cast<float>(m_autoSqlMarginDb);
-        const int level = std::clamp(
-            static_cast<int>(targetDbm - kSqlMinDbm + 0.5f), 1, 100);
-        if (level != m_lastAutoSquelchLevel) {
-            m_lastAutoSquelchLevel = level;
-            emit autoSquelchLevelSuggested(level);
-        }
-        markOverlayDirty();
+    if (!m_kiwiSdrWaterfallActive) {
+        updateAutoSquelchFromBins(*spectrumBins);
     }
 
     // Native VITA waterfall tiles are the primary RX source. If they stop
@@ -4446,6 +4754,10 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
 
     saveCurrentWaterfallStreamState();
     m_kiwiSdrWaterfallActive = active;
+    m_lastAutoSquelchLevel = -1;
+    if (!active) {
+        m_sqlNoiseFloorDbm = -999.0f;
+    }
     restoreCurrentWaterfallStreamState();
     // The newly-active stream is no longer reprojected on every pan step
     // (handleWaterfallFrequencyFrameChange now touches only the active stream),
@@ -4455,6 +4767,7 @@ void SpectrumWidget::setKiwiSdrWaterfallActive(bool active)
     // inactive stream used to receive.
     rebuildWaterfallViewportForFrame(m_centerMhz, m_bandwidthMhz);
     if (!active) {
+        clearKiwiSdrSquelchLine();
         m_pendingDbmRangeEcho = false;
         m_pendingDbmRangeEchoFromAutoFloor = false;
         m_pendingDbmRangeEchoStartMs = 0;
@@ -4627,12 +4940,22 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
             }
         }
         if (!m_kiwiSdrFftTrace.isEmpty()) {
+            const float previousMeasuredNoiseFloorDbm = m_measuredNoiseFloorDbm;
             const float frameFloor = estimateNoiseFloorDbm(m_kiwiSdrFftTrace);
+            const float visualFloor =
+                estimateKiwiSdrVisualNoiseFloorDbm(m_kiwiSdrFftTrace);
+            updateKiwiSdrSquelchVisualFloor(visualFloor);
             constexpr float kAlpha = 0.05f;
             m_measuredNoiseFloorDbm = (m_measuredNoiseFloorDbm <= -500.0f)
                 ? frameFloor
                 : m_measuredNoiseFloorDbm * (1.0f - kAlpha)
                     + frameFloor * kAlpha;
+            if (m_kiwiSdrSquelchLineVisible
+                && (previousMeasuredNoiseFloorDbm <= -500.0f
+                    || std::abs(previousMeasuredNoiseFloorDbm
+                                - m_measuredNoiseFloorDbm) > 0.25f)) {
+                markOverlayDirty();
+            }
 
             const bool useFreshLockFrame = m_noiseFloorFreshFrameCount > 0;
             const bool noiseFloorFrameConsumed =
@@ -4640,6 +4963,7 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
             if (useFreshLockFrame && noiseFloorFrameConsumed) {
                 --m_noiseFloorFreshFrameCount;
             }
+            updateAutoSquelchFromBins(m_kiwiSdrFftTrace);
         }
     }
     pushKiwiSdrWaterfallRow(smoothedBins, destWidth,
@@ -6498,9 +6822,8 @@ QRgb SpectrumWidget::dbmToRgb(float dbm) const
 
 QRgb SpectrumWidget::kiwiSdrLevelToRgb(float level) const
 {
-    // Kiwi W/F bytes are display/bin intensity values, not calibrated dBm.
-    // They are mapped into a Kiwi-only pseudo-dB display range so the
-    // existing waterfall color machinery can be reused without touching Flex.
+    // Kiwi direct W/F bytes are decoded to the server's wrapped negative dB
+    // scale; color aperture is still Kiwi-only and independent of Flex.
     const float floorDbm = m_kiwiSdrAutoRangeValid
         ? m_kiwiSdrAutoFloorDbm
         : kKiwiSdrWaterfallMinDbm;
@@ -7236,27 +7559,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
             drawAutoSqlFloor(p, specRect);
 
-            // ── Squelch threshold line (solid yellow) ────────────────────
-            // Drawn at the radio's actual gate position using the fixed absolute
-            // dBm scale: dBm = -160 + squelch_level. Empirically verified on
-            // FLEX-8600 fw 4.1.5; independent of refLevel/dynamicRange so the
-            // line stays correct regardless of zoom or display range changes.
-            if (m_squelchLineVisible && m_squelchLevel > 0) {
-                constexpr float kSqlMinDbm = -160.0f;
-                const float squelchDbm = kSqlMinDbm + static_cast<float>(m_squelchLevel);
-                const float norm = (m_refLevel - squelchDbm) / m_dynamicRange;
-                const int sy = specRect.top()
-                    + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
-                p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 220), 1));
-                p.drawLine(specRect.left(), sy, specRect.right(), sy);
-                QFont f = p.font();
-                f.setPointSize(8);
-                f.setBold(true);
-                p.setFont(f);
-                p.setPen(AetherSDR::theme::withAlpha("color.accent.warning", 220));
-                const QString lbl = QString("SQL %1").arg(m_squelchLevel);
-                p.drawText(4, sy - 2, lbl);
-            }
+            drawSquelchLine(p, specRect);
 
             // WNB / RF gain / Prop forecast indicators (top-right of spectrum)
             {
@@ -8064,19 +8367,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
         drawAutoSqlFloor(p, specRect);
 
-        // ── Squelch threshold line (solid yellow) ────────────────────
-        if (m_squelchLineVisible && m_squelchLevel > 0) {
-            constexpr float kSqlMinDbm = -160.0f;
-            const float squelchDbm = kSqlMinDbm + static_cast<float>(m_squelchLevel);
-            const float norm = (m_refLevel - squelchDbm) / m_dynamicRange;
-            const int sy = specRect.top()
-                + static_cast<int>(std::clamp(norm, 0.0f, 1.0f) * specRect.height());
-            p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 220), 1));
-            p.drawLine(specRect.left(), sy, specRect.right(), sy);
-            QFont f = p.font(); f.setPointSize(8); f.setBold(true); p.setFont(f);
-            p.setPen(AetherSDR::theme::withAlpha("color.accent.warning", 220));
-            p.drawText(4, sy - 2, QString("SQL %1").arg(m_squelchLevel));
-        }
+        drawSquelchLine(p, specRect);
 
         drawConnectionAnimation(p, specRect);
         drawKiwiSdrConnectionOverlay(
