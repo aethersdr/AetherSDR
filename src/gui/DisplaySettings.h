@@ -14,8 +14,9 @@ namespace AetherSDR {
 //
 // Stored as a nested JSON blob under AppSettings["Display"], per the
 // nested-JSON-per-feature convention (constitution Principle V).  The legacy
-// flat key "LeanMode" is migrated into this blob on first read so existing
-// users keep their behavior.
+// flat key "LeanMode" is migrated into this blob by migrateLegacy(), called
+// once at startup (before the first read), so existing users keep their
+// behavior.
 class DisplaySettings {
 public:
     static bool leanMode() { return readObj().value("leanMode").toString("False") == "True"; }

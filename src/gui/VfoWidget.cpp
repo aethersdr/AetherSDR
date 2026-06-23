@@ -882,7 +882,9 @@ void VfoWidget::buildUI()
     m_labelDirtyClock.start();
     connect(m_smartMtrWidget, &SmartMtrWidget::repainted, this,
             &VfoWidget::onSmartMtrRepainted);
-    pushSmartMtrInput(); // seed the at-rest display
+    // No seed here: m_smartMtr is still false during buildUI, so pushSmartMtrInput()
+    // would early-return. applyMeterView() (run from the constructor) seeds the
+    // meter when the persisted choice is SmartMTR.
 
     root->addWidget(m_meterStack);
 

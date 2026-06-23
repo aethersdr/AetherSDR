@@ -93,6 +93,11 @@ public:
             }
             if (m_window.empty()) {
                 m_hasData = false;
+                // Clear the raw min/max too (matching reset()). Current readers
+                // all gate on hasData() first, but leaving stale values here is
+                // a trap for any future reader of minRaw()/maxRaw().
+                m_minRaw = 0.0;
+                m_maxRaw = 0.0;
             } else {
                 double mn = m_window.front().raw, mx = mn;
                 for (const Sample& s : m_window) {
