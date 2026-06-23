@@ -2286,6 +2286,13 @@ if(UNIX)
 endif()
 set_target_properties(meter_model_test PROPERTIES AUTOMOC ON)
 
+add_executable(meter_extremes_test
+    tests/meter_extremes_test.cpp
+)
+target_include_directories(meter_extremes_test PRIVATE src)
+target_link_libraries(meter_extremes_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME meter_extremes_test COMMAND meter_extremes_test)
+
 add_executable(async_log_writer_test
     tests/async_log_writer_test.cpp
     src/core/AsyncLogWriter.cpp

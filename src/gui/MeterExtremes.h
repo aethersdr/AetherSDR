@@ -56,6 +56,10 @@ public:
     // velocity. Mutually exclusive with record() — a kind switch resets() first.
     void setExternalPeak(double rawPeak)
     {
+        if (!std::isfinite(rawPeak)) {
+            reset();
+            return;
+        }
         m_useExtPeak = true;
         m_extPeakRaw = rawPeak;
         m_hasData = true;
@@ -65,6 +69,9 @@ public:
     // signal source (after clamping to the floor), only while a value is present.
     void record(double rawValue, qint64 nowMs)
     {
+        if (!std::isfinite(rawValue)) {
+            return;
+        }
         m_window.push_back({nowMs, rawValue});
         m_sumRaw += rawValue;
         m_hasData = true;
@@ -93,9 +100,10 @@ public:
             }
             if (m_window.empty()) {
                 m_hasData = false;
-                // Clear the raw min/max too (matching reset()). Current readers
-                // all gate on hasData() first, but leaving stale values here is
-                // a trap for any future reader of minRaw()/maxRaw().
+                // Clear the raw aggregates too (matching reset()). Current
+                // readers all gate on hasData() first, but leaving stale values
+                // here is a trap for any future reader of minRaw()/maxRaw().
+                m_sumRaw = 0.0;
                 m_minRaw = 0.0;
                 m_maxRaw = 0.0;
             } else {
@@ -112,12 +120,15 @@ public:
         // 2) Targets in UNITS. With no data left, glide both to the floor. In
         //    external-peak mode the trough is unused, so it targets the needle so
         //    it collapses there (mic draws no trough) without standing off.
-        const double minTgt =
+        double minTgt =
             !m_hasData      ? SmartMtrUnits::kScaleMin
             : m_useExtPeak  ? needlePosUnits
                             : mapToUnits(m_minRaw);
-        const double maxTgt =
+        double maxTgt =
             m_hasData ? mapToUnits(m_maxRaw) : SmartMtrUnits::kScaleMin;
+        if (m_useExtPeak && m_hasData && maxTgt < needlePosUnits) {
+            maxTgt = needlePosUnits;
+        }
 
         // 3) Constant-velocity slew toward each target. External-peak (mic) mode
         //    tracks tightly at the fast peak slew — the radio's peak is a live
@@ -140,27 +151,18 @@ public:
         if (m_maxPos < SmartMtrUnits::kScaleMin) m_maxPos = SmartMtrUnits::kScaleMin;
         if (m_minPos > m_maxPos) m_minPos = m_maxPos;
 
-        // Keep animating while a marker is mid-slew OR has not yet collapsed onto
-        // the needle (a peak/trough is still standing off it). The latter keeps
-        // the timer running through the whole hold->return so the window prunes
-        // and the markers slew at the timer rate — matching the original app's
-        // steady loop and avoiding a staircase clocked by the irregular packet
-        // feed. It self-terminates once min ~= max ~= needle (markers collapsed),
-        // so an idle meter still settles rather than pinning the repaint timer at
-        // full rate forever (each meter repaint over the GPU panadapter forces a
-        // costly recomposite that starves input).
-        // In external-peak (mic) mode the MAX marker is a held radio stat that
-        // sits above the needle by design, so it would "stand off" forever and
-        // pin the timer for the entire TX. Each mic packet re-arms the timer via
-        // setMeterInput (setExternalPeak keeps hasData() true), so here we only
-        // need to keep animating while a marker is actually slewing — drop the
-        // standing-off keep-alive for this mode so the meter settles between
-        // packets instead of repainting at full rate over the GPU panadapter.
-        if (m_useExtPeak)
-            return moving;
+        // Keep RX extremes animating while a marker is mid-slew OR has not yet
+        // collapsed onto the needle (a peak/trough is still standing off it).
+        // The latter keeps the timer running through the whole hold->return so
+        // the window prunes and the markers slew at the timer rate. In external
+        // peak mode, packets refresh the supplied peak; once the marker reaches
+        // that target there is no free-running decay work to do.
         const bool standingOff = (m_maxPos > needlePosUnits + kConvergeEps)
                                  || (m_minPos < needlePosUnits - kConvergeEps);
-        return moving || standingOff;
+        const bool pendingExternalSlew = m_useExtPeak
+            && (std::fabs(m_minPos - minTgt) > kConvergeEps
+                || std::fabs(m_maxPos - maxTgt) > kConvergeEps);
+        return moving || (m_useExtPeak ? pendingExternalSlew : standingOff);
     }
 
     bool hasData() const { return m_hasData; }

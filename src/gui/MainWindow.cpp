@@ -967,7 +967,7 @@ MainWindow::MainWindow(QWidget* parent)
     // created during startup seed their Lean button/widget correctly, then
     // apply once after construction to cover VFOs + the WAVE applet.
     // Persistence is the nested "Display" blob (Principle V); the legacy
-    // flat "LeanMode" key is migrated into it on first read.
+    // flat "LeanMode" key is migrated into it by the startup call below.
     DisplaySettings::migrateLegacy();
     m_leanMode = DisplaySettings::leanMode();
     if (m_leanMode) {

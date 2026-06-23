@@ -13,6 +13,7 @@
 #include <QWidget>
 
 class QPainter;
+class QEvent;
 
 namespace AetherSDR {
 
@@ -78,7 +79,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent*) override;
-    void changeEvent(QEvent*) override;
+    void changeEvent(QEvent* event) override;
 
 private:
     // One element per method; all draw in UNITS via SmartMtrGeometry. Called

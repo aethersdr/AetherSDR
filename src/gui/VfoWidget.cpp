@@ -323,21 +323,22 @@ VfoWidget::VfoWidget(QWidget* parent)
     applyMeterView(MeterViewController::instance().smartMtr());
     connect(&MeterViewController::instance(), &MeterViewController::changed,
             this, &VfoWidget::applyMeterView);
-    // Extremes options are also global + live: re-push to this flag's SmartMTR
-    // widget whenever any flag changes them.
+    // SmartMTR options are also global + live: re-seed this flag's open controls
+    // and re-push rendering options whenever any flag changes them.
     connect(&MeterViewController::instance(), &MeterViewController::extremesChanged,
-            this, &VfoWidget::pushSmartMtrOptions);
+            this, [this]() {
+        syncSmartMtrOptionControls();
+        pushSmartMtrOptions();
+    });
     // The TX-meter choice swaps the SmartMTR input (signal <-> mic) rather than
-    // its options, so re-push the input when it changes on any flag.
+    // its options, so re-seed controls and re-push the input when it changes on
+    // any flag.
     connect(&MeterViewController::instance(), &MeterViewController::txMeterChanged,
-            this, &VfoWidget::pushSmartMtrInput);
-    // The pushes above update this flag's rendering; also re-seed its option
-    // CONTROLS so a change made on another open flag's selector doesn't leave
-    // this flag's checkbox/combos showing a stale value.
-    connect(&MeterViewController::instance(), &MeterViewController::extremesChanged,
-            this, &VfoWidget::syncSmartMtrSettingsControls);
-    connect(&MeterViewController::instance(), &MeterViewController::txMeterChanged,
-            this, &VfoWidget::syncSmartMtrSettingsControls);
+            this, [this]() {
+        syncSmartMtrOptionControls();
+        pushSmartMtrInput();
+    });
+    syncSmartMtrOptionControls();
     pushSmartMtrOptions(); // apply the persisted options to this new flag
 
     connect(&SliceColorManager::instance(), &SliceColorManager::colorsChanged,
@@ -3227,6 +3228,39 @@ void VfoWidget::syncMeterMenuButtons()
     }
 }
 
+void VfoWidget::syncSmartMtrOptionControls()
+{
+    auto& mv = MeterViewController::instance();
+    auto selectData = [](QComboBox* combo, int value) {
+        if (!combo) {
+            return;
+        }
+        const int idx = combo->findData(value);
+        if (idx >= 0 && combo->currentIndex() != idx) {
+            combo->setCurrentIndex(idx);
+        }
+    };
+
+    if (m_showExtremesChk) {
+        QSignalBlocker blocker(m_showExtremesChk);
+        m_showExtremesChk->setChecked(mv.showExtremes());
+    }
+    if (m_extremesSpeedCmb) {
+        QSignalBlocker blocker(m_extremesSpeedCmb);
+        selectData(m_extremesSpeedCmb, int(mv.extremesSpeed()));
+    }
+    if (m_showValuesCmb) {
+        QSignalBlocker blocker(m_showValuesCmb);
+        selectData(m_showValuesCmb, int(mv.showValues()));
+    }
+    if (m_txMeterCmb) {
+        QSignalBlocker blocker(m_txMeterCmb);
+        selectData(m_txMeterCmb, int(mv.txMeter()));
+    }
+
+    syncSmartMtrSettingsState();
+}
+
 // Enable/disable the SmartMTR-only options to match the current state:
 //   • everything is disabled unless the SmartMTR view is selected;
 //   • "Extremes speed" is further gated on "Show extremes" being checked;
@@ -3241,16 +3275,20 @@ void VfoWidget::syncSmartMtrSettingsState()
     // label.  #5e6e7c is ~0.45 blend of the normal text over the flag bg, so
     // 0.45 opacity reproduces that dimming on the whole row.
     constexpr double kDisabledOpacity = 0.45;
+    auto setRowOpacity = [](QGraphicsOpacityEffect* effect, bool fullStrength) {
+        if (!effect) {
+            return;
+        }
+        // Identity opacity effects can render blank row contents when multiple
+        // VFO flags are GPU-composited. Leave the effect installed only while it
+        // is actually dimming the row.
+        effect->setOpacity(fullStrength ? 1.0 : kDisabledOpacity);
+        effect->setEnabled(!fullStrength);
+    };
     const bool speedEnabled = smart && showExt;
-    if (m_extremesSpeedFade) {
-        m_extremesSpeedFade->setOpacity(speedEnabled ? 1.0 : kDisabledOpacity);
-    }
-    if (m_showValuesFade) {
-        m_showValuesFade->setOpacity(smart ? 1.0 : kDisabledOpacity);
-    }
-    if (m_txMeterFade) {
-        m_txMeterFade->setOpacity(smart ? 1.0 : kDisabledOpacity);
-    }
+    setRowOpacity(m_extremesSpeedFade, speedEnabled);
+    setRowOpacity(m_showValuesFade, smart);
+    setRowOpacity(m_txMeterFade, smart);
 
     if (m_showExtremesChk) {
         m_showExtremesChk->setEnabled(smart);
@@ -3291,35 +3329,6 @@ void VfoWidget::syncSmartMtrSettingsState()
     }
 }
 
-void VfoWidget::syncSmartMtrSettingsControls()
-{
-    // The meter options are global + live, but the per-flag control widgets are
-    // only seeded once at build and updated by local interaction. When another
-    // open flag changes a setting, re-seed this flag's controls from the
-    // (cached) MeterViewController so they don't show a stale value. Block
-    // signals so this re-seed doesn't echo back into the controller.
-    auto& mv = MeterViewController::instance();
-    if (m_showExtremesChk) {
-        const QSignalBlocker b(m_showExtremesChk);
-        m_showExtremesChk->setChecked(mv.showExtremes());
-    }
-    if (m_extremesSpeedCmb) {
-        const QSignalBlocker b(m_extremesSpeedCmb);
-        m_extremesSpeedCmb->setCurrentIndex(
-            m_extremesSpeedCmb->findData(int(mv.extremesSpeed())));
-    }
-    if (m_showValuesCmb) {
-        const QSignalBlocker b(m_showValuesCmb);
-        m_showValuesCmb->setCurrentIndex(
-            m_showValuesCmb->findData(int(mv.showValues())));
-    }
-    if (m_txMeterCmb) {
-        const QSignalBlocker b(m_txMeterCmb);
-        m_txMeterCmb->setCurrentIndex(m_txMeterCmb->findData(int(mv.txMeter())));
-    }
-    syncSmartMtrSettingsState();  // re-evaluate enable/disable for the new state
-}
-
 // ── Signal level ──────────────────────────────────────────────────────────────
 
 void VfoWidget::setSignalLevel(float dbm)
@@ -3352,15 +3361,16 @@ void VfoWidget::pushSmartMtrInput()
             == DisplaySettings::TxMeter::MicLevel;
     if (showMic) {
         in.kind = MeterKind::MicLevel;
+        in.hasValue = true;
         in.value = m_micDbfs;
         in.min = -40.0; // dBFS — scale start
         in.max = 0.0;   // dBFS — full scale / clip (linear scale)
         // Peak marker is the radio's separate MICPEAK stat, not a local window max.
         in.hasPeak = true;
         in.peak = m_micPeakDbfs;
-        in.hasValue = true;
     } else {
         in.kind = MeterKind::Signal;
+        in.hasValue = !usesUnavailableSignalMeter();
         in.value = m_signalDbm;
         in.min = -127.0; // dBm: S0
         in.max = -13.0;  // dBm: S9+60

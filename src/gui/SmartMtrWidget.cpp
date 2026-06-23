@@ -35,6 +35,29 @@ const QColor& markerColor(MarkerColor color)
     return color == MarkerColor::High ? SmartMtrColors::kMarkerHigh
                                       : SmartMtrColors::kMarkerNormal;
 }
+
+MeterInput sanitizedInput(const MeterInput& input)
+{
+    MeterInput out = input;
+    const bool validRange = std::isfinite(out.min) && std::isfinite(out.max)
+        && out.min < out.max;
+    if (!validRange) {
+        out.hasValue = false;
+        out.min = 0.0;
+        out.max = 1.0;
+    }
+    if (out.hasValue && !std::isfinite(out.value)) {
+        out.hasValue = false;
+        out.value = 0.0;
+    }
+    if (!out.hasValue) {
+        out.hasPeak = false;
+    } else if (out.hasPeak && !std::isfinite(out.peak)) {
+        out.hasPeak = false;
+        out.peak = 0.0;
+    }
+    return out;
+}
 } // namespace
 
 SmartMtrWidget::SmartMtrWidget(QWidget* parent)
@@ -98,36 +121,32 @@ void SmartMtrWidget::applyBallistics(MeterKind kind)
 
 void SmartMtrWidget::setMeterInput(const MeterInput& input)
 {
-    // A non-finite value (NaN/Inf) would survive std::clamp (both comparisons
-    // false), stick in the bar smoother so needsAnimation() never clears, and
-    // poison the extremes running sum permanently. Drop it; the last good frame
-    // stays on screen until a finite reading arrives.
-    if (input.hasValue && !std::isfinite(input.value))
-        return;
-    if (input.hasPeak && !std::isfinite(input.peak))
-        return;
-
-    const bool kindChanged = (input.kind != m_kind);
-    m_input = input;
-    m_kind = input.kind;
+    const MeterInput cleanInput = sanitizedInput(input);
+    const bool kindChanged = (cleanInput.kind != m_kind);
+    m_input = cleanInput;
+    m_kind = cleanInput.kind;
 
     // RX<->TX is a scale discontinuity (signal dBm vs mic dBFS); the extremes
     // window must not mix domains, and the bar ballistics differ per kind.
-    if (kindChanged) {
+    if (kindChanged || !m_input.hasValue) {
         m_extremes.reset();
         applyBallistics(m_kind);
+        m_lastExtremesRepaintMs = -1;
     }
 
     // Drive the extremes engine. Signal derives its min/max from a local sliding
     // window of the dBm stream; mic's peak is a separate radio-sourced stat
     // (MICPEAK over UDP), so it overrides the MAX marker directly rather than
     // synthesizing one. Skip on park (no value) or when disabled.
-    if (m_extremesEnabled && input.hasValue) {
-        if (input.kind == MeterKind::MicLevel) {
-            if (input.hasPeak)
-                m_extremes.setExternalPeak(input.peak);
+    if (m_extremesEnabled && m_input.hasValue) {
+        if (m_input.kind == MeterKind::MicLevel) {
+            if (m_input.hasPeak) {
+                m_extremes.setExternalPeak(m_input.peak);
+            } else {
+                m_extremes.reset();
+            }
         } else {
-            m_extremes.record(input.value, m_extremesClock.elapsed());
+            m_extremes.record(m_input.value, m_extremesClock.elapsed());
         }
     }
 
@@ -136,7 +155,7 @@ void SmartMtrWidget::setMeterInput(const MeterInput& input)
     // and read as "dead"; the mic now uses a snappy PPM ballistic on the live
     // level instead — see applyBallistics — with the PEAK marker still holding
     // the loud peaks.)
-    const double posUnits = indicatorPosition(input);
+    const double posUnits = indicatorPosition(m_input);
 
     // Normalise to the scale band so the ballistics are scale-independent.
     const double span = kScaleMax - kScaleMin;
@@ -144,15 +163,18 @@ void SmartMtrWidget::setMeterInput(const MeterInput& input)
         span > 0.0 ? float((posUnits - kScaleMin) / span) : 0.0f;
 
     m_smooth.setTarget(targetFrac);
-    if (kindChanged)
+    if (kindChanged || !m_input.hasValue)
         m_smooth.snapToTarget(); // snap across the discontinuity, don't glide
 
     // Keep the timer running while EITHER the bar or the extremes markers still
     // need to move (a peak can expire and slide a marker after the bar settles).
-    if ((m_smooth.needsAnimation() || (m_extremesEnabled && m_extremes.hasData()))
+    if (m_input.hasValue
+        && (m_smooth.needsAnimation() || (m_extremesEnabled && m_extremes.hasData()))
         && !m_animTimer.isActive()) {
         m_clock.restart();
         m_animTimer.start();
+    } else if (!m_input.hasValue && m_animTimer.isActive()) {
+        m_animTimer.stop();
     }
     update(); // paint the first frame promptly; the timer carries the rest
 }
@@ -288,6 +310,10 @@ void SmartMtrWidget::drawHole(QPainter& p, const SmartMtrGeometry& g) const
 
 void SmartMtrWidget::drawIndicator(QPainter& p, const SmartMtrGeometry& g) const
 {
+    if (!m_input.hasValue) {
+        return;
+    }
+
     // Bar from the scale minimum to the mapped value position, full hole height.
     // Clipped to the rounded hole so the bar's corners follow the hole's radius.
     const QRectF hole = g.rect(kHoleMargX, kHoleMargY, kHoleW, kHoleH);
