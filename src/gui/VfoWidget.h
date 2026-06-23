@@ -327,10 +327,6 @@ private:
     // Which meter to show while transmitting: None (stay on RX signal) or Mic
     // Level. Disabled while the standard S-meter is selected.
     QComboBox* m_txMeterCmb{nullptr};
-    // Opacity effects over each select row (label + combo), dimmed when the
-    // row is disabled so the disabled state is obvious (the custom combo
-    // stylesheet has no :disabled variant).  Matched to the disabled-checkbox
-    // label dimming.
     // The three SmartMTR option rows (label + combo). Disabled as a unit when the
     // option doesn't apply; the label/combo dim via their :disabled stylesheet —
     // render()-compatible, so they stay dimmed (not blank) in GPU flag sprites.
