@@ -17,16 +17,32 @@ is entirely original. SmartSDR is a trademark of FlexRadio Systems.
   FlexLib:   Copyright (c) 2012-2025 FlexRadio Systems
   Reference: https://www.flexradio.com/
 
-The KiwiSDR receive integration includes source-attributed terminal
-denial-message labels derived from the LGPL-marked KiwiSDR server source. No
-KiwiSDR code is incorporated, vendored, translated, or linked into AetherSDR;
-the referenced source is used only to label server MSG keys and numeric badp
-denial codes in original AetherSDR error handling.
+The KiwiSDR receive integration includes source-attributed protocol facts
+derived from the public KiwiSDR server source. No KiwiSDR code is incorporated,
+vendored, translated, or linked into AetherSDR; the referenced source is
+consulted only to verify wire-protocol facts, which are then expressed in
+original AetherSDR code. The consulted facts are:
+  - server MSG keys and numeric badp denial codes (error handling); and
+  - the accepted `SET squelch=<offset> param=<float>` and
+    `SET agc=… thresh=… decay=… manGain=…` command shapes, plus their numeric
+    ranges, for KiwiSDR replacement-receiver squelch/AGC control.
+See docs/kiwisdr-cleanroom-design.md for the per-file, per-fact provenance.
 
-  KiwiSDR source: Copyright (c) 2014-2024 John Seamons and contributors
-  License:        LGPL-2.0-or-later, per consulted file headers
-  Source:         https://github.com/jks-prv/Beagle_SDR_GPS
-  Reference:      commit efb38e2b25137029cb37a96a94e03366f8d2871e
+  KiwiSDR server source: Copyright (c) 2014-2024 John Seamons and contributors
+  License:               LGPL-2.0-or-later, per consulted file headers
+                         (rx/rx_cmd.{h,cpp}, rx/rx_sound.cpp, rx/rx_sound_cmd.cpp,
+                         rx/rx_server.cpp, rx/rx_util.cpp, support/stats.cpp)
+  Source:                https://github.com/jks-prv/Beagle_SDR_GPS
+  Reference:             commit efb38e2b25137029cb37a96a94e03366f8d2871e
+
+The AGC/squelch numeric ranges (threshold -160..0 dB, manual gain 0..100 dB,
+decay 20..5000 ms, and NBFM squelch behavior) were verified against the CuteSDR
+DSP component bundled in that repository, which is separately licensed. Only the
+documented numeric ranges/behavior were used; no CuteSDR code is incorporated.
+
+  CuteSDR source: Copyright (c) Moe Wheatley (AE4JY), per consulted file headers
+  License:        BSD-2-Clause (Simplified BSD)
+  Source:         https://github.com/jks-prv/Beagle_SDR_GPS  (rx/CuteSDR/)
 
 
 1. WDSP — Spectral Noise Reduction (NR2)
