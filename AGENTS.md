@@ -168,7 +168,7 @@ cmake --build build -j$(nproc)
 
 Full dependency list is in `README.md` — don't duplicate it here.
 
-Current version: **26.6.3** (set in both `CMakeLists.txt` and `README.md`).
+Current version: **26.6.4** (set in both `CMakeLists.txt` and `README.md`).
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.
@@ -466,6 +466,16 @@ Filter all status and VITA-49 packets by `client_handle` — three layers:
 
 Early status messages arrive WITHOUT `client_handle`. Create SliceModels for
 all initially, remove other clients' when handle arrives.
+
+---
+
+## KiwiSDR Public-Receiver Browser
+
+The KiwiSDR browser is a clean-room, API-policy-aware public-receiver directory
+(#3679) — find and connect to public KiwiSDR receivers, independent of the
+FlexRadio protocol path. Kiwi panadapters are receive-only (TX is inhibited).
+See `docs/kiwisdr-public-directory.md` (directory / API-policy behaviour) and
+`docs/kiwisdr-cleanroom-design.md` (clean-room design notes, Principle IV).
 
 ---
 

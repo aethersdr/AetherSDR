@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.6.3
+## Current cycle: post-v26.6.4
 
 ### In flight
 
@@ -19,19 +19,17 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
   Mechanical migration tooling is the prerequisite work.
 - **TX DSP chain visual rebuild** — stage-per-applet chain with the
   visual `CHAIN` widget as the primary entry point.
-- **H1 Phase 2** ([#2951](https://github.com/aethersdr/AetherSDR/issues/2951))
-  — WAN cert-mismatch dialog + Pinned Certificates settings UI.
-  Phase 1 ships warn-only TOFU capture; Phase 2 makes it enforce.
+- **Flathub submission** — the AppStream metainfo and manpage landed in
+  v26.6.4; the actual Flathub PR + manifest is the remaining step.
 
 ### Queued (next cycle)
 
-- **L1–L4 audit follow-ups** — four low-severity items from the
-  2026-05-09 security pass, tracked as
-  [#2954](https://github.com/aethersdr/AetherSDR/issues/2954)–[#2957](https://github.com/aethersdr/AetherSDR/issues/2957).
+- **KiwiSDR follow-ups** — audio-quality / AGC polish on top of the
+  v26.6.4 public-receiver browser; potential WebSDR / OpenWebRX support.
 - **Extended region band plans** — DXCC entities outside IARU R1/R2/R3.
-- **macOS shmem + RigctlPty audit** ([#2940](https://github.com/aethersdr/AetherSDR/issues/2940))
-  — focused security review of VirtualAudioBridge (macOS) and
-  RigctlPty (Linux + macOS), follow-up to the audit that found H2.
+- **macOS VirtualAudioBridge audit** ([#2940](https://github.com/aethersdr/AetherSDR/issues/2940))
+  — focused security review of the macOS shared-memory audio bridge.
+  (The RigctlPty side is resolved — RigctlPty was removed in #3380.)
 
 ### Larger feature requests (community backlog)
 
@@ -96,28 +94,27 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
-- **WFM software demodulator** — DAX IQ → NCO Doppler / resample / atan2 →
-  virtual audio cable, for satellite data work.
-- **AetherModem Phase 1 + APRS** — VHF 1200-baud AX.25 RX/TX with a
-  Direwolf-derived AFSK demodulator, plus an APRS client (station map, GPS
-  beacon, two-way messaging).
-- **PSK Reporter reception map** on a new reusable Qt mapping engine
-  (QGeoView); the APRS tab is the next planned consumer.
-- **DAX-IQ fully operational** — end-to-end IQ delivery, dBFS meter, rate
-  switching with persistence.
-- **MainWindow decomposition (#3351)** — the ~19.5k-line monolith split into
-  sibling TUs, with a new `RadioSession` aggregate.
-- Constitution v1.1.0 — 14 numbered principles, multi-agent
-  contribution model, signed-commit enforcement.
-- Six security fixes shipped against the 2026-05 audit
-  (H1, H2, M1, M2, M3+L5, M4 — all advisories will publish on the
-  next release tag).
-- Repo structure cleanup — root and `docs/` directories brought to
-  portfolio-quality OSS shape across 9 sequential PRs
-  ([#2933](https://github.com/aethersdr/AetherSDR/issues/2933)).
-- TCI TX audio regression fix — restored full power to WSJT-X over TCI
-  by reverting the device-identity change that triggered K2 scaling.
-- Aetherial Tube Pre-Amp — RNNoise toggle on the TX mic pre-amp area.
+- **KiwiSDR public-receiver browser** — an API-policy-aware directory to
+  find and connect to public KiwiSDR receivers worldwide, with diversity
+  receive and receive-only TX inhibit (v26.6.4).
+- **SmartMTR meter view** — a selectable, analog-ballistics meter for the
+  VFO flag (extremes markers, value labels, TX mic level), opt-in with the
+  S-meter pixel-identical by default.
+- **Agent automation / test bridge** — an in-app, agent-drivable bridge to
+  drive and verify the GUI without pixels (`AETHER_AUTOMATION`).
+- **GPU-composite slice flags + multi-GPU selector** — flags composited on
+  the GPU instead of raster siblings, plus a render-GPU picker.
+- **Accessibility pass** — `QAccessibleInterface` for custom-painted widgets,
+  backed by a CI accessibility static-analysis check.
+- **CAT / rigctld parity** — a large round of SmartSDR Flex / TS-2000 /
+  rigctld behavior fixes (split VFO, VFO-B dialect capability, the `ZZTX;`
+  uncommanded-TX fix).
+- **Net Reminder Scheduler** — recurring net reminders with one-click tuning.
+- Constitution **v2.0.0** — trims domain conventions (relocated to
+  `AGENTS.md`) and adds governance principles; net 14 principles.
+- Packaging — SHA256-pinned `third_party` downloads, AppStream metainfo +
+  manpage (Flathub prep), and qtkeychain bundled for SmartLink on the
+  AppImage and Windows builds.
 
 ## How to influence the roadmap
 

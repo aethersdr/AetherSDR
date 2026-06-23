@@ -8,6 +8,124 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.6.4] — 2026-06-23
+
+### KiwiSDR public-receiver browser + SmartMTR meter view + agent automation bridge + GPU-composite flags + accessibility
+
+80 commits since v26.6.3. Headlined by a **KiwiSDR public-receiver
+integration**, a selectable **SmartMTR meter view** for the VFO flag, an in-app
+**agent automation/test bridge** for the GUI, **GPU-composited slice flags** with
+a multi-GPU render selector, a first **accessibility** pass for custom-painted
+widgets, and a large round of **CAT/rigctld parity** fixes. Governance moves to
+**Constitution v2.0.0**.
+
+### New features
+
+- **KiwiSDR public-receiver browser** — an API-policy-aware directory browser to
+  find and connect to public KiwiSDR receivers worldwide, independent of the
+  FlexRadio path. Honest, policy-aware receiver picker with the public-directory
+  **Limits** marker; diversity receive interlock with receive-only TX inhibit on
+  Kiwi panadapters; source-attributed terminal denial messages (badp codes + MSG
+  keys); clearer connection-failure messages; dedicated Support-menu logging
+  categories. See `docs/kiwisdr-public-directory.md`. (#3668, #3679, #3676, #3678,
+  #3699, #3706, #3707, #3716, #3749, #3759)
+- **SmartMTR selectable meter view** for the VFO flag — an opt-in alternative to
+  the S-meter (which stays pixel-identical when not selected). Analog d'Arsonval
+  bar ballistics, sliding-window min/max "extremes" markers (1s/3s/5s), optional
+  numeric value labels, and a TX mic-level meter. Renders correctly in the GPU
+  flag-sprite path. (#3723, #3750, #3751, #3752, #3753, #3760, #3765)
+- **Agent automation / test bridge** — an in-app, agent-drivable bridge for the
+  GUI (`dumpTree`/`grab`/`invoke`/`get`, slice/VFO verbs), with TX automation
+  hardening (meter freshness, ATU, two-tone, safety rails), input validation,
+  redaction of masked fields, and a log-observability suite. Off in production,
+  gated behind `AETHER_AUTOMATION`. See `docs/automation-bridge.md`. (#3646,
+  #3710, #3722, #3727, #3728, #3738, #3717, #3747)
+- **GPU-composite slice flags** instead of translucent raster siblings — removes
+  the main-thread re-blend over the QRhi waterfall each frame, plus a multi-GPU
+  **render-GPU selector** (Display menu) for multi-adapter systems and a
+  flag re-raster pause when a flag isn't presented. (#3617, #3695, #3656, #3746,
+  #3713)
+- **Accessibility** — `QAccessibleInterface` implementations for custom-painted
+  widgets (a Grouping summary for the VFO flag; the ESC level bar), backed by a
+  new CI accessibility static-analysis check. See `docs/a11y.md`. (#3754, #3758)
+- **Net Reminder Scheduler** — recurring net reminders with one-click tuning.
+  (#3684)
+- **PSK Reporter map** gains band-condition shading, a lookback window, and a
+  hover card, with cross-platform spot-delivery fixes. (#3635)
+- **FreeDV Reporter**: 6m+ band coverage and multi-select. (#3591)
+- Maidenhead **grid-locator** field in the APRS position row. (#3672)
+- **Memory** editor: NUL sanitisation, field dropdowns, smoother editing. (#3657)
+- Continuous **edge auto-pan** while dragging a slice. (#3581)
+- Status-bar **date** follows the system locale. (#3690)
+- **Support bundles** are deflate-compressed. (#3691)
+- **Waveform** install over the Docker file-upload protocol. (#3585)
+
+### CAT / rigctld parity
+
+- Resolve SmartSDR Flex/TS-2000 split-behavior gaps + block TS-2000 satellite-mode
+  TX. (#3739)
+- Resolve rigctld behavior gaps and fix on-demand split VFO. (#3724)
+- Match missing Hamlib rigctld functionality — VFO mode, mode mapping, CTCSS/FM
+  tones, levels & funcs. (#3619)
+- **Behaviour:** VFO B is a dialect capability — disabled for rigctld, preserved
+  across dialect switches and smaller-radio reconnects. (#3694/#3698)
+- Don't cap running CAT ports by receiver count. (#3693/#3697)
+- **Fix (safety):** a bare `ZZTX;` is a read, not a key — no more uncommanded TX
+  in the Flex dialect. (#3625/#3629)
+- Make the CAT per-port enable toggle visible. (#3618)
+
+### Fixes & hardening
+
+- **TCI DAX RX audio** routed by a cached channel→TRX map, resilient to transient
+  `dax=0`; cache cleared on disconnect teardown. (#3669/#3759, #3766/#3767)
+- **Crash:** guard the slice DAX-recall single-shot against a dangling slice
+  (use-after-free). (#3733)
+- **Live state (Principle II):** `setDax`, `setCwSidetone`, `setSbMonitor`, and
+  `setAmCarrierLevel` now update their cached state optimistically. (#3737, #3736,
+  #3734, #3712)
+- Reproject only the active waterfall stream while panning. (#3700/#3701)
+- Draw the panadapter grid below the FFT trace in the GPU path. (#3606/#3713)
+- Use the radio's auto-black level for an evenly-levelled waterfall floor. (#3586)
+- Independently themable **LIVE** chip (red live / grey history). (#3761)
+- Pace TX waterfall rows to `line_duration` to match the RX scroll rate. (#3686)
+- Profile FFT settling on load. (#3604, #3573)
+- Prune dead followers in `AudioOutputRouter`. (#3660/#3661)
+- Capture TX audio in client-side QSO recordings. (#3556/#3632)
+- Run the CWX local sidetone keyer on a `steady_clock` worker thread. (#3644)
+- Stream Deck Tune Toggle parsed the wrong TCI status field. (#3647)
+- Migrate hardcoded highlight/disabled-state colours to ThemeManager tokens
+  (Principle IX); persist Theme Editor overrides under pre-seeded applet scopes.
+  (#3645, #3688)
+- Ulanzi dial on Linux: detect an inaccessible evdev device and offer a one-click
+  udev grant. (#3677)
+- RX BW indicator shows bandwidth, not the hi-cut. (#3659/#3696)
+- Idle MOX button gets a distinct accent so it reads as the transmit button.
+  (#3763)
+- Fan-mode button label clarity; Fahrenheit toggle for amplifier temperature.
+  (#3651, #3652)
+
+### Internal — audio sink factory (Phase 6, #3306)
+
+- New `AudioOutputRouter` registry for output-following sinks; Pudu/QSO/CW and
+  Quindar sinks finished onto the factory with format negotiated through it.
+  (#3630, #3631, #3655)
+- Architecture note: WebSDR-sourced VFO/slice design. (#3621)
+
+### Governance
+
+- **Constitution v2.0.0** — trims the domain conventions (relocated to
+  `AGENTS.md`) and adds governance principles; net 14 principles. (#3602)
+
+### Packaging / CI
+
+- Build and bundle **qtkeychain** for SmartLink credential persistence on the
+  Linux **AppImage** (#3640) and **Windows** (#3634).
+- **Pin + verify SHA256** for all `third_party` setup-script downloads. (#3665/#3692)
+- **AppStream metainfo** for Linux + Flathub-submission polish; a simple
+  **manpage**. (#3673, #3709, #3674)
+- Dependabot: `actions/checkout` 6.0.3→7.0.0, `microsoft-store-apppublisher`
+  1.1→1.3, `action-gh-release` 3.0.0→3.0.1. (#3682, #3681, #3680)
+
 ## [v26.6.3] — 2026-06-14
 
 ### Satellite WFM + APRS/PSK-Reporter mapping + packet AFSK + MainWindow decomposition
