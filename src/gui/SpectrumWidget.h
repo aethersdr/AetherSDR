@@ -282,7 +282,7 @@ public:
     bool bandPlanShowSpots() const { return m_bandPlanShowSpots; }
     void setBandPlanManager(class BandPlanManager* mgr);
     void setSingleClickTune(bool on) { m_singleClickTune = on; }
-    void setShowCursorFreq(bool on) { m_showCursorFreq = on; update(); }
+    void setShowCursorFreq(bool on) { m_showCursorFreq = on; markOverlayDirty(); }
     bool showCursorFreq() const { return m_showCursorFreq; }
     void setShowFpsMeters(bool on);
     bool showFpsMeters() const { return m_showFpsMeters; }

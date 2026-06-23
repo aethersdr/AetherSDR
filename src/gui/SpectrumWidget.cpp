@@ -5121,7 +5121,15 @@ void SpectrumWidget::updateTrackedCursorState(const QPoint& localPos, bool insid
         }
     }
 
-    if (m_cursorPos != oldCursorPos
+    // A bare cursor-position change only changes the static overlay when the
+    // cursor-frequency readout (#726) or a tune guide is actually drawn there.
+    // With both off (the default) re-baking on every mouse-move produces a
+    // byte-identical overlay and needlessly defeats the GPU overlay-upload cache
+    // (#719) — measured ~6 ms/frame of pure waste while the cursor moves over the
+    // panadapter. TNF-hover and tune-guide-visibility changes are genuine content
+    // changes and still invalidate unconditionally.
+    const bool cursorReadoutShown = m_showCursorFreq || m_tuneGuideVisible;
+    if ((m_cursorPos != oldCursorPos && cursorReadoutShown)
         || m_hoveredTnfId != oldHoveredTnfId
         || m_tuneGuideVisible != oldTuneGuideVisible) {
         markOverlayDirty();
