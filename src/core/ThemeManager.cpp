@@ -378,6 +378,15 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.waterfall.live",    QString("#ff4d4d"));
     m_tokens.insert("color.waterfall.history", QString("#506070"));
 
+    // MOX idle accent — dedicated so the "this is the transmit button" amber
+    // can be recolored independently of the shared button styling (#3663).
+    // Defaults mirror the prior hardcoded literals; the same values seed both
+    // presets, so the appearance is theme-agnostic exactly as before.
+    m_tokens.insert("color.tx.mox.border",       QString("#d08020"));
+    m_tokens.insert("color.tx.mox.text",         QString("#f0c890"));
+    m_tokens.insert("color.tx.mox.border.hover", QString("#e09030"));
+    m_tokens.insert("color.tx.mox.text.hover",   QString("#ffd8a0"));
+
     // Text (4 tiers — label and disabled distinct for Phase 4 contrast
     // tuning).  text.primary aligned to the dominant codebase body-text
     // value (#c8d8e8, 367 refs across applets / dialogs / labels).

@@ -45,6 +45,10 @@
           "accent.success": "{color.green.500}",
           "waterfall.live":    "{color.red.500}",
           "waterfall.history": "{color.gray.500}",
+          "tx.mox.border":       "#d08020",
+          "tx.mox.text":         "#f0c890",
+          "tx.mox.border.hover": "#e09030",
+          "tx.mox.text.hover":   "#ffd8a0",
           "text": {
             "primary":   "{color.gray.200}",
             "secondary": "{color.gray.400}",
