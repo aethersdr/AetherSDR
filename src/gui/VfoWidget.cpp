@@ -3288,6 +3288,7 @@ void VfoWidget::setSignalLevel(float dbm)
 {
     m_receiveMeterReadingActive = false;
     m_signalDbm = dbm;
+    m_signalHasDbm = true; // FLEX always delivers a calibrated dBm reading
     m_dbmLabel->setText(QString("%1 dBm").arg(static_cast<int>(dbm)));
     m_dbmLabel->setAccessibleName("Signal level dBm");
     updateSignalMeterTarget();
@@ -3319,13 +3320,18 @@ void VfoWidget::pushSmartMtrInput()
         // Peak marker is the radio's separate MICPEAK stat, not a local window max.
         in.hasPeak = true;
         in.peak = m_micPeakDbfs;
+        in.hasValue = true;
     } else {
         in.kind = MeterKind::Signal;
         in.value = m_signalDbm;
         in.min = -127.0; // dBm: S0
         in.max = -13.0;  // dBm: S9+60
+        // No calibrated dBm (e.g. a KiwiSDR slice without a real meter): drive
+        // the needle to its no-data state instead of pegging the hardcoded S0.
+        // The widget parks/fades the indicator and suppresses the value labels
+        // when hasValue is false, matching the "Meter ---" dBm label.
+        in.hasValue = m_signalHasDbm;
     }
-    in.hasValue = true;
     m_smartMtrWidget->setMeterInput(in);
 }
 
@@ -3508,6 +3514,7 @@ void VfoWidget::setReceiveMeterReading(
          || reading.capability == KiwiSdrProtocol::MeterCapability::Experimental)
         && reading.hasDbm;
 
+    m_signalHasDbm = hasDisplayDbm;
     if (hasDisplayDbm) {
         m_signalDbm = reading.dbm;
         m_dbmLabel->setText(QString("%1 dBm").arg(static_cast<int>(reading.dbm)));

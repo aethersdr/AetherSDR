@@ -236,6 +236,10 @@ private:
     bool           m_updatingFromModel{false};
     bool           m_lastOnLeft{true};
     float          m_signalDbm{-130.0f};
+    // Whether m_signalDbm is a real calibrated reading. FLEX always is; a
+    // KiwiSDR slice without a calibrated meter is not, in which case the
+    // SmartMTR needle must show no-data rather than peg the hardcoded S0.
+    bool           m_signalHasDbm{true};
     KiwiSdrProtocol::MeterReading m_receiveMeterReading;
     bool           m_receiveMeterReadingActive{false};
     QTimer         m_signalMeterAnimation;
