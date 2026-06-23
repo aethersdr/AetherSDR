@@ -144,6 +144,15 @@ public:
         // so an idle meter still settles rather than pinning the repaint timer at
         // full rate forever (each meter repaint over the GPU panadapter forces a
         // costly recomposite that starves input).
+        // In external-peak (mic) mode the MAX marker is a held radio stat that
+        // sits above the needle by design, so it would "stand off" forever and
+        // pin the timer for the entire TX. Each mic packet re-arms the timer via
+        // setMeterInput (setExternalPeak keeps hasData() true), so here we only
+        // need to keep animating while a marker is actually slewing — drop the
+        // standing-off keep-alive for this mode so the meter settles between
+        // packets instead of repainting at full rate over the GPU panadapter.
+        if (m_useExtPeak)
+            return moving;
         const bool standingOff = (m_maxPos > needlePosUnits + kConvergeEps)
                                  || (m_minPos < needlePosUnits - kConvergeEps);
         return moving || standingOff;

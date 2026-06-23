@@ -319,6 +319,9 @@ private:
     // Enable/disable the SmartMTR-only options per the current meter view and
     // the "Show extremes" checkbox state (see implementation for the rules).
     void syncSmartMtrSettingsState();
+    // Re-seed this flag's option controls from the global MeterViewController
+    // (used when another open flag changes a setting), then re-evaluate state.
+    void syncSmartMtrSettingsControls();
     // Thin spacer between the meter and the tab bar, shown only while the meter
     // selector is open, to give the curved underline room below the indicator.
     QWidget* m_meterUnderlineRoom{nullptr};

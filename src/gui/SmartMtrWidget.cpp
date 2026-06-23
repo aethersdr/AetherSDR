@@ -2,6 +2,7 @@
 
 #include "SmartMtrStyle.h"
 
+#include <QEvent>
 #include <QFont>
 #include <QFontMetricsF>
 #include <QLinearGradient>
@@ -10,6 +11,7 @@
 #include <QPolygonF>
 
 #include <algorithm>
+#include <cmath>
 
 namespace AetherSDR {
 
@@ -96,6 +98,15 @@ void SmartMtrWidget::applyBallistics(MeterKind kind)
 
 void SmartMtrWidget::setMeterInput(const MeterInput& input)
 {
+    // A non-finite value (NaN/Inf) would survive std::clamp (both comparisons
+    // false), stick in the bar smoother so needsAnimation() never clears, and
+    // poison the extremes running sum permanently. Drop it; the last good frame
+    // stays on screen until a finite reading arrives.
+    if (input.hasValue && !std::isfinite(input.value))
+        return;
+    if (input.hasPeak && !std::isfinite(input.peak))
+        return;
+
     const bool kindChanged = (input.kind != m_kind);
     m_input = input;
     m_kind = input.kind;
@@ -181,6 +192,21 @@ void SmartMtrWidget::advance()
     // timer staying alive through a marker hold (nothing moving) doesn't repaint.
     if (settled || extremesRepaintDue || (barMoving && m_smooth.shouldRepaint()))
         update();
+}
+
+void SmartMtrWidget::changeEvent(QEvent* e)
+{
+    // The cached marker layer (m_aboveBar) bakes label glyphs built from font(),
+    // but the cache key is only {size, kind, dpr}. A theme/app font change would
+    // otherwise leave stale glyphs until the next resize/kind/DPR change, so
+    // invalidate the static layers here and repaint.
+    if (e->type() == QEvent::FontChange
+        || e->type() == QEvent::ApplicationFontChange
+        || e->type() == QEvent::StyleChange) {
+        m_cacheValid = false;
+        update();
+    }
+    QWidget::changeEvent(e);
 }
 
 void SmartMtrWidget::paintEvent(QPaintEvent*)

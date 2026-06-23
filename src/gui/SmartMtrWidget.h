@@ -78,6 +78,7 @@ public:
 
 protected:
     void paintEvent(QPaintEvent*) override;
+    void changeEvent(QEvent*) override;
 
 private:
     // One element per method; all draw in UNITS via SmartMtrGeometry. Called

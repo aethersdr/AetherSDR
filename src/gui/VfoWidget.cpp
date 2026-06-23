@@ -331,6 +331,13 @@ VfoWidget::VfoWidget(QWidget* parent)
     // its options, so re-push the input when it changes on any flag.
     connect(&MeterViewController::instance(), &MeterViewController::txMeterChanged,
             this, &VfoWidget::pushSmartMtrInput);
+    // The pushes above update this flag's rendering; also re-seed its option
+    // CONTROLS so a change made on another open flag's selector doesn't leave
+    // this flag's checkbox/combos showing a stale value.
+    connect(&MeterViewController::instance(), &MeterViewController::extremesChanged,
+            this, &VfoWidget::syncSmartMtrSettingsControls);
+    connect(&MeterViewController::instance(), &MeterViewController::txMeterChanged,
+            this, &VfoWidget::syncSmartMtrSettingsControls);
     pushSmartMtrOptions(); // apply the persisted options to this new flag
 
     connect(&SliceColorManager::instance(), &SliceColorManager::colorsChanged,
@@ -3280,6 +3287,35 @@ void VfoWidget::syncSmartMtrSettingsState()
             }
         }
     }
+}
+
+void VfoWidget::syncSmartMtrSettingsControls()
+{
+    // The meter options are global + live, but the per-flag control widgets are
+    // only seeded once at build and updated by local interaction. When another
+    // open flag changes a setting, re-seed this flag's controls from the
+    // (cached) MeterViewController so they don't show a stale value. Block
+    // signals so this re-seed doesn't echo back into the controller.
+    auto& mv = MeterViewController::instance();
+    if (m_showExtremesChk) {
+        const QSignalBlocker b(m_showExtremesChk);
+        m_showExtremesChk->setChecked(mv.showExtremes());
+    }
+    if (m_extremesSpeedCmb) {
+        const QSignalBlocker b(m_extremesSpeedCmb);
+        m_extremesSpeedCmb->setCurrentIndex(
+            m_extremesSpeedCmb->findData(int(mv.extremesSpeed())));
+    }
+    if (m_showValuesCmb) {
+        const QSignalBlocker b(m_showValuesCmb);
+        m_showValuesCmb->setCurrentIndex(
+            m_showValuesCmb->findData(int(mv.showValues())));
+    }
+    if (m_txMeterCmb) {
+        const QSignalBlocker b(m_txMeterCmb);
+        m_txMeterCmb->setCurrentIndex(m_txMeterCmb->findData(int(mv.txMeter())));
+    }
+    syncSmartMtrSettingsState();  // re-evaluate enable/disable for the new state
 }
 
 // ── Signal level ──────────────────────────────────────────────────────────────
