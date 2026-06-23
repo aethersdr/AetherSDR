@@ -232,7 +232,14 @@ void TxApplet::buildUI()
 
         m_moxBtn = new QPushButton("MOX");
         markTxKeying(m_moxBtn);    // manual transmit (PTT) — keys TX (#3646)
-        m_moxBtn->setStyleSheet(btnStyle);
+        const char* moxIdleStyle =
+            "QPushButton { background: #1a3a5a; border: 1px solid #d08020; "
+            "border-radius: 3px; color: #f0c890; font-size: 10px; font-weight: bold; "
+            "padding: 2px; }"
+            "QPushButton:hover { background: #204060; border: 1px solid #e09030; color: #ffd8a0; }"
+            "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
+            "border: 1px solid #2a3040; }";
+        m_moxBtn->setStyleSheet(moxIdleStyle);
         m_moxBtn->setCheckable(true);
         m_moxBtn->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
         m_moxBtn->setFixedHeight(22);
@@ -421,10 +428,12 @@ void TxApplet::setTransmitModel(TransmitModel* model)
             ? "QPushButton { background: #cc2222; border: 1px solid #ff4444; "
               "border-radius: 3px; color: #ffffff; font-size: 10px; font-weight: bold; "
               "padding: 2px; }"
-            : "QPushButton { background: #1a3a5a; border: 1px solid #205070; "
-              "border-radius: 3px; color: #c8d8e8; font-size: 10px; font-weight: bold; "
+            : "QPushButton { background: #1a3a5a; border: 1px solid #d08020; "
+              "border-radius: 3px; color: #f0c890; font-size: 10px; font-weight: bold; "
               "padding: 2px; }"
-              "QPushButton:hover { background: #204060; }");
+              "QPushButton:hover { background: #204060; border: 1px solid #e09030; color: #ffd8a0; }"
+              "QPushButton:disabled { background-color: #1a1a2a; color: #556070; "
+              "border: 1px solid #2a3040; }");
         m_updatingFromModel = false;
     });
 
