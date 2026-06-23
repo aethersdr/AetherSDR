@@ -218,6 +218,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 }
                 m_tciDaxStreamIds.clear();
                 m_tciDaxBorrowedChannels.clear();
+                m_channelTrx.clear();   // routing cache stale once the channel→stream map is torn down (#3766)
                 // Also drop the slice-assignment bookkeeping: slices are being
                 // destroyed with the connection, and a releaseDaxForTci() that
                 // runs later (e.g. the debounced grace timer firing after a
