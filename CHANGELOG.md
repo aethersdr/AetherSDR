@@ -33,7 +33,7 @@ widgets, and a large round of **CAT/rigctld parity** fixes. Governance moves to
   the S-meter (which stays pixel-identical when not selected). Analog d'Arsonval
   bar ballistics, sliding-window min/max "extremes" markers (1s/3s/5s), optional
   numeric value labels, and a TX mic-level meter. Renders correctly in the GPU
-  flag-sprite path. (#3723, #3750, #3751, #3752, #3753, #3760, #3765)
+  flag-sprite path. (#3723, #3750, #3751, #3752, #3753, #3760, #3771)
 - **Agent automation / test bridge** — an in-app, agent-drivable bridge for the
   GUI (`dumpTree`/`grab`/`invoke`/`get`, slice/VFO verbs), with TX automation
   hardening (meter freshness, ATU, two-tone, safety rails), input validation,
