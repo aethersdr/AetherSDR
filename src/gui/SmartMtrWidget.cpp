@@ -598,6 +598,8 @@ QVector<SmartMtrWidget::ExtremeMarker> SmartMtrWidget::extremeLabels() const
         const double opacity = extremesOpacity();
         if (opacity < 0.02)
             return out;
+        // Same opacity as the triangle markers (drawExtremes) so they fade and
+        // disappear together.
         // MAX (peak) — both kinds.
         out.push_back(marker(m_extremes.maxRaw(), m_extremes.maxPosUnits(), opacity, true));
         // MIN (trough) — signal only.

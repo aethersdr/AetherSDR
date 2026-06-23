@@ -3507,8 +3507,15 @@ void VfoWidget::onSmartMtrRepainted()
 void VfoWidget::drawSmartMtrLabels(QPainter& p) const
 {
     using namespace SmartMtrUnits;
+    // Don't gate on m_smartMtrWidget->isVisible(): in the default GPU flag mode
+    // the flag QWidget is hidden (setVisible(false)) and drawn as a grabbed
+    // sprite, so the in-meter triangle markers ride along in that sprite but
+    // isVisible() is false — which used to skip these overlay-drawn value labels
+    // entirely (they only appeared on the brief "live"/hover frames). Gate on the
+    // meter having a real size instead — the same condition the flag sprite is
+    // drawn under — so the labels track the markers in both GPU and software modes.
     if (!m_smartMtrWidget || !m_smartMtr || m_collapsed
-        || !m_smartMtrWidget->isVisible())
+        || m_smartMtrWidget->size().isEmpty())
         return;
     const auto labels = m_smartMtrWidget->extremeLabels();
     if (labels.isEmpty())
