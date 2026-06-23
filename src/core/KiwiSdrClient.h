@@ -31,8 +31,8 @@ struct KiwiSdrReceiverControls {
     int agcThresholdDb{-100};
     int agcDecayMs{1000};
     bool squelchEnabled{false};
-    // Kiwi server squelch: 0 open/off, otherwise signed dB offset from
-    // median RSSI floor for non-NBFM modes.
+    // Kiwi server squelch: 0 open/off; non-NBFM uses signed dB offset from
+    // median RSSI floor, while NBFM uses the raw 1-99 noise squelch level.
     int squelchThresholdDb{20};
 };
 

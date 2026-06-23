@@ -2220,8 +2220,9 @@ void RxApplet::connectSlice(SliceModel* s)
     };
 
     // Squelch — derive 3-way mode from the current receive surface's
-    // squelch on/off state. Auto is client-side only and doesn't survive
-    // slice switches, so a freshly-selected slice starts in Off or Manual.
+    // squelch on/off state. Auto is client-side only: Flex keeps the
+    // applet-wide Auto mode across active Flex slice switches, while Kiwi
+    // replacement receive keeps Auto as per-slice external receive state.
     {
         QSignalBlocker b1(m_sqlBtn), b2(m_sqlSlider);
         // Do NOT overwrite the Flex manual cache from the slice here. Flex
