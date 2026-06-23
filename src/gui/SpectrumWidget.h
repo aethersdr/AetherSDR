@@ -1308,6 +1308,14 @@ private:
     QRhiBuffer* m_fftFillVbo{nullptr};    // dynamic, 2N × (vec2 pos + vec4 color)
     static constexpr int kMaxFftBins = 8192;
     static constexpr int kFftVertStride = 6; // x, y, r, g, b, a
+    // Reused per-frame scratch for GPU FFT-trace vertex generation — avoids a
+    // heap (re)alloc of up to 2*kMaxFftBins*kFftVertStride floats every frame on
+    // the GUI thread (renderGpuFrame). resize() keeps capacity, so steady state
+    // is alloc-free.
+    struct FftScratchPt { float x, y; };
+    QVector<float> m_fftLineScratch;
+    QVector<float> m_fftFillScratch;
+    QVector<FftScratchPt> m_fftPtScratch;
 #endif
 
     // Mark the static overlay for repaint and schedule a frame update.

@@ -7941,8 +7941,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
         // Generate FFT spectrum vertices with baked colors
         const QVector<float>& fftBins = displaySpectrumBins();
-        if (!fftBins.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
-            const int n = qMin(fftBins.size(), kMaxFftBins);
+        const int n = qMin(fftBins.size(), kMaxFftBins);
+        // n >= 2 also guards the 1/(n-1) position step and the central-difference
+        // normal (pts[i±1]) below against a degenerate 1-bin spectrum.
+        if (n >= 2 && m_fftLineVbo && m_fftFillVbo) {
             const float minDbm = m_refLevel - m_dynamicRange;
             const float maxDbm = m_refLevel;
             const float range = maxDbm - minDbm;
@@ -7978,14 +7980,18 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             };
 
             // Line vertices: 2N × (x, y, r, g, b, a) — triangle strip expansion
-            // for variable-width lines on GPU (LineStrip is fixed at 1px)
-            QVector<float> lineVerts(n * 2 * kFftVertStride);
+            // for variable-width lines on GPU (LineStrip is fixed at 1px).
+            // Reused member scratch; resize() keeps capacity so steady state is
+            // alloc-free (no per-frame heap churn on the GUI thread).
+            m_fftLineScratch.resize(n * 2 * kFftVertStride);
+            QVector<float>& lineVerts = m_fftLineScratch;
             // Fill vertices: 2N × (x, y, r, g, b, a)
-            QVector<float> fillVerts(n * 2 * kFftVertStride);
+            m_fftFillScratch.resize(n * 2 * kFftVertStride);
+            QVector<float>& fillVerts = m_fftFillScratch;
 
             // Pre-compute positions for normal calculation
-            struct Pt { float x, y; };
-            QVector<Pt> pts(n);
+            m_fftPtScratch.resize(n);
+            QVector<FftScratchPt>& pts = m_fftPtScratch;
             for (int i = 0; i < n; ++i) {
                 pts[i].x = 2.0f * i / (n - 1) - 1.0f;
                 float t = qBound(0.0f, (fftBins[i] - minDbm) / range, 1.0f);
@@ -8175,8 +8181,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
     // Draw FFT spectrum — viewport restricted to spectrum rect
     const QVector<float>& fftDrawBins = displaySpectrumBins();
-    if (m_fftFillPipeline && m_fftLinePipeline && !fftDrawBins.isEmpty()) {
-        const int n = qMin(fftDrawBins.size(), kMaxFftBins);
+    const int n = qMin(fftDrawBins.size(), kMaxFftBins);
+    if (n >= 2 && m_fftFillPipeline && m_fftLinePipeline) {
         float specVpX = static_cast<float>(specRect.x()) * dpr;
         float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         float specVpW = static_cast<float>(specRect.width()) * dpr;
