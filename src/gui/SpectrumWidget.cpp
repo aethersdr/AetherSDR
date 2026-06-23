@@ -5716,6 +5716,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             if (mx >= left && mx <= right) {
                 emit sliceClicked(so.sliceId);
                 m_draggingVfo = true;
+                emit sliceDragActiveChanged(true);
                 m_vfoDragLastX = mx;
                 m_vfoDragOffsetHz = static_cast<int>(
                     std::round((xToMhz(mx) - so.freqMhz) * 1.0e6));
@@ -5752,6 +5753,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         // Click inside the filter passband → start VFO drag (#404)
         if (filterPassbandBodyHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx)) {
             m_draggingVfo = true;
+            emit sliceDragActiveChanged(true);
             m_vfoDragLastX = mx;
             m_vfoDragOffsetHz = static_cast<int>(std::round((xToMhz(mx) - ao->freqMhz) * 1.0e6));
             setSpectrumCursor(Qt::ClosedHandCursor);
@@ -6360,6 +6362,7 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     }
     if (m_draggingVfo) {
         m_draggingVfo = false;
+        emit sliceDragActiveChanged(false);
         if (m_vfoDragEdgePanTimer)
             m_vfoDragEdgePanTimer->stop();
         m_vfoDragEdgeHoldTicks = 0;

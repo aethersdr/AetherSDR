@@ -8293,6 +8293,11 @@ void MainWindow::setPanFollow(bool on)
 {
     disconnect(m_panFollowConn);
     disconnect(m_panFollowSliceConn);
+    m_panFollowActive = on;
+    // Toggling Pan Lock clears any drag-suppress state — a defensive reset in
+    // case a slice drag was ever abandoned without a mouse-release (e.g. the pane
+    // was removed mid-drag), which would otherwise leave Pan Follow suppressed.
+    m_sliceDragInProgress = false;
 
     if (!on) return;
 
@@ -8309,30 +8314,9 @@ void MainWindow::setPanFollow(bool on)
             return;
         }
 
-        auto centerPan = [this, s]() {
-            const QString panId = s->panId();
-            if (panId.isEmpty()) return;
-            // WFM holds its pan fixed: Doppler rides the demodulator's NCO,
-            // and recentring underneath it would desync the NCO offset until
-            // the next slice retune. While WFM is active on this pan, WFM
-            // wins and Pan Follow stands down. (Precedence is a UX call —
-            // flagged for maintainer review in the WFM PR.)
-            if (m_wfmSliceId >= 0) {
-                auto* wfmSlice = m_radioModel.slice(m_wfmSliceId);
-                if (wfmSlice && wfmSlice->panId() == panId) return;
-            }
-            const double freq = s->frequency();
-            auto* pan = m_radioModel.panadapter(panId);
-            if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
-            const QString freqStr = QString::number(freq, 'f', 6);
-            if (pan) pan->applyPanStatus({{"center", freqStr}});
-            m_radioModel.sendCommand(
-                QString("display pan set %1 center=%2").arg(panId, freqStr));
-        };
-
-        centerPan();
+        recenterPanFollowOnSlice0();
         m_panFollowConn = connect(s, &SliceModel::frequencyChanged,
-                                  this, [centerPan](double) { centerPan(); });
+                                  this, [this](double) { recenterPanFollowOnSlice0(); });
     };
 
     attachToSlice0();
@@ -8342,6 +8326,38 @@ void MainWindow::setPanFollow(bool on)
         this, [this, attachToSlice0](SliceModel* s) {
             if (s && s->sliceId() == 0) attachToSlice0();
         });
+}
+
+// Pan Follow ("Pan Lock"): recenter the panadapter on Slice A (slice 0). Called
+// on enable, on every slice-0 frequency change, and once when a slice drag ends.
+void MainWindow::recenterPanFollowOnSlice0()
+{
+    if (!m_panFollowActive) return;   // Pan Lock off — never move the pan
+    // A slice is being dragged (in-window tune or edge auto-pan): the drag owns
+    // the pan center, so stand down rather than fight it with a per-tick recenter
+    // (that conflict caused ~0.33 MHz pan lurches + jumping). The drag-end handler
+    // calls this once with the flag cleared, so Pan Lock re-asserts on release.
+    // (user-reported)
+    if (m_sliceDragInProgress) return;
+    auto* s = m_radioModel.slice(0);
+    if (!s) return;
+    const QString panId = s->panId();
+    if (panId.isEmpty()) return;
+    // WFM holds its pan fixed: Doppler rides the demodulator's NCO, and
+    // recentring underneath it would desync the NCO offset until the next slice
+    // retune. While WFM is active on this pan, WFM wins and Pan Follow stands
+    // down. (Precedence is a UX call — flagged for maintainer review in the WFM PR.)
+    if (m_wfmSliceId >= 0) {
+        auto* wfmSlice = m_radioModel.slice(m_wfmSliceId);
+        if (wfmSlice && wfmSlice->panId() == panId) return;
+    }
+    const double freq = s->frequency();
+    auto* pan = m_radioModel.panadapter(panId);
+    if (pan && qFuzzyCompare(pan->centerMhz(), freq)) return;
+    const QString freqStr = QString::number(freq, 'f', 6);
+    if (pan) pan->applyPanStatus({{"center", freqStr}});
+    m_radioModel.sendCommand(
+        QString("display pan set %1 center=%2").arg(panId, freqStr));
 }
 
 } // namespace AetherSDR

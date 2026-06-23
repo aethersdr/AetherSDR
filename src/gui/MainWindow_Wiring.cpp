@@ -2469,6 +2469,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         target->setFrequency(sliceFreqMhz);
         mirrorDiversityChildFrequency(target, sliceFreqMhz);  // keep diversity child in step
     });
+    // Pan Follow ("Pan Lock") stands down for the whole duration of a slice drag
+    // so it doesn't fight the drag (in-window tune or edge auto-pan) with per-tick
+    // recenters; on release it recenters once so Pan Lock re-asserts. (user-reported)
+    connect(sw, &SpectrumWidget::sliceDragActiveChanged, this, [this](bool active) {
+        m_sliceDragInProgress = active;
+        if (!active) {
+            recenterPanFollowOnSlice0();   // re-assert Pan Lock on release (self-guards if off)
+        }
+    });
 
     // ── Spot trigger — notify the radio/TCI clients when a spot label is clicked (#341)
     connect(sw, &SpectrumWidget::spotTriggered, this, [this, applet](int spotIndex) {

@@ -511,6 +511,10 @@ signals:
     // already accounted for by the explicit center).  Keeps the dragged slice
     // pinned under the cursor while the band scrolls.  (user-reported)
     void edgePanTuneRequested(double newCenterMhz, double sliceFreqMhz);
+    // Emitted when a slice drag (in-window tune or edge auto-pan) starts (true)
+    // and ends (false), so Pan Follow can stand down for the drag's duration and
+    // recenter once on release. (user-reported)
+    void sliceDragActiveChanged(bool active);
     void spotTriggered(int spotIndex);
     // Emitted when the user changes both center and bandwidth as one explicit
     // pan/zoom operation and the radio should apply them coherently. Splitting
