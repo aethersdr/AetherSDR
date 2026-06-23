@@ -851,11 +851,20 @@ void MainWindow::onSliceAdded(SliceModel* s)
         if (sliceIndex == sid)
             vfo->setEscLevel(dbm);
     });
-    // Feed SmartMTR TX scale: global mic level (dBFS) + MOX state. The VFO shows
-    // mic only on its own TX slice while transmitting.
+    // Feed the SmartMTR TX scales: mic level + compression (dBFS / dB) from
+    // micMetersChanged, and forward power + SWR from txMetersChanged. The VFO
+    // shows the operator-selected meter only on its own TX slice while
+    // transmitting. No amp-operate gate (unlike the analog S-Meter below): the
+    // meter reports the truth of whatever the operator selected.
     connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
-            vfo, [vfo](float micLevel, float, float micPeak, float) {
+            vfo, [vfo](float micLevel, float, float micPeak, float compPeak) {
         vfo->setMicLevel(micLevel, micPeak);
+        vfo->setTxCompression(compPeak);
+    });
+    connect(&m_radioModel.meterModel(), &MeterModel::txMetersChanged,
+            vfo, [vfo](float fwd, float swr) {
+        vfo->setTxPower(fwd);
+        vfo->setTxSwr(swr);
     });
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
             vfo, &VfoWidget::setTransmitting);

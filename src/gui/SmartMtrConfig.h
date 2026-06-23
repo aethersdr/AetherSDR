@@ -21,7 +21,14 @@ namespace AetherSDR {
 // ============================================================================
 
 // The measurement the control currently shows. Extend here for new kinds.
-enum class MeterKind { Signal, MicLevel };
+// Signal is the RX scale; the rest are TX scales (see DisplaySettings::TxMeter).
+enum class MeterKind { Signal, MicLevel, SWR, Power, Compression };
+
+// Forward-power scale headroom: the scale top sits this far above the radio's
+// rated power so a rig pushing slightly past rated doesn't peg the bar, and the
+// red ("over rated") zone begins at rated = fullScale / kPowerHeadroom. Shared
+// so the pushing side (VfoWidget) and buildPowerConfig agree on the one rule.
+inline constexpr double kPowerHeadroom = 1.2;
 
 // Tick footprint and emphasis (see SmartMtrUnits / SmartMtrColors).
 enum class MarkerSize { Small, Large };
@@ -67,10 +74,21 @@ struct MeterConfig {
     // Maps a value within [min,max] to a hole-local unit position. Unclamped:
     // callers range-check (markers) or clamp (indicator) as needed.
     std::function<double(double value, double min, double max)> valueToPosition;
+    // Reversed bar fill: the indicator grows from the scale's RIGHT end toward
+    // the value position instead of from the left. Used by the compression
+    // (gain-reduction) meter so 0 dB reads empty and the bar grows toward -25 as
+    // compression increases (mirrors the Phone/CW reversed HGauge).
+    bool reversed = false;
 };
 
 // Registry lookup for a kind's static configuration.
 const MeterConfig& meterConfig(MeterKind kind);
+
+// Build a forward-power config for a given scale top (watts). Unlike the static
+// kinds, the Power markers are radio-aware (barefoot vs Aurora vs amplifier), so
+// the caller injects the full scale at push time rather than reading the registry.
+// The red zone begins at fullScaleW / kPowerHeadroom (the radio's rated power).
+MeterConfig buildPowerConfig(double fullScaleW);
 
 // Clamped indicator position for an input: handles the null value (-> scale
 // minimum) and clamps the mapped position to the scale band.

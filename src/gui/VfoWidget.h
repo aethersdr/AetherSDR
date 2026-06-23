@@ -60,10 +60,14 @@ public:
     void setReceiveMeterReading(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
     // SmartMTR feeds: live mic level + separately-measured mic peak (both dBFS)
-    // and global TX (MOX) state. The SmartMTR view shows mic level on this VFO's
-    // TX slice while transmitting (peak marker driven by micPeak), and received
-    // signal otherwise.
+    // and global TX (MOX) state. The SmartMTR view shows the operator-selected TX
+    // meter on this VFO's TX slice while transmitting, and received signal
+    // otherwise. The TX setters mirror setMicLevel: each caches its latest value
+    // and re-pushes while this flag is the transmitting TX slice.
     void setMicLevel(float micDbfs, float micPeakDbfs);
+    void setTxSwr(float swr);
+    void setTxPower(float fwdPowerW);
+    void setTxCompression(float compPeakDb);
     void setTransmitting(bool tx);
 
     // Split mode: call whenever TX assignment or active slice changes.
@@ -196,9 +200,12 @@ protected:
 private:
     void updateSignalMeterTarget();
     void animateSignalMeter();
-    // Build and push the current MeterInput (signal vs mic by TX state) to the
-    // SmartMTR widget. Cheap; safe to call on every level/state update.
+    // Build and push the current MeterInput (RX signal vs the selected TX meter)
+    // to the SmartMTR widget. Cheap; safe to call on every level/state update.
     void pushSmartMtrInput();
+    // Radio-aware forward-power scale top (watts): the radio's rated exciter power
+    // x kPowerHeadroom, mirroring TxApplet's exciter gauge. Used for the Power meter.
+    double txPowerFullScaleW() const;
     // Read the global extremes options (MeterViewController) and push them to the
     // SmartMTR widget; show/hide + reposition the value-label overlay. Called on
     // construction, on extremesChanged() broadcast, and on meter-view switch.
@@ -306,6 +313,10 @@ private:
     qint64 m_lastLabelDirtyMs{-1};
     float m_micDbfs{-40.0f}; // latest mic level (dBFS); SmartMTR TX scale
     float m_micPeakDbfs{-40.0f}; // latest mic peak (dBFS, radio MICPEAK stat)
+    // Latest TX-meter values, cached for the SmartMTR TX scales (see the setters).
+    float m_swr{1.0f};            // forward/reflected ratio (1.0 = perfect match)
+    float m_fwdPowerW{0.0f};      // smoothed forward power (watts)
+    float m_compPeakDb{0.0f};     // compression peak (dB, positive); -negated for the face
     bool m_transmitting{false}; // global MOX state
     // Inline selector row revealed by clicking the meter strip (not a popup),
     // shown between the meter and the tab bar.

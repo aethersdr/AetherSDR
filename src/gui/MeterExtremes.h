@@ -34,16 +34,26 @@ public:
     void setTuning(const Tuning& t) { m_tuning = t; }
     const Tuning& tuning() const { return m_tuning; }
 
-    // Clear the window and snap both markers down to the floor. Used on a kind
-    // switch (dBm vs dBFS must not mix) or a hard park.
+    // Reversed (gain-reduction) meters fill from the high end of the scale, so the
+    // markers' rest/floor is the scale MAX (the "0" end) rather than the MIN, and
+    // the meaningful peak is the window MIN (most negative). Set on a kind switch
+    // before reset(); the widget draws minPosUnits() as the peak for these kinds.
+    void setReversed(bool r) { m_reversed = r; }
+    double floorPos() const
+    {
+        return m_reversed ? SmartMtrUnits::kScaleMax : SmartMtrUnits::kScaleMin;
+    }
+
+    // Clear the window and snap both markers to the floor (rest position). Used on
+    // a kind switch (dBm vs dBFS must not mix) or a hard park.
     void reset()
     {
         m_window.clear();
         m_sumRaw = 0.0;
         m_minRaw = 0.0;
         m_maxRaw = 0.0;
-        m_minPos = SmartMtrUnits::kScaleMin;
-        m_maxPos = SmartMtrUnits::kScaleMin;
+        m_minPos = floorPos();
+        m_maxPos = floorPos();
         m_hasData = false;
         m_useExtPeak = false;
         m_extPeakRaw = 0.0;
@@ -113,11 +123,11 @@ public:
         //    external-peak mode the trough is unused, so it targets the needle so
         //    it collapses there (mic draws no trough) without standing off.
         const double minTgt =
-            !m_hasData      ? SmartMtrUnits::kScaleMin
+            !m_hasData      ? floorPos()
             : m_useExtPeak  ? needlePosUnits
                             : mapToUnits(m_minRaw);
         const double maxTgt =
-            m_hasData ? mapToUnits(m_maxRaw) : SmartMtrUnits::kScaleMin;
+            m_hasData ? mapToUnits(m_maxRaw) : floorPos();
 
         // 3) Constant-velocity slew toward each target. External-peak (mic) mode
         //    tracks tightly at the fast peak slew — the radio's peak is a live
@@ -208,6 +218,10 @@ private:
     // setExternalPeak(); cleared by reset() on a kind switch.
     bool m_useExtPeak = false;
     double m_extPeakRaw = 0.0;
+
+    // Reversed (gain-reduction) face: rest at the scale MAX, peak is the window
+    // MIN. See setReversed().
+    bool m_reversed = false;
 };
 
 } // namespace AetherSDR

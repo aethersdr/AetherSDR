@@ -56,6 +56,11 @@ SmartMtrWidget::SmartMtrWidget(QWidget* parent)
     sp.setHeightForWidth(true);
     setSizePolicy(sp);
 
+    // Seed the active config so the value->position mapping is valid before the
+    // first setMeterInput (markers stay empty until then; drawMarkers no-ops), and
+    // so applyBallistics can read its reversed flag.
+    m_activeCfg = meterConfig(m_kind);
+
     // Ballistics depend on the meter kind (signal vs mic) — see applyBallistics.
     // Seed with the default kind's set; setMeterInput re-applies on a kind switch.
     applyBallistics(m_kind);
@@ -89,6 +94,16 @@ void SmartMtrWidget::applyBallistics(MeterKind kind)
         b.attackSeconds = 0.01818f;  // ~18.2 ms — fast rise
         b.releaseSeconds = 0.26940f; // ~269 ms — slow fall
     }
+    // Reversed (gain-reduction) meters fill as the smoothed fraction FALLS, so the
+    // smoother's "attack" (rising) and "release" (falling) map to the opposite
+    // ends of the bar's motion. Swap them so the BAR keeps the conventional
+    // fast-attack / slow-decay feel — jumps toward peak compression and recedes
+    // slowly — instead of crawling up and snapping back.
+    if (m_activeCfg.reversed) {
+        const float tmp = b.attackSeconds;
+        b.attackSeconds = b.releaseSeconds;
+        b.releaseSeconds = tmp;
+    }
     // The smoother integrates the normalised scale fraction; a tiny snap epsilon
     // keeps the slow tail lazy (the source never snaps on decay) without endless
     // sub-pixel repaints.
@@ -108,27 +123,36 @@ void SmartMtrWidget::setMeterInput(const MeterInput& input)
         return;
 
     const bool kindChanged = (input.kind != m_kind);
+    // Power's config is radio-aware (its markers depend on input.max); the rest
+    // are static. Rebuild the active config only when it can actually change — a
+    // kind switch, or a Power full-scale change (radio swap) — not on every meter
+    // packet, since buildPowerConfig() does real work (log/sort/label formatting).
+    const bool powerScaleChanged = input.kind == MeterKind::Power
+        && (input.min != m_input.min || input.max != m_input.max);
     m_input = input;
     m_kind = input.kind;
+
+    if (kindChanged || powerScaleChanged)
+        m_activeCfg = (input.kind == MeterKind::Power) ? buildPowerConfig(input.max)
+                                                       : meterConfig(input.kind);
 
     // RX<->TX is a scale discontinuity (signal dBm vs mic dBFS); the extremes
     // window must not mix domains, and the bar ballistics differ per kind.
     if (kindChanged) {
+        m_extremes.setReversed(m_activeCfg.reversed);
         m_extremes.reset();
         applyBallistics(m_kind);
     }
 
-    // Drive the extremes engine. Signal derives its min/max from a local sliding
-    // window of the dBm stream; mic's peak is a separate radio-sourced stat
-    // (MICPEAK over UDP), so it overrides the MAX marker directly rather than
-    // synthesizing one. Skip on park (no value) or when disabled.
+    // Drive the extremes engine. A kind with an externally-measured peak (mic's
+    // MICPEAK, forward-power's instant sample, compression's peak) overrides the
+    // MAX marker directly; the rest (signal, SWR) derive min/max from a local
+    // sliding window of the value stream. Skip on park (no value) or when disabled.
     if (m_extremesEnabled && input.hasValue) {
-        if (input.kind == MeterKind::MicLevel) {
-            if (input.hasPeak)
-                m_extremes.setExternalPeak(input.peak);
-        } else {
+        if (input.hasPeak)
+            m_extremes.setExternalPeak(input.peak);
+        else
             m_extremes.record(input.value, m_extremesClock.elapsed());
-        }
     }
 
     // Bar target = the instantaneous value. (Mic used to track the windowed
@@ -224,7 +248,7 @@ void SmartMtrWidget::paintEvent(QPaintEvent*)
     // rebuildStaticLayers) — keeping the hot repaint cheap over the GPU panadapter.
     const qreal dpr = devicePixelRatioF();
     if (!m_cacheValid || m_cacheSize != size() || m_cacheKind != m_input.kind
-        || m_cacheDpr != dpr)
+        || m_cacheDpr != dpr || m_cacheMin != m_input.min || m_cacheMax != m_input.max)
         rebuildStaticLayers(g);
 
     p.drawPixmap(0, 0, m_belowBar);
@@ -269,6 +293,8 @@ void SmartMtrWidget::rebuildStaticLayers(const SmartMtrGeometry& g)
     m_cacheSize = logical;
     m_cacheDpr = dpr;
     m_cacheKind = m_input.kind;
+    m_cacheMin = m_input.min;
+    m_cacheMax = m_input.max;
     m_cacheValid = true;
 }
 
@@ -303,13 +329,27 @@ void SmartMtrWidget::drawIndicator(QPainter& p, const SmartMtrGeometry& g) const
     // still renders a short 0..10 stub rather than nothing.
     p.save();
     p.setClipPath(clip);
-    p.fillRect(g.rect(kHoleMargX, kHoleMargY, pos, kHoleH),
-               SmartMtrColors::kForeground);
-    // Bright value line at the bar's right end (the value), drawn just inside the
-    // end so it never extends past the position.
-    p.fillRect(g.rect(kHoleMargX + pos - kIndicatorLine, kHoleMargY,
-                      kIndicatorLine, kHoleH),
-               SmartMtrColors::kIndicator);
+    if (m_activeCfg.reversed) {
+        // Reversed (gain-reduction) fill: mirror of the normal bar. The normal bar
+        // is anchored at the hole's LEFT edge (hole-local 0) and grows to pos; this
+        // one is anchored at the hole's RIGHT edge (kHoleW) and grows leftward to
+        // pos. So a min/blank value renders a short stub at the right edge (like
+        // the normal bar's 0..kScaleMin stub), and rising compression fills toward
+        // -25 — anchored at the hole end, not at the "0" value position.
+        p.fillRect(g.rect(kHoleMargX + pos, kHoleMargY, kHoleW - pos, kHoleH),
+                   SmartMtrColors::kForeground);
+        // Bright value line at the moving (left) edge of the fill.
+        p.fillRect(g.rect(kHoleMargX + pos, kHoleMargY, kIndicatorLine, kHoleH),
+                   SmartMtrColors::kIndicator);
+    } else {
+        p.fillRect(g.rect(kHoleMargX, kHoleMargY, pos, kHoleH),
+                   SmartMtrColors::kForeground);
+        // Bright value line at the bar's right end (the value), drawn just inside
+        // the end so it never extends past the position.
+        p.fillRect(g.rect(kHoleMargX + pos - kIndicatorLine, kHoleMargY,
+                          kIndicatorLine, kHoleH),
+                   SmartMtrColors::kIndicator);
+    }
     p.restore();
 }
 
@@ -359,7 +399,7 @@ void SmartMtrWidget::drawInsetShadow(QPainter& p, const SmartMtrGeometry& g) con
 
 void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
 {
-    const MeterConfig& cfg = meterConfig(m_input.kind);
+    const MeterConfig& cfg = m_activeCfg;
     if (cfg.markers.empty())
         return;
 
@@ -463,7 +503,7 @@ void SmartMtrWidget::setExtremesOptions(bool show, ExtremesSpeed speed,
 
 double SmartMtrWidget::mapRawToUnits(double raw) const
 {
-    const double pos = meterConfig(m_kind).valueToPosition(raw, m_input.min, m_input.max);
+    const double pos = m_activeCfg.valueToPosition(raw, m_input.min, m_input.max);
     return std::clamp(pos, kScaleMin, kScaleMax);
 }
 
@@ -479,8 +519,9 @@ bool SmartMtrWidget::extremesActive() const
 
 double SmartMtrWidget::signalFade() const
 {
-    // Mic (dBFS) has no dBm floor → always full. Signal: fade out near the floor.
-    if (m_kind == MeterKind::MicLevel)
+    // Only the RX signal scale has a dBm floor to fade toward; every TX scale
+    // (mic dBFS, SWR, power, compression) reads at full strength.
+    if (m_kind != MeterKind::Signal)
         return 1.0;
     const double cur = m_input.hasValue ? m_input.value : SmartMtrExtremes::kSignalFadeLoDbm;
     return std::clamp(
@@ -491,9 +532,9 @@ double SmartMtrWidget::signalFade() const
 
 double SmartMtrWidget::extremesOpacity() const
 {
-    // Mic: the lone PEAK marker has no trough to compare against and the dBFS
-    // scale has no dBm floor, so it shows at full opacity.
-    if (m_kind == MeterKind::MicLevel)
+    // TX scales show a lone PEAK marker with no trough to compare against and no
+    // dBm floor, so they show at full opacity. Only signal gets the proximity fade.
+    if (m_kind != MeterKind::Signal)
         return 1.0;
 
     // Signal: proximity fade (min/max too close) x signal fade (near-floor).
@@ -559,10 +600,16 @@ void SmartMtrWidget::drawExtremes(QPainter& p, const SmartMtrGeometry& g) const
         p.drawPolygon(tri);
     };
 
-    // MAX (peak) for both kinds; MIN (trough) for signal only.
-    drawTri(m_extremes.maxPosUnits());
-    if (m_kind == MeterKind::Signal)
+    // Peak marker: normally the window/external MAX. For a reversed (gain-
+    // reduction) meter the peak is the window MIN — the most compression — drawn
+    // toward the -25 end. MIN trough is additionally drawn for signal only.
+    if (m_activeCfg.reversed) {
         drawTri(m_extremes.minPosUnits());
+    } else {
+        drawTri(m_extremes.maxPosUnits());
+        if (m_kind == MeterKind::Signal)
+            drawTri(m_extremes.minPosUnits());
+    }
 
     p.restore();
 }

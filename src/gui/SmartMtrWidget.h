@@ -142,6 +142,12 @@ private:
     QElapsedTimer m_clock;
     MeterKind m_kind = MeterKind::Signal; // last kind, to snap across scale changes
 
+    // Active scale config (markers + value->position). For the static kinds this
+    // is a copy of the registry entry; for Power the markers are radio-aware, so
+    // it is rebuilt from the pushed full scale in setMeterInput(). Both the marker
+    // draw and the raw->units mapping read it instead of the registry directly.
+    MeterConfig m_activeCfg;
+
     // Extremes (min/max peak-hold markers): a sliding-window envelope tracker that
     // glides at a constant linear slew (distinct from the bar's exponential
     // ballistic). Ticked alongside the smoother in advance(). Free-running clock
@@ -167,6 +173,10 @@ private:
     QSize m_cacheSize;                       // logical widget size of the cache
     qreal m_cacheDpr = 0.0;                  // device-pixel ratio of the cache
     MeterKind m_cacheKind = MeterKind::Signal; // kind the markers were built for
+    // Power's markers depend on the pushed full scale, so a radio swap (barefoot
+    // <-> Aurora <-> amp) must re-raster even though the kind is unchanged.
+    double m_cacheMin = 0.0;
+    double m_cacheMax = 0.0;
     bool m_cacheValid = false;
 };
 
