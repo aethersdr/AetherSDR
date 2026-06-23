@@ -310,6 +310,12 @@ private:
     // Inline selector row revealed by clicking the meter strip (not a popup),
     // shown between the meter and the tab bar.
     QWidget* m_meterMenuRow{nullptr};
+    // Explicit open-state for the selector. The paintEvent underline gates on
+    // this rather than m_meterMenuRow->isVisible(): in GPU flag mode the flag is
+    // hidden and rasterized into a sprite, where the child's isVisible() reads
+    // false even with the selector open — which dropped the underline from the
+    // sprite. The selector is one of the controls that should stay visible.
+    bool m_meterMenuOpen{false};
     QPushButton* m_sMeterOptBtn{nullptr};
     QPushButton* m_smartMtrOptBtn{nullptr};
     // SmartMTR-only display options, shown vertically below the selector
@@ -325,9 +331,12 @@ private:
     // row is disabled so the disabled state is obvious (the custom combo
     // stylesheet has no :disabled variant).  Matched to the disabled-checkbox
     // label dimming.
-    QGraphicsOpacityEffect* m_extremesSpeedFade{nullptr};
-    QGraphicsOpacityEffect* m_showValuesFade{nullptr};
-    QGraphicsOpacityEffect* m_txMeterFade{nullptr};
+    // The three SmartMTR option rows (label + combo). Disabled as a unit when the
+    // option doesn't apply; the label/combo dim via their :disabled stylesheet —
+    // render()-compatible, so they stay dimmed (not blank) in GPU flag sprites.
+    QWidget* m_speedRow{nullptr};
+    QWidget* m_valuesRow{nullptr};
+    QWidget* m_txMeterRow{nullptr};
     // Enable/disable the SmartMTR-only options per the current meter view and
     // the "Show extremes" checkbox state (see implementation for the rules).
     void syncSmartMtrSettingsState();

@@ -1044,8 +1044,13 @@ void VfoWidget::buildUI()
     // Label preceding a select control, on the same row as its combo.
     auto makeOptLabel = [](const QString& text) {
         auto* lbl = new QLabel(text);
+        // :disabled dims the label when its row is disabled — a render()-compatible
+        // replacement for the old QGraphicsOpacityEffect (which QWidget::render()
+        // can't rasterize, so it blanked these rows in GPU flag sprites). #5e6e7c is
+        // ~0.45 of the normal text over the flag background.
         lbl->setStyleSheet("QLabel { background: transparent; border: none; "
-                           "color: #c8d8e8; font-size: 12px; }");
+                           "color: #c8d8e8; font-size: 12px; }"
+                           "QLabel:disabled { color: #5e6e7c; }");
         return lbl;
     };
 
@@ -1082,8 +1087,7 @@ void VfoWidget::buildUI()
         m_extremesSpeedCmb->findData(int(DS::extremesSpeed())));
     AetherSDR::applyComboStyle(m_extremesSpeedCmb);
     speedLayout->addWidget(m_extremesSpeedCmb, 1);
-    m_extremesSpeedFade = new QGraphicsOpacityEffect(speedRow);
-    speedRow->setGraphicsEffect(m_extremesSpeedFade);
+    m_speedRow = speedRow;  // disabled as a unit → label + combo dim via :disabled
     meterMenuOuter->addWidget(speedRow);
 
     meterMenuOuter->addWidget(makeSeparator());
@@ -1103,8 +1107,7 @@ void VfoWidget::buildUI()
         m_showValuesCmb->findData(int(DS::showValues())));
     AetherSDR::applyComboStyle(m_showValuesCmb);
     valuesLayout->addWidget(m_showValuesCmb, 1);
-    m_showValuesFade = new QGraphicsOpacityEffect(valuesRow);
-    valuesRow->setGraphicsEffect(m_showValuesFade);
+    m_valuesRow = valuesRow;
     meterMenuOuter->addWidget(valuesRow);
 
     meterMenuOuter->addWidget(makeSeparator());
@@ -1124,8 +1127,7 @@ void VfoWidget::buildUI()
     m_txMeterCmb->setCurrentIndex(m_txMeterCmb->findData(int(DS::txMeter())));
     AetherSDR::applyComboStyle(m_txMeterCmb);
     txMeterLayout->addWidget(m_txMeterCmb, 1);
-    m_txMeterFade = new QGraphicsOpacityEffect(txMeterRow);
-    txMeterRow->setGraphicsEffect(m_txMeterFade);
+    m_txMeterRow = txMeterRow;
     meterMenuOuter->addWidget(txMeterRow);
 
     // Persist + re-evaluate enable/disable rules on change.  Toggling "Show
@@ -2466,6 +2468,7 @@ void VfoWidget::setMeterMenuOpen(bool open)
     if (!m_meterMenuRow) {
         return;
     }
+    m_meterMenuOpen = open;
     m_meterMenuRow->setVisible(open);
     // The underline-room spacer tracks the menu: shown only while open so the
     // closed view stays pixel-exact. (#SmartMTR)
@@ -3113,7 +3116,7 @@ void VfoWidget::paintEvent(QPaintEvent* event)
     // tab-active accent (#00b4d8).  Unlike the straight tab underline, this one
     // is a flat line whose ends hook gently upward (a shallow concave-up curve)
     // for a distinct, finished look. (#SmartMTR)
-    if (m_meterStack && m_meterMenuRow && m_meterMenuRow->isVisible()) {
+    if (m_meterStack && m_meterMenuRow && m_meterMenuOpen) {
         const QRect g = m_meterStack->geometry();
         // Baseline below the content actually shown: the S-meter's scale labels
         // overflow the 22px strip, so anchor below them; SmartMTR is contained,
@@ -3316,25 +3319,20 @@ void VfoWidget::syncSmartMtrSettingsState()
     const bool smart = m_smartMtr;  // options apply to SmartMTR only
     const bool showExt = m_showExtremesChk && m_showExtremesChk->isChecked();
 
-    // Dim disabled select rows (label + combo) to match the disabled-checkbox
-    // label.  #5e6e7c is ~0.45 blend of the normal text over the flag bg, so
-    // 0.45 opacity reproduces that dimming on the whole row.
-    constexpr double kDisabledOpacity = 0.45;
+    // Disable inapplicable select rows as a unit: the label + combo dim via their
+    // :disabled stylesheet (render()-compatible, so they stay dimmed rather than
+    // blank when the flag is rasterized into a GPU sprite — unlike the old
+    // QGraphicsOpacityEffect, which render() can't draw).
     const bool speedEnabled = smart && showExt;
-    // An identity opacity effect (opacity 1.0) can render blank row contents
-    // when multiple VFO flags are GPU-composited (#3695). Disable the effect
-    // entirely while it is at full strength so the row renders directly; keep it
-    // installed only when it is actually dimming the row. (#3750)
-    auto setRowOpacity = [](QGraphicsOpacityEffect* effect, bool fullStrength) {
-        if (!effect) {
-            return;
-        }
-        effect->setOpacity(fullStrength ? 1.0 : kDisabledOpacity);
-        effect->setEnabled(!fullStrength);
-    };
-    setRowOpacity(m_extremesSpeedFade, speedEnabled);
-    setRowOpacity(m_showValuesFade, smart);
-    setRowOpacity(m_txMeterFade, smart);
+    if (m_speedRow) {
+        m_speedRow->setEnabled(speedEnabled);
+    }
+    if (m_valuesRow) {
+        m_valuesRow->setEnabled(smart);
+    }
+    if (m_txMeterRow) {
+        m_txMeterRow->setEnabled(smart);
+    }
 
     if (m_showExtremesChk) {
         m_showExtremesChk->setEnabled(smart);

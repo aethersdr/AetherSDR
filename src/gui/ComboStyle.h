@@ -66,6 +66,12 @@ inline QString comboStyleTemplate()
         " color: {{color.text.primary}};"
         " border: 1px solid {{color.background.2}};"
         " padding: 2px 2px 2px 4px; border-radius: 2px; }"
+        // Disabled combos must read as disabled — the base rule sets an explicit
+        // colour, which otherwise overrides Qt's native disabled greying. This is
+        // also render()-compatible (unlike a QGraphicsEffect), so a disabled combo
+        // stays dimmed when a widget is rasterized into an image (GPU flag sprites).
+        "QComboBox:disabled { color: {{color.text.secondary}};"
+        " border: 1px solid {{color.background.1}}; }"
         "QComboBox::drop-down { border: none; width: 14px; }"
         "QComboBox::down-arrow { image: url(%1); width: 8px; height: 6px; }"
         "QComboBox QAbstractItemView { background: {{color.background.1}};"
