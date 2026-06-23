@@ -1001,6 +1001,17 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     m_overlayMenu->raiseAll();  // keep overlay + panels on top of all VFO widgets
     if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible())
         m_interlockNotificationLabel->raise();
+#ifdef AETHER_GPU_SPECTRUM
+    // #3746(2) diagnostic: the gap from this FlagCreated to the slice's first
+    // FlagFirstGrab is the "blank" window. Gated aether.perf trace, kept so the
+    // fix below stays verifiable (measured ~41 ms gap without it -> ~3 ms with).
+    if (m_gpuFlagMode && lcPerf().isDebugEnabled())
+        qCDebug(lcPerf).nospace() << "FlagCreated slice=" << sliceId;
+    // #3746(2) fix: rasterize the new flag's sprite immediately (off-frame, safe)
+    // so a non-live new slice isn't blank until the next refresh-timer tick.
+    // repositionVfoFlags() positions the quad next frame.
+    grabFlagSprites();
+#endif
     return w;
 }
 
@@ -1255,6 +1266,7 @@ void SpectrumWidget::grabFlagSprites()
         if (!f || f->size().isEmpty() || id == m_liveFlagSliceId) {
             continue;   // the live flag is shown as a real widget, not grabbed
         }
+        const bool firstGrab = !m_flagSprites.contains(id);   // #3746(2) measure: first sprite for this slice?
         FlagSprite& s = m_flagSprites[id];   // inserts a blank sprite if absent
         const QSize devSize(qMax(1, static_cast<int>(std::lround(f->width() * dpr))),
                             qMax(1, static_cast<int>(std::lround(f->height() * dpr))));
@@ -1266,6 +1278,11 @@ void SpectrumWidget::grabFlagSprites()
         f->render(&s.img, QPoint(0, 0));   // off-frame raster — safe
         s.imgDirty = true;
         ++grabbed;
+        // #3746(2) measure: log the first sprite render for a slice, so the
+        // latency from FlagCreated (in addVfoWidget) to here -- the "80 ms
+        // blank" gap -- can be read from the log timestamps.
+        if (firstGrab && lcPerf().isDebugEnabled())
+            qCDebug(lcPerf).nospace() << "FlagFirstGrab slice=" << id;
     }
     if (lcPerf().isDebugEnabled())
         qCDebug(lcPerf).nospace()
