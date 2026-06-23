@@ -3242,15 +3242,20 @@ void VfoWidget::syncSmartMtrSettingsState()
     // 0.45 opacity reproduces that dimming on the whole row.
     constexpr double kDisabledOpacity = 0.45;
     const bool speedEnabled = smart && showExt;
-    if (m_extremesSpeedFade) {
-        m_extremesSpeedFade->setOpacity(speedEnabled ? 1.0 : kDisabledOpacity);
-    }
-    if (m_showValuesFade) {
-        m_showValuesFade->setOpacity(smart ? 1.0 : kDisabledOpacity);
-    }
-    if (m_txMeterFade) {
-        m_txMeterFade->setOpacity(smart ? 1.0 : kDisabledOpacity);
-    }
+    // An identity opacity effect (opacity 1.0) can render blank row contents
+    // when multiple VFO flags are GPU-composited (#3695). Disable the effect
+    // entirely while it is at full strength so the row renders directly; keep it
+    // installed only when it is actually dimming the row. (#3750)
+    auto setRowOpacity = [](QGraphicsOpacityEffect* effect, bool fullStrength) {
+        if (!effect) {
+            return;
+        }
+        effect->setOpacity(fullStrength ? 1.0 : kDisabledOpacity);
+        effect->setEnabled(!fullStrength);
+    };
+    setRowOpacity(m_extremesSpeedFade, speedEnabled);
+    setRowOpacity(m_showValuesFade, smart);
+    setRowOpacity(m_txMeterFade, smart);
 
     if (m_showExtremesChk) {
         m_showExtremesChk->setEnabled(smart);
