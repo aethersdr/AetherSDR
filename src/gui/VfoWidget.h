@@ -335,6 +335,9 @@ private:
     QCheckBox* m_showExtremesChk{nullptr};
     QComboBox* m_extremesSpeedCmb{nullptr};
     QComboBox* m_showValuesCmb{nullptr};
+    // Show the meter-type label (MIC/SWR/PWR/COMP) inside the SmartMTR hole.
+    // Disabled when no TX meter is selected (TxMeter::None).
+    QCheckBox* m_showTxMeterTypeChk{nullptr};
     // Which meter to show while transmitting: None (stay on RX signal) or Mic
     // Level. Disabled while the standard S-meter is selected.
     QComboBox* m_txMeterCmb{nullptr};

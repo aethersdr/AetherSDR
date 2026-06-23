@@ -1056,20 +1056,25 @@ void VfoWidget::buildUI()
 
     meterMenuOuter->addWidget(makeSeparator());
 
+    // Shared styling for the SmartMTR option checkboxes.
+    auto styleMeterCheck = [](QCheckBox* c) {
+        c->setCursor(Qt::PointingHandCursor);
+        c->setStyleSheet(
+            "QCheckBox { background: transparent; color: #c8d8e8; font-size: 12px; "
+            "spacing: 5px; }"
+            "QCheckBox::indicator { width: 13px; height: 13px; border-radius: 2px; "
+            "border: 1px solid #304050; background: #1a2a3a; }"
+            "QCheckBox::indicator:checked { background: #0070c0; "
+            "border: 1px solid #0090e0; }"
+            "QCheckBox:disabled { color: #5a6a78; }"
+            "QCheckBox::indicator:disabled { border: 1px solid #243240; "
+            "background: #141f2a; }");
+    };
+
     // Show extremes — checkbox.
     m_showExtremesChk = new QCheckBox(tr("Show extremes"));
     m_showExtremesChk->setChecked(DS::showExtremes());
-    m_showExtremesChk->setCursor(Qt::PointingHandCursor);
-    m_showExtremesChk->setStyleSheet(
-        "QCheckBox { background: transparent; color: #c8d8e8; font-size: 12px; "
-        "spacing: 5px; }"
-        "QCheckBox::indicator { width: 13px; height: 13px; border-radius: 2px; "
-        "border: 1px solid #304050; background: #1a2a3a; }"
-        "QCheckBox::indicator:checked { background: #0070c0; "
-        "border: 1px solid #0090e0; }"
-        "QCheckBox:disabled { color: #5a6a78; }"
-        "QCheckBox::indicator:disabled { border: 1px solid #243240; "
-        "background: #141f2a; }");
+    styleMeterCheck(m_showExtremesChk);
     meterMenuOuter->addWidget(m_showExtremesChk);
 
     // Extremes speed — Slow / Medium / Fast.
@@ -1133,6 +1138,14 @@ void VfoWidget::buildUI()
     m_txMeterRow = txMeterRow;
     meterMenuOuter->addWidget(txMeterRow);
 
+    // Show meter type — checkbox. Draws a short label (MIC/SWR/PWR/COMP) inside the
+    // SmartMTR hole identifying the active TX meter. Only meaningful with a TX meter
+    // selected, so it disables for None (see syncSmartMtrSettingsState).
+    m_showTxMeterTypeChk = new QCheckBox(tr("Show meter type"));
+    m_showTxMeterTypeChk->setChecked(DS::showTxMeterType());
+    styleMeterCheck(m_showTxMeterTypeChk);
+    meterMenuOuter->addWidget(m_showTxMeterTypeChk);
+
     // Persist + re-evaluate enable/disable rules on change.  Toggling "Show
     // extremes" off disables "Extremes speed" and, if "Show values" is set to
     // Extremes, snaps it back to None (handled in syncSmartMtrSettingsState).
@@ -1157,6 +1170,10 @@ void VfoWidget::buildUI()
         MeterViewController::instance().setTxMeter(
             static_cast<DisplaySettings::TxMeter>(
                 m_txMeterCmb->currentData().toInt()));
+    });
+    connect(m_showTxMeterTypeChk, &QCheckBox::toggled, this, [this](bool on) {
+        MeterViewController::instance().setShowTxMeterType(on);
+        syncSmartMtrSettingsState();
     });
 
     syncSmartMtrSettingsState();  // initial enable/disable per current state
@@ -3346,6 +3363,14 @@ void VfoWidget::syncSmartMtrSettingsState()
     if (m_txMeterCmb) {
         m_txMeterCmb->setEnabled(smart);
     }
+    if (m_showTxMeterTypeChk) {
+        // The meter-type label only means something with a TX meter active, so
+        // disable it for None (and whenever the standard S-meter is selected).
+        m_showTxMeterTypeChk->setEnabled(
+            smart
+            && MeterViewController::instance().txMeter()
+                   != DisplaySettings::TxMeter::None);
+    }
     if (m_showValuesCmb) {
         m_showValuesCmb->setEnabled(smart);
         // The "Extremes" value is meaningless without the extremes markers, so
@@ -3401,6 +3426,10 @@ void VfoWidget::syncSmartMtrSettingsControls()
     if (m_txMeterCmb) {
         const QSignalBlocker b(m_txMeterCmb);
         m_txMeterCmb->setCurrentIndex(m_txMeterCmb->findData(int(mv.txMeter())));
+    }
+    if (m_showTxMeterTypeChk) {
+        const QSignalBlocker b(m_showTxMeterTypeChk);
+        m_showTxMeterTypeChk->setChecked(mv.showTxMeterType());
     }
     syncSmartMtrSettingsState();  // re-evaluate enable/disable for the new state
 }
@@ -3530,6 +3559,7 @@ void VfoWidget::pushSmartMtrOptions()
     }
 
     m_smartMtrWidget->setExtremesOptions(show, speed, values);
+    m_smartMtrWidget->setShowTypeLabel(mv.showTxMeterType());
     emit smartMtrLabelsChanged(); // refresh the spectrum-drawn value labels
 }
 

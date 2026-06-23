@@ -30,10 +30,12 @@ public:
     DisplaySettings::ExtremesSpeed extremesSpeed() const { return m_extremesSpeed; }
     DisplaySettings::MeterValues showValues() const { return m_showValues; }
     DisplaySettings::TxMeter txMeter() const { return m_txMeter; }
+    bool showTxMeterType() const { return m_showTxMeterType; }
     void setShowExtremes(bool on);
     void setExtremesSpeed(DisplaySettings::ExtremesSpeed v);
     void setShowValues(DisplaySettings::MeterValues v);
     void setTxMeter(DisplaySettings::TxMeter v);
+    void setShowTxMeterType(bool on);
 
 Q_SIGNALS:
     void changed(bool smartMtr);
@@ -49,6 +51,7 @@ private:
     DisplaySettings::ExtremesSpeed m_extremesSpeed{DisplaySettings::ExtremesSpeed::Medium};
     DisplaySettings::MeterValues m_showValues{DisplaySettings::MeterValues::None};
     DisplaySettings::TxMeter m_txMeter{DisplaySettings::TxMeter::None};
+    bool m_showTxMeterType{false};
 };
 
 } // namespace AetherSDR

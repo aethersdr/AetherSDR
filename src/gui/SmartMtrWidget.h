@@ -46,6 +46,10 @@ public:
     enum class MeterValues { None, Signal, Extremes };
     void setExtremesOptions(bool show, ExtremesSpeed speed, MeterValues values);
 
+    // Draw the short meter-type label (MIC/SWR/PWR/COMP) inside the hole for TX
+    // meters. Re-rasters the static layers (the label lives in the cached layer).
+    void setShowTypeLabel(bool on);
+
     // One min/max marker's data for the parent's value-label overlay. position is
     // a hole-local UNIT center (SmartMtrUnits::kScaleMin..kScaleMax); the parent
     // maps it through the live geometry. Two text lines: primary = S-unit (e.g.
@@ -88,6 +92,11 @@ private:
     void drawIndicator(QPainter& p, const SmartMtrGeometry& g) const;
     void drawInsetShadow(QPainter& p, const SmartMtrGeometry& g) const;
     void drawMarkers(QPainter& p, const SmartMtrGeometry& g) const;
+    // Short meter-type label (MIC/SWR/PWR/COMP) inside the hole — right side
+    // normally, left for the reversed compression meter. TX meters only; gated on
+    // m_showTypeLabel. Baked into the below-bar cached layer so it sits above the
+    // hole background but below the indicator bar.
+    void drawTypeLabel(QPainter& p, const SmartMtrGeometry& g) const;
     void drawExtremes(QPainter& p, const SmartMtrGeometry& g) const;
 
     // Render the static layers (everything except the moving bar and the
@@ -156,6 +165,7 @@ private:
     QElapsedTimer m_extremesClock;
     bool m_extremesEnabled = false;
     MeterValues m_showValues = MeterValues::None;
+    bool m_showTypeLabel = false; // draw the MIC/SWR/PWR/COMP label inside the hole
 
     // Repaint cadence for a returning marker, independent of the bar's lean
     // repaint gate (which throttles to 12 Hz and would step the slow glide).

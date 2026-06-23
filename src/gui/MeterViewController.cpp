@@ -15,6 +15,7 @@ MeterViewController::MeterViewController()
     , m_extremesSpeed(DisplaySettings::extremesSpeed())
     , m_showValues(DisplaySettings::showValues())
     , m_txMeter(DisplaySettings::txMeter())
+    , m_showTxMeterType(DisplaySettings::showTxMeterType())
 {
 }
 
@@ -66,6 +67,18 @@ void MeterViewController::setTxMeter(DisplaySettings::TxMeter v)
     m_txMeter = v;
     DisplaySettings::setTxMeter(v);
     emit txMeterChanged();
+}
+
+void MeterViewController::setShowTxMeterType(bool on)
+{
+    if (m_showTxMeterType == on) {
+        return;
+    }
+    m_showTxMeterType = on;
+    DisplaySettings::setShowTxMeterType(on);
+    // Shares the meter-overlay-options broadcast (like showValues): flags re-push
+    // options to their SmartMtrWidget and re-seed their menu controls.
+    emit extremesChanged();
 }
 
 } // namespace AetherSDR

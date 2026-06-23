@@ -70,6 +70,19 @@ public:
         write(o);
     }
 
+    // Show the meter-type label (MIC/SWR/PWR/COMP) inside the SmartMTR hole while a
+    // TX meter is active. Default False.
+    static bool showTxMeterType()
+    {
+        return readObj().value("showTxMeterType").toString("False") == "True";
+    }
+    static void setShowTxMeterType(bool on)
+    {
+        QJsonObject o = readObj();
+        o["showTxMeterType"] = on ? QStringLiteral("True") : QStringLiteral("False");
+        write(o);
+    }
+
     // How fast the extremes markers decay / track. Default Medium.
     static ExtremesSpeed extremesSpeed()
     {

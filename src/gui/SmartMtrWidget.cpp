@@ -282,6 +282,10 @@ void SmartMtrWidget::rebuildStaticLayers(const SmartMtrGeometry& g)
         bp.setRenderHint(QPainter::Antialiasing, true);
         drawControl(bp, g);
         drawHole(bp, g);
+        // Type label sits in the below-bar layer: above the hole background but
+        // below the indicator bar (which is painted on top in paintEvent), so the
+        // bar covers it where they overlap.
+        drawTypeLabel(bp, g);
     }
     {
         QPainter ap(&m_aboveBar);
@@ -475,6 +479,46 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
     }
 }
 
+void SmartMtrWidget::drawTypeLabel(QPainter& p, const SmartMtrGeometry& g) const
+{
+    // TX meters only — the RX signal meter shows no type label.
+    if (!m_showTypeLabel || m_kind == MeterKind::Signal)
+        return;
+
+    QString text;
+    switch (m_kind) {
+    case MeterKind::MicLevel:    text = QStringLiteral("MIC");  break;
+    case MeterKind::SWR:         text = QStringLiteral("SWR");  break;
+    case MeterKind::Power:       text = QStringLiteral("PWR");  break;
+    case MeterKind::Compression: text = QStringLiteral("COMP"); break;
+    case MeterKind::Signal:      return;
+    }
+
+    // Fit the font within the hole height so the (uppercase) label never overflows
+    // the recess; clipped to the hole as a hard guarantee at any flag size.
+    QFont f = font();
+    f.setPixelSize(qMax(7, qRound(g.len(kHoleH * 0.8))));
+    f.setWeight(QFont::Medium);
+    p.setFont(f);
+
+    QColor c(255, 255, 255);
+    c.setAlphaF(0.6); // white, 60% opacity
+    p.setPen(c);
+
+    // Bound the label to the marker span [kScaleMin, kScaleMax] so it never sits
+    // further out than the last marker (right, normal) or the first marker (left,
+    // reversed compression). Clip to the hole as a hard guarantee.
+    const QRectF hole = g.rect(kHoleMargX, kHoleMargY, kHoleW, kHoleH);
+    const QRectF box = g.rect(kHoleMargX + kScaleMin, kHoleMargY,
+                              kScaleMax - kScaleMin, kHoleH);
+    const Qt::Alignment align = Qt::AlignVCenter
+        | (m_activeCfg.reversed ? Qt::AlignLeft : Qt::AlignRight);
+    p.save();
+    p.setClipRect(hole);
+    p.drawText(box, align, text);
+    p.restore();
+}
+
 void SmartMtrWidget::setExtremesOptions(bool show, ExtremesSpeed speed,
                                         MeterValues values)
 {
@@ -498,6 +542,15 @@ void SmartMtrWidget::setExtremesOptions(bool show, ExtremesSpeed speed,
 
     if (!show)
         m_extremes.reset();
+    update();
+}
+
+void SmartMtrWidget::setShowTypeLabel(bool on)
+{
+    if (m_showTypeLabel == on)
+        return;
+    m_showTypeLabel = on;
+    m_cacheValid = false; // the label is baked into the cached below-bar layer
     update();
 }
 
