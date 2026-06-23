@@ -1260,7 +1260,6 @@ private:
     QRhiTexture* m_ovGpuTex{nullptr};
     QRhiSampler* m_ovSampler{nullptr};
     QImage m_overlayStatic;     // grid, band plan, scales, markers — drawn ABOVE FFT
-    QImage m_overlayDynamic;    // FFT spectrum — repainted every frame
     bool m_overlayStaticDirty{true};
     bool m_overlayNeedsUpload{true};
 

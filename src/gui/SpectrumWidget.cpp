@@ -7295,9 +7295,6 @@ void SpectrumWidget::initOverlayPipeline()
 
     m_overlayStatic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
     m_overlayStatic.setDevicePixelRatio(dpr);
-    m_overlayDynamic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
-    m_overlayDynamic.setDevicePixelRatio(dpr);
-    m_overlayDynamic.fill(Qt::transparent);
 
     // Background-image layer — parallel texture + SRB so the same overlay
     // pipeline can paint a separate quad BEFORE the FFT pass.  The image
@@ -7581,9 +7578,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         if (m_overlayStatic.size() != QSize(pw, ph)) {
             m_overlayStatic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
             m_overlayStatic.setDevicePixelRatio(dpr);
-            m_overlayDynamic = QImage(pw, ph, QImage::Format_RGBA8888_Premultiplied);
-            m_overlayDynamic.setDevicePixelRatio(dpr);
-            m_overlayDynamic.fill(Qt::transparent);
             m_ovGpuTex->setPixelSize(QSize(pw, ph));
             m_ovGpuTex->create();
             m_ovSrb->setBindings({
