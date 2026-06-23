@@ -8,6 +8,7 @@
 #include <QMap>
 #include <QImage>
 #include <QColor>
+#include <QPointer>
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QTimer>
@@ -1217,7 +1218,7 @@ private:
     // keeps the flags as ordinary live widgets).
     bool m_gpuFlagMode{false};   // flags GPU-composited, panels hidden
     QTimer* m_flagRefreshTimer{nullptr};   // re-snapshot live flag content
-    QWidget* m_flagTimerFilteredWindow{nullptr};   // #3746 — top-level watched for minimize/restore
+    QPointer<QWidget> m_flagTimerFilteredWindow;   // #3746/#3769 — top-level watched for minimize/restore (QPointer: auto-nulls if the window is destroyed out from under us)
     // hover-swap: the flag whose panel is currently shown LIVE (interactive)
     // instead of GPU-composited, because the cursor is over it / it has focus / a
     // popup is open.  -1 = none (all flags GPU).  The panel hosts interactive
