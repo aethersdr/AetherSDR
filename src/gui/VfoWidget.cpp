@@ -522,7 +522,7 @@ void VfoWidget::mousePressEvent(QMouseEvent* ev)
     if (ev->button() == Qt::LeftButton && m_meterStack
         && m_meterStack->geometry().contains(ev->pos())) {
         if (m_meterMenuRow) {
-            setMeterMenuOpen(!m_meterMenuRow->isVisible());
+            setMeterMenuOpen(!m_meterMenuOpen);   // #3773 — m_meterMenuOpen is the open-state source of truth
         }
         return;
     }
@@ -2511,7 +2511,7 @@ void VfoWidget::showTab(int index)
         m_tabStack->setCurrentIndex(index);
         m_tabStack->show();
         // Mutual exclusion: opening a tab closes the meter selector.
-        if (m_meterMenuRow && m_meterMenuRow->isVisible()) {
+        if (m_meterMenuOpen) {   // #3773 — single source of truth (the row may be hidden mid-sprite)
             setMeterMenuOpen(false);
         }
     }
