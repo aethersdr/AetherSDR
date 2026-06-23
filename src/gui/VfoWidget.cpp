@@ -28,6 +28,7 @@
 #include <QSlider>
 #include <QGraphicsOpacityEffect>
 #include <QAccessible>
+#include <QAccessibleWidget>
 #include <QLineEdit>
 #include <QComboBox>
 #include <QCheckBox>
@@ -281,11 +282,74 @@ static bool likelyTxAntennaFallbackToken(const QString& token)
         || upper == QStringLiteral("XVTR");
 }
 
+// ── Accessibility ─────────────────────────────────────────────────────────────
+// The VFO flag custom-paints its chrome and, while collapsed, the slice-letter
+// and TX badges (the expanded controls are accessible child widgets). Expose a
+// Grouping with a live summary so the flag isn't opaque to AT tools — especially
+// collapsed, where the badges have no widget equivalent. (#3754)
+
+// Object name tagged on the ESC level-meter bars so the factory can recognise
+// them without LevelBar needing its own metaobject (it has no Q_OBJECT).
+static const char* const kLevelBarObjectName = "AetherSDR.LevelBar";
+
+// LevelBar is a render-only meter for the ESC combiner output; like PhaseKnob,
+// the named ESC gain/phase sliders are the accessible interface, so the bar
+// itself is decorative and returns NoRole to drop out of AT navigation.
+class LevelBarAccessible : public QAccessibleWidget {
+public:
+    explicit LevelBarAccessible(QWidget* w) : QAccessibleWidget(w) {}
+    QAccessible::Role role() const override { return QAccessible::NoRole; }
+};
+
+class VfoWidgetAccessible : public QAccessibleWidget {
+public:
+    explicit VfoWidgetAccessible(QWidget* w)
+        : QAccessibleWidget(w, QAccessible::Grouping) {}
+    QString text(QAccessible::Text t) const override
+    {
+        if (t == QAccessible::Name) {
+            if (auto* vfo = qobject_cast<VfoWidget*>(widget()))
+                return vfo->accessibleSummary();
+        }
+        return QAccessibleWidget::text(t);
+    }
+};
+
+static QAccessibleInterface* vfoAccessibleFactory(const QString& key, QObject* obj)
+{
+    if (key == QLatin1String("AetherSDR::VfoWidget"))
+        return new VfoWidgetAccessible(qobject_cast<QWidget*>(obj));
+    if (auto* w = qobject_cast<QWidget*>(obj);
+        w && w->objectName() == QLatin1String(kLevelBarObjectName))
+        return new LevelBarAccessible(w);
+    return nullptr;
+}
+
+QString VfoWidget::accessibleSummary() const
+{
+    if (!m_slice)
+        return QStringLiteral("VFO flag");
+    const QString letter = m_slice->letter();
+    QString s = letter.isEmpty() ? QStringLiteral("VFO")
+                                 : QStringLiteral("VFO slice %1").arg(letter);
+    s += QStringLiteral(", %1 MHz").arg(m_slice->frequency(), 0, 'f', 6);
+    if (m_slice->isTxSlice())
+        s += QStringLiteral(", transmit slice");
+    if (m_collapsed)
+        s += QStringLiteral(", collapsed");
+    return s;
+}
+
 // ── Construction ──────────────────────────────────────────────────────────────
 
 VfoWidget::VfoWidget(QWidget* parent)
     : QWidget(parent)
 {
+    static bool s_a11yFactoryInstalled = false;
+    if (!s_a11yFactoryInstalled) {
+        s_a11yFactoryInstalled = true;
+        QAccessible::installFactory(vfoAccessibleFactory);
+    }
     // Container scope — VFO flags are their own theming surface; inspector
     // clicks should land here, not bubble up to `spectrum`.  Lives under
     // the spectrum scope so unset tokens inherit the spectrum overrides.
@@ -1374,6 +1438,7 @@ void VfoWidget::buildTabContent()
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_escMeterLbl, "QLabel { color: {{color.accent}}; font-size: 11px; font-family: monospace; }");
         escMeterRow->addWidget(m_escMeterLbl);
         m_escMeterBar = new LevelBar(m_escLevelDbm);
+        m_escMeterBar->setObjectName(QLatin1String(kLevelBarObjectName));
         m_escMeterBar->setFixedHeight(8);
         m_escMeterBar->setFixedWidth(60);
         escMeterRow->addWidget(m_escMeterBar);
