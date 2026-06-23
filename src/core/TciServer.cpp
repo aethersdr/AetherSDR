@@ -1141,16 +1141,30 @@ void TciServer::onDaxAudioReady(int channel, const QByteArray& pcm)
     // Map DAX channel -> TCI TRX by the slice that owns the channel. Flex
     // slice ids are not necessarily zero-based for this client when another
     // client owns slice 0, but TCI receivers are advertised as 0..N-1.
-    int trx = std::max(0, channel - 1);
+    int trx = -1;
     int owningSliceId = -1;
     if (m_model) {
         for (auto* s : m_model->slices()) {
             if (s->daxChannel() == channel) {
                 trx = TciProtocol::tciTrxForSlice(m_model,s);
                 owningSliceId = s->sliceId();
+                m_channelTrx[channel] = trx;   // remember the resolved mapping (#3669)
                 break;
             }
         }
+    }
+    if (trx < 0) {
+        // The owning slice's DAX binding is transiently 0, so the scan above
+        // missed it: the radio re-broadcasts `dax=0` then `dax=1` during a
+        // band/mode retune, or when a second client (re)subscribes, and
+        // SliceModel zeroes m_daxChannel on the `dax=0`. Route by the last
+        // resolved TRX for this channel instead of the positional `channel-1`
+        // fallback — in a multi-receiver setup tciTrxForSlice() returns the
+        // slice's *index*, which diverges from `channel-1`, so the positional
+        // guess trips the `audioReceiver != trx` filter below and silently
+        // drops audio for the correctly-bound client (#3669). Cold start (no
+        // mapping resolved yet) keeps the legacy positional guess.
+        trx = m_channelTrx.value(channel, std::max(0, channel - 1));
     }
 
     // Check if any client has this receiver's audio enabled. A client that
@@ -2060,6 +2074,7 @@ void TciServer::rearmDaxForProfileLoad()
 
     m_tciDaxStreamIds.clear();
     m_tciDaxBorrowedChannels.clear();
+    m_channelTrx.clear();   // routing cache stale once the channel→stream map is torn down (#3669)
     m_tciDaxSlices.clear();
 
     qCInfo(lcCat) << "TCI: profile load completed - re-arming DAX for active audio client";
@@ -2098,6 +2113,7 @@ void TciServer::releaseDaxForTci()
     }
     m_tciDaxStreamIds.clear();
     m_tciDaxBorrowedChannels.clear();
+    m_channelTrx.clear();   // routing cache stale once the channel→stream map is torn down (#3669)
 
     // Release DAX channel assignments we made
     for (int sliceId : m_tciDaxSlices) {
