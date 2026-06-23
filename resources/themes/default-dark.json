@@ -43,6 +43,8 @@
           "accent.warning": "{color.amber.500}",
           "accent.danger":  "{color.red.500}",
           "accent.success": "{color.green.500}",
+          "waterfall.live":    "{color.red.500}",
+          "waterfall.history": "{color.gray.500}",
           "text": {
             "primary":   "{color.gray.200}",
             "secondary": "{color.gray.400}",

@@ -9916,7 +9916,13 @@ void SpectrumWidget::drawTimeScale(QPainter& p, const QRect& wfRect)
 
     const QRect liveRect = waterfallLiveButtonRect(wfRect);
     p.setPen(AetherSDR::ThemeManager::instance().color("color.meter.bar.fill"));
-    p.setBrush(m_wfLive ? AetherSDR::ThemeManager::instance().color("color.text.label") : AetherSDR::ThemeManager::instance().color("color.accent.danger"));
+    // Dedicated, independently-themable tokens for the waterfall LIVE chip
+    // (decoupled from the shared accent.danger / text.label semantics, #3744).
+    // Red while live, grey while viewing history; recolor either via the theme
+    // editor's color.waterfall.live / color.waterfall.history tokens.
+    p.setBrush(m_wfLive
+        ? AetherSDR::ThemeManager::instance().color("color.waterfall.live")
+        : AetherSDR::ThemeManager::instance().color("color.waterfall.history"));
     p.drawRoundedRect(liveRect, 3, 3);
 
     QFont liveFont = p.font();

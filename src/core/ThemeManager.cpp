@@ -372,6 +372,12 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.accent.danger",   QString("#ff4d4d"));
     m_tokens.insert("color.accent.success",  QString("#4dd87a"));
 
+    // Waterfall LIVE chip — dedicated so the live/history indicator can be
+    // recolored independently of the shared danger/label semantics (#3744).
+    // Defaults mirror the prior shared values (red live, grey history).
+    m_tokens.insert("color.waterfall.live",    QString("#ff4d4d"));
+    m_tokens.insert("color.waterfall.history", QString("#506070"));
+
     // Text (4 tiers — label and disabled distinct for Phase 4 contrast
     // tuning).  text.primary aligned to the dominant codebase body-text
     // value (#c8d8e8, 367 refs across applets / dialogs / labels).
