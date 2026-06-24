@@ -89,8 +89,14 @@ private:
 };
 
 struct Fixture {
-    TestKeyer keyer;
+    // Declaration order is load-bearing: members destruct in reverse, so
+    // `states` (declared first) outlives `keyer` (declared last). A test that
+    // ends key-down leaves the keyer's dtor to call keyUpIfDown() ->
+    // emitKeyDown(false) -> this callback, which must write into a still-live
+    // `states`. Reversing these two lines reintroduces a heap-use-after-free at
+    // teardown that only the ASan/UBSan job catches (#3740).
     std::vector<int> states;
+    TestKeyer keyer;
 
     Fixture()
     {
