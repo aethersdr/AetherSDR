@@ -423,7 +423,14 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
         QFont f = font();
         f.setPixelSize(
             qMax(8, qRound(g.len(strong ? kLabelHeight : kLabelHeightNormal))));
+#ifdef Q_OS_WIN
+        // DirectWrite renders Light/Normal very thin at these small pixel sizes;
+        // nudge each style up one step so Windows matches the weight macOS/Linux
+        // already show. macOS/Linux keep Light/Normal.
+        f.setWeight(strong ? QFont::Medium : QFont::Normal);
+#else
         f.setWeight(strong ? QFont::Normal : QFont::Light);
+#endif
         return f;
     };
     const QFont strongFont = makeLabelFont(true);
@@ -466,16 +473,20 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
         const double cx = above.center().x() + g.len(m.labelOffset);
         const double labelTop = g.rect(x, kHoleMargY - largeH, w, largeH).top();
         const double bottom = labelTop - g.len(kLabelGap);
-        const double tw = fm.horizontalAdvance(m.label);
-        const double th = fm.height();
         // Center every label on the regular-label center line so a strong (larger)
         // label is vertically centered with the regular ones, rather than sharing
         // their bottom baseline (which would push its taller glyphs upward).
         const double centerY = bottom - normalFm.height() / 2.0;
-        const QRectF box(cx - tw, centerY - th / 2.0, tw * 2.0, th);
+        // Center the glyph INK on that line (backend-independent): tightBoundingRect
+        // measures real ink, so the visible digit lands centered on every font
+        // backend, unlike AlignVCenter which centers the font line box (ascent +
+        // descent + leading) — its ascent/descent split differs across Core Text /
+        // FreeType / DirectWrite, which left S9 top-aligned on Linux/Windows.
+        const QRectF ink = fm.tightBoundingRect(m.label);
+        const double baseline = centerY - (ink.top() + ink.height() / 2.0); // ink.top() < 0
         // Label fades with the tick: a small (secondary) tick gets a dimmed label.
         p.setPen(tickColor);
-        p.drawText(box, Qt::AlignHCenter | Qt::AlignVCenter, m.label);
+        p.drawText(QPointF(cx - fm.horizontalAdvance(m.label) / 2.0, baseline), m.label);
     }
 }
 
