@@ -2389,6 +2389,29 @@ target_link_libraries(help_dialog_test PRIVATE
 )
 set_target_properties(help_dialog_test PROPERTIES AUTOMOC ON)
 
+# Regression guard for #3662: the AetherControl window must never demand a
+# minimum height taller than the screen (auto-engages compact when it would).
+add_executable(flex_control_dialog_size_test
+    tests/flex_control_dialog_size_test.cpp
+    src/gui/FlexControlDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/gui/SliceLabel.cpp
+    src/gui/DragValuePopup.cpp
+    src/models/SliceModel.cpp
+    src/core/KiwiSdrProtocol.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(flex_control_dialog_size_test PRIVATE src)
+target_link_libraries(flex_control_dialog_size_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
+
 add_executable(device_diagnostics_test
     tests/device_diagnostics_test.cpp
 )

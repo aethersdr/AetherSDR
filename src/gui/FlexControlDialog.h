@@ -68,6 +68,7 @@ private:
     void updateOptionButtons();
     void updateCompactMode();
     void applyCompactWindowSize();
+    int availableScreenHeight() const;
     void setCaptureHintActive(bool active);
 
     QPointer<SliceModel> m_slice;

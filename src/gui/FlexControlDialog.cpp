@@ -25,6 +25,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QRadialGradient>
+#include <QScreen>
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSizePolicy>
@@ -1732,11 +1733,40 @@ void FlexControlDialog::updateCompactMode()
             applyCompactWindowSize();
         });
     } else {
-        const QSize required = minimumSizeHint().expandedTo(QSize(430, 0));
+        QSize required = minimumSizeHint().expandedTo(QSize(430, 0));
+
+        // Never demand more vertical space than the display can show (#3662).
+        // The full (non-compact) layout is ~1100 px tall; on a short or
+        // DPI-scaled screen that exceeds the available workspace, so pinning
+        // it as a hard minimum opens the window taller than the screen with
+        // its bottom clipped and no way to shrink it back. Fall back to the
+        // existing compact layout, which fits, rather than clipping.
+        const int availH = availableScreenHeight();
+        if (availH > 0 && required.height() > availH
+            && m_compactButton && !m_compactButton->isChecked()) {
+            const QSignalBlocker blocker(m_compactButton);
+            m_compactButton->setChecked(true);
+            updateCompactMode();
+            return;
+        }
+        // Backstop: even when compact mode is unavailable, never enforce a
+        // minimum taller than the screen.
+        if (availH > 0 && required.height() > availH)
+            required.setHeight(availH);
+
         setMinimumSize(required);
         if (isVisible() && (width() < required.width() || height() < required.height()))
             resize(size().expandedTo(required));
     }
+}
+
+// Available (taskbar-excluded) height of the screen this dialog lives on, or 0
+// if it can't be determined. Used to keep the window from demanding more
+// vertical space than the display offers (#3662).
+int FlexControlDialog::availableScreenHeight() const
+{
+    const QScreen* scr = screen();
+    return scr ? scr->availableGeometry().height() : 0;
 }
 
 void FlexControlDialog::applyCompactWindowSize()
@@ -1753,7 +1783,14 @@ void FlexControlDialog::applyCompactWindowSize()
     if (auto* bodyLayout = bodyWidget()->layout())
         bodyLayout->activate();
 
-    const QSize required = minimumSizeHint().expandedTo(QSize(410, 0));
+    QSize required = minimumSizeHint().expandedTo(QSize(410, 0));
+    // Backstop (#3662): never pin a window taller than the screen, even in
+    // compact mode. On a screen shorter than the compact layout's own minimum
+    // the body may need to scroll, but the window stays fully on-screen and
+    // resizable rather than clipping off the bottom edge.
+    const int availH = availableScreenHeight();
+    if (availH > 0 && required.height() > availH)
+        required.setHeight(availH);
     setMinimumSize(required);
     setFixedHeight(required.height());
     if (isVisible()) {
