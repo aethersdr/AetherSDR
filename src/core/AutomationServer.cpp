@@ -53,6 +53,19 @@ struct ResolvedAction {
     QPointer<QMenu> menu;
 };
 
+// mark→tail correlation (#3756): doMark needs the seq/mono the log tap assigns
+// to the MARK message itself, not whatever m_logSeq/back() read afterward — a
+// concurrent logging thread can push between the qCInfo() and the re-lock. The
+// tap runs synchronously on doMark's thread, so a thread_local sink lets only
+// that thread's own tap call publish the marker's identity. Loggers on other
+// threads see a null sink and leave it untouched.
+struct MarkCapture {
+    quint64 seq{0};
+    qint64  monoUs{0};
+    bool    set{false};
+};
+thread_local MarkCapture* g_markSink = nullptr;
+
 QString actionDisplayText(const QAction* action)
 {
     QString text = action->text();
@@ -863,6 +876,14 @@ bool AutomationServer::start(const QString& serverName)
             e.type   = static_cast<int>(type);
             e.cat    = cat;
             e.msg    = msg;
+            // If doMark armed a capture sink on this thread, this is the MARK's
+            // own tap call (#3756) — publish the seq/mono we just assigned so the
+            // caller bracket can't be skewed by a concurrent push afterward.
+            if (g_markSink) {
+                g_markSink->seq    = e.seq;
+                g_markSink->monoUs = e.monoUs;
+                g_markSink->set    = true;
+            }
             m_logRing.push_back(std::move(e));
             while (m_logRing.size() > static_cast<size_t>(kLogRingMax))
                 m_logRing.pop_front();
@@ -1758,9 +1779,15 @@ QJsonObject AutomationServer::doLog(const QString& action, const QString& arg,
         if (n <= 0) n = 100;
         QJsonArray arr;
         quint64 curSeq;
+        quint64 oldest;
         {
             QMutexLocker lk(&m_logMutex);
             curSeq = m_logSeq;
+            // Oldest seq still resident in the ring. A driver can compare its
+            // `since` against this to detect eviction: `since < oldest` means
+            // earlier matching events were dropped (#3756) and the window is a
+            // truncated suffix, not a complete bracket.
+            oldest = m_logRing.empty() ? curSeq : m_logRing.front().seq;
             for (const auto& e : m_logRing)
                 if (e.seq > since)
                     arr.append(logEventToJson(e));
@@ -1769,7 +1796,8 @@ QJsonObject AutomationServer::doLog(const QString& action, const QString& arg,
             arr.removeFirst();
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("events"), arr},
-                           {QStringLiteral("seq"), static_cast<qint64>(curSeq)}};
+                           {QStringLiteral("seq"), static_cast<qint64>(curSeq)},
+                           {QStringLiteral("oldest"), static_cast<qint64>(oldest)}};
     }
 
     if (action == QLatin1String("subscribe")) {
@@ -1800,14 +1828,26 @@ QJsonObject AutomationServer::doLog(const QString& action, const QString& arg,
 QJsonObject AutomationServer::doMark(const QString& text)
 {
     // qCInfo runs the installed handler synchronously on this (main) thread, so
-    // by the time it returns the tap has already assigned the marker its seq —
-    // letting a driver bracket actions with `mark` then `log tail since=<seq>`.
+    // the tap that assigns the marker its seq fires *inside* the call below.
+    // Capture that seq/mono via a thread_local sink (#3756) instead of re-reading
+    // m_logSeq/back() afterward — a concurrent logging thread could push in the
+    // re-lock gap and hand back a later event's seq, which `log tail since=<seq>`
+    // would then skip, defeating the mark→tail bracket.
+    MarkCapture cap;
+    g_markSink = &cap;
     qCInfo(lcAutomation).noquote() << "MARK" << text;
-    QMutexLocker lk(&m_logMutex);
-    const qint64 mono = m_logRing.empty() ? 0 : m_logRing.back().monoUs;
+    g_markSink = nullptr;
+
+    if (!cap.set) {
+        // Tap didn't fire (lcAutomation info logging disabled): fall back to the
+        // resident tail so callers still get a usable, if approximate, anchor.
+        QMutexLocker lk(&m_logMutex);
+        cap.seq    = m_logSeq;
+        cap.monoUs = m_logRing.empty() ? 0 : m_logRing.back().monoUs;
+    }
     return QJsonObject{{QStringLiteral("ok"), true},
-                       {QStringLiteral("seq"), static_cast<qint64>(m_logSeq)},
-                       {QStringLiteral("mono_us"), mono},
+                       {QStringLiteral("seq"), static_cast<qint64>(cap.seq)},
+                       {QStringLiteral("mono_us"), cap.monoUs},
                        {QStringLiteral("text"), text}};
 }
 

@@ -10,7 +10,9 @@ exposes when launched with AETHER_AUTOMATION=1:
   log set <cat> <on|off>         toggle a category at runtime (no restart)
   log set all <on|off>           toggle every category
   log reset                      restore the operator's persisted prefs
-  log tail [n] [since=<seq>]     pull recent ring events (default newest 100)
+  log tail [n] [since=<seq>]     pull recent ring events (default newest 100);
+                                 response carries oldest=<seq> still resident —
+                                 if since < oldest, earlier events were evicted
   log subscribe / unsubscribe    push: stream events as they occur
   mark <text>                    annotate the timeline; returns {seq, mono_us}
 
@@ -65,8 +67,24 @@ class LogClient:
         return self.b.request({"cmd": "mark", "value": text})
 
     def tail(self, n=100, since=None):
+        return self.tail_window(n, since).get("events", [])
+
+    def tail_window(self, n=100, since=None):
+        """Full tail response: {events, seq, oldest}.
+
+        `oldest` is the lowest seq still resident in the ring (#3756). When
+        `since` is given and `since < oldest`, events between `since` and
+        `oldest` were evicted before this call — the returned window is a
+        truncated suffix, not a complete bracket. Check `gap_after(...)`.
+        """
         val = str(n) + (f" since={since}" if since is not None else "")
-        return self.b.request({"cmd": "log", "action": "tail", "value": val}).get("events", [])
+        return self.b.request({"cmd": "log", "action": "tail", "value": val})
+
+    @staticmethod
+    def gap_after(resp, since):
+        """True if events logged after `since` were evicted before the tail."""
+        oldest = resp.get("oldest")
+        return oldest is not None and since is not None and since < oldest
 
 
 class LogStream:
