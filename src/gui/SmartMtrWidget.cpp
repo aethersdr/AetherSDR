@@ -437,6 +437,13 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
     const QFont normalFont = makeLabelFont(false);
     const QFontMetricsF strongFm(strongFont);
     const QFontMetricsF normalFm(normalFont);
+    // A font-uniform vertical anchor: the ink rect of a representative digit,
+    // measured ONCE per style. Centering every label by its OWN ink would let
+    // each label drift (a "+20" centers differently than a "9"); using a shared
+    // reference keeps all same-style labels on one line while still being
+    // ink-based (backend-independent), so strong/normal stay co-centered.
+    const QRectF strongRef = strongFm.tightBoundingRect(QStringLiteral("0"));
+    const QRectF normalRef = normalFm.tightBoundingRect(QStringLiteral("0"));
 
     for (const ScaleMarker& m : cfg.markers) {
         // Only ticks inside the scale band are rendered.
@@ -477,13 +484,14 @@ void SmartMtrWidget::drawMarkers(QPainter& p, const SmartMtrGeometry& g) const
         // label is vertically centered with the regular ones, rather than sharing
         // their bottom baseline (which would push its taller glyphs upward).
         const double centerY = bottom - normalFm.height() / 2.0;
-        // Center the glyph INK on that line (backend-independent): tightBoundingRect
-        // measures real ink, so the visible digit lands centered on every font
-        // backend, unlike AlignVCenter which centers the font line box (ascent +
-        // descent + leading) — its ascent/descent split differs across Core Text /
-        // FreeType / DirectWrite, which left S9 top-aligned on Linux/Windows.
-        const QRectF ink = fm.tightBoundingRect(m.label);
-        const double baseline = centerY - (ink.top() + ink.height() / 2.0); // ink.top() < 0
+        // Anchor the baseline so the digit band (shared per-style reference ink)
+        // is centered on that line. Using the style's reference rather than each
+        // label's own ink keeps all same-style labels on ONE baseline, while
+        // staying ink-based (backend-independent) — AlignVCenter centers the font
+        // line box, whose ascent/descent split differs across Core Text /
+        // FreeType / DirectWrite and left S9 top-aligned on Linux/Windows.
+        const QRectF& ref = strong ? strongRef : normalRef;
+        const double baseline = centerY - (ref.top() + ref.height() / 2.0); // ref.top() < 0
         // Label fades with the tick: a small (secondary) tick gets a dimmed label.
         p.setPen(tickColor);
         p.drawText(QPointF(cx - fm.horizontalAdvance(m.label) / 2.0, baseline), m.label);
