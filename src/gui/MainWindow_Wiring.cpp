@@ -862,6 +862,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
     connect(&m_radioModel, &RadioModel::antListChanged,
             vfo, &VfoWidget::setAntennaList);
 
+    // Refresh the split-pair visualization whenever this slice's TX role changes,
+    // so an externally-initiated split (rigctld / CAT / TCI / front panel) is
+    // reflected on the panadapter, not just GUI-initiated split. (#3726)
+    connect(s, &SliceModel::txSliceChanged, this, [this](bool) { updateSplitState(); });
+
     // Reset band-stack auto-save dwell timer on every active-slice tune
     connect(s, &SliceModel::frequencyChanged, this, [this, s]() {
         if (s->sliceId() != m_activeSliceId) return;
@@ -924,6 +929,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
     refreshKiwiSdrSlices();
     refreshKiwiSdrWaterfallAvailability();
     syncKiwiSdrDiversityEscControls();
+
+    // A slice can arrive already flagged as the TX slice (e.g. external split
+    // created the TX slice out-of-band). Re-derive the split-pair from the model
+    // so the panadapter pairs it without a GUI action. (#3726)
+    updateSplitState();
 }
 
 void MainWindow::onSliceRemoved(int id)
@@ -1022,6 +1032,10 @@ void MainWindow::onSliceRemoved(int id)
     refreshKiwiSdrSlices();
     refreshKiwiSdrWaterfallAvailability();
     syncKiwiSdrDiversityEscControls();
+
+    // Removing one half of a split pair (e.g. external controller deletes the TX
+    // slice) must re-derive the panadapter split-pair from the model. (#3726)
+    updateSplitState();
 }
 
 void MainWindow::beginProfileLoadRadioStateWriteHold(const QString& profileType,

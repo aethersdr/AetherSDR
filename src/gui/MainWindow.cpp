@@ -6146,14 +6146,56 @@ void MainWindow::disableSplit()
 
 void MainWindow::updateSplitState()
 {
-    auto* sw = spectrum();
-    if (!sw) return;
+    // Derive the split-pair visualization from model truth so the panadapter
+    // reflects split regardless of who initiated it — GUI button, rigctld, CAT,
+    // TCI, or front panel. A slice is "TX-in-split" when it is the TX slice and a
+    // distinct RX slice shares its panadapter; that RX slice is "RX-in-split".
+    // (#3726) This drops the rendering dependence on the GUI-only m_splitActive/
+    // m_splitTxSliceId/m_splitRxSliceId flags — those still drive the SWAP/teardown
+    // *actions*, which need the GUI-created TX slice id. Consistent with RFC #3715:
+    // consumers derive from the model, not per-consumer state.
+
+    // Resolve, per pan, the TX slice and its RX partner.
+    QHash<QString, SliceModel*> txByPan;     // panId -> TX slice
+    QHash<QString, SliceModel*> rxByPan;     // panId -> chosen RX partner
+    for (auto* s : m_radioModel.slices())
+        if (s && s->isTxSlice())
+            txByPan.insert(s->panId(), s);
+
     for (auto* s : m_radioModel.slices()) {
-        if (auto* w = sw->vfoWidget(s->sliceId())) {
-            bool isTxSlice = (m_splitActive && s->sliceId() == m_splitTxSliceId);
-            bool isRxSplit = (m_splitActive && s->sliceId() == m_splitRxSliceId);
+        if (!s || s->isTxSlice()) continue;       // RX candidates only
+        if (!txByPan.contains(s->panId())) continue;  // need a distinct TX slice here
+        auto*& chosen = rxByPan[s->panId()];      // default-inserts nullptr
+        // Prefer the GUI-tracked RX (exact pairing for the SPLIT button), then the
+        // active slice, otherwise the first distinct RX slice found on the pan.
+        if (!chosen) chosen = s;
+        else if (chosen->sliceId() == m_splitRxSliceId) continue;  // already best
+        else if (s->sliceId() == m_splitRxSliceId) chosen = s;
+        else if (s->sliceId() == m_activeSliceId)  chosen = s;
+    }
+
+    auto applyToSpectrum = [&](SpectrumWidget* sw) {
+        if (!sw) return;
+        int pairRxId = -1, pairTxId = -1;
+        for (auto* s : m_radioModel.slices()) {
+            auto* w = sw->vfoWidget(s->sliceId());
+            if (!w) continue;
+            auto* tx = txByPan.value(s->panId(), nullptr);
+            auto* rx = rxByPan.value(s->panId(), nullptr);
+            const bool paired   = (tx && rx);
+            const bool isTxSlice = paired && (s == tx);
+            const bool isRxSplit = paired && (s == rx);
             w->updateSplitBadge(isTxSlice, isRxSplit);
+            if (paired) { pairTxId = tx->sliceId(); pairRxId = rx->sliceId(); }
         }
+        sw->setSplitPair(pairRxId, pairTxId);
+    };
+
+    if (m_panStack) {
+        for (auto* applet : m_panStack->allApplets())
+            if (applet) applyToSpectrum(applet->spectrumWidget());
+    } else if (auto* sw = spectrum()) {
+        applyToSpectrum(sw);
     }
 }
 
