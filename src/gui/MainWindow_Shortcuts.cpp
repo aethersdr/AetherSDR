@@ -287,12 +287,21 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             && !textInputCaptured()
             && m_radioModel.isConnected()) {
             if (m_keyboardShortcutsEnabled) {
+                // Route through the PTT coordinator (not the raw
+                // setTransmit() path) so the Quindar intro/outro runs for
+                // space-bar PTT just like it does for the GUI MOX button.
+                // requestPttOn/Off still terminate in an `xmit` command, so
+                // the interlock/gating in RadioModel's xmit handler is
+                // preserved; the coordinator's preflight applies the same
+                // local interlock check. (#3610)
                 if (event->type() == QEvent::KeyPress && !m_spacePttActive) {
                     m_spacePttActive = true;
-                    m_radioModel.setTransmit(true);
+                    m_radioModel.transmitModel().requestPttOn(
+                        TransmitModel::PttSource::Mox);
                 } else if (event->type() == QEvent::KeyRelease && m_spacePttActive) {
                     m_spacePttActive = false;
-                    m_radioModel.setTransmit(false);
+                    m_radioModel.transmitModel().requestPttOff(
+                        TransmitModel::PttSource::Mox);
                 }
             }
             return true;  // always consume Space to prevent button activation
@@ -667,7 +676,13 @@ void MainWindow::registerShortcutActions()
     m_shortcutManager.registerAction("mox_toggle", "MOX Toggle", "TX",
         QKeySequence(Qt::Key_T), [this]() {
             if (!m_radioModel.isConnected()) return;
-            m_radioModel.setTransmit(!m_radioModel.transmitModel().isTransmitting());
+            // Route through the PTT coordinator so Quindar tones fire for the
+            // keyboard MOX toggle, matching the GUI MOX button. (#3610)
+            auto& tx = m_radioModel.transmitModel();
+            if (tx.isTransmitting())
+                tx.requestPttOff(TransmitModel::PttSource::Mox);
+            else
+                tx.requestPttOn(TransmitModel::PttSource::Mox);
         });
     // PTT (Hold) via Space is handled by the app-level event filter
     // because QShortcut has no "released" signal. Register with null
