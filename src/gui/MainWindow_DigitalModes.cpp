@@ -1049,6 +1049,7 @@ void MainWindow::stopDax()
     }
     m_daxSliceConns.clear();
     m_daxSliceLastCh.clear();
+    m_daxPendingRxRemoval.clear();  // drop deferred teardowns; streams handled below (#3626)
 
     disconnect(m_radioModel.panStream(), &PanadapterStream::daxAudioReady,
                m_daxBridge, nullptr);
@@ -1135,46 +1136,77 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
             QString("slice set %1 dax=%2").arg(sliceId).arg(newCh));
     }
 
-    // <old>:1..4 -> now released or moved: remove the old channel's stream if
-    // no other slice still references it.
-    if (oldCh >= 1 && oldCh <= 4) {
-        bool stillUsed = false;
+    // <old>:1..4 -> released or moved. Don't tear the stream down inline: on the
+    // FLEX-8600M every `stream create` provokes a transient dax=0 rebroadcast
+    // (see scheduleDaxRxStreamRemoval) that would read here as a de-assignment
+    // and start a create/remove storm. Defer + re-validate instead. (#3626)
+    if (oldCh >= 1 && oldCh <= 4)
+        scheduleDaxRxStreamRemoval(oldCh);
+}
+
+// #3626: On the FLEX-8600M (and likely other 8000-series radios), issuing
+// `stream create type=dax_rx dax_channel=<ch>` while the bound slice already
+// has dax=<ch> makes the radio momentarily detach the stream and re-broadcast
+// `slice <id> dax=0` immediately followed by `slice <id> dax=<ch>` again.
+// SliceModel mirrors every echo into daxChannelChanged (SliceModel.cpp ~846),
+// so the inline reconciler above would read the transient dax=0 as a real
+// de-assignment, remove the stream, then re-create it on the dax=<ch> that
+// lands ~80 ms later — a self-sustaining create/remove storm (observed at
+// 12-25 Hz in #3626 logs). The churn floods the radio's TCP command channel and
+// resets the DAX VITA-49 sequence every cycle, inflating packetErrorCount until
+// the network-quality monitor falls to POOR ("connection drops to red").
+//
+// Fix: defer the teardown and re-validate at fire time. The dax=<ch>
+// rebroadcast lands long before the grace window elapses, so a slice is back on
+// the channel and the removal is declined — the loop never starts. A genuine
+// user de-assignment has no follow-up rebroadcast, so the channel stays
+// unwanted and the stream is removed after the grace window. Full DAX RX
+// stream refcounting is tracked separately in #3305.
+void MainWindow::scheduleDaxRxStreamRemoval(int ch)
+{
+    if (ch < 1 || ch > 4) return;
+    if (m_daxPendingRxRemoval.contains(ch)) return;  // already pending — don't stack timers
+    m_daxPendingRxRemoval.insert(ch);
+
+    static constexpr int kDaxRxRemovalGraceMs = 1500;  // ≫ the ~80 ms rebroadcast cycle
+    QTimer::singleShot(kDaxRxRemovalGraceMs, this, [this, ch]() {
+        m_daxPendingRxRemoval.remove(ch);
+        if (!m_daxBridge) return;  // bridge torn down — stopDax() already cleared streams
+        auto* ps = m_radioModel.panStream();
+        if (!ps) return;
+
+        // Re-validate: if any slice still wants this channel, the transient
+        // dax=0 has already been undone by the dax=<ch> rebroadcast — keep it.
         for (auto* s : m_radioModel.slices()) {
-            if (s && s != slice && s->daxChannel() == oldCh) {
-                stillUsed = true;
-                break;
-            }
+            if (s && s->daxChannel() == ch) return;
         }
-        if (!stillUsed) {
-            const quint32 id = ps->daxStreamIdForChannel(oldCh);
-            // Ownership guard: the PanadapterStream DAX map is shared across
-            // every DAX consumer — the bridge, TCI (which borrows
-            // bridge-created streams, #1331/#1439), and RADE. Removing a stream
-            // another consumer is still using would silence WSJT-X or RADE
-            // audio — the mirror image of #3270. Only tear down a stream that
-            // no other consumer needs. (#2895)
-            const bool tciUsing = tciServer() && tciServer()->ownsDaxChannel(oldCh);
+
+        const quint32 id = ps->daxStreamIdForChannel(ch);
+        if (id == 0) return;
+        // Ownership guard: the PanadapterStream DAX map is shared across every
+        // DAX consumer — the bridge, TCI (which borrows bridge-created streams,
+        // #1331/#1439), and RADE. Removing a stream another consumer still uses
+        // would silence WSJT-X or RADE audio (the mirror image of #3270). (#2895)
+        const bool tciUsing = tciServer() && tciServer()->ownsDaxChannel(ch);
 #ifdef HAVE_RADE
-            const bool radeUsing = (id != 0 && id == m_radeDaxStreamId);
+        const bool radeUsing = (id == m_radeDaxStreamId);
 #else
-            const bool radeUsing = false;
+        const bool radeUsing = false;
 #endif
-            if (id != 0 && !tciUsing && !radeUsing) {
-                m_radioModel.sendCommand(
-                    QString("stream remove 0x%1").arg(id, 0, 16));
-                ps->unregisterDaxStream(id);
-                qCInfo(lcDax) << "MainWindow: removed DAX RX stream"
-                              << "0x" + QString::number(id, 16)
-                              << "for channel" << oldCh << "(#2895)";
-            } else if (id != 0) {
-                qCInfo(lcDax) << "MainWindow: keeping DAX RX stream"
-                              << "0x" + QString::number(id, 16)
-                              << "for channel" << oldCh
-                              << "— still used by" << (tciUsing ? "TCI" : "RADE")
-                              << "(#2895)";
-            }
+        if (tciUsing || radeUsing) {
+            qCInfo(lcDax) << "MainWindow: keeping DAX RX stream"
+                          << "0x" + QString::number(id, 16)
+                          << "for channel" << ch
+                          << "— still used by" << (tciUsing ? "TCI" : "RADE")
+                          << "(#3626)";
+            return;
         }
-    }
+        m_radioModel.sendCommand(QString("stream remove 0x%1").arg(id, 0, 16));
+        ps->unregisterDaxStream(id);
+        qCInfo(lcDax) << "MainWindow: removed DAX RX stream"
+                      << "0x" + QString::number(id, 16)
+                      << "for channel" << ch << "(#3626 deferred)";
+    });
 }
 #endif
 
