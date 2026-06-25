@@ -126,6 +126,11 @@ private slots:
 
 private:
     void processDatagram(const QByteArray& data);
+    // Raise the kernel receive buffer (SO_RCVBUF) on the bound VITA-49 socket so
+    // bursts / brief drain stalls don't overflow it and surface as false
+    // sequence-loss (which the adaptive throttle would react to). Logs the
+    // granted size — the kernel caps the request at net.core.rmem_max. (#3810)
+    void applyReceiveBufferSize();
     void decodeFFT(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
     void decodeWaterfallTile(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
     void decodeNarrowAudio(const uchar* raw, int totalBytes, bool hasTrailer, quint32 streamId);
