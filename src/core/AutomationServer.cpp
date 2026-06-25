@@ -1442,9 +1442,26 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         const QString text = actionDisplayText(menuAction);
         const QString data = actionDataText(menuAction);
         bool done = false;
+        bool deferred = false;
         if (action == QLatin1String("trigger") || action == QLatin1String("click")
             || action == QLatin1String("toggle")) {
-            done = triggerMenuAction(menuAction, menu);
+            // CRASH-SAFETY: a menu action can open a MODAL dialog (dlg.exec() —
+            // Configure Shortcuts, Slice Troubleshooting, Memory, Profile
+            // Manager, …). exec() spins a nested event loop; running it
+            // synchronously here would re-enter the event loop INSIDE the
+            // QLocalSocket read callback (qt_mac_socket_callback ->
+            // canReadNotification -> handleLine), corrupting the socket notifier
+            // and segfaulting on a later readyRead. It would also block the
+            // response until the dialog closed. Defer the trigger to a clean
+            // main-loop turn so any nested dialog loop runs on a normal stack.
+            // (#3646 fidelity — re-entrancy crash fix)
+            QPointer<QAction> ag = menuAction;
+            QPointer<QMenu> mg = menu;
+            QTimer::singleShot(0, qApp, [ag, mg]() {
+                if (ag) triggerMenuAction(ag, mg);
+            });
+            done = true;
+            deferred = true;
         } else if (action == QLatin1String("setChecked")) {
             if (!menuAction->isCheckable()) {
                 return err(QStringLiteral("action '") + target
@@ -1476,7 +1493,12 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         if (!data.isEmpty()) {
             r[QStringLiteral("data")] = data;
         }
-        if (actionGuard) {
+        if (deferred) {
+            // The trigger runs on the next main-loop turn (it may open a modal
+            // dialog), so any post-state must be re-read (dumpTree / menu list)
+            // rather than trusted from this synchronous reply.
+            r[QStringLiteral("deferred")] = true;
+        } else if (actionGuard) {
             const QString nv = actionValue(actionGuard);
             if (!nv.isNull()) {
                 r[QStringLiteral("newValue")] = nv;
