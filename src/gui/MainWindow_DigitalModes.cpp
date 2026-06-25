@@ -1132,6 +1132,12 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
         // Re-assert slice -> DAX mapping so the radio registers our stream as a
         // client. Without this dax_clients stays 0 and the radio sends silence
         // (the #1439 workaround, mirrored from TciServer::ensureDaxForTci).
+        // This is sent unconditionally (even when newCh is unchanged), so on the
+        // dax=<ch> rebroadcast edge it re-emits a same-value `slice set`. That
+        // does NOT re-enter this reconciler only because SliceModel's status
+        // path drops same-value echoes (`if (m_daxChannel != ch)` in
+        // SliceModel::applyStatus) — that equality guard is load-bearing for the
+        // #3626 storm fix; relaxing it would reopen the loop via this edge.
         m_radioModel.sendCommand(
             QString("slice set %1 dax=%2").arg(sliceId).arg(newCh));
     }
@@ -1170,7 +1176,12 @@ void MainWindow::scheduleDaxRxStreamRemoval(int ch)
 
     static constexpr int kDaxRxRemovalGraceMs = 1500;  // ≫ the ~80 ms rebroadcast cycle
     QTimer::singleShot(kDaxRxRemovalGraceMs, this, [this, ch]() {
-        m_daxPendingRxRemoval.remove(ch);
+        // QSet::remove() returns false when the key is gone, which means
+        // stopDax() cleared the pending set after this timer was armed — i.e. a
+        // stale fire from a previous DAX-bridge generation (off→on toggle inside
+        // the grace window). Treat the cleared set as an authoritative cancel so
+        // we never act against a freshly-recreated bridge's streams. (#3626)
+        if (!m_daxPendingRxRemoval.remove(ch)) return;
         if (!m_daxBridge) return;  // bridge torn down — stopDax() already cleared streams
         auto* ps = m_radioModel.panStream();
         if (!ps) return;
