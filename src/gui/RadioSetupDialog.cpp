@@ -6,6 +6,8 @@
 #include "models/RadioModel.h"
 #include "models/XvtrPolicy.h"
 #include "core/AppSettings.h"
+#include "core/NetworkSettings.h"
+#include "core/PanadapterStream.h"
 #include "core/KiwiSdrManager.h"
 #include "KiwiPublicReceiverPicker.h"
 #include "core/LogManager.h"
@@ -1098,6 +1100,84 @@ QWidget* RadioSetupDialog::buildNetworkTab()
             AppSettings::instance().save();
         });
         grid->addWidget(mtuSpin, 1, 1);
+
+        // VITA-49 UDP receive buffer (SO_RCVBUF). Snap-to-preset slider; the
+        // kernel clamps the grant at net.core.rmem_max, so we show the granted
+        // size live (PanadapterStream::receiveBufferApplied) — the slider never
+        // claims more than the system actually gives. (#3810)
+        static const int kRcvBufPresets[] = {
+            256 * 1024, 512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024
+        };
+        constexpr int kRcvBufPresetCount = 5;
+        auto fmtBytes = [](int b) -> QString {
+            if (b >= 1024 * 1024)
+                return QStringLiteral("%1 MB").arg(
+                    QString::number(b / (1024.0 * 1024.0), 'g', 3));
+            return QStringLiteral("%1 KB").arg(b / 1024);
+        };
+
+        grid->addWidget(new QLabel("VITA-49 RX buffer:"), 2, 0);
+        auto* bufRow = new QWidget;
+        auto* bufLay = new QHBoxLayout(bufRow);
+        bufLay->setContentsMargins(0, 0, 0, 0);
+        bufLay->setSpacing(8);
+        auto* bufSlider = new QSlider(Qt::Horizontal);
+        bufSlider->setRange(0, kRcvBufPresetCount - 1);
+        bufSlider->setSingleStep(1);
+        bufSlider->setPageStep(1);
+        bufSlider->setTickPosition(QSlider::TicksBelow);
+        bufSlider->setTickInterval(1);
+        bufSlider->setToolTip(
+            "Kernel receive buffer for the VITA-49 stream socket.\n"
+            "Larger absorbs panadapter/waterfall bursts so they aren't dropped\n"
+            "(dropped packets look like network-stat dips). Default 4 MB.\n"
+            "The system caps this at net.core.rmem_max — see the granted size.");
+        // Initial position: smallest preset >= the persisted request.
+        {
+            const int cur = AetherSDR::NetworkSettings::vitaReceiveBufferBytes();
+            int idx = kRcvBufPresetCount - 1;
+            for (int i = 0; i < kRcvBufPresetCount; ++i)
+                if (kRcvBufPresets[i] >= cur) { idx = i; break; }
+            bufSlider->setValue(idx);
+        }
+        auto* bufValLabel = new QLabel(fmtBytes(kRcvBufPresets[bufSlider->value()]));
+        bufValLabel->setMinimumWidth(48);
+        bufLay->addWidget(bufSlider, 1);
+        bufLay->addWidget(bufValLabel);
+        grid->addWidget(bufRow, 2, 1);
+
+        auto* bufGrantedLabel = new QLabel;
+        if (m_model && m_model->panStream()) {
+            const int g = m_model->panStream()->grantedReceiveBufferBytes();
+            bufGrantedLabel->setText(g > 0 ? QString("granted: %1").arg(fmtBytes(g))
+                                           : QStringLiteral("granted: — (applies on connect)"));
+        }
+        grid->addWidget(bufGrantedLabel, 3, 1);
+
+        connect(bufSlider, &QSlider::valueChanged, this,
+                [this, bufValLabel, fmtBytes](int idx) {
+            const int bytes = kRcvBufPresets[std::clamp(idx, 0, kRcvBufPresetCount - 1)];
+            bufValLabel->setText(fmtBytes(bytes));
+            AetherSDR::NetworkSettings::setVitaReceiveBufferBytes(bytes);
+            // Re-apply live on the network worker thread (the socket lives there).
+            if (m_model && m_model->panStream()) {
+                QMetaObject::invokeMethod(
+                    m_model->panStream(),
+                    [stream = m_model->panStream(), bytes]() {
+                        stream->setReceiveBufferSizeBytes(bytes);
+                    });
+            }
+        });
+        // Live granted-size feedback (cross-thread → queued).
+        if (m_model && m_model->panStream()) {
+            connect(m_model->panStream(), &PanadapterStream::receiveBufferApplied, this,
+                    [bufGrantedLabel, fmtBytes](int requested, int granted) {
+                QString t = QString("granted: %1").arg(fmtBytes(granted));
+                if (granted < requested)
+                    t += QStringLiteral("  (capped by net.core.rmem_max)");
+                bufGrantedLabel->setText(t);
+            });
+        }
 
         for (auto* lbl : group->findChildren<QLabel*>())
             if (lbl->styleSheet().isEmpty()) lbl->setStyleSheet(kLabelStyle);

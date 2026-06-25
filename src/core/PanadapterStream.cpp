@@ -2,6 +2,7 @@
 #include "AppSettings.h"
 #include "AudioEngine.h"
 #include "LogManager.h"
+#include "NetworkSettings.h"
 #include "OpusCodec.h"
 #include "PerfTelemetry.h"
 #include "RadioConnection.h"
@@ -111,6 +112,10 @@ void PanadapterStream::init()
         AppSettings::instance().value("AudioPacketLossConcealment", "True")
             .toString() == "True");
 
+    // Seed the receive-buffer request from the persisted operator setting; each
+    // bind path then applies it via applyReceiveBufferSize(). (#3810)
+    m_desiredRcvBufBytes = NetworkSettings::vitaReceiveBufferBytes();
+
     connect(m_socket, &QUdpSocket::readyRead,
             this, &PanadapterStream::onDatagramReady);
 
@@ -169,19 +174,30 @@ void PanadapterStream::applyReceiveBufferSize()
     // the radio's pan FPS — a visible "network stats dropped" event. Request a
     // generous SO_RCVBUF so normal bursts are absorbed. The kernel caps the grant
     // at net.core.rmem_max; we log the granted size so an undersized rmem_max is
-    // visible in the logs rather than silently limiting us. (#3810)
-    constexpr int kDesiredRcvBufBytes = 4 * 1024 * 1024; // 4 MiB
-    m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption,
-                              kDesiredRcvBufBytes);
+    // visible in the logs rather than silently limiting us. The requested size
+    // is operator-adjustable (Radio Setup → Advanced); default 4 MiB. (#3810)
+    const int requested = m_desiredRcvBufBytes;
+    m_socket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, requested);
     const int granted =
         m_socket->socketOption(QAbstractSocket::ReceiveBufferSizeSocketOption).toInt();
+    m_grantedRcvBufBytes.store(granted);
     qCInfo(lcVita49).noquote()
         << "PanadapterStream: VITA UDP receive buffer"
-        << QStringLiteral("requested=%1").arg(kDesiredRcvBufBytes)
+        << QStringLiteral("requested=%1").arg(requested)
         << QStringLiteral("granted=%1").arg(granted)
-        << (granted < kDesiredRcvBufBytes
+        << (granted < requested
                 ? QStringLiteral("(capped by net.core.rmem_max — raise it for more headroom)")
                 : QString());
+    emit receiveBufferApplied(requested, granted);
+}
+
+void PanadapterStream::setReceiveBufferSizeBytes(int bytes)
+{
+    m_desiredRcvBufBytes = bytes;
+    // Re-apply live if we already have a bound socket; otherwise the next bind
+    // picks it up via applyReceiveBufferSize().
+    if (m_socket && m_socket->state() == QAbstractSocket::BoundState)
+        applyReceiveBufferSize();
 }
 
 bool PanadapterStream::start(RadioConnection* conn)

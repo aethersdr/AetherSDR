@@ -105,6 +105,15 @@ public:
     Q_INVOKABLE void setPacketLossConcealment(bool on);
     bool packetLossConcealment() const { return m_plcEnabled.load(); }
 
+    // Live-set the VITA-49 socket receive buffer (SO_RCVBUF) request, in bytes.
+    // Re-applies immediately if the socket is bound. Q_INVOKABLE: must run on
+    // the network worker thread (the socket lives there). Persistence is the
+    // caller's responsibility (NetworkSettings, on the GUI thread). (#3810)
+    Q_INVOKABLE void setReceiveBufferSizeBytes(int bytes);
+    // Kernel-granted SO_RCVBUF after the last apply (may be < requested when
+    // capped by net.core.rmem_max). 0 until the first bind. Safe from any thread.
+    int grantedReceiveBufferBytes() const { return m_grantedRcvBufBytes.load(); }
+
 signals:
     void daxAudioReady(int channel, const QByteArray& pcm);
     void iqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
@@ -120,6 +129,9 @@ signals:
     void audioDataReady(const QByteArray& pcm);
     // Meter data: parallel arrays of (meter_index, raw_int16_value).
     void meterDataReady(const QVector<quint16>& ids, const QVector<qint16>& vals);
+    // Emitted after the receive buffer is (re)applied on a bind or a live
+    // setReceiveBufferSizeBytes(). granted < requested ⇒ capped by rmem_max.
+    void receiveBufferApplied(int requestedBytes, int grantedBytes);
 
 private slots:
     void onDatagramReady();
@@ -143,6 +155,12 @@ private:
     // declared above.
     QMap<quint32, AudioPlcState> m_audioPlc;
     std::atomic<bool> m_plcEnabled{true};
+
+    // VITA-49 receive-buffer (SO_RCVBUF) request + last kernel-granted size.
+    // m_desiredRcvBufBytes is seeded from NetworkSettings at init and updated by
+    // setReceiveBufferSizeBytes(); applyReceiveBufferSize() requests it on bind.
+    int m_desiredRcvBufBytes{4 * 1024 * 1024};
+    std::atomic<int> m_grantedRcvBufBytes{0};
 
     // PacketClassCodes (from FlexLib VitaFlex.cs)
     static constexpr quint16 PCC_IF_NARROW         = 0x03E3u; // float32 stereo, big-endian
