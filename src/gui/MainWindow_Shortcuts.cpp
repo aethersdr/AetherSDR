@@ -27,6 +27,7 @@
 #include "RxApplet.h"
 #include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
+#include "TitleBar.h"
 #include "VfoWidget.h"
 #include "MainWindowShortcutState.h"
 #include "core/AppSettings.h"
@@ -739,6 +740,24 @@ void MainWindow::registerShortcutActions()
         QKeySequence(), [this]() {
             m_audio->setMuted(!m_audio->isMuted());
         });
+    // Master volume up/down — mirrors the Aether Control "VolumeUp"/"VolumeDown"
+    // dispatch (MainWindow_Controllers.cpp): clamp MasterVolume ±5 in [0,100],
+    // update the title-bar slider, and push to the audio path. No default key
+    // (Up/Down are taken by per-slice AF Gain); the user binds keys themselves.
+    m_shortcutManager.registerAction("master_volume_up", "Master Volume Up", "Audio",
+        QKeySequence(), [this]() {
+            const int next = std::clamp(
+                AppSettings::instance().value("MasterVolume", "100").toInt() + 5, 0, 100);
+            if (m_titleBar) m_titleBar->setMasterVolume(next);
+            applyMasterVolume(next);
+        }, /*autoRepeat=*/true);
+    m_shortcutManager.registerAction("master_volume_down", "Master Volume Down", "Audio",
+        QKeySequence(), [this]() {
+            const int next = std::clamp(
+                AppSettings::instance().value("MasterVolume", "100").toInt() - 5, 0, 100);
+            if (m_titleBar) m_titleBar->setMasterVolume(next);
+            applyMasterVolume(next);
+        }, /*autoRepeat=*/true);
     m_shortcutManager.registerAction("squelch_toggle", "Squelch Toggle", "Audio",
         QKeySequence(), [this]() {
             auto* s = activeSlice();
