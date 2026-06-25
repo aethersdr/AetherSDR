@@ -468,6 +468,7 @@ void MainWindow::onSliceAdded(SliceModel* s)
     // because doing so parks DAX2's TX Stream in Busy. (#2315)
     auto updateDaxTxMode = [this]() {
         bool isDigital = false;
+        bool voiceMode = false;
         int txSliceId = -1;
         for (auto* sl : m_radioModel.slices()) {
             if (sl->isTxSlice()) {
@@ -475,6 +476,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
                 const QString& m = sl->mode();
                 isDigital = (m == "DIGU" || m == "DIGL" || m == "RTTY"
                           || m == "DFM"  || m == "NFM"  || m == "NT");
+                voiceMode = (m == "USB" || m == "LSB" || m == "AM"
+                          || m == "SAM" || m == "FM" );
                 break;
             }
         }
@@ -492,10 +495,11 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // the user re-arms it from the DAX2 window.  Let the user manage that
         // state via DAX2 — matches SmartSDR Console behavior. (#2315)
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
-        m_audio->setDaxTxMode(isDigital);
+        bool allowDaxTx = isDigital || voiceMode;
+        m_audio->setDaxTxMode(allowDaxTx);
         if (!profileLoadRadioStateWritesHeld()) {
-            m_radioModel.transmitModel().setDax(isDigital);
-            if (isDigital) {
+            m_radioModel.transmitModel().setDax(allowDaxTx);
+            if (allowDaxTx) {
                 m_radioModel.ensureDaxTxStream(DaxTxRequestReason::HostedDaxBridge);
             }
         }
