@@ -1,5 +1,6 @@
 #include "AutomationServer.h"
 #include "LogManager.h"
+#include "AppSettings.h"          // StationName (restore the user's real station name)
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 
@@ -8,8 +9,11 @@
 #include <QLocalSocket>
 #include <QApplication>
 #include <QWidget>
+#include <QMainWindow>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMouseEvent>
+#include <QSysInfo>
 #include <QPointer>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -25,6 +29,7 @@
 #include <QStandardPaths>
 #include <QCoreApplication>
 #include <QRegularExpression>
+#include <QSet>
 #include <QTimer>
 #include <QDateTime>
 #include <QTime>
@@ -366,6 +371,70 @@ ResolvedAction resolveVisibleAction(const QString& target)
     return {};
 }
 
+// Walk a QMenu's actions WITHOUT the isVisible() gate, descending into
+// submenus, so a menu-bar leaf action is reachable even while its menu is
+// closed. The owning QMenu is returned so triggerMenuAction() can route through
+// the closed-menu (action->trigger()) path. (#3646 fidelity — items 5 + 7)
+ResolvedAction matchMenuActionUnconditional(QMenu* menu, const QString& target)
+{
+    for (QAction* action : menu->actions()) {
+        if (action->isSeparator())
+            continue;
+        if (actionMatchesTarget(action, target))
+            return {action, menu};
+        if (QMenu* submenu = action->menu()) {
+            const ResolvedAction match = matchMenuActionUnconditional(submenu, target);
+            if (match.action)
+                return match;
+        }
+    }
+    return {};
+}
+
+// Resolve a QAction anywhere in any top-level window's menu bar, regardless of
+// whether the menu is currently open. This is what lets `invoke` drive
+// menu-launched dialogs (AetherControl…/Network…/MQTT…/Radio Setup…/Connect…)
+// and View→UI Scale→Zoom without the user first popping the menu.
+ResolvedAction resolveMenuBarAction(const QString& target)
+{
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    // 1. Any QMainWindow's menu bar (Windows/Linux, and macOS when the actions
+    //    remain on the bar). Searched unconditionally so a CLOSED menu resolves.
+    for (QWidget* tlw : tops) {
+        auto* mw = qobject_cast<QMainWindow*>(tlw);
+        if (!mw)
+            continue;
+        QMenuBar* mb = mw->menuBar();
+        if (!mb)
+            continue;
+        for (QAction* topAction : mb->actions()) {
+            // A top-level menu title (e.g. "Settings") matches but has no owning
+            // QMenu to route through; its submenu is what carries the leaves.
+            if (actionMatchesTarget(topAction, target))
+                return {topAction, nullptr};
+            if (QMenu* submenu = topAction->menu()) {
+                const ResolvedAction match = matchMenuActionUnconditional(submenu, target);
+                if (match.action)
+                    return match;
+            }
+        }
+    }
+    // 2. macOS NATIVE menu bar: Qt reparents each top menu to a TOP-LEVEL QMenu
+    //    that is NOT under a queryable QMenuBar, so the menu-bar walk above finds
+    //    nothing. Walk every top-level QMenu unconditionally to reach those. A
+    //    transient context-menu/combo-popup QMenu won't carry our dialog/zoom
+    //    labels, so the exact-text match stays unambiguous.
+    for (QWidget* tlw : tops) {
+        auto* menu = qobject_cast<QMenu*>(tlw);
+        if (!menu)
+            continue;
+        const ResolvedAction match = matchMenuActionUnconditional(menu, target);
+        if (match.action)
+            return match;
+    }
+    return {};
+}
+
 // Capture a widget to an image. The QRhi panadapter needs a framebuffer
 // readback (QWidget::grab() would return empty/garbage for a GPU surface),
 // so route QRhiWidget through its own grab().
@@ -483,14 +552,14 @@ bool isTransmitAction(const QAction* action, const QMenu* owner)
 
 bool triggerMenuAction(QAction* action, QMenu* menu)
 {
-    if (!action || !menu) {
+    if (!action) {
         return false;
     }
 
     QPointer<QAction> actionGuard = action;
     QPointer<QMenu> menuGuard = menu;
-    const QRect r = menu->actionGeometry(action);
-    if (menu->isVisible() && r.isValid() && !r.isEmpty()) {
+    const QRect r = menu ? menu->actionGeometry(action) : QRect();
+    if (menu && menu->isVisible() && r.isValid() && !r.isEmpty()) {
         const QPoint local = r.center();
         const QPoint global = menu->mapToGlobal(local);
         menu->setActiveAction(action);
@@ -812,18 +881,46 @@ bool AutomationServer::start(const QString& serverName)
     connect(m_server, &QLocalServer::newConnection,
             this, &AutomationServer::onNewConnection);
 
-    // Drop a discovery file so a driver can find the resolved endpoint without
-    // knowing the platform-specific socket path. Best-effort; not fatal.
-    m_discoveryFile = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
-                          .filePath(QStringLiteral("aethersdr-automation.json"));
+    // Drop discovery info so a driver can find the resolved endpoint without
+    // knowing the platform-specific socket path. Two forms, both best-effort:
+    //   1. A per-pid entry in a discovery DIRECTORY, so multiple concurrent
+    //      AETHER_AUTOMATION instances each own one file and can be ENUMERATED
+    //      (a driver lists the dir, reads {pid,socket,label}, picks the right
+    //      one). Each instance removes only its own entry on stop. (#3646)
+    //   2. A legacy single fixed file pointing at THIS instance, so existing
+    //      single-instance drivers keep working unchanged. On stop it is removed
+    //      only if it still points at our pid (so an exiting sibling can't blind
+    //      a survivor).
+    m_label = qEnvironmentVariable("AETHER_AUTOMATION_LABEL");
+    const QString tmp = QStandardPaths::writableLocation(QStandardPaths::TempLocation);
     QJsonObject disc;
     disc[QStringLiteral("socket")]  = fullServerName();
     disc[QStringLiteral("name")]    = serverName;
-    disc[QStringLiteral("pid")]     = QCoreApplication::applicationPid();
+    disc[QStringLiteral("pid")]     = static_cast<qint64>(QCoreApplication::applicationPid());
     disc[QStringLiteral("version")] = QCoreApplication::applicationVersion();
+    if (!m_label.isEmpty())
+        disc[QStringLiteral("label")] = m_label;
+    disc[QStringLiteral("startedAt")] = QDateTime::currentMSecsSinceEpoch();
+    const QByteArray discJson = QJsonDocument(disc).toJson(QJsonDocument::Compact);
+
+    m_discoveryDir = QDir(tmp).filePath(QStringLiteral("aethersdr-automation"));
+    if (QDir().mkpath(m_discoveryDir)) {
+        m_discoveryEntry = QDir(m_discoveryDir)
+                               .filePath(QString::number(QCoreApplication::applicationPid())
+                                         + QStringLiteral(".json"));
+        QFile ef(m_discoveryEntry);
+        if (ef.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            ef.write(discJson);
+            ef.close();
+        } else {
+            m_discoveryEntry.clear();
+        }
+    }
+
+    m_discoveryFile = QDir(tmp).filePath(QStringLiteral("aethersdr-automation.json"));
     QFile df(m_discoveryFile);
     if (df.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        df.write(QJsonDocument(disc).toJson(QJsonDocument::Compact));
+        df.write(discJson);
         df.close();
     } else {
         m_discoveryFile.clear();
@@ -871,9 +968,31 @@ bool AutomationServer::start(const QString& serverName)
     m_logDrain->setInterval(50);
     connect(m_logDrain, &QTimer::timeout, this, &AutomationServer::onLogDrain);
 
+    // Agent station identity (#3646): announce the agent's name to other
+    // MultiFlex clients. Apply now if already connected; on every (re)connect —
+    // which re-runs the handshake's own `client station <user>` send — re-apply
+    // shortly after so the agent name is what sticks.
+    m_agentStation = qEnvironmentVariableIsSet("AETHER_AUTOMATION_STATION")
+                         ? qEnvironmentVariable("AETHER_AUTOMATION_STATION")
+                         : QStringLiteral("Claude");
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+                [this](bool connected) {
+                    if (!connected || m_agentStation.isEmpty())
+                        return;
+                    QPointer<AutomationServer> self(this);
+                    QTimer::singleShot(1000, this, [self]() {
+                        if (self) self->applyAgentStation(self->m_agentStation);
+                    });
+                });
+        if (m_radioModel->isConnected())
+            applyAgentStation(m_agentStation);
+    }
+
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
-        << "(verbs: ping, dumpTree, grab, invoke, get, txtest, atu, slice, tune, log, mark)";
+        << "(verbs: ping, dumpTree, grab, invoke, get, txtest, atu, slice, tune,"
+        << "key, station, resize, menu, whoami, log, mark)";
     return true;
 }
 
@@ -885,6 +1004,10 @@ void AutomationServer::stop()
     // Safety: never leave the radio keyed when the bridge shuts down.
     if (m_txAllowed)
         forceUnkey("automation bridge stopping");
+
+    // Restore the user's real station name so live MultiFlex peers stop seeing
+    // the agent name immediately (don't wait for the disconnect to drop it).
+    restoreStation();
     if (m_txWatchdog) {
         m_txWatchdog->stop();
         m_txWatchdog->deleteLater();
@@ -910,8 +1033,22 @@ void AutomationServer::stop()
     m_server->deleteLater();
     m_server = nullptr;
 
+    // Our own per-pid entry is always ours to remove.
+    if (!m_discoveryEntry.isEmpty()) {
+        QFile::remove(m_discoveryEntry);
+        m_discoveryEntry.clear();
+    }
+    // The legacy shared pointer: remove it only if it still points at US, so an
+    // exiting sibling can't blind a still-running instance that owns it now.
     if (!m_discoveryFile.isEmpty()) {
-        QFile::remove(m_discoveryFile);
+        QFile lf(m_discoveryFile);
+        if (lf.open(QIODevice::ReadOnly)) {
+            const QJsonObject o = QJsonDocument::fromJson(lf.readAll()).object();
+            lf.close();
+            if (o.value(QStringLiteral("pid")).toVariant().toLongLong()
+                == QCoreApplication::applicationPid())
+                QFile::remove(m_discoveryFile);
+        }
         m_discoveryFile.clear();
     }
 }
@@ -1067,7 +1204,19 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             QStringList rest;
             for (int i = 1; i < p.size(); ++i) rest << tok(i);
             value = rest.join(QLatin1Char(' '));  // free-form annotation text
-        } else {  // grab and friends
+        } else if (cmd == QLatin1String("key")) {
+            action = tok(1); value = tok(2);  // "key ptt on", "key mox"
+        } else if (cmd == QLatin1String("station")) {
+            value = tok(1);   // "station Claude"
+        } else if (cmd == QLatin1String("resize")) {
+            value = tok(1) + QLatin1Char(' ') + tok(2);  // "resize 1920 1080 [target]"
+            target = tok(3);
+        } else if (cmd == QLatin1String("menu")) {
+            action = tok(1);  // list | open
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // "menu open Settings"
+        } else {  // grab, whoami and friends
             target = tok(1); path = tok(2);
         }
     }
@@ -1110,7 +1259,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("slice")) {
         if (action.isEmpty())
-            return err(QStringLiteral("slice requires an action (add|remove|select)"));
+            return err(QStringLiteral("slice requires an action (add|remove|select|tx)"));
         return doSlice(action, value);
     }
     if (cmd == QLatin1String("tune")) {
@@ -1118,6 +1267,22 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("tune requires a frequency in MHz"));
         return doTune(value);
     }
+    if (cmd == QLatin1String("key")) {
+        if (action.isEmpty())
+            return err(QStringLiteral("key requires a name (ptt on|off, mox)"));
+        return doKey(action, value);
+    }
+    if (cmd == QLatin1String("station")) {
+        if (value.isEmpty())
+            return err(QStringLiteral("station requires a name"));
+        return doStation(value);
+    }
+    if (cmd == QLatin1String("resize"))
+        return doResize(value, target);
+    if (cmd == QLatin1String("menu"))
+        return doMenu(action.isEmpty() ? QStringLiteral("list") : action, value);
+    if (cmd == QLatin1String("whoami"))
+        return doWhoami();
     if (cmd == QLatin1String("log"))
         return doLog(action.isEmpty() ? QStringLiteral("categories") : action, value, sock);
     if (cmd == QLatin1String("mark")) {
@@ -1245,11 +1410,16 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 {
     QWidget* w = resolveWidget(target);
     if (!w) {
-        const ResolvedAction resolved = resolveVisibleAction(target);
+        // An open menu wins (it carries live geometry for a real mouse trigger);
+        // otherwise reach the action in a CLOSED menu bar so menu-launched
+        // dialogs and Zoom are drivable without first popping the menu. (#3646)
+        ResolvedAction resolved = resolveVisibleAction(target);
+        if (!resolved.action)
+            resolved = resolveMenuBarAction(target);
         QAction* menuAction = resolved.action;
         QMenu* menu = resolved.menu;
         if (!menuAction) {
-            return err(QStringLiteral("widget or visible menu action not found: ") + target);
+            return err(QStringLiteral("widget or menu action not found: ") + target);
         }
 
         if (menuAction->isSeparator()) {
@@ -1386,6 +1556,18 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         }
     } else if (action == QLatin1String("setText")) {
         if (auto* le = qobject_cast<QLineEdit*>(w)) { le->setText(value); done = true; }
+    } else if (action == QLatin1String("submit")) {
+        // Commit a line edit: optionally set the value, then fire returnPressed —
+        // the signal that actually drives the action (a frequency retune, etc.).
+        // setText alone is intentionally side-effect-free, because other
+        // bridge-reachable fields (SmartLink login, manual-connect host, DX
+        // cluster command) attach irreversible actions to returnPressed; commit
+        // must be an explicit, opt-in verb. (#3646 fidelity — item 6)
+        if (auto* le = qobject_cast<QLineEdit*>(w)) {
+            if (!value.isEmpty()) le->setText(value);
+            emit le->returnPressed();
+            done = true;
+        }
     } else if (action == QLatin1String("setCurrentText")) {
         if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentText(value); done = true; }
     } else if (action == QLatin1String("setCurrentIndex")) {
@@ -1635,7 +1817,28 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("select")},
                            {QStringLiteral("id"), id}};
     }
-    return err(QStringLiteral("unknown slice action: ") + action + QStringLiteral(" (add|remove|select)"));
+    if (action == QLatin1String("tx")) {
+        // Make slice <id> the TX slice — the literal external-split transition
+        // (rigctld set_split_vfo 1 VFOB) bottoms out here. Set-only via the same
+        // SliceModel chokepoint the CAT split path uses; the radio enforces
+        // single-TX and clears the prior TX slice, so we never clear it
+        // client-side (radio-authoritative). The txSlice flag flips only when
+        // the radio echoes status back, so callers re-poll `get slices`. (#3646)
+        bool okId = false;
+        const int id = arg.toInt(&okId);
+        if (!okId)
+            return err(QStringLiteral("slice tx requires a slice id"));
+        SliceModel* s = radio->slice(id);
+        if (!s)
+            return err(QStringLiteral("no slice with id ") + arg);
+        if (s->isTxSlice())
+            return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("tx")},
+                               {QStringLiteral("id"), id}, {QStringLiteral("alreadyTx"), true}};
+        s->setTxSlice(true);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("tx")},
+                           {QStringLiteral("id"), id}, {QStringLiteral("requested"), true}};
+    }
+    return err(QStringLiteral("unknown slice action: ") + action + QStringLiteral(" (add|remove|select|tx)"));
 }
 
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────
@@ -1663,6 +1866,282 @@ QJsonObject AutomationServer::doTune(const QString& value)
     s->setFrequency(mhz);
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("tune"), mhz},
                        {QStringLiteral("sliceId"), s->sliceId()}, {QStringLiteral("letter"), s->letter()}};
+}
+
+// ── Semantic transmitter keying (#3646 fidelity — item 3) ───────────────────
+// `key ptt on|off` and `key mox` drive RadioModel::setTransmit — the exact
+// calls the space-bar PTT event filter (MainWindow_Shortcuts.cpp) and the
+// mox_toggle QShortcut make, which `invoke` cannot reach (one is an app-level
+// QKeyEvent filter, the other a global QShortcut — neither is a named widget).
+// We route to the model rather than synthesizing a QKeyEvent so it is
+// deterministic and focus-independent. KEYING is gated by the same
+// AETHER_AUTOMATION_ALLOW_TX rail as txtest/atu and arms the force-unkey
+// watchdog; UNKEY is always allowed (it only reduces TX risk).
+QJsonObject AutomationServer::doKey(const QString& name, const QString& arg)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    auto& tx = m_radioModel->transmitModel();
+    const QString n = name.trimmed().toLower();
+    const QString a = arg.trimmed().toLower();
+
+    auto keyOn = [&](const QString& what) -> QJsonObject {
+        if (!m_txAllowed)
+            return err(QStringLiteral("blocked: key '") + what
+                       + QStringLiteral("' keys the transmitter — set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        m_radioModel->setTransmit(true);               // == space-bar PTT press (Mox)
+        m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog window
+        qCInfo(lcAutomation).noquote() << "key" << what << "ON (ALLOW_TX)";
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("key"), what},
+                           {QStringLiteral("state"), QStringLiteral("on")}};
+    };
+    auto keyOff = [&](const QString& what) -> QJsonObject {
+        m_radioModel->setTransmit(false);              // == space-bar PTT release
+        m_txKeyedSinceMs = 0;
+        qCInfo(lcAutomation).noquote() << "key" << what << "OFF";
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("key"), what},
+                           {QStringLiteral("state"), QStringLiteral("off")}};
+    };
+
+    if (n == QLatin1String("ptt")) {
+        if (a == QLatin1String("off") || a == QLatin1String("0")
+            || a == QLatin1String("false") || a == QLatin1String("release"))
+            return keyOff(QStringLiteral("ptt"));
+        if (a.isEmpty() || a == QLatin1String("on") || a == QLatin1String("1")
+            || a == QLatin1String("true") || a == QLatin1String("press"))
+            return keyOn(QStringLiteral("ptt"));
+        return err(QStringLiteral("key ptt requires on|off"));
+    }
+    if (n == QLatin1String("mox") || n == QLatin1String("mox_toggle")) {
+        // mox_toggle is non-idempotent: toggling while keyed UNKEYS (ungated),
+        // toggling while idle KEYS (gated). Mirrors the QShortcut handler.
+        return tx.isTransmitting() ? keyOff(QStringLiteral("mox"))
+                                   : keyOn(QStringLiteral("mox"));
+    }
+    return err(QStringLiteral("unknown key '") + name
+               + QStringLiteral("' (use: ptt on|off, mox)"));
+}
+
+// ── Per-GUI-client station identity (#3646 fidelity — item 1) ───────────────
+// Set `client station <name>` so other MultiFlex clients see the agent's name.
+// This is the per-GUI-client station identity (FlexLib SetClientStationName),
+// orthogonal to the radio-wide callsign — we NEVER write `radio callsign`,
+// which is persisted on the radio's front panel. The station name is
+// session-scoped and the radio drops it when this client disconnects, so it is
+// inherently non-persistent; we additionally restore the user's real name on
+// bridge stop so any live peer reverts immediately.
+void AutomationServer::applyAgentStation(const QString& name)
+{
+    if (!m_radioModel || !m_radioModel->isConnected() || name.isEmpty())
+        return;
+    if (!m_stationApplied) {
+        // Capture the user's real station name once, to restore it later. Same
+        // fallback the connect handshake uses (AppSettings StationName → host).
+        m_priorStationName = AppSettings::instance().value("StationName", "").toString();
+        if (m_priorStationName.isEmpty())
+            m_priorStationName = QSysInfo::machineHostName();
+    }
+    m_radioModel->sendCommand(QStringLiteral("client station %1").arg(name));
+    m_stationApplied = true;
+    qCInfo(lcAutomation).noquote() << "station name set to" << name
+                                   << "(other MultiFlex clients will see this)";
+}
+
+void AutomationServer::restoreStation()
+{
+    if (!m_stationApplied || m_priorStationName.isEmpty())
+        return;
+    if (m_radioModel && m_radioModel->isConnected())
+        m_radioModel->sendCommand(QStringLiteral("client station %1").arg(m_priorStationName));
+    m_stationApplied = false;
+}
+
+QJsonObject AutomationServer::doStation(const QString& name)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    const QString n = name.trimmed();
+    if (n.isEmpty())
+        return err(QStringLiteral("station requires a name"));
+    if (n.contains(QLatin1Char(' ')))
+        return err(QStringLiteral("station name must be a single token (no spaces)"));
+    if (!m_radioModel->isConnected())
+        return err(QStringLiteral("not connected — connect to a radio before setting the station name"));
+    m_agentStation = n;
+    applyAgentStation(n);
+    return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
+}
+
+// ── Headless render size (#3646 fidelity — item 8) ──────────────────────────
+// Resize a top-level window so the panadapter x_pixels (== SpectrumWidget
+// width) propagates to a realistic value — under QT_QPA_PLATFORM=offscreen the
+// window collapses to the tiny virtual screen and x_pixels stalls near the
+// floor, so render-size-dependent code (FFT/waterfall stream rate, rhiFlush
+// composite cost, burst regressions) is never exercised. We resize the WINDOW
+// (not force xpixels via the radio command) so the local FFT decoder, the
+// dimensionsChanged debounce, and the radio stay in sync.
+QJsonObject AutomationServer::doResize(const QString& value, const QString& target) const
+{
+    int w = 0, h = 0;
+    const QString v = value.trimmed().toLower();
+    if (v.isEmpty() || v == QLatin1String("default") || v == QLatin1String("full")) {
+        w = 1920; h = 1080;   // realistic full size → SpectrumWidth ~1873
+    } else {
+        QString s = value;
+        s.replace(QLatin1Char('x'), QLatin1Char(' '));
+        s.replace(QLatin1Char('X'), QLatin1Char(' '));
+        const QStringList parts = s.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        if (parts.size() >= 2) { w = parts.at(0).toInt(); h = parts.at(1).toInt(); }
+        else if (parts.size() == 1) { w = parts.at(0).toInt(); h = w * 9 / 16; }
+    }
+    if (w <= 0 || h <= 0)
+        return err(QStringLiteral("resize requires <width> <height> (e.g. 'resize 1920 1080', or 'full')"));
+
+    QWidget* win = nullptr;
+    if (!target.isEmpty()) {
+        QWidget* t = resolveWidget(target);
+        win = t ? t->window() : nullptr;
+        if (!win)
+            return err(QStringLiteral("window not found for target: ") + target);
+    } else {
+        const QWidgetList tops = QApplication::topLevelWidgets();
+        for (QWidget* tlw : tops) {           // prefer the QMainWindow
+            if (tlw->inherits("QMainWindow")) { win = tlw; break; }
+        }
+        if (!win) {                            // else first visible real window
+            for (QWidget* tlw : tops) {
+                if (tlw->objectName() == QLatin1String("qt_scrollarea_viewport"))
+                    continue;
+                if (qobject_cast<QMenu*>(tlw))
+                    continue;
+                if (tlw->isWindow() && tlw->isVisible()) { win = tlw; break; }
+            }
+        }
+    }
+    if (!win)
+        return err(QStringLiteral("no top-level window to resize"));
+
+    // The status-bar min-width recompute caps min width to the screen on a small
+    // offscreen virtual screen; drop the floor so the resize isn't re-clamped.
+    if (win->minimumWidth() > w)
+        win->setMinimumWidth(0);
+    win->resize(w, h);
+
+    QJsonObject r{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("requested"), QJsonObject{{QStringLiteral("w"), w}, {QStringLiteral("h"), h}}},
+        {QStringLiteral("actual"), QJsonObject{{QStringLiteral("w"), win->width()},
+                                               {QStringLiteral("h"), win->height()}}},
+    };
+    // Surface the panadapter width — that IS x_pixels, the thing an agent asserts
+    // on after the ~300ms dimensionsChanged debounce re-pushes it to the radio.
+    if (QWidget* sw = resolveWidget(QStringLiteral("SpectrumWidget")))
+        r[QStringLiteral("spectrumWidth")] = sw->width();
+    return r;
+}
+
+// ── Menu-bar discovery / popup (#3646 fidelity — items 5 + 7) ────────────────
+// `menu list` enumerates the menu-bar tree (so an agent can discover exact
+// labels to invoke); `menu open <name>` pops a top-level menu non-blocking so a
+// follow-up dumpTree/grab can snapshot it. Triggering a leaf is done via
+// `invoke <label> trigger` (resolveMenuBarAction), not here.
+namespace {
+QJsonArray describeMenuActions(QMenu* menu)
+{
+    QJsonArray arr;
+    for (QAction* a : menu->actions()) {
+        if (a->isSeparator())
+            continue;
+        QJsonObject o{{QStringLiteral("text"), actionDisplayText(a)},
+                      {QStringLiteral("enabled"), a->isEnabled()}};
+        if (a->isCheckable()) {
+            o[QStringLiteral("checkable")] = true;
+            o[QStringLiteral("checked")] = a->isChecked();
+        }
+        if (QMenu* sub = a->menu())
+            o[QStringLiteral("submenu")] = describeMenuActions(sub);
+        arr.append(o);
+    }
+    return arr;
+}
+
+// The app's top-level menus, coping with BOTH a regular QMenuBar and the macOS
+// NATIVE menu bar (where each menu is reparented to a top-level QMenu widget,
+// invisible to QMainWindow::menuBar()->actions()). De-duplicated, in discovery
+// order. On macOS this also surfaces submenus as their own entries — harmless.
+QList<QPair<QString, QMenu*>> collectTopMenus()
+{
+    QList<QPair<QString, QMenu*>> out;
+    QSet<QMenu*> seen;
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    for (QWidget* tlw : tops) {
+        auto* mw = qobject_cast<QMainWindow*>(tlw);
+        if (!mw || !mw->menuBar())
+            continue;
+        for (QAction* a : mw->menuBar()->actions()) {
+            if (QMenu* sub = a->menu(); sub && !seen.contains(sub)) {
+                seen.insert(sub);
+                out.append({actionDisplayText(a), sub});
+            }
+        }
+    }
+    for (QWidget* tlw : tops) {
+        auto* menu = qobject_cast<QMenu*>(tlw);
+        if (!menu || seen.contains(menu))
+            continue;
+        const QString title = actionDisplayText(menu->menuAction());
+        if (title.isEmpty())
+            continue;   // a context/combo popup, not a named menu-bar menu
+        seen.insert(menu);
+        out.append({title, menu});
+    }
+    return out;
+}
+} // namespace
+
+QJsonObject AutomationServer::doMenu(const QString& action, const QString& arg) const
+{
+    const QList<QPair<QString, QMenu*>> menus = collectTopMenus();
+    if (menus.isEmpty())
+        return err(QStringLiteral("no menus found"));
+
+    if (action == QLatin1String("list")) {
+        QJsonArray arr;
+        for (const auto& m : menus)
+            arr.append(QJsonObject{{QStringLiteral("title"), m.first},
+                                   {QStringLiteral("actions"), describeMenuActions(m.second)}});
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("menus"), arr}};
+    }
+    if (action == QLatin1String("open")) {
+        if (arg.isEmpty())
+            return err(QStringLiteral("menu open requires a menu name"));
+        for (const auto& m : menus) {
+            if (m.first.compare(arg, Qt::CaseInsensitive) != 0
+                && !actionMatchesTarget(m.second->menuAction(), arg))
+                continue;
+            // popup() is non-blocking (unlike exec()), so it can't deadlock the
+            // socket handler on the GUI thread.
+            m.second->popup(QPoint(200, 200));
+            return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("menu"), QStringLiteral("open")},
+                               {QStringLiteral("title"), m.first}};
+        }
+        return err(QStringLiteral("menu not found: ") + arg);
+    }
+    return err(QStringLiteral("unknown menu action: ") + action + QStringLiteral(" (list|open)"));
+}
+
+QJsonObject AutomationServer::doWhoami() const
+{
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("pid"), static_cast<qint64>(QCoreApplication::applicationPid())},
+        {QStringLiteral("name"), m_serverName},
+        {QStringLiteral("socket"), fullServerName()},
+        {QStringLiteral("label"), m_label},
+        {QStringLiteral("station"), m_agentStation},
+        {QStringLiteral("txAllowed"), m_txAllowed},
+        {QStringLiteral("version"), QCoreApplication::applicationVersion()},
+    };
 }
 
 // ---------------------------------------------------------------------------

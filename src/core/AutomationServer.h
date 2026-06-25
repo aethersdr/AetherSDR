@@ -60,6 +60,36 @@ class RadioModel;
 //                                     trailing property name, returns just that
 //                                     field. Assert on state without screenshots.
 //
+// Phase 2 verbs (fidelity — reach code paths invoke/get can't, #3646):
+//
+//   invoke <le> submit [value]     -> commit a QLineEdit: optional setText then
+//                                     fire returnPressed (the retune/login/send
+//                                     trigger). setText alone stays side-effect-
+//                                     free, so a plain value-set never logs in /
+//                                     connects / sends to a live cluster.
+//   invoke <label> trigger         -> now resolves a QAction anywhere in the menu
+//                                     bar even while its menu is CLOSED, so
+//                                     menu-launched dialogs (AetherControl…,
+//                                     Network…, MQTT…, Radio Setup…, Connect…)
+//                                     and Zoom are drivable headlessly.
+//   slice tx <id>                  -> make slice <id> the TX slice (the external-
+//                                     split transition). Set-only, radio-auth.
+//   key ptt on|off | key mox       -> drive PTT / MOX via the model — the space-
+//                                     bar PTT filter and mox_toggle shortcut that
+//                                     invoke can't target. KEYING is gated by
+//                                     AETHER_AUTOMATION_ALLOW_TX (unkey is not).
+//   station <name>                 -> set the per-GUI-client station name shown
+//                                     to other MultiFlex clients (never the radio
+//                                     callsign). Auto-applied to the agent name
+//                                     on connect, restored on stop.
+//   resize <w> <h> [target]        -> resize a top-level window (default full
+//                                     size) so the panadapter x_pixels reaches a
+//                                     realistic value for headless render tests.
+//   menu list | menu open <name>   -> enumerate the menu bar / pop a menu for a
+//                                     follow-up grab/dumpTree.
+//   whoami                         -> {pid, socket, label, station} — identify
+//                                     THIS instance among concurrent bridges.
+//
 // Requests are newline-delimited. Each line is either a bare command
 // ("dumpTree", "grab SpectrumWidget /tmp/pan.png", "invoke masterVolume
 // setValue 30", "get slice active") or a JSON object ({"cmd":"invoke",
@@ -125,9 +155,29 @@ private:
 
     void forceUnkey(const char* reason);  // emergency all-stop (tune/mox/two-tone)
 
-    // Slice lifecycle (add/remove/select) and VFO tuning — RX/config, no keying.
+    // Slice lifecycle (add/remove/select/tx) and VFO tuning — RX/config, no keying.
     QJsonObject doSlice(const QString& action, const QString& arg);
     QJsonObject doTune(const QString& value);
+    // Semantic transmitter keying (#3646 fidelity): `key ptt on|off` / `key mox`
+    // route to RadioModel::setTransmit — the exact calls the space-bar PTT filter
+    // and the mox_toggle shortcut make, but reachable headlessly. Keying is gated
+    // by AETHER_AUTOMATION_ALLOW_TX (the same rail as txtest/atu); unkey is not.
+    QJsonObject doKey(const QString& name, const QString& arg);
+    // Per-GUI-client station identity (#3646 fidelity). Sets `client station
+    // <name>` so other MultiFlex clients see the agent's name; NEVER the radio
+    // callsign. Auto-applied on connect, restored on stop. No keying.
+    QJsonObject doStation(const QString& name);
+    void applyAgentStation(const QString& name);  // capture prior + send
+    void restoreStation();                        // re-send the user's real name
+    // Resize a top-level window so the panadapter x_pixels (== SpectrumWidget
+    // width) propagates to a realistic value for headless render-size fidelity.
+    QJsonObject doResize(const QString& value, const QString& target) const;
+    // Menu-bar discovery/popup (#3646 fidelity): `menu list` enumerates the
+    // menu-bar tree; `menu open <name>` pops a top-level menu for grab/dumpTree.
+    QJsonObject doMenu(const QString& action, const QString& arg) const;
+    // Identity of THIS bridge instance — pid/socket/label — for multi-instance
+    // drivers that enumerate the per-pid discovery directory.
+    QJsonObject doWhoami() const;
     // Observability suite (#3646): runtime log-category control, ring-buffer
     // tail, push subscription, and timeline markers. All diagnostic, no keying.
     QJsonObject doLog(const QString& action, const QString& arg, QLocalSocket* sock);
@@ -141,9 +191,19 @@ private:
 
     QLocalServer* m_server{nullptr};
     QString       m_serverName;
-    QString       m_discoveryFile;
+    QString       m_discoveryFile;    // legacy single-instance pointer (back-compat)
+    QString       m_discoveryDir;     // <temp>/aethersdr-automation/ (per-pid entries)
+    QString       m_discoveryEntry;   // this instance's <pid>.json in m_discoveryDir
+    QString       m_label;            // AETHER_AUTOMATION_LABEL (human instance tag)
     QHash<QLocalSocket*, QByteArray> m_buffers;  // per-client read buffer
     QPointer<RadioModel> m_radioModel;           // for get(); may be null
+
+    // Agent station identity (#3646). The bridge sets the per-GUI-client station
+    // name to the agent's name on connect and restores the user's real name on
+    // stop, so other MultiFlex clients can see an agent is driving.
+    QString m_agentStation;          // applied name (AETHER_AUTOMATION_STATION)
+    QString m_priorStationName;      // user's real station name, captured to restore
+    bool    m_stationApplied{false};
 
     // TX safety rails (active only when AETHER_AUTOMATION_ALLOW_TX is set).
     QTimer* m_txWatchdog{nullptr};

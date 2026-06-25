@@ -413,12 +413,16 @@ int main(int argc, char* argv[])
 
         // Agent-drivable automation bridge (#3646, Phase 0). Off in production;
         // starts only when AETHER_AUTOMATION is set. AETHER_AUTOMATION_SOCKET
-        // overrides the default QLocalServer name.
+        // overrides the QLocalServer name verbatim (explicit, for a driver that
+        // wants a known endpoint). Otherwise the default name is PID-suffixed so
+        // two concurrent automation instances don't steal each other's socket
+        // (QLocalServer::removeServer() unlinks a sibling's live socket on a
+        // shared name); drivers find the right one via the discovery file/dir.
         std::unique_ptr<AetherSDR::AutomationServer> automation;
         if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
             const QString sockName = qEnvironmentVariableIsSet("AETHER_AUTOMATION_SOCKET")
                 ? qEnvironmentVariable("AETHER_AUTOMATION_SOCKET")
-                : QStringLiteral("aethersdr-automation");
+                : QStringLiteral("aethersdr-automation-%1").arg(QCoreApplication::applicationPid());
             automation = std::make_unique<AetherSDR::AutomationServer>();
             automation->setRadioModel(&window.radioModel());  // for the get() verb
             if (!automation->start(sockName))
