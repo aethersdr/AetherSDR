@@ -864,6 +864,7 @@ private:
     QLabel* m_radioVersionLabel{nullptr};
     QLabel* m_stationLabel{nullptr};
     QLabel* m_stationNickLabel{nullptr};
+    QLabel* m_automationChip{nullptr};    // shown only under AETHER_AUTOMATION (#3646)
     QLabel* m_gpsLabel{nullptr};
     QLabel* m_gpsStatusLabel{nullptr};
     QLabel* m_bandStackIndicator{nullptr};

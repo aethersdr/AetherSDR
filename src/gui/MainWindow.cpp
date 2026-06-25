@@ -4149,6 +4149,27 @@ void MainWindow::buildUI()
         return sep;
     };
 
+    // Automation indicator chip — visible ONLY when the agent automation bridge
+    // is active (AETHER_AUTOMATION). Mirrors the per-client station name the
+    // bridge announces to the radio (AETHER_AUTOMATION_STATION, default
+    // "Claude") so the operator can see at a glance that an agent is driving.
+    // Kept deliberately separate from the station-nickname label so it never
+    // fights radio status updates. (#3646)
+    if (qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
+        const QString agent = qEnvironmentVariableIsSet("AETHER_AUTOMATION_STATION")
+            ? qEnvironmentVariable("AETHER_AUTOMATION_STATION")
+            : QStringLiteral("Claude");
+        m_automationChip = new QLabel(QStringLiteral("\U0001F916 ") + agent);
+        m_automationChip->setStyleSheet(
+            "QLabel { color: #0b0e12; background: #f0a000; font-weight: bold;"
+            " font-size: 18px; border-radius: 4px; padding: 2px 10px; }");
+        m_automationChip->setToolTip(
+            QStringLiteral("Agent automation bridge active — other MultiFlex stations see this client as \"%1\"")
+                .arg(agent));
+        hbox->addWidget(m_automationChip);
+        addSep();
+    }
+
     // Hidden connection state label (used by connect/disconnect logic)
     m_connStatusLabel = new QLabel("", this);
     m_connStatusLabel->hide();

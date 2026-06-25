@@ -726,17 +726,22 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         "QPushButton:checked { background: rgba(0,180,216,210); color: #000; }"
         "QPushButton:pressed { background: #00b4d8; color: #000; }";
 
-    auto makeBtn = [&](const QString& text) {
+    // objectName + accessibleName let the automation bridge target these by a
+    // stable handle instead of the visible label \u2014 notably zoom-out, whose glyph
+    // is a U+2212 minus sign that is awkward to send as button text. (#3646)
+    auto makeBtn = [&](const QString& text, const QString& objName, const QString& a11y) {
         auto* btn = new QPushButton(text, this);
+        btn->setObjectName(objName);
+        btn->setAccessibleName(a11y);
         btn->setFixedSize(22, 22);
         btn->setStyleSheet(kZoomBtnStyle);
         btn->setCursor(Qt::PointingHandCursor);
         return btn;
     };
-    m_zoomSegBtn  = makeBtn("S");
-    m_zoomBandBtn = makeBtn("B");
-    m_zoomOutBtn  = makeBtn("\u2212");  // minus sign U+2212
-    m_zoomInBtn   = makeBtn("+");
+    m_zoomSegBtn  = makeBtn("S", QStringLiteral("panZoomSegBtn"),  QStringLiteral("Zoom to segment"));
+    m_zoomBandBtn = makeBtn("B", QStringLiteral("panZoomBandBtn"), QStringLiteral("Zoom to band"));
+    m_zoomOutBtn  = makeBtn("\u2212", QStringLiteral("panZoomOutBtn"), QStringLiteral("Zoom out"));  // minus sign U+2212
+    m_zoomInBtn   = makeBtn("+", QStringLiteral("panZoomInBtn"),   QStringLiteral("Zoom in"));
 
     // SmartSDR pcap: B sends "band_zoom=1", S sends "segment_zoom=1"
     connect(m_zoomBandBtn, &QPushButton::clicked, this, [this]() {
