@@ -119,13 +119,6 @@ public:
     // whole window every frame (the dominant idle CPU cost — see #3283).
     void setOpaqueMode(bool on);
 
-    // #3617 GPU flag mode: the flag panel is GPU-composited (occludes correctly
-    // via render order) but the external buttons stay live widgets that float
-    // above the panadapter texture.  When another flag overlaps this one from in
-    // front, hide this flag's buttons so they don't sit on top of the covering
-    // flag — mirroring the natural widget-stacking occlusion of normal mode.
-    void setButtonsOccluded(bool occluded);
-
     // Which side of the slice marker the flag panel is currently rendered on.
     // Tracked by updatePosition() via m_lastOnLeft.  Used by panFollowVfo()
     // to extend the pan-follow trigger to the flag's outer edge — single-side
@@ -276,8 +269,6 @@ private:
     QPushButton* m_splitBadge{nullptr};
     QPushButton* m_txBadge{nullptr};
     QLabel*      m_sliceBadge{nullptr};
-    QList<QPointer<QWidget>> m_occludeRestore; // #3617 buttons hidden by overlap
-    bool m_buttonsOccluded{false};             // #3617 current occlusion state
     QPointer<QPushButton> m_lockVfoBtn;
     QPointer<QPushButton> m_closeSliceBtn;
     QPointer<QPushButton> m_recordBtn;

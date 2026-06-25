@@ -2518,36 +2518,6 @@ void VfoWidget::showTab(int index)
     relayoutToCurrentContent();
 }
 
-// ── Collapsed flag toggle ─────────────────────────────────────────────────────
-
-void VfoWidget::setButtonsOccluded(bool occluded)
-{
-    if (occluded == m_buttonsOccluded) {
-        return;     // only act on a state change — no per-frame churn
-    }
-    m_buttonsOccluded = occluded;
-    const QList<QWidget*> ext = {
-        m_collapsedFreqLabel.data(), m_lockVfoBtn.data(), m_closeSliceBtn.data(),
-        m_recordBtn.data(), m_playBtn.data()
-    };
-    if (occluded) {
-        m_occludeRestore.clear();
-        for (QWidget* w : ext) {
-            if (w && w->isVisible()) {
-                m_occludeRestore.append(w);
-                w->hide();
-            }
-        }
-    } else {
-        for (const QPointer<QWidget>& w : m_occludeRestore) {
-            if (w) {
-                w->show();
-            }
-        }
-        m_occludeRestore.clear();
-    }
-}
-
 void VfoWidget::setOpaqueMode(bool on)
 {
     if (m_opaqueMode == on)

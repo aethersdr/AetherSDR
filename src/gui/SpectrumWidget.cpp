@@ -591,39 +591,6 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     m_overlayMenu = new SpectrumOverlayMenu(this);
     m_overlayMenu->raise();
 
-#ifdef AETHER_GPU_SPECTRUM
-    // #3617: GPU-composite the slice flags instead of letting them composite as
-    // translucent raster QWidget siblings over the QRhiWidget (which pegs the
-    // main thread re-blending them on every ~30 Hz waterfall frame).  On by
-    // default; set AETHER_NO_GPU_FLAGS=1 to fall back to the legacy live-widget
-    // flags (A/B comparison).  The flag panels are rendered into a dedicated
-    // GPU texture (see renderGpuFrame); the small external buttons stay live
-    // widgets.  This refresh timer re-snapshots the flags so live content
-    // (S-meter, freq) keeps updating — ~12 Hz is smooth for a meter and far
-    // cheaper than the per-frame composite it replaces.
-    m_gpuFlagMode = !qEnvironmentVariableIsSet("AETHER_NO_GPU_FLAGS");
-    m_flagRefreshTimer = new QTimer(this);
-    m_flagRefreshTimer->setInterval(80);
-    connect(m_flagRefreshTimer, &QTimer::timeout, this, [this]() {
-        if (m_gpuFlagMode) {
-            // Runs outside the render callback → safe to show/hide/raise the live
-            // flag and to QWidget::render the sprites here.  (Responsive hover
-            // enter is handled synchronously in mouseMoveEvent.)
-            updateLiveFlag();
-            grabFlagSprites();   // re-rasterize flag content (~12 Hz)
-            update();
-        }
-    });
-    // #3746: the re-raster timer runs only while the panadapter is actually
-    // presented.  attachFlagTimerWindowWatcher() watches the top-level for
-    // minimize/restore; updateFlagRefreshTimer() starts/stops on
-    // visible + not-minimized.  Re-evaluated on Show/Hide/ParentChange in
-    // event() and on WindowStateChange in eventFilter().  At construction the
-    // widget isn't shown yet, so the timer stays stopped until the first Show.
-    attachFlagTimerWindowWatcher();
-    updateFlagRefreshTimer();
-#endif
-
     m_tnfHoverPopup = new QLabel(this);
     m_tnfHoverPopup->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_tnfHoverPopup->setMargin(6);
@@ -835,12 +802,6 @@ SpectrumWidget::~SpectrumWidget()
 void SpectrumWidget::prepareForTopLevelChange()
 {
 #ifdef AETHER_GPU_SPECTRUM
-    // #3746: the watched top-level is about to change — detach now; the next
-    // Show/ParentChange re-attaches the WindowStateChange watcher to the new one.
-    if (m_flagTimerFilteredWindow && m_flagTimerFilteredWindow != this) {
-        m_flagTimerFilteredWindow->removeEventFilter(this);
-    }
-    m_flagTimerFilteredWindow = nullptr;
 #ifdef Q_OS_MAC
     // QRhiWidget registers a cleanup callback with the current top-level
     // backing-store QRhi. Direct splitter/floating-window reparenting can miss
@@ -1001,17 +962,6 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     m_overlayMenu->raiseAll();  // keep overlay + panels on top of all VFO widgets
     if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible())
         m_interlockNotificationLabel->raise();
-#ifdef AETHER_GPU_SPECTRUM
-    // #3746(2) diagnostic: the gap from this FlagCreated to the slice's first
-    // FlagFirstGrab is the "blank" window. Gated aether.perf trace, kept so the
-    // fix below stays verifiable (measured ~41 ms gap without it -> ~3 ms with).
-    if (m_gpuFlagMode && lcPerf().isDebugEnabled())
-        qCDebug(lcPerf).nospace() << "FlagCreated slice=" << sliceId;
-    // #3746(2) fix: rasterize the new flag's sprite immediately (off-frame, safe)
-    // so a non-live new slice isn't blank until the next refresh-timer tick.
-    // repositionVfoFlags() positions the quad next frame.
-    grabFlagSprites();
-#endif
     return w;
 }
 
@@ -1068,237 +1018,8 @@ void SpectrumWidget::removeVfoWidget(int sliceId)
         if (m_vfoWidget == w)
             m_vfoWidget = nullptr;
         delete w;
-#ifdef AETHER_GPU_SPECTRUM
-        // #3617: drop live-flag state + free the removed flag's GPU sprite.
-        if (m_liveFlagSliceId == sliceId)
-            m_liveFlagSliceId = -1;
-        auto sit = m_flagSprites.find(sliceId);
-        if (sit != m_flagSprites.end()) {
-            releaseFlagSprite(sit.value());
-            m_flagSprites.erase(sit);
-        }
-#endif
     }
 }
-
-#ifdef AETHER_GPU_SPECTRUM
-// #3617 hover-swap: choose which flag (if any) should be shown LIVE — i.e. as a
-// real interactive widget rather than a GPU snapshot — because the cursor is over
-// its panel, a child has keyboard focus (frequency editor), or one of its popup
-// menus is open.  Called every GPU frame (cheap: cursor + focus + popup polls)
-// and synchronously on mouse-move so a hovered flag goes live in time for a click.
-// (Only built with the GPU spectrum path — the legacy software path keeps the
-// flags as ordinary live widgets, so none of this is needed.)
-void SpectrumWidget::updateLiveFlag()
-{
-    if (!m_gpuFlagMode) {
-        return;
-    }
-    // Don't churn flags live/GPU mid-drag (pan/zoom/VFO/filter/dBm) — the drag
-    // owns the mouse; keep the current state until it ends.
-    if (anyDragActive()) {
-        return;
-    }
-    // While a popup (mode/filter/antenna menu) is open, keep the current live
-    // flag — switching it out from under an open menu would be wrong.
-    if (QApplication::activePopupWidget()) {
-        m_liveFlagIdleClock.invalidate();
-        return;
-    }
-
-    int want = -1;
-    // 1) A focused descendant (e.g. the frequency line-edit) keeps the flag live.
-    if (QWidget* fw = QApplication::focusWidget()) {
-        for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
-            VfoWidget* f = it.value();
-            if (f && (f == fw || f->isAncestorOf(fw))) {
-                want = it.key();
-                break;
-            }
-        }
-    }
-    // 2) Otherwise the flag whose panel rect contains the cursor.
-    if (want == -1) {
-        const QPoint gp = QCursor::pos();
-        for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
-            VfoWidget* f = it.value();
-            if (!f || f->size().isEmpty()) {
-                continue;
-            }
-            const QRect gr(mapToGlobal(f->pos()), f->size());
-            if (gr.contains(gp)) {
-                want = it.key();
-                break;
-            }
-        }
-    }
-
-    // aether.perf diagnostic (#3617): on each live-flag change, log the decision
-    // inputs (cursor vs each flag's global rect, focus/popup state) so a flag that
-    // fails to go live on hover can be traced on any platform/scaling.  Gated by
-    // the aether.perf logging category — silent (zero cost) unless enabled.  Only
-    // fires on a state change (hover enter/leave), not per frame.
-    if (want != m_liveFlagSliceId) {
-        QString rects;
-        for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
-            if (VfoWidget* f = it.value()) {
-                const QRect gr(mapToGlobal(f->pos()), f->size());
-                rects += QString(" s%1[%2,%3 %4x%5 vis=%6]")
-                    .arg(it.key()).arg(gr.x()).arg(gr.y())
-                    .arg(gr.width()).arg(gr.height()).arg(f->isVisible() ? 1 : 0);
-            }
-        }
-        const QPoint gp = QCursor::pos();
-        qCDebug(lcPerf).nospace()
-            << "LiveFlag want=" << want << " cur=" << m_liveFlagSliceId
-            << " cursor=" << gp.x() << "," << gp.y()
-            << " popup=" << (QApplication::activePopupWidget() ? 1 : 0)
-            << " rects:" << rects;
-    }
-
-    if (want == m_liveFlagSliceId) {
-        m_liveFlagIdleClock.invalidate();   // still over it → cancel pending hide
-        return;
-    }
-    if (want != -1) {
-        setLiveFlag(want);                  // entered a flag → go live immediately
-    } else {
-        // Left every flag — debounce the hide so sweeping the cursor across the
-        // panadapter doesn't flicker flags live/GPU (and gives a click grace).
-        if (!m_liveFlagIdleClock.isValid()) {
-            m_liveFlagIdleClock.start();
-        } else if (m_liveFlagIdleClock.elapsed() >= kLiveFlagHideDelayMs) {
-            setLiveFlag(-1);
-        }
-    }
-}
-
-void SpectrumWidget::setLiveFlag(int sliceId)
-{
-    if (m_liveFlagSliceId == sliceId) {
-        return;
-    }
-    if (VfoWidget* old = m_vfoWidgets.value(m_liveFlagSliceId, nullptr)) {
-        old->setVisible(false);   // previously-live flag → back to GPU snapshot
-    }
-    m_liveFlagSliceId = sliceId;
-    m_liveFlagIdleClock.invalidate();
-    if (VfoWidget* f = m_vfoWidgets.value(sliceId, nullptr)) {
-        f->setButtonsOccluded(false);
-        f->setVisible(true);      // live, fully interactive, on top of the sprites
-        f->raise();
-        if (m_overlayMenu) {
-            m_overlayMenu->raiseAll();
-        }
-    }
-    // Refresh sprites (the just-released flag is now a sprite again — re-grab so
-    // it isn't stale/blank when it reappears).  Off-frame → safe to render.
-    grabFlagSprites();
-    update();
-}
-
-// #3746: (re)attach the WindowStateChange watcher to the current top-level.
-// The window can change when a panadapter floats/docks (reparent), so this is
-// re-run on Show/ParentChange.  We never filter ourselves (top == this before
-// the widget is parented into a window).
-void SpectrumWidget::attachFlagTimerWindowWatcher()
-{
-    QWidget* top = window();
-    if (top == m_flagTimerFilteredWindow) {
-        return;
-    }
-    if (m_flagTimerFilteredWindow && m_flagTimerFilteredWindow != this) {
-        m_flagTimerFilteredWindow->removeEventFilter(this);
-    }
-    m_flagTimerFilteredWindow = top;
-    if (top && top != this) {
-        top->installEventFilter(this);
-    }
-}
-
-// #3746: run the flag re-raster timer ONLY while the panadapter is actually
-// presented — visible and not minimized.  A minimized window keeps isVisible()
-// true (measured), so the WindowStateChange watcher drives this for the
-// minimize case; Show/Hide/ParentChange drive it for the hidden-tab/reparent
-// cases.  Stopping the timer eliminates both the 12.5 Hz wakeup and the
-// off-screen grab (~2 ms/tick for 4 flags, measured) when nobody can see it.
-void SpectrumWidget::updateFlagRefreshTimer()
-{
-    if (!m_flagRefreshTimer) {
-        return;
-    }
-    QWidget* top = window();
-    const bool present = m_gpuFlagMode && isVisible()
-                         && !(top && top->isMinimized());
-    const bool active = m_flagRefreshTimer->isActive();
-    if (present && !active) {
-        m_flagRefreshTimer->start();
-        qCDebug(lcPerf) << "FlagRefreshTimer START (panadapter presented)";
-    } else if (!present && active) {
-        m_flagRefreshTimer->stop();
-        qCDebug(lcPerf) << "FlagRefreshTimer STOP (hidden/minimized)";
-    }
-}
-
-// #3617: rasterize each non-live flag into its own CPU image.  MUST run OUTSIDE
-// the QRhi render callback (QWidget::render inside an active frame re-enters the
-// renderer and crashes) — called from the refresh timer and on live-flag change.
-void SpectrumWidget::grabFlagSprites()
-{
-    if (!m_gpuFlagMode) {
-        return;
-    }
-    // #3746 instrumentation (aether.perf): time the idle re-raster, count the
-    // flags actually re-rasterized this tick, and record whether the panadapter
-    // is visible -- to quantify the 12.5 Hz grab cost and the hidden-while-
-    // grabbing waste before/after the idle-pause + dirty-skip optimizations.
-    QElapsedTimer grabTimer;
-    grabTimer.start();
-    int grabbed = 0;
-    // Rasterize each flag at EXACTLY its on-screen device-pixel size (1:1), so
-    // the sprite texture maps one texel per screen pixel — drawn pixel-aligned
-    // with NEAREST sampling that gives crisp text (no scaling = no blur).  An
-    // earlier supersample + linear downscale just softened it ("verwaschen").
-    const qreal dpr = devicePixelRatioF();
-    for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
-        const int id = it.key();
-        VfoWidget* f = it.value();
-        if (!f || f->size().isEmpty() || id == m_liveFlagSliceId) {
-            continue;   // the live flag is shown as a real widget, not grabbed
-        }
-        const bool firstGrab = !m_flagSprites.contains(id);   // #3746(2) measure: first sprite for this slice?
-        FlagSprite& s = m_flagSprites[id];   // inserts a blank sprite if absent
-        const QSize devSize(qMax(1, static_cast<int>(std::lround(f->width() * dpr))),
-                            qMax(1, static_cast<int>(std::lround(f->height() * dpr))));
-        if (s.img.size() != devSize) {
-            s.img = QImage(devSize, QImage::Format_RGBA8888_Premultiplied);
-            s.img.setDevicePixelRatio(dpr);
-        }
-        s.img.fill(Qt::transparent);
-        f->render(&s.img, QPoint(0, 0));   // off-frame raster — safe
-        s.imgDirty = true;
-        ++grabbed;
-        // #3746(2) measure: log the first sprite render for a slice, so the
-        // latency from FlagCreated (in addVfoWidget) to here -- the "80 ms
-        // blank" gap -- can be read from the log timestamps.
-        if (firstGrab && lcPerf().isDebugEnabled())
-            qCDebug(lcPerf).nospace() << "FlagFirstGrab slice=" << id;
-    }
-    if (lcPerf().isDebugEnabled())
-        qCDebug(lcPerf).nospace()
-            << "FlagGrab grabbed=" << grabbed
-            << " flags=" << m_vfoWidgets.size()
-            << " ms=" << (grabTimer.nsecsElapsed() / 1.0e6)
-            << " visible=" << (isVisible() ? 1 : 0);
-}
-
-void SpectrumWidget::releaseFlagSprite(FlagSprite& s)
-{
-    delete s.srb;   s.srb = nullptr;   // QRhi defers in-flight native release
-    delete s.tex;   s.tex = nullptr;
-    s.texSize = QSize();
-}
-#endif // AETHER_GPU_SPECTRUM
 
 void SpectrumWidget::setActiveVfoWidget(int sliceId)
 {
@@ -5882,11 +5603,6 @@ void SpectrumWidget::edgePanVelocityStep()
 void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
 {
     PerfInputScope perfScope("mouseMove");
-#ifdef AETHER_GPU_SPECTRUM
-    // #3617 hover-swap: as the cursor enters a flag's rect, promote it to a live
-    // widget now (not just on the next render frame) so an immediate click lands.
-    updateLiveFlag();
-#endif
     if (PerfTelemetry::instance().enabled()) {
         const qint64 nowNs = PerfTelemetry::nowNs();
         if (m_lastMouseMoveNs > 0) {
@@ -6606,17 +6322,7 @@ bool SpectrumWidget::event(QEvent* ev)
     // surface loses mouse tracking and mouseMoveEvent stops firing.
     if (ev->type() == QEvent::WinIdChange || ev->type() == QEvent::ParentChange) {
         setMouseTracking(true);
-#ifdef AETHER_GPU_SPECTRUM
-        attachFlagTimerWindowWatcher();   // #3746 — top-level may have changed (float/dock)
-        updateFlagRefreshTimer();
-#endif
     }
-#ifdef AETHER_GPU_SPECTRUM
-    if (ev->type() == QEvent::Show || ev->type() == QEvent::Hide) {
-        attachFlagTimerWindowWatcher();   // #3746 — pause/resume flag re-raster on
-        updateFlagRefreshTimer();         // panadapter show/hide (e.g. hidden tab)
-    }
-#endif
 
     if (ev->type() == QEvent::NativeGesture) {
         auto* ge = static_cast<QNativeGestureEvent*>(ev);
@@ -6654,15 +6360,6 @@ bool SpectrumWidget::event(QEvent* ev)
 
 bool SpectrumWidget::eventFilter(QObject* watched, QEvent* event)
 {
-#ifdef AETHER_GPU_SPECTRUM
-    // #3746: a minimized top-level keeps our child widgets isVisible()==true, so
-    // we watch the window's WindowStateChange explicitly to pause/resume the flag
-    // re-raster timer on minimize/restore.  Not consumed.
-    if (watched == m_flagTimerFilteredWindow
-        && event->type() == QEvent::WindowStateChange) {
-        updateFlagRefreshTimer();
-    }
-#endif
     QWidget* widget = qobject_cast<QWidget*>(watched);
     if (!widget || anyDragActive()) {
         return SPECTRUM_BASE_CLASS::eventFilter(watched, event);
@@ -7235,19 +6932,6 @@ void SpectrumWidget::initOverlayPipeline()
         QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, m_ovGpuTex, m_ovSampler),
     });
     m_ovSrb->create();
-
-    // #3617 flag sprites: one dynamic vertex buffer holding 4 verts per flag
-    // (positions recomputed every frame).  Per-flag textures + SRBs are created
-    // lazily in renderGpuFrame.  Layout matches the overlay quad: vec2 pos + vec2 uv.
-    m_flagQuadVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
-                                 kMaxFlagSprites * 4 * 4 * sizeof(float));
-    m_flagQuadVbo->create();
-    // NEAREST filtering for flag sprites — they are drawn 1:1 (texel == screen
-    // pixel), so nearest gives crisp text; linear would soften it.
-    m_flagSampler = r->newSampler(QRhiSampler::Nearest, QRhiSampler::Nearest,
-                                  QRhiSampler::None,
-                                  QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
-    m_flagSampler->create();
 
     QShader vs = loadShader(":/shaders/resources/shaders/overlay.vert.qsb");
     QShader fs = loadShader(":/shaders/resources/shaders/overlay.frag.qsb");
@@ -7843,102 +7527,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         // because it shows/raises widgets, which must not happen mid-render.)
         repositionVfoFlags(specRect);
 
-        // #3617 flag sprites: prepare GPU resources and decide draw order +
-        // button occlusion.  The flags were rasterized into per-flag CPU images by
-        // grabFlagSprites() OFF-FRAME; here we only (re)create + upload their
-        // textures (a memcpy, safe inside the frame) and build the ordered draw
-        // list — NO QWidget::render here (that re-enters the renderer → crash).
-        m_flagDrawOrder.clear();
-        if (m_gpuFlagMode) {
-            // Draw order (= z-order, later = on top): active flag on top, then the
-            // live (hover) flag absolutely last.  The live flag shows as a real
-            // widget, so it's excluded from the sprite list (but still an occluder).
-            QVector<int> order;
-            for (auto it = m_vfoWidgets.cbegin(); it != m_vfoWidgets.cend(); ++it) {
-                if (it.value() && !it.value()->size().isEmpty()) {
-                    order.append(it.key());
-                }
-            }
-            auto moveLast = [&order](int id) {
-                const int i = order.indexOf(id);
-                if (i >= 0 && i < order.size() - 1) {
-                    order.move(i, order.size() - 1);
-                }
-            };
-            if (m_vfoWidget) {
-                moveLast(m_vfoWidgets.key(m_vfoWidget, -1));
-            }
-            moveLast(m_liveFlagSliceId);
-
-            // Occlusion: a flag overlapped by any flag on top (later in order,
-            // incl. the live flag) hides its floating buttons (panels occlude
-            // automatically by draw order / the live widget being on top).
-            for (int i = 0; i < order.size(); ++i) {
-                VfoWidget* fi = m_vfoWidgets.value(order[i], nullptr);
-                if (!fi) {
-                    continue;
-                }
-                const QRect ri(fi->pos(), fi->size());
-                bool occluded = false;
-                for (int j = i + 1; j < order.size(); ++j) {
-                    VfoWidget* fj = m_vfoWidgets.value(order[j], nullptr);
-                    if (fj && QRect(fj->pos(), fj->size()).intersects(ri)) {
-                        occluded = true;
-                        break;
-                    }
-                }
-                fi->setButtonsOccluded(occluded);
-            }
-
-            // Ensure each non-live flag's texture exists + is current, and record
-            // it in the draw list.
-            for (int id : order) {
-                if (id == m_liveFlagSliceId) {
-                    continue;   // shown as a live widget, not a sprite
-                }
-                auto sit = m_flagSprites.find(id);
-                if (sit == m_flagSprites.end() || sit->img.isNull()) {
-                    continue;   // not grabbed yet (next timer tick)
-                }
-                FlagSprite& s = sit.value();
-                const QSize isz = s.img.size();
-                if (!s.tex) {
-                    s.tex = rhi()->newTexture(QRhiTexture::RGBA8, isz);
-                    s.tex->create();
-                    s.srb = rhi()->newShaderResourceBindings();
-                    s.srb->setBindings({
-                        QRhiShaderResourceBinding::sampledTexture(
-                            1, QRhiShaderResourceBinding::FragmentStage, s.tex, m_flagSampler),
-                    });
-                    s.srb->create();
-                    s.texSize = isz;
-                    s.imgDirty = true;
-                } else if (s.texSize != isz) {
-                    // Resize the existing texture object — QRhi re-creates the
-                    // native resource and defers releasing the old one, mirroring
-                    // the m_ovGpuTex resize path; then rebind the SRB to it.
-                    s.tex->setPixelSize(isz);
-                    s.tex->create();
-                    s.srb->setBindings({
-                        QRhiShaderResourceBinding::sampledTexture(
-                            1, QRhiShaderResourceBinding::FragmentStage, s.tex, m_flagSampler),
-                    });
-                    s.srb->create();
-                    s.texSize = isz;
-                    s.imgDirty = true;
-                }
-                if (s.imgDirty) {
-                    QRhiTextureSubresourceUploadDescription d(s.img);
-                    batch->uploadTexture(s.tex, QRhiTextureUploadEntry(0, 0, d));
-                    s.imgDirty = false;
-                    if (perfEnabled) {
-                        PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::Overlay);
-                    }
-                }
-                m_flagDrawOrder.append(id);
-            }
-        }
-
         // Generate FFT spectrum vertices with baked colors
         const QVector<float>& fftBins = displaySpectrumBins();
         if (!fftBins.isEmpty() && m_fftLineVbo && m_fftFillVbo) {
@@ -8091,48 +7679,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         }
     }
 
-    // #3617: build this frame's flag-sprite quads (NDC), one 4-vertex strip per
-    // flag in m_flagDrawOrder, into the dynamic VBO.  Positions are taken from the
-    // flags' CURRENT geometry, so a dragged flag follows at frame rate with no
-    // re-raster.  Vertex layout matches kQuadData (vec2 pos + vec2 uv; uv.v=0 top).
-    if (m_gpuFlagMode && m_flagQuadVbo && !m_flagDrawOrder.isEmpty()) {
-        const QSize outSz = renderTarget()->pixelSize();
-        const float outW = static_cast<float>(qMax(1, outSz.width()));
-        const float outH = static_cast<float>(qMax(1, outSz.height()));
-        const float fdpr = outW / static_cast<float>(qMax(1, width()));
-        float verts[kMaxFlagSprites * 16];
-        int vc = 0;
-        const int nDraw = qMin(m_flagDrawOrder.size(), kMaxFlagSprites);
-        for (int i = 0; i < nDraw; ++i) {
-            const int id = m_flagDrawOrder[i];
-            VfoWidget* f = m_vfoWidgets.value(id, nullptr);
-            const auto sit = m_flagSprites.constFind(id);
-            // Pixel-snap: place the quad at the flag's rounded device-px origin and
-            // size it EXACTLY to the sprite's texel dimensions, so one texel maps
-            // to one screen pixel (with NEAREST sampling) — crisp, no resampling.
-            const int left = f ? static_cast<int>(std::lround(f->pos().x() * fdpr)) : 0;
-            const int top  = f ? static_cast<int>(std::lround(f->pos().y() * fdpr)) : 0;
-            const int texW = (sit != m_flagSprites.constEnd()) ? sit->texSize.width() : 0;
-            const int texH = (sit != m_flagSprites.constEnd()) ? sit->texSize.height() : 0;
-            const float xl = 2.0f * left / outW - 1.0f;
-            const float xr = 2.0f * (left + texW) / outW - 1.0f;
-            const float yt = 1.0f - 2.0f * top / outH;
-            const float yb = 1.0f - 2.0f * (top + texH) / outH;
-            const float quad[16] = {
-                xl, yb, 0.0f, 1.0f,   // bottom-left
-                xr, yb, 1.0f, 1.0f,   // bottom-right
-                xl, yt, 0.0f, 0.0f,   // top-left
-                xr, yt, 1.0f, 0.0f,   // top-right
-            };
-            for (float v : quad) {
-                verts[vc++] = v;
-            }
-        }
-        if (vc > 0) {
-            batch->updateDynamicBuffer(m_flagQuadVbo, 0, vc * sizeof(float), verts);
-        }
-    }
-
     cb->resourceUpdate(batch);
 
     // Begin render pass
@@ -8212,27 +7758,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const QRhiCommandBuffer::VertexInput vbuf(m_ovVbo, 0);
         cb->setVertexInput(0, 1, &vbuf);
         cb->draw(4);
-    }
-
-    // #3617 flag sprites — one textured quad per flag, back→front, on top of the
-    // static overlay (same pipeline + premult-alpha blend).  The live (hover)
-    // flag is shown as a real widget, so it's not in m_flagDrawOrder.
-    if (m_gpuFlagMode && m_ovPipeline && m_flagQuadVbo && !m_flagDrawOrder.isEmpty()) {
-        cb->setGraphicsPipeline(m_ovPipeline);
-        cb->setViewport({0, 0,
-            static_cast<float>(outputSize.width()),
-            static_cast<float>(outputSize.height())});
-        const QRhiCommandBuffer::VertexInput vbuf(m_flagQuadVbo, 0);
-        cb->setVertexInput(0, 1, &vbuf);
-        const int nDraw = qMin(m_flagDrawOrder.size(), kMaxFlagSprites);
-        for (int i = 0; i < nDraw; ++i) {
-            auto sit = m_flagSprites.constFind(m_flagDrawOrder[i]);
-            if (sit == m_flagSprites.constEnd() || !sit->srb) {
-                continue;
-            }
-            cb->setShaderResources(sit->srb);
-            cb->draw(4, 1, i * 4, 0);
-        }
     }
 
     cb->endPass();
@@ -8331,24 +7856,6 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
             vfos[i].w->updatePosition(vfos[i].x, specRect.top(), dir);
         }
     }
-
-    // GPU flag mode: keep the flag panels hidden so they never composite as
-    // raster siblings (addVfoWidget shows each flag once so it lays out; this
-    // hides it from the first frame on — setVisible(false) is a no-op once
-    // hidden).  Also mark the flag layer dirty when a flag moved, so its GPU
-    // snapshot re-rasterizes at the new position THIS frame (no lag).  At rest
-    // nothing moves → no extra work (stays at the refresh-timer cadence).
-    if (m_gpuFlagMode) {
-        // Hide every flag panel EXCEPT the live (hover-swapped) one, so it doesn't
-        // composite as a raster sibling.  The live flag stays a real widget for
-        // interaction.  Position is carried by the per-flag sprite quad, so no
-        // move tracking is needed here.  setVisible(false) is a no-op once hidden.
-        for (const auto& vp : vfos) {
-            if (vp.w && vp.sliceId != m_liveFlagSliceId && vp.w->isVisible()) {
-                vp.w->setVisible(false);
-            }
-        }
-    }
 }
 
 void SpectrumWidget::render(QRhiCommandBuffer* cb)
@@ -8377,13 +7884,6 @@ void SpectrumWidget::releaseResources()
     delete m_ovVbo;          m_ovVbo = nullptr;
     delete m_ovGpuTex;       m_ovGpuTex = nullptr;
     delete m_ovSampler;      m_ovSampler = nullptr;
-
-    // #3617 flag sprites — free each flag's texture/SRB + the shared quad VBO.
-    for (auto it = m_flagSprites.begin(); it != m_flagSprites.end(); ++it) {
-        releaseFlagSprite(it.value());
-    }
-    delete m_flagQuadVbo;    m_flagQuadVbo = nullptr;
-    delete m_flagSampler;    m_flagSampler = nullptr;
 
     // Bg-image layer (added with the FFT-above-bg fix) — same lifecycle
     // as the overlay scaffolding it lives alongside; release in the same
