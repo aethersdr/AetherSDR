@@ -1897,6 +1897,11 @@ void AutomationServer::forceUnkey(const char* reason)
     auto& tx = m_radioModel->transmitModel();
     tx.stopTune();
     tx.setMox(false);
+    // Also abort any in-flight CWX keying: CWX is driven by its own buffer,
+    // largely independent of MOX, so setMox(false) alone won't stop a `cwx send`
+    // already keying CW. Without this the watchdog would fire repeatedly with no
+    // effect until the buffer drained — defeating the all-stop guarantee. (#3646)
+    m_radioModel->cwxModel().clearBuffer();
     m_txKeyedSinceMs = 0;
     qCWarning(lcAutomation).noquote() << "TX force-unkey:" << reason;
 }
