@@ -783,8 +783,8 @@ private:
     QVector<float> smoothKiwiSdrWaterfallBins(const QVector<float>& bins);
     void updateKiwiSdrAutoColorRange(const QVector<float>& bins);
     const QVector<float>& displaySpectrumBins() const;
-    QVector<float> buildFftDisplayTrace(const QVector<float>& bins,
-                                        int targetPoints) const;
+    const QVector<float>& buildFftDisplayTrace(const QVector<float>& bins,
+                                               int targetPoints) const;
     const QVector<float>& noiseFloorAutoLevelBins() const;
 
     void pushWaterfallRow(const QVector<float>& bins, int destWidth,
@@ -802,6 +802,8 @@ private:
 
     QVector<float> m_bins;       // raw FFT frame (dBm)
     QVector<float> m_smoothed;   // exponential-smoothed for visual stability
+    mutable QVector<float> m_fftDisplaySmoothScratch;
+    mutable QVector<float> m_fftDisplayTraceScratch;
     QVector<float> m_kiwiSdrFftTrace;  // Kiwi-derived FFT trace, kept separate from Flex FFT
     bool m_shutdownPrepared{false};
     bool m_kiwiSdrWaterfallAvailable{false};

@@ -69,6 +69,9 @@ inline QColor kAetherBrandBlue() { return AetherSDR::ThemeManager::instance().co
 inline QColor kAetherBrandGreen() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
 inline QColor kConnectionTextColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
 static constexpr float kMinDisplayDbm = -180.0f;
+static constexpr float kMaxDisplayDbm = 80.0f;
+static constexpr float kMinDisplayRangeDb = 10.0f;
+static constexpr float kMaxDisplayRangeDb = 180.0f;
 static constexpr int kWaterfallLineDurationMinMs = 1;
 static constexpr int kWaterfallLineDurationMaxMs = 100;
 static constexpr int kWaterfallHistoryCapacityMsPerRow = 50;
@@ -105,6 +108,62 @@ static constexpr const char* kSliceCursorOverrideShapeProperty =
 static bool mhzNearlyEqual(double a, double b)
 {
     return std::abs(a - b) <= 1.0e-6;
+}
+
+static float clampDbmBottom(float bottomDbm)
+{
+    if (!std::isfinite(bottomDbm)) {
+        return kMinDisplayDbm;
+    }
+    return std::clamp(bottomDbm,
+                      kMinDisplayDbm,
+                      kMaxDisplayDbm - kMinDisplayRangeDb);
+}
+
+static float clampDbmRangeForBottom(float bottomDbm, float rangeDb)
+{
+    bottomDbm = clampDbmBottom(bottomDbm);
+    if (!std::isfinite(rangeDb)) {
+        rangeDb = kMinDisplayRangeDb;
+    }
+    const float maxRangeForBottom =
+        std::min(kMaxDisplayRangeDb, kMaxDisplayDbm - bottomDbm);
+    return std::clamp(rangeDb,
+                      kMinDisplayRangeDb,
+                      std::max(kMinDisplayRangeDb, maxRangeForBottom));
+}
+
+static float clampDbmRefForRange(float refDbm, float rangeDb)
+{
+    if (!std::isfinite(rangeDb)) {
+        rangeDb = kMinDisplayRangeDb;
+    }
+    rangeDb = std::clamp(rangeDb, kMinDisplayRangeDb, kMaxDisplayRangeDb);
+    if (!std::isfinite(refDbm)) {
+        return kMinDisplayDbm + rangeDb;
+    }
+    return std::clamp(refDbm,
+                      kMinDisplayDbm + rangeDb,
+                      kMaxDisplayDbm);
+}
+
+static bool clampDbmRange(float& minDbm, float& maxDbm)
+{
+    if (!std::isfinite(minDbm) || !std::isfinite(maxDbm)) {
+        return false;
+    }
+
+    minDbm = std::max(minDbm, kMinDisplayDbm);
+    maxDbm = std::min(maxDbm, kMaxDisplayDbm);
+    if (maxDbm - minDbm > kMaxDisplayRangeDb) {
+        minDbm = maxDbm - kMaxDisplayRangeDb;
+    }
+    if (maxDbm - minDbm < kMinDisplayRangeDb) {
+        maxDbm = std::min(kMaxDisplayDbm, minDbm + kMinDisplayRangeDb);
+        minDbm = std::min(minDbm, maxDbm - kMinDisplayRangeDb);
+        minDbm = std::max(minDbm, kMinDisplayDbm);
+    }
+    return true;
 }
 
 static Qt::CursorShape normalizedSpectrumCursorShape(Qt::CursorShape shape)
@@ -3996,9 +4055,12 @@ void SpectrumWidget::setDbmRange(float minDbm, float maxDbm)
 
 void SpectrumWidget::applyDbmRangeImmediate(float minDbm, float maxDbm)
 {
-    const float clampedMinDbm = std::max(minDbm, kMinDisplayDbm);
+    if (!clampDbmRange(minDbm, maxDbm)) {
+        return;
+    }
+    const float clampedMinDbm = minDbm;
     float ref = maxDbm;
-    float dyn = std::max(10.0f, maxDbm - clampedMinDbm);
+    float dyn = maxDbm - clampedMinDbm;
     if (ref == m_refLevel && dyn == m_dynamicRange) {
         clearDbmReleaseRebase();
         return;
@@ -4833,8 +4895,8 @@ const QVector<float>& SpectrumWidget::displaySpectrumBins() const
     return m_kiwiSdrWaterfallActive ? m_kiwiSdrFftTrace : m_smoothed;
 }
 
-QVector<float> SpectrumWidget::buildFftDisplayTrace(const QVector<float>& bins,
-                                                    int targetPoints) const
+const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>& bins,
+                                                           int targetPoints) const
 {
     const int srcCount = bins.size();
     if (srcCount < 2) {
@@ -4843,7 +4905,8 @@ QVector<float> SpectrumWidget::buildFftDisplayTrace(const QVector<float>& bins,
 
     // Display-only spatial smoothing: m_smoothed is temporal, so it reduces
     // frame shimmer but leaves adjacent-bin stair steps intact.
-    QVector<float> displayBins(srcCount);
+    QVector<float>& displayBins = m_fftDisplaySmoothScratch;
+    displayBins.resize(srcCount);
     displayBins[0] = bins[0];
     displayBins[srcCount - 1] = bins[srcCount - 1];
     for (int i = 1; i < srcCount - 1; ++i) {
@@ -4861,7 +4924,8 @@ QVector<float> SpectrumWidget::buildFftDisplayTrace(const QVector<float>& bins,
         return displayBins;
     }
 
-    QVector<float> trace(dstCount);
+    QVector<float>& trace = m_fftDisplayTraceScratch;
+    trace.resize(dstCount);
     const double srcLast = static_cast<double>(srcCount - 1);
     const double dstLast = static_cast<double>(dstCount - 1);
     for (int dst = 0; dst < dstCount; ++dst) {
@@ -5378,9 +5442,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             if (controlClick) {
                 m_draggingDbmRange = true;
                 m_dbmDragStartY = y;
+                float startMinDbm = m_refLevel - m_dynamicRange;
+                float startMaxDbm = m_refLevel;
+                if (clampDbmRange(startMinDbm, startMaxDbm)) {
+                    m_refLevel = startMaxDbm;
+                    m_dynamicRange = startMaxDbm - startMinDbm;
+                }
                 m_dbmDragStartRef = m_refLevel;
                 m_dbmDragStartRange = m_dynamicRange;
-                m_dbmDragStartBottom = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
+                m_dbmDragStartBottom =
+                    clampDbmBottom(m_refLevel - m_dynamicRange);
                 setSpectrumCursor(Qt::SizeVerCursor);
                 ev->accept();
                 return;
@@ -5389,19 +5460,13 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             if (primaryClick) {
                 // Arrow row (side by side: left = up, right = down)
                 if (y < DBM_ARROW_H) {
-                    const float bottom = std::max(m_refLevel - m_dynamicRange, kMinDisplayDbm);
-                    if (mx < stripX + DBM_STRIP_W / 2) {
-                        // Up arrow: raise ref level by 10 dB, keep bottom fixed
-                        m_refLevel += 10.0f;
-                    } else {
-                        // Down arrow: lower ref level by 10 dB, keep bottom fixed
-                        m_refLevel -= 10.0f;
-                    }
-                    m_dynamicRange = m_refLevel - bottom;
-                    if (m_dynamicRange < 10.0f) {
-                        m_dynamicRange = 10.0f;
-                        m_refLevel = bottom + m_dynamicRange;
-                    }
+                    const float bottom =
+                        clampDbmBottom(m_refLevel - m_dynamicRange);
+                    const float requestedRef =
+                        m_refLevel + ((mx < stripX + DBM_STRIP_W / 2) ? 10.0f : -10.0f);
+                    m_dynamicRange =
+                        clampDbmRangeForBottom(bottom, requestedRef - bottom);
+                    m_refLevel = bottom + m_dynamicRange;
                     markOverlayDirty();
                     refreshNoiseFloorTarget(true, true);
                     emit dbmRangeChangeRequested(bottom, m_refLevel);
@@ -5411,6 +5476,12 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 // Below arrows: start dBm drag (pan reference)
                 m_draggingDbm = true;
                 m_dbmDragStartY = y;
+                float startMinDbm = m_refLevel - m_dynamicRange;
+                float startMaxDbm = m_refLevel;
+                if (clampDbmRange(startMinDbm, startMaxDbm)) {
+                    m_refLevel = startMaxDbm;
+                    m_dynamicRange = startMaxDbm - startMinDbm;
+                }
                 m_dbmDragStartRef = m_refLevel;
                 setSpectrumCursor(Qt::SizeVerCursor);
                 ev->accept();
@@ -6052,7 +6123,9 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const int dragHeight = std::max(1, specH);
         const int dy = m_dbmDragStartY - y;
         const float deltaDb = (static_cast<float>(dy) / dragHeight) * m_dbmDragStartRange;
-        m_dynamicRange = std::max(10.0f, m_dbmDragStartRange + deltaDb);
+        m_dynamicRange =
+            clampDbmRangeForBottom(m_dbmDragStartBottom,
+                                   m_dbmDragStartRange + deltaDb);
         m_refLevel = m_dbmDragStartBottom + m_dynamicRange;
         markOverlayDirty();
         ev->accept();
@@ -6065,7 +6138,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         // Convert pixel drag to dB: full FFT height = full dynamic range
         const float deltaDb = (static_cast<float>(dy) / dragHeight) * m_dynamicRange;
         m_refLevel = m_dbmDragStartRef + deltaDb;
-        m_refLevel = std::max(m_refLevel, kMinDisplayDbm + m_dynamicRange);
+        m_refLevel = clampDbmRefForRange(m_refLevel, m_dynamicRange);
         markOverlayDirty();
         ev->accept();
         return;
@@ -6379,13 +6452,24 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     if (m_draggingDbm || m_draggingDbmRange) {
         const float oldMinDbm = m_draggingDbmRange
             ? m_dbmDragStartBottom
-            : std::max(m_dbmDragStartRef - m_dynamicRange, kMinDisplayDbm);
+            : clampDbmBottom(m_dbmDragStartRef - m_dynamicRange);
         const float oldMaxDbm = m_dbmDragStartRef;
+        float pendingMinDbm = m_refLevel - m_dynamicRange;
+        float pendingMaxDbm = m_refLevel;
+        if (!clampDbmRange(pendingMinDbm, pendingMaxDbm)) {
+            m_draggingDbm = false;
+            m_draggingDbmRange = false;
+            setSpectrumCursor(Qt::CrossCursor);
+            ev->accept();
+            return;
+        }
+        m_refLevel = pendingMaxDbm;
+        m_dynamicRange = pendingMaxDbm - pendingMinDbm;
         m_pendingDbmRangeEcho = true;
         m_pendingDbmRangeEchoFromAutoFloor = false;
         m_pendingDbmRangeEchoStartMs = QDateTime::currentMSecsSinceEpoch();
-        m_pendingMinDbm = m_refLevel - m_dynamicRange;
-        m_pendingMaxDbm = m_refLevel;
+        m_pendingMinDbm = pendingMinDbm;
+        m_pendingMaxDbm = pendingMaxDbm;
         m_dbmReleasePreviewOldMinDbm = oldMinDbm;
         m_dbmReleasePreviewOldMaxDbm = oldMaxDbm;
         m_dbmReleasePreviewNewMinDbm = m_pendingMinDbm;
@@ -7897,7 +7981,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         repositionVfoFlags(specRect);
 
         // Generate FFT spectrum vertices with baked colors
-        const QVector<float> fftBins =
+        const QVector<float>& fftBins =
             buildFftDisplayTrace(displaySpectrumBins(),
                                  qMax(2, specRect.width() * kFftDisplayOversample));
         const int n = qMin(fftBins.size(), kMaxFftBins);
@@ -8082,8 +8166,10 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 }
             }
 
-            batch->updateDynamicBuffer(m_fftLineVbo, 0,
-                n * 4 * kFftVertStride * sizeof(float), lineVerts.constData());
+            if (m_fftLineWidth > 0.0f) {
+                batch->updateDynamicBuffer(m_fftLineVbo, 0,
+                    n * 4 * kFftVertStride * sizeof(float), lineVerts.constData());
+            }
             batch->updateDynamicBuffer(m_fftFillVbo, 0,
                 n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
         }
@@ -8701,7 +8787,7 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
 
 void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 {
-    const QVector<float> fftBins =
+    const QVector<float>& fftBins =
         buildFftDisplayTrace(displaySpectrumBins(),
                              qMax(2, r.width() * kFftDisplayOversample));
     if (fftBins.isEmpty()) {
