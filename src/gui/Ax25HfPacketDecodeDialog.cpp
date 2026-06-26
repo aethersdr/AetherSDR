@@ -3074,10 +3074,10 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
     // and "aprsSvc" + "Wx…" spells "…svcWX…" → a false "cwx" hit that would block
     // the (RX-only) weather entry. The spelled-out prefix avoids that collision.
     static const AprsServiceEntry kAprsServices[] = {
-        {"SMS", "SMSGTE — text an SMS to a phone", "aprsServiceSmsgte",
-         "SMSGTE", "@",
-         "SMSGTE: \"@<10-digit-number> <message>\" (~67 chars). Replies return as "
-         "APRS. Register an alias with \"#mynumber add <number>\" to save text."},
+        {"SMS", "SMS — text an SMS to a phone", "aprsServiceSms",
+         "SMS", "@",
+         "SMS (NA7Q gateway): \"@<10-digit-number> <message>\" (~67 chars). Replies "
+         "return as APRS. Make an alias with \"#alias #add <name> <number>\"."},
         {"Email", "EMAIL-2 — send an email", "aprsServiceEmail2",
          "EMAIL-2", "",
          "EMAIL-2: \"<email@address> <message>\" (~67 chars). Send your own address "
