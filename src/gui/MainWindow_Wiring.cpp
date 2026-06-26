@@ -2316,6 +2316,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         sw->setFftFps(25);
         sw->setFftFillAlpha(0.70f);
         sw->setFftFillColor(QColor(0x00, 0xe5, 0xff));
+        sw->setFftLineWidth(2.0f);
         sw->setFftWeightedAvg(false);
         sw->setFftHeatMap(true);
         sw->setWfColorScheme(0);
@@ -2366,6 +2367,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("DisplayFftFps"),              "25");
         s.setValue(sw->settingsKey("DisplayFftFillAlpha"),        "0.70");
         s.setValue(sw->settingsKey("DisplayFftFillColor"),        "#00e5ff");
+        s.setValue(sw->settingsKey("DisplayFftLineWidth"),        "2.0");
         s.setValue(sw->settingsKey("DisplayFftWeightedAvg"),      "False");
         s.setValue(sw->settingsKey("DisplayFftHeatMap"),          "True");
         s.setValue(sw->settingsKey("DisplayWfColorScheme"),       "0");
@@ -2388,7 +2390,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
 
         // Sync all Display panel UI controls
         menu->syncDisplaySettings(0, 25, 70, false, QColor(0x00, 0xe5, 0xff),
-                                  50, 15, true, 50, 100, 75, false, true, 0);
+                                  50, 15, true, 50, 100, 75, false, true, 0,
+                                  true, 2.0f, false);
         menu->syncExtraDisplaySettings(false, 1.15f, 80, 0,
                                        QColor(0x0a, 0x0a, 0x14));
     });

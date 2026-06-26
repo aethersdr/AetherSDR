@@ -315,7 +315,16 @@ constexpr int kDefaultPanXpixels = 1024;
 constexpr int kDefaultPanYpixels = 700;
 constexpr int kMinPanXpixels = 100;
 constexpr int kMinPanYpixels = 20;
-constexpr int kMinRadioPanYpixels = 100;
+constexpr int kMaxRadioPanPixels = 8192;
+
+int radioPixelsFor(const SpectrumWidget* spectrum, int logicalPixels)
+{
+    const double ratio = spectrum ? spectrum->devicePixelRatioF() : 1.0;
+    const double dpr = std::isfinite(ratio) && ratio > 0.0 ? ratio : 1.0;
+    return std::clamp(static_cast<int>(std::lround(logicalPixels * dpr)),
+                      1,
+                      kMaxRadioPanPixels);
+}
 } // namespace
 
 int panXpixelsFor(const SpectrumWidget* spectrum)
@@ -323,7 +332,7 @@ int panXpixelsFor(const SpectrumWidget* spectrum)
     if (!spectrum || spectrum->width() < kMinPanXpixels) {
         return kDefaultPanXpixels;
     }
-    return spectrum->width();
+    return radioPixelsFor(spectrum, spectrum->width());
 }
 
 int panYpixelsFor(const SpectrumWidget* spectrum)
@@ -336,7 +345,10 @@ int panYpixelsFor(const SpectrumWidget* spectrum)
     if (ypix < kMinPanYpixels) {
         return kDefaultPanYpixels;
     }
-    return std::max(ypix, kMinRadioPanYpixels);
+    // FFT bins arrive as radio-encoded pixel positions, not full-precision dBm
+    // samples. Request render-device pixels and keep the historical 700 px
+    // floor so zoomed traces have sub-screen-pixel precision.
+    return std::max(radioPixelsFor(spectrum, ypix), kDefaultPanYpixels);
 }
 
 bool panPixelDimensionsReady(const SpectrumWidget* spectrum)

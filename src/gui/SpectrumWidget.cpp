@@ -84,6 +84,12 @@ static constexpr float kDbmReleasePreviewChangeThresholdDb = 0.05f;
 static constexpr float kDbmReleaseRebaseMinImprovementDb = 0.75f;
 static constexpr int kFilterEdgeGrabPx = 8;
 static constexpr int kFilterPassbandMinBodyPx = 6;
+static constexpr int kMaxFftDisplayTracePoints = 8192;
+static constexpr int kFftDisplayOversample = 4;
+static constexpr float kFftDisplaySpatialSmoothBlend = 0.75f;
+static constexpr float kFftLineFeatherPx = 1.0f;
+static constexpr float kFftLineFeatherAlpha = 0.22f;
+static constexpr float kFftLineCoreAlpha = 0.90f;
 static constexpr const char* kSliceCursorOverrideActiveProperty =
     "_aetherSliceCursorOverrideActive";
 static constexpr const char* kSliceCursorOverrideHadCursorProperty =
@@ -203,6 +209,19 @@ static constexpr int ratePercentToLineDuration(int ratePercent)
     return std::clamp(ratePercent,
                       kWaterfallRatePercentMin,
                       kWaterfallRatePercentMax);
+}
+
+static float clampedCatmullRom(float p0, float p1, float p2, float p3, float t)
+{
+    const float t2 = t * t;
+    const float t3 = t2 * t;
+    const float value = 0.5f * ((2.0f * p1)
+        + (-p0 + p2) * t
+        + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2
+        + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+    const float lo = std::min(p1, p2);
+    const float hi = std::max(p1, p2);
+    return std::clamp(value, lo, hi);
 }
 
 static_assert(ratePercentToLineDuration(1) == 1);
@@ -742,6 +761,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
             m_bins.clear();
             m_smoothed.clear();
+            m_resetFftSmoothingOnNextFrame = true;
         }
         m_centerMhz = newCenter;
         m_bandwidthMhz = newBw;
@@ -3703,7 +3723,10 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
         if (!keptSpectrum) {
             m_bins.clear();
             m_smoothed.clear();
-            m_wfWriteRow = 0;
+            m_resetFftSmoothingOnNextFrame = true;
+            if (!bwChanged) {
+                m_wfWriteRow = 0;
+            }
         }
         m_centerMhz       = centerMhz;
         m_panCenterTarget = centerMhz;
@@ -4666,6 +4689,55 @@ void SpectrumWidget::clearKiwiSdrWaterfallRowsForProfile(const QString& profileI
 const QVector<float>& SpectrumWidget::displaySpectrumBins() const
 {
     return m_kiwiSdrWaterfallActive ? m_kiwiSdrFftTrace : m_smoothed;
+}
+
+QVector<float> SpectrumWidget::buildFftDisplayTrace(const QVector<float>& bins,
+                                                    int targetPoints) const
+{
+    const int srcCount = bins.size();
+    if (srcCount < 2) {
+        return bins;
+    }
+
+    // Display-only spatial smoothing: m_smoothed is temporal, so it reduces
+    // frame shimmer but leaves adjacent-bin stair steps intact.
+    QVector<float> displayBins(srcCount);
+    displayBins[0] = bins[0];
+    displayBins[srcCount - 1] = bins[srcCount - 1];
+    for (int i = 1; i < srcCount - 1; ++i) {
+        const float localSmooth = (i >= 2 && i + 2 < srcCount)
+            ? (bins[i - 2] + 4.0f * bins[i - 1] + 6.0f * bins[i]
+               + 4.0f * bins[i + 1] + bins[i + 2]) * 0.0625f
+            : (bins[i - 1] + 2.0f * bins[i] + bins[i + 1]) * 0.25f;
+        displayBins[i] = bins[i] * (1.0f - kFftDisplaySpatialSmoothBlend)
+            + localSmooth * kFftDisplaySpatialSmoothBlend;
+    }
+
+    int dstCount = std::max(targetPoints, srcCount);
+    dstCount = std::clamp(dstCount, 2, kMaxFftDisplayTracePoints);
+    if (dstCount == srcCount) {
+        return displayBins;
+    }
+
+    QVector<float> trace(dstCount);
+    const double srcLast = static_cast<double>(srcCount - 1);
+    const double dstLast = static_cast<double>(dstCount - 1);
+    for (int dst = 0; dst < dstCount; ++dst) {
+        const double srcPos = static_cast<double>(dst) * srcLast / dstLast;
+        const int i1 = std::min(static_cast<int>(std::floor(srcPos)), srcCount - 1);
+        if (i1 >= srcCount - 1) {
+            trace[dst] = displayBins.constLast();
+            continue;
+        }
+
+        const float t = static_cast<float>(srcPos - static_cast<double>(i1));
+        const float p0 = displayBins[std::max(i1 - 1, 0)];
+        const float p1 = displayBins[i1];
+        const float p2 = displayBins[i1 + 1];
+        const float p3 = displayBins[std::min(i1 + 2, srcCount - 1)];
+        trace[dst] = clampedCatmullRom(p0, p1, p2, p3, t);
+    }
+    return trace;
 }
 
 const QVector<float>& SpectrumWidget::noiseFloorAutoLevelBins() const
@@ -5808,6 +5880,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, zoomCenter, newBw)) {
             m_bins.clear();
             m_smoothed.clear();
+            m_resetFftSmoothingOnNextFrame = true;
         }
         m_bandwidthMhz = newBw;
         m_centerMhz = zoomCenter;
@@ -6368,6 +6441,7 @@ bool SpectrumWidget::event(QEvent* ev)
             if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
                 m_bins.clear();
                 m_smoothed.clear();
+                m_resetFftSmoothingOnNextFrame = true;
             }
             m_bandwidthMhz = newBw;
             m_centerMhz = newCenter;
@@ -6535,6 +6609,7 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
         if (!reprojectSpectrum(m_centerMhz, m_bandwidthMhz, newCenter, newBw)) {
             m_bins.clear();
             m_smoothed.clear();
+            m_resetFftSmoothingOnNextFrame = true;
         }
         m_centerMhz    = newCenter;
         m_bandwidthMhz = newBw;
@@ -7026,9 +7101,10 @@ void SpectrumWidget::initSpectrumPipeline()
 {
     QRhi* r = rhi();
 
-    // Dynamic vertex buffers: 2N × 6 floats for triangle strip line expansion
+    // Dynamic vertex buffers: two 2N triangle-strip line passes (feather + core)
+    // and one 2N triangle-strip fill.
     m_fftLineVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
-                                 kMaxFftBins * 2 * kFftVertStride * sizeof(float));
+                                 kMaxFftBins * 4 * kFftVertStride * sizeof(float));
     m_fftLineVbo->create();
 
     m_fftFillVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
@@ -7048,10 +7124,11 @@ void SpectrumWidget::initSpectrumPipeline()
     }
 
     QRhiVertexInputLayout layout;
-    layout.setBindings({{kFftVertStride * sizeof(float)}});  // stride: 6 floats
+    layout.setBindings({{kFftVertStride * sizeof(float)}});  // stride: 7 floats
     layout.setAttributes({
         {0, 0, QRhiVertexInputAttribute::Float2, 0},                     // position
         {0, 1, QRhiVertexInputAttribute::Float4, 2 * sizeof(float)},     // color
+        {0, 2, QRhiVertexInputAttribute::Float,  6 * sizeof(float)},     // edge
     });
 
     QRhiGraphicsPipeline::TargetBlend blend;
@@ -7184,6 +7261,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const int wfH = h - wfY;
     const QRect specRect(0, 0, w, specH);
     const QRect wfRect(0, wfY, w, wfH);
+    int fftTracePointCount = 0;
+    int fftLineStripVertexCount = 0;
 
     // Detect display state changes that may bypass markOverlayDirty()
     {
@@ -7550,11 +7629,14 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         repositionVfoFlags(specRect);
 
         // Generate FFT spectrum vertices with baked colors
-        const QVector<float>& fftBins = displaySpectrumBins();
+        const QVector<float> fftBins =
+            buildFftDisplayTrace(displaySpectrumBins(),
+                                 qMax(2, specRect.width() * kFftDisplayOversample));
         const int n = qMin(fftBins.size(), kMaxFftBins);
         // n >= 2 also guards the 1/(n-1) position step and the central-difference
         // normal (pts[i±1]) below against a degenerate 1-bin spectrum.
         if (n >= 2 && m_fftLineVbo && m_fftFillVbo) {
+            fftTracePointCount = n;
             const float minDbm = m_refLevel - m_dynamicRange;
             const float maxDbm = m_refLevel;
             const float range = maxDbm - minDbm;
@@ -7589,13 +7671,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                 out[3] = topAlpha + gt * (botAlpha - topAlpha);
             };
 
-            // Line vertices: 2N × (x, y, r, g, b, a) — triangle strip expansion
-            // for variable-width lines on GPU (LineStrip is fixed at 1px).
-            // Reused member scratch; resize() keeps capacity so steady state is
-            // alloc-free (no per-frame heap churn on the GUI thread).
-            m_fftLineScratch.resize(n * 2 * kFftVertStride);
+            // Line vertices: two 2N triangle strips. The first is a faint,
+            // wider feather that softens QRhi triangle edges on steep peaks;
+            // the second is the normal core line.
+            fftLineStripVertexCount = n * 2;
+            m_fftLineScratch.resize(n * 4 * kFftVertStride);
             QVector<float>& lineVerts = m_fftLineScratch;
-            // Fill vertices: 2N × (x, y, r, g, b, a)
+            // Fill vertices: 2N × (x, y, r, g, b, a, edge)
             m_fftFillScratch.resize(n * 2 * kFftVertStride);
             QVector<float>& fillVerts = m_fftFillScratch;
 
@@ -7614,94 +7696,126 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // so the normal almost always points along Y; using a single
             // NDC half-width based on width() collapses the offset to a
             // sub-pixel value once specH is much smaller than width().
-            const float wPx = static_cast<float>(qMax(1, width()));
-            const float hPx = static_cast<float>(qMax(1, specH));
+            const QSize framePixelSize = renderTarget()->pixelSize();
+            const float frameDpr =
+                static_cast<float>(framePixelSize.width()) / static_cast<float>(qMax(1, width()));
+            const float wPx = static_cast<float>(qMax(1, specRect.width())) * frameDpr;
+            const float hPx = static_cast<float>(qMax(1, specH)) * frameDpr;
 
-            for (int i = 0; i < n; ++i) {
-                float t = qBound(0.0f, (fftBins[i] - minDbm) / range, 1.0f);
-
-                // Compute perpendicular normal from adjacent points
-                float dx, dy;
-                if (i == 0) {
-                    dx = pts[1].x - pts[0].x;
-                    dy = pts[1].y - pts[0].y;
-                } else if (i == n - 1) {
-                    dx = pts[n-1].x - pts[n-2].x;
-                    dy = pts[n-1].y - pts[n-2].y;
-                } else {
-                    dx = pts[i+1].x - pts[i-1].x;
-                    dy = pts[i+1].y - pts[i-1].y;
-                }
-                const float dxPx = dx * wPx * 0.5f;
-                const float dyPx = dy * hPx * 0.5f;
-                float lenPx = std::sqrt(dxPx * dxPx + dyPx * dyPx);
-                if (lenPx < 1e-8f) lenPx = 1e-8f;
-                const float nxPx = -dyPx / lenPx * m_fftLineWidth;
-                const float nyPx =  dxPx / lenPx * m_fftLineWidth;
-                const float nx = nxPx * 2.0f / wPx;
-                const float ny = nyPx * 2.0f / hPx;
-
-                // Per-vertex color
-                float cr, cg, cb2;
+            auto heatColorComponents = [this, fr, fg, fb](float t,
+                                                          float* cr,
+                                                          float* cg,
+                                                          float* cb2) {
                 if (m_fftHeatMap) {
                     if (t < 0.25f) {
-                        float s = t / 0.25f;
-                        cr = 0.0f; cg = s; cb2 = 1.0f;
+                        const float s = t / 0.25f;
+                        *cr = 0.0f; *cg = s; *cb2 = 1.0f;
                     } else if (t < 0.5f) {
-                        float s = (t - 0.25f) / 0.25f;
-                        cr = 0.0f; cg = 1.0f; cb2 = 1.0f - s;
+                        const float s = (t - 0.25f) / 0.25f;
+                        *cr = 0.0f; *cg = 1.0f; *cb2 = 1.0f - s;
                     } else if (t < 0.75f) {
-                        float s = (t - 0.5f) / 0.25f;
-                        cr = s; cg = 1.0f; cb2 = 0.0f;
+                        const float s = (t - 0.5f) / 0.25f;
+                        *cr = s; *cg = 1.0f; *cb2 = 0.0f;
                     } else {
-                        float s = (t - 0.75f) / 0.25f;
-                        cr = 1.0f; cg = 1.0f - s; cb2 = 0.0f;
+                        const float s = (t - 0.75f) / 0.25f;
+                        *cr = 1.0f; *cg = 1.0f - s; *cb2 = 0.0f;
                     }
                 } else {
-                    cr = fr; cg = fg; cb2 = fb;
+                    *cr = fr; *cg = fg; *cb2 = fb;
                 }
+            };
 
-                // Two vertices per point: offset ± normal
-                int li = i * 2 * kFftVertStride;
-                lineVerts[li]     = pts[i].x + nx;
-                lineVerts[li + 1] = pts[i].y + ny;
+            auto writeLineVertex = [&](int vertexIndex, const FftScratchPt& pt,
+                                       float offsetX, float offsetY,
+                                       float t, float alpha, float edge) {
+                float cr, cg, cb2;
+                heatColorComponents(t, &cr, &cg, &cb2);
+                const int li = vertexIndex * kFftVertStride;
+                lineVerts[li]     = pt.x + offsetX;
+                lineVerts[li + 1] = pt.y + offsetY;
                 lineVerts[li + 2] = cr;
                 lineVerts[li + 3] = cg;
                 lineVerts[li + 4] = cb2;
-                lineVerts[li + 5] = 0.9f;
-                lineVerts[li + 6]  = pts[i].x - nx;
-                lineVerts[li + 7]  = pts[i].y - ny;
-                lineVerts[li + 8]  = cr;
-                lineVerts[li + 9]  = cg;
-                lineVerts[li + 10] = cb2;
-                lineVerts[li + 11] = 0.9f;
+                lineVerts[li + 5] = alpha;
+                lineVerts[li + 6] = edge;
+            };
 
-                // Fill vertices
-                int fi = i * 2 * kFftVertStride;
-                fillVerts[fi]     = pts[i].x;
-                fillVerts[fi + 1] = pts[i].y;
-                fillVerts[fi + 6] = pts[i].x;
-                fillVerts[fi + 7] = yBot;
+            auto writeLineStrip = [&](int stripIndex, float halfWidthPx, float alpha) {
+                for (int i = 0; i < n; ++i) {
+                    const float t = qBound(0.0f, (fftBins[i] - minDbm) / range, 1.0f);
+
+                    // Compute perpendicular normal from adjacent points.
+                    float dx, dy;
+                    if (i == 0) {
+                        dx = pts[1].x - pts[0].x;
+                        dy = pts[1].y - pts[0].y;
+                    } else if (i == n - 1) {
+                        dx = pts[n - 1].x - pts[n - 2].x;
+                        dy = pts[n - 1].y - pts[n - 2].y;
+                    } else {
+                        dx = pts[i + 1].x - pts[i - 1].x;
+                        dy = pts[i + 1].y - pts[i - 1].y;
+                    }
+                    const float dxPx = dx * wPx * 0.5f;
+                    const float dyPx = dy * hPx * 0.5f;
+                    float lenPx = std::sqrt(dxPx * dxPx + dyPx * dyPx);
+                    if (lenPx < 1e-8f) {
+                        lenPx = 1e-8f;
+                    }
+                    const float nxPx = -dyPx / lenPx * halfWidthPx;
+                    const float nyPx =  dxPx / lenPx * halfWidthPx;
+                    const float nx = nxPx * 2.0f / wPx;
+                    const float ny = nyPx * 2.0f / hPx;
+
+                    const int baseVertex = stripIndex * fftLineStripVertexCount + i * 2;
+                    writeLineVertex(baseVertex, pts[i], nx, ny, t, alpha, 1.0f);
+                    writeLineVertex(baseVertex + 1, pts[i], -nx, -ny, t, alpha, -1.0f);
+                }
+            };
+
+            auto writeFillVertex = [&](int vertexIndex, float x, float y,
+                                       float cr, float cg, float cb2, float alpha) {
+                const int fi = vertexIndex * kFftVertStride;
+                fillVerts[fi]     = x;
+                fillVerts[fi + 1] = y;
+                fillVerts[fi + 2] = cr;
+                fillVerts[fi + 3] = cg;
+                fillVerts[fi + 4] = cb2;
+                fillVerts[fi + 5] = alpha;
+                fillVerts[fi + 6] = 0.0f;
+            };
+
+            if (m_fftLineWidth > 0.0f) {
+                writeLineStrip(0, m_fftLineWidth + kFftLineFeatherPx, kFftLineFeatherAlpha);
+                writeLineStrip(1, m_fftLineWidth, kFftLineCoreAlpha);
+            }
+
+            for (int i = 0; i < n; ++i) {
+                const float t = qBound(0.0f, (fftBins[i] - minDbm) / range, 1.0f);
+
+                float cr, cg, cb2;
+                heatColorComponents(t, &cr, &cg, &cb2);
 
                 if (m_fftHeatMap) {
                     // Heatmap: line color at top, fade to dark blue at base
-                    fillVerts[fi + 2] = cr;
-                    fillVerts[fi + 3] = cg;
-                    fillVerts[fi + 4] = cb2;
-                    fillVerts[fi + 5] = fa * 0.3f;
-                    fillVerts[fi + 8]  = 0.0f;
-                    fillVerts[fi + 9]  = 0.0f;
-                    fillVerts[fi + 10] = 0.3f;
-                    fillVerts[fi + 11] = fa;
+                    writeFillVertex(i * 2, pts[i].x, pts[i].y, cr, cg, cb2, fa * 0.3f);
+                    writeFillVertex(i * 2 + 1, pts[i].x, yBot, 0.0f, 0.0f, 0.3f, fa);
                 } else {
                     // Solid: Y-based gradient (bright at line, dark+faint at base)
-                    yColor(pts[i].y, &fillVerts[fi + 2]);
-                    yColor(yBot, &fillVerts[fi + 8]);
+                    float topColor[4];
+                    float bottomColor[4];
+                    yColor(pts[i].y, topColor);
+                    yColor(yBot, bottomColor);
+                    writeFillVertex(i * 2, pts[i].x, pts[i].y,
+                                    topColor[0], topColor[1], topColor[2], topColor[3]);
+                    writeFillVertex(i * 2 + 1, pts[i].x, yBot,
+                                    bottomColor[0], bottomColor[1], bottomColor[2],
+                                    bottomColor[3]);
                 }
             }
 
             batch->updateDynamicBuffer(m_fftLineVbo, 0,
-                n * 2 * kFftVertStride * sizeof(float), lineVerts.constData());
+                n * 4 * kFftVertStride * sizeof(float), lineVerts.constData());
             batch->updateDynamicBuffer(m_fftFillVbo, 0,
                 n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
         }
@@ -7748,9 +7862,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     }
 
     // Draw FFT spectrum — viewport restricted to spectrum rect
-    const QVector<float>& fftDrawBins = displaySpectrumBins();
-    const int n = qMin(fftDrawBins.size(), kMaxFftBins);
-    if (n >= 2 && m_fftFillPipeline && m_fftLinePipeline) {
+    if (m_fftFillPipeline && m_fftLinePipeline && fftTracePointCount > 0) {
+        const int n = fftTracePointCount;
         float specVpX = static_cast<float>(specRect.x()) * dpr;
         float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         float specVpW = static_cast<float>(specRect.width()) * dpr;
@@ -7772,7 +7885,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             cb->setViewport(specVp);
             const QRhiCommandBuffer::VertexInput lineVbuf(m_fftLineVbo, 0);
             cb->setVertexInput(0, 1, &lineVbuf);
-            cb->draw(n * 2);
+            cb->draw(fftLineStripVertexCount);
+            cb->draw(fftLineStripVertexCount, 1, fftLineStripVertexCount, 0);
         }
     }
 
@@ -8319,7 +8433,9 @@ void SpectrumWidget::drawGrid(QPainter& p, const QRect& r)
 
 void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
 {
-    const QVector<float>& fftBins = displaySpectrumBins();
+    const QVector<float> fftBins =
+        buildFftDisplayTrace(displaySpectrumBins(),
+                             qMax(2, r.width() * kFftDisplayOversample));
     if (fftBins.isEmpty()) {
         p.setPen(AetherSDR::ThemeManager::instance().color("color.accent.dim"));
         p.drawText(r, Qt::AlignCenter, "No panadapter data — waiting for radio stream");
@@ -8350,13 +8466,15 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
     };
 
     // Pre-compute positions and normalized levels
-    struct Pt { int x, y; float t; };
+    struct Pt { float x, y, t; };
     QVector<Pt> pts(n);
     for (int i = 0; i < n; ++i) {
         const float dbm  = fftBins[i];
         const float norm = qBound(0.0f, (m_refLevel - dbm) / m_dynamicRange, 1.0f);
-        pts[i].x = r.left() + static_cast<int>(static_cast<float>(i) / n * w);
-        pts[i].y = r.top()  + qMin(static_cast<int>(norm * h), h - 1);
+        const float xFrac = n > 1 ? static_cast<float>(i) / static_cast<float>(n - 1) : 0.0f;
+        pts[i].x = static_cast<float>(r.left()) + xFrac * static_cast<float>(w);
+        pts[i].y = static_cast<float>(r.top())
+            + qBound(0.0f, norm * static_cast<float>(h), static_cast<float>(h - 1));
         pts[i].t = 1.0f - norm;  // 0=noise floor, 1=strong signal
     }
 
@@ -8369,6 +8487,8 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
     QPen linePen;
     linePen.setCosmetic(true);
     linePen.setWidthF(m_fftLineWidth);
+    linePen.setCapStyle(Qt::RoundCap);
+    linePen.setJoinStyle(Qt::RoundJoin);
 
     if (m_fftHeatMap) {
         // Heat map fill: per-column vertical gradient from heat color at top to dark blue at base
@@ -8376,16 +8496,16 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
         for (int i = 0; i < n - 1; ++i) {
             QPolygonF trapezoid;
             trapezoid << QPointF(pts[i].x, pts[i].y)
-                      << QPointF(pts[i+1].x, pts[i+1].y)
-                      << QPointF(pts[i+1].x, bottom)
+                      << QPointF(pts[i + 1].x, pts[i + 1].y)
+                      << QPointF(pts[i + 1].x, bottom)
                       << QPointF(pts[i].x, bottom);
 
-            float avgT = (pts[i].t + pts[i+1].t) * 0.5f;
+            float avgT = (pts[i].t + pts[i + 1].t) * 0.5f;
             QColor top = heatColor(avgT);
             const float swFillAlpha = m_leanMode ? 0.0f : m_fftFillAlpha;
             top.setAlphaF(swFillAlpha * 0.3f);
             QColor bot(0, 0, 77, static_cast<int>(255 * swFillAlpha));
-            QLinearGradient grad(0, qMin(pts[i].y, pts[i+1].y), 0, bottom);
+            QLinearGradient grad(0, std::min(pts[i].y, pts[i + 1].y), 0, bottom);
             grad.setColorAt(0.0, top);
             grad.setColorAt(1.0, bot);
             p.setPen(Qt::NoPen);
@@ -8396,10 +8516,11 @@ void SpectrumWidget::drawSpectrum(QPainter& p, const QRect& r)
         // Heat map line: per-segment coloring
         if (drawLine) {
             for (int i = 0; i < n - 1; ++i) {
-                float avgT = (pts[i].t + pts[i+1].t) * 0.5f;
+                float avgT = (pts[i].t + pts[i + 1].t) * 0.5f;
                 linePen.setColor(heatColor(avgT));
                 p.setPen(linePen);
-                p.drawLine(pts[i].x, pts[i].y, pts[i+1].x, pts[i+1].y);
+                p.drawLine(QPointF(pts[i].x, pts[i].y),
+                           QPointF(pts[i + 1].x, pts[i + 1].y));
             }
         }
     } else {

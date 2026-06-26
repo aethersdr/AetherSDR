@@ -739,6 +739,8 @@ private:
     QVector<float> smoothKiwiSdrWaterfallBins(const QVector<float>& bins);
     void updateKiwiSdrAutoColorRange(const QVector<float>& bins);
     const QVector<float>& displaySpectrumBins() const;
+    QVector<float> buildFftDisplayTrace(const QVector<float>& bins,
+                                        int targetPoints) const;
     const QVector<float>& noiseFloorAutoLevelBins() const;
 
     void pushWaterfallRow(const QVector<float>& bins, int destWidth,
@@ -1262,12 +1264,12 @@ private:
     QRhiGraphicsPipeline* m_fftLinePipeline{nullptr};
     QRhiGraphicsPipeline* m_fftFillPipeline{nullptr};
     QRhiShaderResourceBindings* m_fftSrb{nullptr};
-    QRhiBuffer* m_fftLineVbo{nullptr};    // dynamic, N × (vec2 pos + vec4 color)
-    QRhiBuffer* m_fftFillVbo{nullptr};    // dynamic, 2N × (vec2 pos + vec4 color)
+    QRhiBuffer* m_fftLineVbo{nullptr};    // dynamic, feather + core line strips
+    QRhiBuffer* m_fftFillVbo{nullptr};    // dynamic, 2N × (vec2 pos + vec4 color + edge)
     static constexpr int kMaxFftBins = 8192;
-    static constexpr int kFftVertStride = 6; // x, y, r, g, b, a
+    static constexpr int kFftVertStride = 7; // x, y, r, g, b, a, edge
     // Reused per-frame scratch for GPU FFT-trace vertex generation — avoids a
-    // heap (re)alloc of up to 2*kMaxFftBins*kFftVertStride floats every frame on
+    // heap (re)alloc of up to 4*kMaxFftBins*kFftVertStride floats every frame on
     // the GUI thread (renderGpuFrame). resize() keeps capacity, so steady state
     // is alloc-free.
     struct FftScratchPt { float x, y; };

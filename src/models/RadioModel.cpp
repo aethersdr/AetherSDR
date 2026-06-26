@@ -29,7 +29,6 @@ namespace AetherSDR {
 
 namespace {
 
-constexpr int kMinFftDecodeYpixels = 2;
 constexpr int kDefaultPanDimensionThreshold = 100;
 constexpr int kSessionRestorePruneDelayMs = 5000;
 constexpr int kWaterfallLineDurationMinMs = 1;
@@ -5432,17 +5431,14 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
         }
         emit panadapterLevelChanged(minDbm, maxDbm);
     }
-    // Track ypixels from radio status — the radio encodes FFT bins as pixel
-    // Y positions (0..ypixels-1), so PanadapterStream needs this for dBm conversion.
-    // Also detect when the radio resets to default dimensions (e.g. after profile
-    // load) and re-request correct dimensions from MainWindow.
+    // Track usable ypixels from radio status — the radio encodes FFT bins as
+    // pixel Y positions (0..ypixels-1), so PanadapterStream needs this for dBm
+    // conversion. Tiny default/reset values are handled below by re-pushing the
+    // real widget dimensions; do not feed them to the decoder or most FFT bins
+    // clamp into a flat floor until the next dimensions echo.
     if (kvs.contains("y_pixels") && pan && panMatchedById) {
         const int yPix = kvs["y_pixels"].toInt();
-        if (yPix >= kMinFftDecodeYpixels) {
-            // Profile recall can temporarily reset the radio to small default
-            // dimensions. The FFT decoder still needs that exact value because
-            // samples are encoded as radio pixel Y positions; only the dimension
-            // re-push decision below treats small values as unusable long-term.
+        if (yPix > kDefaultPanDimensionThreshold) {
             const bool scaleChanged = pan->setFftYPixels(yPix);
             m_panStream->setYPixels(pan->panStreamId(), yPix);
             if (scaleChanged) {

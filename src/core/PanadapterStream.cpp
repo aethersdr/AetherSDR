@@ -839,7 +839,25 @@ void PanadapterStream::decodeFFT(const uchar* raw, int totalBytes, bool hasTrail
     const int   count = frame.buf.size();
     QVector<float> bins(count);
 
-    const float yPix = static_cast<float>(std::max(yPixVal, 2));
+    int effectiveYPixels = std::max(yPixVal, 2);
+    int rawMax = 0;
+    int overRangeCount = 0;
+    for (const quint16 rawBin : frame.buf) {
+        const int rawValue = static_cast<int>(rawBin);
+        rawMax = std::max(rawMax, rawValue);
+        if (rawValue >= effectiveYPixels) {
+            ++overRangeCount;
+        }
+    }
+    // A stale/tiny y_pixels status makes normal noise bins clamp to one flat
+    // floor while strong signals still poke through. If the frame itself shows
+    // that the radio is encoding against a taller pixel space, preserve the
+    // trace and let the normal dimension re-push/echo path catch up.
+    if (overRangeCount > std::max(8, count / 8)) {
+        effectiveYPixels = std::max(effectiveYPixels, rawMax + 1);
+    }
+
+    const float yPix = static_cast<float>(effectiveYPixels);
 
     for (int i = 0; i < count; ++i) {
         const float pixel = std::clamp(
