@@ -594,6 +594,38 @@ bool triggerMenuAction(QAction* action, QMenu* menu)
     return true;
 }
 
+// Best-effort: activate `win` so a native popup menu shown as a SIDE EFFECT of a
+// bridge-driven click/trigger has a valid parent QWindow. Headless automation
+// runs the app backgrounded (Role: Background); popping a QMenu while the app is
+// inactive can segfault in QWindow::geometry() on a null window (seen from a
+// QToolButton popup and an AX.25/APRS dialog menu). Raising/activating the
+// window gives Cocoa a realized, active window to anchor the popup to.
+//
+// OFF by default: activateWindow() really does foreground the app, so doing it
+// on every driven click would repeatedly steal focus during a sweep — the
+// opposite of headless. Enable AETHER_AUTOMATION_RAISE=1 when driving flows that
+// pop native menus from a backgrounded instance. Only invoked from the deferred
+// (post-socket-callback) drive path. (#3646 follow-up)
+void raiseWindowForPopup(QWidget* win)
+{
+    static const bool kEnabled = qEnvironmentVariableIsSet("AETHER_AUTOMATION_RAISE");
+    if (!kEnabled || !win || !win->isVisible())
+        return;          // default: no focus-steal; also don't force-show a hidden window
+    win->raise();
+    win->activateWindow();
+}
+
+// The app's primary top-level QMainWindow — menu-bar actions and the dialogs
+// they open belong to it, so it's the window to activate before a menu trigger.
+QWidget* primaryTopLevelWindow()
+{
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    for (QWidget* w : tops)
+        if (qobject_cast<QMainWindow*>(w))
+            return w;
+    return nullptr;
+}
+
 // ---- Model snapshots for get(). Hand-built from existing getters so we don't
 // have to annotate every model field as a Q_PROPERTY; one call returns the full
 // assertable state an agent needs. ----
@@ -1458,7 +1490,12 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             QPointer<QAction> ag = menuAction;
             QPointer<QMenu> mg = menu;
             QTimer::singleShot(0, qApp, [ag, mg]() {
-                if (ag) triggerMenuAction(ag, mg);
+                if (!ag) return;
+                // Activate the main window first so a menu action that opens a
+                // dialog / pops a menu has a valid active window (avoids the
+                // backgrounded null-QWindow popup crash). (#3646 follow-up)
+                raiseWindowForPopup(primaryTopLevelWindow());
+                triggerMenuAction(ag, mg);
             });
             done = true;
             deferred = true;
@@ -1567,8 +1604,13 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             const bool useToggle =
                 action == QLatin1String("toggle") && b->isCheckable();
             QPointer<QAbstractButton> bg = b;
-            QTimer::singleShot(0, qApp, [bg, useToggle]() {
+            QPointer<QWidget> win = b->window();
+            QTimer::singleShot(0, qApp, [bg, win, useToggle]() {
                 if (!bg) return;
+                // Activate the button's window first so a popup menu it raises
+                // has a valid active window (backgrounded automation otherwise
+                // segfaults in QWindow::geometry()). (#3646 follow-up)
+                raiseWindowForPopup(win);
                 if (useToggle) bg->toggle();
                 else           bg->click();
             });
