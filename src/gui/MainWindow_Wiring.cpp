@@ -3221,6 +3221,28 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         ensureAetherDspDialog();
     });
 
+    // Accent the ADSP launcher whenever any client-side NR module is active, so
+    // the reporter's gap — "enable NR4 and nothing on the main surface shows it"
+    // — is closed without opening the applet (#3800). The client modules are
+    // global AudioEngine state, so every slice's ADSP button tracks the same OR
+    // of the six *Enabled() flags. Bound to w so it drops when the slice closes.
+    if (m_audio) {
+        auto syncAetherDsp = [this, w] {
+            if (!m_audio) return;
+            const bool active = m_audio->nr2Enabled() || m_audio->nr4Enabled()
+                             || m_audio->mnrEnabled() || m_audio->bnrEnabled()
+                             || m_audio->dfnrEnabled() || m_audio->rn2Enabled();
+            w->setAetherDspActive(active);
+        };
+        connect(m_audio, &AudioEngine::nr2EnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
+        connect(m_audio, &AudioEngine::nr4EnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
+        connect(m_audio, &AudioEngine::mnrEnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
+        connect(m_audio, &AudioEngine::bnrEnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
+        connect(m_audio, &AudioEngine::dfnrEnabledChanged, w, [syncAetherDsp](bool){ syncAetherDsp(); });
+        connect(m_audio, &AudioEngine::rn2EnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
+        syncAetherDsp();  // apply current state to this freshly-wired slice
+    }
+
     // AetherVoice button on the per-slice DSP tab — toggles the Aetherial
     // Audio Channel Strip, matching the existing menu / chain entry points.
     connect(w, &VfoWidget::aetherVoiceRequested,

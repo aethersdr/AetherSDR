@@ -397,6 +397,12 @@ public:
     void setSmartSdrPlus(bool has);
     void setHasExtendedDsp(bool has);
 
+    // Reflect whether any client-side AetherDSP NR module (NR2 / NR4 / MNR /
+    // BNR / DFNR / RN2) is active by accenting the ADSP launcher, so the cue is
+    // visible on the VFO grid without opening the applet. Driven by MainWindow
+    // from the AudioEngine *EnabledChanged signals. (#3800)
+    void setAetherDspActive(bool active);
+
     // Per-slice VFO marker display prefs, persisted by slice ID (#1526).
     // markerWidth: 0 = off, 1 = 1 px, 3 = 3 px.
     int  markerWidth() const { return m_markerWidth; }
@@ -431,6 +437,7 @@ private:
     QPushButton* m_anftBtn{nullptr};
     QPushButton* m_apfBtn{nullptr};
     QPushButton* m_aetherDspBtn{nullptr};    // launches AetherDSP Settings dialog
+    bool         m_aetherDspActive{false};   // any client NR module on (#3800)
     QPushButton* m_aetherVoiceBtn{nullptr};  // toggles Aetherial Audio Channel Strip
 
     // Shared DSP-level row at the bottom of the DSP grid: one slider whose

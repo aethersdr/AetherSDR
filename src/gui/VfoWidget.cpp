@@ -255,6 +255,15 @@ static const QString kDspToggle =
     "QPushButton:checked { background: #1a6030; color: #ffffff; border: 1px solid #20a040; }"
     "QPushButton:hover { border: 1px solid #0090e0; }";
 
+// Active-accent variant for the non-checkable ADSP launcher: mirrors the
+// green "active" look the radio-side toggles get via :checked, so a client-side
+// NR module being on (NR2 / NR4 / MNR / BNR / DFNR / RN2) is visible on the VFO
+// grid without opening the AetherDSP applet. (#3800)
+static const QString kDspToggleActive =
+    "QPushButton { background: #1a6030; border: 1px solid #20a040; border-radius: 2px; "
+    "color: #ffffff; font-size: 13px; font-weight: bold; padding: 2px 4px; }"
+    "QPushButton:hover { border: 1px solid #0090e0; }";
+
 static const QString kModeBtn =
     "QPushButton { background: #1a2a3a; border: 1px solid #304050; border-radius: 2px; "
     "color: #c8d8e8; font-size: 13px; font-weight: bold; padding: 3px; }"
@@ -1638,6 +1647,7 @@ void VfoWidget::buildTabContent()
         // single-cell width as the radio-side toggles, but non-checkable.
         // Placed by relayoutDspGrid() at the end of the radio-side toggle list.
         m_aetherDspBtn = new QPushButton("ADSP");
+        m_aetherDspBtn->setObjectName("aetherDspBtn");
         m_aetherDspBtn->setCheckable(false);
         m_aetherDspBtn->setMinimumHeight(22);
         m_aetherDspBtn->setStyleSheet(kDspToggle);
@@ -2849,6 +2859,24 @@ void VfoWidget::setSmartSdrPlus(bool has)
 void VfoWidget::setHasExtendedDsp(bool has)
 {
     m_hasExtendedDsp = has;
+}
+
+// Accent the ADSP launcher when any client-side NR module is active (#3800).
+// The client modules (NR2 / NR4 / MNR / BNR / DFNR / RN2) live behind this
+// button, so without a cue here the only way to tell one is on is to reopen the
+// applet. We mirror the green "active" look the radio-side toggles get, and
+// fold the state into the accessible name so screen readers — and the agent
+// automation bridge — can read it without a screenshot.
+void VfoWidget::setAetherDspActive(bool active)
+{
+    if (m_aetherDspActive == active)
+        return;
+    m_aetherDspActive = active;
+    if (!m_aetherDspBtn)
+        return;
+    m_aetherDspBtn->setStyleSheet(active ? kDspToggleActive : kDspToggle);
+    m_aetherDspBtn->setAccessibleName(active ? QStringLiteral("AetherDSP Settings (NR active)")
+                                             : QStringLiteral("AetherDSP Settings"));
 }
 
 // ── Per-slice VFO marker display prefs (#1526) ───────────────────────────────
