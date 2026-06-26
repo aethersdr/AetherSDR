@@ -13,6 +13,11 @@ ContainerWidget::ContainerWidget(const QString& id, const QString& title,
     : QWidget(parent)
     , m_id(id)
 {
+    // objectName mirrors the stable container id ("AG", "AMP", "SS", …) so
+    // the agent automation bridge can scope title-bar controls to a specific
+    // container, e.g. invoke "AG/containerFloatToggle". (#3646)
+    setObjectName(id);
+
     auto* outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
@@ -52,6 +57,7 @@ QWidget* ContainerWidget::setContent(QWidget* content)
 {
     QWidget* previous = m_content;
     if (previous && m_bodyLayout) {
+        restoreWidthPolicy(previous);
         m_bodyLayout->removeWidget(previous);
         previous->setParent(nullptr);
     }
@@ -60,6 +66,7 @@ QWidget* ContainerWidget::setContent(QWidget* content)
         m_content->setParent(m_body);
         m_bodyLayout->addWidget(m_content, 1);
         m_content->show();
+        applyWidthPolicyTo(m_content);
     }
     return previous;
 }
@@ -80,11 +87,13 @@ void ContainerWidget::insertChildWidget(int index, QWidget* child)
         index = m_bodyLayout->count();
     m_bodyLayout->insertWidget(index, child);
     child->show();
+    applyWidthPolicyTo(child);
 }
 
 void ContainerWidget::removeChildWidget(QWidget* child)
 {
     if (!child || !m_bodyLayout) return;
+    restoreWidthPolicy(child);
     m_bodyLayout->removeWidget(child);
     child->setParent(nullptr);
 }
@@ -126,7 +135,38 @@ void ContainerWidget::setDockMode(DockMode mode)
     if (mode == m_dockMode) return;
     m_dockMode = mode;
     if (m_titleBar) m_titleBar->setFloatingState(mode == DockMode::Floating);
+    // Re-apply the width policy to every body child for the new mode:
+    // floating lifts width caps so content fills the window; docking
+    // restores each child's original cap. (#3451)
+    if (m_bodyLayout) {
+        for (int i = 0; i < m_bodyLayout->count(); ++i) {
+            if (QWidget* child = m_bodyLayout->itemAt(i)->widget())
+                applyWidthPolicyTo(child);
+        }
+    }
     emit dockModeChanged(mode);
+}
+
+void ContainerWidget::applyWidthPolicyTo(QWidget* child)
+{
+    if (!child) return;
+    if (m_dockMode == DockMode::Floating) {
+        // Remember the docked cap once, then lift it so width-capped
+        // applets fill the floating window instead of hugging the left
+        // edge.  Uncapped content (maximumWidth == QWIDGETSIZE_MAX) is a
+        // no-op here. (#3451)
+        if (!m_savedMaxWidths.contains(child))
+            m_savedMaxWidths.insert(child, child->maximumWidth());
+        child->setMaximumWidth(QWIDGETSIZE_MAX);
+    } else {
+        restoreWidthPolicy(child);
+    }
+}
+
+void ContainerWidget::restoreWidthPolicy(QWidget* child)
+{
+    if (child && m_savedMaxWidths.contains(child))
+        child->setMaximumWidth(m_savedMaxWidths.take(child));
 }
 
 void ContainerWidget::onTitleBarFloatToggle()

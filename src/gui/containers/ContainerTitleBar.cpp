@@ -80,6 +80,9 @@ ContainerTitleBar::ContainerTitleBar(const QString& title, QWidget* parent)
     m_pinBtn->setStyleSheet(kPinBtnStyle);
     m_pinBtn->setFixedSize(16, 16);
     m_pinBtn->setCheckable(true);
+    // Accessible names so the agent automation bridge can drive the
+    // title-bar controls (scoped by the container's objectName). (#3646)
+    m_pinBtn->setAccessibleName(QStringLiteral("containerPin"));
     m_pinBtn->setToolTip("Always on top");
     m_pinBtn->setCursor(Qt::ArrowCursor);
     m_pinBtn->setVisible(false);  // shown only in float mode
@@ -93,6 +96,7 @@ ContainerTitleBar::ContainerTitleBar(const QString& title, QWidget* parent)
     m_floatBtn = new QPushButton(QString::fromUtf8("\xe2\xa7\x89"));  // ⧉ two joined squares (#2430 follow-up)
     m_floatBtn->setStyleSheet(kFloatBtnStyle);
     m_floatBtn->setFixedSize(18, 18);
+    m_floatBtn->setAccessibleName(QStringLiteral("containerFloatToggle"));
     m_floatBtn->setToolTip("Pop out into a floating window");
     m_floatBtn->setCursor(Qt::ArrowCursor);
     connect(m_floatBtn, &QPushButton::clicked,
@@ -102,6 +106,7 @@ ContainerTitleBar::ContainerTitleBar(const QString& title, QWidget* parent)
     m_closeBtn = new QPushButton(QString::fromUtf8("\xc3\x97"));  // ×
     m_closeBtn->setStyleSheet(kBtnStyle);
     m_closeBtn->setFixedSize(16, 16);
+    m_closeBtn->setAccessibleName(QStringLiteral("containerClose"));
     m_closeBtn->setToolTip("Hide this container");
     m_closeBtn->setCursor(Qt::ArrowCursor);
     connect(m_closeBtn, &QPushButton::clicked,

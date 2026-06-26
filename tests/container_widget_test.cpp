@@ -136,6 +136,41 @@ void testFloatDockCycle()
     win2.releaseContainer();
 }
 
+// #3451: a width-capped applet (e.g. Antenna Genius, max 260) should have its
+// cap lifted while floating so it fills the window instead of hugging the left
+// edge, and have the cap restored when it docks back into the panel strip.
+void testFloatingWidthPolicy()
+{
+    ContainerWidget c("id", "T");
+    auto* body = new QLabel("payload");
+    body->setMaximumWidth(260);   // mimic a width-capped applet
+    c.setContent(body);
+
+    report("docked content keeps its width cap",
+           body->maximumWidth() == 260);
+
+    FloatingContainerWindow win;
+    win.takeContainer(&c);
+    report("floating content cap is lifted to fill the window",
+           body->maximumWidth() == QWIDGETSIZE_MAX);
+
+    win.releaseContainer();
+    report("docked-again content cap is restored",
+           body->maximumWidth() == 260);
+
+    // An uncapped applet (e.g. the Amplifier) stays uncapped throughout.
+    ContainerWidget c2("id2", "T2");
+    auto* body2 = new QLabel("uncapped");
+    c2.setContent(body2);
+    FloatingContainerWindow win2;
+    win2.takeContainer(&c2);
+    report("uncapped content stays uncapped while floating",
+           body2->maximumWidth() == QWIDGETSIZE_MAX);
+    win2.releaseContainer();
+    report("uncapped content stays uncapped after docking",
+           body2->maximumWidth() == QWIDGETSIZE_MAX);
+}
+
 void testCloseSignal()
 {
     ContainerWidget c("id", "T");
@@ -167,6 +202,7 @@ int main(int argc, char** argv)
     testSetContent();
     testVisibilitySignal();
     testFloatDockCycle();
+    testFloatingWidthPolicy();
     testCloseSignal();
     testTitlebarCloseButtonToggle();
 

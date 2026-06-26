@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QString>
 #include <QWidget>
 
@@ -137,6 +138,16 @@ private:
     friend class FloatingContainerWindow;
     void setDockMode(DockMode mode);
 
+    // Width-capped applets (Antenna Genius, ShackSwitch, RX-DSP) clamp their
+    // own maximumWidth so they sit tidily in the narrow docked strip.  When
+    // the container floats into its own window that cap leaves the content
+    // hugging the left edge with dead space to the right (#3451).  While
+    // floating we lift the cap so the content fills the window; on re-dock we
+    // restore each child's original cap.  m_savedMaxWidths remembers the
+    // docked cap per child for the duration of a float.
+    void applyWidthPolicyTo(QWidget* child);
+    void restoreWidthPolicy(QWidget* child);
+
     QString            m_id;
     QString            m_dragId;   // empty → dragId() returns m_id (#3057)
     ContainerTitleBar* m_titleBar{nullptr};
@@ -145,6 +156,7 @@ private:
     QWidget*           m_content{nullptr};
     DockMode           m_dockMode{DockMode::PanelDocked};
     bool               m_visible{true};
+    QHash<QWidget*, int> m_savedMaxWidths;  // child → docked maximumWidth (#3451)
 };
 
 } // namespace AetherSDR
