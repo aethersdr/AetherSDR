@@ -8,21 +8,23 @@
 // than the box silently clips its leading (most-significant) digits — the box
 // is right-aligned, so the overflow falls off the LEFT edge (#3463/#3515).
 //
-// Qt detail this relies on: a stylesheet that sets `font-size` OVERRIDES
-// QWidget::setFont(), but a stylesheet that sets only `font-family` lets
-// setFont() win for the size.  So the callers drop `font-size` from the freq
-// label's QSS and drive the (width-fitted) pixel size through setFont() here.
+// IMPORTANT Qt detail (learned the hard way): you CANNOT drive the size with
+// QWidget::setFont() when the label also has a stylesheet that sets
+// `font-family`.  A stylesheet that names any font property makes Qt recompute
+// the widget font from the QSS on every re-polish, discarding setFont() and
+// falling back to the default app size.  So the size MUST go through the
+// stylesheet too — the callers re-apply their freq label QSS with a literal
+// `font-size: <fitFreqPixelSize(...)>px`.
 
 #include <QFont>
 #include <QFontMetrics>
-#include <QLabel>
 #include <QString>
 
 namespace AetherSDR {
 
 // Largest pixel size in [minPx, maxPx] for which `text` rendered bold in
 // `family` advances no wider than `availW`.  Caps at maxPx so the digits never
-// grow beyond the theme's nominal size — it only shrinks to avoid clipping.
+// grow beyond the requested size — it only shrinks to avoid clipping.
 // availW <= 0 (not laid out yet) or empty text returns maxPx unchanged.
 inline int fitFreqPixelSize(const QString& family, const QString& text,
                             int availW, int maxPx, int minPx = 10)
@@ -39,22 +41,6 @@ inline int fitFreqPixelSize(const QString& family, const QString& text,
             return px;
     }
     return minPx;
-}
-
-// Fit `label`'s font to its own width so the current text never clips.
-// `family` is font.family.freq, `maxPx` is font.size.freq (the theme nominal),
-// `pad` reserves border+padding+safety so the glyphs clear the box edge.  The
-// label's QSS must set font-family but NOT font-size for this to take effect.
-inline void applyFittedFreqFont(QLabel* label, const QString& family,
-                                int maxPx, int pad)
-{
-    if (!label)
-        return;
-    QFont f(family.isEmpty() ? label->font().family() : family);
-    f.setBold(true);
-    const int availW = label->width() - pad;
-    f.setPixelSize(fitFreqPixelSize(f.family(), label->text(), availW, maxPx));
-    label->setFont(f);
 }
 
 }  // namespace AetherSDR

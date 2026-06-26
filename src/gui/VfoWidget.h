@@ -285,6 +285,7 @@ private:
 
     // Frequency / meter
     QLabel* m_freqLabel{nullptr};
+    int     m_freqFitPx{-1};  // last applied freq font px (skip restyle if unchanged)
     QLineEdit* m_freqEdit{nullptr};
     QStackedWidget* m_freqStack{nullptr};
     QLabel* m_dbmLabel{nullptr};

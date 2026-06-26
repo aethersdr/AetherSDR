@@ -221,9 +221,10 @@ private:
     QPushButton* m_lockBtn{nullptr};      // tune-lock toggle
     QPushButton* m_rxAntBtn{nullptr};     // RX antenna dropdown (blue)
     QPushButton* m_txAntBtn{nullptr};     // TX antenna dropdown (red)
-    QLabel*      m_filterWidthLbl{nullptr}; // current filter width e.g. "2.7K"
+    int          m_freqFitPx{-1};          // last applied freq font px (skip restyle if unchanged)
     QPushButton* m_qskBtn{nullptr};       // QSK toggle
     QHBoxLayout* m_freqRow{nullptr};       // frequency display row
+    QHBoxLayout* m_stepRow{nullptr};       // STEP row — built in left section, placed in right column
     QPushButton* m_txBadge{nullptr};       // TX slice indicator (click to set as TX slice)
     QComboBox*   m_modeCombo{nullptr};     // mode selector (USB, LSB, CW, etc.)
     QPushButton* m_wfmButton{nullptr};     // WFM software demodulator toggle

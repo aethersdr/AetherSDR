@@ -465,14 +465,6 @@ void RxApplet::buildUI()
 
         row->addStretch(1);
 
-        // Filter width label (e.g. "2.7K") — centered between ANT and QSK
-        m_filterWidthLbl = new QLabel("2.7K");
-        m_filterWidthLbl->setAlignment(Qt::AlignCenter);
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_filterWidthLbl, "QLabel { color: {{color.accent.bright}}; font-size: 11px; font-weight: bold; }");
-        row->addWidget(m_filterWidthLbl);
-
-        row->addStretch(1);
-
         // QSK indicator (read-only — controlled via CW applet Breakin button)
         m_qskBtn = new QPushButton("QSK");
         m_qskBtn->setCheckable(true);
@@ -486,13 +478,18 @@ void RxApplet::buildUI()
         root->addLayout(row);
     }
 
-    // ── Frequency row ──────────────────────────────────────────────────────
+    // ── Hero frequency row: [mode][big frequency] (#3463 redesign) ──────────
+    // The frequency is the panel's primary readout, so it gets its own line at
+    // full size. The mode selector sits to its left; TX/WFM/band/bandwidth move
+    // to the compact context strip below. (Previously TX/mode/WFM shared this
+    // row and squeezed the digits into ~124px, clipping the leading MHz — #3463.)
     {
         m_freqRow = new QHBoxLayout;
         m_freqRow->setContentsMargins(0, 0, 0, 0);
         m_freqRow->setSpacing(0);
 
-        // TX slice indicator badge — click to set this slice as TX
+        // TX slice indicator badge — click to set this slice as TX. Created
+        // here, placed in the context strip below.
         m_txBadge = new QPushButton("TX");
         m_txBadge->setFixedSize(20, 20);
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_txBadge, "QPushButton { background: {{color.meter.bar.fill}}; color: {{color.text.primary}}; "
@@ -502,10 +499,8 @@ void RxApplet::buildUI()
         connect(m_txBadge, &QPushButton::clicked, this, [this] {
             if (m_slice) m_slice->setTxSlice(!m_slice->isTxSlice());
         });
-        m_freqRow->addWidget(m_txBadge);
-        m_freqRow->addSpacing(4);
 
-        // Mode selector combo
+        // Mode selector combo — left element of the hero frequency row
         m_modeCombo = new GuardedComboBox;
         m_modeCombo->setFixedHeight(20);
         m_modeCombo->addItems({"USB", "LSB", "CW", "AM", "SAM", "FM",
@@ -538,8 +533,10 @@ void RxApplet::buildUI()
 #endif
             if (m_slice) m_slice->setMode(mode);
         });
-        m_freqRow->addWidget(m_modeCombo);
+        // Mode combo is placed in the context strip below — keeping it off the
+        // hero row frees the full applet width for the largest frequency digits.
 
+        // WFM toggle — created here, placed in the context strip below.
         m_wfmButton = new QPushButton("WFM");
         m_wfmButton->setCheckable(true);
         m_wfmButton->setFixedSize(36, 20);
@@ -556,11 +553,10 @@ void RxApplet::buildUI()
                 emit wfmActivated(false, m_slice ? m_slice->sliceId() : -1);
             }
         });
-        m_freqRow->addWidget(m_wfmButton);
 
         m_freqStack = new QStackedWidget;
-        m_freqStack->setFixedHeight(34);
-        // Fill the remaining column width (after TX/mode/WFM) with a stable,
+        m_freqStack->setFixedHeight(44);  // tall hero row for the big digits
+        // Fill the remaining row width (after the mode selector) with a stable,
         // font-independent box, so applyFreqFit() fits to a width that does not
         // change when the font shrinks (avoids a fit↔reflow oscillation).
         m_freqStack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -640,6 +636,26 @@ void RxApplet::buildUI()
                 this, &RxApplet::applyFreqFit);
     }
 
+    // ── Context strip: mode ……… TX  WFM (#3463 redesign) ───────────────────
+    // Compact line under the hero frequency holding just the slice's controls —
+    // mode selector, TX-slice and WFM toggles (relocated off the old freq row).
+    // The band and filter-bandwidth readouts were dropped: the band is obvious
+    // from the large frequency, and the bandwidth is already shown by the lit
+    // filter-preset button and the passband graph.
+    {
+        auto* ctx = new QHBoxLayout;
+        ctx->setContentsMargins(0, 0, 0, 0);
+        ctx->setSpacing(6);
+
+        ctx->addWidget(m_modeCombo);  // mode selector (relocated off the hero row)
+        ctx->addStretch(1);
+        ctx->addWidget(m_txBadge);
+        ctx->addSpacing(4);
+        ctx->addWidget(m_wfmButton);
+
+        root->addLayout(ctx);
+    }
+
     // ── Two-column area ─────────────────────────────────────────────────────
     auto* columns = new QHBoxLayout;
     columns->setSpacing(4);
@@ -689,7 +705,8 @@ void RxApplet::buildUI()
         row->addWidget(m_stepDown);
         row->addWidget(m_stepLabel, 1);
         row->addWidget(m_stepUp);
-        leftCol->addLayout(row);
+        // Placed in the right column below (grouped with balance + squelch).
+        m_stepRow = row;
     }
 
     // Filter presets (dynamically rebuilt on mode change)
@@ -851,6 +868,9 @@ void RxApplet::buildUI()
     auto* rightCol = new QVBoxLayout;
     rightCol->setSpacing(2);
 
+    // STEP — moved here from the left column to group with balance + squelch.
+    rightCol->addLayout(m_stepRow);
+
     // AF gain
     {
         auto* row = new QHBoxLayout;
@@ -893,7 +913,9 @@ void RxApplet::buildUI()
             if (m_slice) m_slice->setAudioGain(v);
             emit afGainChanged(v);
         });
-        rightCol->addLayout(row);
+        // Hoisted to a full-width row directly under the mode selector (added to
+        // root, not rightCol), so the volume slider spans the whole applet.
+        root->addLayout(row);
     }
 
     // Audio pan (L ←→ R)
@@ -1035,7 +1057,9 @@ void RxApplet::buildUI()
                 }
             }
         });
-        rightCol->addWidget(m_agcContainer);
+        // Hoisted to a full-width row under the volume bar (added to root, not
+        // rightCol), so the AGC slider spans the whole applet.
+        root->addWidget(m_agcContainer);
     }
 
     rightCol->addStretch(1);
@@ -1177,7 +1201,6 @@ void RxApplet::buildUI()
     m_rxAntBtn->setAccessibleDescription("Select receive antenna port");
     m_txAntBtn->setAccessibleName("TX antenna");
     m_txAntBtn->setAccessibleDescription("Select transmit antenna port");
-    m_filterWidthLbl->setAccessibleName("Filter width");
     m_qskBtn->setAccessibleName("QSK indicator");
     m_qskBtn->setAccessibleDescription("Full break-in CW indicator");
     m_txBadge->setAccessibleName("TX slice selector");
@@ -2035,9 +2058,6 @@ void RxApplet::connectSlice(SliceModel* s)
     connect(s, &SliceModel::txAntennaListChanged,
             this, [this](const QStringList&) { updateAntennaButtons(); });
 
-    // Filter width label
-    m_filterWidthLbl->setText(formatFilterWidth(s->filterLow(), s->filterHigh(), s->mode()));
-
     // QSK
     {
         QSignalBlocker b(m_qskBtn);
@@ -2127,13 +2147,10 @@ void RxApplet::connectSlice(SliceModel* s)
     m_filterPassband->setMode(s->mode());
     connect(s, &SliceModel::filterChanged, this, [this](int lo, int hi) {
         updateFilterButtons();
-        m_filterWidthLbl->setText(formatFilterWidth(lo, hi, m_slice ? m_slice->mode() : QString()));
         m_filterPassband->setFilter(lo, hi);
     });
     connect(s, &SliceModel::modeChanged, this, [this](const QString& mode) {
         m_filterPassband->setMode(mode);
-        if (m_slice)
-            m_filterWidthLbl->setText(formatFilterWidth(m_slice->filterLow(), m_slice->filterHigh(), mode));
     });
 
     // AGC mode
@@ -3037,12 +3054,30 @@ void RxApplet::applyFreqFit()
     if (!m_freqLabel)
         return;
     auto& tm = AetherSDR::ThemeManager::instance();
-    int maxPx = tm.value("font.size.freq").toInt();
-    if (maxPx <= 0)
-        maxPx = 20;
-    // pad: no border/padding on this label — 4px safety from the box edge.
-    AetherSDR::applyFittedFreqFont(m_freqLabel, tm.value("font.family.freq"),
-                                   maxPx, /*pad=*/4);
+    int themeMax = tm.value("font.size.freq").toInt();
+    if (themeMax <= 0)
+        themeMax = 20;
+    // The frequency is this panel's hero readout and owns the full applet
+    // width, so let the digits grow large (derived from the hero row height,
+    // not the theme nominal); fitFreqPixelSize then width-fits them down so they
+    // never clip. Floor at the theme size so a user who picks a larger
+    // font.size.freq still gets at least that.
+    const int heroMax = m_freqStack ? m_freqStack->height() - 10 : themeMax;
+    const int maxPx = qMax(themeMax, heroMax);
+    // pad: no border/padding on this label — small safety from the box edge.
+    const int px = AetherSDR::fitFreqPixelSize(tm.value("font.family.freq"),
+                                               m_freqLabel->text(),
+                                               m_freqLabel->width() - 6, maxPx);
+    if (px == m_freqFitPx)
+        return;  // size unchanged — avoid a needless restyle/re-polish
+    m_freqFitPx = px;
+    // Drive the size through the stylesheet (a literal font-size), NOT setFont:
+    // a QSS that names font-family discards setFont() on re-polish (see
+    // FreqLabelFit.h). applyStyleSheet keeps the colour/family theme-reactive.
+    tm.applyStyleSheet(m_freqLabel, QStringLiteral(
+        "QLabel { color: {{color.text.primary}}; font-weight: bold;"
+        " font-family: \"{{font.family.freq}}\"; font-size: %1px;"
+        " background: transparent; padding: 0; margin: 0; }").arg(px));
 }
 
 void RxApplet::refreshAllMutedDim()

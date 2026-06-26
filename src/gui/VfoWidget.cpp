@@ -4533,8 +4533,19 @@ void VfoWidget::applyFreqFit()
     if (maxPx <= 0)
         maxPx = 20;
     // pad: 1px border each side + 2px left padding + 2px safety.
-    AetherSDR::applyFittedFreqFont(m_freqLabel, tm.value("font.family.freq"),
-                                   maxPx, /*pad=*/6);
+    const int px = AetherSDR::fitFreqPixelSize(tm.value("font.family.freq"),
+                                               m_freqLabel->text(),
+                                               m_freqLabel->width() - 6, maxPx);
+    if (px == m_freqFitPx)
+        return;  // size unchanged — avoid a needless restyle/re-polish
+    m_freqFitPx = px;
+    // Size goes through the stylesheet (literal font-size), NOT setFont — a QSS
+    // that names font-family discards setFont() on re-polish (see FreqLabelFit.h).
+    tm.applyStyleSheet(m_freqLabel, QStringLiteral("QLabel { background: transparent;"
+        " border: 1px solid rgba(255,255,255,80); border-radius: 3px;"
+        " color: {{color.text.primary}}; font-weight: bold;"
+        " font-family: \"{{font.family.freq}}\"; font-size: %1px;"
+        " padding: 0 0 0 2px; }").arg(px));
 }
 
 void VfoWidget::scheduleFrequencyAnnouncement(const QString& text)
