@@ -29,6 +29,7 @@
 #include "AntennaGeniusApplet.h"
 #include "ShackSwitchApplet.h"
 #include "MeterApplet.h"
+#include "ProfileSwitcherApplet.h"
 #include "HealthApplet.h"
 #include "KiwiSdrApplet.h"
 #ifdef HAVE_RADE
@@ -72,7 +73,7 @@
 namespace AetherSDR {
 
 const QStringList AppletPanel::kDefaultOrder = {
-    "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "KSDR", "HLTH", "AG", "SS"
+    "RX", "TUN", "AMP", "TX", "PHNE", "P/CW", "EQ", "WAVE", "TXDSP", "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "KSDR", "HLTH", "AG", "SS"
 };
 
 // ── Drop-aware scroll area ──────────────────────────────────────────────────
@@ -856,6 +857,9 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_meterApplet = new MeterApplet;
     m_appletOrder.append(makeEntry("MTR", "Meters", m_meterApplet, false, m_drawer, m_drawerLayout));
 
+    m_profApplet = new ProfileSwitcherApplet;
+    m_appletOrder.append(makeEntry("PROF", "Profile Switcher", m_profApplet, false, m_drawer, m_drawerLayout));
+
     m_kiwiSdrApplet = new KiwiSdrApplet;
     m_appletOrder.append(makeEntry("KSDR", "KiwiSDR", m_kiwiSdrApplet, false,
                                    m_drawer, m_drawerLayout));
@@ -1368,7 +1372,7 @@ QStringList AppletPanel::defaultButtonOrder() const
     QStringList out = {"VU", "RX", "TX", "P/CW", "WAVE"};
     const QStringList rest = {
         "LCK", "PHNE", "EQ", "TXDSP",
-        "CAT", "DAX", "TCI", "IQ", "MTR", "SS", "MQTT"
+        "CAT", "DAX", "TCI", "IQ", "MTR", "PROF", "SS", "MQTT"
     };
     for (const auto& id : rest)
         if (!out.contains(id)) out.append(id);

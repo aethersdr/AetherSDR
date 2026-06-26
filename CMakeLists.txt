@@ -755,6 +755,7 @@ set(GUI_SOURCES
     src/gui/DvkPanel.cpp
     src/gui/AmpApplet.cpp
     src/gui/MeterApplet.cpp
+    src/gui/ProfileSwitcherApplet.cpp
     src/gui/RadeApplet.cpp
     src/gui/HealthApplet.cpp
     src/gui/PersistentDialog.cpp

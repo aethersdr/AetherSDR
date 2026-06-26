@@ -30,6 +30,7 @@
 #include "AmpApplet.h"
 #include "HealthApplet.h"
 #include "MeterApplet.h"
+#include "ProfileSwitcherApplet.h"
 #include "SMeterWidget.h"
 #include "TunerApplet.h"
 #include "TxApplet.h"
@@ -3604,6 +3605,9 @@ void MainWindow::wireMeters()
 
     // ── Meter applet: all meters consolidated ──────────────────────────────
     m_appletPanel->meterApplet()->setMeterModel(&m_radioModel.meterModel());
+
+    // ── PROF applet: Global / TX / Mic profile switcher (#3376) ─────────────
+    m_appletPanel->profileSwitcherApplet()->setRadioModel(&m_radioModel);
 
     // ── HLTH applet: same meter model — derives antenna-health state from
     //    SWR / power trends across radio / tuner / amp sources.
