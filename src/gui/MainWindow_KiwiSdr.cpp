@@ -578,9 +578,6 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
     if (profileId.isEmpty()) {
         spectrum->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
                                      m_radioModel.maxPanBandwidthMhz());
-        if (const PanadapterModel* pan = m_radioModel.panadapter(panId)) {
-            spectrum->setFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
-        }
         const QString overlayProfileId = kiwiSdrOverlayProfileForPan(panId);
         if (!overlayProfileId.isEmpty()) {
             spectrum->setKiwiSdrConnectionOverlay(

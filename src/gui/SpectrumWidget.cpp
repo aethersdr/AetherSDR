@@ -5126,7 +5126,7 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
 
     double rowLowMhz = lowFreqMhz;
     double rowHighMhz = highFreqMhz;
-    if (rowHighMhz <= rowLowMhz || rowLowMhz <= 0.0 || m_bandwidthMhz <= 0.0) {
+    if (rowHighMhz <= rowLowMhz || rowLowMhz < 0.0 || m_bandwidthMhz <= 0.0) {
         return;
     }
     const double rowCenterMhz = (rowLowMhz + rowHighMhz) * 0.5;

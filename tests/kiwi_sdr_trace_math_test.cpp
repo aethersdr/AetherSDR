@@ -69,6 +69,17 @@ int main()
         return fail("mapped gesture row should keep the FFT trace floor anchored");
     }
 
+    QVector<float> dcEdgeRow(1024, -90.0f);
+    dcEdgeRow[512] = -45.0f;
+    const QVector<float> dcEdgeTrace = mapRowToTrace(
+        dcEdgeRow, 128,
+        7.5, 15.0,
+        7.436213, 14.543089,
+        kMinDbm);
+    if (dcEdgeTrace.isEmpty() || floorOf(dcEdgeTrace) <= kMinDbm) {
+        return fail("DC-edge Kiwi row should map into the visible trace");
+    }
+
     QVector<float> adaptingTrace(128, -80.0f);
     TraceFloorState adaptingFloor{-100.0f, true};
     stabilizeTraceFloor(adaptingTrace, adaptingFloor, true, kMinDbm, kMaxDbm);

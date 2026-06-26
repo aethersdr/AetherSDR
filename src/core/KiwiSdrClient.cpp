@@ -1806,7 +1806,7 @@ void KiwiSdrClient::handleWaterfallFrame(const QByteArray& frame)
         parseWaterfallFrameHeader(frame, &frameStart, &frameZoom);
     const bool requestHasUsableRange =
         m_waterfallRequestValid
-        && m_waterfallRequestLowMhz > 0.0
+        && m_waterfallRequestLowMhz >= 0.0
         && m_waterfallRequestHighMhz > m_waterfallRequestLowMhz;
     if (!hasExtendedHeader && !requestHasUsableRange) {
         return;
