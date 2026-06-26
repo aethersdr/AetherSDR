@@ -1551,12 +1551,29 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
     }
 
     bool done = false;
-    if (action == QLatin1String("click")) {
-        if (auto* b = qobject_cast<QAbstractButton*>(w)) { b->click(); done = true; }
-    } else if (action == QLatin1String("toggle")) {
+    bool deferred = false;
+    if (action == QLatin1String("click") || action == QLatin1String("toggle")) {
+        // CRASH-SAFETY: a button click can open a popup menu (a QToolButton with
+        // a dropdown) or a modal dialog, both of which spin a NESTED event loop.
+        // Running that synchronously here re-enters the event loop INSIDE the
+        // QLocalSocket read callback (qt_mac_socket_callback -> canReadNotification
+        // -> handleLine), corrupting socket/window state — observed SIGSEGV:
+        // QToolButton popup -> QMenu::exec -> QWindow::geometry() on a null
+        // window (worse when the app is backgrounded). Defer to a clean main-loop
+        // turn so any nested loop runs on a normal stack. Mirrors the merged
+        // menu-action trigger fix; the widget path was its latent sibling.
+        // (#3646 follow-up — re-entrancy crash)
         if (auto* b = qobject_cast<QAbstractButton*>(w)) {
-            b->isCheckable() ? b->toggle() : b->click();
+            const bool useToggle =
+                action == QLatin1String("toggle") && b->isCheckable();
+            QPointer<QAbstractButton> bg = b;
+            QTimer::singleShot(0, qApp, [bg, useToggle]() {
+                if (!bg) return;
+                if (useToggle) bg->toggle();
+                else           bg->click();
+            });
             done = true;
+            deferred = true;
         }
     } else if (action == QLatin1String("setChecked")) {
         if (auto* b = qobject_cast<QAbstractButton*>(w); b && b->isCheckable()) {
@@ -1611,9 +1628,16 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         {QStringLiteral("class"), shortClassName(w)},
         {QStringLiteral("action"), action},
     };
-    const QString nv = widgetValue(w);   // round-trip confirmation
-    if (!nv.isNull())
-        r[QStringLiteral("newValue")] = nv;
+    if (deferred) {
+        // click/toggle run on the next main-loop turn (they may open a popup or
+        // dialog), so any post-state must be re-read (get / dumpTree) rather than
+        // trusted from this synchronous reply.
+        r[QStringLiteral("deferred")] = true;
+    } else {
+        const QString nv = widgetValue(w);   // round-trip confirmation
+        if (!nv.isNull())
+            r[QStringLiteral("newValue")] = nv;
+    }
     return r;
 }
 
