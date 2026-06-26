@@ -58,7 +58,6 @@
 #include <utility>
 #include "core/ThemeManager.h"
 #include "FreqLineEdit.h"
-#include "FreqLabelFit.h"
 
 // QSlider that always accepts wheel events, preventing propagation to parent
 // (e.g. SpectrumWidget frequency scroll) at min/max boundaries. (#547 BUG-002)
@@ -774,13 +773,10 @@ void VfoWidget::buildUI()
     // RxApplet's frequency label reads the same token so both surfaces
     // re-theme in lockstep when the operator picks a new family in the
     // Theme Editor.
-    // NOTE: font-size is deliberately omitted — applyFreqFit() drives the
-    // pixel size via setFont() so the digits shrink to fit the fixed box
-    // instead of clipping. A QSS font-size would override setFont() (#3463).
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqLabel, "QLabel { background: transparent;"
                                 " border: 1px solid rgba(255,255,255,80);"
                                 " border-radius: 3px;"
-                                " color: {{color.text.primary}}; font-weight: bold;"
+                                " color: {{color.text.primary}}; font-size: {{font.size.freq}}px; font-weight: bold;"
                                 " font-family: \"{{font.family.freq}}\";"
                                 " padding: 0 0 0 2px; }");
     m_freqLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
@@ -804,12 +800,6 @@ void VfoWidget::buildUI()
     m_freqEdit->installEventFilter(this);
     m_freqStack->addWidget(m_freqEdit);
     m_freqStack->setCurrentIndex(0);  // show label by default
-
-    // Re-fit the frequency digits when the theme (and thus font.size.freq /
-    // font.family.freq) changes, e.g. Dark↔Light or a Theme Editor font bump.
-    connect(&AetherSDR::ThemeManager::instance(),
-            &AetherSDR::ThemeManager::themeChanged,
-            this, &VfoWidget::applyFreqFit);
 
     connect(m_freqEdit, &QLineEdit::returnPressed, this, [this] {
         const QString text = m_freqEdit->text().trimmed();
@@ -4489,7 +4479,6 @@ void VfoWidget::updateFreqLabel()
     if (!m_slice) return;
     if (m_slice->isLockedFeedbackActive()) {
         m_freqLabel->setText(QStringLiteral("LOCKED"));
-        applyFreqFit();
         // Announce immediately — lock state is user-triggered and infrequent.
         // Suppress repeats while the 500 ms lock-feedback gate is active.
         if (QAccessible::isActive() &&
@@ -4514,7 +4503,6 @@ void VfoWidget::updateFreqLabel()
         .arg(khzPart, 3, 10, QChar('0'))
         .arg(hzPart, 3, 10, QChar('0'));
     m_freqLabel->setText(freqText);
-    applyFreqFit();
     scheduleFrequencyAnnouncement(freqText);
 
     // Keep collapsed frequency label in sync
@@ -4522,19 +4510,6 @@ void VfoWidget::updateFreqLabel()
         m_collapsedFreqLabel->setText(freqText);
         m_collapsedFreqLabel->adjustSize();
     }
-}
-
-void VfoWidget::applyFreqFit()
-{
-    if (!m_freqLabel)
-        return;
-    auto& tm = AetherSDR::ThemeManager::instance();
-    int maxPx = tm.value("font.size.freq").toInt();
-    if (maxPx <= 0)
-        maxPx = 20;
-    // pad: 1px border each side + 2px left padding + 2px safety.
-    AetherSDR::applyFittedFreqFont(m_freqLabel, tm.value("font.family.freq"),
-                                   maxPx, /*pad=*/6);
 }
 
 void VfoWidget::scheduleFrequencyAnnouncement(const QString& text)
@@ -5586,12 +5561,6 @@ bool VfoWidget::eventFilter(QObject* obj, QEvent* event)
             m_digOffsetEdit->setFocus();
         }
         return true;
-    }
-
-    // Re-fit the digits whenever the label is resized (theme/layout change).
-    if (obj == m_freqLabel && event->type() == QEvent::Resize) {
-        applyFreqFit();
-        return false;  // observe only — let the label resize normally
     }
 
     // Double-click on frequency label → open inline edit
