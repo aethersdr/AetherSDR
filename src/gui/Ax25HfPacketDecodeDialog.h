@@ -24,6 +24,7 @@ class QStackedWidget;
 class QTableWidget;
 class QTextEdit;
 class QTimer;
+class QToolButton;
 class QVBoxLayout;
 
 namespace AetherSDR {
@@ -128,6 +129,11 @@ private:
     void showAprsStationInfo(const QString& call);
     void openAprsMessagesDialog();
     void sendAprsMessageFromUi();
+    // APRS message-services picker (#3569): seed the To/text fields from a
+    // well-known gateway service (SMS, email, Winlink, weather), or just show a
+    // routing hint for ISS/satellite work. Empty addressee → hint only.
+    void seedAprsService(const QString& addressee, const QString& body,
+                         const QString& hint);
     void updateAprsEnvelopeButton();
     void handleGpsUpdate();
 
@@ -274,6 +280,7 @@ private:
     QLineEdit* m_aprsManualLat{nullptr};
     QLineEdit* m_aprsManualLon{nullptr};
     QLineEdit* m_aprsMsgTo{nullptr};
+    QToolButton* m_aprsServiceButton{nullptr};
     QLineEdit* m_aprsMsgText{nullptr};
     QPushButton* m_aprsMsgSend{nullptr};
     QPushButton* m_aprsEnvelope{nullptr};

@@ -67,6 +67,7 @@
 #include <QStyle>
 #include <QTableWidget>
 #include <QTimeZone>
+#include <QToolButton>
 #include <QUrl>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -3049,6 +3050,91 @@ void Ax25HfPacketDecodeDialog::buildAprsUi(QWidget* page, QVBoxLayout* pageLayou
     m_aprsMsgTo->setPlaceholderText(QStringLiteral("To (N0CALL-7)"));
     m_aprsMsgTo->setMaximumWidth(150);
     msgLayout->addWidget(m_aprsMsgTo);
+
+    // Message-services picker (#3569): a caret button next to the To field that
+    // addresses well-known APRS gateways (SMS, email, Winlink, weather) and
+    // seeds the matching command template, so operators don't have to memorize
+    // callsigns and syntax. The ISS/satellite entry is routing-only — it shows a
+    // path hint rather than mutating the To field or the TX path, which is more
+    // surprising to undo (see the issue's "path coupling" note). The body must
+    // NOT be uppercased anywhere on the send path: EMAIL-2 addresses and SMSGTE
+    // aliases are case-sensitive (sendAprsMessageFromUi only uppercases the
+    // addressee).
+    struct AprsServiceEntry {
+        const char* section;    // category header; empty reuses the prior one
+        const char* label;      // menu item text
+        const char* objectName; // stable id for the agent automation bridge (#3646)
+        const char* addressee;  // To callsign; empty = routing-only (hint only)
+        const char* body;       // seed for the message field; cursor lands at end
+        const char* hint;       // one-line "what this does" + char limit
+    };
+    // objectName scheme is the full word "aprsService…" (not an "aprsSvc…"
+    // abbreviation) on purpose: the agent automation bridge's TX-safety guard
+    // (#3646) does an unanchored substring match for the CW-keying token "cwx",
+    // and "aprsSvc" + "Wx…" spells "…svcWX…" → a false "cwx" hit that would block
+    // the (RX-only) weather entry. The spelled-out prefix avoids that collision.
+    static const AprsServiceEntry kAprsServices[] = {
+        {"SMS", "SMSGTE — text an SMS to a phone", "aprsServiceSmsgte",
+         "SMSGTE", "@",
+         "SMSGTE: \"@<10-digit-number> <message>\" (~67 chars). Replies return as "
+         "APRS. Register an alias with \"#mynumber add <number>\" to save text."},
+        {"Email", "EMAIL-2 — send an email", "aprsServiceEmail2",
+         "EMAIL-2", "",
+         "EMAIL-2: \"<email@address> <message>\" (~67 chars). Send your own address "
+         "once to register; \"get\" to EMAIL-2 retrieves held replies (~24h)."},
+        {"Winlink", "WLNK-1 — APRSLink help (?)", "aprsServiceWlnkHelp",
+         "WLNK-1", "?",
+         "WLNK-1 APRSLink: send \"?\" for the command list (L, R#, SP, SMS, …)."},
+        {"", "WLNK-1 — one-line email/SMS", "aprsServiceWlnkSms",
+         "WLNK-1", "SMS ",
+         "WLNK-1: \"SMS <email-or-callsign> <message>\" sends a one-line message "
+         "over the Winlink radio-email bridge."},
+        {"Weather", "WXBOT — forecast / METAR", "aprsServiceWxbot",
+         "WXBOT", "",
+         "WXBOT: \"Boston,MA\", \"KJFK\" (ICAO→METAR), a Maidenhead grid, or blank "
+         "for your last-heard position. Comma required for City,ST."},
+        {"Satellite / ISS", "ISS / ARISS digipeater — path hint", "aprsServiceIss",
+         "", "",
+         "ISS/ARISS digi (145.825 MHz): set TX PATH to \"ARISS\" (RS0ISS), not "
+         "WIDE1-1,WIDE2-1. Keep messages ≤~60 chars; best on passes >30°."},
+    };
+
+    auto* serviceMenu = new QMenu(msgFrame);
+    QString lastSection;
+    for (const AprsServiceEntry& e : kAprsServices) {
+        const QString section = QString::fromLatin1(e.section);
+        if (!section.isEmpty() && section != lastSection) {
+            serviceMenu->addSection(section);
+            lastSection = section;
+        }
+        QAction* act = serviceMenu->addAction(QString::fromLatin1(e.label));
+        act->setObjectName(QString::fromLatin1(e.objectName));
+        act->setToolTip(QString::fromLatin1(e.hint));
+        const QString addressee = QString::fromLatin1(e.addressee);
+        const QString body = QString::fromLatin1(e.body);
+        const QString hint = QString::fromLatin1(e.hint);
+        connect(act, &QAction::triggered, this,
+                [this, addressee, body, hint] { seedAprsService(addressee, body, hint); });
+    }
+
+    m_aprsServiceButton = new QToolButton(msgFrame);
+    m_aprsServiceButton->setObjectName(QStringLiteral("AprsServiceMenuButton"));
+    m_aprsServiceButton->setAccessibleName(QStringLiteral("APRS message services"));
+    m_aprsServiceButton->setText(QStringLiteral("▾"));
+    m_aprsServiceButton->setToolTip(QStringLiteral(
+        "Address a common APRS service: SMS, email, Winlink, weather, ISS"));
+    m_aprsServiceButton->setMenu(serviceMenu);
+    m_aprsServiceButton->setPopupMode(QToolButton::InstantPopup);
+    // A human mouse press opens the menu via Qt's built-in InstantPopup path.
+    // We deliberately do NOT wire clicked()→open for the agent automation bridge
+    // (#3646): a synthetic click arrives inside the bridge's socket-read callback,
+    // and showing the menu's native popup window from there re-enters the macOS
+    // GUI stack and segfaults intermittently (QMenu::popup → QCocoaWindow::
+    // setVisible → QWindow::geometry). Driving this dropdown is a documented
+    // bridge gap; the menu actions still carry stable objectNames so the bridge
+    // can verify the seeded fields structurally.
+    msgLayout->addWidget(m_aprsServiceButton);
+
     m_aprsMsgText = new QLineEdit(msgFrame);
     m_aprsMsgText->setPlaceholderText(
         QStringLiteral("Message text (sent with ack request, retries until acked)"));
@@ -3500,6 +3586,23 @@ void Ax25HfPacketDecodeDialog::sendAprsMessageFromUi()
         return;
     }
     m_aprsMsgText->clear();
+}
+
+void Ax25HfPacketDecodeDialog::seedAprsService(const QString& addressee,
+                                               const QString& body,
+                                               const QString& hint)
+{
+    // Routing-only entries (ISS/satellite) carry no addressee: leave the To and
+    // message fields untouched and just surface the hint, so we don't clobber
+    // whatever the operator was composing.
+    if (!addressee.isEmpty()) {
+        m_aprsMsgTo->setText(addressee);
+        m_aprsMsgText->setText(body);
+        m_aprsMsgText->setFocus();
+        m_aprsMsgText->setCursorPosition(body.length());
+    }
+    if (!hint.isEmpty())
+        appendSystemLine(hint);
 }
 
 void Ax25HfPacketDecodeDialog::updateAprsEnvelopeButton()
