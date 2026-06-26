@@ -4269,6 +4269,15 @@ void SpectrumWidget::setTransmitting(bool tx)
         m_txEndMs = QDateTime::currentMSecsSinceEpoch(); // post-TX blanking (#2117)
         m_wfBlankerRingCount = 0;                        // reset stale blanker baseline
         m_wfLastGoodRow.clear();                          // forget any TX-era last-good scanline
+        // Drop the FFT trace's client-side EMA so the first clean RX frame is
+        // taken raw instead of weighted against TX-contaminated history. During
+        // the UNKEY_REQUESTED window the radio keeps streaming TX-contaminated
+        // FFT frames (#1927); those poison m_smoothed, and at SMOOTH_ALPHA=0.35
+        // the EMA otherwise takes ~5-7 frames (~200-300 ms at 25 fps) to wash
+        // out, leaving the displayed floor visibly elevated after key-up (#3804).
+        // This does not address the radio firmware's own averaging buffer, which
+        // is the dominant slow-decay source and is not client-fixable.
+        m_resetFftSmoothingOnNextFrame = true;
         endTxDbmRangeFreeze();
     }
     m_transmitting = tx;
