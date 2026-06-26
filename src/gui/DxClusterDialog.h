@@ -142,6 +142,25 @@ private:
     void loadLogFiles(const QString& clusterLog, const QString& rbnLog,
                       const QString& wsjtxLog, const QString& potaLog,
                       const QString& freedvLog = {});
+    // Zero a source log file so its spots/console text don't reload on the
+    // next dialog open (the dialog is WA_DeleteOnClose; loadLogFiles() tails
+    // these files on every construction). No-op if the path is empty/missing.
+    void truncateLogFile(const QString& path);
+    // A right-aligned "Clear" button that wipes a console and zeroes the
+    // matching log file. logPath points at one of the m_*LogPath members,
+    // read at click time (members are assigned before any click). (#2022)
+    QPushButton* makeConsoleClearButton(QPlainTextEdit* console,
+                                        const QString* logPath,
+                                        const QString& objectName);
+
+    // Source log file paths, captured at construction so the Clear handlers
+    // can zero them. (#2022)
+    QString m_clusterLogPath;
+    QString m_rbnLogPath;
+    QString m_wsjtxLogPath;
+    QString m_potaLogPath;
+    QString m_freedvLogPath;
+    QString m_scLogPath;
 
     DxClusterClient*      m_client;
     DxClusterClient*      m_rbnClient;
@@ -229,6 +248,7 @@ private:
     SpotTableModel*        m_spotModel;
     QTableView*            m_spotTable;
     BandFilterProxy*       m_proxyModel;
+    QLabel*                m_spotCountLabel{nullptr};  // Spot List tab counter (#2022)
 
     // Display tab
     QLabel*            m_totalSpotsLabel{nullptr};

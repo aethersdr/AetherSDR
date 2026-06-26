@@ -277,6 +277,17 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
     setMinimumSize(680, 560);
     resize(760, 640);
 
+    // Capture source log paths up front so the per-tab Clear handlers (built
+    // below) can zero them on click. (#2022)
+    m_clusterLogPath = clusterClient->logFilePath();
+    m_rbnLogPath     = rbnClient->logFilePath();
+    m_wsjtxLogPath   = wsjtxClient->logFilePath();
+    m_potaLogPath    = potaClient->logFilePath();
+    m_scLogPath      = spotCollectorClient->logFilePath();
+#ifdef HAVE_WEBSOCKETS
+    m_freedvLogPath  = freedvClient->logFilePath();
+#endif
+
     auto* root = new QVBoxLayout(bodyWidget());
     root->setSpacing(0);
     root->setContentsMargins(4, 4, 4, 4);
@@ -350,17 +361,9 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
 
     // Defer log file loading until after the dialog is shown (#748).
     // Reads only the last 500 lines per file to avoid blocking on large logs.
-    auto clusterLogPath = clusterClient->logFilePath();
-    auto rbnLogPath = rbnClient->logFilePath();
-    auto wsjtxLogPath = wsjtxClient->logFilePath();
-    auto potaLogPath = potaClient->logFilePath();
-    QString freedvLogPath;
-#ifdef HAVE_WEBSOCKETS
-    freedvLogPath = freedvClient->logFilePath();
-#endif
-    QTimer::singleShot(0, this, [this, clusterLogPath, rbnLogPath,
-                                  wsjtxLogPath, potaLogPath, freedvLogPath]() {
-        loadLogFiles(clusterLogPath, rbnLogPath, wsjtxLogPath, potaLogPath, freedvLogPath);
+    QTimer::singleShot(0, this, [this]() {
+        loadLogFiles(m_clusterLogPath, m_rbnLogPath, m_wsjtxLogPath,
+                     m_potaLogPath, m_freedvLogPath);
     });
 
     // ── Live updates from RBN client ──────────────────────────────────
@@ -589,6 +592,33 @@ DxClusterDialog::DxClusterDialog(DxClusterClient* clusterClient, DxClusterClient
         btn->setAutoDefault(false);
 
     updateStatus();
+}
+
+void DxClusterDialog::truncateLogFile(const QString& path)
+{
+    if (path.isEmpty())
+        return;
+    QFile f(path);
+    if (f.exists())
+        f.resize(0);
+}
+
+QPushButton* DxClusterDialog::makeConsoleClearButton(QPlainTextEdit* console,
+                                                     const QString* logPath,
+                                                     const QString& objectName)
+{
+    auto* btn = new QPushButton("Clear");
+    btn->setObjectName(objectName);
+    btn->setFixedWidth(60);
+    btn->setToolTip("Clear this console and delete its stored log so it stays\n"
+                    "empty after you reopen SpotHub.");
+    connect(btn, &QPushButton::clicked, this, [this, console, logPath] {
+        if (console)
+            console->clear();
+        if (logPath)
+            truncateLogFile(*logPath);
+    });
+    return btn;
 }
 
 void DxClusterDialog::loadLogFiles(const QString& clusterLog, const QString& rbnLog,
@@ -837,6 +867,7 @@ void DxClusterDialog::buildClusterTab(QTabWidget* tabs)
     });
     cmdRow->addWidget(m_cmdEdit, 1);
     cmdRow->addWidget(m_sendBtn);
+    cmdRow->addWidget(makeConsoleClearButton(m_console, &m_clusterLogPath, "clusterClearBtn"));
     layout->addLayout(cmdRow);
 
     tabs->addTab(page, "Cluster");
@@ -1038,6 +1069,7 @@ void DxClusterDialog::buildRbnTab(QTabWidget* tabs)
     });
     cmdRow->addWidget(m_rbnCmdEdit, 1);
     cmdRow->addWidget(m_rbnSendBtn);
+    cmdRow->addWidget(makeConsoleClearButton(m_rbnConsole, &m_rbnLogPath, "rbnClearBtn"));
     layout->addLayout(cmdRow);
 
     tabs->addTab(page, "RBN");
@@ -1282,6 +1314,11 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
         "}");
     layout->addWidget(m_wsjtxConsole, 1);
 
+    auto* wsjtxBtnRow = new QHBoxLayout;
+    wsjtxBtnRow->addStretch();
+    wsjtxBtnRow->addWidget(makeConsoleClearButton(m_wsjtxConsole, &m_wsjtxLogPath, "wsjtxClearBtn"));
+    layout->addLayout(wsjtxBtnRow);
+
     tabs->addTab(page, "WSJT-X");
 }
 
@@ -1379,6 +1416,11 @@ void DxClusterDialog::buildSpotCollectorTab(QTabWidget* tabs)
         "  padding: 4px;"
         "}");
     layout->addWidget(m_scConsole, 1);
+
+    auto* scBtnRow = new QHBoxLayout;
+    scBtnRow->addStretch();
+    scBtnRow->addWidget(makeConsoleClearButton(m_scConsole, &m_scLogPath, "scClearBtn"));
+    layout->addLayout(scBtnRow);
 
     // Update status if already listening
     if (m_spotCollectorClient->isListening()) {
@@ -1517,6 +1559,11 @@ void DxClusterDialog::buildPotaTab(QTabWidget* tabs)
         "  padding: 4px;"
         "}");
     layout->addWidget(m_potaConsole, 1);
+
+    auto* potaBtnRow = new QHBoxLayout;
+    potaBtnRow->addStretch();
+    potaBtnRow->addWidget(makeConsoleClearButton(m_potaConsole, &m_potaLogPath, "potaClearBtn"));
+    layout->addLayout(potaBtnRow);
 
     tabs->addTab(page, "POTA");
 }
@@ -1797,6 +1844,11 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
         "}");
     layout->addWidget(m_freedvConsole, 1);
 
+    auto* freedvBtnRow = new QHBoxLayout;
+    freedvBtnRow->addStretch();
+    freedvBtnRow->addWidget(makeConsoleClearButton(m_freedvConsole, &m_freedvLogPath, "freedvClearBtn"));
+    layout->addLayout(freedvBtnRow);
+
     tabs->addTab(page, "FreeDV");
 }
 #endif
@@ -1903,19 +1955,32 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
 
     // Bottom bar: spot count + clear
     auto* bottomRow = new QHBoxLayout;
-    auto* countLabel = new QLabel("0 spots");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(countLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-    connect(m_spotModel, &QAbstractTableModel::rowsInserted, this, [this, countLabel] {
-        countLabel->setText(QString("%1 spots").arg(m_spotModel->rowCount()));
-    });
-    bottomRow->addWidget(countLabel);
+    m_spotCountLabel = new QLabel("0 spots");
+    m_spotCountLabel->setObjectName("spotListCountLabel");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_spotCountLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+    // Keep the counter correct no matter which path mutates the model: live
+    // inserts, the local Clear button, or the Display tab's "Clear All"
+    // (which resets the model without touching this label). (#2022)
+    auto updateCount = [this] {
+        if (m_spotCountLabel)
+            m_spotCountLabel->setText(QString("%1 spots").arg(m_spotModel->rowCount()));
+    };
+    connect(m_spotModel, &QAbstractTableModel::rowsInserted, this, updateCount);
+    connect(m_spotModel, &QAbstractTableModel::rowsRemoved, this, updateCount);
+    connect(m_spotModel, &QAbstractTableModel::modelReset, this, updateCount);
+    bottomRow->addWidget(m_spotCountLabel);
     bottomRow->addStretch();
 
     auto* clearBtn = new QPushButton("Clear");
+    clearBtn->setObjectName("spotListClearBtn");
     clearBtn->setFixedWidth(60);
-    connect(clearBtn, &QPushButton::clicked, this, [this, countLabel] {
+    clearBtn->setToolTip("Clear the spot list and delete the stored cluster/RBN\n"
+                         "spot logs so the list stays empty after you reopen\n"
+                         "SpotHub. Does not send a command to the radio.");
+    connect(clearBtn, &QPushButton::clicked, this, [this] {
         m_spotModel->clear();
-        countLabel->setText("0 spots");
+        truncateLogFile(m_clusterLogPath);
+        truncateLogFile(m_rbnLogPath);
     });
     bottomRow->addWidget(clearBtn);
     layout->addLayout(bottomRow);
@@ -2042,17 +2107,37 @@ void DxClusterDialog::buildDisplayTab(QTabWidget* tabs)
         // the toggles so the row reads as one cluster.  Wipes DX spots,
         // memories feed, and S-History / QRM marker state in one click.
         auto* clearAllBtn = new QPushButton("Clear All");
+        clearAllBtn->setObjectName("displayClearAllBtn");
         clearAllBtn->setFixedWidth(90);
         clearAllBtn->setFixedHeight(26);
         clearAllBtn->setToolTip(
             "Clear all DX cluster, RBN, WSJT-X, memory feed, signal history,\n"
-            "and QRM history markers from the spectrum.");
+            "and QRM history markers from the spectrum, empty every console,\n"
+            "delete the stored source logs, and send a clear command to the\n"
+            "radio. The spot list stays empty after you reopen SpotHub.");
         clearAllBtn->setStyleSheet(kSpotHubToggle);
         connect(clearAllBtn, &QPushButton::clicked, this, [this] {
             m_radioModel->sendCommand("spot clear");
-            m_spotModel->clear();
+            m_spotModel->clear();  // modelReset → m_spotCountLabel updates itself
             if (m_totalSpotsLabel)
                 m_totalSpotsLabel->setText("0");
+            // Zero every source log and empty the consoles so nothing reloads
+            // from disk on the next dialog open. (#2022)
+            truncateLogFile(m_clusterLogPath);
+            truncateLogFile(m_rbnLogPath);
+            truncateLogFile(m_wsjtxLogPath);
+            truncateLogFile(m_potaLogPath);
+            truncateLogFile(m_scLogPath);
+            truncateLogFile(m_freedvLogPath);
+            for (QPlainTextEdit* console : {m_console, m_rbnConsole, m_wsjtxConsole,
+                                            m_scConsole, m_potaConsole}) {
+                if (console)
+                    console->clear();
+            }
+#ifdef HAVE_WEBSOCKETS
+            if (m_freedvConsole)
+                m_freedvConsole->clear();
+#endif
             emit spotsClearedAll();
             emit settingsChanged();
         });
