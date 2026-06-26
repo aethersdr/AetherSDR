@@ -1913,6 +1913,13 @@ target_include_directories(kiwi_sdr_protocol_test PRIVATE src)
 target_link_libraries(kiwi_sdr_protocol_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_protocol_test COMMAND kiwi_sdr_protocol_test)
 
+add_executable(kiwi_sdr_trace_math_test
+    tests/kiwi_sdr_trace_math_test.cpp
+)
+target_include_directories(kiwi_sdr_trace_math_test PRIVATE src)
+target_link_libraries(kiwi_sdr_trace_math_test PRIVATE Qt6::Core)
+add_test(NAME kiwi_sdr_trace_math_test COMMAND kiwi_sdr_trace_math_test)
+
 # Public-directory parser + external-API (ext_api) policy honoring.
 add_executable(kiwi_public_directory_test
     tests/kiwi_public_directory_test.cpp

@@ -351,6 +351,13 @@ private:
     void syncKiwiSdrDiversityEscControls();
     void syncKiwiSdrPanadapterUiState(const QString& panId);
     void syncKiwiSdrPanadapterUiStates();
+    enum KiwiSdrUiSyncFlag {
+        KiwiSdrUiSyncAppletReceivers = 0x01,
+        KiwiSdrUiSyncWaterfallAvailability = 0x02,
+        KiwiSdrUiSyncDiversityEsc = 0x04,
+        KiwiSdrUiSyncPanadapterStates = 0x08,
+    };
+    void scheduleKiwiSdrUiSync(int flags);
     void wirePanadapter(PanadapterApplet* applet);
     void wirePanReconcilers(PanadapterApplet* applet, PanadapterModel* pan);
     void schedulePanFpsReconcile(const QString& panId, int reportedFps);
@@ -789,6 +796,8 @@ private:
     AppletPanel*     m_appletPanel{nullptr};
     KiwiSdrManager*  m_kiwiSdrManager{nullptr};
     KiwiSdrClient*   m_kiwiSdrClient{nullptr};
+    int              m_kiwiSdrUiSyncFlags{0};
+    bool             m_kiwiSdrUiSyncPending{false};
     int              m_kiwiSdrTrackedSliceId{-1};
     int              m_kiwiSdrAudioSliceId{-1};
     bool             m_kiwiSdrAudioPreviousMute{false};

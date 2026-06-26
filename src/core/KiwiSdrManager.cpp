@@ -6,6 +6,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMetaObject>
+#include <QMetaType>
+#include <QThread>
 #include <QTimer>
 #include <QUuid>
 
@@ -31,12 +34,33 @@ QString normalizedProfileEndpoint(const QString& endpoint)
 KiwiSdrManager::KiwiSdrManager(QObject* parent)
     : QObject(parent)
 {
+    qRegisterMetaType<AetherSDR::KiwiSdrClient::State>(
+        "AetherSDR::KiwiSdrClient::State");
+    qRegisterMetaType<AetherSDR::KiwiSdrReceiverTelemetry>(
+        "AetherSDR::KiwiSdrReceiverTelemetry");
+    qRegisterMetaType<AetherSDR::KiwiSdrProtocol::MeterReading>(
+        "AetherSDR::KiwiSdrProtocol::MeterReading");
+    qRegisterMetaType<QVector<float>>("QVector<float>");
     loadSettings();
 }
 
 KiwiSdrManager::~KiwiSdrManager()
 {
     disconnectAll();
+    const QStringList ids = m_clients.keys();
+    for (const QString& id : ids) {
+        destroyClient(id, true);
+    }
+    if (m_clientThread) {
+        m_clientThread->quit();
+        if (!m_clientThread->wait(3000)) {
+            qCWarning(lcKiwiSdr)
+                << "KiwiSDR client thread did not stop during manager teardown";
+            m_clientThread->setParent(nullptr);
+            connect(m_clientThread, &QThread::finished,
+                    m_clientThread, &QObject::deleteLater);
+        }
+    }
 }
 
 KiwiSdrAntennaProfile KiwiSdrManager::profile(const QString& id) const
@@ -96,10 +120,7 @@ QStringList KiwiSdrManager::virtualAntennaLabels() const
 
 KiwiSdrClient::State KiwiSdrManager::state(const QString& id) const
 {
-    if (KiwiSdrClient* c = client(id)) {
-        return c->state();
-    }
-    return KiwiSdrClient::State::Disconnected;
+    return m_states.value(id, KiwiSdrClient::State::Disconnected);
 }
 
 QString KiwiSdrManager::stateDetail(const QString& id) const
@@ -109,34 +130,22 @@ QString KiwiSdrManager::stateDetail(const QString& id) const
 
 KiwiSdrReceiverTelemetry KiwiSdrManager::telemetry(const QString& id) const
 {
-    if (KiwiSdrClient* c = client(id)) {
-        return c->telemetry();
-    }
     return m_telemetry.value(id);
 }
 
 bool KiwiSdrManager::waterfallAvailable(const QString& id) const
 {
-    if (KiwiSdrClient* c = client(id)) {
-        return c->waterfallAvailable();
-    }
     return m_waterfallAvailable.value(id, true);
 }
 
 QString KiwiSdrManager::waterfallDetail(const QString& id) const
 {
-    if (KiwiSdrClient* c = client(id)) {
-        return c->waterfallAvailabilityDetail();
-    }
     return m_waterfallDetails.value(id);
 }
 
 bool KiwiSdrManager::isConnected(const QString& id) const
 {
-    if (KiwiSdrClient* c = client(id)) {
-        return c->isConnected();
-    }
-    return false;
+    return state(id) == KiwiSdrClient::State::Connected;
 }
 
 QString KiwiSdrManager::assignedProfileForSlice(int sliceId) const
@@ -199,15 +208,24 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
     }
 
     if (KiwiSdrClient* c = client(updated.id)) {
-        c->setWaterfallDisplayAdjustments(updated.waterfallCellDb,
-                                          updated.waterfallFloorDb);
-        c->setWaterfallRateOverride(updated.waterfallRate);
-        if (endpointChanged && c->state() != KiwiSdrClient::State::Disconnected) {
-            c->disconnectFromEndpoint();
-            if (!updated.endpoint.isEmpty()) {
-                c->connectToEndpoint(updated.endpoint);
+        Q_UNUSED(c);
+        invokeClient(updated.id, [cellDb = updated.waterfallCellDb,
+                                  floorDb = updated.waterfallFloorDb,
+                                  rate = updated.waterfallRate,
+                                  endpointChanged,
+                                  endpoint = updated.endpoint,
+                                  reconnect = state(updated.id)
+                                      != KiwiSdrClient::State::Disconnected](
+                                     KiwiSdrClient* client) {
+            client->setWaterfallDisplayAdjustments(cellDb, floorDb);
+            client->setWaterfallRateOverride(rate);
+            if (endpointChanged && reconnect) {
+                client->disconnectFromEndpoint();
+                if (!endpoint.isEmpty()) {
+                    client->connectToEndpoint(endpoint);
+                }
             }
-        }
+        });
     }
     emit profilesChanged();
 }
@@ -222,9 +240,7 @@ void KiwiSdrManager::removeProfile(const QString& id)
     qCInfo(lcKiwiSdr).noquote() << "Profile removed" << displayName(id) << "id=" << id;
     cancelReconnect(id);
     disconnectProfile(id);
-    if (KiwiSdrClient* c = m_clients.take(id)) {
-        c->deleteLater();
-    }
+    destroyClient(id);
     if (QTimer* timer = m_reconnectTimers.take(id)) {
         timer->deleteLater();
     }
@@ -237,14 +253,16 @@ void KiwiSdrManager::removeProfile(const QString& id)
     }
 
     m_stateDetails.remove(id);
+    m_states.remove(id);
+    m_clientHasTrackedSlice.remove(id);
     m_telemetry.remove(id);
     m_waterfallAvailable.remove(id);
     m_waterfallDetails.remove(id);
     m_profiles.removeAt(idx);
     saveSettings();
-    // The client is already deleted above, so no further audio will be fed for
-    // this id; free its audio-engine source state (disable alone leaves the
-    // per-source entry allocated — #3668 review).
+    // The client deletion is already scheduled above, so no further audio will
+    // be fed for this id; free its audio-engine source state (disable alone
+    // leaves the per-source entry allocated — #3668 review).
     emit audioSourceRemoved(id);
     emit profilesChanged();
 }
@@ -261,33 +279,47 @@ void KiwiSdrManager::connectProfile(const QString& id)
     if (!c || m_profiles[idx].endpoint.isEmpty()) {
         return;
     }
-    if (c->state() == KiwiSdrClient::State::Connecting
-        || c->state() == KiwiSdrClient::State::Connected) {
+    if (state(id) == KiwiSdrClient::State::Connecting
+        || state(id) == KiwiSdrClient::State::Connected) {
         return;
     }
-    c->setOperatorCallsign(m_operatorCallsign);
-    c->setWaterfallDisplayAdjustments(m_profiles[idx].waterfallCellDb,
-                                      m_profiles[idx].waterfallFloorDb);
-    c->setWaterfallRateOverride(m_profiles[idx].waterfallRate);
+    invokeClient(id, [callsign = m_operatorCallsign,
+                      cellDb = m_profiles[idx].waterfallCellDb,
+                      floorDb = m_profiles[idx].waterfallFloorDb,
+                      rate = m_profiles[idx].waterfallRate](
+                         KiwiSdrClient* client) {
+        client->setOperatorCallsign(callsign);
+        client->setWaterfallDisplayAdjustments(cellDb, floorDb);
+        client->setWaterfallRateOverride(rate);
+    });
     if (assignedSliceForProfile(id) < 0) {
-        c->setTrackedSlice(-1, 0.0, QString(), 0, 0, QString());
+        m_clientHasTrackedSlice.insert(id, false);
+        invokeClient(id, [](KiwiSdrClient* client) {
+            client->setTrackedSlice(-1, 0.0, QString(), 0, 0, QString());
+        });
         emit profileNeedsInitialTracking(id);
     }
-    if (!c->hasTrackedSlice()) {
+    if (!m_clientHasTrackedSlice.value(id, false)) {
         return;
     }
     qCInfo(lcKiwiSdr).noquote()
         << "Connecting" << m_profiles[idx].name
         << "->" << m_profiles[idx].endpoint;
-    c->connectToEndpoint(m_profiles[idx].endpoint);
+    m_states.insert(id, KiwiSdrClient::State::Connecting);
+    invokeClient(id, [endpoint = m_profiles[idx].endpoint](KiwiSdrClient* client) {
+        client->connectToEndpoint(endpoint);
+    });
 }
 
 void KiwiSdrManager::disconnectProfile(const QString& id)
 {
     cancelReconnect(id);
     if (KiwiSdrClient* c = client(id)) {
+        Q_UNUSED(c);
         qCInfo(lcKiwiSdr).noquote() << "Disconnecting" << displayName(id);
-        c->disconnectFromEndpoint();
+        invokeClient(id, [](KiwiSdrClient* client) {
+            client->disconnectFromEndpoint();
+        });
     }
     emit audioSourceEnabledChanged(id, false);
 }
@@ -299,20 +331,20 @@ void KiwiSdrManager::disconnectAll()
             timer->stop();
         }
     }
-    for (KiwiSdrClient* c : std::as_const(m_clients)) {
-        if (c) {
-            c->disconnectFromEndpoint();
-        }
+    for (auto it = m_clients.constBegin(); it != m_clients.constEnd(); ++it) {
+        invokeClient(it.key(), [](KiwiSdrClient* client) {
+            client->disconnectFromEndpoint();
+        });
     }
 }
 
 void KiwiSdrManager::setOperatorCallsign(const QString& callsign)
 {
     m_operatorCallsign = callsign;
-    for (KiwiSdrClient* c : std::as_const(m_clients)) {
-        if (c) {
-            c->setOperatorCallsign(callsign);
-        }
+    for (auto it = m_clients.constBegin(); it != m_clients.constEnd(); ++it) {
+        invokeClient(it.key(), [callsign](KiwiSdrClient* client) {
+            client->setOperatorCallsign(callsign);
+        });
     }
 }
 
@@ -340,12 +372,18 @@ void KiwiSdrManager::primeProfileTracking(const QString& id, int sliceId,
     }
 
     if (KiwiSdrClient* c = ensureClient(id)) {
-        c->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
-                           filterHighHz, panId);
-        c->setWaterfallLineDurationMs(lineDurationMs);
-        if (!panId.isEmpty() && centerMhz > 0.0 && bandwidthMhz > 0.0) {
-            c->setWaterfallView(panId, centerMhz, bandwidthMhz);
-        }
+        Q_UNUSED(c);
+        m_clientHasTrackedSlice.insert(id, true);
+        invokeClient(id, [sliceId, frequencyMhz, mode, filterLowHz,
+                          filterHighHz, panId, lineDurationMs,
+                          centerMhz, bandwidthMhz](KiwiSdrClient* client) {
+            client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
+                                    filterHighHz, panId);
+            client->setWaterfallLineDurationMs(lineDurationMs);
+            if (!panId.isEmpty() && centerMhz > 0.0 && bandwidthMhz > 0.0) {
+                client->setWaterfallView(panId, centerMhz, bandwidthMhz);
+            }
+        });
     }
 }
 
@@ -364,7 +402,10 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
     if (!previousProfile.isEmpty() && previousProfile != profileId) {
         emit audioSourceEnabledChanged(previousProfile, false);
         if (KiwiSdrClient* previousClient = client(previousProfile)) {
-            previousClient->setAudioActive(false);
+            Q_UNUSED(previousClient);
+            invokeClient(previousProfile, [](KiwiSdrClient* client) {
+                client->setAudioActive(false);
+            });
         }
     }
 
@@ -384,9 +425,16 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
     emit sliceAssignmentChanged(sliceId, profileId);
 
     if (KiwiSdrClient* c = ensureClient(profileId)) {
-        c->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
-                           filterHighHz, panId);
-        c->setAudioActive(c->isConnected());
+        Q_UNUSED(c);
+        m_clientHasTrackedSlice.insert(profileId, sliceId >= 0 && frequencyMhz > 0.0);
+        const bool connected = state(profileId) == KiwiSdrClient::State::Connected;
+        invokeClient(profileId, [sliceId, frequencyMhz, mode, filterLowHz,
+                                 filterHighHz, panId, connected](
+                                    KiwiSdrClient* client) {
+            client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
+                                    filterHighHz, panId);
+            client->setAudioActive(connected);
+        });
     }
     connectProfile(profileId);
     emit audioSourceEnabledChanged(profileId, true);
@@ -403,7 +451,10 @@ void KiwiSdrManager::clearSliceAssignment(int sliceId)
         << "Slice" << sliceId << "cleared from" << displayName(previousProfile);
     emit audioSourceEnabledChanged(previousProfile, false);
     if (KiwiSdrClient* c = client(previousProfile)) {
-        c->setAudioActive(false);
+        Q_UNUSED(c);
+        invokeClient(previousProfile, [](KiwiSdrClient* client) {
+            client->setAudioActive(false);
+        });
     }
     emit sliceAssignmentChanged(sliceId, QString());
 }
@@ -418,8 +469,14 @@ void KiwiSdrManager::updateSliceTracking(int sliceId, double frequencyMhz,
         return;
     }
     if (KiwiSdrClient* c = ensureClient(profileId)) {
-        c->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
-                           filterHighHz, panId);
+        Q_UNUSED(c);
+        m_clientHasTrackedSlice.insert(profileId, sliceId >= 0 && frequencyMhz > 0.0);
+        invokeClient(profileId, [sliceId, frequencyMhz, mode,
+                                 filterLowHz, filterHighHz, panId](
+                                    KiwiSdrClient* client) {
+            client->setTrackedSlice(sliceId, frequencyMhz, mode, filterLowHz,
+                                    filterHighHz, panId);
+        });
     }
 }
 
@@ -432,8 +489,12 @@ void KiwiSdrManager::updateWaterfallView(int sliceId, const QString& panId,
         return;
     }
     if (KiwiSdrClient* c = ensureClient(profileId)) {
-        c->setWaterfallLineDurationMs(lineDurationMs);
-        c->setWaterfallView(panId, centerMhz, bandwidthMhz);
+        Q_UNUSED(c);
+        invokeClient(profileId, [panId, centerMhz, bandwidthMhz,
+                                 lineDurationMs](KiwiSdrClient* client) {
+            client->setWaterfallLineDurationMs(lineDurationMs);
+            client->setWaterfallView(panId, centerMhz, bandwidthMhz);
+        });
     }
 }
 
@@ -446,7 +507,10 @@ void KiwiSdrManager::setReceiverControlsForSlice(
     }
 
     if (KiwiSdrClient* c = ensureClient(profileId)) {
-        c->setReceiverControls(controls);
+        Q_UNUSED(c);
+        invokeClient(profileId, [controls](KiwiSdrClient* client) {
+            client->setReceiverControls(controls);
+        });
     }
 }
 
@@ -475,12 +539,21 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
         return nullptr;
     }
 
-    auto* c = new KiwiSdrClient(this);
+    ensureClientThread();
+    auto* c = new KiwiSdrClient;
     c->setDecodeAudioWhenInactive(false);
     c->setOperatorCallsign(m_operatorCallsign);
+    c->moveToThread(m_clientThread);
+    connect(m_clientThread, &QThread::finished, c, &QObject::deleteLater);
     m_clients.insert(id, c);
+    m_states.insert(id, KiwiSdrClient::State::Disconnected);
+    m_clientHasTrackedSlice.insert(id, false);
     connect(c, &KiwiSdrClient::stateChanged,
             this, [this, id, c](KiwiSdrClient::State state, const QString& detail) {
+        if (client(id) != c) {
+            return;
+        }
+        m_states.insert(id, state);
         m_stateDetails.insert(id, detail);
         qCInfo(lcKiwiSdr).noquote()
             << "State" << displayName(id) << "->" << static_cast<int>(state)
@@ -494,13 +567,23 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
         }
         if (state == KiwiSdrClient::State::Connected) {
             const int idx = profileIndex(id);
-            if (idx >= 0) {
-                c->setWaterfallDisplayAdjustments(m_profiles[idx].waterfallCellDb,
-                                                  m_profiles[idx].waterfallFloorDb);
-                c->setWaterfallRateOverride(m_profiles[idx].waterfallRate);
+            const bool hasAssignedSlice = assignedSliceForProfile(id) >= 0;
+            if (idx >= 0 || hasAssignedSlice) {
+                const int cellDb = idx >= 0 ? m_profiles[idx].waterfallCellDb : 0;
+                const int floorDb = idx >= 0 ? m_profiles[idx].waterfallFloorDb : 0;
+                const int rate = idx >= 0 ? m_profiles[idx].waterfallRate : 0;
+                invokeClient(id, [idx, cellDb, floorDb, rate, hasAssignedSlice](
+                                     KiwiSdrClient* client) {
+                    if (idx >= 0) {
+                        client->setWaterfallDisplayAdjustments(cellDb, floorDb);
+                        client->setWaterfallRateOverride(rate);
+                    }
+                    if (hasAssignedSlice) {
+                        client->setAudioActive(true);
+                    }
+                });
             }
-            if (assignedSliceForProfile(id) >= 0) {
-                c->setAudioActive(true);
+            if (hasAssignedSlice) {
                 emit audioSourceEnabledChanged(id, true);
             }
         } else if (state == KiwiSdrClient::State::Disconnected
@@ -513,17 +596,27 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
                     detail));
         }
         emit profileStateChanged(id, state, detail);
-    });
+    }, Qt::QueuedConnection);
     connect(c, &KiwiSdrClient::recoverableDisconnect,
-            this, [this, id](const QString&) {
+            this, [this, id, c](const QString&) {
+        if (client(id) != c) {
+            return;
+        }
         scheduleReconnect(id);
-    });
-    connect(c, &KiwiSdrClient::telemetryChanged, this, [this, id, c]() {
-        m_telemetry.insert(id, c->telemetry());
-        emit profileTelemetryChanged(id, m_telemetry.value(id));
-    });
+    }, Qt::QueuedConnection);
+    connect(c, &KiwiSdrClient::telemetryChanged, this,
+            [this, id, c](const KiwiSdrReceiverTelemetry& telemetry) {
+        if (client(id) != c) {
+            return;
+        }
+        m_telemetry.insert(id, telemetry);
+        emit profileTelemetryChanged(id, telemetry);
+    }, Qt::QueuedConnection);
     connect(c, &KiwiSdrClient::waterfallAvailabilityChanged,
-            this, [this, id](bool available, const QString& detail) {
+            this, [this, id, c](bool available, const QString& detail) {
+        if (client(id) != c) {
+            return;
+        }
         m_waterfallAvailable.insert(id, available);
         if (detail.isEmpty()) {
             m_waterfallDetails.remove(id);
@@ -531,28 +624,86 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
             m_waterfallDetails.insert(id, detail);
         }
         emit profileWaterfallAvailabilityChanged(id, available, detail);
-    });
+    }, Qt::QueuedConnection);
     connect(c, &KiwiSdrClient::decodedAudioReady,
-            this, [this, id](const QByteArray& pcm) {
+            this, [this, id, c](const QByteArray& pcm) {
+        if (client(id) != c) {
+            return;
+        }
         emit decodedAudioReady(id, pcm);
-    });
+    }, Qt::QueuedConnection);
     connect(c, &KiwiSdrClient::waterfallRowReady,
-            this, [this, id](const QString& panId, const QVector<float>& binsDbm,
+            this, [this, id, c](const QString& panId, const QVector<float>& binsDbm,
                              double lowFreqMhz, double highFreqMhz,
                              quint32 timecode) {
+        if (client(id) != c) {
+            return;
+        }
         emit waterfallRowReady(id, panId, binsDbm, lowFreqMhz, highFreqMhz,
                                timecode);
-    });
+    }, Qt::QueuedConnection);
     connect(c, &KiwiSdrClient::meterReadingReady,
-            this, [this, id](const KiwiSdrProtocol::MeterReading& reading) {
+            this, [this, id, c](const KiwiSdrProtocol::MeterReading& reading) {
+        if (client(id) != c) {
+            return;
+        }
         emit meterReadingReady(id, reading);
-    });
+    }, Qt::QueuedConnection);
     return c;
 }
 
 KiwiSdrClient* KiwiSdrManager::client(const QString& id) const
 {
     return m_clients.value(id, nullptr);
+}
+
+void KiwiSdrManager::ensureClientThread()
+{
+    if (m_clientThread) {
+        return;
+    }
+
+    m_clientThread = new QThread(this);
+    m_clientThread->setObjectName(QStringLiteral("KiwiSdrClients"));
+    m_clientThread->start();
+}
+
+void KiwiSdrManager::invokeClient(
+    const QString& id,
+    std::function<void(KiwiSdrClient*)> fn)
+{
+    KiwiSdrClient* c = client(id);
+    if (!c) {
+        return;
+    }
+
+    QMetaObject::invokeMethod(c, [c, fn = std::move(fn)]() {
+        fn(c);
+    }, Qt::QueuedConnection);
+}
+
+void KiwiSdrManager::destroyClient(const QString& id, bool blocking)
+{
+    KiwiSdrClient* c = m_clients.take(id);
+    if (!c) {
+        return;
+    }
+
+    c->disconnect(this);
+    m_states.remove(id);
+    m_stateDetails.remove(id);
+    m_clientHasTrackedSlice.remove(id);
+    m_telemetry.remove(id);
+    m_waterfallAvailable.remove(id);
+    m_waterfallDetails.remove(id);
+    const Qt::ConnectionType connectionType =
+        blocking && c->thread() != QThread::currentThread()
+            ? Qt::BlockingQueuedConnection
+            : Qt::QueuedConnection;
+    QMetaObject::invokeMethod(c, [c]() {
+        c->disconnectFromEndpoint();
+        c->deleteLater();
+    }, connectionType);
 }
 
 int KiwiSdrManager::profileIndex(const QString& id) const

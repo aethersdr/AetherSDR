@@ -1,4 +1,5 @@
 #include "SpectrumWidget.h"
+#include "KiwiSdrTraceMath.h"
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "SliceColors.h"
@@ -78,6 +79,10 @@ static constexpr float kKiwiSdrWaterfallMaxDbm = 0.0f;
 static constexpr int kNativeWaterfallFallbackMinTimeoutMs = 2000;
 static constexpr int kNativeWaterfallFallbackMaxTimeoutMs = 20000;
 static constexpr int kNativeWaterfallRateChangeGraceMaxMs = 14000;
+static constexpr int kPanDragFrameMs = 33;
+static constexpr int kPanDragCommandMs = 33;
+static constexpr int kPanDragSettleMs = 160;
+static constexpr int kFrequencyRangeSettleMs = 300;
 static constexpr int kDbmReleaseHoldFrames = 10;
 static constexpr int kDbmReleaseErrorSampleCount = 256;
 static constexpr float kDbmReleasePreviewChangeThresholdDb = 0.05f;
@@ -90,6 +95,11 @@ static constexpr const char* kSliceCursorOverrideHadCursorProperty =
     "_aetherSliceCursorOverrideHadCursor";
 static constexpr const char* kSliceCursorOverrideShapeProperty =
     "_aetherSliceCursorOverrideShape";
+
+static bool mhzNearlyEqual(double a, double b)
+{
+    return std::abs(a - b) <= 1.0e-6;
+}
 
 static Qt::CursorShape normalizedSpectrumCursorShape(Qt::CursorShape shape)
 {
@@ -709,6 +719,25 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
             m_vfoDragEdgePanTimer->stop();
         }
     });
+    m_panDragSettleTimer = new QTimer(this);
+    m_panDragSettleTimer->setSingleShot(true);
+    m_panDragSettleTimer->setInterval(kPanDragSettleMs);
+    connect(m_panDragSettleTimer, &QTimer::timeout, this, [this]() {
+        if (m_draggingPan) {
+            emit panDragSettled(m_centerMhz, m_bandwidthMhz);
+        }
+    });
+    m_frequencyRangeSettleTimer = new QTimer(this);
+    m_frequencyRangeSettleTimer->setSingleShot(true);
+    m_frequencyRangeSettleTimer->setInterval(kFrequencyRangeSettleMs);
+    connect(m_frequencyRangeSettleTimer, &QTimer::timeout, this, [this]() {
+        if (!m_frequencyRangeSettlePending) {
+            return;
+        }
+        m_frequencyRangeSettlePending = false;
+        m_frequencyRangePendingValid = false;
+        emit frequencyRangeSettled(m_centerMhz, m_bandwidthMhz);
+    });
 
     // Load display settings (panIndex 0 by default — loadSettings() can be
     // called again after setPanIndex() for multi-pan)
@@ -780,6 +809,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         m_bandwidthMhz = newBw;
         resetNoiseFloorBaseline();
         markOverlayDirty();
+        scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
         emit frequencyRangeChangeRequested(newCenter, newBw);
     };
     connect(m_zoomOutBtn, &QPushButton::clicked, this, [emitZoom]() { emitZoom(1.5); });
@@ -1748,6 +1778,27 @@ float SpectrumWidget::estimateKiwiSdrVisualNoiseFloorDbm(
     const int middle = finite.size() / 2;
     std::nth_element(finite.begin(), finite.begin() + middle, finite.end());
     return finite[middle];
+}
+
+float SpectrumWidget::estimateKiwiSdrTraceFloorDbm(
+    const QVector<float>& bins) const
+{
+    return KiwiSdrTraceMath::estimateTraceFloorDbm(
+        bins, kKiwiSdrWaterfallMinDbm);
+}
+
+void SpectrumWidget::stabilizeKiwiSdrFftTrace(QVector<float>& bins,
+                                              bool allowFloorAdapt)
+{
+    KiwiSdrTraceMath::TraceFloorState state{
+        m_kiwiSdrFftTraceFloorDbm,
+        m_kiwiSdrFftTraceFloorValid
+    };
+    KiwiSdrTraceMath::stabilizeTraceFloor(
+        bins, state, allowFloorAdapt,
+        kKiwiSdrWaterfallMinDbm, kKiwiSdrWaterfallMaxDbm);
+    m_kiwiSdrFftTraceFloorDbm = state.floorDbm;
+    m_kiwiSdrFftTraceFloorValid = state.valid;
 }
 
 void SpectrumWidget::updateKiwiSdrSquelchVisualFloor(float floorDbm)
@@ -3289,9 +3340,45 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_kiwiSdrAutoFloorDbm = kKiwiSdrWaterfallMinDbm;
     m_kiwiSdrAutoCeilDbm = kKiwiSdrWaterfallMaxDbm;
     m_kiwiSdrAutoRangeValid = false;
+    m_kiwiSdrFftTraceFloorDbm = -1000.0f;
+    m_kiwiSdrFftTraceFloorValid = false;
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
+}
+
+void SpectrumWidget::resetCurrentWaterfallRowsForSize(
+    const QSize& waterfallSize,
+    const QSize& historySize)
+{
+    if (!waterfallSize.isEmpty()) {
+        m_waterfall = QImage(waterfallSize, QImage::Format_RGB32);
+        m_waterfallStreamSizeHint = waterfallSize;
+    } else {
+        m_waterfall = QImage();
+        m_waterfallStreamSizeHint = QSize();
+    }
+
+    QSize desiredHistorySize = historySize;
+    if (desiredHistorySize.isEmpty() && !waterfallSize.isEmpty()) {
+        desiredHistorySize =
+            QSize(waterfallSize.width(), waterfallHistoryCapacityRows());
+    }
+    if (!desiredHistorySize.isEmpty()) {
+        m_waterfallHistory = QImage(desiredHistorySize, QImage::Format_RGB32);
+        m_waterfallHistoryStreamSizeHint = desiredHistorySize;
+        m_wfHistoryTimestamps = QVector<qint64>(desiredHistorySize.height(), 0);
+        m_wfHistoryRowCenterMhz = QVector<double>(desiredHistorySize.height(), 0.0);
+        m_wfHistoryRowBwMhz = QVector<double>(desiredHistorySize.height(), 0.0);
+    } else {
+        m_waterfallHistory = QImage();
+        m_waterfallHistoryStreamSizeHint = QSize();
+        m_wfHistoryTimestamps.clear();
+        m_wfHistoryRowCenterMhz.clear();
+        m_wfHistoryRowBwMhz.clear();
+    }
+
+    clearCurrentWaterfallRows();
 }
 
 void SpectrumWidget::clearWaterfallRows()
@@ -3315,27 +3402,43 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     WaterfallStreamState& state = m_kiwiSdrWaterfallActive
         ? activeKiwiWaterfallState()
         : m_nativeWaterfallState;
-    state.waterfall = m_waterfall;
-    state.wfWriteRow = m_wfWriteRow;
-    state.waterfallHistory = m_waterfallHistory;
-    state.historyTimestamps = m_wfHistoryTimestamps;
-    state.historyWriteRow = m_wfHistoryWriteRow;
-    state.historyRowCount = m_wfHistoryRowCount;
-    state.historyOffsetRows = m_wfHistoryOffsetRows;
-    state.historyRowCenterMhz = m_wfHistoryRowCenterMhz;
-    state.historyRowBwMhz = m_wfHistoryRowBwMhz;
-    state.live = m_wfLive;
-    state.rowsSinceRateChange = m_wfRowsSinceRateChange;
-    state.prevTileScanline = m_prevTileScanline;
-    state.kiwiFftTrace = m_kiwiSdrFftTrace;
-    state.kiwiLastWaterfallBins = m_kiwiSdrLastWaterfallBins;
-    state.kiwiLastWaterfallCenterMhz = m_kiwiSdrLastWaterfallCenterMhz;
-    state.kiwiLastWaterfallBandwidthMhz = m_kiwiSdrLastWaterfallBandwidthMhz;
-    state.kiwiLastWaterfallFrameValid = m_kiwiSdrLastWaterfallFrameValid;
-    state.kiwiAutoFloorDbm = m_kiwiSdrAutoFloorDbm;
-    state.kiwiAutoCeilDbm = m_kiwiSdrAutoCeilDbm;
-    state.kiwiAutoRangeValid = m_kiwiSdrAutoRangeValid;
-    state.valid = true;
+
+    if (!m_waterfall.isNull()) {
+        m_waterfallStreamSizeHint = m_waterfall.size();
+    }
+    if (!m_waterfallHistory.isNull()) {
+        m_waterfallHistoryStreamSizeHint = m_waterfallHistory.size();
+    }
+
+    // Transfer ownership between the visible stream and saved stream state.
+    // QImage assignment would COW-share the large waterfall history, making the
+    // next scanline write detach and copy the whole image on the GUI thread.
+    WaterfallStreamState updated;
+    updated.waterfall = std::move(m_waterfall);
+    updated.wfWriteRow = m_wfWriteRow;
+    updated.waterfallHistory = std::move(m_waterfallHistory);
+    updated.historyTimestamps = std::move(m_wfHistoryTimestamps);
+    updated.historyWriteRow = m_wfHistoryWriteRow;
+    updated.historyRowCount = m_wfHistoryRowCount;
+    updated.historyOffsetRows = m_wfHistoryOffsetRows;
+    updated.historyRowCenterMhz = std::move(m_wfHistoryRowCenterMhz);
+    updated.historyRowBwMhz = std::move(m_wfHistoryRowBwMhz);
+    updated.live = m_wfLive;
+    updated.rowsSinceRateChange = m_wfRowsSinceRateChange;
+    updated.prevTileScanline = std::move(m_prevTileScanline);
+    updated.kiwiFftTrace = std::move(m_kiwiSdrFftTrace);
+    updated.kiwiLastWaterfallBins = std::move(m_kiwiSdrLastWaterfallBins);
+    updated.kiwiLastWaterfallCenterMhz = m_kiwiSdrLastWaterfallCenterMhz;
+    updated.kiwiLastWaterfallBandwidthMhz = m_kiwiSdrLastWaterfallBandwidthMhz;
+    updated.kiwiLastWaterfallFrameValid = m_kiwiSdrLastWaterfallFrameValid;
+    updated.kiwiAutoFloorDbm = m_kiwiSdrAutoFloorDbm;
+    updated.kiwiAutoCeilDbm = m_kiwiSdrAutoCeilDbm;
+    updated.kiwiAutoRangeValid = m_kiwiSdrAutoRangeValid;
+    updated.kiwiFftTraceFloorDbm = m_kiwiSdrFftTraceFloorDbm;
+    updated.kiwiFftTraceFloorValid = m_kiwiSdrFftTraceFloorValid;
+    updated.valid = !updated.waterfall.isNull();
+
+    state = std::move(updated);
 }
 
 void SpectrumWidget::restoreCurrentWaterfallStreamState()
@@ -3343,41 +3446,57 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     WaterfallStreamState& state = m_kiwiSdrWaterfallActive
         ? activeKiwiWaterfallState()
         : m_nativeWaterfallState;
-    const QSize currentSize = m_waterfall.size();
-    const QSize currentHistorySize = m_waterfallHistory.size();
-    if (!state.valid
-        || (!currentSize.isEmpty() && !state.waterfall.isNull()
-            && state.waterfall.size() != currentSize)
-        || (!currentHistorySize.isEmpty() && !state.waterfallHistory.isNull()
-            && state.waterfallHistory.size() != currentHistorySize)) {
-        clearCurrentWaterfallRows();
+    const QSize currentSize = !m_waterfall.isNull()
+        ? m_waterfall.size()
+        : m_waterfallStreamSizeHint;
+    const QSize currentHistorySize = !m_waterfallHistory.isNull()
+        ? m_waterfallHistory.size()
+        : m_waterfallHistoryStreamSizeHint;
+
+    const bool stateHasWrongWaterfall =
+        !currentSize.isEmpty()
+        && (state.waterfall.isNull() || state.waterfall.size() != currentSize);
+    const bool stateHasWrongHistory =
+        !currentHistorySize.isEmpty()
+        && (state.waterfallHistory.isNull()
+            || state.waterfallHistory.size() != currentHistorySize);
+    if (!state.valid || stateHasWrongWaterfall || stateHasWrongHistory) {
+        state = WaterfallStreamState{};
+        resetCurrentWaterfallRowsForSize(currentSize, currentHistorySize);
         return;
     }
 
-    if (!state.waterfall.isNull()) {
-        m_waterfall = state.waterfall;
+    WaterfallStreamState restored = std::move(state);
+    state = WaterfallStreamState{};
+
+    m_waterfall = std::move(restored.waterfall);
+    if (!m_waterfall.isNull()) {
+        m_waterfallStreamSizeHint = m_waterfall.size();
     }
-    m_wfWriteRow = state.wfWriteRow;
-    if (!state.waterfallHistory.isNull()) {
-        m_waterfallHistory = state.waterfallHistory;
+    m_wfWriteRow = restored.wfWriteRow;
+    m_waterfallHistory = std::move(restored.waterfallHistory);
+    if (!m_waterfallHistory.isNull()) {
+        m_waterfallHistoryStreamSizeHint = m_waterfallHistory.size();
     }
-    m_wfHistoryTimestamps = state.historyTimestamps;
-    m_wfHistoryWriteRow = state.historyWriteRow;
-    m_wfHistoryRowCount = state.historyRowCount;
-    m_wfHistoryOffsetRows = state.historyOffsetRows;
-    m_wfHistoryRowCenterMhz = state.historyRowCenterMhz;
-    m_wfHistoryRowBwMhz = state.historyRowBwMhz;
-    m_wfLive = state.live;
-    m_wfRowsSinceRateChange = state.rowsSinceRateChange;
-    m_prevTileScanline = state.prevTileScanline;
-    m_kiwiSdrFftTrace = state.kiwiFftTrace;
-    m_kiwiSdrLastWaterfallBins = state.kiwiLastWaterfallBins;
-    m_kiwiSdrLastWaterfallCenterMhz = state.kiwiLastWaterfallCenterMhz;
-    m_kiwiSdrLastWaterfallBandwidthMhz = state.kiwiLastWaterfallBandwidthMhz;
-    m_kiwiSdrLastWaterfallFrameValid = state.kiwiLastWaterfallFrameValid;
-    m_kiwiSdrAutoFloorDbm = state.kiwiAutoFloorDbm;
-    m_kiwiSdrAutoCeilDbm = state.kiwiAutoCeilDbm;
-    m_kiwiSdrAutoRangeValid = state.kiwiAutoRangeValid;
+    m_wfHistoryTimestamps = std::move(restored.historyTimestamps);
+    m_wfHistoryWriteRow = restored.historyWriteRow;
+    m_wfHistoryRowCount = restored.historyRowCount;
+    m_wfHistoryOffsetRows = restored.historyOffsetRows;
+    m_wfHistoryRowCenterMhz = std::move(restored.historyRowCenterMhz);
+    m_wfHistoryRowBwMhz = std::move(restored.historyRowBwMhz);
+    m_wfLive = restored.live;
+    m_wfRowsSinceRateChange = restored.rowsSinceRateChange;
+    m_prevTileScanline = std::move(restored.prevTileScanline);
+    m_kiwiSdrFftTrace = std::move(restored.kiwiFftTrace);
+    m_kiwiSdrLastWaterfallBins = std::move(restored.kiwiLastWaterfallBins);
+    m_kiwiSdrLastWaterfallCenterMhz = restored.kiwiLastWaterfallCenterMhz;
+    m_kiwiSdrLastWaterfallBandwidthMhz = restored.kiwiLastWaterfallBandwidthMhz;
+    m_kiwiSdrLastWaterfallFrameValid = restored.kiwiLastWaterfallFrameValid;
+    m_kiwiSdrAutoFloorDbm = restored.kiwiAutoFloorDbm;
+    m_kiwiSdrAutoCeilDbm = restored.kiwiAutoCeilDbm;
+    m_kiwiSdrAutoRangeValid = restored.kiwiAutoRangeValid;
+    m_kiwiSdrFftTraceFloorDbm = restored.kiwiFftTraceFloorDbm;
+    m_kiwiSdrFftTraceFloorValid = restored.kiwiFftTraceFloorValid;
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
@@ -3883,14 +4002,14 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
         return false;
     }
 
-    auto reprojectBins = [&](QVector<float>& bins) {
+    auto reprojectBins = [&](QVector<float>& bins, float fallback) {
         const int binCount = bins.size();
         if (binCount <= 0) {
             return;
         }
 
         const QVector<float> oldBins = std::move(bins);
-        QVector<float> reprojected(binCount, m_refLevel - m_dynamicRange);
+        QVector<float> reprojected(binCount, fallback);
 
         for (int dst = 0; dst < binCount; ++dst) {
             const double dstFrac = (static_cast<double>(dst) + 0.5) / binCount;
@@ -3915,15 +4034,36 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
         bins = std::move(reprojected);
     };
 
-    reprojectBins(m_bins);
-    reprojectBins(m_smoothed);
-    return !m_bins.isEmpty() || !m_smoothed.isEmpty();
+    reprojectBins(m_bins, m_refLevel - m_dynamicRange);
+    reprojectBins(m_smoothed, m_refLevel - m_dynamicRange);
+    reprojectBins(m_kiwiSdrFftTrace, kKiwiSdrWaterfallMinDbm);
+    return !m_bins.isEmpty() || !m_smoothed.isEmpty()
+        || !m_kiwiSdrFftTrace.isEmpty();
 }
 
 void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
 {
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
+
+    // While the user is actively panning, the local drag path owns the visual
+    // center and sends throttled range commands. Radio echoes for intermediate
+    // drag positions are stale by the time they arrive and would force extra
+    // waterfall reprojections back through old frames.
+    if (m_draggingPan && mhzNearlyEqual(bandwidthMhz, m_bandwidthMhz)) {
+        return;
+    }
+
+    // While a local zoom/range gesture is settling, the widget owns the visual
+    // center and bandwidth. Flex can echo older center-only statuses after a
+    // combined center+bandwidth command; accepting those stale centers retargets
+    // the local view and can churn remote Kiwi W/F zoom/start requests.
+    if (m_frequencyRangeSettlePending
+        && m_frequencyRangePendingValid
+        && !mhzNearlyEqual(centerMhz, m_centerMhz)
+        && !mhzNearlyEqual(centerMhz, m_frequencyRangePendingCenterMhz)) {
+        return;
+    }
 
     const double oldCenterMhz = m_centerMhz;
     const double oldBandwidthMhz = m_bandwidthMhz;
@@ -4912,6 +5052,8 @@ void SpectrumWidget::clearKiwiSdrWaterfallRows()
     m_kiwiWaterfallState = WaterfallStreamState{};
     m_kiwiProfileWaterfallStates.clear();
     m_kiwiSdrFftTrace.clear();
+    m_kiwiSdrFftTraceFloorDbm = -1000.0f;
+    m_kiwiSdrFftTraceFloorValid = false;
     if (m_kiwiSdrWaterfallActive) {
         clearCurrentWaterfallRows();
         leanCappedUpdate();
@@ -4994,6 +5136,23 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
     const bool sameWaterfallFrame = m_kiwiSdrLastWaterfallFrameValid
         && std::abs(rowCenterMhz - m_kiwiSdrLastWaterfallCenterMhz) <= centerToleranceMhz
         && std::abs(rowBandwidthMhz - m_kiwiSdrLastWaterfallBandwidthMhz) <= bandwidthToleranceMhz;
+    const double rowLowBoundMhz = rowCenterMhz - rowBandwidthMhz * 0.5;
+    const double rowHighBoundMhz = rowCenterMhz + rowBandwidthMhz * 0.5;
+    const double viewLowBoundMhz = m_centerMhz - m_bandwidthMhz * 0.5;
+    const double viewHighBoundMhz = m_centerMhz + m_bandwidthMhz * 0.5;
+    const double overlapMhz = std::max(
+        0.0,
+        std::min(rowHighBoundMhz, viewHighBoundMhz)
+            - std::max(rowLowBoundMhz, viewLowBoundMhz));
+    const double viewCoverage = (m_bandwidthMhz > 0.0)
+        ? overlapMhz / m_bandwidthMhz
+        : 0.0;
+    const bool rowHasUsableTraceCoverage = viewCoverage >= 0.05;
+    const bool rowCanDriveAutoLevel =
+        viewCoverage >= 0.98
+        && !m_draggingPan
+        && !m_draggingBandwidth
+        && !m_frequencyRangeSettlePending;
     if (!sameWaterfallFrame) {
         m_kiwiSdrLastWaterfallBins.clear();
         m_kiwiSdrLastWaterfallCenterMhz = rowCenterMhz;
@@ -5002,29 +5161,14 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
     }
 
     const QVector<float> smoothedBins = smoothKiwiSdrWaterfallBins(binsDbm);
-    if (m_kiwiSdrWaterfallActive && destWidth > 0) {
-        QVector<float> kiwiTrace(destWidth, kKiwiSdrWaterfallMinDbm);
-        const double rowLow = rowCenterMhz - rowBandwidthMhz * 0.5;
-        const double viewLow = m_centerMhz - m_bandwidthMhz * 0.5;
-        const int srcSize = smoothedBins.size();
-        for (int x = 0; x < destWidth; ++x) {
-            const double freqMhz = viewLow
-                + (static_cast<double>(x) + 0.5)
-                    * m_bandwidthMhz / static_cast<double>(destWidth);
-            const double srcCenter =
-                ((freqMhz - rowLow) / rowBandwidthMhz)
-                    * static_cast<double>(srcSize) - 0.5;
-            if (srcCenter < -0.5
-                || srcCenter > static_cast<double>(srcSize) - 0.5) {
-                continue;
-            }
-            const double srcLeft = std::max(0.0, srcCenter - 0.5);
-            const double srcRight =
-                std::min(static_cast<double>(srcSize), srcCenter + 0.5);
-            kiwiTrace[x] = peakPreservedBinSample(
-                smoothedBins, srcLeft, srcRight, srcCenter,
-                kKiwiSdrWaterfallMinDbm);
-        }
+    if (m_kiwiSdrWaterfallActive && destWidth > 0 && rowHasUsableTraceCoverage) {
+        // The waterfall preserves narrow peaks, but the FFT line must not rise
+        // just because a pan/zoom step changes the sampled row window. Average
+        // the covered bins and normalize the row below.
+        QVector<float> kiwiTrace = KiwiSdrTraceMath::mapRowToTrace(
+            smoothedBins, destWidth, rowCenterMhz, rowBandwidthMhz,
+            m_centerMhz, m_bandwidthMhz, kKiwiSdrWaterfallMinDbm);
+        stabilizeKiwiSdrFftTrace(kiwiTrace, rowCanDriveAutoLevel);
         if (m_kiwiSdrFftTrace.size() != kiwiTrace.size()) {
             m_kiwiSdrFftTrace = kiwiTrace;
         } else {
@@ -5034,30 +5178,32 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
             }
         }
         if (!m_kiwiSdrFftTrace.isEmpty()) {
-            const float previousMeasuredNoiseFloorDbm = m_measuredNoiseFloorDbm;
-            const float frameFloor = estimateNoiseFloorDbm(m_kiwiSdrFftTrace);
-            const float visualFloor =
-                estimateKiwiSdrVisualNoiseFloorDbm(m_kiwiSdrFftTrace);
-            updateKiwiSdrSquelchVisualFloor(visualFloor);
-            constexpr float kAlpha = 0.05f;
-            m_measuredNoiseFloorDbm = (m_measuredNoiseFloorDbm <= -500.0f)
-                ? frameFloor
-                : m_measuredNoiseFloorDbm * (1.0f - kAlpha)
-                    + frameFloor * kAlpha;
-            if (m_kiwiSdrSquelchLineVisible
-                && (previousMeasuredNoiseFloorDbm <= -500.0f
-                    || std::abs(previousMeasuredNoiseFloorDbm
-                                - m_measuredNoiseFloorDbm) > 0.25f)) {
-                markOverlayDirty();
-            }
+            if (rowCanDriveAutoLevel) {
+                const float previousMeasuredNoiseFloorDbm = m_measuredNoiseFloorDbm;
+                const float frameFloor = estimateNoiseFloorDbm(m_kiwiSdrFftTrace);
+                const float visualFloor =
+                    estimateKiwiSdrVisualNoiseFloorDbm(m_kiwiSdrFftTrace);
+                updateKiwiSdrSquelchVisualFloor(visualFloor);
+                constexpr float kAlpha = 0.05f;
+                m_measuredNoiseFloorDbm = (m_measuredNoiseFloorDbm <= -500.0f)
+                    ? frameFloor
+                    : m_measuredNoiseFloorDbm * (1.0f - kAlpha)
+                        + frameFloor * kAlpha;
+                if (m_kiwiSdrSquelchLineVisible
+                    && (previousMeasuredNoiseFloorDbm <= -500.0f
+                        || std::abs(previousMeasuredNoiseFloorDbm
+                                    - m_measuredNoiseFloorDbm) > 0.25f)) {
+                    markOverlayDirty();
+                }
 
-            const bool useFreshLockFrame = m_noiseFloorFreshFrameCount > 0;
-            const bool noiseFloorFrameConsumed =
-                updateNoiseFloorBaseline(m_kiwiSdrFftTrace, useFreshLockFrame);
-            if (useFreshLockFrame && noiseFloorFrameConsumed) {
-                --m_noiseFloorFreshFrameCount;
+                const bool useFreshLockFrame = m_noiseFloorFreshFrameCount > 0;
+                const bool noiseFloorFrameConsumed =
+                    updateNoiseFloorBaseline(m_kiwiSdrFftTrace, useFreshLockFrame);
+                if (useFreshLockFrame && noiseFloorFrameConsumed) {
+                    --m_noiseFloorFreshFrameCount;
+                }
+                updateAutoSquelchFromBins(m_kiwiSdrFftTrace);
             }
-            updateAutoSquelchFromBins(m_kiwiSdrFftTrace);
         }
     }
     pushKiwiSdrWaterfallRow(smoothedBins, destWidth,
@@ -5380,9 +5526,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                 return;
             }
 
-            m_draggingPan = true;
-            m_panDragStartX = static_cast<int>(ev->position().x());
-            m_panDragStartCenter = m_centerMhz;
+            beginPanDrag(static_cast<int>(ev->position().x()));
             setSpectrumCursor(Qt::ClosedHandCursor);
             ev->accept();
             return;
@@ -5766,9 +5910,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     }
 
     // Click in FFT area → start pan drag (tune on double-click only)
-    m_draggingPan = true;
-    m_panDragStartX = static_cast<int>(ev->position().x());
-    m_panDragStartCenter = m_centerMhz;
+    beginPanDrag(static_cast<int>(ev->position().x()));
     setSpectrumCursor(Qt::ClosedHandCursor);
     ev->accept();
 }
@@ -5882,6 +6024,119 @@ void SpectrumWidget::edgePanVelocityStep()
         << " dMhz=" << deltaMhz << " center=" << m_centerMhz
         << " sliceX=" << sliceX << " sliceMhz=" << sliceFreq;
     emit edgePanTuneRequested(newCenter, sliceFreq);
+}
+
+void SpectrumWidget::schedulePanDragDeferredUpdate()
+{
+    if (m_panDragDeferredUpdateScheduled) {
+        return;
+    }
+
+    m_panDragDeferredUpdateScheduled = true;
+    QTimer::singleShot(kPanDragFrameMs, this, [this]() {
+        m_panDragDeferredUpdateScheduled = false;
+        if (!m_draggingPan || !m_panDragPendingCenterValid) {
+            return;
+        }
+        applyPanDragCenter(m_panDragPendingCenterMhz, false);
+    });
+}
+
+void SpectrumWidget::schedulePanDragSettleUpdate()
+{
+    if (m_panDragSettleTimer) {
+        m_panDragSettleTimer->start(kPanDragSettleMs);
+    }
+}
+
+void SpectrumWidget::scheduleFrequencyRangeSettleUpdate(double centerMhz,
+                                                        double bandwidthMhz)
+{
+    m_frequencyRangeSettlePending = true;
+    if (std::isfinite(centerMhz) && std::isfinite(bandwidthMhz)
+        && centerMhz > 0.0 && bandwidthMhz > 0.0) {
+        m_frequencyRangePendingValid = true;
+        m_frequencyRangePendingCenterMhz = centerMhz;
+    }
+    if (m_frequencyRangeSettleTimer) {
+        m_frequencyRangeSettleTimer->start(kFrequencyRangeSettleMs);
+    }
+}
+
+void SpectrumWidget::finishFrequencyRangeSettleUpdate()
+{
+    if (m_frequencyRangeSettleTimer) {
+        m_frequencyRangeSettleTimer->stop();
+    }
+    m_frequencyRangeSettlePending = false;
+    m_frequencyRangePendingValid = false;
+    emit frequencyRangeSettled(m_centerMhz, m_bandwidthMhz);
+}
+
+void SpectrumWidget::beginPanDrag(int startX)
+{
+    m_draggingPan = true;
+    m_panDragStartX = startX;
+    m_panDragStartCenter = m_centerMhz;
+    m_panDragWaterfallFrameCenterMhz = m_centerMhz;
+    m_panDragLastCommandCenterMhz = m_centerMhz;
+    m_panDragPendingCenterMhz = m_centerMhz;
+    m_panDragPendingCenterValid = false;
+    m_panDragDeferredUpdateScheduled = false;
+    m_panDragWaterfallClock.invalidate();
+    m_panDragCommandClock.invalidate();
+    if (m_panDragSettleTimer) {
+        m_panDragSettleTimer->stop();
+    }
+}
+
+void SpectrumWidget::applyPanDragCenter(double newCenterMhz, bool force)
+{
+    if (!std::isfinite(newCenterMhz)) {
+        return;
+    }
+
+    bool needsDeferredFlush = false;
+    const bool waterfallChanged =
+        !mhzNearlyEqual(newCenterMhz, m_panDragWaterfallFrameCenterMhz);
+    const bool waterfallDue = force || !m_panDragWaterfallClock.isValid()
+        || m_panDragWaterfallClock.elapsed() >= kPanDragFrameMs;
+    if (waterfallChanged && waterfallDue) {
+        handleWaterfallFrequencyFrameChange(m_panDragWaterfallFrameCenterMhz,
+                                            m_bandwidthMhz,
+                                            newCenterMhz,
+                                            m_bandwidthMhz);
+        m_panDragWaterfallFrameCenterMhz = newCenterMhz;
+        m_panDragWaterfallClock.restart();
+    } else if (waterfallChanged) {
+        needsDeferredFlush = true;
+    }
+    if (waterfallChanged) {
+        reprojectSpectrum(m_centerMhz, m_bandwidthMhz,
+                          newCenterMhz, m_bandwidthMhz);
+    }
+
+    m_centerMhz = newCenterMhz;
+    markOverlayDirty();
+
+    const bool commandChanged =
+        !mhzNearlyEqual(newCenterMhz, m_panDragLastCommandCenterMhz);
+    const bool commandDue = force || !m_panDragCommandClock.isValid()
+        || m_panDragCommandClock.elapsed() >= kPanDragCommandMs;
+    if (commandChanged && commandDue) {
+        emit centerChangeRequested(newCenterMhz);
+        m_panDragLastCommandCenterMhz = newCenterMhz;
+        m_panDragCommandClock.restart();
+    } else if (commandChanged) {
+        needsDeferredFlush = true;
+    }
+
+    if (force || !needsDeferredFlush) {
+        m_panDragPendingCenterValid = false;
+        return;
+    }
+
+    schedulePanDragDeferredUpdate();
 }
 
 void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
@@ -6083,6 +6338,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         // Keep center and bandwidth coupled while dragging. Sending only the
         // bandwidth and waiting to send center on release caused the radio and
         // client waterfall to diverge under trackpad-heavy zoom workflows.
+        scheduleFrequencyRangeSettleUpdate(zoomCenter, newBw);
         emit frequencyRangeChangeRequested(zoomCenter, newBw);
         ev->accept();
         return;
@@ -6126,11 +6382,10 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         const double deltaMhz = -(static_cast<double>(dx) / width()) * m_bandwidthMhz;
         const double newCenter = std::max(m_panDragStartCenter + deltaMhz,
                                           m_bandwidthMhz / 2.0);
-        handleWaterfallFrequencyFrameChange(m_centerMhz, m_bandwidthMhz,
-                                            newCenter, m_bandwidthMhz);
-        m_centerMhz = newCenter;
-        markOverlayDirty();
-        emit centerChangeRequested(newCenter);
+        m_panDragPendingCenterMhz = newCenter;
+        m_panDragPendingCenterValid = true;
+        applyPanDragCenter(newCenter, false);
+        schedulePanDragSettleUpdate();
         if (s_starstruckMode && s_starstruckSound
             && s_starstruckSound->isLoaded() && !s_starstruckSound->isPlaying()) {
             s_starstruckSound->play();
@@ -6359,7 +6614,9 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
         setSpectrumCursor(Qt::CrossCursor);
         // Re-send the final combined range so the release lands on the same
         // coherent center/bandwidth pair as the in-flight drag updates.
+        scheduleFrequencyRangeSettleUpdate(m_centerMhz, m_bandwidthMhz);
         emit frequencyRangeChangeRequested(m_centerMhz, m_bandwidthMhz);
+        finishFrequencyRangeSettleUpdate();
         ev->accept();
         return;
     }
@@ -6380,6 +6637,15 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     }
     if (m_draggingPan) {
         m_draggingPan = false;
+        if (m_panDragSettleTimer) {
+            m_panDragSettleTimer->stop();
+        }
+        applyPanDragCenter(m_centerMhz, true);
+        emit panDragSettled(m_centerMhz, m_bandwidthMhz);
+        m_panDragPendingCenterValid = false;
+        m_panDragDeferredUpdateScheduled = false;
+        m_panDragWaterfallClock.invalidate();
+        m_panDragCommandClock.invalidate();
         setSpectrumCursor(Qt::CrossCursor);
         if (s_starstruckSound) s_starstruckSound->stop();
 
@@ -6650,6 +6916,7 @@ bool SpectrumWidget::event(QEvent* ev)
             m_centerMhz = newCenter;
             resetNoiseFloorBaseline();
             markOverlayDirty();
+            scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
             emit frequencyRangeChangeRequested(newCenter, newBw);
             return true;
         }
@@ -6826,6 +7093,7 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
         m_bandwidthMhz = newBw;
         resetNoiseFloorBaseline();
         markOverlayDirty();
+        scheduleFrequencyRangeSettleUpdate(newCenter, newBw);
         emit frequencyRangeChangeRequested(newCenter, newBw);
         ev->accept();
         return;

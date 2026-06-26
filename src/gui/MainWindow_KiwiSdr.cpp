@@ -28,6 +28,7 @@ namespace AetherSDR {
 namespace {
 
 constexpr int kKiwiSdrMeterDisplayDelayMs = 520;
+constexpr double kKiwiSdrWaterfallFullBandwidthMhz = 30.0;
 
 const SliceModel* kiwiSliceForPan(const RadioModel& radioModel,
                                   const QString& panId,
@@ -216,7 +217,6 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
     syncActiveSliceSquelchLineToSpectrums();
     syncActiveSliceAutoSquelchToSpectrums();
     syncFlexRxPanToAudioEngine();
-    syncKiwiSdrDiversityEscControls();
 
     if (SpectrumWidget* spectrum = spectrumForSlice(slice)) {
         if (kiwiSdrDisplaySliceForPan(slice->panId()) == slice) {
@@ -240,7 +240,8 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
     }
     syncKiwiSdrPanadapterUiState(slice->panId());
     syncActiveSliceAutoSquelchToSpectrums();
-    refreshKiwiSdrWaterfallAvailability();
+    scheduleKiwiSdrUiSync(KiwiSdrUiSyncDiversityEsc
+                          | KiwiSdrUiSyncWaterfallAvailability);
 }
 
 void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
@@ -272,8 +273,8 @@ void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
     syncFlexRxPanToAudioEngine();
     syncActiveSliceSquelchLineToSpectrums();
     syncActiveSliceAutoSquelchToSpectrums();
-    syncKiwiSdrDiversityEscControls();
-    refreshKiwiSdrWaterfallAvailability();
+    scheduleKiwiSdrUiSync(KiwiSdrUiSyncDiversityEsc
+                          | KiwiSdrUiSyncWaterfallAvailability);
     if (!panId.isEmpty()) {
         syncKiwiSdrPanadapterUiState(panId);
     }
@@ -575,6 +576,11 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
 
     SpectrumOverlayMenu* menu = spectrum->overlayMenu();
     if (profileId.isEmpty()) {
+        spectrum->setBandwidthLimits(m_radioModel.minPanBandwidthMhz(),
+                                     m_radioModel.maxPanBandwidthMhz());
+        if (const PanadapterModel* pan = m_radioModel.panadapter(panId)) {
+            spectrum->setFrequencyRange(pan->centerMhz(), pan->bandwidthMhz());
+        }
         const QString overlayProfileId = kiwiSdrOverlayProfileForPan(panId);
         if (!overlayProfileId.isEmpty()) {
             spectrum->setKiwiSdrConnectionOverlay(
@@ -603,6 +609,11 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
         }
         return;
     }
+
+    spectrum->setBandwidthLimits(
+        m_radioModel.minPanBandwidthMhz(),
+        std::max(m_radioModel.maxPanBandwidthMhz(),
+                 kKiwiSdrWaterfallFullBandwidthMhz));
 
     const KiwiSdrAntennaProfile profile = m_kiwiSdrManager->profile(profileId);
     const KiwiSdrClient::State state = m_kiwiSdrManager->state(profileId);
@@ -649,6 +660,41 @@ void MainWindow::syncKiwiSdrPanadapterUiStates()
         }
         syncKiwiSdrPanadapterUiState(applet->panId());
     }
+}
+
+void MainWindow::scheduleKiwiSdrUiSync(int flags)
+{
+    if (flags == 0) {
+        return;
+    }
+
+    m_kiwiSdrUiSyncFlags |= flags;
+    if (m_kiwiSdrUiSyncPending) {
+        return;
+    }
+
+    m_kiwiSdrUiSyncPending = true;
+    QTimer::singleShot(0, this, [this]() {
+        const int flags = m_kiwiSdrUiSyncFlags;
+        m_kiwiSdrUiSyncFlags = 0;
+        m_kiwiSdrUiSyncPending = false;
+
+        if ((flags & KiwiSdrUiSyncAppletReceivers) != 0) {
+            refreshKiwiSdrAppletReceivers();
+        }
+        if ((flags & KiwiSdrUiSyncDiversityEsc) != 0) {
+            syncKiwiSdrDiversityEscControls();
+        }
+        const bool refreshedWaterfall =
+            (flags & KiwiSdrUiSyncWaterfallAvailability) != 0;
+        if (refreshedWaterfall) {
+            refreshKiwiSdrWaterfallAvailability();
+        }
+        if (!refreshedWaterfall
+            && (flags & KiwiSdrUiSyncPanadapterStates) != 0) {
+            syncKiwiSdrPanadapterUiStates();
+        }
+    });
 }
 
 void MainWindow::updateKiwiSdrVirtualAudioControlsForSlice(SliceModel* slice)
@@ -922,8 +968,8 @@ void MainWindow::wireKiwiSdr()
             const QString panId = m_radioModel.slice(sliceId)
                 ? m_radioModel.slice(sliceId)->panId()
                 : QString();
-            refreshKiwiSdrAppletReceivers();
-            syncKiwiSdrDiversityEscControls();
+            scheduleKiwiSdrUiSync(KiwiSdrUiSyncAppletReceivers
+                                  | KiwiSdrUiSyncDiversityEsc);
             if (m_appletPanel) {
                 m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
             }
@@ -948,8 +994,8 @@ void MainWindow::wireKiwiSdr()
                     spectrum->setKiwiSdrWaterfallProfile(QString());
                 }
             }
-            refreshKiwiSdrWaterfallAvailability();
-            syncKiwiSdrDiversityEscControls();
+            scheduleKiwiSdrUiSync(KiwiSdrUiSyncWaterfallAvailability
+                                  | KiwiSdrUiSyncDiversityEsc);
             syncKiwiSdrPanadapterUiState(panId);
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::profileStateChanged,
@@ -974,26 +1020,22 @@ void MainWindow::wireKiwiSdr()
                     panId = slice->panId();
                 }
             }
-            refreshKiwiSdrWaterfallAvailability();
-            syncKiwiSdrDiversityEscControls();
-            refreshKiwiSdrAppletReceivers();
+            scheduleKiwiSdrUiSync(KiwiSdrUiSyncWaterfallAvailability
+                                  | KiwiSdrUiSyncDiversityEsc
+                                  | KiwiSdrUiSyncAppletReceivers);
             if (!panId.isEmpty()) {
                 syncKiwiSdrPanadapterUiState(panId);
             }
         });
         connect(m_kiwiSdrManager,
                 &KiwiSdrManager::profileWaterfallAvailabilityChanged,
-                this, [this](const QString& profileId, bool, const QString&) {
+                this, [this](const QString&, bool, const QString&) {
             if (!m_kiwiSdrManager) {
                 return;
             }
 
-            const int sliceId =
-                m_kiwiSdrManager->assignedSliceForProfile(profileId);
-            if (SliceModel* slice = m_radioModel.slice(sliceId)) {
-                syncKiwiSdrPanadapterUiState(slice->panId());
-            }
-            refreshKiwiSdrAppletReceivers();
+            scheduleKiwiSdrUiSync(KiwiSdrUiSyncAppletReceivers
+                                  | KiwiSdrUiSyncPanadapterStates);
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::profileStreamReset,
                 this, [this](const QString& profileId) {
@@ -1006,13 +1048,13 @@ void MainWindow::wireKiwiSdr()
                         ->clearKiwiSdrWaterfallRowsForProfile(profileId);
                 }
             }
-            syncKiwiSdrPanadapterUiStates();
+            scheduleKiwiSdrUiSync(KiwiSdrUiSyncPanadapterStates);
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::profilesChanged,
                 this, [this] {
-            refreshKiwiSdrWaterfallAvailability();
-            refreshKiwiSdrAppletReceivers();
-            syncKiwiSdrPanadapterUiStates();
+            scheduleKiwiSdrUiSync(KiwiSdrUiSyncWaterfallAvailability
+                                  | KiwiSdrUiSyncAppletReceivers
+                                  | KiwiSdrUiSyncPanadapterStates);
         });
     }
     m_kiwiSdrClient->setOperatorCallsign(m_radioModel.callsign());
@@ -1031,8 +1073,8 @@ void MainWindow::wireKiwiSdr()
     if (m_kiwiSdrManager) {
         QTimer::singleShot(0, m_kiwiSdrManager, &KiwiSdrManager::startAutoConnect);
     }
-    syncKiwiSdrPanadapterUiStates();
-    syncKiwiSdrDiversityEscControls();
+    scheduleKiwiSdrUiSync(KiwiSdrUiSyncPanadapterStates
+                          | KiwiSdrUiSyncDiversityEsc);
 }
 
 void MainWindow::refreshKiwiSdrAppletReceivers()

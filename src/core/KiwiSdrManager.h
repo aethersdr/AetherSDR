@@ -7,7 +7,10 @@
 #include <QString>
 #include <QVector>
 
+#include <functional>
+
 class QTimer;
+class QThread;
 
 namespace AetherSDR {
 
@@ -110,12 +113,17 @@ private:
     void loadSettings();
     void saveSettings() const;
     bool shouldMaintainProfileConnection(const QString& id) const;
+    void ensureClientThread();
+    void invokeClient(const QString& id, std::function<void(KiwiSdrClient*)> fn);
+    void destroyClient(const QString& id, bool blocking = false);
     void scheduleReconnect(const QString& id);
     void cancelReconnect(const QString& id);
     static QString sanitizedName(const QString& name, const QString& endpoint);
 
     QVector<KiwiSdrAntennaProfile> m_profiles;
     QHash<QString, KiwiSdrClient*> m_clients;
+    QHash<QString, KiwiSdrClient::State> m_states;
+    QHash<QString, bool> m_clientHasTrackedSlice;
     QHash<QString, QTimer*> m_reconnectTimers;
     QHash<QString, QString> m_stateDetails;
     QHash<QString, KiwiSdrReceiverTelemetry> m_telemetry;
@@ -123,6 +131,7 @@ private:
     QHash<QString, QString> m_waterfallDetails;
     QHash<int, QString> m_sliceAssignments;
     QString m_operatorCallsign;
+    QThread* m_clientThread{nullptr};
 };
 
 } // namespace AetherSDR

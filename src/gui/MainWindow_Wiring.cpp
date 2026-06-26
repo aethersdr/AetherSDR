@@ -1578,17 +1578,36 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             applet->panId(), centerMhz, bandwidthMhz);
     };
 
+    const auto updateKiwiWaterfallViewUnlessDeferred =
+        [updateKiwiWaterfallView, sw](double centerMhz, double bandwidthMhz) {
+            if (sw && sw->waterfallViewUpdateDeferred()) {
+                return;
+            }
+            if (sw && sw->frequencyRangeGestureActive()) {
+                return;
+            }
+            updateKiwiWaterfallView(centerMhz, bandwidthMhz);
+        };
+
     connect(sw, &SpectrumWidget::frequencyRangeChanged,
-            this, updateKiwiWaterfallView);
+            this, updateKiwiWaterfallViewUnlessDeferred);
     connect(sw, &SpectrumWidget::frequencyRangeChangeRequested,
-            this, updateKiwiWaterfallView);
+            this, updateKiwiWaterfallViewUnlessDeferred);
     connect(sw, &SpectrumWidget::centerChangeRequested,
             this, [updateKiwiWaterfallView, sw](double centerMhz) {
                 if (!sw) {
                     return;
                 }
+                if (sw->panDragActive()
+                    || sw->frequencyRangeGestureActive()) {
+                    return;
+                }
                 updateKiwiWaterfallView(centerMhz, sw->bandwidthMhz());
             });
+    connect(sw, &SpectrumWidget::panDragSettled,
+            this, updateKiwiWaterfallView);
+    connect(sw, &SpectrumWidget::frequencyRangeSettled,
+            this, updateKiwiWaterfallView);
 
     // Wire band plan manager to this spectrum widget
     sw->setBandPlanManager(m_bandPlanMgr);
@@ -1739,11 +1758,17 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(sw, &SpectrumWidget::bandwidthChangeRequested,
             this, [this, applet](double bw) {
+        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+            return;
+        }
         m_radioModel.sendCommand(
             QString("display pan set %1 bandwidth=%2").arg(applet->panId()).arg(bw, 0, 'f', 6));
     });
     connect(sw, &SpectrumWidget::centerChangeRequested,
             this, [this, applet](double center) {
+        if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
+            return;
+        }
         if (const auto* pan = m_radioModel.panadapter(applet->panId()))
             center = std::max(center, pan->bandwidthMhz() / 2.0);
         m_radioModel.sendCommand(

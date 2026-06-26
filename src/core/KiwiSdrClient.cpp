@@ -43,8 +43,8 @@ constexpr int kZoomedWaterfallPrefixBytes = 5;
 constexpr int kDefaultWaterfallZoomCap = 14;
 constexpr int kDefaultWaterfallFftBins = 1024;
 constexpr quint64 kMaxSequenceGapPaddingFrames = 8;
+constexpr int kWaterfallGuiMinIntervalMs = 33;
 constexpr double kWaterfallStartFixedPointScale = 16777216.0; // 2^24
-constexpr quint32 kWaterfallStartServerSnapTolerance = 16;
 constexpr quint64 kWebSocketSessionIdBase = 1ULL << 62;
 
 QString trKiwiSdrClient(const char* sourceText)
@@ -386,6 +386,11 @@ KiwiSdrClient::KiwiSdrClient(QObject* parent)
         setState(State::Error, setupTimeoutDetail());
         cleanupSockets();
     });
+
+    m_waterfallRowFlushTimer = new QTimer(this);
+    m_waterfallRowFlushTimer->setSingleShot(true);
+    connect(m_waterfallRowFlushTimer, &QTimer::timeout,
+            this, &KiwiSdrClient::flushPendingWaterfallRow);
 }
 
 KiwiSdrClient::~KiwiSdrClient()
@@ -467,6 +472,16 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
     m_lastWaterfallLowMhz = 0.0;
     m_lastWaterfallHighMhz = 0.0;
     m_lastWaterfallRowValid = false;
+    m_waterfallRowPending = false;
+    m_pendingWaterfallPanId.clear();
+    m_pendingWaterfallBins.clear();
+    m_pendingWaterfallLowMhz = 0.0;
+    m_pendingWaterfallHighMhz = 0.0;
+    m_pendingWaterfallTimecode = 0;
+    m_lastWaterfallRowEmitUtcMs = 0;
+    if (m_waterfallRowFlushTimer) {
+        m_waterfallRowFlushTimer->stop();
+    }
     m_waterfallServerCenterMhz = kDefaultWaterfallCenterMhz;
     m_waterfallServerBandwidthMhz = kDefaultWaterfallBandwidthMhz;
     m_waterfallZoomCap = kDefaultWaterfallZoomCap;
@@ -985,6 +1000,16 @@ void KiwiSdrClient::cleanupSockets()
     m_lastWaterfallLowMhz = 0.0;
     m_lastWaterfallHighMhz = 0.0;
     m_lastWaterfallRowValid = false;
+    m_waterfallRowPending = false;
+    m_pendingWaterfallPanId.clear();
+    m_pendingWaterfallBins.clear();
+    m_pendingWaterfallLowMhz = 0.0;
+    m_pendingWaterfallHighMhz = 0.0;
+    m_pendingWaterfallTimecode = 0;
+    m_lastWaterfallRowEmitUtcMs = 0;
+    if (m_waterfallRowFlushTimer) {
+        m_waterfallRowFlushTimer->stop();
+    }
     m_waterfallAvailable = true;
     m_waterfallAvailabilityDetail.clear();
     m_waterfallRxChannel = -1;
@@ -1779,23 +1804,12 @@ void KiwiSdrClient::handleWaterfallFrame(const QByteArray& frame)
     int frameZoom = 0;
     const bool hasExtendedHeader =
         parseWaterfallFrameHeader(frame, &frameStart, &frameZoom);
-    if (!m_waterfallRequestValid
-        || m_waterfallRequestLowMhz <= 0.0
-        || m_waterfallRequestHighMhz <= m_waterfallRequestLowMhz) {
+    const bool requestHasUsableRange =
+        m_waterfallRequestValid
+        && m_waterfallRequestLowMhz > 0.0
+        && m_waterfallRequestHighMhz > m_waterfallRequestLowMhz;
+    if (!hasExtendedHeader && !requestHasUsableRange) {
         return;
-    }
-    if (hasExtendedHeader
-        && frameZoom != m_waterfallRequestZoom) {
-        return;
-    }
-    if (hasExtendedHeader) {
-        const quint32 startDelta =
-            frameStart > m_waterfallRequestStart
-                ? frameStart - m_waterfallRequestStart
-                : m_waterfallRequestStart - frameStart;
-        if (startDelta > kWaterfallStartServerSnapTolerance) {
-            return;
-        }
     }
 
     const QVector<float> bins = decodeWaterfallFrame(frame);
@@ -1831,6 +1845,8 @@ void KiwiSdrClient::handleWaterfallFrame(const QByteArray& frame)
         rowHighMhz = rowLowMhz
             + std::min(fullBandwidthMhz,
                        waterfallRowSpanMhz(fullBandwidthMhz, frameZoom));
+    } else if (!requestHasUsableRange) {
+        return;
     }
     const quint64 padRows = std::min(sequenceGaps,
                                      kMaxSequenceGapPaddingFrames);
@@ -1839,13 +1855,13 @@ void KiwiSdrClient::handleWaterfallFrame(const QByteArray& frame)
         && std::abs(m_lastWaterfallLowMhz - rowLowMhz) <= 1.0e-9
         && std::abs(m_lastWaterfallHighMhz - rowHighMhz) <= 1.0e-9) {
         for (quint64 i = 0; i < padRows; ++i) {
-            emit waterfallRowReady(panId, m_lastWaterfallBins,
-                                   m_lastWaterfallLowMhz,
-                                   m_lastWaterfallHighMhz,
-                                   0);
+            queueWaterfallRow(panId, m_lastWaterfallBins,
+                              m_lastWaterfallLowMhz,
+                              m_lastWaterfallHighMhz,
+                              0);
         }
     }
-    emit waterfallRowReady(panId, bins, rowLowMhz, rowHighMhz, 0);
+    queueWaterfallRow(panId, bins, rowLowMhz, rowHighMhz, 0);
     m_lastWaterfallBins = bins;
     m_lastWaterfallPanId = panId;
     m_lastWaterfallLowMhz = rowLowMhz;
@@ -2259,8 +2275,69 @@ void KiwiSdrClient::emitTelemetryChanged()
     m_telemetryPending = true;
     QTimer::singleShot(0, this, [this]() {
         m_telemetryPending = false;
-        emit telemetryChanged();
+        emit telemetryChanged(m_telemetry);
     });
+}
+
+void KiwiSdrClient::queueWaterfallRow(const QString& panId,
+                                      const QVector<float>& binsDbm,
+                                      double lowFreqMhz,
+                                      double highFreqMhz,
+                                      quint32 timecode)
+{
+    const qint64 nowUtcMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_lastWaterfallRowEmitUtcMs == 0
+        || nowUtcMs - m_lastWaterfallRowEmitUtcMs >= kWaterfallGuiMinIntervalMs) {
+        if (m_waterfallRowFlushTimer) {
+            m_waterfallRowFlushTimer->stop();
+        }
+        m_waterfallRowPending = false;
+        emitWaterfallRowNow(panId, binsDbm, lowFreqMhz, highFreqMhz, timecode);
+        return;
+    }
+
+    m_waterfallRowPending = true;
+    m_pendingWaterfallPanId = panId;
+    m_pendingWaterfallBins = binsDbm;
+    m_pendingWaterfallLowMhz = lowFreqMhz;
+    m_pendingWaterfallHighMhz = highFreqMhz;
+    m_pendingWaterfallTimecode = timecode;
+    const int delayMs = std::max<qint64>(
+        1,
+        kWaterfallGuiMinIntervalMs - (nowUtcMs - m_lastWaterfallRowEmitUtcMs));
+    if (m_waterfallRowFlushTimer && !m_waterfallRowFlushTimer->isActive()) {
+        m_waterfallRowFlushTimer->start(delayMs);
+    }
+}
+
+void KiwiSdrClient::flushPendingWaterfallRow()
+{
+    if (!m_waterfallRowPending) {
+        return;
+    }
+
+    const QString panId = m_pendingWaterfallPanId;
+    const QVector<float> binsDbm = m_pendingWaterfallBins;
+    const double lowFreqMhz = m_pendingWaterfallLowMhz;
+    const double highFreqMhz = m_pendingWaterfallHighMhz;
+    const quint32 timecode = m_pendingWaterfallTimecode;
+    m_waterfallRowPending = false;
+    m_pendingWaterfallPanId.clear();
+    m_pendingWaterfallBins.clear();
+    m_pendingWaterfallLowMhz = 0.0;
+    m_pendingWaterfallHighMhz = 0.0;
+    m_pendingWaterfallTimecode = 0;
+    emitWaterfallRowNow(panId, binsDbm, lowFreqMhz, highFreqMhz, timecode);
+}
+
+void KiwiSdrClient::emitWaterfallRowNow(const QString& panId,
+                                        const QVector<float>& binsDbm,
+                                        double lowFreqMhz,
+                                        double highFreqMhz,
+                                        quint32 timecode)
+{
+    m_lastWaterfallRowEmitUtcMs = QDateTime::currentMSecsSinceEpoch();
+    emit waterfallRowReady(panId, binsDbm, lowFreqMhz, highFreqMhz, timecode);
 }
 
 void KiwiSdrClient::sendWaterfallRateToServer()

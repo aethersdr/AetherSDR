@@ -322,6 +322,15 @@ public:
     int   fftAverage() const           { return m_fftAverage; }
     int   fftFps() const               { return m_fftFps; }
     bool  fftWeightedAvg() const       { return m_fftWeightedAvg; }
+    bool panDragActive() const { return m_draggingPan; }
+    bool frequencyRangeGestureActive() const
+    {
+        return m_draggingBandwidth || m_frequencyRangeSettlePending;
+    }
+    bool waterfallViewUpdateDeferred() const
+    {
+        return m_draggingPan;
+    }
 
     // Waterfall controls (save to AppSettings on each change)
     void setWfColorGain(int gain);
@@ -525,6 +534,12 @@ signals:
     void segmentZoomRequested();
     // Emitted when the user drags the waterfall to pan the center frequency.
     void centerChangeRequested(double newCenterMhz);
+    // Emitted when waterfall pan-dragging pauses or ends. Remote waterfall
+    // providers use this to avoid resetting their stream on every drag step.
+    void panDragSettled(double centerMhz, double bandwidthMhz);
+    // Emitted when zoom/range interaction pauses or ends. Remote waterfall
+    // providers use this to avoid resetting their stream on every zoom step.
+    void frequencyRangeSettled(double centerMhz, double bandwidthMhz);
     // Emitted when the user drags a filter edge to resize the passband.
     void filterChangeRequested(int lowHz, int highHz);
     // Emitted when the user adjusts the dBm scale (drag or arrows).
@@ -637,6 +652,12 @@ private:
                                              double oldBandwidthMhz,
                                              double newCenterMhz,
                                              double newBandwidthMhz);
+    void applyPanDragCenter(double newCenterMhz, bool force);
+    void beginPanDrag(int startX);
+    void schedulePanDragDeferredUpdate();
+    void schedulePanDragSettleUpdate();
+    void scheduleFrequencyRangeSettleUpdate(double centerMhz, double bandwidthMhz);
+    void finishFrequencyRangeSettleUpdate();
     struct WaterfallStreamState {
         QImage waterfall;
         int wfWriteRow{0};
@@ -658,9 +679,13 @@ private:
         float kiwiAutoFloorDbm{-130.0f};
         float kiwiAutoCeilDbm{-50.0f};
         bool kiwiAutoRangeValid{false};
+        float kiwiFftTraceFloorDbm{-1000.0f};
+        bool kiwiFftTraceFloorValid{false};
         bool valid{false};
     };
     void clearCurrentWaterfallRows();
+    void resetCurrentWaterfallRowsForSize(const QSize& waterfallSize,
+                                          const QSize& historySize);
     void saveCurrentWaterfallStreamState();
     void restoreCurrentWaterfallStreamState();
     WaterfallStreamState& activeKiwiWaterfallState();
@@ -703,6 +728,8 @@ private:
     // so brief upward spikes (lightning crashes) don't pull the lock.
     bool updateNoiseFloorBaseline(const QVector<float>& bins, bool forceBaseline);
     float estimateKiwiSdrVisualNoiseFloorDbm(const QVector<float>& bins) const;
+    float estimateKiwiSdrTraceFloorDbm(const QVector<float>& bins) const;
+    void stabilizeKiwiSdrFftTrace(QVector<float>& bins, bool allowFloorAdapt);
     void updateKiwiSdrSquelchVisualFloor(float floorDbm);
     void pinKiwiSdrManualSquelchLine();
     // Adjust m_refLevel toward the target so the smoothed noise floor
@@ -779,6 +806,8 @@ private:
     float m_kiwiSdrAutoFloorDbm{-130.0f};
     float m_kiwiSdrAutoCeilDbm{-50.0f};
     bool m_kiwiSdrAutoRangeValid{false};
+    float m_kiwiSdrFftTraceFloorDbm{-1000.0f};
+    bool m_kiwiSdrFftTraceFloorValid{false};
     int m_kiwiSdrWaterfallCellDb{0};
     int m_kiwiSdrWaterfallFloorDb{0};
 
@@ -921,6 +950,8 @@ private:
     QImage m_waterfall;
     int    m_wfWriteRow{0};  // ring buffer: next row to write (newest at top)
     QImage m_waterfallHistory;
+    QSize  m_waterfallStreamSizeHint;
+    QSize  m_waterfallHistoryStreamSizeHint;
     QVector<qint64> m_wfHistoryTimestamps;
     int    m_wfHistoryWriteRow{0};
     int    m_wfHistoryRowCount{0};
@@ -970,10 +1001,22 @@ private:
     int  m_bwDragStartX{0};
     double m_bwDragStartBw{0.0};
     double m_bwDragAnchorMhz{0.0};
+    bool m_frequencyRangeSettlePending{false};
+    bool m_frequencyRangePendingValid{false};
+    double m_frequencyRangePendingCenterMhz{0.0};
+    QTimer* m_frequencyRangeSettleTimer{nullptr};
     // Waterfall pan drag state
     bool m_draggingPan{false};
     int  m_panDragStartX{0};
     double m_panDragStartCenter{0.0};
+    double m_panDragWaterfallFrameCenterMhz{0.0};
+    double m_panDragLastCommandCenterMhz{0.0};
+    double m_panDragPendingCenterMhz{0.0};
+    bool m_panDragPendingCenterValid{false};
+    bool m_panDragDeferredUpdateScheduled{false};
+    QElapsedTimer m_panDragWaterfallClock;
+    QElapsedTimer m_panDragCommandClock;
+    QTimer* m_panDragSettleTimer{nullptr};
     // Filter edge drag state
     enum class FilterEdge { None, Low, High };
     FilterEdge m_draggingFilter{FilterEdge::None};

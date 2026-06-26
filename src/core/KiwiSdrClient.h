@@ -112,7 +112,7 @@ signals:
                            quint32 timecode);
     void meterReadingReady(
         const AetherSDR::KiwiSdrProtocol::MeterReading& reading);
-    void telemetryChanged();
+    void telemetryChanged(const AetherSDR::KiwiSdrReceiverTelemetry& telemetry);
     void waterfallAvailabilityChanged(bool available, const QString& detail);
     void recoverableDisconnect(const QString& detail);
 
@@ -176,6 +176,13 @@ private:
     void updateSoundTelemetry(const QByteArray& frame);
     void updateWaterfallTelemetry(const QByteArray& frame);
     void emitTelemetryChanged();
+    void queueWaterfallRow(const QString& panId, const QVector<float>& binsDbm,
+                           double lowFreqMhz, double highFreqMhz,
+                           quint32 timecode);
+    void flushPendingWaterfallRow();
+    void emitWaterfallRowNow(const QString& panId, const QVector<float>& binsDbm,
+                             double lowFreqMhz, double highFreqMhz,
+                             quint32 timecode);
     void sendWaterfallRateToServer();
     void markSoundAudioReady();
     QString logEndpoint() const;
@@ -296,6 +303,14 @@ private:
     bool m_lastWaterfallRowValid{false};
     QTimer* m_keepaliveTimer{nullptr};
     QTimer* m_audioReadyTimer{nullptr};
+    QTimer* m_waterfallRowFlushTimer{nullptr};
+    bool m_waterfallRowPending{false};
+    QString m_pendingWaterfallPanId;
+    QVector<float> m_pendingWaterfallBins;
+    double m_pendingWaterfallLowMhz{0.0};
+    double m_pendingWaterfallHighMhz{0.0};
+    quint32 m_pendingWaterfallTimecode{0};
+    qint64 m_lastWaterfallRowEmitUtcMs{0};
 
 #ifdef HAVE_WEBSOCKETS
     QNetworkAccessManager* m_statusNetworkAccessManager{nullptr};
@@ -313,3 +328,4 @@ private:
 } // namespace AetherSDR
 
 Q_DECLARE_METATYPE(AetherSDR::KiwiSdrReceiverTelemetry)
+Q_DECLARE_METATYPE(AetherSDR::KiwiSdrClient::State)
