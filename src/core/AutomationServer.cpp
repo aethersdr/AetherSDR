@@ -44,6 +44,8 @@
 #include <QLabel>
 #include <QSpinBox>
 #include <QProgressBar>
+#include <QPushButton>   // doShowMenu: QPushButton::menu()
+#include <QToolButton>   // doShowMenu: QToolButton::menu()
 
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
@@ -223,6 +225,11 @@ QJsonObject describeWidget(const QWidget* w)
         o[QStringLiteral("objectName")] = w->objectName();
     if (!w->accessibleName().isEmpty())
         o[QStringLiteral("accessibleName")] = w->accessibleName();
+    // Tooltip text — some hints (e.g. the two distinct "Clear" tooltips) carry
+    // the only human-meaningful distinction between otherwise-identical controls,
+    // so an assertion needs them observable, not just visible on hover (#3646).
+    if (!w->toolTip().isEmpty())
+        o[QStringLiteral("toolTip")] = w->toolTip();
     o[QStringLiteral("enabled")] = w->isEnabled();
     o[QStringLiteral("visible")] = w->isVisible();
 
@@ -252,6 +259,18 @@ QJsonObject describeWidget(const QWidget* w)
     else if (auto* ds = qobject_cast<const QDoubleSpinBox*>(w))
         o[QStringLiteral("range")] = QJsonObject{{QStringLiteral("min"), ds->minimum()},
                                                  {QStringLiteral("max"), ds->maximum()}};
+
+    // Full option list for a combo box, so a driver can verify the available
+    // choices non-destructively — `value` reports only the active text, which
+    // can't prove the rest of the set without stepping (and applying) each one
+    // (#3646).
+    if (auto* cb = qobject_cast<const QComboBox*>(w)) {
+        QJsonArray items;
+        for (int i = 0; i < cb->count(); ++i)
+            items.append(cb->itemText(i));
+        o[QStringLiteral("items")] = items;
+        o[QStringLiteral("currentIndex")] = cb->currentIndex();
+    }
 
     // Surface the TX-keying marker so an agent can see which controls invoke()
     // will refuse before trying them (#3646).
@@ -336,6 +355,50 @@ QWidget* matchByButtonText(QWidget* w, const QString& target)
         }
     }
     return nullptr;
+}
+
+// Collect every widget whose short class name matches `cls`, anywhere under
+// `w`. Used to enumerate all SpectrumWidgets (one per pan) so `grab pan <index>`
+// can pick a specific surface instead of the first match. (#3646)
+void collectByClass(QWidget* w, const QString& cls, QList<QWidget*>& out)
+{
+    if (shortClassName(w) == cls)
+        out.append(w);
+    const QObjectList children = w->children();
+    for (QObject* child : children)
+        if (auto* cw = qobject_cast<QWidget*>(child))
+            collectByClass(cw, cls, out);
+}
+
+QList<QWidget*> findWidgetsByClass(const QString& cls)
+{
+    QList<QWidget*> out;
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    for (QWidget* tlw : tops)
+        collectByClass(tlw, cls, out);
+    return out;
+}
+
+// Map a UI pan index (SpectrumWidget::panIndex) to the radio stream panId by
+// ascending from the matching SpectrumWidget to its PanadapterApplet, which
+// carries the panId. Both are read via the meta-object so core/ needs no GUI
+// header. Empty if no such pan. (#3646 — `pan close <index>`)
+QString panIdForIndex(int index)
+{
+    const QList<QWidget*> spectra = findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+    for (QWidget* sw : spectra) {
+        const QVariant pi = sw->property("panIndex");
+        if (!pi.isValid() || pi.toInt() != index)
+            continue;
+        for (QWidget* a = sw; a; a = a->parentWidget()) {
+            if (shortClassName(a) == QLatin1String("PanadapterApplet")) {
+                const QVariant pid = a->property("panId");
+                if (pid.isValid())
+                    return pid.toString();
+            }
+        }
+    }
+    return QString();
 }
 
 bool actionMatchesTarget(const QAction* action, const QString& target)
@@ -495,6 +558,46 @@ bool parseBool(const QString& v)
         || s == QLatin1String("checked");
 }
 
+// Tokenize an identifier or label into lowercased words, splitting on
+// non-alphanumeric separators AND camelCase humps (tuneButton -> [tune, button],
+// aprsSvcWXBOT -> [aprs, svc, wxbot], "Auto-Tune" -> [auto, tune]). The TX-guard
+// fallback matches a deny-word against a WHOLE token, so a cross-token trigram
+// like "cwx" formed by the c in "svc" + "wx" in "wxbot" no longer false-positives
+// as the CWX keyer, while genuine keyers (moxButton, pttSend, "Auto-Tune") still
+// match. This is the anchored replacement for the old bare contains() blocklist
+// that flagged the RX-only APRS weather entry (#3646).
+QStringList identifierTokens(const QString& s)
+{
+    QString spaced;
+    spaced.reserve(s.size() * 2);
+    for (int i = 0; i < s.size(); ++i) {
+        const QChar c = s.at(i);
+        // Break at a lower/digit -> Upper hump (tuneButton -> "tune Button") and
+        // at an acronym -> word hump (WXBot -> "WX Bot"); runs of caps stay whole
+        // (WXBOT -> "wxbot").
+        if (i > 0 && c.isUpper()
+            && (s.at(i - 1).isLower() || s.at(i - 1).isDigit()
+                || (i + 1 < s.size() && s.at(i + 1).isLower())))
+            spaced.append(QLatin1Char(' '));
+        spaced.append(c);
+    }
+    return spaced.toLower().split(QRegularExpression(QStringLiteral("[^a-z0-9]+")),
+                                  Qt::SkipEmptyParts);
+}
+
+// True if any haystack contributes a whole token equal to a deny-word — the
+// anchored TX-guard fallback match.
+bool matchesTxDenyToken(const QStringList& haystacks, const QStringList& deny)
+{
+    for (const QString& h : haystacks) {
+        const QStringList tokens = identifierTokens(h);
+        for (const QString& d : deny)
+            if (tokens.contains(d))
+                return true;
+    }
+    return false;
+}
+
 // TX-safety guard for invoke(): refuse to drive a control that keys the
 // transmitter unless the operator sets AETHER_AUTOMATION_ALLOW_TX. A test bridge
 // must never key a live radio by accident.
@@ -526,18 +629,12 @@ bool isTransmitControl(const QWidget* w)
         QStringLiteral("transmit"), QStringLiteral("vox"), QStringLiteral("cwx"),
         QStringLiteral("atu"),
     };
-    const QStringList hay{w->objectName().toLower(),
-                          w->accessibleName().toLower(),
-                          btn->text().toLower()};
-    for (const QString& h : hay) {
-        for (const QString& d : kDeny) {
-            if (h.contains(d)) {
-                qCWarning(lcAutomation).noquote()
-                    << "TX guard fell back to name match on" << btn->text()
-                    << "— add markTxKeying() at its creation site if it keys TX";
-                return true;
-            }
-        }
+    const QStringList hay{w->objectName(), w->accessibleName(), btn->text()};
+    if (matchesTxDenyToken(hay, kDeny)) {
+        qCWarning(lcAutomation).noquote()
+            << "TX guard fell back to name match on" << btn->text()
+            << "— add markTxKeying() at its creation site if it keys TX";
+        return true;
     }
     return false;
 }
@@ -560,23 +657,15 @@ bool isTransmitAction(const QAction* action, const QMenu* owner)
 
     // QAction labels such as "Tune to <spot>" and tooltips like "Next Tune
     // press transmits..." describe RX tuning or future behavior, not this
-    // action keying TX. Keep the fallback narrow; real keying actions should
-    // be marked explicitly with kTxKeyingProperty.
-    QStringList hay{
-        action->objectName().toLower(),
-        actionDisplayText(action).toLower(),
-    };
-
-    for (const QString& h : hay) {
-        for (const QString& d : kDeny) {
-            if (h.contains(d)) {
-                qCWarning(lcAutomation).noquote()
-                    << "TX guard fell back to QAction name match on"
-                    << actionDisplayText(action)
-                    << "— add an explicit TX marker at the action/menu creation site if it keys TX";
-                return true;
-            }
-        }
+    // action keying TX. Keep the fallback narrow (whole-token match only); real
+    // keying actions should be marked explicitly with kTxKeyingProperty.
+    const QStringList hay{action->objectName(), actionDisplayText(action)};
+    if (matchesTxDenyToken(hay, kDeny)) {
+        qCWarning(lcAutomation).noquote()
+            << "TX guard fell back to QAction name match on"
+            << actionDisplayText(action)
+            << "— add an explicit TX marker at the action/menu creation site if it keys TX";
+        return true;
     }
     return false;
 }
@@ -1064,8 +1153,9 @@ bool AutomationServer::start(const QString& serverName)
 
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
-        << "(verbs: ping, dumpTree, floors, grab, invoke, get, txtest, atu, slice, tune,"
-        << "key, cwx, station, resize, menu, whoami, log, mark)";
+        << "(verbs: ping, dumpTree, floors, grab, grab pan, invoke, get, txtest, atu,"
+        << "slice, tune, pan, txwaterfall, key, cwx, station, resize, menu, close, drag,"
+        << "showMenu, whoami, log, mark)";
     return true;
 }
 
@@ -1298,7 +1388,22 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             QStringList rest;
             for (int i = 2; i < p.size(); ++i) rest << tok(i);
             value = rest.join(QLatin1Char(' '));  // "menu open Settings"
-        } else {  // grab, whoami and friends
+        } else if (cmd == QLatin1String("grab")) {
+            target = tok(1);
+            if (target == QLatin1String("pan")) {
+                selector = tok(2);   // pan index → "grab pan 1 [path]"
+                path = tok(3);
+            } else {
+                path = tok(2);       // "grab SpectrumWidget [path]"
+            }
+        } else if (cmd == QLatin1String("close")
+                   || cmd == QLatin1String("showMenu")
+                   || cmd == QLatin1String("openMenu")) {
+            target = tok(1);  // "close ConnectionPanel", "showMenu modeButton"
+        } else if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
+            target = tok(1);
+            value = tok(2) + QLatin1Char(' ') + tok(3);  // "drag sizeGrip 80 60"
+        } else {  // whoami and friends
             target = tok(1); path = tok(2);
         }
     }
@@ -1319,7 +1424,24 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     if (cmd == QLatin1String("grab")) {
         if (target.isEmpty())
             return err(QStringLiteral("grab requires a target widget"));
+        if (target == QLatin1String("pan"))
+            return doGrabPan(selector, path);
         return doGrab(target, path);
+    }
+    if (cmd == QLatin1String("close")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("close requires a target widget/window"));
+        return doClose(target);
+    }
+    if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("drag requires a target and '<dx> <dy>'"));
+        return doDrag(target, value);
+    }
+    if (cmd == QLatin1String("showMenu") || cmd == QLatin1String("openMenu")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("showMenu requires a target button"));
+        return doShowMenu(target);
     }
     if (cmd == QLatin1String("invoke")) {
         if (target.isEmpty() || action.isEmpty())
@@ -1354,44 +1476,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     if (cmd == QLatin1String("cwx"))
         return doCwx(action, value);
     if (cmd == QLatin1String("pan")) {
-        // Create/remove an independent panadapter so a test can exercise a
-        // second band (its own pan + waterfall + slice) in parallel. Routes
-        // through the same RadioModel chokepoints the GUI's add/remove-pan
-        // controls use; creation is async (radio assigns the pan_id), so a
-        // caller re-reads `get pans`. (#3646)
-        if (!m_radioModel)
-            return err(QStringLiteral("no radio model available"));
-        if (action == QLatin1String("create") || action == QLatin1String("add")) {
-            const int have = m_radioModel->panadapters().size();
-            const int limit = m_radioModel->maxPanadapters();
-            if (have >= limit)
-                return err(QStringLiteral("refused: at panadapter limit (%1)").arg(limit));
-            m_radioModel->createPanadapter();
-            return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("create")},
-                               {QStringLiteral("requested"), true}, {QStringLiteral("priorCount"), have}};
-        }
-        if (action == QLatin1String("remove")) {
-            if (value.isEmpty())
-                return err(QStringLiteral("pan remove requires a panId (e.g. 0x40000001)"));
-            if (m_radioModel->panadapters().size() <= 1)
-                return err(QStringLiteral("refused: cannot remove the last panadapter"));
-            m_radioModel->removePanadapter(value);
-            return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("remove")},
-                               {QStringLiteral("panId"), value}, {QStringLiteral("requested"), true}};
-        }
-        if (action == QLatin1String("center")) {
-            // Move the ACTIVE pan's center frequency — the band-change lever. A
-            // plain `tune` only moves the slice (autopan=0, #292) so it clamps to
-            // the pan's RF range; recentering the pan is what actually changes
-            // band. Caller should re-tune the slice into the new range after.
-            bool okF = false; const double mhz = value.toDouble(&okF);
-            if (!okF || mhz <= 0)
-                return err(QStringLiteral("pan center requires a positive frequency in MHz"));
-            m_radioModel->setPanCenter(mhz);
-            return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("center")},
-                               {QStringLiteral("centerMhz"), mhz}, {QStringLiteral("requested"), true}};
-        }
-        return err(QStringLiteral("unknown pan action: ") + action + QStringLiteral(" (create|remove|center)"));
+        if (action.isEmpty())
+            return err(QStringLiteral("pan requires an action (create|add|remove|close|center)"));
+        return doPan(action, value);
     }
     if (cmd == QLatin1String("txwaterfall")) {
         // Radio-authoritative display flag (`transmit set show_tx_in_waterfall`)
@@ -1493,17 +1580,63 @@ QJsonObject AutomationServer::doGrab(const QString& target, const QString& path)
                            {QStringLiteral("error"),
                             QStringLiteral("widget not found: ") + target}};
     }
+    return saveWidgetGrab(w, target, path);
+}
 
+// Capture a specific pan's spectrum surface by SpectrumWidget::panIndex, so a
+// driver can grab pan 1 (etc.) in a multi-pan layout instead of always getting
+// the first SpectrumWidget. panIndex is read via the meta-object (Q_PROPERTY) so
+// core/ stays free of any GUI include. (#3646)
+QJsonObject AutomationServer::doGrabPan(const QString& indexStr, const QString& path) const
+{
+    bool okIdx = false;
+    const int index = indexStr.toInt(&okIdx);
+    if (!okIdx || index < 0)
+        return err(QStringLiteral("grab pan requires a non-negative pan index "
+                                  "(e.g. 'grab pan 1')"));
+
+    const QList<QWidget*> spectra = findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+    QJsonArray available;
+    QWidget* match = nullptr;
+    for (QWidget* sw : spectra) {
+        const QVariant pi = sw->property("panIndex");
+        if (!pi.isValid())
+            continue;
+        available.append(pi.toInt());
+        // Prefer a visible surface if duplicate indices ever coexist (e.g. mid
+        // float/dock reparent); otherwise the first index match wins below.
+        if (pi.toInt() == index && (!match || sw->isVisible()))
+            match = sw;
+    }
+    if (!match) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("no pan with index ") + QString::number(index)},
+                           {QStringLiteral("available"), available}};
+    }
+
+    QJsonObject r = saveWidgetGrab(match, QStringLiteral("pan") + QString::number(index), path);
+    if (r.value(QStringLiteral("ok")).toBool())
+        r[QStringLiteral("panIndex")] = index;
+    return r;
+}
+
+// Shared tail for grab / grab pan: read the widget back to a PNG (framebuffer
+// readback for the GPU panadapter) and describe the result. `label` names the
+// default temp file and is echoed as `target`.
+QJsonObject AutomationServer::saveWidgetGrab(QWidget* w, const QString& label,
+                                             const QString& path) const
+{
     const QImage img = grabWidget(w);
     if (img.isNull()) {
         return QJsonObject{{QStringLiteral("ok"), false},
                            {QStringLiteral("error"),
-                            QStringLiteral("grab produced an empty image for ") + target}};
+                            QStringLiteral("grab produced an empty image for ") + label}};
     }
 
     QString outPath = path;
     if (outPath.isEmpty()) {
-        QString safe = target;
+        QString safe = label;
         safe.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_.-]")),
                      QStringLiteral("_"));
         outPath = QDir(QStandardPaths::writableLocation(QStandardPaths::TempLocation))
@@ -1523,7 +1656,7 @@ QJsonObject AutomationServer::doGrab(const QString& target, const QString& path)
 
     return QJsonObject{
         {QStringLiteral("ok"), true},
-        {QStringLiteral("target"), target},
+        {QStringLiteral("target"), label},
         {QStringLiteral("class"), shortClassName(w)},
         {QStringLiteral("path"), outPath},
         {QStringLiteral("width"), img.width()},
@@ -2433,6 +2566,244 @@ QJsonObject AutomationServer::doMenu(const QString& action, const QString& arg) 
         return err(QStringLiteral("menu not found: ") + arg);
     }
     return err(QStringLiteral("unknown menu action: ") + action + QStringLiteral(" (list|open)"));
+}
+
+// ── Window close (#3646 fidelity) ───────────────────────────────────────────
+// Close the target's top-level window. We call window()->close() rather than
+// synthesizing a click on the custom frameless title-bar close QLabel ("Close
+// window") — close() is what that QLabel's handler invokes anyway, and it works
+// for ANY window (native or frameless), so `invoke … click` is no longer the
+// only path. Deferred to a clean main-loop turn because a closeEvent can pop a
+// confirm dialog (a nested event loop) which must not re-enter the socket-read
+// callback.
+QJsonObject AutomationServer::doClose(const QString& target) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget not found: ") + target);
+    QWidget* win = w->window();
+    if (!win)
+        return err(QStringLiteral("no top-level window for target: ") + target);
+
+    const QString title = win->windowTitle();
+    const QString cls = shortClassName(win);
+    QPointer<QWidget> wg = win;
+    QTimer::singleShot(0, qApp, [wg]() {
+        if (wg) wg->close();
+    });
+    qCInfo(lcAutomation).noquote() << "close window for" << target << "(" << cls << ")";
+
+    QJsonObject r{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), cls},
+        {QStringLiteral("deferred"), true},   // re-read dumpTree to confirm it's gone
+    };
+    if (!title.isEmpty())
+        r[QStringLiteral("title")] = title;
+    return r;
+}
+
+// ── Mouse-drag gesture synthesis (#3646 fidelity) ───────────────────────────
+// `drag <target> <dx> <dy>` synthesizes a press → moves → release so a resize
+// grip or slider handle is provable end-to-end, not just via seed + read-back.
+// All global coordinates are computed ONCE from the press position; we never
+// re-map after a move. That matters for a QSizeGrip, whose parent (and therefore
+// the grip itself) shifts as the window resizes — re-mapping mid-drag would feed
+// the grip a compounding delta and overshoot the requested size.
+QJsonObject AutomationServer::doDrag(const QString& target, const QString& value) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget or window not found: ") + target);
+    if (!w->isVisible())
+        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+
+    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() < 2)
+        return err(QStringLiteral("drag requires '<dx> <dy>' in pixels (e.g. 'drag sizeGrip 80 60')"));
+    bool okx = false, oky = false;
+    const int dx = parts.at(0).toInt(&okx);
+    const int dy = parts.at(1).toInt(&oky);
+    if (!okx || !oky)
+        return err(QStringLiteral("drag dx/dy must be integers"));
+
+    const QPoint start(w->width() / 2, w->height() / 2);
+    const QPoint globalStart = w->mapToGlobal(start);
+
+    QPointer<QWidget> wp = w;
+    auto send = [&](QEvent::Type type, const QPoint& off,
+                    Qt::MouseButton button, Qt::MouseButtons buttons) -> bool {
+        if (!wp)
+            return false;
+        const QPoint local = start + off;
+        const QPoint global = globalStart + off;
+        QMouseEvent ev(type, QPointF(local), QPointF(local), QPointF(global),
+                       button, buttons, Qt::NoModifier);
+        QCoreApplication::sendEvent(wp, &ev);
+        return wp != nullptr;
+    };
+
+    // press, then thirds of the travel, then release — fixed-base offsets.
+    send(QEvent::MouseButtonPress, QPoint(0, 0), Qt::LeftButton, Qt::LeftButton);
+    send(QEvent::MouseMove, QPoint(dx / 3, dy / 3), Qt::NoButton, Qt::LeftButton);
+    send(QEvent::MouseMove, QPoint(dx * 2 / 3, dy * 2 / 3), Qt::NoButton, Qt::LeftButton);
+    send(QEvent::MouseMove, QPoint(dx, dy), Qt::NoButton, Qt::LeftButton);
+    send(QEvent::MouseButtonRelease, QPoint(dx, dy), Qt::LeftButton, Qt::NoButton);
+
+    qCInfo(lcAutomation).noquote()
+        << "drag" << target << "by" << dx << dy;
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), wp ? shortClassName(wp) : QStringLiteral("(deleted)")},
+        {QStringLiteral("dx"), dx},
+        {QStringLiteral("dy"), dy},
+    };
+}
+
+// ── Button drop-down popup (#3646 fidelity) ─────────────────────────────────
+// `showMenu <target>` pops a QToolButton/QPushButton drop-down menu. The show is
+// POSTED onto the GUI event loop (singleShot(0)) and the owning window is
+// raised+activated first — showing the native popup window from inside the
+// socket-read callback, or while the app is backgrounded, re-enters Cocoa and
+// segfaults in QWindow::geometry(). Raising is unconditional here (unlike the
+// gated raiseWindowForPopup used during sweeps) because an explicit showMenu IS
+// a request to bring the menu to the foreground.
+QJsonObject AutomationServer::doShowMenu(const QString& target) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget not found: ") + target);
+    if (!w->isVisible())
+        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+
+    QMenu* menu = nullptr;
+    if (auto* tb = qobject_cast<QToolButton*>(w))
+        menu = tb->menu();
+    else if (auto* pb = qobject_cast<QPushButton*>(w))
+        menu = pb->menu();
+    if (!menu)
+        return err(QStringLiteral("'") + target
+                   + QStringLiteral("' has no drop-down menu (expected a QToolButton/QPushButton with menu())"));
+
+    QPointer<QMenu> mg = menu;
+    QPointer<QWidget> bg = w;
+    QPointer<QWidget> win = w->window();
+    QTimer::singleShot(0, qApp, [mg, bg, win]() {
+        if (!mg || !bg)
+            return;
+        if (win && win->isVisible()) {   // realize + activate so Cocoa has an anchor
+            win->raise();
+            win->activateWindow();
+        }
+        mg->popup(bg->mapToGlobal(QPoint(0, bg->height())));
+    });
+    qCInfo(lcAutomation).noquote() << "showMenu on" << target;
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), shortClassName(w)},
+        {QStringLiteral("deferred"), true},   // popup runs next turn; dumpTree to read it
+    };
+}
+
+// ── Panadapter lifecycle (#3646) ────────────────────────────────────────────
+// `pan create|add` opens an independent panadapter; `pan center <mhz>` recenters
+// the active pan (the band-change lever — a plain `tune` only moves the slice and
+// clamps to the pan's RF range, #292); `pan close|remove <panId|index|active|all>`
+// tears one down regardless of how it was opened. Close sends the FlexLib-correct
+// pair `display pan remove` AND `display panafall remove` (panId + waterfallId),
+// so a panafall-created pan closes without the slice-removal workaround — the
+// production `RadioModel::removePanadapter` sends only `display pan close` and
+// leaves the waterfall behind (see #3843). Create is async (radio assigns the
+// pan_id), so a caller re-reads `get pans`.
+QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    RadioModel* radio = m_radioModel;
+
+    if (action == QLatin1String("create") || action == QLatin1String("add")) {
+        const int have = radio->panadapters().size();
+        const int limit = radio->maxPanadapters();
+        if (have >= limit)
+            return err(QStringLiteral("refused: at panadapter limit (%1)").arg(limit));
+        radio->createPanadapter();
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("create")},
+                           {QStringLiteral("requested"), true}, {QStringLiteral("priorCount"), have}};
+    }
+
+    if (action == QLatin1String("center")) {
+        bool okF = false; const double mhz = arg.toDouble(&okF);
+        if (!okF || mhz <= 0)
+            return err(QStringLiteral("pan center requires a positive frequency in MHz"));
+        radio->setPanCenter(mhz);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("center")},
+                           {QStringLiteral("centerMhz"), mhz}, {QStringLiteral("requested"), true}};
+    }
+
+    if (action == QLatin1String("close") || action == QLatin1String("remove")) {
+        const QString a = arg.trimmed();
+        if (a.isEmpty())
+            return err(QStringLiteral("pan close requires <panId|index|active|all>"));
+
+        const bool all = (a.compare(QLatin1String("all"), Qt::CaseInsensitive) == 0);
+        QStringList panIds;
+        if (all) {
+            for (const PanadapterModel* p : radio->panadapters())
+                panIds << p->panId();
+        } else if (a.compare(QLatin1String("active"), Qt::CaseInsensitive) == 0) {
+            if (const PanadapterModel* p = radio->activePanadapter())
+                panIds << p->panId();
+        } else if (a.startsWith(QLatin1String("0x"), Qt::CaseInsensitive)) {
+            panIds << a;   // explicit radio stream id
+        } else {
+            bool okIdx = false;
+            const int idx = a.toInt(&okIdx);
+            if (!okIdx)
+                return err(QStringLiteral("pan close: '") + a
+                           + QStringLiteral("' is not a panId (0x…), index, 'active', or 'all'"));
+            const QString pid = panIdForIndex(idx);
+            if (pid.isEmpty())
+                return err(QStringLiteral("no pan with index ") + a);
+            panIds << pid;
+        }
+        if (panIds.isEmpty())
+            return err(QStringLiteral("no matching panadapter to close"));
+        // Match the GUI guard for a single targeted close; `all` is an explicit
+        // teardown so it is allowed to remove the last pan.
+        if (!all && radio->panadapters().size() <= 1)
+            return err(QStringLiteral("refused: cannot close the last panadapter"));
+
+        QJsonArray closed;
+        for (const QString& pid : panIds) {
+            const PanadapterModel* p = radio->panadapter(pid);
+            const QString wfId = p ? p->waterfallId() : QString();
+            // FlexLib-correct teardown: the panadapter stream AND its waterfall.
+            radio->sendCommand(QStringLiteral("display pan remove ") + pid);
+            if (!wfId.isEmpty())
+                radio->sendCommand(QStringLiteral("display panafall remove ") + wfId);
+            QJsonObject o{{QStringLiteral("panId"), pid},
+                          {QStringLiteral("resolved"), p != nullptr}};
+            if (!wfId.isEmpty())
+                o[QStringLiteral("waterfallId")] = wfId;
+            closed.append(o);
+            qCInfo(lcAutomation).noquote() << "pan close" << pid
+                                           << (wfId.isEmpty() ? QString() : QStringLiteral("+ wf ") + wfId);
+        }
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("pan"), QStringLiteral("close")},
+            {QStringLiteral("requested"), true},   // radio echoes "… removed"; re-poll get pans
+            {QStringLiteral("closed"), closed},
+        };
+    }
+
+    return err(QStringLiteral("unknown pan action: ") + action
+               + QStringLiteral(" (create|add|remove|close|center)"));
 }
 
 QJsonObject AutomationServer::doWhoami() const

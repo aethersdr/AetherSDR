@@ -90,6 +90,32 @@ class RadioModel;
 //   whoami                         -> {pid, socket, label, station} — identify
 //                                     THIS instance among concurrent bridges.
 //
+// Phase 2b verbs (observability + reach, this batch — #3646):
+//
+//   grab pan <index> [path]        -> capture a SPECIFIC pan's spectrum surface
+//                                     (by SpectrumWidget::panIndex) in a multi-
+//                                     pan layout; plain `grab SpectrumWidget`
+//                                     only ever returns the first one.
+//   close <target>                 -> close the target's top-level window
+//                                     (deferred; reaches the frameless title-bar
+//                                     close that invoke-click can't).
+//   drag <target> <dx> <dy>        -> synthesize press→move→release so resize
+//                                     grips / slider handles are provable end-to-
+//                                     end. `mouse` is an alias.
+//   showMenu <target>              -> pop a QToolButton/QPushButton drop-down,
+//                                     posted onto the GUI loop with the window
+//                                     raised (crash-safe on backgrounded macOS).
+//                                     `openMenu` is an alias.
+//   pan add                        -> create a new panadapter (panafall); the
+//                                     only UI path is an unaddressable QLabel.
+//   pan close <id|index|active|all>-> tear down a panadapter regardless of how it
+//                                     was opened (sends display pan remove AND
+//                                     display panafall remove).
+//   dumpTree (extended)            -> nodes now carry toolTip, and QComboBox
+//                                     nodes carry items[]/currentIndex and pans
+//                                     carry panIndex, all assertable without
+//                                     stepping a control.
+//
 // Requests are newline-delimited. Each line is either a bare command
 // ("dumpTree", "grab SpectrumWidget /tmp/pan.png", "invoke masterVolume
 // setValue 30", "get slice active") or a JSON object ({"cmd":"invoke",
@@ -145,8 +171,34 @@ private:
     QJsonObject doDumpTree() const;
     QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
+    // grab pan <index> [path]: capture the SpectrumWidget for a specific pan
+    // (by SpectrumWidget::panIndex) in a multi-pan layout — plain `grab
+    // SpectrumWidget` only ever resolves the first one (#3646).
+    QJsonObject doGrabPan(const QString& indexStr, const QString& path) const;
+    // Shared "save this widget to a PNG and describe it" tail for grab/grab pan.
+    QJsonObject saveWidgetGrab(QWidget* w, const QString& label,
+                               const QString& path) const;
     QJsonObject doInvoke(const QString& target, const QString& action,
                          const QString& value) const;
+    // close <target>: close the target's top-level window (deferred to a clean
+    // main-loop turn so a confirm-dialog closeEvent can't re-enter the socket
+    // callback). Reaches the custom frameless title-bar close that `invoke …
+    // click` can't, and works for any window. (#3646 fidelity)
+    QJsonObject doClose(const QString& target) const;
+    // drag <target> <dx> <dy> | mouse <target> <dx> <dy>: synthesize a
+    // press → move → release gesture so resize grips and slider handles are
+    // provable end-to-end, not just via seed + read-back. (#3646 fidelity)
+    QJsonObject doDrag(const QString& target, const QString& value) const;
+    // showMenu <target>: pop a QToolButton/QPushButton drop-down menu, posted
+    // onto the GUI event loop with the owning window raised — showing the native
+    // popup from inside the socket-read callback re-enters Cocoa and segfaults on
+    // a backgrounded macOS instance. (#3646 fidelity)
+    QJsonObject doShowMenu(const QString& target) const;
+    // pan close <panId|index|active|all>: tear down a panadapter regardless of
+    // how it was opened. Sends `display pan remove` AND `display panafall remove`
+    // (the FlexLib-correct pair) so a panafall-created pan closes too — the plain
+    // `display pan close` in removePanadapter leaves the waterfall behind. (#3646)
+    QJsonObject doPan(const QString& action, const QString& arg);
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;
     // TX test-signal control (two-tone) and ATU control. Both gated by

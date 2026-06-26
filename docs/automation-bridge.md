@@ -122,11 +122,15 @@ Each `<node>`:
   "class": "AetherSDR::SpectrumWidget",   // C++ class (full, namespaced)
   "objectName": "masterVolume",            // present only if set
   "accessibleName": "Master volume",       // present only if set
+  "toolTip": "Clear the displayed SWR sweep trace.",  // present only if set
   "enabled": true,
   "visible": true,
   "geometry": { "x": 1, "y": 104, "w": 1448, "h": 751 },  // GLOBAL screen coords
   "value": "42",                           // best-effort; see below
   "range": { "min": 0, "max": 100 },       // numeric controls only (slider/spinbox)
+  "items": ["LSB","USB","AM","CW"],        // QComboBox only: full option list
+  "currentIndex": 1,                       // QComboBox only: selected index
+  "panIndex": 0,                           // SpectrumWidget only: pass to `grab pan`/`pan close`
   "keying": true,                          // present only on TX-keying controls (invoke refuses these)
   "actions": [ <action>, … ],              // QMenu only: popup actions and state
   "children": [ <node>, … ]                // present only if non-empty
@@ -161,6 +165,17 @@ display `text`, check state, enabled/visible state, global `geometry` when the
 menu is visible, and metadata such as `toolTip`, `statusTip`, and `data` when
 present.
 
+**Extra observable fields** (all non-destructive — no control is stepped):
+
+- `toolTip` — any widget's hint text, so distinctions that live only in the
+  tooltip are assertable (e.g. two "Clear" buttons: *Clear all bookmarks* vs
+  *Clear the displayed SWR sweep trace.*).
+- `items` + `currentIndex` — a `QComboBox`'s full option list and active index,
+  so you can verify the available choices without stepping (and applying) each
+  selection.
+- `panIndex` — a `SpectrumWidget`'s pan index in a multi-pan layout; pass it to
+  `grab pan <index>` or `pan close <index>`.
+
 ### `grab`
 PNG capture of a single widget.
 
@@ -175,6 +190,18 @@ PNG capture of a single widget.
 - The panadapter is a GPU (`QRhiWidget`) surface; the bridge does the correct
   framebuffer readback for it, so the capture is the *real* rendered spectrum,
   not a blank.
+
+**`grab pan <index> [path]`** captures a *specific* pan's spectrum surface in a
+multi-pan layout, keyed on the `panIndex` from `dumpTree`. Plain
+`grab SpectrumWidget` always resolves the first one, so it can't reach pan 1+.
+
+```json
+→ {"cmd":"grab","target":"pan","selector":"1","path":"/tmp/pan1.png"}
+← {"ok":true,"target":"pan1","class":"SpectrumWidget","panIndex":1,
+   "path":"/tmp/pan1.png","width":2280,"height":686}
+```
+
+An unknown index returns `{"ok":false,"error":"no pan with index N","available":[0]}`.
 
 ### `invoke`
 Drive a control deterministically — no pixel-hunting. Resolves `target` exactly
@@ -221,7 +248,11 @@ the no-op is an explicit, assertable signal.
 > marked control shows `"keying": true` in `dumpTree`, so you can see what's
 > off-limits before you try. A button-scoped name heuristic
 > (`mox/ptt/tune/atu/transmit/vox/cwx`) remains as a logged belt-and-suspenders
-> fallback for any keying control that predates the marker. Setpoint
+> fallback for any keying control that predates the marker. The fallback is
+> **whole-token anchored**: the name is split on camelCase humps and separators,
+> and a deny-word must equal a complete token — so `aprsSvcWXBOT` (svc + wxbot)
+> and `temperature` no longer false-match `cwx`/`atu`, while `moxButton` and
+> `Auto-Tune` still do. Setpoint
 > **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are never
 > blocked — moving a value setter can't transmit.
 >
@@ -256,6 +287,68 @@ connects).
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
+
+### `close`
+Close the target's **top-level window**. Resolves `target` like `grab`, then
+closes `target->window()` — so a child control closes its dialog. This reaches
+the custom frameless title-bar close (a clickable `QLabel`, accessibleName
+*Close window*) that `invoke … click` can't target, and works for any window.
+
+```json
+→ {"cmd":"close","target":"Theme actions"}
+← {"ok":true,"target":"Theme actions","class":"ThemeEditorDialog",
+   "title":"Theme Editor — Default Dark","deferred":true}
+```
+
+`deferred:true`: the close runs on the next main-loop turn (a `closeEvent` may
+pop a confirm dialog), so re-read `dumpTree` to confirm the window is gone.
+
+### `drag` (alias `mouse`)
+Synthesize a `press → move → release` gesture so a resize grip or slider handle
+is provable end-to-end, not just via seed + read-back.
+
+```json
+→ {"cmd":"drag","target":"QSizeGrip","value":"140 90"}
+← {"ok":true,"target":"QSizeGrip","class":"QSizeGrip","dx":140,"dy":90}
+```
+
+`value` is `"<dx> <dy>"` in pixels from the widget centre. Global coordinates are
+computed once from the press point (a `QSizeGrip` moves as the window resizes, so
+re-mapping mid-drag would overshoot) — a `140 90` grip drag grows the window by
+exactly 140×90.
+
+### `showMenu` (alias `openMenu`)
+Pop a `QToolButton`/`QPushButton` drop-down menu. The show is posted onto the GUI
+event loop with the owning window raised + activated first — showing the native
+popup from inside the socket-read callback, or while the app is backgrounded,
+re-enters Cocoa and segfaults. Returns `deferred:true`; `dumpTree` to read the
+opened menu. A button with no menu returns an error.
+
+```json
+→ {"cmd":"showMenu","target":"Theme actions"}
+← {"ok":true,"target":"Theme actions","class":"QPushButton","deferred":true}
+```
+
+### `pan`
+Panadapter lifecycle — create or tear down a pan regardless of how it was opened.
+
+```json
+→ {"cmd":"pan","action":"add"}
+← {"ok":true,"pan":"add","requested":true,"panCountBefore":1}
+
+→ {"cmd":"pan","action":"close","value":"1"}
+← {"ok":true,"pan":"close","requested":true,
+   "closed":[{"panId":"0x40000001","waterfallId":"0x42000001","resolved":true}]}
+```
+
+| `action` | `value` | effect |
+|---|---|---|
+| `create` (alias `add`) | — | create a new panadapter (panafall). The only UI path is an unaddressable label. |
+| `center` | `<mhz>` | recenter the active pan — the band-change lever (a plain `tune` only moves the slice and clamps to the pan's RF range, #292). |
+| `close` (alias `remove`) | `<panId>` (`0x…`) / `<index>` (panIndex) / `active` / `all` | close pan(s). Sends `display pan remove` **and** `display panafall remove`, so a panafall-created pan closes without the slice-removal workaround. A single target won't close the last pan; `all` will. |
+
+All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
+action is RX/config only; none keys the transmitter.
 
 ### Errors
 Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.

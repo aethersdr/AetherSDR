@@ -19,6 +19,10 @@ class SpectrumWidget;
 // slice gets its own PanadapterApplet in a vertical splitter.
 class PanadapterApplet : public QWidget {
     Q_OBJECT
+    // Expose panId via the meta-object so the automation bridge (core/, no GUI
+    // include) can map a pan back to its radio stream id without depending on
+    // this header — used by `grab pan <index>` and `pan close <index>` (#3646).
+    Q_PROPERTY(QString panId READ panId WRITE setPanId)
 
 public:
     explicit PanadapterApplet(QWidget* parent = nullptr);
