@@ -5841,10 +5841,6 @@ void MainWindow::applyPanRangeRequest(const QString& panId, double centerMhz,
     centerMhz = std::max(centerMhz, bandwidthMhz / 2.0);
 
     if (!kiwiSdrProfileForPan(panId).isEmpty()) {
-        qDebug() << "Pan range request:" << source
-                 << "center" << centerMhz
-                 << "bandwidth" << bandwidthMhz
-                 << "local=kiwi";
         return;
     }
 
