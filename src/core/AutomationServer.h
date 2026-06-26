@@ -143,6 +143,7 @@ private:
     QJsonObject handleLine(const QByteArray& line, QLocalSocket* sock);
 
     QJsonObject doDumpTree() const;
+    QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
     QJsonObject doInvoke(const QString& target, const QString& action,
                          const QString& value) const;
@@ -163,6 +164,11 @@ private:
     // and the mox_toggle shortcut make, but reachable headlessly. Keying is gated
     // by AETHER_AUTOMATION_ALLOW_TX (the same rail as txtest/atu); unkey is not.
     QJsonObject doKey(const QString& name, const QString& arg);
+    // Drive the CWX keyer (send a CW string / set WPM / abort). `send` keys the
+    // transmitter so it sits on the AETHER_AUTOMATION_ALLOW_TX rail and arms the
+    // force-unkey watchdog; speed/stop do not key. CW's rapid TX→RX edges are the
+    // easy repro for post-TX FFT-floor recovery (#3804).
+    QJsonObject doCwx(const QString& action, const QString& arg);
     // Per-GUI-client station identity (#3646 fidelity). Sets `client station
     // <name>` so other MultiFlex clients see the agent's name; NEVER the radio
     // callsign. Auto-applied on connect, restored on stop. No keying.

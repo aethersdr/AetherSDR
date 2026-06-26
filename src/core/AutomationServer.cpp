@@ -258,6 +258,24 @@ QJsonObject describeWidget(const QWidget* w)
     if (w->property(kTxKeyingProperty).toBool())
         o[QStringLiteral("keying")] = true;
 
+    // Surface the spectrum's measured FFT noise floor (dBm) when a widget
+    // exposes it as a Q_PROPERTY (SpectrumWidget). Read generically via the
+    // meta-object so the core bridge stays decoupled from the GUI class. Lets
+    // a driver sample post-TX floor recovery numerically (#3804). The sentinel
+    // -1000 means "no measurement yet"; emit only a real reading.
+    {
+        const QVariant nf = w->property("noiseFloorDbm");
+        if (nf.isValid() && nf.toDouble() > -500.0) {
+            o[QStringLiteral("noiseFloorDbm")] = nf.toDouble();
+            const QVariant df = w->property("displayFloorDbm");
+            if (df.isValid() && df.toDouble() > -500.0)
+                o[QStringLiteral("displayFloorDbm")] = df.toDouble();
+            const QVariant pi = w->property("panIndex");
+            if (pi.isValid())
+                o[QStringLiteral("panIndex")] = pi.toInt();
+        }
+    }
+
     QJsonArray kids;
     const QObjectList children = w->children();
     for (const QObject* child : children) {
@@ -624,6 +642,7 @@ QJsonObject sliceSnapshot(const SliceModel* s)
         {QStringLiteral("active"),     s->isActive()},
         {QStringLiteral("txSlice"),    s->isTxSlice()},
         {QStringLiteral("rxAntenna"),  s->rxAntenna()},
+        {QStringLiteral("txAntenna"),  s->txAntenna()},   // live TX antenna — lets a driver enforce the dummy-load gate before keying (#3646)
         {QStringLiteral("rfGain"),     s->rfGain()},
         {QStringLiteral("audioGain"),  s->audioGain()},
         {QStringLiteral("audioPan"),   s->audioPan()},
@@ -770,6 +789,7 @@ QJsonObject transmitSnapshot(const TransmitModel* t)
         {QStringLiteral("atuMemories"),     t->memoriesEnabled()},
         {QStringLiteral("atuStatus"),       atuStatusName(t->atuStatus())},
         {QStringLiteral("apdEnabled"),      t->apdEnabled()},
+        {QStringLiteral("showTxInWaterfall"), t->showTxInWaterfall()},
     };
 }
 
@@ -1012,8 +1032,8 @@ bool AutomationServer::start(const QString& serverName)
 
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
-        << "(verbs: ping, dumpTree, grab, invoke, get, txtest, atu, slice, tune,"
-        << "key, station, resize, menu, whoami, log, mark)";
+        << "(verbs: ping, dumpTree, floors, grab, invoke, get, txtest, atu, slice, tune,"
+        << "key, cwx, station, resize, menu, whoami, log, mark)";
     return true;
 }
 
@@ -1225,6 +1245,15 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             QStringList rest;
             for (int i = 1; i < p.size(); ++i) rest << tok(i);
             value = rest.join(QLatin1Char(' '));  // free-form annotation text
+        } else if (cmd == QLatin1String("cwx")) {
+            action = tok(1);                  // send | speed | stop
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // "cwx send CQ CQ DE ...", "cwx speed 18"
+        } else if (cmd == QLatin1String("pan")) {
+            action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
+        } else if (cmd == QLatin1String("txwaterfall")) {
+            value = tok(1);                   // on | off
         } else if (cmd == QLatin1String("key")) {
             action = tok(1); value = tok(2);  // "key ptt on", "key mox"
         } else if (cmd == QLatin1String("station")) {
@@ -1253,6 +1282,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("dumpTree"))
         return doDumpTree();
+    if (cmd == QLatin1String("floors"))
+        return doFloors();
     if (cmd == QLatin1String("grab")) {
         if (target.isEmpty())
             return err(QStringLiteral("grab requires a target widget"));
@@ -1280,13 +1311,73 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("slice")) {
         if (action.isEmpty())
-            return err(QStringLiteral("slice requires an action (add|remove|select|tx)"));
+            return err(QStringLiteral("slice requires an action (add|remove|select|tx|txant)"));
         return doSlice(action, value);
     }
     if (cmd == QLatin1String("tune")) {
         if (value.isEmpty())
             return err(QStringLiteral("tune requires a frequency in MHz"));
         return doTune(value);
+    }
+    if (cmd == QLatin1String("cwx"))
+        return doCwx(action, value);
+    if (cmd == QLatin1String("pan")) {
+        // Create/remove an independent panadapter so a test can exercise a
+        // second band (its own pan + waterfall + slice) in parallel. Routes
+        // through the same RadioModel chokepoints the GUI's add/remove-pan
+        // controls use; creation is async (radio assigns the pan_id), so a
+        // caller re-reads `get pans`. (#3646)
+        if (!m_radioModel)
+            return err(QStringLiteral("no radio model available"));
+        if (action == QLatin1String("create") || action == QLatin1String("add")) {
+            const int have = m_radioModel->panadapters().size();
+            const int limit = m_radioModel->maxPanadapters();
+            if (have >= limit)
+                return err(QStringLiteral("refused: at panadapter limit (%1)").arg(limit));
+            m_radioModel->createPanadapter();
+            return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("create")},
+                               {QStringLiteral("requested"), true}, {QStringLiteral("priorCount"), have}};
+        }
+        if (action == QLatin1String("remove")) {
+            if (value.isEmpty())
+                return err(QStringLiteral("pan remove requires a panId (e.g. 0x40000001)"));
+            if (m_radioModel->panadapters().size() <= 1)
+                return err(QStringLiteral("refused: cannot remove the last panadapter"));
+            m_radioModel->removePanadapter(value);
+            return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("remove")},
+                               {QStringLiteral("panId"), value}, {QStringLiteral("requested"), true}};
+        }
+        if (action == QLatin1String("center")) {
+            // Move the ACTIVE pan's center frequency — the band-change lever. A
+            // plain `tune` only moves the slice (autopan=0, #292) so it clamps to
+            // the pan's RF range; recentering the pan is what actually changes
+            // band. Caller should re-tune the slice into the new range after.
+            bool okF = false; const double mhz = value.toDouble(&okF);
+            if (!okF || mhz <= 0)
+                return err(QStringLiteral("pan center requires a positive frequency in MHz"));
+            m_radioModel->setPanCenter(mhz);
+            return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("pan"), QStringLiteral("center")},
+                               {QStringLiteral("centerMhz"), mhz}, {QStringLiteral("requested"), true}};
+        }
+        return err(QStringLiteral("unknown pan action: ") + action + QStringLiteral(" (create|remove|center)"));
+    }
+    if (cmd == QLatin1String("txwaterfall")) {
+        // Radio-authoritative display flag (`transmit set show_tx_in_waterfall`)
+        // that gates whether keyed-up TX renders FFT-derived rows in the
+        // waterfall. Off by default; enabling it lets a test confirm CWX/tune/ATU
+        // energy appears in the waterfall, not just the FFT trace (#3646/#3804).
+        if (!m_radioModel)
+            return err(QStringLiteral("no radio model available"));
+        const QString v = value.trimmed().toLower();
+        const bool on = (v == QLatin1String("on") || v == QLatin1String("1")
+                         || v == QLatin1String("true") || v == QLatin1String("enable"));
+        const bool off = (v == QLatin1String("off") || v == QLatin1String("0")
+                          || v == QLatin1String("false") || v == QLatin1String("disable"));
+        if (!on && !off)
+            return err(QStringLiteral("txwaterfall requires on|off"));
+        m_radioModel->sendCommand(QStringLiteral("transmit set show_tx_in_waterfall=%1").arg(on ? 1 : 0));
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("txwaterfall"), on},
+                           {QStringLiteral("note"), QStringLiteral("radio echoes status; re-read with get transmit showTxInWaterfall")}};
     }
     if (cmd == QLatin1String("key")) {
         if (action.isEmpty())
@@ -1330,6 +1421,36 @@ QJsonObject AutomationServer::doDumpTree() const
         {QStringLiteral("ok"), true},
         {QStringLiteral("roots"), roots},
     };
+}
+
+// Lightweight read of every spectrum's measured noise floors, keyed by
+// panIndex. dumpTree serialises ~2600 widgets (~250 ms) which is far too slow
+// to sample a sub-second post-TX transient; this only touches widgets that
+// expose the noiseFloorDbm Q_PROPERTY and builds a tiny payload, so a driver
+// can poll it at 20+ Hz to trace floor recovery (#3804/#3646).
+QJsonObject AutomationServer::doFloors() const
+{
+    QJsonArray arr;
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    for (QWidget* tlw : tops) {
+        QList<QWidget*> scan = tlw->findChildren<QWidget*>();
+        scan.prepend(tlw);
+        for (QWidget* w : scan) {
+            const QVariant nf = w->property("noiseFloorDbm");
+            if (!nf.isValid())
+                continue;   // not a spectrum — property absent
+            QJsonObject o;
+            o[QStringLiteral("panIndex")] = w->property("panIndex").toInt();
+            o[QStringLiteral("visible")]  = w->isVisible();
+            if (nf.toDouble() > -500.0)
+                o[QStringLiteral("noiseFloorDbm")] = nf.toDouble();
+            const QVariant df = w->property("displayFloorDbm");
+            if (df.isValid() && df.toDouble() > -500.0)
+                o[QStringLiteral("displayFloorDbm")] = df.toDouble();
+            arr.append(o);
+        }
+    }
+    return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("floors"), arr}};
 }
 
 QJsonObject AutomationServer::doGrab(const QString& target, const QString& path) const
@@ -1881,7 +2002,34 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
         return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), QStringLiteral("tx")},
                            {QStringLiteral("id"), id}, {QStringLiteral("requested"), true}};
     }
-    return err(QStringLiteral("unknown slice action: ") + action + QStringLiteral(" (add|remove|select|tx)"));
+    if (action == QLatin1String("txant") || action == QLatin1String("rxant")) {
+        // Set the transmit/receive antenna port deterministically. The GUI
+        // controls are QMenu::exec() popups an invoke() can't drive without
+        // blocking the event loop, so route through the same SliceModel
+        // setTxAntenna/setRxAntenna chokepoints the menus use. Lets a driver
+        // enforce/establish the dummy-load antenna before any TX-safety gate —
+        // read back with `get slice tx txAntenna`/`rxAntenna`. (#3646)
+        const bool tx = (action == QLatin1String("txant"));
+        const QString ant = arg.trimmed();
+        if (ant.isEmpty())
+            return err(QStringLiteral("slice ") + action + QStringLiteral(" requires an antenna port (e.g. ANT2)"));
+        SliceModel* s = nullptr;
+        if (tx) for (SliceModel* c : radio->slices()) if (c->isTxSlice())  { s = c; break; }
+        if (!s) for (SliceModel* c : radio->slices()) if (c->isActive()) { s = c; break; }
+        if (!s && !radio->slices().isEmpty()) s = radio->slices().first();
+        if (!s)
+            return err(QStringLiteral("no slice available to set antenna on"));
+        const QStringList opts = tx ? s->txAntennaList() : s->rxAntennaList();
+        if (!opts.isEmpty() && !opts.contains(ant))
+            return err(QStringLiteral("antenna '") + ant + QStringLiteral("' not in antenna list: ")
+                       + opts.join(QLatin1Char(',')));
+        if (tx) s->setTxAntenna(ant); else s->setRxAntenna(ant);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("slice"), action},
+                           {QStringLiteral("id"), s->sliceId()},
+                           {tx ? QStringLiteral("txAntenna") : QStringLiteral("rxAntenna"), ant},
+                           {QStringLiteral("requested"), true}};
+    }
+    return err(QStringLiteral("unknown slice action: ") + action + QStringLiteral(" (add|remove|select|tx|txant|rxant)"));
 }
 
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────
@@ -1963,6 +2111,49 @@ QJsonObject AutomationServer::doKey(const QString& name, const QString& arg)
     }
     return err(QStringLiteral("unknown key '") + name
                + QStringLiteral("' (use: ptt on|off, mox)"));
+}
+
+// ── CWX keyer (#3646; repro vehicle for #3804) ──────────────────────────────
+// `cwx send <text>` keys CW for the string (gated, arms the watchdog), `cwx
+// speed <wpm>` sets keyer speed, `cwx stop` aborts the buffer. Routes through
+// the same CwxModel chokepoint the CWX panel uses (which emits `cwx send "..."`).
+// The slice should be in a CW mode for the radio to emit; we don't enforce it
+// here so a caller can stage mode first.
+QJsonObject AutomationServer::doCwx(const QString& action, const QString& arg)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+    CwxModel& cwx = m_radioModel->cwxModel();
+    const QString a = action.trimmed().toLower();
+
+    if (a == QLatin1String("speed") || a == QLatin1String("wpm")) {
+        bool ok = false; const int wpm = arg.trimmed().toInt(&ok);
+        if (!ok || wpm < 5 || wpm > 100)
+            return err(QStringLiteral("cwx speed requires wpm in 5..100"));
+        cwx.setSpeed(wpm);
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("speed")},
+                           {QStringLiteral("wpm"), wpm}};
+    }
+    if (a == QLatin1String("stop") || a == QLatin1String("abort") || a == QLatin1String("clear")) {
+        cwx.clearBuffer();
+        m_txKeyedSinceMs = 0;
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("stop")}};
+    }
+    if (a == QLatin1String("send")) {
+        const QString text = arg.trimmed();
+        if (text.isEmpty())
+            return err(QStringLiteral("cwx send requires text"));
+        if (!m_txAllowed)
+            return err(QStringLiteral("blocked: cwx send keys the transmitter — "
+                                      "set AETHER_AUTOMATION_ALLOW_TX=1 to allow"));
+        m_txKeyedSinceMs = QDateTime::currentMSecsSinceEpoch();  // arm watchdog
+        cwx.send(text);
+        qCInfo(lcAutomation).noquote() << "cwx send" << text.length() << "chars (ALLOW_TX)";
+        return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("cwx"), QStringLiteral("send")},
+                           {QStringLiteral("chars"), text.length()}};
+    }
+    return err(QStringLiteral("unknown cwx action '") + action
+               + QStringLiteral("' (use: send <text> | speed <wpm> | stop)"));
 }
 
 // ── Per-GUI-client station identity (#3646 fidelity — item 1) ───────────────

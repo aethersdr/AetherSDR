@@ -74,6 +74,14 @@ const char* wfSchemeName(WfColorScheme scheme);
 // waterfall rendering. Otherwise falls back to QPainter (QWidget).
 class SpectrumWidget : public SPECTRUM_BASE_CLASS {
     Q_OBJECT
+    // Expose the measured FFT noise floor (and the pan index that identifies
+    // which spectrum this is) to the automation bridge so a driver can read
+    // them generically via QObject::property() in dumpTree — without coupling
+    // the core bridge to this GUI class. Used to prove post-TX floor recovery
+    // (#3804) and any future floor/AGC-settle behaviour over the bridge (#3646).
+    Q_PROPERTY(double noiseFloorDbm READ noiseFloorDbm)
+    Q_PROPERTY(double displayFloorDbm READ displayFloorDbm)
+    Q_PROPERTY(int panIndex READ panIndex)
 
 public:
     explicit SpectrumWidget(QWidget* parent = nullptr);
@@ -140,6 +148,15 @@ public:
     // signal peaks exclude themselves, leaving the flat noise baseline.
     // Reflects the current band, antenna and preamp — no hardcoded dBm value.
     float noiseFloorDbm() const { return m_measuredNoiseFloorDbm; }
+
+    // Noise floor of the *displayed* FFT trace — the smoothed green line the
+    // user actually reads — measured off m_smoothed (the client-side EMA) rather
+    // than the raw incoming frame that noiseFloorDbm() tracks. This is what moves
+    // when the post-TX EMA is (or isn't) reset, so it is the quantity that proves
+    // the #3804 recovery fix over the automation bridge. Sentinel -1000 = no trace.
+    float displayFloorDbm() const {
+        return m_smoothed.isEmpty() ? -1000.0f : estimateNoiseFloorDbm(m_smoothed);
+    }
 
     // Flex squelch threshold overlay line. level is the radio squelch_level
     // (0-100), mapped to absolute dBm via the radio's fixed scale:
