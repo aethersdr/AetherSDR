@@ -25,6 +25,10 @@ void rebuildCombo(QComboBox* combo, const QStringList& profiles, const QString& 
     combo->clear();
     combo->addItems(profiles);
     const int idx = combo->findText(active);
+    // If the radio hasn't reported an active profile yet (or it isn't in the
+    // list), fall back to index 0 so the control isn't blank.  This is purely
+    // cosmetic — the set is signal-blocked, so it never issues a load, and the
+    // next *Changed/state signal corrects the highlight once active arrives.
     combo->setCurrentIndex(idx >= 0 ? idx : (profiles.isEmpty() ? -1 : 0));
     combo->setEnabled(!profiles.isEmpty());
 }
@@ -111,19 +115,21 @@ void ProfileSwitcherApplet::setRadioModel(RadioModel* model)
     // changes that reach these slots are genuine selections — there is no
     // select→load→refresh→load feedback loop.
     //
-    // Command strings mirror the proven ProfileManagerDialog paths: the radio
-    // *status* verb is "tx"/"mic" but the *load* command is "transmit"/"mic".
+    // All three rows delegate to the model load helpers (loadGlobalProfile /
+    // loadProfile / loadMicProfile) rather than hand-rolling command strings,
+    // so the radio command verbs live in exactly one place (the models) — same
+    // source of truth ProfileManagerDialog now relies on.
     connect(m_globalCombo, &QComboBox::currentTextChanged, this, [this](const QString& name) {
         if (!name.isEmpty())
             m_model->loadGlobalProfile(name);
     });
     connect(m_txCombo, &QComboBox::currentTextChanged, this, [this](const QString& name) {
         if (!name.isEmpty())
-            m_model->sendCommand(QStringLiteral("profile transmit load \"%1\"").arg(name));
+            m_model->transmitModel().loadProfile(name);
     });
     connect(m_micCombo, &QComboBox::currentTextChanged, this, [this](const QString& name) {
         if (!name.isEmpty())
-            m_model->sendCommand(QStringLiteral("profile mic load \"%1\"").arg(name));
+            m_model->transmitModel().loadMicProfile(name);
     });
 
     // Seed from whatever the model already holds (handles late wiring after a
