@@ -46,6 +46,7 @@
 #include <limits>
 #include "core/ThemeManager.h"
 #include "FreqLineEdit.h"
+#include "FreqLabelFit.h"
 
 // Slider that resets to a default value on double-click.
 // Extends GuardedSlider for controls-lock support (#745).
@@ -559,14 +560,20 @@ void RxApplet::buildUI()
 
         m_freqStack = new QStackedWidget;
         m_freqStack->setFixedHeight(34);
+        // Fill the remaining column width (after TX/mode/WFM) with a stable,
+        // font-independent box, so applyFreqFit() fits to a width that does not
+        // change when the font shrinks (avoids a fit↔reflow oscillation).
+        m_freqStack->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
         m_freqLabel = new QLabel("0.000.000");
         m_freqLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         // font-family resolves via the user-pickable font.family.freq token —
         // VfoWidget's frequency label reads the same token so both surfaces
         // re-theme in lockstep when the operator picks a new family in the
-        // Theme Editor.
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqLabel, "QLabel { color: {{color.text.primary}}; font-size: {{font.size.freq}}px; font-weight: bold;"
+        // Theme Editor.  font-size is omitted on purpose — applyFreqFit() drives
+        // the size via setFont() so wide frequencies shrink instead of clipping
+        // their leading digits (#3463); a QSS font-size would override setFont().
+        AetherSDR::ThemeManager::instance().applyStyleSheet(m_freqLabel, "QLabel { color: {{color.text.primary}}; font-weight: bold;"
             " font-family: \"{{font.family.freq}}\";"
             " background: transparent; padding: 0; margin: 0; }");
         m_freqLabel->installEventFilter(this);
@@ -620,9 +627,17 @@ void RxApplet::buildUI()
             m_freqStack->setCurrentIndex(0);
         });
 
-        m_freqRow->addStretch(1);
+        // No stretch — the Expanding freq stack fills the row's remaining width
+        // and right-aligns the digits inside it, giving applyFreqFit() a stable
+        // box to fit against.
         m_freqRow->addWidget(m_freqStack);
         root->addLayout(m_freqRow);
+
+        // Re-fit the digits when the theme (font.size.freq / font.family.freq)
+        // changes — Dark↔Light or a Theme Editor font bump.
+        connect(&AetherSDR::ThemeManager::instance(),
+                &AetherSDR::ThemeManager::themeChanged,
+                this, &RxApplet::applyFreqFit);
     }
 
     // ── Two-column area ─────────────────────────────────────────────────────
@@ -2918,6 +2933,12 @@ bool RxApplet::eventFilter(QObject* obj, QEvent* ev)
         }
     }
 
+    // Re-fit the digits whenever the label is resized (column/theme change).
+    if (obj == m_freqLabel && ev->type() == QEvent::Resize) {
+        applyFreqFit();
+        return false;  // observe only — let the label resize normally
+    }
+
     // Double-click frequency label → inline edit
     if (obj == m_freqLabel && ev->type() == QEvent::MouseButtonDblClick) {
         if (m_slice && m_slice->isLocked()) {
@@ -2996,6 +3017,7 @@ void RxApplet::updateFreqLabel()
 
     if (m_slice->isLockedFeedbackActive()) {
         m_freqLabel->setText(QStringLiteral("LOCKED"));
+        applyFreqFit();
         return;
     }
 
@@ -3007,6 +3029,20 @@ void RxApplet::updateFreqLabel()
         .arg(mhzPart)
         .arg(khzPart, 3, 10, QChar('0'))
         .arg(hzPart, 3, 10, QChar('0')));
+    applyFreqFit();
+}
+
+void RxApplet::applyFreqFit()
+{
+    if (!m_freqLabel)
+        return;
+    auto& tm = AetherSDR::ThemeManager::instance();
+    int maxPx = tm.value("font.size.freq").toInt();
+    if (maxPx <= 0)
+        maxPx = 20;
+    // pad: no border/padding on this label — 4px safety from the box edge.
+    AetherSDR::applyFittedFreqFont(m_freqLabel, tm.value("font.family.freq"),
+                                   maxPx, /*pad=*/4);
 }
 
 void RxApplet::refreshAllMutedDim()

@@ -215,6 +215,9 @@ private:
     void showTab(int index);
     void closeActiveTab();  // close any open DSP/Mode/... tab panel
     void updateFreqLabel();
+    // Shrink the frequency digits to fit the flag's fixed box so the leading
+    // digits never clip (#3463/#3515). Re-run on text/theme/resize changes.
+    void applyFreqFit();
     bool cancelDirectEntry();
     void updateFilterLabel();
     void updateModeTab();

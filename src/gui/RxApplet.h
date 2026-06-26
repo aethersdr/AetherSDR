@@ -166,6 +166,9 @@ private:
     void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
     void updateAntennaButtons();
     void updateFreqLabel();
+    // Shrink the frequency digits to fit the RX Controls box so the leading
+    // digits never clip in the fixed-width applet column (#3463/#3515).
+    void applyFreqFit();
     QStringList txAntennaOptions() const;
     QString antennaMenuLabel(const QString& token, const QStringList& options) const;
 
