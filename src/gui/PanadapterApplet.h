@@ -84,6 +84,13 @@ protected:
     bool eventFilter(QObject* obj, QEvent* ev) override;
 
 private:
+    // Re-apply the decoded-text stylesheet at the current font size (#3628).
+    void applyCwFont();
+    // Change the decoded-text font size by `delta` px, clamp, and persist (#3628).
+    void adjustCwFont(int delta);
+    // Persist + clamp the CW panel height after a grip drag (#3628).
+    void setCwPanelHeight(int h);
+
     QString         m_panId;
     SpectrumWidget* m_spectrum{nullptr};
     QWidget*        m_titleBar{nullptr};
@@ -95,6 +102,7 @@ private:
 
     // CW decode
     QWidget*      m_cwPanel{nullptr};
+    QWidget*      m_cwGrip{nullptr};
     QTextEdit*    m_cwText{nullptr};
     QLabel*       m_cwStatsLabel{nullptr};
     QSlider*      m_cwSensSlider{nullptr};
@@ -103,6 +111,13 @@ private:
     RangeSlider*  m_pitchRangeSlider{nullptr};
     RangeSlider*  m_speedRangeSlider{nullptr};
     float         m_cwCostThreshold{0.70f};
+
+    // Adjustable, persisted decoded-text display (#3628)
+    int           m_cwFontPx{13};
+    int           m_cwPanelHeight{80};
+    bool          m_cwResizing{false};
+    int           m_cwResizeStartY{0};
+    int           m_cwResizeStartH{0};
 
     enum class CwTextSource { None, Rx, Tx };
     CwTextSource  m_lastCwTextSource{CwTextSource::None};

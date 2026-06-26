@@ -41,6 +41,27 @@ public:
     // should be visible at all (regardless of which direction is fed).
     static bool anyEnabled() { return rxEnabled() || txEnabled(); }
 
+    // Decoded-text display font size (px) and panel height (px), persisted
+    // so operators can tune readability and history depth (#3628).  Stored
+    // in the same nested blob alongside the rx/tx toggles.
+    static int  fontPx()      { return readObj().value("fontPx").toInt(13); }
+    static int  panelHeight() { return readObj().value("panelHeight").toInt(80); }
+
+    static void setFontPx(int px)
+    {
+        QJsonObject o = readObj();
+        o["fontPx"] = px;
+        ensureToggles(o);
+        write(o);
+    }
+    static void setPanelHeight(int h)
+    {
+        QJsonObject o = readObj();
+        o["panelHeight"] = h;
+        ensureToggles(o);
+        write(o);
+    }
+
     // One-shot migration from the legacy "CwDecodeOverlay" flat key.  Run
     // at startup before any caller reads the new blob.  Safe to call
     // repeatedly: returns immediately if the new blob already exists.
@@ -57,6 +78,13 @@ public:
     }
 
 private:
+    // Keep the rx/tx toggles present when writing display-only keys so a
+    // fontPx/panelHeight change never drops a user's enable state.
+    static void ensureToggles(QJsonObject& o)
+    {
+        if (!o.contains("rx")) o["rx"] = QStringLiteral("True");
+        if (!o.contains("tx")) o["tx"] = QStringLiteral("False");
+    }
     static QJsonObject readObj()
     {
         const QString json =
