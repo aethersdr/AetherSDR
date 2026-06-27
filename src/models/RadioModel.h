@@ -24,6 +24,7 @@
 #include "MemoryEntry.h"
 #include "ModelCapabilities.h"
 #include "RadioStatusOwnership.h"
+#include "DisplayInventoryPolicy.h"
 
 #include <QObject>
 #include <QString>
@@ -282,6 +283,11 @@ public:
     PanadapterModel* activePanadapter() const;
     PanadapterModel* panadapter(const QString& panId) const;
     QList<PanadapterModel*> panadapters() const { return m_panadapters.values(); }
+
+    // Radio-authoritative display inventory vs what we own (#3856 Layer B).
+    // Built from the accumulated "display pan"/"display waterfall" status maps;
+    // surfaces leaked waterfalls (parent pan gone), foreign and orphan objects.
+    DisplayInventory::Report displayInventoryReport() const;
 
     QList<SliceModel*> slices() const { return m_slices; }
     SliceModel* slice(int id) const;
@@ -719,6 +725,18 @@ private:
     QMap<QString, PanadapterModel*> m_panadapters;  // panId → model
     QMap<QString, PanadapterModel*> m_stalePanadapters;  // previous session, kept alive for UI reuse
     QString m_activePanId;       // currently active panadapter
+
+    // Radio-authoritative display inventory (#3856 Layer B). Accumulated from
+    // ALL "display pan"/"display waterfall" status (ours, foreign, and orphan),
+    // pruned on the matching "removed" — independent of m_panadapters, which only
+    // holds objects WE own. A leaked waterfall (panafall closed without
+    // "display panafall remove") therefore lingers here after its pan is pruned,
+    // making it detectable even when the radio has stopped streaming it.
+    // Main-thread only (written in onStatusReceived, read in the bridge).
+    struct RadioDisplayPan { quint32 clientHandle{0}; };
+    struct RadioDisplayWf  { quint32 clientHandle{0}; QString parentPanId; };
+    QMap<QString, RadioDisplayPan> m_radioDisplayPans;        // panId → entry
+    QMap<QString, RadioDisplayWf>  m_radioDisplayWaterfalls;  // wfId  → entry
     // Deferred "display pan" status pending ownership confirmation. Paired
     // with QDateTime::currentSecsSinceEpoch() at insert so a sweep on insert
     // can drop entries that the radio never resolved with a client_handle

@@ -1228,8 +1228,8 @@ bool AutomationServer::start(const QString& serverName)
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, invoke, get, connect, disconnect,"
-        << "txtest, atu, slice, tune, pan, txwaterfall, key, cwx, station, resize, menu,"
-        << "close, drag, showMenu, whoami, log, mark)";
+        << "txtest, atu, slice, tune, pan, streams, txwaterfall, key, cwx, station, resize,"
+        << "menu, close, drag, showMenu, whoami, log, mark)";
     return true;
 }
 
@@ -1480,6 +1480,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             value = rest.join(QLatin1Char(' '));  // "cwx send CQ CQ DE ...", "cwx speed 18"
         } else if (cmd == QLatin1String("pan")) {
             action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
+        } else if (cmd == QLatin1String("streams")) {
+            action = tok(1);  // "" (Layer A UDP-orphan) | "radio" (Layer B) | "reset"
         } else if (cmd == QLatin1String("txwaterfall")) {
             value = tok(1);                   // on | off
         } else if (cmd == QLatin1String("key")) {
@@ -1595,6 +1597,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("pan requires an action (create|add|remove|close|center)"));
         return doPan(action, value);
     }
+    if (cmd == QLatin1String("streams"))
+        return doStreams(action);
     if (cmd == QLatin1String("txwaterfall")) {
         // Radio-authoritative display flag (`transmit set show_tx_in_waterfall`)
         // that gates whether keyed-up TX renders FFT-derived rows in the
@@ -3234,6 +3238,110 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
 
     return err(QStringLiteral("unknown pan action: ") + action
                + QStringLiteral(" (create|add|remove|close|center)"));
+}
+
+// ── Radio-side display-stream inventory / leak detector (#3856) ──────────────
+// `get pans` can never show a radio-side leak: the client tears down its own
+// view on the "removed" echo, so it always looks clean. This verb reports two
+// independent radio-authoritative views:
+//   Layer A (`streams`)      — VITA-49 UDP truth: streams the radio is STILL
+//                              transmitting for an id we no longer own (catches
+//                              continued-UDP leaks, the #268 class).
+//   Layer B (`streams radio`)— status-bookkeeping truth: the radio's full
+//                              display-object set classified ours/foreign/orphan,
+//                              with leaked waterfalls (parent pan gone) — catches
+//                              resource-level lingering that emits no UDP (#3843).
+// `streams reset` clears the Layer-A orphan tally to re-baseline a before/after.
+QJsonObject AutomationServer::doStreams(const QString& action)
+{
+    if (!m_radioModel)
+        return err(QStringLiteral("no radio model available"));
+
+    const auto hex = [](quint32 id) {
+        return QStringLiteral("0x") + QString::number(id, 16);
+    };
+    const auto ownStr = [](DisplayInventory::Ownership o) {
+        switch (o) {
+        case DisplayInventory::Ownership::Ours:    return QStringLiteral("ours");
+        case DisplayInventory::Ownership::Foreign: return QStringLiteral("foreign");
+        default:                                   return QStringLiteral("orphan");
+        }
+    };
+
+    // Layer B — radio-authoritative display-object inventory.
+    if (action.compare(QLatin1String("radio"), Qt::CaseInsensitive) == 0
+        || action.compare(QLatin1String("inventory"), Qt::CaseInsensitive) == 0) {
+        const DisplayInventory::Report rep = m_radioModel->displayInventoryReport();
+        QJsonArray pans;
+        for (const auto& p : rep.pans)
+            pans.append(QJsonObject{{QStringLiteral("panId"), p.id},
+                                    {QStringLiteral("clientHandle"), hex(p.clientHandle)},
+                                    {QStringLiteral("ownership"), ownStr(p.ownership)}});
+        QJsonArray wfs;
+        for (const auto& w : rep.waterfalls) {
+            QJsonObject o{{QStringLiteral("waterfallId"), w.id},
+                          {QStringLiteral("clientHandle"), hex(w.clientHandle)},
+                          {QStringLiteral("ownership"), ownStr(w.ownership)},
+                          {QStringLiteral("parentMissing"), w.parentMissing}};
+            if (!w.parentPanId.isEmpty())
+                o[QStringLiteral("parentPanId")] = w.parentPanId;
+            wfs.append(o);
+        }
+        QJsonArray leaked;
+        for (const auto& id : rep.leakedWaterfalls) leaked.append(id);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("scope"), QStringLiteral("radio")},
+            {QStringLiteral("pans"), pans},
+            {QStringLiteral("waterfalls"), wfs},
+            {QStringLiteral("radioPanCount"), rep.pans.size()},
+            {QStringLiteral("radioWaterfallCount"), rep.waterfalls.size()},
+            {QStringLiteral("orphanPanCount"), rep.orphanPanCount},
+            {QStringLiteral("orphanWaterfallCount"), rep.orphanWfCount},
+            {QStringLiteral("foreignPanCount"), rep.foreignPanCount},
+            {QStringLiteral("foreignWaterfallCount"), rep.foreignWfCount},
+            {QStringLiteral("leakedWaterfalls"), leaked},
+            {QStringLiteral("leakCount"), leaked.size()},
+        };
+    }
+
+    // Layer A — VITA-49 UDP-orphan detector (needs the stream receiver).
+    PanadapterStream* ps = m_radioModel->panStream();
+    if (!ps)
+        return err(QStringLiteral("no panadapter stream available"));
+
+    if (action.compare(QLatin1String("reset"), Qt::CaseInsensitive) == 0) {
+        ps->resetOrphanStreams();
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("streams"), QStringLiteral("reset")}};
+    }
+    if (!action.isEmpty())
+        return err(QStringLiteral("unknown streams action: ") + action
+                   + QStringLiteral(" (use '' for UDP-orphan, 'radio' for inventory, or 'reset')"));
+
+    QJsonArray panReg;
+    for (quint32 id : ps->registeredPanStreams()) panReg.append(hex(id));
+    QJsonArray wfReg;
+    for (quint32 id : ps->registeredWfStreams()) wfReg.append(hex(id));
+
+    QJsonArray orphans;
+    for (const auto& o : ps->orphanStreams())
+        orphans.append(QJsonObject{
+            {QStringLiteral("streamId"), hex(o.streamId)},
+            {QStringLiteral("kind"), o.waterfall ? QStringLiteral("waterfall")
+                                                 : QStringLiteral("panadapter")},
+            {QStringLiteral("packets"), static_cast<qint64>(o.packets)},
+            {QStringLiteral("age_ms"), o.ageMs},
+        });
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("scope"), QStringLiteral("udp")},
+        {QStringLiteral("registeredPanStreams"), panReg},
+        {QStringLiteral("registeredWfStreams"), wfReg},
+        {QStringLiteral("orphanStreams"), orphans},
+        {QStringLiteral("orphanCount"), orphans.size()},
+    };
 }
 
 QJsonObject AutomationServer::doWhoami() const

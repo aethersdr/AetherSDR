@@ -404,6 +404,62 @@ connects. `connect wait <timeout_ms>` holds that request's response until
 `RadioModel::connectionStateChanged(true)` or timeout, which is the preferred
 unattended "request then assert" flow.
 
+### `streams`
+Radio-side display-stream inventory + leak detector (#3856). `get pans` can never
+show a radio-side leak — the client tears down its own view on the radio's
+`removed` echo, so it always looks clean. This verb reports two **independent
+radio-authoritative** views, plus a reset:
+
+**`streams` — Layer A (VITA-49 UDP truth).** Streams the radio is *still
+transmitting* for an id the client no longer owns: a stream we once registered
+and let go of that keeps arriving (e.g. a panafall closed without `display
+panafall remove`, on firmware that keeps streaming — the #268 class).
+
+```json
+→ {"cmd":"streams"}
+← {"ok":true,"scope":"udp",
+   "registeredPanStreams":["0x40000000"],
+   "registeredWfStreams":["0x42000000"],
+   "orphanStreams":[{"streamId":"0x42000001","kind":"waterfall","packets":214,"age_ms":48}],
+   "orphanCount":1}
+```
+An orphan whose `packets` climbs across reads with small `age_ms` is a **live
+leak**; one that stops growing was a brief in-flight tail. (Keyed off
+*ever-registered ∧ not-now-registered*, so it stays detectable after `pan close
+all` and never mis-flags a freshly-created stream's registration lag.)
+
+**`streams radio` — Layer B (status-bookkeeping truth).** The radio's full
+display-object set (every pan + waterfall it reports, accumulated from status and
+pruned on `removed`), classified `ours` / `foreign` / `orphan`, with **leaked
+waterfalls** = those whose parent panadapter no longer exists. This catches the
+resource-level lingering Layer A *can't* see — a waterfall the radio keeps
+allocated but no longer streams (the #3843 case on firmware that stops the UDP on
+pan-removal).
+
+```json
+→ {"cmd":"streams","action":"radio"}
+← {"ok":true,"scope":"radio",
+   "pans":[{"panId":"0x40000000","clientHandle":"0x5a3","ownership":"ours"}],
+   "waterfalls":[
+     {"waterfallId":"0x42000000","clientHandle":"0x5a3","ownership":"ours","parentPanId":"0x40000000","parentMissing":false},
+     {"waterfallId":"0x42000001","clientHandle":"0x5a3","ownership":"orphan","parentPanId":"0x40000001","parentMissing":true}],
+   "radioPanCount":1,"radioWaterfallCount":2,
+   "orphanPanCount":0,"orphanWaterfallCount":1,"foreignPanCount":0,"foreignWaterfallCount":0,
+   "leakedWaterfalls":["0x42000001"],"leakCount":1}
+```
+
+**`streams reset`** — clear the Layer-A orphan tally to re-baseline a before/after
+measurement.
+
+| `action` | layer | effect |
+|---|---|---|
+| — (default) | A | UDP-orphan inventory: registered streams + orphan streams (`streamId`, `kind`, `packets`, `age_ms`) |
+| `radio` (alias `inventory`) | B | radio-authoritative display-object set: pans + waterfalls classified ours/foreign/orphan, plus `leakedWaterfalls` |
+| `reset` | A | clear the orphan tally |
+
+All `streams` actions are read-only / RX; none sends a radio command or keys the
+transmitter.
+
 ### Errors
 Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 `widget not found: Foo`, `blocked: '…' looks transmit-related …`,

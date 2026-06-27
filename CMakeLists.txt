@@ -2086,6 +2086,14 @@ target_include_directories(slice_recreate_policy_test PRIVATE src)
 target_link_libraries(slice_recreate_policy_test PRIVATE Qt6::Core)
 add_test(NAME slice_recreate_policy_test COMMAND slice_recreate_policy_test)
 
+# #3856 — radio-side display inventory policy (Layer B leak classification)
+add_executable(display_inventory_policy_test
+    tests/display_inventory_policy_test.cpp
+)
+target_include_directories(display_inventory_policy_test PRIVATE src)
+target_link_libraries(display_inventory_policy_test PRIVATE Qt6::Core)
+add_test(NAME display_inventory_policy_test COMMAND display_inventory_policy_test)
+
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp
     src/core/ShortcutManager.cpp

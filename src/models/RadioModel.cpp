@@ -1869,6 +1869,24 @@ PanadapterModel* RadioModel::panadapter(const QString& panId) const
     return m_panadapters.value(panId, nullptr);
 }
 
+DisplayInventory::Report RadioModel::displayInventoryReport() const
+{
+    DisplayInventory::Inputs in;
+    in.ourHandle = clientHandle();
+    for (auto it = m_radioDisplayPans.cbegin(); it != m_radioDisplayPans.cend(); ++it)
+        in.radioPans.push_back({it.key(), it.value().clientHandle});
+    for (auto it = m_radioDisplayWaterfalls.cbegin();
+         it != m_radioDisplayWaterfalls.cend(); ++it)
+        in.radioWaterfalls.push_back({it.key(), it.value().clientHandle,
+                                      it.value().parentPanId});
+    for (auto it = m_panadapters.cbegin(); it != m_panadapters.cend(); ++it) {
+        in.ownedPanIds.insert(it.key());
+        if (it.value() && !it.value()->waterfallId().isEmpty())
+            in.ownedWaterfallIds.insert(it.value()->waterfallId());
+    }
+    return DisplayInventory::classify(in);
+}
+
 double RadioModel::panCenterMhz() const
 {
     auto* p = activePanadapter();
@@ -2865,6 +2883,8 @@ void RadioModel::onDisconnected()
     // restoreEnabledChannels() skip persisted channels on reconnect. (#3522)
     m_daxIqModel.handleDisconnect();
     m_pendingPanStatuses.clear();
+    m_radioDisplayPans.clear();           // #3856 Layer B — radio re-dumps on reconnect
+    m_radioDisplayWaterfalls.clear();
 
     m_tnfModel.clear();
     m_flexWaveformModel.clear();
@@ -4457,6 +4477,7 @@ void RadioModel::onStatusReceived(const QString& object,
             // Handle pan removal — "display pan 0x40000001 removed" arrives
             // with no '=' so the parser puts the whole string in 'object'
             if (kvs.contains("removed") || object.endsWith("removed")) {
+                m_radioDisplayPans.remove(panId);   // #3856 Layer B inventory
                 m_pendingPanStatuses.remove(panId);
                 m_panTransmitInhibitReasons.remove(panId);
                 auto* pan = m_panadapters.take(panId);
@@ -4475,6 +4496,15 @@ void RadioModel::onStatusReceived(const QString& object,
                                                             : m_panadapters.firstKey();
                 }
                 return;
+            }
+
+            // #3856 Layer B: record into the radio-authoritative pan inventory
+            // (presence + owner), independent of whether we end up owning it —
+            // foreign and unclaimed pans are tracked too. Pruned on "removed".
+            {
+                auto& e = m_radioDisplayPans[panId];
+                if (kvs.contains(QStringLiteral("client_handle")))
+                    e.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
             }
 
             // Preamp is shared antenna hardware — apply to ALL our pans
@@ -4556,9 +4586,34 @@ void RadioModel::onStatusReceived(const QString& object,
     // Only process status for OUR waterfall (matching client_handle).
     static const QRegularExpression wfRe(R"(^display waterfall\s+(0x[0-9A-Fa-f]+)$)");
     if (object.startsWith("display waterfall")) {
+        // #3856 Layer B: prune the radio-side waterfall inventory on removal.
+        // "display waterfall 0x42… removed" has no '=', so wfRe (anchored on a
+        // bare id) won't match it — handle it explicitly here.
+        if (object.endsWith(QLatin1String("removed"))) {
+            static const QRegularExpression wfRemovedRe(R"(^display waterfall\s+(0x[0-9A-Fa-f]+))");
+            const auto rm = wfRemovedRe.match(object);
+            if (rm.hasMatch()) {
+                m_radioDisplayWaterfalls.remove(rm.captured(1));
+                qCDebug(lcProtocol) << "RadioModel: waterfall removed (inventory)" << rm.captured(1);
+            }
+            return;
+        }
         const auto m = wfRe.match(object);
         if (m.hasMatch()) {
             const QString wfId = m.captured(1);
+            // #3856 Layer B: record into the radio-authoritative waterfall
+            // inventory (presence + owner + parent pan), before the ownership
+            // early-returns below — a leaked waterfall must be tracked even when
+            // it carries no client_handle and we don't own it.
+            {
+                auto& e = m_radioDisplayWaterfalls[wfId];
+                if (kvs.contains(QStringLiteral("client_handle")))
+                    e.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
+                const QString parent =
+                    normalizePanadapterId(kvs.value(QStringLiteral("panadapter")));
+                if (!parent.isEmpty())
+                    e.parentPanId = parent;
+            }
             // Check if this waterfall belongs to one of our panadapters.
             // The waterfallId is set on PanadapterModel by the "display pan" status
             // message which contains "waterfall=0x42xxxxxx".

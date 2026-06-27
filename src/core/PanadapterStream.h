@@ -7,6 +7,7 @@
 #include <QHostAddress>
 #include <QVector>
 #include <QMap>
+#include <QHash>
 #include <QSet>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -82,6 +83,28 @@ public:
     void unregisterPanStream(quint32 streamId);
     void unregisterWfStream(quint32 streamId);
     void clearRegisteredStreams();
+
+    // ── Layer A: radio-side UDP-orphan leak detector (#3856) ────────────────
+    // The client view always looks clean after a close because the "removed"
+    // echo unregisters both streams locally. But if the radio was never told to
+    // free a stream (e.g. a panafall closed without "display panafall remove")
+    // it KEEPS transmitting tiles for an id we no longer own. processDatagram()
+    // records any FFT/waterfall packet whose stream id was EVER registered this
+    // session AND is no longer registered — a stream we once owned and let go of
+    // that the radio still streams. (A never-yet-registered id in its
+    // registration-lag window is deliberately ignored.) A growing orphan packet
+    // count with a small age is direct, radio-authoritative proof of a leaked,
+    // still-streaming display stream — the kind seen on older firmware (#268).
+    struct OrphanStream {
+        quint32 streamId{0};
+        bool    waterfall{false};  // true = waterfall tile stream, false = FFT
+        quint64 packets{0};        // packets seen since the stream went orphan
+        qint64  ageMs{0};          // ms since the most recent orphan packet
+    };
+    QVector<OrphanStream> orphanStreams() const;
+    QVector<quint32>      registeredPanStreams() const;
+    QVector<quint32>      registeredWfStreams() const;
+    void                  resetOrphanStreams();   // clear the orphan tally
 
     // DAX stream routing
     void registerDaxStream(quint32 streamId, int channel);
@@ -252,6 +275,22 @@ private:
     mutable QMutex  m_streamMutex;
     QSet<quint32>   m_knownPanStreams;     // registered pan stream IDs
     QSet<quint32>   m_knownWfStreams;     // registered wf stream IDs
+
+    // Stream ids that have EVER been registered this session (never pruned on
+    // unregister; cleared only on disconnect). The orphan detector keys off
+    // these, not the live known-sets: a leaked stream is one we ONCE owned and
+    // have since let go of but the radio keeps sending — which stays detectable
+    // after the live set empties (e.g. `pan close all`), while a never-yet-
+    // registered stream in its registration-lag window is never mis-flagged.
+    QSet<quint32>   m_everRegisteredPanStreams;   // (#3856)
+    QSet<quint32>   m_everRegisteredWfStreams;
+
+    // Orphan (radio-side-leaked) display streams — see OrphanStream above (#3856).
+    // Guarded by m_streamMutex. Bounded to kMaxOrphanStreams to cap memory.
+    struct OrphanRec { bool waterfall{false}; quint64 packets{0}; qint64 lastSeenMs{0}; };
+    static constexpr int kMaxOrphanStreams = 32;
+    QHash<quint32, OrphanRec> m_orphanStreams;
+    QElapsedTimer             m_orphanClock;   // monotonic source for lastSeenMs
     QUdpSocket*     m_socket{nullptr};
     quint16         m_localPort{0};
     QMap<quint32, QPair<float,float>> m_dbmRanges;  // streamId → (min, max)

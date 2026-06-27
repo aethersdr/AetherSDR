@@ -220,6 +220,15 @@ private:
     // production GUI close path now does the same via RadioModel::removePanadapter
     // (#3843). (#3646)
     QJsonObject doPan(const QString& action, const QString& arg);
+    // Radio-side display-stream inventory / leak detector (#3856).
+    //   streams        — Layer A: registered pan/wf streams + UDP "orphan"
+    //                     streams the radio is still transmitting that we let go.
+    //   streams radio   — Layer B: the radio-authoritative display-object set
+    //                     (pans + waterfalls) classified ours/foreign/orphan,
+    //                     plus leaked waterfalls (parent pan gone) — catches the
+    //                     resource-level lingering Layer A can't see.
+    //   streams reset   — clear the Layer-A orphan tally to re-baseline.
+    QJsonObject doStreams(const QString& action);
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;
     QJsonObject doConnect(const QString& action, const QString& arg, QLocalSocket* sock);

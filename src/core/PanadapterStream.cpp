@@ -415,6 +415,8 @@ void PanadapterStream::registerPanStream(quint32 streamId)
 {
     QMutexLocker lock(&m_streamMutex);
     m_knownPanStreams.insert(streamId);
+    m_everRegisteredPanStreams.insert(streamId);   // arms leak detection (#3856)
+    m_orphanStreams.remove(streamId);              // reclaim drops stale orphan
     qCDebug(lcVita49) << "PanadapterStream: registered pan stream 0x" + QString::number(streamId, 16);
 }
 
@@ -422,6 +424,8 @@ void PanadapterStream::registerWfStream(quint32 streamId)
 {
     QMutexLocker lock(&m_streamMutex);
     m_knownWfStreams.insert(streamId);
+    m_everRegisteredWfStreams.insert(streamId);    // arms leak detection (#3856)
+    m_orphanStreams.remove(streamId);              // reclaim drops stale orphan
     qCDebug(lcVita49) << "PanadapterStream: registered wf stream 0x" + QString::number(streamId, 16);
 }
 
@@ -458,8 +462,41 @@ void PanadapterStream::clearRegisteredStreams()
     // the disconnect-time reset hook, so anything keyed by VITA-49 stream
     // id can be cleared safely (#2738).
     m_audioPlc.clear();
+    m_orphanStreams.clear();
+    m_everRegisteredPanStreams.clear();   // new session — re-arm from scratch (#3856)
+    m_everRegisteredWfStreams.clear();
     resetAudioStreamStats();
     qCDebug(lcVita49) << "PanadapterStream: cleared all registered streams";
+}
+
+QVector<PanadapterStream::OrphanStream> PanadapterStream::orphanStreams() const
+{
+    QMutexLocker lock(&m_streamMutex);
+    const qint64 now = m_orphanClock.isValid() ? m_orphanClock.elapsed() : 0;
+    QVector<OrphanStream> out;
+    out.reserve(m_orphanStreams.size());
+    for (auto it = m_orphanStreams.cbegin(); it != m_orphanStreams.cend(); ++it)
+        out.push_back(OrphanStream{it.key(), it->waterfall, it->packets,
+                                   now - it->lastSeenMs});
+    return out;
+}
+
+QVector<quint32> PanadapterStream::registeredPanStreams() const
+{
+    QMutexLocker lock(&m_streamMutex);
+    return QVector<quint32>(m_knownPanStreams.cbegin(), m_knownPanStreams.cend());
+}
+
+QVector<quint32> PanadapterStream::registeredWfStreams() const
+{
+    QMutexLocker lock(&m_streamMutex);
+    return QVector<quint32>(m_knownWfStreams.cbegin(), m_knownWfStreams.cend());
+}
+
+void PanadapterStream::resetOrphanStreams()
+{
+    QMutexLocker lock(&m_streamMutex);
+    m_orphanStreams.clear();
 }
 
 void PanadapterStream::setDbmRange(quint32 streamId, float minDbm, float maxDbm, bool waitForEcho)
@@ -602,6 +639,35 @@ void PanadapterStream::processDatagram(const QByteArray& data)
         }
         isPan = m_knownPanStreams.isEmpty() || m_knownPanStreams.contains(streamId);
         isWf  = m_knownWfStreams.isEmpty() || m_knownWfStreams.contains(streamId);
+
+        // #3856 Layer A leak detector: a display packet for a stream we ONCE
+        // registered but no longer own is a stream the radio is still sending
+        // after we let it go — e.g. a waterfall left alive by a panafall close
+        // that omitted "display panafall remove". Keying off "ever-registered
+        // AND not-now-registered" keeps the leak detectable even after the live
+        // set empties (`pan close all`), and never flags a freshly-created
+        // stream still in its registration-lag window. DAX/IQ are excluded.
+        if (daxChannel < 0 && iqChannel < 0) {
+            const bool wfOrphan  = pcc == PCC_WATERFALL
+                                   && m_everRegisteredWfStreams.contains(streamId)
+                                   && !m_knownWfStreams.contains(streamId);
+            const bool fftOrphan = pcc == PCC_FFT
+                                   && m_everRegisteredPanStreams.contains(streamId)
+                                   && !m_knownPanStreams.contains(streamId);
+            if (wfOrphan || fftOrphan) {
+                if (!m_orphanClock.isValid())
+                    m_orphanClock.start();
+                auto it = m_orphanStreams.find(streamId);
+                if (it == m_orphanStreams.end()
+                    && m_orphanStreams.size() < kMaxOrphanStreams)
+                    it = m_orphanStreams.insert(streamId, OrphanRec{});
+                if (it != m_orphanStreams.end()) {
+                    it->waterfall  = wfOrphan;
+                    it->packets   += 1;
+                    it->lastSeenMs = m_orphanClock.elapsed();
+                }
+            }
+        }
     }
 
     if (logFirstDaxPacket || logFirstIqPacket) {

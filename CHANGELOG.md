@@ -25,6 +25,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **Agent automation bridge:** the `pan close` verb now drives the production
   `RadioModel::removePanadapter` instead of duplicating the teardown commands, so
   it exercises the real GUI close path. (#3843)
+- **Agent automation bridge — radio-side display-stream inventory + leak
+  detection (`streams` verb).** Makes leaked/duplicate panadapter & waterfall
+  streams on the radio directly observable — a class of bug `get pans` can't show,
+  because the client always cleans up its own view. Two layers: `streams` reports
+  the VITA-49 UDP truth (streams the radio is still transmitting for an id we no
+  longer own — the #268 continued-stream class), and `streams radio` reports the
+  radio-authoritative display-object set classified ours/foreign/orphan with
+  leaked waterfalls (parent panadapter gone) — catching resource-level lingering
+  that emits no UDP (the #3843 class on firmware that stops the stream on
+  pan-removal). `streams reset` re-baselines. RX/observe only. See
+  `docs/automation-bridge.md`. (#3856)
 
 ## [v26.6.4] — 2026-06-23
 
