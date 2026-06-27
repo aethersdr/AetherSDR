@@ -593,10 +593,27 @@ AudioEngine::externalKiwiSource(const QString& sourceId, bool create)
     return m_externalKiwiSources.back().get();
 }
 
+bool AudioEngine::kiwiSdrAudioTransmitMuted() const
+{
+    return m_kiwiSdrAudioTransmitMuted.load(std::memory_order_relaxed);
+}
+
+bool AudioEngine::kiwiSdrAudioActive() const
+{
+    return m_kiwiSdrAudioEnabled.load(std::memory_order_relaxed)
+        && !kiwiSdrAudioTransmitMuted();
+}
+
+bool AudioEngine::externalKiwiSourceAudible(
+    const ExternalRxAudioSourceState& source) const
+{
+    return source.enabled && !source.muted && !kiwiSdrAudioTransmitMuted();
+}
+
 bool AudioEngine::anyExternalKiwiAudioEnabled() const
 {
     for (const auto& source : m_externalKiwiSources) {
-        if (source && source->enabled && !source->muted) {
+        if (source && externalKiwiSourceAudible(*source)) {
             return true;
         }
     }
@@ -606,7 +623,7 @@ bool AudioEngine::anyExternalKiwiAudioEnabled() const
 bool AudioEngine::anyExternalKiwiBufferQueued() const
 {
     for (const auto& source : m_externalKiwiSources) {
-        if (source && !source->muted
+        if (source && !source->muted && !kiwiSdrAudioTransmitMuted()
             && (!source->rxBuffer.isEmpty() || !source->rxPackets.empty()
                 || !source->outputBuffer.isEmpty())) {
             return true;
@@ -619,7 +636,7 @@ qsizetype AudioEngine::externalKiwiOutputBufferBytes() const
 {
     qsizetype maxBytes = 0;
     for (const auto& source : m_externalKiwiSources) {
-        if (source && source->enabled && !source->muted
+        if (source && externalKiwiSourceAudible(*source)
             && !source->prebuffering) {
             maxBytes = std::max(maxBytes, source->outputBuffer.size());
         }
@@ -777,8 +794,7 @@ AudioEngine::AudioEngine(QObject* parent)
         // Cap buffer to bound latency. Default 200ms, user-adjustable for
         // high-jitter connections (VPN, SmartLink) where drops cause choppy audio.
         const int sampleRate = m_rxOutputRate.load();
-        const bool kiwiAudio =
-            m_kiwiSdrAudioEnabled.load(std::memory_order_relaxed);
+        const bool kiwiAudio = kiwiSdrAudioActive();
         const bool externalKiwiAudio = anyExternalKiwiAudioEnabled();
         const bool anyKiwiAudio = kiwiAudio || externalKiwiAudio;
         const int configuredBufMs = m_rxBufferCapMs.load();
@@ -833,7 +849,7 @@ AudioEngine::AudioEngine(QObject* parent)
             if (anyKiwiAudio) {
                 m_kiwiSdrPrebuffering = true;
                 for (const auto& source : m_externalKiwiSources) {
-                    if (source && source->enabled) {
+                    if (source && externalKiwiSourceAudible(*source)) {
                         source->prebuffering = true;
                     }
                 }
@@ -907,7 +923,7 @@ AudioEngine::AudioEngine(QObject* parent)
                 processMixedRxAudioData(packet, RxDspSource::KiwiSdr);
             }
             for (const auto& source : m_externalKiwiSources) {
-                if (!source || !source->enabled || source->muted) {
+                if (!source || !externalKiwiSourceAudible(*source)) {
                     continue;
                 }
                 while (!source->rxPackets.empty()) {
@@ -940,7 +956,8 @@ AudioEngine::AudioEngine(QObject* parent)
             }
         }
         for (const auto& source : m_externalKiwiSources) {
-            if (!source || !source->enabled || !source->prebuffering) {
+            if (!source || !externalKiwiSourceAudible(*source)
+                || !source->prebuffering) {
                 continue;
             }
             const int prebufferMs = std::min(
@@ -972,7 +989,8 @@ AudioEngine::AudioEngine(QObject* parent)
         const bool kiwiMixActive =
             kiwiAudio && !kiwiNr2PacketMode && !m_kiwiSdrPrebuffering;
         for (const auto& source : m_externalKiwiSources) {
-            if (!source || !source->enabled || source->muted || source->prebuffering) {
+            if (!source || !externalKiwiSourceAudible(*source)
+                || source->prebuffering) {
                 continue;
             }
             const bool sourceEmpty =
@@ -1036,7 +1054,7 @@ AudioEngine::AudioEngine(QObject* parent)
         // them unless the applet-level Kiwi Audio toggle is also enabled.
         if (!nr2PacketMode) {
             for (const auto& source : m_externalKiwiSources) {
-                if (!source || !source->enabled || source->muted
+                if (!source || !externalKiwiSourceAudible(*source)
                     || source->prebuffering) {
                     continue;
                 }
@@ -1139,7 +1157,7 @@ AudioEngine::AudioEngine(QObject* parent)
                 }
 
                 for (const auto& source : m_externalKiwiSources) {
-                    if (!source || !source->enabled || source->muted
+                    if (!source || !externalKiwiSourceAudible(*source)
                         || source->prebuffering) {
                         continue;
                     }
@@ -1873,6 +1891,9 @@ void AudioEngine::feedKiwiSdrAudioData(const QByteArray& pcm24kStereoFloat)
         return;
     }
     m_lastAudioFeedTime.start();
+    if (kiwiSdrAudioTransmitMuted()) {
+        return;
+    }
 
     constexpr qsizetype kFrameBytes =
         2 * static_cast<qsizetype>(sizeof(float));
@@ -1901,10 +1922,13 @@ void AudioEngine::feedKiwiSdrAudioData(const QString& sourceId,
                                        const QByteArray& pcm24kStereoFloat)
 {
     ExternalRxAudioSourceState* source = externalKiwiSource(sourceId, true);
-    if (!source || !source->enabled || source->muted) {
+    if (!source || !source->enabled) {
         return;
     }
     m_lastAudioFeedTime.start();
+    if (source->muted || kiwiSdrAudioTransmitMuted()) {
+        return;
+    }
 
     constexpr qsizetype kFrameBytes =
         2 * static_cast<qsizetype>(sizeof(float));
@@ -1948,7 +1972,7 @@ void AudioEngine::setKiwiSdrAudioEnabled(bool on)
     if (m_nr2Enabled && m_kiwiSdrNr2) {
         m_kiwiSdrNr2->reset();
     }
-    m_kiwiSdrPrebuffering = on;
+    m_kiwiSdrPrebuffering = on && !kiwiSdrAudioTransmitMuted();
     updateRxBufferStats();
 }
 
@@ -2021,7 +2045,52 @@ void AudioEngine::setKiwiSdrAudioSourceMuted(const QString& sourceId,
     source->bnrDown.reset();
     source->bnrOutBuf.clear();
     source->bnrPrimed = false;
-    source->prebuffering = !muted && source->enabled;
+    source->prebuffering =
+        !muted && source->enabled && !kiwiSdrAudioTransmitMuted();
+    updateRxBufferStats();
+}
+
+void AudioEngine::setKiwiSdrAudioTransmitMuted(bool muted)
+{
+    if (m_kiwiSdrAudioTransmitMuted.exchange(
+            muted, std::memory_order_relaxed) == muted) {
+        return;
+    }
+
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    m_kiwiSdrRxBuffer.clear();
+    m_kiwiSdrRxPackets.clear();
+    m_kiwiSdrOutputBuffer.clear();
+    m_kiwiSdrNr2Mono.clear();
+    m_kiwiSdrNr2Processed.clear();
+    m_kiwiSdrNr2Output.clear();
+    m_kiwiSdrBnrOutBuf.clear();
+    m_kiwiSdrBnrPrimed = false;
+    if (m_nr2Enabled && m_kiwiSdrNr2) {
+        m_kiwiSdrNr2->reset();
+    }
+    m_kiwiSdrPrebuffering = !muted
+        && m_kiwiSdrAudioEnabled.load(std::memory_order_relaxed);
+
+    for (const auto& source : m_externalKiwiSources) {
+        if (!source) {
+            continue;
+        }
+        source->rxBuffer.clear();
+        source->rxPackets.clear();
+        source->outputBuffer.clear();
+        source->nr2Mono.clear();
+        source->nr2Processed.clear();
+        source->nr2Output.clear();
+        source->bnrUp.reset();
+        source->bnrDown.reset();
+        source->bnrOutBuf.clear();
+        source->bnrPrimed = false;
+        if (m_nr2Enabled && source->nr2) {
+            source->nr2->reset();
+        }
+        source->prebuffering = !muted && source->enabled && !source->muted;
+    }
     updateRxBufferStats();
 }
 
@@ -2096,7 +2165,7 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
         if (m_nr2Enabled && source->nr2) {
             source->nr2->reset();
         }
-        source->prebuffering = source->enabled && !source->muted;
+        source->prebuffering = externalKiwiSourceAudible(*source);
     }
 
     if (m_clientEqRx) {
@@ -4352,7 +4421,7 @@ void AudioEngine::setNr2Enabled(bool on)
     m_kiwiSdrNr2Mono.clear();
     m_kiwiSdrNr2Processed.clear();
     m_kiwiSdrNr2Output.clear();
-    m_kiwiSdrPrebuffering = m_kiwiSdrAudioEnabled.load(std::memory_order_relaxed);
+    m_kiwiSdrPrebuffering = kiwiSdrAudioActive();
     for (const auto& source : m_externalKiwiSources) {
         if (!source) {
             continue;
@@ -4365,7 +4434,7 @@ void AudioEngine::setNr2Enabled(bool on)
         source->nr2Output.clear();
         source->rxResampler.reset();
         source->rxResamplerR.reset();
-        source->prebuffering = source->enabled && !source->muted;
+        source->prebuffering = externalKiwiSourceAudible(*source);
     }
     if (on) {
         // Disable all other NR modes — they're mutually exclusive
@@ -4423,7 +4492,7 @@ void AudioEngine::setNr2Enabled(bool on)
             source->outputBuffer.clear();
             source->rxResampler.reset();
             source->rxResamplerR.reset();
-            source->prebuffering = source->enabled && !source->muted;
+            source->prebuffering = externalKiwiSourceAudible(*source);
         }
     }
     qCDebug(lcAudio) << "AudioEngine: NR2" << (on ? "enabled" : "disabled");

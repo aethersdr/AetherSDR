@@ -2,6 +2,7 @@
 #include "LogManager.h"
 #include "AppSettings.h"          // StationName (restore the user's real station name)
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
+#include "AudioEngine.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "gui/ConnectionPanel.h" // ConnectionPanel automation facade
 
@@ -909,6 +910,7 @@ QJsonObject radioSnapshot(const RadioModel* r)
         {QStringLiteral("callsign"),     r->callsign()},
         {QStringLiteral("nickname"),     r->nickname()},
         {QStringLiteral("connected"),    r->isConnected()},
+        {QStringLiteral("fullDuplex"),   r->fullDuplexEnabled()},
         {QStringLiteral("transmitting"), r->isRadioTransmitting()},
         {QStringLiteral("txPower"),      r->txPower()},
         {QStringLiteral("paTemp"),       r->paTemp()},
@@ -985,6 +987,25 @@ QJsonObject transmitSnapshot(const TransmitModel* t)
         {QStringLiteral("atuStatus"),       atuStatusName(t->atuStatus())},
         {QStringLiteral("apdEnabled"),      t->apdEnabled()},
         {QStringLiteral("showTxInWaterfall"), t->showTxInWaterfall()},
+    };
+}
+
+QJsonObject audioSnapshot(const AudioEngine* audio)
+{
+    return QJsonObject{
+        {QStringLiteral("muted"), audio->isMuted()},
+        {QStringLiteral("rxStreaming"), audio->isRxStreaming()},
+        {QStringLiteral("txStreaming"), audio->isTxStreaming()},
+        {QStringLiteral("kiwiSdrTransmitMuted"),
+            audio->kiwiSdrAudioTransmitMuted()},
+        {QStringLiteral("rxBufferBytes"),
+            static_cast<qint64>(audio->rxBufferBytes())},
+        {QStringLiteral("rxBufferPeakBytes"),
+            static_cast<qint64>(audio->rxBufferPeakBytes())},
+        {QStringLiteral("rxBufferUnderrunCount"),
+            static_cast<double>(audio->rxBufferUnderrunCount())},
+        {QStringLiteral("rxBufferSampleRate"),
+            audio->rxBufferSampleRate()},
     };
 }
 
@@ -2080,6 +2101,25 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 QJsonObject AutomationServer::doGet(const QString& model, const QString& selector,
                                     const QString& property) const
 {
+    if (model == QLatin1String("audio")) {
+        AudioEngine* audio = m_audioEngine;
+        if (!audio)
+            return err(QStringLiteral("no audio engine available"));
+        QJsonObject data = audioSnapshot(audio);
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for audio"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("audio"), data}};
+    }
+
     RadioModel* radio = m_radioModel;
     if (!radio)
         return err(QStringLiteral("no radio model available"));
@@ -2130,7 +2170,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use radio|transmit|equalizer|meters|slice|slices|pan|pans)"));
+                   + QStringLiteral(" (use audio|radio|transmit|equalizer|meters|slice|slices|pan|pans)"));
     }
 
     if (!property.isEmpty()) {

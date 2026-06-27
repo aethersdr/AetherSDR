@@ -17,6 +17,7 @@
 #include "core/LogManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QMetaObject>
 #include <QSet>
@@ -832,6 +833,38 @@ bool MainWindow::setKiwiSdrAudioRouting(bool active)
     return routed;
 }
 
+bool MainWindow::kiwiSdrTransmitMuteRequired() const
+{
+    if (m_radioModel.fullDuplexEnabled()) {
+        return false;
+    }
+
+    const TransmitModel& tx = m_radioModel.transmitModel();
+    bool txActive = tx.isTransmitting() || tx.isTuning()
+        || m_radioModel.isRadioTransmitting();
+#ifdef HAVE_RADE
+    txActive = txActive || m_radeEooPending;
+#endif
+    return txActive;
+}
+
+void MainWindow::syncKiwiSdrTransmitMute()
+{
+    if (!m_audio) {
+        return;
+    }
+
+    const bool muted = kiwiSdrTransmitMuteRequired();
+    if (m_kiwiSdrAudioTransmitMuted == muted) {
+        return;
+    }
+
+    m_kiwiSdrAudioTransmitMuted = muted;
+    QMetaObject::invokeMethod(m_audio, [audio = m_audio, muted]() {
+        audio->setKiwiSdrAudioTransmitMuted(muted);
+    }, Qt::QueuedConnection);
+}
+
 void MainWindow::wireKiwiSdr()
 {
     if (!m_appletPanel || !m_appletPanel->kiwiSdrApplet() || m_kiwiSdrClient) {
@@ -875,6 +908,14 @@ void MainWindow::wireKiwiSdr()
                 audio->removeKiwiSdrAudioSource(id);
             }, Qt::QueuedConnection);
         }
+        connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+                this, [this](bool) { syncKiwiSdrTransmitMute(); });
+        connect(&m_radioModel.transmitModel(), &TransmitModel::tuneChanged,
+                this, [this](bool) { syncKiwiSdrTransmitMute(); });
+        connect(&m_radioModel, &RadioModel::radioTransmittingChanged,
+                this, [this](bool) { syncKiwiSdrTransmitMute(); });
+        connect(&m_radioModel, &RadioModel::infoChanged,
+                this, [this]() { syncKiwiSdrTransmitMute(); });
         connect(m_kiwiSdrManager, &KiwiSdrManager::waterfallRowReady,
                 this, [this](const QString& profileId, const QString&,
                              const QVector<float>& binsDbm,
@@ -1066,6 +1107,7 @@ void MainWindow::wireKiwiSdr()
             });
     refreshKiwiSdrSlices();
     refreshKiwiSdrWaterfallAvailability();
+    syncKiwiSdrTransmitMute();
 
     if (m_kiwiSdrManager) {
         QTimer::singleShot(0, m_kiwiSdrManager, &KiwiSdrManager::startAutoConnect);

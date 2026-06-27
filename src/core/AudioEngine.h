@@ -127,6 +127,7 @@ public:
     void setMuted(bool m);
     bool isRxStreaming() const { return m_audioSink != nullptr; }
     bool isTxStreaming() const { return m_audioSource != nullptr; }
+    bool kiwiSdrAudioTransmitMuted() const;
     int  txInputSampleRate() const { return m_txInputRate; }
     int  txInputChannelCount() const { return m_txInputChannels; }
     bool txInputResamplingTo24k() const { return m_txNeedsResample; }
@@ -493,6 +494,7 @@ public slots:
     void setKiwiSdrAudioSourceGain(const QString& sourceId, float gainPercent);
     void setKiwiSdrAudioSourceMuted(const QString& sourceId, bool muted);
     void setKiwiSdrAudioSourcePan(const QString& sourceId, int pan);
+    void setKiwiSdrAudioTransmitMuted(bool muted);
     void removeKiwiSdrAudioSource(const QString& sourceId);
 
 signals:
@@ -609,6 +611,8 @@ private:
     void updateRxBufferStats();
     ExternalRxAudioSourceState* externalKiwiSource(const QString& sourceId,
                                                    bool create);
+    bool kiwiSdrAudioActive() const;
+    bool externalKiwiSourceAudible(const ExternalRxAudioSourceState& source) const;
     bool anyExternalKiwiAudioEnabled() const;
     bool anyExternalKiwiBufferQueued() const;
     qsizetype externalKiwiOutputBufferBytes() const;
@@ -961,6 +965,7 @@ private:
     QByteArray    m_kiwiSdrOutputBuffer;  // post-DSP Kiwi speaker audio at output device rate
     QByteArray    m_radeRxBuffer;  // decoded RADE speech at output device rate
     std::atomic<bool> m_kiwiSdrAudioEnabled{false};
+    std::atomic<bool> m_kiwiSdrAudioTransmitMuted{false};
     bool          m_kiwiSdrPrebuffering{false};
     std::vector<std::unique_ptr<ExternalRxAudioSourceState>> m_externalKiwiSources;
     std::atomic<qsizetype> m_rxBufferBytes{0};

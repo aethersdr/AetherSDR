@@ -182,6 +182,7 @@ public:
     // (#3646) to read live model state via get(); keep it read-oriented.
     RadioModel& radioModel() { return m_radioModel; }
     const RadioModel& radioModel() const { return m_radioModel; }
+    AudioEngine* audioEngine() const { return m_audio; }
     Q_INVOKABLE void showConnectionDialog();
     Q_INVOKABLE void hideConnectionDialog();
 
@@ -334,6 +335,8 @@ private:
     bool setKiwiSdrAudioRouting(bool active);
     bool applyKiwiSdrSliceMute();
     void restoreKiwiSdrSliceMute();
+    bool kiwiSdrTransmitMuteRequired() const;
+    void syncKiwiSdrTransmitMute();
     void setKiwiSdrVirtualAntennaForSlice(int sliceId, const QString& profileId);
     void clearKiwiSdrVirtualAntennaForSlice(int sliceId);
     void updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice);
@@ -805,6 +808,7 @@ private:
     bool             m_kiwiSdrAudioPreviousMute{false};
     bool             m_kiwiSdrAudioMuteApplied{false};
     bool             m_kiwiSdrAudioMuteChanging{false};
+    bool             m_kiwiSdrAudioTransmitMuted{false};
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
 

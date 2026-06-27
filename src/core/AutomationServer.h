@@ -22,6 +22,7 @@ namespace AetherSDR {
 
 class RadioModel;
 class ConnectionPanel;
+class AudioEngine;
 
 // In-app, agent-first automation bridge (issue #3646, Phases 0-1).
 //
@@ -58,10 +59,11 @@ class ConnectionPanel;
 //                                     is a logged fallback; setpoint
 //                                     sliders/combos are never blocked.
 //   get <model> [selector] [prop]  -> live JSON snapshot of a model:
-//                                     radio | transmit | slice <id|active|tx> |
-//                                     slices | pan <panId|active> | pans. With a
-//                                     trailing property name, returns just that
-//                                     field. Assert on state without screenshots.
+//                                     audio | radio | transmit |
+//                                     slice <id|active|tx> | slices |
+//                                     pan <panId|active> | pans. With a trailing
+//                                     property name, returns just that field.
+//                                     Assert on state without screenshots.
 //   connect list                   -> list currently discovered local radios
 //   connect show                   -> show/raise the Connect to Radio dialog
 //   connect hide                   -> hide the Connect to Radio dialog
@@ -163,6 +165,7 @@ public:
     // MainWindow's active-session RadioModel; may be null (get() then reports
     // "no radio model" rather than crashing).
     void setRadioModel(RadioModel* model) { m_radioModel = model; }
+    void setAudioEngine(AudioEngine* audio) { m_audioEngine = audio; }
     // Real connection dialog hook for the connect/disconnect verbs. The bridge
     // asks ConnectionPanel to emit the same signals the visible buttons do, so
     // automation exercises the normal MainWindow/RadioModel connection path.
@@ -291,6 +294,7 @@ private:
     QString       m_label;            // AETHER_AUTOMATION_LABEL (human instance tag)
     QHash<QLocalSocket*, QByteArray> m_buffers;  // per-client read buffer
     QPointer<RadioModel> m_radioModel;           // for get(); may be null
+    QPointer<AudioEngine> m_audioEngine;          // for get audio; may be null
     QPointer<ConnectionPanel> m_connectionPanel;  // for connect/disconnect verbs
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
 

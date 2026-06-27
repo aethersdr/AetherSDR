@@ -342,6 +342,7 @@ void MainWindow::activateRADE(int sliceId)
             return;
         }
         m_radeEooPending = true;
+        syncKiwiSdrTransmitMute();
         qCDebug(lcRade) << "MainWindow: PttOffHook — intercepted requestPttOff, deferring for RADE EOO";
         QMetaObject::invokeMethod(m_radeEngine, [this]() {
             m_radeEngine->setEooRequested(true);
@@ -358,6 +359,7 @@ void MainWindow::activateRADE(int sliceId)
         }
         m_radeEooPending = false;
         m_radeTxActive = false;
+        syncKiwiSdrTransmitMute();
 
         // Post setTransmitting(false) AFTER the queued txModemReady(eoo/silence)
         // signals so the audio gate closes only after EOO is in the UDP send buffer.
@@ -388,6 +390,7 @@ void MainWindow::activateRADE(int sliceId)
         if (tx) {
             m_radeEooPending = false;
             m_radeTxActive = true;
+            syncKiwiSdrTransmitMute();
             QMetaObject::invokeMethod(m_radeEngine, [this]() {
                 m_radeEngine->resetTx();
             }, Qt::QueuedConnection);
@@ -395,6 +398,7 @@ void MainWindow::activateRADE(int sliceId)
         } else if (!m_radeEooPending && m_radeTxActive) {
             qCDebug(lcRade) << "MainWindow: moxChanged(false) fallback — unintercepted PTT release, requesting EOO";
             m_radeEooPending = true;
+            syncKiwiSdrTransmitMute();
             QMetaObject::invokeMethod(m_radeEngine, [this]() {
                 m_radeEngine->setEooRequested(true);
             }, Qt::QueuedConnection);
@@ -542,6 +546,7 @@ void MainWindow::deactivateRADE()
     disconnect(m_radeMoxFallbackConn);
     m_radeEooPending = false;
     m_radeTxActive = false;
+    syncKiwiSdrTransmitMute();
 
     m_audio->setRadeMode(false);
     m_radioModel.setDigitalVoiceTxSlice(-1);

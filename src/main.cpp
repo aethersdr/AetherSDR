@@ -426,6 +426,7 @@ int main(int argc, char* argv[])
                 : QStringLiteral("aethersdr-automation-%1").arg(QCoreApplication::applicationPid());
             automation = std::make_unique<AetherSDR::AutomationServer>();
             automation->setRadioModel(&window.radioModel());  // for the get() verb
+            automation->setAudioEngine(window.audioEngine());
             automation->setConnectionDialogHost(&window);
             automation->setConnectionPanel(
                 window.findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
