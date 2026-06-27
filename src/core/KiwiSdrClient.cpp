@@ -1,5 +1,6 @@
 #include "KiwiSdrClient.h"
 
+#include "KiwiSdrRedirectPolicy.h"
 #include "KiwiSdrProtocol.h"
 #include "LogManager.h"
 #include "Resampler.h"
@@ -331,69 +332,6 @@ int soundPayloadOffset(const QByteArray& frame)
 }
 
 #ifdef HAVE_WEBSOCKETS
-QString canonicalRedirectHost(QString host)
-{
-    host = host.trimmed().toLower();
-    while (host.endsWith(QLatin1Char('.'))) {
-        host.chop(1);
-    }
-    return host;
-}
-
-QString kiwiProxyReceiverAlias(const QString& host)
-{
-    constexpr QLatin1StringView kProxySuffix{".proxy.kiwisdr.com"};
-    constexpr QLatin1StringView kProxy2Suffix{".proxy2.kiwisdr.com"};
-    if (host.endsWith(kProxySuffix) && host.size() > kProxySuffix.size()) {
-        return host.left(host.size() - kProxySuffix.size());
-    }
-    if (host.endsWith(kProxy2Suffix) && host.size() > kProxy2Suffix.size()) {
-        return host.left(host.size() - kProxy2Suffix.size());
-    }
-    return {};
-}
-
-bool isAllowedKiwiStatusRedirect(const QUrl& from,
-                                 const QUrl& to,
-                                 QString* detail)
-{
-    const QString scheme = to.scheme().toLower();
-    if (scheme != QStringLiteral("http") && scheme != QStringLiteral("https")) {
-        if (detail) {
-            *detail = QStringLiteral("unsupported scheme %1").arg(to.scheme());
-        }
-        return false;
-    }
-
-    const QString fromHost = canonicalRedirectHost(from.host());
-    const QString toHost = canonicalRedirectHost(to.host());
-    if (fromHost.isEmpty() || toHost.isEmpty()) {
-        if (detail) {
-            *detail = QStringLiteral("missing redirect host");
-        }
-        return false;
-    }
-
-    if (fromHost == toHost) {
-        return true;
-    }
-
-    // Kiwi's public proxy can migrate one receiver alias from proxy to proxy2.
-    // Keep that exception exact so a status page cannot move the WebSocket
-    // target to an unrelated host after the policy preflight succeeds.
-    const QString fromAlias = kiwiProxyReceiverAlias(fromHost);
-    const QString toAlias = kiwiProxyReceiverAlias(toHost);
-    if (!fromAlias.isEmpty() && fromAlias == toAlias) {
-        return true;
-    }
-
-    if (detail) {
-        *detail = QStringLiteral("cross-domain redirect from %1 to %2")
-                      .arg(fromHost, toHost);
-    }
-    return false;
-}
-
 QString webSocketOrigin(const QString& scheme, const QString& host, quint16 port)
 {
     const QString originScheme = scheme == QStringLiteral("wss")
@@ -634,7 +572,8 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
         if (redirectUrl.isEmpty()) {
             setState(
                 State::Error,
-                tr("This KiwiSDR's status page redirected without a target, so AetherSDR won't connect."));
+                tr("This KiwiSDR's status page returned unsupported HTTP %1 without a redirect target, so AetherSDR won't connect.")
+                    .arg(httpStatus));
             cleanupSockets();
             return;
         }
@@ -645,8 +584,8 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
             redirectDetail = QStringLiteral("too many redirects");
         } else {
             const bool allowed =
-                isAllowedKiwiStatusRedirect(requestUrl, nextUrl,
-                                            &redirectDetail);
+                KiwiSdrRedirectPolicy::isAllowedStatusRedirect(
+                    requestUrl, nextUrl, &redirectDetail);
             if (allowed) {
                 redirectDetail.clear();
             }

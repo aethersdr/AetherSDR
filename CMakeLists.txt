@@ -565,6 +565,7 @@ set(CORE_SOURCES
     src/core/CatPort.cpp
     src/core/SmartLinkClient.cpp
     src/core/KiwiSdrProtocol.cpp
+    src/core/KiwiSdrRedirectPolicy.cpp
     src/core/KiwiSdrClient.cpp
     src/core/KiwiSdrManager.cpp
     src/core/KiwiPublicDirectory.cpp
@@ -1920,6 +1921,14 @@ add_executable(kiwi_sdr_trace_math_test
 target_include_directories(kiwi_sdr_trace_math_test PRIVATE src)
 target_link_libraries(kiwi_sdr_trace_math_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_trace_math_test COMMAND kiwi_sdr_trace_math_test)
+
+add_executable(kiwi_sdr_redirect_policy_test
+    tests/kiwi_sdr_redirect_policy_test.cpp
+    src/core/KiwiSdrRedirectPolicy.cpp
+)
+target_include_directories(kiwi_sdr_redirect_policy_test PRIVATE src)
+target_link_libraries(kiwi_sdr_redirect_policy_test PRIVATE Qt6::Core)
+add_test(NAME kiwi_sdr_redirect_policy_test COMMAND kiwi_sdr_redirect_policy_test)
 
 # Public-directory parser + external-API (ext_api) policy honoring.
 add_executable(kiwi_public_directory_test
