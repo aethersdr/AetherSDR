@@ -444,6 +444,7 @@ QWidget* panadapterAppletForSpectrum(QWidget* spectrum)
 QWidget* vfoWidgetForPanIndex(int index)
 {
     const QList<QWidget*> vfos = findWidgetsByClass(QStringLiteral("VfoWidget"));
+    QWidget* fallback = nullptr;
     for (QWidget* vfo : vfos) {
         for (QWidget* a = vfo; a; a = a->parentWidget()) {
             if (shortClassName(a) != QLatin1String("SpectrumWidget")) {
@@ -451,12 +452,17 @@ QWidget* vfoWidgetForPanIndex(int index)
             }
             const QVariant pi = a->property("panIndex");
             if (pi.isValid() && pi.toInt() == index) {
-                return vfo;
+                if (vfo->isVisible()) {
+                    return vfo;
+                }
+                if (!fallback) {
+                    fallback = vfo;
+                }
             }
             break;
         }
     }
-    return nullptr;
+    return fallback;
 }
 
 QWidget* vfoWidgetForSliceId(int sliceId)
