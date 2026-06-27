@@ -39,6 +39,9 @@
 #include "MqttApplet.h"
 #endif
 #include "models/SliceModel.h"
+#include <QAction>
+#include <QActionGroup>
+#include <QWidgetAction>
 #include <QComboBox>
 #include <QContextMenuEvent>
 #include <QLabel>
@@ -283,111 +286,12 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
     m_sMeter->setAccessibleDescription("Signal strength meter, shows S-units or TX power");
     contentLayout->addWidget(m_sMeter);
 
-    // ── TX / RX meter select row ──────────────────────────────────────────
-    auto* selectRow = new QWidget(sMeterContent);
-    auto* selectLayout = new QHBoxLayout(selectRow);
-    selectLayout->setContentsMargins(4, 2, 4, 2);
-    selectLayout->setSpacing(6);
-
-    const QString labelStyle = QStringLiteral(
-        "color: #8090a0; font-size: 10px; font-weight: bold;");
-
-    auto* txLabel = new QLabel("TX Select", selectRow);
-    txLabel->setStyleSheet(labelStyle);
-    txLabel->setAlignment(Qt::AlignCenter);
-    m_txSelect = new GuardedComboBox(selectRow);
-    m_txSelect->addItems({"Power", "SWR", "Level", "Compression"});
-    m_txSelect->setAccessibleName("TX meter mode");
-    m_txSelect->setAccessibleDescription("Select which TX parameter the S-meter displays");
-    AetherSDR::applyComboStyle(m_txSelect);
-
-    auto* txCol = new QVBoxLayout;
-    txCol->setSpacing(1);
-    txCol->addWidget(txLabel);
-    txCol->addWidget(m_txSelect);
-
-    auto* rxLabel = new QLabel("RX Select", selectRow);
-    rxLabel->setStyleSheet(labelStyle);
-    rxLabel->setAlignment(Qt::AlignCenter);
-    m_rxSelect = new GuardedComboBox(selectRow);
-    m_rxSelect->addItems({"S-Meter", "S-Meter Peak"});
-    m_rxSelect->setCurrentIndex(0);
-    m_rxSelect->setAccessibleName("RX meter mode");
-    m_rxSelect->setAccessibleDescription("Select which RX parameter the S-meter displays");
-    AetherSDR::applyComboStyle(m_rxSelect);
-
-    auto* rxCol = new QVBoxLayout;
-    rxCol->setSpacing(1);
-    rxCol->addWidget(rxLabel);
-    rxCol->addWidget(m_rxSelect);
-
-    selectLayout->addLayout(txCol, 1);
-    selectLayout->addLayout(rxCol, 1);
-    contentLayout->addWidget(selectRow);
-
-    connect(m_txSelect, &QComboBox::currentTextChanged,
-            m_sMeter, &SMeterWidget::setTxMode);
-    connect(m_rxSelect, &QComboBox::currentTextChanged,
-            m_sMeter, &SMeterWidget::setRxMode);
-
-    // Restore saved TX/RX meter selections AFTER connecting signals
-    // so setTxMode/setRxMode are called with the restored values (#809)
-    int txIdx = AppSettings::instance().value("SMeter_TxSelect", 0).toInt();
-    int rxIdx = AppSettings::instance().value("SMeter_RxSelect", 0).toInt();
-    if (txIdx >= 0 && txIdx < m_txSelect->count())
-        m_txSelect->setCurrentIndex(txIdx);
-    if (rxIdx >= 0 && rxIdx < m_rxSelect->count())
-        m_rxSelect->setCurrentIndex(rxIdx);
-
-    // Persist TX/RX meter selections on change (#809)
-    connect(m_txSelect, &QComboBox::currentIndexChanged,
-            this, [](int idx) {
-        AppSettings::instance().setValue("SMeter_TxSelect", idx);
-    });
-    connect(m_rxSelect, &QComboBox::currentIndexChanged,
-            this, [](int idx) {
-        AppSettings::instance().setValue("SMeter_RxSelect", idx);
-    });
-
-    // ── Peak hold line controls (#840) ────────────────────────────────────
-    auto* peakRow = new QWidget(sMeterContent);
-    auto* peakLayout = new QHBoxLayout(peakRow);
-    peakLayout->setContentsMargins(4, 2, 4, 2);
-    peakLayout->setSpacing(6);
-
-    auto* peakBtn = new QPushButton("Peak Hold", peakRow);
-    peakBtn->setCheckable(true);
-    peakBtn->setChecked(AppSettings::instance().value("PeakHoldEnabled", "False") == "True");
-    peakBtn->setAccessibleName("Peak hold");
-    peakBtn->setAccessibleDescription("Toggle peak hold line on S-meter");
-    peakBtn->setFixedHeight(20);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(peakBtn, "QPushButton { background: {{color.background.0}}; color: {{color.text.secondary}}; border: 1px solid #334; "
-        "border-radius: 3px; font-size: 10px; padding: 0 6px; } "
-        "QPushButton:checked { background: #0a3060; color: {{color.accent}}; border-color: {{color.accent}}; }");
-
-    auto* decayLabel = new QLabel("Decay", peakRow);
-    decayLabel->setStyleSheet(labelStyle);
-    auto* decayCombo = new GuardedComboBox(peakRow);
-    decayCombo->addItems({"Fast", "Medium", "Slow"});
-    decayCombo->setAccessibleName("Peak decay rate");
-    decayCombo->setAccessibleDescription("Speed at which peak hold marker decays");
-    decayCombo->setCurrentText(
-        AppSettings::instance().value("PeakDecayRate", "Medium").toString());
-    AetherSDR::applyComboStyle(decayCombo);
-
-    auto* resetBtn = new QPushButton("RST", peakRow);
-    resetBtn->setFixedSize(32, 20);
-    resetBtn->setToolTip("Reset peak hold");
-    resetBtn->setAccessibleName("Reset peak hold");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(resetBtn, "QPushButton { background: {{color.background.0}}; color: {{color.text.secondary}}; border: 1px solid #334; "
-        "border-radius: 3px; font-size: 10px; padding: 0 4px; } "
-        "QPushButton:pressed { background: #2a2a4e; color: {{color.text.primary}}; }");
-
-    peakLayout->addWidget(peakBtn);
-    peakLayout->addWidget(decayLabel);
-    peakLayout->addWidget(decayCombo, 1);
-    peakLayout->addWidget(resetBtn);
-    contentLayout->addWidget(peakRow);
+    // ── S-meter config → right-click context menu on the gauge ────────────
+    // The applet body is just the gauge now; TX/RX meter select, peak-hold
+    // toggle, decay speed, and reset all live in the right-click menu so the
+    // VU applet stays compact. The menu reads/writes the same AppSettings keys
+    // (SMeter_TxSelect/RxSelect, PeakHoldEnabled, PeakDecayRate) it always has,
+    // so state survives and stays in sync.
 
     // Apply decay preset: also sets the hold time (Fast=200ms, Medium=500ms, Slow=1000ms)
     auto applyDecayPreset = [this](const QString& rate) {
@@ -397,21 +301,113 @@ AppletPanel::AppletPanel(QWidget* parent) : QWidget(parent)
         else                       m_sMeter->setPeakHoldTimeMs(500);
     };
 
-    m_sMeter->setPeakHoldEnabled(peakBtn->isChecked());
-    applyDecayPreset(decayCombo->currentText());
+    static const QStringList kTxMeterItems{"Power", "SWR", "Level", "Compression"};
+    static const QStringList kRxMeterItems{"S-Meter", "S-Meter Peak"};
+    static const QStringList kDecayItems{"Fast", "Medium", "Slow"};
 
-    connect(peakBtn, &QPushButton::toggled, this, [this](bool on) {
-        m_sMeter->setPeakHoldEnabled(on);
-        AppSettings::instance().setValue("PeakHoldEnabled", on ? "True" : "False");
-        AppSettings::instance().save();
+    // Restore saved state onto the gauge at startup (#809, #840).
+    {
+        auto& s = AppSettings::instance();
+        const int txIdx = qBound(0, s.value("SMeter_TxSelect", 0).toInt(),
+                                 static_cast<int>(kTxMeterItems.size()) - 1);
+        const int rxIdx = qBound(0, s.value("SMeter_RxSelect", 0).toInt(),
+                                 static_cast<int>(kRxMeterItems.size()) - 1);
+        m_sMeter->setTxMode(kTxMeterItems[txIdx]);
+        m_sMeter->setRxMode(kRxMeterItems[rxIdx]);
+        m_sMeter->setPeakHoldEnabled(s.value("PeakHoldEnabled", "False") == "True");
+        applyDecayPreset(s.value("PeakDecayRate", "Medium").toString());
+    }
+
+    m_sMeter->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_sMeter, &QWidget::customContextMenuRequested, this,
+            [this, applyDecayPreset](const QPoint& pos) {
+        auto& s = AppSettings::instance();
+        QMenu menu(m_sMeter);
+
+        // Section header rows. QMenu::addSection() doesn't render its text under
+        // the app's menu styling (only the separator shows), so use a disabled
+        // QWidgetAction + styled QLabel so the section titles are always visible.
+        bool firstHeader = true;
+        auto addHeader = [&menu, &firstHeader](const QString& text) {
+            if (!firstHeader)
+                menu.addSeparator();
+            firstHeader = false;
+            auto* lbl = new QLabel(text);
+            lbl->setStyleSheet(
+                "color:#8090a0; font-size:10px; font-weight:bold; "
+                "padding:4px 8px 2px 8px;");
+            auto* wa = new QWidgetAction(&menu);
+            wa->setDefaultWidget(lbl);
+            wa->setEnabled(false);
+            menu.addAction(wa);
+        };
+
+        // TX Select (exclusive)
+        addHeader("TX Select");
+        auto* txGroup = new QActionGroup(&menu);
+        const int txCur = s.value("SMeter_TxSelect", 0).toInt();
+        for (int i = 0; i < kTxMeterItems.size(); ++i) {
+            QAction* a = menu.addAction(kTxMeterItems[i]);
+            a->setCheckable(true);
+            a->setChecked(i == txCur);
+            txGroup->addAction(a);
+            connect(a, &QAction::triggered, this, [this, i] {
+                m_sMeter->setTxMode(kTxMeterItems[i]);
+                AppSettings::instance().setValue("SMeter_TxSelect", i);
+                AppSettings::instance().save();
+            });
+        }
+
+        // RX Select (exclusive)
+        addHeader("RX Select");
+        auto* rxGroup = new QActionGroup(&menu);
+        const int rxCur = s.value("SMeter_RxSelect", 0).toInt();
+        for (int i = 0; i < kRxMeterItems.size(); ++i) {
+            QAction* a = menu.addAction(kRxMeterItems[i]);
+            a->setCheckable(true);
+            a->setChecked(i == rxCur);
+            rxGroup->addAction(a);
+            connect(a, &QAction::triggered, this, [this, i] {
+                m_sMeter->setRxMode(kRxMeterItems[i]);
+                AppSettings::instance().setValue("SMeter_RxSelect", i);
+                AppSettings::instance().save();
+            });
+        }
+
+        // Peak Hold (toggle)
+        addHeader("Peak Hold");
+        QAction* peakAct = menu.addAction("Enabled");
+        peakAct->setCheckable(true);
+        peakAct->setChecked(s.value("PeakHoldEnabled", "False") == "True");
+        connect(peakAct, &QAction::toggled, this, [this](bool on) {
+            m_sMeter->setPeakHoldEnabled(on);
+            AppSettings::instance().setValue("PeakHoldEnabled", on ? "True" : "False");
+            AppSettings::instance().save();
+        });
+
+        // Decay speed (exclusive)
+        addHeader("Decay speed");
+        auto* decayGroup = new QActionGroup(&menu);
+        const QString decayCur = s.value("PeakDecayRate", "Medium").toString();
+        for (const QString& d : kDecayItems) {
+            QAction* a = menu.addAction(d);
+            a->setCheckable(true);
+            a->setChecked(d == decayCur);
+            decayGroup->addAction(a);
+            connect(a, &QAction::triggered, this, [this, d, applyDecayPreset] {
+                applyDecayPreset(d);
+                AppSettings::instance().setValue("PeakDecayRate", d);
+                AppSettings::instance().save();
+            });
+        }
+
+        // Reset Peak Hold
+        menu.addSeparator();
+        QAction* rstAct = menu.addAction("Reset Peak Hold");
+        connect(rstAct, &QAction::triggered, m_sMeter, &SMeterWidget::resetPeak);
+
+        menu.exec(m_sMeter->mapToGlobal(pos));
     });
-    connect(decayCombo, &QComboBox::currentTextChanged,
-            this, [this, applyDecayPreset](const QString& rate) {
-        applyDecayPreset(rate);
-        AppSettings::instance().setValue("PeakDecayRate", rate);
-        AppSettings::instance().save();
-    });
-    connect(resetBtn, &QPushButton::clicked, m_sMeter, &SMeterWidget::resetPeak);
 
     // One-shot migration: legacy Applet_ANLG visibility key → Applet_VU.
     // Run before reading Applet_VU so the first launch after upgrade

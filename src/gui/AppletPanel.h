@@ -255,8 +255,6 @@ private:
     ContainerWidget* m_sMeterContainer{nullptr};
     QPushButton*     m_vuBtn{nullptr};
     SMeterWidget*    m_sMeter{nullptr};
-    QComboBox*    m_txSelect{nullptr};
-    QComboBox*    m_rxSelect{nullptr};
     RxApplet*    m_rxApplet{nullptr};
     TunerApplet* m_tunerApplet{nullptr};
     AmpApplet*   m_ampApplet{nullptr};
