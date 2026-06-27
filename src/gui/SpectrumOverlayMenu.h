@@ -88,6 +88,10 @@ public:
     // VHF row will disappear.  Triggers a band-panel rebuild. (#695)
     void setRadioCapabilities(ModelCapabilities caps);
     void syncDaxIqChannel(int channel);
+    // Reflect the real WFM demodulator state onto the DAX-panel WFM toggle
+    // WITHOUT re-emitting wfmToggleRequested. Self-gated on this menu's slice,
+    // so a state change on another slice is ignored. (#3853)
+    void setWfmActive(bool on, int sliceId);
     // DSP button accessors and the DSP sub-panel were removed — radio-
     // side DSP lives on VfoWidget only, client-side DSP lives on the
     // AetherDSP applet only.
@@ -104,6 +108,9 @@ signals:
     void memoryActivated(int memoryIndex, const QString& panId);
     void quickAddMemoryRequested(const QString& panId);
     void daxIqChannelChanged(int channel);  // 0=Off, 1-4
+    // WFM software-demod toggle in the DAX panel. Acts on this menu's slice;
+    // WFM is mode-independent (raw IQ from this pan's DAX stream). (#3853)
+    void wfmToggleRequested(bool on, int sliceId);
     void addPanClicked();
     void daxClicked();
     // DSP-related signals (nr2Toggled / rn2Toggled / bnrToggled /
@@ -237,9 +244,10 @@ private:
     QPushButton* m_swrClearBtn{nullptr};
 
     // DAX sub-panel
-    QWidget*   m_daxPanel{nullptr};
-    bool       m_daxPanelVisible{false};
-    QComboBox* m_daxIqCmb{nullptr};
+    QWidget*     m_daxPanel{nullptr};
+    bool         m_daxPanelVisible{false};
+    QComboBox*   m_daxIqCmb{nullptr};
+    QPushButton* m_wfmBtn{nullptr};   // WFM software-demod toggle (#3853)
 
     // Memory browse sub-panel
     MemoryBrowsePanel* m_memoryPanel{nullptr};

@@ -27,6 +27,7 @@
 #include "MainWindowHelpers.h"
 #include "PanadapterApplet.h"
 #include "PanadapterStack.h"
+#include "SpectrumOverlayMenu.h"
 #include "SpectrumWidget.h"
 #include "WfmDeviceDialog.h"
 #ifdef HAVE_RADE
@@ -1350,17 +1351,15 @@ void MainWindow::deactivateWFM()
     reflectWfmButtons(false, deactivatedSliceId);
 }
 
-// Mirror the real demod state onto both per-slice WFM toggles. Each surface
-// self-gates on its own slice, so passing the affected sliceId is enough; the
-// setWfmActive() setters block their button's signal, so this never loops back
-// through the wfmActivated handlers.
+// Mirror the real demod state onto the WFM toggle in the spectrum overlay DAX
+// menu (the single WFM surface). It self-gates on its own slice, so passing the
+// affected sliceId is enough; setWfmActive() blocks the button's signal, so this
+// never loops back through the wfm handler.
 void MainWindow::reflectWfmButtons(bool on, int sliceId)
 {
-    if (auto* rx = m_appletPanel ? m_appletPanel->rxApplet() : nullptr)
-        rx->setWfmActive(on, sliceId);
     if (auto* sw = spectrumForSlice(m_radioModel.slice(sliceId))) {
-        if (auto* vfo = sw->vfoWidget(sliceId))
-            vfo->setWfmActive(on, sliceId);
+        if (auto* menu = sw->overlayMenu())
+            menu->setWfmActive(on, sliceId);
     }
 }
 

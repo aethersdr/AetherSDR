@@ -2128,6 +2128,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 .arg(applet->panId()).arg(channel));
     });
 
+    // WFM software-demod toggle from the DAX panel. Acts on the menu's slice;
+    // WFM is mode-independent (raw IQ from this pan's DAX stream). Mirrors the
+    // VFO-flag toggle's deactivate guard: only the WFM slice may deactivate,
+    // and not during the activation cooldown. (#3853)
+    connect(menu, &SpectrumOverlayMenu::wfmToggleRequested,
+            this, [this](bool on, int sliceId) {
+        if (on) activateWFM(sliceId);
+        else if (sliceId == m_wfmSliceId && !m_wfmCooldown) deactivateWFM();
+    });
+
     // Sync DAX IQ combo from radio status + restore saved assignment (#1221)
     {
         auto* pan = m_radioModel.panadapter(applet->panId());
@@ -3260,11 +3270,8 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
 #endif
 
-    connect(w, &VfoWidget::wfmActivated, this, [this](bool on, int sliceId) {
-        if (on) activateWFM(sliceId);
-        // Same policy as the RxApplet handler: slice-gated, cooldown-debounced.
-        else if (sliceId == m_wfmSliceId && !m_wfmCooldown) deactivateWFM();
-    });
+    // WFM is toggled from the spectrum overlay DAX menu (wired in the per-pan
+    // setup beside daxIqChannelChanged), not the flag — no connect here. (#3853)
 
     // AetherDSP button on the per-slice DSP tab — same entry point as the
     // Settings menu action and the RX chain double-click; reuses the

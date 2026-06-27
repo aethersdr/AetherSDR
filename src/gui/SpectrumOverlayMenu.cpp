@@ -900,8 +900,40 @@ void SpectrumOverlayMenu::buildDaxPanel()
             emit daxIqChannelChanged(idx);
     });
 
+    // WFM software demodulator toggle. WFM demodulates this pan's DAX IQ stream
+    // on the PC (mode-independent, raw IQ) for the menu's slice — so it lives
+    // here, right below the IQ-channel selector it depends on. (#3853)
+    m_wfmBtn = new QPushButton("WFM");
+    m_wfmBtn->setCheckable(true);
+    m_wfmBtn->setToolTip(
+        tr("Software FM demodulator (DAX IQ → Hi-Fi Cable). Demodulates this "
+           "pan's DAX IQ stream for the active slice; mode-independent."));
+    m_wfmBtn->setStyleSheet(
+        "QPushButton { background: #444; color: #ccc; border: 1px solid #666;"
+        " border-radius: 3px; font-size: 11px; font-weight: bold; padding: 2px 8px; }"
+        "QPushButton:checked { background: #2a7; color: #fff; border-color: #2a7; }"
+        "QPushButton:hover { background: #555; }");
+    connect(m_wfmBtn, &QPushButton::toggled, this, [this](bool on) {
+        if (m_updatingFromModel) return;
+        if (!m_slice) {
+            // No slice to demod — un-stick the toggle without emitting.
+            QSignalBlocker sb(m_wfmBtn);
+            m_wfmBtn->setChecked(false);
+            return;
+        }
+        emit wfmToggleRequested(on, m_slice->sliceId());
+    });
+    vb->addWidget(m_wfmBtn);
+
     m_daxPanel->setFixedWidth(140);
     m_daxPanel->adjustSize();
+}
+
+void SpectrumOverlayMenu::setWfmActive(bool on, int sliceId)
+{
+    if (!m_wfmBtn || !m_slice || m_slice->sliceId() != sliceId) return;
+    QSignalBlocker sb(m_wfmBtn);
+    m_wfmBtn->setChecked(on);
 }
 
 void SpectrumOverlayMenu::syncDaxPanel()

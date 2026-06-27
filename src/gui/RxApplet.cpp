@@ -520,8 +520,8 @@ void RxApplet::buildUI()
             QString mode = m_modeCombo->currentText();
             // Selecting a real radio mode tears down the WFM software-demod
             // overlay if it was running on this slice. ("WFM" is never an
-            // entry in m_modeCombo — it has its own toggle button — so there
-            // is no "turn WFM on" branch here.)
+            // entry in m_modeCombo — it is toggled from the VFO-flag WFM
+            // button — so there is no "turn WFM on" branch here.)
             emit wfmActivated(false, m_slice ? m_slice->sliceId() : -1);
 #ifdef HAVE_RADE
             if (mode == "RADE") {
@@ -538,24 +538,6 @@ void RxApplet::buildUI()
             if (m_slice) m_slice->setMode(mode);
         });
         m_freqRow->addWidget(m_modeCombo);
-
-        m_wfmButton = new QPushButton("WFM");
-        m_wfmButton->setCheckable(true);
-        m_wfmButton->setFixedSize(36, 20);
-        m_wfmButton->setToolTip("Software FM demodulator via DAX IQ → Hi-Fi Cable");
-        m_wfmButton->setStyleSheet(
-            "QPushButton { background: #444; color: #ccc; border: 1px solid #666;"
-            " border-radius: 3px; font-size: 10px; font-weight: bold; padding: 0 2px; }"
-            "QPushButton:checked { background: #2a7; color: #fff; border-color: #2a7; }"
-            "QPushButton:hover { background: #555; }");
-        connect(m_wfmButton, &QPushButton::toggled, this, [this](bool on) {
-            if (on) {
-                emit wfmActivated(true, m_slice ? m_slice->sliceId() : -1);
-            } else {
-                emit wfmActivated(false, m_slice ? m_slice->sliceId() : -1);
-            }
-        });
-        m_freqRow->addWidget(m_wfmButton);
 
         m_freqStack = new QStackedWidget;
         m_freqStack->setFixedHeight(34);
@@ -1453,13 +1435,6 @@ void RxApplet::setAfGain(int pct)
 {
     QSignalBlocker b(m_afSlider);
     m_afSlider->setValue(pct);
-}
-
-void RxApplet::setWfmActive(bool on, int sliceId)
-{
-    if (!m_wfmButton || !m_slice || m_slice->sliceId() != sliceId) return;
-    QSignalBlocker b(m_wfmButton);
-    m_wfmButton->setChecked(on);
 }
 
 // ─── Slice wiring ─────────────────────────────────────────────────────────────

@@ -137,13 +137,6 @@ public:
     void setRadeCallsign(const QString& callsign);
 #endif
 
-    // Reflect the real WFM demodulator state (owned by MainWindow) back onto
-    // the WFM toggle button, WITHOUT re-emitting wfmActivated. Self-gated on
-    // this widget's slice so a state change on another slice is ignored.
-    // Keeps the VfoWidget and RxApplet WFM buttons from desyncing when the
-    // demod is toggled from the other surface or torn down by a mode change.
-    void setWfmActive(bool on, int sliceId);
-
 Q_SIGNALS:
     void afGainChanged(int value);
     void audioMuteToggled(bool on);   // per-slice AF mute changed by user (#1560)
@@ -155,7 +148,6 @@ Q_SIGNALS:
 #ifdef HAVE_RADE
     void radeActivated(bool on, int sliceId);
 #endif
-    void wfmActivated(bool on, int sliceId);
     void recordToggled(bool on);
     void playToggled(bool on);
     void aetherDspRequested();     // user clicked the ADSP button on the DSP tab
@@ -493,7 +485,6 @@ private:
     QComboBox* m_modeCombo{nullptr};
     QPushButton* m_quickModeBtns[3]{};
     QString      m_quickModeAssign[3];  // e.g. "USB", "CW", "SSB", "DIG"
-    QPushButton* m_wfmBtn{nullptr};
     void updateQuickModeButtons();
     QGridLayout* m_filterGrid{nullptr};
     QVector<QPushButton*> m_filterBtns;
