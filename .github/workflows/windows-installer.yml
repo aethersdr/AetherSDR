@@ -39,7 +39,7 @@ jobs:
       # we bump a version.  Skips the upstream download + build entirely
       # on cache hit.
       - name: Cache Opus
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
         id: cache-opus
         with:
           path: third_party/opus
@@ -50,7 +50,7 @@ jobs:
         run: .\scripts\setup\setup-opus.ps1
 
       - name: Cache FFTW3
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
         id: cache-fftw
         with:
           path: third_party/fftw3
@@ -61,7 +61,7 @@ jobs:
         run: .\scripts\setup\setup-fftw.ps1
 
       - name: Cache hidapi
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
         id: cache-hidapi
         with:
           path: third_party/hidapi
@@ -72,7 +72,7 @@ jobs:
         run: .\scripts\setup\setup-hidapi.ps1
 
       - name: Cache DeepFilterNet3
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -83,7 +83,7 @@ jobs:
         run: .\scripts\setup\setup-deepfilter.ps1
 
       - name: Cache qtkeychain
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
         id: cache-qtkeychain
         with:
           path: third_party/qtkeychain
