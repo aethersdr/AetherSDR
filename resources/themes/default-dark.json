@@ -67,6 +67,9 @@
             "thresh": "{color.amber.500}",
             "peak":   "{color.gray.50}",
             "gainReduction": "#f2c14e",
+            "pivot.fill": "#050509",
+            "pivot.rim":  "#3a3e48",
+            "pivot.glow": "#ffb060",
             "bar.fill": "#405060",
             "bar.fillGradient": {
               "type": "linear-gradient",

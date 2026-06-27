@@ -408,6 +408,10 @@ void ThemeManager::seedBuiltinDefaults()
     m_tokens.insert("color.meter.peak",          QString("#e6f0fa"));
     m_tokens.insert("color.meter.gainReduction", QString("#f2c14e"));
     m_tokens.insert("color.meter.bar.fill",      QString("#405060"));
+    // S-meter needle-pivot moulding cover + warm backlight glow (paint code only).
+    m_tokens.insert("color.meter.pivot.fill",    QString("#050509"));
+    m_tokens.insert("color.meter.pivot.rim",     QString("#3a3e48"));
+    m_tokens.insert("color.meter.pivot.glow",    QString("#ffb060"));
     // Vertical (bottom→top, angle 0°) green→amber→red ramp painted by
     // ClientLevelMeter / ClientCompMeter into the level bar.  Seeded so
     // a missing theme file doesn't fall back to whatever the meter
