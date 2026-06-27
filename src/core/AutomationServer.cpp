@@ -32,6 +32,7 @@
 #include <QCoreApplication>
 #include <QRegularExpression>
 #include <QSet>
+#include <QThread>
 #include <QTimer>
 #include <QDateTime>
 #include <QTime>
@@ -1007,6 +1008,29 @@ QJsonObject audioSnapshot(const AudioEngine* audio)
         {QStringLiteral("rxBufferSampleRate"),
             audio->rxBufferSampleRate()},
     };
+}
+
+QJsonObject audioSnapshotOnObjectThread(AudioEngine* audio, bool* ok)
+{
+    *ok = false;
+    if (!audio) {
+        return {};
+    }
+
+    if (!audio->thread() || audio->thread() == QThread::currentThread()) {
+        *ok = true;
+        return audioSnapshot(audio);
+    }
+
+    QJsonObject snapshot;
+    const bool invoked = QMetaObject::invokeMethod(
+        audio,
+        [audio, &snapshot]() {
+            snapshot = audioSnapshot(audio);
+        },
+        Qt::BlockingQueuedConnection);
+    *ok = invoked;
+    return snapshot;
 }
 
 // 8-band graphic EQ (RX + TX). Lets a scenario assert EQ-applet slider changes
@@ -2103,13 +2127,19 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
 {
     if (model == QLatin1String("audio")) {
         AudioEngine* audio = m_audioEngine;
-        if (!audio)
+        if (!audio) {
             return err(QStringLiteral("no audio engine available"));
-        QJsonObject data = audioSnapshot(audio);
+        }
+        bool snapshotOk = false;
+        QJsonObject data = audioSnapshotOnObjectThread(audio, &snapshotOk);
+        if (!snapshotOk) {
+            return err(QStringLiteral("audio engine snapshot unavailable"));
+        }
         if (!property.isEmpty()) {
-            if (!data.contains(property))
+            if (!data.contains(property)) {
                 return err(QStringLiteral("unknown property '") + property
                            + QStringLiteral("' for audio"));
+            }
             return QJsonObject{{QStringLiteral("ok"), true},
                                {QStringLiteral("model"), model},
                                {QStringLiteral("property"), property},
