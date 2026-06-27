@@ -1,6 +1,9 @@
 version: 2
 updates:
-  # Keep GitHub Actions up to date
+  # Keep GitHub Actions up to date.
+  # Convention: pin actions to a full commit SHA with NO trailing `# vX` version
+  # comment — Dependabot bumps the SHA but doesn't keep such comments in sync, so
+  # they drift and mislead (see #3864). The version lives in Dependabot's PR title.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

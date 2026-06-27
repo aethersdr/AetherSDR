@@ -13,13 +13,13 @@ jobs:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
 
       - name: Install Qt6
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730  # v4.3.1
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730
         with:
           version: '6.8.*'
           host: 'windows'
@@ -39,7 +39,7 @@ jobs:
       # we bump a version.  Skips the upstream download + build entirely
       # on cache hit.
       - name: Cache Opus
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-opus
         with:
           path: third_party/opus
@@ -50,7 +50,7 @@ jobs:
         run: .\scripts\setup\setup-opus.ps1
 
       - name: Cache FFTW3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-fftw
         with:
           path: third_party/fftw3
@@ -61,7 +61,7 @@ jobs:
         run: .\scripts\setup\setup-fftw.ps1
 
       - name: Cache hidapi
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-hidapi
         with:
           path: third_party/hidapi
@@ -72,7 +72,7 @@ jobs:
         run: .\scripts\setup\setup-hidapi.ps1
 
       - name: Cache DeepFilterNet3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
@@ -83,7 +83,7 @@ jobs:
         run: .\scripts\setup\setup-deepfilter.ps1
 
       - name: Cache qtkeychain
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         id: cache-qtkeychain
         with:
           path: third_party/qtkeychain
@@ -193,7 +193,7 @@ jobs:
           powershell -NoProfile -ExecutionPolicy Bypass -File packaging\windows\create-msix.ps1 -DeployDir deploy -OutputDir . -CreateUpload -SkipSign -ExcludeDfnrModel
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: Windows-Installer
           path: |
@@ -204,7 +204,7 @@ jobs:
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b  # v3
+        uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b
         with:
           # .msixupload is the Partner Center upload artifact (manual Store
           # submission for now — see docs/WINDOWS-STORE-MSIX.md). It's a
@@ -239,7 +239,7 @@ jobs:
       # ----------------------------------------------------------------------
       - name: Setup Microsoft Store Developer CLI
         if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''
-        uses: microsoft/microsoft-store-apppublisher@b76227f539d68e6465f79bbbc82ed92f61081aa4  # v1.3
+        uses: microsoft/microsoft-store-apppublisher@b76227f539d68e6465f79bbbc82ed92f61081aa4
 
       - name: Stage Microsoft Store submission (draft)
         if: startsWith(github.ref, 'refs/tags/') && vars.AETHERSDR_STORE_PRODUCT_ID != ''

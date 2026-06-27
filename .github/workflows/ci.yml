@@ -24,7 +24,7 @@ jobs:
     container: ghcr.io/ten9876/aethersdr-ci:latest
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Setup DeepFilterNet3 (DFNR)
         run: bash scripts/setup/setup-deepfilter.sh
@@ -60,10 +60,10 @@ jobs:
     env:
       SCCACHE_GHA_ENABLED: 'true'
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730  # v4.3.1
+        uses: jurplel/install-qt-action@48d3ad6db93f3627c8ee7a0454bc6f3744f7e730
         with:
           # 6.8.3 matches what community Windows builders are running and
           # exposes Qt 6.8.x MOC volume so we catch issues like #1910 (MSVC
@@ -73,7 +73,7 @@ jobs:
           cache: true
 
       - name: Cache FFTW3
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: third_party/fftw3
           key: ${{ runner.os }}-fftw3-3.3.5-${{ hashFiles('scripts/setup/setup-fftw.ps1') }}
@@ -87,7 +87,7 @@ jobs:
         run: .\scripts\setup\setup-deepfilter.ps1
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696  # v0.0.10
+        uses: mozilla-actions/sccache-action@9e7fa8a12102821edf02ca5dbea1acd0f89a2696
 
       # CMAKE_CXX_COMPILER_LAUNCHER is honoured by Ninja and Make
       # generators, NOT by the Visual Studio / MSBuild generator that
@@ -96,7 +96,7 @@ jobs:
       # puts the MSVC toolchain on PATH (cl.exe, link.exe, etc.) so
       # Ninja can find them.
       - name: Setup MSVC environment
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756  # v1
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
         with:
           arch: x64
 
@@ -173,7 +173,7 @@ jobs:
   check-macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Install dependencies via Homebrew
         # Mirrors macos-dmg.yml's apple-silicon path.  Homebrew Qt targets
@@ -187,7 +187,7 @@ jobs:
         run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03  # v1.2.23
+        uses: hendrikmuhs/ccache-action@d62db5f07c26379fc4b4e0916f098a92573c3b03
         with:
           key: ccache-macos-ci
           max-size: 500M

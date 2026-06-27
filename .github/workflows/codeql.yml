@@ -51,13 +51,13 @@ jobs:
         language: [cpp]
 
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
 
       - name: Fix git ownership for container
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@7c1e4cf0b20d7c1872b26569c00ba908797a59bf  # v4
+        uses: github/codeql-action/init@7c1e4cf0b20d7c1872b26569c00ba908797a59bf
         with:
           languages: ${{ matrix.language }}
           config-file: ./.github/codeql/codeql-config.yml
@@ -69,4 +69,4 @@ jobs:
         run: cmake --build build -j$(nproc)
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@7c1e4cf0b20d7c1872b26569c00ba908797a59bf  # v4
+        uses: github/codeql-action/analyze@7c1e4cf0b20d7c1872b26569c00ba908797a59bf
