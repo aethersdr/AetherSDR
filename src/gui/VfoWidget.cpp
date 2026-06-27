@@ -4804,6 +4804,17 @@ void VfoWidget::updateModeTab()
         m_filterCustomHi.fill(INT_MIN, m_filterWidths.size());
     }
     rebuildFilterButtons();
+
+    // The filter-preset grid's row count changes with mode (FM has no preset
+    // grid; voice modes have 2+ rows). Rebuilding it here changes the mode-tab
+    // page height, but the synchronous relayout on the same turn can read a
+    // stale page sizeHint before the new grid geometry settles — leaving the
+    // panel too short when growing back (FM -> LSB/USB), so the filter rows
+    // overflow the flag. Defer a relayout to the next event-loop turn, once the
+    // rebuilt grid is fully laid out, so the panel resizes to fit. (#3853)
+    if (m_tabStack && m_tabStack->isVisible()) {
+        QTimer::singleShot(0, this, [this] { relayoutToCurrentContent(); });
+    }
 }
 
 void VfoWidget::updateQuickModeButtons()
