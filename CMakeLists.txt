@@ -1730,6 +1730,13 @@ target_include_directories(slice_label_test PRIVATE src)
 target_link_libraries(slice_label_test PRIVATE Qt6::Gui)
 add_test(NAME slice_label_test COMMAND slice_label_test)
 
+add_executable(vfo_flag_placement_test
+    tests/vfo_flag_placement_test.cpp
+)
+target_include_directories(vfo_flag_placement_test PRIVATE src)
+target_link_libraries(vfo_flag_placement_test PRIVATE Qt6::Widgets)
+add_test(NAME vfo_flag_placement_test COMMAND vfo_flag_placement_test)
+
 add_executable(slice_model_letter_test
     tests/slice_model_letter_test.cpp
     src/models/SliceModel.cpp

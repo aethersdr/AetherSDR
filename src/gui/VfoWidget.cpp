@@ -2957,12 +2957,7 @@ void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
         onLeft = false;
     } else {
         // Auto: use mode-based default
-        bool lowerSideband = false;
-        if (m_slice) {
-            const QString mode = m_slice->mode();
-            lowerSideband = (mode == "LSB" || mode == "DIGL" || mode == "CWL");
-        }
-        onLeft = !lowerSideband;
+        onLeft = !m_slice || defaultFlagOnLeftForMode(m_slice->mode());
     }
 
     // 20px dead-band: only flip side when the widget clearly overruns the edge.
@@ -3834,6 +3829,7 @@ void VfoWidget::setSlice(SliceModel* slice)
     if (m_slice)
         m_slice->disconnect(this);
     m_slice = slice;
+    setProperty("sliceId", m_slice ? m_slice->sliceId() : -1);
     if (!m_slice) {
         updateFreqLabel();
         return;

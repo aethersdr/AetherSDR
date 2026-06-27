@@ -10,6 +10,9 @@
 #include <QTimer>
 #include <QElapsedTimer>
 
+#include <algorithm>
+#include <cmath>
+
 #include "core/KiwiSdrProtocol.h"
 
 class QPushButton;
@@ -87,6 +90,90 @@ public:
 
     // Reposition relative to VFO marker x coordinate.
     void updatePosition(int vfoX, int specTop, FlagDir dir = Auto);
+
+    static bool defaultFlagOnLeftForMode(const QString& mode)
+    {
+        const bool lowerSideband = (mode == "LSB" || mode == "DIGL" || mode == "CWL");
+        return !lowerSideband;
+    }
+
+    static FlagDir autoDirectionForSingleFlag(int markerX, int panelWidth,
+                                              int spectrumWidth,
+                                              bool defaultOnLeft,
+                                              bool previousOnLeft)
+    {
+        if (panelWidth <= 0 || spectrumWidth <= 0) {
+            return defaultOnLeft ? ForceLeft : ForceRight;
+        }
+
+        constexpr int kEdgeHysteresis = 20;
+        constexpr double kPanFollowTriggerMarginFrac = 0.05; // matches incremental pan-follow
+        const int guardPx = std::max(
+            kEdgeHysteresis,
+            static_cast<int>(std::round(spectrumWidth * kPanFollowTriggerMarginFrac)));
+
+        if (defaultOnLeft) {
+            const int flipEnter = panelWidth + guardPx;
+            const int flipExit = flipEnter + kEdgeHysteresis;
+            const bool shouldStayRight = !previousOnLeft && markerX < flipExit;
+            return (markerX <= flipEnter || shouldStayRight) ? ForceRight : ForceLeft;
+        }
+
+        const int flipEnter = spectrumWidth - panelWidth - guardPx;
+        const int flipExit = flipEnter - kEdgeHysteresis;
+        const bool shouldStayLeft = previousOnLeft && markerX > flipExit;
+        return (markerX >= flipEnter || shouldStayLeft) ? ForceLeft : ForceRight;
+    }
+
+    static FlagDir autoDirectionForDeconflictedFlag(int index, int count,
+                                                    int markerX,
+                                                    int previousMarkerX,
+                                                    int nextMarkerX,
+                                                    int panelWidth,
+                                                    int spectrumWidth,
+                                                    bool previousOnLeft)
+    {
+        if (index < 0 || index >= count || count <= 0) {
+            return Auto;
+        }
+        if (count == 1) {
+            return Auto;
+        }
+
+        constexpr int kEdgeHysteresis = 20;
+        constexpr double kPanFollowTriggerMarginFrac = 0.05; // matches incremental pan-follow
+        const int guardPx = std::max(
+            kEdgeHysteresis,
+            static_cast<int>(std::round(spectrumWidth * kPanFollowTriggerMarginFrac)));
+
+        auto leftEdgeFlagDirection = [&]() {
+            const int flipEnter = panelWidth + guardPx;
+            const int flipExit = flipEnter + kEdgeHysteresis;
+            const bool shouldStayRight = !previousOnLeft && markerX < flipExit;
+            return (markerX <= flipEnter || shouldStayRight) ? ForceRight : ForceLeft;
+        };
+        auto rightEdgeFlagDirection = [&]() {
+            const int flipEnter = spectrumWidth - panelWidth - guardPx;
+            const int flipExit = flipEnter - kEdgeHysteresis;
+            const bool shouldStayLeft = previousOnLeft && markerX > flipExit;
+            return (markerX >= flipEnter || shouldStayLeft) ? ForceLeft : ForceRight;
+        };
+
+        if (count == 2) {
+            return index == 0 ? leftEdgeFlagDirection() : rightEdgeFlagDirection();
+        }
+
+        if (index == 0) {
+            return leftEdgeFlagDirection();
+        }
+        if (index == count - 1) {
+            return rightEdgeFlagDirection();
+        }
+
+        const int gapLeft = markerX - previousMarkerX;
+        const int gapRight = nextMarkerX - markerX;
+        return (gapLeft >= gapRight) ? ForceLeft : ForceRight;
+    }
 
     // Draw this flag's SmartMTR extremes value labels (min/max or current signal,
     // gated by the meter options) onto the spectrum painter, in the band just

@@ -3012,10 +3012,10 @@ MainWindow::TuneCenteringResult MainWindow::panFollowVfo(
     // against the *outer edge of the flag* rather than the slice frequency
     // itself — so the flag panel doesn't clip the pan edge before the pan
     // starts to scroll.  Split pairs (LockLeft + LockRight rendered on the
-    // same marker) extend the trigger on *both* sides; single-flag slices
-    // extend only on the side the flag currently renders on.  Non-flagged
-    // and compact-mode slices fall through to the original slice-frequency
-    // comparison (both offsets stay 0.0).
+    // same marker) extend the trigger on *both* sides; non-split slices extend
+    // on the side the flag placement rules predict for the new frequency.
+    // Non-flagged and compact-mode slices fall through to the original
+    // slice-frequency comparison (both offsets stay 0.0).
     double leftFlagOffsetMhz  = 0.0;
     double rightFlagOffsetMhz = 0.0;
     if (auto* sw = spectrumForSlice(s)) {
@@ -3030,7 +3030,8 @@ MainWindow::TuneCenteringResult MainWindow::panFollowVfo(
                     // Split pair: LockLeft + LockRight, flags on both sides.
                     leftFlagOffsetMhz  = flagWidthMhz;
                     rightFlagOffsetMhz = flagWidthMhz;
-                } else if (vfo->onLeft()) {
+                } else if (sw->vfoFlagOnLeftForSlice(
+                               s->sliceId(), mhz, vfo->width(), vfo->onLeft())) {
                     leftFlagOffsetMhz  = flagWidthMhz;
                 } else {
                     rightFlagOffsetMhz = flagWidthMhz;

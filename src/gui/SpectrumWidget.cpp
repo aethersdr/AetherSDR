@@ -65,6 +65,51 @@ namespace AetherSDR {
 bool SpectrumWidget::s_starstruckMode = false;
 QSoundEffect* SpectrumWidget::s_starstruckSound = nullptr;
 
+namespace {
+
+struct VfoPos {
+    int sliceId;
+    int x;
+    VfoWidget* w;
+    int splitPartner;
+    const SpectrumWidget::SliceOverlay* overlay;
+};
+
+VfoWidget::FlagDir singleVfoFlagDirectionForOverlay(
+    const SpectrumWidget::SliceOverlay& overlay,
+    VfoWidget* widget,
+    int markerX,
+    int spectrumWidth)
+{
+    if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+        return VfoWidget::ForceRight;
+    }
+
+    const bool defaultOnLeft = VfoWidget::defaultFlagOnLeftForMode(overlay.mode);
+    const bool previousOnLeft = widget ? widget->onLeft() : defaultOnLeft;
+    return VfoWidget::autoDirectionForSingleFlag(
+        markerX, widget ? widget->width() : 0, spectrumWidth,
+        defaultOnLeft, previousOnLeft);
+}
+
+VfoWidget::FlagDir deconflictedVfoFlagDirection(
+    const QVector<VfoPos>& vfos, int index, int panelWidth, int spectrumWidth)
+{
+    const int previousMarkerX = index > 0 ? vfos[index - 1].x : 0;
+    const int nextMarkerX = index + 1 < vfos.size() ? vfos[index + 1].x : 0;
+    const bool previousOnLeft = vfos[index].w ? vfos[index].w->onLeft() : true;
+    return VfoWidget::autoDirectionForDeconflictedFlag(
+        index, vfos.size(), vfos[index].x, previousMarkerX, nextMarkerX,
+        panelWidth, spectrumWidth, previousOnLeft);
+}
+
+bool flagDirectionOnLeft(VfoWidget::FlagDir dir)
+{
+    return dir == VfoWidget::ForceLeft || dir == VfoWidget::LockLeft;
+}
+
+} // namespace
+
 inline QColor kAetherBrandBlue() { return AetherSDR::ThemeManager::instance().color("color.accent"); }
 inline QColor kAetherBrandGreen() { return AetherSDR::ThemeManager::instance().color("color.accent.success"); }
 inline QColor kConnectionTextColor() { return AetherSDR::ThemeManager::instance().color("color.text.primary"); }
@@ -964,6 +1009,84 @@ bool SpectrumWidget::sliceHasSplitPartner(int sliceId) const
     return false;
 }
 
+bool SpectrumWidget::vfoFlagOnLeftForSlice(
+    int sliceId, double freqMhz, int panelWidth, bool previousOnLeft) const
+{
+    QVector<VfoPos> vfos;
+    for (const SliceOverlay& overlay : m_sliceOverlays) {
+        if (VfoWidget* widget = m_vfoWidgets.value(overlay.sliceId, nullptr)) {
+            const double markerMhz = overlay.sliceId == sliceId ? freqMhz : overlay.freqMhz;
+            int x = mhzToX(markerMhz);
+            if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+                const double hiMhz = markerMhz + overlay.filterHighHz / 1.0e6;
+                x = mhzToX(hiMhz) + 4;
+            }
+            vfos.append({overlay.sliceId, x, widget, overlay.splitPartnerId, &overlay});
+        }
+    }
+    if (vfos.isEmpty()) {
+        return previousOnLeft;
+    }
+    std::sort(vfos.begin(), vfos.end(), [](const VfoPos& a, const VfoPos& b) {
+        return a.x < b.x;
+    });
+
+    int targetIndex = -1;
+    for (int i = 0; i < vfos.size(); ++i) {
+        if (vfos[i].sliceId == sliceId) {
+            targetIndex = i;
+            break;
+        }
+    }
+    if (targetIndex < 0 || !vfos[targetIndex].overlay) {
+        return previousOnLeft;
+    }
+
+    QMap<int, VfoWidget::FlagDir> dirMap;
+    for (int i = 0; i < vfos.size(); ++i) {
+        if (vfos[i].splitPartner < 0) {
+            continue;
+        }
+        if (dirMap.contains(vfos[i].sliceId)) {
+            continue;
+        }
+        int partnerIndex = -1;
+        for (int j = 0; j < vfos.size(); ++j) {
+            if (vfos[j].sliceId == vfos[i].splitPartner) {
+                partnerIndex = j;
+                break;
+            }
+        }
+        if (partnerIndex < 0) {
+            continue;
+        }
+        const int leftIndex = (vfos[i].x <= vfos[partnerIndex].x) ? i : partnerIndex;
+        const int rightIndex = (leftIndex == i) ? partnerIndex : i;
+        dirMap[vfos[leftIndex].sliceId] = VfoWidget::LockLeft;
+        dirMap[vfos[rightIndex].sliceId] = VfoWidget::LockRight;
+    }
+
+    const SliceOverlay& overlay = *vfos[targetIndex].overlay;
+    if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+        return false;
+    }
+    if (dirMap.contains(sliceId)) {
+        return flagDirectionOnLeft(dirMap[sliceId]);
+    }
+
+    VfoWidget::FlagDir dir = VfoWidget::Auto;
+    if (vfos.size() == 1) {
+        const bool defaultOnLeft = VfoWidget::defaultFlagOnLeftForMode(overlay.mode);
+        dir = VfoWidget::autoDirectionForSingleFlag(
+            vfos[targetIndex].x, panelWidth, width(), defaultOnLeft, previousOnLeft);
+    } else {
+        const int deconflictPanelWidth = vfos.first().w ? vfos.first().w->width() : panelWidth;
+        dir = deconflictedVfoFlagDirection(
+            vfos, targetIndex, deconflictPanelWidth, width());
+    }
+    return flagDirectionOnLeft(dir);
+}
+
 QString SpectrumWidget::settingsKey(const QString& base) const
 {
     if (m_panIndex == 0)
@@ -1065,6 +1188,7 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
         return m_vfoWidgets[sliceId];
 
     auto* w = new VfoWidget(this);
+    w->setProperty("sliceId", sliceId);
     installVfoCursorEventFilter(w);
     // The flag's SmartMTR value labels are painted in our overlay pass; refresh
     // the overlay whenever they change or the flag moves.
@@ -8275,7 +8399,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 // is rasterized at this frame's position (no one-frame lag).  (#3617)
 void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
 {
-    struct VfoPos { int sliceId; int x; VfoWidget* w; int splitPartner; };
     QVector<VfoPos> vfos;
     for (const auto& so : m_sliceOverlays) {
         if (auto* vw = m_vfoWidgets.value(so.sliceId, nullptr)) {
@@ -8284,7 +8407,7 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
                 double hiMhz = so.freqMhz + so.filterHighHz / 1.0e6;
                 x = mhzToX(hiMhz) + 4;
             }
-            vfos.append({so.sliceId, x, vw, so.splitPartnerId});
+            vfos.append({so.sliceId, x, vw, so.splitPartnerId, &so});
         }
     }
     std::sort(vfos.begin(), vfos.end(), [](const VfoPos& a, const VfoPos& b) {
@@ -8323,28 +8446,18 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
 
     if (vfos.size() == 1) {
         VfoWidget::FlagDir dir = dirMap.value(vfos[0].sliceId, VfoWidget::Auto);
+        if (!dirMap.contains(vfos[0].sliceId) && vfos[0].overlay) {
+            dir = singleVfoFlagDirectionForOverlay(
+                *vfos[0].overlay, vfos[0].w, vfos[0].x, specW);
+        }
         vfos[0].w->updatePosition(vfos[0].x, specRect.top(), dir);
     } else {
         for (int i = 0; i < vfos.size(); ++i) {
             VfoWidget::FlagDir dir = VfoWidget::Auto;
             if (dirMap.contains(vfos[i].sliceId)) {
                 dir = dirMap[vfos[i].sliceId];
-            } else if (vfos.size() == 2) {
-                dir = (i == 0) ? VfoWidget::ForceLeft : VfoWidget::ForceRight;
-                if (i == 0 && vfos[i].x < panelW) dir = VfoWidget::ForceRight;
-                if (i == 1 && vfos[i].x + panelW > specW) dir = VfoWidget::ForceLeft;
             } else {
-                if (i == 0) {
-                    dir = VfoWidget::ForceLeft;
-                    if (vfos[i].x < panelW) dir = VfoWidget::ForceRight;
-                } else if (i == vfos.size() - 1) {
-                    dir = VfoWidget::ForceRight;
-                    if (vfos[i].x + panelW > specW) dir = VfoWidget::ForceLeft;
-                } else {
-                    const int gapLeft  = vfos[i].x - vfos[i-1].x;
-                    const int gapRight = vfos[i+1].x - vfos[i].x;
-                    dir = (gapLeft >= gapRight) ? VfoWidget::ForceLeft : VfoWidget::ForceRight;
-                }
+                dir = deconflictedVfoFlagDirection(vfos, i, panelW, specW);
             }
             vfos[i].w->updatePosition(vfos[i].x, specRect.top(), dir);
         }
@@ -8481,7 +8594,6 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     // Split pairs always face each other: RX←  →TX
     {
         // Collect visible VFOs sorted by screen X position
-        struct VfoPos { int sliceId; int x; VfoWidget* w; int splitPartner; };
         QVector<VfoPos> vfos;
         for (const auto& so : m_sliceOverlays) {
             if (auto* w = m_vfoWidgets.value(so.sliceId, nullptr)) {
@@ -8492,7 +8604,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
                     double hiMhz = so.freqMhz + so.filterHighHz / 1.0e6;
                     x = mhzToX(hiMhz) + 4;  // 4px padding past filter edge
                 }
-                vfos.append({so.sliceId, x, w, so.splitPartnerId});
+                vfos.append({so.sliceId, x, w, so.splitPartnerId, &so});
             }
         }
         std::sort(vfos.begin(), vfos.end(), [](const VfoPos& a, const VfoPos& b) {
@@ -8537,6 +8649,10 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
 
         if (vfos.size() == 1) {
             VfoWidget::FlagDir dir = dirMap.value(vfos[0].sliceId, VfoWidget::Auto);
+            if (!dirMap.contains(vfos[0].sliceId) && vfos[0].overlay) {
+                dir = singleVfoFlagDirectionForOverlay(
+                    *vfos[0].overlay, vfos[0].w, vfos[0].x, specW);
+            }
             vfos[0].w->updatePosition(vfos[0].x, specRect.top(), dir);
         } else {
             for (int i = 0; i < vfos.size(); ++i) {
@@ -8545,22 +8661,8 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
                 if (dirMap.contains(vfos[i].sliceId)) {
                     // Split pair or RTTY: use pre-assigned direction
                     dir = dirMap[vfos[i].sliceId];
-                } else if (vfos.size() == 2) {
-                    dir = (i == 0) ? VfoWidget::ForceLeft : VfoWidget::ForceRight;
-                    if (i == 0 && vfos[i].x < panelW) dir = VfoWidget::ForceRight;
-                    if (i == 1 && vfos[i].x + panelW > specW) dir = VfoWidget::ForceLeft;
                 } else {
-                    if (i == 0) {
-                        dir = VfoWidget::ForceLeft;
-                        if (vfos[i].x < panelW) dir = VfoWidget::ForceRight;
-                    } else if (i == vfos.size() - 1) {
-                        dir = VfoWidget::ForceRight;
-                        if (vfos[i].x + panelW > specW) dir = VfoWidget::ForceLeft;
-                    } else {
-                        int gapLeft = vfos[i].x - vfos[i-1].x;
-                        int gapRight = vfos[i+1].x - vfos[i].x;
-                        dir = (gapLeft >= gapRight) ? VfoWidget::ForceLeft : VfoWidget::ForceRight;
-                    }
+                    dir = deconflictedVfoFlagDirection(vfos, i, panelW, specW);
                 }
 
                 vfos[i].w->updatePosition(vfos[i].x, specRect.top(), dir);

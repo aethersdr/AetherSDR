@@ -107,10 +107,14 @@ class ConnectionPanel;
 //
 // Phase 2b verbs (observability + reach, this batch — #3646):
 //
-//   grab pan <index> [path]        -> capture a SPECIFIC pan's spectrum surface
-//                                     (by SpectrumWidget::panIndex) in a multi-
-//                                     pan layout; plain `grab SpectrumWidget`
-//                                     only ever returns the first one.
+//   grab pan <index> [path]        -> capture a SPECIFIC pan's raw spectrum
+//                                     surface (by SpectrumWidget::panIndex) in
+//                                     a multi-pan layout; plain `grab
+//                                     SpectrumWidget` only ever returns the
+//                                     first one.
+//   grab pan-visible <index> [path]-> capture the operator-visible pan applet,
+//                                     including VFO/flag child overlays above
+//                                     the GPU surface.
 //   close <target>                 -> close the target's top-level window
 //                                     (deferred; reaches the frameless title-bar
 //                                     close that invoke-click can't).
@@ -191,10 +195,13 @@ private:
     QJsonObject doDumpTree() const;
     QJsonObject doFloors() const;
     QJsonObject doGrab(const QString& target, const QString& path) const;
-    // grab pan <index> [path]: capture the SpectrumWidget for a specific pan
-    // (by SpectrumWidget::panIndex) in a multi-pan layout — plain `grab
-    // SpectrumWidget` only ever resolves the first one (#3646).
+    // grab pan <index> [path]: capture the raw SpectrumWidget framebuffer for a
+    // specific pan (by SpectrumWidget::panIndex) in a multi-pan layout — plain
+    // `grab SpectrumWidget` only ever resolves the first one (#3646).
     QJsonObject doGrabPan(const QString& indexStr, const QString& path) const;
+    // grab pan-visible <index> [path]: capture the enclosing PanadapterApplet so
+    // overlay child widgets such as VFO flags appear in the PNG too.
+    QJsonObject doGrabPanVisible(const QString& indexStr, const QString& path) const;
     // Shared "save this widget to a PNG and describe it" tail for grab/grab pan.
     QJsonObject saveWidgetGrab(QWidget* w, const QString& label,
                                const QString& path) const;

@@ -14,6 +14,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMouseEvent>
+#include <QWheelEvent>
 #include <QSysInfo>
 #include <QPointer>
 #include <QJsonObject>
@@ -278,6 +279,12 @@ QJsonObject describeWidget(const QWidget* w)
     // will refuse before trying them (#3646).
     if (w->property(kTxKeyingProperty).toBool())
         o[QStringLiteral("keying")] = true;
+    {
+        const QVariant sliceId = w->property("sliceId");
+        if (sliceId.isValid()) {
+            o[QStringLiteral("sliceId")] = sliceId.toInt();
+        }
+    }
 
     // Surface the spectrum's measured FFT noise floor (dBm) when a widget
     // exposes it as a Q_PROPERTY (SpectrumWidget). Read generically via the
@@ -401,6 +408,101 @@ QString panIdForIndex(int index)
         }
     }
     return QString();
+}
+
+QWidget* panSpectrumWidgetForIndex(int index, QJsonArray* available = nullptr)
+{
+    const QList<QWidget*> spectra = findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+    QWidget* match = nullptr;
+    for (QWidget* sw : spectra) {
+        const QVariant pi = sw->property("panIndex");
+        if (!pi.isValid()) {
+            continue;
+        }
+        if (available) {
+            available->append(pi.toInt());
+        }
+        // Prefer a visible surface if duplicate indices ever coexist (e.g. mid
+        // float/dock reparent); otherwise the first index match wins below.
+        if (pi.toInt() == index && (!match || sw->isVisible())) {
+            match = sw;
+        }
+    }
+    return match;
+}
+
+QWidget* panadapterAppletForSpectrum(QWidget* spectrum)
+{
+    for (QWidget* a = spectrum; a; a = a->parentWidget()) {
+        if (shortClassName(a) == QLatin1String("PanadapterApplet")) {
+            return a;
+        }
+    }
+    return nullptr;
+}
+
+QWidget* vfoWidgetForPanIndex(int index)
+{
+    const QList<QWidget*> vfos = findWidgetsByClass(QStringLiteral("VfoWidget"));
+    for (QWidget* vfo : vfos) {
+        for (QWidget* a = vfo; a; a = a->parentWidget()) {
+            if (shortClassName(a) != QLatin1String("SpectrumWidget")) {
+                continue;
+            }
+            const QVariant pi = a->property("panIndex");
+            if (pi.isValid() && pi.toInt() == index) {
+                return vfo;
+            }
+            break;
+        }
+    }
+    return nullptr;
+}
+
+QWidget* vfoWidgetForSliceId(int sliceId)
+{
+    const QList<QWidget*> vfos = findWidgetsByClass(QStringLiteral("VfoWidget"));
+    QWidget* fallback = nullptr;
+    for (QWidget* vfo : vfos) {
+        const QVariant sid = vfo->property("sliceId");
+        if (!sid.isValid() || sid.toInt() != sliceId) {
+            continue;
+        }
+        if (vfo->isVisible()) {
+            return vfo;
+        }
+        if (!fallback) {
+            fallback = vfo;
+        }
+    }
+    return fallback;
+}
+
+QWidget* resolveVfoSelector(const QString& target)
+{
+    static const QRegularExpression sliceRe(
+        QStringLiteral("^vfo(?:\\s+|:)slice(?:\\s+|:)(\\d+)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch sliceMatch = sliceRe.match(target.trimmed());
+    if (sliceMatch.hasMatch()) {
+        bool ok = false;
+        const int sliceId = sliceMatch.captured(1).toInt(&ok);
+        return ok ? vfoWidgetForSliceId(sliceId) : nullptr;
+    }
+
+    static const QRegularExpression re(
+        QStringLiteral("^vfo(?:\\s+|:)(\\d+)$"),
+        QRegularExpression::CaseInsensitiveOption);
+    const QRegularExpressionMatch m = re.match(target.trimmed());
+    if (!m.hasMatch()) {
+        return nullptr;
+    }
+    bool ok = false;
+    const int index = m.captured(1).toInt(&ok);
+    if (!ok) {
+        return nullptr;
+    }
+    return vfoWidgetForPanIndex(index);
 }
 
 bool actionMatchesTarget(const QAction* action, const QString& target)
@@ -1227,7 +1329,7 @@ bool AutomationServer::start(const QString& serverName)
 
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
-        << "(verbs: ping, dumpTree, floors, grab, grab pan, invoke, get, connect, disconnect,"
+        << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
         << "txtest, atu, slice, tune, pan, streams, txwaterfall, key, cwx, station, resize,"
         << "menu, close, drag, showMenu, whoami, log, mark)";
     return true;
@@ -1498,8 +1600,10 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             value = rest.join(QLatin1Char(' '));  // "menu open Settings"
         } else if (cmd == QLatin1String("grab")) {
             target = tok(1);
-            if (target == QLatin1String("pan")) {
-                selector = tok(2);   // pan index → "grab pan 1 [path]"
+            if (target == QLatin1String("pan")
+                || target == QLatin1String("pan-visible")
+                || target == QLatin1String("pan-composite")) {
+                selector = tok(2);   // pan index → "grab pan-visible 1 [path]"
                 path = tok(3);
             } else {
                 path = tok(2);       // "grab SpectrumWidget [path]"
@@ -1534,6 +1638,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("grab requires a target widget"));
         if (target == QLatin1String("pan"))
             return doGrabPan(selector, path);
+        if (target == QLatin1String("pan-visible")
+            || target == QLatin1String("pan-composite"))
+            return doGrabPanVisible(selector, path);
         return doGrab(target, path);
     }
     if (cmd == QLatin1String("close")) {
@@ -1714,19 +1821,8 @@ QJsonObject AutomationServer::doGrabPan(const QString& indexStr, const QString& 
         return err(QStringLiteral("grab pan requires a non-negative pan index "
                                   "(e.g. 'grab pan 1')"));
 
-    const QList<QWidget*> spectra = findWidgetsByClass(QStringLiteral("SpectrumWidget"));
     QJsonArray available;
-    QWidget* match = nullptr;
-    for (QWidget* sw : spectra) {
-        const QVariant pi = sw->property("panIndex");
-        if (!pi.isValid())
-            continue;
-        available.append(pi.toInt());
-        // Prefer a visible surface if duplicate indices ever coexist (e.g. mid
-        // float/dock reparent); otherwise the first index match wins below.
-        if (pi.toInt() == index && (!match || sw->isVisible()))
-            match = sw;
-    }
+    QWidget* match = panSpectrumWidgetForIndex(index, &available);
     if (!match) {
         return QJsonObject{{QStringLiteral("ok"), false},
                            {QStringLiteral("error"),
@@ -1737,6 +1833,48 @@ QJsonObject AutomationServer::doGrabPan(const QString& indexStr, const QString& 
     QJsonObject r = saveWidgetGrab(match, QStringLiteral("pan") + QString::number(index), path);
     if (r.value(QStringLiteral("ok")).toBool())
         r[QStringLiteral("panIndex")] = index;
+    return r;
+}
+
+// Capture the whole visible pan applet by index, not just the raw GPU surface.
+// This is the screenshot agents usually want for UI overlays: VFO flags,
+// side buttons, and child widgets are painted above the SpectrumWidget and are
+// therefore absent from `grab pan`, which intentionally returns only the
+// QRhiWidget framebuffer.
+QJsonObject AutomationServer::doGrabPanVisible(const QString& indexStr,
+                                               const QString& path) const
+{
+    bool okIdx = false;
+    const int index = indexStr.toInt(&okIdx);
+    if (!okIdx || index < 0) {
+        return err(QStringLiteral("grab pan-visible requires a non-negative pan index "
+                                  "(e.g. 'grab pan-visible 1')"));
+    }
+
+    QJsonArray available;
+    QWidget* spectrum = panSpectrumWidgetForIndex(index, &available);
+    if (!spectrum) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("no pan with index ") + QString::number(index)},
+                           {QStringLiteral("available"), available}};
+    }
+
+    QWidget* applet = panadapterAppletForSpectrum(spectrum);
+    if (!applet) {
+        return QJsonObject{{QStringLiteral("ok"), false},
+                           {QStringLiteral("error"),
+                            QStringLiteral("pan ") + QString::number(index)
+                                + QStringLiteral(" has no PanadapterApplet ancestor")}};
+    }
+
+    QJsonObject r = saveWidgetGrab(applet,
+                                   QStringLiteral("pan-visible") + QString::number(index),
+                                   path);
+    if (r.value(QStringLiteral("ok")).toBool()) {
+        r[QStringLiteral("panIndex")] = index;
+        r[QStringLiteral("surfaceClass")] = shortClassName(spectrum);
+    }
     return r;
 }
 
@@ -1787,6 +1925,13 @@ QJsonObject AutomationServer::saveWidgetGrab(QWidget* w, const QString& label,
 QWidget* AutomationServer::resolveWidget(const QString& target)
 {
     const QWidgetList tops = QApplication::topLevelWidgets();
+
+    // VFO shortcuts: "vfo slice 1" resolves the flag for slice 1, and
+    // "vfo 1" resolves the first flag inside pan index 1. The slice form is
+    // preferred when a pan contains multiple VFOs.
+    if (QWidget* vfo = resolveVfoSelector(target)) {
+        return vfo;
+    }
 
     // 0. Scoped target "<scope>/<name>" disambiguates duplicate accessibleNames
     //    across applets — e.g. "RxApplet/AF gain" vs "PanadapterApplet/AF gain",
@@ -2029,6 +2174,23 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
             if (!okD) return err(QStringLiteral("setValue needs a number"));
             ds->setValue(d); done = true;
         }
+    } else if (action == QLatin1String("wheel")) {
+        bool okNum = false;
+        const int steps = value.isEmpty() ? 1 : value.toInt(&okNum);
+        if (!value.isEmpty() && !okNum) {
+            return err(QStringLiteral("wheel needs an integer step count"));
+        }
+        if (steps == 0 || steps < -1 || steps > 1) {
+            return err(QStringLiteral("wheel accepts one notch per call (-1 or 1)"));
+        }
+        const QPoint pos(w->width() / 2, w->height() / 2);
+        const QPoint globalPos = w->mapToGlobal(pos);
+        QWheelEvent ev(QPointF(pos), QPointF(globalPos),
+                       QPoint(), QPoint(0, steps * 120),
+                       Qt::NoButton, Qt::NoModifier,
+                       Qt::ScrollUpdate, false);
+        QCoreApplication::sendEvent(w, &ev);
+        done = true;
     } else if (action == QLatin1String("setText")) {
         if (auto* le = qobject_cast<QLineEdit*>(w)) { le->setText(value); done = true; }
     } else if (action == QLatin1String("submit")) {

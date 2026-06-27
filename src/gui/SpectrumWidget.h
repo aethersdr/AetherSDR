@@ -234,6 +234,8 @@ public:
     VfoWidget* addVfoWidget(int sliceId);
     void       removeVfoWidget(int sliceId);
     void       setActiveVfoWidget(int sliceId);
+    bool vfoFlagOnLeftForSlice(int sliceId, double freqMhz,
+                               int panelWidth, bool previousOnLeft) const;
     // True if the slice has a split partner whose own VFO flag is rendered on
     // the opposite side via LockLeft / LockRight.  panFollowVfo() uses this
     // to extend the pan-follow trigger on both sides so neither flag clips

@@ -24,6 +24,7 @@ Usage:
     python tools/automation_probe.py connect local first
     python tools/automation_probe.py connect wait 30000
     python tools/automation_probe.py grab SpectrumWidget /tmp/pan.png
+    python tools/automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png
 """
 
 import argparse
@@ -98,14 +99,15 @@ def main():
                "  automation_probe.py get radio\n"
                "  automation_probe.py get slice active frequency\n"
                "  automation_probe.py invoke 'Master volume' setValue 35\n"
-               "  automation_probe.py grab SpectrumWidget /tmp/pan.png",
+               "  automation_probe.py grab SpectrumWidget /tmp/pan.png\n"
+               "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="demo",
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
                              "connect", "disconnect"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
-                    help="verb args: grab <target> [path] | "
+                    help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
                          "invoke <target> <action> [value] | "
                          "get <model> [selector] [property] | "
                          "connect <list|show|hide|local|ip|wait> [args]")
@@ -134,7 +136,13 @@ def main():
             if not args.rest:
                 sys.exit("error: grab requires a target widget name")
             req = {"cmd": "grab", "target": args.rest[0]}
-            if len(args.rest) > 1:
+            if args.rest[0] in ("pan", "pan-visible", "pan-composite"):
+                if len(args.rest) < 2:
+                    sys.exit(f"error: grab {args.rest[0]} requires a pan index")
+                req["selector"] = args.rest[1]
+                if len(args.rest) > 2:
+                    req["path"] = args.rest[2]
+            elif len(args.rest) > 1:
                 req["path"] = args.rest[1]
             print(json.dumps(bridge.request(req), indent=2))
 

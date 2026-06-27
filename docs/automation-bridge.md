@@ -191,14 +191,28 @@ PNG capture of a single widget.
   framebuffer readback for it, so the capture is the *real* rendered spectrum,
   not a blank.
 
-**`grab pan <index> [path]`** captures a *specific* pan's spectrum surface in a
-multi-pan layout, keyed on the `panIndex` from `dumpTree`. Plain
+**`grab pan <index> [path]`** captures a *specific* pan's raw spectrum surface
+in a multi-pan layout, keyed on the `panIndex` from `dumpTree`. Plain
 `grab SpectrumWidget` always resolves the first one, so it can't reach pan 1+.
+This is the GPU framebuffer only; child overlays such as VFO flags are not part
+of this image.
 
 ```json
 → {"cmd":"grab","target":"pan","selector":"1","path":"/tmp/pan1.png"}
 ← {"ok":true,"target":"pan1","class":"SpectrumWidget","panIndex":1,
    "path":"/tmp/pan1.png","width":2280,"height":686}
+```
+
+**`grab pan-visible <index> [path]`** captures the operator-visible pan applet,
+including the indexed pan's spectrum surface and child overlays such as VFO
+flags. Use this for screenshots of what the user sees. `pan-composite` is an
+alias.
+
+```json
+→ {"cmd":"grab","target":"pan-visible","selector":"1","path":"/tmp/pan1-visible.png"}
+← {"ok":true,"target":"pan-visible1","class":"PanadapterApplet","panIndex":1,
+   "surfaceClass":"SpectrumWidget","path":"/tmp/pan1-visible.png",
+   "width":2280,"height":710}
 ```
 
 An unknown index returns `{"ok":false,"error":"no pan with index N","available":[0]}`.
@@ -228,6 +242,7 @@ the no-op is an explicit, assertable signal.
 | `toggle` | any `QAbstractButton` (checkable → toggle, else click) | — |
 | `setChecked` | checkable button | `true`/`false`/`on`/`off`/`1`/`0` |
 | `setValue` | slider / scrollbar / spinbox | integer (or number for double-spin) |
+| `wheel` | any visible widget | one wheel notch: `-1` or `1` |
 | `setText` | `QLineEdit` | the text |
 | `setCurrentText` | `QComboBox` | item text |
 | `setCurrentIndex` | `QComboBox` | integer index |
@@ -473,22 +488,26 @@ Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 
 `grab` and `invoke` resolve a `target` string in this order — first match wins:
 
-0. **Scoped `"<scope>/<name>"`** — disambiguates a control whose
+0. **VFO shortcuts** — `"vfo slice 1"` or `"vfo:slice:1"` targets the VFO
+   flag for slice 1. `"vfo 1"` or `"vfo:1"` targets the first VFO flag inside
+   the `SpectrumWidget` whose `panIndex` is 1, mirroring `grab pan 1`.
+   Prefer the slice form when a pan contains multiple VFOs.
+1. **Scoped `"<scope>/<name>"`** — disambiguates a control whose
    `accessibleName` appears in more than one applet (e.g. `"AF gain"` and
    `"Squelch threshold"` exist in **both** `RxApplet` and `PanadapterApplet`).
    `<scope>` matches an ancestor by objectName, class, or accessibleName;
    `<name>` is resolved within that subtree. Use `"RxApplet/AF gain"` vs
    `"PanadapterApplet/AF gain"`. Falls through to flat matching if it doesn't
    resolve, so a literal `/` in a name still works.
-1. **Exact `objectName`** — the most stable handle. Prefer this.
-2. **Class name** — full (`AetherSDR::SpectrumWidget`) or short
+2. **Exact `objectName`** — the most stable handle. Prefer this.
+3. **Class name** — full (`AetherSDR::SpectrumWidget`) or short
    (`SpectrumWidget`). Handy when a widget has no objectName (the panadapter is
    targeted as `SpectrumWidget`).
-3. **`accessibleName`** — e.g. `"Panadapter spectrum display"`,
+4. **`accessibleName`** — e.g. `"Panadapter spectrum display"`,
    `"Master volume"`.
-4. **Button text** — last resort, e.g. `"Send"`, `"Transmit"`. Lowest priority,
+5. **Button text** — last resort, e.g. `"Send"`, `"Transmit"`. Lowest priority,
    so a real objectName/accessibleName always wins; first match in tree order.
-5. **Visible popup-menu action** — exact `QAction` objectName, visible text,
+6. **Visible popup-menu action** — exact `QAction` objectName, visible text,
    tooltip, status tip, or data value. Use `invoke <label-or-data> trigger` to
    choose a menu item.
 
@@ -549,8 +568,10 @@ lands.
   `connected` first.
 - **GPU panadapter capture.** `SpectrumWidget` is a `QRhiWidget` when built with
   `AETHER_GPU_SPECTRUM` (the default). The bridge uses
-  `QRhiWidget::grabFramebuffer()` for it — plain `QWidget::grab()` returns an
-  empty surface for a GPU widget, so don't reimplement capture that way.
+  `QRhiWidget::grabFramebuffer()` for raw `SpectrumWidget`/`grab pan` captures
+  because plain `QWidget::grab()` returns an empty surface for a GPU widget.
+  For screenshots that must include child overlays such as VFO flags, use
+  `grab pan-visible <index>`.
 - **Live spectrum isn't golden-able.** Pixels off a live radio are noise.
   Deterministic visual diffs need the recorded-fixture replay mode (Phase 2).
 - **Stale socket after a crash.** On a hard kill the C++ destructor may not run,
