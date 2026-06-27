@@ -1879,11 +1879,20 @@ DisplayInventory::Report RadioModel::displayInventoryReport() const
          it != m_radioDisplayWaterfalls.cend(); ++it)
         in.radioWaterfalls.push_back({it.key(), it.value().clientHandle,
                                       it.value().parentPanId});
-    for (auto it = m_panadapters.cbegin(); it != m_panadapters.cend(); ++it) {
-        in.ownedPanIds.insert(it.key());
-        if (it.value() && !it.value()->waterfallId().isEmpty())
-            in.ownedWaterfallIds.insert(it.value()->waterfallId());
-    }
+    // Owned sets — normalize the waterfall id so it compares equal to the
+    // 0x-prefixed inventory keys regardless of hex case (#3856 review).
+    // Include m_stalePanadapters: during the reconnect reclaim window our own
+    // pans live there (not yet moved to m_panadapters), and the radio re-dumps
+    // their status — without this they'd transiently report as orphan.
+    const auto addOwned = [&in](const QMap<QString, PanadapterModel*>& m) {
+        for (auto it = m.cbegin(); it != m.cend(); ++it) {
+            in.ownedPanIds.insert(normalizePanadapterId(it.key()));
+            if (it.value() && !it.value()->waterfallId().isEmpty())
+                in.ownedWaterfallIds.insert(normalizePanadapterId(it.value()->waterfallId()));
+        }
+    };
+    addOwned(m_panadapters);
+    addOwned(m_stalePanadapters);
     return DisplayInventory::classify(in);
 }
 
@@ -4477,7 +4486,7 @@ void RadioModel::onStatusReceived(const QString& object,
             // Handle pan removal — "display pan 0x40000001 removed" arrives
             // with no '=' so the parser puts the whole string in 'object'
             if (kvs.contains("removed") || object.endsWith("removed")) {
-                m_radioDisplayPans.remove(panId);   // #3856 Layer B inventory
+                m_radioDisplayPans.remove(normalizePanadapterId(panId));   // #3856 Layer B inventory
                 m_pendingPanStatuses.remove(panId);
                 m_panTransmitInhibitReasons.remove(panId);
                 auto* pan = m_panadapters.take(panId);
@@ -4502,7 +4511,7 @@ void RadioModel::onStatusReceived(const QString& object,
             // (presence + owner), independent of whether we end up owning it —
             // foreign and unclaimed pans are tracked too. Pruned on "removed".
             {
-                auto& e = m_radioDisplayPans[panId];
+                auto& e = m_radioDisplayPans[normalizePanadapterId(panId)];
                 if (kvs.contains(QStringLiteral("client_handle")))
                     e.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
             }
@@ -4587,14 +4596,18 @@ void RadioModel::onStatusReceived(const QString& object,
     static const QRegularExpression wfRe(R"(^display waterfall\s+(0x[0-9A-Fa-f]+)$)");
     if (object.startsWith("display waterfall")) {
         // #3856 Layer B: prune the radio-side waterfall inventory on removal.
-        // "display waterfall 0x42… removed" has no '=', so wfRe (anchored on a
-        // bare id) won't match it — handle it explicitly here.
-        if (object.endsWith(QLatin1String("removed"))) {
+        // Removal arrives in two wire forms (mirroring the pan branch): bare
+        // "display waterfall 0x42… removed" (no '=', lands in `object`) and the
+        // kv form "display waterfall 0x42… removed=1" (lands in `kvs`). Handle
+        // both — the bare form won't match wfRe, and the kv form WOULD match
+        // wfRe and be mis-recorded as an add if not caught first.
+        if (kvs.contains(QStringLiteral("removed")) || object.endsWith(QLatin1String("removed"))) {
             static const QRegularExpression wfRemovedRe(R"(^display waterfall\s+(0x[0-9A-Fa-f]+))");
             const auto rm = wfRemovedRe.match(object);
             if (rm.hasMatch()) {
-                m_radioDisplayWaterfalls.remove(rm.captured(1));
-                qCDebug(lcProtocol) << "RadioModel: waterfall removed (inventory)" << rm.captured(1);
+                const QString wfId = normalizePanadapterId(rm.captured(1));
+                m_radioDisplayWaterfalls.remove(wfId);
+                qCDebug(lcProtocol) << "RadioModel: waterfall removed (inventory)" << wfId;
             }
             return;
         }
@@ -4604,9 +4617,10 @@ void RadioModel::onStatusReceived(const QString& object,
             // #3856 Layer B: record into the radio-authoritative waterfall
             // inventory (presence + owner + parent pan), before the ownership
             // early-returns below — a leaked waterfall must be tracked even when
-            // it carries no client_handle and we don't own it.
+            // it carries no client_handle and we don't own it. Normalize the key
+            // so it compares equal to owned/parent ids regardless of hex case.
             {
-                auto& e = m_radioDisplayWaterfalls[wfId];
+                auto& e = m_radioDisplayWaterfalls[normalizePanadapterId(wfId)];
                 if (kvs.contains(QStringLiteral("client_handle")))
                     e.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
                 const QString parent =

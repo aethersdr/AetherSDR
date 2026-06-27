@@ -658,14 +658,25 @@ void PanadapterStream::processDatagram(const QByteArray& data)
                 if (!m_orphanClock.isValid())
                     m_orphanClock.start();
                 auto it = m_orphanStreams.find(streamId);
-                if (it == m_orphanStreams.end()
-                    && m_orphanStreams.size() < kMaxOrphanStreams)
+                if (it == m_orphanStreams.end()) {
+                    // At capacity, evict the least-recently-seen entry rather
+                    // than dropping the new one: a live leak keeps updating its
+                    // lastSeenMs so it's never the stalest, while a long-quiet
+                    // (already-stopped) orphan is the right one to discard. This
+                    // keeps an actively-streaming leak from being lost behind 32
+                    // transient entries. (#3856 review)
+                    if (m_orphanStreams.size() >= kMaxOrphanStreams) {
+                        auto stalest = m_orphanStreams.begin();
+                        for (auto e = m_orphanStreams.begin(); e != m_orphanStreams.end(); ++e)
+                            if (e->lastSeenMs < stalest->lastSeenMs)
+                                stalest = e;
+                        m_orphanStreams.erase(stalest);
+                    }
                     it = m_orphanStreams.insert(streamId, OrphanRec{});
-                if (it != m_orphanStreams.end()) {
-                    it->waterfall  = wfOrphan;
-                    it->packets   += 1;
-                    it->lastSeenMs = m_orphanClock.elapsed();
                 }
+                it->waterfall  = wfOrphan;
+                it->packets   += 1;
+                it->lastSeenMs = m_orphanClock.elapsed();
             }
         }
     }
