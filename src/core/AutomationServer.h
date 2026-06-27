@@ -196,8 +196,9 @@ private:
     QJsonObject doShowMenu(const QString& target) const;
     // pan close <panId|index|active|all>: tear down a panadapter regardless of
     // how it was opened. Sends `display pan remove` AND `display panafall remove`
-    // (the FlexLib-correct pair) so a panafall-created pan closes too — the plain
-    // `display pan close` in removePanadapter leaves the waterfall behind. (#3646)
+    // (the FlexLib-correct pair) so a panafall-created pan closes too. The
+    // production GUI close path now does the same via RadioModel::removePanadapter
+    // (#3843). (#3646)
     QJsonObject doPan(const QString& action, const QString& arg);
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;

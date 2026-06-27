@@ -8,6 +8,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Closing a panafall-created panadapter now frees its waterfall stream on the
+  radio.** The close path sent only `display pan remove` and never the matching
+  `display panafall remove`, so the waterfall stream was left allocated on the
+  radio (the FlexLib-correct teardown is the pair Panadapter.Close +
+  Waterfall.Close). `RadioModel::removePanadapter` now sends both commands
+  (capturing the waterfall id before the removal echo deletes the model), and the
+  GUI X-button and layout-shrink close paths both route through it as the single
+  source of truth — replacing the dead, bogus `display pan close` it used to
+  issue. (#3843)
+
+### Changed
+
+- **Agent automation bridge:** the `pan close` verb now drives the production
+  `RadioModel::removePanadapter` instead of duplicating the teardown commands, so
+  it exercises the real GUI close path. (#3843)
+
 ## [v26.6.4] — 2026-06-23
 
 ### KiwiSDR public-receiver browser + SmartMTR meter view + agent automation bridge + GPU-composite flags + accessibility

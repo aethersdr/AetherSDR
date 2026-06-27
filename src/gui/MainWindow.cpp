@@ -7636,8 +7636,10 @@ void MainWindow::applyPanLayout(const QString& layoutId)
             QString panId = applet->panId();
             if (panId == "default") continue;
             qDebug() << "applyPanLayout: closing pan" << panId;
-            m_radioModel.sendCommand(
-                QString("display pan remove %1").arg(panId));
+            // Route through removePanadapter so a layout-shrink tears down the
+            // waterfall too ("display pan remove" + "display panafall remove"),
+            // not just the panadapter stream. (#3843)
+            m_radioModel.removePanadapter(panId);
             // Radio will send "removed" status → panadapterRemoved signal
             // → PanadapterStack::removePanadapter()
             --toRemove;

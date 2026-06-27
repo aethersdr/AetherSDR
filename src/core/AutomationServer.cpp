@@ -2714,12 +2714,12 @@ QJsonObject AutomationServer::doShowMenu(const QString& target) const
 // `pan create|add` opens an independent panadapter; `pan center <mhz>` recenters
 // the active pan (the band-change lever — a plain `tune` only moves the slice and
 // clamps to the pan's RF range, #292); `pan close|remove <panId|index|active|all>`
-// tears one down regardless of how it was opened. Close sends the FlexLib-correct
-// pair `display pan remove` AND `display panafall remove` (panId + waterfallId),
-// so a panafall-created pan closes without the slice-removal workaround — the
-// production `RadioModel::removePanadapter` sends only `display pan close` and
-// leaves the waterfall behind (see #3843). Create is async (radio assigns the
-// pan_id), so a caller re-reads `get pans`.
+// tears one down regardless of how it was opened. Close routes through the
+// production RadioModel::removePanadapter, which sends the FlexLib-correct pair
+// `display pan remove` AND `display panafall remove` (panId + waterfallId), so a
+// panafall-created pan closes — waterfall and all — without the slice-removal
+// workaround (#3843). Create is async (radio assigns the pan_id), so a caller
+// re-reads `get pans`.
 QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
 {
     if (!m_radioModel)
@@ -2782,10 +2782,11 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
         for (const QString& pid : panIds) {
             const PanadapterModel* p = radio->panadapter(pid);
             const QString wfId = p ? p->waterfallId() : QString();
-            // FlexLib-correct teardown: the panadapter stream AND its waterfall.
-            radio->sendCommand(QStringLiteral("display pan remove ") + pid);
-            if (!wfId.isEmpty())
-                radio->sendCommand(QStringLiteral("display panafall remove ") + wfId);
+            // Single source of truth: drive the production teardown so this verb
+            // exercises the exact GUI close path. removePanadapter sends the
+            // FlexLib-correct pair "display pan remove" + "display panafall
+            // remove" for a panafall, so the waterfall is freed too. (#3843)
+            radio->removePanadapter(pid);
             QJsonObject o{{QStringLiteral("panId"), pid},
                           {QStringLiteral("resolved"), p != nullptr}};
             if (!wfId.isEmpty())

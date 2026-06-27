@@ -1836,8 +1836,24 @@ void RadioModel::createPanadapter()
 
 void RadioModel::removePanadapter(const QString& panId)
 {
-    qCDebug(lcProtocol) << "RadioModel::removePanadapter:" << panId;
-    sendCmd(QString("display pan close %1").arg(panId));
+    // A panafall (display panafall create) allocates BOTH a panadapter stream
+    // and a waterfall stream, and the radio does NOT free the waterfall when
+    // only the panadapter is removed. So the FlexLib-correct teardown is the
+    // pair Panadapter.Close() + Waterfall.Close() — "display pan remove" AND
+    // "display panafall remove" (FlexLib v4.2.18). Sending only the first (or
+    // the bogus "display pan close", which is not a command at all) leaves the
+    // waterfall stream alive on the radio. (#3843)
+    //
+    // Capture the waterfall id BEFORE sending: the "display pan <id> removed"
+    // echo deletes the PanadapterModel in onStatusReceived, so reading it
+    // afterwards would race the teardown.
+    const PanadapterModel* pan = m_panadapters.value(panId, nullptr);
+    const QString wfId = pan ? pan->waterfallId() : QString();
+    qCDebug(lcProtocol) << "RadioModel::removePanadapter:" << panId
+                        << "waterfall:" << (wfId.isEmpty() ? QStringLiteral("(none)") : wfId);
+    sendCommand(QStringLiteral("display pan remove ") + panId);
+    if (!wfId.isEmpty())
+        sendCommand(QStringLiteral("display panafall remove ") + wfId);
     // Radio will send "display pan <id> removed" → handled in onStatusReceived
 }
 

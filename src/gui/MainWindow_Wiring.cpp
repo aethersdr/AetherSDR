@@ -1772,7 +1772,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, [this](const QString& panId) {
         // Don't close the last pan
         if (m_panStack->count() <= 1) return;
-        m_radioModel.sendCommand(QString("display pan remove %1").arg(panId));
+        // Single source of truth for teardown: removePanadapter sends the
+        // FlexLib-correct "display pan remove" + "display panafall remove"
+        // pair, so a panafall-created pan also frees its waterfall. (#3843)
+        m_radioModel.removePanadapter(panId);
     });
 
     // ── User drag actions from spectrum → radio (per-pan) ──────────────────
