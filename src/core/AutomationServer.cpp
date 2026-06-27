@@ -3,6 +3,7 @@
 #include "AppSettings.h"          // StationName (restore the user's real station name)
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
+#include "gui/ConnectionPanel.h" // ConnectionPanel automation facade
 
 #include <QAction>
 #include <QLocalServer>
@@ -34,6 +35,7 @@
 #include <QDateTime>
 #include <QTime>
 
+#include <algorithm>
 #include <limits>
 
 // Best-effort value extraction for common control types.
@@ -547,6 +549,78 @@ QJsonObject err(const QString& msg)
 {
     return QJsonObject{{QStringLiteral("ok"), false},
                        {QStringLiteral("error"), msg}};
+}
+
+QJsonObject deferredResponse()
+{
+    return QJsonObject{{QStringLiteral("_deferred"), true}};
+}
+
+bool isDeferredResponse(const QJsonObject& response)
+{
+    return response.value(QStringLiteral("_deferred")).toBool(false);
+}
+
+bool writeJsonResponse(QLocalSocket* socket, const QJsonObject& response)
+{
+    if (!socket || socket->state() == QLocalSocket::UnconnectedState) {
+        return false;
+    }
+
+    QByteArray payload = QJsonDocument(response).toJson(QJsonDocument::Compact);
+    payload.append('\n');
+    if (socket->write(payload) < 0) {
+        qCWarning(lcAutomation) << "failed to write automation response:"
+                                << socket->errorString();
+        return false;
+    }
+    socket->flush();
+    return true;
+}
+
+QJsonObject connectionRadioToJson(const RadioInfo& radio)
+{
+    QJsonObject o{
+        {QStringLiteral("name"), radio.name},
+        {QStringLiteral("model"), radio.model},
+        {QStringLiteral("serial"), radio.serial},
+        {QStringLiteral("version"), radio.version},
+        {QStringLiteral("nickname"), radio.nickname},
+        {QStringLiteral("callsign"), radio.callsign},
+        {QStringLiteral("address"), radio.address.toString()},
+        {QStringLiteral("port"), radio.port},
+        {QStringLiteral("status"), radio.status},
+        {QStringLiteral("inUse"), radio.inUse},
+        {QStringLiteral("multiFlexEnabled"), radio.multiFlexEnabled},
+        {QStringLiteral("routed"), radio.isRouted},
+    };
+
+    QJsonArray stations;
+    for (const QString& station : radio.guiClientStations) {
+        stations.append(station);
+    }
+    if (!stations.isEmpty()) {
+        o[QStringLiteral("stations")] = stations;
+    }
+
+    QJsonArray handles;
+    for (const QString& handle : radio.guiClientHandles) {
+        handles.append(handle);
+    }
+    if (!handles.isEmpty()) {
+        o[QStringLiteral("clientHandles")] = handles;
+    }
+
+    return o;
+}
+
+QJsonArray connectionRadioListToJson(const QList<RadioInfo>& radios)
+{
+    QJsonArray array;
+    for (const RadioInfo& radio : radios) {
+        array.append(connectionRadioToJson(radio));
+    }
+    return array;
 }
 
 // Parse a textual boolean from an invoke value: 1/true/on/yes/checked → true.
@@ -1153,9 +1227,9 @@ bool AutomationServer::start(const QString& serverName)
 
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
-        << "(verbs: ping, dumpTree, floors, grab, grab pan, invoke, get, txtest, atu,"
-        << "slice, tune, pan, txwaterfall, key, cwx, station, resize, menu, close, drag,"
-        << "showMenu, whoami, log, mark)";
+        << "(verbs: ping, dumpTree, floors, grab, grab pan, invoke, get, connect, disconnect,"
+        << "txtest, atu, slice, tune, pan, txwaterfall, key, cwx, station, resize, menu,"
+        << "close, drag, showMenu, whoami, log, mark)";
     return true;
 }
 
@@ -1187,6 +1261,19 @@ void AutomationServer::stop()
         m_logDrain = nullptr;
     }
     m_logSubscribers.clear();
+    for (const std::shared_ptr<ConnectWait>& wait : m_connectWaits) {
+        if (!wait) {
+            continue;
+        }
+        if (wait->timer) {
+            wait->timer->stop();
+            wait->timer->deleteLater();
+            wait->timer = nullptr;
+        }
+        QObject::disconnect(wait->connection);
+        wait->complete = true;
+    }
+    m_connectWaits.clear();
 
     for (auto it = m_buffers.constBegin(); it != m_buffers.constEnd(); ++it)
         it.key()->deleteLater();
@@ -1286,14 +1373,13 @@ void AutomationServer::onReadyRead()
             return;
         }
 
-        QByteArray payload = QJsonDocument(resp).toJson(QJsonDocument::Compact);
-        payload.append('\n');
-        if (socket->write(payload) < 0) {
-            qCWarning(lcAutomation) << "failed to write automation response:"
-                                    << socket->errorString();
+        if (isDeferredResponse(resp)) {
+            continue;
+        }
+
+        if (!writeJsonResponse(socket, resp)) {
             return;
         }
-        socket->flush();
     }
 }
 
@@ -1305,6 +1391,21 @@ void AutomationServer::onDisconnected()
     m_buffers.remove(sock);
     if (m_logSubscribers.remove(sock) && m_logSubscribers.isEmpty() && m_logDrain)
         m_logDrain->stop();
+    const auto newEnd = std::remove_if(
+        m_connectWaits.begin(), m_connectWaits.end(),
+        [sock](const std::shared_ptr<ConnectWait>& wait) {
+            if (!wait || wait->socket != sock) {
+                return false;
+            }
+            if (wait->timer) {
+                wait->timer->stop();
+                wait->timer->deleteLater();
+            }
+            QObject::disconnect(wait->connection);
+            wait->complete = true;
+            return true;
+        });
+    m_connectWaits.erase(newEnd, m_connectWaits.end());
     sock->deleteLater();
     qCDebug(lcAutomation) << "client disconnected;" << m_buffers.size() << "active";
 }
@@ -1352,6 +1453,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             value = rest.join(QLatin1Char(' '));
         } else if (cmd == QLatin1String("get")) {
             model = tok(1); selector = tok(2); property = tok(3);
+        } else if (cmd == QLatin1String("connect")) {
+            action = tok(1);  // list | local | ip | wait
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // "serial 1234", "10.0.0.25", "30000"
         } else if (cmd == QLatin1String("txtest") || cmd == QLatin1String("atu")) {
             action = tok(1);  // e.g. "txtest twotone", "atu bypass"
         } else if (cmd == QLatin1String("slice")) {
@@ -1452,6 +1558,15 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         if (model.isEmpty())
             return err(QStringLiteral("get requires a model (radio|transmit|meters|slice|slices|pan|pans)"));
         return doGet(model, selector, property);
+    }
+    if (cmd == QLatin1String("connect")) {
+        if (action.isEmpty()) {
+            return err(QStringLiteral("connect requires an action (list|show|hide|local|ip|wait)"));
+        }
+        return doConnect(action, value, sock);
+    }
+    if (cmd == QLatin1String("disconnect")) {
+        return doDisconnect();
     }
     if (cmd == QLatin1String("txtest")) {
         if (action.isEmpty())
@@ -2030,6 +2145,320 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         {QStringLiteral("model"), model},
         {model, data},   // keyed by model name: "radio" / "slice" / "pan"
     };
+}
+
+QJsonObject AutomationServer::doConnect(const QString& action,
+                                        const QString& arg,
+                                        QLocalSocket* sock)
+{
+    const QString a = action.trimmed().toLower();
+
+    if (a == QLatin1String("wait")) {
+        bool ok = false;
+        const int requestedTimeoutMs = arg.trimmed().isEmpty()
+            ? 30000
+            : arg.trimmed().toInt(&ok);
+        if (!ok && !arg.trimmed().isEmpty()) {
+            return err(QStringLiteral("connect wait requires a timeout in milliseconds"));
+        }
+        return doConnectWait(requestedTimeoutMs, sock);
+    }
+    if (a == QLatin1String("show") || a == QLatin1String("hide")) {
+        return doConnectDialog(a);
+    }
+    if (a == QLatin1String("dialog")) {
+        const QString dialogAction = arg.trimmed().toLower();
+        if (dialogAction == QLatin1String("show") || dialogAction == QLatin1String("hide")) {
+            return doConnectDialog(dialogAction);
+        }
+        return err(QStringLiteral("connect dialog requires show|hide"));
+    }
+
+    ConnectionPanel* panel = m_connectionPanel;
+    if (!panel) {
+        return err(QStringLiteral("connection panel unavailable"));
+    }
+
+    if (a == QLatin1String("list")) {
+        const QList<RadioInfo> radios = panel->automationLocalRadios();
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("count"), radios.size()},
+            {QStringLiteral("radios"), connectionRadioListToJson(radios)},
+        };
+    }
+
+    if (m_radioModel && m_radioModel->isConnected()) {
+        return err(QStringLiteral("already connected to a radio"));
+    }
+
+    if (a == QLatin1String("local")) {
+        const QList<RadioInfo> radios = panel->automationLocalRadios();
+        if (radios.isEmpty()) {
+            return err(QStringLiteral("no local radios have been discovered"));
+        }
+
+        const QString selector = arg.trimmed();
+        const QString selectorLower = selector.toLower();
+        if (selector.isEmpty() || selectorLower == QLatin1String("first")) {
+            const RadioInfo selected = radios.first();
+            const QString selectedSerial = selected.serial.trimmed();
+            if (selectedSerial.isEmpty()) {
+                return err(QStringLiteral("first discovered local radio has no serial"));
+            }
+
+            QPointer<ConnectionPanel> guardedPanel = panel;
+            QTimer::singleShot(0, qApp, [guardedPanel, selectedSerial] {
+                if (!guardedPanel) {
+                    return;
+                }
+                QString error;
+                if (!guardedPanel->automationConnectLocalSerial(selectedSerial, &error)) {
+                    qCWarning(lcAutomation).noquote()
+                        << "connect local first failed after scheduling:" << error;
+                }
+            });
+            return QJsonObject{
+                {QStringLiteral("ok"), true},
+                {QStringLiteral("connect"), QStringLiteral("local")},
+                {QStringLiteral("selector"), QStringLiteral("first")},
+                {QStringLiteral("serial"), selectedSerial},
+                {QStringLiteral("requested"), true},
+                {QStringLiteral("deferred"), true},
+                {QStringLiteral("radio"), connectionRadioToJson(selected)},
+            };
+        }
+
+        static const QString kSerialPrefix = QStringLiteral("serial ");
+        if (selectorLower.startsWith(kSerialPrefix)) {
+            const QString serial = selector.mid(kSerialPrefix.size()).trimmed();
+            for (const RadioInfo& radio : radios) {
+                if (radio.serial.compare(serial, Qt::CaseInsensitive) != 0) {
+                    continue;
+                }
+
+                QPointer<ConnectionPanel> guardedPanel = panel;
+                QTimer::singleShot(0, qApp, [guardedPanel, serial] {
+                    if (!guardedPanel) {
+                        return;
+                    }
+                    QString error;
+                    if (!guardedPanel->automationConnectLocalSerial(serial, &error)) {
+                        qCWarning(lcAutomation).noquote()
+                            << "connect local serial failed after scheduling:" << error;
+                    }
+                });
+                return QJsonObject{
+                    {QStringLiteral("ok"), true},
+                    {QStringLiteral("connect"), QStringLiteral("local")},
+                    {QStringLiteral("selector"), QStringLiteral("serial")},
+                    {QStringLiteral("serial"), serial},
+                    {QStringLiteral("requested"), true},
+                    {QStringLiteral("deferred"), true},
+                    {QStringLiteral("radio"), connectionRadioToJson(radio)},
+                };
+            }
+
+            return err(QStringLiteral("no discovered local radio has serial '%1'").arg(serial));
+        }
+
+        return err(QStringLiteral("connect local requires first or serial <serial>"));
+    }
+
+    if (a == QLatin1String("ip")) {
+        const QString target = arg.trimmed();
+        if (target.isEmpty()) {
+            return err(QStringLiteral("connect ip requires a host or IP address"));
+        }
+
+        QPointer<ConnectionPanel> guardedPanel = panel;
+        QTimer::singleShot(0, qApp, [guardedPanel, target] {
+            if (!guardedPanel) {
+                return;
+            }
+            QString error;
+            if (!guardedPanel->automationConnectByIp(target, &error)) {
+                qCWarning(lcAutomation).noquote()
+                    << "connect ip failed after scheduling:" << error;
+            }
+        });
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("connect"), QStringLiteral("ip")},
+            {QStringLiteral("target"), target},
+            {QStringLiteral("requested"), true},
+            {QStringLiteral("deferred"), true},
+        };
+    }
+
+    return err(QStringLiteral("unknown connect action: ") + action
+               + QStringLiteral(" (use list|show|hide|local|ip|wait)"));
+}
+
+QJsonObject AutomationServer::doConnectDialog(const QString& action)
+{
+    const bool show = action == QLatin1String("show");
+    const bool hide = action == QLatin1String("hide");
+    if (!show && !hide) {
+        return err(QStringLiteral("connect dialog requires show|hide"));
+    }
+
+    QObject* host = m_connectionDialogHost;
+    ConnectionPanel* panel = m_connectionPanel;
+    if (!host && !panel) {
+        return err(QStringLiteral("connection dialog unavailable"));
+    }
+
+    const bool wasVisible = panel && panel->isVisible();
+    QPointer<QObject> guardedHost = host;
+    QPointer<ConnectionPanel> guardedPanel = panel;
+    QTimer::singleShot(0, qApp, [guardedHost, guardedPanel, show] {
+        if (guardedHost) {
+            const char* method = show ? "showConnectionDialog" : "hideConnectionDialog";
+            if (QMetaObject::invokeMethod(guardedHost, method, Qt::DirectConnection)) {
+                return;
+            }
+            qCWarning(lcAutomation).noquote()
+                << "connection dialog host missing invokable" << method
+                << "- falling back to direct panel visibility";
+        }
+
+        if (!guardedPanel) {
+            return;
+        }
+        if (show) {
+            guardedPanel->show();
+            guardedPanel->raise();
+            guardedPanel->activateWindow();
+        } else {
+            guardedPanel->hide();
+        }
+    });
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("connect"), action},
+        {QStringLiteral("requested"), true},
+        {QStringLiteral("deferred"), true},
+        {QStringLiteral("wasVisible"), wasVisible},
+    };
+}
+
+QJsonObject AutomationServer::doDisconnect()
+{
+    ConnectionPanel* panel = m_connectionPanel;
+    if (!panel) {
+        return err(QStringLiteral("connection panel unavailable"));
+    }
+    if (!m_radioModel || !m_radioModel->isConnected()) {
+        return err(QStringLiteral("not connected to a radio"));
+    }
+
+    QPointer<ConnectionPanel> guardedPanel = panel;
+    QTimer::singleShot(0, qApp, [guardedPanel] {
+        if (!guardedPanel) {
+            return;
+        }
+        QString error;
+        if (!guardedPanel->automationDisconnect(&error)) {
+            qCWarning(lcAutomation).noquote()
+                << "disconnect failed after scheduling:" << error;
+        }
+    });
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("disconnect"), true},
+        {QStringLiteral("requested"), true},
+        {QStringLiteral("deferred"), true},
+    };
+}
+
+QJsonObject AutomationServer::doConnectWait(int timeoutMs, QLocalSocket* sock)
+{
+    if (!m_radioModel) {
+        return err(QStringLiteral("no radio model available"));
+    }
+    if (m_radioModel->isConnected()) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("connected"), true},
+            {QStringLiteral("elapsedMs"), 0},
+            {QStringLiteral("radio"), radioSnapshot(m_radioModel)},
+        };
+    }
+    if (!sock) {
+        return err(QStringLiteral("connect wait requires a live automation client"));
+    }
+
+    const int boundedTimeoutMs = std::clamp(timeoutMs, 1, 300000);
+    auto wait = std::make_shared<ConnectWait>();
+    wait->socket = sock;
+    wait->timeoutMs = boundedTimeoutMs;
+    wait->elapsed.start();
+    wait->timer = new QTimer(this);
+    wait->timer->setSingleShot(true);
+
+    wait->connection = connect(m_radioModel, &RadioModel::connectionStateChanged,
+                               this, [this, wait](bool connected) {
+        if (connected) {
+            finishConnectWait(wait, false);
+        }
+    });
+    connect(wait->timer, &QTimer::timeout, this, [this, wait] {
+        finishConnectWait(wait, true);
+    });
+
+    m_connectWaits.push_back(wait);
+    wait->timer->start(boundedTimeoutMs);
+    return deferredResponse();
+}
+
+void AutomationServer::finishConnectWait(const std::shared_ptr<ConnectWait>& wait,
+                                         bool timedOut)
+{
+    if (!wait || wait->complete) {
+        return;
+    }
+
+    wait->complete = true;
+    if (wait->timer) {
+        wait->timer->stop();
+        wait->timer->deleteLater();
+        wait->timer = nullptr;
+    }
+    QObject::disconnect(wait->connection);
+
+    const auto newEnd = std::remove(m_connectWaits.begin(), m_connectWaits.end(), wait);
+    m_connectWaits.erase(newEnd, m_connectWaits.end());
+
+    QLocalSocket* socket = wait->socket;
+    if (!socket || m_buffers.find(socket) == m_buffers.end()
+        || socket->state() == QLocalSocket::UnconnectedState) {
+        qCDebug(lcAutomation)
+            << "dropping connect wait response because client disconnected";
+        return;
+    }
+
+    const bool connected = m_radioModel && m_radioModel->isConnected();
+    QJsonObject response{
+        {QStringLiteral("ok"), connected},
+        {QStringLiteral("connected"), connected},
+        {QStringLiteral("elapsedMs"), static_cast<int>(wait->elapsed.elapsed())},
+        {QStringLiteral("timeoutMs"), wait->timeoutMs},
+    };
+    if (connected) {
+        response[QStringLiteral("radio")] = radioSnapshot(m_radioModel);
+    } else if (timedOut) {
+        response[QStringLiteral("timeout")] = true;
+        response[QStringLiteral("error")] =
+            QStringLiteral("timed out waiting for radio connection");
+    } else {
+        response[QStringLiteral("error")] =
+            QStringLiteral("radio connection did not complete");
+    }
+
+    writeJsonResponse(socket, response);
 }
 
 // ── TX test-signal control (#3646) ──────────────────────────────────────────

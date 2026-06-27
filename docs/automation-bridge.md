@@ -350,10 +350,66 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
 action is RX/config only; none keys the transmitter.
 
+### `connect` / `disconnect`
+Connect through the same dialog and model path as the visible **Connect to
+Radio** workflow. Requests are scheduled onto the next Qt event-loop turn so
+the bridge does not run modal connection-conflict UI inside the local-socket
+read callback.
+
+```json
+→ {"cmd":"connect","action":"list"}
+← {"ok":true,"count":1,"radios":[{"serial":"1234-5678","model":"FLEX-8600",
+   "address":"192.168.1.50","port":4992,"status":"Available"}]}
+
+→ {"cmd":"connect","action":"show"}
+← {"ok":true,"connect":"show","requested":true,"deferred":true,"wasVisible":false}
+
+→ {"cmd":"connect","action":"local","value":"serial 1234-5678"}
+← {"ok":true,"connect":"local","selector":"serial","serial":"1234-5678",
+   "requested":true,"deferred":true}
+
+→ {"cmd":"connect","action":"ip","value":"10.0.0.25"}
+← {"ok":true,"connect":"ip","target":"10.0.0.25","requested":true,"deferred":true}
+
+→ {"cmd":"connect","action":"wait","value":30000}
+← {"ok":true,"connected":true,"elapsedMs":4210,"radio":{"connected":true,...}}
+
+→ {"cmd":"disconnect"}
+← {"ok":true,"disconnect":true,"requested":true,"deferred":true}
+```
+
+Bare-line forms are also accepted:
+
+```text
+connect list
+connect show
+connect hide
+connect local first
+connect local serial 1234-5678
+connect ip 10.0.0.25
+connect wait 30000
+disconnect
+```
+
+`connect show` and `connect hide` idempotently show/raise or hide the
+modeless **Connect to Radio** dialog for visual debugging; they do not toggle,
+so `connect show` is safe when the dialog is already open. `connect local first`
+captures the first currently discovered local radio's serial before scheduling
+the request, so the response and deferred connect target stay consistent.
+`connect local serial <serial>` selects by discovery serial. `connect ip
+<host-or-ip>` uses the manual **Connect by IP** probe path; if the probe finds a
+radio, the panel emits its normal `connectRequested` signal and `MainWindow`
+performs the standard Multi-Flex/client-slot checks before `RadioModel`
+connects. `connect wait <timeout_ms>` holds that request's response until
+`RadioModel::connectionStateChanged(true)` or timeout, which is the preferred
+unattended "request then assert" flow.
+
 ### Errors
 Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.
 `widget not found: Foo`, `blocked: '…' looks transmit-related …`,
-`no slice for selector 'tx'`, `unknown action: x`, `unknown command: x`.
+`no slice for selector 'tx'`, `no local radios have been discovered`,
+`timed out waiting for radio connection`, `unknown action: x`,
+`unknown command: x`.
 
 ---
 

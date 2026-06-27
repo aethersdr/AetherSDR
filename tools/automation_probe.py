@@ -19,6 +19,10 @@ Usage:
     AETHER_AUTOMATION=1 ./AetherSDR &        # launch the app with the bridge on
     python tools/automation_probe.py         # snapshot + panadapter grab
     python tools/automation_probe.py ping
+    python tools/automation_probe.py connect list
+    python tools/automation_probe.py connect show
+    python tools/automation_probe.py connect local first
+    python tools/automation_probe.py connect wait 30000
     python tools/automation_probe.py grab SpectrumWidget /tmp/pan.png
 """
 
@@ -87,18 +91,24 @@ def main():
         description="Drive the AetherSDR automation bridge",
         epilog="examples:\n"
                "  automation_probe.py demo\n"
+               "  automation_probe.py connect list\n"
+               "  automation_probe.py connect show\n"
+               "  automation_probe.py connect local first\n"
+               "  automation_probe.py connect wait 30000\n"
                "  automation_probe.py get radio\n"
                "  automation_probe.py get slice active frequency\n"
                "  automation_probe.py invoke 'Master volume' setValue 35\n"
                "  automation_probe.py grab SpectrumWidget /tmp/pan.png",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="demo",
-                    choices=["demo", "ping", "dumpTree", "grab", "invoke", "get"],
+                    choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
+                             "connect", "disconnect"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | "
                          "invoke <target> <action> [value] | "
-                         "get <model> [selector] [property]")
+                         "get <model> [selector] [property] | "
+                         "connect <list|show|hide|local|ip|wait> [args]")
     ap.add_argument("--socket", help="override the bridge socket path")
     ap.add_argument("--out", default=".", help="output dir for demo artifacts")
     args = ap.parse_args()
@@ -146,6 +156,17 @@ def main():
             if len(args.rest) > 2:
                 req["property"] = args.rest[2]
             print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "connect":
+            if not args.rest:
+                sys.exit("error: connect needs <list|local|ip|wait> [args]")
+            req = {"cmd": "connect", "action": args.rest[0]}
+            if len(args.rest) > 1:
+                req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "disconnect":
+            print(json.dumps(bridge.request({"cmd": "disconnect"}), indent=2))
 
         else:  # demo: produce the Phase-0 deliverables
             os.makedirs(args.out, exist_ok=True)

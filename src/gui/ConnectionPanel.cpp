@@ -57,6 +57,13 @@ QString normalizeManualIp(const QString& ip)
     return address.toString();
 }
 
+void setAutomationError(QString* error, const QString& text)
+{
+    if (error) {
+        *error = text;
+    }
+}
+
 QStringList sanitizeRecentManualIps(const QStringList& ips)
 {
     QStringList sanitized;
@@ -183,6 +190,9 @@ QString normalizedStatus(QString status)
 ConnectionPanel::ConnectionPanel(QWidget* parent)
     : QWidget(parent)
 {
+    setObjectName(QStringLiteral("connectionPanel"));
+    setAccessibleName(tr("Connect to Radio"));
+
     theme::setContainer(this, QStringLiteral("panel/connection"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "ConnectionPanel { background: {{color.background.0}}; }"
         "QGroupBox { border: 1px solid {{color.background.2}}; border-radius: 7px; margin-top: 10px; "
@@ -316,6 +326,10 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     auto* localGroup = new QGroupBox("Available radios", localListPage);
     auto* localGroupLayout = new QVBoxLayout(localGroup);
     m_radioList = new QListWidget(localGroup);
+    m_radioList->setObjectName(QStringLiteral("connectionLocalRadioList"));
+    m_radioList->setAccessibleName(tr("Available local radios"));
+    m_radioList->setAccessibleDescription(
+        tr("Discovered FlexRadio radios on the local network"));
     m_radioList->setSelectionMode(QAbstractItemView::SingleSelection);
     m_radioList->setWordWrap(true);
     m_radioList->setSpacing(2);
@@ -326,6 +340,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     auto* localActionRow = new QHBoxLayout;
     localActionRow->addStretch();
     m_localConnectBtn = new QPushButton("Connect Selected Radio", localListPage);
+    m_localConnectBtn->setObjectName(QStringLiteral("connectionLocalConnectButton"));
+    m_localConnectBtn->setAccessibleName(tr("Connect selected local radio"));
     m_localConnectBtn->setEnabled(false);
     localActionRow->addWidget(m_localConnectBtn);
     localListLayout->addLayout(localActionRow);
@@ -439,6 +455,10 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     auto* remoteLayout = new QVBoxLayout(remoteGroup);
     remoteLayout->setSpacing(10);
     m_wanList = new QListWidget(remoteGroup);
+    m_wanList->setObjectName(QStringLiteral("connectionSmartLinkRadioList"));
+    m_wanList->setAccessibleName(tr("Available SmartLink radios"));
+    m_wanList->setAccessibleDescription(
+        tr("Remote FlexRadio radios available through SmartLink"));
     m_wanList->setSelectionMode(QAbstractItemView::SingleSelection);
     m_wanList->setWordWrap(true);
     m_wanList->setSpacing(2);
@@ -458,6 +478,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     wanActionRow->setSpacing(10);
     wanActionRow->addStretch();
     m_wanConnectBtn = new QPushButton("Connect Remote Radio", wanActionBar);
+    m_wanConnectBtn->setObjectName(QStringLiteral("connectionSmartLinkConnectButton"));
+    m_wanConnectBtn->setAccessibleName(tr("Connect selected SmartLink radio"));
     m_wanConnectBtn->setEnabled(false);
     m_wanConnectBtn->setMinimumWidth(190);
     wanActionRow->addWidget(m_wanConnectBtn);
@@ -483,11 +505,19 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualForm->setHorizontalSpacing(8);
     manualForm->setVerticalSpacing(6);
     m_manualIpCombo = new QComboBox(manualGroup);
+    m_manualIpCombo->setObjectName(QStringLiteral("connectionManualIpCombo"));
+    m_manualIpCombo->setAccessibleName(tr("Radio IP address"));
+    m_manualIpCombo->setAccessibleDescription(
+        tr("IP address or host name for a routed or VPN radio connection"));
     m_manualIpCombo->setEditable(true);
     m_manualIpCombo->setInsertPolicy(QComboBox::NoInsert);
     m_manualIpCombo->setMaxVisibleItems(kMaxRecentManualIps);
     m_manualIpCombo->setStyleSheet(comboStyle);
     m_manualIpEdit = m_manualIpCombo->lineEdit();
+    m_manualIpEdit->setObjectName(QStringLiteral("connectionManualIp"));
+    m_manualIpEdit->setAccessibleName(tr("Radio IP address"));
+    m_manualIpEdit->setAccessibleDescription(
+        tr("IP address or host name for a routed or VPN radio connection"));
     m_manualIpEdit->setClearButtonEnabled(true);
     m_manualIpEdit->setPlaceholderText("Example: 10.0.0.25");
     manualForm->addRow("Radio IP:", m_manualIpCombo);
@@ -498,6 +528,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     manualActionRow->addWidget(manualDiagnosticsBtn);
     manualActionRow->addStretch();
     m_manualConnectBtn = new QPushButton("Connect by IP", manualGroup);
+    m_manualConnectBtn->setObjectName(QStringLiteral("connectionManualConnectButton"));
+    m_manualConnectBtn->setAccessibleName(tr("Connect by IP"));
     manualActionRow->addWidget(m_manualConnectBtn);
     manualGroupLayout->addLayout(manualActionRow);
 
@@ -525,6 +557,10 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     sourceRow->setContentsMargins(0, 0, 0, 0);
     sourceRow->addWidget(new QLabel("Source path:", m_manualAdvancedWidget));
     m_manualSourceCombo = new QComboBox(m_manualAdvancedWidget);
+    m_manualSourceCombo->setObjectName(QStringLiteral("connectionManualSourcePath"));
+    m_manualSourceCombo->setAccessibleName(tr("Manual connection source path"));
+    m_manualSourceCombo->setAccessibleDescription(
+        tr("Network interface or source address to use for the routed radio connection"));
     sourceRow->addWidget(m_manualSourceCombo, 1);
     manualAdvancedLayout->addLayout(sourceRow);
     m_manualSourceWarningLabel = makeWrappedLabel(QString(), kErrorLabelStyle);
@@ -594,6 +630,8 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     m_statusLabel = makeWrappedLabel("Choose how you want to connect.", kHintLabelStyle);
     footerRow->addWidget(m_statusLabel, 1);
     m_disconnectBtn = new QPushButton("Disconnect", this);
+    m_disconnectBtn->setObjectName(QStringLiteral("connectionDisconnectButton"));
+    m_disconnectBtn->setAccessibleName(tr("Disconnect from radio"));
     m_disconnectBtn->setVisible(false);
     footerRow->addWidget(m_disconnectBtn, 0, Qt::AlignRight);
     root->addLayout(footerRow);
@@ -718,6 +756,68 @@ void ConnectionPanel::setConnected(bool connected)
 void ConnectionPanel::setStatusText(const QString& text)
 {
     m_statusLabel->setText(text);
+}
+
+QList<RadioInfo> ConnectionPanel::automationLocalRadios() const
+{
+    return m_radios;
+}
+
+bool ConnectionPanel::automationConnectLocalSerial(const QString& serial, QString* error)
+{
+    const QString wanted = serial.trimmed();
+    if (wanted.isEmpty()) {
+        setAutomationError(error, QStringLiteral("local serial selector is empty"));
+        return false;
+    }
+    if (m_connected) {
+        setAutomationError(error, QStringLiteral("already connected to a radio"));
+        return false;
+    }
+
+    for (int i = 0; i < m_radios.size(); ++i) {
+        if (m_radios[i].serial.compare(wanted, Qt::CaseInsensitive) == 0) {
+            setCurrentMode(LocalMode);
+            m_radioList->setCurrentRow(i);
+            onLocalConnectClicked();
+            return true;
+        }
+    }
+
+    setAutomationError(
+        error,
+        QStringLiteral("no discovered local radio has serial '%1'").arg(wanted));
+    return false;
+}
+
+bool ConnectionPanel::automationConnectByIp(const QString& hostOrIp, QString* error)
+{
+    const QString target = hostOrIp.trimmed();
+    if (target.isEmpty()) {
+        setAutomationError(error, QStringLiteral("connect ip requires an address"));
+        return false;
+    }
+    if (m_connected) {
+        setAutomationError(error, QStringLiteral("already connected to a radio"));
+        return false;
+    }
+
+    setCurrentMode(ManualMode);
+    m_manualIpCombo->setCurrentText(target);
+    m_manualIpEdit->setText(target);
+    onManualConnectClicked();
+    return true;
+}
+
+bool ConnectionPanel::automationDisconnect(QString* error)
+{
+    if (!m_connected) {
+        setAutomationError(error, QStringLiteral("not connected to a radio"));
+        return false;
+    }
+
+    emit disconnectRequested();
+    return true;
 }
 
 void ConnectionPanel::saveLowBandwidthPreference(bool enabled)
@@ -1385,11 +1485,16 @@ void ConnectionPanel::probeRadio(const QString& ip)
 
         // Build RadioInfo from collected status and emit the connect signal.
         auto finishProbe = [this, sock, trimmedIp, bindSettings, version, statusLines, localSrc] {
+            QHostAddress targetAddress(trimmedIp);
+            if (targetAddress.isNull()) {
+                targetAddress = sock->peerAddress();
+            }
+
             sock->disconnectFromHost();
             sock->deleteLater();
 
             RadioInfo info;
-            info.address  = QHostAddress(trimmedIp);
+            info.address  = targetAddress;
             info.port     = 4992;
             info.version  = *version;
             info.status   = QStringLiteral("Available");

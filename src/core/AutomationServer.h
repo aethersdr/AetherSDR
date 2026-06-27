@@ -9,6 +9,8 @@
 #include <QString>
 
 #include <deque>
+#include <memory>
+#include <vector>
 
 class QLocalServer;
 class QLocalSocket;
@@ -19,6 +21,7 @@ class QTimer;
 namespace AetherSDR {
 
 class RadioModel;
+class ConnectionPanel;
 
 // In-app, agent-first automation bridge (issue #3646, Phases 0-1).
 //
@@ -59,6 +62,18 @@ class RadioModel;
 //                                     slices | pan <panId|active> | pans. With a
 //                                     trailing property name, returns just that
 //                                     field. Assert on state without screenshots.
+//   connect list                   -> list currently discovered local radios
+//   connect show                   -> show/raise the Connect to Radio dialog
+//   connect hide                   -> hide the Connect to Radio dialog
+//   connect local first            -> request a real local-radio connection via
+//                                     ConnectionPanel/MainWindow/RadioModel
+//   connect local serial <serial>  -> same, selecting by discovered serial
+//   connect ip <host-or-ip>        -> route through the manual Connect by IP
+//                                     probe path, then connect if the probe finds
+//                                     a radio
+//   connect wait <timeout_ms>      -> hold the response until RadioModel reports
+//                                     connected or the timeout expires
+//   disconnect                     -> request the normal user disconnect path
 //
 // Phase 2 verbs (fidelity — reach code paths invoke/get can't, #3646):
 //
@@ -148,6 +163,11 @@ public:
     // MainWindow's active-session RadioModel; may be null (get() then reports
     // "no radio model" rather than crashing).
     void setRadioModel(RadioModel* model) { m_radioModel = model; }
+    // Real connection dialog hook for the connect/disconnect verbs. The bridge
+    // asks ConnectionPanel to emit the same signals the visible buttons do, so
+    // automation exercises the normal MainWindow/RadioModel connection path.
+    void setConnectionPanel(ConnectionPanel* panel) { m_connectionPanel = panel; }
+    void setConnectionDialogHost(QObject* host) { m_connectionDialogHost = host; }
 
 private slots:
     void onNewConnection();
@@ -201,6 +221,12 @@ private:
     QJsonObject doPan(const QString& action, const QString& arg);
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;
+    QJsonObject doConnect(const QString& action, const QString& arg, QLocalSocket* sock);
+    QJsonObject doConnectDialog(const QString& action);
+    QJsonObject doDisconnect();
+    QJsonObject doConnectWait(int timeoutMs, QLocalSocket* sock);
+    struct ConnectWait;
+    void finishConnectWait(const std::shared_ptr<ConnectWait>& wait, bool timedOut);
     // TX test-signal control (two-tone) and ATU control. Both gated by
     // AETHER_AUTOMATION_ALLOW_TX where they key the transmitter.
     QJsonObject doTxTest(const QString& action);
@@ -255,6 +281,8 @@ private:
     QString       m_label;            // AETHER_AUTOMATION_LABEL (human instance tag)
     QHash<QLocalSocket*, QByteArray> m_buffers;  // per-client read buffer
     QPointer<RadioModel> m_radioModel;           // for get(); may be null
+    QPointer<ConnectionPanel> m_connectionPanel;  // for connect/disconnect verbs
+    QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
 
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
     // name to the agent's name on connect and restores the user's real name on
@@ -287,6 +315,16 @@ private:
     QHash<QLocalSocket*, quint64> m_logSubscribers;  // sock -> last seq sent
     QTimer*        m_logDrain{nullptr};
     static constexpr int kLogRingMax = 8000;
+
+    struct ConnectWait {
+        QPointer<QLocalSocket> socket;
+        QTimer* timer{nullptr};
+        QMetaObject::Connection connection;
+        QElapsedTimer elapsed;
+        int timeoutMs{0};
+        bool complete{false};
+    };
+    std::vector<std::shared_ptr<ConnectWait>> m_connectWaits;
 };
 
 } // namespace AetherSDR

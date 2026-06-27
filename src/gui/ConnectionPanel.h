@@ -30,6 +30,10 @@ public:
     void setConnected(bool connected);
     void setStatusText(const QString& text);
     void probeRadio(const QString& ip);
+    QList<RadioInfo> automationLocalRadios() const;
+    bool automationConnectLocalSerial(const QString& serial, QString* error = nullptr);
+    bool automationConnectByIp(const QString& hostOrIp, QString* error = nullptr);
+    bool automationDisconnect(QString* error = nullptr);
 
 protected:
     void paintEvent(QPaintEvent* event) override;

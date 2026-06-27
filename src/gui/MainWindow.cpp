@@ -3242,7 +3242,16 @@ void MainWindow::showPropDashboard()
 void MainWindow::toggleConnectionDialog()
 {
     if (m_connPanel->isVisible()) {
-        m_connPanel->hide();
+        hideConnectionDialog();
+        return;
+    }
+
+    showConnectionDialog();
+}
+
+void MainWindow::showConnectionDialog()
+{
+    if (!m_connPanel) {
         return;
     }
 
@@ -3272,6 +3281,13 @@ void MainWindow::toggleConnectionDialog()
     m_connPanel->show();
     m_connPanel->raise();
     m_connPanel->activateWindow();
+}
+
+void MainWindow::hideConnectionDialog()
+{
+    if (m_connPanel) {
+        m_connPanel->hide();
+    }
 }
 
 void MainWindow::showMemoryDialog()

@@ -182,6 +182,8 @@ public:
     // (#3646) to read live model state via get(); keep it read-oriented.
     RadioModel& radioModel() { return m_radioModel; }
     const RadioModel& radioModel() const { return m_radioModel; }
+    Q_INVOKABLE void showConnectionDialog();
+    Q_INVOKABLE void hideConnectionDialog();
 
 protected:
     void showEvent(QShowEvent* event) override;
