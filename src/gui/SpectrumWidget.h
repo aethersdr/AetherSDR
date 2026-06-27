@@ -783,6 +783,8 @@ private:
     QVector<float> smoothKiwiSdrWaterfallBins(const QVector<float>& bins);
     void updateKiwiSdrAutoColorRange(const QVector<float>& bins);
     const QVector<float>& displaySpectrumBins() const;
+    // Returns a reference into shared mutable scratch — valid only until the
+    // next call. Consume the result before invoking again; never hold two live.
     const QVector<float>& buildFftDisplayTrace(const QVector<float>& bins,
                                                int targetPoints) const;
     const QVector<float>& noiseFloorAutoLevelBins() const;
