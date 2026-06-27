@@ -4511,9 +4511,26 @@ void RadioModel::onStatusReceived(const QString& object,
             // (presence + owner), independent of whether we end up owning it —
             // foreign and unclaimed pans are tracked too. Pruned on "removed".
             {
-                auto& e = m_radioDisplayPans[normalizePanadapterId(panId)];
+                const QString nPanId = normalizePanadapterId(panId);
+                auto& e = m_radioDisplayPans[nPanId];
                 if (kvs.contains(QStringLiteral("client_handle")))
                     e.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
+                // Capture the pan-side waterfall link and stamp it onto the
+                // waterfall entry's parentPanId. Some firmware conveys the
+                // pan↔waterfall link only here (the pan's `waterfall=` key) and
+                // omits `panadapter=` from the waterfall status — without this
+                // backfill the waterfall's parent stays unknown, so a leaked
+                // waterfall (parent pan removed) could never be flagged. Stamping
+                // the persistent waterfall entry means the link survives the
+                // pan's removal, which is exactly when the leak shows. (#3856)
+                const QString wf =
+                    normalizePanadapterId(kvs.value(QStringLiteral("waterfall")));
+                if (!wf.isEmpty()) {
+                    e.waterfallId = wf;
+                    auto wit = m_radioDisplayWaterfalls.find(wf);
+                    if (wit != m_radioDisplayWaterfalls.end() && wit->parentPanId.isEmpty())
+                        wit->parentPanId = nPanId;
+                }
             }
 
             // Preamp is shared antenna hardware — apply to ALL our pans
@@ -4620,13 +4637,27 @@ void RadioModel::onStatusReceived(const QString& object,
             // it carries no client_handle and we don't own it. Normalize the key
             // so it compares equal to owned/parent ids regardless of hex case.
             {
-                auto& e = m_radioDisplayWaterfalls[normalizePanadapterId(wfId)];
+                const QString nWfId = normalizePanadapterId(wfId);
+                auto& e = m_radioDisplayWaterfalls[nWfId];
                 if (kvs.contains(QStringLiteral("client_handle")))
                     e.clientHandle = parseClientHandle(kvs.value(QStringLiteral("client_handle")));
                 const QString parent =
                     normalizePanadapterId(kvs.value(QStringLiteral("panadapter")));
-                if (!parent.isEmpty())
+                if (!parent.isEmpty()) {
                     e.parentPanId = parent;
+                } else if (e.parentPanId.isEmpty()) {
+                    // Firmware omitted `panadapter=` on the waterfall status:
+                    // backfill the parent from the pan that already reported this
+                    // waterfall via its `waterfall=` link (handles pan-status-
+                    // first ordering; the pan-status path covers the reverse). (#3856)
+                    for (auto pit = m_radioDisplayPans.cbegin();
+                         pit != m_radioDisplayPans.cend(); ++pit) {
+                        if (pit.value().waterfallId == nWfId) {
+                            e.parentPanId = pit.key();
+                            break;
+                        }
+                    }
+                }
             }
             // Check if this waterfall belongs to one of our panadapters.
             // The waterfallId is set on PanadapterModel by the "display pan" status

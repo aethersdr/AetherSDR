@@ -733,7 +733,7 @@ private:
     // "display panafall remove") therefore lingers here after its pan is pruned,
     // making it detectable even when the radio has stopped streaming it.
     // Main-thread only (written in onStatusReceived, read in the bridge).
-    struct RadioDisplayPan { quint32 clientHandle{0}; };
+    struct RadioDisplayPan { quint32 clientHandle{0}; QString waterfallId; };
     struct RadioDisplayWf  { quint32 clientHandle{0}; QString parentPanId; };
     QMap<QString, RadioDisplayPan> m_radioDisplayPans;        // panId → entry
     QMap<QString, RadioDisplayWf>  m_radioDisplayWaterfalls;  // wfId  → entry
