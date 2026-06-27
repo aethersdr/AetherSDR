@@ -43,6 +43,49 @@ void testPanadapterOwnershipDecisions()
           "pan removal wins over ownership uncertainty");
 }
 
+void testInterlockTxGate()
+{
+    // VOX keys the radio autonomously, so txRequested stays false. With VOX
+    // enabled and TX owned, local TX must stay ON regardless of the interlock
+    // source token (#3861).
+    check(interlockKeepsLocalTxOn(true, false, false, false, false,
+                                  QString(), true),
+          "VOX-enabled owned TX keeps local TX on with absent source token");
+    check(interlockKeepsLocalTxOn(true, false, false, false, false,
+                                  QStringLiteral("VOX"), true),
+          "VOX-enabled owned TX keeps local TX on with source=VOX");
+
+    // Regression guards: behavior with VOX disabled must be unchanged.
+    check(!interlockKeepsLocalTxOn(true, false, false, false, false,
+                                   QStringLiteral("SW"), false),
+          "VOX-off SW source without txRequested still forces off (optimistic unkey)");
+    check(!interlockKeepsLocalTxOn(true, false, false, false, false,
+                                   QString(), false),
+          "VOX-off owned TX without any key path forces off");
+
+    // Foreign TX owner always forces off, even with VOX enabled.
+    check(!interlockKeepsLocalTxOn(false, false, false, false, false,
+                                   QStringLiteral("VOX"), true),
+          "foreign TX owner forces off even with VOX enabled");
+
+    // Existing owned-TX paths unchanged with VOX off.
+    check(interlockKeepsLocalTxOn(true, true, false, false, false,
+                                  QStringLiteral("SW"), false),
+          "SW MOX with txRequested keeps local TX on");
+    check(interlockKeepsLocalTxOn(true, false, false, false, false,
+                                  QStringLiteral("MIC"), false),
+          "hardware MIC PTT keeps local TX on");
+    check(interlockKeepsLocalTxOn(true, false, false, false, false,
+                                  QStringLiteral("ACC"), false),
+          "hardware ACC PTT keeps local TX on");
+    check(interlockKeepsLocalTxOn(true, false, true, false, false,
+                                  QString(), false),
+          "CW key keeps local TX on");
+    check(interlockKeepsLocalTxOn(true, false, false, false, true,
+                                  QString(), false),
+          "tune keeps local TX on");
+}
+
 void testRemoteAudioRxTracking()
 {
     constexpr quint32 ours = 0x12345678;
@@ -300,6 +343,7 @@ int main()
 {
     std::printf("Radio status ownership tests\n\n");
     testPanadapterOwnershipDecisions();
+    testInterlockTxGate();
     testRemoteAudioRxTracking();
     testStreamStatusOwnershipCompatibility();
     testDaxTxStatusOwnership();

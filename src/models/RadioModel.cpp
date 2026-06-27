@@ -4887,14 +4887,15 @@ void RadioModel::onStatusReceived(const QString& object,
             // tune. SW source still requires m_txRequested so the optimistic
             // local-unkey behaviour from the TX_SYNC_FIX_REPORT is preserved
             // (a stale state=TRANSMITTING after setTransmit(false) on SW
-            // source still falls through to the force-off branch).
-            const bool hardwarePtt = (m_lastInterlockSource == "MIC"
-                                      || m_lastInterlockSource == "ACC"
-                                      || m_lastInterlockSource == "RCA");
-
-            if (!m_txOwnedByUs ||
-                (!m_txRequested && !m_cwKeyActive && !m_cwxActive
-                 && !m_transmitModel.isTuning() && !hardwarePtt)) {
+            // source still falls through to the force-off branch). VOX also
+            // keys the radio autonomously (no setTransmit()); when VOX is
+            // enabled and we own TX, treat it as an owned-TX path like
+            // hardware PTT so the SmartMtr TX meter and audio gate engage
+            // (#3861). See RadioStatusOwnership::interlockKeepsLocalTxOn.
+            if (!RadioStatusOwnership::interlockKeepsLocalTxOn(
+                    m_txOwnedByUs, m_txRequested, m_cwKeyActive, m_cwxActive,
+                    m_transmitModel.isTuning(), m_lastInterlockSource,
+                    m_transmitModel.voxEnable())) {
                 // Another client owns TX, or local unkey requested:
                 // force local TX/audio gate off through all interlock states.
                 m_transmitModel.setTransmitting(false);
