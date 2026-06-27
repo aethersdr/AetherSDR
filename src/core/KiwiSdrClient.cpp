@@ -30,6 +30,7 @@ namespace {
 constexpr int kAudioReadyTimeoutMs = 12000;
 constexpr int kKeepaliveIntervalMs = 10000;
 constexpr int kStatusPreflightTimeoutMs = 5000;
+constexpr int kStatusPreflightMaxRedirects = 8;
 constexpr quint16 kDefaultKiwiSdrPort = 8073;
 constexpr double kDefaultWaterfallCenterMhz = 15.0;
 constexpr double kDefaultWaterfallBandwidthMhz = 30.0;
@@ -330,6 +331,69 @@ int soundPayloadOffset(const QByteArray& frame)
 }
 
 #ifdef HAVE_WEBSOCKETS
+QString canonicalRedirectHost(QString host)
+{
+    host = host.trimmed().toLower();
+    while (host.endsWith(QLatin1Char('.'))) {
+        host.chop(1);
+    }
+    return host;
+}
+
+QString kiwiProxyReceiverAlias(const QString& host)
+{
+    constexpr QLatin1StringView kProxySuffix{".proxy.kiwisdr.com"};
+    constexpr QLatin1StringView kProxy2Suffix{".proxy2.kiwisdr.com"};
+    if (host.endsWith(kProxySuffix) && host.size() > kProxySuffix.size()) {
+        return host.left(host.size() - kProxySuffix.size());
+    }
+    if (host.endsWith(kProxy2Suffix) && host.size() > kProxy2Suffix.size()) {
+        return host.left(host.size() - kProxy2Suffix.size());
+    }
+    return {};
+}
+
+bool isAllowedKiwiStatusRedirect(const QUrl& from,
+                                 const QUrl& to,
+                                 QString* detail)
+{
+    const QString scheme = to.scheme().toLower();
+    if (scheme != QStringLiteral("http") && scheme != QStringLiteral("https")) {
+        if (detail) {
+            *detail = QStringLiteral("unsupported scheme %1").arg(to.scheme());
+        }
+        return false;
+    }
+
+    const QString fromHost = canonicalRedirectHost(from.host());
+    const QString toHost = canonicalRedirectHost(to.host());
+    if (fromHost.isEmpty() || toHost.isEmpty()) {
+        if (detail) {
+            *detail = QStringLiteral("missing redirect host");
+        }
+        return false;
+    }
+
+    if (fromHost == toHost) {
+        return true;
+    }
+
+    // Kiwi's public proxy can migrate one receiver alias from proxy to proxy2.
+    // Keep that exception exact so a status page cannot move the WebSocket
+    // target to an unrelated host after the policy preflight succeeds.
+    const QString fromAlias = kiwiProxyReceiverAlias(fromHost);
+    const QString toAlias = kiwiProxyReceiverAlias(toHost);
+    if (!fromAlias.isEmpty() && fromAlias == toAlias) {
+        return true;
+    }
+
+    if (detail) {
+        *detail = QStringLiteral("cross-domain redirect from %1 to %2")
+                      .arg(fromHost, toHost);
+    }
+    return false;
+}
+
 QString webSocketOrigin(const QString& scheme, const QString& host, quint16 port)
 {
     const QString originScheme = scheme == QStringLiteral("wss")
@@ -435,6 +499,7 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
     m_endpoint = QStringLiteral("%1:%2").arg(host).arg(port);
     m_host = host;
     m_port = port;
+    m_webSocketPort = 0;
     m_secureWebSocket = false;
     m_secureWebSocketRetryAttempted = false;
     m_soundSocketConnected = false;
@@ -506,25 +571,28 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
 
 #ifdef HAVE_WEBSOCKETS
     m_statusPreflightSecure = false;  // try http first, then https
+    m_statusPreflightRedirectCount = 0;
     m_statusPreflightFirstHttpStatus = 0;
     m_statusPreflightFirstError.clear();
-    startStatusPreflight();
+    startStatusPreflight(kiwiStatusUrl(m_host, m_port, m_statusPreflightSecure));
 #else
     setState(State::Error, tr("Qt WebSockets support is required for KiwiSDR."));
 #endif
 }
 
 #ifdef HAVE_WEBSOCKETS
-void KiwiSdrClient::startStatusPreflight()
+void KiwiSdrClient::startStatusPreflight(const QUrl& url)
 {
     if (!m_statusNetworkAccessManager) {
         m_statusNetworkAccessManager = new QNetworkAccessManager(this);
     }
 
-    QNetworkRequest request{kiwiStatusUrl(m_host, m_port, m_statusPreflightSecure)};
+    QNetworkRequest request{url};
     request.setHeader(QNetworkRequest::UserAgentHeader,
                       QStringLiteral("AetherSDR"));
     request.setTransferTimeout(kStatusPreflightTimeoutMs);
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
+                         QNetworkRequest::ManualRedirectPolicy);
 
     qCInfo(lcKiwiSdr).noquote()
         << "KiwiSDR status preflight"
@@ -548,14 +616,63 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
 
     m_statusReply = nullptr;
     const QUrl url = reply->url();
+    const QUrl requestUrl = reply->request().url();
     const bool ok = reply->error() == QNetworkReply::NoError;
-    const QByteArray payload = ok ? reply->readAll() : QByteArray();
     const int httpStatus =
         reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const QString errorText = reply->errorString();
+    const QUrl redirectUrl =
+        reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
+    const QByteArray payload = ok ? reply->readAll() : QByteArray();
     reply->deleteLater();
 
     if (m_userDisconnecting || m_state != State::Connecting) {
+        return;
+    }
+
+    if (httpStatus >= 300 && httpStatus < 400) {
+        if (redirectUrl.isEmpty()) {
+            setState(
+                State::Error,
+                tr("This KiwiSDR's status page redirected without a target, so AetherSDR won't connect."));
+            cleanupSockets();
+            return;
+        }
+
+        const QUrl nextUrl = requestUrl.resolved(redirectUrl);
+        QString redirectDetail;
+        if (m_statusPreflightRedirectCount >= kStatusPreflightMaxRedirects) {
+            redirectDetail = QStringLiteral("too many redirects");
+        } else {
+            const bool allowed =
+                isAllowedKiwiStatusRedirect(requestUrl, nextUrl,
+                                            &redirectDetail);
+            if (allowed) {
+                redirectDetail.clear();
+            }
+        }
+
+        if (!redirectDetail.isEmpty()) {
+            qCWarning(lcKiwiSdr).noquote()
+                << "KiwiSDR status preflight rejected redirect"
+                << QStringLiteral("endpoint=%1").arg(logEndpoint())
+                << "from=" << requestUrl.toString()
+                << "to=" << nextUrl.toString()
+                << "reason=" << redirectDetail;
+            setState(
+                State::Error,
+                tr("This KiwiSDR's status page redirected outside its trusted KiwiSDR proxy host, so AetherSDR won't connect."));
+            cleanupSockets();
+            return;
+        }
+
+        ++m_statusPreflightRedirectCount;
+        qCInfo(lcKiwiSdr).noquote()
+            << "KiwiSDR status preflight redirect"
+            << QStringLiteral("endpoint=%1").arg(logEndpoint())
+            << "from=" << requestUrl.toString()
+            << "to=" << nextUrl.toString();
+        startStatusPreflight(nextUrl);
         return;
     }
 
@@ -608,6 +725,42 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
             cleanupSockets();
             return;
         }
+
+        const QString resolvedScheme = url.scheme().toLower();
+        if (resolvedScheme == QStringLiteral("http")
+            || resolvedScheme == QStringLiteral("https")) {
+            const QString resolvedHost = url.host();
+            const bool resolvedSecure = resolvedScheme == QStringLiteral("https");
+            const int resolvedPort = url.port(resolvedSecure ? 443 : 80);
+            if (!resolvedHost.isEmpty() && resolvedPort > 0 && resolvedPort <= 65535) {
+                const quint16 currentSocketPort = m_webSocketPort > 0
+                    ? m_webSocketPort
+                    : (m_secureWebSocket ? 443 : m_port);
+                const bool changed =
+                    m_secureWebSocket != resolvedSecure
+                    || currentSocketPort != static_cast<quint16>(resolvedPort)
+                    || m_host.compare(resolvedHost, Qt::CaseInsensitive) != 0;
+                if (changed) {
+                    qCInfo(lcKiwiSdr).noquote()
+                        << "KiwiSDR status preflight resolved transport"
+                        << QStringLiteral("endpoint=%1").arg(logEndpoint())
+                        << "status_url=" << url.toString()
+                        << "websocket="
+                        << QStringLiteral("%1://%2:%3")
+                               .arg(resolvedSecure ? QStringLiteral("wss")
+                                                   : QStringLiteral("ws"))
+                               .arg(resolvedHost)
+                               .arg(resolvedPort);
+                }
+                m_host = resolvedHost;
+                m_port = static_cast<quint16>(resolvedPort);
+                m_webSocketPort = static_cast<quint16>(resolvedPort);
+                m_secureWebSocket = resolvedSecure;
+                if (resolvedSecure) {
+                    m_secureWebSocketRetryAttempted = true;
+                }
+            }
+        }
     } else {
         qCInfo(lcKiwiSdr).noquote()
             << "KiwiSDR status preflight unavailable"
@@ -622,7 +775,9 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
             m_statusPreflightFirstHttpStatus = httpStatus;
             m_statusPreflightFirstError = errorText;
             m_statusPreflightSecure = true;
-            startStatusPreflight();
+            m_statusPreflightRedirectCount = 0;
+            startStatusPreflight(
+                kiwiStatusUrl(m_host, m_port, m_statusPreflightSecure));
             return;
         }
 
@@ -654,7 +809,9 @@ void KiwiSdrClient::openWebSockets()
     const QString scheme = m_secureWebSocket
         ? QStringLiteral("wss")
         : QStringLiteral("ws");
-    const quint16 socketPort = m_secureWebSocket ? 443 : m_port;
+    const quint16 socketPort = m_webSocketPort > 0
+        ? m_webSocketPort
+        : (m_secureWebSocket ? 443 : m_port);
     // Clean black-box observation against KiwiSDR v1.842 showed the current
     // web client using /ws/kiwi/<session>/<stream>. Some servers still upgrade
     // /<session>/<stream> but never emit MSG or stream frames on that path.
@@ -2726,6 +2883,7 @@ bool KiwiSdrClient::retryWithSecureWebSocket(bool transportEstablished)
 
     m_secureWebSocketRetryAttempted = true;
     m_secureWebSocket = true;
+    m_webSocketPort = 443;
     m_soundSocketConnected = false;
     m_waterfallSocketConnected = false;
     m_soundAudioReady = false;

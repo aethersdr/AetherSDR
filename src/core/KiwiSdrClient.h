@@ -17,6 +17,7 @@ class QTimer;
 #ifdef HAVE_WEBSOCKETS
 class QNetworkAccessManager;
 class QNetworkReply;
+class QUrl;
 class QWebSocket;
 #endif
 
@@ -209,7 +210,7 @@ private:
 
 #ifdef HAVE_WEBSOCKETS
     void handleSocketError(const QString& detail, bool transportEstablished);
-    void startStatusPreflight();
+    void startStatusPreflight(const QUrl& url);
     void handleStatusPreflightFinished(QNetworkReply* reply);
     void openWebSockets();
     bool retryWithSecureWebSocket(bool transportEstablished);
@@ -223,6 +224,7 @@ private:
     QString m_lastSoundIdentityCallsign;
     QString m_lastWaterfallIdentityCallsign;
     quint16 m_port{0};
+    quint16 m_webSocketPort{0};
     bool m_audioActive{false};
     KiwiSdrReceiverControls m_receiverControls;
     KiwiSdrReceiverTelemetry m_telemetry;
@@ -318,6 +320,7 @@ private:
     // Status preflight tries http first, then https (proxied/TLS-only Kiwis)
     // before giving up.  ext_api can't be confirmed unless one succeeds.
     bool m_statusPreflightSecure{false};
+    int m_statusPreflightRedirectCount{0};
     int m_statusPreflightFirstHttpStatus{0};
     QString m_statusPreflightFirstError;
     QWebSocket* m_soundSocket{nullptr};
