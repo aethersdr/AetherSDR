@@ -39,6 +39,7 @@
 #include <QAbstractSlider>
 #include <QToolTip>
 #include <QApplication>
+#include <QApplicationStateChangeEvent>
 #include <QComboBox>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -114,20 +115,39 @@ bool MainWindow::handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eve
     if (eventType != QEvent::KeyPress && eventType != QEvent::KeyRelease)
         return false;
 
+    enum class CwAction { None, StraightKey, LeftPaddle, RightPaddle };
+
     const QKeySequence seq = shortcutSequenceFromKeyEvent(keyEvent);
     const auto* action = m_shortcutManager.actionForKey(seq);
-    if (!action)
-        return false;
 
-    enum class CwAction { None, StraightKey, LeftPaddle, RightPaddle };
     CwAction cwAction = CwAction::None;
-    if (action->id == QLatin1String(kCwStraightKeyActionId))
-        cwAction = CwAction::StraightKey;
-    else if (action->id == QLatin1String(kCwLeftPaddleActionId))
-        cwAction = CwAction::LeftPaddle;
-    else if (action->id == QLatin1String(kCwRightPaddleActionId))
-        cwAction = CwAction::RightPaddle;
-    else
+    if (action) {
+        if (action->id == QLatin1String(kCwStraightKeyActionId))
+            cwAction = CwAction::StraightKey;
+        else if (action->id == QLatin1String(kCwLeftPaddleActionId))
+            cwAction = CwAction::LeftPaddle;
+        else if (action->id == QLatin1String(kCwRightPaddleActionId))
+            cwAction = CwAction::RightPaddle;
+    }
+
+    // Modifier-tolerant release (Principle VI): a combo binding released
+    // modifier-first delivers a KeyRelease whose `seq` no longer matches the
+    // bound `modifiers|key`, so the un-key above would miss and TX would stay
+    // keyed. On a release, if any CW momentary action is active whose bound
+    // base key matches this key, release that one — fail safe to RX.
+    if (cwAction == CwAction::None && eventType == QEvent::KeyRelease) {
+        if (m_cwStraightKeyActive
+            && keyEventMatchesActionBaseKey(kCwStraightKeyActionId, keyEvent))
+            cwAction = CwAction::StraightKey;
+        else if (m_cwLeftPaddleActive
+            && keyEventMatchesActionBaseKey(kCwLeftPaddleActionId, keyEvent))
+            cwAction = CwAction::LeftPaddle;
+        else if (m_cwRightPaddleActive
+            && keyEventMatchesActionBaseKey(kCwRightPaddleActionId, keyEvent))
+            cwAction = CwAction::RightPaddle;
+    }
+
+    if (cwAction == CwAction::None)
         return false;
 
     const bool press = eventType == QEvent::KeyPress;
@@ -177,7 +197,18 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
 
     const QKeySequence seq = shortcutSequenceFromKeyEvent(keyEvent);
     const auto* action = m_shortcutManager.actionForKey(seq);
-    if (!action || action->id != QLatin1String(kPttHoldActionId))
+    bool isPttHold = action && action->id == QLatin1String(kPttHoldActionId);
+
+    // Modifier-tolerant release (Principle VI): a combo binding like Ctrl+T
+    // released modifier-first delivers the `T` KeyRelease after Ctrl is already
+    // gone, so `seq` resolves to plain `T` and no longer matches `Ctrl+T` — the
+    // un-key would never fire and TX would stay keyed. While PTT-hold is active,
+    // also accept a release whose base key matches the bound key, ignoring
+    // modifiers, so releasing any part of the combo fails safe to RX.
+    if (!isPttHold && eventType == QEvent::KeyRelease && m_pttHoldActive)
+        isPttHold = keyEventMatchesActionBaseKey(kPttHoldActionId, keyEvent);
+
+    if (!isPttHold)
         return false;
 
     // Mirror the prior Space behavior: only key while connected and not typing
@@ -204,6 +235,57 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
         }
     }
     return true;  // consume the bound key so it can't also activate a button
+}
+
+
+bool MainWindow::keyEventMatchesActionBaseKey(const char* actionId,
+                                              const QKeyEvent* ev)
+{
+    if (!ev)
+        return false;
+    const auto* a = m_shortcutManager.action(QLatin1String(actionId));
+    if (!a || a->currentKey.isEmpty())
+        return false;
+    // currentKey[0] is the (modifiers | key) combination; compare the key half
+    // only, so a combo binding matches on release regardless of which
+    // modifiers are still down.
+    return static_cast<int>(a->currentKey[0].key()) == ev->key();
+}
+
+
+void MainWindow::failSafeMomentaryKeyingToRx(const char* reason)
+{
+    // Principle VI fail-safe: a held momentary-keying key whose KeyRelease is
+    // lost (focus left the window) would otherwise strand the transmitter. On
+    // deactivation force the whole family back to RX. Cheap and safe to call on
+    // every deactivation: bail out unless something is actually keyed.
+    const bool anyActive = m_pttHoldActive || m_cwStraightKeyActive
+        || m_cwLeftPaddleActive || m_cwRightPaddleActive;
+    if (!anyActive)
+        return;
+
+    qCInfo(lcCw).noquote().nospace()
+        << "Fail-safe to RX on " << (reason ? reason : "deactivate")
+        << " — releasing held momentary keying (ptt=" << m_pttHoldActive
+        << " straight=" << m_cwStraightKeyActive
+        << " dit=" << m_cwLeftPaddleActive
+        << " dah=" << m_cwRightPaddleActive << ")";
+
+    if (m_pttHoldActive) {
+        m_pttHoldActive = false;
+        // Same un-key path as the normal KeyRelease branch, so the interlock
+        // gating in RadioModel's xmit handler and the Quindar outro both run.
+        m_radioModel.transmitModel().requestPttOff(TransmitModel::PttSource::Mox);
+    }
+
+    // setCw*State(false, …) clears its own flag and issues the un-key through
+    // the existing sendCwKey / paddle path; each no-ops when already released,
+    // so calling all three unconditionally is safe.
+    const quint64 sourceMs = cwTraceNowMs();
+    const quint64 traceId = nextCwTraceId();
+    setCwStraightKeyState(false, QStringLiteral("failsafe:deactivate"), traceId, sourceMs);
+    setCwLeftPaddleState(false, QStringLiteral("failsafe:deactivate"), traceId, sourceMs);
+    setCwRightPaddleState(false, QStringLiteral("failsafe:deactivate"), traceId, sourceMs);
 }
 
 
@@ -263,6 +345,16 @@ bool MainWindow::eventFilter(QObject* obj, QEvent* event)
             QTimer::singleShot(0, this, [this]() { close(); });
             return true;
         }
+    }
+
+    // Belt-and-suspenders for the deactivation fail-safe (#3888, Principle VI):
+    // on macOS the per-window QEvent::ActivationChange can be unreliable when
+    // the whole app is backgrounded, so also unkey any held momentary key when
+    // the application leaves the active state. Do not consume the event.
+    if (obj == qApp && event->type() == QEvent::ApplicationStateChange) {
+        auto* stateEvent = static_cast<QApplicationStateChangeEvent*>(event);
+        if (stateEvent->applicationState() != Qt::ApplicationActive)
+            failSafeMomentaryKeyingToRx("app-deactivate");
     }
 
     if (auto* slider = qobject_cast<QAbstractSlider*>(obj)) {

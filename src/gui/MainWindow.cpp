@@ -2941,6 +2941,15 @@ void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);
 
+    // Principle VI fail-safe (#3888): if a momentary keying key (PTT-hold, CW
+    // straight key / paddles) is held when the window is deactivated, its
+    // KeyRelease is delivered to whatever now has focus and never reaches our
+    // event filter — the flag would stay set and TX would stay keyed. Force the
+    // whole family back to RX on deactivation. (Belt-and-suspenders for the
+    // app-backgrounded case lives in eventFilter via ApplicationStateChange.)
+    if (event->type() == QEvent::ActivationChange && !isActiveWindow())
+        failSafeMomentaryKeyingToRx("window-deactivate");
+
     if (event->type() != QEvent::WindowStateChange
         || !m_minimalMode
         || m_exitingMinimalMode

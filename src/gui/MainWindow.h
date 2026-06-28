@@ -629,6 +629,19 @@ private:
     // hardcoded Qt::Key_Space) so a reassigned PTT-hold key actually keys the
     // radio. Returns true when the bound key was consumed (#3879).
     bool handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventType);
+    // Fail-safe-to-RX for the momentary-keying family (PTT-hold, CW straight
+    // key / paddles). Called when the window/app is deactivated while a
+    // momentary key is "held" in our state — the KeyRelease that would un-key
+    // goes to whatever now has focus and never reaches our filter, so without
+    // this the transmitter stays keyed. Clears every momentary flag and issues
+    // the matching un-key. No-ops when nothing is active (#3888, Principle VI).
+    void failSafeMomentaryKeyingToRx(const char* reason);
+    // True when ev's physical key equals the base key (modifiers stripped) of
+    // the action's current binding. Lets a held momentary key un-key on its
+    // KeyRelease even when a modifier of a combo binding was released first
+    // (#3888, Principle VI).
+    bool keyEventMatchesActionBaseKey(const char* actionId,
+                                      const QKeyEvent* ev);
 
     // Core objects
     RadioDiscovery    m_discovery;
