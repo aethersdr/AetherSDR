@@ -24,7 +24,14 @@
 #include "models/SliceModel.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QFileDialog>
 #include <QMessageBox>
+#include <QRegularExpression>
+#include <QStandardPaths>
+#include <QTextStream>
 #include <QTimer>
 
 #include <algorithm>
@@ -68,6 +75,70 @@ void MainWindow::clearSwrSweepPlot()
             sw->clearSwrSweepPoints();
     }
     statusBar()->showMessage(QStringLiteral("SWR sweep plot cleared"), 2500);
+}
+
+// Export the most recent completed sweep to a CSV (Frequency (Hz),SWR). The
+// samples + band name persist in m_swrSweep after a sweep finishes (only an
+// explicit clear or a band change drops them), so this is available whenever a
+// trace is on the panadapter. Filename defaults to
+// swr_sweep_<band>_<YYYYMMDD>_<HHMMSS>.csv. #2241.
+void MainWindow::saveSwrSweepCsv()
+{
+    if (m_swrSweep.running) {
+        statusBar()->showMessage(
+            QStringLiteral("Wait for the SWR sweep to finish before saving."), 2500);
+        return;
+    }
+    if (m_swrSweep.samples.isEmpty()) {
+        statusBar()->showMessage(
+            QStringLiteral("No SWR sweep data to save — run a sweep first."), 2500);
+        return;
+    }
+
+    // Sanitise the band name for use in a filename (e.g. "20m" stays, but guard
+    // against any separators a band label might carry).
+    QString band = m_swrSweep.originalBandName;
+    band.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9_-]")),
+                 QStringLiteral("_"));
+    if (band.isEmpty())
+        band = QStringLiteral("band");
+
+    const QString stamp =
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    const QString suggestedName =
+        QStringLiteral("swr_sweep_%1_%2.csv").arg(band, stamp);
+    const QString dir =
+        QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QString suggestedPath =
+        dir.isEmpty() ? suggestedName : QDir(dir).filePath(suggestedName);
+
+    const QString path = QFileDialog::getSaveFileName(
+        this, QStringLiteral("Save SWR Sweep CSV"), suggestedPath,
+        QStringLiteral("CSV files (*.csv);;All files (*)"));
+    if (path.isEmpty())
+        return;  // user cancelled
+
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+        QMessageBox::warning(
+            this, QStringLiteral("Save SWR Sweep CSV"),
+            QStringLiteral("Could not open file for writing:\n%1").arg(path));
+        return;
+    }
+
+    QTextStream out(&file);
+    out << "Frequency (Hz),SWR\n";
+    for (const SwrSweepSample& s : m_swrSweep.samples) {
+        const qint64 freqHz = static_cast<qint64>(llround(s.freqMhz * 1.0e6));
+        out << freqHz << ',' << QString::number(s.swr, 'f', 3) << '\n';
+    }
+    file.close();
+
+    statusBar()->showMessage(
+        QStringLiteral("Saved %1 SWR points to %2")
+            .arg(m_swrSweep.samples.size())
+            .arg(QDir::toNativeSeparators(path)),
+        4000);
 }
 
 void MainWindow::clearSwrSweepForBandChange(int sliceId, const QString& panId,

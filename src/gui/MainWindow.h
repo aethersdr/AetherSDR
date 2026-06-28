@@ -593,6 +593,7 @@ private:
     void restoreBandState(const BandSnapshot& snap);
     void startSwrSweep(int requestedSliceId = -1, int sweepPowerWatts = 1);
     void clearSwrSweepPlot();
+    void saveSwrSweepCsv();
     void advanceSwrSweep();
     void finishSwrSweep(bool aborted, const QString& reason = {});
     void beginSwrSweepRf();

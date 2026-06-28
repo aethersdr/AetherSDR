@@ -2887,6 +2887,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             this, &MainWindow::startSwrSweep);
     connect(menu, &SpectrumOverlayMenu::swrSweepClearRequested,
             this, &MainWindow::clearSwrSweepPlot);
+    connect(menu, &SpectrumOverlayMenu::swrSweepSaveCsvRequested,
+            this, &MainWindow::saveSwrSweepCsv);
 
     // Client-side DSP toggles (NR2 / RN2 / NR4 / MNR / BNR / DFNR) now
     // live exclusively in the AetherDSP applet; the spectrum overlay menu

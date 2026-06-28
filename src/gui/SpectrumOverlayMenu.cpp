@@ -625,6 +625,11 @@ void SpectrumOverlayMenu::buildAntPanel()
     sweepRow->addWidget(m_swrClearBtn, 1);
     vbox->addLayout(sweepRow);
 
+    m_swrSaveBtn = new QPushButton("Save CSV");
+    m_swrSaveBtn->setMinimumHeight(22);
+    m_swrSaveBtn->setStyleSheet(sweepBtnStyle);
+    vbox->addWidget(m_swrSaveBtn);
+
     connect(m_swrStartBtn, &QPushButton::clicked, this, [this]() {
         const int sliceId = m_slice ? m_slice->sliceId() : -1;
         hideAllSubPanels();
@@ -633,6 +638,10 @@ void SpectrumOverlayMenu::buildAntPanel()
     connect(m_swrClearBtn, &QPushButton::clicked, this, [this]() {
         hideAllSubPanels();
         emit swrSweepClearRequested();
+    });
+    connect(m_swrSaveBtn, &QPushButton::clicked, this, [this]() {
+        hideAllSubPanels();
+        emit swrSweepSaveCsvRequested();
     });
 
     // ANT panel tooltips
@@ -644,6 +653,7 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_wnbSlider->setToolTip("Adjusts WNB threshold. Higher values blank more aggressively.");
     m_swrStartBtn->setToolTip("Run a low-power tune sweep across the current TX band and plot SWR on the panadapter.");
     m_swrClearBtn->setToolTip("Clear the displayed SWR sweep trace.");
+    m_swrSaveBtn->setToolTip("Export the most recent SWR sweep (frequency + SWR) to a CSV file.");
 
     m_antPanel->setFixedWidth(180);
     updateLoopButtonVisibility();

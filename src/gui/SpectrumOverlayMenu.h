@@ -159,6 +159,7 @@ signals:
     void rfGainChanged(int gain);
     void swrSweepStartRequested(int sliceId, int sweepPowerWatts);
     void swrSweepClearRequested();
+    void swrSweepSaveCsvRequested();
     void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
     void flexRxAntennaSelected(int sliceId);
     // NB Waterfall Blanker (#277)
@@ -242,6 +243,7 @@ private:
     QLabel*      m_wnbLabel{nullptr};
     QPushButton* m_swrStartBtn{nullptr};
     QPushButton* m_swrClearBtn{nullptr};
+    QPushButton* m_swrSaveBtn{nullptr};
 
     // DAX sub-panel
     QWidget*     m_daxPanel{nullptr};
