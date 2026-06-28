@@ -7,6 +7,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QSlider>
 #include <QDateTime>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -256,6 +257,43 @@ void RC28MappingDialog::buildEncoderSection()
             });
     });
     vbox->addWidget(invertCheck);
+
+    // Sensitivity divider: how many encoder pulses are required to produce one
+    // frequency step.  1 = normal (every pulse fires), 10 = most reduced. (#3841)
+    auto* sensRow = new QHBoxLayout;
+    auto* sensKey = new QLabel("Pulses per step:");
+    sensKey->setStyleSheet(kDimStyle);
+    m_sensitivitySlider = new QSlider(Qt::Horizontal);
+    m_sensitivitySlider->setRange(1, 10);
+    m_sensitivitySlider->setTickPosition(QSlider::TicksBelow);
+    m_sensitivitySlider->setTickInterval(1);
+    const int savedSens = HidEncoderManager::rc28MappingField("sensitivity", "1").toInt();
+    m_sensitivitySlider->setValue(savedSens >= 1 && savedSens <= 10 ? savedSens : 1);
+    m_sensitivityValueLabel = new QLabel(QString::number(m_sensitivitySlider->value()));
+    m_sensitivityValueLabel->setStyleSheet(kLabelStyle);
+    m_sensitivityValueLabel->setFixedWidth(18);
+    m_sensitivityValueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    sensRow->addWidget(sensKey);
+    sensRow->addWidget(m_sensitivitySlider);
+    sensRow->addWidget(m_sensitivityValueLabel);
+    connect(m_sensitivitySlider, &QSlider::valueChanged, this, [this](int v) {
+        m_sensitivityValueLabel->setText(QString::number(v));
+        HidEncoderManager::setRc28MappingField("sensitivity", QString::number(v));
+        emit mappingFieldChanged("sensitivity", QString::number(v));
+    });
+    vbox->addLayout(sensRow);
+
+    // Auto-snap: after the knob stops for 600 ms, snap to the nearest 1 kHz
+    // without recentering the spectrum display. (#3841)
+    m_autoSnapCheck = new QCheckBox("Auto-snap to nearest 1 kHz after rotation stops");
+    m_autoSnapCheck->setStyleSheet(kLabelStyle);
+    m_autoSnapCheck->setChecked(
+        HidEncoderManager::rc28MappingField("autoSnap", "False") == "True");
+    connect(m_autoSnapCheck, &QCheckBox::toggled, this, [this](bool on) {
+        HidEncoderManager::setRc28MappingField("autoSnap", on ? "True" : "False");
+        emit mappingFieldChanged("autoSnap", on ? "True" : "False");
+    });
+    vbox->addWidget(m_autoSnapCheck);
 
     static_cast<QVBoxLayout*>(bodyWidget()->layout())->addWidget(group);
 }

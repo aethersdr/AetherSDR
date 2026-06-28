@@ -314,11 +314,19 @@ void MainWindow::buildMenuBar()
         showOrRaisePersistent(m_rc28MappingDialog, m_hidEncoder);
         if (fresh && m_rc28MappingDialog)
             connect(m_rc28MappingDialog, &RC28MappingDialog::mappingFieldChanged,
-                    this, [this](const QString& field, const QString&) {
+                    this, [this](const QString& field, const QString& value) {
                 if (field == "f1Hold" || field == "f2Hold") {
                     m_hidFastTune = false;
                     m_hidFineTune = false;
                     updateRC28Leds();
+                } else if (field == "sensitivity") {
+                    m_hidSensitivity = value.toInt();
+                    if (m_hidSensitivity < 1) m_hidSensitivity = 1;
+                    m_hidPulseAccum = 0;
+                } else if (field == "autoSnap") {
+                    m_hidAutoSnap = (value == "True");
+                    if (!m_hidAutoSnap && m_hidSnapTimer)
+                        m_hidSnapTimer->stop();
                 }
             });
     });

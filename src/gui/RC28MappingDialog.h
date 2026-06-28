@@ -5,10 +5,12 @@
 
 #include <QPointer>
 
+class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPlainTextEdit;
 class QRadioButton;
+class QSlider;
 
 namespace AetherSDR {
 
@@ -68,7 +70,12 @@ private:
     QComboBox* m_f2PressCombo{nullptr};
     QComboBox* m_f2HoldCombo{nullptr};
 
-    // Section D — debug log
+    // Section D — encoder tuning aids
+    QSlider*   m_sensitivitySlider{nullptr};
+    QLabel*    m_sensitivityValueLabel{nullptr};
+    QCheckBox* m_autoSnapCheck{nullptr};
+
+    // Section E — debug log
     QPlainTextEdit* m_log{nullptr};
 };
 

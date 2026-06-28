@@ -2417,6 +2417,24 @@ void MainWindow::wireExternalControllers()
         });
     }
 
+    // Auto-snap timer: fires 600 ms after the last RC-28 encoder step and snaps
+    // to the nearest 1 kHz using IncrementalTune (no spectrum recenter). (#3841)
+    m_hidSnapTimer = new QTimer(this);
+    m_hidSnapTimer->setSingleShot(true);
+    m_hidSnapTimer->setInterval(600);
+    connect(m_hidSnapTimer, &QTimer::timeout, this, [this] {
+        if (auto* s = activeSlice()) {
+            const double snapped = std::round(s->frequency() * 1000.0) / 1000.0;
+            if (std::abs(snapped - s->frequency()) > 1e-9)
+                applyTuneRequest(s, snapped, TuneIntent::IncrementalTune, "rc28-autosnap");
+        }
+    });
+
+    // Load RC-28 sensitivity and auto-snap from persisted settings.
+    m_hidSensitivity = HidEncoderManager::rc28MappingField("sensitivity", "1").toInt();
+    if (m_hidSensitivity < 1) m_hidSensitivity = 1;
+    m_hidAutoSnap = HidEncoderManager::rc28MappingField("autoSnap", "False") == "True";
+
     // Per-encoder action dispatch — routes each dial to its configured action.
     // applyFlexControlWheelAction handles coalescing internally for frequency.
     connect(m_hidEncoder, &HidEncoderManager::tuneSteps,
@@ -2435,6 +2453,25 @@ void MainWindow::wireExternalControllers()
                                  m_hidFastTune ? "rc28-fast" : "rc28-fine");
             }
             return;
+        }
+        // RC-28 sensitivity divider and auto-snap (#3841).
+        // Only applies to encoder 0 on the RC-28 (the single tuning knob).
+        if (m_hidEncoder->isRC28Compatible() && encoderIndex == 0) {
+            if (m_hidSensitivity > 1) {
+                // Direction reversal clears the accumulator so pulses from the
+                // previous direction don't bleed into the new one.
+                if (m_hidPulseAccum != 0 && ((steps > 0) != (m_hidPulseAccum > 0)))
+                    m_hidPulseAccum = 0;
+                m_hidPulseAccum += steps;
+                const int fired = m_hidPulseAccum / m_hidSensitivity;
+                m_hidPulseAccum -= fired * m_hidSensitivity;
+                if (fired == 0) {
+                    if (m_hidAutoSnap) m_hidSnapTimer->start();
+                    return;
+                }
+                steps = fired;
+            }
+            if (m_hidAutoSnap) m_hidSnapTimer->start();
         }
         const bool isTMate2 = m_hidEncoder->isTMate2();
         const QString actionId = AppSettings::instance()

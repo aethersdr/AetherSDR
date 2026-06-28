@@ -804,6 +804,10 @@ private:
     bool    m_rc28PttLatched{false};
     bool    m_hidFastTune{false};
     bool    m_hidFineTune{false};
+    int     m_hidPulseAccum{0};     // accumulated RC-28 encoder pulses for sensitivity divider
+    int     m_hidSensitivity{1};    // RC-28 pulses required per frequency step (1 = off)
+    bool    m_hidAutoSnap{false};   // snap to nearest 1 kHz after rotation stops
+    QTimer* m_hidSnapTimer{nullptr};
     enum class TMate2Overlay { None, Volume, Power, Speed, Wpm, Rit, Xit, Shift, Agc, Apf, Text };
     TMate2Overlay m_tmate2Overlay{TMate2Overlay::None};
     int     m_tmate2OverlayValue{0};
