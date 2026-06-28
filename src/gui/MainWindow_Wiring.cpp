@@ -573,37 +573,10 @@ void MainWindow::onSliceAdded(SliceModel* s)
         // HID encoder frequency tuning routes through applyFlexControlWheelAction,
         // so m_flexCoalesceTimer above already covers it.
         const bool memoryRevealPending = (m_pendingMemoryRevealSliceId == s->sliceId());
-        const bool activeDiversityPartner = [this, s]() {
-            SliceModel* active = m_radioModel.slice(m_activeSliceId);
-            if (!active || active == s || !active->diversity() || !s->diversity()) {
-                return false;
-            }
-
-            const bool parentChildPair =
-                (active->isDiversityParent() && s->isDiversityChild())
-                || (active->isDiversityChild() && s->isDiversityParent());
-            if (parentChildPair) {
-                return true;
-            }
-
-            return !active->panId().isEmpty() && active->panId() == s->panId();
-        }();
-        const bool dragDiversityPartner = [this, s]() {
-            SliceModel* dragTarget = m_radioModel.slice(m_sliceDragTargetSliceId);
-            if (!dragTarget || dragTarget == s
-                || !dragTarget->diversity() || !s->diversity()) {
-                return false;
-            }
-
-            const bool parentChildPair =
-                (dragTarget->isDiversityParent() && s->isDiversityChild())
-                || (dragTarget->isDiversityChild() && s->isDiversityParent());
-            if (parentChildPair) {
-                return true;
-            }
-
-            return !dragTarget->panId().isEmpty() && dragTarget->panId() == s->panId();
-        }();
+        SliceModel* active = m_radioModel.slice(m_activeSliceId);
+        const bool activeDiversityPartner = isSameDiversityReceivePair(active, s);
+        SliceModel* dragTarget = m_radioModel.slice(m_sliceDragTargetSliceId);
+        const bool dragDiversityPartner = isSameDiversityReceivePair(dragTarget, s);
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
         const bool dragEchoHoldActive =
             m_sliceDragInProgress
@@ -614,9 +587,9 @@ void MainWindow::onSliceAdded(SliceModel* s)
         if (dragEchoHoldActive && dragTargetSlice
             && m_sliceDragTargetMhz > 0.0 && !memoryRevealPending) {
             const int sliceId = s->sliceId();
-            const double displayMhz = m_sliceDragTargetMhz;
-            QTimer::singleShot(0, this, [this, sliceId, displayMhz]() {
-                if (m_sliceDragTargetMhz <= 0.0) {
+            QTimer::singleShot(0, this, [this, sliceId]() {
+                const double displayMhz = m_sliceDragTargetMhz;
+                if (displayMhz <= 0.0) {
                     return;
                 }
                 if (!m_sliceDragInProgress

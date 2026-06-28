@@ -298,6 +298,8 @@ private:
                                double oldFreqMhz, double newFreqMhz,
                                const TuneCenteringResult& result) const;
     void pushSliceFrequencyToOverlays(SliceModel* slice, double mhz);
+    static bool isSameDiversityReceivePair(const SliceModel* slice,
+                                           const SliceModel* other);
     // Pan-follow-VFO (#989): if mhz is outside the visible pan window, apply
     // the new center locally (immediate repaint) and send the radio command.
     TuneCenteringResult panFollowVfo(SliceModel* s, double mhz, const char* source);

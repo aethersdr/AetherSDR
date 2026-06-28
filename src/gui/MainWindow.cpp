@@ -310,23 +310,6 @@ QString vfoFrequencyText(double mhz)
         .arg(static_cast<int>(hz % 1000), 3, 10, QChar('0'));
 }
 
-bool sameDiversityReceivePair(const SliceModel* slice, const SliceModel* other)
-{
-    if (!slice || !other || slice == other
-        || !slice->diversity() || !other->diversity()) {
-        return false;
-    }
-
-    const bool parentChildPair =
-        (slice->isDiversityParent() && other->isDiversityChild())
-        || (slice->isDiversityChild() && other->isDiversityParent());
-    if (parentChildPair) {
-        return true;
-    }
-
-    return !slice->panId().isEmpty() && slice->panId() == other->panId();
-}
-
 #ifdef HAVE_HIDAPI
 // tmate2*DefaultAction helpers moved to MainWindow_Controllers.cpp (#3351 Phase 2a).
 #endif
@@ -454,6 +437,24 @@ int windowsResizeBorderThickness(HWND hwnd)
 // Pure formatting / parsing helpers formerly defined here as file-scope
 // statics now live in MainWindowHelpers.{h,cpp} (#3351 Phase 0). Only
 // helpers coupled to the mutable shortcut-lease state below remain.
+
+bool MainWindow::isSameDiversityReceivePair(const SliceModel* slice,
+                                            const SliceModel* other)
+{
+    if (!slice || !other || slice == other
+        || !slice->diversity() || !other->diversity()) {
+        return false;
+    }
+
+    const bool parentChildPair =
+        (slice->isDiversityParent() && other->isDiversityChild())
+        || (slice->isDiversityChild() && other->isDiversityParent());
+    if (parentChildPair) {
+        return true;
+    }
+
+    return !slice->panId().isEmpty() && slice->panId() == other->panId();
+}
 
 // ─── Shortcut guard (file-scope for use as std::function<bool()>) ───────────
 
@@ -5733,7 +5734,7 @@ void MainWindow::pushSliceFrequencyToOverlays(SliceModel* slice, double mhz)
     }
 
     for (SliceModel* other : m_radioModel.slices()) {
-        if (!sameDiversityReceivePair(slice, other)) {
+        if (!isSameDiversityReceivePair(slice, other)) {
             continue;
         }
         pushOne(other);
