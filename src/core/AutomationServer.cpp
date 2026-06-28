@@ -1115,6 +1115,8 @@ QJsonObject audioSnapshot(const AudioEngine* audio)
             static_cast<double>(audio->rxBufferUnderrunCount())},
         {QStringLiteral("rxBufferSampleRate"),
             audio->rxBufferSampleRate()},
+        {QStringLiteral("endpoints"),
+            audio->audioEndpointDiagnostics()},
     };
 }
 
@@ -1381,7 +1383,7 @@ bool AutomationServer::start(const QString& serverName)
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
-        << "txtest, atu, slice, tune, pan, streams, txwaterfall, key, cwx, station, resize,"
+        << "txtest, atu, slice, tune, pan, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
         << "menu, close, drag, showMenu, whoami, log, mark)";
     return true;
 }
@@ -1614,7 +1616,12 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         } else if (cmd == QLatin1String("txtest") || cmd == QLatin1String("atu")) {
             action = tok(1);  // e.g. "txtest twotone", "atu bypass"
         } else if (cmd == QLatin1String("slice")) {
-            action = tok(1); value = tok(2);  // "slice add 14.2", "slice remove 1"
+            action = tok(1);
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) {
+                rest << tok(i);
+            }
+            value = rest.join(QLatin1Char(' '));  // "slice add 14.2", "slice rxsource 7 K4JK"
         } else if (cmd == QLatin1String("tune")) {
             value = tok(1);   // "tune 3.7"
         } else if (cmd == QLatin1String("log")) {
@@ -1635,6 +1642,13 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
         } else if (cmd == QLatin1String("streams")) {
             action = tok(1);  // "" (Layer A UDP-orphan) | "radio" (Layer B) | "reset"
+        } else if (cmd == QLatin1String("audioCapture")) {
+            action = tok(1);  // start | stop | read | status
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) {
+                rest << tok(i);
+            }
+            value = rest.join(QLatin1Char(' '));
         } else if (cmd == QLatin1String("txwaterfall")) {
             value = tok(1);                   // on | off
         } else if (cmd == QLatin1String("key")) {
@@ -1740,7 +1754,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("slice")) {
         if (action.isEmpty())
-            return err(QStringLiteral("slice requires an action (add|remove|select|tx|txant)"));
+            return err(QStringLiteral("slice requires an action (add|remove|select|tx|txant|rxant|rxsource)"));
         return doSlice(action, value);
     }
     if (cmd == QLatin1String("tune")) {
@@ -1757,6 +1771,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("streams"))
         return doStreams(action);
+    if (cmd == QLatin1String("audioCapture"))
+        return doAudioCapture(action.isEmpty() ? QStringLiteral("status") : action,
+                              value, path);
     if (cmd == QLatin1String("txwaterfall")) {
         // Radio-authoritative display flag (`transmit set show_tx_in_waterfall`)
         // that gates whether keyed-up TX renders FFT-derived rows in the
@@ -2317,6 +2334,16 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("audio"), data}};
     }
+    if (model == QLatin1String("sync")
+        || model == QLatin1String("receiveSync")) {
+        if (!m_receiveSyncSnapshotHandler) {
+            return err(QStringLiteral("receive sync snapshot unavailable"));
+        }
+        QJsonObject data = m_receiveSyncSnapshotHandler();
+        data[QStringLiteral("ok")] = true;
+        data[QStringLiteral("model")] = model;
+        return data;
+    }
 
     RadioModel* radio = m_radioModel;
     if (!radio)
@@ -2368,7 +2395,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|radio|transmit|equalizer|meters|slice|slices|pan|pans)"));
+                   + QStringLiteral(" (use audio|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans)"));
     }
 
     if (!property.isEmpty()) {
@@ -2904,7 +2931,13 @@ QJsonObject AutomationServer::doSlice(const QString& action, const QString& arg)
                            {tx ? QStringLiteral("txAntenna") : QStringLiteral("rxAntenna"), ant},
                            {QStringLiteral("requested"), true}};
     }
-    return err(QStringLiteral("unknown slice action: ") + action + QStringLiteral(" (add|remove|select|tx|txant|rxant)"));
+    if (action == QLatin1String("rxsource") || action == QLatin1String("source")) {
+        if (!m_sliceReceiveSourceHandler) {
+            return err(QStringLiteral("slice rxsource is unavailable in this app instance"));
+        }
+        return m_sliceReceiveSourceHandler(arg);
+    }
+    return err(QStringLiteral("unknown slice action: ") + action + QStringLiteral(" (add|remove|select|tx|txant|rxant|rxsource)"));
 }
 
 // ── VFO tuning (#3646) ──────────────────────────────────────────────────────
@@ -3580,6 +3613,101 @@ QJsonObject AutomationServer::doStreams(const QString& action)
         {QStringLiteral("orphanStreams"), orphans},
         {QStringLiteral("orphanCount"), orphans.size()},
     };
+}
+
+QJsonObject AutomationServer::doAudioCapture(const QString& action,
+                                             const QString& arg,
+                                             const QString& path) const
+{
+    if (!m_audioEngine) {
+        return err(QStringLiteral("no audio engine available"));
+    }
+
+    auto compactSnapshot = [this]() {
+        QJsonObject snapshot =
+            m_audioEngine->automationAudioCaptureSnapshot(false);
+        snapshot[QStringLiteral("chunksOmitted")] =
+            snapshot.value(QStringLiteral("chunkCount"));
+        snapshot.remove(QStringLiteral("chunks"));
+        return snapshot;
+    };
+
+    const QString normalizedAction = action.trimmed().toLower();
+    if (normalizedAction == QLatin1String("start")) {
+        const QStringList parts =
+            arg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        int durationMs = 5000;
+        int pointStart = 0;
+        if (!parts.isEmpty()) {
+            bool ok = false;
+            const int parsed = parts.constFirst().toInt(&ok);
+            if (ok) {
+                durationMs = parsed;
+                pointStart = 1;
+            }
+        }
+
+        QStringList points;
+        for (int i = pointStart; i < parts.size(); ++i) {
+            const QStringList split =
+                parts.at(i).split(QLatin1Char(','),
+                                  Qt::SkipEmptyParts);
+            for (const QString& point : split) {
+                points.append(point);
+            }
+        }
+        return m_audioEngine->startAutomationAudioCapture(durationMs, points);
+    }
+
+    if (normalizedAction == QLatin1String("stop")) {
+        m_audioEngine->stopAutomationAudioCapture();
+        return compactSnapshot();
+    }
+
+    if (normalizedAction == QLatin1String("status")) {
+        return compactSnapshot();
+    }
+
+    if (normalizedAction == QLatin1String("read")) {
+        const QString outPath =
+            !path.trimmed().isEmpty() ? path.trimmed() : arg.trimmed();
+        if (outPath.isEmpty()) {
+            return compactSnapshot();
+        }
+
+        const QJsonObject capture =
+            m_audioEngine->automationAudioCaptureSnapshot(true);
+        QFile out(outPath);
+        const QFileInfo info(outPath);
+        if (!info.absoluteDir().exists()
+            && !QDir().mkpath(info.absolutePath())) {
+            return err(QStringLiteral("failed to create audio capture directory: ")
+                       + info.absolutePath());
+        }
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+            return err(QStringLiteral("failed to write audio capture: ")
+                       + out.errorString());
+        }
+        const QByteArray json = QJsonDocument(capture).toJson(
+            QJsonDocument::Compact);
+        if (out.write(json) != json.size()) {
+            return err(QStringLiteral("failed to write complete audio capture"));
+        }
+        out.close();
+
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("path"), outPath},
+            {QStringLiteral("bytes"), json.size()},
+            {QStringLiteral("active"), capture.value(QStringLiteral("active"))},
+            {QStringLiteral("capturedBytes"),
+             capture.value(QStringLiteral("capturedBytes"))},
+            {QStringLiteral("chunkCount"),
+             capture.value(QStringLiteral("chunkCount"))},
+        };
+    }
+
+    return err(QStringLiteral("audioCapture action must be start, stop, status, or read"));
 }
 
 QJsonObject AutomationServer::doWhoami() const

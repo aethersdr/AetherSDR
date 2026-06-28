@@ -19,6 +19,8 @@
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QSet>
 #include <QTimer>
@@ -28,7 +30,6 @@
 namespace AetherSDR {
 namespace {
 
-constexpr int kKiwiSdrMeterDisplayDelayMs = 520;
 constexpr double kKiwiSdrWaterfallFullBandwidthMhz = 30.0;
 
 const SliceModel* kiwiSliceForPan(const RadioModel& radioModel,
@@ -279,6 +280,108 @@ void MainWindow::clearKiwiSdrVirtualAntennaForSlice(int sliceId)
     if (!panId.isEmpty()) {
         syncKiwiSdrPanadapterUiState(panId);
     }
+}
+
+QJsonObject MainWindow::automationSetSliceReceiveSource(const QString& arg)
+{
+    auto error = [](const QString& message) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"), message},
+        };
+    };
+
+    if (!m_kiwiSdrManager) {
+        return error(QStringLiteral("KiwiSDR manager is unavailable"));
+    }
+
+    QStringList parts = arg.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.isEmpty()) {
+        return error(QStringLiteral(
+            "slice rxsource requires '<slice-id|active> <profile-name|profile-id|flex>'"));
+    }
+
+    int sliceId = -1;
+    bool okId = false;
+    const int parsedSliceId = parts.first().toInt(&okId);
+    if (okId) {
+        sliceId = parsedSliceId;
+        parts.removeFirst();
+    } else if (parts.first().compare(QStringLiteral("active"),
+                                     Qt::CaseInsensitive) == 0) {
+        sliceId = m_activeSliceId;
+        parts.removeFirst();
+    } else {
+        sliceId = m_activeSliceId;
+    }
+
+    SliceModel* slice = m_radioModel.slice(sliceId);
+    if (!slice || !m_radioModel.sliceMayBelongToUs(sliceId)) {
+        return error(QStringLiteral("no controllable slice for rxsource"));
+    }
+    if (parts.isEmpty()) {
+        return error(QStringLiteral("slice rxsource requires a receive source"));
+    }
+
+    const QString selector = parts.join(QLatin1Char(' ')).trimmed();
+    const QString lower = selector.toLower();
+    if (lower == QLatin1String("flex") || lower == QLatin1String("none")
+        || lower == QLatin1String("clear")) {
+        clearKiwiSdrVirtualAntennaForSlice(sliceId);
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("slice"), QStringLiteral("rxsource")},
+            {QStringLiteral("id"), sliceId},
+            {QStringLiteral("source"), QStringLiteral("flex")},
+            {QStringLiteral("requested"), true},
+        };
+    }
+
+    QString profileId =
+        m_kiwiSdrManager->profileIdForVirtualAntennaToken(selector);
+    if (profileId.isEmpty()) {
+        for (const KiwiSdrAntennaProfile& profile :
+             m_kiwiSdrManager->profiles()) {
+            if (profile.id.compare(selector, Qt::CaseInsensitive) == 0
+                || profile.name.compare(selector, Qt::CaseInsensitive) == 0
+                || m_kiwiSdrManager->displayName(profile.id)
+                       .compare(selector, Qt::CaseInsensitive) == 0
+                || profile.endpoint.compare(selector, Qt::CaseInsensitive) == 0) {
+                profileId = profile.id;
+                break;
+            }
+        }
+    }
+
+    if (profileId.isEmpty()) {
+        QJsonArray profiles;
+        for (const KiwiSdrAntennaProfile& profile :
+             m_kiwiSdrManager->profiles()) {
+            profiles.append(QJsonObject{
+                {QStringLiteral("id"), profile.id},
+                {QStringLiteral("name"), m_kiwiSdrManager->displayName(profile.id)},
+                {QStringLiteral("endpoint"), profile.endpoint},
+            });
+        }
+        QJsonObject response = error(
+            QStringLiteral("unknown KiwiSDR receive source '") + selector
+            + QStringLiteral("'"));
+        response.insert(QStringLiteral("profiles"), profiles);
+        return response;
+    }
+
+    setKiwiSdrVirtualAntennaForSlice(sliceId, profileId);
+    const KiwiSdrAntennaProfile profile = m_kiwiSdrManager->profile(profileId);
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("slice"), QStringLiteral("rxsource")},
+        {QStringLiteral("id"), sliceId},
+        {QStringLiteral("source"), QStringLiteral("kiwi")},
+        {QStringLiteral("profileId"), profileId},
+        {QStringLiteral("profileName"), m_kiwiSdrManager->displayName(profileId)},
+        {QStringLiteral("endpoint"), profile.endpoint},
+        {QStringLiteral("requested"), true},
+    };
 }
 
 SliceModel* MainWindow::flexRxPanSourceSlice() const
@@ -939,11 +1042,30 @@ void MainWindow::wireKiwiSdr()
                 return;
             }
 
-            if (SpectrumWidget* sw = spectrumForSlice(slice)) {
-                sw->setKiwiSdrWaterfallProfile(profileId);
-                sw->updateKiwiSdrWaterfallRow(binsDbm, lowFreqMhz,
-                                              highFreqMhz, timecode);
-            }
+            deferReceivePresentation(
+                ReceivePresentationSource::KiwiSdr,
+                ReceivePresentationSurface::Waterfall,
+                [this, profileId, sliceId, binsDbm, lowFreqMhz, highFreqMhz,
+                 timecode]() {
+                    if (!m_kiwiSdrManager
+                        || m_kiwiSdrManager->assignedProfileForSlice(sliceId)
+                            != profileId) {
+                        return;
+                    }
+                    SliceModel* delayedSlice = m_radioModel.slice(sliceId);
+                    if (!delayedSlice
+                        || !m_radioModel.sliceMayBelongToUs(sliceId)
+                        || kiwiSdrProfileForPan(delayedSlice->panId())
+                            != profileId) {
+                        return;
+                    }
+                    if (SpectrumWidget* sw = spectrumForSlice(delayedSlice)) {
+                        sw->setKiwiSdrWaterfallProfile(profileId);
+                        sw->updateKiwiSdrWaterfallRow(binsDbm, lowFreqMhz,
+                                                      highFreqMhz, timecode);
+                    }
+                },
+                profileId);
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::meterReadingReady,
                 this, [this](const QString& profileId,
@@ -992,14 +1114,13 @@ void MainWindow::wireKiwiSdr()
                 return;
             }
 
-            // Kiwi audio intentionally prebuffers before mixing to avoid
-            // WebSocket jitter. Delay visual meter samples by the same target
-            // so the S-meter follows the audio the operator is hearing.
-            QTimer::singleShot(
-                kKiwiSdrMeterDisplayDelayMs, this,
+            deferReceivePresentation(
+                ReceivePresentationSource::KiwiSdr,
+                ReceivePresentationSurface::Meter,
                 [profileId, reading, applyMeterReading]() {
                     applyMeterReading(profileId, reading, true);
-                });
+                },
+                profileId);
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::sliceAssignmentChanged,
                 this, [this](int sliceId, const QString& profileId) {
@@ -1010,6 +1131,40 @@ void MainWindow::wireKiwiSdr()
                                   | KiwiSdrUiSyncDiversityEsc);
             if (m_appletPanel) {
                 m_appletPanel->updateSliceButtons(m_radioModel.slices(), m_activeSliceId);
+            }
+            const ReceivePresentationSettings syncSettings =
+                m_receivePresentationSync.settings();
+            if (syncSettings.enabled
+                && syncSettings.mode == ReceiveSyncMode::AutoAssist) {
+                const QString previousSyncProfile = m_receiveSyncKiwiProfileId;
+                const QString currentSyncProfile = receiveSyncKiwiProfileId();
+                if (previousSyncProfile != currentSyncProfile) {
+                    if (currentSyncProfile.isEmpty()
+                        && !previousSyncProfile.isEmpty()) {
+                        if (!m_receiveSyncTargetUnavailable) {
+                            holdReceivePresentationAutoAssistLock(false);
+                            clearReceivePresentationVisualQueueForSource(
+                                ReceivePresentationSource::KiwiSdr,
+                                previousSyncProfile);
+                            resetReceivePresentationAudioBuffersForKiwiSource(
+                                previousSyncProfile);
+                            m_receiveSyncTargetUnavailable = true;
+                            syncReceivePresentationDelaysToAudioEngine();
+                        }
+                    } else {
+                        resetReceivePresentationAutoAssistState(true, false);
+                        if (!previousSyncProfile.isEmpty()) {
+                            clearReceivePresentationVisualQueueForSource(
+                                ReceivePresentationSource::KiwiSdr,
+                                previousSyncProfile);
+                            resetReceivePresentationAudioBuffersForKiwiSource(
+                                previousSyncProfile);
+                        }
+                        m_receiveSyncKiwiProfileId = currentSyncProfile;
+                        m_receiveSyncTargetUnavailable = false;
+                        syncReceivePresentationDelaysToAudioEngine();
+                    }
+                }
             }
             if (!profileId.isEmpty()) {
                 syncKiwiSdrPanadapterUiState(panId);
@@ -1057,6 +1212,37 @@ void MainWindow::wireKiwiSdr()
                 if (SliceModel* slice = m_radioModel.slice(sliceId)) {
                     panId = slice->panId();
                 }
+            }
+            const ReceivePresentationSettings syncSettings =
+                m_receivePresentationSync.settings();
+            if (syncSettings.enabled
+                && syncSettings.mode == ReceiveSyncMode::AutoAssist) {
+                const QString previousSyncProfile = m_receiveSyncKiwiProfileId;
+                const QString currentSyncProfile = receiveSyncKiwiProfileId();
+                if (previousSyncProfile != currentSyncProfile) {
+                    if (currentSyncProfile.isEmpty()
+                        && !previousSyncProfile.isEmpty()) {
+                        holdReceivePresentationAutoAssistLock(false);
+                        clearReceivePresentationVisualQueueForSource(
+                            ReceivePresentationSource::KiwiSdr,
+                            previousSyncProfile);
+                        resetReceivePresentationAudioBuffersForKiwiSource(
+                            previousSyncProfile);
+                        m_receiveSyncTargetUnavailable = true;
+                    } else {
+                        resetReceivePresentationAutoAssistState(true, false);
+                        if (!previousSyncProfile.isEmpty()) {
+                            clearReceivePresentationVisualQueueForSource(
+                                ReceivePresentationSource::KiwiSdr,
+                                previousSyncProfile);
+                            resetReceivePresentationAudioBuffersForKiwiSource(
+                                previousSyncProfile);
+                        }
+                        m_receiveSyncKiwiProfileId = currentSyncProfile;
+                        m_receiveSyncTargetUnavailable = false;
+                    }
+                }
+                syncReceivePresentationDelaysToAudioEngine();
             }
             scheduleKiwiSdrUiSync(KiwiSdrUiSyncWaterfallAvailability
                                   | KiwiSdrUiSyncDiversityEsc

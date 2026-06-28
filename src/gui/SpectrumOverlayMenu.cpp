@@ -771,12 +771,36 @@ void SpectrumOverlayMenu::refreshAntennaCombo()
     if (!m_rxAntCmb)
         return;
     const QString cur = currentRxAntennaToken();
-    QStringList options = m_antList;
+    QStringList options;
+    auto append = [&options](const QString& token) {
+        if (!token.isEmpty() && !options.contains(token)) {
+            options.append(token);
+        }
+    };
+
+    SliceModel* targetSlice =
+        antennaTargetSliceForPan(m_radioModel, m_slice, m_panId);
+    if (targetSlice) {
+        for (const QString& token : targetSlice->rxAntennaList()) {
+            append(token);
+        }
+    }
+    for (const QString& token : m_antList) {
+        append(token);
+    }
+    if (m_radioModel) {
+        for (const QString& token : m_radioModel->knownAntennaTokens()) {
+            append(token);
+        }
+    }
+    append(cur);
+    if (options.isEmpty()) {
+        append(QStringLiteral("ANT1"));
+        append(QStringLiteral("ANT2"));
+    }
     if (m_kiwiSdrManager) {
         for (const QString& token : m_kiwiSdrManager->virtualAntennaTokens()) {
-            if (!options.contains(token)) {
-                options.append(token);
-            }
+            append(token);
         }
     }
     QSignalBlocker sb(m_rxAntCmb);
@@ -2270,6 +2294,16 @@ bool SpectrumOverlayMenu::eventFilter(QObject* obj, QEvent* event)
         if (event->type() == QEvent::Wheel
             || event->type() == QEvent::MouseButtonPress
             || event->type() == QEvent::MouseButtonRelease) {
+            if (auto* panel = qobject_cast<QWidget*>(obj)) {
+                if (auto* mouseEvent = dynamic_cast<QMouseEvent*>(event);
+                    mouseEvent && panel->childAt(mouseEvent->pos())) {
+                    return QWidget::eventFilter(obj, event);
+                }
+                if (auto* wheelEvent = dynamic_cast<QWheelEvent*>(event);
+                    wheelEvent && panel->childAt(wheelEvent->position().toPoint())) {
+                    return QWidget::eventFilter(obj, event);
+                }
+            }
             return true;  // consumed
         }
     }

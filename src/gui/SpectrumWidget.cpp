@@ -1459,6 +1459,12 @@ void SpectrumWidget::setShowFpsMeters(bool on) {
         }
     }
 }
+
+void SpectrumWidget::setFpsMeterSyncStatsProvider(std::function<QString()> provider) {
+    m_fpsMeterSyncStatsProvider = std::move(provider);
+    updateFpsMeterSyncStatsLabel(true);
+}
+
 void SpectrumWidget::applyFpsMeterVisibility(bool on) {
     m_showFpsMeters = on;
     resetFpsMeterWindow();
@@ -1469,6 +1475,7 @@ void SpectrumWidget::applyFpsMeterVisibility(bool on) {
             m_fpsMeterTimer->stop();
     }
     updateFpsMeterLabels();
+    updateFpsMeterSyncStatsLabel(true);
     markOverlayDirty();
 }
 void SpectrumWidget::resetFpsMeterWindow() {
@@ -1502,8 +1509,10 @@ void SpectrumWidget::updateFpsMeterValues() {
     updateFpsMeterLabels();
 }
 void SpectrumWidget::recordPanadapterFrame() {
-    if (m_showFpsMeters)
+    if (m_showFpsMeters) {
         ++m_panadapterFrameCount;
+        updateFpsMeterSyncStatsLabel();
+    }
 }
 void SpectrumWidget::recordWaterfallFrame(int rows) {
     if (m_showFpsMeters && rows > 0)
@@ -1540,11 +1549,13 @@ void SpectrumWidget::createFpsMeterLabels() {
 
     m_panFpsMeterLabel = makeLabel();
     m_wfFpsMeterLabel = makeLabel();
+    m_syncFpsMeterLabel = makeLabel();
+    m_syncFpsMeterLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     updateFpsMeterLabels();
 }
 
 void SpectrumWidget::updateFpsMeterLabels() {
-    if (!m_panFpsMeterLabel || !m_wfFpsMeterLabel) {
+    if (!m_panFpsMeterLabel || !m_wfFpsMeterLabel || !m_syncFpsMeterLabel) {
         return;
     }
 
@@ -1558,6 +1569,37 @@ void SpectrumWidget::updateFpsMeterLabels() {
     m_wfFpsMeterLabel->setText(QStringLiteral("WF %1 FPS").arg(visibleWaterfallFps, 0, 'f', 1));
     m_panFpsMeterLabel->adjustSize();
     m_wfFpsMeterLabel->adjustSize();
+    updateFpsMeterSyncStatsLabel(true);
+    positionFpsMeterLabels();
+}
+
+void SpectrumWidget::updateFpsMeterSyncStatsLabel(bool force) {
+    if (!m_syncFpsMeterLabel) {
+        return;
+    }
+    if (!force && m_syncFpsMeterUpdateTimer.isValid()
+        && m_syncFpsMeterUpdateTimer.elapsed() < 200) {
+        return;
+    }
+    m_syncFpsMeterUpdateTimer.restart();
+
+    if (!m_showFpsMeters || !m_fpsMeterSyncStatsProvider) {
+        m_syncFpsMeterLabel->clear();
+        m_syncFpsMeterLabel->hide();
+        return;
+    }
+
+    const QString text = m_fpsMeterSyncStatsProvider();
+    if (text.isEmpty()) {
+        m_syncFpsMeterLabel->clear();
+        m_syncFpsMeterLabel->hide();
+        return;
+    }
+
+    if (m_syncFpsMeterLabel->text() != text) {
+        m_syncFpsMeterLabel->setText(text);
+        m_syncFpsMeterLabel->adjustSize();
+    }
     positionFpsMeterLabels();
 }
 
@@ -1569,13 +1611,14 @@ int SpectrumWidget::spectrumPixelHeight() const
 }
 
 void SpectrumWidget::positionFpsMeterLabels() {
-    if (!m_panFpsMeterLabel || !m_wfFpsMeterLabel) {
+    if (!m_panFpsMeterLabel || !m_wfFpsMeterLabel || !m_syncFpsMeterLabel) {
         return;
     }
 
     auto hideMeters = [this]() {
         m_panFpsMeterLabel->hide();
         m_wfFpsMeterLabel->hide();
+        m_syncFpsMeterLabel->hide();
     };
 
     if (!m_showFpsMeters || width() <= 0 || height() <= 0) {
@@ -1596,17 +1639,17 @@ void SpectrumWidget::positionFpsMeterLabels() {
     const QRect wfRect(0, wfY, width(), height() - wfY);
 
     auto positionMeter = [](QLabel* label, const QRect& area,
-                            int bottomInset, int rightInset) {
+                            int bottomInset, int rightInset) -> QRect {
         if (area.width() < 56 || area.height() < 18) {
             label->hide();
-            return;
+            return {};
         }
 
         const QSize labelSize = label->sizeHint();
         if (area.width() < labelSize.width() + rightInset + 12
             || area.height() < labelSize.height() + 8) {
             label->hide();
-            return;
+            return {};
         }
 
         const int plotRight = area.right() - rightInset;
@@ -1627,12 +1670,39 @@ void SpectrumWidget::positionFpsMeterLabels() {
 
         label->move(x, y);
         label->show();
+        return QRect(QPoint(x, y), labelSize);
     };
 
     const int panBottomInset = (m_bandPlanFontSize > 0)
         ? m_bandPlanFontSize + 12
         : 6;
-    positionMeter(m_panFpsMeterLabel, specRect, panBottomInset, DBM_STRIP_W);
+    const QRect panMeterRect =
+        positionMeter(m_panFpsMeterLabel, specRect, panBottomInset, DBM_STRIP_W);
+    if (m_syncFpsMeterLabel->text().isEmpty() || panMeterRect.isEmpty()) {
+        m_syncFpsMeterLabel->hide();
+    } else {
+        const QSize syncSize = m_syncFpsMeterLabel->sizeHint();
+        const int gap = 6;
+        const int minX = specRect.left() + 4;
+        const int minY = specRect.top() + 4;
+        const int maxBottom = specRect.bottom() - 4;
+        const int x = panMeterRect.left() - syncSize.width() - gap;
+        int y = panMeterRect.bottom() - syncSize.height() + 1;
+        if (y < minY) {
+            y = minY;
+        }
+        if (y + syncSize.height() > maxBottom) {
+            y = maxBottom - syncSize.height();
+        }
+
+        if (x < minX || y < minY
+            || specRect.height() < syncSize.height() + 8) {
+            m_syncFpsMeterLabel->hide();
+        } else {
+            m_syncFpsMeterLabel->move(x, y);
+            m_syncFpsMeterLabel->show();
+        }
+    }
     positionMeter(m_wfFpsMeterLabel, wfRect, 6, waterfallStripWidth());
     if (m_overlayMenu) {
         m_overlayMenu->raiseAll();

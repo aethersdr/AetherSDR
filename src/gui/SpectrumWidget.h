@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <functional>
 #include <QHash>
 #include <QWidget>
 #include <QPushButton>
@@ -304,6 +305,7 @@ public:
     bool showCursorFreq() const { return m_showCursorFreq; }
     void setShowFpsMeters(bool on);
     bool showFpsMeters() const { return m_showFpsMeters; }
+    void setFpsMeterSyncStatsProvider(std::function<QString()> provider);
     void setShowTuneGuides(bool on);
     bool showTuneGuides() const { return m_showTuneGuides; }
     void setExtendedFrequencyLine(bool on);
@@ -651,6 +653,7 @@ private:
     void drawWaterfall(QPainter& p, const QRect& r);
     void createFpsMeterLabels();
     void updateFpsMeterLabels();
+    void updateFpsMeterSyncStatsLabel(bool force = false);
     void positionFpsMeterLabels();
     void positionZoomButtons();
     void drawFreqScale(QPainter& p, const QRect& r);
@@ -1226,6 +1229,9 @@ private:
     double m_kiwiSdrWaterfallFps{0.0};
     QLabel* m_panFpsMeterLabel{nullptr};
     QLabel* m_wfFpsMeterLabel{nullptr};
+    QLabel* m_syncFpsMeterLabel{nullptr};
+    QElapsedTimer m_syncFpsMeterUpdateTimer;
+    std::function<QString()> m_fpsMeterSyncStatsProvider;
     qint64 m_lastMouseMoveNs{0};
 
     // ── TNF markers ────────────────────────────────────────────────────

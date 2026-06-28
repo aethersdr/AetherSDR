@@ -82,6 +82,17 @@ int main(int argc, char** argv)
                                                        QStringLiteral("XVTR")}),
                  "slice parses tx_ant_list");
 
+    slice.applyStatus({{QStringLiteral("rx_ant_list"), QStringLiteral("ANT1,RX_A,RX_B")}});
+    ok &= expect(slice.rxAntennaList() == QStringList({QStringLiteral("ANT1"),
+                                                       QStringLiteral("RX_A"),
+                                                       QStringLiteral("RX_B")}),
+                 "slice parses rx_ant_list");
+
+    slice.setRxAntenna(QStringLiteral("RX_B"));
+    ok &= expect(commands == QStringList({QStringLiteral("slice set 3 rxant=RX_B")}),
+                 "slice RX antenna command keeps canonical token");
+    commands.clear();
+
     slice.setTxAntenna(QStringLiteral("XVTR"));
     ok &= expect(commands == QStringList({QStringLiteral("slice set 3 txant=XVTR")}),
                  "slice TX antenna command keeps canonical token");

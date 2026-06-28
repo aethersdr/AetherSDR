@@ -304,6 +304,22 @@ connects).
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
 
+### `slice rxsource`
+Selects the receive source for a slice through the same virtual-Kiwi path as
+the GUI RX antenna menus. The source selector is not a static list: it resolves
+against the operator's saved Kiwi receiver profiles by configured name, display
+name, profile id, virtual antenna token, or endpoint. Use `flex`, `none`, or
+`clear` to return the slice to Flex audio.
+
+```json
+→ {"cmd":"slice","action":"rxsource","value":"7 K4JK"}
+← {"ok":true,"slice":"rxsource","id":7,"source":"kiwi",
+   "profileName":"K4JK","requested":true}
+
+→ {"cmd":"slice","action":"rxsource","value":"7 flex"}
+← {"ok":true,"slice":"rxsource","id":7,"source":"flex","requested":true}
+```
+
 ### `close`
 Close the target's **top-level window**. Resolves `target` like `grab`, then
 closes `target->window()` — so a child control closes its dialog. This reaches
@@ -475,6 +491,57 @@ measurement.
 
 All `streams` actions are read-only / RX; none sends a radio command or keys the
 transmitter.
+
+### `get sync`
+Read the Receive Sync state used by the spectrum overlay and Auto Assist.
+
+```json
+→ {"cmd":"get","model":"sync"}
+← {"ok":true,"model":"sync","status":"locked",
+   "effectiveOffsetMs":470,"candidateResidualMs":0,
+   "candidateConfidence":0.54,"candidatePeakCorrelation":0.77}
+```
+
+Useful fields:
+
+| field | meaning |
+|---|---|
+| `status` / `statusText` | `searching`, `locked`, `coasting`, etc. |
+| `effectiveOffsetMs` | Applied presentation offset; positive delays Flex relative to Kiwi |
+| `candidateResidualMs` | Latest measured residual at the output-stage estimator point |
+| `candidateAbsoluteOffsetMs` | Current applied offset plus residual candidate |
+| `candidateConfidence` / `candidatePeakCorrelation` | Matcher quality for the latest estimate |
+| `stableEstimateCount` | Count of consecutive near-equal candidate offsets |
+| `lastAcceptedLock` | Whether the latest estimator pass changed/confirmed the applied lock |
+| `flex*BufferMs`, `kiwi*BufferMs`, `playbackQueuedMs` | Current live-to-ear staging counters |
+
+### `audioCapture`
+Bounded, automation-only PCM capture for receive-sync diagnostics. It is active
+only inside an `AETHER_AUTOMATION=1` process, is read-only, and does not change
+audio routing or playback buffers.
+
+```json
+→ {"cmd":"audioCapture","action":"start","value":"5000 raw,post,output,final"}
+← {"ok":true,"active":true,"durationMs":5000,
+   "raw":true,"post":true,"output":true,"final":true}
+
+→ {"cmd":"audioCapture","action":"read","path":"/tmp/aether-audio-capture.json"}
+← {"ok":true,"path":"/tmp/aether-audio-capture.json","chunkCount":812,"capturedBytes":4874240}
+```
+
+Capture points:
+
+| point | contents |
+|---|---|
+| `raw` | Flex/Kiwi float32 stereo PCM as it enters AudioEngine, useful for arrival-timing diagnostics |
+| `post` | Source-tagged Flex/Kiwi float32 stereo after client DSP/resampling, just before each source output FIFO |
+| `output` | Source-tagged Flex/Kiwi float32 stereo as the final mixer consumes each source FIFO; this is the Auto Assist estimator timing point |
+| `final` | Final mixed float32 stereo bytes accepted by the RX audio sink |
+
+The JSON file contains chunks with `point`, `source`, optional `sourceId`,
+`sampleRate`, `channels`, `format: "float32le"`, `startNs`, `frames`, and
+base64 `pcmBase64`. Use `audioCapture status` for metadata only and
+`audioCapture stop` to stop early.
 
 ### Errors
 Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.

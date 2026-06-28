@@ -909,31 +909,44 @@ void MainWindow::wirePanLifecycle()
                 PerfTelemetry::FrameKind::Panadapter,
                 static_cast<double>(PerfTelemetry::nowNs() - emittedNs) / 1000000.0);
         }
-        for (auto* pan : m_radioModel.panadapters()) {
-            if (pan->panStreamId() == streamId) {
-                if (auto* sw = m_panStack->spectrum(pan->panId())) {
-                    if (!profileLoadFrameReady(pan->panId(), sw, bins.size())) {
+        deferReceivePresentation(
+            ReceivePresentationSource::Flex,
+            ReceivePresentationSurface::Spectrum,
+            [this, profileLoadFrameReady, streamId, bins]() {
+                if (m_shuttingDown || !m_panStack) {
+                    return;
+                }
+                for (auto* pan : m_radioModel.panadapters()) {
+                    if (pan->panStreamId() == streamId) {
+                        if (auto* sw = m_panStack->spectrum(pan->panId())) {
+                            if (!profileLoadFrameReady(pan->panId(), sw,
+                                                       bins.size())) {
+                                return;
+                            }
+                            sw->updateSpectrum(bins);
+                            finishPanadapterConnectionAnimation();
+                        }
                         return;
                     }
-                    sw->updateSpectrum(bins);
-                    finishPanadapterConnectionAnimation();
                 }
-                return;
-            }
-        }
-        // Fallback: active spectrum only before any radio-owned pan has been
-        // claimed. During profile loads/removals, queued frames from streams
-        // that were just removed can arrive after their model is gone; drawing
-        // them into the current active pane produces a brief bogus trace.
-        if (m_radioModel.panadapters().isEmpty() && !profileLoadRadioStateWritesHeld()) {
-            if (auto* sw = spectrum()) {
-                sw->updateSpectrum(bins);
-                finishPanadapterConnectionAnimation();
-            }
-        } else {
-            qCDebug(lcProtocol) << "MainWindow: dropped unmatched FFT stream"
-                                << QStringLiteral("0x%1").arg(streamId, 0, 16);
-        }
+                // Fallback: active spectrum only before any radio-owned pan has
+                // been claimed. During profile loads/removals, queued frames
+                // from streams that were just removed can arrive after their
+                // model is gone; drawing them into the current active pane
+                // produces a brief bogus trace.
+                if (m_radioModel.panadapters().isEmpty()
+                    && !profileLoadRadioStateWritesHeld()) {
+                    if (auto* sw = spectrum()) {
+                        sw->updateSpectrum(bins);
+                        finishPanadapterConnectionAnimation();
+                    }
+                } else {
+                    qCDebug(lcProtocol)
+                        << "MainWindow: dropped unmatched FFT stream"
+                        << QStringLiteral("0x%1").arg(streamId, 0, 16);
+                }
+            },
+            QString::number(streamId));
     });
     // ── S History Markers — tap into FFT frames for voice signal detection ──
     connect(m_radioModel.panStream(), &PanadapterStream::spectrumReady,
@@ -954,55 +967,76 @@ void MainWindow::wirePanLifecycle()
                 PerfTelemetry::FrameKind::Waterfall,
                 static_cast<double>(PerfTelemetry::nowNs() - emittedNs) / 1000000.0);
         }
-        for (auto* pan : m_radioModel.panadapters()) {
-            if (pan->wfStreamId() == streamId) {
-                const double panCenter = pan->centerMhz();
-                if (XvtrPolicy::isWaterfallTileOutsidePan(low, high, panCenter)) {
-                    // Only reinterpret non-overlapping tile ranges for real XVTR
-                    // IF/RF translation. Ordinary HF pans can briefly see stale
-                    // tile centers while dragging; shifting those corrupts rows.
-                    const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
-                    const auto match = XvtrPolicy::matchWaterfallTileTransverterOffset(
-                        low, high, panCenter, xvtrs);
-                    bool hasXvtrSliceAntenna = false;
-                    if (!match.matched) {
-                        for (auto* slice : m_radioModel.slices()) {
-                            if (!slice || slice->panId() != pan->panId())
-                                continue;
-                            if (slice->rxAntenna().startsWith(QStringLiteral("XVT"),
-                                                               Qt::CaseInsensitive)) {
-                                hasXvtrSliceAntenna = true;
-                                break;
-                            }
-                        }
-                    }
-                    const auto mapped = XvtrPolicy::mapWaterfallTileRange(
-                        low, high, panCenter, xvtrs, hasXvtrSliceAntenna);
-                    logXvtrWaterfallDecision(streamId, pan->panId(), panCenter,
-                                             low, high, mapped, match,
-                                             hasXvtrSliceAntenna, xvtrs);
-                    low = mapped.lowMhz;
-                    high = mapped.highMhz;
+        deferReceivePresentation(
+            ReceivePresentationSource::Flex,
+            ReceivePresentationSurface::Waterfall,
+            [this, profileLoadFrameReady, streamId, bins, low, high, tc]() {
+                if (m_shuttingDown || !m_panStack) {
+                    return;
                 }
-                if (auto* sw = m_panStack->spectrum(pan->panId())) {
-                    if (!profileLoadFrameReady(pan->panId(), sw, bins.size())) {
+                for (auto* pan : m_radioModel.panadapters()) {
+                    if (pan->wfStreamId() == streamId) {
+                        double rowLow = low;
+                        double rowHigh = high;
+                        const double panCenter = pan->centerMhz();
+                        if (XvtrPolicy::isWaterfallTileOutsidePan(rowLow, rowHigh,
+                                                                  panCenter)) {
+                            // Only reinterpret non-overlapping tile ranges for
+                            // real XVTR IF/RF translation. Ordinary HF pans can
+                            // briefly see stale tile centers while dragging;
+                            // shifting those corrupts rows.
+                            const auto xvtrs =
+                                xvtrPolicyBandsFrom(m_radioModel.xvtrList());
+                            const auto match =
+                                XvtrPolicy::matchWaterfallTileTransverterOffset(
+                                    rowLow, rowHigh, panCenter, xvtrs);
+                            bool hasXvtrSliceAntenna = false;
+                            if (!match.matched) {
+                                for (auto* slice : m_radioModel.slices()) {
+                                    if (!slice || slice->panId() != pan->panId()) {
+                                        continue;
+                                    }
+                                    if (slice->rxAntenna().startsWith(
+                                            QStringLiteral("XVT"),
+                                            Qt::CaseInsensitive)) {
+                                        hasXvtrSliceAntenna = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            const auto mapped = XvtrPolicy::mapWaterfallTileRange(
+                                rowLow, rowHigh, panCenter, xvtrs,
+                                hasXvtrSliceAntenna);
+                            logXvtrWaterfallDecision(
+                                streamId, pan->panId(), panCenter, rowLow, rowHigh,
+                                mapped, match, hasXvtrSliceAntenna, xvtrs);
+                            rowLow = mapped.lowMhz;
+                            rowHigh = mapped.highMhz;
+                        }
+                        if (auto* sw = m_panStack->spectrum(pan->panId())) {
+                            if (!profileLoadFrameReady(pan->panId(), sw,
+                                                       bins.size())) {
+                                return;
+                            }
+                            sw->updateWaterfallRow(bins, rowLow, rowHigh, tc);
+                            finishPanadapterConnectionAnimation();
+                        }
                         return;
                     }
-                    sw->updateWaterfallRow(bins, low, high, tc);
-                    finishPanadapterConnectionAnimation();
                 }
-                return;
-            }
-        }
-        if (m_radioModel.panadapters().isEmpty() && !profileLoadRadioStateWritesHeld()) {
-            if (auto* sw = spectrum()) {
-                sw->updateWaterfallRow(bins, low, high, tc);
-                finishPanadapterConnectionAnimation();
-            }
-        } else {
-            qCDebug(lcProtocol) << "MainWindow: dropped unmatched waterfall stream"
-                                << QStringLiteral("0x%1").arg(streamId, 0, 16);
-        }
+                if (m_radioModel.panadapters().isEmpty()
+                    && !profileLoadRadioStateWritesHeld()) {
+                    if (auto* sw = spectrum()) {
+                        sw->updateWaterfallRow(bins, low, high, tc);
+                        finishPanadapterConnectionAnimation();
+                    }
+                } else {
+                    qCDebug(lcProtocol)
+                        << "MainWindow: dropped unmatched waterfall stream"
+                        << QStringLiteral("0x%1").arg(streamId, 0, 16);
+                }
+            },
+            QString::number(streamId));
     });
     connect(m_radioModel.panStream(), &PanadapterStream::waterfallAutoBlackLevel,
             this, [this](quint32 streamId, quint32 autoBlack) {

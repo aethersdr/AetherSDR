@@ -7,8 +7,10 @@
 #include <QAudioFormat>
 #include <QIODevice>
 #include <QJsonArray>
+#include <QJsonObject>
 #include <QUdpSocket>
 #include <QTimer>
+#include <QVector>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -17,6 +19,7 @@
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 
 #include "TxMicChannelNormalizer.h"
 #include "SpectralNR.h"
@@ -24,6 +27,7 @@
 class QMediaDevices;
 
 #include <functional>
+#include <algorithm>
 #include <memory>
 #include <deque>
 #include <vector>
@@ -72,6 +76,28 @@ class AudioEngine : public QObject {
 
 public:
     static constexpr int DEFAULT_SAMPLE_RATE = 24000;
+
+    struct ReceivePresentationAudioQueues {
+        int playbackQueuedMs{0};
+        int flexRawBufferMs{0};
+        int flexOutputBufferMs{0};
+        int kiwiSdrRawBufferMs{0};
+        int kiwiSdrOutputBufferMs{0};
+        int externalKiwiRawBufferMs{0};
+        int externalKiwiOutputBufferMs{0};
+
+        int flexTotalQueuedMs() const
+        {
+            return flexRawBufferMs + flexOutputBufferMs + playbackQueuedMs;
+        }
+
+        int kiwiTotalQueuedMs() const
+        {
+            return std::max(kiwiSdrRawBufferMs + kiwiSdrOutputBufferMs,
+                            externalKiwiRawBufferMs + externalKiwiOutputBufferMs)
+                   + playbackQueuedMs;
+        }
+    };
 
     explicit AudioEngine(QObject* parent = nullptr);
     ~AudioEngine() override;
@@ -122,6 +148,13 @@ public:
     int  rxPan() const { return m_rxPan.load(); }
     void  setRxBufferCapMs(int ms) { m_rxBufferCapMs.store(qBound(50, ms, 1000)); }
     int   rxBufferCapMs() const { return m_rxBufferCapMs.load(); }
+    void setReceivePresentationDelays(
+        int flexDelayMs,
+        int kiwiDelayMs,
+        const QString& externalKiwiDelaySourceId = QString());
+    void resetReceivePresentationAudioBuffers();
+    void resetReceivePresentationAudioBuffersForKiwiSource(
+        const QString& sourceId);
 
     bool isMuted() const       { return m_muted.load(); }
     void setMuted(bool m);
@@ -133,6 +166,10 @@ public:
     bool txInputResamplingTo24k() const { return m_txNeedsResample; }
     bool rxOutputResamplingActive() const { return m_rxOutputRate.load() != DEFAULT_SAMPLE_RATE; }
     QJsonArray audioEndpointDiagnostics() const;
+    QJsonObject startAutomationAudioCapture(int durationMs,
+                                            const QStringList& points);
+    QJsonObject stopAutomationAudioCapture();
+    QJsonObject automationAudioCaptureSnapshot(bool includePcm) const;
 
     // Client-side PC mic gain (0-100 → 0.0-1.0, applied before Opus encoding)
     void setPcMicGain(int level) { m_pcMicGain.store(qBound(0, level, 100) / 100.0f); }
@@ -452,6 +489,11 @@ public:
     qsizetype rxBufferPeakBytes() const { return m_rxBufferPeakBytes.load(); }
     quint64 rxBufferUnderrunCount() const { return m_rxBufferUnderrunCount.load(); }
     int rxBufferSampleRate() const { return m_rxBufferSampleRate.load(); }
+    int rxPlaybackQueuedMs() const
+    {
+        return m_rxPlaybackQueuedMs.load(std::memory_order_relaxed);
+    }
+    ReceivePresentationAudioQueues receivePresentationAudioQueues() const;
 
     // Local CW sidetone generator — accessor used by RadioModel signal
     // routing and PhoneCwApplet UI bindings.
@@ -524,6 +566,14 @@ signals:
     // RX panStream::audioDataReady() path so CwDecoder::feedAudio()
     // accepts it without a separate adapter.
     void txDecodeAudioReady(const QByteArray& pcm24kStereoFloat);
+    void receivePresentationPostDspAudioReady(const QString& source,
+                                              const QString& sourceId,
+                                              const QByteArray& pcmStereoFloat,
+                                              int sampleRate);
+    void receivePresentationOutputAudioReady(const QString& source,
+                                             const QString& sourceId,
+                                             const QByteArray& pcmStereoFloat,
+                                             int sampleRate);
 
     void pcMicLevelChanged(float peakDbfs, float avgDbfs);  // client-side PC mic metering
     void scopeSamplesReady(const QByteArray& monoFloat32Pcm, int sampleRate, bool tx);
@@ -580,10 +630,21 @@ private:
         QByteArray bnrOutBuf;
         float gain{1.0f};
         int pan{50};
+        int presentationDelayMs{0};
         bool enabled{false};
         bool muted{false};
         bool prebuffering{false};
         bool bnrPrimed{false};
+    };
+
+    struct AutomationAudioCaptureChunk {
+        QString point;
+        QString source;
+        QString sourceId;
+        int sampleRate{DEFAULT_SAMPLE_RATE};
+        int channels{2};
+        qint64 startNs{0};
+        QByteArray pcm;
     };
 
     QAudioFormat makeFormat() const;
@@ -605,6 +666,12 @@ private:
     void processMixedRxAudioData(const QByteArray& pcm,
                                  RxDspSource source = RxDspSource::Main,
                                  ExternalRxAudioSourceState* externalSource = nullptr);
+    void captureAutomationAudio(const QString& point,
+                                const QString& source,
+                                const QString& sourceId,
+                                const QByteArray& pcm,
+                                int sampleRate,
+                                int channels);
     void processNr2(const QByteArray& stereoPcm,
                     RxDspSource source = RxDspSource::Main,
                     ExternalRxAudioSourceState* externalSource = nullptr);
@@ -966,12 +1033,37 @@ private:
     QByteArray    m_radeRxBuffer;  // decoded RADE speech at output device rate
     std::atomic<bool> m_kiwiSdrAudioEnabled{false};
     std::atomic<bool> m_kiwiSdrAudioTransmitMuted{false};
-    bool          m_kiwiSdrPrebuffering{false};
+    std::atomic<int>  m_flexReceivePresentationDelayMs{0};
+    std::atomic<int>  m_kiwiReceivePresentationDelayMs{0};
+    QString           m_externalKiwiReceivePresentationDelaySourceId;
+    int               m_externalKiwiReceivePresentationDelayMs{0};
+    std::atomic<bool> m_rxPresentationPrebuffering{false};
+    std::atomic<bool> m_kiwiSdrPrebuffering{false};
     std::vector<std::unique_ptr<ExternalRxAudioSourceState>> m_externalKiwiSources;
     std::atomic<qsizetype> m_rxBufferBytes{0};
     std::atomic<qsizetype> m_rxBufferPeakBytes{0};
     std::atomic<quint64>   m_rxBufferUnderrunCount{0};
     std::atomic<int>       m_rxBufferSampleRate{DEFAULT_SAMPLE_RATE};
+    std::atomic<int>       m_rxPlaybackQueuedMs{0};
+    // Cached on the audio thread; diagnostics may read from GUI/automation.
+    std::atomic<int>       m_receivePresentationPlaybackQueuedMs{0};
+    std::atomic<int>       m_receivePresentationFlexRawBufferMs{0};
+    std::atomic<int>       m_receivePresentationFlexOutputBufferMs{0};
+    std::atomic<int>       m_receivePresentationKiwiSdrRawBufferMs{0};
+    std::atomic<int>       m_receivePresentationKiwiSdrOutputBufferMs{0};
+    std::atomic<int>       m_receivePresentationExternalKiwiRawBufferMs{0};
+    std::atomic<int>       m_receivePresentationExternalKiwiOutputBufferMs{0};
+    mutable std::mutex     m_automationAudioCaptureMutex;
+    std::atomic<bool>      m_automationAudioCaptureActive{false};
+    bool                   m_automationCaptureRaw{false};
+    bool                   m_automationCapturePost{false};
+    bool                   m_automationCaptureOutput{false};
+    bool                   m_automationCaptureFinal{false};
+    qint64                 m_automationCaptureStartNs{0};
+    qint64                 m_automationCaptureEndNs{0};
+    qsizetype              m_automationCaptureBytes{0};
+    qsizetype              m_automationCaptureMaxBytes{0};
+    QVector<AutomationAudioCaptureChunk> m_automationCaptureChunks;
     static constexpr int   kKiwiSdrJitterTargetMs = 360;
     static constexpr int   kKiwiSdrBufferCapMs = 1000;
     void resetRxChainStateForSourceSwitch();

@@ -15,6 +15,7 @@
 #include "core/CommandParser.h"   // MessageSeverity for onRadioMessage slot
 #include "core/RadioDiscovery.h"
 #include "core/AudioEngine.h"
+#include "core/ReceivePresentationSync.h"
 #include "core/CatPort.h"
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
@@ -73,8 +74,10 @@
 #include <QHash>
 #include <QJsonObject>
 #include <QTimer>
+#include <QElapsedTimer>
 #include <QEvent>
 #include <atomic>
+#include <functional>
 
 class QAbstractSlider;
 class QMediaDevices;
@@ -185,6 +188,8 @@ public:
     AudioEngine* audioEngine() const { return m_audio; }
     Q_INVOKABLE void showConnectionDialog();
     Q_INVOKABLE void hideConnectionDialog();
+    QJsonObject automationSetSliceReceiveSource(const QString& arg);
+    QJsonObject automationReceiveSyncSnapshot() const;
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -348,6 +353,67 @@ private:
     bool autoSquelchShouldRunOnSpectrum(const QString& panId,
                                         const SpectrumWidget* spectrum) const;
     void syncActiveSliceAutoSquelchToSpectrums();
+    void initReceivePresentationSync(); // MainWindow_ReceiveSync.cpp
+    void syncReceivePresentationDelaysToAudioEngine(
+        bool clearVisualQueueOnAbruptDelayChange = true);
+    ReceivePresentationSettings receivePresentationSettings() const;
+    ReceiveDelayBreakdown receivePresentationDelayBreakdown() const;
+    QString receivePresentationOverlayStatsText() const;
+    void setReceivePresentationSyncEnabled(bool enabled);
+    void setReceivePresentationSyncMode(ReceiveSyncMode mode);
+    void adjustReceivePresentationManualOffsetMs(int deltaMs);
+    void resetReceivePresentationManualOffset();
+    void setReceivePresentationLatencyMs(int latencyMs);
+    int receivePresentationDelayMs(
+        ReceivePresentationSource source,
+        ReceivePresentationSurface surface,
+        const QString& sourceId = QString()) const;
+    void deferReceivePresentation(ReceivePresentationSource source,
+                                  ReceivePresentationSurface surface,
+                                  std::function<void()> apply,
+                                  const QString& sourceId = QString());
+    bool receivePresentationHasUsableSyncTarget() const;
+    void resetReceivePresentationAudioBuffers();
+    void resetReceivePresentationAudioBuffersForKiwiSource(
+        const QString& sourceId);
+    void clearReceivePresentationVisualQueue();
+    void clearReceivePresentationVisualQueueForSource(
+        ReceivePresentationSource source,
+        const QString& sourceId = QString());
+    void scheduleReceivePresentationVisualQueue();
+    void drainReceivePresentationVisualQueue();
+    struct ReceiveSyncTarget {
+        enum class State {
+            None,
+            Usable,
+            Ambiguous,
+        };
+        State state{State::None};
+        QString kiwiProfileId;
+        int flexSliceId{-1};
+        int kiwiSliceId{-1};
+        qint64 frequencyHz{0};
+        int audibleFlexCount{0};
+        int audibleKiwiCount{0};
+        int matchingPairCount{0};
+        QString reason;
+
+        bool usable() const { return state == State::Usable; }
+        bool ambiguous() const { return state == State::Ambiguous; }
+    };
+    ReceiveSyncTarget resolveReceiveSyncTarget() const;
+    QString receiveSyncKiwiProfileId() const;
+    QString receiveSyncDelayKiwiProfileId() const;
+    qint64 receiveSyncTunedFrequencyHz() const;
+    void holdReceivePresentationAutoAssistLock(bool clearVisualQueue = true);
+    void resetReceivePresentationAutoAssistState(bool clearEstimate,
+                                                 bool clearVisualQueue = true);
+    void feedReceivePresentationSyncAudio(ReceivePresentationSource source,
+                                          const QByteArray& pcm24kStereoFloat,
+                                          const QString& sourceId = QString(),
+                                          int sampleRateHz =
+                                              AudioEngine::DEFAULT_SAMPLE_RATE);
+    void runReceivePresentationAutoAssist();
     SliceModel* kiwiSdrDisplaySliceForPan(const QString& panId) const;
     QString kiwiSdrProfileForPan(const QString& panId) const;
     QString kiwiSdrOverlayProfileForPan(const QString& panId) const;
@@ -811,6 +877,30 @@ private:
     bool             m_kiwiSdrAudioTransmitMuted{false};
     QMetaObject::Connection m_kiwiSdrAudioMuteConnection;
     QHash<int, bool> m_kiwiSdrVirtualPreviousMute;
+    ReceivePresentationSync m_receivePresentationSync;
+    ReceiveAudioDelayEstimator m_receiveAudioDelayEstimator;
+    ReceivePresentationQueue<std::function<void()>> m_receivePresentationVisualQueue;
+    QHash<QString, qint64> m_receivePresentationVisualLastDueMs;
+    QTimer* m_receivePresentationVisualTimer{nullptr};
+    quint64 m_receivePresentationVisualSequence{0};
+    int m_receivePresentationLastFlexAudioDelayMs{-1};
+    int m_receivePresentationLastKiwiAudioDelayMs{-1};
+    QVector<float> m_receiveSyncFlexAudio;
+    QVector<float> m_receiveSyncKiwiAudio;
+    QString m_receiveSyncKiwiProfileId;
+    QElapsedTimer m_receiveSyncEstimateTimer;
+    QElapsedTimer m_receiveSyncDriftTimer;
+    int m_receiveSyncLastEstimateOffsetMs{0};
+    int m_receiveSyncStableEstimateCount{0};
+    ReceiveAudioDelayEstimate m_receiveSyncLastCandidate;
+    int m_receiveSyncLastCandidateAbsoluteOffsetMs{0};
+    bool m_receiveSyncLastCandidateAvailable{false};
+    bool m_receiveSyncLastAcceptedLock{false};
+    bool m_receiveSyncLastNearAppliedLock{false};
+    bool m_receiveSyncLastFarRelockEligible{false};
+    qint64 m_receiveSyncLastFrequencyHz{0};
+    bool m_receiveSyncHaveLastEstimate{false};
+    bool m_receiveSyncTargetUnavailable{false};
 
     // Modeless dialogs
     QPointer<DxClusterDialog> m_spotHubDialog;

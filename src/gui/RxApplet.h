@@ -159,6 +159,7 @@ private:
     void updateAntennaButton(QPushButton* button, const QString& token, bool tx);
     void updateAntennaButtons();
     void updateFreqLabel();
+    QStringList rxAntennaOptions() const;
     QStringList txAntennaOptions() const;
     QString antennaMenuLabel(const QString& token, const QStringList& options) const;
 

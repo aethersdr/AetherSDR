@@ -973,6 +973,7 @@ MainWindow::MainWindow(QWidget* parent)
     if (m_leanMode) {
         QTimer::singleShot(0, this, [this]() { applyLeanMode(true); });
     }
+    initReceivePresentationSync();
 
     m_audioThread->setObjectName("AudioEngine");
     m_audio = new AudioEngine;  // no parent — will be moved to thread
@@ -984,6 +985,7 @@ MainWindow::MainWindow(QWidget* parent)
         AppSettings::instance().value("AudioBufferMs", "200").toInt());
     m_audio->moveToThread(m_audioThread);
     m_audioThread->start();
+    syncReceivePresentationDelaysToAudioEngine();
     setupAudioDeviceChangeMonitor();
 
     // QSO audio recorder (#1297) — lives on main thread, audio feeds are thread-safe
@@ -1251,6 +1253,14 @@ MainWindow::MainWindow(QWidget* parent)
     // audioDataReady(); we feed that directly to the QAudioSink.
     connect(m_radioModel.panStream(), &PanadapterStream::audioDataReady,
             m_audio, &AudioEngine::feedAudioData);
+    connect(m_audio, &AudioEngine::receivePresentationOutputAudioReady,
+            this, [this](const QString& source, const QString& sourceId,
+                         const QByteArray& pcm, int sampleRate) {
+        const ReceivePresentationSource syncSource =
+            source == QLatin1String("kiwi") ? ReceivePresentationSource::KiwiSdr
+                                            : ReceivePresentationSource::Flex;
+        feedReceivePresentationSyncAudio(syncSource, pcm, sourceId, sampleRate);
+    });
 
     // KiwiSDR is a receive-only alternate source for the active slice.
     // Wiring is local-only: no Flex radio commands are sent from this path.

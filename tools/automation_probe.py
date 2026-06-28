@@ -23,8 +23,11 @@ Usage:
     python tools/automation_probe.py connect show
     python tools/automation_probe.py connect local first
     python tools/automation_probe.py connect wait 30000
+    python tools/automation_probe.py get sync
     python tools/automation_probe.py grab SpectrumWidget /tmp/pan.png
     python tools/automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png
+    python tools/automation_probe.py audioCapture start 3000 raw,post,final
+    python tools/automation_probe.py audioCapture read /tmp/aether-audio.json
 """
 
 import argparse
@@ -97,20 +100,26 @@ def main():
                "  automation_probe.py connect local first\n"
                "  automation_probe.py connect wait 30000\n"
                "  automation_probe.py get radio\n"
+               "  automation_probe.py get sync\n"
                "  automation_probe.py get slice active frequency\n"
+               "  automation_probe.py slice rxsource 7 K4JK\n"
                "  automation_probe.py invoke 'Master volume' setValue 35\n"
+               "  automation_probe.py audioCapture start 3000 raw,post,final\n"
+               "  automation_probe.py audioCapture read /tmp/aether-audio.json\n"
                "  automation_probe.py grab SpectrumWidget /tmp/pan.png\n"
                "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="demo",
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
-                             "connect", "disconnect"],
+                             "connect", "disconnect", "slice", "audioCapture"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
                          "invoke <target> <action> [value] | "
                          "get <model> [selector] [property] | "
-                         "connect <list|show|hide|local|ip|wait> [args]")
+                         "connect <list|show|hide|local|ip|wait> [args] | "
+                         "slice <add|remove|select|tx|txant|rxant|rxsource> [args] | "
+                         "audioCapture <start|stop|status|read> [args]")
     ap.add_argument("--socket", help="override the bridge socket path")
     ap.add_argument("--out", default=".", help="output dir for demo artifacts")
     args = ap.parse_args()
@@ -175,6 +184,24 @@ def main():
 
         elif args.command == "disconnect":
             print(json.dumps(bridge.request({"cmd": "disconnect"}), indent=2))
+
+        elif args.command == "slice":
+            if not args.rest:
+                sys.exit("error: slice needs an action")
+            req = {"cmd": "slice", "action": args.rest[0]}
+            if len(args.rest) > 1:
+                req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "audioCapture":
+            action = args.rest[0] if args.rest else "status"
+            req = {"cmd": "audioCapture", "action": action}
+            if len(args.rest) > 1:
+                if action == "read" and len(args.rest) == 2:
+                    req["path"] = args.rest[1]
+                else:
+                    req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
 
         else:  # demo: produce the Phase-0 deliverables
             os.makedirs(args.out, exist_ok=True)

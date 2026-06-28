@@ -430,6 +430,14 @@ int main(int argc, char* argv[])
             automation->setConnectionDialogHost(&window);
             automation->setConnectionPanel(
                 window.findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));
+            automation->setSliceReceiveSourceHandler(
+                [&window](const QString& arg) {
+                    return window.automationSetSliceReceiveSource(arg);
+                });
+            automation->setReceiveSyncSnapshotHandler(
+                [&window]() {
+                    return window.automationReceiveSyncSnapshot();
+                });
             if (!automation->start(sockName))
                 automation.reset();
         }

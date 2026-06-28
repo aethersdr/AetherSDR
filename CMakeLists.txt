@@ -568,6 +568,7 @@ set(CORE_SOURCES
     src/core/KiwiSdrRedirectPolicy.cpp
     src/core/KiwiSdrClient.cpp
     src/core/KiwiSdrManager.cpp
+    src/core/ReceivePresentationSync.cpp
     src/core/KiwiPublicDirectory.cpp
     src/core/WanConnection.cpp
     src/core/DxClusterClient.cpp
@@ -707,6 +708,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_SwrSweep.cpp
     src/gui/MainWindow_Wiring.cpp
     src/gui/MainWindow_Nets.cpp
+    src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
     src/gui/map/MapView.cpp
     src/gui/map/MapMarkerItem.cpp
@@ -1936,6 +1938,14 @@ add_executable(kiwi_sdr_redirect_policy_test
 target_include_directories(kiwi_sdr_redirect_policy_test PRIVATE src)
 target_link_libraries(kiwi_sdr_redirect_policy_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_redirect_policy_test COMMAND kiwi_sdr_redirect_policy_test)
+
+add_executable(receive_presentation_sync_test
+    tests/receive_presentation_sync_test.cpp
+    src/core/ReceivePresentationSync.cpp
+)
+target_include_directories(receive_presentation_sync_test PRIVATE src)
+target_link_libraries(receive_presentation_sync_test PRIVATE Qt6::Core)
+add_test(NAME receive_presentation_sync_test COMMAND receive_presentation_sync_test)
 
 # Public-directory parser + external-API (ext_api) policy honoring.
 add_executable(kiwi_public_directory_test

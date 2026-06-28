@@ -19,9 +19,11 @@
 #include "InteractionSettings.h"
 
 #include <QDateTime>
+#include <QAction>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPushButton>
+#include <QPointer>
 #include <QStyle>
 #include <QStyleOptionSlider>
 #include <QTimer>
@@ -572,44 +574,56 @@ void VfoWidget::buildUI()
     m_rxAntBtn->setFlat(true);
     m_rxAntBtn->setStyleSheet(kFlatBtn + "QPushButton { color: #4488ff; }");
     connect(m_rxAntBtn, &QPushButton::clicked, this, [this] {
-        if (!m_slice) return;
-        QMenu menu(this);
-        const QStringList options = !m_slice->rxAntennaList().isEmpty()
-            ? m_slice->rxAntennaList()
-            : m_antList;
-        QStringList menuOptions = options;
+        if (!m_slice) {
+            return;
+        }
+        QPointer<SliceModel> slice = m_slice;
+        QStringList menuOptions = rxAntennaOptions();
         if (m_kiwiSdrManager) {
-            menuOptions.append(m_kiwiSdrManager->virtualAntennaTokens());
+            for (const QString& ant : m_kiwiSdrManager->virtualAntennaTokens()) {
+                if (!ant.isEmpty() && !menuOptions.contains(ant)) {
+                    menuOptions.append(ant);
+                }
+            }
+        }
+        if (menuOptions.isEmpty()) {
+            menuOptions << QStringLiteral("ANT1") << QStringLiteral("ANT2");
         }
         const QString activeKiwiProfile =
             m_kiwiSdrManager
-                ? m_kiwiSdrManager->assignedProfileForSlice(m_slice->sliceId())
+                ? m_kiwiSdrManager->assignedProfileForSlice(slice->sliceId())
                 : QString();
+        QMenu* menu = new QMenu(m_rxAntBtn);
+        connect(menu, &QMenu::aboutToHide, menu, &QObject::deleteLater);
         for (const QString& ant : menuOptions) {
-            auto* act = menu.addAction(antennaMenuLabel(ant, menuOptions));
+            auto* act = menu->addAction(antennaMenuLabel(ant, menuOptions));
             act->setData(ant);
             act->setCheckable(true);
             const QString profileId = m_kiwiSdrManager
                 ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(ant)
                 : QString();
             act->setChecked(profileId.isEmpty()
-                ? ant == m_slice->rxAntenna() && activeKiwiProfile.isEmpty()
+                ? ant == slice->rxAntenna() && activeKiwiProfile.isEmpty()
                 : profileId == activeKiwiProfile);
             act->setToolTip(ant);
             act->setStatusTip(ant);
         }
-        if (auto* sel = menu.exec(m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())))) {
+        connect(menu, &QMenu::triggered, this, [this, slice](QAction* sel) {
+            if (!sel || !slice) {
+                return;
+            }
             const QString token = sel->data().toString();
             const QString profileId = m_kiwiSdrManager
                 ? m_kiwiSdrManager->profileIdForVirtualAntennaToken(token)
                 : QString();
             if (!profileId.isEmpty()) {
-                emit kiwiRxAntennaSelected(m_slice->sliceId(), profileId);
+                emit kiwiRxAntennaSelected(slice->sliceId(), profileId);
             } else {
-                emit flexRxAntennaSelected(m_slice->sliceId());
-                m_slice->setRxAntenna(token);
+                emit flexRxAntennaSelected(slice->sliceId());
+                slice->setRxAntenna(token);
             }
-        }
+        });
+        menu->popup(m_rxAntBtn->mapToGlobal(QPoint(0, m_rxAntBtn->height())));
     });
     hdr->addWidget(m_rxAntBtn);
 
@@ -3989,6 +4003,8 @@ void VfoWidget::setSlice(SliceModel* slice)
     connect(m_slice, &SliceModel::txAntennaChanged, this, [this](const QString& ant) {
         m_updatingFromModel = true; updateAntennaButton(m_txAntBtn, ant, true); m_updatingFromModel = false;
     });
+    connect(m_slice, &SliceModel::rxAntennaListChanged,
+            this, [this](const QStringList&) { updateAntennaButtons(); });
     connect(m_slice, &SliceModel::txAntennaListChanged,
             this, [this](const QStringList&) { updateAntennaButtons(); });
     // TX slice — toggle between red (active TX) and grey (clickable to set TX)
@@ -5549,6 +5565,37 @@ QString VfoWidget::antennaMenuLabel(const QString& token,
         return token;
     return m_radioModel->antennaDisplayName(
         token, m_radioModel->antennaAliasNeedsDisambiguation(token, options));
+}
+
+QStringList VfoWidget::rxAntennaOptions() const
+{
+    QStringList options;
+    auto append = [&options](const QString& token) {
+        if (!token.isEmpty() && !options.contains(token)) {
+            options.append(token);
+        }
+    };
+
+    if (m_slice) {
+        for (const QString& ant : m_slice->rxAntennaList()) {
+            append(ant);
+        }
+    }
+
+    for (const QString& ant : m_antList) {
+        append(ant);
+    }
+
+    if (m_radioModel) {
+        for (const QString& ant : m_radioModel->knownAntennaTokens()) {
+            append(ant);
+        }
+    }
+
+    if (m_slice) {
+        append(m_slice->rxAntenna());
+    }
+    return options;
 }
 
 QStringList VfoWidget::txAntennaOptions() const

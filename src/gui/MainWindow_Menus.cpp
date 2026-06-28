@@ -59,6 +59,8 @@
 #include <QVBoxLayout>
 #include <QWidgetAction>
 
+#include <cmath>
+
 namespace AetherSDR {
 
 void MainWindow::buildMenuBar()
@@ -114,6 +116,163 @@ void MainWindow::buildMenuBar()
     auto* networkAction = settingsMenu->addAction("Network...");
     connect(networkAction, &QAction::triggered, this, [this] {
         showNetworkDiagnosticsDialog();
+    });
+
+    auto* receiveSyncMenu = settingsMenu->addMenu("Receive Sync");
+    auto* receiveSyncEnabledAct =
+        receiveSyncMenu->addAction("Sync Kiwi Audio && Display");
+    receiveSyncEnabledAct->setCheckable(true);
+    receiveSyncEnabledAct->setChecked(receivePresentationSettings().enabled);
+
+    auto* receiveSyncModeGroup = new QActionGroup(receiveSyncMenu);
+    receiveSyncModeGroup->setExclusive(true);
+    auto* receiveSyncManualAct = receiveSyncMenu->addAction("Manual Offset");
+    receiveSyncManualAct->setCheckable(true);
+    receiveSyncModeGroup->addAction(receiveSyncManualAct);
+    auto* receiveSyncAutoAct = receiveSyncMenu->addAction("Auto Assist");
+    receiveSyncAutoAct->setCheckable(true);
+    receiveSyncModeGroup->addAction(receiveSyncAutoAct);
+    receiveSyncMenu->addSeparator();
+
+    auto* receiveSyncOffsetLabel = receiveSyncMenu->addAction(QString());
+    receiveSyncOffsetLabel->setEnabled(false);
+    auto* receiveSyncOffsetMinus =
+        receiveSyncMenu->addAction("Delay KiwiSDR 50 ms");
+    auto* receiveSyncOffsetPlus =
+        receiveSyncMenu->addAction("Delay Flex 50 ms");
+    auto* receiveSyncOffsetReset = receiveSyncMenu->addAction("Reset Offset");
+    receiveSyncMenu->addSeparator();
+
+    auto* receiveSyncLatencyMenu = receiveSyncMenu->addMenu("Latency");
+    auto* receiveSyncLatencyGroup = new QActionGroup(receiveSyncLatencyMenu);
+    receiveSyncLatencyGroup->setExclusive(true);
+    auto* receiveSyncLatencyNormal =
+        receiveSyncLatencyMenu->addAction("Normal (360 ms)");
+    receiveSyncLatencyNormal->setCheckable(true);
+    receiveSyncLatencyGroup->addAction(receiveSyncLatencyNormal);
+    auto* receiveSyncLatencyStable =
+        receiveSyncLatencyMenu->addAction("More Stable (520 ms)");
+    receiveSyncLatencyStable->setCheckable(true);
+    receiveSyncLatencyGroup->addAction(receiveSyncLatencyStable);
+    auto* receiveSyncLatencyHigh =
+        receiveSyncLatencyMenu->addAction("High Jitter (1000 ms)");
+    receiveSyncLatencyHigh->setCheckable(true);
+    receiveSyncLatencyGroup->addAction(receiveSyncLatencyHigh);
+    receiveSyncMenu->addSeparator();
+    auto* receiveSyncStatusLabel = receiveSyncMenu->addAction(QString());
+    receiveSyncStatusLabel->setEnabled(false);
+
+    auto refreshReceiveSyncMenu = [this, receiveSyncEnabledAct,
+                                   receiveSyncManualAct, receiveSyncAutoAct,
+                                   receiveSyncOffsetLabel,
+                                   receiveSyncLatencyNormal,
+                                   receiveSyncLatencyStable,
+                                   receiveSyncLatencyHigh,
+                                   receiveSyncStatusLabel]() {
+        const ReceivePresentationSettings settings =
+            receivePresentationSettings();
+        const ReceiveDelayBreakdown delays =
+            receivePresentationDelayBreakdown();
+        receiveSyncEnabledAct->setChecked(settings.enabled);
+        receiveSyncManualAct->setChecked(settings.mode == ReceiveSyncMode::Manual);
+        receiveSyncAutoAct->setChecked(settings.mode == ReceiveSyncMode::AutoAssist);
+        receiveSyncOffsetLabel->setText(
+            QStringLiteral("Offset: %1%2 ms")
+                .arg(settings.manualOffsetMs >= 0 ? QStringLiteral("+")
+                                                  : QString())
+                .arg(settings.manualOffsetMs));
+        receiveSyncLatencyNormal->setChecked(settings.baseLatencyMs == 360);
+        receiveSyncLatencyStable->setChecked(settings.baseLatencyMs == 520);
+        receiveSyncLatencyHigh->setChecked(settings.baseLatencyMs == 1000);
+        QString status = QStringLiteral("Off");
+        switch (delays.status) {
+        case ReceiveSyncStatus::Off:
+            status = QStringLiteral("Off");
+            break;
+        case ReceiveSyncStatus::Manual:
+            status = QStringLiteral("Manual");
+            break;
+        case ReceiveSyncStatus::Searching:
+            status = QStringLiteral("Searching");
+            break;
+        case ReceiveSyncStatus::Holding:
+            status = QStringLiteral("Coasting");
+            break;
+        case ReceiveSyncStatus::Locked:
+            status = QStringLiteral("Locked");
+            break;
+        case ReceiveSyncStatus::LowConfidence:
+            status = QStringLiteral("Low confidence");
+            break;
+        }
+        QString statusText =
+            QStringLiteral("Status: %1, Flex %2 ms, KiwiSDR %3 ms")
+                .arg(status)
+                .arg(delays.flexDelayMs)
+                .arg(delays.kiwiDelayMs);
+        if (settings.mode == ReceiveSyncMode::AutoAssist
+            && settings.autoEstimate.valid) {
+            statusText += QStringLiteral(", est %1%2 ms, conf %3%, drift %4%5 ppm")
+                              .arg(settings.autoEstimate.offsetMs >= 0
+                                       ? QStringLiteral("+")
+                                       : QString())
+                              .arg(settings.autoEstimate.offsetMs)
+                              .arg(static_cast<int>(std::lround(
+                                  settings.autoEstimate.confidence * 100.0f)))
+                              .arg(settings.autoEstimate.driftPpm >= 0
+                                       ? QStringLiteral("+")
+                                       : QString())
+                              .arg(settings.autoEstimate.driftPpm);
+        }
+        receiveSyncStatusLabel->setText(statusText);
+    };
+    refreshReceiveSyncMenu();
+    connect(receiveSyncMenu, &QMenu::aboutToShow, this, refreshReceiveSyncMenu);
+
+    connect(receiveSyncEnabledAct, &QAction::toggled, this,
+            [this, refreshReceiveSyncMenu](bool enabled) {
+        setReceivePresentationSyncEnabled(enabled);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncManualAct, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationSyncMode(ReceiveSyncMode::Manual);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncAutoAct, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationSyncMode(ReceiveSyncMode::AutoAssist);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncOffsetMinus, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        adjustReceivePresentationManualOffsetMs(-50);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncOffsetPlus, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        adjustReceivePresentationManualOffsetMs(50);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncOffsetReset, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        resetReceivePresentationManualOffset();
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncLatencyNormal, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationLatencyMs(360);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncLatencyStable, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationLatencyMs(520);
+        refreshReceiveSyncMenu();
+    });
+    connect(receiveSyncLatencyHigh, &QAction::triggered, this,
+            [this, refreshReceiveSyncMenu]() {
+        setReceivePresentationLatencyMs(1000);
+        refreshReceiveSyncMenu();
     });
 #ifdef HAVE_MQTT
     auto* mqttAction = settingsMenu->addAction("MQTT...");

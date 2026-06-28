@@ -6,16 +6,17 @@
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QMutex>
+#include <QJsonObject>
 #include <QString>
 
 #include <deque>
+#include <functional>
 #include <memory>
 #include <vector>
 
 class QLocalServer;
 class QLocalSocket;
 class QWidget;
-class QJsonObject;
 class QTimer;
 
 namespace AetherSDR {
@@ -175,6 +176,15 @@ public:
     // automation exercises the normal MainWindow/RadioModel connection path.
     void setConnectionPanel(ConnectionPanel* panel) { m_connectionPanel = panel; }
     void setConnectionDialogHost(QObject* host) { m_connectionDialogHost = host; }
+    void setSliceReceiveSourceHandler(
+        std::function<QJsonObject(const QString&)> handler)
+    {
+        m_sliceReceiveSourceHandler = std::move(handler);
+    }
+    void setReceiveSyncSnapshotHandler(std::function<QJsonObject()> handler)
+    {
+        m_receiveSyncSnapshotHandler = std::move(handler);
+    }
 
 private slots:
     void onNewConnection();
@@ -239,6 +249,9 @@ private:
     //                     resource-level lingering Layer A can't see.
     //   streams reset   — clear the Layer-A orphan tally to re-baseline.
     QJsonObject doStreams(const QString& action);
+    QJsonObject doAudioCapture(const QString& action,
+                               const QString& arg,
+                               const QString& path) const;
     QJsonObject doGet(const QString& model, const QString& selector,
                       const QString& property) const;
     QJsonObject doConnect(const QString& action, const QString& arg, QLocalSocket* sock);
@@ -304,6 +317,8 @@ private:
     QPointer<AudioEngine> m_audioEngine;          // for get audio; may be null
     QPointer<ConnectionPanel> m_connectionPanel;  // for connect/disconnect verbs
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
+    std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;
+    std::function<QJsonObject()> m_receiveSyncSnapshotHandler;
 
     // Agent station identity (#3646). The bridge sets the per-GUI-client station
     // name to the agent's name on connect and restores the user's real name on

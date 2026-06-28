@@ -55,6 +55,7 @@
 
 #include <QDateTime>
 #include <QFileDialog>
+#include <QPointer>
 #include <QSet>
 #include <QTimer>
 
@@ -838,19 +839,41 @@ void MainWindow::onSliceAdded(SliceModel* s)
 
     // Feed S-meter per-slice — only this VFO's slice level
     const int sid = s->sliceId();
+    const QPointer<VfoWidget> vfoPtr(vfo);
     connect(&m_radioModel.meterModel(), &MeterModel::sLevelChanged,
-            vfo, [this, vfo, sid](int sliceIndex, float dbm) {
+            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
         if (sliceIndex == sid
             && (!m_kiwiSdrManager
                 || m_kiwiSdrManager->assignedProfileForSlice(sid).isEmpty())) {
-            vfo->setSignalLevel(dbm);
+            deferReceivePresentation(
+                ReceivePresentationSource::Flex,
+                ReceivePresentationSurface::Meter,
+                [this, vfoPtr, sid, dbm]() {
+                    if (!vfoPtr
+                        || (m_kiwiSdrManager
+                            && !m_kiwiSdrManager
+                                    ->assignedProfileForSlice(sid).isEmpty())) {
+                        return;
+                    }
+                    vfoPtr->setSignalLevel(dbm);
+                },
+                QString::number(sid));
         }
     });
     // Feed ESC meter per-slice — signal strength after ESC processing
     connect(&m_radioModel.meterModel(), &MeterModel::escLevelChanged,
-            vfo, [vfo, sid](int sliceIndex, float dbm) {
-        if (sliceIndex == sid)
-            vfo->setEscLevel(dbm);
+            vfo, [this, vfoPtr, sid](int sliceIndex, float dbm) {
+        if (sliceIndex == sid) {
+            deferReceivePresentation(
+                ReceivePresentationSource::Flex,
+                ReceivePresentationSurface::Meter,
+                [vfoPtr, dbm]() {
+                    if (vfoPtr) {
+                        vfoPtr->setEscLevel(dbm);
+                    }
+                },
+                QString::number(sid));
+        }
     });
     // Feed the SmartMTR TX scales: mic level + compression (dBFS / dB) from
     // micMetersChanged, and forward power + SWR from txMetersChanged. The VFO
@@ -1564,6 +1587,9 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     if (m_appletPanel && m_appletPanel->rxApplet()) {
         QObject::disconnect(m_appletPanel->rxApplet(), nullptr, sw, nullptr);
     }
+    sw->setFpsMeterSyncStatsProvider([this]() {
+        return receivePresentationOverlayStatsText();
+    });
 
     auto updateKiwiWaterfallView = [this, applet, sw](double centerMhz,
                                                       double bandwidthMhz) {
@@ -3387,12 +3413,26 @@ void MainWindow::wireMeters()
             && (!m_kiwiSdrManager
                 || m_kiwiSdrManager
                        ->assignedProfileForSlice(sliceIndex).isEmpty())) {
-            m_appletPanel->sMeterWidget()->setLevel(dbm);
+            deferReceivePresentation(
+                ReceivePresentationSource::Flex,
+                ReceivePresentationSurface::Meter,
+                [this, sliceIndex, dbm]() {
+                    if (!m_appletPanel
+                        || sliceIndex != m_activeSliceId
+                        || (m_kiwiSdrManager
+                            && !m_kiwiSdrManager
+                                    ->assignedProfileForSlice(sliceIndex)
+                                    .isEmpty())) {
+                        return;
+                    }
+                    m_appletPanel->sMeterWidget()->setLevel(dbm);
 #ifdef HAVE_HIDAPI
-            m_tmate2SmeterDbm = dbm;
-            updateTMate2Display();
-            updateTMate2Indicators();
+                    m_tmate2SmeterDbm = dbm;
+                    updateTMate2Display();
+                    updateTMate2Indicators();
 #endif
+                },
+                QString::number(sliceIndex));
         }
     });
     // Symmetric with the amp-side guard at line ~3654 and the PGXL TCP path
