@@ -449,6 +449,24 @@ void QsoRecorder::startPlayback()
             this, &QsoRecorder::onPlaybackSinkState);
     m_playSink->start(&m_playBuffer);
 
+    // Detect an immediate open failure (e.g. a WASAPI/CoreAudio device that
+    // false-positives isFormatSupported() then refuses at start()) BEFORE we
+    // mute live RX. If start() failed synchronously, the stateChanged handler
+    // already ran stopPlayback() but it no-op'd (m_playing was still false), so
+    // we must clean up here. Crucially we return *before* emitting
+    // muteRxRequested(true), so a failed playback can never strand live RX in a
+    // muted state (#3230 invariant) — mirrors ClientPuduMonitor::startPlayback().
+    if (m_playSink->state() == QAudio::StoppedState
+        && m_playSink->error() != QAudio::NoError) {
+        qCWarning(lcAudio) << "QsoRecorder: playback sink failed to start (error"
+                           << m_playSink->error() << ") — aborting, RX left live";
+        m_playSink->disconnect(this);
+        m_playSink->deleteLater();
+        m_playSink = nullptr;
+        if (m_playBuffer.isOpen()) m_playBuffer.close();
+        return;
+    }
+
     m_playing = true;
     emit muteRxRequested(true);
     emit playbackStarted();
