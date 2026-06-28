@@ -2487,6 +2487,18 @@ AetherDspDialog* MainWindow::ensureAetherDspDialog()
     return m_dspDialog.data();
 }
 
+void MainWindow::toggleAetherDspDialog()
+{
+    // Sibling of toggleAetherialStrip(): the per-slice DSP-tab ADSP button is a
+    // toggle, not a one-way launcher (#3877).  When the dialog is already up,
+    // close() deletes it (WA_DeleteOnClose) and clears the QPointer; the next
+    // press re-creates and re-wires through ensureAetherDspDialog().
+    if (m_dspDialog && m_dspDialog->isVisible())
+        m_dspDialog->close();
+    else
+        ensureAetherDspDialog();
+}
+
 #ifdef HAVE_MQTT
 void MainWindow::showMqttSettingsDialog()
 {

@@ -3312,11 +3312,13 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     // WFM is toggled from the spectrum overlay DAX menu (wired in the per-pan
     // setup beside daxIqChannelChanged), not the flag — no connect here. (#3853)
 
-    // AetherDSP button on the per-slice DSP tab — same entry point as the
-    // Settings menu action and the RX chain double-click; reuses the
-    // existing modeless m_dspDialog when one is already open.
+    // AetherDSP button on the per-slice DSP tab — toggles the modeless
+    // m_dspDialog (press to open, press again to close) so it matches its
+    // sibling AetherVoice button instead of being a one-way launcher (#3877).
+    // The Settings menu action and the RX chain double-click keep pure open
+    // semantics by calling ensureAetherDspDialog() directly.
     connect(w, &VfoWidget::aetherDspRequested, this, [this] {
-        ensureAetherDspDialog();
+        toggleAetherDspDialog();
     });
 
     // Accent the ADSP launcher whenever any client-side NR module is active, so
