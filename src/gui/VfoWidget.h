@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "core/KiwiSdrProtocol.h"
 
@@ -85,8 +86,15 @@ public:
     //   LockLeft/LockRight disable that flip and hold the requested side
     //   even if the panel overruns the edge. Used by split pairs so the
     //   RX/TX panels stay on their opposite sides instead of collapsing
-    //   onto the same side when the pair is near a pan edge (#2663).
+    //   onto the same side when the pair is near a pan edge (#2663). Also used
+    //   by attached diversity pairs, whose two flags must keep opposite sides
+    //   while overlapping nearby ordinary slices by z-order.
     enum FlagDir { Auto, ForceLeft, ForceRight, LockLeft, LockRight };
+
+    struct FlagPlacement {
+        QRect rect;
+        bool onLeft{true};
+    };
 
     // Reposition relative to VFO marker x coordinate.
     void updatePosition(int vfoX, int specTop, FlagDir dir = Auto);
@@ -173,6 +181,64 @@ public:
         const int gapLeft = markerX - previousMarkerX;
         const int gapRight = nextMarkerX - markerX;
         return (gapLeft >= gapRight) ? ForceLeft : ForceRight;
+    }
+
+    static int diversityPairOrderKey(bool diversityParent,
+                                     bool diversityChild,
+                                     int diversityIndex,
+                                     int sliceId)
+    {
+        if (diversityIndex >= 0) {
+            return diversityIndex;
+        }
+        if (diversityParent) {
+            return 0;
+        }
+        if (diversityChild) {
+            return 1;
+        }
+        return 1000 + std::max(sliceId, 0);
+    }
+
+    static FlagPlacement placementForMarker(int markerX,
+                                            int specTop,
+                                            int widgetWidth,
+                                            int widgetHeight,
+                                            int parentWidth,
+                                            FlagDir dir,
+                                            bool defaultOnLeft)
+    {
+        bool onLeft = defaultOnLeft;
+        const bool lockedSide = (dir == LockLeft || dir == LockRight);
+
+        if (dir == ForceLeft || dir == LockLeft) {
+            onLeft = true;
+        } else if (dir == ForceRight || dir == LockRight) {
+            onLeft = false;
+        }
+
+        constexpr int kEdgeHysteresis = 20;
+
+        int x = markerX;
+        if (onLeft) {
+            x = markerX - widgetWidth;
+            if (!lockedSide && x < -kEdgeHysteresis) {
+                x = markerX;
+                onLeft = false;
+            }
+        } else {
+            x = markerX;
+            const int effectiveParentWidth = parentWidth > 0
+                ? parentWidth
+                : std::numeric_limits<int>::max() - kEdgeHysteresis;
+            if (!lockedSide
+                && x + widgetWidth > effectiveParentWidth + kEdgeHysteresis) {
+                x = markerX - widgetWidth;
+                onLeft = true;
+            }
+        }
+
+        return {QRect(x, specTop, widgetWidth, widgetHeight), onLeft};
     }
 
     // Draw this flag's SmartMTR extremes value labels (min/max or current signal,

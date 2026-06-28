@@ -2944,49 +2944,14 @@ void VfoWidget::setAfGain(int pct)
 void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
 {
     const int w = width();
-    bool onLeft = true;
-    // Split pairs pass LockLeft/LockRight so the panels stay on their
-    // outward-facing sides even when one is near a pan edge. Without
-    // the lock, the edge-clip flip below would collapse both panels
-    // onto the same side and they would visually overlap (#2663).
-    const bool lockedSide = (dir == LockLeft || dir == LockRight);
-
-    if (dir == ForceLeft || dir == LockLeft) {
-        onLeft = true;
-    } else if (dir == ForceRight || dir == LockRight) {
-        onLeft = false;
-    } else {
-        // Auto: use mode-based default
-        onLeft = !m_slice || defaultFlagOnLeftForMode(m_slice->mode());
-    }
-
-    // 20px dead-band: only flip side when the widget clearly overruns the edge.
-    // Without this, the flip threshold can oscillate frame-to-frame while
-    // m_centerMhz is animating, snapping the VFO panel back and forth.
-    constexpr int kEdgeHysteresis = 20;
-
-    int x;
-    if (onLeft) {
-        x = vfoX - w;
-        // Flip to right only when clearly clipping the left edge.
-        // Split pairs (lockedSide) skip the flip so RX/TX stay opposite.
-        if (!lockedSide && x < -kEdgeHysteresis) {
-            x = vfoX;
-            onLeft = false;
-        }
-    } else {
-        x = vfoX;
-        // Flip to left only when clearly clipping the right edge.
-        // Split pairs (lockedSide) skip the flip so RX/TX stay opposite.
-        const int parentW = parentWidget() ? parentWidget()->width() : INT_MAX;
-        if (!lockedSide && x + w > parentW + kEdgeHysteresis) {
-            x = vfoX - w;
-            onLeft = true;
-        }
-    }
+    const bool defaultOnLeft = !m_slice || defaultFlagOnLeftForMode(m_slice->mode());
+    const int parentW = parentWidget() ? parentWidget()->width() : 0;
+    const FlagPlacement placement = placementForMarker(
+        vfoX, specTop, w, height(), parentW, dir, defaultOnLeft);
+    const bool onLeft = placement.onLeft;
 
     // Skip all moves if position unchanged — prevents repaint cascade on QRhiWidget
-    const QPoint newPos(x, specTop);
+    const QPoint newPos = placement.rect.topLeft();
     if (pos() == newPos && m_lastOnLeft == onLeft)
         return;
     m_lastOnLeft = onLeft;
@@ -3006,11 +2971,11 @@ void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
         const int gap = 2;
         int btnX;
         if (onLeft)
-            btnX = x - btnSize - gap;  // left of VFO widget
+            btnX = newPos.x() - btnSize - gap;  // left of VFO widget
         else
-            btnX = x + w + gap;        // right of VFO widget
+            btnX = newPos.x() + w + gap;        // right of VFO widget
 
-        int btnY = specTop;
+        int btnY = newPos.y();
         if (!m_collapsed) {
             m_closeSliceBtn->move(btnX, btnY);
             btnY += btnSize + gap;
@@ -3033,12 +2998,12 @@ void VfoWidget::updatePosition(int vfoX, int specTop, FlagDir dir)
         const int freqGap = 2;
         int freqX;
         int freqH = m_collapsedFreqLabel->sizeHint().height();
-        int freqY = specTop + (height() - freqH) / 2;  // vertically centered
+        int freqY = newPos.y() + (height() - freqH) / 2;  // vertically centered
         int freqW = m_collapsedFreqLabel->sizeHint().width();
         if (onLeft) {
-            freqX = x - freqW - freqGap;
+            freqX = newPos.x() - freqW - freqGap;
         } else {
-            freqX = x + w + freqGap;
+            freqX = newPos.x() + w + freqGap;
         }
         m_collapsedFreqLabel->move(freqX, freqY);
     }

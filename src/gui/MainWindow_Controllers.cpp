@@ -1354,7 +1354,7 @@ void MainWindow::applyFlexControlWheelAction(const QString& actionId, int steps)
             m_flexTargetMhz = snapped / 1e6;
         }
         m_flexTargetMhz += steps * stepHz / 1e6;
-        if (sw) sw->setVfoFrequency(m_flexTargetMhz);
+        pushSliceFrequencyToOverlays(s, m_flexTargetMhz);
         if (!m_flexCoalesceTimer.isActive())
             m_flexCoalesceTimer.start();
     } else if (actionId == "WheelRit") {
@@ -2367,7 +2367,7 @@ void MainWindow::wireExternalControllers()
                 m_midiTuneTargetMhz = snapped / 1e6;
             }
             m_midiTuneTargetMhz += steps * stepHz / 1e6;
-            if (spectrum()) spectrum()->setVfoFrequency(m_midiTuneTargetMhz);
+            pushSliceFrequencyToOverlays(s, m_midiTuneTargetMhz);
             m_midiTuneIdleTimer.start();
             applyTuneRequest(s, m_midiTuneTargetMhz, TuneIntent::IncrementalTune,
                              "midi-relative");

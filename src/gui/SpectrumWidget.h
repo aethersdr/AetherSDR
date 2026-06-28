@@ -391,6 +391,10 @@ public:
         bool   isTxSlice{false};
         bool   isActive{false};
         int    splitPartnerId{-1};  // slice ID of split partner, -1 if not in split
+        bool   diversity{false};
+        bool   diversityParent{false};
+        bool   diversityChild{false};
+        int    diversityIndex{-1};
         QString mode;               // "RTTY", "USB", etc.
         int    rttyMark{2125};      // RTTY mark audio offset (Hz)
         int    rttyShift{170};      // RTTY shift (Hz)
@@ -412,7 +416,11 @@ public:
                          bool tx, bool active, const QString& mode = {},
                          int rttyMark = 2125, int rttyShift = 170,
                          bool ritOn = false, int ritFreq = 0,
-                         bool xitOn = false, int xitFreq = 0);
+                         bool xitOn = false, int xitFreq = 0,
+                         bool diversity = false,
+                         bool diversityParent = false,
+                         bool diversityChild = false,
+                         int diversityIndex = -1);
     // Update just the frequency on an existing overlay (for optimistic scroll-to-tune)
     void setSliceOverlayFreq(int sliceId, double freqMhz);
     // Update the per-client letter on an existing overlay; safe to call
@@ -642,6 +650,7 @@ private:
     void installVfoCursorEventFilter(VfoWidget* widget);
     void setVfoCursorOverride(Qt::CursorShape shape);
     void clearVfoCursorOverride();
+    void applyActiveVfoZOrder();
 #ifdef AETHER_GPU_SPECTRUM
     void repositionVfoFlags(const QRect& specRect);  // #3617 — shared flag positioner
 #endif
@@ -1071,6 +1080,7 @@ private:
     QTimer* m_vfoDragEdgePanTimer{nullptr};
     int  m_vfoDragLastX{0};                 // last cursor X during VFO drag (px)
     int  m_vfoDragEdgeHoldTicks{0};         // ticks held in edge zone (ramp)
+    qint64 m_vfoDragPanEchoHoldUntilMs{0};  // ignore stale center echoes briefly after drag
     bool m_vfoDragEdgePanDisabled{false};   // AETHER_NO_DRAG_EDGEPAN=1 escape hatch
     // Velocity knobs, env-tunable so the feel can be swept WITHOUT rebuilding:
     //   AETHER_DRAG_EDGEPAN_VMAX     — top speed, % of span width per second

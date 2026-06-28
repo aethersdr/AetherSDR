@@ -108,6 +108,123 @@ bool flagDirectionOnLeft(VfoWidget::FlagDir dir)
     return dir == VfoWidget::ForceLeft || dir == VfoWidget::LockLeft;
 }
 
+bool overlayIsDiversityPairCandidate(const SpectrumWidget::SliceOverlay& overlay)
+{
+    return overlay.diversity;
+}
+
+bool overlaysAreAttachedDiversityPair(const SpectrumWidget::SliceOverlay* active,
+                                      const SpectrumWidget::SliceOverlay& overlay)
+{
+    if (!active || active->sliceId == overlay.sliceId
+        || !active->diversity || !overlay.diversity) {
+        return false;
+    }
+
+    const bool parentChildPair =
+        (active->diversityParent && overlay.diversityChild)
+        || (active->diversityChild && overlay.diversityParent);
+    if (parentChildPair) {
+        return true;
+    }
+
+    if (active->diversityIndex >= 0 && overlay.diversityIndex >= 0) {
+        return active->diversityIndex != overlay.diversityIndex;
+    }
+
+    return true;
+}
+
+int diversityOrderKeyForVfo(const VfoPos& vfo)
+{
+    if (!vfo.overlay) {
+        return 1000 + std::max(vfo.sliceId, 0);
+    }
+
+    return VfoWidget::diversityPairOrderKey(
+        vfo.overlay->diversityParent,
+        vfo.overlay->diversityChild,
+        vfo.overlay->diversityIndex,
+        vfo.sliceId);
+}
+
+void assignSplitPairDirections(const QVector<VfoPos>& vfos,
+                               QMap<int, VfoWidget::FlagDir>& dirMap)
+{
+    for (int i = 0; i < vfos.size(); ++i) {
+        if (vfos[i].splitPartner < 0) {
+            continue;
+        }
+        if (dirMap.contains(vfos[i].sliceId)) {
+            continue;
+        }
+
+        int partnerIndex = -1;
+        for (int j = 0; j < vfos.size(); ++j) {
+            if (vfos[j].sliceId == vfos[i].splitPartner) {
+                partnerIndex = j;
+                break;
+            }
+        }
+        if (partnerIndex < 0) {
+            continue;
+        }
+        if (dirMap.contains(vfos[partnerIndex].sliceId)) {
+            continue;
+        }
+
+        // Split partners stay locked to opposite sides regardless of edge
+        // proximity (#2663).  Flipping a partner near an edge collapses both
+        // panels onto the same side and makes the RX/TX pair overlap.
+        const int leftIndex = (vfos[i].x <= vfos[partnerIndex].x) ? i : partnerIndex;
+        const int rightIndex = (leftIndex == i) ? partnerIndex : i;
+        dirMap[vfos[leftIndex].sliceId] = VfoWidget::LockLeft;
+        dirMap[vfos[rightIndex].sliceId] = VfoWidget::LockRight;
+    }
+}
+
+void assignDiversityPairDirections(const QVector<VfoPos>& vfos,
+                                   QMap<int, VfoWidget::FlagDir>& dirMap)
+{
+    QVector<int> diversityIndices;
+    for (int i = 0; i < vfos.size(); ++i) {
+        if (!vfos[i].overlay || dirMap.contains(vfos[i].sliceId)) {
+            continue;
+        }
+        if (!overlayIsDiversityPairCandidate(*vfos[i].overlay)) {
+            continue;
+        }
+        diversityIndices.append(i);
+    }
+
+    if (diversityIndices.size() != 2) {
+        return;
+    }
+
+    std::sort(diversityIndices.begin(), diversityIndices.end(),
+              [&vfos](int lhs, int rhs) {
+        const int lhsKey = diversityOrderKeyForVfo(vfos[lhs]);
+        const int rhsKey = diversityOrderKeyForVfo(vfos[rhs]);
+        if (lhsKey != rhsKey) {
+            return lhsKey < rhsKey;
+        }
+        return vfos[lhs].sliceId < vfos[rhs].sliceId;
+    });
+
+    dirMap[vfos[diversityIndices[0]].sliceId] = VfoWidget::LockLeft;
+    dirMap[vfos[diversityIndices[1]].sliceId] = VfoWidget::LockRight;
+}
+
+void assignModeForcedDirections(const QVector<SpectrumWidget::SliceOverlay>& overlays,
+                                QMap<int, VfoWidget::FlagDir>& dirMap)
+{
+    for (const SpectrumWidget::SliceOverlay& overlay : overlays) {
+        if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
+            dirMap[overlay.sliceId] = VfoWidget::ForceRight;
+        }
+    }
+}
+
 } // namespace
 
 inline QColor kAetherBrandBlue() { return AetherSDR::ThemeManager::instance().color("color.accent"); }
@@ -1043,33 +1160,11 @@ bool SpectrumWidget::vfoFlagOnLeftForSlice(
     }
 
     QMap<int, VfoWidget::FlagDir> dirMap;
-    for (int i = 0; i < vfos.size(); ++i) {
-        if (vfos[i].splitPartner < 0) {
-            continue;
-        }
-        if (dirMap.contains(vfos[i].sliceId)) {
-            continue;
-        }
-        int partnerIndex = -1;
-        for (int j = 0; j < vfos.size(); ++j) {
-            if (vfos[j].sliceId == vfos[i].splitPartner) {
-                partnerIndex = j;
-                break;
-            }
-        }
-        if (partnerIndex < 0) {
-            continue;
-        }
-        const int leftIndex = (vfos[i].x <= vfos[partnerIndex].x) ? i : partnerIndex;
-        const int rightIndex = (leftIndex == i) ? partnerIndex : i;
-        dirMap[vfos[leftIndex].sliceId] = VfoWidget::LockLeft;
-        dirMap[vfos[rightIndex].sliceId] = VfoWidget::LockRight;
-    }
+    assignDiversityPairDirections(vfos, dirMap);
+    assignSplitPairDirections(vfos, dirMap);
+    assignModeForcedDirections(m_sliceOverlays, dirMap);
 
     const SliceOverlay& overlay = *vfos[targetIndex].overlay;
-    if (overlay.mode == "RTTY" || overlay.mode == "DIGL") {
-        return false;
-    }
     if (dirMap.contains(sliceId)) {
         return flagDirectionOnLeft(dirMap[sliceId]);
     }
@@ -1197,6 +1292,7 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     m_vfoWidgets[sliceId] = w;
     w->show();
     w->raise();
+    applyActiveVfoZOrder();
     m_overlayMenu->raiseAll();  // keep overlay + panels on top of all VFO widgets
     if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible())
         m_interlockNotificationLabel->raise();
@@ -1262,11 +1358,34 @@ void SpectrumWidget::removeVfoWidget(int sliceId)
 void SpectrumWidget::setActiveVfoWidget(int sliceId)
 {
     m_vfoWidget = m_vfoWidgets.value(sliceId, nullptr);
+    applyActiveVfoZOrder();
+}
+
+void SpectrumWidget::applyActiveVfoZOrder()
+{
+    const SliceOverlay* active = activeOverlay();
+    if (active && active->diversity) {
+        for (const SliceOverlay& overlay : m_sliceOverlays) {
+            if (overlay.sliceId == active->sliceId) {
+                continue;
+            }
+            if (overlaysAreAttachedDiversityPair(active, overlay)) {
+                if (VfoWidget* partner = m_vfoWidgets.value(overlay.sliceId, nullptr)) {
+                    partner->raise();
+                }
+            }
+        }
+    }
+
     if (m_vfoWidget) {
         m_vfoWidget->raise();
+    }
+
+    if (m_overlayMenu) {
         m_overlayMenu->raiseAll();  // keep overlay above VFO
-        if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible())
-            m_interlockNotificationLabel->raise();
+    }
+    if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible()) {
+        m_interlockNotificationLabel->raise();
     }
 }
 
@@ -3970,11 +4089,15 @@ void SpectrumWidget::setFrequencyRange(double centerMhz, double bandwidthMhz)
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
 
-    // While the user is actively panning, the local drag path owns the visual
-    // center and sends throttled range commands. Radio echoes for intermediate
-    // drag positions are stale by the time they arrive and would force extra
-    // waterfall reprojections back through old frames.
-    if (m_draggingPan && mhzNearlyEqual(bandwidthMhz, m_bandwidthMhz)) {
+    // While the user is actively dragging the pan or a VFO/slice, the local
+    // drag path owns the visual center. Radio echoes for intermediate drag
+    // positions are stale by the time they arrive and would force the flag and
+    // waterfall back through old frames.
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const bool vfoDragPanEchoHold =
+        m_vfoDragPanEchoHoldUntilMs > 0 && nowMs < m_vfoDragPanEchoHoldUntilMs;
+    if ((m_draggingPan || m_draggingVfo || vfoDragPanEchoHold)
+        && mhzNearlyEqual(bandwidthMhz, m_bandwidthMhz)) {
         return;
     }
 
@@ -4461,7 +4584,9 @@ void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHi
                                      bool tx, bool active, const QString& mode,
                                      int rttyMark, int rttyShift,
                                      bool ritOn, int ritFreq,
-                                     bool xitOn, int xitFreq)
+                                     bool xitOn, int xitFreq,
+                                     bool diversity, bool diversityParent,
+                                     bool diversityChild, int diversityIndex)
 {
     int idx = overlayIndex(sliceId);
     if (idx < 0) {
@@ -4469,6 +4594,10 @@ void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHi
         o.sliceId = sliceId; o.freqMhz = freq;
         o.filterLowHz = fLow; o.filterHighHz = fHigh;
         o.isTxSlice = tx; o.isActive = active;
+        o.diversity = diversity;
+        o.diversityParent = diversityParent;
+        o.diversityChild = diversityChild;
+        o.diversityIndex = diversityIndex;
         o.mode = mode; o.rttyMark = rttyMark; o.rttyShift = rttyShift;
         o.ritOn = ritOn; o.ritFreq = ritFreq;
         o.xitOn = xitOn; o.xitFreq = xitFreq;
@@ -4480,10 +4609,16 @@ void SpectrumWidget::setSliceOverlay(int sliceId, double freq, int fLow, int fHi
             o.isTxSlice == tx && o.isActive == active && o.mode == mode &&
             o.rttyMark == rttyMark && o.rttyShift == rttyShift &&
             o.ritOn == ritOn && o.ritFreq == ritFreq &&
-            o.xitOn == xitOn && o.xitFreq == xitFreq)
+            o.xitOn == xitOn && o.xitFreq == xitFreq &&
+            o.diversity == diversity && o.diversityParent == diversityParent &&
+            o.diversityChild == diversityChild && o.diversityIndex == diversityIndex)
             return;
         o.freqMhz = freq; o.filterLowHz = fLow; o.filterHighHz = fHigh;
         o.isTxSlice = tx; o.isActive = active;
+        o.diversity = diversity;
+        o.diversityParent = diversityParent;
+        o.diversityChild = diversityChild;
+        o.diversityIndex = diversityIndex;
         o.mode = mode; o.rttyMark = rttyMark; o.rttyShift = rttyShift;
         o.ritOn = ritOn; o.ritFreq = ritFreq;
         o.xitOn = xitOn; o.xitFreq = xitFreq;
@@ -5303,8 +5438,12 @@ bool SpectrumWidget::sliceCursorShapeAt(const QPoint& localPos,
         return false;
     }
 
+    const SliceOverlay* ao = activeOverlay();
     for (const auto& so : m_sliceOverlays) {
         if (so.isActive) {
+            continue;
+        }
+        if (overlaysAreAttachedDiversityPair(ao, so)) {
             continue;
         }
         const int sliceX = mhzToX(so.freqMhz);
@@ -5329,7 +5468,7 @@ bool SpectrumWidget::sliceCursorShapeAt(const QPoint& localPos,
         }
     }
 
-    if (const auto* ao = activeOverlay()) {
+    if (ao) {
         const int loX = mhzToX(ao->freqMhz + ao->filterLowHz / 1.0e6);
         const int hiX = mhzToX(ao->freqMhz + ao->filterHighHz / 1.0e6);
         if (filterEdgeHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx) != 0) {
@@ -5835,8 +5974,14 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
     // interaction targets the clicked slice's passband/marker.
     if (y < specH) {
         const int mx = static_cast<int>(ev->position().x());
+        const SliceOverlay* ao = activeOverlay();
         for (const auto& so : m_sliceOverlays) {
-            if (so.isActive) continue;
+            if (so.isActive) {
+                continue;
+            }
+            if (overlaysAreAttachedDiversityPair(ao, so)) {
+                continue;
+            }
             const int sliceX = mhzToX(so.freqMhz);
             const int loX = mhzToX(so.freqMhz + so.filterLowHz / 1.0e6);
             const int hiX = mhzToX(so.freqMhz + so.filterHighHz / 1.0e6);
@@ -5870,6 +6015,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             if (mx >= left && mx <= right) {
                 emit sliceClicked(so.sliceId);
                 m_draggingVfo = true;
+                m_vfoDragPanEchoHoldUntilMs = 0;
                 emit sliceDragActiveChanged(true);
                 m_vfoDragLastX = mx;
                 m_vfoDragOffsetHz = static_cast<int>(
@@ -5907,6 +6053,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
         // Click inside the filter passband → start VFO drag (#404)
         if (filterPassbandBodyHitAtPixel(mx, loX, hiX, kFilterEdgeGrabPx)) {
             m_draggingVfo = true;
+            m_vfoDragPanEchoHoldUntilMs = 0;
             emit sliceDragActiveChanged(true);
             m_vfoDragLastX = mx;
             m_vfoDragOffsetHz = static_cast<int>(std::round((xToMhz(mx) - ao->freqMhz) * 1.0e6));
@@ -6638,6 +6785,7 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
     }
     if (m_draggingVfo) {
         m_draggingVfo = false;
+        m_vfoDragPanEchoHoldUntilMs = QDateTime::currentMSecsSinceEpoch() + 350;
         emit sliceDragActiveChanged(false);
         if (m_vfoDragEdgePanTimer)
             m_vfoDragEdgePanTimer->stop();
@@ -8418,31 +8566,9 @@ void SpectrumWidget::repositionVfoFlags(const QRect& specRect)
     const int specW  = specRect.width();
 
     QMap<int, VfoWidget::FlagDir> dirMap;
-    for (int i = 0; i < vfos.size(); ++i) {
-        if (vfos[i].splitPartner < 0) continue;
-        if (dirMap.contains(vfos[i].sliceId)) continue;
-        int pi = -1;
-        for (int j = 0; j < vfos.size(); ++j) {
-            if (vfos[j].sliceId == vfos[i].splitPartner) { pi = j; break; }
-        }
-        if (pi < 0) continue;
-        // Split partners stay locked to opposite sides regardless of
-        // edge proximity (#2663).  Flipping a partner when near an
-        // edge would collapse both panels onto the same side and the
-        // RX/TX panels would visually overlap; the panadapter is the
-        // user's spatial frame and the side-locking is the whole point
-        // of the split affordance.  The outward-facing panel may clip
-        // the pan edge — the user pans toward center to read it.
-        int leftIdx  = (vfos[i].x <= vfos[pi].x) ? i : pi;
-        int rightIdx = (leftIdx == i) ? pi : i;
-        dirMap[vfos[leftIdx].sliceId]  = VfoWidget::LockLeft;
-        dirMap[vfos[rightIdx].sliceId] = VfoWidget::LockRight;
-    }
-
-    for (const auto& so : m_sliceOverlays) {
-        if (so.mode == "RTTY" || so.mode == "DIGL")
-            dirMap[so.sliceId] = VfoWidget::ForceRight;
-    }
+    assignDiversityPairDirections(vfos, dirMap);
+    assignSplitPairDirections(vfos, dirMap);
+    assignModeForcedDirections(m_sliceOverlays, dirMap);
 
     if (vfos.size() == 1) {
         VfoWidget::FlagDir dir = dirMap.value(vfos[0].sliceId, VfoWidget::Auto);
@@ -8614,38 +8740,14 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         const int panelW = vfos.isEmpty() ? 0 : vfos[0].w->width();
         const int specW = specRect.width();
 
-        // First pass: assign directions for split pairs
+        // First pass: assign directions for role-locked pairs
         QMap<int, VfoWidget::FlagDir> dirMap;  // sliceId → direction
-        for (int i = 0; i < vfos.size(); ++i) {
-            if (vfos[i].splitPartner < 0) continue;
-            if (dirMap.contains(vfos[i].sliceId)) continue;  // already assigned
+        assignDiversityPairDirections(vfos, dirMap);
+        assignSplitPairDirections(vfos, dirMap);
 
-            // Find partner index
-            int pi = -1;
-            for (int j = 0; j < vfos.size(); ++j) {
-                if (vfos[j].sliceId == vfos[i].splitPartner) { pi = j; break; }
-            }
-            if (pi < 0) continue;
-
-            // Left partner flies left, right partner flies right.
-            // Split partners stay locked to opposite sides regardless of
-            // edge proximity (#2663).  Flipping a partner when near an
-            // edge would collapse both panels onto the same side and the
-            // RX/TX panels would visually overlap.  The outward-facing
-            // panel may clip the pan edge — the user pans toward center
-            // to read it.  Mirrors the GPU path block above.
-            int leftIdx  = (vfos[i].x <= vfos[pi].x) ? i : pi;
-            int rightIdx = (leftIdx == i) ? pi : i;
-            dirMap[vfos[leftIdx].sliceId]  = VfoWidget::LockLeft;
-            dirMap[vfos[rightIdx].sliceId] = VfoWidget::LockRight;
-        }
-
-        // Second pass: assign remaining (non-split) VFOs
+        // Second pass: assign remaining mode-forced VFOs
         // In RTTY/DIGL, force flag to fly right so it doesn't cover M/S passband
-        for (const auto& so : m_sliceOverlays) {
-            if (so.mode == "RTTY" || so.mode == "DIGL")
-                dirMap[so.sliceId] = VfoWidget::ForceRight;
-        }
+        assignModeForcedDirections(m_sliceOverlays, dirMap);
 
         if (vfos.size() == 1) {
             VfoWidget::FlagDir dir = dirMap.value(vfos[0].sliceId, VfoWidget::Auto);
@@ -8670,12 +8772,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         }
     }
     // Active widget on top, but overlay stays above all
-    if (m_vfoWidget) {
-        m_vfoWidget->raise();
-        m_overlayMenu->raiseAll();
-        if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible())
-            m_interlockNotificationLabel->raise();
-    }
+    applyActiveVfoZOrder();
 
     // ── WNB / RF Gain / Prop Forecast indicators (top-right of FFT area) ────
     {

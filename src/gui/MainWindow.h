@@ -297,7 +297,7 @@ private:
     void logTunePolicyDecision(const char* source, TuneIntent intent,
                                double oldFreqMhz, double newFreqMhz,
                                const TuneCenteringResult& result) const;
-    void mirrorDiversityChildFrequency(SliceModel* slice, double mhz);
+    void pushSliceFrequencyToOverlays(SliceModel* slice, double mhz);
     // Pan-follow-VFO (#989): if mhz is outside the visible pan window, apply
     // the new center locally (immediate repaint) and send the radio command.
     TuneCenteringResult panFollowVfo(SliceModel* s, double mhz, const char* source);
@@ -1122,6 +1122,9 @@ private:
     // mid-tick made Pan Lock appear to "fall out" after the drag. The drag-end
     // handler recenters once so Pan Lock re-asserts. (user-reported)
     bool m_sliceDragInProgress{false};
+    int m_sliceDragTargetSliceId{-1};
+    double m_sliceDragTargetMhz{0.0};
+    qint64 m_sliceDragEchoHoldUntilMs{0};
     void setPanFollow(bool on);
     void recenterPanFollowOnSlice0();
 

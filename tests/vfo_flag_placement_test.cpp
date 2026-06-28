@@ -140,6 +140,28 @@ int main()
               VfoWidget::autoDirectionForSingleFlag(0, 0, 0, false, true),
               VfoWidget::ForceRight);
 
+    const VfoWidget::FlagPlacement forcedAtLeftEdge =
+        VfoWidget::placementForMarker(10, 3, 200, 80, 1000,
+                                      VfoWidget::ForceLeft, true);
+    report("force-left geometry flips right at left edge",
+           forcedAtLeftEdge.rect.x() == 10 && !forcedAtLeftEdge.onLeft);
+
+    const VfoWidget::FlagPlacement lockedAtLeftEdge =
+        VfoWidget::placementForMarker(10, 3, 200, 80, 1000,
+                                      VfoWidget::LockLeft, true);
+    report("lock-left geometry stays left at left edge",
+           lockedAtLeftEdge.rect.x() == -190 && lockedAtLeftEdge.onLeft);
+
+    report("diversity index 0 orders before index 1",
+           VfoWidget::diversityPairOrderKey(false, false, 0, 5)
+               < VfoWidget::diversityPairOrderKey(false, false, 1, 4));
+    report("diversity parent orders before child without index",
+           VfoWidget::diversityPairOrderKey(true, false, -1, 5)
+               < VfoWidget::diversityPairOrderKey(false, true, -1, 4));
+    report("diversity unknown role orders by stable slice id",
+           VfoWidget::diversityPairOrderKey(false, false, -1, 3)
+               < VfoWidget::diversityPairOrderKey(false, false, -1, 4));
+
     std::printf("%s\n", g_failures == 0 ? "All tests passed." : "Test failures.");
     return g_failures == 0 ? 0 : 1;
 }

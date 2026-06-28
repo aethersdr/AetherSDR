@@ -856,19 +856,28 @@ void SliceModel::applyStatus(const QMap<QString, QString>& kvs)
     }
     // Parse child/parent flags before emitting diversityChanged so handlers
     // can check isDiversityChild() to gate ESC panel visibility.
-    if (kvs.contains("diversity_child"))
+    const bool previousDiversityChild = m_diversityChild;
+    const bool previousDiversityParent = m_diversityParent;
+    const bool previousDiversity = m_diversity;
+    const int previousDiversityIndex = m_diversityIndex;
+    if (kvs.contains("diversity_child")) {
         m_diversityChild = kvs["diversity_child"] == "1";
-    if (kvs.contains("diversity_parent"))
-        m_diversityParent = kvs["diversity_parent"] == "1";
-    if (kvs.contains("diversity")) {
-        bool div = kvs["diversity"] == "1";
-        if (div != m_diversity) {
-            m_diversity = div;
-            emit diversityChanged(div);
-        }
     }
-    if (kvs.contains("diversity_index"))
+    if (kvs.contains("diversity_parent")) {
+        m_diversityParent = kvs["diversity_parent"] == "1";
+    }
+    if (kvs.contains("diversity")) {
+        m_diversity = kvs["diversity"] == "1";
+    }
+    if (kvs.contains("diversity_index")) {
         m_diversityIndex = kvs["diversity_index"].toInt();
+    }
+    if (m_diversityChild != previousDiversityChild
+        || m_diversityParent != previousDiversityParent
+        || m_diversity != previousDiversity
+        || m_diversityIndex != previousDiversityIndex) {
+        emit diversityChanged(m_diversity);
+    }
 
     // ESC (Enhanced Signal Clarity) — diversity beamforming
     if (kvs.contains("esc")) {
