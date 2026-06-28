@@ -303,8 +303,13 @@ void AntennaGeniusApplet::setModel(AntennaGeniusModel* model)
             .arg(m_model->connectedDevice().name,
                  m_model->connectedDevice().version));
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_statusLabel, "color: {{color.accent}}; font-size: 10px;");
+        // Port B visibility is set by the deviceInfoChanged handler below,
+        // which fires after either info get parses or a beacon arrives.
+    });
 
-        // Hide Port B if device has only 1 radio port.
+    // Set Port B visibility once authoritative radioPorts is known --
+    // either from the info get response (manual-IP path) or a UDP beacon.
+    connect(m_model, &AntennaGeniusModel::deviceInfoChanged, this, [this]() {
         m_portBSection->setVisible(m_model->connectedDevice().radioPorts >= 2);
     });
 

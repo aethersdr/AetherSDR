@@ -146,6 +146,7 @@ signals:
     void portStatusChanged(int portId);  // port A or B status updated
     void presenceChanged(bool present);  // any device discovered/lost
     void radioBandChanged(int bandId);   // client-side band derived from radio freq
+    void deviceInfoChanged();            // m_device fields updated from info get or beacon
 
 private slots:
     void onDiscoveryDatagram();
@@ -158,6 +159,10 @@ private slots:
 private:
     // Send a command, returns sequence number.
     int sendCommand(const QString& cmd);
+
+    // Apply parsed `info get` key=value fields to m_device.
+    // Shared by the inline body-parse path and the terminator path.
+    void applyDeviceInfo(const QString& line);
 
     // Process a received line from TCP.
     void processLine(const QString& line);
@@ -230,6 +235,8 @@ private:
     int m_seqPortB{0};
     int m_seqSubPort{0};
     int m_seqSubRelay{0};
+    int m_seqInfo{-1};
+    QTimer* m_initWatchdog{nullptr};  // falls back to runInitSequence() if info get does not answer
 };
 
 } // namespace AetherSDR
