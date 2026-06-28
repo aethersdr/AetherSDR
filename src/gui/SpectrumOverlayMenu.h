@@ -15,6 +15,8 @@ class QPushButton;
 class QComboBox;
 class QSlider;
 class QLabel;
+class QCheckBox;
+class QDoubleSpinBox;
 
 namespace AetherSDR {
 
@@ -157,7 +159,12 @@ signals:
     void wnbLevelChanged(int level);
     // Emitted when RF gain slider changes (panadapter-level).
     void rfGainChanged(int gain);
-    void swrSweepStartRequested(int sliceId, int sweepPowerWatts);
+    // customLowMhz/customHighMhz bound the sweep when the operator has ticked
+    // "Limit range" (else both 0 = sweep the full band). The values are clamped
+    // to the in-region band edges receiver-side, so they can only ever narrow
+    // the sweep, never widen it past what the band plan already permits.
+    void swrSweepStartRequested(int sliceId, int sweepPowerWatts,
+                                double customLowMhz, double customHighMhz);
     void swrSweepClearRequested();
     void swrSweepSaveCsvRequested();
     void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
@@ -244,6 +251,9 @@ private:
     QPushButton* m_swrStartBtn{nullptr};
     QPushButton* m_swrClearBtn{nullptr};
     QPushButton* m_swrSaveBtn{nullptr};
+    QCheckBox* m_swrRangeCheck{nullptr};
+    QDoubleSpinBox* m_swrLowSpin{nullptr};
+    QDoubleSpinBox* m_swrHighSpin{nullptr};
 
     // DAX sub-panel
     QWidget*     m_daxPanel{nullptr};

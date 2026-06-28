@@ -8,6 +8,7 @@
 #include "core/GpuSelector.h"
 #include "models/SliceModel.h"
 #include "models/BandDefs.h"
+#include "models/BandSettings.h"
 #include "core/AppSettings.h"
 #include "core/KiwiSdrManager.h"
 
@@ -16,6 +17,8 @@
 #include <QStandardItemModel>
 #include <QSlider>
 #include <QLabel>
+#include <QCheckBox>
+#include <QDoubleSpinBox>
 #include <QGridLayout>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -630,10 +633,84 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_swrSaveBtn->setStyleSheet(sweepBtnStyle);
     vbox->addWidget(m_swrSaveBtn);
 
+    // Optional manual sweep range. Off by default → full-band sweep (unchanged
+    // behaviour). When ticked, the From/To fields bound the sweep so operators
+    // can confine it to their licence sub-band or a slice of interest. The
+    // values are clamped to the in-region band edges receiver-side, so this can
+    // only ever narrow the sweep. (#2241)
+    m_swrRangeCheck = new QCheckBox("Limit range");
+    m_swrRangeCheck->setStyleSheet(
+        "QCheckBox { color: #ffd070; font-size: 10px; font-weight: bold; }");
+    vbox->addWidget(m_swrRangeCheck);
+
+    auto* rangeRow = new QHBoxLayout;
+    rangeRow->setSpacing(4);
+    const QString spinStyle =
+        "QDoubleSpinBox { background: rgba(38, 34, 24, 235); "
+        "border: 1px solid #705820; border-radius: 2px; "
+        "color: #ffd070; font-size: 10px; padding: 0 2px; }"
+        "QDoubleSpinBox:disabled { color: #706858; border-color: #403828; }";
+    auto makeFreqSpin = [&]() {
+        auto* spin = new QDoubleSpinBox;
+        spin->setRange(0.0, 60.0);
+        spin->setDecimals(3);
+        spin->setSingleStep(0.001);
+        spin->setSuffix(" MHz");
+        spin->setStyleSheet(spinStyle);
+        spin->setEnabled(false);
+        return spin;
+    };
+    auto* fromLabel = new QLabel("From");
+    fromLabel->setStyleSheet("QLabel { color: #b0a080; font-size: 10px; }");
+    auto* toLabel = new QLabel("To");
+    toLabel->setStyleSheet("QLabel { color: #b0a080; font-size: 10px; }");
+    m_swrLowSpin = makeFreqSpin();
+    m_swrHighSpin = makeFreqSpin();
+    rangeRow->addWidget(fromLabel);
+    rangeRow->addWidget(m_swrLowSpin, 1);
+    rangeRow->addWidget(toLabel);
+    rangeRow->addWidget(m_swrHighSpin, 1);
+    vbox->addLayout(rangeRow);
+
+    // Seed the From/To fields with the current band's edges so they start at a
+    // sensible in-band range the operator can narrow.
+    auto seedSwrRangeFromBand = [this]() {
+        if (!m_slice)
+            return;
+        const QString band = BandSettings::bandForFrequency(m_slice->frequency());
+        const BandDef& def = BandSettings::bandDef(band);
+        if (def.lowMhz <= 0.0 || def.highMhz <= def.lowMhz)
+            return;
+        m_swrLowSpin->setValue(def.lowMhz);
+        m_swrHighSpin->setValue(def.highMhz);
+    };
+    connect(m_swrRangeCheck, &QCheckBox::toggled, this,
+            [this, seedSwrRangeFromBand](bool on) {
+        m_swrLowSpin->setEnabled(on);
+        m_swrHighSpin->setEnabled(on);
+        if (!on || !m_slice)
+            return;
+        // (Re)seed when the fields are empty or no longer lie within the active
+        // band — e.g. the operator changed band since the last seed — so the
+        // range always opens from a sensible in-band starting point. A range
+        // the operator narrowed *within* the current band is preserved.
+        const QString band = BandSettings::bandForFrequency(m_slice->frequency());
+        const BandDef& def = BandSettings::bandDef(band);
+        const bool empty = m_swrLowSpin->value() <= 0.0 || m_swrHighSpin->value() <= 0.0;
+        const bool inBand = def.lowMhz > 0.0
+            && m_swrLowSpin->value() >= def.lowMhz
+            && m_swrHighSpin->value() <= def.highMhz;
+        if (empty || !inBand)
+            seedSwrRangeFromBand();
+    });
+
     connect(m_swrStartBtn, &QPushButton::clicked, this, [this]() {
         const int sliceId = m_slice ? m_slice->sliceId() : -1;
+        const bool limit = m_swrRangeCheck->isChecked();
+        const double low = limit ? m_swrLowSpin->value() : 0.0;
+        const double high = limit ? m_swrHighSpin->value() : 0.0;
         hideAllSubPanels();
-        emit swrSweepStartRequested(sliceId, 1);
+        emit swrSweepStartRequested(sliceId, 1, low, high);
     });
     connect(m_swrClearBtn, &QPushButton::clicked, this, [this]() {
         hideAllSubPanels();
@@ -654,6 +731,9 @@ void SpectrumOverlayMenu::buildAntPanel()
     m_swrStartBtn->setToolTip("Run a low-power tune sweep across the current TX band and plot SWR on the panadapter.");
     m_swrClearBtn->setToolTip("Clear the displayed SWR sweep trace.");
     m_swrSaveBtn->setToolTip("Export the most recent SWR sweep (frequency + SWR) to a CSV file.");
+    m_swrRangeCheck->setToolTip("Limit the sweep to a manual frequency range instead of the whole band. Clamped to your in-region band edges.");
+    m_swrLowSpin->setToolTip("Sweep start frequency (clamped to the band).");
+    m_swrHighSpin->setToolTip("Sweep stop frequency (clamped to the band).");
 
     m_antPanel->setFixedWidth(180);
     updateLoopButtonVisibility();

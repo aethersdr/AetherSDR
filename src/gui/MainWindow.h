@@ -602,7 +602,8 @@ private:
 
     BandSnapshot captureCurrentBandState() const;
     void restoreBandState(const BandSnapshot& snap);
-    void startSwrSweep(int requestedSliceId = -1, int sweepPowerWatts = 1);
+    void startSwrSweep(int requestedSliceId = -1, int sweepPowerWatts = 1,
+                       double customLowMhz = 0.0, double customHighMhz = 0.0);
     void clearSwrSweepPlot();
     void saveSwrSweepCsv();
     void advanceSwrSweep();
