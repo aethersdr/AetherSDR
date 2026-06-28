@@ -7,7 +7,7 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.6.4
+## Current cycle: post-v26.6.5
 
 ### In flight
 
@@ -94,12 +94,23 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **KiwiSDR receive sync** — GCC-PHAT Auto-Assist that time-aligns the Flex
+  and a public KiwiSDR receiver in both audio and the spectrum/waterfall
+  (v26.6.5).
+- **SmartMTR TX meters** — selectable SWR, forward-power, and compression
+  gauges with analog ballistics for the VFO flag, including VOX-keyed
+  transmit (v26.6.5).
+- **PROF profile-switcher applet** — live Global / TX / Mic profile
+  selection from a sidebar applet (v26.6.5).
+- **Agent automation bridge expansion** — radio connect/disconnect,
+  display-stream leak detection (`streams`), custom context-menu inspection,
+  and a panadapter/waterfall control surface (v26.6.5).
 - **KiwiSDR public-receiver browser** — an API-policy-aware directory to
   find and connect to public KiwiSDR receivers worldwide, with diversity
   receive and receive-only TX inhibit (v26.6.4).
 - **SmartMTR meter view** — a selectable, analog-ballistics meter for the
   VFO flag (extremes markers, value labels, TX mic level), opt-in with the
-  S-meter pixel-identical by default.
+  S-meter pixel-identical by default (v26.6.4).
 - **Agent automation / test bridge** — an in-app, agent-drivable bridge to
   drive and verify the GUI without pixels (`AETHER_AUTOMATION`).
 - **GPU-composite slice flags + multi-GPU selector** — flags composited on

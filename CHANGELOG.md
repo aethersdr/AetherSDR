@@ -8,34 +8,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
-### Fixed
+## [v26.6.5] — 2026-06-28
 
-- **Closing a panafall-created panadapter now frees its waterfall stream on the
-  radio.** The close path sent only `display pan remove` and never the matching
-  `display panafall remove`, so the waterfall stream was left allocated on the
-  radio (the FlexLib-correct teardown is the pair Panadapter.Close +
-  Waterfall.Close). `RadioModel::removePanadapter` now sends both commands
-  (capturing the waterfall id before the removal echo deletes the model), and the
-  GUI X-button and layout-shrink close paths both route through it as the single
-  source of truth — replacing the dead, bogus `display pan close` it used to
-  issue. (#3843)
+### KiwiSDR receive sync + SmartMTR TX meters + Profile Switcher applet + agent automation bridge expansion
+
+50 commits since v26.6.4. Headlined by **KiwiSDR receive sync** (GCC-PHAT
+audio + visual alignment between the Flex and a public Kiwi), **SmartMTR TX
+meters** (SWR / forward-power / compression gauges for the VFO flag), a new
+**PROF profile-switcher applet** for live Global/TX/Mic profile selection, and a
+large **agent automation/test bridge** expansion (radio connect/disconnect,
+display-stream leak detection, custom context-menu inspection, and a
+panadapter/waterfall control surface) — plus a broad wave of spectrum, VFO-flag,
+and KiwiSDR stability fixes.
+
+### Added
+
+- **KiwiSDR receive sync** — GCC-PHAT Auto-Assist that time-aligns the Flex and a
+  public KiwiSDR receiver in both audio and the spectrum/waterfall. (#3872)
+- **SmartMTR TX meters** — selectable SWR, forward-power, and compression gauges
+  with analog ballistics for the VFO flag meter. (#3776)
+- **PROF (Profile Switcher) applet** — live Global / TX / Mic profile selection
+  from a sidebar applet. (#3829)
+- **Resizable CW decode panel** with an adjustable, persistent font size. (#3824)
+- **APRS message-services picker** on the Recipient field. (#3828)
+- **RC-28 rotation-sensitivity divider** with auto-snap to 1 kHz. (#3875)
+- **SWR sweep CSV export.** (#3882)
+- **Master Volume Up/Down configurable keyboard shortcuts.** (#3820)
+- **S-meter config context menu** plus a needle pivot cover with a themed
+  backlight glow (both tokenized for the theme subsystem). (#3859)
+- **Agent automation bridge — major expansion:** radio connect/disconnect
+  commands (#3851); radio-side display-stream inventory + leak detection
+  (`streams` verb) that surfaces leaked/duplicate panadapter & waterfall streams
+  `get pans` can't show (#3856); the `contextMenu` verb to trigger/inspect custom
+  right-click menus (#3883); observability fields plus close/drag/showMenu/pan
+  verbs, grab pan, and a token-anchored TX guard (#3842); a Panadapter/Waterfall
+  control surface — antennas, CWX, floors, pan management (#3832); and bridge
+  fidelity for slice TX, key/PTT, menu reachability, lineedit submit, resize, and
+  multi-instance station identity (#3819). RX/observe verbs are observe-only; see
+  `docs/automation-bridge.md`.
 
 ### Changed
 
-- **Agent automation bridge:** the `pan close` verb now drives the production
-  `RadioModel::removePanadapter` instead of duplicating the teardown commands, so
-  it exercises the real GUI close path. (#3843)
-- **Agent automation bridge — radio-side display-stream inventory + leak
-  detection (`streams` verb).** Makes leaked/duplicate panadapter & waterfall
-  streams on the radio directly observable — a class of bug `get pans` can't show,
-  because the client always cleans up its own view. Two layers: `streams` reports
-  the VITA-49 UDP truth (streams the radio is still transmitting for an id we no
-  longer own — the #268 continued-stream class), and `streams radio` reports the
-  radio-authoritative display-object set classified ours/foreign/orphan with
-  leaked waterfalls (parent panadapter gone) — catching resource-level lingering
-  that emits no UDP (the #3843 class on firmware that stops the stream on
-  pan-removal). `streams reset` re-baselines. RX/observe only. See
-  `docs/automation-bridge.md`. (#3856)
+- **WFM toggle relocated to the DAX pan menu** so the frequency digits no longer
+  clip. (#3853)
+- **KiwiSDR audio mutes during non-FDX transmit.** (#3865)
+- **AetherDSP Settings now toggle from the DSP-tab ADSP button.** (#3881)
+- **PTT (Hold) honors its reassigned key** instead of a hardcoded Space. (#3884)
+- **ADSP launcher accents** when a client NR module is active. (#3822)
+- **`pan close` verb** drives the production `RadioModel::removePanadapter`
+  teardown path instead of duplicating the commands. (#3843)
+- **GPU flag-sprite machinery excised** — slice flags are now always live. (#3806)
+- CI: SHA-pinned actions drop version comments to stop Dependabot drift (#3867);
+  `actions/cache` → 6.1.0 (#3864); `actions/setup-python` → 6.3.0 (#3863).
+
+### Fixed
+
+- **Closing a panafall-created panadapter now frees its waterfall stream on the
+  radio** — the teardown now sends the FlexLib-correct Panadapter.Close +
+  Waterfall.Close pair through `RadioModel::removePanadapter`. (#3843, #3855)
+- **KiwiSDR proxy redirect transport** (proxy → proxy2). (#3850)
+- **Kiwi waterfall pan/zoom stalls** — moved off the GUI thread. (#3825)
+- **VOX-keyed transmit** now engages the SmartMTR TX meter and audio gate. (#3862)
+- **Pan Lock** stands down during a slice drag and recenters on release. (#3786)
+- **VFO flag-side pan following** and **diversity-pair flag placement**. (#3866, #3880)
+- **Zoomed FFT spectrum rendering.** (#3836)
+- **Smooth FFT trace + clamped display scale**, with EMA reset on TX→RX so the
+  floor doesn't linger. (#3847, #3831)
+- **DAX RX stream create/remove storm** that dropped connection quality to red. (#3796)
+- **Keyboard/space PTT** routed through the Quindar coordinator. (#3798)
+- **AetherControl window** clamped to the screen height. (#3795)
+- **Panadapter split-pair** shown for an externally-initiated split. (#3794)
+- **SpotHub clear buttons** persist; counter-desync and console-clear fixes. (#3823)
+- **Floating window fill** for width-capped applets. (#3827)
+- Automation: widget click/toggle deferred out of the socket read callback (#3826);
+  tightened mark→tail log correlation (#3793).
+- CWX drift-test teardown heap-use-after-free. (#3799)
+
+### Performance
+
+- **VITA-49 RX buffer** default raised to 4 MiB with an operator-adjustable
+  slider — eliminates burst drops and auto-throttle fps caps. (#3811)
+- Reuse GPU FFT-trace vertex scratch buffers + guard against a 1-bin spectrum. (#3782)
+- Skip overlay re-bake on cursor-move when no readout is shown. (#3780)
+
+### Removed
+
+- Dead `m_overlayDynamic` overlay image (#59a19681), leftover `RxApplet.h.bak`
+  (#3818), and a reverted half-baked frequency shrink-to-fit (#3846, #3839).
 
 ## [v26.6.4] — 2026-06-23
 
