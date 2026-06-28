@@ -32,6 +32,7 @@
 #include <QFormLayout>
 #include "core/AppSettings.h"
 #include <QAction>
+#include <QAccessible>
 #include <QFontMetrics>
 #include <QPainter>
 #include <QPointer>
@@ -328,6 +329,19 @@ RxApplet::RxApplet(QWidget* parent) : QWidget(parent)
     m_sqlManualLevel = std::clamp(
         AppSettings::instance().value("LastManualSquelchLevel", "20").toInt(),
         0, 100);
+    m_accessibleFrequencyTimer.setSingleShot(true);
+    connect(&m_accessibleFrequencyTimer, &QTimer::timeout, this, [this]() {
+        if (!QAccessible::isActive() || !m_freqLabel) {
+            return;
+        }
+        if (m_pendingAccessibleFrequencyText == m_lastAccessibleFrequencyText) {
+            return;
+        }
+        m_lastAccessibleFrequencyText = m_pendingAccessibleFrequencyText;
+        QAccessibleValueChangeEvent event(m_freqLabel,
+                                          m_pendingAccessibleFrequencyText);
+        QAccessible::updateAccessibility(&event);
+    });
     buildUI();
 }
 
@@ -3016,7 +3030,15 @@ void RxApplet::updateFreqLabel()
         return;
 
     if (m_slice->isLockedFeedbackActive()) {
+        m_accessibleFrequencyTimer.stop();
         m_freqLabel->setText(QStringLiteral("LOCKED"));
+        if (QAccessible::isActive()
+            && m_lastAccessibleFrequencyText != QStringLiteral("LOCKED")) {
+            m_lastAccessibleFrequencyText = QStringLiteral("LOCKED");
+            QAccessibleValueChangeEvent event(m_freqLabel,
+                                              QStringLiteral("LOCKED"));
+            QAccessible::updateAccessibility(&event);
+        }
         return;
     }
 
@@ -3024,10 +3046,21 @@ void RxApplet::updateFreqLabel()
     int mhzPart  = static_cast<int>(hz / 1000000);
     int khzPart  = static_cast<int>((hz / 1000) % 1000);
     int hzPart   = static_cast<int>(hz % 1000);
-    m_freqLabel->setText(QString("%1.%2.%3")
+    const QString freqText = QString("%1.%2.%3")
         .arg(mhzPart)
         .arg(khzPart, 3, 10, QChar('0'))
-        .arg(hzPart, 3, 10, QChar('0')));
+        .arg(hzPart, 3, 10, QChar('0'));
+    m_freqLabel->setText(freqText);
+    scheduleFrequencyAnnouncement(freqText);
+}
+
+void RxApplet::scheduleFrequencyAnnouncement(const QString& text)
+{
+    if (!QAccessible::isActive()) {
+        return;
+    }
+    m_pendingAccessibleFrequencyText = text;
+    m_accessibleFrequencyTimer.start(300);
 }
 
 void RxApplet::refreshAllMutedDim()
