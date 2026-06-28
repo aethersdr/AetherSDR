@@ -2424,6 +2424,7 @@ void MainWindow::wireExternalControllers()
     m_hidSnapTimer->setInterval(600);
     connect(m_hidSnapTimer, &QTimer::timeout, this, [this] {
         if (auto* s = activeSlice()) {
+            if (s->isLocked()) return;
             const double snapped = std::round(s->frequency() * 1000.0) / 1000.0;
             if (std::abs(snapped - s->frequency()) > 1e-9)
                 applyTuneRequest(s, snapped, TuneIntent::IncrementalTune, "rc28-autosnap");
@@ -2454,9 +2455,18 @@ void MainWindow::wireExternalControllers()
             }
             return;
         }
+        const bool isTMate2 = m_hidEncoder->isTMate2();
+        const QString actionId = AppSettings::instance()
+            .value(QString(isTMate2 ? "TMate2EncoderAction%1" : "HidEncoderAction%1")
+                       .arg(encoderIndex),
+                   isTMate2 ? tmate2EncoderDefaultAction(encoderIndex)
+                             : MainWindow::hidEncoderDefaultAction(encoderIndex))
+            .toString();
         // RC-28 sensitivity divider and auto-snap (#3841).
-        // Only applies to encoder 0 on the RC-28 (the single tuning knob).
-        if (m_hidEncoder->isRC28Compatible() && encoderIndex == 0) {
+        // Only applies to encoder 0 on the RC-28 (the single tuning knob),
+        // and only when that encoder is mapped to frequency tuning.
+        if (m_hidEncoder->isRC28Compatible() && encoderIndex == 0
+                && actionId == QLatin1String("WheelFrequency")) {
             if (m_hidSensitivity > 1) {
                 // Direction reversal clears the accumulator so pulses from the
                 // previous direction don't bleed into the new one.
@@ -2473,13 +2483,6 @@ void MainWindow::wireExternalControllers()
             }
             if (m_hidAutoSnap) m_hidSnapTimer->start();
         }
-        const bool isTMate2 = m_hidEncoder->isTMate2();
-        const QString actionId = AppSettings::instance()
-            .value(QString(isTMate2 ? "TMate2EncoderAction%1" : "HidEncoderAction%1")
-                       .arg(encoderIndex),
-                   isTMate2 ? tmate2EncoderDefaultAction(encoderIndex)
-                             : MainWindow::hidEncoderDefaultAction(encoderIndex))
-            .toString();
         applyFlexControlWheelAction(actionId, steps);
     });
 
