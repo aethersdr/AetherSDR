@@ -6,11 +6,13 @@
 #include "models/SliceModel.h"
 
 #include <QDateTime>
+#include <QFutureWatcher>
 #include <QJsonDocument>
 #include <QMetaObject>
 #include <QJsonObject>
 #include <QSet>
 #include <QStringList>
+#include <QtConcurrent/QtConcurrentRun>
 #include <QTimer>
 
 #include <algorithm>
@@ -557,6 +559,7 @@ void MainWindow::holdReceivePresentationAutoAssistLock(bool clearVisualQueue)
 
     m_receiveSyncFlexAudio.clear();
     m_receiveSyncKiwiAudio.clear();
+    ++m_receiveSyncEstimateGeneration;
     m_receiveSyncHaveLastEstimate = false;
     m_receiveSyncStableEstimateCount = 0;
     if (clearVisualQueue) {
@@ -578,6 +581,7 @@ void MainWindow::resetReceivePresentationAutoAssistState(bool clearEstimate,
 
     m_receiveSyncFlexAudio.clear();
     m_receiveSyncKiwiAudio.clear();
+    ++m_receiveSyncEstimateGeneration;
     m_receiveSyncKiwiProfileId.clear();
     m_receiveSyncHaveLastEstimate = false;
     m_receiveSyncStableEstimateCount = 0;
@@ -722,7 +726,8 @@ void MainWindow::feedReceivePresentationSyncAudio(
 
 void MainWindow::runReceivePresentationAutoAssist()
 {
-    ReceivePresentationSettings settings = m_receivePresentationSync.settings();
+    const ReceivePresentationSettings settings =
+        m_receivePresentationSync.settings();
     if (!settings.enabled || settings.mode != ReceiveSyncMode::AutoAssist) {
         return;
     }
@@ -738,11 +743,44 @@ void MainWindow::runReceivePresentationAutoAssist()
         || m_receiveSyncKiwiAudio.size() < minSamples) {
         return;
     }
+    if (m_receiveSyncEstimateInFlight) {
+        return;
+    }
 
     m_receiveSyncEstimateTimer.restart();
-    const ReceiveAudioDelayEstimate estimate =
-        m_receiveAudioDelayEstimator.estimate(m_receiveSyncFlexAudio,
-                                              m_receiveSyncKiwiAudio);
+    m_receiveSyncEstimateInFlight = true;
+    const quint64 generation = ++m_receiveSyncEstimateGeneration;
+    const QVector<float> flexAudio = m_receiveSyncFlexAudio;
+    const QVector<float> kiwiAudio = m_receiveSyncKiwiAudio;
+    const ReceiveAudioDelayEstimator::Config config =
+        m_receiveAudioDelayEstimator.config();
+
+    auto* watcher = new QFutureWatcher<ReceiveAudioDelayEstimate>(this);
+    connect(watcher, &QFutureWatcher<ReceiveAudioDelayEstimate>::finished,
+            this, [this, watcher, generation]() {
+        const ReceiveAudioDelayEstimate estimate = watcher->result();
+        watcher->deleteLater();
+        m_receiveSyncEstimateInFlight = false;
+        if (generation != m_receiveSyncEstimateGeneration) {
+            return;
+        }
+        applyReceivePresentationAutoAssistEstimate(estimate);
+    });
+    watcher->setFuture(QtConcurrent::run(
+        [config, flexAudio, kiwiAudio]() {
+            ReceiveAudioDelayEstimator estimator(config);
+            return estimator.estimate(flexAudio, kiwiAudio);
+        }));
+}
+
+void MainWindow::applyReceivePresentationAutoAssistEstimate(
+    const ReceiveAudioDelayEstimate& estimate)
+{
+    ReceivePresentationSettings settings = m_receivePresentationSync.settings();
+    if (!settings.enabled || settings.mode != ReceiveSyncMode::AutoAssist) {
+        return;
+    }
+
     const ReceiveSyncEstimate previousEstimate = settings.autoEstimate;
     const bool hadAppliedAutoLock =
         estimateMaintainsAutoLock(previousEstimate,

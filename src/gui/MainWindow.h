@@ -414,6 +414,8 @@ private:
                                           int sampleRateHz =
                                               AudioEngine::DEFAULT_SAMPLE_RATE);
     void runReceivePresentationAutoAssist();
+    void applyReceivePresentationAutoAssistEstimate(
+        const ReceiveAudioDelayEstimate& estimate);
     SliceModel* kiwiSdrDisplaySliceForPan(const QString& panId) const;
     QString kiwiSdrProfileForPan(const QString& panId) const;
     QString kiwiSdrOverlayProfileForPan(const QString& panId) const;
@@ -890,6 +892,8 @@ private:
     QString m_receiveSyncKiwiProfileId;
     QElapsedTimer m_receiveSyncEstimateTimer;
     QElapsedTimer m_receiveSyncDriftTimer;
+    quint64 m_receiveSyncEstimateGeneration{0};
+    bool m_receiveSyncEstimateInFlight{false};
     int m_receiveSyncLastEstimateOffsetMs{0};
     int m_receiveSyncStableEstimateCount{0};
     ReceiveAudioDelayEstimate m_receiveSyncLastCandidate;

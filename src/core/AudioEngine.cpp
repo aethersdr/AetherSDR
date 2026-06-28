@@ -59,6 +59,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QStringList>
+#include <QtGlobal>
 #include <algorithm>
 #include <cstring>
 #include <optional>
@@ -806,8 +807,6 @@ void AudioEngine::setReceivePresentationDelays(
     const int kiwiDelay = qBound(0, kiwiDelayMs, 5000);
     const QString externalKiwiDelayId = externalKiwiDelaySourceId.trimmed();
     const int legacyKiwiDelay = externalKiwiDelayId.isEmpty() ? kiwiDelay : 0;
-    m_externalKiwiReceivePresentationDelaySourceId = externalKiwiDelayId;
-    m_externalKiwiReceivePresentationDelayMs = kiwiDelay;
 
     const int previousFlex =
         m_flexReceivePresentationDelayMs.exchange(flexDelay,
@@ -815,6 +814,10 @@ void AudioEngine::setReceivePresentationDelays(
     const int previousKiwi =
         m_kiwiReceivePresentationDelayMs.exchange(legacyKiwiDelay,
                                                   std::memory_order_relaxed);
+
+    std::lock_guard<std::recursive_mutex> dspLock(m_dspMutex);
+    m_externalKiwiReceivePresentationDelaySourceId = externalKiwiDelayId;
+    m_externalKiwiReceivePresentationDelayMs = kiwiDelay;
 
     const int outputRate = std::max(1, m_rxOutputRate.load());
     const auto hasFlexQueuedAudio = [this]() {
@@ -1922,6 +1925,14 @@ QJsonObject AudioEngine::startAutomationAudioCapture(
     int durationMs,
     const QStringList& points)
 {
+    if (!qEnvironmentVariableIsSet("AETHER_AUTOMATION")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), false},
+            {QStringLiteral("error"),
+             QStringLiteral("audioCapture requires AETHER_AUTOMATION=1")},
+        };
+    }
+
     QStringList normalizedPoints;
     normalizedPoints.reserve(points.size());
     for (const QString& point : points) {

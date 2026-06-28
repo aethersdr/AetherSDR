@@ -62,6 +62,7 @@ endif()
 # — became available.  Binary distributions bundle Qt 6.7+ for QRhiWidget.
 find_package(Qt6 6.2 REQUIRED COMPONENTS
     Core
+    Concurrent
     Widgets
     Network
     Multimedia
@@ -1208,6 +1209,7 @@ target_include_directories(AetherSDR PRIVATE
 
 target_link_libraries(AetherSDR PRIVATE
     Qt6::Core
+    Qt6::Concurrent
     Qt6::Gui
     Qt6::Widgets
     Qt6::Network
