@@ -253,12 +253,9 @@ void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
     // re-enable from the same place.
     m_dspStack->setCurrentIndex(index);
     if (!m_audio) return;
-    // First-use NVIDIA license gate (both backends run NVIDIA-licensed bits).
-    // If the user declines, revert the button and don't enable.
-    if (index == BNR && nowChecked && !ensureBnrLicenseAccepted()) {
-        if (m_dspBtns[BNR]) { QSignalBlocker b(m_dspBtns[BNR]); m_dspBtns[BNR]->setChecked(false); }
-        return;
-    }
+    // The NVIDIA license is accepted at download time (the Download button gate),
+    // since that's when the licensed bits are fetched. Enabling an
+    // already-downloaded BNR doesn't re-prompt.
     // NR2 enable must run FFTW wisdom prep first (#2275) — kick that
     // through MainWindow rather than calling the engine setter directly.
     // NR2 disable + every other DSP go through the engine-thread setter.
