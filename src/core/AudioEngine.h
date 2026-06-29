@@ -39,6 +39,7 @@ class SpecbleachFilter;
 class RNNoiseFilter;
 class NvidiaBnrFilter;
 class DeepFilterFilter;
+class NvidiaAfxFilter;
 class Resampler;
 class ClientEq;
 class ClientComp;
@@ -254,6 +255,11 @@ public:
     void setDfnrAttenLimit(float db);
     float dfnrAttenLimit() const;
     void setDfnrPostFilterBeta(float beta);
+
+    // Optional NVIDIA Maxine AFX GPU denoiser (runtime-loaded; NVIDIA RTX/GeForce).
+    Q_INVOKABLE void setNvAfxEnabled(bool on);
+    bool nvAfxEnabled() const { return m_nvAfxEnabled.load(); }
+    void setNvAfxIntensity(float ratio);
 
     // Client-side parametric EQ. Two instances: one on the RX audio path
     // (post-NR, pre-write to sink), one on the TX path (post-mic, pre-
@@ -551,6 +557,7 @@ signals:
     void bnrEnabledChanged(bool on);
     void bnrConnectionChanged(bool connected);
     void dfnrEnabledChanged(bool on);
+    void nvAfxEnabledChanged(bool on);
     void txRawPcmReady(const QByteArray& pcm);  // raw 24kHz stereo int16 PCM for RADEEngine
     // Post-final-limiter TX monitor PCM (24 kHz stereo int16) — the exact stream
     // packetised to the radio. Fires for all phone/SSB TX (unlike txRawPcmReady,
@@ -891,6 +898,13 @@ private:
     std::unique_ptr<DeepFilterFilter> m_dfnr;
 #endif
     std::atomic<bool> m_dfnrEnabled{false};
+
+    // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so
+    // mutual-exclusion in the other NR setters compiles regardless of the build).
+#ifdef HAVE_NVIDIA_AFX
+    std::unique_ptr<NvidiaAfxFilter> m_nvAfx;
+#endif
+    std::atomic<bool> m_nvAfxEnabled{false};
 
     // Client-side parametric EQ, independent instances for RX and TX.
     std::unique_ptr<ClientEq> m_clientEqRx;

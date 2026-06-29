@@ -28,6 +28,7 @@ option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
 option(ENABLE_BNR "Enable NVIDIA NIM BNR noise removal (requires grpc++)" OFF)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
+option(ENABLE_NVIDIA_AFX "Enable optional NVIDIA Maxine AFX GPU denoiser (runtime-loaded, download-on-demand; NVIDIA RTX/GeForce only)" OFF)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
@@ -606,6 +607,7 @@ set(CORE_SOURCES
     src/core/SignalClassifier.cpp
     src/core/Resampler.cpp
     src/core/NvidiaBnrFilter.cpp
+    src/core/NvidiaAfxFilter.cpp
     src/core/DeepFilterFilter.cpp
     src/core/RADEEngine.cpp
     src/core/AsyncLogWriter.cpp
@@ -1626,6 +1628,21 @@ if(ENABLE_DFNR)
     endif()
 endif()
 
+# Optional NVIDIA Maxine AFX GPU denoiser. The AFX runtime (libnv_audiofx +
+# the ~2 GB CUDA/TensorRT libs) is NOT linked here — it is dlopen'd at runtime
+# from a downloaded/cached pack, so the shipped binary carries none of it.
+# We only compile the wrapper (it uses its own minimal NvAFX_* declarations,
+# so no NVIDIA headers are vendored) and link the dynamic loader.
+if(ENABLE_NVIDIA_AFX)
+    if(UNIX AND NOT APPLE)
+        target_compile_definitions(AetherSDR PRIVATE HAVE_NVIDIA_AFX)
+        target_link_libraries(AetherSDR PRIVATE ${CMAKE_DL_LIBS})
+        message(STATUS "NVIDIA AFX GPU denoiser enabled (runtime-loaded)")
+    else()
+        message(STATUS "NVIDIA AFX GPU denoiser requested but only supported on Linux — skipping")
+    endif()
+endif()
+
 if(ENABLE_MQTT)
     # HAVE_MQTT gates the project's MQTT client code (MqttApplet,
     # RadioModel plumbing) — must be set regardless of whether
@@ -1836,6 +1853,23 @@ target_include_directories(wfm_dsp_test PRIVATE
 )
 target_link_libraries(wfm_dsp_test PRIVATE Qt6::Core)
 add_test(NAME wfm_dsp_test COMMAND wfm_dsp_test)
+
+# Hardware-gated functional test for the optional NVIDIA AFX GPU denoiser.
+# Built only when the feature is enabled; SKIPs at runtime without a pack/GPU.
+if(ENABLE_NVIDIA_AFX AND UNIX AND NOT APPLE)
+    add_executable(nvidia_afx_filter_test
+        tests/nvidia_afx_filter_test.cpp
+        src/core/NvidiaAfxFilter.cpp
+        src/core/Resampler.cpp
+    )
+    target_compile_definitions(nvidia_afx_filter_test PRIVATE HAVE_NVIDIA_AFX)
+    target_include_directories(nvidia_afx_filter_test PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party/r8brain
+    )
+    target_link_libraries(nvidia_afx_filter_test PRIVATE Qt6::Core ${CMAKE_DL_LIBS})
+    add_test(NAME nvidia_afx_filter_test COMMAND nvidia_afx_filter_test)
+endif()
 
 # Pure, headless, hardware-free golden matrix for the consolidated audio
 # format/rate negotiation policy (#3306). TargetOs is data, so this one binary
