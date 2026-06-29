@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QString>
 #include <QList>
+#include <QElapsedTimer>
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -93,6 +94,7 @@ private:
     QString m_arch;
     QString m_staging;       // staging pack root being assembled
     QString m_tmpFile;       // current download temp
+    QElapsedTimer m_dlTimer; // current component download timer (speed/ETA)
     bool m_busy{false};
     bool m_cancelled{false};
 };

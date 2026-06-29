@@ -4,6 +4,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -37,6 +38,25 @@ constexpr char kWinTarballSha[] = "";
 constexpr char kCoreRelPath[] = "nvafx/lib/libnv_audiofx.so";
 constexpr char kPlatformTag[] = "linux-x86_64";
 #endif
+
+// "12.3 MB/s" from a bytes-per-second rate.
+QString humanRate(double bps)
+{
+    const char* unit = "B/s";
+    double v = bps;
+    if (v >= 1024.0) { v /= 1024.0; unit = "KB/s"; }
+    if (v >= 1024.0) { v /= 1024.0; unit = "MB/s"; }
+    if (v >= 1024.0) { v /= 1024.0; unit = "GB/s"; }
+    return QStringLiteral("%1 %2").arg(v, 0, 'f', v < 10.0 ? 1 : 0).arg(QLatin1String(unit));
+}
+
+// "8s" / "1m 05s" / "1h 02m" from a seconds count.
+QString humanEta(qint64 secs)
+{
+    if (secs < 60)   return QStringLiteral("%1s").arg(secs);
+    if (secs < 3600) return QStringLiteral("%1m %2s").arg(secs / 60).arg(secs % 60, 2, 10, QLatin1Char('0'));
+    return QStringLiteral("%1h %2m").arg(secs / 3600).arg((secs % 3600) / 60, 2, 10, QLatin1Char('0'));
+}
 } // namespace
 
 // ─── Static helpers ──────────────────────────────────────────────────────────
@@ -242,10 +262,21 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
     QNetworkRequest req(url);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     m_reply = m_nam->get(req);
+    m_dlTimer.start();
     emitOverall(0, QStringLiteral("Downloading %1").arg(label));
     connect(m_reply, &QNetworkReply::readyRead, this, [this, out]() { out->write(m_reply->readAll()); });
     connect(m_reply, &QNetworkReply::downloadProgress, this, [this, label](qint64 got, qint64 total) {
-        emitOverall(total > 0 ? int(got * 100 / total) : -1, QStringLiteral("Downloading %1").arg(label));
+        // Average rate since this file started — smoother than per-tick deltas.
+        const qint64 ms = m_dlTimer.elapsed();
+        QString suffix;
+        if (ms > 500 && got > 0) {
+            const double bps = got * 1000.0 / double(ms);
+            suffix = QStringLiteral(" — %1").arg(humanRate(bps));
+            if (total > got && bps > 1.0)
+                suffix += QStringLiteral(", %1 left").arg(humanEta(qint64((total - got) / bps)));
+        }
+        emitOverall(total > 0 ? int(got * 100 / total) : -1,
+                    QStringLiteral("Downloading %1%2").arg(label, suffix));
     });
     connect(m_reply, &QNetworkReply::finished, this,
             [this, out, sha256, label, dest]() {
