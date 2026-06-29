@@ -15,6 +15,15 @@
 #include <QRadioButton>
 #include <QButtonGroup>
 #include <QLineEdit>
+#include <QProgressBar>
+#ifdef HAVE_NVIDIA_AFX
+#include "core/NvidiaAfxPack.h"
+// AFX pack (AFX runtime + CUDA/TRT + per-GPU denoiser model) download source.
+// TODO: publish the per-arch pack as a GitHub Release asset and point here.
+static constexpr const char* kAfxPackUrl =
+    "https://github.com/aethersdr/AetherSDR/releases/download/afx-pack-2.1.0/"
+    "nvidia-afx-2.1.0-linux-x86_64-sm89.tar.zst";
+#endif
 #include <QCheckBox>
 #include <QLabel>
 #include <QPushButton>
@@ -942,15 +951,28 @@ void AetherDspWidget::updateBnrStatus()
             QStringLiteral("QLabel { color: %1; font-size: 11px; }")
                 .arg(conn ? "{{color.status.ok}}" : "{{color.text.secondary}}"));
     }
-    if (m_bnrAfxStatus) {
-        bool afxBuilt = false;
 #ifdef HAVE_NVIDIA_AFX
-        afxBuilt = true;
-#endif
+    const bool installed = NvidiaAfxPack::isInstalled();
+    const bool busy = m_bnrAfxPack && m_bnrAfxPack->busy();
+    if (m_bnrAfxStatus && !busy) {
         const bool on = m_audio && m_audio->nvAfxEnabled();
-        m_bnrAfxStatus->setText(!afxBuilt ? "Not available in this build"
-                                          : on ? "● Active" : "Ready when enabled");
+        m_bnrAfxStatus->setText(!installed ? QStringLiteral("Not installed")
+                                : on ? QStringLiteral("● Active")
+                                     : NvidiaAfxPack::isInstalled()
+                                           ? QStringLiteral("Installed — ready")
+                                           : QStringLiteral("Ready"));
     }
+    if (m_bnrAfxDownloadBtn && !busy) {
+        m_bnrAfxDownloadBtn->setText(installed ? QStringLiteral("Re-download")
+                                               : QStringLiteral("Download (~1 GB)"));
+        m_bnrAfxDownloadBtn->setEnabled(true);
+    }
+    if (m_bnrAfxIntensitySlider)
+        m_bnrAfxIntensitySlider->setEnabled(installed);
+#else
+    if (m_bnrAfxStatus)
+        m_bnrAfxStatus->setText(QStringLiteral("Not available in this build"));
+#endif
 }
 
 QWidget* AetherDspWidget::buildBnrPage()
@@ -960,11 +982,8 @@ QWidget* AetherDspWidget::buildBnrPage()
     vbox->setContentsMargins(10, 20, 10, 0);
     auto& s = AppSettings::instance();
 
-    auto* info = new QLabel(
-        "GPU-accelerated AI noise removal (NVIDIA Maxine). Local runs in-process "
-        "on an NVIDIA GPU here; Service connects to a NIM container that can run "
-        "on this or another machine.");
-    info->setWordWrap(true);
+    auto* info = new QLabel("GPU-accelerated AI noise removal (NVIDIA Maxine).");
+    info->setWordWrap(false);
     AetherSDR::ThemeManager::instance().applyStyleSheet(info, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
     vbox->addWidget(info);
 
@@ -1007,17 +1026,25 @@ QWidget* AetherDspWidget::buildBnrPage()
         m_bnrAfxStatus = new QLabel;
         AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrAfxStatus, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
         g->addWidget(new QLabel("Status"), 0, 0);
-        g->addWidget(m_bnrAfxStatus, 0, 1, 1, 2);
-        g->addWidget(new QLabel("Intensity"), 1, 0);
+        g->addWidget(m_bnrAfxStatus, 0, 1);
+        m_bnrAfxDownloadBtn = new QPushButton("Download");
+        m_bnrAfxDownloadBtn->setToolTip("Download the NVIDIA AFX runtime + denoiser model "
+                                        "for this GPU into the app's cache (one-time).");
+        g->addWidget(m_bnrAfxDownloadBtn, 0, 2);
+        m_bnrAfxProgress = new QProgressBar;
+        m_bnrAfxProgress->setTextVisible(true);
+        m_bnrAfxProgress->hide();
+        g->addWidget(m_bnrAfxProgress, 1, 0, 1, 3);
+        g->addWidget(new QLabel("Intensity"), 2, 0);
         m_bnrAfxIntensitySlider = new QSlider(Qt::Horizontal);
         m_bnrAfxIntensitySlider->setRange(0, 100);
         m_bnrAfxIntensitySlider->setValue(static_cast<int>(s.value("NvAfxIntensity", "1.0").toFloat() * 100));
         applyPrimarySliderStyle(m_bnrAfxIntensitySlider);
         m_bnrAfxIntensitySlider->setToolTip("Denoising strength (0 = passthrough, 100 = max).");
-        g->addWidget(m_bnrAfxIntensitySlider, 1, 1);
+        g->addWidget(m_bnrAfxIntensitySlider, 2, 1);
         m_bnrAfxIntensityLabel = new QLabel(QString::number(m_bnrAfxIntensitySlider->value()));
         m_bnrAfxIntensityLabel->setFixedWidth(40);
-        g->addWidget(m_bnrAfxIntensityLabel, 1, 2);
+        g->addWidget(m_bnrAfxIntensityLabel, 2, 2);
         connect(m_bnrAfxIntensitySlider, &QSlider::valueChanged, this, [this](int v) {
             m_bnrAfxIntensityLabel->setText(QString::number(v));
             const float r = v / 100.0f;
@@ -1025,6 +1052,28 @@ QWidget* AetherDspWidget::buildBnrPage()
             st.setValue("NvAfxIntensity", QString::number(r, 'f', 2)); st.save();
             if (m_audio) QMetaObject::invokeMethod(m_audio, [this, r]() { m_audio->setNvAfxIntensity(r); });
         });
+#ifdef HAVE_NVIDIA_AFX
+        m_bnrAfxPack = new NvidiaAfxPack(this);
+        connect(m_bnrAfxPack, &NvidiaAfxPack::progress, this, [this](int pct, const QString& s) {
+            if (!m_bnrAfxProgress) return;
+            m_bnrAfxProgress->show();
+            if (pct < 0) m_bnrAfxProgress->setRange(0, 0);          // indeterminate
+            else { m_bnrAfxProgress->setRange(0, 100); m_bnrAfxProgress->setValue(pct); }
+            m_bnrAfxProgress->setFormat(s);
+            if (m_bnrAfxStatus) m_bnrAfxStatus->setText(s);
+            if (m_bnrAfxDownloadBtn) m_bnrAfxDownloadBtn->setEnabled(false);
+        });
+        connect(m_bnrAfxPack, &NvidiaAfxPack::finished, this, [this](bool ok, const QString& msg) {
+            if (m_bnrAfxProgress) m_bnrAfxProgress->hide();
+            if (!ok && m_bnrAfxStatus) m_bnrAfxStatus->setText(QStringLiteral("Failed: %1").arg(msg));
+            updateBnrStatus();
+        });
+        connect(m_bnrAfxDownloadBtn, &QPushButton::clicked, this, [this]() {
+            if (m_bnrAfxPack) m_bnrAfxPack->install(QString::fromLatin1(kAfxPackUrl));
+        });
+#else
+        m_bnrAfxDownloadBtn->setEnabled(false);
+#endif
         if (!afxBuilt) w->setEnabled(false);
         m_bnrBackendStack->addWidget(w);  // index 0
     }

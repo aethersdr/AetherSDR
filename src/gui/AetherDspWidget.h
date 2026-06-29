@@ -11,10 +11,12 @@ class QCheckBox;
 class QButtonGroup;
 class QStackedWidget;
 class QLineEdit;
+class QProgressBar;
 
 namespace AetherSDR {
 
 class AudioEngine;
+class NvidiaAfxPack;
 
 // AetherDSP settings body — the QTabWidget + per-tab controls + AppSettings
 // persistence wiring shared by the modeless AetherDspDialog (Settings menu)
@@ -152,6 +154,9 @@ private:
     QButtonGroup*   m_bnrBackendGroup{nullptr};
     QStackedWidget* m_bnrBackendStack{nullptr};
     QLabel*         m_bnrAfxStatus{nullptr};
+    QPushButton*    m_bnrAfxDownloadBtn{nullptr};
+    QProgressBar*   m_bnrAfxProgress{nullptr};
+    NvidiaAfxPack*  m_bnrAfxPack{nullptr};
     QSlider*        m_bnrAfxIntensitySlider{nullptr};
     QLabel*         m_bnrAfxIntensityLabel{nullptr};
     QLineEdit*      m_bnrNimAddress{nullptr};
