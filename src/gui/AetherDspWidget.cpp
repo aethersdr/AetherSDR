@@ -190,13 +190,19 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
         }
 #endif
         // BNR (NVIDIA AFX GPU denoiser) is gated at compile time by
-        // HAVE_NVIDIA_AFX (Linux/Windows + NVIDIA GPU). Keep the slot visible so
-        // the 6-button row stays balanced; just dim it where AFX isn't built.
+        // HAVE_NVIDIA_AFX, which is defined only on Linux/Windows (never on
+        // macOS — Maxine AFX has no macOS runtime). Keep the slot visible so the
+        // 6-button row stays balanced; just dim it where AFX isn't built.
 #ifndef HAVE_NVIDIA_AFX
         if (i == BNR) {
             b->setEnabled(false);
+#ifdef Q_OS_MACOS
+            b->setToolTip("BNR (NVIDIA GPU denoiser) is not available on macOS.\n"
+                          "Use DFNR for AI noise removal.");
+#else
             b->setToolTip("BNR requires an NVIDIA RTX/GeForce GPU "
                           "(not available in this build).");
+#endif
         }
 #endif
         m_dspBtns[i] = b;
@@ -1001,11 +1007,6 @@ QWidget* AetherDspWidget::buildBnrPage()
     auto* vbox = new QVBoxLayout(page);
     vbox->setContentsMargins(10, 20, 10, 0);
     auto& s = AppSettings::instance();
-
-    bool afxBuilt = false;
-#ifdef HAVE_NVIDIA_AFX
-    afxBuilt = true;
-#endif
 
     auto* info = new QLabel("GPU-accelerated AI noise removal (NVIDIA Maxine) — "
                             "runs in-process on a local NVIDIA GPU.");
