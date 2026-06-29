@@ -150,7 +150,9 @@ jobs:
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded",
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake",
-            "-DVCPKG_TARGET_TRIPLET=x64-windows"
+            "-DVCPKG_TARGET_TRIPLET=x64-windows",
+            "-DVCPKG_OVERLAY_TRIPLETS=$env:GITHUB_WORKSPACE\.github\vcpkg-triplets",
+            "-DVCPKG_INSTALL_OPTIONS=--clean-after-build"
           )
           if ($launcher) {
             $cargs += "-DCMAKE_C_COMPILER_LAUNCHER=sccache"

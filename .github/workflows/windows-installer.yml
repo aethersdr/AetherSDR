@@ -95,7 +95,7 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET="x64-windows"
+          cmake -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DMQTT_TLS=OFF -DREQUIRE_KEYCHAIN=ON -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" -DVCPKG_TARGET_TRIPLET="x64-windows" -DVCPKG_OVERLAY_TRIPLETS="$env:GITHUB_WORKSPACE\.github\vcpkg-triplets" -DVCPKG_INSTALL_OPTIONS="--clean-after-build"
 
       - name: Build Opus (RADE dependency)
         # ExternalProject dependency ordering via BUILD_BYPRODUCTS is correct,
