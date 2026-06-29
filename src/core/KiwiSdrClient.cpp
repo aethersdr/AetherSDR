@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace AetherSDR {
@@ -38,16 +39,17 @@ constexpr double kDefaultWaterfallBandwidthMhz = 30.0;
 constexpr int kSpecSoundHeaderBytes = 6;
 constexpr int kObservedSoundHeaderBytes = 10;
 constexpr quint8 kSoundCompressedFlag = 0x10;
-constexpr quint8 kSoundLittleEndianFlag = 0x80;
+constexpr quint8 kSoundRestartFlag = 0x20;
 constexpr int kSpecWaterfallHeaderBytes = 4;
 constexpr int kExtendedWaterfallHeaderBytes = 16;
-constexpr int kZoomedWaterfallPrefixBytes = 5;
 constexpr int kDefaultWaterfallZoomCap = 14;
 constexpr int kDefaultWaterfallFftBins = 1024;
 constexpr quint64 kMaxSequenceGapPaddingFrames = 8;
 constexpr int kWaterfallGuiMinIntervalMs = 33;
 constexpr double kWaterfallStartFixedPointScale = 16777216.0; // 2^24
 constexpr quint64 kWebSocketSessionIdBase = 1ULL << 62;
+constexpr const char* kSoundCompressionEnv = "AETHER_KIWI_SND_COMP";
+constexpr const char* kWaterfallCompressionEnv = "AETHER_KIWI_WF_COMP";
 
 QString trKiwiSdrClient(const char* sourceText)
 {
@@ -286,42 +288,14 @@ QString abbreviatedMsgValue(const QString& value)
         + QLatin1Char(')');
 }
 
-bool parseStatusIntField(const QByteArray& payload,
-                         const QByteArray& key,
-                         int* value)
-{
-    const QByteArray prefix = key + '=';
-    const QList<QByteArray> lines = payload.split('\n');
-    for (QByteArray line : lines) {
-        line = line.trimmed();
-        if (!line.startsWith(prefix)) {
-            continue;
-        }
-
-        bool ok = false;
-        const int parsed =
-            QString::fromLatin1(line.mid(prefix.size()).trimmed()).toInt(&ok);
-        if (!ok) {
-            return false;
-        }
-
-        if (value) {
-            *value = parsed;
-        }
-        return true;
-    }
-
-    return false;
-}
-
 bool soundFrameCompressed(quint8 flags)
 {
     return (flags & kSoundCompressedFlag) != 0;
 }
 
-bool soundFrameLittleEndian(quint8 flags)
+bool soundFrameRestart(quint8 flags)
 {
-    return (flags & kSoundLittleEndianFlag) != 0;
+    return (flags & kSoundRestartFlag) != 0;
 }
 
 int soundPayloadOffset(const QByteArray& frame)
@@ -366,6 +340,19 @@ QUrl kiwiStatusUrl(const QString& host, quint16 port, bool secure)
 }
 #endif
 
+}
+
+KiwiSdrReceiverTelemetry::KiwiSdrReceiverTelemetry()
+    : protocol(KiwiSdrProtocol::defaultProtocolState())
+{
+    if (KiwiSdrClient::diagnosticSoundCompressionRequested()) {
+        protocol.sound.compressedRequested = true;
+        protocol.sound.uncompressedRequested = false;
+    }
+    if (KiwiSdrClient::diagnosticWaterfallCompressionRequested()) {
+        protocol.waterfall.compressedRequested = true;
+        protocol.waterfall.uncompressedRequested = false;
+    }
 }
 
 KiwiSdrClient::KiwiSdrClient(QObject* parent)
@@ -442,6 +429,9 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
     m_secureWebSocketRetryAttempted = false;
     m_soundSocketConnected = false;
     m_waterfallSocketConnected = false;
+    m_monitorMode = false;
+    m_monitorQueueRequested = false;
+    m_campAccepted = false;
     m_soundAudioReady = false;
     m_soundAudioRateAcked = false;
     m_soundSampleRateCommandsSent = false;
@@ -453,6 +443,8 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
     m_soundAudioRateText.clear();
     m_soundResamplerRateHz = 0.0;
     m_soundResampler.reset();
+    KiwiSdrProtocol::resetSoundAdpcmState(&m_soundAdpcmState);
+    m_lastSoundFrameLayout = KiwiSdrProtocol::FrameLayout::Unknown;
     m_haveSoundAudioRate = false;
     m_haveSoundSampleRate = false;
     m_soundDiagWindowStartUtcMs = 0;
@@ -466,6 +458,7 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
     m_waterfallDiagFrames = 0;
     m_waterfallDiagBytes = 0;
     m_telemetry = {};
+    resetCapabilityState();
     m_telemetryPending = false;
     m_lastSoundIdentityCallsign.clear();
     m_lastWaterfallIdentityCallsign.clear();
@@ -616,9 +609,31 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
     }
 
     if (ok) {
-        int extApiChannels = -1;
-        if (parseStatusIntField(payload, QByteArrayLiteral("ext_api"),
-                                &extApiChannels)) {
+        const QString serverHeader =
+            QString::fromLatin1(reply->rawHeader("Server"));
+        KiwiSdrProtocol::ReceiverMetadata statusMetadata =
+            KiwiSdrProtocol::parseStatusPayload(payload, serverHeader);
+
+        const int extApiChannels = statusMetadata.hasExtApi
+            ? statusMetadata.extApi
+            : -1;
+        const int users = statusMetadata.hasUsers ? statusMetadata.users : -1;
+        const int usersMax =
+            statusMetadata.hasUsersMax ? statusMetadata.usersMax : -1;
+        const int preempt =
+            statusMetadata.hasPreempt ? statusMetadata.preempt : 0;
+        const bool hasUsers = statusMetadata.hasUsers;
+        const bool hasUsersMax = statusMetadata.hasUsersMax;
+        const bool statusReportsFull =
+            hasUsers && hasUsersMax && usersMax > 0 && users >= usersMax
+            && preempt <= 0;
+        if (statusReportsFull) {
+            statusMetadata.busy = true;
+            statusMetadata.hasBusy = true;
+        }
+        mergeReceiverMetadata(statusMetadata);
+
+        if (statusMetadata.hasExtApi) {
             qCInfo(lcKiwiSdr).noquote()
                 << "KiwiSDR status preflight"
                 << QStringLiteral("endpoint=%1").arg(logEndpoint())
@@ -637,15 +652,6 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
                 << "ext_api=unreported";
         }
 
-        int users = -1;
-        int usersMax = -1;
-        int preempt = 0;
-        const bool hasUsers =
-            parseStatusIntField(payload, QByteArrayLiteral("users"), &users);
-        const bool hasUsersMax =
-            parseStatusIntField(payload, QByteArrayLiteral("users_max"),
-                                &usersMax);
-        parseStatusIntField(payload, QByteArrayLiteral("preempt"), &preempt);
         qCInfo(lcKiwiSdr).noquote()
             << "KiwiSDR status preflight"
             << QStringLiteral("endpoint=%1").arg(logEndpoint())
@@ -654,15 +660,11 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
             << "users_max="
             << (hasUsersMax ? QString::number(usersMax) : QStringLiteral("unreported"))
             << "preempt=" << preempt;
-        if (hasUsers && hasUsersMax && usersMax > 0 && users >= usersMax
-            && preempt <= 0) {
-            setState(
-                State::Error,
-                tr("This KiwiSDR endpoint is at capacity (%1/%2 users). Try again later or choose another receiver.")
-                    .arg(users)
-                    .arg(usersMax));
-            cleanupSockets();
-            return;
+        if (statusReportsFull) {
+            qCInfo(lcKiwiSdr).noquote()
+                << "KiwiSDR status preflight reports full receiver; "
+                   "continuing to WebSocket admission for monitor/camping offer"
+                << QStringLiteral("endpoint=%1").arg(logEndpoint());
         }
 
         const QString resolvedScheme = url.scheme().toLower();
@@ -808,6 +810,16 @@ void KiwiSdrClient::openWebSockets()
                          tr("KiwiSDR sound connection closed during setup. %1")
                              .arg(identityDiagnosticText()));
                 cleanupSockets();
+            } else if (m_state == State::Camping) {
+                const QString detail =
+                    tr("KiwiSDR monitor audio connection closed.");
+                setState(State::CampDisconnected, detail);
+                cleanupSockets();
+            } else if (m_state == State::Waiting
+                       || m_state == State::Busy) {
+                setState(State::Busy,
+                         tr("KiwiSDR busy/waiting connection closed."));
+                cleanupSockets();
             } else if (m_state == State::Connected) {
                 if (retryWithSecureWebSocket(m_soundSocketConnected)) {
                     return;
@@ -827,8 +839,12 @@ void KiwiSdrClient::openWebSockets()
             this,
 #endif
             [this](QAbstractSocket::SocketError) {
-                handleSocketError(m_soundSocket ? m_soundSocket->errorString()
-                                                : tr("KiwiSDR sound socket error."),
+                const QString error =
+                    m_soundSocket ? m_soundSocket->errorString() : QString();
+                handleSocketError(error.isEmpty()
+                                      ? tr("KiwiSDR sound socket error.")
+                                      : tr("KiwiSDR sound socket error: %1")
+                                            .arg(error),
                                   m_soundSocketConnected);
             });
     qCInfo(lcKiwiSdr).noquote()
@@ -863,6 +879,13 @@ void KiwiSdrClient::openWebSockets()
             << "reason=" << closeReason;
         traceClose(StreamKind::Waterfall, closeCode, closeReason);
         if (!m_userDisconnecting) {
+            if (m_monitorMode
+                || m_state == State::Waiting
+                || m_state == State::Camping
+                || m_state == State::Busy
+                || m_state == State::CampDisconnected) {
+                return;
+            }
             if (retryWithSecureWebSocket(m_waterfallSocketConnected)) {
                 return;
             }
@@ -883,8 +906,13 @@ void KiwiSdrClient::openWebSockets()
             this,
 #endif
             [this](QAbstractSocket::SocketError) {
-                handleSocketError(m_waterfallSocket ? m_waterfallSocket->errorString()
-                                                    : tr("KiwiSDR waterfall socket error."),
+                const QString error = m_waterfallSocket
+                    ? m_waterfallSocket->errorString()
+                    : QString();
+                handleSocketError(error.isEmpty()
+                                      ? tr("KiwiSDR waterfall socket error.")
+                                      : tr("KiwiSDR waterfall socket error: %1")
+                                            .arg(error),
                                   m_waterfallSocketConnected);
             });
     qCInfo(lcKiwiSdr).noquote()
@@ -986,12 +1014,13 @@ void KiwiSdrClient::setWaterfallRateOverride(int rate)
 
 void KiwiSdrClient::setAudioActive(bool active)
 {
-    const bool allowed = active && m_state == State::Connected;
+    const bool allowed = active && stateHasReceiveAudio(m_state);
     if (m_audioActive == allowed) {
         return;
     }
 
     m_audioActive = allowed;
+    m_lastDecodedSoundPcm.clear();
     emit audioActiveChanged(m_audioActive);
 }
 
@@ -1062,6 +1091,18 @@ QString KiwiSdrClient::normalizeEndpoint(const QString& endpoint)
     return QStringLiteral("%1:%2").arg(normalized).arg(kDefaultKiwiSdrPort);
 }
 
+bool KiwiSdrClient::diagnosticWaterfallCompressionRequested()
+{
+    return KiwiSdrProtocol::diagnosticCompressionFlagEnabled(
+        qgetenv(kWaterfallCompressionEnv));
+}
+
+bool KiwiSdrClient::diagnosticSoundCompressionRequested()
+{
+    return KiwiSdrProtocol::diagnosticCompressionFlagEnabled(
+        qgetenv(kSoundCompressionEnv));
+}
+
 void KiwiSdrClient::cleanupSockets()
 {
     if (m_keepaliveTimer) {
@@ -1078,6 +1119,8 @@ void KiwiSdrClient::cleanupSockets()
     m_loggedSoundFrameShape = false;
     m_loggedWaterfallFrameShape = false;
     m_lastDecodedSoundPcm.clear();
+    KiwiSdrProtocol::resetSoundAdpcmState(&m_soundAdpcmState);
+    m_lastSoundFrameLayout = KiwiSdrProtocol::FrameLayout::Unknown;
     m_soundAudioRateText.clear();
     m_haveSoundAudioRate = false;
     m_haveSoundSampleRate = false;
@@ -1140,7 +1183,8 @@ void KiwiSdrClient::sendSoundSetupCommands()
 {
     sendSoundCommand(QStringLiteral("SET auth t=kiwi p=#"));
     sendSoundIdentityToServer();
-    sendSoundCommand(QStringLiteral("SET compression=0"));
+    sendSoundCommand(KiwiSdrProtocol::formatSoundCompressionCommand(
+        diagnosticSoundCompressionRequested()));
 }
 
 void KiwiSdrClient::sendSoundAudioRateAck()
@@ -1192,7 +1236,8 @@ void KiwiSdrClient::sendWaterfallSetupCommands()
     sendWaterfallCommand(QStringLiteral("SET auth t=kiwi p=#"));
     sendWaterfallIdentityToServer();
     sendWaterfallCommand(QStringLiteral("SERVER DE CLIENT AetherSDR W/F"));
-    sendWaterfallCommand(QStringLiteral("SET wf_comp=0"));
+    sendWaterfallCommand(KiwiSdrProtocol::formatWaterfallCompressionCommand(
+        diagnosticWaterfallCompressionRequested()));
     sendWaterfallCommand(QStringLiteral("SET send_dB=1"));
     sendWaterfallViewToServer();
     sendWaterfallDisplayAdjustmentsToServer();
@@ -1201,8 +1246,21 @@ void KiwiSdrClient::sendWaterfallSetupCommands()
     sendWaterfallRateToServer();
 }
 
+void KiwiSdrClient::queueKiwiMonitor()
+{
+    if (m_monitorQueueRequested) {
+        return;
+    }
+
+    m_monitorQueueRequested = true;
+    sendSoundCommand(QStringLiteral("SET MON_QSET=1"));
+}
+
 void KiwiSdrClient::sendTrackedSliceToServer()
 {
+    if (m_monitorMode) {
+        return;
+    }
     if (m_trackedSliceId < 0 || m_trackedFrequencyMhz <= 0.0) {
         return;
     }
@@ -1237,6 +1295,9 @@ void KiwiSdrClient::sendTrackedSliceToServer()
 
 void KiwiSdrClient::sendReceiverControlsToServer()
 {
+    if (m_monitorMode) {
+        return;
+    }
 #ifdef HAVE_WEBSOCKETS
     if (!m_soundSocket
         || m_soundSocket->state() != QAbstractSocket::ConnectedState
@@ -1254,6 +1315,10 @@ void KiwiSdrClient::sendReceiverControlsToServer()
 
 void KiwiSdrClient::sendWaterfallViewToServer()
 {
+    if (m_monitorMode) {
+        m_waterfallRequestValid = false;
+        return;
+    }
 #ifdef HAVE_WEBSOCKETS
     if (!m_waterfallSocket
         || m_waterfallSocket->state() != QAbstractSocket::ConnectedState) {
@@ -1375,6 +1440,9 @@ void KiwiSdrClient::sendWaterfallViewToServer()
 
 void KiwiSdrClient::sendWaterfallDisplayAdjustmentsToServer()
 {
+    if (m_monitorMode) {
+        return;
+    }
     const float maxDb = m_waterfallMaxDbm
         + static_cast<float>(m_waterfallCellDb);
     const float minDb = std::min(
@@ -1493,64 +1561,26 @@ int KiwiSdrClient::kiwiHighCutHz() const
     return 4900;
 }
 
-bool KiwiSdrClient::isSupportedPcmSoundFrame(
-    const QByteArray& frame,
-    const KiwiSdrProtocol::SoundFrameHeader& header) const
+bool KiwiSdrClient::isSupportedSoundFrame(
+    const KiwiSdrProtocol::FrameObservation& observation) const
 {
-    if (!header.valid) {
-        return false;
-    }
-    if (soundFrameCompressed(header.flags)) {
-        return false;
-    }
-
-    const int sampleBytes = frame.size() - soundPayloadOffset(frame);
-    if (sampleBytes <= 0 || (sampleBytes % 2) != 0) {
-        return false;
-    }
-
-    return true;
+    return observation.stream == KiwiSdrProtocol::StreamMode::Sound
+        && observation.supported;
 }
 
-QByteArray KiwiSdrClient::decodeSoundFrame(const QByteArray& frame)
+QByteArray KiwiSdrClient::resampleSoundSamples(const QVector<float>& monoSamples)
 {
-    if (frame.size() <= kSpecSoundHeaderBytes || !frame.startsWith("SND")) {
+    if (monoSamples.isEmpty()) {
         return {};
     }
 
-    const KiwiSdrProtocol::SoundFrameHeader header =
-        KiwiSdrProtocol::parseSoundFrameHeader(frame);
-    const int payloadOffset = soundPayloadOffset(frame);
-    const bool littleEndian = header.valid && soundFrameLittleEndian(header.flags);
-    const int sampleBytes = frame.size() - payloadOffset;
-    const int inSamples = sampleBytes / 2;
-    if (inSamples <= 0 || (sampleBytes % 2) != 0) {
-        return {};
-    }
-
-    std::vector<float> mono(static_cast<std::size_t>(inSamples));
-    const auto* data = reinterpret_cast<const uchar*>(frame.constData() + payloadOffset);
-    for (int i = 0; i < inSamples; ++i) {
-        int sample = 0;
-        if (littleEndian) {
-            sample = static_cast<int>(data[2 * i])
-                   | (static_cast<int>(data[2 * i + 1]) << 8);
-        } else {
-            sample = (static_cast<int>(data[2 * i]) << 8)
-                   | static_cast<int>(data[2 * i + 1]);
-        }
-        if (sample & 0x8000) {
-            sample -= 0x10000;
-        }
-        mono[static_cast<std::size_t>(i)] = std::clamp(
-            static_cast<float>(sample) / 32768.0f, -1.0f, 1.0f);
-    }
     if (!m_soundResampler || std::abs(m_soundResamplerRateHz - m_soundSampleRateHz) > 1.0) {
         m_soundResampler = std::make_unique<Resampler>(
             m_soundSampleRateHz, 24000.0);
         m_soundResamplerRateHz = m_soundSampleRateHz;
     }
-    return m_soundResampler->processMonoToStereo(mono.data(), inSamples);
+    return m_soundResampler->processMonoToStereo(monoSamples.constData(),
+                                                 monoSamples.size());
 }
 
 bool KiwiSdrClient::parseWaterfallFrameHeader(const QByteArray& frame,
@@ -1583,53 +1613,8 @@ bool KiwiSdrClient::parseWaterfallFrameHeader(const QByteArray& frame,
 
 QVector<float> KiwiSdrClient::decodeWaterfallFrame(const QByteArray& frame) const
 {
-    if (frame.size() <= kSpecWaterfallHeaderBytes || !frame.startsWith("W/F")) {
-        return {};
-    }
-
-    int payloadOffset = kSpecWaterfallHeaderBytes;
-    int frameZoom = 0;
-    const bool haveExtendedHeader = parseWaterfallFrameHeader(
-        frame, nullptr, &frameZoom);
-    if (haveExtendedHeader) {
-        payloadOffset = kExtendedWaterfallHeaderBytes;
-    }
-    int payloadBytes = frame.size() - payloadOffset;
-    if (payloadBytes == kZoomedWaterfallPrefixBytes) {
-        return {};
-    }
-    const auto* payload = reinterpret_cast<const uchar*>(
-        frame.constData() + payloadOffset);
-    if (haveExtendedHeader
-        && frameZoom > 0
-        && payloadBytes > kZoomedWaterfallPrefixBytes
-        && payload[0] == 0x77
-        && payload[1] == 0x01) {
-        // Clean-room W/F captures on 2026-06-18 showed this zoom-row
-        // prefix marks the compact encoded W/F format. It is not one
-        // byte-per-bin waterfall data; rendering it caused the speckled
-        // display. We request wf_comp=0 during setup, and drop encoded rows
-        // from endpoints that ignore that request until a clean decoder is
-        // available.
-        qCDebug(lcKiwiSdr).noquote()
-            << "KiwiSDR W/F compressed row ignored"
-            << QStringLiteral("endpoint=%1").arg(logEndpoint())
-            << "len=" << frame.size()
-            << "zoom=" << frameZoom
-            << "first=" << firstBytesHex(frame);
-        return {};
-    }
-    if (payloadBytes <= 0) {
-        return {};
-    }
-
-    QVector<float> bins;
-    bins.reserve(payloadBytes);
-    const auto* data = reinterpret_cast<const uchar*>(frame.constData() + payloadOffset);
-    for (int i = 0; i < payloadBytes; ++i) {
-        bins.append(KiwiSdrProtocol::waterfallByteToDisplayLevel(*data++));
-    }
-    return bins;
+    return KiwiSdrProtocol::decodeWaterfallFrame(
+        frame, m_waterfallZoomCap).binsDbm;
 }
 
 void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
@@ -1643,6 +1628,14 @@ void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
     } else if (frame.startsWith("W/F")) {
         handleWaterfallFrame(frame);
     } else if (frame.startsWith("EXT")) {
+        KiwiSdrProtocol::FrameObservation observation;
+        observation.stream = KiwiSdrProtocol::StreamMode::Extension;
+        observation.layout = KiwiSdrProtocol::FrameLayout::Extension;
+        observation.frameBytes = frame.size();
+        observation.supported = false;
+        observation.unsupportedReason =
+            QStringLiteral("Kiwi extensions are not supported");
+        recordFrameObservation(observation);
         qCDebug(lcKiwiSdr).noquote()
             << "KiwiSDR EXT ignored"
             << QStringLiteral("endpoint=%1").arg(logEndpoint())
@@ -1650,6 +1643,14 @@ void KiwiSdrClient::handleBinaryMessage(StreamKind stream,
             << "first=" << firstBytesHex(frame);
     } else {
         const QString tag = QString::fromLatin1(frame.left(3));
+        KiwiSdrProtocol::FrameObservation observation;
+        observation.stream = KiwiSdrProtocol::StreamMode::Unknown;
+        observation.layout = KiwiSdrProtocol::FrameLayout::UnknownBinary;
+        observation.frameBytes = frame.size();
+        observation.supported = false;
+        observation.unsupportedReason =
+            QStringLiteral("Unknown KiwiSDR binary tag: %1").arg(tag);
+        recordFrameObservation(observation);
         qCDebug(lcKiwiSdr).noquote()
             << "KiwiSDR unknown binary tag=" << tag
             << QStringLiteral("endpoint=%1").arg(logEndpoint())
@@ -1677,32 +1678,13 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
     }
     const KiwiSdrProtocol::SoundFrameHeader header =
         KiwiSdrProtocol::parseSoundFrameHeader(frame);
+    const KiwiSdrProtocol::FrameObservation soundObservation =
+        KiwiSdrProtocol::classifySoundFrame(frame);
+    recordFrameObservation(soundObservation);
     const int payloadOffset = header.valid ? soundPayloadOffset(frame) : 0;
     const qsizetype payloadBytes =
         std::max<qsizetype>(0, frame.size() - payloadOffset);
-    if (!isSupportedPcmSoundFrame(frame, header)) {
-        if (header.valid && soundFrameCompressed(header.flags)) {
-            qCWarning(lcKiwiSdrAudio).noquote()
-                << "KiwiSDR SND compressed audio unsupported"
-                << QStringLiteral("endpoint=%1").arg(logEndpoint())
-                << "len=" << frame.size()
-                << "first=" << firstBytesHex(frame)
-                << "flags=0x"
-                << QString::number(header.flags, 16).rightJustified(
-                       2, QLatin1Char('0'))
-                << "compressed=true"
-                << "payload_offset=" << payloadOffset
-                << "payload_len=" << payloadBytes
-                << "decoder=unsupported-compressed"
-                << "audio_rate=" << QString::number(m_soundSampleRateHz, 'f', 0)
-                << "sequence=" << header.sequence
-                << "receive_utc_ms=" << nowUtcMs
-                << "delta_ms=" << deltaMs;
-            setState(State::Error,
-                     tr("Unsupported KiwiSDR compressed SND audio."));
-            cleanupSockets();
-            return;
-        }
+    if (!isSupportedSoundFrame(soundObservation)) {
         qCWarning(lcKiwiSdrAudio).noquote()
             << "KiwiSDR SND unsupported frame shape"
             << QStringLiteral("endpoint=%1").arg(logEndpoint())
@@ -1719,17 +1701,56 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
                     : QStringLiteral("false"))
             << "payload_offset=" << payloadOffset
             << "payload_len=" << payloadBytes
-            << "decoder=unsupported-pcm-shape"
+            << "decoder=unsupported-shape"
+            << "reason=" << soundObservation.unsupportedReason
             << "audio_rate=" << QString::number(m_soundSampleRateHz, 'f', 0)
             << "sequence=" << header.sequence
             << "receive_utc_ms=" << nowUtcMs
             << "delta_ms=" << deltaMs;
+        if (header.valid && soundFrameCompressed(header.flags)) {
+            KiwiSdrProtocol::invalidateSoundAdpcmState(&m_soundAdpcmState);
+            m_lastSoundFrameLayout = KiwiSdrProtocol::FrameLayout::Unknown;
+            m_lastDecodedSoundPcm.clear();
+        }
         return;
     }
     const quint64 sequenceGaps = header.valid
         ? KiwiSdrProtocol::sequenceGapCount(m_telemetry.soundSequence,
                                             header.sequence)
         : 0;
+    const bool compressedSound =
+        soundObservation.layout == KiwiSdrProtocol::FrameLayout::SndCompressed;
+    const bool restartFlag =
+        header.valid && soundFrameRestart(header.flags);
+    const bool layoutChanged =
+        m_lastSoundFrameLayout != KiwiSdrProtocol::FrameLayout::Unknown
+        && m_lastSoundFrameLayout != soundObservation.layout;
+    if (compressedSound) {
+        if (layoutChanged || restartFlag) {
+            KiwiSdrProtocol::resetSoundAdpcmState(&m_soundAdpcmState);
+            m_lastDecodedSoundPcm.clear();
+            qCDebug(lcKiwiSdrAudio).noquote()
+                << "KiwiSDR SND ADPCM decoder reset"
+                << QStringLiteral("endpoint=%1").arg(logEndpoint())
+                << "layout_changed=" << (layoutChanged ? "true" : "false")
+                << "sequence_gap=" << sequenceGaps
+                << "restart_flag=" << (restartFlag ? "true" : "false")
+                << "sequence=" << header.sequence;
+        }
+        if (sequenceGaps > 0 && !restartFlag) {
+            KiwiSdrProtocol::invalidateSoundAdpcmState(&m_soundAdpcmState);
+            m_lastDecodedSoundPcm.clear();
+            qCDebug(lcKiwiSdrAudio).noquote()
+                << "KiwiSDR SND ADPCM decoder state invalidated"
+                << QStringLiteral("endpoint=%1").arg(logEndpoint())
+                << "sequence_gap=" << sequenceGaps
+                << "sequence=" << header.sequence;
+        }
+    } else if (!compressedSound && layoutChanged) {
+        KiwiSdrProtocol::resetSoundAdpcmState(&m_soundAdpcmState);
+        m_lastDecodedSoundPcm.clear();
+    }
+    m_lastSoundFrameLayout = soundObservation.layout;
     updateSoundTelemetry(frame);
     KiwiSdrProtocol::MeterReading meterReading =
         KiwiSdrProtocol::extractMeterFromSndVerifiedLayout(
@@ -1739,9 +1760,34 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
         meterReading.squelched = header.squelched;
     }
     markSoundAudioReady();
+    KiwiSdrProtocol::SoundFrameDecodeResult decodedSound;
+    const bool decodeForAudio =
+        m_audioActive || m_decodeAudioWhenInactive;
+    const bool decodeForState = decodeForAudio || compressedSound;
+    if (decodeForState) {
+        if (compressedSound && !m_soundAdpcmState.valid && !restartFlag) {
+            traceProtocolEvent(
+                QStringLiteral("DROP SND compressed frame until ADPCM restart "
+                               "seq=%1 gaps=%2")
+                    .arg(header.sequence)
+                    .arg(sequenceGaps));
+            return;
+        }
+        decodedSound =
+            KiwiSdrProtocol::decodeSoundFrame(frame, &m_soundAdpcmState);
+        if (!decodedSound.observation.supported
+            || decodedSound.monoSamples.isEmpty()) {
+            if (compressedSound) {
+                KiwiSdrProtocol::invalidateSoundAdpcmState(&m_soundAdpcmState);
+                m_lastDecodedSoundPcm.clear();
+            }
+            return;
+        }
+    }
     ++m_soundDiagFrames;
     m_soundDiagBytes += static_cast<quint64>(frame.size());
-    m_soundDiagDecodedSamples += static_cast<quint64>(payloadBytes / 2);
+    m_soundDiagDecodedSamples += static_cast<quint64>(
+        decodedSound.monoSamples.size());
     if (m_soundDiagWindowStartUtcMs == 0) {
         m_soundDiagWindowStartUtcMs = nowUtcMs;
     }
@@ -1802,7 +1848,7 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
         return;
     }
 
-    QByteArray pcm = decodeSoundFrame(frame);
+    QByteArray pcm = resampleSoundSamples(decodedSound.monoSamples);
     if (!pcm.isEmpty()) {
         if (header.squelched) {
             pcm.fill(0);
@@ -1815,11 +1861,12 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
                 << "flags=0x"
                 << QString::number(header.flags, 16).rightJustified(
                        2, QLatin1Char('0'))
-                << "compressed=false"
+                << "compressed=" << (compressedSound ? "true" : "false")
                 << "payload_offset=" << payloadOffset
                 << "payload_len=" << payloadBytes
-                << "decoder=pcm16"
-                << "decoded_samples=" << (payloadBytes / 2)
+                << "decoder="
+                << (compressedSound ? "adpcm16" : "pcm16")
+                << "decoded_samples=" << decodedSound.monoSamples.size()
                 << "audio_rate=" << QString::number(m_soundSampleRateHz, 'f', 0)
                 << "sequence=" << header.sequence
                 << "receive_utc_ms=" << nowUtcMs
@@ -1827,7 +1874,7 @@ void KiwiSdrClient::handleSoundFrame(const QByteArray& frame)
         }
         const quint64 padFrames = std::min(sequenceGaps,
                                           kMaxSequenceGapPaddingFrames);
-        if (!m_lastDecodedSoundPcm.isEmpty()) {
+        if (!compressedSound && !m_lastDecodedSoundPcm.isEmpty()) {
             for (quint64 i = 0; i < padFrames; ++i) {
                 emit decodedAudioReady(m_lastDecodedSoundPcm);
             }
@@ -1891,6 +1938,8 @@ void KiwiSdrClient::handleWaterfallFrame(const QByteArray& frame)
     }
     const KiwiSdrProtocol::WaterfallLineHeader header =
         KiwiSdrProtocol::parseWaterfallLineHeader(frame);
+    recordFrameObservation(
+        KiwiSdrProtocol::classifyWaterfallFrame(frame, m_waterfallZoomCap));
     const quint64 sequenceGaps = header.valid
         ? KiwiSdrProtocol::sequenceGapCount(m_telemetry.waterfallSequence,
                                             header.sequence)
@@ -2033,17 +2082,33 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
             traceProtocolEvent(QStringLiteral("PARSED %1 %2")
                 .arg(streamLabel(stream), key));
         }
+        if (KiwiSdrProtocol::updateReceiverMetadataFromMsgToken(
+                token, &m_telemetry.metadata)) {
+            updateProtocolStateFromMetadata();
+            emitTelemetryChanged();
+        }
+        if (updateCampStatusFromMetadata(token)) {
+            return;
+        }
         if (key == QStringLiteral("too_busy")) {
             bool busyOk = false;
             const int busyValue = valueText.toInt(&busyOk);
             // KiwiSDR sends too_busy on denial paths, not as a negative
             // status. A value of zero means the server configured zero
             // simultaneous non-Kiwi/API client channels.
-            const QString detail =
-                busyOk && busyValue == 0
-                    ? tr("This KiwiSDR operator does not allow external API clients such as AetherSDR.")
-                    : tr("KiwiSDR endpoint is busy.");
-            setState(State::Error, detail);
+            if (busyOk && busyValue == 0) {
+                setState(State::Error,
+                         tr("This KiwiSDR operator does not allow external API "
+                            "clients such as AetherSDR."));
+            } else {
+                setState(State::Busy,
+                         busyOk && busyValue > 0
+                             ? tr("All %1 KiwiSDR receiver channels are busy. "
+                                  "No waiting or camping slot was offered.")
+                                   .arg(busyValue)
+                             : tr("All KiwiSDR receiver channels are busy. "
+                                  "No waiting or camping slot was offered."));
+            }
             cleanupSockets();
             return;
         }
@@ -2085,12 +2150,6 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
                 State::Error,
                 tr("This KiwiSDR is locked for exclusive use by another "
                    "operation. Try again later or choose another receiver."));
-            cleanupSockets();
-            return;
-        }
-        if (key == QStringLiteral("camp_disconnect")) {
-            setState(State::Error,
-                     tr("KiwiSDR camping queue disconnected this client."));
             cleanupSockets();
             return;
         }
@@ -2177,6 +2236,15 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
         }
         if (key == QStringLiteral("badp")) {
             const int badp = static_cast<int>(value);
+            const KiwiSdrProtocol::AuthMode authMode = badp == 0
+                ? KiwiSdrProtocol::AuthMode::PublicPasswordless
+                : (badp == 1
+                       ? KiwiSdrProtocol::AuthMode::PasswordRequired
+                       : KiwiSdrProtocol::AuthMode::Rejected);
+            if (m_telemetry.protocol.authMode != authMode) {
+                m_telemetry.protocol.authMode = authMode;
+                emitTelemetryChanged();
+            }
             if (badp != 0) {
                 m_startupTrace.badpNonzeroSeen = true;
             }
@@ -2266,6 +2334,149 @@ void KiwiSdrClient::handleTextMessage(StreamKind stream, const QString& text)
     }
 }
 
+bool KiwiSdrClient::updateCampStatusFromMetadata(
+    const KiwiSdrProtocol::MsgToken& token)
+{
+    const QString key = token.key.trimmed();
+    if (key.isEmpty()) {
+        return false;
+    }
+
+    const KiwiSdrProtocol::ReceiverMetadata& metadata = m_telemetry.metadata;
+    auto setMonitorWaterfallUnavailable = [this, &metadata]() {
+        QString detail;
+        if (metadata.hasCampQueueReloadRecommended
+            && metadata.campQueueReloadRecommended) {
+            detail = tr("A KiwiSDR receiver slot is free. AetherSDR is "
+                        "reconnecting for normal receiver control; the "
+                        "temporary monitor session does not provide a "
+                        "controllable waterfall.");
+        } else if (metadata.hasCampQueuePosition
+                   && metadata.hasCampQueueWaiters) {
+            detail = tr("Waiting for a free KiwiSDR receiver slot "
+                        "(position %1 of %2). AetherSDR will reconnect "
+                        "automatically when the server reports one is "
+                        "available. The monitor session does not provide a "
+                        "controllable waterfall.")
+                         .arg(metadata.campQueuePosition)
+                         .arg(metadata.campQueueWaiters);
+        } else if (metadata.campStatus == KiwiSdrProtocol::CampStatus::Accepted) {
+            const QString channel = metadata.hasCampReceiverChannel
+                ? tr("RX%1").arg(metadata.campReceiverChannel)
+                : tr("another receiver");
+            detail = tr("Monitoring KiwiSDR %1 while waiting. Monitor sessions "
+                        "follow an existing receiver and do not provide a "
+                        "controllable waterfall.")
+                         .arg(channel);
+        } else {
+            detail = tr("All KiwiSDR receiver slots are busy. AetherSDR is "
+                        "waiting for an available slot and will reconnect "
+                        "automatically; the temporary monitor session does not "
+                        "provide a controllable waterfall.");
+        }
+        if (!m_waterfallAvailable
+            && m_waterfallAvailabilityDetail == detail) {
+            return;
+        }
+        m_waterfallAvailable = false;
+        m_waterfallAvailabilityDetail = detail;
+        emit waterfallAvailabilityChanged(false, detail);
+    };
+    auto campChannelText = [&metadata]() {
+        return metadata.hasCampReceiverChannel
+            ? QStringLiteral("RX%1").arg(metadata.campReceiverChannel)
+            : QStringLiteral("selected receiver channel");
+    };
+
+    if (key == QStringLiteral("monitor")) {
+        m_monitorMode = true;
+        setMonitorWaterfallUnavailable();
+        setState(State::Waiting,
+                 tr("All KiwiSDR receiver channels are busy. Waiting for a "
+                    "free receiver slot; AetherSDR will reconnect "
+                    "automatically when the server reports one is available. "
+                    "Monitoring/camping does not allow normal tuning or mode "
+                    "control."));
+        queueKiwiMonitor();
+        return false;
+    }
+
+    if (key == QStringLiteral("qpos")) {
+        m_monitorMode = true;
+        setMonitorWaterfallUnavailable();
+        if (metadata.hasCampQueueReloadRecommended
+            && metadata.campQueueReloadRecommended) {
+            setState(State::Waiting,
+                     tr("A KiwiSDR receiver slot is free. Reconnecting for "
+                        "normal receiver control."));
+            return false;
+        }
+        if (metadata.hasCampQueuePosition && metadata.hasCampQueueWaiters) {
+            setState(State::Waiting,
+                     tr("Waiting for a free KiwiSDR receiver slot "
+                        "(position %1 of %2). AetherSDR will reconnect "
+                        "automatically; normal tuning is disabled while "
+                        "waiting.")
+                         .arg(metadata.campQueuePosition)
+                         .arg(metadata.campQueueWaiters));
+            return false;
+        }
+        setState(State::Waiting,
+                 tr("Waiting for a free KiwiSDR receiver slot. AetherSDR "
+                    "will reconnect automatically; normal tuning is disabled "
+                    "while waiting."));
+        return false;
+    }
+
+    if (key == QStringLiteral("camp")) {
+        m_monitorMode = true;
+        setMonitorWaterfallUnavailable();
+        if (metadata.campStatus == KiwiSdrProtocol::CampStatus::Accepted) {
+            m_campAccepted = true;
+            if (m_soundAudioReady) {
+                setState(State::Camping,
+                         tr("Monitoring KiwiSDR %1. This follows another "
+                            "receiver channel, so normal tuning and mode "
+                            "control are disabled.")
+                             .arg(campChannelText()));
+            } else {
+                setState(State::Waiting,
+                         tr("Camping accepted on KiwiSDR %1. Waiting for "
+                            "audio before enabling monitoring.")
+                             .arg(campChannelText()));
+            }
+            return false;
+        }
+        if (metadata.campStatus == KiwiSdrProtocol::CampStatus::Rejected) {
+            m_campAccepted = false;
+            setState(State::Busy,
+                     tr("KiwiSDR rejected camping on %1 because too many "
+                        "campers are already monitoring that channel.")
+                         .arg(campChannelText()));
+            return false;
+        }
+    }
+
+    if (key == QStringLiteral("audio_camp")
+        && metadata.campStatus == KiwiSdrProtocol::CampStatus::AudioStopped) {
+        m_campAccepted = false;
+        setState(State::CampDisconnected,
+                 tr("KiwiSDR monitor audio stopped."));
+        cleanupSockets();
+        return true;
+    }
+
+    if (key == QStringLiteral("camp_disconnect")) {
+        m_campAccepted = false;
+        setState(State::CampDisconnected,
+                 tr("The KiwiSDR receiver channel being monitored disconnected."));
+        cleanupSockets();
+        return true;
+    }
+
+    return false;
+}
+
 bool KiwiSdrClient::updateWaterfallFftBins(int binCount)
 {
     if (!plausibleWaterfallFftBins(binCount)) {
@@ -2313,6 +2524,127 @@ void KiwiSdrClient::updateWaterfallAvailability()
             << "wf_chans=" << m_waterfallChannelCount;
     }
     emit waterfallAvailabilityChanged(available, detail);
+}
+
+void KiwiSdrClient::resetCapabilityState()
+{
+    m_telemetry.protocol = KiwiSdrProtocol::defaultProtocolState();
+    m_telemetry.protocol.authMode =
+        KiwiSdrProtocol::AuthMode::PublicPasswordless;
+    if (diagnosticSoundCompressionRequested()) {
+        m_telemetry.protocol.sound.compressedRequested = true;
+        m_telemetry.protocol.sound.uncompressedRequested = false;
+    }
+    if (diagnosticWaterfallCompressionRequested()) {
+        m_telemetry.protocol.waterfall.compressedRequested = true;
+        m_telemetry.protocol.waterfall.uncompressedRequested = false;
+    }
+}
+
+void KiwiSdrClient::updateProtocolStateFromMetadata()
+{
+    KiwiSdrProtocol::ProtocolState& protocol = m_telemetry.protocol;
+    const KiwiSdrProtocol::ReceiverMetadata& metadata = m_telemetry.metadata;
+    if (!metadata.serverVersion.isEmpty()) {
+        protocol.serverVersion = metadata.serverVersion;
+    }
+    if (!metadata.serverBuild.isEmpty()) {
+        protocol.serverBuild = metadata.serverBuild;
+    }
+    if (metadata.hasExtApi) {
+        protocol.extApi = metadata.extApi;
+        protocol.apiPolicy = metadata.apiPolicy;
+    }
+}
+
+void KiwiSdrClient::mergeReceiverMetadata(
+    const KiwiSdrProtocol::ReceiverMetadata& metadata)
+{
+    if (KiwiSdrProtocol::mergeReceiverMetadata(&m_telemetry.metadata,
+                                               metadata)) {
+        updateProtocolStateFromMetadata();
+        emitTelemetryChanged();
+    }
+}
+
+void KiwiSdrClient::recordFrameObservation(
+    const KiwiSdrProtocol::FrameObservation& observation)
+{
+    if (observation.layout == KiwiSdrProtocol::FrameLayout::Unknown) {
+        return;
+    }
+
+    bool changed = false;
+    KiwiSdrProtocol::StreamCapability* capability = nullptr;
+    if (observation.stream == KiwiSdrProtocol::StreamMode::Sound) {
+        capability = &m_telemetry.protocol.sound;
+    } else if (observation.stream == KiwiSdrProtocol::StreamMode::Waterfall) {
+        capability = &m_telemetry.protocol.waterfall;
+    }
+
+    if (capability) {
+        if (!capability->observed) {
+            capability->observed = true;
+            changed = true;
+        }
+        if (capability->lastObservedLayout != observation.layout) {
+            capability->lastObservedLayout = observation.layout;
+            changed = true;
+        }
+        if (!capability->observedLayouts.contains(observation.layout)) {
+            capability->observedLayouts.append(observation.layout);
+            changed = true;
+        }
+        const bool directWaterfall =
+            observation.layout
+            == KiwiSdrProtocol::FrameLayout::WaterfallDirectBins;
+        const bool plainSound =
+            observation.layout == KiwiSdrProtocol::FrameLayout::SndPcm16
+            || observation.layout
+                == KiwiSdrProtocol::FrameLayout::SndObservedPcm16WithMeter;
+        const bool compactOrCompressed =
+            observation.layout == KiwiSdrProtocol::FrameLayout::SndCompressed
+            || observation.layout
+                == KiwiSdrProtocol::FrameLayout::WaterfallCompactEncoded;
+        if (observation.supported
+            && (directWaterfall || plainSound)
+            && !capability->uncompressedObserved) {
+            capability->uncompressedObserved = true;
+            changed = true;
+        }
+        if (compactOrCompressed && !capability->compressedObserved) {
+            capability->compressedObserved = true;
+            changed = true;
+        }
+        if (!observation.supported
+            && capability->unsupportedReason != observation.unsupportedReason) {
+            capability->unsupportedReason = observation.unsupportedReason;
+            changed = true;
+        }
+    }
+
+    if (!observation.supported) {
+        bool duplicate = false;
+        for (const KiwiSdrProtocol::FrameObservation& existing :
+             std::as_const(m_telemetry.protocol.unsupportedFrames)) {
+            if (existing.stream == observation.stream
+                && existing.layout == observation.layout
+                && existing.unsupportedReason == observation.unsupportedReason) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            m_telemetry.protocol.unsupportedFrames.append(observation);
+            while (m_telemetry.protocol.unsupportedFrames.size() > 16) {
+                m_telemetry.protocol.unsupportedFrames.removeFirst();
+            }
+            changed = true;
+        }
+    }
+    if (changed) {
+        emitTelemetryChanged();
+    }
 }
 
 void KiwiSdrClient::updateSoundTelemetry(const QByteArray& frame)
@@ -2438,6 +2770,9 @@ void KiwiSdrClient::emitWaterfallRowNow(const QString& panId,
 
 void KiwiSdrClient::sendWaterfallRateToServer()
 {
+    if (m_monitorMode) {
+        return;
+    }
     if (m_waterfallRateOverride > 0) {
         sendWaterfallCommand(QStringLiteral("SET wf_speed=%1")
             .arg(m_waterfallRateOverride));
@@ -2462,6 +2797,19 @@ void KiwiSdrClient::markSoundAudioReady()
     if (m_audioReadyTimer) {
         m_audioReadyTimer->stop();
     }
+    if (m_campAccepted) {
+        const KiwiSdrProtocol::ReceiverMetadata& metadata =
+            m_telemetry.metadata;
+        const QString channel = metadata.hasCampReceiverChannel
+            ? tr("RX%1").arg(metadata.campReceiverChannel)
+            : tr("the selected receiver channel");
+        setState(State::Camping,
+                 tr("Monitoring KiwiSDR %1. This follows another receiver "
+                    "channel, so normal tuning and mode control are disabled.")
+                     .arg(channel));
+        return;
+    }
+
     setState(State::Connected, tr("Connected to %1.").arg(m_endpoint));
 }
 
@@ -2579,7 +2927,7 @@ void KiwiSdrClient::updateStartupTraceForOutbound(StreamKind stream,
         m_startupTrace.identUserSent = true;
     } else if (command.startsWith(QStringLiteral("SET browser="))) {
         m_startupTrace.browserSent = true;
-    } else if (command == QStringLiteral("SET compression=0")) {
+    } else if (command.startsWith(QStringLiteral("SET compression="))) {
         m_startupTrace.compressionSent = true;
     } else if (command.startsWith(QStringLiteral("SET AR OK "))) {
         m_startupTrace.arOkSent = true;
@@ -2651,6 +2999,8 @@ void KiwiSdrClient::traceInboundBinary(StreamKind stream,
     const int payloadBytes = static_cast<int>(
         std::max<qsizetype>(0, frame.size() - payloadOffset));
     const bool compressed = header.valid && soundFrameCompressed(header.flags);
+    const KiwiSdrProtocol::FrameObservation observation =
+        KiwiSdrProtocol::classifySoundFrame(frame);
     const qint64 deltaMs = m_lastSoundFrameUtcMs > 0
         ? nowUtcMs - m_lastSoundFrameUtcMs
         : 0;
@@ -2682,9 +3032,13 @@ void KiwiSdrClient::traceInboundBinary(StreamKind stream,
         .arg(rawSmeter)
         .arg(payloadOffset)
         .arg(payloadBytes)
-        .arg(compressed ? QStringLiteral("unsupported-compressed")
-                        : QStringLiteral("pcm16"))
-        .arg(compressed ? 0 : payloadBytes / 2)
+        .arg(observation.supported
+                 ? (compressed ? QStringLiteral("adpcm16")
+                               : QStringLiteral("pcm16"))
+                 : QStringLiteral("unsupported-shape"))
+        .arg(observation.supported
+                 ? (compressed ? payloadBytes * 2 : payloadBytes / 2)
+                 : 0)
         .arg(QString::number(m_soundSampleRateHz, 'f', 0))
         .arg(QString::number(m_soundSampleRateHz, 'f', 0))
         .arg(nowUtcMs)
@@ -2825,6 +3179,9 @@ bool KiwiSdrClient::retryWithSecureWebSocket(bool transportEstablished)
     m_webSocketPort = 443;
     m_soundSocketConnected = false;
     m_waterfallSocketConnected = false;
+    m_monitorMode = false;
+    m_monitorQueueRequested = false;
+    m_campAccepted = false;
     m_soundAudioReady = false;
     m_soundAudioRateAcked = false;
     m_soundSampleRateCommandsSent = false;
@@ -2847,6 +3204,8 @@ bool KiwiSdrClient::retryWithSecureWebSocket(bool transportEstablished)
     m_waterfallDiagBytes = 0;
     m_soundResamplerRateHz = 0.0;
     m_soundResampler.reset();
+    KiwiSdrProtocol::resetSoundAdpcmState(&m_soundAdpcmState);
+    m_lastSoundFrameLayout = KiwiSdrProtocol::FrameLayout::Unknown;
 
     m_userDisconnecting = true;
     cleanupSockets();
@@ -2903,6 +3262,21 @@ void KiwiSdrClient::handleSocketError(const QString& detail,
         if (retryWithSecureWebSocket(transportEstablished)) {
             return;
         }
+        if (m_monitorMode
+            && detail.contains(QStringLiteral("waterfall"),
+                               Qt::CaseInsensitive)) {
+            return;
+        }
+        if (m_state == State::Camping) {
+            setState(State::CampDisconnected, detail);
+            cleanupSockets();
+            return;
+        }
+        if (m_state == State::Waiting || m_state == State::Busy) {
+            setState(State::Busy, detail);
+            cleanupSockets();
+            return;
+        }
         const bool wasConnected = m_state == State::Connected;
         setState(State::Error, detail);
         cleanupSockets();
@@ -2927,9 +3301,23 @@ QString KiwiSdrClient::stateLabel(State state)
     case State::Disconnected: return tr("Disconnected");
     case State::Connecting:   return tr("Connecting");
     case State::Connected:    return tr("Connected");
+    case State::Busy:         return tr("Busy");
+    case State::Waiting:      return tr("Waiting");
+    case State::Camping:      return tr("Monitoring");
+    case State::CampDisconnected: return tr("Camp disconnected");
     case State::Error:        return tr("Error");
     }
     return tr("Disconnected");
+}
+
+bool KiwiSdrClient::stateHasReceiveAudio(State state)
+{
+    return state == State::Connected || state == State::Camping;
+}
+
+bool KiwiSdrClient::stateAllowsReceiverControl(State state)
+{
+    return state == State::Connected;
 }
 
 void KiwiSdrClient::setState(State state, const QString& detail)
@@ -2943,7 +3331,7 @@ void KiwiSdrClient::setState(State state, const QString& detail)
     if (m_audioReadyTimer && m_state != State::Connecting) {
         m_audioReadyTimer->stop();
     }
-    if (m_state != State::Connected) {
+    if (!stateHasReceiveAudio(m_state)) {
         setAudioActive(false);
     }
 

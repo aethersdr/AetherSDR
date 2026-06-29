@@ -32,34 +32,30 @@ namespace {
 
 constexpr double kKiwiSdrWaterfallFullBandwidthMhz = 30.0;
 
-const SliceModel* kiwiSliceForPan(const RadioModel& radioModel,
-                                  const QString& panId,
-                                  int activeSliceId)
-{
-    if (panId.isEmpty()) {
-        return nullptr;
-    }
-
-    for (SliceModel* slice : radioModel.slices()) {
-        if (!slice || slice->panId() != panId
-            || !radioModel.sliceMayBelongToUs(slice->sliceId())) {
-            continue;
-        }
-
-        if (slice->sliceId() == activeSliceId) {
-            return slice;
-        }
-    }
-    return nullptr;
-}
-
 QString kiwiConnectionOverlayDetail(KiwiSdrClient::State state,
-                                    const QString& detail)
+                                     const QString& detail)
 {
     const QString trimmed = detail.trimmed();
     switch (state) {
     case KiwiSdrClient::State::Connecting:
         return trimmed.isEmpty() ? QStringLiteral("Connecting") : trimmed;
+    case KiwiSdrClient::State::Busy:
+        return trimmed.isEmpty()
+            ? QStringLiteral("All KiwiSDR receiver channels are busy")
+            : trimmed;
+    case KiwiSdrClient::State::Waiting:
+        return trimmed.isEmpty()
+            ? QStringLiteral("Waiting for a free KiwiSDR receiver slot")
+            : trimmed;
+    case KiwiSdrClient::State::Camping:
+        return trimmed.isEmpty()
+            ? QStringLiteral("Monitoring another KiwiSDR receiver channel; "
+                             "normal tuning is disabled")
+            : trimmed;
+    case KiwiSdrClient::State::CampDisconnected:
+        return trimmed.isEmpty()
+            ? QStringLiteral("The monitored KiwiSDR receiver channel disconnected")
+            : trimmed;
     case KiwiSdrClient::State::Error:
         return trimmed.isEmpty() ? QStringLiteral("Connection error") : trimmed;
     case KiwiSdrClient::State::Connected:
@@ -68,6 +64,369 @@ QString kiwiConnectionOverlayDetail(KiwiSdrClient::State state,
         return trimmed.isEmpty() ? QStringLiteral("Disconnected") : trimmed;
     }
     return trimmed.isEmpty() ? QStringLiteral("Disconnected") : trimmed;
+}
+
+bool kiwiProfileCanDriveWaterfall(const KiwiSdrManager* manager,
+                                  const QString& profileId)
+{
+    if (!manager || profileId.isEmpty()) {
+        return false;
+    }
+
+    return KiwiSdrClient::stateAllowsReceiverControl(manager->state(profileId))
+        && manager->waterfallAvailable(profileId);
+}
+
+QString kiwiApiPolicyText(KiwiSdrProtocol::ApiPolicy policy)
+{
+    switch (policy) {
+    case KiwiSdrProtocol::ApiPolicy::Disabled:
+        return QStringLiteral("API disabled");
+    case KiwiSdrProtocol::ApiPolicy::Limited:
+        return QStringLiteral("API limited");
+    case KiwiSdrProtocol::ApiPolicy::Open:
+        return QStringLiteral("API open");
+    case KiwiSdrProtocol::ApiPolicy::Unknown:
+        break;
+    }
+    return QStringLiteral("API policy unknown");
+}
+
+QString kiwiStateName(KiwiSdrClient::State state)
+{
+    switch (state) {
+    case KiwiSdrClient::State::Disconnected:
+        return QStringLiteral("disconnected");
+    case KiwiSdrClient::State::Connecting:
+        return QStringLiteral("connecting");
+    case KiwiSdrClient::State::Connected:
+        return QStringLiteral("connected");
+    case KiwiSdrClient::State::Busy:
+        return QStringLiteral("busy");
+    case KiwiSdrClient::State::Waiting:
+        return QStringLiteral("waiting");
+    case KiwiSdrClient::State::Camping:
+        return QStringLiteral("camping");
+    case KiwiSdrClient::State::CampDisconnected:
+        return QStringLiteral("camp_disconnected");
+    case KiwiSdrClient::State::Error:
+        return QStringLiteral("error");
+    }
+    return QStringLiteral("disconnected");
+}
+
+QString kiwiReceiverMetadataSummary(
+    const KiwiSdrProtocol::ReceiverMetadata& metadata)
+{
+    QStringList parts;
+    if (!metadata.serverVersion.isEmpty()) {
+        parts << QStringLiteral("v%1").arg(metadata.serverVersion);
+    }
+    if (metadata.hasUsers && metadata.hasUsersMax) {
+        parts << QStringLiteral("Users %1/%2")
+                     .arg(metadata.users)
+                     .arg(metadata.usersMax);
+    } else if (metadata.hasUsers) {
+        parts << QStringLiteral("Users %1").arg(metadata.users);
+    }
+    if (metadata.hasBusy && metadata.busy) {
+        parts << QStringLiteral("Busy");
+    }
+    if (metadata.hasCampStatus
+        && metadata.campStatus != KiwiSdrProtocol::CampStatus::Unknown) {
+        switch (metadata.campStatus) {
+        case KiwiSdrProtocol::CampStatus::Offered:
+            parts << QStringLiteral("Monitor offered");
+            break;
+        case KiwiSdrProtocol::CampStatus::Queued:
+            if (metadata.hasCampQueuePosition
+                && metadata.hasCampQueueWaiters) {
+                parts << QStringLiteral("Queue %1/%2")
+                             .arg(metadata.campQueuePosition)
+                             .arg(metadata.campQueueWaiters);
+            } else {
+                parts << QStringLiteral("Queued");
+            }
+            if (metadata.hasCampQueueReloadRecommended
+                && metadata.campQueueReloadRecommended) {
+                parts << QStringLiteral("Channel free");
+            }
+            break;
+        case KiwiSdrProtocol::CampStatus::Accepted:
+            parts << (metadata.hasCampReceiverChannel
+                          ? QStringLiteral("Camping RX%1")
+                                .arg(metadata.campReceiverChannel)
+                          : QStringLiteral("Camping"));
+            break;
+        case KiwiSdrProtocol::CampStatus::Rejected:
+            parts << QStringLiteral("Camping rejected");
+            break;
+        case KiwiSdrProtocol::CampStatus::AudioStopped:
+            parts << QStringLiteral("Camp audio stopped");
+            break;
+        case KiwiSdrProtocol::CampStatus::Disconnected:
+            parts << QStringLiteral("Camp disconnected");
+            break;
+        case KiwiSdrProtocol::CampStatus::Unknown:
+            break;
+        }
+    }
+    if (metadata.hasMaxCampers) {
+        parts << QStringLiteral("Max campers %1").arg(metadata.maxCampers);
+    }
+    if (metadata.hasExtApi) {
+        parts << QStringLiteral("%1 (%2)")
+                     .arg(kiwiApiPolicyText(metadata.apiPolicy))
+                     .arg(metadata.extApi);
+    }
+    if (metadata.hasGpsGood) {
+        parts << (metadata.gpsGood ? QStringLiteral("GPS good")
+                                   : QStringLiteral("GPS not good"));
+    } else if (!metadata.gpsStatus.isEmpty()) {
+        parts << QStringLiteral("GPS %1").arg(metadata.gpsStatus);
+    }
+    if (metadata.hasAdcClipping) {
+        parts << (metadata.adcClipping ? QStringLiteral("ADC clipping")
+                                       : QStringLiteral("ADC normal"));
+    }
+    if (metadata.hasCoverageCenter && metadata.hasCoverageBandwidth) {
+        const double lowMhz =
+            metadata.coverageCenterMhz - metadata.coverageBandwidthMhz * 0.5;
+        const double highMhz =
+            metadata.coverageCenterMhz + metadata.coverageBandwidthMhz * 0.5;
+        parts << QStringLiteral("%1-%2 MHz")
+                     .arg(lowMhz, 0, 'f', 3)
+                     .arg(highMhz, 0, 'f', 3);
+    } else if (metadata.hasReportedFrequency) {
+        parts << QStringLiteral("%1 MHz")
+                     .arg(metadata.reportedFrequencyKhz / 1000.0, 0, 'f', 3);
+    }
+    if (metadata.hasReceiverChannel && metadata.hasWaterfallChannels) {
+        parts << QStringLiteral("RX slot %1, W/F %2")
+                     .arg(metadata.receiverChannel + 1)
+                     .arg(metadata.waterfallChannels);
+    }
+    return parts.join(QStringLiteral(" · "));
+}
+
+QString kiwiStreamSummary(const KiwiSdrProtocol::StreamCapability& capability)
+{
+    const bool hasProtocolData =
+        capability.requested
+        || capability.observed
+        || capability.uncompressedRequested
+        || capability.compressedRequested
+        || capability.uncompressedObserved
+        || capability.compressedObserved
+        || !capability.supportedLayouts.isEmpty()
+        || !capability.observedLayouts.isEmpty()
+        || capability.lastObservedLayout != KiwiSdrProtocol::FrameLayout::Unknown
+        || !capability.unsupportedReason.isEmpty();
+    if (!hasProtocolData) {
+        return QString();
+    }
+
+    QStringList parts;
+    parts << KiwiSdrProtocol::streamModeName(capability.mode);
+    if (capability.observed
+        && capability.lastObservedLayout != KiwiSdrProtocol::FrameLayout::Unknown) {
+        parts << KiwiSdrProtocol::frameLayoutName(capability.lastObservedLayout);
+    } else if (capability.requested) {
+        parts << QStringLiteral("requested");
+    }
+    if (capability.uncompressedRequested && !capability.uncompressedObserved) {
+        parts << QStringLiteral("uncompressed requested");
+    } else if (capability.uncompressedObserved) {
+        parts << QStringLiteral("uncompressed observed");
+    }
+    if (capability.compressedRequested && !capability.compressedObserved) {
+        parts << QStringLiteral("compressed requested");
+    }
+    if (capability.compressedObserved) {
+        parts << QStringLiteral("compressed observed");
+    }
+    if (!capability.unsupportedReason.isEmpty()) {
+        parts << QStringLiteral("unsupported: %1")
+                     .arg(capability.unsupportedReason);
+    }
+    return parts.join(QStringLiteral(" "));
+}
+
+QString kiwiProtocolSummary(const KiwiSdrProtocol::ProtocolState& protocol)
+{
+    QStringList parts;
+    if (protocol.authMode != KiwiSdrProtocol::AuthMode::Unknown) {
+        parts << QStringLiteral("Auth %1")
+                     .arg(KiwiSdrProtocol::authModeName(protocol.authMode));
+    }
+    const QString sound = kiwiStreamSummary(protocol.sound);
+    if (!sound.isEmpty()) {
+        parts << sound;
+    }
+    const QString waterfall = kiwiStreamSummary(protocol.waterfall);
+    if (!waterfall.isEmpty()) {
+        parts << waterfall;
+    }
+    if (!protocol.unsupportedFrames.isEmpty()) {
+        const KiwiSdrProtocol::FrameObservation last =
+            protocol.unsupportedFrames.last();
+        if (!last.unsupportedReason.isEmpty()) {
+            parts << QStringLiteral("Last skipped %1")
+                         .arg(last.unsupportedReason);
+        }
+    }
+    return parts.join(QStringLiteral(" · "));
+}
+
+QJsonArray kiwiFrameLayoutsToJson(const QVector<KiwiSdrProtocol::FrameLayout>& layouts)
+{
+    QJsonArray array;
+    for (KiwiSdrProtocol::FrameLayout layout : layouts) {
+        array.append(KiwiSdrProtocol::frameLayoutName(layout));
+    }
+    return array;
+}
+
+QJsonObject kiwiStreamCapabilityToJson(
+    const KiwiSdrProtocol::StreamCapability& capability)
+{
+    return QJsonObject{
+        {QStringLiteral("mode"), KiwiSdrProtocol::streamModeName(capability.mode)},
+        {QStringLiteral("requested"), capability.requested},
+        {QStringLiteral("observed"), capability.observed},
+        {QStringLiteral("uncompressedRequested"),
+            capability.uncompressedRequested},
+        {QStringLiteral("compressedRequested"),
+            capability.compressedRequested},
+        {QStringLiteral("uncompressedObserved"),
+            capability.uncompressedObserved},
+        {QStringLiteral("compressedObserved"), capability.compressedObserved},
+        {QStringLiteral("supportedLayouts"),
+            kiwiFrameLayoutsToJson(capability.supportedLayouts)},
+        {QStringLiteral("observedLayouts"),
+            kiwiFrameLayoutsToJson(capability.observedLayouts)},
+        {QStringLiteral("lastObservedLayout"),
+            KiwiSdrProtocol::frameLayoutName(capability.lastObservedLayout)},
+        {QStringLiteral("unsupportedReason"), capability.unsupportedReason},
+    };
+}
+
+QJsonObject kiwiMetadataToJson(
+    const KiwiSdrProtocol::ReceiverMetadata& metadata)
+{
+    QJsonObject json{
+        {QStringLiteral("apiPolicy"),
+            KiwiSdrProtocol::apiPolicyName(metadata.apiPolicy)},
+        {QStringLiteral("serverHeader"), metadata.serverHeader},
+        {QStringLiteral("serverVersion"), metadata.serverVersion},
+        {QStringLiteral("serverBuild"), metadata.serverBuild},
+        {QStringLiteral("gpsStatus"), metadata.gpsStatus},
+    };
+    if (metadata.hasUsers) {
+        json[QStringLiteral("users")] = metadata.users;
+    }
+    if (metadata.hasUsersMax) {
+        json[QStringLiteral("usersMax")] = metadata.usersMax;
+    }
+    if (metadata.hasPreempt) {
+        json[QStringLiteral("preempt")] = metadata.preempt;
+    }
+    if (metadata.hasExtApi) {
+        json[QStringLiteral("extApi")] = metadata.extApi;
+    }
+    if (metadata.hasBusy) {
+        json[QStringLiteral("busy")] = metadata.busy;
+    }
+    if (metadata.hasCampStatus) {
+        json[QStringLiteral("campStatus")] =
+            KiwiSdrProtocol::campStatusName(metadata.campStatus);
+    }
+    if (metadata.hasCampReceiverChannel) {
+        json[QStringLiteral("campReceiverChannel")] =
+            metadata.campReceiverChannel;
+    }
+    if (metadata.hasCampQueuePosition) {
+        json[QStringLiteral("campQueuePosition")] =
+            metadata.campQueuePosition;
+    }
+    if (metadata.hasCampQueueWaiters) {
+        json[QStringLiteral("campQueueWaiters")] =
+            metadata.campQueueWaiters;
+    }
+    if (metadata.hasCampQueueReloadRecommended) {
+        json[QStringLiteral("campQueueReloadRecommended")] =
+            metadata.campQueueReloadRecommended;
+    }
+    if (metadata.hasMaxCampers) {
+        json[QStringLiteral("maxCampers")] = metadata.maxCampers;
+    }
+    if (metadata.hasGpsGood) {
+        json[QStringLiteral("gpsGood")] = metadata.gpsGood;
+    }
+    if (metadata.hasAdcClipping) {
+        json[QStringLiteral("adcClipping")] = metadata.adcClipping;
+    }
+    if (metadata.hasReportedFrequency) {
+        json[QStringLiteral("reportedFrequencyKhz")] =
+            metadata.reportedFrequencyKhz;
+    }
+    if (metadata.hasCoverageCenter) {
+        json[QStringLiteral("coverageCenterMhz")] = metadata.coverageCenterMhz;
+    }
+    if (metadata.hasCoverageBandwidth) {
+        json[QStringLiteral("coverageBandwidthMhz")] =
+            metadata.coverageBandwidthMhz;
+    }
+    if (metadata.hasReceiverChannel) {
+        json[QStringLiteral("receiverChannel")] = metadata.receiverChannel;
+    }
+    if (metadata.hasWaterfallChannels) {
+        json[QStringLiteral("waterfallChannels")] = metadata.waterfallChannels;
+    }
+    QJsonArray fields;
+    for (const QString& field : metadata.stableStatusFields) {
+        fields.append(field);
+    }
+    json[QStringLiteral("stableStatusFields")] = fields;
+    return json;
+}
+
+QJsonObject kiwiProtocolToJson(
+    const KiwiSdrProtocol::ProtocolState& protocol)
+{
+    QJsonArray unsupportedFeatures;
+    for (const QString& reason : protocol.unsupportedFeatureReasons) {
+        unsupportedFeatures.append(reason);
+    }
+    QJsonArray unsupportedFrames;
+    for (const KiwiSdrProtocol::FrameObservation& frame :
+         protocol.unsupportedFrames) {
+        unsupportedFrames.append(QJsonObject{
+            {QStringLiteral("stream"),
+                KiwiSdrProtocol::streamModeName(frame.stream)},
+            {QStringLiteral("layout"),
+                KiwiSdrProtocol::frameLayoutName(frame.layout)},
+            {QStringLiteral("frameBytes"), frame.frameBytes},
+            {QStringLiteral("payloadBytes"), frame.payloadBytes},
+            {QStringLiteral("supported"), frame.supported},
+            {QStringLiteral("reason"), frame.unsupportedReason},
+        });
+    }
+    return QJsonObject{
+        {QStringLiteral("serverVersion"), protocol.serverVersion},
+        {QStringLiteral("serverBuild"), protocol.serverBuild},
+        {QStringLiteral("authMode"),
+            KiwiSdrProtocol::authModeName(protocol.authMode)},
+        {QStringLiteral("apiPolicy"),
+            KiwiSdrProtocol::apiPolicyName(protocol.apiPolicy)},
+        {QStringLiteral("extApi"), protocol.extApi},
+        {QStringLiteral("sound"),
+            kiwiStreamCapabilityToJson(protocol.sound)},
+        {QStringLiteral("waterfall"),
+            kiwiStreamCapabilityToJson(protocol.waterfall)},
+        {QStringLiteral("unsupportedFeatures"), unsupportedFeatures},
+        {QStringLiteral("unsupportedFrames"), unsupportedFrames},
+    };
 }
 
 void restoreFlexPanadapterDisplayRange(RadioModel& radioModel,
@@ -222,9 +581,11 @@ void MainWindow::setKiwiSdrVirtualAntennaForSlice(int sliceId,
 
     if (SpectrumWidget* spectrum = spectrumForSlice(slice)) {
         if (kiwiSdrDisplaySliceForPan(slice->panId()) == slice) {
-            spectrum->setKiwiSdrWaterfallAvailable(true);
+            spectrum->setKiwiSdrWaterfallAvailable(
+                m_kiwiSdrManager->waterfallAvailable(profileId));
             spectrum->setKiwiSdrWaterfallProfile(profileId);
-            spectrum->setKiwiSdrWaterfallActive(true);
+            spectrum->setKiwiSdrWaterfallActive(
+                kiwiProfileCanDriveWaterfall(m_kiwiSdrManager, profileId));
         }
         if (VfoWidget* vfo = spectrum->vfoWidget(slice->sliceId())) {
             vfo->setReceiveMeterReading(
@@ -384,6 +745,56 @@ QJsonObject MainWindow::automationSetSliceReceiveSource(const QString& arg)
     };
 }
 
+QJsonObject MainWindow::automationKiwiSdrSnapshot() const
+{
+    QJsonArray profiles;
+    if (m_kiwiSdrManager) {
+        for (const KiwiSdrAntennaProfile& profile :
+             m_kiwiSdrManager->profiles()) {
+            const KiwiSdrReceiverTelemetry telemetry =
+                m_kiwiSdrManager->telemetry(profile.id);
+            const int assignedSlice =
+                m_kiwiSdrManager->assignedSliceForProfile(profile.id);
+            profiles.append(QJsonObject{
+                {QStringLiteral("id"), profile.id},
+                {QStringLiteral("name"),
+                    m_kiwiSdrManager->displayName(profile.id)},
+                {QStringLiteral("endpoint"), profile.endpoint},
+                {QStringLiteral("autoConnect"), profile.autoConnect},
+                {QStringLiteral("state"),
+                    kiwiStateName(m_kiwiSdrManager->state(profile.id))},
+                {QStringLiteral("detail"),
+                    m_kiwiSdrManager->stateDetail(profile.id)},
+                {QStringLiteral("assignedSlice"), assignedSlice},
+                {QStringLiteral("waterfallAvailable"),
+                    m_kiwiSdrManager->waterfallAvailable(profile.id)},
+                {QStringLiteral("waterfallDetail"),
+                    m_kiwiSdrManager->waterfallDetail(profile.id)},
+                {QStringLiteral("metadata"),
+                    kiwiMetadataToJson(telemetry.metadata)},
+                {QStringLiteral("protocol"),
+                    kiwiProtocolToJson(telemetry.protocol)},
+                {QStringLiteral("soundSequence"), telemetry.soundSequence},
+                {QStringLiteral("soundSequenceGaps"),
+                    static_cast<double>(telemetry.soundSequenceGaps)},
+                {QStringLiteral("waterfallSequence"),
+                    telemetry.waterfallSequence},
+                {QStringLiteral("waterfallSequenceGaps"),
+                    static_cast<double>(telemetry.waterfallSequenceGaps)},
+            });
+        }
+    }
+
+    return QJsonObject{
+        {QStringLiteral("diagnosticSoundCompressionRequested"),
+            KiwiSdrClient::diagnosticSoundCompressionRequested()},
+        {QStringLiteral("diagnosticWaterfallCompressionRequested"),
+            KiwiSdrClient::diagnosticWaterfallCompressionRequested()},
+        {QStringLiteral("profiles"), profiles},
+        {QStringLiteral("profileCount"), profiles.size()},
+    };
+}
+
 SliceModel* MainWindow::flexRxPanSourceSlice() const
 {
     auto isFlexBacked = [this](const SliceModel* slice) {
@@ -462,8 +873,9 @@ void MainWindow::updateKiwiSdrVirtualTrackingForSlice(SliceModel* slice)
             slice->sliceId(), slice->panId(), spectrum->centerMhz(),
             spectrum->bandwidthMhz(), spectrum->wfLineDuration());
         if (profileId == kiwiSdrProfileForPan(slice->panId())
-            && m_kiwiSdrManager->isConnected(profileId)) {
-            spectrum->setKiwiSdrWaterfallAvailable(true);
+            && kiwiProfileCanDriveWaterfall(m_kiwiSdrManager, profileId)) {
+            spectrum->setKiwiSdrWaterfallAvailable(
+                m_kiwiSdrManager->waterfallAvailable(profileId));
             spectrum->setKiwiSdrWaterfallProfile(profileId);
             spectrum->setKiwiSdrWaterfallActive(true);
             syncKiwiSdrAppletWaterfallState();
@@ -569,8 +981,11 @@ QString MainWindow::kiwiSdrOverlayProfileForPan(const QString& panId) const
 
         switch (m_kiwiSdrManager->state(profileId)) {
         case KiwiSdrClient::State::Error:
+        case KiwiSdrClient::State::Busy:
+        case KiwiSdrClient::State::CampDisconnected:
             return profileId;
         case KiwiSdrClient::State::Connecting:
+        case KiwiSdrClient::State::Waiting:
             if (connectingProfileId.isEmpty()) {
                 connectingProfileId = profileId;
             }
@@ -581,6 +996,7 @@ QString MainWindow::kiwiSdrOverlayProfileForPan(const QString& panId) const
             }
             break;
         case KiwiSdrClient::State::Connected:
+        case KiwiSdrClient::State::Camping:
             break;
         }
     }
@@ -719,25 +1135,30 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
     const KiwiSdrAntennaProfile profile = m_kiwiSdrManager->profile(profileId);
     const KiwiSdrClient::State state = m_kiwiSdrManager->state(profileId);
     const bool kiwiWaterfallChannelAvailable =
-        state == KiwiSdrClient::State::Connected
-            ? m_kiwiSdrManager->waterfallAvailable(profileId)
-            : true;
-    spectrum->setKiwiSdrWaterfallAvailable(true);
+        m_kiwiSdrManager->waterfallAvailable(profileId);
+    const bool kiwiWaterfallActive =
+        KiwiSdrClient::stateAllowsReceiverControl(state)
+        && kiwiWaterfallChannelAvailable;
+    spectrum->setKiwiSdrWaterfallAvailable(kiwiWaterfallChannelAvailable);
     spectrum->setKiwiSdrWaterfallProfile(profileId);
-    spectrum->setKiwiSdrWaterfallActive(true);
+    spectrum->setKiwiSdrWaterfallActive(kiwiWaterfallActive);
     spectrum->setKiwiSdrWaterfallAdjustments(profile.waterfallCellDb,
                                              profile.waterfallFloorDb);
     const QString overlayDetail =
-        state == KiwiSdrClient::State::Connected
-            && !kiwiWaterfallChannelAvailable
+        !kiwiWaterfallChannelAvailable
             ? m_kiwiSdrManager->waterfallDetail(profileId)
             : kiwiConnectionOverlayDetail(
                   state, m_kiwiSdrManager->stateDetail(profileId));
-    const QString overlayTitle =
-        state == KiwiSdrClient::State::Connected
-            && !kiwiWaterfallChannelAvailable
-            ? tr("KiwiSDR waterfall unavailable")
-            : QString();
+    QString overlayTitle;
+    if (!kiwiWaterfallChannelAvailable) {
+        if (state == KiwiSdrClient::State::Waiting) {
+            overlayTitle = tr("Waiting for KiwiSDR receiver slot");
+        } else if (state == KiwiSdrClient::State::Camping) {
+            overlayTitle = tr("KiwiSDR monitor session");
+        } else {
+            overlayTitle = tr("KiwiSDR waterfall unavailable");
+        }
+    }
     spectrum->setKiwiSdrConnectionOverlay(
         state != KiwiSdrClient::State::Connected
             || !kiwiWaterfallChannelAvailable,
@@ -970,11 +1391,10 @@ void MainWindow::syncKiwiSdrTransmitMute()
 
 void MainWindow::wireKiwiSdr()
 {
-    if (!m_appletPanel || !m_appletPanel->kiwiSdrApplet() || m_kiwiSdrClient) {
+    if (!m_appletPanel || !m_appletPanel->kiwiSdrApplet()) {
         return;
     }
 
-    m_kiwiSdrClient = new KiwiSdrClient(this);
     if (m_kiwiSdrManager) {
         m_kiwiSdrManager->setOperatorCallsign(m_radioModel.callsign());
         connect(m_kiwiSdrManager, &KiwiSdrManager::profileNeedsInitialTracking,
@@ -1085,8 +1505,8 @@ void MainWindow::wireKiwiSdr()
                     return;
                 }
                 if (requireConnected
-                    && m_kiwiSdrManager->state(id)
-                    != KiwiSdrClient::State::Connected) {
+                    && !KiwiSdrClient::stateHasReceiveAudio(
+                        m_kiwiSdrManager->state(id))) {
                     return;
                 }
                 SliceModel* slice = m_radioModel.slice(sliceId);
@@ -1121,6 +1541,11 @@ void MainWindow::wireKiwiSdr()
                     applyMeterReading(profileId, reading, true);
                 },
                 profileId);
+        });
+        connect(m_kiwiSdrManager, &KiwiSdrManager::profileTelemetryChanged,
+                this, [this](const QString&,
+                             const KiwiSdrReceiverTelemetry&) {
+            scheduleKiwiSdrUiSync(KiwiSdrUiSyncAppletReceivers);
         });
         connect(m_kiwiSdrManager, &KiwiSdrManager::sliceAssignmentChanged,
                 this, [this](int sliceId, const QString& profileId) {
@@ -1195,7 +1620,7 @@ void MainWindow::wireKiwiSdr()
                 this, [this](const QString& profileId, KiwiSdrClient::State state,
                              const QString&) {
             QString panId;
-            if (state == KiwiSdrClient::State::Connected) {
+            if (KiwiSdrClient::stateHasReceiveAudio(state)) {
                 const int sliceId =
                     m_kiwiSdrManager
                         ? m_kiwiSdrManager->assignedSliceForProfile(profileId)
@@ -1281,16 +1706,12 @@ void MainWindow::wireKiwiSdr()
                                   | KiwiSdrUiSyncPanadapterStates);
         });
     }
-    m_kiwiSdrClient->setOperatorCallsign(m_radioModel.callsign());
     connect(&m_radioModel, &RadioModel::infoChanged,
-            m_kiwiSdrClient, [this]() {
-                if (m_kiwiSdrClient) {
-                    m_kiwiSdrClient->setOperatorCallsign(m_radioModel.callsign());
-                }
-                if (m_kiwiSdrManager) {
-                    m_kiwiSdrManager->setOperatorCallsign(m_radioModel.callsign());
-                }
-            });
+            this, [this]() {
+        if (m_kiwiSdrManager) {
+            m_kiwiSdrManager->setOperatorCallsign(m_radioModel.callsign());
+        }
+    });
     refreshKiwiSdrSlices();
     refreshKiwiSdrWaterfallAvailability();
     syncKiwiSdrTransmitMute();
@@ -1320,6 +1741,10 @@ void MainWindow::refreshKiwiSdrAppletReceivers()
                 && !m_kiwiSdrManager->waterfallAvailable(profile.id)) {
                 receiver.detail = m_kiwiSdrManager->waterfallDetail(profile.id);
             }
+            receiver.metadataSummary = kiwiReceiverMetadataSummary(
+                m_kiwiSdrManager->receiverMetadata(profile.id));
+            receiver.protocolSummary = kiwiProtocolSummary(
+                m_kiwiSdrManager->protocolState(profile.id));
             const int sliceId = m_kiwiSdrManager->assignedSliceForProfile(profile.id);
             receiver.assignedSlice = m_radioModel.slice(sliceId);
             receivers.append(receiver);
@@ -1340,17 +1765,14 @@ void MainWindow::refreshKiwiSdrWaterfallAvailability()
         return;
     }
 
-    const bool connected = m_kiwiSdrClient && m_kiwiSdrClient->isConnected();
-
     for (PanadapterApplet* applet : m_panStack->allApplets()) {
         if (!applet || !applet->spectrumWidget()) {
             continue;
         }
 
         SpectrumWidget* spectrum = applet->spectrumWidget();
-        bool available = connected
-            && kiwiSliceForPan(m_radioModel, applet->panId(), m_activeSliceId) != nullptr;
-        if (!available && m_kiwiSdrManager) {
+        bool available = false;
+        if (m_kiwiSdrManager) {
             for (SliceModel* slice : m_radioModel.slices()) {
                 if (!slice || slice->panId() != applet->panId()
                     || !m_radioModel.sliceMayBelongToUs(slice->sliceId())) {
@@ -1367,105 +1789,6 @@ void MainWindow::refreshKiwiSdrWaterfallAvailability()
         spectrum->setKiwiSdrWaterfallAvailable(available);
         syncKiwiSdrPanadapterUiState(applet->panId());
     }
-    syncKiwiSdrAppletWaterfallState();
-}
-
-void MainWindow::syncKiwiSdrTrackingToActiveSlice()
-{
-    if (!m_kiwiSdrClient || !m_kiwiSdrClient->isConnected()) {
-        return;
-    }
-
-    SliceModel* slice = activeSlice();
-    if (!slice || !m_radioModel.sliceMayBelongToUs(slice->sliceId())) {
-        return;
-    }
-
-    SpectrumWidget* target = spectrumForSlice(slice);
-    if (!target) {
-        return;
-    }
-
-    bool kiwiWaterfallWasActive = false;
-    if (m_panStack) {
-        for (PanadapterApplet* applet : m_panStack->allApplets()) {
-            if (!applet || !applet->spectrumWidget()) {
-                continue;
-            }
-            SpectrumWidget* spectrum = applet->spectrumWidget();
-            if (spectrum->kiwiSdrWaterfallActive()) {
-                kiwiWaterfallWasActive = true;
-                if (spectrum != target) {
-                    setKiwiSdrWaterfallActive(
-                        m_radioModel, applet->panId(), spectrum, false);
-                }
-            }
-        }
-    }
-
-    m_kiwiSdrClient->setTrackedSlice(
-        slice->sliceId(),
-        slice->frequency(),
-        slice->mode(),
-        slice->filterLow(),
-        slice->filterHigh(),
-        slice->panId());
-    m_kiwiSdrClient->setWaterfallLineDurationMs(target->wfLineDuration());
-    m_kiwiSdrClient->setWaterfallView(
-        slice->panId(), target->centerMhz(), target->bandwidthMhz());
-
-    if (kiwiWaterfallWasActive) {
-        target->setKiwiSdrWaterfallActive(true);
-    }
-    syncKiwiSdrAppletWaterfallState();
-}
-
-void MainWindow::setKiwiSdrWaterfallForActiveSlice(bool active)
-{
-    bool allowed = active && m_kiwiSdrClient && m_kiwiSdrClient->isConnected();
-    SliceModel* slice = activeSlice();
-    SpectrumWidget* target = slice ? spectrumForSlice(slice) : nullptr;
-    if (allowed
-        && (!slice || !target || !m_radioModel.sliceMayBelongToUs(slice->sliceId()))) {
-        allowed = false;
-    }
-
-    if (allowed) {
-        m_kiwiSdrClient->setTrackedSlice(
-            slice->sliceId(),
-            slice->frequency(),
-            slice->mode(),
-            slice->filterLow(),
-            slice->filterHigh(),
-            slice->panId());
-        m_kiwiSdrClient->setWaterfallLineDurationMs(target->wfLineDuration());
-        m_kiwiSdrClient->setWaterfallView(
-            slice->panId(), target->centerMhz(), target->bandwidthMhz());
-
-        if (m_panStack) {
-            for (PanadapterApplet* applet : m_panStack->allApplets()) {
-                if (!applet || applet->spectrumWidget() == target) {
-                    continue;
-                }
-                setKiwiSdrWaterfallActive(
-                    m_radioModel, applet->panId(), applet->spectrumWidget(), false);
-            }
-        }
-    }
-
-    if (target) {
-        setKiwiSdrWaterfallActive(
-            m_radioModel, slice ? slice->panId() : QString(), target, allowed);
-    } else if (!allowed && m_panStack) {
-        for (PanadapterApplet* applet : m_panStack->allApplets()) {
-            if (!applet || !applet->spectrumWidget()) {
-                continue;
-            }
-            setKiwiSdrWaterfallActive(
-                m_radioModel, applet->panId(), applet->spectrumWidget(), false);
-        }
-    }
-    refreshKiwiSdrWaterfallAvailability();
     syncKiwiSdrAppletWaterfallState();
 }
 

@@ -150,7 +150,6 @@ using DaxBridge = PipeWireAudioBridge;
 #endif
 class VfoWidget;
 class WfmDemodulator;
-class KiwiSdrClient;
 
 // Wheel mode for FlexControl: determines what the encoder knob adjusts.
 //
@@ -190,6 +189,7 @@ public:
     Q_INVOKABLE void hideConnectionDialog();
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
     QJsonObject automationReceiveSyncSnapshot() const;
+    QJsonObject automationKiwiSdrSnapshot() const;
 
 protected:
     void showEvent(QShowEvent* event) override;
@@ -335,8 +335,6 @@ private:
     void refreshKiwiSdrAppletReceivers();
     void refreshKiwiSdrSlices();
     void refreshKiwiSdrWaterfallAvailability();
-    void syncKiwiSdrTrackingToActiveSlice();
-    void setKiwiSdrWaterfallForActiveSlice(bool active);
     void syncKiwiSdrAppletWaterfallState();
     SliceModel* kiwiSdrAudioTargetSlice() const;
     bool setKiwiSdrAudioRouting(bool active);
@@ -901,7 +899,6 @@ private:
     // GUI — right applet panel
     AppletPanel*     m_appletPanel{nullptr};
     KiwiSdrManager*  m_kiwiSdrManager{nullptr};
-    KiwiSdrClient*   m_kiwiSdrClient{nullptr};
     int              m_kiwiSdrUiSyncFlags{0};
     bool             m_kiwiSdrUiSyncPending{false};
     int              m_kiwiSdrTrackedSliceId{-1};

@@ -43,9 +43,12 @@ public:
     KiwiSdrClient::State state(const QString& id) const;
     QString stateDetail(const QString& id) const;
     KiwiSdrReceiverTelemetry telemetry(const QString& id) const;
+    KiwiSdrProtocol::ReceiverMetadata receiverMetadata(const QString& id) const;
+    KiwiSdrProtocol::ProtocolState protocolState(const QString& id) const;
     bool waterfallAvailable(const QString& id) const;
     QString waterfallDetail(const QString& id) const;
     bool isConnected(const QString& id) const;
+    bool reconnectRecommended(const QString& id) const;
 
     QString assignedProfileForSlice(int sliceId) const;
     int assignedSliceForProfile(const QString& id) const;
@@ -117,6 +120,7 @@ private:
     void invokeClient(const QString& id, std::function<void(KiwiSdrClient*)> fn);
     void destroyClient(const QString& id, bool blocking = false);
     void scheduleReconnect(const QString& id);
+    void scheduleWaitingReconnectIfRecommended(const QString& id);
     void cancelReconnect(const QString& id);
     static QString sanitizedName(const QString& name, const QString& endpoint);
 

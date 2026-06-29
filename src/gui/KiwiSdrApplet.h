@@ -20,6 +20,8 @@ struct KiwiSdrReceiverStatus {
     QString name;
     KiwiSdrClient::State state{KiwiSdrClient::State::Disconnected};
     QString detail;
+    QString metadataSummary;
+    QString protocolSummary;
     QPointer<SliceModel> assignedSlice;
 };
 

@@ -38,6 +38,10 @@ KiwiSdrManager::KiwiSdrManager(QObject* parent)
         "AetherSDR::KiwiSdrClient::State");
     qRegisterMetaType<AetherSDR::KiwiSdrReceiverTelemetry>(
         "AetherSDR::KiwiSdrReceiverTelemetry");
+    qRegisterMetaType<AetherSDR::KiwiSdrProtocol::ReceiverMetadata>(
+        "AetherSDR::KiwiSdrProtocol::ReceiverMetadata");
+    qRegisterMetaType<AetherSDR::KiwiSdrProtocol::ProtocolState>(
+        "AetherSDR::KiwiSdrProtocol::ProtocolState");
     qRegisterMetaType<AetherSDR::KiwiSdrProtocol::MeterReading>(
         "AetherSDR::KiwiSdrProtocol::MeterReading");
     qRegisterMetaType<QVector<float>>("QVector<float>");
@@ -133,6 +137,18 @@ KiwiSdrReceiverTelemetry KiwiSdrManager::telemetry(const QString& id) const
     return m_telemetry.value(id);
 }
 
+KiwiSdrProtocol::ReceiverMetadata KiwiSdrManager::receiverMetadata(
+    const QString& id) const
+{
+    return m_telemetry.value(id).metadata;
+}
+
+KiwiSdrProtocol::ProtocolState KiwiSdrManager::protocolState(
+    const QString& id) const
+{
+    return m_telemetry.value(id).protocol;
+}
+
 bool KiwiSdrManager::waterfallAvailable(const QString& id) const
 {
     return m_waterfallAvailable.value(id, true);
@@ -145,7 +161,19 @@ QString KiwiSdrManager::waterfallDetail(const QString& id) const
 
 bool KiwiSdrManager::isConnected(const QString& id) const
 {
-    return state(id) == KiwiSdrClient::State::Connected;
+    return KiwiSdrClient::stateHasReceiveAudio(state(id));
+}
+
+bool KiwiSdrManager::reconnectRecommended(const QString& id) const
+{
+    if (state(id) != KiwiSdrClient::State::Waiting) {
+        return false;
+    }
+
+    const KiwiSdrProtocol::ReceiverMetadata metadata =
+        m_telemetry.value(id).metadata;
+    return metadata.hasCampQueueReloadRecommended
+        && metadata.campQueueReloadRecommended;
 }
 
 QString KiwiSdrManager::assignedProfileForSlice(int sliceId) const
@@ -279,8 +307,11 @@ void KiwiSdrManager::connectProfile(const QString& id)
     if (!c || m_profiles[idx].endpoint.isEmpty()) {
         return;
     }
-    if (state(id) == KiwiSdrClient::State::Connecting
-        || state(id) == KiwiSdrClient::State::Connected) {
+    const KiwiSdrClient::State currentState = state(id);
+    const bool waitingReconnect = reconnectRecommended(id);
+    if (currentState == KiwiSdrClient::State::Connecting
+        || (currentState == KiwiSdrClient::State::Waiting && !waitingReconnect)
+        || KiwiSdrClient::stateHasReceiveAudio(currentState)) {
         return;
     }
     invokeClient(id, [callsign = m_operatorCallsign,
@@ -427,7 +458,8 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
     if (KiwiSdrClient* c = ensureClient(profileId)) {
         Q_UNUSED(c);
         m_clientHasTrackedSlice.insert(profileId, sliceId >= 0 && frequencyMhz > 0.0);
-        const bool connected = state(profileId) == KiwiSdrClient::State::Connected;
+        const bool connected =
+            KiwiSdrClient::stateHasReceiveAudio(state(profileId));
         invokeClient(profileId, [sliceId, frequencyMhz, mode, filterLowHz,
                                  filterHighHz, panId, connected](
                                     KiwiSdrClient* client) {
@@ -565,16 +597,19 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
             emit profileTelemetryChanged(id, m_telemetry.value(id));
             emit profileWaterfallAvailabilityChanged(id, true, QString());
         }
-        if (state == KiwiSdrClient::State::Connected) {
+        if (KiwiSdrClient::stateHasReceiveAudio(state)) {
             const int idx = profileIndex(id);
             const bool hasAssignedSlice = assignedSliceForProfile(id) >= 0;
             if (idx >= 0 || hasAssignedSlice) {
                 const int cellDb = idx >= 0 ? m_profiles[idx].waterfallCellDb : 0;
                 const int floorDb = idx >= 0 ? m_profiles[idx].waterfallFloorDb : 0;
                 const int rate = idx >= 0 ? m_profiles[idx].waterfallRate : 0;
-                invokeClient(id, [idx, cellDb, floorDb, rate, hasAssignedSlice](
+                const bool normalReceiver =
+                    KiwiSdrClient::stateAllowsReceiverControl(state);
+                invokeClient(id, [idx, cellDb, floorDb, rate, hasAssignedSlice,
+                                  normalReceiver](
                                      KiwiSdrClient* client) {
-                    if (idx >= 0) {
+                    if (idx >= 0 && normalReceiver) {
                         client->setWaterfallDisplayAdjustments(cellDb, floorDb);
                         client->setWaterfallRateOverride(rate);
                     }
@@ -586,8 +621,7 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
             if (hasAssignedSlice) {
                 emit audioSourceEnabledChanged(id, true);
             }
-        } else if (state == KiwiSdrClient::State::Disconnected
-                   || state == KiwiSdrClient::State::Error) {
+        } else if (state != KiwiSdrClient::State::Connecting) {
             emit audioSourceEnabledChanged(id, false);
             emit meterReadingReady(
                 id,
@@ -596,6 +630,7 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
                     detail));
         }
         emit profileStateChanged(id, state, detail);
+        scheduleWaitingReconnectIfRecommended(id);
     }, Qt::QueuedConnection);
     connect(c, &KiwiSdrClient::recoverableDisconnect,
             this, [this, id, c](const QString&) {
@@ -611,6 +646,7 @@ KiwiSdrClient* KiwiSdrManager::ensureClient(const QString& id)
         }
         m_telemetry.insert(id, telemetry);
         emit profileTelemetryChanged(id, telemetry);
+        scheduleWaitingReconnectIfRecommended(id);
     }, Qt::QueuedConnection);
     connect(c, &KiwiSdrClient::waterfallAvailabilityChanged,
             this, [this, id, c](bool available, const QString& detail) {
@@ -783,7 +819,7 @@ bool KiwiSdrManager::shouldMaintainProfileConnection(const QString& id) const
 
 void KiwiSdrManager::scheduleReconnect(const QString& id)
 {
-    if (!shouldMaintainProfileConnection(id)) {
+    if (!shouldMaintainProfileConnection(id) && !reconnectRecommended(id)) {
         return;
     }
 
@@ -794,7 +830,8 @@ void KiwiSdrManager::scheduleReconnect(const QString& id)
         timer->setInterval(kRecoverableReconnectDelayMs);
         m_reconnectTimers.insert(id, timer);
         connect(timer, &QTimer::timeout, this, [this, id]() {
-            if (shouldMaintainProfileConnection(id)) {
+            if (shouldMaintainProfileConnection(id)
+                || reconnectRecommended(id)) {
                 connectProfile(id);
             }
         });
@@ -806,6 +843,15 @@ void KiwiSdrManager::scheduleReconnect(const QString& id)
             << "in" << kRecoverableReconnectDelayMs << "ms";
         timer->start();
     }
+}
+
+void KiwiSdrManager::scheduleWaitingReconnectIfRecommended(const QString& id)
+{
+    if (!reconnectRecommended(id)) {
+        return;
+    }
+
+    scheduleReconnect(id);
 }
 
 void KiwiSdrManager::cancelReconnect(const QString& id)

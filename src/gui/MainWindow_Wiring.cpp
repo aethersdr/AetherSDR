@@ -35,7 +35,6 @@
 #include "TunerApplet.h"
 #include "TxApplet.h"
 #include "core/PeripheralSettings.h"
-#include "core/KiwiSdrClient.h"
 #include "core/KiwiSdrManager.h"
 #include "core/KiwiSdrProtocol.h"
 #include "SpectrumOverlayMenu.h"
@@ -112,27 +111,6 @@ bool dbmRangeLooksPlausible(float minDbm, float maxDbm)
         && maxDbm <= kMaxAllowedDbm
         && rangeDb >= kMinRangeDb
         && rangeDb <= kMaxRangeDb;
-}
-
-const SliceModel* kiwiSliceForPan(const RadioModel& radioModel,
-                                  const QString& panId,
-                                  int activeSliceId)
-{
-    if (panId.isEmpty()) {
-        return nullptr;
-    }
-
-    for (SliceModel* slice : radioModel.slices()) {
-        if (!slice || slice->panId() != panId
-            || !radioModel.sliceMayBelongToUs(slice->sliceId())) {
-            continue;
-        }
-
-        if (slice->sliceId() == activeSliceId) {
-            return slice;
-        }
-    }
-    return nullptr;
 }
 
 SliceModel* kiwiAssignedSliceForPan(const RadioModel& radioModel,
@@ -1642,23 +1620,19 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
                 m_kiwiSdrManager->updateWaterfallView(
                     slice->sliceId(), applet->panId(), centerMhz,
                     bandwidthMhz, sw->wfLineDuration());
-                if (profileId == displayProfileId
-                    && m_kiwiSdrManager->isConnected(profileId)) {
-                    sw->setKiwiSdrWaterfallAvailable(true);
+                const bool profileCanDriveWaterfall =
+                    KiwiSdrClient::stateAllowsReceiverControl(
+                        m_kiwiSdrManager->state(profileId))
+                    && m_kiwiSdrManager->waterfallAvailable(profileId);
+                if (profileId == displayProfileId && profileCanDriveWaterfall) {
+                    sw->setKiwiSdrWaterfallAvailable(
+                        m_kiwiSdrManager->waterfallAvailable(profileId));
                     sw->setKiwiSdrWaterfallProfile(profileId);
                     sw->setKiwiSdrWaterfallActive(true);
                     syncKiwiSdrAppletWaterfallState();
                 }
             }
         }
-        if (!m_kiwiSdrClient || !m_kiwiSdrClient->isConnected()
-            || !applet || !sw
-            || !kiwiSliceForPan(m_radioModel, applet->panId(), m_activeSliceId)) {
-            return;
-        }
-        m_kiwiSdrClient->setWaterfallLineDurationMs(sw->wfLineDuration());
-        m_kiwiSdrClient->setWaterfallView(
-            applet->panId(), centerMhz, bandwidthMhz);
     };
 
     const auto updateKiwiWaterfallViewUnlessDeferred =
@@ -2308,10 +2282,6 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
         sw->setWfLineDuration(clampedMs);
-        if (m_kiwiSdrClient && m_kiwiSdrClient->isConnected()
-            && kiwiSliceForPan(m_radioModel, applet->panId(), m_activeSliceId)) {
-            m_kiwiSdrClient->setWaterfallLineDurationMs(clampedMs);
-        }
         auto* pan = m_radioModel.panadapter(applet->panId());
         if (pan && !pan->waterfallId().isEmpty())
             m_radioModel.sendCommand(

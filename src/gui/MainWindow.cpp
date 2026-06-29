@@ -80,7 +80,6 @@
 #include "core/CwSidetoneGenerator.h"
 #include "core/CwxLocalKeyer.h"
 #include "core/IambicKeyer.h"
-#include "core/KiwiSdrClient.h"
 #include "core/KiwiSdrManager.h"
 #include "CatControlApplet.h"
 #include "DaxApplet.h"
@@ -2019,19 +2018,10 @@ MainWindow::~MainWindow()
     qApp->removeEventFilter(this);
     preparePanadapterUiForShutdown();
 
-    // KiwiSDR clients are QObject children, but their disconnect path emits
+    // KiwiSDR profile clients are QObject children, but their disconnect path emits
     // state changes that are wired back into MainWindow and AudioEngine. Tear
     // them down while MainWindow members are still alive instead of waiting for
     // QWidget child cleanup after member destruction.
-    if (m_kiwiSdrClient) {
-        QObject::disconnect(m_kiwiSdrClient, nullptr, this, nullptr);
-        if (m_audio) {
-            QObject::disconnect(m_kiwiSdrClient, nullptr, m_audio, nullptr);
-        }
-        m_kiwiSdrClient->disconnectFromEndpoint();
-        delete m_kiwiSdrClient;
-        m_kiwiSdrClient = nullptr;
-    }
     if (m_kiwiSdrManager) {
         QObject::disconnect(m_kiwiSdrManager, nullptr, this, nullptr);
         if (m_audio) {
@@ -6045,7 +6035,6 @@ void MainWindow::setActiveSliceInternal(int sliceId, bool revealOffscreen)
     m_appletPanel->setSlice(s);
     m_appletPanel->updateSliceButtons(m_radioModel.slices(), sliceId);
     refreshKiwiSdrSlices();
-    syncKiwiSdrTrackingToActiveSlice();
     refreshKiwiSdrWaterfallAvailability();
     syncFlexRxPanToAudioEngine();
     // Sync squelch line to newly active slice (handles slice switch without

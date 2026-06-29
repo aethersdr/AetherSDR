@@ -74,7 +74,7 @@ black-box observations made in this thread.
   corrected by the implementation-oriented draft pasted the same day:
   timestamp-style WebSocket stream paths ending in `/SND` and `/W/F`,
   `SET auth t=kiwi p=#`, `SET ident_user=...`, `SERVER DE CLIENT ... SND`,
-  `SERVER DE CLIENT ... W/F`, `SET compression=0`,
+  `SERVER DE CLIENT ... W/F`, default `SET compression=0`,
   `SET mod=... low_cut=... high_cut=... freq=...`, AGC as the combined
   `SET agc=... hang=... thresh=... slope=... decay=... manGain=...` command,
   squelch initially as `SET squelch=... max=...`, waterfall positioning via
@@ -89,9 +89,10 @@ black-box observations made in this thread.
   auth-first identity setup, AGC defaults, squelch defaults, NFM mode mapping,
   SND RSSI/sequence telemetry, W/F sequence telemetry, and text metadata
   capture for users, reported frequency, ADC clipping, and GPS-good status.
-  Attenuation, remote mute, PBT, extension launch, IQ streams, and compressed
-  audio are not exposed because they would add Kiwi-only product behavior or
-  require undefined wire details.
+  Attenuation, remote mute, PBT, extension launch, and IQ streams are not
+  exposed because they would add Kiwi-only product behavior or require
+  undefined wire details. Compressed SND audio is not a user-facing setting;
+  `AETHER_KIWI_SND_COMP=1` may request it for receive-only diagnostic runs.
 - Clean server-side parser check from 2026-06-21: the archived KiwiSDR server
   `rx/rx_sound_cmd.cpp` file carries a GNU Library GPL v2-or-later notice and
   was used only to verify the exposed squelch command contract. The accepted
@@ -203,10 +204,12 @@ black-box observations made in this thread.
   binary frame was seen before close.
 - User-provided additional fixes from 2026-06-18: `SET compression=0` and
   `SET wf_comp=0` are requests, not proof that incoming frames are
-  uncompressed. The runtime logs SND and W/F frame shape, decodes only
-  supported PCM/direct-row shapes, drops compact/encoded W/F rows, logs and
-  ignores `EXT` or unknown binary tags, and does not expose calibrated S-meter
-  dBm until the SND meter layout is independently verified.
+  uncompressed. Diagnostic runs may instead request `SET compression=1` with
+  `AETHER_KIWI_SND_COMP=1`. The runtime logs SND and W/F frame shape, decodes
+  only supported PCM, SND ADPCM, direct W/F, and compact W/F row shapes, drops
+  unsupported frame layouts, logs and ignores `EXT` or unknown binary tags, and
+  does not expose calibrated S-meter dBm until the SND meter layout is
+  independently verified.
 - User-provided KiwiSDR meter subsystem specification from 2026-06-19:
   meter capability states, honest user-facing labels, unavailable-meter
   behavior, relative audio-level and waterfall-intensity meters, smoothing and
@@ -454,6 +457,62 @@ the applet-level Kiwi Audio toggle is enabled.
   plus BSD-licensed CuteSDR AGC/squelch headers and implementation comments to
   verify numeric ranges. No KiwiSDR client code was copied, translated, or used
   to derive AetherSDR behavior.
+- The 2026-06-28 capability/metadata follow-up used no additional KiwiSDR
+  source files. It was implemented from the existing clean-room observations,
+  the already-documented source-attributed facts above, and clean upstream
+  AetherSDR interfaces only.
+- The 2026-06-28 compact W/F row follow-up consulted the current open-source
+  KiwiSDR server repository `https://github.com/jks-prv/KiwiSDR.git` at commit
+  `a83085fe2222dd3e374910faf2195e0454b556ae`. The protocol facts used from
+  license-compatible server files were: `rx/rx_waterfall.h` for the 16-byte
+  W/F header layout, compression flag, zoom mask, 1024-row width, and zoom
+  limits; `rx/rx_waterfall.cpp` for the zoom-zero direct-row rule, 10-sample
+  compact predictor padding, compact payload length, and compact-row use of
+  IMA ADPCM over the unsigned W/F row bytes; and `rx/rx_cmd.h` /
+  `rx/rx_cmd.cpp` for the common `SET wf_comp=<0|1>` command path. Those files
+  carry GNU Library General Public License version 2-or-later headers in that
+  snapshot. A broad exploratory search also displayed `rx/csdr/ima_adpcm.h`,
+  `rx/csdr/ima_adpcm.cpp`, and minified web-client snippets; those files were
+  not used as AetherSDR protocol references. No KiwiSDR code was copied,
+  translated, or vendored; the AetherSDR compact decoder is original code
+  limited to the standard IMA ADPCM unsigned-byte predictor path required by
+  the verified server frame boundary.
+- The 2026-06-28 compressed SND audio follow-up consulted the same
+  `https://github.com/jks-prv/KiwiSDR.git` commit
+  `a83085fe2222dd3e374910faf2195e0454b556ae`. The protocol facts used from
+  license-compatible server files were: `rx/rx_sound.h` for the 10-byte real
+  SND header shape; `rx/rx_sound.cpp` for SND flag values, the mono-only
+  compressed send condition, S-meter/header sequencing, and the fixed two
+  decoded 16-bit samples per compressed byte; `rx/rx_sound_cmd.cpp` for
+  `SET compression=<0|1>` and ADPCM state reset behavior; and
+  `rx/csdr/ima_adpcm.h` / `rx/csdr/ima_adpcm.cpp` for the standard IMA ADPCM
+  state shape and nibble order. The sound files carry GNU Library General
+  Public License version 2-or-later headers; the ADPCM helper carries
+  permissive/BSD-style notices. No KiwiSDR code was copied, translated, or
+  vendored; the AetherSDR decoder is original code limited to the verified
+  mono SND ADPCM frame boundary.
+- A later 2026-06-28 review-fix pass added a compact W/F regression fixture
+  from a live receive-only black-box WebSocket capture against
+  `22033.proxy.kiwisdr.com:8073` using `SET wf_comp=1`. No served HTML,
+  JavaScript, client assets, or source code were read for this fixture.
+- The 2026-06-28 busy-channel/camping follow-up consulted the same current
+  open-source KiwiSDR server repository
+  `https://github.com/jks-prv/KiwiSDR.git` at commit
+  `a83085fe2222dd3e374910faf2195e0454b556ae`. The protocol facts used from
+  license-compatible server files were: `rx/rx_server.cpp` for full-channel
+  admission behavior, `MSG too_busy=<rx_chans>`, and conversion of full Kiwi UI
+  connections to the monitor stream; `rx/rx_monitor.cpp` for monitor queue and
+  camping messages (`MSG monitor`, `SET MON_QSET=<0|1>`, `SET MON_QPOS`,
+  `MSG qpos=<position>,<waiters>,<reload>`, `SET MON_CAMP=<rx>`,
+  `MSG camp=<ok>,<rx>`, `MSG audio_camp=<disconnect>,...`, and
+  `MSG camp_disconnect`); `rx/rx_cmd.cpp` for `MSG max_camp=<n>`; and
+  `rx/rx_server_ajax.cpp` for `/status` user/channel/API metadata. These
+  server files carry GNU Library General Public License version 2-or-later
+  headers in that snapshot. The non-minified web monitor file
+  `web/kiwi/monitor.js` was viewed only to confirm user-facing semantics of
+  queue vs camp/monitor wording and carries a KiwiSDR copyright notice; no
+  JavaScript code was copied, translated, or used as an implementation source.
+  No KiwiSDR code was copied, translated, or vendored.
 - No WebSDR source code, prior WebSDR worktrees, PR #3612, prior WebSDR
   threads, contaminated temporary files, or rollout summaries were used.
 
@@ -512,18 +571,40 @@ engine must not mix Flex with Kiwi before NR2, and must not alternate separate
 Kiwi endpoints through one shared adaptive NR2 state. Each virtual Kiwi antenna
 therefore owns its own Kiwi NR2/resampler/output path. The speaker drain mixes
 those post-DSP Kiwi FIFOs with post-DSP Flex audio.
-Managed Kiwi RX antenna clients decode SND audio only while their profile is
+Managed Kiwi RX antenna clients emit SND audio only while their profile is
 the active audio source. Connected but inactive profiles may continue serving
-waterfall data, but they must not spend CPU decoding/resampling unused audio
-frames because that can starve the active NR2 path.
+waterfall data. Uncompressed inactive audio is not decoded/resampled; compressed
+SND ADPCM may be decoded only far enough to keep the predictor synchronized,
+with no audio emission, so later activation does not resume from stale decoder
+state.
 
 The KiwiSDR-side receive behavior is implemented only where it was observed
 directly, except for the terminal denial-message labels called out in
 [Source-Attributed Denial Messages](#source-attributed-denial-messages). The
 client opens the observed `SND` and `W/F` sockets, sends only receive-side setup
-commands, requests uncompressed audio, converts 12 kHz mono samples to 24 kHz
-stereo float PCM, and projects received W/F rows onto the current AetherSDR
-panadapter using the server-reported full W/F center and bandwidth.
+commands, requests uncompressed audio by default, converts 12 kHz mono samples
+to 24 kHz stereo float PCM, and projects received W/F rows onto the current
+AetherSDR panadapter using the server-reported full W/F center and bandwidth.
+Protocol/capability state is read-only scaffolding around that receive path:
+server version/build, external-API policy, public-auth outcome, requested vs
+observed compression, supported and observed SND/W/F frame layouts, and
+unsupported-frame reasons are recorded so later work can branch on explicit
+state instead of string logs. Busy-channel and monitor/camping messages are
+also recorded as typed read-only state: full/busy, monitor offered, queued
+position/waiter count/free-channel hint, accepted/rejected camping channel,
+camp audio stopped, camp disconnected, and maximum campers if reported. A
+normal user-initiated connect may enter the monitor queue when the server
+offers monitor mode. If the queue later reports that a normal receiver slot is
+available, AetherSDR retries the normal receiver connection for the same active
+profile instead of requiring another manual Connect click. It still
+does not silently choose another user's receiver channel to camp on. A camped
+session is labeled as monitoring and is receive-ready only after real SND audio
+frames arrive; normal tuning, mode, receiver-control, and waterfall-control
+commands are suppressed while in the monitor/camp path. This state does not
+authorize unsupported waterfall layouts,
+IQ/GNSS streams, DX labels, extensions, or admin/config writes. Compressed SND
+support is limited to the source-attributed mono ADPCM layout and does not
+claim arbitrary compressed-audio layouts.
 The existing panadapter waterfall controls are source-aware: while a Kiwi
 profile is selected they update the selected profile's W/F cell, W/F floor, and
 W/F rate settings only; while a normal Flex antenna is selected they retain the
@@ -550,23 +631,27 @@ the new slice frequency/mode/filter, and requests the new panadapter's visible
 waterfall range.
 
 SND startup is staged from endpoint messages. On socket open, the client sends
-only auth, identity, and `SET compression=0`. When `MSG audio_rate=...` arrives,
-the client sends `SET AR OK in=<audio_rate> out=24000`, matching AetherSDR's
-Kiwi decoded-audio path. When
+only auth, identity, and `SET compression=0` by default. Diagnostic runs may
+request `SET compression=1` with `AETHER_KIWI_SND_COMP=1`. When
+`MSG audio_rate=...` arrives, the client sends
+`SET AR OK in=<audio_rate> out=24000`, matching AetherSDR's Kiwi decoded-audio
+path. When
 `MSG sample_rate=...` arrives, the client sends squelch, generator disable,
 AGC, demodulator/tuning, and keepalive commands. Connection state is still
-considered receive-ready only after `audio_init` or the first accepted `SND`
-frame. Completing the `sample_rate` follow-up setup is not sufficient by
-itself; if no SND frames arrive before the timeout, the connection reports that
-sound setup completed but no SND audio frames arrived instead of presenting a
-silent audio toggle.
+considered normal receive-ready only after the first accepted `SND` frame.
+`audio_init` and `sample_rate` confirm setup progress but are not sufficient by
+themselves; if no SND frames arrive before the timeout, the connection reports
+that sound setup completed but no SND audio frames arrived instead of
+presenting a silent audio toggle. Camped monitor sessions follow the same rule
+and enter the separate monitoring state only after SND audio is observed.
 If an already-established sound or waterfall WebSocket later closes or reports
 a socket error, the client reports the local error and the profile manager
 retries the profile after a short delay only when the profile is still
 operator-relevant: Auto Connect is enabled or a slice is still assigned to that
 Kiwi RX antenna. Server-declared terminal conditions such as `badp`, busy,
 disabled, down, redirect, or camp disconnect are not retried by this local
-recovery path.
+recovery path. A camp disconnect is terminal for the monitoring session and
+does not spin a reconnect loop.
 
 ## Source-Attributed Denial Messages
 
@@ -700,10 +785,16 @@ row delivery on endpoints that return `wf_fps=0` for larger values.
 Remaining uncertainties are deliberately conservative:
 
 - Only password-free public receive access is supported.
-- Audio uses uncompressed `SND` requested via `SET compression=0`; no
-  compressed KiwiSDR audio codec is implemented. The user-provided protocol
-  says an SND flag can indicate ADPCM, but does not define the flag bit or the
-  compressed block framing, so AetherSDR does not guess a decoder path.
+- Audio still requests uncompressed `SND` via `SET compression=0` by default,
+  but diagnostic runs can request compressed `SND` via `SET compression=1`.
+  The runtime can safely accept the source-attributed compressed mono SND
+  layout: the normal 10-byte SND header, compression flag `0x10`, and IMA ADPCM
+  over signed 16-bit mono samples with two decoded samples per payload byte.
+  Compressed stereo/IQ, header-short, empty, malformed, or otherwise unknown
+  compressed layouts remain unsupported and non-fatal: they update capability
+  telemetry, reset the ADPCM state where needed, and produce no audio samples.
+  Sequence gaps reset the ADPCM state and drop the current compressed audio
+  block rather than feeding corrupt predictor-state audio into AetherSDR.
 - A short receive-only SND timing probe against `w0air.ddns.net:8073` observed
   1034-byte uncompressed SND frames with about 42 ms average cadence, but burst
   delivery with a 275 ms max inter-frame gap in the sample. The Kiwi-only
@@ -734,8 +825,15 @@ Remaining uncertainties are deliberately conservative:
   client-side display normalization only: it does not synthesize waterfall data
   from audio and does not claim Flex-calibrated RF power. Earlier black-box W/F
   captures showed both extended 16-byte-header direct rows and compact encoded
-  rows. AetherSDR requests direct uncompressed W/F rows and drops compact
-  encoded rows until a clean decoder is available.
+  rows. AetherSDR normally requests direct uncompressed W/F rows, but
+  `AETHER_KIWI_WF_COMP=1` is a permanent diagnostic/automation launch flag for
+  requesting compact rows during tests. The decoder is always observation-based
+  and supports the verified compact W/F row layout: extended 16-byte header,
+  compression flag or the known 517-byte compact-row payload shape, 10 decoded
+  predictor-pad bytes discarded, and 1024 decoded unsigned row bytes mapped
+  through the same display-level conversion as direct rows. Malformed compact
+  rows and unknown W/F payload lengths remain non-fatal and produce no bins,
+  preventing stale or fake waterfall data.
 - The applet exposes Waterfall Cell and Waterfall Floor sliders using the
   user-supplied -30 dB to +30 dB range. The corrected protocol draft maps
   portable waterfall aperture control to `SET maxdb=... mindb=...`, so slider

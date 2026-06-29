@@ -1757,7 +1757,7 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("get")) {
         if (model.isEmpty())
-            return err(QStringLiteral("get requires a model (radio|transmit|meters|slice|slices|pan|pans)"));
+            return err(QStringLiteral("get requires a model (radio|transmit|meters|slice|slices|pan|pans|kiwi)"));
         return doGet(model, selector, property);
     }
     if (cmd == QLatin1String("connect")) {
@@ -2371,6 +2371,26 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data[QStringLiteral("model")] = model;
         return data;
     }
+    if (model == QLatin1String("kiwi")
+        || model == QLatin1String("kiwisdr")) {
+        if (!m_kiwiSdrSnapshotHandler) {
+            return err(QStringLiteral("KiwiSDR snapshot unavailable"));
+        }
+        QJsonObject data = m_kiwiSdrSnapshotHandler();
+        if (!property.isEmpty()) {
+            if (!data.contains(property)) {
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for kiwi"));
+            }
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("kiwi"), data}};
+    }
 
     RadioModel* radio = m_radioModel;
     if (!radio)
@@ -2422,7 +2442,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans)"));
+                   + QStringLiteral(" (use audio|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|kiwi)"));
     }
 
     if (!property.isEmpty()) {

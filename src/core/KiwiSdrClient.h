@@ -38,6 +38,10 @@ struct KiwiSdrReceiverControls {
 };
 
 struct KiwiSdrReceiverTelemetry {
+    KiwiSdrReceiverTelemetry();
+
+    KiwiSdrProtocol::ReceiverMetadata metadata;
+    KiwiSdrProtocol::ProtocolState protocol;
     int soundSequence{-1};
     float soundRssiDbm{0.0f};
     bool hasSoundRssi{false};
@@ -60,6 +64,10 @@ public:
         Disconnected,
         Connecting,
         Connected,
+        Busy,
+        Waiting,
+        Camping,
+        CampDisconnected,
         Error,
     };
     Q_ENUM(State)
@@ -69,7 +77,7 @@ public:
 
     State state() const { return m_state; }
     QString endpoint() const { return m_endpoint; }
-    bool isConnected() const { return m_state == State::Connected; }
+    bool isConnected() const { return stateHasReceiveAudio(m_state); }
     bool audioActive() const { return m_audioActive; }
     bool hasTrackedSlice() const
     {
@@ -83,6 +91,10 @@ public:
         return m_waterfallAvailabilityDetail;
     }
     static QString normalizeEndpoint(const QString& endpoint);
+    static bool diagnosticSoundCompressionRequested();
+    static bool diagnosticWaterfallCompressionRequested();
+    static bool stateHasReceiveAudio(State state);
+    static bool stateAllowsReceiverControl(State state);
 
 public slots:
     void setOperatorCallsign(const QString& callsign);
@@ -149,6 +161,7 @@ private:
     void sendSoundAudioRateAck();
     void sendSoundSampleRateCommands();
     void sendWaterfallSetupCommands();
+    void queueKiwiMonitor();
     void sendTrackedSliceToServer();
     void sendReceiverControlsToServer();
     void sendWaterfallViewToServer();
@@ -160,12 +173,11 @@ private:
     QString kiwiMode() const;
     int kiwiLowCutHz() const;
     int kiwiHighCutHz() const;
-    bool isSupportedPcmSoundFrame(
-        const QByteArray& frame,
-        const KiwiSdrProtocol::SoundFrameHeader& header) const;
+    bool isSupportedSoundFrame(
+        const KiwiSdrProtocol::FrameObservation& observation) const;
     bool parseWaterfallFrameHeader(const QByteArray& frame, quint32* start,
                                    int* zoom) const;
-    QByteArray decodeSoundFrame(const QByteArray& frame);
+    QByteArray resampleSoundSamples(const QVector<float>& monoSamples);
     QVector<float> decodeWaterfallFrame(const QByteArray& frame) const;
     void handleBinaryMessage(StreamKind stream, const QByteArray& frame);
     void handleSoundFrame(const QByteArray& frame);
@@ -173,7 +185,14 @@ private:
     void handleMessage(StreamKind stream, const QByteArray& frame);
     void handleTextMessage(StreamKind stream, const QString& text);
     bool updateWaterfallFftBins(int binCount);
+    bool updateCampStatusFromMetadata(const KiwiSdrProtocol::MsgToken& token);
     void updateWaterfallAvailability();
+    void resetCapabilityState();
+    void updateProtocolStateFromMetadata();
+    void mergeReceiverMetadata(
+        const KiwiSdrProtocol::ReceiverMetadata& metadata);
+    void recordFrameObservation(
+        const KiwiSdrProtocol::FrameObservation& observation);
     void updateSoundTelemetry(const QByteArray& frame);
     void updateWaterfallTelemetry(const QByteArray& frame);
     void emitTelemetryChanged();
@@ -240,6 +259,9 @@ private:
     bool m_secureWebSocketRetryAttempted{false};
     bool m_soundSocketConnected{false};
     bool m_waterfallSocketConnected{false};
+    bool m_monitorMode{false};
+    bool m_monitorQueueRequested{false};
+    bool m_campAccepted{false};
     bool m_soundAudioReady{false};
     bool m_soundAudioRateAcked{false};
     bool m_soundSampleRateCommandsSent{false};
@@ -297,6 +319,9 @@ private:
     int m_waterfallRxChannel{-1};
     int m_waterfallChannelCount{-1};
     std::unique_ptr<Resampler> m_soundResampler;
+    KiwiSdrProtocol::SoundAdpcmState m_soundAdpcmState;
+    KiwiSdrProtocol::FrameLayout m_lastSoundFrameLayout{
+        KiwiSdrProtocol::FrameLayout::Unknown};
     QByteArray m_lastDecodedSoundPcm;
     QVector<float> m_lastWaterfallBins;
     QString m_lastWaterfallPanId;

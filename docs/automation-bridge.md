@@ -53,6 +53,22 @@ to confirm a visual change; parse the JSON to assert on control state.
 
 For headless / CI runs, add `QT_QPA_PLATFORM=offscreen` — no display required.
 
+KiwiSDR compression can be forced for diagnostic runs by adding
+`AETHER_KIWI_SND_COMP=1` and/or `AETHER_KIWI_WF_COMP=1` at launch. These are
+receive-only automation knobs: SND changes the outbound sound setup request
+from `SET compression=0` to `SET compression=1`; W/F changes the outbound
+waterfall setup request from `SET wf_comp=0` to `SET wf_comp=1`. The runtime
+still decodes the actual observed frame layout. The `get kiwi` snapshot exposes
+top-level `diagnosticSoundCompressionRequested` and
+`diagnosticWaterfallCompressionRequested` fields, plus connected profiles'
+per-stream `compressedRequested`, so automation can assert that the process
+launched with the intended diagnostic mode and then separately check
+`compressedObserved`. Kiwi profile `state` may also report
+`busy`, `waiting`, `camping`, or `camp_disconnected`; the profile `metadata`
+object includes typed busy/camping fields such as `campStatus`,
+`campReceiverChannel`, `campQueuePosition`, `campQueueWaiters`, and
+`campQueueReloadRecommended` when the server reports them.
+
 On macOS, do not host the bridge from a Codex-style sandboxed command. The
 native Cocoa platform can abort during `QApplication` startup if pasteboard or
 HIServices are unavailable, before AetherSDR reaches the automation bridge; with

@@ -60,10 +60,14 @@ QString stateToken(KiwiSdrClient::State state)
 {
     switch (state) {
     case KiwiSdrClient::State::Connected:
+    case KiwiSdrClient::State::Camping:
         return QStringLiteral("color.accent.success");
     case KiwiSdrClient::State::Connecting:
+    case KiwiSdrClient::State::Waiting:
+    case KiwiSdrClient::State::Busy:
         return QStringLiteral("color.accent.warning");
     case KiwiSdrClient::State::Error:
+    case KiwiSdrClient::State::CampDisconnected:
         return QStringLiteral("color.accent.danger");
     case KiwiSdrClient::State::Disconnected:
         return QStringLiteral("color.text.label");
@@ -87,6 +91,14 @@ QString stateText(KiwiSdrClient::State state)
         return QObject::tr("Connecting");
     case KiwiSdrClient::State::Connected:
         return QObject::tr("Connected");
+    case KiwiSdrClient::State::Busy:
+        return QObject::tr("Busy");
+    case KiwiSdrClient::State::Waiting:
+        return QObject::tr("Waiting");
+    case KiwiSdrClient::State::Camping:
+        return QObject::tr("Monitoring");
+    case KiwiSdrClient::State::CampDisconnected:
+        return QObject::tr("Camp ended");
     case KiwiSdrClient::State::Error:
         return QObject::tr("Error");
     }
@@ -121,6 +133,12 @@ QString receiverAccessibleText(const KiwiSdrReceiverStatus& receiver)
           << stateText(receiver.state);
     if (!receiver.detail.trimmed().isEmpty()) {
         parts << receiver.detail.trimmed();
+    }
+    if (!receiver.metadataSummary.trimmed().isEmpty()) {
+        parts << receiver.metadataSummary.trimmed();
+    }
+    if (!receiver.protocolSummary.trimmed().isEmpty()) {
+        parts << receiver.protocolSummary.trimmed();
     }
     if (receiver.assignedSlice) {
         parts << QStringLiteral("Assigned to slice %1")
@@ -230,21 +248,37 @@ QWidget* KiwiSdrApplet::buildReceiverRow(const KiwiSdrReceiverStatus& receiver)
 
     auto* name = new QLabel(receiver.name, row);
     name->setTextFormat(Qt::PlainText);
+    name->setAccessibleName(tr("KiwiSDR receiver name"));
+    name->setAccessibleDescription(receiver.name);
     name->setStyleSheet(primaryLabelStyle());
     name->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
     topRow->addWidget(name, 1);
 
     auto* status = new QLabel(stateText(receiver.state), row);
     status->setTextFormat(Qt::PlainText);
+    status->setAccessibleName(tr("KiwiSDR receiver state"));
+    status->setAccessibleDescription(receiverAccessibleText(receiver));
     status->setStyleSheet(statusStyle(receiver.state));
     status->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     topRow->addWidget(status, 0, Qt::AlignRight);
     layout->addLayout(topRow);
 
-    const QString detail = receiver.detail.trimmed();
-    if (!detail.isEmpty()) {
+    QStringList detailLines;
+    if (!receiver.detail.trimmed().isEmpty()) {
+        detailLines << receiver.detail.trimmed();
+    }
+    if (!receiver.metadataSummary.trimmed().isEmpty()) {
+        detailLines << receiver.metadataSummary.trimmed();
+    }
+    if (!receiver.protocolSummary.trimmed().isEmpty()) {
+        detailLines << receiver.protocolSummary.trimmed();
+    }
+    if (!detailLines.isEmpty()) {
+        const QString detail = detailLines.join(QLatin1Char('\n'));
         auto* detailLabel = new QLabel(detail, row);
         detailLabel->setTextFormat(Qt::PlainText);
+        detailLabel->setAccessibleName(tr("KiwiSDR receiver details"));
+        detailLabel->setAccessibleDescription(detail);
         detailLabel->setStyleSheet(detailStyle());
         detailLabel->setWordWrap(true);
         layout->addWidget(detailLabel);
