@@ -1145,6 +1145,8 @@ void AetherDspWidget::rebuildBnrRows(const QStringList& names)
         r.bar = new QProgressBar;
         r.bar->setTextVisible(true);
         r.bar->setFixedHeight(16);
+        // 10px left text padding so the status text isn't flush against the edge.
+        r.bar->setStyleSheet(QStringLiteral("QProgressBar { padding-left: 10px; }"));
         r.bar->setFormat(QStringLiteral("queued"));
         r.bar->setRange(0, 100);
         r.bar->setValue(0);
@@ -1192,10 +1194,8 @@ void AetherDspWidget::setBnrRowDetail(int i, const QString& version,
     if (r.bar) r.bar->hide();
     if (r.size) r.size->setText(humanSize(bytes));
     if (!r.detail) return;
-    const QString shortSha = sha256.left(16);
-    r.detail->setText(QStringLiteral("<b>%1</b>&nbsp;&nbsp;<tt>%2%3</tt>")
-                          .arg(version.toHtmlEscaped(), shortSha,
-                               sha256.size() > 16 ? QStringLiteral("…") : QString()));
+    // Version inline; full sha256 lives in the tooltip (it's too wide to show).
+    r.detail->setText(QStringLiteral("<b>%1</b>").arg(version.toHtmlEscaped()));
     if (!sha256.isEmpty())
         r.detail->setToolTip(QStringLiteral("%1\nsha256: %2").arg(version, sha256));
     r.detail->show();
