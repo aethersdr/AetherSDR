@@ -178,6 +178,7 @@ private:
         QLabel*       name{nullptr};
         QLabel*       size{nullptr};
         QProgressBar* bar{nullptr};
+        QLabel*       barText{nullptr};  // overlay on the bar (10px-padded text)
         QLabel*       detail{nullptr};
     };
     QList<BnrCompRow> m_bnrAfxRows;

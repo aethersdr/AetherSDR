@@ -1170,19 +1170,22 @@ void AetherDspWidget::rebuildBnrRows(const QStringList& names)
         AetherSDR::ThemeManager::instance().applyStyleSheet(r.size,
             "QLabel { color: {{color.text.secondary}}; }");
         r.bar = new QProgressBar;
-        r.bar->setTextVisible(true);
+        r.bar->setTextVisible(false);   // chunk fills flush-left; text is overlaid
         r.bar->setFixedHeight(16);
-        // Full self-contained style so QStyleSheetStyle owns the rendering and
-        // honors padding-left — a partial rule lets the global QProgressBar theme
-        // win and the 10px left text pad is ignored.
         AetherSDR::ThemeManager::instance().applyStyleSheet(r.bar,
-            "QProgressBar { text-align: left; padding-left: 10px; font-size: 11px;"
-            " color: {{color.text.primary}}; background: {{color.background.0}};"
+            "QProgressBar { background: {{color.background.0}};"
             " border: 1px solid {{color.border.strong}}; border-radius: 3px; }"
             "QProgressBar::chunk { background: {{color.accent}}; border-radius: 2px; }");
-        r.bar->setFormat(QStringLiteral("queued"));
         r.bar->setRange(0, 100);
         r.bar->setValue(0);
+        // Status text as a transparent overlay so its 10px left pad doesn't inset
+        // the chunk (QProgressBar padding would push the fill in too).
+        r.barText = new QLabel(QStringLiteral("queued"), r.bar);
+        r.barText->setStyleSheet(QStringLiteral(
+            "QLabel { padding-left: 10px; background: transparent; }"));
+        auto* bl = new QHBoxLayout(r.bar);
+        bl->setContentsMargins(0, 0, 0, 0);
+        bl->addWidget(r.barText);
         r.detail = new QLabel;
         r.detail->setTextFormat(Qt::RichText);
         r.detail->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -1207,15 +1210,17 @@ void AetherDspWidget::setBnrRowProgress(int i, int percent, qint64 bytes, const 
     if (r.size && bytes > 0) r.size->setText(humanSize(bytes));
     if (!r.bar) return;
     r.bar->show();
+    QString text;
     if (percent < 0) {                       // resolving / extracting
         r.bar->setRange(0, 0);               // indeterminate
-        r.bar->setFormat(rateEta.isEmpty() ? QStringLiteral("working…") : rateEta);
+        text = rateEta.isEmpty() ? QStringLiteral("working…") : rateEta;
     } else {
         r.bar->setRange(0, 100);
         r.bar->setValue(percent);
-        r.bar->setFormat(rateEta.isEmpty() ? QStringLiteral("%1%").arg(percent)
-                                           : QStringLiteral("%1%  ·  %2").arg(percent).arg(rateEta));
+        text = rateEta.isEmpty() ? QStringLiteral("%1%").arg(percent)
+                                 : QStringLiteral("%1%  ·  %2").arg(percent).arg(rateEta);
     }
+    if (r.barText) r.barText->setText(text);
 }
 
 // Swap a row from its progress bar to the installed version/sha/size line.
