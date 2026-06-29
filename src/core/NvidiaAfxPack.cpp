@@ -179,13 +179,12 @@ void NvidiaAfxPack::fail(const QString& msg)
     emit finished(false, msg);
 }
 
-void NvidiaAfxPack::emitOverall(int compPct, const QString& label)
+QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::plannedComponents() const
 {
-    const int n = m_queue.isEmpty() ? 1 : m_queue.size();
-    const int base = m_idx * 100 / n;
-    const int within = (compPct < 0 ? 0 : compPct) / n;
-    emit progress(compPct < 0 && m_idx == 0 ? -1 : base + within,
-                  QStringLiteral("%1 (%2/%3)").arg(label).arg(m_idx + 1).arg(n));
+    QList<ComponentInfo> out;
+    for (const Component& c : m_queue)
+        out.append({ c.name, c.pypiVer, c.sha256, c.bytes });
+    return out;
 }
 
 // ─── v2 multi-source install ─────────────────────────────────────────────────
@@ -205,6 +204,7 @@ void NvidiaAfxPack::install()
 #endif
     m_queue = manifest(m_arch);
     m_idx = 0;
+    emit planReady(plannedComponents());
     startNext();
 }
 
@@ -223,7 +223,7 @@ void NvidiaAfxPack::startNext()
 // Resolve the manylinux x86_64 wheel URL + sha256 from the PyPI JSON API.
 void NvidiaAfxPack::resolveWheelUrl(const Component& c)
 {
-    emitOverall(-1, QStringLiteral("Resolving %1").arg(c.name));
+    emit componentProgress(m_idx, -1, 0, QStringLiteral("resolving…"));
     const QUrl api(QStringLiteral("https://pypi.org/pypi/%1/%2/json").arg(c.pypiPkg, c.pypiVer));
     QNetworkRequest req(api);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -263,20 +263,19 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     m_reply = m_nam->get(req);
     m_dlTimer.start();
-    emitOverall(0, QStringLiteral("Downloading %1").arg(label));
+    emit componentProgress(m_idx, 0, 0, QString());
     connect(m_reply, &QNetworkReply::readyRead, this, [this, out]() { out->write(m_reply->readAll()); });
-    connect(m_reply, &QNetworkReply::downloadProgress, this, [this, label](qint64 got, qint64 total) {
+    connect(m_reply, &QNetworkReply::downloadProgress, this, [this](qint64 got, qint64 total) {
         // Average rate since this file started — smoother than per-tick deltas.
         const qint64 ms = m_dlTimer.elapsed();
-        QString suffix;
+        QString rateEta;
         if (ms > 500 && got > 0) {
             const double bps = got * 1000.0 / double(ms);
-            suffix = QStringLiteral(" — %1").arg(humanRate(bps));
+            rateEta = humanRate(bps);
             if (total > got && bps > 1.0)
-                suffix += QStringLiteral(", %1 left").arg(humanEta(qint64((total - got) / bps)));
+                rateEta += QStringLiteral(" · %1 left").arg(humanEta(qint64((total - got) / bps)));
         }
-        emitOverall(total > 0 ? int(got * 100 / total) : -1,
-                    QStringLiteral("Downloading %1%2").arg(label, suffix));
+        emit componentProgress(m_idx, total > 0 ? int(got * 100 / total) : -1, total, rateEta);
     });
     connect(m_reply, &QNetworkReply::finished, this,
             [this, out, sha256, label, dest]() {
@@ -293,9 +292,14 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
             if (h.result().toHex() != sha256.toLatin1()) { fail(QStringLiteral("checksum mismatch: %1").arg(label)); return; }
         }
         const Kind kind = m_queue[m_idx].kind;
-        emitOverall(100, QStringLiteral("Extracting %1").arg(label));
+        const qint64 bytes = QFileInfo(dest).size();
+        m_queue[m_idx].bytes = bytes;                  // recorded into the receipt
+        emit componentProgress(m_idx, -1, bytes, QStringLiteral("extracting…"));
         extractInto(dest, kind);
         QFile::remove(dest); m_tmpFile.clear();
+        if (!m_busy) return;                           // extractInto called fail()
+        const Component& c = m_queue[m_idx];
+        emit componentFinished(m_idx, { c.name, c.pypiVer, c.sha256, bytes });
         ++m_idx;
         startNext();
     });
@@ -362,7 +366,6 @@ void NvidiaAfxPack::assembleAndCommit()
 
     m_busy = false;
     if (installedPackDir().isEmpty()) { emit finished(false, QStringLiteral("install verification failed")); return; }
-    emit progress(100, statusText());
     emit finished(true, statusText());
 }
 
@@ -377,6 +380,7 @@ void NvidiaAfxPack::writeReceipt(const QString& packDir)
         o.insert(QStringLiteral("name"), c.name);
         o.insert(QStringLiteral("version"), c.pypiVer);
         o.insert(QStringLiteral("sha256"), c.sha256);
+        o.insert(QStringLiteral("bytes"), static_cast<double>(c.bytes));
         arr.append(o);
     }
     QFile f(QDir(packDir).filePath(QStringLiteral("components.json")));
@@ -396,7 +400,8 @@ QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::installedComponents()
         const QJsonObject o = v.toObject();
         out.append({ o.value(QStringLiteral("name")).toString(),
                      o.value(QStringLiteral("version")).toString(),
-                     o.value(QStringLiteral("sha256")).toString() });
+                     o.value(QStringLiteral("sha256")).toString(),
+                     static_cast<qint64>(o.value(QStringLiteral("bytes")).toDouble()) });
     }
     return out;
 }
@@ -418,14 +423,18 @@ void NvidiaAfxPack::installFromFile(const QString& archivePath)
             importSha = QString::fromLatin1(h.result().toHex());
         }
     }
+    const qint64 importBytes = QFileInfo(archivePath).size();
     m_queue = { { QStringLiteral("AFX pack (imported)"),
-                  {}, QStringLiteral("2.1.0"), {}, importSha, Kind::Tarball } };
+                  {}, QStringLiteral("2.1.0"), {}, importSha, Kind::Tarball, importBytes } };
     QDir().mkpath(cacheRoot());
     m_staging = QDir(cacheRoot()).filePath(QStringLiteral(".staging"));
     QDir(m_staging).removeRecursively(); QDir().mkpath(m_staging);
-    emit progress(-1, QStringLiteral("Extracting…"));
+    emit planReady(plannedComponents());
+    emit componentProgress(0, -1, importBytes, QStringLiteral("extracting…"));
     extractInto(archivePath, Kind::Tarball);
     if (!m_busy) return;  // extractInto called fail()
+    emit componentFinished(0, { m_queue[0].name, m_queue[0].pypiVer,
+                                m_queue[0].sha256, importBytes });
     // A pre-assembled pack may have a single top-level dir — descend to it.
     if (!QFile::exists(QDir(m_staging).filePath(QString::fromLatin1(kCoreRelPath)))) {
         const QStringList subs = QDir(m_staging).entryList(QDir::Dirs | QDir::NoDotAndDotDot);

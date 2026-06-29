@@ -49,6 +49,7 @@ public:
         QString name;
         QString version;
         QString sha256;
+        qint64  bytes = 0;   // download size (0 = unknown / not yet started)
     };
     // Components recorded in the installed pack's receipt (components.json),
     // written at install. Empty if no pack / a pack predating the receipt.
@@ -62,7 +63,16 @@ public:
     void cancel();
 
 signals:
-    void progress(int percent, const QString& status);  // percent <0 = indeterminate
+    // The component list for this install, emitted once at the start so the UI
+    // can lay out one row per component (versions known; sha/bytes fill in later).
+    void planReady(const QList<ComponentInfo>& components);
+    // Live progress for component `index`. percent <0 = indeterminate (resolving
+    // / extracting); totalBytes is the download size once known; rateEta is the
+    // "41 MB/s · 7s left" string (empty until enough data has moved).
+    void componentProgress(int index, int percent, qint64 totalBytes, const QString& rateEta);
+    // Component `index` is downloaded + verified + extracted — its row can swap
+    // the bar for the version/sha/size detail line.
+    void componentFinished(int index, const ComponentInfo& info);
     void finished(bool ok, const QString& message);
 
 private:
@@ -70,10 +80,11 @@ private:
     struct Component {
         QString name;       // display name
         QString pypiPkg;    // for Wheel: PyPI package (url+sha resolved at runtime)
-        QString pypiVer;    // for Wheel: pinned version
+        QString pypiVer;    // pinned version (display)
         QString url;        // for Tarball: direct URL (our host)
         QString sha256;     // for Tarball: pinned sha (Wheel sha comes from PyPI)
         Kind kind;
+        qint64 bytes = 0;   // download size, recorded as it completes (for receipt)
     };
     QList<Component> manifest(const QString& arch) const;
 
@@ -85,7 +96,7 @@ private:
     void assembleAndCommit();                             // symlink + atomic swap
     void writeReceipt(const QString& packDir);           // components.json from m_queue
     void fail(const QString& msg);
-    void emitOverall(int compPct, const QString& label);
+    QList<ComponentInfo> plannedComponents() const;       // m_queue -> ComponentInfo list
 
     QNetworkAccessManager* m_nam{nullptr};
     QNetworkReply* m_reply{nullptr};

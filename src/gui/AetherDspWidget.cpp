@@ -957,41 +957,24 @@ void AetherDspWidget::updateBnrStatus()
     if (m_bnrAfxIntensitySlider)
         m_bnrAfxIntensitySlider->setEnabled(installed);
 
-    if (m_bnrAfxComponents) {
+    // Don't disturb the live download rows mid-flight — the per-component
+    // signals own them while busy. Otherwise reflect the installed manifest.
+    if (!busy) {
         const auto comps = NvidiaAfxPack::installedComponents();
-        if (!installed || comps.isEmpty()) {
-            // No receipt (not installed, or a pack predating the manifest).
-            m_bnrAfxComponents->setText(
-                installed ? tr("<i>Component details available after re-download.</i>")
-                          : QString());
+        if (!installed) {
+            clearBnrRows();
         } else {
-            QString html = QStringLiteral(
-                "<b>Installed components</b>"
-                "<table cellspacing='0' cellpadding='0' width='100%'>");
-            for (const auto& c : comps) {
-                const QString shortSha = c.sha256.left(16);
-                html += QStringLiteral(
-                    "<tr><td>%1</td><td align='right'>&nbsp;%2&nbsp;</td>"
-                    "<td align='right'><tt>%3%4</tt></td></tr>")
-                    .arg(c.name.toHtmlEscaped(),
-                         c.version.toHtmlEscaped(),
-                         shortSha,
-                         c.sha256.size() > 16 ? QStringLiteral("…") : QString());
-            }
-            html += QStringLiteral("</table>");
-            m_bnrAfxComponents->setText(html);
-            // Full sha256s in the tooltip (short form is shown inline).
-            QString tip;
-            for (const auto& c : comps)
-                tip += QStringLiteral("%1  %2\n%3\n").arg(c.name, c.version, c.sha256);
-            m_bnrAfxComponents->setToolTip(tip.trimmed());
+            QStringList names;
+            for (const auto& c : comps) names << c.name;
+            rebuildBnrRows(names);
+            for (int i = 0; i < comps.size(); ++i)
+                setBnrRowDetail(i, comps[i].version, comps[i].sha256, comps[i].bytes);
         }
     }
 #else
     if (m_bnrAfxStatus)
         m_bnrAfxStatus->setText(QStringLiteral("Not available in this build"));
-    if (m_bnrAfxComponents)
-        m_bnrAfxComponents->clear();
+    clearBnrRows();
 #endif
 }
 
@@ -1058,22 +1041,18 @@ QWidget* AetherDspWidget::buildBnrPage()
     m_bnrAfxDownloadBtn->setToolTip("Download the NVIDIA AFX runtime + denoiser model "
                                     "for this GPU into the app's cache (one-time).");
     g->addWidget(m_bnrAfxDownloadBtn, 0, 2);
-    m_bnrAfxProgress = new QProgressBar;
-    m_bnrAfxProgress->setTextVisible(true);
-    m_bnrAfxProgress->hide();
-    g->addWidget(m_bnrAfxProgress, 1, 0, 1, 3);
 
     // Intensity
-    g->addWidget(new QLabel("Intensity"), 2, 0);
+    g->addWidget(new QLabel("Intensity"), 1, 0);
     m_bnrAfxIntensitySlider = new QSlider(Qt::Horizontal);
     m_bnrAfxIntensitySlider->setRange(0, 100);
     m_bnrAfxIntensitySlider->setValue(static_cast<int>(s.value("NvAfxIntensity", "1.0").toFloat() * 100));
     applyPrimarySliderStyle(m_bnrAfxIntensitySlider);
     m_bnrAfxIntensitySlider->setToolTip("Denoising strength (0 = passthrough, 100 = max).");
-    g->addWidget(m_bnrAfxIntensitySlider, 2, 1);
+    g->addWidget(m_bnrAfxIntensitySlider, 1, 1);
     m_bnrAfxIntensityLabel = new QLabel(QString::number(m_bnrAfxIntensitySlider->value()));
     m_bnrAfxIntensityLabel->setFixedWidth(40);
-    g->addWidget(m_bnrAfxIntensityLabel, 2, 2);
+    g->addWidget(m_bnrAfxIntensityLabel, 1, 2);
     connect(m_bnrAfxIntensitySlider, &QSlider::valueChanged, this, [this](int v) {
         m_bnrAfxIntensityLabel->setText(QString::number(v));
         const float r = v / 100.0f;
@@ -1083,32 +1062,36 @@ QWidget* AetherDspWidget::buildBnrPage()
     });
     vbox->addLayout(g);
 
-    // Installed-component manifest — fills the panel's lower area with the
-    // version + sha256 of each downloaded BNR component (populated lazily by
-    // updateBnrStatus from the pack receipt).
-    m_bnrAfxComponents = new QLabel;
-    m_bnrAfxComponents->setTextFormat(Qt::RichText);
-    m_bnrAfxComponents->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_bnrAfxComponents->setContentsMargins(0, 12, 0, 0);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrAfxComponents,
-        "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
-    vbox->addWidget(m_bnrAfxComponents);
+    // Per-component list — one row each, a progress bar while downloading that
+    // swaps to the installed version + sha + size when done. The same rows show
+    // the installed manifest in the steady state (built by updateBnrStatus).
+    m_bnrAfxList = new QWidget;
+    m_bnrAfxListLayout = new QVBoxLayout(m_bnrAfxList);
+    m_bnrAfxListLayout->setContentsMargins(0, 12, 10, 0);
+    m_bnrAfxListLayout->setSpacing(4);
+    vbox->addWidget(m_bnrAfxList);
 
     vbox->addStretch();
 
 #ifdef HAVE_NVIDIA_AFX
     m_bnrAfxPack = new NvidiaAfxPack(this);
-    connect(m_bnrAfxPack, &NvidiaAfxPack::progress, this, [this](int pct, const QString& s) {
-        if (!m_bnrAfxProgress) return;
-        m_bnrAfxProgress->show();
-        if (pct < 0) m_bnrAfxProgress->setRange(0, 0);          // indeterminate
-        else { m_bnrAfxProgress->setRange(0, 100); m_bnrAfxProgress->setValue(pct); }
-        m_bnrAfxProgress->setFormat(s);
-        if (m_bnrAfxStatus) m_bnrAfxStatus->setText(s);
+    connect(m_bnrAfxPack, &NvidiaAfxPack::planReady, this,
+            [this](const QList<NvidiaAfxPack::ComponentInfo>& comps) {
+        QStringList names;
+        for (const auto& c : comps) names << c.name;
+        rebuildBnrRows(names);
+        if (m_bnrAfxStatus) m_bnrAfxStatus->setText(QStringLiteral("Downloading…"));
         if (m_bnrAfxDownloadBtn) m_bnrAfxDownloadBtn->setEnabled(false);
     });
+    connect(m_bnrAfxPack, &NvidiaAfxPack::componentProgress, this,
+            [this](int i, int pct, qint64 bytes, const QString& rateEta) {
+        setBnrRowProgress(i, pct, bytes, rateEta);
+    });
+    connect(m_bnrAfxPack, &NvidiaAfxPack::componentFinished, this,
+            [this](int i, const NvidiaAfxPack::ComponentInfo& info) {
+        setBnrRowDetail(i, info.version, info.sha256, info.bytes);
+    });
     connect(m_bnrAfxPack, &NvidiaAfxPack::finished, this, [this](bool ok, const QString& msg) {
-        if (m_bnrAfxProgress) m_bnrAfxProgress->hide();
         if (!ok && m_bnrAfxStatus) m_bnrAfxStatus->setText(QStringLiteral("Failed: %1").arg(msg));
         updateBnrStatus();
     });
@@ -1121,6 +1104,106 @@ QWidget* AetherDspWidget::buildBnrPage()
 
     updateBnrStatus();
     return page;
+}
+
+namespace {
+// "245 MB" / "8.4 KB" — compact download size.
+QString humanSize(qint64 bytes)
+{
+    if (bytes <= 0) return {};
+    double v = double(bytes);
+    const char* unit = "B";
+    if (v >= 1024.0) { v /= 1024.0; unit = "KB"; }
+    if (v >= 1024.0) { v /= 1024.0; unit = "MB"; }
+    if (v >= 1024.0) { v /= 1024.0; unit = "GB"; }
+    return QStringLiteral("%1 %2").arg(v, 0, 'f', v < 10.0 ? 1 : 0).arg(QLatin1String(unit));
+}
+} // namespace
+
+// Build one row per component: [ name | size | bar/detail ]. Rows start in the
+// "queued" download state; setBnrRowProgress / setBnrRowDetail update them.
+void AetherDspWidget::rebuildBnrRows(const QStringList& names)
+{
+    clearBnrRows();
+    if (!m_bnrAfxListLayout) return;
+    for (const QString& name : names) {
+        BnrCompRow r;
+        r.row = new QWidget;
+        auto* h = new QHBoxLayout(r.row);
+        h->setContentsMargins(0, 0, 0, 0);
+        h->setSpacing(6);
+        r.name = new QLabel(name);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.name,
+            "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
+        r.size = new QLabel;
+        r.size->setMinimumWidth(46);
+        r.size->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.size,
+            "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
+        r.bar = new QProgressBar;
+        r.bar->setTextVisible(true);
+        r.bar->setFixedHeight(14);
+        r.bar->setFormat(QStringLiteral("queued"));
+        r.bar->setRange(0, 100);
+        r.bar->setValue(0);
+        r.detail = new QLabel;
+        r.detail->setTextFormat(Qt::RichText);
+        r.detail->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        r.detail->hide();
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.detail,
+            "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
+        h->addWidget(r.name);
+        h->addStretch(1);
+        h->addWidget(r.size);
+        h->addWidget(r.bar, 2);
+        h->addWidget(r.detail, 2);
+        m_bnrAfxListLayout->addWidget(r.row);
+        m_bnrAfxRows.append(r);
+    }
+}
+
+void AetherDspWidget::setBnrRowProgress(int i, int percent, qint64 bytes, const QString& rateEta)
+{
+    if (i < 0 || i >= m_bnrAfxRows.size()) return;
+    BnrCompRow& r = m_bnrAfxRows[i];
+    if (r.detail) r.detail->hide();
+    if (r.size && bytes > 0) r.size->setText(humanSize(bytes));
+    if (!r.bar) return;
+    r.bar->show();
+    if (percent < 0) {                       // resolving / extracting
+        r.bar->setRange(0, 0);               // indeterminate
+        r.bar->setFormat(rateEta.isEmpty() ? QStringLiteral("working…") : rateEta);
+    } else {
+        r.bar->setRange(0, 100);
+        r.bar->setValue(percent);
+        r.bar->setFormat(rateEta.isEmpty() ? QStringLiteral("%1%").arg(percent)
+                                           : QStringLiteral("%1%  ·  %2").arg(percent).arg(rateEta));
+    }
+}
+
+// Swap a row from its progress bar to the installed version/sha/size line.
+void AetherDspWidget::setBnrRowDetail(int i, const QString& version,
+                                      const QString& sha256, qint64 bytes)
+{
+    if (i < 0 || i >= m_bnrAfxRows.size()) return;
+    BnrCompRow& r = m_bnrAfxRows[i];
+    if (r.bar) r.bar->hide();
+    if (r.size) r.size->setText(humanSize(bytes));
+    if (!r.detail) return;
+    const QString shortSha = sha256.left(16);
+    r.detail->setText(QStringLiteral("<b>%1</b>&nbsp;&nbsp;<tt>%2%3</tt>")
+                          .arg(version.toHtmlEscaped(), shortSha,
+                               sha256.size() > 16 ? QStringLiteral("…") : QString()));
+    if (!sha256.isEmpty())
+        r.detail->setToolTip(QStringLiteral("%1\nsha256: %2").arg(version, sha256));
+    r.detail->show();
+}
+
+void AetherDspWidget::clearBnrRows()
+{
+    for (BnrCompRow& r : m_bnrAfxRows)
+        if (r.row) r.row->deleteLater();
+    m_bnrAfxRows.clear();
 }
 
 // ── DFNR Tab ────────────────────────────────────────────────────────────────
