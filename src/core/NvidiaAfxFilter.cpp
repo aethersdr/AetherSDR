@@ -9,11 +9,55 @@
 #include <QStandardPaths>
 #include <QStringList>
 
-#include <dlfcn.h>
+#if defined(_WIN32)
+#  include <windows.h>
+#else
+#  include <dlfcn.h>
+#endif
 #include <cstring>
 #include <vector>
 
 namespace AetherSDR {
+
+// ─── Cross-platform dynamic-load primitives ──────────────────────────────────
+// Linux: dlopen/dlsym/dlclose. Windows: LoadLibrary/GetProcAddress/FreeLibrary.
+// Handles are stored as void* (an HMODULE is a pointer-width handle).
+namespace {
+
+#if defined(_WIN32)
+void* afxLoadLibrary(const QString& path)
+{
+    // LOAD_WITH_ALTERED_SEARCH_PATH makes the directory containing the loaded
+    // DLL the first place its own dependencies (CUDA/TensorRT siblings in the
+    // pack's bin dir) are resolved from — the Windows analogue of RPATH.
+    return ::LoadLibraryExW(reinterpret_cast<const wchar_t*>(path.utf16()),
+                            nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+}
+void* afxGetSymbol(void* h, const char* name)
+{
+    return reinterpret_cast<void*>(::GetProcAddress(static_cast<HMODULE>(h), name));
+}
+void afxCloseLibrary(void* h) { ::FreeLibrary(static_cast<HMODULE>(h)); }
+QString afxLoadError()
+{
+    const DWORD e = ::GetLastError();
+    return QStringLiteral("LoadLibrary error %1").arg(e);
+}
+#else
+void* afxLoadLibrary(const QString& path)
+{
+    return ::dlopen(path.toLocal8Bit().constData(), RTLD_NOW | RTLD_GLOBAL);
+}
+void* afxGetSymbol(void* h, const char* name) { return ::dlsym(h, name); }
+void afxCloseLibrary(void* h) { ::dlclose(h); }
+QString afxLoadError()
+{
+    const char* e = ::dlerror();
+    return QString::fromLocal8Bit(e ? e : "unknown");
+}
+#endif
+
+} // namespace
 
 // ─── Minimal NVIDIA AFX C API (dlopen'd — we do NOT vendor NVIDIA's header) ───
 // Signatures mirror nvAudioEffects.h. Status 0 == success.
@@ -125,10 +169,10 @@ void NvidiaAfxFilter::teardown()
         m_api->DestroyEffect(m_handle);
         m_handle = nullptr;
     }
-    // Close dlopen handles in reverse order. (CUDA libs are typically retained
+    // Close library handles in reverse order. (CUDA libs are typically retained
     // by the driver; closing is best-effort cleanup.)
     for (auto it = m_dlHandles.rbegin(); it != m_dlHandles.rend(); ++it) {
-        if (*it) ::dlclose(*it);
+        if (*it) afxCloseLibrary(*it);
     }
     m_dlHandles.clear();
     m_ready = false;
@@ -140,30 +184,45 @@ void NvidiaAfxFilter::teardown()
 // lib's symbols/soname visible to satisfy the next.
 bool NvidiaAfxFilter::loadRuntime(const QString& packDir)
 {
-    // Only dlopen the core lib. Its DT_RPATH ($ORIGIN/../../external/cuda/lib
-    // and $ORIGIN/../../nvafx/lib) lets the loader resolve the CUDA/TensorRT
-    // runtime and the core's own deps automatically — mirroring how the SDK's
-    // own sample links only against the core. The denoiser FEATURE lib is
-    // dlopen'd by the core (by unversioned soname); for it to be found, the
-    // cache layout places libnv_audiofx_denoiser.so* in nvafx/lib, which is on
-    // the core's RPATH. (Pre-loading the whole tree ourselves corrupts CUDA
-    // init, so we deliberately do not.)
+    // Load only the core library; let the OS loader resolve its CUDA/TensorRT
+    // deps and the denoiser FEATURE lib from the pack's runtime dir — mirroring
+    // how the SDK's own sample links only against the core. (Pre-loading the
+    // whole tree ourselves corrupts CUDA init, so we deliberately do not.)
+    //
+    //  • Linux: core is nvafx/lib/libnv_audiofx.so; its DT_RPATH
+    //    ($ORIGIN/../../external/cuda/lib, $ORIGIN/../../nvafx/lib) resolves the
+    //    CUDA/TRT runtime and the feature lib (libnv_audiofx_denoiser.so*).
+    //  • Windows: core is bin/NVAudioEffects.dll; the CUDA/TRT DLLs and the
+    //    feature DLL sit alongside it in bin/, and LOAD_WITH_ALTERED_SEARCH_PATH
+    //    makes that directory the head of the dependency search — the RPATH
+    //    analogue. We also pin it on the process default search dirs below.
+#if defined(_WIN32)
+    const QString coreLib =
+        QDir(packDir).filePath(QStringLiteral("bin/NVAudioEffects.dll"));
+    const QString coreName = QStringLiteral("NVAudioEffects.dll");
+    // Register the pack's bin dir on the default DLL search path so transitive
+    // loads (a CUDA DLL pulling in another) also resolve from the pack.
+    ::SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    const QString binDir = QDir::toNativeSeparators(QDir(packDir).filePath(QStringLiteral("bin")));
+    ::AddDllDirectory(reinterpret_cast<const wchar_t*>(binDir.utf16()));
+#else
     const QString coreLib =
         QDir(packDir).filePath(QStringLiteral("nvafx/lib/libnv_audiofx.so"));
+    const QString coreName = QStringLiteral("libnv_audiofx.so");
+#endif
     if (!QFile::exists(coreLib)) {
-        m_lastError = QStringLiteral("libnv_audiofx.so not found at %1").arg(coreLib);
+        m_lastError = QStringLiteral("%1 not found at %2").arg(coreName, coreLib);
         return false;
     }
 
-    void* core = ::dlopen(coreLib.toLocal8Bit().constData(), RTLD_NOW | RTLD_GLOBAL);
+    void* core = afxLoadLibrary(coreLib);
     if (!core) {
-        m_lastError = QStringLiteral("dlopen(libnv_audiofx.so) failed: %1")
-                          .arg(QString::fromLocal8Bit(::dlerror() ? ::dlerror() : "unknown"));
+        m_lastError = QStringLiteral("load(%1) failed: %2").arg(coreName, afxLoadError());
         return false;
     }
     m_dlHandles.push_back(core);
 
-    auto sym = [&](const char* n) { return ::dlsym(core, n); };
+    auto sym = [&](const char* n) { return afxGetSymbol(core, n); };
     // Optional: route AFX's own diagnostics to stderr for debugging.
     if (!qgetenv("AETHER_NVAFX_DEBUG").isEmpty()) {
         if (auto initLog = reinterpret_cast<fn_InitLogger>(sym("NvAFX_InitializeLogger")))

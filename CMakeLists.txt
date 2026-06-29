@@ -1596,12 +1596,16 @@ endif()
 # We only compile the wrapper (it uses its own minimal NvAFX_* declarations,
 # so no NVIDIA headers are vendored) and link the dynamic loader.
 if(ENABLE_NVIDIA_AFX)
-    if(UNIX AND NOT APPLE)
+    if((UNIX AND NOT APPLE) OR WIN32)
         target_compile_definitions(AetherSDR PRIVATE HAVE_NVIDIA_AFX)
-        target_link_libraries(AetherSDR PRIVATE ${CMAKE_DL_LIBS})
+        # Linux loads the AFX runtime via libdl; Windows uses the Win32
+        # LoadLibrary family from kernel32 (linked by default).
+        if(UNIX)
+            target_link_libraries(AetherSDR PRIVATE ${CMAKE_DL_LIBS})
+        endif()
         message(STATUS "NVIDIA AFX GPU denoiser enabled (runtime-loaded)")
     else()
-        message(STATUS "NVIDIA AFX GPU denoiser requested but only supported on Linux — skipping")
+        message(STATUS "NVIDIA AFX GPU denoiser requested but only supported on Linux/Windows — skipping")
     endif()
 endif()
 
@@ -1818,7 +1822,7 @@ add_test(NAME wfm_dsp_test COMMAND wfm_dsp_test)
 
 # Hardware-gated functional test for the optional NVIDIA AFX GPU denoiser.
 # Built only when the feature is enabled; SKIPs at runtime without a pack/GPU.
-if(ENABLE_NVIDIA_AFX AND UNIX AND NOT APPLE)
+if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32))
     add_executable(nvidia_afx_filter_test
         tests/nvidia_afx_filter_test.cpp
         src/core/NvidiaAfxFilter.cpp
@@ -1829,7 +1833,10 @@ if(ENABLE_NVIDIA_AFX AND UNIX AND NOT APPLE)
         src
         ${CMAKE_SOURCE_DIR}/third_party/r8brain
     )
-    target_link_libraries(nvidia_afx_filter_test PRIVATE Qt6::Core ${CMAKE_DL_LIBS})
+    target_link_libraries(nvidia_afx_filter_test PRIVATE Qt6::Core)
+    if(UNIX)
+        target_link_libraries(nvidia_afx_filter_test PRIVATE ${CMAKE_DL_LIBS})
+    endif()
     add_test(NAME nvidia_afx_filter_test COMMAND nvidia_afx_filter_test)
 endif()
 

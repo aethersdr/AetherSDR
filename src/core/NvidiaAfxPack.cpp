@@ -18,6 +18,27 @@
 
 namespace AetherSDR {
 
+// ─── Platform layout ─────────────────────────────────────────────────────────
+// Linux and Windows ship different AFX runtimes and pack layouts:
+//   • Linux: core nvafx/lib/libnv_audiofx.so + a split download (CUDA from PyPI
+//     wheels, AFX/TRT/model from our .tar.zst), feature lib symlinked onto RPATH.
+//   • Windows: core bin/NVAudioEffects.dll. The Windows AFX-bits archive is a
+//     SELF-CONTAINED .zip (AFX + CUDA + TensorRT DLLs all co-located in bin/,
+//     model under features/) — Windows resolves sibling DLLs by directory, so no
+//     wheel-flattening, no zstd tooling, and no symlink step are needed.
+namespace {
+#if defined(_WIN32)
+constexpr char kCoreRelPath[] = "bin/NVAudioEffects.dll";
+constexpr char kPlatformTag[] = "windows-x86_64";
+// Pinned sha256 of afx-bits-2.1.0-windows-x86_64-<arch>.zip — filled in when the
+// Windows pack asset is published.
+constexpr char kWinTarballSha[] = "";
+#else
+constexpr char kCoreRelPath[] = "nvafx/lib/libnv_audiofx.so";
+constexpr char kPlatformTag[] = "linux-x86_64";
+#endif
+} // namespace
+
 // ─── Static helpers ──────────────────────────────────────────────────────────
 QString NvidiaAfxPack::detectArch()
 {
@@ -48,7 +69,7 @@ QString NvidiaAfxPack::cacheRoot()
 QString NvidiaAfxPack::installedPackDir()
 {
     const QString dir = QDir(cacheRoot()).filePath(QStringLiteral("current"));
-    if (!QFile::exists(QDir(dir).filePath(QStringLiteral("nvafx/lib/libnv_audiofx.so"))))
+    if (!QFile::exists(QDir(dir).filePath(QString::fromLatin1(kCoreRelPath))))
         return {};
     const QDir models(QDir(dir).filePath(QStringLiteral("features/denoiser/models")));
     return models.entryList({QStringLiteral("sm_*")}, QDir::Dirs | QDir::NoDotAndDotDot).isEmpty()
@@ -82,11 +103,25 @@ bool NvidiaAfxPack::removeInstalled()
 // against (CUDA 12.8.x / TensorRT 10.9.0.34).
 QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) const
 {
-    // The AFX-bits tarball is per-arch (it carries the sm_XX denoiser model).
-    // TODO: publish these as GitHub Release assets and pin the sha256.
+    // The AFX-bits archive is per-arch (it carries the sm_XX denoiser model).
     const QString afxUrl =
         QStringLiteral("https://github.com/aethersdr/AetherSDR/releases/download/"
-                       "afx-bits-2.1.0/afx-bits-2.1.0-linux-x86_64-%1.tar.zst").arg(arch);
+                       "afx-bits-2.1.0/afx-bits-2.1.0-%1-%2.%3")
+            .arg(QString::fromLatin1(kPlatformTag), arch,
+#if defined(_WIN32)
+                 QStringLiteral("zip"));
+#else
+                 QStringLiteral("tar.zst"));
+#endif
+
+#if defined(_WIN32)
+    // Windows: one self-contained .zip — AFX + CUDA + TensorRT DLLs + model.
+    return {
+        { QStringLiteral("AFX runtime + CUDA + TensorRT + model"), {}, {}, afxUrl,
+          QString::fromLatin1(kWinTarballSha), Kind::Tarball },
+    };
+#else
+    // Linux: AFX/TRT/model from our tarball; CUDA libs from NVIDIA's PyPI wheels.
     return {
         { QStringLiteral("AFX runtime + TensorRT + model"), {}, {}, afxUrl,
           QStringLiteral("0bfe85b0faeb322958303c145996350d0fea8a203899f9215fc0d3a341395b67"),
@@ -96,6 +131,7 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
         { QStringLiteral("cuFFT"),        QStringLiteral("nvidia-cufft-cu12"),        QStringLiteral("11.3.3.83"), {}, {}, Kind::Wheel },
         { QStringLiteral("nvRTC"),        QStringLiteral("nvidia-cuda-nvrtc-cu12"),   QStringLiteral("12.8.93"), {}, {}, Kind::Wheel },
     };
+#endif
 }
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -140,7 +176,11 @@ void NvidiaAfxPack::install()
     QDir().mkpath(cacheRoot());
     m_staging = QDir(cacheRoot()).filePath(QStringLiteral(".staging"));
     QDir(m_staging).removeRecursively();
+    QDir().mkpath(m_staging);
+#if !defined(_WIN32)
+    // Linux flattens CUDA wheel .so files here; Windows DLLs ride in the zip.
     QDir().mkpath(QDir(m_staging).filePath(QStringLiteral("external/cuda/lib")));
+#endif
     m_queue = manifest(m_arch);
     m_idx = 0;
     startNext();
@@ -236,10 +276,17 @@ void NvidiaAfxPack::extractInto(const QString& archive, Kind kind)
                 {QStringLiteral("-o"), QStringLiteral("-j"), QStringLiteral("-d"), libDir,
                  archive, QStringLiteral("*.so*")});
     } else {
+#if defined(_WIN32)
+        // Windows AFX-bits is a self-contained .zip laid out at root (bin/,
+        // features/). bsdtar (tar.exe, shipped with Windows 10+) reads zip.
+        p.start(QStringLiteral("tar"),
+                {QStringLiteral("-xf"), archive, QStringLiteral("-C"), m_staging});
+#else
         // Our AFX-bits tarball is laid out at root (nvafx/, features/, external/).
         p.start(QStringLiteral("tar"),
                 {QStringLiteral("--zstd"), QStringLiteral("-xf"), archive,
                  QStringLiteral("-C"), m_staging});
+#endif
     }
     if (!p.waitForFinished(600000) || p.exitCode() != 0)
         fail(QStringLiteral("extract failed: %1").arg(QString::fromLocal8Bit(p.readAllStandardError()).trimmed()));
@@ -250,9 +297,9 @@ void NvidiaAfxPack::assembleAndCommit()
 {
     const QString root = cacheRoot();
     QString packRoot = m_staging;
-    if (!QFile::exists(QDir(packRoot).filePath(QStringLiteral("nvafx/lib/libnv_audiofx.so")))) {
-        fail(QStringLiteral("assembled pack missing nvafx/lib/libnv_audiofx.so "
-                            "(AFX-bits tarball not published yet?)"));
+    if (!QFile::exists(QDir(packRoot).filePath(QString::fromLatin1(kCoreRelPath)))) {
+        fail(QStringLiteral("assembled pack missing %1 (AFX-bits archive not published yet?)")
+                 .arg(QString::fromLatin1(kCoreRelPath)));
         return;
     }
     const QString current = QDir(root).filePath(QStringLiteral("current"));
@@ -262,6 +309,10 @@ void NvidiaAfxPack::assembleAndCommit()
     if (!QDir().rename(packRoot, current)) { fail(QStringLiteral("could not install into %1").arg(current)); return; }
     m_staging.clear();
 
+#if !defined(_WIN32)
+    // Linux: symlink the denoiser feature lib onto the core's RPATH dir so the
+    // core finds it by unversioned soname. (Windows co-locates every DLL in
+    // bin/, which the loader already searches — nothing to link.)
     const QString featDir  = QDir(current).filePath(QStringLiteral("features/denoiser/lib"));
     const QString nvafxDir = QDir(current).filePath(QStringLiteral("nvafx/lib"));
     for (const QFileInfo& fi : QDir(featDir).entryInfoList(
@@ -270,6 +321,7 @@ void NvidiaAfxPack::assembleAndCommit()
         QFile::remove(link);
         QFile::link(fi.absoluteFilePath(), link);
     }
+#endif
 
     m_busy = false;
     if (installedPackDir().isEmpty()) { emit finished(false, QStringLiteral("install verification failed")); return; }
@@ -291,11 +343,11 @@ void NvidiaAfxPack::installFromFile(const QString& archivePath)
     extractInto(archivePath, Kind::Tarball);
     if (!m_busy) return;  // extractInto called fail()
     // A pre-assembled pack may have a single top-level dir — descend to it.
-    if (!QFile::exists(QDir(m_staging).filePath(QStringLiteral("nvafx/lib")))) {
+    if (!QFile::exists(QDir(m_staging).filePath(QString::fromLatin1(kCoreRelPath)))) {
         const QStringList subs = QDir(m_staging).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
         for (const QString& s : subs) {
             const QString cand = QDir(m_staging).filePath(s);
-            if (QFile::exists(QDir(cand).filePath(QStringLiteral("nvafx/lib")))) { m_staging = cand; break; }
+            if (QFile::exists(QDir(cand).filePath(QString::fromLatin1(kCoreRelPath)))) { m_staging = cand; break; }
         }
     }
     assembleAndCommit();

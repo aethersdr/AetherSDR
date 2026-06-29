@@ -29,9 +29,11 @@ class Resampler;
 
 class NvidiaAfxFilter {
 public:
-    // packDir is the root of the AFX pack (contains nvafx/lib, external/cuda/lib,
-    // features/denoiser/{lib,models/sm_XX}). If empty, the pack is resolved from
-    // $AETHER_NVAFX_DIR then the app data cache dir.
+    // packDir is the root of the AFX pack. Linux layout: nvafx/lib,
+    // external/cuda/lib, features/denoiser/{lib,models/sm_XX}. Windows layout:
+    // bin/ (NVAudioEffects.dll + sibling CUDA/TensorRT/feature DLLs) and the
+    // same features/denoiser/models/sm_XX model tree. If empty, the pack is
+    // resolved from $AETHER_NVAFX_DIR then the app data cache dir.
     explicit NvidiaAfxFilter(const QString& packDir = QString());
     ~NvidiaAfxFilter();
 
