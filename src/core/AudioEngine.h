@@ -735,7 +735,7 @@ private:
     QPointer<QIODevice> m_audioDevice;   // sink-owned device, may vanish on hot-unplug
 
     // Dedicated low-latency sink for the local CW sidetone — kept separate
-    // from the RX sink so the RX path keeps its 200 ms jitter cushion.
+    // from the RX sink so the RX path keeps its 100 ms jitter cushion.
     // Backend chosen at start time: PortAudio when HAVE_PORTAUDIO and not
     // disabled by AppSettings["CwSidetoneBackend"]=="QAudioSink"; QAudioSink
     // (push mode, 2 ms timer, 50 ms buffer) otherwise.  See CwSidetoneSinkBackend.h.
@@ -804,7 +804,7 @@ private:
     std::atomic<bool>  m_rxBoost{false};  // 50% software gain boost (#1445)
     std::atomic<float> m_rxOutputTrimDb{0.0f};  // ±12 dB linear trim, post-boost
     std::atomic<int>   m_rxPan{50};       // 0=left, 50=centre, 100=right (#1460)
-    std::atomic<int>   m_rxBufferCapMs{200}; // RX buffer cap in ms (#1505)
+    std::atomic<int>   m_rxBufferCapMs{100}; // RX buffer cap in ms (#1505; default lowered 200->100 for #3193)
     std::atomic<bool>  m_muted{false};
     // RX sink device rate (negotiated via AudioFormatNegotiator). Audio is
     // resampled from the 24k canonical rate up to this when they differ (#3306).

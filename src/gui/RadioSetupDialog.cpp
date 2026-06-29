@@ -2414,7 +2414,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         auto* bufLabel = new QLabel("Audio Buffer:");
         bufLabel->setStyleSheet(kLabelStyle);
         bufLabel->setFixedWidth(90);
-        int bufMs = AppSettings::instance().value("AudioBufferMs", "200").toInt();
+        int bufMs = AppSettings::instance().value("AudioBufferMs", "100").toInt();
         auto* bufEdit = new QLineEdit(QString::number(bufMs));
         bufEdit->setStyleSheet(kEditStyle);
         bufEdit->setFixedWidth(50);

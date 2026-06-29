@@ -1170,7 +1170,7 @@ AudioEngine::AudioEngine(QObject* parent)
 
     // RX pacing timer -- processes source queues through their RX DSP paths
     // and drains speaker-ready output into QAudioSink at regular intervals.
-    // Includes latency management: caps buffer at ~200ms to prevent unbounded
+    // Includes latency management: caps buffer at ~100ms to prevent unbounded
     // growth when network packets arrive in bursts (common on Windows WASAPI
     // with virtual audio routers like Voicemeeter).
     m_rxTimer = new QTimer(this);
@@ -1179,7 +1179,7 @@ AudioEngine::AudioEngine(QObject* parent)
     connect(m_rxTimer, &QTimer::timeout, this, [this]() {
         if (!m_audioSink || !m_audioDevice || !m_audioDevice->isOpen() || m_audioSink->state() == QAudio::StoppedState) return;
 
-        // Cap buffer to bound latency. Default 200ms, user-adjustable for
+        // Cap buffer to bound latency. Default 100ms, user-adjustable for
         // high-jitter connections (VPN, SmartLink) where drops cause choppy audio.
         const int sampleRate = m_rxOutputRate.load();
         const bool kiwiAudio = kiwiSdrAudioActive();
@@ -2264,6 +2264,18 @@ bool AudioEngine::startRxStream()
         noteRxAttempt(candidate);
         auto* sink = new QAudioSink(dev, candidate, this);
         sink->setVolume(m_muted.load() ? 0.0f : m_rxVolume.load());
+#ifdef Q_OS_WIN
+        // Constrain the WASAPI shared-mode ring buffer (#3193). Without an explicit
+        // size, class-compliant USB interfaces (Scarlett, Focusrite, etc.) inherit
+        // their driver's default ring of 100-300 ms, which stacks on top of the
+        // app-side m_rxBufferCapMs cap and produces 300-500 ms+ speaker latency.
+        // A 50 ms device buffer is comfortably fed by the 10 ms RX drain timer and
+        // mirrors the explicit buffers already used for the sidetone/Quindar sinks.
+        constexpr int kWinRxDeviceBufferMs = 50;
+        const qint64 winRxBufBytes = candidate.bytesForDuration(kWinRxDeviceBufferMs * 1000LL);
+        if (winRxBufBytes > 0)
+            sink->setBufferSize(static_cast<qsizetype>(winRxBufBytes));
+#endif
         QIODevice* io = sink->start();   // push-mode
         if (io) {
             m_audioSink = sink;

@@ -1009,7 +1009,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_audio->setRxOutputTrimDb(
         AppSettings::instance().value("RxOutputTrimDb", "0.0").toFloat());
     m_audio->setRxBufferCapMs(
-        AppSettings::instance().value("AudioBufferMs", "200").toInt());
+        AppSettings::instance().value("AudioBufferMs", "100").toInt());
     m_audio->moveToThread(m_audioThread);
     m_audioThread->start();
     syncReceivePresentationDelaysToAudioEngine();
