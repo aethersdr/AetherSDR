@@ -8,6 +8,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added
+
+- **BNR — one button, two NVIDIA backends.** The AetherDSP **BNR** module now
+  selects between **Local (AFX)** — the Maxine denoiser running in-process on a
+  local NVIDIA RTX/GeForce GPU — and **Service (NIM)** — a gRPC client to a
+  Maxine BNR microservice that can run on this *or another* machine, so users
+  with no local NVIDIA GPU can still use BNR. The backend selector, an
+  intensity slider, connection status, and a one-time **Download** for the AFX
+  runtime all live in the panel below the button row. See
+  [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md).
+- **AFX download-on-demand (`NvidiaAfxPack`).** The Local backend fetches its
+  ~2 GB GPU runtime on first use and caches it — CUDA libs come from NVIDIA's
+  PyPI wheels (pinned, sha256-verified), and the AFX/TensorRT/model bits from a
+  small sha-pinned release asset — so the shipped app carries none of it.
+
+### Changed
+
+- **NIM BNR is always compiled** (was gated behind `-DENABLE_BNR`). grpc/protobuf
+  are resolved cross-platform via CMake config-mode with a pkg-config fallback
+  (vcpkg on Windows, Homebrew on macOS, system grpc on Debian/Ubuntu). BNR is
+  also auto-disabled in digital/CW modes and accents the ADSP launcher like the
+  other client-NR engines.
+
 ## [v26.6.5] — 2026-06-28
 
 ### KiwiSDR receive sync + SmartMTR TX meters + Profile Switcher applet + agent automation bridge expansion

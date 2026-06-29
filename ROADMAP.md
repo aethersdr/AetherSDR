@@ -11,6 +11,11 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### In flight
 
+- **NVIDIA BNR — local + remote backends** — one BNR button selecting an
+  in-process Maxine denoiser on a local NVIDIA GPU (AFX, download-on-demand) or
+  a gRPC NIM service that can live on another machine. NIM is always compiled;
+  remaining: publish the AFX-bits release assets and add other-arch models.
+  ([`docs/nvidia-bnr.md`](docs/nvidia-bnr.md))
 - **Stream Deck plugin** — ship one Elgato-SDK plugin distributed via
   GitHub Releases (avoid Marketplace DRM); works on Windows/macOS plus
   Linux via OpenDeck.
