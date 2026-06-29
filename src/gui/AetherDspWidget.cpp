@@ -1172,17 +1172,20 @@ void AetherDspWidget::rebuildBnrRows(const QStringList& names)
         r.bar = new QProgressBar;
         r.bar->setTextVisible(false);   // chunk fills flush-left; text is overlaid
         r.bar->setFixedHeight(16);
+        // Dimmer accent for the fill so the overlaid text keeps contrast over
+        // both the chunk and the dark groove (the bright accent washed it out).
         AetherSDR::ThemeManager::instance().applyStyleSheet(r.bar,
             "QProgressBar { background: {{color.background.0}};"
             " border: 1px solid {{color.border.strong}}; border-radius: 3px; }"
-            "QProgressBar::chunk { background: {{color.accent}}; border-radius: 2px; }");
+            "QProgressBar::chunk { background: {{color.accent.dim}}; border-radius: 2px; }");
         r.bar->setRange(0, 100);
         r.bar->setValue(0);
         // Status text as a transparent overlay so its 10px left pad doesn't inset
         // the chunk (QProgressBar padding would push the fill in too).
         r.barText = new QLabel(QStringLiteral("queued"), r.bar);
-        r.barText->setStyleSheet(QStringLiteral(
-            "QLabel { padding-left: 10px; background: transparent; }"));
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.barText,
+            "QLabel { padding-left: 10px; background: transparent;"
+            " color: {{color.text.primary}}; }");
         auto* bl = new QHBoxLayout(r.bar);
         bl->setContentsMargins(0, 0, 0, 0);
         bl->addWidget(r.barText);
