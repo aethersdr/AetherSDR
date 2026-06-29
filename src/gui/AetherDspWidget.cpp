@@ -1100,6 +1100,9 @@ QWidget* AetherDspWidget::buildBnrPage()
         updateBnrStatus();
     });
     connect(m_bnrAfxDownloadBtn, &QPushButton::clicked, this, [this]() {
+        // Downloading fetches NVIDIA-licensed bits, so it needs the same
+        // one-time acceptance gate as enabling BNR (#bnr-license).
+        if (!ensureBnrLicenseAccepted()) return;
         if (m_bnrAfxPack) m_bnrAfxPack->install();   // CUDA from PyPI + hosted AFX bits
     });
 #else
