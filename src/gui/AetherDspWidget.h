@@ -10,6 +10,7 @@ class QRadioButton;
 class QCheckBox;
 class QButtonGroup;
 class QStackedWidget;
+class QLineEdit;
 
 namespace AetherSDR {
 
@@ -103,6 +104,10 @@ private:
     // and on every *EnabledChanged signal.
     void syncDspSelectorFromEngine();
 
+    // BNR has two backends behind one button: local AFX vs NIM service.
+    bool bnrBackendIsAfx() const;
+    void updateBnrStatus();
+
     AudioEngine*    m_audio;
     QStackedWidget* m_dspStack{nullptr};
     std::array<QPushButton*, NumDsps> m_dspBtns{};
@@ -142,6 +147,17 @@ private:
     QLabel*       m_dfnrAttenLabel{nullptr};
     QSlider*      m_dfnrBetaSlider{nullptr};
     QLabel*       m_dfnrBetaLabel{nullptr};
+
+    // BNR controls — one button, two backends (AFX local / NIM service)
+    QButtonGroup*   m_bnrBackendGroup{nullptr};
+    QStackedWidget* m_bnrBackendStack{nullptr};
+    QLabel*         m_bnrAfxStatus{nullptr};
+    QSlider*        m_bnrAfxIntensitySlider{nullptr};
+    QLabel*         m_bnrAfxIntensityLabel{nullptr};
+    QLineEdit*      m_bnrNimAddress{nullptr};
+    QLabel*         m_bnrNimStatus{nullptr};
+    QSlider*        m_bnrNimIntensitySlider{nullptr};
+    QLabel*         m_bnrNimIntensityLabel{nullptr};
 };
 
 } // namespace AetherSDR
