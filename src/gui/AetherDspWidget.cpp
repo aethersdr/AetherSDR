@@ -1063,27 +1063,28 @@ QWidget* AetherDspWidget::buildBnrPage()
     g->setContentsMargins(0, 12, 10, 0);
     g->setColumnStretch(1, 1);
 
-    // Intensity (row 0 — above the status/download row)
-    g->addWidget(new QLabel("Intensity"), 0, 0);
+    // Status (row 0 — above the intensity line)
+    g->addWidget(new QLabel("Status"), 0, 0);
+    m_bnrAfxStatus = new QLabel;
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrAfxStatus, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    g->addWidget(m_bnrAfxStatus, 0, 1);
+
+    // Intensity (row 1)
+    g->addWidget(new QLabel("Intensity"), 1, 0);
     m_bnrAfxIntensitySlider = new QSlider(Qt::Horizontal);
     m_bnrAfxIntensitySlider->setRange(0, 100);
     m_bnrAfxIntensitySlider->setValue(static_cast<int>(s.value("NvAfxIntensity", "1.0").toFloat() * 100));
     applyPrimarySliderStyle(m_bnrAfxIntensitySlider);
     m_bnrAfxIntensitySlider->setToolTip("Denoising strength (0 = passthrough, 100 = max).");
-    g->addWidget(m_bnrAfxIntensitySlider, 0, 1);
+    g->addWidget(m_bnrAfxIntensitySlider, 1, 1);
     m_bnrAfxIntensityLabel = new QLabel(QString::number(m_bnrAfxIntensitySlider->value()));
     m_bnrAfxIntensityLabel->setFixedWidth(40);
-    g->addWidget(m_bnrAfxIntensityLabel, 0, 2);
+    g->addWidget(m_bnrAfxIntensityLabel, 1, 2);
 
-    // Status + one-time Download (row 1)
-    g->addWidget(new QLabel("Status"), 1, 0);
-    m_bnrAfxStatus = new QLabel;
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrAfxStatus, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-    g->addWidget(m_bnrAfxStatus, 1, 1);
+    // Download button — created here, placed at the bottom-left of the page below.
     m_bnrAfxDownloadBtn = new QPushButton("Download");
     m_bnrAfxDownloadBtn->setToolTip("Download the NVIDIA AFX runtime + denoiser model "
                                     "for this GPU into the app's cache (one-time).");
-    g->addWidget(m_bnrAfxDownloadBtn, 1, 2);
     connect(m_bnrAfxIntensitySlider, &QSlider::valueChanged, this, [this](int v) {
         m_bnrAfxIntensityLabel->setText(QString::number(v));
         const float r = v / 100.0f;
@@ -1108,6 +1109,13 @@ QWidget* AetherDspWidget::buildBnrPage()
     vbox->addWidget(m_bnrAfxList);
 
     vbox->addStretch();
+
+    // Download / Resume / Update button, pinned to the bottom-left.
+    auto* dlRow = new QHBoxLayout;
+    dlRow->setContentsMargins(0, 8, 0, 0);
+    dlRow->addWidget(m_bnrAfxDownloadBtn);
+    dlRow->addStretch(1);
+    vbox->addLayout(dlRow);
 
 #ifdef HAVE_NVIDIA_AFX
     m_bnrAfxPack = new NvidiaAfxPack(this);
