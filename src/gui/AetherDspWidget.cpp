@@ -18,11 +18,6 @@
 #include <QProgressBar>
 #ifdef HAVE_NVIDIA_AFX
 #include "core/NvidiaAfxPack.h"
-// AFX pack (AFX runtime + CUDA/TRT + per-GPU denoiser model) download source.
-// TODO: publish the per-arch pack as a GitHub Release asset and point here.
-static constexpr const char* kAfxPackUrl =
-    "https://github.com/aethersdr/AetherSDR/releases/download/afx-pack-2.1.0/"
-    "nvidia-afx-2.1.0-linux-x86_64-sm89.tar.zst";
 #endif
 #include <QCheckBox>
 #include <QLabel>
@@ -1069,7 +1064,7 @@ QWidget* AetherDspWidget::buildBnrPage()
             updateBnrStatus();
         });
         connect(m_bnrAfxDownloadBtn, &QPushButton::clicked, this, [this]() {
-            if (m_bnrAfxPack) m_bnrAfxPack->install(QString::fromLatin1(kAfxPackUrl));
+            if (m_bnrAfxPack) m_bnrAfxPack->install();   // v2: CUDA from PyPI + hosted AFX bits
         });
 #else
         m_bnrAfxDownloadBtn->setEnabled(false);

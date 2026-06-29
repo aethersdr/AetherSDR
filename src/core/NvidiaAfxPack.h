@@ -4,60 +4,83 @@
 
 #include <QObject>
 #include <QString>
+#include <QList>
 
 class QNetworkAccessManager;
 class QNetworkReply;
 
 namespace AetherSDR {
 
-// Download-on-demand cache for the NVIDIA AFX denoiser "pack" (the AFX runtime
-// libs + CUDA/TensorRT + the per-GPU denoiser model). Lives under the app data
-// dir so the in-process NvidiaAfxFilter can dlopen it with no env var.
+// Download-on-demand cache for the NVIDIA AFX denoiser "pack" (AFX runtime libs
+// + CUDA/TensorRT + the per-GPU denoiser model). Lives under the app data dir so
+// the in-process NvidiaAfxFilter can dlopen it with no env var.
 //
-// install() accepts an http(s) URL (downloaded) or a local archive path / file://
-// URL (imported — for offline/air-gapped use). The archive is a .tar.zst laid
-// out as the AFX SDK root (nvafx/, external/cuda/, features/denoiser/). After
-// extraction the denoiser feature lib is symlinked into nvafx/lib so the core's
-// $ORIGIN RPATH can find it. Install is atomic: staged, then renamed into place.
+// v2 "split" sourcing — we host almost nothing:
+//   * CUDA libs (cublas/cudart/cufft/nvrtc) come straight from NVIDIA's PyPI
+//     wheels, anonymously. We pin (package, version); the wheel URL + sha256 are
+//     resolved from the PyPI JSON API at runtime, so we get integrity for free
+//     and don't hardcode volatile CDN paths.
+//   * The AFX proprietary libs + TensorRT runtime libs + the denoiser model ship
+//     as one small .tar.zst we host (NVIDIA redistributables we're permitted to
+//     redistribute as part of the app).
+// Components are fetched sequentially, extracted into a staging pack, then the
+// pack is atomically swapped into place and the feature lib is symlinked onto
+// the core's RPATH.
 //
-// All network I/O is async (QNetworkAccessManager); extraction runs via tar in
-// a QProcess. Progress + completion are reported by signals on the GUI thread.
+// install() runs the full v2 fetch; installFromFile() imports a single
+// pre-assembled .tar.zst (offline / air-gapped). Network I/O is async; archive
+// extraction runs via unzip/tar in a QProcess.
 class NvidiaAfxPack : public QObject {
     Q_OBJECT
 public:
     explicit NvidiaAfxPack(QObject* parent = nullptr);
     ~NvidiaAfxPack() override;
 
-    // GPU arch tag for this machine, e.g. "sm_89". Empty if no NVIDIA GPU found.
-    static QString detectArch();
-    // Cache root: <AppLocalData>/nvidia-afx
-    static QString cacheRoot();
-    // The active pack dir (cacheRoot/current) when a usable pack is present.
-    static QString installedPackDir();
+    static QString detectArch();          // "sm_89", or empty if no NVIDIA GPU
+    static QString cacheRoot();           // <AppLocalData>/nvidia-afx
+    static QString installedPackDir();    // cacheRoot/current if usable, else empty
     static bool isInstalled();
+    static bool removeInstalled();
 
-    // One-line status for the panel, e.g. "Installed (sm_89)" / "Not installed".
     QString statusText() const;
-
     bool busy() const { return m_busy; }
 
-    // Download (http/https) or import (local path / file://) + assemble the pack.
-    void install(const QString& sourceUrlOrPath);
+    void install();                       // v2 multi-source fetch + assemble
+    void installFromFile(const QString& archivePath);  // offline single-tarball
     void cancel();
-    // Remove the installed pack (frees disk; next enable needs a re-download).
-    static bool removeInstalled();
 
 signals:
     void progress(int percent, const QString& status);  // percent <0 = indeterminate
     void finished(bool ok, const QString& message);
 
 private:
-    void importArchive(const QString& archivePath);  // extract + assemble + commit
+    enum class Kind { Wheel, Tarball };
+    struct Component {
+        QString name;       // display name
+        QString pypiPkg;    // for Wheel: PyPI package (url+sha resolved at runtime)
+        QString pypiVer;    // for Wheel: pinned version
+        QString url;        // for Tarball: direct URL (our host)
+        QString sha256;     // for Tarball: pinned sha (Wheel sha comes from PyPI)
+        Kind kind;
+    };
+    QList<Component> manifest(const QString& arch) const;
+
+    void startNext();                                     // process m_queue[m_idx]
+    void resolveWheelUrl(const Component& c);             // PyPI JSON -> url+sha
+    void downloadTo(const QUrl& url, const QString& sha256,
+                    const QString& dest, const QString& label);
+    void extractInto(const QString& archive, Kind kind); // unzip *.so* / tar zst
+    void assembleAndCommit();                             // symlink + atomic swap
     void fail(const QString& msg);
+    void emitOverall(int compPct, const QString& label);
 
     QNetworkAccessManager* m_nam{nullptr};
     QNetworkReply* m_reply{nullptr};
-    QString m_tmpArchive;   // downloaded archive awaiting extraction
+    QList<Component> m_queue;
+    int m_idx{0};
+    QString m_arch;
+    QString m_staging;       // staging pack root being assembled
+    QString m_tmpFile;       // current download temp
     bool m_busy{false};
     bool m_cancelled{false};
 };

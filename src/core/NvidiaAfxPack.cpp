@@ -2,9 +2,13 @@
 
 #include "NvidiaAfxPack.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QStandardPaths>
 #include <QNetworkAccessManager>
@@ -17,21 +21,17 @@ namespace AetherSDR {
 // ─── Static helpers ──────────────────────────────────────────────────────────
 QString NvidiaAfxPack::detectArch()
 {
-    // Query the NVIDIA driver for the GPU compute capability, e.g. "8.9" -> sm_89.
     QProcess p;
     p.start(QStringLiteral("nvidia-smi"),
-            {QStringLiteral("--query-gpu=compute_cap"),
-             QStringLiteral("--format=csv,noheader")});
+            {QStringLiteral("--query-gpu=compute_cap"), QStringLiteral("--format=csv,noheader")});
     if (!p.waitForFinished(4000) || p.exitStatus() != QProcess::NormalExit)
         return {};
-    const QString out = QString::fromLocal8Bit(p.readAllStandardOutput()).trimmed();
-    // May list several GPUs; take the first supported (Turing+ = >= 7.5).
+    const QString out = QString::fromLocal8Bit(p.readAllStandardOutput());
     for (const QString& line : out.split('\n', Qt::SkipEmptyParts)) {
-        const QString cc = line.trimmed();           // "8.9"
-        const QString digits = QString(cc).remove('.'); // "89"
+        const QString digits = line.trimmed().remove('.');   // "8.9" -> "89"
         bool ok = false;
         const int v = digits.toInt(&ok);
-        if (ok && v >= 75)
+        if (ok && v >= 75)                                    // Turing+
             return QStringLiteral("sm_%1").arg(digits);
     }
     return {};
@@ -48,42 +48,52 @@ QString NvidiaAfxPack::cacheRoot()
 QString NvidiaAfxPack::installedPackDir()
 {
     const QString dir = QDir(cacheRoot()).filePath(QStringLiteral("current"));
-    // A usable pack has the AFX core lib and at least one denoiser model.
     if (!QFile::exists(QDir(dir).filePath(QStringLiteral("nvafx/lib/libnv_audiofx.so"))))
         return {};
     const QDir models(QDir(dir).filePath(QStringLiteral("features/denoiser/models")));
-    const QStringList sm = models.entryList({QStringLiteral("sm_*")},
-                                            QDir::Dirs | QDir::NoDotAndDotDot);
-    return sm.isEmpty() ? QString() : dir;
+    return models.entryList({QStringLiteral("sm_*")}, QDir::Dirs | QDir::NoDotAndDotDot).isEmpty()
+               ? QString() : dir;
 }
 
-bool NvidiaAfxPack::isInstalled()
-{
-    return !installedPackDir().isEmpty();
-}
+bool NvidiaAfxPack::isInstalled() { return !installedPackDir().isEmpty(); }
 
 QString NvidiaAfxPack::statusText() const
 {
-    if (m_busy)
-        return QStringLiteral("Working…");
+    if (m_busy) return QStringLiteral("Working…");
     const QString dir = installedPackDir();
-    if (dir.isEmpty())
-        return QStringLiteral("Not installed");
-    // Report the installed arch from the model dir name.
+    if (dir.isEmpty()) return QStringLiteral("Not installed");
     const QDir models(QDir(dir).filePath(QStringLiteral("features/denoiser/models")));
-    const QStringList sm = models.entryList({QStringLiteral("sm_*")},
-                                            QDir::Dirs | QDir::NoDotAndDotDot);
-    return sm.isEmpty() ? QStringLiteral("Installed")
-                        : QStringLiteral("Installed (%1)").arg(sm.first());
+    const QStringList sm = models.entryList({QStringLiteral("sm_*")}, QDir::Dirs | QDir::NoDotAndDotDot);
+    return sm.isEmpty() ? QStringLiteral("Installed") : QStringLiteral("Installed (%1)").arg(sm.first());
 }
 
 bool NvidiaAfxPack::removeInstalled()
 {
     const QString cur = QDir(cacheRoot()).filePath(QStringLiteral("current"));
     QFileInfo fi(cur);
-    if (fi.isSymLink())
-        return QFile::remove(cur);     // dev symlink — don't nuke the target
+    if (fi.isSymLink()) return QFile::remove(cur);
     return fi.exists() ? QDir(cur).removeRecursively() : true;
+}
+
+// ─── Manifest (pinned) ───────────────────────────────────────────────────────
+// CUDA libs from NVIDIA's PyPI wheels (url+sha resolved at runtime). The AFX
+// proprietary libs + TensorRT runtime libs + the per-arch denoiser model ship
+// in one small .tar.zst we host. Versions match what libnv_audiofx was built
+// against (CUDA 12.8.x / TensorRT 10.9.0.34).
+QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) const
+{
+    // The AFX-bits tarball is per-arch (it carries the sm_XX denoiser model).
+    // TODO: publish these as GitHub Release assets and pin the sha256.
+    const QString afxUrl =
+        QStringLiteral("https://github.com/aethersdr/AetherSDR/releases/download/"
+                       "afx-bits-2.1.0/afx-bits-2.1.0-linux-x86_64-%1.tar.zst").arg(arch);
+    return {
+        { QStringLiteral("AFX runtime + TensorRT + model"), {}, {}, afxUrl, {}, Kind::Tarball },
+        { QStringLiteral("CUDA runtime"), QStringLiteral("nvidia-cuda-runtime-cu12"), QStringLiteral("12.8.90"), {}, {}, Kind::Wheel },
+        { QStringLiteral("cuBLAS"),       QStringLiteral("nvidia-cublas-cu12"),       QStringLiteral("12.8.4.1"), {}, {}, Kind::Wheel },
+        { QStringLiteral("cuFFT"),        QStringLiteral("nvidia-cufft-cu12"),        QStringLiteral("11.3.3.83"), {}, {}, Kind::Wheel },
+        { QStringLiteral("nvRTC"),        QStringLiteral("nvidia-cuda-nvrtc-cu12"),   QStringLiteral("12.8.93"), {}, {}, Kind::Wheel },
+    };
 }
 
 // ─── Lifecycle ───────────────────────────────────────────────────────────────
@@ -96,148 +106,197 @@ void NvidiaAfxPack::cancel()
 {
     m_cancelled = true;
     if (m_reply) { m_reply->abort(); m_reply->deleteLater(); m_reply = nullptr; }
-    if (!m_tmpArchive.isEmpty()) { QFile::remove(m_tmpArchive); m_tmpArchive.clear(); }
+    if (!m_tmpFile.isEmpty()) { QFile::remove(m_tmpFile); m_tmpFile.clear(); }
+    if (!m_staging.isEmpty()) { QDir(m_staging).removeRecursively(); m_staging.clear(); }
     m_busy = false;
 }
 
 void NvidiaAfxPack::fail(const QString& msg)
 {
-    if (!m_tmpArchive.isEmpty()) { QFile::remove(m_tmpArchive); m_tmpArchive.clear(); }
+    if (!m_tmpFile.isEmpty()) { QFile::remove(m_tmpFile); m_tmpFile.clear(); }
+    if (!m_staging.isEmpty()) { QDir(m_staging).removeRecursively(); m_staging.clear(); }
     m_busy = false;
     emit finished(false, msg);
 }
 
-// ─── Install (download or import) ────────────────────────────────────────────
-void NvidiaAfxPack::install(const QString& sourceUrlOrPath)
+void NvidiaAfxPack::emitOverall(int compPct, const QString& label)
+{
+    const int n = m_queue.isEmpty() ? 1 : m_queue.size();
+    const int base = m_idx * 100 / n;
+    const int within = (compPct < 0 ? 0 : compPct) / n;
+    emit progress(compPct < 0 && m_idx == 0 ? -1 : base + within,
+                  QStringLiteral("%1 (%2/%3)").arg(label).arg(m_idx + 1).arg(n));
+}
+
+// ─── v2 multi-source install ─────────────────────────────────────────────────
+void NvidiaAfxPack::install()
 {
     if (m_busy) return;
-    m_busy = true;
-    m_cancelled = false;
-
-    const QUrl url(sourceUrlOrPath);
-    const bool isHttp = url.scheme() == QLatin1String("http")
-                     || url.scheme() == QLatin1String("https");
-
-    if (!isHttp) {
-        // Local archive path or file:// — import directly, no download.
-        const QString path = url.isLocalFile() ? url.toLocalFile() : sourceUrlOrPath;
-        if (!QFile::exists(path)) { fail(QStringLiteral("archive not found: %1").arg(path)); return; }
-        emit progress(-1, QStringLiteral("Extracting…"));
-        importArchive(path);
-        return;
-    }
-
-    // Stream the download to a temp file in the cache root (same filesystem as
-    // the final install, so the later rename is atomic).
+    m_arch = detectArch();
+    if (m_arch.isEmpty()) { emit finished(false, QStringLiteral("no supported NVIDIA GPU found")); return; }
+    m_busy = true; m_cancelled = false;
     QDir().mkpath(cacheRoot());
-    m_tmpArchive = QDir(cacheRoot()).filePath(QStringLiteral(".download.tar.zst"));
-    auto* out = new QFile(m_tmpArchive);
-    if (!out->open(QIODevice::WriteOnly)) {
-        delete out;
-        fail(QStringLiteral("cannot write to cache: %1").arg(cacheRoot()));
-        return;
-    }
+    m_staging = QDir(cacheRoot()).filePath(QStringLiteral(".staging"));
+    QDir(m_staging).removeRecursively();
+    QDir().mkpath(QDir(m_staging).filePath(QStringLiteral("external/cuda/lib")));
+    m_queue = manifest(m_arch);
+    m_idx = 0;
+    startNext();
+}
 
-    QNetworkRequest req{url};
-    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
-                     QNetworkRequest::NoLessSafeRedirectPolicy);
-    m_reply = m_nam->get(req);
-    emit progress(0, QStringLiteral("Downloading…"));
+void NvidiaAfxPack::startNext()
+{
+    if (m_cancelled) { fail(QStringLiteral("cancelled")); return; }
+    if (m_idx >= m_queue.size()) { assembleAndCommit(); return; }
+    const Component& c = m_queue[m_idx];
+    if (c.kind == Kind::Wheel)
+        resolveWheelUrl(c);                        // PyPI JSON -> url+sha -> download
+    else
+        downloadTo(QUrl(c.url), c.sha256,
+                   QDir(cacheRoot()).filePath(QStringLiteral(".dl.tar.zst")), c.name);
+}
 
-    connect(m_reply, &QNetworkReply::readyRead, this, [this, out]() {
-        out->write(m_reply->readAll());
-    });
-    connect(m_reply, &QNetworkReply::downloadProgress, this,
-            [this](qint64 got, qint64 total) {
-        emit progress(total > 0 ? int(got * 100 / total) : -1,
-                      QStringLiteral("Downloading… %1 MB").arg(got / 1048576));
-    });
-    connect(m_reply, &QNetworkReply::finished, this, [this, out]() {
-        out->flush(); out->close();
-        const bool ok = m_reply->error() == QNetworkReply::NoError && !m_cancelled;
-        const QString err = m_reply->errorString();
-        m_reply->deleteLater(); m_reply = nullptr;
-        delete out;
-        if (!ok) { fail(m_cancelled ? QStringLiteral("cancelled")
-                                    : QStringLiteral("download failed: %1").arg(err)); return; }
-        emit progress(-1, QStringLiteral("Extracting…"));
-        const QString archive = m_tmpArchive;
-        importArchive(archive);
+// Resolve the manylinux x86_64 wheel URL + sha256 from the PyPI JSON API.
+void NvidiaAfxPack::resolveWheelUrl(const Component& c)
+{
+    emitOverall(-1, QStringLiteral("Resolving %1").arg(c.name));
+    const QUrl api(QStringLiteral("https://pypi.org/pypi/%1/%2/json").arg(c.pypiPkg, c.pypiVer));
+    QNetworkRequest req(api);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    auto* reply = m_nam->get(req);
+    connect(reply, &QNetworkReply::finished, this, [this, reply, name = c.name]() {
+        const QByteArray body = reply->readAll();
+        const auto err = reply->error();
+        reply->deleteLater();
+        if (err != QNetworkReply::NoError) { fail(QStringLiteral("PyPI lookup failed for %1").arg(name)); return; }
+        const QJsonObject root = QJsonDocument::fromJson(body).object();
+        for (const QJsonValue v : root.value(QStringLiteral("urls")).toArray()) {
+            const QJsonObject u = v.toObject();
+            const QString fn = u.value(QStringLiteral("filename")).toString();
+            if (fn.endsWith(QStringLiteral(".whl")) && fn.contains(QStringLiteral("x86_64"))
+                && fn.contains(QStringLiteral("manylinux"))) {
+                const QString url = u.value(QStringLiteral("url")).toString();
+                const QString sha = u.value(QStringLiteral("digests")).toObject()
+                                       .value(QStringLiteral("sha256")).toString();
+                downloadTo(QUrl(url), sha,
+                           QDir(cacheRoot()).filePath(QStringLiteral(".dl.whl")), name);
+                return;
+            }
+        }
+        fail(QStringLiteral("no manylinux x86_64 wheel for %1").arg(name));
     });
 }
 
-// Extract the .tar.zst into a staging dir, place the feature lib on the core's
-// RPATH, then atomically swap it in as cacheRoot/current.
-void NvidiaAfxPack::importArchive(const QString& archivePath)
+void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
+                               const QString& dest, const QString& label)
+{
+    m_tmpFile = dest;
+    auto* out = new QFile(dest);
+    if (!out->open(QIODevice::WriteOnly)) { delete out; fail(QStringLiteral("cannot write cache")); return; }
+    QNetworkRequest req(url);
+    req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+    m_reply = m_nam->get(req);
+    emitOverall(0, QStringLiteral("Downloading %1").arg(label));
+    connect(m_reply, &QNetworkReply::readyRead, this, [this, out]() { out->write(m_reply->readAll()); });
+    connect(m_reply, &QNetworkReply::downloadProgress, this, [this, label](qint64 got, qint64 total) {
+        emitOverall(total > 0 ? int(got * 100 / total) : -1, QStringLiteral("Downloading %1").arg(label));
+    });
+    connect(m_reply, &QNetworkReply::finished, this,
+            [this, out, sha256, label, dest]() {
+        out->flush(); out->close(); delete out;
+        const auto err = m_reply->error();
+        const QString es = m_reply->errorString();
+        m_reply->deleteLater(); m_reply = nullptr;
+        if (m_cancelled) { fail(QStringLiteral("cancelled")); return; }
+        if (err != QNetworkReply::NoError) { fail(QStringLiteral("download failed (%1): %2").arg(label, es)); return; }
+        if (!sha256.isEmpty()) {
+            QFile f(dest);
+            if (!f.open(QIODevice::ReadOnly)) { fail(QStringLiteral("cannot re-open %1 to verify").arg(label)); return; }
+            QCryptographicHash h(QCryptographicHash::Sha256); h.addData(&f);
+            if (h.result().toHex() != sha256.toLatin1()) { fail(QStringLiteral("checksum mismatch: %1").arg(label)); return; }
+        }
+        const Kind kind = m_queue[m_idx].kind;
+        emitOverall(100, QStringLiteral("Extracting %1").arg(label));
+        extractInto(dest, kind);
+        QFile::remove(dest); m_tmpFile.clear();
+        ++m_idx;
+        startNext();
+    });
+}
+
+void NvidiaAfxPack::extractInto(const QString& archive, Kind kind)
+{
+    QProcess p;
+    if (kind == Kind::Wheel) {
+        // Flatten the wheel's *.so* into the pack's external/cuda/lib.
+        const QString libDir = QDir(m_staging).filePath(QStringLiteral("external/cuda/lib"));
+        p.start(QStringLiteral("unzip"),
+                {QStringLiteral("-o"), QStringLiteral("-j"), QStringLiteral("-d"), libDir,
+                 archive, QStringLiteral("*.so*")});
+    } else {
+        // Our AFX-bits tarball is laid out at root (nvafx/, features/, external/).
+        p.start(QStringLiteral("tar"),
+                {QStringLiteral("--zstd"), QStringLiteral("-xf"), archive,
+                 QStringLiteral("-C"), m_staging});
+    }
+    if (!p.waitForFinished(600000) || p.exitCode() != 0)
+        fail(QStringLiteral("extract failed: %1").arg(QString::fromLocal8Bit(p.readAllStandardError()).trimmed()));
+}
+
+// Symlink the feature lib onto the core RPATH, then atomically swap into place.
+void NvidiaAfxPack::assembleAndCommit()
 {
     const QString root = cacheRoot();
-    QDir().mkpath(root);
-    const QString staging = QDir(root).filePath(QStringLiteral(".staging"));
-    QDir(staging).removeRecursively();
-    if (!QDir().mkpath(staging)) { fail(QStringLiteral("cannot create staging dir")); return; }
-
-    QProcess tar;
-    tar.setWorkingDirectory(staging);
-    tar.start(QStringLiteral("tar"),
-              {QStringLiteral("--zstd"), QStringLiteral("-xf"), archivePath});
-    if (!tar.waitForFinished(600000) || tar.exitCode() != 0) {
-        QDir(staging).removeRecursively();
-        fail(QStringLiteral("extraction failed: %1")
-                 .arg(QString::fromLocal8Bit(tar.readAllStandardError()).trimmed()));
-        return;
-    }
-
-    // The archive may have a single top-level dir; resolve to the pack root
-    // (the dir containing nvafx/lib).
-    QString packRoot = staging;
-    if (!QFile::exists(QDir(packRoot).filePath(QStringLiteral("nvafx/lib")))) {
-        const QStringList subs = QDir(staging).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-        for (const QString& s : subs) {
-            const QString cand = QDir(staging).filePath(s);
-            if (QFile::exists(QDir(cand).filePath(QStringLiteral("nvafx/lib")))) {
-                packRoot = cand; break;
-            }
-        }
-    }
+    QString packRoot = m_staging;
     if (!QFile::exists(QDir(packRoot).filePath(QStringLiteral("nvafx/lib/libnv_audiofx.so")))) {
-        QDir(staging).removeRecursively();
-        fail(QStringLiteral("archive is not a valid AFX pack (no nvafx/lib/libnv_audiofx.so)"));
+        fail(QStringLiteral("assembled pack missing nvafx/lib/libnv_audiofx.so "
+                            "(AFX-bits tarball not published yet?)"));
         return;
     }
-
-    // Atomic swap: current.old <- current, current <- packRoot.
     const QString current = QDir(root).filePath(QStringLiteral("current"));
-    const QString backup  = QDir(root).filePath(QStringLiteral("current.old"));
     QFileInfo curInfo(current);
     if (curInfo.isSymLink()) QFile::remove(current);
-    else if (curInfo.exists()) { QDir(backup).removeRecursively(); QDir().rename(current, backup); }
-    if (!QDir().rename(packRoot, current)) {
-        QDir(staging).removeRecursively();
-        fail(QStringLiteral("could not install pack into %1").arg(current));
-        return;
-    }
+    else if (curInfo.exists()) QDir(current).removeRecursively();
+    if (!QDir().rename(packRoot, current)) { fail(QStringLiteral("could not install into %1").arg(current)); return; }
+    m_staging.clear();
 
-    // Put the denoiser feature lib on the core's $ORIGIN/../../nvafx/lib RPATH so
-    // NvAFX_CreateEffect can dlopen it by soname (it requests the unversioned
-    // name). Done AFTER the move so the symlinks point into current/, not the
-    // now-deleted staging dir.
     const QString featDir  = QDir(current).filePath(QStringLiteral("features/denoiser/lib"));
     const QString nvafxDir = QDir(current).filePath(QStringLiteral("nvafx/lib"));
     for (const QFileInfo& fi : QDir(featDir).entryInfoList(
              {QStringLiteral("libnv_audiofx_denoiser.so*")}, QDir::Files)) {
         const QString link = QDir(nvafxDir).filePath(fi.fileName());
         QFile::remove(link);
-        QFile::link(fi.absoluteFilePath(), link);   // absolute symlink into current/
+        QFile::link(fi.absoluteFilePath(), link);
     }
-
-    QDir(staging).removeRecursively();
-    QDir(backup).removeRecursively();
-    if (!m_tmpArchive.isEmpty()) { QFile::remove(m_tmpArchive); m_tmpArchive.clear(); }
 
     m_busy = false;
     if (installedPackDir().isEmpty()) { emit finished(false, QStringLiteral("install verification failed")); return; }
     emit progress(100, statusText());
     emit finished(true, statusText());
+}
+
+// ─── Offline single-archive import ───────────────────────────────────────────
+void NvidiaAfxPack::installFromFile(const QString& archivePath)
+{
+    if (m_busy) return;
+    if (!QFile::exists(archivePath)) { emit finished(false, QStringLiteral("archive not found")); return; }
+    m_busy = true; m_cancelled = false;
+    m_queue.clear(); m_idx = 0;
+    QDir().mkpath(cacheRoot());
+    m_staging = QDir(cacheRoot()).filePath(QStringLiteral(".staging"));
+    QDir(m_staging).removeRecursively(); QDir().mkpath(m_staging);
+    emit progress(-1, QStringLiteral("Extracting…"));
+    extractInto(archivePath, Kind::Tarball);
+    if (!m_busy) return;  // extractInto called fail()
+    // A pre-assembled pack may have a single top-level dir — descend to it.
+    if (!QFile::exists(QDir(m_staging).filePath(QStringLiteral("nvafx/lib")))) {
+        const QStringList subs = QDir(m_staging).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString& s : subs) {
+            const QString cand = QDir(m_staging).filePath(s);
+            if (QFile::exists(QDir(cand).filePath(QStringLiteral("nvafx/lib")))) { m_staging = cand; break; }
+        }
+    }
+    assembleAndCommit();
 }
 
 } // namespace AetherSDR
