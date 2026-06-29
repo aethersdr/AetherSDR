@@ -965,7 +965,7 @@ void AetherDspWidget::updateBnrStatus()
 }
 
 // One-time NVIDIA license acceptance, shown the first time BNR is enabled
-// (either backend runs NVIDIA-licensed software/model). Flows NVIDIA's terms
+// (the AFX runtime + denoiser model are NVIDIA-licensed). Flows NVIDIA's terms
 // down to the end user (SWLA §1.3.3) and carries the Works Notice (PST §1.7.1).
 bool AetherDspWidget::ensureBnrLicenseAccepted()
 {
@@ -979,8 +979,8 @@ bool AetherDspWidget::ensureBnrLicenseAccepted()
     box.setTextFormat(Qt::RichText);
     box.setText(tr("<b>BNR uses NVIDIA Maxine software and a denoiser model.</b>"));
     box.setInformativeText(tr(
-        "Both the Local (AFX) and Service (NIM) backends use components provided "
-        "by NVIDIA Corporation, governed by NVIDIA's license agreements:"
+        "BNR uses components provided by NVIDIA Corporation, governed by "
+        "NVIDIA's license agreements:"
         "<ul><li>NVIDIA Software License Agreement</li>"
         "<li>Product-Specific Terms for NVIDIA AI Products</li>"
         "<li>NVIDIA Community Model License</li></ul>"
