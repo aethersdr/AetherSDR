@@ -140,14 +140,14 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
 #if defined(_WIN32)
     // Windows: one self-contained .zip — AFX + CUDA + TensorRT DLLs + model.
     return {
-        { QStringLiteral("AFX runtime + CUDA + TensorRT + model"),
+        { QStringLiteral("AFX runtime"),
           {}, QStringLiteral("2.1.0"), afxUrl,
           QString::fromLatin1(kWinTarballSha), Kind::Tarball },
     };
 #else
     // Linux: AFX/TRT/model from our tarball; CUDA libs from NVIDIA's PyPI wheels.
     return {
-        { QStringLiteral("AFX runtime + TensorRT + model"),
+        { QStringLiteral("AFX runtime"),
           {}, QStringLiteral("2.1.0"), afxUrl,
           QStringLiteral("0bfe85b0faeb322958303c145996350d0fea8a203899f9215fc0d3a341395b67"),
           Kind::Tarball },
