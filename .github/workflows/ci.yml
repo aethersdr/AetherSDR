@@ -29,8 +29,15 @@ jobs:
       - name: Setup DeepFilterNet3 (DFNR)
         run: bash scripts/setup/setup-deepfilter.sh
 
+      # Always-on NIM BNR needs grpc/protobuf. Installed here too (not only in
+      # the CI image) so this passes before the image is rebuilt with the dep.
+      - name: Install gRPC / protobuf
+        run: |
+          apt-get update && apt-get install -y \
+            libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc
+
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -181,7 +188,7 @@ jobs:
         # target pinning is a release-time concern handled in macos-dmg.yml.
         run: |
           brew install ninja qt@6 qtkeychain fftw portaudio hidapi \
-            autoconf automake libtool
+            autoconf automake libtool grpc protobuf
 
       - name: Setup DeepFilterNet3 (DFNR)
         run: bash scripts/setup/setup-deepfilter.sh

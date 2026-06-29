@@ -88,7 +88,9 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
         QStringLiteral("https://github.com/aethersdr/AetherSDR/releases/download/"
                        "afx-bits-2.1.0/afx-bits-2.1.0-linux-x86_64-%1.tar.zst").arg(arch);
     return {
-        { QStringLiteral("AFX runtime + TensorRT + model"), {}, {}, afxUrl, {}, Kind::Tarball },
+        { QStringLiteral("AFX runtime + TensorRT + model"), {}, {}, afxUrl,
+          QStringLiteral("53dcd279cc569b5166e12ef7890c5d87be415b74fa7deaef6d9497874dbec848"),
+          Kind::Tarball },
         { QStringLiteral("CUDA runtime"), QStringLiteral("nvidia-cuda-runtime-cu12"), QStringLiteral("12.8.90"), {}, {}, Kind::Wheel },
         { QStringLiteral("cuBLAS"),       QStringLiteral("nvidia-cublas-cu12"),       QStringLiteral("12.8.4.1"), {}, {}, Kind::Wheel },
         { QStringLiteral("cuFFT"),        QStringLiteral("nvidia-cufft-cu12"),        QStringLiteral("11.3.3.83"), {}, {}, Kind::Wheel },
