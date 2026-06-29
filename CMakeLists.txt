@@ -25,7 +25,6 @@ option(REQUIRE_SERIALPORT "Fail if Qt6 SerialPort is not found (use for release 
 option(REQUIRE_KEYCHAIN "Fail if Qt6Keychain is not found (use for release builds)" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
-option(ENABLE_BNR "Enable NVIDIA NIM BNR noise removal (requires grpc++)" OFF)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
 option(ENABLE_NVIDIA_AFX "Enable optional NVIDIA Maxine AFX GPU denoiser (runtime-loaded, download-on-demand; NVIDIA RTX/GeForce only)" OFF)
@@ -349,43 +348,40 @@ else()
     message(STATUS "GPU spectrum rendering disabled (use -DAETHER_GPU_SPECTRUM=ON to enable)")
 endif()
 
-# NVIDIA NIM BNR (Background Noise Removal) — GPU-accelerated neural denoising
-# Requires: grpc++, protobuf, NVIDIA RTX 4000+ GPU, Docker container
-if(ENABLE_BNR)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GRPC REQUIRED grpc++)
-    pkg_check_modules(PROTOBUF REQUIRED protobuf)
-    find_program(PROTOC protoc REQUIRED)
-    find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
+# NVIDIA NIM BNR (Background Noise Removal) — gRPC client to a Maxine BNR
+# microservice (NVIDIA NIM). ALWAYS compiled: the service can run on any
+# machine (including a remote host), so even users without a local NVIDIA GPU
+# can use BNR by pointing at a service elsewhere. grpc++/protobuf are provided
+# cross-platform via vcpkg (config-mode find_package), so this builds on Linux,
+# Windows (MSVC) and macOS without pkg-config. See vcpkg.json.
+find_package(Protobuf CONFIG REQUIRED)
+find_package(gRPC CONFIG REQUIRED)
 
-    # Generate C++ stubs from bnr.proto
-    set(BNR_PROTO "${CMAKE_SOURCE_DIR}/src/core/proto/bnr.proto")
-    set(BNR_GEN_DIR "${CMAKE_BINARY_DIR}/bnr_gen")
-    file(MAKE_DIRECTORY ${BNR_GEN_DIR})
+# Generate C++ stubs from bnr.proto using the protoc + grpc_cpp_plugin imported
+# targets (resolved from vcpkg/system), so no find_program/PATH assumptions.
+set(BNR_PROTO "${CMAKE_SOURCE_DIR}/src/core/proto/bnr.proto")
+set(BNR_GEN_DIR "${CMAKE_BINARY_DIR}/bnr_gen")
+file(MAKE_DIRECTORY ${BNR_GEN_DIR})
 
-    set(BNR_PB_CC "${BNR_GEN_DIR}/bnr.pb.cc")
-    set(BNR_PB_H  "${BNR_GEN_DIR}/bnr.pb.h")
-    set(BNR_GRPC_CC "${BNR_GEN_DIR}/bnr.grpc.pb.cc")
-    set(BNR_GRPC_H  "${BNR_GEN_DIR}/bnr.grpc.pb.h")
+set(BNR_PB_CC "${BNR_GEN_DIR}/bnr.pb.cc")
+set(BNR_PB_H  "${BNR_GEN_DIR}/bnr.pb.h")
+set(BNR_GRPC_CC "${BNR_GEN_DIR}/bnr.grpc.pb.cc")
+set(BNR_GRPC_H  "${BNR_GEN_DIR}/bnr.grpc.pb.h")
 
-    add_custom_command(
-        OUTPUT ${BNR_PB_CC} ${BNR_PB_H} ${BNR_GRPC_CC} ${BNR_GRPC_H}
-        COMMAND ${PROTOC}
-            --proto_path=${CMAKE_SOURCE_DIR}/src/core/proto
-            --cpp_out=${BNR_GEN_DIR}
-            --grpc_out=${BNR_GEN_DIR}
-            --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
-            ${BNR_PROTO}
-        DEPENDS ${BNR_PROTO}
-        COMMENT "Generating BNR gRPC stubs from bnr.proto"
-    )
+add_custom_command(
+    OUTPUT ${BNR_PB_CC} ${BNR_PB_H} ${BNR_GRPC_CC} ${BNR_GRPC_H}
+    COMMAND protobuf::protoc
+        --proto_path=${CMAKE_SOURCE_DIR}/src/core/proto
+        --cpp_out=${BNR_GEN_DIR}
+        --grpc_out=${BNR_GEN_DIR}
+        --plugin=protoc-gen-grpc=$<TARGET_FILE:gRPC::grpc_cpp_plugin>
+        ${BNR_PROTO}
+    DEPENDS ${BNR_PROTO} protobuf::protoc gRPC::grpc_cpp_plugin
+    COMMENT "Generating BNR gRPC stubs from bnr.proto"
+)
 
-    set(BNR_SOURCES ${BNR_PB_CC} ${BNR_GRPC_CC})
-    message(STATUS "NVIDIA BNR enabled (gRPC ${GRPC_VERSION})")
-else()
-    set(BNR_SOURCES "")
-    message(STATUS "NVIDIA BNR disabled (use -DENABLE_BNR=ON to enable)")
-endif()
+set(BNR_SOURCES ${BNR_PB_CC} ${BNR_GRPC_CC})
+message(STATUS "NVIDIA BNR enabled (always compiled; gRPC/protobuf via vcpkg config-mode)")
 
 # libspecbleach NR4 — bundled spectral noise reduction (LGPL-2.1)
 # MSVC: libspecbleach uses C99 VLAs and __attribute__ which MSVC doesn't support.
@@ -1531,14 +1527,11 @@ elseif(OPUS_FOUND)
     target_link_libraries(AetherSDR PRIVATE ${OPUS_LIBRARIES})
 endif()
 
-if(ENABLE_BNR)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_BNR)
-    target_include_directories(AetherSDR PRIVATE
-        ${BNR_GEN_DIR}
-        ${GRPC_INCLUDE_DIRS}
-        ${PROTOBUF_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${GRPC_LIBRARIES} ${PROTOBUF_LIBRARIES})
-endif()
+# BNR is always compiled (see the proto-gen block above). grpc++/protobuf come
+# from vcpkg via imported CONFIG targets, which carry their own include dirs.
+target_compile_definitions(AetherSDR PRIVATE HAVE_BNR)
+target_include_directories(AetherSDR PRIVATE ${BNR_GEN_DIR})
+target_link_libraries(AetherSDR PRIVATE gRPC::grpc++ protobuf::libprotobuf)
 
 if(ENABLE_SPECBLEACH)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SPECBLEACH)
