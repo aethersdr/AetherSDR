@@ -1172,8 +1172,14 @@ void AetherDspWidget::rebuildBnrRows(const QStringList& names)
         r.bar = new QProgressBar;
         r.bar->setTextVisible(true);
         r.bar->setFixedHeight(16);
-        // 10px left text padding so the status text isn't flush against the edge.
-        r.bar->setStyleSheet(QStringLiteral("QProgressBar { padding-left: 10px; }"));
+        // Full self-contained style so QStyleSheetStyle owns the rendering and
+        // honors padding-left — a partial rule lets the global QProgressBar theme
+        // win and the 10px left text pad is ignored.
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.bar,
+            "QProgressBar { text-align: left; padding-left: 10px; font-size: 11px;"
+            " color: {{color.text.primary}}; background: {{color.background.0}};"
+            " border: 1px solid {{color.border.strong}}; border-radius: 3px; }"
+            "QProgressBar::chunk { background: {{color.accent}}; border-radius: 2px; }");
         r.bar->setFormat(QStringLiteral("queued"));
         r.bar->setRange(0, 100);
         r.bar->setValue(0);
