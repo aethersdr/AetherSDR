@@ -50,6 +50,7 @@ public:
         QString version;
         QString sha256;
         qint64  bytes = 0;   // download size (0 = unknown / not yet started)
+        QString key;         // stable id for cache matching (survives label edits)
     };
     // Components recorded in the installed pack's receipt (components.json),
     // written at install. Empty if no pack / a pack predating the receipt.
@@ -92,7 +93,8 @@ signals:
 private:
     enum class Kind { Wheel, Tarball };
     struct Component {
-        QString name;       // display name
+        QString key;        // STABLE id for cache matching (never change once shipped)
+        QString name;       // display name (free to change — not used for matching)
         QString pypiPkg;    // for Wheel: PyPI package (url+sha resolved at runtime)
         QString pypiVer;    // pinned version (display)
         QString url;        // for Tarball: direct URL (our host)
@@ -110,7 +112,10 @@ private:
     void assembleAndCommit();                             // symlink + atomic swap
     void writeReceipt(const QString& packDir);           // components.json from m_queue
     void writeStagingProgress();                          // .staging/.progress.json
-    bool isCompleted(const Component& c) const;           // already in m_done (name+ver)?
+    bool isCompleted(const Component& c) const;           // already in m_done?
+    // Match a manifest component to a recorded one by stable key + version,
+    // falling back to display name for entries written before keys existed.
+    static bool sameComponent(const Component& c, const ComponentInfo& d);
     void fail(const QString& msg);
     QList<ComponentInfo> plannedComponents() const;       // m_queue -> ComponentInfo list
     static QString stagingPath();                         // cacheRoot()/.staging

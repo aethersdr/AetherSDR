@@ -137,24 +137,26 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
                  QStringLiteral("tar.zst"));
 #endif
 
+    // NOTE: the first field is a STABLE key used for cache/resume matching —
+    // never change it once shipped (display names in the 2nd field may change).
 #if defined(_WIN32)
     // Windows: one self-contained .zip — AFX + CUDA + TensorRT DLLs + model.
     return {
-        { QStringLiteral("AFX runtime"),
+        { QStringLiteral("afx"), QStringLiteral("AFX runtime"),
           {}, QStringLiteral("2.1.0"), afxUrl,
           QString::fromLatin1(kWinTarballSha), Kind::Tarball },
     };
 #else
     // Linux: AFX/TRT/model from our tarball; CUDA libs from NVIDIA's PyPI wheels.
     return {
-        { QStringLiteral("AFX runtime"),
+        { QStringLiteral("afx"), QStringLiteral("AFX runtime"),
           {}, QStringLiteral("2.1.0"), afxUrl,
           QStringLiteral("0bfe85b0faeb322958303c145996350d0fea8a203899f9215fc0d3a341395b67"),
           Kind::Tarball },
-        { QStringLiteral("CUDA runtime"), QStringLiteral("nvidia-cuda-runtime-cu12"), QStringLiteral("12.8.90"), {}, {}, Kind::Wheel },
-        { QStringLiteral("cuBLAS"),       QStringLiteral("nvidia-cublas-cu12"),       QStringLiteral("12.8.4.1"), {}, {}, Kind::Wheel },
-        { QStringLiteral("cuFFT"),        QStringLiteral("nvidia-cufft-cu12"),        QStringLiteral("11.3.3.83"), {}, {}, Kind::Wheel },
-        { QStringLiteral("nvRTC"),        QStringLiteral("nvidia-cuda-nvrtc-cu12"),   QStringLiteral("12.8.93"), {}, {}, Kind::Wheel },
+        { QStringLiteral("cuda-runtime"), QStringLiteral("CUDA runtime"), QStringLiteral("nvidia-cuda-runtime-cu12"), QStringLiteral("12.8.90"), {}, {}, Kind::Wheel },
+        { QStringLiteral("cublas"),       QStringLiteral("cuBLAS"),       QStringLiteral("nvidia-cublas-cu12"),       QStringLiteral("12.8.4.1"), {}, {}, Kind::Wheel },
+        { QStringLiteral("cufft"),        QStringLiteral("cuFFT"),        QStringLiteral("nvidia-cufft-cu12"),        QStringLiteral("11.3.3.83"), {}, {}, Kind::Wheel },
+        { QStringLiteral("nvrtc"),        QStringLiteral("nvRTC"),        QStringLiteral("nvidia-cuda-nvrtc-cu12"),   QStringLiteral("12.8.93"), {}, {}, Kind::Wheel },
     };
 #endif
 }
@@ -198,7 +200,7 @@ QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::plannedComponents() const
 {
     QList<ComponentInfo> out;
     for (const Component& c : m_queue)
-        out.append({ c.name, c.pypiVer, c.sha256, c.bytes });
+        out.append({ c.name, c.pypiVer, c.sha256, c.bytes, c.key });
     return out;
 }
 
@@ -208,7 +210,7 @@ QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::latestComponents() const
     // AFX bundle, not the pinned versions), so any arch tag yields the same list.
     QList<ComponentInfo> out;
     for (const Component& c : manifest(QStringLiteral("any")))
-        out.append({ c.name, c.pypiVer, {}, 0 });
+        out.append({ c.name, c.pypiVer, {}, 0, c.key });
     return out;
 }
 
@@ -216,14 +218,19 @@ bool NvidiaAfxPack::updateAvailable() const
 {
     const auto installed = installedComponents();
     if (installed.isEmpty()) return false;            // not installed / no receipt
-    QHash<QString, QString> have;
-    for (const auto& c : installed) have.insert(c.name, c.version);
-    // Flag only when a matching component's version differs — missing names
+    QHash<QString, QString> byKey, byName;            // -> installed version
+    for (const auto& c : installed) {
+        if (!c.key.isEmpty()) byKey.insert(c.key, c.version);
+        byName.insert(c.name, c.version);
+    }
+    // Flag only when a matching component's version differs — unmatched entries
     // (e.g. an offline-imported pack) are left alone to avoid false positives.
     for (const auto& c : latestComponents()) {
-        const auto it = have.constFind(c.name);
-        if (it != have.constEnd() && it.value() != c.version)
-            return true;
+        QString instVer;
+        if (!c.key.isEmpty() && byKey.contains(c.key)) instVer = byKey.value(c.key);
+        else if (byName.contains(c.name))              instVer = byName.value(c.name);
+        else continue;
+        if (instVer != c.version) return true;
     }
     return false;
 }
@@ -247,7 +254,8 @@ QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::stagedComponents()
         out.append({ o.value(QStringLiteral("name")).toString(),
                      o.value(QStringLiteral("version")).toString(),
                      o.value(QStringLiteral("sha256")).toString(),
-                     static_cast<qint64>(o.value(QStringLiteral("bytes")).toDouble()) });
+                     static_cast<qint64>(o.value(QStringLiteral("bytes")).toDouble()),
+                     o.value(QStringLiteral("key")).toString() });
     }
     return out;
 }
@@ -257,6 +265,7 @@ void NvidiaAfxPack::writeStagingProgress()
     QJsonArray arr;
     for (const ComponentInfo& c : m_done) {
         QJsonObject o;
+        o.insert(QStringLiteral("key"), c.key);
         o.insert(QStringLiteral("name"), c.name);
         o.insert(QStringLiteral("version"), c.version);
         o.insert(QStringLiteral("sha256"), c.sha256);
@@ -268,10 +277,18 @@ void NvidiaAfxPack::writeStagingProgress()
         f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
 }
 
+bool NvidiaAfxPack::sameComponent(const Component& c, const ComponentInfo& d)
+{
+    if (d.version != c.pypiVer) return false;
+    if (!c.key.isEmpty() && !d.key.isEmpty())
+        return d.key == c.key;          // stable-key match (survives label edits)
+    return d.name == c.name;            // fallback for pre-key receipts/progress
+}
+
 bool NvidiaAfxPack::isCompleted(const Component& c) const
 {
     for (const ComponentInfo& d : m_done)
-        if (d.name == c.name && d.version == c.pypiVer)
+        if (sameComponent(c, d))
             return true;
     return false;
 }
@@ -308,10 +325,10 @@ void NvidiaAfxPack::startNext()
         // Already downloaded + extracted in a prior run — restore its recorded
         // sha/bytes and mark the row done without re-fetching.
         for (const ComponentInfo& d : m_done) {
-            if (d.name == c.name && d.version == c.pypiVer) {
+            if (sameComponent(c, d)) {
                 c.sha256 = d.sha256; c.bytes = d.bytes;
                 emit componentProgress(m_idx, 100, d.bytes, QString());
-                emit componentFinished(m_idx, d);
+                emit componentFinished(m_idx, { c.name, c.pypiVer, d.sha256, d.bytes, c.key });
                 break;
             }
         }
@@ -409,9 +426,10 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
         QFile::remove(dest); m_tmpFile.clear();
         if (!m_busy) return;                           // extractInto called fail()
         const Component& c = m_queue[m_idx];
-        const ComponentInfo info{ c.name, c.pypiVer, c.sha256, bytes };
+        const ComponentInfo info{ c.name, c.pypiVer, c.sha256, bytes, c.key };
         // Persist into the resumable staging manifest so a cancel keeps it.
-        m_done.removeIf([&](const ComponentInfo& d) { return d.name == info.name; });
+        m_done.removeIf([&](const ComponentInfo& d) {
+            return d.key.isEmpty() ? d.name == info.name : d.key == info.key; });
         m_done.append(info);
         writeStagingProgress();
         emit componentFinished(m_idx, info);
@@ -495,6 +513,7 @@ void NvidiaAfxPack::writeReceipt(const QString& packDir)
     QJsonArray arr;
     for (const Component& c : m_queue) {
         QJsonObject o;
+        o.insert(QStringLiteral("key"), c.key);
         o.insert(QStringLiteral("name"), c.name);
         o.insert(QStringLiteral("version"), c.pypiVer);
         o.insert(QStringLiteral("sha256"), c.sha256);
@@ -519,7 +538,8 @@ QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::installedComponents()
         out.append({ o.value(QStringLiteral("name")).toString(),
                      o.value(QStringLiteral("version")).toString(),
                      o.value(QStringLiteral("sha256")).toString(),
-                     static_cast<qint64>(o.value(QStringLiteral("bytes")).toDouble()) });
+                     static_cast<qint64>(o.value(QStringLiteral("bytes")).toDouble()),
+                     o.value(QStringLiteral("key")).toString() });
     }
     return out;
 }
@@ -543,7 +563,7 @@ void NvidiaAfxPack::installFromFile(const QString& archivePath)
         }
     }
     const qint64 importBytes = QFileInfo(archivePath).size();
-    m_queue = { { QStringLiteral("AFX pack (imported)"),
+    m_queue = { { QStringLiteral("afx"), QStringLiteral("AFX pack (imported)"),
                   {}, QStringLiteral("2.1.0"), {}, importSha, Kind::Tarball, importBytes } };
     QDir().mkpath(cacheRoot());
     m_staging = QDir(cacheRoot()).filePath(QStringLiteral(".staging"));
@@ -553,7 +573,7 @@ void NvidiaAfxPack::installFromFile(const QString& archivePath)
     extractInto(archivePath, Kind::Tarball);
     if (!m_busy) return;  // extractInto called fail()
     emit componentFinished(0, { m_queue[0].name, m_queue[0].pypiVer,
-                                m_queue[0].sha256, importBytes });
+                                m_queue[0].sha256, importBytes, m_queue[0].key });
     // A pre-assembled pack may have a single top-level dir — descend to it.
     if (!QFile::exists(QDir(m_staging).filePath(QString::fromLatin1(kCoreRelPath)))) {
         const QStringList subs = QDir(m_staging).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
