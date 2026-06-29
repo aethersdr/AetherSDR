@@ -949,13 +949,20 @@ void AetherDspWidget::updateBnrStatus()
     const bool partial = !installed && !staged.isEmpty() && totalComps > 0;
     if (m_bnrAfxStatus && !busy) {
         const bool on = m_audio && m_audio->nvAfxEnabled();
-        m_bnrAfxStatus->setText(installed
-                                    ? (updatable ? QStringLiteral("Installed — update available")
-                                       : on ? QStringLiteral("● Active")
-                                            : QStringLiteral("Installed — ready"))
-                                : partial ? tr("Partially downloaded (%1/%2)")
-                                                .arg(staged.size()).arg(totalComps)
-                                          : QStringLiteral("Not installed"));
+        if (installed && on && !updatable) {
+            // Green dot + text while the denoiser is running.
+            const QString green = AetherSDR::ThemeManager::instance()
+                                      .value(QStringLiteral("color.accent.success"));
+            m_bnrAfxStatus->setText(
+                QStringLiteral("<span style='color:%1;'>● Active</span>").arg(green));
+        } else {
+            m_bnrAfxStatus->setText(installed
+                                        ? (updatable ? QStringLiteral("Installed — update available")
+                                                     : QStringLiteral("Installed — ready"))
+                                    : partial ? tr("Partially downloaded (%1/%2)")
+                                                    .arg(staged.size()).arg(totalComps)
+                                              : QStringLiteral("Not installed"));
+        }
     }
     if (m_bnrAfxDownloadBtn && !busy) {
         m_bnrAfxDownloadBtn->setText(installed
