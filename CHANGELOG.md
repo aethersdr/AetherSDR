@@ -10,26 +10,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Added
 
-- **BNR — one button, two NVIDIA backends.** The AetherDSP **BNR** module now
-  selects between **Local (AFX)** — the Maxine denoiser running in-process on a
-  local NVIDIA RTX/GeForce GPU — and **Service (NIM)** — a gRPC client to a
-  Maxine BNR microservice that can run on this *or another* machine, so users
-  with no local NVIDIA GPU can still use BNR. The backend selector, an
-  intensity slider, connection status, and a one-time **Download** for the AFX
-  runtime all live in the panel below the button row. See
-  [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md).
-- **AFX download-on-demand (`NvidiaAfxPack`).** The Local backend fetches its
-  ~2 GB GPU runtime on first use and caches it — CUDA libs come from NVIDIA's
-  PyPI wheels (pinned, sha256-verified), and the AFX/TensorRT/model bits from a
-  small sha-pinned release asset — so the shipped app carries none of it.
+- **BNR — NVIDIA GPU AI noise removal, in-process, no container.** The AetherDSP
+  **BNR** module runs the NVIDIA Maxine **Audio Effects (AFX)** denoiser directly
+  inside AetherSDR on your local NVIDIA RTX/GeForce GPU (Turing+) — lowest
+  latency, no Docker, no microservice to manage. Supported on **Linux and
+  Windows** (`-DENABLE_NVIDIA_AFX=ON`); macOS / non-NVIDIA machines use DFNR. An
+  intensity slider, status, and a one-time **Download** for the AFX runtime live
+  in the panel below the button row. See [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md).
+- **AFX download-on-demand (`NvidiaAfxPack`).** BNR fetches its ~2 GB GPU runtime
+  on first use and caches it, so the shipped app carries none of it. On Linux the
+  CUDA libs come from NVIDIA's PyPI wheels (pinned, sha256-verified) and the
+  AFX/TensorRT/model bits from a small sha-pinned release asset; on Windows the
+  whole runtime ships as one self-contained sha-pinned `.zip` (Windows resolves
+  sibling DLLs by directory, so no wheel-flattening or symlinks are needed).
 
 ### Changed
 
-- **NIM BNR is always compiled** (was gated behind `-DENABLE_BNR`). grpc/protobuf
-  are resolved cross-platform via CMake config-mode with a pkg-config fallback
-  (vcpkg on Windows, Homebrew on macOS, system grpc on Debian/Ubuntu). BNR is
-  also auto-disabled in digital/CW modes and accents the ADSP launcher like the
-  other client-NR engines.
+- **BNR's container/microservice (NIM, gRPC) backend was removed.** BNR is now
+  purely the local in-process AFX denoiser — ham operators shouldn't have to
+  stand up a container to denoise audio. This also drops the grpc/protobuf build
+  dependency entirely. BNR is auto-disabled in digital/CW modes and accents the
+  ADSP launcher like the other client-NR engines.
 
 ## [v26.6.5] — 2026-06-28
 
