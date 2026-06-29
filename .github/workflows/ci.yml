@@ -149,8 +149,8 @@ jobs:
             "-B","build","-G","Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded",
-            "-DCMAKE_TOOLCHAIN_FILE=$env:CMAKE_TOOLCHAIN_FILE",
-            "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
+            "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows"
           )
           if ($launcher) {
             $cargs += "-DCMAKE_C_COMPILER_LAUNCHER=sccache"
