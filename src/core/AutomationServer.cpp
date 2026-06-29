@@ -3,6 +3,8 @@
 #include "AppSettings.h"          // StationName (restore the user's real station name)
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "AudioEngine.h"
+#include "ClientTxTestTone.h"     // testtone() verb — client-side TX test tone
+#include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "gui/ConnectionPanel.h" // ConnectionPanel automation facade
 
@@ -1657,6 +1659,16 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             QStringList rest;
             for (int i = 2; i < p.size(); ++i) rest << tok(i);
             value = rest.join(QLatin1Char(' '));  // "cwx send CQ CQ DE ...", "cwx speed 18"
+        } else if (cmd == QLatin1String("record")) {
+            action = tok(1);                  // start | stop | status | path | dir
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // "record dir /tmp/recs"
+        } else if (cmd == QLatin1String("testtone")) {
+            action = tok(1);                  // on | off
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // "testtone on 1000 -6" -> freqHz levelDb
         } else if (cmd == QLatin1String("pan")) {
             action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
         } else if (cmd == QLatin1String("streams")) {
@@ -1791,6 +1803,10 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("cwx"))
         return doCwx(action, value);
+    if (cmd == QLatin1String("record"))
+        return doRecord(action, value);
+    if (cmd == QLatin1String("testtone"))
+        return doTestTone(action, value);
     if (cmd == QLatin1String("pan")) {
         if (action.isEmpty())
             return err(QStringLiteral("pan requires an action (create|add|remove|close|center)"));
@@ -2668,6 +2684,92 @@ QJsonObject AutomationServer::doDisconnect()
         {QStringLiteral("requested"), true},
         {QStringLiteral("deferred"), true},
     };
+}
+
+QJsonObject AutomationServer::doRecord(const QString& action, const QString& value)
+{
+    // record start|stop|status|path|dir — drives the Client-Side QSO recorder so
+    // a live test can capture a WAV and verify SSB + CW/CWX TX are recorded.
+    // Not a transmit action, so no ALLOW_TX gate. Runs on the GUI thread (same
+    // as the manual record button), matching the recorder's threading.
+    if (!m_qsoRecorder)
+        return err(QStringLiteral("qso recorder unavailable"));
+
+    const QString a = action.trimmed().toLower();
+
+    if (a == QLatin1String("dir")) {
+        if (value.trimmed().isEmpty())
+            return err(QStringLiteral("record dir requires a path"));
+        m_qsoRecorder->setRecordingDir(value.trimmed());
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("record"), QStringLiteral("dir")},
+                           {QStringLiteral("dir"), m_qsoRecorder->recordingDir()}};
+    }
+    if (a == QLatin1String("start")) {
+        m_qsoRecorder->startRecording();
+        return QJsonObject{
+            {QStringLiteral("ok"), m_qsoRecorder->isRecording()},
+            {QStringLiteral("record"), QStringLiteral("start")},
+            {QStringLiteral("recording"), m_qsoRecorder->isRecording()},
+            {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
+        };
+    }
+    if (a == QLatin1String("stop")) {
+        const int durationSecs = m_qsoRecorder->recordingDurationSecs();
+        m_qsoRecorder->stopRecording();
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("record"), QStringLiteral("stop")},
+            {QStringLiteral("recording"), m_qsoRecorder->isRecording()},
+            {QStringLiteral("durationSecs"), durationSecs},
+            {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
+        };
+    }
+    if (a.isEmpty() || a == QLatin1String("status")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("recording"), m_qsoRecorder->isRecording()},
+            {QStringLiteral("durationSecs"), m_qsoRecorder->recordingDurationSecs()},
+            {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
+        };
+    }
+    if (a == QLatin1String("path")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
+        };
+    }
+    return err(QStringLiteral("record: unknown action '%1' (start|stop|status|path)")
+                   .arg(action));
+}
+
+QJsonObject AutomationServer::doTestTone(const QString& action, const QString& value)
+{
+    if (!m_audioEngine || !m_audioEngine->clientTxTestTone())
+        return err(QStringLiteral("test tone unavailable"));
+    auto* tone = m_audioEngine->clientTxTestTone();
+    const QString a = action.trimmed().toLower();
+
+    if (a == QLatin1String("off")) {
+        tone->setEnabled(false);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("testtone"), QStringLiteral("off")}};
+    }
+    if (a == QLatin1String("on")) {
+        const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        bool okF = false, okL = false;
+        const float hz = parts.value(0).toFloat(&okF);
+        const float db = parts.value(1).toFloat(&okL);
+        if (okF) tone->setFrequencyHz(hz);
+        if (okL) tone->setLevelDb(db);
+        tone->setEnabled(true);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("testtone"), QStringLiteral("on")},
+                           {QStringLiteral("freqHz"), okF ? hz : 0.0},
+                           {QStringLiteral("levelDb"), okL ? db : 0.0}};
+    }
+    return err(QStringLiteral("testtone: unknown action '%1' (on [freqHz] [levelDb] | off)")
+                   .arg(action));
 }
 
 QJsonObject AutomationServer::doConnectWait(int timeoutMs, QLocalSocket* sock)

@@ -156,7 +156,7 @@ void QsoRecorder::onMoxChanged(bool mox)
     m_transmitting.store(mox, std::memory_order_release);
 
     // Only auto-record when in client-side recording mode
-    bool clientSide = AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+    bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
     if (mox) {
         // TX started — begin recording if auto-record is on and not already recording
         if (clientSide && m_autoRecord && !m_recording)

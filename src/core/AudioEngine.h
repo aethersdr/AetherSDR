@@ -499,6 +499,18 @@ public:
     // routing and PhoneCwApplet UI bindings.
     CwSidetoneGenerator* cwSidetone() { return m_cwSidetone.get(); }
 
+    // Key BOTH the audible sidetone and the recorder-sidetone generator from one
+    // call so every local CW source (manual keyer, CWX macros, iambic paddle)
+    // drives them in lockstep. The recorder copy is what lets a Client-Side QSO
+    // recording capture the operator's own sent CW/CWX side-tone (#2539).
+    void setCwKeyDown(bool down);
+
+    // Start the CW-sidetone record pump (#2539). CW has no mic-driven
+    // onTxAudioReady, so a free-running timer on the audio thread feeds the
+    // recorder the local sidetone while the radio is keyed for CW. Idempotent;
+    // must be invoked on the audio thread (queued) after moveToThread().
+    void startCwRecordPump();
+
     // Enable/disable the TX-side CW-decode tap (#2417).  When enabled,
     // the sidetone generator's mono signal is mirrored — downsampled
     // from 48 kHz to 24 kHz stereo float — and emitted via
@@ -558,6 +570,15 @@ signals:
     // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
     // receivers connect via Qt::AutoConnection (queued across threads).
     void txFinalMonitorPcmReady(const QByteArray& int16Stereo);
+    // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
+    // stereo int16 — the recorder's native WAV format. Pumped on the audio
+    // thread while the radio is keyed for CW (no mic-driven onTxAudioReady in
+    // CW). Connect to QsoRecorder::feedTxAudio.
+    void cwSidetoneRecordPcmReady(const QByteArray& int16Stereo);
+    // True while WE are sending CW (radio keyed + our keyer active), so the
+    // recorder opens its TX gate for CW the same way moxChanged does for voice.
+    // Ownership-correct: driven by our local keyer, not any-owner interlock.
+    void cwRecordingActiveChanged(bool active);
     void txPacketReady(const QByteArray& vitaPacket);  // VITA-49 TX packet for PanadapterStream
     // Sidetone-tapped audio for the TX-side CW decoder (#2417).  Emitted
     // from the audio thread; receivers should connect via Qt::AutoConnection
@@ -602,6 +623,9 @@ signals:
 
 private slots:
     void onTxAudioReady();
+    // CW-sidetone record pump tick (#2539): while the radio is keyed for CW,
+    // render the local sidetone and feed it to the QSO recorder.
+    void onCwRecordPump();
 
 private:
     enum class RxAudioBuffer {
@@ -816,6 +840,23 @@ private:
     std::unique_ptr<Resampler> m_rxResamplerR;      // 24k→device rate, R channel — kept in sync with m_rxResampler
     std::unique_ptr<Resampler> m_radeRxResampler;   // separate 24k→device rate for RADE decoded speech
     std::unique_ptr<CwSidetoneGenerator> m_cwSidetone;  // local CW sidetone, mixed into RX drain
+    // Second, recorder-only CW sidetone generator at the 24 kHz recorder rate.
+    // Keyed in lockstep with m_cwSidetone via setCwKeyDown(); the CW record pump
+    // (onCwRecordPump) renders it to the QSO recorder while the radio is keyed
+    // for CW, so a Client-Side recording carries the operator's sent CW/CWX
+    // (#2539). Always enabled at a fixed level so it records even when the
+    // audible sidetone is off/low (operator monitoring CW via the radio).
+    std::unique_ptr<CwSidetoneGenerator> m_cwRecordSidetone;
+    std::vector<float> m_cwRecordSidetoneScratch;       // int16<->float render scratch
+    // CW record pump state (#2539). The pump free-runs on the audio thread;
+    // m_cwKeyedThisOver latches when our keyer fires (set in setCwKeyDown, reset
+    // on the radio TX→RX edge) so the pump excludes voice/DAX/tune overs that
+    // never key the sidetone. m_cwPumpElapsed drives wall-clock-accurate frame
+    // counts so morse timing in the recording matches real time.
+    QTimer*            m_cwRecordPump{nullptr};
+    QElapsedTimer      m_cwPumpElapsed;
+    bool               m_cwPumpActive{false};            // audio-thread only
+    std::atomic<bool>  m_cwKeyedThisOver{false};
     // Atomic gate for the TX-side CW decode tap (#2417).  Flipped from
     // MainWindow on MOX / CwDecodeTxEnabled changes; checked on the
     // sidetone audio thread so the mirror lambda can return cheaply

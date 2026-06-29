@@ -2471,7 +2471,7 @@ QWidget* RadioSetupDialog::buildAudioTab()
         clientSideBtn->setCheckable(true);
         clientSideBtn->setStyleSheet(modeBtnStyle);
 
-        bool clientSide = settings.value("RecordingMode", "Radio").toString() == "Client";
+        bool clientSide = settings.value("RecordingMode", "Client").toString() == "Client";
         radioSideBtn->setChecked(!clientSide);
         clientSideBtn->setChecked(clientSide);
 

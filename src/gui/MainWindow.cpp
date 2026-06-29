@@ -1012,6 +1012,10 @@ MainWindow::MainWindow(QWidget* parent)
         AppSettings::instance().value("AudioBufferMs", "200").toInt());
     m_audio->moveToThread(m_audioThread);
     m_audioThread->start();
+    // Start the CW-sidetone record pump on the audio thread (#2539): queued so
+    // its QTimer is created + started on m_audio's thread after the move.
+    QMetaObject::invokeMethod(m_audio, [ae = m_audio]() { ae->startCwRecordPump(); },
+                              Qt::QueuedConnection);
     syncReceivePresentationDelaysToAudioEngine();
     setupAudioDeviceChangeMonitor();
 
@@ -1091,8 +1095,8 @@ MainWindow::MainWindow(QWidget* parent)
     // the state change via atomic without any blocking.
     connect(&m_radioModel, &RadioModel::cwKeyDownChanged,
             this, [this](bool down) {
-        if (m_audio && m_audio->cwSidetone())
-            m_audio->cwSidetone()->setKeyDown(down);
+        if (m_audio)
+            m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
     });
     // Monitor owns a dedicated QAudioSink in pull mode — no
     // feedDecodedSpeech routing, no timer pacing.  Keeps playback
@@ -1304,6 +1308,15 @@ MainWindow::MainWindow(QWidget* parent)
     connect(m_audio, &AudioEngine::txFinalMonitorPcmReady,
             m_qsoRecorder, &QsoRecorder::feedTxAudio);
     connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+            m_qsoRecorder, &QsoRecorder::onMoxChanged);
+    // CW/CWX path (#2539): break-in keys the radio without a local MOX edge and
+    // without a mic-driven txFinalMonitorPcmReady, so voice wiring alone records
+    // silence during CW. The record pump feeds our local sidetone, and
+    // cwRecordingActiveChanged opens the recorder's TX gate for our CW — driven
+    // by our own keyer, so another client's TX never gates our recorder.
+    connect(m_audio, &AudioEngine::cwSidetoneRecordPcmReady,
+            m_qsoRecorder, &QsoRecorder::feedTxAudio);
+    connect(m_audio, &AudioEngine::cwRecordingActiveChanged,
             m_qsoRecorder, &QsoRecorder::onMoxChanged);
 
     // ── BNR container autostart ─────────────────────────────────────────
@@ -3161,8 +3174,8 @@ void MainWindow::cancelTransmitFromIndicator()
         m_iambicKeyer->setPaddleState(false, false);
         m_iambicKeyer->reset();
     }
-    if (m_audio && m_audio->cwSidetone())
-        m_audio->cwSidetone()->setKeyDown(false);
+    if (m_audio)
+        m_audio->setCwKeyDown(false);   // clear audible + recorder sidetone
 
     const quint64 sourceMs = cwTraceNowMs();
     const quint64 traceId = nextCwTraceId();

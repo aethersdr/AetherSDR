@@ -81,6 +81,13 @@ public:
     bool isPlaying() const { return m_playing; }
     bool hasLastRecording() const { return !m_lastRecordingPath.isEmpty(); }
 
+    // Path of the in-progress recording (while recording) else the last
+    // finalized one; empty if neither. Used by the automation bridge to locate
+    // the WAV for capture-file verification.
+    QString recordingFilePath() const {
+        return m_file ? m_file->fileName() : m_lastRecordingPath;
+    }
+
     // Duration of current recording in seconds (0 if not recording)
     int recordingDurationSecs() const;
 

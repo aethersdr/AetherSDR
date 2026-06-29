@@ -672,8 +672,8 @@ void MainWindow::wireRadioModel()
         m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
             // Lock-free atomic gate; safe to call directly from the keyer
             // thread, matching the iambic keyer's gate path below.
-            if (m_audio && m_audio->cwSidetone())
-                m_audio->cwSidetone()->setKeyDown(down);
+            if (m_audio)
+                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
         });
         connect(&m_radioModel.cwxModel(), &CwxModel::transmissionRequested,
                 this, [this](const QString& text, int wpm) {
@@ -697,8 +697,8 @@ void MainWindow::wireRadioModel()
             // The radio sees `cw key 1` / `cw key 0` matching our element
             // timing — same RF pattern the radio's own iambic engine
             // would have produced from a hardware paddle.
-            if (m_audio && m_audio->cwSidetone())
-                m_audio->cwSidetone()->setKeyDown(down);
+            if (m_audio)
+                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
             const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
             const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
             if (lcCw().isDebugEnabled()) {

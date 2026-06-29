@@ -1050,8 +1050,16 @@ AudioEngine::AudioEngine(QObject* parent)
     , m_clientFinalLimiterTx(std::make_unique<ClientFinalLimiter>())
     , m_clientTxTestTone(std::make_unique<ClientTxTestTone>())
     , m_cwSidetone(std::make_unique<CwSidetoneGenerator>(48000))
+    , m_cwRecordSidetone(std::make_unique<CwSidetoneGenerator>(DEFAULT_SAMPLE_RATE))
     , m_clientQuindarTone(std::make_unique<ClientQuindarTone>())
 {
+    // Recorder-sidetone generator: always enabled at a fixed, audible level and
+    // centre pan so a Client-Side QSO recording captures the operator's sent
+    // CW/CWX regardless of the audible monitor's volume/enable state (#2539).
+    // Its pitch is mirrored from the audible generator each TX block.
+    m_cwRecordSidetone->setEnabled(true);
+    m_cwRecordSidetone->setVolume(0.5f);
+    m_cwRecordSidetone->setPan(0.5f);
     // TX-side CW decode mirror (#2417).  Plug the sidetone generator's
     // per-block tap into a downsampler + signal emitter; gated on the
     // m_cwDecodeTxTapEnabled atomic so MainWindow can flip TX-decode on
@@ -6338,6 +6346,77 @@ void AudioEngine::stopTxStream()
     m_txSourceStartTime.invalidate();
 }
 
+void AudioEngine::setCwKeyDown(bool down)
+{
+    // Drive the audible sidetone and the recorder-sidetone generator together so
+    // the recording's CW envelope matches what the operator hears/sends. Both
+    // setKeyDown()s are lock-free atomics, safe to call from the keyer threads.
+    if (m_cwSidetone)       m_cwSidetone->setKeyDown(down);
+    if (m_cwRecordSidetone) m_cwRecordSidetone->setKeyDown(down);
+    // Latch that this TX over is a CW over (our keyer fired). The record pump
+    // gates on this so it captures CW but not voice/DAX/tune overs that never
+    // key the sidetone. Reset on the radio TX→RX edge (setRadioTransmitting).
+    if (down) m_cwKeyedThisOver.store(true, std::memory_order_release);
+}
+
+// ── CW-sidetone record pump (#2539) ──────────────────────────────────────────
+// CW has no mic-driven onTxAudioReady, so the recorder's TX side would be silent
+// during CW. This free-running audio-thread timer renders our local sidetone to
+// the recorder while the radio is keyed for CW. It feeds a COPY destined only for
+// the recorder — it never touches the radio TX path.
+
+void AudioEngine::startCwRecordPump()
+{
+    if (m_cwRecordPump) return;                  // idempotent
+    m_cwRecordPump = new QTimer(this);
+    m_cwRecordPump->setInterval(10);             // 10 ms → ~240 frames @ 24 kHz
+    connect(m_cwRecordPump, &QTimer::timeout, this, &AudioEngine::onCwRecordPump);
+    m_cwRecordPump->start();
+}
+
+void AudioEngine::onCwRecordPump()
+{
+    // Active only when WE are sending CW: the radio is keyed AND our keyer has
+    // fired this over. isTxStreaming() (mic capture) is never true in CW, so a
+    // voice over can't reach here even if mis-flagged.
+    const bool active = m_radioTransmitting.load(std::memory_order_acquire)
+                        && m_cwKeyedThisOver.load(std::memory_order_acquire)
+                        && !isTxStreaming();
+
+    if (active != m_cwPumpActive) {
+        m_cwPumpActive = active;
+        if (active) m_cwPumpElapsed.restart();
+        // Open/close the recorder's TX gate for CW the same way moxChanged does
+        // for voice (the recorder MOX-gates feedTxAudio).
+        emit cwRecordingActiveChanged(active);
+        if (!active) return;
+    }
+    if (!active) return;
+
+    // Frame count from elapsed wall-time so morse timing in the WAV tracks real
+    // time despite timer jitter on a busy audio thread.
+    const qint64 ns = m_cwPumpElapsed.nsecsElapsed();
+    m_cwPumpElapsed.restart();
+    int frames = static_cast<int>((ns * DEFAULT_SAMPLE_RATE) / 1000000000LL);
+    if (frames <= 0) return;
+    frames = std::min(frames, DEFAULT_SAMPLE_RATE / 5);   // clamp 200 ms (stall guard)
+
+    if (m_cwSidetone) m_cwRecordSidetone->setPitchHz(m_cwSidetone->pitchHz());
+    m_cwRecordSidetoneScratch.assign(static_cast<size_t>(frames) * 2, 0.0f);
+    // process() adds tone when keyed, leaves silence in the inter-element gaps —
+    // emit either way so the gaps (and thus the morse spacing) are preserved.
+    m_cwRecordSidetone->process(m_cwRecordSidetoneScratch.data(), frames);
+
+    QByteArray pcm;
+    pcm.resize(frames * 2 * static_cast<int>(sizeof(int16_t)));
+    auto* o16 = reinterpret_cast<int16_t*>(pcm.data());
+    for (int i = 0; i < frames * 2; ++i)
+        o16[i] = static_cast<int16_t>(
+            std::clamp(m_cwRecordSidetoneScratch[static_cast<size_t>(i)] * 32768.0f,
+                       -32768.0f, 32767.0f));
+    emit cwSidetoneRecordPcmReady(pcm);
+}
+
 void AudioEngine::onTxAudioReady()
 {
     // If a TCI client is actively feeding TX audio (binary frames via
@@ -6532,18 +6611,18 @@ void AudioEngine::onTxAudioReady()
     // Output Stage" panel reads.
     applyClientFinalLimiterTxInt16(data);
 
-    // ── Final-output monitor tap ────────────────────────────────
-    // Mirrors the post-PUDU monitor but reads at the chain's tail
-    // (post-limiter), so a recording captures EXACTLY what the radio
-    // is told to transmit.  Lock-free pointer load; the monitor's
-    // feedTxPostDsp() handles the not-recording fast path.
+    // ── Final-output monitor tap (+ local CW/CWX sidetone for recording) ──
+    // Mirror the post-PUDU monitor at the chain's tail (post-limiter) for the
+    // PUDU TX monitor and the Client-Side QSO recorder's VOICE tap (#3556).
+    // This path is mic-driven, so it only carries phone/SSB. Local CW/CWX
+    // sidetone has no mic stream and is fed to the recorder separately by the
+    // CW record pump (onCwRecordPump, #2539).
     if (auto* mon = m_txFinalMonitor.load(std::memory_order_acquire)) {
         mon->feedTxPostDsp(data);
     }
-    // Expose the same post-limiter int16 stream as a signal so the QSO recorder
-    // can capture TX for Client-Side recording (#3556). Emitted unconditionally
-    // (independent of whether the PUDU monitor is attached); the recorder slot
-    // fast-returns when not recording / not transmitting, so this is cheap.
+    // Expose the post-limiter int16 stream so the QSO recorder captures voice TX
+    // for Client-Side recording (#3556). Emitted unconditionally; the recorder
+    // slot fast-returns when not recording / not transmitting, so this is cheap.
     emit txFinalMonitorPcmReady(data);
 
     // ── TX post-final-limiter scope tap ─────────────────────────
@@ -6848,6 +6927,10 @@ void AudioEngine::setRadioTransmitting(bool tx)
     const bool previous = m_radioTransmitting.exchange(tx);
     if (previous == tx)
         return;
+
+    // Close the CW-record over on unkey so the next over re-arms cleanly (the
+    // pump latches on our keyer, clears here). #2539.
+    if (!tx) m_cwKeyedThisOver.store(false, std::memory_order_release);
 
     // TX→RX edge: NR2 is bypassed entirely during TX (see the RX DSP chain
     // ~line 1512: raw PCM goes straight to writeAudio so the filter doesn't

@@ -24,6 +24,7 @@ namespace AetherSDR {
 class RadioModel;
 class ConnectionPanel;
 class AudioEngine;
+class QsoRecorder;
 
 // In-app, agent-first automation bridge (issue #3646, Phases 0-1).
 //
@@ -176,6 +177,8 @@ public:
     // "no radio model" rather than crashing).
     void setRadioModel(RadioModel* model) { m_radioModel = model; }
     void setAudioEngine(AudioEngine* audio) { m_audioEngine = audio; }
+    // QSO recorder handle for the record() verb (start/stop/status/path).
+    void setQsoRecorder(QsoRecorder* rec) { m_qsoRecorder = rec; }
     // Real connection dialog hook for the connect/disconnect verbs. The bridge
     // asks ConnectionPanel to emit the same signals the visible buttons do, so
     // automation exercises the normal MainWindow/RadioModel connection path.
@@ -269,6 +272,15 @@ private:
     QJsonObject doConnect(const QString& action, const QString& arg, QLocalSocket* sock);
     QJsonObject doConnectDialog(const QString& action);
     QJsonObject doDisconnect();
+    // record start|stop|status|path|dir <path> — drive the Client-Side QSO
+    // recorder, read the WAV path, or point recordings at a path (for live
+    // capture-file verification on TCC-restricted boxes).
+    QJsonObject doRecord(const QString& action, const QString& value);
+    // testtone on [freqHz] [levelDb] | off — drive the client-side TX test tone
+    // through onTxAudioReady so a recording gets a deterministic "phone" segment
+    // (verifies SSB<->CW switching while recording). The actual transmit still
+    // requires a separately-gated key/MOX.
+    QJsonObject doTestTone(const QString& action, const QString& value);
     QJsonObject doConnectWait(int timeoutMs, QLocalSocket* sock);
     struct ConnectWait;
     void finishConnectWait(const std::shared_ptr<ConnectWait>& wait, bool timedOut);
@@ -327,6 +339,7 @@ private:
     QHash<QLocalSocket*, QByteArray> m_buffers;  // per-client read buffer
     QPointer<RadioModel> m_radioModel;           // for get(); may be null
     QPointer<AudioEngine> m_audioEngine;          // for get audio; may be null
+    QPointer<QsoRecorder> m_qsoRecorder;          // for record(); may be null
     QPointer<ConnectionPanel> m_connectionPanel;  // for connect/disconnect verbs
     QPointer<QObject> m_connectionDialogHost;    // MainWindow show/hide invokables
     std::function<QJsonObject(const QString&)> m_sliceReceiveSourceHandler;

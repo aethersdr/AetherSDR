@@ -186,6 +186,7 @@ public:
     RadioModel& radioModel() { return m_radioModel; }
     const RadioModel& radioModel() const { return m_radioModel; }
     AudioEngine* audioEngine() const { return m_audio; }
+    QsoRecorder* qsoRecorder() const { return m_qsoRecorder; }  // automation bridge
     Q_INVOKABLE void showConnectionDialog();
     Q_INVOKABLE void hideConnectionDialog();
     QJsonObject automationSetSliceReceiveSource(const QString& arg);

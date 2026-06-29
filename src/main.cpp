@@ -427,6 +427,7 @@ int main(int argc, char* argv[])
             automation = std::make_unique<AetherSDR::AutomationServer>();
             automation->setRadioModel(&window.radioModel());  // for the get() verb
             automation->setAudioEngine(window.audioEngine());
+            automation->setQsoRecorder(window.qsoRecorder());  // for the record() verb
             automation->setConnectionDialogHost(&window);
             automation->setConnectionPanel(
                 window.findChild<AetherSDR::ConnectionPanel*>(QStringLiteral("connectionPanel")));

@@ -111,7 +111,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="demo",
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
-                             "connect", "disconnect", "slice", "audioCapture"],
+                             "connect", "disconnect", "slice", "audioCapture",
+                             "record", "testtone"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
@@ -200,6 +201,15 @@ def main():
                 if action == "read" and len(args.rest) == 2:
                     req["path"] = args.rest[1]
                 else:
+                    req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command in ("record", "testtone"):
+            # record <start|stop|status|path|dir [path]> | testtone <on [hz] [db]|off>
+            req = {"cmd": args.command}
+            if args.rest:
+                req["action"] = args.rest[0]
+                if len(args.rest) > 1:
                     req["value"] = " ".join(args.rest[1:])
             print(json.dumps(bridge.request(req), indent=2))
 
