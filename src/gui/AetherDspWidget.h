@@ -109,6 +109,8 @@ private:
     // BNR has two backends behind one button: local AFX vs NIM service.
     bool bnrBackendIsAfx() const;
     void updateBnrStatus();
+    // First-use NVIDIA license acceptance gate (returns false if declined).
+    bool ensureBnrLicenseAccepted();
 
     AudioEngine*    m_audio;
     QStackedWidget* m_dspStack{nullptr};

@@ -84,6 +84,28 @@ container start/stop is a possible future addition.
 - **Auto-disabled in digital/CW modes** (DIGU/DIGL/RTTY/CW/CWL) like the other
   speech denoisers — it would corrupt data / suppress CW tones.
 
+## Licensing
+
+BNR runs NVIDIA-provided software and a denoiser model. The first time BNR is
+enabled (either backend), AetherSDR shows a one-time **NVIDIA license
+acceptance** dialog and records it (`BnrNvidiaLicenseAccepted`); declining
+leaves BNR off. This flows NVIDIA's terms down to the end user.
+
+- **Software (AFX + TensorRT runtime libs)** — distributed as part of AetherSDR
+  under the NVIDIA Software License Agreement + Product-Specific Terms for
+  NVIDIA AI Products (which grant distribution as part of a Compatible
+  Application). The required Works Notice ships in the pack's `NOTICE.txt`.
+- **Denoiser model** — under the NVIDIA Community Model License (General
+  Downloadable Grant); the license text is bundled in the pack's `licenses/`.
+- **Scope** — licensed for use on **NVIDIA RTX / GeForce RTX GPUs on a
+  single-user PC/workstation**. Datacenter / multi-user-server use should run
+  the model via an NVIDIA NIM runtime (the Service backend) instead.
+- **CUDA libraries** are obtained at download time from NVIDIA's own PyPI
+  distribution — AetherSDR does not redistribute them.
+
+The downloaded pack carries the full NVIDIA license texts (`licenses/*.pdf`) and
+`NOTICE.txt`.
+
 ## Build
 
 - **NIM (gRPC)** is always compiled. grpc/protobuf are resolved via CMake

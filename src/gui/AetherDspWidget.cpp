@@ -16,6 +16,7 @@
 #include <QButtonGroup>
 #include <QLineEdit>
 #include <QProgressBar>
+#include <QMessageBox>
 #ifdef HAVE_NVIDIA_AFX
 #include "core/NvidiaAfxPack.h"
 #endif
@@ -248,6 +249,12 @@ void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
     // re-enable from the same place.
     m_dspStack->setCurrentIndex(index);
     if (!m_audio) return;
+    // First-use NVIDIA license gate (both backends run NVIDIA-licensed bits).
+    // If the user declines, revert the button and don't enable.
+    if (index == BNR && nowChecked && !ensureBnrLicenseAccepted()) {
+        if (m_dspBtns[BNR]) { QSignalBlocker b(m_dspBtns[BNR]); m_dspBtns[BNR]->setChecked(false); }
+        return;
+    }
     // NR2 enable must run FFTW wisdom prep first (#2275) — kick that
     // through MainWindow rather than calling the engine setter directly.
     // NR2 disable + every other DSP go through the engine-thread setter.
@@ -968,6 +975,43 @@ void AetherDspWidget::updateBnrStatus()
     if (m_bnrAfxStatus)
         m_bnrAfxStatus->setText(QStringLiteral("Not available in this build"));
 #endif
+}
+
+// One-time NVIDIA license acceptance, shown the first time BNR is enabled
+// (either backend runs NVIDIA-licensed software/model). Flows NVIDIA's terms
+// down to the end user (SWLA §1.3.3) and carries the Works Notice (PST §1.7.1).
+bool AetherDspWidget::ensureBnrLicenseAccepted()
+{
+    auto& s = AppSettings::instance();
+    if (s.value("BnrNvidiaLicenseAccepted", "0").toInt() != 0)
+        return true;
+
+    QMessageBox box(this);
+    box.setWindowTitle(tr("NVIDIA Software License — BNR"));
+    box.setIcon(QMessageBox::Information);
+    box.setTextFormat(Qt::RichText);
+    box.setText(tr("<b>BNR uses NVIDIA Maxine software and a denoiser model.</b>"));
+    box.setInformativeText(tr(
+        "Both the Local (AFX) and Service (NIM) backends use components provided "
+        "by NVIDIA Corporation, governed by NVIDIA's license agreements:"
+        "<ul><li>NVIDIA Software License Agreement</li>"
+        "<li>Product-Specific Terms for NVIDIA AI Products</li>"
+        "<li>NVIDIA Community Model License</li></ul>"
+        "Licensed for use on NVIDIA RTX / GeForce RTX GPUs on a single-user "
+        "PC/workstation. The full texts ship with the downloaded BNR pack "
+        "(<tt>licenses/</tt>); see also "
+        "<a href=\"https://www.nvidia.com/en-us/agreements/enterprise-software/"
+        "nvidia-software-license-agreement/\">NVIDIA's Software License Agreement</a>."
+        "<br><br>By clicking <b>Accept</b> you agree to NVIDIA's license terms."));
+    auto* acceptBtn = box.addButton(tr("Accept"), QMessageBox::AcceptRole);
+    box.addButton(tr("Decline"), QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() == acceptBtn) {
+        s.setValue("BnrNvidiaLicenseAccepted", "1");
+        s.save();
+        return true;
+    }
+    return false;
 }
 
 QWidget* AetherDspWidget::buildBnrPage()
