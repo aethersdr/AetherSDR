@@ -42,6 +42,17 @@ public:
     static bool isInstalled();
     static bool removeInstalled();
 
+    // One downloaded component (AFX bundle / a CUDA wheel) with its pinned
+    // version and the sha256 actually verified at install time.
+    struct ComponentInfo {
+        QString name;
+        QString version;
+        QString sha256;
+    };
+    // Components recorded in the installed pack's receipt (components.json),
+    // written at install. Empty if no pack / a pack predating the receipt.
+    static QList<ComponentInfo> installedComponents();
+
     QString statusText() const;
     bool busy() const { return m_busy; }
 
@@ -71,6 +82,7 @@ private:
                     const QString& dest, const QString& label);
     void extractInto(const QString& archive, Kind kind); // unzip *.so* / tar zst
     void assembleAndCommit();                             // symlink + atomic swap
+    void writeReceipt(const QString& packDir);           // components.json from m_queue
     void fail(const QString& msg);
     void emitOverall(int compPct, const QString& label);
 

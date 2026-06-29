@@ -117,13 +117,15 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
 #if defined(_WIN32)
     // Windows: one self-contained .zip — AFX + CUDA + TensorRT DLLs + model.
     return {
-        { QStringLiteral("AFX runtime + CUDA + TensorRT + model"), {}, {}, afxUrl,
+        { QStringLiteral("AFX runtime + CUDA + TensorRT + model"),
+          {}, QStringLiteral("2.1.0"), afxUrl,
           QString::fromLatin1(kWinTarballSha), Kind::Tarball },
     };
 #else
     // Linux: AFX/TRT/model from our tarball; CUDA libs from NVIDIA's PyPI wheels.
     return {
-        { QStringLiteral("AFX runtime + TensorRT + model"), {}, {}, afxUrl,
+        { QStringLiteral("AFX runtime + TensorRT + model"),
+          {}, QStringLiteral("2.1.0"), afxUrl,
           QStringLiteral("0bfe85b0faeb322958303c145996350d0fea8a203899f9215fc0d3a341395b67"),
           Kind::Tarball },
         { QStringLiteral("CUDA runtime"), QStringLiteral("nvidia-cuda-runtime-cu12"), QStringLiteral("12.8.90"), {}, {}, Kind::Wheel },
@@ -220,6 +222,8 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
                 const QString url = u.value(QStringLiteral("url")).toString();
                 const QString sha = u.value(QStringLiteral("digests")).toObject()
                                        .value(QStringLiteral("sha256")).toString();
+                // Record the resolved sha so the install receipt can report it.
+                if (m_idx < m_queue.size()) m_queue[m_idx].sha256 = sha;
                 downloadTo(QUrl(url), sha,
                            QDir(cacheRoot()).filePath(QStringLiteral(".dl.whl")), name);
                 return;
@@ -323,10 +327,47 @@ void NvidiaAfxPack::assembleAndCommit()
     }
 #endif
 
+    writeReceipt(current);
+
     m_busy = false;
     if (installedPackDir().isEmpty()) { emit finished(false, QStringLiteral("install verification failed")); return; }
     emit progress(100, statusText());
     emit finished(true, statusText());
+}
+
+// Record each downloaded component's name/version/sha256 into the pack so the
+// UI can show exactly what's installed. m_queue carries the pinned versions and
+// (after resolve/verify) the actual sha256 of every component.
+void NvidiaAfxPack::writeReceipt(const QString& packDir)
+{
+    QJsonArray arr;
+    for (const Component& c : m_queue) {
+        QJsonObject o;
+        o.insert(QStringLiteral("name"), c.name);
+        o.insert(QStringLiteral("version"), c.pypiVer);
+        o.insert(QStringLiteral("sha256"), c.sha256);
+        arr.append(o);
+    }
+    QFile f(QDir(packDir).filePath(QStringLiteral("components.json")));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        f.write(QJsonDocument(arr).toJson(QJsonDocument::Indented));
+}
+
+QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::installedComponents()
+{
+    QList<ComponentInfo> out;
+    const QString dir = installedPackDir();
+    if (dir.isEmpty()) return out;
+    QFile f(QDir(dir).filePath(QStringLiteral("components.json")));
+    if (!f.open(QIODevice::ReadOnly)) return out;
+    const QJsonArray arr = QJsonDocument::fromJson(f.readAll()).array();
+    for (const QJsonValue v : arr) {
+        const QJsonObject o = v.toObject();
+        out.append({ o.value(QStringLiteral("name")).toString(),
+                     o.value(QStringLiteral("version")).toString(),
+                     o.value(QStringLiteral("sha256")).toString() });
+    }
+    return out;
 }
 
 // ─── Offline single-archive import ───────────────────────────────────────────
@@ -335,7 +376,19 @@ void NvidiaAfxPack::installFromFile(const QString& archivePath)
     if (m_busy) return;
     if (!QFile::exists(archivePath)) { emit finished(false, QStringLiteral("archive not found")); return; }
     m_busy = true; m_cancelled = false;
-    m_queue.clear(); m_idx = 0;
+    m_idx = 0;
+    // Synthesize a one-entry queue so the install receipt records the imported
+    // archive's sha256 (there are no separately-fetched components offline).
+    QString importSha;
+    {
+        QFile a(archivePath);
+        if (a.open(QIODevice::ReadOnly)) {
+            QCryptographicHash h(QCryptographicHash::Sha256); h.addData(&a);
+            importSha = QString::fromLatin1(h.result().toHex());
+        }
+    }
+    m_queue = { { QStringLiteral("AFX pack (imported)"),
+                  {}, QStringLiteral("2.1.0"), {}, importSha, Kind::Tarball } };
     QDir().mkpath(cacheRoot());
     m_staging = QDir(cacheRoot()).filePath(QStringLiteral(".staging"));
     QDir(m_staging).removeRecursively(); QDir().mkpath(m_staging);

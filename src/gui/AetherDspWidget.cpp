@@ -935,9 +935,9 @@ QWidget* AetherDspWidget::buildRn2Page()
 
 // ── BNR Tab ─────────────────────────────────────────────────────────────────
 
-// One BNR button, two backends. The panel picks between the local in-process
-// AFX denoiser (NVIDIA GPU on this machine) and a NIM service (a gRPC container
-// that can live on this OR another machine — so even non-GPU users get BNR).
+// BNR runs the local in-process NVIDIA AFX denoiser on this machine's GPU.
+// The runtime is downloaded on demand; this reflects install/active state and
+// lists the installed components (version + sha256) below the controls.
 void AetherDspWidget::updateBnrStatus()
 {
 #ifdef HAVE_NVIDIA_AFX
@@ -947,9 +947,7 @@ void AetherDspWidget::updateBnrStatus()
         const bool on = m_audio && m_audio->nvAfxEnabled();
         m_bnrAfxStatus->setText(!installed ? QStringLiteral("Not installed")
                                 : on ? QStringLiteral("● Active")
-                                     : NvidiaAfxPack::isInstalled()
-                                           ? QStringLiteral("Installed — ready")
-                                           : QStringLiteral("Ready"));
+                                     : QStringLiteral("Installed — ready"));
     }
     if (m_bnrAfxDownloadBtn && !busy) {
         m_bnrAfxDownloadBtn->setText(installed ? QStringLiteral("Re-download")
@@ -958,9 +956,42 @@ void AetherDspWidget::updateBnrStatus()
     }
     if (m_bnrAfxIntensitySlider)
         m_bnrAfxIntensitySlider->setEnabled(installed);
+
+    if (m_bnrAfxComponents) {
+        const auto comps = NvidiaAfxPack::installedComponents();
+        if (!installed || comps.isEmpty()) {
+            // No receipt (not installed, or a pack predating the manifest).
+            m_bnrAfxComponents->setText(
+                installed ? tr("<i>Component details available after re-download.</i>")
+                          : QString());
+        } else {
+            QString html = QStringLiteral(
+                "<b>Installed components</b>"
+                "<table cellspacing='0' cellpadding='0' width='100%'>");
+            for (const auto& c : comps) {
+                const QString shortSha = c.sha256.left(16);
+                html += QStringLiteral(
+                    "<tr><td>%1</td><td align='right'>&nbsp;%2&nbsp;</td>"
+                    "<td align='right'><tt>%3%4</tt></td></tr>")
+                    .arg(c.name.toHtmlEscaped(),
+                         c.version.toHtmlEscaped(),
+                         shortSha,
+                         c.sha256.size() > 16 ? QStringLiteral("…") : QString());
+            }
+            html += QStringLiteral("</table>");
+            m_bnrAfxComponents->setText(html);
+            // Full sha256s in the tooltip (short form is shown inline).
+            QString tip;
+            for (const auto& c : comps)
+                tip += QStringLiteral("%1  %2\n%3\n").arg(c.name, c.version, c.sha256);
+            m_bnrAfxComponents->setToolTip(tip.trimmed());
+        }
+    }
 #else
     if (m_bnrAfxStatus)
         m_bnrAfxStatus->setText(QStringLiteral("Not available in this build"));
+    if (m_bnrAfxComponents)
+        m_bnrAfxComponents->clear();
 #endif
 }
 
@@ -1051,6 +1082,18 @@ QWidget* AetherDspWidget::buildBnrPage()
         if (m_audio) QMetaObject::invokeMethod(m_audio, [this, r]() { m_audio->setNvAfxIntensity(r); });
     });
     vbox->addLayout(g);
+
+    // Installed-component manifest — fills the panel's lower area with the
+    // version + sha256 of each downloaded BNR component (populated lazily by
+    // updateBnrStatus from the pack receipt).
+    m_bnrAfxComponents = new QLabel;
+    m_bnrAfxComponents->setTextFormat(Qt::RichText);
+    m_bnrAfxComponents->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    m_bnrAfxComponents->setContentsMargins(0, 12, 0, 0);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrAfxComponents,
+        "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
+    vbox->addWidget(m_bnrAfxComponents);
+
     vbox->addStretch();
 
 #ifdef HAVE_NVIDIA_AFX

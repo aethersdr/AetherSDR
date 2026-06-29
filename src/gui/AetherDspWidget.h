@@ -158,6 +158,7 @@ private:
     NvidiaAfxPack*  m_bnrAfxPack{nullptr};
     QSlider*        m_bnrAfxIntensitySlider{nullptr};
     QLabel*         m_bnrAfxIntensityLabel{nullptr};
+    QLabel*         m_bnrAfxComponents{nullptr};  // installed version/sha table
 };
 
 } // namespace AetherSDR
