@@ -6,6 +6,7 @@
 
 #include <QRegularExpression>
 #include <QSet>
+#include <QHash>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -940,32 +941,41 @@ void AetherDspWidget::updateBnrStatus()
 #ifdef HAVE_NVIDIA_AFX
     const bool installed = NvidiaAfxPack::isInstalled();
     const bool busy = m_bnrAfxPack && m_bnrAfxPack->busy();
+    const bool updatable = installed && m_bnrAfxPack && m_bnrAfxPack->updateAvailable();
     if (m_bnrAfxStatus && !busy) {
         const bool on = m_audio && m_audio->nvAfxEnabled();
         m_bnrAfxStatus->setText(!installed ? QStringLiteral("Not installed")
+                                : updatable ? QStringLiteral("Installed — update available")
                                 : on ? QStringLiteral("● Active")
                                      : QStringLiteral("Installed — ready"));
     }
     if (m_bnrAfxDownloadBtn && !busy) {
-        m_bnrAfxDownloadBtn->setText(installed ? QStringLiteral("Re-download")
-                                               : QStringLiteral("Download (~1 GB)"));
+        m_bnrAfxDownloadBtn->setText(!installed ? QStringLiteral("Download (~1 GB)")
+                                     : updatable ? QStringLiteral("Update")
+                                                 : QStringLiteral("Re-download"));
         m_bnrAfxDownloadBtn->setEnabled(true);
     }
     if (m_bnrAfxIntensitySlider)
         m_bnrAfxIntensitySlider->setEnabled(installed);
 
     // Don't disturb the live download rows mid-flight — the per-component
-    // signals own them while busy. Otherwise reflect the installed manifest.
+    // signals own them while busy. Otherwise reflect the installed manifest,
+    // annotating any component whose pinned version has moved on (→ newer).
     if (!busy) {
         const auto comps = NvidiaAfxPack::installedComponents();
         if (!installed) {
             clearBnrRows();
         } else {
+            QHash<QString, QString> latest;
+            if (m_bnrAfxPack)
+                for (const auto& c : m_bnrAfxPack->latestComponents())
+                    latest.insert(c.name, c.version);
             QStringList names;
             for (const auto& c : comps) names << c.name;
             rebuildBnrRows(names);
             for (int i = 0; i < comps.size(); ++i)
-                setBnrRowDetail(i, comps[i].version, comps[i].sha256, comps[i].bytes);
+                setBnrRowDetail(i, comps[i].version, comps[i].sha256, comps[i].bytes,
+                                latest.value(comps[i].name));
         }
     }
 #else
@@ -1187,7 +1197,8 @@ void AetherDspWidget::setBnrRowProgress(int i, int percent, qint64 bytes, const 
 
 // Swap a row from its progress bar to the installed version/sha/size line.
 void AetherDspWidget::setBnrRowDetail(int i, const QString& version,
-                                      const QString& sha256, qint64 bytes)
+                                      const QString& sha256, qint64 bytes,
+                                      const QString& newVersion)
 {
     if (i < 0 || i >= m_bnrAfxRows.size()) return;
     BnrCompRow& r = m_bnrAfxRows[i];
@@ -1195,7 +1206,11 @@ void AetherDspWidget::setBnrRowDetail(int i, const QString& version,
     if (r.size) r.size->setText(humanSize(bytes));
     if (!r.detail) return;
     // Version inline; full sha256 lives in the tooltip (it's too wide to show).
-    r.detail->setText(QStringLiteral("<b>%1</b>").arg(version.toHtmlEscaped()));
+    // When the build pins a newer version, append a "→ x.y" update hint.
+    QString text = QStringLiteral("<b>%1</b>").arg(version.toHtmlEscaped());
+    if (!newVersion.isEmpty() && newVersion != version)
+        text += QStringLiteral(" <span style='color:#d8a000;'>→ %1</span>").arg(newVersion.toHtmlEscaped());
+    r.detail->setText(text);
     if (!sha256.isEmpty())
         r.detail->setToolTip(QStringLiteral("%1\nsha256: %2").arg(version, sha256));
     r.detail->show();

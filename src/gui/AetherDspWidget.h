@@ -119,7 +119,8 @@ private:
     // version + sha + size once installed (same rows for the steady state).
     void rebuildBnrRows(const QStringList& names);               // one row per component
     void setBnrRowProgress(int i, int percent, qint64 bytes, const QString& rateEta);
-    void setBnrRowDetail(int i, const QString& version, const QString& sha256, qint64 bytes);
+    void setBnrRowDetail(int i, const QString& version, const QString& sha256, qint64 bytes,
+                         const QString& newVersion = QString());
     void clearBnrRows();
 
     AudioEngine*    m_audio;

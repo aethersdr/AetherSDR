@@ -55,6 +55,15 @@ public:
     // written at install. Empty if no pack / a pack predating the receipt.
     static QList<ComponentInfo> installedComponents();
 
+    // The component versions this build of AetherSDR pins (name + version),
+    // arch-independent. Used to hint "→ newer" and detect updates.
+    QList<ComponentInfo> latestComponents() const;
+    // True if an installed component's version differs from what this build
+    // pins — i.e. updating the app shipped newer pinned versions, so a
+    // Re-download would refresh the pack. False if not installed / no receipt /
+    // an offline-imported pack (names won't match the standard manifest).
+    bool updateAvailable() const;
+
     QString statusText() const;
     bool busy() const { return m_busy; }
 

@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QHash>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -195,6 +196,32 @@ QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::plannedComponents() const
     for (const Component& c : m_queue)
         out.append({ c.name, c.pypiVer, c.sha256, c.bytes });
     return out;
+}
+
+QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::latestComponents() const
+{
+    // Versions are arch-independent (arch only varies the model file inside the
+    // AFX bundle, not the pinned versions), so any arch tag yields the same list.
+    QList<ComponentInfo> out;
+    for (const Component& c : manifest(QStringLiteral("any")))
+        out.append({ c.name, c.pypiVer, {}, 0 });
+    return out;
+}
+
+bool NvidiaAfxPack::updateAvailable() const
+{
+    const auto installed = installedComponents();
+    if (installed.isEmpty()) return false;            // not installed / no receipt
+    QHash<QString, QString> have;
+    for (const auto& c : installed) have.insert(c.name, c.version);
+    // Flag only when a matching component's version differs — missing names
+    // (e.g. an offline-imported pack) are left alone to avoid false positives.
+    for (const auto& c : latestComponents()) {
+        const auto it = have.constFind(c.name);
+        if (it != have.constEnd() && it.value() != c.version)
+            return true;
+    }
+    return false;
 }
 
 // ─── v2 multi-source install ─────────────────────────────────────────────────
