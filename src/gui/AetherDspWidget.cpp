@@ -1094,7 +1094,8 @@ QWidget* AetherDspWidget::buildBnrPage()
     m_bnrAfxList = new QWidget;
     m_bnrAfxListLayout = new QGridLayout(m_bnrAfxList);
     m_bnrAfxListLayout->setContentsMargins(0, 12, 10, 0);
-    m_bnrAfxListLayout->setHorizontalSpacing(8);
+    // 24px between name|size and size|bar (the grid's only two column gaps).
+    m_bnrAfxListLayout->setHorizontalSpacing(24);
     m_bnrAfxListLayout->setVerticalSpacing(4);
     m_bnrAfxListLayout->setColumnStretch(2, 1);   // bar/detail column expands
     vbox->addWidget(m_bnrAfxList);
