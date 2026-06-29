@@ -165,7 +165,17 @@ NvidiaAfxPack::~NvidiaAfxPack() { cancel(); }
 void NvidiaAfxPack::cancel()
 {
     m_cancelled = true;
-    if (m_reply) { m_reply->abort(); m_reply->deleteLater(); m_reply = nullptr; }
+    if (m_reply) {
+        // Drop our slots BEFORE abort(): abort() emits finished() synchronously,
+        // and when cancel() runs from ~NvidiaAfxPack (the AetherDSP window closed
+        // mid-download), re-entering the finished handler touches a half-destroyed
+        // pack and emits back at the dying widget — that's the close-mid-download
+        // crash. Disconnected, abort() is inert.
+        m_reply->disconnect();
+        m_reply->abort();
+        m_reply->deleteLater();
+        m_reply = nullptr;
+    }
     if (!m_tmpFile.isEmpty()) { QFile::remove(m_tmpFile); m_tmpFile.clear(); }
     if (!m_staging.isEmpty()) { QDir(m_staging).removeRecursively(); m_staging.clear(); }
     m_busy = false;
@@ -227,11 +237,13 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
     const QUrl api(QStringLiteral("https://pypi.org/pypi/%1/%2/json").arg(c.pypiPkg, c.pypiVer));
     QNetworkRequest req(api);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
-    auto* reply = m_nam->get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, name = c.name]() {
-        const QByteArray body = reply->readAll();
-        const auto err = reply->error();
-        reply->deleteLater();
+    // Track in m_reply so cancel() (e.g. window closed mid-resolve) aborts it.
+    m_reply = m_nam->get(req);
+    connect(m_reply, &QNetworkReply::finished, this, [this, name = c.name]() {
+        if (!m_reply) return;
+        const QByteArray body = m_reply->readAll();
+        const auto err = m_reply->error();
+        m_reply->deleteLater(); m_reply = nullptr;
         if (err != QNetworkReply::NoError) { fail(QStringLiteral("PyPI lookup failed for %1").arg(name)); return; }
         const QJsonObject root = QJsonDocument::fromJson(body).object();
         for (const QJsonValue v : root.value(QStringLiteral("urls")).toArray()) {
@@ -257,7 +269,9 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
                                const QString& dest, const QString& label)
 {
     m_tmpFile = dest;
-    auto* out = new QFile(dest);
+    // Parented to the pack so it's destroyed (and the file closed) if cancel()
+    // drops the reply handlers mid-download instead of the finished path deleting it.
+    auto* out = new QFile(dest, this);
     if (!out->open(QIODevice::WriteOnly)) { delete out; fail(QStringLiteral("cannot write cache")); return; }
     QNetworkRequest req(url);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
