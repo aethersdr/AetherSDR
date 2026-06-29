@@ -1065,10 +1065,14 @@ QWidget* AetherDspWidget::buildBnrPage()
     // Per-component list — one row each, a progress bar while downloading that
     // swaps to the installed version + sha + size when done. The same rows show
     // the installed manifest in the steady state (built by updateBnrStatus).
+    // A shared grid keeps the name / size / bar columns aligned across rows so
+    // every bar starts at the same x and is the same width.
     m_bnrAfxList = new QWidget;
-    m_bnrAfxListLayout = new QVBoxLayout(m_bnrAfxList);
+    m_bnrAfxListLayout = new QGridLayout(m_bnrAfxList);
     m_bnrAfxListLayout->setContentsMargins(0, 12, 10, 0);
-    m_bnrAfxListLayout->setSpacing(4);
+    m_bnrAfxListLayout->setHorizontalSpacing(8);
+    m_bnrAfxListLayout->setVerticalSpacing(4);
+    m_bnrAfxListLayout->setColumnStretch(2, 1);   // bar/detail column expands
     vbox->addWidget(m_bnrAfxList);
 
     vbox->addStretch();
@@ -1120,29 +1124,27 @@ QString humanSize(qint64 bytes)
 }
 } // namespace
 
-// Build one row per component: [ name | size | bar/detail ]. Rows start in the
-// "queued" download state; setBnrRowProgress / setBnrRowDetail update them.
+// Build one grid row per component: [ name | size | bar/detail ]. Columns are
+// shared across rows so every bar aligns and is the same width. Rows start in
+// the "queued" download state; setBnrRowProgress / setBnrRowDetail update them.
+// Fonts are left to inherit so the rows match the rest of the dialog.
 void AetherDspWidget::rebuildBnrRows(const QStringList& names)
 {
     clearBnrRows();
     if (!m_bnrAfxListLayout) return;
+    int row = 0;
     for (const QString& name : names) {
         BnrCompRow r;
-        r.row = new QWidget;
-        auto* h = new QHBoxLayout(r.row);
-        h->setContentsMargins(0, 0, 0, 0);
-        h->setSpacing(6);
         r.name = new QLabel(name);
         AetherSDR::ThemeManager::instance().applyStyleSheet(r.name,
-            "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
+            "QLabel { color: {{color.text.primary}}; }");
         r.size = new QLabel;
-        r.size->setMinimumWidth(46);
         r.size->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
         AetherSDR::ThemeManager::instance().applyStyleSheet(r.size,
-            "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
+            "QLabel { color: {{color.text.secondary}}; }");
         r.bar = new QProgressBar;
         r.bar->setTextVisible(true);
-        r.bar->setFixedHeight(14);
+        r.bar->setFixedHeight(16);
         r.bar->setFormat(QStringLiteral("queued"));
         r.bar->setRange(0, 100);
         r.bar->setValue(0);
@@ -1151,14 +1153,14 @@ void AetherDspWidget::rebuildBnrRows(const QStringList& names)
         r.detail->setTextInteractionFlags(Qt::TextSelectableByMouse);
         r.detail->hide();
         AetherSDR::ThemeManager::instance().applyStyleSheet(r.detail,
-            "QLabel { color: {{color.text.secondary}}; font-size: 10px; }");
-        h->addWidget(r.name);
-        h->addStretch(1);
-        h->addWidget(r.size);
-        h->addWidget(r.bar, 2);
-        h->addWidget(r.detail, 2);
-        m_bnrAfxListLayout->addWidget(r.row);
+            "QLabel { color: {{color.text.secondary}}; }");
+        m_bnrAfxListLayout->addWidget(r.name,   row, 0);
+        m_bnrAfxListLayout->addWidget(r.size,   row, 1);
+        // Bar and detail share the same cell; only one is visible at a time.
+        m_bnrAfxListLayout->addWidget(r.bar,    row, 2);
+        m_bnrAfxListLayout->addWidget(r.detail, row, 2);
         m_bnrAfxRows.append(r);
+        ++row;
     }
 }
 
@@ -1201,8 +1203,12 @@ void AetherDspWidget::setBnrRowDetail(int i, const QString& version,
 
 void AetherDspWidget::clearBnrRows()
 {
-    for (BnrCompRow& r : m_bnrAfxRows)
-        if (r.row) r.row->deleteLater();
+    for (BnrCompRow& r : m_bnrAfxRows) {
+        delete r.name;
+        delete r.size;
+        delete r.bar;
+        delete r.detail;
+    }
     m_bnrAfxRows.clear();
 }
 

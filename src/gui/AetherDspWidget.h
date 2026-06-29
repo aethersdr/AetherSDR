@@ -14,7 +14,7 @@ class QButtonGroup;
 class QStackedWidget;
 class QLineEdit;
 class QProgressBar;
-class QVBoxLayout;
+class QGridLayout;
 
 namespace AetherSDR {
 
@@ -169,11 +169,11 @@ private:
     QSlider*        m_bnrAfxIntensitySlider{nullptr};
     QLabel*         m_bnrAfxIntensityLabel{nullptr};
 
-    // Per-component row list (download bars ⇄ installed detail lines).
+    // Per-component list laid out on a shared grid so every row's bar starts at
+    // the same column and is the same width (download bars ⇄ installed details).
     QWidget*        m_bnrAfxList{nullptr};
-    QVBoxLayout*    m_bnrAfxListLayout{nullptr};
+    QGridLayout*    m_bnrAfxListLayout{nullptr};
     struct BnrCompRow {
-        QWidget*      row{nullptr};
         QLabel*       name{nullptr};
         QLabel*       size{nullptr};
         QProgressBar* bar{nullptr};
