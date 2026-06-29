@@ -51,7 +51,9 @@ public:
                              bool heatMap = true, int colorScheme = 0,
                              bool showGrid = true,
                              float lineWidth = 2.0f,
-                             bool autoBlackRadioSide = false);
+                             bool autoBlackRadioSide = false,
+                             int renderMode = 0,
+                             int dssFloorDepth = 6);
     void syncWfLineDuration(int rate);
     void syncKiwiWaterfallSettings(int cellDb, int floorDb, int rate);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
@@ -140,6 +142,8 @@ signals:
     void kiwiWaterfallFloorChanged(int floorDb);
     void kiwiWaterfallRateChanged(int rate);
     void wfColorSchemeChanged(int scheme);
+    void spectrumRenderModeChanged(int mode);
+    void dssFloorDepthChanged(int dB);
     void noiseFloorPositionChanged(int pos);
     void noiseFloorEnableChanged(bool on);
     // Emitted when user selects a band from the sub-panel.  stackKeyHint is
@@ -167,6 +171,9 @@ signals:
     void wfBlankerThresholdChanged(float threshold);
     void backgroundImageRequested();
     void backgroundImageCleared();
+    // Right-click "Clear": turn the background off entirely (no image, just the
+    // fill colour) and persist it.
+    void backgroundImageDisabled();
     void backgroundOpacityChanged(int pct);
     void backgroundFillColorChanged(const QColor& color);
     void displaySettingsReset();
@@ -286,6 +293,9 @@ private:
     int          m_blackManualValue{15};
     int          m_blackAutoOffsetValue{50};
     QComboBox*   m_colorSchemeCmb{nullptr};
+    QComboBox*   m_renderModeCmb{nullptr};
+    QSlider*     m_dssFloorSlider{nullptr};  // 3DSS floor depth (dB below floor)
+    QLabel*      m_dssFloorLabel{nullptr};
     QComboBox*   m_gpuCombo{nullptr};   // render-GPU selector (multi-GPU only)
     QSlider*     m_rateSlider{nullptr};
     QLabel*      m_rateLabel{nullptr};

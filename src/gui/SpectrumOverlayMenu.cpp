@@ -1526,28 +1526,16 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         auto* clearBtn = new QPushButton("Clear");
         clearBtn->setFixedHeight(18);
         clearBtn->setStyleSheet(btnStyle);
-        clearBtn->setToolTip("Revert to the default logo background");
+        clearBtn->setToolTip("Left-click: revert to the default logo background.\n"
+                             "Right-click: turn the background off entirely.");
         connect(clearBtn, &QPushButton::clicked, this, [this] {
             emit backgroundImageCleared();
         });
+        // Right-click clears the background completely (no image, just the fill).
+        clearBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(clearBtn, &QWidget::customContextMenuRequested, this,
+                [this](const QPoint&) { emit backgroundImageDisabled(); });
         grid->addWidget(clearBtn, row, 3);
-        ++row;
-    }
-
-    // ── Lean render mode toggle (#3283) ─────────────────────────────────
-    // Global low-overhead render mode: opaque panadapter + VFO, capped
-    // repaint, WAVE scope off, throttled meters. Lives under Display, just
-    // below the background chooser. Drives the app-wide toggle.
-    {
-        m_leanBtn = new QPushButton("Lean Mode");
-        m_leanBtn->setCheckable(true);
-        m_leanBtn->setStyleSheet(btnStyle);
-        m_leanBtn->setToolTip("Lean mode: opaque panadapter + VFO, capped "
-                              "repaint, WAVE scope off, throttled meters. "
-                              "Reduces CPU/GPU load. Persists across restarts.");
-        connect(m_leanBtn, &QPushButton::toggled, this,
-                [this](bool on) { emit leanModeToggled(on); });
-        grid->addWidget(m_leanBtn, row, 0, 1, 4);
         ++row;
     }
 
@@ -1601,6 +1589,51 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         grid->addWidget(m_colorSchemeCmb, row, 1, 1, 3);
         connect(m_colorSchemeCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
                 this, [this](int idx) { emit wfColorSchemeChanged(idx); });
+        ++row;
+    }
+
+    // ── Spectrum render mode (2D waterfall vs 3DSS) ───────────────────────
+    {
+        auto* lbl = new QLabel("Spectrum:");
+        lbl->setStyleSheet(labelStyle);
+        grid->addWidget(lbl, row, 0);
+        m_renderModeCmb = new QComboBox;
+        m_renderModeCmb->setObjectName("spectrumRenderModeCombo");  // bridge-addressable
+        m_renderModeCmb->setFixedHeight(18);
+        applyComboStyle(m_renderModeCmb);
+        m_renderModeCmb->addItem("2D Waterfall");       // SpectrumRenderMode::Mode2D
+        m_renderModeCmb->addItem("3D Stacked Trace");   // SpectrumRenderMode::Mode3D
+        m_renderModeCmb->setToolTip(
+            "2D: FFT trace + waterfall.\n"
+            "3D: perspective stacked-trace spectrum stream.");
+        grid->addWidget(m_renderModeCmb, row, 1, 1, 3);
+        connect(m_renderModeCmb, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this](int idx) { emit spectrumRenderModeChanged(idx); });
+        ++row;
+    }
+
+    // ── 3D floor depth — how far below the noise floor to surface (dB) ────
+    makeRow("3D Floor:", 0, 24, 6, m_dssFloorSlider, m_dssFloorLabel);
+    if (m_dssFloorSlider) m_dssFloorSlider->setObjectName("dssFloorDepthSlider");
+    connect(m_dssFloorSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (m_dssFloorLabel) m_dssFloorLabel->setText(QString::number(v));
+        emit dssFloorDepthChanged(v);
+    });
+
+    // ── Lean render mode toggle (#3283) ─────────────────────────────────
+    // Global low-overhead render mode: opaque panadapter + VFO, capped
+    // repaint, WAVE scope off, throttled meters. Grouped with the spectrum
+    // render controls, below the 3D Floor slider. Drives the app-wide toggle.
+    {
+        m_leanBtn = new QPushButton("Lean Mode");
+        m_leanBtn->setCheckable(true);
+        m_leanBtn->setStyleSheet(btnStyle);
+        m_leanBtn->setToolTip("Lean mode: opaque panadapter + VFO, capped "
+                              "repaint, WAVE scope off, throttled meters. "
+                              "Reduces CPU/GPU load. Persists across restarts.");
+        connect(m_leanBtn, &QPushButton::toggled, this,
+                [this](bool on) { emit leanModeToggled(on); });
+        grid->addWidget(m_leanBtn, row, 0, 1, 4);
         ++row;
     }
 
@@ -1752,7 +1785,9 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                bool heatMap, int colorScheme,
                                                bool showGrid,
                                                float lineWidth,
-                                               bool autoBlackRadioSide)
+                                               bool autoBlackRadioSide,
+                                               int renderMode,
+                                               int dssFloorDepth)
 {
     if (!m_avgSlider) return;  // panel not built yet
 
@@ -1808,6 +1843,15 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
     if (m_colorSchemeCmb) {
         QSignalBlocker bc(m_colorSchemeCmb);
         m_colorSchemeCmb->setCurrentIndex(colorScheme);
+    }
+    if (m_renderModeCmb) {
+        QSignalBlocker br(m_renderModeCmb);
+        m_renderModeCmb->setCurrentIndex(renderMode);
+    }
+    if (m_dssFloorSlider) {
+        QSignalBlocker bf(m_dssFloorSlider);
+        m_dssFloorSlider->setValue(dssFloorDepth);
+        if (m_dssFloorLabel) m_dssFloorLabel->setText(QString::number(dssFloorDepth));
     }
 }
 

@@ -2239,6 +2239,10 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::wfColorSchemeChanged,
             sw, &SpectrumWidget::setWfColorScheme);
+    connect(menu, &SpectrumOverlayMenu::spectrumRenderModeChanged,
+            sw, &SpectrumWidget::setSpectrumRenderMode);
+    connect(menu, &SpectrumOverlayMenu::dssFloorDepthChanged,
+            sw, &SpectrumWidget::setDssFloorDepth);
     connect(menu, &SpectrumOverlayMenu::wfColorGainChanged,
             this, [this, applet, sw](int v) {
         if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
@@ -2400,6 +2404,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("BackgroundImage"), ":/bg-default.jpg");
         s.save();
     });
+    // Right-click "Clear": turn the background off entirely (no image, just the
+    // fill colour) and persist as "none" so it stays off across restarts.
+    connect(menu, &SpectrumOverlayMenu::backgroundImageDisabled,
+            this, [sw] {
+        sw->setBackgroundImage(QString());
+        auto& s = AppSettings::instance();
+        s.setValue(sw->settingsKey("BackgroundImage"), "none");
+        s.save();
+    });
     connect(menu, &SpectrumOverlayMenu::backgroundOpacityChanged,
             this, [sw](int pct) {
         sw->setBackgroundOpacity(pct);
@@ -2493,12 +2506,19 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("DisplayFreqGridSpacing"),     "0");
         s.setValue(sw->settingsKey("DisplayNoiseFloorEnable"),    "False");
         s.setValue(sw->settingsKey("DisplayNoiseFloorPosition"),  "75");
+        s.setValue(sw->settingsKey("DisplaySpectrumRenderMode"),  "0");
+        s.setValue(sw->settingsKey("Display3DFloorDepth"),        "6");
         s.save();
 
-        // Sync all Display panel UI controls
+        // Apply the render-mode + 3D-floor reset to the widget too (the keys
+        // above only update settings, not the live SpectrumWidget).
+        sw->setSpectrumRenderMode(0);
+        sw->setDssFloorDepth(6);
+
+        // Sync all Display panel UI controls (incl. the 2D/3D combo + 3D Floor).
         menu->syncDisplaySettings(0, 25, 70, false, QColor(0x00, 0xe5, 0xff),
                                   50, 15, true, 50, 100, 75, false, true, 0,
-                                  true, 2.0f, false);
+                                  true, 2.0f, false, 0, 6);
         menu->syncExtraDisplaySettings(false, 1.15f, 80, 0,
                                        QColor(0x0a, 0x0a, 0x14));
     });

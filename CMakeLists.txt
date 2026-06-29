@@ -723,6 +723,7 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/DssRenderer.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/SliceColorManager.cpp
     src/gui/SliceLabel.cpp
@@ -1297,6 +1298,8 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/overlay.frag
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
+            resources/shaders/dss_mesh.vert
+            resources/shaders/dss_mesh.frag
     )
 endif()
 
