@@ -111,6 +111,8 @@ QString NvidiaAfxPack::statusText() const
 
 bool NvidiaAfxPack::removeInstalled()
 {
+    // Also clear any resumable staging so a removal is a clean slate.
+    QDir(stagingPath()).removeRecursively();
     const QString cur = QDir(cacheRoot()).filePath(QStringLiteral("current"));
     QFileInfo fi(cur);
     if (fi.isSymLink()) return QFile::remove(cur);
@@ -177,15 +179,17 @@ void NvidiaAfxPack::cancel()
         m_reply->deleteLater();
         m_reply = nullptr;
     }
+    // Remove only the in-flight partial download; KEEP staging so already-
+    // completed components survive for a resumable re-download.
     if (!m_tmpFile.isEmpty()) { QFile::remove(m_tmpFile); m_tmpFile.clear(); }
-    if (!m_staging.isEmpty()) { QDir(m_staging).removeRecursively(); m_staging.clear(); }
     m_busy = false;
 }
 
 void NvidiaAfxPack::fail(const QString& msg)
 {
+    // Drop only the partial download; completed components stay staged so a
+    // retry resumes instead of starting over.
     if (!m_tmpFile.isEmpty()) { QFile::remove(m_tmpFile); m_tmpFile.clear(); }
-    if (!m_staging.isEmpty()) { QDir(m_staging).removeRecursively(); m_staging.clear(); }
     m_busy = false;
     emit finished(false, msg);
 }
@@ -224,6 +228,54 @@ bool NvidiaAfxPack::updateAvailable() const
     return false;
 }
 
+// ─── Resumable staging ───────────────────────────────────────────────────────
+QString NvidiaAfxPack::stagingPath()
+{
+    return QDir(cacheRoot()).filePath(QStringLiteral(".staging"));
+}
+
+// Components already downloaded + verified into staging (a .progress.json
+// written as each one completes). Survives cancel so a re-download resumes.
+QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::stagedComponents()
+{
+    QList<ComponentInfo> out;
+    QFile f(QDir(stagingPath()).filePath(QStringLiteral(".progress.json")));
+    if (!f.open(QIODevice::ReadOnly)) return out;
+    const QJsonArray arr = QJsonDocument::fromJson(f.readAll()).array();
+    for (const QJsonValue v : arr) {
+        const QJsonObject o = v.toObject();
+        out.append({ o.value(QStringLiteral("name")).toString(),
+                     o.value(QStringLiteral("version")).toString(),
+                     o.value(QStringLiteral("sha256")).toString(),
+                     static_cast<qint64>(o.value(QStringLiteral("bytes")).toDouble()) });
+    }
+    return out;
+}
+
+void NvidiaAfxPack::writeStagingProgress()
+{
+    QJsonArray arr;
+    for (const ComponentInfo& c : m_done) {
+        QJsonObject o;
+        o.insert(QStringLiteral("name"), c.name);
+        o.insert(QStringLiteral("version"), c.version);
+        o.insert(QStringLiteral("sha256"), c.sha256);
+        o.insert(QStringLiteral("bytes"), static_cast<double>(c.bytes));
+        arr.append(o);
+    }
+    QFile f(QDir(m_staging).filePath(QStringLiteral(".progress.json")));
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+}
+
+bool NvidiaAfxPack::isCompleted(const Component& c) const
+{
+    for (const ComponentInfo& d : m_done)
+        if (d.name == c.name && d.version == c.pypiVer)
+            return true;
+    return false;
+}
+
 // ─── v2 multi-source install ─────────────────────────────────────────────────
 void NvidiaAfxPack::install()
 {
@@ -232,14 +284,16 @@ void NvidiaAfxPack::install()
     if (m_arch.isEmpty()) { emit finished(false, QStringLiteral("no supported NVIDIA GPU found")); return; }
     m_busy = true; m_cancelled = false;
     QDir().mkpath(cacheRoot());
-    m_staging = QDir(cacheRoot()).filePath(QStringLiteral(".staging"));
-    QDir(m_staging).removeRecursively();
+    m_staging = stagingPath();
+    // Reuse any existing staging (resume): keep already-downloaded components and
+    // only fetch the missing ones. m_done carries what survived a prior cancel.
     QDir().mkpath(m_staging);
 #if !defined(_WIN32)
     // Linux flattens CUDA wheel .so files here; Windows DLLs ride in the zip.
     QDir().mkpath(QDir(m_staging).filePath(QStringLiteral("external/cuda/lib")));
 #endif
     m_queue = manifest(m_arch);
+    m_done = stagedComponents();
     m_idx = 0;
     emit planReady(plannedComponents());
     startNext();
@@ -247,9 +301,24 @@ void NvidiaAfxPack::install()
 
 void NvidiaAfxPack::startNext()
 {
-    if (m_cancelled) { fail(QStringLiteral("cancelled")); return; }
+    if (m_cancelled) { m_busy = false; return; }   // keep staging for resume
     if (m_idx >= m_queue.size()) { assembleAndCommit(); return; }
-    const Component& c = m_queue[m_idx];
+    Component& c = m_queue[m_idx];
+    if (isCompleted(c)) {
+        // Already downloaded + extracted in a prior run — restore its recorded
+        // sha/bytes and mark the row done without re-fetching.
+        for (const ComponentInfo& d : m_done) {
+            if (d.name == c.name && d.version == c.pypiVer) {
+                c.sha256 = d.sha256; c.bytes = d.bytes;
+                emit componentProgress(m_idx, 100, d.bytes, QString());
+                emit componentFinished(m_idx, d);
+                break;
+            }
+        }
+        ++m_idx;
+        startNext();
+        return;
+    }
     if (c.kind == Kind::Wheel)
         resolveWheelUrl(c);                        // PyPI JSON -> url+sha -> download
     else
@@ -340,7 +409,12 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
         QFile::remove(dest); m_tmpFile.clear();
         if (!m_busy) return;                           // extractInto called fail()
         const Component& c = m_queue[m_idx];
-        emit componentFinished(m_idx, { c.name, c.pypiVer, c.sha256, bytes });
+        const ComponentInfo info{ c.name, c.pypiVer, c.sha256, bytes };
+        // Persist into the resumable staging manifest so a cancel keeps it.
+        m_done.removeIf([&](const ComponentInfo& d) { return d.name == info.name; });
+        m_done.append(info);
+        writeStagingProgress();
+        emit componentFinished(m_idx, info);
         ++m_idx;
         startNext();
     });
@@ -382,12 +456,15 @@ void NvidiaAfxPack::assembleAndCommit()
                  .arg(QString::fromLatin1(kCoreRelPath)));
         return;
     }
+    // Drop the resume marker so it doesn't ride into the committed pack.
+    QFile::remove(QDir(packRoot).filePath(QStringLiteral(".progress.json")));
     const QString current = QDir(root).filePath(QStringLiteral("current"));
     QFileInfo curInfo(current);
     if (curInfo.isSymLink()) QFile::remove(current);
     else if (curInfo.exists()) QDir(current).removeRecursively();
     if (!QDir().rename(packRoot, current)) { fail(QStringLiteral("could not install into %1").arg(current)); return; }
     m_staging.clear();
+    m_done.clear();   // staging consumed — next install starts fresh
 
 #if !defined(_WIN32)
     // Linux: symlink the denoiser feature lib onto the core's RPATH dir so the
@@ -454,6 +531,7 @@ void NvidiaAfxPack::installFromFile(const QString& archivePath)
     if (!QFile::exists(archivePath)) { emit finished(false, QStringLiteral("archive not found")); return; }
     m_busy = true; m_cancelled = false;
     m_idx = 0;
+    m_done.clear();   // offline import is always a fresh, single-archive install
     // Synthesize a one-entry queue so the install receipt records the imported
     // archive's sha256 (there are no separately-fetched components offline).
     QString importSha;

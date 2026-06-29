@@ -55,6 +55,11 @@ public:
     // written at install. Empty if no pack / a pack predating the receipt.
     static QList<ComponentInfo> installedComponents();
 
+    // Components already downloaded + verified into the resumable staging area
+    // from a cancelled/interrupted install. A re-download skips these and only
+    // fetches the missing ones. Empty if there's no partial download.
+    static QList<ComponentInfo> stagedComponents();
+
     // The component versions this build of AetherSDR pins (name + version),
     // arch-independent. Used to hint "→ newer" and detect updates.
     QList<ComponentInfo> latestComponents() const;
@@ -104,8 +109,11 @@ private:
     void extractInto(const QString& archive, Kind kind); // unzip *.so* / tar zst
     void assembleAndCommit();                             // symlink + atomic swap
     void writeReceipt(const QString& packDir);           // components.json from m_queue
+    void writeStagingProgress();                          // .staging/.progress.json
+    bool isCompleted(const Component& c) const;           // already in m_done (name+ver)?
     void fail(const QString& msg);
     QList<ComponentInfo> plannedComponents() const;       // m_queue -> ComponentInfo list
+    static QString stagingPath();                         // cacheRoot()/.staging
 
     QNetworkAccessManager* m_nam{nullptr};
     QNetworkReply* m_reply{nullptr};
@@ -115,6 +123,7 @@ private:
     QString m_staging;       // staging pack root being assembled
     QString m_tmpFile;       // current download temp
     QElapsedTimer m_dlTimer; // current component download timer (speed/ETA)
+    QList<ComponentInfo> m_done;  // components completed into staging (resumable)
     bool m_busy{false};
     bool m_cancelled{false};
 };

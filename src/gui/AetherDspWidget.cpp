@@ -942,30 +942,39 @@ void AetherDspWidget::updateBnrStatus()
     const bool installed = NvidiaAfxPack::isInstalled();
     const bool busy = m_bnrAfxPack && m_bnrAfxPack->busy();
     const bool updatable = installed && m_bnrAfxPack && m_bnrAfxPack->updateAvailable();
+    // A cancelled download leaves verified components staged for resume.
+    const auto staged = installed ? QList<NvidiaAfxPack::ComponentInfo>()
+                                  : NvidiaAfxPack::stagedComponents();
+    const int totalComps = m_bnrAfxPack ? m_bnrAfxPack->latestComponents().size() : 0;
+    const bool partial = !installed && !staged.isEmpty() && totalComps > 0;
     if (m_bnrAfxStatus && !busy) {
         const bool on = m_audio && m_audio->nvAfxEnabled();
-        m_bnrAfxStatus->setText(!installed ? QStringLiteral("Not installed")
-                                : updatable ? QStringLiteral("Installed — update available")
-                                : on ? QStringLiteral("● Active")
-                                     : QStringLiteral("Installed — ready"));
+        m_bnrAfxStatus->setText(installed
+                                    ? (updatable ? QStringLiteral("Installed — update available")
+                                       : on ? QStringLiteral("● Active")
+                                            : QStringLiteral("Installed — ready"))
+                                : partial ? tr("Partially downloaded (%1/%2)")
+                                                .arg(staged.size()).arg(totalComps)
+                                          : QStringLiteral("Not installed"));
     }
     if (m_bnrAfxDownloadBtn && !busy) {
-        m_bnrAfxDownloadBtn->setText(!installed ? QStringLiteral("Download (~1 GB)")
-                                     : updatable ? QStringLiteral("Update")
-                                                 : QStringLiteral("Re-download"));
+        m_bnrAfxDownloadBtn->setText(installed
+                                         ? (updatable ? QStringLiteral("Update")
+                                                      : QStringLiteral("Re-download"))
+                                     : partial ? tr("Resume download")
+                                               : QStringLiteral("Download (~1 GB)"));
         m_bnrAfxDownloadBtn->setEnabled(true);
     }
     if (m_bnrAfxIntensitySlider)
         m_bnrAfxIntensitySlider->setEnabled(installed);
 
     // Don't disturb the live download rows mid-flight — the per-component
-    // signals own them while busy. Otherwise reflect the installed manifest,
-    // annotating any component whose pinned version has moved on (→ newer).
+    // signals own them while busy. Otherwise reflect the installed manifest
+    // (annotating any component whose pinned version moved on, → newer), or the
+    // partially-downloaded set when a download was cancelled.
     if (!busy) {
-        const auto comps = NvidiaAfxPack::installedComponents();
-        if (!installed) {
-            clearBnrRows();
-        } else {
+        if (installed) {
+            const auto comps = NvidiaAfxPack::installedComponents();
             QHash<QString, QString> latest;
             if (m_bnrAfxPack)
                 for (const auto& c : m_bnrAfxPack->latestComponents())
@@ -976,6 +985,14 @@ void AetherDspWidget::updateBnrStatus()
             for (int i = 0; i < comps.size(); ++i)
                 setBnrRowDetail(i, comps[i].version, comps[i].sha256, comps[i].bytes,
                                 latest.value(comps[i].name));
+        } else if (partial) {
+            QStringList names;
+            for (const auto& c : staged) names << c.name;
+            rebuildBnrRows(names);
+            for (int i = 0; i < staged.size(); ++i)
+                setBnrRowDetail(i, staged[i].version, staged[i].sha256, staged[i].bytes);
+        } else {
+            clearBnrRows();
         }
     }
 #else
