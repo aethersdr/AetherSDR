@@ -56,6 +56,13 @@ jobs:
       - name: Fix git ownership for container
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
+      # Always-on NIM BNR needs grpc/protobuf (installed here until the CI image
+      # is rebuilt with the dep).
+      - name: Install gRPC / protobuf
+        run: |
+          apt-get update && apt-get install -y \
+            libgrpc++-dev libprotobuf-dev protobuf-compiler protobuf-compiler-grpc
+
       - name: Initialize CodeQL
         uses: github/codeql-action/init@7c1e4cf0b20d7c1872b26569c00ba908797a59bf
         with:
