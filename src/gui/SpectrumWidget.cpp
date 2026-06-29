@@ -6690,13 +6690,6 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                         foundCursor = true;
                     }
                 }
-                if (!foundCursor) {
-                    Qt::CursorShape cursorShape = Qt::ArrowCursor;
-                    if (sliceCursorShapeAt(pos, cursorShape)) {
-                        setSpectrumCursor(cursorShape);
-                        foundCursor = true;
-                    }
-                }
                 if (!foundCursor && m_showSpots) {
                     bool spotHover = false;
                     for (const auto& hr : m_spotClickRects) {
@@ -6724,6 +6717,13 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                                 break;
                             }
                         }
+                    }
+                }
+                if (!foundCursor) {
+                    Qt::CursorShape cursorShape = Qt::ArrowCursor;
+                    if (sliceCursorShapeAt(pos, cursorShape)) {
+                        setSpectrumCursor(cursorShape);
+                        foundCursor = true;
                     }
                 }
                 // Prop forecast overlay click target
