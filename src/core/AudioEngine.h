@@ -37,7 +37,6 @@ namespace AetherSDR {
 
 class SpecbleachFilter;
 class RNNoiseFilter;
-class NvidiaBnrFilter;
 class DeepFilterFilter;
 class NvidiaAfxFilter;
 class Resampler;
@@ -239,15 +238,6 @@ public:
     bool mnrEnabled() const { return m_mnrEnabled.load(); }
     void setMnrStrength(float normalized);
     float mnrStrength() const;
-
-    // Client-side BNR (NVIDIA NIM GPU noise removal)
-    Q_INVOKABLE void setBnrEnabled(bool on);
-    bool bnrEnabled() const { return m_bnrEnabled.load(); }
-    void setBnrAddress(const QString& addr);
-    QString bnrAddress() const { return m_bnrAddress; }
-    void setBnrIntensity(float ratio);
-    float bnrIntensity() const;
-    bool bnrConnected() const;
 
     // Client-side DFNR (DeepFilterNet3 neural noise reduction)
     Q_INVOKABLE void setDfnrEnabled(bool on);
@@ -554,8 +544,6 @@ signals:
     void mnrEnabledChanged(bool on);
     void rn2EnabledChanged(bool on);
     void rn2TxEnabledChanged(bool on);   // RN2 on the TX mic pre-amp (#2813)
-    void bnrEnabledChanged(bool on);
-    void bnrConnectionChanged(bool connected);
     void dfnrEnabledChanged(bool on);
     void nvAfxEnabledChanged(bool on);
     void txRawPcmReady(const QByteArray& pcm);  // raw 24kHz stereo int16 PCM for RADEEngine
@@ -632,16 +620,12 @@ private:
         std::unique_ptr<SpectralNR> nr2;
         std::unique_ptr<Resampler> rxResampler;
         std::unique_ptr<Resampler> rxResamplerR;
-        std::unique_ptr<Resampler> bnrUp;
-        std::unique_ptr<Resampler> bnrDown;
-        QByteArray bnrOutBuf;
         float gain{1.0f};
         int pan{50};
         int presentationDelayMs{0};
         bool enabled{false};
         bool muted{false};
         bool prebuffering{false};
-        bool bnrPrimed{false};
     };
 
     struct AutomationAudioCaptureChunk {
@@ -876,22 +860,6 @@ private:
     // Scratch buffer for int16 ↔ float32 conversion around RN2 TX.
     // Audio-thread only — grows once to steady state, then alloc-free.
     QByteArray m_rn2TxF32In;
-
-    // Client-side BNR (NVIDIA NIM)
-    std::unique_ptr<NvidiaBnrFilter> m_bnr;
-    std::unique_ptr<Resampler> m_bnrUp;    // 24k→48k mono
-    std::unique_ptr<Resampler> m_bnrDown;  // 48k→24k mono
-    std::unique_ptr<Resampler> m_kiwiSdrBnrUp;
-    std::unique_ptr<Resampler> m_kiwiSdrBnrDown;
-    std::atomic<bool> m_bnrEnabled{false};
-    QString m_bnrAddress{"localhost:8001"};
-    QByteArray m_bnrOutBuf;  // jitter buffer: denoised 24kHz stereo int16
-    QByteArray m_kiwiSdrBnrOutBuf;
-    bool m_bnrPrimed{false}; // true after enough denoised data accumulated
-    bool m_kiwiSdrBnrPrimed{false};
-    void processBnr(const QByteArray& stereoPcm,
-                    RxDspSource source,
-                    ExternalRxAudioSourceState* externalSource = nullptr);
 
     // Client-side DFNR (DeepFilterNet3)
 #ifdef HAVE_DFNR

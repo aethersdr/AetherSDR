@@ -348,12 +348,6 @@ else()
     message(STATUS "GPU spectrum rendering disabled (use -DAETHER_GPU_SPECTRUM=ON to enable)")
 endif()
 
-# NVIDIA NIM BNR (the gRPC/container path) has been dropped: hams can't be
-# expected to run a NIM container, and local in-process AFX (ENABLE_NVIDIA_AFX)
-# now covers NVIDIA GPUs directly. NvidiaBnrFilter falls back to its built-in
-# no-op stub (HAVE_BNR is never defined), so no grpc/protobuf dependency.
-set(BNR_SOURCES "")
-
 # libspecbleach NR4 — bundled spectral noise reduction (LGPL-2.1)
 # MSVC: libspecbleach uses C99 VLAs and __attribute__ which MSVC doesn't support.
 # When clang-cl is available, build as a separate static lib using it.
@@ -573,7 +567,6 @@ set(CORE_SOURCES
     src/core/SpectrogramBuffer.cpp
     src/core/SignalClassifier.cpp
     src/core/Resampler.cpp
-    src/core/NvidiaBnrFilter.cpp
     src/core/NvidiaAfxFilter.cpp
     src/core/NvidiaAfxPack.cpp
     src/core/DeepFilterFilter.cpp
@@ -1030,7 +1023,7 @@ endif()
 
 qt_add_resources(RESOURCES resources/resources.qrc)
 
-add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES} ${DFNR_RESOURCES})
+add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES} ${DFNR_RESOURCES})
 
 if (USE_SYSTEM_ZLIB)
     target_link_libraries(AetherSDR PRIVATE PkgConfig::zlib)
@@ -1498,9 +1491,6 @@ elseif(OPUS_FOUND)
     target_include_directories(AetherSDR PRIVATE ${OPUS_INCLUDE_DIRS})
     target_link_libraries(AetherSDR PRIVATE ${OPUS_LIBRARIES})
 endif()
-
-# NIM BNR dropped — HAVE_BNR is never defined, so NvidiaBnrFilter compiles to
-# its no-op stub and there is no grpc/protobuf link.
 
 if(ENABLE_SPECBLEACH)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SPECBLEACH)
