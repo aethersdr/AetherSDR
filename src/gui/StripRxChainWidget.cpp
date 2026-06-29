@@ -682,7 +682,7 @@ bool StripRxChainWidget::isAdspBypassed() const
     if (!m_audio) return true;
     return !(m_audio->nr2Enabled()  || m_audio->nr4Enabled() ||
              m_audio->mnrEnabled()  || m_audio->dfnrEnabled() ||
-             m_audio->rn2Enabled()  || m_audio->bnrEnabled());
+             m_audio->rn2Enabled()  || m_audio->nvAfxEnabled());
 }
 
 void StripRxChainWidget::toggleAdspBypass()
@@ -696,13 +696,13 @@ void StripRxChainWidget::toggleAdspBypass()
         if (m_audio->mnrEnabled())  m_adspBypassSnapshot << "MNR";
         if (m_audio->dfnrEnabled()) m_adspBypassSnapshot << "DFNR";
         if (m_audio->rn2Enabled())  m_adspBypassSnapshot << "RN2";
-        if (m_audio->bnrEnabled())  m_adspBypassSnapshot << "BNR";
+        if (m_audio->nvAfxEnabled())  m_adspBypassSnapshot << "BNR";
         m_audio->setNr2Enabled(false);
         m_audio->setNr4Enabled(false);
         m_audio->setMnrEnabled(false);
         m_audio->setDfnrEnabled(false);
         m_audio->setRn2Enabled(false);
-        m_audio->setBnrEnabled(false);
+        m_audio->setNvAfxEnabled(false);
     } else {
         // Restore snapshot.  If nothing was on at bypass-time (or no
         // snapshot persisted), fall back to NR2 — sensible default
@@ -716,7 +716,7 @@ void StripRxChainWidget::toggleAdspBypass()
                 else if (m == "MNR")  m_audio->setMnrEnabled(true);
                 else if (m == "DFNR") m_audio->setDfnrEnabled(true);
                 else if (m == "RN2")  m_audio->setRn2Enabled(true);
-                else if (m == "BNR")  m_audio->setBnrEnabled(true);
+                else if (m == "BNR")  m_audio->setNvAfxEnabled(true);
             }
         }
         m_adspBypassSnapshot.clear();

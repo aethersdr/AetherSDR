@@ -1,7 +1,0 @@
-{
-  "name": "aethersdr",
-  "description": "AetherSDR vcpkg manifest — provides grpc/protobuf for the always-on NIM BNR client (used by the Windows CI/build; Linux uses system grpc, macOS uses Homebrew). No builtin-baseline so the host vcpkg resolves grpc from its own port tree.",
-  "dependencies": [
-    "grpc"
-  ]
-}

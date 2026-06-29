@@ -38,8 +38,7 @@ jobs:
             libgstreamer-gl1.0-0 libgstreamer-plugins-base1.0-0 \
             libfuse2 file desktop-file-utils imagemagick \
             python3-pip autoconf automake libtool libasound2-dev \
-            libfftw3-dev libhidapi-dev portaudio19-dev \
-            libgrpc++-dev protobuf-compiler protobuf-compiler-grpc libprotobuf-dev
+            libfftw3-dev libhidapi-dev portaudio19-dev
 
       - name: Install system Qt (ARM only)
         if: matrix.use_aqt == false

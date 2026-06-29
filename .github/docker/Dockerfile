@@ -34,8 +34,4 @@ RUN apt-get update && apt-get install -y \
     libssl-dev \
     libmosquitto-dev \
     ca-certificates \
-    libgrpc++-dev \
-    libprotobuf-dev \
-    protobuf-compiler \
-    protobuf-compiler-grpc \
     && rm -rf /var/lib/apt/lists/*

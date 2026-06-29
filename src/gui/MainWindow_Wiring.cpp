@@ -772,10 +772,6 @@ void MainWindow::onSliceAdded(SliceModel* s)
                     QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr2Enabled(false); });
                 if (m_audio->rn2Enabled())
                     QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setRn2Enabled(false); });
-#ifdef HAVE_BNR
-                if (m_audio->bnrEnabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setBnrEnabled(false); });
-#endif
                 if (m_audio->nr4Enabled())
                     QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr4Enabled(false); });
                 if (m_audio->dfnrEnabled())
@@ -3384,7 +3380,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         auto syncAetherDsp = [this, w] {
             if (!m_audio) return;
             const bool active = m_audio->nr2Enabled() || m_audio->nr4Enabled()
-                             || m_audio->mnrEnabled() || m_audio->bnrEnabled()
+                             || m_audio->mnrEnabled()
                              || m_audio->dfnrEnabled() || m_audio->rn2Enabled()
                              || m_audio->nvAfxEnabled();
             w->setAetherDspActive(active);
@@ -3392,7 +3388,6 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         connect(m_audio, &AudioEngine::nr2EnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
         connect(m_audio, &AudioEngine::nr4EnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
         connect(m_audio, &AudioEngine::mnrEnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
-        connect(m_audio, &AudioEngine::bnrEnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
         connect(m_audio, &AudioEngine::dfnrEnabledChanged, w, [syncAetherDsp](bool){ syncAetherDsp(); });
         connect(m_audio, &AudioEngine::rn2EnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
         connect(m_audio, &AudioEngine::nvAfxEnabledChanged, w, [syncAetherDsp](bool){ syncAetherDsp(); });

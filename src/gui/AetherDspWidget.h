@@ -106,8 +106,7 @@ private:
     // and on every *EnabledChanged signal.
     void syncDspSelectorFromEngine();
 
-    // BNR has two backends behind one button: local AFX vs NIM service.
-    bool bnrBackendIsAfx() const;
+    // BNR = the local NVIDIA AFX denoiser (download-on-demand).
     void updateBnrStatus();
     // First-use NVIDIA license acceptance gate (returns false if declined).
     bool ensureBnrLicenseAccepted();
@@ -152,19 +151,13 @@ private:
     QSlider*      m_dfnrBetaSlider{nullptr};
     QLabel*       m_dfnrBetaLabel{nullptr};
 
-    // BNR controls — one button, two backends (AFX local / NIM service)
-    QButtonGroup*   m_bnrBackendGroup{nullptr};
-    QStackedWidget* m_bnrBackendStack{nullptr};
+    // BNR controls — local NVIDIA AFX GPU denoiser
     QLabel*         m_bnrAfxStatus{nullptr};
     QPushButton*    m_bnrAfxDownloadBtn{nullptr};
     QProgressBar*   m_bnrAfxProgress{nullptr};
     NvidiaAfxPack*  m_bnrAfxPack{nullptr};
     QSlider*        m_bnrAfxIntensitySlider{nullptr};
     QLabel*         m_bnrAfxIntensityLabel{nullptr};
-    QLineEdit*      m_bnrNimAddress{nullptr};
-    QLabel*         m_bnrNimStatus{nullptr};
-    QSlider*        m_bnrNimIntensitySlider{nullptr};
-    QLabel*         m_bnrNimIntensityLabel{nullptr};
 };
 
 } // namespace AetherSDR

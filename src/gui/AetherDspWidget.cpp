@@ -189,14 +189,14 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
                           "Install LLVM from llvm.org and rebuild to enable NR4.");
         }
 #endif
-        // BNR (NVIDIA GPU neural denoising) is gated at compile time
-        // by HAVE_BNR — VfoWidget hides its button entirely; here we
-        // keep the slot visible so the 6-button row stays balanced and
-        // just dim it for builds without the BNR backend.
-#ifndef HAVE_BNR
+        // BNR (NVIDIA AFX GPU denoiser) is gated at compile time by
+        // HAVE_NVIDIA_AFX (Linux/Windows + NVIDIA GPU). Keep the slot visible so
+        // the 6-button row stays balanced; just dim it where AFX isn't built.
+#ifndef HAVE_NVIDIA_AFX
         if (i == BNR) {
             b->setEnabled(false);
-            b->setToolTip("BNR requires the NVIDIA Broadcast SDK and an NVIDIA GPU.");
+            b->setToolTip("BNR requires an NVIDIA RTX/GeForce GPU "
+                          "(not available in this build).");
         }
 #endif
         m_dspBtns[i] = b;
@@ -229,11 +229,9 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
                 this, &AetherDspWidget::syncDspSelectorFromEngine);
         connect(m_audio, &AudioEngine::rn2EnabledChanged,
                 this, &AetherDspWidget::syncDspSelectorFromEngine);
-        connect(m_audio, &AudioEngine::bnrEnabledChanged,
-                this, &AetherDspWidget::syncDspSelectorFromEngine);
         connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
                 this, &AetherDspWidget::syncDspSelectorFromEngine);
-        connect(m_audio, &AudioEngine::bnrConnectionChanged,
+        connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
                 this, &AetherDspWidget::updateBnrStatus);
     }
 
@@ -268,11 +266,7 @@ void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
                 case MNR:  m_audio->setMnrEnabled(nowChecked); break;
                 case DFNR: m_audio->setDfnrEnabled(nowChecked); break;
                 case RN2:  m_audio->setRn2Enabled(nowChecked); break;
-                case BNR:
-                    // One button, two backends: route to the selected one.
-                    if (bnrBackendIsAfx()) m_audio->setNvAfxEnabled(nowChecked);
-                    else                   m_audio->setBnrEnabled(nowChecked);
-                    break;
+                case BNR:  m_audio->setNvAfxEnabled(nowChecked); break;  // local AFX
             }
         });
     }
@@ -299,7 +293,7 @@ void AetherDspWidget::syncDspSelectorFromEngine()
         m_audio->mnrEnabled(),
         m_audio->dfnrEnabled(),
         m_audio->rn2Enabled(),
-        m_audio->bnrEnabled() || m_audio->nvAfxEnabled(),  // BNR = either backend
+        m_audio->nvAfxEnabled(),   // BNR button = local AFX denoiser
     };
     int active = -1;
     for (int i = 0; i < NumDsps; ++i) {
@@ -938,21 +932,8 @@ QWidget* AetherDspWidget::buildRn2Page()
 // One BNR button, two backends. The panel picks between the local in-process
 // AFX denoiser (NVIDIA GPU on this machine) and a NIM service (a gRPC container
 // that can live on this OR another machine — so even non-GPU users get BNR).
-bool AetherDspWidget::bnrBackendIsAfx() const
-{
-    return m_bnrBackendGroup && m_bnrBackendGroup->checkedId() == 0;
-}
-
 void AetherDspWidget::updateBnrStatus()
 {
-    if (m_bnrNimStatus && m_audio) {
-        const bool conn = m_audio->bnrConnected();
-        m_bnrNimStatus->setText(conn ? "● Connected" : "○ Not connected");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(
-            m_bnrNimStatus,
-            QStringLiteral("QLabel { color: %1; font-size: 11px; }")
-                .arg(conn ? "{{color.status.ok}}" : "{{color.text.secondary}}"));
-    }
 #ifdef HAVE_NVIDIA_AFX
     const bool installed = NvidiaAfxPack::isInstalled();
     const bool busy = m_bnrAfxPack && m_bnrAfxPack->busy();
@@ -1021,162 +1002,78 @@ QWidget* AetherDspWidget::buildBnrPage()
     vbox->setContentsMargins(10, 20, 10, 0);
     auto& s = AppSettings::instance();
 
-    auto* info = new QLabel("GPU-accelerated AI noise removal (NVIDIA Maxine).");
-    info->setWordWrap(false);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(info, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
-    vbox->addWidget(info);
-
-    // ── Backend selector ──────────────────────────────────────────────
     bool afxBuilt = false;
 #ifdef HAVE_NVIDIA_AFX
     afxBuilt = true;
 #endif
-    auto* backendRow = new QHBoxLayout;
-    backendRow->setContentsMargins(0, 10, 0, 0);
-    backendRow->addWidget(new QLabel("Backend:"));
-    m_bnrBackendGroup = new QButtonGroup(this);
-    auto* afxRadio = new QRadioButton("Local (AFX)");
-    auto* nimRadio = new QRadioButton("Service (NIM)");
-    if (!afxBuilt) {
-        afxRadio->setEnabled(false);
-        afxRadio->setToolTip("This build has no local AFX backend "
-                             "(build with -DENABLE_NVIDIA_AFX=ON).");
-    }
-    m_bnrBackendGroup->addButton(afxRadio, 0);  // 0 = AFX local
-    m_bnrBackendGroup->addButton(nimRadio, 1);  // 1 = NIM service
-    backendRow->addWidget(afxRadio);
-    backendRow->addWidget(nimRadio);
-    backendRow->addStretch();
-    vbox->addLayout(backendRow);
 
-    const QString backend = s.value("BnrBackend", afxBuilt ? "afx" : "nim").toString();
-    if (backend == "afx" && afxBuilt) afxRadio->setChecked(true);
-    else                              nimRadio->setChecked(true);
+    auto* info = new QLabel("GPU-accelerated AI noise removal (NVIDIA Maxine) — "
+                            "runs in-process on a local NVIDIA GPU.");
+    info->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(info, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    vbox->addWidget(info);
 
-    // ── Backend-specific sub-panels ───────────────────────────────────
-    m_bnrBackendStack = new QStackedWidget;
+    auto* g = new QGridLayout;
+    g->setContentsMargins(0, 12, 10, 0);
+    g->setColumnStretch(1, 1);
 
-    // AFX (local) sub-panel: status + intensity
-    {
-        auto* w = new QWidget;
-        auto* g = new QGridLayout(w);
-        g->setContentsMargins(0, 8, 10, 0);
-        g->setColumnStretch(1, 1);
-        m_bnrAfxStatus = new QLabel;
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrAfxStatus, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-        g->addWidget(new QLabel("Status"), 0, 0);
-        g->addWidget(m_bnrAfxStatus, 0, 1);
-        m_bnrAfxDownloadBtn = new QPushButton("Download");
-        m_bnrAfxDownloadBtn->setToolTip("Download the NVIDIA AFX runtime + denoiser model "
-                                        "for this GPU into the app's cache (one-time).");
-        g->addWidget(m_bnrAfxDownloadBtn, 0, 2);
-        m_bnrAfxProgress = new QProgressBar;
-        m_bnrAfxProgress->setTextVisible(true);
-        m_bnrAfxProgress->hide();
-        g->addWidget(m_bnrAfxProgress, 1, 0, 1, 3);
-        g->addWidget(new QLabel("Intensity"), 2, 0);
-        m_bnrAfxIntensitySlider = new QSlider(Qt::Horizontal);
-        m_bnrAfxIntensitySlider->setRange(0, 100);
-        m_bnrAfxIntensitySlider->setValue(static_cast<int>(s.value("NvAfxIntensity", "1.0").toFloat() * 100));
-        applyPrimarySliderStyle(m_bnrAfxIntensitySlider);
-        m_bnrAfxIntensitySlider->setToolTip("Denoising strength (0 = passthrough, 100 = max).");
-        g->addWidget(m_bnrAfxIntensitySlider, 2, 1);
-        m_bnrAfxIntensityLabel = new QLabel(QString::number(m_bnrAfxIntensitySlider->value()));
-        m_bnrAfxIntensityLabel->setFixedWidth(40);
-        g->addWidget(m_bnrAfxIntensityLabel, 2, 2);
-        connect(m_bnrAfxIntensitySlider, &QSlider::valueChanged, this, [this](int v) {
-            m_bnrAfxIntensityLabel->setText(QString::number(v));
-            const float r = v / 100.0f;
-            auto& st = AppSettings::instance();
-            st.setValue("NvAfxIntensity", QString::number(r, 'f', 2)); st.save();
-            if (m_audio) QMetaObject::invokeMethod(m_audio, [this, r]() { m_audio->setNvAfxIntensity(r); });
-        });
-#ifdef HAVE_NVIDIA_AFX
-        m_bnrAfxPack = new NvidiaAfxPack(this);
-        connect(m_bnrAfxPack, &NvidiaAfxPack::progress, this, [this](int pct, const QString& s) {
-            if (!m_bnrAfxProgress) return;
-            m_bnrAfxProgress->show();
-            if (pct < 0) m_bnrAfxProgress->setRange(0, 0);          // indeterminate
-            else { m_bnrAfxProgress->setRange(0, 100); m_bnrAfxProgress->setValue(pct); }
-            m_bnrAfxProgress->setFormat(s);
-            if (m_bnrAfxStatus) m_bnrAfxStatus->setText(s);
-            if (m_bnrAfxDownloadBtn) m_bnrAfxDownloadBtn->setEnabled(false);
-        });
-        connect(m_bnrAfxPack, &NvidiaAfxPack::finished, this, [this](bool ok, const QString& msg) {
-            if (m_bnrAfxProgress) m_bnrAfxProgress->hide();
-            if (!ok && m_bnrAfxStatus) m_bnrAfxStatus->setText(QStringLiteral("Failed: %1").arg(msg));
-            updateBnrStatus();
-        });
-        connect(m_bnrAfxDownloadBtn, &QPushButton::clicked, this, [this]() {
-            if (m_bnrAfxPack) m_bnrAfxPack->install();   // v2: CUDA from PyPI + hosted AFX bits
-        });
-#else
-        m_bnrAfxDownloadBtn->setEnabled(false);
-#endif
-        if (!afxBuilt) w->setEnabled(false);
-        m_bnrBackendStack->addWidget(w);  // index 0
-    }
+    // Status + one-time Download
+    g->addWidget(new QLabel("Status"), 0, 0);
+    m_bnrAfxStatus = new QLabel;
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrAfxStatus, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    g->addWidget(m_bnrAfxStatus, 0, 1);
+    m_bnrAfxDownloadBtn = new QPushButton("Download");
+    m_bnrAfxDownloadBtn->setToolTip("Download the NVIDIA AFX runtime + denoiser model "
+                                    "for this GPU into the app's cache (one-time).");
+    g->addWidget(m_bnrAfxDownloadBtn, 0, 2);
+    m_bnrAfxProgress = new QProgressBar;
+    m_bnrAfxProgress->setTextVisible(true);
+    m_bnrAfxProgress->hide();
+    g->addWidget(m_bnrAfxProgress, 1, 0, 1, 3);
 
-    // NIM (service) sub-panel: address + connection status + intensity
-    {
-        auto* w = new QWidget;
-        auto* g = new QGridLayout(w);
-        g->setContentsMargins(0, 8, 10, 0);
-        g->setColumnStretch(1, 1);
-        g->addWidget(new QLabel("Service"), 0, 0);
-        m_bnrNimAddress = new QLineEdit(m_audio ? m_audio->bnrAddress() : QStringLiteral("localhost:8001"));
-        m_bnrNimAddress->setToolTip("host:port of the NIM BNR service (local or remote). "
-                                    "The container can run on any machine.");
-        g->addWidget(m_bnrNimAddress, 0, 1, 1, 2);
-        connect(m_bnrNimAddress, &QLineEdit::editingFinished, this, [this]() {
-            const QString addr = m_bnrNimAddress->text().trimmed();
-            if (addr.isEmpty() || !m_audio) return;
-            auto& st = AppSettings::instance();
-            st.setValue("BnrAddress", addr); st.save();
-            QMetaObject::invokeMethod(m_audio, [this, addr]() { m_audio->setBnrAddress(addr); });
-        });
-        m_bnrNimStatus = new QLabel("○ Not connected");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrNimStatus, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
-        g->addWidget(new QLabel("Status"), 1, 0);
-        g->addWidget(m_bnrNimStatus, 1, 1, 1, 2);
-        g->addWidget(new QLabel("Intensity"), 2, 0);
-        m_bnrNimIntensitySlider = new QSlider(Qt::Horizontal);
-        m_bnrNimIntensitySlider->setRange(0, 100);
-        m_bnrNimIntensitySlider->setValue(static_cast<int>(s.value("BnrIntensity", "1.0").toFloat() * 100));
-        applyPrimarySliderStyle(m_bnrNimIntensitySlider);
-        g->addWidget(m_bnrNimIntensitySlider, 2, 1);
-        m_bnrNimIntensityLabel = new QLabel(QString::number(m_bnrNimIntensitySlider->value()));
-        m_bnrNimIntensityLabel->setFixedWidth(40);
-        g->addWidget(m_bnrNimIntensityLabel, 2, 2);
-        connect(m_bnrNimIntensitySlider, &QSlider::valueChanged, this, [this](int v) {
-            m_bnrNimIntensityLabel->setText(QString::number(v));
-            const float r = v / 100.0f;
-            auto& st = AppSettings::instance();
-            st.setValue("BnrIntensity", QString::number(r, 'f', 2)); st.save();
-            if (m_audio) QMetaObject::invokeMethod(m_audio, [this, r]() { m_audio->setBnrIntensity(r); });
-        });
-        m_bnrBackendStack->addWidget(w);  // index 1
-    }
-
-    m_bnrBackendStack->setCurrentIndex(bnrBackendIsAfx() ? 0 : 1);
-    vbox->addWidget(m_bnrBackendStack);
+    // Intensity
+    g->addWidget(new QLabel("Intensity"), 2, 0);
+    m_bnrAfxIntensitySlider = new QSlider(Qt::Horizontal);
+    m_bnrAfxIntensitySlider->setRange(0, 100);
+    m_bnrAfxIntensitySlider->setValue(static_cast<int>(s.value("NvAfxIntensity", "1.0").toFloat() * 100));
+    applyPrimarySliderStyle(m_bnrAfxIntensitySlider);
+    m_bnrAfxIntensitySlider->setToolTip("Denoising strength (0 = passthrough, 100 = max).");
+    g->addWidget(m_bnrAfxIntensitySlider, 2, 1);
+    m_bnrAfxIntensityLabel = new QLabel(QString::number(m_bnrAfxIntensitySlider->value()));
+    m_bnrAfxIntensityLabel->setFixedWidth(40);
+    g->addWidget(m_bnrAfxIntensityLabel, 2, 2);
+    connect(m_bnrAfxIntensitySlider, &QSlider::valueChanged, this, [this](int v) {
+        m_bnrAfxIntensityLabel->setText(QString::number(v));
+        const float r = v / 100.0f;
+        auto& st = AppSettings::instance();
+        st.setValue("NvAfxIntensity", QString::number(r, 'f', 2)); st.save();
+        if (m_audio) QMetaObject::invokeMethod(m_audio, [this, r]() { m_audio->setNvAfxIntensity(r); });
+    });
+    vbox->addLayout(g);
     vbox->addStretch();
 
-    connect(m_bnrBackendGroup, &QButtonGroup::idClicked, this, [this](int id) {
-        m_bnrBackendStack->setCurrentIndex(id == 0 ? 0 : 1);
-        auto& st = AppSettings::instance();
-        st.setValue("BnrBackend", id == 0 ? "afx" : "nim"); st.save();
-        // If BNR is already on, switch backends live.
-        if (m_audio && (m_audio->bnrEnabled() || m_audio->nvAfxEnabled())) {
-            QMetaObject::invokeMethod(m_audio, [this, id]() {
-                m_audio->setBnrEnabled(false);
-                m_audio->setNvAfxEnabled(false);
-                if (id == 0) m_audio->setNvAfxEnabled(true);
-                else         m_audio->setBnrEnabled(true);
-            });
-        }
+#ifdef HAVE_NVIDIA_AFX
+    m_bnrAfxPack = new NvidiaAfxPack(this);
+    connect(m_bnrAfxPack, &NvidiaAfxPack::progress, this, [this](int pct, const QString& s) {
+        if (!m_bnrAfxProgress) return;
+        m_bnrAfxProgress->show();
+        if (pct < 0) m_bnrAfxProgress->setRange(0, 0);          // indeterminate
+        else { m_bnrAfxProgress->setRange(0, 100); m_bnrAfxProgress->setValue(pct); }
+        m_bnrAfxProgress->setFormat(s);
+        if (m_bnrAfxStatus) m_bnrAfxStatus->setText(s);
+        if (m_bnrAfxDownloadBtn) m_bnrAfxDownloadBtn->setEnabled(false);
+    });
+    connect(m_bnrAfxPack, &NvidiaAfxPack::finished, this, [this](bool ok, const QString& msg) {
+        if (m_bnrAfxProgress) m_bnrAfxProgress->hide();
+        if (!ok && m_bnrAfxStatus) m_bnrAfxStatus->setText(QStringLiteral("Failed: %1").arg(msg));
         updateBnrStatus();
     });
+    connect(m_bnrAfxDownloadBtn, &QPushButton::clicked, this, [this]() {
+        if (m_bnrAfxPack) m_bnrAfxPack->install();   // CUDA from PyPI + hosted AFX bits
+    });
+#else
+    m_bnrAfxDownloadBtn->setEnabled(false);
+#endif
 
     updateBnrStatus();
     return page;

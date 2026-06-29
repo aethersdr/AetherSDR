@@ -37,7 +37,6 @@ jobs:
             # build without SmartLink credential persistence on Intel.
             brew install fftw portaudio hidapi
           fi
-          brew install grpc protobuf   # always-on NIM BNR (gRPC client)
 
       - name: Download pre-built Qt (Intel only)
         if: matrix.label == 'intel'

@@ -2078,7 +2078,7 @@ MainWindow::~MainWindow()
         QMetaObject::invokeMethod(audio, [audio]() {
             audio->setNr2Enabled(false);
             audio->setRn2Enabled(false);
-            audio->setBnrEnabled(false);
+            audio->setNvAfxEnabled(false);
             audio->stopRxStream();
             audio->stopTxStream();
         }, Qt::BlockingQueuedConnection);

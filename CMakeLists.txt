@@ -348,60 +348,11 @@ else()
     message(STATUS "GPU spectrum rendering disabled (use -DAETHER_GPU_SPECTRUM=ON to enable)")
 endif()
 
-# NVIDIA NIM BNR (Background Noise Removal) — gRPC client to a Maxine BNR
-# microservice (NVIDIA NIM). ALWAYS compiled: the service can run on any
-# machine (including a remote host), so even users without a local NVIDIA GPU
-# can use BNR by pointing at a service elsewhere. grpc++/protobuf are provided
-# cross-platform via vcpkg (config-mode find_package), so this builds on Linux,
-# Windows (MSVC) and macOS without pkg-config. See vcpkg.json.
-# Prefer CMake config-mode (vcpkg on Windows, Homebrew on macOS, or any grpc
-# shipping CMake configs); fall back to pkg-config (Debian/Ubuntu system grpc,
-# which ships grpc++.pc + protoc/grpc_cpp_plugin but no CMake config).
-find_package(gRPC CONFIG QUIET)
-find_package(Protobuf CONFIG QUIET)
-if(gRPC_FOUND AND Protobuf_FOUND)
-    set(BNR_PROTOC protobuf::protoc)
-    set(BNR_GRPC_PLUGIN $<TARGET_FILE:gRPC::grpc_cpp_plugin>)
-    set(BNR_GRPC_PLUGIN_DEP gRPC::grpc_cpp_plugin)
-    set(BNR_LINK_LIBS gRPC::grpc++ protobuf::libprotobuf)
-    set(BNR_INCLUDE_DIRS "")
-    message(STATUS "NVIDIA BNR: grpc/protobuf via CMake config")
-else()
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GRPCPP REQUIRED grpc++)
-    pkg_check_modules(PROTOBUF REQUIRED protobuf)
-    find_program(BNR_PROTOC protoc REQUIRED)
-    find_program(BNR_GRPC_PLUGIN grpc_cpp_plugin REQUIRED)
-    set(BNR_GRPC_PLUGIN_DEP ${BNR_GRPC_PLUGIN})
-    set(BNR_LINK_LIBS ${GRPCPP_LIBRARIES} ${PROTOBUF_LIBRARIES})
-    set(BNR_INCLUDE_DIRS ${GRPCPP_INCLUDE_DIRS} ${PROTOBUF_INCLUDE_DIRS})
-    message(STATUS "NVIDIA BNR: grpc/protobuf via pkg-config (${GRPCPP_VERSION})")
-endif()
-
-# Generate C++ stubs from bnr.proto.
-set(BNR_PROTO "${CMAKE_SOURCE_DIR}/src/core/proto/bnr.proto")
-set(BNR_GEN_DIR "${CMAKE_BINARY_DIR}/bnr_gen")
-file(MAKE_DIRECTORY ${BNR_GEN_DIR})
-
-set(BNR_PB_CC "${BNR_GEN_DIR}/bnr.pb.cc")
-set(BNR_PB_H  "${BNR_GEN_DIR}/bnr.pb.h")
-set(BNR_GRPC_CC "${BNR_GEN_DIR}/bnr.grpc.pb.cc")
-set(BNR_GRPC_H  "${BNR_GEN_DIR}/bnr.grpc.pb.h")
-
-add_custom_command(
-    OUTPUT ${BNR_PB_CC} ${BNR_PB_H} ${BNR_GRPC_CC} ${BNR_GRPC_H}
-    COMMAND ${BNR_PROTOC}
-        --proto_path=${CMAKE_SOURCE_DIR}/src/core/proto
-        --cpp_out=${BNR_GEN_DIR}
-        --grpc_out=${BNR_GEN_DIR}
-        --plugin=protoc-gen-grpc=${BNR_GRPC_PLUGIN}
-        ${BNR_PROTO}
-    DEPENDS ${BNR_PROTO} ${BNR_GRPC_PLUGIN_DEP}
-    COMMENT "Generating BNR gRPC stubs from bnr.proto"
-)
-
-set(BNR_SOURCES ${BNR_PB_CC} ${BNR_GRPC_CC})
-message(STATUS "NVIDIA BNR enabled (always compiled; gRPC/protobuf via vcpkg config-mode)")
+# NVIDIA NIM BNR (the gRPC/container path) has been dropped: hams can't be
+# expected to run a NIM container, and local in-process AFX (ENABLE_NVIDIA_AFX)
+# now covers NVIDIA GPUs directly. NvidiaBnrFilter falls back to its built-in
+# no-op stub (HAVE_BNR is never defined), so no grpc/protobuf dependency.
+set(BNR_SOURCES "")
 
 # libspecbleach NR4 — bundled spectral noise reduction (LGPL-2.1)
 # MSVC: libspecbleach uses C99 VLAs and __attribute__ which MSVC doesn't support.
@@ -1548,11 +1499,8 @@ elseif(OPUS_FOUND)
     target_link_libraries(AetherSDR PRIVATE ${OPUS_LIBRARIES})
 endif()
 
-# BNR is always compiled (see the proto-gen block above). grpc/protobuf come
-# from CMake config targets or pkg-config (see BNR_* vars set there).
-target_compile_definitions(AetherSDR PRIVATE HAVE_BNR)
-target_include_directories(AetherSDR PRIVATE ${BNR_GEN_DIR} ${BNR_INCLUDE_DIRS})
-target_link_libraries(AetherSDR PRIVATE ${BNR_LINK_LIBS})
+# NIM BNR dropped — HAVE_BNR is never defined, so NvidiaBnrFilter compiles to
+# its no-op stub and there is no grpc/protobuf link.
 
 if(ENABLE_SPECBLEACH)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SPECBLEACH)
