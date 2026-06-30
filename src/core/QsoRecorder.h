@@ -133,7 +133,7 @@ private:
     bool preparePlaybackPcm(int sinkRateHz);
 
     // Recording state
-    bool        m_recording{false};
+    std::atomic<bool> m_recording{false};  // checked lock-free on the audio feed fast path
     std::atomic<bool> m_transmitting{false};  // MOX state; gates RX vs TX writes (#3556)
     QFile*      m_file{nullptr};
     QDateTime   m_startTime;

@@ -125,6 +125,13 @@ static QByteArray float32ToInt16(const QByteArray& pcm)
 
 void QsoRecorder::feedRxAudio(const QByteArray& pcm)
 {
+    // Lock-free fast path off the real-time audio thread: skip the mutex when
+    // we're not recording an RX over, so a GUI thread holding m_writeMutex
+    // during finalize/stop can't stall audio. The post-lock check stays
+    // authoritative (m_recording/m_transmitting can flip after this read).
+    if (!m_recording.load(std::memory_order_acquire)
+        || m_transmitting.load(std::memory_order_acquire))
+        return;
     std::lock_guard<std::mutex> lock(m_writeMutex);
     // While transmitting the radio mutes RX (this stream would be silence), and
     // the TX monitor is recorded instead — skip RX so the two don't double-write
@@ -137,6 +144,13 @@ void QsoRecorder::feedRxAudio(const QByteArray& pcm)
 
 void QsoRecorder::feedTxAudio(const QByteArray& int16Stereo)
 {
+    // Lock-free fast path: the CW record pump calls this ~100×/s from the
+    // real-time audio thread. Skip the mutex when we're not recording a TX over
+    // so a GUI thread holding m_writeMutex during finalize/stop can't stall
+    // audio (xrun). The post-lock check stays authoritative.
+    if (!m_recording.load(std::memory_order_acquire)
+        || !m_transmitting.load(std::memory_order_acquire))
+        return;
     std::lock_guard<std::mutex> lock(m_writeMutex);
     // Only capture the TX monitor while actually transmitting (the tap can fire
     // whenever mic capture runs), so RX and TX never both write.
