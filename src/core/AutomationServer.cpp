@@ -271,6 +271,17 @@ QJsonObject describeWidget(const QWidget* w)
     if (!val.isNull())
         o[QStringLiteral("value")] = val;
 
+    // A checkable button reports its value as "checked"/"unchecked", which hides
+    // the label that says *which* control it is (the six DSP method buttons —
+    // NR2 … BNR — were indistinguishable without a screenshot). Surface the
+    // button text and a boolean check-state so a driver can read both the
+    // identity and the on/off state from dumpTree alone (#3856).
+    if (auto* b = qobject_cast<const QAbstractButton*>(w); b && b->isCheckable()) {
+        if (!b->text().isEmpty())
+            o[QStringLiteral("text")] = b->text();
+        o[QStringLiteral("checked")] = b->isChecked();
+    }
+
     // Range for numeric controls — lets a driver validate against the real
     // bounds (scale) and detect wrapping/circular sliders without guessing
     // extremes (#3646).
@@ -1157,6 +1168,90 @@ QJsonObject audioSnapshotOnObjectThread(AudioEngine* audio, bool* ok)
         [audio, &snapshot]() {
             snapshot = audioSnapshot(audio);
         },
+        Qt::BlockingQueuedConnection);
+    *ok = invoked;
+    return snapshot;
+}
+
+// Client-side AetherDSP noise-reduction state (#3856). `get slice` reports the
+// radio-side nr/nb/anf; this is the missing model for the six client-side
+// AudioEngine modules (NR2 / NR4 / MNR / DFNR / RN2 / BNR) so a driver can
+// assert which method is active and read its tuning without a screenshot of the
+// AetherDSP applet. The modules are mutually exclusive, so `active` names the one
+// enabled module (or "none"). `available` reflects compile-time backend gating —
+// the same guards the selector buttons use to dim an unbuildable method.
+// Engine-only portion (enable flags + engine-owned tuning getters); the NR2/NR4
+// slider params live in AppSettings and are merged in by the caller on the main
+// thread. Runs on the AudioEngine thread (m_bnr/m_dfnr are not main-thread safe).
+QJsonObject dspEngineSnapshot(const AudioEngine* a)
+{
+    struct Mod { const char* name; bool enabled; bool available; };
+    const Mod mods[] = {
+        {"NR2",  a->nr2Enabled(),  true},
+        {"NR4",  a->nr4Enabled(),
+#ifdef HAVE_SPECBLEACH
+                                   true},
+#else
+                                   false},
+#endif
+        {"MNR",  a->mnrEnabled(),
+#ifdef Q_OS_MAC
+                                   true},
+#else
+                                   false},
+#endif
+        {"DFNR", a->dfnrEnabled(),
+#ifdef HAVE_DFNR
+                                   true},
+#else
+                                   false},
+#endif
+        {"RN2",  a->rn2Enabled(),  true},
+        {"BNR",  a->bnrEnabled(),
+#ifdef HAVE_BNR
+                                   true},
+#else
+                                   false},
+#endif
+    };
+
+    QJsonObject methods;
+    QString active = QStringLiteral("none");
+    for (const Mod& m : mods) {
+        methods[QLatin1String(m.name)] =
+            QJsonObject{{QStringLiteral("enabled"), m.enabled},
+                        {QStringLiteral("available"), m.available}};
+        if (m.enabled) active = QLatin1String(m.name);
+    }
+
+    // Engine-owned tuning (the slider params that have live engine getters).
+    QJsonObject tuning;
+    tuning[QStringLiteral("mnr")] =
+        QJsonObject{{QStringLiteral("strength"), a->mnrStrength()}};
+    tuning[QStringLiteral("dfnr")] =
+        QJsonObject{{QStringLiteral("attenLimitDb"), a->dfnrAttenLimit()}};
+    tuning[QStringLiteral("bnr")] =
+        QJsonObject{{QStringLiteral("intensity"), a->bnrIntensity()},
+                    {QStringLiteral("address"), a->bnrAddress()},
+                    {QStringLiteral("connected"), a->bnrConnected()}};
+
+    return QJsonObject{{QStringLiteral("active"), active},
+                       {QStringLiteral("methods"), methods},
+                       {QStringLiteral("tuning"), tuning}};
+}
+
+QJsonObject dspSnapshotOnObjectThread(AudioEngine* audio, bool* ok)
+{
+    *ok = false;
+    if (!audio) return {};
+    if (!audio->thread() || audio->thread() == QThread::currentThread()) {
+        *ok = true;
+        return dspEngineSnapshot(audio);
+    }
+    QJsonObject snapshot;
+    const bool invoked = QMetaObject::invokeMethod(
+        audio,
+        [audio, &snapshot]() { snapshot = dspEngineSnapshot(audio); },
         Qt::BlockingQueuedConnection);
     *ok = invoked;
     return snapshot;
@@ -2361,6 +2456,56 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("audio"), data}};
     }
+    if (model == QLatin1String("dsp")) {
+        AudioEngine* audio = m_audioEngine;
+        if (!audio)
+            return err(QStringLiteral("no audio engine available"));
+        bool snapshotOk = false;
+        QJsonObject data = dspSnapshotOnObjectThread(audio, &snapshotOk);
+        if (!snapshotOk)
+            return err(QStringLiteral("dsp snapshot unavailable"));
+        // Merge the NR2/NR4/DFNR-beta slider params, which the AetherDSP applet
+        // persists in AppSettings rather than the engine. Read on the main
+        // thread (where the bridge runs); defaults mirror the applet's.
+        AppSettings& s = AppSettings::instance();
+        QJsonObject tuning = data.value(QStringLiteral("tuning")).toObject();
+        tuning[QStringLiteral("nr2")] = QJsonObject{
+            {QStringLiteral("gainMax"),    s.value("NR2GainMax", "1.50").toFloat()},
+            {QStringLiteral("gainSmooth"), s.value("NR2GainSmooth", "0.85").toFloat()},
+            {QStringLiteral("qspp"),       s.value("NR2Qspp", "0.20").toFloat()},
+            {QStringLiteral("gainMethod"), s.value("NR2GainMethod", "2").toInt()},
+            {QStringLiteral("npeMethod"),  s.value("NR2NpeMethod", "0").toInt()},
+            {QStringLiteral("aeFilter"),
+                s.value("NR2AeFilter", "True").toString() == QLatin1String("True")},
+        };
+        tuning[QStringLiteral("nr4")] = QJsonObject{
+            {QStringLiteral("reductionDb"),  s.value("NR4ReductionAmount", "100").toFloat()},
+            {QStringLiteral("smoothing"),    s.value("NR4SmoothingFactor", "0").toFloat()},
+            {QStringLiteral("whitening"),    s.value("NR4WhiteningFactor", "0").toFloat()},
+            {QStringLiteral("maskingDepth"), s.value("NR4MaskingDepth", "50").toFloat()},
+            {QStringLiteral("suppression"),  s.value("NR4SuppressionStrength", "50").toFloat()},
+            {QStringLiteral("noiseMethod"),  s.value("NR4NoiseEstimationMethod", "0").toInt()},
+            {QStringLiteral("adaptiveNoise"),
+                s.value("NR4AdaptiveNoise", "True").toString() == QLatin1String("True")},
+        };
+        QJsonObject dfnr = tuning.value(QStringLiteral("dfnr")).toObject();
+        dfnr[QStringLiteral("postFilterBeta")] =
+            s.value("DfnrPostFilterBeta", "0.0").toFloat();
+        tuning[QStringLiteral("dfnr")] = dfnr;
+        data[QStringLiteral("tuning")] = tuning;
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for dsp"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("dsp"), data}};
+    }
     if (model == QLatin1String("sync")
         || model == QLatin1String("receiveSync")) {
         if (!m_receiveSyncSnapshotHandler) {
@@ -2422,7 +2567,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans)"));
     }
 
     if (!property.isEmpty()) {
@@ -3677,6 +3822,26 @@ QJsonObject AutomationServer::doStreams(const QString& action)
         };
     }
 
+    // `streams resync` — force the radio to re-dump its authoritative display
+    // set, then re-poll `streams radio` after a moment. Closes the gap where a
+    // waterfall lingers as a radio resource but no longer emits UDP (Layer A
+    // can't see it) and the client already purged its view (Layer B looked
+    // clean). The re-dump is async, so this just triggers and the driver reads
+    // the refreshed inventory on the next `streams radio`.
+    if (action.compare(QLatin1String("resync"), Qt::CaseInsensitive) == 0
+        || action.compare(QLatin1String("refresh"), Qt::CaseInsensitive) == 0) {
+        const bool sent = m_radioModel->resyncDisplayInventory();
+        if (!sent)
+            return err(QStringLiteral("not connected — cannot resync display inventory"));
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("scope"), QStringLiteral("radio")},
+            {QStringLiteral("resync"), QStringLiteral("requested")},
+            {QStringLiteral("hint"),
+             QStringLiteral("re-poll 'streams radio' after ~500ms for the refreshed set")},
+        };
+    }
+
     // Layer A — VITA-49 UDP-orphan detector (needs the stream receiver).
     PanadapterStream* ps = m_radioModel->panStream();
     if (!ps)
@@ -3689,7 +3854,8 @@ QJsonObject AutomationServer::doStreams(const QString& action)
     }
     if (!action.isEmpty())
         return err(QStringLiteral("unknown streams action: ") + action
-                   + QStringLiteral(" (use '' for UDP-orphan, 'radio' for inventory, or 'reset')"));
+                   + QStringLiteral(" (use '' for UDP-orphan, 'radio' for inventory,"
+                                    " 'resync' to force a re-dump, or 'reset')"));
 
     QJsonArray panReg;
     for (quint32 id : ps->registeredPanStreams()) panReg.append(hex(id));

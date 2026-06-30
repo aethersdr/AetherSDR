@@ -289,6 +289,15 @@ public:
     // surfaces leaked waterfalls (parent pan gone), foreign and orphan objects.
     DisplayInventory::Report displayInventoryReport() const;
 
+    // Force the radio to re-dump every currently-allocated display object by
+    // re-subscribing to the pan/display domain. The status replies refresh the
+    // Layer-B inventory maps (m_radioDisplayPans/Waterfalls) to the radio's
+    // authoritative present-tense set — re-adding a resource-level lingering
+    // waterfall that stopped emitting UDP and whose client view we already tore
+    // down. Async: callers re-poll displayInventoryReport() after the re-dump
+    // settles (#3856). Returns true if the re-subscribe was sent.
+    bool resyncDisplayInventory();
+
     QList<SliceModel*> slices() const { return m_slices; }
     SliceModel* slice(int id) const;
     int activeTxSliceNum() const;

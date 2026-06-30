@@ -1896,6 +1896,22 @@ DisplayInventory::Report RadioModel::displayInventoryReport() const
     return DisplayInventory::classify(in);
 }
 
+bool RadioModel::resyncDisplayInventory()
+{
+    if (!isConnected()) return false;
+    // Re-subscribing to the pan domain makes the radio re-send the status of
+    // every currently-allocated panadapter + waterfall. Those replies flow
+    // through the same `display pan`/`display panafall` status parser that
+    // maintains m_radioDisplayPans/Waterfalls, so the Layer-B inventory
+    // refreshes to the radio's authoritative current set — the only way to
+    // observe a resource-level lingering waterfall that no longer emits UDP
+    // (#3856). We intentionally do NOT clear the maps first: a re-dump can
+    // only re-add/confirm objects, so a no-op on firmware that doesn't re-dump
+    // leaves the inventory intact rather than wiping it.
+    sendCmd("sub pan all");
+    return true;
+}
+
 double RadioModel::panCenterMhz() const
 {
     auto* p = activePanadapter();

@@ -60,11 +60,17 @@ class AudioEngine;
 //                                     is a logged fallback; setpoint
 //                                     sliders/combos are never blocked.
 //   get <model> [selector] [prop]  -> live JSON snapshot of a model:
-//                                     audio | radio | transmit |
+//                                     audio | dsp | radio | transmit |
 //                                     slice <id|active|tx> | slices |
 //                                     pan <panId|active> | pans. With a trailing
 //                                     property name, returns just that field.
 //                                     Assert on state without screenshots.
+//                                     `dsp` is the client-side AetherDSP state:
+//                                     the six AudioEngine noise-reduction modules
+//                                     (NR2/NR4/MNR/DFNR/RN2/BNR) with active
+//                                     method, per-module enabled/available, and
+//                                     tuning values — the client-side counterpart
+//                                     to the radio-side nr/nb/anf in `get slice`.
 //   connect list                   -> list currently discovered local radios
 //   connect show                   -> show/raise the Connect to Radio dialog
 //   connect hide                   -> hide the Connect to Radio dialog
@@ -141,7 +147,12 @@ class AudioEngine;
 //   dumpTree (extended)            -> nodes now carry toolTip, and QComboBox
 //                                     nodes carry items[]/currentIndex and pans
 //                                     carry panIndex, all assertable without
-//                                     stepping a control.
+//                                     stepping a control. A checkable button
+//                                     also carries its text + a checked bool, so
+//                                     the six DSP method buttons (NR2 … BNR) are
+//                                     identifiable and readable from the tree
+//                                     instead of every one reporting only
+//                                     "checked"/"unchecked" (#3856).
 //
 // Requests are newline-delimited. Each line is either a bare command
 // ("dumpTree", "grab SpectrumWidget /tmp/pan.png", "invoke masterVolume
@@ -259,6 +270,11 @@ private:
     //                     (pans + waterfalls) classified ours/foreign/orphan,
     //                     plus leaked waterfalls (parent pan gone) — catches the
     //                     resource-level lingering Layer A can't see.
+    //   streams resync  — re-subscribe (sub pan all) to force the radio to
+    //                     re-dump every allocated display object, refreshing the
+    //                     Layer-B maps to the radio's present-tense set; re-poll
+    //                     `streams radio` after it settles to confirm a lingering
+    //                     waterfall the client view had already purged.
     //   streams reset   — clear the Layer-A orphan tally to re-baseline.
     QJsonObject doStreams(const QString& action);
     QJsonObject doAudioCapture(const QString& action,

@@ -165,6 +165,14 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
         auto* b = makeToggle(kLabels[i]);
         b->setFixedSize(38, 22);
         b->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        // Name each selector for screen readers and the automation bridge.
+        // Checkable buttons report value as "checked"/"unchecked", so without
+        // an objectName/accessibleName a driver (or assistive tech) can't tell
+        // NR2 from BNR — only a screenshot could. Stable objectName lets a
+        // driver target a specific method; accessibleName carries the label.
+        b->setObjectName(QStringLiteral("dspMethodBtn") + QLatin1String(kLabels[i]));
+        b->setAccessibleName(QString::fromLatin1(kLabels[i])
+                             + QStringLiteral(" noise-reduction method"));
         // MNR (MMSE-Wiener spectral NR) is implemented only on macOS —
         // dim the selector on Windows / Linux so users can see it exists
         // but can't enable a path the engine has no backend for.
