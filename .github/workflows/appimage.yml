@@ -60,7 +60,15 @@ jobs:
           echo "PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64/bin:$PATH" >> $GITHUB_ENV
           echo "LD_LIBRARY_PATH=${{ github.workspace }}/Qt/6.8.3/gcc_64/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
 
+      - name: Cache DeepFilterNet3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        id: cache-deepfilter
+        with:
+          path: third_party/deepfilter
+          key: deepfilter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup/setup-deepfilter.sh') }}
+
       - name: Setup DeepFilterNet3 (DFNR)
+        if: steps.cache-deepfilter.outputs.cache-hit != 'true'
         run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Setup qtkeychain (SmartLink credential persistence)

@@ -76,7 +76,7 @@ jobs:
         id: cache-deepfilter
         with:
           path: third_party/deepfilter
-          key: deepfilter-${{ runner.os }}-${{ hashFiles('scripts/setup/setup-deepfilter.ps1') }}
+          key: deepfilter-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup/setup-deepfilter.ps1') }}
 
       - name: Setup DeepFilterNet3 (DFNR)
         if: steps.cache-deepfilter.outputs.cache-hit != 'true'

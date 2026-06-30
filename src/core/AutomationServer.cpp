@@ -3,6 +3,7 @@
 #include "AppSettings.h"          // StationName (restore the user's real station name)
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "AudioEngine.h"
+#include "NvidiaBnrSettings.h"   // BNR intensity (in-process AFX, #3902)
 #include "ClientTxTestTone.h"     // testtone() verb — client-side TX test tone
 #include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
@@ -1232,8 +1233,8 @@ QJsonObject dspEngineSnapshot(const AudioEngine* a)
                                    false},
 #endif
         {"RN2",  a->rn2Enabled(),  true},
-        {"BNR",  a->bnrEnabled(),
-#ifdef HAVE_BNR
+        {"BNR",  a->nvAfxEnabled(),
+#ifdef HAVE_NVIDIA_AFX
                                    true},
 #else
                                    false},
@@ -1255,10 +1256,10 @@ QJsonObject dspEngineSnapshot(const AudioEngine* a)
         QJsonObject{{QStringLiteral("strength"), a->mnrStrength()}};
     tuning[QStringLiteral("dfnr")] =
         QJsonObject{{QStringLiteral("attenLimitDb"), a->dfnrAttenLimit()}};
+    // BNR is now the in-process NVIDIA AFX denoiser (#3902): no container, so
+    // the old address/connected fields are gone; report the persisted intensity.
     tuning[QStringLiteral("bnr")] =
-        QJsonObject{{QStringLiteral("intensity"), a->bnrIntensity()},
-                    {QStringLiteral("address"), a->bnrAddress()},
-                    {QStringLiteral("connected"), a->bnrConnected()}};
+        QJsonObject{{QStringLiteral("intensity"), NvidiaBnrSettings::intensity()}};
 
     return QJsonObject{{QStringLiteral("active"), active},
                        {QStringLiteral("methods"), methods},
