@@ -1,6 +1,7 @@
 #include "AetherDspWidget.h"
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
+#include "core/NvidiaBnrSettings.h"
 #include "GuardedSlider.h"
 #include "Theme.h"
 
@@ -1017,8 +1018,7 @@ void AetherDspWidget::updateBnrStatus()
 // down to the end user (SWLA §1.3.3) and carries the Works Notice (PST §1.7.1).
 bool AetherDspWidget::ensureBnrLicenseAccepted()
 {
-    auto& s = AppSettings::instance();
-    if (s.value("BnrNvidiaLicenseAccepted", "0").toInt() != 0)
+    if (NvidiaBnrSettings::licenseAccepted())
         return true;
 
     QMessageBox box(this);
@@ -1042,8 +1042,7 @@ bool AetherDspWidget::ensureBnrLicenseAccepted()
     box.addButton(tr("Decline"), QMessageBox::RejectRole);
     box.exec();
     if (box.clickedButton() == acceptBtn) {
-        s.setValue("BnrNvidiaLicenseAccepted", "1");
-        s.save();
+        NvidiaBnrSettings::setLicenseAccepted(true);
         return true;
     }
     return false;
@@ -1054,7 +1053,6 @@ QWidget* AetherDspWidget::buildBnrPage()
     auto* page = new QWidget;
     auto* vbox = new QVBoxLayout(page);
     vbox->setContentsMargins(10, 20, 10, 0);
-    auto& s = AppSettings::instance();
 
     auto* info = new QLabel("GPU-accelerated AI noise removal (NVIDIA Maxine) — "
                             "runs in-process on a local NVIDIA GPU.");
@@ -1077,7 +1075,7 @@ QWidget* AetherDspWidget::buildBnrPage()
     g->addWidget(new QLabel("Intensity"), 1, 0);
     m_bnrAfxIntensitySlider = new QSlider(Qt::Horizontal);
     m_bnrAfxIntensitySlider->setRange(0, 100);
-    m_bnrAfxIntensitySlider->setValue(static_cast<int>(s.value("NvAfxIntensity", "1.0").toFloat() * 100));
+    m_bnrAfxIntensitySlider->setValue(static_cast<int>(NvidiaBnrSettings::intensity() * 100));
     applyPrimarySliderStyle(m_bnrAfxIntensitySlider);
     m_bnrAfxIntensitySlider->setAccessibleName(tr("BNR intensity"));
     m_bnrAfxIntensitySlider->setAccessibleDescription(tr("Denoising strength, 0 = passthrough, 100 = maximum."));
@@ -1097,8 +1095,7 @@ QWidget* AetherDspWidget::buildBnrPage()
     connect(m_bnrAfxIntensitySlider, &QSlider::valueChanged, this, [this](int v) {
         m_bnrAfxIntensityLabel->setText(QString::number(v));
         const float r = v / 100.0f;
-        auto& st = AppSettings::instance();
-        st.setValue("NvAfxIntensity", QString::number(r, 'f', 2)); st.save();
+        NvidiaBnrSettings::setIntensity(r);
         // Capture the engine pointer by value, not `this`: the functor runs
         // later on the AudioEngine thread, and this widget may be destroyed
         // before it drains (capturing `this`->m_audio would be a cross-thread UAF).

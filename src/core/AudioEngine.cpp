@@ -34,6 +34,7 @@
 #endif
 #ifdef HAVE_NVIDIA_AFX
 #include "NvidiaAfxFilter.h"
+#include "NvidiaBnrSettings.h"
 #endif
 #ifdef __APPLE__
 #include "MacNRFilter.h"
@@ -5561,7 +5562,7 @@ void AudioEngine::setNvAfxEnabled(bool on)
             emit nvAfxEnabledChanged(false);
             return;
         }
-        m_nvAfx->setIntensity(AppSettings::instance().value("NvAfxIntensity", "1.0").toFloat());
+        m_nvAfx->setIntensity(NvidiaBnrSettings::intensity());
         m_nvAfxEnabled = true;  // set AFTER the object is fully constructed
     } else {
         m_nvAfxEnabled = false;
