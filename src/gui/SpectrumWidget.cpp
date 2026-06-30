@@ -1078,13 +1078,22 @@ SpectrumWidget::~SpectrumWidget()
 void SpectrumWidget::prepareForTopLevelChange()
 {
 #ifdef AETHER_GPU_SPECTRUM
-#ifdef Q_OS_MAC
     // QRhiWidget registers a cleanup callback with the current top-level
     // backing-store QRhi. Direct splitter/floating-window reparenting can miss
-    // Qt's internal notification, leaving the old QRhi with a stale callback.
+    // Qt's internal notification, leaving the old QRhi with a stale callback;
+    // when that QRhi is later torn down, runCleanup() fires against a stale
+    // QRhiWidgetPrivate and crashes during deferred event delivery (#2495).
+    //
+    // QEvent::WindowAboutToChangeInternal is cross-platform Qt machinery —
+    // QRhiWidgetPrivate deregisters the callback the same way on Metal,
+    // D3D/Vulkan and OpenGL — so this must fire on every GPU platform, not
+    // just macOS. It was originally gated to Q_OS_MAC because #2495 was first
+    // reproduced there; leaving Windows ungated let the identical crash slip
+    // through on connect-time multi-panadapter restore (#3714). The send must
+    // happen exactly once, before the reparent (refreshAfterReparent must not
+    // re-send it — see PanadapterStack.cpp).
     QEvent event(QEvent::WindowAboutToChangeInternal);
     QCoreApplication::sendEvent(this, &event);
-#endif
 #endif
 }
 
