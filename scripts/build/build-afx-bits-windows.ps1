@@ -8,35 +8,42 @@
     NvidiaAfxFilter (Windows path) expects:
 
         bin/
-          NVAudioEffects.dll              (AFX core)
-          <denoiser feature DLL>          (from NGC nvidia/maxine via SDK script)
-          cublas64_12.dll cublasLt64_12.dll cufft64_11.dll nvrtc64_120_0.dll
-          nvinfer_10.dll
-          libcrypto-3-x64.dll
-        features/denoiser/models/sm_<arch>/denoiser_48k.trtpkg
-        licenses/
+          NVAudioEffects.dll              (AFX core, from SDK)
+          nvafxdenoiser.dll               (denoiser feature DLL, from NGC)
+          cublas64_12.dll cublasLt64_12.dll cufft64_11.dll nvrtc64_120_0.dll   (from SDK)
+          nvinfer_10.dll                  (TensorRT, from SDK)
+          libcrypto-3-x64.dll             (OpenSSL, from SDK)
+        features/denoiser/models/sm_<arch>/denoiser_48k.trtpkg  (from NGC)
+        licenses/                         (NVIDIA SLA + product terms, from SDK)
         NOTICE.txt
 
-    The script flattens the SDK's tree into bin/ so LOAD_WITH_ALTERED_SEARCH_PATH
+    The script flattens the SDK tree into bin/ so LOAD_WITH_ALTERED_SEARCH_PATH
     resolves the core's transitive deps from the pack itself — no host CUDA
     install required at runtime.
 
+    The SDK's own features/download_features.ps1 is broken against a personal
+    NGC API key (it queries /org/nvidia/team/maxine/... which only returns
+    files to org members). We bypass it and use `ngc registry model
+    download-version` directly, which works on personal keys.
+
 .PARAMETER SdkDir
     Path to the extracted Maxine Audio Effects SDK (the directory whose
-    immediate children are bin/, features/, include/, lib/, ...).
+    immediate children are bin/, features/, include/, lib/, license/, ...).
 
 .PARAMETER Arch
-    Target SM architecture (sm_89 = ada / RTX 40-series).
+    Target SM architecture. Currently the app's pack is per-arch and the manifest
+    pins one zip per arch — pick the one matching the test GPU. Valid: sm_75,
+    sm_86, sm_89, sm_100.
 
 .PARAMETER OutDir
     Where the staged tree and final .zip are written.
 
-.PARAMETER NgcApiKey
-    Optional NGC API key. If absent, falls back to env var NGC_API_KEY.
+.PARAMETER NgcExe
+    Path to ngc.exe. Defaults to the standard installer location.
 
 .EXAMPLE
     pwsh scripts/build/build-afx-bits-windows.ps1 `
-        -SdkDir 'C:\nvidia\maxine-afx-sdk-2.1.0' `
+        -SdkDir 'C:\nvidia\maxine-afx-sdk-2.1.0\2026-03-11_NVIDIA_AFX_SDK_Win_v2.1.0.9' `
         -Arch sm_89
 #>
 
@@ -46,13 +53,14 @@ param(
     [string]$SdkDir,
 
     [Parameter()]
+    [ValidateSet('sm_75','sm_86','sm_89','sm_100')]
     [string]$Arch = 'sm_89',
 
     [Parameter()]
     [string]$OutDir = "$(Join-Path $PSScriptRoot '../../build/afx-pack')",
 
     [Parameter()]
-    [string]$NgcApiKey = $env:NGC_API_KEY,
+    [string]$NgcExe = 'C:\Program Files\NVIDIA Corporation\NGCCLI\amd64\ngc.exe',
 
     [Parameter()]
     [string]$Version = '2.1.0'
@@ -69,14 +77,16 @@ $SdkDir = (Resolve-Path -LiteralPath $SdkDir).Path
 if (-not (Test-Path -LiteralPath $SdkDir -PathType Container)) {
     Die "SDK directory not found: $SdkDir"
 }
+if (-not (Test-Path -LiteralPath $NgcExe)) {
+    Die "ngc.exe not found at $NgcExe — install NGC CLI and run 'ngc config set' first."
+}
 
-# Map sm_XX → SDK arch tag used by download_features.ps1.
+# Map sm_XX → NGC's GPU architecture tag (used in model version IDs).
 $archTag = switch ($Arch) {
-    'sm_75' { 'turing' }
-    'sm_86' { 'ampere' }
-    'sm_89' { 'ada' }
-    'sm_90' { 'hopper' }
-    default { Die "Unsupported arch: $Arch (expected sm_75/86/89/90)" }
+    'sm_75'  { 'turing' }
+    'sm_86'  { 'ampere' }
+    'sm_89'  { 'ada' }
+    'sm_100' { 'blackwell' }
 }
 Log "Target arch: $Arch (NGC tag: $archTag)"
 
@@ -85,30 +95,40 @@ $sdkBin = Join-Path $SdkDir 'bin'
 $sdkExtCuda = Join-Path $sdkBin 'external/cuda/bin'
 $sdkExtTrt  = Join-Path $sdkBin 'external/nvtrt/bin'
 $sdkExtSsl  = Join-Path $sdkBin 'external/openssl/bin'
-$dlScript   = Join-Path $SdkDir 'features/download_features.ps1'
-
-foreach ($p in @($sdkBin, $sdkExtCuda, $sdkExtTrt, $sdkExtSsl, $dlScript)) {
+$sdkLicense = Join-Path $SdkDir 'license'
+foreach ($p in @($sdkBin, $sdkExtCuda, $sdkExtTrt, $sdkExtSsl)) {
     if (-not (Test-Path -LiteralPath $p)) { Die "Missing in SDK: $p" }
 }
-
 $core = Join-Path $sdkBin 'NVAudioEffects.dll'
 if (-not (Test-Path -LiteralPath $core)) { Die "Missing core DLL: $core" }
 
-# ── Run the SDK's feature downloader (fetches feature DLL + model from NGC) ─
-if (-not $NgcApiKey) {
-    Die "NGC API key not provided. Pass -NgcApiKey or set NGC_API_KEY env var."
-}
-$env:NGC_API_KEY = $NgcApiKey
+# ── Fetch feature DLL + per-arch model from NGC ─────────────────────────────
+$ngcWorkDir = Join-Path $OutDir 'ngc-cache'
+New-Item -ItemType Directory -Force -Path $ngcWorkDir | Out-Null
 
-Log "Running SDK download_features.ps1 (denoiser-48k / $archTag)"
-Push-Location $SdkDir
-try {
-    # The SDK script accepts -features and -arch flags. Exact flag names vary
-    # between SDK versions — adjust here if 2.1.0 differs from earlier ones.
-    pwsh -NoProfile -File $dlScript -features 'denoiser-48k' -arch $archTag
-    if ($LASTEXITCODE -ne 0) { Die "download_features.ps1 failed with $LASTEXITCODE" }
-} finally {
-    Pop-Location
+Log "Downloading feature DLL (afx_win_denoiser:$Version-dynamic-library)"
+& $NgcExe registry model download-version "nvidia/maxine/afx_win_denoiser:$Version-dynamic-library" `
+    --dest $ngcWorkDir --format_type json | Out-Null
+if ($LASTEXITCODE -ne 0) { Die "ngc download (dynamic-library) failed" }
+
+$featureDir = Join-Path $ngcWorkDir "afx_win_denoiser_v$Version-dynamic-library"
+$featureDll = Join-Path $featureDir 'nvafxdenoiser.dll'
+if (-not (Test-Path -LiteralPath $featureDll)) {
+    Die "Feature DLL not found at expected path: $featureDll"
+}
+
+Log "Downloading per-arch model (afx_win_denoiser:$Version-48k-$archTag)"
+& $NgcExe registry model download-version "nvidia/maxine/afx_win_denoiser:$Version-48k-$archTag" `
+    --dest $ngcWorkDir --format_type json | Out-Null
+if ($LASTEXITCODE -ne 0) { Die "ngc download (48k-$archTag) failed" }
+
+$modelDir = Join-Path $ngcWorkDir "afx_win_denoiser_v$Version-48k-$archTag"
+# The package ships two variants — denoiser_48k.trtpkg (canonical) and
+# denoiser_v2_48k.trtpkg (newer). The app's findModel() looks for the canonical
+# name; ship that one.
+$modelFile = Join-Path $modelDir 'denoiser_48k.trtpkg'
+if (-not (Test-Path -LiteralPath $modelFile)) {
+    Die "Model file not found at expected path: $modelFile"
 }
 
 # ── Stage the pack tree ─────────────────────────────────────────────────────
@@ -127,74 +147,46 @@ Log "Copied NVAudioEffects.dll"
 foreach ($srcDir in @($sdkExtCuda, $sdkExtTrt, $sdkExtSsl)) {
     Get-ChildItem -LiteralPath $srcDir -Filter '*.dll' -File | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stage 'bin') -Force
-        Log "Copied $($_.Name) from $((Split-Path $srcDir -Parent | Split-Path -Leaf))"
+        $vendor = Split-Path (Split-Path $srcDir -Parent) -Leaf
+        Log "Copied $($_.Name) (from external/$vendor)"
     }
 }
 
-# Feature DLL — download_features.ps1 drops it under <sdk>/bin (the SDK already
-# expects features alongside the core). Glob for the denoiser feature.
-$featureDll = Get-ChildItem -LiteralPath $sdkBin -Filter '*denoiser*.dll' -File -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -ne 'NVAudioEffects.dll' } |
-              Select-Object -First 1
-if (-not $featureDll) {
-    Die "Feature DLL (*denoiser*.dll) not found under $sdkBin after download. Inspect download_features.ps1 output."
-}
-Copy-Item -LiteralPath $featureDll.FullName -Destination (Join-Path $stage 'bin') -Force
-Log "Copied feature DLL: $($featureDll.Name)"
+Copy-Item -LiteralPath $featureDll -Destination (Join-Path $stage 'bin') -Force
+Log "Copied nvafxdenoiser.dll"
 
-# Model — the SDK drops it under features/<...>/models/<arch>. Locate the .trtpkg
-# (or whatever NGC names it) and rename to the canonical filename the app expects.
-$modelSearchRoots = @(
-    Join-Path $SdkDir 'features'
-    Join-Path $SdkDir 'models'
-)
-$modelFile = $null
-foreach ($root in $modelSearchRoots) {
-    if (-not (Test-Path -LiteralPath $root)) { continue }
-    $modelFile = Get-ChildItem -LiteralPath $root -Recurse -File `
-        -Include '*denoiser*48k*.trtpkg', '*denoiser*48k*.bin', '*denoiser_48k*' `
-        -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -match '(?i)\\(' + [regex]::Escape($archTag) + '|' + [regex]::Escape($Arch) + ')\\' } |
-        Select-Object -First 1
-    if ($modelFile) { break }
-    # Fallback: any denoiser_48k* under this root.
-    $modelFile = Get-ChildItem -LiteralPath $root -Recurse -File `
-        -Include '*denoiser*48k*.trtpkg', '*denoiser*48k*.bin', '*denoiser_48k*' `
-        -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($modelFile) { break }
-}
-if (-not $modelFile) {
-    Die "Denoiser model not found under SDK after download. Inspect features/ tree manually."
-}
-Copy-Item -LiteralPath $modelFile.FullName `
+Copy-Item -LiteralPath $modelFile `
           -Destination (Join-Path $stage "features/denoiser/models/$Arch/denoiser_48k.trtpkg") -Force
-Log "Copied model: $($modelFile.Name) → features/denoiser/models/$Arch/denoiser_48k.trtpkg"
+Log "Copied denoiser_48k.trtpkg → features/denoiser/models/$Arch/"
 
 # ── Licenses + NOTICE ───────────────────────────────────────────────────────
-$licenseGlobs = @('*license*', '*LICENSE*', '*SLA*', '*EULA*')
-$licenseFiles = @()
-foreach ($g in $licenseGlobs) {
-    $licenseFiles += Get-ChildItem -LiteralPath $SdkDir -Recurse -File -Include $g -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $sdkLicense) {
+    Get-ChildItem -LiteralPath $sdkLicense -File | ForEach-Object {
+        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stage 'licenses') -Force
+        Log "Copied license: $($_.Name)"
+    }
 }
-$licenseFiles = $licenseFiles | Sort-Object FullName -Unique
-foreach ($f in $licenseFiles) {
-    Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $stage 'licenses') -Force
+$thirdParty = Join-Path $sdkBin 'external/ThirdPartyLicenses.txt'
+if (Test-Path -LiteralPath $thirdParty) {
+    Copy-Item -LiteralPath $thirdParty -Destination (Join-Path $stage 'licenses') -Force
+    Log "Copied ThirdPartyLicenses.txt"
 }
-Log "Copied $($licenseFiles.Count) license file(s)"
 
 @"
 AetherSDR — NVIDIA AFX runtime pack
 ====================================
 
 This archive bundles the NVIDIA Maxine Audio Effects SDK runtime (v$Version)
-and a per-GPU-arch denoiser model so AetherSDR's BNR (background noise
+and the per-GPU-arch denoiser model so AetherSDR's BNR (background noise
 removal) can load the GPU denoiser in-process.
 
 Contents are governed by NVIDIA's Software License Agreement and the
-Maxine SDK product terms (see licenses/ for the originals).
+Maxine SDK product terms — see licenses/ for the originals.
 
-Generated by scripts/build/build-afx-bits-windows.ps1 from Maxine AFX SDK $Version.
-Target arch: $Arch
+Generated by scripts/build/build-afx-bits-windows.ps1
+SDK:        Maxine AFX SDK $Version (Windows)
+Target arch: $Arch ($archTag)
+Feature:    afx_win_denoiser $Version-dynamic-library + $Version-48k-$archTag
 "@ | Set-Content -LiteralPath (Join-Path $stage 'NOTICE.txt') -Encoding UTF8
 
 # ── Zip + sha256 ────────────────────────────────────────────────────────────
