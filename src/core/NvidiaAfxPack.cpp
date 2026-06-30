@@ -23,13 +23,16 @@
 namespace AetherSDR {
 
 // ─── Platform layout ─────────────────────────────────────────────────────────
-// Linux and Windows ship different AFX runtimes and pack layouts:
-//   • Linux: core nvafx/lib/libnv_audiofx.so + a split download (CUDA from PyPI
-//     wheels, AFX/TRT/model from our .tar.zst), feature lib symlinked onto RPATH.
-//   • Windows: core bin/NVAudioEffects.dll. The Windows AFX-bits archive is a
-//     SELF-CONTAINED .zip (AFX + CUDA + TensorRT DLLs all co-located in bin/,
-//     model under features/) — Windows resolves sibling DLLs by directory, so no
-//     wheel-flattening, no zstd tooling, and no symlink step are needed.
+// Linux and Windows ship different AFX runtimes but the SAME split-sourcing
+// strategy (host almost nothing; pull CUDA from NVIDIA's PyPI wheels):
+//   • Linux: core nvafx/lib/libnv_audiofx.so. AFX/TRT/model from our small
+//     .tar.zst; CUDA from PyPI wheels (→ external/cuda/lib); feature lib
+//     symlinked onto the core's RPATH.
+//   • Windows: core bin/NVAudioEffects.dll. A small .zip ships only the AFX bits
+//     (core + denoiser feature DLL + OpenSSL + model); CUDA from PyPI wheels and
+//     the TensorRT inference DLL from a separate hosted .zip — all flattened into
+//     bin/, which the loader searches via LOAD_WITH_ALTERED_SEARCH_PATH (so no
+//     symlink step). Hosting the slim AFX zip keeps it a ~33 MB release asset.
 namespace {
 #if defined(_WIN32)
 constexpr char kCoreRelPath[] = "bin/NVAudioEffects.dll";
