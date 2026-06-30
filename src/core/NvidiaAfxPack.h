@@ -137,6 +137,7 @@ private:
     QString m_tmpFile;       // current download temp
     QFile*  m_dlFile{nullptr};  // open handle for the in-flight download (closed on cancel)
     QCryptographicHash m_dlHash{QCryptographicHash::Sha256};  // streamed as bytes arrive
+    bool    m_dlWriteFailed{false};  // a write() to m_dlFile came up short (disk full)
     QElapsedTimer m_dlTimer; // current component download timer (speed/ETA)
     QList<ComponentInfo> m_done;  // components completed into staging (resumable)
     bool m_busy{false};

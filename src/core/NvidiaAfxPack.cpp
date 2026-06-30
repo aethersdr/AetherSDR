@@ -546,6 +546,7 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
         return;
     }
     m_dlHash.reset();   // hash incrementally as bytes arrive (no post-download re-read)
+    m_dlWriteFailed = false;
     QNetworkRequest req(url);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     m_reply = m_nam->get(req);
@@ -553,7 +554,16 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
     emit componentProgress(m_idx, 0, 0, QString());
     connect(m_reply, &QNetworkReply::readyRead, this, [this]() {
         const QByteArray chunk = m_reply->readAll();
-        if (m_dlFile) { m_dlFile->write(chunk); }
+        if (m_dlFile && m_dlFile->write(chunk) != chunk.size()) {
+            // Short write (disk full / quota): stop now and flag it. Otherwise
+            // the running hash — which sees the full network chunk — would still
+            // match the pinned sha and "verify" bytes that never hit disk,
+            // leaving a truncated archive that fails later with a misleading
+            // "extract failed". Abort so finished() reports the real cause.
+            m_dlWriteFailed = true;
+            m_reply->abort();
+            return;
+        }
         m_dlHash.addData(chunk);
     });
     connect(m_reply, &QNetworkReply::downloadProgress, this, [this](qint64 got, qint64 total) {
@@ -575,6 +585,9 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
         const QString es = m_reply->errorString();
         m_reply->deleteLater(); m_reply = nullptr;
         if (m_cancelled) { fail(QStringLiteral("cancelled")); return; }
+        // Checked before the network-error branch: abort() above also sets an
+        // error, but the disk-full cause is the one worth reporting.
+        if (m_dlWriteFailed) { fail(QStringLiteral("write failed for %1 (disk full?)").arg(label)); return; }
         if (err != QNetworkReply::NoError) { fail(QStringLiteral("download failed (%1): %2").arg(label, es)); return; }
         if (!sha256.isEmpty()
             && m_dlHash.result().toHex() != sha256.toLatin1()) {

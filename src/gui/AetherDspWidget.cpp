@@ -1069,6 +1069,7 @@ QWidget* AetherDspWidget::buildBnrPage()
     // Status (row 0 — above the intensity line)
     g->addWidget(new QLabel("Status"), 0, 0);
     m_bnrAfxStatus = new QLabel;
+    m_bnrAfxStatus->setAccessibleName(tr("BNR status"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrAfxStatus, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
     g->addWidget(m_bnrAfxStatus, 0, 1);
 
@@ -1078,6 +1079,8 @@ QWidget* AetherDspWidget::buildBnrPage()
     m_bnrAfxIntensitySlider->setRange(0, 100);
     m_bnrAfxIntensitySlider->setValue(static_cast<int>(s.value("NvAfxIntensity", "1.0").toFloat() * 100));
     applyPrimarySliderStyle(m_bnrAfxIntensitySlider);
+    m_bnrAfxIntensitySlider->setAccessibleName(tr("BNR intensity"));
+    m_bnrAfxIntensitySlider->setAccessibleDescription(tr("Denoising strength, 0 = passthrough, 100 = maximum."));
     m_bnrAfxIntensitySlider->setToolTip("Denoising strength (0 = passthrough, 100 = max).");
     g->addWidget(m_bnrAfxIntensitySlider, 1, 1);
     m_bnrAfxIntensityLabel = new QLabel(QString::number(m_bnrAfxIntensitySlider->value()));
@@ -1086,6 +1089,9 @@ QWidget* AetherDspWidget::buildBnrPage()
 
     // Download button — created here, placed at the bottom-left of the page below.
     m_bnrAfxDownloadBtn = new QPushButton("Download");
+    m_bnrAfxDownloadBtn->setAccessibleName(tr("Download BNR runtime"));
+    m_bnrAfxDownloadBtn->setAccessibleDescription(tr("Download the NVIDIA AFX runtime and denoiser model "
+                                                     "for this GPU into the app cache (one-time, ~1 GB)."));
     m_bnrAfxDownloadBtn->setToolTip("Download the NVIDIA AFX runtime + denoiser model "
                                     "for this GPU into the app's cache (one-time).");
     connect(m_bnrAfxIntensitySlider, &QSlider::valueChanged, this, [this](int v) {
@@ -1093,7 +1099,11 @@ QWidget* AetherDspWidget::buildBnrPage()
         const float r = v / 100.0f;
         auto& st = AppSettings::instance();
         st.setValue("NvAfxIntensity", QString::number(r, 'f', 2)); st.save();
-        if (m_audio) QMetaObject::invokeMethod(m_audio, [this, r]() { m_audio->setNvAfxIntensity(r); });
+        // Capture the engine pointer by value, not `this`: the functor runs
+        // later on the AudioEngine thread, and this widget may be destroyed
+        // before it drains (capturing `this`->m_audio would be a cross-thread UAF).
+        if (auto* audio = m_audio)
+            QMetaObject::invokeMethod(audio, [audio, r]() { audio->setNvAfxIntensity(r); });
     });
     vbox->addLayout(g);
 
