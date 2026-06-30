@@ -1179,29 +1179,32 @@ bool updateReceiverMetadataFromMsgToken(const MsgToken& token,
     } else if (key == QStringLiteral("qpos")) {
         structured = true;
         const QStringList fields = valueText.split(QLatin1Char(','));
-        changed = setCampStatusField(&metadata->campStatus,
-                                     &metadata->hasCampStatus,
-                                     CampStatus::Queued) || changed;
         bool posOk = false;
+        bool waitersOk = false;
         const int pos = fields.value(0).trimmed().toInt(&posOk);
-        if (posOk) {
+        const int waiters = fields.value(1).trimmed().toInt(&waitersOk);
+        // Only treat this as a queue update when BOTH coupled, displayed values
+        // (position + waiters) parse. A malformed/short `qpos` must not flip the
+        // status to Queued or half-update the counters, which would render as a
+        // nonsensical "position N of <stale> waiters". Matches the too_busy
+        // parse discipline; `reload` is an optional hint applied only if present.
+        if (posOk && waitersOk) {
+            changed = setCampStatusField(&metadata->campStatus,
+                                         &metadata->hasCampStatus,
+                                         CampStatus::Queued) || changed;
             changed = setIntField(&metadata->campQueuePosition,
                                   &metadata->hasCampQueuePosition,
                                   pos) || changed;
-        }
-        bool waitersOk = false;
-        const int waiters = fields.value(1).trimmed().toInt(&waitersOk);
-        if (waitersOk) {
             changed = setIntField(&metadata->campQueueWaiters,
                                   &metadata->hasCampQueueWaiters,
                                   waiters) || changed;
-        }
-        bool reloadOk = false;
-        const int reload = fields.value(2).trimmed().toInt(&reloadOk);
-        if (reloadOk) {
-            changed = setBoolField(&metadata->campQueueReloadRecommended,
-                                   &metadata->hasCampQueueReloadRecommended,
-                                   reload != 0) || changed;
+            bool reloadOk = false;
+            const int reload = fields.value(2).trimmed().toInt(&reloadOk);
+            if (reloadOk) {
+                changed = setBoolField(&metadata->campQueueReloadRecommended,
+                                       &metadata->hasCampQueueReloadRecommended,
+                                       reload != 0) || changed;
+            }
         }
     } else if (key == QStringLiteral("audio_camp")) {
         structured = true;

@@ -624,6 +624,20 @@ int main()
         || !mergedMetadata.campQueueReloadRecommended) {
         return fail("MSG qpos reload metadata update is wrong");
     }
+    // Regression: a malformed/short `qpos` must NOT flip status to Queued or
+    // half-update the queue counters (which would render as a nonsensical
+    // "position N of <stale> waiters"). Position-only / empty / non-numeric
+    // payloads are rejected wholesale, leaving metadata untouched.
+    for (const QString& badValue : {QStringLiteral("99"), QString(),
+                                    QStringLiteral("x,y,z")}) {
+        ReceiverMetadata q;
+        const MsgToken badQpos{QStringLiteral("qpos"), badValue, true};
+        updateReceiverMetadataFromMsgToken(badQpos, &q);
+        if (q.campStatus == CampStatus::Queued || q.hasCampQueuePosition
+            || q.hasCampQueueWaiters) {
+            return fail("malformed qpos must not set Queued/partial counters");
+        }
+    }
     const MsgToken campAcceptedToken{
         QStringLiteral("camp"),
         QStringLiteral("1,2"),
