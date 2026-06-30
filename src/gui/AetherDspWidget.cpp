@@ -192,9 +192,11 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
         }
 #endif
         // BNR (NVIDIA AFX GPU denoiser) is gated at compile time by
-        // HAVE_NVIDIA_AFX, which is defined only on Linux/Windows (never on
-        // macOS — Maxine AFX has no macOS runtime). Keep the slot visible so the
-        // 6-button row stays balanced; just dim it where AFX isn't built.
+        // HAVE_NVIDIA_AFX (defined only on x86_64 Linux/Windows; never on macOS
+        // or aarch64 — no Maxine runtime there). Where it IS built, gate the
+        // button at runtime on a supported NVIDIA GPU so non-NVIDIA / older-GPU
+        // machines get a clear disabled state instead of a download that fails
+        // on click. Keep the slot visible so the 6-button row stays balanced.
 #ifndef HAVE_NVIDIA_AFX
         if (i == BNR) {
             b->setEnabled(false);
@@ -205,6 +207,12 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
             b->setToolTip("BNR requires an NVIDIA RTX/GeForce GPU "
                           "(not available in this build).");
 #endif
+        }
+#else
+        if (i == BNR && !NvidiaAfxPack::hasSupportedGpu()) {
+            b->setEnabled(false);
+            b->setToolTip("BNR requires an NVIDIA RTX 40-series or later GPU.\n"
+                          "Use DFNR for AI noise removal on other hardware.");
         }
 #endif
         m_dspBtns[i] = b;

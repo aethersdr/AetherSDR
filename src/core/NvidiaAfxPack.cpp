@@ -140,6 +140,19 @@ QString NvidiaAfxPack::detectArch()
     return cached;
 }
 
+bool NvidiaAfxPack::hasSupportedGpu()
+{
+    // detectArch() returns "sm_<cc>" for Turing+ (>=75); but we only publish
+    // Ada-and-later packs, so require compute capability >= 8.9 (sm_89 = RTX
+    // 40-series). Earlier RTX (20/30) and non-NVIDIA machines fail this.
+    const QString arch = detectArch();
+    if (!arch.startsWith(QStringLiteral("sm_")))
+        return false;
+    bool ok = false;
+    const int cc = QStringView{arch}.mid(3).toInt(&ok);   // "sm_89" -> 89
+    return ok && cc >= 89;
+}
+
 QString NvidiaAfxPack::cacheRoot()
 {
     QString data = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
