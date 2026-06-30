@@ -140,16 +140,18 @@ New-Item -ItemType Directory -Force -Path (Join-Path $stage 'bin') | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $stage "features/denoiser/models/$Arch") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $stage 'licenses') | Out-Null
 
-# Core + flattened siblings.
+# SLIM pack — only the AFX-specific binaries and OpenSSL. CUDA libs
+# (cublas, cublasLt, cufft, nvrtc, cuda-runtime) and TensorRT (nvinfer)
+# come from PyPI wheels at install time, driven by the manifest in
+# NvidiaAfxPack.cpp. That gets the pack zip from ~1 GB down to ~38 MB so
+# it can ship as a GitHub release asset.
 Copy-Item -LiteralPath $core -Destination (Join-Path $stage 'bin') -Force
 Log "Copied NVAudioEffects.dll"
 
-foreach ($srcDir in @($sdkExtCuda, $sdkExtTrt, $sdkExtSsl)) {
-    Get-ChildItem -LiteralPath $srcDir -Filter '*.dll' -File | ForEach-Object {
-        Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stage 'bin') -Force
-        $vendor = Split-Path (Split-Path $srcDir -Parent) -Leaf
-        Log "Copied $($_.Name) (from external/$vendor)"
-    }
+# OpenSSL — small (~5 MB), no clean PyPI source, ship it.
+Get-ChildItem -LiteralPath $sdkExtSsl -Filter '*.dll' -File | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $stage 'bin') -Force
+    Log "Copied $($_.Name) (from external/openssl)"
 }
 
 Copy-Item -LiteralPath $featureDll -Destination (Join-Path $stage 'bin') -Force
@@ -189,7 +191,7 @@ Target arch: $Arch ($archTag)
 Feature:    afx_win_denoiser $Version-dynamic-library + $Version-48k-$archTag
 "@ | Set-Content -LiteralPath (Join-Path $stage 'NOTICE.txt') -Encoding UTF8
 
-# ── Zip + sha256 ────────────────────────────────────────────────────────────
+# ── Zip + sha256 (AFX zip — small, ~33 MB) ──────────────────────────────────
 $zipPath = Join-Path $OutDir "$packName.zip"
 if (Test-Path -LiteralPath $zipPath) { Remove-Item -Force $zipPath }
 Log "Compressing → $zipPath"
@@ -198,10 +200,36 @@ Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zipPath -Compres
 $hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLower()
 $size = (Get-Item -LiteralPath $zipPath).Length
 
+# ── TensorRT runtime zip (separate component) ───────────────────────────────
+# pypi.nvidia.com hosts tensorrt-cu12-libs as a 1.6 GB wheel that includes the
+# builder, plugins and ONNX parser — Maxine AFX uses a pre-baked .trtpkg engine
+# and only needs the runtime (nvinfer_<ver>.dll, ~420 MB raw / ~220 MB zip).
+# Ship that one DLL alone so the user-side download matches Linux footprint.
+$trtVersion = '10.9.0.34'
+$trtStage = Join-Path $OutDir "afx-bits-$Version-windows-x86_64-tensorrt-$trtVersion"
+if (Test-Path -LiteralPath $trtStage) { Remove-Item -Recurse -Force $trtStage }
+New-Item -ItemType Directory -Force -Path (Join-Path $trtStage 'bin') | Out-Null
+
+$trtSrc = Get-ChildItem -LiteralPath $sdkExtTrt -Filter '*.dll' -File | Select-Object -First 1
+if (-not $trtSrc) { Die "TensorRT DLL not found under $sdkExtTrt" }
+Copy-Item -LiteralPath $trtSrc.FullName -Destination (Join-Path $trtStage 'bin') -Force
+Log "Staged $($trtSrc.Name) for TRT-only pack"
+
+$trtZipPath = Join-Path $OutDir "afx-bits-$Version-windows-x86_64-tensorrt-$trtVersion.zip"
+if (Test-Path -LiteralPath $trtZipPath) { Remove-Item -Force $trtZipPath }
+Log "Compressing → $trtZipPath"
+Compress-Archive -Path (Join-Path $trtStage '*') -DestinationPath $trtZipPath -CompressionLevel Optimal -Force
+$trtHash = (Get-FileHash -LiteralPath $trtZipPath -Algorithm SHA256).Hash.ToLower()
+$trtSize = (Get-Item -LiteralPath $trtZipPath).Length
+
 Log "=============================================="
-Log "Pack:   $zipPath"
-Log "Size:   $([math]::Round($size / 1MB, 1)) MB"
-Log "SHA256: $hash"
+Log "AFX pack:    $zipPath"
+Log "  Size:    $([math]::Round($size / 1MB, 1)) MB"
+Log "  SHA256:  $hash"
+Log "----------------------------------------------"
+Log "TRT pack:    $trtZipPath"
+Log "  Size:    $([math]::Round($trtSize / 1MB, 1)) MB"
+Log "  SHA256:  $trtHash"
 Log "=============================================="
 Log "Next steps:"
 Log "  1. Extract this zip into %LOCALAPPDATA%\AetherSDR\AetherSDR\nvidia-afx\current\"

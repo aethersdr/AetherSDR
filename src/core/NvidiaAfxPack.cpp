@@ -4,6 +4,7 @@
 
 #include <QCryptographicHash>
 #include <QDir>
+#include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QHash>
@@ -12,6 +13,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -34,7 +36,13 @@ constexpr char kCoreRelPath[] = "bin/NVAudioEffects.dll";
 constexpr char kPlatformTag[] = "windows-x86_64";
 // Pinned sha256 of afx-bits-2.1.0-windows-x86_64-<arch>.zip — filled in when the
 // Windows pack asset is published.
-constexpr char kWinTarballSha[] = "";
+constexpr char kWinTarballSha[] = "55e0a35bed70ade2e3b80d463c660da6b749223a998843f176af7da2d689a899";
+// pypi.nvidia.com's tensorrt-cu12-libs wheel is 1.6 GB because it bundles the
+// builder + plugins + ONNX parser. Maxine AFX uses a pre-baked .trtpkg engine
+// and only needs the inference runtime (nvinfer_<ver>.dll, ~420 MB raw).
+// Ship that one DLL ourselves so user-side download matches Linux footprint.
+constexpr char kWinTensorrtVer[] = "10.9.0.34";
+constexpr char kWinTensorrtSha[] = "3b5f3c3d774fd7fedb57a606f76a68d372725a0343d502917d829479d27960c2";
 #else
 constexpr char kCoreRelPath[] = "nvafx/lib/libnv_audiofx.so";
 constexpr char kPlatformTag[] = "linux-x86_64";
@@ -140,23 +148,39 @@ QList<NvidiaAfxPack::Component> NvidiaAfxPack::manifest(const QString& arch) con
     // NOTE: the first field is a STABLE key used for cache/resume matching —
     // never change it once shipped (display names in the 2nd field may change).
 #if defined(_WIN32)
-    // Windows: one self-contained .zip — AFX + CUDA + TensorRT DLLs + model.
+    // Windows: split sourcing matches the Linux design. Our small .zip ships
+    // only the AFX-specific bits (AFX core, denoiser feature DLL, OpenSSL, model)
+    // — ~33 MB. CUDA libs come from pypi.org wheels. The TensorRT inference
+    // runtime (nvinfer_<ver>.dll) ships as a separate ~220 MB tarball on our
+    // release — using NVIDIA's pypi.nvidia.com wheel would be 1.6 GB because
+    // it bundles the builder/plugins/ONNX-parser that Maxine AFX doesn't use.
+    const QString trtUrl =
+        QStringLiteral("https://github.com/aethersdr/AetherSDR/releases/download/"
+                       "afx-bits-2.1.0/afx-bits-2.1.0-windows-x86_64-tensorrt-%1.zip")
+            .arg(QString::fromLatin1(kWinTensorrtVer));
     return {
         { QStringLiteral("afx"), QStringLiteral("AFX runtime"),
-          {}, QStringLiteral("2.1.0"), afxUrl,
+          {}, QStringLiteral("2.1.0"), {}, afxUrl,
           QString::fromLatin1(kWinTarballSha), Kind::Tarball },
+        { QStringLiteral("cuda-runtime"), QStringLiteral("CUDA runtime"), QStringLiteral("nvidia-cuda-runtime-cu12"), QStringLiteral("12.8.90"),  {}, {}, {}, Kind::Wheel },
+        { QStringLiteral("cublas"),       QStringLiteral("cuBLAS"),       QStringLiteral("nvidia-cublas-cu12"),       QStringLiteral("12.8.4.1"),  {}, {}, {}, Kind::Wheel },
+        { QStringLiteral("cufft"),        QStringLiteral("cuFFT"),        QStringLiteral("nvidia-cufft-cu12"),        QStringLiteral("11.3.3.83"), {}, {}, {}, Kind::Wheel },
+        { QStringLiteral("nvrtc"),        QStringLiteral("nvRTC"),        QStringLiteral("nvidia-cuda-nvrtc-cu12"),   QStringLiteral("12.8.93"),  {}, {}, {}, Kind::Wheel },
+        { QStringLiteral("tensorrt"),     QStringLiteral("TensorRT runtime"),
+          {}, QString::fromLatin1(kWinTensorrtVer), {}, trtUrl,
+          QString::fromLatin1(kWinTensorrtSha), Kind::Tarball },
     };
 #else
     // Linux: AFX/TRT/model from our tarball; CUDA libs from NVIDIA's PyPI wheels.
     return {
         { QStringLiteral("afx"), QStringLiteral("AFX runtime"),
-          {}, QStringLiteral("2.1.0"), afxUrl,
+          {}, QStringLiteral("2.1.0"), {}, afxUrl,
           QStringLiteral("0bfe85b0faeb322958303c145996350d0fea8a203899f9215fc0d3a341395b67"),
           Kind::Tarball },
-        { QStringLiteral("cuda-runtime"), QStringLiteral("CUDA runtime"), QStringLiteral("nvidia-cuda-runtime-cu12"), QStringLiteral("12.8.90"), {}, {}, Kind::Wheel },
-        { QStringLiteral("cublas"),       QStringLiteral("cuBLAS"),       QStringLiteral("nvidia-cublas-cu12"),       QStringLiteral("12.8.4.1"), {}, {}, Kind::Wheel },
-        { QStringLiteral("cufft"),        QStringLiteral("cuFFT"),        QStringLiteral("nvidia-cufft-cu12"),        QStringLiteral("11.3.3.83"), {}, {}, Kind::Wheel },
-        { QStringLiteral("nvrtc"),        QStringLiteral("nvRTC"),        QStringLiteral("nvidia-cuda-nvrtc-cu12"),   QStringLiteral("12.8.93"), {}, {}, Kind::Wheel },
+        { QStringLiteral("cuda-runtime"), QStringLiteral("CUDA runtime"), QStringLiteral("nvidia-cuda-runtime-cu12"), QStringLiteral("12.8.90"),  {}, {}, {}, Kind::Wheel },
+        { QStringLiteral("cublas"),       QStringLiteral("cuBLAS"),       QStringLiteral("nvidia-cublas-cu12"),       QStringLiteral("12.8.4.1"),  {}, {}, {}, Kind::Wheel },
+        { QStringLiteral("cufft"),        QStringLiteral("cuFFT"),        QStringLiteral("nvidia-cufft-cu12"),        QStringLiteral("11.3.3.83"), {}, {}, {}, Kind::Wheel },
+        { QStringLiteral("nvrtc"),        QStringLiteral("nvRTC"),        QStringLiteral("nvidia-cuda-nvrtc-cu12"),   QStringLiteral("12.8.93"),  {}, {}, {}, Kind::Wheel },
     };
 #endif
 }
@@ -343,16 +367,87 @@ void NvidiaAfxPack::startNext()
                    QDir(cacheRoot()).filePath(QStringLiteral(".dl.tar.zst")), c.name);
 }
 
-// Resolve the manylinux x86_64 wheel URL + sha256 from the PyPI JSON API.
+// Resolve the platform-correct wheel URL + sha256 for the current OS:
+//   * Linux  → manylinux*_x86_64.whl
+//   * Windows → win_amd64.whl
+// Source is the standard pypi.org JSON API unless the component pins a
+// simple-index URL (pypi.nvidia.com hosts TensorRT but only via the HTML
+// simple index — no JSON API), in which case we parse anchors of the form
+// `<a href="<file>.whl#sha256=...">`.
 void NvidiaAfxPack::resolveWheelUrl(const Component& c)
 {
     emit componentProgress(m_idx, -1, 0, QStringLiteral("resolving…"));
+#if defined(_WIN32)
+    auto matchesPlatform = [](const QString& fn) {
+        return fn.endsWith(QStringLiteral(".whl")) && fn.contains(QStringLiteral("win_amd64"));
+    };
+    const QString platformDesc = QStringLiteral("win_amd64");
+#else
+    auto matchesPlatform = [](const QString& fn) {
+        return fn.endsWith(QStringLiteral(".whl"))
+               && fn.contains(QStringLiteral("x86_64"))
+               && fn.contains(QStringLiteral("manylinux"));
+    };
+    const QString platformDesc = QStringLiteral("manylinux x86_64");
+#endif
+
+    if (!c.pypiIndex.isEmpty()) {
+        // Simple-index HTML — used for tensorrt-cu12-libs on pypi.nvidia.com.
+        // Format: <a href="<filename>#sha256=<hex>">…</a>. The href is relative
+        // to the index URL.
+        const QString indexUrl = c.pypiIndex
+                                 + (c.pypiIndex.endsWith(QLatin1Char('/'))
+                                        ? QString() : QStringLiteral("/"))
+                                 + c.pypiPkg + QStringLiteral("/");
+        QNetworkRequest req{QUrl(indexUrl)};   // braces to avoid most-vexing parse
+        req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+        m_reply = m_nam->get(req);
+        connect(m_reply, &QNetworkReply::finished, this,
+                [this, name = c.name, pkg = c.pypiPkg, ver = c.pypiVer,
+                 indexUrl, platformDesc, matchesPlatform]() {
+            if (!m_reply) return;
+            const QByteArray body = m_reply->readAll();
+            const auto err = m_reply->error();
+            m_reply->deleteLater(); m_reply = nullptr;
+            if (err != QNetworkReply::NoError) { fail(QStringLiteral("simple-index lookup failed for %1").arg(name)); return; }
+            // Match anchors: href="<filename-with-version>#sha256=<hex>"
+            // We pin a specific version, so embed it in the regex to skip others fast.
+            // The version appears between the package name and the next dash, e.g.
+            //   tensorrt_cu12_libs-10.9.0.34-py2.py3-none-win_amd64.whl
+            // Package name in filenames uses underscores not hyphens.
+            const QString pkgUnderscored = QString(pkg).replace(QLatin1Char('-'), QLatin1Char('_'));
+            const QRegularExpression re(
+                QStringLiteral("href=\"([^\"#]*%1-%2[^\"#]*\\.whl)#sha256=([0-9a-f]{64})\"")
+                    .arg(QRegularExpression::escape(pkgUnderscored),
+                         QRegularExpression::escape(ver)));
+            const QString html = QString::fromUtf8(body);
+            QRegularExpressionMatchIterator it = re.globalMatch(html);
+            while (it.hasNext()) {
+                const QRegularExpressionMatch m = it.next();
+                const QString fn = m.captured(1);
+                if (!matchesPlatform(fn)) continue;
+                const QString sha = m.captured(2);
+                // href is relative to the index dir.
+                const QUrl base(indexUrl);
+                const QUrl wheelUrl = base.resolved(QUrl(fn));
+                if (m_idx < m_queue.size()) m_queue[m_idx].sha256 = sha;
+                downloadTo(wheelUrl, sha,
+                           QDir(cacheRoot()).filePath(QStringLiteral(".dl.whl")), name);
+                return;
+            }
+            fail(QStringLiteral("no %1 wheel for %2 %3 at %4").arg(platformDesc, pkg, ver, indexUrl));
+        });
+        return;
+    }
+
+    // pypi.org JSON path.
     const QUrl api(QStringLiteral("https://pypi.org/pypi/%1/%2/json").arg(c.pypiPkg, c.pypiVer));
     QNetworkRequest req(api);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     // Track in m_reply so cancel() (e.g. window closed mid-resolve) aborts it.
     m_reply = m_nam->get(req);
-    connect(m_reply, &QNetworkReply::finished, this, [this, name = c.name]() {
+    connect(m_reply, &QNetworkReply::finished, this,
+            [this, name = c.name, platformDesc, matchesPlatform]() {
         if (!m_reply) return;
         const QByteArray body = m_reply->readAll();
         const auto err = m_reply->error();
@@ -362,8 +457,7 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
         for (const QJsonValue v : root.value(QStringLiteral("urls")).toArray()) {
             const QJsonObject u = v.toObject();
             const QString fn = u.value(QStringLiteral("filename")).toString();
-            if (fn.endsWith(QStringLiteral(".whl")) && fn.contains(QStringLiteral("x86_64"))
-                && fn.contains(QStringLiteral("manylinux"))) {
+            if (matchesPlatform(fn)) {
                 const QString url = u.value(QStringLiteral("url")).toString();
                 const QString sha = u.value(QStringLiteral("digests")).toObject()
                                        .value(QStringLiteral("sha256")).toString();
@@ -374,7 +468,7 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
                 return;
             }
         }
-        fail(QStringLiteral("no manylinux x86_64 wheel for %1").arg(name));
+        fail(QStringLiteral("no %1 wheel for %2").arg(platformDesc, name));
     });
 }
 
@@ -442,11 +536,46 @@ void NvidiaAfxPack::extractInto(const QString& archive, Kind kind)
 {
     QProcess p;
     if (kind == Kind::Wheel) {
-        // Flatten the wheel's *.so* into the pack's external/cuda/lib.
+#if defined(_WIN32)
+        // Wheels are zip files. tar.exe (bsdtar, ships in Win10+) extracts
+        // zips but has no "flatten paths" mode. So extract into a temp dir
+        // then move all *.dll up into staging/bin/. CUDA wheels put DLLs at
+        // nvidia/<pkg>/bin/*.dll; tensorrt-cu12-libs at tensorrt_libs/*.dll.
+        const QString binDir = QDir(m_staging).filePath(QStringLiteral("bin"));
+        QDir().mkpath(binDir);
+        const QString tmpDir = QDir(cacheRoot()).filePath(QStringLiteral(".whl-extract"));
+        QDir(tmpDir).removeRecursively();
+        QDir().mkpath(tmpDir);
+        p.start(QStringLiteral("tar"),
+                {QStringLiteral("-xf"), archive, QStringLiteral("-C"), tmpDir});
+        if (!p.waitForFinished(600000) || p.exitCode() != 0) {
+            fail(QStringLiteral("wheel extract failed: %1")
+                     .arg(QString::fromLocal8Bit(p.readAllStandardError()).trimmed()));
+            return;
+        }
+        // Flatten: move any *.dll from anywhere in the wheel into bin/.
+        QDirIterator it(tmpDir, {QStringLiteral("*.dll")},
+                        QDir::Files, QDirIterator::Subdirectories);
+        int moved = 0;
+        while (it.hasNext()) {
+            const QString src = it.next();
+            const QString dst = QDir(binDir).filePath(QFileInfo(src).fileName());
+            QFile::remove(dst);  // idempotent: overwrite on retry
+            if (QFile::rename(src, dst)) ++moved;
+        }
+        QDir(tmpDir).removeRecursively();
+        if (moved == 0) {
+            fail(QStringLiteral("wheel %1 contained no DLLs").arg(QFileInfo(archive).fileName()));
+            return;
+        }
+        return;  // success
+#else
+        // Linux: flatten the wheel's *.so* into the pack's external/cuda/lib.
         const QString libDir = QDir(m_staging).filePath(QStringLiteral("external/cuda/lib"));
         p.start(QStringLiteral("unzip"),
                 {QStringLiteral("-o"), QStringLiteral("-j"), QStringLiteral("-d"), libDir,
                  archive, QStringLiteral("*.so*")});
+#endif
     } else {
 #if defined(_WIN32)
         // Windows AFX-bits is a self-contained .zip laid out at root (bin/,
@@ -564,7 +693,7 @@ void NvidiaAfxPack::installFromFile(const QString& archivePath)
     }
     const qint64 importBytes = QFileInfo(archivePath).size();
     m_queue = { { QStringLiteral("afx"), QStringLiteral("AFX pack (imported)"),
-                  {}, QStringLiteral("2.1.0"), {}, importSha, Kind::Tarball, importBytes } };
+                  {}, QStringLiteral("2.1.0"), {}, {}, importSha, Kind::Tarball, importBytes } };
     QDir().mkpath(cacheRoot());
     m_staging = QDir(cacheRoot()).filePath(QStringLiteral(".staging"));
     QDir(m_staging).removeRecursively(); QDir().mkpath(m_staging);

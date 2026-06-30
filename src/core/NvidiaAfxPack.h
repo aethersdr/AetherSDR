@@ -97,6 +97,8 @@ private:
         QString name;       // display name (free to change — not used for matching)
         QString pypiPkg;    // for Wheel: PyPI package (url+sha resolved at runtime)
         QString pypiVer;    // pinned version (display)
+        QString pypiIndex;  // for Wheel: empty=pypi.org JSON, else simple-index base
+                            //   (e.g. "https://pypi.nvidia.com/" for TensorRT)
         QString url;        // for Tarball: direct URL (our host)
         QString sha256;     // for Tarball: pinned sha (Wheel sha comes from PyPI)
         Kind kind;
