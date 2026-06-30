@@ -1104,6 +1104,8 @@ void MainWindow::wirePanLifecycle()
                 s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
             sw->setDssFloorDepth(
                 s.value(sw->settingsKey("Display3DFloorDepth"), "6").toInt());
+            sw->setDssGain(
+                s.value(sw->settingsKey("Display3DGain"), "70").toInt());
             // Nudge rate to force waterfall tile re-sync
             if (!m_adaptiveThrottleActive) {
                 QTimer::singleShot(500, this, [this, rate]() {

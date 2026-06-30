@@ -53,7 +53,8 @@ public:
                              float lineWidth = 2.0f,
                              bool autoBlackRadioSide = false,
                              int renderMode = 0,
-                             int dssFloorDepth = 6);
+                             int dssFloorDepth = 6,
+                             int dssGain = 70);
     void syncWfLineDuration(int rate);
     void syncKiwiWaterfallSettings(int cellDb, int floorDb, int rate);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
@@ -144,6 +145,7 @@ signals:
     void wfColorSchemeChanged(int scheme);
     void spectrumRenderModeChanged(int mode);
     void dssFloorDepthChanged(int dB);
+    void dssGainChanged(int pct);
     void noiseFloorPositionChanged(int pos);
     void noiseFloorEnableChanged(bool on);
     // Emitted when user selects a band from the sub-panel.  stackKeyHint is
@@ -296,6 +298,8 @@ private:
     QComboBox*   m_renderModeCmb{nullptr};
     QSlider*     m_dssFloorSlider{nullptr};  // 3DSS floor depth (dB below floor)
     QLabel*      m_dssFloorLabel{nullptr};
+    QSlider*     m_dssGainSlider{nullptr};  // 3DSS colour floor (0-100)
+    QLabel*      m_dssGainLabel{nullptr};
     QComboBox*   m_gpuCombo{nullptr};   // render-GPU selector (multi-GPU only)
     QSlider*     m_rateSlider{nullptr};
     QLabel*      m_rateLabel{nullptr};

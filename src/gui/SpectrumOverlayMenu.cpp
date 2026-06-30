@@ -1620,6 +1620,20 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         emit dssFloorDepthChanged(v);
     });
 
+    // ── 3D gain — how far down the strength range the colormap reaches ────
+    makeRow("3D Gain:", 0, 100, 70, m_dssGainSlider, m_dssGainLabel);
+    if (m_dssGainSlider) {
+        m_dssGainSlider->setObjectName("dssGainSlider");
+        m_dssGainSlider->setToolTip(
+            "3D surface colour gain: how far down the signal range the colormap "
+            "reaches.\nHigher = colour down toward the noise floor; lower = "
+            "colour only on the strongest signals.");
+    }
+    connect(m_dssGainSlider, &QSlider::valueChanged, this, [this](int v) {
+        if (m_dssGainLabel) m_dssGainLabel->setText(QString::number(v));
+        emit dssGainChanged(v);
+    });
+
     // ── Lean render mode toggle (#3283) ─────────────────────────────────
     // Global low-overhead render mode: opaque panadapter + VFO, capped
     // repaint, WAVE scope off, throttled meters. Grouped with the spectrum
@@ -1787,7 +1801,8 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
                                                float lineWidth,
                                                bool autoBlackRadioSide,
                                                int renderMode,
-                                               int dssFloorDepth)
+                                               int dssFloorDepth,
+                                               int dssGain)
 {
     if (!m_avgSlider) return;  // panel not built yet
 
@@ -1852,6 +1867,11 @@ void SpectrumOverlayMenu::syncDisplaySettings(int avg, int fps, int fillPct,
         QSignalBlocker bf(m_dssFloorSlider);
         m_dssFloorSlider->setValue(dssFloorDepth);
         if (m_dssFloorLabel) m_dssFloorLabel->setText(QString::number(dssFloorDepth));
+    }
+    if (m_dssGainSlider) {
+        QSignalBlocker bc(m_dssGainSlider);
+        m_dssGainSlider->setValue(dssGain);
+        if (m_dssGainLabel) m_dssGainLabel->setText(QString::number(dssGain));
     }
 }
 

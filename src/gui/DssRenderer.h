@@ -36,7 +36,7 @@ public:
     static constexpr float kBackWidthFrac     = 0.60f;  // back row width / front
     static constexpr float kDepthSpanFrac     = 0.58f;  // baseline rise to the back
     static constexpr float kFrontMaxRidgeFrac = 0.46f;  // front ridge height / plot H
-    static constexpr float kHaze              = 0.28f;  // fade toward bg with depth
+    static constexpr float kHaze              = 0.16f;  // fade toward bg with depth
 
     // Maps a dBm value to an RGB colour using the host's panadapter palette.
     using PaletteFn = std::function<QRgb(float dbm)>;

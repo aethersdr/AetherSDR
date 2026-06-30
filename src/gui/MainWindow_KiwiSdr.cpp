@@ -707,7 +707,8 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
                 spectrum->noiseFloorEnabled(), spectrum->fftHeatMap(),
                 spectrum->wfColorScheme(), spectrum->showGrid(),
                 spectrum->fftLineWidth(), spectrum->wfAutoBlackRadioSide(),
-                spectrum->spectrumRenderMode(), spectrum->dssFloorDepth());
+                spectrum->spectrumRenderMode(), spectrum->dssFloorDepth(),
+                spectrum->dssGain());
         }
         return;
     }

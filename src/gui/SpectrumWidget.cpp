@@ -2789,6 +2789,19 @@ void SpectrumWidget::setDssFloorDepth(int dB) {
     update();
 }
 
+void SpectrumWidget::setDssGain(int pct) {
+    pct = std::clamp(pct, 0, 100);
+    if (pct != m_dssGain) {
+        m_dssGain = pct;
+        auto& s = AppSettings::instance();
+        s.setValue(settingsKey("Display3DGain"), QString::number(pct));
+        s.save();
+        m_dssLutToken = ~0ull;  // force the GPU palette LUT to re-bake next frame
+        m_dss.invalidate();     // CPU fallback surface re-colours too
+    }
+    update();
+}
+
 void SpectrumWidget::setSpectrumRenderMode(int mode) {
     auto clamped = static_cast<SpectrumRenderMode>(
         std::clamp(mode, 0, static_cast<int>(SpectrumRenderMode::Count) - 1));
@@ -7472,11 +7485,25 @@ QRgb SpectrumWidget::dbmToRgb(float dbm) const
     return interpolateGradient(t, stops, n);
 }
 
+QRgb SpectrumWidget::dssStrengthToRgb(float s) const
+{
+    // gamma in [0.25 .. 4]: gain=100 -> 0.25 (colour lifted to the noise floor),
+    // gain=50 -> 1.0 (linear), gain=0 -> 4 (colour only on the strongest peaks).
+    const float gamma = std::pow(4.0f, (50.0f - m_dssGain) / 50.0f);
+    int n = 0;
+    const auto* stops = wfSchemeStops(m_wfColorScheme, n);
+    return interpolateGradient(std::pow(std::clamp(s, 0.0f, 1.0f), gamma),
+                               stops, n);
+}
+
 quint64 SpectrumWidget::dssPaletteToken() const
 {
-    // Fold the dbmToRgb() inputs so the cached surface recolours when any of
-    // them changes (scheme/gain/black-level/min-dBm).
+    // Fold the inputs that define the 3DSS surface colour so the cached image
+    // recolours when any change. The surface now maps strength through the
+    // scheme + "3D Gain" (dssStrengthToRgb); the waterfall gain/black/min are
+    // kept here too since they still affect the 2D/waterfall colour path.
     quint64 t = static_cast<quint64>(m_wfColorScheme);
+    t = t * 131 + static_cast<quint64>(m_dssGain);
     t = t * 131 + static_cast<quint64>(m_wfColorGain);
     t = t * 131 + static_cast<quint64>(m_wfBlackLevel);
     t = t * 131 + static_cast<quint64>(qRound(m_wfMinDbm));
@@ -7515,7 +7542,12 @@ const QImage& SpectrumWidget::buildDssImage(const QSize& px, int scaleStripPx)
     const float floorDbm = dssFloorDbm();
     const float rangeDb  = std::round(dssSpanDb() * 2.0f) / 2.0f;
 
-    auto palette = [this](float dbm) { return dbmToRgb(dbm); };
+    // Same mapping as the GPU mesh: full colormap over the strength axis, gamma-
+    // shaped by "3D Gain" (NOT dbmToRgb, which clipped the low range to black).
+    auto palette = [this, floorDbm, rangeDb](float dbm) {
+        const float r = (rangeDb > 0.0f) ? rangeDb : 1.0f;
+        return dssStrengthToRgb((dbm - floorDbm) / r);
+    };
     return m_dss.image(px, scaleStripPx, floorDbm, rangeDb, m_dssZCurve,
                        palette, dssPaletteToken(), m_bgFillColor);
 }
@@ -7983,24 +8015,25 @@ void SpectrumWidget::uploadDssPaletteLut(QRhiResourceUpdateBatch* batch,
     if (!m_dssPaletteTex || !batch) {
         return;
     }
-    // Bake the LUT through dbmToRgb() — the SAME mapping the 2D trace and the
-    // CPU 3D path use — so colour-gain / black-level / min-dBm reach the GPU
-    // surface and the same data renders the same colour on GPU and CPU. The LUT
-    // is indexed by the mesh's linear strength s = (dbm-floor)/range, so entry i
-    // is the colour of dBm = floor + (i/255)*range. Keyed on dssPaletteToken()
-    // plus the (quantised) floor/range that define that dBm mapping.
-    quint64 token = dssPaletteToken();
-    token = token * 131 + static_cast<quint64>(qRound(floorDbm * 2.0f));
-    token = token * 131 + static_cast<quint64>(qRound(rangeDb * 2.0f));
+    // The 3D surface maps its strength axis (noise floor -> ref level) across the
+    // FULL colormap gradient, bypassing dbmToRgb()'s waterfall black-level window
+    // (which forced everything below ~(min + (125-black)*0.4) dBm to black, so
+    // only the strongest signals showed any colour). The "3D Color" control
+    // gamma-shapes the strength before the lookup: higher = colour reaches down
+    // toward the noise floor; lower = colour only on the strongest signals.
+    // Colour depends only on the scheme + that control (NOT the per-frame floor/
+    // range, which jitter every frame), so the LUT re-bakes only on a real change.
+    Q_UNUSED(floorDbm);
+    Q_UNUSED(rangeDb);
+    const quint64 token = static_cast<quint64>(m_wfColorScheme) * 131
+                        + static_cast<quint64>(m_dssGain);
     if (token == m_dssLutToken) {
         return;  // unchanged
     }
 
-    const float range = (rangeDb > 0.0f) ? rangeDb : 1.0f;
     QImage lut(256, 1, QImage::Format_RGBA8888);  // owns its data
     for (int i = 0; i < 256; ++i) {
-        const float dbm = floorDbm + (i / 255.0f) * range;
-        const QRgb c = dbmToRgb(dbm);
+        const QRgb c = dssStrengthToRgb(i / 255.0f);
         lut.setPixelColor(i, 0, QColor(qRed(c), qGreen(c), qBlue(c)));
     }
     QRhiTextureSubresourceUploadDescription desc(lut);
@@ -8016,14 +8049,14 @@ void SpectrumWidget::initDssMeshPipeline()
     // R16F height texture is the cleanest dBm store; if unsupported, fall back
     // to the cached-image quad path (no mesh).
     if (!r->isTextureFormatSupported(QRhiTexture::R16F, {})) {
-        qWarning() << "SpectrumWidget: R16F unsupported — stacked-trace mesh disabled (CPU fallback)";
+        qCWarning(lcGui) << "SpectrumWidget: R16F unsupported — stacked-trace mesh disabled (CPU fallback)";
         return;
     }
 
     QShader vs = loadShader(":/shaders/resources/shaders/dss_mesh.vert.qsb");
     QShader fs = loadShader(":/shaders/resources/shaders/dss_mesh.frag.qsb");
     if (!vs.isValid() || !fs.isValid()) {
-        qWarning() << "SpectrumWidget: dss_mesh shader load failed — stacked-trace mesh disabled";
+        qCWarning(lcGui) << "SpectrumWidget: dss_mesh shader load failed — stacked-trace mesh disabled";
         return;
     }
 
@@ -8039,14 +8072,14 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssMeshUbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
                                 kDssMeshUboFloats * sizeof(float));
     if (!m_dssMeshVbo->create() || !m_dssMeshLineVbo->create() || !m_dssMeshUbo->create()) {
-        qWarning() << "SpectrumWidget: dss_mesh buffer create failed";
+        qCWarning(lcGui) << "SpectrumWidget: dss_mesh buffer create failed";
         return;
     }
 
     m_dssHeightTex  = r->newTexture(QRhiTexture::R16F, QSize(cols, rows));
     m_dssPaletteTex = r->newTexture(QRhiTexture::RGBA8, QSize(256, 1));
     if (!m_dssHeightTex->create() || !m_dssPaletteTex->create()) {
-        qWarning() << "SpectrumWidget: dss_mesh texture create failed";
+        qCWarning(lcGui) << "SpectrumWidget: dss_mesh texture create failed";
         return;
     }
 
@@ -8057,7 +8090,7 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssPaletteSampler = r->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
         QRhiSampler::None, QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
     if (!m_dssHeightSampler->create() || !m_dssPaletteSampler->create()) {
-        qWarning() << "SpectrumWidget: dss_mesh sampler create failed";
+        qCWarning(lcGui) << "SpectrumWidget: dss_mesh sampler create failed";
         return;
     }
 
@@ -8072,7 +8105,7 @@ void SpectrumWidget::initDssMeshPipeline()
             QRhiShaderResourceBinding::FragmentStage, m_dssPaletteTex, m_dssPaletteSampler),
     });
     if (!m_dssMeshSrb->create()) {
-        qWarning() << "SpectrumWidget: dss_mesh SRB create failed";
+        qCWarning(lcGui) << "SpectrumWidget: dss_mesh SRB create failed";
         return;
     }
 
@@ -8104,7 +8137,7 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssMeshLinePipeline->setTargetBlends({lblend});
 
     if (!m_dssMeshFillPipeline->create() || !m_dssMeshLinePipeline->create()) {
-        qWarning() << "SpectrumWidget: dss_mesh pipeline create failed";
+        qCWarning(lcGui) << "SpectrumWidget: dss_mesh pipeline create failed";
         return;
     }
 
@@ -8635,16 +8668,19 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     : (m_dssMeshHeadUploaded - head + rows) % rows;
                 newRows = std::clamp(newRows, 0, valid);
                 QVarLengthArray<QRhiTextureUploadEntry, DssRenderer::kRows> entries;
+                m_dssRowScratch.resize(cols * int(sizeof(qfloat16)));
                 for (int n = 0; n < newRows; ++n) {
                     const int ring = (head + n) % rows;  // head..head+newRows-1
                     const float* srcRow = m_dss.rowDataRing(ring);
-                    QByteArray bytes(cols * int(sizeof(qfloat16)), Qt::Uninitialized);
-                    qfloat16* dst = reinterpret_cast<qfloat16*>(bytes.data());
+                    // Reuse the member buffer: setData() holds a COW ref, so the
+                    // common single-new-row frame reuses it with no allocation,
+                    // while a multi-row catch-up detaches per row (still correct).
+                    qfloat16* dst = reinterpret_cast<qfloat16*>(m_dssRowScratch.data());
                     for (int c = 0; c < cols; ++c) {
                         dst[c] = qfloat16(srcRow[c]);
                     }
                     QRhiTextureSubresourceUploadDescription rowDesc;
-                    rowDesc.setData(bytes);  // descriptor keeps the bytes alive
+                    rowDesc.setData(m_dssRowScratch);  // descriptor keeps the bytes alive
                     rowDesc.setSourceSize(QSize(cols, 1));
                     rowDesc.setDestinationTopLeft(QPoint(0, ring));
                     entries.append(QRhiTextureUploadEntry(0, 0, rowDesc));
@@ -8686,13 +8722,15 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                               / static_cast<float>(qMax(1, w));
             const int specPwDev = qMax(1, qRound(specRect.width() * fbDpr));
             const int specPhDev = qMax(1, qRound(specH * fbDpr));
-            constexpr int kDssMaxW = 1024, kDssMaxH = 512;
             const double sc = qMin(1.0, qMin(double(kDssMaxW) / specPwDev,
                                              double(kDssMaxH) / specPhDev));
             const int dssW = qMax(2, static_cast<int>(specPwDev * sc));
             const int dssH = qMax(2, static_cast<int>(specPhDev * sc));
             const QImage& surf = buildDssImage(QSize(dssW, dssH), 0);
-            if (!surf.isNull()) {
+            // m_dssGpuTex/m_dssSrb/m_ovSampler come from initOverlayPipeline();
+            // guard against a partial GPU init (OOM / device loss) so the
+            // fallback never dereferences a null resource.
+            if (!surf.isNull() && m_dssGpuTex && m_dssSrb && m_ovSampler) {
                 if (m_dssTexW != dssW || m_dssTexH != dssH) {
                     m_dssTexW = dssW;
                     m_dssTexH = dssH;
@@ -9226,8 +9264,6 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         // Cap the software surface (like the GPU path) so a HiDPI/maximized
         // window doesn't rebuild a multi-megapixel QImage every frame; the
         // surface is intrinsically low-res, so stretch it on draw.
-        constexpr int kDssMaxW = 1024;
-        constexpr int kDssMaxH = 512;
         const QImage& surf =
             buildDssImage(specRect.size().boundedTo(QSize(kDssMaxW, kDssMaxH)), 0);
         if (!surf.isNull()) {

@@ -57,7 +57,10 @@ void main()
 
     gl_Position = vec4(plotX * 2.0 - 1.0, 1.0 - plotY * 2.0, 0.0, 1.0);
 
-    vLut   = (edge > 0.5) ? 0.0 : sLin;  // ridge = signal colour, floor = floor colour
+    // Ridge carries the full signal colour; the floor edge keeps a dimmer share
+    // of it (not pure palette[0]) so the whole curtain stays tinted by the
+    // colormap instead of fading to black between the white trace lines.
+    vLut   = (edge > 0.5) ? sLin * 0.6 : sLin;
     vDepth = v;
     vEdge  = edge;
 }

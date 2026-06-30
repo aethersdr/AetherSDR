@@ -387,6 +387,11 @@ public:
     // lifting the floor carpet into view. Persisted per-panadapter.
     void setDssFloorDepth(int dB);
     int  dssFloorDepth() const { return static_cast<int>(std::lround(-m_dssFloorOffsetDb)); }
+    // 3DSS colour floor (0-100): how far down the strength range the colormap
+    // reaches. Higher lifts colour toward the noise floor; lower keeps colour on
+    // strong signals only (gamma-shapes the palette lookup). Persisted per-pan.
+    void setDssGain(int pct);
+    int  dssGain() const { return m_dssGain; }
     void resetWfTimeScale();
     int   wfColorGain() const          { return m_wfColorGain; }
     int   wfBlackLevel() const         { return m_wfBlackLevel; }
@@ -831,6 +836,12 @@ private:
     QRgb dbmToRgb(float dbm) const;
     QRgb kiwiSdrLevelToRgb(float level) const;
     QRgb intensityToRgb(float intensity) const;  // for native waterfall tiles
+    // 3DSS surface colour for a normalised strength s in [0,1] (0 = noise floor,
+    // 1 = ref). The full colormap gradient, gamma-shaped by the "3D Gain"
+    // control. Shared by the GPU LUT bake and the CPU fallback so both paths
+    // colour identically (deliberately NOT dbmToRgb(), whose waterfall
+    // black-level window clipped the lower range to black).
+    QRgb dssStrengthToRgb(float s) const;
 
     // 3DSS — rebuild/return the cached perspective surface for the given pixel
     // size (scaleStripPx = transparent frequency-scale strip at the bottom).
@@ -1007,11 +1018,15 @@ private:
     // 3DSS — perspective stacked-trace render mode. m_dss owns the rolling
     // history + cached surface image; consumed by both the CPU and GPU paths.
     SpectrumRenderMode m_spectrumRenderMode{SpectrumRenderMode::Mode2D};
+    // GUI-thread only: pushRow() (updateSpectrum / updateKiwiSdrWaterfallRow) and
+    // the renderGpuFrame/paint reads all run on the GUI thread, so m_dss needs no
+    // lock. Do NOT call pushRow() from a worker/audio thread without adding one.
     DssRenderer   m_dss;
     // 3DSS height anchor: the measured noise floor maps this many dB below the
     // trace baseline. A few dB negative lifts the noisy floor carpet (with its
     // own colour) up off the baseline so you see floor -> peak, not just crests.
     float m_dssFloorOffsetDb{-6.0f};
+    int   m_dssGain{70};   // 3DSS colour floor 0-100 (gamma of palette lookup)
 
     float m_autoBlackThresh{145.0f}; // client-side auto-black: tracked noise floor
     // Radio's per-tile auto-black level (raw uint16). Preferred over the client
@@ -1412,7 +1427,13 @@ private:
     bool m_dssMeshReady{false};
     int  m_dssMeshHeadUploaded{-1};          // ring head last uploaded to heightTex
     quint64 m_dssLutToken{~0ull};            // token of the palette LUT last baked
+    QByteArray m_dssRowScratch;              // reused qfloat16 row buffer (mesh upload)
     float m_dssZCurve{0.70f};           // <1 expands the floor band (more floor)
+    // Cap for the 3DSS surface texture/image (GPU mesh fallback + CPU paint).
+    // The surface is intrinsically low-res, so a smaller texture is visually
+    // free via the linear sampler and keeps the per-frame rebuild/upload cheap.
+    static constexpr int kDssMaxW = 1024;
+    static constexpr int kDssMaxH = 512;
 
     void initDssMeshPipeline();
     void uploadDssPaletteLut(QRhiResourceUpdateBatch* batch, float floorDbm, float rangeDb);
