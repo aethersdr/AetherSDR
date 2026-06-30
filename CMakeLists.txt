@@ -1591,7 +1591,10 @@ endif()
 # We only compile the wrapper (it uses its own minimal NvAFX_* declarations,
 # so no NVIDIA headers are vendored) and link the dynamic loader.
 if(ENABLE_NVIDIA_AFX)
-    if((UNIX AND NOT APPLE) OR WIN32)
+    # x86_64 ONLY: NVIDIA Maxine AFX ships no ARM runtime, so aarch64 (Raspberry
+    # Pi etc. — which also have no NVIDIA GPU) and macOS get the DFNR fallback,
+    # not BNR. The arch guard means BNR is simply absent there (no dead button).
+    if(((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
         target_compile_definitions(AetherSDR PRIVATE HAVE_NVIDIA_AFX)
         # Linux loads the AFX runtime via libdl; Windows uses the Win32
         # LoadLibrary family from kernel32 (linked by default).
@@ -1600,7 +1603,7 @@ if(ENABLE_NVIDIA_AFX)
         endif()
         message(STATUS "NVIDIA AFX GPU denoiser enabled (runtime-loaded)")
     else()
-        message(STATUS "NVIDIA AFX GPU denoiser requested but only supported on Linux/Windows — skipping")
+        message(STATUS "NVIDIA AFX GPU denoiser not built (x86_64 Linux/Windows only; macOS/aarch64 use DFNR)")
     endif()
 endif()
 
@@ -1817,7 +1820,7 @@ add_test(NAME wfm_dsp_test COMMAND wfm_dsp_test)
 
 # Hardware-gated functional test for the optional NVIDIA AFX GPU denoiser.
 # Built only when the feature is enabled; SKIPs at runtime without a pack/GPU.
-if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32))
+if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
     add_executable(nvidia_afx_filter_test
         tests/nvidia_afx_filter_test.cpp
         src/core/NvidiaAfxFilter.cpp
