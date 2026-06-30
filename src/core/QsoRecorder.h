@@ -81,6 +81,18 @@ public:
     bool isPlaying() const { return m_playing; }
     bool hasLastRecording() const { return !m_lastRecordingPath.isEmpty(); }
 
+    // Path of the in-progress recording (while recording) else the last
+    // finalized one; empty if neither. Used by the automation bridge to locate
+    // the WAV for capture-file verification.
+    QString recordingFilePath() const {
+        // Lock: m_file is mutated/deleteLater'd under m_writeMutex by the feed
+        // path and finalizeFile(); reading it unlocked races those and can hit
+        // a half-torn-down handle (UAF). All callers are external (automation),
+        // none hold the write lock, so this can't self-deadlock.
+        std::lock_guard<std::mutex> lock(m_writeMutex);
+        return m_file ? m_file->fileName() : m_lastRecordingPath;
+    }
+
     // Duration of current recording in seconds (0 if not recording)
     int recordingDurationSecs() const;
 
@@ -121,7 +133,7 @@ private:
     bool preparePlaybackPcm(int sinkRateHz);
 
     // Recording state
-    bool        m_recording{false};
+    std::atomic<bool> m_recording{false};  // checked lock-free on the audio feed fast path
     std::atomic<bool> m_transmitting{false};  // MOX state; gates RX vs TX writes (#3556)
     QFile*      m_file{nullptr};
     QDateTime   m_startTime;
@@ -154,7 +166,7 @@ private:
     QAudioDevice m_outputDevice;
 
     // Thread safety for audio feed paths
-    std::mutex  m_writeMutex;
+    mutable std::mutex  m_writeMutex;
 
     // WAV format constants (matching AudioEngine native format)
     static constexpr int SAMPLE_RATE = 24000;

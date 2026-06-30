@@ -1,6 +1,8 @@
 #pragma once
 
 #include <QWidget>
+#include <QStringList>
+#include <QList>
 #include <array>
 
 class QSlider;
@@ -10,10 +12,14 @@ class QRadioButton;
 class QCheckBox;
 class QButtonGroup;
 class QStackedWidget;
+class QLineEdit;
+class QProgressBar;
+class QGridLayout;
 
 namespace AetherSDR {
 
 class AudioEngine;
+class NvidiaAfxPack;
 
 // AetherDSP settings body — the QTabWidget + per-tab controls + AppSettings
 // persistence wiring shared by the modeless AetherDspDialog (Settings menu)
@@ -103,6 +109,20 @@ private:
     // and on every *EnabledChanged signal.
     void syncDspSelectorFromEngine();
 
+    // BNR = the local NVIDIA AFX denoiser (download-on-demand).
+    void updateBnrStatus();
+    // First-use NVIDIA license acceptance gate (returns false if declined).
+    bool ensureBnrLicenseAccepted();
+
+    // Per-component download/installed list. One row per BNR component; while a
+    // component downloads the row shows a progress bar, then swaps to its
+    // version + sha + size once installed (same rows for the steady state).
+    void rebuildBnrRows(const QStringList& names);               // one row per component
+    void setBnrRowProgress(int i, int percent, qint64 bytes, const QString& rateEta);
+    void setBnrRowDetail(int i, const QString& version, const QString& sha256, qint64 bytes,
+                         const QString& newVersion = QString());
+    void clearBnrRows();
+
     AudioEngine*    m_audio;
     QStackedWidget* m_dspStack{nullptr};
     std::array<QPushButton*, NumDsps> m_dspBtns{};
@@ -142,6 +162,26 @@ private:
     QLabel*       m_dfnrAttenLabel{nullptr};
     QSlider*      m_dfnrBetaSlider{nullptr};
     QLabel*       m_dfnrBetaLabel{nullptr};
+
+    // BNR controls — local NVIDIA AFX GPU denoiser
+    QLabel*         m_bnrAfxStatus{nullptr};
+    QPushButton*    m_bnrAfxDownloadBtn{nullptr};
+    NvidiaAfxPack*  m_bnrAfxPack{nullptr};
+    QSlider*        m_bnrAfxIntensitySlider{nullptr};
+    QLabel*         m_bnrAfxIntensityLabel{nullptr};
+
+    // Per-component list laid out on a shared grid so every row's bar starts at
+    // the same column and is the same width (download bars ⇄ installed details).
+    QWidget*        m_bnrAfxList{nullptr};
+    QGridLayout*    m_bnrAfxListLayout{nullptr};
+    struct BnrCompRow {
+        QLabel*       name{nullptr};
+        QLabel*       size{nullptr};
+        QProgressBar* bar{nullptr};
+        QLabel*       barText{nullptr};  // overlay on the bar (10px-padded text)
+        QLabel*       detail{nullptr};
+    };
+    QList<BnrCompRow> m_bnrAfxRows;
 };
 
 } // namespace AetherSDR

@@ -1,11 +1,13 @@
 #include "AetherDspWidget.h"
 #include "core/AudioEngine.h"
 #include "core/AppSettings.h"
+#include "core/NvidiaBnrSettings.h"
 #include "GuardedSlider.h"
 #include "Theme.h"
 
 #include <QRegularExpression>
 #include <QSet>
+#include <QHash>
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -14,6 +16,12 @@
 #include <QStackedWidget>
 #include <QRadioButton>
 #include <QButtonGroup>
+#include <QLineEdit>
+#include <QProgressBar>
+#include <QMessageBox>
+#ifdef HAVE_NVIDIA_AFX
+#include "core/NvidiaAfxPack.h"
+#endif
 #include <QCheckBox>
 #include <QLabel>
 #include <QPushButton>
@@ -165,6 +173,14 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
         auto* b = makeToggle(kLabels[i]);
         b->setFixedSize(38, 22);
         b->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+        // Name each selector for screen readers and the automation bridge.
+        // Checkable buttons report value as "checked"/"unchecked", so without
+        // an objectName/accessibleName a driver (or assistive tech) can't tell
+        // NR2 from BNR — only a screenshot could. Stable objectName lets a
+        // driver target a specific method; accessibleName carries the label.
+        b->setObjectName(QStringLiteral("dspMethodBtn") + QLatin1String(kLabels[i]));
+        b->setAccessibleName(QString::fromLatin1(kLabels[i])
+                             + QStringLiteral(" noise-reduction method"));
         // MNR (MMSE-Wiener spectral NR) is implemented only on macOS —
         // dim the selector on Windows / Linux so users can see it exists
         // but can't enable a path the engine has no backend for.
@@ -183,14 +199,28 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
                           "Install LLVM from llvm.org and rebuild to enable NR4.");
         }
 #endif
-        // BNR (NVIDIA GPU neural denoising) is gated at compile time
-        // by HAVE_BNR — VfoWidget hides its button entirely; here we
-        // keep the slot visible so the 6-button row stays balanced and
-        // just dim it for builds without the BNR backend.
-#ifndef HAVE_BNR
+        // BNR (NVIDIA AFX GPU denoiser) is gated at compile time by
+        // HAVE_NVIDIA_AFX (defined only on x86_64 Linux/Windows; never on macOS
+        // or aarch64 — no Maxine runtime there). Where it IS built, gate the
+        // button at runtime on a supported NVIDIA GPU so non-NVIDIA / older-GPU
+        // machines get a clear disabled state instead of a download that fails
+        // on click. Keep the slot visible so the 6-button row stays balanced.
+#ifndef HAVE_NVIDIA_AFX
         if (i == BNR) {
             b->setEnabled(false);
-            b->setToolTip("BNR requires the NVIDIA Broadcast SDK and an NVIDIA GPU.");
+#ifdef Q_OS_MACOS
+            b->setToolTip("BNR (NVIDIA GPU denoiser) is not available on macOS.\n"
+                          "Use DFNR for AI noise removal.");
+#else
+            b->setToolTip("BNR requires an NVIDIA RTX/GeForce GPU "
+                          "(not available in this build).");
+#endif
+        }
+#else
+        if (i == BNR && !NvidiaAfxPack::hasSupportedGpu()) {
+            b->setEnabled(false);
+            b->setToolTip("BNR requires an NVIDIA RTX 40-series or later GPU.\n"
+                          "Use DFNR for AI noise removal on other hardware.");
         }
 #endif
         m_dspBtns[i] = b;
@@ -223,8 +253,10 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
                 this, &AetherDspWidget::syncDspSelectorFromEngine);
         connect(m_audio, &AudioEngine::rn2EnabledChanged,
                 this, &AetherDspWidget::syncDspSelectorFromEngine);
-        connect(m_audio, &AudioEngine::bnrEnabledChanged,
+        connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
                 this, &AetherDspWidget::syncDspSelectorFromEngine);
+        connect(m_audio, &AudioEngine::nvAfxEnabledChanged,
+                this, &AetherDspWidget::updateBnrStatus);
     }
 
     syncDspSelectorFromEngine();
@@ -239,6 +271,9 @@ void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
     // re-enable from the same place.
     m_dspStack->setCurrentIndex(index);
     if (!m_audio) return;
+    // The NVIDIA license is accepted at download time (the Download button gate),
+    // since that's when the licensed bits are fetched. Enabling an
+    // already-downloaded BNR doesn't re-prompt.
     // NR2 enable must run FFTW wisdom prep first (#2275) — kick that
     // through MainWindow rather than calling the engine setter directly.
     // NR2 disable + every other DSP go through the engine-thread setter.
@@ -252,7 +287,7 @@ void AetherDspWidget::onDspButtonClicked(int index, bool nowChecked)
                 case MNR:  m_audio->setMnrEnabled(nowChecked); break;
                 case DFNR: m_audio->setDfnrEnabled(nowChecked); break;
                 case RN2:  m_audio->setRn2Enabled(nowChecked); break;
-                case BNR:  m_audio->setBnrEnabled(nowChecked); break;
+                case BNR:  m_audio->setNvAfxEnabled(nowChecked); break;  // local AFX
             }
         });
     }
@@ -279,7 +314,7 @@ void AetherDspWidget::syncDspSelectorFromEngine()
         m_audio->mnrEnabled(),
         m_audio->dfnrEnabled(),
         m_audio->rn2Enabled(),
-        m_audio->bnrEnabled(),
+        m_audio->nvAfxEnabled(),   // BNR button = local AFX denoiser
     };
     int active = -1;
     for (int i = 0; i < NumDsps; ++i) {
@@ -915,21 +950,354 @@ QWidget* AetherDspWidget::buildRn2Page()
 
 // ── BNR Tab ─────────────────────────────────────────────────────────────────
 
+// BNR runs the local in-process NVIDIA AFX denoiser on this machine's GPU.
+// The runtime is downloaded on demand; this reflects install/active state and
+// lists the installed components (version + sha256) below the controls.
+void AetherDspWidget::updateBnrStatus()
+{
+#ifdef HAVE_NVIDIA_AFX
+    const bool installed = NvidiaAfxPack::isInstalled();
+    const bool busy = m_bnrAfxPack && m_bnrAfxPack->busy();
+    const bool updatable = installed && m_bnrAfxPack && m_bnrAfxPack->updateAvailable();
+    // Fetch the pack queries once and reuse (this runs on every BNR toggle).
+    const auto installedList = installed ? NvidiaAfxPack::installedComponents()
+                                         : QList<NvidiaAfxPack::ComponentInfo>();
+    const auto latestList = m_bnrAfxPack ? m_bnrAfxPack->latestComponents()
+                                         : QList<NvidiaAfxPack::ComponentInfo>();
+    // A cancelled download leaves verified components staged for resume.
+    const auto staged = installed ? QList<NvidiaAfxPack::ComponentInfo>()
+                                  : NvidiaAfxPack::stagedComponents();
+    const int totalComps = latestList.size();
+    const bool partial = !installed && !staged.isEmpty() && totalComps > 0;
+    if (m_bnrAfxStatus && !busy) {
+        const bool on = m_audio && m_audio->nvAfxEnabled();
+        if (installed && on && !updatable) {
+            // Green dot + text while the denoiser is running.
+            const QString green = AetherSDR::ThemeManager::instance()
+                                      .value(QStringLiteral("color.accent.success"));
+            m_bnrAfxStatus->setText(
+                QStringLiteral("<span style='color:%1;'>● Active</span>").arg(green));
+        } else {
+            m_bnrAfxStatus->setText(installed
+                                        ? (updatable ? QStringLiteral("Installed — update available")
+                                                     : QStringLiteral("Installed — ready"))
+                                    : partial ? tr("Partially downloaded (%1/%2)")
+                                                    .arg(staged.size()).arg(totalComps)
+                                              : QStringLiteral("Not installed"));
+        }
+    }
+    if (m_bnrAfxDownloadBtn && !busy) {
+        m_bnrAfxDownloadBtn->setText(installed
+                                         ? (updatable ? QStringLiteral("Update")
+                                                      : QStringLiteral("Re-download"))
+                                     : partial ? tr("Resume download")
+                                               : QStringLiteral("Download (~1 GB)"));
+        m_bnrAfxDownloadBtn->setEnabled(true);
+    }
+    if (m_bnrAfxIntensitySlider)
+        m_bnrAfxIntensitySlider->setEnabled(installed);
+
+    // Don't disturb the live download rows mid-flight — the per-component
+    // signals own them while busy. Otherwise reflect the installed manifest
+    // (annotating any component whose pinned version moved on, → newer), or the
+    // partially-downloaded set when a download was cancelled.
+    if (!busy) {
+        if (installed) {
+            QHash<QString, QString> latest;
+            for (const auto& c : latestList)
+                latest.insert(c.name, c.version);
+            QStringList names;
+            for (const auto& c : installedList) names << c.name;
+            rebuildBnrRows(names);
+            for (int i = 0; i < installedList.size(); ++i)
+                setBnrRowDetail(i, installedList[i].version, installedList[i].sha256,
+                                installedList[i].bytes, latest.value(installedList[i].name));
+        } else if (partial) {
+            QStringList names;
+            for (const auto& c : staged) names << c.name;
+            rebuildBnrRows(names);
+            for (int i = 0; i < staged.size(); ++i)
+                setBnrRowDetail(i, staged[i].version, staged[i].sha256, staged[i].bytes);
+        } else {
+            clearBnrRows();
+        }
+    }
+#else
+    if (m_bnrAfxStatus)
+        m_bnrAfxStatus->setText(QStringLiteral("Not available in this build"));
+    clearBnrRows();
+#endif
+}
+
+// One-time NVIDIA license acceptance, shown the first time BNR is enabled
+// (the AFX runtime + denoiser model are NVIDIA-licensed). Flows NVIDIA's terms
+// down to the end user (SWLA §1.3.3) and carries the Works Notice (PST §1.7.1).
+bool AetherDspWidget::ensureBnrLicenseAccepted()
+{
+    if (NvidiaBnrSettings::licenseAccepted())
+        return true;
+
+    QMessageBox box(this);
+    box.setWindowTitle(tr("NVIDIA Software License — BNR"));
+    box.setIcon(QMessageBox::Information);
+    box.setTextFormat(Qt::RichText);
+    box.setText(tr("<b>BNR uses NVIDIA Maxine software and a denoiser model.</b>"));
+    box.setInformativeText(tr(
+        "BNR uses components provided by NVIDIA Corporation, governed by "
+        "NVIDIA's license agreements:"
+        "<ul><li>NVIDIA Software License Agreement</li>"
+        "<li>Product-Specific Terms for NVIDIA AI Products</li>"
+        "<li>NVIDIA Community Model License</li></ul>"
+        "Licensed for use on NVIDIA RTX / GeForce RTX GPUs on a single-user "
+        "PC/workstation. The full texts ship with the downloaded BNR pack "
+        "(<tt>licenses/</tt>); see also "
+        "<a href=\"https://www.nvidia.com/en-us/agreements/enterprise-software/"
+        "nvidia-software-license-agreement/\">NVIDIA's Software License Agreement</a>."
+        "<br><br>By clicking <b>Accept</b> you agree to NVIDIA's license terms."));
+    auto* acceptBtn = box.addButton(tr("Accept"), QMessageBox::AcceptRole);
+    box.addButton(tr("Decline"), QMessageBox::RejectRole);
+    box.exec();
+    if (box.clickedButton() == acceptBtn) {
+        NvidiaBnrSettings::setLicenseAccepted(true);
+        return true;
+    }
+    return false;
+}
+
 QWidget* AetherDspWidget::buildBnrPage()
 {
     auto* page = new QWidget;
     auto* vbox = new QVBoxLayout(page);
-    auto* lbl = new QLabel(
-        "NVIDIA Broadcast — GPU-accelerated AI noise removal.  Strongest "
-        "against non-stationary noise (typing, traffic, dogs barking).  "
-        "Requires an NVIDIA GPU with the Broadcast SDK.  Intensity is "
-        "controlled from the slice overlay menu.");
-    lbl->setWordWrap(true);
-    lbl->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
-    vbox->addWidget(lbl);
+    vbox->setContentsMargins(10, 20, 10, 0);
+
+    auto* info = new QLabel("GPU-accelerated AI noise removal (NVIDIA Maxine) — "
+                            "runs in-process on a local NVIDIA GPU.");
+    info->setWordWrap(true);
+    AetherSDR::ThemeManager::instance().applyStyleSheet(info, "QLabel { color: {{color.text.secondary}}; font-size: 12px; }");
+    vbox->addWidget(info);
+
+    auto* g = new QGridLayout;
+    g->setContentsMargins(0, 12, 10, 0);
+    g->setColumnStretch(1, 1);
+
+    // Status (row 0 — above the intensity line)
+    g->addWidget(new QLabel("Status"), 0, 0);
+    m_bnrAfxStatus = new QLabel;
+    m_bnrAfxStatus->setAccessibleName(tr("BNR status"));
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_bnrAfxStatus, "QLabel { color: {{color.text.secondary}}; font-size: 11px; }");
+    g->addWidget(m_bnrAfxStatus, 0, 1);
+
+    // Intensity (row 1)
+    g->addWidget(new QLabel("Intensity"), 1, 0);
+    m_bnrAfxIntensitySlider = new QSlider(Qt::Horizontal);
+    m_bnrAfxIntensitySlider->setRange(0, 100);
+    m_bnrAfxIntensitySlider->setValue(static_cast<int>(NvidiaBnrSettings::intensity() * 100));
+    applyPrimarySliderStyle(m_bnrAfxIntensitySlider);
+    m_bnrAfxIntensitySlider->setAccessibleName(tr("BNR intensity"));
+    m_bnrAfxIntensitySlider->setAccessibleDescription(tr("Denoising strength, 0 = passthrough, 100 = maximum."));
+    m_bnrAfxIntensitySlider->setToolTip("Denoising strength (0 = passthrough, 100 = max).");
+    g->addWidget(m_bnrAfxIntensitySlider, 1, 1);
+    m_bnrAfxIntensityLabel = new QLabel(QString::number(m_bnrAfxIntensitySlider->value()));
+    m_bnrAfxIntensityLabel->setFixedWidth(40);
+    g->addWidget(m_bnrAfxIntensityLabel, 1, 2);
+
+    // Download button — created here, placed at the bottom-left of the page below.
+    m_bnrAfxDownloadBtn = new QPushButton("Download");
+    m_bnrAfxDownloadBtn->setAccessibleName(tr("Download BNR runtime"));
+    m_bnrAfxDownloadBtn->setAccessibleDescription(tr("Download the NVIDIA AFX runtime and denoiser model "
+                                                     "for this GPU into the app cache (one-time, ~1 GB)."));
+    m_bnrAfxDownloadBtn->setToolTip("Download the NVIDIA AFX runtime + denoiser model "
+                                    "for this GPU into the app's cache (one-time).");
+    connect(m_bnrAfxIntensitySlider, &QSlider::valueChanged, this, [this](int v) {
+        m_bnrAfxIntensityLabel->setText(QString::number(v));
+        const float r = v / 100.0f;
+        NvidiaBnrSettings::setIntensity(r);
+        // Capture the engine pointer by value, not `this`: the functor runs
+        // later on the AudioEngine thread, and this widget may be destroyed
+        // before it drains (capturing `this`->m_audio would be a cross-thread UAF).
+        if (auto* audio = m_audio)
+            QMetaObject::invokeMethod(audio, [audio, r]() { audio->setNvAfxIntensity(r); });
+    });
+    vbox->addLayout(g);
+
+    // Per-component list — one row each, a progress bar while downloading that
+    // swaps to the installed version + sha + size when done. The same rows show
+    // the installed manifest in the steady state (built by updateBnrStatus).
+    // A shared grid keeps the name / size / bar columns aligned across rows so
+    // every bar starts at the same x and is the same width.
+    m_bnrAfxList = new QWidget;
+    m_bnrAfxListLayout = new QGridLayout(m_bnrAfxList);
+    m_bnrAfxListLayout->setContentsMargins(0, 12, 10, 0);
+    // 24px between name|size and size|bar (the grid's only two column gaps).
+    m_bnrAfxListLayout->setHorizontalSpacing(24);
+    m_bnrAfxListLayout->setVerticalSpacing(4);
+    m_bnrAfxListLayout->setColumnStretch(2, 1);   // bar/detail column expands
+    vbox->addWidget(m_bnrAfxList);
+
     vbox->addStretch();
+
+    // Download / Resume / Update button, pinned to the bottom-left.
+    auto* dlRow = new QHBoxLayout;
+    dlRow->setContentsMargins(0, 8, 0, 0);
+    dlRow->addWidget(m_bnrAfxDownloadBtn);
+    dlRow->addStretch(1);
+    vbox->addLayout(dlRow);
+
+#ifdef HAVE_NVIDIA_AFX
+    m_bnrAfxPack = new NvidiaAfxPack(this);
+    connect(m_bnrAfxPack, &NvidiaAfxPack::planReady, this,
+            [this](const QList<NvidiaAfxPack::ComponentInfo>& comps) {
+        QStringList names;
+        for (const auto& c : comps) names << c.name;
+        rebuildBnrRows(names);
+        if (m_bnrAfxStatus) m_bnrAfxStatus->setText(QStringLiteral("Downloading…"));
+        if (m_bnrAfxDownloadBtn) m_bnrAfxDownloadBtn->setEnabled(false);
+    });
+    connect(m_bnrAfxPack, &NvidiaAfxPack::componentProgress, this,
+            [this](int i, int pct, qint64 bytes, const QString& rateEta) {
+        setBnrRowProgress(i, pct, bytes, rateEta);
+    });
+    connect(m_bnrAfxPack, &NvidiaAfxPack::componentFinished, this,
+            [this](int i, const NvidiaAfxPack::ComponentInfo& info) {
+        setBnrRowDetail(i, info.version, info.sha256, info.bytes);
+    });
+    connect(m_bnrAfxPack, &NvidiaAfxPack::finished, this, [this](bool ok, const QString& msg) {
+        if (!ok && m_bnrAfxStatus) m_bnrAfxStatus->setText(QStringLiteral("Failed: %1").arg(msg));
+        updateBnrStatus();
+    });
+    connect(m_bnrAfxDownloadBtn, &QPushButton::clicked, this, [this]() {
+        // Downloading fetches NVIDIA-licensed bits, so it needs the same
+        // one-time acceptance gate as enabling BNR (#bnr-license).
+        if (!ensureBnrLicenseAccepted()) return;
+        if (m_bnrAfxPack) m_bnrAfxPack->install();   // CUDA from PyPI + hosted AFX bits
+    });
+#else
+    m_bnrAfxDownloadBtn->setEnabled(false);
+#endif
+
+    updateBnrStatus();
     return page;
+}
+
+namespace {
+// "245 MB" / "8.4 KB" — compact download size.
+QString humanSize(qint64 bytes)
+{
+    if (bytes <= 0) return {};
+    double v = double(bytes);
+    const char* unit = "B";
+    if (v >= 1024.0) { v /= 1024.0; unit = "KB"; }
+    if (v >= 1024.0) { v /= 1024.0; unit = "MB"; }
+    if (v >= 1024.0) { v /= 1024.0; unit = "GB"; }
+    return QStringLiteral("%1 %2").arg(v, 0, 'f', v < 10.0 ? 1 : 0).arg(QLatin1String(unit));
+}
+} // namespace
+
+// Build one grid row per component: [ name | size | bar/detail ]. Columns are
+// shared across rows so every bar aligns and is the same width. Rows start in
+// the "queued" download state; setBnrRowProgress / setBnrRowDetail update them.
+// Fonts are left to inherit so the rows match the rest of the dialog.
+void AetherDspWidget::rebuildBnrRows(const QStringList& names)
+{
+    clearBnrRows();
+    if (!m_bnrAfxListLayout) return;
+    int row = 0;
+    for (const QString& name : names) {
+        BnrCompRow r;
+        r.name = new QLabel(name);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.name,
+            "QLabel { color: {{color.text.primary}}; }");
+        r.size = new QLabel;
+        r.size->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.size,
+            "QLabel { color: {{color.text.secondary}}; }");
+        r.bar = new QProgressBar;
+        r.bar->setTextVisible(false);   // chunk fills flush-left; text is overlaid
+        r.bar->setFixedHeight(16);
+        // Dimmer accent for the fill so the overlaid text keeps contrast over
+        // both the chunk and the dark groove (the bright accent washed it out).
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.bar,
+            "QProgressBar { background: {{color.background.0}};"
+            " border: 1px solid {{color.border.strong}}; border-radius: 3px; }"
+            "QProgressBar::chunk { background: {{color.accent.dim}}; border-radius: 2px; }");
+        r.bar->setRange(0, 100);
+        r.bar->setValue(0);
+        // Status text as a transparent overlay so its 10px left pad doesn't inset
+        // the chunk (QProgressBar padding would push the fill in too).
+        r.barText = new QLabel(QStringLiteral("queued"), r.bar);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.barText,
+            "QLabel { padding-left: 10px; background: transparent;"
+            " color: {{color.text.primary}}; }");
+        auto* bl = new QHBoxLayout(r.bar);
+        bl->setContentsMargins(0, 0, 0, 0);
+        bl->addWidget(r.barText);
+        r.detail = new QLabel;
+        r.detail->setTextFormat(Qt::RichText);
+        r.detail->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        r.detail->hide();
+        AetherSDR::ThemeManager::instance().applyStyleSheet(r.detail,
+            "QLabel { color: {{color.text.secondary}}; }");
+        m_bnrAfxListLayout->addWidget(r.name,   row, 0);
+        m_bnrAfxListLayout->addWidget(r.size,   row, 1);
+        // Bar and detail share the same cell; only one is visible at a time.
+        m_bnrAfxListLayout->addWidget(r.bar,    row, 2);
+        m_bnrAfxListLayout->addWidget(r.detail, row, 2);
+        m_bnrAfxRows.append(r);
+        ++row;
+    }
+}
+
+void AetherDspWidget::setBnrRowProgress(int i, int percent, qint64 bytes, const QString& rateEta)
+{
+    if (i < 0 || i >= m_bnrAfxRows.size()) return;
+    BnrCompRow& r = m_bnrAfxRows[i];
+    if (r.detail) r.detail->hide();
+    if (r.size && bytes > 0) r.size->setText(humanSize(bytes));
+    if (!r.bar) return;
+    r.bar->show();
+    QString text;
+    if (percent < 0) {                       // resolving / extracting
+        r.bar->setRange(0, 0);               // indeterminate
+        text = rateEta.isEmpty() ? QStringLiteral("working…") : rateEta;
+    } else {
+        r.bar->setRange(0, 100);
+        r.bar->setValue(percent);
+        text = rateEta.isEmpty() ? QStringLiteral("%1%").arg(percent)
+                                 : QStringLiteral("%1%  ·  %2").arg(percent).arg(rateEta);
+    }
+    if (r.barText) r.barText->setText(text);
+}
+
+// Swap a row from its progress bar to the installed version/sha/size line.
+void AetherDspWidget::setBnrRowDetail(int i, const QString& version,
+                                      const QString& sha256, qint64 bytes,
+                                      const QString& newVersion)
+{
+    if (i < 0 || i >= m_bnrAfxRows.size()) return;
+    BnrCompRow& r = m_bnrAfxRows[i];
+    if (r.bar) r.bar->hide();
+    if (r.size) r.size->setText(humanSize(bytes));
+    if (!r.detail) return;
+    // Version inline; full sha256 lives in the tooltip (it's too wide to show).
+    // When the build pins a newer version, append a "→ x.y" update hint.
+    QString text = QStringLiteral("<b>%1</b>").arg(version.toHtmlEscaped());
+    if (!newVersion.isEmpty() && newVersion != version)
+        text += QStringLiteral(" <span style='color:#d8a000;'>→ %1</span>").arg(newVersion.toHtmlEscaped());
+    r.detail->setText(text);
+    if (!sha256.isEmpty())
+        r.detail->setToolTip(QStringLiteral("%1\nsha256: %2").arg(version, sha256));
+    r.detail->show();
+}
+
+void AetherDspWidget::clearBnrRows()
+{
+    for (BnrCompRow& r : m_bnrAfxRows) {
+        delete r.name;
+        delete r.size;
+        delete r.bar;
+        delete r.detail;
+    }
+    m_bnrAfxRows.clear();
 }
 
 // ── DFNR Tab ────────────────────────────────────────────────────────────────

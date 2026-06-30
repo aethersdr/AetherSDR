@@ -21,7 +21,7 @@ Multi-thread architecture — up to 12 threads depending on features enabled:
 - **DAX IQ thread**: DaxIqModel worker (byte-swap + pipe I/O)
 - **AX.25 TNC thread**: AetherAx25LibmodemShim worker (HDLC/AX.25 + AFSK decode, on-demand when the AetherModem/packet tab is active)
 - **RADE thread**: RADEEngine neural encoder/decoder (on-demand, HAVE_RADE)
-- **BNR thread**: NvidiaBnrFilter gRPC async I/O (std::thread, HAVE_BNR)
+- **BNR**: NvidiaAfxFilter — in-process NVIDIA Maxine AFX GPU denoiser (runtime-loaded, HAVE_NVIDIA_AFX; runs inline on the audio thread, no dedicated thread)
 - **DXCC parse thread**: DxccColorProvider ADIF log parser (one-shot at startup)
 
 ```
@@ -54,7 +54,7 @@ SpectrumWidget   SpectrumWidget  MeterModel     AudioEngine
     │                  │     │    │                   │
     │ (ring buffer)    │     │    ├─→ SMeterWidget    ├─→ NR2 (SpectralNR)
     │ + NB blanker     │     │    ├─→ TxApplet        ├─→ RN2 (RNNoiseFilter)
-    ▼                  ▼     │    ├─→ TunerApplet     ├─→ BNR (NvidiaBnrFilter)
+    ▼                  ▼     │    ├─→ TunerApplet     ├─→ BNR (NvidiaAfxFilter)
   paintEvent()    paintEvent │    └─→ StatusBar       ├─→ CwDecoder [MAIN]
   (~98% CPU)                 │                        ▼
                              │                   QAudioSink
@@ -182,7 +182,7 @@ SPOT PIPELINES:                             ◄── SPOT WORKER THREAD
 | **AX.25 TNC** | AetherAx25LibmodemShim worker | ~0% | moveToThread | HDLC/AX.25 + AFSK decode; on-demand when the packet tab is active |
 | **DXCC** | DxccColorProvider ADIF parser | ~0% | moveToThread | One-shot at startup |
 | **RADE** | RADEEngine neural encoder/decoder | ~0% | moveToThread | On-demand, HAVE_RADE |
-| **BNR** | NvidiaBnrFilter gRPC async I/O | ~0% | std::thread | GPU container, HAVE_BNR |
+| **BNR** | NvidiaAfxFilter in-process AFX denoiser | varies | audio thread | local NVIDIA GPU, HAVE_NVIDIA_AFX |
 
 **Cross-thread signals (auto-queued):**
 - Connection → Main: statusReceived, messageReceived, commandResponse, pingRttMeasured

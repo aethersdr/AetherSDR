@@ -82,6 +82,7 @@ jobs:
             -DREQUIRE_SERIALPORT=ON \
             -DREQUIRE_KEYCHAIN=ON \
             -DMQTT_TLS=OFF \
+            -DENABLE_NVIDIA_AFX=ON \
             $CMAKE_EXTRA
 
       - name: Build Opus (RADE dependency)

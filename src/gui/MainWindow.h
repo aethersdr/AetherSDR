@@ -185,6 +185,7 @@ public:
     RadioModel& radioModel() { return m_radioModel; }
     const RadioModel& radioModel() const { return m_radioModel; }
     AudioEngine* audioEngine() const { return m_audio; }
+    QsoRecorder* qsoRecorder() const { return m_qsoRecorder; }  // automation bridge
     Q_INVOKABLE void showConnectionDialog();
     Q_INVOKABLE void hideConnectionDialog();
     QJsonObject automationSetSliceReceiveSource(const QString& arg);
@@ -600,7 +601,8 @@ private:
 
     BandSnapshot captureCurrentBandState() const;
     void restoreBandState(const BandSnapshot& snap);
-    void startSwrSweep(int requestedSliceId = -1, int sweepPowerWatts = 1);
+    void startSwrSweep(int requestedSliceId = -1, int sweepPowerWatts = 1,
+                       double customLowMhz = 0.0, double customHighMhz = 0.0);
     void clearSwrSweepPlot();
     void saveSwrSweepCsv();
     void advanceSwrSweep();

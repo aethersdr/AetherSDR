@@ -11,6 +11,11 @@ For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
 ### In flight
 
+- **NVIDIA BNR — in-process GPU denoiser (Linux + Windows)** — one BNR button
+  running the Maxine AFX denoiser in-process on a local NVIDIA RTX/GeForce GPU,
+  download-on-demand, no container. Remaining: publish the Windows AFX-bits
+  release asset and add other-arch models.
+  ([`docs/nvidia-bnr.md`](docs/nvidia-bnr.md))
 - **Stream Deck plugin** — ship one Elgato-SDK plugin distributed via
   GitHub Releases (avoid Marketplace DRM); works on Windows/macOS plus
   Linux via OpenDeck.

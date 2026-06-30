@@ -3,6 +3,8 @@
 #include "AppSettings.h"          // StationName (restore the user's real station name)
 #include "TxKeyingMarker.h"       // kTxKeyingProperty — authoritative TX-guard marker
 #include "AudioEngine.h"
+#include "ClientTxTestTone.h"     // testtone() verb — client-side TX test tone
+#include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "gui/ConnectionPanel.h" // ConnectionPanel automation facade
 
@@ -44,6 +46,8 @@
 // Best-effort value extraction for common control types.
 #include <QAbstractButton>
 #include <QAbstractSlider>
+#include <QAbstractItemView>   // invoke selectRow: QTableWidget/QTreeWidget/QListWidget row select
+#include <QItemSelectionModel>
 #include <QComboBox>
 #include <QLineEdit>
 #include <QLabel>
@@ -267,9 +271,33 @@ QJsonObject describeWidget(const QWidget* w)
     geo[QStringLiteral("h")] = w->height();
     o[QStringLiteral("geometry")] = geo;
 
+    // Window state for top-level windows — lets a driver assert a maximize /
+    // restore / minimize without screenshotting, and prove the `window` verb
+    // (resize only ever set explicit geometry, so an un-maximize was previously
+    // unverifiable). (#3918)
+    if (w->isWindow()) {
+        const Qt::WindowStates st = w->windowState();
+        const char* ws = "normal";
+        if (st & Qt::WindowMinimized)       ws = "minimized";
+        else if (st & Qt::WindowFullScreen) ws = "fullscreen";
+        else if (st & Qt::WindowMaximized)  ws = "maximized";
+        o[QStringLiteral("windowState")] = QLatin1String(ws);
+    }
+
     const QString val = widgetValue(w);
     if (!val.isNull())
         o[QStringLiteral("value")] = val;
+
+    // A checkable button reports its value as "checked"/"unchecked", which hides
+    // the label that says *which* control it is (the six DSP method buttons —
+    // NR2 … BNR — were indistinguishable without a screenshot). Surface the
+    // button text and a boolean check-state so a driver can read both the
+    // identity and the on/off state from dumpTree alone (#3856).
+    if (auto* b = qobject_cast<const QAbstractButton*>(w); b && b->isCheckable()) {
+        if (!b->text().isEmpty())
+            o[QStringLiteral("text")] = b->text();
+        o[QStringLiteral("checked")] = b->isChecked();
+    }
 
     // Range for numeric controls — lets a driver validate against the real
     // bounds (scale) and detect wrapping/circular sliders without guessing
@@ -827,10 +855,18 @@ bool isTransmitControl(const QWidget* w)
     if (!btn)
         return false;  // sliders / combos / spinboxes can't trigger TX
 
+    // Keep the fallback deny-list narrow and aligned with isTransmitAction():
+    // only words that unambiguously mean "keys TX". "tune"/"atu"/"vox" were
+    // dropped because they false-positive on RX-only controls — the "Tune Now"
+    // button (net/spot retune) and "Tune to <spot>" only move the VFO, and a VOX
+    // toggle arms TX rather than keying it. The genuine keying TUNE/ATU buttons
+    // (TxApplet, AtuPreTuneDialog) all carry the authoritative markTxKeying()
+    // marker, which the positive check above already honors, so removing them
+    // here loses no real protection — it just stops blocking RX-only buttons
+    // that happen to contain "tune". (#3918 — "Tune Now" false-positive)
     static const QStringList kDeny = {
-        QStringLiteral("mox"), QStringLiteral("ptt"), QStringLiteral("tune"),
-        QStringLiteral("transmit"), QStringLiteral("vox"), QStringLiteral("cwx"),
-        QStringLiteral("atu"),
+        QStringLiteral("mox"), QStringLiteral("ptt"),
+        QStringLiteral("transmit"), QStringLiteral("cwx"),
     };
     const QStringList hay{w->objectName(), w->accessibleName(), btn->text()};
     if (matchesTxDenyToken(hay, kDeny)) {
@@ -1157,6 +1193,90 @@ QJsonObject audioSnapshotOnObjectThread(AudioEngine* audio, bool* ok)
         [audio, &snapshot]() {
             snapshot = audioSnapshot(audio);
         },
+        Qt::BlockingQueuedConnection);
+    *ok = invoked;
+    return snapshot;
+}
+
+// Client-side AetherDSP noise-reduction state (#3856). `get slice` reports the
+// radio-side nr/nb/anf; this is the missing model for the six client-side
+// AudioEngine modules (NR2 / NR4 / MNR / DFNR / RN2 / BNR) so a driver can
+// assert which method is active and read its tuning without a screenshot of the
+// AetherDSP applet. The modules are mutually exclusive, so `active` names the one
+// enabled module (or "none"). `available` reflects compile-time backend gating —
+// the same guards the selector buttons use to dim an unbuildable method.
+// Engine-only portion (enable flags + engine-owned tuning getters); the NR2/NR4
+// slider params live in AppSettings and are merged in by the caller on the main
+// thread. Runs on the AudioEngine thread (m_bnr/m_dfnr are not main-thread safe).
+QJsonObject dspEngineSnapshot(const AudioEngine* a)
+{
+    struct Mod { const char* name; bool enabled; bool available; };
+    const Mod mods[] = {
+        {"NR2",  a->nr2Enabled(),  true},
+        {"NR4",  a->nr4Enabled(),
+#ifdef HAVE_SPECBLEACH
+                                   true},
+#else
+                                   false},
+#endif
+        {"MNR",  a->mnrEnabled(),
+#ifdef Q_OS_MAC
+                                   true},
+#else
+                                   false},
+#endif
+        {"DFNR", a->dfnrEnabled(),
+#ifdef HAVE_DFNR
+                                   true},
+#else
+                                   false},
+#endif
+        {"RN2",  a->rn2Enabled(),  true},
+        {"BNR",  a->bnrEnabled(),
+#ifdef HAVE_BNR
+                                   true},
+#else
+                                   false},
+#endif
+    };
+
+    QJsonObject methods;
+    QString active = QStringLiteral("none");
+    for (const Mod& m : mods) {
+        methods[QLatin1String(m.name)] =
+            QJsonObject{{QStringLiteral("enabled"), m.enabled},
+                        {QStringLiteral("available"), m.available}};
+        if (m.enabled) active = QLatin1String(m.name);
+    }
+
+    // Engine-owned tuning (the slider params that have live engine getters).
+    QJsonObject tuning;
+    tuning[QStringLiteral("mnr")] =
+        QJsonObject{{QStringLiteral("strength"), a->mnrStrength()}};
+    tuning[QStringLiteral("dfnr")] =
+        QJsonObject{{QStringLiteral("attenLimitDb"), a->dfnrAttenLimit()}};
+    tuning[QStringLiteral("bnr")] =
+        QJsonObject{{QStringLiteral("intensity"), a->bnrIntensity()},
+                    {QStringLiteral("address"), a->bnrAddress()},
+                    {QStringLiteral("connected"), a->bnrConnected()}};
+
+    return QJsonObject{{QStringLiteral("active"), active},
+                       {QStringLiteral("methods"), methods},
+                       {QStringLiteral("tuning"), tuning}};
+}
+
+QJsonObject dspSnapshotOnObjectThread(AudioEngine* audio, bool* ok)
+{
+    *ok = false;
+    if (!audio) return {};
+    if (!audio->thread() || audio->thread() == QThread::currentThread()) {
+        *ok = true;
+        return dspEngineSnapshot(audio);
+    }
+    QJsonObject snapshot;
+    const bool invoked = QMetaObject::invokeMethod(
+        audio,
+        [audio, &snapshot]() { snapshot = dspEngineSnapshot(audio); },
         Qt::BlockingQueuedConnection);
     *ok = invoked;
     return snapshot;
@@ -1657,6 +1777,16 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             QStringList rest;
             for (int i = 2; i < p.size(); ++i) rest << tok(i);
             value = rest.join(QLatin1Char(' '));  // "cwx send CQ CQ DE ...", "cwx speed 18"
+        } else if (cmd == QLatin1String("record")) {
+            action = tok(1);                  // start | stop | status | path | dir
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // "record dir /tmp/recs"
+        } else if (cmd == QLatin1String("testtone")) {
+            action = tok(1);                  // on | off
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // "testtone on 1000 -6" -> freqHz levelDb
         } else if (cmd == QLatin1String("pan")) {
             action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
         } else if (cmd == QLatin1String("streams")) {
@@ -1677,6 +1807,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         } else if (cmd == QLatin1String("resize")) {
             value = tok(1) + QLatin1Char(' ') + tok(2);  // "resize 1920 1080 [target]"
             target = tok(3);
+        } else if (cmd == QLatin1String("window")) {
+            action = tok(1);  // maximize | restore | minimize | fullscreen
+            target = tok(2);  // optional window target
         } else if (cmd == QLatin1String("menu")) {
             action = tok(1);  // list | open
             QStringList rest;
@@ -1791,6 +1924,10 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("cwx"))
         return doCwx(action, value);
+    if (cmd == QLatin1String("record"))
+        return doRecord(action, value);
+    if (cmd == QLatin1String("testtone"))
+        return doTestTone(action, value);
     if (cmd == QLatin1String("pan")) {
         if (action.isEmpty())
             return err(QStringLiteral("pan requires an action (create|add|remove|close|center)"));
@@ -1831,6 +1968,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("resize"))
         return doResize(value, target);
+    if (cmd == QLatin1String("window"))
+        return doWindow(action, target);
     if (cmd == QLatin1String("menu"))
         return doMenu(action.isEmpty() ? QStringLiteral("list") : action, value);
     if (cmd == QLatin1String("whoami"))
@@ -2223,6 +2362,8 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 
     bool done = false;
     bool deferred = false;
+    QString selectedRowText;   // selectRow: first-column text of the chosen row
+    int     selectedRow = -1;
     if (action == QLatin1String("click") || action == QLatin1String("toggle")) {
         // CRASH-SAFETY: a button click can open a popup menu (a QToolButton with
         // a dropdown) or a modal dialog, both of which spin a NESTED event loop.
@@ -2304,6 +2445,38 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentText(value); done = true; }
     } else if (action == QLatin1String("setCurrentIndex")) {
         if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentIndex(value.toInt()); done = true; }
+    } else if (action == QLatin1String("selectRow")) {
+        // Select a whole row in an item view (QTableWidget / QTreeWidget /
+        // QListWidget / any QAbstractItemView) so the dialog's row-scoped
+        // buttons (Tune / Edit / Remove / Disable) — which read the view's
+        // current row or selection — become drivable. invoke click on those
+        // buttons was useless without first selecting a row. (#3918)
+        if (auto* view = qobject_cast<QAbstractItemView*>(w)) {
+            QAbstractItemModel* m = view->model();
+            if (!m) return err(QStringLiteral("view has no model"));
+            bool okRow = false;
+            const int row = value.toInt(&okRow);
+            if (!okRow) return err(QStringLiteral("selectRow needs an integer row index"));
+            const int rows = m->rowCount();
+            if (row < 0 || row >= rows)
+                return err(QStringLiteral("row %1 out of range [0,%2)")
+                               .arg(row).arg(rows));
+            const QModelIndex first = m->index(row, 0);
+            const int lastCol = m->columnCount() > 0 ? m->columnCount() - 1 : 0;
+            const QModelIndex last = m->index(row, lastCol);
+            // Set both the current index and a full-row selection so handlers
+            // that read currentRow()/currentItem() AND those that read
+            // selectedItems()/selectionModel() all see the choice.
+            if (QItemSelectionModel* sm = view->selectionModel())
+                sm->select(QItemSelection(first, last),
+                           QItemSelectionModel::ClearAndSelect
+                               | QItemSelectionModel::Rows);
+            view->setCurrentIndex(first);
+            view->scrollTo(first);
+            selectedRow = row;
+            selectedRowText = m->data(first, Qt::DisplayRole).toString();
+            done = true;
+        }
     } else {
         return err(QStringLiteral("unknown action: ") + action);
     }
@@ -2326,6 +2499,12 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         // dialog), so any post-state must be re-read (get / dumpTree) rather than
         // trusted from this synchronous reply.
         r[QStringLiteral("deferred")] = true;
+    } else if (selectedRow >= 0) {
+        // selectRow: echo the chosen row + its first-column text so the driver
+        // can confirm the right entry is selected before firing a row action.
+        r[QStringLiteral("selectedRow")] = selectedRow;
+        if (!selectedRowText.isEmpty())
+            r[QStringLiteral("selectedRowText")] = selectedRowText;
     } else {
         const QString nv = widgetValue(w);   // round-trip confirmation
         if (!nv.isNull())
@@ -2360,6 +2539,56 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("model"), model},
                            {QStringLiteral("audio"), data}};
+    }
+    if (model == QLatin1String("dsp")) {
+        AudioEngine* audio = m_audioEngine;
+        if (!audio)
+            return err(QStringLiteral("no audio engine available"));
+        bool snapshotOk = false;
+        QJsonObject data = dspSnapshotOnObjectThread(audio, &snapshotOk);
+        if (!snapshotOk)
+            return err(QStringLiteral("dsp snapshot unavailable"));
+        // Merge the NR2/NR4/DFNR-beta slider params, which the AetherDSP applet
+        // persists in AppSettings rather than the engine. Read on the main
+        // thread (where the bridge runs); defaults mirror the applet's.
+        AppSettings& s = AppSettings::instance();
+        QJsonObject tuning = data.value(QStringLiteral("tuning")).toObject();
+        tuning[QStringLiteral("nr2")] = QJsonObject{
+            {QStringLiteral("gainMax"),    s.value("NR2GainMax", "1.50").toFloat()},
+            {QStringLiteral("gainSmooth"), s.value("NR2GainSmooth", "0.85").toFloat()},
+            {QStringLiteral("qspp"),       s.value("NR2Qspp", "0.20").toFloat()},
+            {QStringLiteral("gainMethod"), s.value("NR2GainMethod", "2").toInt()},
+            {QStringLiteral("npeMethod"),  s.value("NR2NpeMethod", "0").toInt()},
+            {QStringLiteral("aeFilter"),
+                s.value("NR2AeFilter", "True").toString() == QLatin1String("True")},
+        };
+        tuning[QStringLiteral("nr4")] = QJsonObject{
+            {QStringLiteral("reductionDb"),  s.value("NR4ReductionAmount", "100").toFloat()},
+            {QStringLiteral("smoothing"),    s.value("NR4SmoothingFactor", "0").toFloat()},
+            {QStringLiteral("whitening"),    s.value("NR4WhiteningFactor", "0").toFloat()},
+            {QStringLiteral("maskingDepth"), s.value("NR4MaskingDepth", "50").toFloat()},
+            {QStringLiteral("suppression"),  s.value("NR4SuppressionStrength", "50").toFloat()},
+            {QStringLiteral("noiseMethod"),  s.value("NR4NoiseEstimationMethod", "0").toInt()},
+            {QStringLiteral("adaptiveNoise"),
+                s.value("NR4AdaptiveNoise", "True").toString() == QLatin1String("True")},
+        };
+        QJsonObject dfnr = tuning.value(QStringLiteral("dfnr")).toObject();
+        dfnr[QStringLiteral("postFilterBeta")] =
+            s.value("DfnrPostFilterBeta", "0.0").toFloat();
+        tuning[QStringLiteral("dfnr")] = dfnr;
+        data[QStringLiteral("tuning")] = tuning;
+        if (!property.isEmpty()) {
+            if (!data.contains(property))
+                return err(QStringLiteral("unknown property '") + property
+                           + QStringLiteral("' for dsp"));
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("model"), model},
+                               {QStringLiteral("property"), property},
+                               {QStringLiteral("value"), data.value(property)}};
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("dsp"), data}};
     }
     if (model == QLatin1String("sync")
         || model == QLatin1String("receiveSync")) {
@@ -2442,7 +2671,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|kiwi)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|kiwi)"));
     }
 
     if (!property.isEmpty()) {
@@ -2688,6 +2917,92 @@ QJsonObject AutomationServer::doDisconnect()
         {QStringLiteral("requested"), true},
         {QStringLiteral("deferred"), true},
     };
+}
+
+QJsonObject AutomationServer::doRecord(const QString& action, const QString& value)
+{
+    // record start|stop|status|path|dir — drives the Client-Side QSO recorder so
+    // a live test can capture a WAV and verify SSB + CW/CWX TX are recorded.
+    // Not a transmit action, so no ALLOW_TX gate. Runs on the GUI thread (same
+    // as the manual record button), matching the recorder's threading.
+    if (!m_qsoRecorder)
+        return err(QStringLiteral("qso recorder unavailable"));
+
+    const QString a = action.trimmed().toLower();
+
+    if (a == QLatin1String("dir")) {
+        if (value.trimmed().isEmpty())
+            return err(QStringLiteral("record dir requires a path"));
+        m_qsoRecorder->setRecordingDir(value.trimmed());
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("record"), QStringLiteral("dir")},
+                           {QStringLiteral("dir"), m_qsoRecorder->recordingDir()}};
+    }
+    if (a == QLatin1String("start")) {
+        m_qsoRecorder->startRecording();
+        return QJsonObject{
+            {QStringLiteral("ok"), m_qsoRecorder->isRecording()},
+            {QStringLiteral("record"), QStringLiteral("start")},
+            {QStringLiteral("recording"), m_qsoRecorder->isRecording()},
+            {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
+        };
+    }
+    if (a == QLatin1String("stop")) {
+        const int durationSecs = m_qsoRecorder->recordingDurationSecs();
+        m_qsoRecorder->stopRecording();
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("record"), QStringLiteral("stop")},
+            {QStringLiteral("recording"), m_qsoRecorder->isRecording()},
+            {QStringLiteral("durationSecs"), durationSecs},
+            {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
+        };
+    }
+    if (a.isEmpty() || a == QLatin1String("status")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("recording"), m_qsoRecorder->isRecording()},
+            {QStringLiteral("durationSecs"), m_qsoRecorder->recordingDurationSecs()},
+            {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
+        };
+    }
+    if (a == QLatin1String("path")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
+        };
+    }
+    return err(QStringLiteral("record: unknown action '%1' (start|stop|status|path|dir)")
+                   .arg(action));
+}
+
+QJsonObject AutomationServer::doTestTone(const QString& action, const QString& value)
+{
+    if (!m_audioEngine || !m_audioEngine->clientTxTestTone())
+        return err(QStringLiteral("test tone unavailable"));
+    auto* tone = m_audioEngine->clientTxTestTone();
+    const QString a = action.trimmed().toLower();
+
+    if (a == QLatin1String("off")) {
+        tone->setEnabled(false);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("testtone"), QStringLiteral("off")}};
+    }
+    if (a == QLatin1String("on")) {
+        const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+        bool okF = false, okL = false;
+        const float hz = parts.value(0).toFloat(&okF);
+        const float db = parts.value(1).toFloat(&okL);
+        if (okF) tone->setFrequencyHz(hz);
+        if (okL) tone->setLevelDb(db);
+        tone->setEnabled(true);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("testtone"), QStringLiteral("on")},
+                           {QStringLiteral("freqHz"), okF ? hz : 0.0},
+                           {QStringLiteral("levelDb"), okL ? db : 0.0}};
+    }
+    return err(QStringLiteral("testtone: unknown action '%1' (on [freqHz] [levelDb] | off)")
+                   .arg(action));
 }
 
 QJsonObject AutomationServer::doConnectWait(int timeoutMs, QLocalSocket* sock)
@@ -3161,6 +3476,74 @@ QJsonObject AutomationServer::doStation(const QString& name)
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
 }
 
+// Resolve the top-level window a window-scoped verb acts on: the target's
+// window() when given, else the QMainWindow (or first visible real top-level).
+// Skips scroll-area viewports and popup QMenus so the main window wins. Shared by
+// doResize and doWindow.
+QWidget* AutomationServer::topLevelWindowForTarget(const QString& target)
+{
+    if (!target.isEmpty()) {
+        QWidget* t = resolveWidget(target);
+        return t ? t->window() : nullptr;
+    }
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    for (QWidget* tlw : tops)                 // prefer the QMainWindow
+        if (tlw->inherits("QMainWindow")) return tlw;
+    for (QWidget* tlw : tops) {               // else first visible real window
+        if (tlw->objectName() == QLatin1String("qt_scrollarea_viewport")) continue;
+        if (qobject_cast<QMenu*>(tlw)) continue;
+        if (tlw->isWindow() && tlw->isVisible()) return tlw;
+    }
+    return nullptr;
+}
+
+// ── Window state (#3918) ─────────────────────────────────────────────────────
+// Drive a top-level window's state so an agent can maximize / restore / minimize
+// / fullscreen and prove it via dumpTree's `windowState`. resize only set
+// explicit geometry, so an un-maximize (restore) was previously unverifiable.
+// State changes don't spin a nested event loop, so they're safe to run
+// synchronously here (unlike click/menu, which defer).
+QJsonObject AutomationServer::doWindow(const QString& action, const QString& target) const
+{
+    const QString a = action.trimmed().toLower();
+    if (a.isEmpty())
+        return err(QStringLiteral("window needs an action "
+                                  "(maximize|restore|minimize|fullscreen)"));
+    if (!target.isEmpty() && !resolveWidget(target))
+        return err(QStringLiteral("window not found for target: ") + target);
+    QWidget* win = topLevelWindowForTarget(target);
+    if (!win)
+        return err(QStringLiteral("no top-level window to drive"));
+
+    if (a == QLatin1String("maximize") || a == QLatin1String("max")) {
+        win->showMaximized();
+    } else if (a == QLatin1String("restore") || a == QLatin1String("normal")
+               || a == QLatin1String("unmaximize")) {
+        win->showNormal();
+    } else if (a == QLatin1String("minimize") || a == QLatin1String("min")) {
+        win->showMinimized();
+    } else if (a == QLatin1String("fullscreen") || a == QLatin1String("full")) {
+        win->showFullScreen();
+    } else {
+        return err(QStringLiteral("unknown window action: ") + action
+                   + QStringLiteral(" (maximize|restore|minimize|fullscreen)"));
+    }
+
+    const Qt::WindowStates st = win->windowState();
+    const char* ws = "normal";
+    if (st & Qt::WindowMinimized)       ws = "minimized";
+    else if (st & Qt::WindowFullScreen) ws = "fullscreen";
+    else if (st & Qt::WindowMaximized)  ws = "maximized";
+    qCInfo(lcAutomation).noquote() << "window" << a << "->" << ws;
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("action"), a},
+        {QStringLiteral("windowState"), QLatin1String(ws)},
+        {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("w"), win->width()},
+                                                 {QStringLiteral("h"), win->height()}}},
+    };
+}
+
 // ── Headless render size (#3646 fidelity — item 8) ──────────────────────────
 // Resize a top-level window so the panadapter x_pixels (== SpectrumWidget
 // width) propagates to a realistic value — under QT_QPA_PLATFORM=offscreen the
@@ -3186,27 +3569,9 @@ QJsonObject AutomationServer::doResize(const QString& value, const QString& targ
     if (w <= 0 || h <= 0)
         return err(QStringLiteral("resize requires <width> <height> (e.g. 'resize 1920 1080', or 'full')"));
 
-    QWidget* win = nullptr;
-    if (!target.isEmpty()) {
-        QWidget* t = resolveWidget(target);
-        win = t ? t->window() : nullptr;
-        if (!win)
-            return err(QStringLiteral("window not found for target: ") + target);
-    } else {
-        const QWidgetList tops = QApplication::topLevelWidgets();
-        for (QWidget* tlw : tops) {           // prefer the QMainWindow
-            if (tlw->inherits("QMainWindow")) { win = tlw; break; }
-        }
-        if (!win) {                            // else first visible real window
-            for (QWidget* tlw : tops) {
-                if (tlw->objectName() == QLatin1String("qt_scrollarea_viewport"))
-                    continue;
-                if (qobject_cast<QMenu*>(tlw))
-                    continue;
-                if (tlw->isWindow() && tlw->isVisible()) { win = tlw; break; }
-            }
-        }
-    }
+    if (!target.isEmpty() && !resolveWidget(target))
+        return err(QStringLiteral("window not found for target: ") + target);
+    QWidget* win = topLevelWindowForTarget(target);
     if (!win)
         return err(QStringLiteral("no top-level window to resize"));
 
@@ -3697,6 +4062,26 @@ QJsonObject AutomationServer::doStreams(const QString& action)
         };
     }
 
+    // `streams resync` — force the radio to re-dump its authoritative display
+    // set, then re-poll `streams radio` after a moment. Closes the gap where a
+    // waterfall lingers as a radio resource but no longer emits UDP (Layer A
+    // can't see it) and the client already purged its view (Layer B looked
+    // clean). The re-dump is async, so this just triggers and the driver reads
+    // the refreshed inventory on the next `streams radio`.
+    if (action.compare(QLatin1String("resync"), Qt::CaseInsensitive) == 0
+        || action.compare(QLatin1String("refresh"), Qt::CaseInsensitive) == 0) {
+        const bool sent = m_radioModel->resyncDisplayInventory();
+        if (!sent)
+            return err(QStringLiteral("not connected — cannot resync display inventory"));
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("scope"), QStringLiteral("radio")},
+            {QStringLiteral("resync"), QStringLiteral("requested")},
+            {QStringLiteral("hint"),
+             QStringLiteral("re-poll 'streams radio' after ~500ms for the refreshed set")},
+        };
+    }
+
     // Layer A — VITA-49 UDP-orphan detector (needs the stream receiver).
     PanadapterStream* ps = m_radioModel->panStream();
     if (!ps)
@@ -3709,7 +4094,8 @@ QJsonObject AutomationServer::doStreams(const QString& action)
     }
     if (!action.isEmpty())
         return err(QStringLiteral("unknown streams action: ") + action
-                   + QStringLiteral(" (use '' for UDP-orphan, 'radio' for inventory, or 'reset')"));
+                   + QStringLiteral(" (use '' for UDP-orphan, 'radio' for inventory,"
+                                    " 'resync' to force a re-dump, or 'reset')"));
 
     QJsonArray panReg;
     for (quint32 id : ps->registeredPanStreams()) panReg.append(hex(id));

@@ -125,6 +125,13 @@ static QByteArray float32ToInt16(const QByteArray& pcm)
 
 void QsoRecorder::feedRxAudio(const QByteArray& pcm)
 {
+    // Lock-free fast path off the real-time audio thread: skip the mutex when
+    // we're not recording an RX over, so a GUI thread holding m_writeMutex
+    // during finalize/stop can't stall audio. The post-lock check stays
+    // authoritative (m_recording/m_transmitting can flip after this read).
+    if (!m_recording.load(std::memory_order_acquire)
+        || m_transmitting.load(std::memory_order_acquire))
+        return;
     std::lock_guard<std::mutex> lock(m_writeMutex);
     // While transmitting the radio mutes RX (this stream would be silence), and
     // the TX monitor is recorded instead — skip RX so the two don't double-write
@@ -137,6 +144,13 @@ void QsoRecorder::feedRxAudio(const QByteArray& pcm)
 
 void QsoRecorder::feedTxAudio(const QByteArray& int16Stereo)
 {
+    // Lock-free fast path: the CW record pump calls this ~100×/s from the
+    // real-time audio thread. Skip the mutex when we're not recording a TX over
+    // so a GUI thread holding m_writeMutex during finalize/stop can't stall
+    // audio (xrun). The post-lock check stays authoritative.
+    if (!m_recording.load(std::memory_order_acquire)
+        || !m_transmitting.load(std::memory_order_acquire))
+        return;
     std::lock_guard<std::mutex> lock(m_writeMutex);
     // Only capture the TX monitor while actually transmitting (the tap can fire
     // whenever mic capture runs), so RX and TX never both write.
@@ -156,7 +170,7 @@ void QsoRecorder::onMoxChanged(bool mox)
     m_transmitting.store(mox, std::memory_order_release);
 
     // Only auto-record when in client-side recording mode
-    bool clientSide = AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+    bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
     if (mox) {
         // TX started — begin recording if auto-record is on and not already recording
         if (clientSide && m_autoRecord && !m_recording)
@@ -448,6 +462,24 @@ void QsoRecorder::startPlayback()
     connect(m_playSink, &QAudioSink::stateChanged,
             this, &QsoRecorder::onPlaybackSinkState);
     m_playSink->start(&m_playBuffer);
+
+    // Detect an immediate open failure (e.g. a WASAPI/CoreAudio device that
+    // false-positives isFormatSupported() then refuses at start()) BEFORE we
+    // mute live RX. If start() failed synchronously, the stateChanged handler
+    // already ran stopPlayback() but it no-op'd (m_playing was still false), so
+    // we must clean up here. Crucially we return *before* emitting
+    // muteRxRequested(true), so a failed playback can never strand live RX in a
+    // muted state (#3230 invariant) — mirrors ClientPuduMonitor::startPlayback().
+    if (m_playSink->state() == QAudio::StoppedState
+        && m_playSink->error() != QAudio::NoError) {
+        qCWarning(lcAudio) << "QsoRecorder: playback sink failed to start (error"
+                           << m_playSink->error() << ") — aborting, RX left live";
+        m_playSink->disconnect(this);
+        m_playSink->deleteLater();
+        m_playSink = nullptr;
+        if (m_playBuffer.isOpen()) m_playBuffer.close();
+        return;
+    }
 
     m_playing = true;
     emit muteRxRequested(true);

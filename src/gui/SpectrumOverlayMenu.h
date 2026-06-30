@@ -15,6 +15,8 @@ class QPushButton;
 class QComboBox;
 class QSlider;
 class QLabel;
+class QCheckBox;
+class QDoubleSpinBox;
 
 namespace AetherSDR {
 
@@ -51,7 +53,10 @@ public:
                              bool heatMap = true, int colorScheme = 0,
                              bool showGrid = true,
                              float lineWidth = 2.0f,
-                             bool autoBlackRadioSide = false);
+                             bool autoBlackRadioSide = false,
+                             int renderMode = 0,
+                             int dssFloorDepth = 6,
+                             int dssGain = 70);
     void syncWfLineDuration(int rate);
     void syncKiwiWaterfallSettings(int cellDb, int floorDb, int rate);
     // Sync blanker/cursor/opacity controls not covered by syncDisplaySettings.
@@ -140,6 +145,9 @@ signals:
     void kiwiWaterfallFloorChanged(int floorDb);
     void kiwiWaterfallRateChanged(int rate);
     void wfColorSchemeChanged(int scheme);
+    void spectrumRenderModeChanged(int mode);
+    void dssFloorDepthChanged(int dB);
+    void dssGainChanged(int pct);
     void noiseFloorPositionChanged(int pos);
     void noiseFloorEnableChanged(bool on);
     // Emitted when user selects a band from the sub-panel.  stackKeyHint is
@@ -157,7 +165,12 @@ signals:
     void wnbLevelChanged(int level);
     // Emitted when RF gain slider changes (panadapter-level).
     void rfGainChanged(int gain);
-    void swrSweepStartRequested(int sliceId, int sweepPowerWatts);
+    // customLowMhz/customHighMhz bound the sweep when the operator has ticked
+    // "Limit range" (else both 0 = sweep the full band). The values are clamped
+    // to the in-region band edges receiver-side, so they can only ever narrow
+    // the sweep, never widen it past what the band plan already permits.
+    void swrSweepStartRequested(int sliceId, int sweepPowerWatts,
+                                double customLowMhz, double customHighMhz);
     void swrSweepClearRequested();
     void swrSweepSaveCsvRequested();
     void kiwiRxAntennaSelected(int sliceId, const QString& profileId);
@@ -167,6 +180,9 @@ signals:
     void wfBlankerThresholdChanged(float threshold);
     void backgroundImageRequested();
     void backgroundImageCleared();
+    // Right-click "Clear": turn the background off entirely (no image, just the
+    // fill colour) and persist it.
+    void backgroundImageDisabled();
     void backgroundOpacityChanged(int pct);
     void backgroundFillColorChanged(const QColor& color);
     void displaySettingsReset();
@@ -244,6 +260,9 @@ private:
     QPushButton* m_swrStartBtn{nullptr};
     QPushButton* m_swrClearBtn{nullptr};
     QPushButton* m_swrSaveBtn{nullptr};
+    QCheckBox* m_swrRangeCheck{nullptr};
+    QDoubleSpinBox* m_swrLowSpin{nullptr};
+    QDoubleSpinBox* m_swrHighSpin{nullptr};
 
     // DAX sub-panel
     QWidget*     m_daxPanel{nullptr};
@@ -286,6 +305,11 @@ private:
     int          m_blackManualValue{15};
     int          m_blackAutoOffsetValue{50};
     QComboBox*   m_colorSchemeCmb{nullptr};
+    QComboBox*   m_renderModeCmb{nullptr};
+    QSlider*     m_dssFloorSlider{nullptr};  // 3DSS floor depth (dB below floor)
+    QLabel*      m_dssFloorLabel{nullptr};
+    QSlider*     m_dssGainSlider{nullptr};  // 3DSS colour floor (0-100)
+    QLabel*      m_dssGainLabel{nullptr};
     QComboBox*   m_gpuCombo{nullptr};   // render-GPU selector (multi-GPU only)
     QSlider*     m_rateSlider{nullptr};
     QLabel*      m_rateLabel{nullptr};

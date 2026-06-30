@@ -248,7 +248,7 @@ void ClientRxChainWidget::toggleStageBypass(int boxIdx)
     if (box.kind == TileKind::StatusDsp) {
         const bool anyOn = m_audio->nr2Enabled()  || m_audio->nr4Enabled()
                         || m_audio->mnrEnabled()  || m_audio->dfnrEnabled()
-                        || m_audio->rn2Enabled()  || m_audio->bnrEnabled();
+                        || m_audio->rn2Enabled()  || m_audio->nvAfxEnabled();
         if (anyOn) {
             QMetaObject::invokeMethod(m_audio, [audio = m_audio]() {
                 if (audio->nr2Enabled())  audio->setNr2Enabled(false);
@@ -256,7 +256,7 @@ void ClientRxChainWidget::toggleStageBypass(int boxIdx)
                 if (audio->mnrEnabled())  audio->setMnrEnabled(false);
                 if (audio->dfnrEnabled()) audio->setDfnrEnabled(false);
                 if (audio->rn2Enabled())  audio->setRn2Enabled(false);
-                if (audio->bnrEnabled())  audio->setBnrEnabled(false);
+                if (audio->nvAfxEnabled())  audio->setNvAfxEnabled(false);
             });
         } else {
             const QString name = AppSettings::instance()
@@ -273,7 +273,7 @@ void ClientRxChainWidget::toggleStageBypass(int boxIdx)
                 else if (name == "MNR")  audio->setMnrEnabled(true);
                 else if (name == "DFNR") audio->setDfnrEnabled(true);
                 else if (name == "RN2")  audio->setRn2Enabled(true);
-                else if (name == "BNR")  audio->setBnrEnabled(true);
+                else if (name == "BNR")  audio->setNvAfxEnabled(true);
             });
         }
         return;

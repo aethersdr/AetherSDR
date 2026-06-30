@@ -1,5 +1,6 @@
 build/
 build-*/
+!scripts/build/
 deploy/
 deploy-*/
 installer-runtime/

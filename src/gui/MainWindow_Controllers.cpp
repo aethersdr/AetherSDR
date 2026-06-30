@@ -2156,7 +2156,7 @@ void MainWindow::registerMidiParams()
         [this](float v) {
             const bool on = v > 0.5f;
             const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
             if (clientSide) {
                 if (on) m_qsoRecorder->startRecording();
                 else    m_qsoRecorder->stopRecording();
@@ -2166,7 +2166,7 @@ void MainWindow::registerMidiParams()
         },
         [this]() -> float {
             const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
             if (clientSide)
                 return (m_qsoRecorder && m_qsoRecorder->isRecording()) ? 1.0f : 0.0f;
             auto* s = activeSlice();
@@ -2177,7 +2177,7 @@ void MainWindow::registerMidiParams()
         [this](float v) {
             const bool on = v > 0.5f;
             const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
             if (clientSide) {
                 if (on) m_qsoRecorder->startPlayback();
                 else    m_qsoRecorder->stopPlayback();
@@ -2187,7 +2187,7 @@ void MainWindow::registerMidiParams()
         },
         [this]() -> float {
             const bool clientSide =
-                AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+                AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
             if (clientSide)
                 return (m_qsoRecorder && m_qsoRecorder->isPlaying()) ? 1.0f : 0.0f;
             auto* s = activeSlice();

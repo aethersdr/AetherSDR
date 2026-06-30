@@ -25,9 +25,14 @@ option(REQUIRE_SERIALPORT "Fail if Qt6 SerialPort is not found (use for release 
 option(REQUIRE_KEYCHAIN "Fail if Qt6Keychain is not found (use for release builds)" OFF)
 option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus snapshot)" ON)
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
-option(ENABLE_BNR "Enable NVIDIA NIM BNR noise removal (requires grpc++)" OFF)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
+# ON by default (like the other NR engines) so the pre-compiled release images
+# all ship BNR — the runtime is download-on-demand, so this only compiles a small
+# dlopen wrapper (no NVIDIA SDK at build time). Compiled on Linux/Windows only
+# (see the platform gate below; macOS has no AFX runtime and uses DFNR). Pass
+# -DENABLE_NVIDIA_AFX=OFF to opt out.
+option(ENABLE_NVIDIA_AFX "Enable the NVIDIA Maxine AFX GPU denoiser (BNR; runtime-loaded, download-on-demand; NVIDIA RTX/GeForce, Linux/Windows)" ON)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
@@ -348,44 +353,6 @@ else()
     message(STATUS "GPU spectrum rendering disabled (use -DAETHER_GPU_SPECTRUM=ON to enable)")
 endif()
 
-# NVIDIA NIM BNR (Background Noise Removal) — GPU-accelerated neural denoising
-# Requires: grpc++, protobuf, NVIDIA RTX 4000+ GPU, Docker container
-if(ENABLE_BNR)
-    find_package(PkgConfig REQUIRED)
-    pkg_check_modules(GRPC REQUIRED grpc++)
-    pkg_check_modules(PROTOBUF REQUIRED protobuf)
-    find_program(PROTOC protoc REQUIRED)
-    find_program(GRPC_CPP_PLUGIN grpc_cpp_plugin REQUIRED)
-
-    # Generate C++ stubs from bnr.proto
-    set(BNR_PROTO "${CMAKE_SOURCE_DIR}/src/core/proto/bnr.proto")
-    set(BNR_GEN_DIR "${CMAKE_BINARY_DIR}/bnr_gen")
-    file(MAKE_DIRECTORY ${BNR_GEN_DIR})
-
-    set(BNR_PB_CC "${BNR_GEN_DIR}/bnr.pb.cc")
-    set(BNR_PB_H  "${BNR_GEN_DIR}/bnr.pb.h")
-    set(BNR_GRPC_CC "${BNR_GEN_DIR}/bnr.grpc.pb.cc")
-    set(BNR_GRPC_H  "${BNR_GEN_DIR}/bnr.grpc.pb.h")
-
-    add_custom_command(
-        OUTPUT ${BNR_PB_CC} ${BNR_PB_H} ${BNR_GRPC_CC} ${BNR_GRPC_H}
-        COMMAND ${PROTOC}
-            --proto_path=${CMAKE_SOURCE_DIR}/src/core/proto
-            --cpp_out=${BNR_GEN_DIR}
-            --grpc_out=${BNR_GEN_DIR}
-            --plugin=protoc-gen-grpc=${GRPC_CPP_PLUGIN}
-            ${BNR_PROTO}
-        DEPENDS ${BNR_PROTO}
-        COMMENT "Generating BNR gRPC stubs from bnr.proto"
-    )
-
-    set(BNR_SOURCES ${BNR_PB_CC} ${BNR_GRPC_CC})
-    message(STATUS "NVIDIA BNR enabled (gRPC ${GRPC_VERSION})")
-else()
-    set(BNR_SOURCES "")
-    message(STATUS "NVIDIA BNR disabled (use -DENABLE_BNR=ON to enable)")
-endif()
-
 # libspecbleach NR4 — bundled spectral noise reduction (LGPL-2.1)
 # MSVC: libspecbleach uses C99 VLAs and __attribute__ which MSVC doesn't support.
 # When clang-cl is available, build as a separate static lib using it.
@@ -605,7 +572,8 @@ set(CORE_SOURCES
     src/core/SpectrogramBuffer.cpp
     src/core/SignalClassifier.cpp
     src/core/Resampler.cpp
-    src/core/NvidiaBnrFilter.cpp
+    src/core/NvidiaAfxFilter.cpp
+    src/core/NvidiaAfxPack.cpp
     src/core/DeepFilterFilter.cpp
     src/core/RADEEngine.cpp
     src/core/AsyncLogWriter.cpp
@@ -723,6 +691,7 @@ set(GUI_SOURCES
     src/gui/ConnectedStationsDialog.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
+    src/gui/DssRenderer.cpp
     src/gui/FrequencyEntryParser.cpp
     src/gui/SliceColorManager.cpp
     src/gui/SliceLabel.cpp
@@ -1060,7 +1029,7 @@ endif()
 
 qt_add_resources(RESOURCES resources/resources.qrc)
 
-add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${BNR_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES} ${DFNR_RESOURCES})
+add_executable(AetherSDR ${ALL_SOURCES} ${RNNOISE_SOURCES} ${GGMORSE_SOURCES} ${RADE_SOURCES} ${SPECBLEACH_SOURCES} ${RESOURCES} ${DFNR_RESOURCES})
 
 if (USE_SYSTEM_ZLIB)
     target_link_libraries(AetherSDR PRIVATE PkgConfig::zlib)
@@ -1297,6 +1266,8 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/overlay.frag
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
+            resources/shaders/dss_mesh.vert
+            resources/shaders/dss_mesh.frag
     )
 endif()
 
@@ -1529,15 +1500,6 @@ elseif(OPUS_FOUND)
     target_link_libraries(AetherSDR PRIVATE ${OPUS_LIBRARIES})
 endif()
 
-if(ENABLE_BNR)
-    target_compile_definitions(AetherSDR PRIVATE HAVE_BNR)
-    target_include_directories(AetherSDR PRIVATE
-        ${BNR_GEN_DIR}
-        ${GRPC_INCLUDE_DIRS}
-        ${PROTOBUF_INCLUDE_DIRS})
-    target_link_libraries(AetherSDR PRIVATE ${GRPC_LIBRARIES} ${PROTOBUF_LIBRARIES})
-endif()
-
 if(ENABLE_SPECBLEACH)
     target_compile_definitions(AetherSDR PRIVATE HAVE_SPECBLEACH)
     target_include_directories(AetherSDR PRIVATE
@@ -1623,6 +1585,28 @@ if(ENABLE_DFNR)
         install(FILES "${DFNR_MODEL}"
             DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/AetherSDR"
             OPTIONAL)
+    endif()
+endif()
+
+# Optional NVIDIA Maxine AFX GPU denoiser. The AFX runtime (libnv_audiofx +
+# the ~2 GB CUDA/TensorRT libs) is NOT linked here — it is dlopen'd at runtime
+# from a downloaded/cached pack, so the shipped binary carries none of it.
+# We only compile the wrapper (it uses its own minimal NvAFX_* declarations,
+# so no NVIDIA headers are vendored) and link the dynamic loader.
+if(ENABLE_NVIDIA_AFX)
+    # x86_64 ONLY: NVIDIA Maxine AFX ships no ARM runtime, so aarch64 (Raspberry
+    # Pi etc. — which also have no NVIDIA GPU) and macOS get the DFNR fallback,
+    # not BNR. The arch guard means BNR is simply absent there (no dead button).
+    if(((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+        target_compile_definitions(AetherSDR PRIVATE HAVE_NVIDIA_AFX)
+        # Linux loads the AFX runtime via libdl; Windows uses the Win32
+        # LoadLibrary family from kernel32 (linked by default).
+        if(UNIX)
+            target_link_libraries(AetherSDR PRIVATE ${CMAKE_DL_LIBS})
+        endif()
+        message(STATUS "NVIDIA AFX GPU denoiser enabled (runtime-loaded)")
+    else()
+        message(STATUS "NVIDIA AFX GPU denoiser not built (x86_64 Linux/Windows only; macOS/aarch64 use DFNR)")
     endif()
 endif()
 
@@ -1836,6 +1820,26 @@ target_include_directories(wfm_dsp_test PRIVATE
 )
 target_link_libraries(wfm_dsp_test PRIVATE Qt6::Core)
 add_test(NAME wfm_dsp_test COMMAND wfm_dsp_test)
+
+# Hardware-gated functional test for the optional NVIDIA AFX GPU denoiser.
+# Built only when the feature is enabled; SKIPs at runtime without a pack/GPU.
+if(ENABLE_NVIDIA_AFX AND ((UNIX AND NOT APPLE) OR WIN32) AND CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
+    add_executable(nvidia_afx_filter_test
+        tests/nvidia_afx_filter_test.cpp
+        src/core/NvidiaAfxFilter.cpp
+        src/core/Resampler.cpp
+    )
+    target_compile_definitions(nvidia_afx_filter_test PRIVATE HAVE_NVIDIA_AFX)
+    target_include_directories(nvidia_afx_filter_test PRIVATE
+        src
+        ${CMAKE_SOURCE_DIR}/third_party/r8brain
+    )
+    target_link_libraries(nvidia_afx_filter_test PRIVATE Qt6::Core)
+    if(UNIX)
+        target_link_libraries(nvidia_afx_filter_test PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+    add_test(NAME nvidia_afx_filter_test COMMAND nvidia_afx_filter_test)
+endif()
 
 # Pure, headless, hardware-free golden matrix for the consolidated audio
 # format/rate negotiation policy (#3306). TargetOs is data, so this one binary

@@ -924,10 +924,30 @@ void TciServer::onBinaryMessage(const QByteArray& data)
 
     if (pcm.isEmpty()) return;
 
-    int inputFrames48k = 0;
+    int inputFramesSrcRate = 0;   // input frames at the client-declared rate (#3914)
     bool duplicatedStereo = false;
 
-    // ─── TX resampling: 48kHz (TCI) → 24kHz (radio native DAX) ───────────
+    // ─── TX resampling: client-declared rate → 24kHz (radio native DAX) ──
+    // Resample from the rate the client declared in THIS frame (hdr.sampleRate),
+    // not a hardcoded 48k. WSJT-X sends 48 kHz — the common path, unchanged — but
+    // a client that negotiated 8/12/24 kHz (audio_samplerate) sends at that rate
+    // and must be resampled from it, or every tone is mis-pitched and digital
+    // decodes fail (#3306). Rebuild the per-session resampler only if the
+    // declared rate changes (rare, mid-stream); a 24 kHz client gets a 1:1
+    // resampler so the mono/stereo canonicalization below still runs.
+    {
+        const int declaredRate = static_cast<int>(hdr.sampleRate);
+        const int txSrcRate = (declaredRate == 8000 || declaredRate == 12000
+                               || declaredRate == 24000 || declaredRate == 48000)
+                                  ? declaredRate
+                                  : 48000;   // default/garbage -> WSJT-X-compatible 48k
+        if (!m_txResampler
+            || static_cast<int>(m_txResampler->srcRate()) != txSrcRate) {
+            m_txResampler = std::make_unique<Resampler>(
+                static_cast<double>(txSrcRate), 24000.0, 4096);
+        }
+    }
+
     // Detect mono vs stereo from payload layout.
     //
     // WSJT-X's TCI modulator writes the first `hdr.length` floats as duplicated
@@ -952,17 +972,17 @@ void TciServer::onBinaryMessage(const QByteArray& data)
         if (duplicatedStereo) {
             // WSJT-X fills `length` floats as stereo pairs in-place.
             int stereoFrames = totalFloats / 2;
-            inputFrames48k = stereoFrames;
+            inputFramesSrcRate = stereoFrames;
             pcm = m_txResampler->processStereoToStereo(fSrc, stereoFrames);
         } else if (totalFloats <= declaredSamples) {
             // True mono: upmix to stereo then resample.
             int monoFrames = totalFloats;
-            inputFrames48k = monoFrames;
+            inputFramesSrcRate = monoFrames;
             pcm = m_txResampler->processMonoToStereo(fSrc, monoFrames);
         } else {
             // Explicit stereo: resample directly.
             int stereoFrames = totalFloats / 2;
-            inputFrames48k = stereoFrames;
+            inputFramesSrcRate = stereoFrames;
             pcm = m_txResampler->processStereoToStereo(fSrc, stereoFrames);
         }
         if (pcm.isEmpty()) return;
@@ -1020,7 +1040,7 @@ void TciServer::onBinaryMessage(const QByteArray& data)
     }
 
     ++m_txAudioBlocks;
-    m_txInputFrames += inputFrames48k;
+    m_txInputFrames += inputFramesSrcRate;
     m_txOutputFrames += outputStereoFrames;
     m_txClipSamples += clipSamples;
     m_txAudioSampleCount += outputSamples;
@@ -1669,7 +1689,9 @@ void TciServer::startTxChrono(QWebSocket* client, int trx)
         m_audio->setDaxTxMode(true);
     }
 
-    // Create TX resampler: 48kHz (TCI client) → 24kHz (radio DAX/native rate)
+    // Create the TX resampler with the 48 kHz default (WSJT-X). onBinaryMessage
+    // re-derives the source rate from each frame's hdr.sampleRate and rebuilds
+    // this if a client transmits at a non-48k negotiated rate (#3306).
     m_txResampler = std::make_unique<Resampler>(48000.0, 24000.0, 4096);
     if (m_model) {
         // Always dax=1 for TCI TX. The DaxTxLowLatency flag only controls
@@ -1758,7 +1780,7 @@ void TciServer::logTxAudioSummary(const char* reason)
         << " gain=" << m_txGain
         << " blocks=" << m_txAudioBlocks
         << " requested48k=" << m_txChronoRequestedFrames
-        << " input48k=" << m_txInputFrames
+        << " inputFramesSrc=" << m_txInputFrames
         << " output24k=" << m_txOutputFrames
         << " effective48k=" << effectiveRate48k
         << " peak=" << m_txAudioPeak

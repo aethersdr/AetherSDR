@@ -672,8 +672,8 @@ void MainWindow::wireRadioModel()
         m_cwxLocalKeyer->setOnKeyDownChange([this](bool down) {
             // Lock-free atomic gate; safe to call directly from the keyer
             // thread, matching the iambic keyer's gate path below.
-            if (m_audio && m_audio->cwSidetone())
-                m_audio->cwSidetone()->setKeyDown(down);
+            if (m_audio)
+                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
         });
         connect(&m_radioModel.cwxModel(), &CwxModel::transmissionRequested,
                 this, [this](const QString& text, int wpm) {
@@ -697,8 +697,8 @@ void MainWindow::wireRadioModel()
             // The radio sees `cw key 1` / `cw key 0` matching our element
             // timing — same RF pattern the radio's own iambic engine
             // would have produced from a hardware paddle.
-            if (m_audio && m_audio->cwSidetone())
-                m_audio->cwSidetone()->setKeyDown(down);
+            if (m_audio)
+                m_audio->setCwKeyDown(down);   // keys audible + recorder sidetone
             const quint64 traceId = m_lastCwPaddleTraceId.load(std::memory_order_relaxed);
             const quint64 sourceMs = m_lastCwPaddleSourceMs.load(std::memory_order_relaxed);
             if (lcCw().isDebugEnabled()) {
@@ -1089,7 +1089,7 @@ void MainWindow::wirePanLifecycle()
             sw->overlayMenu()->setWnbState(wnbOn, wnbLevel);
             sw->overlayMenu()->setRfGain(rfGain);
             QString bgPath = s.value(sw->settingsKey("BackgroundImage")).toString();
-            if (!bgPath.isEmpty())
+            if (!bgPath.isEmpty() && bgPath != "none")
                 sw->setBackgroundImage(bgPath);
             int bgOpacity = s.value(sw->settingsKey("BackgroundOpacity"), "80").toInt();
             sw->setBackgroundOpacity(bgOpacity);
@@ -1097,6 +1097,15 @@ void MainWindow::wirePanLifecycle()
                                   "#0a0a14").toString());
             if (bgFill.isValid())
                 sw->setBackgroundFillColor(bgFill);
+            // Restore the spectrum render mode (2D / 3D stacked trace) + 3D floor
+            // depth per pan, like the other Display settings above, so a pan set
+            // to 3D survives a restart / pan re-attach.
+            sw->setSpectrumRenderMode(
+                s.value(sw->settingsKey("DisplaySpectrumRenderMode"), "0").toInt());
+            sw->setDssFloorDepth(
+                s.value(sw->settingsKey("Display3DFloorDepth"), "6").toInt());
+            sw->setDssGain(
+                s.value(sw->settingsKey("Display3DGain"), "70").toInt());
             // Nudge rate to force waterfall tile re-sync
             if (!m_adaptiveThrottleActive) {
                 QTimer::singleShot(500, this, [this, rate]() {

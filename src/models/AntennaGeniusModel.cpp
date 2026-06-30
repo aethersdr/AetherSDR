@@ -36,6 +36,21 @@ AntennaGeniusModel::AntennaGeniusModel(QObject* parent)
             connectToDevice(m_device);
         }
     });
+
+    // Watchdog for `info get`: falls back to runInitSequence() if the device
+    // accepts the TCP connection and sends a prologue but never responds to
+    // info get (no body, no terminator). 5 seconds is generous for the real
+    // AG (responds in <50ms in pcap traces) while still bounded enough to
+    // recover the connection if a device truly stalls.
+    m_initWatchdog = new QTimer(this);
+    m_initWatchdog->setSingleShot(true);
+    m_initWatchdog->setInterval(5000);
+    connect(m_initWatchdog, &QTimer::timeout, this, [this]() {
+        qCWarning(lcTuner) << "AntennaGenius: info get watchdog fired after 5s --"
+                           << "device did not respond, running init anyway";
+        m_seqInfo = -1;
+        runInitSequence();
+    });
 }
 
 AntennaGeniusModel::~AntennaGeniusModel()
@@ -165,6 +180,9 @@ void AntennaGeniusModel::onDiscoveryDatagram()
             m_device.webPort      = info.webPort;
             m_device.radioPorts   = info.radioPorts;
             m_device.antennaPorts = info.antennaPorts;
+            // Re-evaluate Port B visibility from the beacon's authoritative
+            // radioPorts value, even if serial did not change.
+            emit deviceInfoChanged();
             if (serialChanged)
                 emit antennasChanged();
         }
@@ -369,8 +387,15 @@ void AntennaGeniusModel::onTcpReadyRead()
                     if (wasEmpty)
                         emit presenceChanged(true);
                 }
-
-                runInitSequence();
+                // Probe device identity before running the init sequence.
+                // The response provides authoritative ports/antennas/serial
+                // and is required for manual-IP connections that never see
+                // a UDP discovery beacon. runInitSequence() is deferred to
+                // the info get response handler so radioPorts is correct
+                // before any antenna/band list arrives. The init watchdog
+                // catches devices that never answer (silent non-response).
+                m_seqInfo = sendCommand("info get");
+                m_initWatchdog->start();
             }
             continue;
         }
@@ -395,6 +420,17 @@ int AntennaGeniusModel::sendCommand(const QString& cmd)
     m_pending[seq] = PendingResponse{cmd, {}};
 
     return seq;
+}
+
+void AntennaGeniusModel::applyDeviceInfo(const QString& line)
+{
+    auto kvs = parseKeyValues(line);
+    if (kvs.contains("ports"))    m_device.radioPorts   = kvs.value("ports").toInt();
+    if (kvs.contains("antennas")) m_device.antennaPorts = kvs.value("antennas").toInt();
+    if (kvs.contains("serial"))   m_device.serial       = kvs.value("serial");
+    if (kvs.contains("name"))     m_device.name         = kvs.value("name").replace('_', ' ');
+    if (kvs.contains("v"))        m_device.version      = kvs.value("v");
+    if (kvs.contains("mode"))     m_device.mode         = kvs.value("mode");
 }
 
 // ── Line processing ────────────────────────────────────────────────────────
@@ -439,6 +475,27 @@ void AntennaGeniusModel::processResponse(int seq, int code, const QString& body)
         QStringList lines = pr.lines;
         QString cmd = pr.command;
         m_pending.remove(seq);
+
+        if (seq == m_seqInfo) {
+            // info get's body is normally consumed inline in the accumulate
+            // block below. This terminator path handles error responses
+            // (code != 0) and defensive parsing if a firmware variant sends
+            // a terminator after the body line. In either case, proceed to
+            // init so the connection does not stall.
+            if (!lines.isEmpty()) {
+                applyDeviceInfo(lines.first());
+                emit deviceInfoChanged();
+            } else if (code != 0) {
+                qCWarning(lcTuner) << "AntennaGenius: info get error code 0x"
+                                   << Qt::hex << code
+                                   << ", keeping heuristic radioPorts="
+                                   << m_device.radioPorts;
+            }
+            m_seqInfo = -1;        // clear so a wrapped-seq reuse cannot re-enter the info-get path
+            m_initWatchdog->stop();  // device answered (even with error) before watchdog could fire
+            runInitSequence();
+            return;
+        }
 
         if (seq == m_seqAntennaList) {
             // Parse antenna list.
@@ -524,7 +581,19 @@ void AntennaGeniusModel::processResponse(int seq, int code, const QString& body)
 
     // Accumulate multi-line response body.
     if (code == 0) {
-        pr.lines.append(body);
+        if (seq == m_seqInfo) {
+            // info get is single-shot: body arrives on one non-empty line
+            // with no terminating empty body. Parse inline rather than
+            // accumulating, and proceed to init.
+            applyDeviceInfo(body);
+            emit deviceInfoChanged();
+            m_pending.remove(seq);
+            m_seqInfo = -1;        // clear so a wrapped-seq reuse cannot re-enter the info-get path
+            m_initWatchdog->stop();  // info get answered before watchdog could fire
+            runInitSequence();
+        } else {
+            pr.lines.append(body);
+        }
     } else {
         qCWarning(lcTuner) << "AntennaGenius: command" << pr.command
                     << "error code" << Qt::hex << code << body;

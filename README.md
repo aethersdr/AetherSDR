@@ -27,7 +27,7 @@ AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. 
 - **Multi-slice & multi-panadapter** — colour-coded VFO overlays, independent TX assignment, diversity/ESC beamforming; up to 8 detachable pans with native VITA-49 waterfall tiles, with selectable S-meter / **SmartMTR** meter views per flag
 - **KiwiSDR public-receiver browser** — find and connect to public KiwiSDR receivers worldwide through an API-policy-aware directory (diversity receive with receive-only TX inhibit)
 - **Aetherial Audio Channel Strip** — a unified RX **and** TX DSP suite (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and a per-side scope
-- **Six client-side noise-reduction engines** — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), DFNR (DeepFilterNet3), BNR (NVIDIA GPU AI), and MNR (macOS)
+- **Six client-side noise-reduction engines** — NR2 (spectral), RN2 (RNNoise), NR4 (libspecbleach), DFNR (DeepFilterNet3), BNR (NVIDIA GPU AI — the Maxine denoiser in-process on a local NVIDIA RTX/GeForce GPU, Linux + Windows; see [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md)), and MNR (macOS)
 - **DAX virtual audio + IQ** — 4 RX + 1 TX channels and raw I/Q at 24–192 kHz for WSJT-X / fldigi / VARA / JS8Call, plus a per-slice **WFM demodulator** for satellite data
 - **AetherModem packet radio** — KISS-over-TCP TNC, connected-mode AX.25 BBS, a personal mailbox, and an **APRS client** (station map, GPS beacon, messaging) with a Direwolf-derived VHF demodulator
 - **AetherSweep** — in-panadapter SWR analyzer with log scale, threshold-band shading, and interpolated bandwidth at SWR ≤ 1.5 / 2.0

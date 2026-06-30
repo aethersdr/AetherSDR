@@ -37,8 +37,8 @@ namespace AetherSDR {
 
 class SpecbleachFilter;
 class RNNoiseFilter;
-class NvidiaBnrFilter;
 class DeepFilterFilter;
+class NvidiaAfxFilter;
 class Resampler;
 class ClientEq;
 class ClientComp;
@@ -239,21 +239,17 @@ public:
     void setMnrStrength(float normalized);
     float mnrStrength() const;
 
-    // Client-side BNR (NVIDIA NIM GPU noise removal)
-    Q_INVOKABLE void setBnrEnabled(bool on);
-    bool bnrEnabled() const { return m_bnrEnabled.load(); }
-    void setBnrAddress(const QString& addr);
-    QString bnrAddress() const { return m_bnrAddress; }
-    void setBnrIntensity(float ratio);
-    float bnrIntensity() const;
-    bool bnrConnected() const;
-
     // Client-side DFNR (DeepFilterNet3 neural noise reduction)
     Q_INVOKABLE void setDfnrEnabled(bool on);
     bool dfnrEnabled() const { return m_dfnrEnabled.load(); }
     void setDfnrAttenLimit(float db);
     float dfnrAttenLimit() const;
     void setDfnrPostFilterBeta(float beta);
+
+    // Optional NVIDIA Maxine AFX GPU denoiser (runtime-loaded; NVIDIA RTX/GeForce).
+    Q_INVOKABLE void setNvAfxEnabled(bool on);
+    bool nvAfxEnabled() const { return m_nvAfxEnabled.load(); }
+    void setNvAfxIntensity(float ratio);
 
     // Client-side parametric EQ. Two instances: one on the RX audio path
     // (post-NR, pre-write to sink), one on the TX path (post-mic, pre-
@@ -499,6 +495,18 @@ public:
     // routing and PhoneCwApplet UI bindings.
     CwSidetoneGenerator* cwSidetone() { return m_cwSidetone.get(); }
 
+    // Key BOTH the audible sidetone and the recorder-sidetone generator from one
+    // call so every local CW source (manual keyer, CWX macros, iambic paddle)
+    // drives them in lockstep. The recorder copy is what lets a Client-Side QSO
+    // recording capture the operator's own sent CW/CWX side-tone (#2539).
+    void setCwKeyDown(bool down);
+
+    // Start the CW-sidetone record pump (#2539). CW has no mic-driven
+    // onTxAudioReady, so a free-running timer on the audio thread feeds the
+    // recorder the local sidetone while the radio is keyed for CW. Idempotent;
+    // must be invoked on the audio thread (queued) after moveToThread().
+    void startCwRecordPump();
+
     // Enable/disable the TX-side CW-decode tap (#2417).  When enabled,
     // the sidetone generator's mono signal is mirrored — downsampled
     // from 48 kHz to 24 kHz stereo float — and emitted via
@@ -548,9 +556,8 @@ signals:
     void mnrEnabledChanged(bool on);
     void rn2EnabledChanged(bool on);
     void rn2TxEnabledChanged(bool on);   // RN2 on the TX mic pre-amp (#2813)
-    void bnrEnabledChanged(bool on);
-    void bnrConnectionChanged(bool connected);
     void dfnrEnabledChanged(bool on);
+    void nvAfxEnabledChanged(bool on);
     void txRawPcmReady(const QByteArray& pcm);  // raw 24kHz stereo int16 PCM for RADEEngine
     // Post-final-limiter TX monitor PCM (24 kHz stereo int16) — the exact stream
     // packetised to the radio. Fires for all phone/SSB TX (unlike txRawPcmReady,
@@ -558,6 +565,15 @@ signals:
     // connect to QsoRecorder::feedTxAudio (#3556). Emitted from the audio thread;
     // receivers connect via Qt::AutoConnection (queued across threads).
     void txFinalMonitorPcmReady(const QByteArray& int16Stereo);
+    // Local CW/CWX sidetone for the Client-Side QSO recorder (#2539), 24 kHz
+    // stereo int16 — the recorder's native WAV format. Pumped on the audio
+    // thread while the radio is keyed for CW (no mic-driven onTxAudioReady in
+    // CW). Connect to QsoRecorder::feedTxAudio.
+    void cwSidetoneRecordPcmReady(const QByteArray& int16Stereo);
+    // True while WE are sending CW (radio keyed + our keyer active), so the
+    // recorder opens its TX gate for CW the same way moxChanged does for voice.
+    // Ownership-correct: driven by our local keyer, not any-owner interlock.
+    void cwRecordingActiveChanged(bool active);
     void txPacketReady(const QByteArray& vitaPacket);  // VITA-49 TX packet for PanadapterStream
     // Sidetone-tapped audio for the TX-side CW decoder (#2417).  Emitted
     // from the audio thread; receivers should connect via Qt::AutoConnection
@@ -602,6 +618,9 @@ signals:
 
 private slots:
     void onTxAudioReady();
+    // CW-sidetone record pump tick (#2539): while the radio is keyed for CW,
+    // render the local sidetone and feed it to the QSO recorder.
+    void onCwRecordPump();
 
 private:
     enum class RxAudioBuffer {
@@ -625,16 +644,12 @@ private:
         std::unique_ptr<SpectralNR> nr2;
         std::unique_ptr<Resampler> rxResampler;
         std::unique_ptr<Resampler> rxResamplerR;
-        std::unique_ptr<Resampler> bnrUp;
-        std::unique_ptr<Resampler> bnrDown;
-        QByteArray bnrOutBuf;
         float gain{1.0f};
         int pan{50};
         int presentationDelayMs{0};
         bool enabled{false};
         bool muted{false};
         bool prebuffering{false};
-        bool bnrPrimed{false};
     };
 
     struct AutomationAudioCaptureChunk {
@@ -735,7 +750,7 @@ private:
     QPointer<QIODevice> m_audioDevice;   // sink-owned device, may vanish on hot-unplug
 
     // Dedicated low-latency sink for the local CW sidetone — kept separate
-    // from the RX sink so the RX path keeps its 200 ms jitter cushion.
+    // from the RX sink so the RX path keeps its 100 ms jitter cushion.
     // Backend chosen at start time: PortAudio when HAVE_PORTAUDIO and not
     // disabled by AppSettings["CwSidetoneBackend"]=="QAudioSink"; QAudioSink
     // (push mode, 2 ms timer, 50 ms buffer) otherwise.  See CwSidetoneSinkBackend.h.
@@ -804,7 +819,7 @@ private:
     std::atomic<bool>  m_rxBoost{false};  // 50% software gain boost (#1445)
     std::atomic<float> m_rxOutputTrimDb{0.0f};  // ±12 dB linear trim, post-boost
     std::atomic<int>   m_rxPan{50};       // 0=left, 50=centre, 100=right (#1460)
-    std::atomic<int>   m_rxBufferCapMs{200}; // RX buffer cap in ms (#1505)
+    std::atomic<int>   m_rxBufferCapMs{100}; // RX buffer cap in ms (#1505; default lowered 200->100 for #3193)
     std::atomic<bool>  m_muted{false};
     // RX sink device rate (negotiated via AudioFormatNegotiator). Audio is
     // resampled from the 24k canonical rate up to this when they differ (#3306).
@@ -816,6 +831,23 @@ private:
     std::unique_ptr<Resampler> m_rxResamplerR;      // 24k→device rate, R channel — kept in sync with m_rxResampler
     std::unique_ptr<Resampler> m_radeRxResampler;   // separate 24k→device rate for RADE decoded speech
     std::unique_ptr<CwSidetoneGenerator> m_cwSidetone;  // local CW sidetone, mixed into RX drain
+    // Second, recorder-only CW sidetone generator at the 24 kHz recorder rate.
+    // Keyed in lockstep with m_cwSidetone via setCwKeyDown(); the CW record pump
+    // (onCwRecordPump) renders it to the QSO recorder while the radio is keyed
+    // for CW, so a Client-Side recording carries the operator's sent CW/CWX
+    // (#2539). Always enabled at a fixed level so it records even when the
+    // audible sidetone is off/low (operator monitoring CW via the radio).
+    std::unique_ptr<CwSidetoneGenerator> m_cwRecordSidetone;
+    std::vector<float> m_cwRecordSidetoneScratch;       // int16<->float render scratch
+    // CW record pump state (#2539). The pump free-runs on the audio thread;
+    // m_cwKeyedThisOver latches when our keyer fires (set in setCwKeyDown, reset
+    // on the radio TX→RX edge) so the pump excludes voice/DAX/tune overs that
+    // never key the sidetone. m_cwPumpElapsed drives wall-clock-accurate frame
+    // counts so morse timing in the recording matches real time.
+    QTimer*            m_cwRecordPump{nullptr};
+    QElapsedTimer      m_cwPumpElapsed;
+    bool               m_cwPumpActive{false};            // audio-thread only
+    std::atomic<bool>  m_cwKeyedThisOver{false};
     // Atomic gate for the TX-side CW decode tap (#2417).  Flipped from
     // MainWindow on MOX / CwDecodeTxEnabled changes; checked on the
     // sidetone audio thread so the mirror lambda can return cheaply
@@ -870,27 +902,18 @@ private:
     // Audio-thread only — grows once to steady state, then alloc-free.
     QByteArray m_rn2TxF32In;
 
-    // Client-side BNR (NVIDIA NIM)
-    std::unique_ptr<NvidiaBnrFilter> m_bnr;
-    std::unique_ptr<Resampler> m_bnrUp;    // 24k→48k mono
-    std::unique_ptr<Resampler> m_bnrDown;  // 48k→24k mono
-    std::unique_ptr<Resampler> m_kiwiSdrBnrUp;
-    std::unique_ptr<Resampler> m_kiwiSdrBnrDown;
-    std::atomic<bool> m_bnrEnabled{false};
-    QString m_bnrAddress{"localhost:8001"};
-    QByteArray m_bnrOutBuf;  // jitter buffer: denoised 24kHz stereo int16
-    QByteArray m_kiwiSdrBnrOutBuf;
-    bool m_bnrPrimed{false}; // true after enough denoised data accumulated
-    bool m_kiwiSdrBnrPrimed{false};
-    void processBnr(const QByteArray& stereoPcm,
-                    RxDspSource source,
-                    ExternalRxAudioSourceState* externalSource = nullptr);
-
     // Client-side DFNR (DeepFilterNet3)
 #ifdef HAVE_DFNR
     std::unique_ptr<DeepFilterFilter> m_dfnr;
 #endif
     std::atomic<bool> m_dfnrEnabled{false};
+
+    // Optional NVIDIA AFX GPU denoiser (runtime-loaded; flag always present so
+    // mutual-exclusion in the other NR setters compiles regardless of the build).
+#ifdef HAVE_NVIDIA_AFX
+    std::unique_ptr<NvidiaAfxFilter> m_nvAfx;
+#endif
+    std::atomic<bool> m_nvAfxEnabled{false};
 
     // Client-side parametric EQ, independent instances for RX and TX.
     std::unique_ptr<ClientEq> m_clientEqRx;

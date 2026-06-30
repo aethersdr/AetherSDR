@@ -30,7 +30,7 @@ jobs:
         run: bash scripts/setup/setup-deepfilter.sh
 
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DENABLE_NVIDIA_AFX=ON
 
       - name: Build
         run: cmake --build build -j$(nproc)
@@ -142,6 +142,7 @@ jobs:
             "-B","build","-G","Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded",
+            "-DENABLE_NVIDIA_AFX=ON",
             "-DCMAKE_TOOLCHAIN_FILE=$env:CMAKE_TOOLCHAIN_FILE",
             "-DVCPKG_TARGET_TRIPLET=$env:VCPKG_TARGET_TRIPLET"
           )

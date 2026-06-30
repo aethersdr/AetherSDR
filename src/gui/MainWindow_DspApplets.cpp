@@ -109,7 +109,7 @@ void MainWindow::wirePooDooTiles()
                 [dspState, pushDsp](bool on) { dspState->dfnr = on; pushDsp(); });
         connect(m_audio, &AudioEngine::mnrEnabledChanged, chain,
                 [dspState, pushDsp](bool on) { dspState->mnr = on; pushDsp(); });
-        connect(m_audio, &AudioEngine::bnrEnabledChanged, chain,
+        connect(m_audio, &AudioEngine::nvAfxEnabledChanged, chain,
                 [dspState, pushDsp](bool on) { dspState->bnr = on; pushDsp(); });
 
         // SPEAK — AudioEngine emits mutedChanged on every setMuted() flip.
@@ -132,7 +132,7 @@ void MainWindow::wirePooDooTiles()
         dspState->nr4  = m_audio->nr4Enabled();
         dspState->dfnr = m_audio->dfnrEnabled();
         dspState->mnr  = m_audio->mnrEnabled();
-        dspState->bnr  = m_audio->bnrEnabled();
+        dspState->bnr  = m_audio->nvAfxEnabled();   // BNR == local AFX denoiser
         pushDsp();
         chain->setRxOutputUnmuted(!m_audio->isMuted());
         if (m_aetherialStrip)

@@ -262,7 +262,8 @@ void MainWindow::beginSwrSweepRf()
         5000);
 }
 
-void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts)
+void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts,
+                               double customLowMhz, double customHighMhz)
 {
     if (m_swrSweep.running)
         return;
@@ -350,6 +351,33 @@ void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts)
         return;
     }
 
+    // Optional manual range. The operator-entered bounds can only narrow the
+    // sweep: they are intersected with the in-region safe range above, so a
+    // custom range never transmits outside what the band plan already permits.
+    // Both 0 means no manual range was requested → full band.
+    double sweepLow = safeLow;
+    double sweepHigh = safeHigh;
+    if (customLowMhz > 0.0 || customHighMhz > 0.0) {
+        // Reject a positive-but-inverted (or zero-width) range up front instead
+        // of silently falling through to a full-band sweep — confining a sweep
+        // to your privileges and getting the whole band is a wrong-direction
+        // surprise for the exact use case this targets.
+        if (customLowMhz <= 0.0 || customHighMhz <= customLowMhz) {
+            QMessageBox::warning(this, tr("SWR Sweep"),
+                                 tr("Enter a sweep start frequency below the stop "
+                                    "frequency."));
+            return;
+        }
+        sweepLow = std::max(safeLow, customLowMhz);
+        sweepHigh = std::min(safeHigh, customHighMhz);
+        if (sweepHigh - sweepLow < kSwrSweepStepMhz) {
+            QMessageBox::warning(this, tr("SWR Sweep"),
+                                 tr("The chosen sweep range does not overlap the band by "
+                                    "enough to take a measurement. Widen the range."));
+            return;
+        }
+    }
+
     const double displayBw = (band.highMhz - band.lowMhz) + 2.0 * kSwrSweepPanPaddingMhz;
     if (displayBw > m_radioModel.maxPanBandwidthMhz()) {
         QMessageBox::warning(this, tr("SWR Sweep"),
@@ -358,7 +386,7 @@ void MainWindow::startSwrSweep(int requestedSliceId, int sweepPowerWatts)
     }
 
     QVector<double> sweepFreqs;
-    for (double f = safeLow; f <= safeHigh + 1.0e-9; f += kSwrSweepStepMhz)
+    for (double f = sweepLow; f <= sweepHigh + 1.0e-9; f += kSwrSweepStepMhz)
         sweepFreqs.append(std::round(f * 1.0e6) / 1.0e6);
     if (sweepFreqs.isEmpty()) {
         QMessageBox::warning(this, tr("SWR Sweep"),

@@ -750,14 +750,12 @@ void MainWindow::onSliceAdded(SliceModel* s)
                     QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr2Enabled(false); });
                 if (m_audio->rn2Enabled())
                     QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setRn2Enabled(false); });
-#ifdef HAVE_BNR
-                if (m_audio->bnrEnabled())
-                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setBnrEnabled(false); });
-#endif
                 if (m_audio->nr4Enabled())
                     QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNr4Enabled(false); });
                 if (m_audio->dfnrEnabled())
                     QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setDfnrEnabled(false); });
+                if (m_audio->nvAfxEnabled())  // AFX is a speech denoiser too
+                    QMetaObject::invokeMethod(m_audio, [this]() { m_audio->setNvAfxEnabled(false); });
             }
         }
 #ifdef HAVE_RADE
@@ -2213,6 +2211,12 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     });
     connect(menu, &SpectrumOverlayMenu::wfColorSchemeChanged,
             sw, &SpectrumWidget::setWfColorScheme);
+    connect(menu, &SpectrumOverlayMenu::spectrumRenderModeChanged,
+            sw, &SpectrumWidget::setSpectrumRenderMode);
+    connect(menu, &SpectrumOverlayMenu::dssFloorDepthChanged,
+            sw, &SpectrumWidget::setDssFloorDepth);
+    connect(menu, &SpectrumOverlayMenu::dssGainChanged,
+            sw, &SpectrumWidget::setDssGain);
     connect(menu, &SpectrumOverlayMenu::wfColorGainChanged,
             this, [this, applet, sw](int v) {
         if (!kiwiSdrProfileForPan(applet->panId()).isEmpty()) {
@@ -2370,6 +2374,15 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("BackgroundImage"), ":/bg-default.jpg");
         s.save();
     });
+    // Right-click "Clear": turn the background off entirely (no image, just the
+    // fill colour) and persist as "none" so it stays off across restarts.
+    connect(menu, &SpectrumOverlayMenu::backgroundImageDisabled,
+            this, [sw] {
+        sw->setBackgroundImage(QString());
+        auto& s = AppSettings::instance();
+        s.setValue(sw->settingsKey("BackgroundImage"), "none");
+        s.save();
+    });
     connect(menu, &SpectrumOverlayMenu::backgroundOpacityChanged,
             this, [sw](int pct) {
         sw->setBackgroundOpacity(pct);
@@ -2463,12 +2476,21 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         s.setValue(sw->settingsKey("DisplayFreqGridSpacing"),     "0");
         s.setValue(sw->settingsKey("DisplayNoiseFloorEnable"),    "False");
         s.setValue(sw->settingsKey("DisplayNoiseFloorPosition"),  "75");
+        s.setValue(sw->settingsKey("DisplaySpectrumRenderMode"),  "0");
+        s.setValue(sw->settingsKey("Display3DFloorDepth"),        "6");
+        s.setValue(sw->settingsKey("Display3DGain"),        "70");
         s.save();
 
-        // Sync all Display panel UI controls
+        // Apply the render-mode + 3D-floor reset to the widget too (the keys
+        // above only update settings, not the live SpectrumWidget).
+        sw->setSpectrumRenderMode(0);
+        sw->setDssFloorDepth(6);
+        sw->setDssGain(70);
+
+        // Sync all Display panel UI controls (incl. the 2D/3D combo + 3D Floor).
         menu->syncDisplaySettings(0, 25, 70, false, QColor(0x00, 0xe5, 0xff),
                                   50, 15, true, 50, 100, 75, false, true, 0,
-                                  true, 2.0f, false);
+                                  true, 2.0f, false, 0, 6);
         menu->syncExtraDisplaySettings(false, 1.15f, 80, 0,
                                        QColor(0x0a, 0x0a, 0x14));
     });
@@ -3202,7 +3224,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     // Record/playback — route to radio or client-side QsoRecorder (#1297)
     connect(w, &VfoWidget::recordToggled, this, [this, w, sliceId](bool on) {
-        bool clientSide = AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+        bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
         if (clientSide) {
             if (on)
                 m_qsoRecorder->startRecording();
@@ -3221,7 +3243,7 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
     });
     // Client-side playback
     connect(w, &VfoWidget::playToggled, this, [this, sliceId](bool on) {
-        bool clientSide = AppSettings::instance().value("RecordingMode", "Radio").toString() == "Client";
+        bool clientSide = AppSettings::instance().value("RecordingMode", "Client").toString() == "Client";
         if (clientSide) {
             if (on)
                 m_qsoRecorder->startPlayback();
@@ -3352,16 +3374,17 @@ void MainWindow::wireVfoWidget(VfoWidget* w, SliceModel* s)
         auto syncAetherDsp = [this, w] {
             if (!m_audio) return;
             const bool active = m_audio->nr2Enabled() || m_audio->nr4Enabled()
-                             || m_audio->mnrEnabled() || m_audio->bnrEnabled()
-                             || m_audio->dfnrEnabled() || m_audio->rn2Enabled();
+                             || m_audio->mnrEnabled()
+                             || m_audio->dfnrEnabled() || m_audio->rn2Enabled()
+                             || m_audio->nvAfxEnabled();
             w->setAetherDspActive(active);
         };
         connect(m_audio, &AudioEngine::nr2EnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
         connect(m_audio, &AudioEngine::nr4EnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
         connect(m_audio, &AudioEngine::mnrEnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
-        connect(m_audio, &AudioEngine::bnrEnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
         connect(m_audio, &AudioEngine::dfnrEnabledChanged, w, [syncAetherDsp](bool){ syncAetherDsp(); });
         connect(m_audio, &AudioEngine::rn2EnabledChanged,  w, [syncAetherDsp](bool){ syncAetherDsp(); });
+        connect(m_audio, &AudioEngine::nvAfxEnabledChanged, w, [syncAetherDsp](bool){ syncAetherDsp(); });
         syncAetherDsp();  // apply current state to this freshly-wired slice
     }
 
