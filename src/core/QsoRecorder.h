@@ -85,6 +85,11 @@ public:
     // finalized one; empty if neither. Used by the automation bridge to locate
     // the WAV for capture-file verification.
     QString recordingFilePath() const {
+        // Lock: m_file is mutated/deleteLater'd under m_writeMutex by the feed
+        // path and finalizeFile(); reading it unlocked races those and can hit
+        // a half-torn-down handle (UAF). All callers are external (automation),
+        // none hold the write lock, so this can't self-deadlock.
+        std::lock_guard<std::mutex> lock(m_writeMutex);
         return m_file ? m_file->fileName() : m_lastRecordingPath;
     }
 
@@ -161,7 +166,7 @@ private:
     QAudioDevice m_outputDevice;
 
     // Thread safety for audio feed paths
-    std::mutex  m_writeMutex;
+    mutable std::mutex  m_writeMutex;
 
     // WAV format constants (matching AudioEngine native format)
     static constexpr int SAMPLE_RATE = 24000;

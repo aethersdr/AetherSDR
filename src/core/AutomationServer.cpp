@@ -2739,7 +2739,7 @@ QJsonObject AutomationServer::doRecord(const QString& action, const QString& val
             {QStringLiteral("path"), m_qsoRecorder->recordingFilePath()},
         };
     }
-    return err(QStringLiteral("record: unknown action '%1' (start|stop|status|path)")
+    return err(QStringLiteral("record: unknown action '%1' (start|stop|status|path|dir)")
                    .arg(action));
 }
 
