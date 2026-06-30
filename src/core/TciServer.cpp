@@ -924,7 +924,7 @@ void TciServer::onBinaryMessage(const QByteArray& data)
 
     if (pcm.isEmpty()) return;
 
-    int inputFrames48k = 0;
+    int inputFramesSrcRate = 0;   // input frames at the client-declared rate (#3914)
     bool duplicatedStereo = false;
 
     // ─── TX resampling: client-declared rate → 24kHz (radio native DAX) ──
@@ -972,17 +972,17 @@ void TciServer::onBinaryMessage(const QByteArray& data)
         if (duplicatedStereo) {
             // WSJT-X fills `length` floats as stereo pairs in-place.
             int stereoFrames = totalFloats / 2;
-            inputFrames48k = stereoFrames;
+            inputFramesSrcRate = stereoFrames;
             pcm = m_txResampler->processStereoToStereo(fSrc, stereoFrames);
         } else if (totalFloats <= declaredSamples) {
             // True mono: upmix to stereo then resample.
             int monoFrames = totalFloats;
-            inputFrames48k = monoFrames;
+            inputFramesSrcRate = monoFrames;
             pcm = m_txResampler->processMonoToStereo(fSrc, monoFrames);
         } else {
             // Explicit stereo: resample directly.
             int stereoFrames = totalFloats / 2;
-            inputFrames48k = stereoFrames;
+            inputFramesSrcRate = stereoFrames;
             pcm = m_txResampler->processStereoToStereo(fSrc, stereoFrames);
         }
         if (pcm.isEmpty()) return;
@@ -1040,7 +1040,7 @@ void TciServer::onBinaryMessage(const QByteArray& data)
     }
 
     ++m_txAudioBlocks;
-    m_txInputFrames += inputFrames48k;
+    m_txInputFrames += inputFramesSrcRate;
     m_txOutputFrames += outputStereoFrames;
     m_txClipSamples += clipSamples;
     m_txAudioSampleCount += outputSamples;
@@ -1780,7 +1780,7 @@ void TciServer::logTxAudioSummary(const char* reason)
         << " gain=" << m_txGain
         << " blocks=" << m_txAudioBlocks
         << " requested48k=" << m_txChronoRequestedFrames
-        << " input48k=" << m_txInputFrames
+        << " inputFramesSrc=" << m_txInputFrames
         << " output24k=" << m_txOutputFrames
         << " effective48k=" << effectiveRate48k
         << " peak=" << m_txAudioPeak
