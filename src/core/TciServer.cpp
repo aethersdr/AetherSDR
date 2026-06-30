@@ -213,6 +213,38 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 }
             }
         });
+
+        // Panadapter recenter → dds: broadcast. The DAX IQ stream a skimmer
+        // (CW Skimmer / SDC) decodes is centered on the panadapter, not the
+        // slice (FlexLib: DAXIQChannel is a Panadapter property). When a pan
+        // scrolls/recenters, every slice on that pan shares the new IQ center,
+        // so emit dds:<trx>,<panCenterHz>; for each — mirroring the vfo:
+        // broadcast in wireSlice(). Without it a skimmer's spots drift as the
+        // pan moves. (#3910)
+        auto wirePan = [this](PanadapterModel* pan) {
+            if (!pan) return;
+            connect(pan, &PanadapterModel::infoChanged, this,
+                    [this, pan](double centerMhz, double /*bwMhz*/) {
+                if (m_clients.isEmpty() || !m_model) return;
+                const long long hz =
+                    static_cast<long long>(std::round(centerMhz * 1e6));
+                // infoChanged also fires on bandwidth-only (zoom) changes; only
+                // broadcast when the IQ center actually moves, mirroring the
+                // frequency-gated vfo: broadcast in wireSlice(). Skips redundant
+                // identical dds: fan-out to every client during a zoom. (#3910)
+                if (m_lastDdsCenterHz.value(pan->panId(), -1) == hz) return;
+                m_lastDdsCenterHz.insert(pan->panId(), hz);
+                for (auto* s : m_model->slices()) {
+                    if (s && s->panId() == pan->panId()) {
+                        const int trx = TciProtocol::tciTrxForSlice(m_model, s);
+                        broadcast(QStringLiteral("dds:%1,%2;").arg(trx).arg(hz));
+                    }
+                }
+            });
+        };
+        connect(m_model, &RadioModel::panadapterAdded, this, wirePan);
+        for (auto* pan : m_model->panadapters())
+            wirePan(pan);
     }
 
     // Periodic status broadcast (200ms — S-meter, TX sensors, TX state)

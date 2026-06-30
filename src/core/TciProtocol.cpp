@@ -3,6 +3,7 @@
 #include "AppSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/PanadapterModel.h"
 #include "models/TransmitModel.h"
 #include "models/EqualizerModel.h"
 #include "models/SpotModel.h"
@@ -76,6 +77,22 @@ SliceModel* TciProtocol::sliceForTrx(int trx) const
     return slices.isEmpty() ? nullptr : slices.first();
 }
 
+// DDS = the IQ-stream center frequency a skimmer (CW Skimmer / SDC) decodes
+// against. On FlexRadio the DAX IQ stream is a *panadapter* stream centered on
+// the pan, not the slice (FlexLib: DAXIQChannel is a Panadapter property), so
+// the center is the panadapter center, not the slice/VFO frequency. Reporting
+// the slice freq mis-maps every detected signal by (slice − panCenter) Hz.
+// Falls back to the slice frequency if the pan can't be resolved. (#3910)
+long long TciProtocol::ddsCenterHz(const SliceModel* slice) const
+{
+    if (!slice) return 0;
+    if (m_model) {
+        if (auto* pan = m_model->panadapter(slice->panId()))
+            return static_cast<long long>(std::round(pan->centerMhz() * 1e6));
+    }
+    return static_cast<long long>(std::round(slice->frequency() * 1e6));
+}
+
 // ── Init burst ─────────────────────────────────────────────────────────────
 
 QString TciProtocol::generateInitBurst()
@@ -144,6 +161,10 @@ QString TciProtocol::generateInitBurst()
             int trx = tciTrxForSlice(m_model, s);
             long long hz = static_cast<long long>(std::round(s->frequency() * 1e6));
             burst += QStringLiteral("vfo:%1,0,%2;").arg(trx).arg(hz);
+            // dds: = IQ-stream center (panadapter center). Skimmers learn the
+            // IQ center only from this; without it every spot is mis-mapped by
+            // (slice − panCenter) Hz. (#3910)
+            burst += QStringLiteral("dds:%1,%2;").arg(trx).arg(ddsCenterHz(s));
             burst += QStringLiteral("modulation:%1,%2;")
                          .arg(trx).arg(smartsdrToTci(s->mode()));
             burst += QStringLiteral("rx_enable:%1,true;").arg(trx);
@@ -1298,8 +1319,14 @@ QString TciProtocol::cmdIqSampleRate(const QStringList& args, bool isSet)
             model->daxIqModel().setSampleRate(1, rate);
         }, Qt::QueuedConnection);
     }
+    // Echo the achieved rate to BOTH the requester and other clients. The
+    // server is authoritative for the rate (it clamps/rejects above), so a
+    // skimmer (CW Skimmer / SDC) blocks waiting for this confirmation. The
+    // dispatcher sends the return value to the requesting socket and the
+    // pendingNotification to all *other* sockets, so each client gets exactly
+    // one copy — without the return, the requester got no reply at all. (#3910)
     m_pendingNotification = QStringLiteral("iq_samplerate:%1;").arg(rate);
-    return {};
+    return QStringLiteral("iq_samplerate:%1;").arg(rate);
 }
 
 // ── CW keyer (straight key via TCI) ────────────────────────────────────────
@@ -1365,15 +1392,14 @@ QString TciProtocol::cmdCwTerminal(const QStringList& args, bool isSet)
 
 QString TciProtocol::cmdDds(const QStringList& args, bool isSet)
 {
-    // DDS = center frequency of the receiver (panadapter center)
+    // DDS = center frequency of the receiver (panadapter center, not the VFO).
     if (args.isEmpty()) return {};
     int trx = args[0].toInt();
     auto* s = sliceForTrx(trx);
     if (!s) return {};
 
     if (!isSet) {
-        long long hz = static_cast<long long>(std::round(s->frequency() * 1e6));
-        return QStringLiteral("dds:%1,%2;").arg(trx).arg(hz);
+        return QStringLiteral("dds:%1,%2;").arg(trx).arg(ddsCenterHz(s));
     }
 
     if (args.size() < 2) return {};

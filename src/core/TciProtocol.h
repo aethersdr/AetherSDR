@@ -114,6 +114,10 @@ private:
 
     // Helpers
     SliceModel* sliceForTrx(int trx) const;
+    // IQ center (DDS) for a slice = its panadapter center in Hz. DAX IQ is a
+    // panadapter stream centered on the pan, not the slice, so a skimmer
+    // learns the IQ center only from dds:<trx>,<panCenterHz>; (#3910).
+    long long ddsCenterHz(const SliceModel* slice) const;
 
 public:
     // Mode conversion (public for TciServer broadcast use)
