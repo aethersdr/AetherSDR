@@ -27,7 +27,12 @@ option(ENABLE_RADE "Build with RADE digital voice support (uses vendored Opus sn
 option(AETHER_GPU_SPECTRUM "Enable QRhi GPU spectrum rendering" ON)
 option(ENABLE_SPECBLEACH "Enable NR4 spectral bleach noise reduction" ON)
 option(ENABLE_DFNR "Enable DFNR DeepFilterNet3 noise reduction" ON)
-option(ENABLE_NVIDIA_AFX "Enable optional NVIDIA Maxine AFX GPU denoiser (runtime-loaded, download-on-demand; NVIDIA RTX/GeForce only)" OFF)
+# ON by default (like the other NR engines) so the pre-compiled release images
+# all ship BNR — the runtime is download-on-demand, so this only compiles a small
+# dlopen wrapper (no NVIDIA SDK at build time). Compiled on Linux/Windows only
+# (see the platform gate below; macOS has no AFX runtime and uses DFNR). Pass
+# -DENABLE_NVIDIA_AFX=OFF to opt out.
+option(ENABLE_NVIDIA_AFX "Enable the NVIDIA Maxine AFX GPU denoiser (BNR; runtime-loaded, download-on-demand; NVIDIA RTX/GeForce, Linux/Windows)" ON)
 option(ENABLE_MQTT "Enable MQTT client support" ON)
 option(MQTT_TLS "Enable MQTT TLS via OpenSSL (disable for AppImage)" ON)
 option(LOWER_CASE_BINARY_NAME "Make the output binary lower case. Only affects Linux" OFF)
