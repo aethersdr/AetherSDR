@@ -39,8 +39,7 @@ namespace {
 #if defined(_WIN32)
 constexpr char kCoreRelPath[] = "bin/NVAudioEffects.dll";
 constexpr char kPlatformTag[] = "windows-x86_64";
-// Pinned sha256 of afx-bits-2.1.0-windows-x86_64-<arch>.zip — filled in when the
-// Windows pack asset is published.
+// Pinned sha256 of the published afx-bits-2.1.0-windows-x86_64 zip.
 constexpr char kWinTarballSha[] = "55e0a35bed70ade2e3b80d463c660da6b749223a998843f176af7da2d689a899";
 // pypi.nvidia.com's tensorrt-cu12-libs wheel is 1.6 GB because it bundles the
 // builder + plugins + ONNX parser. Maxine AFX uses a pre-baked .trtpkg engine
