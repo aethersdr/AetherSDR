@@ -73,6 +73,26 @@ bool textInputCaptured()
         || qobject_cast<QComboBox*>(w);
 }
 
+// Like textInputCaptured(), but for TX *keying* (Space PTT / CW keys),
+// which must fire regardless of a focused **non-editable** combo —
+// matching the app-level Space filter's stated intent that "buttons,
+// combos, etc. won't steal Space".  A non-editable QComboBox keeps
+// keyboard focus after its popup closes (#3908) but consumes no typed
+// text, so it must not swallow a keying press.  It is still treated as
+// capturing by textInputCaptured() above, so arrow shortcuts stay
+// suppressed and Up/Down/Left/Right navigate the list as usual.  An
+// editable QComboBox exposes its internal QLineEdit as the focus widget,
+// so it is caught by the QLineEdit branch and still captures text.
+bool textEntryCaptured()
+{
+    auto* w = QApplication::focusWidget();
+    if (!w) return false;
+    if (auto* combo = qobject_cast<QComboBox*>(w))
+        return combo->isEditable();
+    return qobject_cast<QLineEdit*>(w) || qobject_cast<QTextEdit*>(w)
+        || qobject_cast<QPlainTextEdit*>(w) || qobject_cast<QSpinBox*>(w);
+}
+
 bool shortcutInputCaptured()
 {
     if (s_sliderShortcutLeaseActive)
@@ -156,10 +176,10 @@ bool MainWindow::handleCwMomentaryShortcut(QKeyEvent* keyEvent, QEvent::Type eve
         cwAction == CwAction::LeftPaddle ? m_cwLeftPaddleActive :
                                            m_cwRightPaddleActive;
 
-    if (press && (!m_keyboardShortcutsEnabled || textInputCaptured()))
+    if (press && (!m_keyboardShortcutsEnabled || textEntryCaptured()))
         return false;
     if (!press && !currentlyActive)
-        return m_keyboardShortcutsEnabled && !textInputCaptured();
+        return m_keyboardShortcutsEnabled && !textEntryCaptured();
 
     const quint64 sourceMs = cwTraceNowMs();
     const quint64 traceId = nextCwTraceId();
@@ -214,7 +234,10 @@ bool MainWindow::handlePttHoldShortcut(QKeyEvent* keyEvent, QEvent::Type eventTy
     // Mirror the prior Space behavior: only key while connected and not typing
     // into a text field. When those gates fail, do not consume the key — let it
     // fall through (matching the old `&& m_radioModel.isConnected()` guard).
-    if (textInputCaptured() || !m_radioModel.isConnected())
+    // Use textEntryCaptured() (not textInputCaptured()) so a focused
+    // non-editable combo — which keeps focus after its popup closes (#3908) —
+    // doesn't swallow the first Space/PTT press.
+    if (textEntryCaptured() || !m_radioModel.isConnected())
         return false;
 
     if (m_keyboardShortcutsEnabled) {

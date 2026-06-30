@@ -29,7 +29,15 @@ extern bool s_keyboardShortcutsEnabled;
 extern bool s_sliderShortcutLeaseActive;
 
 // True when a text-input widget has focus (line edit, spin box, …).
+// Includes non-editable combos so arrow shortcuts stay suppressed while a
+// combo is focused (the arrows navigate its list).
 bool textInputCaptured();
+
+// True when a text-*entry* widget has focus (line edit, spin box, editable
+// combo). Unlike textInputCaptured(), a focused non-editable combo does NOT
+// count — used to gate TX keying (Space PTT / CW keys) so a combo that keeps
+// focus after its popup closes can't swallow the keypress (#3908).
+bool textEntryCaptured();
 
 // textInputCaptured() plus the slider lease.
 bool shortcutInputCaptured();
