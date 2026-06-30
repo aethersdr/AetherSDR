@@ -2796,7 +2796,9 @@ void SpectrumWidget::setDssGain(int pct) {
         auto& s = AppSettings::instance();
         s.setValue(settingsKey("Display3DGain"), QString::number(pct));
         s.save();
+#ifdef AETHER_GPU_SPECTRUM
         m_dssLutToken = ~0ull;  // force the GPU palette LUT to re-bake next frame
+#endif
         m_dss.invalidate();     // CPU fallback surface re-colours too
     }
     update();

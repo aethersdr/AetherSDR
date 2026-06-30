@@ -1027,6 +1027,12 @@ private:
     // own colour) up off the baseline so you see floor -> peak, not just crests.
     float m_dssFloorOffsetDb{-6.0f};
     int   m_dssGain{70};   // 3DSS colour floor 0-100 (gamma of palette lookup)
+    // Consumed by BOTH the GPU mesh and the CPU fallback surface, so these stay
+    // outside the AETHER_GPU_SPECTRUM block below — the CPU paint path needs them
+    // even when GPU spectrum rendering is disabled (older Qt / -DAETHER_GPU_SPECTRUM=OFF).
+    float m_dssZCurve{0.70f};               // <1 expands the floor band (more floor)
+    static constexpr int kDssMaxW = 1024;   // 3DSS surface texture/image caps
+    static constexpr int kDssMaxH = 512;
 
     float m_autoBlackThresh{145.0f}; // client-side auto-black: tracked noise floor
     // Radio's per-tile auto-black level (raw uint16). Preferred over the client
@@ -1428,12 +1434,6 @@ private:
     int  m_dssMeshHeadUploaded{-1};          // ring head last uploaded to heightTex
     quint64 m_dssLutToken{~0ull};            // token of the palette LUT last baked
     QByteArray m_dssRowScratch;              // reused qfloat16 row buffer (mesh upload)
-    float m_dssZCurve{0.70f};           // <1 expands the floor band (more floor)
-    // Cap for the 3DSS surface texture/image (GPU mesh fallback + CPU paint).
-    // The surface is intrinsically low-res, so a smaller texture is visually
-    // free via the linear sampler and keeps the per-frame rebuild/upload cheap.
-    static constexpr int kDssMaxW = 1024;
-    static constexpr int kDssMaxH = 512;
 
     void initDssMeshPipeline();
     void uploadDssPaletteLut(QRhiResourceUpdateBatch* batch, float floorDbm, float rangeDb);
