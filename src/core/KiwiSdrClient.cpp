@@ -3203,6 +3203,11 @@ bool KiwiSdrClient::retryWithSecureWebSocket(bool transportEstablished)
     m_monitorMode = false;
     m_monitorQueueRequested = false;
     m_campAccepted = false;
+    // The wss retry does NOT re-run the HTTP status preflight, so clear the
+    // "preflight reported full" flag too — otherwise a stale full result from
+    // the ws attempt would make a wss-retry timeout emit a misleading capacity
+    // message the secure attempt never actually verified.
+    m_preflightReportedFull = false;
     m_soundAudioReady = false;
     m_soundAudioRateAcked = false;
     m_soundSampleRateCommandsSent = false;
