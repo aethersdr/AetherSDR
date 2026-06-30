@@ -4,10 +4,12 @@
 #include "Resampler.h"
 
 #include <QCoreApplication>
-#include <QDebug>
 #include <QDir>
+#include <QLoggingCategory>
 #include <QStandardPaths>
 #include <QStringList>
+
+Q_LOGGING_CATEGORY(lcNvAfx, "aether.nvafx")
 
 #if defined(_WIN32)
 #  include <windows.h>
@@ -113,7 +115,10 @@ static QString resolvePackDir(const QString& explicitDir)
     const QByteArray env = qgetenv("AETHER_NVAFX_DIR");
     if (!env.isEmpty())
         return QString::fromLocal8Bit(env);
-    // Default cache location the downloader will populate.
+    // Default cache location the downloader populates. NOTE: this must stay in
+    // sync with NvidiaAfxPack::cacheRoot() (kept separate so the hardware test,
+    // which links only this filter, doesn't drag in the whole pack + its
+    // Network/Concurrent deps).
     QString data = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
     if (data.isEmpty())
         data = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
@@ -147,7 +152,7 @@ NvidiaAfxFilter::NvidiaAfxFilter(const QString& packDir)
     const QString dir = resolvePackDir(packDir);
     if (!QDir(dir).exists()) {
         m_lastError = QStringLiteral("AFX pack directory not found: %1").arg(dir);
-        qWarning() << "NvidiaAfxFilter:" << m_lastError;
+        qCWarning(lcNvAfx) << "NvidiaAfxFilter:" << m_lastError;
         return;
     }
     if (!loadRuntime(dir))
@@ -155,7 +160,7 @@ NvidiaAfxFilter::NvidiaAfxFilter(const QString& packDir)
     if (!createDenoiser(dir))
         return;
     m_ready = true;
-    qDebug() << "NvidiaAfxFilter: ready (frame =" << m_afxFrame << "@ 48 kHz)";
+    qCDebug(lcNvAfx) << "NvidiaAfxFilter: ready (frame =" << m_afxFrame << "@ 48 kHz)";
 }
 
 NvidiaAfxFilter::~NvidiaAfxFilter()
@@ -172,7 +177,7 @@ void NvidiaAfxFilter::teardown()
     // Close library handles in reverse order. (CUDA libs are typically retained
     // by the driver; closing is best-effort cleanup.)
     for (auto it = m_dlHandles.rbegin(); it != m_dlHandles.rend(); ++it) {
-        if (*it) afxCloseLibrary(*it);
+        if (*it) { afxCloseLibrary(*it); }
     }
     m_dlHandles.clear();
     m_ready = false;
@@ -288,8 +293,8 @@ bool NvidiaAfxFilter::createDenoiser(const QString& packDir)
 
 void NvidiaAfxFilter::setIntensity(float ratio)
 {
-    if (ratio < 0.0f) ratio = 0.0f;
-    if (ratio > 1.0f) ratio = 1.0f;
+    if (ratio < 0.0f) { ratio = 0.0f; }
+    if (ratio > 1.0f) { ratio = 1.0f; }
     m_intensity.store(ratio);
     m_paramsDirty.store(true);
 }
@@ -320,7 +325,11 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcm24kStereo)
     const int frames = total / m_afxFrame;
     if (frames > 0) {
         auto* accum = reinterpret_cast<float*>(m_inAccum.data());
-        std::vector<float> out(static_cast<size_t>(frames) * m_afxFrame);
+        const size_t outN = static_cast<size_t>(frames) * m_afxFrame;
+        if (m_runScratch.size() < outN) {
+            m_runScratch.resize(outN);   // grows to steady state, then alloc-free
+        }
+        float* out = m_runScratch.data();
         for (int f = 0; f < frames; ++f) {
             const float* in[1]  = { &accum[f * m_afxFrame] };
             float*       op[1]  = { &out[f * m_afxFrame] };
@@ -333,24 +342,45 @@ QByteArray NvidiaAfxFilter::process(const QByteArray& pcm24kStereo)
         const int consumed = frames * m_afxFrame;
         const int leftover = total - consumed;
         if (leftover > 0) {
-            QByteArray rem(reinterpret_cast<const char*>(&accum[consumed]),
-                           leftover * sizeof(float));
-            m_inAccum = rem;
+            std::memmove(m_inAccum.data(),
+                         reinterpret_cast<const char*>(&accum[consumed]),
+                         leftover * sizeof(float));
+            m_inAccum.resize(leftover * sizeof(float));
         } else {
             m_inAccum.clear();
         }
         // 3. 48 kHz mono float32 → 24 kHz stereo float32
-        m_outAccum.append(m_down->processMonoToStereo(out.data(), consumed));
+        m_outAccum.append(m_down->processMonoToStereo(out, consumed));
     }
 
-    // 4. Return exactly the input byte count
+    // 4. Return exactly the input byte count. Use a read cursor instead of an
+    //    O(n) front-erase every block; compact only once the consumed prefix
+    //    grows past the unread tail.
     const int needed = pcm24kStereo.size();
-    if (m_outAccum.size() >= needed) {
-        QByteArray result = m_outAccum.left(needed);
-        m_outAccum.remove(0, needed);
+    if (m_outAccum.size() - m_outReadPos >= needed) {
+        QByteArray result(m_outAccum.constData() + m_outReadPos, needed);
+        m_outReadPos += needed;
+        if (m_outReadPos >= m_outAccum.size()) {
+            m_outAccum.clear();
+            m_outReadPos = 0;
+        } else if (m_outReadPos > m_outAccum.size() - m_outReadPos) {
+            m_outAccum.remove(0, m_outReadPos);
+            m_outReadPos = 0;
+        }
         return result;
     }
     return QByteArray(needed, '\0');  // priming silence at startup
+}
+
+void NvidiaAfxFilter::reset()
+{
+    // Flush jitter accumulators and rebuild the resamplers (Resampler has no
+    // reset) so no stale or pre-discontinuity audio carries into the next block.
+    m_inAccum.clear();
+    m_outAccum.clear();
+    m_outReadPos = 0;
+    m_up   = std::make_unique<Resampler>(24000, 48000);
+    m_down = std::make_unique<Resampler>(48000, 24000);
 }
 
 } // namespace AetherSDR

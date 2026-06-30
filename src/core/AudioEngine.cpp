@@ -2952,6 +2952,11 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
         m_mnr->reset();
     }
 #endif
+#ifdef HAVE_NVIDIA_AFX
+    if (m_nvAfxEnabled && m_nvAfx) {
+        m_nvAfx->reset();
+    }
+#endif
 }
 
 void AudioEngine::processRxAudioData(const QByteArray& pcm, bool emitTncTap,

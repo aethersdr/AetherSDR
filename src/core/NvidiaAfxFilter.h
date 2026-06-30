@@ -44,6 +44,11 @@ public:
     // (same format, same byte count). No-op passthrough until the engine is ready.
     QByteArray process(const QByteArray& pcm24kStereo);
 
+    // Flush all carried state — the jitter accumulators and the resamplers — so
+    // the next process() starts clean. Call on any audio discontinuity (stream
+    // restart, RX source switch, TX→RX) to avoid replaying stale/pre-gap audio.
+    void reset();
+
     // True once the effect is created, model loaded, and the engine is ready.
     bool isValid() const { return m_ready; }
 
@@ -72,6 +77,8 @@ private:
     std::unique_ptr<Resampler> m_down;          // 48 kHz mono → 24 kHz stereo
     QByteArray m_inAccum;                        // 48 kHz mono float input
     QByteArray m_outAccum;                       // 24 kHz stereo float output
+    int        m_outReadPos{0};                 // read cursor into m_outAccum
+    std::vector<float> m_runScratch;            // reused NvAFX_Run output buffer
 
     std::atomic<float> m_intensity{1.0f};
     std::atomic<bool>  m_paramsDirty{false};
