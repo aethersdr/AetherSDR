@@ -49,16 +49,22 @@ class AudioEngine;
 //
 //   invoke <target> <action> [v]   -> drive a control deterministically:
 //                                     click / toggle / setChecked / setValue /
-//                                     setText / setCurrentText / setCurrentIndex.
-//                                     SAFETY: refuses any control marked as
-//                                     transmit-keying (markTxKeying() / the
-//                                     "aetherTxKeying" property — MOX/PTT, TUNE,
-//                                     ATU, CWX send, packet/APRS send) unless
-//                                     AETHER_AUTOMATION_ALLOW_TX is set, so the
-//                                     bridge can never key a live radio by
-//                                     accident. A button-scoped name heuristic
-//                                     is a logged fallback; setpoint
+//                                     setText / setCurrentText / setCurrentIndex /
+//                                     selectRow. SAFETY: refuses any control
+//                                     marked as transmit-keying (markTxKeying() /
+//                                     the "aetherTxKeying" property — MOX/PTT,
+//                                     TUNE, ATU, CWX send, packet/APRS send)
+//                                     unless AETHER_AUTOMATION_ALLOW_TX is set, so
+//                                     the bridge can never key a live radio by
+//                                     accident. A button-scoped name heuristic is
+//                                     a logged fallback, kept narrow (mox/ptt/
+//                                     transmit/cwx) so RX-only buttons like "Tune
+//                                     Now" aren't false-blocked (#3918); setpoint
 //                                     sliders/combos are never blocked.
+//   invoke <view> selectRow <n>    -> select row n of an item view (QTableWidget /
+//                                     QTreeWidget / QListWidget) so the dialog's
+//                                     row-scoped buttons (Tune/Edit/Remove/Disable)
+//                                     become drivable; echoes selectedRow[Text].
 //   get <model> [selector] [prop]  -> live JSON snapshot of a model:
 //                                     audio | dsp | radio | transmit |
 //                                     slice <id|active|tx> | slices |
@@ -109,6 +115,11 @@ class AudioEngine;
 //   resize <w> <h> [target]        -> resize a top-level window (default full
 //                                     size) so the panadapter x_pixels reaches a
 //                                     realistic value for headless render tests.
+//   window <state> [target]        -> drive a window's state: maximize | restore
+//                                     | minimize | fullscreen. resize only set
+//                                     explicit geometry, so an un-maximize was
+//                                     unprovable; dumpTree now carries
+//                                     `windowState` to assert it (#3918).
 //   menu list | menu open <name>   -> enumerate the menu bar / pop a menu for a
 //                                     follow-up grab/dumpTree.
 //   whoami                         -> {pid, socket, label, station} — identify
@@ -317,6 +328,14 @@ private:
     // Resize a top-level window so the panadapter x_pixels (== SpectrumWidget
     // width) propagates to a realistic value for headless render-size fidelity.
     QJsonObject doResize(const QString& value, const QString& target) const;
+    // window <maximize|restore|minimize|fullscreen> [target]: drive a top-level
+    // window's state (resize only ever set explicit geometry, so an un-maximize
+    // was unverifiable). dumpTree now also carries `windowState`. (#3918)
+    QJsonObject doWindow(const QString& action, const QString& target) const;
+    // Resolve the top-level window a window-scoped verb (resize/window) acts on:
+    // the target's window() if given, else the QMainWindow (or first visible real
+    // top-level). Shared by doResize and doWindow.
+    static QWidget* topLevelWindowForTarget(const QString& target);
     // Menu-bar discovery/popup (#3646 fidelity): `menu list` enumerates the
     // menu-bar tree; `menu open <name>` pops a top-level menu for grab/dumpTree.
     QJsonObject doMenu(const QString& action, const QString& arg) const;

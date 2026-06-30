@@ -44,6 +44,8 @@
 // Best-effort value extraction for common control types.
 #include <QAbstractButton>
 #include <QAbstractSlider>
+#include <QAbstractItemView>   // invoke selectRow: QTableWidget/QTreeWidget/QListWidget row select
+#include <QItemSelectionModel>
 #include <QComboBox>
 #include <QLineEdit>
 #include <QLabel>
@@ -266,6 +268,19 @@ QJsonObject describeWidget(const QWidget* w)
     geo[QStringLiteral("w")] = w->width();
     geo[QStringLiteral("h")] = w->height();
     o[QStringLiteral("geometry")] = geo;
+
+    // Window state for top-level windows — lets a driver assert a maximize /
+    // restore / minimize without screenshotting, and prove the `window` verb
+    // (resize only ever set explicit geometry, so an un-maximize was previously
+    // unverifiable). (#3918)
+    if (w->isWindow()) {
+        const Qt::WindowStates st = w->windowState();
+        const char* ws = "normal";
+        if (st & Qt::WindowMinimized)       ws = "minimized";
+        else if (st & Qt::WindowFullScreen) ws = "fullscreen";
+        else if (st & Qt::WindowMaximized)  ws = "maximized";
+        o[QStringLiteral("windowState")] = QLatin1String(ws);
+    }
 
     const QString val = widgetValue(w);
     if (!val.isNull())
@@ -838,10 +853,18 @@ bool isTransmitControl(const QWidget* w)
     if (!btn)
         return false;  // sliders / combos / spinboxes can't trigger TX
 
+    // Keep the fallback deny-list narrow and aligned with isTransmitAction():
+    // only words that unambiguously mean "keys TX". "tune"/"atu"/"vox" were
+    // dropped because they false-positive on RX-only controls — the "Tune Now"
+    // button (net/spot retune) and "Tune to <spot>" only move the VFO, and a VOX
+    // toggle arms TX rather than keying it. The genuine keying TUNE/ATU buttons
+    // (TxApplet, AtuPreTuneDialog) all carry the authoritative markTxKeying()
+    // marker, which the positive check above already honors, so removing them
+    // here loses no real protection — it just stops blocking RX-only buttons
+    // that happen to contain "tune". (#3918 — "Tune Now" false-positive)
     static const QStringList kDeny = {
-        QStringLiteral("mox"), QStringLiteral("ptt"), QStringLiteral("tune"),
-        QStringLiteral("transmit"), QStringLiteral("vox"), QStringLiteral("cwx"),
-        QStringLiteral("atu"),
+        QStringLiteral("mox"), QStringLiteral("ptt"),
+        QStringLiteral("transmit"), QStringLiteral("cwx"),
     };
     const QStringList hay{w->objectName(), w->accessibleName(), btn->text()};
     if (matchesTxDenyToken(hay, kDeny)) {
@@ -1772,6 +1795,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         } else if (cmd == QLatin1String("resize")) {
             value = tok(1) + QLatin1Char(' ') + tok(2);  // "resize 1920 1080 [target]"
             target = tok(3);
+        } else if (cmd == QLatin1String("window")) {
+            action = tok(1);  // maximize | restore | minimize | fullscreen
+            target = tok(2);  // optional window target
         } else if (cmd == QLatin1String("menu")) {
             action = tok(1);  // list | open
             QStringList rest;
@@ -1926,6 +1952,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("resize"))
         return doResize(value, target);
+    if (cmd == QLatin1String("window"))
+        return doWindow(action, target);
     if (cmd == QLatin1String("menu"))
         return doMenu(action.isEmpty() ? QStringLiteral("list") : action, value);
     if (cmd == QLatin1String("whoami"))
@@ -2318,6 +2346,8 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
 
     bool done = false;
     bool deferred = false;
+    QString selectedRowText;   // selectRow: first-column text of the chosen row
+    int     selectedRow = -1;
     if (action == QLatin1String("click") || action == QLatin1String("toggle")) {
         // CRASH-SAFETY: a button click can open a popup menu (a QToolButton with
         // a dropdown) or a modal dialog, both of which spin a NESTED event loop.
@@ -2399,6 +2429,38 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentText(value); done = true; }
     } else if (action == QLatin1String("setCurrentIndex")) {
         if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentIndex(value.toInt()); done = true; }
+    } else if (action == QLatin1String("selectRow")) {
+        // Select a whole row in an item view (QTableWidget / QTreeWidget /
+        // QListWidget / any QAbstractItemView) so the dialog's row-scoped
+        // buttons (Tune / Edit / Remove / Disable) — which read the view's
+        // current row or selection — become drivable. invoke click on those
+        // buttons was useless without first selecting a row. (#3918)
+        if (auto* view = qobject_cast<QAbstractItemView*>(w)) {
+            QAbstractItemModel* m = view->model();
+            if (!m) return err(QStringLiteral("view has no model"));
+            bool okRow = false;
+            const int row = value.toInt(&okRow);
+            if (!okRow) return err(QStringLiteral("selectRow needs an integer row index"));
+            const int rows = m->rowCount();
+            if (row < 0 || row >= rows)
+                return err(QStringLiteral("row %1 out of range [0,%2)")
+                               .arg(row).arg(rows));
+            const QModelIndex first = m->index(row, 0);
+            const int lastCol = m->columnCount() > 0 ? m->columnCount() - 1 : 0;
+            const QModelIndex last = m->index(row, lastCol);
+            // Set both the current index and a full-row selection so handlers
+            // that read currentRow()/currentItem() AND those that read
+            // selectedItems()/selectionModel() all see the choice.
+            if (QItemSelectionModel* sm = view->selectionModel())
+                sm->select(QItemSelection(first, last),
+                           QItemSelectionModel::ClearAndSelect
+                               | QItemSelectionModel::Rows);
+            view->setCurrentIndex(first);
+            view->scrollTo(first);
+            selectedRow = row;
+            selectedRowText = m->data(first, Qt::DisplayRole).toString();
+            done = true;
+        }
     } else {
         return err(QStringLiteral("unknown action: ") + action);
     }
@@ -2421,6 +2483,12 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         // dialog), so any post-state must be re-read (get / dumpTree) rather than
         // trusted from this synchronous reply.
         r[QStringLiteral("deferred")] = true;
+    } else if (selectedRow >= 0) {
+        // selectRow: echo the chosen row + its first-column text so the driver
+        // can confirm the right entry is selected before firing a row action.
+        r[QStringLiteral("selectedRow")] = selectedRow;
+        if (!selectedRowText.isEmpty())
+            r[QStringLiteral("selectedRowText")] = selectedRowText;
     } else {
         const QString nv = widgetValue(w);   // round-trip confirmation
         if (!nv.isNull())
@@ -3286,6 +3354,74 @@ QJsonObject AutomationServer::doStation(const QString& name)
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
 }
 
+// Resolve the top-level window a window-scoped verb acts on: the target's
+// window() when given, else the QMainWindow (or first visible real top-level).
+// Skips scroll-area viewports and popup QMenus so the main window wins. Shared by
+// doResize and doWindow.
+QWidget* AutomationServer::topLevelWindowForTarget(const QString& target)
+{
+    if (!target.isEmpty()) {
+        QWidget* t = resolveWidget(target);
+        return t ? t->window() : nullptr;
+    }
+    const QWidgetList tops = QApplication::topLevelWidgets();
+    for (QWidget* tlw : tops)                 // prefer the QMainWindow
+        if (tlw->inherits("QMainWindow")) return tlw;
+    for (QWidget* tlw : tops) {               // else first visible real window
+        if (tlw->objectName() == QLatin1String("qt_scrollarea_viewport")) continue;
+        if (qobject_cast<QMenu*>(tlw)) continue;
+        if (tlw->isWindow() && tlw->isVisible()) return tlw;
+    }
+    return nullptr;
+}
+
+// ── Window state (#3918) ─────────────────────────────────────────────────────
+// Drive a top-level window's state so an agent can maximize / restore / minimize
+// / fullscreen and prove it via dumpTree's `windowState`. resize only set
+// explicit geometry, so an un-maximize (restore) was previously unverifiable.
+// State changes don't spin a nested event loop, so they're safe to run
+// synchronously here (unlike click/menu, which defer).
+QJsonObject AutomationServer::doWindow(const QString& action, const QString& target) const
+{
+    const QString a = action.trimmed().toLower();
+    if (a.isEmpty())
+        return err(QStringLiteral("window needs an action "
+                                  "(maximize|restore|minimize|fullscreen)"));
+    if (!target.isEmpty() && !resolveWidget(target))
+        return err(QStringLiteral("window not found for target: ") + target);
+    QWidget* win = topLevelWindowForTarget(target);
+    if (!win)
+        return err(QStringLiteral("no top-level window to drive"));
+
+    if (a == QLatin1String("maximize") || a == QLatin1String("max")) {
+        win->showMaximized();
+    } else if (a == QLatin1String("restore") || a == QLatin1String("normal")
+               || a == QLatin1String("unmaximize")) {
+        win->showNormal();
+    } else if (a == QLatin1String("minimize") || a == QLatin1String("min")) {
+        win->showMinimized();
+    } else if (a == QLatin1String("fullscreen") || a == QLatin1String("full")) {
+        win->showFullScreen();
+    } else {
+        return err(QStringLiteral("unknown window action: ") + action
+                   + QStringLiteral(" (maximize|restore|minimize|fullscreen)"));
+    }
+
+    const Qt::WindowStates st = win->windowState();
+    const char* ws = "normal";
+    if (st & Qt::WindowMinimized)       ws = "minimized";
+    else if (st & Qt::WindowFullScreen) ws = "fullscreen";
+    else if (st & Qt::WindowMaximized)  ws = "maximized";
+    qCInfo(lcAutomation).noquote() << "window" << a << "->" << ws;
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("action"), a},
+        {QStringLiteral("windowState"), QLatin1String(ws)},
+        {QStringLiteral("geometry"), QJsonObject{{QStringLiteral("w"), win->width()},
+                                                 {QStringLiteral("h"), win->height()}}},
+    };
+}
+
 // ── Headless render size (#3646 fidelity — item 8) ──────────────────────────
 // Resize a top-level window so the panadapter x_pixels (== SpectrumWidget
 // width) propagates to a realistic value — under QT_QPA_PLATFORM=offscreen the
@@ -3311,27 +3447,9 @@ QJsonObject AutomationServer::doResize(const QString& value, const QString& targ
     if (w <= 0 || h <= 0)
         return err(QStringLiteral("resize requires <width> <height> (e.g. 'resize 1920 1080', or 'full')"));
 
-    QWidget* win = nullptr;
-    if (!target.isEmpty()) {
-        QWidget* t = resolveWidget(target);
-        win = t ? t->window() : nullptr;
-        if (!win)
-            return err(QStringLiteral("window not found for target: ") + target);
-    } else {
-        const QWidgetList tops = QApplication::topLevelWidgets();
-        for (QWidget* tlw : tops) {           // prefer the QMainWindow
-            if (tlw->inherits("QMainWindow")) { win = tlw; break; }
-        }
-        if (!win) {                            // else first visible real window
-            for (QWidget* tlw : tops) {
-                if (tlw->objectName() == QLatin1String("qt_scrollarea_viewport"))
-                    continue;
-                if (qobject_cast<QMenu*>(tlw))
-                    continue;
-                if (tlw->isWindow() && tlw->isVisible()) { win = tlw; break; }
-            }
-        }
-    }
+    if (!target.isEmpty() && !resolveWidget(target))
+        return err(QStringLiteral("window not found for target: ") + target);
+    QWidget* win = topLevelWindowForTarget(target);
     if (!win)
         return err(QStringLiteral("no top-level window to resize"));
 
