@@ -6,6 +6,9 @@
 #include <QString>
 #include <QList>
 #include <QElapsedTimer>
+#include <QCryptographicHash>
+
+class QFile;
 
 class QNetworkAccessManager;
 class QNetworkReply;
@@ -110,7 +113,10 @@ private:
     void resolveWheelUrl(const Component& c);             // PyPI JSON -> url+sha
     void downloadTo(const QUrl& url, const QString& sha256,
                     const QString& dest, const QString& label);
-    void extractInto(const QString& archive, Kind kind); // unzip *.so* / tar zst
+    // Pure worker run off the GUI thread (QtConcurrent) so decompression doesn't
+    // freeze the UI. Returns an empty string on success, else an error message.
+    static QString runExtract(const QString& archive, Kind kind,
+                              const QString& staging, const QString& cacheRoot);
     void assembleAndCommit();                             // symlink + atomic swap
     void writeReceipt(const QString& packDir);           // components.json from m_queue
     void writeStagingProgress();                          // .staging/.progress.json
@@ -129,6 +135,8 @@ private:
     QString m_arch;
     QString m_staging;       // staging pack root being assembled
     QString m_tmpFile;       // current download temp
+    QFile*  m_dlFile{nullptr};  // open handle for the in-flight download (closed on cancel)
+    QCryptographicHash m_dlHash{QCryptographicHash::Sha256};  // streamed as bytes arrive
     QElapsedTimer m_dlTimer; // current component download timer (speed/ETA)
     QList<ComponentInfo> m_done;  // components completed into staging (resumable)
     bool m_busy{false};

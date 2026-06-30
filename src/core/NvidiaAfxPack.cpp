@@ -7,7 +7,9 @@
 #include <QDirIterator>
 #include <QElapsedTimer>
 #include <QFile>
+#include <QFutureWatcher>
 #include <QHash>
+#include <QtConcurrent>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -65,29 +67,77 @@ QString humanRate(double bps)
 // "8s" / "1m 05s" / "1h 02m" from a seconds count.
 QString humanEta(qint64 secs)
 {
-    if (secs < 60)   return QStringLiteral("%1s").arg(secs);
-    if (secs < 3600) return QStringLiteral("%1m %2s").arg(secs / 60).arg(secs % 60, 2, 10, QLatin1Char('0'));
+    if (secs < 60)   { return QStringLiteral("%1s").arg(secs); }
+    if (secs < 3600) { return QStringLiteral("%1m %2s").arg(secs / 60).arg(secs % 60, 2, 10, QLatin1Char('0')); }
     return QStringLiteral("%1h %2m").arg(secs / 3600).arg((secs % 3600) / 60, 2, 10, QLatin1Char('0'));
+}
+
+// Shared component-receipt JSON I/O (used by both the staging progress file and
+// the installed components.json — same schema, one implementation).
+QList<NvidiaAfxPack::ComponentInfo> readComponentJson(const QString& path)
+{
+    QList<NvidiaAfxPack::ComponentInfo> out;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) { return out; }
+    const QJsonArray arr = QJsonDocument::fromJson(f.readAll()).array();
+    for (const QJsonValue v : arr) {
+        const QJsonObject o = v.toObject();
+        out.append({ o.value(QStringLiteral("name")).toString(),
+                     o.value(QStringLiteral("version")).toString(),
+                     o.value(QStringLiteral("sha256")).toString(),
+                     static_cast<qint64>(o.value(QStringLiteral("bytes")).toDouble()),
+                     o.value(QStringLiteral("key")).toString() });
+    }
+    return out;
+}
+
+void writeComponentJson(const QString& path,
+                        const QList<NvidiaAfxPack::ComponentInfo>& comps,
+                        QJsonDocument::JsonFormat fmt)
+{
+    QJsonArray arr;
+    for (const NvidiaAfxPack::ComponentInfo& c : comps) {
+        QJsonObject o;
+        o.insert(QStringLiteral("key"), c.key);
+        o.insert(QStringLiteral("name"), c.name);
+        o.insert(QStringLiteral("version"), c.version);
+        o.insert(QStringLiteral("sha256"), c.sha256);
+        o.insert(QStringLiteral("bytes"), static_cast<double>(c.bytes));
+        arr.append(o);
+    }
+    QFile f(path);
+    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        f.write(QJsonDocument(arr).toJson(fmt));
+    }
 }
 } // namespace
 
 // ─── Static helpers ──────────────────────────────────────────────────────────
 QString NvidiaAfxPack::detectArch()
 {
+    // The GPU's compute capability can't change during a session — query
+    // nvidia-smi once and cache it (the call blocks up to 4s on a subprocess).
+    static QString cached;
+    static bool resolved = false;
+    if (resolved)
+        return cached;
+    resolved = true;
     QProcess p;
     p.start(QStringLiteral("nvidia-smi"),
             {QStringLiteral("--query-gpu=compute_cap"), QStringLiteral("--format=csv,noheader")});
     if (!p.waitForFinished(4000) || p.exitStatus() != QProcess::NormalExit)
-        return {};
+        return cached;
     const QString out = QString::fromLocal8Bit(p.readAllStandardOutput());
     for (const QString& line : out.split('\n', Qt::SkipEmptyParts)) {
         const QString digits = line.trimmed().remove('.');   // "8.9" -> "89"
         bool ok = false;
         const int v = digits.toInt(&ok);
-        if (ok && v >= 75)                                    // Turing+
-            return QStringLiteral("sm_%1").arg(digits);
+        if (ok && v >= 75) {                                  // Turing+
+            cached = QStringLiteral("sm_%1").arg(digits);
+            break;
+        }
     }
-    return {};
+    return cached;
 }
 
 QString NvidiaAfxPack::cacheRoot()
@@ -112,9 +162,9 @@ bool NvidiaAfxPack::isInstalled() { return !installedPackDir().isEmpty(); }
 
 QString NvidiaAfxPack::statusText() const
 {
-    if (m_busy) return QStringLiteral("Working…");
+    if (m_busy) { return QStringLiteral("Working…"); }
     const QString dir = installedPackDir();
-    if (dir.isEmpty()) return QStringLiteral("Not installed");
+    if (dir.isEmpty()) { return QStringLiteral("Not installed"); }
     const QDir models(QDir(dir).filePath(QStringLiteral("features/denoiser/models")));
     const QStringList sm = models.entryList({QStringLiteral("sm_*")}, QDir::Dirs | QDir::NoDotAndDotDot);
     return sm.isEmpty() ? QStringLiteral("Installed") : QStringLiteral("Installed (%1)").arg(sm.first());
@@ -126,7 +176,7 @@ bool NvidiaAfxPack::removeInstalled()
     QDir(stagingPath()).removeRecursively();
     const QString cur = QDir(cacheRoot()).filePath(QStringLiteral("current"));
     QFileInfo fi(cur);
-    if (fi.isSymLink()) return QFile::remove(cur);
+    if (fi.isSymLink()) { return QFile::remove(cur); }
     return fi.exists() ? QDir(cur).removeRecursively() : true;
 }
 
@@ -208,6 +258,9 @@ void NvidiaAfxPack::cancel()
         m_reply->deleteLater();
         m_reply = nullptr;
     }
+    // Close the open download handle BEFORE removing the temp file — an open
+    // handle blocks QFile::remove() on Windows, leaking the partial file.
+    if (m_dlFile) { m_dlFile->close(); delete m_dlFile; m_dlFile = nullptr; }
     // Remove only the in-flight partial download; KEEP staging so already-
     // completed components survive for a resumable re-download.
     if (!m_tmpFile.isEmpty()) { QFile::remove(m_tmpFile); m_tmpFile.clear(); }
@@ -218,6 +271,7 @@ void NvidiaAfxPack::fail(const QString& msg)
 {
     // Drop only the partial download; completed components stay staged so a
     // retry resumes instead of starting over.
+    if (m_dlFile) { m_dlFile->close(); delete m_dlFile; m_dlFile = nullptr; }
     if (!m_tmpFile.isEmpty()) { QFile::remove(m_tmpFile); m_tmpFile.clear(); }
     m_busy = false;
     emit finished(false, msg);
@@ -247,17 +301,25 @@ bool NvidiaAfxPack::updateAvailable() const
     if (installed.isEmpty()) return false;            // not installed / no receipt
     QHash<QString, QString> byKey, byName;            // -> installed version
     for (const auto& c : installed) {
-        if (!c.key.isEmpty()) byKey.insert(c.key, c.version);
+        if (!c.key.isEmpty()) { byKey.insert(c.key, c.version); }
         byName.insert(c.name, c.version);
     }
-    // Flag only when a matching component's version differs — unmatched entries
-    // (e.g. an offline-imported pack) are left alone to avoid false positives.
+    // An installed component whose version differs, OR a manifest component the
+    // installed pack lacks entirely (a newly-added component, e.g. the Windows
+    // TensorRT runtime), both mean the pack is out of date. Exception: a single
+    // offline-imported entry (key "afx", name "AFX pack (imported)") never
+    // carries the full component set, so don't nag those — treat as up to date.
+    const bool imported = installed.size() == 1
+                          && installed.first().name.contains(QStringLiteral("imported"));
+    if (imported) { return false; }
     for (const auto& c : latestComponents()) {
-        QString instVer;
-        if (!c.key.isEmpty() && byKey.contains(c.key)) instVer = byKey.value(c.key);
-        else if (byName.contains(c.name))              instVer = byName.value(c.name);
-        else continue;
-        if (instVer != c.version) return true;
+        if (!c.key.isEmpty() && byKey.contains(c.key)) {
+            if (byKey.value(c.key) != c.version) { return true; }
+        } else if (byName.contains(c.name)) {
+            if (byName.value(c.name) != c.version) { return true; }
+        } else {
+            return true;   // manifest has a component the installed pack lacks
+        }
     }
     return false;
 }
@@ -272,41 +334,18 @@ QString NvidiaAfxPack::stagingPath()
 // written as each one completes). Survives cancel so a re-download resumes.
 QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::stagedComponents()
 {
-    QList<ComponentInfo> out;
-    QFile f(QDir(stagingPath()).filePath(QStringLiteral(".progress.json")));
-    if (!f.open(QIODevice::ReadOnly)) return out;
-    const QJsonArray arr = QJsonDocument::fromJson(f.readAll()).array();
-    for (const QJsonValue v : arr) {
-        const QJsonObject o = v.toObject();
-        out.append({ o.value(QStringLiteral("name")).toString(),
-                     o.value(QStringLiteral("version")).toString(),
-                     o.value(QStringLiteral("sha256")).toString(),
-                     static_cast<qint64>(o.value(QStringLiteral("bytes")).toDouble()),
-                     o.value(QStringLiteral("key")).toString() });
-    }
-    return out;
+    return readComponentJson(QDir(stagingPath()).filePath(QStringLiteral(".progress.json")));
 }
 
 void NvidiaAfxPack::writeStagingProgress()
 {
-    QJsonArray arr;
-    for (const ComponentInfo& c : m_done) {
-        QJsonObject o;
-        o.insert(QStringLiteral("key"), c.key);
-        o.insert(QStringLiteral("name"), c.name);
-        o.insert(QStringLiteral("version"), c.version);
-        o.insert(QStringLiteral("sha256"), c.sha256);
-        o.insert(QStringLiteral("bytes"), static_cast<double>(c.bytes));
-        arr.append(o);
-    }
-    QFile f(QDir(m_staging).filePath(QStringLiteral(".progress.json")));
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        f.write(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+    writeComponentJson(QDir(m_staging).filePath(QStringLiteral(".progress.json")),
+                       m_done, QJsonDocument::Compact);
 }
 
 bool NvidiaAfxPack::sameComponent(const Component& c, const ComponentInfo& d)
 {
-    if (d.version != c.pypiVer) return false;
+    if (d.version != c.pypiVer) { return false; }
     if (!c.key.isEmpty() && !d.key.isEmpty())
         return d.key == c.key;          // stable-key match (survives label edits)
     return d.name == c.name;            // fallback for pre-key receipts/progress
@@ -323,21 +362,40 @@ bool NvidiaAfxPack::isCompleted(const Component& c) const
 // ─── v2 multi-source install ─────────────────────────────────────────────────
 void NvidiaAfxPack::install()
 {
-    if (m_busy) return;
+    if (m_busy) { return; }
     m_arch = detectArch();
     if (m_arch.isEmpty()) { emit finished(false, QStringLiteral("no supported NVIDIA GPU found")); return; }
     m_busy = true; m_cancelled = false;
     QDir().mkpath(cacheRoot());
     m_staging = stagingPath();
-    // Reuse any existing staging (resume): keep already-downloaded components and
-    // only fetch the missing ones. m_done carries what survived a prior cancel.
+    m_queue = manifest(m_arch);
+    m_done = stagedComponents();
+
+    // Reuse existing staging (resume) ONLY if every staged component still
+    // matches the current manifest. If a staged component's version moved on, or
+    // it's no longer in the manifest (an app update changed pins), the staging
+    // tree may hold stale files that tar -C would not overwrite — discard it and
+    // start clean rather than committing a mixed-version pack.
+    bool stagingStale = false;
+    for (const ComponentInfo& d : m_done) {
+        bool stillWanted = false;
+        for (const Component& c : m_queue) {
+            if (sameComponent(c, d)) { stillWanted = true; break; }
+        }
+        if (!stillWanted) { stagingStale = true; break; }
+    }
+    if (stagingStale) {
+        QDir(m_staging).removeRecursively();
+        m_done.clear();
+    }
+
+    // Reuse any surviving staging (resume): keep already-downloaded components
+    // and only fetch the missing ones.
     QDir().mkpath(m_staging);
 #if !defined(_WIN32)
     // Linux flattens CUDA wheel .so files here; Windows DLLs ride in the zip.
     QDir().mkpath(QDir(m_staging).filePath(QStringLiteral("external/cuda/lib")));
 #endif
-    m_queue = manifest(m_arch);
-    m_done = stagedComponents();
     m_idx = 0;
     emit planReady(plannedComponents());
     startNext();
@@ -408,7 +466,7 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
         connect(m_reply, &QNetworkReply::finished, this,
                 [this, name = c.name, pkg = c.pypiPkg, ver = c.pypiVer,
                  indexUrl, platformDesc, matchesPlatform]() {
-            if (!m_reply) return;
+            if (!m_reply) { return; }
             const QByteArray body = m_reply->readAll();
             const auto err = m_reply->error();
             m_reply->deleteLater(); m_reply = nullptr;
@@ -428,12 +486,12 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
             while (it.hasNext()) {
                 const QRegularExpressionMatch m = it.next();
                 const QString fn = m.captured(1);
-                if (!matchesPlatform(fn)) continue;
+                if (!matchesPlatform(fn)) { continue; }
                 const QString sha = m.captured(2);
                 // href is relative to the index dir.
                 const QUrl base(indexUrl);
                 const QUrl wheelUrl = base.resolved(QUrl(fn));
-                if (m_idx < m_queue.size()) m_queue[m_idx].sha256 = sha;
+                if (m_idx < m_queue.size()) { m_queue[m_idx].sha256 = sha; }
                 downloadTo(wheelUrl, sha,
                            QDir(cacheRoot()).filePath(QStringLiteral(".dl.whl")), name);
                 return;
@@ -451,7 +509,7 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
     m_reply = m_nam->get(req);
     connect(m_reply, &QNetworkReply::finished, this,
             [this, name = c.name, platformDesc, matchesPlatform]() {
-        if (!m_reply) return;
+        if (!m_reply) { return; }
         const QByteArray body = m_reply->readAll();
         const auto err = m_reply->error();
         m_reply->deleteLater(); m_reply = nullptr;
@@ -465,7 +523,7 @@ void NvidiaAfxPack::resolveWheelUrl(const Component& c)
                 const QString sha = u.value(QStringLiteral("digests")).toObject()
                                        .value(QStringLiteral("sha256")).toString();
                 // Record the resolved sha so the install receipt can report it.
-                if (m_idx < m_queue.size()) m_queue[m_idx].sha256 = sha;
+                if (m_idx < m_queue.size()) { m_queue[m_idx].sha256 = sha; }
                 downloadTo(QUrl(url), sha,
                            QDir(cacheRoot()).filePath(QStringLiteral(".dl.whl")), name);
                 return;
@@ -479,16 +537,25 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
                                const QString& dest, const QString& label)
 {
     m_tmpFile = dest;
-    // Parented to the pack so it's destroyed (and the file closed) if cancel()
-    // drops the reply handlers mid-download instead of the finished path deleting it.
-    auto* out = new QFile(dest, this);
-    if (!out->open(QIODevice::WriteOnly)) { delete out; fail(QStringLiteral("cannot write cache")); return; }
+    // Tracked in a member so cancel() can close the handle before removing the
+    // temp file — on Windows an open handle blocks QFile::remove().
+    m_dlFile = new QFile(dest, this);
+    if (!m_dlFile->open(QIODevice::WriteOnly)) {
+        delete m_dlFile; m_dlFile = nullptr;
+        fail(QStringLiteral("cannot write cache"));
+        return;
+    }
+    m_dlHash.reset();   // hash incrementally as bytes arrive (no post-download re-read)
     QNetworkRequest req(url);
     req.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
     m_reply = m_nam->get(req);
     m_dlTimer.start();
     emit componentProgress(m_idx, 0, 0, QString());
-    connect(m_reply, &QNetworkReply::readyRead, this, [this, out]() { out->write(m_reply->readAll()); });
+    connect(m_reply, &QNetworkReply::readyRead, this, [this]() {
+        const QByteArray chunk = m_reply->readAll();
+        if (m_dlFile) { m_dlFile->write(chunk); }
+        m_dlHash.addData(chunk);
+    });
     connect(m_reply, &QNetworkReply::downloadProgress, this, [this](qint64 got, qint64 total) {
         // Average rate since this file started — smoother than per-tick deltas.
         const qint64 ms = m_dlTimer.elapsed();
@@ -502,40 +569,53 @@ void NvidiaAfxPack::downloadTo(const QUrl& url, const QString& sha256,
         emit componentProgress(m_idx, total > 0 ? int(got * 100 / total) : -1, total, rateEta);
     });
     connect(m_reply, &QNetworkReply::finished, this,
-            [this, out, sha256, label, dest]() {
-        out->flush(); out->close(); delete out;
+            [this, sha256, label, dest]() {
+        if (m_dlFile) { m_dlFile->flush(); m_dlFile->close(); delete m_dlFile; m_dlFile = nullptr; }
         const auto err = m_reply->error();
         const QString es = m_reply->errorString();
         m_reply->deleteLater(); m_reply = nullptr;
         if (m_cancelled) { fail(QStringLiteral("cancelled")); return; }
         if (err != QNetworkReply::NoError) { fail(QStringLiteral("download failed (%1): %2").arg(label, es)); return; }
-        if (!sha256.isEmpty()) {
-            QFile f(dest);
-            if (!f.open(QIODevice::ReadOnly)) { fail(QStringLiteral("cannot re-open %1 to verify").arg(label)); return; }
-            QCryptographicHash h(QCryptographicHash::Sha256); h.addData(&f);
-            if (h.result().toHex() != sha256.toLatin1()) { fail(QStringLiteral("checksum mismatch: %1").arg(label)); return; }
+        if (!sha256.isEmpty()
+            && m_dlHash.result().toHex() != sha256.toLatin1()) {
+            // A mismatch is not transient (the bytes are pinned) — say so rather
+            // than inviting an endless re-download of the same bad artifact.
+            fail(QStringLiteral("checksum mismatch for %1 (corrupt or stale mirror)").arg(label));
+            return;
         }
         const Kind kind = m_queue[m_idx].kind;
         const qint64 bytes = QFileInfo(dest).size();
         m_queue[m_idx].bytes = bytes;                  // recorded into the receipt
         emit componentProgress(m_idx, -1, bytes, QStringLiteral("extracting…"));
-        extractInto(dest, kind);
-        QFile::remove(dest); m_tmpFile.clear();
-        if (!m_busy) return;                           // extractInto called fail()
-        const Component& c = m_queue[m_idx];
-        const ComponentInfo info{ c.name, c.pypiVer, c.sha256, bytes, c.key };
-        // Persist into the resumable staging manifest so a cancel keeps it.
-        m_done.removeIf([&](const ComponentInfo& d) {
-            return d.key.isEmpty() ? d.name == info.name : d.key == info.key; });
-        m_done.append(info);
-        writeStagingProgress();
-        emit componentFinished(m_idx, info);
-        ++m_idx;
-        startNext();
+        // Extract off the GUI thread so decompression doesn't freeze the UI.
+        auto* watcher = new QFutureWatcher<QString>(this);
+        connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher, dest, bytes]() {
+            const QString err = watcher->result();
+            watcher->deleteLater();
+            QFile::remove(dest); m_tmpFile.clear();
+            if (m_cancelled) { fail(QStringLiteral("cancelled")); return; }
+            if (!err.isEmpty()) { fail(err); return; }
+            const Component& c = m_queue[m_idx];
+            const ComponentInfo info{ c.name, c.pypiVer, c.sha256, bytes, c.key };
+            // Persist into the resumable staging manifest so a cancel keeps it.
+            m_done.removeIf([&](const ComponentInfo& d) {
+                return d.key.isEmpty() ? d.name == info.name : d.key == info.key; });
+            m_done.append(info);
+            writeStagingProgress();
+            emit componentFinished(m_idx, info);
+            ++m_idx;
+            startNext();
+        });
+        watcher->setFuture(QtConcurrent::run(&NvidiaAfxPack::runExtract,
+                                             dest, kind, m_staging, cacheRoot()));
     });
 }
 
-void NvidiaAfxPack::extractInto(const QString& archive, Kind kind)
+// Pure worker — runs on a QtConcurrent thread (no member access, no signals) so
+// decompression doesn't block the GUI event loop. Returns "" on success.
+QString NvidiaAfxPack::runExtract(const QString& archive, Kind kind,
+                                  const QString& staging,
+                                  [[maybe_unused]] const QString& cacheRoot)
 {
     QProcess p;
     if (kind == Kind::Wheel) {
@@ -544,17 +624,16 @@ void NvidiaAfxPack::extractInto(const QString& archive, Kind kind)
         // zips but has no "flatten paths" mode. So extract into a temp dir
         // then move all *.dll up into staging/bin/. CUDA wheels put DLLs at
         // nvidia/<pkg>/bin/*.dll; tensorrt-cu12-libs at tensorrt_libs/*.dll.
-        const QString binDir = QDir(m_staging).filePath(QStringLiteral("bin"));
+        const QString binDir = QDir(staging).filePath(QStringLiteral("bin"));
         QDir().mkpath(binDir);
-        const QString tmpDir = QDir(cacheRoot()).filePath(QStringLiteral(".whl-extract"));
+        const QString tmpDir = QDir(cacheRoot).filePath(QStringLiteral(".whl-extract"));
         QDir(tmpDir).removeRecursively();
         QDir().mkpath(tmpDir);
         p.start(QStringLiteral("tar"),
                 {QStringLiteral("-xf"), archive, QStringLiteral("-C"), tmpDir});
         if (!p.waitForFinished(600000) || p.exitCode() != 0) {
-            fail(QStringLiteral("wheel extract failed: %1")
-                     .arg(QString::fromLocal8Bit(p.readAllStandardError()).trimmed()));
-            return;
+            return QStringLiteral("wheel extract failed: %1")
+                       .arg(QString::fromLocal8Bit(p.readAllStandardError()).trimmed());
         }
         // Flatten: move any *.dll from anywhere in the wheel into bin/.
         QDirIterator it(tmpDir, {QStringLiteral("*.dll")},
@@ -564,17 +643,16 @@ void NvidiaAfxPack::extractInto(const QString& archive, Kind kind)
             const QString src = it.next();
             const QString dst = QDir(binDir).filePath(QFileInfo(src).fileName());
             QFile::remove(dst);  // idempotent: overwrite on retry
-            if (QFile::rename(src, dst)) ++moved;
+            if (QFile::rename(src, dst)) { ++moved; }
         }
         QDir(tmpDir).removeRecursively();
         if (moved == 0) {
-            fail(QStringLiteral("wheel %1 contained no DLLs").arg(QFileInfo(archive).fileName()));
-            return;
+            return QStringLiteral("wheel %1 contained no DLLs").arg(QFileInfo(archive).fileName());
         }
-        return;  // success
+        return {};  // success
 #else
         // Linux: flatten the wheel's *.so* into the pack's external/cuda/lib.
-        const QString libDir = QDir(m_staging).filePath(QStringLiteral("external/cuda/lib"));
+        const QString libDir = QDir(staging).filePath(QStringLiteral("external/cuda/lib"));
         p.start(QStringLiteral("unzip"),
                 {QStringLiteral("-o"), QStringLiteral("-j"), QStringLiteral("-d"), libDir,
                  archive, QStringLiteral("*.so*")});
@@ -584,16 +662,18 @@ void NvidiaAfxPack::extractInto(const QString& archive, Kind kind)
         // Windows AFX-bits is a self-contained .zip laid out at root (bin/,
         // features/). bsdtar (tar.exe, shipped with Windows 10+) reads zip.
         p.start(QStringLiteral("tar"),
-                {QStringLiteral("-xf"), archive, QStringLiteral("-C"), m_staging});
+                {QStringLiteral("-xf"), archive, QStringLiteral("-C"), staging});
 #else
         // Our AFX-bits tarball is laid out at root (nvafx/, features/, external/).
         p.start(QStringLiteral("tar"),
                 {QStringLiteral("--zstd"), QStringLiteral("-xf"), archive,
-                 QStringLiteral("-C"), m_staging});
+                 QStringLiteral("-C"), staging});
 #endif
     }
-    if (!p.waitForFinished(600000) || p.exitCode() != 0)
-        fail(QStringLiteral("extract failed: %1").arg(QString::fromLocal8Bit(p.readAllStandardError()).trimmed()));
+    if (!p.waitForFinished(600000) || p.exitCode() != 0) {
+        return QStringLiteral("extract failed: %1").arg(QString::fromLocal8Bit(p.readAllStandardError()).trimmed());
+    }
+    return {};  // success
 }
 
 // Symlink the feature lib onto the core RPATH, then atomically swap into place.
@@ -610,8 +690,8 @@ void NvidiaAfxPack::assembleAndCommit()
     QFile::remove(QDir(packRoot).filePath(QStringLiteral(".progress.json")));
     const QString current = QDir(root).filePath(QStringLiteral("current"));
     QFileInfo curInfo(current);
-    if (curInfo.isSymLink()) QFile::remove(current);
-    else if (curInfo.exists()) QDir(current).removeRecursively();
+    if (curInfo.isSymLink()) { QFile::remove(current); }
+    else if (curInfo.exists()) { QDir(current).removeRecursively(); }
     if (!QDir().rename(packRoot, current)) { fail(QStringLiteral("could not install into %1").arg(current)); return; }
     m_staging.clear();
     m_done.clear();   // staging consumed — next install starts fresh
@@ -642,44 +722,21 @@ void NvidiaAfxPack::assembleAndCommit()
 // (after resolve/verify) the actual sha256 of every component.
 void NvidiaAfxPack::writeReceipt(const QString& packDir)
 {
-    QJsonArray arr;
-    for (const Component& c : m_queue) {
-        QJsonObject o;
-        o.insert(QStringLiteral("key"), c.key);
-        o.insert(QStringLiteral("name"), c.name);
-        o.insert(QStringLiteral("version"), c.pypiVer);
-        o.insert(QStringLiteral("sha256"), c.sha256);
-        o.insert(QStringLiteral("bytes"), static_cast<double>(c.bytes));
-        arr.append(o);
-    }
-    QFile f(QDir(packDir).filePath(QStringLiteral("components.json")));
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        f.write(QJsonDocument(arr).toJson(QJsonDocument::Indented));
+    writeComponentJson(QDir(packDir).filePath(QStringLiteral("components.json")),
+                       plannedComponents(), QJsonDocument::Indented);
 }
 
 QList<NvidiaAfxPack::ComponentInfo> NvidiaAfxPack::installedComponents()
 {
-    QList<ComponentInfo> out;
     const QString dir = installedPackDir();
-    if (dir.isEmpty()) return out;
-    QFile f(QDir(dir).filePath(QStringLiteral("components.json")));
-    if (!f.open(QIODevice::ReadOnly)) return out;
-    const QJsonArray arr = QJsonDocument::fromJson(f.readAll()).array();
-    for (const QJsonValue v : arr) {
-        const QJsonObject o = v.toObject();
-        out.append({ o.value(QStringLiteral("name")).toString(),
-                     o.value(QStringLiteral("version")).toString(),
-                     o.value(QStringLiteral("sha256")).toString(),
-                     static_cast<qint64>(o.value(QStringLiteral("bytes")).toDouble()),
-                     o.value(QStringLiteral("key")).toString() });
-    }
-    return out;
+    if (dir.isEmpty()) { return {}; }
+    return readComponentJson(QDir(dir).filePath(QStringLiteral("components.json")));
 }
 
 // ─── Offline single-archive import ───────────────────────────────────────────
 void NvidiaAfxPack::installFromFile(const QString& archivePath)
 {
-    if (m_busy) return;
+    if (m_busy) { return; }
     if (!QFile::exists(archivePath)) { emit finished(false, QStringLiteral("archive not found")); return; }
     m_busy = true; m_cancelled = false;
     m_idx = 0;
@@ -702,19 +759,27 @@ void NvidiaAfxPack::installFromFile(const QString& archivePath)
     QDir(m_staging).removeRecursively(); QDir().mkpath(m_staging);
     emit planReady(plannedComponents());
     emit componentProgress(0, -1, importBytes, QStringLiteral("extracting…"));
-    extractInto(archivePath, Kind::Tarball);
-    if (!m_busy) return;  // extractInto called fail()
-    emit componentFinished(0, { m_queue[0].name, m_queue[0].pypiVer,
-                                m_queue[0].sha256, importBytes, m_queue[0].key });
-    // A pre-assembled pack may have a single top-level dir — descend to it.
-    if (!QFile::exists(QDir(m_staging).filePath(QString::fromLatin1(kCoreRelPath)))) {
-        const QStringList subs = QDir(m_staging).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
-        for (const QString& s : subs) {
-            const QString cand = QDir(m_staging).filePath(s);
-            if (QFile::exists(QDir(cand).filePath(QString::fromLatin1(kCoreRelPath)))) { m_staging = cand; break; }
+    // Extract off the GUI thread, then assemble on completion.
+    auto* watcher = new QFutureWatcher<QString>(this);
+    connect(watcher, &QFutureWatcher<QString>::finished, this, [this, watcher, importBytes]() {
+        const QString err = watcher->result();
+        watcher->deleteLater();
+        if (m_cancelled) { fail(QStringLiteral("cancelled")); return; }
+        if (!err.isEmpty()) { fail(err); return; }
+        emit componentFinished(0, { m_queue[0].name, m_queue[0].pypiVer,
+                                    m_queue[0].sha256, importBytes, m_queue[0].key });
+        // A pre-assembled pack may have a single top-level dir — descend to it.
+        if (!QFile::exists(QDir(m_staging).filePath(QString::fromLatin1(kCoreRelPath)))) {
+            const QStringList subs = QDir(m_staging).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+            for (const QString& s : subs) {
+                const QString cand = QDir(m_staging).filePath(s);
+                if (QFile::exists(QDir(cand).filePath(QString::fromLatin1(kCoreRelPath)))) { m_staging = cand; break; }
+            }
         }
-    }
-    assembleAndCommit();
+        assembleAndCommit();
+    });
+    watcher->setFuture(QtConcurrent::run(&NvidiaAfxPack::runExtract,
+                                         archivePath, Kind::Tarball, m_staging, cacheRoot()));
 }
 
 } // namespace AetherSDR

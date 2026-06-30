@@ -942,10 +942,15 @@ void AetherDspWidget::updateBnrStatus()
     const bool installed = NvidiaAfxPack::isInstalled();
     const bool busy = m_bnrAfxPack && m_bnrAfxPack->busy();
     const bool updatable = installed && m_bnrAfxPack && m_bnrAfxPack->updateAvailable();
+    // Fetch the pack queries once and reuse (this runs on every BNR toggle).
+    const auto installedList = installed ? NvidiaAfxPack::installedComponents()
+                                         : QList<NvidiaAfxPack::ComponentInfo>();
+    const auto latestList = m_bnrAfxPack ? m_bnrAfxPack->latestComponents()
+                                         : QList<NvidiaAfxPack::ComponentInfo>();
     // A cancelled download leaves verified components staged for resume.
     const auto staged = installed ? QList<NvidiaAfxPack::ComponentInfo>()
                                   : NvidiaAfxPack::stagedComponents();
-    const int totalComps = m_bnrAfxPack ? m_bnrAfxPack->latestComponents().size() : 0;
+    const int totalComps = latestList.size();
     const bool partial = !installed && !staged.isEmpty() && totalComps > 0;
     if (m_bnrAfxStatus && !busy) {
         const bool on = m_audio && m_audio->nvAfxEnabled();
@@ -981,17 +986,15 @@ void AetherDspWidget::updateBnrStatus()
     // partially-downloaded set when a download was cancelled.
     if (!busy) {
         if (installed) {
-            const auto comps = NvidiaAfxPack::installedComponents();
             QHash<QString, QString> latest;
-            if (m_bnrAfxPack)
-                for (const auto& c : m_bnrAfxPack->latestComponents())
-                    latest.insert(c.name, c.version);
+            for (const auto& c : latestList)
+                latest.insert(c.name, c.version);
             QStringList names;
-            for (const auto& c : comps) names << c.name;
+            for (const auto& c : installedList) names << c.name;
             rebuildBnrRows(names);
-            for (int i = 0; i < comps.size(); ++i)
-                setBnrRowDetail(i, comps[i].version, comps[i].sha256, comps[i].bytes,
-                                latest.value(comps[i].name));
+            for (int i = 0; i < installedList.size(); ++i)
+                setBnrRowDetail(i, installedList[i].version, installedList[i].sha256,
+                                installedList[i].bytes, latest.value(installedList[i].name));
         } else if (partial) {
             QStringList names;
             for (const auto& c : staged) names << c.name;
