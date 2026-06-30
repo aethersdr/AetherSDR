@@ -432,6 +432,7 @@ void KiwiSdrClient::connectToEndpoint(const QString& endpoint)
     m_monitorMode = false;
     m_monitorQueueRequested = false;
     m_campAccepted = false;
+    m_preflightReportedFull = false;
     m_soundAudioReady = false;
     m_soundAudioRateAcked = false;
     m_soundSampleRateCommandsSent = false;
@@ -630,6 +631,7 @@ void KiwiSdrClient::handleStatusPreflightFinished(QNetworkReply* reply)
         if (statusReportsFull) {
             statusMetadata.busy = true;
             statusMetadata.hasBusy = true;
+            m_preflightReportedFull = true;
         }
         mergeReceiverMetadata(statusMetadata);
 
@@ -1258,7 +1260,7 @@ void KiwiSdrClient::queueKiwiMonitor()
 
 void KiwiSdrClient::sendTrackedSliceToServer()
 {
-    if (m_monitorMode) {
+    if (receiverControlSuppressed()) {
         return;
     }
     if (m_trackedSliceId < 0 || m_trackedFrequencyMhz <= 0.0) {
@@ -1295,7 +1297,7 @@ void KiwiSdrClient::sendTrackedSliceToServer()
 
 void KiwiSdrClient::sendReceiverControlsToServer()
 {
-    if (m_monitorMode) {
+    if (receiverControlSuppressed()) {
         return;
     }
 #ifdef HAVE_WEBSOCKETS
@@ -1315,7 +1317,7 @@ void KiwiSdrClient::sendReceiverControlsToServer()
 
 void KiwiSdrClient::sendWaterfallViewToServer()
 {
-    if (m_monitorMode) {
+    if (receiverControlSuppressed()) {
         m_waterfallRequestValid = false;
         return;
     }
@@ -1440,7 +1442,7 @@ void KiwiSdrClient::sendWaterfallViewToServer()
 
 void KiwiSdrClient::sendWaterfallDisplayAdjustmentsToServer()
 {
-    if (m_monitorMode) {
+    if (receiverControlSuppressed()) {
         return;
     }
     const float maxDb = m_waterfallMaxDbm
@@ -2770,7 +2772,7 @@ void KiwiSdrClient::emitWaterfallRowNow(const QString& panId,
 
 void KiwiSdrClient::sendWaterfallRateToServer()
 {
-    if (m_monitorMode) {
+    if (receiverControlSuppressed()) {
         return;
     }
     if (m_waterfallRateOverride > 0) {
@@ -2829,6 +2831,25 @@ QString KiwiSdrClient::logEndpoint() const
 
 QString KiwiSdrClient::setupTimeoutDetail() const
 {
+    // Preflight said the receiver was full and we proceeded to admission in
+    // case a monitor/camp offer arrived. If none did (still not monitoring,
+    // no camp accepted), this is the full-and-not-camp-capable case — surface
+    // the precise capacity message the preflight fast-fail used to emit, rather
+    // than a vague "no audio arrived" timeout.
+    if (m_preflightReportedFull && !m_monitorMode
+        && m_telemetry.metadata.campStatus
+               == KiwiSdrProtocol::CampStatus::Unknown) {
+        const KiwiSdrProtocol::ReceiverMetadata& md = m_telemetry.metadata;
+        if (md.hasUsers && md.hasUsersMax) {
+            return tr("This KiwiSDR endpoint is at capacity (%1/%2 users). "
+                      "Try again later or choose another receiver.")
+                .arg(md.users)
+                .arg(md.usersMax);
+        }
+        return tr("This KiwiSDR endpoint is at capacity. Try again later or "
+                  "choose another receiver.");
+    }
+
     if (m_soundSampleRateCommandsSent) {
         return tr("KiwiSDR sound setup completed for %1, but no SND audio frames arrived.")
             .arg(logEndpoint());

@@ -1141,9 +1141,14 @@ bool updateReceiverMetadataFromMsgToken(const MsgToken& token,
         structured = true;
         bool ok = false;
         const int value = parseInt(&ok);
-        const bool busy = !ok || value != 0;
-        changed = setBoolField(&metadata->busy, &metadata->hasBusy, busy)
-            || changed;
+        // Only update busy when the value actually parses. A malformed/empty
+        // `too_busy=` must NOT be treated as busy=true, or an injected/garbled
+        // MSG could falsely mark a reachable receiver as full. Matches the
+        // ok-guarded pattern used by users/users_max/preempt/max_camp above.
+        if (ok) {
+            changed = setBoolField(&metadata->busy, &metadata->hasBusy,
+                                   value != 0) || changed;
+        }
     } else if (key == QStringLiteral("max_camp")) {
         structured = true;
         bool ok = false;

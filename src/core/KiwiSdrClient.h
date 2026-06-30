@@ -207,6 +207,14 @@ private:
     void markSoundAudioReady();
     QString logEndpoint() const;
     QString setupTimeoutDetail() const;
+    // Tune/mode/AGC/waterfall-view commands must never reach a receiver we are
+    // only monitoring/camping on. Bound to BOTH the monitor flag and the
+    // Camping state so the read-only guarantee survives either being set
+    // without the other (the state is the authoritative source of truth).
+    bool receiverControlSuppressed() const
+    {
+        return m_monitorMode || m_state == State::Camping;
+    }
     void sendKeepalive();
     void sendSoundCommand(const QString& command);
     void sendWaterfallCommand(const QString& command);
@@ -262,6 +270,11 @@ private:
     bool m_monitorMode{false};
     bool m_monitorQueueRequested{false};
     bool m_campAccepted{false};
+    // The HTTP status preflight already reported the receiver full (all slots
+    // in use, no preempt). We proceed to WebSocket admission anyway in case a
+    // monitor/camp offer arrives, but if none does this lets the failure carry
+    // the precise capacity message instead of a generic setup-timeout.
+    bool m_preflightReportedFull{false};
     bool m_soundAudioReady{false};
     bool m_soundAudioRateAcked{false};
     bool m_soundSampleRateCommandsSent{false};

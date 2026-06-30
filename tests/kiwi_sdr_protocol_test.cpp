@@ -558,6 +558,23 @@ int main()
         || !mergedMetadata.busy) {
         return fail("MSG metadata busy update is wrong");
     }
+    // Regression: a malformed or empty `too_busy=` must NOT mark a reachable
+    // receiver as busy (the parser previously forced busy=true on parse
+    // failure, so a garbled/injected MSG could falsely report capacity).
+    for (const QString& badValue :
+         {QStringLiteral("not-a-number"), QString()}) {
+        ReceiverMetadata reachableMetadata;
+        const MsgToken malformedBusyToken{
+            QStringLiteral("too_busy"),
+            badValue,
+            true,
+        };
+        updateReceiverMetadataFromMsgToken(malformedBusyToken,
+                                           &reachableMetadata);
+        if (reachableMetadata.hasBusy || reachableMetadata.busy) {
+            return fail("malformed too_busy must not force busy");
+        }
+    }
     const MsgToken monitorToken{
         QStringLiteral("monitor"),
         QString(),
