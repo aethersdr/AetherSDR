@@ -120,45 +120,27 @@ void MainWindow::tuneToNet(const NetEntry& entry)
         return;
 
     const double freqMhz = entry.preset.freq;
-    const QString slicePanId = slice->panId();
 
-    // If the net is on a different band than the slice currently sits on,
-    // preselect that band's stack memory first — a bare `slice tune` will not
-    // move the panadapter across bands, which is why a cross-band net appears
-    // "not to tune". Same preselect path as a memory recall.
-    if (freqMhz > 0.0) {
-        const QString netBand = BandSettings::bandForFrequency(freqMhz);
-        const QString currentBand = BandSettings::bandForFrequency(slice->frequency());
-        if (netBand != currentBand) {
-            const auto xvtrs = xvtrPolicyBandsFrom(m_radioModel.xvtrList());
-            const auto stackKeyResult =
-                XvtrPolicy::resolveBandStackKey(netBand, xvtrs, m_radioModel.capabilities());
-            if (stackKeyResult.isSupported()) {
-                clearSwrSweepForBandChange(-1, slicePanId, netBand);
-                m_bandSettings.setCurrentBand(netBand);
-                m_radioModel.sendCommand(
-                    QString("display pan set %1 band=%2").arg(slicePanId, stackKeyResult.key));
-                QTimer::singleShot(300, this, [this, slicePanId]() {
-                    reassertUnmutedSliceAudioForPan(slicePanId);
-                });
-            } else {
-                statusBar()->showMessage(
-                    QString("Can't tune %1 — %2 isn't available on this radio.")
-                        .arg(entry.name, netBand),
-                    5000);
-            }
-        }
-    }
+    // Route the net's frequency change through the canonical tune-and-recenter
+    // policy — the same AbsoluteJump path a DX-cluster spot uses to jump to an
+    // arbitrary frequency on any band. applyTuneRequest() moves the slice with
+    // `slice tune <freq>` (which the radio echoes back as a slice RF_frequency
+    // status, so the VFO display tracks it) and recenters the panadapter on the
+    // target, crossing bands as needed.
+    //
+    // The previous bespoke path issued `display pan set <pan> band=<key>` first,
+    // which reloaded the band stack: the radio retuned the slice to that band's
+    // *last-used* frequency (and echoed it), then emitted no status echo for the
+    // subsequent net retune — so the VFO display stuck on the band frequency
+    // while RX/TX ran on the net's (#3918). Reusing applyTuneRequest avoids the
+    // band-stack reload entirely and keeps the display radio-authoritative.
+    if (freqMhz > 0.0)
+        applyTuneRequest(slice, freqMhz, TuneIntent::AbsoluteJump, "net-tune");
 
-    // Reuse the memory-recall command builders for the retune + repeater/tone
-    // fixup, and set mode/filter/step directly (a net has no radio-side memory
-    // slot to "memory apply").
-    const QString retune = buildMemoryRecallRetuneCommand(sliceId, entry.preset);
-    if (!retune.isEmpty())
-        m_radioModel.sendCommand(retune);
+    // Net-specific slice settings the tune policy doesn't cover (a net has no
+    // radio-side memory slot to "memory apply").
     if (!entry.preset.mode.isEmpty())
-        m_radioModel.sendCommand(
-            QString("slice set %1 mode=%2").arg(sliceId).arg(entry.preset.mode));
+        slice->setMode(entry.preset.mode);
     if (entry.preset.rxFilterLow != entry.preset.rxFilterHigh) {
         m_radioModel.sendCommand(QString("filt %1 %2 %3")
                                      .arg(sliceId)
@@ -170,15 +152,6 @@ void MainWindow::tuneToNet(const NetEntry& entry)
     const QString fixup = buildMemoryRecallSliceFixupCommand(sliceId, entry.preset);
     if (!fixup.isEmpty())
         m_radioModel.sendCommand(fixup);
-
-    // After the band change + retune settle, recenter the panadapter on the net
-    // frequency if it ended up off-screen (mirrors the memory-recall reveal).
-    QTimer::singleShot(750, this, [this, sliceId, freqMhz]() {
-        if (auto* s = m_radioModel.slice(sliceId)) {
-            const double revealMhz = freqMhz > 0.0 ? freqMhz : s->frequency();
-            revealFrequencyIfNeeded(s, revealMhz, TuneIntent::CommandedTargetCenter, "net-tune");
-        }
-    });
 
     statusBar()->showMessage(QString("Tuned to %1").arg(entry.name), 3000);
 }
@@ -214,7 +187,11 @@ void MainWindow::onNetReminderDue(const NetEntry& entry, const QDateTime& occurr
                             break;
                         }
                     }
-                    showNormal();
+                    // Bring the window forward without disturbing its state.
+                    // showNormal() would clear a Maximized/FullScreen window
+                    // (#3918) — only un-minimize if actually minimized.
+                    if (isMinimized())
+                        showNormal();
                     raise();
                     activateWindow();
                 });
@@ -230,7 +207,9 @@ void MainWindow::onNetReminderDue(const NetEntry& entry, const QDateTime& occurr
         m_trayIcon->setToolTip(QStringLiteral("AetherSDR"));
         m_trayIcon->show();
         connect(m_trayIcon, &QSystemTrayIcon::messageClicked, this, [this] {
-            showNormal();
+            // Raise without un-maximizing the window (#3918).
+            if (isMinimized())
+                showNormal();
             raise();
             activateWindow();
         });
