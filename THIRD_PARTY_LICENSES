@@ -248,3 +248,28 @@ URLs — are documented in third_party/QGeoView/AETHERSDR-PATCHES.md.
   Copyright (C) 2018-2025 Andrey Yaroshenko
   License: LGPL-3.0-or-later
   Source:  https://github.com/AmonRaNet/QGeoView
+
+
+17. NVIDIA Maxine Audio Effects (AFX) — BNR GPU denoiser (download-on-demand)
+----------------------------------------------------------------------------
+NOT bundled in the source tree or the shipped binary. The optional BNR feature
+downloads an NVIDIA runtime "pack" on demand at first use (see
+src/core/NvidiaAfxPack.cpp and docs/nvidia-bnr.md) and caches it under the app
+data dir. AetherSDR redistributes a subset of these NVIDIA binaries as GitHub
+release assets (the afx-bits-2.1.0 release); CUDA runtime libraries are pulled
+directly from NVIDIA's PyPI wheels at install time (not redistributed by us).
+
+Redistributed / downloaded components:
+  - Maxine Audio Effects runtime (libnv_audiofx.so / NVAudioEffects.dll + the
+    denoiser feature library)
+  - NVIDIA TensorRT inference runtime (nvinfer)
+  - NVIDIA CUDA runtime libraries (cuda-runtime, cuBLAS, cuFFT, nvRTC) — from
+    NVIDIA's PyPI wheels
+  - Per-GPU denoiser model (denoiser_48k.trtpkg)
+
+  Copyright (C) NVIDIA Corporation
+  Licenses: NVIDIA Software License Agreement; Product-Specific Terms for
+            NVIDIA AI Products; NVIDIA Community Model License (denoiser model).
+            The full license texts ship inside the downloaded pack
+            (licenses/ + NOTICE.txt) and the user must accept them on first use.
+  Source:   https://developer.nvidia.com/maxine  (NGC: nvidia/maxine)

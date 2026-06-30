@@ -210,8 +210,13 @@ $trtStage = Join-Path $OutDir "afx-bits-$Version-windows-x86_64-tensorrt-$trtVer
 if (Test-Path -LiteralPath $trtStage) { Remove-Item -Recurse -Force $trtStage }
 New-Item -ItemType Directory -Force -Path (Join-Path $trtStage 'bin') | Out-Null
 
-$trtSrc = Get-ChildItem -LiteralPath $sdkExtTrt -Filter '*.dll' -File | Select-Object -First 1
-if (-not $trtSrc) { Die "TensorRT DLL not found under $sdkExtTrt" }
+# Pick the core inference runtime specifically (nvinfer_<ver>.dll) — not the
+# plugin/ONNX-parser DLLs that may also live here. Grabbing 'first *.dll' could
+# stage the wrong one if the SDK ever ships more than nvinfer in nvtrt/bin.
+$trtSrc = Get-ChildItem -LiteralPath $sdkExtTrt -Filter 'nvinfer*.dll' -File |
+          Where-Object { $_.Name -match '^nvinfer_\d+\.dll$' } |
+          Select-Object -First 1
+if (-not $trtSrc) { Die "core nvinfer_<ver>.dll not found under $sdkExtTrt" }
 Copy-Item -LiteralPath $trtSrc.FullName -Destination (Join-Path $trtStage 'bin') -Force
 Log "Staged $($trtSrc.Name) for TRT-only pack"
 
@@ -232,9 +237,13 @@ Log "  Size:    $([math]::Round($trtSize / 1MB, 1)) MB"
 Log "  SHA256:  $trtHash"
 Log "=============================================="
 Log "Next steps:"
-Log "  1. Extract this zip into %LOCALAPPDATA%\AetherSDR\AetherSDR\nvidia-afx\current\"
+Log "  1. Extract the AFX zip into %LOCALAPPDATA%\AetherSDR\AetherSDR\nvidia-afx\current\"
 Log "     (or set AETHER_NVAFX_DIR to its extracted location)"
 Log "  2. Launch AetherSDR, AetherDSP → BNR → accept license, confirm Active"
-Log "  3. If it works: paste this sha256 into kWinTarballSha in"
-Log "     src/core/NvidiaAfxPack.cpp, commit + push (updates PR #3902)"
-Log "  4. gh release upload afx-bits-$Version $zipPath"
+Log "  3. If it works, pin BOTH shas in src/core/NvidiaAfxPack.cpp:"
+Log "       kWinTarballSha  = $hash"
+Log "       kWinTensorrtSha = $trtHash"
+Log "     (and kWinTensorrtVer = $trtVersion), then commit + push (updates PR #3902)"
+Log "  4. Publish BOTH assets:"
+Log "       gh release upload afx-bits-$Version `"$zipPath`""
+Log "       gh release upload afx-bits-$Version `"$trtZipPath`""
