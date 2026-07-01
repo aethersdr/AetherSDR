@@ -52,8 +52,8 @@ public:
     // Ridge HEIGHT is anchored to the noise floor: a column maps to
     // strength = clamp((dbm - floorDbm) / rangeDb, 0, 1), so floorDbm sits at
     // the baseline (≈0 height) and floorDbm+rangeDb reaches the full ridge. The
-    // host supplies floorDbm from its measured-noise-floor estimate and rangeDb
-    // from the Ref-derived span, mirroring the 2D auto-noise-floor behaviour.
+    // host supplies floorDbm from its measured-noise-floor estimate plus the 3D
+    // floor offset, and rangeDb from the current dBm display span.
     // Colour comes from palette(dbm), independent of height. paletteToken lets
     // the host signal palette changes without us inspecting them. Rebuilds only
     // when something relevant changed.

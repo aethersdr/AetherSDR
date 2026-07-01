@@ -2241,6 +2241,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setSpectrumRenderMode);
     connect(menu, &SpectrumOverlayMenu::dssFloorDepthChanged,
             sw, &SpectrumWidget::setDssFloorDepth);
+    connect(sw, &SpectrumWidget::dssFloorDepthResolved,
+            menu, &SpectrumOverlayMenu::syncDssFloorDepth);
     connect(menu, &SpectrumOverlayMenu::dssGainChanged,
             sw, &SpectrumWidget::setDssGain);
     connect(menu, &SpectrumOverlayMenu::wfColorGainChanged,

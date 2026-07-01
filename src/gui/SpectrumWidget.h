@@ -200,7 +200,9 @@ public:
     float spectrumFrac()  const { return m_spectrumFrac; }
     float refLevel()      const { return m_refLevel; }
     float dynamicRange()  const { return m_dynamicRange; }
-    bool isDraggingDbmScale() const { return m_draggingDbm || m_draggingDbmRange; }
+    bool isDraggingDbmScale() const {
+        return m_draggingDbm || m_draggingDbmRange || m_draggingDssFloor;
+    }
     bool pendingAutoNoiseFloorDbmRange() const {
         return m_pendingDbmRangeEcho && m_pendingDbmRangeEchoFromAutoFloor;
     }
@@ -600,6 +602,7 @@ signals:
     void dbmRangeChangeRequested(float minDbm, float maxDbm);
     void dbmRangeDragFinished(float minDbm, float maxDbm);
     void noiseFloorPositionResolved(int pos);
+    void dssFloorDepthResolved(int dB);
     void waterfallLineDurationChangeRequested(int ms);
     // TNF signals
     void tnfCreateRequested(double freqMhz);
@@ -694,14 +697,12 @@ private:
     // strip's geometry and click targets are identical in either render mode.
     void drawDbmScaleChrome(QPainter& p, const QRect& specRect);
     // Shared full-height LINEAR dBm tick labels: topDbm at specRect.top(),
-    // topDbm-rangeDb at the baseline, evenly spaced. Used by both the 2D scale
-    // (Ref / dynamic range) and the 3D scale (Ref / 3D floor→Ref span).
+    // topDbm-rangeDb at the baseline, evenly spaced.
     void drawDbmScaleLabels(QPainter& p, const QRect& specRect,
                             float topDbm, float rangeDb);
-    // dBm amplitude scale for 3D stacked-trace mode: a full-height linear axis
-    // spanning the measured noise floor (baseline) up to Ref, so the noise floor
-    // and levels read like the 2D scale. The floor tracks the Display-pane
-    // "3D Floor" slider (dssFloorDbm()).
+    // Full-height dBm amplitude reference for 3D stacked-trace mode. It follows
+    // the floor anchor and scale span; perspective means individual history rows
+    // do not share a single pixel-exact y-axis.
     void drawDbmScale3D(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
     void drawConnectionAnimation(QPainter& p, const QRect& contentRect);
@@ -867,8 +868,8 @@ private:
     // measured floor for the active source (Flex or KiwiSDR), offset by the
     // user's 3D Floor depth, so the floor sits at the baseline consistently.
     float dssFloorDbm() const;
-    // dB span shown above the noise floor — Ref-derived, clamped so the wide
-    // Flex window can't flatten signals.
+    // dB span shown above the 3D floor anchor — follows the normal dBm scale,
+    // clamped so the wide Flex window can't flatten signals.
     float dssSpanDb() const;
 
     // Pixel x coordinate for a given frequency in MHz (0 = left edge).
@@ -1179,10 +1180,12 @@ private:
     static constexpr int DBM_ARROW_H = 14;  // height of each arrow button
     bool  m_draggingDbm{false};
     bool  m_draggingDbmRange{false};
+    bool  m_draggingDssFloor{false};
     int   m_dbmDragStartY{0};
     float m_dbmDragStartRef{0.0f};
     float m_dbmDragStartRange{0.0f};
     float m_dbmDragStartBottom{0.0f};
+    int   m_dssFloorDragStartDepth{0};
     // Off-screen slice indicator hit rects (parallel to m_sliceOverlays)
     QVector<QRect> m_offScreenRects;
     int  m_hoveringOffScreenIdx{-1};

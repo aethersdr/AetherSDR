@@ -1852,6 +1852,7 @@ bool SpectrumWidget::anyDragActive() const {
         || m_draggingVfo
         || m_draggingDbm
         || m_draggingDbmRange
+        || m_draggingDssFloor
         || m_draggingTimeScale
         || m_draggingTimeScaleRate
         || m_draggingTnfId >= 0;
@@ -2794,9 +2795,10 @@ void SpectrumWidget::setDssFloorDepth(int dB) {
         s.setValue(settingsKey("Display3DFloorDepth"), QString::number(dB));
         s.save();
         m_dss.invalidate();   // CPU fallback cache; mesh re-reads each frame
-        // The floor anchors the 3D dBm scale (dssFloorDbm), which lives in the
-        // cached overlay — rebuild it so the strip tracks the slider live.
+        // In 3D mode the visible dBm markings are anchored to this floor, so the
+        // cached overlay must redraw even when the span is stable.
         markOverlayDirty();
+        emit dssFloorDepthResolved(dB);
     }
     update();
 }
@@ -5843,6 +5845,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             const Qt::KeyboardModifiers modifiers =
                 ev->modifiers() | QGuiApplication::keyboardModifiers();
             const bool primaryClick = ev->button() == Qt::LeftButton;
+            const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
 #ifdef Q_OS_MAC
             const bool rangeDrag = modifiers.testFlag(Qt::ControlModifier)
                 || modifiers.testFlag(Qt::MetaModifier);
@@ -5883,6 +5886,14 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     markOverlayDirty();
                     refreshNoiseFloorTarget(true, true);
                     emit dbmRangeChangeRequested(bottom, m_refLevel);
+                    ev->accept();
+                    return;
+                }
+                if (is3D) {
+                    m_draggingDssFloor = true;
+                    m_dbmDragStartY = y;
+                    m_dssFloorDragStartDepth = dssFloorDepth();
+                    setSpectrumCursor(Qt::SizeVerCursor);
                     ev->accept();
                     return;
                 }
@@ -6555,6 +6566,18 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         return;
     }
 
+    if (m_draggingDssFloor) {
+        constexpr int kDssFloorDragRangeDb = 24;
+        const int dragHeight = std::max(1, specH);
+        const int dy = m_dbmDragStartY - y;
+        const int deltaDb = static_cast<int>(
+            std::lround((static_cast<double>(dy) / dragHeight) * kDssFloorDragRangeDb));
+        setDssFloorDepth(m_dssFloorDragStartDepth + deltaDb);
+        setSpectrumCursor(Qt::SizeVerCursor);
+        ev->accept();
+        return;
+    }
+
     if (m_draggingDbm) {
         const int dragHeight = std::max(1, specH);
         const int dy = y - m_dbmDragStartY;
@@ -6749,15 +6772,23 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 // level rather than inside a macro call — MSVC strictly
                 // rejects preprocessor directives inside macro arguments.
                 const QRect stripRect(stripX, 0, DBM_STRIP_W, specH);
-                static const QString tip =
-                    "<b>dBm scale</b><br>"
-                    "Drag &mdash; pan reference level<br>"
+                const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
 #ifdef Q_OS_MAC
-                    "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>"
+                const QString rangeDragTip =
+                    "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>";
 #else
-                    "Ctrl-drag &mdash; zoom span (anchor at bottom)<br>"
+                const QString rangeDragTip =
+                    "Ctrl-drag &mdash; zoom span (anchor at bottom)<br>";
 #endif
-                    "&#9650; / &#9660; &mdash; &plusmn;10 dB steps";
+                const QString tip =
+                    QString(is3D
+                        ? "<b>3D dBm scale</b><br>"
+                          "Drag &mdash; adjust 3D Floor<br>%1"
+                          "&#9650; / &#9660; &mdash; &plusmn;10 dB steps"
+                        : "<b>dBm scale</b><br>"
+                          "Drag &mdash; pan reference level<br>%1"
+                          "&#9650; / &#9660; &mdash; &plusmn;10 dB steps")
+                    .arg(rangeDragTip);
                 QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
                                    tip, this, stripRect);
             } else {
@@ -6869,6 +6900,12 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
         if (width() >= 100 && spectrumPixelHeight() >= 20) {
             emit dimensionsChanged(width(), spectrumPixelHeight());
         }
+        ev->accept();
+        return;
+    }
+    if (m_draggingDssFloor) {
+        m_draggingDssFloor = false;
+        setSpectrumCursor(Qt::CrossCursor);
         ev->accept();
         return;
     }
@@ -7544,10 +7581,10 @@ float SpectrumWidget::dssFloorDbm() const
 
 float SpectrumWidget::dssSpanDb() const
 {
-    // Span from the noise floor up to the Ref level. Ref drag still controls
-    // vertical zoom; the clamp keeps the wide 100-130 dB Flex window from
-    // flattening signals, and a small floor keeps weak bands legible.
-    const float span = m_refLevel - dssFloorDbm();
+    // The dB-per-height scale follows the normal panadapter dBm range, not the
+    // 3D Floor depth. The floor control shifts the surface reference; Ctrl-drag
+    // on the dBm strip remains the gesture that changes the scale/span.
+    const float span = m_dynamicRange;
     return std::clamp(span, 45.0f, 120.0f);
 }
 
@@ -8624,9 +8661,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawConnectionAnimation(p, specRect);
             drawKiwiSdrConnectionOverlay(
                 p, QRect(0, 0, qMax(0, w - DBM_STRIP_W), h));
-            // dBm strip: the 2D scale is a linear dBm axis; the 3D scale maps its
-            // ticks onto the front (live) trace's ridge band (height = floor→ref
-            // strength). Both share the same strip chrome and click targets.
+            // dBm strip: both render modes use a readable full-height amplitude
+            // reference; the 3D surface itself is perspective-foreshortened.
             if (is3D) {
                 drawDbmScale3D(p, specRect);
             } else {
@@ -11078,7 +11114,9 @@ void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
 void SpectrumWidget::drawDbmScaleLabels(QPainter& p, const QRect& specRect,
                                         float topDbm, float rangeDb)
 {
-    if (rangeDb <= 0.0f) return;
+    if (rangeDb <= 0.0f) {
+        return;
+    }
     const int stripX = specRect.right() - DBM_STRIP_W + 1;
 
     // ── dBm labels — full-height LINEAR axis: topDbm at the top, topDbm-rangeDb
@@ -11132,18 +11170,16 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
 
 // ─── dBm scale strip for 3D stacked-trace mode ───────────────────────────────
 //
-// A full-height LINEAR dBm axis: the measured noise floor sits at the baseline
-// and Ref at the top, so levels read like the 2D scale. The floor tracks the
-// Display-pane "3D Floor" slider (dssFloorDbm() folds in m_dssFloorOffsetDb) and
-// the span the Ref level (dssSpanDb()); moving either redraws the strip. The
-// perspective surface is foreshortened, so the ticks are an amplitude reference
-// (floor/Ref anchored), not pixel-aligned to individual receding ridges. Strip
-// chrome and click targets are identical to the 2D scale.
+// In 3D mode, a single right-side axis cannot be pixel-exact for every
+// perspective row. Keep it as a full-height amplitude reference anchored to the
+// 3D floor, so plain drag visibly shifts the dBm numbers and Ctrl/Meta-drag
+// changes the span.
 void SpectrumWidget::drawDbmScale3D(QPainter& p, const QRect& specRect)
 {
     drawDbmScaleChrome(p, specRect);
+    const float floorDbm = dssFloorDbm();
     const float span = dssSpanDb();
-    drawDbmScaleLabels(p, specRect, dssFloorDbm() + span, span);
+    drawDbmScaleLabels(p, specRect, floorDbm + span, span);
 }
 
 // ─── Time scale (right edge of waterfall) ─────────────────────────────────────

@@ -2033,6 +2033,20 @@ void SpectrumOverlayMenu::syncNoiseFloorPosition(int pos)
     }
 }
 
+void SpectrumOverlayMenu::syncDssFloorDepth(int dB)
+{
+    if (!m_dssFloorSlider) {
+        return;
+    }
+
+    const int clamped = std::clamp(dB, 0, 24);
+    QSignalBlocker block(m_dssFloorSlider);
+    m_dssFloorSlider->setValue(clamped);
+    if (m_dssFloorLabel) {
+        m_dssFloorLabel->setText(QString::number(clamped));
+    }
+}
+
 void SpectrumOverlayMenu::syncWfLineDuration(int rate)
 {
     if (!m_rateSlider || !m_rateLabel) {

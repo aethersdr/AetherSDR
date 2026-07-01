@@ -82,6 +82,7 @@ public:
     void setRfGainRange(int low, int high, int step);
     void setLoopState(bool loopA, bool loopB);
     void syncNoiseFloorPosition(int pos);
+    void syncDssFloorDepth(int dB);
 
     // Populate XVTR band sub-panel
     struct XvtrBand { QString name; double rfFreqMhz; QString stackKey; };
