@@ -349,6 +349,27 @@ computed once from the press point (a `QSizeGrip` moves as the window resizes, s
 re-mapping mid-drag would overshoot) — a `140 90` grip drag grows the window by
 exactly 140×90.
 
+### `hover`
+Synthesize a pointer **hover** over a widget (no button pressed, unlike `drag`)
+so hover-driven UI is provable end-to-end. The bare form fires a `QEnterEvent`
+plus a no-button `QMouseMove` at the widget centre; the `leave` form fires a
+`QEvent::Leave` so a driver can watch a fade-after-exit timer.
+
+```json
+→ {"cmd":"hover","target":"Forward power gauge"}
+← {"ok":true,"target":"Forward power gauge","class":"QWidget","action":"enter","x":1572,"y":993}
+→ {"cmd":"hover","target":"Forward power gauge","action":"leave"}
+← {"ok":true,"target":"Forward power gauge","class":"QWidget","action":"leave", ...}
+```
+
+Used to prove the TX meter mouse-over value readout: the SWR / forward-power /
+ALC / mic-level / compression `HGauge`s pop a `DragValuePopup` badge (the same
+one the sliders flash) showing the live numeric value while hovered, which fades
+one second after the pointer leaves. Grab the badge with `grab DragValuePopup`
+— note each `HGauge` owns its own popup, so with several meters hovered the name
+resolves to the first-created one; hover a single meter per instance for an
+unambiguous grab.
+
 ### `showMenu` (alias `openMenu`)
 Pop a `QToolButton`/`QPushButton` drop-down menu. The show is posted onto the GUI
 event loop with the owning window raised + activated first — showing the native

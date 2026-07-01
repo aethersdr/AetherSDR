@@ -17,6 +17,7 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QEnterEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QSysInfo>
@@ -1524,7 +1525,7 @@ bool AutomationServer::start(const QString& serverName)
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
         << "txtest, atu, slice, tune, pan, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
-        << "menu, close, drag, showMenu, contextMenu, whoami, log, mark)";
+        << "menu, close, drag, hover, showMenu, contextMenu, whoami, log, mark)";
     return true;
 }
 
@@ -1833,6 +1834,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         } else if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "drag sizeGrip 80 60"
+        } else if (cmd == QLatin1String("hover")) {
+            target = tok(1);
+            action = tok(2);  // optional "leave" → fade after exit
         } else if (cmd == QLatin1String("contextMenu")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "contextMenu SMeterWidget [x y]"
@@ -1868,6 +1872,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         if (target.isEmpty())
             return err(QStringLiteral("close requires a target widget/window"));
         return doClose(target);
+    }
+    if (cmd == QLatin1String("hover")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("hover requires a target widget"));
+        return doHover(target, action);
     }
     if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
         if (target.isEmpty())
@@ -3768,6 +3777,50 @@ QJsonObject AutomationServer::doDrag(const QString& target, const QString& value
         {QStringLiteral("class"), wp ? shortClassName(wp) : QStringLiteral("(deleted)")},
         {QStringLiteral("dx"), dx},
         {QStringLiteral("dy"), dy},
+    };
+}
+
+// hover <target> [leave]: synthesize pointer hover so hover-driven UI is
+// provable. Bare form fires QEnterEvent + a no-button QMouseMove at the widget
+// centre (mouse tracking is on for hover-aware widgets), which is what the
+// HGauge meter readout listens for. The 'leave' form fires QEvent::Leave so a
+// driver can watch the value badge fade one second after the pointer exits.
+QJsonObject AutomationServer::doHover(const QString& target, const QString& action) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget or window not found: ") + target);
+    if (!w->isVisible())
+        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+
+    const QPoint center(w->width() / 2, w->height() / 2);
+    const QPoint global = w->mapToGlobal(center);
+    const bool leave = (action == QLatin1String("leave"));
+
+    const QPointF localF = QPointF(center);
+    const QPointF globalF = QPointF(global);
+    if (leave) {
+        QEvent ev(QEvent::Leave);
+        QCoreApplication::sendEvent(w, &ev);
+    } else {
+        QEnterEvent enter(localF, localF, globalF);
+        QCoreApplication::sendEvent(w, &enter);
+        QMouseEvent move(QEvent::MouseMove, localF, localF, globalF,
+                         Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(w, &move);
+    }
+
+    qCInfo(lcAutomation).noquote()
+        << "hover" << target << (leave ? "leave" : "enter") << "at" << global;
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), shortClassName(w)},
+        {QStringLiteral("action"), leave ? QStringLiteral("leave")
+                                         : QStringLiteral("enter")},
+        {QStringLiteral("x"), global.x()},
+        {QStringLiteral("y"), global.y()},
     };
 }
 

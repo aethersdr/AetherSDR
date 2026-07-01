@@ -2529,6 +2529,7 @@ set_target_properties(container_widget_test PROPERTIES AUTOMOC ON)
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp
+    src/gui/DragValuePopup.cpp
     src/core/AppSettings.cpp
     src/core/ThemeManager.cpp
     src/core/LogManager.cpp

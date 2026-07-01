@@ -1,17 +1,23 @@
 #pragma once
 
+#include "DragValuePopup.h"
 #include "MeterSmoother.h"
 
 #include <QAccessible>
 #include <QAccessibleWidget>
+#include <QEnterEvent>
+#include <QEvent>
 #include <QKeyEvent>
+#include <QMouseEvent>
 #include <QPainter>
+#include <QPoint>
 #include <QWidget>
 #include <QWheelEvent>
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QVector>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <utility>
 
@@ -72,6 +78,8 @@ public:
             m_animElapsed.restart();
             m_animTimer.start();
         }
+        if (m_hovered)
+            showHoverPopup(m_lastHoverGlobal);
     }
 
     void setValueImmediate(float v) {
@@ -81,6 +89,8 @@ public:
             qBound(0.0f, (v - m_min) / (m_max - m_min), 1.0f));
         m_smooth.snapToTarget();
         update();
+        if (m_hovered)
+            showHoverPopup(m_lastHoverGlobal);
     }
 
     void setPeakValue(float v) {
@@ -129,7 +139,49 @@ public:
         update();
     }
 
+    // ── Hover value readout ───────────────────────────────────────────────
+    // Opt-in floating popup that shows the gauge's current numeric value
+    // while the pointer hovers over the bar, reusing the same DragValuePopup
+    // badge the sliders flash on keyboard/drag adjustment.  Handy on the TX
+    // meters (SWR / forward power / ALC) where the bar scale alone doesn't
+    // give an exact reading.  The badge lingers briefly after the pointer
+    // leaves so a quick glance-and-move still registers. (#feat meter readout)
+    using HoverValueFormatter = std::function<QString(float)>;
+
+    void setHoverValueFormatter(HoverValueFormatter formatter) {
+        m_hoverFormatter = std::move(formatter);
+    }
+
+    void setHoverValuePopupEnabled(bool enabled) {
+        m_hoverPopupEnabled = enabled;
+        setMouseTracking(enabled);
+        if (!enabled && m_hoverPopup)
+            m_hoverPopup->hideNow();
+    }
+
 protected:
+    void enterEvent(QEnterEvent* ev) override {
+        QWidget::enterEvent(ev);
+        m_hovered = true;
+        m_lastHoverGlobal = ev->globalPosition().toPoint();
+        showHoverPopup(m_lastHoverGlobal);
+    }
+
+    void mouseMoveEvent(QMouseEvent* ev) override {
+        QWidget::mouseMoveEvent(ev);
+        m_lastHoverGlobal = ev->globalPosition().toPoint();
+        if (m_hovered)
+            showHoverPopup(m_lastHoverGlobal);
+    }
+
+    void leaveEvent(QEvent* ev) override {
+        QWidget::leaveEvent(ev);
+        m_hovered = false;
+        // Fade the readout one second after the pointer leaves the bar.
+        if (m_hoverPopup)
+            m_hoverPopup->linger(kHoverLingerMs);
+    }
+
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
@@ -239,6 +291,23 @@ protected:
     }
 
 private:
+    QString hoverValueText() const {
+        if (m_hoverFormatter)
+            return m_hoverFormatter(m_value);
+        QString text = QString::number(m_value, 'f', 1);
+        if (!m_unit.isEmpty())
+            text += QLatin1Char(' ') + m_unit;
+        return text;
+    }
+
+    void showHoverPopup(const QPoint& globalAnchor) {
+        if (!m_hoverPopupEnabled)
+            return;
+        if (!m_hoverPopup)
+            m_hoverPopup = new AetherSDR::DragValuePopup(this);
+        m_hoverPopup->showValue(globalAnchor, hoverValueText());
+    }
+
     float m_min, m_max, m_redStart, m_yellowStart;
     float m_value{0.0f};
     float m_peakValue{0.0f};
@@ -247,6 +316,14 @@ private:
     bool  m_fillFromRight{false};
     QString m_label, m_unit;
     QVector<Tick> m_ticks;
+
+    // Hover value readout state (see setHoverValuePopupEnabled).
+    static constexpr int kHoverLingerMs = 1000;
+    HoverValueFormatter m_hoverFormatter;
+    AetherSDR::DragValuePopup* m_hoverPopup{nullptr};
+    bool m_hoverPopupEnabled{false};
+    bool m_hovered{false};
+    QPoint m_lastHoverGlobal;
 
     // Shared meter ballistics — see MeterSmoother.h.
     MeterSmoother m_smooth;
