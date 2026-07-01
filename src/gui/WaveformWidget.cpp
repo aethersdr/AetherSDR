@@ -6,10 +6,11 @@
 #include <QApplication>
 #include <QFontMetrics>
 #include <QLinearGradient>
+#include <QLineF>
 #include <QMouseEvent>
 #include <QPaintEvent>
 #include <QPainter>
-#include <QPainterPath>
+#include <QPolygonF>
 #include <QSizePolicy>
 
 #include <algorithm>
@@ -18,9 +19,12 @@
 
 namespace AetherSDR {
 
-// WAVE is intentionally QPainter-only for v1: the sidebar scope is small,
-// cross-platform, and cheap to repaint; future QRhi support can follow the
-// SpectrumWidget path without making GPU builds depend on another renderer now.
+// WAVE is QPainter-only for now, but reduction is already incremental
+// (WaveformScopeModel): repaints merge pre-folded bins instead of rescanning
+// the raw window, so paint cost no longer scales with the time window.
+// A QRhi render path can follow the SpectrumWidget pattern by uploading the
+// merged ColumnStats array as a 1-D texture; the model's generation()
+// counter is the dirty flag for that upload (#3351-adjacent, Phase 2).
 namespace {
 
 constexpr int kDefaultSampleRate = 24000;
@@ -28,13 +32,16 @@ constexpr int kMinSampleRate = 8000;
 constexpr int kMaxSampleRate = 192000;
 constexpr int kNoAudioTimeoutMs = 1000;
 constexpr int kMinWindowMs = 40;
-// Lifted from 240 ms to 20 s so the WaveApplet drawer's "Window" slider
-// (1–20 s, matches StripWaveformPanel) can take effect.  ensureCapacity
-// scales the ring buffer to fit the current window, so larger values
-// only allocate when the user picks them.
-constexpr int kMaxWindowMs = 20000;
+// Per-profile window ceilings — the sidebar applet's Window slider tops out
+// at 20 s; the strip fork historically allowed 30 s for CE-SSB envelope
+// monitoring on voice TX.
+constexpr int kAppletMaxWindowMs = 20000;
+constexpr int kStripMaxWindowMs = 30000;
 constexpr int kMinRefreshRateHz = 5;
-constexpr int kMaxRefreshRateHz = 30;
+// One shared repaint ceiling. The old sidebar cap of 30 Hz existed to keep
+// QPainter cost down; with incremental reduction the applet can afford the
+// strip's 120 Hz ceiling (the applet UI defaults to 60).
+constexpr int kMaxRefreshRateHz = 120;
 constexpr double kPi = 3.14159265358979323846;
 
 inline QColor kBackground() { return AetherSDR::ThemeManager::instance().color("color.background.0"); }
@@ -76,13 +83,31 @@ QString formatSampleRate(int sampleRate)
 } // namespace
 
 WaveformWidget::WaveformWidget(QWidget* parent)
+    : WaveformWidget(Profile::Applet, parent)
+{
+}
+
+WaveformWidget::WaveformWidget(Profile profile, QWidget* parent)
     : QWidget(parent)
+    , m_maxWindowMs(profile == Profile::Strip ? kStripMaxWindowMs
+                                              : kAppletMaxWindowMs)
+    // The strip fork drew with antialiased strokes (visibly smoother at its
+    // higher refresh / longer windows); the sidebar applet keeps the crisp
+    // unantialiased trace. Preserved per-profile through the merge.
+    , m_antialiasedStroke(profile == Profile::Strip)
 {
     setMinimumSize(minimumSizeHint());
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     setAttribute(Qt::WA_OpaquePaintEvent);
     setAutoFillBackground(false);
     setToolTip("Click to pause/resume waveform capture; double-click for WAVE settings");
+    setObjectName(profile == Profile::Strip ? QStringLiteral("stripWaveformScope")
+                                            : QStringLiteral("waveAppletScope"));
+    setAccessibleName(profile == Profile::Strip
+                          ? QStringLiteral("Strip waveform scope")
+                          : QStringLiteral("WAVE waveform scope"));
+
+    m_perfSince.start();
 
     m_clickTimer.setSingleShot(true);
     // Interval read at click time from clickDiscriminationIntervalMs() so
@@ -104,7 +129,13 @@ void WaveformWidget::appendScopeSamples(const QByteArray& monoFloat32Pcm,
         return;
 
     const auto* src = reinterpret_cast<const float*>(monoFloat32Pcm.constData());
-    appendToRing(tx ? m_tx : m_rx, src, samples, sanitizeSampleRate(sampleRate));
+    WaveformScopeModel& model = tx ? m_tx : m_rx;
+    model.configure(sanitizeSampleRate(sampleRate), m_windowMs);
+    model.append(src, samples);
+
+    ++m_perfAppendCount;
+    m_perfAppendedSamples += static_cast<quint64>(samples);
+
     scheduleRepaint();
 }
 
@@ -118,8 +149,8 @@ void WaveformWidget::setTransmitting(bool tx)
 
 void WaveformWidget::clear()
 {
-    clearRing(m_rx);
-    clearRing(m_tx);
+    m_rx.clear();
+    m_tx.clear();
     update();
 }
 
@@ -138,11 +169,13 @@ void WaveformWidget::setZoomWindowMs(int windowMs)
         return;
 
     m_windowMs = sanitized;
+    m_rx.configure(m_rx.sampleRate(), sanitized);
+    m_tx.configure(m_tx.sampleRate(), sanitized);
     if (m_paused) {
-        const RingBuffer& buffer = activeBuffer();
-        m_pausedSampleRate = sanitizeSampleRate(buffer.sampleRate);
-        const int windowSamples = std::max(1, m_pausedSampleRate * m_windowMs / 1000);
-        copyLatest(buffer, windowSamples, m_pausedSamples);
+        // Re-window the frozen audio — the paused raw ring holds the old
+        // window plus headroom, so shrinking (or modestly growing) the
+        // window re-bins from the snapshot rather than pulling live data.
+        m_pausedModel.configure(m_pausedModel.sampleRate(), sanitized);
     }
     update();
 }
@@ -165,112 +198,201 @@ void WaveformWidget::setAmplitudeZoom(float zoom)
     update();
 }
 
+WaveformWidget::PerfStats WaveformWidget::perfStats() const
+{
+    PerfStats s;
+    s.paintCount = m_perfPaintCount;
+    s.paintUsTotal = m_perfPaintUsTotal;
+    s.paintUsMax = m_perfPaintUsMax;
+    s.appendCount = m_perfAppendCount;
+    s.appendedSamples = m_perfAppendedSamples;
+    s.sinceMs = m_perfSince.isValid() ? m_perfSince.elapsed() : 0;
+    return s;
+}
+
+void WaveformWidget::resetPerfStats()
+{
+    m_perfPaintCount = 0;
+    m_perfPaintUsTotal = 0;
+    m_perfPaintUsMax = 0;
+    m_perfAppendCount = 0;
+    m_perfAppendedSamples = 0;
+    m_perfSince.restart();
+}
+
+int WaveformWidget::activeSampleRate() const
+{
+    return displayModel().sampleRate();
+}
+
+QVariantMap WaveformWidget::wavestatsSnapshot(bool reset)
+{
+    const PerfStats s = perfStats();
+    const double secs = std::max(0.001, s.sinceMs / 1000.0);
+
+    QVariantMap m;
+    m[QStringLiteral("name")] = objectName();
+    m[QStringLiteral("windowTitle")] = window() ? window()->windowTitle() : QString();
+    // Which top-level surface hosts this scope: the main window (docked),
+    // a FloatingContainerWindow (popped-out applet), or the strip.
+    m[QStringLiteral("windowClass")] = window()
+        ? QString::fromLatin1(window()->metaObject()->className())
+        : QString();
+    m[QStringLiteral("floating")] =
+        window() && !window()->inherits("QMainWindow");
+    m[QStringLiteral("visible")] = isVisible();
+    m[QStringLiteral("tx")] = m_transmitting;
+    m[QStringLiteral("paused")] = m_paused;
+    switch (m_viewMode) {
+    case ViewMode::Graph:        m[QStringLiteral("mode")] = QStringLiteral("Scope"); break;
+    case ViewMode::Envelope:     m[QStringLiteral("mode")] = QStringLiteral("Envelope"); break;
+    case ViewMode::Bars:         m[QStringLiteral("mode")] = QStringLiteral("History"); break;
+    case ViewMode::VerticalBars: m[QStringLiteral("mode")] = QStringLiteral("Bands"); break;
+    }
+    m[QStringLiteral("fps")] = m_refreshRateHz;
+    m[QStringLiteral("windowMs")] = m_windowMs;
+    m[QStringLiteral("sampleRate")] = activeSampleRate();
+    m[QStringLiteral("widthPx")] = width();
+    m[QStringLiteral("heightPx")] = height();
+    m[QStringLiteral("sinceMs")] = static_cast<qlonglong>(s.sinceMs);
+    m[QStringLiteral("paintCount")] = static_cast<qulonglong>(s.paintCount);
+    m[QStringLiteral("paintsPerSec")] = s.paintCount / secs;
+    m[QStringLiteral("avgPaintUs")] = s.paintCount
+        ? static_cast<double>(s.paintUsTotal) / s.paintCount : 0.0;
+    m[QStringLiteral("maxPaintUs")] = static_cast<qulonglong>(s.paintUsMax);
+    // Main-thread paint budget actually consumed, in "ms per wall second" —
+    // the single number to compare before/after a rendering change.
+    m[QStringLiteral("paintMsPerSec")] = (s.paintUsTotal / 1000.0) / secs;
+    m[QStringLiteral("appendsPerSec")] = s.appendCount / secs;
+    m[QStringLiteral("samplesPerSec")] = s.appendedSamples / secs;
+
+    if (reset)
+        resetPerfStats();
+    return m;
+}
+
 void WaveformWidget::paintEvent(QPaintEvent* event)
 {
-    Q_UNUSED(event);
+    QElapsedTimer paintTimer;
+    paintTimer.start();
 
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, false);
+    painter.setRenderHint(QPainter::Antialiasing, m_antialiasedStroke);
+    // fillRect is clipped to the update region, so a plot-only data
+    // repaint doesn't re-fill (or re-composite) the header/footer bands.
     painter.fillRect(rect(), kBackground());
 
-    QRectF plotRect = QRectF(rect()).adjusted(5.0, 18.0, -34.0, -17.0);
-    if (plotRect.width() < 24.0 || plotRect.height() < 36.0)
-        plotRect = QRectF(rect()).adjusted(4.0, 17.0, -30.0, -16.0);
+    const QRectF plotRect = plotArea();
+    // Data-driven repaints (scheduleRepaint) invalidate only the plot
+    // area; the header readout and footer are re-shaped and re-drawn only
+    // when the update region reaches them (~5 Hz, or any full update()).
+    const QRect updateRect = event->rect();
+    const bool drawHeader = updateRect.top() < static_cast<int>(plotRect.top());
+    const bool drawFooter =
+        updateRect.bottom() > static_cast<int>(plotRect.bottom());
 
-    const RingBuffer& buffer = activeBuffer();
+    const WaveformScopeModel& model = displayModel();
     const QString source = (m_paused ? m_pausedTransmitting : m_transmitting)
         ? QStringLiteral("TX")
         : QStringLiteral("RX");
-    const int sampleRate = sanitizeSampleRate(m_paused
-        ? m_pausedSampleRate
-        : buffer.sampleRate);
-    if (m_paused) {
-        m_displaySamples = m_pausedSamples;
+    const int sampleRate = model.sampleRate();
+
+    // Merge bins → pixel columns once, per the mode's column count; the
+    // whole-window readout stats come from the same walk.
+    WaveformScopeModel::WindowStats stats;
+    if (m_viewMode == ViewMode::VerticalBars) {
+        stats = model.windowStats();
+        m_columns.clear();
     } else {
-        const int windowSamples = std::max(1, sampleRate * m_windowMs / 1000);
-        copyLatest(buffer, windowSamples, m_displaySamples);
+        int columnCount = 0;
+        if (m_viewMode == ViewMode::Bars)
+            columnCount = std::clamp(static_cast<int>(plotRect.width() / 5.0), 12, 64);
+        else
+            columnCount = std::max(1, static_cast<int>(std::floor(plotRect.width())));
+        stats = model.mergeColumns(columnCount, m_columns);
     }
 
-    float peak = 0.0f;
-    double sumSq = 0.0;
-    int clipCount = 0;
-    for (float s : m_displaySamples) {
-        const float a = std::abs(s);
-        peak = std::max(peak, a);
-        sumSq += static_cast<double>(s) * s;
-        if (a >= 0.98f)
-            ++clipCount;
-    }
-    const float rms = m_displaySamples.isEmpty()
-        ? 0.0f
-        : static_cast<float>(std::sqrt(sumSq / m_displaySamples.size()));
-    const float peakDb = linearToDb(peak);
-    const float rmsDb = linearToDb(rms);
+    const float peakDb = linearToDb(stats.peak);
+    const float rmsDb = linearToDb(stats.rms);
+    const int clipCount = stats.clipCount;
+
+    const int gridKind =
+        (m_viewMode == ViewMode::Bars || m_viewMode == ViewMode::VerticalBars)
+            ? 1 : 0;
+    ensureGridCache(gridKind, plotRect);
+    painter.drawPixmap(0, 0, m_gridCache);
 
     if (m_viewMode == ViewMode::VerticalBars) {
-        drawBarsGrid(painter, plotRect);
-        if (!m_displaySamples.isEmpty())
+        if (!stats.empty)
             drawVerticalBars(painter, plotRect, sampleRate);
     } else if (m_viewMode == ViewMode::Envelope) {
-        drawGrid(painter, plotRect, sampleRate);
-        if (!m_displaySamples.isEmpty())
+        if (!stats.empty)
             drawEnvelope(painter, plotRect, clipCount);
     } else if (m_viewMode == ViewMode::Bars) {
-        drawBarsGrid(painter, plotRect);
-        if (!m_displaySamples.isEmpty())
+        if (!stats.empty)
             drawBars(painter, plotRect);
     } else {
-        drawGrid(painter, plotRect, sampleRate);
-        if (!m_displaySamples.isEmpty())
+        if (!stats.empty)
             drawGraph(painter, plotRect, clipCount);
     }
 
-    QFont labelFont = font();
-    labelFont.setPointSizeF(std::max(7.0, labelFont.pointSizeF() - 1.0));
-    painter.setFont(labelFont);
-    painter.setPen(kLabelColor());
-    const QString readout = QStringLiteral("%1  RMS %2 dBFS  PK %3 dBFS")
-        .arg(source)
-        .arg(rmsDb, 0, 'f', 1)
-        .arg(peakDb, 0, 'f', 1);
-    painter.drawText(QRectF(7.0, 3.0, width() - 14.0, 16.0),
-                     Qt::AlignLeft | Qt::AlignVCenter,
-                     readout);
-
-    if (clipCount > 0) {
-        QFont clipFont = labelFont;
-        clipFont.setBold(true);
-        painter.setFont(clipFont);
-        painter.setPen(kClipColor());
-        painter.drawText(QRectF(7.0, 3.0, width() - 14.0, 16.0),
-                         Qt::AlignRight | Qt::AlignVCenter,
-                         QStringLiteral("CLIP %1").arg(clipCount));
+    if (drawHeader) {
+        QFont labelFont = font();
+        labelFont.setPointSizeF(std::max(7.0, labelFont.pointSizeF() - 1.0));
         painter.setFont(labelFont);
+        painter.setPen(kLabelColor());
+        const QString readout = QStringLiteral("%1  RMS %2 dBFS  PK %3 dBFS")
+            .arg(source)
+            .arg(rmsDb, 0, 'f', 1)
+            .arg(peakDb, 0, 'f', 1);
+        painter.drawText(QRectF(7.0, 3.0, width() - 14.0, 16.0),
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         readout);
+
+        if (clipCount > 0) {
+            QFont clipFont = labelFont;
+            clipFont.setBold(true);
+            painter.setFont(clipFont);
+            painter.setPen(kClipColor());
+            painter.drawText(QRectF(7.0, 3.0, width() - 14.0, 16.0),
+                             Qt::AlignRight | Qt::AlignVCenter,
+                             QStringLiteral("CLIP %1").arg(clipCount));
+        }
     }
 
-    painter.setPen(kMutedLabel());
-    const QString timeText = m_viewMode == ViewMode::VerticalBars
-        ? QString::fromUtf8("%1 \xc2\xb7 %2 ms \xc2\xb7 frequency bands")
-            .arg(formatSampleRate(sampleRate))
-            .arg(m_windowMs)
-        : QString::fromUtf8("%1 \xc2\xb7 %2 ms \xc2\xb7 %3 ms/div")
-            .arg(formatSampleRate(sampleRate))
-            .arg(m_windowMs)
-            .arg(std::max(1, m_windowMs / 10));
     const QRectF footerRect(plotRect.left(), plotRect.bottom() + 2.0,
                             plotRect.width(), 15.0);
-    painter.drawText(m_paused ? footerRect.adjusted(0.0, 0.0, -52.0, 0.0) : footerRect,
-                     Qt::AlignLeft | Qt::AlignVCenter,
-                     timeText);
+    if (drawFooter) {
+        QFont labelFont = font();
+        labelFont.setPointSizeF(std::max(7.0, labelFont.pointSizeF() - 1.0));
+        painter.setFont(labelFont);
+        painter.setPen(kMutedLabel());
+        const QString timeText = m_viewMode == ViewMode::VerticalBars
+            ? QString::fromUtf8("%1 \xc2\xb7 %2 ms \xc2\xb7 frequency bands")
+                .arg(formatSampleRate(sampleRate))
+                .arg(m_windowMs)
+            : QString::fromUtf8("%1 \xc2\xb7 %2 ms \xc2\xb7 %3 ms/div")
+                .arg(formatSampleRate(sampleRate))
+                .arg(m_windowMs)
+                .arg(std::max(1, m_windowMs / 10));
+        painter.drawText(m_paused ? footerRect.adjusted(0.0, 0.0, -52.0, 0.0) : footerRect,
+                         Qt::AlignLeft | Qt::AlignVCenter,
+                         timeText);
+    }
 
+    const qint64 sinceAppend = activeModel().msSinceLastAppend();
     const bool stale = !m_paused
-        && (!buffer.lastSamples.isValid()
-        || buffer.lastSamples.elapsed() > kNoAudioTimeoutMs);
-    if (m_displaySamples.isEmpty() || stale)
+        && (sinceAppend < 0 || sinceAppend > kNoAudioTimeoutMs);
+    if (stats.empty || stale)
         drawNoAudio(painter, plotRect, source);
 
-    if (m_paused)
+    if (m_paused && drawFooter)
         drawPausedBadge(painter, footerRect);
+
+    ++m_perfPaintCount;
+    const quint64 us = static_cast<quint64>(paintTimer.nsecsElapsed() / 1000);
+    m_perfPaintUsTotal += us;
+    m_perfPaintUsMax = std::max(m_perfPaintUsMax, us);
 }
 
 void WaveformWidget::mouseReleaseEvent(QMouseEvent* event)
@@ -299,90 +421,70 @@ void WaveformWidget::mouseDoubleClickEvent(QMouseEvent* event)
     QWidget::mouseDoubleClickEvent(event);
 }
 
-WaveformWidget::RingBuffer& WaveformWidget::activeBuffer()
+WaveformScopeModel& WaveformWidget::activeModel()
 {
     return m_transmitting ? m_tx : m_rx;
 }
 
-const WaveformWidget::RingBuffer& WaveformWidget::activeBuffer() const
+const WaveformScopeModel& WaveformWidget::activeModel() const
 {
     return m_transmitting ? m_tx : m_rx;
 }
 
-void WaveformWidget::ensureCapacity(RingBuffer& buffer, int sampleRate)
+const WaveformScopeModel& WaveformWidget::displayModel() const
 {
-    const int rate = sanitizeSampleRate(sampleRate);
-    // Size the ring to hold the current window plus 1 s headroom.  Floor
-    // at 1 s so a freshly-applied small window doesn't truncate samples
-    // that arrived just before the change.  Round up to 4096-sample
-    // chunks so a slider drag doesn't realloc on every notch.
-    const int windowSamples = static_cast<int>(
-        static_cast<int64_t>(rate) * std::max(1000, m_windowMs) / 1000);
-    const int needed   = std::max(rate, windowSamples) + rate;
-    const int capacity = ((needed + 4095) / 4096) * 4096;
-    if (buffer.samples.size() >= capacity) {
-        buffer.sampleRate = rate;
-        return;
-    }
-
-    QVector<float> preserved;
-    copyLatest(buffer, std::min(buffer.filled, capacity), preserved);
-
-    buffer.samples = QVector<float>(capacity, 0.0f);
-    buffer.writeIndex = 0;
-    buffer.filled = 0;
-    buffer.sampleRate = rate;
-
-    const int newCapacity = buffer.samples.size();
-    for (float s : preserved) {
-        buffer.samples[buffer.writeIndex] = s;
-        buffer.writeIndex = (buffer.writeIndex + 1) % newCapacity;
-        buffer.filled = std::min(buffer.filled + 1, newCapacity);
-    }
+    return m_paused ? m_pausedModel : activeModel();
 }
 
-void WaveformWidget::appendToRing(RingBuffer& buffer,
-                                  const float* samples,
-                                  int count,
-                                  int sampleRate)
+QRectF WaveformWidget::plotArea() const
 {
-    ensureCapacity(buffer, sampleRate);
-    if (buffer.samples.isEmpty())
+    QRectF plotRect = QRectF(rect()).adjusted(5.0, 18.0, -34.0, -17.0);
+    if (plotRect.width() < 24.0 || plotRect.height() < 36.0)
+        plotRect = QRectF(rect()).adjusted(4.0, 17.0, -30.0, -16.0);
+    return plotRect;
+}
+
+void WaveformWidget::ensureGridCache(int kind, const QRectF& plotRect)
+{
+    const qreal dpr = devicePixelRatioF();
+    const bool grid = showGrid();
+    // Grid colors come from the theme; mix the four it uses into one key
+    // so a theme switch invalidates the cache.
+    const quint64 themeKey =
+        (static_cast<quint64>(kGridMinor().rgba()) << 32)
+        ^ (static_cast<quint64>(kGridMajor().rgba()) << 16)
+        ^ (static_cast<quint64>(kCenterLine().rgba()) << 8)
+        ^ static_cast<quint64>(kMutedLabel().rgba());
+    const QString fontKey = font().key();
+
+    if (m_gridCacheKind == kind && m_gridCacheSize == size()
+        && qFuzzyCompare(m_gridCacheDpr, dpr)
+        && qFuzzyCompare(m_gridCacheZoom, m_amplitudeZoom)
+        && m_gridCacheShowGrid == grid
+        && m_gridCacheThemeKey == themeKey
+        && m_gridCacheFontKey == fontKey
+        && !m_gridCache.isNull())
         return;
 
-    const int capacity = buffer.samples.size();
-    for (int i = 0; i < count; ++i) {
-        buffer.samples[buffer.writeIndex] = clampSample(samples[i]);
-        buffer.writeIndex = (buffer.writeIndex + 1) % capacity;
-        buffer.filled = std::min(buffer.filled + 1, capacity);
+    m_gridCache = QPixmap(size() * dpr);
+    m_gridCache.setDevicePixelRatio(dpr);
+    m_gridCache.fill(Qt::transparent);
+    {
+        QPainter p(&m_gridCache);
+        p.setRenderHint(QPainter::Antialiasing, m_antialiasedStroke);
+        p.setFont(font());
+        if (kind == 1)
+            drawBarsGrid(p, plotRect);
+        else
+            drawGrid(p, plotRect, 0);
     }
-    buffer.lastSamples.restart();
-}
-
-void WaveformWidget::clearRing(RingBuffer& buffer)
-{
-    buffer.samples.fill(0.0f);
-    buffer.writeIndex = 0;
-    buffer.filled = 0;
-    buffer.lastSamples.invalidate();
-}
-
-void WaveformWidget::copyLatest(const RingBuffer& buffer, int count, QVector<float>& out) const
-{
-    out.clear();
-    if (count <= 0 || buffer.filled <= 0 || buffer.samples.isEmpty())
-        return;
-
-    count = std::min(count, buffer.filled);
-    out.resize(count);
-
-    const int capacity = buffer.samples.size();
-    int start = buffer.writeIndex - count;
-    while (start < 0)
-        start += capacity;
-
-    for (int i = 0; i < count; ++i)
-        out[i] = buffer.samples[(start + i) % capacity];
+    m_gridCacheKind = kind;
+    m_gridCacheSize = size();
+    m_gridCacheDpr = dpr;
+    m_gridCacheZoom = m_amplitudeZoom;
+    m_gridCacheShowGrid = grid;
+    m_gridCacheThemeKey = themeKey;
+    m_gridCacheFontKey = fontKey;
 }
 
 void WaveformWidget::setPaused(bool paused)
@@ -391,67 +493,21 @@ void WaveformWidget::setPaused(bool paused)
         return;
 
     if (paused) {
-        const RingBuffer& buffer = activeBuffer();
         m_pausedTransmitting = m_transmitting;
-        m_pausedSampleRate = sanitizeSampleRate(buffer.sampleRate);
-        const int windowSamples = std::max(1, m_pausedSampleRate * m_windowMs / 1000);
-        copyLatest(buffer, windowSamples, m_pausedSamples);
+        m_pausedModel = activeModel();
     } else {
-        m_pausedSamples.clear();
+        // Drop the snapshot — it carries a full copy of the raw ring.
+        m_pausedModel = WaveformScopeModel();
     }
 
     m_paused = paused;
     update();
 }
 
-void WaveformWidget::buildColumns(int columnCount)
-{
-    m_columns.clear();
-    if (columnCount <= 0 || m_displaySamples.isEmpty())
-        return;
-
-    m_columns.resize(columnCount);
-    const int n = m_displaySamples.size();
-
-    for (int x = 0; x < columnCount; ++x) {
-        int start = (x * n) / columnCount;
-        int end = ((x + 1) * n) / columnCount;
-        if (end <= start)
-            end = start + 1;
-        start = std::clamp(start, 0, n - 1);
-        end = std::clamp(end, start + 1, n);
-
-        float mn = 1.0f;
-        float mx = -1.0f;
-        float peak = 0.0f;
-        double sumSq = 0.0;
-        int clipped = 0;
-        for (int i = start; i < end; ++i) {
-            const float s = clampSample(m_displaySamples[i]);
-            mn = std::min(mn, s);
-            mx = std::max(mx, s);
-            const float a = std::abs(s);
-            peak = std::max(peak, a);
-            sumSq += static_cast<double>(s) * s;
-            if (a >= 0.98f)
-                ++clipped;
-        }
-
-        ColumnStats& c = m_columns[x];
-        c.min = mn;
-        c.max = mx;
-        c.peak = peak;
-        c.rms = static_cast<float>(std::sqrt(sumSq / (end - start)));
-        c.clipped = clipped;
-    }
-}
-
 void WaveformWidget::drawGraph(QPainter& painter,
                                const QRectF& plotRect,
                                int clipCount)
 {
-    const int columnCount = std::max(1, static_cast<int>(std::floor(plotRect.width())));
-    buildColumns(columnCount);
     if (m_columns.isEmpty())
         return;
 
@@ -460,58 +516,57 @@ void WaveformWidget::drawGraph(QPainter& painter,
     const qreal left = plotRect.left();
     const QColor wave = waveformColor();
 
-    QPainterPath peakTop;
-    QPainterPath peakBottom;
-    QPainterPath rmsTop;
-    QPainterPath rmsBottom;
+    // One geometry pass, then batched draw calls: a single drawLines()
+    // for the min/max columns and drawPolyline() for the envelopes,
+    // instead of ~columnCount drawLine() calls plus four QPainterPaths
+    // rebuilt per frame.
+    m_lineScratch.clear();
+    m_lineScratch.reserve(m_columns.size());
+    m_peakTopPts.resize(m_columns.size());
+    m_peakBottomPts.resize(m_columns.size());
+    m_rmsTopPts.resize(m_columns.size());
+    m_rmsBottomPts.resize(m_columns.size());
 
-    painter.setPen(QPen(wave, waveformLineWidth(), Qt::SolidLine, Qt::RoundCap));
     for (int x = 0; x < m_columns.size(); ++x) {
-        const ColumnStats& c = m_columns[x];
+        const WaveformScopeModel::ColumnStats& c = m_columns[x];
         const qreal px = left + x + 0.5;
         const qreal minY = centerY - std::clamp(c.min * m_amplitudeZoom, -1.0f, 1.0f) * halfHeight;
         const qreal maxY = centerY - std::clamp(c.max * m_amplitudeZoom, -1.0f, 1.0f) * halfHeight;
-        painter.drawLine(QPointF(px, minY), QPointF(px, maxY));
+        m_lineScratch.append(QLineF(px, minY, px, maxY));
 
         const qreal peak = std::clamp(c.peak * m_amplitudeZoom, 0.0f, 1.0f);
         const qreal rms = std::clamp(c.rms * m_amplitudeZoom, 0.0f, 1.0f);
-        const qreal peakTopY = centerY - peak * halfHeight;
-        const qreal peakBottomY = centerY + peak * halfHeight;
-        const qreal rmsTopY = centerY - rms * halfHeight;
-        const qreal rmsBottomY = centerY + rms * halfHeight;
-        if (x == 0) {
-            peakTop.moveTo(px, peakTopY);
-            peakBottom.moveTo(px, peakBottomY);
-            rmsTop.moveTo(px, rmsTopY);
-            rmsBottom.moveTo(px, rmsBottomY);
-        } else {
-            peakTop.lineTo(px, peakTopY);
-            peakBottom.lineTo(px, peakBottomY);
-            rmsTop.lineTo(px, rmsTopY);
-            rmsBottom.lineTo(px, rmsBottomY);
-        }
+        m_peakTopPts[x] = QPointF(px, centerY - peak * halfHeight);
+        m_peakBottomPts[x] = QPointF(px, centerY + peak * halfHeight);
+        m_rmsTopPts[x] = QPointF(px, centerY - rms * halfHeight);
+        m_rmsBottomPts[x] = QPointF(px, centerY + rms * halfHeight);
     }
+
+    painter.setPen(QPen(wave, waveformLineWidth(), Qt::SolidLine, Qt::RoundCap));
+    painter.drawLines(m_lineScratch.constData(), m_lineScratch.size());
 
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setPen(QPen(kPeakColor(), 1.0));
-    painter.drawPath(peakTop);
-    painter.drawPath(peakBottom);
+    painter.drawPolyline(m_peakTopPts.constData(), m_peakTopPts.size());
+    painter.drawPolyline(m_peakBottomPts.constData(), m_peakBottomPts.size());
     painter.setPen(QPen(kRmsColor(), 1.4));
-    painter.drawPath(rmsTop);
-    painter.drawPath(rmsBottom);
+    painter.drawPolyline(m_rmsTopPts.constData(), m_rmsTopPts.size());
+    painter.drawPolyline(m_rmsBottomPts.constData(), m_rmsBottomPts.size());
     painter.setRenderHint(QPainter::Antialiasing, false);
 
     if (clipCount > 0) {
-        painter.setPen(QPen(kClipColor(), 1.0));
+        m_lineScratch.clear();
         for (int x = 0; x < m_columns.size(); ++x) {
             if (m_columns[x].clipped <= 0)
                 continue;
             const qreal px = left + x + 0.5;
-            painter.drawLine(QPointF(px, plotRect.top()),
-                             QPointF(px, plotRect.top() + 4.0));
-            painter.drawLine(QPointF(px, plotRect.bottom() - 4.0),
-                             QPointF(px, plotRect.bottom()));
+            m_lineScratch.append(QLineF(px, plotRect.top(),
+                                        px, plotRect.top() + 4.0));
+            m_lineScratch.append(QLineF(px, plotRect.bottom() - 4.0,
+                                        px, plotRect.bottom()));
         }
+        painter.setPen(QPen(kClipColor(), 1.0));
+        painter.drawLines(m_lineScratch.constData(), m_lineScratch.size());
     }
 }
 
@@ -519,8 +574,6 @@ void WaveformWidget::drawEnvelope(QPainter& painter,
                                   const QRectF& plotRect,
                                   int clipCount)
 {
-    const int columnCount = std::max(1, static_cast<int>(std::floor(plotRect.width())));
-    buildColumns(columnCount);
     if (m_columns.isEmpty())
         return;
 
@@ -529,56 +582,39 @@ void WaveformWidget::drawEnvelope(QPainter& painter,
     const qreal left = plotRect.left();
     const QColor wave = waveformColor();
 
-    QVector<QPointF> rmsTop;
-    QVector<QPointF> rmsBottom;
-    QPainterPath peakTop;
-    QPainterPath peakBottom;
-    QPainterPath rmsLineTop;
-    QPainterPath rmsLineBottom;
-
-    rmsTop.reserve(m_columns.size());
-    rmsBottom.reserve(m_columns.size());
+    m_peakTopPts.resize(m_columns.size());
+    m_peakBottomPts.resize(m_columns.size());
+    m_rmsTopPts.resize(m_columns.size());
+    m_rmsBottomPts.resize(m_columns.size());
 
     for (int x = 0; x < m_columns.size(); ++x) {
-        const ColumnStats& c = m_columns[x];
+        const WaveformScopeModel::ColumnStats& c = m_columns[x];
         const qreal px = left + x + 0.5;
         const qreal peak = std::clamp(c.peak * m_amplitudeZoom, 0.0f, 1.0f);
         const qreal rms = std::clamp(c.rms * m_amplitudeZoom, 0.0f, 1.0f);
-        const qreal peakTopY = centerY - peak * halfHeight;
-        const qreal peakBottomY = centerY + peak * halfHeight;
-        const qreal rmsTopY = centerY - rms * halfHeight;
-        const qreal rmsBottomY = centerY + rms * halfHeight;
-
-        rmsTop.append(QPointF(px, rmsTopY));
-        rmsBottom.append(QPointF(px, rmsBottomY));
-
-        if (x == 0) {
-            peakTop.moveTo(px, peakTopY);
-            peakBottom.moveTo(px, peakBottomY);
-            rmsLineTop.moveTo(px, rmsTopY);
-            rmsLineBottom.moveTo(px, rmsBottomY);
-        } else {
-            peakTop.lineTo(px, peakTopY);
-            peakBottom.lineTo(px, peakBottomY);
-            rmsLineTop.lineTo(px, rmsTopY);
-            rmsLineBottom.lineTo(px, rmsBottomY);
-        }
+        m_peakTopPts[x] = QPointF(px, centerY - peak * halfHeight);
+        m_peakBottomPts[x] = QPointF(px, centerY + peak * halfHeight);
+        m_rmsTopPts[x] = QPointF(px, centerY - rms * halfHeight);
+        m_rmsBottomPts[x] = QPointF(px, centerY + rms * halfHeight);
     }
 
-    QPainterPath fillPath;
-    fillPath.moveTo(rmsTop.first());
-    for (int i = 1; i < rmsTop.size(); ++i)
-        fillPath.lineTo(rmsTop[i]);
-    for (int i = rmsBottom.size() - 1; i >= 0; --i)
-        fillPath.lineTo(rmsBottom[i]);
-    fillPath.closeSubpath();
+    // RMS ribbon polygon: top edge forward, bottom edge reversed.
+    QPolygonF fillPoly;
+    fillPoly.reserve(m_rmsTopPts.size() * 2);
+    for (const QPointF& p : m_rmsTopPts)
+        fillPoly.append(p);
+    for (int i = m_rmsBottomPts.size() - 1; i >= 0; --i)
+        fillPoly.append(m_rmsBottomPts[i]);
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
 
     QColor fill = wave;
     fill.setAlpha(65);
-    painter.fillPath(fillPath, fill);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(fill);
+    painter.drawPolygon(fillPoly);
+    painter.setBrush(Qt::NoBrush);
 
     QColor centerFill = kRmsColor();
     centerFill.setAlpha(55);
@@ -587,35 +623,35 @@ void WaveformWidget::drawEnvelope(QPainter& painter,
                      QPointF(plotRect.right(), centerY));
 
     painter.setPen(QPen(kRmsColor(), 1.3));
-    painter.drawPath(rmsLineTop);
-    painter.drawPath(rmsLineBottom);
+    painter.drawPolyline(m_rmsTopPts.constData(), m_rmsTopPts.size());
+    painter.drawPolyline(m_rmsBottomPts.constData(), m_rmsBottomPts.size());
 
     QColor peak = kPeakColor();
     peak.setAlpha(210);
     painter.setPen(QPen(peak, 1.0));
-    painter.drawPath(peakTop);
-    painter.drawPath(peakBottom);
+    painter.drawPolyline(m_peakTopPts.constData(), m_peakTopPts.size());
+    painter.drawPolyline(m_peakBottomPts.constData(), m_peakBottomPts.size());
 
     painter.restore();
 
     if (clipCount > 0) {
-        painter.setPen(QPen(kClipColor(), 1.0));
+        m_lineScratch.clear();
         for (int x = 0; x < m_columns.size(); ++x) {
             if (m_columns[x].clipped <= 0)
                 continue;
             const qreal px = left + x + 0.5;
-            painter.drawLine(QPointF(px, plotRect.top()),
-                             QPointF(px, plotRect.top() + 4.0));
-            painter.drawLine(QPointF(px, plotRect.bottom() - 4.0),
-                             QPointF(px, plotRect.bottom()));
+            m_lineScratch.append(QLineF(px, plotRect.top(),
+                                        px, plotRect.top() + 4.0));
+            m_lineScratch.append(QLineF(px, plotRect.bottom() - 4.0,
+                                        px, plotRect.bottom()));
         }
+        painter.setPen(QPen(kClipColor(), 1.0));
+        painter.drawLines(m_lineScratch.constData(), m_lineScratch.size());
     }
 }
 
 void WaveformWidget::drawBars(QPainter& painter, const QRectF& plotRect)
 {
-    const int targetBars = std::clamp(static_cast<int>(plotRect.width() / 5.0), 12, 64);
-    buildColumns(targetBars);
     if (m_columns.isEmpty())
         return;
 
@@ -629,7 +665,7 @@ void WaveformWidget::drawBars(QPainter& painter, const QRectF& plotRect)
     const qreal maxHeight = std::max<qreal>(1.0, plotRect.height() - 1.0);
 
     for (int i = 0; i < m_columns.size(); ++i) {
-        const ColumnStats& c = m_columns[i];
+        const WaveformScopeModel::ColumnStats& c = m_columns[i];
         const qreal x = plotRect.left() + i * slot + (slot - barWidth) * 0.5;
         const QRectF rail(x, plotRect.top(), barWidth, maxHeight);
         painter.fillRect(rail, kBarEmpty());
@@ -670,17 +706,16 @@ void WaveformWidget::drawVerticalBars(QPainter& painter,
                                       const QRectF& plotRect,
                                       int sampleRate)
 {
-    if (m_displaySamples.isEmpty())
-        return;
-
-    const int bandCount = std::clamp(static_cast<int>(plotRect.width() / 12.0), 10, 18);
-    const int analysisCount = std::min(
-        static_cast<int>(m_displaySamples.size()),
-        std::clamp(sampleRate / 25, 256, 1536));
+    // Bands only ever analyzes the newest fraction of a second of audio —
+    // pull exactly that tail from the raw ring instead of copying the
+    // whole window.
+    const int wantSamples = std::clamp(sampleRate / 25, 256, 1536);
+    displayModel().copyTail(wantSamples, m_tailScratch);
+    const int analysisCount = m_tailScratch.size();
     if (analysisCount < 32)
         return;
 
-    const int start = m_displaySamples.size() - analysisCount;
+    const int bandCount = std::clamp(static_cast<int>(plotRect.width() / 12.0), 10, 18);
     const double lowHz = 70.0;
     const double highHz = std::max(lowHz * 2.0, std::min(sampleRate * 0.45, 7000.0));
     const double logLow = std::log(lowHz);
@@ -711,7 +746,7 @@ void WaveformWidget::drawVerticalBars(QPainter& painter,
 
         for (int i = 0; i < analysisCount; ++i) {
             const double window = 0.5 - 0.5 * std::cos(2.0 * kPi * i / std::max(1, analysisCount - 1));
-            const double sample = clampSample(m_displaySamples[start + i]) * window;
+            const double sample = m_tailScratch[i] * window;
             const double q0 = sample + coeff * q1 - q2;
             q2 = q1;
             q1 = q0;
@@ -894,7 +929,18 @@ void WaveformWidget::scheduleRepaint()
 
     if (!m_repaintThrottle.isValid()
         || m_repaintThrottle.elapsed() >= std::max(1, 1000 / m_refreshRateHz)) {
-        update();
+        // Data repaints invalidate only the plot area — the header/footer
+        // text doesn't need re-shaping per frame. Roughly every fifth of a
+        // second a full update refreshes the RMS/PK readout (which also
+        // reads steadier than a per-frame flicker of digits). Any state
+        // change (mode, zoom, pause, TX pin) still calls update() directly.
+        const int headerEvery = std::max(1, m_refreshRateHz / 5);
+        if (++m_headerTick >= headerEvery) {
+            m_headerTick = 0;
+            update();
+        } else {
+            update(plotArea().toAlignedRect());
+        }
         m_repaintThrottle.restart();
     }
 }
@@ -906,12 +952,12 @@ int WaveformWidget::sanitizeSampleRate(int sampleRate)
     return std::clamp(sampleRate, kMinSampleRate, kMaxSampleRate);
 }
 
-int WaveformWidget::sanitizeWindowMs(int windowMs)
+int WaveformWidget::sanitizeWindowMs(int windowMs) const
 {
-    return std::clamp(windowMs, kMinWindowMs, kMaxWindowMs);
+    return std::clamp(windowMs, kMinWindowMs, m_maxWindowMs);
 }
 
-int WaveformWidget::sanitizeRefreshRateHz(int hz)
+int WaveformWidget::sanitizeRefreshRateHz(int hz) const
 {
     return std::clamp(hz, kMinRefreshRateHz, kMaxRefreshRateHz);
 }
@@ -921,13 +967,6 @@ float WaveformWidget::sanitizeAmplitudeZoom(float zoom)
     if (!std::isfinite(zoom))
         zoom = 1.7f;
     return std::clamp(zoom, 1.0f, 6.0f);
-}
-
-float WaveformWidget::clampSample(float sample)
-{
-    if (!std::isfinite(sample))
-        return 0.0f;
-    return std::clamp(sample, -1.0f, 1.0f);
 }
 
 float WaveformWidget::dbToAmplitude(float db)

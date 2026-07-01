@@ -26,7 +26,7 @@ struct FlexWaveformEntry {
 //   "waveform wfp_status" — Waveform Processor power/ready/ipaddr
 //
 // Named FlexWaveformModel (not WaveformModel) to avoid confusion with the
-// audio waveform visualization classes (WaveformWidget, StripWaveform).
+// audio waveform visualization class (WaveformWidget).
 class FlexWaveformModel : public QObject {
     Q_OBJECT
 

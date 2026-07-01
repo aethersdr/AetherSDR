@@ -2,11 +2,15 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QPixmap>
 #include <QRectF>
 #include <QString>
 #include <QTimer>
+#include <QVariantMap>
 #include <QVector>
 #include <QWidget>
+
+#include "WaveformScopeModel.h"
 
 class QMouseEvent;
 class QPainter;
@@ -14,6 +18,14 @@ class QPaintEvent;
 
 namespace AetherSDR {
 
+// Audio scope shared by the sidebar WAVE applet and the Aetherial strip's
+// waveform panels. The strip used to be a near-identical fork
+// (StripWaveform); Profile carries the few real differences so both
+// surfaces share one implementation and one perf story.
+//
+// Reduction is incremental (WaveformScopeModel): samples fold into bins as
+// they arrive, and a repaint only merges bins into pixel columns — the
+// per-frame cost no longer scales with the time window (#3283).
 class WaveformWidget : public QWidget {
     Q_OBJECT
 
@@ -25,7 +37,13 @@ public:
         VerticalBars
     };
 
+    enum class Profile {
+        Applet,  // sidebar WAVE applet — 20 s window cap, crisp stroke
+        Strip,   // Aetherial strip panel — 30 s window cap, AA stroke
+    };
+
     explicit WaveformWidget(QWidget* parent = nullptr);
+    explicit WaveformWidget(Profile profile, QWidget* parent = nullptr);
 
     QSize sizeHint() const override { return {240, 160}; }
     QSize minimumSizeHint() const override { return {220, 110}; }
@@ -39,6 +57,26 @@ public:
     void setZoomWindowMs(int windowMs);
     void setRefreshRateHz(int hz);
     void setAmplitudeZoom(float zoom);
+
+    // Live counters for the automation bridge's `get wavestats` verb —
+    // per-widget paint cost is measurable without a profiler attach.
+    struct PerfStats {
+        quint64 paintCount{0};
+        quint64 paintUsTotal{0};
+        quint64 paintUsMax{0};
+        quint64 appendCount{0};
+        quint64 appendedSamples{0};
+        qint64 sinceMs{0};   // ms the counters have been accumulating
+    };
+    PerfStats perfStats() const;
+    void resetPerfStats();
+    // Bridge-facing snapshot (invoked by name from AutomationServer, which
+    // deliberately includes no GUI headers). Optionally resets the
+    // counters so successive reads measure disjoint intervals.
+    Q_INVOKABLE QVariantMap wavestatsSnapshot(bool reset);
+    bool isPausedByUser() const { return m_paused; }
+    bool isTransmitSource() const { return m_transmitting; }
+    int activeSampleRate() const;
 
 public slots:
     void appendScopeSamples(const QByteArray& monoFloat32Pcm, int sampleRate, bool tx);
@@ -54,30 +92,12 @@ protected:
     void mouseDoubleClickEvent(QMouseEvent* event) override;
 
 private:
-    struct RingBuffer {
-        QVector<float> samples;
-        int writeIndex{0};
-        int filled{0};
-        int sampleRate{24000};
-        QElapsedTimer lastSamples;
-    };
-
-    struct ColumnStats {
-        float min{0.0f};
-        float max{0.0f};
-        float peak{0.0f};
-        float rms{0.0f};
-        int clipped{0};
-    };
-
-    RingBuffer& activeBuffer();
-    const RingBuffer& activeBuffer() const;
-    void ensureCapacity(RingBuffer& buffer, int sampleRate);
-    void appendToRing(RingBuffer& buffer, const float* samples, int count, int sampleRate);
-    void clearRing(RingBuffer& buffer);
-    void copyLatest(const RingBuffer& buffer, int count, QVector<float>& out) const;
+    WaveformScopeModel& activeModel();
+    const WaveformScopeModel& activeModel() const;
+    const WaveformScopeModel& displayModel() const;
     void setPaused(bool paused);
-    void buildColumns(int columnCount);
+    QRectF plotArea() const;
+    void ensureGridCache(int kind, const QRectF& plotRect);
     void drawGrid(QPainter& painter, const QRectF& plotRect, int sampleRate) const;
     void drawBarsGrid(QPainter& painter, const QRectF& plotRect) const;
     void drawGraph(QPainter& painter, const QRectF& plotRect, int clipCount);
@@ -88,19 +108,40 @@ private:
     void drawPausedBadge(QPainter& painter, const QRectF& footerRect) const;
     void scheduleRepaint();
 
+    int sanitizeWindowMs(int windowMs) const;
+    int sanitizeRefreshRateHz(int hz) const;
     static int sanitizeSampleRate(int sampleRate);
-    static int sanitizeWindowMs(int windowMs);
-    static int sanitizeRefreshRateHz(int hz);
     static float sanitizeAmplitudeZoom(float zoom);
-    static float clampSample(float sample);
     static float dbToAmplitude(float db);
     static float linearToDb(float value);
 
-    RingBuffer m_rx;
-    RingBuffer m_tx;
-    QVector<float> m_displaySamples;
-    QVector<float> m_pausedSamples;
-    QVector<ColumnStats> m_columns;
+    WaveformScopeModel m_rx;
+    WaveformScopeModel m_tx;
+    // Frozen copy of the active model while paused; cleared on resume so
+    // the (potentially multi-MB) raw ring copy isn't kept around.
+    WaveformScopeModel m_pausedModel;
+    QVector<WaveformScopeModel::ColumnStats> m_columns;
+    QVector<float> m_tailScratch;   // Bands-mode analysis tail
+    // Per-frame geometry scratch, reused to avoid realloc churn at 60 fps.
+    QVector<QLineF> m_lineScratch;
+    QVector<QPointF> m_peakTopPts;
+    QVector<QPointF> m_peakBottomPts;
+    QVector<QPointF> m_rmsTopPts;
+    QVector<QPointF> m_rmsBottomPts;
+
+    // The grid + dB labels are static per (size, zoom, theme, mode family);
+    // rendering them once into a pixmap removes per-frame line drawing and
+    // text shaping — HarfBuzz re-shaping every frame was a top cost in the
+    // #3283 profile.
+    QPixmap m_gridCache;
+    QSize m_gridCacheSize;
+    qreal m_gridCacheDpr{0.0};
+    float m_gridCacheZoom{-1.0f};
+    bool m_gridCacheShowGrid{false};
+    int m_gridCacheKind{-1};        // 0 = centered scope grid, 1 = bars grid
+    quint64 m_gridCacheThemeKey{0};
+    QString m_gridCacheFontKey;
+    int m_headerTick{0};            // full-widget repaint divider (~5 Hz text)
 
     QTimer m_clickTimer;
     QElapsedTimer m_repaintThrottle;
@@ -108,11 +149,22 @@ private:
     bool m_paused{false};
     bool m_pausedTransmitting{false};
     bool m_transmitting{false};
-    int m_pausedSampleRate{24000};
     int m_windowMs{100};
     int m_refreshRateHz{24};
     float m_amplitudeZoom{1.7f};
     ViewMode m_viewMode{ViewMode::Graph};
+
+    // Profile-dependent limits (the old WaveformWidget/StripWaveform fork).
+    int m_maxWindowMs;
+    bool m_antialiasedStroke;
+
+    // Perf counters (reset via resetPerfStats()).
+    quint64 m_perfPaintCount{0};
+    quint64 m_perfPaintUsTotal{0};
+    quint64 m_perfPaintUsMax{0};
+    quint64 m_perfAppendCount{0};
+    quint64 m_perfAppendedSamples{0};
+    QElapsedTimer m_perfSince;
 };
 
 } // namespace AetherSDR

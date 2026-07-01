@@ -754,6 +754,7 @@ set(GUI_SOURCES
     src/gui/PhoneApplet.cpp
     src/gui/EqApplet.cpp
     src/gui/WaveApplet.cpp
+    src/gui/WaveformScopeModel.cpp
     src/gui/WaveformWidget.cpp
     src/gui/ClientEqApplet.cpp
     src/gui/ClientEqCurveWidget.cpp
@@ -796,7 +797,6 @@ set(GUI_SOURCES
     src/gui/StripPuduPanel.cpp
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
-    src/gui/StripWaveform.cpp
     src/gui/StripWaveformPanel.cpp
     src/gui/StripFinalOutputPanel.cpp
     src/gui/AetherialAudioStrip.cpp
