@@ -1610,8 +1610,9 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         ++row;
     }
 
-    // ── Background row: colour swatch + Choose + Clear ────────────────────
-    // Layout:  "Background:"   [color]  [Choose...]  [Clear]
+    // ── Background row: Choose / Clear / Off, colour swatch on its own row ──
+    // Layout:  "Background:"   [Choose...]  [Clear]  [Off]
+    //          "Color:"        [color swatch]
     // The colour swatch picks the solid fill that paints BENEATH the
     // background image — fade the BG Opacity slider to see this colour
     // bleed through.  Z-order in the spectrum area, bottom to top:
@@ -1621,9 +1622,46 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         lbl->setStyleSheet(labelStyle);
         grid->addWidget(lbl, row, 0);
 
+        auto* bgBtn = new QPushButton("Choose...");
+        bgBtn->setObjectName("displayBgChooseBtn");
+        bgBtn->setFixedHeight(18);
+        bgBtn->setStyleSheet(btnStyle);
+        connect(bgBtn, &QPushButton::clicked, this, [this] {
+            emit backgroundImageRequested();
+        });
+        grid->addWidget(bgBtn, row, 1);
+
+        auto* clearBtn = new QPushButton("Clear");
+        clearBtn->setObjectName("displayBgClearBtn");
+        clearBtn->setFixedHeight(18);
+        clearBtn->setStyleSheet(btnStyle);
+        clearBtn->setToolTip("Revert to the default logo background.");
+        connect(clearBtn, &QPushButton::clicked, this, [this] {
+            emit backgroundImageCleared();
+        });
+        grid->addWidget(clearBtn, row, 2);
+
+        auto* offBtn = new QPushButton("Off");
+        offBtn->setObjectName("displayBgOffBtn");
+        offBtn->setFixedHeight(18);
+        offBtn->setStyleSheet(btnStyle);
+        offBtn->setToolTip("Turn the background off entirely (no image, just the fill colour).");
+        connect(offBtn, &QPushButton::clicked, this, [this] {
+            emit backgroundImageDisabled();
+        });
+        grid->addWidget(offBtn, row, 3);
+        ++row;
+    }
+
+    // ── Color row: fill-colour swatch on its own row below the buttons ──────
+    {
+        auto* lbl = new QLabel("Color:");
+        lbl->setStyleSheet(labelStyle);
+        grid->addWidget(lbl, row, 0);
+
         m_bgFillColorBtn = new QPushButton;
         m_bgFillColorBtn->setObjectName("displayBgFillColorBtn");
-        m_bgFillColorBtn->setFixedHeight(18);
+        m_bgFillColorBtn->setFixedSize(18, 18);
         m_bgFillColorBtn->setToolTip("Solid fill colour painted beneath the background image");
         // Initial styling — overridden by syncExtraDisplaySettings once the
         // SpectrumWidget reports its loaded m_bgFillColor.
@@ -1642,31 +1680,7 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             if (chosen.isValid())
                 emit backgroundFillColorChanged(chosen);
         });
-        grid->addWidget(m_bgFillColorBtn, row, 1);
-
-        auto* bgBtn = new QPushButton("Choose...");
-        bgBtn->setObjectName("displayBgChooseBtn");
-        bgBtn->setFixedHeight(18);
-        bgBtn->setStyleSheet(btnStyle);
-        connect(bgBtn, &QPushButton::clicked, this, [this] {
-            emit backgroundImageRequested();
-        });
-        grid->addWidget(bgBtn, row, 2);
-
-        auto* clearBtn = new QPushButton("Clear");
-        clearBtn->setObjectName("displayBgClearBtn");
-        clearBtn->setFixedHeight(18);
-        clearBtn->setStyleSheet(btnStyle);
-        clearBtn->setToolTip("Left-click: revert to the default logo background.\n"
-                             "Right-click: turn the background off entirely.");
-        connect(clearBtn, &QPushButton::clicked, this, [this] {
-            emit backgroundImageCleared();
-        });
-        // Right-click clears the background completely (no image, just the fill).
-        clearBtn->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(clearBtn, &QWidget::customContextMenuRequested, this,
-                [this](const QPoint&) { emit backgroundImageDisabled(); });
-        grid->addWidget(clearBtn, row, 3);
+        grid->addWidget(m_bgFillColorBtn, row, 1, Qt::AlignLeft);
         ++row;
     }
 
