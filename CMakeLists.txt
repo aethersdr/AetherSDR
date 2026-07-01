@@ -1159,12 +1159,14 @@ elseif(WIN32)
         target_sources(AetherSDR PRIVATE "${WIN_RC}")
     endif()
     if(MSVC)
-        # /MANIFESTINPUT requires /MANIFEST:EMBED per MSVC docs.  Newer MSVC
-        # toolsets (VS 18.x / 14.50+) enforce this strictly with LNK1220;
-        # older ones were lenient.  Be explicit.
-        target_link_options(AetherSDR PRIVATE
-            "/MANIFEST:EMBED"
-            "/MANIFESTINPUT:${CMAKE_SOURCE_DIR}/packaging/windows/AetherSDR.exe.manifest")
+        # Embed the application manifest the CMake-native way: list it as a
+        # source so CMake hands it to its own vs_link_exe/mt.exe embed step.
+        # Passing /MANIFEST:EMBED + /MANIFESTINPUT directly fights that
+        # machinery — link.exe embeds inline and emits no side-car manifest,
+        # so CMake's mt.exe step runs with an empty --manifests list and dies
+        # with c10100a7 (cmake 4.x) / LNK1220 the other way (#3237).
+        target_sources(AetherSDR PRIVATE
+            "${CMAKE_SOURCE_DIR}/packaging/windows/AetherSDR.exe.manifest")
     endif()
 endif()
 
