@@ -36,6 +36,7 @@ param(
     [string]$PdbPath = "build/AetherSDR.pdb",
     [switch]$CreateUpload,
     [switch]$ExcludeDfnrModel,
+    [switch]$RequirePdb,
 
     [string]$CertificateFile = $env:AETHERSDR_MSIX_CERTIFICATE_FILE,
     [string]$CertificatePassword = $env:AETHERSDR_MSIX_CERTIFICATE_PASSWORD,
@@ -461,6 +462,9 @@ else {
 $appxSymPath = $null
 if ($CreateUpload) {
     $appxSymPath = New-AppxSym -InputPdbPath $resolvedPdbPath -OutputPath (Join-Path $resolvedOutputDir "$packageBaseName.appxsym")
+    if (-not $appxSymPath -and $RequirePdb) {
+        throw "RequirePdb was specified but no PDB was found at $resolvedPdbPath. The .msixupload would ship without crash symbols for Partner Center. Build with -DCMAKE_BUILD_TYPE=RelWithDebInfo (or otherwise ensure the PDB is emitted) before packaging, or drop -RequirePdb for a deliberately symbol-less dev package."
+    }
     $uploadPath = Join-Path $resolvedOutputDir "$packageBaseName.msixupload"
     New-MsixUpload -MsixPath $msixPath -AppxSymPath $appxSymPath -OutputPath $uploadPath
     Write-Host "Created Store upload package: $uploadPath"

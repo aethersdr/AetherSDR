@@ -77,12 +77,43 @@ Already automatable:
 - Store identity injection from `packaging/windows/store-identity.ps1`, with
   optional GitHub repository variable overrides.
 - Signing from GitHub secrets when a development/test PFX exists.
-- `.msixupload` creation for Partner Center.
+- `.msixupload` creation for Partner Center, with bundled `.appxsym` debug
+  symbols for crash decoding (see below).
 
 Not fully automatable until account setup:
 
 - Final Store submission unless Partner Center API credentials are created and
   stored as secrets.
+
+## Debug Symbols (.appxsym / PDB)
+
+Microsoft Store crash reports in Partner Center only resolve to a symbolized
+stack trace if the submitted `.msixupload` carries matching debug symbols.
+There is no separate "upload symbols" step in Partner Center — the symbols
+travel *inside* the upload package as a `.appxsym` file (a zip of the PDB),
+which Partner Center auto-ingests on submission.
+
+The Windows installer workflow produces this automatically:
+
+1. **Configure** builds with `-DCMAKE_BUILD_TYPE=RelWithDebInfo`, not
+   `Release`. Plain MSVC `Release` does not emit `/Zi`/`/DEBUG`, so
+   `build/AetherSDR.pdb` would never exist. `RelWithDebInfo` keeps the same
+   `-O2` optimization level (only the inliner threshold, `/Ob1` vs. `/Ob2`,
+   differs) while producing a full PDB.
+2. `create-msix.ps1 -CreateUpload -RequirePdb` zips `build/AetherSDR.pdb` into
+   `<package>.appxsym` (`New-AppxSym`) and bundles it alongside the `.msix`
+   into `<package>.msixupload` (`New-MsixUpload`). `-RequirePdb` makes the
+   step fail the build if no PDB was found, instead of silently shipping a
+   symbol-less upload package — CI passes it; local dev builds can omit it.
+3. CI uploads `build/AetherSDR.pdb` as its own **Windows-Symbols** artifact
+   (90-day retention) and the standalone `.appxsym` alongside the other
+   Windows-Installer artifacts, so a maintainer can pull matching symbols for
+   local WinDbg/Visual Studio debugging without unzipping a `.msixupload`.
+
+Submitting the `.msixupload` to Partner Center (manually today, or via the
+automated draft-staging flow below) is the only "publish" step needed —
+Partner Center decodes future crash stacks against the bundled `.appxsym`
+automatically, with no further action required.
 
 ## Known WACK Follow-Ups
 
