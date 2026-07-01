@@ -137,6 +137,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
+| | [`scrollTo <target>`](#scrollto-alias-ensurevisible) | Scroll a widget into its scroll-area viewport. |
 | **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
 | | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
@@ -632,6 +633,30 @@ one second after the pointer leaves. Grab the badge with `grab DragValuePopup`
 — note each `HGauge` owns its own popup, so with several meters hovered the name
 resolves to the first-created one; hover a single meter per instance for an
 unambiguous grab.
+
+### `scrollTo` (alias `ensureVisible`)
+Scroll the target's nearest `QScrollArea` ancestor so the widget sits in the
+viewport. Widgets parked below the fold of a scroll area receive **no paint
+events at all** until scrolled into view (macOS clips paint delivery to the
+exposed area), so a driver must bring them on screen before measuring,
+hovering, or grabbing live content — e.g. the Aetherial strip's waveform
+panel at the bottom of the strip's scroll column.
+
+```json
+→ {"cmd":"scrollTo","target":"stripWaveformScope"}
+← {"ok":true,"target":"stripWaveformScope","class":"WaveformWidget",
+   "scrollArea":"QScrollArea","vScroll":812,"hScroll":0,"inViewport":true}
+```
+
+`vScroll`/`hScroll` echo the resulting scrollbar positions and `inViewport`
+confirms the widget's rect now intersects the viewport — assert on it before
+trusting a follow-up measurement.
+
+Related targeting change: when several widgets match a class, accessibleName,
+or objectName target, resolution now prefers a **visible** match (every scroll
+area owns hidden `QScrollBar`s next to the visible one; the strip owns a
+hidden TX scope next to the visible RX one). Hidden widgets remain addressable
+when they're the only match, so hidden-container grabs keep working.
 
 ### `showMenu` (alias `openMenu`)
 Pop a `QToolButton`/`QPushButton` drop-down menu. The show is posted onto the GUI

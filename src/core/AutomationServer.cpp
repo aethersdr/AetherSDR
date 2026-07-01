@@ -62,6 +62,8 @@
 
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
+#include <QScrollArea>
+#include <QScrollBar>
 #endif
 
 namespace AetherSDR {
@@ -401,22 +403,38 @@ QJsonObject describeWidget(const QWidget* w)
 }
 
 // Depth-first match by class name (full or short) or accessibleName.
-QWidget* matchRecursive(QWidget* w, const QString& target)
+// Prefers a VISIBLE match: class/accessibleName targets are often shared by
+// several instances where only one is on screen (e.g. every scroll area owns
+// hidden QScrollBars alongside the visible one), and drivers almost always
+// mean the visible control. Falls back to the first hidden match so hidden
+// widgets stay addressable (grab of a hidden container is a supported flow).
+QWidget* matchRecursiveImpl(QWidget* w, const QString& target, QWidget** firstAny)
 {
     const QString fullClass = QString::fromUtf8(w->metaObject()->className());
     if (fullClass == target
         || shortClassName(w) == target
         || w->accessibleName() == target) {
-        return w;
+        if (w->isVisible())
+            return w;
+        if (!*firstAny)
+            *firstAny = w;
     }
     const QObjectList children = w->children();
     for (QObject* child : children) {
         if (auto* cw = qobject_cast<QWidget*>(child)) {
-            if (QWidget* m = matchRecursive(cw, target))
+            if (QWidget* m = matchRecursiveImpl(cw, target, firstAny))
                 return m;
         }
     }
     return nullptr;
+}
+
+QWidget* matchRecursive(QWidget* w, const QString& target)
+{
+    QWidget* firstAny = nullptr;
+    if (QWidget* visible = matchRecursiveImpl(w, target, &firstAny))
+        return visible;
+    return firstAny;
 }
 
 // Last-resort match by a button's visible text — agents often know a control
@@ -1898,6 +1916,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("hover requires a target widget"));
         return doHover(target, action);
     }
+    if (cmd == QLatin1String("scrollTo") || cmd == QLatin1String("ensureVisible")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("scrollTo requires a target widget"));
+        return doScrollTo(target);
+    }
     if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
         if (target.isEmpty())
             return err(QStringLiteral("drag requires a target and '<dx> <dy>'"));
@@ -2220,13 +2243,22 @@ QWidget* AutomationServer::resolveWidget(const QString& target)
         }
     }
 
-    // 1. Exact objectName (cheap, unambiguous).
+    // 1. Exact objectName (cheap; visible instance preferred when several
+    //    widgets share a name, e.g. the strip's TX and RX waveform scopes).
+    QWidget* namedHidden = nullptr;
     for (QWidget* tlw : tops) {
         if (tlw->objectName() == target)
             return tlw;
-        if (QWidget* c = tlw->findChild<QWidget*>(target))
-            return c;
+        const QList<QWidget*> named = tlw->findChildren<QWidget*>(target);
+        for (QWidget* c : named) {
+            if (c->isVisible())
+                return c;
+            if (!namedHidden)
+                namedHidden = c;
+        }
     }
+    if (namedHidden)
+        return namedHidden;
     // 2. Class name or accessibleName (e.g. "SpectrumWidget" for the panadapter).
     for (QWidget* tlw : tops) {
         if (QWidget* m = matchRecursive(tlw, target))
@@ -3941,6 +3973,46 @@ QJsonObject AutomationServer::doHover(const QString& target, const QString& acti
                                          : QStringLiteral("enter")},
         {QStringLiteral("x"), global.x()},
         {QStringLiteral("y"), global.y()},
+    };
+}
+
+QJsonObject AutomationServer::doScrollTo(const QString& target) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget or window not found: ") + target);
+
+    QScrollArea* area = nullptr;
+    for (QWidget* p = w->parentWidget(); p; p = p->parentWidget()) {
+        if (auto* sa = qobject_cast<QScrollArea*>(p)) {
+            area = sa;
+            break;
+        }
+    }
+    if (!area)
+        return err(QStringLiteral("'") + target
+                   + QStringLiteral("' has no QScrollArea ancestor to scroll"));
+
+    area->ensureWidgetVisible(w);
+
+    // Round-trip confirmation: the scrollbar position that resulted and
+    // whether the widget's rect now intersects the viewport.
+    const int vValue = area->verticalScrollBar()
+        ? area->verticalScrollBar()->value() : 0;
+    const int hValue = area->horizontalScrollBar()
+        ? area->horizontalScrollBar()->value() : 0;
+    const QRect vp = area->viewport()->rect()
+        .translated(area->viewport()->mapToGlobal(QPoint(0, 0)));
+    const QRect wr = w->rect().translated(w->mapToGlobal(QPoint(0, 0)));
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), shortClassName(w)},
+        {QStringLiteral("scrollArea"), shortClassName(area)},
+        {QStringLiteral("vScroll"), vValue},
+        {QStringLiteral("hScroll"), hValue},
+        {QStringLiteral("inViewport"), vp.intersects(wr)},
     };
 }
 
