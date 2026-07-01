@@ -8328,13 +8328,20 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
     // Detect display state changes that may bypass markOverlayDirty()
     {
+        // In 3D the dBm scale is anchored to the noise floor, which drifts every
+        // FFT frame (dssFloorDbm() reads the measured floor, quantised to 0.5 dB).
+        // The surface UBO re-reads it per frame, so without this the surface
+        // would shift while the cached scale labels stay stale (#3937). In 2D the
+        // scale is Ref-anchored, so the floor is left out of the check there.
+        const float dssFloor = is3D ? dssFloorDbm() : m_lastDetectDssFloor;
         if (m_centerMhz != m_lastDetectCenter || m_bandwidthMhz != m_lastDetectBw ||
             m_refLevel != m_lastDetectRef || m_dynamicRange != m_lastDetectDyn ||
             m_spectrumFrac != m_lastDetectFrac ||
             m_wnbActive != m_lastDetectWnb ||
             m_wnbUpdating != m_lastDetectWnbUpdating ||
             m_rfGainValue != m_lastDetectRfGain ||
-            m_wideActive != m_lastDetectWide) {
+            m_wideActive != m_lastDetectWide ||
+            dssFloor != m_lastDetectDssFloor) {
             markOverlayDirty();
             m_lastDetectCenter = m_centerMhz; m_lastDetectBw = m_bandwidthMhz;
             m_lastDetectRef = m_refLevel; m_lastDetectDyn = m_dynamicRange;
@@ -8343,6 +8350,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             m_lastDetectWnbUpdating = m_wnbUpdating;
             m_lastDetectRfGain = m_rfGainValue;
             m_lastDetectWide = m_wideActive;
+            m_lastDetectDssFloor = dssFloor;
         }
     }
 
@@ -11178,7 +11186,10 @@ void SpectrumWidget::drawDbmScale3D(QPainter& p, const QRect& specRect)
 {
     drawDbmScaleChrome(p, specRect);
     const float floorDbm = dssFloorDbm();
-    const float span = dssSpanDb();
+    // Round the span the same way the mesh/CPU surface do (buildDssImage /
+    // renderGpuFrame use std::round(span*2)/2) so labels and surface agree to
+    // the pixel instead of a sub-dB top/bottom skew (#3937).
+    const float span = std::round(dssSpanDb() * 2.0f) / 2.0f;
     drawDbmScaleLabels(p, specRect, floorDbm + span, span);
 }
 

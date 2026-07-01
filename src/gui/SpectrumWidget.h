@@ -1250,6 +1250,9 @@ private:
     bool   m_lastDetectWnbUpdating{false};
     int    m_lastDetectRfGain{0};
     bool   m_lastDetectWide{false};
+    // 3DSS only: the dBm scale is anchored to the (drifting) noise floor, so a
+    // floor change must redraw the cached overlay even when nothing else did.
+    float  m_lastDetectDssFloor{-1000.0f};
 
     // NB Waterfall Blanker (#277)
     bool  m_wfBlankerEnabled{false};
