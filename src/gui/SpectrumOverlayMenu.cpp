@@ -1587,31 +1587,9 @@ void SpectrumOverlayMenu::buildDisplayPanel()
 
     makeHeader("BACKGROUND");
 
-    // BG Opacity
-    {
-        auto* lbl = new QLabel("BG Opacity:");
-        lbl->setStyleSheet(labelStyle);
-        grid->addWidget(lbl, row, 0);
-        m_bgOpacitySlider = new GuardedSlider(Qt::Horizontal);
-        m_bgOpacitySlider->setRange(0, 100);
-        m_bgOpacitySlider->setValue(80);
-        m_bgOpacitySlider->setObjectName("displayBgOpacitySlider");
-        applyPrimarySliderStyle(m_bgOpacitySlider);
-        grid->addWidget(m_bgOpacitySlider, row, 1, 1, 2);
-        m_bgOpacityLabel = new QLabel("80");
-        m_bgOpacityLabel->setStyleSheet(valStyle);
-        m_bgOpacityLabel->setFixedWidth(28);
-        m_bgOpacityLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-        grid->addWidget(m_bgOpacityLabel, row, 3);
-        connect(m_bgOpacitySlider, &QSlider::valueChanged, this, [this](int v) {
-            m_bgOpacityLabel->setText(QString::number(v));
-            emit backgroundOpacityChanged(v);
-        });
-        ++row;
-    }
-
-    // ── Background row: Choose / Clear / Off, colour swatch on its own row ──
+    // ── Background row: Choose / Clear / Off, opacity + colour swatch below ─
     // Layout:  "Background:"   [Choose...]  [Clear]  [Off]
+    //          "BG Opacity:"   [slider]
     //          "Color:"        [color swatch]
     // The colour swatch picks the solid fill that paints BENEATH the
     // background image — fade the BG Opacity slider to see this colour
@@ -1650,6 +1628,29 @@ void SpectrumOverlayMenu::buildDisplayPanel()
             emit backgroundImageDisabled();
         });
         grid->addWidget(offBtn, row, 3);
+        ++row;
+    }
+
+    // BG Opacity
+    {
+        auto* lbl = new QLabel("BG Opacity:");
+        lbl->setStyleSheet(labelStyle);
+        grid->addWidget(lbl, row, 0);
+        m_bgOpacitySlider = new GuardedSlider(Qt::Horizontal);
+        m_bgOpacitySlider->setRange(0, 100);
+        m_bgOpacitySlider->setValue(80);
+        m_bgOpacitySlider->setObjectName("displayBgOpacitySlider");
+        applyPrimarySliderStyle(m_bgOpacitySlider);
+        grid->addWidget(m_bgOpacitySlider, row, 1, 1, 2);
+        m_bgOpacityLabel = new QLabel("80");
+        m_bgOpacityLabel->setStyleSheet(valStyle);
+        m_bgOpacityLabel->setFixedWidth(28);
+        m_bgOpacityLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+        grid->addWidget(m_bgOpacityLabel, row, 3);
+        connect(m_bgOpacitySlider, &QSlider::valueChanged, this, [this](int v) {
+            m_bgOpacityLabel->setText(QString::number(v));
+            emit backgroundOpacityChanged(v);
+        });
         ++row;
     }
 
