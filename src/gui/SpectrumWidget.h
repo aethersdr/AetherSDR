@@ -689,6 +689,14 @@ private:
     void positionZoomButtons();
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
+    // Shared strip chrome (background, border, ref-adjust arrows) for both the
+    // 2D linear dBm scale and the 3D stacked-trace amplitude scale, so the
+    // strip's geometry and click targets are identical in either render mode.
+    void drawDbmScaleChrome(QPainter& p, const QRect& specRect);
+    // dBm amplitude scale for 3D stacked-trace mode: ticks are placed along the
+    // front (live) trace's ridge band so a peak read against them gives its true
+    // dBm, mirroring the surface's floor→ref strength mapping.
+    void drawDbmScale3D(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
     void drawConnectionAnimation(QPainter& p, const QRect& contentRect);
     void drawKiwiSdrConnectionOverlay(QPainter& p, const QRect& contentRect);

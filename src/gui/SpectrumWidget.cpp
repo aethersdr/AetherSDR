@@ -8621,10 +8621,12 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawConnectionAnimation(p, specRect);
             drawKiwiSdrConnectionOverlay(
                 p, QRect(0, 0, qMax(0, w - DBM_STRIP_W), h));
-            // The dBm strip is the 2D vertical scale; it doesn't apply to the 3D
-            // surface (height = floor→ref strength, not linear dBm). Keep the
-            // time scale — the waterfall below is unchanged.
-            if (!is3D) {
+            // dBm strip: the 2D scale is a linear dBm axis; the 3D scale maps its
+            // ticks onto the front (live) trace's ridge band (height = floor→ref
+            // strength). Both share the same strip chrome and click targets.
+            if (is3D) {
+                drawDbmScale3D(p, specRect);
+            } else {
                 drawDbmScale(p, specRect);
             }
             drawTimeScale(p, wfRect);
@@ -9520,8 +9522,11 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
     }
 
-    // dBm strip is the 2D vertical scale — not meaningful on the 3D surface.
-    if (!is3D) {
+    // dBm strip: 2D draws a linear dBm axis; 3D maps the ticks onto the front
+    // (live) trace's ridge band. Same strip chrome and click targets either way.
+    if (is3D) {
+        drawDbmScale3D(p, specRect);
+    } else {
         drawDbmScale(p, specRect);
     }
     drawTimeScale(p, wfRect);
@@ -11030,7 +11035,7 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 
 // ─── dBm scale strip (right edge of FFT area) ────────────────────────────────
 
-void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
+void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
 {
     const int stripX = specRect.right() - DBM_STRIP_W + 1;
     const QRect strip(stripX, specRect.top(), DBM_STRIP_W, specRect.height());
@@ -11065,6 +11070,13 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
           << QPoint(dnCx + 5, arrowTop)
           << QPoint(dnCx,     arrowBot);
     p.drawPolygon(dnTri);
+}
+
+void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
+{
+    const int stripX = specRect.right() - DBM_STRIP_W + 1;
+
+    drawDbmScaleChrome(p, specRect);
 
     // ── dBm labels ───────────────────────────────────────────────────────
     QFont f = p.font();
@@ -11105,6 +11117,78 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
     const int bottomY = specRect.bottom();
     if (bottomY >= labelTop) {
         drawTickLabel(bottomDbm, bottomY, bottomY - 2);
+    }
+}
+
+// ─── dBm scale strip for 3D stacked-trace mode ───────────────────────────────
+//
+// In 3D the vertical axis is not a linear dBm axis: the front (live) trace's
+// ridge height encodes strength = ((dbm − floor) / span)^zCurve, rising from the
+// plot floor (noise floor, strength 0) to kFrontMaxRidgeFrac of the plot height
+// (strength 1, ≈ Ref). We place the ticks along that same front-ridge mapping so
+// a peak read against the scale gives its true dBm — the reference behaviour of a
+// real stacked-trace scope. floor/span/zCurve are the exact values the CPU
+// fallback and the GPU mesh render from, so the scale can't drift from the
+// surface. The strip chrome (background, border, ref-adjust arrows) and its click
+// targets are identical to the 2D scale.
+void SpectrumWidget::drawDbmScale3D(QPainter& p, const QRect& specRect)
+{
+    const int stripX = specRect.right() - DBM_STRIP_W + 1;
+
+    drawDbmScaleChrome(p, specRect);
+
+    const float floorDbm = dssFloorDbm();
+    const float rangeDb  = dssSpanDb();
+    if (rangeDb <= 0.0f) return;
+    const float topDbm   = floorDbm + rangeDb;
+
+    QFont f = p.font();
+    f.setPointSize(7);
+    p.setFont(f);
+    const QFontMetrics fm(f);
+
+    const int labelTop = specRect.top() + DBM_ARROW_H + 4;
+
+    // Same floor→ridge projection the surface uses (DssRenderer::rebuild /
+    // dss_mesh.vert): strength^zCurve scaled by the front ridge band, measured
+    // up from the front baseline (the bottom of the plot region).
+    const double zc         = std::max(0.05, static_cast<double>(m_dssZCurve));
+    const double frontRidge = specRect.height() * DssRenderer::kFrontMaxRidgeFrac;
+    auto yForDbm = [&](float dbm) -> int {
+        double strength = std::clamp((dbm - floorDbm) / rangeDb, 0.0f, 1.0f);
+        strength = std::pow(strength, zc);
+        return specRect.bottom() - static_cast<int>(strength * frontRidge);
+    };
+
+    auto drawTickLabel = [&](float dbm, int y) {
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.background.3"));
+        p.drawLine(stripX, y, stripX + 4, y);
+        const QString label = QString::number(static_cast<int>(std::lround(dbm)));
+        p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
+        p.drawText(stripX + 6, y + fm.ascent() / 2, label);
+    };
+
+    // Adaptive step, aiming for ~4-6 labels across the span (mirrors the 2D scale).
+    const float rawStep = rangeDb / 5.0f;
+    float stepDb;
+    if      (rawStep >= 20.0f) stepDb = 20.0f;
+    else if (rawStep >= 10.0f) stepDb = 10.0f;
+    else if (rawStep >= 5.0f)  stepDb = 5.0f;
+    else                        stepDb = 2.0f;
+
+    // Anchor the noise floor at the baseline, then walk nice steps upward. The
+    // pow() curve compresses ticks near Ref, so skip any that would collide.
+    const int floorY = yForDbm(floorDbm);
+    drawTickLabel(floorDbm, floorY - 2);
+    int lastY = floorY;
+
+    const float firstLabel = std::ceil((floorDbm + 1.0f) / stepDb) * stepDb;
+    for (float dbm = firstLabel; dbm <= topDbm; dbm += stepDb) {
+        const int y = yForDbm(dbm);
+        if (y < labelTop || y > floorY - fm.height()) continue;
+        if (lastY - y < fm.height()) continue;   // too close to the previous tick
+        drawTickLabel(dbm, y);
+        lastY = y;
     }
 }
 
