@@ -693,9 +693,15 @@ private:
     // 2D linear dBm scale and the 3D stacked-trace amplitude scale, so the
     // strip's geometry and click targets are identical in either render mode.
     void drawDbmScaleChrome(QPainter& p, const QRect& specRect);
-    // dBm amplitude scale for 3D stacked-trace mode: ticks are placed along the
-    // front (live) trace's ridge band so a peak read against them gives its true
-    // dBm, mirroring the surface's floor→ref strength mapping.
+    // Shared full-height LINEAR dBm tick labels: topDbm at specRect.top(),
+    // topDbm-rangeDb at the baseline, evenly spaced. Used by both the 2D scale
+    // (Ref / dynamic range) and the 3D scale (Ref / 3D floor→Ref span).
+    void drawDbmScaleLabels(QPainter& p, const QRect& specRect,
+                            float topDbm, float rangeDb);
+    // dBm amplitude scale for 3D stacked-trace mode: a full-height linear axis
+    // spanning the measured noise floor (baseline) up to Ref, so the noise floor
+    // and levels read like the 2D scale. The floor tracks the Display-pane
+    // "3D Floor" slider (dssFloorDbm()).
     void drawDbmScale3D(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
     void drawConnectionAnimation(QPainter& p, const QRect& contentRect);
