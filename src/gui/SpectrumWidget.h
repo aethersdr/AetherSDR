@@ -728,6 +728,7 @@ private:
         double kiwiLastWaterfallCenterMhz{0.0};
         double kiwiLastWaterfallBandwidthMhz{0.0};
         bool kiwiLastWaterfallFrameValid{false};
+        DssRenderer dss;
         float kiwiAutoFloorDbm{-130.0f};
         float kiwiAutoCeilDbm{-50.0f};
         bool kiwiAutoRangeValid{false};
@@ -846,6 +847,7 @@ private:
     // 3DSS — rebuild/return the cached perspective surface for the given pixel
     // size (scaleStripPx = transparent frequency-scale strip at the bottom).
     const QImage& buildDssImage(const QSize& px, int scaleStripPx);
+    void resetDssUploadState();
     // Token folding the dbmToRgb() palette inputs so the 3DSS cache rebuilds
     // when the colour mapping (scheme/gain/floor) changes.
     quint64 dssPaletteToken() const;
@@ -1417,11 +1419,11 @@ private:
     // feeds a ring-buffered R16F height texture; a static perspective grid samples
     // it in dss_mesh.vert. Geometry never rebuilds, so pan/zoom are free. Falls
     // back to the cached-image quad above when the pipeline can't be created.
-    QRhiGraphicsPipeline* m_dssMeshFillPipeline{nullptr};  // TriangleStrip, opaque
-    QRhiGraphicsPipeline* m_dssMeshLinePipeline{nullptr};  // LineStrip, alpha (outline)
+    QRhiGraphicsPipeline* m_dssMeshFillPipeline{nullptr};  // Triangles, opaque
+    QRhiGraphicsPipeline* m_dssMeshLinePipeline{nullptr};  // Lines, alpha (outline)
     QRhiShaderResourceBindings* m_dssMeshSrb{nullptr};
-    QRhiBuffer* m_dssMeshVbo{nullptr};       // curtain verts (ridge+floor), static
-    QRhiBuffer* m_dssMeshLineVbo{nullptr};   // ridge-only verts (outline), static
+    QRhiBuffer* m_dssMeshVbo{nullptr};       // batched curtain triangles, static
+    QRhiBuffer* m_dssMeshLineVbo{nullptr};   // batched ridge line segments, static
     QRhiBuffer* m_dssMeshUbo{nullptr};       // dynamic uniforms
     // std140 UBO float count — must match dss_mesh.{vert,frag}'s U block AND the
     // ubo[] writer in renderGpuFrame(). 8 scalars + texCols + 3 pad + vec4 bgFill.
@@ -1432,8 +1434,10 @@ private:
     QRhiSampler* m_dssPaletteSampler{nullptr};
     bool m_dssMeshReady{false};
     int  m_dssMeshHeadUploaded{-1};          // ring head last uploaded to heightTex
+    quint64 m_dssMeshRowGenUploaded{~0ull};  // DssRenderer rowGeneration uploaded
     quint64 m_dssLutToken{~0ull};            // token of the palette LUT last baked
     QByteArray m_dssRowScratch;              // reused qfloat16 row buffer (mesh upload)
+    QByteArray m_dssTextureScratch;          // reused qfloat16 full texture buffer
 
     void initDssMeshPipeline();
     void uploadDssPaletteLut(QRhiResourceUpdateBatch* batch, float floorDbm, float rangeDb);

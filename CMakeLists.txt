@@ -1937,6 +1937,14 @@ target_include_directories(kiwi_sdr_trace_math_test PRIVATE src)
 target_link_libraries(kiwi_sdr_trace_math_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_trace_math_test COMMAND kiwi_sdr_trace_math_test)
 
+add_executable(dss_renderer_test
+    tests/dss_renderer_test.cpp
+    src/gui/DssRenderer.cpp
+)
+target_include_directories(dss_renderer_test PRIVATE src)
+target_link_libraries(dss_renderer_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME dss_renderer_test COMMAND dss_renderer_test)
+
 add_executable(kiwi_sdr_redirect_policy_test
     tests/kiwi_sdr_redirect_policy_test.cpp
     src/core/KiwiSdrRedirectPolicy.cpp

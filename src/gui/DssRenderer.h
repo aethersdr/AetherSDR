@@ -44,6 +44,9 @@ public:
     // Push one freshly-decoded FFT row (any bin count, dBm). Peak-preserving
     // downsample to kCols and store it as the newest (front) trace.
     void pushRow(const QVector<float>& binsDbm);
+    void reprojectFrequencyFrame(double oldCenterMhz, double oldBandwidthMhz,
+                                 double newCenterMhz, double newBandwidthMhz,
+                                 float fallbackDbm);
 
     // Return the cached surface sized to px. The plot region (everything above
     // the bottom scaleStripPx) is painted opaque over bgFill; the scale strip
@@ -76,6 +79,7 @@ public:
     int rowCount() const { return m_count; }     // valid rows (0..kRows)
     int headRing() const { return m_head; }       // ring index of the newest row
     const float* rowDataRing(int ringIndex) const { return m_rows[ringIndex].data(); }
+    quint64 rowGeneration() const { return m_rowGeneration; }
 
     // Increments on every cache rebuild — lets the GPU path upload the texture
     // only when the surface actually changed.
@@ -95,6 +99,7 @@ private:
     int     m_count = 0;         // number of valid rows (0..kRows)
     bool    m_dirty = true;
     quint64 m_generation = 0;    // bumped on each rebuild
+    quint64 m_rowGeneration = 0; // bumped whenever stored row contents change
 
     // Last two RAW (pre-smoothing) resampled rows, for temporal median-of-3
     // impulse rejection of broadband interference bursts.

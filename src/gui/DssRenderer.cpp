@@ -40,6 +40,102 @@ inline QColor lerpColor(const QColor& c, const QColor& t, double f)
                   chan(c.blue()  + (t.blue()  - c.blue())  * f));
 }
 
+float rowSample(const std::array<float, DssRenderer::kCols>& row,
+                double srcLeft, double srcRight, double srcCenter,
+                float fallback)
+{
+    if (srcRight <= 0.0 || srcLeft >= DssRenderer::kCols) {
+        return fallback;
+    }
+
+    const double clampedLeft =
+        std::clamp(srcLeft, 0.0, static_cast<double>(DssRenderer::kCols));
+    const double clampedRight =
+        std::clamp(srcRight, 0.0, static_cast<double>(DssRenderer::kCols));
+    if (clampedRight <= clampedLeft) {
+        return fallback;
+    }
+
+    if (clampedRight - clampedLeft <= 1.0) {
+        const double clampedCenter =
+            std::clamp(srcCenter, 0.0, static_cast<double>(DssRenderer::kCols - 1));
+        const int left = std::clamp(static_cast<int>(std::floor(clampedCenter)),
+                                    0, DssRenderer::kCols - 1);
+        const int right = std::min(left + 1, DssRenderer::kCols - 1);
+        const float leftValue = std::isfinite(row[left]) ? row[left] : fallback;
+        const float rightValue = std::isfinite(row[right]) ? row[right] : leftValue;
+        const float frac = static_cast<float>(clampedCenter - left);
+        return leftValue + frac * (rightValue - leftValue);
+    }
+
+    const int first = std::clamp(static_cast<int>(std::floor(clampedLeft)),
+                                 0, DssRenderer::kCols - 1);
+    const int last = std::clamp(static_cast<int>(std::ceil(clampedRight)) - 1,
+                                0, DssRenderer::kCols - 1);
+    double weightedSum = 0.0;
+    double totalWeight = 0.0;
+    for (int i = first; i <= last; ++i) {
+        if (!std::isfinite(row[i])) {
+            continue;
+        }
+        const double binLeft = static_cast<double>(i);
+        const double binRight = binLeft + 1.0;
+        const double weight =
+            std::max(0.0, std::min(clampedRight, binRight)
+                - std::max(clampedLeft, binLeft));
+        if (weight <= 0.0) {
+            continue;
+        }
+        weightedSum += row[i] * weight;
+        totalWeight += weight;
+    }
+    return totalWeight > 0.0
+        ? static_cast<float>(weightedSum / totalWeight)
+        : fallback;
+}
+
+std::array<float, DssRenderer::kCols> reprojectRow(
+    const std::array<float, DssRenderer::kCols>& row,
+    double oldCenterMhz,
+    double oldBandwidthMhz,
+    double newCenterMhz,
+    double newBandwidthMhz,
+    float fallback)
+{
+    std::array<float, DssRenderer::kCols> remapped;
+    remapped.fill(fallback);
+    if (oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
+        return remapped;
+    }
+
+    const double oldStartMhz = oldCenterMhz - oldBandwidthMhz * 0.5;
+    const double oldEndMhz = oldCenterMhz + oldBandwidthMhz * 0.5;
+    const double newStartMhz = newCenterMhz - newBandwidthMhz * 0.5;
+    const double srcWidthBins = newBandwidthMhz / oldBandwidthMhz;
+    for (int dst = 0; dst < DssRenderer::kCols; ++dst) {
+        const double dstFrac =
+            (static_cast<double>(dst) + 0.5) / DssRenderer::kCols;
+        const double freqMhz = newStartMhz + dstFrac * newBandwidthMhz;
+        if (freqMhz < oldStartMhz || freqMhz > oldEndMhz) {
+            continue;
+        }
+
+        const double srcCenter =
+            ((freqMhz - oldStartMhz) / oldBandwidthMhz)
+                * DssRenderer::kCols - 0.5;
+        if (srcCenter < -0.5
+            || srcCenter > static_cast<double>(DssRenderer::kCols) - 0.5) {
+            continue;
+        }
+        remapped[dst] = rowSample(row,
+                                  srcCenter - srcWidthBins * 0.5,
+                                  srcCenter + srcWidthBins * 0.5,
+                                  srcCenter,
+                                  fallback);
+    }
+    return remapped;
+}
+
 } // namespace
 
 void DssRenderer::clear()
@@ -66,20 +162,26 @@ void DssRenderer::pushRow(const QVector<float>& binsDbm)
         nr.fill(-200.0f);
     } else {
         std::array<float, kCols> raw;
-        const double step = static_cast<double>(n) / kCols;
-        for (int c = 0; c < kCols; ++c) {
-            // Peak-preserving downsample: take the strongest bin in the source
-            // span so signals survive as ridges. Upsampling (n < kCols)
-            // collapses the span to a single source bin.
-            int i0 = static_cast<int>(std::floor(c * step));
-            int i1 = static_cast<int>(std::ceil((c + 1) * step));
-            i0 = std::clamp(i0, 0, n - 1);
-            i1 = std::clamp(i1, i0 + 1, n);
-            float mx = binsDbm[i0];
-            for (int i = i0 + 1; i < i1; ++i) {
-                mx = std::max(mx, binsDbm[i]);
+        if (n == kCols) {
+            for (int c = 0; c < kCols; ++c) {
+                raw[c] = binsDbm[c];
             }
-            raw[c] = mx;
+        } else {
+            const double step = static_cast<double>(n) / kCols;
+            for (int c = 0; c < kCols; ++c) {
+                // Peak-preserving downsample: take the strongest bin in the source
+                // span so signals survive as ridges. Upsampling (n < kCols)
+                // collapses the span to a single source bin.
+                int i0 = static_cast<int>(std::floor(c * step));
+                int i1 = static_cast<int>(std::ceil((c + 1) * step));
+                i0 = std::clamp(i0, 0, n - 1);
+                i1 = std::clamp(i1, i0 + 1, n);
+                float mx = binsDbm[i0];
+                for (int i = i0 + 1; i < i1; ++i) {
+                    mx = std::max(mx, binsDbm[i]);
+                }
+                raw[c] = mx;
+            }
         }
 
         // Temporal median-of-3 impulse rejection. A strong broadband
@@ -125,6 +227,41 @@ void DssRenderer::pushRow(const QVector<float>& binsDbm)
     m_rows[m_head] = nr;
     m_count = std::min(m_count + 1, kRows);
     m_dirty = true;
+    ++m_rowGeneration;
+}
+
+void DssRenderer::reprojectFrequencyFrame(double oldCenterMhz,
+                                          double oldBandwidthMhz,
+                                          double newCenterMhz,
+                                          double newBandwidthMhz,
+                                          float fallbackDbm)
+{
+    if (m_count <= 0 || oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
+        return;
+    }
+
+    for (int age = 0; age < m_count; ++age) {
+        const int ring = (m_head + age) % kRows;
+        m_rows[ring] = reprojectRow(m_rows[ring],
+                                    oldCenterMhz, oldBandwidthMhz,
+                                    newCenterMhz, newBandwidthMhz,
+                                    fallbackDbm);
+    }
+    if (m_rawHistCount >= 1) {
+        m_rawPrev1 = reprojectRow(m_rawPrev1,
+                                  oldCenterMhz, oldBandwidthMhz,
+                                  newCenterMhz, newBandwidthMhz,
+                                  fallbackDbm);
+    }
+    if (m_rawHistCount >= 2) {
+        m_rawPrev2 = reprojectRow(m_rawPrev2,
+                                  oldCenterMhz, oldBandwidthMhz,
+                                  newCenterMhz, newBandwidthMhz,
+                                  fallbackDbm);
+    }
+
+    m_dirty = true;
+    ++m_rowGeneration;
 }
 
 const QImage& DssRenderer::image(const QSize& px, int scaleStripPx,
