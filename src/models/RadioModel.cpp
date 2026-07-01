@@ -649,7 +649,8 @@ int RadioModel::maxSlicesForModel(const QString& model)
             || normalized.contains("8600") || normalized.contains("AU-520"))
         return 4;
     if (normalized.contains("6300") || normalized.contains("6400")
-            || normalized.contains("8400") || normalized.contains("AU-510"))
+            || normalized.contains("8400") || normalized.contains("AU-510")
+            || normalized.contains("RT-2122"))  // DragonFire, SliceList {A,B}
         return 2;
     return 4;
 }

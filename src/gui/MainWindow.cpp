@@ -1404,16 +1404,19 @@ MainWindow::MainWindow(QWidget* parent)
     // the wrong state (#1356 for SmartSDR+, #1503 for DIV).
     connect(&m_radioModel, &RadioModel::infoChanged, this, [this]() {
         const bool hasPlus = m_radioModel.licenseSubscription().contains("SmartSDR+");
-        const QString& model = m_radioModel.model();
-        const bool divAllowed = model.contains("6500") || model.contains("6600")
-                             || model.contains("6700") || model.contains("8600")
-                             || model.contains("AU-520");
+        const bool divAllowed = m_radioModel.isDiversityAllowed();
+        // Refresh extended-DSP (NRL/NRS/RNN/NRF) visibility here too: onSliceAdded
+        // pushes it once at slice creation, but if the `model` status arrives after
+        // the slice (e.g. GUIClientID session restore) that one-shot value is stale
+        // — the AU-510 symptom where the extended filters never appeared. (#2177)
+        const bool hasExtendedDsp = m_radioModel.hasExtendedDspFilters();
         if (m_panStack) {
             for (auto* applet : m_panStack->allApplets()) {
                 auto* sw = applet->spectrumWidget();
                 for (auto* vfo : sw->findChildren<VfoWidget*>()) {
                     vfo->setSmartSdrPlus(hasPlus);
                     vfo->setDiversityAllowed(divAllowed);
+                    vfo->setHasExtendedDsp(hasExtendedDsp);
                 }
             }
         }
@@ -4886,12 +4889,9 @@ void MainWindow::onConnectionStateChanged(bool connected)
         // Slice tab toggle is initialized from infoChanged when radio
         // reports its actual slice capacity (#1278).
 
-        // Show DIV button on dual-SCU radios
+        // Show DIV button on dual-SCU radios (ModelCapabilities table, Principle I)
         {
-            const QString& model = m_radioModel.model();
-            bool divAllowed = model.contains("6500") || model.contains("6600")
-                           || model.contains("6700") || model.contains("8600")
-                           || model.contains("AU-520");
+            const bool divAllowed = m_radioModel.isDiversityAllowed();
             // Set diversity allowed on all existing VFO widgets (including Slice A at startup) (#1503)
             if (m_panStack) {
                 for (auto* pan : m_radioModel.panadapters()) {

@@ -147,13 +147,24 @@ public:
     }
 
     // Returns true for BigBend/DragonFire-platform radios (8400, 8600,
-    // AU-series, ML-series, CL-series, RT-series) that support the extended
+    // AU-/ML-/MLS-/CL-/CLS- series, RT-2122) that support the extended
     // firmware DSP filters (NRL, NRS, RNN, NRF).  6000-series radios don't
     // expose these filters and the UI hides them when this returns false. (#2177)
+    //
+    // Delegates to the FlexLib-sourced ModelCapabilities platform table
+    // (Principle I) instead of ad-hoc substring checks — the old prefix form
+    // silently missed the "S" server variants (MLS-9601 doesn't contain "ML-";
+    // CLS-9301 doesn't contain "CL-") and was case-sensitive.
     bool hasExtendedDspFilters() const {
-        return m_model.contains("8400") || m_model.contains("8600")
-            || m_model.contains("AU-")  || m_model.contains("ML-")
-            || m_model.contains("CL-")  || m_model.contains("RT-");
+        return capabilitiesFor(m_model).hasExtendedDsp();
+    }
+
+    // True for 2-SCU radios that support diversity RX, from the FlexLib-sourced
+    // ModelCapabilities table (Principle I).  Replaces the hand-maintained
+    // contains("6500")|... checks, which wrongly enabled diversity on the
+    // single-SCU FLEX-6500 and omitted the ML-/MLS-/CL-/CLS- dual-SCU models.
+    bool isDiversityAllowed() const {
+        return capabilitiesFor(m_model).isDiversityAllowed;
     }
 
     // Max panadapters supported by this radio model.
