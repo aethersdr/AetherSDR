@@ -4285,6 +4285,8 @@ void MainWindow::buildUI()
         hbox->addSpacing(8);
 
         auto* addPanBtn = new QLabel;
+        addPanBtn->setObjectName("addPanadapterButton");
+        addPanBtn->setAccessibleName("Add Panadapter");
         addPanBtn->setPixmap(pm);
         addPanBtn->setCursor(Qt::PointingHandCursor);
         addPanBtn->setToolTip("Add Panadapter");

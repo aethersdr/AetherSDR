@@ -2460,6 +2460,23 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
 )
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
 
+add_executable(pan_layout_dialog_size_test
+    tests/pan_layout_dialog_size_test.cpp
+    src/gui/PanLayoutDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(pan_layout_dialog_size_test PRIVATE src)
+target_link_libraries(pan_layout_dialog_size_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
+
 add_executable(device_diagnostics_test
     tests/device_diagnostics_test.cpp
 )
