@@ -124,6 +124,7 @@ protected:
         if (ev->button() == Qt::LeftButton) {
             setSliderDown(true);
             setValue(valueFromPosition(ev->position().x()));
+            showDragValuePopup(ev->globalPosition().toPoint());
             ev->accept();
             return;
         }
@@ -138,6 +139,7 @@ protected:
         }
         if (isSliderDown() && ev->buttons().testFlag(Qt::LeftButton)) {
             setValue(valueFromPosition(ev->position().x()));
+            showDragValuePopup(ev->globalPosition().toPoint());
             ev->accept();
             return;
         }
@@ -149,6 +151,9 @@ protected:
         if (isSliderDown() && ev->button() == Qt::LeftButton) {
             setValue(valueFromPosition(ev->position().x()));
             setSliderDown(false);
+            showDragValuePopup(ev->globalPosition().toPoint());
+            if (m_dragValuePopup)
+                m_dragValuePopup->linger();
             ev->accept();
             return;
         }
@@ -1379,12 +1384,18 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         lbl->setStyleSheet(labelStyle);
         grid->addWidget(lbl, row, 0);
 
-        m_lineWidthSlider = new QSlider(Qt::Horizontal);
-        m_lineWidthSlider->setRange(0, 10);
-        m_lineWidthSlider->setValue(4);
-        m_lineWidthSlider->setSingleStep(1);
-        m_lineWidthSlider->setPageStep(1);
-        m_lineWidthSlider->setObjectName("displayFftLineWidthSlider");
+        auto* lineWidthSlider = new GuardedSlider(Qt::Horizontal);
+        lineWidthSlider->setRange(0, 10);
+        lineWidthSlider->setValue(4);
+        lineWidthSlider->setSingleStep(1);
+        lineWidthSlider->setPageStep(1);
+        lineWidthSlider->setObjectName("displayFftLineWidthSlider");
+        // Drag popup mirrors the adjacent value label's units (line width in
+        // px, not the raw 0-10 slider steps).
+        lineWidthSlider->setDragValueFormatter([](int v) {
+            return v == 0 ? QStringLiteral("Off") : QString::number(v * 0.5f, 'f', 1);
+        });
+        m_lineWidthSlider = lineWidthSlider;
         applyPrimarySliderStyle(m_lineWidthSlider);
         grid->addWidget(m_lineWidthSlider, row, 1, 1, 2);
 
