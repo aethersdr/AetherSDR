@@ -60,10 +60,11 @@
 #include <QWidgetAction>  // describeAction: header rows (disabled QWidgetAction + QLabel)
 #include <QContextMenuEvent>  // doContextMenu: synthesize a right-click menu trigger
 
+#include <QScrollArea>   // doScrollTo: ensureWidgetVisible on the ancestor
+#include <QScrollBar>    // doScrollTo: echo the resulting scrollbar positions
+
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
-#include <QScrollArea>
-#include <QScrollBar>
 #endif
 
 namespace AetherSDR {
