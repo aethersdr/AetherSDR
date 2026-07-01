@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QImage>
 #include <QPixmap>
 #include <QRectF>
 #include <QString>
@@ -9,6 +10,14 @@
 #include <QVariantMap>
 #include <QVector>
 #include <QWidget>
+
+#ifdef AETHER_GPU_SPECTRUM
+#include <QRhiWidget>
+#include <rhi/qrhi.h>
+#define WAVEFORM_BASE_CLASS QRhiWidget
+#else
+#define WAVEFORM_BASE_CLASS QWidget
+#endif
 
 #include "WaveformScopeModel.h"
 
@@ -26,7 +35,14 @@ namespace AetherSDR {
 // Reduction is incremental (WaveformScopeModel): samples fold into bins as
 // they arrive, and a repaint only merges bins into pixel columns — the
 // per-frame cost no longer scales with the time window (#3283).
-class WaveformWidget : public QWidget {
+//
+// Rendering follows the SpectrumWidget dual-path pattern: with
+// AETHER_GPU_SPECTRUM the widget is a QRhiWidget and the waveform (all four
+// view modes, grid lines, clip ticks) is evaluated per-pixel in a fragment
+// shader from a 1-D column texture; text (dB labels, readout, footer,
+// badges) rides a QPainter-drawn overlay texture refreshed only when it
+// changes. Without the flag it stays the QPainter paintEvent path.
+class WaveformWidget : public WAVEFORM_BASE_CLASS {
     Q_OBJECT
 
 public:
@@ -74,6 +90,11 @@ public:
     // deliberately includes no GUI headers). Optionally resets the
     // counters so successive reads measure disjoint intervals.
     Q_INVOKABLE QVariantMap wavestatsSnapshot(bool reset);
+
+    // Deregister from the current top-level backing-store QRhi BEFORE a
+    // float/dock reparent — the #2495 QRhiWidget stale-cleanup-callback
+    // crash class. No-op in CPU builds. Called by ContainerManager.
+    void prepareForTopLevelChange();
     bool isPausedByUser() const { return m_paused; }
     bool isTransmitSource() const { return m_transmitting; }
     int activeSampleRate() const;
@@ -87,7 +108,13 @@ signals:
     void settingsDrawerToggleRequested();
 
 protected:
+#ifdef AETHER_GPU_SPECTRUM
+    void initialize(QRhiCommandBuffer* cb) override;
+    void render(QRhiCommandBuffer* cb) override;
+    void releaseResources() override;
+#else
     void paintEvent(QPaintEvent* event) override;
+#endif
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseDoubleClickEvent(QMouseEvent* event) override;
 
@@ -115,6 +142,24 @@ private:
     static float dbToAmplitude(float db);
     static float linearToDb(float value);
 
+    // Bands-mode Goertzel band levels [0..1] from the model's raw tail —
+    // shared by the QPainter draw path and the GPU column-texture upload.
+    // Cached on the model generation with a floor interval so a 60 fps
+    // render loop doesn't re-run the filter bank per frame.
+    void computeBandLevels(const WaveformScopeModel& model,
+                           int bandCount, QVector<float>& levels);
+
+#ifdef AETHER_GPU_SPECTRUM
+    struct WaveUniforms;    // std140 block mirrored in wavescope.frag
+    void initWavePipeline();
+    void initOverlayPipeline();
+    void renderGpuFrame(QRhiCommandBuffer* cb);
+    // Rebuild the text overlay image (dB labels, RMS/PK readout, footer,
+    // CLIP / PAUSED / no-audio badges) — only when its content key changes.
+    void updateOverlayImage(const WaveformScopeModel::WindowStats& stats,
+                            const QString& source, int sampleRate, bool stale);
+#endif
+
     WaveformScopeModel m_rx;
     WaveformScopeModel m_tx;
     // Frozen copy of the active model while paused; cleared on resume so
@@ -129,11 +174,13 @@ private:
     QVector<QPointF> m_rmsTopPts;
     QVector<QPointF> m_rmsBottomPts;
 
-    // The grid + dB labels are static per (size, zoom, theme, mode family);
-    // rendering them once into a pixmap removes per-frame line drawing and
+    // The background + grid + dB labels are static per (size, zoom, theme,
+    // mode family); rendering them once removes per-frame line drawing and
     // text shaping — HarfBuzz re-shaping every frame was a top cost in the
-    // #3283 profile.
-    QPixmap m_gridCache;
+    // #3283 profile. A QImage so the GPU build can upload the same layer as
+    // its base texture.
+    QImage m_gridCache;
+    bool m_gridCacheDirty{true};          // GPU: re-upload after rebuild
     QSize m_gridCacheSize;
     qreal m_gridCacheDpr{0.0};
     float m_gridCacheZoom{-1.0f};
@@ -158,13 +205,51 @@ private:
     int m_maxWindowMs;
     bool m_antialiasedStroke;
 
-    // Perf counters (reset via resetPerfStats()).
+    // Perf counters (reset via resetPerfStats()). In GPU builds the "paint"
+    // numbers time render() — the main-thread cost of a frame either way.
     quint64 m_perfPaintCount{0};
     quint64 m_perfPaintUsTotal{0};
     quint64 m_perfPaintUsMax{0};
     quint64 m_perfAppendCount{0};
     quint64 m_perfAppendedSamples{0};
     QElapsedTimer m_perfSince;
+
+    // Bands-mode level cache (see computeBandLevels()).
+    QVector<float> m_bandLevels;
+    quint64 m_bandCacheGen{~0ull};
+    int m_bandCacheCount{0};
+    QElapsedTimer m_bandCacheAge;
+
+#ifdef AETHER_GPU_SPECTRUM
+    QRhiGraphicsPipeline* m_wavePipeline{nullptr};
+    QRhiShaderResourceBindings* m_waveSrb{nullptr};
+    QRhiBuffer* m_waveVbo{nullptr};
+    QRhiBuffer* m_waveUbo{nullptr};
+    QRhiTexture* m_colTex{nullptr};       // columnCount×1 RGBA16F min/max/rms/peak
+    QRhiTexture* m_clipTex{nullptr};      // columnCount×1 R8 clip flags
+    QRhiSampler* m_colSampler{nullptr};   // linear — curves interpolate between columns
+    QRhiSampler* m_clipSampler{nullptr};  // nearest
+    int m_colTexW{0};
+
+    // Textured-quad pipeline (overlay.vert/.frag, premultiplied blend),
+    // drawn twice per frame with different SRBs: the grid/background image
+    // UNDER the waveform, and the text overlay OVER it.
+    QRhiGraphicsPipeline* m_ovPipeline{nullptr};
+    QRhiShaderResourceBindings* m_gridSrb{nullptr};
+    QRhiTexture* m_gridTex{nullptr};
+    QRhiShaderResourceBindings* m_ovSrb{nullptr};
+    QRhiTexture* m_ovTex{nullptr};
+    QRhiSampler* m_ovSampler{nullptr};
+
+    QImage m_overlayImage;
+    QString m_overlayKey;                 // content key — skip repaint+upload when unchanged
+    QElapsedTimer m_overlayTextAge;       // floor interval for readout refresh (~5 Hz)
+    bool m_overlayNeedsUpload{false};
+    bool m_rhiInitialized{false};
+    bool m_shutdownPrepared{false};
+    QVector<float> m_colUpload;           // columnCount × RGBA32F staging
+    QVector<quint8> m_clipUpload;         // columnCount × R8 staging
+#endif
 };
 
 } // namespace AetherSDR
