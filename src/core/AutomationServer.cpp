@@ -2667,6 +2667,39 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("pans"), pans}};
     }
+    if (model == QLatin1String("wavestats")) {
+        // Per-scope paint/append counters from every WaveformWidget
+        // instance (sidebar WAVE applet + Aetherial strip panels), for
+        // before/after rendering-cost proofs without a profiler attach.
+        // selector filters by objectName ("waveAppletScope" /
+        // "stripWaveformScope"); property "reset" zeroes the counters
+        // after the read so successive reads measure disjoint intervals.
+        // GUI-header-free: found by class name, snapshotted via meta-call.
+        const bool reset = property == QLatin1String("reset");
+        QJsonArray scopes;
+        // A floated container is reachable from two top-level roots, so the
+        // class walk can yield the same widget twice — dedupe by pointer.
+        QSet<QWidget*> seen;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("WaveformWidget"));
+        for (QWidget* w : widgets) {
+            if (seen.contains(w))
+                continue;
+            seen.insert(w);
+            if (!selector.isEmpty() && w->objectName() != selector)
+                continue;
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "wavestatsSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap),
+                                           Q_ARG(bool, reset)))
+                continue;
+            scopes.append(QJsonObject::fromVariantMap(snap));
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("scopes"), scopes}};
+    }
     if (model == QLatin1String("sync")
         || model == QLatin1String("receiveSync")) {
         if (!m_receiveSyncSnapshotHandler) {
@@ -2748,7 +2781,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|panstats|kiwi)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|panstats|kiwi|wavestats)"));
     }
 
     if (!property.isEmpty()) {

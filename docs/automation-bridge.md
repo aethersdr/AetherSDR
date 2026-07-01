@@ -143,6 +143,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
 | | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
+| | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
@@ -425,6 +426,7 @@ connects).
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps) |
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
+| `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
@@ -498,6 +500,36 @@ only non-screenshot way to assert it.
   NR2/NR4/DFNR-beta values. (BNR is the in-process NVIDIA AFX denoiser since
   #3902 — no container, so it exposes only `intensity`.)
 - A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`.
+
+### `get wavestats`
+Per-scope paint/append counters from every `WaveformWidget` instance — the
+sidebar WAVE applet (`waveAppletScope`) plus the Aetherial strip's TX/RX
+waveform panels (`stripWaveformScope`). This is the no-profiler way to prove a
+rendering-cost change: `paintMsPerSec` is the main-thread paint budget the
+scope actually consumed, in milliseconds per wall-clock second.
+
+```json
+→ {"cmd":"get","model":"wavestats"}
+← {"ok":true,"model":"wavestats","scopes":[{
+   "name":"waveAppletScope","windowTitle":"AetherSDR","windowClass":"AetherSDR::MainWindow",
+   "floating":false,"visible":true,"tx":false,"paused":false,
+   "mode":"Scope","fps":60,"windowMs":1000,"sampleRate":48000,
+   "widthPx":244,"heightPx":110,"sinceMs":40012,
+   "paintCount":2381,"paintsPerSec":59.5,"avgPaintUs":312.4,"maxPaintUs":1893,
+   "paintMsPerSec":18.6,"appendsPerSec":124.9,"samplesPerSec":47980.1}]}
+```
+
+- `paintMsPerSec` — `avgPaintUs × paintsPerSec / 1000`; the headline number.
+- `mode` uses the applet's UI names: `Scope` / `Envelope` / `History` / `Bands`.
+- `floating` + `windowClass` — which top-level surface hosts the scope
+  (`MainWindow` docked, `FloatingContainerWindow` popped out, or the strip).
+- Counters accumulate from app start; a selector narrows to one scope
+  (`get wavestats waveAppletScope`) and the pseudo-property `reset` zeroes
+  the counters after the read (`get wavestats "" reset`) so successive reads
+  measure disjoint intervals.
+- Hidden scopes keep counting appends (the data feed stays live) but never
+  paint — `paintsPerSec` 0 with a nonzero `appendsPerSec` is the expected
+  hidden-widget signature, not a bug.
 
 ### `tune`
 Set the **active slice's** frequency in MHz — the most fundamental control the
