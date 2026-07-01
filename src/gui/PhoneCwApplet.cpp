@@ -99,7 +99,7 @@ static constexpr float kAlcGaugeFloorDbfs = -20.0f;
 
 // Mouse-over readout formatter for the ALC gauges — one decimal of dBFS so a
 // transmitting operator can read the exact SSB-peak level off the bar rather
-// than eyeballing it against the -20…0 scale. (#feat meter readout)
+// than eyeballing it against the -20…0 scale. (#3936)
 static HGauge::HoverValueFormatter alcHoverFormatter()
 {
     return [](float v) {
@@ -147,7 +147,7 @@ void PhoneCwApplet::buildPhonePanel()
         nullptr, -10.0f);
     m_levelGauge->setAccessibleName("Microphone level gauge");
     m_levelGauge->setAccessibleDescription("Microphone input level in dBFS");
-    // Mouse-over readout: exact mic peak in dB. (#feat meter readout)
+    // Mouse-over readout: exact mic peak in dB. (#3936)
     m_levelGauge->setHoverValueFormatter([](float v) {
         return QStringLiteral("%1 dB").arg(QString::number(v, 'f', 1));
     });
@@ -161,7 +161,7 @@ void PhoneCwApplet::buildPhonePanel()
     m_compGauge->setAccessibleName("Compression gauge");
     m_compGauge->setAccessibleDescription("Speech compression amount in dB");
     // Mouse-over readout: the gauge stores compression as a negative offset
-    // (-25…0); report it as a positive "amount of compression" in dB. (#feat)
+    // (-25…0); report it as a positive "amount of compression" in dB. (#3936)
     m_compGauge->setHoverValueFormatter([](float v) {
         return QStringLiteral("%1 dB").arg(QString::number(-v, 'f', 1));
     });

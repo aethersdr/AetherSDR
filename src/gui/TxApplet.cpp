@@ -135,7 +135,7 @@ void TxApplet::buildUI()
     m_fwdGauge->setAccessibleName("Forward power gauge");
     m_fwdGauge->setAccessibleDescription("RF forward power in watts");
     // Mouse-over readout: exact watts, so the operator isn't left estimating
-    // between the 40 W tick marks while transmitting. (#feat meter readout)
+    // between the 40 W tick marks while transmitting. (#3936)
     static_cast<HGauge*>(m_fwdGauge)->setHoverValueFormatter([](float v) {
         return QStringLiteral("%1 W").arg(QString::number(std::lround(v)));
     });

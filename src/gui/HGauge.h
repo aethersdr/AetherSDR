@@ -145,7 +145,7 @@ public:
     // badge the sliders flash on keyboard/drag adjustment.  Handy on the TX
     // meters (SWR / forward power / ALC) where the bar scale alone doesn't
     // give an exact reading.  The badge lingers briefly after the pointer
-    // leaves so a quick glance-and-move still registers. (#feat meter readout)
+    // leaves so a quick glance-and-move still registers. (#3936)
     using HoverValueFormatter = std::function<QString(float)>;
 
     void setHoverValueFormatter(HoverValueFormatter formatter) {
@@ -318,7 +318,20 @@ private:
             return;
         if (!m_hoverPopup)
             m_hoverPopup = new AetherSDR::DragValuePopup(this);
-        m_hoverPopup->showValue(globalAnchor, hoverValueText());
+        // setValue() fires at ballistics-animation rate while hovered, but the
+        // badge text and anchor are usually identical frame-to-frame. showValue()
+        // re-runs adjustSize()/resize()/move()/raise() every call, so skip it
+        // when nothing changed and the popup is already up. (isVisible() gates
+        // the re-enter case, where the cache may still match but the popup was
+        // hidden by leaveEvent/hideEvent and must be shown again.)
+        const QString text = hoverValueText();
+        if (m_hoverPopup->isVisible()
+            && text == m_lastPopupText
+            && globalAnchor == m_lastPopupAnchor)
+            return;
+        m_lastPopupText = text;
+        m_lastPopupAnchor = globalAnchor;
+        m_hoverPopup->showValue(globalAnchor, text);
     }
 
     float m_min, m_max, m_redStart, m_yellowStart;
@@ -337,6 +350,8 @@ private:
     bool m_hoverPopupEnabled{false};
     bool m_hovered{false};
     QPoint m_lastHoverGlobal;
+    QString m_lastPopupText;    // last badge text/anchor pushed to the popup —
+    QPoint m_lastPopupAnchor;   // used to skip redundant per-frame re-layouts
 
     // Shared meter ballistics — see MeterSmoother.h.
     MeterSmoother m_smooth;
