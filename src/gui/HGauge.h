@@ -182,6 +182,19 @@ protected:
             m_hoverPopup->linger(kHoverLingerMs);
     }
 
+    void hideEvent(QHideEvent* ev) override {
+        QWidget::hideEvent(ev);
+        // Qt does not guarantee a leaveEvent when the gauge is hidden or
+        // reparented while the pointer is still over it (tab switch, applet
+        // float/dock, window minimize). The popup is a top-level Qt::ToolTip
+        // window, so without this it could linger orphaned on screen — close
+        // it immediately and clear the hover state so it can't reappear stale
+        // when the gauge is shown again.
+        m_hovered = false;
+        if (m_hoverPopup)
+            m_hoverPopup->hideNow();
+    }
+
     void paintEvent(QPaintEvent*) override {
         QPainter p(this);
         p.setRenderHint(QPainter::Antialiasing);
