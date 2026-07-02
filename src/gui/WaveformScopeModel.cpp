@@ -232,6 +232,11 @@ WaveformScopeModel::mergeColumns(int columnCount, QVector<ColumnStats>& out) con
             c.peak = peak;
             c.rms = static_cast<float>(std::sqrt(sumSq / count));
             c.clipped = clipped;
+        } else {
+            // Empty column: match the old buildColumns() no-data sentinel
+            // (min > max) so the render draws nothing here, not a zero line.
+            c.min = 1.0f;
+            c.max = -1.0f;
         }
 
         // Column ranges tile the bin range exactly once when used >=

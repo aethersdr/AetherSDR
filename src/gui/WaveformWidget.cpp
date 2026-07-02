@@ -291,6 +291,12 @@ void WaveformWidget::prepareForTopLevelChange()
 }
 
 #ifndef AETHER_GPU_SPECTRUM
+// TODO(a11y): QAccessibleInterface needed — this scope custom-paints
+// data-bearing content (min/max envelope, RMS band, peak, clip flags, and the
+// peak/RMS/clip header readout) in both this CPU path and the GPU render()
+// path. A screen reader sees only the accessibleName, not the live values.
+// Expose via a WaveformWidget QAccessibleInterface. Tracked in
+// aethersdr/AetherSDR#3959.
 void WaveformWidget::paintEvent(QPaintEvent* event)
 {
     QElapsedTimer paintTimer;
@@ -1357,8 +1363,13 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         m_clipTex->setPixelSize(QSize(m_colTexW, 1));
         m_clipTex->create();
         m_waveSrb->create();   // rebind the recreated textures
+        m_lastColUploadGen = ~0ull;   // recreated textures must be re-uploaded
     }
-    {
+    // Skip the column/clip re-upload when the reduced data is unchanged —
+    // model.generation() is the dirty counter (reset above on texture
+    // recreate so a new/resized texture is always populated).
+    if (model.generation() != m_lastColUploadGen) {
+        m_lastColUploadGen = model.generation();
         QRhiTextureSubresourceUploadDescription colDesc(
             m_colUpload.constData(),
             m_colUpload.size() * static_cast<int>(sizeof(float)));

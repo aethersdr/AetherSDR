@@ -227,6 +227,7 @@ private:
     QRhiBuffer* m_waveUbo{nullptr};
     QRhiTexture* m_colTex{nullptr};       // columnCount×1 RGBA16F min/max/rms/peak
     QRhiTexture* m_clipTex{nullptr};      // columnCount×1 R8 clip flags
+    quint64 m_lastColUploadGen{~0ull};    // model.generation() of the last col/clip upload
     QRhiSampler* m_colSampler{nullptr};   // linear — curves interpolate between columns
     QRhiSampler* m_clipSampler{nullptr};  // nearest
     int m_colTexW{0};
