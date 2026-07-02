@@ -65,7 +65,8 @@ void main()
 
     float hPx = plot.y;
     float py = v_uv.y * hPx;                       // y-down device px
-    float t = clamp(texture(columns, vec2(v_uv.x, 0.5)).r, 0.0, 1.0);
+    float texX = (v_uv.x * (plot.z - 1.0) + 0.5) / plot.z;
+    float t = clamp(texture(columns, vec2(texX, 0.5)).r, 0.0, 1.0);
     float yTrace = (1.0 - t) * hPx;                // trace top edge in px
 
     bool heat = fillP.y > 0.5;
