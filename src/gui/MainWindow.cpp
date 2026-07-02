@@ -2983,6 +2983,14 @@ void MainWindow::closeEvent(QCloseEvent* event)
     m_tgxlConn.disconnect();
     m_pgxlConn.disconnect();
 
+    // Same reason as the TGXL/PGXL sockets above: the D-STAR helper is stopped
+    // by the queued RadioModel::connectionStateChanged(false) handler, which
+    // does not run during close (the event loop isn't pumped here). Without an
+    // explicit stop, quitting while the radio is connected orphans the helper
+    // subprocess — it keeps holding the ThumbDV serial port and can block the
+    // next AetherSDR launch from reacquiring it.
+    DStarWaveformProcess::instance().stop();
+
     preparePanadapterUiForShutdown();
     auto& s = AppSettings::instance();
     s.setValue("MainWindowGeometry", saveGeometry().toBase64());
