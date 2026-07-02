@@ -58,6 +58,14 @@ from FlexLib and a broad wave of audio, spectrum, and UI fixes.
   continuous file holds both across SSB↔CW switches — usable at last for contest
   CW review. Client-Side recording is now the out-of-box default (Radio Side
   stays selectable). Scope is AetherSDR-keyed CW (keyboard / paddle / CWX). (#3895)
+- **Local D-STAR waveform.** AetherSDR builds and runs a bundled
+  `aether-dstar-waveform` helper against the connected radio via the Flex
+  waveform API, with Local D-STAR controls in the Waveforms window and
+  auto-detection of an attached **ThumbDV / DV3000** vocoder (required —
+  software AMBE is intentionally not bundled). Also hardens waveform
+  install/management: protocol-token validation, bounded package reads, escaped
+  radio/user strings, and the frameless install dialog. Built on public
+  GPL-compatible SmartSDR-DSP sources (clean-room, Principle IV). (#3956)
 - **KiwiSDR protocol metadata scaffolding.** Richer read-only receiver metadata,
   protocol/capability handling, and monitor/camping state for public KiwiSDR
   receivers, with new `get kiwi` / `get kiwisdr` automation-bridge snapshots.
