@@ -31,6 +31,12 @@ struct ModelCapabilities {
     bool hasLoopA{false};    // RX loop/preselector path (FLEX-6500, FLEX-6700)
     bool hasLoopB{false};    // Second RX loop path (FLEX-6700)
     bool isDiversityAllowed{false};  // 2-SCU diversity RX (FlexLib IsDiversityAllowed)
+    // Max independent receivers (FlexLib SliceList size).  Also the max
+    // panadapter count — pan capacity tracks the radio's SCU/slice capacity,
+    // which is identical across every current model.  Default 2 mirrors
+    // FlexLib's DEFAULT entry (SliceList {A,B}); the radio's live "slices=N"
+    // status overrides this initial estimate once connected.
+    int maxSlices{2};
 
     // Extended firmware DSP filters (NRL / NRS / RNN / NRF) exist on the
     // BigBend and DragonFire platforms.  Unknown (pre-discovery) and the

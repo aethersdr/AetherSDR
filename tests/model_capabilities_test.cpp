@@ -51,31 +51,32 @@ int main()
         bool hasLoopA;
         bool hasLoopB;
         bool diversity;
+        int  slices;   // FlexLib SliceList size == max slices == max panadapters
     };
     const Row kExpected[] = {
-        {"FLEX-6300",  RadioPlatform::Microburst, false, false, false, false, false},
-        {"FLEX-6400",  RadioPlatform::DeepEddy,   false, false, false, false, false},
-        {"FLEX-6400M", RadioPlatform::DeepEddy,   false, false, false, false, false},
-        {"FLEX-6500",  RadioPlatform::Microburst, true,  false, true,  false, false},
-        {"FLEX-6600",  RadioPlatform::DeepEddy,   false, false, false, false, true },
-        {"FLEX-6600M", RadioPlatform::DeepEddy,   false, false, false, false, true },
-        {"FLEX-6700",  RadioPlatform::Microburst, true,  true,  true,  true,  true },
-        {"FLEX-6700R", RadioPlatform::Microburst, false, false, false, false, true },
-        {"FLEX-8400",  RadioPlatform::BigBend,    false, false, false, false, false},
-        {"FLEX-8400M", RadioPlatform::BigBend,    false, false, false, false, false},
-        {"FLEX-8600",  RadioPlatform::BigBend,    false, false, false, false, true },
-        {"FLEX-8600M", RadioPlatform::BigBend,    false, false, false, false, true },
-        {"ML-9600",    RadioPlatform::BigBend,    false, false, false, false, true },
-        {"ML-9600W",   RadioPlatform::BigBend,    false, false, false, false, true },
-        {"ML-9600X",   RadioPlatform::BigBend,    false, false, false, false, true },
-        {"MLS-9601",   RadioPlatform::BigBend,    false, false, false, false, true },
-        {"CL-9300",    RadioPlatform::BigBend,    false, false, false, false, true },
-        {"CLS-9301",   RadioPlatform::BigBend,    false, false, false, false, true },
-        {"RT-2122",    RadioPlatform::DragonFire, false, false, false, false, false},
-        {"AU-510",     RadioPlatform::BigBend,    false, false, false, false, false},
-        {"AU-510M",    RadioPlatform::BigBend,    false, false, false, false, false},
-        {"AU-520",     RadioPlatform::BigBend,    false, false, false, false, true },
-        {"AU-520M",    RadioPlatform::BigBend,    false, false, false, false, true },
+        {"FLEX-6300",  RadioPlatform::Microburst, false, false, false, false, false, 2},
+        {"FLEX-6400",  RadioPlatform::DeepEddy,   false, false, false, false, false, 2},
+        {"FLEX-6400M", RadioPlatform::DeepEddy,   false, false, false, false, false, 2},
+        {"FLEX-6500",  RadioPlatform::Microburst, true,  false, true,  false, false, 4},
+        {"FLEX-6600",  RadioPlatform::DeepEddy,   false, false, false, false, true,  4},
+        {"FLEX-6600M", RadioPlatform::DeepEddy,   false, false, false, false, true,  4},
+        {"FLEX-6700",  RadioPlatform::Microburst, true,  true,  true,  true,  true,  8},
+        {"FLEX-6700R", RadioPlatform::Microburst, false, false, false, false, true,  8},
+        {"FLEX-8400",  RadioPlatform::BigBend,    false, false, false, false, false, 2},
+        {"FLEX-8400M", RadioPlatform::BigBend,    false, false, false, false, false, 2},
+        {"FLEX-8600",  RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"FLEX-8600M", RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"ML-9600",    RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"ML-9600W",   RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"ML-9600X",   RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"MLS-9601",   RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"CL-9300",    RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"CLS-9301",   RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"RT-2122",    RadioPlatform::DragonFire, false, false, false, false, false, 2},
+        {"AU-510",     RadioPlatform::BigBend,    false, false, false, false, false, 2},
+        {"AU-510M",    RadioPlatform::BigBend,    false, false, false, false, false, 2},
+        {"AU-520",     RadioPlatform::BigBend,    false, false, false, false, true,  4},
+        {"AU-520M",    RadioPlatform::BigBend,    false, false, false, false, true,  4},
     };
 
     for (const auto& row : kExpected) {
@@ -89,11 +90,27 @@ int main()
         check(caps.hasLoopA == row.hasLoopA, m + ": hasLoopA");
         check(caps.hasLoopB == row.hasLoopB, m + ": hasLoopB");
         check(caps.isDiversityAllowed == row.diversity, m + ": isDiversityAllowed");
+        check(caps.maxSlices == row.slices,
+              m + ": maxSlices == " + std::to_string(row.slices)
+                  + " (got " + std::to_string(caps.maxSlices) + ")");
         // Extended firmware DSP (NRL/NRS/RNN/NRF) = BigBend | DragonFire.
         const bool expectExt = row.platform == RadioPlatform::BigBend
                             || row.platform == RadioPlatform::DragonFire;
         check(caps.hasExtendedDsp() == expectExt, m + ": hasExtendedDsp");
     }
+
+    // Regression: the dual-SCU ML-/MLS-/CL-/CLS- models must report 4 slices/
+    // panadapters (SliceList {A,B,C,D}); the old maxPanadapters() contains()
+    // list omitted them and capped them at 2. AU-510 (2) vs AU-520 (4) confirm
+    // the M-variant families resolve to the right capacity.
+    for (const char* m : {"ML-9600", "MLS-9601", "CL-9300", "CLS-9301"}) {
+        check(capabilitiesFor(QString::fromLatin1(m)).maxSlices == 4,
+              std::string(m) + " reports 4 slices/pans (was capped at 2)");
+    }
+    check(capabilitiesFor(QStringLiteral("AU-510M")).maxSlices == 2,
+          "AU-510M reports 2 slices/pans");
+    check(capabilitiesFor(QStringLiteral("AU-520M")).maxSlices == 4,
+          "AU-520M reports 4 slices/pans");
 
     // Regression: the "S" server variants must NOT be lost the way the old
     // contains("ML-")/contains("CL-") prefix logic dropped them (MLS-9601 has
@@ -159,8 +176,9 @@ int main()
         check(caps.platform == RadioPlatform::Unknown
                   && !caps.has4Meters && !caps.has2Meters
                   && !caps.hasLoopA && !caps.hasLoopB
-                  && !caps.hasExtendedDsp(),
-              "Unknown model returns default Unknown/all-false capabilities");
+                  && !caps.hasExtendedDsp()
+                  && caps.maxSlices == 2,   // FlexLib DEFAULT SliceList {A,B}
+              "Unknown model returns default Unknown/all-false/2-slice capabilities");
     }
 
     // Empty / disconnected state should not crash and should return default
