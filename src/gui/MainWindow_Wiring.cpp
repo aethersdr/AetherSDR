@@ -3515,6 +3515,16 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             unsupportedBandReason = stackKeyResult.unsupportedReason;
         }
 
+        if (stackKey.isEmpty() && m_radioModel.declaredBands().contains(bandName)) {
+            // Radio-declared band (see RadioModel::declaredBands): the radio
+            // told us it tunes this natively, so pass the declared name
+            // through as the band-stack key — the declaring radio defines
+            // and honours these keys (e.g. band=440 on an IC-9700 gateway).
+            // Real Flex radios never declare bands, so their unsupported-band
+            // refusal below is unchanged.
+            stackKey = bandName;
+        }
+
         if (stackKey.isEmpty()) {
             qCWarning(lcProtocol).noquote().nospace()
                 << "MainWindow: refusing unsupported band change band=" << bandName
