@@ -227,6 +227,7 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
     updated.waterfallRate =
         std::clamp(updated.waterfallRate, 0, kKiwiSdrWaterfallRateMax);
     const QString oldEndpoint = m_profiles[idx].endpoint;
+    const bool wasAutoConnect = m_profiles[idx].autoConnect;
     m_profiles[idx] = updated;
     saveSettings();
     const bool endpointChanged = oldEndpoint != updated.endpoint;
@@ -255,6 +256,18 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
             }
         });
     }
+
+    // Turning off auto-connect on a profile that no slice is using leaves it
+    // "no longer in use" (no assigned slice, not auto-connect) — release it so
+    // it stops squatting the receiver's user slot / per-IP time budget, the same
+    // disconnect-when-idle invariant as the slice-transition paths (#3950).
+    // Scoped to the true->false transition so plain name/endpoint edits and
+    // manually-connected profiles are left untouched.
+    if (wasAutoConnect && !updated.autoConnect
+        && !shouldMaintainProfileConnection(updated.id)) {
+        disconnectProfile(updated.id);
+    }
+
     emit profilesChanged();
 }
 
