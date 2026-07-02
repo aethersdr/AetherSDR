@@ -802,7 +802,7 @@ void MainWindow::registerShortcutActions()
     }
 
     // ── Mode ────────────────────────────────────────────────────────────
-    static const char* modes[] = {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM", "DFM", "DIGU", "DIGL", "RTTY"};
+    static const char* modes[] = {"USB", "LSB", "CW", "CWL", "AM", "SAM", "FM", "NFM", "DFM", "DSTR", "DIGU", "DIGL", "RTTY"};
     for (const char* mode : modes) {
         QString m = mode;
         m_shortcutManager.registerAction(

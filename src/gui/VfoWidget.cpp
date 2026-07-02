@@ -2199,7 +2199,7 @@ void VfoWidget::buildTabContent()
         m_modeCombo->setFixedHeight(26);
         // Default modes — replaced dynamically when slice connects and sends mode_list
         m_modeCombo->addItems({"USB", "LSB", "CW", "AM", "SAM", "FM",
-                                "NFM", "DFM", "DIGU", "DIGL", "RTTY"});
+                                "NFM", "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
 #ifdef HAVE_RADE
         m_modeCombo->addItem("RADE");
 #endif
@@ -2275,7 +2275,7 @@ void VfoWidget::buildTabContent()
             connect(btn, &QPushButton::customContextMenuRequested, this, [this, i, btn](const QPoint& pos) {
                 QMenu menu;
                 for (const char* m : {"USB", "LSB", "SSB", "CW", "AM", "SAM",
-                                      "FM", "NFM", "DFM", "RTTY", "DIGU", "DIGL", "DIG"}) {
+                                      "FM", "NFM", "DFM", "DSTR", "RTTY", "DIGU", "DIGL", "DIG"}) {
                     menu.addAction(m, [this, i, m] {
                         m_quickModeAssign[i] = m;
                         AppSettings::instance().setValue(

@@ -9,10 +9,15 @@ namespace AetherSDR {
 
 class RadioModel;
 
-// Installs a Docker waveform container image on the radio via the file upload
-// protocol introduced in firmware 4.2.18.
+// Installs radio waveform packages via the Flex file upload protocol.
 //
-// Protocol (confirmed by pcap 4.2.18-waveform-install.pcapng, frame 4496):
+// Legacy protocol (FlexLib Radio.cs SendSSDRWaveformFile):
+//   1. Client -> Radio: "file filename <filename>"
+//   2. Client -> Radio: "file upload <size> new_waveform"
+//   3. Radio  -> Client: R<seq>|0|<port>
+//   4. Client connects TCP to radio:<port> and streams raw .ssdr_waveform bytes
+//
+// Docker protocol (confirmed by pcap 4.2.18-waveform-install.pcapng, frame 4496):
 //   1. Client → Radio: "file upload <size> waveform_docker_image <filename>"
 //   2. Radio  → Client: R<seq>|0|<port>   (radio opens TCP server on <port>)
 //   3. Radio  → Client: S0|file server active
@@ -30,9 +35,16 @@ class WaveformInstaller : public QObject {
 public:
     explicit WaveformInstaller(RadioModel* model, QObject* parent = nullptr);
 
-    // Begin installing the .tar.gz waveform image at filePath.
-    // Emits progressChanged() during transfer and finished() on completion.
+    // Backward-compatible Docker install entry point.
     void install(const QString& filePath);
+
+    // Begin installing a legacy .ssdr_waveform package at filePath.
+    // Emits progressChanged() during transfer and finished() on completion.
+    void installLegacyWaveform(const QString& filePath);
+
+    // Begin installing a Docker .tar/.tar.gz/.tgz waveform image at filePath.
+    // Emits progressChanged() during transfer and finished() on completion.
+    void installDockerWaveform(const QString& filePath);
 
     // Abort an in-progress install.
     void cancel();
@@ -44,6 +56,12 @@ signals:
     void finished(bool success, const QString& message);
 
 private:
+    enum class PackageKind {
+        Legacy,
+        Docker
+    };
+
+    void beginInstall(const QString& filePath, PackageKind kind);
     void onUploadPortReceived(int code, const QString& body);
     void onConnected();
     void onBytesWritten(qint64 bytes);
@@ -53,6 +71,7 @@ private:
     QTcpSocket  m_socket;
     QByteArray  m_fileData;
     QString     m_fileName;
+    PackageKind m_packageKind{PackageKind::Docker};
     qint64      m_bytesSent{0};
     int         m_uploadPort{-1};
     bool        m_installing{false};

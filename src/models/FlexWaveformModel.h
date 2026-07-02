@@ -35,6 +35,7 @@ public:
 
     // ── Accessors ─────────────────────────────────────────────────────────────
     const QList<FlexWaveformEntry>& waveforms()    const { return m_waveforms; }
+    bool    wfpStatusSeen() const { return m_wfpStatusSeen; }
     bool    wfpPowered()   const { return m_wfpPowered; }
     bool    wfpReady()     const { return m_wfpReady; }
     QString wfpIpAddress() const { return m_wfpIpAddress; }
@@ -62,6 +63,7 @@ signals:
 
 private:
     QList<FlexWaveformEntry> m_waveforms;
+    bool    m_wfpStatusSeen{false};
     bool    m_wfpPowered{false};
     bool    m_wfpReady{false};
     QString m_wfpIpAddress;

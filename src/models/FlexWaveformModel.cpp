@@ -3,6 +3,32 @@
 
 namespace AetherSDR {
 
+namespace {
+
+bool isSafeWaveformCommandName(const QString& name)
+{
+    if (name.isEmpty() || name.size() > 64) {
+        return false;
+    }
+
+    for (const QChar ch : name) {
+        const ushort c = ch.unicode();
+        const bool allowed =
+            (c >= 'A' && c <= 'Z')
+            || (c >= 'a' && c <= 'z')
+            || (c >= '0' && c <= '9')
+            || c == '.'
+            || c == '_'
+            || c == '-';
+        if (!allowed) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 FlexWaveformModel::FlexWaveformModel(QObject* parent)
     : QObject(parent)
 {}
@@ -85,7 +111,8 @@ void FlexWaveformModel::handleContainerStatus(const QMap<QString, QString>& kvs)
 // FlexLib Radio.cs ParseWfpStatus (line 11292).
 void FlexWaveformModel::handleWfpStatus(const QMap<QString, QString>& kvs)
 {
-    bool changed = false;
+    bool changed = !m_wfpStatusSeen;
+    m_wfpStatusSeen = true;
 
     if (kvs.contains(QStringLiteral("power"))) {
         const bool powered = kvs[QStringLiteral("power")].compare(
@@ -111,13 +138,15 @@ void FlexWaveformModel::handleWfpStatus(const QMap<QString, QString>& kvs)
         }
     }
 
-    if (changed)
+    if (changed) {
         emit wfpStatusChanged();
+    }
 }
 
 void FlexWaveformModel::clear()
 {
     m_waveforms.clear();
+    m_wfpStatusSeen = false;
     m_wfpPowered   = false;
     m_wfpReady     = false;
     m_wfpIpAddress.clear();
@@ -129,16 +158,28 @@ void FlexWaveformModel::clear()
 
 void FlexWaveformModel::requestUninstall(const QString& name)
 {
+    if (!isSafeWaveformCommandName(name)) {
+        qWarning() << "FlexWaveformModel: refusing unsafe waveform uninstall name:" << name;
+        return;
+    }
     emit commandReady(QStringLiteral("waveform uninstall ") + name);
 }
 
 void FlexWaveformModel::requestRemoveContainer(const QString& name)
 {
+    if (!isSafeWaveformCommandName(name)) {
+        qWarning() << "FlexWaveformModel: refusing unsafe waveform container removal name:" << name;
+        return;
+    }
     emit commandReady(QStringLiteral("waveform remove_container ") + name);
 }
 
 void FlexWaveformModel::requestRestart(const QString& name)
 {
+    if (!isSafeWaveformCommandName(name)) {
+        qWarning() << "FlexWaveformModel: refusing unsafe waveform restart name:" << name;
+        return;
+    }
     emit commandReady(QStringLiteral("waveform restart ") + name);
 }
 

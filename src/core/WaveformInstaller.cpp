@@ -9,6 +9,32 @@
 
 namespace AetherSDR {
 
+namespace {
+
+bool isSafeUploadFileName(const QString& fileName)
+{
+    if (fileName.isEmpty() || fileName.size() > 255) {
+        return false;
+    }
+
+    for (const QChar ch : fileName) {
+        const ushort c = ch.unicode();
+        const bool allowed =
+            (c >= 'A' && c <= 'Z')
+            || (c >= 'a' && c <= 'z')
+            || (c >= '0' && c <= '9')
+            || c == '.'
+            || c == '_'
+            || c == '-';
+        if (!allowed) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 WaveformInstaller::WaveformInstaller(RadioModel* model, QObject* parent)
     : QObject(parent), m_model(model)
 {
@@ -19,8 +45,33 @@ WaveformInstaller::WaveformInstaller(RadioModel* model, QObject* parent)
 
 void WaveformInstaller::install(const QString& filePath)
 {
+    installDockerWaveform(filePath);
+}
+
+void WaveformInstaller::installLegacyWaveform(const QString& filePath)
+{
+    beginInstall(filePath, PackageKind::Legacy);
+}
+
+void WaveformInstaller::installDockerWaveform(const QString& filePath)
+{
+    beginInstall(filePath, PackageKind::Docker);
+}
+
+void WaveformInstaller::beginInstall(const QString& filePath, PackageKind kind)
+{
     if (m_installing) {
         emit finished(false, tr("Install already in progress"));
+        return;
+    }
+
+    const QFileInfo fileInfo(filePath);
+    const QString fileName = fileInfo.fileName();
+
+    if (!isSafeUploadFileName(fileName)) {
+        emit finished(false, tr("Waveform package filename contains characters "
+                                "that cannot be sent safely to the radio. "
+                                "Use letters, numbers, dots, dashes, and underscores."));
         return;
     }
 
@@ -30,52 +81,81 @@ void WaveformInstaller::install(const QString& filePath)
         return;
     }
 
-    // Validate file format: accept gzip-compressed tars (magic 0x1F 0x8B) and
-    // plain uncompressed tars (POSIX "ustar" magic at byte 257).
-    // FlexRadio waveform packages may use either format — newer releases ship
-    // Docker OCI image layout tars without gzip compression despite a .tar.gz
-    // extension (confirmed with freedv-waveform-2.4.0-dev-7132.tar.gz).
-    const QByteArray header = file.read(262);
-    const bool isGzip = header.size() >= 2
-                        && static_cast<quint8>(header[0]) == 0x1F
-                        && static_cast<quint8>(header[1]) == 0x8B;
-    const bool isTar  = header.size() >= 262
-                        && header.mid(257, 5) == QByteArray("ustar", 5);
-    if (!isGzip && !isTar) {
-        emit finished(false, tr("Not a valid waveform image (expected a .tar.gz or tar archive)"));
-        return;
+    if (kind == PackageKind::Legacy) {
+        if (fileInfo.suffix().compare(QStringLiteral("ssdr_waveform"),
+                                      Qt::CaseInsensitive) != 0) {
+            emit finished(false, tr("Not a legacy SmartSDR waveform package "
+                                    "(expected .ssdr_waveform)"));
+            return;
+        }
+    } else {
+        // Validate file format: accept gzip-compressed tars (magic 0x1F 0x8B)
+        // and plain uncompressed tars (POSIX "ustar" magic at byte 257).
+        // FlexRadio Docker waveform packages may use either format — newer
+        // releases ship Docker OCI image layout tars without gzip compression
+        // despite a .tar.gz extension.
+        const QByteArray header = file.read(262);
+        const bool isGzip = header.size() >= 2
+                            && static_cast<quint8>(header[0]) == 0x1F
+                            && static_cast<quint8>(header[1]) == 0x8B;
+        const bool isTar  = header.size() >= 262
+                            && header.mid(257, 5) == QByteArray("ustar", 5);
+        if (!isGzip && !isTar) {
+            emit finished(false, tr("Not a valid Docker waveform image "
+                                    "(expected a .tar.gz or tar archive)"));
+            return;
+        }
+        file.seek(0);
     }
-    file.seek(0);
 
-    m_fileData = file.readAll();
-    file.close();
-
-    if (m_fileData.isEmpty()) {
+    const qint64 fileSize = fileInfo.size();
+    if (fileSize <= 0) {
         emit finished(false, tr("File is empty"));
         return;
     }
 
-    if (m_fileData.size() > MAX_FILE_BYTES) {
+    if (fileSize > MAX_FILE_BYTES) {
         emit finished(false, tr("File too large (> 500 MB)"));
         return;
     }
 
-    m_fileName   = QFileInfo(filePath).fileName();
-    m_bytesSent  = 0;
-    m_uploadPort = -1;
-    m_installing = true;
-    m_cancelled  = false;
+    m_fileData = file.readAll();
+    file.close();
+
+    if (m_fileData.size() != fileSize) {
+        emit finished(false, tr("Could not read the complete waveform package"));
+        m_fileData.clear();
+        return;
+    }
+
+    m_fileName    = fileName;
+    m_packageKind = kind;
+    m_bytesSent   = 0;
+    m_uploadPort  = -1;
+    m_installing  = true;
+    m_cancelled   = false;
 
     emit progressChanged(0, tr("Requesting upload port…"));
 
-    // Single command — filename is embedded directly (no separate "file filename" step).
-    // Protocol confirmed by pcap 4.2.18-waveform-install.pcapng frame 4496.
-    m_model->sendCmdPublic(
-        QStringLiteral("file upload %1 waveform_docker_image %2")
-            .arg(m_fileData.size()).arg(m_fileName),
-        [this](int code, const QString& body) {
-            onUploadPortReceived(code, body);
-        });
+    if (kind == PackageKind::Legacy) {
+        // FlexLib Radio.cs SendSSDRWaveformFile sends the filename first, then
+        // requests an upload port with upload kind "new_waveform".
+        m_model->sendCmdPublic(QStringLiteral("file filename ") + m_fileName, nullptr);
+        m_model->sendCmdPublic(
+            QStringLiteral("file upload %1 new_waveform").arg(m_fileData.size()),
+            [this](int code, const QString& body) {
+                onUploadPortReceived(code, body);
+            });
+    } else {
+        // Docker images embed the filename in the upload command.
+        // Protocol confirmed by pcap 4.2.18-waveform-install.pcapng frame 4496.
+        m_model->sendCmdPublic(
+            QStringLiteral("file upload %1 waveform_docker_image %2")
+                .arg(m_fileData.size()).arg(m_fileName),
+            [this](int code, const QString& body) {
+                onUploadPortReceived(code, body);
+            });
+    }
 }
 
 void WaveformInstaller::cancel()
@@ -137,7 +217,9 @@ void WaveformInstaller::onConnected()
     if (m_cancelled) return;
 
     qCDebug(lcWaveform) << "WaveformInstaller: connected, sending" << m_fileData.size() << "bytes";
-    emit progressChanged(0, tr("Uploading waveform image…"));
+    emit progressChanged(0, m_packageKind == PackageKind::Legacy
+                             ? tr("Uploading legacy waveform…")
+                             : tr("Uploading Docker waveform image…"));
 
     const qint64 toSend = qMin(static_cast<qint64>(CHUNK_SIZE),
                                 m_fileData.size() - m_bytesSent);
@@ -162,8 +244,11 @@ void WaveformInstaller::onBytesWritten(qint64 bytes)
         m_installing = false;
         m_fileData.clear();
         emit progressChanged(100, tr("Upload complete — installing on radio…"));
-        emit finished(true, tr("Waveform image uploaded successfully. "
-                               "The radio will install it momentarily."));
+        emit finished(true, m_packageKind == PackageKind::Legacy
+                      ? tr("Legacy waveform uploaded successfully. "
+                           "The radio will install it momentarily.")
+                      : tr("Docker waveform image uploaded successfully. "
+                           "The radio will install it momentarily."));
         return;
     }
 

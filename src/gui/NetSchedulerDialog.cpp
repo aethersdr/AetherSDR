@@ -41,7 +41,7 @@ const char* const kWeekdayLong[7] = {"Monday",   "Tuesday", "Wednesday", "Thursd
 QStringList commonModes()
 {
     return {"LSB", "USB", "CW", "CWL", "CWU", "AM", "SAM",
-            "FM", "NFM", "DIGL", "DIGU", "RTTY", "FDV"};
+            "FM", "NFM", "DFM", "DSTR", "DIGL", "DIGU", "RTTY", "FDV"};
 }
 
 // Friendly one-line preview of the next firing, e.g.

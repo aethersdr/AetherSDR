@@ -213,6 +213,8 @@
 #include <QToolTip>
 #include <QMediaDevices>
 #include "core/AppSettings.h"
+#include "core/DStarWaveformProcess.h"
+#include "core/DStarWaveformSettings.h"
 #include "core/SpotCommandPolicy.h"
 #include "core/SpotModeResolver.h"
 #ifdef HAVE_RADE
@@ -5024,6 +5026,14 @@ void MainWindow::onConnectionStateChanged(bool connected)
             });
         }
 #endif
+        if (DStarWaveformSettings::autoStart()) {
+            QTimer::singleShot(3000, this, [this]() {
+                if (!m_radioModel.isConnected()) {
+                    return;
+                }
+                DStarWaveformProcess::instance().startForRadio(m_radioModel.radioAddress());
+            });
+        }
         // Auto-connect DX cluster if enabled
         {
             auto& cs = AppSettings::instance();
@@ -5126,6 +5136,8 @@ void MainWindow::onConnectionStateChanged(bool connected)
         updateTMate2Status();
 #endif
     } else {
+        DStarWaveformProcess::instance().stop();
+
         // Radio disconnected: trim CAT ports back to 1 so apps on channel A
         // stay connected through brief reconnects, higher channels stop cleanly.
         applyCatPortCount();  // catPortTargetCount() returns 1 when !connected

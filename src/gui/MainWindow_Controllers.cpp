@@ -2007,8 +2007,8 @@ void MainWindow::registerMidiParams()
 
     // ── Mode triggers (mirror Mode/* keyboard shortcuts) ───────────────
     static const char* kModes[] = {"USB", "LSB", "CW", "CWL",
-                                    "AM", "SAM", "FM", "NFM",
-                                    "DFM", "DIGU", "DIGL", "RTTY"};
+                                   "AM", "SAM", "FM", "NFM",
+                                   "DFM", "DSTR", "DIGU", "DIGL", "RTTY"};
     for (const char* m : kModes) {
         const QString idShort = QString("mode_%1").arg(QString(m).toLower());
         const QString idMidi  = QString("global.mode%1").arg(m);

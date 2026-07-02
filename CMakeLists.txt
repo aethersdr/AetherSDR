@@ -556,6 +556,7 @@ set(CORE_SOURCES
     src/core/PgxlConnection.cpp
     src/core/FirmwareUploader.cpp
     src/core/WaveformInstaller.cpp
+    src/core/DStarWaveformProcess.cpp
     src/core/DvkWavTransfer.cpp
     src/core/ZipArchive.cpp
     src/core/ProfileTransfer.cpp
@@ -1106,6 +1107,78 @@ endif()
 # of this ecosystem-standard approach).
 if(DEFINED ENV{SOURCE_DATE_EPOCH})
     message(STATUS "Reproducible build: honoring SOURCE_DATE_EPOCH=$ENV{SOURCE_DATE_EPOCH}")
+endif()
+
+if(UNIX)
+    set(DSTAR_WAVEFORM_DIR "${CMAKE_SOURCE_DIR}/third_party/smartsdr-dsp")
+    set(DSTAR_WAVEFORM_SOURCES
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/cmd_basics.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/cmd_engine.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/discovery_client.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/hal_buffer.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/hal_listener.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/hal_vita.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/io_utils.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/sched_waveform.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/smartsdr_dsp_api.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/status_processor.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/traffic_cop.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/utils.c
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface/vita_output.c
+        ${DSTAR_WAVEFORM_DIR}/ThumbDV/bit_pattern_matcher.c
+        ${DSTAR_WAVEFORM_DIR}/ThumbDV/dstar.c
+        ${DSTAR_WAVEFORM_DIR}/ThumbDV/gmsk_modem.c
+        ${DSTAR_WAVEFORM_DIR}/ThumbDV/slow_data.c
+        ${DSTAR_WAVEFORM_DIR}/ThumbDV/thumbDV.c
+        ${DSTAR_WAVEFORM_DIR}/aether_vocoder_backend.cpp
+        ${DSTAR_WAVEFORM_DIR}/aether_sem_compat.c
+        ${DSTAR_WAVEFORM_DIR}/aether_serial_compat.c
+        ${DSTAR_WAVEFORM_DIR}/circular_buffer.c
+        ${DSTAR_WAVEFORM_DIR}/main.c
+        ${DSTAR_WAVEFORM_DIR}/resampler.c
+    )
+
+    add_executable(aether-dstar-waveform ${DSTAR_WAVEFORM_SOURCES})
+    set_target_properties(aether-dstar-waveform PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+    )
+    target_compile_definitions(aether-dstar-waveform PRIVATE _DEFAULT_SOURCE)
+    target_include_directories(aether-dstar-waveform BEFORE PRIVATE
+        ${DSTAR_WAVEFORM_DIR}/compat
+        ${DSTAR_WAVEFORM_DIR}/include
+        ${DSTAR_WAVEFORM_DIR}
+        ${DSTAR_WAVEFORM_DIR}/SmartSDR_Interface
+        ${DSTAR_WAVEFORM_DIR}/ThumbDV
+    )
+    find_package(Threads REQUIRED)
+    target_link_libraries(aether-dstar-waveform PRIVATE Threads::Threads m)
+    if(APPLE)
+        target_link_libraries(aether-dstar-waveform PRIVATE "-framework IOKit")
+        set(DSTAR_WAVEFORM_RUNTIME_DIR "${CMAKE_BINARY_DIR}/AetherSDR.app/Contents/MacOS")
+    else()
+        set(DSTAR_WAVEFORM_RUNTIME_DIR "${CMAKE_BINARY_DIR}")
+    endif()
+    set_target_properties(aether-dstar-waveform PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${DSTAR_WAVEFORM_RUNTIME_DIR}"
+    )
+    if(NOT MSVC)
+        target_compile_options(aether-dstar-waveform PRIVATE -w)
+    endif()
+    add_custom_command(TARGET aether-dstar-waveform POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${DSTAR_WAVEFORM_DIR}/config/ThumbDV.cfg"
+            "$<TARGET_FILE_DIR:aether-dstar-waveform>/ThumbDV.cfg"
+        COMMENT "Copying ThumbDV waveform config"
+    )
+    add_test(NAME aether_dstar_waveform_no_args
+        COMMAND ${CMAKE_COMMAND}
+            -DHELPER=$<TARGET_FILE:aether-dstar-waveform>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/run_dstar_waveform_no_args.cmake
+    )
+    add_dependencies(AetherSDR aether-dstar-waveform)
 endif()
 
 # Windows: GUI app (no console window) + icon resource
@@ -2054,6 +2127,17 @@ add_executable(flex_waveform_model_test
 target_include_directories(flex_waveform_model_test PRIVATE src)
 target_link_libraries(flex_waveform_model_test PRIVATE Qt6::Core Qt6::Test)
 
+add_executable(dstar_waveform_process_test
+    tests/dstar_waveform_process_test.cpp
+    src/core/DStarWaveformProcess.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(dstar_waveform_process_test PRIVATE src)
+target_link_libraries(dstar_waveform_process_test PRIVATE Qt6::Core Qt6::Network)
+add_test(NAME dstar_waveform_process_test COMMAND dstar_waveform_process_test)
+
 add_executable(ole_compound_file_test
     tests/ole_compound_file_test.cpp
     src/core/OleCompoundFile.cpp
@@ -2638,10 +2722,26 @@ if(APPLE)
     install(TARGETS AetherSDR
         BUNDLE DESTINATION .
     )
+    if(TARGET aether-dstar-waveform)
+        install(PROGRAMS "$<TARGET_FILE:aether-dstar-waveform>"
+            DESTINATION AetherSDR.app/Contents/MacOS
+        )
+        install(FILES third_party/smartsdr-dsp/config/ThumbDV.cfg
+            DESTINATION AetherSDR.app/Contents/MacOS
+        )
+    endif()
 else()
     install(TARGETS AetherSDR
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
+    if(TARGET aether-dstar-waveform)
+        install(TARGETS aether-dstar-waveform
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+        install(FILES third_party/smartsdr-dsp/config/ThumbDV.cfg
+            DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+    endif()
     install(FILES ${CMAKE_CURRENT_BINARY_DIR}/packaging/linux/AetherSDR.desktop
         DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/applications
     )

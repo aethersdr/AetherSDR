@@ -535,7 +535,7 @@ void RxApplet::buildUI()
         m_modeCombo = new GuardedComboBox;
         m_modeCombo->setFixedHeight(20);
         m_modeCombo->addItems({"USB", "LSB", "CW", "AM", "SAM", "FM",
-                               "NFM", "DFM", "DIGU", "DIGL", "RTTY"});
+                               "NFM", "DFM", "DSTR", "DIGU", "DIGL", "RTTY"});
 #ifdef HAVE_RADE
         m_modeCombo->addItem("RADE");
 #endif

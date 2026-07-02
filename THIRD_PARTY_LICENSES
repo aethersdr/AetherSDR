@@ -273,3 +273,20 @@ Redistributed / downloaded components:
             The full license texts ship inside the downloaded pack
             (licenses/ + NOTICE.txt) and the user must accept them on first use.
   Source:   https://developer.nvidia.com/maxine  (NGC: nvidia/maxine)
+
+
+18. SmartSDR-DSP ThumbDV Waveform Helper
+-----------------------------------------
+Bundled at third_party/smartsdr-dsp/ as a local helper executable for D-Star
+waveform operation with a ThumbDV/DV3000U attached to the user's computer. The
+import is trimmed to the ThumbDV waveform runtime sources from the public
+`thumbDV_support` branch. The historical FTDI D2XX header, static library,
+Windows GUI, IDE files, and packaged `.ssdr_waveform` binary are not bundled.
+AetherSDR replaces the D2XX calls used by the helper with a POSIX termios serial
+compatibility shim and starts the helper as a separate process.
+
+  Copyright (C) 2014 FlexRadio Systems
+  License: GPL-3.0-or-later
+  Source:  https://github.com/n5ac/smartsdr-dsp
+  Import:  thumbDV_support commit 762297a7d56f9e37c661c550e4b1cbd8b78091f1
+  Patches: third_party/smartsdr-dsp/AETHERSDR-PATCHES.md
