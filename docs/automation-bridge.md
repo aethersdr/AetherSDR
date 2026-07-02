@@ -141,6 +141,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
 | | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
 | | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
+| | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
@@ -409,9 +410,44 @@ connects).
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, txSlice, …) |
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps) |
+| `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
+
+### `get panstats`
+Per-panadapter (SpectrumWidget) frame-cost counters — how much GUI-thread time
+each pan spends preparing frames, split by pipeline section, for before/after
+rendering-cost proofs without a profiler attach. Counters are always on and
+cost a few integer adds per frame.
+
+```json
+→ {"cmd":"get","model":"panstats"}
+← {"ok":true,"model":"panstats","pans":[{
+   "panIndex":0,"renderMode":"2D","renderer":"GPU QRhi (Metal; Apple M1 Ultra)",
+   "widthPx":2280,"heightPx":1302,"dpr":2.0,"leanMode":false,"sinceMs":60012,
+   "fftFramesPerSec":29.6,"ingestMsPerSec":8.1,
+   "gpuFramesPerSec":29.6,"gpuFrameMsPerSec":97.4,"avgGpuFrameUs":3290.0,
+   "fftBuildMsPerSec":64.2,"fftVboBytesPerSec":42049536.0,
+   "overlayRebuildsPerSec":0.1,"overlayRebuildMsPerSec":1.9,
+   "overlayUploadBytesPerSec":3964928.0,"wfUploadBytesPerSec":18240.0,
+   "paintsPerSec":0.0,"paintMsPerSec":0.0,
+   "overlayDirtyCauses":{"smartMtr":2,"detect":1,"other":3}}]}
+```
+
+| field | meaning |
+|---|---|
+| `gpuFrameMsPerSec` | **the headline number** — main-thread ms consumed per wall-second preparing + encoding this pan's GPU frames |
+| `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
+| `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
+| `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
+| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
+| `wfUploadBytesPerSec` | waterfall texture upload volume |
+| `paintsPerSec` / `paintMsPerSec` | software-QPainter path (non-zero only before QRhi init or in non-GPU builds) |
+
+`selector` filters by pan index (`get panstats 0`) or objectName. `property`
+`reset` zeroes the counters after the read so successive reads measure
+disjoint intervals: `get panstats 0 reset`.
 
 ### `get dsp`
 Client-side **AetherDSP** noise-reduction state — the counterpart to the

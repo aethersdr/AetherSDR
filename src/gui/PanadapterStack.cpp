@@ -27,7 +27,9 @@ static void refreshAfterReparent(AetherSDR::SpectrumWidget* sw)
     if (QWindow* windowHandle = sw->windowHandle()) {
         windowHandle->destroy();
     }
-    sw->setAttribute(Qt::WA_NativeWindow);
+    if (AetherSDR::SpectrumWidget::nativeWindowPreferred()) {
+        sw->setAttribute(Qt::WA_NativeWindow);
+    }
     if (wasVisible) {
         sw->show();
     }

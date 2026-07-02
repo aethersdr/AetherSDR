@@ -1268,6 +1268,7 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/overlay.frag
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
+            resources/shaders/panscope.frag
             resources/shaders/dss_mesh.vert
             resources/shaders/dss_mesh.frag
     )

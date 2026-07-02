@@ -2600,6 +2600,53 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("dsp"), data}};
     }
+    if (model == QLatin1String("panstats")) {
+        // Per-panadapter frame-cost counters from every SpectrumWidget, for
+        // before/after rendering-cost proofs without a profiler attach.
+        // selector filters by pan index or objectName; property "reset"
+        // zeroes the counters after the read so successive reads measure
+        // disjoint intervals. GUI-header-free: snapshotted via meta-call.
+        const bool reset = property == QLatin1String("reset");
+        bool selectorIsIndex = false;
+        const int wantIndex = selector.toInt(&selectorIsIndex);
+        QJsonArray pans;
+        // A floated container is reachable from two top-level roots, so the
+        // class walk can yield the same widget twice — dedupe by pointer.
+        QSet<QWidget*> seen;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+        for (QWidget* w : widgets) {
+            if (seen.contains(w))
+                continue;
+            seen.insert(w);
+            if (!selector.isEmpty() && !selectorIsIndex
+                && w->objectName() != selector)
+                continue;
+            // Read without resetting first: index filtering needs the
+            // snapshot's own panIndex (panIndex() is a plain accessor, not a
+            // Q_PROPERTY), and a filtered-out pan must keep its counters.
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "panstatsSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap),
+                                           Q_ARG(bool, false)))
+                continue;
+            if (!selector.isEmpty() && selectorIsIndex
+                && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex)
+                continue;
+            if (reset) {
+                QVariantMap discard;
+                QMetaObject::invokeMethod(w, "panstatsSnapshot",
+                                          Qt::DirectConnection,
+                                          Q_RETURN_ARG(QVariantMap, discard),
+                                          Q_ARG(bool, true));
+            }
+            pans.append(QJsonObject::fromVariantMap(snap));
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("pans"), pans}};
+    }
     if (model == QLatin1String("sync")
         || model == QLatin1String("receiveSync")) {
         if (!m_receiveSyncSnapshotHandler) {
@@ -2681,7 +2728,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|kiwi)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|panstats|kiwi)"));
     }
 
     if (!property.isEmpty()) {

@@ -1370,8 +1370,10 @@ void SpectrumOverlayMenu::buildDisplayPanel()
         emit fftAverageChanged(v);
     });
 
-    // FPS
-    makeRow("FFT FPS:", 5, 30, 25, m_fpsSlider, m_fpsLabel);
+    // FPS — 60 ceiling: the per-pixel trace path made per-frame prep cost
+    // width-flat (~120 µs), so the display, not the client, is the limit.
+    // The radio clamps what it will actually deliver.
+    makeRow("FFT FPS:", 5, 60, 25, m_fpsSlider, m_fpsLabel);
     m_fpsSlider->setObjectName("displayFftFpsSlider");
     connect(m_fpsSlider, &QSlider::valueChanged, this, [this](int v) {
         m_fpsLabel->setText(QString::number(v));

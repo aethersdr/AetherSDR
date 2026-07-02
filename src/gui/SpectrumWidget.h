@@ -11,6 +11,7 @@
 #include <QColor>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <QVariant>
 #include <QTimer>
 #include <QLabel>
 
@@ -112,6 +113,19 @@ public:
     void prepareForTopLevelChange(); // unregister QRhiWidget from the current backing-store QRhi
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     QString rendererDescription() const;
+    // macOS: whether the pan gets its own native NSView (historical default —
+    // #714). AETHER_PAN_NO_NATIVE_WINDOW=1 opts out to validate the cheaper
+    // composited path (no per-present raster flushSubWindow blend).
+    static bool nativeWindowPreferred() {
+        static const bool noNative =
+            qEnvironmentVariableIntValue("AETHER_PAN_NO_NATIVE_WINDOW") == 1;
+        return !noNative;
+    }
+    // panstats (automation bridge): per-widget frame-cost counters — what the
+    // GUI thread spends preparing this panadapter's frames, split by section,
+    // plus a cause breakdown of static-overlay rebuilds. `reset` zeroes the
+    // counters after the read so successive reads measure disjoint intervals.
+    Q_INVOKABLE QVariantMap panstatsSnapshot(bool reset);
     void setConnectionAnimationVisible(bool on, const QString& label = {});
     void setKiwiSdrConnectionOverlay(bool visible,
                                      const QString& detail = {},
@@ -1139,13 +1153,22 @@ private:
     int m_filterDragStartHz{0};     // filter edge Hz at grab time (#764)
     // Lean render mode state (#3283).
     bool m_leanMode{false};
-    QElapsedTimer m_leanRepaintClock;       // repaint cap in lean mode
+    QElapsedTimer m_leanRepaintClock;       // data-repaint coalescing clock
     // Each panadapter present forces a full-window backing-store→GPU texture
     // re-upload (the dominant pooled cost on large/5K windows — #3283), so the
     // present rate ~= the flush rate. 33 ms (~30 Hz) roughly halves that upload
     // load vs 60 Hz while staying visually smooth for a low-overhead mode.
     static constexpr int kLeanFrameMs = 33;
-    void leanCappedUpdate();                // update(), throttled when lean
+    // Normal-mode coalescing window: FFT frames and waterfall rows arrive as
+    // separate UDP events, so without coalescing a narrow pan schedules up to
+    // ~56 window flushes/s (30 fps FFT + 26 rows/s WF) — over the display's
+    // 60 Hz budget once WAVE/meters add theirs, which starves the swapchain
+    // drawable pool and blocks the GUI thread in nextDrawable (#3938 class).
+    // One present per 16 ms slot keeps every data frame (a trailing update
+    // fires at the slot edge) while capping flushes at ~60/s.
+    static constexpr int kPresentCoalesceMs = 16;
+    bool m_presentPending{false};           // trailing update scheduled
+    void leanCappedUpdate();                // update(), coalesced / lean-capped
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)
@@ -1467,29 +1490,64 @@ private:
     void initSpectrumPipeline();
     void renderGpuFrame(QRhiCommandBuffer* cb);
 
-    // FFT spectrum GPU resources — vertex color, no uniforms
-    QRhiGraphicsPipeline* m_fftLinePipeline{nullptr};
-    QRhiGraphicsPipeline* m_fftFillPipeline{nullptr};
-    QRhiShaderResourceBindings* m_fftSrb{nullptr};
-    QRhiBuffer* m_fftLineVbo{nullptr};    // dynamic, feather + core line strips
-    QRhiBuffer* m_fftFillVbo{nullptr};    // dynamic, 2N × (vec2 pos + vec4 color + edge)
-    static constexpr int kMaxFftBins = 8192;
-    static constexpr int kFftVertStride = 7; // x, y, r, g, b, a, edge
-    // Reused per-frame scratch for GPU FFT-trace vertex generation — avoids a
-    // heap (re)alloc of up to 4*kMaxFftBins*kFftVertStride floats every frame on
-    // the GUI thread (renderGpuFrame). resize() keeps capacity, so steady state
-    // is alloc-free.
-    struct FftScratchPt { float x, y; };
-    QVector<float> m_fftLineScratch;
-    QVector<float> m_fftFillScratch;
-    QVector<FftScratchPt> m_fftPtScratch;
+    // FFT spectrum GPU resources — the trace is evaluated per-pixel by
+    // panscope.frag from a width×1 R32F column texture (normalized amplitude
+    // per device pixel column), drawn as one full-viewport quad. The CPU per
+    // frame only resamples the display trace to device columns and uploads
+    // ~4 bytes/column, replacing the old per-frame feather/core/fill vertex
+    // bake (~1.4 MB of VBO writes per frame at a 2140 px pan).
+    QRhiGraphicsPipeline* m_fftScopePipeline{nullptr};
+    QRhiShaderResourceBindings* m_fftScopeSrb{nullptr};
+    QRhiBuffer* m_fftScopeUbo{nullptr};
+    QRhiTexture* m_fftColTex{nullptr};
+    QRhiSampler* m_fftColSampler{nullptr};
+    QRhiTexture::Format m_fftColFormat{QRhiTexture::R32F};
+    int m_fftColTexW{0};
+    QByteArray m_fftColScratch;  // reused per-frame column staging buffer
 #endif
 
+    // ── panstats: per-widget frame-cost counters (automation bridge) ─────────
+    // Always-on: a handful of integer adds per frame plus one QElapsedTimer
+    // read per instrumented section. Snapshot/reset via panstatsSnapshot().
+    struct PanStats {
+        QElapsedTimer clock;              // wall interval since last reset
+        quint64 updateSpectrumCalls{0};   // FFT frames ingested
+        quint64 updateSpectrumUs{0};      // smoothing + floor + ingest cost
+        quint64 gpuFrames{0};             // renderGpuFrame invocations
+        quint64 gpuFrameUs{0};            // whole CPU-side frame prep + encode
+        quint64 fftBuildUs{0};            // trace resample + vertex bake
+        quint64 fftVboBytes{0};           // vertex bytes uploaded
+        quint64 overlayRebuilds{0};       // static+bg QPainter repaints
+        quint64 overlayRebuildUs{0};
+        quint64 overlayUploadBytes{0};    // static+bg texture bytes uploaded
+        quint64 wfUploadBytes{0};         // waterfall texture bytes uploaded
+        quint64 paintEvents{0};           // software-path paints
+        quint64 paintUs{0};
+        QHash<QByteArray, quint64> dirtyCauses;  // why the overlay rebuilt
+        void noteDirty(const char* cause) {
+            dirtyCauses[QByteArray(cause ? cause : "other")]++;
+        }
+        qint64 sinceMs() {
+            if (!clock.isValid())
+                clock.start();
+            return clock.elapsed();
+        }
+        void reset() {
+            *this = PanStats{};
+            clock.start();
+        }
+    } m_panStats;
+
     // Mark the static overlay for repaint and schedule a frame update.
-    // In non-GPU mode this is just update().
-    void markOverlayDirty() {
+    // In non-GPU mode this is just update(). `cause` feeds the panstats
+    // dirty-cause breakdown — annotate call sites that can fire at frame rate.
+    void markOverlayDirty(const char* cause = nullptr) {
 #ifdef AETHER_GPU_SPECTRUM
+        if (!m_overlayStaticDirty)
+            m_panStats.noteDirty(cause);
         m_overlayStaticDirty = true;
+#else
+        m_panStats.noteDirty(cause);
 #endif
         update();
     }
