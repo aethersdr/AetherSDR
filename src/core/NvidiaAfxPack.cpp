@@ -139,17 +139,39 @@ QString NvidiaAfxPack::detectArch()
     return cached;
 }
 
-bool NvidiaAfxPack::hasSupportedGpu()
+// Compute capabilities (sm_<cc>) for which an afx-bits pack is actually published
+// on our releases. detectArch() can report a newer NVIDIA card — e.g. sm_120
+// (consumer Blackwell / RTX 50-series) — that clears the Ada+ bar but has no
+// published pack yet, so it must not dead-end at a Download that 404s. Keep this
+// in sync with the afx-bits release assets + the build-afx-bits ValidateSet. (#3933)
+static const QList<int> kPublishedComputeCaps = { 89 };   // sm_89 (Ada) — Linux + Windows
+
+// Compute capability of the detected NVIDIA GPU (89 for "sm_89"), or -1 if none.
+static int detectedComputeCap()
 {
-    // detectArch() returns "sm_<cc>" for Turing+ (>=75); but we only publish
-    // Ada-and-later packs, so require compute capability >= 8.9 (sm_89 = RTX
-    // 40-series). Earlier RTX (20/30) and non-NVIDIA machines fail this.
-    const QString arch = detectArch();
+    const QString arch = NvidiaAfxPack::detectArch();
     if (!arch.startsWith(QStringLiteral("sm_")))
-        return false;
+        return -1;
     bool ok = false;
     const int cc = QStringView{arch}.mid(3).toInt(&ok);   // "sm_89" -> 89
-    return ok && cc >= 89;
+    return ok ? cc : -1;
+}
+
+bool NvidiaAfxPack::isAfxCapableGpu()
+{
+    // detectArch() returns "sm_<cc>" for Turing+ (>=75); AFX itself needs Ada
+    // (sm_89 = RTX 40-series) or later. Earlier RTX (20/30) and non-NVIDIA
+    // machines fail this. This says nothing about whether a *pack* is published.
+    return detectedComputeCap() >= 89;
+}
+
+bool NvidiaAfxPack::hasSupportedGpu()
+{
+    // BNR is only usable when an afx-bits pack is actually published for the
+    // detected GPU's arch — not merely when the GPU is new enough for AFX. An
+    // AFX-capable card with no published pack (e.g. sm_120) is reported distinctly
+    // by the UI and steered to DFNR instead of a 404 Download. (#3933)
+    return isAfxCapableGpu() && kPublishedComputeCaps.contains(detectedComputeCap());
 }
 
 QString NvidiaAfxPack::cacheRoot()

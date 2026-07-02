@@ -219,8 +219,17 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
 #else
         if (i == BNR && !NvidiaAfxPack::hasSupportedGpu()) {
             b->setEnabled(false);
-            b->setToolTip("BNR requires an NVIDIA RTX 40-series or later GPU.\n"
-                          "Use DFNR for AI noise removal on other hardware.");
+            if (NvidiaAfxPack::isAfxCapableGpu()) {
+                // Recent NVIDIA card, but no AFX pack is published for its arch
+                // yet (e.g. sm_120 / RTX 50-series). Don't imply the GPU is too
+                // old — say so plainly and point at DFNR. (#3933)
+                b->setToolTip(QStringLiteral("No BNR pack for your GPU (%1) yet — "
+                                             "DFNR remains available.")
+                                  .arg(NvidiaAfxPack::detectArch()));
+            } else {
+                b->setToolTip("BNR requires an NVIDIA RTX 40-series or later GPU.\n"
+                              "Use DFNR for AI noise removal on other hardware.");
+            }
         }
 #endif
         m_dspBtns[i] = b;
@@ -993,6 +1002,20 @@ void AetherDspWidget::updateBnrStatus()
                                      : partial ? tr("Resume download")
                                                : QStringLiteral("Download (~1 GB)"));
         m_bnrAfxDownloadBtn->setEnabled(true);
+#ifdef HAVE_NVIDIA_AFX
+        // If no afx-bits pack is published for this GPU's arch (e.g. sm_120 /
+        // RTX 50-series), don't offer a Download that would 404 — disable it and
+        // say why, steering the user to DFNR. (#3933)
+        if (!NvidiaAfxPack::hasSupportedGpu()) {
+            m_bnrAfxDownloadBtn->setEnabled(false);
+            if (NvidiaAfxPack::isAfxCapableGpu()) {
+                m_bnrAfxDownloadBtn->setText(tr("No pack for this GPU"));
+                m_bnrAfxDownloadBtn->setToolTip(
+                    QStringLiteral("No BNR pack for your GPU (%1) yet — use DFNR.")
+                        .arg(NvidiaAfxPack::detectArch()));
+            }
+        }
+#endif
     }
     if (m_bnrAfxIntensitySlider)
         m_bnrAfxIntensitySlider->setEnabled(installed);
