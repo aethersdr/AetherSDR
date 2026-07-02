@@ -1172,7 +1172,7 @@ void MainWindow::buildMenuBar()
             "<h2 style='margin-bottom:2px; color:#c8d8e8;'>AetherSDR</h2>"
             "<p style='margin-top:0; color:#8aa8c0;'>v%1<br>"
             "<span style='font-size:10px; color:#6a8090;'>(%4)</span></p>"
-            "<p style='margin-top:8px; color:#c8d8e8;'>Linux-native SmartSDR-compatible client<br>"
+            "<p style='margin-top:8px; color:#c8d8e8;'>Cross-platform SmartSDR-compatible client<br>"
             "for FlexRadio transceivers.</p>"
             "<p style='font-size:11px; color:#6a8090;'>"
             "Built with Qt %2 &middot; C++20<br>"

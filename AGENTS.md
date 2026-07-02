@@ -15,7 +15,7 @@ of doing the job right on this codebase.
 ## Project Goal
 
 Replicate the **Windows-only FlexRadio SmartSDR client** (written in C#) as a
-**Linux-native C++ application** using Qt6 and C++20. The aim is to mirror the
+**native, cross-platform C++ application** using Qt6 and C++20. The aim is to mirror the
 look, feel, and every function SmartSDR is capable of. The reference radio is a
 **FLEX-8600 running firmware 4.2.18**, which speaks **SmartSDR protocol v1.4.0.0**.
 

@@ -9,7 +9,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the mechanics of submitting code.
 
 ## Project Direction
 
-AetherSDR's goal is a **Linux-native, cross-platform** FlexRadio client that
+AetherSDR's goal is a **cross-platform, natively-compiled** FlexRadio client that
 matches SmartSDR feature-for-feature. Every technical and design decision
 should be evaluated against that goal.
 
