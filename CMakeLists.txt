@@ -1926,6 +1926,14 @@ target_include_directories(spectral_nr_test PRIVATE src)
 target_link_libraries(spectral_nr_test PRIVATE Qt6::Core)
 add_test(NAME spectral_nr_test COMMAND spectral_nr_test)
 
+add_executable(waveform_scope_model_test
+    tests/waveform_scope_model_test.cpp
+    src/gui/WaveformScopeModel.cpp
+)
+target_include_directories(waveform_scope_model_test PRIVATE src)
+target_link_libraries(waveform_scope_model_test PRIVATE Qt6::Core)
+add_test(NAME waveform_scope_model_test COMMAND waveform_scope_model_test)
+
 add_executable(kiwi_sdr_protocol_test
     tests/kiwi_sdr_protocol_test.cpp
     src/core/KiwiSdrProtocol.cpp
