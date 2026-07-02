@@ -2257,6 +2257,7 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     menu->setRadioModel(&m_radioModel);
     menu->setKiwiSdrManager(m_kiwiSdrManager);
     menu->setRadioCapabilities(m_radioModel.capabilities());
+    menu->setDeclaredBands(m_radioModel.declaredBands());
 
     // Antenna list → this overlay menu (per-pan, mirrors VfoWidget pattern) (#1260)
     connect(&m_radioModel, &RadioModel::antListChanged,

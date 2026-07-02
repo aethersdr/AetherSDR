@@ -5050,9 +5050,11 @@ void MainWindow::onConnectionStateChanged(bool connected)
                     xvtrBands.append({x.name, x.rfFreq, QString("X%1").arg(x.index)});
             }
             const ModelCapabilities caps = m_radioModel.capabilities();
+            const QStringList declaredBands = m_radioModel.declaredBands();
             for (auto* applet : m_panStack->allApplets()) {
                 auto* menu = applet->spectrumWidget()->overlayMenu();
                 menu->setRadioCapabilities(caps);
+                menu->setDeclaredBands(declaredBands);
                 menu->setXvtrBands(xvtrBands);
             }
         };

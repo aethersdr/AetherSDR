@@ -767,6 +767,7 @@ void FlexBackend::decodeRadioStatus(const QMap<QString, QString>& kvs)
     carry(kvs, "nickname", d.nickname);
     carry(kvs, "region", d.region);
     carry(kvs, "radio_options", d.radioOptions);
+    carry(kvs, "bands", d.bandsRaw);   // optional radio-declared bands (gateway/non-Flex); validated in RadioModel
     // Global flags
     carry(kvs, "remote_on_enabled", d.remoteOnEnabled);
     carry(kvs, "mf_enable", d.multiFlexEnabled);

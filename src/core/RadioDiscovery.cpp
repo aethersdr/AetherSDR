@@ -219,6 +219,8 @@ RadioInfo RadioDiscovery::parseDiscoveryPacket(const QByteArray& data) const
             info.isSystemModel = (value == "1");
         } else if (key == "turf_region") {
             info.turfRegion = value;
+        } else if (key == "bands") {
+            info.bands = value;
         } else if (key == "gui_client_stations") {
             info.guiClientStations = splitDiscoveryListValue(rawValue, true);
         } else if (key == "gui_client_handles") {

@@ -65,6 +65,12 @@ struct RadioInfo {
     bool isRouted{false};
     bool isSystemModel{false};
     QString turfRegion;
+    // Optional: bands the radio itself supports, e.g. "2m,440,23cm"
+    // (names from BandDefs).  Real Flex radios don't send this — band
+    // capability then derives from the model string as before.  Gateways
+    // presenting non-Flex hardware use it to declare their true band set
+    // instead of inheriting the impersonated model's bands.
+    QString bands;
     RadioBindSettings bindSettings;
     QHostAddress sessionBindAddress;
 

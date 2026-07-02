@@ -1146,6 +1146,7 @@ void MainWindow::wirePanLifecycle()
                 menu->setPanId(pan->panId());
                 menu->setRadioModel(&m_radioModel);
                 menu->setRadioCapabilities(m_radioModel.capabilities());
+                menu->setDeclaredBands(m_radioModel.declaredBands());
                 connect(pan, &PanadapterModel::infoChanged,
                         sw, &SpectrumWidget::setFrequencyRange);
                 connect(pan, &PanadapterModel::infoChanged,
