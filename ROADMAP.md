@@ -7,15 +7,10 @@ as direction changes.
 
 For *what shipped*, see [`CHANGELOG.md`](CHANGELOG.md).
 
-## Current cycle: post-v26.6.5
+## Current cycle: post-v26.7.1
 
 ### In flight
 
-- **NVIDIA BNR — in-process GPU denoiser (Linux + Windows)** — one BNR button
-  running the Maxine AFX denoiser in-process on a local NVIDIA RTX/GeForce GPU,
-  download-on-demand, no container. Remaining: publish the Windows AFX-bits
-  release asset and add other-arch models.
-  ([`docs/nvidia-bnr.md`](docs/nvidia-bnr.md))
 - **Stream Deck plugin** — ship one Elgato-SDK plugin distributed via
   GitHub Releases (avoid Marketplace DRM); works on Windows/macOS plus
   Linux via OpenDeck.
@@ -99,6 +94,20 @@ Substantial features requested on the
 Highlights from the last 30 days — full list in
 [`CHANGELOG.md`](CHANGELOG.md):
 
+- **3D stacked-trace spectrum** — a perspective stacked-trace panadapter render
+  mode (rolling FFT history, floor-anchored ridges, 3D Floor depth) with the
+  right-edge dBm scale carried into 3D (v26.7.1).
+- **NVIDIA BNR — in-process AI noise removal** — the Maxine AFX denoiser running
+  in-process on a local NVIDIA GPU, download-on-demand, no container; the
+  NIM/gRPC microservice backend was removed (v26.7.1).
+- **60 fps GPU panadapters** — a per-pixel GPU FFT trace (no per-frame CPU vertex
+  bake) plus present coalescing lift the FFT ceiling from 30 to 60 fps at flat
+  CPU cost (v26.7.1).
+- **TX meter mouse-over readouts** — exact numeric badges on the SWR / power /
+  ALC / mic-level / compression meters (v26.7.1).
+- **FlexLib-sourced model capabilities** — extended-DSP, diversity, and slice/pan
+  counts now come from the FlexLib `ModelInfo` platform table, fixing the AU-510
+  and ML/CL/S-variant gaps (v26.7.1).
 - **KiwiSDR receive sync** — GCC-PHAT Auto-Assist that time-aligns the Flex
   and a public KiwiSDR receiver in both audio and the spectrum/waterfall
   (v26.6.5).
