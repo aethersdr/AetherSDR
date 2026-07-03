@@ -11,6 +11,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPoint>
+#include <QStringList>
 #include <QWidget>
 #include <QWheelEvent>
 #include <QTimer>
@@ -58,11 +59,13 @@ public:
                 m_animTimer.stop();
             update();
         });
+        publishAutomationState();
     }
 
     void setLabel(const QString& label) {
         if (m_label == label) return;
         m_label = label;
+        publishAutomationState();
         update();
     }
 
@@ -78,6 +81,7 @@ public:
             m_animElapsed.restart();
             m_animTimer.start();
         }
+        publishAutomationState();
         if (m_hovered)
             showHoverPopup(m_lastHoverGlobal);
     }
@@ -88,6 +92,7 @@ public:
         m_smooth.setTarget(
             qBound(0.0f, (v - m_min) / (m_max - m_min), 1.0f));
         m_smooth.snapToTarget();
+        publishAutomationState();
         update();
         if (m_hovered)
             showHoverPopup(m_lastHoverGlobal);
@@ -136,6 +141,7 @@ public:
         m_min = min; m_max = max; m_redStart = redStart;
         m_yellowStart = std::isnan(yellowStart) ? redStart : yellowStart;
         m_ticks = ticks;
+        publishAutomationState();
         update();
     }
 
@@ -304,6 +310,30 @@ protected:
     }
 
 private:
+    // ── Automation-bridge introspection ───────────────────────────────────
+    // HGauge is custom-painted and has no Q_OBJECT, so its label/value/scale
+    // are invisible to the automation bridge's dumpTree. Mirror the state into
+    // dynamic properties whenever it changes; the bridge reads them generically
+    // via the meta-object (the same decoupled pattern SpectrumWidget uses for
+    // noiseFloorDbm), so the °C/°F toggle and live overlay values become
+    // numerically assertable without pixel-reading. Gated on AETHER_AUTOMATION
+    // so production paints carry zero extra cost. (#3886 test support)
+    void publishAutomationState() {
+        static const bool kAutomation = qEnvironmentVariableIsSet("AETHER_AUTOMATION");
+        if (!kAutomation) return;
+        setProperty("gaugeLabel", m_label);
+        setProperty("gaugeValue", m_value);
+        setProperty("gaugeMin", m_min);
+        setProperty("gaugeMax", m_max);
+        setProperty("gaugeRedStart", m_redStart);
+        setProperty("gaugeYellowStart", m_yellowStart);
+        QStringList tickLabels;
+        tickLabels.reserve(m_ticks.size());
+        for (const auto& t : m_ticks)
+            tickLabels << t.label;
+        setProperty("gaugeTicks", tickLabels.join(QLatin1Char(',')));
+    }
+
     QString hoverValueText() const {
         if (m_hoverFormatter)
             return m_hoverFormatter(m_value);

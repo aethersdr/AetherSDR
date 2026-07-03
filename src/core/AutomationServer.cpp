@@ -355,6 +355,26 @@ QJsonObject describeWidget(const QWidget* w)
         }
     }
 
+    // Surface an HGauge's label/value/scale when the widget publishes them as
+    // dynamic properties (custom-painted, no Q_OBJECT, so read generically via
+    // the meta-object — same decoupled pattern as noiseFloorDbm above). Lets a
+    // driver assert the MtrApplet °C/°F range switch and the live numeric
+    // overlays (PA Temp, fan RPM) numerically, not by pixel-reading (#3886).
+    {
+        const QVariant gl = w->property("gaugeLabel");
+        if (gl.isValid()) {
+            o[QStringLiteral("gaugeLabel")] = gl.toString();
+            o[QStringLiteral("gaugeValue")] = w->property("gaugeValue").toDouble();
+            QJsonObject range;
+            range[QStringLiteral("min")] = w->property("gaugeMin").toDouble();
+            range[QStringLiteral("max")] = w->property("gaugeMax").toDouble();
+            range[QStringLiteral("redStart")] = w->property("gaugeRedStart").toDouble();
+            range[QStringLiteral("yellowStart")] = w->property("gaugeYellowStart").toDouble();
+            o[QStringLiteral("gaugeRange")] = range;
+            o[QStringLiteral("gaugeTicks")] = w->property("gaugeTicks").toString();
+        }
+    }
+
     QJsonArray kids;
     const QObjectList children = w->children();
     for (const QObject* child : children) {

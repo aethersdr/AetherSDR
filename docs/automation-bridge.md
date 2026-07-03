@@ -204,6 +204,10 @@ Each `<node>`:
   "panIndex": 0,                           // SpectrumWidget only: pass to `grab pan`/`pan close`
   "noiseFloorDbm": -99.68,                 // SpectrumWidget only: measured floor (see `floors`)
   "displayFloorDbm": -99.17,               // SpectrumWidget only: display floor
+  "gaugeLabel": "71.3°C",                  // HGauge only: centred bar label (live overlay text)
+  "gaugeValue": 71.3,                      // HGauge only: current numeric value
+  "gaugeRange": { "min": 0, "max": 120, "redStart": 70, "yellowStart": 55 },  // HGauge only: scale + zones
+  "gaugeTicks": "0,30,55,70,90,120",       // HGauge only: comma-joined tick labels
   "sliceId": 0,                            // present on widgets tagged with a slice
   "keying": true,                          // present only on TX-keying controls (invoke refuses these)
   "actions": [ <action>, … ],              // QMenu only: popup actions and state
@@ -257,6 +261,16 @@ present.
   `"checked"`); `text` restores the identity.
 - `noiseFloorDbm` / `displayFloorDbm` — a `SpectrumWidget`'s live measured floors
   (the same values [`floors`](#floors) returns), for numeric floor assertions.
+- `gaugeLabel` / `gaugeValue` / `gaugeRange` / `gaugeTicks` — an `HGauge`'s
+  centred bar label, current numeric value, scale (`min`/`max`/`redStart`/`yellowStart`),
+  and tick labels. `HGauge` is a custom-painted widget with no `Q_OBJECT`, so it
+  otherwise serializes as a bare `QWidget` carrying only its `accessibleName`;
+  these fields make the horizontal bar gauges (PA temp / supply / fan on the
+  Radio Hardware applet, and the TX SWR / forward-power / ALC / mic / compression
+  meters) numerically assertable — e.g. proving the MtrApplet °C↔°F toggle
+  switches the PA-temp scale from `0–120` (ticks `0,30,55,70,90,120`) to `32–248`
+  (ticks `32,86,131,158,194,248`) and updates the live overlay text, without a
+  screenshot. Published only under `AETHER_AUTOMATION` (zero cost otherwise).
 
 ### `grab`
 PNG capture of a single widget.
