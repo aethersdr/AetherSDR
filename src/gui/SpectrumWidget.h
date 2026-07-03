@@ -32,6 +32,8 @@ namespace AetherSDR {
 
 class SpectrumOverlayMenu;
 class VfoWidget;
+struct PanadapterOverlayMessage;
+class PanadapterMessageOverlay;
 
 // Shared timeout for the dBm-range echo handshake between MainWindow's
 // request-side tracker (wirePanadapter / PendingDbmRange) and SpectrumWidget's
@@ -130,6 +132,17 @@ public:
     void setKiwiSdrConnectionOverlay(bool visible,
                                      const QString& detail = {},
                                      const QString& title = {});
+    void upsertOverlayMessage(PanadapterOverlayMessage message);
+    bool removeOverlayMessage(const QString& id);
+    void clearOverlayMessages();
+    Q_INVOKABLE bool automationUpsertOverlayMessage(const QString& id,
+                                                    const QString& title,
+                                                    const QString& detail,
+                                                    int timeoutMs,
+                                                    const QString& toneName);
+    Q_INVOKABLE bool automationRemoveOverlayMessage(const QString& id);
+    Q_INVOKABLE void automationClearOverlayMessages();
+    Q_INVOKABLE QVariantList overlayMessageSnapshot() const;
     void showInterlockNotification(const QString& message, int durationMs = 5000);
 
     // Feed a new FFT frame. bins are scaled dBm values.
@@ -726,8 +739,8 @@ private:
     void drawDbmScale3D(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
     void drawConnectionAnimation(QPainter& p, const QRect& contentRect);
-    void drawKiwiSdrConnectionOverlay(QPainter& p, const QRect& contentRect);
-    void positionInterlockNotification();
+    void positionPanadapterMessageOverlay();
+    void raisePanadapterMessageOverlay();
     int waterfallStripWidth() const;
     QRect waterfallLiveButtonRect(const QRect& wfRect) const;
     QRect waterfallTimeScaleRect(const QRect& wfRect) const;
@@ -910,9 +923,7 @@ private:
     bool m_shutdownPrepared{false};
     bool m_kiwiSdrWaterfallAvailable{false};
     bool m_kiwiSdrWaterfallActive{false};
-    bool m_kiwiSdrConnectionOverlayVisible{false};
-    QString m_kiwiSdrConnectionOverlayTitle;
-    QString m_kiwiSdrConnectionOverlayDetail;
+    PanadapterMessageOverlay* m_panadapterMessageOverlay{nullptr};
     WaterfallStreamState m_nativeWaterfallState;
     WaterfallStreamState m_kiwiWaterfallState;
     QHash<QString, WaterfallStreamState> m_kiwiProfileWaterfallStates;
@@ -1269,8 +1280,6 @@ private:
     QString m_connectionAnimationLabel;
     QTimer* m_connectionAnimationTimer{nullptr};
     QElapsedTimer m_connectionAnimationClock;
-    QLabel* m_interlockNotificationLabel{nullptr};
-    QTimer* m_interlockNotificationTimer{nullptr};
 
     // State change detector cache (per-instance, NOT static — multiple
     // panadapters have different values and static vars cause an infinite

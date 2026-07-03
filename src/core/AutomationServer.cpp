@@ -264,6 +264,9 @@ QJsonObject describeWidget(const QWidget* w)
         o[QStringLiteral("objectName")] = w->objectName();
     if (!w->accessibleName().isEmpty())
         o[QStringLiteral("accessibleName")] = w->accessibleName();
+    if (!w->accessibleDescription().isEmpty()) {
+        o[QStringLiteral("accessibleDescription")] = w->accessibleDescription();
+    }
     // Tooltip text — some hints (e.g. the two distinct "Clear" tooltips) carry
     // the only human-meaningful distinction between otherwise-identical controls,
     // so an assertion needs them observable, not just visible on hover (#3646).
@@ -406,6 +409,57 @@ QJsonObject describeWidget(const QWidget* w)
     if (!kids.isEmpty())
         o[QStringLiteral("children")] = kids;
 
+    return o;
+}
+
+QJsonObject describeHitWidget(const QWidget* w)
+{
+    if (!w) {
+        return QJsonObject{};
+    }
+
+    QJsonObject o;
+    o[QStringLiteral("class")] = shortClassName(w);
+    o[QStringLiteral("fullClass")] =
+        QString::fromUtf8(w->metaObject()->className());
+    if (!w->objectName().isEmpty()) {
+        o[QStringLiteral("objectName")] = w->objectName();
+    }
+    if (!w->accessibleName().isEmpty()) {
+        o[QStringLiteral("accessibleName")] = w->accessibleName();
+    }
+    if (!w->accessibleDescription().isEmpty()) {
+        o[QStringLiteral("accessibleDescription")] = w->accessibleDescription();
+    }
+    o[QStringLiteral("visible")] = w->isVisible();
+    o[QStringLiteral("enabled")] = w->isEnabled();
+
+    const QPoint gp = w->mapToGlobal(QPoint(0, 0));
+    o[QStringLiteral("geometry")] = QJsonObject{
+        {QStringLiteral("x"), gp.x()},
+        {QStringLiteral("y"), gp.y()},
+        {QStringLiteral("w"), w->width()},
+        {QStringLiteral("h"), w->height()},
+    };
+
+    QJsonArray ancestors;
+    const QWidget* p = w;
+    while (p) {
+        QJsonObject a;
+        a[QStringLiteral("class")] = shortClassName(p);
+        if (!p->objectName().isEmpty()) {
+            a[QStringLiteral("objectName")] = p->objectName();
+        }
+        if (!p->accessibleName().isEmpty()) {
+            a[QStringLiteral("accessibleName")] = p->accessibleName();
+        }
+        if (!p->accessibleDescription().isEmpty()) {
+            a[QStringLiteral("accessibleDescription")] = p->accessibleDescription();
+        }
+        ancestors.append(a);
+        p = p->parentWidget();
+    }
+    o[QStringLiteral("ancestors")] = ancestors;
     return o;
 }
 
@@ -901,6 +955,10 @@ bool isTransmitControl(const QWidget* w)
     const auto* btn = qobject_cast<const QAbstractButton*>(w);
     if (!btn)
         return false;  // sliders / combos / spinboxes can't trigger TX
+
+    if (w->objectName().startsWith(QStringLiteral("panOverlayMessageClose_"))) {
+        return false;  // closes an overlay notification, never keys TX.
+    }
 
     // Keep the fallback deny-list narrow and aligned with isTransmitAction():
     // only words that unambiguously mean "keys TX". "tune"/"atu"/"vox" were
@@ -1586,8 +1644,8 @@ bool AutomationServer::start(const QString& serverName)
     qCInfo(lcAutomation).noquote()
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
-        << "txtest, atu, slice, tune, pan, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
-        << "menu, close, drag, hover, showMenu, contextMenu, whoami, log, mark)";
+        << "txtest, atu, slice, tune, pan, panmessage, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
+        << "menu, close, drag, hover, showMenu, contextMenu, hitTest, whoami, log, mark)";
     return true;
 }
 
@@ -1771,6 +1829,8 @@ void AutomationServer::onDisconnected()
 QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* sock)
 {
     QString cmd, target, path, action, value, model, selector, property;
+    QString id, title, detail, tone;
+    int timeoutMs = 0;
 
     const QByteArray trimmed = line.trimmed();
     if (trimmed.startsWith('{')) {
@@ -1795,6 +1855,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         model    = obj.value(QStringLiteral("model")).toString();
         selector = obj.value(QStringLiteral("selector")).toString();
         property = obj.value(QStringLiteral("property")).toString();
+        id       = obj.value(QStringLiteral("id")).toString();
+        title    = obj.value(QStringLiteral("title")).toString();
+        detail   = obj.value(QStringLiteral("detail")).toString();
+        tone     = obj.value(QStringLiteral("tone")).toString();
+        timeoutMs = obj.value(QStringLiteral("timeoutMs")).toInt(0);
     } else {
         // Bare line. Positional by verb:
         //   grab   <target> [path]
@@ -1858,6 +1923,39 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             QStringList rest;
             for (int i = 2; i < p.size(); ++i) rest << tok(i);
             value = rest.join(QLatin1Char(' '));  // callsign, or free-form CW text
+        } else if (cmd == QLatin1String("panmessage")) {
+            action = tok(1);                  // add | remove | clear | list
+            target = tok(2);                  // pan index | active
+            id = tok(3);                      // message id for add/remove
+            if (action == QLatin1String("add")) {
+                bool okTimeout = false;
+                timeoutMs = tok(4).toInt(&okTimeout);
+                int textStart = 5;
+                if (!okTimeout) {
+                    // Timeout omitted — tok(4) is the first text token, not a
+                    // number; don't swallow it into the failed parse. (#3999 review)
+                    timeoutMs = 0;
+                    textStart = 4;
+                }
+                if (tok(textStart).startsWith(QStringLiteral("tone="),
+                                              Qt::CaseInsensitive)) {
+                    tone = tok(textStart).section(QLatin1Char('='), 1).trimmed();
+                    ++textStart;
+                }
+                QStringList rest;
+                for (int i = textStart; i < p.size(); ++i) {
+                    rest << tok(i);
+                }
+                const QString text = rest.join(QLatin1Char(' '));
+                const int sep = text.indexOf(QLatin1Char('|'));
+                if (sep >= 0) {
+                    title = text.left(sep).trimmed();
+                    detail = text.mid(sep + 1).trimmed();
+                } else {
+                    title = text.trimmed();
+                    detail.clear();
+                }
+            }
         } else if (cmd == QLatin1String("streams")) {
             action = tok(1);  // "" (Layer A UDP-orphan) | "radio" (Layer B) | "reset"
         } else if (cmd == QLatin1String("audioCapture")) {
@@ -1898,6 +1996,10 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
                    || cmd == QLatin1String("showMenu")
                    || cmd == QLatin1String("openMenu")) {
             target = tok(1);  // "close ConnectionPanel", "showMenu modeButton"
+        } else if (cmd == QLatin1String("hitTest")
+                   || cmd == QLatin1String("hittest")) {
+            target = tok(1);
+            value = tok(2) + QLatin1Char(' ') + tok(3);  // "hitTest SpectrumWidget [x y]"
         } else if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "drag sizeGrip 80 60"
@@ -1965,6 +2067,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("contextMenu requires a target widget"));
         return doContextMenu(target, value);
     }
+    if (cmd == QLatin1String("hitTest") || cmd == QLatin1String("hittest")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("hitTest requires a target widget"));
+        return doHitTest(target, value);
+    }
     if (cmd == QLatin1String("invoke")) {
         if (target.isEmpty() || action.isEmpty())
             return err(QStringLiteral("invoke requires a target and an action"));
@@ -2014,6 +2121,12 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         if (action.isEmpty())
             return err(QStringLiteral("pan requires an action (create|add|remove|close|center)"));
         return doPan(action, value);
+    }
+    if (cmd == QLatin1String("panmessage")) {
+        if (action.isEmpty()) {
+            return err(QStringLiteral("panmessage requires an action (add|remove|clear|list)"));
+        }
+        return doPanMessage(action, target, id, title, detail, timeoutMs, tone);
     }
     if (cmd == QLatin1String("streams"))
         return doStreams(action);
@@ -4329,6 +4442,49 @@ QJsonObject AutomationServer::doContextMenu(const QString& target,
     };
 }
 
+QJsonObject AutomationServer::doHitTest(const QString& target,
+                                        const QString& value) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w) {
+        return err(QStringLiteral("widget not found: ") + target);
+    }
+    if (!w->isVisible()) {
+        return err(QStringLiteral("refused: '") + target
+                   + QStringLiteral("' is not visible"));
+    }
+
+    QPoint local = w->rect().center();
+    const QStringList parts = value.split(QLatin1Char(' '), Qt::SkipEmptyParts);
+    if (parts.size() >= 2) {
+        bool okx = false;
+        bool oky = false;
+        const int x = parts.at(0).toInt(&okx);
+        const int y = parts.at(1).toInt(&oky);
+        if (!okx || !oky) {
+            return err(QStringLiteral("hitTest offset x/y must be integers"));
+        }
+        local = QPoint(x, y);
+    }
+
+    const QPoint global = w->mapToGlobal(local);
+    QWidget* child = w->childAt(local);
+    QWidget* globalHit = QApplication::widgetAt(global);
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("targetWidget"), describeHitWidget(w)},
+        {QStringLiteral("x"), local.x()},
+        {QStringLiteral("y"), local.y()},
+        {QStringLiteral("globalX"), global.x()},
+        {QStringLiteral("globalY"), global.y()},
+        {QStringLiteral("insideTarget"), w->rect().contains(local)},
+        {QStringLiteral("childAt"), describeHitWidget(child)},
+        {QStringLiteral("widgetAt"), describeHitWidget(globalHit)},
+    };
+}
+
 // ── Panadapter lifecycle (#3646) ────────────────────────────────────────────
 // `pan create|add` opens an independent panadapter; `pan center <mhz>` recenters
 // the active pan (the band-change lever — a plain `tune` only moves the slice and
@@ -4424,6 +4580,142 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
 
     return err(QStringLiteral("unknown pan action: ") + action
                + QStringLiteral(" (create|add|remove|close|center)"));
+}
+
+QJsonObject AutomationServer::doPanMessage(const QString& action,
+                                           const QString& target,
+                                           const QString& id,
+                                           const QString& title,
+                                           const QString& detail,
+                                           int timeoutMs,
+                                           const QString& tone) const
+{
+    auto resolveSpectrum = [this, &target]() -> QWidget* {
+        const QString trimmed = target.trimmed();
+        if (trimmed.isEmpty() || trimmed == QLatin1String("active")) {
+            QString activePanId;
+            if (m_radioModel && m_radioModel->activePanadapter()) {
+                activePanId = m_radioModel->activePanadapter()->panId();
+            }
+            if (!activePanId.isEmpty()) {
+                const QList<QWidget*> spectra =
+                    findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+                for (QWidget* sw : spectra) {
+                    for (QWidget* a = sw; a; a = a->parentWidget()) {
+                        if (shortClassName(a) == QLatin1String("PanadapterApplet")
+                            && a->property("panId").toString() == activePanId) {
+                            return sw;
+                        }
+                    }
+                }
+            }
+            return panSpectrumWidgetForIndex(0);
+        }
+
+        bool okIndex = false;
+        const int index = trimmed.toInt(&okIndex);
+        if (okIndex) {
+            return panSpectrumWidgetForIndex(index);
+        }
+
+        const QList<QWidget*> spectra =
+            findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+        for (QWidget* sw : spectra) {
+            if (sw->objectName() == trimmed) {
+                return sw;
+            }
+            for (QWidget* a = sw; a; a = a->parentWidget()) {
+                if (shortClassName(a) == QLatin1String("PanadapterApplet")
+                    && a->property("panId").toString() == trimmed) {
+                    return sw;
+                }
+            }
+        }
+        return nullptr;
+    };
+
+    QWidget* spectrum = resolveSpectrum();
+    if (!spectrum) {
+        return err(QStringLiteral("no panadapter spectrum for target '")
+                   + target + QStringLiteral("'"));
+    }
+
+    auto snapshot = [spectrum]() {
+        QVariantList messages;
+        QMetaObject::invokeMethod(spectrum, "overlayMessageSnapshot",
+                                  Qt::DirectConnection,
+                                  Q_RETURN_ARG(QVariantList, messages));
+        QJsonArray arr;
+        for (const QVariant& v : messages) {
+            arr.append(QJsonObject::fromVariantMap(v.toMap()));
+        }
+        return arr;
+    };
+
+    const QString lower = action.trimmed().toLower();
+    if (lower == QLatin1String("list") || lower == QLatin1String("snapshot")) {
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("panmessage"), QStringLiteral("list")},
+                           {QStringLiteral("target"), target},
+                           {QStringLiteral("messages"), snapshot()}};
+    }
+
+    if (lower == QLatin1String("clear")) {
+        QMetaObject::invokeMethod(spectrum, "automationClearOverlayMessages",
+                                  Qt::DirectConnection);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("panmessage"), QStringLiteral("clear")},
+                           {QStringLiteral("target"), target},
+                           {QStringLiteral("messages"), snapshot()}};
+    }
+
+    if (lower == QLatin1String("remove") || lower == QLatin1String("dismiss")) {
+        if (id.trimmed().isEmpty()) {
+            return err(QStringLiteral("panmessage remove requires an id"));
+        }
+        bool removed = false;
+        QMetaObject::invokeMethod(spectrum, "automationRemoveOverlayMessage",
+                                  Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, removed),
+                                  Q_ARG(QString, id));
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("panmessage"), QStringLiteral("remove")},
+                           {QStringLiteral("target"), target},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("removed"), removed},
+                           {QStringLiteral("messages"), snapshot()}};
+    }
+
+    if (lower == QLatin1String("add") || lower == QLatin1String("upsert")) {
+        if (id.trimmed().isEmpty()) {
+            return err(QStringLiteral("panmessage add requires an id"));
+        }
+        if (title.trimmed().isEmpty() && detail.trimmed().isEmpty()) {
+            return err(QStringLiteral("panmessage add requires title or detail"));
+        }
+        bool accepted = false;
+        QMetaObject::invokeMethod(spectrum, "automationUpsertOverlayMessage",
+                                  Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, accepted),
+                                  Q_ARG(QString, id),
+                                  Q_ARG(QString, title),
+                                  Q_ARG(QString, detail),
+                                  Q_ARG(int, timeoutMs),
+                                  Q_ARG(QString, tone));
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("panmessage"), QStringLiteral("add")},
+                           {QStringLiteral("target"), target},
+                           {QStringLiteral("id"), id},
+                           {QStringLiteral("timeoutMs"), timeoutMs},
+                           {QStringLiteral("tone"), tone.trimmed().isEmpty()
+                                ? QStringLiteral("info")
+                                : tone.trimmed().toLower()},
+                           {QStringLiteral("accepted"), accepted},
+                           {QStringLiteral("messages"), snapshot()}};
+    }
+
+    return err(QStringLiteral("unknown panmessage action: ") + action
+               + QStringLiteral(" (add|remove|clear|list)"));
 }
 
 // ── Radio-side display-stream inventory / leak detector (#3856) ──────────────

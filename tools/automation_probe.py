@@ -26,6 +26,7 @@ Usage:
     python tools/automation_probe.py get sync
     python tools/automation_probe.py grab SpectrumWidget /tmp/pan.png
     python tools/automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png
+    python tools/automation_probe.py panmessage add 0 kiwi 0 "Waiting|Queued"
     python tools/automation_probe.py audioCapture start 3000 raw,post,final
     python tools/automation_probe.py audioCapture read /tmp/aether-audio.json
 """
@@ -104,22 +105,30 @@ def main():
                "  automation_probe.py get slice active frequency\n"
                "  automation_probe.py slice rxsource 7 K4JK\n"
                "  automation_probe.py invoke 'Master volume' setValue 35\n"
+               "  automation_probe.py hitTest SpectrumWidget 80 80\n"
+               "  automation_probe.py resize 1600 900\n"
                "  automation_probe.py audioCapture start 3000 raw,post,final\n"
                "  automation_probe.py audioCapture read /tmp/aether-audio.json\n"
                "  automation_probe.py grab SpectrumWidget /tmp/pan.png\n"
-               "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png",
+               "  automation_probe.py grab pan-visible 1 /tmp/pan1-visible.png\n"
+               "  automation_probe.py panmessage add 0 kiwi 0 'Waiting|Queued'\n"
+               "  automation_probe.py panmessage add 0 tx 10000 tone=warning 'Transmit disabled|TX blocked'",
         formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="demo",
                     choices=["demo", "ping", "dumpTree", "grab", "invoke", "get",
                              "connect", "disconnect", "slice", "audioCapture",
-                             "record", "testtone", "tci"],
+                             "record", "testtone", "tci", "panmessage",
+                             "hitTest", "resize"],
                     help="verb to run (default: demo = dumpTree + panadapter grab)")
     ap.add_argument("rest", nargs="*",
                     help="verb args: grab <target> [path] | grab pan-visible <index> [path] | "
                          "invoke <target> <action> [value] | "
                          "get <model> [selector] [property] | "
+                         "hitTest <target> [x y] | "
+                         "resize <w> <h> [target] | "
                          "connect <list|show|hide|local|ip|wait> [args] | "
                          "slice <add|remove|select|tx|txant|rxant|rxsource> [args] | "
+                         "panmessage <add|remove|clear|list> <target> [id timeout [tone=info|warning] title|detail] | "
                          "audioCapture <start|stop|status|read> [args]")
     ap.add_argument("--socket", help="override the bridge socket path")
     ap.add_argument("--out", default=".", help="output dir for demo artifacts")
@@ -175,6 +184,22 @@ def main():
                 req["property"] = args.rest[2]
             print(json.dumps(bridge.request(req), indent=2))
 
+        elif args.command == "hitTest":
+            if not args.rest:
+                sys.exit("error: hitTest needs <target> [x y]")
+            req = {"cmd": "hitTest", "target": args.rest[0]}
+            if len(args.rest) > 1:
+                req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "resize":
+            if len(args.rest) < 2:
+                sys.exit("error: resize needs <w> <h> [target]")
+            req = {"cmd": "resize", "value": f"{args.rest[0]} {args.rest[1]}"}
+            if len(args.rest) > 2:
+                req["target"] = " ".join(args.rest[2:])
+            print(json.dumps(bridge.request(req), indent=2))
+
         elif args.command == "connect":
             if not args.rest:
                 sys.exit("error: connect needs <list|local|ip|wait> [args]")
@@ -212,6 +237,34 @@ def main():
                 req["action"] = args.rest[0]
                 if len(args.rest) > 1:
                     req["value"] = " ".join(args.rest[1:])
+            print(json.dumps(bridge.request(req), indent=2))
+
+        elif args.command == "panmessage":
+            if not args.rest:
+                sys.exit("error: panmessage needs <add|remove|clear|list> <target> ...")
+            req = {"cmd": "panmessage", "action": args.rest[0]}
+            if len(args.rest) > 1:
+                req["target"] = args.rest[1]
+            if args.rest[0] in ("add", "upsert"):
+                if len(args.rest) < 5:
+                    sys.exit("error: panmessage add needs <target> <id> <timeoutMs> <title|detail>")
+                req["id"] = args.rest[2]
+                try:
+                    req["timeoutMs"] = int(args.rest[3])
+                except ValueError:
+                    sys.exit("error: panmessage add timeoutMs must be an integer")
+                text_start = 4
+                if len(args.rest) > text_start and args.rest[text_start].lower().startswith("tone="):
+                    req["tone"] = args.rest[text_start].split("=", 1)[1].strip()
+                    text_start += 1
+                text = " ".join(args.rest[text_start:])
+                title, sep, detail = text.partition("|")
+                req["title"] = title.strip()
+                req["detail"] = detail.strip() if sep else ""
+            elif args.rest[0] in ("remove", "dismiss"):
+                if len(args.rest) < 3:
+                    sys.exit("error: panmessage remove needs <target> <id>")
+                req["id"] = args.rest[2]
             print(json.dumps(bridge.request(req), indent=2))
 
         else:  # demo: produce the Phase-0 deliverables

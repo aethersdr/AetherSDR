@@ -1,5 +1,6 @@
 #include "SpectrumWidget.h"
 #include "KiwiSdrTraceMath.h"
+#include "PanadapterMessageOverlay.h"
 #include "SpectrumOverlayMenu.h"
 #include "VfoWidget.h"
 #include "SliceColors.h"
@@ -933,21 +934,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     m_tnfHoverPopup->hide();
     m_tnfHoverPopup->raise();
 
-    m_interlockNotificationLabel = new QLabel(this);
-    m_interlockNotificationLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
-    m_interlockNotificationLabel->setAlignment(Qt::AlignCenter);
-    m_interlockNotificationLabel->setWordWrap(true);
-    AetherSDR::ThemeManager::instance().applyStyleSheet(m_interlockNotificationLabel, "QLabel { background: rgba(10,10,20,225); color: #d7fbff; "
-        "border: 2px solid {{color.accent}}; padding: 10px 14px; "
-        "font-size: 13px; font-weight: bold; }");
-    m_interlockNotificationLabel->hide();
-    m_interlockNotificationLabel->raise();
-
-    m_interlockNotificationTimer = new QTimer(this);
-    m_interlockNotificationTimer->setSingleShot(true);
-    connect(m_interlockNotificationTimer, &QTimer::timeout, this, [this]() {
-        m_interlockNotificationLabel->hide();
-    });
+    m_panadapterMessageOverlay = new PanadapterMessageOverlay(this);
+    m_panadapterMessageOverlay->hide();
 
     // Tune guide auto-hide timer (2-second inactivity timeout)
     m_tuneGuideTimer = new QTimer(this);
@@ -1395,8 +1383,7 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     w->raise();
     applyActiveVfoZOrder();
     m_overlayMenu->raiseAll();  // keep overlay + panels on top of all VFO widgets
-    if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible())
-        m_interlockNotificationLabel->raise();
+    raisePanadapterMessageOverlay();
     return w;
 }
 
@@ -1485,9 +1472,7 @@ void SpectrumWidget::applyActiveVfoZOrder()
     if (m_overlayMenu) {
         m_overlayMenu->raiseAll();  // keep overlay above VFO
     }
-    if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible()) {
-        m_interlockNotificationLabel->raise();
-    }
+    raisePanadapterMessageOverlay();
 }
 
 // ── Display control setters (save to AppSettings on each change) ──────────────
@@ -3922,45 +3907,106 @@ void SpectrumWidget::setKiwiSdrConnectionOverlay(bool visible,
 {
     const QString trimmedDetail = detail.trimmed();
     const QString trimmedTitle = title.trimmed();
-    if (m_kiwiSdrConnectionOverlayVisible == visible
-        && m_kiwiSdrConnectionOverlayTitle == trimmedTitle
-        && m_kiwiSdrConnectionOverlayDetail == trimmedDetail) {
+
+    if (!visible) {
+        removeOverlayMessage(QStringLiteral("kiwi.connection"));
         return;
     }
 
-    m_kiwiSdrConnectionOverlayVisible = visible;
-    m_kiwiSdrConnectionOverlayTitle = trimmedTitle;
-    m_kiwiSdrConnectionOverlayDetail = trimmedDetail;
-    markOverlayDirty();
+    PanadapterOverlayMessage message;
+    message.id = QStringLiteral("kiwi.connection");
+    message.title = trimmedTitle.isEmpty()
+        ? QStringLiteral("Not connected to KiwiSDR")
+        : trimmedTitle;
+    message.detail = trimmedDetail.isEmpty()
+        ? QStringLiteral("Disconnected")
+        : trimmedDetail;
+    message.timeoutMs = 0;
+    message.dismissible = true;
+    upsertOverlayMessage(std::move(message));
+}
+
+void SpectrumWidget::upsertOverlayMessage(PanadapterOverlayMessage message)
+{
+    if (!m_panadapterMessageOverlay) {
+        return;
+    }
+    positionPanadapterMessageOverlay();
+    m_panadapterMessageOverlay->upsertMessage(std::move(message));
+    raisePanadapterMessageOverlay();
+}
+
+bool SpectrumWidget::removeOverlayMessage(const QString& id)
+{
+    if (!m_panadapterMessageOverlay) {
+        return false;
+    }
+    return m_panadapterMessageOverlay->removeMessage(id);
+}
+
+void SpectrumWidget::clearOverlayMessages()
+{
+    if (m_panadapterMessageOverlay) {
+        m_panadapterMessageOverlay->clearMessages();
+    }
+}
+
+bool SpectrumWidget::automationUpsertOverlayMessage(const QString& id,
+                                                    const QString& title,
+                                                    const QString& detail,
+                                                    int timeoutMs,
+                                                    const QString& toneName)
+{
+    PanadapterOverlayMessage message;
+    message.id = id;
+    message.title = title;
+    message.detail = detail;
+    message.timeoutMs = timeoutMs;
+    message.dismissible = true;
+    message.tone = toneName.compare(QStringLiteral("warning"), Qt::CaseInsensitive) == 0
+        ? PanadapterOverlayMessageTone::Warning
+        : PanadapterOverlayMessageTone::Info;
+    upsertOverlayMessage(std::move(message));
+    return true;
+}
+
+bool SpectrumWidget::automationRemoveOverlayMessage(const QString& id)
+{
+    return removeOverlayMessage(id);
+}
+
+void SpectrumWidget::automationClearOverlayMessages()
+{
+    clearOverlayMessages();
+}
+
+QVariantList SpectrumWidget::overlayMessageSnapshot() const
+{
+    if (!m_panadapterMessageOverlay) {
+        return {};
+    }
+    return m_panadapterMessageOverlay->messageSnapshot();
 }
 
 void SpectrumWidget::showInterlockNotification(const QString& message, int durationMs)
 {
     const QString text = message.trimmed();
-    if (text.isEmpty())
+    if (text.isEmpty()) {
         return;
+    }
 
-    const int availableWidth = qMax(80, width() - 24);
-    const int maxTextWidth = qMax(80, qMin(availableWidth - 36, int(width() * 0.78)));
-    QFont font = m_interlockNotificationLabel->font();
-    font.setPointSize(13);
-    font.setBold(true);
-    m_interlockNotificationLabel->setFont(font);
-
-    const QFontMetrics fm(font);
-    const QRect textBounds = fm.boundingRect(
-        QRect(0, 0, maxTextWidth, 1000),
-        Qt::AlignCenter | Qt::TextWordWrap,
-        text);
-
-    m_interlockNotificationLabel->setText(text);
-    m_interlockNotificationLabel->setFixedSize(
-        qBound(80, textBounds.width() + 36, availableWidth),
-        textBounds.height() + 24);
-    positionInterlockNotification();
-    m_interlockNotificationLabel->show();
-    m_interlockNotificationLabel->raise();
-    m_interlockNotificationTimer->start(qMax(1, durationMs));
+    PanadapterOverlayMessage overlay;
+    overlay.id = QStringLiteral("interlock.%1").arg(
+        QString::number(static_cast<qulonglong>(qHash(text)), 16));
+    overlay.title = text.startsWith(QStringLiteral("Transmit is disabled"),
+                                    Qt::CaseInsensitive)
+        ? tr("Transmit disabled")
+        : tr("Notice");
+    overlay.detail = text;
+    overlay.timeoutMs = qMax(1, durationMs);
+    overlay.dismissible = true;
+    overlay.tone = PanadapterOverlayMessageTone::Warning;
+    upsertOverlayMessage(std::move(overlay));
 }
 
 void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRect)
@@ -4115,69 +4161,6 @@ void SpectrumWidget::drawConnectionAnimation(QPainter& p, const QRect& contentRe
     p.setPen(withAlpha(kConnectionTextColor(), 180));
     p.drawText(subtitleRect, Qt::AlignHCenter | Qt::AlignTop, subtitle);
 
-    p.restore();
-}
-
-void SpectrumWidget::drawKiwiSdrConnectionOverlay(QPainter& p,
-                                                  const QRect& contentRect)
-{
-    if (!m_kiwiSdrConnectionOverlayVisible || contentRect.width() < 160
-        || contentRect.height() < 80) {
-        return;
-    }
-
-    const QString title = m_kiwiSdrConnectionOverlayTitle.isEmpty()
-        ? QStringLiteral("Not connected to KiwiSDR")
-        : m_kiwiSdrConnectionOverlayTitle;
-    const QString detail = m_kiwiSdrConnectionOverlayDetail.isEmpty()
-        ? QStringLiteral("Disconnected")
-        : m_kiwiSdrConnectionOverlayDetail;
-
-    QFont titleFont = p.font();
-    titleFont.setPointSize(15);
-    titleFont.setBold(true);
-    QFont detailFont = titleFont;
-    detailFont.setPointSize(10);
-    detailFont.setBold(false);
-
-    const QFontMetrics titleFm(titleFont);
-    const QFontMetrics detailFm(detailFont);
-    const int maxTextWidth =
-        qMax(120, qMin(contentRect.width() - 48, 460));
-    const QRect titleBounds = titleFm.boundingRect(
-        QRect(0, 0, maxTextWidth, 200),
-        Qt::AlignCenter | Qt::TextWordWrap,
-        title);
-    const QRect detailBounds = detailFm.boundingRect(
-        QRect(0, 0, maxTextWidth, 240),
-        Qt::AlignCenter | Qt::TextWordWrap,
-        detail);
-    const int boxW =
-        qBound(180, qMax(titleBounds.width(), detailBounds.width()) + 40,
-               qMax(180, contentRect.width() - 32));
-    const int boxH = titleBounds.height() + detailBounds.height() + 34;
-    const QRect box(contentRect.center().x() - boxW / 2,
-                    contentRect.center().y() - boxH / 2,
-                    boxW, boxH);
-
-    p.save();
-    p.setRenderHint(QPainter::Antialiasing, true);
-    p.setPen(QPen(AetherSDR::theme::withAlpha("color.accent.warning", 210), 1));
-    p.setBrush(AetherSDR::theme::withAlpha("color.background.0", 220));
-    p.drawRoundedRect(box, 6, 6);
-
-    p.setFont(titleFont);
-    p.setPen(AetherSDR::ThemeManager::instance().color("color.text.primary"));
-    QRect textRect = box.adjusted(16, 10, -16, -10);
-    const QRect titleRect(textRect.left(), textRect.top(),
-                          textRect.width(), titleBounds.height() + 4);
-    p.drawText(titleRect, Qt::AlignCenter | Qt::TextWordWrap, title);
-
-    p.setFont(detailFont);
-    p.setPen(AetherSDR::ThemeManager::instance().color("color.text.secondary"));
-    const QRect detailRect(textRect.left(), titleRect.bottom() + 4,
-                           textRect.width(), detailBounds.height() + 6);
-    p.drawText(detailRect, Qt::AlignCenter | Qt::TextWordWrap, detail);
     p.restore();
 }
 
@@ -7771,7 +7754,7 @@ void SpectrumWidget::resizeEvent(QResizeEvent* ev)
 
     positionZoomButtons();
     positionFpsMeterLabels();
-    positionInterlockNotification();
+    positionPanadapterMessageOverlay();
 
     // Notify MainWindow so it can re-push xpixels/ypixels to the radio (#1511)
     if (width() >= 100 && spectrumPixelHeight() >= 20) {
@@ -7793,14 +7776,22 @@ void SpectrumWidget::positionZoomButtons()
     m_zoomBandBtn->move(pad + sz + 2, botY - sz - sz - 2);
 }
 
-void SpectrumWidget::positionInterlockNotification()
+void SpectrumWidget::positionPanadapterMessageOverlay()
 {
-    if (!m_interlockNotificationLabel)
+    if (!m_panadapterMessageOverlay) {
         return;
+    }
 
-    const int x = qMax(0, (width() - m_interlockNotificationLabel->width()) / 2);
-    const int y = qMax(0, (height() - m_interlockNotificationLabel->height()) / 2);
-    m_interlockNotificationLabel->move(x, y);
+    const QRect contentRect(0, 0, qMax(0, width() - DBM_STRIP_W), height());
+    m_panadapterMessageOverlay->setGeometry(contentRect);
+    raisePanadapterMessageOverlay();
+}
+
+void SpectrumWidget::raisePanadapterMessageOverlay()
+{
+    if (m_panadapterMessageOverlay && m_panadapterMessageOverlay->hasMessages()) {
+        m_panadapterMessageOverlay->raise();
+    }
 }
 
 // ─── Colour map ───────────────────────────────────────────────────────────────
@@ -8995,8 +8986,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             }
 
             drawConnectionAnimation(p, specRect);
-            drawKiwiSdrConnectionOverlay(
-                p, QRect(0, 0, qMax(0, w - DBM_STRIP_W), h));
             // dBm strip: both render modes use a readable full-height amplitude
             // reference; the 3D surface itself is perspective-foreshortened.
             if (is3D) {
@@ -9397,8 +9386,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     // before the flag-layer render) so GPU-composited flags follow the marker
     // without a one-frame lag (#3617).
 
-    if (m_interlockNotificationLabel && m_interlockNotificationLabel->isVisible())
-        m_interlockNotificationLabel->raise();
+    raisePanadapterMessageOverlay();
 
     if (perfEnabled) {
         PerfTelemetry::instance().recordRender(
@@ -9628,8 +9616,6 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     }
 
     drawConnectionAnimation(p, specRect);
-    drawKiwiSdrConnectionOverlay(
-        p, QRect(0, 0, qMax(0, width() - DBM_STRIP_W), height()));
 
     // Reposition all VFO widgets — deconflict flags so they fly away from each other
     // Split pairs always face each other: RX←  →TX

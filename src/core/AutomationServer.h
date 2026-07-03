@@ -157,11 +157,19 @@ class QsoRecorder;
 //                                     contextMenuEvent) via a synthesized
 //                                     QContextMenuEvent; deferred, then dumpTree
 //                                     to read it and invoke to drive it.
+//   hitTest <target> [x y]         -> report Qt's widgetAt()/childAt() owner for
+//                                     a target-local point. Read-only proof for
+//                                     transparent overlays and input masks.
 //   pan add                        -> create a new panadapter (panafall); the
 //                                     only UI path is an unaddressable QLabel.
 //   pan close <id|index|active|all>-> tear down a panadapter regardless of how it
 //                                     was opened (sends display pan remove AND
 //                                     display panafall remove).
+//   panmessage add|remove|clear|list
+//                                  -> inject/read panadapter overlay messages
+//                                     for deterministic UI screenshots; add
+//                                     accepts tone=info|warning, timed messages
+//                                     expose countdown in snapshots.
 //   dumpTree (extended)            -> nodes now carry toolTip, and QComboBox
 //                                     nodes carry items[]/currentIndex and pans
 //                                     carry panIndex, all assertable without
@@ -304,12 +312,26 @@ private:
     // handler pops a QMenu that runs its own event loop. The popped menu is read
     // via dumpTree and driven via invoke, no extra inspection code needed. (#3858)
     QJsonObject doContextMenu(const QString& target, const QString& value) const;
+    // hitTest <target> [x y]: read-only Qt hit-test probe. Reports the widget
+    // under a target-local point according to childAt() and QApplication::widgetAt().
+    QJsonObject doHitTest(const QString& target, const QString& value) const;
     // pan close <panId|index|active|all>: tear down a panadapter regardless of
     // how it was opened. Sends `display pan remove` AND `display panafall remove`
     // (the FlexLib-correct pair) so a panafall-created pan closes too. The
     // production GUI close path now does the same via RadioModel::removePanadapter
     // (#3843). (#3646)
     QJsonObject doPan(const QString& action, const QString& arg);
+    // panmessage add|remove|clear|list <pan-index|active>: inject/read
+    // panadapter overlay messages for deterministic UI verification. UI-only;
+    // never sends radio commands and never keys TX. `add` accepts optional
+    // tone=info|warning for visual-state coverage.
+    QJsonObject doPanMessage(const QString& action,
+                             const QString& target,
+                             const QString& id,
+                             const QString& title,
+                             const QString& detail,
+                             int timeoutMs,
+                             const QString& tone) const;
     // Radio-side display-stream inventory / leak detector (#3856).
     //   streams        — Layer A: registered pan/wf streams + UDP "orphan"
     //                     streams the radio is still transmitting that we let go.

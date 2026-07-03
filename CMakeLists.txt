@@ -697,6 +697,8 @@ set(GUI_SOURCES
     src/gui/ConnectionPanel.cpp
     src/gui/ClientDisconnectDialog.cpp
     src/gui/ConnectedStationsDialog.cpp
+    src/gui/PanadapterMessageOverlay.cpp
+    src/gui/PanadapterMessageOverlay.h
     src/gui/SpectrumWidget.cpp
     src/gui/SpectrumOverlayMenu.cpp
     src/gui/DssRenderer.cpp

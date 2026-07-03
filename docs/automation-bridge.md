@@ -134,6 +134,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
 | | [`showMenu <target>`](#showmenu-alias-openmenu) | Pop a button's drop-down menu (alias `openMenu`). |
 | | [`contextMenu <target> [x y]`](#contextmenu) | Trigger a custom right-click menu. |
+| | [`hitTest <target> [x y]`](#hittest) | Read Qt's widget owner for a target-local point. |
 | | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
 | | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
 | | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
@@ -152,6 +153,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
 | | [`slice <action>`](#slice) | add/remove/select/tx/txant/rxant/rxsource. |
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
+| | [`panmessage <action>`](#panmessage) | Add, remove, clear, or list panadapter overlay messages for UI testing. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
 | **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X-shaped). |
@@ -742,6 +744,19 @@ menu headers since `QMenu::addSection` text doesn't render under the app styling
 serialize with `"type":"header"` and the label's text, so titles are assertable
 instead of blank rows.
 
+### `hitTest`
+Read-only Qt hit-test probe for overlay/input-mask regressions. The point is
+target-local; omit `x y` to test the target center. `childAt` is the target's
+child owner at that local point, while `widgetAt` is Qt's global topmost widget
+owner at the same screen point.
+
+```json
+→ {"cmd":"hitTest","target":"SpectrumWidget","value":"80 80"}
+← {"ok":true,"target":"SpectrumWidget","x":80,"y":80,
+   "childAt":{"class":"VfoWidget",...},
+   "widgetAt":{"class":"VfoWidget",...}}
+```
+
 ### `menu`
 Enumerate or pop a **menu-bar** menu. On macOS the native menu bar reparents its
 menus to top-level `QMenu`s, so `dumpTree` finds them but `menuBar()->actions()`
@@ -821,6 +836,51 @@ Panadapter lifecycle — create or tear down a pan regardless of how it was open
 
 All are async (the radio echoes the change) — re-poll `get pans`. Every `pan`
 action is RX/config only; none keys the transmitter.
+
+### `panmessage`
+Manual test hook for panadapter overlay popup messages. This is UI-only: it
+does not send radio commands and never keys the transmitter.
+
+```json
+→ {"cmd":"panmessage","action":"add","target":"0","id":"kiwi",
+   "title":"Waiting for KiwiSDR receiver slot",
+   "detail":"Receiver channels are full; AetherSDR will reconnect automatically.",
+   "timeoutMs":0}
+← {"ok":true,"panmessage":"add","target":"0","id":"kiwi","accepted":true,
+   "messages":[{"id":"kiwi","title":"Waiting for KiwiSDR receiver slot",...}]}
+
+→ {"cmd":"panmessage","action":"add","target":"0","id":"tx","timeoutMs":2500,
+   "tone":"warning",
+   "title":"Transmit disabled",
+   "detail":"Transmit is disabled because this panadapter is displaying a KiwiSDR receiver."}
+← {"ok":true,"panmessage":"add","target":"0","id":"tx","accepted":true,...}
+
+→ {"cmd":"panmessage","action":"list","target":"0"}
+← {"ok":true,"panmessage":"list",
+   "messages":[{"id":"tx","remainingMs":1840,"countdown":"2s","tone":"warning",...}]}
+
+→ {"cmd":"panmessage","action":"remove","target":"0","id":"kiwi"}
+← {"ok":true,"panmessage":"remove","removed":true,...}
+```
+
+Bare-line forms are accepted for quick screenshot setup. For `add`, an optional
+`tone=info|warning` may follow `<timeoutMs>`, and the text after that is split
+at the first `|` into title and detail:
+
+```text
+panmessage add 0 kiwi 0 Waiting for KiwiSDR receiver slot|Receiver channels are full; AetherSDR will reconnect automatically.
+panmessage add 0 tx 2500 tone=warning Transmit disabled|Transmit is disabled because this panadapter is displaying a KiwiSDR receiver.
+panmessage list 0
+panmessage remove 0 kiwi
+panmessage clear 0
+```
+
+Targets are a `panIndex` from `dumpTree`, `active`, a `SpectrumWidget`
+`objectName`, or a radio pan id (`0x...`). Use `grab pan-visible <index>` to
+capture the operator-visible stack, including the close buttons.
+
+Messages with `timeoutMs > 0` render a small countdown badge on the card and
+report the same value in the `countdown` snapshot field.
 
 ### `connect` / `disconnect`
 Connect through the same dialog and model path as the visible **Connect to
