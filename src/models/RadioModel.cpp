@@ -2103,6 +2103,7 @@ void RadioModel::onConnected()
 void RadioModel::stageSessionModelsForReconnect()
 {
     ++m_sessionModelGeneration;
+    m_staleSessionOwnHandle = clientHandle();
 
     for (SliceModel* slice : m_slices) {
         if (slice) {
@@ -3937,7 +3938,13 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
         // -gone handle is a harmless error reply.
         bool oldOk = false;
         const quint32 oldHandle = pan->clientHandle().toUInt(&oldOk, 16);
+        // Only evict when the staged pan still records OUR OWN pre-reconnect
+        // handle. If status parsing reassigned the pan to another client
+        // before we went down, that client is the pan's live rightful owner
+        // — evicting it would start an eviction ping-pong between two
+        // healthy sessions sharing a client_id.
         if (oldOk && oldHandle != 0 && oldHandle != clientHandle()
+            && oldHandle == m_staleSessionOwnHandle
             && !m_evictedPredecessorHandles.contains(oldHandle)) {
             m_evictedPredecessorHandles.insert(oldHandle);
             qCDebug(lcProtocol).noquote()

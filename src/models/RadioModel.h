@@ -890,6 +890,12 @@ private:
     // Reclaim-by-ID is only valid against the same radio — slice indexes and
     // stream IDs collide near-certainly across different radios.
     QString m_staleSessionSerial;
+    // #3977: OUR connection handle at stage time. Reclaim eviction must only
+    // fire when the staged pan still records THIS handle — pan status parsing
+    // (client_handle) can legitimately rewrite a pan's owner to another live
+    // client before we disconnect (ownership transfer), and evicting that
+    // client would kick a healthy session, not a zombie.
+    quint32 m_staleSessionOwnHandle{0};
     QMap<int, MemoryEntry> m_memories;
     QStringList m_globalProfiles;
     QString     m_activeGlobalProfile;
