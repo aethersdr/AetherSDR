@@ -147,26 +147,35 @@ public:
     }
 
     // Returns true for BigBend/DragonFire-platform radios (8400, 8600,
-    // AU-series, ML-series, CL-series, RT-series) that support the extended
+    // AU-/ML-/MLS-/CL-/CLS- series, RT-2122) that support the extended
     // firmware DSP filters (NRL, NRS, RNN, NRF).  6000-series radios don't
     // expose these filters and the UI hides them when this returns false. (#2177)
+    //
+    // Delegates to the FlexLib-sourced ModelCapabilities platform table
+    // (Principle I) instead of ad-hoc substring checks — the old prefix form
+    // silently missed the "S" server variants (MLS-9601 doesn't contain "ML-";
+    // CLS-9301 doesn't contain "CL-") and was case-sensitive.
     bool hasExtendedDspFilters() const {
-        return m_model.contains("8400") || m_model.contains("8600")
-            || m_model.contains("AU-")  || m_model.contains("ML-")
-            || m_model.contains("CL-")  || m_model.contains("RT-");
+        return capabilitiesFor(m_model).hasExtendedDsp();
     }
 
-    // Max panadapters supported by this radio model.
-    // FLEX-6700: 8 (dual SCU, high-capacity)
-    // FLEX-6600 / FLEX-6500 / FLEX-8600 / AU-520: 4 (dual SCU)
-    // All single-SCU models (6300, 6400, etc.): 2
+    // True for 2-SCU radios that support diversity RX, from the FlexLib-sourced
+    // ModelCapabilities table (Principle I).  Replaces the hand-maintained
+    // contains("6500")|... checks, which wrongly enabled diversity on the
+    // single-SCU FLEX-6500 and omitted the ML-/MLS-/CL-/CLS- dual-SCU models.
+    bool isDiversityAllowed() const {
+        return capabilitiesFor(m_model).isDiversityAllowed;
+    }
+
+    // Max panadapters supported by this radio model.  Panadapter capacity
+    // tracks the radio's SCU/slice capacity (identical across every current
+    // model), so this comes from the same FlexLib-sourced ModelCapabilities
+    // table (Principle I) rather than an ad-hoc contains() list — the old list
+    // omitted the dual-SCU ML-/MLS-/CL-/CLS- models, capping them at 2 pans
+    // instead of 4.  Examples: FLEX-6700 -> 8; 6600/6500/8600/AU-520/ML/CL -> 4;
+    // 6300/6400/8400/AU-510/RT-2122 -> 2.
     int maxPanadapters() const {
-        if (m_model.contains("6700"))
-            return 8;
-        if (m_model.contains("6600") || m_model.contains("6500")
-                || m_model.contains("8600") || m_model.contains("AU-520"))
-            return 4;
-        return 2;
+        return capabilitiesFor(m_model).maxSlices;
     }
 
     // Panadapter bandwidth limits by radio model (MHz).

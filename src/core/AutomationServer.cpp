@@ -17,6 +17,7 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QEnterEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QSysInfo>
@@ -1533,7 +1534,7 @@ bool AutomationServer::start(const QString& serverName)
         << "automation bridge listening on" << fullServerName()
         << "(verbs: ping, dumpTree, floors, grab, grab pan, grab pan-visible, invoke, get, connect, disconnect,"
         << "txtest, atu, slice, tune, pan, streams, audioCapture, txwaterfall, key, cwx, station, resize,"
-        << "menu, close, drag, showMenu, contextMenu, whoami, log, mark)";
+        << "menu, close, drag, hover, showMenu, contextMenu, whoami, log, mark)";
     return true;
 }
 
@@ -1842,6 +1843,9 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         } else if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "drag sizeGrip 80 60"
+        } else if (cmd == QLatin1String("hover")) {
+            target = tok(1);
+            action = tok(2);  // optional "leave" → fade after exit
         } else if (cmd == QLatin1String("contextMenu")) {
             target = tok(1);
             value = tok(2) + QLatin1Char(' ') + tok(3);  // "contextMenu SMeterWidget [x y]"
@@ -1877,6 +1881,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
         if (target.isEmpty())
             return err(QStringLiteral("close requires a target widget/window"));
         return doClose(target);
+    }
+    if (cmd == QLatin1String("hover")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("hover requires a target widget"));
+        return doHover(target, action);
     }
     if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
         if (target.isEmpty())
@@ -2600,6 +2609,53 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("dsp"), data}};
     }
+    if (model == QLatin1String("panstats")) {
+        // Per-panadapter frame-cost counters from every SpectrumWidget, for
+        // before/after rendering-cost proofs without a profiler attach.
+        // selector filters by pan index or objectName; property "reset"
+        // zeroes the counters after the read so successive reads measure
+        // disjoint intervals. GUI-header-free: snapshotted via meta-call.
+        const bool reset = property == QLatin1String("reset");
+        bool selectorIsIndex = false;
+        const int wantIndex = selector.toInt(&selectorIsIndex);
+        QJsonArray pans;
+        // A floated container is reachable from two top-level roots, so the
+        // class walk can yield the same widget twice — dedupe by pointer.
+        QSet<QWidget*> seen;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("SpectrumWidget"));
+        for (QWidget* w : widgets) {
+            if (seen.contains(w))
+                continue;
+            seen.insert(w);
+            if (!selector.isEmpty() && !selectorIsIndex
+                && w->objectName() != selector)
+                continue;
+            // Read without resetting first: index filtering needs the
+            // snapshot's own panIndex (panIndex() is a plain accessor, not a
+            // Q_PROPERTY), and a filtered-out pan must keep its counters.
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "panstatsSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap),
+                                           Q_ARG(bool, false)))
+                continue;
+            if (!selector.isEmpty() && selectorIsIndex
+                && snap.value(QStringLiteral("panIndex")).toInt() != wantIndex)
+                continue;
+            if (reset) {
+                QVariantMap discard;
+                QMetaObject::invokeMethod(w, "panstatsSnapshot",
+                                          Qt::DirectConnection,
+                                          Q_RETURN_ARG(QVariantMap, discard),
+                                          Q_ARG(bool, true));
+            }
+            pans.append(QJsonObject::fromVariantMap(snap));
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("pans"), pans}};
+    }
     if (model == QLatin1String("sync")
         || model == QLatin1String("receiveSync")) {
         if (!m_receiveSyncSnapshotHandler) {
@@ -2681,7 +2737,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p);
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|kiwi)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|panstats|kiwi)"));
     }
 
     if (!property.isEmpty()) {
@@ -3797,6 +3853,50 @@ QJsonObject AutomationServer::doDrag(const QString& target, const QString& value
         {QStringLiteral("class"), wp ? shortClassName(wp) : QStringLiteral("(deleted)")},
         {QStringLiteral("dx"), dx},
         {QStringLiteral("dy"), dy},
+    };
+}
+
+// hover <target> [leave]: synthesize pointer hover so hover-driven UI is
+// provable. Bare form fires QEnterEvent + a no-button QMouseMove at the widget
+// centre (mouse tracking is on for hover-aware widgets), which is what the
+// HGauge meter readout listens for. The 'leave' form fires QEvent::Leave so a
+// driver can watch the value badge fade one second after the pointer exits.
+QJsonObject AutomationServer::doHover(const QString& target, const QString& action) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget or window not found: ") + target);
+    if (!w->isVisible())
+        return err(QStringLiteral("refused: '") + target + QStringLiteral("' is not visible"));
+
+    const QPoint center(w->width() / 2, w->height() / 2);
+    const QPoint global = w->mapToGlobal(center);
+    const bool leave = (action == QLatin1String("leave"));
+
+    const QPointF localF = QPointF(center);
+    const QPointF globalF = QPointF(global);
+    if (leave) {
+        QEvent ev(QEvent::Leave);
+        QCoreApplication::sendEvent(w, &ev);
+    } else {
+        QEnterEvent enter(localF, localF, globalF);
+        QCoreApplication::sendEvent(w, &enter);
+        QMouseEvent move(QEvent::MouseMove, localF, localF, globalF,
+                         Qt::NoButton, Qt::NoButton, Qt::NoModifier);
+        QCoreApplication::sendEvent(w, &move);
+    }
+
+    qCInfo(lcAutomation).noquote()
+        << "hover" << target << (leave ? "leave" : "enter") << "at" << global;
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), shortClassName(w)},
+        {QStringLiteral("action"), leave ? QStringLiteral("leave")
+                                         : QStringLiteral("enter")},
+        {QStringLiteral("x"), global.x()},
+        {QStringLiteral("y"), global.y()},
     };
 }
 

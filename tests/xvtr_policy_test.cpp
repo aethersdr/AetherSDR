@@ -138,11 +138,11 @@ void testBandStackKeysUseNativeVhfOnlyWhenCapable()
     };
 
     expectBandKey("FLEX-6700 native 2m strips UI suffix",
-                  "2m", {}, "2", {false, true});
+                  "2m", {}, "2", {.has2Meters = true});
     expectBandKey("FLEX-6500/6700 native 4m strips UI suffix",
-                  "4m", {}, "4", {true, false});
+                  "4m", {}, "4", {.has4Meters = true});
     expectBandKey("native 2m wins over same-named XVTR on capable radio",
-                  "2m", xvtrs, "2", {false, true});
+                  "2m", xvtrs, "2", {.has2Meters = true});
     expectBandKey("without 2m capability, same-named XVTR still resolves",
                   "2m", xvtrs, "X12");
 }

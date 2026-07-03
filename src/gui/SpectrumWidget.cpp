@@ -68,6 +68,23 @@ QSoundEffect* SpectrumWidget::s_starstruckSound = nullptr;
 
 namespace {
 
+constexpr int kDssMaxIncrementalUploadRows = 8;
+
+constexpr int dssFillVerticesPerRow()
+{
+    return (DssRenderer::kCols - 1) * 6;
+}
+
+constexpr int dssLineVerticesPerRow()
+{
+    return (DssRenderer::kCols - 1) * 2;
+}
+
+void appendDssVertex(QVector<float>& vertices, float u, float v, float edge)
+{
+    vertices << u << v << edge;
+}
+
 struct VfoPos {
     int sliceId;
     int x;
@@ -798,6 +815,56 @@ QString SpectrumWidget::rendererDescription() const
 #endif
 }
 
+QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
+{
+    const double secs = std::max(0.001, m_panStats.sinceMs() / 1000.0);
+    const auto msPerSec = [secs](quint64 us) { return (us / 1000.0) / secs; };
+
+    QVariantMap m;
+    m[QStringLiteral("panIndex")] = m_panIndex;
+    m[QStringLiteral("name")] = objectName();
+    m[QStringLiteral("visible")] = isVisible();
+    m[QStringLiteral("widthPx")] = width();
+    m[QStringLiteral("heightPx")] = height();
+    m[QStringLiteral("dpr")] = devicePixelRatioF();
+    m[QStringLiteral("renderMode")] =
+        m_spectrumRenderMode == SpectrumRenderMode::Mode3D
+            ? QStringLiteral("3D") : QStringLiteral("2D");
+    m[QStringLiteral("renderer")] = rendererDescription();
+    m[QStringLiteral("leanMode")] = m_leanMode;
+    m[QStringLiteral("sinceMs")] = static_cast<qlonglong>(m_panStats.sinceMs());
+
+    m[QStringLiteral("fftFramesPerSec")] = m_panStats.updateSpectrumCalls / secs;
+    m[QStringLiteral("ingestMsPerSec")] = msPerSec(m_panStats.updateSpectrumUs);
+    m[QStringLiteral("gpuFramesPerSec")] = m_panStats.gpuFrames / secs;
+    // Main-thread budget consumed preparing + encoding GPU frames, in
+    // "ms per wall second" — the single number to compare before/after.
+    m[QStringLiteral("gpuFrameMsPerSec")] = msPerSec(m_panStats.gpuFrameUs);
+    m[QStringLiteral("avgGpuFrameUs")] = m_panStats.gpuFrames
+        ? static_cast<double>(m_panStats.gpuFrameUs) / m_panStats.gpuFrames : 0.0;
+    m[QStringLiteral("fftBuildMsPerSec")] = msPerSec(m_panStats.fftBuildUs);
+    m[QStringLiteral("fftVboBytesPerSec")] =
+        static_cast<double>(m_panStats.fftVboBytes) / secs;
+    m[QStringLiteral("overlayRebuildsPerSec")] = m_panStats.overlayRebuilds / secs;
+    m[QStringLiteral("overlayRebuildMsPerSec")] = msPerSec(m_panStats.overlayRebuildUs);
+    m[QStringLiteral("overlayUploadBytesPerSec")] =
+        static_cast<double>(m_panStats.overlayUploadBytes) / secs;
+    m[QStringLiteral("wfUploadBytesPerSec")] =
+        static_cast<double>(m_panStats.wfUploadBytes) / secs;
+    m[QStringLiteral("paintsPerSec")] = m_panStats.paintEvents / secs;
+    m[QStringLiteral("paintMsPerSec")] = msPerSec(m_panStats.paintUs);
+
+    QVariantMap causes;
+    for (auto it = m_panStats.dirtyCauses.cbegin();
+         it != m_panStats.dirtyCauses.cend(); ++it)
+        causes[QString::fromLatin1(it.key())] = static_cast<qulonglong>(it.value());
+    m[QStringLiteral("overlayDirtyCauses")] = causes;
+
+    if (reset)
+        m_panStats.reset();
+    return m;
+}
+
 SpectrumWidget::SpectrumWidget(QWidget* parent)
     : SPECTRUM_BASE_CLASS(parent)
 {
@@ -806,6 +873,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // through the "spectrum" scope chain.  Token migration into this
     // scope happens in step 4 of the refactor.
     theme::setContainer(this, QStringLiteral("spectrum"));
+
+    m_panStats.clock.start();  // panstats rates are meaningless without an epoch
 
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -818,9 +887,14 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // WA_NativeWindow forces Qt to create a dedicated native NSView for this widget.
     // Without it, QRhiWidget embedded in a QWidget hierarchy (especially one whose
     // backing store was created before this widget was added) fails to obtain a QRhi
-    // context because the parent window's surface type is RasterSurface, not MetalSurface.
-    // A native window gives QRhiWidget its own Metal-capable surface to render into.
-    setAttribute(Qt::WA_NativeWindow);
+    // context because the parent window's surface type is RasterSurface, not MetalSurface
+    // (#714, Qt 6.6 era). The native view is expensive, though: every present forces
+    // a raster flushSubWindow blend of the pan region on the GUI thread.
+    // AETHER_PAN_NO_NATIVE_WINDOW=1 skips it to validate the composited path on
+    // newer Qt, where the whole window flushes through one rhi swapchain.
+    if (nativeWindowPreferred()) {
+        setAttribute(Qt::WA_NativeWindow);
+    }
 #  else
     // Warn if running under XWayland — GLX context switching between the main
     // window and child dialogs (e.g. Radio Setup) can trigger BadAccess (#1233).
@@ -1304,7 +1378,7 @@ VfoWidget* SpectrumWidget::addVfoWidget(int sliceId)
     // The flag's SmartMTR value labels are painted in our overlay pass; refresh
     // the overlay whenever they change or the flag moves.
     connect(w, &VfoWidget::smartMtrLabelsChanged, this,
-            [this]() { markOverlayDirty(); });
+            [this]() { markOverlayDirty("smartMtr"); });
     m_vfoWidgets[sliceId] = w;
     w->show();
     w->raise();
@@ -1852,6 +1926,7 @@ bool SpectrumWidget::anyDragActive() const {
         || m_draggingVfo
         || m_draggingDbm
         || m_draggingDbmRange
+        || m_draggingDssFloor
         || m_draggingTimeScale
         || m_draggingTimeScaleRate
         || m_draggingTnfId >= 0;
@@ -2794,6 +2869,10 @@ void SpectrumWidget::setDssFloorDepth(int dB) {
         s.setValue(settingsKey("Display3DFloorDepth"), QString::number(dB));
         s.save();
         m_dss.invalidate();   // CPU fallback cache; mesh re-reads each frame
+        // In 3D mode the visible dBm markings are anchored to this floor, so the
+        // cached overlay must redraw even when the span is stable.
+        markOverlayDirty();
+        emit dssFloorDepthResolved(dB);
     }
     update();
 }
@@ -3423,6 +3502,13 @@ void SpectrumWidget::handleWaterfallFrequencyFrameChange(double oldCenterMhz,
         }
         reprojectWaterfall(oldCenterMhz, oldBandwidthMhz,
                            newCenterMhz, newBandwidthMhz);
+        const float dssFallback = kiwiStream
+            ? kKiwiSdrWaterfallMinDbm
+            : m_refLevel - m_dynamicRange;
+        m_dss.reprojectFrequencyFrame(oldCenterMhz, oldBandwidthMhz,
+                                      newCenterMhz, newBandwidthMhz,
+                                      dssFallback);
+        resetDssUploadState();
     };
 
     // #3668 (KiwiSDR integration) replaced #3578's single per-pan reproject with
@@ -3519,6 +3605,8 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_kiwiSdrAutoRangeValid = false;
     m_kiwiSdrFftTraceFloorDbm = -1000.0f;
     m_kiwiSdrFftTraceFloorValid = false;
+    m_dss.clear();
+    resetDssUploadState();
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
@@ -3608,6 +3696,7 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.kiwiLastWaterfallCenterMhz = m_kiwiSdrLastWaterfallCenterMhz;
     updated.kiwiLastWaterfallBandwidthMhz = m_kiwiSdrLastWaterfallBandwidthMhz;
     updated.kiwiLastWaterfallFrameValid = m_kiwiSdrLastWaterfallFrameValid;
+    updated.dss = std::move(m_dss);
     updated.kiwiAutoFloorDbm = m_kiwiSdrAutoFloorDbm;
     updated.kiwiAutoCeilDbm = m_kiwiSdrAutoCeilDbm;
     updated.kiwiAutoRangeValid = m_kiwiSdrAutoRangeValid;
@@ -3669,11 +3758,13 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     m_kiwiSdrLastWaterfallCenterMhz = restored.kiwiLastWaterfallCenterMhz;
     m_kiwiSdrLastWaterfallBandwidthMhz = restored.kiwiLastWaterfallBandwidthMhz;
     m_kiwiSdrLastWaterfallFrameValid = restored.kiwiLastWaterfallFrameValid;
+    m_dss = std::move(restored.dss);
     m_kiwiSdrAutoFloorDbm = restored.kiwiAutoFloorDbm;
     m_kiwiSdrAutoCeilDbm = restored.kiwiAutoCeilDbm;
     m_kiwiSdrAutoRangeValid = restored.kiwiAutoRangeValid;
     m_kiwiSdrFftTraceFloorDbm = restored.kiwiFftTraceFloorDbm;
     m_kiwiSdrFftTraceFloorValid = restored.kiwiFftTraceFloorValid;
+    resetDssUploadState();
 #ifdef AETHER_GPU_SPECTRUM
     m_wfTexFullUpload = true;
 #endif
@@ -4165,8 +4256,11 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterMhz, double oldBandwidth
 bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthMhz,
                                        double newCenterMhz, double newBandwidthMhz)
 {
+    const bool hadSpectrum = !m_bins.isEmpty() || !m_smoothed.isEmpty()
+        || !m_kiwiSdrFftTrace.isEmpty();
     if (oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
-        return false;
+        m_resetFftSmoothingOnNextFrame = m_resetFftSmoothingOnNextFrame || hadSpectrum;
+        return hadSpectrum;
     }
 
     const double oldStartMhz = oldCenterMhz - oldBandwidthMhz / 2.0;
@@ -4176,7 +4270,11 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
     const double overlapStartMhz = std::max(oldStartMhz, newStartMhz);
     const double overlapEndMhz = std::min(oldEndMhz, newEndMhz);
     if (overlapEndMhz <= overlapStartMhz) {
-        return false;
+        // Large gesture jumps can have no overlap with the previous spectrum
+        // frame. Keep the last trace visible until the next real FFT row instead
+        // of flashing the line off for one frame.
+        m_resetFftSmoothingOnNextFrame = m_resetFftSmoothingOnNextFrame || hadSpectrum;
+        return hadSpectrum;
     }
 
     auto reprojectBins = [&](QVector<float>& bins, float fallback) {
@@ -4860,6 +4958,13 @@ void SpectrumWidget::setSliceInfo(int sliceId, bool isTxSlice)
 void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
 {
     PerfUpdateScope perfScope(PerfUpdateScope::Kind::Panadapter);
+    m_panStats.updateSpectrumCalls++;
+    struct IngestCost {
+        quint64& acc;
+        QElapsedTimer t;
+        explicit IngestCost(quint64& a) : acc(a) { t.start(); }
+        ~IngestCost() { acc += static_cast<quint64>(t.nsecsElapsed() / 1000); }
+    } panStatsIngestCost(m_panStats.updateSpectrumUs);
     if (!binsDbm.isEmpty()) {
         recordPanadapterFrame();
         if (PerfTelemetry::instance().enabled())
@@ -5402,10 +5507,6 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
         return;
     }
 
-    // Feed the 3D rolling history from the KiwiSDR FFT rows too (the Flex path
-    // feeds from updateSpectrum), so the stacked-trace surface works on KiwiSDR.
-    m_dss.pushRow(binsDbm);
-
     const bool visibleStream = beginWaterfallStreamWrite(true);
     auto restoreStream = qScopeGuard([&] {
         endWaterfallStreamWrite(true, visibleStream);
@@ -5453,6 +5554,17 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
     }
 
     const QVector<float> smoothedBins = smoothKiwiSdrWaterfallBins(binsDbm);
+    if (m_kiwiSdrWaterfallActive && rowHasUsableTraceCoverage) {
+        // 3DSS rows must be in the visible panadapter frequency frame. Raw Kiwi
+        // rows often span a wider quantized server window, so feeding them
+        // directly makes the stacked trace drift away from the remapped waterfall.
+        const QVector<float> kiwiDssTrace = KiwiSdrTraceMath::mapRowToTrace(
+            smoothedBins, DssRenderer::kCols, rowCenterMhz, rowBandwidthMhz,
+            m_centerMhz, m_bandwidthMhz, kKiwiSdrWaterfallMinDbm);
+        if (!kiwiDssTrace.isEmpty()) {
+            m_dss.pushRow(kiwiDssTrace);
+        }
+    }
     if (m_kiwiSdrWaterfallActive && destWidth > 0 && rowHasUsableTraceCoverage) {
         // The waterfall preserves narrow peaks, but the FFT line must not rise
         // just because a pan/zoom step changes the sampled row window. Average
@@ -5860,6 +5972,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             const Qt::KeyboardModifiers modifiers =
                 ev->modifiers() | QGuiApplication::keyboardModifiers();
             const bool primaryClick = ev->button() == Qt::LeftButton;
+            const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
 #ifdef Q_OS_MAC
             const bool rangeDrag = modifiers.testFlag(Qt::ControlModifier)
                 || modifiers.testFlag(Qt::MetaModifier);
@@ -5900,6 +6013,14 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     markOverlayDirty();
                     refreshNoiseFloorTarget(true, true);
                     emit dbmRangeChangeRequested(bottom, m_refLevel);
+                    ev->accept();
+                    return;
+                }
+                if (is3D) {
+                    m_draggingDssFloor = true;
+                    m_dbmDragStartY = y;
+                    m_dssFloorDragStartDepth = dssFloorDepth();
+                    setSpectrumCursor(Qt::SizeVerCursor);
                     ev->accept();
                     return;
                 }
@@ -6572,6 +6693,18 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         return;
     }
 
+    if (m_draggingDssFloor) {
+        constexpr int kDssFloorDragRangeDb = 24;
+        const int dragHeight = std::max(1, specH);
+        const int dy = m_dbmDragStartY - y;
+        const int deltaDb = static_cast<int>(
+            std::lround((static_cast<double>(dy) / dragHeight) * kDssFloorDragRangeDb));
+        setDssFloorDepth(m_dssFloorDragStartDepth + deltaDb);
+        setSpectrumCursor(Qt::SizeVerCursor);
+        ev->accept();
+        return;
+    }
+
     if (m_draggingDbm) {
         const int dragHeight = std::max(1, specH);
         const int dy = y - m_dbmDragStartY;
@@ -6766,15 +6899,23 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
                 // level rather than inside a macro call — MSVC strictly
                 // rejects preprocessor directives inside macro arguments.
                 const QRect stripRect(stripX, 0, DBM_STRIP_W, specH);
-                static const QString tip =
-                    "<b>dBm scale</b><br>"
-                    "Drag &mdash; pan reference level<br>"
+                const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
 #ifdef Q_OS_MAC
-                    "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>"
+                const QString rangeDragTip =
+                    "Ctrl-drag or &#8984;-drag &mdash; zoom span (anchor at bottom)<br>";
 #else
-                    "Ctrl-drag &mdash; zoom span (anchor at bottom)<br>"
+                const QString rangeDragTip =
+                    "Ctrl-drag &mdash; zoom span (anchor at bottom)<br>";
 #endif
-                    "&#9650; / &#9660; &mdash; &plusmn;10 dB steps";
+                const QString tip =
+                    QString(is3D
+                        ? "<b>3D dBm scale</b><br>"
+                          "Drag &mdash; adjust 3D Floor<br>%1"
+                          "&#9650; / &#9660; &mdash; &plusmn;10 dB steps"
+                        : "<b>dBm scale</b><br>"
+                          "Drag &mdash; pan reference level<br>%1"
+                          "&#9650; / &#9660; &mdash; &plusmn;10 dB steps")
+                    .arg(rangeDragTip);
                 QToolTip::showText(ev->globalPosition().toPoint() + QPoint(0, 20),
                                    tip, this, stripRect);
             } else {
@@ -6886,6 +7027,12 @@ void SpectrumWidget::mouseReleaseEvent(QMouseEvent* ev)
         if (width() >= 100 && spectrumPixelHeight() >= 20) {
             emit dimensionsChanged(width(), spectrumPixelHeight());
         }
+        ev->accept();
+        return;
+    }
+    if (m_draggingDssFloor) {
+        m_draggingDssFloor = false;
+        setSpectrumCursor(Qt::CrossCursor);
         ev->accept();
         return;
     }
@@ -7164,14 +7311,34 @@ void SpectrumWidget::setLeanMode(bool on)
 
 void SpectrumWidget::leanCappedUpdate()
 {
-    if (m_leanMode) {
-        if (m_leanRepaintClock.isValid()
-            && m_leanRepaintClock.elapsed() < kLeanFrameMs) {
-            return;  // drop frames above ~30 Hz (kLeanFrameMs = 33)
-        }
-        m_leanRepaintClock.restart();
+    // Data-driven repaints (FFT frames, waterfall rows) coalesce into one
+    // present per slot; interactive paths still call update() directly so
+    // input latency is unaffected. Lean mode drops excess frames outright
+    // (~30 Hz cap); normal mode never drops — a trailing update presents
+    // whatever arrived inside the slot.
+    const int slotMs = m_leanMode ? kLeanFrameMs : kPresentCoalesceMs;
+    if (!m_leanRepaintClock.isValid()) {
+        m_leanRepaintClock.start();
+        update();
+        return;
     }
-    update();
+    const qint64 sinceMs = m_leanRepaintClock.elapsed();
+    if (sinceMs >= slotMs) {
+        m_leanRepaintClock.restart();
+        update();
+        return;
+    }
+    if (m_leanMode) {
+        return;  // drop frames above ~30 Hz (kLeanFrameMs = 33)
+    }
+    if (!m_presentPending) {
+        m_presentPending = true;
+        QTimer::singleShot(static_cast<int>(slotMs - sinceMs), this, [this]() {
+            m_presentPending = false;
+            m_leanRepaintClock.restart();
+            update();
+        });
+    }
 }
 
 void SpectrumWidget::setBackgroundImage(const QString& path)
@@ -7561,10 +7728,10 @@ float SpectrumWidget::dssFloorDbm() const
 
 float SpectrumWidget::dssSpanDb() const
 {
-    // Span from the noise floor up to the Ref level. Ref drag still controls
-    // vertical zoom; the clamp keeps the wide 100-130 dB Flex window from
-    // flattening signals, and a small floor keeps weak bands legible.
-    const float span = m_refLevel - dssFloorDbm();
+    // The dB-per-height scale follows the normal panadapter dBm range, not the
+    // 3D Floor depth. The floor control shifts the surface reference; Ctrl-drag
+    // on the dBm strip remains the gesture that changes the scale/span.
+    const float span = m_dynamicRange;
     return std::clamp(span, 45.0f, 120.0f);
 }
 
@@ -7581,6 +7748,17 @@ const QImage& SpectrumWidget::buildDssImage(const QSize& px, int scaleStripPx)
     };
     return m_dss.image(px, scaleStripPx, floorDbm, rangeDb, m_dssZCurve,
                        palette, dssPaletteToken(), m_bgFillColor);
+}
+
+void SpectrumWidget::resetDssUploadState()
+{
+    m_dss.invalidate();
+#ifdef AETHER_GPU_SPECTRUM
+    m_dssTexNeedsUpload = true;
+    m_dssLastUploadedGen = ~0ull;
+    m_dssMeshHeadUploaded = -1;
+    m_dssMeshRowGenUploaded = ~0ull;
+#endif
 }
 
 QRgb SpectrumWidget::kiwiSdrLevelToRgb(float level) const
@@ -7974,70 +8152,73 @@ void SpectrumWidget::initSpectrumPipeline()
 {
     QRhi* r = rhi();
 
-    // Dynamic vertex buffers: two 2N triangle-strip line passes (feather + core)
-    // and one 2N triangle-strip fill.
-    m_fftLineVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
-                                 kMaxFftBins * 4 * kFftVertStride * sizeof(float));
-    m_fftLineVbo->create();
+    // Column texture is (re)created at the spectrum viewport width in
+    // renderGpuFrame; only the fixed resources are built here. R32F is
+    // universal on the desktop backends; fall back to R16F (mandatory
+    // linear-filterable since GLES3) for anything that lacks it.
+    m_fftColFormat = r->isTextureFormatSupported(QRhiTexture::R32F)
+        ? QRhiTexture::R32F : QRhiTexture::R16F;
+    m_fftScopeUbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
+                                 5 * 4 * sizeof(float));
+    m_fftScopeUbo->create();
 
-    m_fftFillVbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer,
-                                 kMaxFftBins * 2 * kFftVertStride * sizeof(float));
-    m_fftFillVbo->create();
+    // LINEAR column sampling interpolates the trace between device pixel
+    // columns exactly like the old per-point polyline did between vertices.
+    m_fftColSampler = r->newSampler(QRhiSampler::Linear, QRhiSampler::Linear,
+                                    QRhiSampler::None,
+                                    QRhiSampler::ClampToEdge,
+                                    QRhiSampler::ClampToEdge);
+    m_fftColSampler->create();
 
-    // No uniforms — color is per-vertex
-    m_fftSrb = r->newShaderResourceBindings();
-    m_fftSrb->setBindings({});
-    m_fftSrb->create();
-
-    QShader vs = loadShader(":/shaders/resources/shaders/spectrum.vert.qsb");
-    QShader fs = loadShader(":/shaders/resources/shaders/spectrum.frag.qsb");
+    QShader vs = loadShader(":/shaders/resources/shaders/overlay.vert.qsb");
+    QShader fs = loadShader(":/shaders/resources/shaders/panscope.frag.qsb");
     if (!vs.isValid() || !fs.isValid()) {
-        qWarning() << "SpectrumWidget: spectrum shader load failed";
+        qWarning() << "SpectrumWidget: panscope shader load failed";
         return;
     }
 
+    // Same full-viewport quad layout as the overlay pipeline (reuses m_ovVbo).
     QRhiVertexInputLayout layout;
-    layout.setBindings({{kFftVertStride * sizeof(float)}});  // stride: 7 floats
+    layout.setBindings({{4 * sizeof(float)}});
     layout.setAttributes({
-        {0, 0, QRhiVertexInputAttribute::Float2, 0},                     // position
-        {0, 1, QRhiVertexInputAttribute::Float4, 2 * sizeof(float)},     // color
-        {0, 2, QRhiVertexInputAttribute::Float,  6 * sizeof(float)},     // edge
+        {0, 0, QRhiVertexInputAttribute::Float2, 0},                   // position
+        {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},   // texcoord
     });
 
+    // panscope.frag emits premultiplied color.
     QRhiGraphicsPipeline::TargetBlend blend;
     blend.enable = true;
-    blend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+    blend.srcColor = QRhiGraphicsPipeline::One;
     blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
     blend.srcAlpha = QRhiGraphicsPipeline::One;
     blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
 
-    // Fill pipeline (triangle strip)
-    m_fftFillPipeline = r->newGraphicsPipeline();
-    m_fftFillPipeline->setShaderStages({
+    m_fftScopePipeline = r->newGraphicsPipeline();
+    m_fftScopePipeline->setShaderStages({
         {QRhiShaderStage::Vertex, vs},
         {QRhiShaderStage::Fragment, fs},
     });
-    m_fftFillPipeline->setVertexInputLayout(layout);
-    m_fftFillPipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
-    m_fftFillPipeline->setShaderResourceBindings(m_fftSrb);
-    m_fftFillPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
-    m_fftFillPipeline->setTargetBlends({blend});
-    m_fftFillPipeline->create();
-
-    // Line pipeline (line strip)
-    m_fftLinePipeline = r->newGraphicsPipeline();
-    m_fftLinePipeline->setShaderStages({
-        {QRhiShaderStage::Vertex, vs},
-        {QRhiShaderStage::Fragment, fs},
+    m_fftScopePipeline->setVertexInputLayout(layout);
+    m_fftScopePipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    // Placeholder-width column texture so the SRB is valid from the first
+    // frame; renderGpuFrame recreates it at the real viewport width.
+    m_fftColTexW = 16;
+    m_fftColTex = r->newTexture(m_fftColFormat, QSize(m_fftColTexW, 1));
+    m_fftColTex->create();
+    m_fftScopeSrb = r->newShaderResourceBindings();
+    m_fftScopeSrb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0, QRhiShaderResourceBinding::FragmentStage, m_fftScopeUbo),
+        QRhiShaderResourceBinding::sampledTexture(
+            1, QRhiShaderResourceBinding::FragmentStage, m_fftColTex, m_fftColSampler),
     });
-    m_fftLinePipeline->setVertexInputLayout(layout);
-    m_fftLinePipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
-    m_fftLinePipeline->setShaderResourceBindings(m_fftSrb);
-    m_fftLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
-    m_fftLinePipeline->setTargetBlends({blend});
-    m_fftLinePipeline->create();
+    m_fftScopeSrb->create();
+    m_fftScopePipeline->setShaderResourceBindings(m_fftScopeSrb);
+    m_fftScopePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    m_fftScopePipeline->setTargetBlends({blend});
+    m_fftScopePipeline->create();
 
-    qDebug() << "SpectrumWidget: spectrum pipeline created (vertex-colored)";
+    qDebug() << "SpectrumWidget: spectrum pipeline created (per-pixel columns)";
 }
 
 void SpectrumWidget::uploadDssPaletteLut(QRhiResourceUpdateBatch* batch,
@@ -8093,8 +8274,8 @@ void SpectrumWidget::initDssMeshPipeline()
 
     const int cols = m_dss.cols();
     const int rows = m_dss.rows();
-    const int fillVerts = rows * cols * 2;  // ridge + floor per (col,row)
-    const int lineVerts = rows * cols;      // ridge-only outline
+    const int fillVerts = rows * dssFillVerticesPerRow();
+    const int lineVerts = rows * dssLineVerticesPerRow();
 
     m_dssMeshVbo = r->newBuffer(QRhiBuffer::Immutable, QRhiBuffer::VertexBuffer,
                                 fillVerts * 3 * sizeof(float));
@@ -8144,15 +8325,15 @@ void SpectrumWidget::initDssMeshPipeline()
     layout.setBindings({{3 * sizeof(float)}});
     layout.setAttributes({{0, 0, QRhiVertexInputAttribute::Float3, 0}});  // u, v, edge
 
-    // Fill pipeline — opaque triangle strips (occlusion via back-to-front order).
+    // Fill pipeline — opaque triangle lists (occlusion via back-to-front order).
     m_dssMeshFillPipeline = r->newGraphicsPipeline();
     m_dssMeshFillPipeline->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
     m_dssMeshFillPipeline->setVertexInputLayout(layout);
-    m_dssMeshFillPipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    m_dssMeshFillPipeline->setTopology(QRhiGraphicsPipeline::Triangles);
     m_dssMeshFillPipeline->setShaderResourceBindings(m_dssMeshSrb);
     m_dssMeshFillPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
 
-    // Outline pipeline — alpha-blended line strips (the dim trace line).
+    // Outline pipeline — alpha-blended line segments (the dim trace line).
     QRhiGraphicsPipeline::TargetBlend lblend;
     lblend.enable = true;
     lblend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
@@ -8162,7 +8343,7 @@ void SpectrumWidget::initDssMeshPipeline()
     m_dssMeshLinePipeline = r->newGraphicsPipeline();
     m_dssMeshLinePipeline->setShaderStages({{QRhiShaderStage::Vertex, vs}, {QRhiShaderStage::Fragment, fs}});
     m_dssMeshLinePipeline->setVertexInputLayout(layout);
-    m_dssMeshLinePipeline->setTopology(QRhiGraphicsPipeline::LineStrip);
+    m_dssMeshLinePipeline->setTopology(QRhiGraphicsPipeline::Lines);
     m_dssMeshLinePipeline->setShaderResourceBindings(m_dssMeshSrb);
     m_dssMeshLinePipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
     m_dssMeshLinePipeline->setTargetBlends({lblend});
@@ -8173,6 +8354,7 @@ void SpectrumWidget::initDssMeshPipeline()
     }
 
     m_dssMeshHeadUploaded = -1;
+    m_dssMeshRowGenUploaded = ~0ull;
     m_dssLutToken = ~0ull;
     m_dssMeshReady = true;
     qDebug() << "SpectrumWidget: stacked-trace mesh pipeline created" << cols << "x" << rows;
@@ -8209,15 +8391,21 @@ void SpectrumWidget::initialize(QRhiCommandBuffer* cb)
         const int rows = m_dss.rows();
         QVector<float> fill;
         QVector<float> line;
-        fill.reserve(rows * cols * 2 * 3);
-        line.reserve(rows * cols * 3);
-        for (int rr = 0; rr < rows; ++rr) {
+        fill.reserve(rows * dssFillVerticesPerRow() * 3);
+        line.reserve(rows * dssLineVerticesPerRow() * 3);
+        for (int rr = rows - 1; rr >= 0; --rr) {
             const float v = static_cast<float>(rr) / rows;   // 0 front .. ~1 back
-            for (int cc = 0; cc < cols; ++cc) {
-                const float u = (cols > 1) ? static_cast<float>(cc) / (cols - 1) : 0.0f;
-                fill << u << v << 0.0f;    // ridge vertex
-                fill << u << v << 1.0f;    // floor vertex (down to plot bottom)
-                line << u << v << -1.0f;   // outline vertex
+            for (int cc = 0; cc + 1 < cols; ++cc) {
+                const float u0 = static_cast<float>(cc) / (cols - 1);
+                const float u1 = static_cast<float>(cc + 1) / (cols - 1);
+                appendDssVertex(fill, u0, v, 0.0f);   // ridge
+                appendDssVertex(fill, u0, v, 1.0f);   // floor
+                appendDssVertex(fill, u1, v, 0.0f);   // next ridge
+                appendDssVertex(fill, u1, v, 0.0f);
+                appendDssVertex(fill, u0, v, 1.0f);
+                appendDssVertex(fill, u1, v, 1.0f);   // next floor
+                appendDssVertex(line, u0, v, -1.0f);
+                appendDssVertex(line, u1, v, -1.0f);
             }
         }
         batch->uploadStaticBuffer(m_dssMeshVbo, fill.constData());
@@ -8290,6 +8478,15 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const bool perfEnabled = PerfTelemetry::instance().enabled();
     const qint64 perfStartNs = perfEnabled ? PerfTelemetry::nowNs() : 0;
 
+    // panstats: whole CPU-side frame prep + encode (RAII catches every exit).
+    m_panStats.gpuFrames++;
+    struct FrameCost {
+        quint64& acc;
+        QElapsedTimer t;
+        explicit FrameCost(quint64& a) : acc(a) { t.start(); }
+        ~FrameCost() { acc += static_cast<quint64>(t.nsecsElapsed() / 1000); }
+    } panStatsFrameCost(m_panStats.gpuFrameUs);
+
     const int chromeH = freqScaleH() + DIVIDER_H;
     const int contentH = h - chromeH;
     const int specH = static_cast<int>(contentH * m_spectrumFrac);
@@ -8298,7 +8495,6 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const QRect specRect(0, 0, w, specH);
     const QRect wfRect(0, wfY, w, wfH);
     int fftTracePointCount = 0;
-    int fftLineStripVertexCount = 0;
 
     // 3DSS replaces only the spectrum trace: the surface fills specRect and the
     // waterfall, divider, freq scale, and all overlays keep their normal 2D
@@ -8308,14 +8504,21 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
     // Detect display state changes that may bypass markOverlayDirty()
     {
+        // In 3D the dBm scale is anchored to the noise floor, which drifts every
+        // FFT frame (dssFloorDbm() reads the measured floor, quantised to 0.5 dB).
+        // The surface UBO re-reads it per frame, so without this the surface
+        // would shift while the cached scale labels stay stale (#3937). In 2D the
+        // scale is Ref-anchored, so the floor is left out of the check there.
+        const float dssFloor = is3D ? dssFloorDbm() : m_lastDetectDssFloor;
         if (m_centerMhz != m_lastDetectCenter || m_bandwidthMhz != m_lastDetectBw ||
             m_refLevel != m_lastDetectRef || m_dynamicRange != m_lastDetectDyn ||
             m_spectrumFrac != m_lastDetectFrac ||
             m_wnbActive != m_lastDetectWnb ||
             m_wnbUpdating != m_lastDetectWnbUpdating ||
             m_rfGainValue != m_lastDetectRfGain ||
-            m_wideActive != m_lastDetectWide) {
-            markOverlayDirty();
+            m_wideActive != m_lastDetectWide ||
+            dssFloor != m_lastDetectDssFloor) {
+            markOverlayDirty("detect");
             m_lastDetectCenter = m_centerMhz; m_lastDetectBw = m_bandwidthMhz;
             m_lastDetectRef = m_refLevel; m_lastDetectDyn = m_dynamicRange;
             m_lastDetectFrac = m_spectrumFrac;
@@ -8323,6 +8526,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             m_lastDetectWnbUpdating = m_wnbUpdating;
             m_lastDetectRfGain = m_rfGainValue;
             m_lastDetectWide = m_wideActive;
+            m_lastDetectDssFloor = dssFloor;
         }
     }
 
@@ -8349,6 +8553,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             QImage rgba = m_waterfall.convertToFormat(QImage::Format_RGBA8888);
             QRhiTextureSubresourceUploadDescription desc(rgba);
             batch->uploadTexture(m_wfGpuTex, QRhiTextureUploadEntry(0, 0, desc));
+            m_panStats.wfUploadBytes += static_cast<quint64>(rgba.sizeInBytes());
             if (perfEnabled)
                 PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::WaterfallFull);
             m_wfLastUploadedRow = m_wfWriteRow;
@@ -8383,6 +8588,8 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             if (!entries.isEmpty()) {
                 uploadDesc.setEntries(entries.begin(), entries.end());
                 batch->uploadTexture(m_wfGpuTex, uploadDesc);
+                m_panStats.wfUploadBytes +=
+                    static_cast<quint64>(entries.size()) * m_wfGpuTexW * 4;
                 if (perfEnabled) {
                     PerfTelemetry::instance().recordGpuUpload(
                         PerfTelemetry::GpuUploadKind::WaterfallIncremental);
@@ -8429,6 +8636,12 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             // panadapter resize doesn't touch them — their quads just reposition.
             m_overlayStaticDirty = true;
         }
+
+        // panstats: time the bg + static QPainter repaints as one rebuild.
+        const bool panStatsOvRebuild = m_overlayStaticDirty;
+        QElapsedTimer panStatsOvTimer;
+        if (panStatsOvRebuild)
+            panStatsOvTimer.start();
 
         // Background-image layer — kept separate from the static overlay so
         // it can render BELOW the FFT trace (parity with software paint).
@@ -8641,10 +8854,11 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             drawConnectionAnimation(p, specRect);
             drawKiwiSdrConnectionOverlay(
                 p, QRect(0, 0, qMax(0, w - DBM_STRIP_W), h));
-            // The dBm strip is the 2D vertical scale; it doesn't apply to the 3D
-            // surface (height = floor→ref strength, not linear dBm). Keep the
-            // time scale — the waterfall below is unchanged.
-            if (!is3D) {
+            // dBm strip: both render modes use a readable full-height amplitude
+            // reference; the 3D surface itself is perspective-foreshortened.
+            if (is3D) {
+                drawDbmScale3D(p, specRect);
+            } else {
                 drawDbmScale(p, specRect);
             }
             drawTimeScale(p, wfRect);
@@ -8653,10 +8867,17 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             m_overlayNeedsUpload = true;
         }
 
+        if (panStatsOvRebuild) {
+            m_panStats.overlayRebuilds++;
+            m_panStats.overlayRebuildUs +=
+                static_cast<quint64>(panStatsOvTimer.nsecsElapsed() / 1000);
+        }
+
         // Upload overlay texture only when content changed
         if (m_overlayNeedsUpload) {
             QRhiTextureSubresourceUploadDescription ovDesc(m_overlayStatic);
             batch->uploadTexture(m_ovGpuTex, QRhiTextureUploadEntry(0, 0, ovDesc));
+            m_panStats.overlayUploadBytes += static_cast<quint64>(m_overlayStatic.sizeInBytes());
             if (perfEnabled)
                 PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::Overlay);
             m_overlayNeedsUpload = false;
@@ -8664,6 +8885,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         if (m_overlayBgNeedsUpload) {
             QRhiTextureSubresourceUploadDescription bgDesc(m_overlayBg);
             batch->uploadTexture(m_bgGpuTex, QRhiTextureUploadEntry(0, 0, bgDesc));
+            m_panStats.overlayUploadBytes += static_cast<quint64>(m_overlayBg.sizeInBytes());
             if (perfEnabled)
                 PerfTelemetry::instance().recordGpuUpload(PerfTelemetry::GpuUploadKind::Overlay);
             m_overlayBgNeedsUpload = false;
@@ -8687,45 +8909,72 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             const int rows = m_dss.rows();
             const int head = m_dss.headRing();
             const int valid = m_dss.rowCount();
+            const quint64 rowGeneration = m_dss.rowGeneration();
             // Catch-up upload: pushRow runs per FFT block (often faster than
-            // vsync), so the ring head can advance by >1 between frames. Upload
-            // every new ring slot from the last-uploaded head up to the current
-            // head — uploading only the newest would draw the skipped rows stale.
-            if (valid > 0 && head != m_dssMeshHeadUploaded) {
+            // vsync), so the ring head can advance by >1 between frames. Small
+            // catch-ups upload only changed ring slots; large catch-ups refresh the
+            // full height texture in one entry to avoid many per-row uploads right
+            // when the GUI is already behind.
+            if (valid > 0 && rowGeneration != m_dssMeshRowGenUploaded) {
                 static_assert(DssRenderer::kCols <= 65536,
                               "qfloat16 row fits a texture width");
-                int newRows = (m_dssMeshHeadUploaded < 0)
+                const quint64 rowsSinceUpload =
+                    (m_dssMeshRowGenUploaded == ~0ull
+                     || rowGeneration < m_dssMeshRowGenUploaded)
+                    ? static_cast<quint64>(valid)
+                    : rowGeneration - m_dssMeshRowGenUploaded;
+                int newRows = (m_dssMeshHeadUploaded < 0
+                               || rowsSinceUpload >= static_cast<quint64>(rows))
                     ? valid
-                    : (m_dssMeshHeadUploaded - head + rows) % rows;
+                    : static_cast<int>(rowsSinceUpload);
                 newRows = std::clamp(newRows, 0, valid);
-                QVarLengthArray<QRhiTextureUploadEntry, DssRenderer::kRows> entries;
-                m_dssRowScratch.resize(cols * int(sizeof(qfloat16)));
-                for (int n = 0; n < newRows; ++n) {
-                    const int ring = (head + n) % rows;  // head..head+newRows-1
-                    const float* srcRow = m_dss.rowDataRing(ring);
-                    // Reuse the member buffer: setData() holds a COW ref, so the
-                    // common single-new-row frame reuses it with no allocation,
-                    // while a multi-row catch-up detaches per row (still correct).
-                    qfloat16* dst = reinterpret_cast<qfloat16*>(m_dssRowScratch.data());
-                    for (int c = 0; c < cols; ++c) {
-                        dst[c] = qfloat16(srcRow[c]);
+                if (newRows > kDssMaxIncrementalUploadRows) {
+                    const int rowBytes = cols * int(sizeof(qfloat16));
+                    m_dssTextureScratch.resize(rows * rowBytes);
+                    char* textureData = m_dssTextureScratch.data();
+                    for (int ring = 0; ring < rows; ++ring) {
+                        qfloat16* dst = reinterpret_cast<qfloat16*>(textureData + ring * rowBytes);
+                        const float* srcRow = m_dss.rowDataRing(ring);
+                        for (int c = 0; c < cols; ++c) {
+                            dst[c] = qfloat16(srcRow[c]);
+                        }
                     }
-                    QRhiTextureSubresourceUploadDescription rowDesc;
-                    rowDesc.setData(m_dssRowScratch);  // descriptor keeps the bytes alive
-                    rowDesc.setSourceSize(QSize(cols, 1));
-                    rowDesc.setDestinationTopLeft(QPoint(0, ring));
-                    entries.append(QRhiTextureUploadEntry(0, 0, rowDesc));
-                }
-                if (!entries.isEmpty()) {
-                    QRhiTextureUploadDescription desc;
-                    desc.setEntries(entries.cbegin(), entries.cend());
-                    batch->uploadTexture(m_dssHeightTex, desc);
+                    QRhiTextureSubresourceUploadDescription fullDesc;
+                    fullDesc.setData(m_dssTextureScratch);
+                    fullDesc.setSourceSize(QSize(cols, rows));
+                    batch->uploadTexture(m_dssHeightTex, QRhiTextureUploadEntry(0, 0, fullDesc));
                     if (perfEnabled) {
                         PerfTelemetry::instance().recordGpuUpload(
                             PerfTelemetry::GpuUploadKind::Overlay);
                     }
+                } else {
+                    QVarLengthArray<QRhiTextureUploadEntry, kDssMaxIncrementalUploadRows> entries;
+                    m_dssRowScratch.resize(cols * int(sizeof(qfloat16)));
+                    for (int n = 0; n < newRows; ++n) {
+                        const int ring = (head + n) % rows;  // head..head+newRows-1
+                        const float* srcRow = m_dss.rowDataRing(ring);
+                        qfloat16* dst = reinterpret_cast<qfloat16*>(m_dssRowScratch.data());
+                        for (int c = 0; c < cols; ++c) {
+                            dst[c] = qfloat16(srcRow[c]);
+                        }
+                        QRhiTextureSubresourceUploadDescription rowDesc;
+                        rowDesc.setData(m_dssRowScratch);  // descriptor keeps the bytes alive
+                        rowDesc.setSourceSize(QSize(cols, 1));
+                        rowDesc.setDestinationTopLeft(QPoint(0, ring));
+                        entries.append(QRhiTextureUploadEntry(0, 0, rowDesc));
+                    }
+                    if (!entries.isEmpty()) {
+                        QRhiTextureUploadDescription desc;
+                        desc.setEntries(entries.cbegin(), entries.cend());
+                        batch->uploadTexture(m_dssHeightTex, desc);
+                        if (perfEnabled) {
+                            PerfTelemetry::instance().recordGpuUpload(
+                                PerfTelemetry::GpuUploadKind::Overlay);
+                        }
+                    }
                 }
                 m_dssMeshHeadUploaded = head;
+                m_dssMeshRowGenUploaded = rowGeneration;
             }
 
             // rowOffset carries a half-texel so the shader (texY = fract(rowOffset
@@ -8791,206 +9040,95 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         // because it shows/raises widgets, which must not happen mid-render.)
         repositionVfoFlags(specRect);
 
-        // Generate FFT spectrum vertices with baked colors. 2D only — in 3D the
-        // surface replaces the trace, so skip the trace build + vertex write
-        // entirely (they were previously built and then discarded every frame).
-        const QVector<float>* fftBinsPtr = nullptr;
-        int n = 0;
-        if (!is3D) {
-            fftBinsPtr = &buildFftDisplayTrace(
-                displaySpectrumBins(),
-                qMax(2, specRect.width() * kFftDisplayOversample));
-            n = qMin(fftBinsPtr->size(), kMaxFftBins);
+        // FFT trace columns. 2D only — in 3D the surface replaces the trace.
+        // The display trace (spatially smoothed + Catmull-Rom resampled by
+        // buildFftDisplayTrace) is sampled at one point per DEVICE pixel
+        // column, normalized to the dynamic range, and uploaded as a width×1
+        // R32F texture; panscope.frag evaluates fill + feather + core stroke
+        // per pixel. This replaces the per-frame feather/core/fill vertex
+        // bake and its ~1.4 MB/frame VBO uploads.
+        QElapsedTimer panStatsFftTimer;
+        panStatsFftTimer.start();
+        if (!is3D && m_fftScopePipeline && m_fftColTex) {
+            const float fbDpr = static_cast<float>(renderTarget()->pixelSize().width())
+                              / static_cast<float>(qMax(1, w));
+            const int cols = std::clamp(
+                static_cast<int>(std::lround(specRect.width() * fbDpr)),
+                2, kMaxFftDisplayTracePoints);
+            const QVector<float>& trace =
+                buildFftDisplayTrace(displaySpectrumBins(), cols);
+            const int n = trace.size();
+            if (n >= 2) {
+                fftTracePointCount = n;
+                if (m_fftColTexW != n) {
+                    m_fftColTexW = n;
+                    m_fftColTex->setPixelSize(QSize(n, 1));
+                    m_fftColTex->create();
+                    m_fftScopeSrb->setBindings({
+                        QRhiShaderResourceBinding::uniformBuffer(
+                            0, QRhiShaderResourceBinding::FragmentStage, m_fftScopeUbo),
+                        QRhiShaderResourceBinding::sampledTexture(
+                            1, QRhiShaderResourceBinding::FragmentStage,
+                            m_fftColTex, m_fftColSampler),
+                    });
+                    m_fftScopeSrb->create();
+                }
+
+                const float minDbm = m_refLevel - m_dynamicRange;
+                const float range = qMax(1e-3f, m_dynamicRange);
+                if (m_fftColFormat == QRhiTexture::R32F) {
+                    m_fftColScratch.resize(n * int(sizeof(float)));
+                    float* colData = reinterpret_cast<float*>(m_fftColScratch.data());
+                    for (int i = 0; i < n; ++i) {
+                        colData[i] = qBound(0.0f, (trace[i] - minDbm) / range, 1.0f);
+                    }
+                } else {  // R16F fallback (GL without float32 filtering)
+                    m_fftColScratch.resize(n * int(sizeof(qfloat16)));
+                    qfloat16* colData = reinterpret_cast<qfloat16*>(m_fftColScratch.data());
+                    for (int i = 0; i < n; ++i) {
+                        colData[i] = qfloat16(
+                            qBound(0.0f, (trace[i] - minDbm) / range, 1.0f));
+                    }
+                }
+                QRhiTextureSubresourceUploadDescription colDesc;
+                colDesc.setData(m_fftColScratch);
+                colDesc.setSourceSize(QSize(n, 1));
+                batch->uploadTexture(m_fftColTex, QRhiTextureUploadEntry(0, 0, colDesc));
+                m_panStats.fftVboBytes += static_cast<quint64>(m_fftColScratch.size());
+
+                // UBO — see panscope.frag's U block.
+                const QColor dk = m_fftFillColor.darker(300);
+                const float fa = m_fftFillAlpha;
+                const float ubo[20] = {
+                    static_cast<float>(specRect.width()) * fbDpr,   // plot: wPx
+                    static_cast<float>(specH) * fbDpr,              // hPx
+                    static_cast<float>(n),                          // columnCount
+                    1.0f,                                           // hasData
+                    // Match the old vertex bake: stroke half-widths were
+                    // DEVICE-pixel offsets with no dpr scaling.
+                    m_fftLineWidth,                                 // coreHalfWidthPx
+                    kFftLineFeatherPx,                              // featherPx
+                    kFftLineCoreAlpha,
+                    kFftLineFeatherAlpha,
+                    fa,                                             // fillAlpha
+                    m_fftHeatMap ? 1.0f : 0.0f,
+                    m_leanMode ? 1.0f : 0.0f,
+                    0.0f,
+                    static_cast<float>(m_fftFillColor.redF()),
+                    static_cast<float>(m_fftFillColor.greenF()),
+                    static_cast<float>(m_fftFillColor.blueF()),
+                    1.0f,
+                    static_cast<float>(dk.redF()),
+                    static_cast<float>(dk.greenF()),
+                    static_cast<float>(dk.blueF()),
+                    1.0f,
+                };
+                batch->updateDynamicBuffer(m_fftScopeUbo, 0, sizeof(ubo), ubo);
+            }
         }
-        // n >= 2 also guards the 1/(n-1) position step and the central-difference
-        // normal (pts[i±1]) below against a degenerate 1-bin spectrum.
-        if (n >= 2 && m_fftLineVbo && m_fftFillVbo) {
-            const QVector<float>& fftBins = *fftBinsPtr;
-            fftTracePointCount = n;
-            const float minDbm = m_refLevel - m_dynamicRange;
-            const float maxDbm = m_refLevel;
-            const float range = maxDbm - minDbm;
-            const float yBot = -1.0f;
-            const float yTop = 1.0f;
-
-            // Colors from settings
-            const float fr = m_fftFillColor.redF();
-            const float fg = m_fftFillColor.greenF();
-            const float fb = m_fftFillColor.blueF();
-            const float fa = m_leanMode ? 0.0f : m_fftFillAlpha;
-
-            // Solid fill: slider sweeps from translucent gradient to solid.
-            // At low slider: soft glow under curve (bright top, dark faint base)
-            // At high slider: converges to uniform solid fill color
-            const QColor dk = m_fftFillColor.darker(300);
-            const float topAlpha = fa;
-            const float botAlpha = fa * fa;
-            // Blend bottom color from darker(300) toward fill color as slider increases
-            const float colorBlend = fa;  // 0=full dark, 1=same as top
-            const float dr = fr + (1.0f - colorBlend) * (dk.redF() - fr);
-            const float dg = fg + (1.0f - colorBlend) * (dk.greenF() - fg);
-            const float db = fb + (1.0f - colorBlend) * (dk.blueF() - fb);
-            const float gradRange = yTop - yBot;
-
-            auto yColor = [&](float vy, float* out) {
-                const float gt = (gradRange > 0)
-                    ? qBound(0.0f, (yTop - vy) / gradRange, 1.0f) : 0.0f;
-                out[0] = fr + gt * (dr - fr);
-                out[1] = fg + gt * (dg - fg);
-                out[2] = fb + gt * (db - fb);
-                out[3] = topAlpha + gt * (botAlpha - topAlpha);
-            };
-
-            // Line vertices: two 2N triangle strips. The first is a faint,
-            // wider feather that softens QRhi triangle edges on steep peaks;
-            // the second is the normal core line.
-            fftLineStripVertexCount = n * 2;
-            m_fftLineScratch.resize(n * 4 * kFftVertStride);
-            QVector<float>& lineVerts = m_fftLineScratch;
-            // Fill vertices: 2N × (x, y, r, g, b, a, edge)
-            m_fftFillScratch.resize(n * 2 * kFftVertStride);
-            QVector<float>& fillVerts = m_fftFillScratch;
-
-            // Pre-compute positions for normal calculation
-            m_fftPtScratch.resize(n);
-            QVector<FftScratchPt>& pts = m_fftPtScratch;
-            for (int i = 0; i < n; ++i) {
-                pts[i].x = 2.0f * i / (n - 1) - 1.0f;
-                float t = qBound(0.0f, (fftBins[i] - minDbm) / range, 1.0f);
-                pts[i].y = yBot + t * (yTop - yBot);
-            }
-
-            // Compute the perpendicular normal in pixel space so the line
-            // width is a true pixel measurement regardless of the spectrum
-            // viewport's aspect ratio. The trace is predominantly horizontal,
-            // so the normal almost always points along Y; using a single
-            // NDC half-width based on width() collapses the offset to a
-            // sub-pixel value once specH is much smaller than width().
-            const QSize framePixelSize = renderTarget()->pixelSize();
-            const float frameDpr =
-                static_cast<float>(framePixelSize.width()) / static_cast<float>(qMax(1, width()));
-            const float wPx = static_cast<float>(qMax(1, specRect.width())) * frameDpr;
-            const float hPx = static_cast<float>(qMax(1, specH)) * frameDpr;
-
-            auto heatColorComponents = [this, fr, fg, fb](float t,
-                                                          float* cr,
-                                                          float* cg,
-                                                          float* cb2) {
-                if (m_fftHeatMap) {
-                    if (t < 0.25f) {
-                        const float s = t / 0.25f;
-                        *cr = 0.0f; *cg = s; *cb2 = 1.0f;
-                    } else if (t < 0.5f) {
-                        const float s = (t - 0.25f) / 0.25f;
-                        *cr = 0.0f; *cg = 1.0f; *cb2 = 1.0f - s;
-                    } else if (t < 0.75f) {
-                        const float s = (t - 0.5f) / 0.25f;
-                        *cr = s; *cg = 1.0f; *cb2 = 0.0f;
-                    } else {
-                        const float s = (t - 0.75f) / 0.25f;
-                        *cr = 1.0f; *cg = 1.0f - s; *cb2 = 0.0f;
-                    }
-                } else {
-                    *cr = fr; *cg = fg; *cb2 = fb;
-                }
-            };
-
-            auto writeLineVertex = [&](int vertexIndex, const FftScratchPt& pt,
-                                       float offsetX, float offsetY,
-                                       float t, float alpha, float edge) {
-                float cr, cg, cb2;
-                heatColorComponents(t, &cr, &cg, &cb2);
-                const int li = vertexIndex * kFftVertStride;
-                lineVerts[li]     = pt.x + offsetX;
-                lineVerts[li + 1] = pt.y + offsetY;
-                lineVerts[li + 2] = cr;
-                lineVerts[li + 3] = cg;
-                lineVerts[li + 4] = cb2;
-                lineVerts[li + 5] = alpha;
-                lineVerts[li + 6] = edge;
-            };
-
-            auto writeLineStrip = [&](int stripIndex, float halfWidthPx, float alpha) {
-                for (int i = 0; i < n; ++i) {
-                    const float t = qBound(0.0f, (fftBins[i] - minDbm) / range, 1.0f);
-
-                    // Compute perpendicular normal from adjacent points.
-                    float dx, dy;
-                    if (i == 0) {
-                        dx = pts[1].x - pts[0].x;
-                        dy = pts[1].y - pts[0].y;
-                    } else if (i == n - 1) {
-                        dx = pts[n - 1].x - pts[n - 2].x;
-                        dy = pts[n - 1].y - pts[n - 2].y;
-                    } else {
-                        dx = pts[i + 1].x - pts[i - 1].x;
-                        dy = pts[i + 1].y - pts[i - 1].y;
-                    }
-                    const float dxPx = dx * wPx * 0.5f;
-                    const float dyPx = dy * hPx * 0.5f;
-                    float lenPx = std::sqrt(dxPx * dxPx + dyPx * dyPx);
-                    if (lenPx < 1e-8f) {
-                        lenPx = 1e-8f;
-                    }
-                    const float nxPx = -dyPx / lenPx * halfWidthPx;
-                    const float nyPx =  dxPx / lenPx * halfWidthPx;
-                    const float nx = nxPx * 2.0f / wPx;
-                    const float ny = nyPx * 2.0f / hPx;
-
-                    const int baseVertex = stripIndex * fftLineStripVertexCount + i * 2;
-                    writeLineVertex(baseVertex, pts[i], nx, ny, t, alpha, 1.0f);
-                    writeLineVertex(baseVertex + 1, pts[i], -nx, -ny, t, alpha, -1.0f);
-                }
-            };
-
-            auto writeFillVertex = [&](int vertexIndex, float x, float y,
-                                       float cr, float cg, float cb2, float alpha) {
-                const int fi = vertexIndex * kFftVertStride;
-                fillVerts[fi]     = x;
-                fillVerts[fi + 1] = y;
-                fillVerts[fi + 2] = cr;
-                fillVerts[fi + 3] = cg;
-                fillVerts[fi + 4] = cb2;
-                fillVerts[fi + 5] = alpha;
-                fillVerts[fi + 6] = 0.0f;
-            };
-
-            if (m_fftLineWidth > 0.0f) {
-                writeLineStrip(0, m_fftLineWidth + kFftLineFeatherPx, kFftLineFeatherAlpha);
-                writeLineStrip(1, m_fftLineWidth, kFftLineCoreAlpha);
-            }
-
-            for (int i = 0; i < n; ++i) {
-                const float t = qBound(0.0f, (fftBins[i] - minDbm) / range, 1.0f);
-
-                float cr, cg, cb2;
-                heatColorComponents(t, &cr, &cg, &cb2);
-
-                if (m_fftHeatMap) {
-                    // Heatmap: line color at top, fade to dark blue at base
-                    writeFillVertex(i * 2, pts[i].x, pts[i].y, cr, cg, cb2, fa * 0.3f);
-                    writeFillVertex(i * 2 + 1, pts[i].x, yBot, 0.0f, 0.0f, 0.3f, fa);
-                } else {
-                    // Solid: Y-based gradient (bright at line, dark+faint at base)
-                    float topColor[4];
-                    float bottomColor[4];
-                    yColor(pts[i].y, topColor);
-                    yColor(yBot, bottomColor);
-                    writeFillVertex(i * 2, pts[i].x, pts[i].y,
-                                    topColor[0], topColor[1], topColor[2], topColor[3]);
-                    writeFillVertex(i * 2 + 1, pts[i].x, yBot,
-                                    bottomColor[0], bottomColor[1], bottomColor[2],
-                                    bottomColor[3]);
-                }
-            }
-
-            if (m_fftLineWidth > 0.0f) {
-                batch->updateDynamicBuffer(m_fftLineVbo, 0,
-                    n * 4 * kFftVertStride * sizeof(float), lineVerts.constData());
-            }
-            batch->updateDynamicBuffer(m_fftFillVbo, 0,
-                n * 2 * kFftVertStride * sizeof(float), fillVerts.constData());
-        }
+        if (!is3D)
+            m_panStats.fftBuildUs +=
+                static_cast<quint64>(panStatsFftTimer.nsecsElapsed() / 1000);
     }
 
     cb->resourceUpdate(batch);
@@ -9042,28 +9180,32 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                               static_cast<float>(h - specRect.bottom() - 1) * dpr,
                               static_cast<float>(specRect.width()) * dpr,
                               static_cast<float>(specRect.height()) * dpr);
-        const int cols = m_dss.cols();
         const int drawnRows = m_dss.rowCount();
 
-        // Opaque fill curtains, back (oldest) -> front (newest) for occlusion.
-        cb->setGraphicsPipeline(m_dssMeshFillPipeline);
-        cb->setShaderResources(m_dssMeshSrb);
-        cb->setViewport(vp);
-        {
-            const QRhiCommandBuffer::VertexInput vbuf(m_dssMeshVbo, 0);
-            cb->setVertexInput(0, 1, &vbuf);
-            for (int rr = drawnRows - 1; rr >= 0; --rr)
-                cb->draw(2 * cols, 1, rr * 2 * cols, 0);
-        }
-        // Dim per-row trace outline on top.
-        cb->setGraphicsPipeline(m_dssMeshLinePipeline);
-        cb->setShaderResources(m_dssMeshSrb);
-        cb->setViewport(vp);
-        {
-            const QRhiCommandBuffer::VertexInput vbuf(m_dssMeshLineVbo, 0);
-            cb->setVertexInput(0, 1, &vbuf);
-            for (int rr = drawnRows - 1; rr >= 0; --rr)
-                cb->draw(cols, 1, rr * cols, 0);
+        if (drawnRows > 0) {
+            // Opaque fill curtains, back (oldest) -> front (newest) for occlusion.
+            // The static VBO is already ordered back-to-front for all rows; drawing
+            // only the valid suffix keeps startup frames short while the history fills.
+            const int skippedRows = m_dss.rows() - drawnRows;
+            cb->setGraphicsPipeline(m_dssMeshFillPipeline);
+            cb->setShaderResources(m_dssMeshSrb);
+            cb->setViewport(vp);
+            {
+                const QRhiCommandBuffer::VertexInput vbuf(m_dssMeshVbo, 0);
+                cb->setVertexInput(0, 1, &vbuf);
+                cb->draw(drawnRows * dssFillVerticesPerRow(), 1,
+                         skippedRows * dssFillVerticesPerRow(), 0);
+            }
+            // Dim per-row trace outline on top.
+            cb->setGraphicsPipeline(m_dssMeshLinePipeline);
+            cb->setShaderResources(m_dssMeshSrb);
+            cb->setViewport(vp);
+            {
+                const QRhiCommandBuffer::VertexInput vbuf(m_dssMeshLineVbo, 0);
+                cb->setVertexInput(0, 1, &vbuf);
+                cb->draw(drawnRows * dssLineVerticesPerRow(), 1,
+                         skippedRows * dssLineVerticesPerRow(), 0);
+            }
         }
     } else if (is3D && m_ovPipeline && m_dssSrb && m_dssTexW > 0) {
         // Cached-image fallback quad, stretched to the specRect viewport.
@@ -9078,33 +9220,20 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         cb->draw(4);
     }
 
-    // Draw FFT spectrum — viewport restricted to spectrum rect (2D only)
-    if (!is3D && m_fftFillPipeline && m_fftLinePipeline && fftTracePointCount > 0) {
-        const int n = fftTracePointCount;
+    // Draw FFT spectrum — viewport restricted to spectrum rect (2D only).
+    // One full-viewport quad; panscope.frag evaluates fill + feather + core
+    // stroke per pixel from the column texture.
+    if (!is3D && m_fftScopePipeline && m_ovVbo && fftTracePointCount > 0) {
         float specVpX = static_cast<float>(specRect.x()) * dpr;
         float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         float specVpW = static_cast<float>(specRect.width()) * dpr;
         float specVpH = static_cast<float>(specRect.height()) * dpr;
-        QRhiViewport specVp(specVpX, specVpY, specVpW, specVpH);
-
-        // Fill pass
-        cb->setGraphicsPipeline(m_fftFillPipeline);
-        cb->setShaderResources(m_fftSrb);
-        cb->setViewport(specVp);
-        const QRhiCommandBuffer::VertexInput fillVbuf(m_fftFillVbo, 0);
-        cb->setVertexInput(0, 1, &fillVbuf);
-        cb->draw(n * 2);
-
-        // Line pass (skip when line width is 0 = "Off")
-        if (m_fftLineWidth > 0.0f) {
-            cb->setGraphicsPipeline(m_fftLinePipeline);
-            cb->setShaderResources(m_fftSrb);
-            cb->setViewport(specVp);
-            const QRhiCommandBuffer::VertexInput lineVbuf(m_fftLineVbo, 0);
-            cb->setVertexInput(0, 1, &lineVbuf);
-            cb->draw(fftLineStripVertexCount);
-            cb->draw(fftLineStripVertexCount, 1, fftLineStripVertexCount, 0);
-        }
+        cb->setGraphicsPipeline(m_fftScopePipeline);
+        cb->setShaderResources(m_fftScopeSrb);
+        cb->setViewport({specVpX, specVpY, specVpW, specVpH});
+        const QRhiCommandBuffer::VertexInput vbuf(m_ovVbo, 0);
+        cb->setVertexInput(0, 1, &vbuf);
+        cb->draw(4);
     }
 
     // Draw overlay quad — on top of FFT fill/line
@@ -9237,13 +9366,15 @@ void SpectrumWidget::releaseResources()
     delete m_dssPaletteSampler;   m_dssPaletteSampler = nullptr;
     m_dssMeshReady = false;
     m_dssMeshHeadUploaded = -1;
+    m_dssMeshRowGenUploaded = ~0ull;
     m_dssLutToken = ~0ull;
 
-    delete m_fftLinePipeline; m_fftLinePipeline = nullptr;
-    delete m_fftFillPipeline; m_fftFillPipeline = nullptr;
-    delete m_fftSrb;          m_fftSrb = nullptr;
-    delete m_fftLineVbo;      m_fftLineVbo = nullptr;
-    delete m_fftFillVbo;      m_fftFillVbo = nullptr;
+    delete m_fftScopePipeline; m_fftScopePipeline = nullptr;
+    delete m_fftScopeSrb;      m_fftScopeSrb = nullptr;
+    delete m_fftScopeUbo;      m_fftScopeUbo = nullptr;
+    delete m_fftColTex;        m_fftColTex = nullptr;
+    delete m_fftColSampler;    m_fftColSampler = nullptr;
+    m_fftColTexW = 0;
 
     m_rhiInitialized = false;
     qDebug() << "SpectrumWidget: QRhi resources released";
@@ -9264,6 +9395,16 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         return;
     }
 #endif
+
+    // panstats: software-path paint cost (GPU builds only reach here before
+    // QRhi init or after GPU teardown).
+    m_panStats.paintEvents++;
+    struct PaintCost {
+        quint64& acc;
+        QElapsedTimer t;
+        explicit PaintCost(quint64& a) : acc(a) { t.start(); }
+        ~PaintCost() { acc += static_cast<quint64>(t.nsecsElapsed() / 1000); }
+    } panStatsPaintCost(m_panStats.paintUs);
     Q_UNUSED(ev);
 
     QElapsedTimer frameTimer;
@@ -9540,8 +9681,11 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
         p.drawText(lx + 4, ly + fm.ascent() + 2, label);
     }
 
-    // dBm strip is the 2D vertical scale — not meaningful on the 3D surface.
-    if (!is3D) {
+    // dBm strip: 2D draws a linear dBm axis; 3D maps the ticks onto the front
+    // (live) trace's ridge band. Same strip chrome and click targets either way.
+    if (is3D) {
+        drawDbmScale3D(p, specRect);
+    } else {
         drawDbmScale(p, specRect);
     }
     drawTimeScale(p, wfRect);
@@ -11132,7 +11276,7 @@ void SpectrumWidget::drawFreqScale(QPainter& p, const QRect& r)
 
 // ─── dBm scale strip (right edge of FFT area) ────────────────────────────────
 
-void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
+void SpectrumWidget::drawDbmScaleChrome(QPainter& p, const QRect& specRect)
 {
     const int stripX = specRect.right() - DBM_STRIP_W + 1;
     const QRect strip(stripX, specRect.top(), DBM_STRIP_W, specRect.height());
@@ -11167,8 +11311,18 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
           << QPoint(dnCx + 5, arrowTop)
           << QPoint(dnCx,     arrowBot);
     p.drawPolygon(dnTri);
+}
 
-    // ── dBm labels ───────────────────────────────────────────────────────
+void SpectrumWidget::drawDbmScaleLabels(QPainter& p, const QRect& specRect,
+                                        float topDbm, float rangeDb)
+{
+    if (rangeDb <= 0.0f) {
+        return;
+    }
+    const int stripX = specRect.right() - DBM_STRIP_W + 1;
+
+    // ── dBm labels — full-height LINEAR axis: topDbm at the top, topDbm-rangeDb
+    //    at the baseline, evenly spaced across specRect.height(). ──────────
     QFont f = p.font();
     f.setPointSize(7);
     p.setFont(f);
@@ -11177,14 +11331,14 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
     const int labelTop = specRect.top() + DBM_ARROW_H + 4;
 
     // Use adaptive step: aim for ~4-6 labels
-    float rawStep = m_dynamicRange / 5.0f;
+    float rawStep = rangeDb / 5.0f;
     float stepDb;
     if      (rawStep >= 20.0f) stepDb = 20.0f;
     else if (rawStep >= 10.0f) stepDb = 10.0f;
     else if (rawStep >= 5.0f)  stepDb = 5.0f;
     else                        stepDb = 2.0f;
 
-    const float bottomDbm = m_refLevel - m_dynamicRange;
+    const float bottomDbm = topDbm - rangeDb;
     const float firstLabel = std::ceil(bottomDbm / stepDb) * stepDb;
 
     auto drawTickLabel = [&](float dbm, int y, int textBaseline) {
@@ -11196,8 +11350,8 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
         p.drawText(stripX + 6, textBaseline, label);
     };
 
-    for (float dbm = firstLabel; dbm <= m_refLevel; dbm += stepDb) {
-        const float frac = (m_refLevel - dbm) / m_dynamicRange;
+    for (float dbm = firstLabel; dbm <= topDbm; dbm += stepDb) {
+        const float frac = (topDbm - dbm) / rangeDb;
         const int y = specRect.top() + static_cast<int>(frac * specRect.height());
         if (y < labelTop || y > specRect.bottom() - 5) continue;
 
@@ -11208,6 +11362,29 @@ void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
     if (bottomY >= labelTop) {
         drawTickLabel(bottomDbm, bottomY, bottomY - 2);
     }
+}
+
+void SpectrumWidget::drawDbmScale(QPainter& p, const QRect& specRect)
+{
+    drawDbmScaleChrome(p, specRect);
+    drawDbmScaleLabels(p, specRect, m_refLevel, m_dynamicRange);
+}
+
+// ─── dBm scale strip for 3D stacked-trace mode ───────────────────────────────
+//
+// In 3D mode, a single right-side axis cannot be pixel-exact for every
+// perspective row. Keep it as a full-height amplitude reference anchored to the
+// 3D floor, so plain drag visibly shifts the dBm numbers and Ctrl/Meta-drag
+// changes the span.
+void SpectrumWidget::drawDbmScale3D(QPainter& p, const QRect& specRect)
+{
+    drawDbmScaleChrome(p, specRect);
+    const float floorDbm = dssFloorDbm();
+    // Round the span the same way the mesh/CPU surface do (buildDssImage /
+    // renderGpuFrame use std::round(span*2)/2) so labels and surface agree to
+    // the pixel instead of a sub-dB top/bottom skew (#3937).
+    const float span = std::round(dssSpanDb() * 2.0f) / 2.0f;
+    drawDbmScaleLabels(p, specRect, floorDbm + span, span);
 }
 
 // ─── Time scale (right edge of waterfall) ─────────────────────────────────────

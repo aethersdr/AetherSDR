@@ -11,6 +11,7 @@
 #include <QColor>
 #include <QDateTime>
 #include <QElapsedTimer>
+#include <QVariant>
 #include <QTimer>
 #include <QLabel>
 
@@ -112,6 +113,19 @@ public:
     void prepareForTopLevelChange(); // unregister QRhiWidget from the current backing-store QRhi
     void prepareForShutdown(); // tear down QRhi/native resources before QWidget backing store destruction
     QString rendererDescription() const;
+    // macOS: whether the pan gets its own native NSView (historical default —
+    // #714). AETHER_PAN_NO_NATIVE_WINDOW=1 opts out to validate the cheaper
+    // composited path (no per-present raster flushSubWindow blend).
+    static bool nativeWindowPreferred() {
+        static const bool noNative =
+            qEnvironmentVariableIntValue("AETHER_PAN_NO_NATIVE_WINDOW") == 1;
+        return !noNative;
+    }
+    // panstats (automation bridge): per-widget frame-cost counters — what the
+    // GUI thread spends preparing this panadapter's frames, split by section,
+    // plus a cause breakdown of static-overlay rebuilds. `reset` zeroes the
+    // counters after the read so successive reads measure disjoint intervals.
+    Q_INVOKABLE QVariantMap panstatsSnapshot(bool reset);
     void setConnectionAnimationVisible(bool on, const QString& label = {});
     void setKiwiSdrConnectionOverlay(bool visible,
                                      const QString& detail = {},
@@ -200,7 +214,9 @@ public:
     float spectrumFrac()  const { return m_spectrumFrac; }
     float refLevel()      const { return m_refLevel; }
     float dynamicRange()  const { return m_dynamicRange; }
-    bool isDraggingDbmScale() const { return m_draggingDbm || m_draggingDbmRange; }
+    bool isDraggingDbmScale() const {
+        return m_draggingDbm || m_draggingDbmRange || m_draggingDssFloor;
+    }
     bool pendingAutoNoiseFloorDbmRange() const {
         return m_pendingDbmRangeEcho && m_pendingDbmRangeEchoFromAutoFloor;
     }
@@ -606,6 +622,7 @@ signals:
     void dbmRangeChangeRequested(float minDbm, float maxDbm);
     void dbmRangeDragFinished(float minDbm, float maxDbm);
     void noiseFloorPositionResolved(int pos);
+    void dssFloorDepthResolved(int dB);
     void waterfallLineDurationChangeRequested(int ms);
     // TNF signals
     void tnfCreateRequested(double freqMhz);
@@ -695,6 +712,18 @@ private:
     void positionZoomButtons();
     void drawFreqScale(QPainter& p, const QRect& r);
     void drawDbmScale(QPainter& p, const QRect& specRect);
+    // Shared strip chrome (background, border, ref-adjust arrows) for both the
+    // 2D linear dBm scale and the 3D stacked-trace amplitude scale, so the
+    // strip's geometry and click targets are identical in either render mode.
+    void drawDbmScaleChrome(QPainter& p, const QRect& specRect);
+    // Shared full-height LINEAR dBm tick labels: topDbm at specRect.top(),
+    // topDbm-rangeDb at the baseline, evenly spaced.
+    void drawDbmScaleLabels(QPainter& p, const QRect& specRect,
+                            float topDbm, float rangeDb);
+    // Full-height dBm amplitude reference for 3D stacked-trace mode. It follows
+    // the floor anchor and scale span; perspective means individual history rows
+    // do not share a single pixel-exact y-axis.
+    void drawDbmScale3D(QPainter& p, const QRect& specRect);
     void drawTimeScale(QPainter& p, const QRect& wfRect);
     void drawConnectionAnimation(QPainter& p, const QRect& contentRect);
     void drawKiwiSdrConnectionOverlay(QPainter& p, const QRect& contentRect);
@@ -734,6 +763,7 @@ private:
         double kiwiLastWaterfallCenterMhz{0.0};
         double kiwiLastWaterfallBandwidthMhz{0.0};
         bool kiwiLastWaterfallFrameValid{false};
+        DssRenderer dss;
         float kiwiAutoFloorDbm{-130.0f};
         float kiwiAutoCeilDbm{-50.0f};
         bool kiwiAutoRangeValid{false};
@@ -852,6 +882,7 @@ private:
     // 3DSS — rebuild/return the cached perspective surface for the given pixel
     // size (scaleStripPx = transparent frequency-scale strip at the bottom).
     const QImage& buildDssImage(const QSize& px, int scaleStripPx);
+    void resetDssUploadState();
     // Token folding the dbmToRgb() palette inputs so the 3DSS cache rebuilds
     // when the colour mapping (scheme/gain/floor) changes.
     quint64 dssPaletteToken() const;
@@ -859,8 +890,8 @@ private:
     // measured floor for the active source (Flex or KiwiSDR), offset by the
     // user's 3D Floor depth, so the floor sits at the baseline consistently.
     float dssFloorDbm() const;
-    // dB span shown above the noise floor — Ref-derived, clamped so the wide
-    // Flex window can't flatten signals.
+    // dB span shown above the 3D floor anchor — follows the normal dBm scale,
+    // clamped so the wide Flex window can't flatten signals.
     float dssSpanDb() const;
 
     // Pixel x coordinate for a given frequency in MHz (0 = left edge).
@@ -1128,13 +1159,22 @@ private:
     int m_filterDragStartHz{0};     // filter edge Hz at grab time (#764)
     // Lean render mode state (#3283).
     bool m_leanMode{false};
-    QElapsedTimer m_leanRepaintClock;       // repaint cap in lean mode
+    QElapsedTimer m_leanRepaintClock;       // data-repaint coalescing clock
     // Each panadapter present forces a full-window backing-store→GPU texture
     // re-upload (the dominant pooled cost on large/5K windows — #3283), so the
     // present rate ~= the flush rate. 33 ms (~30 Hz) roughly halves that upload
     // load vs 60 Hz while staying visually smooth for a low-overhead mode.
     static constexpr int kLeanFrameMs = 33;
-    void leanCappedUpdate();                // update(), throttled when lean
+    // Normal-mode coalescing window: FFT frames and waterfall rows arrive as
+    // separate UDP events, so without coalescing a narrow pan schedules up to
+    // ~56 window flushes/s (30 fps FFT + 26 rows/s WF) — over the display's
+    // 60 Hz budget once WAVE/meters add theirs, which starves the swapchain
+    // drawable pool and blocks the GUI thread in nextDrawable (#3938 class).
+    // One present per 16 ms slot keeps every data frame (a trailing update
+    // fires at the slot edge) while capping flushes at ~60/s.
+    static constexpr int kPresentCoalesceMs = 16;
+    bool m_presentPending{false};           // trailing update scheduled
+    void leanCappedUpdate();                // update(), coalesced / lean-capped
     // VFO passband drag state (#404)
     bool m_draggingVfo{false};
     int  m_vfoDragOffsetHz{0};  // Hz offset from VFO at grab point (#1120)
@@ -1171,10 +1211,12 @@ private:
     static constexpr int DBM_ARROW_H = 14;  // height of each arrow button
     bool  m_draggingDbm{false};
     bool  m_draggingDbmRange{false};
+    bool  m_draggingDssFloor{false};
     int   m_dbmDragStartY{0};
     float m_dbmDragStartRef{0.0f};
     float m_dbmDragStartRange{0.0f};
     float m_dbmDragStartBottom{0.0f};
+    int   m_dssFloorDragStartDepth{0};
     // Off-screen slice indicator hit rects (parallel to m_sliceOverlays)
     QVector<QRect> m_offScreenRects;
     int  m_hoveringOffScreenIdx{-1};
@@ -1239,6 +1281,9 @@ private:
     bool   m_lastDetectWnbUpdating{false};
     int    m_lastDetectRfGain{0};
     bool   m_lastDetectWide{false};
+    // 3DSS only: the dBm scale is anchored to the (drifting) noise floor, so a
+    // floor change must redraw the cached overlay even when nothing else did.
+    float  m_lastDetectDssFloor{-1000.0f};
 
     // NB Waterfall Blanker (#277)
     bool  m_wfBlankerEnabled{false};
@@ -1423,11 +1468,11 @@ private:
     // feeds a ring-buffered R16F height texture; a static perspective grid samples
     // it in dss_mesh.vert. Geometry never rebuilds, so pan/zoom are free. Falls
     // back to the cached-image quad above when the pipeline can't be created.
-    QRhiGraphicsPipeline* m_dssMeshFillPipeline{nullptr};  // TriangleStrip, opaque
-    QRhiGraphicsPipeline* m_dssMeshLinePipeline{nullptr};  // LineStrip, alpha (outline)
+    QRhiGraphicsPipeline* m_dssMeshFillPipeline{nullptr};  // Triangles, opaque
+    QRhiGraphicsPipeline* m_dssMeshLinePipeline{nullptr};  // Lines, alpha (outline)
     QRhiShaderResourceBindings* m_dssMeshSrb{nullptr};
-    QRhiBuffer* m_dssMeshVbo{nullptr};       // curtain verts (ridge+floor), static
-    QRhiBuffer* m_dssMeshLineVbo{nullptr};   // ridge-only verts (outline), static
+    QRhiBuffer* m_dssMeshVbo{nullptr};       // batched curtain triangles, static
+    QRhiBuffer* m_dssMeshLineVbo{nullptr};   // batched ridge line segments, static
     QRhiBuffer* m_dssMeshUbo{nullptr};       // dynamic uniforms
     // std140 UBO float count — must match dss_mesh.{vert,frag}'s U block AND the
     // ubo[] writer in renderGpuFrame(). 8 scalars + texCols + 3 pad + vec4 bgFill.
@@ -1438,8 +1483,10 @@ private:
     QRhiSampler* m_dssPaletteSampler{nullptr};
     bool m_dssMeshReady{false};
     int  m_dssMeshHeadUploaded{-1};          // ring head last uploaded to heightTex
+    quint64 m_dssMeshRowGenUploaded{~0ull};  // DssRenderer rowGeneration uploaded
     quint64 m_dssLutToken{~0ull};            // token of the palette LUT last baked
     QByteArray m_dssRowScratch;              // reused qfloat16 row buffer (mesh upload)
+    QByteArray m_dssTextureScratch;          // reused qfloat16 full texture buffer
 
     void initDssMeshPipeline();
     void uploadDssPaletteLut(QRhiResourceUpdateBatch* batch, float floorDbm, float rangeDb);
@@ -1449,29 +1496,64 @@ private:
     void initSpectrumPipeline();
     void renderGpuFrame(QRhiCommandBuffer* cb);
 
-    // FFT spectrum GPU resources — vertex color, no uniforms
-    QRhiGraphicsPipeline* m_fftLinePipeline{nullptr};
-    QRhiGraphicsPipeline* m_fftFillPipeline{nullptr};
-    QRhiShaderResourceBindings* m_fftSrb{nullptr};
-    QRhiBuffer* m_fftLineVbo{nullptr};    // dynamic, feather + core line strips
-    QRhiBuffer* m_fftFillVbo{nullptr};    // dynamic, 2N × (vec2 pos + vec4 color + edge)
-    static constexpr int kMaxFftBins = 8192;
-    static constexpr int kFftVertStride = 7; // x, y, r, g, b, a, edge
-    // Reused per-frame scratch for GPU FFT-trace vertex generation — avoids a
-    // heap (re)alloc of up to 4*kMaxFftBins*kFftVertStride floats every frame on
-    // the GUI thread (renderGpuFrame). resize() keeps capacity, so steady state
-    // is alloc-free.
-    struct FftScratchPt { float x, y; };
-    QVector<float> m_fftLineScratch;
-    QVector<float> m_fftFillScratch;
-    QVector<FftScratchPt> m_fftPtScratch;
+    // FFT spectrum GPU resources — the trace is evaluated per-pixel by
+    // panscope.frag from a width×1 R32F column texture (normalized amplitude
+    // per device pixel column), drawn as one full-viewport quad. The CPU per
+    // frame only resamples the display trace to device columns and uploads
+    // ~4 bytes/column, replacing the old per-frame feather/core/fill vertex
+    // bake (~1.4 MB of VBO writes per frame at a 2140 px pan).
+    QRhiGraphicsPipeline* m_fftScopePipeline{nullptr};
+    QRhiShaderResourceBindings* m_fftScopeSrb{nullptr};
+    QRhiBuffer* m_fftScopeUbo{nullptr};
+    QRhiTexture* m_fftColTex{nullptr};
+    QRhiSampler* m_fftColSampler{nullptr};
+    QRhiTexture::Format m_fftColFormat{QRhiTexture::R32F};
+    int m_fftColTexW{0};
+    QByteArray m_fftColScratch;  // reused per-frame column staging buffer
 #endif
 
+    // ── panstats: per-widget frame-cost counters (automation bridge) ─────────
+    // Always-on: a handful of integer adds per frame plus one QElapsedTimer
+    // read per instrumented section. Snapshot/reset via panstatsSnapshot().
+    struct PanStats {
+        QElapsedTimer clock;              // wall interval since last reset
+        quint64 updateSpectrumCalls{0};   // FFT frames ingested
+        quint64 updateSpectrumUs{0};      // smoothing + floor + ingest cost
+        quint64 gpuFrames{0};             // renderGpuFrame invocations
+        quint64 gpuFrameUs{0};            // whole CPU-side frame prep + encode
+        quint64 fftBuildUs{0};            // trace resample + vertex bake
+        quint64 fftVboBytes{0};           // vertex bytes uploaded
+        quint64 overlayRebuilds{0};       // static+bg QPainter repaints
+        quint64 overlayRebuildUs{0};
+        quint64 overlayUploadBytes{0};    // static+bg texture bytes uploaded
+        quint64 wfUploadBytes{0};         // waterfall texture bytes uploaded
+        quint64 paintEvents{0};           // software-path paints
+        quint64 paintUs{0};
+        QHash<QByteArray, quint64> dirtyCauses;  // why the overlay rebuilt
+        void noteDirty(const char* cause) {
+            dirtyCauses[QByteArray(cause ? cause : "other")]++;
+        }
+        qint64 sinceMs() {
+            if (!clock.isValid())
+                clock.start();
+            return clock.elapsed();
+        }
+        void reset() {
+            *this = PanStats{};
+            clock.start();
+        }
+    } m_panStats;
+
     // Mark the static overlay for repaint and schedule a frame update.
-    // In non-GPU mode this is just update().
-    void markOverlayDirty() {
+    // In non-GPU mode this is just update(). `cause` feeds the panstats
+    // dirty-cause breakdown — annotate call sites that can fire at frame rate.
+    void markOverlayDirty(const char* cause = nullptr) {
 #ifdef AETHER_GPU_SPECTRUM
+        if (!m_overlayStaticDirty)
+            m_panStats.noteDirty(cause);
         m_overlayStaticDirty = true;
+#else
+        m_panStats.noteDirty(cause);
 #endif
         update();
     }

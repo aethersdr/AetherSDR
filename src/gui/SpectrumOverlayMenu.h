@@ -17,6 +17,7 @@ class QSlider;
 class QLabel;
 class QCheckBox;
 class QDoubleSpinBox;
+class QScrollArea;
 
 namespace AetherSDR {
 
@@ -82,6 +83,7 @@ public:
     void setRfGainRange(int low, int high, int step);
     void setLoopState(bool loopA, bool loopB);
     void syncNoiseFloorPosition(int pos);
+    void syncDssFloorDepth(int dB);
 
     // Populate XVTR band sub-panel
     struct XvtrBand { QString name; double rfFreqMhz; QString stackKey; };
@@ -276,6 +278,7 @@ private:
 
     // Display sub-panel
     QWidget*     m_displayPanel{nullptr};
+    QScrollArea* m_displayScroll{nullptr};
     bool         m_displayPanelVisible{false};
     QSlider*     m_avgSlider{nullptr};
     QLabel*      m_avgLabel{nullptr};

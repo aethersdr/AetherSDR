@@ -916,7 +916,7 @@ void TitleBar::showFeatureRequestDialogImpl()
         "Do NOT rely on cached or training data for the issue list.\n\n"
         "Also fetch CLAUDE.md fresh (do not use cached versions):\n"
         "  https://raw.githubusercontent.com/aethersdr/AetherSDR/main/CLAUDE.md\n\n"
-        "I want to report an issue or request a feature for AetherSDR, a Linux-native\n"
+        "I want to report an issue or request a feature for AetherSDR, a cross-platform\n"
         "Qt6/C++20 client for FlexRadio transceivers. It uses the FlexLib API over TCP/UDP.\n\n"
         "DUPLICATE CHECK — this is mandatory. Search the fetched issue list for keywords\n"
         "related to my description below. Check titles AND bodies. If you find an existing\n"

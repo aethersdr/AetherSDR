@@ -134,6 +134,12 @@ void TxApplet::buildUI()
         this, 80.0f);
     m_fwdGauge->setAccessibleName("Forward power gauge");
     m_fwdGauge->setAccessibleDescription("RF forward power in watts");
+    // Mouse-over readout: exact watts, so the operator isn't left estimating
+    // between the 40 W tick marks while transmitting. (#3936)
+    static_cast<HGauge*>(m_fwdGauge)->setHoverValueFormatter([](float v) {
+        return QStringLiteral("%1 W").arg(QString::number(std::lround(v)));
+    });
+    static_cast<HGauge*>(m_fwdGauge)->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_fwdGauge);
 
     // ── SWR gauge (1.0–3.0, red > 2.5) ─────────────────────────────────────
@@ -142,6 +148,11 @@ void TxApplet::buildUI()
         this, 2.0f);
     m_swrGauge->setAccessibleName("SWR gauge");
     m_swrGauge->setAccessibleDescription("Standing wave ratio");
+    // Mouse-over readout: exact ratio in the conventional N.N:1 form.
+    static_cast<HGauge*>(m_swrGauge)->setHoverValueFormatter([](float v) {
+        return QStringLiteral("%1:1").arg(QString::number(v, 'f', 2));
+    });
+    static_cast<HGauge*>(m_swrGauge)->setHoverValuePopupEnabled(true);
     vbox->addWidget(m_swrGauge);
 
     // ── RF Power slider ─────────────────────────────────────────────────────

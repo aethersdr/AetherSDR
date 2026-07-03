@@ -264,6 +264,13 @@ private:
     // press → move → release gesture so resize grips and slider handles are
     // provable end-to-end, not just via seed + read-back. (#3646 fidelity)
     QJsonObject doDrag(const QString& target, const QString& value) const;
+    // hover <target> [leave]: synthesize pointer hover over a widget so
+    // hover-driven UI (e.g. the HGauge mouse-over value readout on the TX
+    // SWR/power/ALC meters) is provable end-to-end. Bare form sends a
+    // QEnterEvent + QMouseMove at the widget centre; the 'leave' form sends a
+    // QEvent::Leave so the fade-after-exit timer can be observed. Unlike drag,
+    // no button is pressed, matching a real hover.
+    QJsonObject doHover(const QString& target, const QString& action) const;
     // showMenu <target>: pop a QToolButton/QPushButton drop-down menu, posted
     // onto the GUI event loop with the owning window raised — showing the native
     // popup from inside the socket-read callback re-enters Cocoa and segfaults on

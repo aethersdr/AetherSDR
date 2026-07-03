@@ -113,9 +113,11 @@ PanLayoutDialog::PanLayoutDialog(int maxPans, const QString& currentLayout,
     theme::setContainer(this, QStringLiteral("dialog/panLayout"));
     AetherSDR::ThemeManager::instance().applyStyleSheet(this, "QDialog { background: {{color.background.0}}; }"
                   "QLabel { color: {{color.text.primary}}; }");
-    // Fixed-size grid of thumbnails — body content is the same regardless of
-    // chrome state; the dialog wraps it.  Modal dialog; no geometry persist.
-    bodyWidget()->setFixedSize(560, 502);
+    // Fixed body width keeps the 3-column thumbnail grid centred; the height is
+    // left to the layout so the Cancel button always sits below the grid rather
+    // than being clipped up over the bottom thumbnail row when the grid is tall.
+    // Modal dialog; no geometry persist.
+    bodyWidget()->setFixedWidth(560);
     buildUI(maxPans, currentLayout);
 }
 

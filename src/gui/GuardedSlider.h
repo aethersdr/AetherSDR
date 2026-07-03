@@ -109,7 +109,11 @@ public:
         ev->accept();
     }
 
-private:
+protected:
+    // Below is protected (not private) so subclasses that override the
+    // mouse handlers for custom drag behaviour — e.g. WaterfallRateSlider's
+    // click-to-jump positioning — can still drive the same drag-value popup
+    // instead of silently losing it.
     QString dragValueText() const {
         if (m_dragValueFormatter)
             return m_dragValueFormatter(value());

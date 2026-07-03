@@ -2,6 +2,7 @@
 #include "CabExtractor.h"
 #include "LogManager.h"
 #include "OleCompoundFile.h"
+#include "models/ModelCapabilities.h"   // RadioPlatform for firmware-family routing
 
 #include <QCryptographicHash>
 #include <QDir>
@@ -32,15 +33,16 @@ QString FirmwareStager::stagingDir()
 
 QString FirmwareStager::modelToFamily(const QString& model)
 {
-    // Platform codenames (from FlexLib ModelInfo.cs):
-    //   Microburst  = FLEX-6300, 6500, 6700, 6700R       → FLEX-6x00 firmware
-    //   DeepEddy    = FLEX-6400, 6400M, 6600, 6600M      → FLEX-6x00 firmware
-    //   BigBend     = FLEX-8400, 8400M, 8600, 8600M,     → FLEX-6x00 firmware
-    //                 AU-510, AU-510M, AU-520, AU-520M
-    //   DragonFire  = FLEX-9600 (government only)         → FLEX-9600 firmware
+    // Firmware family follows the FlexLib RadioPlatform (Principle I), NOT a
+    // model-string substring:
+    //   Microburst / DeepEddy / BigBend  -> FLEX-6x00 firmware (all consumer
+    //     radios, including 8400/8600 and the AU-/ML-/MLS-/CL-/CLS- series)
+    //   DragonFire (RT-2122, government)  -> FLEX-9600 firmware
     //
-    // ALL consumer radios use FLEX-6x00 firmware.
-    if (model.contains("9600"))
+    // The old contains("9600") test misrouted both directions: ML-9600 /
+    // ML-9600W (BigBend) were sent to the government 9600 family, while RT-2122
+    // (the actual DragonFire radio) fell through to the 6x00 family.
+    if (capabilitiesFor(model).platform == RadioPlatform::DragonFire)
         return "9600";
     return "6x00";
 }

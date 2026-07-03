@@ -27,7 +27,8 @@ production; it only exists when you ask for it via an env var.
 | Visually check a dialog or applet layout | **Yes** — `grab <widget>` → view the PNG. |
 | Click a button or move a slider programmatically | **Yes** — `invoke <target> <action> [value]`. |
 | Read live model truth (freq, mode, center, dBm, NB/NR) | **Yes** — `get radio\|slice\|pan …`. Assert on state, no pixels. |
-| Key the radio (MOX/PTT/Tune) | **No** — `invoke` refuses transmit controls by design (see [TX safety](#tx-safety)). |
+| Key the radio (MOX/PTT/Tune) | **Only deliberately** — `invoke` refuses transmit controls by design; the dedicated [transmit verbs](#transmit-verbs--gated) (`key`/`cwx`/`txtest`/`atu`) work **only** under `AETHER_AUTOMATION_ALLOW_TX=1` (see [TX safety](#tx-safety)). |
+| Read client-side DSP / window / floor state | **Yes** — `get dsp`, `dumpTree` `windowState`, `floors`. |
 
 ---
 
@@ -114,6 +115,57 @@ printf '{"cmd":"ping"}\n' | nc -U "$SOCK"
 
 ## Verbs
 
+Every request is one verb. The table below is the **complete** catalog, grouped
+by category; each verb links to its detailed section. A ⚠️ marks the
+transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
+[TX safety](#tx-safety)).
+
+| Category | Verb | One-liner |
+|---|---|---|
+| **Introspection** | [`ping`](#ping) | Handshake; returns app + version. |
+| | [`dumpTree`](#dumptree) | ARIA-style snapshot of the whole widget tree. |
+| | [`grab <target> [path]`](#grab) | PNG of one widget (GPU-correct for the panadapter). |
+| | [`grab pan <index> [path]`](#grab) | Raw spectrum surface of a specific pan. |
+| | [`grab pan-visible <index> [path]`](#grab) | Pan applet incl. VFO/flag overlays (alias `pan-composite`). |
+| | [`floors`](#floors) | Per-pan measured noise + display floor (dBm). |
+| | [`whoami`](#whoami) | This bridge instance: pid, socket, label, station, `txAllowed`. |
+| **Drive** | [`invoke <target> <action> [v]`](#invoke) | Click/toggle/set/selectRow/submit/trigger a control (TX-guarded). |
+| | [`close <target>`](#close) | Close the target's top-level window. |
+| | [`drag <target> "<dx> <dy>"`](#drag-alias-mouse) | Synthesize press→move→release (alias `mouse`). |
+| | [`showMenu <target>`](#showmenu-alias-openmenu) | Pop a button's drop-down menu (alias `openMenu`). |
+| | [`contextMenu <target> [x y]`](#contextmenu) | Trigger a custom right-click menu. |
+| | [`menu list \| open <name>`](#menu) | Enumerate / pop a menu-bar menu. |
+| | [`resize <w> <h> [target]`](#resize) | Resize a window (drives panadapter `x_pixels`). |
+| | [`window <state> [target]`](#window) | maximize / restore / minimize / fullscreen. |
+| **State (`get`)** | [`get audio`](#get) | Audio-engine stream/buffer snapshot. |
+| | [`get dsp`](#get-dsp) | Client-side AetherDSP NR state (NR2…BNR). |
+| | [`get radio \| transmit \| eq \| meters`](#get) | Radio / TX-chain / EQ / meters snapshots. |
+| | [`get slice[s] \| pan[s]`](#get) | Slice & panadapter model snapshots. |
+| | [`get panstats`](#get-panstats) | Per-panadapter render-cost counters (profiling). |
+| | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
+| **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
+| | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
+| **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
+| | [`slice <action>`](#slice) | add/remove/select/tx/txant/rxant/rxsource. |
+| **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
+| | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
+| | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
+| **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
+| | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
+| | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
+| | [`record <action>`](#record) | Drive the client QSO WAV recorder. |
+| **Identity** | [`station <name>`](#station) | Set this client's MultiFlex station name. |
+| **Transmit ⚠️** | [`key ptt on\|off` / `key mox`](#key) | Key/unkey via PTT / MOX. |
+| | [`cwx send <text> \| speed <wpm> \| stop`](#cwx) | Drive the CWX CW keyer. |
+| | [`txtest twotone\|off`](#txtest) | Two-tone test signal. |
+| | [`atu bypass\|start`](#atu) | ATU bypass (no TX) / tune cycle (keys TX). |
+| | [`testtone on [hz] [db] \| off`](#testtone) | Client TX test tone into the mic path. |
+
+> **Two request forms, always interchangeable.** Bare line (`get slice active mode`)
+> or JSON (`{"cmd":"get","model":"slice","selector":"active","property":"mode"}`).
+> The JSON field names per verb are noted in each section; positional order is
+> shown in the bare-line examples.
+
 ### `ping`
 Connectivity / handshake.
 
@@ -142,11 +194,17 @@ Each `<node>`:
   "enabled": true,
   "visible": true,
   "geometry": { "x": 1, "y": 104, "w": 1448, "h": 751 },  // GLOBAL screen coords
+  "windowState": "maximized",              // top-level windows only: normal|maximized|minimized|fullscreen
   "value": "42",                           // best-effort; see below
+  "text": "NR2",                           // checkable buttons: the label (value would just be "checked")
+  "checked": false,                        // checkable buttons: explicit boolean check-state
   "range": { "min": 0, "max": 100 },       // numeric controls only (slider/spinbox)
   "items": ["LSB","USB","AM","CW"],        // QComboBox only: full option list
   "currentIndex": 1,                       // QComboBox only: selected index
   "panIndex": 0,                           // SpectrumWidget only: pass to `grab pan`/`pan close`
+  "noiseFloorDbm": -99.68,                 // SpectrumWidget only: measured floor (see `floors`)
+  "displayFloorDbm": -99.17,               // SpectrumWidget only: display floor
+  "sliceId": 0,                            // present on widgets tagged with a slice
   "keying": true,                          // present only on TX-keying controls (invoke refuses these)
   "actions": [ <action>, … ],              // QMenu only: popup actions and state
   "children": [ <node>, … ]                // present only if non-empty
@@ -191,6 +249,14 @@ present.
   selection.
 - `panIndex` — a `SpectrumWidget`'s pan index in a multi-pan layout; pass it to
   `grab pan <index>` or `pan close <index>`.
+- `windowState` — on top-level windows: `normal` / `maximized` / `minimized` /
+  `fullscreen`, so a `window` action (or a manual maximize) is assertable.
+- `text` + `checked` — on a **checkable** button, the label and an explicit
+  boolean state. `value` alone reports only `"checked"`/`"unchecked"`, which hid
+  *which* control it was (e.g. the six DSP method buttons NR2…BNR all read
+  `"checked"`); `text` restores the identity.
+- `noiseFloorDbm` / `displayFloorDbm` — a `SpectrumWidget`'s live measured floors
+  (the same values [`floors`](#floors) returns), for numeric floor assertions.
 
 ### `grab`
 PNG capture of a single widget.
@@ -259,11 +325,34 @@ the no-op is an explicit, assertable signal.
 | `setChecked` | checkable button | `true`/`false`/`on`/`off`/`1`/`0` |
 | `setValue` | slider / scrollbar / spinbox | integer (or number for double-spin) |
 | `wheel` | any visible widget | one wheel notch: `-1` or `1` |
-| `setText` | `QLineEdit` | the text |
+| `setText` | `QLineEdit` | the text (side-effect-free — does **not** submit) |
+| `submit` | `QLineEdit` | optional text, then fires `returnPressed` (retune / login / send) |
 | `setCurrentText` | `QComboBox` | item text |
 | `setCurrentIndex` | `QComboBox` | integer index |
+| `selectRow` | `QAbstractItemView` (`QTableWidget`/`QTreeWidget`/`QListWidget`) | integer row index |
 | `trigger` / `click` / `toggle` | visible `QMenu` `QAction` | — |
 | `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
+
+**`submit` vs `setText`.** `setText` only sets the field — deliberately
+side-effect-free, because several bridge-reachable fields wire irreversible
+actions to `returnPressed` (SmartLink login, manual-connect host, DX-cluster
+send). `submit` is the explicit opt-in that sets (optional) then fires
+`returnPressed` — use it to commit a frequency entry, a login, or a cluster
+command.
+
+**`selectRow`** selects a whole row in an item view (sets the current index
+**and** a full-row selection), so a dialog's row-scoped buttons (Tune / Edit /
+Remove / Disable) — which read the view's current row or selection — become
+drivable; plain `invoke click` on those buttons is a no-op until a row is
+selected. The reply echoes `selectedRow` and `selectedRowText` (first-column
+text) as the round-trip confirmation. Row index is **order-sensitive**:
+re-`dumpTree` (or re-read) after any sort, filter, or insert.
+
+```json
+→ {"cmd":"invoke","target":"Scheduled nets","action":"selectRow","value":"0"}
+← {"ok":true,"target":"Scheduled nets","class":"QTableWidget","action":"selectRow",
+   "selectedRow":0,"selectedRowText":"✓"}
+```
 
 <a name="tx-safety"></a>
 > **🚨 TX safety.** `invoke` **refuses any control that keys the transmitter**,
@@ -278,12 +367,15 @@ the no-op is an explicit, assertable signal.
 > word, so it catches keying buttons like **"Send"** that no keyword would. A
 > marked control shows `"keying": true` in `dumpTree`, so you can see what's
 > off-limits before you try. A button-scoped name heuristic
-> (`mox/ptt/tune/atu/transmit/vox/cwx`) remains as a logged belt-and-suspenders
+> (`mox/ptt/transmit/cwx`) remains as a logged belt-and-suspenders
 > fallback for any keying control that predates the marker. The fallback is
 > **whole-token anchored**: the name is split on camelCase humps and separators,
 > and a deny-word must equal a complete token — so `aprsSvcWXBOT` (svc + wxbot)
-> and `temperature` no longer false-match `cwx`/`atu`, while `moxButton` and
-> `Auto-Tune` still do. Setpoint
+> no longer false-matches `cwx`, while `moxButton` still matches `mox`. The list
+> was deliberately narrowed from the old `…/tune/atu/vox/…` set: `tune`/`atu`/`vox`
+> false-blocked **RX-only** buttons like **"Tune Now"** (net/spot retune) and VOX
+> toggles, and the genuine keying TUNE/ATU buttons all carry `markTxKeying()`
+> anyway, so the marker still covers them (#3918). Setpoint
 > **sliders/combos** like `Tune power`, `RF power`, or `VOX level` are never
 > blocked — moving a value setter can't transmit.
 >
@@ -309,18 +401,127 @@ connects).
 | `model` | `selector` | returns |
 |---|---|---|
 | `audio` | — | audio-engine snapshot (RX/TX stream state, mute, buffer counters, KiwiSDR TX mute gate) |
+| `dsp` | — | client-side AetherDSP noise-reduction state — see [`get dsp`](#get-dsp) |
 | `radio` | — | radio snapshot (name, model, version, connected, fullDuplex, transmitting, txPower, paTemp, slice/pan counts) |
 | `transmit` | — | TX-chain snapshot: RF/tune power, mic/processor/monitor, VOX/AM/DEXP, TX filter, CW (speed/pitch/breakin/delay/sidetone/iambic/monitor), ATU, APD. Validate that a TX/Phone/CW applet control reached the radio model. |
 | `equalizer` (or `eq`) | — | 8-band RX+TX graphic EQ: `rxEnabled`/`txEnabled` and `rx`/`tx` band maps keyed by label (`63`…`8k`). Validate EQ-applet slider changes. |
+| `meters` | — | `{all:[…]}` — every radio meter with `name`, `value`, `unit`, `low`/`high`, `description`, and **`age_ms`** (staleness): a meter that updates has small `age_ms` and a tracking `value`. |
 | `slices` | — | array of all slice snapshots |
 | `slice` | `active` (default) / `tx` / `<sliceId>` | one slice (sliceId, letter, frequency, mode, filterLow/High, rxAntenna, nb/nr/anf + levels, **squelch/squelchLevel, agcMode/agcThreshold, apf/apfLevel**, **adaptiveFilterEnabled/adaptiveMinLowCut/adaptiveMaxHighCut/adaptiveMinSnr/adaptiveResponse/adaptiveSplatter/adaptiveActive** (SSB adaptive RX filter — `adaptiveActive` is the live AUTO-fit state), txSlice, …) |
 | `pans` | — | array of all panadapter snapshots |
 | `pan` | `active` (default) / `<panId>` e.g. `0x40000000` | one pan (centerMhz, bandwidthMhz, min/maxDbm, rxAntenna, rfGain, fps) |
+| `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
 
-### `slice rxsource`
+### `get panstats`
+Per-panadapter (SpectrumWidget) frame-cost counters — how much GUI-thread time
+each pan spends preparing frames, split by pipeline section, for before/after
+rendering-cost proofs without a profiler attach. Counters are always on and
+cost a few integer adds per frame.
+
+```json
+→ {"cmd":"get","model":"panstats"}
+← {"ok":true,"model":"panstats","pans":[{
+   "panIndex":0,"renderMode":"2D","renderer":"GPU QRhi (Metal; Apple M1 Ultra)",
+   "widthPx":2280,"heightPx":1302,"dpr":2.0,"leanMode":false,"sinceMs":60012,
+   "fftFramesPerSec":29.6,"ingestMsPerSec":8.1,
+   "gpuFramesPerSec":29.6,"gpuFrameMsPerSec":97.4,"avgGpuFrameUs":3290.0,
+   "fftBuildMsPerSec":64.2,"fftVboBytesPerSec":42049536.0,
+   "overlayRebuildsPerSec":0.1,"overlayRebuildMsPerSec":1.9,
+   "overlayUploadBytesPerSec":3964928.0,"wfUploadBytesPerSec":18240.0,
+   "paintsPerSec":0.0,"paintMsPerSec":0.0,
+   "overlayDirtyCauses":{"smartMtr":2,"detect":1,"other":3}}]}
+```
+
+| field | meaning |
+|---|---|
+| `gpuFrameMsPerSec` | **the headline number** — main-thread ms consumed per wall-second preparing + encoding this pan's GPU frames |
+| `ingestMsPerSec` | `updateSpectrum()` cost (EMA smoothing, noise floor, waterfall fallback pacing) |
+| `fftBuildMsPerSec` / `fftVboBytesPerSec` | FFT trace resample + vertex bake cost and VBO upload volume |
+| `overlayRebuilds*`, `overlayUploadBytesPerSec` | static-overlay QPainter repaints (should be ~0/s when idle) |
+| `overlayDirtyCauses` | first-cause attribution for each overlay rebuild (`smartMtr`, `detect`, `other`) |
+| `wfUploadBytesPerSec` | waterfall texture upload volume |
+| `paintsPerSec` / `paintMsPerSec` | software-QPainter path (non-zero only before QRhi init or in non-GPU builds) |
+
+`selector` filters by pan index (`get panstats 0`) or objectName. `property`
+`reset` zeroes the counters after the read so successive reads measure
+disjoint intervals: `get panstats 0 reset`.
+
+### `get dsp`
+Client-side **AetherDSP** noise-reduction state — the counterpart to the
+radio-side `nr`/`nb`/`anf` in `get slice`. There is no widget that exposes which
+of the six AudioEngine NR modules is active and how it's tuned, so this is the
+only non-screenshot way to assert it.
+
+```json
+→ {"cmd":"get","model":"dsp"}
+← {"ok":true,"model":"dsp","dsp":{
+   "active":"none",
+   "methods":{
+     "NR2":{"enabled":false,"available":true},
+     "NR4":{"enabled":false,"available":true},
+     "MNR":{"enabled":false,"available":true},
+     "DFNR":{"enabled":false,"available":false},
+     "RN2":{"enabled":false,"available":true},
+     "BNR":{"enabled":false,"available":false}},
+   "tuning":{
+     "nr2":{"gainMax":0.6,"gainSmooth":0.85,"qspp":0.2,"gainMethod":2,"npeMethod":0,"aeFilter":true},
+     "nr4":{"reductionDb":10,"smoothing":0,"whitening":0,"maskingDepth":50,"suppression":50,"noiseMethod":0,"adaptiveNoise":true},
+     "mnr":{"strength":1},
+     "dfnr":{"attenLimitDb":100,"postFilterBeta":0},
+     "bnr":{"intensity":1}}}}
+```
+
+- `active` — the name of the **one** enabled module (the modules are mutually
+  exclusive), or `"none"`. There is **no** top-level `enabled` field.
+- `methods.<NAME>` — `enabled` (engine state) and `available` (whether this build
+  has the backend; `available:false` reflects a compile flag such as
+  `HAVE_NVIDIA_AFX` (BNR) or `HAVE_DFNR`, so the button exists but is dimmed).
+- `tuning` — per-module slider params: engine getters (`mnr`/`dfnr`) and the
+  persisted `bnr` intensity, merged with the AppSettings-persisted
+  NR2/NR4/DFNR-beta values. (BNR is the in-process NVIDIA AFX denoiser since
+  #3902 — no container, so it exposes only `intensity`.)
+- A trailing property narrows it: `get dsp active` → `{"value":"NR2"}`.
+
+### `tune`
+Set the **active slice's** frequency in MHz — the most fundamental control the
+custom-painted `VfoWidget` couldn't expose. RX/config only; despite the name it
+does **not** key (cf. `atu tune`, which does). Honors the per-slice VFO lock.
+
+```json
+→ {"cmd":"tune","value":"7.175"}
+← {"ok":true,"tune":7.175,"sliceId":0,"letter":"A"}
+```
+
+Refused with `refused: slice A is VFO-locked` when the slice is locked. To
+recenter the *pan* (band change) rather than move the slice within it, use
+[`pan center`](#pan).
+
+### `slice`
+Slice lifecycle, TX assignment, antennas, and receive source. All actions are
+RX/config — none keys the transmitter. `add`/`remove`/`tx` are async
+(radio-authoritative); re-poll `get slices`.
+
+```json
+→ {"cmd":"slice","action":"add","value":"14.074"}
+← {"ok":true,"slice":"add","freq":14.074,"requested":true,"sliceCount":2}
+
+→ {"cmd":"slice","action":"tx","value":"1"}
+← {"ok":true,"slice":"tx","id":1,"requested":true}
+```
+
+| `action` | `value` | effect |
+|---|---|---|
+| `add` | optional `<mhz>` | create a slice (radio-wide slot capacity is pre-checked; refused at the slice limit, naming any foreign occupant) |
+| `remove` | `<sliceId>` | remove a slice (refuses the last one) |
+| `select` | `<sliceId>` | make a slice the active slice (`slice set <id> active=1`) |
+| `tx` | `<sliceId>` | make a slice the TX slice — the external-split transition; radio enforces single-TX |
+| `txant` / `rxant` | `<port>` e.g. `ANT2` | set the TX/RX antenna of the TX (else active) slice; validated against the slice's antenna list — establish the dummy-load antenna before any TX-safety gate, then read back with `get slice tx txAntenna` |
+| `rxsource` (alias `source`) | see below | select the slice's receive source (Flex / virtual-Kiwi) |
+
+#### `slice rxsource`
 Selects the receive source for a slice through the same virtual-Kiwi path as
 the GUI RX antenna menus. The source selector is not a static list: it resolves
 against the operator's saved Kiwi receiver profiles by configured name, display
@@ -365,6 +566,27 @@ computed once from the press point (a `QSizeGrip` moves as the window resizes, s
 re-mapping mid-drag would overshoot) — a `140 90` grip drag grows the window by
 exactly 140×90.
 
+### `hover`
+Synthesize a pointer **hover** over a widget (no button pressed, unlike `drag`)
+so hover-driven UI is provable end-to-end. The bare form fires a `QEnterEvent`
+plus a no-button `QMouseMove` at the widget centre; the `leave` form fires a
+`QEvent::Leave` so a driver can watch a fade-after-exit timer.
+
+```json
+→ {"cmd":"hover","target":"Forward power gauge"}
+← {"ok":true,"target":"Forward power gauge","class":"QWidget","action":"enter","x":1572,"y":993}
+→ {"cmd":"hover","target":"Forward power gauge","action":"leave"}
+← {"ok":true,"target":"Forward power gauge","class":"QWidget","action":"leave", ...}
+```
+
+Used to prove the TX meter mouse-over value readout: the SWR / forward-power /
+ALC / mic-level / compression `HGauge`s pop a `DragValuePopup` badge (the same
+one the sliders flash) showing the live numeric value while hovered, which fades
+one second after the pointer leaves. Grab the badge with `grab DragValuePopup`
+— note each `HGauge` owns its own popup, so with several meters hovered the name
+resolves to the first-created one; hover a single meter per instance for an
+unambiguous grab.
+
 ### `showMenu` (alias `openMenu`)
 Pop a `QToolButton`/`QPushButton` drop-down menu. The show is posted onto the GUI
 event loop with the owning window raised + activated first — showing the native
@@ -402,6 +624,65 @@ Section-title rows (a disabled `QWidgetAction` + `QLabel`, the app's idiom for
 menu headers since `QMenu::addSection` text doesn't render under the app styling)
 serialize with `"type":"header"` and the label's text, so titles are assertable
 instead of blank rows.
+
+### `menu`
+Enumerate or pop a **menu-bar** menu. On macOS the native menu bar reparents its
+menus to top-level `QMenu`s, so `dumpTree` finds them but `menuBar()->actions()`
+is empty — this verb walks the real menu set either way.
+
+```json
+→ {"cmd":"menu","action":"list"}
+← {"ok":true,"menus":[{"title":"View","actions":[
+     {"text":"Default Dark","checkable":true,"checked":true,"enabled":true}, …]}, …]}
+
+→ {"cmd":"menu","action":"open","value":"Settings"}
+← {"ok":true,"menu":"open","title":"Settings"}
+```
+
+`menu open <name>` pops the menu (non-blocking `popup()`, so it can't deadlock the
+socket handler); follow with `dumpTree` to read it and `invoke <label> trigger` to
+choose an item. To drive a menu item whose menu is **closed**, you don't even need
+`menu open` — `invoke "<label>" trigger` resolves a menu-bar `QAction` anywhere,
+opening dialogs (AetherControl…, Network…, Radio Setup…) headlessly.
+
+### `resize`
+Resize a top-level window so the panadapter `x_pixels` (== `SpectrumWidget` width)
+reaches a realistic value for headless render-size fidelity. Without a `target`,
+the main window is resized. `full`/`default` → 1920×1080.
+
+```json
+→ {"cmd":"resize","value":"1600 900"}
+← {"ok":true,"requested":{"w":1600,"h":900},"actual":{"w":1600,"h":900},"spectrumWidth":1340}
+```
+
+Returns `spectrumWidth` (the panadapter width that becomes `x_pixels` after the
+~300 ms `dimensionsChanged` debounce re-pushes it to the radio). It resizes the
+**window**, not `x_pixels` directly, so the local FFT decoder and the radio stay
+in sync.
+
+### `window`
+Drive a top-level window's state. `resize` only ever sets explicit geometry, so an
+un-maximize was previously unprovable; `window restore` does it, and `dumpTree`
+carries `windowState` (`normal`/`maximized`/`minimized`/`fullscreen`) on every
+window node so the result is assertable (#3918). Without a `target`, the main
+window is used.
+
+```json
+→ {"cmd":"window","action":"maximize"}
+← {"ok":true,"action":"maximize","windowState":"maximized","geometry":{"w":1400,"h":800}}
+```
+
+| `action` | aliases | effect |
+|---|---|---|
+| `maximize` | `max` | `showMaximized()` |
+| `restore` | `normal`, `unmaximize` | `showNormal()` (un-maximize / un-fullscreen) |
+| `minimize` | `min` | `showMinimized()` |
+| `fullscreen` | `full` | `showFullScreen()` |
+
+State changes are synchronous (no nested event loop), so the reply's
+`windowState` is authoritative. `resize` and `window` share window-target
+resolution (`topLevelWindowForTarget`): a child `target` resolves to its
+`window()`.
 
 ### `pan`
 Panadapter lifecycle — create or tear down a pan regardless of how it was opened.
@@ -529,13 +810,47 @@ measurement.
 |---|---|---|
 | — (default) | A | UDP-orphan inventory: registered streams + orphan streams (`streamId`, `kind`, `packets`, `age_ms`) |
 | `radio` (alias `inventory`) | B | radio-authoritative display-object set: pans + waterfalls classified ours/foreign/orphan, plus `leakedWaterfalls` |
+| `resync` (alias `refresh`) | B | re-subscribe (`sub pan all`) to force the radio to re-dump every display object, then re-poll `streams radio` |
 | `reset` | A | clear the orphan tally |
 
-All `streams` actions are read-only / RX; none sends a radio command or keys the
-transmitter.
+**`streams resync`** closes the one gap Layer B can't see on its own: a waterfall
+the radio keeps allocated as a resource but no longer streams, *and* whose
+client-side view was already torn down (so both layers looked clean). It
+re-subscribes so the radio re-dumps its present-tense set; the response is just a
+trigger — re-poll `streams radio` after it settles to read the refreshed
+inventory.
+
+```json
+→ {"cmd":"streams","action":"resync"}
+← {"ok":true,"scope":"radio","resync":"requested",
+   "hint":"re-poll 'streams radio' after ~500ms for the refreshed set"}
+```
+
+The `~500ms` is a **best-effort hint, not a contract** — the re-dump is async; if
+`streams radio` still looks stale, poll again. Returns
+`not connected — cannot resync display inventory` with no radio.
+
+All `streams` actions are read-only / RX; none keys the transmitter (`resync`
+sends only the `sub pan all` subscription command).
+
+### `txwaterfall`
+Toggle the radio's **show-TX-in-waterfall** display flag (`transmit set
+show_tx_in_waterfall`), which gates whether keyed-up TX renders FFT-derived rows
+in the waterfall. Off by default; enable it so a test can confirm CWX / tune /
+ATU energy appears in the waterfall, not just in the FFT trace. This is a display
+toggle — it does **not** key the transmitter.
+
+```json
+→ {"cmd":"txwaterfall","value":"on"}
+← {"ok":true,"txwaterfall":true,"note":"radio echoes status; re-read with get transmit showTxInWaterfall"}
+```
+
+Accepts `on`/`off` (also `1`/`0`, `true`/`false`, `enable`/`disable`). The radio
+echoes the change asynchronously — re-read with `get transmit showTxInWaterfall`.
 
 ### `get sync`
-Read the Receive Sync state used by the spectrum overlay and Auto Assist.
+Read the Receive Sync state used by the spectrum overlay and Auto Assist
+(`sync`, alias `receiveSync`).
 
 ```json
 → {"cmd":"get","model":"sync"}
@@ -584,6 +899,189 @@ The JSON file contains chunks with `point`, `source`, optional `sourceId`,
 `sampleRate`, `channels`, `format: "float32le"`, `startNs`, `frames`, and
 base64 `pcmBase64`. Use `audioCapture status` for metadata only and
 `audioCapture stop` to stop early.
+
+### `floors`
+Per-pan **measured FFT noise floor** and the **display floor** (dBm), read off the
+live spectrum without a screenshot — the numeric way to assert post-TX floor
+recovery (#3804) or that the waterfall auto-range settled.
+
+```json
+→ {"cmd":"floors"}
+← {"ok":true,"floors":[{"panIndex":0,"noiseFloorDbm":-99.68,"displayFloorDbm":-99.17,"visible":true}]}
+```
+
+One entry per `SpectrumWidget` that has a real measurement; the same numbers
+appear per-node in `dumpTree` (`noiseFloorDbm`/`displayFloorDbm`/`panIndex`).
+
+### `whoami`
+Identify **this** bridge instance among concurrent bridges (each app process gets
+its own per-pid socket + discovery entry).
+
+```json
+→ {"cmd":"whoami"}
+← {"ok":true,"pid":34758,"name":"aethersdr-automation-34758",
+   "socket":"/var/folders/…/aethersdr-automation-34758",
+   "label":"","station":"Claude","txAllowed":false,"version":"26.6.5"}
+```
+
+`txAllowed` reports whether `AETHER_AUTOMATION_ALLOW_TX` is set for this process —
+check it before assuming a keying verb will work. `label` is
+`AETHER_AUTOMATION_LABEL` (a human tag for the instance).
+
+### `mark`
+Drop a **sequenced timeline marker** into the log ring, then bracket a sequence
+with `log tail since=<seq>` to capture exactly the events between two marks.
+
+```json
+→ {"cmd":"mark","value":"pre-tune"}
+← {"ok":true,"seq":4992,"mono_us":34216461,"text":"pre-tune"}
+```
+
+Use the returned `seq` as the `since=` anchor for a later `log tail`.
+
+### `log`
+Runtime control of the Qt logging categories plus a ring-buffer tail and a live
+push subscription — the observability suite. All diagnostic; nothing keys.
+
+```json
+→ {"cmd":"log","action":"categories"}
+← {"ok":true,"categories":[{"id":"aether.connection","label":"Connection / Commands","enabled":true}, …]}
+
+→ {"cmd":"log","action":"set","value":"aether.dsp on"}
+← {"ok":true,"id":"aether.dsp","enabled":true}
+
+→ {"cmd":"log","action":"tail","value":"50 since=4992"}
+← {"ok":true,"events":[{"seq":5013,"t":"15:14:16.630","mono_us":34276567,"lvl":"D","cat":"aether.automation","msg":"…"}],
+   "seq":5015,"oldest":12}
+```
+
+| `action` | `value` | effect |
+|---|---|---|
+| `categories` | — | list every category (`id`, `label`, `enabled`) |
+| `get` | `<id>` | one category's enabled state |
+| `set` | `<id> on\|off` (id `all` = every category) | toggle a category at runtime |
+| `reset` | — | restore the operator's persisted category prefs |
+| `tail` | `[n] [since=<seq>]` | newest `n` ring events, optionally only `seq > since` |
+| `subscribe` / `unsubscribe` | — | start / stop a live push of new events on this connection |
+
+`tail` also returns `oldest` (the oldest `seq` still resident): if your `since <
+oldest`, earlier matching events were evicted and the window is a truncated
+suffix, not a complete bracket.
+
+### `record`
+Drive the client-side **QSO WAV recorder** (the same one behind the manual record
+button), so a live test can capture audio and verify SSB + CW/CWX is recorded.
+Not a transmit action — no gate.
+
+```json
+→ {"cmd":"record","action":"start"}
+← {"ok":true,"record":"start","recording":true,"path":"/…/QSO_2026….wav"}
+
+→ {"cmd":"record","action":"stop"}
+← {"ok":true,"record":"stop","recording":false,"durationSecs":7,"path":"/…/QSO_2026….wav"}
+```
+
+`start` / `stop` / `status` (default) / `path` / `dir <path>` (set the output
+directory).
+
+### `station`
+Set this GUI client's **MultiFlex station name** (FlexLib `SetClientStationName`)
+so other clients on the radio see the agent driving. This is per-client and
+session-scoped — it is **never** the radio-wide callsign (`radio callsign`), which
+is persisted on the front panel.
+
+```json
+→ {"cmd":"station","value":"Claude"}
+← {"ok":true,"station":"Claude"}
+```
+
+Must be a single token (no spaces) and requires a connected radio. The agent name
+is applied automatically on connect and the user's real name is restored when the
+bridge stops.
+
+---
+
+## Transmit verbs ⚠️ (gated)
+
+These verbs **key the live transmitter** and are refused unless the app was
+launched with `AETHER_AUTOMATION_ALLOW_TX=1` (the same rail as a keying `invoke`).
+A force-unkey watchdog (`AETHER_AUTOMATION_TX_MAX_MS`, default 20 s) drops any
+continuous key that runs too long, and the bridge force-unkeys on stop. **Verify
+the TX antenna is your dummy load before keying** (`get slice tx txAntenna`, or
+set it with `slice txant ANT2`). Unkey/stop sub-actions are always allowed.
+
+### `key`
+PTT / MOX keying via `RadioModel::setTransmit` — the exact path the space-bar PTT
+filter and the `mox_toggle` shortcut take, which `invoke` can't reach.
+
+```json
+→ {"cmd":"key","action":"ptt","value":"on"}    # gated
+← {"ok":true,"key":"ptt","state":"on"}
+
+→ {"cmd":"key","action":"ptt","value":"off"}   # always allowed
+← {"ok":true,"key":"ptt","state":"off"}
+```
+
+`key ptt on|off` keys/unkeys (also `press`/`release`, `1`/`0`). `key mox` is a
+**toggle**: keyed → unkeys (allowed), idle → keys (gated). Keying arms the
+force-unkey watchdog.
+
+### `cwx`
+Drive the CWX CW keyer — the easy repro for post-TX FFT-floor recovery (#3804).
+
+```json
+→ {"cmd":"cwx","action":"send","value":"CQ TEST DE W1AW"}   # gated
+← {"ok":true,"cwx":"send","chars":15}
+```
+
+| `action` | `value` | gated? | effect |
+|---|---|---|---|
+| `send` | `<text>` | **yes** | key CW for the string (arms the watchdog) |
+| `speed` (alias `wpm`) | `<5–100>` | no | set keyer speed |
+| `stop` (alias `abort`/`clear`) | — | no | abort the keying buffer |
+
+Stage the slice into a CW mode first (`invoke sliceModeCombo setCurrentText CW`)
+for the radio to actually emit.
+
+### `txtest`
+Two-tone TX test signal (for IMD / PA / meter measurements).
+
+```json
+→ {"cmd":"txtest","action":"twotone"}   # gated
+← {"ok":true,"txtest":"twotone"}
+
+→ {"cmd":"txtest","action":"off"}        # always allowed (alias stop)
+← {"ok":true,"txtest":"off"}
+```
+
+### `atu`
+Antenna-tuner control. `bypass` is relay-only (takes the tuner out of circuit so
+meters see the raw load) and does **not** transmit; `start` runs a tune cycle that
+**keys TX**.
+
+```json
+→ {"cmd":"atu","action":"bypass"}   # no TX, always allowed
+← {"ok":true,"atu":"bypass"}
+
+→ {"cmd":"atu","action":"start"}     # gated (alias tune)
+← {"ok":true,"atu":"start"}
+```
+
+### `testtone`
+Inject a **client-side test tone** into the TX mic/audio path (frequency Hz +
+level dB). It does not key by itself — it only reaches the air if you also key
+(which is gated) — so the verb itself is ungated, but it stages a TX signal and
+belongs with the transmit group.
+
+```json
+→ {"cmd":"testtone","action":"on","value":"1000 -10"}
+← {"ok":true,"testtone":"on","freqHz":1000,"levelDb":-10}
+
+→ {"cmd":"testtone","action":"off"}
+← {"ok":true,"testtone":"off"}
+```
+
+---
 
 ### Errors
 Every failure is a one-line object: `{"ok":false,"error":"<message>"}` — e.g.

@@ -9,32 +9,40 @@ struct Entry {
     ModelCapabilities caps;
 };
 
-// Mirrors FlexLib/ModelInfo.cs Has4Meters / Has2Meters / HasLoopA /
-// HasLoopB columns.  Keep this table in sync with FlexLib when Flex
-// ships a new model — the tests/model_capabilities_test harness will
-// fail loudly if a flag drifts away from the upstream source.
+// Mirrors FlexLib/ModelInfo.cs Platform / Has4Meters / Has2Meters /
+// HasLoopA / HasLoopB columns (Principle I — FlexLib is the model
+// authority).  Keep this table in sync with FlexLib when Flex ships a
+// new model — the tests/model_capabilities_test harness will fail loudly
+// if a flag drifts away from the upstream source.
 //
-// Ordering matters: capabilitiesFor() returns the first substring
-// match, so longer/suffix variants (FLEX-6400M, FLEX-6700R) must come
-// before their base model (FLEX-6400, FLEX-6700) so that an exact
-// "FLEX-6700R" status string doesn't match "FLEX-6700" first.
+// Ordering matters: capabilitiesFor() returns the first substring match,
+// so longer/suffix variants must come before their base model — an exact
+// "FLEX-6700R" status string must not match "FLEX-6700" first, and the
+// "S" server variants ("MLS-9601", "CLS-9301") must precede the base
+// "ML-9600"/"CL-9300" families they'd otherwise be mistaken for.  Family
+// entries (ML-9600, AU-510, AU-520) intentionally catch their W/X/M
+// variants (ML-9600W, AU-510M, ...) by substring.
 constexpr Entry kTable[] = {
-    {"FLEX-6300",  {false, false, false, false}},
-    {"FLEX-6400M", {false, false, false, false}},
-    {"FLEX-6400",  {false, false, false, false}},
-    {"FLEX-6500",  {true,  false, true,  false}},  // Region 1 4m mod, LoopA only
-    {"FLEX-6600M", {false, false, false, false}},
-    {"FLEX-6600",  {false, false, false, false}},
-    {"FLEX-6700R", {false, false, false, false}},  // Receive-only, per FlexLib
-    {"FLEX-6700",  {true,  true,  true,  true }},  // Both built-in, LoopA + LoopB
-    {"FLEX-8400M", {false, false, false, false}},
-    {"FLEX-8400",  {false, false, false, false}},
-    {"FLEX-8600M", {false, false, false, false}},
-    {"FLEX-8600",  {false, false, false, false}},
-    {"AU-520",     {false, false, false, false}},
-    {"ML-380",     {false, false, false, false}},
-    {"CL-200",     {false, false, false, false}},
-    {"RT-100",     {false, false, false, false}},
+    // model key      platform                   4m     2m     LoopA  LoopB  Diversity  Slices
+    {"FLEX-6300",  {RadioPlatform::Microburst, false, false, false, false, false,     2}},
+    {"FLEX-6400M", {RadioPlatform::DeepEddy,   false, false, false, false, false,     2}},
+    {"FLEX-6400",  {RadioPlatform::DeepEddy,   false, false, false, false, false,     2}},
+    {"FLEX-6500",  {RadioPlatform::Microburst, true,  false, true,  false, false,     4}},  // Region 1 4m mod, LoopA only; single-SCU, no diversity
+    {"FLEX-6600M", {RadioPlatform::DeepEddy,   false, false, false, false, true,      4}},
+    {"FLEX-6600",  {RadioPlatform::DeepEddy,   false, false, false, false, true,      4}},
+    {"FLEX-6700R", {RadioPlatform::Microburst, false, false, false, false, true,      8}},  // Receive-only, per FlexLib
+    {"FLEX-6700",  {RadioPlatform::Microburst, true,  true,  true,  true,  true,      8}},  // Both built-in, LoopA + LoopB
+    {"FLEX-8400M", {RadioPlatform::BigBend,    false, false, false, false, false,     2}},
+    {"FLEX-8400",  {RadioPlatform::BigBend,    false, false, false, false, false,     2}},
+    {"FLEX-8600M", {RadioPlatform::BigBend,    false, false, false, false, true,      4}},
+    {"FLEX-8600",  {RadioPlatform::BigBend,    false, false, false, false, true,      4}},
+    {"MLS-9601",   {RadioPlatform::BigBend,    false, false, false, false, true,      4}},  // before ML-9600
+    {"ML-9600",    {RadioPlatform::BigBend,    false, false, false, false, true,      4}},  // catches ML-9600W / ML-9600X
+    {"CLS-9301",   {RadioPlatform::BigBend,    false, false, false, false, true,      4}},  // before CL-9300
+    {"CL-9300",    {RadioPlatform::BigBend,    false, false, false, false, true,      4}},
+    {"AU-510",     {RadioPlatform::BigBend,    false, false, false, false, false,     2}},  // catches AU-510M
+    {"AU-520",     {RadioPlatform::BigBend,    false, false, false, false, true,      4}},  // catches AU-520M
+    {"RT-2122",    {RadioPlatform::DragonFire, false, false, false, false, false,     2}},
 };
 
 } // namespace

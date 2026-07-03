@@ -641,17 +641,12 @@ bool RadioModel::isConnected() const
 
 int RadioModel::maxSlicesForModel(const QString& model)
 {
-    const QString normalized = model.toUpper();
-    // FlexRadio lists slice capacity as independent receivers per model family.
-    if (normalized.contains("6700"))
-        return 8;
-    if (normalized.contains("6600") || normalized.contains("6500")
-            || normalized.contains("8600") || normalized.contains("AU-520"))
-        return 4;
-    if (normalized.contains("6300") || normalized.contains("6400")
-            || normalized.contains("8400") || normalized.contains("AU-510"))
-        return 2;
-    return 4;
+    // Slice capacity per model comes from the FlexLib-sourced ModelCapabilities
+    // table (SliceList size, Principle I) — the single source of model truth,
+    // shared with maxPanadapters(), diversity, and extended-DSP gating.  This is
+    // only the pre-connection estimate; the radio's live "slices=N" status
+    // overrides m_maxSlices once connected.
+    return capabilitiesFor(model).maxSlices;
 }
 
 SliceModel* RadioModel::slice(int id) const

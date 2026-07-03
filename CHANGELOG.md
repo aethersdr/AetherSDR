@@ -8,21 +8,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+## [v26.7.1] — 2026-07-02
+
+### 3D stacked-trace spectrum + in-process NVIDIA BNR + TX meter readouts + 60 fps panadapters
+
+29 commits since v26.6.5. Headlined by a new **3D stacked-trace spectrum**
+panadapter render mode, the **NVIDIA in-process AI noise removal** engine (BNR,
+no container), **mouse-over numeric readouts** on the TX meters, and a **60 fps
+GPU panadapter** rendering path — plus platform-based model capability gating
+from FlexLib and a broad wave of audio, spectrum, and UI fixes.
+
 ### Added
 
+- **3D stacked-trace spectrum panadapter.** A new **Spectrum: 2D / 3D** display
+  mode turns the spectrum region into a perspective stacked-trace surface — a
+  rolling history of FFT traces receding into the distance — with the waterfall,
+  scales, and all overlays (spots, memories, markers, band plan) still rendering
+  underneath. Ridge height is anchored to the measured noise floor with a
+  floor→peak colour gradient, single-frame impulse bursts are rejected, and a
+  **3D Floor** depth slider tunes how far below the floor to surface.
+  Cross-platform (macOS / Windows / Linux) with graceful GPU→CPU degradation. (#3899)
+- **dBm / noise-floor scale in 3D mode.** The right-edge amplitude scale returns
+  in 3D stacked-trace mode as a full-height linear axis that reads just like the
+  2D scale, synced to and persisted with the **3D Floor** slider. (#3937)
 - **BNR — NVIDIA GPU AI noise removal, in-process, no container.** The AetherDSP
   **BNR** module runs the NVIDIA Maxine **Audio Effects (AFX)** denoiser directly
   inside AetherSDR on your local NVIDIA RTX/GeForce GPU (Turing+) — lowest
   latency, no Docker, no microservice to manage. Supported on **Linux and
   Windows** (`-DENABLE_NVIDIA_AFX=ON`); macOS / non-NVIDIA machines use DFNR. An
   intensity slider, status, and a one-time **Download** for the AFX runtime live
-  in the panel below the button row. See [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md).
+  in the panel below the button row. See [`docs/nvidia-bnr.md`](docs/nvidia-bnr.md). (#3902)
 - **AFX download-on-demand (`NvidiaAfxPack`).** BNR fetches its ~2 GB GPU runtime
   on first use and caches it, so the shipped app carries none of it. On Linux the
   CUDA libs come from NVIDIA's PyPI wheels (pinned, sha256-verified) and the
   AFX/TensorRT/model bits from a small sha-pinned release asset; on Windows the
-  whole runtime ships as one self-contained sha-pinned `.zip` (Windows resolves
-  sibling DLLs by directory, so no wheel-flattening or symlinks are needed).
+  whole runtime ships as one self-contained sha-pinned `.zip`. (#3902)
+- **Mouse-over numeric readouts on the TX meters.** Hover any TX meter — SWR,
+  forward power, ALC, mic Level, or Compression — and a floating badge shows the
+  exact value (e.g. `12 W`, `1.12 : 1`, `-6.4 dBFS`) instead of making you
+  eyeball the bar. Updates live while hovered and fades a second after you
+  leave. (#3936)
+- **SWR sweep — optional manual range.** A **Limit range** checkbox with
+  **From** / **To** fields confines a sweep to a licence sub-band or a slice of
+  interest instead of always sweeping the whole band. Off by default; the fields
+  seed with the current band's edges, and the bounds can only ever narrow the
+  sweep — never widen it past what the regional band plan permits. (#3885)
+- **Local CW/CWX sidetone captured in Client-Side recordings.** QSO recordings
+  now carry the AetherSDR-generated CW sidetone alongside voice, so a single
+  continuous file holds both across SSB↔CW switches — usable at last for contest
+  CW review. Client-Side recording is now the out-of-box default (Radio Side
+  stays selectable). Scope is AetherSDR-keyed CW (keyboard / paddle / CWX). (#3895)
+- **KiwiSDR protocol metadata scaffolding.** Richer read-only receiver metadata,
+  protocol/capability handling, and monitor/camping state for public KiwiSDR
+  receivers, with new `get kiwi` / `get kiwisdr` automation-bridge snapshots.
+  Clean-room per Constitution Principle IV. (#3898)
+- **Automation bridge — `get dsp`, `streams resync`, `selectRow` / `window`
+  verbs.** A `get dsp` model for the client-side AetherDSP modules (NR2 / NR4 /
+  MNR / DFNR / RN2 / BNR), `streams resync` to force the radio to re-dump its
+  display inventory, item-view row selection, and top-level window state control
+  — plus a TX-guard fix so the RX-only "Tune Now" button is no longer wrongly
+  blocked, and a11y names on the six DSP buttons. (#3920)
 
 ### Changed
 
@@ -30,7 +75,71 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   purely the local in-process AFX denoiser — ham operators shouldn't have to
   stand up a container to denoise audio. This also drops the grpc/protobuf build
   dependency entirely. BNR is auto-disabled in digital/CW modes and accents the
-  ADSP launcher like the other client-NR engines.
+  ADSP launcher like the other client-NR engines. (#3902)
+- **Faster panadapters — 60 fps ceiling and a per-pixel GPU FFT trace.** The 2D
+  spectrum trace is now evaluated per pixel on the GPU from a single column
+  texture, eliminating the per-frame CPU vertex bake (pan main-thread prep
+  dropped ~5×). Data-driven repaints coalesce into one present per 16 ms slot,
+  and the FFT frame-rate ceiling is raised from 30 to 60 fps. A new
+  `get panstats` bridge verb reports per-panadapter frame-cost counters for
+  before/after profiling. (#3958)
+- **Model capabilities now sourced from FlexLib.** Extended-DSP (NRS/RNN/NRF)
+  and diversity gating migrated from hand-maintained model-name sniffing to the
+  FlexLib `ModelCapabilities` table (Principle I), fixing the AU-510 and
+  "S"-variant (MLS-9601 / CLS-9301) extended-DSP toggles that never appeared,
+  correcting diversity for FLEX-6500 (now off) and dual-SCU ML/CL/MLS/CLS models
+  (now on), and refreshing the flag when a late `model` status arrives. All 23
+  current FlexLib models resolve. (#3954, #2177)
+- **Cut RX speaker latency for USB and local audio.** The app-side RX buffer cap
+  default drops from 200 ms to 100 ms and the Windows RX sink now requests an
+  explicit 50 ms device buffer, taking the worst-case Windows USB path from
+  ~300–500 ms toward ~150 ms. Still fully adjustable (50–1000 ms) for
+  VPN/SmartLink users who need a larger cushion. (#3897)
+- **Display pane grouped into labeled sections.** The panadapter's Display panel
+  is split into six labeled, divided sections — Panadapter, Waterfall,
+  Background, Appearance, 3D View, System — and the background-off gesture is now
+  a dedicated **Off** button instead of an undiscoverable right-click on Clear. (#3935)
+
+### Fixed
+
+- **Windows multi-pan crash.** The QRhiWidget cleanup callback is now
+  deregistered on all GPU platforms, fixing a crash when tearing down
+  panadapters on Windows. (#3922)
+- **Profile Switcher swallowed the first Space PTT / CW key.** The non-editable
+  Profile Switcher combo no longer eats the first Space press after gaining
+  focus. (#3926)
+- **New Panadapter Cancel button overlapped the layout grid.** The layout-picker
+  window now sizes its height to the content, so the Cancel button sits below the
+  thumbnail grid instead of on top of the bottom row. (#3941)
+- **RC-28 auto-snap now sticks.** After the 600 ms auto-snap rounds to the
+  nearest 1 kHz, the wheel accumulator is re-based to the snapped frequency, so
+  the next knob tick no longer resumes from the stale pre-snap target and undoes
+  the snap. (#3940)
+- **KiwiSDR 3D trace / waterfall alignment.** DSS history is preserved and
+  reprojected when the visible frequency frame changes during pan/zoom, keeping
+  the 3D stacked trace aligned with the waterfall on Kiwi receivers and
+  eliminating a one-frame line flash. (#3942)
+- **Cross-band net tune routed through the canonical tune policy.** (#3921)
+- **DX spot tooltip blocked by the passband hit-test.** Hovering a DX spot inside
+  the active slice passband now shows its tooltip; the spot hit-test runs ahead
+  of the passband cursor check, matching the click path. (#3903)
+- **TCI TX resamples from the client-declared rate, not a hardcoded 48 kHz.** A
+  TCI client that negotiated 8/12/24 kHz and then transmitted was mis-pitched
+  (tones offset, digital decodes failing); TX now resamples from each frame's
+  declared rate. WSJT-X (48 kHz) is unaffected. (#3892)
+- **TCI TX soak-telemetry field rename** (`inputFrames48k` / `input48k=`) for
+  accuracy. (#3924)
+- **QsoRecorder playback stuck-mute on sink-open failure.** If the playback sink
+  failed to open, live RX could be muted with no path to unmute until restart;
+  the failure path now returns with RX left live. (#3891)
+- **Auto-unkey momentary keyboard PTT/CW on focus loss and modifier-release**, so
+  a held key can't leave the radio stuck keyed. (#3890)
+- **Antenna Genius Port B visibility on manual-IP connections.** AetherSDR now
+  probes the device with `info get` to read the authoritative port/antenna
+  counts, restoring Port B parity with the UDP-discovery path for 2-radio-input
+  hardware. (#3900)
+- **Windows manifest embedded via `target_sources`** rather than a linker flag,
+  fixing the build. (#3947)
 
 ## [v26.6.5] — 2026-06-28
 

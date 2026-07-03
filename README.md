@@ -1,6 +1,6 @@
 # AetherSDR
 
-**A Linux-native client for FlexRadio Systems transceivers**
+**A cross-platform, open-source client for FlexRadio Systems transceivers**
 
 [![CI](https://github.com/aethersdr/AetherSDR/actions/workflows/ci.yml/badge.svg)](https://github.com/aethersdr/AetherSDR/actions/workflows/ci.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
@@ -8,12 +8,11 @@
 [![Qt6](https://img.shields.io/badge/Qt-6-green.svg)](https://www.qt.io/)
 [![Signed Commits](https://img.shields.io/badge/commits-GPG%20signed-brightgreen?logo=gnuprivacyguard)](https://github.com/aethersdr/AetherSDR/commits/main)
 
-AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
+AetherSDR brings full FlexRadio operation to Linux, macOS, and Windows — each a native build, no Wine or virtual machines. A native aarch64 build also runs on Raspberry Pi and other embedded ARM devices. Built from the ground up with Qt6 and C++20, it speaks the SmartSDR protocol natively and aims to replicate the full SmartSDR experience.
 
-**Current version: 26.6.5** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
+**Current version: 26.7.1** — CalVer (`YY.M.patch[.hotfix]`). | [Download](https://github.com/aethersdr/AetherSDR/releases/latest) | [Discussions](https://github.com/aethersdr/AetherSDR/discussions) | [What's New](https://github.com/aethersdr/AetherSDR/releases)
 
-> **Cross-platform downloads available:** Linux AppImage, macOS universal DMG, Windows installer and portable ZIP.
-> Linux is the primary supported platform. macOS and Windows builds are provided as a courtesy.
+> **Native builds for Linux, macOS, and Windows** — Linux AppImage (x86-64 + aarch64), macOS DMG (Apple Silicon + Intel), Windows installer and portable ZIP. Every platform is built, tested in CI, and released together.
 
 ![AetherSDR Screenshot](docs/assets/screenshot-current.png)
 
@@ -23,7 +22,7 @@ AetherSDR brings FlexRadio operation to Linux without Wine or virtual machines. 
 
 ## Highlights
 
-- **GPU-accelerated spectrum & waterfall** — QRhi rendering on the GPU (OpenGL/Metal/D3D11), ~71% CPU reduction over CPU paint, GPU-composited slice flags, and multi-GPU adapter selection
+- **GPU-accelerated spectrum & waterfall** — QRhi rendering on the GPU (OpenGL/Metal/D3D11) with a per-pixel FFT trace at up to **60 fps**, an optional **3D stacked-trace** spectrum mode (perspective FFT history, floor-anchored ridges), ~71% CPU reduction over CPU paint, GPU-composited slice flags, and multi-GPU adapter selection
 - **Multi-slice & multi-panadapter** — colour-coded VFO overlays, independent TX assignment, diversity/ESC beamforming; up to 8 detachable pans with native VITA-49 waterfall tiles, with selectable S-meter / **SmartMTR** meter views per flag
 - **KiwiSDR public-receiver browser** — find and connect to public KiwiSDR receivers worldwide through an API-policy-aware directory (diversity receive with receive-only TX inhibit)
 - **Aetherial Audio Channel Strip** — a unified RX **and** TX DSP suite (gate, EQ, compressor, de-esser, tube, AetherVoice exciter, reverb, brickwall limiter) with a preset library and a per-side scope
@@ -170,6 +169,30 @@ cmake --build build -j$(nproc)
 
 RADE-enabled builds use a vendored Opus snapshot, so no additional Opus download
 is required during configure or build.
+
+### Windows 11
+
+Prerequisites: Visual Studio 2022 (Build Tools, Community, or higher) with the
+MSVC C++ workload, CMake 3.25+, Ninja, and Qt 6.7+ (`msvc2022_64`; the release
+binaries ship 6.8.3 LTS).
+
+```bat
+:: 1. Activate the MSVC environment. Adjust the edition (BuildTools / Community /
+::    Professional / Enterprise) to match your install; run "vswhere" if unsure.
+"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
+
+:: 2. Generate the single-precision FFTW import lib (needed by NR4/libspecbleach)
+powershell -File scripts\setup\setup-fftw.ps1
+
+:: 3. Configure. Ninja is required: the default Visual Studio generator is
+::    multi-config (it ignores CMAKE_BUILD_TYPE) and takes a different
+::    manifest-embed path. Point CMAKE_PREFIX_PATH at your Qt kit so
+::    find_package(Qt6) resolves.
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64"
+
+:: 4. Build
+cmake --build build --target AetherSDR
+```
 
 ### Qt 6.7+ for GPU Spectrum Rendering
 

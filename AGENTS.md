@@ -15,7 +15,7 @@ of doing the job right on this codebase.
 ## Project Goal
 
 Replicate the **Windows-only FlexRadio SmartSDR client** (written in C#) as a
-**Linux-native C++ application** using Qt6 and C++20. The aim is to mirror the
+**native, cross-platform C++ application** using Qt6 and C++20. The aim is to mirror the
 look, feel, and every function SmartSDR is capable of. The reference radio is a
 **FLEX-8600 running firmware 4.2.18**, which speaks **SmartSDR protocol v1.4.0.0**.
 
@@ -168,7 +168,7 @@ cmake --build build -j$(nproc)
 
 Full dependency list is in `README.md` — don't duplicate it here.
 
-Current version: **26.6.5** (set in both `CMakeLists.txt` and `README.md`).
+Current version: **26.7.1** (set in both `CMakeLists.txt` and `README.md`).
 Versioning scheme is **CalVer** (`YY.M.patch[.hotfix]`) starting from v26.5.1,
 the 1.0-equivalent. Hotfix sub-patches use a 4th component (e.g. 26.5.2.1).
 Earlier tags used semver through v0.9.8.

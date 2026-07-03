@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(AetherSDR VERSION 26.6.5 LANGUAGES C CXX)
+project(AetherSDR VERSION 26.7.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -1162,12 +1162,14 @@ elseif(WIN32)
         target_sources(AetherSDR PRIVATE "${WIN_RC}")
     endif()
     if(MSVC)
-        # /MANIFESTINPUT requires /MANIFEST:EMBED per MSVC docs.  Newer MSVC
-        # toolsets (VS 18.x / 14.50+) enforce this strictly with LNK1220;
-        # older ones were lenient.  Be explicit.
-        target_link_options(AetherSDR PRIVATE
-            "/MANIFEST:EMBED"
-            "/MANIFESTINPUT:${CMAKE_SOURCE_DIR}/packaging/windows/AetherSDR.exe.manifest")
+        # Embed the application manifest the CMake-native way: list it as a
+        # source so CMake hands it to its own vs_link_exe/mt.exe embed step.
+        # Passing /MANIFEST:EMBED + /MANIFESTINPUT directly fights that
+        # machinery — link.exe embeds inline and emits no side-car manifest,
+        # so CMake's mt.exe step runs with an empty --manifests list and dies
+        # with c10100a7 (cmake 4.x) / LNK1220 the other way (#3237).
+        target_sources(AetherSDR PRIVATE
+            "${CMAKE_SOURCE_DIR}/packaging/windows/AetherSDR.exe.manifest")
     endif()
 endif()
 
@@ -1269,6 +1271,7 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/overlay.frag
             resources/shaders/spectrum.vert
             resources/shaders/spectrum.frag
+            resources/shaders/panscope.frag
             resources/shaders/dss_mesh.vert
             resources/shaders/dss_mesh.frag
     )
@@ -1948,6 +1951,14 @@ target_include_directories(kiwi_sdr_trace_math_test PRIVATE src)
 target_link_libraries(kiwi_sdr_trace_math_test PRIVATE Qt6::Core)
 add_test(NAME kiwi_sdr_trace_math_test COMMAND kiwi_sdr_trace_math_test)
 
+add_executable(dss_renderer_test
+    tests/dss_renderer_test.cpp
+    src/gui/DssRenderer.cpp
+)
+target_include_directories(dss_renderer_test PRIVATE src)
+target_link_libraries(dss_renderer_test PRIVATE Qt6::Core Qt6::Gui)
+add_test(NAME dss_renderer_test COMMAND dss_renderer_test)
+
 add_executable(kiwi_sdr_redirect_policy_test
     tests/kiwi_sdr_redirect_policy_test.cpp
     src/core/KiwiSdrRedirectPolicy.cpp
@@ -2471,6 +2482,23 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
 )
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
 
+add_executable(pan_layout_dialog_size_test
+    tests/pan_layout_dialog_size_test.cpp
+    src/gui/PanLayoutDialog.cpp
+    src/gui/PersistentDialog.cpp
+    src/gui/FramelessResizer.cpp
+    src/gui/FramelessWindowTitleBar.cpp
+    src/core/ThemeManager.cpp
+    src/core/AppSettings.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+)
+target_include_directories(pan_layout_dialog_size_test PRIVATE src)
+target_link_libraries(pan_layout_dialog_size_test PRIVATE
+    Qt6::Core Qt6::Widgets Qt6::Test
+)
+set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
+
 add_executable(device_diagnostics_test
     tests/device_diagnostics_test.cpp
 )
@@ -2540,6 +2568,7 @@ set_target_properties(container_widget_test PROPERTIES AUTOMOC ON)
 add_executable(amp_applet_test
     tests/amp_applet_test.cpp
     src/gui/AmpApplet.cpp
+    src/gui/DragValuePopup.cpp
     src/core/AppSettings.cpp
     src/core/ThemeManager.cpp
     src/core/LogManager.cpp

@@ -838,14 +838,8 @@ void MainWindow::onSliceAdded(SliceModel* s)
         activateFdvDisplay(s->sliceId());
 #endif
 
-    // Show DIV button on dual-SCU radios
-    {
-        const QString& model = m_radioModel.model();
-        bool divAllowed = model.contains("6500") || model.contains("6600")
-                       || model.contains("6700") || model.contains("8600")
-                       || model.contains("AU-520");
-        vfo->setDiversityAllowed(divAllowed);
-    }
+    // Show DIV button on dual-SCU radios (ModelCapabilities table, Principle I)
+    vfo->setDiversityAllowed(m_radioModel.isDiversityAllowed());
 
     // Feed S-meter per-slice — only this VFO's slice level
     const int sid = s->sliceId();
@@ -2223,6 +2217,8 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             sw, &SpectrumWidget::setSpectrumRenderMode);
     connect(menu, &SpectrumOverlayMenu::dssFloorDepthChanged,
             sw, &SpectrumWidget::setDssFloorDepth);
+    connect(sw, &SpectrumWidget::dssFloorDepthResolved,
+            menu, &SpectrumOverlayMenu::syncDssFloorDepth);
     connect(menu, &SpectrumOverlayMenu::dssGainChanged,
             sw, &SpectrumWidget::setDssGain);
     connect(menu, &SpectrumOverlayMenu::wfColorGainChanged,

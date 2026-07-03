@@ -59,7 +59,7 @@ body:
     id: crossplatform
     attributes:
       label: Cross-platform impact
-      description: How does this affect Linux, macOS, and Windows? AetherSDR is Linux-native first.
+      description: How does this affect Linux, macOS, and Windows? AetherSDR treats all three as equals.
       placeholder: |
         Linux: ...
         macOS: ...
