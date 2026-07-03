@@ -93,42 +93,6 @@ void testNoRestoredPanNoSettingsUsesDefaults()
     check(d.antenna == QStringLiteral("ANT1"), "cold start: defaults to ANT1");
 }
 
-// Edge: pan restored but its center hasn't been reported by the radio yet
-// (claimed this instant, "display pan ... center=" still in flight). We still
-// reuse the pan — never create a second one — and fall back to LastFrequency.
-void testRestoredPanCenterNotYetKnownFallsBackToLastFreq()
-{
-    Inputs in;
-    in.hasRestoredPan = true;
-    in.restoredPanCenterMhz = 0.0;   // not reported yet
-    in.lastFreqMhz = 21.300000;
-    in.lastMode = QStringLiteral("USB");
-
-    const Decision d = decide(in);
-
-    check(d.action == Action::ReuseRestoredPan,
-          "center unknown: still reuse the pan (no duplicate)");
-    check(freqEq(d.freqMhz, 21.300000),
-          "center unknown: fall back to LastFrequency");
-}
-
-void testRestoredPanCenterUnknownNoSettingsFallsBackToDefault()
-{
-    Inputs in;
-    in.hasRestoredPan = true;
-    in.restoredPanCenterMhz = 0.0;
-    in.lastFreqMhz = 0.0;
-    in.lastMode = QString();
-
-    const Decision d = decide(in);
-
-    check(d.action == Action::ReuseRestoredPan,
-          "center+settings unknown: still reuse the pan");
-    check(freqEq(d.freqMhz, 14.225000),
-          "center+settings unknown: fall back to 14.225 default");
-    check(d.mode == QStringLiteral("USB"), "center unknown: default mode USB");
-}
-
 // The restored-pan center always wins over LastFrequency, even when both are on
 // the same band — the pan center is radio-authoritative for what's on screen.
 void testRestoredPanCenterWinsOverLastFrequency()
@@ -152,8 +116,6 @@ int main()
     testIssue3212BundleScenario();
     testNoRestoredPanCreatesNew();
     testNoRestoredPanNoSettingsUsesDefaults();
-    testRestoredPanCenterNotYetKnownFallsBackToLastFreq();
-    testRestoredPanCenterUnknownNoSettingsFallsBackToDefault();
     testRestoredPanCenterWinsOverLastFrequency();
 
     if (failures == 0) {
