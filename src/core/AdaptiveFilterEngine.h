@@ -62,6 +62,11 @@ private:
         QVector<float> avgEnv;          // temporal average (video averaging)
         qint64 lastFrameNs{0};          // last ACCEPTED frame (pacing gate)
         qint64 lastSendNs{0};           // last filt send (wall-clock rate guard)
+        QVector<float> refTrail;        // recent referenceDbm (fade detector)
+        int    lastGoodLow{INT_MIN};    // fit remembered at dropout (signed)
+        int    lastGoodHigh{INT_MIN};
+        double lastGoodFreqMhz{0.0};    // ...valid only for this frequency
+        qint64 lastGoodNs{0};           // ...and only for kRefitMemoryNs
     };
 
     // Commit a glide target and step the live passband toward it.

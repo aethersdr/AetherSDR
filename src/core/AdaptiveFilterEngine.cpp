@@ -98,6 +98,37 @@ namespace {
     constexpr int    kDeadbandHz    = 220;    // ignore sub-deadband wiggle (locks
                                               // the edge; only a real width change
                                               // > this commits a move)
+    // ── Low-SNR / fade protection for the NARROWING direction ───────────────
+    // Narrowing cuts into the signal, and two situations make a narrow
+    // measurement untrustworthy even after the median/hold smoothing:
+    //   * LOW SNR — on a soft skirt the floor-relative crossing moves inward
+    //     as the signal weakens (the level-invariant cap needs headroom it
+    //     doesn't have down here), so a weak station's "narrow" reading is an
+    //     SNR artifact: widen-only until the peak clears the floor by
+    //     kLowSnrNarrowFreezeDb. Deliberately above the strongest presence
+    //     preset (14 dB), so every preset has a widen-only band just above
+    //     engagement.
+    //   * FADING — while the in-band reference is falling (QSB fade in
+    //     progress) the measured width is shrinking with it; freeze narrowing
+    //     until the level stabilises. Median-of-first vs median-of-last over a
+    //     short trail so a single frame cannot fake a fade.
+    // Both suppress only the narrowing COMMIT — measurement, dwell and
+    // widening stay live, so a genuine width change commits the moment the
+    // freeze lifts.
+    constexpr float  kLowSnrNarrowFreezeDb = 16.0f;
+    constexpr int    kFadeWindowFrames     = 20;     // ~0.7 s at the paced rate
+    constexpr int    kFadeEndFrames        = 6;      // median span at each end
+    constexpr float  kFadeDropDb           = 2.5f;
+    // Re-engage restore: a deep fade releases AUTO (confidence decays) and the
+    // filter reverts to baseline; when the SAME station comes back the fresh
+    // engage fit is built from the first weak frames and lands narrow. Instead,
+    // a fit remembered at the dropout is restored verbatim if the slice is
+    // still on the same frequency and the gap was shorter than kRefitMemoryNs
+    // (HF QSB cycles run ~5-30 s; 20 s rides a deep fade but expires before
+    // "same frequency" plausibly means a different station). The normal
+    // pipeline then refines from there — widening is fast, narrowing takes the
+    // slow dwell, so a stale-wide restore is safe.
+    constexpr qint64 kRefitMemoryNs = 20LL * 1000000000LL;
     constexpr int    kSnapHz        = 50;     // 50 Hz grid
     constexpr int    kMinBwHz       = 50;     // never narrower than this
     // Glide + send throttle (RFC #3878 cond. 2 — no filt command storm). Emit
@@ -121,6 +152,13 @@ namespace {
     int medianOf(QVector<int> v)
     {
         if (v.isEmpty()) return 0;
+        std::sort(v.begin(), v.end());
+        return v[v.size() / 2];
+    }
+
+    float medianOfF(QVector<float> v)
+    {
+        if (v.isEmpty()) return 0.0f;
         std::sort(v.begin(), v.end());
         return v[v.size() / 2];
     }
@@ -177,6 +215,7 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
         s.dwell = 0; s.refractory = 0; s.sinceWrite = 0;
         s.confScore = 0; s.active = false;
         s.avgEnv.clear();
+        s.refTrail.clear();
     };
 
     // ── Tune detection: re-fit fresh on a frequency jump ────────────────────
@@ -205,6 +244,7 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
         clearFit(st);
         st.haveBaseline = false;     // re-capture baseline from the new mode
         st.framesSinceTune = 0;
+        st.lastGoodLow = INT_MIN;    // signed convention flips — memory invalid
     }
     st.lastMode = mode;
 
@@ -270,8 +310,21 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
     // weak/marginal signal cannot flicker the badge between AUTO and the value.
     st.confScore = reg.valid ? std::min(st.confScore + kConfUp, kConfMax)
                              : std::max(st.confScore - kConfDown, 0);
-    if (!st.active && st.confScore >= kConfHigh)      st.active = true;
-    else if (st.active && st.confScore <= kConfLow)   st.active = false;
+    if (!st.active && st.confScore >= kConfHigh) {
+        st.active = true;
+    } else if (st.active && st.confScore <= kConfLow) {
+        st.active = false;
+        // Genuine dropout (confidence fully decayed): remember the confident
+        // fit before the invalid branch reverts to baseline, so a return of
+        // the same station within kRefitMemoryNs restores it instead of
+        // re-fitting narrow from the first weak frames.
+        if (emittedNs > 0 && st.tgtLow != INT_MIN &&
+            !(st.tgtLow == st.baseLow && st.tgtHigh == st.baseHigh)) {
+            st.lastGoodLow = st.tgtLow; st.lastGoodHigh = st.tgtHigh;
+            st.lastGoodFreqMhz = freqMhz;
+            st.lastGoodNs = emittedNs;
+        }
+    }
 
     if (!reg.valid) {
         // A momentary measurement gap (e.g. a speech pause). If we are
@@ -347,13 +400,44 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
     const int needDwell = atBaseline    ? resp.engage
                         : narrowing     ? resp.narrow
                                         : resp.widen;
+    // Narrowing-freeze inputs (see kLowSnrNarrowFreezeDb block): a weak peak
+    // or a falling in-band reference makes a narrower reading untrustworthy.
+    const bool lowSnr = (reg.peakDbm - reg.floorDbm) < kLowSnrNarrowFreezeDb;
+    st.refTrail.append(reg.referenceDbm);
+    if (st.refTrail.size() > kFadeWindowFrames) st.refTrail.removeFirst();
+    bool fading = false;
+    if (st.refTrail.size() >= kFadeWindowFrames) {
+        const float early = medianOfF(st.refTrail.mid(0, kFadeEndFrames));
+        const float late  = medianOfF(st.refTrail.mid(st.refTrail.size() - kFadeEndFrames));
+        fading = (early - late) > kFadeDropDb;
+    }
+    // Re-engage restore is possible only on the engage commit (passband still
+    // at baseline), same frequency, within the memory window.
+    const bool restorable = atBaseline && st.lastGoodLow != INT_MIN &&
+                            emittedNs > 0 &&
+                            emittedNs - st.lastGoodNs <= kRefitMemoryNs &&
+                            std::abs(freqMhz - st.lastGoodFreqMhz) <= 0.0003;
+
     // Settle after each change before allowing the next, so the filter feels
     // calm rather than continuously nudging.
     if (st.refractory > 0) --st.refractory;
     if (differs && st.dwell >= needDwell && st.refractory == 0) {
-        st.tgtLow = wantLo; st.tgtHigh = wantHi;
-        st.dwell = 0;
-        st.refractory = resp.refractory;
+        if (restorable) {
+            // Same station back after a dropout: restore the pre-fade fit
+            // verbatim (the fresh candidate is built from the first weak
+            // frames and lands narrow); the pipeline refines from there.
+            st.tgtLow = st.lastGoodLow; st.tgtHigh = st.lastGoodHigh;
+            st.lastGoodLow = INT_MIN;   // consumed
+            st.dwell = 0;
+            st.refractory = resp.refractory;
+        } else if (narrowing && (lowSnr || fading)) {
+            // Widen-only: hold the target; dwell keeps accumulating so the
+            // narrowing commits the moment the freeze lifts.
+        } else {
+            st.tgtLow = wantLo; st.tgtHigh = wantHi;
+            st.dwell = 0;
+            st.refractory = resp.refractory;
+        }
     }
 
     glideToward(slice, st, st.active, emittedNs);
