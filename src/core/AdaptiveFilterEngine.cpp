@@ -20,7 +20,22 @@ namespace {
     constexpr int    kMaxLowCutHz   = 400;
     constexpr int    kMinHighCutHz  = 1800;
 
-    // ── Pipeline constants (in frames; panadapter ~30 fps) ──────────────────
+    // ── Frame pacing (wall-clock) ────────────────────────────────────────────
+    // Every constant below is counted in FRAMES and was calibrated at the
+    // panadapter's historical ~25-30 fps. The pan fps ceiling is now 60
+    // (perf(gui) #3958), which would halve every dwell/hold/confidence window
+    // in wall-clock time AND push the frame-counted send throttle to ~15
+    // filt/s — violating RFC #3878 cond. 2 (<= ~8/s). Rather than re-express
+    // the whole pipeline in seconds (a redesign), frames arriving faster than
+    // kMinFrameSpacingMs are simply not accepted: a native ~30 fps stream
+    // (33 ms) passes untouched with jitter headroom, a 60 fps stream is paced
+    // down to ~30 — the calibration rate — and the measurement cost halves as
+    // a bonus. kMinSendSpacingMs additionally enforces the filt-rate condition
+    // directly in wall-clock, independent of any fps assumption.
+    constexpr qint64 kMinFrameSpacingNs = 25LL * 1000000LL;   // <= 40 fps accepted
+    constexpr qint64 kMinSendSpacingNs  = 125LL * 1000000LL;  // <= 8 filt/s
+
+    // ── Pipeline constants (in frames; paced to ~30 fps above) ──────────────
     // Biased toward LOCKING: once fitted, the passband should sit still and move
     // only on a real width change, not chase speech dynamics. A wider deadband
     // and longer dwell are the levers that stop the float.
@@ -128,7 +143,8 @@ void AdaptiveFilterEngine::resetSlice(int sliceId) { m_state.remove(sliceId); }
 void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
                                         double bandwidthMhz,
                                         const QVector<float>& binsDbm,
-                                        float noiseFloorDbm)
+                                        float noiseFloorDbm,
+                                        qint64 emittedNs)
 {
     if (!slice) return;
     const QString mode = slice->mode();
@@ -140,6 +156,16 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
     }
 
     SliceState& st = m_state[slice->sliceId()];
+
+    // ── Frame pacing: keep the pipeline at its ~30 fps calibration ──────────
+    // Placed before any state update so a rejected frame is invisible — all
+    // frame counters keep their calibrated meaning. Frames without a timestamp
+    // (emittedNs <= 0) are accepted unpaced (no basis to space them).
+    if (emittedNs > 0) {
+        if (st.lastFrameNs != 0 && emittedNs - st.lastFrameNs < kMinFrameSpacingNs)
+            return;
+        st.lastFrameNs = emittedNs;
+    }
 
     // Clear the per-fit smoothing/measurement state for a fresh fit, WITHOUT
     // touching the baseline (the operator's manual filter). Shared by the tune
@@ -259,7 +285,7 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
             st.medLow.clear(); st.medHigh.clear();
             st.dwell = 0;
         }
-        glideToward(slice, st, st.active);
+        glideToward(slice, st, st.active, emittedNs);
         return;
     }
 
@@ -330,10 +356,11 @@ void AdaptiveFilterEngine::processFrame(SliceModel* slice, double centerMhz,
         st.refractory = resp.refractory;
     }
 
-    glideToward(slice, st, st.active);
+    glideToward(slice, st, st.active, emittedNs);
 }
 
-void AdaptiveFilterEngine::glideToward(SliceModel* slice, SliceState& st, bool active)
+void AdaptiveFilterEngine::glideToward(SliceModel* slice, SliceState& st, bool active,
+                                       qint64 emittedNs)
 {
     // AUTO-badge state is cheap and not a radio command — update every frame.
     slice->setAdaptiveActive(active);
@@ -341,8 +368,12 @@ void AdaptiveFilterEngine::glideToward(SliceModel* slice, SliceState& st, bool a
     // Already at target: nothing to send (steady state stays silent).
     if (st.curLow == st.tgtLow && st.curHigh == st.tgtHigh) { st.sinceWrite = 0; return; }
 
-    // Throttle: emit at most one filt per kSendIntervalFrames (anti-storm).
+    // Throttle: emit at most one filt per kSendIntervalFrames (anti-storm),
+    // AND at most one per kMinSendSpacingNs wall-clock — the direct RFC #3878
+    // cond. 2 guarantee (<= ~8/s) whatever the pan frame rate does.
     if (++st.sinceWrite < kSendIntervalFrames) return;
+    if (emittedNs > 0 && st.lastSendNs != 0 &&
+        emittedNs - st.lastSendNs < kMinSendSpacingNs) return;
     st.sinceWrite = 0;
 
     // Proportional step toward the target — smooth, converges in a few sends.
@@ -358,6 +389,7 @@ void AdaptiveFilterEngine::glideToward(SliceModel* slice, SliceState& st, bool a
 
     if (nextLow != st.curLow || nextHigh != st.curHigh) {
         st.curLow = nextLow; st.curHigh = nextHigh;
+        st.lastSendNs = emittedNs;
         slice->applyAdaptiveFilter(nextLow, nextHigh);
     }
 }

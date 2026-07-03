@@ -3841,7 +3841,6 @@ void MainWindow::onSpectrumReadyForAdaptiveFilter(quint32 streamId,
                                                   const QVector<float>& bins,
                                                   qint64 emittedNs)
 {
-    Q_UNUSED(emittedNs);
     if (m_shuttingDown || !m_panStack) return;
     // Suspend while transmitting: the panadapter shows the TX signal (or muted
     // RX), so fitting against it would chase garbage. Returning early holds the
@@ -3860,7 +3859,8 @@ void MainWindow::onSpectrumReadyForAdaptiveFilter(quint32 streamId,
         for (auto* slice : m_radioModel.slices()) {
             if (!slice || slice->panId() != pan->panId()) continue;
             m_adaptiveFilterEngine->processFrame(
-                slice, pan->centerMhz(), pan->bandwidthMhz(), bins, noiseFloor);
+                slice, pan->centerMhz(), pan->bandwidthMhz(), bins, noiseFloor,
+                emittedNs);
         }
         break;  // one pan owns this stream id
     }

@@ -31,8 +31,12 @@ public:
     // Drive one FFT frame for the slice that owns the pan it came from. The
     // caller resolves the pan span + noise floor (e.g. from SpectrumWidget) and
     // the slice. No-op unless the slice is SSB with the adaptive filter enabled.
+    // emittedNs is the frame's monotonic timestamp (PanadapterStream's
+    // spectrumReady); it paces the pipeline to its ~30 fps calibration and
+    // enforces the filt-send rate wall-clock (0 = no timestamp, no pacing).
     void processFrame(SliceModel* slice, double centerMhz, double bandwidthMhz,
-                      const QVector<float>& binsDbm, float noiseFloorDbm);
+                      const QVector<float>& binsDbm, float noiseFloorDbm,
+                      qint64 emittedNs = 0);
 
     // Forget per-slice smoothing/glide state (e.g. on mode change or disable).
     void resetSlice(int sliceId);
@@ -56,10 +60,13 @@ private:
         quint64 lastUserEpoch{0};       // detect a manual filter edit -> disable
         int  framesSinceTune{1000};     // post-tune settle gate (starts "settled")
         QVector<float> avgEnv;          // temporal average (video averaging)
+        qint64 lastFrameNs{0};          // last ACCEPTED frame (pacing gate)
+        qint64 lastSendNs{0};           // last filt send (wall-clock rate guard)
     };
 
     // Commit a glide target and step the live passband toward it.
-    void glideToward(SliceModel* slice, SliceState& st, bool active);
+    void glideToward(SliceModel* slice, SliceState& st, bool active,
+                     qint64 emittedNs);
 
     QHash<int, SliceState> m_state;
 };
