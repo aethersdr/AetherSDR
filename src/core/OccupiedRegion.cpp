@@ -454,8 +454,10 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
         // bypass — see kFloorDiscHz). Hz-accumulated, so coarse pans cannot
         // truncate it. An envelope-occupied bin clears the ARM (same-signal
         // energy resumed and was adjudicated above), while the raw run itself
-        // only resets on a raw bin back above the floor gate.
-        if (binsDbm[binAt(o)] < floorGateAt(o)) {
+        // only resets on a raw bin back above the floor gate. binAt(o) can run
+        // past the pan when the slice sits within kScanHz of a pan edge —
+        // clamp like env() does (edge bin repeats).
+        if (binsDbm[std::clamp(binAt(o), 0, N - 1)] < floorGateAt(o)) {
             rawFloorRunHz += hzPerBin;
             if (rawFloorRunHz >= kFloorDiscHz) armed = true;
         } else {

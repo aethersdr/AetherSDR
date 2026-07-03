@@ -542,6 +542,45 @@ int main()
                rf.floorDbm > -114.0f && rf.floorDbm < -105.0f, d);
     });
 
+    // ── 18. Carrier near the pan edge — scan clipped, no out-of-range access ─
+    // A slice tuned within kScanHz of the pan edge, WITH signal energy on the
+    // energy side, makes the extent pass walk offsets whose bins lie past the
+    // pan; every access must clamp (this crashed on air: QList assert in the
+    // extent pass's raw-bin arming, slice near the top of the pan). Exercised
+    // on the canonical grid and on the decimation path.
+    forEachMode([](bool usb) {
+        // Paint floor + a voice hump RELATIVE TO the edge carrier (clipped at
+        // the pan boundary), then measure at that carrier.
+        const auto edgeCase = [usb](int n, double bwMhz) -> OccupiedRegion {
+            const double hzPerBin = bwMhz * 1.0e6 / n;
+            const double startMhz = kCenter - bwMhz / 2.0;
+            const double edgeCarrier = usb ? kCenter + bwMhz / 2.0 - 0.002
+                                           : kCenter - bwMhz / 2.0 + 0.002;
+            const int carrierBin = static_cast<int>(
+                std::lround((edgeCarrier - startMhz) / bwMhz * n));
+            QVector<float> bins(n, -110.0f);
+            for (int o = 0; o * hzPerBin <= 2700.0; ++o) {
+                if (o * hzPerBin < 300.0) continue;
+                const int bin = usb ? carrierBin + o : carrierBin - o;
+                if (bin >= 0 && bin < n) bins[bin] = -80.0f;
+            }
+            QVector<float> avgEnv;
+            return measureOccupiedRegion(
+                bins, kCenter, bwMhz, edgeCarrier,
+                usb ? QStringLiteral("USB") : QStringLiteral("LSB"),
+                -110.0f, avgEnv);
+        };
+        const OccupiedRegion r  = edgeCase(kN, kBwMhz);   // canonical grid
+        const OccupiedRegion rf = edgeCase(8192, 0.05);   // decimated path
+        char d[96];
+        std::snprintf(d, sizeof d, "  [%s] valid=%d fineValid=%d",
+                      tag(usb), r.valid ? 1 : 0, rf.valid ? 1 : 0);
+        // Reaching here without an assert IS the test; both grids must also
+        // still produce a fit from the clipped-but-present energy.
+        report("edge carrier: clipped scan measures without OOB access",
+               r.valid && rf.valid, d);
+    });
+
     std::printf("\n%s (%d failure%s)\n",
                 g_failed ? "FAILED" : "PASSED",
                 g_failed, g_failed == 1 ? "" : "s");
