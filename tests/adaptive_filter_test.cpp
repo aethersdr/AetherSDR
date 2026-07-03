@@ -463,6 +463,85 @@ int main()
         }
     });
 
+    // ── 15. Level-invariant outer edge — width must not track SNR ───────────
+    // The same signal shape (flat core 300-2400, then a soft 30 dB/kHz skirt)
+    // at three levels 20 dB apart: a floor-relative edge would move the
+    // crossing ~333 Hz per 10 dB, but the in-guard reference cap pins the edge
+    // at a fixed depth below the in-band reference — the same Hz whatever the
+    // level. This is the QSB case: the passband must not breathe with fades.
+    forEachMode([](bool usb) {
+        const auto shapeAt = [](float coreDbm) {
+            return [coreDbm](double f) -> float {
+                if (f < 300)    return -1000.0f;
+                if (f <= 2400)  return coreDbm;
+                return static_cast<float>(coreDbm - 30.0 * (f - 2400.0) / 1000.0);
+            };
+        };
+        int highs[3] = {0, 0, 0};
+        bool allValid = true;
+        const float levels[3] = {-60.0f, -70.0f, -80.0f};
+        for (int i = 0; i < 3; ++i) {
+            const OccupiedRegion r = measure(
+                buildSpectrum(usb, -120.0f, 0.0f, shapeAt(levels[i])), usb, -120.0f);
+            allValid = allValid && r.valid;
+            highs[i] = r.highHz;
+        }
+        const int spread = std::max({highs[0], highs[1], highs[2]}) -
+                           std::min({highs[0], highs[1], highs[2]});
+        char d[112];
+        std::snprintf(d, sizeof d, "  [%s] high=%d/%d/%d spread=%d",
+                      tag(usb), highs[0], highs[1], highs[2], spread);
+        report("level sweep: soft-skirt high-cut level-invariant",
+               allValid && spread <= 250 &&
+               highs[0] >= 3000 && highs[0] <= 3700, d);
+    });
+
+    // ── 16. FCC two-tone occupied-bandwidth vectors (47 CFR 2.1049) ──────────
+    // The FCC's type-acceptance excitations for SSB: two tones whose spacing
+    // defines the occupied bandwidth (400/1800 -> 3.0 kHz class, 500/2100 ->
+    // 3.5 kHz, 500/2400 -> 4.0 kHz). With realistic steep TX skirts the
+    // measured band must end just past the upper tone and start at or below
+    // the lower tone — regulator-defined ground truth for the whole chain.
+    forEachMode([](bool usb) {
+        const struct { double f1, f2; } pairs[] = {
+            {400.0, 1800.0}, {500.0, 2100.0}, {500.0, 2400.0} };
+        for (const auto& p : pairs) {
+            const auto sig = [&p](double f) -> float {
+                if (std::abs(f - p.f1) <= 50.0 || std::abs(f - p.f2) <= 50.0)
+                    return -60.0f;                        // the two tones
+                if (f > p.f1 && f < p.f2) return -70.0f;  // intermod fill
+                if (f > p.f2)                              // steep TX skirt
+                    return static_cast<float>(-70.0 - 120.0 * (f - p.f2) / 1000.0);
+                if (f < p.f1 && f >= 100.0)
+                    return static_cast<float>(-70.0 - 120.0 * (p.f1 - f) / 1000.0);
+                return -1000.0f;
+            };
+            const OccupiedRegion r = measure(
+                buildSpectrum(usb, -120.0f, 0.0f, sig), usb, -120.0f);
+            char d[112];
+            std::snprintf(d, sizeof d, "  [%s %.0f/%.0f] low=%d high=%d",
+                          tag(usb), p.f1, p.f2, r.lowHz, r.highHz);
+            report("FCC two-tone: band ends just past the upper tone",
+                   r.valid && r.lowHz <= static_cast<int>(p.f1) &&
+                   r.highHz >= static_cast<int>(p.f2) - 100 &&
+                   r.highHz <= static_cast<int>(p.f2) + 500, d);
+        }
+    });
+
+    // ── 17. floorDbm export — the scalar floor the measurement used ─────────
+    forEachMode([](bool usb) {
+        const auto bins = buildSpectrum(usb, -110.0f, 0.0f, hump(300, 2700, -80.0f));
+        const OccupiedRegion rs = measure(bins, usb, -110.0f);    // supplied
+        const OccupiedRegion rf = measure(bins, usb, -1000.0f);   // sentinel
+        char d[96];
+        std::snprintf(d, sizeof d, "  [%s] supplied=%.1f fallback=%.1f",
+                      tag(usb), rs.floorDbm, rf.floorDbm);
+        report("floorDbm export: supplied passthrough + local fallback",
+               rs.valid && rf.valid &&
+               std::abs(rs.floorDbm - (-110.0f)) < 0.1f &&
+               rf.floorDbm > -114.0f && rf.floorDbm < -105.0f, d);
+    });
+
     std::printf("\n%s (%d failure%s)\n",
                 g_failed ? "FAILED" : "PASSED",
                 g_failed, g_failed == 1 ? "" : "s");

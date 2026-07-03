@@ -19,9 +19,15 @@ struct OccupiedRegion {
     int    lowHz{0};                // low-cut: nearest-carrier edge of the energy
     int    highHz{0};               // high-cut: far edge of the energy
     float  peakDbm{-1000.0f};       // envelope peak (the loud voice level)
-    float  referenceDbm{-1000.0f};  // robust in-band reference (median of the
-                                    // confirmed-core bins) — the relative anchor
-                                    // for the outer splatter cap and soft edges
+    float  referenceDbm{-1000.0f};  // robust in-band reference (high percentile
+                                    // of the kept extent) — the relative anchor
+                                    // for the outer caps and soft edges
+    float  floorDbm{-1000.0f};      // the scalar noise floor the measurement
+                                    // actually used (caller-supplied, or the
+                                    // local fallback when the caller sent the
+                                    // sentinel) — lets the engine key low-SNR
+                                    // behaviour on peakDbm - floorDbm without
+                                    // guessing which floor was in effect
 };
 
 // Operator-tunable knobs for measureOccupiedRegion (mapped from the SliceModel

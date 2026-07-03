@@ -131,6 +131,31 @@ namespace {
     // kSplatterDownDb / kSplatterGuardHz are operator-tunable via the Splatter-
     // rejection setting — see OccupiedRegionParams.
 
+    // ── Level-invariant outer edge (in-guard reference cap) ─────────────────
+    // A floor-relative crossing on a SOFT skirt is a property of the SNR, not
+    // of the TX signal: on a skirt of S dB/kHz the floor+5 crossing moves
+    // ~1000/S Hz per dB of signal-level change, so the measured width breathed
+    // with QSB and collapsed as stations weakened. The level-invariant answer
+    // is reference-relative (ITU-R SM.443 puts the 99% occupied bandwidth of
+    // SSB voice ~26 dB below the peak): INSIDE the splatter guard the edge is
+    // additionally capped at the outermost bin within
+    // (splatterDownDb + kOccupiedCapExtraDb) of the in-band reference — the
+    // SAME rule family as the splatter cap, at a deeper depth (Tight 23 /
+    // Normal 30 / Wide 40 dB), so the operator's Tight/Wide intent scales both
+    // regimes and the past-guard splatter depth is always the tighter of the
+    // two where both apply. The extra 5 dB over ITU's 26 accounts for the
+    // reference sitting a few dB under the peak plus envelope-smear headroom
+    // (a bare 26 re-chopped the declining-voice shape the splatter guard was
+    // built to protect). The cap only engages with real headroom —
+    // referenceDbm at least (depth + kCapHeadroomMarginDb) above the scalar
+    // floor — because below that the cap level is within a few dB of the
+    // noise and indistinguishable from it: weak signals stay governed by the
+    // floor crossing (that regime is handled by the engine's widen-only
+    // low-SNR behaviour instead). The floor+5 crossing remains the absolute
+    // outer limit by construction (the cap only ranges over occupied bins).
+    constexpr float  kOccupiedCapExtraDb   = 5.0f;
+    constexpr float  kCapHeadroomMarginDb  = 5.0f;
+
     // ── Sharp-edge precision (spec Stage G) ─────────────────────────────────
     // Where a clear steep transition exists (modern DSP rigs have near-vertical
     // skirts), snap the edge to the steepest dB/Hz bin — the most precise method.
@@ -466,13 +491,26 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
     // ── Cap pass ─────────────────────────────────────────────────────────────
     // splatterO tracks the outermost occupied bin still within kSplatterDownDb
     // of the in-band reference — the reference-relative cap that excludes a
-    // slowly-decaying splatter tail (Stage F.2). Computed against the FINAL
-    // reference (anchor pass), not a run-so-far value.
-    int nearO = firstO, farO = keptEndO, splatterO = firstO;
+    // slowly-decaying splatter tail (Stage F.2). refCapO tracks the outermost
+    // occupied bin within the deeper in-guard depth — the level-invariant edge
+    // (see the kOccupiedCapExtraDb block comment). Both computed against the
+    // FINAL reference (anchor pass), not a run-so-far value.
+    const float capDepthDb  = params.splatterDownDb + kOccupiedCapExtraDb;
+    const float refCapLevel = referenceDbm - capDepthDb;
+    int nearO = firstO, farO = keptEndO, splatterO = firstO, refCapO = firstO;
     for (int o = firstO; o <= keptEndO; ++o) {
         const float v = envAt(o);
-        if (v >= occThrAt(o) && v >= splatterLevel) splatterO = o;
+        if (v < occThrAt(o)) continue;
+        if (v >= splatterLevel) splatterO = o;
+        if (v >= refCapLevel)   refCapO   = o;
     }
+
+    // Level-invariant edge: with real headroom, the occupied width ends where
+    // the envelope has fallen capDepthDb below the in-band reference — the
+    // same Hz whatever the absolute signal level, so QSB stops breathing the
+    // passband on soft skirts. Without headroom the floor crossing governs.
+    if (referenceDbm - scalarFloor >= capDepthDb + kCapHeadroomMarginDb)
+        farO = std::min(farO, std::max(refCapO, peakO));
     // ── Outer-edge refinement (Stage F.2 / G) ───────────────────────────────
     // Steep slope, in dB per bin (kSteepSlopeDbPerKHz is dB/kHz).
     const float steepPerBin = kSteepSlopeDbPerKHz * static_cast<float>(hzPerBin) / 1000.0f;
@@ -529,6 +567,7 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
     r.highHz       = audioHigh;
     r.peakDbm      = envPeak;
     r.referenceDbm = referenceDbm;
+    r.floorDbm     = scalarFloor;
     return r;
 }
 
