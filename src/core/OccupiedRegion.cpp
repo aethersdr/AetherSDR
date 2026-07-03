@@ -1,6 +1,7 @@
 #include "OccupiedRegion.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace AetherSDR {
@@ -103,16 +104,56 @@ namespace {
     // bounds any over-wide tail.
     constexpr float  kSteepSlopeDbPerKHz = 30.0f;
 
-    // Value at the given percentile (0-100) of bins[a..b], via nth_element
-    // (selection, not a full sort).
-    float percentileOfWindow(const QVector<float>& bins, int a, int b, int pct)
-    {
-        QVector<float> w(bins.begin() + a, bins.begin() + b + 1);
-        const int idx = std::clamp(pct * (static_cast<int>(w.size()) - 1) / 100,
-                                   0, static_cast<int>(w.size()) - 1);
-        std::nth_element(w.begin(), w.begin() + idx, w.end());
-        return w[idx];
-    }
+    // ── Sliding-window percentile (floor curve) ────────────────────────────
+    // The floor curve needs a low percentile of a wide (±2500 Hz) raw-bin
+    // window at EVERY scan offset. Copying the window and running nth_element
+    // per offset is O(span × window) — quadratic in zoom (span and window both
+    // grow as hzPerBin shrinks) and an allocation storm on the GUI thread; on
+    // a zoomed-in Retina pan it reached millions of float copies per frame
+    // (the "waterfall chokes when zoomed" regression). The window slides by
+    // exactly one bin per offset, so a histogram over quantized dB with one
+    // remove + one add per step gives the same percentile in O(buckets).
+    //
+    // Quantization: 256 buckets over [scalarFloor - kFloorHistBelowDb,
+    // scalarFloor + kFloorHistAboveDb] ≈ 0.23 dB/bucket. The incoming bins are
+    // display-quantized (~0.13 dB) and the result is clamped to
+    // [scalarFloor, scalarFloor + kFloorTiltMaxDb] before use, so the ≤0.24 dB
+    // bucket rounding is absorbed long before the 3/5 dB gates can notice.
+    constexpr int   kFloorHistBuckets = 256;
+    constexpr float kFloorHistBelowDb = 20.0f;   // histogram floor headroom
+    constexpr float kFloorHistAboveDb = 40.0f;   // histogram signal headroom
+
+    struct FloorHistogram {
+        std::array<int, kFloorHistBuckets> counts{};
+        int   total{0};
+        float lo{0.0f};
+        float bucketDb{1.0f};
+
+        explicit FloorHistogram(float scalarFloor)
+            : lo(scalarFloor - kFloorHistBelowDb),
+              bucketDb((kFloorHistBelowDb + kFloorHistAboveDb) / kFloorHistBuckets) {}
+
+        int bucketOf(float v) const {
+            return std::clamp(static_cast<int>((v - lo) / bucketDb),
+                              0, kFloorHistBuckets - 1);
+        }
+        void add(float v)    { ++counts[bucketOf(v)]; ++total; }
+        void remove(float v) { --counts[bucketOf(v)]; --total; }
+
+        // Value at the given percentile (0-100), replicating the previous
+        // copy+nth_element semantics: idx = pct*(n-1)/100 (integer division),
+        // then the idx-th smallest sample -> its bucket's lower edge.
+        float percentile(int pct) const {
+            if (total <= 0) return lo;
+            const int idx = std::clamp(pct * (total - 1) / 100, 0, total - 1);
+            int cum = 0;
+            for (int i = 0; i < kFloorHistBuckets; ++i) {
+                cum += counts[i];
+                if (cum > idx) return lo + i * bucketDb;
+            }
+            return lo + (kFloorHistBuckets - 1) * bucketDb;
+        }
+    };
 }
 
 OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
@@ -197,14 +238,28 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
     // to swallow a signal). Tracks a tilted floor at the signal/noise boundary
     // where edge accuracy matters, while the clamp guarantees it can never make
     // the occupied threshold lower than the proven scalar behaviour.
+    // One histogram slides across the scan: the window center moves by exactly
+    // one bin per offset (carrier-outward), so each step removes at most one
+    // leaving bin and adds at most one entering bin (the clamps freeze an edge
+    // at the pan boundary, hence the while-loops that move each edge 0..1 step).
     const int floorHalf = std::max(2, static_cast<int>(kFloorWindowHz / hzPerBin / 2.0));
     QVector<float> floorCurve(span);
-    for (int o = 0; o < span; ++o) {
-        const int c = binAt(o);
-        const int a = std::clamp(c - floorHalf, 0, N - 1);
-        const int b = std::clamp(c + floorHalf, 0, N - 1);
-        const float pct = percentileOfWindow(binsDbm, a, b, kFloorPercentile);
-        floorCurve[o] = std::clamp(pct, scalarFloor, scalarFloor + kFloorTiltMaxDb);
+    {
+        FloorHistogram hist(scalarFloor);
+        int a = std::clamp(binAt(0) - floorHalf, 0, N - 1);
+        int b = std::clamp(binAt(0) + floorHalf, 0, N - 1);
+        for (int i = a; i <= b; ++i) hist.add(binsDbm[i]);
+        for (int o = 0; o < span; ++o) {
+            const int c  = binAt(o);
+            const int a2 = std::clamp(c - floorHalf, 0, N - 1);
+            const int b2 = std::clamp(c + floorHalf, 0, N - 1);
+            while (b < b2) hist.add(binsDbm[++b]);
+            while (a > a2) hist.add(binsDbm[--a]);
+            while (a < a2) hist.remove(binsDbm[a++]);
+            while (b > b2) hist.remove(binsDbm[b--]);
+            floorCurve[o] = std::clamp(hist.percentile(kFloorPercentile),
+                                       scalarFloor, scalarFloor + kFloorTiltMaxDb);
+        }
     }
     const auto floorAt = [&](int o) -> float { return floorCurve[o]; };
 
