@@ -5412,17 +5412,42 @@ const QVector<float>& SpectrumWidget::buildFftDisplayTrace(const QVector<float>&
 
     // Display-only spatial smoothing: m_smoothed is temporal, so it reduces
     // frame shimmer but leaves adjacent-bin stair steps intact.
+    //
+    // #3932/#3967: the 5-tap blend exists to melt the radio's RBW stair-steps
+    // when zoomed IN (bins repeat as plateaus once the span drops below the
+    // FFT's resolution). Applied unconditionally (#3836) it low-passes every
+    // trace — rounding off narrow carriers and defocusing the noise floor at
+    // wide spans ("out of focus", 26.6.5). Gate the blend on the measured
+    // plateau fraction so it only engages when stair-steps actually exist:
+    // zoomed-in plateaus (long equal runs, frac >~0.65) get the full blend,
+    // a busy wide span (frac <~0.35, adjacent noise bins rarely equal) gets
+    // none, and the ramp between avoids a visible mode flip while zooming.
+    int plateauPairs = 0;
+    for (int i = 1; i < srcCount; ++i) {
+        if (std::abs(bins[i] - bins[i - 1]) < 0.01f) {
+            ++plateauPairs;
+        }
+    }
+    const float plateauFrac =
+        static_cast<float>(plateauPairs) / static_cast<float>(srcCount - 1);
+    const float smoothBlend = kFftDisplaySpatialSmoothBlend
+        * std::clamp((plateauFrac - 0.35f) / 0.30f, 0.0f, 1.0f);
+
     QVector<float>& displayBins = m_fftDisplaySmoothScratch;
-    displayBins.resize(srcCount);
-    displayBins[0] = bins[0];
-    displayBins[srcCount - 1] = bins[srcCount - 1];
-    for (int i = 1; i < srcCount - 1; ++i) {
-        const float localSmooth = (i >= 2 && i + 2 < srcCount)
-            ? (bins[i - 2] + 4.0f * bins[i - 1] + 6.0f * bins[i]
-               + 4.0f * bins[i + 1] + bins[i + 2]) * 0.0625f
-            : (bins[i - 1] + 2.0f * bins[i] + bins[i + 1]) * 0.25f;
-        displayBins[i] = bins[i] * (1.0f - kFftDisplaySpatialSmoothBlend)
-            + localSmooth * kFftDisplaySpatialSmoothBlend;
+    if (smoothBlend <= 0.0f) {
+        displayBins = bins;
+    } else {
+        displayBins.resize(srcCount);
+        displayBins[0] = bins[0];
+        displayBins[srcCount - 1] = bins[srcCount - 1];
+        for (int i = 1; i < srcCount - 1; ++i) {
+            const float localSmooth = (i >= 2 && i + 2 < srcCount)
+                ? (bins[i - 2] + 4.0f * bins[i - 1] + 6.0f * bins[i]
+                   + 4.0f * bins[i + 1] + bins[i + 2]) * 0.0625f
+                : (bins[i - 1] + 2.0f * bins[i] + bins[i + 1]) * 0.25f;
+            displayBins[i] = bins[i] * (1.0f - smoothBlend)
+                + localSmooth * smoothBlend;
+        }
     }
 
     int dstCount = std::max(targetPoints, srcCount);
@@ -8133,11 +8158,14 @@ void SpectrumWidget::initSpectrumPipeline()
     QRhi* r = rhi();
 
     // Column texture is (re)created at the spectrum viewport width in
-    // renderGpuFrame; only the fixed resources are built here. R32F is
-    // universal on the desktop backends; fall back to R16F (mandatory
-    // linear-filterable since GLES3) for anything that lacks it.
-    m_fftColFormat = r->isTextureFormatSupported(QRhiTexture::R32F)
-        ? QRhiTexture::R32F : QRhiTexture::R16F;
+    // renderGpuFrame; only the fixed resources are built here. The column is
+    // sampled with LINEAR filtering, so the format must be linearly
+    // *filterable*, not merely creatable — isTextureFormatSupported() cannot
+    // distinguish the two, and float32 filtering is optional on GLES (and on
+    // some older GL drivers). R16F is filterable on every QRhi backend and
+    // half precision is ample for the normalized 0..1 amplitude stored here
+    // (same conclusion as PR #3968). Use it unconditionally.
+    m_fftColFormat = QRhiTexture::R16F;
     m_fftScopeUbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
                                  5 * 4 * sizeof(float));
     m_fftScopeUbo->create();

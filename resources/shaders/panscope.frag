@@ -95,23 +95,45 @@ void main()
         outc = over(outc, pm(rgb, a, 1.0));
     }
 
-    // ── Stroke (feather under core), slope-corrected width ─────────────
+    // ── Stroke (feather under core), exact segment distance ────────────
+    // #3967: the first cut approximated stroke distance as the vertical
+    // distance scaled by a dFdx()-derived slope — distance to the segment's
+    // INFINITE line. On steep segments that line passes near the entire pixel
+    // column, so the stroke shot full-height spikes above and below the trace
+    // ("spiky both above and below the line"). Compute the true distance to
+    // the two polyline segments adjacent to this column instead (plus one
+    // neighbor each side so wide strokes bleed across columns like the old
+    // geometry quads did), clamped to the segment endpoints.
     float coreHalf = stroke.x;
     if (coreHalf > 0.0) {
-        // dFdx of the trace height gives the segment slope in px/px; scale
-        // the vertical distance to true perpendicular distance so steep
-        // flanks keep their stroke width (the old geometry offset vertices
-        // along the segment normal for the same reason).
-        float slope = dFdx(yTrace) / max(fwidth(v_uv.x) * plot.x, 1e-4);
-        float invLen = inversesqrt(1.0 + slope * slope);
-        float d = abs(py - yTrace) * invLen;
+        vec2 px = vec2(v_uv.x * plot.x, py);       // this fragment in device px
+        float nCols = max(plot.z, 2.0);
+        float colW = plot.x / nCols;               // px per column
+        float i0 = floor(px.x / colW - 0.5);
+        vec2 pt[4];
+        for (int k = 0; k < 4; ++k) {
+            float ci = clamp(i0 + float(k) - 1.0, 0.0, nCols - 1.0);
+            float ty = clamp(texture(columns, vec2((ci + 0.5) / nCols, 0.5)).r,
+                             0.0, 1.0);
+            pt[k] = vec2((ci + 0.5) * colW, (1.0 - ty) * hPx);
+        }
+        float d = 1e9;
+        for (int k = 0; k < 3; ++k) {
+            vec2 a = pt[k];
+            vec2 ab = pt[k + 1] - a;
+            float tt = clamp(dot(px - a, ab) / max(dot(ab, ab), 1e-6), 0.0, 1.0);
+            d = min(d, length(px - (a + tt * ab)));
+        }
 
+        // Falloff parity with the old vertex strips (spectrum.frag): solid
+        // out to halfWidth-1, a 1 px fade to halfWidth; the feather adds one
+        // more 1 px annulus at low alpha. The first cut's fixed ±0.75 px
+        // smoothstep band read as a soft "blurred" stroke at 1x DPI.
         vec3 lineRgb = heat ? heatColor(t) : fillColor.rgb;
         float featherHalf = coreHalf + stroke.y;
-        float aa = 0.75;
-        float covF = 1.0 - smoothstep(featherHalf - aa, featherHalf + aa, d);
+        float covF = 1.0 - smoothstep(coreHalf, featherHalf, d);
         outc = over(outc, pm(lineRgb, stroke.w, covF));
-        float covC = 1.0 - smoothstep(coreHalf - aa, coreHalf + aa, d);
+        float covC = 1.0 - smoothstep(max(coreHalf - 1.0, 0.0), coreHalf, d);
         outc = over(outc, pm(lineRgb, stroke.z, covC));
     }
 
