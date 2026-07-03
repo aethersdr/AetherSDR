@@ -190,7 +190,15 @@ void CwxModel::handleSendReply(int resultCode, const QString& body)
         qWarning() << "CwxModel: failed to parse radio_index from reply body:" << body;
         return;
     }
-    m_cwxEndIndex = radioIndex;
+    // Only ever advance the watch, never retract it. cwx send replies on the
+    // single command socket are normally ordered, but if two back-to-back
+    // macros' replies arrive out of order, a smaller radio_index must not
+    // overwrite a larger one — that would release TX while the later batch
+    // still has chars queued. m_cwxEndIndex is -1 while idle, so the first
+    // reply of a batch always takes. (#3949)
+    if (radioIndex > m_cwxEndIndex) {
+        m_cwxEndIndex = radioIndex;
+    }
 }
 
 void CwxModel::setSpeed(int wpm)
