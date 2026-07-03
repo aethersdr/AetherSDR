@@ -20,6 +20,7 @@ public:
         QKeySequence currentKey;
         std::function<void()> handler;
         bool autoRepeat{false};   // allow key-hold repeat (e.g. tuning)
+        bool persisted{false};    // explicit user intent (set/cleared) → written to settings
     };
 
     explicit ShortcutManager(QObject* parent = nullptr);

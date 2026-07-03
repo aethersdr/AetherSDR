@@ -1,6 +1,7 @@
 #include "ShortcutManager.h"
 #include "AppSettings.h"
 #include <QHash>
+#include <QRegularExpression>
 #include <QWidget>
 #include <QDebug>
 
@@ -16,6 +17,15 @@ void ShortcutManager::registerAction(const QString& id, const QString& displayNa
                                      std::function<void()> handler,
                                      bool autoRepeat)
 {
+    // The id becomes part of the XML element name "Shortcut_<id>". AppSettings
+    // silently drops keys that fail ^[A-Za-z_][A-Za-z0-9_]*$ on save (qWarning
+    // only), so an id containing '.'/'-'/etc. would be contains()-true in-session
+    // yet never written — a cleared binding would resurrect after restart (the
+    // exact #3964 failure mode). Keep ids to [A-Za-z0-9_].
+    Q_ASSERT_X(QRegularExpression(QStringLiteral("^[A-Za-z0-9_]+$")).match(id).hasMatch(),
+               "ShortcutManager::registerAction",
+               "action id must match [A-Za-z0-9_]+ (it forms the XML key Shortcut_<id>)");
+
     // Prevent duplicate registration
     for (const auto& a : m_actions) {
         if (a.id == id) {
@@ -41,6 +51,7 @@ void ShortcutManager::setBinding(const QString& actionId, const QKeySequence& ke
     }
 
     a->currentKey = key;
+    a->persisted = true;
     saveBindings();
     emit bindingsChanged();
 }
@@ -50,14 +61,17 @@ void ShortcutManager::clearBinding(const QString& actionId)
     auto* a = action(actionId);
     if (!a) return;
     a->currentKey = QKeySequence();
+    a->persisted = true;   // user intent — an explicit "" must survive restart (#3964)
     saveBindings();
     emit bindingsChanged();
 }
 
 void ShortcutManager::resetToDefaults()
 {
-    for (auto& a : m_actions)
+    for (auto& a : m_actions) {
         a.currentKey = a.defaultKey;
+        a.persisted = false;   // back to default → drop from settings, track future defaults
+    }
     saveBindings();
     emit bindingsChanged();
 }
@@ -67,13 +81,25 @@ void ShortcutManager::loadBindings()
     auto& s = AppSettings::instance();
     for (auto& a : m_actions) {
         const QString key = QStringLiteral("Shortcut_%1").arg(a.id);
-        QString val = s.value(key).toString();
-        if (!val.isNull())
-            a.currentKey = QKeySequence(val);
-        // else keep default
+        // A present key (even "") is explicit user intent — apply it and mark the
+        // action persisted; an absent key keeps the registered default. Presence,
+        // not the null-vs-"" value (which the XML round-trip flattens), is the
+        // correct sentinel (#3964). We need the presence bit itself to seed
+        // `persisted`, so this stays a contains() gate rather than a
+        // value(key, default) fallback.
+        if (s.contains(key)) {
+            a.currentKey = QKeySequence(s.value(key).toString());
+            a.persisted = true;
+        }
     }
 
-    bool normalized = false;
+    // Normalize duplicate key bindings for this session only. This clears the
+    // losing action's currentKey in memory but leaves its `persisted` flag
+    // untouched, so saveBindings() will NOT write the machine-initiated clear:
+    // the loser is recomputed from (defaults + persisted customizations) on every
+    // load. Persisting it would be indistinguishable from a user clear and would
+    // pin the loser to "" forever — suppressing a future release's default once
+    // the colliding registration is fixed (#3964 review).
     QHash<QString, int> ownerByKey;
     for (int i = 0; i < m_actions.size(); ++i) {
         auto& action = m_actions[i];
@@ -102,11 +128,7 @@ void ShortcutManager::loadBindings()
                        << "owned by" << incumbent.id;
             action.currentKey = QKeySequence();
         }
-        normalized = true;
     }
-
-    if (normalized)
-        saveBindings();
 }
 
 void ShortcutManager::saveBindings()
@@ -114,7 +136,18 @@ void ShortcutManager::saveBindings()
     auto& s = AppSettings::instance();
     for (const auto& a : m_actions) {
         const QString key = QStringLiteral("Shortcut_%1").arg(a.id);
-        s.setValue(key, a.currentKey.toString());
+        // Persist only actions the user explicitly touched. A set or cleared
+        // binding is marked persisted and written back — a cleared one round-trips
+        // as "" and loadBindings()'s presence gate honors it (#3964). Everything
+        // else (fresh at default, reset to default, or cleared only by the
+        // load-time duplicate-key normalization) is written absent: a future
+        // release's changed default reaches it instead of being pinned, and a
+        // machine-initiated normalization clear never sticks.
+        if (a.persisted) {
+            s.setValue(key, a.currentKey.toString());
+        } else {
+            s.remove(key);
+        }
     }
     s.save();
 }
