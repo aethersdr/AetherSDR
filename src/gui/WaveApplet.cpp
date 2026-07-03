@@ -72,6 +72,16 @@ QLabel* makeSettingLabel(const QString& text, QWidget* parent)
 
 WaveformWidget::ViewMode viewModeFromSetting(const QString& value)
 {
+#ifdef AETHER_GPU_SPECTRUM
+    // Showcase visualizations are GPU-only; without the flag a persisted
+    // demo mode falls back to Graph below.
+    if (value.compare("Ridge", Qt::CaseInsensitive) == 0)
+        return WaveformWidget::ViewMode::Ridge;
+    if (value.compare("Tunnel", Qt::CaseInsensitive) == 0)
+        return WaveformWidget::ViewMode::Tunnel;
+    if (value.compare("Horizon", Qt::CaseInsensitive) == 0)
+        return WaveformWidget::ViewMode::Horizon;
+#endif
     if (value.compare("Bands", Qt::CaseInsensitive) == 0)
         return WaveformWidget::ViewMode::VerticalBars;
     if (value.compare("History", Qt::CaseInsensitive) == 0)
@@ -90,6 +100,12 @@ QString settingForViewMode(WaveformWidget::ViewMode mode)
         return QStringLiteral("History");
     case WaveformWidget::ViewMode::VerticalBars:
         return QStringLiteral("Bands");
+    case WaveformWidget::ViewMode::Ridge:
+        return QStringLiteral("Ridge");
+    case WaveformWidget::ViewMode::Tunnel:
+        return QStringLiteral("Tunnel");
+    case WaveformWidget::ViewMode::Horizon:
+        return QStringLiteral("Horizon");
     case WaveformWidget::ViewMode::Graph:
         return QStringLiteral("Graph");
     }
@@ -222,6 +238,13 @@ void WaveApplet::buildSettingsDrawer()
         m_viewCombo->addItem("Envelope", QStringLiteral("Envelope"));
         m_viewCombo->addItem("History", QStringLiteral("History"));
         m_viewCombo->addItem("Bands", QStringLiteral("Bands"));
+#ifdef AETHER_GPU_SPECTRUM
+        // GPU showcase visualizations (wavedemo.frag) — audio-reactive,
+        // theme-colorized, and unapologetically fun.
+        m_viewCombo->addItem("3D Ridge", QStringLiteral("Ridge"));
+        m_viewCombo->addItem("Tunnel", QStringLiteral("Tunnel"));
+        m_viewCombo->addItem("Horizon", QStringLiteral("Horizon"));
+#endif
         row->addWidget(m_viewCombo, 1);
 
         connect(m_viewCombo, qOverload<int>(&QComboBox::currentIndexChanged),

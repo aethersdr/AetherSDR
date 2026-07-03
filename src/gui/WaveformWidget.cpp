@@ -281,6 +281,9 @@ QVariantMap WaveformWidget::wavestatsSnapshot(bool reset)
     case ViewMode::Envelope:     m[QStringLiteral("mode")] = QStringLiteral("Envelope"); break;
     case ViewMode::Bars:         m[QStringLiteral("mode")] = QStringLiteral("History"); break;
     case ViewMode::VerticalBars: m[QStringLiteral("mode")] = QStringLiteral("Bands"); break;
+    case ViewMode::Ridge:        m[QStringLiteral("mode")] = QStringLiteral("Ridge"); break;
+    case ViewMode::Tunnel:       m[QStringLiteral("mode")] = QStringLiteral("Tunnel"); break;
+    case ViewMode::Horizon:      m[QStringLiteral("mode")] = QStringLiteral("Horizon"); break;
     }
     m[QStringLiteral("fps")] = m_refreshRateHz;
     m[QStringLiteral("windowMs")] = m_windowMs;
@@ -1098,6 +1101,12 @@ const float kWaveQuadData[] = {
      1,  1,  1, 0,
 };
 
+// Showcase-mode geometry: column resolution for the demo scenes and the
+// envelope-history ring the Ridge scene scrolls through.
+constexpr int kDemoCols = 256;
+constexpr int kHistRows = 96;
+constexpr int kHistRowMs = 33;   // ~30 rows/s → ~3 s of visible history
+
 QShader loadWaveShader(const QString& path)
 {
     QFile f(path);
@@ -1135,6 +1144,19 @@ struct WaveformWidget::WaveUniforms {
     float colRmsLight[4];
     float colCap[4];
     float colCenter[4];
+};
+
+// std140 mirror of the U block in wavedemo.frag.
+struct WaveformWidget::DemoUniforms {
+    float widget[4];   // w, h, demoMode (0 ridge / 1 tunnel / 2 horizon), zoom
+    float anim[4];     // timeSec, rms, peak, hasData
+    float energy[4];   // low, mid, high, histHeadV
+    float colBg[4];
+    float colA[4];
+    float colB[4];
+    float colC[4];
+    float colD[4];
+    float colE[4];
 };
 
 void WaveformWidget::initWavePipeline()
@@ -1209,6 +1231,57 @@ void WaveformWidget::initWavePipeline()
     blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
     m_wavePipeline->setTargetBlends({blend});
     m_wavePipeline->create();
+}
+
+void WaveformWidget::initDemoPipeline()
+{
+    QRhi* r = rhi();
+
+    m_demoUbo = r->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer,
+                             sizeof(DemoUniforms));
+    m_demoUbo->create();
+
+    m_histTex = r->newTexture(QRhiTexture::R32F, QSize(kDemoCols, kHistRows));
+    m_histTex->create();
+    m_histRow = QVector<float>(kDemoCols, 0.0f);
+
+    m_demoSrb = r->newShaderResourceBindings();
+    m_demoSrb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0, QRhiShaderResourceBinding::FragmentStage, m_demoUbo),
+        QRhiShaderResourceBinding::sampledTexture(
+            1, QRhiShaderResourceBinding::FragmentStage, m_colTex, m_colSampler),
+        QRhiShaderResourceBinding::sampledTexture(
+            2, QRhiShaderResourceBinding::FragmentStage, m_histTex, m_colSampler),
+    });
+    m_demoSrb->create();
+
+    QShader vs = loadWaveShader(QStringLiteral(":/shaders/resources/shaders/overlay.vert.qsb"));
+    QShader fs = loadWaveShader(QStringLiteral(":/shaders/resources/shaders/wavedemo.frag.qsb"));
+    if (!vs.isValid() || !fs.isValid()) {
+        qWarning() << "WaveformWidget: demo shader load failed";
+        return;
+    }
+
+    m_demoPipeline = r->newGraphicsPipeline();
+    m_demoPipeline->setShaderStages({
+        {QRhiShaderStage::Vertex, vs},
+        {QRhiShaderStage::Fragment, fs},
+    });
+    QRhiVertexInputLayout layout;
+    layout.setBindings({{4 * sizeof(float)}});
+    layout.setAttributes({
+        {0, 0, QRhiVertexInputAttribute::Float2, 0},
+        {0, 1, QRhiVertexInputAttribute::Float2, 2 * sizeof(float)},
+    });
+    m_demoPipeline->setVertexInputLayout(layout);
+    m_demoPipeline->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+    m_demoPipeline->setShaderResourceBindings(m_demoSrb);
+    m_demoPipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    // The scenes are opaque full-bleed — no blending needed.
+    m_demoPipeline->create();
+
+    m_demoClock.start();
 }
 
 void WaveformWidget::initOverlayPipeline()
@@ -1286,8 +1359,9 @@ void WaveformWidget::initialize(QRhiCommandBuffer* cb)
     }
 
     initWavePipeline();
+    initDemoPipeline();
     initOverlayPipeline();
-    if (!m_wavePipeline || !m_ovPipeline)
+    if (!m_wavePipeline || !m_ovPipeline || !m_demoPipeline)
         return;
 
     auto* batch = r->nextResourceUpdateBatch();
@@ -1332,10 +1406,42 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const int sampleRate = model.sampleRate();
 
     // ── Reduce: columns / band levels + whole-window stats ───────────────
+    const bool demo = isDemoMode(m_viewMode);
     WaveformScopeModel::WindowStats stats;
     int columnCount = 0;
     int barCount = 0;
-    if (m_viewMode == ViewMode::VerticalBars) {
+    float energyLow = 0.0f, energyMid = 0.0f, energyHigh = 0.0f;
+    if (demo) {
+        // Fixed column resolution — the scenes sample it as a texture, so
+        // the widget width doesn't matter. Band energies drive the pulses.
+        columnCount = kDemoCols;
+        stats = model.mergeColumns(columnCount, m_columns);
+        m_colUpload.resize(columnCount * 4);
+        m_clipUpload.resize(columnCount);
+        for (int i = 0; i < columnCount; ++i) {
+            if (i < m_columns.size()) {
+                const WaveformScopeModel::ColumnStats& c = m_columns[i];
+                m_colUpload[i * 4 + 0] = c.min;
+                m_colUpload[i * 4 + 1] = c.max;
+                m_colUpload[i * 4 + 2] = std::clamp(c.rms * m_amplitudeZoom, 0.0f, 1.0f);
+                m_colUpload[i * 4 + 3] = std::clamp(c.peak * m_amplitudeZoom, 0.0f, 1.0f);
+            } else {
+                m_colUpload[i * 4 + 0] = 0.0f;
+                m_colUpload[i * 4 + 1] = 0.0f;
+                m_colUpload[i * 4 + 2] = 0.0f;
+                m_colUpload[i * 4 + 3] = 0.0f;
+            }
+            m_clipUpload[i] = 0;
+        }
+        QVector<float> bands;
+        computeBandLevels(model, 12, bands);
+        if (bands.size() >= 24) {
+            for (int b = 0; b < 4; ++b)  energyLow  += bands[b * 2];
+            for (int b = 4; b < 8; ++b)  energyMid  += bands[b * 2];
+            for (int b = 8; b < 12; ++b) energyHigh += bands[b * 2];
+            energyLow /= 4.0f; energyMid /= 4.0f; energyHigh /= 4.0f;
+        }
+    } else if (m_viewMode == ViewMode::VerticalBars) {
         stats = model.windowStats();
         barCount = std::clamp(static_cast<int>(plotRect.width() / 12.0), 10, 18);
         QVector<float> bands;
@@ -1393,6 +1499,8 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         m_clipTex->create();
         m_waveSrb->create();   // rebind the recreated textures
         m_lastColUploadGen = ~0ull;   // recreated textures must be re-uploaded
+        if (m_demoSrb)
+            m_demoSrb->create();
     }
     // Skip the column/clip re-upload when the reduced data is unchanged —
     // model.generation() is the dirty counter (reset above on texture
@@ -1408,12 +1516,10 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         batch->uploadTexture(m_clipTex, QRhiTextureUploadEntry(0, 0, clipDesc));
     }
 
-    // ── Grid/background layer ─────────────────────────────────────────────
-    const int gridKind =
-        (m_viewMode == ViewMode::Bars || m_viewMode == ViewMode::VerticalBars)
-            ? 1 : 0;
-    ensureGridCache(gridKind, plotRect);
-    const QSize texSize = m_gridCache.size();  // device px
+    // ── Grid/background + overlay texture sizing ──────────────────────────
+    const qreal dpr = devicePixelRatioF();
+    const QSize texSize(std::max(1, static_cast<int>(width() * dpr)),
+                        std::max(1, static_cast<int>(height() * dpr)));
     if (m_gridTex->pixelSize() != texSize) {
         m_gridTex->setPixelSize(texSize);
         m_gridTex->create();
@@ -1423,13 +1529,37 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         m_ovSrb->create();
         m_overlayKey.clear();   // overlay image must re-render at the new size
     }
-    if (m_gridCacheDirty) {
-        const QImage rgba =
-            m_gridCache.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
-        batch->uploadTexture(m_gridTex,
-                             QRhiTextureUploadEntry(
-                                 0, 0, QRhiTextureSubresourceUploadDescription(rgba)));
-        m_gridCacheDirty = false;
+    if (!demo) {
+        const int gridKind =
+            (m_viewMode == ViewMode::Bars || m_viewMode == ViewMode::VerticalBars)
+                ? 1 : 0;
+        ensureGridCache(gridKind, plotRect);
+        if (m_gridCacheDirty) {
+            const QImage rgba =
+                m_gridCache.convertToFormat(QImage::Format_RGBA8888_Premultiplied);
+            batch->uploadTexture(m_gridTex,
+                                 QRhiTextureUploadEntry(
+                                     0, 0, QRhiTextureSubresourceUploadDescription(rgba)));
+            m_gridCacheDirty = false;
+        }
+    }
+
+    // ── Ridge history ring: fold the current envelope into one row ────────
+    if (demo) {
+        if (!m_histAdvance.isValid()
+            || m_histAdvance.elapsed() >= kHistRowMs) {
+            m_histAdvance.restart();
+            for (int i = 0; i < kDemoCols; ++i)
+                m_histRow[i] = m_colUpload[i * 4 + 3];   // zoomed peak
+            QRhiTextureSubresourceUploadDescription rowDesc(
+                m_histRow.constData(),
+                kDemoCols * static_cast<int>(sizeof(float)));
+            rowDesc.setDestinationTopLeft(QPoint(0, m_histHead));
+            rowDesc.setSourceSize(QSize(kDemoCols, 1));
+            batch->uploadTexture(m_histTex,
+                                 QRhiTextureUploadEntry(0, 0, rowDesc));
+            m_histHead = (m_histHead + 1) % kHistRows;
+        }
     }
 
     // ── Text overlay layer ────────────────────────────────────────────────
@@ -1444,6 +1574,47 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     }
 
     // ── Uniforms ──────────────────────────────────────────────────────────
+    if (demo) {
+        if (!m_demoClock.isValid())
+            m_demoClock.start();
+        DemoUniforms d{};
+        d.widget[0] = static_cast<float>(width());
+        d.widget[1] = static_cast<float>(height());
+        d.widget[2] = m_viewMode == ViewMode::Ridge ? 0.0f
+                    : m_viewMode == ViewMode::Tunnel ? 1.0f : 2.0f;
+        d.widget[3] = m_amplitudeZoom;
+        d.anim[0] = static_cast<float>(m_demoClock.elapsed()) / 1000.0f;
+        d.anim[1] = std::clamp(stats.rms * m_amplitudeZoom, 0.0f, 1.0f);
+        d.anim[2] = std::clamp(stats.peak * m_amplitudeZoom, 0.0f, 1.0f);
+        d.anim[3] = (stats.empty || stale) ? 0.0f : 1.0f;
+        d.energy[0] = energyLow;
+        d.energy[1] = energyMid;
+        d.energy[2] = energyHigh;
+        d.energy[3] = static_cast<float>(m_histHead) / kHistRows;
+        fillColor(d.colBg, kBackground());
+        fillColor(d.colA, AetherSDR::ThemeManager::instance().color("color.accent"));
+        fillColor(d.colB, AetherSDR::ThemeManager::instance().color("color.accent.bright"));
+        fillColor(d.colC, AetherSDR::ThemeManager::instance().color("color.accent.success"));
+        fillColor(d.colD, AetherSDR::ThemeManager::instance().color("color.accent.warning"));
+        fillColor(d.colE, AetherSDR::ThemeManager::instance().color("color.accent.danger"));
+        batch->updateDynamicBuffer(m_demoUbo, 0, sizeof(DemoUniforms), &d);
+
+        const QSize outPx = renderTarget()->pixelSize();
+        cb->beginPass(renderTarget(), QColor(0, 0, 0, 255), {1.0f, 0}, batch);
+        cb->setViewport(QRhiViewport(0, 0, outPx.width(), outPx.height()));
+        const QRhiCommandBuffer::VertexInput vin(m_waveVbo, 0);
+        cb->setGraphicsPipeline(m_demoPipeline);
+        cb->setShaderResources(m_demoSrb);
+        cb->setVertexInput(0, 1, &vin);
+        cb->draw(4);
+        cb->setGraphicsPipeline(m_ovPipeline);
+        cb->setShaderResources(m_ovSrb);
+        cb->setVertexInput(0, 1, &vin);
+        cb->draw(4);
+        cb->endPass();
+        return;
+    }
+
     WaveUniforms u{};
     u.plot[0] = static_cast<float>(plotRect.x());
     u.plot[1] = static_cast<float>(plotRect.y());
@@ -1456,6 +1627,7 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     case ViewMode::Envelope:     u.widget[2] = 1.0f; break;
     case ViewMode::Bars:         u.widget[2] = 2.0f; break;
     case ViewMode::VerticalBars: u.widget[2] = 3.0f; break;
+    default:                     u.widget[2] = 0.0f; break;   // demo modes never reach here
     }
     u.widget[3] = m_amplitudeZoom;
     u.params[0] = static_cast<float>(columnCount);
@@ -1580,7 +1752,7 @@ void WaveformWidget::updateOverlayImage(const WaveformScopeModel::WindowStats& s
                          Qt::AlignLeft | Qt::AlignVCenter,
                          timeText);
 
-        if (stats.empty || stale)
+        if ((stats.empty || stale) && !isDemoMode(m_viewMode))
             drawNoAudio(painter, plotRect, source);
         if (m_paused)
             drawPausedBadge(painter, footerRect);
@@ -1601,6 +1773,11 @@ void WaveformWidget::releaseResources()
     delete m_clipTex;        m_clipTex = nullptr;
     delete m_colSampler;     m_colSampler = nullptr;
     delete m_clipSampler;    m_clipSampler = nullptr;
+
+    delete m_demoPipeline;   m_demoPipeline = nullptr;
+    delete m_demoSrb;        m_demoSrb = nullptr;
+    delete m_demoUbo;        m_demoUbo = nullptr;
+    delete m_histTex;        m_histTex = nullptr;
 
     delete m_ovPipeline;     m_ovPipeline = nullptr;
     delete m_gridSrb;        m_gridSrb = nullptr;
