@@ -123,6 +123,7 @@ private:
     QWidget*        m_setupPage{nullptr};
     QTextEdit*      m_macroEdits[12]{};
     QSpinBox*       m_delaySpin{nullptr};
+    QSpinBox*       m_speedStepSpin{nullptr};
     QPushButton*    m_qskBtn{nullptr};
 
     // Bottom bar

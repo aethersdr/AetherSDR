@@ -1,26 +1,77 @@
 #include "CwxPanel.h"
+#include "core/AppSettings.h"
 #include "core/TxKeyingMarker.h"
 #include "models/CwxModel.h"
 
-#include <QVBoxLayout>
+#include <QContextMenuEvent>
+#include <QDateTime>
 #include <QHBoxLayout>
-#include <QPushButton>
-#include <QTextEdit>
-#include <QSpinBox>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
-#include <QStackedWidget>
-#include <QScrollArea>
-#include <QDateTime>
-#include <QKeyEvent>
-#include <QPainter>
-#include <QScrollBar>
-#include <QContextMenuEvent>
 #include <QMenu>
+#include <QPainter>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QSpinBox>
+#include <QStackedWidget>
+#include <QTextEdit>
 #include <QTimer>
+#include <QVBoxLayout>
 #include "core/ThemeManager.h"
+
+namespace {
+
+constexpr const char* kCwxPanelSettingsKey = "CwxPanel";
+constexpr const char* kSpeedStepField = "speedStep";
+
+QJsonObject readCwxPanelSettings()
+{
+    const QString json = AetherSDR::AppSettings::instance()
+        .value(kCwxPanelSettingsKey, QString{}).toString();
+    if (json.isEmpty())
+        return {};
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    return doc.isObject() ? doc.object() : QJsonObject{};
+}
+
+void writeCwxPanelSettings(const QJsonObject& obj)
+{
+    auto& s = AetherSDR::AppSettings::instance();
+    s.setValue(kCwxPanelSettingsKey,
+        QString::fromUtf8(QJsonDocument(obj).toJson(QJsonDocument::Compact)));
+    s.save();
+}
+
+int readSpeedStep()
+{
+    return qBound(1, readCwxPanelSettings().value(kSpeedStepField).toInt(3), 20);
+}
+
+void writeSpeedStep(int step)
+{
+    QJsonObject obj = readCwxPanelSettings();
+    obj[kSpeedStepField] = step;
+    writeCwxPanelSettings(obj);
+}
+
+// Returns bubble-display text for a CW transmission: the text actually keyed
+// (speed modifier prefixes stripped, joined from expansion segments).
+QString bubbleTextFor(const QString& rawText, int baseWpm, int step)
+{
+    const auto segs = AetherSDR::CwxModel::expandSpeedModifiers(rawText, baseWpm, step);
+    QString result;
+    for (const auto& s : segs)
+        result += s.text;
+    return result.isEmpty() ? rawText : result;
+}
+
+} // namespace
 
 namespace AetherSDR {
 
@@ -260,7 +311,9 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
             // Log the macro text to the history feed BEFORE firing the
             // command so the snapshot of m_model->sentIndex() lines up
             // with the chars about to be keyed for this bubble. (#3146)
-            appendHistoryBubble(m_model->macro(i));
+            const QString raw = m_model->macro(i);
+            appendHistoryBubble(
+                bubbleTextFor(raw, m_model->speed(), m_model->speedStep()));
             m_model->sendMacro(i + 1);
         });
     }
@@ -316,6 +369,17 @@ void CwxPanel::setModel(CwxModel* model)
             m_delaySpin->setValue(ms);
         }
     });
+    connect(m_model, &CwxModel::speedStepChanged, this, [this](int step) {
+        if (m_speedStepSpin) {
+            QSignalBlocker b(m_speedStepSpin);
+            m_speedStepSpin->setValue(step);
+        }
+    });
+    // Sync step spin to model's current value (model may be set after construction)
+    if (m_speedStepSpin && m_model->speedStep() != m_speedStepSpin->value()) {
+        QSignalBlocker b(m_speedStepSpin);
+        m_speedStepSpin->setValue(m_model->speedStep());
+    }
     connect(m_model, &CwxModel::qskChanged, this, [this](bool on) {
         if (m_qskBtn) {
             QSignalBlocker b(m_qskBtn);
@@ -374,13 +438,13 @@ void CwxPanel::buildSetupView()
     vbox->setContentsMargins(4, 4, 4, 4);
     vbox->setSpacing(4);
 
-    // Delay + QSK
+    // Delay + QSK + Speed Step
     auto* topRow = new QHBoxLayout;
     topRow->addWidget(new QLabel("Delay:"));
     m_delaySpin = new QSpinBox;
     m_delaySpin->setRange(0, 2000);
     m_delaySpin->setValue(5);
-    m_delaySpin->setFixedWidth(60);
+    m_delaySpin->setFixedWidth(52);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_delaySpin, "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
         "border-radius: 2px; font-size: 11px; }");
     topRow->addWidget(m_delaySpin);
@@ -389,6 +453,17 @@ void CwxPanel::buildSetupView()
     m_qskBtn->setCheckable(true);
     m_qskBtn->setStyleSheet(kBtnStyle);
     topRow->addWidget(m_qskBtn);
+
+    topRow->addWidget(new QLabel("Step:"));
+    m_speedStepSpin = new QSpinBox;
+    m_speedStepSpin->setRange(1, 20);
+    m_speedStepSpin->setValue(readSpeedStep());
+    m_speedStepSpin->setSuffix(" wpm");
+    m_speedStepSpin->setFixedWidth(60);
+    m_speedStepSpin->setToolTip("WPM delta applied by each + or - speed modifier prefix");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(m_speedStepSpin, "QSpinBox { background: {{color.background.1}}; color: {{color.text.primary}}; border: 1px solid {{color.background.2}}; "
+        "border-radius: 2px; font-size: 11px; }");
+    topRow->addWidget(m_speedStepSpin);
     topRow->addStretch(1);
     vbox->addLayout(topRow);
 
@@ -396,6 +471,11 @@ void CwxPanel::buildSetupView()
             this, [this](int v) { if (m_model) m_model->setDelay(v); });
     connect(m_qskBtn, &QPushButton::toggled,
             this, [this](bool on) { if (m_model) m_model->setQsk(on); });
+    connect(m_speedStepSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [this](int v) {
+                if (m_model) m_model->setSpeedStep(v);
+                writeSpeedStep(v);
+            });
 
     // Style labels
     for (auto* lbl : m_setupPage->findChildren<QLabel*>())
@@ -431,7 +511,9 @@ void CwxPanel::buildSetupView()
         // Click F-key label → log macro text to history, then send. (#3146)
         connect(label, &QPushButton::clicked, this, [this, i]() {
             if (!m_model) return;
-            appendHistoryBubble(m_model->macro(i));
+            const QString raw = m_model->macro(i);
+            appendHistoryBubble(
+                bubbleTextFor(raw, m_model->speed(), m_model->speedStep()));
             m_model->sendMacro(i + 1);
         });
 
@@ -444,8 +526,11 @@ void CwxPanel::buildSetupView()
 
     vbox->addWidget(macroWidget, 1);
 
-    // Prosign legend
-    auto* legend = new QLabel("Prosigns: = (BT)  + (AR)  ( (KN)  & (BK)  $ (SK)");
+    // Prosign + speed-modifier legend
+    auto* legend = new QLabel(
+        "Prosigns: = (BT)  + (AR)  ( (KN)  & (BK)  $ (SK)\n"
+        "Speed: +word (faster)  -word (slower)  ++/-- (2\xc3\x97 step)\n"
+        "  + or - at word-start only; standalone + remains AR");
     AetherSDR::ThemeManager::instance().applyStyleSheet(legend, "QLabel { color: {{color.text.label}}; font-size: 9px; padding: 4px; }");
     legend->setWordWrap(true);
     vbox->addWidget(legend);
@@ -468,7 +553,10 @@ void CwxPanel::sendBuffer()
     QString text = m_textEdit->toPlainText().trimmed();
     if (text.isEmpty()) return;
 
-    appendHistoryBubble(text);
+    // Show keyed text (modifiers stripped) so the bubble's char count
+    // matches what the radio's sent=N counter advances against. (#272)
+    appendHistoryBubble(
+        bubbleTextFor(text, m_model->speed(), m_model->speedStep()));
     m_textEdit->clear();
 
     m_model->send(text);

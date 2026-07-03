@@ -14,14 +14,103 @@ QString CwxModel::macro(int idx) const
     return m_macros[idx];
 }
 
+QVector<CwxModel::SpeedSegment>
+CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
+{
+    QVector<SpeedSegment> segs;
+    if (text.isEmpty())
+        return segs;
+
+    QString accumText;
+    int     accumWpm    = baseWpm;
+    bool    prevWasSpace = true;  // string start acts like after-space
+
+    for (int i = 0; i < text.size(); ) {
+        if (text[i] == ' ') {
+            accumText += ' ';
+            prevWasSpace = true;
+            ++i;
+            continue;
+        }
+
+        // Count +/- modifier prefix — only valid at a word boundary
+        int plus = 0, minus = 0;
+        int j = i;
+        if (prevWasSpace) {
+            while (j < text.size() && (text[j] == '+' || text[j] == '-')) {
+                if (text[j] == '+') ++plus; else ++minus;
+                ++j;
+            }
+            // Treat as modifier only when immediately followed by a word char
+            // (non-space, non-modifier).  Standalone +/- are prosigns/hyphens.
+            if (j >= text.size() || text[j] == ' ') {
+                plus = minus = 0;
+                j = i;
+            }
+        }
+
+        // Scan word body to end-of-word
+        const int wordStart = j;
+        while (j < text.size() && text[j] != ' ') ++j;
+        const QString wordBody = text.mid(wordStart, j - wordStart);
+
+        const bool hasModifier = (plus > 0 || minus > 0);
+        const int  delta   = (plus - minus) * step;
+        const int  wordWpm = hasModifier
+                           ? qBound(5, baseWpm + delta, 100)
+                           : baseWpm;
+
+        if (wordWpm != accumWpm) {
+            if (!accumText.isEmpty())
+                segs.append({accumText, accumWpm});
+            accumText.clear();
+            accumWpm = wordWpm;
+        }
+
+        accumText   += wordBody;
+        prevWasSpace = false;
+
+        if (hasModifier) {
+            // Speed resets to base after each modifier word
+            segs.append({accumText, accumWpm});
+            accumText.clear();
+            accumWpm = baseWpm;
+        }
+
+        i = j;
+    }
+
+    if (!accumText.isEmpty())
+        segs.append({accumText, accumWpm});
+
+    return segs;
+}
+
+void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
+{
+    int cmdWpm = m_speed;
+    for (const SpeedSegment& seg : segs) {
+        if (seg.wpm != cmdWpm) {
+            emit commandReady(QString("cwx wpm %1").arg(seg.wpm));
+            cmdWpm = seg.wpm;
+        }
+        QString encoded = seg.text;
+        encoded.replace(' ', QChar(0x7f));
+        if (!encoded.isEmpty())
+            emit commandReady(
+                QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++));
+        if (!seg.text.isEmpty())
+            emit transmissionRequested(seg.text, seg.wpm);
+    }
+    // Restore authoritative WPM if transient changes were made
+    if (cmdWpm != m_speed)
+        emit commandReady(QString("cwx wpm %1").arg(m_speed));
+}
+
 void CwxModel::send(const QString& text)
 {
     if (text.isEmpty()) return;
-    // Encode spaces as DEL (0x7f) per FlexLib protocol
-    QString encoded = text;
-    encoded.replace(' ', QChar(0x7f));
-    emit commandReady(QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++));
-    emit transmissionRequested(text, m_speed);
+    emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep));
 }
 
 void CwxModel::sendChar(const QString& ch)
@@ -36,12 +125,14 @@ void CwxModel::sendChar(const QString& ch)
 void CwxModel::sendMacro(int idx)
 {
     if (idx < 1 || idx > 12) return;
-    emit commandReady(QString("cwx macro send %1").arg(idx));
-    // Macro text lives in m_macros (0-based); fire local keyer with it
-    // so sidetone matches the radio's expansion.
     const QString text = m_macros[idx - 1];
-    if (!text.isEmpty())
-        emit transmissionRequested(text, m_speed);
+    if (text.isEmpty()) return;
+    // Expand speed modifiers client-side via cwx send blocks rather than
+    // cwx macro send N.  When no modifiers are present the result is a
+    // single cwx send identical in effect to the radio-side expansion, but
+    // the unified path ensures + / - prefixes are never forwarded to the
+    // radio where they would be misread as prosigns (AR / hyphen).
+    emitExpandedSend(expandSpeedModifiers(text, m_speed, m_speedStep));
 }
 
 void CwxModel::saveMacro(int idx, const QString& text)
@@ -61,6 +152,9 @@ void CwxModel::erase(int numChars)
 
 void CwxModel::clearBuffer()
 {
+    // Re-anchor WPM before clearing so ESC can't leave the radio parked at
+    // a transient speed that was in-flight from an expandedSend sequence.
+    emit commandReady(QString("cwx wpm %1").arg(m_speed));
     emit commandReady("cwx clear");
     emit transmissionCancelled();
 }
@@ -72,6 +166,15 @@ void CwxModel::setSpeed(int wpm)
         m_speed = wpm;
         emit commandReady(QString("cwx wpm %1").arg(m_speed));
         emit speedChanged(m_speed);
+    }
+}
+
+void CwxModel::setSpeedStep(int step)
+{
+    step = qBound(1, step, 20);
+    if (step != m_speedStep) {
+        m_speedStep = step;
+        emit speedStepChanged(m_speedStep);
     }
 }
 

@@ -2323,6 +2323,15 @@ target_include_directories(tnc_terminal_test PRIVATE src)
 target_link_libraries(tnc_terminal_test PRIVATE Qt6::Core)
 add_test(NAME tnc_terminal_test COMMAND tnc_terminal_test)
 
+add_executable(cwx_speed_modifier_test
+    tests/cwx_speed_modifier_test.cpp
+    src/models/CwxModel.cpp
+    src/models/CwxModel.h
+)
+target_include_directories(cwx_speed_modifier_test PRIVATE src)
+target_link_libraries(cwx_speed_modifier_test PRIVATE Qt6::Core)
+add_test(NAME cwx_speed_modifier_test COMMAND cwx_speed_modifier_test)
+
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
     src/gui/CwxPanel.cpp

@@ -11,11 +11,22 @@ class CwxModel : public QObject {
 public:
     explicit CwxModel(QObject* parent = nullptr);
 
+    // A contiguous run of text to be keyed at a single WPM.
+    // expandSpeedModifiers() returns a sequence of these.
+    struct SpeedSegment {
+        QString text;  // plain text (modifier prefix stripped, space=' ')
+        int     wpm;
+        bool operator==(const SpeedSegment& o) const {
+            return text == o.text && wpm == o.wpm;
+        }
+    };
+
     // State
-    int   speed()    const { return m_speed; }
-    int   delay()    const { return m_delay; }
-    bool  qskOn()    const { return m_qsk; }
-    bool  isLive()   const { return m_live; }
+    int   speed()     const { return m_speed; }
+    int   delay()     const { return m_delay; }
+    int   speedStep() const { return m_speedStep; }
+    bool  qskOn()     const { return m_qsk; }
+    bool  isLive()    const { return m_live; }
     int   sentIndex() const { return m_sentIndex; }
     QString macro(int idx) const;  // 0-based (0=F1, 11=F12)
 
@@ -28,15 +39,26 @@ public:
     void clearBuffer();
     void setSpeed(int wpm);
     void setDelay(int ms);
+    void setSpeedStep(int step);
     void setQsk(bool on);
     void setLive(bool on);
 
     // Status parsing (from radio)
     void applyStatus(const QMap<QString, QString>& kvs);
 
+    // Parses text for leading +/- speed modifiers on words.
+    // A +/- run at word-start (after space or string-start) immediately
+    // followed by a non-space, non-modifier character counts as a modifier.
+    // Standalone +/- not followed by word chars are prosigns/hyphens and
+    // pass through unchanged.  Speed resets to baseWpm after each modified
+    // word.  Returns a single segment at baseWpm when no modifiers found.
+    static QVector<SpeedSegment> expandSpeedModifiers(
+        const QString& text, int baseWpm, int step);
+
 signals:
     void commandReady(const QString& cmd);
     void speedChanged(int wpm);
+    void speedStepChanged(int step);
     void delayChanged(int ms);
     void qskChanged(bool on);
     void charSent(int index);           // character at index was keyed
@@ -52,8 +74,11 @@ signals:
     void queueEmpty();                   // radio CWX buffer drained — TX teardown required
 
 private:
+    void emitExpandedSend(const QVector<SpeedSegment>& segs);
+
     int     m_speed{20};
     int     m_delay{5};
+    int     m_speedStep{3};
     bool    m_qsk{false};
     bool    m_live{false};
     int     m_sentIndex{-1};
