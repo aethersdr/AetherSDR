@@ -129,11 +129,6 @@ MeterApplet::MeterApplet(QWidget* parent)
     m_paTempGauge->setAccessibleName(tr("PA temperature"));
     vbox->addWidget(m_paTempGauge);
 
-    // Apply persisted unit at startup so the saved preference takes effect
-    // before the first telemetry packet arrives.
-    if (m_tempFahrenheit)
-        m_paTempGauge->setRange(32.0f, 248.0f, 158.0f, kFahrenheitTicks, 131.0f);
-
     // ── Supply voltage gauge ───────────────────────────────────────────────────
     m_supplyGauge = new HGauge(10.0f, 16.0f, 15.0f, "+13.8V", "",
         {{10.5f, "10.5"}, {12, "12"}, {13.8f, "13.8"}, {15, "15"}},
@@ -189,7 +184,6 @@ void MeterApplet::onMeterUpdated(int index, float value)
         resolveIndices();
 
     if (index == m_fanIdx && m_fanIdx >= 0) {
-        m_fanRpm = value;
         m_fanGauge->setValue(value);
         m_fanGauge->setLabel(QStringLiteral("%1 rpm").arg(static_cast<int>(value)));
     }

@@ -38,7 +38,6 @@ private:
     QPushButton* m_tempUnitBtn{nullptr};
 
     float m_paTemp{0.0f};
-    float m_fanRpm{0.0f};
     bool  m_hasPaTemp{false};
     bool  m_tempFahrenheit{false};
 
