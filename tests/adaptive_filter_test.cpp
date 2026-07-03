@@ -273,6 +273,31 @@ int main()
                r.valid && r.highHz > 2500, d);
     });
 
+    // ── 12. Intermittent upper voice — high edge HELD across gaps (temporal) ─
+    forEachMode([](bool usb) {
+        // A ~2900 Hz signal, only ~12 dB over the floor, whose upper band (>1000
+        // Hz) empties during speech gaps — exactly how SSB voice behaves. The
+        // measured high edge must reflect the SUSTAINED reach (~2900), not collapse
+        // to the low formants every gap. The fast-attack / slow-release envelope
+        // holds it open; a symmetric average would sag below the gate and pinch.
+        const auto full = buildSpectrum(usb, -118.0f, 0.0f, hump(300, 2900, -106.0f));
+        const auto gap  = buildSpectrum(usb, -118.0f, 0.0f, hump(300, 1000, -106.0f));
+        QVector<float> avgEnv;   // shared across frames -> temporal behaviour
+        const auto call = [&](const QVector<float>& b) {
+            return measureOccupiedRegion(
+                b, kCenter, kBwMhz, kCarrier,
+                usb ? QStringLiteral("USB") : QStringLiteral("LSB"),
+                -118.0f, avgEnv);
+        };
+        for (int i = 0; i < 20; ++i) call(full);     // establish the wide edge
+        OccupiedRegion r;
+        for (int i = 0; i < 20; ++i) r = call(gap);  // ~0.7 s upper-band gap
+        char d[96];
+        std::snprintf(d, sizeof d, "  [%s] high after gap=%d", tag(usb), r.highHz);
+        report("intermittent upper voice: high edge held across the gap",
+               r.valid && r.highHz >= 2500, d);
+    });
+
     std::printf("\n%s (%d failure%s)\n",
                 g_failed ? "FAILED" : "PASSED",
                 g_failed, g_failed == 1 ? "" : "s");

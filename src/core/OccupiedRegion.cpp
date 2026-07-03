@@ -48,11 +48,21 @@ namespace {
                                              // treble hump; robust to a transient)
     constexpr int    kMarginHz      = 150;    // intelligibility margin
     constexpr int    kMinBwHz       = 50;     // never narrower than this
-    // Temporal averaging (video averaging): per-offset envelope EMA coefficient.
-    // Slow (~0.06, time constant ~0.5 s) — averages noise down (like the
-    // waterfall's persistence) so weak signals read reliably above the gate, and
-    // keeps the measured edges from chasing speech/sibilance dynamics (float).
-    constexpr float  kEnvAvgAlpha = 0.06f;
+    // Temporal envelope (video peak-hold with leak): per-offset EMA that rises
+    // FAST when energy appears and decays SLOWLY when it goes — a bounded
+    // maximum-hold, not a symmetric average. Rationale: SSB voice only fills its
+    // upper 1.5-3 kHz INTERMITTENTLY (sibilants, formant peaks), so a symmetric
+    // slow average let the upper-band envelope sag below the occupied gate in
+    // every word gap — the measured high edge then collapsed to the low formants
+    // and snapped back out when speech resumed, jittering between "narrow voice"
+    // and "full width" frame to frame. A fast attack captures the signal's reach
+    // the instant it appears; a slow, BOUNDED (~1 s) release holds that reach
+    // across gaps, so the high edge reflects the SUSTAINED occupied width. The
+    // release is short enough that a genuine narrowing still resolves in ~1-2 s,
+    // and noise is still averaged down (a near-floor spike, held briefly, stays
+    // near the floor — it cannot walk the edge far past the signal).
+    constexpr float  kEnvAttackAlpha  = 0.30f;  // fast rise  (~0.1 s time constant)
+    constexpr float  kEnvReleaseAlpha = 0.03f;  // slow fall  (~1.1 s time constant)
 
     // ── Per-frequency noise floor (spec Stage B) ────────────────────────────
     // A single scalar floor mis-thresholds a TILTED floor: with a global 10th-pct
@@ -164,15 +174,20 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
     for (int o = 0; o < span; ++o)
         envInst[o] = env(binAt(o));
 
-    // ── Temporal averaging (video averaging) ─────────────────────────────
-    // Per-offset EMA of the envelope reduces frame-to-frame noise BEFORE the
-    // edge threshold, so weak/medium-signal edges (which sit near the noise
-    // floor) stop jittering and single noisy frames can't extend an edge.
+    // ── Temporal envelope: video peak-hold with leak (fast attack, slow release) ─
+    // Per-offset asymmetric EMA. Rising energy is tracked quickly (attack) so the
+    // edge extends the instant the signal reaches out; falling energy decays slowly
+    // (release) so a word gap or a between-sibilant lull does NOT collapse the high
+    // edge. The first frame seeds avgEnv to the instantaneous envelope (so a
+    // single call stays reproducible for the unit tests and a fresh fit engages at
+    // full width immediately).
     if (avgEnv.size() != span) {
         avgEnv = envInst;
     } else {
-        for (int o = 0; o < span; ++o)
-            avgEnv[o] += kEnvAvgAlpha * (envInst[o] - avgEnv[o]);
+        for (int o = 0; o < span; ++o) {
+            const float d = envInst[o] - avgEnv[o];
+            avgEnv[o] += (d > 0.0f ? kEnvAttackAlpha : kEnvReleaseAlpha) * d;
+        }
     }
     const auto envAt = [&](int o) -> float { return avgEnv[o]; };
 
