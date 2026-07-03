@@ -1878,6 +1878,27 @@ target_include_directories(audio_output_router_test PRIVATE src)
 target_link_libraries(audio_output_router_test PRIVATE Qt6::Core Qt6::Multimedia)
 add_test(NAME audio_output_router_test COMMAND audio_output_router_test)
 
+# Regression test for #4003 — QsoRecorder must not dereference a SliceModel that
+# was freed (reconnect prune) before recording starts. QPointer auto-nulls the
+# reference; the test deletes the slice and asserts the metadata is cleared.
+add_executable(qso_recorder_slice_lifetime_test
+    tests/qso_recorder_slice_lifetime_test.cpp
+    src/core/QsoRecorder.cpp
+    src/core/AppSettings.cpp
+    src/core/AudioDeviceNegotiator.cpp
+    src/core/AudioFormatNegotiator.cpp
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/Resampler.cpp
+    src/models/SliceModel.cpp
+)
+target_include_directories(qso_recorder_slice_lifetime_test PRIVATE
+    src
+    ${CMAKE_SOURCE_DIR}/third_party/r8brain
+)
+target_link_libraries(qso_recorder_slice_lifetime_test PRIVATE Qt6::Core Qt6::Multimedia)
+add_test(NAME qso_recorder_slice_lifetime_test COMMAND qso_recorder_slice_lifetime_test)
+
 add_executable(profile_transfer_test
     tests/profile_transfer_test.cpp
 )

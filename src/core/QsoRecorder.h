@@ -7,6 +7,7 @@
 #include <QDateTime>
 #include <QFile>
 #include <QObject>
+#include <QPointer>
 #include <QString>
 #include <QTimer>
 #include <atomic>
@@ -149,8 +150,10 @@ private:
     bool        m_includeFreq{true};
     bool        m_includeMode{true};
 
-    // Slice metadata (captured at recording start)
-    SliceModel* m_slice{nullptr};
+    // Slice metadata (captured at recording start). QPointer auto-nulls when the
+    // SliceModel is destroyed (slice removal / reconnect prune), so startFile()'s
+    // guard can't dereference a freed pointer (#4003).
+    QPointer<SliceModel> m_slice;
     double      m_freqMhz{0.0};
     QString     m_mode;
 
