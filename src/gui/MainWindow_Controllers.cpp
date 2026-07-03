@@ -586,8 +586,9 @@ void MainWindow::updateRC28Leds()
     const QString f2Hold = HidEncoderManager::rc28MappingField("f2Hold", "ModeCycle");
     if (rc28HoldActionActive(f1Hold)) b &= ~0x02u;  // F1 LED
     if (rc28HoldActionActive(f2Hold)) b &= ~0x04u;  // F2 LED
-    const uint8_t ledByte = b;
-    QMetaObject::invokeMethod(m_hidEncoder, [this, ledByte] {
+    if (b == m_lastRC28LedByte) return;  // skip USB write when byte unchanged (#3313)
+    m_lastRC28LedByte = b;
+    QMetaObject::invokeMethod(m_hidEncoder, [this, ledByte = b] {
         m_hidEncoder->setRC28Leds(ledByte);
     });
 }
@@ -2630,8 +2631,11 @@ void MainWindow::wireExternalControllers()
         }
     });
 
-    // RC-28 TX LED: mirror MOX state to the device's red TRANSMIT LED.
-    connect(&m_radioModel.transmitModel(), &TransmitModel::moxChanged,
+    // RC-28 TX LED: mirror actual transmit state (interlock) to the device's
+    // red TRANSMIT LED.  transmittingChanged fires from both setMox()
+    // (optimistic user edge) and setTransmitting() (CW break-in / VOX /
+    // footswitch), so the LED tracks all TX sources correctly. (#3313)
+    connect(&m_radioModel.transmitModel(), &TransmitModel::transmittingChanged,
             this, [this](bool tx) {
         updateRC28Leds();
         updateTMate2Display();

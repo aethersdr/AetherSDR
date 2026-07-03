@@ -820,6 +820,7 @@ private:
     bool    m_rc28HoldConsumed[2]{false, false};
     // RC-28 stateful action flags
     bool    m_rc28PttLatched{false};
+    uint8_t m_lastRC28LedByte{0xFF};  // last byte sent; 0xFF forces first write
     bool    m_hidFastTune{false};
     bool    m_hidFineTune{false};
     int     m_hidPulseAccum{0};     // accumulated RC-28 encoder pulses for sensitivity divider

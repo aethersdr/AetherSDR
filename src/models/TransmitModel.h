@@ -238,6 +238,11 @@ signals:
     void stateChanged();
     void tuneChanged(bool tuning);
     void moxChanged(bool mox);
+    // Fires whenever m_transmitting changes — from setMox() (optimistic edge)
+    // OR from setTransmitting() (interlock-driven: CW break-in, VOX, footswitch).
+    // Use this instead of moxChanged() for anything that should track actual TX
+    // state regardless of source (e.g. hardware TX indicator LEDs).
+    void transmittingChanged(bool tx);
     void atuStateChanged();
     void profileListChanged();
     void micStateChanged();
