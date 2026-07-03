@@ -50,30 +50,49 @@ const double     kHzPerBin = kBwMhz * 1.0e6 / kN;   // ~97.66 Hz/bin
 // Build a spectrum: a flat (optionally tilted) noise floor, then a signal whose
 // level (dBm, or <= -1000 = "no energy here") is given per AUDIO offset Hz and
 // laid onto the correct energy side (USB above the carrier, LSB below).
-QVector<float> buildSpectrum(bool usb, float floorDbm, float tiltDb,
-                             const std::function<float(double)>& sigDbm)
+// The generalized form takes an arbitrary geometry (bin count + span) so the
+// decimation path (fine zoomed-in pans) can be exercised against the same
+// signal shapes as the canonical coarse grid.
+QVector<float> buildSpectrumAt(int n, double bwMhz, bool usb, float floorDbm,
+                               float tiltDb,
+                               const std::function<float(double)>& sigDbm)
 {
-    QVector<float> bins(kN);
-    for (int i = 0; i < kN; ++i) {
-        const double offHz = (i - kCarrierBin) * kHzPerBin;
+    const int    carrierBin = n / 2;
+    const double hzPerBin   = bwMhz * 1.0e6 / n;
+    QVector<float> bins(n);
+    for (int i = 0; i < n; ++i) {
+        const double offHz = (i - carrierBin) * hzPerBin;
         const double frac  = std::clamp(std::abs(offHz) / 6500.0, 0.0, 1.0);
         bins[i] = floorDbm + static_cast<float>(tiltDb * frac);
     }
-    for (int o = 0; o * kHzPerBin <= 6500.0; ++o) {
-        const float s = sigDbm(o * kHzPerBin);
+    for (int o = 0; o * hzPerBin <= 6500.0; ++o) {
+        const float s = sigDbm(o * hzPerBin);
         if (s <= -1000.0f) continue;
-        const int bin = usb ? kCarrierBin + o : kCarrierBin - o;
-        if (bin >= 0 && bin < kN) bins[bin] = std::max(bins[bin], s);
+        const int bin = usb ? carrierBin + o : carrierBin - o;
+        if (bin >= 0 && bin < n) bins[bin] = std::max(bins[bin], s);
     }
     return bins;
 }
 
-OccupiedRegion measure(const QVector<float>& bins, bool usb, float noiseFloorDbm)
+QVector<float> buildSpectrum(bool usb, float floorDbm, float tiltDb,
+                             const std::function<float(double)>& sigDbm)
 {
+    return buildSpectrumAt(kN, kBwMhz, usb, floorDbm, tiltDb, sigDbm);
+}
+
+OccupiedRegion measureAt(int n, double bwMhz, const QVector<float>& bins,
+                         bool usb, float noiseFloorDbm)
+{
+    Q_UNUSED(n);
     QVector<float> avgEnv;
-    return measureOccupiedRegion(bins, kCenter, kBwMhz, kCarrier,
+    return measureOccupiedRegion(bins, kCenter, bwMhz, kCarrier,
                                  usb ? QStringLiteral("USB") : QStringLiteral("LSB"),
                                  noiseFloorDbm, avgEnv);
+}
+
+OccupiedRegion measure(const QVector<float>& bins, bool usb, float noiseFloorDbm)
+{
+    return measureAt(kN, kBwMhz, bins, usb, noiseFloorDbm);
 }
 
 // A flat-topped voice "hump" between [lowHz, highHz] at `level`, else floor.
@@ -297,6 +316,48 @@ int main()
         report("intermittent upper voice: high edge held across the gap",
                r.valid && r.highHz >= 2500, d);
     });
+
+    // ── 13. Fine-grid decimation — zoomed-in pans match the coarse fit ──────
+    // A 50 kHz span across 8192 bins is ~6.1 Hz/bin (deep zoom on a Retina
+    // pan); the resolution cap decimates it to ~30.5 Hz/bin. The measured fit
+    // must match the canonical coarse grid (~98 Hz/bin) for the same signal
+    // shapes within decimation tolerance.
+    {
+        struct Shape { const char* name; std::function<float(double)> sig; };
+        const Shape shapes[] = {
+            { "clean sharp",  hump(300, 2700, -80.0f) },
+            { "soft rolloff", [](double f) -> float {
+                  if (f < 300)   return -1000.0f;
+                  if (f <= 1500) return -60.0f;
+                  if (f <= 4000) return static_cast<float>(-60.0 - 24.0 * (f - 1500.0) / 1000.0);
+                  return -1000.0f; } },
+            { "declining",    [](double f) -> float {
+                  if (f < 300)   return -1000.0f;
+                  if (f <= 900)  return -55.0f;
+                  if (f <= 3100) return static_cast<float>(-78.0 - 14.3 * (f - 900.0) / 1000.0);
+                  return -1000.0f; } },
+        };
+        constexpr int    kFineN  = 8192;
+        constexpr double kFineBw = 0.05;   // MHz -> ~6.1 Hz/bin -> D=5
+        forEachMode([&](bool usb) {
+            for (const auto& s : shapes) {
+                const OccupiedRegion rc = measure(
+                    buildSpectrum(usb, -120.0f, 0.0f, s.sig), usb, -120.0f);
+                const OccupiedRegion rf = measureAt(kFineN, kFineBw,
+                    buildSpectrumAt(kFineN, kFineBw, usb, -120.0f, 0.0f, s.sig),
+                    usb, -120.0f);
+                char d[128];
+                std::snprintf(d, sizeof d,
+                              "  [%s %s] coarse=%d..%d fine=%d..%d",
+                              tag(usb), s.name, rc.lowHz, rc.highHz, rf.lowHz, rf.highHz);
+                report("fine-grid decimation: fit matches coarse grid",
+                       rc.valid && rf.valid &&
+                       std::abs(rf.lowHz  - rc.lowHz)  <= 150 &&
+                       std::abs(rf.highHz - rc.highHz) <= 150 &&
+                       std::abs(rf.referenceDbm - rc.referenceDbm) <= 2.0f, d);
+            }
+        });
+    }
 
     std::printf("\n%s (%d failure%s)\n",
                 g_failed ? "FAILED" : "PASSED",

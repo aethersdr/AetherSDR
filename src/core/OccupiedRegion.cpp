@@ -11,6 +11,21 @@ namespace {
     // Starting values, biased toward stability. Expect on-air tuning before
     // release (the maintainer signs off on the DSP feel per the RFC).
     constexpr double kScanHz        = 6500.0; // scan this far from the carrier
+    // Measurement resolution cap (zoom-invariant cost). Every loop below is
+    // O(kScanHz / hzPerBin), and the pan's hzPerBin shrinks without bound as
+    // the operator zooms in (xpixels is tied to widget width, not span) — the
+    // measurement got quadratically slower with zoom while producing edges no
+    // better: everything downstream is far coarser (50 Hz snap grid, 150 Hz
+    // margin, 220 Hz engine deadband). Below this resolution the input is
+    // decimated (mean in dB of D consecutive bins) so the effective bin stays
+    // in [kMinMeasureHzPerBin, 2*kMinMeasureHzPerBin) and the whole
+    // measurement is O(1) in zoom. Mean — not max (extreme-value bias inflates
+    // averaged noise ~5 dB and risks false-engage at the Sensitive preset) and
+    // not stride (a narrow het hopping in/out of the sample comb jitters the
+    // edges); the dB mean is literally the first stage of the kEnvHz box
+    // average, so envelope semantics are unchanged. Coarser pans (hzPerBin
+    // already >= the cap) take the D=1 path, bit-identical to before.
+    constexpr double kMinMeasureHzPerBin = 25.0;
     // Spectral-envelope smoothing: a moving average over kEnvHz suppresses
     // narrow spikes (hets/carriers) and speech fine structure, leaving the
     // voice "hump". Edge finding runs on the envelope, NOT the raw bins, so a
@@ -169,6 +184,33 @@ OccupiedRegion measureOccupiedRegion(const QVector<float>& binsDbm,
 
     const double hzPerBin = bandwidthMhz * 1.0e6 / N;
     if (hzPerBin <= 0.0) return r;
+
+    // ── Resolution cap: decimate over-fine pans, then measure normally ──────
+    // (see kMinMeasureHzPerBin). One level of recursion: the decimated grid is
+    // >= the cap, so the recursive call always takes the D=1 path. The ragged
+    // tail (< D bins, < 50 Hz of span at the far pan edge) is dropped and the
+    // center re-derived so the carrier<->bin mapping stays exact. avgEnv needs
+    // no special handling: span is derived from the effective grid and the
+    // existing size-mismatch reseed covers the geometry change (zoom already
+    // reseeds it today).
+    if (hzPerBin < kMinMeasureHzPerBin) {
+        const int D  = static_cast<int>(std::ceil(kMinMeasureHzPerBin / hzPerBin));
+        const int Nd = N / D;
+        if (Nd >= 32) {
+            QVector<float> deci(Nd);
+            for (int i = 0; i < Nd; ++i) {
+                double sum = 0.0;
+                const int base = i * D;
+                for (int k = 0; k < D; ++k) sum += binsDbm[base + k];
+                deci[i] = static_cast<float>(sum / D);
+            }
+            const double bwDeciMhz  = bandwidthMhz * (static_cast<double>(Nd) * D / N);
+            const double startMhz   = centerMhz - bandwidthMhz / 2.0;
+            return measureOccupiedRegion(deci, startMhz + bwDeciMhz / 2.0, bwDeciMhz,
+                                         carrierMhz, mode, noiseFloorDbm, avgEnv, params);
+        }
+    }
+
     const double startMhz = centerMhz - bandwidthMhz / 2.0;
     const bool   isUsb    = (mode != QStringLiteral("LSB"));  // USB-family default
 
