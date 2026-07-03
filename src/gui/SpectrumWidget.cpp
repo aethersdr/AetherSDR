@@ -896,6 +896,17 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         setAttribute(Qt::WA_NativeWindow);
     }
 #  else
+    // AETHER_NO_GPU / QT_OPENGL=software: force the OpenGL QRhi backend so the
+    // software OpenGL rasterizer requested in main.cpp actually takes effect.
+    // Without this, QRhiWidget defaults to D3D11 on Windows and ignores
+    // QT_OPENGL entirely, making the flag a silent no-op there (#3597). On Linux
+    // the default backend is already OpenGL, so this is a harmless explicit
+    // restatement that keeps the two platforms on the same code path.
+    if (qtSoftwareOpenGlRequested()) {
+        setApi(QRhiWidget::Api::OpenGL);
+        qInfo() << "SpectrumWidget: AETHER_NO_GPU/QT_OPENGL=software — forcing "
+                   "OpenGL QRhi backend (software rasterizer) instead of D3D11";
+    }
     // Warn if running under XWayland — GLX context switching between the main
     // window and child dialogs (e.g. Radio Setup) can trigger BadAccess (#1233).
     // main.cpp normally forces native Wayland, but log it if we ended up here.
