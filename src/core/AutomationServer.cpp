@@ -1031,6 +1031,15 @@ QJsonObject sliceSnapshot(const SliceModel* s)
         {QStringLiteral("flexAgcMode"), s->flexAgcMode()},
         {QStringLiteral("flexAgcThreshold"), s->flexAgcThreshold()},
         {QStringLiteral("flexAgcOffLevel"), s->flexAgcOffLevel()},
+        // Adaptive RX filter (SSB) — settings plus the live AUTO/active state, so an
+        // agent can drive the controls via invoke and assert the result via get slice.
+        {QStringLiteral("adaptiveFilterEnabled"), s->adaptiveFilterEnabled()},
+        {QStringLiteral("adaptiveMinLowCut"),     s->adaptiveMinLowCut()},
+        {QStringLiteral("adaptiveMaxHighCut"),    s->adaptiveMaxHighCut()},
+        {QStringLiteral("adaptiveMinSnr"),        s->adaptiveMinSnr()},
+        {QStringLiteral("adaptiveResponse"),      s->adaptiveResponse()},
+        {QStringLiteral("adaptiveSplatter"),      s->adaptiveSplatter()},
+        {QStringLiteral("adaptiveActive"),        s->adaptiveActive()},
     };
 }
 
