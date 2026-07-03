@@ -455,6 +455,15 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
         << "freq=" << frequencyMhz << "MHz mode=" << mode;
     emit sliceAssignmentChanged(sliceId, profileId);
 
+    // Release the previous Kiwi's user slot once nothing uses it. Checked
+    // after the insert above: shouldMaintainProfileConnection() reads
+    // m_sliceAssignments, which still mapped sliceId -> previousProfile at
+    // the mute block.
+    if (!previousProfile.isEmpty() && previousProfile != profileId
+        && !shouldMaintainProfileConnection(previousProfile)) {
+        disconnectProfile(previousProfile);
+    }
+
     if (KiwiSdrClient* c = ensureClient(profileId)) {
         Q_UNUSED(c);
         m_clientHasTrackedSlice.insert(profileId, sliceId >= 0 && frequencyMhz > 0.0);
@@ -489,6 +498,12 @@ void KiwiSdrManager::clearSliceAssignment(int sliceId)
         });
     }
     emit sliceAssignmentChanged(sliceId, QString());
+
+    // The take() above already dropped this slice's mapping, so the
+    // predicate only keeps the Kiwi alive for auto-connect or another slice.
+    if (!shouldMaintainProfileConnection(previousProfile)) {
+        disconnectProfile(previousProfile);
+    }
 }
 
 void KiwiSdrManager::updateSliceTracking(int sliceId, double frequencyMhz,
