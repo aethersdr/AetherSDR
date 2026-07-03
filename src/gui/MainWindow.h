@@ -23,6 +23,7 @@
 #include "core/SmartLinkClient.h"
 #include "core/WanConnection.h"
 #include "core/CwDecoder.h"
+#include "core/CwCallsignSpotter.h"
 #include "core/RttyDecoder.h"
 #include "core/QsoRecorder.h"
 #include "core/ClientPuduMonitor.h"
@@ -119,6 +120,7 @@ class AetherDspDialog;
 class MqttSettingsDialog;
 class WaveformsDialog;
 class DxClusterDialog;
+class CallsignLookupDialog;
 class Ax25HfPacketDecodeDialog;
 class PskReporterMapDialog;
 class FlexControlDialog;
@@ -443,6 +445,11 @@ private:
     void setActivePanApplet(PanadapterApplet* applet);
     void routeCwDecoderOutput();
     void refreshCwDecodeState();
+    // QRZ callsign lookup (MainWindow_Callsign.cpp): CW-spotter → lookup
+    // service → contact card on the CW decode panel + lookup dialog.
+    void wireCallsignLookup();
+    void onCwCallsignSpotted(const QString& call);
+    void showCallsignLookupDialog(const QString& call = QString());
     void routeRttyDecoderOutput();
     void refreshRttyDecodeState();
     SpectrumWidget* spectrumForSlice(SliceModel* s) const;
@@ -697,6 +704,7 @@ private:
     float             m_cwLastPitchHz{0.0f};
     float             m_cwLastSpeedWpm{0.0f};
     CwDecoder         m_cwDecoderTx;
+    CwCallsignSpotter m_cwCallsignSpotter;
     RttyDecoder       m_rttyDecoder;
     DxClusterClient*   m_dxCluster{nullptr};
     DxClusterClient*   m_rbnClient{nullptr};
@@ -940,6 +948,7 @@ private:
 
     // Modeless dialogs
     QPointer<DxClusterDialog> m_spotHubDialog;
+    QPointer<CallsignLookupDialog> m_callsignLookupDialog;
     QPointer<RadioSetupDialog> m_radioSetupDialog;
     QPointer<NetworkDiagnosticsDialog> m_networkDiagnosticsDialog;
     QPointer<AgcCalibrationDialog> m_agcCalibrationDialog;

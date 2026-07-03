@@ -155,6 +155,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
 | | [`record <action>`](#record) | Drive the client QSO WAV recorder. |
 | **Identity** | [`station <name>`](#station) | Set this client's MultiFlex station name. |
+| **QRZ lookup** | [`qrz <action>`](#qrz) | Callsign-lookup status / cache probe / lookup / CW-spot simulation. |
 | **Transmit ⚠️** | [`key ptt on\|off` / `key mox`](#key) | Key/unkey via PTT / MOX. |
 | | [`cwx send <text> \| speed <wpm> \| stop`](#cwx) | Drive the CWX CW keyer. |
 | | [`txtest twotone\|off`](#txtest) | Two-tone test signal. |
@@ -327,8 +328,8 @@ the no-op is an explicit, assertable signal.
 | `wheel` | any visible widget | one wheel notch: `-1` or `1` |
 | `setText` | `QLineEdit` | the text (side-effect-free — does **not** submit) |
 | `submit` | `QLineEdit` | optional text, then fires `returnPressed` (retune / login / send) |
-| `setCurrentText` | `QComboBox` | item text |
-| `setCurrentIndex` | `QComboBox` | integer index |
+| `setCurrentText` | `QComboBox` (item text) / `QTabBar` (tab label, case-insensitive — reaches deferred setup-dialog tabs) | text |
+| `setCurrentIndex` | `QComboBox` / `QTabBar` | integer index |
 | `selectRow` | `QAbstractItemView` (`QTableWidget`/`QTreeWidget`/`QListWidget`) | integer row index |
 | `trigger` / `click` / `toggle` | visible `QMenu` `QAction` | — |
 | `setChecked` | checkable visible `QMenu` `QAction` | `true`/`false`/`on`/`off`/`1`/`0` |
@@ -998,6 +999,40 @@ is persisted on the front panel.
 Must be a single token (no spaces) and requires a connected radio. The agent name
 is applied automatically on connect and the user's real name is restored when the
 bridge stops.
+
+### `qrz`
+QRZ.com callsign-lookup subsystem (CW decoder contact card + View → Callsign
+Lookup). Four actions; none touch the radio and none key TX.
+
+```json
+→ {"cmd":"qrz","action":"status"}
+← {"ok":true,"enabled":true,"hasCredentials":true,"cacheEntries":42}
+
+→ {"cmd":"qrz","action":"cached","value":"KI6BCJ"}
+← {"ok":true,"found":true,"entry":{"call":"KI6BCJ","nameFmt":"…","grid":"CM97",
+   "stale":false,"photoPath":"/…/qrz-photos/KI6BCJ.jpg", …}}
+
+→ {"cmd":"qrz","action":"lookup","value":"W1AW"}
+← {"ok":true,"queued":true,"call":"W1AW","note":"async — poll `qrz cached W1AW`…"}
+
+→ {"cmd":"qrz","action":"spottext","value":"CQ CQ DE KI6BCJ KI6BCJ K"}
+← {"ok":true,"fed":"CQ CQ DE KI6BCJ KI6BCJ K"}
+```
+
+- `status` — enable flag, credential presence, lookup-cache entry count.
+- `cached <call>` — cache probe; returns the entry (plus `stale`, 7-day TTL,
+  and `photoPath` when a photo is cached) or `found:false`. Never hits the
+  network — safe to poll after `lookup`.
+- `lookup <call>` — queue a real lookup through the service (cache-first;
+  network only on miss/stale). Async: poll `qrz cached <call>` for arrival.
+- `spottext <text>` — feed text into the **CW callsign spotter** as if the CW
+  decoder produced it. Drives the real detection path ("DE <call> <call>" →
+  service → contact card on the CW decode panel), so an agent can prove the
+  end-to-end screen-pop with no radio, no live CW, and — with a seeded cache —
+  no QRZ account. Verify with `grab callsignCard` / `dumpTree`.
+
+Bare-line forms: `qrz status`, `qrz cached KI6BCJ`, `qrz lookup W1AW`,
+`qrz spottext CQ CQ DE KI6BCJ KI6BCJ K`.
 
 ---
 

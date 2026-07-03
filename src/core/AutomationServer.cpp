@@ -6,6 +6,8 @@
 #include "NvidiaBnrSettings.h"   // BNR intensity (in-process AFX, #3902)
 #include "ClientTxTestTone.h"     // testtone() verb — client-side TX test tone
 #include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
+#include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
+#include "CallsignUtils.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "gui/ConnectionPanel.h" // ConnectionPanel automation facade
 
@@ -17,6 +19,7 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QTabBar>
 #include <QEnterEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
@@ -1791,6 +1794,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             value = rest.join(QLatin1Char(' '));  // "testtone on 1000 -6" -> freqHz levelDb
         } else if (cmd == QLatin1String("pan")) {
             action = tok(1); value = tok(2);  // "pan create", "pan remove 0x40000001"
+        } else if (cmd == QLatin1String("qrz")) {
+            action = tok(1);  // status | cached | lookup | spottext
+            QStringList rest;
+            for (int i = 2; i < p.size(); ++i) rest << tok(i);
+            value = rest.join(QLatin1Char(' '));  // callsign, or free-form CW text
         } else if (cmd == QLatin1String("streams")) {
             action = tok(1);  // "" (Layer A UDP-orphan) | "radio" (Layer B) | "reset"
         } else if (cmd == QLatin1String("audioCapture")) {
@@ -1991,6 +1999,8 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("mark requires annotation text"));
         return doMark(value);
     }
+    if (cmd == QLatin1String("qrz"))
+        return doQrz(action.isEmpty() ? QStringLiteral("status") : action, value);
 
     return err(QStringLiteral("unknown command: ") + cmd);
 }
@@ -2453,8 +2463,22 @@ QJsonObject AutomationServer::doInvoke(const QString& target, const QString& act
         }
     } else if (action == QLatin1String("setCurrentText")) {
         if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentText(value); done = true; }
+        else if (auto* tb = qobject_cast<QTabBar*>(w)) {
+            // Select a tab by its label — the only way to reach deferred
+            // setup-dialog tabs (built on first selection) from the bridge.
+            for (int i = 0; i < tb->count(); ++i) {
+                if (tb->tabText(i).compare(value, Qt::CaseInsensitive) == 0) {
+                    tb->setCurrentIndex(i);
+                    done = true;
+                    break;
+                }
+            }
+            if (!done)
+                return err(QStringLiteral("no tab labeled '%1'").arg(value));
+        }
     } else if (action == QLatin1String("setCurrentIndex")) {
         if (auto* cb = qobject_cast<QComboBox*>(w)) { cb->setCurrentIndex(value.toInt()); done = true; }
+        else if (auto* tb = qobject_cast<QTabBar*>(w)) { tb->setCurrentIndex(value.toInt()); done = true; }
     } else if (action == QLatin1String("selectRow")) {
         // Select a whole row in an item view (QTableWidget / QTreeWidget /
         // QListWidget / any QAbstractItemView) so the dialog's row-scoped
@@ -3531,6 +3555,64 @@ QJsonObject AutomationServer::doStation(const QString& name)
     m_agentStation = n;
     applyAgentStation(n);
     return QJsonObject{{QStringLiteral("ok"), true}, {QStringLiteral("station"), n}};
+}
+
+// ── QRZ callsign lookup (#3646) ─────────────────────────────────────────────
+QJsonObject AutomationServer::doQrz(const QString& action, const QString& value)
+{
+    auto& svc = CallsignLookupService::instance();
+
+    if (action == QLatin1String("status")) {
+        return QJsonObject{
+            {QStringLiteral("ok"), true},
+            {QStringLiteral("enabled"), svc.enabled()},
+            {QStringLiteral("hasCredentials"), svc.hasCredentials()},
+            {QStringLiteral("cacheEntries"), svc.cacheEntryCount()},
+        };
+    }
+    if (action == QLatin1String("cached")) {
+        const QString call = Callsigns::normalized(value);
+        if (call.isEmpty())
+            return err(QStringLiteral("qrz cached requires a callsign"));
+        const CallsignInfo info = svc.cachedEntry(call);
+        if (!info.isValid())
+            return QJsonObject{{QStringLiteral("ok"), true},
+                               {QStringLiteral("found"), false},
+                               {QStringLiteral("call"), call}};
+        QJsonObject o = info.toJson();
+        o.insert(QStringLiteral("stale"),
+                 info.isOlderThan(CallsignLookupService::kCacheTtlSec));
+        o.insert(QStringLiteral("photoPath"), svc.photoPathFor(call));
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("found"), true},
+                           {QStringLiteral("entry"), o}};
+    }
+    if (action == QLatin1String("lookup")) {
+        const QString call = Callsigns::normalized(value);
+        if (call.isEmpty())
+            return err(QStringLiteral("qrz lookup requires a callsign"));
+        svc.lookup(call);
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("queued"), true},
+                           {QStringLiteral("call"), call},
+                           {QStringLiteral("note"),
+                            QStringLiteral("async — poll `qrz cached %1` for the result").arg(call)}};
+    }
+    if (action == QLatin1String("spottext")) {
+        if (value.trimmed().isEmpty())
+            return err(QStringLiteral("qrz spottext requires CW text, e.g. \"CQ CQ DE KI6BCJ KI6BCJ K\""));
+        QWidget* mw = topLevelWindowForTarget({});
+        QObject* spotter = mw ? mw->findChild<QObject*>(QStringLiteral("cwCallsignSpotter"))
+                              : nullptr;
+        if (!spotter)
+            return err(QStringLiteral("CW callsign spotter not found (main window not up yet?)"));
+        const bool ok = QMetaObject::invokeMethod(spotter, "feedText",
+                                                  Qt::DirectConnection,
+                                                  Q_ARG(QString, value));
+        return QJsonObject{{QStringLiteral("ok"), ok},
+                           {QStringLiteral("fed"), value}};
+    }
+    return err(QStringLiteral("qrz requires status|cached|lookup|spottext"));
 }
 
 // Resolve the top-level window a window-scoped verb acts on: the target's

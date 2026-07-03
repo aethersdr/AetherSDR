@@ -79,6 +79,10 @@ private:
     // (host, sha256 fingerprint, pinned date) with per-row Forget and a
     // Forget All button. Backed by WanCertCache in WanConnection.cpp.
     QWidget* buildSmartLinkTab();
+    // QRZ.com account for callsign lookups (CW decoder contact card +
+    // View → Callsign Lookup).  Username in AppSettings, password in the
+    // OS keychain, lookups cached 7 days by CallsignLookupService.
+    QWidget* buildQrzTab();
 
 public:
     // Public so MainWindow can refresh the table from outside this

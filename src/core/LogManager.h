@@ -45,6 +45,7 @@ Q_DECLARE_LOGGING_CATEGORY(lcWaveform)
 Q_DECLARE_LOGGING_CATEGORY(lcKiwiSdr)
 Q_DECLARE_LOGGING_CATEGORY(lcKiwiSdrAudio)
 Q_DECLARE_LOGGING_CATEGORY(lcAutomation)
+Q_DECLARE_LOGGING_CATEGORY(lcQrz)
 
 // Central registry for toggling per-module diagnostic logging at runtime.
 // The Support dialog (Help → Support) uses this to let users enable/disable

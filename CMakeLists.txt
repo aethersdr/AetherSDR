@@ -567,6 +567,10 @@ set(CORE_SOURCES
     src/core/RNNoiseFilter.cpp
     src/core/SpecbleachFilter.cpp
     src/core/CwDecoder.cpp
+    src/core/CwCallsignSpotter.cpp
+    src/core/CallsignInfo.cpp
+    src/core/QrzClient.cpp
+    src/core/CallsignLookupService.cpp
     src/core/RttyDecoder.cpp
     src/core/VoiceSignalDetector.cpp
     src/core/SpectrogramBuffer.cpp
@@ -677,6 +681,7 @@ set(GUI_SOURCES
     src/gui/MainWindow_SwrSweep.cpp
     src/gui/MainWindow_Wiring.cpp
     src/gui/MainWindow_Nets.cpp
+    src/gui/MainWindow_Callsign.cpp
     src/gui/MainWindow_ReceiveSync.cpp
     src/gui/MainWindow_KiwiSdr.cpp
     src/gui/map/MapView.cpp
@@ -720,6 +725,8 @@ set(GUI_SOURCES
     src/gui/DspParamPopup.cpp
     src/gui/DxClusterDialog.cpp
     src/gui/DxClusterStartupCommandsDialog.cpp
+    src/gui/CallsignCard.cpp
+    src/gui/CallsignLookupDialog.cpp
     src/gui/CwxPanel.cpp
     src/gui/BandStackPanel.cpp
     src/gui/FramelessWindowTitleBar.cpp
@@ -2127,6 +2134,22 @@ add_executable(display_inventory_policy_test
 target_include_directories(display_inventory_policy_test PRIVATE src)
 target_link_libraries(display_inventory_policy_test PRIVATE Qt6::Core)
 add_test(NAME display_inventory_policy_test COMMAND display_inventory_policy_test)
+
+# QRZ callsign lookup — spotter stream detection, callsign regex,
+# CallsignInfo JSON round-trip, 7-day cache TTL rule.
+add_executable(qrz_callsign_test
+    tests/qrz_callsign_test.cpp
+    src/core/CwCallsignSpotter.cpp
+    src/core/CallsignInfo.cpp
+    # LogManager provides lcQrz (spotter's qCDebug category); it drags
+    # AsyncLogWriter + AppSettings for its writer/ctor chain at link time.
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(qrz_callsign_test PRIVATE src)
+target_link_libraries(qrz_callsign_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME qrz_callsign_test COMMAND qrz_callsign_test)
 
 add_executable(shortcut_manager_test
     tests/shortcut_manager_test.cpp

@@ -349,6 +349,11 @@ private:
     QJsonObject doStation(const QString& name);
     void applyAgentStation(const QString& name);  // capture prior + send
     void restoreStation();                        // re-send the user's real name
+    // QRZ callsign lookup (status | cached <call> | lookup <call> |
+    // spottext <text>).  spottext feeds the CW callsign spotter the given
+    // text as if the decoder produced it — end-to-end card-pop proof with
+    // no radio or live CW required. No keying.
+    QJsonObject doQrz(const QString& action, const QString& value);
     // Resize a top-level window so the panadapter x_pixels (== SpectrumWidget
     // width) propagates to a realistic value for headless render-size fidelity.
     QJsonObject doResize(const QString& value, const QString& target) const;

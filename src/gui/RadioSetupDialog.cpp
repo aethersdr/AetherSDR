@@ -26,6 +26,8 @@
 #include "core/TgxlConnection.h"
 #include "core/PgxlConnection.h"
 #include "core/WanConnection.h"   // PinnedCertInfo + WanCertCache (#2951)
+#include "core/CallsignLookupService.h"
+#include "core/QrzLookupSettings.h"
 #include "models/AntennaGeniusModel.h"
 
 #include <QCloseEvent>
@@ -627,6 +629,7 @@ RadioSetupDialog::RadioSetupDialog(RadioModel* model, AudioEngine* audio,
     addDeferred("Peripherals",     [this] { return buildPeripheralsTab(); });
     addDeferred("Themes",          [this] { return buildUiEnhancementsTab(); });
     addDeferred("SmartLink",       [this] { return buildSmartLinkTab(); });
+    addDeferred("QRZ",             [this] { return buildQrzTab(); });
 #ifdef HAVE_SERIALPORT
     addDeferred("Serial",          [this] { return buildSerialTab(); });
 #endif
@@ -6005,6 +6008,170 @@ void RadioSetupDialog::refreshPinnedCertsTable()
             : pin.pinnedAtIso.left(10);   // YYYY-MM-DD
         m_pinnedCertsTable->setItem(i, 2, new QTableWidgetItem(when));
     }
+}
+
+QWidget* RadioSetupDialog::buildQrzTab()
+{
+    auto* page = new QWidget;
+    auto* root = new QVBoxLayout(page);
+    root->setContentsMargins(16, 16, 16, 16);
+    root->setSpacing(12);
+
+    auto& svc = CallsignLookupService::instance();
+
+    // ---- Account group -------------------------------------------------
+    auto* acct = new QGroupBox("QRZ.com Account");
+    acct->setStyleSheet(kGroupStyle);
+    auto* acctLay = new QVBoxLayout(acct);
+    acctLay->setSpacing(8);
+
+    auto* desc = new QLabel(
+        "AetherSDR uses your QRZ.com account to look up station details — "
+        "name, location, grid, and photo — for callsigns heard in the CW "
+        "decoder and entered in View → Callsign Lookup. An XML Logbook Data "
+        "subscription returns full details; a free account returns limited "
+        "fields. Your password is stored in the operating system keychain, "
+        "never in the settings file.");
+    desc->setStyleSheet("QLabel { color: #7090a0; font-size: 11px; }");
+    desc->setWordWrap(true);
+    acctLay->addWidget(desc);
+
+    auto* enableCheck = new QCheckBox("Enable QRZ callsign lookups");
+    enableCheck->setObjectName("qrzEnableCheck");
+    enableCheck->setAccessibleName("Enable QRZ callsign lookups");
+    enableCheck->setStyleSheet("QCheckBox { color: #c8d8e8; font-size: 12px; }");
+    enableCheck->setChecked(QrzLookupSettings::enabled());
+    connect(enableCheck, &QCheckBox::toggled, this, [](bool on) {
+        QrzLookupSettings::setEnabled(on);
+        CallsignLookupService::instance().reloadConfiguration();
+    });
+    acctLay->addWidget(enableCheck);
+
+    auto* grid = new QGridLayout;
+    grid->setSpacing(8);
+
+    auto* userLbl = new QLabel("Username (callsign):");
+    userLbl->setStyleSheet(kLabelStyle);
+    grid->addWidget(userLbl, 0, 0);
+    auto* userEdit = new QLineEdit(QrzLookupSettings::username());
+    userEdit->setObjectName("qrzUsernameEdit");
+    userEdit->setAccessibleName("QRZ username");
+    userEdit->setStyleSheet(kEditStyle);
+    userEdit->setMaxLength(64);
+    grid->addWidget(userEdit, 0, 1);
+
+    auto* passLbl = new QLabel("Password:");
+    passLbl->setStyleSheet(kLabelStyle);
+    grid->addWidget(passLbl, 1, 0);
+    auto* passEdit = new QLineEdit;
+    passEdit->setObjectName("qrzPasswordEdit");
+    passEdit->setAccessibleName("QRZ password");
+    passEdit->setStyleSheet(kEditStyle);
+    passEdit->setEchoMode(QLineEdit::Password);
+    passEdit->setMaxLength(128);
+    grid->addWidget(passEdit, 1, 1);
+    grid->setColumnStretch(1, 1);
+    acctLay->addLayout(grid);
+
+    // Populate the password field from the keychain (async).
+    QPointer<QLineEdit> passGuard(passEdit);
+    svc.readPassword([passGuard](const QString& pw) {
+        if (passGuard && passGuard->text().isEmpty())
+            passGuard->setText(pw);
+    });
+
+    connect(userEdit, &QLineEdit::editingFinished, this, [userEdit] {
+        QrzLookupSettings::setUsername(userEdit->text().trimmed());
+        CallsignLookupService::instance().reloadConfiguration();
+    });
+    connect(passEdit, &QLineEdit::editingFinished, this, [passEdit] {
+        CallsignLookupService::instance().savePassword(passEdit->text());
+    });
+
+    auto* testRow = new QHBoxLayout;
+    testRow->setSpacing(8);
+    auto* testBtn = new QPushButton("Test Login");
+    testBtn->setObjectName("qrzTestLoginBtn");
+    testBtn->setAccessibleName("Test QRZ login");
+    testBtn->setStyleSheet(
+        "QPushButton { background: #183548; border: 1px solid #28506a; "
+        "border-radius: 3px; color: #c8d8e8; font-size: 11px; padding: 4px 12px; }"
+        "QPushButton:hover { background: #1f4258; }"
+        "QPushButton:disabled { color: #506070; }");
+    testRow->addWidget(testBtn);
+    auto* testStatus = new QLabel;
+    testStatus->setObjectName("qrzTestStatus");
+    testStatus->setStyleSheet("QLabel { color: #7090a0; font-size: 11px; }");
+    testStatus->setWordWrap(true);
+    testRow->addWidget(testStatus, 1);
+    acctLay->addLayout(testRow);
+
+    connect(testBtn, &QPushButton::clicked, this,
+            [testBtn, testStatus, userEdit, passEdit] {
+        const QString user = userEdit->text().trimmed();
+        const QString pass = passEdit->text();
+        if (user.isEmpty() || pass.isEmpty()) {
+            testStatus->setText("Enter a username and password first.");
+            return;
+        }
+        testBtn->setEnabled(false);
+        testStatus->setText("Contacting QRZ.com…");
+        CallsignLookupService::instance().testLogin(user, pass);
+    });
+    connect(&svc, &CallsignLookupService::loginTestFinished, this,
+            [testBtn, testStatus](bool ok, const QString& message) {
+        testBtn->setEnabled(true);
+        testStatus->setText(ok
+            ? (message.isEmpty() ? QStringLiteral("Login OK.")
+                                 : QStringLiteral("Login OK — %1").arg(message))
+            : QStringLiteral("Login failed: %1").arg(message));
+        testStatus->setStyleSheet(ok
+            ? "QLabel { color: #4dd87a; font-size: 11px; }"
+            : "QLabel { color: #ff6060; font-size: 11px; }");
+    });
+
+    root->addWidget(acct);
+
+    // ---- Cache group ----------------------------------------------------
+    auto* cache = new QGroupBox("Lookup Cache");
+    cache->setStyleSheet(kGroupStyle);
+    auto* cacheLay = new QVBoxLayout(cache);
+    cacheLay->setSpacing(8);
+
+    auto* cacheDesc = new QLabel(
+        "Looked-up callsigns are cached for 7 days so a busy net never asks "
+        "QRZ twice for the same station. Station photos are cached alongside.");
+    cacheDesc->setStyleSheet("QLabel { color: #7090a0; font-size: 11px; }");
+    cacheDesc->setWordWrap(true);
+    cacheLay->addWidget(cacheDesc);
+
+    auto* cacheRow = new QHBoxLayout;
+    cacheRow->setSpacing(8);
+    auto* cacheCount = new QLabel;
+    cacheCount->setObjectName("qrzCacheCount");
+    cacheCount->setStyleSheet(kValueStyle);
+    auto refreshCacheCount = [cacheCount] {
+        cacheCount->setText(QStringLiteral("%1 cached callsign(s)")
+            .arg(CallsignLookupService::instance().cacheEntryCount()));
+    };
+    refreshCacheCount();
+    cacheRow->addWidget(cacheCount);
+    cacheRow->addStretch();
+
+    auto* clearBtn = new QPushButton("Clear Cache");
+    clearBtn->setObjectName("qrzClearCacheBtn");
+    clearBtn->setAccessibleName("Clear QRZ lookup cache");
+    clearBtn->setStyleSheet(testBtn->styleSheet());
+    connect(clearBtn, &QPushButton::clicked, this, [refreshCacheCount] {
+        CallsignLookupService::instance().clearCache();
+        refreshCacheCount();
+    });
+    cacheRow->addWidget(clearBtn);
+    cacheLay->addLayout(cacheRow);
+
+    root->addWidget(cache);
+    root->addStretch();
+    return page;
 }
 
 } // namespace AetherSDR

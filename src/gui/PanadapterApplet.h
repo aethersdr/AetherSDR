@@ -12,6 +12,7 @@ class RangeSlider;
 namespace AetherSDR {
 
 class SpectrumWidget;
+class CallsignCard;
 
 // Container for a single panadapter display (FFT spectrum + waterfall).
 // Adds a title bar with placeholder min/max/close buttons above the
@@ -48,6 +49,9 @@ public:
     QPushButton* lockPitchButton()  const { return m_lockPitchBtn; }
     QPushButton* lockSpeedButton()  const { return m_lockSpeedBtn; }
     float        cwCostThreshold()  const { return m_cwCostThreshold; }
+    // Contact card beside the decoded text — MainWindow's QRZ wiring
+    // fills it when the CW stream identifies a station (hidden until then).
+    CallsignCard* cwCallsignCard() const { return m_cwCallsignCard; }
     int speedRangeLow()   const;
     int speedRangeHigh()  const;
     int pitchRangeLow()   const;
@@ -76,6 +80,9 @@ signals:
     void pitchRangeChanged(int minHz, int maxHz);
     void speedRangeChanged(int minWpm, int maxWpm);
     void cwPanelCloseRequested();
+    // RX text that passed the confidence filter and was rendered — the
+    // stream the CW callsign spotter watches for "DE <call> <call>".
+    void cwRxTextDisplayed(const QString& text);
 
     // RTTY
     void rttyMarkHzChanged(int hz);
@@ -108,6 +115,7 @@ private:
     QWidget*      m_cwPanel{nullptr};
     QWidget*      m_cwGrip{nullptr};
     QTextEdit*    m_cwText{nullptr};
+    CallsignCard* m_cwCallsignCard{nullptr};
     QLabel*       m_cwStatsLabel{nullptr};
     QSlider*      m_cwSensSlider{nullptr};
     QPushButton*  m_lockPitchBtn{nullptr};
