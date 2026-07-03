@@ -3829,9 +3829,9 @@ void VfoWidget::setSlice(SliceModel* slice)
     // runs after wireVfoWidget() has connected markerStyleChanged (#1526).
     loadDisplayPrefs();
     emit markerStyleChanged(m_markerWidth, m_filterEdgesHidden);
-    // Restore the per-slice adaptive RX filter config (RFC #3878). This pushes
-    // the enabled state into the slice model, which (via wiring) updates the
-    // panadapter overlay and the engine. Single load site (the flag is always
+    // Restore the per-slice adaptive RX filter config (RFC #3878) — bounds and
+    // presets only; the enabled state is session-scoped and always starts off
+    // (the operator opts in each session). Single load site (the flag is always
     // present per slice); the RX-applet copy just reflects the loaded slice.
     AdaptiveFilterControls::loadPrefs(m_slice);
 

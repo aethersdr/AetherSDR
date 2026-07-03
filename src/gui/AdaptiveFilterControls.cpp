@@ -257,7 +257,10 @@ void AdaptiveFilterControls::loadPrefs(SliceModel* slice)
     slice->setAdaptiveMinSnr(o.value("minSnr").toInt(1));      // default Normal
     slice->setAdaptiveResponse(o.value("response").toInt(1));  // default Normal
     slice->setAdaptiveSplatter(o.value("splatter").toInt(1));  // default Normal
-    slice->setAdaptiveFilterEnabled(o.value("enabled").toBool(false));
+    // Session-scoped by design: the adaptive filter always starts DISABLED and
+    // the operator enables it explicitly each session. Only the config above
+    // persists; the saved "enabled" value is deliberately not restored.
+    slice->setAdaptiveFilterEnabled(false);
 }
 
 void AdaptiveFilterControls::savePrefs(SliceModel* slice)
