@@ -202,6 +202,12 @@ void AdaptiveFilterControls::setSlice(SliceModel* slice)
     // Every instance tracks enabled (for visibility); the rest only if built.
     connect(slice, &SliceModel::adaptiveFilterEnabledChanged, this, [this](bool on) {
         if (m_chk) { QSignalBlocker b(m_chk); m_chk->setChecked(on); }
+        // Persist the new enabled state. This also captures an engine-driven
+        // auto-handback (manual filter edit -> setAdaptiveFilterEnabled(false)),
+        // which would otherwise leave enabled=true on disk and silently re-enable
+        // adaptive next session. The model signal only fires on a real change, and
+        // setSlice() sets the checkbox under a blocker, so there is no echo loop.
+        if (m_slice) savePrefs(m_slice);
         updateVisibility();
     });
     if (m_minLow) connect(slice, &SliceModel::adaptiveMinLowCutChanged, this, [this](int hz) {
