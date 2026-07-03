@@ -88,17 +88,31 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
 
 void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
 {
+    // Find last segment with non-empty text — that block's cwx send goes via
+    // replyCommandReady so RadioModel can capture the radio_index and detect
+    // queue drain via sent= status instead of the broken queue= path. (#3949)
+    int lastNonEmpty = -1;
+    for (int i = segs.size() - 1; i >= 0; --i) {
+        if (!segs[i].text.isEmpty()) { lastNonEmpty = i; break; }
+    }
+
     int cmdWpm = m_speed;
-    for (const SpeedSegment& seg : segs) {
+    for (int i = 0; i < segs.size(); ++i) {
+        const SpeedSegment& seg = segs[i];
         if (seg.wpm != cmdWpm) {
             emit commandReady(QString("cwx wpm %1").arg(seg.wpm));
             cmdWpm = seg.wpm;
         }
         QString encoded = seg.text;
         encoded.replace(' ', QChar(0x7f));
-        if (!encoded.isEmpty())
-            emit commandReady(
-                QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++));
+        if (!encoded.isEmpty()) {
+            const QString cmd =
+                QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++);
+            if (i == lastNonEmpty)
+                emit replyCommandReady(cmd);
+            else
+                emit commandReady(cmd);
+        }
         if (!seg.text.isEmpty())
             emit transmissionRequested(seg.text, seg.wpm);
     }
@@ -152,11 +166,31 @@ void CwxModel::erase(int numChars)
 
 void CwxModel::clearBuffer()
 {
+    m_cwxEndIndex = -1;   // abort any pending queue-drain watch (#3949)
     // Re-anchor WPM before clearing so ESC can't leave the radio parked at
     // a transient speed that was in-flight from an expandedSend sequence.
     emit commandReady(QString("cwx wpm %1").arg(m_speed));
     emit commandReady("cwx clear");
     emit transmissionCancelled();
+}
+
+void CwxModel::handleSendReply(int resultCode, const QString& body)
+{
+    if (resultCode != 0) {
+        qWarning() << "CwxModel: cwx send failed, result=" << resultCode;
+        return;
+    }
+    // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83.
+    // radio_index is the absolute char-queue position of the last char in
+    // this batch; queueEmpty() fires when cwx sent= reaches that value.
+    const QString indexStr = body.split(',').first().trimmed();
+    bool ok = false;
+    const int radioIndex = indexStr.toInt(&ok);
+    if (!ok || radioIndex < 0) {
+        qWarning() << "CwxModel: failed to parse radio_index from reply body:" << body;
+        return;
+    }
+    m_cwxEndIndex = radioIndex;
 }
 
 void CwxModel::setSpeed(int wpm)
@@ -217,6 +251,13 @@ void CwxModel::applyStatus(const QMap<QString, QString>& kvs)
             if (ok) {
                 m_sentIndex = idx;
                 emit charSent(idx);
+                // Queue drain detection: radio_index captured from cwx send
+                // reply tells us the last char position of the queued batch.
+                // Fire queueEmpty() so RadioModel can release MOX. (#3949)
+                if (m_cwxEndIndex >= 0 && idx >= m_cwxEndIndex) {
+                    m_cwxEndIndex = -1;
+                    emit queueEmpty();
+                }
             }
         } else if (key == "wpm") {
             bool ok;

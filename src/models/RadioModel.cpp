@@ -731,6 +731,16 @@ RadioModel::RadioModel(QObject* parent)
             m_cwxActive = false;
         sendCmd(cmd);
     });
+    // Final cwx send of each macro/text block goes via replyCommandReady so we
+    // can capture the radio_index from the reply.  CwxModel::handleSendReply
+    // stores it; applyStatus fires queueEmpty() when cwx sent= reaches it.
+    // This replaces the broken cwx queue= path — firmware never sends it. (#3949)
+    connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd){
+        m_cwxActive = true;
+        sendCmd(cmd, [this](int respVal, const QString& body){
+            m_cwxModel.handleSendReply(respVal, body);
+        });
+    });
     // When the radio signals its CWX buffer is drained, release TX. (#2450)
     // The radio's break-in timer fires but sync_cwx=1 still requires an
     // explicit xmit 0 from the client — without it the radio holds TX for

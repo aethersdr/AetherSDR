@@ -60,6 +60,11 @@ struct Fixture {
                          [this](const QString& command) {
                              commands.push_back(command);
                          });
+        // replyCommandReady carries the final cwx send of each macro block (#3949)
+        QObject::connect(&model, &CwxModel::replyCommandReady,
+                         [this](const QString& command) {
+                             commands.push_back(command);
+                         });
     }
 };
 

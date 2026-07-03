@@ -45,6 +45,9 @@ public:
 
     // Status parsing (from radio)
     void applyStatus(const QMap<QString, QString>& kvs);
+    // Invoked by RadioModel with the reply to the final cwx send command.
+    // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83. (#3949)
+    void handleSendReply(int resultCode, const QString& body);
 
     // Parses text for leading +/- speed modifiers on words.
     // A +/- run at word-start (after space or string-start) immediately
@@ -57,6 +60,10 @@ public:
 
 signals:
     void commandReady(const QString& cmd);
+    // Emitted for the final cwx send of a macro/send block so RadioModel can
+    // capture the radio_index from the reply and know when that block is fully
+    // transmitted.  See handleSendReply(). (#3949)
+    void replyCommandReady(const QString& cmd);
     void speedChanged(int wpm);
     void speedStepChanged(int step);
     void delayChanged(int ms);
@@ -83,6 +90,7 @@ private:
     bool    m_live{false};
     int     m_sentIndex{-1};
     int     m_nextBlock{1};
+    int     m_cwxEndIndex{-1};   // radio_index to watch for; -1 = not tracking
     QString m_macros[12];
 };
 
