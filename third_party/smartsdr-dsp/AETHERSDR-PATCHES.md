@@ -1,8 +1,21 @@
-# AetherSDR Patches
+# AetherSDR SmartSDR-DSP Adopted Fork Notes
 
-This directory contains the GPL-3.0 `thumbDV_support` branch of
-`n5ac/smartsdr-dsp`, trimmed to the ThumbDV waveform runtime sources needed by
-AetherSDR's `aether-dstar-waveform` helper.
+This directory is an adopted, in-tree fork of the GPL-3.0
+`thumbDV_support` branch of `n5ac/smartsdr-dsp`, trimmed to the ThumbDV
+waveform runtime sources needed by AetherSDR's `aether-dstar-waveform` helper.
+
+The upstream repository is inactive for AetherSDR's purposes: the public
+`n5ac/smartsdr-dsp` repository has not received code updates since 2019, and
+this tree was imported from the tip of the historical `thumbDV_support` branch.
+AetherSDR does not treat this directory as a patch stack to reapply during
+future upstream resyncs. It is maintained in place under `third_party/` so the
+original license, attribution, and source boundary remain visible.
+
+Future changes to compiled vendored files should stay narrowly scoped, keep
+upstream copyright/license headers intact, and be recorded in git history. When
+the modification is material, update the local change summary below so the
+repository itself remains the provenance and change notice for this maintained
+fork.
 
 Imported source:
 
