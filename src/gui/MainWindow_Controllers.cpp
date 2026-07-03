@@ -2426,10 +2426,9 @@ void MainWindow::wireExternalControllers()
         if (auto* s = activeSlice()) {
             if (s->isLocked()) return;
             const double snapped = std::round(s->frequency() * 1000.0) / 1000.0;
-            if (std::abs(snapped - s->frequency()) > 1e-9) {
+            if (std::abs(snapped - s->frequency()) > 1e-9)
                 applyTuneRequest(s, snapped, TuneIntent::IncrementalTune, "rc28-autosnap");
-                m_flexTargetMhz = snapped;
-            }
+            m_flexTargetMhz = snapped;
         }
     });
 
