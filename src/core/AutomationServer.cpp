@@ -1340,6 +1340,27 @@ QJsonObject transmitSnapshot(const TransmitModel* t)
     };
 }
 
+// CWX keyer snapshot — the queue-drain watch that the #3949 fix rests on.
+// `cwxEndIndex` is the radio_index of the last char in the batch we're waiting
+// to drain (-1 = not tracking); `sentIndex` is the radio's live `cwx sent=`
+// counter. When sentIndex reaches cwxEndIndex, queueEmpty() fires and TX is
+// released. There is no widget exposing this state, so this is the only
+// non-hardware-poll way to assert the fix (cf. `get dsp`).
+QJsonObject cwxSnapshot(const CwxModel* c, bool active)
+{
+    return QJsonObject{
+        {QStringLiteral("active"),      active},           // TX in flight (RadioModel::cwxActive)
+        {QStringLiteral("tracking"),    c->cwxEndIndex() >= 0},
+        {QStringLiteral("cwxEndIndex"), c->cwxEndIndex()}, // batch-end radio_index being watched
+        {QStringLiteral("sentIndex"),   c->sentIndex()},   // live `cwx sent=` counter
+        {QStringLiteral("speed"),       c->speed()},
+        {QStringLiteral("speedStep"),   c->speedStep()},
+        {QStringLiteral("delay"),       c->delay()},
+        {QStringLiteral("qsk"),         c->qskOn()},
+        {QStringLiteral("live"),        c->isLive()},
+    };
+}
+
 QJsonObject audioSnapshot(const AudioEngine* audio)
 {
     return QJsonObject{
@@ -3123,6 +3144,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = radioSnapshot(radio);
     } else if (model == QLatin1String("transmit")) {
         data = transmitSnapshot(&radio->transmitModel());
+    } else if (model == QLatin1String("cwx")) {
+        data = cwxSnapshot(&radio->cwxModel(), radio->cwxActive());
     } else if (model == QLatin1String("equalizer") || model == QLatin1String("eq")) {
         data = equalizerSnapshot(&radio->equalizerModel());
     } else if (model == QLatin1String("meters")) {
@@ -3163,7 +3186,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         data = panSnapshot(p, radio->ourClientHandle());
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|panstats|clients|kiwi|wavestats)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|cwx|equalizer|meters|slice|slices|pan|pans|panstats|clients|kiwi|wavestats)"));
     }
 
     if (!property.isEmpty()) {

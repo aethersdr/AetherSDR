@@ -28,6 +28,11 @@ public:
     bool  qskOn()     const { return m_qsk; }
     bool  isLive()    const { return m_live; }
     int   sentIndex() const { return m_sentIndex; }
+    // radio_index of the last char in the queued batch we are waiting to drain,
+    // or -1 when not tracking. queueEmpty() fires once sentIndex() reaches this.
+    // Exposed for the automation bridge's `get cwx` snapshot so the queue-drain
+    // watch is observable (#3949).
+    int   cwxEndIndex() const { return m_cwxEndIndex; }
     QString macro(int idx) const;  // 0-based (0=F1, 11=F12)
 
     // Actions
