@@ -359,6 +359,110 @@ int main()
         });
     }
 
+    // ── 14. Two-hump spectra (smiley EQ / tilted ESSB) — extent decisions ───
+    // The extent pass adjudicates a resume across a floor-reaching valley by
+    // rebound level AND run confidence: same-signal recoveries bridge, a
+    // stronger lobe past a CONFIDENT run is a neighbour (cut), a stronger lobe
+    // past an UNCONFIDENT run is the tuned signal's dominant hump (re-anchor,
+    // if it starts by kReanchorMaxStartHz). Floor -120 => floorGate -117,
+    // occThr -115, Normal confidence = floor+9 = -111.
+    forEachMode([](bool usb) {
+        // (a) 150 Hz valley — below the 250 Hz disconnection standard: bridged.
+        {
+            const auto sig = [](double f) -> float {
+                if (f >= 300 && f <= 1000)  return -100.0f;
+                if (f >= 1150 && f <= 2800) return -95.0f;
+                return -1000.0f;
+            };
+            const OccupiedRegion r = measure(
+                buildSpectrum(usb, -120.0f, 0.0f, sig), usb, -120.0f);
+            char d[96];
+            std::snprintf(d, sizeof d, "  [%s] low=%d high=%d", tag(usb), r.lowHz, r.highHz);
+            report("two-hump: sub-standard 150 Hz valley bridged",
+                   r.valid && r.highHz >= 2500, d);
+        }
+        // (b) 500 Hz floor valley, treble only +6 dB (<= kReboundDb): a
+        // same-signal recovery — bridged.
+        {
+            const auto sig = [](double f) -> float {
+                if (f >= 300 && f <= 1000)  return -100.0f;
+                if (f >= 1500 && f <= 2800) return -94.0f;
+                return -1000.0f;
+            };
+            const OccupiedRegion r = measure(
+                buildSpectrum(usb, -120.0f, 0.0f, sig), usb, -120.0f);
+            char d[96];
+            std::snprintf(d, sizeof d, "  [%s] low=%d high=%d", tag(usb), r.lowHz, r.highHz);
+            report("two-hump: +6 dB resume across 500 Hz valley bridged",
+                   r.valid && r.highHz >= 2500, d);
+        }
+        // (c) 500 Hz floor valley, +12 dB lobe past a CONFIDENT (floor+30) run:
+        // indistinguishable from a stronger neighbour — cut at the valley.
+        {
+            const auto sig = [](double f) -> float {
+                if (f >= 300 && f <= 1000)  return -90.0f;
+                if (f >= 1500 && f <= 2800) return -78.0f;
+                return -1000.0f;
+            };
+            const OccupiedRegion r = measure(
+                buildSpectrum(usb, -120.0f, 0.0f, sig), usb, -120.0f);
+            char d[96];
+            std::snprintf(d, sizeof d, "  [%s] low=%d high=%d", tag(usb), r.lowHz, r.highHz);
+            report("two-hump: +12 dB lobe past confident run cut",
+                   r.valid && r.highHz > 900 && r.highHz < 1500, d);
+        }
+        // (d) Weak bass (floor+7, below the Normal presence preset) + dominant
+        // treble (floor+25) across a 500 Hz floor valley — the smiley-EQ case
+        // that used to be amputated at the scoop (or rejected outright, since
+        // presence was judged on the bass-only run): re-anchored + valid.
+        {
+            const auto sig = [](double f) -> float {
+                if (f >= 300 && f <= 1000)  return -113.0f;
+                if (f >= 1500 && f <= 2900) return -95.0f;
+                return -1000.0f;
+            };
+            const OccupiedRegion r = measure(
+                buildSpectrum(usb, -120.0f, 0.0f, sig), usb, -120.0f);
+            char d[96];
+            std::snprintf(d, sizeof d, "  [%s] low=%d high=%d", tag(usb), r.lowHz, r.highHz);
+            report("two-hump: weak bass + dominant treble re-anchored",
+                   r.valid && r.lowHz <= 500 && r.highHz >= 2600, d);
+        }
+        // (e) 1000 Hz at-floor mid scoop (wider than kSilenceHz) on an
+        // unconfident bass — the silence-stop no longer truncates: the scan
+        // looks ahead and captures the treble hump (was: high ~1029, AUTO
+        // confidently wrong).
+        {
+            const auto sig = [](double f) -> float {
+                if (f >= 300 && f <= 900)   return -113.0f;
+                if (f >= 1900 && f <= 3100) return -95.0f;
+                return -1000.0f;
+            };
+            const OccupiedRegion r = measure(
+                buildSpectrum(usb, -120.0f, 0.0f, sig), usb, -120.0f);
+            char d[96];
+            std::snprintf(d, sizeof d, "  [%s] low=%d high=%d", tag(usb), r.lowHz, r.highHz);
+            report("two-hump: wide at-floor scoop looked past (silence-stop)",
+                   r.valid && r.highHz >= 2800, d);
+        }
+        // (g) Re-anchor guard: a sub-confidence blip near the carrier + a
+        // strong lobe first appearing at 2600 Hz (past kReanchorMaxStartHz) is
+        // an adjacent station above a silent low band — NOT re-anchored, and
+        // the blip alone fails the presence gate -> invalid.
+        {
+            const auto sig = [](double f) -> float {
+                if (f >= 300 && f <= 600)   return -112.0f;
+                if (f >= 2600 && f <= 4000) return -80.0f;
+                return -1000.0f;
+            };
+            const OccupiedRegion r = measure(
+                buildSpectrum(usb, -120.0f, 0.0f, sig), usb, -120.0f);
+            char d[64];
+            std::snprintf(d, sizeof d, "  [%s] valid=%d", tag(usb), r.valid ? 1 : 0);
+            report("two-hump: distant lobe not re-anchored (reject)", !r.valid, d);
+        }
+    });
+
     std::printf("\n%s (%d failure%s)\n",
                 g_failed ? "FAILED" : "PASSED",
                 g_failed, g_failed == 1 ? "" : "s");
