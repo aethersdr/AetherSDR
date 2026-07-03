@@ -14,6 +14,7 @@
 namespace AetherSDR {
 
 class QrzClient;
+class CtyDatParser;
 
 // Application-wide callsign-lookup facade: QRZ client + lazy on-disk cache
 // + photo download.  Every consumer (CW decoder card, lookup dialog, and
@@ -41,8 +42,32 @@ public:
 
     static CallsignLookupService& instance();
 
+    static constexpr int kPrefixFallbackMs = 5000;
+
     bool enabled() const { return m_enabled; }
     bool hasCredentials() const;
+
+    // Loaded cty.dat parser (owned elsewhere — MainWindow's DxccColorProvider).
+    // Enables country-level prefix-fallback cards when QRZ can't answer.
+    void setCtyParser(const CtyDatParser* parser) { m_ctyParser = parser; }
+
+    // Operator's own position (radio GPS fix, or grid-square center) used to
+    // stamp distance/bearing onto every emitted CallsignInfo.  GPS-sourced
+    // positions take priority over the own-callsign fallback below.
+    void setOwnLocation(double lat, double lon);
+    void clearOwnLocation() { m_hasOwnLocation = false; }
+    bool hasOwnLocation() const { return m_hasOwnLocation; }
+
+    // Zero-config own-position fallback for radios without GPS: the
+    // operator's own QRZ record (or its cache entry) carries their grid, so
+    // a lookup of the radio's callsign supplies the missing home position.
+    // A GPS fix, when one exists, always overrides this.
+    void setOwnCallsign(const QString& call);
+
+    // Can lookup(call) produce *something* for this call — QRZ credentials,
+    // a cache entry, or at least cty.dat prefix data?  The CW screen-pop
+    // gates on this so a pending card can never sit unfillable.
+    bool canResolve(const QString& call);
 
     // Kick a lookup.  Fresh cache hit → infoReady fires (queued, so
     // connect-then-call ordering is safe).  Otherwise the network path
@@ -93,13 +118,32 @@ private:
     void fetchPhoto(const CallsignInfo& info);
     void loadPasswordFromKeychain();
 
+    // cty.dat country-level stand-in for `call`; !isValid() when the prefix
+    // doesn't resolve (or no parser was provided).
+    CallsignInfo prefixInfo(const QString& call) const;
+    // Emit the prefix stand-in for a call (at most once per lookup attempt).
+    // Returns false when no prefix data exists for the call.
+    bool emitPrefixFallback(const QString& call);
+    // Stamp distance/bearing from the operator's position onto an outgoing
+    // info (exact lat/lon > grid center > DXCC country center).
+    void stampGeo(CallsignInfo& info) const;
+    // Adopt the operator's own QRZ record as home position (unless GPS won).
+    void maybeAdoptOwnLocation(const CallsignInfo& info);
+
     QrzClient* m_client{nullptr};
     QNetworkAccessManager m_photoNam;
+    const CtyDatParser* m_ctyParser{nullptr};
     bool m_enabled{false};
     bool m_cacheLoaded{false};
     bool m_cacheDirty{false};
+    bool m_hasOwnLocation{false};
+    bool m_ownLocationFromGps{false};
+    double m_ownLat{0.0};
+    double m_ownLon{0.0};
+    QString m_ownCallsign;
     QHash<QString, CallsignInfo> m_cache;
     QSet<QString> m_inFlight;
+    QSet<QString> m_fallbackShown;   // calls already given a prefix card this attempt
     QSet<QString> m_photoInFlight;
     QTimer m_saveTimer;
 };

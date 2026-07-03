@@ -6,6 +6,7 @@
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLocale>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -51,6 +52,21 @@ private:
                 QUrl(QStringLiteral("https://www.qrz.com/db/%1").arg(call)));
     }
 };
+
+// "2,412 mi @ 078°" / "3 881 km @ 078°" from the operator's position;
+// "~" marks a DXCC-country-center estimate.  Locale picks the unit.
+QString formatDistanceBearing(double km, double bearingDeg, bool approx)
+{
+    const bool imperial =
+        QLocale().measurementSystem() != QLocale::MetricSystem;
+    const double value = imperial ? km * 0.621371 : km;
+    const QString unit = imperial ? QStringLiteral("mi") : QStringLiteral("km");
+    return QStringLiteral("%1%L2 %3 @ %4°")
+        .arg(approx ? QStringLiteral("~") : QString())
+        .arg(qRound(value))
+        .arg(unit)
+        .arg(qRound(bearingDeg), 3, 10, QLatin1Char('0'));
+}
 
 // Rounded-corner copy of a station photo scaled to fill edge×edge.
 QPixmap roundedPhoto(const QPixmap& src, int edge, int radius)
@@ -257,15 +273,27 @@ void CallsignCard::showInfo(const CallsignInfo& info, bool fromCache)
 
     m_classChip->setText(info.licenseClass);
     m_classChip->setVisible(!info.licenseClass.isEmpty());
-    m_cacheHint->setText(fromCache ? QStringLiteral("cached") : QString());
-    m_cacheHint->setVisible(fromCache);
+    // One provenance hint slot: "cached" (7-day cache) or "prefix"
+    // (country-level cty.dat stand-in while QRZ is unreachable/slow).
+    m_cacheHint->setText(info.prefixOnly ? QStringLiteral("prefix")
+                         : fromCache     ? QStringLiteral("cached")
+                                         : QString());
+    m_cacheHint->setVisible(info.prefixOnly || fromCache);
 
-    m_nameLabel->setText(info.displayName());
+    // A prefix card has no operator name; the country line carries it.
+    m_nameLabel->setText(info.prefixOnly ? QString() : info.displayName());
     m_locationLabel->setText(info.displayLocation());
 
     QStringList meta;
     if (!info.grid.isEmpty())   meta << info.grid;
     if (!info.county.isEmpty()) meta << info.county;
+    if (info.prefixOnly) {
+        if (!info.continent.isEmpty()) meta << info.continent;
+        if (info.cqZone > 0) meta << QStringLiteral("CQ %1").arg(info.cqZone);
+    }
+    if (info.distanceKm >= 0.0)
+        meta << formatDistanceBearing(info.distanceKm, info.bearingDeg,
+                                      info.distanceApprox);
     if (m_variant == Variant::Large) {
         QStringList qsl;
         if (info.lotw)    qsl << QStringLiteral("LoTW");

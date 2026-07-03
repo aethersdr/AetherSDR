@@ -116,7 +116,7 @@ void CtyDatParser::parse(const QStringList& lines)
     // Regex for header line: "Entity Name:  CQ:  ITU:  Cont:  lat:  lon:  tz:  Prefix:"
     // Fields are colon-separated on the first line.
     static const QRegularExpression headerRe(
-        R"(^([^:]+):\s*(\d+):\s*(\d+):\s*(\w+):\s*[\d\.\-]+:\s*[\d\.\-]+:\s*[\d\.\-]+:\s*([^:]+):)");
+        R"(^([^:]+):\s*(\d+):\s*(\d+):\s*(\w+):\s*([\d\.\-]+):\s*([\d\.\-]+):\s*[\d\.\-]+:\s*([^:]+):)");
 
     for (const QString& line : lines) {
         // Header line — doesn't start with whitespace
@@ -135,7 +135,19 @@ void CtyDatParser::parse(const QStringList& lines)
             current.cqZone       = m.captured(2).toInt();
             current.ituZone      = m.captured(3).toInt();
             current.continent    = m.captured(4).trimmed();
-            current.primaryPrefix = m.captured(5).trimmed().toUpper();
+            {
+                // cty.dat longitude is west-positive; flip to east-positive
+                // so it composes with everything else in the app.
+                bool okLat = false, okLon = false;
+                const double lat = m.captured(5).toDouble(&okLat);
+                const double lon = m.captured(6).toDouble(&okLon);
+                if (okLat && okLon) {
+                    current.latitude  = lat;
+                    current.longitude = -lon;
+                    current.hasLatLon = true;
+                }
+            }
+            current.primaryPrefix = m.captured(7).trimmed().toUpper();
             // Remove trailing slash variants like "3D2/c" -> use as-is (sub-entities get own primary prefix)
             inEntity = true;
             aliasBuffer.clear();
@@ -199,6 +211,13 @@ const DxccEntity* CtyDatParser::entityByPrefix(const QString& primaryPrefix) con
     auto it = m_entityByPrefix.find(primaryPrefix.toUpper());
     if (it == m_entityByPrefix.end()) return nullptr;
     return &it.value();
+}
+
+const DxccEntity* CtyDatParser::entityForCallsign(const QString& callsign) const
+{
+    const QString pfx = resolvePrimaryPrefix(callsign);
+    if (pfx.isEmpty()) return nullptr;
+    return entityByPrefix(pfx);
 }
 
 } // namespace AetherSDR

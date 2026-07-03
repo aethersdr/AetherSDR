@@ -1,7 +1,9 @@
 #include "CallsignLookupService.h"
 
 #include "CallsignUtils.h"
+#include "CtyDatParser.h"
 #include "LogManager.h"
+#include "MaidenheadLocator.h"
 #include "QrzClient.h"
 #include "QrzLookupSettings.h"
 
@@ -43,10 +45,15 @@ CallsignLookupService::CallsignLookupService(QObject* parent)
 
     connect(m_client, &QrzClient::lookupSucceeded, this, [this](const CallsignInfo& info) {
         m_inFlight.remove(info.call);
+        m_fallbackShown.remove(info.call);
         m_cache.insert(info.call, info);
         m_cacheDirty = true;
         scheduleCacheSave();
-        emit infoReady(info, /*fromCache=*/false);
+        if (info.call == m_ownCallsign)
+            maybeAdoptOwnLocation(info);
+        CallsignInfo out = info;
+        stampGeo(out);
+        emit infoReady(out, /*fromCache=*/false);
         fetchPhoto(info);
     });
 
@@ -58,9 +65,15 @@ CallsignLookupService::CallsignLookupService(QObject* parent)
         const auto it = m_cache.constFind(call);
         if (it != m_cache.constEnd()) {
             qCDebug(lcQrz) << "lookup failed for" << call << "— serving stale cache entry";
-            emit infoReady(it.value(), /*fromCache=*/true);
+            m_fallbackShown.remove(call);
+            CallsignInfo out = it.value();
+            stampGeo(out);
+            emit infoReady(out, /*fromCache=*/true);
             return;
         }
+        // No cache either → country-level card from cty.dat prefix data.
+        if (emitPrefixFallback(call))
+            return;
         emit lookupFailed(call, message);
     });
 
@@ -181,7 +194,8 @@ void CallsignLookupService::lookup(const QString& call, bool forceRefresh)
     const auto it = m_cache.constFind(norm);
     const bool fresh = it != m_cache.constEnd() && !it.value().isOlderThan(kCacheTtlSec);
     if (fresh && !forceRefresh) {
-        const CallsignInfo info = it.value();
+        CallsignInfo info = it.value();
+        stampGeo(info);
         // Queued so callers connecting right before lookup() still get it.
         QMetaObject::invokeMethod(this, [this, info] {
             emit infoReady(info, /*fromCache=*/true);
@@ -197,8 +211,138 @@ void CallsignLookupService::lookup(const QString& call, bool forceRefresh)
     if (m_inFlight.contains(norm))
         return;  // coalesce — a busy net pileup is one request
     m_inFlight.insert(norm);
+    m_fallbackShown.remove(norm);   // new attempt → fallback allowed again
     qCDebug(lcQrz) << "QRZ lookup" << norm << (fresh ? "(forced refresh)" : "(cache miss/stale)");
+
+    // Slow-network stopgap: if QRZ hasn't answered in kPrefixFallbackMs,
+    // show the country-level prefix card now; the full card replaces it
+    // whenever the real answer lands.
+    QTimer::singleShot(kPrefixFallbackMs, this, [this, norm] {
+        if (m_inFlight.contains(norm))
+            emitPrefixFallback(norm);
+    });
+
     m_client->lookup(norm);
+}
+
+bool CallsignLookupService::canResolve(const QString& call)
+{
+    if (hasCredentials() || hasCachedEntry(call))
+        return true;
+    return m_ctyParser && m_ctyParser->entityForCallsign(Callsigns::normalized(call));
+}
+
+void CallsignLookupService::setOwnLocation(double lat, double lon)
+{
+    m_ownLat = lat;
+    m_ownLon = lon;
+    m_hasOwnLocation = true;
+    m_ownLocationFromGps = true;
+}
+
+void CallsignLookupService::setOwnCallsign(const QString& call)
+{
+    const QString norm = Callsigns::normalized(call);
+    if (norm.isEmpty() || norm == m_ownCallsign)
+        return;
+    m_ownCallsign = norm;
+    if (m_ownLocationFromGps)
+        return;  // GPS already supplied a better position
+
+    ensureCacheLoaded();
+    const auto it = m_cache.constFind(norm);
+    if (it != m_cache.constEnd()) {
+        maybeAdoptOwnLocation(it.value());
+        return;
+    }
+    // Not cached — fetch quietly; the lookupSucceeded path adopts it.
+    // (No card is pending for this call, so nothing pops visually.)
+    if (m_enabled && hasCredentials())
+        lookup(norm);
+}
+
+void CallsignLookupService::maybeAdoptOwnLocation(const CallsignInfo& info)
+{
+    if (m_ownLocationFromGps || info.prefixOnly)
+        return;  // GPS wins; a country center is useless as a home position
+    double lat = 0.0, lon = 0.0;
+    if (info.hasLatLon) {
+        lat = info.latitude;
+        lon = info.longitude;
+    } else if (info.grid.isEmpty()
+               || !MaidenheadLocator::toLatLon(info.grid, lat, lon)) {
+        return;
+    }
+    m_ownLat = lat;
+    m_ownLon = lon;
+    m_hasOwnLocation = true;
+    qCDebug(lcQrz) << "own position adopted from" << info.call << "QRZ record";
+}
+
+CallsignInfo CallsignLookupService::prefixInfo(const QString& call) const
+{
+    CallsignInfo info;
+    if (!m_ctyParser)
+        return info;
+    const DxccEntity* entity = m_ctyParser->entityForCallsign(call);
+    if (!entity)
+        return info;
+    info.call       = call;
+    info.country    = entity->name;
+    info.continent  = entity->continent;
+    info.cqZone     = entity->cqZone;
+    info.prefixOnly = true;
+    if (entity->hasLatLon) {
+        info.latitude  = entity->latitude;
+        info.longitude = entity->longitude;
+        info.hasLatLon = true;
+    }
+    info.fetchedUtc = QDateTime::currentSecsSinceEpoch();
+    return info;
+}
+
+bool CallsignLookupService::emitPrefixFallback(const QString& call)
+{
+    if (m_fallbackShown.contains(call))
+        return true;   // already showing the prefix card for this attempt
+    CallsignInfo info = prefixInfo(call);
+    if (!info.isValid())
+        return false;
+    m_fallbackShown.insert(call);
+    stampGeo(info);
+    qCDebug(lcQrz) << "prefix fallback for" << call << "→" << info.country;
+    // Deliberately NOT cached: a country-level stand-in must never mask a
+    // future full QRZ lookup.
+    emit infoReady(info, /*fromCache=*/false);
+    return true;
+}
+
+void CallsignLookupService::stampGeo(CallsignInfo& info) const
+{
+    info.distanceKm = -1.0;
+    info.bearingDeg = -1.0;
+    info.distanceApprox = false;
+    if (!m_hasOwnLocation)
+        return;
+
+    // Best available station position: exact lat/lon → grid center →
+    // (already folded into hasLatLon for prefix cards) country center.
+    double lat = 0.0, lon = 0.0;
+    bool have = false;
+    if (info.hasLatLon) {
+        lat = info.latitude;
+        lon = info.longitude;
+        have = true;
+        info.distanceApprox = info.prefixOnly;   // country center is coarse
+    } else if (!info.grid.isEmpty()
+               && MaidenheadLocator::toLatLon(info.grid, lat, lon)) {
+        have = true;
+    }
+    if (!have)
+        return;
+
+    info.distanceKm = MaidenheadLocator::distanceKm(m_ownLat, m_ownLon, lat, lon);
+    info.bearingDeg = MaidenheadLocator::bearingDeg(m_ownLat, m_ownLon, lat, lon);
 }
 
 void CallsignLookupService::testLogin(const QString& username, const QString& password)

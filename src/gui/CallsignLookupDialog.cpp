@@ -91,7 +91,11 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
             return;
         m_card->setVisible(true);
         m_card->showInfo(info, fromCache);
-        if (fromCache) {
+        if (info.prefixOnly) {
+            setStatus(QStringLiteral(
+                "QRZ.com unavailable — showing country-level prefix data "
+                "(cty.dat). Full details will replace this if QRZ answers."));
+        } else if (fromCache) {
             const qint64 ageDays =
                 (QDateTime::currentSecsSinceEpoch() - info.fetchedUtc) / 86400;
             setStatus(ageDays > 0
@@ -121,8 +125,9 @@ CallsignLookupDialog::CallsignLookupDialog(QWidget* parent)
 
     if (!svc.hasCredentials()) {
         setStatus(QStringLiteral(
-            "QRZ.com account not configured — add your username and password "
-            "in Radio Setup → QRZ."));
+            "QRZ.com account not configured — lookups fall back to "
+            "country-level prefix data. Add your username and password in "
+            "Radio Setup → QRZ for full details."));
     }
 }
 

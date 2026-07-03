@@ -6,13 +6,17 @@
 
 #include "core/CallsignInfo.h"
 #include "core/CallsignUtils.h"
+#include "core/CtyDatParser.h"
 #include "core/CwCallsignSpotter.h"
+#include "core/MaidenheadLocator.h"
 
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QSignalSpy>
+#include <QTemporaryFile>
 #include <QTimer>
 
+#include <cmath>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -174,6 +178,44 @@ int main(int argc, char** argv)
         info.lastName.clear();
         check(info.displayName() == "W1AW", "displayName falls back to call");
         check(info.displayLocation().isEmpty(), "empty location joins to empty");
+    }
+
+    // ── CtyDatParser: entity lat/lon for the prefix-fallback card ───────
+    {
+        // Two entities in AD1C cty.dat format.  NOTE: the file stores
+        // longitude WEST-positive; the parser must flip it east-positive.
+        QTemporaryFile f;
+        f.open();
+        f.write("United States:            5:  8:  NA:   37.53:    91.67:     5.0:  K:\n"
+                "    K,W,N,AA,AB,KI6,=W1AW;\n"
+                "England:                 14: 27:  EU:   52.77:     1.47:     0.0:  G:\n"
+                "    G,M,2E;\n");
+        f.close();
+
+        CtyDatParser cty;
+        check(cty.loadFromFile(f.fileName()), "cty.dat sample loads");
+        const DxccEntity* us = cty.entityForCallsign("KI6BCJ");
+        check(us && us->name == "United States", "KI6BCJ resolves to United States");
+        check(us && us->hasLatLon && std::abs(us->latitude - 37.53) < 0.01
+              && std::abs(us->longitude - (-91.67)) < 0.01,
+              "US lat/lon parsed, longitude flipped east-positive");
+        check(us && us->continent == "NA" && us->cqZone == 5,
+              "US continent + CQ zone parsed");
+        const DxccEntity* uk = cty.entityForCallsign("G4ABC");
+        check(uk && uk->name == "England" && uk->hasLatLon,
+              "G4ABC resolves to England with lat/lon");
+        check(cty.entityForCallsign("ZZ9ZZZ") == nullptr
+              || !cty.entityForCallsign("ZZ9ZZZ"),
+              "unknown prefix resolves to null");
+    }
+
+    // ── Distance + bearing sanity (San Jose CM97 → ARRL FN31) ───────────
+    {
+        double km = 0.0, brg = 0.0;
+        check(MaidenheadLocator::gridDistance("CM97", "FN31", km, brg),
+              "grid distance computes");
+        check(km > 4000 && km < 4400, "CM97→FN31 distance ≈ 4200 km");
+        check(brg > 55 && brg < 90, "CM97→FN31 initial bearing ≈ ENE");
     }
 
     // ── TTL staleness — the 7-day cache rule ────────────────────────────

@@ -1006,7 +1006,8 @@ Lookup). Four actions; none touch the radio and none key TX.
 
 ```json
 → {"cmd":"qrz","action":"status"}
-← {"ok":true,"enabled":true,"hasCredentials":true,"cacheEntries":42}
+← {"ok":true,"enabled":true,"hasCredentials":true,"cacheEntries":42,
+   "hasOwnLocation":true}
 
 → {"cmd":"qrz","action":"cached","value":"KI6BCJ"}
 ← {"ok":true,"found":true,"entry":{"call":"KI6BCJ","nameFmt":"…","grid":"CM97",
@@ -1019,7 +1020,9 @@ Lookup). Four actions; none touch the radio and none key TX.
 ← {"ok":true,"fed":"CQ CQ DE KI6BCJ KI6BCJ K"}
 ```
 
-- `status` — enable flag, credential presence, lookup-cache entry count.
+- `status` — enable flag, credential presence, lookup-cache entry count, and
+  whether an own position (radio GPS/grid, or the operator's own QRZ record)
+  is available for card distance/bearing.
 - `cached <call>` — cache probe; returns the entry (plus `stale`, 7-day TTL,
   and `photoPath` when a photo is cached) or `found:false`. Never hits the
   network — safe to poll after `lookup`.

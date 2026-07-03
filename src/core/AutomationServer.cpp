@@ -3568,6 +3568,7 @@ QJsonObject AutomationServer::doQrz(const QString& action, const QString& value)
             {QStringLiteral("enabled"), svc.enabled()},
             {QStringLiteral("hasCredentials"), svc.hasCredentials()},
             {QStringLiteral("cacheEntries"), svc.cacheEntryCount()},
+            {QStringLiteral("hasOwnLocation"), svc.hasOwnLocation()},
         };
     }
     if (action == QLatin1String("cached")) {

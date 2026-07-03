@@ -19,8 +19,34 @@
 #include "PanadapterApplet.h"
 #include "core/CallsignLookupService.h"
 #include "core/LogManager.h"
+#include "core/MaidenheadLocator.h"
+#include "models/RadioModel.h"
 
 namespace AetherSDR {
+
+namespace {
+
+// Operator position for card distance/bearing: GPS fix when the radio has
+// one, else the radio's grid-locator center (same preference order as the
+// PSK Reporter map's home position).
+void pushOwnLocationFromRadio(RadioModel* radio)
+{
+    auto& svc = CallsignLookupService::instance();
+    if (!radio)
+        return;
+    bool ok = false;
+    double lat = radio->gpsLat().toDouble(&ok);
+    double lon = 0.0;
+    if (ok)
+        lon = radio->gpsLon().toDouble(&ok);
+    if (!ok || (lat == 0.0 && lon == 0.0)) {
+        if (!MaidenheadLocator::toLatLon(radio->gpsGrid(), lat, lon))
+            return;  // keep whatever the service already has
+    }
+    svc.setOwnLocation(lat, lon);
+}
+
+} // namespace
 
 void MainWindow::wireCallsignLookup()
 {
@@ -28,6 +54,24 @@ void MainWindow::wireCallsignLookup()
     // findChild and drive `qrz spottext` through the real detection path.
     m_cwCallsignSpotter.setParent(this);
     m_cwCallsignSpotter.setObjectName(QStringLiteral("cwCallsignSpotter"));
+
+    // Country-level prefix fallback data (cty.dat is parsed once, by the
+    // DXCC spot-coloring provider).
+    CallsignLookupService::instance().setCtyParser(m_dxccProvider.ctyParser());
+
+    // Distance/bearing needs the operator's own position; follow the
+    // radio's GPS (or grid) as it becomes available and as it updates.
+    connect(&m_radioModel, &RadioModel::gpsStatusChanged, this,
+            [this] { pushOwnLocationFromRadio(&m_radioModel); });
+    pushOwnLocationFromRadio(&m_radioModel);
+
+    // No GPS? The operator's own QRZ record carries their grid — the radio
+    // callsign keys that zero-config fallback (GPS overrides when present).
+    connect(&m_radioModel, &RadioModel::callsignChanged, this, [this] {
+        CallsignLookupService::instance().setOwnCallsign(m_radioModel.callsign());
+    });
+    if (!m_radioModel.callsign().isEmpty())
+        CallsignLookupService::instance().setOwnCallsign(m_radioModel.callsign());
 
     connect(&m_cwCallsignSpotter, &CwCallsignSpotter::callsignSpotted,
             this, &MainWindow::onCwCallsignSpotted);
@@ -70,10 +114,9 @@ void MainWindow::wireCallsignLookup()
 void MainWindow::onCwCallsignSpotted(const QString& call)
 {
     auto& svc = CallsignLookupService::instance();
-    // No account configured → no pending card that can never fill in.
-    // A cached entry can still fill the card without credentials, so
-    // cache hits pop regardless (also lets the offline case keep working).
-    if (!svc.enabled() || (!svc.hasCredentials() && !svc.hasCachedEntry(call)))
+    // Only pop a card that can actually fill in: QRZ credentials, a cache
+    // entry, or at least cty.dat prefix data (country-level fallback card).
+    if (!svc.enabled() || !svc.canResolve(call))
         return;
     if (!m_cwDecoderApplet)
         return;

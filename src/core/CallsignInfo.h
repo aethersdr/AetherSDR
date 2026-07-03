@@ -33,6 +33,19 @@ struct CallsignInfo {
     bool    mailQsl{false};// returns paper QSL, QRZ <mqsl>
     qint64  fetchedUtc{0}; // epoch seconds when fetched from the provider
 
+    // ── Transient (never serialized to the cache) ───────────────────────
+    // prefixOnly: built from cty.dat prefix data because QRZ was
+    // unreachable/slow/unconfigured — country-level accuracy only.
+    bool    prefixOnly{false};
+    QString continent;         // cty.dat continent ("NA") for prefix cards
+    int     cqZone{0};         // cty.dat CQ zone for prefix cards
+    // Distance/bearing from the operator's own position, stamped by
+    // CallsignLookupService at emit time (own position changes; the cache
+    // entry must not bake it in).  distanceKm < 0 → unknown.
+    double  distanceKm{-1.0};
+    double  bearingDeg{-1.0};
+    bool    distanceApprox{false};  // position came from the DXCC country center
+
     bool isValid() const { return !call.isEmpty(); }
 
     // Age-based staleness against the lookup cache TTL.

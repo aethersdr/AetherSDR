@@ -2141,6 +2141,7 @@ add_executable(qrz_callsign_test
     tests/qrz_callsign_test.cpp
     src/core/CwCallsignSpotter.cpp
     src/core/CallsignInfo.cpp
+    src/core/CtyDatParser.cpp
     # LogManager provides lcQrz (spotter's qCDebug category); it drags
     # AsyncLogWriter + AppSettings for its writer/ctor chain at link time.
     src/core/LogManager.cpp
