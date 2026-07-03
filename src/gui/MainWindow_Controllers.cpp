@@ -2605,6 +2605,7 @@ void MainWindow::wireExternalControllers()
             if (m_hidEncoder->isTMate2())
                 noteTMate2Interaction();
             refreshStreamDeckLabels();
+            m_lastRC28LedByte = 0xFF;  // force write to re-init LEDs on (re)connect
             updateRC28Leds();
             updateTMate2Display();
             updateTMate2Indicators();

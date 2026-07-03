@@ -30,6 +30,7 @@ void TransmitModel::resetState()
     m_txSliceMode.clear();
 
     emit apdStateChanged();
+    emit transmittingChanged(false);
     emit moxChanged(false);
     emit tuneChanged(false);
     emit micStateChanged();
