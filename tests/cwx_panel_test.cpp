@@ -170,6 +170,47 @@ void testSetupTurnsLiveOff()
            !f.model.isLive() && !live->isChecked() && setup->isChecked());
 }
 
+// #3514: the F1-F12 macro fire must not transmit a stored macro when the
+// CWX panel is hidden, even though the active slice is in a CW mode (so the
+// ApplicationShortcut is enabled). The guard lives in fireMacro(), not in
+// the shortcut enable state, so the "one enabled shortcut per key" invariant
+// (#2464/#2582) stays intact — the shortcut still activates while hidden;
+// the fire just returns early.
+//
+// We drive fireMacroForTest() directly rather than synthesizing an F-key
+// press. In the real app the shortcut's owner is window() == MainWindow,
+// which stays visible when the panel is hidden, so the ApplicationShortcut
+// still dispatches and the fireMacro() guard is what blocks the transmit.
+// In this test the panel has no parent, so window() resolves to the panel
+// itself; hiding it hides the shortcut owner and suppresses dispatch
+// entirely — a key-event test would then pass whether or not the guard
+// exists (a false pass). The seam exercises the exact guarded path.
+void testMacroBlockedWhenPanelHidden()
+{
+    Fixture f;
+    f.panel.setActiveModeProvider([]() { return QString("CW"); });
+    f.panel.setShortcutsEnabled(true);   // as MainWindow does in CW mode
+
+    // Panel hidden (never shown): F1 must NOT fire the macro.
+    f.panel.fireMacroForTest(0);
+    report("F1 does not fire macro when CWX panel hidden", f.commands.isEmpty(),
+           f.commands.isEmpty() ? "" : ("fired: " + f.commands.join(',').toStdString()));
+
+    // Panel visible + CW: F1 fires the macro.
+    f.panel.show();
+    f.panel.fireMacroForTest(0);
+    report("F1 fires macro when CWX panel visible",
+           f.commands == QStringList{"cwx macro send 1"},
+           f.commands.join(',').toStdString());
+    f.commands.clear();
+
+    // Panel visible but active slice not in a CW mode: still blocked.
+    f.panel.setActiveModeProvider([]() { return QString("USB"); });
+    f.panel.fireMacroForTest(0);
+    report("F1 does not fire macro in non-CW mode", f.commands.isEmpty(),
+           f.commands.isEmpty() ? "" : ("fired: " + f.commands.join(',').toStdString()));
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -182,6 +223,7 @@ int main(int argc, char** argv)
     testEnterStillSendsWhenLiveOff();
     testSendButtonTurnsLiveOffWithoutDuplicateSend();
     testSetupTurnsLiveOff();
+    testMacroBlockedWhenPanelHidden();
 
     std::printf("\n%s\n",
                 g_failed == 0

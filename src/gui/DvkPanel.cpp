@@ -220,15 +220,19 @@ DvkPanel::DvkPanel(DvkModel* model, QWidget* parent)
     // F1-F12 hotkeys (only play if slot has a recording).  Registered as
     // Qt::ApplicationShortcut on window() and created disabled — MainWindow
     // flips enable state based on the active slice's mode (mutually
-    // exclusive with CwxPanel's F1-F12 set) so the keys fire regardless of
-    // panel visibility while Qt still sees at most one enabled shortcut
-    // per key and never emits activatedAmbiguously. (#2464, #2582)
+    // exclusive with CwxPanel's F1-F12 set) so Qt still sees at most one
+    // enabled shortcut per key and never emits activatedAmbiguously
+    // (#2464, #2582). The playback fire is additionally gated on panel
+    // visibility at fire time so a hidden DVK can't transmit a stored
+    // voice message on an accidental F-key press. (#3514)
     for (int i = 0; i < 12; ++i) {
         auto* sc = new QShortcut(QKeySequence(Qt::Key_F1 + i), window());
         sc->setContext(Qt::ApplicationShortcut);
         sc->setEnabled(false);
         m_shortcuts.append(sc);
         connect(sc, &QShortcut::activated, this, [this, i]() {
+            // #3514: don't fire stored voice messages when the panel is hidden.
+            if (!isVisible()) return;
             int id = i + 1;
             selectSlot(id);
             if (m_model->status() == DvkModel::Playback && m_model->activeId() == id)

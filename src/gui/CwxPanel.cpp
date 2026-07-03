@@ -242,27 +242,20 @@ CwxPanel::CwxPanel(CwxModel* model, QWidget* parent)
     //
     //    Created disabled; MainWindow flips enable state based on the
     //    active slice's mode (mutually exclusive with DvkPanel's F1-F12
-    //    set) so the keys fire regardless of panel visibility, while
-    //    Qt still sees at most one enabled ApplicationShortcut per key
-    //    and never emits activatedAmbiguously. (#2464, #2582)
+    //    set) so Qt still sees at most one enabled ApplicationShortcut
+    //    per key and never emits activatedAmbiguously. (#2464, #2582)
+    //
+    //    The macro fire (fireMacro) is additionally gated on panel
+    //    visibility at fire time: a hidden CWX keyer must not transmit
+    //    stored macros on an accidental F-key press. The gate lives in
+    //    fireMacro rather than the enable state so the Qt-level "one
+    //    enabled shortcut per key" invariant above stays intact. (#3514)
     for (int i = 0; i < 12; ++i) {
         auto* sc = new QShortcut(Qt::Key_F1 + i, window());
         sc->setContext(Qt::ApplicationShortcut);
         sc->setEnabled(false);
         m_shortcuts.append(sc);
-        connect(sc, &QShortcut::activated, this, [this, i]() {
-            if (!m_model) return;
-            if (m_activeModeProvider) {
-                const QString mode = m_activeModeProvider();
-                if (mode != QLatin1String("CW") && mode != QLatin1String("CWL"))
-                    return;
-            }
-            // Log the macro text to the history feed BEFORE firing the
-            // command so the snapshot of m_model->sentIndex() lines up
-            // with the chars about to be keyed for this bubble. (#3146)
-            appendHistoryBubble(m_model->macro(i));
-            m_model->sendMacro(i + 1);
-        });
+        connect(sc, &QShortcut::activated, this, [this, i]() { fireMacro(i); });
     }
 
     // ── ESC — abort CW transmission.  Fires unconditionally: during a CW
@@ -509,6 +502,29 @@ int CwxPanel::historyBubbleCount() const
 void CwxPanel::setShortcutsEnabled(bool enabled)
 {
     for (auto* sc : m_shortcuts) sc->setEnabled(enabled);
+}
+
+// Fire the stored macro for F(index+1). Invoked by the F1-F12
+// ApplicationShortcuts and, directly, by the #3514 regression test.
+void CwxPanel::fireMacro(int index)
+{
+    if (!m_model || index < 0 || index >= 12) return;
+    // #3514: a hidden CWX keyer must not transmit stored macros on an
+    // accidental F-key press. Gated here rather than in the shortcut
+    // enable state so the Qt "one enabled shortcut per key" invariant
+    // (#2464/#2582) stays intact — the shortcut still activates; the
+    // fire just returns early.
+    if (!isVisible()) return;
+    if (m_activeModeProvider) {
+        const QString mode = m_activeModeProvider();
+        if (mode != QLatin1String("CW") && mode != QLatin1String("CWL"))
+            return;
+    }
+    // Log the macro text to the history feed BEFORE firing the command so
+    // the snapshot of m_model->sentIndex() lines up with the chars about
+    // to be keyed for this bubble. (#3146)
+    appendHistoryBubble(m_model->macro(index));
+    m_model->sendMacro(index + 1);
 }
 
 void CwxPanel::onCharSent(int index)

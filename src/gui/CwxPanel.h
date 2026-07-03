@@ -70,8 +70,10 @@ public:
     }
 
     // Enable/disable the F1-F12 and Esc ApplicationShortcuts. Driven by
-    // the active slice's mode in MainWindow, so the keys fire whether
-    // the panel is visible or not. (#2582)
+    // the active slice's mode in MainWindow. Esc (CW-abort) fires whether
+    // the panel is visible or not; the F1-F12 macro fires are additionally
+    // gated on panel visibility at fire time so a hidden keyer can't
+    // transmit stored macros. (#2582, #3514)
     void setShortcutsEnabled(bool enabled);
 
     // Inspection accessors for the in-flight bubble — used by tests to
@@ -79,6 +81,12 @@ public:
     // without re-walking the history container ourselves.
     CwxBubble* pendingBubble() const { return m_pendingBubble; }
     int        historyBubbleCount() const;
+
+    // Test seam: fire the F(index+1) macro exactly as its ApplicationShortcut
+    // does, including the visibility/mode guards, so the #3514 regression
+    // test can exercise the guard without Qt shortcut dispatch (which won't
+    // route to a hidden widget headlessly). (0-based: 0=F1, 11=F12)
+    void fireMacroForTest(int index) { fireMacro(index); }
 
 protected:
     bool eventFilter(QObject* obj, QEvent* event) override;
@@ -89,6 +97,7 @@ private slots:
     void onTransmissionCancelled();
 
 private:
+    void fireMacro(int index);   // #3514: guarded F1-F12 macro fire (0-based)
     void buildSendView();
     void buildSetupView();
     void showSendView();
@@ -135,9 +144,9 @@ private:
     std::function<bool()>    m_transmittingProvider;
 
     // F1-F12 + ESC shortcuts — enabled by MainWindow based on the active
-    // slice's mode so they fire regardless of panel visibility, while
-    // staying mutually exclusive with DvkPanel's F1-F12 set to avoid Qt
-    // shortcut ambiguity (#2464, #2582).
+    // slice's mode, staying mutually exclusive with DvkPanel's F1-F12 set
+    // to avoid Qt shortcut ambiguity (#2464, #2582). The macro fires are
+    // additionally gated on panel visibility at fire time (#3514).
     QVector<QShortcut*> m_shortcuts;
 };
 

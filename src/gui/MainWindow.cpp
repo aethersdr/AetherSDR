@@ -7464,9 +7464,12 @@ void MainWindow::updateKeyerAvailability(const QString& mode)
                   || mode == "FM" || mode == "NFM" || mode == "DFM");
 
     // F1-F12 / Esc ApplicationShortcuts: enable the set that matches the
-    // active slice's mode, regardless of panel visibility.  The two sets
-    // are mutually exclusive so Qt never sees two enabled shortcuts for
-    // the same key and won't emit activatedAmbiguously (#2464, #2582).
+    // active slice's mode.  The two sets are mutually exclusive so Qt
+    // never sees two enabled shortcuts for the same key and won't emit
+    // activatedAmbiguously (#2464, #2582).  The F1-F12 macro/playback
+    // fires are additionally gated on panel visibility inside each panel
+    // so a hidden keyer can't transmit on an accidental press (#3514);
+    // Esc (CW-abort) still fires whenever the slice is in a CW mode.
     if (m_cwxPanel) m_cwxPanel->setShortcutsEnabled(isCw);
     if (m_dvkPanel) m_dvkPanel->setShortcutsEnabled(isSsb);
 
