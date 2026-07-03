@@ -418,7 +418,7 @@ void WanConnection::processLine(const QString& line)
     }
 
     case MessageType::Status:
-        emit statusReceived(msg.object, msg.kvs);
+        emit statusReceived(msg.object, msg.kvs, msg.handle);
         break;
 
     default:

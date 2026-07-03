@@ -1571,6 +1571,20 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
             return;
         }
 
+        // #3977: never adjust a pan this session no longer owns. The radio
+        // reassigns a pan's client_handle when another session reclaims it
+        // (MultiFlex reconnect), and a stale session's auto-floor tracker
+        // must not keep ratcheting the new owner's dBm range (#3951).
+        if (auto* pan = m_radioModel.panadapter(applet->panId());
+            pan && !pan->ownedByClient(m_radioModel.ourClientHandle())) {
+            qCWarning(lcProtocol).noquote()
+                << "MainWindow: dropping dBm range command for pan"
+                << applet->panId() << "owned by client" << pan->clientHandle()
+                << "- ours is"
+                << QString::number(m_radioModel.ourClientHandle(), 16);
+            return;
+        }
+
         m_radioModel.sendCommand(
             QString("display pan set %1 min_dbm=%2 max_dbm=%3")
                 .arg(applet->panId())

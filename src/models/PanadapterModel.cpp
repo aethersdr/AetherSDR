@@ -37,6 +37,20 @@ void PanadapterModel::setClientHandle(const QString& h)
     m_clientHandle = h;
 }
 
+bool PanadapterModel::ownedByClient(quint32 handle) const
+{
+    // Stored either as bare lowercase hex (our own assignment) or as the
+    // radio's "0x…" status form — compare numerically.
+    QStringView v(m_clientHandle);
+    if (v.startsWith(QLatin1String("0x"), Qt::CaseInsensitive))
+        v = v.mid(2);
+    bool ok = false;
+    const quint32 parsed = v.toUInt(&ok, 16);
+    // An unknown/unparsable owner is treated as ours: the radio hasn't told
+    // us otherwise, and failing open here would break every dBm command.
+    return !ok || parsed == 0 || parsed == handle;
+}
+
 void PanadapterModel::setRfGainInfo(int low, int high, int step)
 {
     m_rfGainLow = low;
@@ -49,6 +63,23 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
 {
     bool infoChanged = false;
     bool levelChanged = false;
+
+    // #3977: ownership is radio-authoritative. When another session reclaims
+    // this pan (MultiFlex reconnect), the radio broadcasts the new
+    // client_handle; tracking it here lets a superseded session stop
+    // adjusting a pan it no longer owns.
+    if (kvs.contains("client_handle")) {
+        QStringView v(kvs["client_handle"]);
+        if (v.startsWith(QLatin1String("0x"), Qt::CaseInsensitive))
+            v = v.mid(2);
+        bool ok = false;
+        const quint32 parsed = v.toUInt(&ok, 16);
+        if (ok && parsed != 0) {
+            const QString canonical = QString::number(parsed, 16);
+            if (canonical != m_clientHandle)
+                m_clientHandle = canonical;
+        }
+    }
 
     if (kvs.contains("center")) {
         double c = kvs["center"].toDouble();

@@ -326,7 +326,7 @@ void RadioConnection::processLine(const QString& line)
         emit commandResponse(msg.sequence, msg.resultCode, msg.object);
         break;
     case MessageType::Status:
-        emit statusReceived(msg.object, msg.kvs);
+        emit statusReceived(msg.object, msg.kvs, msg.handle);
         break;
     default:
         break;

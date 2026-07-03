@@ -272,6 +272,17 @@ public:
         double txFreqMhz{0};
     };
     const QMap<quint32, ClientInfo>& clientInfoMap() const { return m_clientInfoMap; }
+    // #3977: per-source-handle tally of dBm-range writes made by OTHER
+    // clients against pans we own — the #3951 zombie signature. Exposed via
+    // the bridge `get clients` verb; feeds the evidence-based eviction.
+    struct ForeignPanWrite {
+        int count{0};
+        QString panId;   // last pan written
+        qint64 lastMs{0};
+    };
+    const QMap<quint32, ForeignPanWrite>& foreignPanWrites() const { return m_foreignPanWrites; }
+    const QSet<quint32>& evictedPredecessorHandles() const { return m_evictedPredecessorHandles; }
+    QString ourStationName() const;
     void    setKnownGuiClients(const QStringList& handles,
                                const QStringList& programs,
                                const QStringList& stations,
@@ -557,7 +568,8 @@ public:
     QString protocolVersion() const { return m_protocolVersion; }
 
 private slots:
-    void onStatusReceived(const QString& object, const QMap<QString, QString>& kvs);
+    void onStatusReceived(const QString& object, const QMap<QString, QString>& kvs,
+                          quint32 sourceHandle);
     void onMessageReceived(const ParsedMessage& msg);
     void onConnected();
     void onDisconnected();
@@ -742,6 +754,13 @@ private:
 
     QMap<QString, PanadapterModel*> m_panadapters;  // panId → model
     QMap<QString, PanadapterModel*> m_stalePanadapters;  // previous session, kept alive for UI reuse
+    // #3977: predecessor handles already sent a `client disconnect` during
+    // pan reclaim, so a burst of reclaimed pans evicts each zombie once.
+    QSet<quint32> m_evictedPredecessorHandles;
+    QMap<quint32, ForeignPanWrite> m_foreignPanWrites;
+    void noteForeignPanWriteIfAny(const QString& object,
+                                  const QMap<QString, QString>& kvs,
+                                  quint32 sourceHandle);
     QString m_activePanId;       // currently active panadapter
 
     // Radio-authoritative display inventory (#3856 Layer B). Accumulated from

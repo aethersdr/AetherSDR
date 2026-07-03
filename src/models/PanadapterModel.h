@@ -24,6 +24,11 @@ public:
     void setWaterfallId(const QString& id);
     QString clientHandle() const { return m_clientHandle; }
     void setClientHandle(const QString& h);
+    // #3977: true when this pan belongs to the given connection handle. The
+    // radio reassigns client_handle when another session reclaims the pan;
+    // callers gate outbound pan-set commands on this so a superseded session
+    // stops adjusting the new owner's display.
+    bool ownedByClient(quint32 handle) const;
 
     // Display state
     double centerMhz() const { return m_centerMhz; }
