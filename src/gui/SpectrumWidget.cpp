@@ -5602,6 +5602,8 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
         m_kiwiSdrLastWaterfallFrameValid = true;
     }
 
+    // Keep the trace/3DSS smoothing local to those consumers; the scrolling
+    // waterfall below uses decoded bins so narrow Kiwi carriers stay sharp.
     const QVector<float> smoothedBins = smoothKiwiSdrWaterfallBins(binsDbm);
     if (m_kiwiSdrWaterfallActive && rowHasUsableTraceCoverage) {
         // 3DSS rows must be in the visible panadapter frequency frame. Raw Kiwi
@@ -5697,7 +5699,7 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
             }
         }
     }
-    pushKiwiSdrWaterfallRow(smoothedBins, destWidth,
+    pushKiwiSdrWaterfallRow(binsDbm, destWidth,
                             rowCenterMhz, rowBandwidthMhz);
     if (visibleStream) {
         leanCappedUpdate();
