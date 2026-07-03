@@ -53,6 +53,7 @@
 #include "models/SliceModel.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QPointer>
 #include <QSet>
@@ -73,6 +74,7 @@ constexpr double kSpectrumClickEdgeMarginFrac = 0.05;
 
 constexpr double kMemoryRevealTargetToleranceMhz = 0.000001;
 constexpr int kPanDimensionDecoderFallbackMs = 650;
+constexpr int kKiwiGestureViewUpdateMs = 100;
 constexpr qint64 kProfileLoadDimensionSettleMs = kPanDimensionDecoderFallbackMs + 100;
 
 int currentAutoSqlMarginDb()
@@ -1627,15 +1629,33 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
         }
     };
 
+    auto kiwiGestureLastViewUpdate = std::make_shared<QElapsedTimer>();
+    const auto updateKiwiWaterfallViewForGesture =
+        [updateKiwiWaterfallView,
+         kiwiGestureLastViewUpdate](double centerMhz, double bandwidthMhz) {
+            const bool updateDue =
+                !kiwiGestureLastViewUpdate->isValid()
+                || kiwiGestureLastViewUpdate->elapsed()
+                       >= kKiwiGestureViewUpdateMs;
+            if (!updateDue) {
+                return;
+            }
+            updateKiwiWaterfallView(centerMhz, bandwidthMhz);
+            kiwiGestureLastViewUpdate->restart();
+        };
+
     const auto updateKiwiWaterfallViewUnlessDeferred =
-        [updateKiwiWaterfallView, sw](double centerMhz, double bandwidthMhz) {
+        [updateKiwiWaterfallView, updateKiwiWaterfallViewForGesture, sw,
+         kiwiGestureLastViewUpdate](double centerMhz, double bandwidthMhz) {
             if (sw && sw->waterfallViewUpdateDeferred()) {
                 return;
             }
             if (sw && sw->frequencyRangeGestureActive()) {
+                updateKiwiWaterfallViewForGesture(centerMhz, bandwidthMhz);
                 return;
             }
             updateKiwiWaterfallView(centerMhz, bandwidthMhz);
+            kiwiGestureLastViewUpdate->invalidate();
         };
 
     connect(sw, &SpectrumWidget::frequencyRangeChanged,
@@ -1643,20 +1663,36 @@ void MainWindow::wirePanadapter(PanadapterApplet* applet)
     connect(sw, &SpectrumWidget::frequencyRangeChangeRequested,
             this, updateKiwiWaterfallViewUnlessDeferred);
     connect(sw, &SpectrumWidget::centerChangeRequested,
-            this, [updateKiwiWaterfallView, sw](double centerMhz) {
+            this, [updateKiwiWaterfallView, updateKiwiWaterfallViewForGesture,
+                   sw, kiwiGestureLastViewUpdate](double centerMhz) {
                 if (!sw) {
                     return;
                 }
-                if (sw->panDragActive()
-                    || sw->frequencyRangeGestureActive()) {
+                if (sw->frequencyRangeGestureActive()) {
+                    return;
+                }
+                if (sw->panDragActive()) {
+                    updateKiwiWaterfallViewForGesture(centerMhz,
+                                                      sw->bandwidthMhz());
                     return;
                 }
                 updateKiwiWaterfallView(centerMhz, sw->bandwidthMhz());
+                kiwiGestureLastViewUpdate->invalidate();
             });
     connect(sw, &SpectrumWidget::panDragSettled,
-            this, updateKiwiWaterfallView);
+            this, [updateKiwiWaterfallView,
+                   kiwiGestureLastViewUpdate](double centerMhz,
+                                              double bandwidthMhz) {
+                updateKiwiWaterfallView(centerMhz, bandwidthMhz);
+                kiwiGestureLastViewUpdate->invalidate();
+            });
     connect(sw, &SpectrumWidget::frequencyRangeSettled,
-            this, updateKiwiWaterfallView);
+            this, [updateKiwiWaterfallView,
+                   kiwiGestureLastViewUpdate](double centerMhz,
+                                              double bandwidthMhz) {
+                updateKiwiWaterfallView(centerMhz, bandwidthMhz);
+                kiwiGestureLastViewUpdate->invalidate();
+            });
 
     // Wire band plan manager to this spectrum widget
     sw->setBandPlanManager(m_bandPlanMgr);

@@ -753,6 +753,7 @@ private:
         int rowsSinceRateChange{0};
         QVector<QRgb> prevTileScanline;
         QVector<float> kiwiFftTrace;
+        QVector<quint8> kiwiFftFallbackSeedMask;
         QVector<float> kiwiLastWaterfallBins;
         double kiwiLastWaterfallCenterMhz{0.0};
         double kiwiLastWaterfallBandwidthMhz{0.0};
@@ -895,9 +896,11 @@ private:
 
     QVector<float> m_bins;       // raw FFT frame (dBm)
     QVector<float> m_smoothed;   // exponential-smoothed for visual stability
+    QVector<quint8> m_fftFallbackSeedMask; // 1 = replace from next real FFT frame
     mutable QVector<float> m_fftDisplaySmoothScratch;
     mutable QVector<float> m_fftDisplayTraceScratch;
     QVector<float> m_kiwiSdrFftTrace;  // Kiwi-derived FFT trace, kept separate from Flex FFT
+    QVector<quint8> m_kiwiSdrFftFallbackSeedMask; // 1 = replace from next real Kiwi row
     bool m_shutdownPrepared{false};
     bool m_kiwiSdrWaterfallAvailable{false};
     bool m_kiwiSdrWaterfallActive{false};

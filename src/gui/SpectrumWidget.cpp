@@ -3596,6 +3596,7 @@ void SpectrumWidget::clearCurrentWaterfallRows()
     m_wfRowsSinceRateChange = 0;
     m_prevTileScanline.clear();
     m_kiwiSdrFftTrace.clear();
+    m_kiwiSdrFftFallbackSeedMask.clear();
     m_kiwiSdrLastWaterfallBins.clear();
     m_kiwiSdrLastWaterfallCenterMhz = 0.0;
     m_kiwiSdrLastWaterfallBandwidthMhz = 0.0;
@@ -3692,6 +3693,7 @@ void SpectrumWidget::saveCurrentWaterfallStreamState()
     updated.rowsSinceRateChange = m_wfRowsSinceRateChange;
     updated.prevTileScanline = std::move(m_prevTileScanline);
     updated.kiwiFftTrace = std::move(m_kiwiSdrFftTrace);
+    updated.kiwiFftFallbackSeedMask = std::move(m_kiwiSdrFftFallbackSeedMask);
     updated.kiwiLastWaterfallBins = std::move(m_kiwiSdrLastWaterfallBins);
     updated.kiwiLastWaterfallCenterMhz = m_kiwiSdrLastWaterfallCenterMhz;
     updated.kiwiLastWaterfallBandwidthMhz = m_kiwiSdrLastWaterfallBandwidthMhz;
@@ -3754,6 +3756,7 @@ void SpectrumWidget::restoreCurrentWaterfallStreamState()
     m_wfRowsSinceRateChange = restored.rowsSinceRateChange;
     m_prevTileScanline = std::move(restored.prevTileScanline);
     m_kiwiSdrFftTrace = std::move(restored.kiwiFftTrace);
+    m_kiwiSdrFftFallbackSeedMask = std::move(restored.kiwiFftFallbackSeedMask);
     m_kiwiSdrLastWaterfallBins = std::move(restored.kiwiLastWaterfallBins);
     m_kiwiSdrLastWaterfallCenterMhz = restored.kiwiLastWaterfallCenterMhz;
     m_kiwiSdrLastWaterfallBandwidthMhz = restored.kiwiLastWaterfallBandwidthMhz;
@@ -4260,6 +4263,8 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
         || !m_kiwiSdrFftTrace.isEmpty();
     if (oldBandwidthMhz <= 0.0 || newBandwidthMhz <= 0.0) {
         m_resetFftSmoothingOnNextFrame = m_resetFftSmoothingOnNextFrame || hadSpectrum;
+        m_fftFallbackSeedMask.clear();
+        m_kiwiSdrFftFallbackSeedMask.clear();
         return hadSpectrum;
     }
 
@@ -4274,17 +4279,37 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
         // frame. Keep the last trace visible until the next real FFT row instead
         // of flashing the line off for one frame.
         m_resetFftSmoothingOnNextFrame = m_resetFftSmoothingOnNextFrame || hadSpectrum;
+        m_fftFallbackSeedMask.clear();
+        m_kiwiSdrFftFallbackSeedMask.clear();
         return hadSpectrum;
     }
 
-    auto reprojectBins = [&](QVector<float>& bins, float fallback) {
+    auto reprojectBins = [&](QVector<float>& bins, float fallback,
+                             QVector<quint8>* fallbackSeedMask = nullptr,
+                             bool extendFallbackEdges = false) {
         const int binCount = bins.size();
         if (binCount <= 0) {
+            if (fallbackSeedMask) {
+                fallbackSeedMask->clear();
+            }
             return;
         }
 
+        QVector<quint8> oldFallbackSeedMask;
+        if (fallbackSeedMask) {
+            oldFallbackSeedMask = std::move(*fallbackSeedMask);
+        }
+        const bool hadFallbackSeedMask = oldFallbackSeedMask.size() == binCount;
+
         const QVector<float> oldBins = std::move(bins);
         QVector<float> reprojected(binCount, fallback);
+        QVector<quint8> reprojectedFallbackSeedMask;
+        if (fallbackSeedMask) {
+            reprojectedFallbackSeedMask = QVector<quint8>(binCount, quint8(1));
+        }
+
+        int firstProjected = -1;
+        int lastProjected = -1;
 
         for (int dst = 0; dst < binCount; ++dst) {
             const double dstFrac = (static_cast<double>(dst) + 0.5) / binCount;
@@ -4299,19 +4324,51 @@ bool SpectrumWidget::reprojectSpectrum(double oldCenterMhz, double oldBandwidthM
             if (srcLeft < 0 || srcRight >= binCount) {
                 const int src = std::clamp(static_cast<int>(std::round(srcPos)), 0, binCount - 1);
                 reprojected[dst] = oldBins[src];
+                if (fallbackSeedMask) {
+                    reprojectedFallbackSeedMask[dst] =
+                        hadFallbackSeedMask ? oldFallbackSeedMask[src] : quint8(0);
+                }
+                if (firstProjected < 0) {
+                    firstProjected = dst;
+                }
+                lastProjected = dst;
                 continue;
             }
 
             const float t = static_cast<float>(srcPos - srcLeft);
             reprojected[dst] = oldBins[srcLeft] * (1.0f - t) + oldBins[srcRight] * t;
+            if (fallbackSeedMask) {
+                reprojectedFallbackSeedMask[dst] =
+                    hadFallbackSeedMask
+                    ? quint8(oldFallbackSeedMask[srcLeft] || oldFallbackSeedMask[srcRight])
+                    : quint8(0);
+            }
+            if (firstProjected < 0) {
+                firstProjected = dst;
+            }
+            lastProjected = dst;
+        }
+
+        if (extendFallbackEdges && firstProjected >= 0) {
+            for (int dst = 0; dst < firstProjected; ++dst) {
+                reprojected[dst] = reprojected[firstProjected];
+            }
+            for (int dst = lastProjected + 1; dst < binCount; ++dst) {
+                reprojected[dst] = reprojected[lastProjected];
+            }
         }
 
         bins = std::move(reprojected);
+        if (fallbackSeedMask) {
+            *fallbackSeedMask = std::move(reprojectedFallbackSeedMask);
+        }
     };
 
     reprojectBins(m_bins, m_refLevel - m_dynamicRange);
-    reprojectBins(m_smoothed, m_refLevel - m_dynamicRange);
-    reprojectBins(m_kiwiSdrFftTrace, kKiwiSdrWaterfallMinDbm);
+    reprojectBins(m_smoothed, m_refLevel - m_dynamicRange,
+                  &m_fftFallbackSeedMask, true);
+    reprojectBins(m_kiwiSdrFftTrace, kKiwiSdrWaterfallMinDbm,
+                  &m_kiwiSdrFftFallbackSeedMask, true);
     return !m_bins.isEmpty() || !m_smoothed.isEmpty()
         || !m_kiwiSdrFftTrace.isEmpty();
 }
@@ -5010,11 +5067,22 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm)
     if (m_resetFftSmoothingOnNextFrame) {
         m_smoothed = *spectrumBins;
         m_resetFftSmoothingOnNextFrame = false;
+        m_fftFallbackSeedMask.clear();
     } else if (m_smoothed.size() != spectrumBins->size()) {
         m_smoothed = *spectrumBins;
+        m_fftFallbackSeedMask.clear();
     } else {
-        for (int i = 0; i < spectrumBins->size(); ++i)
-            m_smoothed[i] = SMOOTH_ALPHA * (*spectrumBins)[i] + (1.0f - SMOOTH_ALPHA) * m_smoothed[i];
+        const bool seedFallbackBins =
+            m_fftFallbackSeedMask.size() == spectrumBins->size();
+        for (int i = 0; i < spectrumBins->size(); ++i) {
+            if (seedFallbackBins && m_fftFallbackSeedMask[i]) {
+                m_smoothed[i] = (*spectrumBins)[i];
+            } else {
+                m_smoothed[i] = SMOOTH_ALPHA * (*spectrumBins)[i]
+                    + (1.0f - SMOOTH_ALPHA) * m_smoothed[i];
+            }
+        }
+        m_fftFallbackSeedMask.clear();
     }
     m_bins = *spectrumBins;
 
@@ -5374,6 +5442,7 @@ void SpectrumWidget::clearKiwiSdrWaterfallRows()
     m_kiwiWaterfallState = WaterfallStreamState{};
     m_kiwiProfileWaterfallStates.clear();
     m_kiwiSdrFftTrace.clear();
+    m_kiwiSdrFftFallbackSeedMask.clear();
     m_kiwiSdrFftTraceFloorDbm = -1000.0f;
     m_kiwiSdrFftTraceFloorValid = false;
     if (m_kiwiSdrWaterfallActive) {
@@ -5552,13 +5621,51 @@ void SpectrumWidget::updateKiwiSdrWaterfallRow(const QVector<float>& binsDbm,
         QVector<float> kiwiTrace = KiwiSdrTraceMath::mapRowToTrace(
             smoothedBins, destWidth, rowCenterMhz, rowBandwidthMhz,
             m_centerMhz, m_bandwidthMhz, kKiwiSdrWaterfallMinDbm);
+        const QVector<quint8> kiwiTraceCoverage =
+            KiwiSdrTraceMath::mapRowCoverageMask(
+                smoothedBins.size(), destWidth, rowCenterMhz, rowBandwidthMhz,
+                m_centerMhz, m_bandwidthMhz);
         stabilizeKiwiSdrFftTrace(kiwiTrace, rowCanDriveAutoLevel);
         if (m_kiwiSdrFftTrace.size() != kiwiTrace.size()) {
             m_kiwiSdrFftTrace = kiwiTrace;
+            m_kiwiSdrFftFallbackSeedMask.clear();
         } else {
+            const bool seedFallbackBins =
+                m_kiwiSdrFftFallbackSeedMask.size() == kiwiTrace.size();
+            const bool hasCoverageMask = kiwiTraceCoverage.size() == kiwiTrace.size();
+            QVector<quint8> nextFallbackSeedMask;
+            if (seedFallbackBins) {
+                nextFallbackSeedMask = m_kiwiSdrFftFallbackSeedMask;
+            }
             for (int i = 0; i < kiwiTrace.size(); ++i) {
-                m_kiwiSdrFftTrace[i] = SMOOTH_ALPHA * kiwiTrace[i]
-                    + (1.0f - SMOOTH_ALPHA) * m_kiwiSdrFftTrace[i];
+                const bool pendingFallback =
+                    seedFallbackBins && m_kiwiSdrFftFallbackSeedMask[i];
+                if (hasCoverageMask && !kiwiTraceCoverage[i] && pendingFallback) {
+                    continue;
+                }
+                if (pendingFallback) {
+                    m_kiwiSdrFftTrace[i] = kiwiTrace[i];
+                    nextFallbackSeedMask[i] = quint8(0);
+                } else {
+                    m_kiwiSdrFftTrace[i] = SMOOTH_ALPHA * kiwiTrace[i]
+                        + (1.0f - SMOOTH_ALPHA) * m_kiwiSdrFftTrace[i];
+                }
+            }
+            if (seedFallbackBins) {
+                bool hasPendingFallback = false;
+                for (quint8 pending : nextFallbackSeedMask) {
+                    if (pending) {
+                        hasPendingFallback = true;
+                        break;
+                    }
+                }
+                if (hasPendingFallback) {
+                    m_kiwiSdrFftFallbackSeedMask = std::move(nextFallbackSeedMask);
+                } else {
+                    m_kiwiSdrFftFallbackSeedMask.clear();
+                }
+            } else {
+                m_kiwiSdrFftFallbackSeedMask.clear();
             }
         }
         if (!m_kiwiSdrFftTrace.isEmpty()) {
