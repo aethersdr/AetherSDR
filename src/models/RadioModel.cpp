@@ -737,15 +737,15 @@ RadioModel::RadioModel(QObject* parent)
     // can capture the radio_index from the reply.  CwxModel::handleSendReply
     // stores it; applyStatus fires queueEmpty() when cwx sent= reaches it.
     // This replaces the broken cwx queue= path — firmware never sends it. (#3949)
-    connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch){
+    connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch, int nChars){
         m_cwxActive = true;
         // Arm the drain-release latch. Unlike m_cwxActive (which the interlock
         // handler clears on every TRANSMITTING→READY flicker during a macro),
         // m_cwxDrainArmed is owned solely by the CWX send/drain lifecycle, so
         // the queueEmpty release below survives QSK break-in flicker. (#3949)
         m_cwxDrainArmed = true;
-        sendCmd(cmd, [this, epoch](int respVal, const QString& body){
-            m_cwxModel.handleSendReply(respVal, body, epoch);
+        sendCmd(cmd, [this, epoch, nChars](int respVal, const QString& body){
+            m_cwxModel.handleSendReply(respVal, body, epoch, nChars);
         });
     });
     // When the radio signals its CWX buffer is drained, release TX. (#2450)

@@ -453,10 +453,13 @@ field: `get slice active mode` → `{"value":"LSB"}`.
 ### `get cwx`
 CWX keyer state, including the **queue-drain watch** that the #3949 fix relies
 on. Firmware never emits `cwx queue=`, so the client detects a drained CWX buffer
-by capturing the `radio_index` from the final `cwx send` reply (the batch-end
-char position) and firing `queueEmpty()` — which releases TX — once the live
-`cwx sent=` counter reaches it. None of that state has a widget, so this is the
-only non-hardware-poll way to assert the mechanism (cf. [`get dsp`](#get-dsp)).
+by capturing the `radio_index` from the final `cwx send` reply and firing
+`queueEmpty()` — which releases TX — once the live `cwx sent=` counter reaches the
+batch end. `radio_index` is the batch's **first-char** queue position (verified on
+FLEX-6500 fw 4.2.20.41343 — a 23-char send at `sent=48` replied `radio_index=49`
+and `sent=` then climbed to 71), so `cwxEndIndex` is stored as
+`radio_index + nChars - 1`. None of that state has a widget, so this is the only
+non-hardware-poll way to assert the mechanism (cf. [`get dsp`](#get-dsp)).
 
 ```json
 → {"cmd":"get","model":"cwx"}
@@ -469,16 +472,17 @@ only non-hardware-poll way to assert the mechanism (cf. [`get dsp`](#get-dsp)).
 |---|---|
 | `active` | `RadioModel::cwxActive` — a `cwx send` batch is in flight (TX keyed for it) |
 | `tracking` | `true` while a queue-drain watch is armed (`cwxEndIndex >= 0`) |
-| `cwxEndIndex` | the batch-end `radio_index` captured from the last `cwx send` reply; the value `sentIndex` must reach to release TX (`-1` = idle) |
+| `cwxEndIndex` | the batch-end index = `radio_index + nChars - 1`, the value `sentIndex` must reach to release TX (`-1` = idle) |
 | `sentIndex` | the radio's live `cwx sent=` counter (last char keyed) |
 | `speed` / `speedStep` / `delay` / `qsk` / `live` | keyer settings |
 
-**The drain proof:** on a keyed macro, `cwxEndIndex` jumps to N when the send
-reply arrives, `sentIndex` climbs 0→N as the radio keys each char, and the frame
-it reaches N `tracking` flips back to `false` and `active` clears (queueEmpty →
-`xmit 0`). Watching `cwxEndIndex` and `sentIndex` converge is the direct evidence
-that `radio_index` is the **end** of the batch, not the start — the load-bearing
-assumption of the fix. ESC mid-macro ([`cwx stop`](#cwx) / `clearBuffer`) resets
+**The drain proof:** on a keyed macro, `cwxEndIndex` jumps to the batch-end N when
+the send reply arrives, `sentIndex` climbs to N as the radio keys each char, and
+the frame it reaches N `tracking` flips back to `false` and `active` clears
+(queueEmpty → `xmit 0`). Watching `cwxEndIndex` hold while `sentIndex` climbs to
+meet it — over the full keying duration, not after one char — is the direct
+evidence the batch-end index is right (radio_index is the batch **start**, so the
+end is `radio_index + nChars - 1`). ESC mid-macro ([`cwx stop`](#cwx) / `clearBuffer`) resets
 `cwxEndIndex` to `-1` so an aborted macro never triggers a spurious release. A
 trailing property narrows it: `get cwx cwxEndIndex` → `{"value":14}`. Fields are
 zero/`-1`/idle until a radio connects.

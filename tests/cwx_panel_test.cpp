@@ -61,9 +61,9 @@ struct Fixture {
                              commands.push_back(command);
                          });
         // replyCommandReady carries the final cwx send of each macro block, and
-        // every live-mode char, plus the drain-watch epoch (#3949)
+        // every live-mode char, plus the drain-watch epoch + batch char count (#3949)
         QObject::connect(&model, &CwxModel::replyCommandReady,
-                         [this](const QString& command, int /*epoch*/) {
+                         [this](const QString& command, int /*epoch*/, int /*nChars*/) {
                              commands.push_back(command);
                          });
     }

@@ -60,11 +60,18 @@ public:
     // Status parsing (from radio)
     void applyStatus(const QMap<QString, QString>& kvs);
     // Invoked by RadioModel with the reply to the final cwx send command.
-    // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83. The
-    // epoch is the drainEpoch() snapshot taken when the command was emitted;
+    // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83.
+    //
+    // radio_index is the INSERTION-START (first-char) queue position of the
+    // batch, NOT the last char — confirmed on FLEX-6500 fw 4.2.20.41343: a
+    // 23-char send into a queue at sent=48 replied radio_index=49 (=48+1), and
+    // `cwx sent=` then climbed 48→71 as the radio keyed. So the batch-end index
+    // to watch is radio_index + nChars - 1 (49+23-1 = 71, matching the observed
+    // final sent=). nChars is the char count of this send (spaces included).
+    // The epoch is the drainEpoch() snapshot taken when the command was emitted;
     // a reply whose epoch no longer matches belongs to a batch that was since
     // aborted (ESC/clear/disconnect) and is ignored. (#3949)
-    void handleSendReply(int resultCode, const QString& body, int epoch);
+    void handleSendReply(int resultCode, const QString& body, int epoch, int nChars);
 
     // Parses text for leading +/- speed modifiers on words.
     // A +/- run at word-start (after space or string-start) immediately
@@ -79,10 +86,12 @@ signals:
     void commandReady(const QString& cmd);
     // Emitted for the final cwx send of a macro/send block, and for every
     // live-mode char, so RadioModel can capture the radio_index from the reply
-    // and know when that block is fully transmitted.  The epoch is snapshotted
-    // at emit time and passed back to handleSendReply() so a reply for an
-    // aborted batch is discarded.  See handleSendReply(). (#3949)
-    void replyCommandReady(const QString& cmd, int epoch);
+    // and know when that block is fully transmitted.  epoch is snapshotted at
+    // emit time (stale-batch guard) and nChars is the char count of this send
+    // (spaces included) — handleSendReply() watches radio_index + nChars - 1
+    // because radio_index is the batch's first-char position, not its last.
+    // See handleSendReply(). (#3949)
+    void replyCommandReady(const QString& cmd, int epoch, int nChars);
     void speedChanged(int wpm);
     void speedStepChanged(int step);
     void delayChanged(int ms);

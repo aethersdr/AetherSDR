@@ -110,7 +110,10 @@ void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
             const QString cmd =
                 QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++);
             if (i == lastNonEmpty)
-                emit replyCommandReady(cmd, m_drainEpoch);
+                // Segments queue contiguously, so the last segment's start
+                // (radio_index) + its length - 1 is the last char of the whole
+                // message — the correct batch-end index to watch. (#3949)
+                emit replyCommandReady(cmd, m_drainEpoch, seg.text.length());
             else
                 emit commandReady(cmd);
         }
@@ -139,7 +142,7 @@ void CwxModel::sendChar(const QString& ch)
     // and chars typed after a macro would be truncated by a stale watch. (#3949)
     emit replyCommandReady(
         QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++),
-        m_drainEpoch);
+        m_drainEpoch, ch.length());
     emit transmissionRequested(ch, m_speed);
 }
 
@@ -197,7 +200,7 @@ void CwxModel::resetDrainWatch()
     m_cwxEndIndex = -1;
 }
 
-void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch)
+void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch, int nChars)
 {
     // Stale-reply guard: a reply for a batch that was aborted (ESC/clear/
     // disconnect) after the command was sent carries the pre-abort epoch and
@@ -211,8 +214,6 @@ void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch)
         return;
     }
     // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83.
-    // radio_index is the absolute char-queue position of the last char in
-    // this batch; queueEmpty() fires when cwx sent= reaches that value.
     const QString indexStr = body.split(',').first().trimmed();
     bool ok = false;
     const int radioIndex = indexStr.toInt(&ok);
@@ -220,14 +221,22 @@ void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch)
         qCWarning(lcCw) << "CwxModel: failed to parse radio_index from reply body:" << body;
         return;
     }
+    // radio_index is the FIRST-char (insertion-start) queue position of this
+    // batch, so the last char — the value cwx sent= must reach to release TX —
+    // is radio_index + nChars - 1. Verified on FLEX-6500 fw 4.2.20.41343 (see
+    // handleSendReply() doc in the header). nChars is always >= 1 for a real
+    // send; guard defensively so an empty batch can't retract the index. (#3949)
+    if (nChars < 1)
+        return;
+    const int endIndex = radioIndex + nChars - 1;
     // Only ever advance the watch, never retract it. cwx send replies on the
     // single command socket are normally ordered, but if two back-to-back
-    // macros' replies arrive out of order, a smaller radio_index must not
+    // macros' replies arrive out of order, a smaller end index must not
     // overwrite a larger one — that would release TX while the later batch
     // still has chars queued. m_cwxEndIndex is -1 while idle, so the first
     // reply of a batch always takes. (#3949)
-    if (radioIndex > m_cwxEndIndex) {
-        m_cwxEndIndex = radioIndex;
+    if (endIndex > m_cwxEndIndex) {
+        m_cwxEndIndex = endIndex;
     }
 }
 
