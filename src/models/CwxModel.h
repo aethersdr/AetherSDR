@@ -79,6 +79,11 @@ private:
     int     m_speed{20};
     int     m_delay{5};
     int     m_speedStep{3};
+    // Count of self-originated transient `cwx wpm` commands whose radio echoes
+    // must be swallowed in applyStatus so they don't clobber the authoritative
+    // base speed or flicker the UI. Reset on user setSpeed / clearBuffer so a
+    // dropped echo can't permanently suppress a real speed update. (#3976)
+    int     m_pendingWpmEchoes{0};
     bool    m_qsk{false};
     bool    m_live{false};
     int     m_sentIndex{-1};

@@ -375,10 +375,12 @@ void CwxPanel::setModel(CwxModel* model)
             m_speedStepSpin->setValue(step);
         }
     });
-    // Sync step spin to model's current value (model may be set after construction)
+    // Push the persisted step (loaded into the spin from AppSettings in
+    // buildSetupView) INTO the model — a fresh model starts at its hardcoded
+    // default, so syncing model->spin here would discard the saved value every
+    // launch. The persisted value is authoritative at setup. (#3976 review)
     if (m_speedStepSpin && m_model->speedStep() != m_speedStepSpin->value()) {
-        QSignalBlocker b(m_speedStepSpin);
-        m_speedStepSpin->setValue(m_model->speedStep());
+        m_model->setSpeedStep(m_speedStepSpin->value());
     }
     connect(m_model, &CwxModel::qskChanged, this, [this](bool on) {
         if (m_qskBtn) {
