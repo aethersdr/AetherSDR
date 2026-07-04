@@ -23,6 +23,13 @@
 
 namespace AetherSDR {
 
+static const QString kCheckBoxIndicator =
+    "QCheckBox::indicator { width: 14px; height: 14px; "
+    "border: 2px solid {{color.background.3}}; border-radius: 3px; background: {{color.background.0}}; }"
+    "QCheckBox::indicator:hover { border-color: {{color.accent}}; background: {{color.background.1}}; }"
+    "QCheckBox::indicator:checked { border: 2px solid {{color.accent}}; background: {{color.background.2}}; }"
+    "QCheckBox::indicator:disabled { border-color: {{color.background.2}}; background: {{color.background.0}}; }";
+
 // ── Proxy ──────────────────────────────────────────────────────────────────
 
 class FreeDvReporterProxy : public QSortFilterProxyModel {
@@ -177,7 +184,8 @@ void FreeDvReporterDialog::buildBody()
 
     m_trackCheck = new QCheckBox("Track");
     ThemeManager::instance().applyStyleSheet(m_trackCheck,
-        "QCheckBox { color: {{color.text.primary}}; }");
+        "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
+        + kCheckBoxIndicator);
     bottom->addWidget(m_trackCheck);
 
     m_bandRadio = new QRadioButton("Band");
