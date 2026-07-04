@@ -50,6 +50,7 @@
 #include <QCheckBox>
 #include <QDoubleValidator>
 #include <QTimer>
+#include <QVector>
 #include <QDesktopServices>
 #include <QUrl>
 #include <QMediaDevices>
@@ -3733,6 +3734,141 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         QComboBox* flow{nullptr};
     };
 
+    // Cable Type combo: values match FlexLib's UsbCableType enum, listed here
+    // in enum order as the single source of truth for the combo's item
+    // order, the proto string sent on the wire, and the index recovered when
+    // a status arrives — collapses what used to be three hand-synced lists
+    // (combo item order, typeIndexToProto, protoToTypeIndex) into one.
+    // "Invalid" is the unconfigured sentinel, not a menu entry. Selecting
+    // BCD sends bare type=bcd; the existing bcdTypeCombo refines the specific
+    // bcd/vbcd/bcd_vbcd sub-type afterward (matches FlexLib's own default-
+    // then-refine behavior for this exact transition).
+    struct CableTypeEntry { QString proto; QString label; };
+    static const QVector<CableTypeEntry> kCableTypes = {
+        {"cat",         "CAT"},
+        {"bit",         "Bit"},
+        {"bcd",         "BCD"},
+        {"ldpa",        "LDPA"},
+        {"passthrough", "Passthrough"},
+    };
+    // Helper: create Cable Type combo (shared across all pages). Guarded
+    // against accidental wheel-scroll retyping a live cable (#570/#676-style
+    // hazard — this combo's value change sends a destructive command).
+    auto makeTypeCombo = []() {
+        auto* combo = new GuardedComboBox;
+        for (const auto& entry : kCableTypes) {
+            combo->addItem(entry.label);
+        }
+        combo->setStyleSheet(kCombo);
+        combo->setAccessibleName("Cable Type");
+        combo->setAccessibleDescription(
+            "Selects this cable's protocol type: CAT, Bit, BCD, LDPA, or Passthrough");
+        return combo;
+    };
+    auto typeIndexToProto = [](int idx) -> QString {
+        if (idx >= 0 && idx < kCableTypes.size()) {
+            return kCableTypes[idx].proto;
+        }
+        return kCableTypes[0].proto;  // default: CAT
+    };
+    auto protoToTypeIndex = [](const QString& proto) -> int {
+        // bcd/vbcd/bcd_vbcd are one family in FlexLib's UsbCableType — collapse
+        // before lookup so any of the three sub-types selects the BCD entry.
+        const QString family = (proto == "vbcd" || proto == "bcd_vbcd") ? "bcd" : proto;
+        for (int i = 0; i < kCableTypes.size(); ++i) {
+            if (kCableTypes[i].proto == family) {
+                return i;
+            }
+        }
+        return -1;  // invalid / unrecognized — leave the combo unset
+    };
+
+    // Helper: build the "Cable Settings" header group (Name/[Enabled]/Status/
+    // Type) shared by all six cable pages. `includeEnabled` is false only for
+    // the Unconfigured page, which has no enable state to toggle yet.
+    struct CableHeaderWidgets {
+        QGroupBox* group{nullptr};
+        QLineEdit* nameEdit{nullptr};
+        QCheckBox* enabledCheck{nullptr};  // nullptr when !includeEnabled
+        QLabel*    statusLabel{nullptr};
+        QComboBox* typeCombo{nullptr};
+    };
+    auto makeCableHeader = [makeTypeCombo](bool includeEnabled) -> CableHeaderWidgets {
+        auto* group = new QGroupBox("Cable Settings");
+        group->setStyleSheet(kGroupStyle);
+        auto* hg = new QGridLayout(group);
+        hg->setSpacing(4);
+
+        int row = 0;
+        hg->addWidget(new QLabel("Name:"), row, 0);
+        auto* nameEdit = new QLineEdit;
+        nameEdit->setStyleSheet(kEdit);
+        hg->addWidget(nameEdit, row, 1);
+        ++row;
+
+        QCheckBox* enabledCheck = nullptr;
+        if (includeEnabled) {
+            enabledCheck = new QCheckBox("Enabled");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(enabledCheck, kCheck);
+            hg->addWidget(enabledCheck, row, 0, 1, 2);
+            ++row;
+        }
+
+        auto* statusLabel = new QLabel("Unplugged");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(
+            statusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
+        hg->addWidget(new QLabel("Status:"), row, 0);
+        hg->addWidget(statusLabel, row, 1);
+        ++row;
+
+        hg->addWidget(new QLabel("Type:"), row, 0);
+        auto* typeCombo = makeTypeCombo();
+        hg->addWidget(typeCombo, row, 1);
+
+        return CableHeaderWidgets{group, nameEdit, enabledCheck, statusLabel, typeCombo};
+    };
+
+    // Tracks the serial number of a cable currently being retyped, so the
+    // cableAdded handler (fired once the radio's fresh status for the new
+    // type arrives — see "Wire model signals" below) knows to reselect it
+    // and repopulate the detail panel. Without this, a successful retype
+    // leaves the panel stuck on the empty-state page until manually
+    // re-clicked, since a type change tears the old cable entry down and
+    // rebuilds it fresh (UsbCableModel::applyStatus).
+    //
+    // Cleared two ways beyond the normal matching-cableAdded path, so a
+    // rejected/never-echoed retype can't hijack a later unplug/replug's
+    // selection: (1) cableRemoved for this serial defers a clear via a 0ms
+    // timer — harmless for a genuine retype, since its own cableAdded fires
+    // synchronously first (in the same applyStatus() call) and clears the
+    // pointer before the deferred callback runs; (2) a bounded timeout armed
+    // on send, in case the radio never echoes back at all.
+    auto pendingTypeChangeSn = std::make_shared<QString>();
+    auto sendCableType = [cableModel, cableList, pendingTypeChangeSn](const QString& proto) {
+        auto* item = cableList->currentItem();
+        if (!item) {
+            return;
+        }
+        const QString sn = item->data(Qt::UserRole).toString();
+        *pendingTypeChangeSn = sn;
+        cableModel->sendSet(sn, "type", proto);
+        QTimer::singleShot(5000, [pendingTypeChangeSn, sn]() {
+            if (*pendingTypeChangeSn == sn) {
+                pendingTypeChangeSn->clear();
+            }
+        });
+    };
+    // Wires a Cable Type combo's index changes to sendCableType — collapses
+    // what used to be six copy-pasted connect() blocks into one call site.
+    auto wireTypeCombo = [this, sendCableType, typeIndexToProto](QComboBox* combo) {
+        connect(combo, &QComboBox::currentIndexChanged, this,
+                [sendCableType, typeIndexToProto](int idx) {
+            if (idx >= 0) {
+                sendCableType(typeIndexToProto(idx));
+            }
+        });
+    };
+
     // Helper: serial parameter group (shared by CAT and Passthrough)
     auto makeSerialGroup = [](const QString& title) -> SerialWidgets {
         auto* group = new QGroupBox(title);
@@ -3784,28 +3920,19 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     QComboBox* catSourceCombo;
     QCheckBox* catAutoReportCheck;
     SerialWidgets catSerialWidgets;
+    QComboBox* catTypeCombo;
     {
         catPage = new QWidget;
         auto* vbox = new QVBoxLayout(catPage);
         vbox->setSpacing(6);
 
         // Common header
-        auto* headerGroup = new QGroupBox("Cable Settings");
-        headerGroup->setStyleSheet(kGroupStyle);
-        auto* hg = new QGridLayout(headerGroup);
-        hg->setSpacing(4);
-        hg->addWidget(new QLabel("Name:"), 0, 0);
-        catNameEdit = new QLineEdit;
-        catNameEdit->setStyleSheet(kEdit);
-        hg->addWidget(catNameEdit, 0, 1);
-        catEnabledCheck = new QCheckBox("Enabled");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(catEnabledCheck, kCheck);
-        hg->addWidget(catEnabledCheck, 1, 0, 1, 2);
-        catStatusLabel = new QLabel("Unplugged");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(catStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-        hg->addWidget(new QLabel("Status:"), 2, 0);
-        hg->addWidget(catStatusLabel, 2, 1);
-        vbox->addWidget(headerGroup);
+        auto catHeader = makeCableHeader(/*includeEnabled=*/true);
+        catNameEdit = catHeader.nameEdit;
+        catEnabledCheck = catHeader.enabledCheck;
+        catStatusLabel = catHeader.statusLabel;
+        catTypeCombo = catHeader.typeCombo;
+        vbox->addWidget(catHeader.group);
 
         // Serial params
         catSerialWidgets = makeSerialGroup("Serial Parameters");
@@ -3836,27 +3963,18 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     QComboBox* bcdSourceCombo;
     QComboBox* bcdTypeCombo;
     QComboBox* bcdPolarityCombo;
+    QComboBox* bcdCableTypeCombo;
     {
         bcdPage = new QWidget;
         auto* vbox = new QVBoxLayout(bcdPage);
         vbox->setSpacing(6);
 
-        auto* headerGroup = new QGroupBox("Cable Settings");
-        headerGroup->setStyleSheet(kGroupStyle);
-        auto* hg = new QGridLayout(headerGroup);
-        hg->setSpacing(4);
-        hg->addWidget(new QLabel("Name:"), 0, 0);
-        bcdNameEdit = new QLineEdit;
-        bcdNameEdit->setStyleSheet(kEdit);
-        hg->addWidget(bcdNameEdit, 0, 1);
-        bcdEnabledCheck = new QCheckBox("Enabled");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(bcdEnabledCheck, kCheck);
-        hg->addWidget(bcdEnabledCheck, 1, 0, 1, 2);
-        bcdStatusLabel = new QLabel("Unplugged");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(bcdStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-        hg->addWidget(new QLabel("Status:"), 2, 0);
-        hg->addWidget(bcdStatusLabel, 2, 1);
-        vbox->addWidget(headerGroup);
+        auto bcdHeader = makeCableHeader(/*includeEnabled=*/true);
+        bcdNameEdit = bcdHeader.nameEdit;
+        bcdEnabledCheck = bcdHeader.enabledCheck;
+        bcdStatusLabel = bcdHeader.statusLabel;
+        bcdCableTypeCombo = bcdHeader.typeCombo;
+        vbox->addWidget(bcdHeader.group);
 
         auto* bcdGroup = new QGroupBox("BCD Settings");
         bcdGroup->setStyleSheet(kGroupStyle);
@@ -3910,27 +4028,18 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     };
     BitWidgets bitWidgets;
     auto currentBit = std::make_shared<int>(0);
+    QComboBox* bitTypeCombo;
     {
         bitPage = new QWidget;
         auto* vbox = new QVBoxLayout(bitPage);
         vbox->setSpacing(6);
 
-        auto* headerGroup = new QGroupBox("Cable Settings");
-        headerGroup->setStyleSheet(kGroupStyle);
-        auto* hg = new QGridLayout(headerGroup);
-        hg->setSpacing(4);
-        hg->addWidget(new QLabel("Name:"), 0, 0);
-        bitNameEdit = new QLineEdit;
-        bitNameEdit->setStyleSheet(kEdit);
-        hg->addWidget(bitNameEdit, 0, 1);
-        bitEnabledCheck = new QCheckBox("Enabled");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(bitEnabledCheck, kCheck);
-        hg->addWidget(bitEnabledCheck, 1, 0, 1, 2);
-        bitStatusLabel = new QLabel("Unplugged");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(bitStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-        hg->addWidget(new QLabel("Status:"), 2, 0);
-        hg->addWidget(bitStatusLabel, 2, 1);
-        vbox->addWidget(headerGroup);
+        auto bitHeader = makeCableHeader(/*includeEnabled=*/true);
+        bitNameEdit = bitHeader.nameEdit;
+        bitEnabledCheck = bitHeader.enabledCheck;
+        bitStatusLabel = bitHeader.statusLabel;
+        bitTypeCombo = bitHeader.typeCombo;
+        vbox->addWidget(bitHeader.group);
 
         auto* bitSplit = new QHBoxLayout;
 
@@ -4099,33 +4208,99 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     QCheckBox* ptEnabledCheck;
     QLabel*    ptStatusLabel;
     SerialWidgets ptSerialWidgets;
+    QComboBox* ptTypeCombo;
     {
         ptPage = new QWidget;
         auto* vbox = new QVBoxLayout(ptPage);
         vbox->setSpacing(6);
 
-        auto* headerGroup = new QGroupBox("Cable Settings");
-        headerGroup->setStyleSheet(kGroupStyle);
-        auto* hg = new QGridLayout(headerGroup);
-        hg->setSpacing(4);
-        hg->addWidget(new QLabel("Name:"), 0, 0);
-        ptNameEdit = new QLineEdit;
-        ptNameEdit->setStyleSheet(kEdit);
-        hg->addWidget(ptNameEdit, 0, 1);
-        ptEnabledCheck = new QCheckBox("Enabled");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(ptEnabledCheck, kCheck);
-        hg->addWidget(ptEnabledCheck, 1, 0, 1, 2);
-        ptStatusLabel = new QLabel("Unplugged");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(ptStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
-        hg->addWidget(new QLabel("Status:"), 2, 0);
-        hg->addWidget(ptStatusLabel, 2, 1);
-        vbox->addWidget(headerGroup);
+        auto ptHeader = makeCableHeader(/*includeEnabled=*/true);
+        ptNameEdit = ptHeader.nameEdit;
+        ptEnabledCheck = ptHeader.enabledCheck;
+        ptStatusLabel = ptHeader.statusLabel;
+        ptTypeCombo = ptHeader.typeCombo;
+        vbox->addWidget(ptHeader.group);
 
         ptSerialWidgets = makeSerialGroup("Serial Parameters");
         vbox->addWidget(ptSerialWidgets.group);
 
         vbox->addStretch();
         stack->addWidget(ptPage);  // index 4
+    }
+
+    // Page 5: LDPA cable
+    QWidget* ldpaPage;
+    QLineEdit* ldpaNameEdit;
+    QCheckBox* ldpaEnabledCheck;
+    QLabel*    ldpaStatusLabel;
+    QComboBox* ldpaTypeCombo;
+    QComboBox* ldpaBandCombo;
+    QCheckBox* ldpaPreampCheck;
+    QComboBox* ldpaSourceCombo;
+    {
+        ldpaPage = new QWidget;
+        auto* vbox = new QVBoxLayout(ldpaPage);
+        vbox->setSpacing(6);
+
+        auto ldpaHeader = makeCableHeader(/*includeEnabled=*/true);
+        ldpaNameEdit = ldpaHeader.nameEdit;
+        ldpaEnabledCheck = ldpaHeader.enabledCheck;
+        ldpaStatusLabel = ldpaHeader.statusLabel;
+        ldpaTypeCombo = ldpaHeader.typeCombo;
+        vbox->addWidget(ldpaHeader.group);
+
+        auto* ldpaGroup = new QGroupBox("LDPA Settings");
+        ldpaGroup->setStyleSheet(kGroupStyle);
+        auto* lg = new QGridLayout(ldpaGroup);
+        lg->setSpacing(4);
+        lg->addWidget(new QLabel("Band:"), 0, 0);
+        ldpaBandCombo = new QComboBox;
+        ldpaBandCombo->addItems({"2m", "4m"});
+        ldpaBandCombo->setStyleSheet(kCombo);
+        lg->addWidget(ldpaBandCombo, 0, 1);
+        ldpaPreampCheck = new QCheckBox("Preamp");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(ldpaPreampCheck, kCheck);
+        lg->addWidget(ldpaPreampCheck, 1, 0, 1, 2);
+        lg->addWidget(new QLabel("Source:"), 2, 0);
+        ldpaSourceCombo = makeSourceCombo();
+        lg->addWidget(ldpaSourceCombo, 2, 1);
+        vbox->addWidget(ldpaGroup);
+
+        vbox->addStretch();
+        stack->addWidget(ldpaPage);  // index 5
+    }
+
+    // Page 6: Unconfigured cable (type is "invalid" or otherwise unrecognized —
+    // a real, present cable that hasn't been assigned a type yet, distinct
+    // from "nothing plugged in" at index 0)
+    QWidget* unconfiguredPage;
+    QLineEdit* unconfiguredNameEdit;
+    QLabel*    unconfiguredStatusLabel;
+    QComboBox* unconfiguredTypeCombo;
+    QPushButton* unconfiguredRemoveBtn;
+    {
+        unconfiguredPage = new QWidget;
+        auto* vbox = new QVBoxLayout(unconfiguredPage);
+        vbox->setSpacing(6);
+
+        auto unconfiguredHeader = makeCableHeader(/*includeEnabled=*/false);
+        unconfiguredNameEdit = unconfiguredHeader.nameEdit;
+        unconfiguredStatusLabel = unconfiguredHeader.statusLabel;
+        unconfiguredTypeCombo = unconfiguredHeader.typeCombo;
+        unconfiguredTypeCombo->setCurrentIndex(-1);  // force a real choice, no default
+        vbox->addWidget(unconfiguredHeader.group);
+
+        auto* note = new QLabel("Select a cable type to configure this device.");
+        note->setStyleSheet("QLabel { color: #606880; font-size: 12px; }");
+        note->setWordWrap(true);
+        vbox->addWidget(note);
+
+        unconfiguredRemoveBtn = new QPushButton("Remove This Cable");
+        unconfiguredRemoveBtn->setAutoDefault(false);
+        vbox->addWidget(unconfiguredRemoveBtn);
+
+        vbox->addStretch();
+        stack->addWidget(unconfiguredPage);  // index 6
     }
 
     hbox->addWidget(stack, 1);
@@ -4167,10 +4342,11 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
 
         if (t == "cat") {
             stack->setCurrentIndex(1);
-            QSignalBlocker b1(catNameEdit), b2(catEnabledCheck), b3(catSourceCombo), b4(catAutoReportCheck);
-            QSignalBlocker b5(catSerialWidgets.speed), b6(catSerialWidgets.data),
-                           b7(catSerialWidgets.parity), b8(catSerialWidgets.stop),
-                           b9(catSerialWidgets.flow);
+            QSignalBlocker b1(catNameEdit), b2(catEnabledCheck), b3(catSourceCombo),
+                           b4(catAutoReportCheck), b5(catTypeCombo);
+            QSignalBlocker b6(catSerialWidgets.speed), b7(catSerialWidgets.data),
+                           b8(catSerialWidgets.parity), b9(catSerialWidgets.stop),
+                           b10(catSerialWidgets.flow);
             catNameEdit->setText(cable.name);
             catEnabledCheck->setChecked(cable.enabled);
             catStatusLabel->setText(cable.present ? "Plugged In" : "Unplugged");
@@ -4179,7 +4355,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
                 : "QLabel { color: #808080; font-size: 11px; }");
             catSourceCombo->setCurrentIndex(protoToSource(cable.source));
             catAutoReportCheck->setChecked(cable.autoReport);
-            
+            catTypeCombo->setCurrentIndex(protoToTypeIndex(t));
+
             catSerialWidgets.speed->setCurrentText(QString::number(cable.speed));
             catSerialWidgets.data->setCurrentText(QString::number(cable.dataBits));
             catSerialWidgets.parity->setCurrentText(cable.parity);
@@ -4188,7 +4365,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         } else if (t == "bcd" || t == "vbcd" || t == "bcd_vbcd") {
             stack->setCurrentIndex(2);
             QSignalBlocker b1(bcdNameEdit), b2(bcdEnabledCheck), b3(bcdSourceCombo),
-                           b4(bcdTypeCombo), b5(bcdPolarityCombo);
+                           b4(bcdTypeCombo), b5(bcdPolarityCombo), b6(bcdCableTypeCombo);
             bcdNameEdit->setText(cable.name);
             bcdEnabledCheck->setChecked(cable.enabled);
             bcdStatusLabel->setText(cable.present ? "Plugged In" : "Unplugged");
@@ -4200,15 +4377,17 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             else if (t == "bcd_vbcd") bcdTypeCombo->setCurrentIndex(2);
             else bcdTypeCombo->setCurrentIndex(0);
             bcdPolarityCombo->setCurrentIndex(cable.activeHigh ? 0 : 1);
+            bcdCableTypeCombo->setCurrentIndex(protoToTypeIndex(t));
         } else if (t == "bit") {
             stack->setCurrentIndex(3);
-            QSignalBlocker b1(bitNameEdit), b2(bitEnabledCheck);
+            QSignalBlocker b1(bitNameEdit), b2(bitEnabledCheck), b3(bitTypeCombo);
             bitNameEdit->setText(cable.name);
             bitEnabledCheck->setChecked(cable.enabled);
             bitStatusLabel->setText(cable.present ? "Plugged In" : "Unplugged");
             bitStatusLabel->setStyleSheet(cable.present
                 ? "QLabel { color: #30d050; font-size: 11px; }"
                 : "QLabel { color: #808080; font-size: 11px; }");
+            bitTypeCombo->setCurrentIndex(protoToTypeIndex(t));
             if (bitIndexList->currentRow() < 0) {
                 QSignalBlocker blk(bitIndexList);
                 bitIndexList->setCurrentRow(0);
@@ -4216,24 +4395,50 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             refreshBitDetail();
         } else if (t == "passthrough") {
             stack->setCurrentIndex(4);
-            QSignalBlocker b1(ptNameEdit), b2(ptEnabledCheck);
-            QSignalBlocker b3(ptSerialWidgets.speed), b4(ptSerialWidgets.data),
-                           b5(ptSerialWidgets.parity), b6(ptSerialWidgets.stop),
-                           b7(ptSerialWidgets.flow);
+            QSignalBlocker b1(ptNameEdit), b2(ptEnabledCheck), b3(ptTypeCombo);
+            QSignalBlocker b4(ptSerialWidgets.speed), b5(ptSerialWidgets.data),
+                           b6(ptSerialWidgets.parity), b7(ptSerialWidgets.stop),
+                           b8(ptSerialWidgets.flow);
             ptNameEdit->setText(cable.name);
             ptEnabledCheck->setChecked(cable.enabled);
             ptStatusLabel->setText(cable.present ? "Plugged In" : "Unplugged");
             ptStatusLabel->setStyleSheet(cable.present
                 ? "QLabel { color: #30d050; font-size: 11px; }"
                 : "QLabel { color: #808080; font-size: 11px; }");
-            
+            ptTypeCombo->setCurrentIndex(protoToTypeIndex(t));
+
             ptSerialWidgets.speed->setCurrentText(QString::number(cable.speed));
             ptSerialWidgets.data->setCurrentText(QString::number(cable.dataBits));
             ptSerialWidgets.parity->setCurrentText(cable.parity);
             ptSerialWidgets.stop->setCurrentText(QString::number(cable.stopBits));
             ptSerialWidgets.flow->setCurrentText(cable.flowControl);
+        } else if (t == "ldpa") {
+            stack->setCurrentIndex(5);
+            QSignalBlocker b1(ldpaNameEdit), b2(ldpaEnabledCheck), b3(ldpaTypeCombo),
+                           b4(ldpaBandCombo), b5(ldpaPreampCheck), b6(ldpaSourceCombo);
+            ldpaNameEdit->setText(cable.name);
+            ldpaEnabledCheck->setChecked(cable.enabled);
+            ldpaStatusLabel->setText(cable.present ? "Plugged In" : "Unplugged");
+            ldpaStatusLabel->setStyleSheet(cable.present
+                ? "QLabel { color: #30d050; font-size: 11px; }"
+                : "QLabel { color: #808080; font-size: 11px; }");
+            ldpaTypeCombo->setCurrentIndex(protoToTypeIndex(t));
+            ldpaBandCombo->setCurrentIndex(cable.ldpaBand == "4" ? 1 : 0);
+            ldpaPreampCheck->setChecked(cable.preamp);
+            ldpaSourceCombo->setCurrentIndex(protoToSource(cable.source));
         } else {
-            stack->setCurrentIndex(0);
+            // "invalid" or any other unrecognized type: a real, present cable
+            // that hasn't been assigned a type yet — distinct from "nothing
+            // plugged in" (index 0), which is handled by the isEmpty()/
+            // not-found guard above and by the cableRemoved handler.
+            stack->setCurrentIndex(6);
+            QSignalBlocker b1(unconfiguredNameEdit), b2(unconfiguredTypeCombo);
+            unconfiguredNameEdit->setText(cable.name);
+            unconfiguredStatusLabel->setText(cable.present ? "Plugged In" : "Unplugged");
+            unconfiguredStatusLabel->setStyleSheet(cable.present
+                ? "QLabel { color: #30d050; font-size: 11px; }"
+                : "QLabel { color: #808080; font-size: 11px; }");
+            unconfiguredTypeCombo->setCurrentIndex(-1);
         }
     };
 
@@ -4244,12 +4449,43 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     });
 
     // ── Wire model signals ──────────────────────────────────────────────
-    connect(cableModel, &UsbCableModel::cableAdded, this, [refreshList](const QString&) {
+    connect(cableModel, &UsbCableModel::cableAdded, this,
+            [refreshList, cableList, showCableProps, pendingTypeChangeSn](const QString& sn) {
         refreshList();
+        // A retype tears the old cable entry down and rebuilds it fresh
+        // (UsbCableModel::applyStatus), which drops the list selection along
+        // the way (see the cableRemoved handler below). Reselect and
+        // repopulate the detail panel so a successful retype doesn't leave
+        // it stuck on the empty-state page until manually re-clicked.
+        if (*pendingTypeChangeSn == sn) {
+            pendingTypeChangeSn->clear();
+            for (int i = 0; i < cableList->count(); ++i) {
+                if (cableList->item(i)->data(Qt::UserRole).toString() == sn) {
+                    cableList->setCurrentItem(cableList->item(i));
+                    break;
+                }
+            }
+            showCableProps(sn);
+        }
     });
-    connect(cableModel, &UsbCableModel::cableRemoved, this, [refreshList, stack](const QString&) {
+    connect(cableModel, &UsbCableModel::cableRemoved, this,
+            [refreshList, stack, pendingTypeChangeSn](const QString& sn) {
         refreshList();
         stack->setCurrentIndex(0);
+        // Defer the clear to the next event-loop tick: a genuine retype's own
+        // cableAdded for this serial fires synchronously right after this
+        // handler returns (same applyStatus() call) and clears the pointer
+        // itself first, so this is a no-op for that case. It only matters for
+        // a standalone removal unrelated to any pending retype, preventing a
+        // later unplug/replug's cableAdded from being mistaken for a retype
+        // completion.
+        if (*pendingTypeChangeSn == sn) {
+            QTimer::singleShot(0, [pendingTypeChangeSn, sn]() {
+                if (*pendingTypeChangeSn == sn) {
+                    pendingTypeChangeSn->clear();
+                }
+            });
+        }
     });
     connect(cableModel, &UsbCableModel::cableChanged, this,
             [refreshList, cableList, showCableProps](const QString& sn) {
@@ -4279,6 +4515,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     connect(catAutoReportCheck, &QCheckBox::toggled, this, [sendCatProp](bool on) {
         sendCatProp("auto_report", on ? "1" : "0");
     });
+    wireTypeCombo(catTypeCombo);
 
     connect(catSerialWidgets.speed, &QComboBox::currentTextChanged, this, [sendCatProp](const QString& val) { sendCatProp("speed", val); });
     connect(catSerialWidgets.data, &QComboBox::currentTextChanged, this, [sendCatProp](const QString& val) { sendCatProp("data_bits", val); });
@@ -4311,6 +4548,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             [sendBcdProp, sourceToProto](const QString& text) {
         sendBcdProp("source", sourceToProto(text));
     });
+    wireTypeCombo(bcdCableTypeCombo);
 
     // Bit cable header (whole-cable name/enable, cableModel->sendSet)
     auto sendBitProp = [cableModel, cableList](const QString& key, const QString& val) {
@@ -4324,6 +4562,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     connect(bitEnabledCheck, &QCheckBox::toggled, this, [sendBitProp](bool on) {
         sendBitProp("enable", on ? "1" : "0");
     });
+    wireTypeCombo(bitTypeCombo);
 
     // Bit detail fields (per-bit, cableModel->sendSetBit against *currentBit)
     auto sendBitFieldProp = [cableModel, cableList, currentBit](const QString& key, const QString& val) {
@@ -4394,6 +4633,49 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     });
     connect(ptEnabledCheck, &QCheckBox::toggled, this, [sendPtProp](bool on) {
         sendPtProp("enable", on ? "1" : "0");
+    });
+    wireTypeCombo(ptTypeCombo);
+
+    // LDPA
+    auto sendLdpaProp = [cableModel, cableList](const QString& key, const QString& val) {
+        auto* item = cableList->currentItem();
+        if (!item) return;
+        cableModel->sendSet(item->data(Qt::UserRole).toString(), key, val);
+    };
+    connect(ldpaNameEdit, &QLineEdit::editingFinished, this, [ldpaNameEdit, sendLdpaProp]() {
+        sendLdpaProp("name", QString(ldpaNameEdit->text()).replace(' ', QChar(0x7F)));
+    });
+    connect(ldpaEnabledCheck, &QCheckBox::toggled, this, [sendLdpaProp](bool on) {
+        sendLdpaProp("enable", on ? "1" : "0");
+    });
+    wireTypeCombo(ldpaTypeCombo);
+    connect(ldpaBandCombo, &QComboBox::currentIndexChanged, this,
+            [sendLdpaProp](int idx) {
+        sendLdpaProp("band", idx == 1 ? "4" : "2");
+    });
+    connect(ldpaPreampCheck, &QCheckBox::toggled, this, [sendLdpaProp](bool on) {
+        sendLdpaProp("preamp", on ? "1" : "0");
+    });
+    connect(ldpaSourceCombo, &QComboBox::currentTextChanged, this,
+            [sendLdpaProp, sourceToProto](const QString& text) {
+        sendLdpaProp("source", sourceToProto(text));
+    });
+
+    // Unconfigured cable
+    auto sendUnconfiguredProp = [cableModel, cableList](const QString& key, const QString& val) {
+        auto* item = cableList->currentItem();
+        if (!item) return;
+        cableModel->sendSet(item->data(Qt::UserRole).toString(), key, val);
+    };
+    connect(unconfiguredNameEdit, &QLineEdit::editingFinished, this,
+            [unconfiguredNameEdit, sendUnconfiguredProp]() {
+        sendUnconfiguredProp("name", QString(unconfiguredNameEdit->text()).replace(' ', QChar(0x7F)));
+    });
+    wireTypeCombo(unconfiguredTypeCombo);
+    connect(unconfiguredRemoveBtn, &QPushButton::clicked, this, [cableModel, cableList]() {
+        auto* item = cableList->currentItem();
+        if (!item) return;
+        cableModel->sendRemove(item->data(Qt::UserRole).toString());
     });
 
     connect(ptSerialWidgets.speed, &QComboBox::currentTextChanged, this, [sendPtProp](const QString& val) { sendPtProp("speed", val); });

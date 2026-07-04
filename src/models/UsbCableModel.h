@@ -92,8 +92,14 @@ private:
     void parseBcdStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
     void parseBitStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
     void parsePassthroughStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
+    void parseLdpaStatus(UsbCable& cable, const QMap<QString, QString>& kvs);
 
     static QString decodeSpaces(const QString& s);
+
+    // Collapses BCD's sub-types (bcd/vbcd/bcd_vbcd) to one family so a
+    // sub-type change isn't mistaken for a type change — matches FlexLib's
+    // StringToUsbCableType, which maps all three to UsbCableType.BCD.
+    static QString normalizeTypeFamily(const QString& type);
 
     QMap<QString, UsbCable> m_cables;
 };

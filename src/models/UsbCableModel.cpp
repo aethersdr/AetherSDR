@@ -12,14 +12,56 @@ QString UsbCableModel::decodeSpaces(const QString& s)
     return QString(s).replace(QChar(0x7F), ' ');
 }
 
+QString UsbCableModel::normalizeTypeFamily(const QString& type)
+{
+    if (type == "bcd" || type == "vbcd" || type == "bcd_vbcd") {
+        return "bcd";
+    }
+    return type;
+}
+
 // ── Status parsing ──────────────────────────────────────────────────────────
 
 void UsbCableModel::applyStatus(const QString& serialNumber,
                                  const QMap<QString, QString>& kvs)
 {
     bool isNew = !m_cables.contains(serialNumber);
+
+    // A type change on an already-known cable is a distinct lifecycle event,
+    // not an in-place mutation — mirrors FlexLib's UsbCable.CableType setter,
+    // which removes the old cable object and lets the radio's next status
+    // reconstruct a brand-new one of the new type (UsbCable.cs / Radio.cs
+    // ParseUsbCableStatus). Without this, stale fields from the old type
+    // (e.g. cable.band, cable.bits[]) would survive into the new type's page.
+    // Compared by family (normalizeTypeFamily) so a BCD sub-type change
+    // (bcd <-> vbcd <-> bcd_vbcd) doesn't trip a spurious recreate — FlexLib's
+    // setter compares UsbCableType, where all three are the same value.
+    UsbCable preservedBase;
+    bool isFamilyChange = false;
+    if (!isNew && kvs.contains("type") &&
+        normalizeTypeFamily(kvs["type"]) != normalizeTypeFamily(m_cables[serialNumber].type)) {
+        isFamilyChange = true;
+        preservedBase = m_cables[serialNumber];
+        m_cables.remove(serialNumber);
+        emit cableRemoved(serialNumber);
+        isNew = true;
+    }
+
     auto& cable = m_cables[serialNumber];
     cable.serialNumber = serialNumber;
+
+    // Radio-assigned identity fields survive a type-change recreate — FlexLib's
+    // Radio.cs ParseUsbCableStatus reuses these across the change rather than
+    // blanking them, so a partial retype-confirmation status (missing
+    // name=/enable=) doesn't clear the user's cable name/enabled flag until a
+    // full status arrives. parseBaseStatus() below overwrites these if the
+    // status does carry fresh values.
+    if (isFamilyChange) {
+        cable.name = preservedBase.name;
+        cable.enabled = preservedBase.enabled;
+        cable.present = preservedBase.present;
+        cable.loggingEnabled = preservedBase.loggingEnabled;
+    }
 
     // Detect type on first status
     if (kvs.contains("type")) {
@@ -66,6 +108,9 @@ void UsbCableModel::applyStatus(const QString& serialNumber,
              cable.type == "bcd_vbcd")    parseBcdStatus(cable, kvs);
     else if (cable.type == "bit")         parseBitStatus(cable, kvs);
     else if (cable.type == "passthrough") parsePassthroughStatus(cable, kvs);
+    else if (cable.type == "ldpa") {
+        parseLdpaStatus(cable, kvs);
+    }
 
     if (isNew) {
         qDebug() << "UsbCableModel: new cable" << serialNumber << "type:" << cable.type
@@ -151,6 +196,27 @@ void UsbCableModel::parsePassthroughStatus(UsbCable& cable, const QMap<QString, 
         else if (k == "parity")         cable.parity = v;
         else if (k == "stop_bits")      cable.stopBits = v.toInt();
         else if (k == "flow_control")   cable.flowControl = v;
+    }
+}
+
+void UsbCableModel::parseLdpaStatus(UsbCable& cable, const QMap<QString, QString>& kvs)
+{
+    for (auto it = kvs.begin(); it != kvs.end(); ++it) {
+        const QString& k = it.key();
+        const QString& v = it.value();
+        if (k == "band") {
+            cable.ldpaBand = v;  // "2" or "4"
+        } else if (k == "preamp") {
+            cable.preamp = (v == "1");
+        } else if (k == "source") {
+            cable.source = v;
+        } else if (k == "source_rx_ant") {
+            cable.sourceRxAnt = v;
+        } else if (k == "source_tx_ant") {
+            cable.sourceTxAnt = v;
+        } else if (k == "source_slice") {
+            cable.sourceSlice = v;
+        }
     }
 }
 

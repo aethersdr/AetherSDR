@@ -2497,6 +2497,15 @@ if(UNIX)
 endif()
 set_target_properties(meter_model_test PROPERTIES AUTOMOC ON)
 
+add_executable(usb_cable_model_test
+    tests/usb_cable_model_test.cpp
+    src/models/UsbCableModel.cpp
+)
+target_include_directories(usb_cable_model_test PRIVATE src)
+target_link_libraries(usb_cable_model_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(usb_cable_model_test PROPERTIES AUTOMOC ON)
+add_test(NAME usb_cable_model_test COMMAND usb_cable_model_test)
+
 add_executable(async_log_writer_test
     tests/async_log_writer_test.cpp
     src/core/AsyncLogWriter.cpp
