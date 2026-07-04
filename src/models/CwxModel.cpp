@@ -368,7 +368,9 @@ void CwxModel::applyStatus(const QMap<QString, QString>& kvs)
             // drained. Firmware doesn't actually emit this (confirmed on FLEX-6500
             // fw 4.2.20.41343 — the reply-radio_index watch exists precisely
             // because queue= never arrives), so this is a belt-and-suspenders
-            // fallback should a future firmware start sending it. (#3949)
+            // fallback should a future firmware start sending it. If it does, the
+            // reply-radio_index machinery can be retired in favour of this path —
+            // tracked in #4028 (protocol/upstream). (#3949)
             if (val.isEmpty() || val == "0")
                 emit queueEmpty();
         } else if (key.startsWith("macro") && key.length() > 5) {
