@@ -3701,8 +3701,17 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         return 0;  // None
     };
 
+    struct SerialWidgets {
+        QGroupBox* group{nullptr};
+        QComboBox* speed{nullptr};
+        QComboBox* data{nullptr};
+        QComboBox* parity{nullptr};
+        QComboBox* stop{nullptr};
+        QComboBox* flow{nullptr};
+    };
+
     // Helper: serial parameter group (shared by CAT and Passthrough)
-    auto makeSerialGroup = [](const QString& title) {
+    auto makeSerialGroup = [](const QString& title) -> SerialWidgets {
         auto* group = new QGroupBox(title);
         group->setStyleSheet(kGroupStyle);
         auto* grid = new QGridLayout(group);
@@ -3741,10 +3750,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         grid->addWidget(new QLabel("Flow:"), 4, 0);
         grid->addWidget(flowCombo, 4, 1);
 
-        struct SerialWidgets { QComboBox *speed, *data, *parity, *stop, *flow; QGroupBox* group; };
-        auto* w = new SerialWidgets{speedCombo, dataCombo, parityCombo, stopCombo, flowCombo, group};
-        group->setProperty("_widgets", QVariant::fromValue(static_cast<void*>(w)));
-        return group;
+        return SerialWidgets{group, speedCombo, dataCombo, parityCombo, stopCombo, flowCombo};
     };
 
     // Page 1: CAT cable
@@ -3754,7 +3760,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     QLabel*    catStatusLabel;
     QComboBox* catSourceCombo;
     QCheckBox* catAutoReportCheck;
-    QGroupBox* catSerialGroup;
+    SerialWidgets catSerialWidgets;
     {
         catPage = new QWidget;
         auto* vbox = new QVBoxLayout(catPage);
@@ -3779,8 +3785,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         vbox->addWidget(headerGroup);
 
         // Serial params
-        catSerialGroup = makeSerialGroup("Serial Parameters");
-        vbox->addWidget(catSerialGroup);
+        catSerialWidgets = makeSerialGroup("Serial Parameters");
+        vbox->addWidget(catSerialWidgets.group);
 
         // CAT source
         auto* srcGroup = new QGroupBox("CAT Source");
@@ -3967,7 +3973,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     QLineEdit* ptNameEdit;
     QCheckBox* ptEnabledCheck;
     QLabel*    ptStatusLabel;
-    QGroupBox* ptSerialGroup;
+    SerialWidgets ptSerialWidgets;
     {
         ptPage = new QWidget;
         auto* vbox = new QVBoxLayout(ptPage);
@@ -3990,8 +3996,8 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         hg->addWidget(ptStatusLabel, 2, 1);
         vbox->addWidget(headerGroup);
 
-        ptSerialGroup = makeSerialGroup("Serial Parameters");
-        vbox->addWidget(ptSerialGroup);
+        ptSerialWidgets = makeSerialGroup("Serial Parameters");
+        vbox->addWidget(ptSerialWidgets.group);
 
         vbox->addStretch();
         stack->addWidget(ptPage);  // index 4
@@ -4037,6 +4043,9 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         if (t == "cat") {
             stack->setCurrentIndex(1);
             QSignalBlocker b1(catNameEdit), b2(catEnabledCheck), b3(catSourceCombo), b4(catAutoReportCheck);
+            QSignalBlocker b5(catSerialWidgets.speed), b6(catSerialWidgets.data),
+                           b7(catSerialWidgets.parity), b8(catSerialWidgets.stop),
+                           b9(catSerialWidgets.flow);
             catNameEdit->setText(cable.name);
             catEnabledCheck->setChecked(cable.enabled);
             catStatusLabel->setText(cable.present ? "Plugged In" : "Unplugged");
@@ -4045,6 +4054,12 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
                 : "QLabel { color: #808080; font-size: 11px; }");
             catSourceCombo->setCurrentIndex(protoToSource(cable.source));
             catAutoReportCheck->setChecked(cable.autoReport);
+            
+            catSerialWidgets.speed->setCurrentText(QString::number(cable.speed));
+            catSerialWidgets.data->setCurrentText(QString::number(cable.dataBits));
+            catSerialWidgets.parity->setCurrentText(cable.parity);
+            catSerialWidgets.stop->setCurrentText(QString::number(cable.stopBits));
+            catSerialWidgets.flow->setCurrentText(cable.flowControl);
         } else if (t == "bcd" || t == "vbcd" || t == "bcd_vbcd") {
             stack->setCurrentIndex(2);
             QSignalBlocker b1(bcdNameEdit), b2(bcdEnabledCheck), b3(bcdSourceCombo),
@@ -4076,12 +4091,21 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         } else if (t == "passthrough") {
             stack->setCurrentIndex(4);
             QSignalBlocker b1(ptNameEdit), b2(ptEnabledCheck);
+            QSignalBlocker b3(ptSerialWidgets.speed), b4(ptSerialWidgets.data),
+                           b5(ptSerialWidgets.parity), b6(ptSerialWidgets.stop),
+                           b7(ptSerialWidgets.flow);
             ptNameEdit->setText(cable.name);
             ptEnabledCheck->setChecked(cable.enabled);
             ptStatusLabel->setText(cable.present ? "Plugged In" : "Unplugged");
             ptStatusLabel->setStyleSheet(cable.present
                 ? "QLabel { color: #30d050; font-size: 11px; }"
                 : "QLabel { color: #808080; font-size: 11px; }");
+            
+            ptSerialWidgets.speed->setCurrentText(QString::number(cable.speed));
+            ptSerialWidgets.data->setCurrentText(QString::number(cable.dataBits));
+            ptSerialWidgets.parity->setCurrentText(cable.parity);
+            ptSerialWidgets.stop->setCurrentText(QString::number(cable.stopBits));
+            ptSerialWidgets.flow->setCurrentText(cable.flowControl);
         } else {
             stack->setCurrentIndex(0);
         }
@@ -4129,6 +4153,12 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     connect(catAutoReportCheck, &QCheckBox::toggled, this, [sendCatProp](bool on) {
         sendCatProp("auto_report", on ? "1" : "0");
     });
+
+    connect(catSerialWidgets.speed, &QComboBox::currentTextChanged, this, [sendCatProp](const QString& val) { sendCatProp("speed", val); });
+    connect(catSerialWidgets.data, &QComboBox::currentTextChanged, this, [sendCatProp](const QString& val) { sendCatProp("data_bits", val); });
+    connect(catSerialWidgets.parity, &QComboBox::currentTextChanged, this, [sendCatProp](const QString& val) { sendCatProp("parity", val); });
+    connect(catSerialWidgets.stop, &QComboBox::currentTextChanged, this, [sendCatProp](const QString& val) { sendCatProp("stop_bits", val); });
+    connect(catSerialWidgets.flow, &QComboBox::currentTextChanged, this, [sendCatProp](const QString& val) { sendCatProp("flow_control", val); });
 
     // BCD
     auto sendBcdProp = [cableModel, cableList](const QString& key, const QString& val) {
@@ -4181,6 +4211,12 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     connect(ptEnabledCheck, &QCheckBox::toggled, this, [sendPtProp](bool on) {
         sendPtProp("enable", on ? "1" : "0");
     });
+
+    connect(ptSerialWidgets.speed, &QComboBox::currentTextChanged, this, [sendPtProp](const QString& val) { sendPtProp("speed", val); });
+    connect(ptSerialWidgets.data, &QComboBox::currentTextChanged, this, [sendPtProp](const QString& val) { sendPtProp("data_bits", val); });
+    connect(ptSerialWidgets.parity, &QComboBox::currentTextChanged, this, [sendPtProp](const QString& val) { sendPtProp("parity", val); });
+    connect(ptSerialWidgets.stop, &QComboBox::currentTextChanged, this, [sendPtProp](const QString& val) { sendPtProp("stop_bits", val); });
+    connect(ptSerialWidgets.flow, &QComboBox::currentTextChanged, this, [sendPtProp](const QString& val) { sendPtProp("flow_control", val); });
 
     // Initial populate
     refreshList();
