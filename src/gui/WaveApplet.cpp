@@ -27,8 +27,11 @@ constexpr int kMinZoomPercent = 100;
 constexpr int kMaxZoomPercent = 600;
 constexpr int kDefaultZoomPercent = 170;
 constexpr int kMinFps = 5;
-constexpr int kMaxFps = 30;
-constexpr int kDefaultFps = 24;
+// Raised from 30/24 with the incremental-reduction scope (#3283 follow-up):
+// repaints no longer rescan the raw window, so 60 fps costs less than the
+// old 24 fps did. Users who previously saved an explicit FPS keep it.
+constexpr int kMaxFps = 60;
+constexpr int kDefaultFps = 60;
 // Discrete window steps for the WaveApplet drawer's "Window" slider.
 // First three notches give sub-second detail (240 ms, 480 ms, 1 s); the
 // rest are 1-second increments out to 10 s.  Index-based so each notch
@@ -69,6 +72,16 @@ QLabel* makeSettingLabel(const QString& text, QWidget* parent)
 
 WaveformWidget::ViewMode viewModeFromSetting(const QString& value)
 {
+#ifdef AETHER_GPU_SPECTRUM
+    // Showcase visualizations are GPU-only; without the flag a persisted
+    // demo mode falls back to Graph below.
+    if (value.compare("Ridge", Qt::CaseInsensitive) == 0)
+        return WaveformWidget::ViewMode::Ridge;
+    if (value.compare("Tunnel", Qt::CaseInsensitive) == 0)
+        return WaveformWidget::ViewMode::Tunnel;
+    if (value.compare("Horizon", Qt::CaseInsensitive) == 0)
+        return WaveformWidget::ViewMode::Horizon;
+#endif
     if (value.compare("Bands", Qt::CaseInsensitive) == 0)
         return WaveformWidget::ViewMode::VerticalBars;
     if (value.compare("History", Qt::CaseInsensitive) == 0)
@@ -87,6 +100,12 @@ QString settingForViewMode(WaveformWidget::ViewMode mode)
         return QStringLiteral("History");
     case WaveformWidget::ViewMode::VerticalBars:
         return QStringLiteral("Bands");
+    case WaveformWidget::ViewMode::Ridge:
+        return QStringLiteral("Ridge");
+    case WaveformWidget::ViewMode::Tunnel:
+        return QStringLiteral("Tunnel");
+    case WaveformWidget::ViewMode::Horizon:
+        return QStringLiteral("Horizon");
     case WaveformWidget::ViewMode::Graph:
         return QStringLiteral("Graph");
     }
@@ -209,6 +228,8 @@ void WaveApplet::buildSettingsDrawer()
         row->addWidget(makeSettingLabel("View:", m_settingsDrawer));
 
         m_viewCombo = new GuardedComboBox(m_settingsDrawer);
+        m_viewCombo->setObjectName(QStringLiteral("waveViewCombo"));
+        m_viewCombo->setAccessibleName(QStringLiteral("WAVE view mode"));
         applyComboStyle(m_viewCombo);
         m_viewCombo->setFixedHeight(20);
         m_viewCombo->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
@@ -217,6 +238,13 @@ void WaveApplet::buildSettingsDrawer()
         m_viewCombo->addItem("Envelope", QStringLiteral("Envelope"));
         m_viewCombo->addItem("History", QStringLiteral("History"));
         m_viewCombo->addItem("Bands", QStringLiteral("Bands"));
+#ifdef AETHER_GPU_SPECTRUM
+        // GPU showcase visualizations (wavedemo.frag) — audio-reactive,
+        // theme-colorized, and unapologetically fun.
+        m_viewCombo->addItem("3D Ridge", QStringLiteral("Ridge"));
+        m_viewCombo->addItem("Tunnel", QStringLiteral("Tunnel"));
+        m_viewCombo->addItem("Horizon", QStringLiteral("Horizon"));
+#endif
         row->addWidget(m_viewCombo, 1);
 
         connect(m_viewCombo, qOverload<int>(&QComboBox::currentIndexChanged),
@@ -239,6 +267,8 @@ void WaveApplet::buildSettingsDrawer()
         row->addWidget(makeSettingLabel("Zoom:", m_settingsDrawer));
 
         m_zoomSlider = new GuardedSlider(Qt::Horizontal, m_settingsDrawer);
+        m_zoomSlider->setObjectName(QStringLiteral("waveZoomSlider"));
+        m_zoomSlider->setAccessibleName(QStringLiteral("WAVE zoom"));
         m_zoomSlider->setRange(kMinZoomPercent, kMaxZoomPercent);
         m_zoomSlider->setSingleStep(10);
         m_zoomSlider->setPageStep(50);
@@ -273,6 +303,8 @@ void WaveApplet::buildSettingsDrawer()
         row->addWidget(makeSettingLabel("FPS:", m_settingsDrawer));
 
         m_refreshSlider = new GuardedSlider(Qt::Horizontal, m_settingsDrawer);
+        m_refreshSlider->setObjectName(QStringLiteral("waveFpsSlider"));
+        m_refreshSlider->setAccessibleName(QStringLiteral("WAVE FPS"));
         m_refreshSlider->setRange(kMinFps, kMaxFps);
         m_refreshSlider->setSingleStep(5);
         m_refreshSlider->setPageStep(10);
@@ -307,6 +339,8 @@ void WaveApplet::buildSettingsDrawer()
         row->addWidget(makeSettingLabel("Window:", m_settingsDrawer));
 
         m_windowSlider = new GuardedSlider(Qt::Horizontal, m_settingsDrawer);
+        m_windowSlider->setObjectName(QStringLiteral("waveWindowSlider"));
+        m_windowSlider->setAccessibleName(QStringLiteral("WAVE window"));
         m_windowSlider->setRange(0, windowStepsMs().size() - 1);
         m_windowSlider->setSingleStep(1);
         m_windowSlider->setPageStep(1);

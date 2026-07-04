@@ -754,6 +754,7 @@ set(GUI_SOURCES
     src/gui/PhoneApplet.cpp
     src/gui/EqApplet.cpp
     src/gui/WaveApplet.cpp
+    src/gui/WaveformScopeModel.cpp
     src/gui/WaveformWidget.cpp
     src/gui/ClientEqApplet.cpp
     src/gui/ClientEqCurveWidget.cpp
@@ -796,7 +797,6 @@ set(GUI_SOURCES
     src/gui/StripPuduPanel.cpp
     src/gui/ClientReverbApplet.cpp
     src/gui/StripReverbPanel.cpp
-    src/gui/StripWaveform.cpp
     src/gui/StripWaveformPanel.cpp
     src/gui/StripFinalOutputPanel.cpp
     src/gui/AetherialAudioStrip.cpp
@@ -1271,6 +1271,8 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/panscope.frag
             resources/shaders/dss_mesh.vert
             resources/shaders/dss_mesh.frag
+            resources/shaders/wavescope.frag
+            resources/shaders/wavedemo.frag
     )
 endif()
 
@@ -1924,6 +1926,14 @@ add_executable(spectral_nr_test
 target_include_directories(spectral_nr_test PRIVATE src)
 target_link_libraries(spectral_nr_test PRIVATE Qt6::Core)
 add_test(NAME spectral_nr_test COMMAND spectral_nr_test)
+
+add_executable(waveform_scope_model_test
+    tests/waveform_scope_model_test.cpp
+    src/gui/WaveformScopeModel.cpp
+)
+target_include_directories(waveform_scope_model_test PRIVATE src)
+target_link_libraries(waveform_scope_model_test PRIVATE Qt6::Core)
+add_test(NAME waveform_scope_model_test COMMAND waveform_scope_model_test)
 
 add_executable(kiwi_sdr_protocol_test
     tests/kiwi_sdr_protocol_test.cpp

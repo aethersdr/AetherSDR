@@ -41,9 +41,14 @@ public:
     ~NvidiaAfxPack() override;
 
     static QString detectArch();          // "sm_89", or empty if no NVIDIA GPU
-    // True only if an NVIDIA GPU new enough for a published AFX pack is present
-    // (Ada / RTX 40-series or later, compute capability >= 8.9). Earlier GPUs
-    // (RTX 20/30) have no published pack, so the BNR UI gates on this.
+    // True if an NVIDIA GPU new enough for AFX at all is present — Ada /
+    // RTX 40-series or later (compute capability >= 8.9) — regardless of whether
+    // a pack is published for its exact arch. Broader than hasSupportedGpu():
+    // a card can be AFX-capable yet unpublished (e.g. sm_120 / RTX 50-series). (#3933)
+    static bool isAfxCapableGpu();
+    // True only if an afx-bits pack is actually published for the detected GPU's
+    // arch (a subset of isAfxCapableGpu()). The BNR UI enables the feature on this
+    // so an AFX-capable-but-unpublished card (sm_120) doesn't dead-end on a 404.
     static bool hasSupportedGpu();
     static QString cacheRoot();           // <AppLocalData>/nvidia-afx
     static QString installedPackDir();    // cacheRoot/current if usable, else empty

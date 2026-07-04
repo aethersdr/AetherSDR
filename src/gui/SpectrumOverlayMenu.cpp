@@ -25,6 +25,9 @@
 #include <QSignalBlocker>
 #include <QEvent>
 #include <QFrame>
+#include <QScrollArea>
+#include <QScrollBar>
+#include <QStyle>
 #include <QColorDialog>
 #include <QRegularExpression>
 #include <QColorDialog>
@@ -1220,7 +1223,30 @@ void SpectrumOverlayMenu::buildDisplayPanel()
                                    "border: 1px solid {{color.background.2}}; border-radius: 3px; }");
     m_displayPanel->hide();
 
-    auto* grid = new QGridLayout(m_displayPanel);
+    // #3969: the panel's ~24 rows exceed a short window's height, so the grid
+    // lives on a content widget inside a scroll area (same pattern as
+    // RadioSetupDialog::wrapTabInScrollArea) and toggleDisplayPanel() clamps
+    // the shown height. The explicit transparent styles stop the panel-level
+    // QWidget stylesheet above from cascading a second background/border onto
+    // the scroll machinery.
+    auto* panelLayout = new QVBoxLayout(m_displayPanel);
+    panelLayout->setContentsMargins(1, 1, 1, 1);  // keep the 1px panel border visible
+    m_displayScroll = new QScrollArea;
+    m_displayScroll->setObjectName(QStringLiteral("displayPanelScroll"));
+    m_displayScroll->verticalScrollBar()->setObjectName(
+        QStringLiteral("displayPanelScrollBar"));
+    m_displayScroll->setWidgetResizable(true);
+    m_displayScroll->setFrameShape(QFrame::NoFrame);
+    m_displayScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_displayScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_displayScroll->setStyleSheet("QScrollArea { background: transparent; border: none; }");
+    m_displayScroll->viewport()->setStyleSheet("background: transparent; border: none;");
+    auto* displayContent = new QWidget;
+    displayContent->setStyleSheet("background: transparent; border: none;");
+    m_displayScroll->setWidget(displayContent);
+    panelLayout->addWidget(m_displayScroll);
+
+    auto* grid = new QGridLayout(displayContent);
     grid->setContentsMargins(8, 6, 8, 6);
     grid->setSpacing(4);
     grid->setColumnStretch(1, 1);
@@ -1915,7 +1941,8 @@ void SpectrumOverlayMenu::buildDisplayPanel()
     if (m_floorEnableBtn) m_floorEnableBtn->setToolTip("Shows a noise floor reference line on the spectrum display.");
     if (m_floorSlider) m_floorSlider->setToolTip("Vertical position of the noise floor reference line (% from top).");
 
-    m_displayPanel->adjustSize();
+    // No adjustSize() here: toggleDisplayPanel() sizes the panel from the
+    // scroll content's hint (clamped to the parent) on every show.
 }
 
 // Apply a 3-way auto-black mode to the single cycle button + shared Black slider.
@@ -2202,7 +2229,20 @@ void SpectrumOverlayMenu::toggleDisplayPanel()
     if (!wasVisible) {
         m_displayPanelVisible = true;
         int menuBottom = y() + height();
-        int panelH = m_displayPanel->sizeHint().height();
+        // Size from the scroll content's hint — QScrollArea::sizeHint() is
+        // font-metric-capped, not content-sized — then clamp to the parent
+        // height so short windows scroll instead of clipping (#3969).
+        const QSize contentHint = m_displayScroll->widget()->sizeHint();
+        int panelW = contentHint.width() + 2;   // panelLayout 1px margins
+        int panelH = contentHint.height() + 2;
+        const QWidget* host = m_displayPanel->parentWidget();
+        const int maxH = host ? host->height() : panelH;
+        if (panelH > maxH) {
+            panelH = maxH;
+            panelW += m_displayPanel->style()->pixelMetric(
+                QStyle::PM_ScrollBarExtent, nullptr, m_displayScroll);
+        }
+        m_displayPanel->resize(panelW, panelH);
         int panelY = menuBottom - panelH;
         m_displayPanel->move(x() + width(), std::max(0, panelY));
         m_displayPanel->raise();

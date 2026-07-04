@@ -227,6 +227,7 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
     updated.waterfallRate =
         std::clamp(updated.waterfallRate, 0, kKiwiSdrWaterfallRateMax);
     const QString oldEndpoint = m_profiles[idx].endpoint;
+    const bool wasAutoConnect = m_profiles[idx].autoConnect;
     m_profiles[idx] = updated;
     saveSettings();
     const bool endpointChanged = oldEndpoint != updated.endpoint;
@@ -255,6 +256,18 @@ void KiwiSdrManager::updateProfile(const KiwiSdrAntennaProfile& profile)
             }
         });
     }
+
+    // Turning off auto-connect on a profile that no slice is using leaves it
+    // "no longer in use" (no assigned slice, not auto-connect) — release it so
+    // it stops squatting the receiver's user slot / per-IP time budget, the same
+    // disconnect-when-idle invariant as the slice-transition paths (#3950).
+    // Scoped to the true->false transition so plain name/endpoint edits and
+    // manually-connected profiles are left untouched.
+    if (wasAutoConnect && !updated.autoConnect
+        && !shouldMaintainProfileConnection(updated.id)) {
+        disconnectProfile(updated.id);
+    }
+
     emit profilesChanged();
 }
 
@@ -455,6 +468,15 @@ void KiwiSdrManager::assignSliceToProfile(int sliceId, const QString& profileId,
         << "freq=" << frequencyMhz << "MHz mode=" << mode;
     emit sliceAssignmentChanged(sliceId, profileId);
 
+    // Switching this slice to a different Kiwi: release the previous one if no
+    // other slice still uses it and it isn't auto-connect, so we don't squat the
+    // receiver's user slot / burn its per-IP time budget (#3950). Must come after
+    // the insert() above so shouldMaintainProfileConnection() sees the new map.
+    if (!previousProfile.isEmpty() && previousProfile != profileId
+        && !shouldMaintainProfileConnection(previousProfile)) {
+        disconnectProfile(previousProfile);
+    }
+
     if (KiwiSdrClient* c = ensureClient(profileId)) {
         Q_UNUSED(c);
         m_clientHasTrackedSlice.insert(profileId, sliceId >= 0 && frequencyMhz > 0.0);
@@ -489,6 +511,14 @@ void KiwiSdrManager::clearSliceAssignment(int sliceId)
         });
     }
     emit sliceAssignmentChanged(sliceId, QString());
+
+    // The slice no longer uses this Kiwi (antenna reverted to Flex, or the slice
+    // was closed). Release it once nothing else needs it, so it stops holding the
+    // receiver's user slot / per-IP time budget (#3950). take() above already
+    // updated the map, so shouldMaintainProfileConnection() reflects reality here.
+    if (!shouldMaintainProfileConnection(previousProfile)) {
+        disconnectProfile(previousProfile);
+    }
 }
 
 void KiwiSdrManager::updateSliceTracking(int sliceId, double frequencyMhz,

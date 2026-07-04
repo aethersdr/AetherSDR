@@ -1,8 +1,8 @@
 #include "StripWaveformPanel.h"
 
 #include "EditorFramelessTitleBar.h"
-#include "StripWaveform.h"
 #include "Theme.h"
+#include "WaveformWidget.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 
@@ -49,6 +49,8 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     // Envelope (m_modeIdx = 1) since CE-SSB is fundamentally about
     // envelope behaviour.
     m_modeBtn = new QPushButton(this);
+    m_modeBtn->setObjectName(QStringLiteral("stripWaveformModeBtn"));
+    m_modeBtn->setAccessibleName(QStringLiteral("Strip waveform view mode"));
     m_modeBtn->setFixedSize(78, 18);
     AetherSDR::ThemeManager::instance().applyStyleSheet(m_modeBtn, "QPushButton {"
         "  background: {{color.background.1}}; border: 1px solid {{color.background.1}};"
@@ -64,6 +66,8 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     // Time-window slider (1–20 s) + readout, also on the title row.
     // Adjusts how much wall-clock audio fits across the plot.
     m_windowSlider = new QSlider(Qt::Horizontal, this);
+    m_windowSlider->setObjectName(QStringLiteral("stripWaveformWindowSlider"));
+    m_windowSlider->setAccessibleName(QStringLiteral("Strip waveform window"));
     m_windowSlider->setRange(1, 20);
     m_windowSlider->setSingleStep(1);
     m_windowSlider->setPageStep(1);   // mouse wheel notch = ±1 sec
@@ -91,7 +95,7 @@ StripWaveformPanel::StripWaveformPanel(AudioEngine* engine, QWidget* parent)
     titleRow->addWidget(m_modeBtn);
     root->addLayout(titleRow);
 
-    m_waveform = new StripWaveform(this);
+    m_waveform = new WaveformWidget(WaveformWidget::Profile::Strip, this);
     // Restore the saved time window (or default to 20 s) and apply
     // it through the slider so the readout label updates in lockstep.
     const int savedSec = std::clamp(
@@ -216,12 +220,12 @@ QString StripWaveformPanel::windowSettingsKey() const
 void StripWaveformPanel::applyViewMode()
 {
     if (!m_waveform) return;
-    StripWaveform::ViewMode mode = StripWaveform::ViewMode::Envelope;
+    WaveformWidget::ViewMode mode = WaveformWidget::ViewMode::Envelope;
     QString label = "ENVELOPE";
     switch (m_modeIdx) {
-        case 0: mode = StripWaveform::ViewMode::Graph;    label = "SCOPE";    break;
-        case 1: mode = StripWaveform::ViewMode::Envelope; label = "ENVELOPE"; break;
-        case 2: mode = StripWaveform::ViewMode::Bars;     label = "HISTORY";  break;
+        case 0: mode = WaveformWidget::ViewMode::Graph;    label = "SCOPE";    break;
+        case 1: mode = WaveformWidget::ViewMode::Envelope; label = "ENVELOPE"; break;
+        case 2: mode = WaveformWidget::ViewMode::Bars;     label = "HISTORY";  break;
     }
     m_waveform->setViewMode(mode);
     if (m_modeBtn) m_modeBtn->setText(label);

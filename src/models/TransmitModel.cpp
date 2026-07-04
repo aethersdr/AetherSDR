@@ -30,6 +30,7 @@ void TransmitModel::resetState()
     m_txSliceMode.clear();
 
     emit apdStateChanged();
+    emit transmittingChanged(false);
     emit moxChanged(false);
     emit tuneChanged(false);
     emit micStateChanged();
@@ -439,6 +440,7 @@ void TransmitModel::setMox(bool on)
     // Interlock status from the radio will still reconcile final state.
     if (m_transmitting != on) {
         m_transmitting = on;
+        emit transmittingChanged(on);
         emit moxChanged(on);
     }
     emit commandReady(QString("xmit %1").arg(on ? 1 : 0));
@@ -448,6 +450,9 @@ void TransmitModel::setTransmitting(bool tx)
 {
     if (tx == m_transmitting) return;
     m_transmitting = tx;
+    emit transmittingChanged(tx);
+    // Keep moxChanged for backward compat — CW decoder gate and QSO recorder
+    // currently gate on this signal and need interlock-driven TX edges too.
     emit moxChanged(tx);
 }
 

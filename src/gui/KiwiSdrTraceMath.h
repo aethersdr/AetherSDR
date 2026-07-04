@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QVector>
+#include <QtGlobal>
 
 #include <algorithm>
 #include <cmath>
@@ -114,6 +115,36 @@ inline QVector<float> mapRowToTrace(const QVector<float>& rowBins,
                                      srcCenter, fallback);
     }
     return trace;
+}
+
+inline QVector<quint8> mapRowCoverageMask(int sourceBins,
+                                          int destWidth,
+                                          double rowCenterMhz,
+                                          double rowBandwidthMhz,
+                                          double viewCenterMhz,
+                                          double viewBandwidthMhz)
+{
+    if (sourceBins <= 0 || destWidth <= 0
+        || rowBandwidthMhz <= 0.0 || viewBandwidthMhz <= 0.0) {
+        return {};
+    }
+
+    QVector<quint8> coverage(destWidth, quint8(0));
+    const double rowLowMhz = rowCenterMhz - rowBandwidthMhz * 0.5;
+    const double viewLowMhz = viewCenterMhz - viewBandwidthMhz * 0.5;
+    for (int x = 0; x < destWidth; ++x) {
+        const double freqMhz = viewLowMhz
+            + (static_cast<double>(x) + 0.5)
+                * viewBandwidthMhz / static_cast<double>(destWidth);
+        const double srcCenter =
+            ((freqMhz - rowLowMhz) / rowBandwidthMhz)
+                * static_cast<double>(sourceBins) - 0.5;
+        if (srcCenter >= -0.5
+            && srcCenter <= static_cast<double>(sourceBins) - 0.5) {
+            coverage[x] = quint8(1);
+        }
+    }
+    return coverage;
 }
 
 inline float estimateTraceFloorDbm(const QVector<float>& bins,

@@ -60,6 +60,9 @@
 #include <QWidgetAction>  // describeAction: header rows (disabled QWidgetAction + QLabel)
 #include <QContextMenuEvent>  // doContextMenu: synthesize a right-click menu trigger
 
+#include <QScrollArea>   // doScrollTo: ensureWidgetVisible on the ancestor
+#include <QScrollBar>    // doScrollTo: echo the resulting scrollbar positions
+
 #ifdef AETHER_GPU_SPECTRUM
 #include <QRhiWidget>
 #endif
@@ -355,6 +358,26 @@ QJsonObject describeWidget(const QWidget* w)
         }
     }
 
+    // Surface an HGauge's label/value/scale when the widget publishes them as
+    // dynamic properties (custom-painted, no Q_OBJECT, so read generically via
+    // the meta-object — same decoupled pattern as noiseFloorDbm above). Lets a
+    // driver assert the MtrApplet °C/°F range switch and the live numeric
+    // overlays (PA Temp, fan RPM) numerically, not by pixel-reading (#3886).
+    {
+        const QVariant gl = w->property("gaugeLabel");
+        if (gl.isValid()) {
+            o[QStringLiteral("gaugeLabel")] = gl.toString();
+            o[QStringLiteral("gaugeValue")] = w->property("gaugeValue").toDouble();
+            QJsonObject range;
+            range[QStringLiteral("min")] = w->property("gaugeMin").toDouble();
+            range[QStringLiteral("max")] = w->property("gaugeMax").toDouble();
+            range[QStringLiteral("redStart")] = w->property("gaugeRedStart").toDouble();
+            range[QStringLiteral("yellowStart")] = w->property("gaugeYellowStart").toDouble();
+            o[QStringLiteral("gaugeRange")] = range;
+            o[QStringLiteral("gaugeTicks")] = w->property("gaugeTicks").toString();
+        }
+    }
+
     QJsonArray kids;
     const QObjectList children = w->children();
     for (const QObject* child : children) {
@@ -381,22 +404,38 @@ QJsonObject describeWidget(const QWidget* w)
 }
 
 // Depth-first match by class name (full or short) or accessibleName.
-QWidget* matchRecursive(QWidget* w, const QString& target)
+// Prefers a VISIBLE match: class/accessibleName targets are often shared by
+// several instances where only one is on screen (e.g. every scroll area owns
+// hidden QScrollBars alongside the visible one), and drivers almost always
+// mean the visible control. Falls back to the first hidden match so hidden
+// widgets stay addressable (grab of a hidden container is a supported flow).
+QWidget* matchRecursiveImpl(QWidget* w, const QString& target, QWidget** firstAny)
 {
     const QString fullClass = QString::fromUtf8(w->metaObject()->className());
     if (fullClass == target
         || shortClassName(w) == target
         || w->accessibleName() == target) {
-        return w;
+        if (w->isVisible())
+            return w;
+        if (!*firstAny)
+            *firstAny = w;
     }
     const QObjectList children = w->children();
     for (QObject* child : children) {
         if (auto* cw = qobject_cast<QWidget*>(child)) {
-            if (QWidget* m = matchRecursive(cw, target))
+            if (QWidget* m = matchRecursiveImpl(cw, target, firstAny))
                 return m;
         }
     }
     return nullptr;
+}
+
+QWidget* matchRecursive(QWidget* w, const QString& target)
+{
+    QWidget* firstAny = nullptr;
+    if (QWidget* visible = matchRecursiveImpl(w, target, &firstAny))
+        return visible;
+    return firstAny;
 }
 
 // Last-resort match by a button's visible text — agents often know a control
@@ -1881,6 +1920,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
             return err(QStringLiteral("hover requires a target widget"));
         return doHover(target, action);
     }
+    if (cmd == QLatin1String("scrollTo") || cmd == QLatin1String("ensureVisible")) {
+        if (target.isEmpty())
+            return err(QStringLiteral("scrollTo requires a target widget"));
+        return doScrollTo(target);
+    }
     if (cmd == QLatin1String("drag") || cmd == QLatin1String("mouse")) {
         if (target.isEmpty())
             return err(QStringLiteral("drag requires a target and '<dx> <dy>'"));
@@ -2203,13 +2247,22 @@ QWidget* AutomationServer::resolveWidget(const QString& target)
         }
     }
 
-    // 1. Exact objectName (cheap, unambiguous).
+    // 1. Exact objectName (cheap; visible instance preferred when several
+    //    widgets share a name, e.g. the strip's TX and RX waveform scopes).
+    QWidget* namedHidden = nullptr;
     for (QWidget* tlw : tops) {
         if (tlw->objectName() == target)
             return tlw;
-        if (QWidget* c = tlw->findChild<QWidget*>(target))
-            return c;
+        const QList<QWidget*> named = tlw->findChildren<QWidget*>(target);
+        for (QWidget* c : named) {
+            if (c->isVisible())
+                return c;
+            if (!namedHidden)
+                namedHidden = c;
+        }
     }
+    if (namedHidden)
+        return namedHidden;
     // 2. Class name or accessibleName (e.g. "SpectrumWidget" for the panadapter).
     for (QWidget* tlw : tops) {
         if (QWidget* m = matchRecursive(tlw, target))
@@ -2702,6 +2755,39 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
                            {QStringLiteral("model"), model},
                            {QStringLiteral("pans"), pans}};
     }
+    if (model == QLatin1String("wavestats")) {
+        // Per-scope paint/append counters from every WaveformWidget
+        // instance (sidebar WAVE applet + Aetherial strip panels), for
+        // before/after rendering-cost proofs without a profiler attach.
+        // selector filters by objectName ("waveAppletScope" /
+        // "stripWaveformScope"); property "reset" zeroes the counters
+        // after the read so successive reads measure disjoint intervals.
+        // GUI-header-free: found by class name, snapshotted via meta-call.
+        const bool reset = property == QLatin1String("reset");
+        QJsonArray scopes;
+        // A floated container is reachable from two top-level roots, so the
+        // class walk can yield the same widget twice — dedupe by pointer.
+        QSet<QWidget*> seen;
+        const QList<QWidget*> widgets =
+            findWidgetsByClass(QStringLiteral("WaveformWidget"));
+        for (QWidget* w : widgets) {
+            if (seen.contains(w))
+                continue;
+            seen.insert(w);
+            if (!selector.isEmpty() && w->objectName() != selector)
+                continue;
+            QVariantMap snap;
+            if (!QMetaObject::invokeMethod(w, "wavestatsSnapshot",
+                                           Qt::DirectConnection,
+                                           Q_RETURN_ARG(QVariantMap, snap),
+                                           Q_ARG(bool, reset)))
+                continue;
+            scopes.append(QJsonObject::fromVariantMap(snap));
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("scopes"), scopes}};
+    }
     if (model == QLatin1String("sync")
         || model == QLatin1String("receiveSync")) {
         if (!m_receiveSyncSnapshotHandler) {
@@ -2790,7 +2876,7 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             p->ownedByClient(radio->ourClientHandle());
     } else {
         return err(QStringLiteral("unknown model: ") + model
-                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|panstats|clients|kiwi)"));
+                   + QStringLiteral(" (use audio|dsp|sync|radio|transmit|equalizer|meters|slice|slices|pan|pans|panstats|clients|kiwi|wavestats)"));
     }
 
     if (!property.isEmpty()) {
@@ -3950,6 +4036,46 @@ QJsonObject AutomationServer::doHover(const QString& target, const QString& acti
                                          : QStringLiteral("enter")},
         {QStringLiteral("x"), global.x()},
         {QStringLiteral("y"), global.y()},
+    };
+}
+
+QJsonObject AutomationServer::doScrollTo(const QString& target) const
+{
+    QWidget* w = resolveWidget(target);
+    if (!w)
+        return err(QStringLiteral("widget or window not found: ") + target);
+
+    QScrollArea* area = nullptr;
+    for (QWidget* p = w->parentWidget(); p; p = p->parentWidget()) {
+        if (auto* sa = qobject_cast<QScrollArea*>(p)) {
+            area = sa;
+            break;
+        }
+    }
+    if (!area)
+        return err(QStringLiteral("'") + target
+                   + QStringLiteral("' has no QScrollArea ancestor to scroll"));
+
+    area->ensureWidgetVisible(w);
+
+    // Round-trip confirmation: the scrollbar position that resulted and
+    // whether the widget's rect now intersects the viewport.
+    const int vValue = area->verticalScrollBar()
+        ? area->verticalScrollBar()->value() : 0;
+    const int hValue = area->horizontalScrollBar()
+        ? area->horizontalScrollBar()->value() : 0;
+    const QRect vp = area->viewport()->rect()
+        .translated(area->viewport()->mapToGlobal(QPoint(0, 0)));
+    const QRect wr = w->rect().translated(w->mapToGlobal(QPoint(0, 0)));
+
+    return QJsonObject{
+        {QStringLiteral("ok"), true},
+        {QStringLiteral("target"), target},
+        {QStringLiteral("class"), shortClassName(w)},
+        {QStringLiteral("scrollArea"), shortClassName(area)},
+        {QStringLiteral("vScroll"), vValue},
+        {QStringLiteral("hScroll"), hValue},
+        {QStringLiteral("inViewport"), vp.intersects(wr)},
     };
 }
 

@@ -5,11 +5,17 @@
 
 #include <QBoxLayout>
 #include <QByteArray>
+#include <QCoreApplication>
+#include <QEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
+
+#ifdef AETHER_GPU_SPECTRUM
+#include <QRhiWidget>
+#endif
 
 namespace AetherSDR {
 
@@ -21,6 +27,29 @@ constexpr int         kSchemaVersion = 1;
 QString dockModeToString(ContainerWidget::DockMode m)
 {
     return m == ContainerWidget::DockMode::Floating ? "floating" : "panel";
+}
+
+// QRhiWidget descendants must deregister their cleanup callback from the old
+// top-level's backing-store QRhi BEFORE a float/dock reparent, or the stale
+// callback fires against freed state when that QRhi is torn down (#2495 —
+// the same guard SpectrumWidget/PanadapterStack use for splitter moves and
+// pop-outs). Fire the cross-platform notification for every QRhiWidget in
+// the container's subtree; harmless for widgets without one.
+void prepareRhiChildrenForReparent(QWidget* root)
+{
+#ifdef AETHER_GPU_SPECTRUM
+    if (!root)
+        return;
+    QList<QRhiWidget*> rhiWidgets = root->findChildren<QRhiWidget*>();
+    if (auto* self = qobject_cast<QRhiWidget*>(root))
+        rhiWidgets.prepend(self);
+    for (QRhiWidget* w : rhiWidgets) {
+        QEvent event(QEvent::WindowAboutToChangeInternal);
+        QCoreApplication::sendEvent(w, &event);
+    }
+#else
+    Q_UNUSED(root);
+#endif
 }
 
 ContainerWidget::DockMode dockModeFromString(const QString& s)
@@ -159,6 +188,11 @@ void ContainerManager::reparentContainer(const QString& id,
     // external widget).  Floating containers don't have a layout
     // parent right now — just update the logical parentId.
     if (!c->isFloating()) {
+        // #2495: deregister any QRhiWidget child (e.g. the WAVE scope) from the
+        // old backing-store QRhi before reparenting, exactly as
+        // floatContainer()/dockContainer() do — otherwise a stale cleanup
+        // callback can fire against freed state on a GPU build.
+        prepareRhiChildrenForReparent(c);
         if (!meta.parentId.isEmpty()) {
             ContainerWidget* oldParent = m_containers.value(meta.parentId).data();
             if (oldParent) oldParent->removeChildWidget(c);
@@ -204,6 +238,8 @@ void ContainerManager::floatContainer(const QString& id)
 {
     ContainerWidget* c = m_containers.value(id).data();
     if (!c || c->isFloating()) return;
+
+    prepareRhiChildrenForReparent(c);   // #2495 — before any reparent below
 
     // Remember the container's current slot so re-dock restores it.
     // Two cases: nested (parentId points at another container) and
@@ -262,6 +298,8 @@ void ContainerManager::dockContainer(const QString& id)
 {
     ContainerWidget* c = m_containers.value(id).data();
     if (!c || !c->isFloating()) return;
+
+    prepareRhiChildrenForReparent(c);   // #2495 — before releaseContainer()
 
     auto* win = m_floatingWindows.take(id);
     if (!win) return;

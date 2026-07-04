@@ -147,6 +147,34 @@ void testBandStackKeysUseNativeVhfOnlyWhenCapable()
                   "2m", xvtrs, "X12");
 }
 
+// #3930 — the tuneToNet() pre-check refuses a net tune when the target band
+// resolves unsupported. Pin the decision core it relies on, using the band
+// names BandSettings::bandForFrequency() actually produces (432.1 MHz → "440",
+// 144.2 MHz → "2m", 7.2 MHz → "40m" per BandDefs.h).
+void testNetTunePrecheckBandSupport()
+{
+    const QVector<XvtrPolicy::Transverter> xvtrs = {
+        xvtr(4, 7, "440", 432.0, 28.0),
+    };
+
+    // The repro: 432.1 MHz net, no XVTR configured, no native 70 cm on any
+    // model — must resolve unsupported with a non-empty reason.
+    expectUnsupportedBand("net tune 440 with no XVTR is unsupported",
+                          "440", {}, "has no Flex display pan band= mapping");
+
+    // Same band with a covering XVTR entry — must tune, not refuse.
+    expectBandKey("net tune 440 with covering XVTR resolves",
+                  "440", xvtrs, "X4");
+
+    // FLEX-6700 does 2 m natively (has2Meters) — the pre-check must not
+    // over-block a band the model covers without any XVTR.
+    expectBandKey("net tune 2m on 6700-class radio is native",
+                  "2m", {}, "2", {.has2Meters = true});
+
+    // Plain HF control.
+    expectBandKey("net tune 40m HF is always native", "40m", {}, "40");
+}
+
 void testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan()
 {
     const QVector<XvtrPolicy::Transverter> xvtrs = {
@@ -284,6 +312,7 @@ int main()
     testBandStackKeysUseFlexIndex();
     testBandStackKeysRefuseGuesses();
     testBandStackKeysUseNativeVhfOnlyWhenCapable();
+    testNetTunePrecheckBandSupport();
     testHfWaterfallDoesNotShiftWhenTileLagsByOneSpan();
     testXvtrWaterfallMapsIfToRfBands();
     testXvtrWaterfallGuardrails();

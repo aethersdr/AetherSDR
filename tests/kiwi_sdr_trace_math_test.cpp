@@ -108,6 +108,19 @@ int main()
         return fail("3D-width Kiwi trace should align to the viewport frequency frame");
     }
 
+    const QVector<quint8> narrowCoverage = mapRowCoverageMask(
+        256, 128,
+        14.0, 0.5,
+        14.0, 1.0);
+    if (narrowCoverage.size() != 128
+        || narrowCoverage[0] != 0
+        || narrowCoverage[32] == 0
+        || narrowCoverage[64] == 0
+        || narrowCoverage[95] == 0
+        || narrowCoverage[127] != 0) {
+        return fail("narrow Kiwi row coverage should mark only bins covered by the server row");
+    }
+
     QVector<float> adaptingTrace(128, -80.0f);
     TraceFloorState adaptingFloor{-100.0f, true};
     stabilizeTraceFloor(adaptingTrace, adaptingFloor, true, kMinDbm, kMaxDbm);

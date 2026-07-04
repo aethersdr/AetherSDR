@@ -271,6 +271,12 @@ private:
     // QEvent::Leave so the fade-after-exit timer can be observed. Unlike drag,
     // no button is pressed, matching a real hover.
     QJsonObject doHover(const QString& target, const QString& action) const;
+    // scrollTo <target> (alias ensureVisible): scroll the nearest QScrollArea
+    // ancestor so the target widget sits in its viewport. Widgets parked below
+    // the fold of a scroll area (e.g. the Aetherial strip's waveform panel)
+    // receive no paint events until scrolled into view, so a driver must be
+    // able to bring them on screen before measuring or grabbing them.
+    QJsonObject doScrollTo(const QString& target) const;
     // showMenu <target>: pop a QToolButton/QPushButton drop-down menu, posted
     // onto the GUI event loop with the owning window raised — showing the native
     // popup from inside the socket-read callback re-enters Cocoa and segfaults on

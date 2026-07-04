@@ -17,6 +17,7 @@ class QSlider;
 class QLabel;
 class QCheckBox;
 class QDoubleSpinBox;
+class QScrollArea;
 
 namespace AetherSDR {
 
@@ -277,6 +278,7 @@ private:
 
     // Display sub-panel
     QWidget*     m_displayPanel{nullptr};
+    QScrollArea* m_displayScroll{nullptr};
     bool         m_displayPanelVisible{false};
     QSlider*     m_avgSlider{nullptr};
     QLabel*      m_avgLabel{nullptr};

@@ -9,14 +9,14 @@ class QSlider;
 namespace AetherSDR {
 
 class AudioEngine;
-class StripWaveform;
+class WaveformWidget;
 
-// "Waveform CE-SSB" panel — small strip-row tile that embeds a copy
-// of the WaveformWidget (forked into StripWaveform so we can iterate
-// on it without disturbing the floating Waveform applet).  Defaults
-// to Envelope view since CE-SSB is fundamentally about envelope
-// behaviour; a single toggle button on the right cycles between
-// Scope / Envelope / History modes.
+// "Waveform CE-SSB" panel — small strip-row tile that embeds a
+// WaveformWidget in its Strip profile (30 s window ceiling, antialiased
+// stroke; formerly the StripWaveform fork).  Defaults to Envelope view
+// since CE-SSB is fundamentally about envelope behaviour; a single
+// toggle button on the right cycles between Scope / Envelope / History
+// modes.
 class StripWaveformPanel : public QWidget {
     Q_OBJECT
 
@@ -43,7 +43,7 @@ private:
     AudioEngine*    m_audio{nullptr};
     Side            m_side{Side::Tx};
     QWidget*        m_titleBar{nullptr};   // EditorFramelessTitleBar*
-    StripWaveform*  m_waveform{nullptr};
+    WaveformWidget* m_waveform{nullptr};
     QPushButton*    m_modeBtn{nullptr};
     QSlider*        m_windowSlider{nullptr};
     QLabel*         m_windowLbl{nullptr};

@@ -205,10 +205,16 @@ public:
     bool    extPresent()   const { return m_extPresent; }
     bool    gpsdoPresent() const { return m_gpsdoPresent; }
 
-    // Returns true for FLEX-8000 class (8400, 8600) and Aurora, which have GPS hardware.
+    // True when the radio delivers GPS data: FLEX-8000 class (8400, 8600) and
+    // Aurora by model, or any radio whose "gps" status object has arrived — a
+    // 6000-series with the optional GPSDO reports the same object (and sends
+    // no gpsdo_present oscillator flag, so presence is only detectable from
+    // the data itself).
     bool hasGpsHardware() const {
         return m_model.contains("8400") || m_model.contains("8600")
-               || m_model.startsWith("AU-");
+               || m_model.startsWith("AU-")
+               || (!m_gpsStatus.isEmpty()
+                   && m_gpsStatus != QLatin1String("Not Present"));
     }
     bool    tcxoPresent()  const { return m_tcxoPresent; }
     bool    binauralRx()   const { return m_binauralRx; }
