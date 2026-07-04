@@ -3853,10 +3853,34 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     }
 
     // Page 3: Bit cable
+    // Master-detail sub-view (Bit 0-7 list + one detail form), mirroring the
+    // outer cable-list/stack pattern above — a flat 8-row grid can't fit
+    // PTT-dependent/PTT-delay/TX-delay/freq-range/antenna-slice fields
+    // without becoming unreadably cramped at this panel's width (#3607).
     QWidget* bitPage;
     QLineEdit* bitNameEdit;
     QCheckBox* bitEnabledCheck;
     QLabel*    bitStatusLabel;
+    QListWidget* bitIndexList;
+    struct BitWidgets {
+        QCheckBox* enabled{nullptr};
+        QComboBox* source{nullptr};
+        QComboBox* sourceDetail{nullptr};
+        QLabel*    sourceDetailLabel{nullptr};
+        QComboBox* output{nullptr};
+        QLineEdit* band{nullptr};
+        QLabel*    bandLabel{nullptr};
+        QLineEdit* lowFreq{nullptr};
+        QLabel*    lowFreqLabel{nullptr};
+        QLineEdit* highFreq{nullptr};
+        QLabel*    highFreqLabel{nullptr};
+        QComboBox* polarity{nullptr};
+        QCheckBox* pttDependent{nullptr};
+        QSpinBox*  pttDelay{nullptr};
+        QSpinBox*  txDelay{nullptr};
+    };
+    BitWidgets bitWidgets;
+    auto currentBit = std::make_shared<int>(0);
     {
         bitPage = new QWidget;
         auto* vbox = new QVBoxLayout(bitPage);
@@ -3879,88 +3903,166 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         hg->addWidget(bitStatusLabel, 2, 1);
         vbox->addWidget(headerGroup);
 
-        // 8-row bit grid
-        auto* bitGroup = new QGroupBox("Bit Configuration (0-7)");
-        bitGroup->setStyleSheet(kGroupStyle);
-        auto* bitGrid = new QGridLayout(bitGroup);
-        bitGrid->setSpacing(2);
+        auto* bitSplit = new QHBoxLayout;
 
-        // Header row
-        int col = 0;
-        for (const auto& h : {"Bit", "En", "Source", "Output", "Polarity", "Band"}) {
-            auto* lbl = new QLabel(h);
-            AetherSDR::ThemeManager::instance().applyStyleSheet(lbl, "QLabel { color: {{color.text.secondary}}; font-size: 10px; font-weight: bold; }");
-            lbl->setAlignment(Qt::AlignCenter);
-            bitGrid->addWidget(lbl, 0, col++);
-        }
+        auto* bitListGroup = new QGroupBox("Bits");
+        bitListGroup->setStyleSheet(kGroupStyle);
+        bitListGroup->setFixedWidth(90);
+        auto* bitListVbox = new QVBoxLayout(bitListGroup);
+        bitIndexList = new QListWidget;
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bitIndexList,
+            "QListWidget { background: {{color.background.0}}; color: {{color.text.primary}}; border: 1px solid {{color.background.1}}; "
+            "font-size: 11px; }"
+            "QListWidget::item { padding: 4px; }"
+            "QListWidget::item:selected { background: {{color.accent}}; color: {{color.background.0}}; }");
+        for (int b = 0; b < 8; ++b)
+            bitIndexList->addItem(QString("Bit %1").arg(b));
+        bitListVbox->addWidget(bitIndexList);
+        bitSplit->addWidget(bitListGroup);
 
-        for (int b = 0; b < 8; ++b) {
-            int row = b + 1;
-            auto* bitLabel = new QLabel(QString::number(b));
-            bitLabel->setAlignment(Qt::AlignCenter);
-            AetherSDR::ThemeManager::instance().applyStyleSheet(bitLabel, "QLabel { color: {{color.text.primary}}; font-size: 10px; }");
-            bitGrid->addWidget(bitLabel, row, 0);
+        auto* bitDetailGroup = new QGroupBox("Bit Settings");
+        bitDetailGroup->setStyleSheet(kGroupStyle);
+        auto* bd = new QGridLayout(bitDetailGroup);
+        bd->setSpacing(6);
 
-            auto* enCheck = new QCheckBox;
-            bitGrid->addWidget(enCheck, row, 1, Qt::AlignCenter);
+        int row = 0;
+        auto addRow = [&](const QString& label, QWidget* w) -> QLabel* {
+            auto* lbl = new QLabel(label);
+            bd->addWidget(lbl, row, 0);
+            bd->addWidget(w, row, 1);
+            ++row;
+            return lbl;
+        };
 
-            auto* srcCombo = new QComboBox;
-            srcCombo->addItems({"None", "Active Slice", "TX Slice"});
-            srcCombo->setStyleSheet(kCombo + "QComboBox { font-size: 9px; }");
-            srcCombo->setFixedWidth(90);
-            bitGrid->addWidget(srcCombo, row, 2);
+        bitWidgets.enabled = new QCheckBox;
+        addRow("Enabled:", bitWidgets.enabled);
 
-            auto* outCombo = new QComboBox;
-            outCombo->addItems({"band", "freq_range"});
-            outCombo->setStyleSheet(kCombo + "QComboBox { font-size: 9px; }");
-            outCombo->setFixedWidth(80);
-            bitGrid->addWidget(outCombo, row, 3);
+        bitWidgets.source = makeSourceCombo();
+        addRow("Source:", bitWidgets.source);
 
-            auto* polCombo = new QComboBox;
-            polCombo->addItems({"High", "Low"});
-            polCombo->setStyleSheet(kCombo + "QComboBox { font-size: 9px; }");
-            polCombo->setFixedWidth(50);
-            bitGrid->addWidget(polCombo, row, 4);
+        bitWidgets.sourceDetail = new QComboBox;
+        bitWidgets.sourceDetail->setEditable(true);
+        bitWidgets.sourceDetail->setStyleSheet(kCombo);
+        bitWidgets.sourceDetailLabel = addRow("Antenna/Slice:", bitWidgets.sourceDetail);
 
-            auto* bandEdit = new QLineEdit;
-            bandEdit->setPlaceholderText("e.g. 20");
-            bandEdit->setFixedWidth(50);
-            bandEdit->setStyleSheet(kEdit + "QLineEdit { font-size: 9px; }");
-            bitGrid->addWidget(bandEdit, row, 5);
+        bitWidgets.output = new QComboBox;
+        bitWidgets.output->addItems({"band", "freq_range"});
+        bitWidgets.output->setStyleSheet(kCombo);
+        addRow("Output:", bitWidgets.output);
 
-            // Wire signals to send commands
-            connect(enCheck, &QCheckBox::toggled, this, [cableModel, cableList, b](bool on) {
-                auto* item = cableList->currentItem();
-                if (!item) return;
-                cableModel->sendSetBit(item->data(Qt::UserRole).toString(), b,
-                                       "enable", on ? "1" : "0");
-            });
-            connect(outCombo, &QComboBox::currentTextChanged, this,
-                    [cableModel, cableList, b](const QString& text) {
-                auto* item = cableList->currentItem();
-                if (!item) return;
-                cableModel->sendSetBit(item->data(Qt::UserRole).toString(), b, "output", text);
-            });
-            connect(polCombo, &QComboBox::currentTextChanged, this,
-                    [cableModel, cableList, b](const QString& text) {
-                auto* item = cableList->currentItem();
-                if (!item) return;
-                cableModel->sendSetBit(item->data(Qt::UserRole).toString(), b,
-                                       "polarity", text == "High" ? "active_high" : "active_low");
-            });
-            connect(bandEdit, &QLineEdit::editingFinished, this,
-                    [cableModel, cableList, b, bandEdit]() {
-                auto* item = cableList->currentItem();
-                if (!item) return;
-                cableModel->sendSetBit(item->data(Qt::UserRole).toString(), b,
-                                       "band", bandEdit->text());
-            });
-        }
+        bitWidgets.band = new QLineEdit;
+        bitWidgets.band->setPlaceholderText("e.g. 20");
+        bitWidgets.band->setStyleSheet(kEdit);
+        bitWidgets.bandLabel = addRow("Band:", bitWidgets.band);
 
-        vbox->addWidget(bitGroup);
+        bitWidgets.lowFreq = new QLineEdit;
+        bitWidgets.lowFreq->setPlaceholderText("e.g. 0.100");
+        bitWidgets.lowFreq->setStyleSheet(kEdit);
+        bitWidgets.lowFreqLabel = addRow("Low Freq (MHz):", bitWidgets.lowFreq);
+
+        bitWidgets.highFreq = new QLineEdit;
+        bitWidgets.highFreq->setPlaceholderText("e.g. 54.000");
+        bitWidgets.highFreq->setStyleSheet(kEdit);
+        bitWidgets.highFreqLabel = addRow("High Freq (MHz):", bitWidgets.highFreq);
+
+        bitWidgets.polarity = new QComboBox;
+        bitWidgets.polarity->addItems({"High", "Low"});
+        bitWidgets.polarity->setStyleSheet(kCombo);
+        addRow("Polarity:", bitWidgets.polarity);
+
+        bitWidgets.pttDependent = new QCheckBox;
+        addRow("PTT Dependent:", bitWidgets.pttDependent);
+
+        bitWidgets.pttDelay = new QSpinBox;
+        bitWidgets.pttDelay->setRange(0, 10000);
+        bitWidgets.pttDelay->setSingleStep(5);
+        bitWidgets.pttDelay->setSuffix(" ms");
+        bitWidgets.pttDelay->setStyleSheet(kSpin);
+        addRow("PTT Delay:", bitWidgets.pttDelay);
+
+        bitWidgets.txDelay = new QSpinBox;
+        bitWidgets.txDelay->setRange(0, 10000);
+        bitWidgets.txDelay->setSingleStep(5);
+        bitWidgets.txDelay->setSuffix(" ms");
+        bitWidgets.txDelay->setStyleSheet(kSpin);
+        addRow("TX Delay:", bitWidgets.txDelay);
+
+        bd->setRowStretch(row, 1);
+        bitSplit->addWidget(bitDetailGroup, 1);
+
+        vbox->addLayout(bitSplit);
         vbox->addStretch();
         stack->addWidget(bitPage);  // index 3
     }
+
+    // Bit detail refresh helpers — output mode (band vs freq-range) and
+    // source (antenna/slice sub-selector) each drive which sibling fields
+    // are visible; kept as named lambdas so both the interactive wiring
+    // below and the model-driven repopulation in showCableProps can call
+    // the exact same logic.
+    auto refreshBitOutputVisibility = [bitWidgets]() {
+        const bool isFreqRange = (bitWidgets.output->currentText() == "freq_range");
+        bitWidgets.band->setVisible(!isFreqRange);
+        bitWidgets.bandLabel->setVisible(!isFreqRange);
+        bitWidgets.lowFreq->setVisible(isFreqRange);
+        bitWidgets.lowFreqLabel->setVisible(isFreqRange);
+        bitWidgets.highFreq->setVisible(isFreqRange);
+        bitWidgets.highFreqLabel->setVisible(isFreqRange);
+    };
+    auto refreshBitSourceDetail = [bitWidgets, sourceToProto, this]() {
+        const QString proto = sourceToProto(bitWidgets.source->currentText());
+        const bool needsDetail = (proto == "tx_ant" || proto == "rx_ant" || proto == "ordinal_slice");
+        bitWidgets.sourceDetail->setVisible(needsDetail);
+        bitWidgets.sourceDetailLabel->setVisible(needsDetail);
+        if (!needsDetail) return;
+        QSignalBlocker blocker(bitWidgets.sourceDetail);
+        bitWidgets.sourceDetail->clear();
+        if (proto == "ordinal_slice") {
+            for (int i = 0; i < m_model->maxSlices(); ++i)
+                bitWidgets.sourceDetail->addItem(QString::number(i));
+        } else {
+            bitWidgets.sourceDetail->addItems(m_model->knownAntennaTokens());
+        }
+    };
+    refreshBitOutputVisibility();
+    refreshBitSourceDetail();
+
+    auto refreshBitDetail = [=]() {
+        auto* item = cableList->currentItem();
+        if (!item) return;
+        const QString sn = item->data(Qt::UserRole).toString();
+        if (!cableModel->cables().contains(sn)) return;
+        const auto& cable = cableModel->cables()[sn];
+        if (cable.type != "bit") return;
+        const int b = qBound(0, *currentBit, 7);
+        const auto& bit = cable.bits[b];
+
+        QSignalBlocker blk1(bitWidgets.enabled), blk2(bitWidgets.source),
+                       blk3(bitWidgets.sourceDetail), blk4(bitWidgets.output),
+                       blk5(bitWidgets.band), blk6(bitWidgets.lowFreq),
+                       blk7(bitWidgets.highFreq), blk8(bitWidgets.polarity),
+                       blk9(bitWidgets.pttDependent), blk10(bitWidgets.pttDelay),
+                       blk11(bitWidgets.txDelay);
+
+        bitWidgets.enabled->setChecked(bit.enabled);
+        bitWidgets.source->setCurrentIndex(protoToSource(bit.source));
+        bitWidgets.output->setCurrentText(bit.output.isEmpty() ? "band" : bit.output);
+        bitWidgets.band->setText(bit.band);
+        bitWidgets.lowFreq->setText(QString::number(bit.lowFreqMhz, 'f', 3));
+        bitWidgets.highFreq->setText(QString::number(bit.highFreqMhz, 'f', 3));
+        bitWidgets.polarity->setCurrentIndex(bit.activeHigh ? 0 : 1);
+        bitWidgets.pttDependent->setChecked(bit.pttDependent);
+        bitWidgets.pttDelay->setValue(bit.pttDelayMs);
+        bitWidgets.txDelay->setValue(bit.txDelayMs);
+
+        refreshBitOutputVisibility();
+        refreshBitSourceDetail();
+        QString detailValue;
+        if (bit.source == "tx_ant")           detailValue = bit.sourceTxAnt;
+        else if (bit.source == "rx_ant")      detailValue = bit.sourceRxAnt;
+        else if (bit.source == "ordinal_slice") detailValue = bit.sourceSlice;
+        bitWidgets.sourceDetail->setCurrentText(detailValue);
+    };
 
     // Page 4: Passthrough cable
     QWidget* ptPage;
@@ -4069,10 +4171,11 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
             bitStatusLabel->setStyleSheet(cable.present
                 ? "QLabel { color: #30d050; font-size: 11px; }"
                 : "QLabel { color: #808080; font-size: 11px; }");
-            // Update bit grid rows
-            auto* bitGroup = bitPage->findChild<QGroupBox*>("Bit Configuration (0-7)");
-            // Bit grid cells are updated by index in the grid layout — skip for now,
-            // per-bit UI refresh would iterate the grid children
+            if (bitIndexList->currentRow() < 0) {
+                QSignalBlocker blk(bitIndexList);
+                bitIndexList->setCurrentRow(0);
+            }
+            refreshBitDetail();
         } else if (t == "passthrough") {
             stack->setCurrentIndex(4);
             QSignalBlocker b1(ptNameEdit), b2(ptEnabledCheck);
@@ -4156,7 +4259,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         sendBcdProp("source", sourceToProto(text));
     });
 
-    // Bit cable header
+    // Bit cable header (whole-cable name/enable, cableModel->sendSet)
     auto sendBitProp = [cableModel, cableList](const QString& key, const QString& val) {
         auto* item = cableList->currentItem();
         if (!item) return;
@@ -4167,6 +4270,64 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     });
     connect(bitEnabledCheck, &QCheckBox::toggled, this, [sendBitProp](bool on) {
         sendBitProp("enable", on ? "1" : "0");
+    });
+
+    // Bit detail fields (per-bit, cableModel->sendSetBit against *currentBit)
+    auto sendBitFieldProp = [cableModel, cableList, currentBit](const QString& key, const QString& val) {
+        auto* item = cableList->currentItem();
+        if (!item) return;
+        cableModel->sendSetBit(item->data(Qt::UserRole).toString(), *currentBit, key, val);
+    };
+    connect(bitWidgets.enabled, &QCheckBox::toggled, this, [sendBitFieldProp](bool on) {
+        sendBitFieldProp("enable", on ? "1" : "0");
+    });
+    connect(bitWidgets.source, &QComboBox::currentTextChanged, this,
+            [sendBitFieldProp, sourceToProto, refreshBitSourceDetail](const QString& text) {
+        sendBitFieldProp("source", sourceToProto(text));
+        refreshBitSourceDetail();
+    });
+    connect(bitWidgets.sourceDetail, &QComboBox::currentTextChanged, this,
+            [sendBitFieldProp, sourceToProto, bitWidgets](const QString& text) {
+        if (text.isEmpty()) return;
+        const QString proto = sourceToProto(bitWidgets.source->currentText());
+        if (proto == "tx_ant") sendBitFieldProp("source_tx_ant", text);
+        else if (proto == "rx_ant") sendBitFieldProp("source_rx_ant", text);
+        else if (proto == "ordinal_slice") sendBitFieldProp("source_slice", text);
+    });
+    connect(bitWidgets.output, &QComboBox::currentTextChanged, this,
+            [sendBitFieldProp, refreshBitOutputVisibility](const QString& text) {
+        sendBitFieldProp("output", text);
+        refreshBitOutputVisibility();
+    });
+    connect(bitWidgets.band, &QLineEdit::editingFinished, this, [sendBitFieldProp, bitWidgets]() {
+        sendBitFieldProp("band", bitWidgets.band->text());
+    });
+    connect(bitWidgets.lowFreq, &QLineEdit::editingFinished, this, [sendBitFieldProp, bitWidgets]() {
+        sendBitFieldProp("low_freq", QString::number(bitWidgets.lowFreq->text().toDouble(), 'f', 3));
+    });
+    connect(bitWidgets.highFreq, &QLineEdit::editingFinished, this, [sendBitFieldProp, bitWidgets]() {
+        sendBitFieldProp("high_freq", QString::number(bitWidgets.highFreq->text().toDouble(), 'f', 3));
+    });
+    connect(bitWidgets.polarity, &QComboBox::currentTextChanged, this,
+            [sendBitFieldProp](const QString& text) {
+        sendBitFieldProp("polarity", text == "High" ? "active_high" : "active_low");
+    });
+    connect(bitWidgets.pttDependent, &QCheckBox::toggled, this, [sendBitFieldProp](bool on) {
+        sendBitFieldProp("ptt_dependent", on ? "1" : "0");
+    });
+    connect(bitWidgets.pttDelay, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [sendBitFieldProp](int val) {
+        sendBitFieldProp("ptt_delay", QString::number(val));
+    });
+    connect(bitWidgets.txDelay, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            [sendBitFieldProp](int val) {
+        sendBitFieldProp("tx_delay", QString::number(val));
+    });
+    connect(bitIndexList, &QListWidget::currentRowChanged, this,
+            [currentBit, refreshBitDetail](int row) {
+        if (row < 0) return;
+        *currentBit = row;
+        refreshBitDetail();
     });
 
     // Passthrough
