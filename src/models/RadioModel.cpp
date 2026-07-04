@@ -420,19 +420,25 @@ RadioModel::RadioModel(QObject* parent)
                 m_panStream->notifyDaxCreateFailed(ch);
                 return;
             }
-            // One-shot #1439 client-registration re-assert, gated on the
-            // create SUCCEEDING: if a slice carries this channel, nudge
-            // dax_clients once per confirmed stream. Modern firmware
-            // auto-binds stream↔slice at create (state-machines.md §7.2);
-            // this covers older firmware. Success-gating keeps the failure
-            // retry loop (notifyDaxCreateFailed, 2 s cadence) from
-            // re-asserting a live binding every cycle — the radio answers
-            // same-value re-asserts with a transient unbind/rebind pair
-            // (§7.4), which is noise we never want to emit repeatedly.
-            // Tied to a command we initiated, never to a status echo, so it
-            // cannot oscillate (#4009).
+            // One-shot #1439 client-registration re-assert — LEGACY FALLBACK
+            // ONLY. Gated on (a) the create succeeding and (b) the radio NOT
+            // having auto-bound the stream to the slice already: statuses
+            // precede this reply (state-machines.md §1.3), so by now the
+            // registration status has told us (slice=<letter>) whether modern
+            // firmware married them. When it did — the captured behavior on
+            // ≥4.2.18 — re-asserting would be a same-value `slice set dax=`,
+            // which the radio answers with the transient dax=0/dax=<ch> pair
+            // AND a real stream unbind/rebind (an audio blip, §7.4). Tied to
+            // a command we initiated, never a status echo: cannot oscillate.
+            if (m_daxRxBoundObserved.value(ch, false)) {
+                qCDebug(lcDax) << "RadioModel: dax_rx ch" << ch
+                               << "auto-bound by firmware — #1439 nudge skipped";
+                return;
+            }
             for (auto* s : slices()) {
                 if (s && s->daxChannel() == ch) {
+                    qCInfo(lcDax) << "RadioModel: dax_rx ch" << ch
+                                  << "not auto-bound — sending #1439 nudge";
                     sendCommand(QString("slice set %1 dax=%2").arg(s->sliceId()).arg(ch));
                     break;
                 }
@@ -2982,6 +2988,7 @@ void RadioModel::onDisconnected()
     // ownership table without emitting removals (#3305). Consumers re-acquire
     // on their reconnect re-arm paths.
     m_panStream->resetDaxChannelsForDisconnect();
+    m_daxRxBoundObserved.clear();
     emit otherClientsChanged(0, {});
     emit connectionStateChanged(false);
     m_forcedDisconnectInProgress = false;
@@ -4478,8 +4485,17 @@ void RadioModel::handleDaxRxStreamRegistry(const QString& object,
         return;
     }
     const int ch = kvs.value(QStringLiteral("dax_channel")).toInt();
-    if (ch >= 1 && ch <= 4)
+    if (ch >= 1 && ch <= 4) {
+        // Record whether the radio already married stream↔slice (slice=<letter>
+        // non-empty). Modern firmware auto-binds at create (captured: the
+        // registration status carries slice=A immediately); when it did, the
+        // #1439 nudge is skipped — a same-value `slice set dax=` re-assert is
+        // exactly the transient-pair + stream unbind/rebind trigger
+        // (state-machines.md §7.4) and would blip audio once per create.
+        m_daxRxBoundObserved[ch] =
+            !kvs.value(QStringLiteral("slice")).trimmed().isEmpty();
         m_panStream->registerDaxStream(stream.streamId, ch);
+    }
 }
 
 void RadioModel::onStatusReceived(const QString& object,
