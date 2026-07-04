@@ -1103,6 +1103,13 @@ void MainWindow::stopDax()
 void MainWindow::wireDaxSlice(SliceModel* slice)
 {
     if (!slice) return;
+    // Seed the tracker with the slice's current channel before connecting the
+    // signal. Without this, m_daxSliceLastCh starts at 0 even when the slice
+    // already has dax=<ch> from the radio profile. The first ensureDaxForTci()
+    // re-assert then triggers the transient dax=0/dax=<ch> broadcast, and the
+    // dax=<ch> recovery sees oldCh=0 rather than oldCh==newCh, firing one
+    // spurious re-assert before the storm guard (below) stabilises things.
+    m_daxSliceLastCh[slice->sliceId()] = slice->daxChannel();
     m_daxSliceConns.append(connect(slice, &SliceModel::daxChannelChanged,
                                    this, [this, slice](int newCh) {
         if (!m_daxBridge) return;  // bridge torn down — ignore late signals
@@ -1123,7 +1130,16 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
     const int sliceId = slice->sliceId();
     const int oldCh = m_daxSliceLastCh.value(sliceId, 0);
     if (oldCh == newCh) return;
-    m_daxSliceLastCh[sliceId] = newCh;
+    // Don't record the transient dax=0 the radio emits after every
+    // `slice set dax=<ch>` (all 8000-series radios). Updating the tracker to 0
+    // corrupts oldCh so the subsequent dax=<ch> recovery looks like a fresh
+    // 0→N assignment, re-triggers the re-assert below, and creates a
+    // self-sustaining storm. Leaving the tracker at the last real channel means
+    // the recovery sees oldCh==newCh and early-returns with no re-assert.
+    // This is the loop-prevention mechanism for the ensureDaxForTci() re-assert
+    // path; the stream create/remove path is handled by scheduleDaxRxStreamRemoval.
+    if (newCh != 0)
+        m_daxSliceLastCh[sliceId] = newCh;
 
     // 0 -> 1..4 (or 1..4 -> different 1..4): ensure the new channel has a
     // radio-registered DAX RX stream. The stream status echo will register the
@@ -1136,14 +1152,8 @@ void MainWindow::onDaxChannelChanged(SliceModel* slice, int newCh)
                           << newCh << "(slice" << sliceId << ", #2895)";
         }
         // Re-assert slice -> DAX mapping so the radio registers our stream as a
-        // client. Without this dax_clients stays 0 and the radio sends silence
-        // (the #1439 workaround, mirrored from TciServer::ensureDaxForTci).
-        // This is sent unconditionally (even when newCh is unchanged), so on the
-        // dax=<ch> rebroadcast edge it re-emits a same-value `slice set`. That
-        // does NOT re-enter this reconciler only because SliceModel's status
-        // path drops same-value echoes (`if (m_daxChannel != ch)` in
-        // SliceModel::applyStatus) — that equality guard is load-bearing for the
-        // #3626 storm fix; relaxing it would reopen the loop via this edge.
+        // client. Without this dax_clients stays 0 and the radio sends silence.
+        // (#1439, mirrored from TciServer::ensureDaxForTci)
         m_radioModel.sendCommand(
             QString("slice set %1 dax=%2").arg(sliceId).arg(newCh));
     }

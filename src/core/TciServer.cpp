@@ -2030,15 +2030,24 @@ void TciServer::ensureDaxForTci()
     // Re-assert slice → DAX channel mapping so the radio registers our
     // stream as a client.  Without this, dax_clients stays 0 and the
     // radio sends silence instead of demodulated audio. (#1439)
+    // Skip borrowed channels: the DAX bridge already owns those streams and
+    // has dax_clients >= 1. Re-asserting on a live binding triggers the radio's
+    // transient dax=0/dax=<ch> broadcast, which — when the DAX bridge is also
+    // active — drives onDaxChannelChanged and can seed a re-assert storm.
     for (auto* s : m_model->slices()) {
         int ch = s->daxChannel();
-        if (ch > 0 && channelsNeeded.contains(ch)) {
+        if (ch > 0 && channelsNeeded.contains(ch)
+                && !m_tciDaxBorrowedChannels.contains(ch)) {
             m_model->sendCommand(QString("slice set %1 dax=%2")
                 .arg(s->sliceId()).arg(ch));
             qCDebug(lcCat) << "TCI: re-asserting DAX channel" << ch
                            << "on slice" << s->sliceId();
             qCInfo(lcCat) << "TCI: re-asserting dax=" << ch
                           << "on slice" << s->sliceId();
+        } else if (ch > 0 && channelsNeeded.contains(ch)) {
+            qCDebug(lcCat) << "TCI: skipping re-assert for borrowed DAX channel" << ch
+                           << "on slice" << s->sliceId()
+                           << "(bridge already owns the client slot)";
         }
     }
 }
