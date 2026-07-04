@@ -2470,6 +2470,7 @@ target_link_libraries(flex_control_dialog_size_test PRIVATE
     Qt6::Core Qt6::Widgets Qt6::Test
 )
 set_target_properties(flex_control_dialog_size_test PROPERTIES AUTOMOC ON)
+add_test(NAME flex_control_dialog_size_test COMMAND flex_control_dialog_size_test)
 
 add_executable(pan_layout_dialog_size_test
     tests/pan_layout_dialog_size_test.cpp
@@ -2487,6 +2488,7 @@ target_link_libraries(pan_layout_dialog_size_test PRIVATE
     Qt6::Core Qt6::Widgets Qt6::Test
 )
 set_target_properties(pan_layout_dialog_size_test PROPERTIES AUTOMOC ON)
+add_test(NAME pan_layout_dialog_size_test COMMAND pan_layout_dialog_size_test)
 
 add_executable(device_diagnostics_test
     tests/device_diagnostics_test.cpp
