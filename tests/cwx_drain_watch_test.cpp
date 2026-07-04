@@ -188,6 +188,34 @@ int main(int argc, char** argv)
                "queueEmpty count=" + std::to_string(emptySpy.count()));
     }
 
+    // ── Cleanup: saveMacro strips client-only +/- before the shared radio store ─
+    {
+        CwxModel m;
+        QSignalSpy cmdSpy(&m, &CwxModel::commandReady);
+        m.saveMacro(0, "+CQ TEST");   // F1, raw text carries a speed modifier
+        report("saveMacro keeps the raw +/- text client-side (for our expansion)",
+               m.macro(0) == QStringLiteral("+CQ TEST"),
+               "macro(0)=" + m.macro(0).toStdString());
+        // radio-side command must have the '+' stripped and space -> 0x7f
+        const QString expected =
+            QStringLiteral("cwx macro save 1 \"CQ%1TEST\"").arg(QChar(0x7f));
+        const QString got = cmdSpy.isEmpty() ? QString() : cmdSpy.last().at(0).toString();
+        report("saveMacro strips +/- from the shared `cwx macro save` payload",
+               got == expected,
+               "got=" + got.toStdString());
+    }
+
+    // ── Cleanup: sendMacro falls back to radio-side expansion when unsynced ────
+    {
+        CwxModel m;
+        QSignalSpy cmdSpy(&m, &CwxModel::commandReady);
+        m.sendMacro(1);   // F1 not yet synced (m_macros[0] empty) — must not no-op
+        const QString got = cmdSpy.isEmpty() ? QString() : cmdSpy.last().at(0).toString();
+        report("sendMacro (unsynced) falls back to `cwx macro send N`, not silence",
+               got == QStringLiteral("cwx macro send 1"),
+               "got=" + got.toStdString());
+    }
+
     std::printf("\n%s\n", g_failed == 0 ? "ALL PASSED" : "FAILURES PRESENT");
     return g_failed == 0 ? 0 : 1;
 }

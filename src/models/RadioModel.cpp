@@ -736,7 +736,8 @@ RadioModel::RadioModel(QObject* parent)
     // Final cwx send of each macro/text block goes via replyCommandReady so we
     // can capture the radio_index from the reply.  CwxModel::handleSendReply
     // stores it; applyStatus fires queueEmpty() when cwx sent= reaches it.
-    // This replaces the broken cwx queue= path — firmware never sends it. (#3949)
+    // This replaces the broken cwx queue= path — firmware never sends it
+    // (observed on FLEX-6500 fw 4.2.20.41343; the 8600 target runs 4.2.18). (#3949)
     connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch, int nChars){
         m_cwxActive = true;
         // Arm the drain-release latch. Unlike m_cwxActive (which the interlock

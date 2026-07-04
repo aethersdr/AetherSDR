@@ -371,10 +371,14 @@ void CwxPanel::setModel(CwxModel* model)
             m_speedStepSpin->setValue(step);
         }
     });
-    // Sync step spin to model's current value (model may be set after construction)
+    // The persisted speed step was loaded into the spin (readSpeedStep) in
+    // buildSetupView, before the model was attached — so the spin, not the
+    // model's default, holds the saved value. Push it INTO the model so the
+    // persisted step drives +/- expansion. The old direction (model → spin)
+    // overwrote the spin with the model default and discarded the saved value
+    // on every launch. (#3949 review)
     if (m_speedStepSpin && m_model->speedStep() != m_speedStepSpin->value()) {
-        QSignalBlocker b(m_speedStepSpin);
-        m_speedStepSpin->setValue(m_model->speedStep());
+        m_model->setSpeedStep(m_speedStepSpin->value());
     }
     connect(m_model, &CwxModel::qskChanged, this, [this](bool on) {
         if (m_qskBtn) {
@@ -452,6 +456,7 @@ void CwxPanel::buildSetupView()
 
     topRow->addWidget(new QLabel("Step:"));
     m_speedStepSpin = new QSpinBox;
+    m_speedStepSpin->setObjectName("cwxSpeedStepSpin");  // addressable via automation bridge
     m_speedStepSpin->setRange(1, 20);
     m_speedStepSpin->setValue(readSpeedStep());
     m_speedStepSpin->setSuffix(" wpm");

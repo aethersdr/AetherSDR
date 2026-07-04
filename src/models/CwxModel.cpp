@@ -5,6 +5,13 @@
 
 namespace AetherSDR {
 
+namespace {
+// CWX keyer speed is clamped to the FlexLib-supported 5–100 wpm range at every
+// entry point (user setSpeed and +/- modifier expansion) — one definition so
+// the two clamp sites can't drift. (#3949 review)
+inline int clampWpm(int wpm) { return qBound(5, wpm, 100); }
+}
+
 CwxModel::CwxModel(QObject* parent)
     : QObject(parent)
 {}
@@ -58,7 +65,7 @@ CwxModel::expandSpeedModifiers(const QString& text, int baseWpm, int step)
         const bool hasModifier = (plus > 0 || minus > 0);
         const int  delta   = (plus - minus) * step;
         const int  wordWpm = hasModifier
-                           ? qBound(5, baseWpm + delta, 100)
+                           ? clampWpm(baseWpm + delta)
                            : baseWpm;
 
         if (wordWpm != accumWpm) {
@@ -150,7 +157,18 @@ void CwxModel::sendMacro(int idx)
 {
     if (idx < 1 || idx > 12) return;
     const QString text = m_macros[idx - 1];
-    if (text.isEmpty()) return;
+    if (text.isEmpty()) {
+        // Local copy not yet synced (the macroN= status is still pending in the
+        // first seconds after connect) — fall back to radio-side expansion so an
+        // early F-key press still transmits instead of silently keying nothing.
+        // The radio is authoritative for stored macros (Principle II).
+        // Caveat: this fire-and-forget path can't arm the reply-driven drain
+        // watch (no client-side char count), so a macro keyed before sync
+        // completes relies on the radio's own break-in for TX release. It's a
+        // narrow first-few-seconds window; keying something beats keying nothing.
+        emit commandReady(QString("cwx macro send %1").arg(idx));
+        return;
+    }
     // Expand speed modifiers client-side via cwx send blocks rather than
     // cwx macro send N.  When no modifiers are present the result is a
     // single cwx send identical in effect to the radio-side expansion, but
@@ -162,8 +180,19 @@ void CwxModel::sendMacro(int idx)
 void CwxModel::saveMacro(int idx, const QString& text)
 {
     if (idx < 0 || idx >= 12) return;
-    m_macros[idx] = text;
-    QString encoded = text;
+    m_macros[idx] = text;   // keep the raw +/- text for our own client-side expansion
+    // Strip the client-only +/- speed-modifier prefixes before writing to the
+    // radio's shared macro store. The +/- syntax is an AetherSDR extension; a
+    // Multi-Flex peer (SmartSDR/Maestro) that plays this stored slot would key a
+    // leading '+' as the AR prosign (CWX.cs HandleSpecialStrings maps " + " ↔
+    // " AR "). Store the plain keyed text so shared slots stay portable.
+    // (Principle VII: sanitise at the boundary where the bytes leave.) The strip
+    // reuses expandSpeedModifiers — its segment text has the modifier prefixes
+    // already removed; joining the segments reconstructs the plain message.
+    QString plain;
+    for (const auto& seg : expandSpeedModifiers(text, m_speed, m_speedStep))
+        plain += seg.text;
+    QString encoded = plain;
     encoded.replace(' ', QChar(0x7f));
     emit commandReady(QString("cwx macro save %1 \"%2\"").arg(idx + 1).arg(encoded));
 }
@@ -242,7 +271,7 @@ void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch, i
 
 void CwxModel::setSpeed(int wpm)
 {
-    wpm = qBound(5, wpm, 100);
+    wpm = clampWpm(wpm);
     if (wpm != m_speed) {
         m_speed = wpm;
         emit commandReady(QString("cwx wpm %1").arg(m_speed));
@@ -335,8 +364,11 @@ void CwxModel::applyStatus(const QMap<QString, QString>& kvs)
                 if (ok1 && ok2) emit erased(start, stop);
             }
         } else if (key == "queue") {
-            // Empty queue= means the radio's CWX buffer has drained.
-            // Signal RadioModel to release MOX (required when sync_cwx=1).
+            // Legacy path: an empty queue= would mean the radio's CWX buffer has
+            // drained. Firmware doesn't actually emit this (confirmed on FLEX-6500
+            // fw 4.2.20.41343 — the reply-radio_index watch exists precisely
+            // because queue= never arrives), so this is a belt-and-suspenders
+            // fallback should a future firmware start sending it. (#3949)
             if (val.isEmpty() || val == "0")
                 emit queueEmpty();
         } else if (key.startsWith("macro") && key.length() > 5) {
