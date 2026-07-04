@@ -1564,6 +1564,29 @@ bool PanadapterStream::daxChannelHeldBy(int channel, DaxConsumer who) const
     return it != m_daxChannelStates.constEnd() && (it->holders & daxHolderBit(who));
 }
 
+QVector<PanadapterStream::DaxChannelSnapshot> PanadapterStream::daxChannelSnapshot() const
+{
+    QMutexLocker lock(&m_streamMutex);
+    QVector<DaxChannelSnapshot> out;
+    out.reserve(m_daxChannelStates.size());
+    for (auto it = m_daxChannelStates.constBegin(); it != m_daxChannelStates.constEnd(); ++it) {
+        DaxChannelSnapshot s;
+        s.channel = it.key();
+        s.streamId = it->streamId;
+        s.createPending = it->createPending;
+        for (DaxConsumer who : {DaxConsumer::Bridge, DaxConsumer::Tci, DaxConsumer::Rade}) {
+            if (it->holders & daxHolderBit(who))
+                s.holders << QString::fromLatin1(daxConsumerName(who));
+        }
+        out.append(s);
+    }
+    std::sort(out.begin(), out.end(),
+              [](const DaxChannelSnapshot& a, const DaxChannelSnapshot& b) {
+        return a.channel < b.channel;
+    });
+    return out;
+}
+
 void PanadapterStream::resetDaxChannelsForDisconnect()
 {
     QMutexLocker lock(&m_streamMutex);

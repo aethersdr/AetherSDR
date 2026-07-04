@@ -146,6 +146,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | | [`get clients`](#get-clients) | Radio client roster + foreign-pan-write forensics (#3977). |
 | | [`get sync`](#get-sync) | Receive-Sync (Auto Assist) state. |
 | | [`get wavestats`](#get-wavestats) | WAVE/strip scope paint-cost counters. |
+| | [`get dax`](#get-dax) | DAX RX channel-ownership table (holders/streams, #3305). |
 | **Connection** | [`connect …`](#connect--disconnect) | list / show / hide / local / ip / wait. |
 | | [`disconnect`](#connect--disconnect) | Normal user disconnect. |
 | **Tuning & slices** | [`tune <mhz>`](#tune) | Set the active slice frequency (VFO; not keying). |
@@ -153,6 +154,7 @@ transmit-gated verbs (refused unless `AETHER_AUTOMATION_ALLOW_TX=1` — see
 | **Display / pans** | [`pan <action>`](#pan) | create / center / close a panadapter. |
 | | [`streams [radio\|resync\|reset]`](#streams) | Radio-side display-stream leak detector. |
 | | [`txwaterfall on\|off`](#txwaterfall) | Toggle "show TX in waterfall". |
+| **DAX / TCI** | [`tci start\|status\|stop`](#tci) | In-process TCI client simulator (WSJT-X-shaped). |
 | **Observability** | [`log <action>`](#log) | Runtime log-category control + ring-buffer tail/subscribe. |
 | | [`mark <text>`](#mark) | Drop a sequenced timeline marker. |
 | | [`audioCapture <action>`](#audiocapture) | Bounded PCM capture for sync diagnostics. |
@@ -431,6 +433,7 @@ connects).
 | `panstats` | `<panIndex>` / `<objectName>` (default: all) | per-panadapter render-cost counters — see [`get panstats`](#get-panstats) |
 | `wavestats` | `—` / scope objectName | waveform-scope paint/append counters — see [`get wavestats`](#get-wavestats) |
 | `clients` | — | connected-client roster, per-pan ownership, foreign dBm-write counters and evictions — see [`get clients`](#get-clients) |
+| `dax` | — | DAX RX channel-ownership table — see [`get dax`](#get-dax) |
 
 Add a trailing **property** name to any single-object form to get just that
 field: `get slice active mode` → `{"value":"LSB"}`.
@@ -961,6 +964,55 @@ toggle — it does **not** key the transmitter.
 
 Accepts `on`/`off` (also `1`/`0`, `true`/`false`, `enable`/`disable`). The radio
 echoes the change asynchronously — re-read with `get transmit showTxInWaterfall`.
+
+### `get dax`
+Read the centralized DAX RX channel-ownership table (#3305): which consumers
+(`bridge` / `tci` / `rade`) hold each channel, the radio-side stream id, and
+whether a `stream create` is in flight — plus each slice's `dax=` assignment.
+This is the assertion surface for DAX/TCI lifecycle tests: storm regressions
+(#4009), co-hold survival across a bridge or TCI teardown (#3363), and
+grace-window stream removal, all without log-grepping.
+
+```json
+→ {"cmd":"get","model":"dax"}
+← {"ok":true,"model":"dax",
+   "channels":[{"channel":1,"streamId":"0x4000008","createPending":false,
+                "holders":["bridge","tci"]}],
+   "slices":[{"sliceId":0,"daxChannel":1}]}
+```
+
+Semantics to assert against: a channel with holders and `streamId=0x0` +
+`createPending=true` is mid-create; a channel with a stream and **no** holders
+is inside the 1.5 s removal grace window (it disappears once the removal
+lands); a channel entry that persists with holders across a consumer teardown
+proves the co-hold path.
+
+### `tci`
+In-process TCI **client** simulator. Connects to this app's own TCI server
+over loopback and speaks the WSJT-X dialect: drain the init burst until
+`ready;`, then send `audio_samplerate:48000;` + `audio_start:0;`, then count
+the binary audio frames the server pushes. Removes the external-WebSocket
+dependency for TCI/DAX lifecycle testing. Requires the TCI server to be
+running (toggle via `invoke tciEnable click` if needed).
+
+```json
+→ {"cmd":"tci","action":"start"}            // optional value = port (default: TciPort setting)
+← {"ok":true,"action":"start","port":40001}
+
+→ {"cmd":"tci","action":"status"}
+← {"ok":true,"running":true,"connected":true,"ready":true,"audioStarted":true,
+   "binaryFrames":412,"binaryBytes":1687552,"textMessages":37,"msSinceLastFrame":18}
+
+→ {"cmd":"tci","action":"stop","value":"abrupt"}   // omit value for graceful audio_stop + close
+← {"ok":true,"action":"stop","abrupt":true,"binaryFrames":412, …}
+```
+
+`stop abrupt` closes the socket without `audio_stop` — the WSJT-X
+watchdog-reconnect shape — so a test can assert the server's debounced DAX
+release and the manager's grace-window `stream remove` (watch with `get dax`).
+`binaryFrames` climbing at a steady rate (~47/s at 48 kHz) is the "audio is
+actually flowing" assertion; `msSinceLastFrame` spiking while `audioStarted`
+is true means the stream went silent.
 
 ### `get sync`
 Read the Receive Sync state used by the spectrum overlay and Auto Assist

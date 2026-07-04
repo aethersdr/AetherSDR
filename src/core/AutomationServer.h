@@ -9,6 +9,10 @@
 #include <QJsonObject>
 #include <QString>
 
+#ifdef HAVE_WEBSOCKETS
+class QWebSocket;
+#endif
+
 #include <deque>
 #include <functional>
 #include <memory>
@@ -309,6 +313,7 @@ private:
     //                     waterfall the client view had already purged.
     //   streams reset   — clear the Layer-A orphan tally to re-baseline.
     QJsonObject doStreams(const QString& action);
+    QJsonObject doTci(const QString& action, const QString& value);
     QJsonObject doAudioCapture(const QString& action,
                                const QString& arg,
                                const QString& path) const;
@@ -410,6 +415,23 @@ private:
     QString m_agentStation;          // applied name (AETHER_AUTOMATION_STATION)
     QString m_priorStationName;      // user's real station name, captured to restore
     bool    m_stationApplied{false};
+
+#ifdef HAVE_WEBSOCKETS
+    // In-process TCI client simulator (`tci start|status|stop`, #3305/#4009).
+    // Connects to the app's own TCI server over loopback exactly like WSJT-X
+    // (init burst → ready → audio_samplerate + audio_start) so agents can
+    // exercise the TCI/DAX lifecycle — including abrupt-disconnect reaping —
+    // without an external WebSocket client.
+    QWebSocket* m_tciSim{nullptr};
+    bool    m_tciSimReady{false};
+    bool    m_tciSimAudioStarted{false};
+    qint64  m_tciSimBinaryFrames{0};
+    qint64  m_tciSimBinaryBytes{0};
+    qint64  m_tciSimTextMsgs{0};
+    qint64  m_tciSimLastFrameMs{-1};
+    QString m_tciSimCloseReason;
+    QElapsedTimer m_tciSimTimer;
+#endif
 
     // TX safety rails (active only when AETHER_AUTOMATION_ALLOW_TX is set).
     QTimer* m_txWatchdog{nullptr};

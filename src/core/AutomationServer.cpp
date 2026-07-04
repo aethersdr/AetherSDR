@@ -62,6 +62,9 @@
 #include <QToolButton>   // doShowMenu: QToolButton::menu()
 #include <QWidgetAction>  // describeAction: header rows (disabled QWidgetAction + QLabel)
 #include <QContextMenuEvent>  // doContextMenu: synthesize a right-click menu trigger
+#ifdef HAVE_WEBSOCKETS
+#include <QWebSocket>         // doTci: in-process TCI client simulator (#3305)
+#endif
 
 #include <QScrollArea>   // doScrollTo: ensureWidgetVisible on the ancestor
 #include <QScrollBar>    // doScrollTo: echo the resulting scrollbar positions
@@ -2004,6 +2007,11 @@ QJsonObject AutomationServer::handleLine(const QByteArray& line, QLocalSocket* s
     }
     if (cmd == QLatin1String("streams"))
         return doStreams(action);
+    if (cmd == QLatin1String("tci")) {
+        if (action.isEmpty())
+            return err(QStringLiteral("tci requires an action (start [port] | status | stop [abrupt])"));
+        return doTci(action, value);
+    }
     if (cmd == QLatin1String("audioCapture"))
         return doAudioCapture(action.isEmpty() ? QStringLiteral("status") : action,
                               value, path);
@@ -2741,6 +2749,41 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             {QStringLiteral("clients"), clients},
             {QStringLiteral("foreignPanWrites"), foreign},
             {QStringLiteral("evictedHandles"), evicted}};
+    }
+    if (model == QLatin1String("dax")) {
+        // Centralized DAX RX channel-ownership snapshot (#3305): who holds
+        // which channel, the radio-side stream id, and whether a create is in
+        // flight — plus each slice's dax assignment. This is the direct
+        // assertion surface for DAX/TCI lifecycle tests (storm regression,
+        // co-hold survival, grace-window removal) that previously required
+        // log-grepping.
+        if (!m_radioModel)
+            return err(QStringLiteral("no radio model available"));
+        auto* ps = m_radioModel->panStream();
+        if (!ps)
+            return err(QStringLiteral("no panadapter stream available"));
+        QJsonArray channels;
+        for (const auto& c : ps->daxChannelSnapshot()) {
+            channels.append(QJsonObject{
+                {QStringLiteral("channel"),       c.channel},
+                {QStringLiteral("streamId"),      QStringLiteral("0x")
+                     + QString::number(c.streamId, 16)},
+                {QStringLiteral("createPending"), c.createPending},
+                {QStringLiteral("holders"),       QJsonArray::fromStringList(c.holders)},
+            });
+        }
+        QJsonArray sliceDax;
+        for (const SliceModel* s : m_radioModel->slices()) {
+            if (!s) continue;
+            sliceDax.append(QJsonObject{
+                {QStringLiteral("sliceId"),    s->sliceId()},
+                {QStringLiteral("daxChannel"), s->daxChannel()},
+            });
+        }
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("model"), model},
+                           {QStringLiteral("channels"), channels},
+                           {QStringLiteral("slices"), sliceDax}};
     }
     if (model == QLatin1String("panstats")) {
         // Per-panadapter frame-cost counters from every SpectrumWidget, for
@@ -4391,6 +4434,120 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
 //                              with leaked waterfalls (parent pan gone) — catches
 //                              resource-level lingering that emits no UDP (#3843).
 // `streams reset` clears the Layer-A orphan tally to re-baseline a before/after.
+// `tci start [port] | status | stop [abrupt]` — in-process TCI client
+// simulator (#3305/#4009). Speaks the same WebSocket dialect as WSJT-X: drain
+// the init burst until `ready;`, then `audio_samplerate` + `audio_start`, then
+// count the binary audio frames the server pushes back. `stop abrupt` closes
+// the socket without `audio_stop` (the WSJT-X watchdog-reconnect shape) so
+// tests can assert the debounced release + grace-window stream removal.
+QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
+{
+#ifndef HAVE_WEBSOCKETS
+    Q_UNUSED(action);
+    Q_UNUSED(value);
+    return err(QStringLiteral("TCI is not built into this binary (HAVE_WEBSOCKETS off)"));
+#else
+    const auto status = [this]() {
+        QJsonObject o{{QStringLiteral("ok"), true},
+                      {QStringLiteral("running"), m_tciSim != nullptr}};
+        if (m_tciSim) {
+            o[QStringLiteral("connected")]    = m_tciSim->state() == QAbstractSocket::ConnectedState;
+            o[QStringLiteral("ready")]        = m_tciSimReady;
+            o[QStringLiteral("audioStarted")] = m_tciSimAudioStarted;
+        }
+        o[QStringLiteral("binaryFrames")] = m_tciSimBinaryFrames;
+        o[QStringLiteral("binaryBytes")]  = m_tciSimBinaryBytes;
+        o[QStringLiteral("textMessages")] = m_tciSimTextMsgs;
+        o[QStringLiteral("msSinceLastFrame")] =
+            (m_tciSimLastFrameMs >= 0 && m_tciSimTimer.isValid())
+                ? m_tciSimTimer.elapsed() - m_tciSimLastFrameMs : -1;
+        if (!m_tciSimCloseReason.isEmpty())
+            o[QStringLiteral("closeReason")] = m_tciSimCloseReason;
+        return o;
+    };
+
+    if (action == QLatin1String("status"))
+        return status();
+
+    if (action == QLatin1String("start")) {
+        if (m_tciSim)
+            return err(QStringLiteral("tci sim already running — `tci stop` first"));
+        bool okPort = false;
+        int port = value.trimmed().toInt(&okPort);
+        if (!okPort || port <= 0)
+            port = AppSettings::instance().value("TciPort", "50001").toInt();
+        m_tciSimReady = false;
+        m_tciSimAudioStarted = false;
+        m_tciSimBinaryFrames = 0;
+        m_tciSimBinaryBytes = 0;
+        m_tciSimTextMsgs = 0;
+        m_tciSimLastFrameMs = -1;
+        m_tciSimCloseReason.clear();
+        m_tciSimTimer.start();
+        m_tciSim = new QWebSocket(QStringLiteral("aether-automation-tci-sim"),
+                                  QWebSocketProtocol::VersionLatest, this);
+        connect(m_tciSim, &QWebSocket::textMessageReceived,
+                this, [this](const QString& msg) {
+            ++m_tciSimTextMsgs;
+            if (m_tciSimReady) return;
+            const QStringList cmds = msg.split(QLatin1Char(';'));
+            for (const QString& c : cmds) {
+                if (c.trimmed() == QLatin1String("ready")) {
+                    m_tciSimReady = true;
+                    m_tciSim->sendTextMessage(QStringLiteral("audio_samplerate:48000;"));
+                    m_tciSim->sendTextMessage(QStringLiteral("audio_start:0;"));
+                    m_tciSimAudioStarted = true;
+                    qCInfo(lcAutomation) << "tci sim: ready received — audio_start sent";
+                    break;
+                }
+            }
+        });
+        connect(m_tciSim, &QWebSocket::binaryMessageReceived,
+                this, [this](const QByteArray& b) {
+            ++m_tciSimBinaryFrames;
+            m_tciSimBinaryBytes += b.size();
+            m_tciSimLastFrameMs = m_tciSimTimer.elapsed();
+        });
+        connect(m_tciSim, &QWebSocket::disconnected, this, [this]() {
+            if (m_tciSimCloseReason.isEmpty())
+                m_tciSimCloseReason = QStringLiteral("server closed");
+        });
+        m_tciSim->open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
+        qCInfo(lcAutomation) << "tci sim: connecting to ws://127.0.0.1:" << port;
+        return QJsonObject{{QStringLiteral("ok"), true},
+                           {QStringLiteral("action"), QStringLiteral("start")},
+                           {QStringLiteral("port"), port}};
+    }
+
+    if (action == QLatin1String("stop")) {
+        if (!m_tciSim)
+            return err(QStringLiteral("tci sim is not running"));
+        const bool abrupt = value.trimmed().compare(QLatin1String("abrupt"),
+                                                    Qt::CaseInsensitive) == 0;
+        QJsonObject o = status();
+        m_tciSimCloseReason = abrupt ? QStringLiteral("client abort (abrupt)")
+                                     : QStringLiteral("client stop");
+        if (abrupt) {
+            m_tciSim->abort();
+        } else {
+            if (m_tciSimAudioStarted)
+                m_tciSim->sendTextMessage(QStringLiteral("audio_stop:0;"));
+            m_tciSim->close();
+        }
+        m_tciSim->deleteLater();
+        m_tciSim = nullptr;
+        m_tciSimReady = false;
+        m_tciSimAudioStarted = false;
+        o[QStringLiteral("action")] = QStringLiteral("stop");
+        o[QStringLiteral("abrupt")] = abrupt;
+        qCInfo(lcAutomation) << "tci sim: stopped" << (abrupt ? "(abrupt)" : "(graceful)");
+        return o;
+    }
+
+    return err(QStringLiteral("tci requires an action (start [port] | status | stop [abrupt])"));
+#endif
+}
+
 QJsonObject AutomationServer::doStreams(const QString& action)
 {
     if (!m_radioModel)

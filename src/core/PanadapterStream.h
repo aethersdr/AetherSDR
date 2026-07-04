@@ -151,6 +151,15 @@ public:
     // Drop the whole table without emitting removals — the radio reaps all of
     // a client's streams itself on TCP disconnect (state-machines.md §4.2).
     void resetDaxChannelsForDisconnect();
+    // Read-only snapshot of the ownership table for diagnostics and the
+    // automation bridge (`get dax`). Safe from any thread.
+    struct DaxChannelSnapshot {
+        int         channel{0};
+        quint32     streamId{0};
+        bool        createPending{false};
+        QStringList holders;   // daxConsumerName() strings
+    };
+    QVector<DaxChannelSnapshot> daxChannelSnapshot() const;
 
     // DAX IQ stream routing
     void registerIqStream(quint32 streamId, int channel);
