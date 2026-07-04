@@ -35,15 +35,6 @@
 
 namespace AetherSDR {
 
-// Shared indicator block — ThemeManager tokens + full pseudo-state set.
-// Apply via applyStyleSheet(); setStyleSheet() will not resolve {{tokens}}.
-static const QString kCheckBoxIndicator =
-    "QCheckBox::indicator { width: 14px; height: 14px; "
-    "border: 2px solid {{color.background.3}}; border-radius: 3px; background: {{color.background.0}}; }"
-    "QCheckBox::indicator:hover { border-color: {{color.accent}}; background: {{color.background.1}}; }"
-    "QCheckBox::indicator:checked { border: 2px solid {{color.accent}}; background: {{color.background.2}}; }"
-    "QCheckBox::indicator:disabled { border-color: {{color.background.2}}; background: {{color.background.0}}; }";
-
 // GuardedSlider variant that resets to a stored default on left
 // double-click.  Used for the Filter Match Window slider (#2609) so
 // the operator can snap back to the 1 kHz default without dragging.
@@ -1175,7 +1166,7 @@ void DxClusterDialog::buildWsjtxTab(QTabWidget* tabs)
 
     const QString cbStyle =
         "QCheckBox { color: {{color.text.secondary}}; font-size: 14px; spacing: 3px; }"
-        + kCheckBoxIndicator;
+        + ThemeManager::checkBoxIndicatorStyle();
     auto swatchStyle = [](const QColor& c) {
         return QString("QPushButton { background: %1; border: 2px solid #405060; border-radius: 3px; }"
                        "QPushButton:hover { border-color: #c8d8e8; }").arg(c.name());
@@ -1653,7 +1644,7 @@ void DxClusterDialog::buildFreeDvTab(QTabWidget* tabs)
 
     const QString fdvCheckStyle =
         "QCheckBox { color: {{color.text.primary}}; spacing: 8px; background: transparent; border: none; }"
-        + kCheckBoxIndicator;
+        + ThemeManager::checkBoxIndicatorStyle();
 
     // Enable checkbox spans all columns so it sits reliably inside the grid,
     // not above it (avoids group-box title margin clipping on dark themes).
@@ -1884,7 +1875,7 @@ void DxClusterDialog::buildSpotListTab(QTabWidget* tabs)
     };
     const QString cbStyle =
         "QCheckBox { color: {{color.text.secondary}}; font-size: 12px; spacing: 3px; }"
-        + kCheckBoxIndicator;
+        + ThemeManager::checkBoxIndicatorStyle();
     auto& sf = AppSettings::instance();
     for (const char* band : bands) {
         auto* cb = new QCheckBox(band);
