@@ -1005,15 +1005,6 @@ QString MainWindow::kiwiSdrOverlayProfileForPan(const QString& panId) const
                                           : disconnectedProfileId;
 }
 
-void MainWindow::syncKiwiSdrPanadapterTxInhibit(const QString& panId,
-                                                const QString& profileId)
-{
-    m_radioModel.setPanTransmitInhibited(
-        panId,
-        !profileId.isEmpty(),
-        tr("Transmit is disabled because this panadapter is displaying a KiwiSDR receiver."));
-}
-
 void MainWindow::syncKiwiSdrDiversityEscControls()
 {
     QSet<int> blockedSlices;
@@ -1087,7 +1078,6 @@ void MainWindow::syncKiwiSdrPanadapterUiState(const QString& panId)
     }
 
     const QString profileId = kiwiSdrProfileForPan(panId);
-    syncKiwiSdrPanadapterTxInhibit(panId, profileId);
 
     SpectrumWidget* spectrum = m_panStack->spectrum(panId);
     if (!spectrum) {

@@ -420,8 +420,6 @@ private:
     SliceModel* kiwiSdrDisplaySliceForPan(const QString& panId) const;
     QString kiwiSdrProfileForPan(const QString& panId) const;
     QString kiwiSdrOverlayProfileForPan(const QString& panId) const;
-    void syncKiwiSdrPanadapterTxInhibit(const QString& panId,
-                                        const QString& profileId);
     void syncKiwiSdrDiversityEscControls();
     void syncKiwiSdrPanadapterUiState(const QString& panId);
     void syncKiwiSdrPanadapterUiStates();
