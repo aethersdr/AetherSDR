@@ -133,6 +133,15 @@ WaveformWidget::WaveformWidget(Profile profile, QWidget* parent)
     connect(&m_clickTimer, &QTimer::timeout, this, [this]() {
         setPaused(!m_paused);
     });
+
+#ifdef AETHER_GPU_SPECTRUM
+    // The showcase scenes animate continuously (attract-mode drift, breathing
+    // core); repaints are otherwise data-driven, so pump ~60 fps repaints only
+    // while a demo mode is active (started/stopped in setViewMode). (#3991)
+    m_demoAnimTimer = new QTimer(this);
+    m_demoAnimTimer->setInterval(16);
+    connect(m_demoAnimTimer, &QTimer::timeout, this, [this]() { update(); });
+#endif
 }
 
 void WaveformWidget::appendScopeSamples(const QByteArray& monoFloat32Pcm,
@@ -192,6 +201,15 @@ void WaveformWidget::setViewMode(ViewMode mode)
     // [level,amplitude,0,0] vs Scope [min,max,rms,peak]); a mode switch with
     // unchanged columnCount + frozen generation must still re-upload.
     invalidateRenderCaches();
+#ifdef AETHER_GPU_SPECTRUM
+    // Demo scenes need continuous repaints to animate; normal modes don't.
+    if (m_demoAnimTimer) {
+        if (isDemoMode(m_viewMode))
+            m_demoAnimTimer->start();
+        else
+            m_demoAnimTimer->stop();
+    }
+#endif
     update();
 }
 
@@ -1288,8 +1306,11 @@ void WaveformWidget::initOverlayPipeline()
 {
     QRhi* r = rhi();
     const qreal dpr = devicePixelRatioF();
-    const QSize texSize(std::max(1, static_cast<int>(width() * dpr)),
-                        std::max(1, static_cast<int>(height() * dpr)));
+    // Match m_gridCache / m_overlayImage, sized `size() * dpr` (QSize::operator*
+    // rounds); truncating here makes the texture 1px smaller than the source
+    // image on fractional DPR and size-mismatches uploadTexture on the shared
+    // grid/overlay path (#3991).
+    const QSize texSize = (size() * dpr).expandedTo(QSize(1, 1));
 
     m_gridTex = r->newTexture(QRhiTexture::RGBA8, texSize);
     m_gridTex->create();
@@ -1361,7 +1382,12 @@ void WaveformWidget::initialize(QRhiCommandBuffer* cb)
     initWavePipeline();
     initDemoPipeline();
     initOverlayPipeline();
-    if (!m_wavePipeline || !m_ovPipeline || !m_demoPipeline)
+    // Don't gate the whole GPU path on the optional demo pipeline — if
+    // wavedemo.frag failed to load, m_demoPipeline is null but Graph/Bars/etc
+    // must still render (and m_rhiInitialized must still latch, or render()
+    // re-inits every frame and leaks). The demo branch guards on m_demoPipeline
+    // via `demo`. (#3991)
+    if (!m_wavePipeline || !m_ovPipeline)
         return;
 
     auto* batch = r->nextResourceUpdateBatch();
@@ -1406,7 +1432,9 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     const int sampleRate = model.sampleRate();
 
     // ── Reduce: columns / band levels + whole-window stats ───────────────
-    const bool demo = isDemoMode(m_viewMode);
+    // Fall back to normal (Graph) rendering when the demo shader is
+    // unavailable, so a demo-only shader failure never blanks the widget.
+    const bool demo = isDemoMode(m_viewMode) && m_demoPipeline != nullptr;
     WaveformScopeModel::WindowStats stats;
     int columnCount = 0;
     int barCount = 0;
@@ -1518,8 +1546,11 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
     // ── Grid/background + overlay texture sizing ──────────────────────────
     const qreal dpr = devicePixelRatioF();
-    const QSize texSize(std::max(1, static_cast<int>(width() * dpr)),
-                        std::max(1, static_cast<int>(height() * dpr)));
+    // Match m_gridCache / m_overlayImage, sized `size() * dpr` (QSize::operator*
+    // rounds); truncating here makes the texture 1px smaller than the source
+    // image on fractional DPR and size-mismatches uploadTexture on the shared
+    // grid/overlay path (#3991).
+    const QSize texSize = (size() * dpr).expandedTo(QSize(1, 1));
     if (m_gridTex->pixelSize() != texSize) {
         m_gridTex->setPixelSize(texSize);
         m_gridTex->create();
@@ -1546,6 +1577,20 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
 
     // ── Ridge history ring: fold the current envelope into one row ────────
     if (demo) {
+        if (!m_histCleared) {
+            // Seed the whole ring to zero so unwritten rows aren't sampled as
+            // undefined GPU memory (garbage/NaN ridgelines) until it fills over
+            // ~3 s — recurs on every device-loss re-init. (#3991)
+            const QByteArray zeros(
+                kDemoCols * kHistRows * static_cast<int>(sizeof(float)), '\0');
+            QRhiTextureSubresourceUploadDescription zeroDesc(
+                zeros.constData(), zeros.size());
+            zeroDesc.setSourceSize(QSize(kDemoCols, kHistRows));
+            batch->uploadTexture(m_histTex,
+                                 QRhiTextureUploadEntry(0, 0, zeroDesc));
+            m_histCleared = true;
+            m_histHead = 0;
+        }
         if (!m_histAdvance.isValid()
             || m_histAdvance.elapsed() >= kHistRowMs) {
             m_histAdvance.restart();
@@ -1584,12 +1629,15 @@ void WaveformWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     : m_viewMode == ViewMode::Tunnel ? 1.0f : 2.0f;
         d.widget[3] = m_amplitudeZoom;
         d.anim[0] = static_cast<float>(m_demoClock.elapsed()) / 1000.0f;
-        d.anim[1] = std::clamp(stats.rms * m_amplitudeZoom, 0.0f, 1.0f);
-        d.anim[2] = std::clamp(stats.peak * m_amplitudeZoom, 0.0f, 1.0f);
+        // std::clamp doesn't sanitize NaN; guard so a degenerate reduction
+        // can't push NaN into the UBO. (#3991)
+        const auto finite = [](float v) { return std::isfinite(v) ? v : 0.0f; };
+        d.anim[1] = std::clamp(finite(stats.rms) * m_amplitudeZoom, 0.0f, 1.0f);
+        d.anim[2] = std::clamp(finite(stats.peak) * m_amplitudeZoom, 0.0f, 1.0f);
         d.anim[3] = (stats.empty || stale) ? 0.0f : 1.0f;
-        d.energy[0] = energyLow;
-        d.energy[1] = energyMid;
-        d.energy[2] = energyHigh;
+        d.energy[0] = finite(energyLow);
+        d.energy[1] = finite(energyMid);
+        d.energy[2] = finite(energyHigh);
         d.energy[3] = static_cast<float>(m_histHead) / kHistRows;
         fillColor(d.colBg, kBackground());
         fillColor(d.colA, AetherSDR::ThemeManager::instance().color("color.accent"));
@@ -1778,6 +1826,8 @@ void WaveformWidget::releaseResources()
     delete m_demoSrb;        m_demoSrb = nullptr;
     delete m_demoUbo;        m_demoUbo = nullptr;
     delete m_histTex;        m_histTex = nullptr;
+    m_histCleared = false;   // fresh texture on re-init must be re-seeded
+    m_histHead = 0;
 
     delete m_ovPipeline;     m_ovPipeline = nullptr;
     delete m_gridSrb;        m_gridSrb = nullptr;

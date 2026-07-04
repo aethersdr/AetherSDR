@@ -280,8 +280,12 @@ private:
     QRhiTexture* m_histTex{nullptr};      // R32F kDemoCols × kHistRows ring
     QVector<float> m_histRow;             // one-row staging buffer
     int m_histHead{0};
+    bool m_histCleared{false};            // ring zero-seeded (reset on re-init)
     QElapsedTimer m_histAdvance;          // row cadence (~30 rows/s)
     QElapsedTimer m_demoClock;            // animation time base
+    // Demo scenes animate continuously (attract mode); repaints are otherwise
+    // data-driven, so drive ~60 fps repaints while a demo mode is active.
+    QTimer* m_demoAnimTimer{nullptr};
 #endif
 };
 
