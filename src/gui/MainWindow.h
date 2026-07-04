@@ -1226,8 +1226,7 @@ private:
     QThread*    m_radeThread{nullptr};
     int  m_radeSliceId{-1};
     bool m_radePrevMute{false};
-    quint32 m_radeDaxStreamId{0};
-    QMetaObject::Connection m_radeDaxStreamConn;
+    int m_radeDaxChannel{0};  // DAX channel RADE holds via PanadapterStream (#3305)
     QMetaObject::Connection m_freedvMoxConn;
     QMetaObject::Connection m_radeMoxFallbackConn;
     QString m_lastRadeRxCallsign;
@@ -1287,12 +1286,8 @@ private:
     // up so the radio registers a DAX client for slices 1-3, not just slice 0.
     void wireDaxSlice(SliceModel* slice);
     void onDaxChannelChanged(SliceModel* slice, int newCh);
-    // #3626: defer + re-validate DAX RX stream teardown so a radio's transient
-    // dax=0 rebroadcast can't drive a create/remove storm. See the .cpp comment.
-    void scheduleDaxRxStreamRemoval(int ch);
     QList<QMetaObject::Connection> m_daxSliceConns;
     QHash<int, int> m_daxSliceLastCh;  // sliceId -> last-known DAX channel
-    QSet<int>       m_daxPendingRxRemoval;  // channels with a deferred teardown in flight (#3626)
 #endif
 };
 

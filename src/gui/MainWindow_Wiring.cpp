@@ -1447,9 +1447,14 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
 #if defined(Q_OS_MAC) || defined(HAVE_PIPEWIRE)
     if (m_daxBridge) {
         auto* panStream = m_radioModel.panStream();
-        QSet<int> requestedChannels;
         bool txSliceIsDigital = false;
 
+        // Post-profile-load reconcile (#3305): reseed the slice→channel shadow
+        // and (re)acquire whatever the restored slices carry. The manager
+        // dedupes against live streams, and streams the radio destroyed during
+        // the load are re-created automatically by its removed-status recreate
+        // path — no manual stream remove/create here anymore. Channels held by
+        // TCI or RADE are simply co-held; nothing is stomped.
         for (auto* slice : m_radioModel.slices()) {
             if (!slice) {
                 continue;
@@ -1469,34 +1474,9 @@ void MainWindow::runProfileLoadRecoveryPass(const QString& profileType,
             if (channel < 1 || channel > 4) {
                 continue;
             }
-
-#ifdef HAVE_WEBSOCKETS
-            const bool tciUsingChannel = tciServer() && tciServer()->ownsDaxChannel(channel);
-#else
-            const bool tciUsingChannel = false;
-#endif
-#ifdef HAVE_RADE
-            const bool radeUsingChannel =
-                (m_radeDaxStreamId != 0 && panStream
-                 && m_radeDaxStreamId == panStream->daxStreamIdForChannel(channel));
-#else
-            const bool radeUsingChannel = false;
-#endif
-            quint32 existingStream = panStream ? panStream->daxStreamIdForChannel(channel) : 0;
-            if (!tciUsingChannel && panStream && resetDaxRxStreams) {
-                if (existingStream != 0 && !radeUsingChannel) {
-                    m_radioModel.sendCommand(
-                        QString("stream remove 0x%1").arg(existingStream, 0, 16));
-                    panStream->unregisterDaxStream(existingStream);
-                    existingStream = 0;
-                }
-            }
-
-            if (!tciUsingChannel && !radeUsingChannel && existingStream == 0
-                    && !requestedChannels.contains(channel)) {
-                m_radioModel.sendCommand(
-                    QString("stream create type=dax_rx dax_channel=%1").arg(channel));
-                requestedChannels.insert(channel);
+            if (panStream) {
+                panStream->acquireDaxChannel(
+                    channel, PanadapterStream::DaxConsumer::Bridge);
             }
         }
 

@@ -595,6 +595,7 @@ private:
     void handleProfileStatus(const QString& object, const QMap<QString, QString>& kvs);
     void handleProfileStatusRaw(const QString& profileType, const QString& rawBody);
     void traceDaxStreamStatus(const QString& object, const QMap<QString, QString>& kvs);
+    void handleDaxRxStreamRegistry(const QString& object, const QMap<QString, QString>& kvs);
     bool handleRemoteAudioRxStreamStatus(const QString& object,
                                          const QMap<QString, QString>& kvs);
     void scheduleRxAudioStreamEnsure(const QString& reason);
