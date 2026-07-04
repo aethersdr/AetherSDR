@@ -119,6 +119,16 @@ static const QString kKiwiIconButtonStyle =
     "QPushButton:hover { background: #20465e; }"
     "QPushButton:pressed { background: #132c3d; }";
 
+// Shared indicator block for all QCheckBox instances in this dialog.
+// Uses ThemeManager tokens (Low Latency architecture) with hover + disabled
+// pseudo-states (FreeDV Reporter pattern) so boxes are visible in dark mode.
+static const QString kCheckBoxIndicator =
+    "QCheckBox::indicator { width: 14px; height: 14px; "
+    "border: 2px solid {{color.background.3}}; border-radius: 3px; background: {{color.background.0}}; }"
+    "QCheckBox::indicator:hover { border-color: {{color.accent}}; background: {{color.background.1}}; }"
+    "QCheckBox::indicator:checked { border: 2px solid {{color.accent}}; background: {{color.background.2}}; }"
+    "QCheckBox::indicator:disabled { border-color: {{color.background.2}}; background: {{color.background.0}}; }";
+
 static constexpr int kInfoLeftLabelWidth = 112;
 static constexpr int kInfoRightLabelWidth = 160;
 
@@ -2359,7 +2369,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
     {
         auto* plcCheck = new QCheckBox(
             "Smooth packet loss (conceal dropped audio packets)");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(plcCheck, "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(plcCheck,
+            "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
+            + kCheckBoxIndicator);
         plcCheck->setToolTip(
             "When the radio's audio stream loses a UDP packet, fade the gap\n"
             "to silence (uncompressed) or synthesize a perceptually smooth\n"
@@ -2392,7 +2404,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
     // ── Prevent Sleep ───────────────────────────────────────────────────
     {
         auto* sleepCheck = new QCheckBox("Prevent system sleep while connected");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(sleepCheck, "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(sleepCheck,
+            "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
+            + kCheckBoxIndicator);
         sleepCheck->setToolTip("Hold a system power assertion to prevent idle sleep\n"
                                "while connected to a radio. Keeps TCP/UDP/audio\n"
                                "streams alive during long sessions.");
@@ -2449,7 +2463,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
     pcLayout->addLayout(outRow);
 
     auto* promptCheck = new QCheckBox("Prompt on Audio Device Changes");
-    AetherSDR::ThemeManager::instance().applyStyleSheet(promptCheck, "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
+    AetherSDR::ThemeManager::instance().applyStyleSheet(promptCheck,
+        "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
+        + kCheckBoxIndicator);
     promptCheck->setToolTip("Show the Audio Device Detected dialog when a new PC audio device appears.");
     const bool suppressAudioDeviceNotifications =
         AppSettings::instance()
@@ -2647,7 +2663,9 @@ QWidget* RadioSetupDialog::buildAudioTab()
         // Auto-record on TX
         auto* autoRow = new QHBoxLayout;
         auto* autoCheck = new QCheckBox("Auto-record on TX");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(autoCheck, "QCheckBox { color: {{color.text.primary}}; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(autoCheck,
+            "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
+            + kCheckBoxIndicator);
         autoCheck->setChecked(settings.value("QsoRecordingAutoRecord", "False").toString() == "True");
         connect(autoCheck, &QCheckBox::toggled, this, [](bool on) {
             auto& s = AppSettings::instance();
@@ -2790,10 +2808,9 @@ QWidget* RadioSetupDialog::buildFiltersTab()
 
         auto* chk = new QCheckBox("Use Low Latency Filters for Digital Modes");
         chk->setChecked(m_model->lowLatencyDigital());
-        AetherSDR::ThemeManager::instance().applyStyleSheet(chk, "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
-            "QCheckBox::indicator { width: 16px; height: 16px; "
-            "border: 2px solid {{color.background.3}}; border-radius: 3px; background: {{color.background.0}}; }"
-            "QCheckBox::indicator:checked { background: {{color.background.2}}; border: 2px solid #00a0e0; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(chk,
+            "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
+            + kCheckBoxIndicator);
         connect(chk, &QCheckBox::toggled, this, [this](bool on) {
             m_model->sendCommand(
                 QString("radio set low_latency_digital_modes=%1").arg(on ? 1 : 0));
@@ -4486,7 +4503,9 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         // Paddle swap
         auto* swapCb = new QCheckBox("Paddle Swap (swap dit/dah)");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(swapCb, "QCheckBox { color: {{color.text.primary}}; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(swapCb,
+            "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
+            + kCheckBoxIndicator);
         swapCb->setChecked(AppSettings::instance().value("SerialPaddleSwap", "False").toString() == "True");
         connect(swapCb, &QCheckBox::toggled, this, [](bool on) {
             auto& s = AppSettings::instance();
@@ -4559,7 +4578,9 @@ QWidget* RadioSetupDialog::buildSerialTab()
         vbox->addLayout(row);
 
         auto* autoOpen = new QCheckBox("Auto-open serial port on startup");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(autoOpen, "QCheckBox { color: {{color.text.primary}}; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(autoOpen,
+            "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
+            + kCheckBoxIndicator);
         autoOpen->setChecked(settings.value("SerialAutoOpen", "False").toString() == "True");
         connect(autoOpen, &QCheckBox::toggled, this, [](bool on) {
             auto& s = AppSettings::instance();
@@ -4687,7 +4708,9 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         // Auto-detect checkbox
         auto* autoDetect = new QCheckBox("Auto-detect on startup");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(autoDetect, "QCheckBox { color: {{color.text.primary}}; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(autoDetect,
+            "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
+            + kCheckBoxIndicator);
         autoDetect->setChecked(settings.value("FlexControlAutoDetect", "True").toString() == "True");
         connect(autoDetect, &QCheckBox::toggled, this, [this](bool on) {
             auto& s = AppSettings::instance();
@@ -4698,7 +4721,9 @@ QWidget* RadioSetupDialog::buildSerialTab()
         grid->addWidget(autoDetect, 5, 0, 1, 3);
 
         auto* invertDir = new QCheckBox("Invert tuning direction");
-        AetherSDR::ThemeManager::instance().applyStyleSheet(invertDir, "QCheckBox { color: {{color.text.primary}}; }");
+        AetherSDR::ThemeManager::instance().applyStyleSheet(invertDir,
+            "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
+            + kCheckBoxIndicator);
         invertDir->setChecked(settings.value("FlexControlInvertDir", "False").toString() == "True");
         m_flexControlInvertCheck = invertDir;
         connect(invertDir, &QCheckBox::toggled, this, [this](bool on) {
@@ -5454,7 +5479,8 @@ QWidget* RadioSetupDialog::buildPeripheralsTab()
     // Auto-reconnect checkbox
     auto* reconnectCheck = new QCheckBox("Auto-reconnect to peripherals on connection drop");
     AetherSDR::ThemeManager::instance().applyStyleSheet(reconnectCheck,
-        "QCheckBox { color: {{color.text.primary}}; font-size: 11px; }");
+        "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
+        + kCheckBoxIndicator);
     const bool autoReconnect = PeripheralSettings::autoReconnect();
     reconnectCheck->setChecked(autoReconnect);
     connect(reconnectCheck, &QCheckBox::toggled, this, [this](bool on) {
