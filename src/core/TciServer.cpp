@@ -187,6 +187,32 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 }
             }
         });
+        // A removed slice never fires daxChannelChanged, so without this the
+        // Tci hold on its channel stays set forever and the dax_rx stream
+        // lingers until the TCI client disconnects (pre-existing orphan,
+        // closed alongside #3305 per PR #4017 review item 4). Release any
+        // Tci-held channel that no remaining slice carries; the sliceAdded
+        // re-arm above re-acquires when a replacement slice appears.
+        connect(m_model, &RadioModel::sliceRemoved,
+                this, [this](int sliceId) {
+            m_tciDaxSlices.remove(sliceId);
+            auto* ps = m_model ? m_model->panStream() : nullptr;
+            if (!ps) return;
+            for (int ch = 1; ch <= 4; ++ch) {
+                if (!ps->daxChannelHeldBy(ch, PanadapterStream::DaxConsumer::Tci))
+                    continue;
+                bool stillWanted = false;
+                for (auto* s : m_model->slices()) {
+                    if (s && s->daxChannel() == ch) { stillWanted = true; break; }
+                }
+                if (!stillWanted) {
+                    qCInfo(lcCat) << "TCI: releasing DAX channel" << ch
+                                  << "after slice" << sliceId << "removal (#3305)";
+                    ps->releaseDaxChannel(ch, PanadapterStream::DaxConsumer::Tci);
+                    m_channelTrx.remove(ch);
+                }
+            }
+        });
     }
 
     // Periodic status broadcast (200ms — S-meter, TX sensors, TX state)

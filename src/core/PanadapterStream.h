@@ -143,6 +143,12 @@ public:
     // the channel gains its first holder. Idempotent per holder. Returns the
     // channel's current stream id (0 while creation is in flight).
     quint32 acquireDaxChannel(int channel, DaxConsumer who);
+    // Command plane reports a failed/dropped `stream create` (radio error
+    // reply, or emitted while disconnected). Clears the create latch and — if
+    // the channel is still held — arms a deferred retry, so a transient
+    // failure (DAX slots busy, connect-gap drop) cannot wedge the channel
+    // with `createPending` stuck true (the #3669 wedge class).
+    void notifyDaxCreateFailed(int channel);
     // Drop `who` as a holder. When the last holder leaves, stream removal is
     // requested after a grace window (cancelled by a re-acquire).
     void releaseDaxChannel(int channel, DaxConsumer who);
@@ -190,10 +196,11 @@ signals:
     // Centralized DAX ownership (#3305): command-plane requests, connected to
     // RadioModel which sends `stream create type=dax_rx dax_channel=<ch>` /
     // `stream remove 0x<id>` (plus the one-shot #1439 re-assert on create).
+    // RadioModel reports create failures back via notifyDaxCreateFailed().
     void daxStreamCreateNeeded(int channel);
     void daxStreamRemoveNeeded(quint32 streamId, int channel);
-    // Observability for consumers (e.g. TCI invalidates its channel→trx cache).
-    void daxStreamRegistered(int channel, quint32 streamId);
+    // A channel's radio-side stream went away (our removal or radio-initiated).
+    // TCI uses this to invalidate its channel→trx routing cache.
     void daxStreamUnregistered(int channel, quint32 streamId);
 
     void daxAudioReady(int channel, const QByteArray& pcm);
@@ -424,6 +431,7 @@ private:
     quint32 m_daxGenCounter{0};   // monotonic; entries never reuse a generation
     static constexpr int kDaxRemovalGraceMs  = 1500;  // ≫ the ~80 ms transient rebroadcast cycle (#3626)
     static constexpr int kDaxRecreateDelayMs = 500;   // radio-removed-but-still-held re-create backoff (#3476)
+    static constexpr int kDaxCreateRetryMs   = 2000;  // failed-create retry cadence while the channel stays held
     void scheduleDaxRemovalLocked(int channel);       // call with m_streamMutex held
     void scheduleDaxRecreateLocked(int channel);      // call with m_streamMutex held
     // DAX IQ stream routing: stream ID → IQ channel (1-4)

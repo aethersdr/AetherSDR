@@ -1227,6 +1227,7 @@ private:
     int  m_radeSliceId{-1};
     bool m_radePrevMute{false};
     int m_radeDaxChannel{0};  // DAX channel RADE holds via PanadapterStream (#3305)
+    QMetaObject::Connection m_radeDaxReconcileConn;  // RADE slice dax= change → move the Rade hold
     QMetaObject::Connection m_freedvMoxConn;
     QMetaObject::Connection m_radeMoxFallbackConn;
     QString m_lastRadeRxCallsign;

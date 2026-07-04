@@ -405,8 +405,23 @@ RadioModel::RadioModel(QObject* parent)
     // bridge/TCI/RADE); RadioModel is the command plane that makes it so.
     connect(m_panStream, &PanadapterStream::daxStreamCreateNeeded,
             this, [this](int ch) {
-        if (!isConnected()) return;
-        sendCommand(QString("stream create type=dax_rx dax_channel=%1").arg(ch));
+        if (!isConnected()) {
+            // Dropped create (connect gap): tell the manager so the latch
+            // clears and its retry cadence re-fires — otherwise the channel
+            // wedges with createPending stuck true (the #3669 wedge class).
+            m_panStream->notifyDaxCreateFailed(ch);
+            return;
+        }
+        sendCmd(QString("stream create type=dax_rx dax_channel=%1").arg(ch),
+                [this, ch](int code, const QString& body) {
+            if (code != 0) {
+                qCWarning(lcDax) << "RadioModel: dax_rx stream create for channel"
+                                 << ch << "failed, code" << Qt::hex << code << body;
+                m_panStream->notifyDaxCreateFailed(ch);
+            }
+            // Success needs no action here: the stream status registers the
+            // id (registerDaxStream clears the latch).
+        });
         // One-shot #1439 client-registration re-assert: if a slice already
         // carries this channel, nudge dax_clients once. Modern firmware
         // auto-binds stream↔slice at create (state-machines.md §7.2); this

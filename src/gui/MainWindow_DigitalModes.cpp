@@ -434,6 +434,31 @@ void MainWindow::activateRADE(int sliceId)
             qWarning() << "MainWindow: RADE slice" << sliceId
                        << "has no DAX channel assigned — RX audio will not flow";
         }
+        // Follow mid-session dax= changes on the RADE slice: RADE stays active
+        // across a channel edit (only a mode change deactivates it), and its
+        // RX filter already retargets live via s->daxChannel() — so the Rade
+        // hold must move with it or the old channel's stream leaks and the
+        // new one is never created. Independent of the DAX bridge's
+        // reconciler, which is Bridge-only and absent on Windows.
+        // (PR #4017 review item 2)
+        if (radeSlice) {
+            m_radeDaxReconcileConn = connect(
+                radeSlice, &SliceModel::daxChannelChanged,
+                this, [this](int newCh) {
+                auto* ps = m_radioModel.panStream();
+                if (!ps) return;
+                const int oldCh = m_radeDaxChannel;
+                m_radeDaxChannel = (newCh >= 1 && newCh <= 4) ? newCh : 0;
+                if (m_radeDaxChannel)
+                    ps->acquireDaxChannel(m_radeDaxChannel,
+                                          PanadapterStream::DaxConsumer::Rade);
+                if (oldCh >= 1 && oldCh <= 4 && oldCh != m_radeDaxChannel)
+                    ps->releaseDaxChannel(oldCh,
+                                          PanadapterStream::DaxConsumer::Rade);
+                qCInfo(lcRade) << "MainWindow: RADE dax hold moved"
+                               << oldCh << "->" << m_radeDaxChannel;
+            });
+        }
     }
 
     // Restore client-side mic gain for RADE. The radio's mic input is unused in
@@ -566,6 +591,7 @@ void MainWindow::deactivateRADE()
                    this, nullptr);
         disconnect(m_radeEngine, &RADEEngine::eooCallsignReceived,
                    this, nullptr);
+        disconnect(m_radeDaxReconcileConn);
         if (m_radeDaxChannel >= 1 && m_radeDaxChannel <= 4) {
             // Release RADE's hold; the centralized manager removes the
             // radio-side stream only when the LAST holder (TCI / DAX bridge /

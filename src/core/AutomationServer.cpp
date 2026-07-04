@@ -4511,6 +4511,20 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         connect(m_tciSim, &QWebSocket::disconnected, this, [this]() {
             if (m_tciSimCloseReason.isEmpty())
                 m_tciSimCloseReason = QStringLiteral("server closed");
+            // Tear down so `tci status` reports running=false and a later
+            // `tci start` isn't rejected as "already running" after a
+            // server/radio-side close (PR #4017 review item 5). The stop path
+            // nulls m_tciSim before its own close lands — only reap here when
+            // the disconnect came from the socket we still track.
+            if (auto* sock = qobject_cast<QWebSocket*>(sender());
+                    sock && sock == m_tciSim) {
+                m_tciSim->deleteLater();
+                m_tciSim = nullptr;
+                m_tciSimReady = false;
+                m_tciSimAudioStarted = false;
+                qCInfo(lcAutomation) << "tci sim: torn down after server-side close"
+                                     << m_tciSimCloseReason;
+            }
         });
         m_tciSim->open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
         qCInfo(lcAutomation) << "tci sim: connecting to ws://127.0.0.1:" << port;

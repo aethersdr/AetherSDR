@@ -1435,8 +1435,6 @@ void PanadapterStream::registerDaxStream(quint32 streamId, int channel)
             scheduleDaxRemovalLocked(channel);
     }
     qCDebug(lcVita49) << "PanadapterStream: registered DAX stream" << Qt::hex << streamId << "-> channel" << channel;
-    lock.unlock();
-    emit daxStreamRegistered(channel, streamId);
 }
 
 quint32 PanadapterStream::daxStreamIdForChannel(int channel) const
@@ -1547,8 +1545,62 @@ void PanadapterStream::releaseDaxChannel(int channel, DaxConsumer who)
     qCInfo(lcVita49) << "PanadapterStream: DAX ch" << channel
                      << "released by" << daxConsumerName(who)
                      << "holders=0x" + QString::number(it->holders, 16);
-    if (it->holders == 0)
-        scheduleDaxRemovalLocked(channel);
+    if (it->holders == 0) {
+        if (it->streamId != 0) {
+            scheduleDaxRemovalLocked(channel);
+        } else if (!it->createPending) {
+            m_daxChannelStates.erase(it);
+        }
+        // else: a create is in flight for a channel nobody wants anymore.
+        // Keep the entry so registerDaxStream() finds it when the status
+        // lands, sees holders==0, and schedules ONE deterministic removal —
+        // erasing here would make the registration re-insert a fresh entry
+        // and bounce through create→remove churn (review #4017 item 3).
+    }
+}
+
+void PanadapterStream::notifyDaxCreateFailed(int channel)
+{
+    if (channel < 1 || channel > 4) return;
+    bool retryArmed = false;
+    {
+        QMutexLocker lock(&m_streamMutex);
+        auto it = m_daxChannelStates.find(channel);
+        if (it == m_daxChannelStates.end() || it->streamId != 0) return;
+        it->createPending = false;
+        it->generation = ++m_daxGenCounter;
+        if (it->holders == 0) {
+            m_daxChannelStates.erase(it);
+        } else {
+            // Still wanted: retry on a gentle cadence. Each cycle re-enters
+            // this method on failure, so a persistent condition (DAX slots
+            // exhausted on the radio) costs one command per kDaxCreateRetryMs
+            // — and heals the moment a slot frees or the connection is up.
+            const quint32 gen = it->generation;
+            QTimer::singleShot(kDaxCreateRetryMs, this, [this, channel, gen]() {
+                bool needCreate = false;
+                {
+                    QMutexLocker lock(&m_streamMutex);
+                    auto it = m_daxChannelStates.find(channel);
+                    if (it == m_daxChannelStates.end()) return;
+                    if (it->generation != gen) return;
+                    if (it->holders == 0 || it->streamId != 0 || it->createPending) return;
+                    it->createPending = true;
+                    it->generation = ++m_daxGenCounter;
+                    needCreate = true;
+                }
+                if (needCreate) {
+                    qCInfo(lcVita49) << "PanadapterStream: retrying DAX ch" << channel
+                                     << "stream create after failure (#3305)";
+                    emit daxStreamCreateNeeded(channel);
+                }
+            });
+            retryArmed = true;
+        }
+    }
+    qCWarning(lcVita49) << "PanadapterStream: DAX ch" << channel
+                        << "stream create failed/dropped —"
+                        << (retryArmed ? "retry armed" : "channel unheld, entry dropped");
 }
 
 void PanadapterStream::releaseAllDaxChannels(DaxConsumer who)
@@ -1648,6 +1700,7 @@ void PanadapterStream::scheduleDaxRecreateLocked(int channel)
             if (it->generation != gen) return;
             if (it->holders == 0 || it->streamId != 0 || it->createPending) return;
             it->createPending = true;
+            it->generation = ++m_daxGenCounter;  // keep the mutation⇒generation-bump invariant
             needCreate = true;
         }
         if (needCreate) {

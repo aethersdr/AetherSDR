@@ -996,8 +996,8 @@ dependency for TCI/DAX lifecycle testing. Requires the TCI server to be
 running (toggle via `invoke tciEnable click` if needed).
 
 ```json
-→ {"cmd":"tci","action":"start"}            // optional value = port (default: TciPort setting)
-← {"ok":true,"action":"start","port":40001}
+→ {"cmd":"tci","action":"start"}            // optional value = port
+← {"ok":true,"action":"start","port":50001} // default = the TciPort setting (50001 unless changed)
 
 → {"cmd":"tci","action":"status"}
 ← {"ok":true,"running":true,"connected":true,"ready":true,"audioStarted":true,
