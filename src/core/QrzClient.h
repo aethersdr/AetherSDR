@@ -52,7 +52,10 @@ public:
     void testLogin(const QString& username, const QString& password);
 
 signals:
-    void lookupSucceeded(const AetherSDR::CallsignInfo& info);
+    // `call` is the queried (normalized) form; `info.call` is QRZ's canonical
+    // base call, which can differ for portable/prefixed queries — consumers
+    // must key their in-flight/cache state on `call`, not info.call (#3990).
+    void lookupSucceeded(const QString& call, const AetherSDR::CallsignInfo& info);
     void lookupFailed(const QString& call, QrzClient::Error error, const QString& message);
     void loginTestFinished(bool ok, const QString& message);
 

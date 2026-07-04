@@ -10,6 +10,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QImageReader>
 #include <QPixmap>
 #include <QPushButton>
 #include <QUrl>
@@ -308,13 +309,22 @@ void CallsignCard::showInfo(const CallsignInfo& info, bool fromCache)
 
 void CallsignCard::setPhotoPath(const QString& imagePath)
 {
-    QPixmap pm(imagePath);
-    if (pm.isNull()) {
+    // Check dimensions before decoding so an image with a small file but huge
+    // pixel dimensions (decompression bomb) can't freeze/OOM the GUI. (#3990)
+    QImageReader reader(imagePath);
+    const QSize dim = reader.size();
+    if (dim.isValid() && (dim.width() > 4096 || dim.height() > 4096)) {
+        setPlaceholderPhoto();
+        return;
+    }
+    reader.setAutoTransform(true);
+    const QImage img = reader.read();
+    if (img.isNull()) {
         setPlaceholderPhoto();
         return;
     }
     m_photoLabel->setText({});
-    m_photoLabel->setPixmap(roundedPhoto(pm, photoEdge(), 6));
+    m_photoLabel->setPixmap(roundedPhoto(QPixmap::fromImage(img), photoEdge(), 6));
 }
 
 } // namespace AetherSDR

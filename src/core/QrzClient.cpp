@@ -111,6 +111,7 @@ void QrzClient::handleLoginReply(QNetworkReply* reply)
 
     auto failAll = [this](Error error, const QString& message) {
         qCWarning(lcQrz) << "QRZ login failed:" << message;
+        m_retriedAfterRelogin.clear();   // all pending are failing — don't leak retry flags (#3990)
         while (!m_pending.isEmpty())
             emit lookupFailed(m_pending.dequeue(), error, message);
     };
@@ -141,6 +142,7 @@ void QrzClient::handleLookupReply(QNetworkReply* reply, const QString& call,
     m_lookupInFlight = false;
 
     if (reply->error() != QNetworkReply::NoError) {
+        m_retriedAfterRelogin.remove(call);   // don't leak the retry flag (#3990)
         emit lookupFailed(call, Error::Network, reply->errorString());
         startNextLookup();
         return;
@@ -165,7 +167,7 @@ void QrzClient::handleLookupReply(QNetworkReply* reply, const QString& call,
     m_retriedAfterRelogin.remove(call);
     if (resp.info.isValid()) {
         resp.info.fetchedUtc = QDateTime::currentSecsSinceEpoch();
-        emit lookupSucceeded(resp.info);
+        emit lookupSucceeded(call, resp.info);
     } else {
         const QString err = resp.sessionError.isEmpty()
             ? QStringLiteral("No data returned") : resp.sessionError;
@@ -208,6 +210,7 @@ QrzClient::ParsedResponse QrzClient::parseXml(const QByteArray& xml)
 
     enum class Block { None, Session, Callsign };
     Block block = Block::None;
+    bool hasLat = false, hasLon = false;   // require BOTH before trusting geo (#3990)
 
     while (!r.atEnd()) {
         const QXmlStreamReader::TokenType tok = r.readNext();
@@ -244,11 +247,11 @@ QrzClient::ParsedResponse QrzClient::parseXml(const QByteArray& xml)
                 else if (name == QLatin1String("lat")) {
                     bool ok = false;
                     const double v = text.toDouble(&ok);
-                    if (ok) { i.latitude = v; i.hasLatLon = true; }
+                    if (ok) { i.latitude = v; hasLat = true; }
                 } else if (name == QLatin1String("lon")) {
                     bool ok = false;
                     const double v = text.toDouble(&ok);
-                    if (ok) i.longitude = v;
+                    if (ok) { i.longitude = v; hasLon = true; }
                 }
                 else if (name == QLatin1String("lotw"))     i.lotw = (text == QLatin1String("1"));
                 else if (name == QLatin1String("eqsl"))     i.eqsl = (text == QLatin1String("1"));
@@ -256,9 +259,9 @@ QrzClient::ParsedResponse QrzClient::parseXml(const QByteArray& xml)
             }
         }
     }
-    // lat without lon is useless; require both.
-    if (resp.info.hasLatLon && resp.info.longitude == 0.0 && resp.info.latitude == 0.0)
-        resp.info.hasLatLon = false;
+    // lat without lon (or vice-versa) is useless — a valid lat with a missing
+    // lon would otherwise leave a bogus (lat, 0.0). Require both. (#3990)
+    resp.info.hasLatLon = hasLat && hasLon;
     return resp;
 }
 

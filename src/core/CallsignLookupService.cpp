@@ -43,10 +43,14 @@ CallsignLookupService::CallsignLookupService(QObject* parent)
 {
     m_client = new QrzClient(this);
 
-    connect(m_client, &QrzClient::lookupSucceeded, this, [this](const CallsignInfo& info) {
-        m_inFlight.remove(info.call);
-        m_fallbackShown.remove(info.call);
-        m_cache.insert(info.call, info);
+    connect(m_client, &QrzClient::lookupSucceeded, this,
+            [this](const QString& call, const CallsignInfo& info) {
+        // Key on the queried form (call), not QRZ's base info.call — they
+        // differ for portable/prefixed queries, and keying on info.call leaks
+        // the in-flight entry (dead lookup) and misses the cache (#3990).
+        m_inFlight.remove(call);
+        m_fallbackShown.remove(call);
+        m_cache.insert(call, info);
         m_cacheDirty = true;
         scheduleCacheSave();
         if (info.call == m_ownCallsign)
@@ -486,8 +490,10 @@ void CallsignLookupService::fetchPhoto(const CallsignInfo& info)
     }
 
     const QUrl url(info.imageUrl);
-    if (!url.isValid() || (url.scheme() != QLatin1String("https")
-                           && url.scheme() != QLatin1String("http")))
+    // https only — the <image> URL is untrusted; permitting http (with the
+    // NoLessSafeRedirectPolicy below allowing cross-host) would let a crafted
+    // profile reach an internal host over cleartext (SSRF-lite). (#3990)
+    if (!url.isValid() || url.scheme() != QLatin1String("https"))
         return;
 
     m_photoInFlight.insert(info.call);
@@ -499,6 +505,15 @@ void CallsignLookupService::fetchPhoto(const CallsignInfo& info)
                      QNetworkRequest::NoLessSafeRedirectPolicy);
 
     auto* reply = m_photoNam.get(req);
+    // Cap the untrusted download so a decompression-bomb / huge image can't
+    // exhaust memory: abort as soon as the body (or advertised size) exceeds
+    // the cap; the abort trips reply->error() and the finished handler drops it. (#3990)
+    constexpr qint64 kMaxPhotoBytes = 8 * 1024 * 1024;
+    connect(reply, &QNetworkReply::downloadProgress, reply,
+            [reply](qint64 received, qint64 total) {
+        if (received > kMaxPhotoBytes || total > kMaxPhotoBytes)
+            reply->abort();
+    });
     const QString call = info.call;
     connect(reply, &QNetworkReply::finished, this, [this, reply, call, url] {
         reply->deleteLater();

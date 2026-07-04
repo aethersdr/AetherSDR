@@ -6075,7 +6075,9 @@ QWidget* RadioSetupDialog::buildQrzTab()
 
     // Populate the password field from the keychain (async).
     QPointer<QLineEdit> passGuard(passEdit);
-    svc.readPassword([passGuard](const QString& pw) {
+    auto passLoaded = std::make_shared<bool>(false);
+    svc.readPassword([passGuard, passLoaded](const QString& pw) {
+        *passLoaded = true;
         if (passGuard && passGuard->text().isEmpty())
             passGuard->setText(pw);
     });
@@ -6084,7 +6086,12 @@ QWidget* RadioSetupDialog::buildQrzTab()
         QrzLookupSettings::setUsername(userEdit->text().trimmed());
         CallsignLookupService::instance().reloadConfiguration();
     });
-    connect(passEdit, &QLineEdit::editingFinished, this, [passEdit] {
+    connect(passEdit, &QLineEdit::editingFinished, this, [passEdit, passLoaded] {
+        // Don't let a focus-out before the async keychain read completes delete
+        // a stored password: skip the save when the field is empty and the read
+        // hasn't landed yet (savePassword("") deletes the keychain entry). (#3990)
+        if (!*passLoaded && passEdit->text().isEmpty())
+            return;
         CallsignLookupService::instance().savePassword(passEdit->text());
     });
 

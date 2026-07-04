@@ -3592,6 +3592,11 @@ QJsonObject AutomationServer::doQrz(const QString& action, const QString& value)
         const QString call = Callsigns::normalized(value);
         if (call.isEmpty())
             return err(QStringLiteral("qrz lookup requires a callsign"));
+        // Shape-gate like the GUI dialog does: the bridge must not let an agent
+        // drive unbounded authenticated QRZ queries over arbitrary tokens (#3990).
+        if (!Callsigns::isLikelyCallsign(call))
+            return err(QStringLiteral("qrz lookup: '") + call
+                       + QStringLiteral("' is not a plausible callsign"));
         svc.lookup(call);
         return QJsonObject{{QStringLiteral("ok"), true},
                            {QStringLiteral("queued"), true},
