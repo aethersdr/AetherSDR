@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QFile>
 #include <QFontMetrics>
+#include <QHashFunctions>
 #include <QLinearGradient>
 #include <QLineF>
 #include <QMouseEvent>
@@ -117,6 +118,15 @@ WaveformWidget::WaveformWidget(Profile profile, QWidget* parent)
 
     m_perfSince.start();
 
+    // Size each model's raw ring to this profile's window ceiling so widening
+    // the window (live or paused) reveals captured history, not a blank plot
+    // that refills over the next N seconds (#3955 regression vs the old
+    // StripWaveform buffer). m_pausedModel inherits the ceiling on copy but is
+    // set here too for the pause-before-first-append case.
+    m_rx.setMaxWindowMs(m_maxWindowMs);
+    m_tx.setMaxWindowMs(m_maxWindowMs);
+    m_pausedModel.setMaxWindowMs(m_maxWindowMs);
+
     m_clickTimer.setSingleShot(true);
     // Interval read at click time from clickDiscriminationIntervalMs() so
     // a user-adjusted Radio Setup value propagates without an app restart.
@@ -147,11 +157,22 @@ void WaveformWidget::appendScopeSamples(const QByteArray& monoFloat32Pcm,
     scheduleRepaint();
 }
 
+void WaveformWidget::invalidateRenderCaches()
+{
+    m_bandCacheGen = ~0ull;
+#ifdef AETHER_GPU_SPECTRUM
+    m_lastColUploadGen = ~0ull;
+#endif
+}
+
 void WaveformWidget::setTransmitting(bool tx)
 {
     if (m_transmitting == tx)
         return;
     m_transmitting = tx;
+    // displayModel() now returns a different model instance whose per-model
+    // generation() is unrelated to the last-uploaded one — force a refresh.
+    invalidateRenderCaches();
     update();
 }
 
@@ -167,6 +188,10 @@ void WaveformWidget::setViewMode(ViewMode mode)
     if (m_viewMode == mode)
         return;
     m_viewMode = mode;
+    // Column-texture channel packing differs by mode (Bands packs
+    // [level,amplitude,0,0] vs Scope [min,max,rms,peak]); a mode switch with
+    // unchanged columnCount + frozen generation must still re-upload.
+    invalidateRenderCaches();
     update();
 }
 
@@ -475,14 +500,14 @@ void WaveformWidget::ensureGridCache(int kind, const QRectF& plotRect)
 {
     const qreal dpr = devicePixelRatioF();
     const bool grid = showGrid();
-    // Grid colors come from the theme; mix the four it uses into one key
-    // so a theme switch invalidates the cache.
-    const quint64 themeKey =
-        (static_cast<quint64>(kGridMinor().rgba()) << 32)
-        ^ (static_cast<quint64>(kGridMajor().rgba()) << 16)
-        ^ (static_cast<quint64>(kCenterLine().rgba()) << 8)
-        ^ (static_cast<quint64>(kBackground().rgba()) << 4)
-        ^ static_cast<quint64>(kMutedLabel().rgba());
+    // Grid colors come from the theme; hash the five it uses into one key so
+    // a theme switch invalidates the cache. qHashMulti (not an overlapping-
+    // shift XOR, which loses bits and lets distinct color sets collide to the
+    // same key, leaving the old theme's grid on screen) mixes all 32 bits of
+    // each rgba().
+    const quint64 themeKey = qHashMulti(0,
+        kGridMinor().rgba(), kGridMajor().rgba(), kCenterLine().rgba(),
+        kBackground().rgba(), kMutedLabel().rgba());
     const QString fontKey = font().key();
 
     if (m_gridCacheKind == kind && m_gridCacheSize == size()
@@ -533,6 +558,10 @@ void WaveformWidget::setPaused(bool paused)
     }
 
     m_paused = paused;
+    // Pausing/resuming swaps displayModel() between the live model and the
+    // frozen snapshot; force a refresh so the swap isn't skipped by a
+    // coincidental generation() match.
+    invalidateRenderCaches();
     update();
 }
 
@@ -1490,17 +1519,22 @@ void WaveformWidget::updateOverlayImage(const WaveformScopeModel::WindowStats& s
             .arg(m_windowMs)
             .arg(std::max(1, m_windowMs / 10));
 
-    // Structural key (badges, footer, size) forces a rebuild; the numeric
+    // Structural key (badges, footer, size, dpr) forces a rebuild; the numeric
     // readout re-renders at most ~5 Hz so text shaping stays off the
-    // per-frame path.
-    const QString structural = QStringLiteral("%1|%2|%3|%4|%5|%6x%7")
+    // per-frame path. dpr is part of the key so moving the window between
+    // monitors with different scale factors (same logical size + text) still
+    // rebuilds the overlay at the new resolution instead of returning early
+    // and leaving a blurry image.
+    const qreal dpr = devicePixelRatioF();
+    const QString structural = QStringLiteral("%1|%2|%3|%4|%5|%6x%7@%8")
         .arg(timeText)
         .arg(m_paused ? 1 : 0)
         .arg(stale ? 1 : 0)
         .arg(stats.clipCount > 0 ? 1 : 0)
         .arg(stats.empty ? 1 : 0)
         .arg(width())
-        .arg(height());
+        .arg(height())
+        .arg(dpr, 0, 'f', 3);
     const QString key = structural + QLatin1Char('|') + readout
         + QLatin1Char('|') + QString::number(stats.clipCount);
     if (key == m_overlayKey)
@@ -1511,7 +1545,6 @@ void WaveformWidget::updateOverlayImage(const WaveformScopeModel::WindowStats& s
         && m_overlayTextAge.elapsed() < 200)
         return;
 
-    const qreal dpr = devicePixelRatioF();
     if (m_overlayImage.size() != size() * dpr) {
         m_overlayImage = QImage(size() * dpr, QImage::Format_ARGB32_Premultiplied);
         m_overlayImage.setDevicePixelRatio(dpr);

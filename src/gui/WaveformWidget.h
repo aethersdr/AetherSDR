@@ -149,6 +149,14 @@ private:
     void computeBandLevels(const WaveformScopeModel& model,
                            int bandCount, QVector<float>& levels);
 
+    // Force the next render to recompute Bands levels and re-upload the
+    // column/clip textures. Called when the DISPLAYED model or view mode
+    // changes: the generation() dirty counters are per-model and per-frame,
+    // not namespaced to which model/mode produced the cached data, so a
+    // model/view swap that leaves columnCount unchanged could otherwise skip
+    // the refresh and render the previous source's data (#3955).
+    void invalidateRenderCaches();
+
 #ifdef AETHER_GPU_SPECTRUM
     struct WaveUniforms;    // std140 block mirrored in wavescope.frag
     void initWavePipeline();
@@ -225,7 +233,7 @@ private:
     QRhiShaderResourceBindings* m_waveSrb{nullptr};
     QRhiBuffer* m_waveVbo{nullptr};
     QRhiBuffer* m_waveUbo{nullptr};
-    QRhiTexture* m_colTex{nullptr};       // columnCount×1 RGBA16F min/max/rms/peak
+    QRhiTexture* m_colTex{nullptr};       // columnCount×1 RGBA32F min/max/rms/peak
     QRhiTexture* m_clipTex{nullptr};      // columnCount×1 R8 clip flags
     quint64 m_lastColUploadGen{~0ull};    // model.generation() of the last col/clip upload
     QRhiSampler* m_colSampler{nullptr};   // linear — curves interpolate between columns

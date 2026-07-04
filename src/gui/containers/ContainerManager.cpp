@@ -188,6 +188,11 @@ void ContainerManager::reparentContainer(const QString& id,
     // external widget).  Floating containers don't have a layout
     // parent right now — just update the logical parentId.
     if (!c->isFloating()) {
+        // #2495: deregister any QRhiWidget child (e.g. the WAVE scope) from the
+        // old backing-store QRhi before reparenting, exactly as
+        // floatContainer()/dockContainer() do — otherwise a stale cleanup
+        // callback can fire against freed state on a GPU build.
+        prepareRhiChildrenForReparent(c);
         if (!meta.parentId.isEmpty()) {
             ContainerWidget* oldParent = m_containers.value(meta.parentId).data();
             if (oldParent) oldParent->removeChildWidget(c);

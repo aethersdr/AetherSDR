@@ -26,6 +26,17 @@ inline float clampSample(float sample)
 
 } // namespace
 
+void WaveformScopeModel::setMaxWindowMs(int maxWindowMs)
+{
+    const int clamped = std::max(0, maxWindowMs);
+    if (clamped == m_maxWindowMs)
+        return;
+    m_maxWindowMs = clamped;
+    // Grow the raw ring to the new ceiling now so history captured before the
+    // first widen is retained rather than starting from the current window.
+    ensureRawCapacity();
+}
+
 void WaveformScopeModel::configure(int sampleRate, int windowMs)
 {
     if (sampleRate == m_sampleRate && windowMs == m_windowMs
@@ -47,11 +58,15 @@ int WaveformScopeModel::windowSampleCount() const
 
 void WaveformScopeModel::ensureRawCapacity()
 {
-    // Same policy the widget's old ensureCapacity used: window plus 1 s
-    // headroom, floored at 1 s, rounded to 4096-sample chunks so slider
-    // drags don't realloc per notch.
+    // Size to the MAXIMUM window (not the current one) plus 1 s headroom,
+    // floored at 1 s, rounded to 4096-sample chunks so slider drags don't
+    // realloc per notch. Sizing to the ceiling is what lets a widen reveal
+    // already-captured history instead of a blank plot (StripWaveform's old
+    // ensureCapacity invariant); m_maxWindowMs==0 falls back to the current
+    // window.
+    const int sizingWindowMs = std::max({1000, m_windowMs, m_maxWindowMs});
     const int windowSamples = std::max(1, static_cast<int>(
-        static_cast<int64_t>(m_sampleRate) * std::max(1000, m_windowMs) / 1000));
+        static_cast<int64_t>(m_sampleRate) * sizingWindowMs / 1000));
     const int needed = std::max(m_sampleRate, windowSamples) + m_sampleRate;
     const int capacity = ((needed + 4095) / 4096) * 4096;
     if (m_raw.size() >= capacity)

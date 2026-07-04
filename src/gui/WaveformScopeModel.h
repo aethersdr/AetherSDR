@@ -42,6 +42,15 @@ public:
         bool empty{true};
     };
 
+    // The largest window this model will ever be asked to display. The raw
+    // ring is sized to hold it (not merely the current window), so widening
+    // the window — live or on a paused snapshot — reveals already-captured
+    // history instead of a blank plot that refills over the next N seconds
+    // (the invariant the old StripWaveform::ensureCapacity enforced). Set
+    // once from the widget's per-profile ceiling; 0 falls back to
+    // current-window sizing.
+    void setMaxWindowMs(int maxWindowMs);
+
     // Applies a new sample rate / window; re-bins from the raw ring when
     // either changed. Cheap no-op when both are unchanged.
     void configure(int sampleRate, int windowMs);
@@ -115,6 +124,7 @@ private:
 
     int m_sampleRate{24000};
     int m_windowMs{100};
+    int m_maxWindowMs{0};   // raw-ring sizing ceiling; 0 = size to current window
     quint64 m_generation{0};
     QElapsedTimer m_lastAppend;
 };

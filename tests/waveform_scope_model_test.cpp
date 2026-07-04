@@ -144,6 +144,31 @@ int main()
               "reconfigure: stats stay correct after window change");
     }
 
+    // ── setMaxWindowMs retains history for a later widen (#3955) ─────────
+    // The raw ring is sized to the max window, not the current one, so
+    // widening reveals already-captured history instead of a blank plot.
+    // Capture a distinguishing early burst (0.8 for 1 s) followed by 3 s of
+    // 0.2 while displaying a narrow 100 ms window, then widen to 4 s: the
+    // 0.8 burst — 3 s old, far outside the current-window+1 s fallback ring —
+    // must survive. Without setMaxWindowMs it would have been overwritten and
+    // the widened window would peak at 0.2.
+    {
+        WaveformScopeModel m;
+        m.setMaxWindowMs(5000);          // 5 s ceiling
+        m.configure(sr, 100);            // display a narrow 100 ms window
+        appendConst(m, 0.8f, sr);        // 1 s of 0.8 (the old burst)
+        appendConst(m, 0.2f, sr * 3);    // then 3 s of 0.2
+        m.configure(sr, 4000);           // widen to a 4 s window → re-bin from raw
+        const auto ws = m.windowStats();
+        check(!ws.empty, "maxwindow: widened window has data");
+        check(approx(ws.peak, 0.8f),
+              "maxwindow: 3 s-old 0.8 burst survives the widen");
+        QVector<WaveformScopeModel::ColumnStats> cols;
+        m.mergeColumns(64, cols);
+        check(cols.size() == 64 && approx(cols[0].peak, 0.8f),
+              "maxwindow: oldest column reflects the retained 0.8 burst");
+    }
+
     std::printf("\n%s (%d failures)\n", g_failures ? "FAILED" : "PASSED", g_failures);
     return g_failures ? 1 : 0;
 }
