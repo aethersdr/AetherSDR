@@ -76,10 +76,7 @@ signals:
     void disconnected();
     void errorOccurred(const QString& message);
     void messageReceived(const ParsedMessage& msg);
-    // sourceHandle: S<handle>| prefix (0 = radio-originated) — see
-    // RadioConnection::statusReceived (#3977).
-    void statusReceived(const QString& object, const QMap<QString, QString>& kvs,
-                        quint32 sourceHandle);
+    void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
     void versionReceived(const QString& version);
     void pingRttMeasured(int ms);
 

@@ -1272,7 +1272,6 @@ if(AETHER_GPU_SPECTRUM)
             resources/shaders/dss_mesh.vert
             resources/shaders/dss_mesh.frag
             resources/shaders/wavescope.frag
-            resources/shaders/wavedemo.frag
     )
 endif()
 

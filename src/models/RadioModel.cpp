@@ -16,6 +16,7 @@
 #include <QCoreApplication>
 #include <QDebug>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
 #include <QDateTime>
@@ -2103,7 +2104,12 @@ void RadioModel::onConnected()
 void RadioModel::stageSessionModelsForReconnect()
 {
     ++m_sessionModelGeneration;
-    m_staleSessionOwnHandle = clientHandle();
+    // The PREVIOUS session's handle, captured when that session registered
+    // (m_ownSessionHandle). clientHandle() is useless here: by stage time the
+    // connection has already assigned (or zeroed) the NEW session's handle,
+    // so capturing it would make the reclaim-eviction guard dead code. (#3977)
+    m_staleSessionOwnHandle = m_ownSessionHandle;
+    m_ownSessionHandle = 0;
 
     for (SliceModel* slice : m_slices) {
         if (slice) {
@@ -2395,6 +2401,11 @@ void RadioModel::registerAsGuiClient(const QString& clientId)
             s.save();
             qCDebug(lcProtocol) << "RadioModel: saved GUIClientID:" << body.trimmed();
         }
+
+        // #3977: remember THIS session's handle for the next reconnect's
+        // reclaim-eviction guard. Captured here (reply time) because the
+        // handle is guaranteed assigned once any command round-trips.
+        m_ownSessionHandle = clientHandle();
 
         sendCmd(QString("client station %1").arg(ourStationName()));
         sendCmd("client set send_reduced_bw_dax=1");
@@ -2911,6 +2922,13 @@ void RadioModel::onDisconnected()
     }
     m_clientStations.clear();
     m_clientInfoMap.clear();
+    // #3977: handles are radio-boot-scoped and recycled across connections —
+    // strikes and eviction marks must not outlive the connection they were
+    // observed on, or a recycled handle inherits them (instant eviction of an
+    // innocent client / permanent immunity for a real zombie).
+    m_foreignPanWrites.clear();
+    m_evictedPredecessorHandles.clear();
+    m_evictionsInFlight.clear();
     m_announcedClientConnections.clear();
     m_startupClientConnections.clear();
     m_clientConnectionNoticeTimer.invalidate();
@@ -3502,6 +3520,15 @@ void RadioModel::onMessageReceived(const ParsedMessage& msg)
     // status line here and parse it ourselves.
     if (msg.type != MessageType::Status) return;
 
+    // #3977: attribute display-pan writes to their originating client via the
+    // S<handle>| source prefix (msg.handle; 0 = the radio itself). A foreign
+    // session repeatedly adjusting OUR pan's dBm range is the #3951 zombie
+    // signature — detect, log, and (opt-in) evict. Originator semantics were
+    // observed live on fw 4.2.18 (FLEX-8400M); FlexLib never parses this
+    // token, and 4.1.x is unverified — which is one reason eviction defaults
+    // off (see staleSessionEvictionEnabled()).
+    noteForeignPanWriteIfAny(msg.object, msg.kvs, msg.handle);
+
     // Raw line: "S<handle>|meter 7.src=SLC#7.num=0#7.nam=LEVEL#..."
     const QString& raw = msg.raw;
     const int pipe = raw.indexOf('|');
@@ -3545,6 +3572,22 @@ void RadioModel::onMessageReceived(const ParsedMessage& msg)
 
 void RadioModel::sendCommand(const QString& cmd)
 {
+    // #3977: last-line ownership gate for pan writes. Every UI path that
+    // adjusts a pan (auto-floor, band restore, center/bandwidth/zoom/fps)
+    // funnels through here; when the radio has told us another client owns
+    // the pan, drop the write instead of stomping the rightful owner — the
+    // #3951 signature. Fails open when ownership is unknown.
+    if (cmd.startsWith(QLatin1String("display pan set "))) {
+        const QString panId =
+            normalizePanadapterId(cmd.mid(16).section(QLatin1Char(' '), 0, 0));
+        if (auto* pan = m_panadapters.value(panId, nullptr);
+            pan && !pan->ownedByClient(clientHandle())) {
+            qCWarning(lcProtocol).noquote()
+                << "RadioModel: dropping pan-set for foreign-owned pan"
+                << panId << "(owner 0x" + pan->clientHandle() + ") —" << cmd;
+            return;
+        }
+    }
     qCDebug(lcProtocol) << "RadioModel::sendCommand:" << cmd
              << "connected:" << isConnected() << "wan:" << (m_wanConn != nullptr);
     this->sendCmd(cmd);
@@ -3934,24 +3977,20 @@ PanadapterModel* RadioModel::ensureOwnedPanadapter(const QString& panId)
         // superseding. If that connection is somehow still alive radio-side
         // (half-open TCP, zombie process), its auto-floor tracker will keep
         // adjusting THIS pan's dBm range under us (#3951) — evict it the way
-        // SmartSDR evicts a predecessor on takeover. Disconnecting an already
-        // -gone handle is a harmless error reply.
-        bool oldOk = false;
-        const quint32 oldHandle = pan->clientHandle().toUInt(&oldOk, 16);
+        // SmartSDR evicts a predecessor on takeover (observed on fw 4.2.18,
+        // where the radio also self-heals duplicate client_ids on its own).
         // Only evict when the staged pan still records OUR OWN pre-reconnect
-        // handle. If status parsing reassigned the pan to another client
-        // before we went down, that client is the pan's live rightful owner
-        // — evicting it would start an eviction ping-pong between two
-        // healthy sessions sharing a client_id.
-        if (oldOk && oldHandle != 0 && oldHandle != clientHandle()
-            && oldHandle == m_staleSessionOwnHandle
-            && !m_evictedPredecessorHandles.contains(oldHandle)) {
-            m_evictedPredecessorHandles.insert(oldHandle);
-            qCDebug(lcProtocol).noquote()
-                << "RadioModel: evicting predecessor client 0x"
-                   + QString::number(oldHandle, 16)
-                << "still recorded on reclaimed pan" << normalizedPanId;
-            disconnectClientHandlesThen({oldHandle});
+        // handle (captured at registration, consumed at stage time). If
+        // status parsing reassigned the pan to another client before we went
+        // down, that client is the pan's live rightful owner — evicting it
+        // would start an eviction ping-pong between two healthy sessions
+        // sharing a client_id.
+        const quint32 oldHandle = pan->ownerHandle();
+        if (oldHandle != 0 && oldHandle != clientHandle()
+            && oldHandle == m_staleSessionOwnHandle) {
+            evictStaleSession(oldHandle,
+                              QStringLiteral("predecessor recorded on reclaimed "
+                                             "pan %1").arg(normalizedPanId));
         }
     } else {
         pan = new PanadapterModel(normalizedPanId, this);
@@ -4032,23 +4071,77 @@ QString RadioModel::ourStationName() const
     return station;
 }
 
+bool RadioModel::staleSessionEvictionEnabled() const
+{
+    // #3977: force-disconnecting another radio client is opt-in — detection
+    // and forensics always run, the disconnect does not. Feature-owned nested
+    // config per Principle V. fw 4.2+ self-heals duplicate-client_id zombies
+    // (observed on 4.2.18); the client-side eviction targets older firmware
+    // (the #3951 reporter's 8600 runs 4.1.3) where the S<handle> originator
+    // semantics below are unverified — hence off by default.
+    const QString json = AppSettings::instance()
+                             .value(QStringLiteral("StaleSessionDefense"), QString())
+                             .toString();
+    const QJsonObject obj = QJsonDocument::fromJson(json.toUtf8()).object();
+    return obj.value(QStringLiteral("EvictionEnabled")).toBool(false);
+}
+
+void RadioModel::evictStaleSession(quint32 handle, const QString& reason)
+{
+    if (handle == 0 || handle == clientHandle()) {
+        return;
+    }
+    if (m_evictedPredecessorHandles.contains(handle)
+        || m_evictionsInFlight.contains(handle)) {
+        return;
+    }
+    m_evictionsInFlight.insert(handle);
+    qCWarning(lcProtocol).noquote()
+        << "RadioModel: evicting stale session" << hexId(handle) << "—" << reason;
+    sendCmd(QStringLiteral("client disconnect 0x%1").arg(handle, 0, 16),
+            [this, handle](int code, const QString& body) {
+        m_evictionsInFlight.remove(handle);
+        if (code == 0) {
+            m_evictedPredecessorHandles.insert(handle);
+        } else {
+            // Not marked evicted: a refused disconnect must stay retryable,
+            // and `get clients` reporting evicted=true for a live zombie
+            // would defeat the forensics this exists for. (#3977)
+            qCWarning(lcProtocol) << "RadioModel: client disconnect refused for"
+                                  << Qt::hex << handle << "code" << code
+                                  << "body:" << body;
+        }
+    });
+}
+
 void RadioModel::noteForeignPanWriteIfAny(const QString& object,
                                           const QMap<QString, QString>& kvs,
                                           quint32 sourceHandle)
 {
-    if (sourceHandle == 0 || sourceHandle == clientHandle())
+    if (sourceHandle == 0 || sourceHandle == clientHandle()) {
         return;  // radio-originated or our own echo
-    if (!object.startsWith(QLatin1String("display pan ")))
+    }
+    if (!object.startsWith(QLatin1String("display pan "))) {
         return;
+    }
     if (!kvs.contains(QStringLiteral("min_dbm"))
-        && !kvs.contains(QStringLiteral("max_dbm")))
+        && !kvs.contains(QStringLiteral("max_dbm"))) {
         return;
+    }
 
     const QString panId =
         normalizePanadapterId(object.mid(12).section(QLatin1Char(' '), 0, 0));
     auto* pan = m_panadapters.value(panId, nullptr);
-    if (!pan || !pan->ownedByClient(clientHandle()))
-        return;  // not a pan we own — the other client's own business
+    // Fail CLOSED for evidence: only writes to a pan whose radio-confirmed
+    // (or claim-time) owner is us count against another client. The fail-open
+    // ownedByClient() would let writes to a not-yet-attributed pan frame a
+    // legitimate peer. Note applyPanStatus re-stamps the pan when the radio
+    // reassigns it, so a rightful new owner's echoes stop counting the moment
+    // the radio broadcasts the transfer — that ordering is what prevents two
+    // healthy sessions from evicting each other. (#3977)
+    if (!pan || pan->ownerHandle() == 0 || pan->ownerHandle() != clientHandle()) {
+        return;
+    }
 
     auto& rec = m_foreignPanWrites[sourceHandle];
     rec.count++;
@@ -4063,8 +4156,8 @@ void RadioModel::noteForeignPanWriteIfAny(const QString& object,
 
     // Evidence-based eviction (#3951): three strikes AND the offender is
     // provably a stale instance of us (same program + station). Anything
-    // else — SmartSDR, a differently-named station — is the user's business;
-    // we log and leave it alone.
+    // else — SmartSDR, a differently-named station, a non-GUI client absent
+    // from the roster — is the user's business; we log and leave it alone.
     constexpr int kEvictAfterForeignWrites = 3;
     if (rec.count < kEvictAfterForeignWrites
         || m_evictedPredecessorHandles.contains(sourceHandle)) {
@@ -4079,12 +4172,21 @@ void RadioModel::noteForeignPanWriteIfAny(const QString& object,
         || ourStation.isEmpty() || info.station != ourStation) {
         return;
     }
-    m_evictedPredecessorHandles.insert(sourceHandle);
-    qCWarning(lcProtocol).noquote()
-        << "RadioModel: evicting stale AetherSDR session" << hexId(sourceHandle)
-        << "(station" << info.station << ") after" << rec.count
-        << "foreign dBm writes to our pan" << panId << "(#3977/#3951)";
-    disconnectClientHandlesThen({sourceHandle});
+    if (!staleSessionEvictionEnabled()) {
+        if (rec.count == kEvictAfterForeignWrites) {
+            qCWarning(lcProtocol).noquote()
+                << "RadioModel: stale AetherSDR session" << hexId(sourceHandle)
+                << "(station" << info.station << ") reached" << rec.count
+                << "foreign dBm writes to our pan" << panId
+                << "— would evict, but eviction is disabled"
+                << "(StaleSessionDefense.EvictionEnabled) (#3977/#3951)";
+        }
+        return;
+    }
+    evictStaleSession(sourceHandle,
+                      QStringLiteral("%1 foreign dBm writes to our pan %2 "
+                                     "(station %3) (#3977/#3951)")
+                          .arg(rec.count).arg(panId, info.station));
 }
 
 bool RadioModel::sliceMayBelongToUs(int sliceId) const
@@ -4302,17 +4404,10 @@ void RadioModel::traceDaxStreamStatus(const QString& object,
 }
 
 void RadioModel::onStatusReceived(const QString& object,
-                                  const QMap<QString, QString>& kvs,
-                                  quint32 sourceHandle)
+                                  const QMap<QString, QString>& kvs)
 {
     // Relay to listeners (e.g., MemoryDialog)
     emit statusReceived(object, kvs);
-
-    // #3977: attribute display-pan writes to their originating client. A
-    // foreign session repeatedly adjusting OUR pan's dBm range is the #3951
-    // zombie signature — detect, log, and (when its identity proves it is a
-    // stale instance of us) evict it.
-    noteForeignPanWriteIfAny(object, kvs, sourceHandle);
 
     handleRemoteAudioRxStreamStatus(object, kvs);
     traceDaxStreamStatus(object, kvs);
@@ -4694,12 +4789,24 @@ void RadioModel::onStatusReceived(const QString& object,
                     }
                 } else if (m_panadapters.contains(panId)
                            && kvs.contains(QStringLiteral("client_handle"))) {
-                    // A pan we hold reporting a different owner means an
-                    // earlier claim was wrong — keep the pan (don't rip the
-                    // user's display down on a transient fragment) but make
-                    // the misclaim visible.
-                    qCWarning(lcProtocol) << "RadioModel: ignoring foreign owner status for claimed panadapter"
-                                          << panId << "owner=" << kvs.value(QStringLiteral("client_handle"));
+                    // A pan we hold reporting a different owner: the radio is
+                    // authoritative (Principle II). Keep the pan (don't rip
+                    // the user's display down on a transient fragment) but
+                    // adopt the radio's verdict on ownership — stamping the
+                    // new owner flips ownedByClient() false, which silences
+                    // every outbound pan-set gate AND stops the foreign-write
+                    // tally from counting the rightful owner's own echoes as
+                    // zombie evidence against it. (#3977)
+                    PanadapterModel* heldPan = m_panadapters.value(panId);
+                    const QString newOwner =
+                        kvs.value(QStringLiteral("client_handle"));
+                    if (heldPan->ownedByClient(clientHandle())) {
+                        qCWarning(lcProtocol)
+                            << "RadioModel: panadapter" << panId
+                            << "reassigned to client" << newOwner
+                            << "— going quiet on it (#3977)";
+                    }
+                    heldPan->setClientHandle(newOwner);
                 }
                 return;  // not our panadapter, ignore
             }

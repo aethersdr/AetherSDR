@@ -31,11 +31,20 @@ buf = b""
 seq = 0
 handle = None
 
+class Evicted(Exception):
+    pass
+
 def send(cmd):
     global seq
     seq += 1
     line = f"C{seq}|{cmd}\n".encode()
-    s.sendall(line)
+    try:
+        s.sendall(line)
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        # A forced `client disconnect` usually surfaces as RST, not a clean
+        # FIN — that's the eviction succeeding, not a test failure.
+        print("CONNECTION RESET BY RADIO (during send)", flush=True)
+        raise Evicted
     print(f"TX {line.decode().strip()}", flush=True)
 
 def pump(duration):
@@ -46,6 +55,9 @@ def pump(duration):
             chunk = s.recv(65536)
         except socket.timeout:
             continue
+        except (ConnectionResetError, ConnectionAbortedError, OSError):
+            print("CONNECTION RESET BY RADIO", flush=True)
+            return False
         if not chunk:
             print("CONNECTION CLOSED BY RADIO", flush=True)
             return False
@@ -71,13 +83,17 @@ pump(1)
 
 writes = 0
 base = -117.0
-while writes < args.max_writes:
-    mn = base + (writes % 5) * 0.1
-    send(f"display pan set {args.pan} min_dbm={mn:.2f} max_dbm={mn+90:.2f}")
-    writes += 1
-    if not pump(0.5):
-        print(f"EVICTED after {writes} writes", flush=True)
-        sys.exit(0)
+try:
+    while writes < args.max_writes:
+        mn = base + (writes % 5) * 0.1
+        send(f"display pan set {args.pan} min_dbm={mn:.2f} max_dbm={mn+90:.2f}")
+        writes += 1
+        if not pump(0.5):
+            print(f"EVICTED after {writes} writes", flush=True)
+            sys.exit(0)
+except Evicted:
+    print(f"EVICTED after {writes} writes", flush=True)
+    sys.exit(0)
 
 print(f"NOT evicted after {writes} writes", flush=True)
 sys.exit(1)

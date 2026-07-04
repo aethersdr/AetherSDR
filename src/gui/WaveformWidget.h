@@ -50,19 +50,8 @@ public:
         Graph,
         Envelope,
         Bars,
-        VerticalBars,
-        // GPU-only showcase visualizations (wavedemo.frag). CPU builds
-        // treat them as Graph and never offer them in the UI.
-        Ridge,
-        Tunnel,
-        Horizon
+        VerticalBars
     };
-
-    static bool isDemoMode(ViewMode m)
-    {
-        return m == ViewMode::Ridge || m == ViewMode::Tunnel
-            || m == ViewMode::Horizon;
-    }
 
     enum class Profile {
         Applet,  // sidebar WAVE applet — 20 s window cap, crisp stroke
@@ -170,9 +159,7 @@ private:
 
 #ifdef AETHER_GPU_SPECTRUM
     struct WaveUniforms;    // std140 block mirrored in wavescope.frag
-    struct DemoUniforms;    // std140 block mirrored in wavedemo.frag
     void initWavePipeline();
-    void initDemoPipeline();
     void initOverlayPipeline();
     void renderGpuFrame(QRhiCommandBuffer* cb);
     // Rebuild the text overlay image (dB labels, RMS/PK readout, footer,
@@ -271,21 +258,6 @@ private:
     bool m_shutdownPrepared{false};
     QVector<float> m_colUpload;           // columnCount × RGBA32F staging
     QVector<quint8> m_clipUpload;         // columnCount × R8 staging
-
-    // Showcase modes (Ridge/Tunnel/Horizon): dedicated pipeline over the
-    // same quad, plus a small envelope-history ring texture for Ridge.
-    QRhiGraphicsPipeline* m_demoPipeline{nullptr};
-    QRhiShaderResourceBindings* m_demoSrb{nullptr};
-    QRhiBuffer* m_demoUbo{nullptr};
-    QRhiTexture* m_histTex{nullptr};      // R32F kDemoCols × kHistRows ring
-    QVector<float> m_histRow;             // one-row staging buffer
-    int m_histHead{0};
-    bool m_histCleared{false};            // ring zero-seeded (reset on re-init)
-    QElapsedTimer m_histAdvance;          // row cadence (~30 rows/s)
-    QElapsedTimer m_demoClock;            // animation time base
-    // Demo scenes animate continuously (attract mode); repaints are otherwise
-    // data-driven, so drive ~60 fps repaints while a demo mode is active.
-    QTimer* m_demoAnimTimer{nullptr};
 #endif
 };
 

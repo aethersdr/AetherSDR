@@ -478,7 +478,8 @@ assertions.
 
 ```json
 → {"cmd":"get","model":"clients"}
-← {"ok":true,"model":"clients","ourHandle":"0x443a5d3c","station":"Shack",
+← {"ok":true,"model":"clients","evictionEnabled":false,
+   "ourHandle":"0x443a5d3c","station":"Shack",
    "clients":[
      {"handle":"0x443a5d3c","station":"Shack","program":"AetherSDR","source":"","isUs":true},
      {"handle":"0x42ffe1c4","station":"Shack","program":"AetherSDR","source":"","isUs":false}],
@@ -491,14 +492,21 @@ assertions.
 | field | meaning |
 |---|---|
 | `clients` | radio's client roster (from `sub client all`): handle, station, program, `isUs` |
-| `foreignPanWrites` | per-handle tally of `min_dbm`/`max_dbm` status writes some OTHER client made against a pan we own — the #3951 zombie signature |
-| `evictedHandles` | stale same-station/same-program sessions this client force-disconnected (`client disconnect`), via pan-reclaim or the 3-strike foreign-write rule |
+| `foreignPanWrites` | per-handle tally of `min_dbm`/`max_dbm` status writes some OTHER client made against a pan whose radio-confirmed owner is us — the #3951 zombie signature |
+| `evictedHandles` | stale same-station/same-program sessions whose `client disconnect` the radio **acknowledged** (confirmed, not merely attempted), via pan-reclaim or the 3-strike foreign-write rule |
+| `evictionEnabled` | whether the 3-strike eviction may act. **Off by default** — detection and forensics always run; the force-disconnect requires `AppSettings["StaleSessionDefense"]` = `{"EvictionEnabled": true}`. The pan-reclaim eviction (scoped to our own pre-reconnect handle) is always active |
+
+Counters and eviction marks are per-connection: they reset on disconnect,
+because the radio recycles handle values across sessions.
 
 Test recipe for session-fight classes of bugs: connect a second client to the
-same pan (or replay `display pan set … min_dbm=…` from a raw TCP session),
-then assert `foreignPanWrites` increments and — when the offender's
-station+program match ours — `evicted` flips true and the offender's
-connection drops.
+same pan (or replay `display pan set … min_dbm=…` from a raw TCP session —
+see `tools/zombie_session_sim.py`), then assert `foreignPanWrites`
+increments. With `EvictionEnabled` true and the offender's station+program
+matching ours (it must be a **GUI** client to appear in the roster — a
+`--bind-client-id` non-GUI zombie is tallied and logged but never evicted),
+`evicted` flips true once the radio acknowledges the disconnect and the
+offender's connection drops.
 
 ### `get dsp`
 Client-side **AetherDSP** noise-reduction state — the counterpart to the

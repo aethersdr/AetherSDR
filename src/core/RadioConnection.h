@@ -67,11 +67,7 @@ signals:
     void errorOccurred(const QString& message);
     void messageReceived(const ParsedMessage& msg);
     void pingRttMeasured(int ms);
-    // sourceHandle is the S<handle>| prefix — the client whose action caused
-    // this status (0 = the radio itself). Lets the model attribute writes to
-    // foreign sessions (#3977).
-    void statusReceived(const QString& object, const QMap<QString, QString>& kvs,
-                        quint32 sourceHandle);
+    void statusReceived(const QString& object, const QMap<QString, QString>& kvs);
     void versionReceived(const QString& version);
     // Emitted when a response (R-line) is received from the radio.
     // Callers register callbacks keyed by seq in their own maps. (#502)
