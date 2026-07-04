@@ -71,6 +71,24 @@ int main(int argc, char** argv)
                && info.inUse
                && info.multiFlexEnabled);
 
+    report("no bands key -> empty declaration (real Flex radios)",
+           info.bands.isEmpty());
+
+    // Radio-declared band set: a gateway presenting non-Flex hardware
+    // declares what it can actually tune (validation/dedup against BandDefs
+    // happens in RadioModel; discovery just carries the raw value).
+    QByteArray gatewayPacket("model=FLEX-6700 serial=GATE9700 nickname=Icom-IC-9700 "
+                             "ip=192.0.2.20 port=4992 status=Available "
+                             "bands=2m,440,23cm callsign=SDRSIM");
+    const RadioInfo gateway = RadioDiscoveryParserTest::parse(discovery, gatewayPacket);
+
+    report("bands= discovery key captured verbatim",
+           gateway.bands == QStringLiteral("2m,440,23cm"));
+    report("bands= does not disturb neighbouring fields",
+           gateway.model == QStringLiteral("FLEX-6700")
+               && gateway.nickname == QStringLiteral("Icom-IC-9700")
+               && gateway.callsign == QStringLiteral("SDRSIM"));
+
     if (g_failed == 0) {
         std::printf("\nAll %d radio-discovery tests passed.\n", g_total);
         return 0;
