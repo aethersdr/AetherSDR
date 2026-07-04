@@ -4541,17 +4541,25 @@ QJsonObject AutomationServer::doTci(const QString& action, const QString& value)
         QJsonObject o = status();
         m_tciSimCloseReason = abrupt ? QStringLiteral("client abort (abrupt)")
                                      : QStringLiteral("client stop");
-        if (abrupt) {
-            m_tciSim->abort();
-        } else {
-            if (m_tciSimAudioStarted)
-                m_tciSim->sendTextMessage(QStringLiteral("audio_stop:0;"));
-            m_tciSim->close();
-        }
-        m_tciSim->deleteLater();
+        // Null m_tciSim BEFORE abort()/close(). abort() emits QWebSocket::
+        // disconnected synchronously (same-thread direct delivery), re-entering
+        // the disconnected lambda; if m_tciSim were still set there it would
+        // deleteLater()+null it, and the deleteLater() below would then fire on
+        // a dangling pointer. Nulling first makes the lambda's sock==m_tciSim
+        // guard fail so it no-ops, and we own the teardown here (#4017).
+        QWebSocket* sim = m_tciSim;
+        const bool wasAudioStarted = m_tciSimAudioStarted;
         m_tciSim = nullptr;
         m_tciSimReady = false;
         m_tciSimAudioStarted = false;
+        if (abrupt) {
+            sim->abort();
+        } else {
+            if (wasAudioStarted)
+                sim->sendTextMessage(QStringLiteral("audio_stop:0;"));
+            sim->close();
+        }
+        sim->deleteLater();
         o[QStringLiteral("action")] = QStringLiteral("stop");
         o[QStringLiteral("abrupt")] = abrupt;
         qCInfo(lcAutomation) << "tci sim: stopped" << (abrupt ? "(abrupt)" : "(graceful)");
