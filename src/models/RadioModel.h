@@ -942,9 +942,6 @@ private:
     QSet<quint32> m_deadDaxRxSeen;
     QSet<quint32> m_externalDaxTxSeen;
     QSet<quint32> m_externalDaxRxSeen;
-    // dax_rx channel → firmware auto-bound stream↔slice at registration
-    // (slice=<letter> in the status). Gates the legacy #1439 nudge (#3305).
-    QHash<int, bool> m_daxRxBoundObserved;
     WanConnection* m_wanConn{nullptr};  // non-null when connected via SmartLink
     QString  m_wanPublicIp;
     quint16  m_wanUdpPort{4991};
