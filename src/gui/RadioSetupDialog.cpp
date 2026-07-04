@@ -3338,8 +3338,9 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
                 autoCheck->setText("Auto");
                 autoCheck->setChecked(profile.autoConnect);
                 autoCheck->setAccessibleName("Auto connect KiwiSDR antenna");
-                autoCheck->setStyleSheet(
-                    "QCheckBox { color: #c8d8e8; font-size: 12px; spacing: 4px; }");
+                AetherSDR::ThemeManager::instance().applyStyleSheet(autoCheck,
+                    "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
+                    + kCheckBoxIndicator);
                 rowLayout->addWidget(autoCheck, 1, 1, Qt::AlignCenter);
 
                 const KiwiSdrClient::State kiwiState =
@@ -3442,8 +3443,9 @@ QWidget* RadioSetupDialog::buildAntennaNamesTab()
             auto* autoCheck = new QCheckBox;
             autoCheck->setText("Auto");
             autoCheck->setAccessibleName("Auto connect new KiwiSDR antenna");
-            autoCheck->setStyleSheet(
-                "QCheckBox { color: #c8d8e8; font-size: 12px; spacing: 4px; }");
+            AetherSDR::ThemeManager::instance().applyStyleSheet(autoCheck,
+                "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
+                + kCheckBoxIndicator);
             rowLayout->addWidget(autoCheck, 1, 1, Qt::AlignCenter);
 
             auto committed = std::make_shared<bool>(false);
@@ -3655,8 +3657,12 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
     static const QString kSpin =
         "QSpinBox { background: #1a2a3a; border: 1px solid #304050; "
         "color: #c8d8e8; font-size: 11px; padding: 2px; }";
+    // Token template (applied via applyStyleSheet) so the indicator is visible
+    // in dark mode, matching the other checkboxes in this dialog. #c8d8e8 is
+    // exactly {{color.text.primary}}, so the text colour is unchanged (#4012).
     static const QString kCheck =
-        "QCheckBox { color: #c8d8e8; font-size: 11px; }";
+        "QCheckBox { color: {{color.text.primary}}; font-size: 11px; spacing: 8px; }"
+        + kCheckBoxIndicator;
 
     // ── Left: cable list ────────────────────────────────────────────────
     auto* listGroup = new QGroupBox("Cables");
@@ -3784,7 +3790,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         catNameEdit->setStyleSheet(kEdit);
         hg->addWidget(catNameEdit, 0, 1);
         catEnabledCheck = new QCheckBox("Enabled");
-        catEnabledCheck->setStyleSheet(kCheck);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(catEnabledCheck, kCheck);
         hg->addWidget(catEnabledCheck, 1, 0, 1, 2);
         catStatusLabel = new QLabel("Unplugged");
         AetherSDR::ThemeManager::instance().applyStyleSheet(catStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
@@ -3805,7 +3811,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         catSourceCombo = makeSourceCombo();
         sg->addWidget(catSourceCombo, 0, 1);
         catAutoReportCheck = new QCheckBox("Auto Report");
-        catAutoReportCheck->setStyleSheet(kCheck);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(catAutoReportCheck, kCheck);
         sg->addWidget(catAutoReportCheck, 1, 0, 1, 2);
         vbox->addWidget(srcGroup);
 
@@ -3835,7 +3841,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         bcdNameEdit->setStyleSheet(kEdit);
         hg->addWidget(bcdNameEdit, 0, 1);
         bcdEnabledCheck = new QCheckBox("Enabled");
-        bcdEnabledCheck->setStyleSheet(kCheck);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bcdEnabledCheck, kCheck);
         hg->addWidget(bcdEnabledCheck, 1, 0, 1, 2);
         bcdStatusLabel = new QLabel("Unplugged");
         AetherSDR::ThemeManager::instance().applyStyleSheet(bcdStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
@@ -3885,7 +3891,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         bitNameEdit->setStyleSheet(kEdit);
         hg->addWidget(bitNameEdit, 0, 1);
         bitEnabledCheck = new QCheckBox("Enabled");
-        bitEnabledCheck->setStyleSheet(kCheck);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(bitEnabledCheck, kCheck);
         hg->addWidget(bitEnabledCheck, 1, 0, 1, 2);
         bitStatusLabel = new QLabel("Unplugged");
         AetherSDR::ThemeManager::instance().applyStyleSheet(bitStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
@@ -3996,7 +4002,7 @@ QWidget* RadioSetupDialog::buildUsbCablesTab()
         ptNameEdit->setStyleSheet(kEdit);
         hg->addWidget(ptNameEdit, 0, 1);
         ptEnabledCheck = new QCheckBox("Enabled");
-        ptEnabledCheck->setStyleSheet(kCheck);
+        AetherSDR::ThemeManager::instance().applyStyleSheet(ptEnabledCheck, kCheck);
         hg->addWidget(ptEnabledCheck, 1, 0, 1, 2);
         ptStatusLabel = new QLabel("Unplugged");
         AetherSDR::ThemeManager::instance().applyStyleSheet(ptStatusLabel, "QLabel { color: {{color.text.label}}; font-size: 11px; }");
@@ -4239,7 +4245,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
 
         auto* ulanziEnable = new QCheckBox("Enable Ulanzi Dial");
         AetherSDR::ThemeManager::instance().applyStyleSheet(
-            ulanziEnable, "QCheckBox { color: {{color.text.primary}}; }");
+            ulanziEnable, "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
+            + kCheckBoxIndicator);
         ulanziEnable->setChecked(
             settings.value("UlanziDialEnabled", "False").toString() == "True");
         connect(ulanziEnable, &QCheckBox::toggled, this, [this](bool on) {
@@ -4254,7 +4261,8 @@ QWidget* RadioSetupDialog::buildSerialTab()
         auto* hidEnable = new QCheckBox(
             "Enable HID encoders / StreamDeck+ (RC-28, PowerMate, ShuttleXpress, …)");
         AetherSDR::ThemeManager::instance().applyStyleSheet(
-            hidEnable, "QCheckBox { color: {{color.text.primary}}; }");
+            hidEnable, "QCheckBox { color: {{color.text.primary}}; spacing: 8px; }"
+            + kCheckBoxIndicator);
         hidEnable->setChecked(
             settings.value("HidEncoderEnabled", "False").toString() == "True");
         connect(hidEnable, &QCheckBox::toggled, this, [this](bool on) {
@@ -5886,7 +5894,8 @@ QWidget* RadioSetupDialog::buildUiEnhancementsTab()
 
         auto* reverseChk = new QCheckBox("Reverse mouse-wheel tuning direction");
         AetherSDR::ThemeManager::instance().applyStyleSheet(reverseChk,
-            "QCheckBox { color: {{color.text.primary}}; font-size: 12px; }");
+            "QCheckBox { color: {{color.text.primary}}; font-size: 12px; spacing: 8px; }"
+            + kCheckBoxIndicator);
         {
             auto& s = AppSettings::instance();
             reverseChk->setChecked(s.value("ReverseMouseWheel", false).toBool());
