@@ -418,21 +418,26 @@ RadioModel::RadioModel(QObject* parent)
                 qCWarning(lcDax) << "RadioModel: dax_rx stream create for channel"
                                  << ch << "failed, code" << Qt::hex << code << body;
                 m_panStream->notifyDaxCreateFailed(ch);
+                return;
             }
-            // Success needs no action here: the stream status registers the
-            // id (registerDaxStream clears the latch).
+            // One-shot #1439 client-registration re-assert, gated on the
+            // create SUCCEEDING: if a slice carries this channel, nudge
+            // dax_clients once per confirmed stream. Modern firmware
+            // auto-binds stream↔slice at create (state-machines.md §7.2);
+            // this covers older firmware. Success-gating keeps the failure
+            // retry loop (notifyDaxCreateFailed, 2 s cadence) from
+            // re-asserting a live binding every cycle — the radio answers
+            // same-value re-asserts with a transient unbind/rebind pair
+            // (§7.4), which is noise we never want to emit repeatedly.
+            // Tied to a command we initiated, never to a status echo, so it
+            // cannot oscillate (#4009).
+            for (auto* s : slices()) {
+                if (s && s->daxChannel() == ch) {
+                    sendCommand(QString("slice set %1 dax=%2").arg(s->sliceId()).arg(ch));
+                    break;
+                }
+            }
         });
-        // One-shot #1439 client-registration re-assert: if a slice already
-        // carries this channel, nudge dax_clients once. Modern firmware
-        // auto-binds stream↔slice at create (state-machines.md §7.2); this
-        // covers older firmware. Sent once per create — tied to a command we
-        // initiated, never to a status echo, so it cannot oscillate (#4009).
-        for (auto* s : slices()) {
-            if (s && s->daxChannel() == ch) {
-                sendCommand(QString("slice set %1 dax=%2").arg(s->sliceId()).arg(ch));
-                break;
-            }
-        }
     });
     connect(m_panStream, &PanadapterStream::daxStreamRemoveNeeded,
             this, [this](quint32 streamId, int ch) {
