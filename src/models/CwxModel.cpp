@@ -1,4 +1,5 @@
 #include "CwxModel.h"
+#include "core/LogManager.h"
 #include <QDebug>
 #include <QMap>
 
@@ -109,7 +110,7 @@ void CwxModel::emitExpandedSend(const QVector<SpeedSegment>& segs)
             const QString cmd =
                 QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++);
             if (i == lastNonEmpty)
-                emit replyCommandReady(cmd);
+                emit replyCommandReady(cmd, m_drainEpoch);
             else
                 emit commandReady(cmd);
         }
@@ -132,7 +133,13 @@ void CwxModel::sendChar(const QString& ch)
     if (ch.isEmpty()) return;
     QString encoded = ch;
     encoded.replace(' ', QChar(0x7f));
-    emit commandReady(QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++));
+    // Live-mode chars go via the reply path (not fire-and-forget commandReady)
+    // so each char's radio_index advances the drain watch. Without this a
+    // live-typing-only session arms no watch and the ~60 s stuck-TX survives,
+    // and chars typed after a macro would be truncated by a stale watch. (#3949)
+    emit replyCommandReady(
+        QString("cwx send \"%1\" %2").arg(encoded).arg(m_nextBlock++),
+        m_drainEpoch);
     emit transmissionRequested(ch, m_speed);
 }
 
@@ -160,13 +167,19 @@ void CwxModel::saveMacro(int idx, const QString& text)
 
 void CwxModel::erase(int numChars)
 {
+    // KNOWN GAP (needs hardware / #3949 item 4): erase removes queued chars, so
+    // an armed drain watch at m_cwxEndIndex may point past the new tail — sent=
+    // could then never reach it and TX would stick for the full interlock
+    // timeout. The correct adjustment depends on the radio's post-erase sent=
+    // semantics, which aren't yet confirmed on the 8600. Left unchanged (bare
+    // commandReady) pending that observation rather than guessing an offset.
     emit commandReady(QString("cwx erase %1").arg(numChars));
     emit transmissionCancelled();
 }
 
 void CwxModel::clearBuffer()
 {
-    m_cwxEndIndex = -1;   // abort any pending queue-drain watch (#3949)
+    resetDrainWatch();    // abort pending watch + bump epoch (#3949)
     // Re-anchor WPM before clearing so ESC can't leave the radio parked at
     // a transient speed that was in-flight from an expandedSend sequence.
     emit commandReady(QString("cwx wpm %1").arg(m_speed));
@@ -174,10 +187,27 @@ void CwxModel::clearBuffer()
     emit transmissionCancelled();
 }
 
-void CwxModel::handleSendReply(int resultCode, const QString& body)
+void CwxModel::resetDrainWatch()
 {
+    // Bumping the epoch invalidates any in-flight cwx-send reply so it can't
+    // re-arm the watch for a batch the radio has discarded. Clearing the end
+    // index also releases the monotonic guard in handleSendReply(), so a fresh
+    // session after reconnect can arm at a smaller radio_index. (#3949)
+    ++m_drainEpoch;
+    m_cwxEndIndex = -1;
+}
+
+void CwxModel::handleSendReply(int resultCode, const QString& body, int epoch)
+{
+    // Stale-reply guard: a reply for a batch that was aborted (ESC/clear/
+    // disconnect) after the command was sent carries the pre-abort epoch and
+    // must not re-arm the watch. Without this, a late reply arriving after ESC
+    // — easy over SmartLink latency — would arm at an index the radio already
+    // discarded, causing a spurious mid-message xmit 0 later. (#3949)
+    if (epoch != m_drainEpoch)
+        return;
     if (resultCode != 0) {
-        qWarning() << "CwxModel: cwx send failed, result=" << resultCode;
+        qCWarning(lcCw) << "CwxModel: cwx send failed, result=" << resultCode;
         return;
     }
     // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83.
@@ -187,7 +217,7 @@ void CwxModel::handleSendReply(int resultCode, const QString& body)
     bool ok = false;
     const int radioIndex = indexStr.toInt(&ok);
     if (!ok || radioIndex < 0) {
-        qWarning() << "CwxModel: failed to parse radio_index from reply body:" << body;
+        qCWarning(lcCw) << "CwxModel: failed to parse radio_index from reply body:" << body;
         return;
     }
     // Only ever advance the watch, never retract it. cwx send replies on the

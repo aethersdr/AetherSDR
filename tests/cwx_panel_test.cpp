@@ -60,9 +60,10 @@ struct Fixture {
                          [this](const QString& command) {
                              commands.push_back(command);
                          });
-        // replyCommandReady carries the final cwx send of each macro block (#3949)
+        // replyCommandReady carries the final cwx send of each macro block, and
+        // every live-mode char, plus the drain-watch epoch (#3949)
         QObject::connect(&model, &CwxModel::replyCommandReady,
-                         [this](const QString& command) {
+                         [this](const QString& command, int /*epoch*/) {
                              commands.push_back(command);
                          });
     }

@@ -33,6 +33,10 @@ public:
     // Exposed for the automation bridge's `get cwx` snapshot so the queue-drain
     // watch is observable (#3949).
     int   cwxEndIndex() const { return m_cwxEndIndex; }
+    // Generation counter for the drain watch. Bumped by resetDrainWatch() (ESC/
+    // clear/disconnect) so a late cwx-send reply for a discarded batch can be
+    // recognised as stale and ignored rather than re-arming the watch. (#3949)
+    int   drainEpoch()  const { return m_drainEpoch; }
     QString macro(int idx) const;  // 0-based (0=F1, 11=F12)
 
     // Actions
@@ -42,6 +46,11 @@ public:
     void saveMacro(int idx, const QString& text); // 0-based
     void erase(int numChars);
     void clearBuffer();
+    // Abort any in-flight queue-drain watch and bump the epoch so replies for
+    // the discarded batch are rejected. Called on ESC/clear and on disconnect
+    // (via RadioModel::onDisconnected) so a stale m_cwxEndIndex can't wedge the
+    // monotonic guard across a reconnect. (#3949)
+    void resetDrainWatch();
     void setSpeed(int wpm);
     void setDelay(int ms);
     void setSpeedStep(int step);
@@ -51,8 +60,11 @@ public:
     // Status parsing (from radio)
     void applyStatus(const QMap<QString, QString>& kvs);
     // Invoked by RadioModel with the reply to the final cwx send command.
-    // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83. (#3949)
-    void handleSendReply(int resultCode, const QString& body);
+    // Body format is "<radio_index>,<block>" per FlexLib CWX.cs:54-83. The
+    // epoch is the drainEpoch() snapshot taken when the command was emitted;
+    // a reply whose epoch no longer matches belongs to a batch that was since
+    // aborted (ESC/clear/disconnect) and is ignored. (#3949)
+    void handleSendReply(int resultCode, const QString& body, int epoch);
 
     // Parses text for leading +/- speed modifiers on words.
     // A +/- run at word-start (after space or string-start) immediately
@@ -65,10 +77,12 @@ public:
 
 signals:
     void commandReady(const QString& cmd);
-    // Emitted for the final cwx send of a macro/send block so RadioModel can
-    // capture the radio_index from the reply and know when that block is fully
-    // transmitted.  See handleSendReply(). (#3949)
-    void replyCommandReady(const QString& cmd);
+    // Emitted for the final cwx send of a macro/send block, and for every
+    // live-mode char, so RadioModel can capture the radio_index from the reply
+    // and know when that block is fully transmitted.  The epoch is snapshotted
+    // at emit time and passed back to handleSendReply() so a reply for an
+    // aborted batch is discarded.  See handleSendReply(). (#3949)
+    void replyCommandReady(const QString& cmd, int epoch);
     void speedChanged(int wpm);
     void speedStepChanged(int step);
     void delayChanged(int ms);
@@ -96,6 +110,7 @@ private:
     int     m_sentIndex{-1};
     int     m_nextBlock{1};
     int     m_cwxEndIndex{-1};   // radio_index to watch for; -1 = not tracking
+    int     m_drainEpoch{0};     // bumped on ESC/clear/disconnect (#3949)
     QString m_macros[12];
 };
 

@@ -727,26 +727,41 @@ RadioModel::RadioModel(QObject* parent)
         // CWX TX and doesn't force the audio gate off. (#2047, #2097)
         if (cmd.startsWith("cwx send") || cmd.startsWith("cwx macro send"))
             m_cwxActive = true;
-        else if (cmd.startsWith("cwx clear"))
+        else if (cmd.startsWith("cwx clear")) {
             m_cwxActive = false;
+            m_cwxDrainArmed = false;  // ESC/clear aborts the drain watch (#3949)
+        }
         sendCmd(cmd);
     });
     // Final cwx send of each macro/text block goes via replyCommandReady so we
     // can capture the radio_index from the reply.  CwxModel::handleSendReply
     // stores it; applyStatus fires queueEmpty() when cwx sent= reaches it.
     // This replaces the broken cwx queue= path — firmware never sends it. (#3949)
-    connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd){
+    connect(&m_cwxModel, &CwxModel::replyCommandReady, this, [this](const QString& cmd, int epoch){
         m_cwxActive = true;
-        sendCmd(cmd, [this](int respVal, const QString& body){
-            m_cwxModel.handleSendReply(respVal, body);
+        // Arm the drain-release latch. Unlike m_cwxActive (which the interlock
+        // handler clears on every TRANSMITTING→READY flicker during a macro),
+        // m_cwxDrainArmed is owned solely by the CWX send/drain lifecycle, so
+        // the queueEmpty release below survives QSK break-in flicker. (#3949)
+        m_cwxDrainArmed = true;
+        sendCmd(cmd, [this, epoch](int respVal, const QString& body){
+            m_cwxModel.handleSendReply(respVal, body, epoch);
         });
     });
     // When the radio signals its CWX buffer is drained, release TX. (#2450)
     // The radio's break-in timer fires but sync_cwx=1 still requires an
     // explicit xmit 0 from the client — without it the radio holds TX for
     // its full hardware interlock timeout (~60 s).
+    //
+    // Gated on m_cwxDrainArmed, NOT m_cwxActive: setMox(false) unconditionally
+    // emits `xmit 0`, so the release must only fire for a CWX batch we armed,
+    // but the gate must not be the interlock-flicker-vulnerable m_cwxActive or
+    // the release would be skipped mid-macro and TX would stick. queueEmpty()
+    // itself only fires from CwxModel's armed watch (or a legacy queue= that
+    // firmware never sends), so this pairing is the drain-release authority. (#3949)
     connect(&m_cwxModel, &CwxModel::queueEmpty, this, [this]() {
-        if (!m_cwxActive) return;
+        if (!m_cwxDrainArmed) return;
+        m_cwxDrainArmed = false;
         m_cwxActive = false;
         m_transmitModel.setMox(false);
     });
@@ -3032,6 +3047,10 @@ void RadioModel::onDisconnected()
     m_txRequested = false;
     m_cwKeyActive = false;
     m_cwxActive = false;
+    m_cwxDrainArmed = false;
+    // Reset the CWX drain watch and bump its epoch so a watch armed mid-macro
+    // at disconnect can't wedge the monotonic guard after reconnect. (#3949)
+    m_cwxModel.resetDrainWatch();
     m_lastInterlockSource.clear();
     m_lastInterlockNotificationKey.clear();
     m_lastInterlockNotificationMs = 0;

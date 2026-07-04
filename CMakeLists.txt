@@ -2509,10 +2509,30 @@ add_executable(cwx_speed_modifier_test
     tests/cwx_speed_modifier_test.cpp
     src/models/CwxModel.cpp
     src/models/CwxModel.h
+    # CwxModel now logs via lcCw (qCWarning) — pull in the logging category.
+    # LogManager depends on AsyncLogWriter (member) + AppSettings (retention
+    # config), so both come along to satisfy the link. (#3949)
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
 )
 target_include_directories(cwx_speed_modifier_test PRIVATE src)
 target_link_libraries(cwx_speed_modifier_test PRIVATE Qt6::Core)
 add_test(NAME cwx_speed_modifier_test COMMAND cwx_speed_modifier_test)
+
+# Queue-drain watch state machine: epoch guard, live-char arming, and the
+# CwxModel-side invariant the RadioModel flicker-immune release latch relies on. (#3949)
+add_executable(cwx_drain_watch_test
+    tests/cwx_drain_watch_test.cpp
+    src/models/CwxModel.cpp
+    src/models/CwxModel.h
+    src/core/LogManager.cpp
+    src/core/AsyncLogWriter.cpp
+    src/core/AppSettings.cpp
+)
+target_include_directories(cwx_drain_watch_test PRIVATE src)
+target_link_libraries(cwx_drain_watch_test PRIVATE Qt6::Core Qt6::Test)
+add_test(NAME cwx_drain_watch_test COMMAND cwx_drain_watch_test)
 
 add_executable(cwx_panel_test
     tests/cwx_panel_test.cpp
