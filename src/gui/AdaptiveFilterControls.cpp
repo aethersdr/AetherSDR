@@ -12,6 +12,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QSet>
 #include <QSignalBlocker>
 #include <QVBoxLayout>
 
@@ -260,7 +261,19 @@ void AdaptiveFilterControls::loadPrefs(SliceModel* slice)
     // Session-scoped by design: the adaptive filter always starts DISABLED and
     // the operator enables it explicitly each session. Only the config above
     // persists; the saved "enabled" value is deliberately not restored.
-    slice->setAdaptiveFilterEnabled(false);
+    //
+    // Force-disable only on the FIRST load of a slice this session. loadPrefs
+    // also runs on every re-bind — e.g. a pan migration destroys and rebuilds
+    // the host widget, re-running setSlice — and re-disabling there would switch
+    // the feature off just because the operator dragged the slice to another
+    // panadapter. The set is shared across both host controls (VFO flag + RX
+    // applet), so the second control binding the same slice won't re-disable
+    // either. (#3945 review)
+    static QSet<int> s_sessionLoaded;
+    if (!s_sessionLoaded.contains(slice->sliceId())) {
+        s_sessionLoaded.insert(slice->sliceId());
+        slice->setAdaptiveFilterEnabled(false);
+    }
 }
 
 void AdaptiveFilterControls::savePrefs(SliceModel* slice)
