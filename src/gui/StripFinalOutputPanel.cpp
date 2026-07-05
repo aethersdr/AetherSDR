@@ -1060,7 +1060,7 @@ void StripFinalOutputPanel::showQuindarEditor()
     };
     refreshFieldsForStyle();
 
-    auto setStyle = [=](bool morse) {
+    auto setStyle = [=, this](bool morse) {
         toneStyleBtn->setChecked(!morse);
         morseStyleBtn->setChecked(morse);
         if (auto* qt = m_audio->clientQuindarTone()) {
