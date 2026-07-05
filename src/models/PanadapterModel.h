@@ -38,6 +38,10 @@ public:
     // Display state
     double centerMhz() const { return m_centerMhz; }
     double bandwidthMhz() const { return m_bandwidthMhz; }
+    // Normalized setter driven by the backend (aetherd RFC 2.3). A negative
+    // value means "leave unchanged" (the radio may report one without the
+    // other). Emits infoChanged when either actually changes.
+    void setCenterBandwidth(double centerMhz, double bandwidthMhz);
     float minDbm() const { return m_minDbm; }
     float maxDbm() const { return m_maxDbm; }
     QString rxAntenna() const { return m_rxAntenna; }

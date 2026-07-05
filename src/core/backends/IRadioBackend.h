@@ -107,6 +107,13 @@ signals:
     void sliceChanged(int sliceId, const QVariantMap& changes);
     void sliceRemoved(int sliceId);
     void meterUpdate(const QString& meterId, double value);
+    // Panadapter core display state (universal — every family has a pan center
+    // and span). The backend decodes it from vendor status; RadioModel drives
+    // the PanadapterModel. panId is the pan's identifier (opaque to the model).
+    // (aetherd RFC 2.3 — first converted touchpoint; the template the other
+    // universal pan fields + the other mixed models follow.)
+    void panCenterBandwidthChanged(const QString& panId,
+                                   double centerMhz, double bandwidthMhz);
 
     // ---- data plane UP (RFC §4.2) ----
     // Declared here so backends have a normalized outlet for spectrum/waterfall/

@@ -42,6 +42,7 @@
 namespace AetherSDR {
 
 class IRadioBackend;   // aetherd RFC §5.5 radio-facing seam (owned via unique_ptr below)
+class FlexBackend;     // transitional concrete alias for 2.3 status-decode driving
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection, processes incoming status messages,
@@ -669,6 +670,12 @@ private:
     // PanadapterStream and their worker threads; RadioModel keeps the two
     // NON-OWNING pointers below, obtained from the backend at construction.
     std::unique_ptr<IRadioBackend> m_backend;
+    // Transitional (aetherd RFC 2.3): RadioModel drives the backend's Flex
+    // status decode from its status choke points while touchpoints convert
+    // one at a time. Non-owning alias of m_backend; goes away once the backend
+    // owns status ingress (the protocol step). Concrete type because the decode
+    // input is vendor-specific; the outputs are normalized interface signals.
+    FlexBackend* m_flexBackend{nullptr};
     RadioConnection*  m_connection{nullptr};   // non-owning — owned by m_backend
     // Sequence counter and callback map — owned by RadioModel on main thread.
     // RadioConnection no longer manages callbacks. (#502)

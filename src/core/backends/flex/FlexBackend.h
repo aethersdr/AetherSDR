@@ -2,6 +2,9 @@
 
 #include <functional>
 
+#include <QMap>
+#include <QString>
+
 #include "core/backends/IRadioBackend.h"
 
 class QThread;
@@ -57,6 +60,16 @@ public:
     void setKeying(bool key) override;
     void invokeExtension(const QString& ns, const QString& verb,
                          quint64 requestId, const QVariant& arg = {}) override;
+
+    // ---- status decode (aetherd RFC 2.3) ----
+    // Decode the universal panadapter display fields (center/bandwidth) out of
+    // a Flex "display pan" status kv-set and emit the normalized
+    // panCenterBandwidthChanged signal. RadioModel calls this from its status
+    // choke point (handlePanadapterStatus), so both live and deferred/replayed
+    // status flow through it. The Flex-specific pan fields still decode in
+    // PanadapterModel::applyPanStatus until they convert too.
+    void decodePanCenterBandwidth(const QString& panId,
+                                  const QMap<QString, QString>& kvs);
 
 private:
     void send(const QString& cmd);

@@ -411,8 +411,23 @@ RadioModel::RadioModel(QObject* parent)
         flex->setModelProvider([this]{ return m_model; });
         m_connection = flex->connection();   // non-owning; the backend owns it
         m_panStream  = flex->panStream();    // non-owning; the backend owns it
+        m_flexBackend = flex.get();          // transitional alias (2.3)
         m_backend = std::move(flex);
     }
+
+    // aetherd RFC 2.3: the first converted touchpoint. The backend decodes the
+    // universal pan center/bandwidth from Flex status and emits this normalized
+    // signal; RadioModel drives the addressed PanadapterModel. (Template for the
+    // remaining universal fields and the other mixed models.)
+    connect(m_backend.get(), &IRadioBackend::panCenterBandwidthChanged, this,
+            [this](const QString& panId, double centerMhz, double bandwidthMhz) {
+        auto* pan = m_panadapters.value(panId, nullptr);
+        if (!pan) pan = activePanadapter();
+        if (!pan) return;
+        pan->setCenterBandwidth(centerMhz, bandwidthMhz);
+        // Legacy signal MainWindow still consumes (unchanged behavior).
+        emit panadapterInfoChanged(pan->centerMhz(), pan->bandwidthMhz());
+    });
 
     // Centralized DAX RX channel ownership (#3305): PanadapterStream decides
     // WHEN a dax_rx stream must exist (refcounted acquire/release from the
@@ -5817,9 +5832,13 @@ void RadioModel::handlePanadapterStatus(const QString& panId, const QMap<QString
         pan->applyPanStatus(kvs);
     }
 
-    // Keep legacy signals for backward compat (MainWindow still uses these)
-    if (kvs.contains("center") || kvs.contains("bandwidth")) {
-        if (pan) emit panadapterInfoChanged(pan->centerMhz(), pan->bandwidthMhz());
+    // aetherd RFC 2.3: center/bandwidth decode moved to the backend. Driving it
+    // from this choke point (not a live statusReceived observer) means both live
+    // and deferred/replayed status flow through the converted path. The
+    // panCenterBandwidthChanged signal applies to the model + emits the legacy
+    // panadapterInfoChanged (in the ctor-wired handler above).
+    if (m_flexBackend) {
+        m_flexBackend->decodePanCenterBandwidth(panId, kvs);
     }
     if (kvs.contains("min_dbm") || kvs.contains("max_dbm")) {
         const float minDbm = pan ? pan->minDbm() : kvs.value("min_dbm", "-130").toFloat();

@@ -182,6 +182,25 @@ void FlexBackend::invokeExtension(const QString& /*ns*/, const QString& /*verb*/
     }
 }
 
+void FlexBackend::decodePanCenterBandwidth(const QString& panId,
+                                           const QMap<QString, QString>& kvs)
+{
+    // Only emit when the wire carried these fields — matches the old
+    // applyPanStatus behavior of touching center/bandwidth only when present.
+    if (!kvs.contains(QStringLiteral("center"))
+        && !kvs.contains(QStringLiteral("bandwidth"))) {
+        return;
+    }
+    // The radio may send one without the other; carry the current-or-parsed
+    // value for the missing one (RadioModel resolves against the model). A
+    // sentinel of -1 means "unchanged" for the absent field.
+    const double center = kvs.contains(QStringLiteral("center"))
+        ? kvs.value(QStringLiteral("center")).toDouble() : -1.0;
+    const double bandwidth = kvs.contains(QStringLiteral("bandwidth"))
+        ? kvs.value(QStringLiteral("bandwidth")).toDouble() : -1.0;
+    emit panCenterBandwidthChanged(panId, center, bandwidth);
+}
+
 void FlexBackend::send(const QString& cmd)
 {
     if (m_sink) {

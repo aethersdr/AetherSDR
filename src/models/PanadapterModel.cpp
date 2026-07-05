@@ -71,9 +71,24 @@ void PanadapterModel::setRfGainInfo(int low, int high, int step)
     emit rfGainInfoChanged(low, high, step);
 }
 
+void PanadapterModel::setCenterBandwidth(double centerMhz, double bandwidthMhz)
+{
+    bool changed = false;
+    if (centerMhz >= 0.0 && centerMhz != m_centerMhz) {
+        m_centerMhz = centerMhz;
+        changed = true;
+    }
+    if (bandwidthMhz >= 0.0 && bandwidthMhz != m_bandwidthMhz) {
+        m_bandwidthMhz = bandwidthMhz;
+        changed = true;
+    }
+    if (changed) {
+        emit infoChanged(m_centerMhz, m_bandwidthMhz);
+    }
+}
+
 void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
 {
-    bool infoChanged = false;
     bool levelChanged = false;
 
     // #3977: ownership is radio-authoritative. When another session reclaims
@@ -88,14 +103,8 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
         }
     }
 
-    if (kvs.contains("center")) {
-        double c = kvs["center"].toDouble();
-        if (c != m_centerMhz) { m_centerMhz = c; infoChanged = true; }
-    }
-    if (kvs.contains("bandwidth")) {
-        double b = kvs["bandwidth"].toDouble();
-        if (b != m_bandwidthMhz) { m_bandwidthMhz = b; infoChanged = true; }
-    }
+    // center/bandwidth now decode in FlexBackend → panCenterBandwidthChanged →
+    // setCenterBandwidth() (aetherd RFC 2.3, the first converted pan touchpoint).
     if (kvs.contains("min_dbm")) {
         float v = kvs["min_dbm"].toFloat();
         if (v != m_minDbm) { m_minDbm = v; levelChanged = true; }
@@ -219,8 +228,6 @@ void PanadapterModel::applyPanStatus(const QMap<QString, QString>& kvs)
         }
     }
 
-    if (infoChanged)
-        emit this->infoChanged(m_centerMhz, m_bandwidthMhz);
     if (levelChanged)
         emit this->levelChanged(m_minDbm, m_maxDbm);
 }
