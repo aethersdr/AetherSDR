@@ -143,12 +143,17 @@ def run(socket, want_grab, grab_path):
     tx = probe("get", "transmit", socket=socket)
     r.check("transmit model resolves", tx.get("ok"), "")
 
-    # 6. TX-safety guard: a keying invoke must be REFUSED without ALLOW_TX.
-    #    (This asserts the guard, it does not key.)
+    # 6. TX-safety guard: a keying invoke must be REFUSED *by the guard*
+    #    without ALLOW_TX. (This asserts the guard; it does not key.)
+    #    Match the specific guard phrasing, not a bare "TX" substring — an
+    #    unrelated failure like "unknown control TX_MOX" would false-pass and
+    #    the guard would never have run.
     mox = probe("invoke", "MOX", "toggle", socket=socket)
-    refused = (not mox.get("ok")) and "TX" in str(mox.get("error", ""))
-    r.check("TX-keying guard refuses MOX (no ALLOW_TX)", refused,
-            mox.get("error", "")[:60])
+    err = str(mox.get("error", "")).lower()
+    refused_by_guard = (not mox.get("ok")) and (
+        "transmit-keying" in err or "tx-safety" in err or "allow_tx" in err)
+    r.check("TX-keying guard refuses MOX (no ALLOW_TX)", refused_by_guard,
+            mox.get("error", "")[:70])
 
     # 7. Optional: prove the GPU panadapter renders (needs a real display;
     #    offscreen returns an empty image, which we report as SKIP not FAIL).

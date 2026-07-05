@@ -116,7 +116,7 @@ already in the tree:
    change signals — they *are* the thing to serialize.
 
 The **missing fifth piece** is the bulk of the work: the GUI currently reaches
-into the engine through **127 distinct `core/`/`models/` headers** (measured
+into the engine through **140 distinct `core/`/`models/` headers** (measured
 2026-07-04; regenerate with `tools/gen_touchpoint_manifest.py`, which emits the
 burndown manifest at `docs/architecture/aetherd-touchpoints.md`). Each of
 those touchpoints must become an enumerated protocol message. Cataloguing that
@@ -131,9 +131,9 @@ protocol's **core profile**; the rest become namespaced vendor extensions
 defines what a radio backend must provide upward — one sweep, two contracts.
 
 The first full tagging pass ran 2026-07-04 (results in the manifest's tags
-sidecar): of 127 headers, **43 universal, 16 mixed** (core-profile protocol
-surface: 54), **26 vendor** (22 flex, 4 kiwi — encapsulate behind the §5.5
-seam, no client protocol needed), and **42 ui-support** (settings, theming,
+sidecar): of 140 headers, **53 universal, 16 mixed** (core-profile protocol
+surface: 69), **26 vendor** (22 flex, 4 kiwi — encapsulate behind the §5.5
+seam, no client protocol needed), and **45 ui-support** (settings, theming,
 device/OS plumbing, control surfaces — need engine-vs-shell home decisions,
 not protocol messages). The protocol-message workload is therefore roughly
 half the raw touchpoint count.
@@ -369,7 +369,7 @@ transmitter.** Any design that can't guarantee that is rejected.
 
 ## 7. The hard problems (honest cost)
 
-1. **Enumerating the surface.** The 127 gui→engine header dependencies each map
+1. **Enumerating the surface.** The 140 gui→engine header dependencies each map
    to protocol messages. Mechanical but large; this is the bulk of the effort.
    The non-mechanical part is the §2 tagging pass: deciding, touchpoint by
    touchpoint, what is core profile and what is a vendor extension. The models
@@ -493,7 +493,7 @@ another CMake target (`libaethercore` + a headless executable) alongside the
 existing app target, in the pattern the repo already uses for `hal-plugin/`
 and `plugins/`. The reasons are structural, not preference:
 
-- Steps 1–6 carve the boundary out of 127 shared touchpoints; nearly every PR
+- Steps 1–6 carve the boundary out of 140 shared touchpoints; nearly every PR
   in that window touches engine and desktop client together. One repo keeps
   each conversion an atomic, revertable commit with one CI run — two repos
   mean paired PRs and protocol-version skew between checkouts.

@@ -99,9 +99,14 @@ def scan():
 
 
 def load_json(path):
-    if path.is_file():
+    if not path.is_file():
+        return {}
+    try:
         return json.loads(path.read_text())
-    return {}
+    except (json.JSONDecodeError, ValueError) as e:
+        print(f"warning: {path.name} is not valid JSON ({e}); treating as "
+              "empty", file=sys.stderr)
+        return {}
 
 
 def render(touchpoints, tags, status):

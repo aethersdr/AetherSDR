@@ -1032,7 +1032,7 @@ endif()
 
 qt_add_resources(RESOURCES resources/resources.qrc)
 
-# aetherd RFC step 1 (dry run): engine static library — src/core + src/models
+# aetherd RFC step 1: engine static library — src/core + src/models
 # plus the vendored C/C++ sources those engine files compile against
 # (rnnoise, ggmorse, RADE, specbleach; mosquitto/rtmidi are appended below in
 # their feature blocks). Qt resources (resources.qrc, DFNR model qrc) stay on
@@ -1205,10 +1205,12 @@ target_include_directories(aethercore PUBLIC
     ${CMAKE_SOURCE_DIR}/third_party/r8brain
 )
 
-# Engine dependency surface. NOTE (dry run): Qt6::Widgets is linked into the
-# engine because five core files still use QtWidgets (TxKeyingMarker.h,
-# ThemeManager.cpp, AutomationServer.cpp, ShortcutManager.cpp,
-# SettingsHelpers.cpp). A real step-1 PR must relocate/split those first.
+# Engine dependency surface. Qt6::Widgets is still linked into the engine
+# because five core files use QtWidgets (TxKeyingMarker.h, ThemeManager.cpp,
+# AutomationServer.cpp, ShortcutManager.cpp, SettingsHelpers.cpp). These are
+# tracked as EB2 legacy in tools/check_engine_boundary.py (per-file baseline
+# counts that may only shrink) and split out in step 3 — AutomationServer's
+# widget-facing dumpTree/grab half is the bulk of it.
 target_link_libraries(aethercore PUBLIC
     Qt6::Core
     Qt6::Concurrent
@@ -1569,7 +1571,14 @@ if(RADE_FOUND)
     if(RADE_WAV_TAP)
         set(RADE_TAP_DIR "${CMAKE_BINARY_DIR}/rade_taps"
             CACHE PATH "Output directory for RADE WAV tap files")
-        target_compile_definitions(aethercore PRIVATE RADE_WAV_TAP
+        # PUBLIC: RADEEngine.h guards two QByteArray members with
+        # #ifdef RADE_WAV_TAP mid-class, so the flag changes sizeof(RADEEngine)
+        # and every later member offset. A gui TU allocates it
+        # (MainWindow_DigitalModes.cpp `new RADEEngine`); a PRIVATE define would
+        # give the exe a smaller layout than the constructor compiled here →
+        # ODR violation / heap corruption under -DRADE_WAV_TAP=ON. Matches the
+        # sibling HAVE_RADE/HAVE_OPUS defines.
+        target_compile_definitions(aethercore PUBLIC RADE_WAV_TAP
             RADE_TAP_DIR="${RADE_TAP_DIR}")
     endif()
     target_include_directories(aethercore PRIVATE ${RADE_DIR}/src)
