@@ -1419,7 +1419,8 @@ endif()
 # mapper dialog and MainWindow dispatcher are unchanged across
 # platforms.  See #3232 for the design.
 target_sources(aethercore PRIVATE
-    src/core/UlanziDialBackend.h)   # header-only Q_OBJECT — listed so AUTOMOC mocs it in the engine
+    src/core/UlanziDialBackend.h    # header-only Q_OBJECT — listed so AUTOMOC mocs it in the engine
+    src/core/backends/IRadioBackend.h)  # aetherd RFC step 2.1: radio-facing seam (§5.5); header-only Q_OBJECT
 target_sources(AetherSDR PRIVATE
     src/gui/UlanziDialMapperDialog.cpp
     src/gui/UlanziDialMapperDialog.h)
