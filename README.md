@@ -184,13 +184,19 @@ binaries ship 6.8.3 LTS).
 :: 2. Generate the single-precision FFTW import lib (needed by NR4/libspecbleach)
 powershell -File scripts\setup\setup-fftw.ps1
 
-:: 3. Configure. Ninja is required: the default Visual Studio generator is
+:: 3. Build qtkeychain (needed for QRZ/SmartLink credential persistence).
+::    Downloads source and builds it against your Qt kit into third_party\qtkeychain\.
+::    Skip this step and the build still succeeds, but QRZ/SmartLink passwords
+::    won't be saved between runs.
+powershell -File scripts\setup\setup-qtkeychain.ps1
+
+:: 4. Configure. Ninja is required: the default Visual Studio generator is
 ::    multi-config (it ignores CMAKE_BUILD_TYPE) and takes a different
 ::    manifest-embed path. Point CMAKE_PREFIX_PATH at your Qt kit so
 ::    find_package(Qt6) resolves.
 cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64"
 
-:: 4. Build
+:: 5. Build
 cmake --build build --target AetherSDR
 ```
 

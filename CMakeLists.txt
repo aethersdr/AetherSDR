@@ -1224,6 +1224,17 @@ endif()
 if(Qt6Keychain_FOUND)
     target_compile_definitions(AetherSDR PRIVATE HAVE_KEYCHAIN)
     target_link_libraries(AetherSDR PRIVATE Qt6Keychain::Qt6Keychain)
+    # Local Windows builds run straight from the build dir with no packaging
+    # step — windeployqt, which stages qt6keychain.dll for the installer, isn't
+    # involved — so the DLL needs to land next to the exe or the app fails to
+    # start with "qt6keychain.dll was not found".
+    if(WIN32 AND EXISTS "${CMAKE_SOURCE_DIR}/third_party/qtkeychain/bin/qt6keychain.dll")
+        add_custom_command(TARGET AetherSDR POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/third_party/qtkeychain/bin/qt6keychain.dll"
+                "$<TARGET_FILE_DIR:AetherSDR>"
+        )
+    endif()
 endif()
 
 if(Qt6DBus_FOUND)
